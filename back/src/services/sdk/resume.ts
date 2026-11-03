@@ -1,6 +1,6 @@
 import * as registry from "../board/registry.js";
 import { getSettings } from "../settings/settings.js";
-import { appendHistory } from "./history.js";
+import { HISTORY_REPLAY_LIMIT, appendHistory, readHistory } from "./history.js";
 import {
   INFLIGHT_OWNER,
   clearInflightMarker,
@@ -41,6 +41,9 @@ import { logger } from "../../utils/logger.js";
  *     a segunda atualização seguida largava a tarefa pela metade); o que não avança é o loop de
  *     verdade — a retomada que morre ao chegar — e esse para com a linha de sistema e o estado
  *     parado explícito. O teto cobre o caso que avança E derruba o painel a cada volta.
+ *  4. o turno estava PARADO num cartão de pergunta: nada a retomar — só a linha, e o cartão fica
+ *     aberto para a pessoa responder (a resposta vai como mensagem, com o segundo plano que morreu;
+ *     ver manager.ts).
  *
  * Melhor esforço por card: um card que falha não impede os outros, e falha alguma derruba o boot.
  *
@@ -108,6 +111,10 @@ export const NOTE_AUTO_OFF =
   "O turno foi interrompido por uma atualização do painel. A retomada automática está desligada " +
   "(sdkAutoResume) — mande uma mensagem para continuar.";
 
+export const NOTE_AWAITING_ANSWER =
+  "O turno foi interrompido por uma atualização do painel enquanto o agente esperava a sua resposta. " +
+  "A pergunta continua aberta: responda o cartão e ele segue de onde parou.";
+
 /** A linha que segue um "retomando…" que não deu certo — o card não fica prometendo para sempre. */
 export const NOTE_RESUME_FAILED =
   "A retomada automática falhou antes de chegar ao Claude. Mande uma mensagem para continuar.";
@@ -119,6 +126,8 @@ interface ResumeTexts {
   notAgain: string;
   backgroundStale: string;
   autoOff: string;
+  /** O turno estava parado num cartão de pergunta: não há retomada, a pessoa responde o cartão. */
+  awaitingAnswer: string;
   continuation: string;
 }
 
@@ -128,6 +137,7 @@ const DEPLOY_TEXTS: ResumeTexts = {
   notAgain: NOTE_NOT_AGAIN,
   backgroundStale: NOTE_BACKGROUND_STALE,
   autoOff: NOTE_AUTO_OFF,
+  awaitingAnswer: NOTE_AWAITING_ANSWER,
   continuation: RESUME_CONTINUATION_TEXT,
 };
 
@@ -144,6 +154,9 @@ export const CRASH_TEXTS: ResumeTexts = {
   autoOff:
     "O processo do Claude deste card caiu no meio do turno. A retomada automática está desligada " +
     "(sdkAutoResume) — mande uma mensagem para continuar.",
+  awaitingAnswer:
+    "O processo do Claude deste card caiu enquanto o agente esperava a sua resposta. " +
+    "A pergunta continua aberta: responda o cartão e ele segue de onde parou.",
   continuation:
     "Continue de onde parou: o processo anterior do Claude deste card caiu no meio do trabalho (foi encerrado " +
     "de fora, sem reinício do painel). Retome a tarefa em andamento e conclua o que estava fazendo.",
@@ -167,7 +180,8 @@ export interface ResumeDeps {
   commandFor: typeof sdkDriverCommand;
   ensureSession: typeof ensureDriverSession;
   inject: typeof injectSystemTurn;
-  appendNote: (cardId: string, text: string) => Promise<void>;
+  /** `lostBackground`: o segundo plano que morreu, gravado na nota para ir junto da resposta do cartão. */
+  appendNote: (cardId: string, text: string, extra?: { lostBackground?: string[] }) => Promise<void>;
   readMarker: typeof readInflightMarker;
   /** A identidade deste processo: o marcador que ela assina é um turno vivo DAQUI, não um órfão. */
   selfOwner: string;
@@ -178,6 +192,13 @@ export interface ResumeDeps {
   stopping: () => boolean;
   /** A bolinha vai a `waiting` — a queda que não virou retomada (o manager a segurou em `working`). */
   reportIdle: (cardId: string) => void;
+  /**
+   * O turno começado em `since` está esperando a pessoa num cartão de pergunta aberto? Com ele, o
+   * trabalho em paralelo que o reinício matou (subagentes sem resultado).
+   */
+  awaitingAnswer: (cardId: string, since: number) => Promise<{ open: boolean; lostParallel: string[] }>;
+  /** O card acende o "precisa de você": o cartão aberto espera a pessoa. */
+  markAwaitingDecision: (cardId: string) => Promise<void>;
   wait: (ms: number) => Promise<void>;
 }
 
@@ -192,15 +213,57 @@ const realDeps: ResumeDeps = {
   commandFor: sdkDriverCommand,
   ensureSession: ensureDriverSession,
   inject: injectSystemTurn,
-  appendNote: (cardId, text) => appendHistory(cardId, { type: "system_note", text, at: Date.now() }),
+  appendNote: (cardId, text, extra) =>
+    appendHistory(cardId, { type: "system_note", text, ...(extra?.lostBackground?.length ? { lostBackground: extra.lostBackground } : {}), at: Date.now() }),
   readMarker: readInflightMarker,
   selfOwner: INFLIGHT_OWNER,
   ownerAlive: isInflightOwnerAlive,
   turnRunning: driverTurnRunning,
   stopping: () => shuttingDown,
   reportIdle: (cardId) => reportCardStatusFromDriver(cardId, "waiting"),
+  awaitingAnswer: awaitingAnswerInHistory,
+  markAwaitingDecision: (cardId) => registry.setCardAwaitingDecision(cardId, Date.now()),
   wait: (ms) => new Promise((resolve) => { setTimeout(resolve, ms).unref?.(); }),
 };
+
+/**
+ * Os cartões de pergunta feitos desde `since` que nenhum `question_result` encerrou — o que o turno
+ * interrompido esperava da pessoa. PURA.
+ */
+export function openQuestionIds(events: ReadonlyArray<{ type: string; id?: unknown; at?: number }>, since: number): string[] {
+  const open = new Set<string>();
+  for (const event of events) {
+    if (typeof event.id !== "string") continue;
+    if (event.type === "user_question" && (event.at ?? 0) >= since) open.add(event.id);
+    else if (event.type === "question_result") open.delete(event.id);
+  }
+  return [...open];
+}
+
+/**
+ * Os subagentes (Agent/Task) chamados desde `since` que não voltaram — rodavam em paralelo e morreram
+ * com o reinício. PURA.
+ */
+export function unfinishedSubagents(
+  events: ReadonlyArray<{ type: string; id?: unknown; name?: unknown; input?: unknown; at?: number }>,
+  since: number,
+): string[] {
+  const open = new Map<string, string>();
+  for (const event of events) {
+    if (typeof event.id !== "string" || (event.at ?? 0) < since) continue;
+    if (event.type === "tool_use" && (event.name === "Agent" || event.name === "Task")) {
+      const input = (event.input ?? {}) as { description?: unknown };
+      open.set(event.id, `subagente: ${typeof input.description === "string" && input.description ? input.description : event.id}`);
+    } else if (event.type === "tool_result") open.delete(event.id);
+  }
+  return [...open.values()];
+}
+
+/** O histórico do card diz se o turno começado em `since` está esperando a resposta de um cartão. */
+export async function awaitingAnswerInHistory(cardId: string, since: number): Promise<{ open: boolean; lostParallel: string[] }> {
+  const events = await readHistory(cardId, HISTORY_REPLAY_LIMIT, { strict: true });
+  return { open: openQuestionIds(events, since).length > 0, lostParallel: unfinishedSubagents(events, since) };
+}
 
 /**
  * Espera o marcador deixar de ter dono vivo. Devolve o marcador ÓRFÃO (a versão relida, que é a
@@ -322,6 +385,21 @@ async function resumeCard(
       logger.info({ audit: true, action: "sdk.resume.background_stale", card: card.worktreeSlug }, "long-lived background work ended by the restart — noted, not resumed");
       return "noted";
     }
+    const waiting = await awaitingAnswer(cardId, marker, deps);
+    if (waiting) {
+      // Parado num cartão de pergunta, o turno não tem o que retomar: ele espera a pessoa. A retomada
+      // fechava o cartão ("respondeu por mensagem") e o agente perguntava de novo num cartão em
+      // branco — o que já estava marcado se perdia (produção, 2026-11-03). Aberto, o clique vai ao
+      // modelo como mensagem (a resposta da órfã, manager.ts) — com o que os outros marcaram e, se o
+      // reinício matou algo em segundo plano, com a lista do que morreu (gravada nesta nota).
+      // O que morreu junto — segundo plano e subagentes em paralelo — vai ao modelo com a resposta.
+      const lostBackground = [...(marker.background?.tasks ?? []), ...waiting.lostParallel];
+      await deps.appendNote(cardId, texts.awaitingAnswer, lostBackground.length ? { lostBackground } : undefined);
+      await deps.clearMarker(cardId);
+      await deps.markAwaitingDecision(cardId).catch(() => undefined);
+      logger.info({ audit: true, action: "sdk.resume.awaiting_answer", card: card.worktreeSlug }, "interrupted sdk turn was waiting on a question card — left open, not resumed");
+      return "noted";
+    }
     if (!mayResumeAgain(marker)) {
       await deps.appendNote(cardId, texts.notAgain);
       await deps.clearMarker(cardId);
@@ -373,6 +451,20 @@ async function resumeCard(
     // marker would note the same interruption again on the next boot. Best-effort cleanup:
     await deps.clearMarker(cardId).catch(() => undefined);
     return "noted";
+  }
+}
+
+/**
+ * O turno do marcador estava esperando a resposta de um cartão? Devolve o trabalho em paralelo que
+ * morreu junto, ou null. Na dúvida (disco ilegível), null: retoma como antes.
+ */
+async function awaitingAnswer(cardId: string, marker: InflightMarker, deps: ResumeDeps): Promise<{ lostParallel: string[] } | null> {
+  try {
+    const found = await deps.awaitingAnswer(cardId, marker.startedAt);
+    return found.open ? { lostParallel: found.lostParallel } : null;
+  } catch (err) {
+    logger.warn({ card: cardId, detail: (err as Error).message }, "could not read the history for open question cards — resuming as usual");
+    return null;
   }
 }
 

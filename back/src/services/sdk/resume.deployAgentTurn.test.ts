@@ -78,13 +78,15 @@ function sweep(b: Proc, settings: { sdkDriver: boolean; sdkAutoResume: boolean }
     commandFor: async () => ({ file: "docker", args: ["exec"] }),
     ensureSession: manager.ensureDriverSession,
     inject: manager.injectSystemTurn,
-    appendNote: (cardId, text) => import("./history.js").then((h) => h.appendHistory(cardId, { type: "system_note", text, at: Date.now() })),
+    appendNote: (cardId, text, extra) => import("./history.js").then((h) => h.appendHistory(cardId, { type: "system_note", text, ...(extra?.lostBackground ? { lostBackground: extra.lostBackground } : {}), at: Date.now() })),
     readMarker: inflight.readInflightMarker,
     selfOwner: inflight.INFLIGHT_OWNER,
     ownerAlive: inflight.isInflightOwnerAlive,
     turnRunning: manager.driverTurnRunning,
     stopping: () => false,
     reportIdle: (cardId) => { void import("../board/agentState.js").then((a) => a.reportCardStatusFromDriver(cardId, "waiting")); },
+    awaitingAnswer: resume.awaitingAnswerInHistory,
+    markAwaitingDecision: (cardId) => registry.setCardAwaitingDecision(cardId, Date.now()),
     wait: async () => undefined,
   });
 }
@@ -211,5 +213,52 @@ describe("deploy no meio de uma ordem do maestro (card a28ffa23)", () => {
     expect(c.children).toHaveLength(0);
     await settle();
     expect((await c.registry.getCard(cardId))?.status).toBe("waiting");
+  });
+});
+
+/**
+ * O DEPLOY COM O CARTÃO DE PERGUNTA DE PÉ (produção, 2026-11-03): a pessoa marcava as opções de
+ * quatro perguntas quando o painel atualizou. A retomada encerrava o cartão e o agente perguntava
+ * de novo, em branco. Agora o processo novo deixa o cartão aberto e o clique chega ao modelo.
+ */
+describe("deploy com o agente esperando resposta num cartão", () => {
+  const QUESTIONS = [
+    { question: "Como marcamos o trucado?", header: "Trucado", options: [{ label: "Tipo no cadastro" }, { label: "Faixa de capacidade" }] },
+    { question: "Produto sem peso?", header: "Sem peso", options: [{ label: "Bloqueia o envio" }, { label: "Avisa e deixa seguir" }] },
+  ];
+
+  it("o processo novo não retoma: o cartão segue aberto, a bolinha aguarda, e o clique vai ao modelo", async () => {
+    const { a, cardId } = await oldProcessRunsAMaestroOrder();
+    a.emit(0, { type: "user_question", id: "q_1_1793740462180", questions: QUESTIONS });
+    await settle();
+
+    const b = await bootProcess();
+    const summary = await sweep(b, { sdkDriver: true, sdkAutoResume: true });
+    expect(summary).toEqual({ resumed: [], noted: [cardId] });
+    expect(b.children).toHaveLength(0); // nenhum "Continue de onde parou", nenhuma pergunta refeita
+    await settle();
+    const { readHistory } = await import("./history.js");
+    const history = await readHistory(cardId);
+    expect(history.some((e) => e.type === "question_result")).toBe(false);
+    expect((history.at(-1) as { text?: string }).text).toBe(b.resume.NOTE_AWAITING_ANSWER);
+    expect((await b.registry.getCard(cardId))?.status).toBe("waiting");
+    expect((await b.registry.getCard(cardId))?.awaitingDecisionAt).toBeTruthy(); // "precisa de você"
+
+    // A pessoa responde o MESMO cartão: o driver novo sobe e recebe as escolhas como mensagem.
+    const session = b.manager.ensureDriverSession({ cardId, label: "a28f", command: { file: "docker", args: ["exec"] } });
+    const socket = Object.assign(new EventEmitter(), { readyState: 1, send: () => undefined, close: () => undefined });
+    b.manager.attachSocket(session, socket as never, OWNER_ORIGIN);
+    socket.emit("message", Buffer.from(JSON.stringify({
+      type: "question_answer", id: "q_1_1793740462180",
+      answers: [{ selected: ["Faixa de capacidade", "pela placa"] }, { selected: ["Bloqueia o envio"] }],
+    })));
+    await vi.waitFor(() => {
+      const sent = b.children[0]!.written.map((w) => JSON.parse(w) as { type: string; text?: string });
+      const answer = sent.find((f) => f.type === "user")?.text ?? "";
+      expect(answer).toContain("Faixa de capacidade, pela placa");
+      expect(answer).toContain("Bloqueia o envio");
+    });
+    // respondido, o card apaga o "precisa de você"
+    await vi.waitFor(async () => expect((await b.registry.getCard(cardId))?.awaitingDecisionAt ?? null).toBeNull());
   });
 });

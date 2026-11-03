@@ -57,7 +57,15 @@ export type HistoryEvent = (
     }
   /** The user edited a sent message: the row whose text matches `originalText` is drawn "editada". */
   | { type: "message_edited"; originalText: string; /** The FIRST copy was edited, not the newest. */ first?: boolean }
-  | { type: "system_note"; text: string }
+  | {
+      type: "system_note";
+      text: string;
+      /**
+       * Na nota de um reinício que deixou um cartão de pergunta aberto: o que rodava em segundo plano
+       * e morreu junto. Vai ao modelo com a resposta do cartão (`buildOrphanAnswerText`).
+       */
+      lostBackground?: string[];
+    }
   /**
    * One turn of a VOICE call held inside this chat (see services/voice/turns.ts): what the person
    * said, or what the voice assistant answered, already settled into a whole turn by the browser.

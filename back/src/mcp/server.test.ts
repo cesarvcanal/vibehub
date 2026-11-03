@@ -56,6 +56,19 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(INSTRUCTIONS).toContain("(recomendado)");
   });
 
+  it("planejar começa no brainstorming; dúvida ou contradição viram pergunta — nunca decisão por conta própria", () => {
+    // Pedido do dono da instalação (2026-11-03): "sempre use brainstorming quando estivermos
+    // planejando… se não ficar claro, NUNCA tomar decisões por conta própria… se entrar em
+    // contradição, ir perguntando".
+    expect(INSTRUCTIONS).toContain("Planning ALWAYS starts with brainstorming");
+    expect(INSTRUCTIONS).toContain("superpowers:brainstorming");
+    expect(INSTRUCTIONS).toContain("You NEVER decide on your own");
+    expect(INSTRUCTIONS).toContain("keep asking until it is clear");
+    expect(INSTRUCTIONS).toContain("Contradiction = ask");
+    // O antigo "pergunte só quando bloquear" deixava a IA escolher sozinha a leitura do pedido.
+    expect(INSTRUCTIONS).not.toContain("Ask when it blocks, not before");
+  });
+
   it("build a server that carries those instructions", () => {
     let server: ReturnType<typeof createMcpServer> | undefined;
     expect(() => {
@@ -150,6 +163,11 @@ describe("MCP server instructions for an external app (ChatGPT, Claude.ai)", () 
     expect(EXTERNAL_INSTRUCTIONS).toContain("authorized: true");
     expect(EXTERNAL_INSTRUCTIONS).toContain("vibehub_create_card");
     expect(EXTERNAL_INSTRUCTIONS).not.toContain("vibehub_report");
+  });
+
+  it("pedido confuso ou contraditório: pergunta ao usuário antes de mandar ao card", () => {
+    expect(EXTERNAL_INSTRUCTIONS).toContain("unclear or contradicts itself");
+    expect(EXTERNAL_INSTRUCTIONS).toContain("never fill the gap with your own reading");
   });
 
   it("teach the voice loop: send → wait → relay the question → report what changed", () => {

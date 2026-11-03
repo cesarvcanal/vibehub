@@ -7,6 +7,7 @@ import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
 import { HISTORY_REPLAY_LIMIT, appendHistory, appendHistoryReported, clearHistoryBeforeLastClear, readHistory, replayableHistoryEvent, rewindHistory, unwrapEditedMessage, type HistoryEvent } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker, type InflightBackground, type InflightMarker } from "./inflight.js";
 import { forgetDriverKeys, noteDriverEventFor, onOutsideTurn } from "./mirror.js";
+import { loadQuestionDrafts, saveQuestionDrafts, type StoredQuestionDraft } from "./questionDrafts.js";
 import { createLineReader } from "../../utils/lineReader.js";
 import { writeCardCatalog } from "./catalog.js";
 import { normalizeRateLimit, type RateLimitInfo } from "./rateLimit.js";
@@ -243,11 +244,21 @@ export interface DriverSession {
   ownQuestions: Set<string>;
   /**
    * O QUE CADA PESSOA JÁ MARCOU num cartão de pergunta ainda aberto, por id da pergunta → nome de
-   * quem escreve. Só memória (some com o driver, como a digitação): existe para que quem abre o card
-   * no meio da resposta de outra pessoa veja o rascunho dela no primeiro quadro, e não só no próximo
-   * toque. Sai quando a pergunta encerra (`forgetQuestionDrafts`).
+   * quem escreve. Para quem abre o card no meio da resposta de outra pessoa ver o rascunho dela no
+   * primeiro quadro, e para a resposta levar junto o que os outros marcaram (`mergePeerAnswers`).
+   * Espelhado em DISCO (./questionDrafts.ts): um deploy no meio de quatro perguntas apagava tudo
+   * (produção, 2026-11-03). Fechar a aba NÃO apaga — só a pergunta encerrada (`forgetQuestionDrafts`).
    */
-  questionDrafts: Map<string, Map<string, Pick<QuestionDraft, "picked" | "other">>>;
+  questionDrafts: Map<string, Map<string, StoredQuestionDraft>>;
+  /**
+   * Cartões de pergunta ÓRFÃOS ainda abertos (de um driver que morreu: o deploy). Contam como decisão
+   * pendente igual às do driver vivo — o card acende o "precisa de você" até alguém responder.
+   */
+  orphanAsks: Set<string>;
+  /** Quantas abas abertas de cada pessoa estão mexendo em cada cartão — 0 = ela saiu ("ausente"). */
+  draftLive: Map<string, Map<string, number>>;
+  /** Os rascunhos guardados em disco já entraram em `questionDrafts`. */
+  draftsLoaded: Promise<void>;
   /**
    * OS CARTÕES DESTE DRIVER e onde cada um está. Uma segunda resposta a um cartão já respondido vira
    * mensagem para o modelo comparar (`answerLate`), em vez de morrer como "no pending question". Só
@@ -500,7 +511,7 @@ function syncBoardStatus(session: DriverSession, opts: { force?: boolean } = {})
  */
 function syncAwaitingDecision(session: DriverSession, opts: { force?: boolean } = {}): void {
   if (session.closed && !opts.force) return;
-  const awaiting = session.openAsks.size > 0 && !session.closed;
+  const awaiting = (session.openAsks.size > 0 || session.orphanAsks.size > 0) && !session.closed;
   if (session.awaitingDecision === awaiting) return;
   session.awaitingDecision = awaiting;
   void registry.setCardAwaitingDecision(session.cardId, awaiting ? Date.now() : null)
@@ -546,12 +557,54 @@ function makeRoom(map: Map<string, unknown>, max: number): void {
 
 /** A pergunta encerrou: o rascunho de ninguém importa mais (a tela já desenha o cartão respondido). */
 function forgetQuestionDrafts(session: DriverSession, questionId: string): void {
-  session.questionDrafts.delete(questionId);
+  if (!session.questionDrafts.delete(questionId)) return;
+  session.draftLive.delete(questionId);
+  persistQuestionDrafts(session);
 }
 
-/** O frame que conta às outras abas o rascunho de `name` num cartão (rascunho vazio = apagou). */
-function peerQuestionDraftFrame(id: string, name: string, draft: Pick<QuestionDraft, "picked" | "other">): string {
-  return JSON.stringify({ type: "peer_question_draft", id, name, picked: draft.picked, other: draft.other });
+function persistQuestionDrafts(session: DriverSession): void {
+  void saveQuestionDrafts(session.cardId, session.questionDrafts);
+}
+
+/** Alguma aba de `name` está mexendo neste cartão agora. */
+function draftIsLive(session: DriverSession, id: string, name: string): boolean {
+  return (session.draftLive.get(id)?.get(name) ?? 0) > 0;
+}
+
+/**
+ * O frame que conta às outras abas o rascunho de `name` num cartão (rascunho vazio = apagou).
+ * `away`: a pessoa fechou a aba — o que ela marcou continua valendo, só não está respondendo agora.
+ */
+function peerQuestionDraftFrame(id: string, name: string, draft: StoredQuestionDraft, away = false): string {
+  return JSON.stringify({
+    type: "peer_question_draft", id, name, picked: draft.picked, other: draft.other,
+    ...(draft.at !== undefined ? { at: draft.at } : {}),
+    ...(away ? { away: true } : {}),
+  });
+}
+
+/**
+ * O que estava em disco entra na sessão nova — sem passar por cima do que já chegou nela — e vai às
+ * abas já conectadas (elas chegaram antes da leitura terminar).
+ */
+async function restoreQuestionDrafts(session: DriverSession): Promise<void> {
+  const stored = await loadQuestionDrafts(session.cardId);
+  for (const [id, byName] of stored) {
+    let mine = session.questionDrafts.get(id);
+    for (const [name, draft] of byName) {
+      if (mine?.has(name)) continue;
+      if (!mine) {
+        makeRoom(session.questionDrafts, QUESTION_DRAFTS_MAX);
+        mine = new Map();
+        session.questionDrafts.set(id, mine);
+      }
+      mine.set(name, draft);
+      const frame = peerQuestionDraftFrame(id, name, draft, !draftIsLive(session, id, name));
+      for (const socket of session.sockets) {
+        try { socket.send(frame); } catch { /* going away */ }
+      }
+    }
+  }
 }
 
 function broadcast(session: DriverSession, event: object): void {
@@ -1041,6 +1094,9 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     openAsks: new Set(),
     awaitingDecision: false,
     questionDrafts: new Map(),
+    orphanAsks: new Set(),
+    draftLive: new Map(),
+    draftsLoaded: Promise.resolve(),
     questionCards: new Map(),
     settledOrphans: new Set(),
     answeringOrphans: new Set(),
@@ -1048,9 +1104,20 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     ...(opts.transcriptDir ? { transcriptDir: opts.transcriptDir } : {}),
   };
   sessions.set(opts.cardId, session);
+  // O que cada pessoa já tinha marcado nos cartões abertos, de antes do reinício (ou do driver anterior).
+  session.draftsLoaded = restoreQuestionDrafts(session).catch((err: unknown) => {
+    logger.warn({ card: opts.label, detail: (err as Error).message }, "could not restore the question drafts");
+  });
   // Um carimbo de "espera decisão" que sobrou de um driver que não pôde apagá-lo (o back caiu no
   // meio de uma pergunta): este driver nasce sem nenhuma pendente.
   void registry.setCardAwaitingDecision(opts.cardId, null).catch(() => { /* best-effort */ });
+  // …exceto o cartão órfão ainda aberto (o deploy pegou o agente esperando): ele segue pedindo a pessoa.
+  void orphanQuestions(session).then((open) => {
+    for (const id of open.keys()) {
+      if (!session.settledOrphans.has(id)) session.orphanAsks.add(id);
+    }
+    syncAwaitingDecision(session);
+  }).catch(() => { /* sem leitura, sem carimbo: o caminho de antes */ });
   // Conversa que entrou pela aba Terminal: a corrente aberta do driver está num ponto que já não é o
   // fim do arquivo. Seguir dela órfã o turno do terminal, e turno órfão não tem ponto de volta — era
   // por isso que editar aquela mensagem não rebobinava. O driver só MARCA; religa no próximo envio.
@@ -1357,7 +1424,7 @@ export function handleClientFrame(
   if (control.type === "question_answer" && !session.ownQuestions.has(control.id)) {
     // ÓRFÃ: este driver nunca fez esta pergunta. Repassá-la devolvia "no pending question with id"
     // e a resposta se perdia — ela vira mensagem (ver `answerOrphanQuestion`).
-    void answerOrphanQuestion(session, control);
+    void answerOrphanQuestion(session, control, origin);
     return { kind: "ignored" };
   }
   if (control.type === "question_answer") {
@@ -1433,16 +1500,27 @@ function noteStop(session: DriverSession, origin: MessageOrigin | undefined, how
   );
 }
 
+/** Um cartão de pergunta pendente sem o driver que o abriu. */
+interface OrphanCard {
+  questions: UserQuestionItem[];
+  /** O que rodava em segundo plano e morreu no reinício que deixou o cartão de pé. */
+  lostBackground: string[];
+}
+
 /**
  * O que o histórico ainda mostra como pergunta PENDENTE e que o driver atual não espera — os
  * cartões órfãos, com o texto deles. Lido do disco: depois de um deploy o back novo não tem outra
  * memória deles, e o cartão que a tela redesenha vem exatamente daqui.
  */
-async function orphanQuestions(session: DriverSession): Promise<Map<string, UserQuestionItem[]>> {
-  const open = new Map<string, UserQuestionItem[]>();
+async function orphanQuestions(session: DriverSession): Promise<Map<string, OrphanCard>> {
+  const open = new Map<string, OrphanCard>();
   for (const event of await readHistory(session.cardId, HISTORY_REPLAY_LIMIT, { strict: true })) {
-    if (event.type === "user_question") open.set(event.id, event.questions);
+    if (event.type === "user_question") open.set(event.id, { questions: event.questions, lostBackground: [] });
     else if (event.type === "question_result") open.delete(event.id);
+    // O reinício que deixou o cartão de pé matou também o segundo plano (resume.ts): vai junto da resposta.
+    else if (event.type === "system_note" && event.lostBackground?.length) {
+      for (const card of open.values()) card.lostBackground.push(...event.lostBackground);
+    }
   }
   for (const id of [...open.keys()]) {
     if (session.ownQuestions.has(id)) open.delete(id);
@@ -1453,6 +1531,7 @@ async function orphanQuestions(session: DriverSession): Promise<Map<string, User
 /** Encerra um cartão em todas as abas e no histórico (o F5 lê a mesma coisa). */
 function settleQuestionCard(session: DriverSession, result: Extract<DriverEvent, { type: "question_result" }>): void {
   forgetQuestionDrafts(session, result.id);
+  if (session.orphanAsks.delete(result.id)) syncAwaitingDecision(session);
   broadcast(session, result);
   void appendHistory(session.cardId, { ...result, at: Date.now() });
   void observeDriverEvent(session.cardId, result);
@@ -1468,7 +1547,7 @@ function settleQuestionCard(session: DriverSession, result: Extract<DriverEvent,
 async function settleOrphanQuestions(session: DriverSession): Promise<void> {
   if (session.orphansSwept) return;
   session.orphansSwept = true;
-  let orphans: Map<string, UserQuestionItem[]>;
+  let orphans: Map<string, OrphanCard>;
   try {
     orphans = await orphanQuestions(session);
   } catch (err) {
@@ -1489,7 +1568,7 @@ async function settleOrphanQuestions(session: DriverSession): Promise<void> {
  * ainda importam — elas vão ao modelo como MENSAGEM, cada pergunta citada ao lado do escolhido, e o
  * cartão se encerra como respondido. É um turno: conta, desarma o ocioso e ganha o marcador.
  */
-async function answerOrphanQuestion(session: DriverSession, control: QuestionAnswerControl): Promise<void> {
+async function answerOrphanQuestion(session: DriverSession, control: QuestionAnswerControl, origin?: MessageOrigin): Promise<void> {
   // Marcada ANTES de qualquer await: o segundo clique (outra aba, duplo clique) chega no meio da
   // leitura do disco e precisa encontrar a vaga já tomada.
   if (session.answeringOrphans.has(control.id)) return; // a mesma resposta já está a caminho
@@ -1503,15 +1582,15 @@ async function answerOrphanQuestion(session: DriverSession, control: QuestionAns
     session.answeringOrphans.delete(control.id);
     broadcast(session, { type: "error", message });
   };
-  let orphans: Map<string, UserQuestionItem[]>;
+  let orphans: Map<string, OrphanCard>;
   try {
     orphans = await orphanQuestions(session);
   } catch (err) {
     release(`could not read the question card: ${(err as Error).message}`);
     return;
   }
-  const questions = orphans.get(control.id);
-  if (!questions) {
+  const orphan = orphans.get(control.id);
+  if (!orphan) {
     // Não está pendente no disco: já encerrada (aba velha) ou nunca existiu. Nada vai ao modelo —
     // o mesmo veredito que o driver dava antes.
     release(`no pending question with id ${control.id}`);
@@ -1522,7 +1601,10 @@ async function answerOrphanQuestion(session: DriverSession, control: QuestionAns
     release("driver exited before the answer reached it — answer again once the chat reconnects");
     return;
   }
-  const text = buildOrphanAnswerText(questions, control.answers);
+  // O que os OUTROS marcaram neste cartão vai junto, com o nome — de antes do reinício inclusive.
+  await session.draftsLoaded;
+  const forModel = mergePeerAnswers(control.answers, origin?.name, session.questionDrafts.get(control.id));
+  const text = buildOrphanAnswerText(orphan.questions, forModel ?? control.answers, orphan.lostBackground);
   if (!writeToDriver(session, { type: "user", text })) {
     release("driver exited before the answer reached it — answer again once the chat reconnects");
     return;
@@ -1985,9 +2067,10 @@ export function attachSocket(
 
   // OS RASCUNHOS dos cartões abertos: quem chega no meio da resposta de outra pessoa vê, de cara, o
   // que ela já marcou e escreveu — senão só no próximo toque dela.
+  // Os de quem já fechou a aba (ou de antes do reinício) vão marcados como ausentes.
   for (const [id, byName] of session.questionDrafts) {
     for (const [name, draft] of byName) {
-      try { socket.send(peerQuestionDraftFrame(id, name, draft)); } catch { /* going away */ }
+      try { socket.send(peerQuestionDraftFrame(id, name, draft, !draftIsLive(session, id, name))); } catch { /* going away */ }
     }
   }
 
@@ -2029,42 +2112,68 @@ export function attachSocket(
   // mandar (as respostas de todos vão juntas ao modelo, ver `mergePeerAnswers`). Fica guardado enquanto a pergunta está aberta, para quem
   // abrir o card depois; nunca vai ao driver nem ao histórico.
   const draftedHere = new Set<string>();
-  const relayDraft = (id: string, name: string, draft: Pick<QuestionDraft, "picked" | "other">): void => {
-    const frame = peerQuestionDraftFrame(id, name, draft);
+  const relayDraft = (id: string, name: string, draft: StoredQuestionDraft, away = false): void => {
+    const frame = peerQuestionDraftFrame(id, name, draft, away);
     for (const other of session.sockets) {
       if (other === socket) continue;
       try { other.send(frame); } catch { /* that socket is going away */ }
     }
   };
+  const countLive = (id: string, name: string, delta: 1 | -1): number => {
+    let byName = session.draftLive.get(id);
+    if (!byName) {
+      byName = new Map();
+      session.draftLive.set(id, byName);
+    }
+    const count = Math.max(0, (byName.get(name) ?? 0) + delta);
+    if (count === 0) byName.delete(name);
+    else byName.set(name, count);
+    if (byName.size === 0) session.draftLive.delete(id);
+    return count;
+  };
   const noteDraft = (draft: QuestionDraft): void => {
     if (!origin || draft.id === "") return;
     const empty = isEmptyQuestionDraft(draft);
     let byName = session.questionDrafts.get(draft.id);
+    const stored = byName?.get(origin.name);
+    // A MAIS NOVA VENCE: uma aba que volta com um rascunho mais velho (o notebook depois do celular)
+    // não apaga o que a pessoa fez em outro lugar — recebe de volta a versão nova.
+    if (stored?.at !== undefined && draft.at !== undefined && draft.at < stored.at) {
+      try { socket.send(peerQuestionDraftFrame(draft.id, origin.name, stored)); } catch { /* going away */ }
+      return;
+    }
+    const next: StoredQuestionDraft = { picked: draft.picked, other: draft.other, ...(draft.at !== undefined ? { at: draft.at } : {}) };
     if (empty) {
+      if (draftedHere.delete(draft.id)) countLive(draft.id, origin.name, -1);
       if (!byName?.has(origin.name)) return;
       byName.delete(origin.name);
       if (byName.size === 0) session.questionDrafts.delete(draft.id);
-      draftedHere.delete(draft.id);
     } else {
       if (!byName) {
-        // Teto de memória: um cartão esquecido aberto não acumula para sempre.
+        // Teto: um cartão esquecido aberto não acumula para sempre.
         makeRoom(session.questionDrafts, QUESTION_DRAFTS_MAX);
         byName = new Map();
         session.questionDrafts.set(draft.id, byName);
       }
-      byName.set(origin.name, { picked: draft.picked, other: draft.other });
-      draftedHere.add(draft.id);
+      byName.set(origin.name, next);
+      if (!draftedHere.has(draft.id)) {
+        draftedHere.add(draft.id);
+        countLive(draft.id, origin.name, 1);
+      }
     }
-    relayDraft(draft.id, origin.name, { picked: draft.picked, other: draft.other });
+    persistQuestionDrafts(session);
+    relayDraft(draft.id, origin.name, next);
   };
-  /** A aba fechou: o rascunho dela sai das outras telas, como o "digitando". */
+  /**
+   * A aba fechou: o que a pessoa marcou FICA (guardado, e vai junto da resposta de quem enviar); as
+   * outras telas só deixam de mostrá-la como "respondendo" — se nenhuma outra aba dela segue no cartão.
+   */
   const dropDraftsOfThisSocket = (): void => {
     if (!origin) return;
     for (const id of draftedHere) {
-      const byName = session.questionDrafts.get(id);
-      if (!byName?.delete(origin.name)) continue;
-      if (byName.size === 0) session.questionDrafts.delete(id);
-      relayDraft(id, origin.name, { picked: [], other: [] });
+      if (countLive(id, origin.name, -1) > 0) continue;
+      const draft = session.questionDrafts.get(id)?.get(origin.name);
+      if (draft) relayDraft(id, origin.name, draft, true);
     }
     draftedHere.clear();
   };

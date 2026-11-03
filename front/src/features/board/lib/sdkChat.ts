@@ -237,6 +237,8 @@ export interface SdkEvent {
    */
   picked?: unknown;
   other?: unknown;
+  /** On `peer_question_draft`: the person left the card (closed tab, or before a deploy) — the draft still counts. */
+  away?: unknown;
 }
 
 /** One live background task (mirror of `BackgroundTaskInfo` in the back's protocol). `toolUseId` =

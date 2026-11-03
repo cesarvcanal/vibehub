@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { config } from "../../config/env.js";
 import type { Card, Project } from "../board/registry.js";
 import type { Settings } from "../settings/settings.js";
-import { BACKGROUND_HOLD_MAX_MS, SYSTEM_ORIGIN, ensureDriverSession, injectSystemTurn, resetSdkSessionsForTesting, setDriverSpawnerForTesting } from "./manager.js";
+import { BACKGROUND_HOLD_MAX_MS, SYSTEM_ORIGIN, attachSocket, ensureDriverSession, injectSystemTurn, resetSdkSessionsForTesting, setDriverSpawnerForTesting } from "./manager.js";
 import { readHistory } from "./history.js";
 import {
   INFLIGHT_OWNER,
@@ -21,13 +21,16 @@ import {
   CRASH_TEXTS,
   MAX_AUTO_RESUMES,
   NOTE_AUTO_OFF,
+  NOTE_AWAITING_ANSWER,
   NOTE_BACKGROUND_STALE,
   NOTE_NOT_AGAIN,
   NOTE_RESUMING,
   NOTE_RESUME_FAILED,
   RESUME_CONTINUATION_TEXT,
+  awaitingAnswerInHistory,
   handOffSdkOnShutdown,
   isStaleBackgroundOnly,
+  openQuestionIds,
   resumeAfterDriverCrash,
   resumeContinuationText,
   resumeInterruptedTurns,
@@ -106,10 +109,12 @@ function deps(over: Partial<ResumeDeps> = {}, settings: Settings = settingsWith(
     turnRunning: () => false,
     stopping: () => false,
     reportIdle: () => undefined,
+    awaitingAnswer: awaitingAnswerInHistory,
+    markAwaitingDecision: async () => undefined,
     wait: async () => undefined,
-    appendNote: async (cardId, text) => {
+    appendNote: async (cardId, text, extra) => {
       const { appendHistory } = await import("./history.js");
-      await appendHistory(cardId, { type: "system_note", text, at: Date.now() });
+      await appendHistory(cardId, { type: "system_note", text, ...(extra?.lostBackground ? { lostBackground: extra.lostBackground } : {}), at: Date.now() });
     },
     ...over,
   };
@@ -326,6 +331,127 @@ describe("resumeInterruptedTurns — the boot sweep", () => {
     // …e o card não fica dizendo "retomando…" para sempre: a linha seguinte diz que não deu.
     expect(history.map((e) => (e as { text?: string }).text)).toEqual([NOTE_RESUMING, NOTE_RESUME_FAILED]);
     expect(await readInflightMarker(CARD)).toBeNull();
+  });
+});
+
+/**
+ * O DEPLOY COM O CARTÃO DE PÉ (produção, 2026-11-03): o agente fez quatro perguntas, a pessoa marcou
+ * as opções, e um deploy matou o driver no meio. A retomada mandava "Continue de onde parou" — que
+ * encerrava o cartão como "Você respondeu por mensagem" — e o agente perguntava de NOVO, num cartão
+ * novo e em branco: tudo o que estava marcado se perdia. Um turno parado numa pergunta não tem o que
+ * retomar: ele espera a pessoa. O cartão fica aberto e o clique vai ao modelo como mensagem (a
+ * resposta da órfã, ver manager.ts).
+ */
+const QUESTIONS = [
+  { question: "Como marcamos o trucado?", header: "Trucado", options: [{ label: "Tipo no cadastro" }, { label: "Faixa de capacidade" }] },
+];
+
+async function historyWith(events: Array<Record<string, unknown>>): Promise<void> {
+  const { appendHistory } = await import("./history.js");
+  for (const event of events) await appendHistory(CARD, event as never);
+}
+
+describe("resumeInterruptedTurns — o turno parado numa pergunta", () => {
+  it("O CASO REAL: o cartão esperando resposta fica aberto — nada de retomada nem de pergunta refeita", async () => {
+    const idle: string[] = [];
+    const awaiting: string[] = [];
+    await historyWith([
+      { type: "user", text: "vamos fechar o trucado", at: 5 },
+      { type: "user_question", id: "q_1_1", questions: QUESTIONS, at: 10 },
+    ]);
+    await writeInflightMarker(CARD, { startedAt: 5, preview: "vamos fechar o trucado", attempts: 0 });
+    const summary = await resumeInterruptedTurns(deps({ reportIdle: (id) => idle.push(id), markAwaitingDecision: async (id) => { awaiting.push(id); } }));
+    expect(summary).toEqual({ resumed: [], noted: [CARD] });
+    expect(spawned).toHaveLength(0);
+    expect(installed).toBe(0);
+    expect(awaiting).toEqual([CARD]); // revisão #222, f1: o card acende o "precisa de você"
+    const history = await readHistory(CARD);
+    // o cartão segue pendente: nenhum question_result o encerrou
+    expect(history.some((e) => e.type === "question_result")).toBe(false);
+    expect((history.at(-1) as { text?: string }).text).toBe(NOTE_AWAITING_ANSWER);
+    expect(await readInflightMarker(CARD)).toBeNull();
+    expect(idle).toEqual([CARD]); // a bolinha vai a aguardando: é a vez da pessoa
+  });
+
+  it("vale também para um turno que já era retomada — esperar a pessoa não é loop", async () => {
+    await historyWith([{ type: "user_question", id: "q_1_1", questions: QUESTIONS, at: 10 }]);
+    await writeInflightMarker(CARD, { startedAt: 5, attempts: 2, progressed: true });
+    const summary = await resumeInterruptedTurns(deps());
+    expect(summary.noted).toEqual([CARD]);
+    expect((await readHistory(CARD)).map((e) => (e as { text?: string }).text).at(-1)).toBe(NOTE_AWAITING_ANSWER);
+  });
+
+  it("a pergunta JÁ tinha resposta quando o deploy chegou: retoma como sempre", async () => {
+    await historyWith([
+      { type: "user_question", id: "q_1_1", questions: QUESTIONS, at: 10 },
+      { type: "question_result", id: "q_1_1", answers: [{ selected: ["Tipo no cadastro"] }], at: 11 },
+    ]);
+    await writeInflightMarker(CARD, { startedAt: 5, attempts: 0 });
+    const summary = await resumeInterruptedTurns(deps());
+    expect(summary.resumed).toEqual([CARD]);
+  });
+
+  it("uma pergunta aberta de ANTES deste turno não segura a retomada", async () => {
+    await historyWith([{ type: "user_question", id: "q_1_1", questions: QUESTIONS, at: 3 }]);
+    await writeInflightMarker(CARD, { startedAt: 5, attempts: 0 });
+    const summary = await resumeInterruptedTurns(deps());
+    expect(summary.resumed).toEqual([CARD]);
+  });
+
+  it("com segundo plano morto junto, o cartão também fica aberto — e a nota guarda o que morreu", async () => {
+    await historyWith([{ type: "user_question", id: "q_1_1", questions: QUESTIONS, at: 10 }]);
+    await writeInflightMarker(CARD, { startedAt: 5, attempts: 0, background: { tasks: ["suíte do back"], since: Date.now(), idle: false } });
+    const summary = await resumeInterruptedTurns(deps());
+    expect(summary.noted).toEqual([CARD]);
+    expect(spawned).toHaveLength(0);
+    const note = (await readHistory(CARD)).at(-1) as { text?: string; lostBackground?: string[] };
+    expect(note.text).toBe(NOTE_AWAITING_ANSWER);
+    expect(note.lostBackground).toEqual(["suíte do back"]);
+  });
+
+  it("subagentes em paralelo que morreram com o reinício vão na nota (revisão #222, f2)", async () => {
+    await historyWith([
+      { type: "tool_use", id: "t_agent", name: "Agent", input: { description: "auditar o estoque" }, at: 6 },
+      { type: "tool_use", id: "t_done", name: "Task", input: { description: "já voltou" }, at: 7 },
+      { type: "tool_result", id: "t_done", toolResult: { lines: 1 }, at: 8 },
+      { type: "user_question", id: "q_1_1", questions: QUESTIONS, at: 10 },
+    ]);
+    await writeInflightMarker(CARD, { startedAt: 5, attempts: 0 });
+    await resumeInterruptedTurns(deps());
+    const note = (await readHistory(CARD)).at(-1) as { lostBackground?: string[] };
+    expect(note.lostBackground).toEqual(["subagente: auditar o estoque"]);
+  });
+
+  it("openQuestionIds — pura: aberta desde o início do turno, sem resultado", () => {
+    expect(openQuestionIds([
+      { type: "user_question", id: "q_old", at: 1 },
+      { type: "user_question", id: "q_a", at: 10 },
+      { type: "user_question", id: "q_b", at: 11 },
+      { type: "question_result", id: "q_a", at: 12 },
+      { type: "user_question", id: "q_sem_hora" },
+    ], 5)).toEqual(["q_b"]);
+  });
+
+  it("o histórico ilegível não trava a retomada: na dúvida, retoma como sempre", async () => {
+    await writeInflightMarker(CARD, { startedAt: 5, attempts: 0 });
+    const summary = await resumeInterruptedTurns(deps({ awaitingAnswer: async () => { throw new Error("EBUSY"); } }));
+    expect(summary.resumed).toEqual([CARD]);
+  });
+
+  it("depois da nota, o clique no cartão chega ao modelo como a resposta da órfã — com o segundo plano que morreu", async () => {
+    await historyWith([{ type: "user_question", id: "q_1_1", questions: QUESTIONS, at: 10 }]);
+    await writeInflightMarker(CARD, { startedAt: 5, attempts: 0, background: { tasks: ["suíte do back"], since: Date.now(), idle: false } });
+    await resumeInterruptedTurns(deps());
+    const session = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
+    const socket = Object.assign(new EventEmitter(), { readyState: 1, send: () => undefined, close: () => undefined });
+    attachSocket(session, socket as never, { kind: "user", name: "cesar" });
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "question_answer", id: "q_1_1", answers: [{ selected: ["Faixa de capacidade"] }] })));
+    await vi.waitFor(() => {
+      const frames = spawned[0]!.stdin.written.map((w) => JSON.parse(w) as { type: string; text?: string });
+      const answer = frames.find((f) => f.type === "user")?.text ?? "";
+      expect(answer).toContain("Faixa de capacidade");
+      expect(answer).toContain("- suíte do back");
+    });
   });
 });
 
@@ -552,6 +678,15 @@ describe("resumeAfterDriverCrash — o driver caiu, o back não", () => {
     expect(spawned.length).toBe(0);
     expect(await readHistory(CARD)).toEqual([]);
     expect(await readInflightMarker(CARD)).toBeNull();
+  });
+
+  it("queda com o agente esperando resposta: o cartão fica aberto, e a nota fala de queda", async () => {
+    await historyWith([{ type: "user_question", id: "q_1_1", questions: QUESTIONS, at: 10 }]);
+    const marker = { startedAt: 5, attempts: 0 };
+    await writeInflightMarker(CARD, marker);
+    expect(await resumeAfterDriverCrash(CARD, marker, crashDeps())).toBe("noted");
+    expect(spawned).toHaveLength(0);
+    expect((await readHistory(CARD)).map((e) => (e as { text?: string }).text).at(-1)).toBe(CRASH_TEXTS.awaitingAnswer);
   });
 
   it("queda que NÃO retoma: a bolinha vai a aguardando (o manager a segurou em trabalhando)", async () => {
