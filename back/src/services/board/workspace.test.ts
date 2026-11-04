@@ -1578,15 +1578,36 @@ describe("image upload into the card", () => {
     expect(script).toContain(`base64 -w0 '/work/.uploads/${card.id}/1790375878344-shot.png'`);
   });
 
-  it("serves ONLY names this server writes, and only image types — nothing else reaches a shell", async () => {
+  it("documentos também voltam: PDF e texto abrem no navegador, o resto vira download", () => {
+    expect(ws.uploadContentType("1793817741668-circular-do-ponto-multiverso-.pdf")).toBe("application/pdf");
+    expect(ws.uploadContentType("1790375878344-notes.txt")).toBe("text/plain; charset=utf-8");
+    expect(ws.uploadContentType("1790375878344-planilha.csv")).toBe("text/plain; charset=utf-8");
+    // Scriptable or unknown types are served as bytes to save, never as a page on our origin.
+    for (const download of ["1790375878344-x.svg", "1790375878344-x.html", "1790375878344-contrato.docx"]) {
+      expect(ws.uploadContentType(download)).toBe("application/octet-stream");
+      expect(ws.uploadServedInline(ws.uploadContentType(download) as string)).toBe(false);
+    }
+    expect(ws.uploadServedInline("application/pdf")).toBe(true);
+    expect(ws.uploadServedInline("image/png")).toBe(true);
+  });
+
+  it("reads a PDF back with its type", async () => {
+    const { card } = await seed();
+    runScript.mockResolvedValue({ stdout: Buffer.from("%PDF-1.7").toString("base64"), stderr: "" });
+    const { contentType } = await ws.readCardUpload(card.id, "1793817742302-contrato.pdf");
+    expect(contentType).toBe("application/pdf");
+    expect(scriptAt(0)).toContain(`test -f '/work/.uploads/${card.id}/1793817742302-contrato.pdf'`);
+  });
+
+  it("serves ONLY names this server writes — nothing else reaches a shell", async () => {
     const { card } = await seed();
     for (const bad of [
       "../../etc/passwd", // traversal
-      "1790375878344-notes.txt", // not an image
       "1790375878344-x.png; rm -rf /", // injection
       "shot.png", // no upload stamp
       ".oauth-token", // a dotfile
-      "1790375878344-x.svg", // scriptable, deliberately not served
+      "1790375878344-noext", // no extension: not a name the upload route writes
+      "1790375878344-X.PDF", // upper case: the sanitizer never writes it
     ]) {
       expect(ws.uploadContentType(bad)).toBeNull();
       await expect(ws.readCardUpload(card.id, bad)).rejects.toThrow(/upload not found/);

@@ -241,6 +241,25 @@ describe("card lifecycle routes", () => {
     expect(readCardUpload).toHaveBeenCalledWith(id, "1790375878344-shot.png");
   });
 
+  it("serves a PDF inline and an unknown type as a download, both pinned by nosniff", async () => {
+    const id = await makeCard();
+    readCardUpload.mockResolvedValueOnce({ body: Buffer.from("%PDF"), contentType: "application/pdf" });
+    const pdf = await app.inject({
+      method: "GET", url: `/api/cards/${id}/uploads/1793817742302-contrato.pdf`, headers: { cookie },
+    });
+    expect(pdf.statusCode).toBe(200);
+    expect(pdf.headers["content-type"]).toBe("application/pdf");
+    expect(pdf.headers["content-disposition"]).toBe('inline; filename="1793817742302-contrato.pdf"');
+    expect(pdf.headers["x-content-type-options"]).toBe("nosniff");
+
+    readCardUpload.mockResolvedValueOnce({ body: Buffer.from("<svg/>"), contentType: "application/octet-stream" });
+    const svg = await app.inject({
+      method: "GET", url: `/api/cards/${id}/uploads/1793817742302-x.svg`, headers: { cookie },
+    });
+    expect(svg.headers["content-disposition"]).toBe('attachment; filename="1793817742302-x.svg"');
+    expect(svg.headers["x-content-type-options"]).toBe("nosniff");
+  });
+
   it("404s an upload that is not there — the chat falls back to printing the path", async () => {
     const id = await makeCard();
     readCardUpload.mockRejectedValueOnce(new Error("upload not found"));
