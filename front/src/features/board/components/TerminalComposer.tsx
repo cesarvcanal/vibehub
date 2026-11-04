@@ -233,20 +233,28 @@ function SlashMenu({
   );
 }
 
-/** Image files in a paste or drop payload, ignoring everything else. */
-export function imageFiles(data: DataTransfer | null | undefined): File[] {
+/**
+ * The files in a paste or drop payload — any type, not only images: a PDF the DP sends for the agent
+ * to read goes up the same way a screenshot does (Claude reads PDFs from the path). Text pasted from
+ * the clipboard is not a file and stays out, so a plain paste still lands in the field.
+ */
+export function attachableFiles(data: DataTransfer | null | undefined): File[] {
   if (!data) return [];
   const out: File[] = [];
   for (const item of Array.from(data.items ?? [])) {
-    if (item.kind === "file" && item.type.startsWith("image/")) {
+    if (item.kind === "file") {
       const f = item.getAsFile();
       if (f) out.push(f);
     }
   }
-  if (out.length === 0) {
-    for (const f of Array.from(data.files ?? [])) if (f.type.startsWith("image/")) out.push(f);
-  }
+  if (out.length === 0) out.push(...Array.from(data.files ?? []));
   return out;
+}
+
+/** Only an image gets a local thumbnail: a blob URL of a PDF in an `<img>` is a broken icon. PURE. */
+function localPreviewUrl(file: File): string | undefined {
+  if (!file.type.startsWith("image/") || typeof URL.createObjectURL !== "function") return undefined;
+  return URL.createObjectURL(file);
 }
 
 /** Appends a fragment to what is already typed, separated by a single space. PURE. */
@@ -469,7 +477,7 @@ export async function restoreInterruptedUploads(cardId: string): Promise<Attachm
     const file = rec.blob instanceof File ? rec.blob : new File([rec.blob], rec.name, { type: rec.blob.type });
     stashed.set(rec.id, { cardId, failed: rec.failed, seen: false });
     chipFiles.set(rec.id, file);
-    const previewUrl = typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : undefined;
+    const previewUrl = localPreviewUrl(file);
     fresh.push({ id: rec.id, name: rec.name, previewUrl, status: rec.failed ? "error" : "uploading" });
   }
   if (fresh.length > 0) {
@@ -1058,7 +1066,7 @@ export function TerminalComposer({
     if (!onUploadImage) return;
     for (const file of files) {
       const id = nextAttachmentId();
-      const previewUrl = typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : undefined;
+      const previewUrl = localPreviewUrl(file);
       const name = file.name || t("composer.pastedImage");
       chipFiles.set(id, file);
       setAttachments((prev) => [...prev, { id, name, previewUrl, status: "uploading" }]);
@@ -1456,7 +1464,7 @@ export function TerminalComposer({
             }
           }}
           onPaste={(e) => {
-            const files = imageFiles(e.clipboardData);
+            const files = attachableFiles(e.clipboardData);
             if (files.length === 0) return; // plain text: the textarea's own paste
             e.preventDefault();
             upload(files);
@@ -1464,7 +1472,7 @@ export function TerminalComposer({
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => {
             e.preventDefault();
-            upload(imageFiles(e.dataTransfer));
+            upload(attachableFiles(e.dataTransfer));
           }}
           placeholder={placeholder ?? t("composer.placeholder")}
           rows={isMobile ? 2 : 3}
@@ -1625,9 +1633,8 @@ function StopButton({ interrupt, mobile }: { interrupt: ComposerInterrupt; mobil
  * the photo roll, and "a file" opens the system picker; on a desktop they are all just a file
  * dialog, which is exactly right.
  *
- * The uploads are wired to the image pipeline, so a non-image chosen through "a file" comes back as
- * a failed chip rather than an attachment — the honest outcome until the runner accepts arbitrary
- * files.
+ * "A file" takes any type (a PDF, a spreadsheet): it goes to the runner like a picture and its path
+ * goes into the message; only the chip changes — the file's name instead of a thumbnail.
  *
  * The gallery and the file picker take MORE THAN ONE at a time. Attaching three screenshots used to
  * mean opening the photo roll three times, because the picker closes on the first tap; `multiple`

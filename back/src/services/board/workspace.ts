@@ -990,7 +990,7 @@ export async function uploadCardImage(
   const b64 = String(base64 ?? "").replace(/\s+/g, ""); // tolerate line breaks from encoders
   if (!B64_RE.test(b64)) throw new Error("invalid base64 content");
   const bytes = Math.floor((b64.length * 3) / 4) - (b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0);
-  if (bytes > UPLOAD_MAX_BYTES) throw new Error("image is larger than 10 MB");
+  if (bytes > UPLOAD_MAX_BYTES) throw new Error("file is larger than 10 MB");
 
   const name = sanitizeUploadName(originalName);
   const destDir = `/work/.uploads/${card.id}`;
