@@ -183,6 +183,22 @@ describe("ChatView", () => {
     expect(image.className).not.toMatch(/\bh-16\b/);
   });
 
+  it("shows an attached PDF as a chip with its name, linking to the file", async () => {
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    const card = "0a78f497-8bfd-4f0a-821b-2dbee5c8d9f9";
+    const pdf = `/work/.uploads/${card}/1793817742302-contrato-de-trabalho.pdf`;
+    ws.deliver({ id: "u1", kind: "user", at: 1, text: `analisa ${pdf}` });
+
+    const chip = await screen.findByTestId("chat-file");
+    expect(chip).toHaveAttribute("href", `/api/cards/${card}/uploads/1793817742302-contrato-de-trabalho.pdf`);
+    expect(chip).toHaveAttribute("target", "_blank");
+    expect(chip).toHaveTextContent("contrato-de-trabalho.pdf");
+    expect(screen.getByTestId("chat-user")).not.toHaveTextContent("/work/.uploads");
+    expect(screen.queryByTestId("chat-image")).not.toBeInTheDocument();
+  });
+
   it("falls back to the path when the image cannot be fetched — never a broken-image icon", async () => {
     renderChat();
     const ws = await socket();

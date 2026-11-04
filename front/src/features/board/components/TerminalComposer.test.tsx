@@ -237,6 +237,10 @@ describe("attachmentThumbUrl", () => {
   it("nothing to show for a path that is not an upload, or no path at all", () => {
     expect(attachmentThumbUrl({ id: "a", name: "x", path: "/etc/passwd", status: "ready" })).toBeUndefined();
     expect(attachmentThumbUrl({ id: "a", name: "x", status: "error" })).toBeUndefined();
+    // A PDF has no thumbnail: an <img> on it would be a broken icon, the chip keeps the name.
+    expect(
+      attachmentThumbUrl({ id: "a", name: "c.pdf", path: `/work/.uploads/${CARD}/1793365269495-c.pdf`, status: "ready" }),
+    ).toBeUndefined();
   });
 });
 

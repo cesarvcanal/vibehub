@@ -23,7 +23,8 @@
  * ONLY these two shapes ever become an href, which is the whole sanitisation story: `javascript:`,
  * `data:` or any other scheme simply never matches, so it can never leave as anything but text.
  *
- * A third shape, `UPLOAD_IMAGE_SOURCE` below, is not a link at all: it becomes the picture itself.
+ * A third shape, `UPLOAD_SOURCE` below, is an attachment: an image becomes the picture itself, any
+ * other file (a PDF, a spreadsheet) becomes a chip that opens it.
  */
 const PREVIEW_SOURCE = "\\/preview\\/\\d{1,5}\\/(?:[^\\s<>()]*[^\\s<>().,;:!?])?";
 
@@ -39,8 +40,11 @@ const PREVIEW_SOURCE = "\\/preview\\/\\d{1,5}\\/(?:[^\\s<>()]*[^\\s<>().,;:!?])?
  * `[a-z0-9._-]`, so nothing looser than what the upload route itself can produce ever matches.
  */
 const UPLOAD_ID_SOURCE = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
-const UPLOAD_FILE_SOURCE = "\\d+-[a-z0-9._-]+\\.(?:png|jpe?g|gif|webp|bmp|avif)";
-const UPLOAD_IMAGE_SOURCE = `\\/work\\/\\.uploads\\/${UPLOAD_ID_SOURCE}\\/${UPLOAD_FILE_SOURCE}`;
+const UPLOAD_FILE_SOURCE = "\\d+-[a-z0-9._-]+\\.[a-z0-9]+";
+const UPLOAD_SOURCE = `\\/work\\/\\.uploads\\/${UPLOAD_ID_SOURCE}\\/${UPLOAD_FILE_SOURCE}`;
+
+/** The extensions the chat shows as a picture; every other upload is a file chip. */
+const UPLOAD_IMAGE_RE = /\.(?:png|jpe?g|gif|webp|bmp|avif)$/;
 
 const LINK_SOURCE = `https?:\\/\\/[^\\s<>()]+[^\\s<>().,;:!?]|${PREVIEW_SOURCE}`;
 
@@ -49,16 +53,30 @@ export type MdToken =
   | { type: "code"; value: string }
   | { type: "strong"; value: string }
   | { type: "link"; value: string }
-  | { type: "image"; value: string; cardId: string; file: string };
+  | { type: "image"; value: string; cardId: string; file: string }
+  | { type: "file"; value: string; cardId: string; file: string };
 
 /** `/work/.uploads/<cardId>/<file>` split into its two halves, or `null`. PURE, TOTAL. */
 export function parseUploadPath(path: string): { cardId: string; file: string } | null {
-  const m = new RegExp(`^${UPLOAD_IMAGE_SOURCE}$`).exec(String(path ?? ""));
+  const m = new RegExp(`^${UPLOAD_SOURCE}$`).exec(String(path ?? ""));
   if (!m) return null;
   const parts = m[0].split("/");
   const file = parts.pop() as string;
   const cardId = parts.pop() as string;
   return { cardId, file };
+}
+
+/** Whether an upload name is one the chat shows as a picture. PURE, TOTAL. */
+export function isUploadImage(file: string): boolean {
+  return UPLOAD_IMAGE_RE.test(String(file ?? ""));
+}
+
+/**
+ * The name the person attached, without the `<stamp>-` the upload route prefixes it with: the
+ * chip reads `contrato.pdf`, not `1793817742302-contrato.pdf`. PURE, TOTAL.
+ */
+export function uploadDisplayName(file: string): string {
+  return String(file ?? "").replace(/^\d+-/, "");
 }
 
 /**
@@ -70,21 +88,22 @@ export function uploadImageUrl(cardId: string, file: string): string {
 }
 
 /**
- * Bare linkification for PLAIN text (a user's own message): text, link and uploaded-image tokens,
+ * Bare linkification for PLAIN text (a user's own message): text, link and uploaded-file tokens,
  * nothing of markdown is interpreted — a user's asterisks are their asterisks. PURE, TOTAL.
  */
 export function linkifyTokens(text: string): MdToken[] {
   const tokens: MdToken[] = [];
-  // The image shape comes FIRST in the alternation: an upload path is not a link, and whichever
+  // The upload shape comes FIRST in the alternation: an upload path is not a link, and whichever
   // branch matches at the earliest index wins in JS regex alternation only when it is listed first.
-  const pattern = new RegExp(`(${UPLOAD_IMAGE_SOURCE}|${LINK_SOURCE})`, "g");
+  const pattern = new RegExp(`(${UPLOAD_SOURCE}|${LINK_SOURCE})`, "g");
   let last = 0;
   const source = String(text ?? "");
   for (let m = pattern.exec(source); m; m = pattern.exec(source)) {
     if (m.index > last) tokens.push({ type: "text", value: source.slice(last, m.index) });
     const value = m[1] as string;
     const upload = parseUploadPath(value);
-    tokens.push(upload ? { type: "image", value, ...upload } : { type: "link", value });
+    if (!upload) tokens.push({ type: "link", value });
+    else tokens.push({ type: isUploadImage(upload.file) ? "image" : "file", value, ...upload });
     last = m.index + m[0].length;
   }
   if (last < source.length) tokens.push({ type: "text", value: source.slice(last) });

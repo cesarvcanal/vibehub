@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { linkifyTokens, parseUploadPath, safeUrl, uploadImageUrl } from "@/features/board/lib/markdown";
+import {
+  isUploadImage,
+  linkifyTokens,
+  parseUploadPath,
+  safeUrl,
+  uploadDisplayName,
+  uploadImageUrl,
+} from "@/features/board/lib/markdown";
 
 describe("linkifyTokens", () => {
   it("turns http(s) urls into link tokens and leaves everything else literal", () => {
@@ -106,9 +113,23 @@ describe("uploaded images", () => {
     }
   });
 
-  it("leaves anything that is not an upload of an image as plain text", () => {
+  it("um documento anexado vira um token de arquivo, não texto cru", () => {
+    const pdf = `/work/.uploads/${CARD}/1793817742302-contrato-de-trabalho-priscilla-lilian.pdf`;
+    const txt = `/work/.uploads/${CARD}/1790375878344-notes.txt`;
+    expect(linkifyTokens(`analisa ${pdf} ${txt}`)).toEqual([
+      { type: "text", value: "analisa " },
+      { type: "file", value: pdf, cardId: CARD, file: "1793817742302-contrato-de-trabalho-priscilla-lilian.pdf" },
+      { type: "text", value: " " },
+      { type: "file", value: txt, cardId: CARD, file: "1790375878344-notes.txt" },
+    ]);
+    expect(isUploadImage("1790375878344-shot.png")).toBe(true);
+    expect(isUploadImage("1790375878344-x.pdf")).toBe(false);
+    expect(uploadDisplayName("1793817742302-contrato.pdf")).toBe("contrato.pdf");
+  });
+
+  it("leaves anything that is not an upload as plain text", () => {
     for (const notAnImage of [
-      `/work/.uploads/${CARD}/1790375878344-notes.txt`, // not an image
+      `/work/.uploads/${CARD}/1790375878344-noext`, // no extension: not a name the server writes
       `/work/.uploads/${CARD}/../../etc/passwd.png`, // not a name this server writes
       "/work/.uploads/nope/1790375878344-image.png", // not a card id
       `/etc/${CARD}/1790375878344-image.png`, // not the uploads directory

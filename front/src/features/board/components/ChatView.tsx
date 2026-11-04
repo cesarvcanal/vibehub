@@ -2,7 +2,7 @@ import * as React from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
-import { Bell, Bot, Check, ChevronRight, Copy, Loader2, MessageSquare, TerminalSquare, UserRound, Wrench } from "lucide-react";
+import { Bell, Bot, Check, ChevronRight, Copy, FileText, Loader2, MessageSquare, TerminalSquare, UserRound, Wrench } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
@@ -30,7 +30,14 @@ import {
   unechoedPending,
   userEventIdsSaying,
 } from "@/features/board/lib/chat";
-import { linkifyTokens, remarkEscapeHtml, remarkPreviewPaths, safeUrl, uploadImageUrl } from "@/features/board/lib/markdown";
+import {
+  linkifyTokens,
+  remarkEscapeHtml,
+  remarkPreviewPaths,
+  safeUrl,
+  uploadDisplayName,
+  uploadImageUrl,
+} from "@/features/board/lib/markdown";
 import { UltraText } from "@/features/board/components/UltraText";
 import { copyText } from "@/features/board/lib/terminalZoom";
 import { t as translate, useT } from "@/i18n";
@@ -650,6 +657,8 @@ export function LinkifiedText({ text, compact = false }: { text: string; compact
           // Keyed by the path too: a queued row is rewritten IN PLACE (same id) when it is edited,
           // and a new image at the same index must not inherit the old one's `broken`.
           <UploadedImage key={`${i}:${token.value}`} cardId={token.cardId} file={token.file} compact={compact} />
+        ) : token.type === "file" ? (
+          <UploadedFile key={i} cardId={token.cardId} file={token.file} />
         ) : compact ? (
           // The two reserved words are painted only in the field and the bubble (see UltraText).
           <React.Fragment key={i}>{token.value}</React.Fragment>
@@ -702,6 +711,32 @@ function UploadedImage({ cardId, file, compact = false }: { cardId: string; file
           compact ? "h-16 w-auto" : "max-h-64",
         )}
       />
+    </a>
+  );
+}
+
+/**
+ * A document this composer uploaded (a PDF, a spreadsheet), shown as a chip that opens it.
+ *
+ * Same story as the image: the message carries the runner path, and seven PDFs of an admission came
+ * back as seven lines of `/work/.uploads/…/1793817742302-contrato.pdf`. The chip names the file as
+ * it was attached and opens it in a tab — the panel serves PDF and text inline, anything else as a
+ * download. A file that is gone (card deleted, runner cleaned) answers 404 in that tab; there is no
+ * cheap way to know before the click, and the name in the chip is still the truth.
+ */
+function UploadedFile({ cardId, file }: { cardId: string; file: string }) {
+  const t = useT();
+  return (
+    <a
+      href={uploadImageUrl(cardId, file)}
+      target="_blank"
+      rel="noreferrer noopener"
+      title={t("chat.openAttachedFile")}
+      data-testid="chat-file"
+      className="my-0.5 mr-1 inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/70 bg-muted/40 px-2 py-1 align-middle text-xs hover:bg-muted"
+    >
+      <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+      <span className="truncate">{uploadDisplayName(file)}</span>
     </a>
   );
 }

@@ -316,7 +316,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
   );
 
   /**
-   * The other half of the upload: the image, back.
+   * The other half of the upload: the file (image, PDF, any document), back.
    *
    * What the composer puts in the message is the RUNNER path (`/work/.uploads/<card>/<file>`),
    * because that is the only form Claude can open — the uploads live outside the card's worktree.
@@ -332,8 +332,14 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       try {
         const { body, contentType } = await workspace.readCardUpload(req.params.id, req.params.file);
+        // The file name is the upload's own (`[a-z0-9._-]`, checked by the workspace), so it goes
+        // into the header as is. `nosniff` holds the browser to the type we chose: a download never
+        // gets promoted to a page.
+        const disposition = workspace.uploadServedInline(contentType) ? "inline" : "attachment";
         return await reply
           .header("content-type", contentType)
+          .header("content-disposition", `${disposition}; filename="${req.params.file}"`)
+          .header("x-content-type-options", "nosniff")
           .header("cache-control", "private, max-age=31536000, immutable")
           .send(body);
       } catch {

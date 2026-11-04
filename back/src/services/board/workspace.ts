@@ -1015,13 +1015,18 @@ export async function uploadCardImage(
 /* ------------------------------------------------- reading an upload back out of the runner */
 
 /**
- * The image types the panel serves back, and what it calls them.
+ * What the panel serves an upload back as, by extension.
  *
  * An upload goes INTO the runner and the message carries its path — which is all Claude needs, and
  * nothing at all for the person who attached it: the bubble read `/work/.uploads/…/shot.png` and
- * there was no way to look at what had just been sent. Serving the bytes back closes that, and the
- * allowlist is what keeps it boring: only these extensions are ever answered, each with the type
- * it actually is, so nothing the browser might run can be reached through this route.
+ * there was no way to look at what had just been sent. Images were the first case; documents (a
+ * DP admission with seven PDFs, 2026-11-04) were the second — the bubble printed seven paths.
+ *
+ * This table is what keeps serving them boring: only these types open IN the browser, each with the
+ * type it actually is, none of them able to run anything in the panel's origin. Every other
+ * extension still comes back, but as `application/octet-stream` + attachment (see
+ * `uploadServedInline`): a download, never a page — an `.html` or `.svg` attached to a card cannot
+ * become a script on the panel's origin.
  */
 const UPLOAD_CONTENT_TYPES: Record<string, string> = {
   png: "image/png",
@@ -1031,7 +1036,16 @@ const UPLOAD_CONTENT_TYPES: Record<string, string> = {
   webp: "image/webp",
   bmp: "image/bmp",
   avif: "image/avif",
+  pdf: "application/pdf",
+  txt: "text/plain; charset=utf-8",
+  csv: "text/plain; charset=utf-8",
+  md: "text/plain; charset=utf-8",
+  json: "text/plain; charset=utf-8",
+  log: "text/plain; charset=utf-8",
 };
+
+/** Anything not in the table: bytes to save, never something the browser renders. */
+const UPLOAD_DOWNLOAD_TYPE = "application/octet-stream";
 
 /**
  * The name of an upload, as `uploadCardImage` writes it: `<stamp>-<sanitized>.<ext>`. The check is
@@ -1040,12 +1054,21 @@ const UPLOAD_CONTENT_TYPES: Record<string, string> = {
  */
 const UPLOAD_FILE_RE = /^\d+-[a-z0-9][a-z0-9._-]*\.[a-z0-9]+$/;
 
-/** The content type for an upload name, or `null` when it is not one we serve. PURE, TOTAL. */
+/**
+ * The content type for an upload name, or `null` when the name is not one this server writes. A
+ * well-formed name with an extension outside the table is a download (`application/octet-stream`).
+ * PURE, TOTAL.
+ */
 export function uploadContentType(file: string): string | null {
   const name = String(file ?? "");
   if (!UPLOAD_FILE_RE.test(name) || name.includes("..")) return null;
   const ext = name.slice(name.lastIndexOf(".") + 1);
-  return UPLOAD_CONTENT_TYPES[ext] ?? null;
+  return UPLOAD_CONTENT_TYPES[ext] ?? UPLOAD_DOWNLOAD_TYPE;
+}
+
+/** Whether a served type opens in the tab (`inline`) or is saved (`attachment`). PURE, TOTAL. */
+export function uploadServedInline(contentType: string): boolean {
+  return contentType !== UPLOAD_DOWNLOAD_TYPE;
 }
 
 /** Heredoc delimiter of the upload-read script — a reserved word, never derived from input. */
@@ -1069,7 +1092,7 @@ export function buildReadUploadScript(containerName: string, remotePath: string)
 }
 
 /**
- * One uploaded image, back out of the runner, for the chat to show. The card is resolved first so
+ * One upload (image or document), back out of the runner, for the chat to show or open. The card is resolved first so
  * the path can only ever be built from a card that exists — the id in the URL never reaches the
  * filesystem as text.
  */
