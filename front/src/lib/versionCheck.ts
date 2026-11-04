@@ -23,8 +23,11 @@ import { t } from "@/i18n";
 /** Sem interação por este tempo, com a aba visível, a recarga sozinha acontece. */
 export const VERSION_IDLE_MS = 90_000;
 
-/** De quanto em quanto tempo o `index.html` é sondado. */
-export const VERSION_POLL_MS = 60_000;
+/**
+ * De quanto em quanto tempo o `index.html` é sondado. Era 60s e o aviso chegava tarde demais; a
+ * sonda é um GET de um HTML pequeno, 20s não pesa em nada.
+ */
+export const VERSION_POLL_MS = 20_000;
 
 const BUNDLE_RE = /\/assets\/index-[A-Za-z0-9_-]+\.js/;
 
@@ -32,6 +35,19 @@ const BUNDLE_RE = /\/assets\/index-[A-Za-z0-9_-]+\.js/;
 export function bundleFromHtml(html: string): string | null {
   const m = html.match(BUNDLE_RE);
   return m ? m[0] : null;
+}
+
+/**
+ * O bundle que ESTA aba está rodando, lido do próprio `<script>` que o carregou. É ele a referência,
+ * não a primeira sondagem: uma aba que já abriu velha (cache, aba restaurada, deploy entre o load e
+ * a sondagem) tomaria a versão nova por "a sua" e nunca avisaria. Null no dev server.
+ */
+function runningBundle(): string | null {
+  for (const el of document.querySelectorAll<HTMLScriptElement>("script[src]")) {
+    const found = bundleFromHtml(el.getAttribute("src") ?? "");
+    if (found) return found;
+  }
+  return null;
 }
 
 async function currentBundle(): Promise<string | null> {
@@ -87,7 +103,7 @@ export function useVersionCheck(opts: { intervalMs?: number; reload?: () => void
 
   React.useEffect(() => {
     let alive = true;
-    let loaded: string | null = null;
+    let loaded: string | null = runningBundle();
     let pending = false;
     let lastInteraction = Date.now();
     let idleTimer: number | undefined;
@@ -111,7 +127,11 @@ export function useVersionCheck(opts: { intervalMs?: number; reload?: () => void
       lastInteraction = Date.now();
       armIdle();
     };
-    const onVisibility = (): void => maybeReload();
+    // Voltar para a aba confere na hora: é quando a pessoa vai olhar a tela.
+    const onVisibility = (): void => {
+      maybeReload();
+      if (!document.hidden) void check();
+    };
     const onRelease = (): void => {
       maybeReload();
       armIdle();
@@ -121,7 +141,7 @@ export function useVersionCheck(opts: { intervalMs?: number; reload?: () => void
       const cur = await currentBundle();
       if (!alive || !cur) return;
       if (loaded === null) {
-        loaded = cur; // a primeira leitura boa é a versão que esta aba está rodando
+        loaded = cur; // sem o script na página (dev server): a primeira leitura boa é a referência
         return;
       }
       if (cur === loaded) return;
