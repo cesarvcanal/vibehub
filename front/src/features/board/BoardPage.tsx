@@ -433,7 +433,10 @@ export function BoardPage() {
         data-testid={cardOpen ? "card-layout" : "board-layout"}
         className={cn(
           "flex min-w-0 flex-col gap-3 lg:flex-row",
-          cardOpen ? "min-h-[420px] lg:items-stretch" : "lg:items-start",
+          // `overflow-hidden`: the card view is a fixed screen. Anything a pane spills (panes are
+          // absolutely positioned, so they never clip on their own) would otherwise grow the shell's
+          // scroll area and let the whole card view be scrolled up into empty background.
+          cardOpen ? "min-h-[420px] overflow-hidden lg:items-stretch" : "lg:items-start",
         )}
         style={cardOpen ? { height: cardViewHeight(undefined, isMobile) } : undefined}
       >
