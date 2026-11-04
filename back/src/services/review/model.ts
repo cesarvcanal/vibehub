@@ -225,3 +225,14 @@ export function phaseAfterReviewerRound(review: Review): { phase: ReviewPhase; i
   if (pendingQuestions(review.findings).length > 0) return { phase: "reviewing" };
   return { phase: "ready" };
 }
+
+/**
+ * O merge sai SOZINHO quando não sobrou nada para uma pessoa olhar: revisão em `ready` e nenhum achado
+ * em pé, de nenhuma severidade — bloqueante, dúvida ou sugestão aberta/contestada. Sugestão não segura
+ * o `ready`, mas segura o merge automático: ela é justamente o que alguém pode querer aplicar antes.
+ * Sem isso o PR ficava "pronto pra merge" esperando alguém voltar ao card só para dizer "pode mergear".
+ * PURE.
+ */
+export function autoMergeEligible(review: Review): boolean {
+  return review.phase === "ready" && !!review.reviewedSha && !review.findings.some(isOpen);
+}

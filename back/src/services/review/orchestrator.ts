@@ -14,7 +14,7 @@ import type { MessageOrigin } from "../chat/provenance.js";
 import { eventsAfter, onCardEvent, recordMessage, type CardEvent, type Severity } from "../events/cardEvents.js";
 import { logger } from "../../utils/logger.js";
 import {
-  MAX_ROUNDS, applyAuthorResponses, applyReviewerVerdicts, blockingOpen, normalizeSubmittedFindings, pendingQuestions,
+  MAX_ROUNDS, applyAuthorResponses, applyReviewerVerdicts, autoMergeEligible, blockingOpen, normalizeSubmittedFindings, pendingQuestions,
   phaseAfterReviewerRound,
   type AuthorAnswerStatus, type Finding, type FindingStatus, type Review, type ReviewEvent, type ReviewEventItem, type ReviewPhase,
   type SubmittedFinding,
@@ -23,7 +23,7 @@ import {
   activeReviewForPr, getReview, insertReview, listReviewsForCards, mutateReview, reviewByReviewerCard,
 } from "./store.js";
 import {
-  actionableForAuthor, approvePendingText, authorFixPrompt, authorQuestionNoticeText, authorSuggestionsPrompt, headMovedPrefix,
+  actionableForAuthor, approvePendingText, autoMergeFailedText, authorFixPrompt, authorQuestionNoticeText, authorSuggestionsPrompt, headMovedPrefix,
   impasseText, nudgePrefix, oneLine, phaseNoticeText, questionNoticeText, reviewerApprovePrompt, reviewerDeltaPrompt,
   reviewerRoundPrompt,
 } from "./prompts.js";
@@ -326,10 +326,38 @@ async function dispatch(r: Review): Promise<Review> {
   } else if (r.phase === "ready") {
     await announcePhase(r);
     await relayReview(r, "reviewer", reviewerApprovePrompt(r), { approve: true });
+    await autoMerge(r);
   } else if (r.phase === "impasse") {
     await announcePhase(r);
   }
   return (await getReview(r.id)) ?? r;
+}
+
+/**
+ * O merge automático de uma revisão pronta sem nada em pé ({@link autoMergeEligible}): o MESMO caminho
+ * do botão (`mergeReviewedPr`, em nome do responsável pelo merge, preso ao commit revisado, com gate).
+ * Recusa "não está pronta"/"merge já saindo" é corrida com uma pessoa e fica calada; qualquer outra
+ * (CI vermelho, conflito, merger sem conexão GitHub) vira nota na revisão e aviso nos dois cards — o
+ * botão continua ali. Nunca lança. Import dinâmico: merge.ts importa este arquivo.
+ */
+async function autoMerge(r: Review): Promise<void> {
+  const now = (await getReview(r.id)) ?? r;
+  if (!autoMergeEligible(now)) return;
+  try {
+    const { mergeReviewedPr } = await import("./merge.js");
+    const outcome = await mergeReviewedPr(now.id, now.mergerUserId);
+    logger.info(
+      { audit: true, action: "review.automerge", review: now.id, merged: outcome.kind === "merged", reason: outcome.kind === "refused" ? outcome.reason : "merged" },
+      "PR review ready with nothing pending: auto-merge",
+    );
+    if (outcome.kind === "merged" || outcome.reason === "not_ready" || outcome.reason === "merging" || outcome.reason === "head_moved") return;
+    const after = await mutateReview(now.id, (x) => {
+      note(x, "system", `Merge automático não saiu (${outcome.error}); o merge fica pelo botão.`);
+    });
+    await notifyBoth(after, `review:${now.id}:automerge_failed:${now.round}`, autoMergeFailedText(after, outcome.error), "warning");
+  } catch (err) {
+    logger.warn({ review: r.id, detail: (err as Error).message }, "PR review auto-merge failed");
+  }
 }
 
 /** A linha de sistema que conta o resultado da rodada do revisor. */
@@ -341,7 +369,9 @@ function outcomeNote(r: Review): string {
     case "fixing":
       return `${blocking} bloqueante(s) em aberto: a lista vai ao autor.${questions}`;
     case "ready":
-      return "Sem bloqueante em aberto: pronto para o merge humano.";
+      return autoMergeEligible(r)
+        ? "Sem nada em aberto: pronto, e o merge sai sozinho."
+        : "Sem bloqueante em aberto: pronto para o merge humano.";
     case "impasse":
       return `Impasse: ${impasseText(r.impasseReason)}.`;
     default:
@@ -1228,7 +1258,11 @@ export function reviewToolAnswer(r: Review, side: Side, askedRound: number): Rec
   else if (r.phase === "reviewing") {
     next = r.lastSubmitRound === r.round ? "esperando o revisor humano decidir as dúvidas" : "a vez é do revisor";
   } else if (r.phase === "fixing") next = "a vez é do autor";
-  else if (r.phase === "ready") next = "pronto para o merge humano; ninguém mergeia daqui";
+  else if (r.phase === "ready") {
+    next = autoMergeEligible(r)
+      ? "pronto e sem nada em pé: o painel mergeia sozinho; nenhuma IA mergeia daqui"
+      : "pronto para o merge humano (há sugestão em aberto); ninguém mergeia daqui";
+  }
   else if (r.phase === "impasse") next = `impasse: ${impasseText(r.impasseReason)}`;
   else next = `revisão encerrada (${r.phase})`;
   return {

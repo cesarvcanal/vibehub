@@ -49,6 +49,10 @@ const resume = vi.fn(async (cardId: string) => {
   return await reopen?.(cardId);
 });
 const deliverSpy = vi.fn(async () => ({ merged: true }));
+type MergeOutcome = import("./merge.js").ReviewMergeOutcome;
+const REFUSED_NOT_READY: MergeOutcome = { kind: "refused", status: 409, reason: "not_ready", error: "não pronta" };
+let mergeAnswer: MergeOutcome = REFUSED_NOT_READY;
+const mergeSpy = vi.fn(async (_reviewId: string, _userId: string): Promise<MergeOutcome> => mergeAnswer);
 /** O PR no GitHub, como `readPrState` o leria: o head (null = leitura que falhou) e o estado. */
 let prHeadNow: string | null = null;
 let prStateNow: "OPEN" | "MERGED" | "CLOSED" = "OPEN";
@@ -87,6 +91,10 @@ async function load() {
     readPrState: prHead,
     afterPrMerged: afterMerged,
     setPrPeople: prPeople,
+  }));
+  vi.doMock("./merge.js", async () => ({
+    ...(await vi.importActual<typeof import("./merge.js")>("./merge.js")),
+    mergeReviewedPr: mergeSpy,
   }));
   vi.doMock("../../auth/users.js", async () => ({
     ...(await vi.importActual<typeof import("../../auth/users.js")>("../../auth/users.js")),
@@ -133,6 +141,8 @@ beforeEach(async () => {
   actor.mockClear();
   resume.mockClear();
   deliverSpy.mockClear();
+  mergeSpy.mockClear();
+  mergeAnswer = REFUSED_NOT_READY;
   prHead.mockClear();
   prHeadNow = null;
   prStateNow = "OPEN";
@@ -142,7 +152,7 @@ beforeEach(async () => {
 afterEach(async () => {
   for (const m of [
     "../maestro/maestro.js", "../board/actor.js", "../board/workspace.js", "../maestro/deliver.js",
-    "../../auth/users.js", "../../auth/userGit.js",
+    "../../auth/users.js", "../../auth/userGit.js", "./merge.js",
   ]) vi.doUnmock(m);
   // Fechar uma revisão manda o card do revisor pra done, e o "concluído" dele é gravado numa
   // microtask: uma escrita dessas pode chegar junto do rm.
@@ -625,6 +635,46 @@ describe("rodada do revisor", () => {
     expect(text).toContain("gh pr review 7 --approve");
     expect(text).toMatch(/NÃO mergeie|NUNCA mergeie/);
     expect(deliverSpy).not.toHaveBeenCalled();
+  });
+
+  it("pronta com sugestão em aberto: o merge segue humano", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [SUGGESTION], headSha: SHA1, summary: "s" });
+    expect(mergeSpy).not.toHaveBeenCalled();
+  });
+
+  it("pronta sem nada em aberto: o merge sai sozinho, em nome do responsável, depois do pedido de Approve", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
+    expect(after.phase).toBe("ready");
+    expect(mergeSpy).toHaveBeenCalledTimes(1);
+    expect(mergeSpy).toHaveBeenCalledWith(review.id, "u-merger");
+    // o Approve foi pedido antes do merge
+    expect(send.mock.invocationCallOrder[0]!).toBeLessThan(mergeSpy.mock.invocationCallOrder[0]!);
+  });
+
+  it("merge automático recusado (CI vermelho) vira nota e aviso, e a revisão fica pronta pro botão", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    mergeAnswer = { kind: "refused", status: 409, reason: "gate", error: "checks vermelhos" };
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
+    expect(after.phase).toBe("ready");
+    expect(after.log.some((e) => e.who === "system" && /Merge automático não saiu \(checks vermelhos\)/.test(e.text))).toBe(true);
+    const notices = (await messagesOn(o, author.id)).map((e) => e.text);
+    expect(notices).toContainEqual(expect.stringMatching(/PR #7: o merge automático não saiu \(checks vermelhos\)/));
+  });
+
+  it("dúvida retirada pelo humano deixa a revisão limpa: o merge sai sozinho também", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    const waiting = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [QUESTION], headSha: SHA1, summary: "d" });
+    expect(waiting.phase).toBe("reviewing");
+    expect(mergeSpy).not.toHaveBeenCalled();
+    const after = await o.orch.decideQuestion(review.id, waiting.findings[0]!.id, "drop", "revisor");
+    expect(after.phase).toBe("ready");
+    expect(mergeSpy).toHaveBeenCalledWith(review.id, "u-merger");
   });
 
   it("mudança pra ready grava aviso no card do autor", async () => {
