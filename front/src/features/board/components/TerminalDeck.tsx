@@ -172,7 +172,9 @@ function Pane({
       data-active={active ? "true" : "false"}
       aria-hidden={!active || undefined}
       className={cn(
-        "absolute inset-0 flex min-h-0 min-w-0 flex-col",
+        // `overflow-hidden`: an absolute box does not clip what overflows it, so a pane taller inside
+        // than its slot (even an invisible one parked behind the active card) would scroll the page.
+        "absolute inset-0 flex min-h-0 min-w-0 flex-col overflow-hidden",
         !active && "invisible pointer-events-none",
       )}
     >

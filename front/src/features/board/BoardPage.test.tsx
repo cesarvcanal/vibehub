@@ -707,6 +707,22 @@ describe("BoardPage — one frame, two middles", () => {
     expect(sidebar()).toBeInTheDocument();
   });
 
+  it("clips the card view so nothing in a pane can scroll the whole page", async () => {
+    // A pane is `absolute inset-0`: whatever overflows it (the open card, or a card parked
+    // invisible in the deck) is not clipped by it, so it grows the shell's scroll area and the whole
+    // card view could be scrolled up into empty background. The card view is a fixed screen.
+    const user = userEvent.setup();
+    renderApp(<BoardPage />, { route: "/?project=p1&card=c2" });
+    await waitFor(() => expect(activeTerminal()).toHaveTextContent("c2"));
+    await user.click(await within(sidebar()).findByRole("link", { name: "waiting on review" }));
+    await waitFor(() => expect(activeTerminal()).toHaveTextContent("c3"));
+
+    expect(screen.getByTestId("card-layout")).toHaveClass("overflow-hidden");
+    for (const pane of document.querySelectorAll("[data-card-pane]")) {
+      expect(pane).toHaveClass("overflow-hidden");
+    }
+  });
+
   it("shows the project's board when the URL names only a project", async () => {
     renderApp(<BoardPage />, { route: "/?project=p2" });
     expect(await screen.findByRole("region", { name: "Waiting" })).toBeInTheDocument();

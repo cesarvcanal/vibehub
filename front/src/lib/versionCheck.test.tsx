@@ -8,6 +8,7 @@ import {
   resetReloadHoldsForTesting,
   useVersionCheck,
   VERSION_IDLE_MS,
+  VERSION_POLL_MS,
 } from "@/lib/versionCheck";
 
 vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }) }));
@@ -57,6 +58,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  document.head.querySelectorAll("script[data-test-bundle]").forEach((el) => el.remove());
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
@@ -194,6 +196,51 @@ describe("useVersionCheck", () => {
     await tick(1_000);
     await tick(1_000);
     expect(toast).not.toHaveBeenCalled();
+  });
+
+  /**
+   * O AVISO QUE DEMORAVA (ou não vinha). A referência era a PRIMEIRA sondagem, não o script que a
+   * aba carregou: uma aba que já abriu velha (cache, aba restaurada, deploy entre o load e a
+   * sondagem) tomava a versão nova por "a sua" e nunca avisava. E a sondagem era de minuto em
+   * minuto, sem olhar de novo quando a pessoa volta para a aba.
+   */
+  it("a aba já roda um bundle velho: avisa na PRIMEIRA sondagem, sem esperar outra", async () => {
+    const script = document.createElement("script");
+    script.type = "module";
+    script.src = "/assets/index-OLD.js";
+    script.dataset.testBundle = "";
+    document.head.appendChild(script);
+    served = html("NEW");
+    render(<Probe intervalMs={60_000} />);
+    await flush();
+    expect(toast).toHaveBeenCalledTimes(1);
+  });
+
+  it("a aba roda o bundle que o servidor serve: nenhum aviso", async () => {
+    const script = document.createElement("script");
+    script.type = "module";
+    script.src = "/assets/index-AAA.js";
+    script.dataset.testBundle = "";
+    document.head.appendChild(script);
+    render(<Probe />);
+    await flush();
+    await tick(3_000);
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it("voltar para a aba confere na hora, sem esperar o próximo ciclo", async () => {
+    hidden = true;
+    render(<Probe intervalMs={600_000} />);
+    await flush();
+    served = html("BBB");
+    hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flush();
+    expect(toast).toHaveBeenCalledTimes(1);
+  });
+
+  it("a sondagem padrão pega um deploy em até 20s", () => {
+    expect(VERSION_POLL_MS).toBeLessThanOrEqual(20_000);
   });
 
   it("desmontado, para de sondar", async () => {
