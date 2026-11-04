@@ -466,6 +466,7 @@ export const en: Record<string, string> = {
   "chat.resend": "Resend",
   "chat.discard": "Discard",
   "chat.attachedImage": "Attached image",
+  "chat.openAttachedFile": "Open attached file",
   "chat.copy": "Copy",
   "chat.copied": "Copied",
   "chat.copyError": "Could not copy",

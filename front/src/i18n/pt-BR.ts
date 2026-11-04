@@ -467,6 +467,7 @@ export const ptBR: Record<string, string> = {
   "chat.resend": "Reenviar",
   "chat.discard": "Descartar",
   "chat.attachedImage": "Imagem anexada",
+  "chat.openAttachedFile": "Abrir arquivo anexado",
   "chat.copy": "Copiar",
   "chat.copied": "Copiado",
   "chat.copyError": "Não deu pra copiar",

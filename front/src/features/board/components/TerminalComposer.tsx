@@ -20,7 +20,7 @@ import {
   applySlashPick, filterSlashCommands, slashQuery, type SlashCommandInfo,
 } from "@/features/board/lib/slashMenu";
 import { UltraFieldOverlay } from "@/features/board/components/UltraText";
-import { parseUploadPath, uploadImageUrl } from "@/features/board/lib/markdown";
+import { isUploadImage, parseUploadPath, uploadImageUrl } from "@/features/board/lib/markdown";
 import {
   deletePendingUpload,
   listPendingUploads,
@@ -570,7 +570,7 @@ export function loadDraft(cardId: string): { text: string; attachments: Attachme
 export function attachmentThumbUrl(a: Attachment): string | undefined {
   if (a.previewUrl) return a.previewUrl;
   const upload = a.path ? parseUploadPath(a.path) : null;
-  return upload ? uploadImageUrl(upload.cardId, upload.file) : undefined;
+  return upload && isUploadImage(upload.file) ? uploadImageUrl(upload.cardId, upload.file) : undefined;
 }
 
 /** Tests only: forget every draft, in both layers. */
