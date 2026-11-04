@@ -15,7 +15,7 @@ import {
   composeMessage,
   flushDrafts,
   formatElapsed,
-  imageFiles,
+  attachableFiles,
   isEmptyDraft,
   levelFromTimeDomain,
   loadDraft,
@@ -108,13 +108,19 @@ describe("textAfterSend", () => {
   });
 });
 
-describe("imageFiles", () => {
-  it("keeps only images from a transfer payload", () => {
+describe("attachableFiles", () => {
+  it("keeps every file of a transfer payload — a PDF too, not only images", () => {
     const png = new File(["x"], "a.png", { type: "image/png" });
-    const txt = new File(["x"], "a.txt", { type: "text/plain" });
-    const data = { items: [], files: [png, txt] } as unknown as DataTransfer;
-    expect(imageFiles(data)).toEqual([png]);
-    expect(imageFiles(null)).toEqual([]);
+    const pdf = new File(["x"], "contrato.pdf", { type: "application/pdf" });
+    const data = { items: [], files: [png, pdf] } as unknown as DataTransfer;
+    expect(attachableFiles(data)).toEqual([png, pdf]);
+    expect(attachableFiles(null)).toEqual([]);
+  });
+
+  it("leaves pasted text out, so a plain paste still lands in the field", () => {
+    const text = { kind: "string", type: "text/plain", getAsFile: () => null };
+    const data = { items: [text], files: [] } as unknown as DataTransfer;
+    expect(attachableFiles(data)).toEqual([]);
   });
 });
 
@@ -269,6 +275,21 @@ describe("TerminalComposer — an F5 does not lose a pasted image", () => {
     const chip = await screen.findByTestId("composer-attachment");
     expect(chip.dataset.status).toBe("ready");
     expect(chip.querySelector("img")).toHaveAttribute("src", `/api/cards/${CARD}/uploads/1793365577802-image.png`);
+  });
+
+  it("a PDF goes up like a picture: the chip shows its name and the path goes into the message", async () => {
+    const pdfPath = `/work/.uploads/${CARD}/1793365577802-contrato.pdf`;
+    const onSend = vi.fn();
+    const onUploadImage = vi.fn(async () => pdfPath);
+    renderComposer(<TerminalComposer onSend={onSend} cardId={CARD} onUploadImage={onUploadImage} />);
+    paste(new File(["%PDF-1.4"], "contrato.pdf", { type: "application/pdf" }));
+    await waitFor(() => expect(screen.getByTestId("composer-attachment").dataset.status).toBe("ready"));
+    expect(onUploadImage).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("composer-attachment-thumb")).not.toBeInTheDocument();
+    expect(screen.getByTestId("composer-attachment")).toHaveTextContent("contrato.pdf");
+    await userEvent.type(screen.getByRole("textbox"), "analisa{Enter}");
+    await waitFor(() => expect(onSend).toHaveBeenCalled());
+    expect(String(onSend.mock.calls[0][0])).toContain(pdfPath);
   });
 
   it("the runner failing to give the image back shows the file's name, not a broken icon", async () => {

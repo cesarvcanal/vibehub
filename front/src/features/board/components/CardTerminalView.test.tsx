@@ -396,7 +396,7 @@ describe("CardTerminalView — which chat the Chat tab mounts (the INSTALL flag,
     const path = await sdkChatUpload.current?.(new File(["x"], "a.png", { type: "image/png" }));
     expect(path).toBeNull(); // the chip turns into an error with Retry
     expect(mockPost.mock.calls.filter(([url]) => url === "/cards/c1/upload")).toHaveLength(2); // tried again once
-    expect(toast.error).toHaveBeenCalledWith("The connection dropped while sending the image. Tap Retry on it.");
+    expect(toast.error).toHaveBeenCalledWith("The connection dropped while sending the file. Tap Retry on it.");
   });
 
   it("with the install flag on, ANY card opens the Chat tab in the NATIVE chat — no per-card opt-in", async () => {

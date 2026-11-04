@@ -600,7 +600,6 @@ export function CardTerminalView({
    */
   const uploadImageWith = React.useCallback(
     async (file: File, progress: boolean): Promise<string | null> => {
-      if (!file.type.startsWith("image/")) return null;
       if (file.size > UPLOAD_MAX_BYTES) {
         toast.error(translate("cardView.imageTooBig"));
         return null;
