@@ -23,7 +23,7 @@ const killCardSession = vi.fn(async () => undefined);
 /** The card purge a deleted PROJECT cascades into (its own tests live next to the purge). */
 const purgeRemovedCards = vi.fn(async () => []);
 /** The PR-review store read the board listings use — the real one, counted (one read per request). */
-const listReviewsForCards = vi.fn();
+const listReviewsFollowedBy = vi.fn();
 
 /** The registry the running app is using (same module instance — boot() resets the graph first). */
 async function registry(): Promise<typeof import("../services/board/registry.js")> {
@@ -56,8 +56,8 @@ async function boot(): Promise<FastifyInstance> {
   });
   vi.doMock("../services/review/store.js", async () => {
     const actual = await vi.importActual<typeof import("../services/review/store.js")>("../services/review/store.js");
-    listReviewsForCards.mockImplementation(actual.listReviewsForCards);
-    return { ...actual, listReviewsForCards };
+    listReviewsFollowedBy.mockImplementation(actual.listReviewsFollowedBy);
+    return { ...actual, listReviewsFollowedBy };
   });
   const { buildServer } = await import("../index.js");
   const server = await buildServer();
@@ -304,7 +304,7 @@ describe("revisão de PR no board", () => {
     await review(authorId, projectId, { id: "r-new", phase: "fixing", createdAt: 2_000, round: 2 });
 
     for (const url of ["/api/cards", `/api/projects/${projectId}/cards`]) {
-      listReviewsForCards.mockClear();
+      listReviewsFollowedBy.mockClear();
       const cards = (await app.inject({ method: "GET", url, headers: { cookie } })).json().cards as
         { id: string; review?: unknown }[];
       expect(cards.map((c) => c.id).sort()).toEqual([authorId, otherId].sort());
@@ -313,7 +313,7 @@ describe("revisão de PR no board", () => {
       expect(cards.find((c) => c.id === authorId)!.review).toEqual({ id: "r-new", prNumber: 7, phase: "fixing", round: 2 });
       expect(cards.find((c) => c.id === otherId)!.review).toBeUndefined();
       // uma leitura do store por pedido, não uma por card
-      expect(listReviewsForCards).toHaveBeenCalledTimes(1);
+      expect(listReviewsFollowedBy).toHaveBeenCalledTimes(1);
     }
     // o card do revisor segue alcançável pelo id (o painel abre a sessão dele)
     expect((await app.inject({ method: "GET", url: `/api/cards/${reviewerCard.id}`, headers: { cookie } })).statusCode).toBe(200);
@@ -368,7 +368,7 @@ describe("revisão de PR no board", () => {
     await review(authorId, projectId, { id: "r-new", phase: "fixing", createdAt: 2_000, round: 2 });
     await review(authorId, projectId, { id: "r-cancel", phase: "cancelled", createdAt: 3_000 });
 
-    listReviewsForCards.mockClear();
+    listReviewsFollowedBy.mockClear();
     const one = (await app.inject({ method: "GET", url: `/api/cards/${authorId}`, headers: { cookie } })).json().card;
     // a mesma regra da lista: a mais recente que não foi cancelada, só o resumo
     expect(one.review).toEqual({ id: "r-new", prNumber: 7, phase: "fixing", round: 2 });
