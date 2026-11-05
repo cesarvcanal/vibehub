@@ -762,7 +762,11 @@ function Footer({
         </p>
       ) : null}
       {notice ? (
-        <p role={notice.tone === "error" ? "alert" : "status"} className={cn("rounded-md border px-2.5 py-1.5 text-xs", NOTICE_TONE[notice.tone])}>
+        // A refused merge can carry the whole gate log: capped and scrolled, or it pushes over the tabs.
+        <p
+          role={notice.tone === "error" ? "alert" : "status"}
+          className={cn("max-h-28 overflow-y-auto whitespace-pre-wrap break-words rounded-md border px-2.5 py-1.5 text-xs", NOTICE_TONE[notice.tone])}
+        >
           {notice.text}
         </p>
       ) : null}

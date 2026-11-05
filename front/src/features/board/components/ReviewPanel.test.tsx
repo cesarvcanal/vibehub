@@ -712,6 +712,17 @@ describe("ReviewPanel — merge", () => {
     await waitFor(() => expect(screen.queryByText(notice)).toBeNull());
   });
 
+  it("recusa com o log inteiro do gate fica numa caixa de altura limitada, sem cobrir as abas", async () => {
+    const log = Array.from({ length: 200 }, (_, i) => `[TESTE] Índice ${i} recusado pelo Mongo: interrupted at shutdown`).join("\n");
+    post.mockRejectedValueOnce(failure(409, { error: `gate vermelho\n${log}`, reason: "gate" }));
+    open("mer", review({ phase: "ready" }));
+    await loaded();
+    await userEvent.click(screen.getByRole("button", { name: "Mergear na dev" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("gate vermelho");
+    expect(alert).toHaveClass("max-h-28", "overflow-y-auto", "whitespace-pre-wrap", "break-words");
+  });
+
   it("a recusa do merge some quando a fase da revisão muda", async () => {
     post.mockRejectedValueOnce(failure(409, { error: "gate vermelho: 2 testes falharam", reason: "gate" }));
     open("mer", review({ phase: "ready" }));
