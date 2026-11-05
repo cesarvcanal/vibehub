@@ -87,6 +87,54 @@ describe("RequestReviewDialog", () => {
     expect(startButton()).toBeEnabled();
   });
 
+  describe("PR anexado (de outra pessoa)", () => {
+    const ATTACHED: CardPr = { ...PR, number: 599, branch: "feat/aviso", attached: true, author: "Albert-GH" };
+    const WITH_GH: Person[] = [
+      { id: "u1", username: "mussa", canReview: true, githubLogin: "mussa-gh" },
+      { id: "u2", username: "albert", canReview: true, githubLogin: "albert-gh" },
+      { id: "u3", username: "kim", canReview: false, githubLogin: "kim-gh" },
+    ];
+    const openAttached = (pr: CardPr = ATTACHED) =>
+      renderApp(<RequestReviewDialog cardId="c1" pr={pr} actorUserId="u1" open onClose={vi.fn()} />);
+
+    it("o autor vem de quem abriu o PR no GitHub (pelo login), não do ator do card", async () => {
+      serve(WITH_GH);
+      openAttached();
+      await loaded();
+      await waitFor(() => expect(select(/^Quem corrige/).value).toBe("u2"));
+      expect(select(/^Revisor/).value).toBe("u1");
+      expect(screen.getByTestId("review-opened-by")).toHaveTextContent("Aberto por Albert-GH no GitHub");
+    });
+
+    it("quem não tem conta Claude não pode ser o autor de um PR anexado", async () => {
+      serve(WITH_GH);
+      openAttached();
+      await loaded();
+      const kim = within(select(/^Quem corrige/)).getByRole("option", { name: /kim/ }) as HTMLOptionElement;
+      expect(kim.disabled).toBe(true);
+      expect(kim.textContent).toMatch(/sem conta Claude/);
+    });
+
+    it("login que ninguém no vibehub tem: autor vazio e o aviso diz pra escolher", async () => {
+      serve(WITH_GH);
+      openAttached({ ...ATTACHED, author: "estranho" });
+      await loaded();
+      expect(select(/^Quem corrige/).value).toBe("");
+      expect(screen.getByTestId("review-opened-by")).toHaveTextContent("Ninguém no vibehub tem a conexão GitHub estranho");
+      expect(startButton()).toBeDisabled();
+    });
+
+    it("autor_sem_conta vem traduzido", async () => {
+      serve(WITH_GH);
+      post.mockImplementation(async () => { throw apiReject(400, "autor_sem_conta: o autor não tem uma conta Claude própria"); });
+      openAttached();
+      await loaded();
+      await waitFor(() => expect(select(/^Quem corrige/).value).toBe("u2"));
+      await userEvent.click(startButton());
+      expect(await screen.findByRole("alert")).toHaveTextContent("Quem corrige não tem uma conta Claude própria");
+    });
+  });
+
   it("names the PR it is about and says nobody merges without you", async () => {
     serve();
     open({ actorUserId: "u2" });

@@ -302,4 +302,100 @@ describe("PrReviewBlocks", () => {
     const author = (await screen.findByLabelText(/^Quem corrige/)) as HTMLSelectElement;
     await vi.waitFor(() => expect(author.value).toBe("u2"));
   });
+
+  describe("vários PRs no card", () => {
+    const attached = (n: number, openedAt = n): CardPr => ({
+      number: n, url: `https://github.com/acme/erp/pull/${n}`, base: "dev", branch: `feat/pr-${n}`, openedAt, attached: true, author: "albert-gh",
+    });
+    /** What `GET /cards/c1/review?pr=N` answers, per PR. */
+    let perPr: Record<number, ReviewResponse> = {};
+    const prGets: number[] = [];
+
+    beforeEach(() => {
+      perPr = {};
+      prGets.length = 0;
+      localStorage.removeItem("vibehub.prList.folded.c1");
+      const base = get.getMockImplementation()!;
+      get.mockImplementation(async (url: string) => {
+        const m = /^\/cards\/c1\/review\?pr=(\d+)$/.exec(url);
+        if (m) {
+          prGets.push(Number(m[1]));
+          return perPr[Number(m[1])] ?? { review: null };
+        }
+        return await base(url);
+      });
+    });
+
+    it("um PR só: o bloco de sempre, sem cabeçalho", () => {
+      renderApp(<PrReviewBlocks card={{ id: "c1", prs: [PR] }} onOpenPanel={() => {}} />);
+      expect(screen.queryByTestId("pr-list")).toBeNull();
+      expect(screen.getByTestId("pr-review-block")).toBeInTheDocument();
+    });
+
+    it("dois ou mais: cabeçalho com a contagem, lista que rola e recolhe, lembrada no aparelho", async () => {
+      const card = {
+        id: "c1", prs: [attached(598), attached(599), attached(600)],
+        review: reviewOf({ id: "r9", prNumber: 600, phase: "ready" }),
+        reviews: [reviewOf({ id: "r9", prNumber: 600, phase: "ready" }), reviewOf({ id: "r8", prNumber: 599, phase: "fixing" })],
+      };
+      const view = renderApp(<PrReviewBlocks card={card} onOpenPanel={() => {}} />);
+      const header = screen.getByRole("button", { name: /3 PRs/ });
+      expect(header).toHaveTextContent("1 pronto · 1 em correção · 1 sem revisão");
+      expect(header).toHaveAttribute("aria-expanded", "true");
+      // a lista tem teto e rola por dentro: o chat não sai da tela
+      expect(screen.getByTestId("pr-list-rows").className).toMatch(/max-h-\[8\.5rem\].*overflow-y-auto/);
+      expect(screen.getAllByTestId("pr-review-block")).toHaveLength(3);
+
+      await userEvent.click(header);
+      expect(screen.queryByTestId("pr-list-rows")).toBeNull();
+      expect(header).toHaveAttribute("aria-expanded", "false");
+      view.unmount();
+      renderApp(<PrReviewBlocks card={card} onOpenPanel={() => {}} />);
+      expect(screen.queryByTestId("pr-list-rows")).toBeNull();
+      await userEvent.click(screen.getByRole("button", { name: /3 PRs/ }));
+      expect(screen.getAllByTestId("pr-review-block")).toHaveLength(3);
+    });
+
+    it("cada linha lê a revisão DELA e abre o painel do PR dela; a sem revisão não lê nada", async () => {
+      perPr = {
+        600: { review: fullReview({ id: "r9", prNumber: 600, phase: "reviewing", round: 2 }), working: { author: false, reviewer: true } },
+        599: { review: fullReview({ id: "r8", prNumber: 599, phase: "ready", round: 1 }), working: { author: false, reviewer: false } },
+      };
+      const onOpenPanel = vi.fn();
+      renderApp(
+        <PrReviewBlocks
+          card={{
+            id: "c1", prs: [attached(598), attached(599), attached(600)],
+            review: reviewOf({ id: "r9", prNumber: 600, phase: "reviewing", round: 1 }),
+            reviews: [reviewOf({ id: "r9", prNumber: 600, phase: "reviewing", round: 1 }), reviewOf({ id: "r8", prNumber: 599, phase: "fixing", round: 1 })],
+          }}
+          onOpenPanel={onOpenPanel}
+        />,
+      );
+      const line = (n: number) => screen.getAllByTestId("pr-review-block").find((b) => b.getAttribute("data-pr") === String(n))!;
+      expect(await within(line(600)).findByText("rodada 2/3")).toBeInTheDocument();
+      expect(await within(line(599)).findByText("pronto pra merge")).toBeInTheDocument();
+      expect(within(line(598)).getByText("sem revisão")).toBeInTheDocument();
+      expect(within(line(598)).getByRole("button", { name: "Pedir revisão" })).toBeInTheDocument();
+      // quem abriu cada PR no GitHub aparece na linha
+      expect(within(line(598)).getByText("albert-gh")).toBeInTheDocument();
+      expect([...new Set(prGets)].sort()).toEqual([599, 600]);
+      // a leitura de sempre, do card, não é feita
+      expect(reviewGets).toBe(0);
+
+      await userEvent.click(within(line(599)).getByRole("button", { name: /PR #599/ }));
+      expect(onOpenPanel).toHaveBeenCalledWith(599);
+    });
+
+    it("a leitura de um PR dizendo mergeado tira só a linha dele", async () => {
+      perPr = { 599: { review: fullReview({ id: "r8", prNumber: 599, phase: "merged" }) } };
+      renderApp(
+        <PrReviewBlocks
+          card={{ id: "c1", prs: [attached(598), attached(599)], review: reviewOf({ id: "r8", prNumber: 599, phase: "ready" }) }}
+          onOpenPanel={() => {}}
+        />,
+      );
+      await waitFor(() => expect(screen.getAllByTestId("pr-review-block").map((b) => b.getAttribute("data-pr"))).toEqual(["598"]));
+    });
+  });
 });

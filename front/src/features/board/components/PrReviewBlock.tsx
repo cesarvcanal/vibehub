@@ -1,11 +1,12 @@
 import * as React from "react";
-import { ExternalLink } from "lucide-react";
+import { ChevronDown, ExternalLink } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Card, CardPr, Finding, ReviewSummary } from "@/api/types";
 import { RequestReviewDialog } from "@/features/board/components/RequestReviewDialog";
-import { reviewPill, visiblePrs } from "@/features/board/lib/review";
+import { prStripCounts, readsPerPr, reviewPill, summaryForPr, visiblePrs } from "@/features/board/lib/review";
 import { useLiveReview } from "@/features/board/lib/useLiveReview";
+import { cn } from "@/lib/utils";
 import { useT } from "@/i18n";
 
 /**
@@ -31,9 +32,13 @@ export interface PrReviewBlockProps {
   actorUserId?: string;
   /** Show the review's panel. */
   onOpenPanel: () => void;
+  /** `row`: a line inside the card's PR list ({@link PrList}), which draws the frame around them all. */
+  variant?: "block" | "row";
 }
 
-export function PrReviewBlock({ cardId, pr, review: summary, authorWorking = false, actorUserId, onOpenPanel }: PrReviewBlockProps) {
+export function PrReviewBlock({
+  cardId, pr, review: summary, authorWorking = false, actorUserId, onOpenPanel, variant = "block",
+}: PrReviewBlockProps) {
   const t = useT();
   const [asking, setAsking] = React.useState(false);
   // The server never puts a cancelled review on a card; a stale cache must not turn one into a panel to open.
@@ -43,9 +48,18 @@ export function PrReviewBlock({ cardId, pr, review: summary, authorWorking = fal
   const line = (
     <>
       <span className="shrink-0 font-semibold text-amber-400">PR #{pr.number}</span>
-      <span className="min-w-0 truncate text-muted-foreground">
+      <span className="min-w-0 truncate text-muted-foreground" title={pr.title}>
         {pr.branch} → {pr.base}
       </span>
+      {pr.author ? (
+        // Who opened it on GitHub (an attached PR): the person the review's fixes will be asked of.
+        <span
+          className="shrink-0 rounded-full bg-foreground/5 px-1.5 text-[11px] text-foreground/80"
+          title={t("review.openedBy", { login: pr.author })}
+        >
+          {pr.author}
+        </span>
+      ) : null}
       <Badge tone={pill.tone} className="ml-auto shrink-0 transition-colors duration-500">
         {t(pill.key, pill.vars)}
       </Badge>
@@ -56,7 +70,12 @@ export function PrReviewBlock({ cardId, pr, review: summary, authorWorking = fal
     <div
       data-testid="pr-review-block"
       data-pr={pr.number}
-      className="mt-1.5 flex shrink-0 items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs"
+      className={cn(
+        "flex shrink-0 items-center gap-2 px-2.5 py-1 text-xs",
+        variant === "row"
+          ? "border-b border-amber-500/15 last:border-b-0"
+          : "mt-1.5 rounded-md border border-amber-500/40 bg-amber-500/10",
+      )}
     >
       {review ? (
         <button
@@ -96,6 +115,98 @@ export function PrReviewBlock({ cardId, pr, review: summary, authorWorking = fal
   );
 }
 
+/** Where the card's PR list is remembered as folded, per card and per device. */
+const foldedKey = (cardId: string) => `vibehub.prList.folded.${cardId}`;
+
+function readFolded(cardId: string): boolean {
+  try {
+    return localStorage.getItem(foldedKey(cardId)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The frame of a card's PRs. One PR is the block it always was. Two or more get a header — "4 PRs ·
+ * 1 pronto · 2 sem revisão" — that folds the list (remembered per card on this device), and a list
+ * with a ceiling of ~4 lines that scrolls on its own: a card with many PRs never pushes the chat off
+ * the screen.
+ */
+function PrList({ cardId, count, summaries, children }: {
+  cardId: string;
+  count: number;
+  /** The review of each listed PR, as the board has it (undefined = not reviewed). */
+  summaries: (ReviewSummary | undefined)[];
+  children: React.ReactNode;
+}) {
+  const t = useT();
+  const [folded, setFolded] = React.useState(() => readFolded(cardId));
+  React.useEffect(() => setFolded(readFolded(cardId)), [cardId]);
+  if (count < 2) return <>{children}</>;
+  const toggle = () => {
+    const next = !folded;
+    setFolded(next);
+    try {
+      if (next) localStorage.setItem(foldedKey(cardId), "1");
+      else localStorage.removeItem(foldedKey(cardId));
+    } catch {
+      // A browser that refuses storage still folds; it just forgets on reload.
+    }
+  };
+  const counts = prStripCounts(summaries).map((c) => t(`review.list.${c.kind}`, { n: c.n })).join(" · ");
+  return (
+    <div data-testid="pr-list" className="mt-1.5 shrink-0 rounded-md border border-amber-500/40 bg-amber-500/10 text-xs">
+      <button
+        type="button"
+        aria-expanded={!folded}
+        title={t(folded ? "review.list.unfold" : "review.list.fold")}
+        onClick={toggle}
+        className="flex w-full min-w-0 items-center gap-2 rounded-md px-2.5 py-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      >
+        <span className="shrink-0 font-semibold text-amber-400">{t("review.list.count", { n: count })}</span>
+        <span className="min-w-0 truncate text-muted-foreground">{counts}</span>
+        <ChevronDown aria-hidden className={cn("ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform", folded && "-rotate-90")} />
+      </button>
+      {folded ? null : (
+        <div data-testid="pr-list-rows" className="max-h-[8.5rem] overflow-y-auto border-t border-amber-500/20">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One line of a card that reads its PRs one review each ({@link readsPerPr}): its OWN live read
+ * (`?pr=N`), with the same rules the single read has — the board's summary stands in until the read
+ * lands, a cancelled review is no review, a closed one loses to a newer summary, and a merged one takes
+ * the line away.
+ */
+function LivePrLine({ card, pr, row, onOpenPanel }: {
+  card: Pick<Card, "id" | "review" | "reviews" | "actorUserId">;
+  pr: CardPr;
+  row: boolean;
+  onOpenPanel: (prNumber?: number) => void;
+}) {
+  const summary = summaryForPr(card, pr.number);
+  const reviewed = summary !== undefined && summary.phase !== "cancelled";
+  const live = useLiveReview(card.id, { enabled: reviewed, summaryId: summary?.id, pr: pr.number });
+  const current = live.review && live.review.phase !== "cancelled" && !live.outdated ? live.review : summary;
+  if (current?.phase === "merged") return null;
+  const authorWorking = live.query.data && !live.outdated ? live.working.author : summary?.authorWorking === true;
+  return (
+    <PrReviewBlock
+      cardId={card.id}
+      pr={pr}
+      review={current?.prNumber === pr.number ? current : undefined}
+      authorWorking={authorWorking}
+      actorUserId={card.actorUserId}
+      onOpenPanel={() => onOpenPanel(pr.number)}
+      variant={row ? "row" : "block"}
+    />
+  );
+}
+
 /**
  * The blocks of a card: one per PR it has open, newest first (see {@link visiblePrs}). Renders
  * nothing for a card with no open PR — which is most of them; a merged one leaves.
@@ -103,12 +214,38 @@ export function PrReviewBlock({ cardId, pr, review: summary, authorWorking = fal
  * A card with a review reads it LIVE ({@link useLiveReview}, the same query the panel reads): the
  * board's summary only moves when the sidebar polls, and the block must follow the review as it goes
  * (the AIs' rounds, a push after `ready`, the author's AI working on it) without anyone reopening the
- * card. The board's summary stands in until the first read lands.
+ * card. The board's summary stands in until the first read lands. A card that attached PRs, or has
+ * more than one reviewed, reads one review PER LINE instead ({@link readsPerPr}), and each line opens
+ * the panel of its own PR. Two or more PRs sit in one list that folds and scrolls ({@link PrList}).
  */
 export function PrReviewBlocks({
   card,
   onOpenPanel,
 }: {
+  card: Pick<Card, "id" | "prs" | "review" | "reviews" | "actorUserId">;
+  /** Show the review's panel — of THIS PR, on a card that reads one review per PR. */
+  onOpenPanel: (prNumber?: number) => void;
+}) {
+  return readsPerPr(card) ? <PerPrBlocks card={card} onOpenPanel={onOpenPanel} /> : <CardReviewBlocks card={card} onOpenPanel={onOpenPanel} />;
+}
+
+/** A card with several PRs under review, or attached ones: every line reads its own review. */
+function PerPrBlocks({ card, onOpenPanel }: {
+  card: Pick<Card, "id" | "prs" | "review" | "reviews" | "actorUserId">;
+  onOpenPanel: (prNumber?: number) => void;
+}) {
+  const prs = visiblePrs(card);
+  if (prs.length === 0) return null;
+  const row = prs.length > 1;
+  return (
+    <PrList cardId={card.id} count={prs.length} summaries={prs.map((pr) => summaryForPr(card, pr.number))}>
+      {prs.map((pr) => <LivePrLine key={pr.number} card={card} pr={pr} row={row} onOpenPanel={onOpenPanel} />)}
+    </PrList>
+  );
+}
+
+/** The card's own PRs with (at most) one reviewed: the single live read of the card's review, as always. */
+function CardReviewBlocks({ card, onOpenPanel }: {
   card: Pick<Card, "id" | "prs" | "review" | "actorUserId">;
   onOpenPanel: () => void;
 }) {
@@ -123,8 +260,9 @@ export function PrReviewBlocks({
   if (prs.length === 0) return null;
   // The server's rule either way: the live read's `working`, or the board summary's until it lands.
   const authorWorking = live.query.data && !live.outdated ? live.working.author : card.review?.authorWorking === true;
+  const row = prs.length > 1;
   return (
-    <>
+    <PrList cardId={card.id} count={prs.length} summaries={prs.map((pr) => (current?.prNumber === pr.number ? current : undefined))}>
       {prs.map((pr) => (
         <PrReviewBlock
           key={pr.number}
@@ -135,8 +273,9 @@ export function PrReviewBlocks({
           authorWorking={authorWorking}
           actorUserId={card.actorUserId}
           onOpenPanel={onOpenPanel}
+          variant={row ? "row" : "block"}
         />
       ))}
-    </>
+    </PrList>
   );
 }

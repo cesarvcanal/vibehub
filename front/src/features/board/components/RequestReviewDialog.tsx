@@ -33,6 +33,10 @@ import { t as translate, useT } from "@/i18n";
  *
  * The reviewer can never be the author: the dialog says so and holds the button, and the server
  * refuses it anyway.
+ *
+ * An ATTACHED PR (somebody else's, `vibehub_attach_prs`) is fixed in a card of its own, on the
+ * author's Claude account: the author comes pre-picked as the person whose own GitHub connection has
+ * the login that opened the PR, and nobody without a Claude account can be the author.
  */
 
 interface Roles {
@@ -47,15 +51,27 @@ interface Roles {
  * are the author, or have no Claude account to review on), and the card's actor fixes. A person who
  * is not among the card's people cannot hold a role, so they never come out as a default. PURE.
  */
-function suggestedRoles(people: Person[], meId: string | undefined, actorUserId: string | undefined): Roles {
+function suggestedRoles(people: Person[], meId: string | undefined, actorUserId: string | undefined, pr: CardPr): Roles {
   const me = people.find((p) => p.id === meId);
-  const author = actorUserId && people.some((p) => p.id === actorUserId) ? actorUserId : "";
+  const author = pr.attached
+    ? githubAuthor(people, pr.author)?.id ?? ""
+    : actorUserId && people.some((p) => p.id === actorUserId) ? actorUserId : "";
   return {
     reviewer: me && me.canReview && me.id !== author ? me.id : "",
     author,
     coauthor: "",
     merger: me?.id ?? "",
   };
+}
+
+/**
+ * Who opened an attached PR, among the card's people: the one whose OWN GitHub connection has that
+ * login (GitHub logins are case-insensitive) and who has a Claude account for the fixes to run on. PURE.
+ */
+function githubAuthor(people: Person[], login: string | undefined): Person | undefined {
+  if (!login) return undefined;
+  const wanted = login.toLowerCase();
+  return people.find((p) => p.canReview && p.githubLogin?.toLowerCase() === wanted);
 }
 
 export interface RequestReviewDialogProps {
@@ -84,8 +100,8 @@ export function RequestReviewDialog({ cardId, pr, actorUserId, open, onClose }: 
   const [picked, setPicked] = React.useState<Partial<Roles>>({});
   const [failure, setFailure] = React.useState<{ error: unknown } | null>(null);
   const suggested = React.useMemo(
-    () => suggestedRoles(people.data ?? [], user?.id, actorUserId),
-    [people.data, user?.id, actorUserId],
+    () => suggestedRoles(people.data ?? [], user?.id, actorUserId, pr),
+    [people.data, user?.id, actorUserId, pr],
   );
   const roles: Roles = { ...suggested, ...picked };
 
@@ -177,7 +193,28 @@ export function RequestReviewDialog({ cardId, pr, actorUserId, open, onClose }: 
                 ))}
               </>,
             )}
-            {field("author", t("review.dialog.author"), <><option value="">{t("review.dialog.pick")}</option>{choices}</>)}
+            {field(
+              "author",
+              t("review.dialog.author"),
+              <>
+                <option value="">{t("review.dialog.pick")}</option>
+                {pr.attached
+                  ? people.data.map((p) => (
+                    // The fixes of an attached PR run on the author's own Claude account.
+                    <option key={p.id} value={p.id} disabled={!p.canReview}>
+                      {p.canReview ? p.username : t("review.dialog.noAccount", { name: p.username })}
+                    </option>
+                  ))
+                  : choices}
+              </>,
+            )}
+            {pr.attached && pr.author ? (
+              <p className="-mt-1.5 text-xs text-muted-foreground" data-testid="review-opened-by">
+                {githubAuthor(people.data, pr.author)
+                  ? t("review.dialog.openedBy", { login: pr.author })
+                  : t("review.dialog.authorUnknown", { login: pr.author })}
+              </p>
+            ) : null}
             {field("coauthor", t("review.dialog.coauthor"), <><option value="">{t("review.dialog.nobody")}</option>{choices}</>)}
             {field("merger", t("review.dialog.merger"), <><option value="">{t("review.dialog.pick")}</option>{choices}</>)}
 

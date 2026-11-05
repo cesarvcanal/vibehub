@@ -34,8 +34,13 @@ export const IMPASSE_HEAD_MOVED = "push depois do pronto";
 
 /** The people who can take a role in a review of this card. */
 export const cardPeopleKey = (cardId: string) => ["card-people", cardId] as const;
-/** The card's review — the active one, or the last. The panel reads it; starting one refreshes it. */
-export const cardReviewKey = (cardId: string) => ["card-review", cardId] as const;
+/**
+ * The card's review — the active one, or the last. The panel reads it; starting one refreshes it. With
+ * `pr`, the review of THAT PR among the ones the card follows (a card with several PRs reads one per
+ * line); `["card-review", cardId]` is the prefix of both, so invalidating it refreshes them all.
+ */
+export const cardReviewKey = (cardId: string, pr?: number) =>
+  (pr === undefined ? ["card-review", cardId] : ["card-review", cardId, pr]) as readonly unknown[];
 
 export interface ReviewPill {
   /** i18n key of the label. */
@@ -100,11 +105,49 @@ export function reviewPill(
 export function visiblePrs(card: {
   prs?: CardPr[];
   review?: Pick<ReviewSummary, "prNumber" | "phase">;
+  reviews?: Pick<ReviewSummary, "prNumber" | "phase">[];
 }): CardPr[] {
-  const mergedByReview = card.review?.phase === "merged" ? card.review.prNumber : null;
+  const mergedByReview = new Set(
+    [...(card.reviews ?? []), ...(card.review ? [card.review] : [])].filter((r) => r.phase === "merged").map((r) => r.prNumber),
+  );
   return (card.prs ?? [])
-    .filter((pr) => pr.mergedAt === undefined && pr.number !== mergedByReview)
+    .filter((pr) => pr.mergedAt === undefined && !mergedByReview.has(pr.number))
     .sort((a, b) => b.openedAt - a.openedAt);
+}
+
+/**
+ * The card reads its PRs one review per line — each line its own live read (`?pr=N`) and its own
+ * panel — when it attached PRs or has more than one reviewed. Otherwise it keeps the single read of
+ * the card's review it always had. PURE.
+ */
+export function readsPerPr(card: { prs?: CardPr[]; reviews?: ReviewSummary[] }): boolean {
+  return (card.reviews?.length ?? 0) > 1 || (card.prs ?? []).some((pr) => pr.attached);
+}
+
+/** The board's summary of the review of ONE PR of the card, if it has one. PURE. */
+export function summaryForPr(
+  card: { review?: ReviewSummary; reviews?: ReviewSummary[] }, prNumber: number,
+): ReviewSummary | undefined {
+  return card.reviews?.find((r) => r.prNumber === prNumber) ?? (card.review?.prNumber === prNumber ? card.review : undefined);
+}
+
+/** What the header of a card's PR list counts, in the order it reads. */
+export type PrStripCount = "ready" | "fixing" | "reviewing" | "decision" | "none";
+
+/**
+ * The header of a card's PR list: how many PRs are where, by the same reading as each line's pill —
+ * ready to merge, being fixed, being reviewed, waiting on a person (a doubt or an impasse), and not
+ * reviewed yet. Only the counts that are not zero, in a fixed order. PURE.
+ */
+export function prStripCounts(reviews: (ReviewSummary | undefined)[]): { kind: PrStripCount; n: number }[] {
+  const n: Record<PrStripCount, number> = { ready: 0, fixing: 0, reviewing: 0, decision: 0, none: 0 };
+  for (const r of reviews) {
+    if (!r || r.phase === "cancelled" || r.phase === "merged") n.none += 1;
+    else if (r.phase === "ready") n.ready += 1;
+    else if (r.phase === "impasse" || awaitingDecision(r)) n.decision += 1;
+    else n[r.phase] += 1;
+  }
+  return (["ready", "fixing", "reviewing", "decision", "none"] as const).filter((k) => n[k] > 0).map((kind) => ({ kind, n: n[kind] }));
 }
 
 /** Roles as the dialog names them, keyed by the field the server puts in its message. */
@@ -119,7 +162,7 @@ const ROLE_FIELDS: Record<string, ReviewRole> = {
 /** The codes `POST /api/cards/:id/review` answers with — each has its own sentence in i18n. */
 const START_CODES: ReadonlySet<string> = new Set([
   "revisor_igual_autor", "sem_pr", "pr_mergeado", "revisao_ativa", "revisor_sem_conta", "revisor_sem_github", "papel_sem_work",
-  "pessoa_sem_acesso",
+  "pessoa_sem_acesso", "autor_sem_conta",
 ]);
 
 interface ApiFailure {

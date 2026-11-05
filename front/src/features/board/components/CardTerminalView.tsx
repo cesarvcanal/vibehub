@@ -41,6 +41,7 @@ import { CardOutbox } from "@/features/board/components/CardOutbox";
 import { PrReviewBlocks } from "@/features/board/components/PrReviewBlock";
 import { ReviewPanel } from "@/features/board/components/ReviewPanel";
 import { cardState, nextPosition, wantsReviewPanel, withoutReviewFlag } from "@/features/board/lib/board";
+import { readsPerPr } from "@/features/board/lib/review";
 import { CardStateIcon } from "@/features/board/components/CardStateIcon";
 import { boardTitle, useDocumentTitle } from "@/features/board/lib/documentTitle";
 import type { ConnectionState } from "@/features/board/lib/reconnect";
@@ -437,21 +438,34 @@ export function CardTerminalView({
    * block of a PR under review, or by a link carrying `?review=1` (the sidebar's PR line).
    */
   const [reviewOpen, setReviewOpen] = React.useState(false);
+  /**
+   * WHICH PR's review the panel shows, on a card that reads one per PR (`readsPerPr`): the line that
+   * was clicked. Undefined = the card's review, as on every other card.
+   */
+  const [reviewPr, setReviewPr] = React.useState<number | undefined>(undefined);
+  const openReview = React.useCallback((prNumber?: number) => {
+    setReviewPr(prNumber);
+    setReviewOpen(true);
+  }, []);
   // The link's request is read ONCE: the panel opens and the flag leaves the URL, so closing it by
   // hand sticks. Only the card the URL names answers — the deck keeps the others mounted behind.
   const [searchParams, setSearchParams] = useSearchParams();
   const reviewRequested = wantsReviewPanel(searchParams, cardId);
   React.useEffect(() => {
     if (!reviewRequested) return;
+    // The link names the card, not a PR: on a card with one review per PR, the most recent one.
+    setReviewPr(card && readsPerPr(card) ? card.review?.prNumber : undefined);
     setReviewOpen(true);
     setSearchParams((current) => withoutReviewFlag(current), { replace: true });
+    // `card` is read at that moment only: the flag is taken once, and its later polls must not re-run this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewRequested, setSearchParams]);
   /**
    * The PRs the card delivered, one line each, ALWAYS right above the composer: in the terminal that
    * is this file's own composer; in the chat the composer lives inside the chat view, which takes
    * these as its `footer`. Null for a card that never opened a PR.
    */
-  const prBlocks = card ? <PrReviewBlocks card={card} onOpenPanel={() => setReviewOpen(true)} /> : null;
+  const prBlocks = card ? <PrReviewBlocks card={card} onOpenPanel={openReview} /> : null;
   const [connection, setConnection] = React.useState<ConnectionState>("connecting");
 
   /**
@@ -1318,7 +1332,7 @@ export function CardTerminalView({
               screen to share, so on a wide display it keeps a fixed width instead of taking half. */}
           {reviewOpen ? (
             <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:w-[26rem] lg:flex-none">
-              <ReviewPanel cardId={cardId} onClose={() => setReviewOpen(false)} />
+              <ReviewPanel key={reviewPr ?? "card"} cardId={cardId} prNumber={reviewPr} onClose={() => setReviewOpen(false)} />
             </div>
           ) : null}
         </div>
