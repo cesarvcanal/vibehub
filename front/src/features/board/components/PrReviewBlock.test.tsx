@@ -107,6 +107,8 @@ describe("PrReviewBlock", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /PR #553/ }));
     expect(onOpenPanel).toHaveBeenCalledTimes(1);
+    // Nothing but "open": the click event used to ride along and crash the panel (circular JSON).
+    expect(onOpenPanel).toHaveBeenCalledWith();
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
@@ -179,6 +181,16 @@ describe("PrReviewBlocks", () => {
     live = { ...live, working: { author: true, reviewer: false } };
     await tick(10_100);
     expect(await screen.findByText("IA mexendo")).toBeInTheDocument();
+  });
+
+  it("clicar no PR revisado abre o painel sem levar o evento do clique junto (o painel quebrava em JSON circular)", async () => {
+    live = { review: fullReview({ phase: "ready", round: 1 }), working: { author: false, reviewer: false } };
+    const onOpenPanel = vi.fn();
+    renderApp(<PrReviewBlocks card={{ id: "c1", prs: [PR], review: reviewOf({ phase: "ready", round: 1 }) }} onOpenPanel={onOpenPanel} />);
+    await userEvent.click(await screen.findByRole("button", { name: /PR #553/ }));
+    expect(onOpenPanel).toHaveBeenCalledTimes(1);
+    const arg = onOpenPanel.mock.calls[0]![0] as unknown;
+    expect(arg === undefined || typeof arg === "number").toBe(true);
   });
 
   it("before the first read, a ready PR whose author's AI is working already reads IA mexendo (the board's summary)", () => {
