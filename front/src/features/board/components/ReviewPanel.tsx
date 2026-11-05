@@ -49,11 +49,16 @@ type MergeNote =
   | { kind: "head_moved"; at: Stamp | null }
   | { kind: "refused"; message: string; at: Stamp | null };
 
-export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () => void }) {
+export function ReviewPanel({ cardId, prNumber: pr, onClose }: {
+  cardId: string;
+  /** The review of THIS PR, on a card that reads one per line. Absent = the card's review. */
+  prNumber?: number;
+  onClose: () => void;
+}) {
   const t = useT();
   const qc = useQueryClient();
   const { user, isOwner } = useAuth();
-  const key = cardReviewKey(cardId);
+  const key = cardReviewKey(cardId, pr);
 
   // A merge request is open (the button reads "Mergeando…"), or its answer is unconfirmed and the
   // panel is checking whether it went through. Either way the review is re-read.
@@ -69,7 +74,7 @@ export function ReviewPanel({ cardId, onClose }: { cardId: string; onClose: () =
   /** The merge button is held: a request is open, or its result is unknown. Cancel and retry wait too. */
   const mergeBusy = mergeWait || unconfirmed;
 
-  const { query: reviewQuery, review, working, apply } = useLiveReview(cardId, { fast: mergeBusy });
+  const { query: reviewQuery, review, working, apply } = useLiveReview(cardId, { fast: mergeBusy, pr });
 
   // The review carries user ids; the roles read better as names. Same key and shape as the request dialog's.
   const people = useQuery({

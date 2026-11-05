@@ -54,6 +54,21 @@ export async function activeReviewFor(cardId: string, prNumber?: number): Promis
   return found && copy(found);
 }
 
+/** A revisão em andamento de um PR, pela URL, em qualquer card (a mais recente, se houver mais de uma). */
+export async function activeReviewForPr(prUrl: string): Promise<Review | undefined> {
+  const found = newest((await store.load()).reviews.filter((r) => r.prUrl === prUrl && !FINISHED.has(r.phase)));
+  return found && copy(found);
+}
+
+/**
+ * As revisões que um card ACOMPANHA, de qualquer fase: as dele como autor e as dos PRs que ele anexou
+ * (`hubCardId`). É o que o card mostra numa linha por PR.
+ */
+export async function listReviewsFollowedBy(cardIds: string[]): Promise<Review[]> {
+  const ids = new Set(cardIds);
+  return (await store.load()).reviews.filter((r) => ids.has(r.cardId) || (r.hubCardId !== undefined && ids.has(r.hubCardId))).map(copy);
+}
+
 /** A revisão a que um card de revisor pertence (ativa ou já encerrada: o histórico não some). */
 export async function reviewByReviewerCard(reviewerCardId: string): Promise<Review | undefined> {
   const found = newest((await store.load()).reviews.filter((r) => r.reviewerCardId === reviewerCardId));

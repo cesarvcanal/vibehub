@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { requireSession, requestUser } from "../auth/session.js";
 import { cardLevel, requireCardAccess, requireCardWork } from "../auth/access.js";
-import { creatorAccountSlug } from "../auth/userGit.js";
+import { creatorAccountSlug, getUserGit } from "../auth/userGit.js";
 import { listUsers, type PublicUser } from "../auth/users.js";
 import * as registry from "../services/board/registry.js";
 import {
@@ -9,7 +9,7 @@ import {
 } from "../services/review/orchestrator.js";
 import { mergeReviewedPr, ownGithubConnection } from "../services/review/merge.js";
 import { isBusy } from "../services/maestro/maestro.js";
-import { activeReviewFor, getReview, listReviewsForCards } from "../services/review/store.js";
+import { activeReviewFor, getReview, listReviewsFollowedBy, listReviewsForCards } from "../services/review/store.js";
 import type { Review } from "../services/review/model.js";
 
 /**
@@ -31,7 +31,7 @@ type Decision = "block" | "drop" | "keep" | "accept_risk";
 const DECISIONS: ReadonlySet<string> = new Set<Decision>(["block", "drop", "keep", "accept_risk"]);
 
 /** Os códigos que `startReview` põe na mensagem: recusa do pedido, não falha do servidor. */
-const START_REFUSALS = /^(revisor_igual_autor|sem_pr|pr_mergeado|revisao_ativa|revisor_sem_conta)\b/;
+const START_REFUSALS = /^(revisor_igual_autor|sem_pr|pr_mergeado|revisao_ativa|revisor_sem_conta|autor_sem_conta)\b/;
 
 interface StartBody {
   prNumber?: unknown;
@@ -41,7 +41,12 @@ interface StartBody {
   mergerUserId?: unknown;
 }
 
-interface Person { id: string; username: string; canReview: boolean }
+/**
+ * `canReview` = tem conta Claude própria (a sessão do revisor, e a do card de correção de um PR
+ * anexado, rodam nela). `githubLogin` = o login da conexão GitHub PRÓPRIA dela, quando tem uma: é por
+ * ele que o diálogo acha o autor de um PR anexado (quem o abriu no GitHub).
+ */
+interface Person { id: string; username: string; canReview: boolean; githubLogin?: string }
 
 /** Quem alcança o card: os owners (veem tudo) e quem tem share no card ou no projeto dele. */
 async function reachingCard(card: registry.Card): Promise<PublicUser[]> {
@@ -54,16 +59,28 @@ async function reachingCard(card: registry.Card): Promise<PublicUser[]> {
   return users.filter((u) => u.role === "owner" || shared.has(u.id));
 }
 
-/** As pessoas do card para a janela de papéis. `canReview` = tem conta Claude própria (a sessão do revisor roda nela). */
+/** As pessoas do card para a janela de papéis (ver {@link Person}). */
 async function cardPeople(card: registry.Card): Promise<Person[]> {
   return await Promise.all(
-    (await reachingCard(card)).map(async (u) => ({ id: u.id, username: u.username, canReview: !!(await creatorAccountSlug(u.id)) })),
+    (await reachingCard(card)).map(async (u) => {
+      const person: Person = { id: u.id, username: u.username, canReview: !!(await creatorAccountSlug(u.id)) };
+      const own = (await getUserGit(u.id))?.githubConnectionId;
+      const login = own ? (await registry.getGithubConnection(own))?.login : undefined;
+      if (login) person.githubLogin = login;
+      return person;
+    }),
   );
 }
 
 /** A revisão mais recente da lista (empate: a inserida depois). */
 function newest(list: Review[]): Review | undefined {
   return list.reduce<Review | undefined>((latest, r) => (!latest || r.createdAt >= latest.createdAt ? r : latest), undefined);
+}
+
+/** A revisão de um PR numa lista: a ativa, ou a última de qualquer fase. */
+function prReview(list: Review[], prNumber: number): Review | undefined {
+  const ofPr = list.filter((r) => r.prNumber === prNumber);
+  return newest(ofPr.filter((r) => r.phase !== "merged" && r.phase !== "cancelled")) ?? newest(ofPr);
 }
 
 /**
@@ -94,13 +111,19 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
-   * A revisão do card: a ativa, ou a última (de qualquer fase) — o painel mostra o histórico. Junto,
+   * A revisão do card: a ativa, ou a última (de qualquer fase) — o painel mostra o histórico. Com
+   * `?pr=N`, a daquele PR, entre as que o card acompanha (dele como autor ou de um PR que ele anexou):
+   * é o que cada linha de PR e o painel dela leem. Junto,
    * `working`: se a IA do autor e a do revisor estão trabalhando agora (ausente quando não há revisão).
    * Uma revisão aberta é conferida no GitHub em segundo plano, no máximo uma vez por minuto
    * (`syncReviewSoon`): é o que faz um merge feito direto no GitHub aparecer no painel sozinho.
    */
-  app.get<{ Params: { id: string } }>("/api/cards/:id/review", { preHandler: requireCardAccess }, async (req, reply) => {
-    const review = (await activeReviewFor(req.params.id)) ?? newest(await listReviewsForCards([req.params.id]));
+  app.get<{ Params: { id: string }; Querystring: { pr?: string } }>("/api/cards/:id/review", { preHandler: requireCardAccess }, async (req, reply) => {
+    const pr = req.query?.pr === undefined ? undefined : Number(req.query.pr);
+    if (pr !== undefined && (!Number.isInteger(pr) || pr <= 0)) return await reply.code(400).send({ error: "pr inválido" });
+    const review = pr === undefined
+      ? (await activeReviewFor(req.params.id)) ?? newest(await listReviewsForCards([req.params.id]))
+      : prReview(await listReviewsFollowedBy([req.params.id]), pr);
     if (!review) return await reply.send({ review: null });
     syncReviewSoon(review);
     return await reply.send({ review, working: await sidesWorking(review) });

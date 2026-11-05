@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import {
-  getCard, createReviewerCard, removeCard, updateCard, cardMoveEffect, isHumanActive, shareWith, getGithubConnection,
+  getCard, createCard, createReviewerCard, removeCard, updateCard, cardMoveEffect, isHumanActive, shareWith, getGithubConnection,
+  listCards, recordCardPr, markCardPrMerged, type Card, type CardPr,
 } from "../board/registry.js";
-import { resumeCard } from "../board/workspace.js";
+import { cardBranch, resumeCard } from "../board/workspace.js";
 import { recordCardActor } from "../board/actor.js";
 import { findUser } from "../../auth/users.js";
 import { cardLevel } from "../../auth/access.js";
@@ -19,7 +20,7 @@ import {
   type SubmittedFinding,
 } from "./model.js";
 import {
-  activeReviewFor, getReview, insertReview, listReviewsForCards, mutateReview, reviewByReviewerCard,
+  activeReviewForPr, getReview, insertReview, listReviewsForCards, mutateReview, reviewByReviewerCard,
 } from "./store.js";
 import {
   actionableForAuthor, approvePendingText, authorFixPrompt, authorQuestionNoticeText, authorSuggestionsPrompt, headMovedPrefix,
@@ -169,11 +170,15 @@ async function namePeopleOnGithub(r: Review): Promise<void> {
 /* ------------------------------------------------------------------ avisos */
 
 /**
- * Um aviso nos DOIS cards da revisão (autor e revisor), cada um com a sua chave: um replay não
- * duplica. Nunca lança: um aviso que não grava custa o aviso, não a revisão.
+ * Um aviso nos DOIS cards da revisão (autor e revisor) — e no card que anexou o PR, quando é outro —,
+ * cada um com a sua chave: um replay não duplica. Nunca lança: um aviso que não grava custa o aviso,
+ * não a revisão.
  */
 async function notifyBoth(r: Review, key: string, text: string, severity: Severity): Promise<void> {
-  for (const [cardId, who] of [[r.cardId, "author"], [r.reviewerCardId, "reviewer"]] as const) {
+  // O card que ANEXOU o PR (quando não é o do autor) acompanha a revisão de lá: recebe o mesmo aviso.
+  const sides: [string, string][] = [[r.cardId, "author"], [r.reviewerCardId, "reviewer"]];
+  if (r.hubCardId && r.hubCardId !== r.cardId) sides.push([r.hubCardId, "hub"]);
+  for (const [cardId, who] of sides) {
     try {
       await recordMessage({ cardId, type: "info", severity, text, idempotencyKey: `${key}:${who}` });
     } catch (err) {
@@ -355,9 +360,48 @@ function serialStart<T>(work: () => Promise<T>): Promise<T> {
 }
 
 /**
+ * O card onde a correção de um PR ANEXADO roda. Um card vivo do projeto (não revisor, fora de `done`)
+ * que já trabalha na branch do PR é ele — inclusive o próprio card que anexou: dois worktrees na mesma
+ * branch não coexistem no git, e esse card já é o lugar da correção. Sem um, nenhum (o chamador cria).
+ */
+async function cardOnBranch(projectId: string, branch: string): Promise<Card | undefined> {
+  return (await listCards(projectId)).find((c) => !c.reviewOf && c.column !== "done" && cardBranch(c) === branch);
+}
+
+/**
+ * O CARD DE CORREÇÃO de um PR anexado que nenhum card trabalha: um card comum do projeto, visível no
+ * board, na conta Claude do AUTOR escolhido, com a branch do PR como a dele (o worktree nasce de
+ * `origin/<branch>`, e o push da correção cai no PR) e a base do PR como alvo. O PR fica registrado
+ * nele, como se ele o tivesse entregado: é o que o deliver, a conferência do GitHub e a linha do PR leem.
+ */
+async function createFixCard(hub: Card, pr: CardPr, accountSlug: string): Promise<Card> {
+  const fix = await createCard(
+    { projectId: hub.projectId, title: `Correção PR #${pr.number} · ${pr.title || hub.title}` },
+    { base: pr.base, branch: pr.branch, accountSlug, column: "waiting" },
+  );
+  await recordCardPr(fix.id, { number: pr.number, url: pr.url, base: pr.base, branch: pr.branch });
+  return fix;
+}
+
+/** Garante `work` a uma pessoa num card (share de card), quando ela ainda não tem. */
+async function ensureWork(userId: string, cardId: string): Promise<void> {
+  const user = await findUser(userId);
+  if (user && (await cardLevel(user, cardId)) !== "work") {
+    await shareWith({ kind: "card", targetId: cardId, userId: user.id, level: "work" });
+  }
+}
+
+/**
  * Abre a revisão do PR `prNumber` do card: cria o card do revisor (conta Claude do revisor, branch
  * do PR, escondido do board) e manda a rodada 1. Recusas com o código na mensagem, que a rota
- * traduz em 400: `revisor_igual_autor`, `sem_pr`, `pr_mergeado`, `revisao_ativa`, `revisor_sem_conta`.
+ * traduz em 400: `revisor_igual_autor`, `sem_pr`, `pr_mergeado`, `revisao_ativa`, `revisor_sem_conta`,
+ * `autor_sem_conta`.
+ *
+ * PR ANEXADO (`vibehub_attach_prs`): a correção não roda no card que anexou, mas no card que trabalha
+ * a branch do PR ({@link cardOnBranch}) ou, sem um, num CARD DE CORREÇÃO novo na conta do autor
+ * ({@link createFixCard}; autor sem conta Claude própria = `autor_sem_conta`). A revisão grava esse
+ * card como o do autor (`cardId`: relays, resposta do autor, deliver e conferência do GitHub seguem
+ * iguais) e o que anexou em `hubCardId`, de onde as pessoas acompanham.
  */
 export async function startReview(input: {
   cardId: string;
@@ -378,57 +422,87 @@ export async function startReview(input: {
     if (!pr) throw new Error(`sem_pr: o card não tem o PR #${input.prNumber}`);
     // Um PR já mergeado não tem o que revisar: revisar seria gastar duas IAs num diff que já está na base.
     if (pr.mergedAt !== undefined) throw new Error(`pr_mergeado: o PR #${pr.number} já foi mergeado`);
-    if (await activeReviewFor(card.id, pr.number)) {
-      throw new Error(`revisao_ativa: já existe uma revisão em andamento do PR #${pr.number} neste card`);
+    // Pela URL, em qualquer card: o mesmo PR anexado em dois cards não ganha duas revisões.
+    if (await activeReviewForPr(pr.url)) {
+      throw new Error(`revisao_ativa: já existe uma revisão em andamento do PR #${pr.number}`);
     }
     const accountSlug = await creatorAccountSlug(input.reviewerUserId);
     if (!accountSlug) throw new Error("revisor_sem_conta: o revisor não tem uma conta Claude própria no vibehub");
 
-    const reviewerCard = await createReviewerCard({
-      authorCard: card, reviewerAccountSlug: accountSlug, prBranch: pr.branch, title: `Revisão PR #${pr.number} · ${card.title}`,
-    });
-    const now = Date.now();
-    const fresh: Review = {
-      id: randomUUID(),
-      cardId: card.id,
-      projectId: card.projectId,
-      prNumber: pr.number,
-      prUrl: pr.url,
-      prBranch: pr.branch,
-      base: pr.base,
-      reviewerUserId: input.reviewerUserId,
-      authorUserId: input.authorUserId,
-      ...(input.coauthorUserId ? { coauthorUserId: input.coauthorUserId } : {}),
-      mergerUserId: input.mergerUserId,
-      reviewerCardId: reviewerCard.id,
-      round: 1,
-      phase: "reviewing",
-      findings: [],
-      log: [],
-      nudges: 0,
-      createdAt: now,
-      updatedAt: now,
-    };
-    note(fresh, "system", `Revisão iniciada: o revisor confere o PR #${pr.number} (rodada 1 de ${MAX_ROUNDS}).`);
+    let authorCard = card;
+    let fixCard: Card | undefined;
+    if (pr.attached) {
+      const working = await cardOnBranch(card.projectId, pr.branch);
+      if (working) {
+        authorCard = working;
+      } else {
+        const authorAccount = await creatorAccountSlug(input.authorUserId);
+        if (!authorAccount) {
+          throw new Error("autor_sem_conta: o autor não tem uma conta Claude própria no vibehub (a correção roda nela)");
+        }
+        fixCard = await createFixCard(card, pr, authorAccount);
+        authorCard = fixCard;
+      }
+    }
+
+    let reviewerCard: Card | undefined;
     try {
+      reviewerCard = await createReviewerCard({
+        authorCard, reviewerAccountSlug: accountSlug, prBranch: pr.branch, title: `Revisão PR #${pr.number} · ${pr.title || card.title}`,
+      });
+      const now = Date.now();
+      const fresh: Review = {
+        id: randomUUID(),
+        cardId: authorCard.id,
+        ...(authorCard.id !== card.id ? { hubCardId: card.id } : {}),
+        projectId: card.projectId,
+        prNumber: pr.number,
+        prUrl: pr.url,
+        prBranch: pr.branch,
+        base: pr.base,
+        reviewerUserId: input.reviewerUserId,
+        authorUserId: input.authorUserId,
+        ...(input.coauthorUserId ? { coauthorUserId: input.coauthorUserId } : {}),
+        mergerUserId: input.mergerUserId,
+        reviewerCardId: reviewerCard.id,
+        round: 1,
+        phase: "reviewing",
+        findings: [],
+        log: [],
+        nudges: 0,
+        createdAt: now,
+        updatedAt: now,
+      };
+      note(fresh, "system", `Revisão iniciada: o revisor confere o PR #${pr.number} (rodada 1 de ${MAX_ROUNDS}).`);
+      if (fixCard) note(fresh, "system", `A correção roda no card "${fixCard.title}", na conta Claude do autor.`);
+      else if (authorCard.id !== card.id) note(fresh, "system", `A correção roda no card "${authorCard.title}", que já trabalha a branch do PR.`);
       // O revisor age no card dele pelo `recordCardActor` do relay, que só pousa com `work`. Owner e
       // share de projeto já dão isso; quem só alcança o card do autor ganha um share `work` no card do
       // revisor — senão o `gh pr review` sairia na conta de outra pessoa.
-      const reviewer = await findUser(input.reviewerUserId);
-      if (reviewer && (await cardLevel(reviewer, reviewerCard.id)) !== "work") {
-        await shareWith({ kind: "card", targetId: reviewerCard.id, userId: reviewer.id, level: "work" });
+      await ensureWork(input.reviewerUserId, reviewerCard.id);
+      // A correção num card que não é o que pediu: o autor (ator a cada relay) e o merger (o merge
+      // opera no card do autor) precisam de `work` lá também — a rota só conferiu no card que pediu.
+      if (authorCard.id !== card.id) {
+        await ensureWork(input.authorUserId, authorCard.id);
+        await ensureWork(input.mergerUserId, authorCard.id);
       }
       await insertReview(fresh);
+      logger.info(
+        {
+          audit: true, action: "review.start", review: fresh.id, card: authorCard.worktreeSlug, pr: pr.number,
+          reviewerCard: reviewerCard.id, ...(fresh.hubCardId ? { hubCard: card.worktreeSlug } : {}), ...(fixCard ? { fixCard: fixCard.id } : {}),
+          by: input.by,
+        },
+        "PR review started",
+      );
+      return fresh;
     } catch (err) {
-      // Sem revisão, o card do revisor é lixo: nunca foi aberto, então sai sem sessão pra matar.
-      await removeCard(reviewerCard.id).catch(() => undefined);
+      // Sem revisão, o card do revisor (e o de correção, se nasceu agora) é lixo: nunca foi aberto,
+      // então sai sem sessão pra matar.
+      if (reviewerCard) await removeCard(reviewerCard.id).catch(() => undefined);
+      if (fixCard) await removeCard(fixCard.id).catch(() => undefined);
       throw err;
     }
-    logger.info(
-      { audit: true, action: "review.start", review: fresh.id, card: card.worktreeSlug, pr: pr.number, reviewerCard: reviewerCard.id, by: input.by },
-      "PR review started",
-    );
-    return fresh;
   });
   // O GitHub não depende do relay (nem o relay dele): os dois saem juntos.
   await Promise.all([relayReview(review, "reviewer", reviewerRoundPrompt(review)), namePeopleOnGithub(review)]);
@@ -1034,6 +1108,11 @@ export async function markReviewMerged(
   lastGithubSync.delete(reviewId);
   if (landed) {
     logger.info({ audit: true, action: "review.merged", review: reviewId, by }, "PR review merged");
+    // O card que anexou o PR também o vê mergeado (a linha dele sai). Best-effort: o merge já aconteceu.
+    if (after.hubCardId) {
+      await markCardPrMerged(after.hubCardId, after.base, after.prNumber, Date.now()).catch((err: unknown) =>
+        logger.warn({ review: reviewId, card: after.hubCardId, detail: (err as Error).message }, "could not mark the attached PR as merged"));
+    }
     await announcePhase(after);
     await retireReviewerCard(after);
   }

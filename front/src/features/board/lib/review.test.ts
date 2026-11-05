@@ -9,6 +9,8 @@ import {
   findingCounts,
   mergeFailure,
   pendingQuestions,
+  prStripCounts,
+  readsPerPr,
   reviewActions,
   reviewIsOpen,
   reviewPill,
@@ -16,6 +18,7 @@ import {
   startErrorCode,
   startErrorRoles,
   stuckItems,
+  summaryForPr,
   visiblePrs,
 } from "@/features/board/lib/review";
 import type { CardPr, Finding, Review, ReviewSummary } from "@/api/types";
@@ -75,6 +78,52 @@ describe("reviewPill", () => {
     expect(reviewPill(review({ phase: "reviewing", pendingQuestions: 0 }))).toMatchObject({ key: "review.pill.round" });
     // While the author fixes the rest, the AIs are working: the round still reads.
     expect(reviewPill(review({ phase: "fixing", pendingQuestions: 2 }))).toMatchObject({ key: "review.pill.round", tone: "warn" });
+  });
+});
+
+describe("vários PRs por card", () => {
+  const attached = (n: number): CardPr => ({ ...pr(n, n), attached: true, author: "albert-gh" });
+
+  it("visiblePrs tira cada PR que a revisão DELE diz mergeado, não só o da mais recente", () => {
+    const list = visiblePrs({
+      prs: [attached(1), attached(2), attached(3)],
+      review: review({ prNumber: 3, phase: "fixing" }),
+      reviews: [review({ prNumber: 3, phase: "fixing" }), review({ prNumber: 1, phase: "merged" })],
+    });
+    expect(list.map((p) => p.number)).toEqual([3, 2]);
+  });
+
+  it("lê uma revisão por PR quando o card anexou PRs ou tem mais de um revisado; senão, a do card", () => {
+    expect(readsPerPr({ prs: [pr(1, 1)] })).toBe(false);
+    expect(readsPerPr({ prs: [pr(1, 1), pr(2, 2, "prod")], reviews: undefined })).toBe(false);
+    expect(readsPerPr({ prs: [pr(1, 1)], reviews: [review({ prNumber: 1 }), review({ prNumber: 2 })] })).toBe(true);
+    expect(readsPerPr({ prs: [attached(5)] })).toBe(true);
+  });
+
+  it("summaryForPr acha a revisão do PR na lista, ou na mais recente quando a lista não veio", () => {
+    const card = { review: review({ id: "b", prNumber: 2 }), reviews: [review({ id: "b", prNumber: 2 }), review({ id: "a", prNumber: 1 })] };
+    expect(summaryForPr(card, 1)?.id).toBe("a");
+    expect(summaryForPr(card, 3)).toBeUndefined();
+    expect(summaryForPr({ review: review({ id: "only", prNumber: 7 }) }, 7)?.id).toBe("only");
+  });
+
+  it("o cabeçalho conta cada PR onde ele está, na ordem fixa, só o que não é zero", () => {
+    expect(prStripCounts([
+      review({ phase: "ready" }),
+      review({ phase: "fixing" }),
+      review({ phase: "fixing" }),
+      review({ phase: "reviewing", pendingQuestions: 1 }),
+      review({ phase: "impasse" }),
+      undefined,
+      review({ phase: "cancelled" }),
+    ])).toEqual([
+      { kind: "ready", n: 1 }, { kind: "fixing", n: 2 }, { kind: "decision", n: 2 }, { kind: "none", n: 2 },
+    ]);
+    expect(prStripCounts([review({ phase: "reviewing" })])).toEqual([{ kind: "reviewing", n: 1 }]);
+  });
+
+  it("a chave da revisão de um PR fica debaixo da do card (invalidar o card renova todas)", () => {
+    expect(cardReviewKey("c1", 5).slice(0, 2)).toEqual([...cardReviewKey("c1")]);
   });
 });
 

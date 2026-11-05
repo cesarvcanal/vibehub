@@ -139,6 +139,16 @@ describe("MCP server instructions (the maestro persona)", () => {
     }
   });
 
+  it("register vibehub_attach_prs, and the instructions send a review request to it instead of a review by hand", () => {
+    const server = createMcpServer("test") as unknown as {
+      _registeredTools?: Record<string, { description?: string }>;
+    };
+    const description = server._registeredTools?.["vibehub_attach_prs"]?.description ?? "";
+    expect(description).toContain("$VIBEHUB_CARD_ID");
+    expect(description).toContain("Do NOT review them yourself");
+    expect(INSTRUCTIONS).toContain("vibehub_attach_prs");
+  });
+
   it("register the Cofre tools and instruct on using them for logins", () => {
     const server = createMcpServer("test") as unknown as {
       _registeredTools?: Record<string, unknown>;

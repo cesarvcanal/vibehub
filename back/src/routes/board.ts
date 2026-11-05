@@ -10,7 +10,7 @@ import {
 import { reportCardStatus } from "../services/board/status.js";
 import { purgeRemovedCards } from "../services/board/purge.js";
 import { runnerToken } from "../runtime/runner.js";
-import { listReviewsForCards } from "../services/review/store.js";
+import { listReviewsFollowedBy } from "../services/review/store.js";
 import { pendingQuestions, type Review } from "../services/review/model.js";
 import { logger } from "../utils/logger.js";
 import { isBusy } from "../services/maestro/maestro.js";
@@ -36,30 +36,46 @@ function badRequest(err: unknown): { code: number; body: { error: string } } {
  * "aguardando decisão" instead of the orange "rodada N/3" that means the AIs are on it.
  */
 type ReviewSummary = Pick<Review, "id" | "prNumber" | "phase" | "round"> & { pendingQuestions?: number; authorWorking?: boolean };
-type BoardCard = registry.Card & { review?: ReviewSummary };
+/**
+ * `review` = the most recent; `reviews` = the most recent of EACH PR (only with more than one PR
+ * reviewed), the one line per PR of a card that attached several.
+ */
+type BoardCard = registry.Card & { review?: ReviewSummary; reviews?: ReviewSummary[] };
 
 /**
  * Each card with the summary of its most recent review that was not cancelled (a merged one stays:
- * the line reads "mergeado"). ONE read of the review store for the whole batch, never one per card —
- * and the same rule for a listing and for a single card (`GET /api/cards/:id`), so a deep link does
- * not show "sem revisão" for a PR the list already shows under review.
+ * the line reads "mergeado") — the reviews it FOLLOWS: its own as the author and those of the PRs it
+ * attached. ONE read of the review store for the whole batch, never one per card — and the same rule
+ * for a listing and for a single card (`GET /api/cards/:id`), so a deep link does not show "sem
+ * revisão" for a PR the list already shows under review.
  */
 async function withReviewSummary(cards: registry.Card[]): Promise<BoardCard[]> {
-  const latest = new Map<string, Review>();
-  for (const r of await listReviewsForCards(cards.map((c) => c.id))) {
+  // card → PR → its most recent review that was not cancelled.
+  const latest = new Map<string, Map<number, Review>>();
+  const keep = (cardId: string, r: Review) => {
+    const perPr = latest.get(cardId) ?? new Map<number, Review>();
+    const seen = perPr.get(r.prNumber);
+    if (!seen || r.createdAt >= seen.createdAt) perPr.set(r.prNumber, r);
+    latest.set(cardId, perPr);
+  };
+  for (const r of await listReviewsFollowedBy(cards.map((c) => c.id))) {
     if (r.phase === "cancelled") continue;
-    const seen = latest.get(r.cardId);
-    if (!seen || r.createdAt >= seen.createdAt) latest.set(r.cardId, r);
+    keep(r.cardId, r);
+    if (r.hubCardId && r.hubCardId !== r.cardId) keep(r.hubCardId, r);
   }
   return cards.map((c) => {
-    const r = latest.get(c.id);
-    if (!r) return c;
-    const waiting = pendingQuestions(r.findings).length;
-    const review: ReviewSummary = { id: r.id, prNumber: r.prNumber, phase: r.phase, round: r.round };
-    if (waiting > 0) review.pendingQuestions = waiting;
-    // Pronto, com a IA do autor num turno (hooks ou chat nativo): a linha diz "IA mexendo".
-    if (r.phase === "ready" && isBusy(c)) review.authorWorking = true;
-    return { ...c, review };
+    const perPr = [...(latest.get(c.id)?.values() ?? [])].sort((a, b) => b.createdAt - a.createdAt);
+    if (perPr.length === 0) return c;
+    const summaries = perPr.map((r) => {
+      const waiting = pendingQuestions(r.findings).length;
+      const review: ReviewSummary = { id: r.id, prNumber: r.prNumber, phase: r.phase, round: r.round };
+      if (waiting > 0) review.pendingQuestions = waiting;
+      // Pronto, com a IA do autor num turno (hooks ou chat nativo): a linha diz "IA mexendo". Só quando
+      // o autor é ESTE card; o de um PR anexado é outro, e a linha lê isso ao vivo.
+      if (r.phase === "ready" && r.cardId === c.id && isBusy(c)) review.authorWorking = true;
+      return review;
+    });
+    return { ...c, review: summaries[0], ...(summaries.length > 1 ? { reviews: summaries } : {}) };
   });
 }
 

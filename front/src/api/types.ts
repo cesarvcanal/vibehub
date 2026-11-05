@@ -437,6 +437,11 @@ export interface Card {
    * sidebar line; the full thing is `GET /api/cards/:id/review`. Absent = never reviewed.
    */
   review?: ReviewSummary;
+  /**
+   * The most recent review of EACH PR the card follows (its own and the ones it attached), only when
+   * more than one PR was reviewed: one line per PR reads its own. Absent = `review` says it all.
+   */
+  reviews?: ReviewSummary[];
   createdAt: number;
   updatedAt?: number;
 }
@@ -456,6 +461,16 @@ export interface CardPr {
    * open, or closed without a merge (not tracked). A merged PR leaves the chat and cannot be reviewed.
    */
   mergedAt?: number;
+  /**
+   * Somebody else's open PR ATTACHED to this card to be reviewed from here (`vibehub_attach_prs`): its
+   * fixes run in the card that works its branch, or in a correction card on the author's Claude
+   * account. Absent = delivered by the card.
+   */
+  attached?: true;
+  /** GitHub login of who opened it (attached PRs): the dialog suggests that person as the author. */
+  author?: string;
+  /** Its title on GitHub (attached PRs). */
+  title?: string;
 }
 
 /** One preview the agent announced on a card — see `Card.previews`. */
@@ -594,7 +609,10 @@ export interface ReviewEvent {
 
 /** `GET /api/cards/:id/review` — the whole review, as the panel reads it. */
 export interface Review extends ReviewSummary {
+  /** The AUTHOR's card: where the fixes run and the PR lives. */
   cardId: string;
+  /** The card that attached the PR and asked for the review, when it is not the author's. */
+  hubCardId?: string;
   projectId: string;
   prUrl: string;
   prBranch: string;
@@ -634,6 +652,8 @@ export interface Person {
   id: string;
   username: string;
   canReview: boolean;
+  /** Login of their OWN GitHub connection, when they have one: how an attached PR's author is found. */
+  githubLogin?: string;
 }
 
 /** `GET /api/cards/:id/people` — members can call it, unlike `GET /api/users`. */

@@ -372,6 +372,61 @@ describe("iniciar a revisão", () => {
   });
 });
 
+describe("PRs anexados: uma revisão por PR, acompanhada do card que anexou", () => {
+  const attached = (n: number) => ({
+    number: n, url: `https://github.com/acme/widgets/pull/${n}`, base: "dev", branch: `feat/pr-${n}`, author: "albert-gh", title: `PR ${n}`,
+  });
+
+  async function hub() {
+    const w = await world();
+    await app.inject({ method: "POST", url: "/api/accounts", headers: { cookie: w.owner.cookie }, payload: { name: "Albert" } });
+    await app.inject({
+      method: "PATCH", url: `/api/users/${w.autor.id}`, headers: { cookie: w.owner.cookie }, payload: { claudeAccountSlug: "albert" },
+    });
+    await (await registry()).attachCardPrs(w.cardId, [attached(599), attached(600)]);
+    return w;
+  }
+  const read = async (w: World, query: string) =>
+    await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/review${query}`, headers: { cookie: w.leitor.cookie } });
+
+  it("iniciar um PR anexado cria a revisão no card de correção; ?pr=N lê a dele do card que anexou", async () => {
+    const w = await hub();
+    const res = await startReview(w, w.autor, { prNumber: 599 });
+    expect(res.statusCode).toBe(200);
+    const review = res.json().review;
+    expect(review).toMatchObject({ prNumber: 599, hubCardId: w.cardId });
+    expect(review.cardId).not.toBe(w.cardId);
+
+    expect((await read(w, "?pr=599")).json().review).toMatchObject({ id: review.id, prNumber: 599 });
+    expect((await read(w, "?pr=600")).json()).toEqual({ review: null });
+    expect((await read(w, "?pr=abc")).statusCode).toBe(400);
+    expect((await read(w, "?pr=0")).statusCode).toBe(400);
+    // sem `pr`, o de sempre: a revisão do card como autor (este card não é o autor de nenhuma)
+    expect((await read(w, "")).json()).toEqual({ review: null });
+  });
+
+  it("o card que anexou carrega a revisão mais recente e uma por PR", async () => {
+    const w = await hub();
+    const a = (await startReview(w, w.autor, { prNumber: 599 })).json().review;
+    const b = (await startReview(w, w.autor, { prNumber: 600 })).json().review;
+    const card = (await app.inject({ method: "GET", url: `/api/cards/${w.cardId}`, headers: { cookie: w.leitor.cookie } })).json().card;
+    expect(card.review).toMatchObject({ id: b.id, prNumber: 600 });
+    expect(card.reviews.map((r: { id: string }) => r.id).sort()).toEqual([a.id, b.id].sort());
+    // e o card de correção, como autor, tem a dele
+    const fix = (await app.inject({ method: "GET", url: `/api/cards/${a.cardId}`, headers: { cookie: w.owner.cookie } })).json().card;
+    expect(fix.review).toMatchObject({ id: a.id, prNumber: 599 });
+    expect(fix.reviews).toBeUndefined();
+  });
+
+  it("autor sem conta Claude própria num PR anexado é recusado com autor_sem_conta", async () => {
+    const w = await world();
+    await (await registry()).attachCardPrs(w.cardId, [attached(599)]);
+    const res = await startReview(w, w.autor, { prNumber: 599 });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/autor_sem_conta/);
+  });
+});
+
 describe("GET da revisão: quem está trabalhando agora", () => {
   it("diz se a IA do autor e a do revisor estão num turno, pelo status de cada card", async () => {
     const w = await world();
@@ -466,7 +521,9 @@ describe("pessoas do card", () => {
     const people = res.json().people as { id: string; username: string; canReview: boolean }[];
     const byName = Object.fromEntries(people.map((p) => [p.username, p]));
     expect(Object.keys(byName).sort()).toEqual(["autor", "cesar", "leitor", "merger", "revisor"]);
-    expect(byName.revisor).toEqual({ id: w.revisor.id, username: "revisor", canReview: true });
+    // o login da conexão GitHub própria vem junto: é por ele que o diálogo acha o autor de um PR anexado
+    expect(byName.revisor).toEqual({ id: w.revisor.id, username: "revisor", canReview: true, githubLogin: "revisor-gh" });
+    expect(byName.autor!.githubLogin).toBeUndefined();
     expect(byName.autor!.canReview).toBe(false);
     expect(byName.cesar!.canReview).toBe(false);
     // quem não tem acesso ao card não entra (e nem vê a lista)

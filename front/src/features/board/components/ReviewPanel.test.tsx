@@ -107,6 +107,23 @@ afterEach(() => {
   localStorage.removeItem(LANGUAGE_KEY);
 });
 
+describe("ReviewPanel de um PR (card com vários)", () => {
+  it("lê a revisão do PR pedido (?pr=N), não a do card", async () => {
+    me = "rev";
+    const urls: string[] = [];
+    const base = get.getMockImplementation()!;
+    get.mockImplementation(async (url: string) => {
+      urls.push(url);
+      if (url === "/cards/c1/review?pr=599") return { review: review({ prNumber: 599 }), working };
+      return await base(url);
+    });
+    renderApp(<ReviewPanel cardId="c1" prNumber={599} onClose={vi.fn()} />);
+    expect(await screen.findByText("PR #599")).toBeInTheDocument();
+    expect(urls).toContain("/cards/c1/review?pr=599");
+    expect(reviewGets).toBe(0);
+  });
+});
+
 describe("ReviewPanel — o que mostra", () => {
   it("cabeçalho com PR, base, pill da rodada e os papéis pelo nome", async () => {
     open("rev", review({ coauthorUserId: "u-co" }));

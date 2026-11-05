@@ -288,6 +288,16 @@ export interface CardPr {
    * tracked). It belongs to THIS PR: a new number in the same base slot starts without it.
    */
   mergedAt?: number;
+  /**
+   * An open PR somebody else opened, ATTACHED to this card to be reviewed from here
+   * (`vibehub_attach_prs`, {@link attachCardPrs}) — not delivered by it. Keyed by its number: it never
+   * takes the one-per-base slot of the PR the card delivers. Absent = delivered by the card.
+   */
+  attached?: true;
+  /** GitHub login of who opened the PR (attached PRs): what the review dialog suggests as the author. */
+  author?: string;
+  /** The PR's title on GitHub (attached PRs). */
+  title?: string;
 }
 
 export interface Card {
@@ -757,7 +767,12 @@ function readReviewFields(cards: Card[]): Card[] {
     if (card.prs !== undefined) {
       const valid = Array.isArray(card.prs) ? card.prs.filter(isCardPr) : [];
       // A merge mark that is not a time (a hand edit) is dropped; the PR itself stays.
-      for (const pr of valid) if (pr.mergedAt !== undefined && typeof pr.mergedAt !== "number") delete pr.mergedAt;
+      for (const pr of valid) {
+        if (pr.mergedAt !== undefined && typeof pr.mergedAt !== "number") delete pr.mergedAt;
+        if (pr.attached !== undefined && pr.attached !== true) delete pr.attached;
+        if (pr.author !== undefined && typeof pr.author !== "string") delete pr.author;
+        if (pr.title !== undefined && typeof pr.title !== "string") delete pr.title;
+      }
       card.prs = valid.length > 0 ? valid : undefined;
     }
     if (card.reviewOf !== undefined && (typeof card.reviewOf !== "string" || !card.reviewOf)) card.reviewOf = undefined;
@@ -1650,7 +1665,8 @@ export async function recordCardPr(cardId: string, pr: Omit<CardPr, "openedAt">)
     const card = doc.cards.find((c) => c.id === cardId);
     if (!card) return;
     const prs = card.prs ?? [];
-    const known = prs.find((p) => p.base === base);
+    // An attached PR (somebody else's, reviewed from here) is not the card's delivery: never its slot.
+    const known = prs.find((p) => p.base === base && !p.attached);
     if (known) {
       // A new number in the slot is a new PR: the merge mark was the old one's.
       if (known.number !== pr.number) delete known.mergedAt;
@@ -1659,6 +1675,46 @@ export async function recordCardPr(cardId: string, pr: Omit<CardPr, "openedAt">)
       known.branch = branch;
     } else {
       prs.push({ number: pr.number, url, base, branch, openedAt: Date.now() });
+    }
+    card.prs = prs;
+  });
+}
+
+/** What {@link attachCardPrs} takes: a PR as GitHub has it, already read by the caller. */
+export type AttachedPrInput = Pick<CardPr, "number" | "url" | "base" | "branch" | "author" | "title">;
+
+/**
+ * ATTACHES open PRs to a card, to be reviewed from it (`vibehub_attach_prs`): one line each, keyed by
+ * NUMBER — never the one-per-base slot of the PR the card delivers. Attaching the same number again
+ * updates the line (branch, base, title, author) and keeps its `openedAt`; a number the card already
+ * has as its OWN delivery is left as it is. Every item is validated before anything is written: one
+ * bad PR writes none. A reviewer card cannot attach (it reviews one PR, never a list); a card deleted
+ * meanwhile is a no-op.
+ */
+export async function attachCardPrs(cardId: string, input: AttachedPrInput[]): Promise<void> {
+  const clean = input.map((pr) => {
+    if (!Number.isInteger(pr.number) || pr.number <= 0) throw new Error("invalid PR number");
+    const url = String(pr.url ?? "").trim();
+    if (!url) throw new Error("PR url is required");
+    const item: Omit<CardPr, "openedAt"> = {
+      number: pr.number, url, base: assertBranchName(pr.base), branch: assertBranchName(pr.branch), attached: true,
+    };
+    const author = typeof pr.author === "string" ? pr.author.trim() : "";
+    const title = typeof pr.title === "string" ? pr.title.trim().slice(0, 300) : "";
+    if (author) item.author = author;
+    if (title) item.title = title;
+    return item;
+  });
+  await store.mutate((doc) => {
+    const card = doc.cards.find((c) => c.id === cardId);
+    if (!card) return;
+    if (card.reviewOf) throw new Error("a reviewer card cannot attach PRs");
+    const prs = card.prs ?? [];
+    for (const pr of clean) {
+      const known = prs.find((p) => p.number === pr.number);
+      if (known && !known.attached) continue;
+      if (known) Object.assign(known, pr, { openedAt: known.openedAt });
+      else prs.push({ ...pr, openedAt: Date.now() });
     }
     card.prs = prs;
   });

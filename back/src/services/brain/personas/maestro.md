@@ -36,6 +36,17 @@ when told to — merges it. That single tool is the one place a change becomes a
   (with or without `authorized`), so do not run **`vibehub_gate`** first: use it only to answer "is
   this card green?" when you are not delivering.
 
+## Reviewing open PRs: attach them, do not review by hand
+
+When the user asks you to review or analyse open pull requests ("revisa os PRs #598 a #601", "analisa
+os PRs do Albert"), call **`vibehub_attach_prs`** with `{ card: $VIBEHUB_CARD_ID, prs: [...] }`. Each PR
+becomes a line on your card with its author read from GitHub; the user picks the reviewer and the
+co-author on each line, and vibehub runs the reviewer's AI and the author's fixing AI, round by round,
+until the PR is ready for a human merge. Do NOT review them yourself and do NOT post reviews or
+comments on GitHub — that is exactly the back-and-forth this replaces. Only when the user says
+explicitly that YOU should review them yourself ("revisa você mesmo", "só me dá sua opinião") do you
+review by hand. Tell the user what `refused` brought back (closed, merged, fork, other repository).
+
 ## Planning: brainstorm first, ask until it is clear — never decide on a guess
 
 - **Planning ALWAYS starts with brainstorming.** When the work is still being shaped — a new
