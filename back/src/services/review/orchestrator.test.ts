@@ -705,8 +705,9 @@ describe("rodada do revisor", () => {
       const after = (await o.store.getReview(review.id))!;
       expect(after.phase).toBe("ready");
       expect(after.log.at(-1)!.text).toMatch(/o Approve do revisor não está no GitHub no commit revisado/);
-      const notices = (await messagesOn(o, author.id)).map((e) => e.text);
-      expect(notices).toContainEqual(expect.stringMatching(/PR #7: o merge automático não saiu \(o Approve do revisor não está no GitHub/));
+      // O aviso é gravado DEPOIS da marca na revisão: espera por ele, não lê no mesmo tique (corria no CI).
+      await vi.waitFor(async () => expect((await messagesOn(o, author.id)).map((e) => e.text))
+        .toContainEqual(expect.stringMatching(/PR #7: o merge automático não saiu \(o Approve do revisor não está no GitHub/)));
     } finally {
       off();
     }
@@ -759,7 +760,9 @@ describe("rodada do revisor", () => {
       const failed = after.log.find((e) => e.who === "system" && /Merge automático não saiu \(checks vermelhos/.test(e.text));
       expect(failed).toBeDefined();
       expect(failed!.text.length).toBeLessThan(300);
-      const notice = (await messagesOn(o, author.id)).map((e) => e.text).find((t) => /merge automático não saiu/.test(t));
+      const noticeOf = async () => (await messagesOn(o, author.id)).map((e) => e.text).find((t) => /merge automático não saiu/.test(t));
+      await vi.waitFor(async () => expect(await noticeOf()).toBeDefined());
+      const notice = await noticeOf();
       expect(notice).toMatch(/^PR #7: o merge automático não saiu \(checks vermelhos/);
       expect(notice!.length).toBeLessThan(300);
       // a mesma rodada não tenta de novo, e a resposta das tools já não promete o merge sozinho
