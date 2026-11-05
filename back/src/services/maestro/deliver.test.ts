@@ -772,6 +772,43 @@ describe("buildPrStateScript / parsePrState", () => {
   });
 });
 
+describe("buildPrInfoScript / parsePrInfo (anexar um PR ao card)", () => {
+  const info = {
+    number: 599, url: "https://github.com/acme/widgets/pull/599", headRefName: "feat/aviso", baseRefName: "dev",
+    author: { login: "albert-gh" }, state: "OPEN", title: "Aviso não saiu", isCrossRepository: false,
+  };
+  const out = (o: unknown) => `__VIBEHUB_DELIVER__ prinfo ${Buffer.from(JSON.stringify(o)).toString("base64")}`;
+
+  it("lê o PR pelo número ou pela URL, com o token do stdin; referência fora do formato é recusada antes do shell", async () => {
+    const { deliver } = await load();
+    const byNumber = deliver.buildPrInfoScript("vibehub-runner", "c1", TOKEN, "/work/x", 599);
+    expect(byNumber).toContain("gh pr view '599' --json number,url,headRefName,baseRefName,author,state,title,isCrossRepository");
+    for (const line of byNumber.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
+    expect(deliver.buildPrInfoScript("vibehub-runner", "c1", TOKEN, "/work/x", PR)).toContain(`gh pr view '${PR}'`);
+    expect(() => deliver.buildPrInfoScript("vibehub-runner", "c1", TOKEN, "/work/x", "1;rm -rf /")).toThrow(/PR/);
+    expect(() => deliver.buildPrInfoScript("vibehub-runner", "c1", TOKEN, "/work/x", 0)).toThrow(/PR/);
+  });
+
+  it("devolve o PR como o card guarda: branch, base, autor, título, estado e se é de fork", async () => {
+    const { deliver } = await load();
+    expect(deliver.parsePrInfo(`noise\n${out(info)}`)).toEqual({
+      ok: true,
+      pr: { number: 599, url: info.url, branch: "feat/aviso", base: "dev", author: "albert-gh", title: "Aviso não saiu", state: "OPEN", fork: false },
+    });
+    expect(deliver.parsePrInfo(out({ ...info, state: "MERGED", isCrossRepository: true, author: null }))).toMatchObject({
+      ok: true, pr: { state: "MERGED", fork: true, author: undefined },
+    });
+  });
+
+  it("falha do gh, JSON quebrado ou sem os campos viram erro com o estágio", async () => {
+    const { deliver } = await load();
+    expect(deliver.parsePrInfo("no pull requests found\n__VIBEHUB_DELIVER__ error view")).toMatchObject({ ok: false, stage: "view" });
+    expect(deliver.parsePrInfo("__VIBEHUB_DELIVER__ prinfo !!!")).toMatchObject({ ok: false, stage: "parse" });
+    expect(deliver.parsePrInfo(out({ number: 1 }))).toMatchObject({ ok: false, stage: "parse" });
+    expect(deliver.parsePrInfo("")).toMatchObject({ ok: false, stage: "unknown" });
+  });
+});
+
 describe("buildPrPeopleScript / parsePrPeople (assignee e reviewer do PR)", () => {
   it("marca o assignee e pede o reviewer em chamadas separadas, com o token do stdin", async () => {
     const { deliver } = await load();

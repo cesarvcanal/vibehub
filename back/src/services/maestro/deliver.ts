@@ -429,6 +429,96 @@ export async function readPrState(cardId: string, prUrl: string): Promise<{ stat
   return null;
 }
 
+/** A PR as `vibehub_attach_prs` needs it: what the card stores, plus whether it can be attached at all. */
+export interface PrInfo {
+  number: number;
+  url: string;
+  branch: string;
+  base: string;
+  author?: string;
+  title: string;
+  state: PrState;
+  /** The head lives in ANOTHER repository (a fork): a correction card would have nowhere to push. */
+  fork: boolean;
+}
+
+/**
+ * Reads one PR — by number (in the card's repository) or by URL — for attaching it to a card:
+ * `__VIBEHUB_DELIVER__ prinfo <base64 of gh's JSON>`, or `__VIBEHUB_DELIVER__ error view`. The
+ * reference is checked BEFORE it reaches the shell: a positive number or a GitHub PR URL. PURE.
+ */
+export function buildPrInfoScript(containerName: string, cardId: string, token: string, cwd: string, ref: number | string): string {
+  assertSafeRemotePath(cwd);
+  const value = prRef(ref);
+  const body = [
+    ...ghTokenPreamble(token),
+    `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
+    `if ! J=$(gh pr view ${shQuote(value)} --json number,url,headRefName,baseRefName,author,state,title,isCrossRepository 2>&1); then`,
+    `  printf '%s\\n' "$J"; echo "${MARKER} error view"; exit 0;`,
+    `fi`,
+    `echo "${MARKER} prinfo $(printf '%s' "$J" | base64 -w0)"`,
+  ];
+  return dockerBashScript(containerName, body);
+}
+
+/** A PR reference that may reach the shell: a positive number, or a GitHub PR URL. Throws otherwise. PURE. */
+function prRef(ref: number | string): string {
+  if (typeof ref === "number") {
+    if (Number.isInteger(ref) && ref > 0) return String(ref);
+  } else if (parsePrUrl(String(ref ?? "").trim())) {
+    return String(ref).trim();
+  }
+  throw new Error(`not a PR number or GitHub PR url: ${String(ref)}`);
+}
+
+/** Parses the PR lookup of {@link buildPrInfoScript}. PURE. */
+export function parsePrInfo(stdout: string): { ok: true; pr: PrInfo } | { ok: false; stage: string; output: string } {
+  const output = stdout.replace(new RegExp(`${MARKER} (prinfo|error).*`, "g"), "").trimEnd();
+  const m = new RegExp(`${MARKER} prinfo (\\S+)`).exec(stdout);
+  if (!m) return { ok: false, stage: new RegExp(`${MARKER} error (\\S+)`).exec(stdout)?.[1] ?? "unknown", output };
+  try {
+    const j = JSON.parse(Buffer.from(m[1]!, "base64").toString("utf8")) as Record<string, unknown>;
+    const state = j.state;
+    if (
+      !Number.isInteger(j.number) || typeof j.url !== "string" || typeof j.headRefName !== "string" ||
+      typeof j.baseRefName !== "string" || (state !== "OPEN" && state !== "MERGED" && state !== "CLOSED")
+    ) {
+      return { ok: false, stage: "parse", output };
+    }
+    const login = (j.author as { login?: unknown } | null)?.login;
+    return {
+      ok: true,
+      pr: {
+        number: j.number as number, url: j.url, branch: j.headRefName, base: j.baseRefName,
+        author: typeof login === "string" && login ? login : undefined,
+        title: typeof j.title === "string" ? j.title : "", state, fork: j.isCrossRepository === true,
+      },
+    };
+  } catch {
+    return { ok: false, stage: "parse", output };
+  }
+}
+
+/**
+ * One PR read with the card's own connection (the actor's), for attaching it. Null when the lookup
+ * failed (logged, with what `gh` said in `detail`): the caller reports it as not found.
+ */
+export async function readPrInfo(cardId: string, ref: number | string): Promise<{ pr: PrInfo } | { error: string }> {
+  try {
+    prRef(ref);
+  } catch {
+    return { error: `referência inválida: ${String(ref)}` };
+  }
+  const out = await runCardGhScript(cardId, "read the PR to attach", (c) => buildPrInfoScript(c.container, c.cardId, c.token, c.cwd, ref));
+  if (!out) return { error: "não consegui consultar o GitHub" };
+  const found = parsePrInfo(out.stdout);
+  if (found.ok) return { pr: found.pr };
+  logger.warn({ card: out.slug, stage: found.stage, detail: cleanOutput(found.output) }, "could not read the PR to attach");
+  return { error: found.stage === "view" ? `não encontrado (${oneLineOf(cleanOutput(found.output))})` : "resposta do GitHub ilegível" };
+}
+
+const oneLineOf = (s: string): string => s.replace(/\s+/g, " ").trim().slice(0, 200);
+
 /**
  * Deletes a MERGED PR's head branch on GitHub — the work is in the base now, and a branch left behind
  * is clutter nobody cleans. Two guards, in the script, against the moment it runs: the repo's default

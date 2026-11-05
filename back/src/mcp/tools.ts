@@ -12,6 +12,7 @@ import { recordLearning } from "../services/brain/learn.js";
 import { moveCards, AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX } from "./cardMove.js";
 import { submitReviewerRound, submitAuthorResponse, reviewToolAnswer, HEAD_SHA_RE } from "../services/review/orchestrator.js";
 import { MAX_ROUNDS } from "../services/review/model.js";
+import { attachPrs } from "../services/review/attach.js";
 
 /**
  * MAESTRO TOOLS — what one card's agent can do to the OTHER cards.
@@ -485,6 +486,38 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         // O que ESTA chamada registrou: os itens da fala do autor gravada agora (repetida não grava).
         const answered = after.log.filter((e) => e.who === "author" && e.at >= since).reduce((n, e) => n + (e.items?.length ?? 0), 0);
         return ok({ ...reviewToolAnswer(after, "author", a.round), answered });
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_attach_prs",
+    {
+      description:
+        "PR REVIEW, asking side: the user asked YOU to review / analyse one or more OPEN pull requests " +
+        "(\"revisa os PRs #598 a #601\"). Do NOT review them yourself and do NOT post reviews on GitHub: " +
+        "attach them to your card (`card` = YOUR OWN $VIBEHUB_CARD_ID) with this tool. Each PR becomes a line on your card, with its author read " +
+        "from GitHub; the user picks the reviewer and the co-author on each line and starts it, and vibehub " +
+        "runs the reviewer AI and the author's fixing AI until it is ready to merge. Pass PR numbers (of " +
+        "your project's repository) or GitHub PR URLs. Only open PRs of the same repository, not from a " +
+        "fork, are attached; the rest comes back in `refused` with the reason. Attaching again is harmless. " +
+        "Returns { attached, refused, next }, or { error }.",
+      inputSchema: {
+        card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this terminal"),
+        prs: z.array(z.union([z.number().int().positive(), z.string().min(1).max(300)])).min(1).max(20)
+          .describe("PR numbers (598) or GitHub PR URLs"),
+      },
+    },
+    async (a) => {
+      try {
+        const out = await attachPrs(a.card, a.prs);
+        const next = out.attached.length
+          ? "tell the user the PRs are on the card, each with its line: pick the reviewer and the co-author on each " +
+            "and press \"Pedir revisão\". Do not review them yourself."
+          : "nothing was attached: tell the user why (refused)";
+        return ok({ ...out, next });
       } catch (e) {
         return fail(e);
       }

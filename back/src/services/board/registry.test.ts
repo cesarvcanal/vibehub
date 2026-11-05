@@ -696,6 +696,85 @@ describe("board registry (persisted)", () => {
       expect(pr?.mergedAt).toBeUndefined();
     });
 
+    describe("PRs anexados (vibehub_attach_prs)", () => {
+      const ALBERT_PR = {
+        number: 599, url: "https://github.com/acme/widgets/pull/599", base: "dev", branch: "feat/aviso", author: "albert-gh", title: "Aviso não saiu",
+      };
+
+      it("anexa vários PRs da mesma base, cada um na sua linha, marcados como anexados", async () => {
+        const { author } = await seedAuthor();
+        const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+        await reg.attachCardPrs(author.id, [ALBERT_PR, { ...ALBERT_PR, number: 600, url: "https://github.com/acme/widgets/pull/600", branch: "feat/receb" }]);
+        now.mockRestore();
+        const prs = (await reg.getCard(author.id))?.prs;
+        expect(prs).toHaveLength(2);
+        expect(prs?.find((x) => x.number === 599)).toEqual({ ...ALBERT_PR, attached: true, openedAt: 1_000 });
+        expect(prs?.find((x) => x.number === 600)).toMatchObject({ branch: "feat/receb", base: "dev", attached: true });
+      });
+
+      it("anexar de novo o mesmo número atualiza a linha e mantém o openedAt", async () => {
+        const { author } = await seedAuthor();
+        const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+        await reg.attachCardPrs(author.id, [ALBERT_PR]);
+        now.mockReturnValue(2_000);
+        await reg.attachCardPrs(author.id, [{ ...ALBERT_PR, title: "Título novo" }]);
+        now.mockRestore();
+        const prs = (await reg.getCard(author.id))?.prs;
+        expect(prs).toHaveLength(1);
+        expect(prs?.[0]).toMatchObject({ title: "Título novo", openedAt: 1_000 });
+      });
+
+      it("PR anexado não ocupa a vaga por base do PR entregue, e PR entregue não vira anexado", async () => {
+        const { author } = await seedAuthor();
+        await reg.attachCardPrs(author.id, [ALBERT_PR]);
+        // a entrega do próprio card na mesma base: linha própria, o anexado fica intacto
+        await reg.recordCardPr(author.id, AUTHOR_PR);
+        let prs = (await reg.getCard(author.id))?.prs;
+        expect(prs).toHaveLength(2);
+        expect(prs?.find((x) => x.number === 599)).toMatchObject({ attached: true, branch: "feat/aviso" });
+        expect(prs?.find((x) => x.number === AUTHOR_PR.number)?.attached).toBeUndefined();
+        // anexar o PR que o card entregou não muda nada nele
+        await reg.attachCardPrs(author.id, [{ ...ALBERT_PR, number: AUTHOR_PR.number, url: AUTHOR_PR.url }]);
+        prs = (await reg.getCard(author.id))?.prs;
+        expect(prs).toHaveLength(2);
+        expect(prs?.find((x) => x.number === AUTHOR_PR.number)).toMatchObject({ branch: AUTHOR_PR.branch });
+        expect(prs?.find((x) => x.number === AUTHOR_PR.number)?.attached).toBeUndefined();
+      });
+
+      it("markCardPrMerged marca o anexado pelo número", async () => {
+        const { author } = await seedAuthor();
+        await reg.attachCardPrs(author.id, [ALBERT_PR, { ...ALBERT_PR, number: 600, url: "https://github.com/acme/widgets/pull/600" }]);
+        await reg.markCardPrMerged(author.id, "dev", 600, 9_000);
+        const prs = (await reg.getCard(author.id))?.prs;
+        expect(prs?.find((x) => x.number === 600)?.mergedAt).toBe(9_000);
+        expect(prs?.find((x) => x.number === 599)?.mergedAt).toBeUndefined();
+      });
+
+      it("recusa número, branch ou url inválidos sem gravar nada; card de revisor não anexa; card sumido é no-op", async () => {
+        const { author } = await seedAuthor();
+        await expect(reg.attachCardPrs(author.id, [{ ...ALBERT_PR, number: 0 }])).rejects.toThrow(/invalid PR number/);
+        await expect(reg.attachCardPrs(author.id, [ALBERT_PR, { ...ALBERT_PR, number: 2, branch: "a;rm" }])).rejects.toThrow(/invalid branch/);
+        await expect(reg.attachCardPrs(author.id, [{ ...ALBERT_PR, url: " " }])).rejects.toThrow(/url is required/);
+        expect((await reg.getCard(author.id))?.prs).toBeUndefined();
+        const reviewer = await reg.createReviewerCard({ authorCard: author, reviewerAccountSlug: "mussa", prBranch: "card/login-ab12", title: "Rev" });
+        await expect(reg.attachCardPrs(reviewer.id, [ALBERT_PR])).rejects.toThrow(/reviewer card/);
+        await expect(reg.attachCardPrs("nao-existe", [ALBERT_PR])).resolves.toBeUndefined();
+      });
+
+      it("hidratação: author/title que não são texto saem, attached que não é true sai; o PR fica", async () => {
+        const { author } = await seedAuthor();
+        await reg.attachCardPrs(author.id, [ALBERT_PR]);
+        const raw = JSON.parse(await readFile(join(dir, "board.json"), "utf8")) as { cards: { id: string; prs?: Record<string, unknown>[] }[] };
+        Object.assign(raw.cards.find((c) => c.id === author.id)!.prs![0]!, { author: 5, title: {}, attached: "sim" });
+        await writeFile(join(dir, "board.json"), JSON.stringify(raw));
+        const pr = (await (await freshRegistry()).getCard(author.id))?.prs?.[0];
+        expect(pr).toMatchObject({ number: 599, branch: "feat/aviso" });
+        expect(pr?.author).toBeUndefined();
+        expect(pr?.title).toBeUndefined();
+        expect(pr?.attached).toBeUndefined();
+      });
+    });
+
     it("recordCardPr: card que sumiu no meio da entrega é no-op, não erro", async () => {
       await seedAuthor();
       await expect(reg.recordCardPr("nao-existe", AUTHOR_PR)).resolves.toBeUndefined();
