@@ -81,7 +81,9 @@ export function PrReviewBlock({
         <button
           type="button"
           title={t("review.openPanel")}
-          onClick={onOpenPanel}
+          // Never `onClick={onOpenPanel}`: the click EVENT would arrive as the PR number, become the
+          // panel's key and query, and the panel died on "Converting circular structure to JSON".
+          onClick={() => onOpenPanel()}
           className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-0.5 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           {line}
@@ -272,7 +274,7 @@ function CardReviewBlocks({ card, onOpenPanel }: {
           review={current?.prNumber === pr.number ? current : undefined}
           authorWorking={authorWorking}
           actorUserId={card.actorUserId}
-          onOpenPanel={onOpenPanel}
+          onOpenPanel={() => onOpenPanel()}
           variant={row ? "row" : "block"}
         />
       ))}

@@ -444,7 +444,8 @@ export function CardTerminalView({
    */
   const [reviewPr, setReviewPr] = React.useState<number | undefined>(undefined);
   const openReview = React.useCallback((prNumber?: number) => {
-    setReviewPr(prNumber);
+    // Only a real number: anything else (a click event handed over by mistake) is "the card's review".
+    setReviewPr(typeof prNumber === "number" ? prNumber : undefined);
     setReviewOpen(true);
   }, []);
   // The link's request is read ONCE: the panel opens and the flag leaves the URL, so closing it by
