@@ -309,6 +309,151 @@ describe("iniciar a revisão", () => {
   });
 });
 
+describe("PR anexado: a correção roda no card da branch do PR, ou num card de correção na conta do autor", () => {
+  const ATTACHED = {
+    number: 599, url: "https://github.com/acme/widgets/pull/599", base: "dev", branch: "feat/aviso", author: "albert-gh", title: "Aviso não saiu",
+  };
+  const ROLES = { prNumber: 599, reviewerUserId: "u-revisor", authorUserId: "u-autor", mergerUserId: "u-merger", by: "u-merger" };
+
+  async function seedHub(o: Loaded) {
+    const project = await o.registry.createProject({
+      name: "widgets", repoFullName: "acme/widgets", cloneUrl: "https://github.com/acme/widgets.git", baseBranch: "main",
+    });
+    await o.registry.createAccount({ name: "Mussa" });
+    await o.registry.createAccount({ name: "Albert" });
+    accountOf = { "u-revisor": "mussa", "u-autor": "albert" };
+    const hub = await o.registry.createCard({ projectId: project.id, title: "Revisar PRs do Albert" });
+    await o.registry.attachCardPrs(hub.id, [ATTACHED]);
+    return { project, hub };
+  }
+
+  it("cria o card de correção na conta do autor, na branch do PR, e a revisão aponta pra ele com o card que anexou", async () => {
+    const o = await load();
+    const { project, hub } = await seedHub(o);
+    const before = (await o.registry.listCards(project.id)).length;
+    const review = await o.orch.startReview({ cardId: hub.id, ...ROLES });
+
+    expect(review.cardId).not.toBe(hub.id);
+    expect(review).toMatchObject({ hubCardId: hub.id, prNumber: 599, prBranch: "feat/aviso", base: "dev", prUrl: ATTACHED.url });
+    const fix = await o.registry.getCard(review.cardId);
+    expect(fix).toMatchObject({
+      projectId: project.id, branch: "feat/aviso", base: "dev", accountSlug: "albert", column: "waiting", title: "Correção PR #599 · Aviso não saiu",
+    });
+    expect(fix?.reviewOf).toBeUndefined();
+    // o PR mora no card de correção como entregue por ele (é o que deliver e conferência do GitHub leem)
+    expect(fix?.prs).toEqual([expect.objectContaining({ number: 599, branch: "feat/aviso", base: "dev" })]);
+    expect(fix?.prs?.[0]?.attached).toBeUndefined();
+    // o revisor revisa o card de correção, na branch do PR
+    expect(await o.registry.getCard(review.reviewerCardId)).toMatchObject({ reviewOf: fix!.id, base: "feat/aviso", accountSlug: "mussa" });
+    // visíveis no board: o hub, o de correção (o do revisor fica escondido)
+    expect((await o.registry.listCards(project.id)).length).toBe(before + 2);
+    // a rodada 1 sai pro revisor
+    expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
+    // o autor e o merger ganham work no card de correção (o autor é ator dele a cada relay; o merger mergeia de lá)
+    const shared = (await o.registry.sharesForTarget("card", fix!.id)).filter((x) => x.level === "work").map((x) => x.userId);
+    expect(shared).toContain("u-autor");
+  });
+
+  it("a lista de correção vai ao card de correção, com o autor como ator", async () => {
+    const o = await load();
+    const { hub } = await seedHub(o);
+    const review = await o.orch.startReview({ cardId: hub.id, ...ROLES });
+    send.mockClear();
+    calls.length = 0;
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "1 bloqueante" });
+    expect(send.mock.calls.at(-1)![0]).toBe(review.cardId);
+    expect(calls).toEqual([`actor:u-autor:${review.cardId}`, `send:${review.cardId}`]);
+    // e o card de correção responde como o autor da revisão
+    const after = await o.orch.submitAuthorResponse(review.cardId, {
+      round: 1, items: [{ id: "f1", status: "fixed", commit: "abc1234", reply: "tirei" }], headSha: SHA2,
+    });
+    expect(after).toMatchObject({ phase: "reviewing", round: 2 });
+  });
+
+  it("reaproveita o card que já trabalha a branch do PR, sem criar outro", async () => {
+    const o = await load();
+    const { project, hub } = await seedHub(o);
+    const albert = await o.registry.createCard({ projectId: project.id, title: "Aviso" }, { branch: "feat/aviso" });
+    const before = (await o.registry.listCards(project.id)).length;
+    const review = await o.orch.startReview({ cardId: hub.id, ...ROLES });
+    expect(review).toMatchObject({ cardId: albert.id, hubCardId: hub.id });
+    expect((await o.registry.listCards(project.id)).length).toBe(before + 1);
+    // o card do Albert não ganha o PR registrado por cima da vaga de entrega dele
+    expect((await o.registry.getCard(albert.id))?.prs).toBeUndefined();
+  });
+
+  it("card concluído na branch não conta: nasce o card de correção", async () => {
+    const o = await load();
+    const { project, hub } = await seedHub(o);
+    const old = await o.registry.createCard({ projectId: project.id, title: "Aviso velho" }, { branch: "feat/aviso", column: "done" });
+    const review = await o.orch.startReview({ cardId: hub.id, ...ROLES });
+    expect(review.cardId).not.toBe(old.id);
+    expect(review.cardId).not.toBe(hub.id);
+  });
+
+  it("o próprio card que anexou, se está na branch do PR, é o do autor (sem hubCardId)", async () => {
+    const o = await load();
+    const { project } = await seedHub(o);
+    const self = await o.registry.createCard({ projectId: project.id, title: "Eu mesmo" }, { branch: "feat/aviso" });
+    await o.registry.attachCardPrs(self.id, [ATTACHED]);
+    const review = await o.orch.startReview({ cardId: self.id, ...ROLES });
+    expect(review.cardId).toBe(self.id);
+    expect(review.hubCardId).toBeUndefined();
+  });
+
+  it("autor sem conta Claude própria: autor_sem_conta, nenhum card criado", async () => {
+    const o = await load();
+    const { project, hub } = await seedHub(o);
+    accountOf = { "u-revisor": "mussa" };
+    const before = (await o.registry.listAllCards()).length;
+    await expect(o.orch.startReview({ cardId: hub.id, ...ROLES })).rejects.toThrow(/autor_sem_conta/);
+    expect((await o.registry.listAllCards()).length).toBe(before);
+    expect(await o.store.listReviewsFollowedBy([hub.id])).toEqual([]);
+    expect(project).toBeDefined();
+  });
+
+  it("o mesmo PR anexado em dois cards não ganha duas revisões", async () => {
+    const o = await load();
+    const { project, hub } = await seedHub(o);
+    const other = await o.registry.createCard({ projectId: project.id, title: "Outro" });
+    await o.registry.attachCardPrs(other.id, [ATTACHED]);
+    await o.orch.startReview({ cardId: hub.id, ...ROLES });
+    await expect(o.orch.startReview({ cardId: other.id, ...ROLES })).rejects.toThrow(/revisao_ativa/);
+  });
+
+  it("falha depois de criar o card de correção leva ele junto", async () => {
+    const o = await load();
+    const { hub } = await seedHub(o);
+    // a conta do revisor não existe: o card do revisor não nasce, e o de correção já tinha nascido
+    accountOf = { "u-revisor": "fantasma", "u-autor": "albert" };
+    const before = (await o.registry.listAllCards()).length;
+    await expect(o.orch.startReview({ cardId: hub.id, ...ROLES })).rejects.toThrow(/does not exist/);
+    expect((await o.registry.listAllCards()).length).toBe(before);
+  });
+
+  it("o card que anexou recebe os avisos de fase e vê o PR mergeado", async () => {
+    const o = await load();
+    const { hub } = await seedHub(o);
+    const review = await o.orch.startReview({ cardId: hub.id, ...ROLES });
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
+    expect((await messagesOn(o, hub.id)).length).toBe(1);
+    await o.orch.markReviewMerged(review.id, "merger");
+    expect((await messagesOn(o, hub.id)).length).toBe(2);
+    expect((await o.registry.getCard(hub.id))?.prs?.find((p) => p.number === 599)?.mergedAt).toEqual(expect.any(Number));
+    expect(await o.store.listReviewsFollowedBy([hub.id])).toEqual([expect.objectContaining({ id: review.id, phase: "merged" })]);
+  });
+
+  it("PR entregue pelo próprio card segue o caminho de sempre", async () => {
+    const o = await load();
+    const { author } = await seed(o);
+    const review = await o.orch.startReview({
+      cardId: author.id, prNumber: 7, reviewerUserId: "u-revisor", authorUserId: "u-autor", mergerUserId: "u-merger", by: "u-autor",
+    });
+    expect(review.cardId).toBe(author.id);
+    expect(review.hubCardId).toBeUndefined();
+  });
+});
+
 describe("os papéis no GitHub e o crédito do co-autor", () => {
   /** Conexão GitHub própria e identidade git de uma pessoa (o que o vibehub guarda dela). */
   async function identity(o: Loaded, userId: string, login: string, git?: { gitName: string; gitEmail: string }) {

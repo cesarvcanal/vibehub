@@ -62,7 +62,13 @@ export interface ReviewEvent {
 
 export interface Review {
   id: string;
+  /** O card do AUTOR: onde a correção roda e o PR mora. */
   cardId: string;
+  /**
+   * O card que ANEXOU o PR e pediu a revisão, quando não é o do autor (`vibehub_attach_prs`): de lá as
+   * pessoas acompanham a linha do PR, e lá chegam os avisos de fase. Ausente = pedida no próprio card do autor.
+   */
+  hubCardId?: string;
   projectId: string;
   prNumber: number;
   prUrl: string;
