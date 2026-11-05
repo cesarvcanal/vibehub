@@ -96,6 +96,11 @@ export interface Review {
    * "tentar de novo" (retryReview), e o relay que dá certo limpa a marca.
    */
   approvePending?: boolean;
+  /**
+   * A rodada em que o merge automático foi tentado e recusado (CI, conflito, conexão). Nessa rodada ele
+   * não é tentado de novo e os textos voltam a dizer "merge pelo botão"; uma rodada nova zera o efeito.
+   */
+  autoMergeFailedRound?: number;
   lastSubmitRound?: number;
   lastRespondRound?: number;
   nudges: number;
@@ -234,5 +239,11 @@ export function phaseAfterReviewerRound(review: Review): { phase: ReviewPhase; i
  * PURE.
  */
 export function autoMergeEligible(review: Review): boolean {
-  return review.phase === "ready" && !!review.reviewedSha && !review.findings.some(isOpen);
+  return (
+    review.phase === "ready" && !!review.reviewedSha && !review.findings.some(isOpen) &&
+    // Approve que não chegou ao GitHub: o PR segue com o "changes requested" da rodada 1 — o merge
+    // automático não passa por cima disso; o "tentar de novo" do painel publica e o merge sai depois.
+    !review.approvePending &&
+    review.autoMergeFailedRound !== review.round
+  );
 }

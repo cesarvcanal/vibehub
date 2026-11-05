@@ -24,7 +24,8 @@ import type { Review } from "../services/review/model.js";
  *    e com a conexão GitHub DELE (nunca a do ator do card nem a do projeto, salvo owner sem conexão).
  *
  * As regras de estado (fases, rodadas, relays) moram no orquestrador; aqui ficam quem pode chamar o
- * quê e a tradução dos erros em HTTP. Nenhuma IA chega aqui: o merge é o clique de uma pessoa.
+ * quê e a tradução dos erros em HTTP. Nenhuma IA chega aqui: o merge é o clique de uma pessoa, ou o
+ * merge automático do servidor quando a revisão fica pronta sem nada em pé (orchestrator `autoMerge`).
  */
 
 type Decision = "block" | "drop" | "keep" | "accept_risk";

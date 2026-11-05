@@ -637,44 +637,139 @@ describe("rodada do revisor", () => {
     expect(deliverSpy).not.toHaveBeenCalled();
   });
 
-  it("pronta com sugestão em aberto: o merge segue humano", async () => {
+  /**
+   * O revisor termina o turno do Approve declarando `ready` (o passo 3 do prompt de Approve), como em
+   * produção: o turno começa (limpa a declaração), o `vibehub_report` grava no card, o turno acaba.
+   */
+  const approveTurnEnds = async (o: Loaded, reviewerCardId: string, state: "ready" | "working" = "ready") => {
+    await o.registry.applyCardStatus(reviewerCardId, "working");
+    await o.events.observeCardStatus(reviewerCardId, "waiting", "working");
+    await o.registry.reportCardState(reviewerCardId, state, "PR #7 aprovado no GitHub");
+    await o.registry.applyCardStatus(reviewerCardId, "waiting");
+    await o.events.observeCardStatus(reviewerCardId, "working", "waiting", { state });
+  };
+
+  it("pronta com sugestão em aberto: o merge segue humano, nem depois do Approve", async () => {
     const o = await load();
     const { review } = await started(o);
-    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [SUGGESTION], headSha: SHA1, summary: "s" });
-    expect(mergeSpy).not.toHaveBeenCalled();
+    const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    try {
+      await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [SUGGESTION], headSha: SHA1, summary: "s" });
+      await approveTurnEnds(o, review.reviewerCardId);
+      await new Promise((r) => setTimeout(r, 40));
+      expect(mergeSpy).not.toHaveBeenCalled();
+    } finally {
+      off();
+    }
   });
 
-  it("pronta sem nada em aberto: o merge sai sozinho, em nome do responsável, depois do pedido de Approve", async () => {
+  it("pronta sem nada em aberto: o submit NÃO mergeia (nem espera CI); o merge sai quando o revisor termina o Approve", async () => {
     const o = await load();
     const { review } = await started(o);
+    const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    try {
+      const after = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
+      expect(after.phase).toBe("ready");
+      // a ferramenta do revisor volta já: o merge não roda dentro dela, e o Approve ainda não saiu
+      expect(mergeSpy).not.toHaveBeenCalled();
+      expect(lastText()).toContain("o PAINEL mergeia sozinho");
+      // um fim de turno que não reporta ready (o do próprio submit) não dispara nada
+      await approveTurnEnds(o, review.reviewerCardId, "working");
+      await new Promise((r) => setTimeout(r, 40));
+      expect(mergeSpy).not.toHaveBeenCalled();
+      // o turno do Approve termina com ready: o merge sai, automático, em nome do responsável
+      await approveTurnEnds(o, review.reviewerCardId);
+      await vi.waitFor(() => expect(mergeSpy).toHaveBeenCalledWith(review.id, "u-merger", { auto: true }));
+      expect(mergeSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      off();
+    }
+  });
+
+  it("Approve que não chegou (approvePending) segura o merge automático", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    sendFailure = new Error("card do revisor fora do ar");
     const after = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
-    expect(after.phase).toBe("ready");
-    expect(mergeSpy).toHaveBeenCalledTimes(1);
-    expect(mergeSpy).toHaveBeenCalledWith(review.id, "u-merger");
-    // o Approve foi pedido antes do merge
-    expect(send.mock.invocationCallOrder[0]!).toBeLessThan(mergeSpy.mock.invocationCallOrder[0]!);
+    expect(after).toMatchObject({ phase: "ready", approvePending: true });
+    sendFailure = null;
+    const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    try {
+      await approveTurnEnds(o, review.reviewerCardId);
+      await new Promise((r) => setTimeout(r, 40));
+      expect(mergeSpy).not.toHaveBeenCalled();
+    } finally {
+      off();
+    }
   });
 
-  it("merge automático recusado (CI vermelho) vira nota e aviso, e a revisão fica pronta pro botão", async () => {
+  it("merge automático recusado (CI vermelho): nota e aviso curtos, a rodada não tenta de novo e os textos voltam ao botão", async () => {
     const o = await load();
     const { author, review } = await started(o);
-    mergeAnswer = { kind: "refused", status: 409, reason: "gate", error: "checks vermelhos" };
-    const after = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
-    expect(after.phase).toBe("ready");
-    expect(after.log.some((e) => e.who === "system" && /Merge automático não saiu \(checks vermelhos\)/.test(e.text))).toBe(true);
-    const notices = (await messagesOn(o, author.id)).map((e) => e.text);
-    expect(notices).toContainEqual(expect.stringMatching(/PR #7: o merge automático não saiu \(checks vermelhos\)/));
+    const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    try {
+      mergeAnswer = { kind: "refused", status: 409, reason: "gate", error: `checks vermelhos ${"log ".repeat(200)}` };
+      await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
+      await approveTurnEnds(o, review.reviewerCardId);
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.autoMergeFailedRound).toBe(1));
+      const after = (await o.store.getReview(review.id))!;
+      expect(after.phase).toBe("ready");
+      const failed = after.log.find((e) => e.who === "system" && /Merge automático não saiu \(checks vermelhos/.test(e.text));
+      expect(failed).toBeDefined();
+      expect(failed!.text.length).toBeLessThan(300);
+      const notice = (await messagesOn(o, author.id)).map((e) => e.text).find((t) => /merge automático não saiu/.test(t));
+      expect(notice).toMatch(/^PR #7: o merge automático não saiu \(checks vermelhos/);
+      expect(notice!.length).toBeLessThan(300);
+      // a mesma rodada não tenta de novo, e a resposta das tools já não promete o merge sozinho
+      expect(o.orch.reviewToolAnswer(after, "reviewer", 1).next).toMatch(/merge humano/);
+      await approveTurnEnds(o, review.reviewerCardId);
+      await new Promise((r) => setTimeout(r, 40));
+      expect(mergeSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      off();
+    }
   });
 
-  it("dúvida retirada pelo humano deixa a revisão limpa: o merge sai sozinho também", async () => {
+  it("dúvida retirada pelo humano deixa a revisão limpa: o merge sai depois do Approve", async () => {
     const o = await load();
     const { review } = await started(o);
-    const waiting = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [QUESTION], headSha: SHA1, summary: "d" });
-    expect(waiting.phase).toBe("reviewing");
+    const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    try {
+      const waiting = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [QUESTION], headSha: SHA1, summary: "d" });
+      expect(waiting.phase).toBe("reviewing");
+      const after = await o.orch.decideQuestion(review.id, waiting.findings[0]!.id, "drop", "revisor");
+      expect(after.phase).toBe("ready");
+      expect(mergeSpy).not.toHaveBeenCalled();
+      await approveTurnEnds(o, review.reviewerCardId);
+      await vi.waitFor(() => expect(mergeSpy).toHaveBeenCalledWith(review.id, "u-merger", { auto: true }));
+    } finally {
+      off();
+    }
+  });
+
+  it("'não fazer' a última sugestão de uma revisão já aprovada: o merge sai sozinho", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    try {
+      const ready = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [SUGGESTION], headSha: SHA1, summary: "s" });
+      await approveTurnEnds(o, review.reviewerCardId);
+      await new Promise((r) => setTimeout(r, 40));
+      expect(mergeSpy).not.toHaveBeenCalled();
+      await o.orch.decideSuggestions(review.id, { skip: [ready.findings[0]!.id] }, "revisor");
+      await vi.waitFor(() => expect(mergeSpy).toHaveBeenCalledWith(review.id, "u-merger", { auto: true }));
+    } finally {
+      off();
+    }
+  });
+
+  it("'não fazer' a última sugestão ANTES do Approve terminar: espera o fim de turno do revisor", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    const ready = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [SUGGESTION], headSha: SHA1, summary: "s" });
+    await o.orch.decideSuggestions(review.id, { skip: [ready.findings[0]!.id] }, "revisor");
+    await new Promise((r) => setTimeout(r, 40));
     expect(mergeSpy).not.toHaveBeenCalled();
-    const after = await o.orch.decideQuestion(review.id, waiting.findings[0]!.id, "drop", "revisor");
-    expect(after.phase).toBe("ready");
-    expect(mergeSpy).toHaveBeenCalledWith(review.id, "u-merger");
   });
 
   it("mudança pra ready grava aviso no card do autor", async () => {

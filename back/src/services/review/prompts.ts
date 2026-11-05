@@ -334,14 +334,18 @@ export function reviewerApprovePrompt(r: Review): string {
   const risks = r.findings.filter((f) => f.status === "accepted_risk");
   return [
     header(r),
-    "A revisão terminou sem bloqueante em aberto: o PR está pronto para o merge HUMANO.",
+    autoMergeEligible(r)
+      ? "A revisão terminou sem nada em aberto: depois do seu Approve, o PAINEL mergeia sozinho (não você)."
+      : "A revisão terminou sem bloqueante em aberto: o PR está pronto para o merge HUMANO.",
     rules(),
     "",
     `1. Aprove no GitHub, na sua conta: gh pr review ${r.prNumber} --approve --body "<resumo>"`,
     "   O resumo diz o que foi revisado, o que o autor corrigiu e as sugestões que ficaram.",
     ...(risks.length ? ["   Cite os riscos aceitos pelo revisor humano:", lines(risks, "")] : []),
     ghReviewFallback("vibehub_report"),
-    "2. NÃO mergeie. Não rode `gh pr merge` e não chame vibehub_deliver: o merge é o botão do responsável no vibehub.",
+    autoMergeEligible(r)
+      ? "2. NÃO mergeie. Não rode `gh pr merge` e não chame vibehub_deliver: o merge sai do vibehub quando você reportar o passo 3."
+      : "2. NÃO mergeie. Não rode `gh pr merge` e não chame vibehub_deliver: o merge é o botão do responsável no vibehub.",
     `3. No fim, chame a ferramenta MCP vibehub_report com card: "${r.reviewerCardId}", state: "ready", ` +
       `summary: "PR #${r.prNumber} aprovado no GitHub".`,
   ].join("\n");
@@ -390,7 +394,7 @@ export function phaseNoticeText(r: Review): string {
 
 /** O aviso de que o merge automático não saiu: o motivo, e que o botão segue valendo. */
 export function autoMergeFailedText(r: Review, why: string): string {
-  return `PR #${r.prNumber}: o merge automático não saiu (${why}) — mergeie pelo painel.`;
+  return `PR #${r.prNumber}: o merge automático não saiu (${oneLine(why, 200)}) — mergeie pelo painel.`;
 }
 
 /** O aviso de que o Approve não foi publicado: o PR está pronto, mas o GitHub ainda mostra o pedido de mudanças. */

@@ -700,9 +700,10 @@ describe("decidir, tentar de novo e cancelar", () => {
     expect((await decide(review.id, w.revisor, { findingId: "f1" })).statusCode).toBe(400);
     const ok = await decide(review.id, w.revisor, { findingId: "f1", decision: "drop" });
     expect(ok.statusCode).toBe(200);
-    // Retirada a única dúvida, nada fica em pé: a revisão vai a ready e o merge sai sozinho.
-    expect(ok.json().review.phase).toBe("merged");
-    expect(deliver.mock.calls.at(-1)![1]).toMatchObject({ mergeOnly: true, expectedHeadSha: SHA1 });
+    // Retirada a única dúvida, a revisão vai a ready; o merge automático espera o Approve do revisor
+    // (o fim de turno dele), então a rota responde na hora e nada é mergeado aqui.
+    expect(ok.json().review.phase).toBe("ready");
+    expect(deliver).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ mergeOnly: true }));
     expect((await decide("nao-existe", w.revisor, { findingId: "f1", decision: "drop" })).statusCode).toBe(404);
   });
 
