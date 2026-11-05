@@ -9,7 +9,7 @@ import { findUser } from "../../auth/users.js";
 import { cardLevel } from "../../auth/access.js";
 import { creatorAccountSlug, getUserGit } from "../../auth/userGit.js";
 import { sendToTerminal, SEND_READY_WAIT_MS } from "../maestro/maestro.js";
-import { afterPrMerged, readPrState, setPrPeople } from "../maestro/deliver.js";
+import { afterPrMerged, readPrApproval, readPrState, setPrPeople } from "../maestro/deliver.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { eventsAfter, onCardEvent, recordMessage, type CardEvent, type Severity } from "../events/cardEvents.js";
 import { logger } from "../../utils/logger.js";
@@ -348,17 +348,32 @@ async function autoMerge(r: Review): Promise<void> {
   const now = (await getReview(r.id)) ?? r;
   if (!autoMergeEligible(now)) return;
   try {
+    // O "ready" que o revisor reporta não prova o Approve: o prompt manda reportar mesmo quando o
+    // `gh pr review --approve` falha (review do próprio PR, permissão). Quem prova é o GitHub — um
+    // APPROVED no commit revisado e nenhum "changes requested" de pé. Leitura que falha = não.
+    const approved = await readPrApproval(now.cardId, now.prUrl, now.reviewedSha as string);
+    if (approved !== true) {
+      const why = approved === null ? "não consegui ler as reviews do PR no GitHub" : "o Approve do revisor não está no GitHub no commit revisado";
+      await refuseAutoMerge(now, why);
+      return;
+    }
     const { mergeReviewedPr } = await import("./merge.js");
     const outcome = await mergeReviewedPr(now.id, now.mergerUserId, { auto: true });
     if (outcome.kind === "merged" || outcome.reason === "not_ready" || outcome.reason === "merging" || outcome.reason === "head_moved") return;
-    const after = await mutateReview(now.id, (x) => {
-      x.autoMergeFailedRound = x.round;
-      note(x, "system", `Merge automático não saiu (${oneLine(outcome.error, 200)}); o merge fica pelo botão.`);
-    });
-    await notifyBoth(after, `review:${now.id}:automerge_failed:${now.round}`, autoMergeFailedText(after, outcome.error), "warning");
+    await refuseAutoMerge(now, outcome.error);
   } catch (err) {
     logger.warn({ review: r.id, detail: (err as Error).message }, "PR review auto-merge failed");
   }
+}
+
+/** O merge automático não sai nesta rodada: marca, conta no log da revisão e avisa os dois cards. */
+async function refuseAutoMerge(r: Review, why: string): Promise<void> {
+  logger.info({ audit: true, action: "review.automerge", review: r.id, merged: false, reason: oneLine(why, 200) }, "PR review auto-merge refused");
+  const after = await mutateReview(r.id, (x) => {
+    x.autoMergeFailedRound = x.round;
+    note(x, "system", `Merge automático não saiu (${oneLine(why, 200)}); o merge fica pelo botão.`);
+  });
+  await notifyBoth(after, `review:${r.id}:automerge_failed:${r.round}`, autoMergeFailedText(after, why), "warning");
 }
 
 /** A linha de sistema que conta o resultado da rodada do revisor. */

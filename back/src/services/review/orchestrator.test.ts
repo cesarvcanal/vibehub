@@ -49,6 +49,8 @@ const resume = vi.fn(async (cardId: string) => {
   return await reopen?.(cardId);
 });
 const deliverSpy = vi.fn(async () => ({ merged: true }));
+let approvalNow: boolean | null = true;
+const prApproval = vi.fn(async (_cardId: string, _prUrl: string, _sha: string) => approvalNow);
 type MergeOutcome = import("./merge.js").ReviewMergeOutcome;
 const REFUSED_NOT_READY: MergeOutcome = { kind: "refused", status: 409, reason: "not_ready", error: "não pronta" };
 let mergeAnswer: MergeOutcome = REFUSED_NOT_READY;
@@ -89,6 +91,7 @@ async function load() {
     ...(await vi.importActual<typeof import("../maestro/deliver.js")>("../maestro/deliver.js")),
     deliver: deliverSpy,
     readPrState: prHead,
+    readPrApproval: prApproval,
     afterPrMerged: afterMerged,
     setPrPeople: prPeople,
   }));
@@ -143,6 +146,8 @@ beforeEach(async () => {
   deliverSpy.mockClear();
   mergeSpy.mockClear();
   mergeAnswer = REFUSED_NOT_READY;
+  prApproval.mockClear();
+  approvalNow = true;
   prHead.mockClear();
   prHeadNow = null;
   prStateNow = "OPEN";
@@ -681,6 +686,43 @@ describe("rodada do revisor", () => {
       await approveTurnEnds(o, review.reviewerCardId);
       await vi.waitFor(() => expect(mergeSpy).toHaveBeenCalledWith(review.id, "u-merger", { auto: true }));
       expect(mergeSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      off();
+    }
+  });
+
+  it("revisor reporta ready mas o GitHub recusou o Approve: nada é mergeado, a rodada vai pro botão (f9)", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    try {
+      approvalNow = false;
+      await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
+      await approveTurnEnds(o, review.reviewerCardId);
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.autoMergeFailedRound).toBe(1));
+      expect(prApproval).toHaveBeenCalledWith(author.id, PR.url, SHA1);
+      expect(mergeSpy).not.toHaveBeenCalled();
+      const after = (await o.store.getReview(review.id))!;
+      expect(after.phase).toBe("ready");
+      expect(after.log.at(-1)!.text).toMatch(/o Approve do revisor não está no GitHub no commit revisado/);
+      const notices = (await messagesOn(o, author.id)).map((e) => e.text);
+      expect(notices).toContainEqual(expect.stringMatching(/PR #7: o merge automático não saiu \(o Approve do revisor não está no GitHub/));
+    } finally {
+      off();
+    }
+  });
+
+  it("leitura das reviews que falha conta como sem Approve: não mergeia", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    try {
+      approvalNow = null;
+      await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
+      await approveTurnEnds(o, review.reviewerCardId);
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.autoMergeFailedRound).toBe(1));
+      expect(mergeSpy).not.toHaveBeenCalled();
+      expect((await o.store.getReview(review.id))!.log.at(-1)!.text).toMatch(/não consegui ler as reviews do PR/);
     } finally {
       off();
     }
