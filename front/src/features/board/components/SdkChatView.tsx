@@ -1505,6 +1505,14 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
         {working ? t(workingStage(workingKind, 0).verb) : ""}
       </span>
       <JumpToLatest stick={stick} />
+      {/* O MEDIDOR DE CONTEXTO mora no canto inferior direito da caixa da conversa — na linha do
+          copiar/ouvir da última resposta e do "Trabalhando…", que ocupam a esquerda. Fica por cima
+          do log (como o "ir para o fim"), com fundo opaco para o texto rolando não vazar por trás. */}
+      {state.contextUsage ? (
+        <div data-testid="sdk-context-corner" className="absolute bottom-3 right-4 z-10 rounded-full bg-background">
+          <ContextMeter usage={state.contextUsage} />
+        </div>
+      ) : null}
       </div>
 
       {/* O TRABALHO QUE SEGUE DEPOIS DO TURNO — um `sleep` esperando o deploy, um subagente. O
@@ -1556,15 +1564,13 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
       {/* O contexto saiu da faixa inteligente: o recado por extenso, acima da faixa do medidor. */}
       <ContextNotice usage={state.contextUsage} className="mt-1.5" />
 
-      {/* Uma faixa, três recados: quem está digitando à esquerda; à direita o aviso do plano e o
-          medidor de quanto do contexto a conversa já ocupa. */}
+      {/* Uma faixa, dois recados: quem está digitando à esquerda; à direita o aviso do plano. */}
       <div className="mt-1.5 flex items-center justify-between gap-2">
         <div className="min-w-0 flex-1">
           <PeerTypingIndicator names={typingPeers} />
         </div>
         <div className="flex min-w-0 max-w-[75%] items-center justify-end gap-2">
           <PlanUsageAlert alert={usageAlert} now={alertNow} className="min-w-0 shrink" />
-          <ContextMeter usage={state.contextUsage} />
         </div>
       </div>
 
@@ -1955,7 +1961,8 @@ function SdkWorkingLine({
     // Para os olhos: dentro do log o relógio seria anunciado a cada segundo (a fase vai pelo status).
     <div
       aria-hidden="true"
-      className="flex items-center gap-2 text-xs text-muted-foreground"
+      // `pr-36`: o canto direito desta linha é do medidor de contexto; a nota trunca antes dele.
+      className="flex items-center gap-2 pr-36 text-xs text-muted-foreground"
       data-testid="sdk-chat-working"
       data-phase={kind}
     >

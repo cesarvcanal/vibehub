@@ -4578,7 +4578,7 @@ describe("SdkChatView — o aviso de limite do plano", () => {
 });
 
 /**
- * O MEDIDOR DE CONTEXTO — quanto da janela a conversa ocupa, ao lado do aviso do plano. A cor
+ * O MEDIDOR DE CONTEXTO — quanto da janela a conversa ocupa, no canto inferior direito do log. A cor
  * desliza com o percentual; o guia (tooltip) mostra as três faixas com a de agora em destaque.
  */
 describe("SdkChatView — o medidor de contexto", () => {
@@ -4609,6 +4609,20 @@ describe("SdkChatView — o medidor de contexto", () => {
 
     ws.deliver({ type: "ready" });
     expect(screen.queryByTestId("context-meter")).toBeNull();
+  });
+
+  it("fica no canto inferior direito da caixa da conversa, não na faixa acima do campo", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "context_usage", usedTokens: 24_000, maxTokens: 200_000, percent: 12 } as SdkEvent);
+    const corner = screen.getByTestId("sdk-context-corner");
+    expect(corner).toContainElement(screen.getByTestId("context-meter"));
+    expect(corner.className).toMatch(/\babsolute\b.*\bbottom-3\b.*\bright-4\b/);
+    // Mesma caixa do log: o canto é irmão do scroller, dentro do mesmo invólucro.
+    expect(corner.parentElement).toContainElement(screen.getByTestId("sdk-chat-scroller"));
+    expect(screen.getByTestId("terminal-composer").previousElementSibling).not.toContainElement(screen.getByTestId("context-meter"));
   });
 
   it("o guia mostra os tokens, as três faixas e destaca a de agora", async () => {
