@@ -378,6 +378,64 @@ describe("iniciar a revisão", () => {
   });
 });
 
+/**
+ * A REVISÃO PEDIDA PELA IA DO CARD (`vibehub_review_start`): a pessoa disse no chat quem revisa, quem é
+ * coautor e que pode mergear, e ainda teve que abrir o "Pedir revisão" e escolher tudo de novo
+ * (produção, 2026-11-06). Agora a IA pede em nome de quem deu a ordem (o ator do card), com as MESMAS
+ * conferências da rota e os padrões do diálogo para o que não foi dito.
+ */
+describe("iniciar a revisão pela IA do card (vibehub_review_start)", () => {
+  const byAgent = async () => (await import("../services/review/start.js")).startReviewByAgent;
+  const actor = async (cardId: string, userId: string) => await (await registry()).stampCardActor(cardId, userId);
+
+  it("os papéis ditos no chat, por nome: revisor e coautor; quem corrige e quem mergeia saem dos padrões", async () => {
+    const w = await world();
+    await actor(w.cardId, w.autor.id);
+    await app.inject({
+      method: "POST", url: `/api/projects/${w.projectId}/shares`, headers: { cookie: w.owner.cookie }, payload: { userId: w.outro.id, level: "view" },
+    });
+    // a ordem veio do merger ("pede revisão pro revisor, coautor o outro, e mergeia quando estiver ok")
+    await actor(w.cardId, w.merger.id);
+    const review = await (await byAgent())(w.cardId, { reviewer: "REVISOR", coauthor: "@outro" });
+    expect(review).toMatchObject({
+      prNumber: 7, phase: "reviewing", reviewerUserId: w.revisor.id, coauthorUserId: w.outro.id,
+      // sem `merger`: quem deu a ordem; sem `author`: quem trabalha o card agora (o mesmo do diálogo)
+      mergerUserId: w.merger.id, authorUserId: w.merger.id,
+    });
+    expect(send).toHaveBeenCalled(); // a rodada 1 saiu para o revisor, como pelo botão
+    expect((await (await store()).activeReviewFor(w.cardId))?.id).toBe(review.id);
+  });
+
+  it("autor e merger explícitos valem; o merge automático segue sendo o de sempre (em nome do merger)", async () => {
+    const w = await world();
+    await actor(w.cardId, w.autor.id);
+    const review = await (await byAgent())(w.cardId, { reviewer: "revisor", author: "autor", merger: "merger", pr: 7 });
+    expect(review).toMatchObject({ authorUserId: w.autor.id, mergerUserId: w.merger.id, reviewerUserId: w.revisor.id });
+  });
+
+  it("recusa com código, sem abrir nada: pessoa desconhecida, sem ordem, PR que não existe, papel sem work", async () => {
+    const w = await world();
+    const start = await byAgent();
+    await expect(start(w.cardId, { reviewer: "revisor" })).rejects.toThrow(/^sem_ordem/);
+    await actor(w.cardId, w.autor.id);
+    await expect(start(w.cardId, { reviewer: "fulano" })).rejects.toThrow(/^pessoa_desconhecida: revisor "fulano".*revisor/);
+    await expect(start(w.cardId, { reviewer: "revisor", pr: 99 })).rejects.toThrow(/^sem_pr: .*#7/);
+    await expect(start(w.cardId, { reviewer: "revisor", merger: "leitor" })).rejects.toThrow(/^papel_sem_work/);
+    await expect(start(w.cardId, { reviewer: "autor" })).rejects.toThrow(/^revisor_igual_autor/);
+    expect(send).not.toHaveBeenCalled();
+    expect(await (await store()).activeReviewFor(w.cardId)).toBeUndefined();
+    expect((await (await registry()).listAllCards()).filter((c) => c.reviewOf)).toEqual([]);
+  });
+
+  it("quem deu a ordem sem work no card não pede revisão em nome de ninguém", async () => {
+    const w = await world();
+    await actor(w.cardId, w.leitor.id);
+    await expect((await byAgent())(w.cardId, { reviewer: "revisor", author: "autor", merger: "merger" }))
+      .rejects.toThrow(/^pessoa_sem_acesso: leitor/);
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
 describe("PRs anexados: uma revisão por PR, acompanhada do card que anexou", () => {
   const attached = (n: number) => ({
     number: n, url: `https://github.com/acme/widgets/pull/${n}`, base: "dev", branch: `feat/pr-${n}`, author: "albert-gh", title: `PR ${n}`,
