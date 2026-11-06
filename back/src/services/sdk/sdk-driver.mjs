@@ -1126,6 +1126,8 @@ async function runStream() {
             emit({ type: "tool_use", id: block.id, name: block.name, input: block.input, ...origin });
           }
         }
+        // Cada resposta do principal muda o contexto; num turno longo o medidor anda junto (com teto).
+        if (parent === null) void emitContextUsage(myQuery, false);
       } else if (msg.type === "user") {
         // O RESULTADO de cada ferramenta (do principal e dos subagentes) — ver `toolResultFrames`.
         for (const frame of toolResultFrames(msg)) {
@@ -1144,6 +1146,7 @@ async function runStream() {
         const aborted = wasAborted(msg.terminal_reason);
         emit({ type: "result", subtype: msg.subtype, isError: !!msg.is_error && !aborted,
           sessionId: msg.session_id, result: msg.result, permissionDenials: msg.permission_denials });
+        void emitContextUsage(myQuery, true);
       }
     }
   } catch (err) {
@@ -1191,6 +1194,54 @@ async function runStream() {
       // it, so there is nothing left to give back. (A disowned stream ending late must not wipe
       // what its SUCCESSOR pinned — that effort would never be given back.)
       ultraRaised = null;
+    }
+  }
+}
+
+/* ------------------------------------------------------- context usage */
+
+// QUANTO DA JANELA DE CONTEXTO A SESSÃO JÁ OCUPA — o número do /context, para a tela pintar o medidor.
+// `detail: "summary"` responde da `usage` da última resposta + estimativa local, sem as chamadas de
+// contagem de tokens por categoria do modo "full": barato o bastante para correr a cada resposta.
+// Pedido no fim de cada turno e, durante um turno longo, no máximo a cada CONTEXT_USAGE_EVERY_MS.
+const CONTEXT_USAGE_EVERY_MS = 5_000;
+let contextUsageAt = 0;
+let contextUsageInFlight = false;
+let contextUsageAgain = false; // o fim do turno chegou com uma leitura em voo: refaz depois dela
+
+/**
+ * Asks the live session how full its context window is and emits `context_usage`. Best effort: an
+ * SDK without `getContextUsage`, a stream that died in between, an answer without numbers — all end
+ * in silence (the meter keeps the last reading). `force` skips the throttle (the end of a turn).
+ */
+async function emitContextUsage(handle, force) {
+  if (!handle || typeof handle.getContextUsage !== "function") return;
+  if (contextUsageInFlight) {
+    if (force) contextUsageAgain = true;
+    return;
+  }
+  const now = Date.now();
+  if (!force && now - contextUsageAt < CONTEXT_USAGE_EVERY_MS) return;
+  contextUsageInFlight = true;
+  contextUsageAt = now;
+  try {
+    const usage = await handle.getContextUsage({ detail: "summary" });
+    // Um stream que foi trocado no meio fala da sessão VELHA: o número dele não vale mais.
+    if (!usage || handle !== currentQuery) return;
+    emit({
+      type: "context_usage",
+      totalTokens: usage.totalTokens,
+      maxTokens: usage.rawMaxTokens ?? usage.maxTokens,
+      percentage: usage.percentage,
+      ...(typeof usage.model === "string" ? { model: usage.model } : {}),
+    });
+  } catch (err) {
+    trace(`context usage: ${err && err.message ? err.message : String(err)}`);
+  } finally {
+    contextUsageInFlight = false;
+    if (contextUsageAgain) {
+      contextUsageAgain = false;
+      void emitContextUsage(currentQuery, true);
     }
   }
 }
