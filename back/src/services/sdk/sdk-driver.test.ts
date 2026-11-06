@@ -1034,7 +1034,7 @@ describe("sdk-driver.mjs — uso de contexto", () => {
     driver.send({ type: "user", text: "hello" });
     const usage = await driver.waitFor((e) => e.type === "context_usage");
     expect(usage).toMatchObject({ type: "context_usage", maxTokens: 200000, model: "claude-opus-5-5" });
-    expect(typeof usage.totalTokens).toBe("number");
+    expect(typeof usage.usedTokens).toBe("number");
     expect(driver.marks).toContain('context:{"detail":"summary"}');
     const resultAt = driver.events.findIndex((e) => e.type === "result");
     const lastUsageAt = driver.events.map((e) => e.type).lastIndexOf("context_usage");

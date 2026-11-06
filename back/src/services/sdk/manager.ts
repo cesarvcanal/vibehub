@@ -11,6 +11,7 @@ import { loadQuestionDrafts, saveQuestionDrafts, type StoredQuestionDraft } from
 import { createLineReader } from "../../utils/lineReader.js";
 import { writeCardCatalog } from "./catalog.js";
 import { normalizeRateLimit, type RateLimitInfo } from "./rateLimit.js";
+import { normalizeContextUsage, type ContextUsageInfo } from "./contextUsage.js";
 import { forgetCardWorkflows, lastWorkflowRuns, readAgentFeed, watchCardWorkflows } from "./workflow.js";
 import { InvalidWorkflowIdError } from "./workflowProbe.js";
 import { InvalidDetailIdError, readAgentTimeline, readToolDetail } from "./detail.js";
@@ -137,6 +138,11 @@ export interface DriverSession {
    * Estado da sessão: reenviado a quem conecta depois, nunca gravado.
    */
   rateLimits: Map<string, RateLimitInfo>;
+  /**
+   * A última leitura de quanto da janela de contexto a sessão ocupa (o medidor ao lado do "está
+   * digitando"). Estado da sessão, como o aviso de limite: reenviado a quem conecta, nunca gravado.
+   */
+  contextUsage?: ContextUsageInfo;
   /** Quando o conjunto deixou de ser vazio — o início da contagem de `BACKGROUND_HOLD_MAX_MS`. */
   backgroundSince?: number;
   /** O acerto do status do card depois que o segundo plano esvaziou (ver BACKGROUND_SETTLE_MS). */
@@ -791,6 +797,12 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     if (!info) return;
     session.rateLimits.set(info.window, info);
     event = { type: "rate_limit", ...info };
+  }
+  if (event.type === "context_usage") {
+    const info = normalizeContextUsage(event);
+    if (!info) return;
+    session.contextUsage = info;
+    event = { type: "context_usage", ...info };
   }
   if (event.type === "turn_absorbed") {
     // Streaming input: this send folded into the turn ALREADY running (the model absorbs it at its
@@ -2055,6 +2067,12 @@ export function attachSocket(
   // com a sessão a 92% precisa ver a faixa no primeiro quadro, não depois da próxima resposta.
   for (const info of session.rateLimits.values()) {
     try { socket.send(JSON.stringify({ type: "rate_limit", ...info })); } catch { /* going away */ }
+  }
+
+  // O medidor de contexto também: a leitura só vem no fim de um turno, e quem abre o card parado
+  // precisa ver quanto a conversa já ocupa sem mandar mensagem nenhuma.
+  if (session.contextUsage) {
+    try { socket.send(JSON.stringify({ type: "context_usage", ...session.contextUsage })); } catch { /* going away */ }
   }
 
   // A frota do workflow é da mesma natureza do catálogo: estado, não conversa. Ela não está no

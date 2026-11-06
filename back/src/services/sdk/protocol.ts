@@ -13,6 +13,7 @@
 // keeps the file free of runtime imports (and of the probe's config/host side of the graph).
 import type { WorkflowFeedItem, WorkflowRun } from "./workflowProbe.js";
 import type { RateLimitEvent } from "./rateLimit.js";
+import type { ContextUsageEvent } from "./contextUsage.js";
 import type { RawTaskEvent, RawToolResultEvent } from "./toolResult.js";
 
 /* ------------------------------------------------------------------ events */
@@ -274,6 +275,11 @@ export interface BackgroundTasksEvent { type: "background_tasks"; tasks: Backgro
  * e é reenviado a quem conecta depois. Unidades já normalizadas pelo manager (ver ./rateLimit.ts).
  */
 export type { RateLimitEvent };
+/**
+ * Quanto da janela de contexto a sessão ocupa (o `/context`), lido no fim de cada turno. Estado da
+ * SESSÃO como o aviso de limite; tokens e percentual já normalizados pelo manager (./contextUsage.ts).
+ */
+export type { ContextUsageEvent };
 export interface ConversationResetEvent { type: "conversation_reset"; trigger?: string }
 /** The driver is up and ready to accept the first user message. The back stamps `turnActive` on
  *  every `ready` it sends (real or synthesized on reattach) with the manager's live turn count, so
@@ -322,6 +328,7 @@ export type DriverEvent =
   | BtwAnswerEvent
   | BackgroundTasksEvent
   | RateLimitEvent
+  | ContextUsageEvent
   | ConversationResetEvent
   | ResultEvent
   | ReadyEvent
@@ -356,6 +363,7 @@ const DRIVER_EVENT_TYPES = new Set([
   "btw_answer",
   "background_tasks",
   "rate_limit",
+  "context_usage",
   "conversation_reset",
   "result",
   "ready",

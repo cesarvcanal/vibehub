@@ -1230,9 +1230,9 @@ async function emitContextUsage(handle, force) {
     if (!usage || handle !== currentQuery) return;
     emit({
       type: "context_usage",
-      totalTokens: usage.totalTokens,
+      // A janela CRUA do modelo (200k, 1M) — a mesma base do "84k/200k" do /context.
+      usedTokens: usage.totalTokens,
       maxTokens: usage.rawMaxTokens ?? usage.maxTokens,
-      percentage: usage.percentage,
       ...(typeof usage.model === "string" ? { model: usage.model } : {}),
     });
   } catch (err) {
