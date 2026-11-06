@@ -2902,6 +2902,40 @@ describe("context_usage — o medidor de contexto", () => {
     expect(parsed(s1)).toEqual([{ type: "context_usage", usedTokens: 10_000, maxTokens: 100_000, percent: 10 }]);
   });
 
+  it("card reaberto que retoma a MESMA sessão já mostra a última leitura; outra sessão não herda", () => {
+    const first = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
+    spawned[0]!.stdout.emit("data", line({ type: "session", sessionId: "s-1" }));
+    spawned[0]!.stdout.emit("data", line({ type: "context_usage", usedTokens: 130_000, maxTokens: 200_000 }));
+    stopCardDriver(CARD);
+    expect(first.closed).toBe(true);
+
+    const resumed = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec", "--resume", "s-1"] } });
+    const s1 = fakeSocket();
+    attachSocket(resumed, s1 as never);
+    expect(parsed(s1)).toEqual([{ type: "context_usage", usedTokens: 130_000, maxTokens: 200_000, percent: 65 }]);
+    stopCardDriver(CARD);
+
+    const other = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec", "--resume", "s-2"] } });
+    const s2 = fakeSocket();
+    attachSocket(other, s2 as never);
+    expect(parsed(s2)).toEqual([]);
+  });
+
+  it("o /clear apaga a leitura: quem conecta depois não vê o medidor da conversa apagada", () => {
+    const session = ensure();
+    spawned[0]!.stdout.emit("data", line({ type: "session", sessionId: "s-1" }));
+    spawned[0]!.stdout.emit("data", line({ type: "context_usage", usedTokens: 130_000, maxTokens: 200_000 }));
+    spawned[0]!.stdout.emit("data", line({ type: "conversation_reset", trigger: "clear" }));
+    const late = fakeSocket();
+    attachSocket(session, late as never);
+    expect(parsed(late)).toEqual([]);
+    stopCardDriver(CARD);
+    const resumed = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec", "--resume", "s-1"] } });
+    const s2 = fakeSocket();
+    attachSocket(resumed, s2 as never);
+    expect(parsed(s2)).toEqual([]);
+  });
+
   it("uma sessão sem leitura não manda medidor nenhum a quem conecta", () => {
     const session = ensure();
     const s1 = fakeSocket();

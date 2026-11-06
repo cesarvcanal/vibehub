@@ -366,6 +366,7 @@ export function setDriverSpawnerForTesting(fn: DriverSpawner | null): void {
 export function resetSdkSessionsForTesting(): void {
   for (const cardId of [...sessions.keys()]) stopCardDriver(cardId);
   sessions.clear();
+  lastContextByCard.clear();
 }
 
 /** Whether a card has a LIVE driver right now. */
@@ -802,6 +803,7 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     const info = normalizeContextUsage(event);
     if (!info) return;
     session.contextUsage = info;
+    if (session.lastSessionId) lastContextByCard.set(session.cardId, { sessionId: session.lastSessionId, info });
     event = { type: "context_usage", ...info };
   }
   if (event.type === "turn_absorbed") {
@@ -931,6 +933,10 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     // `conversation_reset` em sdk-driver.mjs), sair do plan mode inclusive.
     void clearHistoryBeforeLastClear(session.cardId);
     forgetCardWorkflows(session.cardId);
+    // A conversa apagada não ocupa mais nada: o medidor dela sai junto (a leitura da sessão nova
+    // chega no fim do turno do /clear).
+    session.contextUsage = undefined;
+    lastContextByCard.delete(session.cardId);
     emitSystemNote(session, NOTE_CONVERSATION_CLEARED);
   }
   if (interruptNoteToFlush) emitSystemNote(session, interruptNoteToFlush);
@@ -1063,6 +1069,19 @@ export function createDetailResponder(
   };
 }
 
+/**
+ * A última leitura de contexto de cada card, PELA SESSÃO a que ela pertence — sobrevive ao fim do
+ * driver (idle stop, pausa). Um card reaberto que retoma a mesma sessão (`--resume`) já mostra o
+ * medidor, sem esperar a próxima mensagem; uma sessão diferente não herda o número de outra.
+ */
+const lastContextByCard = new Map<string, { sessionId: string; info: ContextUsageInfo }>();
+
+/** O id que o driver vai retomar, lido do argv do spawn (`--resume <id>`). */
+function resumeIdOf(args: readonly string[]): string | undefined {
+  const i = args.indexOf("--resume");
+  return i >= 0 ? args[i + 1] : undefined;
+}
+
 /* ------------------------------------------------------------------- API */
 
 export interface EnsureDriverOpts {
@@ -1116,6 +1135,8 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     ...(opts.transcriptDir ? { transcriptDir: opts.transcriptDir } : {}),
   };
   sessions.set(opts.cardId, session);
+  const remembered = lastContextByCard.get(opts.cardId);
+  if (remembered && remembered.sessionId === resumeIdOf(opts.command.args)) session.contextUsage = remembered.info;
   // O que cada pessoa já tinha marcado nos cartões abertos, de antes do reinício (ou do driver anterior).
   session.draftsLoaded = restoreQuestionDrafts(session).catch((err: unknown) => {
     logger.warn({ card: opts.label, detail: (err as Error).message }, "could not restore the question drafts");
