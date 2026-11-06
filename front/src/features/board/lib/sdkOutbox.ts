@@ -91,6 +91,11 @@ export interface OutboxMessage {
    * automático — quem pediu foi gente (ver `askResend`).
    */
   asked?: boolean;
+  /**
+   * Quando o pedido foi feito — o relógio do teto de idade dele. Campo próprio porque `writtenAt` é a
+   * ORDEM da conversa: reescrevê-lo mandava a mais velha pedida depois da mais nova.
+   */
+  askedAt?: number;
 }
 
 /**
@@ -147,6 +152,7 @@ export function readOutbox(cardId: string): OutboxMessage[] {
       autoRetries: Number.isInteger(m.autoRetries) && (m.autoRetries as number) >= 0 ? m.autoRetries : undefined,
       writtenAt: typeof m.writtenAt === "number" && Number.isFinite(m.writtenAt) ? m.writtenAt : undefined,
       asked: m.asked === true ? true : undefined,
+      askedAt: typeof m.askedAt === "number" && Number.isFinite(m.askedAt) ? m.askedAt : undefined,
     }));
   } catch {
     return [];
@@ -231,7 +237,7 @@ export function retryOutbox(
   mark: SendMark,
   auto = false,
 ): OutboxMessage[] {
-  const { unsent: _neverSent, autoRetries, writtenAt, asked: _asked, ...sent } = entry;
+  const { unsent: _neverSent, autoRetries, writtenAt, asked: _asked, askedAt: _askedAt, ...sent } = entry;
   const plan = auto
     ? { autoRetries: (autoRetries ?? 0) + 1, writtenAt: writtenAt ?? entry.at }
     : { writtenAt: now };
@@ -243,16 +249,17 @@ export function retryOutbox(
  * "Sem conexão — a mensagem não foi enviada. Ela fica no campo." (falso: ela está na bolha) e a
  * mensagem continuava parada até o plano automático. Agora o clique fica anotado na própria entrada
  * e o despacho a manda assim que o chat voltar, dentro do mesmo teto de idade do plano automático
- * contado do clique (a aba reaberta no dia seguinte não dispara o pedido de ontem). Só vale para quem ainda está sem veredito favorável
- * (`undelivered`); uma entrada que não existe mais não muda nada. PURE.
+ * contado do clique (`askedAt`: a aba reaberta no dia seguinte não dispara o pedido de ontem). Um
+ * clique novo renova o pedido. A ORDEM não muda: `writtenAt` segue sendo quando ela foi escrita. Só
+ * vale para quem ainda está sem veredito favorável (`undelivered`); uma entrada que não existe mais
+ * não muda nada. PURE.
  */
 export function askResend(messages: readonly OutboxMessage[], cid: string, now: number): OutboxMessage[] {
   let changed = false;
   const next = messages.map((m) => {
-    if (m.cid !== cid || m.undelivered !== true || m.asked === true) return m;
+    if (m.cid !== cid || m.undelivered !== true) return m;
     changed = true;
-    // O clique é a pessoa dizendo de novo "quero isso": a idade volta a contar dele.
-    return { ...m, asked: true, writtenAt: now };
+    return { ...m, asked: true, askedAt: now };
   });
   return changed ? next : (messages as OutboxMessage[]);
 }
@@ -310,9 +317,11 @@ export function planAutoResend(messages: readonly OutboxMessage[], now: number):
     if (m.undelivered !== true) continue;
     // Pedido da pessoa: sai já, sem intervalo nem teto de tentativas (ver `askResend`).
     if (m.asked === true) {
-      if (now >= (m.writtenAt ?? m.at) + AUTO_RESEND_MAX_AGE_MS) continue;
+      const expires = (m.askedAt ?? m.writtenAt ?? m.at) + AUTO_RESEND_MAX_AGE_MS;
+      if (now >= expires) continue;
       pending.add(m.cid);
       due.push(m);
+      wake(expires);
       continue;
     }
     if (m.unsent === true) continue;
