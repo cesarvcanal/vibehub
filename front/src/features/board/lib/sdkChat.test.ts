@@ -66,11 +66,11 @@ describe("message provenance (from)", () => {
 });
 
 describe("applySdkEvent", () => {
-  it("ready arms the view; a resume id becomes the session and a note", () => {
+  it("ready arms the view; a resume id becomes the session, never a line in the log", () => {
     const state = feed([{ type: "ready", resume: "abc-123" }]);
     expect(state.ready).toBe(true);
     expect(state.sessionId).toBe("abc-123");
-    expect(state.rows).toEqual([{ kind: "note", id: "note:1", text: "resume:abc-123" }]);
+    expect(state.rows).toEqual([]);
   });
 
   it("system_note draws the panel's own line as a muted note, never a bubble, never a turn", () => {
@@ -303,11 +303,11 @@ describe("history replay (the conversation must survive a remount)", () => {
     expect(state.turnActive).toBe(false);
   });
 
-  it("`ready` settles a streaming row before adding the resume note", () => {
+  it("`ready` with a resume settles a streaming row and adds no row", () => {
     let state = applySdkEvent(INITIAL_SDK_STATE, { type: "assistant_delta", text: "meio de fra" });
     state = applySdkEvent(state, { type: "ready", resume: "bfe63d25-95df-4c86-bf34-047b1366cc02" });
     expect(state.rows[0]).toMatchObject({ kind: "assistant", streaming: false });
-    expect(state.rows[1]).toMatchObject({ kind: "note" });
+    expect(state.rows).toHaveLength(1);
     expect(state.sessionId).toBe("bfe63d25-95df-4c86-bf34-047b1366cc02");
   });
 });

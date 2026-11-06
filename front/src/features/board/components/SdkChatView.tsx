@@ -1397,14 +1397,14 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     if (!working) setEscalation(null);
   }, [working]);
 
-  // O medidor do canto só DIVIDE a última linha quando ela deixa a direita livre: o "Trabalhando…"
-  // (que trunca antes dele) ou a resposta fechada, cuja linha de copiar/ouvir ocupa só a esquerda.
-  // Qualquer outra última linha (a bolha do usuário, um erro, uma ferramenta) ficaria por baixo
-  // dele — aí o log reserva uma faixa no fim (`pb-10`) e o medidor senta nela.
+  // O MEDIDOR DE CONTEXTO fecha a linha do fim do log, à direita. Se ela é a resposta fechada, ele
+  // entra NA linha do copiar/ouvir (mesma altura, nada flutuando). Com o "Trabalhando…" (que trunca
+  // antes dele) ele senta no canto, por cima. Qualquer outra última linha (a bolha do usuário, um
+  // erro, uma ferramenta) ficaria por baixo dele — aí o log reserva uma faixa no fim (`pb-10`).
   const lastEntry = rendered[rendered.length - 1];
-  const meterSharesLastLine =
-    (working && workStartedAt !== null) || (lastEntry?.kind === "row" && finishedAnswers.has(lastEntry.id));
-  const meterReservesStrip = state.contextUsage !== null && !meterSharesLastLine;
+  const meterInAnswer = state.contextUsage !== null && lastEntry?.kind === "row" && finishedAnswers.has(lastEntry.id);
+  const meterInCorner = state.contextUsage !== null && !meterInAnswer;
+  const meterReservesStrip = meterInCorner && !(working && workStartedAt !== null);
 
   return (
     <WorkflowFeedContext.Provider value={workflowFeed}>
@@ -1490,6 +1490,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
                 onDiscard={discardUndelivered}
                 retrying={entry.row.kind === "user" && entry.row.cid !== undefined && resendPlan.pending.has(entry.row.cid)}
                 answerOf={finishedAnswers.has(entry.id) ? cardId : undefined}
+                trailing={meterInAnswer && entry === lastEntry ? <ContextMeter usage={state.contextUsage} /> : undefined}
               />
             )}
           </div>
@@ -1517,11 +1518,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
         {working ? t(workingStage(workingKind, 0).verb) : ""}
       </span>
       {/* Com o medidor no canto, o "ir pro fim" sobe uma faixa: num painel estreito os dois se tocavam. */}
-      <JumpToLatest stick={stick} className={state.contextUsage ? "bottom-11" : undefined} />
-      {/* O MEDIDOR DE CONTEXTO mora no canto inferior direito da caixa da conversa — na linha do
-          copiar/ouvir da última resposta e do "Trabalhando…", que ocupam a esquerda. Fica por cima
-          do log (como o "ir para o fim"), com fundo opaco para o texto rolando não vazar por trás. */}
-      {state.contextUsage ? (
+      <JumpToLatest stick={stick} className={meterInCorner ? "bottom-11" : undefined} />
+      {/* Fora da resposta fechada, o medidor mora no canto inferior direito da caixa da conversa, por
+          cima do log (como o "ir para o fim"), com fundo opaco para o texto rolando não vazar por trás. */}
+      {meterInCorner ? (
         <div data-testid="sdk-context-corner" className="absolute bottom-3 right-4 z-10 rounded-full bg-background">
           <ContextMeter usage={state.contextUsage} />
         </div>
@@ -2249,6 +2249,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
   onDiscard,
   retrying = false,
   answerOf,
+  trailing,
 }: {
   /** The conversation's card — a question card keeps its draft per card (lib/questionDraftStore.ts). */
   cardId?: string;
@@ -2275,6 +2276,8 @@ const SdkChatRow = React.memo(function SdkChatRow({
   retrying?: boolean;
   /** A FINISHED answer (`finishedAnswerIds`): the card it belongs to — it gets "copiar" and "ouvir". */
   answerOf?: string;
+  /** Closes this answer's copiar/ouvir row on the right: the context meter, on the last answer. */
+  trailing?: React.ReactNode;
 }) {
   const t = useT();
   // Whose screen this is — their own messages render unlabelled, everyone else's carry the sender.
@@ -2538,7 +2541,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
   // Best-effort highlight: when the message CLOSES on a question directed at the user, that final
   // paragraph gets a subtle amber frame so it never drowns in the text above it.
   const prose = row.kind === "assistant" && !row.streaming ? splitProseQuestion(row.text) : null;
-  const actions = row.kind === "assistant" && answerOf ? <AnswerActions id={row.id} cardId={answerOf} text={row.text} /> : null;
+  const actions = row.kind === "assistant" && answerOf ? <AnswerActions id={row.id} cardId={answerOf} text={row.text} trailing={trailing} /> : null;
   if (prose) {
     // What this question RECEIVED (`answered`), anchored to it — the third question the screen owes
     // the person ("pronto, respondi"). Survives a reload: the answer is read back out of the sent message.
@@ -2933,7 +2936,6 @@ function cancelledText(cancel: QuestionCancel | undefined, t: ReturnType<typeof 
  * in either language); anything else is already a sentence and passes through. PURE.
  */
 function noteText(text: string, t: ReturnType<typeof useT>): string {
-  if (text.startsWith("resume:")) return t("sdk.resumed", { id: text.slice("resume:".length, "resume:".length + 8) });
   if (text === TERMINAL_ACTIVITY_NOTE) return t("sdk.terminalActivity");
   if (text === TURN_INTERRUPTED_EDIT_NOTE) return t("sdk.noteInterruptedEdit");
   if (text === TURN_INTERRUPTED_NOTE) return t("sdk.noteInterrupted");
