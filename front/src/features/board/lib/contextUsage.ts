@@ -13,6 +13,8 @@
  * vermelho em 60%), então o medidor vai esquentando conforme a conversa cresce.
  */
 
+import { interpolateHue } from "@/features/board/lib/planUsage";
+
 /** A conversa deixa de estar folgada aqui. */
 export const CONTEXT_WARN_AT = 30;
 /** Daqui pra cima a qualidade cai de verdade. */
@@ -51,16 +53,7 @@ const HUE_STOPS: readonly (readonly [pct: number, hue: number])[] = [
 
 /** O matiz (hsl) de um percentual, contínuo. PURE. */
 export function contextHue(percent: number): number {
-  const pct = Math.min(100, Math.max(0, Number.isFinite(percent) ? percent : 0));
-  if (pct <= HUE_STOPS[0]![0]) return HUE_STOPS[0]![1];
-  for (let i = 1; i < HUE_STOPS.length; i++) {
-    const [p1, h1] = HUE_STOPS[i]!;
-    if (pct <= p1) {
-      const [p0, h0] = HUE_STOPS[i - 1]!;
-      return Math.round(h0 + ((pct - p0) / (p1 - p0)) * (h1 - h0));
-    }
-  }
-  return 0;
+  return interpolateHue(HUE_STOPS, percent);
 }
 
 /** `hsl(…)` do percentual, com alfa opcional (0..1). PURE. */
@@ -74,16 +67,15 @@ export function contextGradient(): string {
   return `linear-gradient(to right, ${stops.join(", ")})`;
 }
 
-/** O que chegou no socket como leitura, ou null quando não dá para medir nada. PURE. */
+/**
+ * O que chegou no socket como leitura, ou null quando a forma não bate. O percentual é o do back
+ * (back/src/services/sdk/contextUsage.ts, onde a regra mora); aqui só se confere a forma. PURE.
+ */
 export function parseContextUsage(raw: { usedTokens?: unknown; maxTokens?: unknown; percent?: unknown; model?: unknown }): ContextUsageInfo | null {
   const { usedTokens, maxTokens, percent, model } = raw;
-  if (typeof usedTokens !== "number" || !Number.isFinite(usedTokens) || usedTokens < 0) return null;
-  if (typeof maxTokens !== "number" || !Number.isFinite(maxTokens) || maxTokens <= 0) return null;
-  const pct = typeof percent === "number" && Number.isFinite(percent) ? percent : (usedTokens / maxTokens) * 100;
-  return {
-    usedTokens,
-    maxTokens,
-    percent: Math.min(100, Math.max(0, pct)),
-    ...(typeof model === "string" && model ? { model } : {}),
-  };
+  const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+  if (!finite(usedTokens) || usedTokens < 0) return null;
+  if (!finite(maxTokens) || maxTokens <= 0) return null;
+  if (!finite(percent) || percent < 0 || percent > 100) return null;
+  return { usedTokens, maxTokens, percent, ...(typeof model === "string" && model ? { model } : {}) };
 }

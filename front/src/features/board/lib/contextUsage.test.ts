@@ -53,17 +53,16 @@ describe("parseContextUsage", () => {
       .toEqual({ usedTokens: 84_000, maxTokens: 200_000, percent: 42, model: "claude-opus-5-5" });
   });
 
-  it("sem percentual, calcula; percentual fora de faixa é preso", () => {
-    expect(parseContextUsage({ usedTokens: 50_000, maxTokens: 200_000 })?.percent).toBe(25);
-    expect(parseContextUsage({ usedTokens: 1, maxTokens: 2, percent: 140 })?.percent).toBe(100);
-  });
 
   it.each([
     {},
     { usedTokens: 10 },
     { usedTokens: 10, maxTokens: 0 },
     { usedTokens: -1, maxTokens: 10 },
-    { usedTokens: "1", maxTokens: 10 },
+    { usedTokens: "1", maxTokens: 10, percent: 10 },
+    { usedTokens: 50_000, maxTokens: 200_000 },
+    { usedTokens: 1, maxTokens: 2, percent: 140 },
+    { usedTokens: 1, maxTokens: 2, percent: Number.NaN },
   ])("leitura torta não vira medidor: %j", (raw) => {
     expect(parseContextUsage(raw)).toBeNull();
   });
