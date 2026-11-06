@@ -1382,6 +1382,8 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         workflowMeta: {},
         terminalBurst: false,
         awaiting: false,
+        // A conversa apagada não ocupa mais nada; a leitura da sessão nova vem no fim do turno.
+        contextUsage: null,
       };
     }
     case "local_output": {

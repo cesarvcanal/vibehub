@@ -33,6 +33,9 @@ const ZONES: readonly { zone: ContextZone; mid: number }[] = [
 
 export function ContextMeter({ usage, className }: { usage: ContextUsageInfo | null; className?: string }) {
   const t = useT();
+  // Controlado para abrir também no CLIQUE/TOQUE: o tooltip sozinho só abre no hover e no foco, e
+  // no celular (layout compacto) o guia nunca aparecia. Toque fora ou Esc fecha.
+  const [open, setOpen] = React.useState(false);
   if (!usage) return null;
   const pct = usage.percent;
   const zone = contextZone(pct);
@@ -40,10 +43,15 @@ export function ContextMeter({ usage, className }: { usage: ContextUsageInfo | n
   const Icon = zone === "danger" ? OctagonAlert : AlertTriangle;
 
   return (
-    <Tooltip>
+    <Tooltip open={open} onOpenChange={setOpen}>
       <TooltipTrigger asChild>
         <button
           type="button"
+          // O gatilho do Radix fecha no clique; o preventDefault segura isso e o clique ABRE.
+          onClick={(event) => {
+            event.preventDefault();
+            setOpen(true);
+          }}
           data-testid="context-meter"
           data-zone={zone}
           aria-label={t("context.aria", { n: shown })}
@@ -141,12 +149,14 @@ export function ContextMeter({ usage, className }: { usage: ContextUsageInfo | n
 export function ContextNotice({ usage, className }: { usage: ContextUsageInfo | null; className?: string }) {
   const t = useT();
   const [dismissedWarn, setDismissedWarn] = React.useState(false);
-  const zone = usage ? contextZone(usage.percent) : "smart";
-  // Voltou para a faixa inteligente (um /compact, um /clear): o próximo aviso aparece de novo.
+  const zone = usage ? contextZone(usage.percent) : null;
+  // O "esconder" vale até a conversa sair da faixa preocupante — para a inteligente (um /compact, um
+  // /clear) ou para o perigo: na volta ao preocupante, o aviso aparece de novo. Só uma LEITURA conta:
+  // sem leitura (a reconexão zera e o back reenvia logo atrás) não é a conversa que mudou de faixa.
   React.useEffect(() => {
-    if (zone === "smart") setDismissedWarn(false);
+    if (zone === "smart" || zone === "danger") setDismissedWarn(false);
   }, [zone]);
-  if (!usage || zone === "smart") return null;
+  if (!usage || zone === null || zone === "smart") return null;
   if (zone === "warn" && dismissedWarn) return null;
   const n = Math.round(usage.percent);
   const danger = zone === "danger";

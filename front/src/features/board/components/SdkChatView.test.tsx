@@ -4663,6 +4663,49 @@ describe("SdkChatView — o medidor de contexto", () => {
     ws.deliver({ type: "context_usage", usedTokens: 70_000, maxTokens: 200_000, percent: 35 } as SdkEvent);
     expect(screen.getByTestId("context-notice").getAttribute("data-zone")).toBe("warn");
   });
+
+  it("o aviso escondido continua escondido depois de uma reconexão, e volta depois de passar pelo perigo", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "context_usage", usedTokens: 84_000, maxTokens: 200_000, percent: 42 } as SdkEvent);
+    fireEvent.click(screen.getByTestId("context-notice-dismiss"));
+    expect(screen.queryByTestId("context-notice")).toBeNull();
+
+    // Reconexão: o `ready` zera a leitura e o back reenvia a mesma logo atrás.
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "context_usage", usedTokens: 86_000, maxTokens: 200_000, percent: 43 } as SdkEvent);
+    expect(screen.queryByTestId("context-notice")).toBeNull();
+
+    // Foi ao perigo e voltou (um /compact parcial): o aviso preocupante aparece de novo.
+    ws.deliver({ type: "context_usage", usedTokens: 130_000, maxTokens: 200_000, percent: 65 } as SdkEvent);
+    ws.deliver({ type: "context_usage", usedTokens: 100_000, maxTokens: 200_000, percent: 50 } as SdkEvent);
+    expect(screen.getByTestId("context-notice").getAttribute("data-zone")).toBe("warn");
+  });
+
+  it("o /clear tira o medidor da conversa apagada", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "context_usage", usedTokens: 130_000, maxTokens: 200_000, percent: 65 } as SdkEvent);
+    expect(screen.getByTestId("context-notice")).toBeTruthy();
+    ws.deliver({ type: "conversation_reset", trigger: "clear" } as SdkEvent);
+    expect(screen.queryByTestId("context-meter")).toBeNull();
+    expect(screen.queryByTestId("context-notice")).toBeNull();
+  });
+
+  it("o guia abre no clique (toque), não só no hover — e janela de 1M sai como 1M", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "context_usage", usedTokens: 250_000, maxTokens: 1_000_000, percent: 25 } as SdkEvent);
+    fireEvent.click(screen.getByTestId("context-meter"));
+    const guide = await screen.findByTestId("context-guide");
+    expect(guide).toHaveTextContent("250k of 1M tokens");
+  });
 });
 
 /**
