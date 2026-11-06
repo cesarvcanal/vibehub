@@ -36,6 +36,7 @@ import { agentContext, typedContext } from "@/features/voice/voiceContext";
 import { AnswerActions } from "@/features/voice/AnswerActions";
 import { readAloud, readAloudError, setReadAloudErrorHandler } from "@/features/voice/readAloud";
 import { PlanUsageAlert, cardRateLimitsKey, useCardPlanUsage } from "@/features/board/components/PlanUsage";
+import { ContextMeter } from "@/features/board/components/ContextMeter";
 import { planAlert, planWindows } from "@/features/board/lib/planUsage";
 import { LinkifiedText, Markdown, SenderTag } from "@/features/board/components/ChatView";
 import { originRole, type MessageOrigin } from "@/features/board/lib/chat";
@@ -1552,12 +1553,16 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
 
       {/* The interrupt button lives INSIDE the composer — right column, above the microphone —
           in the same seat as the transcript chat's stop. The interrupt frame is still this view's. */}
-      {/* Uma faixa, dois recados: quem está digitando à esquerda, o aviso do plano à direita. */}
+      {/* Uma faixa, três recados: quem está digitando à esquerda; à direita o aviso do plano e o
+          medidor de quanto do contexto a conversa já ocupa. */}
       <div className="mt-1.5 flex items-center justify-between gap-2">
         <div className="min-w-0 flex-1">
           <PeerTypingIndicator names={typingPeers} />
         </div>
-        <PlanUsageAlert alert={usageAlert} now={alertNow} className="max-w-[70%] shrink" />
+        <div className="flex min-w-0 max-w-[75%] items-center justify-end gap-2">
+          <PlanUsageAlert alert={usageAlert} now={alertNow} className="min-w-0 shrink" />
+          <ContextMeter usage={state.contextUsage} />
+        </div>
       </div>
 
       {showCallBar ? (
