@@ -631,6 +631,8 @@ export const en: Record<string, string> = {
   "sdk.toolBackground": "Running in the background",
   "sdk.result.decimal": ".",
   "sdk.result.thousands": "{n}k",
+  "sdk.result.millions": "{n}M",
+  "sdk.result.decimalSeparator": ".",
   "sdk.result.error": "error: {error}",
   "sdk.result.background": "running in the background",
   "sdk.result.agentDone": "done",

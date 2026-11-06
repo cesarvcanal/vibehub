@@ -632,6 +632,8 @@ export const ptBR: Record<string, string> = {
   "sdk.toolBackground": "Rodando em segundo plano",
   "sdk.result.decimal": ",",
   "sdk.result.thousands": "{n} mil",
+  "sdk.result.millions": "{n} mi",
+  "sdk.result.decimalSeparator": ",",
   "sdk.result.error": "erro: {error}",
   "sdk.result.background": "rodando em segundo plano",
   "sdk.result.agentDone": "concluído",

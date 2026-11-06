@@ -26,10 +26,14 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
 }
 
-/** Quantos tokens, curto: `900`, `41 mil` / `41k`. PURE. */
+/** Quantos tokens, curto: `900`, `41 mil` / `41k`, `1 mi` / `1M`, `1,5 mi` / `1.5M`. PURE. */
 export function formatTokens(n: number): string {
   if (!Number.isFinite(n) || n < 1000) return String(Math.max(0, Math.round(n || 0)));
-  return translate("sdk.result.thousands", { n: Math.round(n / 1000) });
+  // 999.500 arredondaria para "1000k": daí para cima a conta já é em milhões.
+  if (n < 999_500) return translate("sdk.result.thousands", { n: Math.round(n / 1000) });
+  const millions = Math.round(n / 100_000) / 10;
+  const shown = Number.isInteger(millions) ? String(millions) : millions.toFixed(1).replace(".", translate("sdk.result.decimalSeparator"));
+  return translate("sdk.result.millions", { n: shown });
 }
 
 /**
