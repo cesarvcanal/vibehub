@@ -96,6 +96,11 @@ export interface Review {
    * "tentar de novo" (retryReview), e o relay que dá certo limpa a marca.
    */
   approvePending?: boolean;
+  /**
+   * A rodada em que o merge automático foi tentado e recusado (CI, conflito, conexão). Nessa rodada ele
+   * não é tentado de novo e os textos voltam a dizer "merge pelo botão"; uma rodada nova zera o efeito.
+   */
+  autoMergeFailedRound?: number;
   lastSubmitRound?: number;
   lastRespondRound?: number;
   nudges: number;
@@ -224,4 +229,21 @@ export function phaseAfterReviewerRound(review: Review): { phase: ReviewPhase; i
   }
   if (pendingQuestions(review.findings).length > 0) return { phase: "reviewing" };
   return { phase: "ready" };
+}
+
+/**
+ * O merge sai SOZINHO quando não sobrou nada para uma pessoa olhar: revisão em `ready` e nenhum achado
+ * em pé, de nenhuma severidade — bloqueante, dúvida ou sugestão aberta/contestada. Sugestão não segura
+ * o `ready`, mas segura o merge automático: ela é justamente o que alguém pode querer aplicar antes.
+ * Sem isso o PR ficava "pronto pra merge" esperando alguém voltar ao card só para dizer "pode mergear".
+ * PURE.
+ */
+export function autoMergeEligible(review: Review): boolean {
+  return (
+    review.phase === "ready" && !!review.reviewedSha && !review.findings.some(isOpen) &&
+    // Approve que não chegou ao GitHub: o PR segue com o "changes requested" da rodada 1 — o merge
+    // automático não passa por cima disso; o "tentar de novo" do painel publica e o merge sai depois.
+    !review.approvePending &&
+    review.autoMergeFailedRound !== review.round
+  );
 }

@@ -9,12 +9,12 @@ import { findUser } from "../../auth/users.js";
 import { cardLevel } from "../../auth/access.js";
 import { creatorAccountSlug, getUserGit } from "../../auth/userGit.js";
 import { sendToTerminal, SEND_READY_WAIT_MS } from "../maestro/maestro.js";
-import { afterPrMerged, readPrState, setPrPeople } from "../maestro/deliver.js";
+import { afterPrMerged, readPrApproval, readPrState, setPrPeople } from "../maestro/deliver.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { eventsAfter, onCardEvent, recordMessage, type CardEvent, type Severity } from "../events/cardEvents.js";
 import { logger } from "../../utils/logger.js";
 import {
-  MAX_ROUNDS, applyAuthorResponses, applyReviewerVerdicts, blockingOpen, normalizeSubmittedFindings, pendingQuestions,
+  MAX_ROUNDS, applyAuthorResponses, applyReviewerVerdicts, autoMergeEligible, blockingOpen, normalizeSubmittedFindings, pendingQuestions,
   phaseAfterReviewerRound,
   type AuthorAnswerStatus, type Finding, type FindingStatus, type Review, type ReviewEvent, type ReviewEventItem, type ReviewPhase,
   type SubmittedFinding,
@@ -23,7 +23,7 @@ import {
   activeReviewForPr, getReview, insertReview, listReviewsForCards, mutateReview, reviewByReviewerCard,
 } from "./store.js";
 import {
-  actionableForAuthor, approvePendingText, authorFixPrompt, authorQuestionNoticeText, authorSuggestionsPrompt, headMovedPrefix,
+  actionableForAuthor, approvePendingText, autoMergeFailedText, authorFixPrompt, authorQuestionNoticeText, authorSuggestionsPrompt, headMovedPrefix,
   impasseText, nudgePrefix, oneLine, phaseNoticeText, questionNoticeText, reviewerApprovePrompt, reviewerDeltaPrompt,
   reviewerRoundPrompt,
 } from "./prompts.js";
@@ -325,11 +325,55 @@ async function dispatch(r: Review): Promise<Review> {
     await relayReview(r, "author", await promptFor(r, "author"), { unpause: true });
   } else if (r.phase === "ready") {
     await announcePhase(r);
+    // O merge automático NÃO sai daqui: este é o caminho do submit do revisor (a ferramenta dele
+    // ficaria presa até o fim do CI) e o Approve ainda nem foi publicado. Ele sai do fim do turno do
+    // revisor que reporta `ready` (onTurnFinished), já com o Approve no GitHub.
     await relayReview(r, "reviewer", reviewerApprovePrompt(r), { approve: true });
   } else if (r.phase === "impasse") {
     await announcePhase(r);
   }
   return (await getReview(r.id)) ?? r;
+}
+
+/**
+ * O merge automático de uma revisão pronta sem nada em pé ({@link autoMergeEligible}): o MESMO caminho
+ * do botão (`mergeReviewedPr`, em nome do responsável pelo merge, preso ao commit revisado, com gate).
+ * Chamado DEPOIS do Approve: do fim de turno do revisor que reportou `ready`, ou de "não fazer" a
+ * última sugestão de uma revisão já aprovada. Recusa "não está pronta"/"merge já saindo"/"head andou"
+ * é corrida e fica calada; qualquer outra (CI vermelho, conflito, merger sem conexão GitHub) marca a
+ * rodada (`autoMergeFailedRound`: não tenta de novo, e os textos voltam ao botão), vira nota na
+ * revisão e aviso nos dois cards. Nunca lança. Import dinâmico: merge.ts importa este arquivo.
+ */
+async function autoMerge(r: Review): Promise<void> {
+  const now = (await getReview(r.id)) ?? r;
+  if (!autoMergeEligible(now)) return;
+  try {
+    // O "ready" que o revisor reporta não prova o Approve: o prompt manda reportar mesmo quando o
+    // `gh pr review --approve` falha (review do próprio PR, permissão). Quem prova é o GitHub — um
+    // APPROVED no commit revisado e nenhum "changes requested" de pé. Leitura que falha = não.
+    const approved = await readPrApproval(now.cardId, now.prUrl, now.reviewedSha as string);
+    if (approved !== true) {
+      const why = approved === null ? "não consegui ler as reviews do PR no GitHub" : "o Approve do revisor não está no GitHub no commit revisado";
+      await refuseAutoMerge(now, why);
+      return;
+    }
+    const { mergeReviewedPr } = await import("./merge.js");
+    const outcome = await mergeReviewedPr(now.id, now.mergerUserId, { auto: true });
+    if (outcome.kind === "merged" || outcome.reason === "not_ready" || outcome.reason === "merging" || outcome.reason === "head_moved") return;
+    await refuseAutoMerge(now, outcome.error);
+  } catch (err) {
+    logger.warn({ review: r.id, detail: (err as Error).message }, "PR review auto-merge failed");
+  }
+}
+
+/** O merge automático não sai nesta rodada: marca, conta no log da revisão e avisa os dois cards. */
+async function refuseAutoMerge(r: Review, why: string): Promise<void> {
+  logger.info({ audit: true, action: "review.automerge", review: r.id, merged: false, reason: oneLine(why, 200) }, "PR review auto-merge refused");
+  const after = await mutateReview(r.id, (x) => {
+    x.autoMergeFailedRound = x.round;
+    note(x, "system", `Merge automático não saiu (${oneLine(why, 200)}); o merge fica pelo botão.`);
+  });
+  await notifyBoth(after, `review:${r.id}:automerge_failed:${r.round}`, autoMergeFailedText(after, why), "warning");
 }
 
 /** A linha de sistema que conta o resultado da rodada do revisor. */
@@ -341,7 +385,9 @@ function outcomeNote(r: Review): string {
     case "fixing":
       return `${blocking} bloqueante(s) em aberto: a lista vai ao autor.${questions}`;
     case "ready":
-      return "Sem bloqueante em aberto: pronto para o merge humano.";
+      return autoMergeEligible(r)
+        ? "Sem nada em aberto: pronto, e o merge sai sozinho."
+        : "Sem bloqueante em aberto: pronto para o merge humano.";
     case "impasse":
       return `Impasse: ${impasseText(r.impasseReason)}.`;
     default:
@@ -740,7 +786,7 @@ export async function decideSuggestions(
     await relayReview(review, "author", text, { unpause: true, optional: true });
   }
   logger.info({ audit: true, action: "review.suggestions", review: reviewId, apply, skip, by }, "PR review: suggestions decided");
-  return await mutateReview(reviewId, (r) => {
+  const after = await mutateReview(reviewId, (r) => {
     if (skip.length) {
       for (const f of r.findings) {
         if (!skip.includes(f.id) || f.status !== "open") continue;
@@ -757,6 +803,18 @@ export async function decideSuggestions(
       });
     }
   });
+  // "Não fazer" a última sugestão de uma revisão que o revisor JÁ aprovou: nada ficou em pé e o fim
+  // de turno que dispararia o merge já passou. Sem esperar: é o clique de uma pessoa, não o CI.
+  if (skip.length && apply.length === 0 && autoMergeEligible(after) && (await reviewerApproved(after))) {
+    void autoMerge(after);
+  }
+  return after;
+}
+
+/** O revisor terminou o turno do Approve: o card dele parou declarando `ready` (o passo final do prompt). */
+async function reviewerApproved(r: Review): Promise<boolean> {
+  const card = await getCard(r.reviewerCardId);
+  return card?.declaredState === "ready" && card.status !== "working";
 }
 
 /** Só "fazer": as sugestões escolhidas vão ao autor ({@link decideSuggestions}). */
@@ -1088,7 +1146,7 @@ async function checkAuthorPush(cardId: string): Promise<void> {
  * o PR foi mergeado, e é isso que o painel tem de dizer. Repetir não grava nada nem avisa de novo.
  */
 export async function markReviewMerged(
-  reviewId: string, by: string, opts: { outsidePanel?: { headSha: string } } = {},
+  reviewId: string, by: string, opts: { outsidePanel?: { headSha: string }; auto?: boolean } = {},
 ): Promise<Review> {
   let landed = false as boolean;
   const after = await mutateReview(reviewId, (r) => {
@@ -1101,13 +1159,14 @@ export async function markReviewMerged(
       note(r, "system", `Mergeado em ${r.base} fora do painel, direto no GitHub (head ${opts.outsidePanel.headSha.slice(0, 7)}).`);
     } else {
       const head = r.reviewedSha ? ` (head ${r.reviewedSha.slice(0, 7)})` : "";
-      note(r, "human", `Mergeado em ${r.base} por ${by}${head}.`, { by });
+      if (opts.auto) note(r, "system", `Mergeado em ${r.base} automaticamente, em nome de ${by}${head}: nada ficou em aberto.`);
+      else note(r, "human", `Mergeado em ${r.base} por ${by}${head}.`, { by });
     }
     landed = true;
   });
   lastGithubSync.delete(reviewId);
   if (landed) {
-    logger.info({ audit: true, action: "review.merged", review: reviewId, by }, "PR review merged");
+    logger.info({ audit: true, action: "review.merged", review: reviewId, by, auto: opts.auto === true }, "PR review merged");
     // O card que anexou o PR também o vê mergeado (a linha dele sai). Best-effort: o merge já aconteceu.
     if (after.hubCardId) {
       await markCardPrMerged(after.hubCardId, after.base, after.prNumber, Date.now()).catch((err: unknown) =>
@@ -1151,6 +1210,9 @@ async function onTurnFinished(event: CardEvent): Promise<void> {
   const cardId = event.cardId;
   const waiting: { id: string; side: Side }[] = [];
   const asReviewer = await reviewByReviewerCard(cardId);
+  // O revisor terminou o turno do Approve (o prompt manda reportar `ready` no fim): é a vez do merge
+  // automático, se nada ficou em pé. Fora do caminho da ferramenta dele — aqui ninguém espera o CI.
+  if (asReviewer?.phase === "ready" && event.state === "ready") await autoMerge(asReviewer);
   if (asReviewer && awaitingTool(asReviewer, "reviewer")) waiting.push({ id: asReviewer.id, side: "reviewer" });
   for (const r of await listReviewsForCards([cardId])) {
     if (awaitingTool(r, "author")) waiting.push({ id: r.id, side: "author" });
@@ -1228,7 +1290,11 @@ export function reviewToolAnswer(r: Review, side: Side, askedRound: number): Rec
   else if (r.phase === "reviewing") {
     next = r.lastSubmitRound === r.round ? "esperando o revisor humano decidir as dúvidas" : "a vez é do revisor";
   } else if (r.phase === "fixing") next = "a vez é do autor";
-  else if (r.phase === "ready") next = "pronto para o merge humano; ninguém mergeia daqui";
+  else if (r.phase === "ready") {
+    next = autoMergeEligible(r)
+      ? "pronto e sem nada em pé: o painel mergeia sozinho; nenhuma IA mergeia daqui"
+      : "pronto para o merge humano (há sugestão em aberto); ninguém mergeia daqui";
+  }
   else if (r.phase === "impasse") next = `impasse: ${impasseText(r.impasseReason)}`;
   else next = `revisão encerrada (${r.phase})`;
   return {

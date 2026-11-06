@@ -429,6 +429,82 @@ export async function readPrState(cardId: string, prUrl: string): Promise<{ stat
   return null;
 }
 
+/** One review on a PR, as the auto-merge needs it: who, what verdict, on which commit. */
+export interface PrReview {
+  author: string;
+  state: string;
+  commit: string;
+}
+
+/**
+ * Reads a PR's reviews, oldest first: `__VIBEHUB_DELIVER__ prreviews <base64 of [{a,s,c}]>`, or
+ * `__VIBEHUB_DELIVER__ error view`. `reviews` (not `latestReviews`) because only it carries the commit
+ * each verdict was given on. PURE.
+ */
+export function buildPrReviewsScript(containerName: string, cardId: string, token: string, cwd: string, prUrl: string): string {
+  assertSafeRemotePath(cwd);
+  const body = [
+    ...ghTokenPreamble(token),
+    `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
+    `if ! J=$(gh pr view ${shQuote(prUrl)} --json reviews --jq '[.reviews[] | {a: .author.login, s: .state, c: .commit.oid}]' 2>&1); then`,
+    `  printf '%s\\n' "$J"; echo "${MARKER} error view"; exit 0;`,
+    `fi`,
+    `echo "${MARKER} prreviews $(printf '%s' "$J" | base64 -w0)"`,
+  ];
+  return dockerBashScript(containerName, body);
+}
+
+/** Parses the reviews lookup. Anything that is not the list it promised is an error. PURE. */
+export function parsePrReviews(stdout: string): { ok: true; reviews: PrReview[] } | { ok: false; stage: string } {
+  const m = new RegExp(`${MARKER} prreviews ([A-Za-z0-9+/=]*)`).exec(stdout);
+  if (m) {
+    try {
+      const raw: unknown = JSON.parse(Buffer.from(m[1]!, "base64").toString("utf8"));
+      if (Array.isArray(raw)) {
+        const reviews = raw.map((r: { a?: unknown; s?: unknown; c?: unknown }) => ({
+          author: String(r?.a ?? ""), state: String(r?.s ?? ""), commit: String(r?.c ?? "").toLowerCase(),
+        }));
+        return { ok: true, reviews };
+      }
+    } catch {
+      // falls through to the error answer
+    }
+    return { ok: false, stage: "parse" };
+  }
+  const err = new RegExp(`${MARKER} error (\\S+)`).exec(stdout);
+  return { ok: false, stage: err?.[1] ?? "unknown" };
+}
+
+/**
+ * Whether the PR is APPROVED on commit `sha`: some APPROVED review was given on exactly that commit,
+ * and nobody's standing verdict is CHANGES_REQUESTED (each author's LAST approve / request-changes /
+ * dismiss is what stands; comments do not change it). An Approve on an older commit does not count:
+ * it approved other code. PURE, TOTAL.
+ */
+export function prApprovedAt(reviews: PrReview[], sha: string): boolean {
+  const target = String(sha ?? "").toLowerCase();
+  if (!target) return false;
+  const standing = new Map<string, string>();
+  for (const r of reviews) {
+    if (r.state === "APPROVED" || r.state === "CHANGES_REQUESTED" || r.state === "DISMISSED") standing.set(r.author, r.state);
+  }
+  if ([...standing.values()].includes("CHANGES_REQUESTED")) return false;
+  return reviews.some((r) => r.state === "APPROVED" && r.commit === target && standing.get(r.author) === "APPROVED");
+}
+
+/**
+ * Whether GitHub has the PR approved on `sha` ({@link prApprovedAt}), read with the card's own
+ * connection. Null when the lookup failed (logged): the auto-merge treats that as "no".
+ */
+export async function readPrApproval(cardId: string, prUrl: string, sha: string): Promise<boolean | null> {
+  const out = await runCardGhScript(cardId, "read the PR reviews", (c) => buildPrReviewsScript(c.container, c.cardId, c.token, c.cwd, prUrl));
+  if (!out) return null;
+  const found = parsePrReviews(out.stdout);
+  if (found.ok) return prApprovedAt(found.reviews, sha);
+  logger.warn({ card: out.slug, stage: found.stage }, "could not read the PR reviews");
+  return null;
+}
+
 /** A PR as `vibehub_attach_prs` needs it: what the card stores, plus whether it can be attached at all. */
 export interface PrInfo {
   number: number;

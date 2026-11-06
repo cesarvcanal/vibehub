@@ -173,13 +173,19 @@ async function startReview(w: World, as: Person = w.autor, over: Record<string, 
   });
 }
 
-/** Uma revisão iniciada e levada a `ready` (rodada 1 sem bloqueante, SHA1 revisado). */
+/**
+ * Uma sugestão em aberto: deixa a revisão em `ready` sem o merge automático (que só sai sem NADA em
+ * pé), para os testes do botão exercitarem o botão.
+ */
+const OPEN_SUGGESTION = [{ severity: "suggestion" as const, title: "nome confuso" }];
+
+/** Uma revisão iniciada e levada a `ready` (rodada 1 sem bloqueante, SHA1 revisado, merge pelo botão). */
 async function readyReview(w: World) {
   const started = await startReview(w);
   expect(started.statusCode).toBe(200);
   const review = started.json().review as { id: string; reviewerCardId: string };
   const ready = await (await orchestrator()).submitReviewerRound(review.reviewerCardId, {
-    round: 1, findings: [], headSha: SHA1, summary: "nada bloqueia",
+    round: 1, findings: OPEN_SUGGESTION, headSha: SHA1, summary: "nada bloqueia",
   });
   expect(ready.phase).toBe("ready");
   send.mockClear();
@@ -649,7 +655,7 @@ describe("merge", () => {
     const started = await startReview(w, w.autor, { mergerUserId: w.owner.id });
     expect(started.statusCode).toBe(200);
     const review = started.json().review as { id: string; reviewerCardId: string };
-    await (await orchestrator()).submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "ok" });
+    await (await orchestrator()).submitReviewerRound(review.reviewerCardId, { round: 1, findings: OPEN_SUGGESTION, headSha: SHA1, summary: "ok" });
     const res = await merge(review.id, w.owner);
     expect(res.statusCode).toBe(200);
     expect(deliver.mock.calls[0]![1]).toMatchObject({ mergeOnly: true, connectionId: w.gh.project });
@@ -694,7 +700,10 @@ describe("decidir, tentar de novo e cancelar", () => {
     expect((await decide(review.id, w.revisor, { findingId: "f1" })).statusCode).toBe(400);
     const ok = await decide(review.id, w.revisor, { findingId: "f1", decision: "drop" });
     expect(ok.statusCode).toBe(200);
+    // Retirada a única dúvida, a revisão vai a ready; o merge automático espera o Approve do revisor
+    // (o fim de turno dele), então a rota responde na hora e nada é mergeado aqui.
     expect(ok.json().review.phase).toBe("ready");
+    expect(deliver).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ mergeOnly: true }));
     expect((await decide("nao-existe", w.revisor, { findingId: "f1", decision: "drop" })).statusCode).toBe(404);
   });
 

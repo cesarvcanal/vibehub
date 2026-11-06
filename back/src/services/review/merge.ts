@@ -11,9 +11,11 @@ import { claimMerge, markReviewMerged, releaseMerge, reopenAfterHeadMoved } from
 import { getReview } from "./store.js";
 
 /**
- * O MERGE DE UM PR REVISADO — um caminho só, chamado de dois lugares: o botão "Mergear" do painel
- * (`POST /api/reviews/:id/merge`) e o `vibehub_deliver` autorizado quando quem deu a ordem ao card é
- * o responsável pelo merge da revisão. Os dois fazem exatamente o mesmo, com as mesmas recusas:
+ * O MERGE DE UM PR REVISADO — um caminho só, chamado de três lugares: o botão "Mergear" do painel
+ * (`POST /api/reviews/:id/merge`), o `vibehub_deliver` autorizado quando quem deu a ordem ao card é
+ * o responsável pelo merge da revisão, e o merge automático da revisão pronta sem nada em pé (o
+ * servidor, depois do Approve do revisor; decisão do usuário em 05/11/2026). Os três fazem
+ * exatamente o mesmo, com as mesmas recusas:
  *
  *  - só o `mergerUserId`, só em `ready`, só com o commit revisado gravado;
  *  - o responsável precisa de `work` no card do autor (conferido de novo aqui: um share que caiu
@@ -59,8 +61,14 @@ export async function ownGithubConnection(user: PublicUser, card: registry.Card)
   return resolveIdentity({ actor: git, project, settings: await getSettings(), connections }).connectionId ?? null;
 }
 
-/** Mergeia o PR da revisão `reviewId` em nome de `userId`, ou diz por que não. Ver o topo do arquivo. */
-export async function mergeReviewedPr(reviewId: string, userId: string): Promise<ReviewMergeOutcome> {
+/**
+ * Mergeia o PR da revisão `reviewId` em nome de `userId`, ou diz por que não. Ver o topo do arquivo.
+ * `auto`: é o merge automático da revisão pronta sem nada em pé (orchestrator `autoMerge`), não um
+ * clique — as mesmas travas, mas o log e a auditoria dizem que ninguém clicou.
+ */
+export async function mergeReviewedPr(
+  reviewId: string, userId: string, opts: { auto?: boolean } = {},
+): Promise<ReviewMergeOutcome> {
   const review = await getReview(reviewId);
   if (!review) return { kind: "refused", status: 404, error: "review not found" };
   const user = await findUser(userId);
@@ -100,14 +108,20 @@ export async function mergeReviewedPr(reviewId: string, userId: string): Promise
     }
     // A conexão vai explícita: o ator do card (o autor) não muda, e uma mensagem no card durante o
     // merge não troca a credencial debaixo dele.
+    const by = opts.auto ? `${user.username} (merge automático)` : user.username;
     const result = await deliver(review.cardId, {
-      authorized: true, mergeOnly: true, expectedHeadSha: review.reviewedSha, branch: review.base, connectionId, by: user.username,
+      authorized: true, mergeOnly: true, expectedHeadSha: review.reviewedSha, branch: review.base, connectionId, by,
     });
     logger.info(
-      { audit: true, action: "review.merge", review: review.id, merged: result.merged, reason: result.reason, by: user.username },
+      {
+        audit: true, action: opts.auto ? "review.automerge" : "review.merge", review: review.id,
+        merged: result.merged, reason: result.reason, by: user.username, auto: opts.auto === true,
+      },
       result.merged ? "PR review merged by its merger" : "PR review merge did not happen",
     );
-    if (result.merged) return { kind: "merged", review: await markReviewMerged(review.id, user.username), result };
+    if (result.merged) {
+      return { kind: "merged", review: await markReviewMerged(review.id, user.username, { auto: opts.auto }), result };
+    }
     if (result.reason === "head_moved") {
       const after = await reopenAfterHeadMoved(review.id, user.username);
       return { kind: "refused", status: 409, reason: "head_moved", error: result.output ?? "o PR andou depois do pronto", review: after, result };

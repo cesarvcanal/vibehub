@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyAuthorResponses,
   applyReviewerVerdicts,
+  autoMergeEligible,
   blockingOpen,
   normalizeSubmittedFindings,
   pendingQuestions,
@@ -152,5 +153,23 @@ describe("phaseAfterReviewerRound", () => {
       finding({ id: "f4", severity: "question" }), finding({ id: "f5", severity: "question", humanDecision: "keep" })];
     expect(blockingOpen(fs).map((f) => f.id)).toEqual(["f1", "f2"]);
     expect(pendingQuestions(fs).map((f) => f.id)).toEqual(["f4"]);
+  });
+});
+
+describe("autoMergeEligible", () => {
+  const ready = (findings: Finding[]): Review => ({ ...review(findings), phase: "ready", reviewedSha: "a".repeat(40) });
+
+  it("pronta, com o commit revisado e nada em pé: mergeia sozinha", () => {
+    expect(autoMergeEligible(ready([]))).toBe(true);
+    expect(autoMergeEligible(ready([finding({ status: "fixed" }), finding({ id: "f2", severity: "suggestion", status: "wontfix" })]))).toBe(true);
+    expect(autoMergeEligible(ready([finding({ severity: "question", status: "dropped", humanDecision: "drop" })]))).toBe(true);
+    expect(autoMergeEligible(ready([finding({ status: "accepted_risk" })]))).toBe(true);
+  });
+
+  it("qualquer coisa em pé segura: sugestão aberta, contestado, fase que não é ready, sem commit revisado", () => {
+    expect(autoMergeEligible(ready([finding({ severity: "suggestion" })]))).toBe(false);
+    expect(autoMergeEligible(ready([finding({ status: "contested" })]))).toBe(false);
+    expect(autoMergeEligible({ ...ready([]), phase: "reviewing" })).toBe(false);
+    expect(autoMergeEligible({ ...ready([]), reviewedSha: undefined })).toBe(false);
   });
 });

@@ -772,6 +772,43 @@ describe("buildPrStateScript / parsePrState", () => {
   });
 });
 
+describe("reviews do PR: o Approve que o merge automático exige", () => {
+  const SHA = "c".repeat(40);
+  const OLD = "d".repeat(40);
+  const enc = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64");
+
+  it("lê as reviews com o commit de cada uma, com o token do stdin", async () => {
+    const { deliver } = await load();
+    const script = deliver.buildPrReviewsScript("vibehub-runner", "c1", TOKEN, "/work/x", PR);
+    expect(script).toContain(`gh pr view '${PR}' --json reviews`);
+    for (const line of script.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
+    expect(deliver.parsePrReviews(`__VIBEHUB_DELIVER__ prreviews ${enc([{ a: "albert", s: "APPROVED", c: SHA.toUpperCase() }])}`))
+      .toEqual({ ok: true, reviews: [{ author: "albert", state: "APPROVED", commit: SHA }] });
+    expect(deliver.parsePrReviews("denied\n__VIBEHUB_DELIVER__ error view")).toEqual({ ok: false, stage: "view" });
+    expect(deliver.parsePrReviews(`__VIBEHUB_DELIVER__ prreviews ${Buffer.from("not json").toString("base64")}`)).toEqual({ ok: false, stage: "parse" });
+    expect(deliver.parsePrReviews("")).toEqual({ ok: false, stage: "unknown" });
+  });
+
+  it("aprovado = APPROVED no commit revisado e nenhum changes requested de pé", async () => {
+    const { deliver } = await load();
+    const r = (author: string, state: string, commit = SHA) => ({ author, state, commit });
+    // o caso real do f9: a rodada 1 pediu mudanças e o Approve falhou — só o CHANGES_REQUESTED existe
+    expect(deliver.prApprovedAt([r("albert", "CHANGES_REQUESTED", OLD), r("albert", "COMMENTED")], SHA)).toBe(false);
+    expect(deliver.prApprovedAt([], SHA)).toBe(false);
+    // pediu mudanças e depois aprovou o commit revisado: aprovado (comentário depois não muda o veredito)
+    expect(deliver.prApprovedAt([r("albert", "CHANGES_REQUESTED", OLD), r("albert", "APPROVED"), r("albert", "COMMENTED")], SHA)).toBe(true);
+    // Approve de OUTRO commit não aprova o código revisado
+    expect(deliver.prApprovedAt([r("albert", "APPROVED", OLD)], SHA)).toBe(false);
+    // outra pessoa com changes requested de pé segura
+    expect(deliver.prApprovedAt([r("albert", "APPROVED"), r("mussa", "CHANGES_REQUESTED")], SHA)).toBe(false);
+    // aprovou e depois pediu mudanças: o veredito que vale é o último
+    expect(deliver.prApprovedAt([r("albert", "APPROVED"), r("albert", "CHANGES_REQUESTED")], SHA)).toBe(false);
+    // Approve dispensado (DISMISSED) não conta
+    expect(deliver.prApprovedAt([r("albert", "APPROVED"), r("albert", "DISMISSED")], SHA)).toBe(false);
+    expect(deliver.prApprovedAt([r("albert", "APPROVED")], "")).toBe(false);
+  });
+});
+
 describe("buildPrInfoScript / parsePrInfo (anexar um PR ao card)", () => {
   const info = {
     number: 599, url: "https://github.com/acme/widgets/pull/599", headRefName: "feat/aviso", baseRefName: "dev",
