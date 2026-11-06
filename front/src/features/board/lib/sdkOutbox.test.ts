@@ -4,6 +4,7 @@ import {
   AUTO_RESEND_MAX_AGE_MS,
   OUTBOX_ACK_TIMEOUT_MS,
   addToOutbox,
+  askResend,
   planAutoResend,
   dropFromOutbox,
   newCid,
@@ -422,5 +423,43 @@ describe("o AUTOR da mensagem guardada (troca de conta na mesma aba)", () => {
     localStorage.setItem("vibehub.sdkOutbox.card-lixo", JSON.stringify([{ cid: "c1", text: "oi", at: 1, from: { kind: "hacker", name: 3 } }]));
     expect(readOutbox("card-lixo")[0]!.from).toBeUndefined();
     localStorage.removeItem("vibehub.sdkOutbox.card-lixo");
+  });
+});
+
+describe("askResend — o Reenviar clicado sem fio (produção, 2026-11-06)", () => {
+  const T0 = 1_800_000_000_000;
+  const failed: OutboxMessage = { cid: "a", text: "instrução longa", at: T0, undelivered: true, autoRetries: 5 };
+
+  it("vira devida JÁ, mesmo com o plano automático esgotado e antes de qualquer intervalo", () => {
+    const list = askResend([failed], "a", T0);
+    const plan = planAutoResend(list, T0 + 1);
+    expect(plan.due.map((m) => m.cid)).toEqual(["a"]);
+    expect(plan.pending.has("a")).toBe(true);
+  });
+
+  it("a idade conta do CLIQUE: mensagem velha pedida agora sai; pedido de ontem não dispara sozinho", () => {
+    const later = T0 + AUTO_RESEND_MAX_AGE_MS + 1;
+    expect(planAutoResend(askResend([failed], "a", later), later + 1).due.map((m) => m.cid)).toEqual(["a"]);
+    expect(planAutoResend(askResend([failed], "a", T0), later).due).toHaveLength(0);
+  });
+
+  it("não toca no que está a caminho (sem veredito) nem no que não existe", () => {
+    const sending: OutboxMessage = { cid: "b", text: "x", at: T0 };
+    const list = [sending];
+    expect(askResend(list, "b", T0)).toBe(list);
+    expect(askResend(list, "zz", T0)).toBe(list);
+  });
+
+  it("o envio de verdade apaga o pedido — um segundo envio só com novo veredito e novo pedido", () => {
+    const asked = askResend([failed], "a", T0);
+    const sent = retryOutbox(asked, asked[0]!, T0 + 10, {});
+    expect(sent[0]!.asked).toBeUndefined();
+    expect(planAutoResend(sent, T0 + 20).due).toHaveLength(0);
+  });
+
+  it("o pedido sobrevive ao F5 (vai pro disco com a entrada)", () => {
+    writeOutbox("card-ask", askResend([failed], "a", T0));
+    expect(readOutbox("card-ask")[0]!.asked).toBe(true);
+    writeOutbox("card-ask", []);
   });
 });

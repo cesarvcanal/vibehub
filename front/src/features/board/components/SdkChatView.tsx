@@ -144,6 +144,7 @@ import {
   readOutbox,
   reconcileOutbox,
   retryOutbox,
+  askResend,
   sendMark,
   writeOutbox,
   type OutboxMessage,
@@ -275,6 +276,11 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     return stateRef.current;
   }, []);
   const socketRef = React.useRef<WebSocket | null>(null);
+  /**
+   * CONDENAR o socket atual e reconectar já (ver o watchdog). Preenchido pela conexão viva; fora
+   * dela não faz nada.
+   */
+  const abandonSocketRef = React.useRef<() => void>(() => {});
   /** Onde a resposta de um `workflow_feed` é entregue (o painel do workflow escuta; ver lib/workflowFeed.ts). */
   const workflowFeedRef = React.useRef<WorkflowFeedChannel | null>(null);
   /** Onde a resposta de um `detail` é entregue (os modais escutam; ver lib/sdkDetail.ts). */
@@ -490,6 +496,30 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
       };
     };
 
+    /**
+     * O watchdog CONDENOU este socket. `close()` sozinho não basta: num socket meio-aberto o
+     * navegador espera o aperto de mão de fechamento que nunca vem (no Chrome, até 60s) e só então
+     * dispara o `onclose` — o único que agendava a reconexão. Nesse minuto o fio não estava OPEN nem
+     * voltando, e todo Reenviar caía no "Sem conexão" (produção, 2026-11-06). Então ele é soltado
+     * aqui: os handlers saem (o fechamento tardio não fala por cima da conexão nova) e a reconexão
+     * sai pelo backoff de sempre.
+     */
+    abandonSocketRef.current = () => {
+      const dead = socket;
+      if (disposed || !dead) return;
+      dead.onopen = null;
+      dead.onmessage = null;
+      dead.onerror = null;
+      dead.onclose = null;
+      try { dead.close(); } catch { /* already closing */ }
+      socket = null;
+      if (socketRef.current === dead) socketRef.current = null;
+      setConnected(false);
+      setPeers({});
+      typingRef.current?.stop();
+      scheduleRetry();
+    };
+
     const scheduleRetry = (): void => {
       if (disposed || retry) return;
       setStatus("reconnecting");
@@ -502,6 +532,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     connect();
     return () => {
       disposed = true;
+      abandonSocketRef.current = () => {};
       if (retry) clearTimeout(retry);
       discardDeltas();
       backoff.dispose();
@@ -648,9 +679,13 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
       sendFrame(entry.original !== undefined
         ? { type: "edit_user", original: entry.original, text: entry.text, cid, ...(entry.first ? { first: true } : {}) }
         : { type: "user", text: entry.text, cid });
-    } catch (err) {
-      if (!auto) toast.error((err as Error).message);
-      setOutbox((prev) => markUndelivered(prev, [cid]));
+    } catch {
+      // Sem fio no meio do caminho: nada de erro. O clique da pessoa vira PEDIDO (sai sozinho no
+      // primeiro portão aberto); o automático só reagenda.
+      setOutbox((prev) => {
+        const failed = markUndelivered(prev, [cid]);
+        return auto ? failed : askResend(failed, cid, Date.now());
+      });
       setState((prev) => settleUserRow(prev, cid, "undelivered"));
     }
   }, [sendFrame]);
@@ -742,11 +777,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
       const cids = overdue.map((m) => m.cid);
       setOutbox((prev) => markUndelivered(prev, cids));
       setState((prev) => cids.reduce((acc, cid) => settleUserRow(acc, cid, "undelivered"), prev));
-      const socket = socketRef.current;
-      // Drop the socket: the reconnect is the only way to find out whether it was still alive.
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        try { socket.close(); } catch { /* already closing */ }
-      }
+      // Drop the socket: the reconnect is the only way to find out whether it was still alive —
+      // and it starts NOW, not when a half-open socket finally finishes closing.
+      if (socketRef.current?.readyState === WebSocket.OPEN) abandonSocketRef.current();
     }, OUTBOX_TICK_MS);
     return () => clearInterval(timer);
   }, [outbox.length]);
@@ -1001,7 +1034,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     const retry = planAutoResend(ownSends(outboxRef.current, viewer), Date.now()).due
       .find((m) => m.original === undefined || !state.turnActive);
     if (retry) {
-      resendEntry(retry, true);
+      // Um pedido da pessoa (`asked`) sai como o clique que ele é: zera o plano automático.
+      resendEntry(retry, retry.asked !== true);
       return;
     }
     // Só o que é DESTA conta sai por esta conexão (o servidor carimba o autor pela conexão).
@@ -1148,8 +1182,17 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   const resendUndelivered = React.useCallback((cid: string): void => {
     // Reenviar a mensagem de OUTRA conta a gravaria no nome de quem está na aba agora.
     const entry = ownSends(outboxRef.current, viewer).find((m) => m.cid === cid);
-    if (entry) resendEntry(entry, false);
-  }, [resendEntry, viewer]);
+    if (!entry) return;
+    // SEM FIO (o socket condenado, a reconexão no backoff, o servidor no setup) o clique não tenta o
+    // socket — tentar era o "Sem conexão… Ela fica no campo" de 2026-11-06. Vira pedido, e o despacho
+    // o manda assim que o chat estiver pronto, na frente da fila.
+    const wireUp = socketRef.current?.readyState === WebSocket.OPEN && readSettledState().ready;
+    if (!wireUp) {
+      setOutbox((prev) => askResend(prev, cid, Date.now()));
+      return;
+    }
+    resendEntry(entry, false);
+  }, [resendEntry, viewer, readSettledState]);
 
   /** "Descartar": the person gave up on this send — the bubble and the stored copy both go. */
   const discardUndelivered = React.useCallback((cid: string): void => {

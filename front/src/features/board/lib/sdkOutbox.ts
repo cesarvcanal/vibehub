@@ -84,6 +84,13 @@ export interface OutboxMessage {
    * primeiro envio), vale o `at`, que até o primeiro reenvio é a mesma hora.
    */
   writtenAt?: number;
+  /**
+   * A PESSOA PEDIU o Reenviar num instante em que não havia fio para levá-lo (o socket condenado
+   * ainda fechando, a reconexão no backoff, o servidor no setup). O pedido não vira erro: a
+   * mensagem sai no primeiro portão aberto do despacho, sem esperar intervalo nem olhar o plano
+   * automático — quem pediu foi gente (ver `askResend`).
+   */
+  asked?: boolean;
 }
 
 /**
@@ -139,6 +146,7 @@ export function readOutbox(cardId: string): OutboxMessage[] {
       unsent: m.unsent === true ? true : undefined,
       autoRetries: Number.isInteger(m.autoRetries) && (m.autoRetries as number) >= 0 ? m.autoRetries : undefined,
       writtenAt: typeof m.writtenAt === "number" && Number.isFinite(m.writtenAt) ? m.writtenAt : undefined,
+      asked: m.asked === true ? true : undefined,
     }));
   } catch {
     return [];
@@ -223,11 +231,30 @@ export function retryOutbox(
   mark: SendMark,
   auto = false,
 ): OutboxMessage[] {
-  const { unsent: _neverSent, autoRetries, writtenAt, ...sent } = entry;
+  const { unsent: _neverSent, autoRetries, writtenAt, asked: _asked, ...sent } = entry;
   const plan = auto
     ? { autoRetries: (autoRetries ?? 0) + 1, writtenAt: writtenAt ?? entry.at }
     : { writtenAt: now };
   return addToOutbox(messages, { ...sent, ...mark, ...plan, at: now, undelivered: false });
+}
+
+/**
+ * O Reenviar clicado SEM FIO (produção, 2026-11-06): antes ele tentava o socket na hora, recebia o
+ * "Sem conexão — a mensagem não foi enviada. Ela fica no campo." (falso: ela está na bolha) e a
+ * mensagem continuava parada até o plano automático. Agora o clique fica anotado na própria entrada
+ * e o despacho a manda assim que o chat voltar, dentro do mesmo teto de idade do plano automático
+ * contado do clique (a aba reaberta no dia seguinte não dispara o pedido de ontem). Só vale para quem ainda está sem veredito favorável
+ * (`undelivered`); uma entrada que não existe mais não muda nada. PURE.
+ */
+export function askResend(messages: readonly OutboxMessage[], cid: string, now: number): OutboxMessage[] {
+  let changed = false;
+  const next = messages.map((m) => {
+    if (m.cid !== cid || m.undelivered !== true || m.asked === true) return m;
+    changed = true;
+    // O clique é a pessoa dizendo de novo "quero isso": a idade volta a contar dele.
+    return { ...m, asked: true, writtenAt: now };
+  });
+  return changed ? next : (messages as OutboxMessage[]);
 }
 
 /**
@@ -280,7 +307,15 @@ export function planAutoResend(messages: readonly OutboxMessage[], now: number):
     if (t > now && (wakeAt === null || t < wakeAt)) wakeAt = t;
   };
   for (const m of messages) {
-    if (m.undelivered !== true || m.unsent === true) continue;
+    if (m.undelivered !== true) continue;
+    // Pedido da pessoa: sai já, sem intervalo nem teto de tentativas (ver `askResend`).
+    if (m.asked === true) {
+      if (now >= (m.writtenAt ?? m.at) + AUTO_RESEND_MAX_AGE_MS) continue;
+      pending.add(m.cid);
+      due.push(m);
+      continue;
+    }
+    if (m.unsent === true) continue;
     const delay = AUTO_RESEND_DELAYS_MS[m.autoRetries ?? 0];
     if (delay === undefined) continue;
     const expires = (m.writtenAt ?? m.at) + AUTO_RESEND_MAX_AGE_MS;

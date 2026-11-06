@@ -1520,6 +1520,76 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
     }
   });
 
+  /**
+   * O BUG DO ALBERT (produção, 2026-11-06): a mensagem ficou "não entregue", o Reenviar devolveu o
+   * genérico "Sem conexão — a mensagem não foi enviada. Ela fica no campo." e ela só saiu sozinha um
+   * minuto depois. O watchdog derruba o socket com `close()`, mas um socket meio-aberto não termina
+   * de fechar: o navegador espera o aperto de mão de fechamento (no Chrome, até 60s) e só então
+   * dispara o `onclose` — que é quem agenda a reconexão. Nesse minuto o fio não estava OPEN nem
+   * voltando, e todo clique caía no erro. (O `FakeSocket.close()` é exatamente isso: não chama
+   * `onclose`.)
+   */
+  it("o watchdog condena o socket e reconecta JÁ, sem esperar o navegador terminar de fechá-lo", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ type: "ready" });
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
+      await waitFor(() => expect(ws.sent.length).toBe(1));
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS + OUTBOX_TICK_MS); });
+      expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered");
+      // Só o tempo do backoff da primeira tentativa — nunca o minuto do handshake de fechamento.
+      await act(async () => { await vi.advanceTimersByTimeAsync(RECONNECT_MAX_MS); });
+      expect(FakeSocket.instances).toHaveLength(2);
+
+      const fresh = FakeSocket.instances[1]!;
+      fresh.accept();
+      fresh.deliver({ type: "ready" });
+      // O fechamento tardio do socket condenado não derruba a conexão nova.
+      act(() => { ws.onclose?.(); });
+      expect(FakeSocket.instances).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("Reenviar com o fio caído não dá erro: a mensagem sai sozinha assim que o chat volta", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { toast } = await import("sonner");
+      renderSdkChat();
+      const ws = await socket();
+      ws.accept();
+      ws.deliver({ type: "ready" });
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
+      await waitFor(() => expect(ws.sent.length).toBe(1));
+      const cid = (JSON.parse(ws.sent[0]!) as { cid: string }).cid;
+      await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS + OUTBOX_TICK_MS); });
+
+      // O fio ainda não voltou (a reconexão está no backoff ou no setup): o clique é um pedido.
+      await user.click(screen.getByTestId("sdk-user-resend"));
+      expect(toast.error).not.toHaveBeenCalled();
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(RECONNECT_MAX_MS); });
+      const fresh = FakeSocket.instances.at(-1)!;
+      expect(fresh).not.toBe(ws);
+      fresh.accept();
+      fresh.deliver({ type: "ready" });
+
+      // Na hora do `ready`, sem esperar o intervalo do reenvio automático — a pessoa já pediu.
+      await waitFor(() => expect(fresh.sent).toHaveLength(1));
+      expect(JSON.parse(fresh.sent[0]!)).toMatchObject({ type: "user", text: "instrução longa", cid });
+      expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sending");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("user_ack: o servidor gravou — a bolha vira 'sent' e o navegador esquece a cópia", async () => {
     renderSdkChat();
     const ws = await socket();
