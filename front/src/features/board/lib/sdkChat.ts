@@ -14,6 +14,7 @@ import type { SlashCommandInfo } from "@/features/board/lib/slashMenu";
 import type { ServerText } from "@/features/board/lib/sdkOutbox";
 import { hasToolDiff } from "@/features/board/lib/toolDiff";
 import type { RateLimitInfo } from "@/features/board/lib/planUsage";
+import { parseContextUsage, type ContextUsageInfo } from "@/features/board/lib/contextUsage";
 import { t as translate } from "@/i18n";
 import type { LocalVoiceTurn } from "@/features/voice/voiceTurns";
 
@@ -84,6 +85,7 @@ export interface SdkEvent {
     | "btw_answer"
     | "background_tasks"
     | "rate_limit"
+    | "context_usage"
     | "conversation_reset"
     | "result"
     | "workflow_progress"
@@ -155,6 +157,11 @@ export interface SdkEvent {
   window?: string;
   utilization?: number;
   resetsAt?: number;
+  /** On `context_usage`: how full the session's context window is (see `contextUsage`). */
+  usedTokens?: number;
+  maxTokens?: number;
+  percent?: number;
+  model?: string;
   /** On `catalog`: every skill/command this session can run — what the composer's "/" offers. */
   commands?: SlashCommandInfo[];
   /** On `user_question`: the questions with their selectable options. */
@@ -568,6 +575,11 @@ export interface SdkChatState {
    * faixa colorida ao lado do "está digitando" (ver lib/planUsage.ts).
    */
   rateLimits: Record<string, RateLimitInfo>;
+  /**
+   * QUANTO DA JANELA DE CONTEXTO a conversa ocupa, a última leitura (o `/context`). Estado, não
+   * conversa: vira o medidor colorido ao lado do "está digitando" (ver lib/contextUsage.ts).
+   */
+  contextUsage: ContextUsageInfo | null;
   /** Monotonic counter for rows the driver did not name. */
   seq: number;
 }
@@ -578,6 +590,7 @@ export const INITIAL_SDK_STATE: SdkChatState = {
   backgroundTasks: [],
   agentTasks: {},
   rateLimits: {},
+  contextUsage: null,
   ready: false,
   turnActive: false,
   terminalBurst: false,
@@ -1345,6 +1358,11 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       };
       return { ...state, rateLimits: { ...state.rateLimits, [info.window]: info } };
     }
+    case "context_usage": {
+      // Substitui a leitura anterior. Uma torta não apaga a que vale.
+      const info = parseContextUsage(event);
+      return info ? { ...state, contextUsage: info } : state;
+    }
     case "conversation_reset": {
       // /clear: o modelo começou do zero numa sessão nova. A tela esquece a conversa antiga como
       // o Claude Code faz — senão o /clear parecia não ter feito nada. Fica o que é da SESSÃO do
@@ -1364,6 +1382,8 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         workflowMeta: {},
         terminalBurst: false,
         awaiting: false,
+        // A conversa apagada não ocupa mais nada; a leitura da sessão nova vem no fim do turno.
+        contextUsage: null,
       };
     }
     case "local_output": {
@@ -1447,6 +1467,8 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         // Idem o aviso de limite: o back reenvia o vigente atrás do `ready`; um driver novo (conta
         // trocada, inclusive) não herda o aviso da conta anterior.
         rateLimits: {},
+        // Idem o medidor de contexto: o back reenvia a última leitura da sessão atrás do `ready`.
+        contextUsage: null,
         rows: event.turnActive === true ? settleStreaming(state.rows) : settleLiveTools(dropProvisionalTools(settleStreaming(state.rows))),
       };
       if (event.resume) {

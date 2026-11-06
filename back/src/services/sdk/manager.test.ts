@@ -2869,6 +2869,82 @@ describe("rate_limit — o aviso de limite do plano", () => {
 });
 
 /**
+ * O MEDIDOR DE CONTEXTO: a última leitura de quanto da janela a sessão ocupa — normalizada,
+ * reenviada a quem conecta (a leitura só vem no fim de um turno), nunca gravada no histórico.
+ */
+describe("context_usage — o medidor de contexto", () => {
+  const parsed = (socket: ReturnType<typeof fakeSocket>) =>
+    socket.sent.map((s) => JSON.parse(s) as { type: string }).filter((e) => e.type === "context_usage");
+
+  it("sai com percentual sobre a janela crua, e só a ÚLTIMA leitura é reenviada a quem conecta depois", async () => {
+    const session = ensure();
+    const s1 = fakeSocket();
+    attachSocket(session, s1 as never);
+    spawned[0]!.stdout.emit("data", line({ type: "context_usage", usedTokens: 20_000, maxTokens: 200_000, model: "claude-opus-5-5" }));
+    spawned[0]!.stdout.emit("data", line({ type: "context_usage", usedTokens: 84_000, maxTokens: 200_000, model: "claude-opus-5-5" }));
+    const expected = { type: "context_usage", usedTokens: 84_000, maxTokens: 200_000, percent: 42, model: "claude-opus-5-5" };
+    expect(parsed(s1)[1]).toEqual(expected);
+
+    const late = fakeSocket();
+    attachSocket(session, late as never);
+    expect(parsed(late)).toEqual([expected]);
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect((await readHistory(CARD)).some((e) => e.type === "context_usage")).toBe(false);
+  });
+
+  it("descarta uma leitura sem janela e mantém a anterior", () => {
+    const session = ensure();
+    const s1 = fakeSocket();
+    attachSocket(session, s1 as never);
+    spawned[0]!.stdout.emit("data", line({ type: "context_usage", usedTokens: 10_000, maxTokens: 100_000 }));
+    spawned[0]!.stdout.emit("data", line({ type: "context_usage", usedTokens: 10 }));
+    expect(parsed(s1)).toEqual([{ type: "context_usage", usedTokens: 10_000, maxTokens: 100_000, percent: 10 }]);
+  });
+
+  it("card reaberto que retoma a MESMA sessão já mostra a última leitura; outra sessão não herda", () => {
+    const first = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
+    spawned[0]!.stdout.emit("data", line({ type: "session", sessionId: "s-1" }));
+    spawned[0]!.stdout.emit("data", line({ type: "context_usage", usedTokens: 130_000, maxTokens: 200_000 }));
+    stopCardDriver(CARD);
+    expect(first.closed).toBe(true);
+
+    const resumed = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec", "--resume", "s-1"] } });
+    const s1 = fakeSocket();
+    attachSocket(resumed, s1 as never);
+    expect(parsed(s1)).toEqual([{ type: "context_usage", usedTokens: 130_000, maxTokens: 200_000, percent: 65 }]);
+    stopCardDriver(CARD);
+
+    const other = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec", "--resume", "s-2"] } });
+    const s2 = fakeSocket();
+    attachSocket(other, s2 as never);
+    expect(parsed(s2)).toEqual([]);
+  });
+
+  it("o /clear apaga a leitura: quem conecta depois não vê o medidor da conversa apagada", () => {
+    const session = ensure();
+    spawned[0]!.stdout.emit("data", line({ type: "session", sessionId: "s-1" }));
+    spawned[0]!.stdout.emit("data", line({ type: "context_usage", usedTokens: 130_000, maxTokens: 200_000 }));
+    spawned[0]!.stdout.emit("data", line({ type: "conversation_reset", trigger: "clear" }));
+    const late = fakeSocket();
+    attachSocket(session, late as never);
+    expect(parsed(late)).toEqual([]);
+    stopCardDriver(CARD);
+    const resumed = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec", "--resume", "s-1"] } });
+    const s2 = fakeSocket();
+    attachSocket(resumed, s2 as never);
+    expect(parsed(s2)).toEqual([]);
+  });
+
+  it("uma sessão sem leitura não manda medidor nenhum a quem conecta", () => {
+    const session = ensure();
+    const s1 = fakeSocket();
+    attachSocket(session, s1 as never);
+    expect(parsed(s1)).toEqual([]);
+  });
+});
+
+/**
  * A ORDEM ESPERA A IDENTIDADE DE QUEM A DEU. Quando a mensagem é de outra pessoa (troca de autor), o
  * driver só a recebe depois que o token e o autor dela aterrissaram no runner — e o que vem depois,
  * desse socket, não passa na frente dela.

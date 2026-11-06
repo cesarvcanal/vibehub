@@ -224,6 +224,15 @@ export function query({ prompt, options }) {
     const own = existsSync(file) ? readFileSync(file, "utf8").trim() : undefined;
     return { applied: { effort: options.effort ?? own ?? "medium" }, effective: own ? { effortLevel: own } : {} };
   };
+  // O /context: "nocontext" simula um SDK que falha na consulta (o medidor só não anda).
+  let contextReads = 0;
+  handle.getContextUsage = async (opts) => {
+    contextReads++;
+    mark("context:" + JSON.stringify(opts ?? null));
+    if (existsSync(join(options.cwd, "context-fail"))) throw new Error("control request failed");
+    if (existsSync(join(options.cwd, "context-hang"))) return new Promise(() => {});
+    return { totalTokens: 1000 * contextReads, maxTokens: 167000, rawMaxTokens: 200000, percentage: contextReads * 0.5, model: "claude-opus-5-5", categories: [] };
+  };
   return handle;
 }
 `;
@@ -268,6 +277,8 @@ afterEach(async () => {
   await rm(join(sandbox, "release-tool"), { force: true });
   await rm(join(sandbox, "release-btw"), { force: true });
   await rm(join(sandbox, "account-effort"), { force: true });
+  await rm(join(sandbox, "context-fail"), { force: true });
+  await rm(join(sandbox, "context-hang"), { force: true });
 });
 
 afterAll(async () => {
@@ -1011,5 +1022,58 @@ describe("sdk-driver.mjs — /btw", () => {
     expect(String(answer.error)).toContain("CLI caiu");
     driver.send({ type: "user", text: "depois" });
     await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:depois", from);
+  }, 60_000);
+});
+
+/**
+ * O MEDIDOR DE CONTEXTO: o fim de cada turno pergunta à sessão quanto da janela ela ocupa (o número
+ * do /context) e repassa como `context_usage` — no modo "summary", que não gasta chamada de contagem.
+ */
+describe("sdk-driver.mjs — uso de contexto", () => {
+  it("depois do result, emite context_usage com o total e a janela CRUA, pedido em modo summary", async () => {
+    const driver = startDriver();
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "hello" });
+    const usage = await driver.waitFor((e) => e.type === "context_usage");
+    expect(usage).toMatchObject({ type: "context_usage", maxTokens: 200000, model: "claude-opus-5-5" });
+    expect(typeof usage.usedTokens).toBe("number");
+    expect(driver.marks).toContain('context:{"detail":"summary"}');
+    const resultAt = driver.events.findIndex((e) => e.type === "result");
+    const lastUsageAt = driver.events.map((e) => e.type).lastIndexOf("context_usage");
+    expect(lastUsageAt).toBeGreaterThan(resultAt);
+  }, 60_000);
+
+  it("uma consulta que falha não derruba o turno nem emite leitura torta", async () => {
+    await writeFile(join(sandbox, "context-fail"), "");
+    const driver = startDriver();
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "hello" });
+    await driver.waitFor((e) => e.type === "result");
+    await driver.waitMark('context:{"detail":"summary"}');
+    driver.send({ type: "user", text: "de novo" });
+    await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:de novo");
+    expect(driver.events.some((e) => e.type === "context_usage")).toBe(false);
+    expect(driver.events.some((e) => e.type === "error")).toBe(false);
+  }, 60_000);
+
+  it("uma consulta que nunca responde vence o prazo e não congela as leituras seguintes", async () => {
+    await writeFile(join(sandbox, "context-hang"), "");
+    process.env.VIBEHUB_CONTEXT_USAGE_TIMEOUT_MS = "150";
+    let driver: RunningDriver;
+    try {
+      driver = startDriver();
+    } finally {
+      delete process.env.VIBEHUB_CONTEXT_USAGE_TIMEOUT_MS;
+    }
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "hello" });
+    await driver.waitFor((e) => e.type === "result");
+    await driver.waitMark('context:{"detail":"summary"}');
+    await rm(join(sandbox, "context-hang"), { force: true });
+    // Passado o prazo, o próximo fim de turno lê de novo — e desta vez responde.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    driver.send({ type: "user", text: "de novo" });
+    const usage = await driver.waitFor((e) => e.type === "context_usage");
+    expect(usage).toMatchObject({ maxTokens: 200000 });
   }, 60_000);
 });

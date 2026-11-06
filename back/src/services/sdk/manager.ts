@@ -11,6 +11,7 @@ import { loadQuestionDrafts, saveQuestionDrafts, type StoredQuestionDraft } from
 import { createLineReader } from "../../utils/lineReader.js";
 import { writeCardCatalog } from "./catalog.js";
 import { normalizeRateLimit, type RateLimitInfo } from "./rateLimit.js";
+import { normalizeContextUsage, type ContextUsageInfo } from "./contextUsage.js";
 import { forgetCardWorkflows, lastWorkflowRuns, readAgentFeed, watchCardWorkflows } from "./workflow.js";
 import { InvalidWorkflowIdError } from "./workflowProbe.js";
 import { InvalidDetailIdError, readAgentTimeline, readToolDetail } from "./detail.js";
@@ -137,6 +138,11 @@ export interface DriverSession {
    * Estado da sessão: reenviado a quem conecta depois, nunca gravado.
    */
   rateLimits: Map<string, RateLimitInfo>;
+  /**
+   * A última leitura de quanto da janela de contexto a sessão ocupa (o medidor ao lado do "está
+   * digitando"). Estado da sessão, como o aviso de limite: reenviado a quem conecta, nunca gravado.
+   */
+  contextUsage?: ContextUsageInfo;
   /** Quando o conjunto deixou de ser vazio — o início da contagem de `BACKGROUND_HOLD_MAX_MS`. */
   backgroundSince?: number;
   /** O acerto do status do card depois que o segundo plano esvaziou (ver BACKGROUND_SETTLE_MS). */
@@ -360,6 +366,7 @@ export function setDriverSpawnerForTesting(fn: DriverSpawner | null): void {
 export function resetSdkSessionsForTesting(): void {
   for (const cardId of [...sessions.keys()]) stopCardDriver(cardId);
   sessions.clear();
+  lastContextByCard.clear();
 }
 
 /** Whether a card has a LIVE driver right now. */
@@ -792,6 +799,13 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     session.rateLimits.set(info.window, info);
     event = { type: "rate_limit", ...info };
   }
+  if (event.type === "context_usage") {
+    const info = normalizeContextUsage(event);
+    if (!info) return;
+    session.contextUsage = info;
+    if (session.lastSessionId) lastContextByCard.set(session.cardId, { sessionId: session.lastSessionId, info });
+    event = { type: "context_usage", ...info };
+  }
   if (event.type === "turn_absorbed") {
     // Streaming input: this send folded into the turn ALREADY running (the model absorbs it at its
     // next step) — it will not produce its own `result`, so its +1 comes back off. Floor at 1: an
@@ -919,6 +933,10 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     // `conversation_reset` em sdk-driver.mjs), sair do plan mode inclusive.
     void clearHistoryBeforeLastClear(session.cardId);
     forgetCardWorkflows(session.cardId);
+    // A conversa apagada não ocupa mais nada: o medidor dela sai junto (a leitura da sessão nova
+    // chega no fim do turno do /clear).
+    session.contextUsage = undefined;
+    lastContextByCard.delete(session.cardId);
     emitSystemNote(session, NOTE_CONVERSATION_CLEARED);
   }
   if (interruptNoteToFlush) emitSystemNote(session, interruptNoteToFlush);
@@ -1051,6 +1069,19 @@ export function createDetailResponder(
   };
 }
 
+/**
+ * A última leitura de contexto de cada card, PELA SESSÃO a que ela pertence — sobrevive ao fim do
+ * driver (idle stop, pausa). Um card reaberto que retoma a mesma sessão (`--resume`) já mostra o
+ * medidor, sem esperar a próxima mensagem; uma sessão diferente não herda o número de outra.
+ */
+const lastContextByCard = new Map<string, { sessionId: string; info: ContextUsageInfo }>();
+
+/** O id que o driver vai retomar, lido do argv do spawn (`--resume <id>`). */
+function resumeIdOf(args: readonly string[]): string | undefined {
+  const i = args.indexOf("--resume");
+  return i >= 0 ? args[i + 1] : undefined;
+}
+
 /* ------------------------------------------------------------------- API */
 
 export interface EnsureDriverOpts {
@@ -1104,6 +1135,8 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     ...(opts.transcriptDir ? { transcriptDir: opts.transcriptDir } : {}),
   };
   sessions.set(opts.cardId, session);
+  const remembered = lastContextByCard.get(opts.cardId);
+  if (remembered && remembered.sessionId === resumeIdOf(opts.command.args)) session.contextUsage = remembered.info;
   // O que cada pessoa já tinha marcado nos cartões abertos, de antes do reinício (ou do driver anterior).
   session.draftsLoaded = restoreQuestionDrafts(session).catch((err: unknown) => {
     logger.warn({ card: opts.label, detail: (err as Error).message }, "could not restore the question drafts");
@@ -2055,6 +2088,12 @@ export function attachSocket(
   // com a sessão a 92% precisa ver a faixa no primeiro quadro, não depois da próxima resposta.
   for (const info of session.rateLimits.values()) {
     try { socket.send(JSON.stringify({ type: "rate_limit", ...info })); } catch { /* going away */ }
+  }
+
+  // O medidor de contexto também: a leitura só vem no fim de um turno, e quem abre o card parado
+  // precisa ver quanto a conversa já ocupa sem mandar mensagem nenhuma.
+  if (session.contextUsage) {
+    try { socket.send(JSON.stringify({ type: "context_usage", ...session.contextUsage })); } catch { /* going away */ }
   }
 
   // A frota do workflow é da mesma natureza do catálogo: estado, não conversa. Ela não está no

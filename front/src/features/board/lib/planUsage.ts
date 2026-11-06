@@ -154,16 +154,24 @@ const HUE_STOPS: readonly (readonly [pct: number, hue: number])[] = [
 ];
 
 export function usageHue(utilization: number): number {
-  const pct = Math.min(100, Math.max(0, Number.isFinite(utilization) ? utilization : 0));
-  if (pct <= HUE_STOPS[0]![0]) return HUE_STOPS[0]![1];
-  for (let i = 1; i < HUE_STOPS.length; i++) {
-    const [p1, h1] = HUE_STOPS[i]!;
+  return interpolateHue(HUE_STOPS, utilization);
+}
+
+/**
+ * O matiz de um percentual (preso em 0..100) entre âncoras `[pct, hue]` em ordem crescente: antes
+ * da primeira, o matiz dela; entre duas, linear; depois da última, o matiz da última. PURE.
+ */
+export function interpolateHue(stops: readonly (readonly [pct: number, hue: number])[], percent: number): number {
+  const pct = Math.min(100, Math.max(0, Number.isFinite(percent) ? percent : 0));
+  if (pct <= stops[0]![0]) return stops[0]![1];
+  for (let i = 1; i < stops.length; i++) {
+    const [p1, h1] = stops[i]!;
     if (pct <= p1) {
-      const [p0, h0] = HUE_STOPS[i - 1]!;
+      const [p0, h0] = stops[i - 1]!;
       return Math.round(h0 + ((pct - p0) / (p1 - p0)) * (h1 - h0));
     }
   }
-  return 0;
+  return stops[stops.length - 1]![1];
 }
 
 /** `hsl(…)` do percentual, com alfa opcional (0..1). PURE. */
