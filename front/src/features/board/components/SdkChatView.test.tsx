@@ -4625,6 +4625,44 @@ describe("SdkChatView — o medidor de contexto", () => {
     expect(zones.filter((z) => z.getAttribute("data-current") === "true").map((z) => z.getAttribute("data-zone"))).toEqual(["warn"]);
     expect(within(guide).getByTestId("context-guide-marker").style.left).toBe("42%");
   });
+
+  it("acima de 30% vira aviso que o dev pode esconder; acima de 60% faixa de perigo que não se esconde", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "context_usage", usedTokens: 50_000, maxTokens: 200_000, percent: 25 } as SdkEvent);
+    expect(screen.queryByTestId("context-notice")).toBeNull();
+    expect(screen.queryByTestId("context-meter-icon")).toBeNull();
+
+    ws.deliver({ type: "context_usage", usedTokens: 84_000, maxTokens: 200_000, percent: 42 } as SdkEvent);
+    const warn = screen.getByTestId("context-notice");
+    expect(warn.getAttribute("data-zone")).toBe("warn");
+    expect(warn.getAttribute("role")).toBe("status");
+    expect(warn).toHaveTextContent("Context at 42%");
+    expect(screen.getByTestId("context-meter")).toHaveTextContent("attention");
+    expect(screen.getByTestId("context-meter-icon")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("context-notice-dismiss"));
+    expect(screen.queryByTestId("context-notice")).toBeNull();
+    // Escondido o aviso, o medidor continua dizendo "atenção".
+    expect(screen.getByTestId("context-meter")).toHaveTextContent("attention");
+
+    // Chegou no perigo: a faixa volta, vermelha, e sem botão de esconder.
+    ws.deliver({ type: "context_usage", usedTokens: 130_000, maxTokens: 200_000, percent: 65 } as SdkEvent);
+    const danger = screen.getByTestId("context-notice");
+    expect(danger.getAttribute("data-zone")).toBe("danger");
+    expect(danger.getAttribute("role")).toBe("alert");
+    expect(danger).toHaveTextContent("AI in the danger zone: 65%");
+    expect(screen.queryByTestId("context-notice-dismiss")).toBeNull();
+    expect(screen.getByTestId("context-meter")).toHaveTextContent("danger");
+
+    // Um /compact traz de volta à faixa inteligente: some tudo, e o próximo aviso volta a aparecer.
+    ws.deliver({ type: "context_usage", usedTokens: 20_000, maxTokens: 200_000, percent: 10 } as SdkEvent);
+    expect(screen.queryByTestId("context-notice")).toBeNull();
+    ws.deliver({ type: "context_usage", usedTokens: 70_000, maxTokens: 200_000, percent: 35 } as SdkEvent);
+    expect(screen.getByTestId("context-notice").getAttribute("data-zone")).toBe("warn");
+  });
 });
 
 /**

@@ -36,7 +36,7 @@ import { agentContext, typedContext } from "@/features/voice/voiceContext";
 import { AnswerActions } from "@/features/voice/AnswerActions";
 import { readAloud, readAloudError, setReadAloudErrorHandler } from "@/features/voice/readAloud";
 import { PlanUsageAlert, cardRateLimitsKey, useCardPlanUsage } from "@/features/board/components/PlanUsage";
-import { ContextMeter } from "@/features/board/components/ContextMeter";
+import { ContextMeter, ContextNotice } from "@/features/board/components/ContextMeter";
 import { planAlert, planWindows } from "@/features/board/lib/planUsage";
 import { LinkifiedText, Markdown, SenderTag } from "@/features/board/components/ChatView";
 import { originRole, type MessageOrigin } from "@/features/board/lib/chat";
@@ -1553,6 +1553,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
 
       {/* The interrupt button lives INSIDE the composer — right column, above the microphone —
           in the same seat as the transcript chat's stop. The interrupt frame is still this view's. */}
+      {/* O contexto saiu da faixa inteligente: o recado por extenso, acima da faixa do medidor. */}
+      <ContextNotice usage={state.contextUsage} className="mt-1.5" />
+
       {/* Uma faixa, três recados: quem está digitando à esquerda; à direita o aviso do plano e o
           medidor de quanto do contexto a conversa já ocupa. */}
       <div className="mt-1.5 flex items-center justify-between gap-2">
