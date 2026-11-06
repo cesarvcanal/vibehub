@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 import { useT } from "@/i18n";
 
 /**
- * O MEDIDOR DE CONTEXTO — quanto da janela a conversa já ocupa, ao lado do "está digitando".
+ * O MEDIDOR DE CONTEXTO — quanto da janela a conversa já ocupa, no canto inferior direito da caixa da conversa.
  *
  * A pílula carrega a cor CONTÍNUA do percentual (borda, fundo e a barrinha), e o número fica na cor
  * do texto para ler em qualquer tema. Passar o mouse (ou focar) abre o guia: a régua inteira com o

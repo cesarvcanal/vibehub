@@ -577,7 +577,7 @@ export interface SdkChatState {
   rateLimits: Record<string, RateLimitInfo>;
   /**
    * QUANTO DA JANELA DE CONTEXTO a conversa ocupa, a última leitura (o `/context`). Estado, não
-   * conversa: vira o medidor colorido ao lado do "está digitando" (ver lib/contextUsage.ts).
+   * conversa: vira o medidor colorido no canto inferior direito do log (ver lib/contextUsage.ts).
    */
   contextUsage: ContextUsageInfo | null;
   /** Monotonic counter for rows the driver did not name. */

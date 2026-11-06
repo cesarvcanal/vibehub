@@ -4578,7 +4578,7 @@ describe("SdkChatView — o aviso de limite do plano", () => {
 });
 
 /**
- * O MEDIDOR DE CONTEXTO — quanto da janela a conversa ocupa, ao lado do aviso do plano. A cor
+ * O MEDIDOR DE CONTEXTO — quanto da janela a conversa ocupa, no canto inferior direito do log. A cor
  * desliza com o percentual; o guia (tooltip) mostra as três faixas com a de agora em destaque.
  */
 describe("SdkChatView — o medidor de contexto", () => {
@@ -4609,6 +4609,65 @@ describe("SdkChatView — o medidor de contexto", () => {
 
     ws.deliver({ type: "ready" });
     expect(screen.queryByTestId("context-meter")).toBeNull();
+  });
+
+  it("fica no canto inferior direito da caixa da conversa, não na faixa acima do campo", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "context_usage", usedTokens: 24_000, maxTokens: 200_000, percent: 12 } as SdkEvent);
+    const corner = screen.getByTestId("sdk-context-corner");
+    expect(corner).toContainElement(screen.getByTestId("context-meter"));
+    expect(corner).toHaveClass("absolute", "bottom-3", "right-4");
+    // Mesma caixa do log: o canto é irmão do scroller, dentro do mesmo invólucro.
+    expect(corner.parentElement).toContainElement(screen.getByTestId("sdk-chat-scroller"));
+    expect(screen.getByTestId("terminal-composer").previousElementSibling).not.toContainElement(screen.getByTestId("context-meter"));
+  });
+
+  it("divide a linha com a resposta fechada; outra última linha ganha faixa própria embaixo", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "user", text: "oi" });
+    ws.deliver({ type: "assistant_delta", text: "Pronto." } as SdkEvent);
+    ws.deliver({ type: "result", isError: false });
+    ws.deliver({ type: "context_usage", usedTokens: 24_000, maxTokens: 200_000, percent: 12 } as SdkEvent);
+    const scroller = screen.getByTestId("sdk-chat-scroller");
+    // A linha do copiar ocupa só a esquerda: o medidor senta nela, sem faixa extra.
+    expect(scroller).not.toHaveClass("pb-10");
+
+    // A última linha agora é a bolha do usuário, à direita: o medidor a cobriria.
+    ws.deliver({ type: "user", text: "mais uma" });
+    expect(scroller).toHaveClass("pb-10");
+  });
+
+  it("sem medidor, o log não reserva o canto", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "user", text: "oi" });
+    expect(screen.getByTestId("sdk-chat-scroller")).not.toHaveClass("pb-10");
+  });
+
+  it("com o medidor no canto, o 'ir pro fim' sobe uma faixa para não colidir com ele", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "user", text: "oi" });
+    const scroller = screen.getByTestId("sdk-chat-scroller");
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 1000 });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 200 });
+    Object.defineProperty(scroller, "scrollTop", { configurable: true, get: () => 0, set: () => {} });
+    fireEvent.scroll(scroller);
+    expect(screen.getByTestId("jump-latest")).toHaveClass("bottom-3");
+
+    ws.deliver({ type: "context_usage", usedTokens: 24_000, maxTokens: 200_000, percent: 12 } as SdkEvent);
+    expect(screen.getByTestId("jump-latest")).toHaveClass("bottom-11");
+    expect(screen.getByTestId("jump-latest")).not.toHaveClass("bottom-3");
   });
 
   it("o guia mostra os tokens, as três faixas e destaca a de agora", async () => {
