@@ -482,18 +482,25 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
         /* onclose always follows */
       };
       next.onclose = () => {
-        if (socket === next) socket = null;
         if (socketRef.current === next) socketRef.current = null;
         // A DISPOSED socket's close lands late — after a reconnect (account switch, card switch) the
-        // NEW connection may already be open, and its state is not this one's to clear.
-        if (disposed) return;
-        setConnected(false);
-        // Who was typing belonged to THAT connection; the next one starts from silence — and so
-        // does this tab's own signal (the back already told the others this socket stopped).
-        setPeers({});
-        typingRef.current?.stop();
-        scheduleRetry();
+        // NEW connection may already be open, and its state is not this one's to clear. Same for a
+        // socket the watchdog already replaced (`abandonSocketRef`): it is no longer THE socket.
+        if (disposed || socket !== next) return;
+        dropConnection(next);
       };
+    };
+
+    /** O fio `dead` caiu (ou foi condenado): a tela fica offline e a reconexão é agendada. */
+    const dropConnection = (dead: WebSocket): void => {
+      if (socket === dead) socket = null;
+      if (socketRef.current === dead) socketRef.current = null;
+      setConnected(false);
+      // Who was typing belonged to THAT connection; the next one starts from silence — and so
+      // does this tab's own signal (the back already told the others this socket stopped).
+      setPeers({});
+      typingRef.current?.stop();
+      scheduleRetry();
     };
 
     /**
@@ -512,12 +519,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
       dead.onerror = null;
       dead.onclose = null;
       try { dead.close(); } catch { /* already closing */ }
-      socket = null;
-      if (socketRef.current === dead) socketRef.current = null;
-      setConnected(false);
-      setPeers({});
-      typingRef.current?.stop();
-      scheduleRetry();
+      dropConnection(dead);
     };
 
     const scheduleRetry = (): void => {

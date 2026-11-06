@@ -1539,9 +1539,14 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
       await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
       await waitFor(() => expect(ws.sent.length).toBe(1));
+      // O handler que o navegador chamaria quando o socket condenado terminasse de fechar.
+      const lateClose = ws.onclose;
 
       await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS + OUTBOX_TICK_MS); });
       expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered");
+      // O socket condenado não fala mais com a tela: os handlers saíram junto com ele.
+      expect(ws.onclose).toBeNull();
+      expect(ws.onmessage).toBeNull();
       // Só o tempo do backoff da primeira tentativa — nunca o minuto do handshake de fechamento.
       await act(async () => { await vi.advanceTimersByTimeAsync(RECONNECT_MAX_MS); });
       expect(FakeSocket.instances).toHaveLength(2);
@@ -1549,9 +1554,18 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
       const fresh = FakeSocket.instances[1]!;
       fresh.accept();
       fresh.deliver({ type: "ready" });
-      // O fechamento tardio do socket condenado não derruba a conexão nova.
-      act(() => { ws.onclose?.(); });
+      // A conexão nova é boa: o reenvio sai por ela e o servidor confirma.
+      await waitFor(() => expect(fresh.sent).toHaveLength(1));
+      fresh.deliver({ type: "user_ack", cid: (JSON.parse(fresh.sent[0]!) as { cid: string }).cid } as SdkEvent);
+      fresh.deliver({ type: "result", subtype: "success" } as SdkEvent);
+      // Mesmo que o fechamento tardio do condenado chegasse, ele não derruba a conexão nova: a tela
+      // continua se sabendo online, e o que se escreve sai por ela na hora (não fica na fila).
+      act(() => { lateClose?.(); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(RECONNECT_MAX_MS); });
       expect(FakeSocket.instances).toHaveLength(2);
+      const before = fresh.sent.length;
+      await user.type(screen.getByRole("textbox"), "segue o baile{Enter}");
+      await waitFor(() => expect(fresh.sent.slice(before).some((raw) => raw.includes("segue o baile"))).toBe(true));
     } finally {
       vi.useRealTimers();
     }
