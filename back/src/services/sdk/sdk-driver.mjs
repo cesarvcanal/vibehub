@@ -1205,6 +1205,7 @@ async function runStream() {
 // contagem de tokens por categoria do modo "full": barato o bastante para correr a cada resposta.
 // Pedido no fim de cada turno e, durante um turno longo, no máximo a cada CONTEXT_USAGE_EVERY_MS.
 const CONTEXT_USAGE_EVERY_MS = 5_000;
+const CONTEXT_USAGE_TIMEOUT_MS = Number(process.env.VIBEHUB_CONTEXT_USAGE_TIMEOUT_MS) || 10_000;
 let contextUsageAt = 0;
 let contextUsageInFlight = false;
 let contextUsageAgain = false; // o fim do turno chegou com uma leitura em voo: refaz depois dela
@@ -1225,7 +1226,13 @@ async function emitContextUsage(handle, force) {
   contextUsageInFlight = true;
   contextUsageAt = now;
   try {
-    const usage = await handle.getContextUsage({ detail: "summary" });
+    // Com prazo: uma consulta que nunca responde não pode prender o medidor para sempre (o
+    // `contextUsageInFlight` barraria todas as seguintes).
+    let timer;
+    const usage = await Promise.race([
+      handle.getContextUsage({ detail: "summary" }),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer in ${CONTEXT_USAGE_TIMEOUT_MS}ms`)), CONTEXT_USAGE_TIMEOUT_MS); }),
+    ]).finally(() => clearTimeout(timer));
     // Um stream que foi trocado no meio fala da sessão VELHA: o número dele não vale mais.
     if (!usage || handle !== currentQuery) return;
     emit({
