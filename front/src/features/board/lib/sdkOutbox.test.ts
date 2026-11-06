@@ -4,6 +4,7 @@ import {
   AUTO_RESEND_MAX_AGE_MS,
   OUTBOX_ACK_TIMEOUT_MS,
   addToOutbox,
+  askResend,
   planAutoResend,
   dropFromOutbox,
   newCid,
@@ -422,5 +423,65 @@ describe("o AUTOR da mensagem guardada (troca de conta na mesma aba)", () => {
     localStorage.setItem("vibehub.sdkOutbox.card-lixo", JSON.stringify([{ cid: "c1", text: "oi", at: 1, from: { kind: "hacker", name: 3 } }]));
     expect(readOutbox("card-lixo")[0]!.from).toBeUndefined();
     localStorage.removeItem("vibehub.sdkOutbox.card-lixo");
+  });
+});
+
+describe("askResend — o Reenviar clicado sem fio (produção, 2026-11-06)", () => {
+  const T0 = 1_800_000_000_000;
+  const failed: OutboxMessage = { cid: "a", text: "instrução longa", at: T0, undelivered: true, autoRetries: 5 };
+
+  it("vira devida JÁ, mesmo com o plano automático esgotado e antes de qualquer intervalo", () => {
+    const list = askResend([failed], "a", T0);
+    const plan = planAutoResend(list, T0 + 1);
+    expect(plan.due.map((m) => m.cid)).toEqual(["a"]);
+    expect(plan.pending.has("a")).toBe(true);
+  });
+
+  it("a idade conta do CLIQUE: mensagem velha pedida agora sai; pedido de ontem não dispara sozinho", () => {
+    const later = T0 + AUTO_RESEND_MAX_AGE_MS + 1;
+    expect(planAutoResend(askResend([failed], "a", later), later + 1).due.map((m) => m.cid)).toEqual(["a"]);
+    expect(planAutoResend(askResend([failed], "a", T0), later).due).toHaveLength(0);
+  });
+
+  it("não toca no que está a caminho (sem veredito) nem no que não existe", () => {
+    const sending: OutboxMessage = { cid: "b", text: "x", at: T0 };
+    const list = [sending];
+    expect(askResend(list, "b", T0)).toBe(list);
+    expect(askResend(list, "zz", T0)).toBe(list);
+  });
+
+  it("o envio de verdade apaga o pedido — um segundo envio só com novo veredito e novo pedido", () => {
+    const asked = askResend([failed], "a", T0);
+    const sent = retryOutbox(asked, asked[0]!, T0 + 10, {});
+    expect(sent[0]!.asked).toBeUndefined();
+    expect(planAutoResend(sent, T0 + 20).due).toHaveLength(0);
+  });
+
+  it("o pedido não muda a ORDEM: a mais velha pedida sem fio sai antes da mais nova (revisão f1)", () => {
+    const older: OutboxMessage = { cid: "a", text: "primeira", at: T0, writtenAt: T0, undelivered: true };
+    const newer: OutboxMessage = { cid: "b", text: "segunda", at: T0 + 1_000, writtenAt: T0 + 1_000, undelivered: true };
+    const asked = askResend([older, newer], "a", T0 + 60_000);
+    expect(asked[0]!.writtenAt).toBe(T0);
+    const plan = planAutoResend(asked, T0 + 60_000 + AUTO_RESEND_DELAYS_MS[0]!);
+    expect(plan.due.map((m) => m.cid)).toEqual(["a", "b"]);
+  });
+
+  it("um clique depois do pedido vencido o renova (revisão f2)", () => {
+    const first = askResend([failed], "a", T0);
+    const later = T0 + AUTO_RESEND_MAX_AGE_MS + 1;
+    expect(planAutoResend(first, later).due).toHaveLength(0);
+    expect(planAutoResend(askResend(first, "a", later), later).due.map((m) => m.cid)).toEqual(["a"]);
+  });
+
+  it("o pedido acorda o plano quando vence, e a bolha para de prometer (revisão f3)", () => {
+    const plan = planAutoResend(askResend([failed], "a", T0), T0 + 1);
+    expect(plan.wakeAt).toBe(T0 + AUTO_RESEND_MAX_AGE_MS);
+    expect(planAutoResend(askResend([failed], "a", T0), T0 + AUTO_RESEND_MAX_AGE_MS).pending.has("a")).toBe(false);
+  });
+
+  it("o pedido sobrevive ao F5 (vai pro disco com a entrada)", () => {
+    writeOutbox("card-ask", askResend([failed], "a", T0));
+    expect(readOutbox("card-ask")[0]).toMatchObject({ asked: true, askedAt: T0 });
+    writeOutbox("card-ask", []);
   });
 });
