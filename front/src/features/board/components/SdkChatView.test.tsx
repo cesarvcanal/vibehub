@@ -4625,21 +4625,27 @@ describe("SdkChatView — o medidor de contexto", () => {
     expect(screen.getByTestId("terminal-composer").previousElementSibling).not.toContainElement(screen.getByTestId("context-meter"));
   });
 
-  it("divide a linha com a resposta fechada; outra última linha ganha faixa própria embaixo", async () => {
+  it("na resposta fechada, entra na linha do copiar/ouvir; outra última linha volta ao canto com faixa própria", async () => {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
-    ws.deliver({ type: "ready" });
     ws.deliver({ type: "user", text: "oi" });
-    ws.deliver({ type: "assistant_delta", text: "Pronto." } as SdkEvent);
+    ws.deliver({ type: "assistant_text", text: "Pronto." });
     ws.deliver({ type: "result", isError: false });
+    // A retomada da sessão não vira linha no log: a resposta continua sendo a última.
+    ws.deliver({ type: "ready", resume: "bfe63d25-95df-4c86-bf34-047b1366cc02" } as SdkEvent);
     ws.deliver({ type: "context_usage", usedTokens: 24_000, maxTokens: 200_000, percent: 12 } as SdkEvent);
     const scroller = screen.getByTestId("sdk-chat-scroller");
-    // A linha do copiar ocupa só a esquerda: o medidor senta nela, sem faixa extra.
+    expect(screen.queryByText(/Retomando a sessão/)).toBeNull();
+    // Mesma linha dos ícones, sem faixa extra nem pílula flutuando.
+    expect(screen.getByTestId("sdk-answer-actions")).toContainElement(screen.getByTestId("context-meter"));
+    expect(screen.queryByTestId("sdk-context-corner")).toBeNull();
     expect(scroller).not.toHaveClass("pb-10");
 
-    // A última linha agora é a bolha do usuário, à direita: o medidor a cobriria.
+    // A última linha agora é a bolha do usuário, à direita: o medidor vai ao canto e o log reserva a faixa.
     ws.deliver({ type: "user", text: "mais uma" });
+    expect(screen.getByTestId("sdk-context-corner")).toContainElement(screen.getByTestId("context-meter"));
+    expect(screen.getByTestId("sdk-answer-actions")).not.toContainElement(screen.queryByTestId("context-meter"));
     expect(scroller).toHaveClass("pb-10");
   });
 

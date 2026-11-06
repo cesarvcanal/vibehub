@@ -513,7 +513,6 @@ export const ptBR: Record<string, string> = {
   "sdk.empty": "Nenhuma mensagem ainda",
   "sdk.emptyHint": "Esta conversa roda pelo Agent SDK: eventos estruturados, e permissões respondidas aqui mesmo no chat.",
   "sdk.session": "sessão {id}",
-  "sdk.resumed": "Retomando a sessão {id}",
   "sdk.terminalActivity": "Atividade no terminal — a conversa seguiu na aba Terminal",
   "sdk.offline": "Sem conexão — a mensagem não foi enviada. Ela fica no campo.",
   "sdk.btwLabel": "Pergunta lateral (/btw) — respondida à parte, o turno seguiu sem ela",

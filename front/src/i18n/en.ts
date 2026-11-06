@@ -512,7 +512,6 @@ export const en: Record<string, string> = {
   "sdk.empty": "No messages yet",
   "sdk.emptyHint": "This conversation runs over the Agent SDK: structured events, and permissions answered right here in the chat.",
   "sdk.session": "session {id}",
-  "sdk.resumed": "Resuming session {id}",
   "sdk.terminalActivity": "Activity in the terminal — the conversation moved to the Terminal tab",
   "sdk.offline": "Not connected — the message was not sent. It stays in the field.",
   "sdk.btwLabel": "Side question (/btw) — answered on the side, the turn went on without it",

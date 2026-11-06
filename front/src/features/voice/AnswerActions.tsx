@@ -22,6 +22,7 @@ export function AnswerActions({
   cardId,
   text,
   player = readAloud,
+  trailing,
 }: {
   /** The answer's row id — which answer the single player is reading. */
   id: string;
@@ -29,6 +30,8 @@ export function AnswerActions({
   /** The answer as written (markdown): what is copied, and what is read. */
   text: string;
   player?: ReadAloudPlayer;
+  /** What closes the row on the right (the context meter, on the last answer). */
+  trailing?: React.ReactNode;
 }) {
   const t = useT();
   const speech = useVoiceStatus().data?.speech === true;
@@ -51,7 +54,8 @@ export function AnswerActions({
   const listenLabel = phase === "playing" ? t("answer.stop") : phase === "loading" ? t("answer.loading") : t("answer.listen");
 
   return (
-    <div data-testid="sdk-answer-actions" className="mt-1 flex items-center gap-0.5">
+    // `-ml-1`: the buttons' padding would indent the icons; this lines them up with the text above.
+    <div data-testid="sdk-answer-actions" className="-ml-1 mt-1 flex items-center gap-0.5">
       <button
         type="button"
         data-testid="sdk-answer-copy"
@@ -82,6 +86,7 @@ export function AnswerActions({
           )}
         </button>
       ) : null}
+      {trailing ? <div className="ml-auto pl-2">{trailing}</div> : null}
     </div>
   );
 }

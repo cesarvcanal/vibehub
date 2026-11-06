@@ -1471,12 +1471,8 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         contextUsage: null,
         rows: event.turnActive === true ? settleStreaming(state.rows) : settleLiveTools(dropProvisionalTools(settleStreaming(state.rows))),
       };
-      if (event.resume) {
-        next.sessionId = event.resume;
-        const { id, seq } = nextId(state, "note");
-        next.seq = seq;
-        next.rows = [...next.rows, { kind: "note", id, text: `resume:${event.resume}` }];
-      }
+      // A sessão retomada é estado, não conversa: nenhuma linha "Retomando a sessão…" no log.
+      if (event.resume) next.sessionId = event.resume;
       return next;
     }
     case "user_ack":
