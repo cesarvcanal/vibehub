@@ -82,7 +82,7 @@ export function useStickToBottom(content: unknown): StickToBottom {
  * The floating arrow. Render INSIDE a `relative` wrapper around the scroller; it sits just above
  * the composer edge and only exists while the reader is away from the end.
  */
-export function JumpToLatest({ stick }: { stick: StickToBottom }) {
+export function JumpToLatest({ stick, className }: { stick: StickToBottom; className?: string }) {
   const t = useT();
   if (stick.atBottom) return null;
   return (
@@ -95,6 +95,7 @@ export function JumpToLatest({ stick }: { stick: StickToBottom }) {
         "absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border/70",
         "bg-background/95 px-2.5 py-1.5 text-xs text-muted-foreground shadow-md backdrop-blur",
         "hover:text-foreground",
+        className,
       )}
     >
       <ArrowDown className="h-3.5 w-3.5" />

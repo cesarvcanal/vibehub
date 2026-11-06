@@ -1397,6 +1397,15 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     if (!working) setEscalation(null);
   }, [working]);
 
+  // O medidor do canto só DIVIDE a última linha quando ela deixa a direita livre: o "Trabalhando…"
+  // (que trunca antes dele) ou a resposta fechada, cuja linha de copiar/ouvir ocupa só a esquerda.
+  // Qualquer outra última linha (a bolha do usuário, um erro, uma ferramenta) ficaria por baixo
+  // dele — aí o log reserva uma faixa no fim (`pb-10`) e o medidor senta nela.
+  const lastEntry = rendered[rendered.length - 1];
+  const meterSharesLastLine =
+    (working && workStartedAt !== null) || (lastEntry?.kind === "row" && finishedAnswers.has(lastEntry.id));
+  const meterReservesStrip = state.contextUsage !== null && !meterSharesLastLine;
+
   return (
     <WorkflowFeedContext.Provider value={workflowFeed}>
     <DetailChannelContext.Provider value={detailChannel}>
@@ -1414,7 +1423,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
         // absolute inside the conversation (the diff card's `sr-only` label, for one). Without it
         // those anchor to the wrapper outside, keep their place deep in the history, and give the
         // whole page an empty scroll below the composer.
-        className="relative min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain rounded-md border border-border/60 bg-card/30 px-3 py-3"
+        className={cn(
+          "relative min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain rounded-md border border-border/60 bg-card/30 px-3 py-3",
+          meterReservesStrip && "pb-10",
+        )}
       >
         {/* WHAT IS RUNNING — pinned to the top of the conversation for as long as work runs, so a
             long turn never leaves the person scrolling to find out whether anything is happening. */}
@@ -1504,7 +1516,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
       <span role="status" data-testid="sdk-working-status" className="sr-only">
         {working ? t(workingStage(workingKind, 0).verb) : ""}
       </span>
-      <JumpToLatest stick={stick} />
+      {/* Com o medidor no canto, o "ir pro fim" sobe uma faixa: num painel estreito os dois se tocavam. */}
+      <JumpToLatest stick={stick} className={state.contextUsage ? "bottom-11" : undefined} />
       {/* O MEDIDOR DE CONTEXTO mora no canto inferior direito da caixa da conversa — na linha do
           copiar/ouvir da última resposta e do "Trabalhando…", que ocupam a esquerda. Fica por cima
           do log (como o "ir para o fim"), com fundo opaco para o texto rolando não vazar por trás. */}
