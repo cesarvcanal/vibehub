@@ -120,4 +120,11 @@ describe("gateFailureOutput — o vermelho mostra o que falhou", () => {
     const out = gateFailureOutput("=== gate: npm test ===\nError: ENOSPC: no space left on device, write");
     expect(out).toContain("[vibehub] disco do runner cheio (ENOSPC): libere espaço no runner e entregue de novo");
   });
+
+  it("memória estourada (heap do Node) vira dica: runner sobrecarregado, não o código", () => {
+    const out = gateFailureOutput(
+      "=== gate: npm test ===\nFATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory",
+    );
+    expect(out).toContain("[vibehub] o Node ficou sem memória (heap out of memory): o runner está sobrecarregado; espere e entregue de novo");
+  });
 });

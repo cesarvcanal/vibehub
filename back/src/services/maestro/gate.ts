@@ -306,6 +306,9 @@ function gateHints(text: string): string[] {
   if (/\bENOSPC\b|no space left on device/i.test(text)) {
     hints.push("[vibehub] disco do runner cheio (ENOSPC): libere espaço no runner e entregue de novo");
   }
+  if (/JavaScript heap out of memory/.test(text)) {
+    hints.push("[vibehub] o Node ficou sem memória (heap out of memory): o runner está sobrecarregado; espere e entregue de novo");
+  }
   return hints;
 }
 
