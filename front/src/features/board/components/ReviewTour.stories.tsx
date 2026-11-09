@@ -127,7 +127,7 @@ function Tour() {
         }
       >
         <Frame label="Painel com a IA do autor trabalhando">
-          <ReviewPanelView {...props(Panel.IaMexendoDepoisDoPronto)} />
+          <ReviewPanelView {...props(Panel.IaTrabalhandoDepoisDoPronto)} />
         </Frame>
         <Frame label="O PR continuou: o revisor confere o que entrou">
           <ReviewPanelView {...props(Panel.PrContinuou)} />
