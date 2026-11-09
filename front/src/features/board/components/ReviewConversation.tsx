@@ -261,6 +261,7 @@ function ItemLine({
       {where ? <code className="block break-all font-mono text-[10px] text-muted-foreground">{where}</code> : null}
       {problem ? (
         <p data-testid="review-line-problem" className={cn("whitespace-pre-wrap break-words leading-relaxed text-foreground/90", long && !open && "line-clamp-4")}>
+          <span className="text-muted-foreground">{t("review.conversation.problem")} </span>
           {problem}
         </p>
       ) : null}

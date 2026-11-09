@@ -328,8 +328,8 @@ describe("ReviewPanel — o que mostra", () => {
     expect(items.map((i) => i.getAttribute("data-who"))).toEqual(["reviewer", "reviewer", "author"]);
     expect(items[0]).toHaveTextContent("Bloqueio A");
     expect(items[0]).toHaveTextContent("src/a.ts:12");
-    expect(within(items[0]).getByTestId("review-line-problem")).toHaveTextContent("grava pedido sem cliente");
-    expect(items[0]).toHaveTextContent("Como corrigir: valide antes de gravar");
+    expect(within(items[0]).getByTestId("review-line-problem")).toHaveTextContent("O problema: grava pedido sem cliente");
+    expect(items[0]).toHaveTextContent("Como resolver: valide antes de gravar");
     expect(within(items[1]).queryByTestId("review-line-problem")).toBeNull();
     expect(items[1]).toHaveTextContent("Sugestão B");
     expect(items[2]).toHaveTextContent("validação no service");
@@ -1054,6 +1054,40 @@ describe("ReviewPanel — sugestões: fazer ou não fazer", () => {
     await userEvent.click(within(choices("Renomear pump")).getByRole("radio", { name: /Não fazer/ }));
     await userEvent.click(screen.getByRole("button", { name: "Fazer todas e enviar (1)" }));
     expect(post).toHaveBeenLastCalledWith("/reviews/r1/suggestions", { apply: ["s2"], skip: ["s1"] });
+  });
+
+  it("sugestão já pedida ao autor mostra de quem foi o pedido e não oferece escolha de novo", async () => {
+    const requested = { by: "mussa", at: 1 };
+    open("aut", review({
+      phase: "ready",
+      findings: [{ ...suggestions[0]!, requested }, suggestions[1]!, suggestions[2]!],
+    }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    const card = screen.getByText("Renomear pump").closest("[data-testid=finding]") as HTMLElement;
+    expect(within(card).getByTestId("finding-requested")).toHaveTextContent("pedida ao autor por mussa");
+    expect(screen.queryByRole("radiogroup", { name: "O que fazer com: Renomear pump" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Fazer todas e enviar (1)" }));
+    expect(post).toHaveBeenLastCalledWith("/reviews/r1/suggestions", { apply: ["s2"], skip: [] });
+  });
+
+  it("todas já pedidas: some a barra de enviar", async () => {
+    const requested = { by: "mussa", at: 1 };
+    open("aut", review({ phase: "ready", findings: suggestions.map((f) => ({ ...f, requested })) }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    expect(screen.queryByTestId("suggestions-request")).toBeNull();
+  });
+
+  it("envio recusado mantém as escolhas da pessoa", async () => {
+    post.mockRejectedValue(failure(409, { error: "ja_pedida: s1" }));
+    open("aut", review({ phase: "ready", findings: suggestions }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    await userEvent.click(within(choices("Renomear pump")).getByRole("radio", { name: /Não fazer/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Fazer todas e enviar (1)" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(within(choices("Renomear pump")).getByRole("radio", { name: /Não fazer/ })).toHaveAttribute("aria-checked", "true");
   });
 
   it("com todas marcadas 'Não fazer', 'Fazer todas e enviar' fica desligado", async () => {

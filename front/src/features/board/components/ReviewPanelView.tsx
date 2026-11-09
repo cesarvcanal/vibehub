@@ -54,7 +54,8 @@ export interface ReviewPanelViewProps {
   onCancel: () => void;
   onDecide: (finding: Finding, decision: Decision) => void;
   /** What to do with open suggestions: `apply` goes to the author's AI, `skip` leaves the list. */
-  onDecideSuggestions: (choice: { apply: string[]; skip: string[] }) => void;
+  /** `done` runs only when the server took it: a refused send keeps the person's choices. */
+  onDecideSuggestions: (choice: { apply: string[]; skip: string[] }, done: () => void) => void;
   onClose: () => void;
   /** The tab to open on, instead of the one the review calls for (the Storybook tour shows each). */
   initialTab?: Tab;
@@ -359,13 +360,16 @@ function FindingsList({
   decisionsFor: (f: Finding) => Decision[];
   canRequest: boolean;
   onDecide: (finding: Finding, decision: Decision) => void;
-  onDecideSuggestions: (choice: { apply: string[]; skip: string[] }) => void;
+  onDecideSuggestions: (choice: { apply: string[]; skip: string[] }, done: () => void) => void;
 }) {
   const t = useT();
   // What the person chose for each open suggestion: do it (the author applies it) or not (it leaves
   // the list). One confirm sends both. A suggestion that stops being open drops out of the choice.
   const [choices, setChoices] = React.useState<Map<string, SuggestionChoice>>(() => new Map());
-  const openSuggestions = review.findings.filter((f) => f.severity === "suggestion" && f.status === "open").map((f) => f.id);
+  // An open suggestion already sent to the author is not a choice any more: it waits for the author.
+  const openSuggestions = review.findings
+    .filter((f) => f.severity === "suggestion" && f.status === "open" && !f.requested)
+    .map((f) => f.id);
   const chosen = (c: SuggestionChoice) => openSuggestions.filter((id) => choices.get(id) === c);
   const apply = chosen("apply");
   const skip = chosen("skip");
@@ -418,8 +422,7 @@ function FindingsList({
                   className="h-7 px-2.5 text-xs"
                   disabled={busy || apply.length + skip.length === 0}
                   onClick={() => {
-                    onDecideSuggestions({ apply, skip });
-                    setChoices(new Map());
+                    onDecideSuggestions({ apply, skip }, () => setChoices(new Map()));
                   }}
                 >
                   {apply.length + skip.length === 0
@@ -435,8 +438,7 @@ function FindingsList({
                   className="h-7 px-2.5 text-xs"
                   disabled={busy || openSuggestions.length === skip.length}
                   onClick={() => {
-                    onDecideSuggestions({ apply: openSuggestions.filter((id) => !skip.includes(id)), skip });
-                    setChoices(new Map());
+                    onDecideSuggestions({ apply: openSuggestions.filter((id) => !skip.includes(id)), skip }, () => setChoices(new Map()));
                   }}
                 >
                   {t("review.suggestions.allApply", { n: openSuggestions.length - skip.length })}
@@ -451,7 +453,7 @@ function FindingsList({
                   busy={busy}
                   decisions={decisionsFor(f)}
                   onDecide={(d) => onDecide(f, d)}
-                  suggestion={choosing && f.status === "open" ? { choice: choices.get(f.id) ?? null, onChoose: (c) => choose(f.id, c) } : undefined}
+                  suggestion={choosing && openSuggestions.includes(f.id) ? { choice: choices.get(f.id) ?? null, onChoose: (c) => choose(f.id, c) } : undefined}
                 />
               ))}
             </ul>
@@ -547,6 +549,11 @@ function FindingCard({
               {t(`review.status.${f.status}`)}
             </Badge>
             {f.commit ? <code className="font-mono text-[10px] text-muted-foreground">{f.commit.slice(0, 7)}</code> : null}
+            {f.requested && f.status === "open" ? (
+              <Badge tone="info" className="px-1.5 text-[10px]" data-testid="finding-requested">
+                {t("review.suggestions.requested", { by: f.requested.by })}
+              </Badge>
+            ) : null}
           </div>
           <p
             className={cn(

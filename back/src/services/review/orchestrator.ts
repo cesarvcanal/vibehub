@@ -780,6 +780,12 @@ export async function decideSuggestions(
   if (all.length === 0 || all.some((id) => !open.has(id)) || apply.some((id) => skip.includes(id))) {
     throw new Error("sem_sugestao: escolha sugestões em aberto da revisão, cada uma para fazer ou para não fazer");
   }
+  // Já pedida e o autor ainda não respondeu: mandar de novo só duplica o trabalho dele. "Não fazer"
+  // continua valendo (a pessoa mudou de ideia).
+  const again = review.findings.filter((f) => apply.includes(f.id) && f.requested).map((f) => f.id);
+  if (again.length) {
+    throw new Error(`ja_pedida: ${again.join(", ")} já ${again.length === 1 ? "foi pedida" : "foram pedidas"} ao autor, que ainda não respondeu`);
+  }
   if (apply.length) {
     const chosen = review.findings.filter((f) => apply.includes(f.id));
     const text = authorSuggestionsPrompt(review, chosen, { by, coauthorTrailer: await coauthorTrailer(review) });
@@ -798,6 +804,8 @@ export async function decideSuggestions(
       });
     }
     if (apply.length) {
+      const at = Date.now();
+      for (const f of r.findings) if (apply.includes(f.id) && f.status === "open") f.requested = { by, at };
       note(r, "human", `Pediu ao autor aplicar ${apply.length === 1 ? "a sugestão" : "as sugestões"} ${apply.join(", ")}.`, {
         items: apply.map((id) => ({ id, status: "open" as const })), by,
       });

@@ -129,6 +129,7 @@ const BLOCKER: SubmittedFinding = {
   file: "src/auth.ts",
   line: 42,
   proof: { kind: "failing_test", ref: "src/auth.test.ts:12" },
+  problem: "o token da sessão sai inteiro no log de login",
   fix: "tirar o token do logger.info",
 };
 const SUGGESTION: SubmittedFinding = { severity: "suggestion", title: "nome de variável confuso" };
@@ -1374,6 +1375,21 @@ describe("pedir ao autor aplicar as sugestões escolhidas", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it("sugestão pedida fica marcada e não vai ao autor de novo enquanto ele não responde; 'não fazer' ainda vale", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 1, findings: [SUGGESTION, { severity: "suggestion", title: "extrair helper" }], headSha: SHA1, summary: "só sugestões",
+    });
+    const after = await o.orch.requestSuggestions(review.id, ["f1", "f2"], "mussa");
+    expect(after.findings.map((f) => f.requested?.by)).toEqual(["mussa", "mussa"]);
+    send.mockClear();
+    await expect(o.orch.requestSuggestions(review.id, ["f1"], "mussa")).rejects.toThrow(/ja_pedida: f1/);
+    expect(send).not.toHaveBeenCalled();
+    const dropped = await o.orch.decideSuggestions(review.id, { skip: ["f2"] }, "mussa");
+    expect(dropped.findings[1]).toMatchObject({ status: "dropped" });
+  });
+
   it("a mesma sugestão nos dois lados, ou envio ao autor que falha, não muda nada", async () => {
     const o = await load();
     const { review } = await started(o);
@@ -1382,6 +1398,8 @@ describe("pedir ao autor aplicar as sugestões escolhidas", () => {
     sendFailure = new Error("card pausado");
     await expect(o.orch.decideSuggestions(review.id, { apply: ["f1"] }, "mussa")).rejects.toThrow(/envio_falhou/);
     expect((await o.store.getReview(review.id))?.findings[0]).toMatchObject({ status: "open" });
+    // o envio que falhou não deixa a sugestão marcada como pedida: dá para tentar de novo
+    expect((await o.store.getReview(review.id))?.findings[0]?.requested).toBeUndefined();
   });
 
   it("só sugestão em aberto pode ser pedida; nada escolhido ou revisão encerrada é recusado", async () => {

@@ -586,6 +586,8 @@ export interface Finding {
   authorReply?: string;
   reviewerReply?: string;
   humanDecision?: "keep" | "accept_risk" | "block" | "drop";
+  /** A suggestion someone already sent the author to apply; while it stays open it is not offered again. */
+  requested?: { by: string; at: number };
 }
 
 /** A finding a line of the conversation is about, with what that side said of it AT THAT moment. */

@@ -39,6 +39,12 @@ export interface Finding {
   authorReply?: string;
   reviewerReply?: string;
   humanDecision?: "keep" | "accept_risk" | "block" | "drop";
+  /**
+   * Sugestão que uma pessoa já mandou o autor aplicar (quem e quando). Enquanto ela segue em aberto, o
+   * painel não oferece "fazer" de novo e o servidor recusa o reenvio: sem isso, a lista enviada voltava
+   * com as mesmas escolhas e dava para mandar a mesma coisa ao autor duas vezes (produção, 2026-11-09).
+   */
+  requested?: { by: string; at: number };
 }
 
 /**

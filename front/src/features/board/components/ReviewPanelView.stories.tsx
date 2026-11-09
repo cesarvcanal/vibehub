@@ -117,7 +117,7 @@ const base: ReviewPanelViewProps = {
   onRetry: () => {},
   onCancel: () => {},
   onDecide: () => {},
-  onDecideSuggestions: () => {},
+  onDecideSuggestions: (_choice, done) => done(),
   onClose: () => {},
 };
 

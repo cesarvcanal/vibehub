@@ -212,7 +212,7 @@ export function ReviewPanel({ cardId, prNumber: pr, onClose }: {
       onRetry={() => act.mutate({ path: "retry" })}
       onCancel={cancel}
       onDecide={(finding, decision) => act.mutate({ path: "decide", body: { findingId: finding.id, decision } })}
-      onDecideSuggestions={(choice) => act.mutate({ path: "suggestions", body: choice })}
+      onDecideSuggestions={(choice, done) => act.mutate({ path: "suggestions", body: choice }, { onSuccess: done })}
       onClose={onClose}
     />
   );
