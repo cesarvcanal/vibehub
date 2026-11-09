@@ -42,7 +42,9 @@ const reviewHeadSha = z.string().regex(HEAD_SHA_RE, "the full sha of `git rev-pa
 const reviewFinding = z.object({
   severity: z.enum(["blocking", "suggestion", "question", "refuted"])
     .describe("blocking = only with proof | suggestion | question = a risk you are not sure about (a human decides) | refuted"),
-  title: z.string().min(1).max(300),
+  title: z.string().min(1).max(300).describe("short label of the finding (one line)"),
+  problem: z.string().max(2000).optional()
+    .describe("the problem in plain words for someone who will not open the code: what is wrong and what happens if it stays"),
   file: z.string().max(400).optional(),
   line: z.number().int().positive().optional(),
   proof: z.object({
@@ -51,7 +53,8 @@ const reviewFinding = z.object({
     ref: z.string().max(400).describe("the failing test, the written repo rule, or file:line of the scenario"),
     detail: z.string().max(2000).optional(),
   }).optional().describe("required for blocking: without it the server downgrades the finding to a suggestion"),
-  fix: z.string().max(2000).optional().describe("the fix you propose"),
+  fix: z.string().max(2000).optional()
+    .describe("how to solve it, concretely: what to change and where, enough for the author to apply without guessing"),
   introducedInRound: z.number().int().min(1).max(MAX_ROUNDS).optional()
     .describe("round 2+: the current round, ONLY for a bug the author's own fix created"),
 });

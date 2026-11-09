@@ -38,6 +38,13 @@ describe("normalizeSubmittedFindings", () => {
     expect(ok[1].id).toBe("f2");
   });
 
+  it("guarda o problema explicado e como resolver que o revisor mandou", () => {
+    const [f] = normalizeSubmittedFindings(
+      [{ severity: "suggestion", title: "cache sem teto", problem: "O mapa cresce sem limite e derruba o back.", fix: "Use um LRU de 500." }],
+      1, []);
+    expect(f).toMatchObject({ problem: "O mapa cresce sem limite e derruba o back.", fix: "Use um LRU de 500." });
+  });
+
   it("ids continuam depois dos já existentes", () => {
     const out = normalizeSubmittedFindings([{ severity: "suggestion", title: "n" }], 1, [finding(), finding({ id: "f2" })]);
     expect(out[0].id).toBe("f3");

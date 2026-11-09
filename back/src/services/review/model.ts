@@ -24,6 +24,11 @@ export interface Finding {
   id: string;
   severity: FindingSeverity;
   title: string;
+  /**
+   * O problema explicado para quem decide sem abrir o código: o que está errado e o que acontece se
+   * ficar assim. O título sozinho não dizia isso (produção, 2026-11-09). Ausente nos achados antigos.
+   */
+  problem?: string;
   file?: string;
   line?: number;
   proof?: FindingProof;
@@ -147,6 +152,7 @@ export function normalizeSubmittedFindings(input: SubmittedFinding[], round: num
       status: "open",
       introducedInRound: round,
     };
+    if (item.problem !== undefined) finding.problem = item.problem;
     if (item.file !== undefined) finding.file = item.file;
     if (item.line !== undefined) finding.line = item.line;
     if (item.proof !== undefined) finding.proof = item.proof;

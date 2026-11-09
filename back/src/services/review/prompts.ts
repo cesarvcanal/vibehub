@@ -63,7 +63,8 @@ function findingLine(f: Finding): string {
   const tags = [f.severity, STATUS_PT[f.status], f.humanDecision ? `decisão humana: ${f.humanDecision}` : ""].filter(Boolean);
   const head = `- ${f.id} [${tags.join(", ")}] ${oneLine(f.title, 200)}${loc ? ` (${loc})` : ""}`;
   const parts = [`prova: ${proofText(f)}`];
-  if (f.fix) parts.push(`correção proposta: ${oneLine(f.fix, 200)}`);
+  if (f.problem) parts.push(`problema: ${oneLine(f.problem, 400)}`);
+  if (f.fix) parts.push(`como resolver: ${oneLine(f.fix, 400)}`);
   if (f.authorReply !== undefined) parts.push(`autor: "${oneLine(f.authorReply)}"${f.commit ? ` (commit ${oneLine(f.commit, 60)})` : ""}`);
   if (f.reviewerReply !== undefined) parts.push(`revisor: "${oneLine(f.reviewerReply)}"`);
   return `${head}\n    ${parts.join("; ")}`;
@@ -91,8 +92,8 @@ function underReview(f: Finding): boolean {
 }
 
 const FINDING_FIELDS =
-  "findings: [{ severity: \"blocking\" | \"suggestion\" | \"question\" | \"refuted\", title, file?, line?, " +
-  "proof?: { kind: \"failing_test\" | \"rule\" | \"scenario\", ref, detail? }, fix? }]";
+  "findings: [{ severity: \"blocking\" | \"suggestion\" | \"question\" | \"refuted\", title, problem, file?, line?, " +
+  "proof?: { kind: \"failing_test\" | \"rule\" | \"scenario\", ref, detail? }, fix }]";
 
 function classification(): string {
   return [
@@ -104,6 +105,13 @@ function classification(): string {
     "- question: risco que pode comprometer, mas você não tem certeza. Fica esperando decisão: o revisor humano decide no " +
       "painel, ou o autor resolve/explica e você confere na rodada seguinte. O ciclo segue com o resto.",
     "- refuted: achado que a verificação derrubou (fica só no histórico).",
+    "",
+    "Escreva cada achado para uma pessoa que vai decidir pelo painel, sem abrir o código:",
+    "- title: um rótulo curto, uma linha.",
+    "- problem: o problema em português claro, 2 a 4 frases: o que está errado, em que situação aparece e o que " +
+      "acontece se ficar assim (quem é afetado, o que quebra ou piora). Nada de jargão solto nem só o nome da função.",
+    "- fix: como resolver, de forma concreta: o que mudar, em qual arquivo/função e o resultado esperado — o bastante " +
+      "para a IA do autor aplicar sem adivinhar. Obrigatório em toda sugestão.",
   ].join("\n");
 }
 
@@ -303,6 +311,7 @@ export function authorSuggestionsPrompt(r: Review, list: Finding[], opts: { by: 
     lines(list, ""),
     "",
     "Para cada uma:",
+    "- Cada sugestão traz o problema e como resolver: siga a proposta, ou resolva o mesmo problema de outro jeito melhor.",
     "- Aplicou: commit, com teste do que mudou.",
     "- Não vai aplicar (fora do escopo, piora outra coisa, já resolvida): explique no reply.",
     ...(opts.coauthorTrailer

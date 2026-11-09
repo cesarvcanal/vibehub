@@ -574,6 +574,8 @@ export interface Finding {
   id: string;
   severity: FindingSeverity;
   title: string;
+  /** The problem in plain words: what is wrong and what happens if it stays. Absent on old findings. */
+  problem?: string;
   file?: string;
   line?: number;
   proof?: FindingProof;
