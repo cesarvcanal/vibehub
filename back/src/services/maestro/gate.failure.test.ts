@@ -74,6 +74,28 @@ describe("gateFailureOutput — o vermelho mostra o que falhou", () => {
     );
   });
 
+  it("Error genéricas não tomam o espaço das linhas que dizem a falha (FAIL, npm error)", () => {
+    const noise = Array.from({ length: 80 }, (_, i) => `Error: log ruidoso de um teste verde número ${i} com texto longo o bastante`);
+    const run = ["=== gate: npm test ===", ...noise, " FAIL  src/fim.test.ts > o que quebrou", ...Array.from({ length: 300 }, (_, i) => ` ✓ ok${i}.test.ts`)].join("\n");
+    const out = gateFailureOutput(run);
+    expect(out).toContain("FAIL  src/fim.test.ts > o que quebrou");
+    expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(GATE_OUTPUT_TAIL_BYTES);
+  });
+
+  it("prazo estourado ou script morto: o cabeçalho diz que o gate PAROU durante o check, não que ele falhou", () => {
+    expect(gateFailureOutput("=== gate: npm test ===\nrodando", "timeout")).toMatch(/^\[vibehub\] o gate passou do prazo durante o check: npm test/);
+    expect(gateFailureOutput("=== gate: npm test ===\nrodando", "died")).toMatch(/^\[vibehub\] o gate parou durante o check: npm test/);
+  });
+
+  it("check com nome enorme não estoura o teto nem come o fim da saída", () => {
+    const long = `node -e "${"x".repeat(5000)}"`;
+    const run = [`=== gate: ${long} ===`, " FAIL  a.test.ts", ...Array.from({ length: 300 }, (_, i) => ` ✓ ok${i}.test.ts`), " Tests  1 failed"].join("\n");
+    const out = gateFailureOutput(run);
+    expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(GATE_OUTPUT_TAIL_BYTES);
+    expect(out).toContain(" Tests  1 failed");
+    expect(out.split("\n")[0]!.length).toBeLessThan(260);
+  });
+
   it("sem cabeçalho de check (o script morreu antes) devolve a saída como veio", () => {
     expect(gateFailureOutput("boom")).toBe("boom");
   });

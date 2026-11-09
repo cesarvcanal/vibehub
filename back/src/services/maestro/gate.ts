@@ -221,7 +221,7 @@ export function buildGateRunScript(
 }
 
 /** The verdict from the run output: `pass` only when the pass marker is present and none failed. PURE. */
-export function parseGateRun(stdout: string): { passed: boolean; output: string; timedOut: boolean } {
+export function parseGateRun(stdout: string): { passed: boolean; output: string; timedOut: boolean; reached: boolean } {
   const passIdx = stdout.lastIndexOf(`${RESULT_MARKER} pass`);
   const failIdx = stdout.lastIndexOf(`${RESULT_MARKER} fail`);
   const errIdx = stdout.lastIndexOf(`${RESULT_MARKER} error`);
@@ -241,7 +241,7 @@ export function parseGateRun(stdout: string): { passed: boolean; output: string;
       `\n\n[vibehub] o gate não chegou a rodar os checks: o script morreu antes (erro de shell, container ` +
       `fora do ar). Isso é falha do gate, não do código do card.`;
   }
-  return { passed, output: output.trimStart(), timedOut: !!timeout };
+  return { passed, output: output.trimStart(), timedOut: !!timeout, reached };
 }
 
 /**
@@ -271,47 +271,67 @@ export function cleanOutput(text: string): string {
 }
 
 /**
- * Lines that say what broke, in the outputs the gate runs into: vitest (`FAIL`, `×`, the
- * `⎯ Failed/Startup/Unhandled` banners, any `…Error`), npm (`npm error`) and tsc (`error TS1234`).
- * Only at the start of the line (one space of indent at most): an indented `Error: boom` is a log a
- * GREEN test printed on purpose. A green line (`✓ …`) never counts, even when its NAME says "failed".
+ * Lines that say what broke, in the outputs the gate runs into. STRONG ones name a failure for sure:
+ * vitest (`FAIL`, `×`, the `⎯ Failed/Startup/Unhandled` banners), npm (`npm error`) and tsc
+ * (`error TS1234`). WEAK ones are any `…Error` at the start of a line — usually the cause, but a green
+ * test can print one too, so they only get what the strong ones left of the budget. Only at the start
+ * of the line (one space of indent at most): an indented `Error: boom` is a log a green test printed
+ * on purpose. A green line (`✓ …`) never counts, even when its NAME says "failed".
  */
-const ERROR_LINE =
-  /^ ?(?:FAIL\b|×|✗|npm (?:error|ERR!)|[\w.]*Error\b|⎯+ (?:Failed|Startup|Unhandled))|\berror TS\d+/;
+const STRONG_ERROR_LINE = /^ ?(?:FAIL\b|×|✗|npm (?:error|ERR!)|⎯+ (?:Failed|Startup|Unhandled))|\berror TS\d+/;
+const WEAK_ERROR_LINE = /^ ?[\w.]*Error\b/;
 // eslint-disable-next-line no-control-regex
 const ANSI = /\x1b\[[0-9;]*m/g;
 const GATE_CHECK_HEADER = /^=== gate: (.*) ===$/gm;
 /** How much of the budget the error lines may take; the rest is the end of the output. */
 const ERROR_LINES_BYTES = 1_800;
+/** The end of the output always gets at least this much, whatever came before it. */
+const MIN_TAIL_BYTES = 1_000;
+const MAX_CHECK_NAME = 200;
+
+const byteLength = (s: string): number => Buffer.byteLength(s, "utf8");
+
+/** The error lines, strong first then weak, within the budget, in the order they appeared. PURE. */
+function errorLines(text: string): string[] {
+  const lines = text.replace(ANSI, "").split("\n").map((l, i) => ({ l: l.length > 300 ? `${l.slice(0, 299)}…` : l, i }));
+  const seen = new Set<string>();
+  const picked: { l: string; i: number }[] = [];
+  let used = 0;
+  for (const re of [STRONG_ERROR_LINE, WEAK_ERROR_LINE]) {
+    for (const x of lines) {
+      if (!re.test(x.l) || /^\s*✓/.test(x.l) || seen.has(x.l)) continue;
+      if (used + byteLength(x.l) + 1 > ERROR_LINES_BYTES) continue;
+      seen.add(x.l);
+      picked.push(x);
+      used += byteLength(x.l) + 1;
+    }
+  }
+  return picked.sort((a, b) => a.i - b.i).map((x) => x.l);
+}
 
 /**
  * What a RED gate shows: the check that failed, the lines that say why, then the end of the output —
  * within `GATE_OUTPUT_TAIL_BYTES`, redacted. A plain tail is not enough: `npm test --workspaces`
  * runs the front and THEN the back, so a front that died at startup was followed by 60 KB of a green
  * back, and the tail showed only green tests under a red banner (production, 2026-11-09, PR #215 of
- * tech.multi — not the first time). Output with no check header (the script died first) is the plain
+ * tech.multi — not the first time). `stopped` says how the run ended when it was not a check failing:
+ * the deadline killed it, or the script died before its verdict — the header then says the gate
+ * stopped DURING that check, not that the check failed. Output with no check header is the plain
  * tail. PURE.
  */
-export function gateFailureOutput(output: string): string {
+export function gateFailureOutput(output: string, stopped?: "timeout" | "died"): string {
   const text = redactSecrets(output);
-  const check = [...text.matchAll(GATE_CHECK_HEADER)].pop()?.[1];
-  if (!check) return tailOutput(text);
-  const header = `[vibehub] o gate falhou no check: ${check}\n\n`;
-  const bytes = (s: string) => Buffer.byteLength(s, "utf8");
-  if (bytes(header) + bytes(text) <= GATE_OUTPUT_TAIL_BYTES) return header + text;
+  const raw = [...text.matchAll(GATE_CHECK_HEADER)].pop()?.[1];
+  if (!raw) return tailOutput(text);
+  const check = raw.length > MAX_CHECK_NAME ? `${raw.slice(0, MAX_CHECK_NAME - 1)}…` : raw;
+  const what = stopped === "timeout" ? "passou do prazo durante o check" : stopped === "died" ? "parou durante o check" : "falhou no check";
+  const header = `[vibehub] o gate ${what}: ${check}\n\n`;
+  if (byteLength(header) + byteLength(text) <= GATE_OUTPUT_TAIL_BYTES) return header + text;
 
-  const errors: string[] = [];
-  let used = 0;
-  const plain = text.replace(ANSI, "");
-  for (const line of new Set(plain.split("\n").filter((l) => ERROR_LINE.test(l) && !/^\s*✓/.test(l)))) {
-    const kept = line.length > 300 ? `${line.slice(0, 299)}…` : line;
-    if (used + bytes(kept) + 1 > ERROR_LINES_BYTES) break;
-    errors.push(kept);
-    used += bytes(kept) + 1;
-  }
+  const errors = errorLines(text);
   const prefix = header + (errors.length ? `[vibehub] linhas de erro:\n${errors.join("\n")}\n\n` : "") + "[vibehub] fim da saída:\n";
   // tailOutput adds "…\n" and a cut multi-byte char may grow: keep a margin.
-  return prefix + tailOutput(text, GATE_OUTPUT_TAIL_BYTES - bytes(prefix) - 16);
+  return prefix + tailOutput(text, Math.max(GATE_OUTPUT_TAIL_BYTES - byteLength(prefix) - 16, MIN_TAIL_BYTES));
 }
 
 /** Each card's last green verdict, timed from when its tree was probed. In memory only. */
@@ -405,8 +425,8 @@ async function runGateNow(cardId: string): Promise<GateResult> {
     releaseSlot();
   }
   // stderr only matters when the script died before `exec 2>&1` folded it into stdout.
-  const { passed, output, timedOut } = parseGateRun(`${runOut.stderr ?? ""}${runOut.stdout}`);
-  const cleaned = passed ? cleanOutput(output) : gateFailureOutput(output);
+  const { passed, output, timedOut, reached } = parseGateRun(`${runOut.stderr ?? ""}${runOut.stdout}`);
+  const cleaned = passed ? cleanOutput(output) : gateFailureOutput(output, timedOut ? "timeout" : reached ? undefined : "died");
   if (passed && reuseKey) greenVerdicts.set(card.id, { key: reuseKey, at: probedAt, output: cleaned });
   else greenVerdicts.delete(card.id);
   logger.info(
