@@ -44,4 +44,11 @@ describe("prompts da revisão: achado explicado", () => {
     const f: Finding = { id: "f1", severity: "suggestion", title: "t", status: "open", introducedInRound: 1 };
     expect(authorSuggestionsPrompt(review([f]), [f], { by: "cesar" })).not.toContain("problema:");
   });
+
+  it("sugestão já pedida ao autor sai marcada no texto, com quem pediu", () => {
+    const f: Finding = {
+      id: "f1", severity: "suggestion", title: "t", status: "open", introducedInRound: 1, requested: { by: "mussa", at: 1 },
+    };
+    expect(authorSuggestionsPrompt(review([f]), [f], { by: "mussa" })).toContain("- f1 [suggestion, aberto, pedida ao autor por mussa] t");
+  });
 });

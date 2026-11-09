@@ -71,7 +71,10 @@ function proofText(f: Finding): string {
 /** Um achado em uma linha de cabeçalho e uma de detalhes: o que é, onde, a prova e o que cada lado disse. */
 function findingLine(f: Finding): string {
   const loc = where(f);
-  const tags = [f.severity, STATUS_PT[f.status], f.humanDecision ? `decisão humana: ${f.humanDecision}` : ""].filter(Boolean);
+  const tags = [
+    f.severity, STATUS_PT[f.status], f.humanDecision ? `decisão humana: ${f.humanDecision}` : "",
+    f.requested ? `pedida ao autor por ${oneLine(f.requested.by, 60)}` : "",
+  ].filter(Boolean);
   const head = `- ${f.id} [${tags.join(", ")}] ${oneLine(f.title, 200)}${loc ? ` (${loc})` : ""}`;
   const parts = [`prova: ${proofText(f)}`];
   if (f.authorReply !== undefined) parts.push(`autor: "${oneLine(f.authorReply)}"${f.commit ? ` (commit ${oneLine(f.commit, 60)})` : ""}`);
