@@ -35,9 +35,17 @@ const FINDINGS: Finding[] = [
     file: "front/src/features/board/components/TerminalComposer.tsx", line: 427,
     proof: { kind: "failing_test", ref: "TerminalComposer.test.tsx:88" },
   }),
-  f({ id: "f3", title: "<img> do runner sem onError: 404 mostra ícone quebrado", file: "front/src/features/board/components/TerminalComposer.tsx", line: 1679 }),
+  f({
+    id: "f3", title: "<img> do runner sem onError: 404 mostra ícone quebrado", file: "front/src/features/board/components/TerminalComposer.tsx", line: 1679,
+    problem: "Quando o print anexado some do runner (card reiniciado, arquivo limpo), a miniatura vira o ícone de imagem quebrada e a pessoa não sabe se o anexo vai junto ou não.",
+    fix: "Pôr onError no <img> do chip: trocar a miniatura pelo ícone de arquivo com o nome e marcar o chip como 'anexo indisponível', sem reenviar.",
+  }),
   f({ id: "f4", title: "Remount com upload retomado em voo reenvia o mesmo arquivo" }),
-  f({ id: "f5", title: "Nome do helper `pump` não diz o que faz" }),
+  f({
+    id: "f5", title: "Nome do helper `pump` não diz o que faz",
+    problem: "Quem lê o composer precisa abrir a função para entender que ela drena a fila de uploads; o nome não ajuda na próxima manutenção.",
+    fix: "Renomear `pump` para `drainUploadQueue` e ajustar as três chamadas no mesmo arquivo.",
+  }),
   f({ id: "f6", severity: "question", title: "Trocar de card no meio do upload deveria cancelar o envio?" }),
 ];
 

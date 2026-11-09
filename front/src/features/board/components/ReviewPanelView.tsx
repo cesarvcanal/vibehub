@@ -426,13 +426,21 @@ function FindingsList({
                     ? t("review.suggestions.confirm.none")
                     : t("review.suggestions.confirm", { apply: apply.length, skip: skip.length })}
                 </Button>
-                <button
+                {/* One click for the common case: every open suggestion goes to the author, except the
+                    ones marked "não fazer", which leave the list. No marking each one, then confirming. */}
+                <Button
                   type="button"
-                  className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                  onClick={() => setChoices(new Map(openSuggestions.map((id) => [id, "apply" as const])))}
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2.5 text-xs"
+                  disabled={busy || openSuggestions.length === skip.length}
+                  onClick={() => {
+                    onDecideSuggestions({ apply: openSuggestions.filter((id) => !skip.includes(id)), skip });
+                    setChoices(new Map());
+                  }}
                 >
-                  {t("review.suggestions.allApply")}
-                </button>
+                  {t("review.suggestions.allApply", { n: openSuggestions.length - skip.length })}
+                </Button>
               </div>
             ) : null}
             <ul className="space-y-1.5">
@@ -488,8 +496,8 @@ const CHOICES: Record<Decision, { title: string; desc: string }> = {
 
 /**
  * One finding, as a card that answers the questions a person has before deciding anything: WHAT it
- * is (title, severity, where it stands), WHERE (file:line), WHY the reviewer raised it (the proof and
- * its detail) and WHAT the reviewer proposes. The latest reply of each AI is folded under it (the
+ * is (title, severity, where it stands), the PROBLEM in plain words, HOW to solve it, WHERE (file:line)
+ * and WHY the reviewer raised it (the proof and its detail). The latest reply of each AI is folded under it (the
  * whole back-and-forth is in the conversation). An open suggestion this person can decide offers
  * "do it" or "don't" (confirmed for the whole group at once); a doubt or a stuck item waiting on this
  * person shows its choices — pick one, then confirm.
@@ -549,6 +557,8 @@ function FindingCard({
           >
             {f.title}
           </p>
+          {f.problem ? <FindingText label={t("review.finding.problem")}>{f.problem}</FindingText> : null}
+          {f.fix ? <FindingText label={t("review.finding.fix")}>{f.fix}</FindingText> : null}
           <dl className="space-y-0.5 text-[11px]">
             {f.file ? (
               <FindingFact label={t("review.finding.where")}>
@@ -561,7 +571,6 @@ function FindingCard({
                 {f.proof.detail ? <span className="block text-foreground/80">{f.proof.detail}</span> : null}
               </FindingFact>
             ) : null}
-            {f.fix ? <FindingFact label={t("review.finding.fix")}>{f.fix}</FindingFact> : null}
           </dl>
         </div>
       </div>
@@ -653,6 +662,16 @@ function FindingCard({
         </fieldset>
       ) : null}
     </li>
+  );
+}
+
+/** A paragraph of the finding a person reads before deciding: the problem, and how to solve it. */
+function FindingText({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-0.5 text-xs">
+      <p className="text-[11px] font-semibold text-muted-foreground">{label}</p>
+      <p className="whitespace-pre-line break-words leading-relaxed text-foreground/90">{children}</p>
+    </div>
   );
 }
 
