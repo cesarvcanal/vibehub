@@ -264,7 +264,7 @@ export function buildCiChecksScript(
     `    if [ "$i" -lt ${appearRounds} ]; then sleep ${CI_POLL_SECONDS}; continue; fi`,
     `    echo "${CI_MARKER} stale"; exit 0`,
     `  fi`,
-    `  J=$(gh pr checks ${shQuote(prUrl)} --json name,bucket 2>&1)`,
+    `  J=$(gh pr checks ${shQuote(prUrl)} --json name,bucket,link 2>&1)`,
     `  case "$J" in`,
     `    *'"bucket":"pending"'*) [ "$i" -lt ${rounds} ] || break ;;`,
     `    *"no checks reported"*) [ "$WF" = 1 ] && [ "$i" -lt ${appearRounds} ] || break ;;`,
@@ -279,10 +279,11 @@ export function buildCiChecksScript(
 }
 
 /**
- * The CI verdict from what `gh pr checks --json name,bucket` printed:
+ * The CI verdict from what `gh pr checks --json name,bucket,link` printed:
  *  - `none`: no checks on the PR (or the answer was unreadable) — the local gate decides;
  *  - `pass`: every check passed or was skipped;
- *  - `fail`: some check failed or was cancelled (named in `output`);
+ *  - `fail`: some check failed or was cancelled (named in `output`, each with its job link when GitHub
+ *    gave one — the red then points straight at the log that failed);
  *  - `pending`: checks still running when the wait ran out, or the PR never moved to the pushed
  *    commit (`stale`) — red either way. PURE.
  */
@@ -292,17 +293,22 @@ export function parseCiChecks(stdout: string): { verdict: "none" | "pass" | "fai
   }
   const body = stdout.replace(new RegExp(`${CI_MARKER} \\S+.*`, "g"), "").trim();
   const start = body.indexOf("[");
-  let checks: { name?: string; bucket?: string }[] | null = null;
+  let checks: { name?: string; bucket?: string; link?: string }[] | null = null;
   if (start >= 0) {
     try {
       const parsed: unknown = JSON.parse(body.slice(start));
-      if (Array.isArray(parsed)) checks = parsed as { name?: string; bucket?: string }[];
+      if (Array.isArray(parsed)) checks = parsed as { name?: string; bucket?: string; link?: string }[];
     } catch { /* not the JSON we asked for */ }
   }
   if (!checks || checks.length === 0) return { verdict: "none", output: "" };
   const named = (buckets: string[]) => checks!.filter((c) => buckets.includes(String(c.bucket))).map((c) => c.name || "?");
   const failed = named(["fail", "cancel"]);
-  if (failed.length) return { verdict: "fail", output: `CI do PR vermelho: ${failed.join(", ")}` };
+  if (failed.length) {
+    const links = checks
+      .filter((c) => ["fail", "cancel"].includes(String(c.bucket)) && typeof c.link === "string" && /^https:\/\//.test(c.link))
+      .map((c) => `\n  ${c.name || "?"}: ${c.link}`);
+    return { verdict: "fail", output: `CI do PR vermelho: ${failed.join(", ")}${links.join("")}` };
+  }
   const pending = named(["pending"]);
   if (pending.length) return { verdict: "pending", output: `CI do PR ainda rodando: ${pending.join(", ")}` };
   return { verdict: "pass", output: `CI do PR verde: ${checks.map((c) => c.name || "?").join(", ")}` };

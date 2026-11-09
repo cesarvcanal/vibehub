@@ -203,6 +203,9 @@ describe("parseCiChecks", () => {
     expect(p('[{"name":"back","bucket":"pass"},{"name":"lint","bucket":"skipping"}]\n__VIBEHUB_CI__ done')).toMatchObject({ verdict: "pass" });
     expect(p('[{"name":"back","bucket":"pass"},{"name":"front","bucket":"fail"}]')).toEqual({ verdict: "fail", output: "CI do PR vermelho: front" });
     expect(p('[{"name":"e2e","bucket":"cancel"}]').verdict).toBe("fail");
+    // com o link do job, o vermelho leva a quem lê direto ao log que falhou
+    expect(p('[{"name":"back","bucket":"fail","link":"https://github.com/o/r/actions/runs/1/job/2"},{"name":"front","bucket":"pass"}]'))
+      .toEqual({ verdict: "fail", output: "CI do PR vermelho: back\n  back: https://github.com/o/r/actions/runs/1/job/2" });
     expect(p('[{"name":"front","bucket":"pending"}]')).toEqual({ verdict: "pending", output: "CI do PR ainda rodando: front" });
   });
   it("no checks, an empty list or an unreadable answer is 'none' — the local gate decides", async () => {
@@ -224,7 +227,7 @@ describe("buildCiChecksScript", () => {
     const s = deliver.buildCiChecksScript("vibehub-runner", "card1", TOKEN, "/work/scratch/x", PR);
     const dockerLine = s.split("\n").find((l) => l.startsWith("docker exec")) ?? "";
     expect(dockerLine).not.toContain(TOKEN);
-    expect(s).toContain(`gh pr checks '${PR}' --json name,bucket`);
+    expect(s).toContain(`gh pr checks '${PR}' --json name,bucket,link`);
     expect(s).toContain(`-lt ${Math.ceil(deliver.CI_WAIT_SECONDS / deliver.CI_POLL_SECONDS)} ] || break`);
     expect(s).toContain(`[ "$WF" = 1 ] && [ "$i" -lt ${Math.ceil(deliver.CI_APPEAR_SECONDS / deliver.CI_POLL_SECONDS)} ] || break`);
     // each glob tested alone: a repo with only *.yml still counts as having workflows
