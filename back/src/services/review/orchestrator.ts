@@ -798,6 +798,8 @@ export async function decideSuggestions(
         if (!skip.includes(f.id) || f.status !== "open") continue;
         f.status = "dropped";
         f.humanDecision = "drop";
+        // Retirada, ela não está mais com o autor (mesmo que tenha sido pedida antes).
+        delete f.requested;
       }
       note(r, "human", `Não fazer ${skip.length === 1 ? "a sugestão" : "as sugestões"} ${skip.join(", ")}.`, {
         items: skip.map((id) => ({ id, status: "dropped" as const })), by,

@@ -1388,6 +1388,8 @@ describe("pedir ao autor aplicar as sugestões escolhidas", () => {
     expect(send).not.toHaveBeenCalled();
     const dropped = await o.orch.decideSuggestions(review.id, { skip: ["f2"] }, "mussa");
     expect(dropped.findings[1]).toMatchObject({ status: "dropped" });
+    // retirada, ela não está mais com o autor: a marca sai junto
+    expect(dropped.findings[1]?.requested).toBeUndefined();
   });
 
   it("sugestão pedida que o autor respondeu e o revisor reabriu pode ser pedida de novo (f10)", async () => {
