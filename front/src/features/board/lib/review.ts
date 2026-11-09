@@ -266,37 +266,42 @@ export interface ReviewActions {
 /**
  * Who sees which button — the server's rules (`routes/reviews.ts`), so the panel never offers one
  * that would answer 403/409:
- *  - **merge**: the merger and nobody else (the owner's click is not the merger's), only in `ready`;
+ *  - **merge**: anyone with a role in the review — merger, reviewer, author, co-author (an owner
+ *    without one, no) — only in `ready`; each merges on their own GitHub connection;
  *  - **decide** (questions, stuck items): the reviewer or an owner, while the review is open to it;
- *  - **retry**: the reviewer, the merger or an owner, for an impasse that is a FAILURE (not "rodadas",
+ *  - **retry**: the reviewer, the merger, the co-author or an owner, for an impasse that is a FAILURE (not "rodadas",
  *    not a push after ready: those have no turn to hand back), a `ready` whose Approve never got out,
  *    or a turn an AI may have dropped — `fixing`, or `reviewing` before the reviewer's round is in
  *    (after it, only doubts are left and the turn is the human's);
- *  - **cancel**: the reviewer, the author, the merger or an owner, while the review is active;
+ *  - **cancel**: the reviewer, the author, the co-author, the merger or an owner, while the review is active;
  *  - **request** (ask the author to apply chosen suggestions): the same people, while it is active.
  * PURE.
  */
 export function reviewActions(
   review: Pick<
     Review,
-    "phase" | "round" | "lastSubmitRound" | "reviewerUserId" | "authorUserId" | "mergerUserId" | "impasseReason" | "approvePending"
+    | "phase" | "round" | "lastSubmitRound" | "reviewerUserId" | "authorUserId" | "coauthorUserId" | "mergerUserId"
+    | "impasseReason" | "approvePending"
   >,
   me: { id: string; isOwner: boolean } | null,
 ): ReviewActions {
   if (!me) return { decide: false, retry: false, cancel: false, merge: false, request: false };
   const isReviewer = me.id === review.reviewerUserId;
   const isMerger = me.id === review.mergerUserId;
+  const isCoauthor = review.coauthorUserId !== undefined && me.id === review.coauthorUserId;
+  // Quem tem papel na revisão (o `canMergeReview` do servidor): o trabalho segue sem o responsável.
+  const hasRole = isReviewer || isMerger || isCoauthor || me.id === review.authorUserId;
   const { phase } = review;
   const failedImpasse =
     phase === "impasse" && review.impasseReason !== IMPASSE_ROUNDS && review.impasseReason !== IMPASSE_HEAD_MOVED;
   const approveStuck = phase === "ready" && review.approvePending === true;
   const turnOpen = phase === "fixing" || (phase === "reviewing" && review.lastSubmitRound !== review.round);
   return {
-    merge: isMerger && phase === "ready",
+    merge: hasRole && phase === "ready",
     decide: (isReviewer || me.isOwner) && (reviewIsWorking(phase) || phase === "impasse"),
-    retry: (isReviewer || isMerger || me.isOwner) && (failedImpasse || approveStuck || turnOpen),
-    cancel: (isReviewer || me.id === review.authorUserId || isMerger || me.isOwner) && reviewIsOpen(phase),
-    request: (isReviewer || me.id === review.authorUserId || isMerger || me.isOwner) && reviewIsOpen(phase),
+    retry: (isReviewer || isMerger || isCoauthor || me.isOwner) && (failedImpasse || approveStuck || turnOpen),
+    cancel: (hasRole || me.isOwner) && reviewIsOpen(phase),
+    request: (hasRole || me.isOwner) && reviewIsOpen(phase),
   };
 }
 

@@ -281,13 +281,18 @@ function full(overrides: Partial<Review> = {}): Review {
 const as = (id: string, isOwner = false) => ({ id, isOwner });
 
 describe("reviewActions", () => {
-  it("merge is the merger's alone, and only in ready — not even an owner", () => {
-    const ready = full({ phase: "ready" });
-    expect(reviewActions(ready, as("mer")).merge).toBe(true);
-    expect(reviewActions(ready, as("rev")).merge).toBe(false);
+  it("merge is anyone with a role in the review (merger, reviewer, author, co-author), only in ready — not an owner without one", () => {
+    const ready = full({ phase: "ready", coauthorUserId: "coa" });
+    for (const id of ["mer", "rev", "aut", "coa"]) expect({ id, merge: reviewActions(ready, as(id)).merge }).toEqual({ id, merge: true });
     expect(reviewActions(ready, as("own", true)).merge).toBe(false);
+    expect(reviewActions(ready, as("someone")).merge).toBe(false);
     expect(reviewActions(full({ phase: "fixing" }), as("mer")).merge).toBe(false);
     expect(reviewActions(full({ phase: "merged" }), as("mer")).merge).toBe(false);
+  });
+
+  it("the co-author carries the work on: retry, cancel and request like the author and the merger", () => {
+    const open = full({ phase: "fixing", coauthorUserId: "coa" });
+    expect(reviewActions(open, as("coa"))).toMatchObject({ retry: true, cancel: true, request: true, decide: false });
   });
 
   it("deciding is the reviewer's or an owner's, while the review is open to decisions", () => {
@@ -322,7 +327,7 @@ describe("reviewActions", () => {
     expect(reviewActions(full({ phase: "fixing" }), as("aut")).retry).toBe(false);
   });
 
-  it("cancelling is for the reviewer, author, merger or an owner, while the review is active", () => {
+  it("cancelling is for the reviewer, author, co-author, merger or an owner, while the review is active", () => {
     for (const phase of ["reviewing", "fixing", "ready", "impasse"] as const) {
       expect(reviewActions(full({ phase }), as("aut")).cancel).toBe(true);
     }
@@ -330,7 +335,8 @@ describe("reviewActions", () => {
     expect(reviewActions(full(), as("mer")).cancel).toBe(true);
     expect(reviewActions(full(), as("own", true)).cancel).toBe(true);
     expect(reviewActions(full(), as("co")).cancel).toBe(false);
-    expect(reviewActions(full({ coauthorUserId: "co" }), as("co")).cancel).toBe(false);
+    // o coautor dá continuidade sem o responsável (produção, 2026-11-09)
+    expect(reviewActions(full({ coauthorUserId: "co" }), as("co")).cancel).toBe(true);
     expect(reviewActions(full({ phase: "merged" }), as("aut")).cancel).toBe(false);
     expect(reviewActions(full({ phase: "cancelled" }), as("aut")).cancel).toBe(false);
   });
