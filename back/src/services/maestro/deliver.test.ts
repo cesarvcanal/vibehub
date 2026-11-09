@@ -1042,3 +1042,41 @@ describe("buildPushAndPrScript executado de verdade (gh e git falsos): PR novo s
   });
 });
 
+describe("deliver abre PR documentado (diretriz de PR de todo repositório)", () => {
+  const reviewPosted = () => scripts().find((s) => s.includes("/reviews' --input"));
+  /** The JSON the review script carries (base64 in the script). */
+  const payloadOf = (script: string) => JSON.parse(Buffer.from(/printf '%s' '([A-Za-z0-9+/=]+)' \| base64 -d > "\$F"/.exec(script)![1]!, "base64").toString("utf8"));
+
+  it("documentação inválida volta ANTES de qualquer script: nada é empurrado", async () => {
+    const { deliver, card } = await makeCard();
+    wire();
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, docs: { ...DOCS, body: "## Contexto\nsó" } });
+    expect(out).toMatchObject({ merged: false, reason: "undocumented" });
+    expect(out.output).toContain("Pontos de atenção");
+    expect(runScript).not.toHaveBeenCalled();
+  });
+
+  it("o runner diz que não há PR e faltou documentação: undocumented, sem gate, sem merge, sem PR gravado", async () => {
+    const { deliver, registry, card } = await makeCard();
+    wire({ push: "pushed\n__VIBEHUB_DELIVER__ error undocumented" });
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true });
+    expect(out).toMatchObject({ merged: false, reason: "undocumented" });
+    expect(out.output).toContain("falta title, body, comments");
+    expect(runScript).toHaveBeenCalledOnce();
+    expect((await registry.getCard(card.id))?.prs).toBeUndefined();
+  });
+
+  it("só-merge ignora documentação: não empurra, não escreve no PR", async () => {
+    const { deliver, card } = await makeCard();
+    const sha = "a".repeat(40);
+    runScript.mockImplementation(async (script: string) => {
+      if (script.includes("gh pr merge")) return { stdout: "__VIBEHUB_DELIVER__ merged\n", stderr: "" };
+      if (script.includes("gh pr checks")) return { stdout: '[{"name":"b","bucket":"pass"}]\n__VIBEHUB_CI__ done\n', stderr: "" };
+      if (script.includes("gh pr list")) return { stdout: `__VIBEHUB_DELIVER__ head ${PR} ${sha}\n`, stderr: "" };
+      return { stdout: "", stderr: "" };
+    });
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: sha, docs: { body: "x" } });
+    expect(out).toMatchObject({ merged: true });
+    expect(scripts().some((s) => s.includes("/comments' --paginate") || s.includes("--body-file"))).toBe(false);
+  });
+});

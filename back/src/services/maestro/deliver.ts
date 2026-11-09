@@ -392,7 +392,7 @@ export function parseMerge(stdout: string): { merged: boolean; output: string } 
 
 /** Which git stage failed maps to the reason a maestro reads. PURE. */
 function reasonForStage(stage: string): DeliverReason {
-  return stage === "create" ? "pr_failed" : stage === "push" ? "push_failed" : "pr_failed";
+  return stage === "push" ? "push_failed" : stage === "undocumented" ? "undocumented" : "pr_failed";
 }
 
 /**
@@ -880,6 +880,20 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     );
     return { merged: false, reason: "locked", branch: target, cardBranch: source, locked: true };
   }
+  // The PR's documentation is checked before anything runs: a body without its sections must not cost
+  // a push. Merge-only writes nothing on the PR, so it has nothing to check.
+  const checked = mergeOnly ? null : validatePrDocs(opts.docs);
+  if (checked && !checked.ok) {
+    logger.info(
+      { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, reason: "undocumented", by: opts.by },
+      "deliver refused: the PR documentation is invalid",
+    );
+    return {
+      merged: false, reason: "undocumented", branch: target, cardBranch: source, ...lock,
+      output: `Documentação do PR recusada; nada foi enviado:\n- ${checked.problems.join("\n- ")}`,
+    };
+  }
+  const docs: CleanPrDocs = checked?.ok ? checked.docs : { comments: [] };
   const { cwd } = cardWorkPaths(project, card);
   const container = config.runner.container;
 
@@ -915,7 +929,7 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
   } else {
     // (a)+(b) push and resolve the PR.
     const prOut = await hostExecutor().runScript(
-      buildPushAndPrScript(container, card.id, token, cwd, source, target),
+      buildPushAndPrScript(container, card.id, token, cwd, source, target, docs),
       { timeoutMs: 120_000 },
     );
     const pr = parsePushAndPr(prOut.stdout);
@@ -924,7 +938,8 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
         { audit: true, action: "maestro.deliver", card: card.worktreeSlug, stage: pr.stage, merged: false, by: opts.by },
         "deliver stopped before a PR",
       );
-      return { merged: false, reason: reasonForStage(pr.stage), branch: target, cardBranch: source, ...lock, output: cleanOutput(pr.output) };
+      const output = pr.stage === "undocumented" ? undocumentedOutput(docs) : cleanOutput(pr.output);
+      return { merged: false, reason: reasonForStage(pr.stage), branch: target, cardBranch: source, ...lock, output };
     }
     prUrl = pr.prUrl;
     await rememberPr(card, prUrl, target, source);
