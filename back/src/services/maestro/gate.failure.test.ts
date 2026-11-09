@@ -115,4 +115,9 @@ describe("gateFailureOutput — o vermelho mostra o que falhou", () => {
     const out = gateFailureOutput("=== gate: npm test ===\n> vitest run\nsh: 1: vitest: not found\nnpm error code 127");
     expect(out).toContain("[vibehub] comando não encontrado na worktree (vitest): rode npm install no card e entregue de novo");
   });
+
+  it("disco cheio (ENOSPC) vira dica: não é o código do card", () => {
+    const out = gateFailureOutput("=== gate: npm test ===\nError: ENOSPC: no space left on device, write");
+    expect(out).toContain("[vibehub] disco do runner cheio (ENOSPC): libere espaço no runner e entregue de novo");
+  });
 });

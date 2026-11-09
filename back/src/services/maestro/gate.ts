@@ -303,6 +303,9 @@ function gateHints(text: string): string[] {
   // sh (dash) diz "sh: 1: vitest: not found"; bash diz "vitest: command not found".
   const command = /(?:^|\n)(?:sh: \d+: )?([\w.@/-]+): (?:not found|command not found)/.exec(text)?.[1];
   if (command) hints.push(`[vibehub] comando não encontrado na worktree (${command}): rode npm install no card e entregue de novo`);
+  if (/\bENOSPC\b|no space left on device/i.test(text)) {
+    hints.push("[vibehub] disco do runner cheio (ENOSPC): libere espaço no runner e entregue de novo");
+  }
   return hints;
 }
 
