@@ -83,7 +83,8 @@ describe("buildPushAndPrScript", () => {
     expect(s).not.toContain("/root/.vibehub/gh/");
     // git push is force-with-lease, and the PR targets the given branch
     expect(s).toContain("git push --force-with-lease origin 'card/fix-1'");
-    expect(s).toContain("gh pr create --base 'dev' --head 'card/fix-1' --fill");
+    // never --fill: its body is the list of commits, the undocumented PR the team rule forbids
+    expect(s).not.toContain("--fill");
   });
 });
 
@@ -946,3 +947,98 @@ describe("deliver com revisão de PR ativa no card", () => {
     }
   });
 });
+
+/* ------------------------------------------------------------- PR documentation */
+
+/** A description with every section of the standard (prDocs.PR_SECTIONS). */
+const DOC_BODY = [
+  "## Contexto", "c", "## Problema identificado", "p", "## Objetivo", "o", "## Solução implementada", "s",
+  "## Detalhamento técnico", "d", "## Comportamento esperado", "e", "## Impactos", "i",
+  "## Testes e validações", "t", "## Pontos de atenção", "a",
+].join("\n");
+/** A comment that explains its block (above prDocs.MIN_COMMENT_CHARS). */
+const EXPLAINED =
+  "Este bloco passa a validar a documentação antes do push: um corpo sem as seções obrigatórias volta para a IA " +
+  "com a lista do que falta, e nenhum script roda no runner.";
+const DOCS = { title: "feat: PR documentado", body: DOC_BODY, comments: [{ path: "back/src/a.ts", line: 3, body: EXPLAINED }] };
+
+describe("buildPushAndPrScript executado de verdade (gh e git falsos): PR novo só abre documentado", () => {
+  const roots: string[] = [];
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  /** Runs the script's runner-side body (what `docker exec … bash -s` receives) with fake gh/git on PATH. */
+  async function run(docs: Parameters<typeof import("./deliver.js").buildPushAndPrScript>[6], existing = "", editResult = "") {
+    const { deliver } = await load();
+    const root = await mkdtemp(join(tmpdir(), "vibehub-prdocs-"));
+    roots.push(root);
+    const bin = join(root, "bin");
+    const fake = (name: string, body: string) =>
+      execFileSync("bash", ["-c", `mkdir -p '${bin}' && cat > '${bin}/${name}' && chmod +x '${bin}/${name}'`], { input: body });
+    fake("git", '#!/bin/bash\necho "git $*" >> "$ROOT/log"\nexit 0\n');
+    fake("gh", [
+      "#!/bin/bash",
+      'echo "gh $1 $2" >> "$ROOT/log"',
+      'case "$1 $2" in',
+      '  "pr list") [ -n "$EXISTING" ] && echo "$EXISTING"; exit 0 ;;',
+      '  "pr edit") [ -n "$EDIT_RESULT" ] && { echo "no permission"; $EDIT_RESULT; } ;;&',
+      '  "pr create"|"pr edit")',
+      '    while [ $# -gt 0 ]; do case "$1" in',
+      '      --title) printf "%s" "$2" > "$ROOT/title"; shift ;;',
+      '      --body-file) cp "$2" "$ROOT/body"; shift ;;',
+      '    esac; shift; done',
+      '    echo "https://github.com/acme/repo/pull/9"; exit 0 ;;',
+      "esac",
+    ].join("\n"));
+    const script = deliver.buildPushAndPrScript("vibehub-runner", "card-1", TOKEN, root, "card/x", "dev", docs);
+    const lines = script.split("\n");
+    const inner = lines.slice(lines.findIndex((l) => l.startsWith("docker exec")) + 1, -1).join("\n");
+    const env = { PATH: `${bin}:${process.env.PATH}`, ROOT: root, EXISTING: existing, EDIT_RESULT: editResult };
+    const stdout = execFileSync("bash", ["-s"], { input: inner, env, encoding: "utf8" });
+    const read = (f: string) => execFileSync("bash", ["-c", `cat '${join(root, f)}' 2>/dev/null || true`], { encoding: "utf8" });
+    return { stdout, log: read("log"), title: read("title"), body: read("body"), script };
+  }
+
+  const clean = (d: typeof DOCS) => ({ ...d, comments: d.comments.map((c) => ({ ...c, side: "RIGHT" as const })) });
+
+  it("sem documentação e sem PR aberto: empurra, mas NÃO abre o PR (undocumented)", async () => {
+    const r = await run({ comments: [] });
+    expect(r.log).toContain("git push");
+    expect(r.log).not.toContain("gh pr create");
+    expect(r.stdout).toContain("__VIBEHUB_DELIVER__ error undocumented");
+  });
+
+  it("título e corpo chegam ao gh exatamente como a IA escreveu — aspas, $(…), crases e a linha do heredoc não escapam", async () => {
+    const body = `${DOC_BODY}\nVIBEHUB_DELIVER\nit's \`rm -rf /\` and $(echo pwned) "quoted" ação`;
+    const title = `fix: it's "$(echo pwned)" \`x\``;
+    const r = await run(clean({ ...DOCS, title, body }));
+    expect(r.log).toContain("gh pr create");
+    expect(r.title).toBe(title);
+    expect(r.body).toBe(body);
+    expect(r.stdout).toContain("__VIBEHUB_DELIVER__ pr https://github.com/acme/repo/pull/9");
+    // the text travels base64-encoded: none of it is in the script as shell source
+    expect(r.script).not.toContain("echo pwned");
+  });
+
+  it("PR já aberto: reaproveita; com título/corpo novos ele é reescrito (gh pr edit)", async () => {
+    const r = await run(clean(DOCS), PR);
+    expect(r.log).not.toContain("gh pr create");
+    expect(r.log).toContain("gh pr edit");
+    expect(r.body).toBe(DOC_BODY);
+    expect(r.stdout).toContain(`__VIBEHUB_DELIVER__ pr ${PR}`);
+  });
+
+  it("gh pr edit falhou: o erro diz QUAL PR está aberto", async () => {
+    const r = await run(clean(DOCS), PR, "exit 1");
+    expect(r.stdout).toContain("__VIBEHUB_DELIVER__ error edit");
+    expect(r.stdout).toContain(`PR: ${PR}`);
+  });
+
+  it("PR já aberto e nada de texto novo: reaproveitado sem tocar (a revisão empurra correção assim)", async () => {
+    const r = await run({ comments: [] }, PR);
+    expect(r.log).not.toMatch(/gh pr (create|edit)/);
+    expect(r.stdout).toContain(`__VIBEHUB_DELIVER__ pr ${PR}`);
+  });
+});
+

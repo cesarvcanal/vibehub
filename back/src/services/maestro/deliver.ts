@@ -29,7 +29,10 @@ import { logger } from "../../utils/logger.js";
  * Steps:
  *   a. push the card branch (`--force-with-lease` — the card owns its branch; a branch the last merge
  *      deleted on GitHub goes up again, see forgetDeletedRemoteBranch).
- *   b. open a PR to the target branch, or reuse the open one.
+ *   b. open a PR to the target branch, or reuse the open one. A NEW PR opens only DOCUMENTED (prDocs.ts):
+ *      title, a body with every section of the team's standard, and comments on the diff — otherwise
+ *      the branch is pushed and the delivery stops at `undocumented`. Then the comments go up as one
+ *      COMMENT review on the pushed commit (those already on the PR are skipped).
  *   c. the GATE. When the pull request has GitHub CI checks, THEY are the gate: wait for them (bounded)
  *      and read their verdict — the CI already runs the full suite on a clean machine, and running it
  *      again inside the shared runner duplicated the work and timed out on a loaded box. Without CI
@@ -185,25 +188,60 @@ export function forgetDeletedRemoteBranch(branch: string): string {
 }
 
 /**
+ * Free text (a PR title, body or review payload) as a shell expression that rebuilds it in the runner:
+ * the text travels base64-encoded, so quotes, `$(…)`, backticks or a line equal to the heredoc
+ * delimiter are never shell source. PURE.
+ */
+function decoded(text: string): string {
+  return `printf '%s' '${Buffer.from(text, "utf8").toString("base64")}' | base64 -d`;
+}
+
+/**
  * Script for steps (a)+(b): push the branch, then reuse an open PR or create one. Emits
  * `__VIBEHUB_DELIVER__ pr <url>` on success, or `__VIBEHUB_DELIVER__ error <stage>` with the
- * command output above it. Branch names are validated by the caller and shell-quoted here. PURE.
+ * command output above it. Branch names are validated by the caller and shell-quoted here.
+ *
+ * The PR's text comes from `docs` (already validated, prDocs.ts) — never `--fill`, whose body is the
+ * list of commits. No open PR and not enough to open a documented one: `error undocumented`, after the
+ * push. An open PR is reused; given a title or body, it is rewritten with them (`gh pr edit`). PURE.
  */
 export function buildPushAndPrScript(
   containerName: string, cardId: string, token: string, cwd: string, branch: string, target: string,
+  docs: CleanPrDocs = { comments: [] },
 ): string {
   assertSafeRemotePath(cwd);
+  const textFlags = [
+    docs.title !== undefined ? `--title "$TITLE"` : "",
+    docs.body !== undefined ? `--body-file "$BODY"` : "",
+  ].filter(Boolean).join(" ");
+  const open = canOpenPr(docs)
+    ? [
+      `  if ! CREATE=$(gh pr create --base ${shQuote(target)} --head ${shQuote(branch)} ${textFlags} 2>&1); then`,
+      `    printf '%s\\n' "$CREATE"; echo "${MARKER} error create"; exit 0;`,
+      `  fi`,
+      `  URL=$(printf '%s\\n' "$CREATE" | grep -Eo 'https://github.com/[^[:space:]]+/pull/[0-9]+' | tail -1)`,
+    ]
+    : [`  echo "${MARKER} error undocumented"; exit 0`];
+  const edit = textFlags
+    ? [
+      `else`,
+      `  if ! EDIT=$(gh pr edit "$URL" ${textFlags} 2>&1); then`,
+      // The PR is open: say which one, so the agent can fix its text by hand if it must.
+      `    printf '%s\\n' "$EDIT" "PR: $URL"; echo "${MARKER} error edit"; exit 0;`,
+      `  fi`,
+    ]
+    : [];
   const body = [
     ...ghTokenPreamble(token),
     `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
     forgetDeletedRemoteBranch(branch),
     `if ! git push --force-with-lease origin ${shQuote(branch)}; then echo "${MARKER} error push"; exit 0; fi`,
+    ...(docs.title !== undefined ? [`TITLE=$(${decoded(docs.title)})`] : []),
+    ...(docs.body !== undefined ? [`BODY=$(mktemp)`, `trap 'rm -f "$BODY"' EXIT`, `${decoded(docs.body)} > "$BODY"`] : []),
     `URL=$(gh pr list --head ${shQuote(branch)} --base ${shQuote(target)} --state open --json url --jq '.[0].url' 2>/dev/null)`,
     `if [ -z "$URL" ]; then`,
-    `  if ! CREATE=$(gh pr create --base ${shQuote(target)} --head ${shQuote(branch)} --fill 2>&1); then`,
-    `    printf '%s\\n' "$CREATE"; echo "${MARKER} error create"; exit 0;`,
-    `  fi`,
-    `  URL=$(printf '%s\\n' "$CREATE" | grep -Eo 'https://github.com/[^[:space:]]+/pull/[0-9]+' | tail -1)`,
+    ...open,
+    ...edit,
     `fi`,
     `echo "${MARKER} pr $URL"`,
   ];
