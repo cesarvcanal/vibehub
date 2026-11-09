@@ -80,6 +80,13 @@ describe("deliverCard — o vibehub_deliver com revisão de PR ativa", () => {
     expect(out).toMatchObject({ merged: true, reason: "merged", prUrl: PR, headBranch: "deleted" });
   });
 
+  it("a documentação do PR vai junto no push da correção (comentários do autor no diff)", async () => {
+    const { deliverCard, card } = await cardUnderReview("fixing", "u-a");
+    const docs = { comments: [{ path: "a.ts", line: 3, body: "explica o bloco" }] };
+    await deliverCard(card.id, { branch: "dev", authorized: true, by: "mussa", from: card.id, docs });
+    expect(deliver).toHaveBeenCalledWith(card.id, expect.objectContaining({ pushOnly: true, docs }));
+  });
+
   it("a IA de OUTRO card entregando este (from diferente, ou sem from): push sim, merge não — mesmo com o responsável como ator", async () => {
     const { deliverCard, card } = await cardUnderReview("ready", "u-m");
     for (const from of ["outro-card", undefined]) {
