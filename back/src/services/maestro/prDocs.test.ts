@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  validatePrDocs, missingPrSections, canOpenPr, undocumentedOutput, MIN_COMMENT_CHARS, PR_SECTIONS,
+  validatePrDocs, missingPrSections, canOpenPr, undocumentedOutput, freshComments, reviewPayload,
+  MIN_COMMENT_CHARS, PR_SECTIONS,
 } from "./prDocs.js";
 
 /** A body with every section the standard asks for, as an agent following the tool would write it. */
@@ -135,3 +136,34 @@ describe("canOpenPr — a NEW pull request opens only fully documented", () => {
   });
 });
 
+describe("freshComments — a re-delivery does not post the same explanation twice", () => {
+  const wanted = [
+    { path: "a.ts", line: 3, side: "RIGHT" as const, body: EXPLAINED },
+    { path: "b.ts", line: 8, side: "RIGHT" as const, body: EXPLAINED },
+  ];
+  it("skips what is already on the PR (same file and text, wherever the line moved to)", () => {
+    expect(freshComments([{ path: "a.ts", body: `${EXPLAINED}\n` }], wanted)).toEqual([wanted[1]]);
+  });
+  it("the same text on ANOTHER file is still new", () => {
+    expect(freshComments([{ path: "c.ts", body: EXPLAINED }], wanted)).toEqual(wanted);
+  });
+  it("a PR with no comments gets them all", () => {
+    expect(freshComments([], wanted)).toEqual(wanted);
+  });
+});
+
+describe("reviewPayload", () => {
+  it("one COMMENT review pinned to the pushed commit, ranges as GitHub expects them", () => {
+    const sha = "a".repeat(40);
+    const p = reviewPayload(sha, [
+      { path: "a.ts", line: 9, side: "RIGHT", body: EXPLAINED, startLine: 5 },
+      { path: "b.ts", line: 2, side: "LEFT", body: EXPLAINED },
+    ]);
+    expect(p).toMatchObject({ commit_id: sha, event: "COMMENT" });
+    expect(p.body.length).toBeGreaterThan(0);
+    expect(p.comments).toEqual([
+      { path: "a.ts", line: 9, side: "RIGHT", start_line: 5, start_side: "RIGHT", body: EXPLAINED },
+      { path: "b.ts", line: 2, side: "LEFT", body: EXPLAINED },
+    ]);
+  });
+});

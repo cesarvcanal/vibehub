@@ -192,3 +192,36 @@ export function undocumentedOutput(docs: CleanPrDocs): string {
   ].join("\n");
 }
 
+/** A comment already on the PR, as GitHub lists it. */
+export interface PostedComment {
+  path?: string;
+  body?: string;
+}
+
+/**
+ * The comments not yet on the PR. Same file and same text = already posted, wherever its line is now
+ * (a later push moves lines; the explanation is the same). Makes a repeated delivery idempotent. PURE.
+ */
+export function freshComments(posted: PostedComment[], wanted: CleanComment[]): CleanComment[] {
+  const have = new Set(posted.map((p) => `${String(p.path ?? "")}\n${String(p.body ?? "").trim()}`));
+  return wanted.filter((c) => !have.has(`${c.path}\n${c.body}`));
+}
+
+/** The body of the review that carries the comments (GitHub wants one on a COMMENT review). */
+const REVIEW_BODY = "Explicação trecho a trecho desta mudança, pelo autor: o que cada bloco faz, por que mudou e o impacto.";
+
+/** The `POST /pulls/{n}/reviews` payload: one COMMENT review, pinned to the commit the lines refer to. PURE. */
+export function reviewPayload(commitId: string, comments: CleanComment[]) {
+  return {
+    commit_id: commitId,
+    event: "COMMENT" as const,
+    body: REVIEW_BODY,
+    comments: comments.map((c) => ({
+      path: c.path,
+      line: c.line,
+      side: c.side,
+      ...(c.startLine !== undefined ? { start_line: c.startLine, start_side: c.side } : {}),
+      body: c.body,
+    })),
+  };
+}
