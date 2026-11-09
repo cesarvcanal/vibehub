@@ -11,6 +11,10 @@ import { getSettings } from "../settings/settings.js";
 import { assertGhToken } from "../accounts/token.js";
 import { runGate, cleanOutput, type GateResult } from "./gate.js";
 import { activeReviewFor } from "../review/store.js";
+import {
+  validatePrDocs, canOpenPr, undocumentedOutput, freshComments, reviewPayload,
+  type PrDocs, type CleanPrDocs, type CleanComment, type PostedComment,
+} from "./prDocs.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -65,7 +69,11 @@ export type DeliverReason =
   /** An authorized merge outside merge-only while the card has a PR review in progress. */
   | "review_active"
   /** Push-only: the branch went to the PR; nothing else was asked. */
-  | "pushed";
+  | "pushed"
+  /** No PR opened: its documentation is missing or invalid (prDocs.ts). The branch may have been pushed. */
+  | "undocumented"
+  /** The PR is open, but GitHub refused its comments (a line outside the diff, say). Nothing merged. */
+  | "comments_failed";
 
 export interface DeliverResult {
   /** URL of the PR — present once (b) resolved one, whether or not it was later merged. */
@@ -87,6 +95,8 @@ export interface DeliverResult {
    * it would close that PR), or `failed` (the merge stands; the branch is just still there).
    */
   headBranch?: "deleted" | "kept" | "failed";
+  /** The comments on the diff this delivery was given: how many went up, how many were already there. */
+  comments?: { posted: number; skipped: number };
 }
 
 export interface DeliverOpts {
@@ -114,6 +124,12 @@ export interface DeliverOpts {
    * message to the card in the meantime cannot swap the identity under it.
    */
   connectionId?: string;
+  /**
+   * The PR's documentation, written by the AI that did the work: required to OPEN a new PR (title, body
+   * and comments), optional on an existing one (rewrites its title/body, adds the comments). Ignored in
+   * merge-only, which writes nothing.
+   */
+  docs?: PrDocs;
 }
 
 const MARKER = "__VIBEHUB_DELIVER__";
