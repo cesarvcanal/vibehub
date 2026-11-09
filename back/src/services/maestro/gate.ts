@@ -300,6 +300,9 @@ function gateHints(text: string): string[] {
   const hints: string[] = [];
   const missing = /Cannot find (?:package|module) '([^']+)'/.exec(text)?.[1];
   if (missing) hints.push(`[vibehub] dependência faltando na worktree (${missing}): rode npm install no card e entregue de novo`);
+  // sh (dash) diz "sh: 1: vitest: not found"; bash diz "vitest: command not found".
+  const command = /(?:^|\n)(?:sh: \d+: )?([\w.@/-]+): (?:not found|command not found)/.exec(text)?.[1];
+  if (command) hints.push(`[vibehub] comando não encontrado na worktree (${command}): rode npm install no card e entregue de novo`);
   return hints;
 }
 

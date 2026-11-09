@@ -110,4 +110,9 @@ describe("gateFailureOutput — o vermelho mostra o que falhou", () => {
   it("sem dependência faltando, nenhuma dica", () => {
     expect(gateFailureOutput("=== gate: npm test ===\n FAIL  a.test.ts")).not.toContain("dependência faltando");
   });
+
+  it("comando do check que não existe na worktree (sh: vitest: not found) também vira dica", () => {
+    const out = gateFailureOutput("=== gate: npm test ===\n> vitest run\nsh: 1: vitest: not found\nnpm error code 127");
+    expect(out).toContain("[vibehub] comando não encontrado na worktree (vitest): rode npm install no card e entregue de novo");
+  });
 });
