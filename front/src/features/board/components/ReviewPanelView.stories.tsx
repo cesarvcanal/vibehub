@@ -29,11 +29,15 @@ const FINDINGS: Finding[] = [
     id: "f1", severity: "blocking", title: "Chips em erro nunca saem do stash e reenviam a cada F5",
     file: "front/src/features/board/components/TerminalComposer.tsx", line: 514,
     proof: { kind: "scenario", ref: "TerminalComposer.tsx:514", detail: "upload falha, F5, o chip volta e reenvia" },
+    problem: "Um anexo que falhou no envio volta toda vez que a página recarrega e é reenviado sozinho: a pessoa vê o mesmo erro a cada F5 e o card recebe o arquivo repetido.",
+    fix: "Ao gravar o stash, deixar de fora os chips com status 'erro'; no restore, descartar chip em erro que ainda esteja lá (dado antigo).",
   }),
   f({
     id: "f2", severity: "blocking", title: "Stash em sessionStorage (chave única, ~5M chars) não comporta prints grandes",
     file: "front/src/features/board/components/TerminalComposer.tsx", line: 427,
     proof: { kind: "failing_test", ref: "TerminalComposer.test.tsx:88" },
+    problem: "Um print grande estoura o limite do sessionStorage (cerca de 5 milhões de caracteres numa chave só): o stash inteiro falha e os outros anexos somem junto.",
+    fix: "Guardar no stash só o id de cada upload já enviado ao runner (não o conteúdo) e ler o arquivo do runner no restore.",
   }),
   f({
     id: "f3", title: "<img> do runner sem onError: 404 mostra ícone quebrado", file: "front/src/features/board/components/TerminalComposer.tsx", line: 1679,
