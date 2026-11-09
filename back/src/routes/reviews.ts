@@ -87,7 +87,7 @@ function prReview(list: Review[], prNumber: number): Review | undefined {
 /**
  * Se a IA de cada lado está num turno AGORA (`isBusy`: o status dos hooks, ou o turno do chat nativo).
  * A fase só muda quando uma ferramenta pousa; isto muda no instante em que a IA começa ou para de
- * trabalhar, e é o que deixa o painel dizer "IA mexendo" com a revisão ainda em `ready`. Card que
+ * trabalhar, e é o que deixa o painel dizer "IA trabalhando" com a revisão ainda em `ready`. Card que
  * sumiu = parado.
  */
 async function sidesWorking(r: Review): Promise<{ author: boolean; reviewer: boolean }> {

@@ -162,7 +162,7 @@ export const ProntoPraMerge: Story = {
 };
 
 export const IaMexendoDepoisDoPronto: Story = {
-  name: "6. Pronto, mas a IA do autor está mexendo no PR",
+  name: "6. Pronto, mas a IA do autor está trabalhando no PR",
   args: { review: READY, working: { author: true, reviewer: false }, actions: { ...NO_ACTIONS, merge: true, cancel: true } },
 };
 

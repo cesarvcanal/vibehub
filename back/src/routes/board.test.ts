@@ -336,7 +336,7 @@ describe("revisão de PR no board", () => {
     expect(one.review).toEqual(listed.review);
   });
 
-  it("revisão pronta com a IA do autor num turno: o resumo leva authorWorking (a linha diz 'IA mexendo')", async () => {
+  it("revisão pronta com a IA do autor num turno: o resumo leva authorWorking (a linha diz 'IA trabalhando')", async () => {
     const projectId = await makeProject();
     const authorId = await makeCard(projectId, "login");
     await review(authorId, projectId, { id: "r-ready", phase: "ready", createdAt: 1_000 });

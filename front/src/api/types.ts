@@ -560,7 +560,7 @@ export interface ReviewSummary {
    * review in `reviewing`, the line reads "aguardando decisão" instead of the AIs' round.
    */
   pendingQuestions?: number;
-  /** A `ready` review whose author's AI is in a turn right now (hooks or native chat): "IA mexendo". */
+  /** A `ready` review whose author's AI is in a turn right now (hooks or native chat): "IA trabalhando". */
   authorWorking?: boolean;
 }
 

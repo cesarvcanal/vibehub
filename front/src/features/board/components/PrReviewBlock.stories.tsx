@@ -25,7 +25,7 @@ export const AguardandoDecisao: Story = {
 };
 export const Pronto: Story = { name: "Pronto pra merge", args: { review: { id: "r1", prNumber: 211, phase: "ready", round: 1 } } };
 export const IaMexendo: Story = {
-  name: "Pronto, mas a IA do autor está mexendo",
+  name: "Pronto, mas a IA do autor está trabalhando",
   args: { review: { id: "r1", prNumber: 211, phase: "ready", round: 1 }, authorWorking: true },
 };
 export const Impasse: Story = { name: "Impasse", args: { review: { id: "r1", prNumber: 211, phase: "impasse", round: 3 } } };

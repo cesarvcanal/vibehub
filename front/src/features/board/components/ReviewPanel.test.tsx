@@ -1253,7 +1253,7 @@ describe("ReviewPanel — leitura periódica", () => {
     }
   });
 
-  it("pronto, e a IA do autor começa a mexer no PR: a pill vira IA mexendo e o merge espera ela terminar", async () => {
+  it("pronto, e a IA do autor começa a mexer no PR: a pill vira IA trabalhando e o merge espera ela terminar", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     open("mer", review({ phase: "ready", round: 1 }));
     await loaded();
@@ -1262,9 +1262,9 @@ describe("ReviewPanel — leitura periódica", () => {
 
     working = { author: true, reviewer: false };
     await tick(10_100);
-    expect(await screen.findByText("IA mexendo")).toBeInTheDocument();
+    expect(await screen.findByText("IA trabalhando")).toBeInTheDocument();
     expect(screen.queryByText("pronto pra merge")).toBeNull();
-    expect(screen.getByText(/A IA do autor está mexendo no PR/)).toBeInTheDocument();
+    expect(screen.getByText(/A IA do autor está trabalhando no PR/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeDisabled();
     expect(screen.getByText(/Espere a IA do autor terminar/)).toBeInTheDocument();
 

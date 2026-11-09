@@ -70,7 +70,7 @@ async function withReviewSummary(cards: registry.Card[]): Promise<BoardCard[]> {
       const waiting = pendingQuestions(r.findings).length;
       const review: ReviewSummary = { id: r.id, prNumber: r.prNumber, phase: r.phase, round: r.round };
       if (waiting > 0) review.pendingQuestions = waiting;
-      // Pronto, com a IA do autor num turno (hooks ou chat nativo): a linha diz "IA mexendo". Só quando
+      // Pronto, com a IA do autor num turno (hooks ou chat nativo): a linha diz "IA trabalhando". Só quando
       // o autor é ESTE card; o de um PR anexado é outro, e a linha lê isso ao vivo.
       if (r.phase === "ready" && r.cardId === c.id && isBusy(c)) review.authorWorking = true;
       return review;

@@ -30,7 +30,7 @@ import { t as translate, useT } from "@/i18n";
  * review is open it is re-read ({@link useLiveReview}) whatever the phase — every 3 s while something
  * moves, every 10 s while it sits still: it moves on its own (an AI's turn, a push after `ready`, a
  * merge done on GitHub), and the panel follows. With the author's AI working on a
- * `ready` PR, the pill reads "IA mexendo" and the merge waits for it to finish.
+ * `ready` PR, the pill reads "IA trabalhando" and the merge waits for it to finish.
  */
 
 /** Where the review stood when a banner was raised: the banner is about THAT state and goes with it. */
