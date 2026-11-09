@@ -411,3 +411,15 @@ export function conversationRows(log: ReviewEvent[]): ConversationRow[] {
   });
   return rows;
 }
+
+/**
+ * When a suggestion was sent to the author, as `dd/mm/aaaa hh:mm` in São Paulo time — the company's
+ * clock, whatever the browser's timezone, and a fixed shape a test can assert. PURE.
+ */
+export function requestedAtText(at: number): string {
+  const parts = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(new Date(at));
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("day")}/${get("month")}/${get("year")} ${get("hour")}:${get("minute")}`;
+}

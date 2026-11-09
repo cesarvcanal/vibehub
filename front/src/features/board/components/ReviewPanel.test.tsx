@@ -1066,6 +1066,7 @@ describe("ReviewPanel — sugestões: fazer ou não fazer", () => {
     await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
     const card = screen.getByText("Renomear pump").closest("[data-testid=finding]") as HTMLElement;
     expect(within(card).getByTestId("finding-requested")).toHaveTextContent("pedida ao autor por mussa");
+    expect(within(card).getByTestId("finding-requested")).toHaveAttribute("title", "Pedida em 31/12/1969 21:00 (horário de Brasília)");
     expect(screen.queryByRole("radiogroup", { name: "O que fazer com: Renomear pump" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Fazer todas e enviar (1)" }));
     expect(post).toHaveBeenLastCalledWith("/reviews/r1/suggestions", { apply: ["s2"], skip: [] });

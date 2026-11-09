@@ -1546,6 +1546,7 @@ export const ptBR: Record<string, string> = {
   "review.suggestions.confirm.none": "Escolha fazer ou não fazer",
   "review.suggestions.confirm": "Confirmar: {apply} pra fazer, {skip} pra não fazer",
   "review.suggestions.requested": "pedida ao autor por {by}",
+  "review.suggestions.requestedAt": "Pedida em {when} (horário de Brasília)",
   "review.suggestions.allApply": "Fazer todas e enviar ({n})",
   "review.suggestions.sent": "Enviado: {apply} pro autor fazer, {skip} fora da lista",
   "review.impasse.rodadas": "Bateu {max} rodadas com item travado",

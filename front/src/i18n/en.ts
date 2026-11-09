@@ -1534,6 +1534,7 @@ export const en: Record<string, string> = {
   "review.suggestions.confirm.none": "Choose do it or don't",
   "review.suggestions.confirm": "Confirm: {apply} to do, {skip} not to do",
   "review.suggestions.requested": "sent to the author by {by}",
+  "review.suggestions.requestedAt": "Sent on {when} (Brasília time)",
   "review.suggestions.allApply": "Do all and send ({n})",
   "review.suggestions.sent": "Sent: {apply} for the author to do, {skip} off the list",
   "review.impasse.rodadas": "Hit {max} rounds with an item still stuck",

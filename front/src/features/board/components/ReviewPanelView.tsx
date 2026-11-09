@@ -8,7 +8,7 @@ import { ENTER, ReviewConversation } from "@/features/board/components/ReviewCon
 import { cardHref } from "@/features/board/lib/board";
 import {
   FINDING_SEVERITY_TONE, FINDING_STATUS_TONE, IMPASSE_ROUNDS, REVIEW_MAX_ROUNDS, awaitingDecision, findingIsOpen,
-  pendingQuestions, reviewIsOpen, reviewPill, reviewTurn, stuckItems, type ReviewActions,
+  pendingQuestions, requestedAtText, reviewIsOpen, reviewPill, reviewTurn, stuckItems, type ReviewActions,
 } from "@/features/board/lib/review";
 import { t as translate, useT } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -550,7 +550,12 @@ function FindingCard({
             </Badge>
             {f.commit ? <code className="font-mono text-[10px] text-muted-foreground">{f.commit.slice(0, 7)}</code> : null}
             {f.requested && f.status === "open" ? (
-              <Badge tone="info" className="px-1.5 text-[10px]" data-testid="finding-requested">
+              <Badge
+                tone="info"
+                className="px-1.5 text-[10px]"
+                data-testid="finding-requested"
+                title={t("review.suggestions.requestedAt", { when: requestedAtText(f.requested.at) })}
+              >
                 {t("review.suggestions.requested", { by: f.requested.by })}
               </Badge>
             ) : null}
