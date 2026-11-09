@@ -464,7 +464,7 @@ describe("ReviewPanel — o que mostra", () => {
 });
 
 describe("ReviewPanel — merge", () => {
-  it("merge só aparece pro responsável e só em ready", async () => {
+  it("merge aparece pra quem tem papel na revisão e só em ready", async () => {
     open("mer", review({ phase: "ready" }));
     await loaded();
     expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeInTheDocument();
@@ -478,13 +478,17 @@ describe("ReviewPanel — merge", () => {
       cleanup();
     }
 
-    // Em ready, quem não é o responsável não vê: revisor, autor, co-autor e nem o owner.
-    for (const who of ["rev", "aut", "co", "own"] as const) {
+    // Em ready, revisor, autor e coautor também veem: o trabalho segue sem o responsável
+    // (produção, 2026-11-09). O owner sem papel na revisão, não.
+    for (const who of ["rev", "aut", "co"] as const) {
       open(who, review({ phase: "ready", coauthorUserId: "u-co" }));
       await loaded();
-      expect(screen.queryByRole("button", { name: /Mergear na/ })).toBeNull();
+      expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeInTheDocument();
       cleanup();
     }
+    open("own", review({ phase: "ready", coauthorUserId: "u-co" }));
+    await loaded();
+    expect(screen.queryByRole("button", { name: /Mergear na/ })).toBeNull();
   });
 
   it("o botão leva a base na etiqueta e manda o POST do merge", async () => {
@@ -1169,7 +1173,7 @@ describe("ReviewPanel — tentar de novo e cancelar", () => {
     expect(post).toHaveBeenCalledWith("/reviews/r1/cancel");
   });
 
-  it("cancelar: revisor, autor, responsável pelo merge e owner veem; o co-autor não", async () => {
+  it("cancelar: revisor, autor, co-autor, responsável pelo merge e owner veem", async () => {
     for (const who of ["rev", "aut", "mer", "own"] as const) {
       open(who, review({ phase: "ready" }));
       await loaded();
@@ -1178,7 +1182,7 @@ describe("ReviewPanel — tentar de novo e cancelar", () => {
     }
     open("co", review({ phase: "ready", coauthorUserId: "u-co" }));
     await loaded();
-    expect(screen.queryByRole("button", { name: "Cancelar revisão" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Cancelar revisão" })).toBeInTheDocument();
   });
 
   it("cancelar vale em qualquer fase ativa", async () => {
