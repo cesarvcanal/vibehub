@@ -39,6 +39,8 @@ beforeEach(async () => {
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
 const PR = "https://github.com/acme/repo/pull/7";
+/** The commit the card pushed, as the comments step reads it back. */
+const HEAD_SHA = "d".repeat(40);
 
 /** Wire the runner: one canned reply per phase, chosen by the script's content. */
 function wire(over: { push?: string; probe?: string; run?: string; merge?: string; ci?: string } = {}) {
@@ -1078,5 +1080,28 @@ describe("deliver abre PR documentado (diretriz de PR de todo repositório)", ()
     const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: sha, docs: { body: "x" } });
     expect(out).toMatchObject({ merged: true });
     expect(scripts().some((s) => s.includes("/comments' --paginate") || s.includes("--body-file"))).toBe(false);
+  });
+});
+
+describe("buildPrCommentsReadScript / parsePrComments", () => {
+  it("espera o PR apontar para o HEAD empurrado (limitado) e lê os comentários em base64", async () => {
+    const { deliver } = await load();
+    const s = deliver.buildPrCommentsReadScript("vibehub-runner", "c1", TOKEN, "/work/x", PR);
+    expect(s).toContain("HEAD=$(git rev-parse HEAD)");
+    expect(s).toContain(`gh pr view '${PR}' --json headRefOid`);
+    expect(s).toContain("gh api 'repos/acme/repo/pulls/7/comments' --paginate --jq '.[] | {path, body} | tojson'");
+    expect(s).toContain("base64 -w0");
+    for (const line of s.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
+  });
+
+  it("lê head e comentários; vazio é lista vazia; erro vem com o estágio", async () => {
+    const { deliver } = await load();
+    const lines = [{ path: "a", body: "x\ny" }, { path: "b", body: "z" }].map((o) => JSON.stringify(o)).join("\n");
+    const b64 = Buffer.from(lines).toString("base64");
+    expect(deliver.parsePrComments(`__VIBEHUB_DELIVER__ prcomments ${HEAD_SHA} ${b64}`)).toEqual({
+      ok: true, head: HEAD_SHA, posted: [{ path: "a", body: "x\ny" }, { path: "b", body: "z" }],
+    });
+    expect(deliver.parsePrComments(`__VIBEHUB_DELIVER__ prcomments ${HEAD_SHA} `)).toEqual({ ok: true, head: HEAD_SHA, posted: [] });
+    expect(deliver.parsePrComments("boom\n__VIBEHUB_DELIVER__ error comments")).toMatchObject({ ok: false, stage: "comments", output: "boom" });
   });
 });

@@ -248,6 +248,62 @@ export function buildPushAndPrScript(
   return dockerBashScript(containerName, body);
 }
 
+/** How long the comments step waits for the PR to point at the pushed commit (rounds × seconds). */
+const COMMENTS_HEAD_ROUNDS = 12;
+const COMMENTS_HEAD_POLL_SECONDS = 5;
+
+/**
+ * Before commenting: wait (bounded) for the PR to point at the commit just pushed — the comment lines
+ * belong to THAT diff, and a reused PR moves to it a few seconds after the push — then list the review
+ * comments already on the PR, so a repeated delivery does not post them again. Emits
+ * `__VIBEHUB_DELIVER__ prcomments <head> <base64 of JSON lines {path, body}>` (`tojson`: one comment per
+ * line whatever gh's own formatting, a body's newlines escaped), or `error stale` /
+ * `error comments`. PURE.
+ */
+export function buildPrCommentsReadScript(containerName: string, cardId: string, token: string, cwd: string, prUrl: string): string {
+  assertSafeRemotePath(cwd);
+  const pr = parsePrUrl(prUrl);
+  if (!pr) throw new Error(`not a GitHub PR url: ${prUrl}`);
+  const body = [
+    ...ghTokenPreamble(token),
+    `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
+    `HEAD=$(git rev-parse HEAD)`,
+    `i=0`,
+    `while :; do`,
+    `  i=$((i+1))`,
+    `  PH=$(gh pr view ${shQuote(prUrl)} --json headRefOid --jq .headRefOid 2>/dev/null)`,
+    `  [ "$PH" = "$HEAD" ] && break`,
+    `  if [ "$i" -ge ${COMMENTS_HEAD_ROUNDS} ]; then echo "${MARKER} error stale"; exit 0; fi`,
+    `  sleep ${COMMENTS_HEAD_POLL_SECONDS}`,
+    `done`,
+    `if ! J=$(gh api ${shQuote(`repos/${pr.repo}/pulls/${pr.number}/comments`)} --paginate --jq '.[] | {path, body} | tojson' 2>&1); then`,
+    `  printf '%s\\n' "$J"; echo "${MARKER} error comments"; exit 0;`,
+    `fi`,
+    `echo "${MARKER} prcomments $HEAD $(printf '%s' "$J" | base64 -w0)"`,
+  ];
+  return dockerBashScript(containerName, body);
+}
+
+/** Parses the comments lookup: the pushed head and the comments already on the PR. PURE. */
+export function parsePrComments(
+  stdout: string,
+): { ok: true; head: string; posted: PostedComment[] } | { ok: false; stage: string; output: string } {
+  const m = new RegExp(`${MARKER} prcomments ([0-9a-fA-F]{40,64}) ?([A-Za-z0-9+/=]*)`).exec(stdout);
+  if (m) {
+    try {
+      const posted = Buffer.from(m[2] ?? "", "base64").toString("utf8").split("\n").filter((l) => l.trim())
+        .map((l) => JSON.parse(l) as { path?: unknown; body?: unknown })
+        .map((c) => ({ path: String(c?.path ?? ""), body: String(c?.body ?? "") }));
+      return { ok: true, head: m[1]!.toLowerCase(), posted };
+    } catch {
+      return { ok: false, stage: "comments", output: "a lista de comentários do PR veio ilegível" };
+    }
+  }
+  const err = new RegExp(`${MARKER} error (\\S+)`).exec(stdout);
+  const output = stdout.replace(new RegExp(`${MARKER} (prcomments|error).*`, "g"), "").trim();
+  return { ok: false, stage: err?.[1] ?? "unknown", output };
+}
+
 /**
  * Merge-only step (a)+(b): NO push — find the open PR from `branch` to `target` and print its head.
  * Filtered by head AND base (a card may have a PR to `dev` and another to `prod` from the same
