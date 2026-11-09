@@ -170,3 +170,25 @@ export function validatePrDocs(docs: PrDocs | undefined): { ok: true; docs: Clea
   return problems.length ? { ok: false, problems } : { ok: true, docs: clean };
 }
 
+/** A NEW pull request needs all three: title, a sectioned body and at least one comment on the diff. PURE. */
+export function canOpenPr(docs: CleanPrDocs): boolean {
+  return docs.title !== undefined && docs.body !== undefined && docs.comments.length > 0;
+}
+
+/** What a refused opening tells the agent: what is missing and the shape to send it in. PURE. */
+export function undocumentedOutput(docs: CleanPrDocs): string {
+  const missing = [
+    docs.title === undefined ? "title" : null,
+    docs.body === undefined ? "body" : null,
+    docs.comments.length === 0 ? "comments" : null,
+  ].filter(Boolean);
+  return [
+    `PR novo só abre documentado: falta ${missing.join(", ")}. O push foi feito; o PR NÃO foi aberto.`,
+    "Chame o vibehub_deliver de novo com:",
+    "- title: o título do PR;",
+    `- body: markdown com as seções (headings) ${PR_SECTIONS.map((s) => s.label).join(", ")};`,
+    "- comments: um comentário por bloco relevante do diff ({ path, line, body, side?, startLine? }), dizendo o que " +
+      "mudou, por que, como funciona, a responsabilidade do trecho, o impacto e as regras envolvidas.",
+  ].join("\n");
+}
+

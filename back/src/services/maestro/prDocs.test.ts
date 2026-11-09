@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { validatePrDocs, missingPrSections, MIN_COMMENT_CHARS, PR_SECTIONS } from "./prDocs.js";
+import {
+  validatePrDocs, missingPrSections, canOpenPr, undocumentedOutput, MIN_COMMENT_CHARS, PR_SECTIONS,
+} from "./prDocs.js";
 
 /** A body with every section the standard asks for, as an agent following the tool would write it. */
 const BODY = [
@@ -108,6 +110,28 @@ describe("validatePrDocs", () => {
   it("refuses sizes past GitHub's limits", () => {
     expect(validatePrDocs({ title: "x".repeat(257) }).ok).toBe(false);
     expect(validatePrDocs({ body: `${BODY}\n${"x".repeat(65_536)}` }).ok).toBe(false);
+  });
+});
+
+describe("canOpenPr — a NEW pull request opens only fully documented", () => {
+  const docs = (d: Parameters<typeof validatePrDocs>[0]) => {
+    const v = validatePrDocs(d);
+    if (!v.ok) throw new Error(v.problems.join("; "));
+    return v.docs;
+  };
+  it("title, body and at least one comment: opens", () => {
+    expect(canOpenPr(docs({ title: "t", body: BODY, comments: [COMMENT] }))).toBe(true);
+  });
+  it("any of the three missing: does not", () => {
+    expect(canOpenPr(docs({ body: BODY, comments: [COMMENT] }))).toBe(false);
+    expect(canOpenPr(docs({ title: "t", comments: [COMMENT] }))).toBe(false);
+    expect(canOpenPr(docs({ title: "t", body: BODY }))).toBe(false);
+  });
+  it("the refusal names what is missing and how to send it", () => {
+    const out = undocumentedOutput(docs({ title: "t", body: BODY }));
+    expect(out).toContain("comments");
+    expect(out).not.toMatch(/falta.*title/);
+    expect(out).toContain("O push foi feito");
   });
 });
 
