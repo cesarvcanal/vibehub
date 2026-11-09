@@ -540,10 +540,10 @@ describe("pessoas do card", () => {
 });
 
 describe("merge", () => {
-  it("só o responsável pelo merge mergeia", async () => {
+  it("o responsável pelo merge mergeia; quem não tem papel na revisão, não", async () => {
     const w = await world();
     const review = await readyReview(w);
-    for (const who of [w.owner, w.autor, w.revisor, w.leitor, w.outro]) {
+    for (const who of [w.owner, w.leitor, w.outro]) {
       const res = await merge(review.id, who);
       expect({ who: who.id, status: res.statusCode }).toEqual({ who: who.id, status: 403 });
     }
@@ -562,6 +562,48 @@ describe("merge", () => {
     // mergeada não é ativa, e não mergeia de novo
     expect((await merge(review.id, w.merger)).statusCode).toBe(409);
     expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * CONTINUIDADE SEM O RESPONSÁVEL (produção, 2026-11-09): o César era o responsável pelo merge e o
+   * Albert, revisor e coautor, não tinha botão nenhum — a revisão pronta parava esperando o César
+   * voltar. Quem tem papel na revisão (revisor, autor, coautor) mergeia uma revisão PRONTA, com a
+   * conexão GitHub PRÓPRIA dele (o merge passa pela permissão dele no GitHub).
+   */
+  it("revisor, autor e coautor também mergeiam a revisão pronta, cada um na própria conta GitHub", async () => {
+    const w = await world();
+    const review = await readyReview(w);
+    const res = await merge(review.id, w.revisor);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().review).toMatchObject({ id: review.id, phase: "merged" });
+    const revisorGh = (await (await import("../auth/userGit.js")).getUserGit(w.revisor.id))?.githubConnectionId;
+    expect(deliver.mock.calls[0]![1]).toMatchObject({ mergeOnly: true, expectedHeadSha: SHA1, connectionId: revisorGh });
+  });
+
+  it("o coautor mergeia; papel sem conexão GitHub própria é recusado com o motivo, não 403", async () => {
+    const w = await world();
+    const started = await startReview(w, w.autor, { coauthorUserId: w.outro.id });
+    expect(started.statusCode).toBe(400); // "outro" não alcança o card: o coautor precisa alcançar
+    await app.inject({
+      method: "POST", url: `/api/projects/${w.projectId}/shares`, headers: { cookie: w.owner.cookie }, payload: { userId: w.outro.id, level: "work" },
+    });
+    const ok = await startReview(w, w.autor, { coauthorUserId: w.outro.id });
+    expect(ok.statusCode).toBe(200);
+    const id = ok.json().review.id as string;
+    await (await orchestrator()).submitReviewerRound(ok.json().review.reviewerCardId, {
+      round: 1, findings: OPEN_SUGGESTION, headSha: SHA1, summary: "nada bloqueia",
+    });
+    // coautor e autor têm papel, mas nenhum dos dois tem conexão GitHub própria
+    for (const who of [w.outro, w.autor]) {
+      const res = await merge(id, who);
+      expect({ who: who.id, status: res.statusCode }).toEqual({ who: who.id, status: 400 });
+      expect(res.json().error).toMatch(/^merger_sem_github/);
+    }
+    const gh = await (await registry()).addGithubConnection({ label: "outro", login: "outro-gh" });
+    await (await import("../auth/userGit.js")).setUserGit(w.outro.id, { githubConnectionId: gh.id });
+    const res = await merge(id, w.outro);
+    expect(res.statusCode).toBe(200);
+    expect(deliver.mock.calls.at(-1)![1]).toMatchObject({ connectionId: gh.id });
   });
 
   it("dois cliques no merge ao mesmo tempo mergeiam uma vez só", async () => {

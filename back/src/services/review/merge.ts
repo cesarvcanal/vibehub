@@ -6,7 +6,7 @@ import { resolveIdentity } from "../github/identity.js";
 import { getSettings } from "../settings/settings.js";
 import { deliver, type DeliverResult } from "../maestro/deliver.js";
 import { logger } from "../../utils/logger.js";
-import type { Review, ReviewPhase } from "./model.js";
+import { canMergeReview, type Review, type ReviewPhase } from "./model.js";
 import { claimMerge, markReviewMerged, releaseMerge, reopenAfterHeadMoved } from "./orchestrator.js";
 import { getReview } from "./store.js";
 
@@ -17,8 +17,9 @@ import { getReview } from "./store.js";
  * servidor, depois do Approve do revisor; decisão do usuário em 05/11/2026). Os três fazem
  * exatamente o mesmo, com as mesmas recusas:
  *
- *  - só o `mergerUserId`, só em `ready`, só com o commit revisado gravado;
- *  - o responsável precisa de `work` no card do autor (conferido de novo aqui: um share que caiu
+ *  - só quem tem papel na revisão (`canMergeReview`: responsável, revisor, autor, coautor), só em
+ *    `ready`, só com o commit revisado gravado;
+ *  - quem mergeia precisa de `work` no card do autor (conferido de novo aqui: um share que caiu
  *    depois do início tira o merge também) e de uma conexão GitHub PRÓPRIA (`ownGithubConnection`);
  *  - um merge por vez por revisão (`claimMerge`): um segundo clique, ou o deliver junto do botão, não
  *    dispara um segundo — e a conferência do GitHub não fecha por fora um merge que está saindo;
@@ -72,7 +73,7 @@ export async function mergeReviewedPr(
   const review = await getReview(reviewId);
   if (!review) return { kind: "refused", status: 404, error: "review not found" };
   const user = await findUser(userId);
-  if (!user || user.id !== review.mergerUserId) {
+  if (!user || !canMergeReview(review, user.id)) {
     return { kind: "refused", status: 403, error: "você não tem esse papel nesta revisão", reason: "not_merger" };
   }
   if (review.phase !== "ready") {
@@ -85,7 +86,7 @@ export async function mergeReviewedPr(
     return { kind: "refused", status: 409, reason: "not_ready", phase: review.phase, error: "a revisão não tem o commit revisado" };
   }
   if ((await cardLevel(user, review.cardId)) !== "work") {
-    return { kind: "refused", status: 403, error: "o responsável pelo merge precisa de acesso de trabalho ao card do autor" };
+    return { kind: "refused", status: 403, error: "quem mergeia precisa de acesso de trabalho ao card do autor" };
   }
   const card = await registry.getCard(review.cardId);
   if (!card) return { kind: "refused", status: 404, error: "card not found" };
@@ -93,7 +94,7 @@ export async function mergeReviewedPr(
   if (!connectionId) {
     return {
       kind: "refused", status: 400, reason: "merger_sem_github",
-      error: "merger_sem_github: o responsável pelo merge não tem uma conexão GitHub própria no vibehub",
+      error: "merger_sem_github: quem mergeia não tem uma conexão GitHub própria no vibehub",
     };
   }
   if (!claimMerge(review.id)) return { kind: "refused", status: 409, reason: "merging", error: "merge já em andamento" };
