@@ -305,6 +305,33 @@ export function parsePrComments(
 }
 
 /**
+ * Posts ONE review with the comments (`POST /pulls/{n}/reviews`, event COMMENT). The payload travels
+ * base64-encoded into a temp file read by `gh api --input`. GitHub takes all of the comments or none
+ * (a line outside the diff refuses the whole review), so a failure leaves nothing half-posted. Emits
+ * `__VIBEHUB_DELIVER__ review ok` or `error review` with GitHub's answer above it. PURE.
+ */
+export function buildPrReviewScript(
+  containerName: string, cardId: string, token: string, cwd: string, prUrl: string, payload: unknown,
+): string {
+  assertSafeRemotePath(cwd);
+  const pr = parsePrUrl(prUrl);
+  if (!pr) throw new Error(`not a GitHub PR url: ${prUrl}`);
+  const body = [
+    ...ghTokenPreamble(token),
+    `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
+    `F=$(mktemp)`,
+    `trap 'rm -f "$F"' EXIT`,
+    `${decoded(JSON.stringify(payload))} > "$F"`,
+    `if OUT=$(gh api --method POST ${shQuote(`repos/${pr.repo}/pulls/${pr.number}/reviews`)} --input "$F" 2>&1); then`,
+    `  echo "${MARKER} review ok"`,
+    `else`,
+    `  printf '%s\\n' "$OUT"; echo "${MARKER} error review"`,
+    `fi`,
+  ];
+  return dockerBashScript(containerName, body);
+}
+
+/**
  * Merge-only step (a)+(b): NO push — find the open PR from `branch` to `target` and print its head.
  * Filtered by head AND base (a card may have a PR to `dev` and another to `prod` from the same
  * branch; `gh pr view <branch>` would pick either). Emits `__VIBEHUB_DELIVER__ head <url> <sha>`, or

@@ -1105,3 +1105,19 @@ describe("buildPrCommentsReadScript / parsePrComments", () => {
     expect(deliver.parsePrComments("boom\n__VIBEHUB_DELIVER__ error comments")).toMatchObject({ ok: false, stage: "comments", output: "boom" });
   });
 });
+
+describe("buildPrReviewScript", () => {
+  it("publica UMA revisão pela API com o payload em base64, token só pelo stdin", async () => {
+    const { deliver } = await load();
+    const payload = { commit_id: HEAD_SHA, event: "COMMENT", body: "b", comments: [{ path: "a.ts", line: 1, side: "RIGHT", body: "it's $(x)" }] };
+    const s = deliver.buildPrReviewScript("vibehub-runner", "c1", TOKEN, "/work/x", PR, payload);
+    expect(s).toContain("gh api --method POST 'repos/acme/repo/pulls/7/reviews' --input \"$F\"");
+    expect(s).toContain(`trap 'rm -f "$F"' EXIT`);
+    const b64 = /printf '%s' '([A-Za-z0-9+/=]+)' \| base64 -d > "\$F"/.exec(s)![1]!;
+    expect(JSON.parse(Buffer.from(b64, "base64").toString("utf8"))).toEqual(payload);
+    // the comment text is never shell source
+    expect(s).not.toContain("$(x)");
+    for (const line of s.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
+    expect(() => deliver.buildPrReviewScript("vibehub-runner", "c1", TOKEN, "/work/x", "https://example.com/x", payload)).toThrow(/PR/);
+  });
+});
