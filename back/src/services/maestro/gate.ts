@@ -270,6 +270,50 @@ export function cleanOutput(text: string): string {
   return tailOutput(redactSecrets(text));
 }
 
+/**
+ * Lines that say what broke, in the outputs the gate runs into: vitest (`FAIL`, `×`, the
+ * `⎯ Failed/Startup/Unhandled` banners, any `…Error`), npm (`npm error`) and tsc (`error TS1234`).
+ * Only at the start of the line (one space of indent at most): an indented `Error: boom` is a log a
+ * GREEN test printed on purpose. A green line (`✓ …`) never counts, even when its NAME says "failed".
+ */
+const ERROR_LINE =
+  /^ ?(?:FAIL\b|×|✗|npm (?:error|ERR!)|[\w.]*Error\b|⎯+ (?:Failed|Startup|Unhandled))|\berror TS\d+/;
+// eslint-disable-next-line no-control-regex
+const ANSI = /\x1b\[[0-9;]*m/g;
+const GATE_CHECK_HEADER = /^=== gate: (.*) ===$/gm;
+/** How much of the budget the error lines may take; the rest is the end of the output. */
+const ERROR_LINES_BYTES = 1_800;
+
+/**
+ * What a RED gate shows: the check that failed, the lines that say why, then the end of the output —
+ * within `GATE_OUTPUT_TAIL_BYTES`, redacted. A plain tail is not enough: `npm test --workspaces`
+ * runs the front and THEN the back, so a front that died at startup was followed by 60 KB of a green
+ * back, and the tail showed only green tests under a red banner (production, 2026-11-09, PR #215 of
+ * tech.multi — not the first time). Output with no check header (the script died first) is the plain
+ * tail. PURE.
+ */
+export function gateFailureOutput(output: string): string {
+  const text = redactSecrets(output);
+  const check = [...text.matchAll(GATE_CHECK_HEADER)].pop()?.[1];
+  if (!check) return tailOutput(text);
+  const header = `[vibehub] o gate falhou no check: ${check}\n\n`;
+  const bytes = (s: string) => Buffer.byteLength(s, "utf8");
+  if (bytes(header) + bytes(text) <= GATE_OUTPUT_TAIL_BYTES) return header + text;
+
+  const errors: string[] = [];
+  let used = 0;
+  const plain = text.replace(ANSI, "");
+  for (const line of new Set(plain.split("\n").filter((l) => ERROR_LINE.test(l) && !/^\s*✓/.test(l)))) {
+    const kept = line.length > 300 ? `${line.slice(0, 299)}…` : line;
+    if (used + bytes(kept) + 1 > ERROR_LINES_BYTES) break;
+    errors.push(kept);
+    used += bytes(kept) + 1;
+  }
+  const prefix = header + (errors.length ? `[vibehub] linhas de erro:\n${errors.join("\n")}\n\n` : "") + "[vibehub] fim da saída:\n";
+  // tailOutput adds "…\n" and a cut multi-byte char may grow: keep a margin.
+  return prefix + tailOutput(text, GATE_OUTPUT_TAIL_BYTES - bytes(prefix) - 16);
+}
+
 /** Each card's last green verdict, timed from when its tree was probed. In memory only. */
 const greenVerdicts = new Map<string, { key: string; at: number; output: string }>();
 
@@ -362,7 +406,7 @@ async function runGateNow(cardId: string): Promise<GateResult> {
   }
   // stderr only matters when the script died before `exec 2>&1` folded it into stdout.
   const { passed, output, timedOut } = parseGateRun(`${runOut.stderr ?? ""}${runOut.stdout}`);
-  const cleaned = cleanOutput(output);
+  const cleaned = passed ? cleanOutput(output) : gateFailureOutput(output);
   if (passed && reuseKey) greenVerdicts.set(card.id, { key: reuseKey, at: probedAt, output: cleaned });
   else greenVerdicts.delete(card.id);
   logger.info(
