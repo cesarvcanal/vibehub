@@ -174,6 +174,22 @@ export const IaTrabalhandoDepoisDoPronto: Story = {
   args: { review: READY, working: { author: true, reviewer: false }, actions: { ...NO_ACTIONS, merge: true, cancel: true } },
 };
 
+export const SugestoesComOAutor: Story = {
+  name: "6b. Sugestões já mandadas ao autor: selo no lugar da escolha",
+  args: {
+    review: {
+      ...READY,
+      findings: READY.findings.map((x) => (x.id === "f3" || x.id === "f5" ? { ...x, requested: { by: "mussa", at: at(60) } } : x)),
+      log: [
+        ...READY.log,
+        line({ min: 60, round: 2, who: "human", by: "mussa", text: "Pediu ao autor aplicar as sugestões f3, f5.", items: [{ id: "f3", status: "open" }, { id: "f5", status: "open" }] }),
+      ],
+    },
+    working: { author: true, reviewer: false },
+    actions: { ...NO_ACTIONS, merge: true, cancel: true, request: true },
+  },
+};
+
 const REOPENED_LOG = [
   ...READY.log,
   line({
