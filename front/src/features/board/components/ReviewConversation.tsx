@@ -217,7 +217,7 @@ function ItemLines({
 }
 
 /** Past this many characters, what was said of a finding comes clamped, with "ver mais". */
-const SAID_CLAMP_CHARS = 240;
+export const SAID_CLAMP_CHARS = 240;
 
 /**
  * One finding an AI line is about, as a message of its own: what it is and where it stands after

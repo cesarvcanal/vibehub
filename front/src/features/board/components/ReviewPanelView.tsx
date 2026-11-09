@@ -4,7 +4,7 @@ import { Check, ChevronRight, ExternalLink, FileDiff, Loader2, SquareTerminal, X
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Finding, FindingSeverity, Review, ReviewPhase, ReviewWorking } from "@/api/types";
-import { ENTER, ReviewConversation } from "@/features/board/components/ReviewConversation";
+import { ENTER, ReviewConversation, SAID_CLAMP_CHARS } from "@/features/board/components/ReviewConversation";
 import { cardHref } from "@/features/board/lib/board";
 import {
   FINDING_SEVERITY_TONE, FINDING_STATUS_TONE, IMPASSE_ROUNDS, REVIEW_MAX_ROUNDS, awaitingDecision, findingIsOpen,
@@ -677,12 +677,29 @@ function FindingCard({
   );
 }
 
-/** A paragraph of the finding a person reads before deciding: the problem, and how to solve it. */
-function FindingText({ label, children }: { label: string; children: React.ReactNode }) {
+/**
+ * A paragraph of the finding a person reads before deciding: the problem, and how to solve it. Long
+ * text (the reviewer may write up to 2000 characters) comes folded, the same way as in the
+ * conversation, so eight suggestions do not turn the list into a wall.
+ */
+function FindingText({ label, children }: { label: string; children: string }) {
+  const t = useT();
+  const [open, setOpen] = React.useState(false);
+  const long = children.length > SAID_CLAMP_CHARS;
   return (
     <div className="space-y-0.5 text-xs">
       <p className="text-[11px] font-semibold text-muted-foreground">{label}</p>
-      <p className="whitespace-pre-line break-words leading-relaxed text-foreground/90">{children}</p>
+      <p className={cn("whitespace-pre-line break-words leading-relaxed text-foreground/90", long && !open && "line-clamp-4")}>{children}</p>
+      {long ? (
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+          className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+        >
+          {open ? t("review.conversation.less") : t("review.conversation.more")}
+        </button>
+      ) : null}
     </div>
   );
 }

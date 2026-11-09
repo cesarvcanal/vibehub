@@ -999,6 +999,16 @@ describe("ReviewPanel — dúvidas e impasse", () => {
     expect(within(card).getByText("Como resolver").nextElementSibling).toHaveTextContent("trocar por Decimal");
   });
 
+  it("problema longo no card vem recolhido, com ver mais / ver menos", async () => {
+    open("rev", review({ phase: "reviewing", findings: [doubt({ problem: "o total sai errado. ".repeat(30) })] }));
+    await loaded();
+    const card = cardOf("O cálculo está certo?");
+    const more = within(card).getByRole("button", { name: "ver mais" });
+    expect(more).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(more);
+    expect(within(card).getByRole("button", { name: "ver menos" })).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("achado antigo, sem problema nem proposta, não mostra os blocos vazios", async () => {
     open("rev", review({ phase: "reviewing", findings: [doubt()] }));
     await loaded();
