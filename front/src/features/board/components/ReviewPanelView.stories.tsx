@@ -29,15 +29,27 @@ const FINDINGS: Finding[] = [
     id: "f1", severity: "blocking", title: "Chips em erro nunca saem do stash e reenviam a cada F5",
     file: "front/src/features/board/components/TerminalComposer.tsx", line: 514,
     proof: { kind: "scenario", ref: "TerminalComposer.tsx:514", detail: "upload falha, F5, o chip volta e reenvia" },
+    problem: "Um anexo que falhou no envio volta toda vez que a página recarrega e é reenviado sozinho: a pessoa vê o mesmo erro a cada F5 e o card recebe o arquivo repetido.",
+    fix: "Ao gravar o stash, deixar de fora os chips com status 'erro'; no restore, descartar chip em erro que ainda esteja lá (dado antigo).",
   }),
   f({
     id: "f2", severity: "blocking", title: "Stash em sessionStorage (chave única, ~5M chars) não comporta prints grandes",
     file: "front/src/features/board/components/TerminalComposer.tsx", line: 427,
     proof: { kind: "failing_test", ref: "TerminalComposer.test.tsx:88" },
+    problem: "Um print grande estoura o limite do sessionStorage (cerca de 5 milhões de caracteres numa chave só): o stash inteiro falha e os outros anexos somem junto.",
+    fix: "Guardar no stash só o id de cada upload já enviado ao runner (não o conteúdo) e ler o arquivo do runner no restore.",
   }),
-  f({ id: "f3", title: "<img> do runner sem onError: 404 mostra ícone quebrado", file: "front/src/features/board/components/TerminalComposer.tsx", line: 1679 }),
+  f({
+    id: "f3", title: "<img> do runner sem onError: 404 mostra ícone quebrado", file: "front/src/features/board/components/TerminalComposer.tsx", line: 1679,
+    problem: "Quando o print anexado some do runner (card reiniciado, arquivo limpo), a miniatura vira o ícone de imagem quebrada e a pessoa não sabe se o anexo vai junto ou não.",
+    fix: "Pôr onError no <img> do chip: trocar a miniatura pelo ícone de arquivo com o nome e marcar o chip como 'anexo indisponível', sem reenviar.",
+  }),
   f({ id: "f4", title: "Remount com upload retomado em voo reenvia o mesmo arquivo" }),
-  f({ id: "f5", title: "Nome do helper `pump` não diz o que faz" }),
+  f({
+    id: "f5", title: "Nome do helper `pump` não diz o que faz",
+    problem: "Quem lê o composer precisa abrir a função para entender que ela drena a fila de uploads; o nome não ajuda na próxima manutenção.",
+    fix: "Renomear `pump` para `drainUploadQueue` e ajustar as três chamadas no mesmo arquivo.",
+  }),
   f({ id: "f6", severity: "question", title: "Trocar de card no meio do upload deveria cancelar o envio?" }),
 ];
 
@@ -109,7 +121,7 @@ const base: ReviewPanelViewProps = {
   onRetry: () => {},
   onCancel: () => {},
   onDecide: () => {},
-  onDecideSuggestions: () => {},
+  onDecideSuggestions: (_choice, done) => done(),
   onClose: () => {},
 };
 
@@ -164,6 +176,22 @@ export const ProntoPraMerge: Story = {
 export const IaTrabalhandoDepoisDoPronto: Story = {
   name: "6. Pronto, mas a IA do autor está trabalhando no PR",
   args: { review: READY, working: { author: true, reviewer: false }, actions: { ...NO_ACTIONS, merge: true, cancel: true } },
+};
+
+export const SugestoesComOAutor: Story = {
+  name: "6b. Sugestões já mandadas ao autor: selo no lugar da escolha",
+  args: {
+    review: {
+      ...READY,
+      findings: READY.findings.map((x) => (x.id === "f3" || x.id === "f5" ? { ...x, requested: { by: "mussa", at: at(60) } } : x)),
+      log: [
+        ...READY.log,
+        line({ min: 60, round: 2, who: "human", by: "mussa", text: "Pediu ao autor aplicar as sugestões f3, f5.", items: [{ id: "f3", status: "open" }, { id: "f5", status: "open" }] }),
+      ],
+    },
+    working: { author: true, reviewer: false },
+    actions: { ...NO_ACTIONS, merge: true, cancel: true, request: true },
+  },
 };
 
 const REOPENED_LOG = [

@@ -4,11 +4,11 @@ import { Check, ChevronRight, ExternalLink, FileDiff, Loader2, SquareTerminal, X
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Finding, FindingSeverity, Review, ReviewPhase, ReviewWorking } from "@/api/types";
-import { ENTER, ReviewConversation } from "@/features/board/components/ReviewConversation";
+import { ENTER, ReviewConversation, SAID_CLAMP_CHARS } from "@/features/board/components/ReviewConversation";
 import { cardHref } from "@/features/board/lib/board";
 import {
   FINDING_SEVERITY_TONE, FINDING_STATUS_TONE, IMPASSE_ROUNDS, REVIEW_MAX_ROUNDS, awaitingDecision, findingIsOpen,
-  pendingQuestions, reviewIsOpen, reviewPill, reviewTurn, stuckItems, type ReviewActions,
+  pendingQuestions, requestedAtText, reviewIsOpen, reviewPill, reviewTurn, stuckItems, type ReviewActions,
 } from "@/features/board/lib/review";
 import { t as translate, useT } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -54,7 +54,8 @@ export interface ReviewPanelViewProps {
   onCancel: () => void;
   onDecide: (finding: Finding, decision: Decision) => void;
   /** What to do with open suggestions: `apply` goes to the author's AI, `skip` leaves the list. */
-  onDecideSuggestions: (choice: { apply: string[]; skip: string[] }) => void;
+  /** `done` runs only when the server took it: a refused send keeps the person's choices. */
+  onDecideSuggestions: (choice: { apply: string[]; skip: string[] }, done: () => void) => void;
   onClose: () => void;
   /** The tab to open on, instead of the one the review calls for (the Storybook tour shows each). */
   initialTab?: Tab;
@@ -359,13 +360,16 @@ function FindingsList({
   decisionsFor: (f: Finding) => Decision[];
   canRequest: boolean;
   onDecide: (finding: Finding, decision: Decision) => void;
-  onDecideSuggestions: (choice: { apply: string[]; skip: string[] }) => void;
+  onDecideSuggestions: (choice: { apply: string[]; skip: string[] }, done: () => void) => void;
 }) {
   const t = useT();
   // What the person chose for each open suggestion: do it (the author applies it) or not (it leaves
   // the list). One confirm sends both. A suggestion that stops being open drops out of the choice.
   const [choices, setChoices] = React.useState<Map<string, SuggestionChoice>>(() => new Map());
-  const openSuggestions = review.findings.filter((f) => f.severity === "suggestion" && f.status === "open").map((f) => f.id);
+  // An open suggestion already sent to the author is not a choice any more: it waits for the author.
+  const openSuggestions = review.findings
+    .filter((f) => f.severity === "suggestion" && f.status === "open" && !f.requested)
+    .map((f) => f.id);
   const chosen = (c: SuggestionChoice) => openSuggestions.filter((id) => choices.get(id) === c);
   const apply = chosen("apply");
   const skip = chosen("skip");
@@ -418,21 +422,27 @@ function FindingsList({
                   className="h-7 px-2.5 text-xs"
                   disabled={busy || apply.length + skip.length === 0}
                   onClick={() => {
-                    onDecideSuggestions({ apply, skip });
-                    setChoices(new Map());
+                    onDecideSuggestions({ apply, skip }, () => setChoices(new Map()));
                   }}
                 >
                   {apply.length + skip.length === 0
                     ? t("review.suggestions.confirm.none")
                     : t("review.suggestions.confirm", { apply: apply.length, skip: skip.length })}
                 </Button>
-                <button
+                {/* One click for the common case: every open suggestion goes to the author, except the
+                    ones marked "não fazer", which leave the list. No marking each one, then confirming. */}
+                <Button
                   type="button"
-                  className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                  onClick={() => setChoices(new Map(openSuggestions.map((id) => [id, "apply" as const])))}
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2.5 text-xs"
+                  disabled={busy || openSuggestions.length === skip.length}
+                  onClick={() => {
+                    onDecideSuggestions({ apply: openSuggestions.filter((id) => !skip.includes(id)), skip }, () => setChoices(new Map()));
+                  }}
                 >
-                  {t("review.suggestions.allApply")}
-                </button>
+                  {t("review.suggestions.allApply", { n: openSuggestions.length - skip.length })}
+                </Button>
               </div>
             ) : null}
             <ul className="space-y-1.5">
@@ -443,7 +453,7 @@ function FindingsList({
                   busy={busy}
                   decisions={decisionsFor(f)}
                   onDecide={(d) => onDecide(f, d)}
-                  suggestion={choosing && f.status === "open" ? { choice: choices.get(f.id) ?? null, onChoose: (c) => choose(f.id, c) } : undefined}
+                  suggestion={choosing && openSuggestions.includes(f.id) ? { choice: choices.get(f.id) ?? null, onChoose: (c) => choose(f.id, c) } : undefined}
                 />
               ))}
             </ul>
@@ -488,8 +498,8 @@ const CHOICES: Record<Decision, { title: string; desc: string }> = {
 
 /**
  * One finding, as a card that answers the questions a person has before deciding anything: WHAT it
- * is (title, severity, where it stands), WHERE (file:line), WHY the reviewer raised it (the proof and
- * its detail) and WHAT the reviewer proposes. The latest reply of each AI is folded under it (the
+ * is (title, severity, where it stands), the PROBLEM in plain words, HOW to solve it, WHERE (file:line)
+ * and WHY the reviewer raised it (the proof and its detail). The latest reply of each AI is folded under it (the
  * whole back-and-forth is in the conversation). An open suggestion this person can decide offers
  * "do it" or "don't" (confirmed for the whole group at once); a doubt or a stuck item waiting on this
  * person shows its choices — pick one, then confirm.
@@ -539,6 +549,16 @@ function FindingCard({
               {t(`review.status.${f.status}`)}
             </Badge>
             {f.commit ? <code className="font-mono text-[10px] text-muted-foreground">{f.commit.slice(0, 7)}</code> : null}
+            {f.requested && f.status === "open" ? (
+              <Badge
+                tone="info"
+                className="px-1.5 text-[10px]"
+                data-testid="finding-requested"
+                title={t("review.suggestions.requestedAt", { when: requestedAtText(f.requested.at) })}
+              >
+                {t("review.suggestions.requested", { by: f.requested.by })}
+              </Badge>
+            ) : null}
           </div>
           <p
             className={cn(
@@ -549,6 +569,8 @@ function FindingCard({
           >
             {f.title}
           </p>
+          {f.problem ? <FindingText label={t("review.finding.problem")}>{f.problem}</FindingText> : null}
+          {f.fix ? <FindingText label={t("review.finding.fix")}>{f.fix}</FindingText> : null}
           <dl className="space-y-0.5 text-[11px]">
             {f.file ? (
               <FindingFact label={t("review.finding.where")}>
@@ -561,7 +583,6 @@ function FindingCard({
                 {f.proof.detail ? <span className="block text-foreground/80">{f.proof.detail}</span> : null}
               </FindingFact>
             ) : null}
-            {f.fix ? <FindingFact label={t("review.finding.fix")}>{f.fix}</FindingFact> : null}
           </dl>
         </div>
       </div>
@@ -656,6 +677,33 @@ function FindingCard({
   );
 }
 
+/**
+ * A paragraph of the finding a person reads before deciding: the problem, and how to solve it. Long
+ * text (the reviewer may write up to 2000 characters) comes folded, the same way as in the
+ * conversation, so eight suggestions do not turn the list into a wall.
+ */
+function FindingText({ label, children }: { label: string; children: string }) {
+  const t = useT();
+  const [open, setOpen] = React.useState(false);
+  const long = children.length > SAID_CLAMP_CHARS;
+  return (
+    <div className="space-y-0.5 text-xs">
+      <p className="text-[11px] font-semibold text-muted-foreground">{label}</p>
+      <p className={cn("whitespace-pre-line break-words leading-relaxed text-foreground/90", long && !open && "line-clamp-4")}>{children}</p>
+      {long ? (
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+          className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+        >
+          {open ? t("review.conversation.less") : t("review.conversation.more")}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function FindingFact({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex gap-1.5">
@@ -709,11 +757,15 @@ function Verdict({ review }: { review: Review }) {
 
   const blocking = review.findings.filter((f) => f.severity === "blocking");
   const resolved = blocking.filter((f) => !findingIsOpen(f)).length;
-  const suggestions = review.findings.filter((f) => f.severity === "suggestion" && f.status === "open").length;
+  // The ones already sent to the author are not waiting on anyone's choice: said apart.
+  const open = review.findings.filter((f) => f.severity === "suggestion" && f.status === "open");
+  const withAuthor = open.filter((f) => f.requested).length;
+  const suggestions = open.length - withAuthor;
   return (
     <VerdictBox tone="ok">
       {blocking.length > 0 ? t("review.verdict.ready", { resolved, total: blocking.length }) : t("review.verdict.readyNone")}
       {suggestions > 0 ? ` ${t("review.verdict.suggestions", { n: suggestions })}` : ""}
+      {withAuthor > 0 ? ` ${t("review.verdict.withAuthor", { n: withAuthor })}` : ""}
     </VerdictBox>
   );
 }

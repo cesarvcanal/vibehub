@@ -39,10 +39,12 @@ const fail = (e: unknown) => ok({ error: (e as Error).message });
 const reviewRound = z.number().int().min(1).max(MAX_ROUNDS).describe("the review round you were asked for (1-3)");
 const reviewHeadSha = z.string().regex(HEAD_SHA_RE, "the full sha of `git rev-parse HEAD`")
   .describe("full sha of `git rev-parse HEAD` after you finished (40 hex chars)");
-const reviewFinding = z.object({
+export const reviewFinding = z.object({
   severity: z.enum(["blocking", "suggestion", "question", "refuted"])
     .describe("blocking = only with proof | suggestion | question = a risk you are not sure about (a human decides) | refuted"),
-  title: z.string().min(1).max(300),
+  title: z.string().min(1).max(300).describe("short label of the finding (one line)"),
+  problem: z.string().max(2000).optional()
+    .describe("the problem in plain words for someone who will not open the code: what is wrong and what happens if it stays"),
   file: z.string().max(400).optional(),
   line: z.number().int().positive().optional(),
   proof: z.object({
@@ -51,9 +53,20 @@ const reviewFinding = z.object({
     ref: z.string().max(400).describe("the failing test, the written repo rule, or file:line of the scenario"),
     detail: z.string().max(2000).optional(),
   }).optional().describe("required for blocking: without it the server downgrades the finding to a suggestion"),
-  fix: z.string().max(2000).optional().describe("the fix you propose"),
+  fix: z.string().max(2000).optional()
+    .describe("how to solve it, concretely: what to change and where, enough for the author to apply without guessing"),
   introducedInRound: z.number().int().min(1).max(MAX_ROUNDS).optional()
     .describe("round 2+: the current round, ONLY for a bug the author's own fix created"),
+}).superRefine((f, ctx) => {
+  // The person decides from the panel, without the code: a finding with only a title is refused here,
+  // at the AI's boundary (the server guarantees, not the prompt). A refuted one is history; a question
+  // may have no fix (it is a doubt).
+  if (f.severity !== "refuted" && !f.problem?.trim()) {
+    ctx.addIssue({ code: "custom", path: ["problem"], message: "problem is required: what is wrong and what happens if it stays, in plain words" });
+  }
+  if ((f.severity === "blocking" || f.severity === "suggestion") && !f.fix?.trim()) {
+    ctx.addIssue({ code: "custom", path: ["fix"], message: "fix is required for blocking and suggestion: how to solve it, concretely" });
+  }
 });
 
 export function registerMaestroTools(server: McpServer, actor: string): void {
@@ -424,7 +437,10 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "Round 2+: `verdicts` on the closed list (fixed | open | dropped — accepting the author's " +
         "contestation is dropped; accepting a risk is a human decision) and new findings ONLY for a bug the " +
         "fix itself created (`introducedInRound` = the round). A blocking finding needs `proof` " +
-        "(failing_test, rule or scenario), or the server downgrades it to a suggestion. Calling twice for " +
+        "(failing_test, rule or scenario), or the server downgrades it to a suggestion. Every finding is read " +
+        "by a person deciding from the panel, without the code: `problem` (what is wrong and what happens if it " +
+        "stays) is required except on refuted, and `fix` (how to solve it, concretely) on blocking and " +
+        "suggestion — a finding with only a title is refused. Calling twice for " +
         "the same round is harmless. This never merges; the merge is a human button. Returns the review's " +
         "phase and `next`, or { error }.",
       inputSchema: {

@@ -574,6 +574,8 @@ export interface Finding {
   id: string;
   severity: FindingSeverity;
   title: string;
+  /** The problem in plain words: what is wrong and what happens if it stays. Absent on old findings. */
+  problem?: string;
   file?: string;
   line?: number;
   proof?: FindingProof;
@@ -584,6 +586,8 @@ export interface Finding {
   authorReply?: string;
   reviewerReply?: string;
   humanDecision?: "keep" | "accept_risk" | "block" | "drop";
+  /** A suggestion someone already sent the author to apply; while it stays open it is not offered again. */
+  requested?: { by: string; at: number };
 }
 
 /** A finding a line of the conversation is about, with what that side said of it AT THAT moment. */

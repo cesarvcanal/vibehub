@@ -558,6 +558,20 @@ describe("pedir ao autor aplicar sugestões", () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
+  it("pedir de novo uma sugestão que já está com o autor é 409 (a revisão mudou sob o clique), com o motivo", async () => {
+    const w = await world();
+    const started = (await startReview(w)).json().review as { id: string; reviewerCardId: string };
+    await (await orchestrator()).submitReviewerRound(started.reviewerCardId, {
+      round: 1, findings: [{ severity: "suggestion", title: "renomear" }], headSha: SHA1, summary: "uma sugestão",
+    });
+    const ask = async () =>
+      await app.inject({ method: "POST", url: `/api/reviews/${started.id}/suggestions`, headers: { cookie: w.autor.cookie }, payload: { apply: ["f1"] } });
+    expect((await ask()).statusCode).toBe(200);
+    const again = await ask();
+    expect(again.statusCode).toBe(409);
+    expect(again.json().error).toMatch(/^ja_pedida: f1/);
+  });
+
   it("'não fazer' (skip) também é desta rota, com as mesmas permissões", async () => {
     const w = await world();
     const started = (await startReview(w)).json().review as { id: string; reviewerCardId: string };

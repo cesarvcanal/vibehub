@@ -217,7 +217,7 @@ function ItemLines({
 }
 
 /** Past this many characters, what was said of a finding comes clamped, with "ver mais". */
-const SAID_CLAMP_CHARS = 240;
+export const SAID_CLAMP_CHARS = 240;
 
 /**
  * One finding an AI line is about, as a message of its own: what it is and where it stands after
@@ -238,7 +238,8 @@ function ItemLine({
   const [open, setOpen] = React.useState(false);
   const where = finding?.file ? (finding.line ? `${finding.file}:${finding.line}` : finding.file) : null;
   const said = item.reply ?? (item.isNew ? finding?.fix : undefined);
-  const long = (said?.length ?? 0) > SAID_CLAMP_CHARS;
+  const problem = item.isNew && !item.reply ? finding?.problem : undefined;
+  const long = (said?.length ?? 0) > SAID_CLAMP_CHARS || (problem?.length ?? 0) > SAID_CLAMP_CHARS;
   return (
     <Bubble testId="review-line-item" reviewer={reviewer} fresh={fresh} status={item.status}>
       <div className="flex items-center gap-1.5">
@@ -258,6 +259,12 @@ function ItemLine({
       </div>
       {finding ? <p className="break-words font-medium leading-snug">{finding.title}</p> : null}
       {where ? <code className="block break-all font-mono text-[10px] text-muted-foreground">{where}</code> : null}
+      {problem ? (
+        <p data-testid="review-line-problem" className={cn("whitespace-pre-wrap break-words leading-relaxed text-foreground/90", long && !open && "line-clamp-4")}>
+          <span className="text-muted-foreground">{t("review.conversation.problem")} </span>
+          {problem}
+        </p>
+      ) : null}
       {said ? (
         <p data-testid="review-line-said" className={cn("whitespace-pre-wrap break-words leading-relaxed text-foreground/90", long && !open && "line-clamp-4")}>
           {item.isNew && !item.reply ? <span className="text-muted-foreground">{t("review.conversation.fix")} </span> : null}

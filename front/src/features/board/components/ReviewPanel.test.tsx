@@ -310,7 +310,7 @@ describe("ReviewPanel — o que mostra", () => {
   it("cada achado de uma fala da IA vira uma mensagem própria, depois do resumo, do lado de quem falou", async () => {
     open("aut", review({
       findings: [
-        finding({ id: "f1", title: "Bloqueio A", file: "src/a.ts", line: 12, fix: "valide antes de gravar" }),
+        finding({ id: "f1", title: "Bloqueio A", file: "src/a.ts", line: 12, fix: "valide antes de gravar", problem: "grava pedido sem cliente" }),
         finding({ id: "f2", severity: "suggestion", title: "Sugestão B" }),
       ],
       log: [
@@ -328,7 +328,9 @@ describe("ReviewPanel — o que mostra", () => {
     expect(items.map((i) => i.getAttribute("data-who"))).toEqual(["reviewer", "reviewer", "author"]);
     expect(items[0]).toHaveTextContent("Bloqueio A");
     expect(items[0]).toHaveTextContent("src/a.ts:12");
-    expect(items[0]).toHaveTextContent("Como corrigir: valide antes de gravar");
+    expect(within(items[0]).getByTestId("review-line-problem")).toHaveTextContent("O problema: grava pedido sem cliente");
+    expect(items[0]).toHaveTextContent("Como resolver: valide antes de gravar");
+    expect(within(items[1]).queryByTestId("review-line-problem")).toBeNull();
     expect(items[1]).toHaveTextContent("Sugestão B");
     expect(items[2]).toHaveTextContent("validação no service");
     expect(items[2]).toHaveTextContent("commit abc1234");
@@ -982,10 +984,10 @@ describe("ReviewPanel — dúvidas e impasse", () => {
     expect(screen.queryByTestId("decision-banner")).toBeNull();
   });
 
-  it("cada achado mostra onde, por quê e a proposta do revisor", async () => {
+  it("cada achado mostra o problema, como resolver, onde e por quê", async () => {
     open("rev", review({
       phase: "reviewing", findings: [doubt({
-        file: "src/a.ts", line: 9, fix: "trocar por Decimal",
+        file: "src/a.ts", line: 9, fix: "trocar por Decimal", problem: "O total do pedido sai com centavos a menos.",
         proof: { kind: "scenario", ref: "src/a.ts:9", detail: "soma de centavos perde precisão" },
       })],
     }));
@@ -993,7 +995,26 @@ describe("ReviewPanel — dúvidas e impasse", () => {
     const card = cardOf("O cálculo está certo?");
     expect(within(card).getByText("Onde").nextElementSibling).toHaveTextContent("src/a.ts:9");
     expect(within(card).getByText("Por quê").nextElementSibling).toHaveTextContent("soma de centavos perde precisão");
-    expect(within(card).getByText("Proposta").nextElementSibling).toHaveTextContent("trocar por Decimal");
+    expect(within(card).getByText("O problema").nextElementSibling).toHaveTextContent("O total do pedido sai com centavos a menos.");
+    expect(within(card).getByText("Como resolver").nextElementSibling).toHaveTextContent("trocar por Decimal");
+  });
+
+  it("problema longo no card vem recolhido, com ver mais / ver menos", async () => {
+    open("rev", review({ phase: "reviewing", findings: [doubt({ problem: "o total sai errado. ".repeat(30) })] }));
+    await loaded();
+    const card = cardOf("O cálculo está certo?");
+    const more = within(card).getByRole("button", { name: "ver mais" });
+    expect(more).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(more);
+    expect(within(card).getByRole("button", { name: "ver menos" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("achado antigo, sem problema nem proposta, não mostra os blocos vazios", async () => {
+    open("rev", review({ phase: "reviewing", findings: [doubt()] }));
+    await loaded();
+    const card = cardOf("O cálculo está certo?");
+    expect(within(card).queryByText("O problema")).toBeNull();
+    expect(within(card).queryByText("Como resolver")).toBeNull();
   });
 });
 
@@ -1023,7 +1044,7 @@ describe("ReviewPanel — sugestões: fazer ou não fazer", () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Enviado: 1 pro autor fazer, 1 fora da lista"));
   });
 
-  it("clicar de novo na mesma escolha desfaz; 'marcar todas pra fazer' escolhe todas as em aberto", async () => {
+  it("clicar de novo na mesma escolha desfaz; 'Fazer todas e enviar' manda todas as em aberto num clique", async () => {
     open("aut", review({ phase: "ready", findings: suggestions }));
     await loaded();
     await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
@@ -1031,9 +1052,71 @@ describe("ReviewPanel — sugestões: fazer ou não fazer", () => {
     await userEvent.click(skip);
     await userEvent.click(skip);
     expect(skip).toHaveAttribute("aria-checked", "false");
-    await userEvent.click(screen.getByRole("button", { name: "marcar todas pra fazer" }));
-    await userEvent.click(screen.getByRole("button", { name: "Confirmar: 2 pra fazer, 0 pra não fazer" }));
+    await userEvent.click(screen.getByRole("button", { name: "Fazer todas e enviar (2)" }));
     expect(post).toHaveBeenLastCalledWith("/reviews/r1/suggestions", { apply: ["s1", "s2"], skip: [] });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Enviado: 2 pro autor fazer, 0 fora da lista"));
+  });
+
+  it("'Fazer todas e enviar' respeita as marcadas como 'Não fazer'", async () => {
+    open("aut", review({ phase: "ready", findings: suggestions }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    await userEvent.click(within(choices("Renomear pump")).getByRole("radio", { name: /Não fazer/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Fazer todas e enviar (1)" }));
+    expect(post).toHaveBeenLastCalledWith("/reviews/r1/suggestions", { apply: ["s2"], skip: ["s1"] });
+  });
+
+  it("sugestão já pedida ao autor mostra de quem foi o pedido e não oferece escolha de novo", async () => {
+    const requested = { by: "mussa", at: 1 };
+    open("aut", review({
+      phase: "ready",
+      findings: [{ ...suggestions[0]!, requested }, suggestions[1]!, suggestions[2]!],
+    }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    const card = screen.getByText("Renomear pump").closest("[data-testid=finding]") as HTMLElement;
+    expect(within(card).getByTestId("finding-requested")).toHaveTextContent("pedida ao autor por mussa");
+    expect(within(card).getByTestId("finding-requested")).toHaveAttribute("title", "Pedida em 31/12/1969 21:00 (horário de Brasília)");
+    expect(screen.queryByRole("radiogroup", { name: "O que fazer com: Renomear pump" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Fazer todas e enviar (1)" }));
+    expect(post).toHaveBeenLastCalledWith("/reviews/r1/suggestions", { apply: ["s2"], skip: [] });
+  });
+
+  it("o resumo do pronto separa as sugestões que esperam escolha das que estão com o autor", async () => {
+    const requested = { by: "mussa", at: 1 };
+    open("aut", review({ phase: "ready", findings: [{ ...suggestions[0]!, requested }, suggestions[1]!, suggestions[2]!] }));
+    await loaded();
+    expect(screen.getByText(/Analisado\. Nenhum bloqueante\./)).toHaveTextContent(
+      "Analisado. Nenhum bloqueante. 1 sugestão em aberto, que não bloqueia. 1 sugestão com o autor aplicando.",
+    );
+  });
+
+  it("todas já pedidas: some a barra de enviar", async () => {
+    const requested = { by: "mussa", at: 1 };
+    open("aut", review({ phase: "ready", findings: suggestions.map((f) => ({ ...f, requested })) }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    expect(screen.queryByTestId("suggestions-request")).toBeNull();
+  });
+
+  it("envio recusado mantém as escolhas da pessoa", async () => {
+    post.mockRejectedValue(failure(409, { error: "ja_pedida: s1" }));
+    open("aut", review({ phase: "ready", findings: suggestions }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    await userEvent.click(within(choices("Renomear pump")).getByRole("radio", { name: /Não fazer/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Fazer todas e enviar (1)" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(within(choices("Renomear pump")).getByRole("radio", { name: /Não fazer/ })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("com todas marcadas 'Não fazer', 'Fazer todas e enviar' fica desligado", async () => {
+    open("aut", review({ phase: "ready", findings: suggestions }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    await userEvent.click(within(choices("Renomear pump")).getByRole("radio", { name: /Não fazer/ }));
+    await userEvent.click(within(choices("Extrair helper")).getByRole("radio", { name: /Não fazer/ }));
+    expect(screen.getByRole("button", { name: "Fazer todas e enviar (0)" })).toBeDisabled();
   });
 
   it("quem não tem papel na revisão, ou revisão encerrada, não escolhe", async () => {

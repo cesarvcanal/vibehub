@@ -10,6 +10,7 @@ import {
   mergeFailure,
   pendingQuestions,
   prStripCounts,
+  requestedAtText,
   readsPerPr,
   reviewActions,
   reviewIsOpen,
@@ -449,5 +450,12 @@ describe("conversationRows", () => {
     const same = [{ at: 5, round: 1, who: "system" as const, text: "x" }, { at: 5, round: 1, who: "system" as const, text: "x" }];
     const keys = conversationRows(same).map((r) => r.key);
     expect(new Set(keys).size).toBe(keys.length);
+  });
+});
+
+describe("requestedAtText", () => {
+  it("dá a hora de São Paulo, qualquer que seja o fuso do navegador", () => {
+    expect(requestedAtText(Date.UTC(2026, 10, 9, 22, 40))).toBe("09/11/2026 19:40");
+    expect(requestedAtText(Date.UTC(2026, 10, 10, 2, 5))).toBe("09/11/2026 23:05");
   });
 });

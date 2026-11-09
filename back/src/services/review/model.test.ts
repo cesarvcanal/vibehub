@@ -38,6 +38,13 @@ describe("normalizeSubmittedFindings", () => {
     expect(ok[1].id).toBe("f2");
   });
 
+  it("guarda o problema explicado e como resolver que o revisor mandou", () => {
+    const [f] = normalizeSubmittedFindings(
+      [{ severity: "suggestion", title: "cache sem teto", problem: "O mapa cresce sem limite e derruba o back.", fix: "Use um LRU de 500." }],
+      1, []);
+    expect(f).toMatchObject({ problem: "O mapa cresce sem limite e derruba o back.", fix: "Use um LRU de 500." });
+  });
+
   it("ids continuam depois dos já existentes", () => {
     const out = normalizeSubmittedFindings([{ severity: "suggestion", title: "n" }], 1, [finding(), finding({ id: "f2" })]);
     expect(out[0].id).toBe("f3");
@@ -171,5 +178,19 @@ describe("autoMergeEligible", () => {
     expect(autoMergeEligible(ready([finding({ status: "contested" })]))).toBe(false);
     expect(autoMergeEligible({ ...ready([]), phase: "reviewing" })).toBe(false);
     expect(autoMergeEligible({ ...ready([]), reviewedSha: undefined })).toBe(false);
+  });
+});
+
+describe("requested — o pedido ao autor acaba quando o achado muda de mão (f10)", () => {
+  const requested = { by: "mussa", at: 1 };
+
+  it("a resposta do autor apaga o pedido", () => {
+    const r = review([finding({ severity: "suggestion", requested })]);
+    expect(applyAuthorResponses(r, [{ id: "f1", status: "fixed", reply: "feito" }])[0]!.requested).toBeUndefined();
+  });
+
+  it("o veredito do revisor apaga o pedido", () => {
+    const r = review([finding({ severity: "suggestion", requested })]);
+    expect(applyReviewerVerdicts(r, [{ id: "f1", status: "open" }])[0]!.requested).toBeUndefined();
   });
 });
