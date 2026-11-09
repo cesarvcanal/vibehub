@@ -1,13 +1,14 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { requireSession, requestUser } from "../auth/session.js";
-import { cardLevel, requireCardAccess, requireCardWork } from "../auth/access.js";
+import { requireCardAccess, requireCardWork } from "../auth/access.js";
 import { creatorAccountSlug, getUserGit } from "../auth/userGit.js";
-import { listUsers, type PublicUser } from "../auth/users.js";
+import type { PublicUser } from "../auth/users.js";
 import * as registry from "../services/board/registry.js";
 import {
-  cancelReview, decideQuestion, decideSuggestions, retryReview, startReview, syncReviewSoon,
+  cancelReview, decideQuestion, decideSuggestions, retryReview, syncReviewSoon,
 } from "../services/review/orchestrator.js";
-import { mergeReviewedPr, ownGithubConnection } from "../services/review/merge.js";
+import { reachingCard, startReviewChecked } from "../services/review/start.js";
+import { mergeReviewedPr } from "../services/review/merge.js";
 import { isBusy } from "../services/maestro/maestro.js";
 import { activeReviewFor, getReview, listReviewsFollowedBy, listReviewsForCards } from "../services/review/store.js";
 import type { Review } from "../services/review/model.js";
@@ -31,8 +32,9 @@ import type { Review } from "../services/review/model.js";
 type Decision = "block" | "drop" | "keep" | "accept_risk";
 const DECISIONS: ReadonlySet<string> = new Set<Decision>(["block", "drop", "keep", "accept_risk"]);
 
-/** Os códigos que `startReview` põe na mensagem: recusa do pedido, não falha do servidor. */
-const START_REFUSALS = /^(revisor_igual_autor|sem_pr|pr_mergeado|revisao_ativa|revisor_sem_conta|autor_sem_conta)\b/;
+/** Os códigos que `startReviewChecked`/`startReview` põem na mensagem: recusa do pedido, não falha do servidor. */
+const START_REFUSALS =
+  /^(revisor_igual_autor|sem_pr|pr_mergeado|revisao_ativa|revisor_sem_conta|autor_sem_conta|papeis_obrigatorios|card_de_revisor|pessoa_sem_acesso|papel_sem_work|revisor_sem_github)\b/;
 
 interface StartBody {
   prNumber?: unknown;
@@ -48,17 +50,6 @@ interface StartBody {
  * ele que o diálogo acha o autor de um PR anexado (quem o abriu no GitHub).
  */
 interface Person { id: string; username: string; canReview: boolean; githubLogin?: string }
-
-/** Quem alcança o card: os owners (veem tudo) e quem tem share no card ou no projeto dele. */
-async function reachingCard(card: registry.Card): Promise<PublicUser[]> {
-  const [users, onCard, onProject] = await Promise.all([
-    listUsers(),
-    registry.sharesForTarget("card", card.id),
-    registry.sharesForTarget("project", card.projectId),
-  ]);
-  const shared = new Set([...onCard, ...onProject].map((s) => s.userId));
-  return users.filter((u) => u.role === "owner" || shared.has(u.id));
-}
 
 /** As pessoas do card para a janela de papéis (ver {@link Person}). */
 async function cardPeople(card: registry.Card): Promise<Person[]> {
@@ -137,50 +128,23 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
       const body = req.body ?? {};
       const prNumber = typeof body.prNumber === "number" ? body.prNumber : Number.NaN;
       if (!Number.isInteger(prNumber) || prNumber <= 0) return await reply.code(400).send({ error: "prNumber inválido" });
-      const roles = {
-        reviewerUserId: str(body.reviewerUserId),
-        authorUserId: str(body.authorUserId),
-        mergerUserId: str(body.mergerUserId),
-      };
-      const missing = Object.entries(roles).filter(([, v]) => !v).map(([k]) => k);
-      if (missing.length) return await reply.code(400).send({ error: `papéis obrigatórios: ${missing.join(", ")}` });
       const coauthorUserId = str(body.coauthorUserId) || undefined;
       if (body.coauthorUserId !== undefined && body.coauthorUserId !== null && !coauthorUserId) {
         return await reply.code(400).send({ error: "coauthorUserId inválido" });
       }
       const card = await registry.getCard(req.params.id);
       if (!card) return await reply.code(404).send({ error: "card not found" });
-      if (card.reviewOf) return await reply.code(400).send({ error: "o card de um revisor não é revisado" });
-      // Cada papel é alguém que alcança o card; quem não está na lista de pessoas não teria por onde acompanhar.
-      const reaching = new Map((await reachingCard(card)).map((u) => [u.id, u]));
-      const outside = Object.entries({ ...roles, ...(coauthorUserId ? { coauthorUserId } : {}) })
-        .filter(([, id]) => !reaching.has(id))
-        .map(([k]) => k);
-      if (outside.length) {
-        return await reply.code(400).send({ error: `pessoa_sem_acesso: ${outside.join(", ")} não alcança este card` });
-      }
-      // O autor vira ator do card a cada relay (commit e push na conta dele) e o merger opera nele: os
-      // dois precisam de `work` aqui, senão a revisão roda inteira e trava no papel de quem não pode.
-      // O revisor age no card DELE, e o orquestrador garante o `work` lá.
-      const withoutWork: string[] = [];
-      for (const key of ["authorUserId", "mergerUserId"] as const) {
-        if ((await cardLevel(reaching.get(roles[key]) ?? null, card.id)) !== "work") withoutWork.push(key);
-      }
-      if (withoutWork.length) {
-        return await reply.code(400).send({ error: `papel_sem_work: ${withoutWork.join(", ")} só tem leitura neste card` });
-      }
-      // Os reviews do PR saem do card do revisor, na identidade dele: sem conexão própria, iriam na do
-      // projeto (a regra do merger vale aqui também; owner sem conexão usa a do projeto). Revisor igual
-      // ao autor fica com a recusa própria, do `startReview`.
-      const reviewer = reaching.get(roles.reviewerUserId);
-      if (reviewer && reviewer.id !== roles.authorUserId && !(await ownGithubConnection(reviewer, card))) {
-        return await reply.code(400).send({
-          error: "revisor_sem_github: o revisor não tem uma conexão GitHub própria no vibehub (os reviews do PR sairiam na conta de outra pessoa)",
-        });
-      }
       try {
-        const review = await startReview({
-          cardId: card.id, prNumber, ...roles, ...(coauthorUserId ? { coauthorUserId } : {}), by: user.username,
+        const review = await startReviewChecked({
+          card,
+          prNumber,
+          requester: user,
+          roles: {
+            reviewerUserId: str(body.reviewerUserId),
+            authorUserId: str(body.authorUserId),
+            mergerUserId: str(body.mergerUserId),
+            ...(coauthorUserId ? { coauthorUserId } : {}),
+          },
         });
         return await reply.send({ review });
       } catch (err) {

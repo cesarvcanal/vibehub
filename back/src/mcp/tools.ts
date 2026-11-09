@@ -13,6 +13,7 @@ import { moveCards, AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX } from "./cardMove.js"
 import { submitReviewerRound, submitAuthorResponse, reviewToolAnswer, HEAD_SHA_RE } from "../services/review/orchestrator.js";
 import { MAX_ROUNDS } from "../services/review/model.js";
 import { attachPrs } from "../services/review/attach.js";
+import { startReviewByAgent } from "../services/review/start.js";
 
 /**
  * MAESTRO TOOLS — what one card's agent can do to the OTHER cards.
@@ -486,6 +487,52 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         // O que ESTA chamada registrou: os itens da fala do autor gravada agora (repetida não grava).
         const answered = after.log.filter((e) => e.who === "author" && e.at >= since).reduce((n, e) => n + (e.items?.length ?? 0), 0);
         return ok({ ...reviewToolAnswer(after, "author", a.round), answered });
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_review_start",
+    {
+      description:
+        "PR REVIEW, starting it: the same as the panel's \"Pedir revisão\" button, done FOR the person who " +
+        "gave the order. Use it when the user tells you, in this card, who reviews (and optionally who fixes, " +
+        "who co-authors, who merges) — \"o albert revisa e é coautor\", \"pede revisão pro albert e mergeia " +
+        "quando estiver ok\" — instead of asking them to open the dialog and pick it all again. `card` = YOUR " +
+        "OWN $VIBEHUB_CARD_ID; people are vibehub usernames. Defaults are the dialog's: `author` (who fixes) = " +
+        "the person working this card (the PR's opener for an attached PR), `merger` = the person who gave " +
+        "the order, `pr` = the card's only open PR. Deliver the PR first (vibehub_deliver) so the card has " +
+        "one. The reviewer AI and the author's fixing AI then run by themselves; when the review ends ready " +
+        "with nothing open (no blocking, question or suggestion standing, Approve on GitHub, gate green, no " +
+        "conflict) the server MERGES BY ITSELF in the merger's name — nobody has to come back to press " +
+        "anything. Anything left standing goes to the merger's button. Refusals carry a code (pessoa_" +
+        "desconhecida, revisor_igual_autor, revisor_sem_conta, revisor_sem_github, papel_sem_work, " +
+        "revisao_ativa, sem_pr, ...): tell the user exactly that. Returns { review, phase, roles, next }.",
+      inputSchema: {
+        card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this terminal"),
+        reviewer: z.string().min(1).describe("vibehub username of who reviews (e.g. 'albert')"),
+        author: z.string().optional().describe("username of who fixes (the PR assignee). Absent = the dialog's default."),
+        coauthor: z.string().optional().describe("username credited as co-author on the fix commits. Absent = nobody."),
+        merger: z.string().optional().describe("username of the only person who merges. Absent = who gave the order."),
+        pr: z.number().int().positive().optional().describe("the card's PR number. Absent = its only open PR."),
+      },
+    },
+    async (a) => {
+      try {
+        const r = await startReviewByAgent(a.card, {
+          reviewer: a.reviewer, author: a.author, coauthor: a.coauthor, merger: a.merger, pr: a.pr,
+        });
+        return ok({
+          review: r.id,
+          pr: r.prNumber,
+          phase: r.phase,
+          roles: { reviewer: a.reviewer, author: a.author ?? "(padrão)", coauthor: a.coauthor ?? null, merger: a.merger ?? "(quem deu a ordem)" },
+          next:
+            "tell the user the review started with these roles; it runs by itself and merges by itself " +
+            "when it ends ready with nothing open — anything left standing waits for the merger's button",
+        });
       } catch (e) {
         return fail(e);
       }

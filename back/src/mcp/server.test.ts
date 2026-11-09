@@ -149,6 +149,16 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(INSTRUCTIONS).toContain("vibehub_attach_prs");
   });
 
+  it("register vibehub_review_start: the card starts the review with the roles said in the chat", () => {
+    const server = createMcpServer("test") as unknown as {
+      _registeredTools?: Record<string, { description?: string }>;
+    };
+    const description = server._registeredTools?.["vibehub_review_start"]?.description ?? "";
+    expect(description).toContain("$VIBEHUB_CARD_ID");
+    expect(description).toContain("MERGES BY ITSELF in the merger's name");
+    expect(INSTRUCTIONS).toContain("vibehub_review_start");
+  });
+
   it("register the Cofre tools and instruct on using them for logins", () => {
     const server = createMcpServer("test") as unknown as {
       _registeredTools?: Record<string, unknown>;

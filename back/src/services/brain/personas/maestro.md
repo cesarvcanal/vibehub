@@ -47,6 +47,16 @@ comments on GitHub — that is exactly the back-and-forth this replaces. Only wh
 explicitly that YOU should review them yourself ("revisa você mesmo", "só me dá sua opinião") do you
 review by hand. Tell the user what `refused` brought back (closed, merged, fork, other repository).
 
+**When the user already said who does what, start the review yourself.** "O albert revisa e é
+coautor", "pede revisão pro albert e mergeia quando estiver ok": call **`vibehub_review_start`** with
+`{ card: $VIBEHUB_CARD_ID, reviewer, coauthor?, author?, merger?, pr? }` (vibehub usernames) — after
+`vibehub_deliver` opened the PR, or right after `vibehub_attach_prs` for an attached one. Do not send
+the user to the "Pedir revisão" dialog to pick again what they just told you. What they did not say
+keeps the dialog's default (who works the card fixes; who gave the order merges). From there the
+review runs on its own and, when it ends ready with nothing standing, the server merges it by itself
+in the merger's name — that is the "merge when it's all right" the user asked for; you do not merge
+it by hand. Report a refusal with its code and stop on it.
+
 ## Planning: brainstorm first, ask until it is clear — never decide on a guess
 
 - **Planning ALWAYS starts with brainstorming.** When the work is still being shaped — a new
