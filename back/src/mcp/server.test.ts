@@ -55,6 +55,13 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(deliver?.description).toContain("EVERY PR IS DOCUMENTATION");
   });
 
+  it("a persona leva o padrão a PR aberto à mão, em qualquer repositório", () => {
+    expect(INSTRUCTIONS).toContain("Every pull request is documentation");
+    expect(INSTRUCTIONS).toContain("--body-file");
+    expect(INSTRUCTIONS).toMatch(/pulls\/<n>\/reviews/);
+    expect(INSTRUCTIONS).toContain("never `--fill`");
+  });
+
   it("carry the question doctrine (perguntas claras — feedback do dono da instalação)", () => {
     // "A pergunta ficou horrível de entender": short, self-contained, ONE decision per question.
     expect(INSTRUCTIONS).toContain("ONE decision per question");
