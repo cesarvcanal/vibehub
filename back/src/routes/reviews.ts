@@ -226,7 +226,8 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
       try {
         return await reply.send({ review: await decideSuggestions(found.review.id, { apply, skip }, found.user.username) });
       } catch (err) {
-        return await fail(reply, err, /revisao_encerrada|envio_falhou/);
+        // ja_pedida: outra pessoa (ou outra aba) já mandou a mesma sugestão ao autor — conflito, não pedido inválido.
+        return await fail(reply, err, /revisao_encerrada|envio_falhou|ja_pedida/);
       }
     },
   );
