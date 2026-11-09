@@ -1543,6 +1543,8 @@ export const en: Record<string, string> = {
   "review.verdict.readyNone": "Reviewed. No blockers.",
   "review.verdict.suggestions.one": "{n} suggestion still open, which does not block.",
   "review.verdict.suggestions.other": "{n} suggestions still open, which do not block.",
+  "review.verdict.withAuthor.one": "{n} suggestion with the author, being applied.",
+  "review.verdict.withAuthor.other": "{n} suggestions with the author, being applied.",
   "review.merge": "Merge into {base}",
   "review.merge.pending": "Merging…",
   "review.merge.authorWorking": "Wait for the author's AI to finish: the merge opens up when it stops, and whatever it pushes goes back to the reviewer first.",

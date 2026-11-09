@@ -735,11 +735,15 @@ function Verdict({ review }: { review: Review }) {
 
   const blocking = review.findings.filter((f) => f.severity === "blocking");
   const resolved = blocking.filter((f) => !findingIsOpen(f)).length;
-  const suggestions = review.findings.filter((f) => f.severity === "suggestion" && f.status === "open").length;
+  // The ones already sent to the author are not waiting on anyone's choice: said apart.
+  const open = review.findings.filter((f) => f.severity === "suggestion" && f.status === "open");
+  const withAuthor = open.filter((f) => f.requested).length;
+  const suggestions = open.length - withAuthor;
   return (
     <VerdictBox tone="ok">
       {blocking.length > 0 ? t("review.verdict.ready", { resolved, total: blocking.length }) : t("review.verdict.readyNone")}
       {suggestions > 0 ? ` ${t("review.verdict.suggestions", { n: suggestions })}` : ""}
+      {withAuthor > 0 ? ` ${t("review.verdict.withAuthor", { n: withAuthor })}` : ""}
     </VerdictBox>
   );
 }

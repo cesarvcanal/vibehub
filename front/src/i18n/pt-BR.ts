@@ -1555,6 +1555,8 @@ export const ptBR: Record<string, string> = {
   "review.verdict.readyNone": "Analisado. Nenhum bloqueante.",
   "review.verdict.suggestions.one": "{n} sugestão em aberto, que não bloqueia.",
   "review.verdict.suggestions.other": "{n} sugestões em aberto, que não bloqueiam.",
+  "review.verdict.withAuthor.one": "{n} sugestão com o autor aplicando.",
+  "review.verdict.withAuthor.other": "{n} sugestões com o autor aplicando.",
   "review.merge": "Mergear na {base}",
   "review.merge.pending": "Mergeando…",
   "review.merge.authorWorking": "Espere a IA do autor terminar: o merge libera quando ela parar, e o que ela empurrar volta pro revisor antes.",

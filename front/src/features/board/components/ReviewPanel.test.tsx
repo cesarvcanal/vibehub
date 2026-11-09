@@ -1071,6 +1071,15 @@ describe("ReviewPanel — sugestões: fazer ou não fazer", () => {
     expect(post).toHaveBeenLastCalledWith("/reviews/r1/suggestions", { apply: ["s2"], skip: [] });
   });
 
+  it("o resumo do pronto separa as sugestões que esperam escolha das que estão com o autor", async () => {
+    const requested = { by: "mussa", at: 1 };
+    open("aut", review({ phase: "ready", findings: [{ ...suggestions[0]!, requested }, suggestions[1]!, suggestions[2]!] }));
+    await loaded();
+    expect(screen.getByText(/Analisado\. Nenhum bloqueante\./)).toHaveTextContent(
+      "Analisado. Nenhum bloqueante. 1 sugestão em aberto, que não bloqueia. 1 sugestão com o autor aplicando.",
+    );
+  });
+
   it("todas já pedidas: some a barra de enviar", async () => {
     const requested = { by: "mussa", at: 1 };
     open("aut", review({ phase: "ready", findings: suggestions.map((f) => ({ ...f, requested })) }));
