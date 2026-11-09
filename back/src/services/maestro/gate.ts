@@ -291,6 +291,18 @@ const MAX_CHECK_NAME = 200;
 
 const byteLength = (s: string): number => Buffer.byteLength(s, "utf8");
 
+/**
+ * Causes the gate can name with confidence, said as what to do. They are about the WORKTREE, not the
+ * code: a red gate that is a missing install must not send anyone hunting a bug (PR #215 of
+ * tech.multi: the front's `@vitejs/plugin-react` was never installed in the card). PURE.
+ */
+function gateHints(text: string): string[] {
+  const hints: string[] = [];
+  const missing = /Cannot find (?:package|module) '([^']+)'/.exec(text)?.[1];
+  if (missing) hints.push(`[vibehub] dependência faltando na worktree (${missing}): rode npm install no card e entregue de novo`);
+  return hints;
+}
+
 /** The error lines, strong first then weak, within the budget, in the order they appeared. PURE. */
 function errorLines(text: string): string[] {
   const lines = text.replace(ANSI, "").split("\n").map((l, i) => ({ l: l.length > 300 ? `${l.slice(0, 299)}…` : l, i }));
@@ -325,7 +337,8 @@ export function gateFailureOutput(output: string, stopped?: "timeout" | "died"):
   if (!raw) return tailOutput(text);
   const check = raw.length > MAX_CHECK_NAME ? `${raw.slice(0, MAX_CHECK_NAME - 1)}…` : raw;
   const what = stopped === "timeout" ? "passou do prazo durante o check" : stopped === "died" ? "parou durante o check" : "falhou no check";
-  const header = `[vibehub] o gate ${what}: ${check}\n\n`;
+  const hints = gateHints(text);
+  const header = `[vibehub] o gate ${what}: ${check}\n${hints.length ? `${hints.join("\n")}\n` : ""}\n`;
   if (byteLength(header) + byteLength(text) <= GATE_OUTPUT_TAIL_BYTES) return header + text;
 
   const errors = errorLines(text);

@@ -99,4 +99,15 @@ describe("gateFailureOutput — o vermelho mostra o que falhou", () => {
   it("sem cabeçalho de check (o script morreu antes) devolve a saída como veio", () => {
     expect(gateFailureOutput("boom")).toBe("boom");
   });
+
+  it("dependência faltando na worktree vira uma dica do que fazer, logo abaixo do cabeçalho", () => {
+    const out = gateFailureOutput(npmWorkspacesRun());
+    expect(out.split("\n").slice(0, 4).join("\n")).toContain(
+      "[vibehub] dependência faltando na worktree (@vitejs/plugin-react): rode npm install no card e entregue de novo",
+    );
+  });
+
+  it("sem dependência faltando, nenhuma dica", () => {
+    expect(gateFailureOutput("=== gate: npm test ===\n FAIL  a.test.ts")).not.toContain("dependência faltando");
+  });
 });
