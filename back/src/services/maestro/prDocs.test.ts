@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { missingPrSections, PR_SECTIONS } from "./prDocs.js";
+import { validatePrDocs, missingPrSections, MIN_COMMENT_CHARS, PR_SECTIONS } from "./prDocs.js";
 
 /** A body with every section the standard asks for, as an agent following the tool would write it. */
 const BODY = [
@@ -46,6 +46,68 @@ describe("missingPrSections — the description has every section of the standar
 
   it("an empty body misses everything", () => {
     expect(missingPrSections("")).toHaveLength(PR_SECTIONS.length);
+  });
+});
+
+describe("validatePrDocs", () => {
+  it("nothing given is valid and empty: an existing PR is reused untouched", () => {
+    expect(validatePrDocs({})).toEqual({ ok: true, docs: { comments: [] } });
+    expect(validatePrDocs(undefined)).toEqual({ ok: true, docs: { comments: [] } });
+  });
+
+  it("normalizes: trims, collapses the title to one line, defaults the side to RIGHT, drops repeated comments", () => {
+    const v = validatePrDocs({
+      title: "  feat(deliver):\n PR documentado  ",
+      body: `\n${BODY}\n`,
+      comments: [COMMENT, { ...COMMENT, body: `  ${EXPLAINED}  ` }, { ...COMMENT, path: "y.ts", side: "LEFT" }],
+    });
+    expect(v.ok).toBe(true);
+    if (!v.ok) return;
+    expect(v.docs.title).toBe("feat(deliver): PR documentado");
+    expect(v.docs.body).toBe(BODY);
+    expect(v.docs.comments).toEqual([
+      { path: "back/src/x.ts", line: 10, side: "RIGHT", body: EXPLAINED },
+      { path: "y.ts", line: 10, side: "LEFT", body: EXPLAINED },
+    ]);
+  });
+
+  it("a body without the sections is refused, naming what is missing", () => {
+    const v = validatePrDocs({ title: "t", body: "## Contexto\nsó isso" });
+    expect(v.ok).toBe(false);
+    if (v.ok) return;
+    expect(v.problems.join("\n")).toContain("Problema identificado");
+    expect(v.problems.join("\n")).toContain("Pontos de atenção");
+  });
+
+  it("a shallow comment is refused — 'Adicionada validação' is exactly what the standard forbids", () => {
+    const v = validatePrDocs({ comments: [{ ...COMMENT, body: "Adicionada validação para verificar os dados antes de continuar." }] });
+    expect(v.ok).toBe(false);
+    if (v.ok) return;
+    expect(v.problems[0]).toContain("back/src/x.ts:10");
+    expect(v.problems[0]).toContain(String(MIN_COMMENT_CHARS));
+  });
+
+  it("refuses positions GitHub cannot resolve: absolute or escaping paths, line < 1, a range that ends before it starts", () => {
+    const bad = [
+      { ...COMMENT, path: "/etc/passwd" },
+      { ...COMMENT, path: "../outside.ts" },
+      { ...COMMENT, path: "" },
+      { ...COMMENT, line: 0 },
+      { ...COMMENT, line: 2.5 },
+      { ...COMMENT, line: 5, startLine: 5 },
+      { ...COMMENT, line: 5, startLine: 9 },
+    ];
+    for (const c of bad) expect(validatePrDocs({ comments: [c] }).ok, JSON.stringify(c)).toBe(false);
+    expect(validatePrDocs({ comments: [{ ...COMMENT, line: 9, startLine: 5 }] }).ok).toBe(true);
+  });
+
+  it("a blank title or body counts as not sent (MCP clients fill optional fields with \"\"): an open PR is reused", () => {
+    expect(validatePrDocs({ title: "   ", body: "", comments: [] })).toEqual({ ok: true, docs: { comments: [] } });
+  });
+
+  it("refuses sizes past GitHub's limits", () => {
+    expect(validatePrDocs({ title: "x".repeat(257) }).ok).toBe(false);
+    expect(validatePrDocs({ body: `${BODY}\n${"x".repeat(65_536)}` }).ok).toBe(false);
   });
 });
 
