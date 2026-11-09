@@ -44,6 +44,17 @@ describe("MCP server instructions (the maestro persona)", () => {
     }
   });
 
+  it("toda entrega de PR é documentação: o vibehub_deliver pede título, corpo e comentários", () => {
+    // Diretriz de 2026-11-09: "isso precisa ser em qualquer PR de qualquer repositório, pois a tool de
+    // abrir PR não tá boa a explicação e contexto nela" — o deliver abria com --fill (lista de commits).
+    const server = createMcpServer("test") as unknown as {
+      _registeredTools?: Record<string, { description?: string; inputSchema?: { shape?: Record<string, unknown> } }>;
+    };
+    const deliver = server._registeredTools?.["vibehub_deliver"];
+    expect(Object.keys(deliver?.inputSchema?.shape ?? {})).toEqual(expect.arrayContaining(["title", "body", "comments"]));
+    expect(deliver?.description).toContain("EVERY PR IS DOCUMENTATION");
+  });
+
   it("carry the question doctrine (perguntas claras — feedback do dono da instalação)", () => {
     // "A pergunta ficou horrível de entender": short, self-contained, ONE decision per question.
     expect(INSTRUCTIONS).toContain("ONE decision per question");
