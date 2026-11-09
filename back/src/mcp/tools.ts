@@ -39,7 +39,7 @@ const fail = (e: unknown) => ok({ error: (e as Error).message });
 const reviewRound = z.number().int().min(1).max(MAX_ROUNDS).describe("the review round you were asked for (1-3)");
 const reviewHeadSha = z.string().regex(HEAD_SHA_RE, "the full sha of `git rev-parse HEAD`")
   .describe("full sha of `git rev-parse HEAD` after you finished (40 hex chars)");
-const reviewFinding = z.object({
+export const reviewFinding = z.object({
   severity: z.enum(["blocking", "suggestion", "question", "refuted"])
     .describe("blocking = only with proof | suggestion | question = a risk you are not sure about (a human decides) | refuted"),
   title: z.string().min(1).max(300).describe("short label of the finding (one line)"),
@@ -57,6 +57,16 @@ const reviewFinding = z.object({
     .describe("how to solve it, concretely: what to change and where, enough for the author to apply without guessing"),
   introducedInRound: z.number().int().min(1).max(MAX_ROUNDS).optional()
     .describe("round 2+: the current round, ONLY for a bug the author's own fix created"),
+}).superRefine((f, ctx) => {
+  // The person decides from the panel, without the code: a finding with only a title is refused here,
+  // at the AI's boundary (the server guarantees, not the prompt). A refuted one is history; a question
+  // may have no fix (it is a doubt).
+  if (f.severity !== "refuted" && !f.problem?.trim()) {
+    ctx.addIssue({ code: "custom", path: ["problem"], message: "problem is required: what is wrong and what happens if it stays, in plain words" });
+  }
+  if ((f.severity === "blocking" || f.severity === "suggestion") && !f.fix?.trim()) {
+    ctx.addIssue({ code: "custom", path: ["fix"], message: "fix is required for blocking and suggestion: how to solve it, concretely" });
+  }
 });
 
 export function registerMaestroTools(server: McpServer, actor: string): void {

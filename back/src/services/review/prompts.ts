@@ -23,6 +23,17 @@ export function oneLine(text: string | undefined, max = 300): string {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
+/**
+ * Um texto explicativo do achado (o problema, como resolver) com as quebras de linha preservadas e
+ * indentadas sob o achado: é o que a pessoa leu no painel, e passos numerados achatados numa linha
+ * perdiam o sentido. Teto alto, o mesmo do schema da ferramenta. PURE.
+ */
+export function indentedBlock(text: string | undefined, indent: string, max = 2000): string {
+  const t = String(text ?? "").replace(/\r/g, "").trim();
+  const capped = t.length > max ? `${t.slice(0, max - 1)}…` : t;
+  return capped.split("\n").map((l) => l.trimEnd()).filter((l, i, all) => l !== "" || (all[i - 1] ?? "") !== "").join(`\n${indent}`);
+}
+
 const STATUS_PT: Record<FindingStatus, string> = {
   open: "aberto",
   fixed: "corrigido",
@@ -63,11 +74,13 @@ function findingLine(f: Finding): string {
   const tags = [f.severity, STATUS_PT[f.status], f.humanDecision ? `decisão humana: ${f.humanDecision}` : ""].filter(Boolean);
   const head = `- ${f.id} [${tags.join(", ")}] ${oneLine(f.title, 200)}${loc ? ` (${loc})` : ""}`;
   const parts = [`prova: ${proofText(f)}`];
-  if (f.problem) parts.push(`problema: ${oneLine(f.problem, 400)}`);
-  if (f.fix) parts.push(`como resolver: ${oneLine(f.fix, 400)}`);
   if (f.authorReply !== undefined) parts.push(`autor: "${oneLine(f.authorReply)}"${f.commit ? ` (commit ${oneLine(f.commit, 60)})` : ""}`);
   if (f.reviewerReply !== undefined) parts.push(`revisor: "${oneLine(f.reviewerReply)}"`);
-  return `${head}\n    ${parts.join("; ")}`;
+  const blocks = [
+    f.problem ? `\n    problema: ${indentedBlock(f.problem, "      ")}` : "",
+    f.fix ? `\n    como resolver: ${indentedBlock(f.fix, "      ")}` : "",
+  ].join("");
+  return `${head}\n    ${parts.join("; ")}${blocks}`;
 }
 
 const lines = (list: Finding[], empty: string): string => (list.length ? list.map(findingLine).join("\n") : `  (${empty})`);
@@ -157,7 +170,7 @@ export function reviewerRoundPrompt(r: Review): string {
     "   e guarde o sha: git rev-parse HEAD",
     `2. Rode /code-review high no PR #${r.prNumber} (com a etapa de verificação que tenta derrubar cada achado).`,
     `3. ${classification()}`,
-    "4. Publique a rodada no GitHub, na sua conta, com a lista (severidade, arquivo:linha, prova, correção proposta):",
+    "4. Publique a rodada no GitHub, na sua conta, com a lista (severidade, arquivo:linha, problema, prova, como resolver):",
     `   - com algum blocking: gh pr review ${r.prNumber} --request-changes --body "<lista>"`,
     `   - sem blocking: gh pr review ${r.prNumber} --comment --body "<lista>"`,
     ghReviewFallback(TOOL_SUBMIT),

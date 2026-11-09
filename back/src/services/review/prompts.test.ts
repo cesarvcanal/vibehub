@@ -28,6 +28,18 @@ describe("prompts da revisão: achado explicado", () => {
     expect(text).toContain("como resolver: Use um LRU de 500.");
   });
 
+  it("problema e como resolver longos e em passos chegam inteiros, com as quebras indentadas sob o achado", () => {
+    const fix = `1. Troque o Map por um LRU.\n2. Teste o teto.\n${"detalhe ".repeat(100)}`;
+    const f: Finding = { id: "f1", severity: "suggestion", title: "t", status: "open", introducedInRound: 1, problem: "p", fix };
+    const text = authorSuggestionsPrompt(review([f]), [f], { by: "cesar" });
+    expect(text).toContain("como resolver: 1. Troque o Map por um LRU.\n      2. Teste o teto.");
+    expect(text).toContain("detalhe ".repeat(100).trim());
+  });
+
+  it("a lista publicada no GitHub também leva o problema", () => {
+    expect(reviewerRoundPrompt(review())).toMatch(/\(severidade, arquivo:linha, problema, prova, como resolver\)/);
+  });
+
   it("achado antigo, sem problema, segue saindo sem a parte vazia", () => {
     const f: Finding = { id: "f1", severity: "suggestion", title: "t", status: "open", introducedInRound: 1 };
     expect(authorSuggestionsPrompt(review([f]), [f], { by: "cesar" })).not.toContain("problema:");
