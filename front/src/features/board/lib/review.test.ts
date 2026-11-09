@@ -50,7 +50,7 @@ describe("reviewPill", () => {
     expect(reviewPill(review({ phase: "merged" }))).toMatchObject({ key: "review.pill.merged", tone: "muted" });
   });
 
-  it("ready with the author's AI working reads 'IA mexendo' in the orange of work; no other phase changes", () => {
+  it("ready with the author's AI working reads 'IA trabalhando' in the orange of work; no other phase changes", () => {
     expect(reviewPill(review({ phase: "ready" }), { authorWorking: true })).toEqual({ key: "review.pill.authorWorking", tone: "warn" });
     expect(reviewPill(review({ phase: "ready" }), { authorWorking: false })).toMatchObject({ key: "review.pill.ready" });
     expect(reviewPill(review({ phase: "fixing", round: 2 }), { authorWorking: true })).toMatchObject({ key: "review.pill.round" });

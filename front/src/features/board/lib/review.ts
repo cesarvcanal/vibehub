@@ -66,7 +66,7 @@ export function awaitingDecision(review: ReviewSummary & { findings?: Finding[] 
  * round N of 3"; the difference (whose turn) belongs to the panel — except a `reviewing` that waits
  * on a doubt only a person can decide ({@link awaitingDecision}): that one reads "aguardando decisão",
  * in the blue of "needs a person", or it would look like the AIs working. A `ready` whose author's AI
- * is working right now (`authorWorking`: someone sent it to touch the PR) reads "IA mexendo", in the
+ * is working right now (`authorWorking`: someone sent it to touch the PR) reads "IA trabalhando", in the
  * orange of work: what it pushes sends the review back to the reviewer, so "pronto pra merge" would
  * be a lie while it works. A cancelled review is NO review: the server never sends one on a card,
  * and a stale cache must not resurrect it. PURE.

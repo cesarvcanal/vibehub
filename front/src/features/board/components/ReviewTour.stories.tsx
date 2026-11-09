@@ -63,7 +63,7 @@ function Tour() {
         caption={
           <p>
             Um passo a cada 3 segundos, como o painel se move quando o servidor responde: o revisor “digitando”, a rodada
-            dele chegando, o autor corrigindo, a revisão pronta, a IA mexendo depois do pronto, o PR voltando ao revisor e as
+            dele chegando, o autor corrigindo, a revisão pronta, a IA trabalhando depois do pronto, o PR voltando ao revisor e as
             sugestões conferidas. Nada é recarregado: é a mesma leitura ao vivo do app.
           </p>
         }
@@ -117,17 +117,17 @@ function Tour() {
 
       <Section
         n={3}
-        title="Status ao vivo: a IA mexendo num PR pronto"
+        title="Status ao vivo: a IA trabalhando num PR pronto"
         caption={
           <p>
-            Antes: “pronto pra merge” enquanto a IA do autor mudava o código. Agora: a pill vira “IA mexendo” (painel, bloco
-            do card e barra lateral), o merge espera ela terminar, e a conversa mostra “mussa está mexendo no PR” com os
+            Antes: “pronto pra merge” enquanto a IA do autor mudava o código. Agora: a pill vira “IA trabalhando” (painel, bloco
+            do card e barra lateral), o merge espera ela terminar, e a conversa mostra “mussa está trabalhando no PR” com os
             pontinhos. Se ela empurrar commit, a revisão volta sozinha ao revisor.
           </p>
         }
       >
         <Frame label="Painel com a IA do autor trabalhando">
-          <ReviewPanelView {...props(Panel.IaMexendoDepoisDoPronto)} />
+          <ReviewPanelView {...props(Panel.IaTrabalhandoDepoisDoPronto)} />
         </Frame>
         <Frame label="O PR continuou: o revisor confere o que entrou">
           <ReviewPanelView {...props(Panel.PrContinuou)} />

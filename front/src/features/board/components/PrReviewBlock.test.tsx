@@ -180,7 +180,7 @@ describe("PrReviewBlocks", () => {
     // The author's AI starts working on the ready PR: the block says so on the next read.
     live = { ...live, working: { author: true, reviewer: false } };
     await tick(10_100);
-    expect(await screen.findByText("IA mexendo")).toBeInTheDocument();
+    expect(await screen.findByText("IA trabalhando")).toBeInTheDocument();
   });
 
   it("clicar no PR revisado abre o painel sem levar o evento do clique junto (o painel quebrava em JSON circular)", async () => {
@@ -193,12 +193,12 @@ describe("PrReviewBlocks", () => {
     expect(arg === undefined || typeof arg === "number").toBe(true);
   });
 
-  it("before the first read, a ready PR whose author's AI is working already reads IA mexendo (the board's summary)", () => {
+  it("before the first read, a ready PR whose author's AI is working already reads IA trabalhando (the board's summary)", () => {
     get.mockImplementation(() => new Promise(() => {})); // the live read never lands
     renderApp(
       <PrReviewBlocks card={{ id: "c1", prs: [PR], review: reviewOf({ phase: "ready", authorWorking: true }) }} onOpenPanel={() => {}} />,
     );
-    expect(screen.getByText("IA mexendo")).toBeInTheDocument();
+    expect(screen.getByText("IA trabalhando")).toBeInTheDocument();
   });
 
   it("a closed review stops reading; a card that never had one never reads", async () => {

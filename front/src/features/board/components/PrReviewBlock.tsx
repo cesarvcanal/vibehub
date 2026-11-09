@@ -26,7 +26,7 @@ export interface PrReviewBlockProps {
   pr: CardPr;
   /** The card's review, when it is about THIS PR: the live one, or the board's summary. Absent = never reviewed. */
   review?: ReviewSummary & { findings?: Finding[] };
-  /** The author's AI is working right now: a `ready` PR reads "IA mexendo". */
+  /** The author's AI is working right now: a `ready` PR reads "IA trabalhando". */
   authorWorking?: boolean;
   /** Who works the card now: the dialog suggests them as the author. */
   actorUserId?: string;
