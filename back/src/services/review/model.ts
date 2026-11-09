@@ -232,6 +232,20 @@ export function phaseAfterReviewerRound(review: Review): { phase: ReviewPhase; i
 }
 
 /**
+ * QUEM PODE MERGEAR uma revisão pronta: qualquer pessoa com papel nela — o responsável pelo merge,
+ * o revisor, o autor e o coautor. O responsável segue sendo quem o merge automático usa; os outros
+ * existem para o trabalho continuar quando ele não está (produção, 2026-11-09: o Albert, revisor e
+ * coautor, não tinha botão e a revisão pronta parou esperando o César). PURE.
+ */
+export function canMergeReview(
+  review: Pick<Review, "reviewerUserId" | "authorUserId" | "coauthorUserId" | "mergerUserId">,
+  userId: string | undefined,
+): boolean {
+  if (!userId) return false;
+  return [review.mergerUserId, review.reviewerUserId, review.authorUserId, review.coauthorUserId].includes(userId);
+}
+
+/**
  * O merge sai SOZINHO quando não sobrou nada para uma pessoa olhar: revisão em `ready` e nenhum achado
  * em pé, de nenhuma severidade — bloqueante, dúvida ou sugestão aberta/contestada. Sugestão não segura
  * o `ready`, mas segura o merge automático: ela é justamente o que alguém pode querer aplicar antes.

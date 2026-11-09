@@ -118,9 +118,26 @@ describe("deliverCard — o vibehub_deliver com revisão de PR ativa", () => {
     expect(mergeReviewedPr).not.toHaveBeenCalled();
   });
 
-  it("ordem de quem NÃO é o responsável: o push sai, o merge é recusado dizendo quem pode e onde", async () => {
-    const { deliverCard, card } = await cardUnderReview("ready", "u-a");
-    const out = await deliverCard(card.id, { branch: "dev", authorized: true });
+  it("ordem de outro papel da revisão (revisor, autor) no próprio card: o merge sai na conta de QUEM mandou", async () => {
+    for (const actor of ["u-r", "u-a"]) {
+      mergeReviewedPr.mockClear();
+      const { deliverCard, card } = await cardUnderReview("ready", actor);
+      mergeAnswer = {
+        kind: "merged", review: { phase: "merged" } as never,
+        result: { prUrl: PR, merged: true, reason: "merged", branch: "dev", cardBranch: "card/x" },
+      };
+      const out = await deliverCard(card.id, { branch: "dev", authorized: true, from: card.id });
+      expect(mergeReviewedPr).toHaveBeenCalledWith("rev-1", actor);
+      expect(out).toMatchObject({ merged: true });
+      // cada papel num mundo limpo (o afterEach apaga o último)
+      await rm(dir, { recursive: true, force: true });
+      dir = await mkdtemp(join(tmpdir(), "vibehub-deliver-card-"));
+    }
+  });
+
+  it("ordem de quem NÃO tem papel na revisão: o push sai, o merge é recusado dizendo quem pode e onde", async () => {
+    const { deliverCard, card } = await cardUnderReview("ready", "u-x");
+    const out = await deliverCard(card.id, { branch: "dev", authorized: true, from: card.id });
     expect(deliver).toHaveBeenCalledWith(card.id, expect.objectContaining({ pushOnly: true }));
     expect(mergeReviewedPr).not.toHaveBeenCalled();
     expect(out).toMatchObject({ merged: false, reason: "review_active", prUrl: PR });

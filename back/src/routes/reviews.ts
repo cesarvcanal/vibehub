@@ -11,7 +11,7 @@ import { reachingCard, startReviewChecked } from "../services/review/start.js";
 import { mergeReviewedPr } from "../services/review/merge.js";
 import { isBusy } from "../services/maestro/maestro.js";
 import { activeReviewFor, getReview, listReviewsFollowedBy, listReviewsForCards } from "../services/review/store.js";
-import type { Review } from "../services/review/model.js";
+import { canMergeReview, type Review } from "../services/review/model.js";
 
 /**
  * REVISÃO DE PR — a superfície HTTP do orquestrador e o ÚNICO caminho de merge de um PR revisado.
@@ -21,7 +21,7 @@ import type { Review } from "../services/review/model.js";
  *    (`revisor_sem_github`), como o merger;
  *  - quem decide uma dúvida/item travado: o revisor humano (ou um owner);
  *  - quem tenta de novo: revisor, responsável pelo merge ou owner; quem cancela: esses e o autor;
- *  - quem MERGEIA: só o `mergerUserId`, só em `ready`, só se o head do PR ainda é o commit revisado,
+ *  - quem MERGEIA: quem tem papel na revisão (`canMergeReview`), só em `ready`, só se o head do PR ainda é o commit revisado,
  *    e com a conexão GitHub DELE (nunca a do ator do card nem a do projeto, salvo owner sem conexão).
  *
  * As regras de estado (fases, rodadas, relays) moram no orquestrador; aqui ficam quem pode chamar o
@@ -194,7 +194,7 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { id: string } }>("/api/reviews/:id/retry", { preHandler: requireSession }, async (req, reply) => {
     const found = await reviewFor(
       req.params.id, await requestUser(req),
-      (r, u) => u.id === r.reviewerUserId || u.id === r.mergerUserId || isOwner(u), reply,
+      (r, u) => [r.reviewerUserId, r.mergerUserId, r.coauthorUserId].includes(u.id) || isOwner(u), reply,
     );
     if (!found) return;
     try {
@@ -213,7 +213,7 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const found = await reviewFor(
         req.params.id, await requestUser(req),
-        (r, u) => [r.reviewerUserId, r.authorUserId, r.mergerUserId].includes(u.id) || isOwner(u), reply,
+        (r, u) => [r.reviewerUserId, r.authorUserId, r.coauthorUserId, r.mergerUserId].includes(u.id) || isOwner(u), reply,
       );
       if (!found) return;
       const ids = (v: unknown): string[] | null =>
@@ -234,7 +234,7 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { id: string } }>("/api/reviews/:id/cancel", { preHandler: requireSession }, async (req, reply) => {
     const found = await reviewFor(
       req.params.id, await requestUser(req),
-      (r, u) => [r.reviewerUserId, r.authorUserId, r.mergerUserId].includes(u.id) || isOwner(u), reply,
+      (r, u) => [r.reviewerUserId, r.authorUserId, r.coauthorUserId, r.mergerUserId].includes(u.id) || isOwner(u), reply,
     );
     if (!found) return;
     try {
@@ -245,16 +245,16 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
-   * O MERGE. Só o responsável pelo merge (nem o owner: o clique dele é a autorização que a revisão
-   * pediu), só em `ready`, e preso ao commit que o revisor aprovou: o deliver roda em modo só-merge
-   * (sem push) e recusa `head_moved` quando o PR andou — aí a revisão volta à rodada seguinte, ou a
-   * impasse na última. O deliver recebe a conexão GitHub do merger (`ownGithubConnection`); sem uma,
-   * 400 `merger_sem_github` e nada roda. Uma recusa do GitHub (403) volta como veio, sem outra credencial.
-   * As regras moram em `mergeReviewedPr` (services/review/merge.ts): o `vibehub_deliver` do responsável
-   * pelo merge passa pelo mesmo caminho.
+   * O MERGE. Quem tem papel na revisão (`canMergeReview`: responsável, revisor, autor, coautor — o
+   * owner sem papel, não), só em `ready`, e preso ao commit que o revisor aprovou: o deliver roda em
+   * modo só-merge (sem push) e recusa `head_moved` quando o PR andou — aí a revisão volta à rodada
+   * seguinte, ou a impasse na última. O deliver recebe a conexão GitHub de quem clicou
+   * (`ownGithubConnection`); sem uma, 400 `merger_sem_github` e nada roda. Uma recusa do GitHub (403)
+   * volta como veio, sem outra credencial. As regras moram em `mergeReviewedPr`
+   * (services/review/merge.ts): o `vibehub_deliver` de quem tem papel passa pelo mesmo caminho.
    */
   app.post<{ Params: { id: string } }>("/api/reviews/:id/merge", { preHandler: requireSession }, async (req, reply) => {
-    const found = await reviewFor(req.params.id, await requestUser(req), (r, u) => u.id === r.mergerUserId, reply);
+    const found = await reviewFor(req.params.id, await requestUser(req), (r, u) => canMergeReview(r, u.id), reply);
     if (!found) return;
     const outcome = await mergeReviewedPr(found.review.id, found.user.id);
     if (outcome.kind === "merged") return await reply.send({ review: outcome.review, result: outcome.result });

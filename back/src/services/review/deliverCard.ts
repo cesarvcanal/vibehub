@@ -2,7 +2,7 @@ import { findUser } from "../../auth/users.js";
 import { getCard } from "../board/registry.js";
 import { deliver, parsePrUrl, type DeliverOpts, type DeliverResult } from "../maestro/deliver.js";
 import { logger } from "../../utils/logger.js";
-import type { Review } from "./model.js";
+import { canMergeReview, type Review } from "./model.js";
 import { mergeReviewedPr, type ReviewMergeOutcome } from "./merge.js";
 import { activeReviewFor, getReview } from "./store.js";
 
@@ -12,8 +12,8 @@ import { activeReviewFor, getReview } from "./store.js";
  *
  *  - sem revisão ativa, ou sem `authorized`: é o `deliver` de sempre (push → PR → gate → merge);
  *  - com revisão ativa e `authorized`: primeiro o PUSH (só ele, `pushOnly`) — é assim que o autor
- *    entrega a correção, e acontece quem quer que tenha pedido. Depois, o merge é da revisão: só o
- *    responsável pelo merge, só com a revisão pronta e deste PR, e pelo MESMO caminho do botão do
+ *    entrega a correção, e acontece quem quer que tenha pedido. Depois, o merge é da revisão: só
+ *    quem tem papel nela (`canMergeReview`), na conta dela, só com a revisão pronta e deste PR, e pelo MESMO caminho do botão do
  *    painel (`mergeReviewedPr`: só-merge preso ao commit aprovado, conexão GitHub própria dele, a
  *    revisão fechando como mergeada). Quem deu a ordem é o ATOR do card (quem mandou a última
  *    mensagem) — e só quando é o PRÓPRIO card que se entrega (`from` = o card): a IA de outro card
@@ -43,22 +43,24 @@ export async function deliverCard(
   const card = await getCard(cardId);
   const merger = (await findUser(now.mergerUserId))?.username ?? now.mergerUserId;
   const ownCard = opts.from === cardId;
-  const ordered = ownCard && card?.actorUserId === now.mergerUserId;
+  // A ordem vale de quem tem papel na revisão (`canMergeReview`), e o merge sai na conta dela.
+  const orderedBy = ownCard && canMergeReview(now, card?.actorUserId) ? card?.actorUserId : undefined;
   const samePr = parsePrUrl(pushed.prUrl ?? "")?.number === now.prNumber;
-  if (!ordered || !samePr || now.phase !== "ready") {
+  if (!orderedBy || !samePr || now.phase !== "ready") {
     logger.info(
       { audit: true, action: "maestro.deliver", card: cardId, merged: false, reason: "review_active", phase: now.phase, ownCard, by: opts.by },
       "deliver pushed but did not merge: the card's PR is under review",
     );
-    const who = `o merge é de ${merger}, pelo botão "Mergear na ${now.base}" no painel da revisão, ou por este deliver ` +
-      `feito pelo próprio card (from = o id dele) quando a ordem vier de ${merger} com a revisão pronta`;
+    const who = `o merge é de quem tem papel na revisão (responsável: ${merger}; também revisor, autor e coautor), pelo botão ` +
+      `"Mergear na ${now.base}" no painel da revisão, ou por este deliver feito pelo próprio card (from = o id dele) quando a ` +
+      `ordem vier de uma dessas pessoas com a revisão pronta`;
     return {
       ...pushed, reason: "review_active",
       output: `revisão do PR #${now.prNumber} ${reviewStage(now)}: ${who}. O push foi feito: o PR já tem estes commits.`,
     };
   }
 
-  const outcome = await mergeReviewedPr(now.id, now.mergerUserId);
+  const outcome = await mergeReviewedPr(now.id, orderedBy);
   if (outcome.kind === "merged") return { ...pushed, merged: true, reason: "merged", headBranch: outcome.result.headBranch };
   if (outcome.reason === "head_moved") {
     const round = outcome.review?.round ?? now.round + 1;
