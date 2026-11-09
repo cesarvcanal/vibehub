@@ -437,7 +437,10 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "Round 2+: `verdicts` on the closed list (fixed | open | dropped — accepting the author's " +
         "contestation is dropped; accepting a risk is a human decision) and new findings ONLY for a bug the " +
         "fix itself created (`introducedInRound` = the round). A blocking finding needs `proof` " +
-        "(failing_test, rule or scenario), or the server downgrades it to a suggestion. Calling twice for " +
+        "(failing_test, rule or scenario), or the server downgrades it to a suggestion. Every finding is read " +
+        "by a person deciding from the panel, without the code: `problem` (what is wrong and what happens if it " +
+        "stays) is required except on refuted, and `fix` (how to solve it, concretely) on blocking and " +
+        "suggestion — a finding with only a title is refused. Calling twice for " +
         "the same round is harmless. This never merges; the merge is a human button. Returns the review's " +
         "phase and `next`, or { error }.",
       inputSchema: {
