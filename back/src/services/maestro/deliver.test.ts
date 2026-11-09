@@ -1070,6 +1070,44 @@ describe("deliver abre PR documentado (diretriz de PR de todo repositório)", ()
     expect((await registry.getCard(card.id))?.prs).toBeUndefined();
   });
 
+  it("documentado: publica os comentários como UMA revisão COMMENT presa ao commit empurrado, e segue para o gate", async () => {
+    const { deliver, card } = await makeCard();
+    wire();
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, docs: DOCS });
+    expect(out).toMatchObject({ merged: true, reason: "merged", comments: { posted: 1, skipped: 0 } });
+    const push = scripts().find((s) => s.includes("git push --force-with-lease"))!;
+    expect(push).toContain("--body-file");
+    const review = reviewPosted()!;
+    expect(review).toContain("gh api --method POST 'repos/acme/repo/pulls/7/reviews' --input");
+    expect(payloadOf(review)).toMatchObject({
+      commit_id: HEAD_SHA, event: "COMMENT",
+      comments: [{ path: "back/src/a.ts", line: 3, side: "RIGHT", body: EXPLAINED }],
+    });
+    // the comments go up before the gate: a PR that will be merged already carries them
+    const order = scripts().map((s) => (s.includes("/reviews' --input") ? "review" : s.includes("gh pr merge") ? "merge" : "")).filter(Boolean);
+    expect(order).toEqual(["review", "merge"]);
+    for (const s of scripts()) for (const line of s.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
+  });
+
+  it("entregar de novo não duplica: o que já está no PR (mesmo arquivo e texto) é pulado", async () => {
+    const { deliver, card } = await makeCard();
+    const already = Buffer.from(JSON.stringify({ path: "back/src/a.ts", body: EXPLAINED })).toString("base64");
+    wire({ comments: `__VIBEHUB_DELIVER__ prcomments ${HEAD_SHA} ${already}` });
+    const second = { path: "back/src/b.ts", line: 8, body: EXPLAINED };
+    const out = await deliver.deliver(card.id, { branch: "dev", docs: { comments: [DOCS.comments[0]!, second] } });
+    expect(out).toMatchObject({ reason: "unauthorized", comments: { posted: 1, skipped: 1 } });
+    expect(payloadOf(reviewPosted()!).comments).toEqual([{ path: "back/src/b.ts", line: 8, side: "RIGHT", body: EXPLAINED }]);
+  });
+
+  it("tudo já publicado: nenhuma revisão nova", async () => {
+    const { deliver, card } = await makeCard();
+    const already = Buffer.from(JSON.stringify({ path: "back/src/a.ts", body: EXPLAINED })).toString("base64");
+    wire({ comments: `__VIBEHUB_DELIVER__ prcomments ${HEAD_SHA} ${already}` });
+    const out = await deliver.deliver(card.id, { branch: "dev", docs: { comments: DOCS.comments } });
+    expect(out).toMatchObject({ reason: "unauthorized", comments: { posted: 0, skipped: 1 } });
+    expect(reviewPosted()).toBeUndefined();
+  });
+
   it("GitHub recusa a posição de um comentário: comments_failed com o erro, PR aberto e gravado, sem gate e sem merge", async () => {
     const { deliver, registry, card } = await makeCard();
     wire({ review: 'gh: Line could not be resolved (HTTP 422)\n__VIBEHUB_DELIVER__ error review' });

@@ -1093,14 +1093,14 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     gate = (await ciGate(container, card.id, token, cwd, prUrl, mergeOnly ? expectedHead : undefined)) ?? (await runGate(card.id));
   } catch (err) {
     logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "gate could not run — treating as red");
-    return { prUrl, merged: false, reason: "gate", branch: target, cardBranch: source, ...lock, output: (err as Error).message };
+    return { prUrl, merged: false, reason: "gate", branch: target, cardBranch: source, ...lock, ...commented, output: (err as Error).message };
   }
   if (gate.ran && !gate.passed) {
     logger.info(
       { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, gate: "red", by: opts.by },
       "deliver stopped at the gate",
     );
-    return { prUrl, merged: false, reason: "gate", branch: target, cardBranch: source, ...lock, output: gate.output };
+    return { prUrl, merged: false, reason: "gate", branch: target, cardBranch: source, ...lock, ...commented, output: gate.output };
   }
 
   // (d) merge. A LOCKED card never gets here on purpose: its delivery IS the open pull request, and
@@ -1113,14 +1113,14 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
       { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, reason: "locked", by: opts.by },
       "deliver opened a PR on a locked card — merging is the reviewer's",
     );
-    return { prUrl, merged: false, reason: "locked", branch: target, cardBranch: source, locked: true };
+    return { prUrl, merged: false, reason: "locked", branch: target, cardBranch: source, locked: true, ...commented };
   }
   if (opts.authorized !== true) {
     logger.info(
       { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, reason: "unauthorized", by: opts.by },
       "deliver prepared a PR but was not authorized to merge",
     );
-    return { prUrl, merged: false, reason: "unauthorized", branch: target, cardBranch: source };
+    return { prUrl, merged: false, reason: "unauthorized", branch: target, cardBranch: source, ...commented };
   }
   // The CI wait can take minutes: a review asked for in the meantime still takes the merge away.
   if (!mergeOnly && (await activeReviewFor(card.id))) {
@@ -1129,7 +1129,7 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
       "deliver refused to merge: a PR review started while the gate ran",
     );
     return {
-      prUrl, merged: false, reason: "review_active", branch: target, cardBranch: source, ...lock,
+      prUrl, merged: false, reason: "review_active", branch: target, cardBranch: source, ...lock, ...commented,
       output: "uma revisão de PR começou enquanto o gate rodava: o merge é o botão do responsável no painel da revisão",
     };
   }
@@ -1144,8 +1144,8 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     merged ? "deliver merged the PR" : "deliver could not merge the PR",
   );
   if (!merged) {
-    return { prUrl, merged, reason: "merge_failed", branch: target, cardBranch: source, ...lock, output: cleanOutput(output) };
+    return { prUrl, merged, reason: "merge_failed", branch: target, cardBranch: source, ...lock, ...commented, output: cleanOutput(output) };
   }
   const headBranch = await afterPrMerged(card.id, prUrl, target, source, opts.connectionId);
-  return { prUrl, merged, reason: "merged", branch: target, cardBranch: source, ...lock, headBranch };
+  return { prUrl, merged, reason: "merged", branch: target, cardBranch: source, ...lock, ...commented, headBranch };
 }
