@@ -180,3 +180,17 @@ describe("autoMergeEligible", () => {
     expect(autoMergeEligible({ ...ready([]), reviewedSha: undefined })).toBe(false);
   });
 });
+
+describe("requested — o pedido ao autor acaba quando o achado muda de mão (f10)", () => {
+  const requested = { by: "mussa", at: 1 };
+
+  it("a resposta do autor apaga o pedido", () => {
+    const r = review([finding({ severity: "suggestion", requested })]);
+    expect(applyAuthorResponses(r, [{ id: "f1", status: "fixed", reply: "feito" }])[0]!.requested).toBeUndefined();
+  });
+
+  it("o veredito do revisor apaga o pedido", () => {
+    const r = review([finding({ severity: "suggestion", requested })]);
+    expect(applyReviewerVerdicts(r, [{ id: "f1", status: "open" }])[0]!.requested).toBeUndefined();
+  });
+});

@@ -43,6 +43,7 @@ export interface Finding {
    * Sugestão que uma pessoa já mandou o autor aplicar (quem e quando). Enquanto ela segue em aberto, o
    * painel não oferece "fazer" de novo e o servidor recusa o reenvio: sem isso, a lista enviada voltava
    * com as mesmas escolhas e dava para mandar a mesma coisa ao autor duas vezes (produção, 2026-11-09).
+   * Some quando o achado muda de mão: a resposta do autor ou o veredito do revisor apagam a marca.
    */
   requested?: { by: string; at: number };
 }
@@ -183,6 +184,8 @@ export function applyReviewerVerdicts(
   for (const u of updates) {
     const f = mustFind(out, u.id);
     f.status = u.status;
+    // O pedido ao autor acabou: um "open" do revisor é uma sugestão nova a decidir, não a mesma pendente.
+    delete f.requested;
     if (u.reviewerReply !== undefined) f.reviewerReply = u.reviewerReply;
   }
   return out;
@@ -207,6 +210,8 @@ export function applyAuthorResponses(
     }
     f.status = it.status;
     f.authorReply = it.reply;
+    // O autor respondeu: o pedido foi atendido (ou recusado com motivo) e não segura mais a escolha.
+    delete f.requested;
     if (it.commit !== undefined) f.commit = it.commit;
   }
   return out;
