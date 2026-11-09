@@ -332,6 +332,46 @@ export function buildPrReviewScript(
 }
 
 /**
+ * The comments step of a delivery: read what is on the PR, post the rest as one review pinned to the
+ * pushed commit. Any failure comes back with what to tell the agent — the PR is open either way.
+ */
+async function postPrComments(
+  container: string, cardId: string, token: string, cwd: string, prUrl: string, comments: CleanComment[],
+): Promise<{ ok: true; posted: number; skipped: number } | { ok: false; output: string }> {
+  if (!parsePrUrl(prUrl)) return { ok: false, output: `a URL do PR não é do GitHub (${prUrl}): os comentários não foram publicados` };
+  const read = await hostExecutor().runScript(
+    buildPrCommentsReadScript(container, cardId, token, cwd, prUrl),
+    { timeoutMs: (COMMENTS_HEAD_ROUNDS * COMMENTS_HEAD_POLL_SECONDS + 60) * 1000 },
+  );
+  const found = parsePrComments(read.stdout);
+  if (!found.ok) {
+    return {
+      ok: false,
+      output: found.stage === "stale"
+        ? "o PR ainda não aponta para o commit enviado: os comentários não foram publicados (entregue de novo em instantes)"
+        : `não deu para ler os comentários do PR: ${cleanOutput(found.output) || found.stage}`,
+    };
+  }
+  const fresh = freshComments(found.posted, comments);
+  const skipped = comments.length - fresh.length;
+  if (fresh.length === 0) return { ok: true, posted: 0, skipped };
+  const post = await hostExecutor().runScript(
+    buildPrReviewScript(container, cardId, token, cwd, prUrl, reviewPayload(found.head, fresh)),
+    { timeoutMs: 60_000 },
+  );
+  if (!new RegExp(`${MARKER} review ok`).test(post.stdout)) {
+    const answer = cleanOutput(post.stdout.replace(new RegExp(`${MARKER} .*`, "g"), "").trim());
+    // The hint about lines only when GitHub refused a POSITION (422); a 403 or a token without the
+    // scope is not fixed by moving lines.
+    const position = /\b422\b|line|position|diff/i.test(answer)
+      ? " Cada line tem que estar no diff do PR (side RIGHT = linha da versão nova; LEFT = linha removida)."
+      : "";
+    return { ok: false, output: `o GitHub recusou os comentários (nenhum foi publicado): ${answer || "sem resposta"}.${position}` };
+  }
+  return { ok: true, posted: fresh.length, skipped };
+}
+
+/**
  * Merge-only step (a)+(b): NO push — find the open PR from `branch` to `target` and print its head.
  * Filtered by head AND base (a card may have a PR to `dev` and another to `prod` from the same
  * branch; `gh pr view <branch>` would pick either). Emits `__VIBEHUB_DELIVER__ head <url> <sha>`, or
@@ -983,6 +1023,8 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
   const token = opts.connectionId ? await tokenFor(opts.connectionId) : await cardConnectionToken(card, project);
 
   let prUrl: string;
+  /** Spread into every result after the comments step: what this delivery posted on the diff. */
+  let commented: Pick<DeliverResult, "comments"> = {};
   if (mergeOnly) {
     // (a)+(b) merge-only: nothing is pushed — the PR is read as GitHub has it.
     const out = await hostExecutor().runScript(
@@ -1026,8 +1068,21 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     }
     prUrl = pr.prUrl;
     await rememberPr(card, prUrl, target, source);
+    // The comments on the diff go up BEFORE the gate: a PR that gets merged already explains itself,
+    // and one GitHub refused them on stops here — merging it undocumented is what the rule forbids.
+    if (docs.comments.length) {
+      const posted = await postPrComments(container, card.id, token, cwd, prUrl, docs.comments);
+      logger.info(
+        { audit: true, action: "maestro.deliver", card: card.worktreeSlug, comments: posted.ok ? posted.posted : "failed", by: opts.by },
+        posted.ok ? "deliver posted the PR comments" : "deliver could not post the PR comments",
+      );
+      if (!posted.ok) {
+        return { prUrl, merged: false, reason: "comments_failed", branch: target, cardBranch: source, ...lock, output: posted.output };
+      }
+      commented = { comments: { posted: posted.posted, skipped: posted.skipped } };
+    }
     // Push-only: the branch is on the PR, and that is all that was asked (no gate, no merge).
-    if (opts.pushOnly) return { prUrl, merged: false, reason: "pushed", branch: target, cardBranch: source, ...lock };
+    if (opts.pushOnly) return { prUrl, merged: false, reason: "pushed", branch: target, cardBranch: source, ...lock, ...commented };
   }
 
   // (c) the gate — the PR's CI when it has one, the local gate otherwise. A gate that errors

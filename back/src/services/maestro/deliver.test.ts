@@ -43,12 +43,14 @@ const PR = "https://github.com/acme/repo/pull/7";
 const HEAD_SHA = "d".repeat(40);
 
 /** Wire the runner: one canned reply per phase, chosen by the script's content. */
-function wire(over: { push?: string; probe?: string; run?: string; merge?: string; ci?: string } = {}) {
+function wire(over: { push?: string; probe?: string; run?: string; merge?: string; ci?: string; comments?: string; review?: string } = {}) {
   const push = over.push ?? `pushed\n__VIBEHUB_DELIVER__ pr ${PR}`;
   const probe = over.probe ?? ['pkg=0', 'test=0', 'tsconfig=0', 'localtsc=0', '__VIBEHUB_GATE_JSON__', '{"checks":["npm test"]}'].join("\n");
   const run = over.run ?? "ran\n__VIBEHUB_GATE__ pass\n";
   const merge = over.merge ?? "Merged\n__VIBEHUB_DELIVER__ merged\n";
   runScript.mockImplementation(async (script: string) => {
+    if (script.includes("/comments' --paginate")) return { stdout: over.comments ?? `__VIBEHUB_DELIVER__ prcomments ${HEAD_SHA} `, stderr: "" };
+    if (script.includes("/reviews' --input")) return { stdout: over.review ?? "__VIBEHUB_DELIVER__ review ok", stderr: "" };
     if (script.includes("gh pr merge")) return { stdout: merge, stderr: "" };
     if (script.includes("gh pr checks")) return { stdout: `${over.ci ?? ""}\n__VIBEHUB_CI__ done\n`, stderr: "" };
     if (script.includes("git push --force-with-lease")) return { stdout: push, stderr: "" };
@@ -1066,6 +1068,44 @@ describe("deliver abre PR documentado (diretriz de PR de todo repositório)", ()
     expect(out.output).toContain("falta title, body, comments");
     expect(runScript).toHaveBeenCalledOnce();
     expect((await registry.getCard(card.id))?.prs).toBeUndefined();
+  });
+
+  it("GitHub recusa a posição de um comentário: comments_failed com o erro, PR aberto e gravado, sem gate e sem merge", async () => {
+    const { deliver, registry, card } = await makeCard();
+    wire({ review: 'gh: Line could not be resolved (HTTP 422)\n__VIBEHUB_DELIVER__ error review' });
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, docs: DOCS });
+    expect(out).toMatchObject({ merged: false, reason: "comments_failed", prUrl: PR });
+    expect(out.output).toContain("Line could not be resolved");
+    expect(out.output).toContain("tem que estar no diff");
+    expect(mergeRan()).toBe(false);
+    expect(localGateRan()).toBe(false);
+    expect((await registry.getCard(card.id))?.prs?.[0]?.number).toBe(7);
+  });
+
+  it("recusa por permissão (403) não manda mexer em linha: só o erro do GitHub", async () => {
+    const { deliver, card } = await makeCard();
+    wire({ review: "gh: Resource not accessible by personal access token (HTTP 403)\n__VIBEHUB_DELIVER__ error review" });
+    const out = await deliver.deliver(card.id, { branch: "dev", docs: DOCS });
+    expect(out).toMatchObject({ reason: "comments_failed" });
+    expect(out.output).toContain("HTTP 403");
+    expect(out.output).not.toContain("tem que estar no diff");
+  });
+
+  it("o PR não chegou ao commit empurrado: comments_failed (as linhas seriam de outro diff)", async () => {
+    const { deliver, card } = await makeCard();
+    wire({ comments: "__VIBEHUB_DELIVER__ error stale" });
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, docs: DOCS });
+    expect(out).toMatchObject({ merged: false, reason: "comments_failed" });
+    expect(out.output).toContain("commit enviado");
+    expect(reviewPosted()).toBeUndefined();
+  });
+
+  it("push-only (correção de PR em revisão) também publica os comentários que vierem", async () => {
+    const { deliver, card } = await makeCard();
+    wire();
+    const out = await deliver.deliver(card.id, { branch: "dev", pushOnly: true, docs: { comments: DOCS.comments } });
+    expect(out).toMatchObject({ reason: "pushed", comments: { posted: 1, skipped: 0 } });
+    expect(localGateRan()).toBe(false);
   });
 
   it("só-merge ignora documentação: não empurra, não escreve no PR", async () => {
