@@ -120,6 +120,34 @@ describe("external MCP — the tools an assistant gets", () => {
   });
 });
 
+describe("external MCP — vibehub_deliver pede a documentação do PR (diretriz de todo repositório)", () => {
+  it("lista title, body e comments, e a descrição diz a regra", async () => {
+    const env = await load();
+    const { client, close } = await env.connect(env.owner);
+    const tool = (await client.listTools()).tools.find((t) => t.name === "vibehub_deliver")!;
+    await close();
+    expect(Object.keys(tool.inputSchema.properties ?? {})).toEqual(expect.arrayContaining(["title", "body", "comments"]));
+    expect(tool.description).toContain("EVERY PR IS DOCUMENTATION");
+    expect(tool.description).toContain("Pontos de atenção");
+  });
+
+  it("documentação sem as seções volta undocumented pela chamada MCP, sem empurrar nada", async () => {
+    const env = await load();
+    const { call, close } = await env.connect(env.owner);
+    runScript.mockClear();
+    const out = await call("vibehub_deliver", {
+      cardId: env.card.id, branch: "dev",
+      title: "t", body: "## Contexto\nsó isso", comments: [{ path: "a.ts", line: 1, body: "curto" }],
+    });
+    await close();
+    expect(out).toMatchObject({ merged: false, reason: "undocumented" });
+    expect(String(out.output)).toContain("Pontos de atenção");
+    expect(String(out.output)).toContain("a.ts:1");
+    const pushed = runScript.mock.calls.some((c) => String((c as unknown as string[])[0]).includes("git push"));
+    expect(pushed).toBe(false);
+  });
+});
+
 describe("send → wait → read, the voice loop", () => {
   it("send answers with `sentAt`, and goes into the live native chat (one conversation, attributed to the person)", async () => {
     const env = await load();
