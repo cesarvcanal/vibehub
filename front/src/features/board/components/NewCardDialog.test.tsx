@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NewCardDialog } from "@/features/board/components/NewCardDialog";
 import { renderApp } from "@/test/render";
@@ -324,6 +324,26 @@ describe("NewCardDialog", () => {
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it("rolar o diálogo pela barra de rolagem não fecha a lista", async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Options" }));
+    await user.click(await screen.findByLabelText("Cut from"));
+    // Clicar na barra de rolagem do diálogo põe o foco no próprio diálogo, ancestral do seletor.
+    act(() => screen.getByRole("dialog").focus());
+
+    expect(document.activeElement).toBe(screen.getByRole("dialog"));
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+  });
+
+  it("perder o foco para outro campo fecha a lista", async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Options" }));
+    await user.click(await screen.findByLabelText("Cut from"));
+    await user.click(screen.getByLabelText("Branch", { exact: true }));
+
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
 
   it("navega pelas setas a partir da branch escolhida", async () => {
