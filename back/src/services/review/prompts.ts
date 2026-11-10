@@ -420,6 +420,37 @@ export function phaseNoticeText(r: Review): string {
   }
 }
 
+/** O aviso, nos dois cards, de que o gate do merge falhou no commit aprovado. */
+export function mergeGateFailedText(r: Review): string {
+  return `PR #${r.prNumber}: os testes do merge falharam no commit aprovado — o merge espera a correção do autor.`;
+}
+
+/**
+ * O gate do merge falhou no commit aprovado: o autor recebe a saída e conserta. Quase sempre é a
+ * worktree (dependência não instalada) ou um teste instável sob carga, não o código revisado; o texto
+ * diz isso para a IA não sair caçando bug no diff.
+ */
+export function authorMergeGatePrompt(r: Review): string {
+  return [
+    header(r),
+    "A revisão aprovou o PR, mas os testes que o merge roda (o gate: CI do PR, ou os testes desta worktree) " +
+      `falharam no commit aprovado (${(r.reviewedSha ?? "").slice(0, 7)}). Enquanto estiverem vermelhos, o merge não sai.`,
+    rules(),
+    "",
+    "Saída do gate:",
+    indentedBlock(r.mergeGate?.output, "  ", 4000),
+    "",
+    "O que fazer:",
+    "1. Leia a causa. Dependência faltando ou comando não encontrado é a worktree: rode npm install (na raiz e nos " +
+      "pacotes que pedirem). Nada a commitar nesse caso.",
+    "2. Teste que falhou de verdade: corrija, com commit e teste. Teste de tempo que estoura sob carga: torne-o " +
+      "robusto (sem depender do relógio da máquina), não só aumente o limite.",
+    "3. Rode de novo os testes que falharam até passarem.",
+    `4. Se houve commit: git push origin HEAD:${r.prBranch} (a revisão volta ao revisor conferir o que entrou, é o esperado).`,
+    "   Sem commit (só instalar): nada a empurrar. Ao fim do seu turno o vibehub roda o gate de novo sozinho.",
+  ].join("\n");
+}
+
 /** O aviso de que o merge automático não saiu: o motivo, e que o botão segue valendo. */
 export function autoMergeFailedText(r: Review, why: string): string {
   return `PR #${r.prNumber}: o merge automático não saiu (${oneLine(why, 200)}) — mergeie pelo painel.`;

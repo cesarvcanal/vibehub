@@ -651,6 +651,25 @@ describe("deliver no modo só-merge (botão de merge da revisão de PR)", () => 
     }
   });
 
+  it("mergeOnly com o gate já verde no sha revisado (gatePassed): mergeia sem esperar CI nem rodar a suíte", async () => {
+    const { deliver, card } = await makeCard();
+    wireMergeOnly(REVIEWED, { ci: '[{"name":"back","bucket":"fail"}]' });
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: REVIEWED, gatePassed: true });
+    expect(out).toMatchObject({ merged: true, reason: "merged" });
+    expect(scripts().some((s) => s.includes("gh pr checks"))).toBe(false);
+    expect(localGateRan()).toBe(false);
+    // o merge segue preso ao commit em que o gate passou
+    expect(scripts().find((s) => s.includes("gh pr merge"))).toContain(`--match-head-commit '${REVIEWED}'`);
+  });
+
+  it("gatePassed fora do só-merge não pula o gate (só vale preso ao commit revisado)", async () => {
+    const { deliver, card } = await makeCard();
+    wire({ ci: '[{"name":"back","bucket":"fail"}]' });
+    const out = await deliver.deliver(card.id, { branch: "main", authorized: true, gatePassed: true });
+    expect(out).toMatchObject({ merged: false, reason: "gate" });
+    expect(mergeRan()).toBe(false);
+  });
+
   it("mergeOnly: o merge grava mergedAt no PR do card (o PR #7 gravado pela entrega); head movido não grava", async () => {
     const { deliver, registry, card } = await makeCard();
     // a entrega que abriu o PR gravou o slot da base

@@ -31,6 +31,9 @@ let deliverResult: DeliverResult = { merged: true, reason: "merged", branch: "de
 let prState: { state: "OPEN" | "MERGED" | "CLOSED"; headSha: string } | null = null;
 const readPrState = vi.fn(async () => prState);
 const afterPrMerged = vi.fn(async () => "deleted" as const);
+/** O gate do merge no commit aprovado (rodado quando a revisão fica pronta). */
+let gateAnswer = { ran: true, passed: true, output: "" };
+const gateAtCommit = vi.fn(async (_cardId: string, _prUrl: string, _sha: string) => gateAnswer);
 const deliver = vi.fn(async (cardId: string, _opts: DeliverOpts = {}): Promise<DeliverResult> => {
   actorAtDeliver = (await (await import("../services/board/registry.js")).getCard(cardId))?.actorUserId;
   return deliverResult;
@@ -68,6 +71,7 @@ async function boot(): Promise<FastifyInstance> {
   vi.doMock("../services/maestro/deliver.js", async () => ({
     ...(await vi.importActual<typeof import("../services/maestro/deliver.js")>("../services/maestro/deliver.js")),
     deliver,
+    gateAtCommit,
     readPrState,
     afterPrMerged,
     setPrPeople: vi.fn(async () => ({})),
@@ -188,8 +192,10 @@ async function readyReview(w: World) {
     round: 1, findings: OPEN_SUGGESTION, headSha: SHA1, summary: "nada bloqueia",
   });
   expect(ready.phase).toBe("ready");
+  // o gate do merge roda em segundo plano assim que fica pronta: a revisão entregue já tem o veredito
+  await vi.waitFor(async () => expect((await (await store()).getReview(ready.id))?.mergeGate?.state).toMatch(/passed|failed/));
   send.mockClear();
-  return ready;
+  return (await (await store()).getReview(ready.id))!;
 }
 
 const merge = async (reviewId: string, as: Person) =>
@@ -199,6 +205,8 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "vibehub-review-routes-"));
   send.mockClear();
   deliver.mockClear();
+  gateAtCommit.mockClear();
+  gateAnswer = { ran: true, passed: true, output: "" };
   readPrState.mockClear();
   afterPrMerged.mockClear();
   prState = null;
@@ -783,6 +791,49 @@ describe("merge", () => {
     const res = await merge(id, w.outro);
     expect(res.statusCode).toBe(200);
     expect(deliver.mock.calls.at(-1)![1]).toMatchObject({ connectionId: gh.id });
+  });
+
+  it("gate verde no commit aprovado: o clique mergeia sem rodar o gate de novo (gatePassed)", async () => {
+    const w = await world();
+    const review = await readyReview(w);
+    expect(review.mergeGate).toMatchObject({ sha: SHA1, state: "passed" });
+    const res = await merge(review.id, w.merger);
+    expect(res.statusCode).toBe(200);
+    expect(deliver.mock.calls[0]![1]).toMatchObject({ mergeOnly: true, expectedHeadSha: SHA1, gatePassed: true });
+    expect(gateAtCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("caso real (PR #215): gate vermelho no commit aprovado — o clique responde NA HORA com a falha, sem deliver", async () => {
+    const w = await world();
+    gateAnswer = { ran: true, passed: false, output: "FAIL src/services/secrets/audit.test.ts > Test timed out in 5000ms." };
+    const review = await readyReview(w);
+    const res = await merge(review.id, w.merger);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/os testes do merge falharam no commit aprovado/);
+    expect(res.json().error).toContain("audit.test.ts");
+    expect(deliver).not.toHaveBeenCalled();
+    // quem não tem papel segue levando 403, não a falha do gate
+    expect((await merge(review.id, w.outro)).statusCode).toBe(403);
+  });
+
+  it("gate ainda rodando: o clique é recusado na hora (gate_running), sem deliver", async () => {
+    const w = await world();
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    gateAtCommit.mockImplementationOnce(async () => { await held; return gateAnswer; });
+    const started = await startReview(w);
+    const id = started.json().review.id as string;
+    await (await orchestrator()).submitReviewerRound(started.json().review.reviewerCardId, {
+      round: 1, findings: OPEN_SUGGESTION, headSha: SHA1, summary: "nada bloqueia",
+    });
+    await vi.waitFor(() => expect(gateAtCommit).toHaveBeenCalled());
+    const res = await merge(id, w.merger);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/ainda estão rodando/);
+    expect(deliver).not.toHaveBeenCalled();
+    release();
+    await vi.waitFor(async () => expect((await (await store()).getReview(id))?.mergeGate?.state).toBe("passed"));
+    expect((await merge(id, w.merger)).statusCode).toBe(200);
   });
 
   it("dois cliques no merge ao mesmo tempo mergeiam uma vez só", async () => {

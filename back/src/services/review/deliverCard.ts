@@ -123,7 +123,7 @@ function mergeResult(outcome: ReviewMergeOutcome, base: DeliverResult, review: R
  */
 function refusalReason(outcome: Extract<ReviewMergeOutcome, { kind: "refused" }>): DeliverResult["reason"] {
   if (outcome.result) return outcome.result.reason;
-  if (outcome.reason === "gate") return "gate";
+  if (outcome.reason === "gate" || outcome.reason === "gate_running") return "gate";
   if (outcome.reason === "not_ready" || outcome.reason === "merging") return "review_active";
   return "merge_failed";
 }
