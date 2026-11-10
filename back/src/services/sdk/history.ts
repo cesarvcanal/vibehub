@@ -115,6 +115,11 @@ export function replayableHistoryEvent(event: HistoryEvent): boolean {
     // (fila cheia, prazo) redesenhada em todo F5 seria um aviso eterno de algo que já passou.
     case "btw_answer":
       return typeof (event as { text?: unknown }).text === "string";
+    // A compactação: o DESFECHO é o divisor da conversa ("antes disto, só o resumo") e vale em todo
+    // F5. O início não — uma barra replayada de semana passada rodaria para sempre; a compactação
+    // em andamento chega a quem conecta pelo estado da sessão (ver `connect` em ./manager.ts).
+    case "compaction":
+      return (event as { phase?: unknown }).phase === "done" || (event as { phase?: unknown }).phase === "failed";
     // O resumo do resultado (a linha "7 linhas" / "erro: …"): só do agente PRINCIPAL. O dos
     // subagentes é muito (centenas por frota) e empurraria a conversa para fora da janela do
     // replay — a linha do tempo de um subagente vem do transcript (./detail.ts).

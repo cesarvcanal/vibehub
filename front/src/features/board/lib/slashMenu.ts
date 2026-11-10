@@ -89,3 +89,26 @@ export function filterSlashCommands(
 export function applySlashPick(command: SlashCommandInfo): string {
   return `/${command.name} `;
 }
+
+/** A mensagem enviada que É um comando do catálogo: o nome como foi digitado e os argumentos. */
+export interface InvokedCommand {
+  name: string;
+  args: string;
+  source: SlashCommandInfo["source"];
+}
+
+/**
+ * Esta mensagem invoca um comando do catálogo? Só quando ela COMEÇA pelo nome (`/context`,
+ * `/compact foca no PR`), o nome existe no catálogo da sessão (ou é apelido de um) — um caminho
+ * (`/etc/hosts`) ou um nome que a sessão não conhece segue sendo texto. É o que faz o chat desenhar
+ * o envio como o comando que ele é, e não como uma frase. PURE.
+ */
+export function invokedCommand(text: string, commands: readonly SlashCommandInfo[]): InvokedCommand | null {
+  const trimmed = text.trim();
+  const match = /^\/([^\s/]+)(?:\s+([\s\S]*))?$/.exec(trimmed);
+  if (!match) return null;
+  const name = match[1]!;
+  const known = commands.find((c) => c.name === name || c.aliases?.includes(name));
+  if (!known) return null;
+  return { name, args: (match[2] ?? "").trim(), source: known.source };
+}

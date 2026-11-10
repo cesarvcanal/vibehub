@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  invokedCommand,
   applySlashPick,
   filterSlashCommands,
   scoreSlashCommand,
@@ -85,5 +86,34 @@ describe("applySlashPick", () => {
   it("leaves the field with the command and a caret where its arguments go", () => {
     expect(applySlashPick(CATALOGUE[0]!)).toBe("/code-review ");
     expect(applySlashPick(CATALOGUE[4]!)).toBe("/compact ");
+  });
+});
+
+describe("invokedCommand — a mensagem que É um comando do catálogo", () => {
+  const catalog: SlashCommandInfo[] = [
+    { name: "context", source: "command", description: "Show current context usage" },
+    { name: "compact", source: "command" },
+    { name: "usage", source: "command", aliases: ["cost"] },
+    { name: "code-review", source: "skill" },
+    { name: "superpowers:brainstorming", source: "plugin" },
+  ];
+
+  it("reconhece o nome no começo da mensagem, com os argumentos à parte", () => {
+    expect(invokedCommand("/context", catalog)).toEqual({ name: "context", args: "", source: "command" });
+    expect(invokedCommand("  /compact foca no PR  ", catalog)).toEqual({ name: "compact", args: "foca no PR", source: "command" });
+    expect(invokedCommand("/code-review high\nsó o back", catalog)).toEqual({ name: "code-review", args: "high\nsó o back", source: "skill" });
+    expect(invokedCommand("/superpowers:brainstorming", catalog)).toMatchObject({ source: "plugin" });
+  });
+
+  it("um apelido vale como o comando", () => {
+    expect(invokedCommand("/cost", catalog)).toEqual({ name: "cost", args: "", source: "command" });
+  });
+
+  it("nome fora do catálogo, caminho, ou comando no meio da frase não é comando", () => {
+    expect(invokedCommand("/nao-existe", catalog)).toBeNull();
+    expect(invokedCommand("/etc/hosts", catalog)).toBeNull();
+    expect(invokedCommand("roda o /context", catalog)).toBeNull();
+    expect(invokedCommand("/", catalog)).toBeNull();
+    expect(invokedCommand("/context", [])).toBeNull();
   });
 });

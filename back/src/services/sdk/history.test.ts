@@ -601,3 +601,11 @@ describe("/btw no log do card", () => {
     expect(replayableHistoryEvent({ type: "btw_answer", id: "b2", question: "q", error: "fila cheia" })).toBe(false);
   });
 });
+
+describe("compactação no log do card", () => {
+  it("o desfecho fica (o F5 redesenha o divisor); o início não — quem está rodando agora é estado, não log", () => {
+    expect(replayableHistoryEvent({ type: "compaction", phase: "done", preTokens: 180000, postTokens: 22000 })).toBe(true);
+    expect(replayableHistoryEvent({ type: "compaction", phase: "failed", error: "interrompida" })).toBe(true);
+    expect(replayableHistoryEvent({ type: "compaction", phase: "started" })).toBe(false);
+  });
+});

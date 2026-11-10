@@ -83,6 +83,7 @@ export interface SdkEvent {
     | "catalog"
     | "local_output"
     | "btw_answer"
+    | "compaction"
     | "background_tasks"
     | "rate_limit"
     | "context_usage"
@@ -157,6 +158,12 @@ export interface SdkEvent {
   window?: string;
   utilization?: number;
   resetsAt?: number;
+  /** On `compaction` (o /compact, ou a automática): a fase, e no fim quanto a conversa ocupava
+   *  antes e depois. Também lê `trigger` ("manual"/"auto"), `durationMs` e `startedAt` (posto pelo
+   *  back no `started`, para quem conecta no meio contar o tempo certo). */
+  phase?: "started" | "done" | "failed";
+  preTokens?: number;
+  postTokens?: number;
   /** On `context_usage`: how full the session's context window is (see `contextUsage`). */
   usedTokens?: number;
   maxTokens?: number;
@@ -469,6 +476,23 @@ export type SdkRow =
       askedAt?: number;
       /** Sem `text` nem `error`: ainda respondendo. */
       text?: string;
+      error?: string;
+    }
+  /**
+   * A COMPACTAÇÃO da conversa (o /compact, ou a automática quando a janela enche): a barra rodando
+   * enquanto o CLI resume, e depois o divisor "antes disto, só o resumo" com os tokens antes/depois.
+   * Sem ela o chat ficava parado por um minuto e parecia travado.
+   */
+  | {
+      kind: "compaction";
+      id: string;
+      status: "running" | "done" | "failed";
+      /** Quando começou (ms) — o relógio da barra. Ausente no replay (o log só guarda o desfecho). */
+      startedAt?: number;
+      trigger?: "manual" | "auto";
+      preTokens?: number;
+      postTokens?: number;
+      durationMs?: number;
       error?: string;
     }
   /**
@@ -1398,6 +1422,8 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         rows: [...settleStreaming(state.rows), { kind: "command_output", id, text: event.text }],
       };
     }
+    case "compaction":
+      return applyCompaction(state, event);
     case "btw_answer": {
       // Não toca em `awaiting` nem em `turnActive`: a pergunta lateral não é o turno, e o turno
       // que estava rodando segue rodando. A pergunta desta aba já tem linha (pendente); a de outra
@@ -1762,7 +1788,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         turnActive: false,
         awaiting: false,
         interruptRequested: false,
-        rows: settleLiveTools(dropProvisionalTools(settleStreaming(state.rows))),
+        rows: settleCompaction(settleLiveTools(dropProvisionalTools(settleStreaming(state.rows)))),
       };
       if (event.sessionId) next.sessionId = event.sessionId;
       if (!event.isError) return next;
@@ -1824,6 +1850,72 @@ function withSideRow(rows: SdkRow[], row: SdkRow): SdkRow[] {
   const last = rows[rows.length - 1];
   const stillWriting = last && (last.kind === "assistant" || last.kind === "thinking") && last.streaming;
   return stillWriting ? [...rows.slice(0, -1), row, last] : [...rows, row];
+}
+
+type CompactionRow = Extract<SdkRow, { kind: "compaction" }>;
+
+/** A compactação ainda rodando, se houver — a ÚLTIMA (só existe uma por vez). */
+function runningCompactionAt(rows: SdkRow[]): number {
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const row = rows[i]!;
+    if (row.kind === "compaction" && row.status === "running") return i;
+  }
+  return -1;
+}
+
+/**
+ * O evento `compaction`: `started` abre a barra (uma só — o início repetido de quem reconecta não
+ * abre outra); `done`/`failed` fecham a barra aberta, ou desenham o divisor sozinho (o replay, que
+ * só tem o desfecho). PURE.
+ */
+function applyCompaction(state: SdkChatState, event: SdkEvent): SdkChatState {
+  const at = runningCompactionAt(state.rows);
+  if (event.phase === "started") {
+    if (at >= 0) return state;
+    const { id, seq } = nextId(state, "compact");
+    const row: CompactionRow = {
+      kind: "compaction", id, status: "running",
+      ...(typeof event.startedAt === "number" ? { startedAt: event.startedAt } : {}),
+      ...(event.trigger === "manual" || event.trigger === "auto" ? { trigger: event.trigger } : {}),
+    };
+    return { ...state, seq, rows: withSideRow(state.rows, row) };
+  }
+  if (event.phase !== "done" && event.phase !== "failed") return state;
+  const count = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined);
+  const outcome: Partial<CompactionRow> = { status: event.phase };
+  if (event.trigger === "manual" || event.trigger === "auto") outcome.trigger = event.trigger;
+  if (count(event.preTokens) !== undefined) outcome.preTokens = count(event.preTokens);
+  if (count(event.postTokens) !== undefined) outcome.postTokens = count(event.postTokens);
+  if (count(event.durationMs) !== undefined) outcome.durationMs = count(event.durationMs);
+  if (event.phase === "failed" && event.error) outcome.error = event.error;
+  const next = { ...state, contextUsage: compactedUsage(state.contextUsage, outcome) };
+  if (at >= 0) {
+    const rows = [...state.rows];
+    rows[at] = { ...(rows[at] as CompactionRow), ...outcome };
+    return { ...next, rows };
+  }
+  const { id, seq } = nextId(state, "compact");
+  return { ...next, seq, rows: withSideRow(state.rows, { kind: "compaction", id, status: event.phase, ...outcome }) };
+}
+
+/**
+ * O medidor depois da compactação: o CLI diz quanto sobrou (`postTokens`), e o medidor cai NA HORA
+ * — a leitura de verdade só vem no fim do turno, e até lá ele mostraria a conversa velha. Sem
+ * leitura anterior não há janela para dividir: fica como está. PURE.
+ */
+function compactedUsage(usage: ContextUsageInfo | null, outcome: Partial<CompactionRow>): ContextUsageInfo | null {
+  if (!usage || outcome.status !== "done" || outcome.postTokens === undefined || usage.maxTokens <= 0) return usage;
+  const percent = Math.min(100, Math.round((outcome.postTokens / usage.maxTokens) * 100));
+  return { ...usage, usedTokens: outcome.postTokens, percent };
+}
+
+/** O turno fechou: uma barra ainda aberta não roda para sempre (o driver antigo não a fecha). PURE. */
+function settleCompaction(rows: SdkRow[]): SdkRow[] {
+  const at = runningCompactionAt(rows);
+  if (at < 0) return rows;
+  const next = [...rows];
+  next[at] = { ...(next[at] as CompactionRow), status: "failed" };
+  return next;
 }
 
 type BtwRow = Extract<SdkRow, { kind: "btw" }>;

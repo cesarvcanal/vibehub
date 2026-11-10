@@ -143,6 +143,11 @@ export interface DriverSession {
    * digitando"). Estado da sessão, como o aviso de limite: reenviado a quem conecta, nunca gravado.
    */
   contextUsage?: ContextUsageInfo;
+  /**
+   * Quando a compactação em andamento começou (ms) — ausente fora dela. Estado, como o medidor: quem
+   * abre o card no meio do /compact recebe a barra contando desde aqui, e não um chat parado.
+   */
+  compacting?: { startedAt: number; trigger?: "manual" | "auto" };
   /** Quando o conjunto deixou de ser vazio — o início da contagem de `BACKGROUND_HOLD_MAX_MS`. */
   backgroundSince?: number;
   /** O acerto do status do card depois que o segundo plano esvaziou (ver BACKGROUND_SETTLE_MS). */
@@ -806,6 +811,14 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     if (session.lastSessionId) lastContextByCard.set(session.cardId, { sessionId: session.lastSessionId, info });
     event = { type: "context_usage", ...info };
   }
+  if (event.type === "compaction") {
+    if (event.phase === "started") {
+      session.compacting = { startedAt: Date.now(), ...(event.trigger ? { trigger: event.trigger } : {}) };
+      event = { ...event, ...session.compacting };
+    } else {
+      session.compacting = undefined;
+    }
+  }
   if (event.type === "turn_absorbed") {
     // Streaming input: this send folded into the turn ALREADY running (the model absorbs it at its
     // next step) — it will not produce its own `result`, so its +1 comes back off. Floor at 1: an
@@ -817,6 +830,8 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
   let interruptNoteToFlush: string | undefined;
   if (event.type === "result") {
     session.activeTurns = Math.max(0, session.activeTurns - 1);
+    // O driver já fecha a compactação antes do result; isto é a rede para um driver antigo.
+    session.compacting = undefined;
     interruptNoteToFlush = session.pendingInterruptNote;
     session.pendingInterruptNote = undefined;
     session.autonomousTurn = false;
@@ -2094,6 +2109,11 @@ export function attachSocket(
   // precisa ver quanto a conversa já ocupa sem mandar mensagem nenhuma.
   if (session.contextUsage) {
     try { socket.send(JSON.stringify({ type: "context_usage", ...session.contextUsage })); } catch { /* going away */ }
+  }
+
+  // A compactação em andamento: a barra, contando desde quando começou.
+  if (session.compacting) {
+    try { socket.send(JSON.stringify({ type: "compaction", phase: "started", ...session.compacting })); } catch { /* going away */ }
   }
 
   // A frota do workflow é da mesma natureza do catálogo: estado, não conversa. Ela não está no
