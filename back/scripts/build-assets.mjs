@@ -23,3 +23,10 @@ const sdkRel = join("services", "sdk");
 const sdkDest = join(backRoot, "dist", sdkRel);
 mkdirSync(sdkDest, { recursive: true });
 cpSync(join(backRoot, "src", sdkRel, "sdk-driver.mjs"), join(sdkDest, "sdk-driver.mjs"));
+
+// O conversor de documentos (`services/anexos/ler-documento.py`) — lido por services/anexos/documento.ts
+// e enviado ao runner pelo stdin. tsc ignora .py, então ele é copiado para o mesmo caminho em dist.
+const anexosRel = join("services", "anexos");
+const anexosDest = join(backRoot, "dist", anexosRel);
+mkdirSync(anexosDest, { recursive: true });
+cpSync(join(backRoot, "src", anexosRel, "ler-documento.py"), join(anexosDest, "ler-documento.py"));
