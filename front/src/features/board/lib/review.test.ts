@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  mergeGateStatus,
   IMPASSE_HEAD_MOVED,
   MERGE_CONFIRM_MS,
   REVIEW_MAX_ROUNDS,
@@ -23,7 +24,7 @@ import {
   summaryForPr,
   visiblePrs,
 } from "@/features/board/lib/review";
-import type { CardPr, Finding, Review, ReviewSummary } from "@/api/types";
+import type { CardPr, Finding, MergeGate, Review, ReviewSummary } from "@/api/types";
 
 function pr(number: number, openedAt: number, base = "dev"): CardPr {
   return { number, url: `https://github.com/acme/x/pull/${number}`, base, branch: "card/x", openedAt };
@@ -67,6 +68,22 @@ describe("reviewPill", () => {
     // a IA do autor trabalhando segue na frente: o push dela muda o commit, e o gate com ele
     expect(reviewPill(review({ phase: "ready" }), { authorWorking: true, gate: "failed" })).toMatchObject({ key: "review.pill.authorWorking" });
     expect(reviewPill(review({ phase: "fixing", round: 2 }), { gate: "failed" })).toMatchObject({ key: "review.pill.round" });
+  });
+
+  it("caso real (PR #218): gate vermelho que a IA do autor ainda corrige sozinha fica no laranja de trabalho, não no vermelho", () => {
+    expect(reviewPill(review({ phase: "ready" }), { gate: "fixing" })).toEqual({ key: "review.pill.gateFixing", tone: "warn" });
+  });
+
+  it("mergeGateStatus: vermelho com volta sozinha é fixing; esgotado ou da época de uma volta só é failed", () => {
+    const sha = "a".repeat(40);
+    const at = (mergeGate: MergeGate) => mergeGateStatus({ reviewedSha: sha, mergeGate });
+    expect(at({ sha, state: "failed", at: 1, failures: 1 })).toBe("fixing");
+    expect(at({ sha, state: "failed", at: 1 })).toBe("fixing");
+    expect(at({ sha, state: "failed", at: 1, failures: 4, exhausted: true })).toBe("failed");
+    expect(at({ sha, state: "failed", at: 1, autoRetried: true })).toBe("failed");
+    expect(at({ sha, state: "running", at: 1, failures: 2 })).toBe("running");
+    expect(at({ sha, state: "passed", at: 1 })).toBeUndefined();
+    expect(mergeGateStatus({ reviewedSha: "b".repeat(40), mergeGate: { sha, state: "failed", at: 1 } })).toBeUndefined();
   });
 
   it("reviewIsOpen: every phase but merged and cancelled (and no review at all)", () => {
