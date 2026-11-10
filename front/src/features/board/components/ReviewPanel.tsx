@@ -41,11 +41,15 @@ type Stamp = { phase: ReviewPhase; round: number };
  *    running) — the panel keeps reading, with the merge button held, until `merged` or the time cap;
  *  - `expired`: the cap passed with no `merged`: reading stops, the button is back, and the person is
  *    sent to GitHub;
+ *  - `stopped`: a read made AFTER the answer got lost says no merge is running on the server and the
+ *    review is still `ready`: the merge died (a deploy restarted the server mid-way) or ended without
+ *    merging. Nothing is left to wait for — the button is back at once instead of after the cap;
  *  - `head_moved` / `refused`: answers of the server, pinned to the `at` state they were raised in.
  */
 type MergeNote =
   | { kind: "unconfirmed"; cause: "lost" | "running" }
   | { kind: "expired"; at: Stamp | null }
+  | { kind: "stopped"; at: Stamp | null }
   | { kind: "head_moved"; at: Stamp | null }
   | { kind: "refused"; message: string; at: Stamp | null };
 
@@ -68,13 +72,18 @@ export function ReviewPanel({ cardId, prNumber: pr, onClose }: {
   const mergeAsked = React.useRef(false);
   /** When that click happened: the unconfirmed wait is counted from it, not from when the answer got lost. */
   const mergeStartedAt = React.useRef(0);
+  /**
+   * When the read on screen was made at the moment the answer got lost: only a read NEWER than it may
+   * say "no merge running" — the one from before the click says so too, and means nothing.
+   */
+  const lostReadAt = React.useRef(0);
   /** The review's state as of the latest render, for the banners raised from callbacks. */
   const stamp = React.useRef<Stamp | null>(null);
   const unconfirmed = mergeNote?.kind === "unconfirmed";
   /** The merge button is held: a request is open, or its result is unknown. Cancel and retry wait too. */
   const mergeBusy = mergeWait || unconfirmed;
 
-  const { query: reviewQuery, review, working, apply } = useLiveReview(cardId, { fast: mergeBusy, pr });
+  const { query: reviewQuery, review, working, merging, apply } = useLiveReview(cardId, { fast: mergeBusy, pr });
 
   // The review carries user ids; the roles read better as names. Same key and shape as the request dialog's.
   const people = useQuery({
@@ -120,6 +129,7 @@ export function ReviewPanel({ cardId, prNumber: pr, onClose }: {
       if (failed.kind === "lost" || failed.kind === "running") {
         // Not a refusal: the merge may well be running (or done). Read now, keep reading, and keep
         // `mergeAsked`, so the `merged` that follows is announced as this click's success.
+        lostReadAt.current = reviewQuery.dataUpdatedAt;
         setMergeNote({ kind: "unconfirmed", cause: failed.kind });
         reread();
         return;
@@ -164,6 +174,17 @@ export function ReviewPanel({ cardId, prNumber: pr, onClose }: {
       return note.at && (note.at.phase !== phase || note.at.round !== round) ? null : note;
     });
   }, [phase, round, prNumber, base]);
+
+  // An unconfirmed merge that the server says is no longer running, read after the answer got lost,
+  // with the review still `ready`: it died with the process (a deploy) or ended without merging. A
+  // merge that went through turns the review `merged` before it lets go of the lock, so this never
+  // hides a success. A server that does not say (`merging` undefined) keeps the wait and its cap.
+  const readAt = reviewQuery.dataUpdatedAt;
+  React.useEffect(() => {
+    if (!unconfirmed || merging !== false || phase !== "ready" || readAt <= lostReadAt.current) return;
+    mergeAsked.current = false;
+    setMergeNote({ kind: "stopped", at: stamp.current });
+  }, [unconfirmed, merging, phase, readAt]);
 
   // The wait for an unconfirmed merge has a cap (the server's own merge limit, plus a margin): past it
   // the panel stops reading and says it could not confirm, instead of polling for ever.
@@ -227,6 +248,8 @@ function noticeOf(note: MergeNote | null, t: typeof translate): PanelNotice | nu
       return { tone: "muted", text: t(note.cause === "lost" ? "review.merge.lost" : "review.merge.running") };
     case "expired":
       return { tone: "error", text: t("review.merge.expired") };
+    case "stopped":
+      return { tone: "error", text: t("review.merge.stopped") };
     case "refused":
       return { tone: "error", text: note.message };
     default:
