@@ -36,7 +36,8 @@ import { logger } from "../../utils/logger.js";
  *   c. the GATE. When the pull request has GitHub CI checks, THEY are the gate: wait for them (bounded)
  *      and read their verdict — the CI already runs the full suite on a clean machine, and running it
  *      again inside the shared runner duplicated the work and timed out on a loaded box. Without CI
- *      checks, the local gate runs as before (see gate.ts). Red either way: STOP — do not merge.
+ *      checks (gh SAYS so), the local gate runs as before (see gate.ts); a CI answer that could not be
+ *      read is red, never "no CI". Red either way: STOP — do not merge.
  *   d. MERGE only when the caller passed `authorized: true` AND the gate is green. A merge commit,
  *      NEVER a squash.
  *
@@ -482,18 +483,23 @@ export function buildCiChecksScript(
 
 /**
  * The CI verdict from what `gh pr checks --json name,bucket,link` printed:
- *  - `none`: no checks on the PR (or the answer was unreadable) — the local gate decides;
+ *  - `none`: gh said the PR has no checks ("no checks reported", or an empty list) — the local gate decides;
  *  - `pass`: every check passed or was skipped;
  *  - `fail`: some check failed or was cancelled (named in `output`, each with its job link when GitHub
  *    gave one — the red then points straight at the log that failed);
  *  - `pending`: checks still running when the wait ran out, or the PR never moved to the pushed
- *    commit (`stale`) — red either way. PURE.
+ *    commit (`stale`) — red either way;
+ *  - `error`: any other answer (GitHub down, rate limit, a revoked token, the script died) — the CI
+ *    was NOT read, so it is red, with what gh said. It used to be `none`: a 502 handed the PR to the
+ *    local gate, which passes through in a repo with no local checks, and the PR merged unread. PURE.
  */
-export function parseCiChecks(stdout: string): { verdict: "none" | "pass" | "fail" | "pending"; output: string } {
+export function parseCiChecks(stdout: string): { verdict: "none" | "pass" | "fail" | "pending" | "error"; output: string } {
   if (stdout.includes(`${CI_MARKER} stale`)) {
     return { verdict: "pending", output: "o PR ainda não aponta para o commit enviado — o CI dele não foi lido" };
   }
   const body = stdout.replace(new RegExp(`${CI_MARKER} \\S+.*`, "g"), "").trim();
+  // gh's own words for a PR without checks (pkg/cmd/pr/checks: "no checks reported on the '%s' branch").
+  if (/^no checks reported on the /m.test(body)) return { verdict: "none", output: "" };
   const start = body.indexOf("[");
   let checks: { name?: string; bucket?: string; link?: string }[] | null = null;
   if (start >= 0) {
@@ -502,7 +508,8 @@ export function parseCiChecks(stdout: string): { verdict: "none" | "pass" | "fai
       if (Array.isArray(parsed)) checks = parsed as { name?: string; bucket?: string; link?: string }[];
     } catch { /* not the JSON we asked for */ }
   }
-  if (!checks || checks.length === 0) return { verdict: "none", output: "" };
+  if (!checks) return { verdict: "error", output: cleanOutput(`não consegui ler o CI do PR: ${body || "sem resposta do gh"}`) };
+  if (checks.length === 0) return { verdict: "none", output: "" };
   const named = (buckets: string[]) => checks!.filter((c) => buckets.includes(String(c.bucket))).map((c) => c.name || "?");
   const failed = named(["fail", "cancel"]);
   if (failed.length) {
@@ -927,7 +934,8 @@ export async function setPrPeople(cardId: string, prUrl: string, people: PrPeopl
 
 /**
  * The PR's CI as the gate: its verdict, or null when the PR has no CI checks (the local gate
- * decides). Checks still running past the wait are red — never merged on a guess.
+ * decides). Checks still running past the wait are red — never merged on a guess — and so is an
+ * answer that could not be read: only gh saying "no checks" hands the PR to the local gate.
  */
 async function ciGate(
   container: string, cardId: string, token: string, cwd: string, prUrl: string, headSha?: string,

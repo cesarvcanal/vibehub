@@ -42,6 +42,9 @@ const PR = "https://github.com/acme/repo/pull/7";
 /** The commit the card pushed, as the comments step reads it back. */
 const HEAD_SHA = "d".repeat(40);
 
+/** What `gh pr checks` says about a PR without CI: the only answer that hands the gate to the local one. */
+const NO_CHECKS = "no checks reported on the 'card/x' branch";
+
 /** Wire the runner: one canned reply per phase, chosen by the script's content. */
 function wire(over: { push?: string; probe?: string; run?: string; merge?: string; ci?: string; comments?: string; review?: string } = {}) {
   const push = over.push ?? `pushed\n__VIBEHUB_DELIVER__ pr ${PR}`;
@@ -52,7 +55,7 @@ function wire(over: { push?: string; probe?: string; run?: string; merge?: strin
     if (script.includes("/comments' --paginate")) return { stdout: over.comments ?? `__VIBEHUB_DELIVER__ prcomments ${HEAD_SHA} `, stderr: "" };
     if (script.includes("/reviews' --input")) return { stdout: over.review ?? "__VIBEHUB_DELIVER__ review ok", stderr: "" };
     if (script.includes("gh pr merge")) return { stdout: merge, stderr: "" };
-    if (script.includes("gh pr checks")) return { stdout: `${over.ci ?? ""}\n__VIBEHUB_CI__ done\n`, stderr: "" };
+    if (script.includes("gh pr checks")) return { stdout: `${over.ci ?? NO_CHECKS}\n__VIBEHUB_CI__ done\n`, stderr: "" };
     if (script.includes("git push --force-with-lease")) return { stdout: push, stderr: "" };
     if (script.includes("__VIBEHUB_GATE_JSON__")) return { stdout: probe, stderr: "" };
     if (script.includes('echo "__VIBEHUB_GATE__ pass"')) return { stdout: run, stderr: "" };
@@ -219,12 +222,26 @@ describe("parseCiChecks", () => {
       .toEqual({ verdict: "fail", output: "CI do PR vermelho: back\n  back: https://github.com/o/r/actions/runs/1/job/2" });
     expect(p('[{"name":"front","bucket":"pending"}]')).toEqual({ verdict: "pending", output: "CI do PR ainda rodando: front" });
   });
-  it("no checks, an empty list or an unreadable answer is 'none' — the local gate decides", async () => {
+  it("only gh's own 'no checks reported' (or an empty list) is 'none' — the local gate decides", async () => {
     const { deliver } = await load();
     expect(deliver.parseCiChecks("no checks reported on the 'x' branch\n__VIBEHUB_CI__ done").verdict).toBe("none");
-    expect(deliver.parseCiChecks("[]").verdict).toBe("none");
-    expect(deliver.parseCiChecks("HTTP 502 [oops").verdict).toBe("none");
-    expect(deliver.parseCiChecks("").verdict).toBe("none");
+    expect(deliver.parseCiChecks("[]\n__VIBEHUB_CI__ done").verdict).toBe("none");
+  });
+  it("an answer that is not the checks (GitHub down, rate limit, bad token, script died) is 'error', with what gh said", async () => {
+    const { deliver } = await load();
+    const p = deliver.parseCiChecks;
+    const bad = p("HTTP 502: Bad Gateway (https://api.github.com/graphql)\n__VIBEHUB_CI__ done");
+    expect(bad.verdict).toBe("error");
+    expect(bad.output).toContain("HTTP 502: Bad Gateway");
+    expect(p("API rate limit exceeded for user\n__VIBEHUB_CI__ done")).toMatchObject({ verdict: "error" });
+    expect(p("HTTP 401: Bad credentials (https://api.github.com/graphql)\n__VIBEHUB_CI__ done").verdict).toBe("error");
+    expect(p("HTTP 502 [oops\n__VIBEHUB_CI__ done").verdict).toBe("error");
+    expect(p('{"message":"x"}\n__VIBEHUB_CI__ done').verdict).toBe("error");
+    // the worktree was gone, or the script died before printing anything at all
+    expect(p("__VIBEHUB_CI__ error\n").verdict).toBe("error");
+    expect(p("").verdict).toBe("error");
+    // a token in what gh printed never rides back out in the answer
+    expect(p(`fatal: ${TOKEN} rejected\n__VIBEHUB_CI__ done`).output).not.toContain(TOKEN);
   });
   it("a PR that never moved to the pushed commit is NOT read as green", async () => {
     const { deliver } = await load();
@@ -318,6 +335,16 @@ describe("deliver uses the PR's CI as the gate when there is one", () => {
     });
     const out = await deliver.deliver(card.id, { branch: "main", authorized: true });
     expect(out).toMatchObject({ merged: false, reason: "gate" });
+    expect(mergeRan()).toBe(false);
+    expect(localGateRan()).toBe(false);
+  });
+
+  it("an error reading the CI is red, even when the repo has no local checks — never merged unread", async () => {
+    const { deliver, card } = await makeCard();
+    wire({ ci: "HTTP 502: Bad Gateway", probe: "pkg=0\ntest=0\ntsconfig=0\nlocaltsc=0\n__VIBEHUB_GATE_JSON__\n" });
+    const out = await deliver.deliver(card.id, { branch: "main", authorized: true });
+    expect(out).toMatchObject({ merged: false, reason: "gate" });
+    expect(out.output).toContain("HTTP 502: Bad Gateway");
     expect(mergeRan()).toBe(false);
     expect(localGateRan()).toBe(false);
   });
