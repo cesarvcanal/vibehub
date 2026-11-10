@@ -11,6 +11,7 @@ import * as workspace from "../services/board/workspace.js";
 import * as browser from "../services/browser/browser.js";
 import * as outbox from "../services/board/outbox.js";
 import { purgeCard } from "../services/board/purge.js";
+import { lerAnexoDoCard } from "../services/anexos/documento.js";
 import { observeCardStatus } from "../services/events/cardEvents.js";
 import { logger } from "../utils/logger.js";
 
@@ -327,6 +328,22 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
    * Cached hard and forever on purpose — the name carries the upload's timestamp, so a given URL
    * names one file that never changes.
    */
+  /**
+   * O anexo como texto (planilha, Word, PowerPoint): o navegador não abre esses formatos, então o chat
+   * mostra o que o agente também lê. Mesmo acesso de quem pode ver o arquivo.
+   */
+  app.get<{ Params: { id: string; file: string } }>(
+    "/api/cards/:id/uploads/:file/preview", { preHandler: requireCardAccess },
+    async (req, reply) => {
+      try {
+        return await reply.send(await lerAnexoDoCard(req.params.id, req.params.file));
+      } catch (err) {
+        const message = (err as Error).message;
+        return await reply.code(/not found/i.test(message) ? 404 : 422).send({ error: message });
+      }
+    },
+  );
+
   app.get<{ Params: { id: string; file: string } }>(
     "/api/cards/:id/uploads/:file", { preHandler: requireCardAccess },
     async (req, reply) => {
