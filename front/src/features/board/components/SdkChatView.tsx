@@ -14,6 +14,7 @@ import {
   CornerDownLeft,
   ListTodo,
   Loader2,
+  MessageCircleQuestion,
   MessageSquare,
   Pencil,
   Reply,
@@ -2470,20 +2471,25 @@ const SdkChatRow = React.memo(function SdkChatRow({
   }
 
   if (row.kind === "btw") {
-    // A resposta do /btw: marcada à esquerda e com a pergunta, para nunca ser lida como o turno falando.
+    // A resposta do /btw pende da pergunta por um fio à esquerda, num tom abaixo do turno, para nunca
+    // ser lida como o turno falando.
     return (
-      <div data-testid="sdk-btw" className="border-l-2 border-primary/40 pl-3 text-sm">
-        <div className="flex items-baseline gap-2 text-xs text-muted-foreground">
-          <span title={t("sdk.btwLabel")} className="shrink-0 font-mono text-primary/80">/btw</span>
+      <div data-testid="sdk-btw" className="max-w-prose text-sm">
+        <div className="flex items-start gap-1.5 text-xs leading-5 text-muted-foreground">
+          <span title={t("sdk.btwLabel")} className="mt-[3px] shrink-0">
+            <MessageCircleQuestion aria-label={t("sdk.btwLabel")} className="h-3.5 w-3.5 text-primary/70" />
+          </span>
           <span className="min-w-0 whitespace-pre-wrap">{row.question}</span>
         </div>
-        {row.text !== undefined ? (
-          <div className="mt-1"><Markdown text={row.text} /></div>
-        ) : row.error !== undefined ? (
-          <div className="mt-1 text-xs text-destructive">{t("sdk.btwError", { error: row.error })}</div>
-        ) : (
-          <Loader2 aria-label={t("sdk.btwPending")} className="mt-1 h-3.5 w-3.5 animate-spin text-muted-foreground" />
-        )}
+        <div className="ml-[6px] mt-1 border-l border-border pl-3.5">
+          {row.text !== undefined ? (
+            <div className="leading-relaxed text-foreground/85"><Markdown text={row.text} /></div>
+          ) : row.error !== undefined ? (
+            <div className="text-xs leading-5 text-destructive">{t("sdk.btwError", { error: row.error })}</div>
+          ) : (
+            <Loader2 aria-label={t("sdk.btwPending")} className="my-0.5 h-3.5 w-3.5 animate-spin text-muted-foreground/70 motion-reduce:animate-none" />
+          )}
+        </div>
       </div>
     );
   }
