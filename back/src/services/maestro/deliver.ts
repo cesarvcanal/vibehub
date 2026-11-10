@@ -98,8 +98,11 @@ export interface DeliverResult {
    * it would close that PR), or `failed` (the merge stands; the branch is just still there).
    */
   headBranch?: "deleted" | "kept" | "failed";
-  /** The comments on the diff this delivery was given: how many went up, how many were already there. */
-  comments?: { posted: number; skipped: number };
+  /**
+   * The comments on the diff this delivery was given: how many went up, how many were already on the PR,
+   * and how many the call itself repeated (same file and text twice — posted once).
+   */
+  comments?: { posted: number; skipped: number; repeated?: number };
 }
 
 export interface DeliverOpts {
@@ -1091,7 +1094,8 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
       if (!posted.ok) {
         return { prUrl, merged: false, reason: "comments_failed", branch: target, cardBranch: source, ...lock, output: posted.output };
       }
-      commented = { comments: { posted: posted.posted, skipped: posted.skipped } };
+      const repeated = docs.repeated ? { repeated: docs.repeated } : {};
+      commented = { comments: { posted: posted.posted, skipped: posted.skipped, ...repeated } };
     }
     // Push-only: the branch is on the PR, and that is all that was asked (no gate, no merge).
     if (opts.pushOnly) return { prUrl, merged: false, reason: "pushed", branch: target, cardBranch: source, ...lock, ...commented };

@@ -94,6 +94,8 @@ describe("validatePrDocs", () => {
       { path: "back/src/x.ts", line: 10, side: "RIGHT", body: EXPLAINED },
       { path: "y.ts", line: 10, side: "LEFT", body: EXPLAINED },
     ]);
+    // the repeated one is counted, not silently lost
+    expect(v.docs.repeated).toBe(1);
   });
 
   it("a body without the sections is refused, naming what is missing", () => {

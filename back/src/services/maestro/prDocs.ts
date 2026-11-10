@@ -40,6 +40,8 @@ export interface CleanPrDocs {
   title?: string;
   body?: string;
   comments: CleanComment[];
+  /** Comments dropped because the same call already had them (same file and text); absent when none. */
+  repeated?: number;
 }
 
 /**
@@ -217,7 +219,10 @@ export function validatePrDocs(docs: PrDocs | undefined): { ok: true; docs: Clea
     }
     const path = cleanPath(c.path);
     const key = `${path}\n${text}`;
-    if (seen.has(key)) continue;
+    if (seen.has(key)) {
+      clean.repeated = (clean.repeated ?? 0) + 1;
+      continue;
+    }
     seen.add(key);
     clean.comments.push({
       path, line: c.line, side: c.side ?? "RIGHT", body: text,

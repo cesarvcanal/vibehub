@@ -1105,6 +1105,13 @@ describe("deliver abre PR documentado (diretriz de PR de todo repositório)", ()
     expect(payloadOf(reviewPosted()!).comments).toEqual([{ path: "back/src/b.ts", line: 8, side: "RIGHT", body: EXPLAINED }]);
   });
 
+  it("comentário repetido na MESMA chamada é contado na resposta (repeated), não some calado", async () => {
+    const { deliver, card } = await makeCard();
+    wire();
+    const out = await deliver.deliver(card.id, { branch: "dev", docs: { comments: [DOCS.comments[0]!, DOCS.comments[0]!] } });
+    expect(out).toMatchObject({ reason: "unauthorized", comments: { posted: 1, skipped: 0, repeated: 1 } });
+  });
+
   it("tudo já publicado: nenhuma revisão nova", async () => {
     const { deliver, card } = await makeCard();
     const already = Buffer.from(JSON.stringify({ path: "back/src/a.ts", body: EXPLAINED })).toString("base64");
