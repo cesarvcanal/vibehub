@@ -81,3 +81,15 @@ describe("prompts da revisão: o merge por ordem", () => {
     }
   });
 });
+
+describe("prompts da revisão: bug não é sugestão", () => {
+  it("o revisor é instruído a bloquear bug real no escopo do PR (com cenário) e a deixar como sugestão só o que não é bug", () => {
+    for (const text of [reviewerRoundPrompt(review()), authorFixPrompt(review())]) {
+      expect(text).toMatch(/Bug no código deste PR \(comportamento errado, falha, quebra, brecha de segurança, perda de dado, regressão\) TEM essa prova: é bloqueante/);
+      expect(text).toMatch(/Sugestão é só o que não é bug no escopo/);
+    }
+    const round = reviewerRoundPrompt(review());
+    expect(round).toMatch(/- suggestion: SÓ o que não é bug no escopo do PR/);
+    expect(round).toContain("blocking com proof.kind = scenario (ref = arquivo:linha, detail = o caso que dá errado)");
+  });
+});

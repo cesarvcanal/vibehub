@@ -58,8 +58,10 @@ function rules(): string {
       "mandar mergear NESTE card, mergeie: chame vibehub_deliver com card e from = o $VIBEHUB_CARD_ID deste terminal e " +
       "authorized: true. O vibehub só mergeia a revisão pronta, preso ao commit aprovado, e diz o motivo se recusar. " +
       "Nunca por `gh pr merge` nem pela API do GitHub.",
-    "- Só bloqueia com prova: teste que falha, regra escrita do repo citada (arquivo e trecho), ou risco concreto de quebrar " +
-      "funcionalidade existente (cenário com arquivo:linha). O resto é sugestão: aparece, não bloqueia, não abre rodada.",
+    "- Só bloqueia com prova: teste que falha, regra escrita do repo citada (arquivo e trecho), ou cenário concreto com " +
+      "arquivo:linha. Bug no código deste PR (comportamento errado, falha, quebra, brecha de segurança, perda de dado, " +
+      "regressão) TEM essa prova: é bloqueante e se resolve neste PR, nunca sugestão. Sugestão é só o que não é bug no " +
+      "escopo (estilo, nome, refatoração, melhoria opcional, problema antigo fora do diff): aparece, não bloqueia, não abre rodada.",
   ].join("\n");
 }
 
@@ -120,7 +122,10 @@ function classification(): string {
     "- blocking: SÓ com prova. proof.kind = failing_test (ref = o teste que falha, ex. src/x.test.ts:12), rule (ref = a regra " +
       "escrita do repo, ex. CLAUDE.md, com o trecho em detail) ou scenario (ref = arquivo:linha, detail = o cenário concreto " +
       "que quebra, inclusive funcionalidade que já existia). Bloqueante sem prova vira sugestão no servidor.",
-    "- suggestion: melhoria que não bloqueia.",
+    "- suggestion: SÓ o que não é bug no escopo do PR: estilo, nome, legibilidade, refatoração, melhoria opcional, ou " +
+      "problema que já existia fora do que o PR mexe. Bug, falha ou correção urgente no que o PR mexe não é sugestão: é " +
+      "blocking com proof.kind = scenario (ref = arquivo:linha, detail = o caso que dá errado). Na dúvida entre os dois, " +
+      "e o defeito é real e alcançável, é blocking.",
     "- question: risco que pode comprometer, mas você não tem certeza. Fica esperando decisão: o revisor humano decide no " +
       "painel, ou o autor resolve/explica e você confere na rodada seguinte. O ciclo segue com o resto.",
     "- refuted: achado que a verificação derrubou (fica só no histórico).",
