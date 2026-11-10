@@ -1529,6 +1529,10 @@ async function raiseUltra(kinds, waitForInit, keyword) {
       return;
     } catch { /* try the next, weaker one */ }
   }
+  // Every attempt refused, with an earlier keyword's level still pinned (this message joined its
+  // turn): the turn goes on at that level for THIS message too, the newest one, whose "high effort"
+  // the bar now shows — so a switch that takes the level has to say so.
+  if (ultraRaised && "effortLevel" in ultraRaised) ultraRaisedFor = keyword;
 }
 
 /** Give the effort back at the end of the turn: the keyword was for THAT turn, not for the session. */

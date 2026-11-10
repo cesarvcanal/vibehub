@@ -422,7 +422,9 @@ navegador não sabe. O "ultracode" continua, porque a orquestração segue ligad
 quando o nível tirado é o da mensagem com a palavra mais NOVA (o driver numera essas mensagens na
 chegada): uma troca presa na fila que cai depois do fim do turno, com a mensagem seguinte (também
 com a palavra) já enviada, acha ainda o `max` do turno velho, e avisar ali apagaria a barra da
-mensagem nova, que a escalada dela põe em `max` logo depois.
+mensagem nova, que a escalada dela põe em `max` logo depois. Uma mensagem nova que entra no turno
+em andamento e tem a escalada recusada herda o `max` que já estava fixado: é nele que o turno
+segue, e a troca seguinte avisa a barra dela.
 
 Com a fila do nível ocupada (uma troca, a devolução do turno anterior), a escalada de uma corrente
 viva espera a vez e pode cair com o turno já andando. A espera é limitada pelos prazos do que está à

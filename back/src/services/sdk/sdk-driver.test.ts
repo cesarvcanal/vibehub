@@ -1094,6 +1094,27 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     await driver.waitFor((e) => e.type === "result", afterFirstTurn);
   }, 60_000);
 
+  it("uma mensagem ultrathink absorvida cuja escalada falha herda o max já fixado: a troca do pill avisa a tela", async () => {
+    // Review do PR #259 (rodada 3): a numeração das mensagens com a palavra deixava o max com a
+    // mensagem anterior quando a escalada da nova falhava. A troca tirava o max sem avisar, e a barra,
+    // acesa para a mensagem nova, seguia dizendo "esforço alto" com a sessão no nível escolhido.
+    const driver = startDriver(["--effort", "low"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "pensa nisso ultrathink slow" });
+    await driver.waitMark('flags:{"effortLevel":"max"}');
+    await driver.waitMark("slow:running");
+    await writeFile(join(sandbox, "flags-fail"), "");
+    driver.send({ type: "user", text: "mais isso ultrathink" });
+    await driver.waitMark('flags:{"effortLevel":"xhigh"}');
+    await rm(join(sandbox, "flags-fail"), { force: true });
+    driver.send({ type: "set_effort", id: "tira-o-max", effort: "high" });
+    expect(await driver.waitFor((e) => e.type === "effort_ack" && e.id === "tira-o-max"))
+      .toEqual({ type: "effort_ack", id: "tira-o-max", effort: "high" });
+    expect(driver.events.some((e) => e.type === "keyword_effort_replaced")).toBe(true);
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+  }, 60_000);
+
   it("um turno ultracode em voo: o nível entra na hora e a devolução limpa só o ultracode", async () => {
     const driver = startDriver(["--effort", "low"]);
     await driver.waitFor((e) => e.type === "ready");
