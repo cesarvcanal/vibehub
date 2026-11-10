@@ -35,7 +35,7 @@
 // the second lock on the same door, in case the driver is ever spawned by another path. An API key
 // in the environment would silently bill the API instead of the Max subscription.
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -928,6 +928,21 @@ async function readSessionTranscript(sessionId) {
   return "";
 }
 
+/**
+ * Does the session's transcript still exist under `root` (`<config>/projects`)? The CLI deletes
+ * transcripts idle for weeks on its own (`cleanupPeriodDays`) while the card keeps its
+ * `resumeSessionId` forever — and `--resume` of an id with no file dies with "No conversation found
+ * with session ID" on EVERY turn. Only a PROVEN absence answers false: an unreadable root or an id
+ * that is not a session id answers true, so the resume goes on exactly as before. Sync on purpose:
+ * `runStream` must reach `query()` without yielding (an interrupt in between would miss the stream).
+ */
+function sessionTranscriptExists(root, sessionId) {
+  if (typeof sessionId !== "string" || !SESSION_FILE_ID_RE.test(sessionId)) return true;
+  let dirs;
+  try { dirs = readdirSync(root); } catch { return true; }
+  return dirs.some((dir) => existsSync(join(root, dir, `${sessionId}.jsonl`)));
+}
+
 /** No máximo um `tool_input_progress` por bloco nesta janela: o modelo solta deltas às dezenas por segundo. */
 const TOOL_INPUT_PROGRESS_MS = 500;
 
@@ -991,6 +1006,14 @@ async function runStream() {
   // The sign-in this CLI is born with — the newest one in the profile, read NOW (see `applyAuth`).
   streamAuth = applyAuth();
   const options = baseOptions();
+  const projectsRoot = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects");
+  if (lastSessionId && !sessionTranscriptExists(projectsRoot, lastSessionId)) {
+    // The conversation is gone from disk: start a NEW session instead of failing every turn. The
+    // screen keeps its history (that lives in the panel); the model does not — say so once.
+    trace(`transcript of ${lastSessionId} is gone; starting a new session`);
+    emit({ type: "local_output", text: `A sessão anterior deste card (${lastSessionId.slice(0, 8)}) não existe mais no runner: o Claude Code apagou o transcript antigo. Esta mensagem abriu uma conversa nova; o histórico continua na tela, mas o modelo não lembra dele.` });
+    lastSessionId = null;
+  }
   if (lastSessionId) options.resume = lastSessionId;
   if (pendingResumeAt && lastSessionId) {
     // The rewind itself: resume this session only up to that entry. Consumed here — one stream,
