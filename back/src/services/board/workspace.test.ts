@@ -1304,7 +1304,7 @@ describe("restart (single and all) — a working card is protected", () => {
       .map((f) => f.card);
     expect(restartedSlugs).toEqual([first.worktreeSlug, second.worktreeSlug]);
 
-    expect(await ws.restartStaggered("mcp")).toEqual({ restarted: 2, pending: 0 });
+    expect(await ws.restartStaggered("mcp")).toEqual({ restarted: 2, pending: 0, failed: 1 });
   });
 
   it("restartAllCards / restartStaggered: ONE docker exec for every card, not one per card", async () => {
@@ -1321,7 +1321,7 @@ describe("restart (single and all) — a working card is protected", () => {
     for (const c of cards) expect(scriptAt(0)).toContain(`tmux kill-session -t '${c.tmuxSession}'`);
 
     runScript.mockClear();
-    expect(await ws.restartStaggered("mcp")).toEqual({ restarted: 3, pending: 0 });
+    expect(await ws.restartStaggered("mcp")).toEqual({ restarted: 3, pending: 0, failed: 0 });
     expect(runScript).toHaveBeenCalledTimes(1);
   });
 
@@ -1450,7 +1450,7 @@ describe("restart (single and all) — a working card is protected", () => {
     await reg.applyCardStatus(busy.id, "working");
     runScript.mockClear();
 
-    expect(await ws.restartStaggered("brain", "tester")).toEqual({ restarted: 1, pending: 1 });
+    expect(await ws.restartStaggered("brain", "tester")).toEqual({ restarted: 1, pending: 1, failed: 0 });
 
     // the idle one had its session killed right away (it reopens with `claude -c`, re-reading the brain)
     expect(runScript).toHaveBeenCalledTimes(1);
@@ -1471,6 +1471,21 @@ describe("restart (single and all) — a working card is protected", () => {
     expect((await reg.getCard(untouched.id))?.restartPendingAt ?? null).toBeNull();
   });
 
+  it("restartStaggered: a runner that cannot be reached RESOLVES, and says how many idle cards it failed", async () => {
+    // Best-effort for the brain/MCP save, but the post-deploy restart must not record its fingerprint
+    // over a sweep that never reached the runner (#273): `failed` is how it can tell.
+    const p = await reg.createProject({ name: "x" });
+    const idle = await reg.createCard({ projectId: p.id, title: "idle" });
+    const busy = await reg.createCard({ projectId: p.id, title: "busy" });
+    await ws.openCard(idle.id);
+    await ws.openCard(busy.id);
+    await reg.applyCardStatus(busy.id, "working");
+    runScript.mockRejectedValue(new Error("ssh: connect to host timed out"));
+
+    expect(await ws.restartStaggered("deploy")).toEqual({ restarted: 0, pending: 1, failed: 1 });
+    expect((await reg.getCard(busy.id))?.restartPendingAt).toBeGreaterThan(0);
+  });
+
   it("restartStaggered: a PAUSED card is neither restarted nor flagged (no live session)", async () => {
     const p = await reg.createProject({ name: "x" });
     const parked = await reg.createCard({ projectId: p.id, title: "parked" });
@@ -1478,7 +1493,7 @@ describe("restart (single and all) — a working card is protected", () => {
     await ws.pauseCard(parked.id);
     runScript.mockClear();
 
-    expect(await ws.restartStaggered("mcp")).toEqual({ restarted: 0, pending: 0 });
+    expect(await ws.restartStaggered("mcp")).toEqual({ restarted: 0, pending: 0, failed: 0 });
     expect(runScript).not.toHaveBeenCalled();
     expect((await reg.getCard(parked.id))?.restartPendingAt ?? null).toBeNull();
   });
@@ -1494,7 +1509,7 @@ describe("restart (single and all) — a working card is protected", () => {
     }
     runScript.mockClear();
     const out = await ws.restartStaggered("brain", "tester", { projectId: alpha.id });
-    expect(out).toEqual({ restarted: 1, pending: 0 });
+    expect(out).toEqual({ restarted: 1, pending: 0, failed: 0 });
     // only alpha's card had its session ended — beta's tmux session is nowhere in the scripts
     const scripts = runScript.mock.calls.map((c) => String(c[0])).join("\n");
     expect(scripts).toContain(a.tmuxSession);
@@ -1533,7 +1548,7 @@ describe("restart (single and all) — a working card is protected", () => {
     const out = await ws.restartStaggered("brain", "tester");
 
     // The sweep RESOLVES rather than rejecting, and the healthy cards were served.
-    expect(out).toEqual({ restarted: 2, pending: 2 });
+    expect(out).toEqual({ restarted: 2, pending: 2, failed: 0 });
     expect(runScript).toHaveBeenCalledTimes(1);
     expect(scriptAt(0)).toContain(`tmux kill-session -t '${goodIdle.tmuxSession}'`);
     expect((await reg.getCard(goodBusy.id))?.restartPendingAt).toBeGreaterThan(0);

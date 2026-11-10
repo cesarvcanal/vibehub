@@ -1995,13 +1995,16 @@ export async function restartAllCards(by?: string): Promise<{ restarted: number;
  *    (brain and MCP) — `reason` is only the badge label.
  * Best-effort: a dead host or a card that vanished mid-sweep must not take the rest down (a session
  * that is already gone is fine for the kill script, and the flags are settled per card). Returns
- * {restarted (idle cards whose sessions were ended now), pending (working cards flagged)}.
+ * {restarted (idle cards whose sessions were ended now), pending (working cards flagged), failed
+ * (idle cards the runner could not be told to restart)}. `failed` is never a session that was
+ * already gone — the kill script counts that one as ended — only a runner that was not reached: a
+ * caller that must not settle on a half-done sweep (the post-deploy restart) reads it.
  */
 export async function restartStaggered(
   reason: RestartReason,
   by?: string,
   opts: { projectId?: string } = {},
-): Promise<{ restarted: number; pending: number }> {
+): Promise<{ restarted: number; pending: number; failed: number }> {
   // `projectId` scopes the sweep (a PROJECT brain save only concerns that project's cards — bouncing
   // every other project's terminals for it would be noise). Absent = the whole board, as before.
   const live = (await listAllCards()).filter(
@@ -2010,15 +2013,16 @@ export async function restartStaggered(
   const idle = cardsToRestart(live); // live session and NOT working
   const working = live.filter((c) => c.status === "working"); // live session AND working
   const restarted = await restartCardSessions(idle, by);
+  const failed = idle.length - restarted;
   await Promise.allSettled(working.map((c) => markRestartPending(c.id, reason)));
   logger.info(
     {
-      audit: true, action: "card.restartStaggered", reason, restarted, pending: working.length,
+      audit: true, action: "card.restartStaggered", reason, restarted, failed, pending: working.length,
       cards: idle.map((c) => c.worktreeSlug), by,
     },
     "staggered restart after applying the brain/MCPs — idle cards restarted now, working cards flagged as pending",
   );
-  return { restarted, pending: working.length };
+  return { restarted, pending: working.length, failed };
 }
 
 /**

@@ -69,15 +69,28 @@ async function storeFingerprint(fingerprint: string): Promise<void> {
 /**
  * Boot step: compares the current fingerprint with the one the last boot recorded and, when they
  * differ (or none was recorded — sessions from before this existed), restarts the board's sessions,
- * staggered. Records the new fingerprint only after the sweep, so a sweep that failed is retried on
- * the next boot. Never throws: a runner that is down must not stop the back from starting.
+ * staggered. Records the new fingerprint only after a sweep that ENDED EVERY IDLE SESSION, so one
+ * that failed — or reached only part of the runner — is retried on the next boot. Never throws: a
+ * runner that is down must not stop the back from starting.
+ *
+ * "Failed" includes the sweep that resolved: the kill under it is best-effort and swallows an
+ * unreachable runner, so judging by "it did not throw" recorded the fingerprint with every idle
+ * card still on the old setup, and no later boot ever looked again (#273). A retry restarts the
+ * idle cards the first attempt did reach, too: they resume the same conversation, a cheap price.
  */
 export async function restartSessionsIfSpecChanged(): Promise<{ changed: boolean; restarted: number; pending: number }> {
   const current = sessionSpecFingerprint();
   const stored = await readStoredFingerprint();
   if (stored === current) return { changed: false, restarted: 0, pending: 0 };
   try {
-    const { restarted, pending } = await restartStaggered("deploy");
+    const { restarted, pending, failed } = await restartStaggered("deploy");
+    if (failed > 0) {
+      logger.warn(
+        { restarted, failed, pending },
+        "session setup changed but the runner could not restart every idle card — retried on next boot",
+      );
+      return { changed: true, restarted, pending };
+    }
     await storeFingerprint(current);
     logger.info(
       { audit: true, action: "card.restartAfterDeploy", restarted, pending, previous: stored?.slice(0, 12) ?? null, current: current.slice(0, 12) },
