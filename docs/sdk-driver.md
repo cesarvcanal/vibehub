@@ -535,7 +535,10 @@ no meio do turno** — 2x em produção o card ficou mudo. A resposta:
   saída da IA (texto ou ferramenta). Outro deploy no meio dele retoma DE NOVO só se ele avançou e
   ainda não gastou `MAX_AUTO_RESUMES` (5) seguidas; a retomada que morre sem produzir nada (o loop
   de verdade) ou o teto só escrevem a linha ("não vou retomar de novo") e param. Mensagem de pessoa
-  zera a cadeia. As operações do marcador são serializadas por card, para um `progressed` atrasado
+  zera a cadeia. A retomada que avançou e ficou de pé por `SETTLED_RESUME_MS` (2 min) também zera:
+  ela trabalhou, e o deploy que a matou é dos outros — num dia de deploy a cada ~5 min a 5ª retomada
+  parava um trabalho longo no meio (2026-11-10). O teto só pega o turno que derruba o painel logo
+  depois de voltar. As operações do marcador são serializadas por card, para um `progressed` atrasado
   nunca ressuscitar o marcador de um turno que já fechou.
 - **Trabalho que nenhuma mensagem abriu (2026-10-19):** o marcador cobre todo trabalho que um
   deploy mataria, não só o turno de quem mandou mensagem: o turno que o PRÓPRIO CLI abre (a tarefa
