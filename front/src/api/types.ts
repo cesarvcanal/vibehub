@@ -419,6 +419,12 @@ export interface Card {
   /** Last time a human typed into this card's terminal (epoch ms). */
   humanActiveAt?: number;
   /**
+   * Last sign of life the server itself produced for the card (epoch ms): an open/wake, an
+   * instruction delivered to it. Read only by the done-card countdown, which must count it as the
+   * server's retention does.
+   */
+  activityAt?: number;
+  /**
    * When the card was moved to `done` (epoch ms); cleared when it leaves. One of the stamps the
    * done-card retention counts from — see `features/board/lib/doneRetention`.
    */

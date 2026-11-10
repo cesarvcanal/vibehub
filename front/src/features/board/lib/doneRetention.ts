@@ -6,17 +6,20 @@ import type { BoardCard } from "@/features/board/api";
  * The server purges a card that sat untouched in `done` for `doneRetentionDays` (served by
  * `GET /api/features`; the rule is back/src/services/board/retention.ts). The card prints how long
  * it has left, so the deadline it shows MUST be the one the server acts on: the same stamps make
- * up the card's last sign of life (`doneAt`, `updatedAt`, `statusAt`, `humanActiveAt` — NOT
- * `lastActivity` from ./board, which counts opens and pauses the server ignores), the same
- * `done`-only rule and the same `0 = off` switch. Anything unknown prints NOTHING: no countdown
- * beats a wrong one.
+ * up the card's last sign of life (`doneAt`, `updatedAt`, `statusAt`, `humanActiveAt`, `openedAt`,
+ * `activityAt` — NOT `lastActivity` from ./board, which counts pauses the server ignores), the
+ * same `done`-only rule and the same `0 = off` switch. Anything unknown prints NOTHING: no
+ * countdown beats a wrong one.
  */
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 
-type RetentionStamps = Pick<BoardCard, "column" | "doneAt" | "updatedAt" | "statusAt" | "humanActiveAt">;
+type RetentionStamps = Pick<
+  BoardCard,
+  "column" | "doneAt" | "updatedAt" | "statusAt" | "humanActiveAt" | "openedAt" | "activityAt"
+>;
 
 /**
  * When the server will purge this card (epoch ms), or null when it never will / we cannot know:
@@ -25,7 +28,14 @@ type RetentionStamps = Pick<BoardCard, "column" | "doneAt" | "updatedAt" | "stat
 export function donePurgeAt(card: RetentionStamps, retentionDays: number | undefined): number | null {
   if (card.column !== "done") return null;
   if (!retentionDays || !(retentionDays > 0)) return null;
-  const last = Math.max(card.doneAt ?? 0, card.updatedAt ?? 0, card.statusAt ?? 0, card.humanActiveAt ?? 0);
+  const last = Math.max(
+    card.doneAt ?? 0,
+    card.updatedAt ?? 0,
+    card.statusAt ?? 0,
+    card.humanActiveAt ?? 0,
+    card.openedAt ?? 0,
+    card.activityAt ?? 0,
+  );
   if (last <= 0) return null;
   return last + retentionDays * DAY_MS;
 }
