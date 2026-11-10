@@ -94,7 +94,7 @@ async function fresh(opts: { flakyRegistry?: boolean } = {}) {
   runScript = vi.fn(async () => ({ stdout: "", stderr: "" }));
   ptyCommand = vi.fn((line: string) => ({ file: "bash", args: ["-lc", line] }));
   vi.mocked(host.hostExecutor).mockReturnValue({
-    kind: "local", label: "this machine", runScript, ptyCommand, writeFile: vi.fn(),
+    kind: "local", label: "this machine", runScript, ptyCommand,
   } as unknown as import("../../runtime/host.js").HostExecutor);
   const gh = await import("../github/client.js");
   vi.mocked(gh.gitAuthHeaderFor).mockResolvedValue(AUTH_HEADER);
@@ -1304,7 +1304,7 @@ describe("restart (single and all) — a working card is protected", () => {
       .map((f) => f.card);
     expect(restartedSlugs).toEqual([first.worktreeSlug, second.worktreeSlug]);
 
-    expect(await ws.restartStaggered("mcp")).toEqual({ restarted: 2, pending: 0 });
+    expect(await ws.restartStaggered("mcp")).toEqual({ restarted: 2, pending: 0, failed: 1 });
   });
 
   it("restartAllCards / restartStaggered: ONE docker exec for every card, not one per card", async () => {
@@ -1321,7 +1321,7 @@ describe("restart (single and all) — a working card is protected", () => {
     for (const c of cards) expect(scriptAt(0)).toContain(`tmux kill-session -t '${c.tmuxSession}'`);
 
     runScript.mockClear();
-    expect(await ws.restartStaggered("mcp")).toEqual({ restarted: 3, pending: 0 });
+    expect(await ws.restartStaggered("mcp")).toEqual({ restarted: 3, pending: 0, failed: 0 });
     expect(runScript).toHaveBeenCalledTimes(1);
   });
 
@@ -1450,7 +1450,7 @@ describe("restart (single and all) — a working card is protected", () => {
     await reg.applyCardStatus(busy.id, "working");
     runScript.mockClear();
 
-    expect(await ws.restartStaggered("brain", "tester")).toEqual({ restarted: 1, pending: 1 });
+    expect(await ws.restartStaggered("brain", "tester")).toEqual({ restarted: 1, pending: 1, failed: 0 });
 
     // the idle one had its session killed right away (it reopens with `claude -c`, re-reading the brain)
     expect(runScript).toHaveBeenCalledTimes(1);
@@ -1471,6 +1471,21 @@ describe("restart (single and all) — a working card is protected", () => {
     expect((await reg.getCard(untouched.id))?.restartPendingAt ?? null).toBeNull();
   });
 
+  it("restartStaggered: a runner that cannot be reached RESOLVES, and says how many idle cards it failed", async () => {
+    // Best-effort for the brain/MCP save, but the post-deploy restart must not record its fingerprint
+    // over a sweep that never reached the runner (#273): `failed` is how it can tell.
+    const p = await reg.createProject({ name: "x" });
+    const idle = await reg.createCard({ projectId: p.id, title: "idle" });
+    const busy = await reg.createCard({ projectId: p.id, title: "busy" });
+    await ws.openCard(idle.id);
+    await ws.openCard(busy.id);
+    await reg.applyCardStatus(busy.id, "working");
+    runScript.mockRejectedValue(new Error("ssh: connect to host timed out"));
+
+    expect(await ws.restartStaggered("deploy")).toEqual({ restarted: 0, pending: 1, failed: 1 });
+    expect((await reg.getCard(busy.id))?.restartPendingAt).toBeGreaterThan(0);
+  });
+
   it("restartStaggered: a PAUSED card is neither restarted nor flagged (no live session)", async () => {
     const p = await reg.createProject({ name: "x" });
     const parked = await reg.createCard({ projectId: p.id, title: "parked" });
@@ -1478,7 +1493,7 @@ describe("restart (single and all) — a working card is protected", () => {
     await ws.pauseCard(parked.id);
     runScript.mockClear();
 
-    expect(await ws.restartStaggered("mcp")).toEqual({ restarted: 0, pending: 0 });
+    expect(await ws.restartStaggered("mcp")).toEqual({ restarted: 0, pending: 0, failed: 0 });
     expect(runScript).not.toHaveBeenCalled();
     expect((await reg.getCard(parked.id))?.restartPendingAt ?? null).toBeNull();
   });
@@ -1494,7 +1509,7 @@ describe("restart (single and all) — a working card is protected", () => {
     }
     runScript.mockClear();
     const out = await ws.restartStaggered("brain", "tester", { projectId: alpha.id });
-    expect(out).toEqual({ restarted: 1, pending: 0 });
+    expect(out).toEqual({ restarted: 1, pending: 0, failed: 0 });
     // only alpha's card had its session ended — beta's tmux session is nowhere in the scripts
     const scripts = runScript.mock.calls.map((c) => String(c[0])).join("\n");
     expect(scripts).toContain(a.tmuxSession);
@@ -1533,7 +1548,7 @@ describe("restart (single and all) — a working card is protected", () => {
     const out = await ws.restartStaggered("brain", "tester");
 
     // The sweep RESOLVES rather than rejecting, and the healthy cards were served.
-    expect(out).toEqual({ restarted: 2, pending: 2 });
+    expect(out).toEqual({ restarted: 2, pending: 2, failed: 0 });
     expect(runScript).toHaveBeenCalledTimes(1);
     expect(scriptAt(0)).toContain(`tmux kill-session -t '${goodIdle.tmuxSession}'`);
     expect((await reg.getCard(goodBusy.id))?.restartPendingAt).toBeGreaterThan(0);
@@ -1559,8 +1574,12 @@ describe("restart (single and all) — a working card is protected", () => {
     runScript.mockClear();
     await ws.purgeCardWorkspace(card, { by: "tester" });
 
-    expect(scriptAt(0)).toContain(`tmux kill-session -t '${card.tmuxSession}-sh'`);
-    const drop = scriptAt(1);
+    // ONE exec (#284): the sessions end at the head of the purge, before anything is erased.
+    expect(runScript).toHaveBeenCalledTimes(1);
+    const drop = scriptAt(0);
+    expect(drop).toContain(`tmux kill-session -t '${card.tmuxSession}'`);
+    expect(drop.indexOf(`tmux kill-session -t '${card.tmuxSession}-sh'`)).toBeGreaterThan(-1);
+    expect(drop.indexOf("kill -KILL $PIDS")).toBeLessThan(drop.indexOf("worktree remove"));
     expect(drop).toContain(`git -C '/work/acme--erp-aux' worktree remove --force '/work/acme--erp-aux-worktrees/${card.worktreeSlug}'`);
     expect(drop).toContain("worktree prune");
     // The branch goes with the card: `worktree remove` only unregisters the worktree, and a new
@@ -1592,14 +1611,47 @@ describe("image upload into the card", () => {
   it("sanitizeUploadName: lower case, [a-z0-9._-], no '..', no dotfile, with a fallback", () => {
     expect(ws.sanitizeUploadName("Screen Shot 2026-08-14.PNG")).toBe("screen-shot-2026-08-14.png");
     const traversal = ws.sanitizeUploadName("../../etc/passwd");
-    expect(traversal).toBe("etc-passwd");
+    expect(traversal).toBe("etc-passwd.bin");
     expect(traversal).not.toContain("..");
     expect(ws.sanitizeUploadName("a..b...png")).toBe("a.b.png");
-    expect(ws.sanitizeUploadName(".hidden")).toBe("hidden");
-    expect(ws.sanitizeUploadName("💥 !!!")).toBe("image");
+    expect(ws.sanitizeUploadName(".hidden")).toBe("hidden.bin");
+    expect(ws.sanitizeUploadName("💥 !!!")).toBe("image.bin");
     const long = ws.sanitizeUploadName("a".repeat(200) + ".png");
     expect(long.length).toBeLessThanOrEqual(80);
     expect(long.endsWith(".png")).toBe(true);
+  });
+
+  /**
+   * The write and the read speak ONE rule. A name without an extension (`README`, an empty name)
+   * used to be written as `<stamp>-readme`, a shape uploadContentType refuses: the server answered
+   * "upload not found" for a file it had just stored. Such a name gets `.bin` — served as a
+   * download, and still opened by its path inside the runner.
+   */
+  it("sanitizeUploadName: every name it returns is one uploadContentType reads back", () => {
+    const cases: Array<[string, string]> = [
+      ["README", "readme.bin"],
+      ["", "image.bin"],
+      ["Makefile.", "makefile.bin"],
+      ["_notes.txt", "notes.txt"], // a leading `_` is not a first character the read accepts
+      ["dump.tar_gz", "dump.tar_gz.bin"], // `_` is not an extension character on the read side
+      ["a" + "_".repeat(100) + ".png", "png.bin"], // the cut keeps the end, then the extension check
+      ["foto.JPG", "foto.jpg"],
+    ];
+    for (const [original, expected] of cases) {
+      const name = ws.sanitizeUploadName(original);
+      expect(name).toBe(expected);
+      expect(ws.uploadContentType(`1731000000000-${name}`)).not.toBeNull();
+    }
+    expect(ws.uploadContentType("1731000000000-readme.bin")).toBe("application/octet-stream");
+    expect(ws.uploadContentType("1731000000000-foto.jpg")).toBe("image/jpeg");
+  });
+
+  it("an upload named without an extension is written under a name the read accepts", async () => {
+    const { card } = await seed();
+    const { path } = await ws.uploadCardImage(card.id, "README", Buffer.from("hello").toString("base64"));
+    const file = path.split("/").pop()!;
+    expect(file).toMatch(/^\d+-readme\.bin$/);
+    expect(ws.uploadContentType(file)).toBe("application/octet-stream");
   });
 
   it("the base64 rides on the script's stdin, after one exec line — never in argv nor in a heredoc; the path comes back", async () => {
@@ -1867,7 +1919,11 @@ describe("managed MCPs injected on open (into the card's effective profile)", ()
     await reg.createMcp({ name: "erp", kind: "stdio", command: "npx", envKeys: ["ERP_TOKEN"] }); // no value in the vault
     const updated = await ws.openCard(card.id);
     expect(updated.openedAt).toBeTypeOf("number"); // the card still opened
-    expect(scriptAt(1)).not.toContain("mcp add-json"); // but no MCP was injected
+    // Only the MCP without its secret is left out: the built-in browser and the other MCP still ship
+    // (one broken registration used to drop the whole set, built-ins included).
+    expect(scriptAt(1)).not.toContain("add-json -s user 'erp'");
+    expect(scriptAt(1)).toContain("CLAUDE_CONFIG_DIR='/root/.claude-profiles/personal' claude mcp add-json -s user 'tm'");
+    expect(scriptAt(1)).toContain("CLAUDE_CONFIG_DIR='/root/.claude-profiles/personal' claude mcp add-json -s user 'navegador'");
   });
 });
 
@@ -2464,6 +2520,7 @@ describe("buildCardPurgeScript (everything the card left on the runner's disk)",
       repoDir: "/work/acme--erp-aux",
       branch: `card/deletar-card`,
       browserDataDir: "/work/.browser/card-e3f1ab5a",
+      sessions: ["card-e3f1ab5a", "card-e3f1ab5a-sh"],
     });
 
   it("erases the worktree, the branch, the uploads, the gh token and the browser profile", () => {
@@ -2540,6 +2597,7 @@ describe("buildCardPurgeScript (everything the card left on the runner's disk)",
       cardId: CARD_ID,
       cwd: "/work/scratch/ideia",
       browserDataDir: "/work/.browser/card-e3f1ab5a",
+      sessions: ["card-e3f1ab5a"],
     });
     expect(s).toContain(`rm -rf '/work/scratch/ideia'`);
     expect(s).not.toContain("git -C");
@@ -2547,7 +2605,7 @@ describe("buildCardPurgeScript (everything the card left on the runner's disk)",
   });
 
   it("refuses a card id or a path that is not id/path-shaped — nothing raw reaches a shell", () => {
-    const base = { containerName: CONTAINER, cwd: CWD, browserDataDir: "/work/.browser/card-x" };
+    const base = { containerName: CONTAINER, cwd: CWD, browserDataDir: "/work/.browser/card-x", sessions: ["card-x"] };
     expect(() => ws.buildCardPurgeScript({ ...base, cardId: "../../etc" })).toThrow(/invalid card id/);
     expect(() => ws.buildCardPurgeScript({ ...base, cardId: "a; rm -rf /" })).toThrow(/invalid card id/);
     expect(() => ws.buildCardPurgeScript({ ...base, cardId: CARD_ID, cwd: "/work/../etc" })).toThrow(/\.\./);
@@ -2586,6 +2644,7 @@ describe("ownBranch (what a delete may drop)", () => {
       cwd: "/work/acme--erp-aux-worktrees/x",
       repoDir: "/work/acme--erp-aux",
       browserDataDir: "/work/.browser/card-e3f1ab5a",
+      sessions: ["card-e3f1ab5a"],
     };
     for (const branch of ["dev", "prod", "main", "master", "feat/pdv", "release/1.0"]) {
       expect(() => ws.buildCardPurgeScript({ ...base, branch })).toThrow(/refusing to delete a branch/);

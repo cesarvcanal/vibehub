@@ -95,8 +95,13 @@ export const WATCH_QUIET_MS = 90_000;
 export const WATCH_STALL_MS = 60 * 60_000;
 /** Teto duro: nenhuma sondagem vive mais que isto, aconteça o que acontecer. */
 export const WATCH_MAX_MS = 6 * 60 * 60_000;
-/** Sondagens seguidas com erro antes de desistir — runner caído não se resolve insistindo. */
-export const WATCH_MAX_FAILURES = 5;
+/**
+ * Por quanto tempo a sondagem pode falhar SEM PARAR (contado da primeira falha da sequência, zerado
+ * por qualquer sucesso) antes de desistir. É tempo, não número de tiques: um runner reiniciando leva
+ * cerca de um minuto, e desistir em 5 tiques (20 s) publicava como concluída uma frota que seguia
+ * rodando. Bater num `docker exec` que falha é barato, então os tiques seguem durante a sequência.
+ */
+export const WATCH_FAILURE_GRACE_MS = 3 * 60_000;
 /**
  * Sondagens seguidas SEM rodada nenhuma antes de desistir. Um `Workflow` que morre antes de escrever
  * o diário (script com erro de sintaxe) não deixa nada para ler: sem isto, a sondagem dele ficaria
@@ -135,7 +140,8 @@ interface Watch {
   startedAt: number;
   /** A última vez que QUALQUER rodada mudou algo na tela — a desistência por parada mede daqui. */
   activeAt: number;
-  failures: number;
+  /** Início da sequência de falhas em curso; `null` = a última sondagem respondeu. */
+  failingSince: number | null;
   /** Tiques seguidos sem rodada nenhuma no diretório. */
   empty: number;
   /** Uma sondagem em voo: o tique seguinte não abre outra em cima dela. */
@@ -215,7 +221,7 @@ export function watchCardWorkflows(cardId: string, deps: WatchDeps): void {
     timer: null as unknown as NodeJS.Timeout,
     startedAt: now(),
     activeAt: now(),
-    failures: 0,
+    failingSince: null,
     empty: 0,
     busy: false,
     runs: new Map(),
@@ -237,6 +243,8 @@ export function watchCardWorkflows(cardId: string, deps: WatchDeps): void {
     if (deps.watchers() <= 0) {
       for (const tracked of watch.runs.values()) tracked.movedAt = now();
       watch.activeAt = now();
+      // Sem sondar, não se sabe se o runner seguiu caído: a sequência recomeça na próxima falha.
+      watch.failingSince = null;
       return;
     }
     const dirs = deps.dirs();
@@ -255,14 +263,14 @@ export function watchCardWorkflows(cardId: string, deps: WatchDeps): void {
         { timeoutMs: 10_000 },
       );
       runs = parseWorkflowProbe(stdout, (runId) => watch.runs.get(runId)?.last);
-      watch.failures = 0;
+      watch.failingSince = null;
     } catch (err) {
-      watch.failures += 1;
-      logger.debug(
-        { card: deps.label, detail: (err as Error).message, failures: watch.failures },
-        "workflow probe failed",
-      );
-      if (watch.failures >= WATCH_MAX_FAILURES) closeWatch(cardId, "probe failures", deps.label);
+      // Uma linha por sequência, não por tique: a desistência é registrada pelo closeWatch.
+      if (watch.failingSince === null) {
+        watch.failingSince = now();
+        logger.warn({ card: deps.label, detail: (err as Error).message }, "workflow probe failing");
+      }
+      if (now() - watch.failingSince > WATCH_FAILURE_GRACE_MS) closeWatch(cardId, "probe failures", deps.label);
       return;
     } finally {
       watch.busy = false;

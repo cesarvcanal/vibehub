@@ -21,7 +21,7 @@ import { join } from "node:path";
 const runScript = vi.fn();
 vi.mock("../../runtime/host.js", async (orig) => ({
   ...(await orig<typeof import("../../runtime/host.js")>()),
-  hostExecutor: () => ({ kind: "local", label: "this machine", runScript, ptyCommand: vi.fn(), writeFile: vi.fn() }),
+  hostExecutor: () => ({ kind: "local", label: "this machine", runScript, ptyCommand: vi.fn() }),
 }));
 
 const runnerStatus = vi.fn();
@@ -284,6 +284,35 @@ describe("importSessions", () => {
     expect(out.failed).toBe(hostile.length);
     expect(out.results.every((r) => /invalid resumeSessionId/.test(r.error ?? ""))).toBe(true);
     expect(runScript).not.toHaveBeenCalled();
+  });
+
+  it("an invalid branch or column fails its item WITHOUT leaving a card — re-sending creates none either", async () => {
+    const { mod, reg } = await fresh();
+    const batch = {
+      items: [
+        { repo: REPO, title: "bad branch", sessionId: UUID_A, branch: "bad branch!" },
+        { repo: REPO, title: "bad column", sessionId: UUID_B, column: "nowhere" as never },
+      ],
+    };
+    for (let run = 0; run < 2; run++) {
+      const out = await mod.importSessions(batch, cardCwd);
+      expect(out).toMatchObject({ created: 0, skipped: 0, failed: 2 });
+      expect(out.results[0]!.error).toMatch(/invalid branch name/);
+      expect(out.results[1]!.error).toMatch(/invalid column/);
+      expect(out.results.every((r) => r.cardId === undefined)).toBe(true);
+    }
+    expect(await reg.listAllCards()).toEqual([]);
+    expect(runScript).not.toHaveBeenCalled();
+
+    // Fixed and re-sent, the item imports once, carrying its session id from the first write.
+    const fixed = await mod.importSessions(
+      { items: [{ repo: REPO, title: "bad branch", sessionId: UUID_A, branch: "feat/ok" }] },
+      cardCwd,
+    );
+    expect(fixed).toMatchObject({ created: 1, failed: 0 });
+    const cards = await reg.listAllCards();
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ resumeSessionId: UUID_A, branch: "feat/ok", column: mod.IMPORT_COLUMN });
   });
 
   it("rejects a hostile repo name at the board boundary", async () => {

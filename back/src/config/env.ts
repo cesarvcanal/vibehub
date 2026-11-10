@@ -12,11 +12,22 @@ function str(name: string, fallback: string): string {
   return v === undefined || v === "" ? fallback : v;
 }
 
-function int(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw === undefined || raw === "") return fallback;
-  const n = Number.parseInt(raw, 10);
-  return Number.isFinite(n) ? n : fallback;
+/**
+ * A TCP port, VALIDATED: read with parseInt, `3010abc` listened on 3010 and `abc` on the default,
+ * so a typo never surfaced. 0 stays valid — "any free port", which Fastify takes.
+ */
+function port(name: string, fallback: number): number {
+  const v = str(name, String(fallback));
+  const n = Number(v);
+  if (!/^\d+$/.test(v) || n > 65535) throw new Error(`${name} must be a port number (0-65535), not '${v}'`);
+  return n;
+}
+
+/** VIBEHUB_RUNNER_KIND: exactly `local` or `ssh`. Anything else (`SSH`, a typo) silently meant local. */
+function runnerKind(name: string): RunnerHostKind {
+  const v = str(name, "local");
+  if (v !== "local" && v !== "ssh") throw new Error(`${name} must be 'local' or 'ssh', not '${v}'`);
+  return v;
 }
 
 /** A docker container name — and nothing a shell could read as more than one word or a flag. */
@@ -173,12 +184,12 @@ export interface VibehubConfig {
 }
 
 export const config: VibehubConfig = {
-  port: int("VIBEHUB_PORT", 3010),
+  port: port("VIBEHUB_PORT", 3010),
   host: str("VIBEHUB_HOST", "0.0.0.0"),
   dataDir: resolve(str("VIBEHUB_DATA_DIR", "data")),
-  publicUrl: str("VIBEHUB_PUBLIC_URL", `http://127.0.0.1:${int("VIBEHUB_PORT", 3010)}`),
+  publicUrl: str("VIBEHUB_PUBLIC_URL", `http://127.0.0.1:${port("VIBEHUB_PORT", 3010)}`),
   runner: {
-    kind: (str("VIBEHUB_RUNNER_KIND", "local") === "ssh" ? "ssh" : "local") as RunnerHostKind,
+    kind: runnerKind("VIBEHUB_RUNNER_KIND"),
     sshHost: str("VIBEHUB_RUNNER_SSH_HOST", ""),
     sshUser: str("VIBEHUB_RUNNER_SSH_USER", "root"),
     sshKeyPath: str("VIBEHUB_RUNNER_SSH_KEY", ""),

@@ -81,6 +81,33 @@ export class AttemptLimiter {
   }
 }
 
+/**
+ * The per-address ceiling, ONE per process and shared by every door that runs scrypt for a
+ * stranger — this file's sign-in and setup, and the OAuth consent page (routes/oauth.ts): a ceiling
+ * per door would only multiply what rotating usernames buy. null when VIBEHUB_TRUST_PROXY is unset
+ * (see authRoutes for why the address then identifies nobody).
+ */
+const perAddress = config.trustProxy === false ? null : new AttemptLimiter(ATTEMPTS_PER_ADDRESS, ADDRESS_WINDOW_MS);
+
+/**
+ * Counts one sign-in try against the address ceiling, then against `perAccount` under `accountKey`.
+ * 0 when it may run; otherwise the seconds to wait. Short-circuit: a try the address ceiling
+ * refused is not also charged to the account, and one the ACCOUNT ceiling refused ran no scrypt, so
+ * the address gets it back. A try that then signs in returns its address charge with
+ * {@link refundAddressTry}; a failure keeps it.
+ */
+export function chargeSignInTry(ip: string, perAccount: AttemptLimiter, accountKey: string): number {
+  const addressWait = perAddress?.hit(ip) ?? 0;
+  const wait = addressWait || perAccount.hit(accountKey);
+  if (wait && !addressWait) perAddress?.refund(ip);
+  return wait;
+}
+
+/** Gives the address back the try {@link chargeSignInTry} counted: it signed in, so it was no failure. */
+export function refundAddressTry(ip: string): void {
+  perAddress?.refund(ip);
+}
+
 async function tooManyAttempts(reply: FastifyReply, retryAfterSeconds: number): Promise<FastifyReply> {
   return await reply.code(429).header("retry-after", String(retryAfterSeconds))
     .send({ error: "too many attempts — wait a few minutes and try again" });
@@ -113,7 +140,6 @@ async function tooManyAttempts(reply: FastifyReply, retryAfterSeconds: number): 
  * cap on scrypt cost is the lesser harm — the per-account limit still bounds password guessing.
  */
 export async function authRoutes(app: FastifyInstance): Promise<void> {
-  const perAddress = config.trustProxy === false ? null : new AttemptLimiter(ATTEMPTS_PER_ADDRESS, ADDRESS_WINDOW_MS);
   const perAccount = new AttemptLimiter(LOGIN_ATTEMPTS_PER_ACCOUNT, ACCOUNT_WINDOW_MS);
 
   app.post<{ Body: { username?: string; password?: string } }>("/api/auth/login", async (req, reply) => {
@@ -129,12 +155,8 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     }
     const device = await knownDeviceId(req.cookies?.[deviceCookieName(name)], name);
     const account = device ? `device:${device}|${name}` : `${req.ip}|${name}`;
-    // Short-circuit: a try the address ceiling refused is not also charged to the account.
-    const addressWait = perAddress?.hit(req.ip) ?? 0;
-    const wait = addressWait || perAccount.hit(account);
+    const wait = chargeSignInTry(req.ip, perAccount, account);
     if (wait) {
-      // Refused by the ACCOUNT ceiling: no scrypt ran, so the address is not charged for it.
-      if (!addressWait) perAddress?.refund(req.ip);
       logger.warn({ audit: true, action: "auth.login.throttled", username: name, ip: req.ip }, "sign-in throttled");
       return await tooManyAttempts(reply, wait);
     }
@@ -145,7 +167,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       return await reply.code(401).send({ error: "invalid username or password" });
     }
     perAccount.clear(account);
-    perAddress?.refund(req.ip);
+    refundAddressTry(req.ip);
     await setSessionCookie(reply, user.id);
     if (!device) await setDeviceCookie(reply, user.username);
     logger.info({ audit: true, action: "auth.login", user: user.username }, "signed in");

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -74,7 +74,42 @@ describe("buildWorkflowProbeScript", () => {
     expect(script).toContain("'/root/.claude/p/s/subagents/workflows'");
     expect(script).toContain("'/root/.claude/p/s/workflows/scripts'");
     expect(script).toContain("process.argv[1]");
-    expect(script.endsWith("|| true")).toBe(true); // no session, no workflows: not an error
+    // A runner that cannot run the probe must reach the caller as an error, never as "no runs".
+    expect(script).not.toMatch(/\|\|\s*true/);
+    expect(script).not.toContain("2>/dev/null");
+  });
+
+  describe("run by a real shell, with a stand-in `docker`", () => {
+    let bin = "";
+    beforeEach(() => { bin = mkdtempSync(join(tmpdir(), "vibehub-probe-bin-")); });
+    afterEach(() => { rmSync(bin, { recursive: true, force: true }); });
+
+    /** `docker` on PATH: `exec` runs the rest locally (the probe's node), `fail` is a runner that is down. */
+    function runShell(script: string, docker: "exec" | "fail") {
+      const body = docker === "exec"
+        ? `#!/bin/sh\nshift 2\nexec "$@"\n`
+        : `#!/bin/sh\necho "Error response from daemon: container is restarting" >&2\nexit 1\n`;
+      writeFileSync(join(bin, "docker"), body, { mode: 0o755 });
+      // `node` resolves to the test's own binary, as it would to the runner's inside the container.
+      writeFileSync(join(bin, "node"), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$@"\n`, { mode: 0o755 });
+      return spawnSync("sh", ["-c", script], { encoding: "utf8", env: { PATH: `${bin}:/usr/bin:/bin` } });
+    }
+
+    it("no journal directory yet is a SUCCESS that prints `[]` — the legitimate empty", async () => {
+      const wf = await load();
+      const out = runShell(wf.buildWorkflowProbeScript("runner", join(bin, "missing"), join(bin, "scripts")), "exec");
+      expect(out.status).toBe(0);
+      expect(wf.parseWorkflowProbe(out.stdout)).toEqual([]);
+      expect(out.stdout.trim()).toBe("[]");
+    });
+
+    it("a docker exec that fails exits non-zero, so the executor rejects instead of handing back ''", async () => {
+      const wf = await load();
+      const out = runShell(wf.buildWorkflowProbeScript("runner", "/runs", "/scripts"), "fail");
+      expect(out.status).not.toBe(0);
+      expect(out.stdout).toBe("");
+      expect(out.stderr).toContain("container is restarting"); // reaches the executor's error detail
+    });
   });
 
   it("a hostile directory cannot break out of the quoting", async () => {

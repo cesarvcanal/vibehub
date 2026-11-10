@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   OFFICIAL_MARKETPLACE,
@@ -188,7 +188,7 @@ describe("reconcileLines — install what is missing, remove what nobody wants",
     // default profile: superpowers is missing, old-thing is no longer wanted, code-review is left alone
     expect(script).toContain(`claude plugin install 'superpowers@${OFFICIAL_MARKETPLACE}'`);
     expect(script).toContain(`claude plugin uninstall 'old-thing@${OFFICIAL_MARKETPLACE}'`);
-    expect(script).not.toContain(`claude plugin install 'code-review@${OFFICIAL_MARKETPLACE}' >/dev/null 2>&1 || true\nrm`);
+    expect(script.split("\n").filter((l) => l.startsWith("claude plugin install 'code-review@"))).toEqual([]);
     // the account profile has nothing yet: both go in, addressed through CLAUDE_CONFIG_DIR
     expect(script).toContain(`CLAUDE_CONFIG_DIR='${ACCOUNT}' claude plugin install 'code-review@${OFFICIAL_MARKETPLACE}'`);
   });
@@ -197,7 +197,7 @@ describe("reconcileLines — install what is missing, remove what nobody wants",
     const signature = pluginsSignature(["code-review"]);
     const script = reconcileLines([DEFAULT], ["code-review"], installed).join("\n");
     expect(script).toContain("rm -f '/root/.claude'/.plugins-*"); // the old markers go
-    expect(script).toContain(`: > '/root/.claude'/.plugins-${signature}`);
+    expect(script).toContain(`: > '/root/.claude/.plugins-${signature}'`);
   });
 
   it("wanting nothing uninstalls everything vibehub put there, and leaves no marker", () => {
@@ -207,10 +207,59 @@ describe("reconcileLines — install what is missing, remove what nobody wants",
     expect(script).not.toContain(": > '/root/.claude'/.plugins-");
   });
 
-  it("one profile refusing must not abort the sweep over the others", () => {
-    for (const line of reconcileLines(profiles, ["code-review"], installed)) {
-      if (line.includes("claude plugin")) expect(line.endsWith("|| true")).toBe(true);
-    }
+});
+
+describe("reconcileLines — run by bash: the marker only after a clean apply, and a failure is reported", () => {
+  const root = `/tmp/vibehub-reconcile-${randomUUID().slice(0, 8)}`;
+  const ok = `${root}/ok`;
+  const bad = `${root}/bad`;
+  /**
+   * `claude` fails inside the profile named `failIn` (the network dropping mid-clone) and succeeds
+   * everywhere else. Returns the exit status and stderr instead of throwing.
+   */
+  const apply = (lines: string[], failIn = ""): { status: number; stderr: string } => {
+    const out = spawnSync("bash", ["-c", [
+      `claude() { [ "\${CLAUDE_CONFIG_DIR:-}" = ${JSON.stringify(failIn)} ] && [ -n ${JSON.stringify(failIn)} ] && return 1; return 0; }`,
+      ...lines,
+    ].join("\n")], { encoding: "utf8" });
+    return { status: out.status ?? -1, stderr: out.stderr };
+  };
+  const markerOf = (dir: string): string =>
+    execFileSync("bash", ["-c", `ls -A ${dir} 2>/dev/null | grep -E '^[.]plugins-[0-9a-f]+$' || true`], { encoding: "utf8" }).trim();
+  const signature = pluginsSignature(["code-review"]);
+  afterEach(() => {
+    execFileSync("rm", ["-rf", root]);
+  });
+
+  it("a failed install leaves NO marker in that profile, still sweeps the others, and fails the apply", () => {
+    execFileSync("mkdir", ["-p", bad, ok]); // profiles that exist: the marker CAN be written
+    const result = apply(reconcileLines([bad, ok], ["code-review"], {}), bad);
+    expect(markerOf(bad)).toBe("");
+    expect(markerOf(ok)).toBe(`.plugins-${signature}`);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(bad);
+    expect(result.stderr).not.toContain(ok);
+    expect(result.stderr).toMatch(/runner/); // the route reports it as the runner's failure (502)
+  });
+
+  it("a marker left by an earlier apply does not survive a re-install that failed", () => {
+    execFileSync("bash", ["-c", `mkdir -p ${bad} && : > ${bad}/.plugins-${signature}`]);
+    // Somebody removed the plugin by hand: the read says it is missing, the re-install fails.
+    expect(apply(reconcileLines([bad], ["code-review"], { [bad]: [] }), bad).status).not.toBe(0);
+    expect(markerOf(bad)).toBe("");
+  });
+
+  it("a failed uninstall also fails the apply — wanting nothing still leaves no marker", () => {
+    const result = apply(reconcileLines([bad], [], { [bad]: ["old-thing"] }), bad);
+    expect(result.status).not.toBe(0);
+    expect(markerOf(bad)).toBe("");
+  });
+
+  it("a clean apply writes the marker, replaces the old one, and exits 0", () => {
+    execFileSync("bash", ["-c", `mkdir -p ${ok} && : > ${ok}/.plugins-dead`]);
+    const result = apply(reconcileLines([ok], ["code-review"], { [ok]: ["old-thing"] }));
+    expect(result).toEqual({ status: 0, stderr: "" });
+    expect(markerOf(ok)).toBe(`.plugins-${signature}`);
   });
 });
 

@@ -33,7 +33,7 @@ async function fresh() {
   runScript = vi.fn(async () => ({ stdout: "", stderr: "" }));
   vi.mocked(host.hostExecutor).mockReturnValue({
     kind: "local", label: "this machine", runScript,
-    writeFile: vi.fn(), ptyCommand: () => ({ file: "bash", args: [] }),
+    ptyCommand: () => ({ file: "bash", args: [] }),
   } as unknown as import("../../runtime/host.js").HostExecutor);
   return {
     token: await import("./token.js"),

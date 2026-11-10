@@ -24,7 +24,7 @@ const SECRET = "tok_SUPER_SECRET_987654321";
 const runScript = vi.fn();
 vi.mock("../../runtime/host.js", async (orig) => ({
   ...(await orig<typeof import("../../runtime/host.js")>()),
-  hostExecutor: () => ({ kind: "local", label: "this machine", runScript, ptyCommand: vi.fn(), writeFile: vi.fn() }),
+  hostExecutor: () => ({ kind: "local", label: "this machine", runScript, ptyCommand: vi.fn() }),
 }));
 
 let dir = "";
@@ -506,6 +506,53 @@ describe("dropDeletedMcps (deleting an MCP)", () => {
     expect(scripts).toHaveLength(2);
     expect(scripts[0]).toContain("claude mcp remove -s user 'erp'");
     expect(scripts[1]).toContain("add-json -s user 'erp'");
+  });
+});
+
+describe("resolveMcpInjections — a registered MCP that does not resolve", () => {
+  async function withBroken() {
+    const ctx = await fresh();
+    await ctx.vault.secretSet("VIBEHUB_RUNNER_TOKEN", "runner-token-123");
+    await ctx.reg.createMcp({ name: "erp", kind: "stdio", command: "npx", envKeys: ["ERP_TOKEN"] }); // no value
+    await ctx.reg.createMcp({ name: "tm", kind: "http", url: "https://example.test/mcp" });
+    return ctx;
+  }
+
+  it("strict (the apply): THROWS, naming the missing value", async () => {
+    const { mod } = await withBroken();
+    await expect(mod.resolveMcpInjections()).rejects.toThrow("MCP 'erp': value for 'ERP_TOKEN' is not configured");
+  });
+
+  it("lenient (the card open): skips ONLY that MCP and reports it; built-ins and the others still ship", async () => {
+    const { mod } = await withBroken();
+    const skipped: Array<[string, string]> = [];
+    const injections = await mod.resolveMcpInjections((name, err) => skipped.push([name, err.message]));
+    expect(injections.map((i) => i.name)).toEqual([mod.BUILTIN_MAESTRO_NAME, mod.BUILTIN_BROWSER_NAME, "tm"]);
+    expect(skipped).toEqual([["erp", "MCP 'erp': value for 'ERP_TOKEN' is not configured"]]);
+  });
+
+  it("lenient with nothing broken reports nothing and resolves the same set as strict", async () => {
+    const { mod, reg } = await withBroken();
+    const erp = (await reg.listMcps()).find((m) => m.name === "erp")!;
+    await mod.setMcpSecret(erp, "ERP_TOKEN", SECRET);
+    const onUnresolved = vi.fn();
+    expect(await mod.resolveMcpInjections(onUnresolved)).toEqual(await mod.resolveMcpInjections());
+    expect(onUnresolved).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The open's marker is the signature of the set it RESOLVED. A skipped MCP leaves a set (and a
+   * marker) that differs from the full one, so once its secret is stored the next open no longer
+   * finds its marker and injects it — the skip is never frozen into the profile.
+   */
+  it("the set without the skipped MCP signs differently from the full one, so fixing the secret re-injects", async () => {
+    const { mod, reg } = await withBroken();
+    const partial = await mod.resolveMcpInjections(() => {});
+    const erp = (await reg.listMcps()).find((m) => m.name === "erp")!;
+    await mod.setMcpSecret(erp, "ERP_TOKEN", SECRET);
+    const full = await mod.resolveMcpInjections(() => {});
+    expect(full.map((i) => i.name)).toContain("erp");
+    expect(mod.mcpsSignature(full)).not.toBe(mod.mcpsSignature(partial));
   });
 });
 

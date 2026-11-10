@@ -3,7 +3,7 @@ import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const restartStaggered = vi.fn(async () => ({ restarted: 2, pending: 1 }));
+const restartStaggered = vi.fn(async () => ({ restarted: 2, pending: 1, failed: 0 }));
 let dir = "";
 
 async function load() {
@@ -20,7 +20,7 @@ async function load() {
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "vibehub-spec-"));
   restartStaggered.mockClear();
-  restartStaggered.mockResolvedValue({ restarted: 2, pending: 1 });
+  restartStaggered.mockResolvedValue({ restarted: 2, pending: 1, failed: 0 });
 });
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
@@ -71,11 +71,82 @@ describe("restartSessionsIfSpecChanged", () => {
     expect(restartStaggered).not.toHaveBeenCalled();
   });
 
+  it("a sweep that could not end every idle session does not record — the next boot tries again", async () => {
+    const spec = await load();
+    restartStaggered.mockResolvedValueOnce({ restarted: 1, pending: 0, failed: 2 });
+    expect(await spec.restartSessionsIfSpecChanged()).toEqual({ changed: true, restarted: 1, pending: 0 });
+    await expect(readFile(join(dir, "session-spec.json"), "utf8")).rejects.toThrow();
+    expect(await spec.restartSessionsIfSpecChanged()).toEqual({ changed: true, restarted: 2, pending: 1 });
+    expect(JSON.parse(await readFile(join(dir, "session-spec.json"), "utf8")).fingerprint).toBe(
+      spec.sessionSpecFingerprint(),
+    );
+  });
+
   it("a sweep that failed does not record — the next boot tries again — and never throws", async () => {
     const spec = await load();
     restartStaggered.mockRejectedValueOnce(new Error("runner down"));
     await expect(spec.restartSessionsIfSpecChanged()).resolves.toMatchObject({ changed: true, restarted: 0 });
     await expect(readFile(join(dir, "session-spec.json"), "utf8")).rejects.toThrow();
     expect(await spec.restartSessionsIfSpecChanged()).toMatchObject({ changed: true, restarted: 2 });
+  });
+});
+
+/**
+ * The same boot step over the REAL sweep and board, only the runner mocked: the restart used to be
+ * best-effort all the way down (`killCardSession` swallows the error), so a runner unreachable at
+ * boot came back as `restarted: 0` and the fingerprint was recorded anyway — the idle cards stayed
+ * on the old setup (a dead VIBEHUB_STATUS_URL, 20/10) and no later boot ever looked again (#273).
+ */
+describe("restartSessionsIfSpecChanged — real sweep, runner mocked", () => {
+  let runScript: ReturnType<typeof vi.fn>;
+
+  async function loadReal() {
+    vi.resetModules();
+    vi.doUnmock("./workspace.js");
+    vi.doMock("../../runtime/host.js", async () => ({
+      ...(await vi.importActual<typeof import("../../runtime/host.js")>("../../runtime/host.js")),
+      hostExecutor: () => ({ kind: "local", label: "this machine", runScript }),
+    }));
+    vi.doMock("../github/client.js", () => ({ gitAuthHeaderFor: vi.fn(), tokenFor: vi.fn() }));
+    const env = await import("../../config/env.js");
+    env.config.dataDir = dir;
+    env.config.secretKey = "test-key";
+    env.config.runner.container = "vibehub-runner";
+    const reg = await import("./registry.js");
+    const spec = await import("./sessionSpec.js");
+    const project = await reg.createProject({ name: "erp-aux" });
+    const card = await reg.createCard({ projectId: project.id, title: "Aberto" });
+    await reg.applyOpenTerminal(card.id); // a live session, idle
+    return { spec, card };
+  }
+
+  beforeEach(() => {
+    runScript = vi.fn(async () => ({ stdout: "", stderr: "" }));
+  });
+  afterEach(() => {
+    vi.doUnmock("../../runtime/host.js");
+    vi.doUnmock("../github/client.js");
+  });
+
+  it("a runner unreachable at boot leaves the fingerprint unrecorded, and the next boot restarts the card", async () => {
+    const { spec, card } = await loadReal();
+    runScript.mockRejectedValue(new Error("ssh: connect to host timed out"));
+
+    expect(await spec.restartSessionsIfSpecChanged()).toEqual({ changed: true, restarted: 0, pending: 0 });
+    await expect(readFile(join(dir, "session-spec.json"), "utf8")).rejects.toThrow();
+
+    runScript.mockReset();
+    runScript.mockResolvedValue({ stdout: "", stderr: "" });
+    expect(await spec.restartSessionsIfSpecChanged()).toEqual({ changed: true, restarted: 1, pending: 0 });
+    expect(String(runScript.mock.calls[0]![0])).toContain(`tmux kill-session -t '${card.tmuxSession}'`);
+    expect(await spec.restartSessionsIfSpecChanged()).toEqual({ changed: false, restarted: 0, pending: 0 });
+  });
+
+  it("a reachable runner records the fingerprint, whether or not the session was still there", async () => {
+    // The kill script ends a missing session with `|| true` and still reports it ended, so "nothing
+    // to kill" never reaches the sweep as a failure: only a runner that was not reached holds it back.
+    const { spec } = await loadReal();
+    expect(await spec.restartSessionsIfSpecChanged()).toEqual({ changed: true, restarted: 1, pending: 0 });
+    expect(await spec.restartSessionsIfSpecChanged()).toEqual({ changed: false, restarted: 0, pending: 0 });
   });
 });

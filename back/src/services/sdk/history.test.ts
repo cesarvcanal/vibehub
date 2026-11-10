@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { appendFile, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { config } from "../../config/env.js";
@@ -8,11 +8,15 @@ import {
   onExternalMessage,
   publishExternalMessage,
   readHistory,
+  readHistoryTail,
   removeHistory,
   replayableHistoryEvent,
   rewindHistory,
   unwrapEditedMessage,
+  capToolInput,
   HISTORY_COMPACT_FACTOR,
+  HISTORY_COMPACT_SIZE,
+  TOOL_INPUT_TEXT_MAX,
   SDK_HISTORY_DIR,
   type HistoryEvent,
 } from "./history.js";
@@ -147,6 +151,72 @@ describe("appendHistory / readHistory", () => {
     await appendHistory(CARD, { type: "user", text: "depois" });
     const after = await readHistory(CARD, limit);
     expect((after[after.length - 1] as { text: string }).text).toBe("depois");
+  });
+
+  /**
+   * Uma frota de subagentes grava centenas de `tool_use`/`assistant_text` com `parentToolUseId` em
+   * poucos minutos. Contados na mesma janela do principal, eles empurravam a conversa inteira para
+   * fora do replay: o F5 voltava só com a atividade dos subagentes, sem uma mensagem da pessoa.
+   */
+  describe("a janela do replay é contada pelo agente principal", () => {
+    const sub = (i: number, parent = "agent-1"): HistoryEvent =>
+      ({ type: "tool_use", id: `s${i}`, name: "Read", input: { file_path: `/f${i}` }, parentToolUseId: parent });
+    const texts = (events: HistoryEvent[]) =>
+      events.filter((e) => !(e as { parentToolUseId?: string }).parentToolUseId).map((e) => (e as { text?: string }).text);
+
+    it("uma frota maior que a janela não tira a conversa principal do replay", async () => {
+      await appendHistory(CARD, { type: "user", text: "faz a análise" });
+      await appendHistory(CARD, { type: "assistant_text", text: "vou disparar a frota" });
+      for (let i = 0; i < 600; i += 1) await appendHistory(CARD, sub(i));
+      await appendHistory(CARD, { type: "assistant_text", text: "a frota terminou" });
+
+      const replay = await readHistory(CARD);
+      expect(texts(replay)).toEqual(["faz a análise", "vou disparar a frota", "a frota terminou"]);
+    });
+
+    it("as linhas dos subagentes seguem no replay, na ordem, intercaladas com o principal", async () => {
+      await appendHistory(CARD, { type: "user", text: "u" });
+      await appendHistory(CARD, { type: "tool_use", id: "agent-1", name: "Agent", input: { description: "d" } });
+      await appendHistory(CARD, sub(0));
+      await appendHistory(CARD, { type: "assistant_text", text: "lendo", parentToolUseId: "agent-1" });
+      await appendHistory(CARD, { type: "assistant_text", text: "fim" });
+      const replay = await readHistory(CARD);
+      expect(replay.map((e) => e.type)).toEqual(["user", "tool_use", "tool_use", "assistant_text", "assistant_text"]);
+    });
+
+    it("conta `limit` eventos do principal e só os subagentes DEPOIS do primeiro deles", async () => {
+      const limit = 3;
+      await appendHistory(CARD, { type: "user", text: "m0" });
+      await appendHistory(CARD, sub(0)); // antes da janela do principal: fica de fora
+      for (let i = 1; i <= 3; i += 1) {
+        await appendHistory(CARD, { type: "user", text: `m${i}` });
+        await appendHistory(CARD, sub(i));
+      }
+      const replay = await readHistory(CARD, limit);
+      expect(replay.map((e) => (e as { text?: string; id?: string }).text ?? (e as { id: string }).id))
+        .toEqual(["m1", "s1", "m2", "s2", "m3", "s3"]);
+    });
+
+    it("os subagentes têm teto próprio: os `limit` mais recentes, sem inchar o frame do replay", async () => {
+      const limit = 3;
+      await appendHistory(CARD, { type: "user", text: "m0" });
+      for (let i = 0; i < 10; i += 1) await appendHistory(CARD, sub(i));
+      const replay = await readHistory(CARD, limit);
+      expect(replay.map((e) => (e as { text?: string; id?: string }).text ?? (e as { id: string }).id))
+        .toEqual(["m0", "s7", "s8", "s9"]);
+    });
+
+    it("a compactação grava a mesma janela que o replay mostra — a conversa principal fica no arquivo", async () => {
+      const limit = 2;
+      await appendHistory(CARD, { type: "user", text: "pergunta" });
+      await appendHistory(CARD, { type: "assistant_text", text: "resposta" });
+      for (let i = 0; i < limit * HISTORY_COMPACT_FACTOR + 5; i += 1) await appendHistory(CARD, sub(i));
+      const replay = await readHistory(CARD, limit);
+      const file = join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`);
+      const lines = (await readFile(file, "utf8")).split("\n").filter(Boolean).map((l) => JSON.parse(l) as HistoryEvent);
+      expect(lines).toEqual(replay);
+      expect(texts(lines)).toEqual(["pergunta", "resposta"]);
+    });
   });
 
   it("interleaved appends serialize into whole lines", async () => {
@@ -592,6 +662,166 @@ describe("unwrapEditedMessage — tira o invólucro de uma edição que foi limp
     await appendHistory(CARD, { type: "user", text: "B", sent: "[x]" } as HistoryEvent);
     expect(await unwrapEditedMessage(CARD, "A", "B")).toBe(false);
     expect((await read())[0]).toEqual({ type: "user", text: "B", sent: "[x]" });
+  });
+});
+
+/**
+ * O `tool_use` ia ao log com o input INTEIRO — o `content` de cada Write, o `old_string`/`new_string`
+ * de cada Edit. Vinte Writes de 500 KB davam um log de 10 MB com 20 eventos, que nunca compactava
+ * (a compactação era só por contagem) e que cada fim de turno relia e parseava inteiro.
+ */
+describe("input do tool_use no log", () => {
+  const BIG = TOOL_INPUT_TEXT_MAX * 25;
+  const rawLines = async (): Promise<HistoryEvent[]> => {
+    const raw = await readFile(join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`), "utf8");
+    return raw.split("\n").filter(Boolean).map((l) => JSON.parse(l) as HistoryEvent);
+  };
+
+  it("capToolInput corta só a folha de texto grande, com a marca do que ficou de fora, e mantém a forma", () => {
+    const input = {
+      file_path: "/a.ts",
+      content: "x".repeat(BIG),
+      edits: [{ old_string: "y".repeat(BIG), new_string: "curto", replace_all: true }],
+      todos: [{ content: "passo", status: "pending" }],
+      n: 3,
+      flag: false,
+      none: null,
+    };
+    const capped = capToolInput(input) as typeof input;
+    expect(capped.file_path).toBe("/a.ts");
+    expect(capped.content.length).toBeLessThanOrEqual(TOOL_INPUT_TEXT_MAX);
+    expect(capped.content.startsWith("x".repeat(1000))).toBe(true);
+    expect(capped.content).toContain(`+${BIG - capped.content.indexOf("\n…")}`);
+    expect(capped.edits[0]!.old_string.length).toBeLessThanOrEqual(TOOL_INPUT_TEXT_MAX);
+    expect(capped.edits[0]!.new_string).toBe("curto");
+    expect(capped.edits[0]!.replace_all).toBe(true);
+    expect(capped.todos).toEqual(input.todos);
+    expect([capped.n, capped.flag, capped.none]).toEqual([3, false, null]);
+  });
+
+  it("um texto no teto passa intacto, e cortar de novo o que já foi cortado não muda nada", () => {
+    const exact = "z".repeat(TOOL_INPUT_TEXT_MAX);
+    expect(capToolInput(exact)).toBe(exact);
+    const once = capToolInput("w".repeat(BIG));
+    expect(capToolInput(once)).toBe(once);
+  });
+
+  it("não parte um caractere fora do plano básico (par substituto) ao meio", () => {
+    const capped = capToolInput("😀".repeat(TOOL_INPUT_TEXT_MAX)) as string;
+    const kept = capped.slice(0, capped.indexOf("\n…"));
+    expect(kept.length % 2).toBe(0);
+    expect(kept).toBe("😀".repeat(kept.length / 2));
+  });
+
+  it("o tool_use vai ao log com o input capado; os outros eventos vão como vieram", async () => {
+    await appendHistory(CARD, { type: "tool_use", id: "w1", name: "Write", input: { file_path: "/a", content: "x".repeat(BIG) } });
+    const long = "palavra ".repeat(TOOL_INPUT_TEXT_MAX);
+    await appendHistory(CARD, { type: "assistant_text", text: long });
+    const [tool, text] = await rawLines();
+    const input = (tool as { input: { file_path: string; content: string } }).input;
+    expect(input.file_path).toBe("/a");
+    expect(input.content.length).toBeLessThanOrEqual(TOOL_INPUT_TEXT_MAX);
+    expect((text as { text: string }).text).toBe(long);
+  });
+
+  it("um log antigo, gravado sem o teto, chega ao replay já capado", async () => {
+    await mkdir(join(dir, SDK_HISTORY_DIR), { recursive: true });
+    const old = { type: "tool_use", id: "w1", name: "Write", input: { file_path: "/a", content: "x".repeat(BIG) } };
+    await appendFile(join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`), `${JSON.stringify(old)}\n`, "utf8");
+    const [tool] = await readHistory(CARD);
+    expect((tool as { input: { content: string } }).input.content.length).toBeLessThanOrEqual(TOOL_INPUT_TEXT_MAX);
+  });
+
+  describe("compactação por tamanho", () => {
+    const file = () => join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`);
+    const writeRaw = async (events: object[]) => {
+      await mkdir(join(dir, SDK_HISTORY_DIR), { recursive: true });
+      await appendFile(file(), events.map((e) => `${JSON.stringify(e)}\n`).join(""), "utf8");
+    };
+    const write = (i: number, size: number) =>
+      ({ type: "tool_use", id: `w${i}`, name: "Write", input: { file_path: `/f${i}`, content: "x".repeat(size) } });
+
+    it("um log grande com poucos eventos é reescrito capado, sem perder um evento sequer", async () => {
+      const events = [{ type: "user", text: "escreve os arquivos" }, ...Array.from({ length: 20 }, (_, i) => write(i, 500_000))];
+      await writeRaw(events);
+      expect((await stat(file())).size).toBeGreaterThan(HISTORY_COMPACT_SIZE);
+
+      const replay = await readHistory(CARD);
+      expect(replay).toHaveLength(21);
+      expect((await stat(file())).size).toBeLessThan(TOOL_INPUT_TEXT_MAX * 21 + 10_000);
+      expect(await readHistory(CARD)).toEqual(replay);
+    });
+
+    it("abaixo do teto de tamanho e de contagem, nada é reescrito", async () => {
+      await writeRaw([write(0, 1_000), write(1, 1_000)]);
+      const before = (await stat(file())).ino;
+      await readHistory(CARD);
+      expect((await stat(file())).ino).toBe(before);
+    });
+
+    it("uma janela que já é grande não é reescrita a cada leitura — só quando a reescrita encolhe o arquivo", async () => {
+      // Cada evento já cabe no teto do input: cortar o que está fora da janela não ganharia quase nada.
+      const count = Math.ceil(HISTORY_COMPACT_SIZE / TOOL_INPUT_TEXT_MAX) + 10;
+      await writeRaw(Array.from({ length: count }, (_, i) => write(i, TOOL_INPUT_TEXT_MAX - 100)));
+      expect((await stat(file())).size).toBeGreaterThan(HISTORY_COMPACT_SIZE);
+      const before = (await stat(file())).ino;
+      expect(await readHistory(CARD)).toHaveLength(count);
+      expect((await stat(file())).ino).toBe(before);
+    });
+  });
+});
+
+/**
+ * Quem só precisa do FIM da conversa (a pergunta que fechou o turno) lia e parseava o log inteiro a
+ * cada fim de turno. O rabo é lido pelos bytes finais do arquivo.
+ */
+describe("readHistoryTail — só o rabo do log", () => {
+  const file = () => join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`);
+  const lineOf = (e: object) => `${JSON.stringify(e)}\n`;
+
+  it("um log menor que o rabo pedido vem inteiro, e diz que veio inteiro", async () => {
+    await appendHistory(CARD, { type: "user", text: "a" });
+    await appendHistory(CARD, { type: "assistant_text", text: "b" });
+    expect(await readHistoryTail(CARD, 1024 * 1024)).toEqual({
+      events: [{ type: "user", text: "a" }, { type: "assistant_text", text: "b" }],
+      whole: true,
+    });
+  });
+
+  it("começando no meio do arquivo, a linha partida do começo sai e o resto vem certo", async () => {
+    const last = { type: "assistant_text", text: "fechou" };
+    await appendHistory(CARD, { type: "user", text: "x".repeat(5_000) });
+    await appendHistory(CARD, last);
+    const tail = await readHistoryTail(CARD, Buffer.byteLength(lineOf(last)) + 100);
+    expect(tail).toEqual({ events: [last], whole: false });
+  });
+
+  it("o corte no meio de um caractere de vários bytes não vira lixo", async () => {
+    const last = { type: "assistant_text", text: "ação concluída 😀 — quer revisar?" };
+    await appendHistory(CARD, { type: "user", text: "ç😀".repeat(2_000) });
+    await appendHistory(CARD, last);
+    const lastBytes = Buffer.byteLength(lineOf(last));
+    // Todos os cortes possíveis dentro da linha de antes, inclusive no meio de um "😀" (4 bytes).
+    for (let extra = 1; extra <= 12; extra += 1) {
+      expect(await readHistoryTail(CARD, lastBytes + extra)).toEqual({ events: [last], whole: false });
+    }
+  });
+
+  it("um rabo que não chega a ter uma linha inteira volta vazio, sem fingir que é o log inteiro", async () => {
+    await appendHistory(CARD, { type: "user", text: "y".repeat(1_000) });
+    expect(await readHistoryTail(CARD, 100)).toEqual({ events: [], whole: false });
+  });
+
+  it("sem log, vazio e inteiro", async () => {
+    expect(await readHistoryTail(CARD, 1024)).toEqual({ events: [], whole: true });
+  });
+
+  it("não compacta: é leitura, não manutenção", async () => {
+    await mkdir(join(dir, SDK_HISTORY_DIR), { recursive: true });
+    await appendFile(file(), lineOf({ type: "user", text: "z".repeat(HISTORY_COMPACT_SIZE + 10) }), "utf8");
+    const before = (await stat(file())).ino;
+    await readHistoryTail(CARD, 1024);
+    expect((await stat(file())).ino).toBe(before);
   });
 });
 

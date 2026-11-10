@@ -327,7 +327,13 @@ console.log(JSON.stringify(main(process.argv[1]||'',process.argv[2]||'',settled)
 
 /**
  * `settled`: os concluídos que o back já tem inteiros, como "runId/agentId" — a sonda devolve só um
- * marcador para eles. Chave fora do formato do harness é descartada aqui. PURE.
+ * marcador para eles. Chave fora do formato do harness é descartada aqui.
+ *
+ * Sem `2>/dev/null || true`: o vazio legítimo (nenhuma rodada, diretório que ainda não existe) o
+ * próprio script já imprime como `[]` com saída 0. O `|| true` transformava runner reiniciando,
+ * container parado ou node ausente em stdout vazio — lido como "sem diário", até a sondagem dar a
+ * frota por concluída enquanto ela seguia rodando. O código de saída chega ao executor, que
+ * rejeita, e o tique conta FALHA, não vazio. PURE.
  */
 export function buildWorkflowProbeScript(
   containerName: string,
@@ -341,7 +347,7 @@ export function buildWorkflowProbeScript(
   });
   return (
     `docker exec ${shQuote(containerName)} node -e ${shQuote(WORKFLOW_PROBE_JS)} ` +
-    `${shQuote(runsDir)} ${shQuote(scriptsDir)} ${shQuote(keys.join(","))} 2>/dev/null || true`
+    `${shQuote(runsDir)} ${shQuote(scriptsDir)} ${shQuote(keys.join(","))}`
   );
 }
 

@@ -38,8 +38,13 @@ describe("donePurgeAt — when the server will purge the card", () => {
     expect(donePurgeAt(card({ doneAt: NOW - 5 * HOUR, updatedAt: NOW - 3 * HOUR }), 1)).toBe(NOW - 3 * HOUR + DAY);
   });
 
-  it("ignores stamps the server does not count (opening the card is not activity there)", () => {
-    expect(donePurgeAt(card({ doneAt: NOW - 5 * HOUR, openedAt: NOW - MIN, pausedAt: NOW - MIN }), 1)).toBe(
+  it("counts a reopen or a maestro instruction too (activityAt, openedAt), like the server", () => {
+    expect(donePurgeAt(card({ doneAt: NOW - 5 * HOUR, activityAt: NOW - MIN }), 1)).toBe(NOW - MIN + DAY);
+    expect(donePurgeAt(card({ doneAt: NOW - 5 * HOUR, openedAt: NOW - 2 * MIN }), 1)).toBe(NOW - 2 * MIN + DAY);
+  });
+
+  it("ignores stamps the server does not count (a pause is not activity there)", () => {
+    expect(donePurgeAt(card({ doneAt: NOW - 5 * HOUR, pausedAt: NOW - MIN, hibernatedAt: NOW - MIN }), 1)).toBe(
       NOW - 5 * HOUR + DAY,
     );
   });

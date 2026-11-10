@@ -31,7 +31,7 @@ export function buildExtrairAudioScript(caminho: string): string {
     `ffmpeg -nostdin -loglevel error -y -i "$0" -vn -ac 1 -ar 16000 -b:a 32k "$t" </dev/null || { rm -f "$t"; echo "o ffmpeg não conseguiu ler este áudio" >&2; exit 1; }`,
     `echo ${MARCA_CONVERTIDO}; base64 -w0 "$t"; s=$?; rm -f "$t"; exit $s`,
   ].join("\n");
-  return scriptNoRunner(interno, [caminho, aceito]);
+  return scriptNoRunner(interno, [caminho, aceito], TIMEOUT_EXTRACAO_MS);
 }
 
 /** Separa a marca do base64 e devolve o nome com que o Whisper deve receber o arquivo. PURE. */

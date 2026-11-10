@@ -885,12 +885,22 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
       session.pendingInterruptNote = undefined;
       // Which row is the edit's new message, for the screen's cut (see `RewoundEvent.text`).
       event = edit.first ? { ...event, text: edit.text, first: true } : { ...event, text: edit.text };
-      void rewindHistory(session.cardId, edit.original, edit.text, { first: edit.first }).then((dropped) => {
-        logger.info(
-          { audit: true, action: "sdk.rewind", card: session.label, dropped },
-          "the conversation was rewound to before an edited message",
-        );
-      });
+      // A cut the disk refused is audited as such: the screen and the model are already rewound,
+      // and the log still holding the edited-away turn brings it back on the next F5.
+      void rewindHistory(session.cardId, edit.original, edit.text, { first: edit.first }).then(
+        (dropped) => {
+          logger.info(
+            { audit: true, action: "sdk.rewind", card: session.label, dropped },
+            "the conversation was rewound to before an edited message",
+          );
+        },
+        (err: unknown) => {
+          logger.warn(
+            { audit: true, action: "sdk.rewind.failed", card: session.label, detail: (err as Error).message },
+            "the conversation was rewound, but its chat history could not be cut",
+          );
+        },
+      );
     } else if (!event.ok && event.reason === "not-delivered" && edit) {
       // The original never reached the model, so the driver sent the CLEAN words as a plain turn
       // (no rewind, nothing to cut — the rest of the log still happened). Same two repairs as a
@@ -898,7 +908,12 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
       // driver's own, and the log line loses the wrapper the replay would look for.
       if (edit.text !== "") {
         noteDriverEventFor(session.cardId, { type: "user", text: edit.text });
-        void unwrapEditedMessage(session.cardId, edit.original, edit.text);
+        void unwrapEditedMessage(session.cardId, edit.original, edit.text).catch((err: unknown) => {
+          logger.warn(
+            { card: session.label, detail: (err as Error).message },
+            "could not unwrap the edited message in the sdk chat history",
+          );
+        });
       }
     } else if (event.ok) {
       // Um `ok: true` SEM dono (driver repetindo, frame atrasado) não chega à tela: lá ele não é
@@ -953,7 +968,9 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     // painel de workflow da conversa apagada também não volta num F5. O filtro de gatilho só separa
     // algo se o CLI um dia disser a causa do reset: hoje o driver manda "clear" para todos (ver o
     // `conversation_reset` em sdk-driver.mjs), sair do plan mode inclusive.
-    void clearHistoryBeforeLastClear(session.cardId);
+    void clearHistoryBeforeLastClear(session.cardId).catch((err: unknown) => {
+      logger.warn({ card: session.label, detail: (err as Error).message }, "could not clear the sdk chat history");
+    });
     forgetCardWorkflows(session.cardId);
     // A conversa apagada não ocupa mais nada: o medidor dela sai junto (a leitura da sessão nova
     // chega no fim do turno do /clear).

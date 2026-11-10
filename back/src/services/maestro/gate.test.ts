@@ -15,7 +15,7 @@ async function load() {
   env.config.runner.container = "vibehub-runner";
   vi.doMock("../../runtime/host.js", async () => {
     const actual = await vi.importActual<typeof import("../../runtime/host.js")>("../../runtime/host.js");
-    return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript, writeFile: vi.fn(), ptyCommand: vi.fn() }) };
+    return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript, ptyCommand: vi.fn() }) };
   });
   return {
     gate: await import("./gate.js"),
@@ -386,6 +386,16 @@ describe("runGate reuses a GREEN verdict for the same commit on a clean tree", (
     expect(second.output).toContain("tests ran");
   });
 
+  it("every verdict names the commit it is about (the merge is pinned to it); unreadable = absent", async () => {
+    const { gate, card } = await cardFor();
+    probes = [probeOut(SHA_A, true), probeOut(SHA_A, true), '__VIBEHUB_GATE_JSON__\n{"checks":["npm test"]}', `head=${SHA_B}\n__VIBEHUB_GATE_JSON__\n`];
+    wireHost();
+    expect(await gate.runGate(card.id)).toMatchObject({ ran: true, headSha: SHA_A });
+    expect(await gate.runGate(card.id)).toMatchObject({ reused: true, headSha: SHA_A });
+    expect(await gate.runGate(card.id)).not.toHaveProperty("headSha");
+    expect(await gate.runGate(card.id)).toEqual({ ran: false, passed: true, output: "", headSha: SHA_B });
+  });
+
   it("a new commit runs the checks again", async () => {
     const { gate, card } = await cardFor();
     probes = [probeOut(SHA_A, true), probeOut(SHA_B, true)];
@@ -451,5 +461,164 @@ describe("runGate reuses a GREEN verdict for the same commit on a clean tree", (
     await gate.runGate(card.id);
     await gate.runGate(card.id);
     expect(runs).toHaveLength(2);
+  });
+});
+
+describe("runGate on a given commit (expectedSha): the green is of THAT commit, or it is red", () => {
+  // The PR review runs the gate on the approved commit (gateAtCommit) and records the green as that
+  // commit's. Without CI the local gate tests the author's worktree — which may be on another commit,
+  // or carry edits nobody pushed: that green was of THAT code, not of the commit about to be merged.
+  const SHA = "a".repeat(40);
+  const OTHER = "b".repeat(40);
+  const probeOut = (sha: string | null, clean: boolean) =>
+    [...(sha ? [`head=${sha}`] : []), `clean=${clean ? 1 : 0}`, "__VIBEHUB_GATE_JSON__", '{"checks":["npm test"]}'].join("\n");
+  const isRun = (s: string) => s.includes('echo "__VIBEHUB_GATE__ pass"');
+  let runs: string[] = [];
+  const wireHost = (probe: string, run = "tests ran\n__VIBEHUB_GATE__ pass\n") => {
+    runs = [];
+    runScript.mockImplementation(async (script: string) => {
+      if (!isRun(script)) return { stdout: probe, stderr: "" };
+      runs.push(script);
+      return { stdout: run, stderr: "" };
+    });
+  };
+  async function cardFor() {
+    const { gate, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    return { gate, card: await registry.createCard({ projectId: p.id, title: "x" }) };
+  }
+
+  it("worktree on another commit: red, naming both, and the checks never run", async () => {
+    const { gate, card } = await cardFor();
+    wireHost(probeOut(OTHER, true));
+    const r = await gate.runGate(card.id, { expectedSha: SHA });
+    expect(r).toMatchObject({ ran: true, passed: false, headSha: OTHER });
+    expect(r.output).toContain(SHA.slice(0, 7));
+    expect(r.output).toContain(OTHER.slice(0, 7));
+    expect(runs).toHaveLength(0);
+  });
+
+  it("right commit but uncommitted edits or untracked files: red, the checks never run", async () => {
+    const { gate, card } = await cardFor();
+    wireHost(probeOut(SHA, false));
+    const r = await gate.runGate(card.id, { expectedSha: SHA });
+    expect(r).toMatchObject({ ran: true, passed: false });
+    expect(r.output).toContain("não commitadas");
+    expect(runs).toHaveLength(0);
+  });
+
+  it("HEAD unreadable, or nothing to run on a worktree off the commit: red too", async () => {
+    const { gate, card } = await cardFor();
+    wireHost(probeOut(null, false));
+    expect(await gate.runGate(card.id, { expectedSha: SHA })).toMatchObject({ ran: true, passed: false });
+    wireHost(`head=${OTHER}\nclean=1\n__VIBEHUB_GATE_JSON__\n`);
+    expect(await gate.runGate(card.id, { expectedSha: SHA })).toMatchObject({ ran: true, passed: false });
+  });
+
+  it("on the commit with a clean tree: runs, and the run itself re-checks the commit (the run may queue)", async () => {
+    const { gate, card } = await cardFor();
+    wireHost(probeOut(SHA, true));
+    const r = await gate.runGate(card.id, { expectedSha: SHA.toUpperCase() });
+    expect(r).toMatchObject({ ran: true, passed: true, headSha: SHA });
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toContain(SHA);
+  });
+
+  it("the worktree moved while the checks ran: red, saying so — not a failing check", async () => {
+    const { gate, card } = await cardFor();
+    wireHost(probeOut(SHA, true), "=== gate: npm test ===\ntests ran\n__VIBEHUB_GATE__ moved\n");
+    const r = await gate.runGate(card.id, { expectedSha: SHA });
+    expect(r).toMatchObject({ ran: true, passed: false });
+    expect(r.output).toContain(SHA.slice(0, 7));
+    expect(r.output).not.toContain("falhou no check");
+    expect(r.output).not.toContain("__VIBEHUB_GATE__");
+  });
+
+  it("a sha that is not a full one is refused before any script", async () => {
+    const { gate, card } = await cardFor();
+    wireHost(probeOut(SHA, true));
+    await expect(gate.runGate(card.id, { expectedSha: "abc1234" })).rejects.toThrow(/sha/);
+    await expect(gate.runGate(card.id, { expectedSha: `${SHA}; rm -rf /` })).rejects.toThrow(/sha/);
+    expect(runScript).not.toHaveBeenCalled();
+  });
+
+  it("a gate on a commit does not join the card's plain gate in flight (nor the reverse)", async () => {
+    const { gate, card } = await cardFor();
+    let finish!: () => void;
+    runs = [];
+    runScript.mockImplementation(async (script: string) => {
+      if (!isRun(script)) return { stdout: probeOut(OTHER, true), stderr: "" };
+      runs.push(script);
+      if (runs.length === 1) await new Promise<void>((r) => { finish = r; });
+      return { stdout: "__VIBEHUB_GATE__ pass\n", stderr: "" };
+    });
+    const plain = gate.runGate(card.id);
+    await vi.waitFor(() => expect(runs).toHaveLength(1));
+    // the plain gate is green on OTHER; the one on SHA must not come back with that answer
+    expect(await gate.runGate(card.id, { expectedSha: SHA })).toMatchObject({ passed: false });
+    finish();
+    expect(await plain).toMatchObject({ passed: true });
+  });
+});
+
+describe("buildGateRunScript with expectedSha, executed for real (git repo + a docker that runs in place)", () => {
+  const roots: string[] = [];
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  async function repo() {
+    const { gate } = await load();
+    const root = await mkdtemp(join(tmpdir(), "vibehub-gate-sha-"));
+    roots.push(root);
+    const bin = join(root, "bin");
+    const work = join(root, "work");
+    // Only a clean git: none of the runner's GIT_* (the card's GIT_CONFIG_* lives there), no global config.
+    const base = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_")));
+    const env = { ...base, PATH: `${bin}:${process.env.PATH}`, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+    const sh = (script: string) => execFileSync("sh", ["-c", script], { cwd: root, env, encoding: "utf8" });
+    sh(`mkdir -p bin work && printf '#!/bin/sh\\nshift 2\\nexec "$@"\\n' > bin/docker && chmod +x bin/docker`);
+    sh(`cd work && git init -q && echo a > f && git add f && git -c user.name=t -c user.email=t@t commit -q -m one`);
+    const head = sh("cd work && git rev-parse HEAD").trim();
+    const run = (checks: string[], sha = head) => {
+      const out = sh(gate.buildGateRunScript("c", work, checks, { expectedSha: sha }));
+      return { out, ...gate.parseGateRun(out) };
+    };
+    return { sh, run, head };
+  }
+
+  it("on the commit, clean: the checks run and pass", async () => {
+    const { run } = await repo();
+    const r = run(["echo checked"]);
+    expect(r).toMatchObject({ passed: true, moved: false });
+    expect(r.out).toContain("checked");
+  });
+
+  it("another commit, an edit or an untracked file before the run: moved, no check runs", async () => {
+    const { run, sh } = await repo();
+    expect(run(["echo checked"], "b".repeat(40))).toMatchObject({ passed: false, moved: true });
+    sh("cd work && echo new > untracked.txt");
+    const untracked = run(["echo checked"]);
+    expect(untracked).toMatchObject({ passed: false, moved: true });
+    expect(untracked.out).not.toContain("checked");
+    sh("cd work && rm untracked.txt && echo b > f");
+    expect(run(["echo checked"])).toMatchObject({ passed: false, moved: true });
+  });
+
+  it("a commit DURING the run: moved", async () => {
+    const { run } = await repo();
+    expect(run(["git -c user.name=t -c user.email=t@t commit -q --allow-empty -m two"])).toMatchObject({ passed: false, moved: true });
+  });
+
+  it("an edit to a tracked file during the run: moved; a file the tests leave behind (untracked) is not", async () => {
+    const { run, sh } = await repo();
+    expect(run(["echo changed > f"])).toMatchObject({ passed: false, moved: true });
+    sh("cd work && git checkout -q -- f");
+    expect(run(["mkdir -p coverage && echo x > coverage/out.txt"])).toMatchObject({ passed: true, moved: false });
+  });
+
+  it("the sha is validated before it reaches the shell", async () => {
+    const { gate } = await load();
+    expect(() => gate.buildGateRunScript("c", "/work/scratch/x", ["npm test"], { expectedSha: "a'; rm -rf / #" })).toThrow(/sha/);
   });
 });

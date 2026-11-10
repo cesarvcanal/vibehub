@@ -16,7 +16,7 @@ async function load() {
     const actual = await vi.importActual<typeof import("../../runtime/host.js")>("../../runtime/host.js");
     return {
       ...actual,
-      hostExecutor: () => ({ kind: "local", label: "test", runScript, writeFile: vi.fn(), ptyCommand: vi.fn() }),
+      hostExecutor: () => ({ kind: "local", label: "test", runScript, ptyCommand: vi.fn() }),
     };
   });
   return {

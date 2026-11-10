@@ -92,9 +92,12 @@ export class JsonStore<T extends object> {
         throw err;
       }
       try {
-        // Nothing changed and the file exists: rewriting it would only cost a full serialize+fsync
-        // (status hooks and periodic prunes call this a lot with nothing to do).
-        if (this.stamp === null || serialize(doc) !== this.saved) await this.persist(doc);
+        // One serialization serves both the comparison and the write: on board.json it is the
+        // whole board, on the hot path of status hooks and keystrokes. Nothing changed and the
+        // file exists: rewriting it would only cost an fsync (status hooks and periodic prunes call
+        // this a lot with nothing to do).
+        const text = serialize(doc);
+        if (this.stamp === null || text !== this.saved) await this.persist(doc, text);
       } catch (err) {
         this.dropCache();
         throw err;
@@ -107,9 +110,8 @@ export class JsonStore<T extends object> {
     return next;
   }
 
-  private async persist(doc: T): Promise<void> {
+  private async persist(doc: T, text: string): Promise<void> {
     await mkdir(dirname(this.file), { recursive: true });
-    const text = serialize(doc);
     this.stamp = toStamp(await writeFileAtomic(this.file, text));
     this.cache = doc;
     this.saved = text;

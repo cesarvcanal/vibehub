@@ -20,7 +20,7 @@ const pipeCommand = vi.fn();
 
 vi.mock("../../runtime/host.js", async (orig) => ({
   ...(await orig<typeof import("../../runtime/host.js")>()),
-  hostExecutor: () => ({ kind: "local", label: "this machine", runScript, ptyCommand, pipeCommand, writeFile: vi.fn() }),
+  hostExecutor: () => ({ kind: "local", label: "this machine", runScript, ptyCommand, pipeCommand }),
 }));
 vi.mock("../board/registry.js", () => ({ getCard: vi.fn(), getProject: vi.fn() }));
 

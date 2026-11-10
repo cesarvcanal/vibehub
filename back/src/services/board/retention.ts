@@ -1,6 +1,7 @@
 import * as registry from "./registry.js";
 import type { Card } from "./registry.js";
 import { purgeCard } from "./purge.js";
+import { lastActivityAt as lastSessionActivityAt } from "./workspace.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -22,7 +23,8 @@ import { logger } from "../../utils/logger.js";
  *    (`vibehub_move_cards`, mcp/cardMove.ts) — never on its own.
  *  - **Silence, not just the move.** The clock is the card's LAST SIGN OF LIFE
  *    ({@link lastActivityAt}) — the move to done, a rename, a status the hooks reported, a human
- *    typing in the terminal. Touch a finished card and it gets another day.
+ *    typing in the terminal, an open or a maestro instruction. Touch a finished card and it gets
+ *    another day.
  *  - **One day.** `done` means delivered: the work is on GitHub (pushed, PR'd, merged) and the
  *    card is only holding the runner's copy of it. A day is enough to notice a card was moved to
  *    `done` by mistake — and every done card shows a countdown, so nobody is surprised.
@@ -48,15 +50,26 @@ export const DONE_SWEEP_MAX = 20;
 const DAY_MS = 24 * 60 * 60_000;
 
 /** The stamps that prove somebody still cares about a card. */
-type ActivityStamps = Pick<Card, "doneAt" | "updatedAt" | "statusAt" | "humanActiveAt">;
+type ActivityStamps = Pick<
+  Card,
+  "doneAt" | "updatedAt" | "statusAt" | "humanActiveAt" | "openedAt" | "activityAt"
+>;
 
 /**
  * The card's LAST SIGN OF LIFE (epoch ms): the newest of the stamps anything writes on it. A card
  * finished before `doneAt` existed falls back to `updatedAt`, which is what the move to `done`
  * wrote back then. PURE.
+ *
+ * Built ON TOP of the idle sweep's clock ({@link lastSessionActivityAt}), never beside it: this
+ * one used to keep its own list and missed `activityAt` — the only stamp a reopen or a maestro/
+ * ChatGPT instruction moves on a done card (`openedAt` never re-stamps; with no hook reaching the
+ * back and nobody typing, nothing else moves) — so a card back in use was purged a day after
+ * being finished (#265). It is a SUPERSET on purpose, not the same function: `doneAt` and
+ * `updatedAt` (a rename, the move to done) mean "somebody cares about this card", which is what
+ * guards a deletion; for hibernation they mean nothing, since a board edit does not warm a session.
  */
 export function lastActivityAt(card: ActivityStamps): number {
-  return Math.max(card.doneAt ?? 0, card.updatedAt ?? 0, card.statusAt ?? 0, card.humanActiveAt ?? 0);
+  return Math.max(card.doneAt ?? 0, card.updatedAt ?? 0, lastSessionActivityAt(card));
 }
 
 /**

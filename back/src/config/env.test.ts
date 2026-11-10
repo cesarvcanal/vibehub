@@ -114,3 +114,56 @@ describe("VIBEHUB_TRUST_PROXY", () => {
     expect(fastifyTrustProxy(false)).toBe(false);
   });
 });
+
+/**
+ * A value that is SET but not one vibehub understands stops the boot naming the variable, like the
+ * docker names and VIBEHUB_TRUST_PROXY: read loosely, `VIBEHUB_RUNNER_KIND=SSH` ran every card on
+ * the LOCAL Docker without a word, and `VIBEHUB_PORT=3010abc` listened on 3010.
+ */
+describe("VIBEHUB_RUNNER_KIND and VIBEHUB_PORT", () => {
+  const ORIGINAL_KIND = process.env.VIBEHUB_RUNNER_KIND;
+  const ORIGINAL_PORT = process.env.VIBEHUB_PORT;
+  afterEach(() => {
+    if (ORIGINAL_KIND === undefined) delete process.env.VIBEHUB_RUNNER_KIND;
+    else process.env.VIBEHUB_RUNNER_KIND = ORIGINAL_KIND;
+    if (ORIGINAL_PORT === undefined) delete process.env.VIBEHUB_PORT;
+    else process.env.VIBEHUB_PORT = ORIGINAL_PORT;
+  });
+
+  async function loadWithEnv(name: "VIBEHUB_RUNNER_KIND" | "VIBEHUB_PORT", value: string | undefined) {
+    vi.resetModules();
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+    return (await import("./env.js")).config;
+  }
+
+  it("the runner kind defaults to local when unset or blank, and takes exactly local or ssh", async () => {
+    expect((await loadWithEnv("VIBEHUB_RUNNER_KIND", undefined)).runner.kind).toBe("local");
+    expect((await loadWithEnv("VIBEHUB_RUNNER_KIND", "")).runner.kind).toBe("local");
+    expect((await loadWithEnv("VIBEHUB_RUNNER_KIND", "local")).runner.kind).toBe("local");
+    expect((await loadWithEnv("VIBEHUB_RUNNER_KIND", "ssh")).runner.kind).toBe("ssh");
+  });
+
+  it("REFUSES at boot, naming the variable, a runner kind that is neither — never a silent local", async () => {
+    for (const bad of ["SSH", "ssh ", "sh", "remote", "Local"]) {
+      await expect(loadWithEnv("VIBEHUB_RUNNER_KIND", bad)).rejects.toThrow(/VIBEHUB_RUNNER_KIND/);
+    }
+  });
+
+  it("the port defaults to 3010 when unset or blank, and takes a whole number up to 65535 — 0 included", async () => {
+    expect((await loadWithEnv("VIBEHUB_PORT", undefined)).port).toBe(3010);
+    expect((await loadWithEnv("VIBEHUB_PORT", "")).port).toBe(3010);
+    const custom = await loadWithEnv("VIBEHUB_PORT", "3011");
+    expect(custom.port).toBe(3011);
+    expect(custom.publicUrl).toBe("http://127.0.0.1:3011");
+    expect((await loadWithEnv("VIBEHUB_PORT", "65535")).port).toBe(65535);
+    // 0 = "any free port", which Fastify takes; it was accepted before and stays so.
+    expect((await loadWithEnv("VIBEHUB_PORT", "0")).port).toBe(0);
+  });
+
+  it("REFUSES at boot, naming the variable, a port that is not a whole number in range", async () => {
+    for (const bad of ["abc", "3010abc", " 3010", "3010 ", "-1", "1e3", "30.10", "65536", "99999"]) {
+      await expect(loadWithEnv("VIBEHUB_PORT", bad)).rejects.toThrow(/VIBEHUB_PORT/);
+    }
+  });
+});

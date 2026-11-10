@@ -120,7 +120,7 @@ Everything is an environment variable with a working default. The ones that matt
 ```bash
 npm run install:all
 npm --prefix back run dev     # API on :3010
-npm --prefix front run dev    # UI on :5173, proxying /api
+npm --prefix front run dev    # UI on :5183, proxying /api
 npm test                      # back + front
 ```
 

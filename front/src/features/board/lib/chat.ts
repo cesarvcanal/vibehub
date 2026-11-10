@@ -94,15 +94,22 @@ export function parseChatFrame(raw: string): ChatEvent | null {
 }
 
 /**
- * Merges an event into the list: new ones append, known ones are ignored.
+ * The events of a batch that are not on screen yet, in arrival order: an id already seen — before
+ * or earlier in the same batch — is ignored, never updated, because a transcript line does not
+ * change once written. The caller appends the result as is.
  *
- * The list is NOT re-sorted by timestamp. The transcript is already in order, and re-sorting would
- * shuffle the several events that share one millisecond (a message and its two tool calls) on every
- * single frame. PURE — it returns the same array when nothing changed, so React can skip the render.
+ * Checked against a Set of the ids already drawn, not the list itself: a replay is up to 400 frames
+ * and scanning the list for each one made the reconnect quadratic. And the result is NOT re-sorted
+ * by timestamp — the transcript is already in order, and sorting would shuffle the several events
+ * that share one millisecond (a message and its two tool calls). PURE.
  */
-export function mergeEvent(events: ChatEvent[], event: ChatEvent): ChatEvent[] {
-  if (events.some((e) => e.id === event.id)) return events;
-  return [...events, event];
+export function unseenEvents(batch: readonly ChatEvent[], seenIds: ReadonlySet<string>): ChatEvent[] {
+  const taken = new Set<string>();
+  return batch.filter((event) => {
+    if (seenIds.has(event.id) || taken.has(event.id)) return false;
+    taken.add(event.id);
+    return true;
+  });
 }
 
 /* --------------------------------------------------------------- grouping */

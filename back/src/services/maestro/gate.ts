@@ -41,6 +41,11 @@ export interface GateResult {
   reused?: true;
   /** true = the checks hit `GATE_RUN_TIMEOUT_MS` and were KILLED inside the runner (a red verdict). */
   timedOut?: true;
+  /**
+   * The commit the verdict is about: the worktree's HEAD the probe read (the PR's head the CI was read
+   * on, in deliver.ts). Absent when it could not be read. A merge is pinned to it — nothing else.
+   */
+  headSha?: string;
 }
 
 /**
@@ -75,6 +80,9 @@ export const GATE_MAX_CONCURRENT = 2;
 
 const PROBE_MARKER = "__VIBEHUB_GATE_JSON__";
 const RESULT_MARKER = "__VIBEHUB_GATE__";
+
+/** A full commit sha (SHA-1, or SHA-256 in a repo that uses it): an abbreviated one could match two commits. */
+export const FULL_SHA_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
 
 /** What the probe round trip discovers about a worktree. All facts, no decisions. */
 export interface GateProbe {
@@ -182,15 +190,20 @@ export function gateReuseKey(probe: Pick<GateProbe, "headSha" | "cleanTree">, ch
  * embedded to be interpreted — but the whole inner script is one shell-quoted argument, so nothing
  * in a check can break out of the structure. The cwd is `$1`, validated. The whole run is bounded by
  * an in-container deadline; reaching it prints `__VIBEHUB_GATE__ timeout <s>`. With a `baseBranch`, the
- * checks see `VIBEHUB_BASE_REF=origin/<base>`. PURE.
+ * checks see `VIBEHUB_BASE_REF=origin/<base>`. With an `expectedSha`, the worktree must be on that
+ * commit with a clean tree before the first check, and still on it with no tracked edit after the
+ * last one — otherwise `__VIBEHUB_GATE__ moved`, never `pass`. PURE.
  */
 export function buildGateRunScript(
   containerName: string,
   cwd: string,
   checks: string[],
-  opts: { timeoutMs?: number; baseBranch?: string } = {},
+  opts: { timeoutMs?: number; baseBranch?: string; expectedSha?: string } = {},
 ): string {
   assertSafeRemotePath(cwd);
+  if (opts.expectedSha !== undefined && !FULL_SHA_RE.test(opts.expectedSha)) {
+    throw new Error("the gate can only be held to a full commit sha");
+  }
   const timeoutMs = opts.timeoutMs ?? GATE_RUN_TIMEOUT_MS;
   const parts: string[] = [
     "exec 2>&1",
@@ -199,6 +212,14 @@ export function buildGateRunScript(
     // syntax error that killed every gate before its first check.
     testWorkerExports().trim().replace(/;$/, ""),
   ];
+  // The gate tests the WORKTREE, and the card's author keeps working in it while the gate queues and
+  // runs: held to a commit, the run checks it is still there — before (the probe may be minutes old)
+  // and after. After, only tracked files count: tests leave untracked output behind (coverage, new
+  // snapshots), and a check that edits a tracked file or commits is the worktree moving all the same.
+  const sha = opts.expectedSha ? shQuote(opts.expectedSha.toLowerCase()) : "";
+  const onCommit = (untracked: "all" | "no") =>
+    `[ "$(git rev-parse HEAD 2>/dev/null)" = ${sha} ] && [ -z "$(git status --porcelain --untracked-files=${untracked} 2>&1)" ]`;
+  if (sha) parts.push(`${onCommit("all")} || { echo "${RESULT_MARKER} moved"; exit 0; }`);
   // The branch the card's work is compared against, for checks that test only what changed
   // (`vitest run --changed "$VIBEHUB_BASE_REF"`). Validated, then quoted: it is data, not a command.
   if (opts.baseBranch) parts.push(`export VIBEHUB_BASE_REF=${shQuote(`origin/${assertBranchName(opts.baseBranch)}`)}`);
@@ -206,6 +227,7 @@ export function buildGateRunScript(
     parts.push(`printf '\\n=== gate: %s ===\\n' ${shQuote(check)}`);
     parts.push(`if ${check}; then :; else echo "${RESULT_MARKER} fail"; exit 0; fi`);
   }
+  if (sha) parts.push(`${onCommit("no")} || { echo "${RESULT_MARKER} moved"; exit 0; }`);
   parts.push(`echo "${RESULT_MARKER} pass"`);
   const inner = parts.join("; ");
   // `timeout` runs the checks in a process group of its own and KILLs the whole group on the
@@ -220,16 +242,20 @@ export function buildGateRunScript(
   );
 }
 
-/** The verdict from the run output: `pass` only when the pass marker is present and none failed. PURE. */
-export function parseGateRun(stdout: string): { passed: boolean; output: string; timedOut: boolean; reached: boolean } {
+/**
+ * The verdict from the run output: `pass` only when the pass marker is present and none failed.
+ * `moved` = the worktree was not (or no longer) on the commit the run was held to. PURE.
+ */
+export function parseGateRun(stdout: string): { passed: boolean; output: string; timedOut: boolean; reached: boolean; moved: boolean } {
   const passIdx = stdout.lastIndexOf(`${RESULT_MARKER} pass`);
   const failIdx = stdout.lastIndexOf(`${RESULT_MARKER} fail`);
   const errIdx = stdout.lastIndexOf(`${RESULT_MARKER} error`);
+  const moved = stdout.includes(`${RESULT_MARKER} moved`);
   const timeout = new RegExp(`${RESULT_MARKER} timeout (\\d+)`).exec(stdout);
-  const passed = passIdx >= 0 && failIdx < 0 && errIdx < 0 && !timeout;
-  const reached = passIdx >= 0 || failIdx >= 0 || errIdx >= 0 || !!timeout;
+  const passed = passIdx >= 0 && failIdx < 0 && errIdx < 0 && !moved && !timeout;
+  const reached = passIdx >= 0 || failIdx >= 0 || errIdx >= 0 || moved || !!timeout;
   // Strip the marker lines from what we show — they are protocol, not output.
-  let output = stdout.replace(new RegExp(`${RESULT_MARKER} (pass|fail|error|timeout \\d+)\\r?\\n?`, "g"), "").trimEnd();
+  let output = stdout.replace(new RegExp(`${RESULT_MARKER} (pass|fail|error|moved|timeout \\d+)\\r?\\n?`, "g"), "").trimEnd();
   if (timeout) {
     output +=
       `\n\n[vibehub] o gate passou do prazo de ${timeout[1]}s e foi encerrado (todos os processos dele mortos ` +
@@ -241,7 +267,7 @@ export function parseGateRun(stdout: string): { passed: boolean; output: string;
       `\n\n[vibehub] o gate não chegou a rodar os checks: o script morreu antes (erro de shell, container ` +
       `fora do ar). Isso é falha do gate, não do código do card.`;
   }
-  return { passed, output: output.trimStart(), timedOut: !!timeout, reached };
+  return { passed, output: output.trimStart(), timedOut: !!timeout, reached, moved };
 }
 
 /**
@@ -390,19 +416,38 @@ function releaseSlot(): void {
  * client gave up must not start a second suite), and runs across cards are capped at
  * `GATE_MAX_CONCURRENT`. Each run logs how long it queued and ran, so "why did the delivery take 20
  * minutes" is answered by the log, not by guessing.
+ *
+ * With `expectedSha` the verdict is held to THAT commit (the PR review's merge gate, `gateAtCommit`):
+ * a worktree on another commit, or with anything uncommitted, is red without running — and so is one
+ * that moves while the checks run (see `buildGateRunScript`). Such a call joins only a run held to
+ * the same commit.
  */
-export function runGate(cardId: string): Promise<GateResult> {
-  const current = inFlight.get(cardId);
+export function runGate(cardId: string, opts: { expectedSha?: string } = {}): Promise<GateResult> {
+  const expectedSha = opts.expectedSha?.toLowerCase();
+  const key = expectedSha ? `${cardId}@${expectedSha}` : cardId;
+  const current = inFlight.get(key);
   if (current) {
     logger.info({ action: "maestro.gate", cardId }, "gate already running for this card — joining it");
     return current;
   }
-  const run = runGateNow(cardId).finally(() => inFlight.delete(cardId));
-  inFlight.set(cardId, run);
+  const run = runGateNow(cardId, expectedSha).finally(() => inFlight.delete(key));
+  inFlight.set(key, run);
   return run;
 }
 
-async function runGateNow(cardId: string): Promise<GateResult> {
+/** What a gate held to `expectedSha` answers when the probe found the worktree elsewhere. PURE. */
+function offCommitOutput(expectedSha: string, probe: Pick<GateProbe, "headSha" | "cleanTree">): string {
+  const why: string[] = [];
+  if (probe.headSha !== expectedSha) why.push(probe.headSha ? `o HEAD está em ${probe.headSha.slice(0, 7)}` : "o HEAD não foi lido");
+  if (!probe.cleanTree) why.push("há mudanças não commitadas (ou arquivos fora do git)");
+  return (
+    `[vibehub] o gate local testa a worktree do card, e ela não está no commit ${expectedSha.slice(0, 7)} com a árvore ` +
+    `limpa: ${why.join(" e ")}. Um verde dela não seria desse commit: deixe a worktree nele, limpa, e rode o gate de novo.`
+  );
+}
+
+async function runGateNow(cardId: string, expectedSha?: string): Promise<GateResult> {
+  if (expectedSha !== undefined && !FULL_SHA_RE.test(expectedSha)) throw new Error("the gate can only be held to a full commit sha");
   const card = await getCard(cardId);
   if (!card) throw new Error("card not found");
   const project = await getProject(card.projectId);
@@ -413,10 +458,18 @@ async function runGateNow(cardId: string): Promise<GateResult> {
   const probeOut = await hostExecutor().runScript(buildGateProbeScript(container, cwd), { timeoutMs: 30_000 });
   const probedAt = Date.now();
   const probe = parseGateProbe(probeOut.stdout);
+  const tested = probe.headSha ? { headSha: probe.headSha } : {};
+  if (expectedSha && (probe.headSha !== expectedSha || !probe.cleanTree)) {
+    logger.info(
+      { audit: true, action: "maestro.gate", card: card.worktreeSlug, passed: false, head: probe.headSha, expected: expectedSha, clean: probe.cleanTree },
+      "gate refused: the worktree is not on the commit it was asked about",
+    );
+    return { ran: true, passed: false, output: offCommitOutput(expectedSha, probe), ...tested };
+  }
   const plan = resolveGateChecks(probe);
   if (!plan.ran) {
     logger.info({ audit: true, action: "maestro.gate", card: card.worktreeSlug, ran: false }, "gate had nothing to run");
-    return { ran: false, passed: true, output: "" };
+    return { ran: false, passed: true, output: "", ...tested };
   }
 
   const reuseKey = gateReuseKey(probe, plan.checks);
@@ -426,7 +479,7 @@ async function runGateNow(cardId: string): Promise<GateResult> {
       { audit: true, action: "maestro.gate", card: card.worktreeSlug, ran: true, passed: true, reused: true, head: probe.headSha },
       "gate reused: same commit, clean tree, green moments ago",
     );
-    return { ran: true, passed: true, output: green.output, reused: true };
+    return { ran: true, passed: true, output: green.output, reused: true, ...tested };
   }
 
   const queuedAt = Date.now();
@@ -434,7 +487,8 @@ async function runGateNow(cardId: string): Promise<GateResult> {
   const startedAt = Date.now();
   let runOut: { stdout: string; stderr?: string };
   try {
-    runOut = await hostExecutor().runScript(buildGateRunScript(container, cwd, plan.checks, { baseBranch: card.base || project.baseBranch }),
+    runOut = await hostExecutor().runScript(
+      buildGateRunScript(container, cwd, plan.checks, { baseBranch: card.base || project.baseBranch, ...(expectedSha ? { expectedSha } : {}) }),
       { timeoutMs: GATE_RUN_TIMEOUT_MS },
     );
   } catch (err) {
@@ -447,16 +501,20 @@ async function runGateNow(cardId: string): Promise<GateResult> {
     releaseSlot();
   }
   // stderr only matters when the script died before `exec 2>&1` folded it into stdout.
-  const { passed, output, timedOut, reached } = parseGateRun(`${runOut.stderr ?? ""}${runOut.stdout}`);
-  const cleaned = passed ? cleanOutput(output) : gateFailureOutput(output, timedOut ? "timeout" : reached ? undefined : "died");
+  const { passed, output, timedOut, reached, moved } = parseGateRun(`${runOut.stderr ?? ""}${runOut.stdout}`);
+  // A worktree that moved is not a check that failed: its output would point at a bug that is not there.
+  const cleaned = moved
+    ? `[vibehub] a worktree do card saiu do commit ${expectedSha?.slice(0, 7)} (ou ganhou mudanças) enquanto o gate ` +
+      `esperava ou rodava: o resultado não seria desse commit. Rode de novo com a worktree parada nele, limpa.`
+    : passed ? cleanOutput(output) : gateFailureOutput(output, timedOut ? "timeout" : reached ? undefined : "died");
   if (passed && reuseKey) greenVerdicts.set(card.id, { key: reuseKey, at: probedAt, output: cleaned });
   else greenVerdicts.delete(card.id);
   logger.info(
     {
       audit: true, action: "maestro.gate", card: card.worktreeSlug, ran: true, passed, checks: plan.checks.length,
-      head: probe.headSha, waitedMs: startedAt - queuedAt, durationMs: Date.now() - startedAt, ...(timedOut ? { timedOut } : {}),
+      head: probe.headSha, waitedMs: startedAt - queuedAt, durationMs: Date.now() - startedAt, ...(timedOut ? { timedOut } : {}), ...(moved ? { moved } : {}),
     },
     timedOut ? "gate timed out — killed in the runner" : "gate ran",
   );
-  return { ran: true, passed, output: cleaned, ...(timedOut ? { timedOut: true as const } : {}) };
+  return { ran: true, passed, output: cleaned, ...(timedOut ? { timedOut: true as const } : {}), ...tested };
 }

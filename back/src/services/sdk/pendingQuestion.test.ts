@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HistoryEvent } from "./history.js";
@@ -113,6 +113,43 @@ describe("syncPendingQuestion / backfillPendingQuestions — o carimbo no card",
     await registry.setCardPendingQuestion(card.id, 1);
     await pending.syncPendingQuestion(card.id);
     expect((await registry.getCard(card.id))!.pendingQuestionAt ?? null).toBeNull();
+  });
+
+  /**
+   * O fim do turno lia o log INTEIRO (readFile + JSON.parse de todas as linhas) para olhar só o fim.
+   * Agora lê o rabo — e cresce o rabo quando nele não há fala do principal nem mensagem da pessoa.
+   */
+  describe("lendo só o rabo do log", () => {
+    const subagent = (i: number): HistoryEvent =>
+      ({ type: "tool_use", id: `s${i}`, name: "Read", input: { file_path: "/x".repeat(500) }, parentToolUseId: "a1" }) as HistoryEvent;
+
+    it("a pergunta seguida de muita atividade de subagente ainda carimba (o rabo cresce até achar a fala)", async () => {
+      const log = [typed("analisa"), said("Disparei a frota.\n\nQuer que eu abra o PR depois?"), ...Array.from({ length: 400 }, (_, i) => subagent(i))];
+      const { registry, pending, card } = await cardWithLog(log);
+      await pending.syncPendingQuestion(card.id);
+      expect((await registry.getCard(card.id))!.pendingQuestionAt).toEqual(expect.any(Number));
+    });
+
+    it("a mensagem da pessoa depois da pergunta, além do rabo inicial, ainda a resolve", async () => {
+      const log = [said("Posso fazer o merge?"), typed("pode"), ...Array.from({ length: 400 }, (_, i) => subagent(i))];
+      const { registry, pending, card } = await cardWithLog(log);
+      await registry.setCardPendingQuestion(card.id, 1);
+      await pending.syncPendingQuestion(card.id);
+      expect((await registry.getCard(card.id))!.pendingQuestionAt ?? null).toBeNull();
+    });
+
+    it("não passa pela leitura do replay: um log grande não é compactado no fim do turno", async () => {
+      const { registry, history, pending, card } = await cardWithLog([]);
+      // Um log de antes do teto do input: o replay o reescreveria capado (compactação por tamanho).
+      const file = join(dir, history.SDK_HISTORY_DIR, `${card.id}.ndjson`);
+      const write = { type: "tool_use", id: "w1", name: "Write", input: { file_path: "/a", content: "x".repeat(history.HISTORY_COMPACT_SIZE) } };
+      await mkdir(join(dir, history.SDK_HISTORY_DIR), { recursive: true });
+      await appendFile(file, `${JSON.stringify(write)}\n${JSON.stringify(said("Posso seguir?"))}\n`, "utf8");
+      const before = (await stat(file)).ino;
+      await pending.syncPendingQuestion(card.id);
+      expect((await stat(file)).ino).toBe(before);
+      expect((await registry.getCard(card.id))!.pendingQuestionAt).toEqual(expect.any(Number));
+    });
   });
 
   it("no boot, carimba quem já tinha parado numa pergunta — e deixa de fora o turno em voo e o card concluído", async () => {

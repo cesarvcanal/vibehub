@@ -29,7 +29,7 @@ beforeEach(async () => {
   const host = await import("../../runtime/host.js");
   runScript = vi.fn(async () => ({ stdout: "", stderr: "" }));
   vi.mocked(host.hostExecutor).mockReturnValue({
-    kind: "local", label: "this machine", runScript, ptyCommand: vi.fn(), writeFile: vi.fn(),
+    kind: "local", label: "this machine", runScript, ptyCommand: vi.fn(),
   } as unknown as import("../../runtime/host.js").HostExecutor);
   reaper = await import("./reaper.js");
   reaper.resetReaperForTesting();

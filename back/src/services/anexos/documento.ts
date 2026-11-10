@@ -41,7 +41,7 @@ export function formatoDocumentoSuportado(caminho: string): boolean {
 /** Script de host: garante os pacotes e roda o conversor (fonte pelo stdin) sobre o arquivo. PURE. */
 export function buildLerDocumentoScript(caminho: string, limite: number, fonte: string): string {
   const interno = `${linhaGarantirPacotes(PACOTES_LEITURA_DOCUMENTO)}; exec python3 - "$0" "$1"`;
-  return scriptNoRunner(interno, [caminho, String(limite)], fonte);
+  return scriptNoRunner(interno, [caminho, String(limite)], TIMEOUT_LEITURA_MS, fonte);
 }
 
 /** Converte o JSON do conversor, recusando qualquer coisa fora do contrato. PURE. */

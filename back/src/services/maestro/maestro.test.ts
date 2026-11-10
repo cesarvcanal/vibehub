@@ -17,7 +17,7 @@ async function load() {
   env.config.runner.container = "vibehub-runner";
   vi.doMock("../../runtime/host.js", async () => {
     const actual = await vi.importActual<typeof import("../../runtime/host.js")>("../../runtime/host.js");
-    return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript, writeFile: vi.fn(), ptyCommand: vi.fn(), pipeCommand }) };
+    return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript, ptyCommand: vi.fn(), pipeCommand }) };
   });
   return {
     maestro: await import("./maestro.js"),

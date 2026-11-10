@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, onTestFinished, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { config } from "../../config/env.js";
 import { readCardCatalog } from "./catalog.js";
 import { readHistory, rewindHistory } from "./history.js";
+import { logger } from "../../utils/logger.js";
 import {
   BACKGROUND_HOLD_MAX_MS,
   DRIVER_IDLE_MS,
@@ -53,6 +54,19 @@ vi.mock("../board/registry.js", async (importOriginal) => {
   return {
     ...actual,
     markCardHumanActive: (cardId: string) => { humanActiveCalls.push(cardId); return Promise.resolve(undefined); },
+  };
+});
+
+/** The disk refusing a whole-file rewrite (ENOSPC): the log's rewrites must not claim they happened. */
+const disk = vi.hoisted(() => ({ failRewrites: false }));
+vi.mock("../../store/atomicWrite.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../store/atomicWrite.js")>();
+  return {
+    ...actual,
+    writeFileAtomic: (...args: Parameters<typeof actual.writeFileAtomic>) =>
+      disk.failRewrites
+        ? Promise.reject(Object.assign(new Error("no space left on device"), { code: "ENOSPC" }))
+        : actual.writeFileAtomic(...args),
   };
 });
 
@@ -140,6 +154,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  disk.failRewrites = false;
   resetSdkSessionsForTesting();
   setDriverSpawnerForTesting(null);
   // DRENA a fila de appends do log antes de trocar a pasta de dados. `appendHistory` resolve o
@@ -1745,6 +1760,43 @@ describe("rewound — o log só é cortado quando o driver confirma que rebobino
     });
   });
 
+  /**
+   * O DISCO RECUSOU O CORTE (ENOSPC): a tela já cortou as linhas e o modelo já foi rebobinado, mas o
+   * arquivo continua com tudo. Auditar "dropped N" aqui era mentira — e o F5 devolvia a conversa.
+   */
+  it("um corte que o disco recusa sai como FALHA, não como rewind feito, e a fila segue gravando", async () => {
+    await conversaComEdicao();
+    const info = vi.spyOn(logger, "info");
+    onTestFinished(() => info.mockRestore());
+    const warn = vi.spyOn(logger, "warn");
+    onTestFinished(() => warn.mockRestore());
+    disk.failRewrites = true;
+    emit({ type: "rewound", ok: true, uuid: "abc" });
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ audit: true, action: "sdk.rewind.failed", detail: "no space left on device" }),
+      expect.any(String),
+    ));
+    expect(info).not.toHaveBeenCalledWith(expect.objectContaining({ action: "sdk.rewind" }), expect.anything());
+    expect((await readHistory(CARD)).map((e) => e.type)).toEqual(ANTES_DO_REWOUND);
+
+    disk.failRewrites = false;
+    emit({ type: "assistant_text", text: "resposta da certa" });
+    await vi.waitFor(async () => expect((await readHistory(CARD)).at(-1)).toMatchObject({ text: "resposta da certa" }));
+  });
+
+  it("`not-delivered` com o disco recusando: a falha de tirar o invólucro é dita, não engolida", async () => {
+    await conversaComEdicao();
+    const warn = vi.spyOn(logger, "warn");
+    onTestFinished(() => warn.mockRestore());
+    disk.failRewrites = true;
+    emit({ type: "rewound", ok: false, reason: "not-delivered" });
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ detail: "no space left on device" }),
+      "could not unwrap the edited message in the sdk chat history",
+    ));
+    expect((await readHistory(CARD)).at(-1)).toMatchObject({ text: "certa", sent: expect.any(String) });
+  });
+
   it("ok: false NÃO corta nada — houve supersede, e tudo que está no log ainda vale", async () => {
     for (const reason of ["absorbed", "no-fork-point"]) {
       await conversaComEdicao();
@@ -2788,6 +2840,26 @@ describe("conversation_reset — o /clear limpa a conversa de verdade", () => {
         ["system_note", "conversation-cleared"],
       ]);
     }, { timeout: 5000 });
+  });
+
+  it("o corte do /clear que o disco recusa é dito no log do servidor, não engolido como compactação", async () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "conversa antiga" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"/clear"}`));
+    await vi.waitFor(async () => expect(await readHistory(CARD)).toHaveLength(2));
+    const warn = vi.spyOn(logger, "warn");
+    onTestFinished(() => warn.mockRestore());
+    disk.failRewrites = true;
+    spawned[0]!.stdout.emit("data", line({ type: "conversation_reset", trigger: "clear" }));
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ detail: "no space left on device" }),
+      "could not clear the sdk chat history",
+    ));
+    disk.failRewrites = false;
+    expect((await readHistory(CARD)).map((e) => (e as { text?: string }).text)).toContain("conversa antiga");
   });
 
   it("uma mensagem enviada DEPOIS do /clear (fila do CLI) sobrevive: só sai o que veio antes dele", async () => {

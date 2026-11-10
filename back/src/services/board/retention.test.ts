@@ -57,6 +57,17 @@ describe("lastActivityAt (pure) — the clock the retention reads", () => {
     ).toBe(NOW - DAY);
   });
 
+  it("counts every stamp the BACK writes for a card in use: an open/wake and a maestro instruction", () => {
+    // `activityAt` is the only stamp that moves when a done card is reopened (openedAt never
+    // re-stamps) or instructed by the maestro/ChatGPT with nobody typing and no hook reaching us.
+    expect(
+      lastActivityAt(card({ doneAt: NOW - 300 * DAY, updatedAt: NOW - 300 * DAY, activityAt: NOW - HOUR })),
+    ).toBe(NOW - HOUR);
+    expect(
+      lastActivityAt(card({ doneAt: NOW - 300 * DAY, updatedAt: NOW - 300 * DAY, openedAt: NOW - 2 * HOUR })),
+    ).toBe(NOW - 2 * HOUR);
+  });
+
   it("falls back to updatedAt on a card written before doneAt existed", () => {
     expect(lastActivityAt(card({ doneAt: undefined, updatedAt: NOW - 190 * DAY }))).toBe(NOW - 190 * DAY);
   });
@@ -89,6 +100,12 @@ describe("expiredDoneCards (pure) — what the sweep is allowed to delete", () =
     const reported = card({ id: "reported", doneAt: NOW - 300 * DAY, updatedAt: NOW - 300 * DAY, statusAt: NOW - HOUR });
     const typed = card({ id: "typed", doneAt: NOW - 300 * DAY, updatedAt: NOW - 300 * DAY, humanActiveAt: NOW - HOUR });
     expect(run([renamed, reported, typed])).toEqual([]);
+  });
+
+  it("a done card reopened or instructed recently is NOT expired, even with every other stamp old", () => {
+    const instructed = card({ id: "instructed", doneAt: NOW - 3 * DAY, updatedAt: NOW - 3 * DAY, activityAt: NOW - HOUR });
+    const stale = card({ id: "stale", doneAt: NOW - 3 * DAY, updatedAt: NOW - 3 * DAY, activityAt: NOW - 2 * DAY });
+    expect(run([instructed, stale]).map((c) => c.id)).toEqual(["stale"]);
   });
 
   it("a legacy done card without doneAt is judged by updatedAt", () => {
@@ -138,7 +155,6 @@ async function fresh() {
     kind: "local",
     label: "this machine",
     runScript,
-    writeFile: vi.fn(),
     scriptArgs: vi.fn(() => ["bash", "-s"]),
   });
   reg = await import("./registry.js");
@@ -329,6 +345,55 @@ describe("sweepDoneCards — the purge of what has been done for a day", () => {
 
     expect(await retention.sweepDoneCards({ now: limite })).toMatchObject({ purged: 1 });
     expect(await reg.getCard(c.id)).toBeUndefined();
+  });
+
+  it("um card em done reaberto e instruído pelo maestro dias depois NÃO entra na purga", async () => {
+    // The audit's case (#265): the reopen and the instruction move only `activityAt` — `openedAt`
+    // never re-stamps, no hook reached the back, nobody typed. The sweep used to purge it anyway.
+    const project = await reg.createProject({ name: "erp-aux" });
+    const c = await reg.createCard({ projectId: project.id, title: "Entregue" });
+    await reg.applyOpenTerminal(c.id);
+    await reg.updateCard(c.id, { column: "done" });
+    const later = inDays(2);
+    vi.useFakeTimers({ now: later, toFake: ["Date"] });
+    try {
+      await reg.applyOpenTerminal(c.id);
+      await reg.markCardActivity(c.id);
+    } finally {
+      vi.useRealTimers();
+    }
+    const current = (await reg.getCard(c.id))!;
+    expect(current.column).toBe("done");
+    expect(retention.expiredDoneCards([current], { now: later })).toEqual([]);
+
+    expect(await retention.sweepDoneCards({ now: later + DAY - HOUR })).toMatchObject({ expired: 0, purged: 0 });
+    expect(await reg.getCard(c.id)).toBeDefined();
+    // The instruction buys a day, not immunity: a day of silence after it and the card goes.
+    expect(await retention.sweepDoneCards({ now: later + DAY })).toMatchObject({ purged: 1 });
+    expect(await reg.getCard(c.id)).toBeUndefined();
+  });
+
+  it("a card INSTRUCTED while the pass is running is not purged — the re-read sees activityAt", async () => {
+    const project = await reg.createProject({ name: "erp-aux" });
+    const older = await reg.createCard({ projectId: project.id, title: "Mais velho" });
+    const instructed = await reg.createCard({ projectId: project.id, title: "Instruído" });
+    await reg.updateCard(older.id, { column: "done" });
+    await reg.updateCard(instructed.id, { column: "done" });
+    const now = inDays(365);
+    let touched = false;
+    runScript.mockImplementation(async () => {
+      if (!touched) {
+        touched = true;
+        await reg.markCardActivity(instructed.id, now);
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const summary = await retention.sweepDoneCards({ now });
+
+    expect(await reg.getCard(older.id)).toBeUndefined();
+    expect(await reg.getCard(instructed.id)).toBeDefined();
+    expect(summary.purged).toBe(1);
   });
 
   it("the defaults are the ones the product promises: ONE day, a capped pass", () => {

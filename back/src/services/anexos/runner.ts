@@ -1,5 +1,5 @@
 import { config } from "../../config/env.js";
-import { hostExecutor, shQuote, HostExecError } from "../../runtime/host.js";
+import { hostExecutor, shQuote, HostExecError, CONTAINER_DEADLINE_MARGIN_MS } from "../../runtime/host.js";
 
 /**
  * Pacotes apt que o runner precisa para abrir anexos: PDF (poppler), planilhas (openpyxl/xlrd), Word
@@ -47,11 +47,23 @@ export function extensaoDe(caminho: string): string {
 /**
  * Script de host que entrega o resto do stdin a um comando dentro do runner. Mesmo transporte do
  * upload (`buildUploadScript`): o bash do host lê só a primeira linha e o `exec` passa o stdin adiante,
- * então o payload nunca é interpretado como shell. `argumentos` chegam ao `sh -c` como $0, $1… PURE.
+ * então o payload nunca é interpretado como shell. `argumentos` chegam ao `sh -c` como $0, $1…
+ *
+ * `timeoutMs` é o MESMO prazo passado ao `rodarNoRunner`. O timeout do Node mata só o cliente
+ * `docker exec`, não o que ele iniciou no container (docs/runner-processes.md): um ffmpeg que estourou
+ * o prazo seguia convertendo, e cada nova tentativa empilhava outro no runner. O `timeout -s KILL`
+ * dentro do container mata o grupo inteiro (sh e filhos) com a margem do `containerScriptCommand`,
+ * antes de o Node desistir — que aqui não serve como está porque lê o SCRIPT do stdin (`bash -s`), e
+ * neste caminho o stdin é o payload. PURE; prazo curto demais para a margem LANÇA.
  */
-export function scriptNoRunner(comandoInterno: string, argumentos: readonly string[], payload = ""): string {
+export function scriptNoRunner(comandoInterno: string, argumentos: readonly string[], timeoutMs: number, payload = ""): string {
+  const segundos = Math.floor((timeoutMs - CONTAINER_DEADLINE_MARGIN_MS) / 1000);
+  if (segundos < 1) throw new Error(`prazo curto demais para o limite dentro do runner: ${timeoutMs}ms`);
   const argv = argumentos.map(shQuote).join(" ");
-  return `exec docker exec -i ${shQuote(config.runner.container)} sh -c ${shQuote(comandoInterno)} ${argv}\n${payload}`;
+  return (
+    `exec docker exec -i ${shQuote(config.runner.container)} timeout -s KILL ${segundos} ` +
+    `sh -c ${shQuote(comandoInterno)} ${argv}\n${payload}`
+  );
 }
 
 /** Roda um script no runner e devolve o stdout; a falha vira a última linha do stderr, legível pro agente. */
@@ -60,7 +72,8 @@ export async function rodarNoRunner(script: string, timeoutMs: number): Promise<
     const { stdout } = await hostExecutor().runScript(script, { timeoutMs });
     return stdout;
   } catch (err) {
-    if (err instanceof HostExecError && err.timedOut) throw new Error("o runner não respondeu a tempo");
+    // 137 é como o `timeout -s KILL` de scriptNoRunner relata o prazo — e chega antes do do Node.
+    if (err instanceof HostExecError && (err.timedOut || err.exitCode === 137)) throw new Error("o runner não respondeu a tempo");
     const linhas = String((err as Error).message ?? err).split("\n").map((l) => l.trim()).filter(Boolean);
     throw new Error(linhas.at(-1) ?? "falha ao rodar no runner", { cause: err });
   }

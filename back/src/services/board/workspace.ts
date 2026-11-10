@@ -764,11 +764,14 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
     } catch (e) {
       logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "GitHub connection token not resolved on open (ambient gh login)");
     }
-    // Managed MCPs: BEST-EFFORT on open (a missing secret must not stop a card from opening — the
-    // "apply" button in the UI is the path that fails loudly and names what is missing).
+    // Managed MCPs: BEST-EFFORT on open, PER MCP (a missing secret must not stop a card from opening,
+    // nor take the built-ins and the other MCPs down with it — the "apply" button in the UI is the
+    // path that fails loudly and names what is missing).
     let mcps: McpInjection[] = [];
     try {
-      mcps = await resolveMcpInjections();
+      mcps = await resolveMcpInjections((name, e) => {
+        logger.warn({ card: card.worktreeSlug, mcp: name, detail: e.message }, "managed MCP skipped on open (continuing)");
+      });
     } catch (e) {
       logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "managed MCPs not injected on open (continuing)");
     }
@@ -929,9 +932,19 @@ export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
 /**
+ * The shape of a sanitized upload name — what `sanitizeUploadName` returns and what the read side
+ * (UPLOAD_FILE_RE) accepts after the stamp. One pattern for both: a written name the read refused
+ * came back as "upload not found" for a file the server had just stored.
+ */
+const UPLOAD_NAME_SOURCE = "[a-z0-9][a-z0-9._-]*\\.[a-z0-9]+";
+const UPLOAD_NAME_RE = new RegExp(`^${UPLOAD_NAME_SOURCE}$`);
+
+/**
  * Sanitizes an uploaded file name: lower case, only [a-z0-9._-], no `..` (assertSafeRemotePath would
- * reject it), never starting with `.`/`-` (no dotfiles, no flags), at most 80 characters (keeping
- * the END — that is where the extension lives). Empty after the cleanup → "image". PURE.
+ * reject it), never starting with `.`/`-`/`_` (no dotfiles, no flags), at most 80 characters before
+ * the extension check (keeping the END — that is where the extension lives). Empty after the cleanup
+ * → "image". A name still without an extension (`README`) gets `.bin`: an unknown type, served as a
+ * download and opened by its path in the runner. PURE.
  */
 export function sanitizeUploadName(name: string): string {
   let s = String(name ?? "")
@@ -940,10 +953,11 @@ export function sanitizeUploadName(name: string): string {
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/\.{2,}/g, ".")
     .replace(/-{2,}/g, "-")
-    .replace(/^[.-]+/, "")
+    .replace(/^[._-]+/, "")
     .replace(/[.-]+$/, "");
-  if (s.length > 80) s = s.slice(-80).replace(/^[.-]+/, "");
-  return s || "image";
+  if (s.length > 80) s = s.slice(-80).replace(/^[._-]+/, "");
+  s ||= "image";
+  return UPLOAD_NAME_RE.test(s) ? s : `${s}.bin`;
 }
 
 export interface UploadScriptOpts {
@@ -1063,7 +1077,7 @@ const UPLOAD_DOWNLOAD_TYPE = "application/octet-stream";
  * deliberately stricter than "no traversal" — it is the exact shape this server produces, so a
  * name that could not have come from the upload route is refused before it reaches a shell. PURE.
  */
-const UPLOAD_FILE_RE = /^\d+-[a-z0-9][a-z0-9._-]*\.[a-z0-9]+$/;
+const UPLOAD_FILE_RE = new RegExp(`^\\d+-${UPLOAD_NAME_SOURCE}$`);
 
 /**
  * The content type for an upload name, or `null` when the name is not one this server writes. A
@@ -1354,6 +1368,19 @@ export function notifyCardSessionKill(cardId: string): void {
 export function buildKillSessionScript(containerName: string, sessions: string[]): string {
   return [
     `docker exec -i ${shQuote(containerName)} bash -s <<'${KILL_DELIM}'`,
+    ...killSessionLines(sessions),
+    "true",
+    KILL_DELIM,
+  ].join("\n");
+}
+
+/**
+ * The body of {@link buildKillSessionScript}, to run INSIDE the container — shared with the purge
+ * script, which ends the card's sessions in its own exec right before erasing (see
+ * {@link purgeCardWorkspace}). Every line is `|| true`-shaped. PURE.
+ */
+function killSessionLines(sessions: readonly string[]): string[] {
+  return [
     // Every pid whose ancestry reaches a pane pid, panes included. One ps snapshot per pane; awk
     // walks each pid up the ppid chain (pgrep is not guaranteed in the image). A pid whose chain
     // ends elsewhere (0/1) is not printed.
@@ -1369,9 +1396,7 @@ export function buildKillSessionScript(containerName: string, sessions: string[]
     ...sessions.map((s) => `tmux kill-session -t ${shQuote(s)} 2>/dev/null || true; echo ${SESSION_ENDED_MARKER} ${shQuote(s)}`),
     // ...then KILL whatever ignored both the TERM and tmux's HUP (claude did, in production).
     'if [ -n "$PIDS" ]; then sleep 1; kill -KILL $PIDS 2>/dev/null || true; fi',
-    "true",
-    KILL_DELIM,
-  ].join("\n");
+  ];
 }
 
 /**
@@ -1981,13 +2006,16 @@ export async function restartAllCards(by?: string): Promise<{ restarted: number;
  *    (brain and MCP) — `reason` is only the badge label.
  * Best-effort: a dead host or a card that vanished mid-sweep must not take the rest down (a session
  * that is already gone is fine for the kill script, and the flags are settled per card). Returns
- * {restarted (idle cards whose sessions were ended now), pending (working cards flagged)}.
+ * {restarted (idle cards whose sessions were ended now), pending (working cards flagged), failed
+ * (idle cards the runner could not be told to restart)}. `failed` is never a session that was
+ * already gone — the kill script counts that one as ended — only a runner that was not reached: a
+ * caller that must not settle on a half-done sweep (the post-deploy restart) reads it.
  */
 export async function restartStaggered(
   reason: RestartReason,
   by?: string,
   opts: { projectId?: string } = {},
-): Promise<{ restarted: number; pending: number }> {
+): Promise<{ restarted: number; pending: number; failed: number }> {
   // `projectId` scopes the sweep (a PROJECT brain save only concerns that project's cards — bouncing
   // every other project's terminals for it would be noise). Absent = the whole board, as before.
   const live = (await listAllCards()).filter(
@@ -1996,15 +2024,16 @@ export async function restartStaggered(
   const idle = cardsToRestart(live); // live session and NOT working
   const working = live.filter((c) => c.status === "working"); // live session AND working
   const restarted = await restartCardSessions(idle, by);
+  const failed = idle.length - restarted;
   await Promise.allSettled(working.map((c) => markRestartPending(c.id, reason)));
   logger.info(
     {
-      audit: true, action: "card.restartStaggered", reason, restarted, pending: working.length,
+      audit: true, action: "card.restartStaggered", reason, restarted, failed, pending: working.length,
       cards: idle.map((c) => c.worktreeSlug), by,
     },
     "staggered restart after applying the brain/MCPs — idle cards restarted now, working cards flagged as pending",
   );
-  return { restarted, pending: working.length };
+  return { restarted, pending: working.length, failed };
 }
 
 /**
@@ -2080,6 +2109,8 @@ export interface CardPurgeScriptOpts {
   branch?: string;
   /** Chromium user-data-dir of the card's live browser (cookies, logins, history, cache). */
   browserDataDir: string;
+  /** The card's tmux sessions, ended — whole process tree — before anything is erased. */
+  sessions: string[];
 }
 
 /**
@@ -2109,6 +2140,9 @@ export function ownBranch(card: Pick<Card, "branch" | "worktreeSlug">): string |
  * behind — which is exactly how a delete ends up half done. Every line is `|| true`-shaped and the
  * script ends with `true`.
  *
+ * It FIRST ends the card's sessions (the kill script's body), so no `claude` is left writing into —
+ * or running in — what is about to be erased.
+ *
  * What it erases, and why each one is part of the card:
  *  - the git worktree, its directory and the card's branch — the code the card wrote;
  *  - `/work/.uploads/<cardId>` — the images the user attached to the conversation;
@@ -2133,7 +2167,7 @@ export function buildCardPurgeScript(o: CardPurgeScriptOpts): string {
   const uploads = `/work/.uploads/${o.cardId}`;
   assertSafeRemotePath(uploads);
   const transcriptDirName = claudeProjectsDirName(o.cwd);
-  const inner: string[] = [];
+  const inner: string[] = killSessionLines(o.sessions);
   if (o.repoDir) {
     assertSafeRemotePath(o.repoDir);
     // `worktree remove --force` unregisters it in .git/worktrees; `prune` cleans a stale entry when
@@ -2197,7 +2231,13 @@ export function buildCardPurgeScript(o: CardPurgeScriptOpts): string {
 
 /**
  * PURGES the card's side of the runner: both tmux sessions, then every file the card owns (see
- * {@link buildCardPurgeScript}).
+ * {@link buildCardPurgeScript}) — in ONE docker exec, the kill riding at the head of the purge.
+ *
+ * The kill stays HERE even though the card delete already ran its strict kill (#284): that one
+ * happens while the card is still on the board, and a pane's socket reconnects in under a second
+ * and revives the session with `tmux new-session -A` before the card leaves it. This kill is the
+ * one after the card is gone — and the provisioning teardown (`tearDownIfDeleted`) has no other.
+ * It used to be a docker exec of its own; inside the purge it costs nothing more.
  *
  * THROWS when the runner could not be reached or the script failed — the caller (the card purge)
  * turns that into a reported, retried step instead of a silent half-deletion. A card whose PROJECT
@@ -2214,8 +2254,10 @@ export async function purgeCardWorkspace(
   // its cards in ONE mutation, so by the time those cards are purged there is nothing to look up —
   // and without the project there are no paths, which used to leave every worktree behind.
   const project = opts.project ?? (await getProject(card.projectId));
-  await killCardSession(card, { includeShell: true });
-  if (!project) throw new Error("project for this card not found: its runner files cannot be resolved");
+  if (!project) {
+    await killCardSession(card, { includeShell: true });
+    throw new Error("project for this card not found: its runner files cannot be resolved");
+  }
   const paths = cardWorkPaths(project, card);
   const script = buildCardPurgeScript({
     containerName: config.runner.container,
@@ -2224,7 +2266,10 @@ export async function purgeCardWorkspace(
     repoDir: paths.repoDir,
     branch: paths.repoDir ? ownBranch(card) : undefined,
     browserDataDir: cardBrowserPorts(card.id).userDataDir,
+    sessions: [card.tmuxSession, `${card.tmuxSession}-sh`],
   });
+  // The kill listeners (the SDK driver) first, exactly as killCardSessionOrThrow does it.
+  notifyCardSessionKill(card.id);
   try {
     await hostExecutor().runScript(script, { timeoutMs: 180_000 });
   } catch (err) {

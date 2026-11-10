@@ -8,7 +8,7 @@ async function load() {
   env.config.runner.container = "vibehub-runner";
   vi.doMock("../../runtime/host.js", async () => {
     const actual = await vi.importActual<typeof import("../../runtime/host.js")>("../../runtime/host.js");
-    return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript, writeFile: vi.fn(), ptyCommand: vi.fn() }) };
+    return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript, ptyCommand: vi.fn() }) };
   });
   return await import("./workflow.js");
 }
@@ -125,13 +125,16 @@ describe("watchCardWorkflows — a sondagem e suas travas", () => {
     wf.resetWorkflowWatchesForTesting();
   });
 
-  it("a runner that keeps failing is given up on, not hammered", async () => {
+  it("a runner that keeps failing past the grace is given up on — the loop is gone, not idling", async () => {
     vi.useFakeTimers();
     const wf = await load();
     runScript.mockRejectedValue(new Error("runner down"));
     wf.watchCardWorkflows("c6", { label: "card", dirs, watchers: () => 1, publish: () => {} });
-    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS * (wf.WATCH_MAX_FAILURES + 4));
-    expect(runScript.mock.calls.length).toBeLessThanOrEqual(wf.WATCH_MAX_FAILURES);
+    await vi.advanceTimersByTimeAsync(wf.WATCH_FAILURE_GRACE_MS + wf.WATCH_INTERVAL_MS * 3);
+    const calls = runScript.mock.calls.length;
+    expect(calls).toBeGreaterThan(1);
+    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS * 10);
+    expect(runScript.mock.calls.length).toBe(calls);
     wf.resetWorkflowWatchesForTesting();
   });
 
@@ -193,8 +196,60 @@ describe("watchCardWorkflows — a sondagem e suas travas", () => {
     wf.watchCardWorkflows("c10", { label: "card", dirs, watchers: () => 1, publish: (r) => published.push(r) });
     await vi.advanceTimersByTimeAsync(10);
     runScript.mockRejectedValue(new Error("runner down"));
-    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS * (wf.WATCH_MAX_FAILURES + 2));
+    // Still inside the grace: a runner restarting is not the fleet ending.
+    await vi.advanceTimersByTimeAsync(wf.WATCH_FAILURE_GRACE_MS - wf.WATCH_INTERVAL_MS);
+    expect(published.every((r) => !r.finished)).toBe(true);
+    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS * 3);
     expect(published.at(-1)!.finished).toBe(true);
+    wf.resetWorkflowWatchesForTesting();
+  });
+
+  it("a runner restarting for a minute mid-fleet keeps the watch alive and never publishes finished", async () => {
+    vi.useFakeTimers();
+    const wf = await load();
+    const { logger } = await import("../../utils/logger.js");
+    const warn = vi.spyOn(logger, "warn");
+    const published: Array<{ finished: boolean }> = [];
+    const running = { stdout: probe([{ runId: "wf_a", at: 1, agents: [AGENT()] }]), stderr: "" };
+    runScript.mockResolvedValueOnce(running);
+    wf.watchCardWorkflows("c12", { label: "card", dirs, watchers: () => 1, publish: (r) => published.push(r) });
+    await vi.advanceTimersByTimeAsync(10);
+    // The probe exits non-zero while docker exec fails: ~1 min of failures, every tick.
+    runScript.mockRejectedValue(new Error("container is restarting"));
+    await vi.advanceTimersByTimeAsync(60_000);
+    const failedCalls = runScript.mock.calls.length;
+    expect(failedCalls).toBeGreaterThan(10);
+    // One line for the whole streak, not one per tick.
+    expect(warn.mock.calls.filter(([, msg]) => msg === "workflow probe failing")).toHaveLength(1);
+    runScript.mockResolvedValue(running);
+    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS);
+    expect(published.every((r) => !r.finished)).toBe(true);
+    // The streak was reset by the success: another full minute of failures is still tolerated.
+    runScript.mockRejectedValue(new Error("container is restarting"));
+    await vi.advanceTimersByTimeAsync(wf.WATCH_FAILURE_GRACE_MS - wf.WATCH_INTERVAL_MS);
+    expect(published.every((r) => !r.finished)).toBe(true);
+    const calls = runScript.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS);
+    expect(runScript.mock.calls.length).toBe(calls + 1); // still watching
+    expect(warn.mock.calls.filter(([, msg]) => msg === "workflow probe failing")).toHaveLength(2);
+    wf.resetWorkflowWatchesForTesting();
+  });
+
+  it("time with nobody watching does not count toward the failure grace", async () => {
+    vi.useFakeTimers();
+    const wf = await load();
+    let watching = 1;
+    const published: Array<{ finished: boolean }> = [];
+    runScript.mockResolvedValueOnce({ stdout: probe([{ runId: "wf_a", at: 1, agents: [AGENT()] }]), stderr: "" });
+    wf.watchCardWorkflows("c13", { label: "card", dirs, watchers: () => watching, publish: (r) => published.push(r) });
+    await vi.advanceTimersByTimeAsync(10);
+    runScript.mockRejectedValue(new Error("runner down"));
+    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS); // a streak starts
+    watching = 0;
+    await vi.advanceTimersByTimeAsync(wf.WATCH_FAILURE_GRACE_MS * 2); // nobody probes
+    watching = 1;
+    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS * 2);
+    expect(published.every((r) => !r.finished)).toBe(true);
     wf.resetWorkflowWatchesForTesting();
   });
 
@@ -392,7 +447,7 @@ describe("watchCardWorkflows — rodada longa e rodada morta", () => {
     wf.watchCardWorkflows("l5", { label: "card", dirs, watchers: () => 1, publish: (r) => published.push(r) });
     await vi.advanceTimersByTimeAsync(10);
     runScript.mockRejectedValue(new Error("runner down"));
-    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS * (wf.WATCH_MAX_FAILURES + 2));
+    await vi.advanceTimersByTimeAsync(wf.WATCH_FAILURE_GRACE_MS + wf.WATCH_INTERVAL_MS * 2);
     expect(published.at(-1)).toMatchObject({ finished: true, agents: [{ status: "stopped" }] });
     wf.resetWorkflowWatchesForTesting();
   });

@@ -25,10 +25,11 @@ const sends: { cardId: string; text: string; opts: Record<string, unknown> }[] =
 const delivers: { cardId: string; opts: Record<string, unknown> }[] = [];
 const opens: string[] = [];
 
-async function boot(): Promise<FastifyInstance> {
+async function boot(trustProxy: string | number | false = false): Promise<FastifyInstance> {
   vi.resetModules();
   const env = await import("../config/env.js");
   env.config.dataDir = dir;
+  env.config.trustProxy = trustProxy;
   env.config.secretKey = "";
   env.config.sessionSecret = "";
   env.config.insecureCookies = true;
@@ -323,6 +324,82 @@ describe("authorize", () => {
     let last = 0;
     for (let i = 0; i < 12; i++) last = (await authorize(clientId, challenge, "owner", "nope")).res.statusCode;
     expect(last).toBe(429);
+  });
+
+  it("a name no account can have is refused before it is counted, and is never echoed back", async () => {
+    await world();
+    const clientId = await register();
+    const { challenge } = pkce();
+    const huge = "a".repeat(2_000_000);
+    const { res } = await authorize(clientId, challenge, huge, "x");
+    expect(res.statusCode).toBe(401);
+    expect(res.body.length).toBeLessThan(20_000);
+    expect(res.body).toContain('value=""');
+    // Uncounted: more failures than the per-account ceiling still answer 401, never 429.
+    for (let i = 0; i < 12; i++) expect((await authorize(clientId, challenge, "bad name!", "x")).res.statusCode).toBe(401);
+  });
+});
+
+describe("authorize — the per-address ceiling of the board's sign-in", () => {
+  /** Rotating usernames from one address: what the per-account count alone never stops. */
+  const rotate = async (clientId: string, i: number) =>
+    (await authorize(clientId, pkce().challenge, `guess${i}`, "nope")).res.statusCode;
+
+  it("with VIBEHUB_TRUST_PROXY set, rotating usernames hit the same ceiling as /api/auth/login", async () => {
+    await app.close();
+    app = await boot(0);
+    const { ATTEMPTS_PER_ADDRESS } = await import("./auth.js");
+    const clientId = await register();
+    for (let i = 0; i < ATTEMPTS_PER_ADDRESS; i++) expect(await rotate(clientId, i)).toBe(401);
+    const refused = await authorize(clientId, pkce().challenge, "another", "nope");
+    expect(refused.res.statusCode).toBe(429);
+    expect(refused.res.headers["retry-after"]).toBeTruthy();
+  });
+
+  it("is ONE budget per address across both sign-in forms", async () => {
+    await app.close();
+    app = await boot(0);
+    const { ATTEMPTS_PER_ADDRESS } = await import("./auth.js");
+    const clientId = await register();
+    const half = ATTEMPTS_PER_ADDRESS / 2;
+    for (let i = 0; i < half; i++) expect(await rotate(clientId, i)).toBe(401);
+    for (let i = half; i < ATTEMPTS_PER_ADDRESS; i++) {
+      const res = await inject({ method: "POST", url: "/api/auth/login", payload: { username: `guess${i}`, password: "nope" } });
+      expect(res.statusCode).toBe(401);
+    }
+    expect(await rotate(clientId, 99)).toBe(429);
+    const board = await inject({ method: "POST", url: "/api/auth/login", payload: { username: "guess100", password: "nope" } });
+    expect(board.statusCode).toBe(429);
+  });
+
+  it("a consent that signs in is no failure — it hands its address charge back", async () => {
+    await app.close();
+    app = await boot(0);
+    const { ATTEMPTS_PER_ADDRESS } = await import("./auth.js");
+    await world();
+    const clientId = await register();
+    // The owner's setup already spent one try of this address (setup charges every try).
+    for (let i = 0; i < ATTEMPTS_PER_ADDRESS - 2; i++) expect(await rotate(clientId, i)).toBe(401);
+    expect((await authorize(clientId, pkce().challenge, "owner", "supersecret")).code).toBeTruthy();
+    expect(await rotate(clientId, 98)).toBe(401);
+    expect(await rotate(clientId, 99)).toBe(429);
+  });
+
+  it("names no account can have do not spend the address's budget", async () => {
+    await app.close();
+    app = await boot(0);
+    const { ATTEMPTS_PER_ADDRESS } = await import("./auth.js");
+    const clientId = await register();
+    for (let i = 0; i <= ATTEMPTS_PER_ADDRESS; i++) {
+      expect((await authorize(clientId, pkce().challenge, `bad name ${i}`, "x")).res.statusCode).toBe(401);
+    }
+    expect(await rotate(clientId, 0)).toBe(401);
+  });
+
+  it("without VIBEHUB_TRUST_PROXY there is no per-address ceiling — the gateway's address is everyone's", async () => {
+    const { ATTEMPTS_PER_ADDRESS } = await import("./auth.js");
+    const clientId = await register();
+    for (let i = 0; i <= ATTEMPTS_PER_ADDRESS; i++) expect(await rotate(clientId, i)).toBe(401);
   });
 });
 
