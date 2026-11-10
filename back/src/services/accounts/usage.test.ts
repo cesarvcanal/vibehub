@@ -383,14 +383,27 @@ describe("rate limiting", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("throttled with no good reading, the vault token is preferred for the probe when there is one", async () => {
+  it("throttled with no good reading, a revoked vault token never shadows the working login", async () => {
     const { usage } = await fresh();
     await storeLongLived("tech");
     fetchMock
       .mockResolvedValueOnce(response(429, { error: { type: "rate_limit_error" } }))
       .mockResolvedValueOnce(response(200, {}, PLAN_HEADERS));
     expect((await usage.accountUsage("tech")).available).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     const [, init] = fetchMock.mock.calls[1] as [string, { headers: Record<string, string> }];
+    expect(init.headers.authorization).toBe(`Bearer ${ACCESS_TOKEN}`);
+  });
+
+  it("throttled with no good reading and a login the probe refuses, the vault token is tried next", async () => {
+    const { usage } = await fresh();
+    await storeLongLived("tech");
+    fetchMock
+      .mockResolvedValueOnce(response(429, { error: { type: "rate_limit_error" } }))
+      .mockResolvedValueOnce(response(401, { error: { type: "authentication_error" } }))
+      .mockResolvedValueOnce(response(200, {}, PLAN_HEADERS));
+    expect((await usage.accountUsage("tech")).available).toBe(true);
+    const [, init] = fetchMock.mock.calls[2] as [string, { headers: Record<string, string> }];
     expect(init.headers.authorization).toBe(`Bearer ${LONG_LIVED}`);
   });
 
