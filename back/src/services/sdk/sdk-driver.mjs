@@ -2035,7 +2035,7 @@ rl.on("line", (line) => {
     // cards are released, so a turn parked on a question never answers without having read it.
     // rewindAndSend releases them itself, at the right moment of whichever path it takes.
     // Religar ANTES de decidir: um supersede escrito na corrente velha órfã o turno do terminal
-    // outra run, e o ponto em memória que a decisão consultaria é de uma linha do tempo vencida.
+    // outra vez, e o ponto em memória que a decisão consultaria é de uma linha do tempo vencida.
     serialized(async () => {
       await reanchorIfStale();
       await reauthIfChanged();
@@ -2049,7 +2049,7 @@ rl.on("line", (line) => {
     return;
   }
   if (control && control.type === "set_effort" && typeof control.id === "string" && (typeof control.effort === "string" || control.effort === null)) {
-    // FORA da fila `serialized`: a effortWrite vale para o turno que já está rodando, não espera por ele.
+    // FORA da fila `serialized`: a troca vale para o turno que já está rodando, não espera por ele.
     queueEffortSwitch(control.id, control.effort);
     return;
   }
