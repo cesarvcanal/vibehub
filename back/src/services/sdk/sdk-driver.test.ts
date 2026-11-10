@@ -243,18 +243,26 @@ export function query({ prompt, options }) {
   handle.supportedCommands = async () => [];
   handle.initializationResult = async () => ({});
   // O nível no flag: undefined = nenhum; null = limpo, e o CLI de verdade cai no padrão do MODELO.
-  // "flags-fail" no sandbox simula a sessão recusando a troca.
+  // "flags-fail" no sandbox simula a sessão recusando a troca; "flags-hang", um control request
+  // escrito num CLI que não escuta (nunca responde).
   let flagEffort;
   handle.applyFlagSettings = async (settings) => {
     mark("flags:" + JSON.stringify(settings));
     if (existsSync(join(options.cwd, "flags-fail"))) throw new Error("control request failed");
+    if (existsSync(join(options.cwd, "flags-hang"))) return new Promise(() => {});
     if ("effortLevel" in settings) flagEffort = settings.effortLevel;
   };
   // O nível que a CONTA define (o effortLevel dos settings) vem de um arquivo no sandbox; sem ele, o
   // padrão do modelo ("medium", como o CLI de verdade para o Opus). \`applied\` é o que o CLI de
   // verdade diz que a próxima chamada vai usar: o flag, senão o --effort, senão os settings, senão o
   // do modelo.
+  // "settings-hang": a leitura nunca responde. "settings-gate": ela espera o "release-settings".
   handle.getSettings = async () => {
+    if (existsSync(join(options.cwd, "settings-hang"))) return new Promise(() => {});
+    if (existsSync(join(options.cwd, "settings-gate"))) {
+      mark("settings:waiting");
+      while (!existsSync(join(options.cwd, "release-settings"))) await sleep(20);
+    }
     const file = join(options.cwd, "account-effort");
     const own = existsSync(file) ? readFileSync(file, "utf8").trim() : undefined;
     const applied = flagEffort === undefined ? (options.effort ?? own ?? "medium") : (flagEffort ?? "medium");
@@ -314,6 +322,7 @@ afterEach(async () => {
   await rm(join(sandbox, "release-btw"), { force: true });
   await rm(join(sandbox, "account-effort"), { force: true });
   await rm(join(sandbox, "flags-fail"), { force: true });
+  for (const gate of ["flags-hang", "settings-hang", "settings-gate", "release-settings"]) await rm(join(sandbox, gate), { force: true });
   await rm(join(sandbox, "context-fail"), { force: true });
   await rm(join(sandbox, "context-hang"), { force: true });
 });
@@ -376,6 +385,20 @@ function startDriver(extraArgs: string[] = [], cwd = sandbox, configDir = sandbo
     },
     marks: marks.items,
   };
+}
+
+/** startDriver with extra environment for the driver process (its timeouts are read at boot). */
+function startDriverWithEnv(env: Record<string, string>, extraArgs: string[] = []): RunningDriver {
+  const saved = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, env);
+  try {
+    return startDriver(extraArgs);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 }
 
 /** Boots a driver and finishes one ordinary turn — the memory fork point a rewind needs. */
@@ -1084,6 +1107,51 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     expect(String(ack.error)).toContain("turbo");
   }, 60_000);
 
+  it("uma ida ao CLI que nunca responde vence o prazo: a confirmação traz o erro e a fila não trava", async () => {
+    const driver = startDriverWithEnv({ VIBEHUB_EFFORT_STEP_TIMEOUT_MS: "200" }, ["--effort", "xhigh"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "revisa slow" });
+    await driver.waitMark("slow:running");
+    await writeFile(join(sandbox, "flags-hang"), "");
+    driver.send({ type: "set_effort", id: "presa", effort: "medium" });
+    const presa = await driver.waitFor((e) => e.type === "effort_ack" && e.id === "presa");
+    expect(presa.effort).toBeUndefined();
+    expect(String(presa.error)).toMatch(/não respondeu/);
+
+    await rm(join(sandbox, "flags-hang"), { force: true });
+    driver.send({ type: "set_effort", id: "seguinte", effort: "high" });
+    expect(await driver.waitFor((e) => e.type === "effort_ack" && e.id === "seguinte"))
+      .toEqual({ type: "effort_ack", id: "seguinte", effort: "high" });
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+  }, 60_000);
+
+  it("a devolução do ultrathink e a troca do pill passam pela MESMA fila: a troca feita logo depois do turno fica", async () => {
+    // Card sem nível, conta em high: a devolução são três idas ao CLI (null, leitura, high). Uma
+    // troca para low no meio passava entre elas, e o high da devolução a desfazia.
+    await writeFile(join(sandbox, "account-effort"), "high");
+    const driver = startDriver();
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "pensa nisso ultrathink slow" });
+    await driver.waitMark("slow:running");
+    await writeFile(join(sandbox, "settings-gate"), "");
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+    await driver.waitMark("settings:waiting");
+    driver.send({ type: "set_effort", id: "pra-low", effort: "low" });
+    driver.send({ type: "permission_decision", id: "barreira-fila", allow: false });
+    await driver.waitFor((e) => e.type === "error" && String(e.message).includes("barreira-fila"));
+    await writeFile(join(sandbox, "release-settings"), "");
+    expect(await driver.waitFor((e) => e.type === "effort_ack" && e.id === "pra-low"))
+      .toEqual({ type: "effort_ack", id: "pra-low", effort: "low" });
+    expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual([
+      'flags:{"effortLevel":"max"}',
+      'flags:{"effortLevel":null}',
+      'flags:{"effortLevel":"high"}',
+      'flags:{"effortLevel":"low"}',
+    ]);
+  }, 60_000);
+
   it("um nível que não existe não chega ao CLI", async () => {
     const driver = startDriver(["--effort", "medium"]);
     await driver.waitFor((e) => e.type === "ready");
@@ -1192,6 +1260,19 @@ describe("sdk-driver.mjs — /btw", () => {
     const segunda = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "nivel-2");
     expect(String(segunda.text)).toContain("sessão principal está agora: medium");
     expect(String(segunda.text)).not.toContain("xhigh");
+  }, 60_000);
+
+  it("uma sessão que não diz o nível não segura a pergunta lateral: ela responde sem a linha do nível", async () => {
+    const driver = startDriverWithEnv({ VIBEHUB_EFFORT_STEP_TIMEOUT_MS: "200" }, ["--effort", "low"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "hello" });
+    await driver.waitFor((e) => e.type === "result");
+    await writeFile(join(sandbox, "settings-hang"), "");
+    driver.send({ type: "btw", id: "sem-nivel", question: "em que nível você está?" });
+    const answer = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "sem-nivel");
+    expect(String(answer.text)).toContain("em que nível você está?");
+    // Com a sessão viva e muda, o pin do card não é dito como o nível dela (num turno ultrathink, não é).
+    expect(String(answer.text)).not.toContain("sessão principal está agora");
   }, 60_000);
 
   it("UMA pergunta lateral por vez: a segunda espera a primeira responder", async () => {

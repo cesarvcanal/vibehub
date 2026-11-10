@@ -483,17 +483,17 @@ describe("sdk-driver.mjs — ultrathink / ultracode", () => {
   });
 
   it("devolve o esforço no fim do turno — a palavra valia para AQUELE turno", () => {
-    expect(source).toContain("void clearUltra(); // the keyword was for THIS turn");
+    expect(source).toContain("void naFilaDoNivel(clearUltra); // the keyword was for THIS turn");
     // A devolução limpa SÓ o que o driver fixou: um turno com `ultrathink` não pode desligar um
     // `ultracode` que a sessão já tinha.
     expect(source).toContain("ultraRaised = settings;");
     expect(source).toContain("const give = Object.fromEntries(Object.keys(outrasChaves).map((key) => [key, null]));");
-    expect(source).toContain("await handle.applyFlagSettings(give);");
+    expect(source).toContain("comPrazo(handle.applyFlagSettings(give), PRAZO_IDA_AO_CLI_MS, SESSAO_NAO_RESPONDEU)");
   });
 
   it("a mensagem NUNCA é engolida por uma escalada que falhou (o push mora no finally)", () => {
     const send = source.slice(source.indexOf("function sendUser(text)"));
-    const tryAt = send.indexOf("await raiseUltra(ultra, true);");
+    const tryAt = send.indexOf("await naFilaDoNivel(() => raiseUltra(ultra, true));");
     const finallyAt = send.indexOf("} finally {");
     const pushAt = send.indexOf("myChannel.push(userMessage(text));", finallyAt);
     expect(tryAt).toBeGreaterThan(0);
