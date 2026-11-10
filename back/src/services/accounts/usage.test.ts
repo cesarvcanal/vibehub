@@ -364,6 +364,36 @@ describe("rate limiting", () => {
     expect(again.retryAt).toBe(t2 + 240_000);
   });
 
+  it("throttled with no good reading (a fresh deploy), the plan is read off the probe with the login's own token", async () => {
+    const { usage } = await fresh();
+    fetchMock
+      .mockResolvedValueOnce(response(429, { error: { type: "rate_limit_error" } }))
+      .mockResolvedValueOnce(response(200, {}, PLAN_HEADERS));
+
+    const result = await usage.accountUsage("tech");
+    expect(result).toMatchObject({ available: true, sevenDay: { utilization: 40 } });
+    expect(result.error).toBeUndefined();
+    const [url, init] = fetchMock.mock.calls[1] as [string, { headers: Record<string, string> }];
+    expect(url).toBe(usage.MESSAGES_URL);
+    expect(init.headers.authorization).toBe(`Bearer ${ACCESS_TOKEN}`);
+
+    // The endpoint stays backed off and the probe reading is not repeated every minute.
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + usage.FRESH_MS + 1);
+    expect((await usage.accountUsage("tech")).sevenDay?.utilization).toBe(40);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("throttled with no good reading, the vault token is preferred for the probe when there is one", async () => {
+    const { usage } = await fresh();
+    await storeLongLived("tech");
+    fetchMock
+      .mockResolvedValueOnce(response(429, { error: { type: "rate_limit_error" } }))
+      .mockResolvedValueOnce(response(200, {}, PLAN_HEADERS));
+    expect((await usage.accountUsage("tech")).available).toBe(true);
+    const [, init] = fetchMock.mock.calls[1] as [string, { headers: Record<string, string> }];
+    expect(init.headers.authorization).toBe(`Bearer ${LONG_LIVED}`);
+  });
+
   it("with no good reading to fall back on it says rate_limited with no numbers", async () => {
     const { usage } = await fresh();
     fetchMock.mockResolvedValue(response(429, { error: { type: "rate_limit_error" } }));
