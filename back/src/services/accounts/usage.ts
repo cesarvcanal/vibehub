@@ -404,10 +404,14 @@ async function usageFor(slug: string | undefined): Promise<{ result: AccountUsag
     logger.warn({ action: "account.usage", account: key, strikes, blockedUntil }, "usage endpoint rate-limited");
     // Throttled with nothing to show — every deploy empties this cache, so the first poll after one
     // used to paint "sem leitura" for the whole back-off. The inference headers are not throttled
-    // with the endpoint, and the login's own token carries `user:inference`.
+    // with the endpoint. The login's own token comes first: it carries `user:inference` and is the
+    // one Claude Code keeps refreshed, while a vault token can sit there revoked.
     if (!entry.good && token) {
-      const probeToken = (await resolveAccountToken(key).catch(() => undefined)) ?? token;
-      const probed = await probeViaInference(probeToken, now);
+      let probed = await probeViaInference(token, now);
+      if (!probed.available) {
+        const longLived = await resolveAccountToken(key).catch(() => undefined);
+        if (longLived) probed = await probeViaInference(longLived, now);
+      }
       if (probed.available) {
         cache.set(key, { good: probed, last: probed, freshUntil: now + PROBE_FRESH_MS, strikes, blockedUntil });
         return { result: probed, called: true };
