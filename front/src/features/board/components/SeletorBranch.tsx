@@ -1,5 +1,6 @@
 import { Check, ChevronDown, GitBranch, RefreshCw, Search } from "lucide-react";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { idDaOpcao, useSeletorBranch } from "@/features/board/lib/useSeletorBranch";
 import type { BranchClassificada, DestaqueBranch, PropsSeletorBranch } from "@/features/board/types/branches";
 import { useT } from "@/i18n";
@@ -11,6 +12,18 @@ const TOM_DO_DESTAQUE: Record<DestaqueBranch, BadgeTone> = {
   principal: "ok",
   desenvolvimento: "warn",
 };
+
+// O nome trunca com reticências na largura do diálogo; o tooltip devolve o nome inteiro no hover.
+function NomeBranch({ nome }: { nome: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="min-w-0 flex-1 truncate font-mono">{nome}</span>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-[min(32rem,90vw)] break-all font-mono">{nome}</TooltipContent>
+    </Tooltip>
+  );
+}
 
 export default function SeletorBranch({
   id,
@@ -40,7 +53,7 @@ export default function SeletorBranch({
       className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm data-[ativo]:bg-accent"
     >
       <GitBranch className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1 truncate font-mono">{branch.nome}</span>
+      <NomeBranch nome={branch.nome} />
       {branch.destaque ? (
         <Badge tone={TOM_DO_DESTAQUE[branch.destaque]} className="px-1.5 py-0 text-[10px]">
           {t(`branchPicker.badge.${branch.destaque}`)}
@@ -82,7 +95,7 @@ export default function SeletorBranch({
         <GitBranch className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         {seletor.selecionada ? (
           <>
-            <span className="min-w-0 flex-1 truncate font-mono">{seletor.selecionada.nome}</span>
+            <NomeBranch nome={seletor.selecionada.nome} />
             {seletor.selecionada.destaque ? (
               <Badge tone={TOM_DO_DESTAQUE[seletor.selecionada.destaque]} className="px-1.5 py-0 text-[10px]">
                 {t(`branchPicker.badge.${seletor.selecionada.destaque}`)}
