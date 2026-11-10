@@ -218,7 +218,14 @@ export function NewCardDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent className="max-h-[90vh] max-w-md overflow-y-auto" onEscapeKeyDown={manterDialogoNoEscDoSeletor}>
+      {/* Vertical scroll only. grid-cols-1 makes the dialog's grid track minmax(0, 1fr): with the default
+          track, a select whose longest option is wider than the dialog stretched the form past it and
+          the dialog grew a sideways scroll. Wide (2xl) so the options sit in pairs instead of a tall
+          single column that hits the 90vh cap. */}
+      <DialogContent
+        className="grid-cols-1 max-h-[90vh] max-w-2xl overflow-y-auto overflow-x-hidden"
+        onEscapeKeyDown={manterDialogoNoEscDoSeletor}
+      >
         <DialogHeader>
           <DialogTitle>{t("newCard.title")}</DialogTitle>
           <DialogDescription>
@@ -266,8 +273,8 @@ export function NewCardDialog({
           </button>
 
           {showOptions ? (
-            <div className="space-y-4 rounded-md border border-border/60 bg-card/40 p-3">
-              <div className="space-y-1.5">
+            <div className="grid grid-cols-1 gap-4 rounded-md border border-border/60 bg-card/40 p-3 sm:grid-cols-2">
+              <div className="min-w-0 space-y-1.5">
                 <Label htmlFor="new-card-account">{t("newCard.account")}</Label>
                 <select
                   id="new-card-account"
@@ -293,7 +300,7 @@ export function NewCardDialog({
                 </select>
               </div>
 
-              <div className="space-y-1.5">
+              <div className="min-w-0 space-y-1.5">
                 <Label htmlFor="new-card-model">{t("newCard.model")}</Label>
                 <select
                   id="new-card-model"
@@ -313,7 +320,7 @@ export function NewCardDialog({
               {/* CUT FROM comes first: it is the question you answer before naming anything, and a
                   list of the repository's real branches is the whole point — "dev" exists in some
                   repos and not others, and typing it wrong fails minutes later inside the runner. */}
-              <div className="space-y-1.5">
+              <div className="min-w-0 space-y-1.5">
                 <Label htmlFor="new-card-base">{t("newCard.base")}</Label>
                 {branches?.length ? (
                   <SeletorBranch
@@ -344,7 +351,7 @@ export function NewCardDialog({
                 ) : null}
               </div>
 
-              <div className="space-y-1.5">
+              <div className="min-w-0 space-y-1.5">
                 <Label htmlFor="new-card-branch">{t("newCard.branch")}</Label>
                 <Input
                   id="new-card-branch"
@@ -381,7 +388,7 @@ export function NewCardDialog({
 
               {/* The LOCK. Deliberately next to the base, because the base is what it locks the card
                   to: the delivery becomes a PR against that branch and nothing else. */}
-              <label htmlFor="new-card-locked" className="flex cursor-pointer items-start gap-2">
+              <label htmlFor="new-card-locked" className="flex cursor-pointer items-start gap-2 sm:col-span-2">
                 <input
                   id="new-card-locked"
                   type="checkbox"

@@ -1138,15 +1138,20 @@ export function onCardConcluded(sink: ConcludedSink): () => void {
   return () => concludedSinks.delete(sink);
 }
 
-/** Puts the card in the target column at the requested (clamped) position, renumbering both columns. */
-function placeCard(cards: Card[], card: Card, column: BoardColumn, position?: number): void {
+/**
+ * Puts the card in the target column at the requested (clamped) position, renumbering both columns.
+ * `now` is the instant of the whole mutation: the caller stamps `updatedAt` with the same value, so a
+ * clock tick between the two never leaves `updatedAt` a millisecond after `doneAt` (the retention
+ * reads the newest stamp, and that millisecond kept a card alive past its day).
+ */
+function placeCard(cards: Card[], card: Card, column: BoardColumn, now: number, position?: number): void {
   const from = card.column;
   // The "done since" clock, stamped at the single funnel every column change goes through (the
   // patch, the mirror rule, the pause). Only CROSSING the border counts: reordering inside `done`
   // must not buy a finished card another six months, and leaving `done` throws the stamp away.
   if (column === "done") {
     if (from !== "done") {
-      card.doneAt = Date.now();
+      card.doneAt = now;
       // Told on the next microtask: placeCard runs inside a mutation, which must finish first.
       queueMicrotask(() => { for (const sink of concludedSinks) sink(card.id); });
     }
@@ -1154,7 +1159,7 @@ function placeCard(cards: Card[], card: Card, column: BoardColumn, position?: nu
     card.doneAt = undefined;
   }
   const parked = (c: BoardColumn) => c === "done" || c === "paused";
-  if (parked(column) && !parked(from)) card.parkedAt = Date.now();
+  if (parked(column) && !parked(from)) card.parkedAt = now;
   card.column = column;
   const dest = cards
     .filter((c) => c.projectId === card.projectId && c.column === column && c.id !== card.id)
@@ -1644,8 +1649,8 @@ export async function createCard(input: CreateCardInput, fields: UpdateCardInput
     doc.cards.push(card);
     rememberBrowserSlot(id, browserSlot);
     // Renumbers the backlog with the new card spliced in at 0, so positions stay 0..n-1.
-    placeCard(doc.cards, card, "backlog", 0);
-    if (move) placeCard(doc.cards, card, move.column, move.position);
+    placeCard(doc.cards, card, "backlog", now, 0);
+    if (move) placeCard(doc.cards, card, move.column, now, move.position);
     return card;
   });
 }
@@ -1893,8 +1898,9 @@ export async function updateCard(id: string, patch: UpdateCardInput): Promise<Ca
     // Nothing below this line can throw. (Object.assign copies keys explicitly set to `undefined`
     // too, which is exactly how a field gets cleared.)
     Object.assign(card, next);
-    if (move) placeCard(doc.cards, card, move.column, move.position);
-    card.updatedAt = Date.now();
+    const now = Date.now();
+    if (move) placeCard(doc.cards, card, move.column, now, move.position);
+    card.updatedAt = now;
     return card;
   });
 }
@@ -1990,7 +1996,7 @@ export async function applyCardStatus(cardId: string, status: CardStatus): Promi
     } else {
       target = columnAfterStatus(card.column, status);
     }
-    if (target !== card.column) placeCard(doc.cards, card, target);
+    if (target !== card.column) placeCard(doc.cards, card, target, Date.now());
     // PENDING brain/MCP update carried out: Claude went idle (status != working) — the flag is cleared
     // HERE, while the side effect (restartCard) belongs to the hook ROUTE (shouldRestartOnStatus),
     // mirroring how the pending pause is split. A card that is still `working` keeps the flag: the
@@ -2225,7 +2231,7 @@ export async function applyOpenTerminal(cardId: string): Promise<Card | undefine
     let changed = false;
     const target = columnAfterOpen(card.column);
     if (target !== card.column) {
-      placeCard(doc.cards, card, target);
+      placeCard(doc.cards, card, target, Date.now());
       changed = true;
     }
     if (!card.openedAt) {
@@ -2318,7 +2324,7 @@ export async function pauseCard(cardId: string, opts: PauseOpts = {}): Promise<C
     if (card.pausedAt) return card;
     // `done` is the user's own sticky column: pausing does NOT take the card out of it. And a card
     // already in `paused` has nowhere to move.
-    if (card.column !== "paused" && card.column !== "done") placeCard(doc.cards, card, "paused");
+    if (card.column !== "paused" && card.column !== "done") placeCard(doc.cards, card, "paused", Date.now());
     if (opts.effective || shouldEndSessionOnMove(card.status)) {
       // Idle -> effective pause: the caller kills the session now.
       card.pausedAt = Date.now();
