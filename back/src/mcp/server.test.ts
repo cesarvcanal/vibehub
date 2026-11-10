@@ -177,6 +177,16 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(INSTRUCTIONS).toContain("vibehub_review_start");
   });
 
+  it("vibehub_review_start carries the merger's 'merge and conclude when it ends' order instead of dropping it", () => {
+    const server = createMcpServer("test") as unknown as {
+      _registeredTools?: Record<string, { description?: string; inputSchema?: { shape?: Record<string, unknown> } }>;
+    };
+    const tool = server._registeredTools?.["vibehub_review_start"];
+    expect(Object.keys(tool?.inputSchema?.shape ?? {})).toEqual(expect.arrayContaining(["mergeWhenReady", "concludeWhenMerged"]));
+    expect(tool?.description ?? "").toContain("mergeWhenReady");
+    expect(tool?.description ?? "").toContain("terminando pode mergear");
+  });
+
   it("vibehub_review_submit says each finding needs the problem and how to fix it, not only a title", () => {
     const server = createMcpServer("test") as unknown as {
       _registeredTools?: Record<string, { description?: string }>;
