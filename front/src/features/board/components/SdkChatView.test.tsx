@@ -5311,6 +5311,7 @@ describe("SdkChatView — /btw", () => {
     expect(pendente).toHaveTextContent("o que falta?");
     expect(within(pendente).getByLabelText(/Answering…|Respondendo…/)).toBeInTheDocument();
     expect(pendente).not.toHaveTextContent(/Side question|Pergunta lateral/);
+    expect(within(pendente).getByTitle(/Side question|Pergunta lateral/)).toBeInTheDocument();
 
     ws.deliver({ type: "btw_answer", id: frame.id, question: "o que falta?", text: "falta abrir o PR" });
     await waitFor(() => expect(screen.getByTestId("sdk-btw")).toHaveTextContent("falta abrir o PR"));

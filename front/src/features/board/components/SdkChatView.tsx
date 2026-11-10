@@ -2476,7 +2476,9 @@ const SdkChatRow = React.memo(function SdkChatRow({
     return (
       <div data-testid="sdk-btw" className="max-w-prose text-sm">
         <div className="flex items-start gap-1.5 text-xs leading-5 text-muted-foreground">
-          <MessageCircleQuestion aria-label={t("sdk.btwLabel")} className="mt-[3px] h-3.5 w-3.5 shrink-0 text-primary/70" />
+          <span title={t("sdk.btwLabel")} className="mt-[3px] shrink-0">
+            <MessageCircleQuestion aria-label={t("sdk.btwLabel")} className="h-3.5 w-3.5 text-primary/70" />
+          </span>
           <span className="min-w-0 whitespace-pre-wrap">{row.question}</span>
         </div>
         <div className="ml-[6px] mt-1 border-l border-border pl-3.5">
