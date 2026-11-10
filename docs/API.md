@@ -165,6 +165,24 @@ that card.
 | POST | `/api/cards/:id/chat/key` | `{ key: "escape" \| "interrupt" }` — the chat's Stop button |
 | WS | `/api/cards/:id/vnc` | noVNC bridge for the card browser |
 
+### Documented pull requests — every PR explains itself
+
+`vibehub_deliver` never opens a PR with `gh pr create --fill` (a body that is just the list of
+commits). The AI that did the work sends the documentation with the delivery:
+
+- `title`, and `body` — markdown with the headings Contexto, Problema identificado, Objetivo, Solução
+  implementada, Detalhamento técnico, Comportamento esperado, Impactos, Testes e validações, Pontos de
+  atenção (English equivalents are accepted);
+- `comments` — `[{ path, line, body, side?, startLine? }]`, one per relevant block of the diff, each
+  120 to 8 000 characters (what changed, why, how, responsibility, impact, rules).
+
+A NEW PR needs all three. Invalid documentation is refused before anything runs; missing documentation
+with no open PR pushes the branch and stops at `{ reason: "undocumented" }`. An open PR is reused, and
+rewritten (`gh pr edit`) when a title or body comes along. The comments go up before the gate as ONE
+`COMMENT` review pinned to the pushed commit, skipping those already on the PR (same file and text);
+GitHub refusing them (a line outside the diff) answers `{ reason: "comments_failed", prUrl }` and
+nothing is merged. The answer carries `comments: { posted, skipped }`.
+
 ### Locked cards — deliver only as a pull request
 
 A card can be **locked to its base** (`locked: true`, owner-only, off by default and absent from
@@ -349,7 +367,7 @@ Tokens are stored hashed in `oauth.json` and die with the account, or when its p
 | `vibehub_card_activity` | `view` — situation, `busy`, `pendingQuestion` / `pendingPermission` and recent events (messages, one line per tool call, answers); `since` for only what is new |
 | `vibehub_card_changes` | `view` — read-only git: branch, commits ahead of the base, files changed, uncommitted work, the branch's PR |
 | `vibehub_move_cards` | `work` on each card — `done` or `backlog` |
-| `vibehub_deliver` | `work` — PR + checks; merges only with `authorized: true` |
+| `vibehub_deliver` | `work` — PR + checks; merges only with `authorized: true`. A NEW PR opens only documented: `title`, `body` with the standard's sections and `comments` on the diff (`reason: "undocumented"` otherwise; see below) |
 
 The read tools carry `readOnlyHint`, so the app does not ask the user to confirm every poll.
 

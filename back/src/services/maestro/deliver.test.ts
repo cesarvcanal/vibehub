@@ -39,14 +39,18 @@ beforeEach(async () => {
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
 const PR = "https://github.com/acme/repo/pull/7";
+/** The commit the card pushed, as the comments step reads it back. */
+const HEAD_SHA = "d".repeat(40);
 
 /** Wire the runner: one canned reply per phase, chosen by the script's content. */
-function wire(over: { push?: string; probe?: string; run?: string; merge?: string; ci?: string } = {}) {
+function wire(over: { push?: string; probe?: string; run?: string; merge?: string; ci?: string; comments?: string; review?: string } = {}) {
   const push = over.push ?? `pushed\n__VIBEHUB_DELIVER__ pr ${PR}`;
   const probe = over.probe ?? ['pkg=0', 'test=0', 'tsconfig=0', 'localtsc=0', '__VIBEHUB_GATE_JSON__', '{"checks":["npm test"]}'].join("\n");
   const run = over.run ?? "ran\n__VIBEHUB_GATE__ pass\n";
   const merge = over.merge ?? "Merged\n__VIBEHUB_DELIVER__ merged\n";
   runScript.mockImplementation(async (script: string) => {
+    if (script.includes("/comments' --paginate")) return { stdout: over.comments ?? `__VIBEHUB_DELIVER__ prcomments ${HEAD_SHA} `, stderr: "" };
+    if (script.includes("/reviews' --input")) return { stdout: over.review ?? "__VIBEHUB_DELIVER__ review ok", stderr: "" };
     if (script.includes("gh pr merge")) return { stdout: merge, stderr: "" };
     if (script.includes("gh pr checks")) return { stdout: `${over.ci ?? ""}\n__VIBEHUB_CI__ done\n`, stderr: "" };
     if (script.includes("git push --force-with-lease")) return { stdout: push, stderr: "" };
@@ -83,7 +87,8 @@ describe("buildPushAndPrScript", () => {
     expect(s).not.toContain("/root/.vibehub/gh/");
     // git push is force-with-lease, and the PR targets the given branch
     expect(s).toContain("git push --force-with-lease origin 'card/fix-1'");
-    expect(s).toContain("gh pr create --base 'dev' --head 'card/fix-1' --fill");
+    // never --fill: its body is the list of commits, the undocumented PR the team rule forbids
+    expect(s).not.toContain("--fill");
   });
 });
 
@@ -182,6 +187,12 @@ describe("buildMergeScript", () => {
 });
 
 describe("parsePushAndPr / parseMerge", () => {
+  it("a failed edit still names the open PR", async () => {
+    const { deliver } = await load();
+    expect(deliver.parsePushAndPr(`no permission\n__VIBEHUB_DELIVER__ error edit ${PR}`)).toEqual({
+      ok: false, stage: "edit", output: "no permission", prUrl: PR,
+    });
+  });
   it("reads the PR url or the failed stage", async () => {
     const { deliver } = await load();
     expect(deliver.parsePushAndPr(`x\n__VIBEHUB_DELIVER__ pr ${PR}`)).toEqual({ ok: true, prUrl: PR });
@@ -947,5 +958,295 @@ describe("deliver com revisão de PR ativa no card", () => {
       await rm(dir, { recursive: true, force: true });
       dir = await mkdtemp(join(tmpdir(), "vibehub-deliver-"));
     }
+  });
+});
+
+/* ------------------------------------------------------------- PR documentation */
+
+/** A description with every section of the standard (prDocs.PR_SECTIONS). */
+const DOC_BODY = [
+  "## Contexto", "c", "## Problema identificado", "p", "## Objetivo", "o", "## Solução implementada", "s",
+  "## Detalhamento técnico", "d", "## Comportamento esperado", "e", "## Impactos", "i",
+  "## Testes e validações", "t", "## Pontos de atenção", "a",
+].join("\n");
+/** A comment that explains its block (above prDocs.MIN_COMMENT_CHARS). */
+const EXPLAINED =
+  "Este bloco passa a validar a documentação antes do push: um corpo sem as seções obrigatórias volta para a IA " +
+  "com a lista do que falta, e nenhum script roda no runner.";
+const DOCS = { title: "feat: PR documentado", body: DOC_BODY, comments: [{ path: "back/src/a.ts", line: 3, body: EXPLAINED }] };
+
+describe("buildPushAndPrScript executado de verdade (gh e git falsos): PR novo só abre documentado", () => {
+  const roots: string[] = [];
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  /** Runs the script's runner-side body (what `docker exec … bash -s` receives) with fake gh/git on PATH. */
+  async function run(docs: Parameters<typeof import("./deliver.js").buildPushAndPrScript>[6], existing = "", editResult = "") {
+    const { deliver } = await load();
+    const root = await mkdtemp(join(tmpdir(), "vibehub-prdocs-"));
+    roots.push(root);
+    const bin = join(root, "bin");
+    const fake = (name: string, body: string) =>
+      execFileSync("bash", ["-c", `mkdir -p '${bin}' && cat > '${bin}/${name}' && chmod +x '${bin}/${name}'`], { input: body });
+    fake("git", '#!/bin/bash\necho "git $*" >> "$ROOT/log"\nexit 0\n');
+    fake("gh", [
+      "#!/bin/bash",
+      'echo "gh $1 $2" >> "$ROOT/log"',
+      'case "$1 $2" in',
+      '  "pr list") [ -n "$EXISTING" ] && echo "$EXISTING"; exit 0 ;;',
+      '  "pr edit") [ -n "$EDIT_RESULT" ] && { echo "no permission"; $EDIT_RESULT; } ;;&',
+      '  "pr create"|"pr edit")',
+      '    while [ $# -gt 0 ]; do case "$1" in',
+      '      --title) printf "%s" "$2" > "$ROOT/title"; shift ;;',
+      '      --body-file) cp "$2" "$ROOT/body"; shift ;;',
+      '    esac; shift; done',
+      '    echo "https://github.com/acme/repo/pull/9"; exit 0 ;;',
+      "esac",
+    ].join("\n"));
+    const script = deliver.buildPushAndPrScript("vibehub-runner", "card-1", TOKEN, root, "card/x", "dev", docs);
+    const lines = script.split("\n");
+    const inner = lines.slice(lines.findIndex((l) => l.startsWith("docker exec")) + 1, -1).join("\n");
+    const env = { PATH: `${bin}:${process.env.PATH}`, ROOT: root, EXISTING: existing, EDIT_RESULT: editResult };
+    const stdout = execFileSync("bash", ["-s"], { input: inner, env, encoding: "utf8" });
+    const read = (f: string) => execFileSync("bash", ["-c", `cat '${join(root, f)}' 2>/dev/null || true`], { encoding: "utf8" });
+    return { stdout, log: read("log"), title: read("title"), body: read("body"), script };
+  }
+
+  const clean = (d: typeof DOCS) => ({ ...d, comments: d.comments.map((c) => ({ ...c, side: "RIGHT" as const })) });
+
+  it("sem documentação e sem PR aberto: empurra, mas NÃO abre o PR (undocumented)", async () => {
+    const r = await run({ comments: [] });
+    expect(r.log).toContain("git push");
+    expect(r.log).not.toContain("gh pr create");
+    expect(r.stdout).toContain("__VIBEHUB_DELIVER__ error undocumented");
+  });
+
+  it("título e corpo chegam ao gh exatamente como a IA escreveu — aspas, $(…), crases e a linha do heredoc não escapam", async () => {
+    const body = `${DOC_BODY}\nVIBEHUB_DELIVER\nit's \`rm -rf /\` and $(echo pwned) "quoted" ação`;
+    const title = `fix: it's "$(echo pwned)" \`x\``;
+    const r = await run(clean({ ...DOCS, title, body }));
+    expect(r.log).toContain("gh pr create");
+    expect(r.title).toBe(title);
+    expect(r.body).toBe(body);
+    expect(r.stdout).toContain("__VIBEHUB_DELIVER__ pr https://github.com/acme/repo/pull/9");
+    // the text travels base64-encoded: none of it is in the script as shell source
+    expect(r.script).not.toContain("echo pwned");
+  });
+
+  it("PR já aberto: reaproveita; com título/corpo novos ele é reescrito (gh pr edit)", async () => {
+    const r = await run(clean(DOCS), PR);
+    expect(r.log).not.toContain("gh pr create");
+    expect(r.log).toContain("gh pr edit");
+    expect(r.body).toBe(DOC_BODY);
+    expect(r.stdout).toContain(`__VIBEHUB_DELIVER__ pr ${PR}`);
+  });
+
+  it("gh pr edit falhou: o marcador do erro leva a URL do PR que está aberto", async () => {
+    const r = await run(clean(DOCS), PR, "exit 1");
+    expect(r.stdout).toContain(`__VIBEHUB_DELIVER__ error edit ${PR}`);
+    expect(r.stdout).toContain("no permission");
+  });
+
+  it("PR já aberto e nada de texto novo: reaproveitado sem tocar (a revisão empurra correção assim)", async () => {
+    const r = await run({ comments: [] }, PR);
+    expect(r.log).not.toMatch(/gh pr (create|edit)/);
+    expect(r.stdout).toContain(`__VIBEHUB_DELIVER__ pr ${PR}`);
+  });
+});
+
+describe("deliver abre PR documentado (diretriz de PR de todo repositório)", () => {
+  const reviewPosted = () => scripts().find((s) => s.includes("/reviews' --input"));
+  /** The JSON the review script carries (base64 in the script). */
+  const payloadOf = (script: string) => JSON.parse(Buffer.from(/printf '%s' '([A-Za-z0-9+/=]+)' \| base64 -d > "\$F"/.exec(script)![1]!, "base64").toString("utf8"));
+
+  it("documentação inválida volta ANTES de qualquer script: nada é empurrado", async () => {
+    const { deliver, card } = await makeCard();
+    wire();
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, docs: { ...DOCS, body: "## Contexto\nsó" } });
+    expect(out).toMatchObject({ merged: false, reason: "undocumented" });
+    expect(out.output).toContain("Pontos de atenção");
+    expect(runScript).not.toHaveBeenCalled();
+  });
+
+  it("o runner diz que não há PR e faltou documentação: undocumented, sem gate, sem merge, sem PR gravado", async () => {
+    const { deliver, registry, card } = await makeCard();
+    wire({ push: "pushed\n__VIBEHUB_DELIVER__ error undocumented" });
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true });
+    expect(out).toMatchObject({ merged: false, reason: "undocumented" });
+    expect(out.output).toContain("falta title, body, comments");
+    expect(runScript).toHaveBeenCalledOnce();
+    expect((await registry.getCard(card.id))?.prs).toBeUndefined();
+  });
+
+  it("documentado: publica os comentários como UMA revisão COMMENT presa ao commit empurrado, e segue para o gate", async () => {
+    const { deliver, card } = await makeCard();
+    wire();
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, docs: DOCS });
+    expect(out).toMatchObject({ merged: true, reason: "merged", comments: { posted: 1, skipped: 0 } });
+    const push = scripts().find((s) => s.includes("git push --force-with-lease"))!;
+    expect(push).toContain("--body-file");
+    const review = reviewPosted()!;
+    expect(review).toContain("gh api --method POST 'repos/acme/repo/pulls/7/reviews' --input");
+    expect(payloadOf(review)).toMatchObject({
+      commit_id: HEAD_SHA, event: "COMMENT",
+      comments: [{ path: "back/src/a.ts", line: 3, side: "RIGHT", body: EXPLAINED }],
+    });
+    // the comments go up before the gate: a PR that will be merged already carries them
+    const order = scripts().map((s) => (s.includes("/reviews' --input") ? "review" : s.includes("gh pr merge") ? "merge" : "")).filter(Boolean);
+    expect(order).toEqual(["review", "merge"]);
+    for (const s of scripts()) for (const line of s.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
+  });
+
+  it("entregar de novo não duplica: o que já está no PR (mesmo arquivo e texto) é pulado", async () => {
+    const { deliver, card } = await makeCard();
+    const already = Buffer.from(JSON.stringify({ path: "back/src/a.ts", body: EXPLAINED })).toString("base64");
+    wire({ comments: `__VIBEHUB_DELIVER__ prcomments ${HEAD_SHA} ${already}` });
+    const second = { path: "back/src/b.ts", line: 8, body: EXPLAINED };
+    const out = await deliver.deliver(card.id, { branch: "dev", docs: { comments: [DOCS.comments[0]!, second] } });
+    expect(out).toMatchObject({ reason: "unauthorized", comments: { posted: 1, skipped: 1 } });
+    expect(payloadOf(reviewPosted()!).comments).toEqual([{ path: "back/src/b.ts", line: 8, side: "RIGHT", body: EXPLAINED }]);
+  });
+
+  it("comentário repetido na MESMA chamada é contado na resposta (repeated), não some calado", async () => {
+    const { deliver, card } = await makeCard();
+    wire();
+    const out = await deliver.deliver(card.id, { branch: "dev", docs: { comments: [DOCS.comments[0]!, DOCS.comments[0]!] } });
+    expect(out).toMatchObject({ reason: "unauthorized", comments: { posted: 1, skipped: 0, repeated: 1 } });
+  });
+
+  it("tudo já publicado: nenhuma revisão nova", async () => {
+    const { deliver, card } = await makeCard();
+    const already = Buffer.from(JSON.stringify({ path: "back/src/a.ts", body: EXPLAINED })).toString("base64");
+    wire({ comments: `__VIBEHUB_DELIVER__ prcomments ${HEAD_SHA} ${already}` });
+    const out = await deliver.deliver(card.id, { branch: "dev", docs: { comments: DOCS.comments } });
+    expect(out).toMatchObject({ reason: "unauthorized", comments: { posted: 0, skipped: 1 } });
+    expect(reviewPosted()).toBeUndefined();
+  });
+
+  it("GitHub recusa a posição de um comentário: comments_failed com o erro, PR aberto e gravado, sem gate e sem merge", async () => {
+    const { deliver, registry, card } = await makeCard();
+    wire({ review: 'gh: Line could not be resolved (HTTP 422)\n__VIBEHUB_DELIVER__ error review' });
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, docs: DOCS });
+    expect(out).toMatchObject({ merged: false, reason: "comments_failed", prUrl: PR });
+    expect(out.output).toContain("Line could not be resolved");
+    expect(out.output).toContain("tem que estar no diff");
+    expect(mergeRan()).toBe(false);
+    expect(localGateRan()).toBe(false);
+    expect((await registry.getCard(card.id))?.prs?.[0]?.number).toBe(7);
+  });
+
+  it("recusa por permissão (403) não manda mexer em linha: só o erro do GitHub", async () => {
+    const { deliver, card } = await makeCard();
+    wire({ review: "gh: Resource not accessible by personal access token (HTTP 403)\n__VIBEHUB_DELIVER__ error review" });
+    const out = await deliver.deliver(card.id, { branch: "dev", docs: DOCS });
+    expect(out).toMatchObject({ reason: "comments_failed" });
+    expect(out.output).toContain("HTTP 403");
+    expect(out.output).not.toContain("tem que estar no diff");
+  });
+
+  it("gh pr edit falhou num PR aberto: pr_failed COM a URL, e o PR fica gravado no card", async () => {
+    const { deliver, registry, card } = await makeCard();
+    wire({ push: `no permission\n__VIBEHUB_DELIVER__ error edit ${PR}` });
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, docs: DOCS });
+    expect(out).toMatchObject({ merged: false, reason: "pr_failed", prUrl: PR });
+    expect(out.output).toContain("no permission");
+    expect((await registry.getCard(card.id))?.prs?.[0]?.number).toBe(7);
+    expect(mergeRan()).toBe(false);
+  });
+
+  it("a dica de linha só sai com palavra inteira: 'different', 'deadline' e 'pipeline' não a disparam", async () => {
+    const { deliver, card } = await makeCard();
+    for (const [answer, hint] of [
+      ["gh: token from a different account, deadline passed in pipeline (HTTP 403)", false],
+      ["gh: pull_request_review_thread.line must be part of the diff (HTTP 422)", true],
+      ["Unprocessable Entity (HTTP 422)", true],
+    ] as const) {
+      runScript.mockClear();
+      wire({ review: `${answer}\n__VIBEHUB_DELIVER__ error review` });
+      const out = await deliver.deliver(card.id, { branch: "dev", docs: DOCS });
+      expect(out.output, answer).toContain(answer);
+      expect(String(out.output).includes("tem que estar no diff"), answer).toBe(hint);
+    }
+  });
+
+  it("o PR não chegou ao commit empurrado: comments_failed (as linhas seriam de outro diff)", async () => {
+    const { deliver, card } = await makeCard();
+    wire({ comments: "__VIBEHUB_DELIVER__ error stale" });
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, docs: DOCS });
+    expect(out).toMatchObject({ merged: false, reason: "comments_failed" });
+    expect(out.output).toContain("commit enviado");
+    expect(reviewPosted()).toBeUndefined();
+  });
+
+  it("a espera compara o PR com a branch do card que foi empurrada", async () => {
+    const { deliver, card } = await makeCard();
+    wire();
+    await deliver.deliver(card.id, { branch: "dev", docs: DOCS });
+    const read = scripts().find((s) => s.includes("/comments' --paginate"))!;
+    expect(read).toContain(`git rev-parse 'refs/heads/${card.branch ?? `card/${card.worktreeSlug}`}'`);
+  });
+
+  it("push-only (correção de PR em revisão) também publica os comentários que vierem", async () => {
+    const { deliver, card } = await makeCard();
+    wire();
+    const out = await deliver.deliver(card.id, { branch: "dev", pushOnly: true, docs: { comments: DOCS.comments } });
+    expect(out).toMatchObject({ reason: "pushed", comments: { posted: 1, skipped: 0 } });
+    expect(localGateRan()).toBe(false);
+  });
+
+  it("só-merge ignora documentação: não empurra, não escreve no PR", async () => {
+    const { deliver, card } = await makeCard();
+    const sha = "a".repeat(40);
+    runScript.mockImplementation(async (script: string) => {
+      if (script.includes("gh pr merge")) return { stdout: "__VIBEHUB_DELIVER__ merged\n", stderr: "" };
+      if (script.includes("gh pr checks")) return { stdout: '[{"name":"b","bucket":"pass"}]\n__VIBEHUB_CI__ done\n', stderr: "" };
+      if (script.includes("gh pr list")) return { stdout: `__VIBEHUB_DELIVER__ head ${PR} ${sha}\n`, stderr: "" };
+      return { stdout: "", stderr: "" };
+    });
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: sha, docs: { body: "x" } });
+    expect(out).toMatchObject({ merged: true });
+    expect(scripts().some((s) => s.includes("/comments' --paginate") || s.includes("--body-file"))).toBe(false);
+  });
+});
+
+describe("buildPrCommentsReadScript / parsePrComments", () => {
+  it("espera o PR apontar para o HEAD empurrado (limitado) e lê os comentários em base64", async () => {
+    const { deliver } = await load();
+    const s = deliver.buildPrCommentsReadScript("vibehub-runner", "c1", TOKEN, "/work/x", PR, "card/fix-1");
+    // the commit the push SENT (the card branch), not whatever the worktree has checked out
+    expect(s).toContain("HEAD=$(git rev-parse 'refs/heads/card/fix-1')");
+    expect(s).not.toContain("git rev-parse HEAD");
+    expect(s).toContain(`gh pr view '${PR}' --json headRefOid`);
+    expect(s).toContain("gh api 'repos/acme/repo/pulls/7/comments' --paginate --jq '.[] | {path, body} | tojson'");
+    expect(s).toContain("base64 -w0");
+    for (const line of s.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
+  });
+
+  it("lê head e comentários; vazio é lista vazia; erro vem com o estágio", async () => {
+    const { deliver } = await load();
+    const lines = [{ path: "a", body: "x\ny" }, { path: "b", body: "z" }].map((o) => JSON.stringify(o)).join("\n");
+    const b64 = Buffer.from(lines).toString("base64");
+    expect(deliver.parsePrComments(`__VIBEHUB_DELIVER__ prcomments ${HEAD_SHA} ${b64}`)).toEqual({
+      ok: true, head: HEAD_SHA, posted: [{ path: "a", body: "x\ny" }, { path: "b", body: "z" }],
+    });
+    expect(deliver.parsePrComments(`__VIBEHUB_DELIVER__ prcomments ${HEAD_SHA} `)).toEqual({ ok: true, head: HEAD_SHA, posted: [] });
+    expect(deliver.parsePrComments("boom\n__VIBEHUB_DELIVER__ error comments")).toMatchObject({ ok: false, stage: "comments", output: "boom" });
+  });
+});
+
+describe("buildPrReviewScript", () => {
+  it("publica UMA revisão pela API com o payload em base64, token só pelo stdin", async () => {
+    const { deliver } = await load();
+    const payload = { commit_id: HEAD_SHA, event: "COMMENT", body: "b", comments: [{ path: "a.ts", line: 1, side: "RIGHT", body: "it's $(x)" }] };
+    const s = deliver.buildPrReviewScript("vibehub-runner", "c1", TOKEN, "/work/x", PR, payload);
+    expect(s).toContain("gh api --method POST 'repos/acme/repo/pulls/7/reviews' --input \"$F\"");
+    expect(s).toContain(`trap 'rm -f "$F"' EXIT`);
+    const b64 = /printf '%s' '([A-Za-z0-9+/=]+)' \| base64 -d > "\$F"/.exec(s)![1]!;
+    expect(JSON.parse(Buffer.from(b64, "base64").toString("utf8"))).toEqual(payload);
+    // the comment text is never shell source
+    expect(s).not.toContain("$(x)");
+    for (const line of s.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
+    expect(() => deliver.buildPrReviewScript("vibehub-runner", "c1", TOKEN, "/work/x", "https://example.com/x", payload)).toThrow(/PR/);
   });
 });

@@ -6,6 +6,7 @@ import { recordMessage, MESSAGE_TYPES, SEVERITIES, type MessageType, type Severi
 import { sendAnswer } from "./events.js";
 import { runGate } from "../services/maestro/gate.js";
 import { deliverCard } from "../services/review/deliverCard.js";
+import { prDocsInput, prDocsOf, PR_DOCS_RULE } from "./prDocsInput.js";
 import { relayCardActor, actAsParticipant } from "../services/board/actor.js";
 import { announcePreview } from "../services/preview/announce.js";
 import { recordLearning } from "../services/brain/learn.js";
@@ -339,7 +340,8 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "review's merger and the review is ready — the same merge as the " +
         "panel's button, which also closes the review. Otherwise 'review_active' says who merges and " +
         "where the review stands; 'head_moved' = the push brought commits the reviewer has not seen and " +
-        "the review went back to them. Never merge a reviewed PR any other way (gh pr merge, the GitHub API).",
+        "the review went back to them. Never merge a reviewed PR any other way (gh pr merge, the GitHub API). " +
+        PR_DOCS_RULE,
       inputSchema: {
         card: z.string().describe("id of the card to deliver (from vibehub_list_terminals)"),
         branch: z.string().optional().describe("target branch for the PR / merge. Absent = the project's base branch."),
@@ -347,11 +349,12 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         from: z.string().optional().describe(
           "YOUR OWN card id ($VIBEHUB_CARD_ID). A PR under review merges only when a card delivers ITSELF (from = card) by order of the review's merger.",
         ),
+        ...prDocsInput,
       },
     },
     async (a) => {
       try {
-        return ok(await deliverCard(a.card, { branch: a.branch, authorized: a.authorized === true, by: actor, from: a.from }));
+        return ok(await deliverCard(a.card, { branch: a.branch, authorized: a.authorized === true, by: actor, from: a.from, docs: prDocsOf(a) }));
       } catch (e) {
         return fail(e);
       }

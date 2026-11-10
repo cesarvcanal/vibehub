@@ -11,6 +11,7 @@ import {
 } from "../services/maestro/maestro.js";
 import { readCardChanges } from "../services/maestro/changes.js";
 import { deliverCard } from "../services/review/deliverCard.js";
+import { prDocsInput, prDocsOf, PR_DOCS_RULE } from "./prDocsInput.js";
 import { inboxFor, markDelivered, takeUndelivered, type CardEvent } from "../services/events/cardEvents.js";
 import { sendAnswer } from "./events.js";
 import { moveCards, AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX, type CardMoveOutcome } from "./cardMove.js";
@@ -447,11 +448,12 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
         "`authorized:true` ONLY when the user explicitly named where to ship ('sobe pra dev'); a " +
         "merge is a deploy, never a default. A PR under review: the push always happens; the merge only " +
         "when you are the review's merger and it is ready ('review_active' otherwise, naming who merges; " +
-        "'head_moved' = new commits went back to the reviewer).",
+        "'head_moved' = new commits went back to the reviewer). " + PR_DOCS_RULE,
       inputSchema: {
         cardId: z.string().describe("id of the card to deliver (from vibehub_list_terminals)"),
         branch: z.string().optional().describe("target branch. Absent = the project's base branch."),
         authorized: z.boolean().optional().describe("true = merge (deploy). Only when the user named the target."),
+        ...prDocsInput,
       },
     },
     async (a) => {
@@ -460,7 +462,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
         // Ordering the delivery IS an order: the push, the PR and the merge go out as this person.
         await recordCardActor(user, a.cardId);
         // The person IS the caller here (and was just made the card's actor): the order is theirs.
-        return ok(await deliverCard(a.cardId, { branch: a.branch, authorized: a.authorized === true, by: user.id, from: a.cardId }));
+        return ok(await deliverCard(a.cardId, { branch: a.branch, authorized: a.authorized === true, by: user.id, from: a.cardId, docs: prDocsOf(a) }));
       } catch (e) {
         return fail(e);
       }

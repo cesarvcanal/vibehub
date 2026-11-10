@@ -35,6 +35,23 @@ when told to — merges it. That single tool is the one place a change becomes a
   never merge around a red gate. `vibehub_deliver` already runs the gate and returns its verdict
   (with or without `authorized`), so do not run **`vibehub_gate`** first: use it only to answer "is
   this card green?" when you are not delivering.
+- **Every pull request is documentation — in any repository.** A reviewer who never saw the code must
+  understand the change from the PR alone. `vibehub_deliver` opens a NEW PR only with `title`, `body`
+  and `comments` (otherwise `reason: "undocumented"` lists what is missing):
+  - `body`: markdown with these headings — Contexto, Problema identificado, Objetivo, Solução
+    implementada, Detalhamento técnico, Comportamento esperado, Impactos, Testes e validações, Pontos
+    de atenção. Explain the change as a whole, not the list of files; tests say what was RUN and what
+    is only recommended; never invent a cause, a test or a reason — say what is not confirmed.
+  - `comments`: one per relevant block of the diff (`{ path, line, body }`, `line` inside the diff),
+    saying what changed, why, how it works, its responsibility, its impact and the rules involved.
+    Specific to that block — never "Adicionada validação" or "Ajuste no fluxo". Trivial lines need none.
+  - A PR opened BY HAND (another repository cloned under `./_repos/`, or any `gh pr create`) follows the
+    same standard: `gh pr create --title … --body-file …` with those sections — never `--fill`, whose
+    body is the list of commits — then the comments as ONE review:
+    `gh api repos/<owner>/<repo>/pulls/<n>/reviews --method POST --input review.json` with
+    `{ "commit_id": "<pushed sha>", "event": "COMMENT", "body": "…", "comments": [{ "path", "line", "side": "RIGHT", "body" }] }`.
+  - Before handing the PR over, re-read it as a stranger would: context, the problem before, the
+    solution, every relevant block commented, impacts and tests. If it is shallow, improve it first.
 
 ## Reviewing open PRs: attach them, do not review by hand
 

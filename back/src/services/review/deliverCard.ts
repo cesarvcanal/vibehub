@@ -22,7 +22,7 @@ import { activeReviewFor, getReview } from "./store.js";
  *    revisão está. Uma recusa do próprio merge chega com o motivo real (conflito, CI, conexão).
  */
 export async function deliverCard(
-  cardId: string, opts: Pick<DeliverOpts, "branch" | "authorized" | "by"> & { from?: string } = {},
+  cardId: string, opts: Pick<DeliverOpts, "branch" | "authorized" | "by" | "docs"> & { from?: string } = {},
 ): Promise<DeliverResult> {
   const review = opts.authorized === true ? await activeReviewFor(cardId) : undefined;
   if (!review) return await deliver(cardId, opts);
@@ -35,7 +35,8 @@ export async function deliverCard(
       output: `o PR #${review.prNumber} pra ${review.base} está em revisão: entregar pra ${target} fica para depois do merge dele. Nada foi feito.`,
     };
   }
-  const pushed = await deliver(cardId, { branch: review.base, by: opts.by, pushOnly: true });
+  // A documentação vai junto: o autor que empurra a correção também explica no diff o que mudou.
+  const pushed = await deliver(cardId, { branch: review.base, by: opts.by, docs: opts.docs, pushOnly: true });
   if (pushed.reason !== "pushed") return pushed;
   // O push leva até minutos: a revisão pode ter andado nesse meio (ficado pronta, fechado).
   const now = await getReview(review.id);

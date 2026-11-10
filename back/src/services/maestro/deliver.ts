@@ -11,6 +11,10 @@ import { getSettings } from "../settings/settings.js";
 import { assertGhToken } from "../accounts/token.js";
 import { runGate, cleanOutput, type GateResult } from "./gate.js";
 import { activeReviewFor } from "../review/store.js";
+import {
+  validatePrDocs, canOpenPr, undocumentedOutput, freshComments, reviewPayload,
+  type PrDocs, type CleanPrDocs, type CleanComment, type PostedComment,
+} from "./prDocs.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -25,7 +29,10 @@ import { logger } from "../../utils/logger.js";
  * Steps:
  *   a. push the card branch (`--force-with-lease` — the card owns its branch; a branch the last merge
  *      deleted on GitHub goes up again, see forgetDeletedRemoteBranch).
- *   b. open a PR to the target branch, or reuse the open one.
+ *   b. open a PR to the target branch, or reuse the open one. A NEW PR opens only DOCUMENTED (prDocs.ts):
+ *      title, a body with every section of the team's standard, and comments on the diff — otherwise
+ *      the branch is pushed and the delivery stops at `undocumented`. Then the comments go up as one
+ *      COMMENT review on the pushed commit (those already on the PR are skipped).
  *   c. the GATE. When the pull request has GitHub CI checks, THEY are the gate: wait for them (bounded)
  *      and read their verdict — the CI already runs the full suite on a clean machine, and running it
  *      again inside the shared runner duplicated the work and timed out on a loaded box. Without CI
@@ -65,7 +72,11 @@ export type DeliverReason =
   /** An authorized merge outside merge-only while the card has a PR review in progress. */
   | "review_active"
   /** Push-only: the branch went to the PR; nothing else was asked. */
-  | "pushed";
+  | "pushed"
+  /** No PR opened: its documentation is missing or invalid (prDocs.ts). The branch may have been pushed. */
+  | "undocumented"
+  /** The PR is open, but GitHub refused its comments (a line outside the diff, say). Nothing merged. */
+  | "comments_failed";
 
 export interface DeliverResult {
   /** URL of the PR — present once (b) resolved one, whether or not it was later merged. */
@@ -87,6 +98,11 @@ export interface DeliverResult {
    * it would close that PR), or `failed` (the merge stands; the branch is just still there).
    */
   headBranch?: "deleted" | "kept" | "failed";
+  /**
+   * The comments on the diff this delivery was given: how many went up, how many were already on the PR,
+   * and how many the call itself repeated (same file and text twice — posted once).
+   */
+  comments?: { posted: number; skipped: number; repeated?: number };
 }
 
 export interface DeliverOpts {
@@ -114,6 +130,12 @@ export interface DeliverOpts {
    * message to the card in the meantime cannot swap the identity under it.
    */
   connectionId?: string;
+  /**
+   * The PR's documentation, written by the AI that did the work: required to OPEN a new PR (title, body
+   * and comments), optional on an existing one (rewrites its title/body, adds the comments). Ignored in
+   * merge-only, which writes nothing.
+   */
+  docs?: PrDocs;
 }
 
 const MARKER = "__VIBEHUB_DELIVER__";
@@ -169,29 +191,191 @@ export function forgetDeletedRemoteBranch(branch: string): string {
 }
 
 /**
+ * Free text (a PR title, body or review payload) as a shell expression that rebuilds it in the runner:
+ * the text travels base64-encoded, so quotes, `$(…)`, backticks or a line equal to the heredoc
+ * delimiter are never shell source. PURE.
+ */
+function decoded(text: string): string {
+  return `printf '%s' '${Buffer.from(text, "utf8").toString("base64")}' | base64 -d`;
+}
+
+/**
  * Script for steps (a)+(b): push the branch, then reuse an open PR or create one. Emits
  * `__VIBEHUB_DELIVER__ pr <url>` on success, or `__VIBEHUB_DELIVER__ error <stage>` with the
- * command output above it. Branch names are validated by the caller and shell-quoted here. PURE.
+ * command output above it. Branch names are validated by the caller and shell-quoted here.
+ *
+ * The PR's text comes from `docs` (already validated, prDocs.ts) — never `--fill`, whose body is the
+ * list of commits. No open PR and not enough to open a documented one: `error undocumented`, after the
+ * push. An open PR is reused; given a title or body, it is rewritten with them (`gh pr edit`). PURE.
  */
 export function buildPushAndPrScript(
   containerName: string, cardId: string, token: string, cwd: string, branch: string, target: string,
+  docs: CleanPrDocs = { comments: [] },
 ): string {
   assertSafeRemotePath(cwd);
+  const textFlags = [
+    docs.title !== undefined ? `--title "$TITLE"` : "",
+    docs.body !== undefined ? `--body-file "$BODY"` : "",
+  ].filter(Boolean).join(" ");
+  const open = canOpenPr(docs)
+    ? [
+      `  if ! CREATE=$(gh pr create --base ${shQuote(target)} --head ${shQuote(branch)} ${textFlags} 2>&1); then`,
+      `    printf '%s\\n' "$CREATE"; echo "${MARKER} error create"; exit 0;`,
+      `  fi`,
+      `  URL=$(printf '%s\\n' "$CREATE" | grep -Eo 'https://github.com/[^[:space:]]+/pull/[0-9]+' | tail -1)`,
+    ]
+    : [`  echo "${MARKER} error undocumented"; exit 0`];
+  const edit = textFlags
+    ? [
+      `else`,
+      `  if ! EDIT=$(gh pr edit "$URL" ${textFlags} 2>&1); then`,
+      // The PR is open: the marker names it, so the delivery still records it and answers with its url.
+      `    printf '%s\\n' "$EDIT"; echo "${MARKER} error edit $URL"; exit 0;`,
+      `  fi`,
+    ]
+    : [];
   const body = [
     ...ghTokenPreamble(token),
     `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
     forgetDeletedRemoteBranch(branch),
     `if ! git push --force-with-lease origin ${shQuote(branch)}; then echo "${MARKER} error push"; exit 0; fi`,
+    ...(docs.title !== undefined ? [`TITLE=$(${decoded(docs.title)})`] : []),
+    ...(docs.body !== undefined ? [`BODY=$(mktemp)`, `trap 'rm -f "$BODY"' EXIT`, `${decoded(docs.body)} > "$BODY"`] : []),
     `URL=$(gh pr list --head ${shQuote(branch)} --base ${shQuote(target)} --state open --json url --jq '.[0].url' 2>/dev/null)`,
     `if [ -z "$URL" ]; then`,
-    `  if ! CREATE=$(gh pr create --base ${shQuote(target)} --head ${shQuote(branch)} --fill 2>&1); then`,
-    `    printf '%s\\n' "$CREATE"; echo "${MARKER} error create"; exit 0;`,
-    `  fi`,
-    `  URL=$(printf '%s\\n' "$CREATE" | grep -Eo 'https://github.com/[^[:space:]]+/pull/[0-9]+' | tail -1)`,
+    ...open,
+    ...edit,
     `fi`,
     `echo "${MARKER} pr $URL"`,
   ];
   return dockerBashScript(containerName, body);
+}
+
+/** How long the comments step waits for the PR to point at the pushed commit (rounds × seconds). */
+const COMMENTS_HEAD_ROUNDS = 12;
+const COMMENTS_HEAD_POLL_SECONDS = 5;
+
+/**
+ * Before commenting: wait (bounded) for the PR to point at the commit just pushed — the comment lines
+ * belong to THAT diff, and a reused PR moves to it a few seconds after the push. "Just pushed" is the
+ * tip of `branch` (what the push sent), not the worktree's HEAD, which may be on something else. Then list the review
+ * comments already on the PR, so a repeated delivery does not post them again. Emits
+ * `__VIBEHUB_DELIVER__ prcomments <head> <base64 of JSON lines {path, body}>` (`tojson`: one comment per
+ * line whatever gh's own formatting, a body's newlines escaped), or `error stale` /
+ * `error comments`. PURE.
+ */
+export function buildPrCommentsReadScript(
+  containerName: string, cardId: string, token: string, cwd: string, prUrl: string, branch: string,
+): string {
+  assertSafeRemotePath(cwd);
+  const pr = parsePrUrl(prUrl);
+  if (!pr) throw new Error(`not a GitHub PR url: ${prUrl}`);
+  const body = [
+    ...ghTokenPreamble(token),
+    `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
+    `HEAD=$(git rev-parse ${shQuote(`refs/heads/${branch}`)})`,
+    `i=0`,
+    `while :; do`,
+    `  i=$((i+1))`,
+    `  PH=$(gh pr view ${shQuote(prUrl)} --json headRefOid --jq .headRefOid 2>/dev/null)`,
+    `  [ "$PH" = "$HEAD" ] && break`,
+    `  if [ "$i" -ge ${COMMENTS_HEAD_ROUNDS} ]; then echo "${MARKER} error stale"; exit 0; fi`,
+    `  sleep ${COMMENTS_HEAD_POLL_SECONDS}`,
+    `done`,
+    `if ! J=$(gh api ${shQuote(`repos/${pr.repo}/pulls/${pr.number}/comments`)} --paginate --jq '.[] | {path, body} | tojson' 2>&1); then`,
+    `  printf '%s\\n' "$J"; echo "${MARKER} error comments"; exit 0;`,
+    `fi`,
+    `echo "${MARKER} prcomments $HEAD $(printf '%s' "$J" | base64 -w0)"`,
+  ];
+  return dockerBashScript(containerName, body);
+}
+
+/** Parses the comments lookup: the pushed head and the comments already on the PR. PURE. */
+export function parsePrComments(
+  stdout: string,
+): { ok: true; head: string; posted: PostedComment[] } | { ok: false; stage: string; output: string } {
+  const m = new RegExp(`${MARKER} prcomments ([0-9a-fA-F]{40,64}) ?([A-Za-z0-9+/=]*)`).exec(stdout);
+  if (m) {
+    try {
+      const posted = Buffer.from(m[2] ?? "", "base64").toString("utf8").split("\n").filter((l) => l.trim())
+        .map((l) => JSON.parse(l) as { path?: unknown; body?: unknown })
+        .map((c) => ({ path: String(c?.path ?? ""), body: String(c?.body ?? "") }));
+      return { ok: true, head: m[1]!.toLowerCase(), posted };
+    } catch {
+      return { ok: false, stage: "comments", output: "a lista de comentários do PR veio ilegível" };
+    }
+  }
+  const err = new RegExp(`${MARKER} error (\\S+)`).exec(stdout);
+  const output = stdout.replace(new RegExp(`${MARKER} (prcomments|error).*`, "g"), "").trim();
+  return { ok: false, stage: err?.[1] ?? "unknown", output };
+}
+
+/**
+ * Posts ONE review with the comments (`POST /pulls/{n}/reviews`, event COMMENT). The payload travels
+ * base64-encoded into a temp file read by `gh api --input`. GitHub takes all of the comments or none
+ * (a line outside the diff refuses the whole review), so a failure leaves nothing half-posted. Emits
+ * `__VIBEHUB_DELIVER__ review ok` or `error review` with GitHub's answer above it. PURE.
+ */
+export function buildPrReviewScript(
+  containerName: string, cardId: string, token: string, cwd: string, prUrl: string, payload: unknown,
+): string {
+  assertSafeRemotePath(cwd);
+  const pr = parsePrUrl(prUrl);
+  if (!pr) throw new Error(`not a GitHub PR url: ${prUrl}`);
+  const body = [
+    ...ghTokenPreamble(token),
+    `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
+    `F=$(mktemp)`,
+    `trap 'rm -f "$F"' EXIT`,
+    `${decoded(JSON.stringify(payload))} > "$F"`,
+    `if OUT=$(gh api --method POST ${shQuote(`repos/${pr.repo}/pulls/${pr.number}/reviews`)} --input "$F" 2>&1); then`,
+    `  echo "${MARKER} review ok"`,
+    `else`,
+    `  printf '%s\\n' "$OUT"; echo "${MARKER} error review"`,
+    `fi`,
+  ];
+  return dockerBashScript(containerName, body);
+}
+
+/**
+ * The comments step of a delivery: read what is on the PR, post the rest as one review pinned to the
+ * pushed commit. Any failure comes back with what to tell the agent — the PR is open either way.
+ */
+async function postPrComments(
+  container: string, cardId: string, token: string, cwd: string, prUrl: string, branch: string, comments: CleanComment[],
+): Promise<{ ok: true; posted: number; skipped: number } | { ok: false; output: string }> {
+  if (!parsePrUrl(prUrl)) return { ok: false, output: `a URL do PR não é do GitHub (${prUrl}): os comentários não foram publicados` };
+  const read = await hostExecutor().runScript(
+    buildPrCommentsReadScript(container, cardId, token, cwd, prUrl, branch),
+    { timeoutMs: (COMMENTS_HEAD_ROUNDS * COMMENTS_HEAD_POLL_SECONDS + 60) * 1000 },
+  );
+  const found = parsePrComments(read.stdout);
+  if (!found.ok) {
+    return {
+      ok: false,
+      output: found.stage === "stale"
+        ? "o PR ainda não aponta para o commit enviado: os comentários não foram publicados (entregue de novo em instantes)"
+        : `não deu para ler os comentários do PR: ${cleanOutput(found.output) || found.stage}`,
+    };
+  }
+  const fresh = freshComments(found.posted, comments);
+  const skipped = comments.length - fresh.length;
+  if (fresh.length === 0) return { ok: true, posted: 0, skipped };
+  const post = await hostExecutor().runScript(
+    buildPrReviewScript(container, cardId, token, cwd, prUrl, reviewPayload(found.head, fresh)),
+    { timeoutMs: 60_000 },
+  );
+  if (!new RegExp(`${MARKER} review ok`).test(post.stdout)) {
+    const answer = cleanOutput(post.stdout.replace(new RegExp(`${MARKER} .*`, "g"), "").trim());
+    // The hint about lines only when GitHub refused a POSITION (422); a 403 or a token without the
+    // scope is not fixed by moving lines.
+    // Whole words only: "different", "deadline" or "pipeline" in a 403 are not a refused position.
+    const position = /\b(422|line|position|diff)\b/i.test(answer)
+      ? " Cada line tem que estar no diff do PR (side RIGHT = linha da versão nova; LEFT = linha removida)."
+      : "";
+    return { ok: false, output: `o GitHub recusou os comentários (nenhum foi publicado): ${answer || "sem resposta"}.${position}` };
+  }
+  return { ok: true, posted: fresh.length, skipped };
 }
 
 /**
@@ -314,14 +498,19 @@ export function parseCiChecks(stdout: string): { verdict: "none" | "pass" | "fai
   return { verdict: "pass", output: `CI do PR verde: ${checks.map((c) => c.name || "?").join(", ")}` };
 }
 
-/** Parses the push+PR output into a resolved PR url or a staged error. PURE. */
-export function parsePushAndPr(stdout: string): { ok: true; prUrl: string } | { ok: false; stage: string; output: string } {
+/**
+ * Parses the push+PR output into a resolved PR url or a staged error. A failed `edit` happened on a PR
+ * that IS open: its url rides on the marker and comes back as `prUrl`. PURE.
+ */
+export function parsePushAndPr(
+  stdout: string,
+): { ok: true; prUrl: string } | { ok: false; stage: string; output: string; prUrl?: string } {
   const pr = new RegExp(`${MARKER} pr (\\S+)`).exec(stdout);
   if (pr && pr[1]) return { ok: true, prUrl: pr[1] };
-  const err = new RegExp(`${MARKER} error (\\S+)`).exec(stdout);
+  const err = new RegExp(`${MARKER} error (\\S+)(?: (https://\\S+))?`).exec(stdout);
   const stage = err?.[1] ?? "unknown";
   const output = stdout.replace(new RegExp(`${MARKER} (pr|error).*`, "g"), "").trimEnd();
-  return { ok: false, stage, output };
+  return { ok: false, stage, output, ...(err?.[2] ? { prUrl: err[2] } : {}) };
 }
 
 /** Parses the merge-only PR lookup into the PR url and its head, or a staged error. PURE. */
@@ -344,7 +533,7 @@ export function parseMerge(stdout: string): { merged: boolean; output: string } 
 
 /** Which git stage failed maps to the reason a maestro reads. PURE. */
 function reasonForStage(stage: string): DeliverReason {
-  return stage === "create" ? "pr_failed" : stage === "push" ? "push_failed" : "pr_failed";
+  return stage === "push" ? "push_failed" : stage === "undocumented" ? "undocumented" : "pr_failed";
 }
 
 /**
@@ -832,12 +1021,28 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     );
     return { merged: false, reason: "locked", branch: target, cardBranch: source, locked: true };
   }
+  // The PR's documentation is checked before anything runs: a body without its sections must not cost
+  // a push. Merge-only writes nothing on the PR, so it has nothing to check.
+  const checked = mergeOnly ? null : validatePrDocs(opts.docs);
+  if (checked && !checked.ok) {
+    logger.info(
+      { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, reason: "undocumented", by: opts.by },
+      "deliver refused: the PR documentation is invalid",
+    );
+    return {
+      merged: false, reason: "undocumented", branch: target, cardBranch: source, ...lock,
+      output: `Documentação do PR recusada; nada foi enviado:\n- ${checked.problems.join("\n- ")}`,
+    };
+  }
+  const docs: CleanPrDocs = checked?.ok ? checked.docs : { comments: [] };
   const { cwd } = cardWorkPaths(project, card);
   const container = config.runner.container;
 
   const token = opts.connectionId ? await tokenFor(opts.connectionId) : await cardConnectionToken(card, project);
 
   let prUrl: string;
+  /** Spread into every result after the comments step: what this delivery posted on the diff. */
+  let commented: Pick<DeliverResult, "comments"> = {};
   if (mergeOnly) {
     // (a)+(b) merge-only: nothing is pushed — the PR is read as GitHub has it.
     const out = await hostExecutor().runScript(
@@ -867,7 +1072,7 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
   } else {
     // (a)+(b) push and resolve the PR.
     const prOut = await hostExecutor().runScript(
-      buildPushAndPrScript(container, card.id, token, cwd, source, target),
+      buildPushAndPrScript(container, card.id, token, cwd, source, target, docs),
       { timeoutMs: 120_000 },
     );
     const pr = parsePushAndPr(prOut.stdout);
@@ -876,12 +1081,30 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
         { audit: true, action: "maestro.deliver", card: card.worktreeSlug, stage: pr.stage, merged: false, by: opts.by },
         "deliver stopped before a PR",
       );
-      return { merged: false, reason: reasonForStage(pr.stage), branch: target, cardBranch: source, ...lock, output: cleanOutput(pr.output) };
+      const output = pr.stage === "undocumented" ? undocumentedOutput(docs) : cleanOutput(pr.output);
+      // A failed rewrite of an OPEN PR: the PR exists, so the card still learns of it and the answer names it.
+      if (pr.prUrl) await rememberPr(card, pr.prUrl, target, source);
+      const open = pr.prUrl ? { prUrl: pr.prUrl } : {};
+      return { ...open, merged: false, reason: reasonForStage(pr.stage), branch: target, cardBranch: source, ...lock, output };
     }
     prUrl = pr.prUrl;
     await rememberPr(card, prUrl, target, source);
+    // The comments on the diff go up BEFORE the gate: a PR that gets merged already explains itself,
+    // and one GitHub refused them on stops here — merging it undocumented is what the rule forbids.
+    if (docs.comments.length) {
+      const posted = await postPrComments(container, card.id, token, cwd, prUrl, source, docs.comments);
+      logger.info(
+        { audit: true, action: "maestro.deliver", card: card.worktreeSlug, comments: posted.ok ? posted.posted : "failed", by: opts.by },
+        posted.ok ? "deliver posted the PR comments" : "deliver could not post the PR comments",
+      );
+      if (!posted.ok) {
+        return { prUrl, merged: false, reason: "comments_failed", branch: target, cardBranch: source, ...lock, output: posted.output };
+      }
+      const repeated = docs.repeated ? { repeated: docs.repeated } : {};
+      commented = { comments: { posted: posted.posted, skipped: posted.skipped, ...repeated } };
+    }
     // Push-only: the branch is on the PR, and that is all that was asked (no gate, no merge).
-    if (opts.pushOnly) return { prUrl, merged: false, reason: "pushed", branch: target, cardBranch: source, ...lock };
+    if (opts.pushOnly) return { prUrl, merged: false, reason: "pushed", branch: target, cardBranch: source, ...lock, ...commented };
   }
 
   // (c) the gate — the PR's CI when it has one, the local gate otherwise. A gate that errors
@@ -892,14 +1115,14 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     gate = (await ciGate(container, card.id, token, cwd, prUrl, mergeOnly ? expectedHead : undefined)) ?? (await runGate(card.id));
   } catch (err) {
     logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "gate could not run — treating as red");
-    return { prUrl, merged: false, reason: "gate", branch: target, cardBranch: source, ...lock, output: (err as Error).message };
+    return { prUrl, merged: false, reason: "gate", branch: target, cardBranch: source, ...lock, ...commented, output: (err as Error).message };
   }
   if (gate.ran && !gate.passed) {
     logger.info(
       { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, gate: "red", by: opts.by },
       "deliver stopped at the gate",
     );
-    return { prUrl, merged: false, reason: "gate", branch: target, cardBranch: source, ...lock, output: gate.output };
+    return { prUrl, merged: false, reason: "gate", branch: target, cardBranch: source, ...lock, ...commented, output: gate.output };
   }
 
   // (d) merge. A LOCKED card never gets here on purpose: its delivery IS the open pull request, and
@@ -912,14 +1135,14 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
       { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, reason: "locked", by: opts.by },
       "deliver opened a PR on a locked card — merging is the reviewer's",
     );
-    return { prUrl, merged: false, reason: "locked", branch: target, cardBranch: source, locked: true };
+    return { prUrl, merged: false, reason: "locked", branch: target, cardBranch: source, locked: true, ...commented };
   }
   if (opts.authorized !== true) {
     logger.info(
       { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, reason: "unauthorized", by: opts.by },
       "deliver prepared a PR but was not authorized to merge",
     );
-    return { prUrl, merged: false, reason: "unauthorized", branch: target, cardBranch: source };
+    return { prUrl, merged: false, reason: "unauthorized", branch: target, cardBranch: source, ...commented };
   }
   // The CI wait can take minutes: a review asked for in the meantime still takes the merge away.
   if (!mergeOnly && (await activeReviewFor(card.id))) {
@@ -928,7 +1151,7 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
       "deliver refused to merge: a PR review started while the gate ran",
     );
     return {
-      prUrl, merged: false, reason: "review_active", branch: target, cardBranch: source, ...lock,
+      prUrl, merged: false, reason: "review_active", branch: target, cardBranch: source, ...lock, ...commented,
       output: "uma revisão de PR começou enquanto o gate rodava: o merge é o botão do responsável no painel da revisão",
     };
   }
@@ -943,8 +1166,8 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     merged ? "deliver merged the PR" : "deliver could not merge the PR",
   );
   if (!merged) {
-    return { prUrl, merged, reason: "merge_failed", branch: target, cardBranch: source, ...lock, output: cleanOutput(output) };
+    return { prUrl, merged, reason: "merge_failed", branch: target, cardBranch: source, ...lock, ...commented, output: cleanOutput(output) };
   }
   const headBranch = await afterPrMerged(card.id, prUrl, target, source, opts.connectionId);
-  return { prUrl, merged, reason: "merged", branch: target, cardBranch: source, ...lock, headBranch };
+  return { prUrl, merged, reason: "merged", branch: target, cardBranch: source, ...lock, ...commented, headBranch };
 }
