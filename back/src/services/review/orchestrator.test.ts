@@ -910,6 +910,28 @@ describe("resposta do autor", () => {
     expect((await o.store.getReview(review.id))?.round).toBe(2);
   });
 
+  it("caso real (PR #259): palavra reservada na fala do autor não chega como palavra reservada ao revisor", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 1, findings: [{ ...BLOCKER, problem: "o ultrathink some da barra" }], headSha: SHA1, summary: "r1",
+    });
+    send.mockClear();
+
+    const reply = "a barra tira o \"esforço alto\" nesse aviso e mantém o ultracode. Saiu a comparação";
+    const after = await o.orch.submitAuthorResponse(author.id, {
+      round: 1, items: [{ id: "f1", status: "fixed", commit: "c0ffee1", reply }], headSha: SHA2,
+    });
+    const text = lastText();
+    // O Claude Code lê as duas como pedido do turno: o revisor subia a max com orquestração multiagente e
+    // cada rodada de delta passou a levar 12 a 14 minutos num Workflow.
+    expect(text).not.toMatch(/ultracode|ultrathink/i);
+    expect(text).toContain("mantém o ultra-code");
+    expect(text).toContain("o ultra-think some da barra");
+    // O registro guarda o que o autor escreveu: só o texto digitado no card é desarmado.
+    expect(after.findings[0]?.authorReply).toBe(reply);
+  });
+
   it("resposta a sugestão vale junto da rodada: a sugestão fecha com o commit, sem pesar na fase", async () => {
     const o = await load();
     const { author, review } = await started(o);
