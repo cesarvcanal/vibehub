@@ -166,6 +166,11 @@ describe("buildSetupScript", () => {
     expect(script).toContain("npm i -g @anthropic-ai/claude-code");
     expect(script).toContain("playwright install");
   });
+  it("instala o que os anexos precisam: leitores de Excel/Word/PDF e o ffmpeg do áudio", () => {
+    expect(buildSetupScript(base)).toContain(
+      "apt-get install -y -qq poppler-utils python3-openpyxl python3-xlrd python3-docx catdoc ffmpeg >/dev/null",
+    );
+  });
   it("installs the gh WRAPPER right after gh itself — and no longer plants the `.bashrc` shim", () => {
     const lines = buildSetupScript(base).split("\n");
     const gh = lines.findIndex((l) => l.includes("apt-get install -y -qq gh"));
