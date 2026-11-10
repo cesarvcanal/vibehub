@@ -18,7 +18,7 @@ import { stopAllMirrors } from "./mirror.js";
 import { transcriptDirFor } from "../maestro/cardSession.js";
 import { effectiveAccountSlug } from "../board/registry.js";
 import { logger } from "../../utils/logger.js";
-import { defuseUltraWords } from "../../utils/ultraWords.js";
+import { defusedCommandList } from "../../utils/ultraWords.js";
 
 /**
  * BOOT RESUME — a deploy do painel não pode mais matar um turno do chat nativo EM SILÊNCIO.
@@ -75,7 +75,7 @@ export function resumeContinuationText(marker: InflightMarker, base: string = RE
   const tasks = marker.background?.tasks ?? [];
   if (tasks.length === 0) return base;
   // O comando citado não é pedido deste turno: com a palavra reservada nele, a retomada subia a max.
-  const list = tasks.slice(0, 8).map((t) => `- ${defuseUltraWords(t)}`).join("\n");
+  const list = defusedCommandList(tasks.slice(0, 8));
   return `${base} A interrupção também encerrou o que estava rodando em segundo plano — ` +
     `o resultado disso não vai chegar:\n${list}\nConfira o estado atual, rode de novo o que ainda for ` +
     `necessário e siga até o fim.`;
