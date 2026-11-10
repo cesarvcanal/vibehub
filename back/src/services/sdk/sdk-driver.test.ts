@@ -242,9 +242,9 @@ export function query({ prompt, options }) {
   handle.interrupt = () => { mark("interrupt"); onInterrupt(); return interruptAnswer; };
   handle.supportedCommands = async () => [];
   handle.initializationResult = async () => ({});
-  // O nível no flag: undefined = nenhum; null = limpo, e o CLI de verdade cai no padrão do MODELO.
-  // "flags-fail" no sandbox simula a sessão recusando a troca; "flags-hang", um control request
-  // escrito num CLI que não escuta (nunca responde).
+  // The level in the flag layer: undefined = none; null = cleared, and the real CLI falls to the
+  // MODEL's default. "flags-fail" in the sandbox is the session refusing the switch; "flags-hang", a
+  // control request written into a CLI that is not listening (it never answers).
   let flagEffort;
   handle.applyFlagSettings = async (settings) => {
     mark("flags:" + JSON.stringify(settings));
@@ -253,10 +253,9 @@ export function query({ prompt, options }) {
     if ("effortLevel" in settings) flagEffort = settings.effortLevel;
   };
   // O nível que a CONTA define (o effortLevel dos settings) vem de um arquivo no sandbox; sem ele, o
-  // padrão do modelo ("medium", como o CLI de verdade para o Opus). \`applied\` é o que o CLI de
-  // verdade diz que a próxima chamada vai usar: o flag, senão o --effort, senão os settings, senão o
-  // do modelo.
-  // "settings-hang": a leitura nunca responde. "settings-gate": ela espera o "release-settings".
+  // padrão do modelo ("medium", como o CLI de verdade para o Opus). \`applied\` is what the real CLI
+  // says the next call uses: the flag, else --effort, else the settings, else the model's default.
+  // "settings-hang": the read never answers. "settings-gate": it waits for "release-settings".
   handle.getSettings = async () => {
     if (existsSync(join(options.cwd, "settings-hang"))) return new Promise(() => {});
     if (existsSync(join(options.cwd, "settings-gate"))) {
@@ -1114,9 +1113,9 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     await driver.waitMark("slow:running");
     await writeFile(join(sandbox, "flags-hang"), "");
     driver.send({ type: "set_effort", id: "presa", effort: "medium" });
-    const presa = await driver.waitFor((e) => e.type === "effort_ack" && e.id === "presa");
-    expect(presa.effort).toBeUndefined();
-    expect(String(presa.error)).toMatch(/não respondeu/);
+    const stuck = await driver.waitFor((e) => e.type === "effort_ack" && e.id === "presa");
+    expect(stuck.effort).toBeUndefined();
+    expect(String(stuck.error)).toMatch(/did not answer/);
 
     await rm(join(sandbox, "flags-hang"), { force: true });
     driver.send({ type: "set_effort", id: "seguinte", effort: "high" });
@@ -1251,15 +1250,15 @@ describe("sdk-driver.mjs — /btw", () => {
     driver.send({ type: "user", text: "hello" });
     await driver.waitFor((e) => e.type === "result");
     driver.send({ type: "btw", id: "nivel-1", question: "em que nível você está?" });
-    const primeira = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "nivel-1");
-    expect(String(primeira.text)).toContain("sessão principal está agora: xhigh");
+    const first = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "nivel-1");
+    expect(String(first.text)).toContain("sessão principal está agora: xhigh");
 
     driver.send({ type: "set_effort", id: "pra-medio", effort: "medium" });
     await driver.waitFor((e) => e.type === "effort_ack" && e.id === "pra-medio");
     driver.send({ type: "btw", id: "nivel-2", question: "e agora?" });
-    const segunda = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "nivel-2");
-    expect(String(segunda.text)).toContain("sessão principal está agora: medium");
-    expect(String(segunda.text)).not.toContain("xhigh");
+    const second = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "nivel-2");
+    expect(String(second.text)).toContain("sessão principal está agora: medium");
+    expect(String(second.text)).not.toContain("xhigh");
   }, 60_000);
 
   it("uma sessão que não diz o nível não segura a pergunta lateral: ela responde sem a linha do nível", async () => {

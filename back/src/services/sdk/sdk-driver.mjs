@@ -592,26 +592,27 @@ async function warmCatalog() {
 const BTW_TIMEOUT_MS = 3 * 60_000;
 
 /**
- * O que o modelo lê: a pergunta, com o aviso de que é lateral e de que não há ferramentas. E o nível
- * de raciocínio da sessão principal, quando se sabe: ele não está na conversa, e "em que nível você
- * está?" logo depois de trocar no pill ficava sem resposta (produção, 10/11/2026).
+ * O que o modelo lê: a pergunta, com o aviso de que é lateral e de que não há ferramentas. And the
+ * main session's reasoning level, when known: it is not in the conversation, so "em que nível você
+ * está?" right after a switch in the pill went unanswered (produção, 10/11/2026).
  */
-function btwPrompt(question, nivel) {
-  const nivelAgora = nivel ? ` Nível de raciocínio (effort) em que a sessão principal está agora: ${nivel}.` : "";
+function btwPrompt(question, mainEffort) {
+  const effortNote = mainEffort ? ` Nível de raciocínio (effort) em que a sessão principal está agora: ${mainEffort}.` : "";
   return (
     "<system-reminder>Pergunta LATERAL do usuário, feita enquanto você trabalha na tarefa principal. " +
     "Responda curto e direto, só com o que já está nesta conversa. Aqui você NÃO tem ferramentas: não " +
     "tente ler arquivos nem rodar comandos — se o contexto não basta, diga isso. Esta resposta não " +
-    "interrompe nem muda a tarefa principal." + nivelAgora + "</system-reminder>\n\n" + question
+    "interrompe nem muda a tarefa principal." + effortNote + "</system-reminder>\n\n" + question
   );
 }
 
 /**
- * O nível da sessão principal: com ela de pé, só o que ela mesma diz (o pin do card não é o nível de
- * um turno ultrathink); sem ela, o fixado no card, com que a próxima nasce. Undefined = ninguém sabe.
+ * The main session's level: with a live stream, only what the session itself says (the card's pin is
+ * not the level of an ultrathink turn); without one, the pin, which the next stream starts on.
+ * Undefined = nobody knows.
  */
-async function nivelDaSessaoPrincipal() {
-  return currentQuery ? await nivelDaSessao(currentQuery) : EFFORT ?? undefined;
+async function mainSessionEffort() {
+  return currentQuery ? await sessionEffort(currentQuery) : EFFORT ?? undefined;
 }
 
 async function answerBtw(id, question) {
@@ -628,8 +629,8 @@ async function answerBtw(id, question) {
       options.resume = lastSessionId;
       options.forkSession = true;
     }
-    const nivel = await nivelDaSessaoPrincipal();
-    for await (const msg of query({ prompt: btwPrompt(question, nivel), options })) {
+    const mainEffort = await mainSessionEffort();
+    for await (const msg of query({ prompt: btwPrompt(question, mainEffort), options })) {
       if (msg.type === "assistant" && !msg.parent_tool_use_id) {
         const text = resultText(msg.message?.content).trim();
         if (text) texts.push(text);
@@ -1188,7 +1189,7 @@ async function runStream() {
         turnActive = false;
         turnEnded();
         settleCompaction();
-        void naFilaDoNivel(clearUltra); // the keyword was for THIS turn
+        void inEffortQueue(clearUltra); // the keyword was for THIS turn
         // An ABORTED turn is not a failed one: the turn ends because someone stopped it (the stop
         // button, an edit, a deploy), and the conversation already says so in its own words.
         const aborted = wasAborted(msg.terminal_reason);
@@ -1455,27 +1456,28 @@ let ultraRaised = null;
 const ULTRA_INIT_TIMEOUT_MS = 10_000;
 
 /**
- * Quanto cada escrita (ou leitura) no nível da sessão pode levar. Um control request escrito num CLI
- * que não escuta nunca responde, e sem prazo ele travaria a fila do nível (e o /btw) até o driver morrer.
+ * How long each write (or read) of the session's level may take. A control request written into a
+ * CLI that is not listening never answers, and without a deadline it would hold the effort queue (and
+ * the /btw) until the driver died.
  */
-const PRAZO_IDA_AO_CLI_MS = Number(process.env.VIBEHUB_EFFORT_STEP_TIMEOUT_MS) || 4_000;
-const SESSAO_NAO_RESPONDEU = `a sessão não respondeu em ${PRAZO_IDA_AO_CLI_MS / 1000} s`;
+const EFFORT_STEP_TIMEOUT_MS = Number(process.env.VIBEHUB_EFFORT_STEP_TIMEOUT_MS) || 4_000;
+const EFFORT_STEP_TIMEOUT_ERROR = `the session did not answer within ${EFFORT_STEP_TIMEOUT_MS} ms`;
 
-/** `promessa`, ou um erro com `motivo` se ela passar de `ms`. */
-function comPrazo(promessa, ms, motivo) {
+/** `promise`, or an error saying `reason` once `ms` go by. */
+function withDeadline(promise, ms, reason) {
   let timer;
-  const prazo = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(motivo)), ms); });
-  return Promise.race([promessa, prazo]).finally(() => clearTimeout(timer));
+  const deadline = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(reason)), ms); });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
 }
 
 /**
- * O CLI desta corrente já responde a control requests? Uma corrente recém-criada ainda não tem CLI
- * atrás, e um control request escrito no vazio se perde: este é o handshake que diz que ele escuta.
+ * Does this stream's CLI answer control requests yet? A stream that has only just been created has no
+ * CLI behind it, and a control request written into nothing is lost: this handshake says it listens.
  */
-async function sessaoPronta(handle) {
+async function sessionReady(handle) {
   if (typeof handle.initializationResult !== "function") return true;
   try {
-    await comPrazo(handle.initializationResult(), ULTRA_INIT_TIMEOUT_MS, "a sessão não terminou de subir");
+    await withDeadline(handle.initializationResult(), ULTRA_INIT_TIMEOUT_MS, "the session did not finish starting");
     return true;
   } catch {
     return false;
@@ -1493,7 +1495,7 @@ async function raiseUltra(kinds, waitForInit) {
   const handle = currentQuery;
   if (!handle || typeof handle.applyFlagSettings !== "function") return;
   // A CLI that never answered the handshake still gets the attempt: the message goes either way.
-  if (waitForInit) await sessaoPronta(handle);
+  if (waitForInit) await sessionReady(handle);
   if (currentQuery !== handle) return; // the stream died while we waited
   // Strongest first. `ultracode` is xhigh PLUS standing workflow orchestration, which is exactly
   // what the keyword means; where the session cannot have it, plain `max` effort still answers
@@ -1503,7 +1505,7 @@ async function raiseUltra(kinds, waitForInit) {
     : [{ effortLevel: "max" }, { effortLevel: "xhigh" }];
   for (const settings of attempts) {
     try {
-      await comPrazo(handle.applyFlagSettings(settings), PRAZO_IDA_AO_CLI_MS, SESSAO_NAO_RESPONDEU);
+      await withDeadline(handle.applyFlagSettings(settings), EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR);
       ultraRaised = settings;
       return;
     } catch { /* try the next, weaker one */ }
@@ -1526,12 +1528,12 @@ async function clearUltra() {
     // So a card that pinned a level gets that level written back instead of a null. And a card
     // with NO level goes back to the ACCOUNT's (restoreAccountEffort): the null alone lands on the
     // model's default, skipping the settings' effortLevel.
-    const { effortLevel: _nivelDaPalavra, ...outrasChaves } = raised;
-    const give = Object.fromEntries(Object.keys(outrasChaves).map((key) => [key, null]));
-    const devolveNivel = "effortLevel" in raised;
-    if (devolveNivel && EFFORT) give.effortLevel = EFFORT;
-    if (Object.keys(give).length > 0) await comPrazo(handle.applyFlagSettings(give), PRAZO_IDA_AO_CLI_MS, SESSAO_NAO_RESPONDEU);
-    if (devolveNivel && !EFFORT) await comPrazo(restoreAccountEffort(handle), PRAZO_IDA_AO_CLI_MS, SESSAO_NAO_RESPONDEU);
+    const { effortLevel: _keywordEffort, ...otherKeys } = raised;
+    const give = Object.fromEntries(Object.keys(otherKeys).map((key) => [key, null]));
+    const givesEffortBack = "effortLevel" in raised;
+    if (givesEffortBack && EFFORT) give.effortLevel = EFFORT;
+    if (Object.keys(give).length > 0) await withDeadline(handle.applyFlagSettings(give), EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR);
+    if (givesEffortBack && !EFFORT) await withDeadline(restoreAccountEffort(handle), EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR);
   } catch { /* the stream is gone, and a dead stream has no effort to give back */ }
 }
 
@@ -1545,7 +1547,7 @@ const EFFORT_LEVELS = new Set(["low", "medium", "high", "xhigh", "max"]);
  * SDK without it simply announces nothing, and the pill waits for the first reply as before.
  */
 async function announceDefaultEffort(handle) {
-  const level = await nivelDaSessao(handle);
+  const level = await sessionEffort(handle);
   if (level) emit({ type: "effort_default", effort: level });
 }
 
@@ -1583,43 +1585,43 @@ async function restoreAccountEffort(handle) {
  * uses (absent when nobody knows), `{ error }` = it was not applied.
  */
 async function setCardEffort(level) {
-  if (level !== null && !EFFORT_LEVELS.has(level)) return { error: `nível desconhecido: ${level}` };
+  if (level !== null && !EFFORT_LEVELS.has(level)) return { error: `unknown effort level: ${level}` };
   EFFORT = level;
   const handle = currentQuery;
   // No stream, or the stream went away mid-switch (a rewind, a new sign-in, the CLI exiting): the
   // next one starts with `effort: EFFORT` (sdkOptions), so the switch holds.
-  const proximaNasceNele = () => ({ effort: EFFORT ?? undefined });
-  if (!handle || typeof handle.applyFlagSettings !== "function") return proximaNasceNele();
-  const pronta = await sessaoPronta(handle);
-  if (currentQuery !== handle) return proximaNasceNele();
+  const nextStreamTakesIt = () => ({ effort: EFFORT ?? undefined });
+  if (!handle || typeof handle.applyFlagSettings !== "function") return nextStreamTakesIt();
+  const ready = await sessionReady(handle);
+  if (currentQuery !== handle) return nextStreamTakesIt();
   // Written into a CLI that is not listening, the switch would be lost and the session would stay
   // on the `--effort` it was born with.
-  if (!pronta) return { error: "a sessão ainda não terminou de subir" };
+  if (!ready) return { error: "the session has not finished starting" };
   try {
-    const troca = level === null ? restoreAccountEffort(handle) : handle.applyFlagSettings({ effortLevel: level });
-    await comPrazo(troca, PRAZO_IDA_AO_CLI_MS, SESSAO_NAO_RESPONDEU);
+    const effortWrite = level === null ? restoreAccountEffort(handle) : handle.applyFlagSettings({ effortLevel: level });
+    await withDeadline(effortWrite, EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR);
   } catch (err) {
-    if (currentQuery !== handle) return proximaNasceNele();
-    const motivo = err && err.message ? err.message : String(err);
-    trace(`could not apply effort ${level ?? "default"} to the live session: ${motivo}`);
-    return { error: motivo };
+    if (currentQuery !== handle) return nextStreamTakesIt();
+    const reason = err && err.message ? err.message : String(err);
+    trace(`could not apply effort ${level ?? "default"} to the live session: ${reason}`);
+    return { error: reason };
   }
   if (ultraRaised && "effortLevel" in ultraRaised) {
-    const { effortLevel: _nivelDaPalavra, ...restoDaPalavra } = ultraRaised;
-    ultraRaised = Object.keys(restoDaPalavra).length > 0 ? restoDaPalavra : null;
+    const { effortLevel: _keywordEffort, ...keywordRest } = ultraRaised;
+    ultraRaised = Object.keys(keywordRest).length > 0 ? keywordRest : null;
   }
-  return { effort: (await nivelDaSessao(handle)) ?? EFFORT ?? undefined };
+  return { effort: (await sessionEffort(handle)) ?? EFFORT ?? undefined };
 }
 
 /**
- * O nível que a próxima chamada ao modelo vai usar, segundo a PRÓPRIA sessão (`getSettings`, que o
- * SDK 0.3.300 tem sem tipar). Undefined quando ela não diz: um SDK sem a consulta, uma consulta que
- * falhou ou passou do prazo.
+ * The level the next call to the model will use, as the session ITSELF says (`getSettings`, untyped
+ * in SDK 0.3.300). Undefined when it does not say: an SDK without the query, or a query that failed
+ * or ran out of time.
  */
-async function nivelDaSessao(handle) {
+async function sessionEffort(handle) {
   if (typeof handle.getSettings !== "function") return undefined;
   try {
-    const level = (await comPrazo(handle.getSettings(), PRAZO_IDA_AO_CLI_MS, SESSAO_NAO_RESPONDEU))?.applied?.effort;
+    const level = (await withDeadline(handle.getSettings(), EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR))?.applied?.effort;
     return EFFORT_LEVELS.has(level) ? level : undefined;
   } catch {
     return undefined;
@@ -1627,34 +1629,34 @@ async function nivelDaSessao(handle) {
 }
 
 /**
- * O ESCRITOR ÚNICO do nível da sessão. Três coisas escrevem nele: o ultrathink que sobe no começo
- * do turno, a devolução no fim dele e a troca do pill. A devolução e a volta ao padrão da conta são
- * várias idas ao CLI, e uma escrita de fora que passasse no meio era desfeita pela última ida (o pill
- * dizendo um nível, a sessão em outro). Aqui elas vão uma de cada vez, na ordem em que chegaram, e
- * cada ida ao CLI tem prazo, então nenhuma trava as seguintes.
+ * The ONE WRITER of the session's level. Three things write it: the ultrathink raise at the start of
+ * a turn, its give-back at the end, and the switch in the pill. The give-back and the way back to the
+ * account's level take several trips to the CLI, and a write from outside landing between them was
+ * undone by the last trip (the pill saying one level, the session on another). Here they go one at a
+ * time, in arrival order, and every trip to the CLI has a deadline, so none holds the ones behind it.
  *
- * Com a fila vazia a tarefa começa NA HORA, síncrona até o primeiro await: o ultrathink de uma
- * corrente viva escreve o control request antes de a mensagem ser empurrada.
+ * With the queue empty the task starts RIGHT AWAY, synchronously up to its first await: the
+ * ultrathink of a live stream writes its control request before the message is pushed.
  */
-let filaDoNivel = Promise.resolve();
-let tarefasNaFilaDoNivel = 0;
-function naFilaDoNivel(tarefa) {
-  const vez = tarefasNaFilaDoNivel === 0 ? tarefa() : filaDoNivel.then(tarefa);
-  tarefasNaFilaDoNivel += 1;
-  filaDoNivel = vez
+let effortWrites = Promise.resolve();
+let effortWritesPending = 0;
+function inEffortQueue(task) {
+  const run = effortWritesPending === 0 ? task() : effortWrites.then(task);
+  effortWritesPending += 1;
+  effortWrites = run
     .catch((err) => { trace(`effort write failed: ${err && err.message ? err.message : String(err)}`); })
-    .finally(() => { tarefasNaFilaDoNivel -= 1; });
-  return vez;
+    .finally(() => { effortWritesPending -= 1; });
+  return run;
 }
 
 /**
- * A troca do pill, CONFIRMADA (`effort_ack`): com o nível que a sessão diz que vai usar, ou com o
- * erro de quem recusou. O back só diz "já valendo" com essa resposta na mão.
+ * The pill's switch, ANSWERED (`effort_ack`): with the level the session says it will use, or with
+ * the error of whoever refused it. The back only says "já valendo" holding this answer.
  */
-function enfileirarTrocaDeNivel(id, level) {
-  naFilaDoNivel(() => setCardEffort(level))
+function queueEffortSwitch(id, level) {
+  inEffortQueue(() => setCardEffort(level))
     .catch((err) => ({ error: err && err.message ? err.message : String(err) }))
-    .then((desfecho) => emit({ type: "effort_ack", id, ...desfecho }))
+    .then((outcome) => emit({ type: "effort_ack", id, ...outcome }))
     .catch((err) => { trace(`effort switch failed: ${err && err.message ? err.message : String(err)}`); });
 }
 
@@ -1682,14 +1684,14 @@ function sendUser(text) {
   } else if (!fresh) {
     // A live CLI: the control frame is written before the push below, so the effort is already
     // pinned by the time the message reaches the model.
-    void naFilaDoNivel(() => raiseUltra(ultra, false));
+    void inEffortQueue(() => raiseUltra(ultra, false));
     myChannel.push(userMessage(text));
   } else {
     // The FIRST message of a fresh stream has to wait for the CLI to exist. The push moves into
     // the continuation — `finally`, so no failure up there can ever swallow the message.
     void (async () => {
       try {
-        await naFilaDoNivel(() => raiseUltra(ultra, true));
+        await inEffortQueue(() => raiseUltra(ultra, true));
       } finally {
         myChannel.push(userMessage(text));
       }
@@ -2033,7 +2035,7 @@ rl.on("line", (line) => {
     // cards are released, so a turn parked on a question never answers without having read it.
     // rewindAndSend releases them itself, at the right moment of whichever path it takes.
     // Religar ANTES de decidir: um supersede escrito na corrente velha órfã o turno do terminal
-    // outra vez, e o ponto em memória que a decisão consultaria é de uma linha do tempo vencida.
+    // outra run, e o ponto em memória que a decisão consultaria é de uma linha do tempo vencida.
     serialized(async () => {
       await reanchorIfStale();
       await reauthIfChanged();
@@ -2047,8 +2049,8 @@ rl.on("line", (line) => {
     return;
   }
   if (control && control.type === "set_effort" && typeof control.id === "string" && (typeof control.effort === "string" || control.effort === null)) {
-    // FORA da fila `serialized`: a troca vale para o turno que já está rodando, não espera por ele.
-    enfileirarTrocaDeNivel(control.id, control.effort);
+    // FORA da fila `serialized`: a effortWrite vale para o turno que já está rodando, não espera por ele.
+    queueEffortSwitch(control.id, control.effort);
     return;
   }
   if (control && control.type === "reanchor") {

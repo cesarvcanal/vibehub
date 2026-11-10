@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { config } from "../../config/env.js";
 import { applyLiveEffort, cardDefaultEffort, onCardStatusSink } from "../board/agentState.js";
 import {
-  PRAZO_CONFIRMACAO_NIVEL_MS,
+  EFFORT_ACK_TIMEOUT_MS,
   applyDriverEffort,
   driverDefaultEffort,
   ensureDriverSession,
@@ -126,20 +126,20 @@ describe("sdk manager — a inteligência trocada com o driver de pé", () => {
 
   it("a confirmação de OUTRA troca não responde por esta", async () => {
     ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
-    const primeira = applyDriverEffort(CARD, "low");
-    const idPrimeira = lastEffortFrame().id;
-    const segunda = applyDriverEffort(CARD, "max");
-    const idSegunda = lastEffortFrame().id;
-    expect(idSegunda).not.toBe(idPrimeira);
+    const first = applyDriverEffort(CARD, "low");
+    const firstId = lastEffortFrame().id;
+    const second = applyDriverEffort(CARD, "max");
+    const secondId = lastEffortFrame().id;
+    expect(secondId).not.toBe(firstId);
 
-    let primeiraRespondida = false;
-    void primeira.then(() => { primeiraRespondida = true; });
-    confirm({ id: idSegunda, error: "recusada" });
-    expect(await segunda).toBe(false);
+    let firstSettled = false;
+    void first.then(() => { firstSettled = true; });
+    confirm({ id: secondId, error: "refused" });
+    expect(await second).toBe(false);
     await flush();
-    expect(primeiraRespondida).toBe(false);
-    confirm({ id: idPrimeira, effort: "low" });
-    expect(await primeira).toBe(true);
+    expect(firstSettled).toBe(false);
+    confirm({ id: firstId, effort: "low" });
+    expect(await first).toBe(true);
   });
 
   it("um driver que nunca confirma vence o prazo: não aplicado", async () => {
@@ -147,7 +147,7 @@ describe("sdk manager — a inteligência trocada com o driver de pé", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const applied = applyDriverEffort(CARD, "high");
-      await vi.advanceTimersByTimeAsync(PRAZO_CONFIRMACAO_NIVEL_MS);
+      await vi.advanceTimersByTimeAsync(EFFORT_ACK_TIMEOUT_MS);
       expect(await applied).toBe(false);
     } finally {
       vi.useRealTimers();
@@ -156,14 +156,14 @@ describe("sdk manager — a inteligência trocada com o driver de pé", () => {
 
   it("o driver morreu ou foi parado antes de confirmar: não aplicado, sem esperar o prazo", async () => {
     ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
-    const caiu = applyDriverEffort(CARD, "high");
+    const crashed = applyDriverEffort(CARD, "high");
     spawned[0]!.emit("close", 1);
-    expect(await caiu).toBe(false);
+    expect(await crashed).toBe(false);
 
     ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
-    const parado = applyDriverEffort(CARD, "high");
+    const stopped = applyDriverEffort(CARD, "high");
     stopCardDriver(CARD);
-    expect(await parado).toBe(false);
+    expect(await stopped).toBe(false);
   });
 
   it("é o aplicador que o board consulta (applyLiveEffort), e espera a mesma confirmação", async () => {
@@ -231,9 +231,9 @@ describe("sdk manager — a inteligência trocada com o driver de pé", () => {
     expect(driverDefaultEffort(CARD)).toBe("high");
 
     // A confirmação de um nível FIXADO não é o padrão da conta.
-    const fixado = applyDriverEffort(CARD, "low");
+    const pinned = applyDriverEffort(CARD, "low");
     confirm({ id: lastEffortFrame().id, effort: "low" });
-    await fixado;
+    await pinned;
     expect(driverDefaultEffort(CARD)).toBe("high");
   });
 

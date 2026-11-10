@@ -21,7 +21,7 @@ import { mergeTaskEvent, taskSnapshot, toolResultEvent, type AgentTaskEvent, typ
 import { isHarnessFiller } from "../chat/chat.js";
 import {
   NOTE_CONVERSATION_CLEARED, buildLateAnswerText, buildOrphanAnswerText, mergePeerAnswers, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseQuestionDraftFrame, isEmptyQuestionDraft, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
-  type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type ConfirmacaoDeNivelEvent, type QuestionAnswerControl, type QuestionDraft, type StopHow, type UserQuestionItem,
+  type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type EffortAckEvent, type QuestionAnswerControl, type QuestionDraft, type StopHow, type UserQuestionItem,
   type WorkflowFeedEvent, type WorkflowFeedRequest, type DetailRequest, type ResultEvent,
 } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
@@ -162,8 +162,8 @@ export interface DriverSession {
   catalog?: CatalogEvent;
   /** The account's reasoning level, as the driver announced it at boot (`effort_default`). */
   defaultEffort?: string;
-  /** Trocas de nível esperando o `effort_ack` do driver, por id: o nível pedido e quem responde. */
-  trocasDeNivelPendentes: Map<string, TrocaDeNivelPendente>;
+  /** Effort switches waiting for the driver's `effort_ack`, by id: the level asked for and who to answer. */
+  pendingEffortSwitches: Map<string, PendingEffortSwitch>;
   idleTimer: NodeJS.Timeout | null;
   /** Rolling tail of the driver's stderr — what a post-mortem has to say (see STDERR_TAIL_MAX). */
   stderrTail: string;
@@ -719,7 +719,7 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     return;
   }
   if (event.type === "effort_ack") {
-    confirmarTrocaDeNivel(session, event);
+    settleEffortSwitch(session, event);
     return;
   }
   if (event.type === "catalog") {
@@ -1145,7 +1145,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     acceptedCids: new Map(),
     ownQuestions: new Set(),
     openAsks: new Set(),
-    trocasDeNivelPendentes: new Map(),
+    pendingEffortSwitches: new Map(),
     awaitingDecision: false,
     questionDrafts: new Map(),
     orphanAsks: new Set(),
@@ -1233,7 +1233,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     // a bolinha se não retomar (resume.ts).
     const crashWithWork = !deliberate && !succeeded && session.marker !== undefined && crashListeners.size > 0;
     if (!succeeded && session.boardStatus === "working" && !crashWithWork) syncBoardStatus(session, { force: true });
-    soltarTrocasDeNivel(session);
+    dropPendingEffortSwitches(session);
     // Com o driver morreu quem esperava as respostas: o card não espera mais decisão nenhuma dele.
     if (!succeeded) dropOpenAsks(session);
     else session.openAsks.clear();
@@ -2330,23 +2330,23 @@ export function stopCardDriver(cardId: string): void {
   session.marker = undefined;
   void clearInflightMarker(cardId);
   dropOpenAsks(session);
-  soltarTrocasDeNivel(session);
+  dropPendingEffortSwitches(session);
   // A sondagem da frota é filha deste driver: sem ele não há a quem publicar nem sessão para ler.
   forgetCardWorkflows(cardId);
   logger.debug({ card: session.label }, "sdk driver stopped");
 }
 
 /**
- * Quanto quem trocou espera a confirmação do driver: os 10 s que ele espera um CLI que acabou de
- * nascer (ULTRA_INIT_TIMEOUT_MS em sdk-driver.mjs), mais a troca e a leitura do nível, 4 s cada
- * (PRAZO_IDA_AO_CLI_MS), e folga.
+ * How long a switch waits for the driver's answer: the 10 s the driver gives a CLI that was just born
+ * (ULTRA_INIT_TIMEOUT_MS in sdk-driver.mjs), plus the write and the read of the level, 4 s each
+ * (EFFORT_STEP_TIMEOUT_MS), and slack.
  */
-export const PRAZO_CONFIRMACAO_NIVEL_MS = 20_000;
+export const EFFORT_ACK_TIMEOUT_MS = 20_000;
 
-/** Uma troca de nível escrita no driver, esperando o `effort_ack` dele. */
-interface TrocaDeNivelPendente {
-  nivelPedido: string | null;
-  responder: (aplicado: boolean) => void;
+/** An effort switch written to the driver, waiting for its `effort_ack`. */
+interface PendingEffortSwitch {
+  requested: string | null;
+  settle: (applied: boolean) => void;
 }
 
 /**
@@ -2354,56 +2354,56 @@ interface TrocaDeNivelPendente {
  * do turno inclusive, a próxima chamada ao modelo já sai nela — e passa a usá-la em tudo o que vier
  * (um stream novo, a devolução do `ultrathink`).
  *
- * Resolve true só quando o driver CONFIRMA (`effort_ack` sem erro). Escrever no stdin não basta: a
- * tela dizia "já valendo" antes de a sessão aceitar, e uma recusa ficava só no trace do driver.
- * False = sem driver, recusada, driver morto ou prazo vencido; quem trocou reinicia a sessão no nível
- * (`applySessionChange`).
+ * Resolves true only once the driver CONFIRMS it (`effort_ack` with no error). Writing to stdin is
+ * not enough: the screen said "já valendo" before the session took it, and a refusal only reached
+ * the driver's trace. False = no driver, refused, driver gone or no answer in time; the caller then
+ * restarts the session onto the level (`applySessionChange`).
  */
 export function applyDriverEffort(cardId: string, effort: string | null): Promise<boolean> {
   const session = sessions.get(cardId);
   if (!session || !canAcceptTurn(session)) return Promise.resolve(false);
   const id = randomUUID();
   return new Promise((resolve) => {
-    const prazo = setTimeout(() => {
+    const timer = setTimeout(() => {
       logger.warn({ audit: true, action: "sdk.effort.timeout", card: session.label, effort }, "the driver never confirmed the intelligence switch");
-      responder(false);
-    }, PRAZO_CONFIRMACAO_NIVEL_MS);
-    const responder = (aplicado: boolean): void => {
-      clearTimeout(prazo);
-      session.trocasDeNivelPendentes.delete(id);
-      resolve(aplicado);
+      settle(false);
+    }, EFFORT_ACK_TIMEOUT_MS);
+    const settle = (applied: boolean): void => {
+      clearTimeout(timer);
+      session.pendingEffortSwitches.delete(id);
+      resolve(applied);
     };
-    session.trocasDeNivelPendentes.set(id, { nivelPedido: effort, responder });
-    if (!writeToDriver(session, { type: "set_effort", id, effort })) responder(false);
+    session.pendingEffortSwitches.set(id, { requested: effort, settle });
+    if (!writeToDriver(session, { type: "set_effort", id, effort })) settle(false);
   });
 }
 
-function confirmarTrocaDeNivel(session: DriverSession, confirmacao: ConfirmacaoDeNivelEvent): void {
-  const pendente = session.trocasDeNivelPendentes.get(confirmacao.id);
-  // Prazo vencido: quem trocou já seguiu pelo reinício.
-  if (!pendente) return;
-  if (typeof confirmacao.error === "string") {
-    logger.warn({ audit: true, action: "sdk.effort.refused", card: session.label, effort: pendente.nivelPedido, detail: confirmacao.error }, "the live session refused the intelligence switch");
-    pendente.responder(false);
+function settleEffortSwitch(session: DriverSession, ack: EffortAckEvent): void {
+  const pending = session.pendingEffortSwitches.get(ack.id);
+  // Timed out: the caller already went the restart way.
+  if (!pending) return;
+  if (typeof ack.error === "string") {
+    logger.warn({ audit: true, action: "sdk.effort.refused", card: session.label, effort: pending.requested, detail: ack.error }, "the live session refused the intelligence switch");
+    pending.settle(false);
     return;
   }
-  const nivelAplicado = typeof confirmacao.effort === "string" && registry.isValidEffort(confirmacao.effort) ? confirmacao.effort : null;
-  // A volta ao padrão da conta diz QUAL é o padrão: o pill de um card sem nível o lê daqui.
-  if (pendente.nivelPedido === null && nivelAplicado) session.defaultEffort = nivelAplicado;
-  // Um nível diferente do pedido (um plano que limita o esforço) ainda é a troca aplicada: o pill se
-  // acerta pelo carimbo da próxima chamada. Fica registrado para quem for investigar.
-  const divergiu = pendente.nivelPedido !== null && nivelAplicado !== null && nivelAplicado !== pendente.nivelPedido;
-  const registrar = divergiu ? logger.warn.bind(logger) : logger.info.bind(logger);
-  registrar(
-    { audit: true, action: "sdk.effort.applied", card: session.label, requested: pendente.nivelPedido, effort: nivelAplicado },
-    divergiu ? "the live session took the switch on another level" : "the live session confirmed the intelligence switch",
+  const appliedEffort = typeof ack.effort === "string" && registry.isValidEffort(ack.effort) ? ack.effort : null;
+  // Going back to the account's level says WHICH level that is: an unpinned card's pill reads it here.
+  if (pending.requested === null && appliedEffort) session.defaultEffort = appliedEffort;
+  // A level other than the one asked for (a plan that caps effort) is still the switch applied: the
+  // pill corrects itself from the next call's stamp. Logged for whoever investigates.
+  const diverged = pending.requested !== null && appliedEffort !== null && appliedEffort !== pending.requested;
+  const log = diverged ? logger.warn.bind(logger) : logger.info.bind(logger);
+  log(
+    { audit: true, action: "sdk.effort.applied", card: session.label, requested: pending.requested, effort: appliedEffort },
+    diverged ? "the live session took the switch on another level" : "the live session confirmed the intelligence switch",
   );
-  pendente.responder(true);
+  pending.settle(true);
 }
 
-/** O driver acabou: nenhuma troca pendente vai ser confirmada por ele. */
-function soltarTrocasDeNivel(session: DriverSession): void {
-  for (const { responder } of [...session.trocasDeNivelPendentes.values()]) responder(false);
+/** The driver is gone: no pending switch will be answered by it. */
+function dropPendingEffortSwitches(session: DriverSession): void {
+  for (const { settle } of [...session.pendingEffortSwitches.values()]) settle(false);
 }
 
 /**
