@@ -1192,6 +1192,39 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     ]);
   }, 60_000);
 
+  it("nem um /btw nem um turno comum no meio cancelam a volta atrasada ao nível da conta", async () => {
+    // Review do PR #259 (f10): a guarda contava QUALQUER tarefa posterior da fila como dona do nível,
+    // inclusive a leitura do /btw e a devolução vazia de um turno comum. Card sem nível, conta em high:
+    // a devolução gravava o null, a leitura dos settings passava do prazo, um /btw entrava na fila e a
+    // escrita do high era pulada em silêncio. A sessão ficava no padrão do modelo (medium).
+    await writeFile(join(sandbox, "account-effort"), "high");
+    const driver = startDriverWithEnv({ VIBEHUB_EFFORT_STEP_TIMEOUT_MS: "300" });
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "pensa nisso ultrathink slow" });
+    await driver.waitMark("slow:running");
+    await writeFile(join(sandbox, "settings-gate-once"), "");
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+    await driver.waitMark("settings:waiting");
+    // A fila só chega ao /btw depois que a devolução estourou o prazo: a resposta dele é a prova.
+    driver.send({ type: "btw", id: "no-meio", question: "em que nível você está?" });
+    await driver.waitFor((e) => e.type === "btw_answer" && e.id === "no-meio");
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "oi" });
+    await driver.waitFor((e) => e.type === "result", from);
+
+    await writeFile(join(sandbox, "release-settings"), "");
+    await driver.waitMark("settings:answered");
+    driver.send({ type: "btw", id: "depois", question: "e agora?" });
+    const after = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "depois");
+    expect(String(after.text)).toContain("sessão principal está agora: high");
+    expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual([
+      'flags:{"effortLevel":"max"}',
+      'flags:{"effortLevel":null}',
+      'flags:{"effortLevel":"high"}',
+    ]);
+  }, 60_000);
+
   it("uma troca presa na fila além do prazo de início é recusada NA HORA e nunca grava depois", async () => {
     // Review do PR #259 (f4): o back espera a confirmação por um prazo contado da escrita, e a troca
     // podia ficar atrás de uma devolução lenta. O back desistia (pendente/reinício) e o driver

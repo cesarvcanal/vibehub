@@ -1511,6 +1511,7 @@ async function raiseUltra(kinds, waitForInit) {
   const attempts = kinds.ultracode
     ? [{ effortLevel: "max", ultracode: true }, { effortLevel: "max" }, { effortLevel: "xhigh" }]
     : [{ effortLevel: "max" }, { effortLevel: "xhigh" }];
+  claimEffortWrite(); // a give-back still reading the account's level must not land over the keyword's
   for (const settings of attempts) {
     try {
       await withDeadline(handle.applyFlagSettings(settings), EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR);
@@ -1521,12 +1522,13 @@ async function raiseUltra(kinds, waitForInit) {
 }
 
 /** Give the effort back at the end of the turn: the keyword was for THAT turn, not for the session. */
-async function clearUltra(ownsQueue) {
+async function clearUltra() {
   const raised = ultraRaised;
   if (!raised) return;
   ultraRaised = null;
   const handle = currentQuery;
   if (!handle || typeof handle.applyFlagSettings !== "function") return;
+  const isLatestWrite = claimEffortWrite();
   try {
     // `null` clears the key from the flag layer, so whatever the user's own settings say takes
     // over again — this restores a level, it does not impose one. Only the keys this driver
@@ -1541,7 +1543,7 @@ async function clearUltra(ownsQueue) {
     const givesEffortBack = "effortLevel" in raised;
     if (givesEffortBack && EFFORT) give.effortLevel = EFFORT;
     if (Object.keys(give).length > 0) await withDeadline(handle.applyFlagSettings(give), EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR);
-    if (givesEffortBack && !EFFORT) await withDeadline(restoreAccountEffort(handle, ownsQueue), EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR);
+    if (givesEffortBack && !EFFORT) await withDeadline(restoreAccountEffort(handle, isLatestWrite), EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR);
   } catch { /* the stream is gone, and a dead stream has no effort to give back */ }
 }
 
@@ -1565,16 +1567,21 @@ async function announceDefaultEffort(handle) {
  * 0.3.300, 2026-10-29: settings `high` → flag `xhigh` → null = `medium`). So the settings' own
  * level, when there is one, goes back on top — what a fresh start without `--effort` would read.
  *
- * Several trips, so the last write checks it still OWNS the effort queue (`ownsQueue`): past its
- * deadline the queue moved on, and a slow settings read coming back late wrote the account's level
- * over a switch that was already confirmed — the pill on one level, the session on another.
+ * Several trips, so the last write checks it is still the LATEST write (`isLatestWrite`, see
+ * claimEffortWrite): past its deadline the queue moved on, and a slow settings read coming back late
+ * wrote the account's level over a switch that was already confirmed — the pill on one level, the
+ * session on another.
  */
-async function restoreAccountEffort(handle, ownsQueue) {
+async function restoreAccountEffort(handle, isLatestWrite) {
   await handle.applyFlagSettings({ effortLevel: null });
   if (typeof handle.getSettings !== "function") return;
   const own = (await handle.getSettings())?.effective?.effortLevel;
-  if (!ownsQueue()) return;
-  if (EFFORT_LEVELS.has(own)) await handle.applyFlagSettings({ effortLevel: own });
+  if (!EFFORT_LEVELS.has(own)) return;
+  if (!isLatestWrite()) {
+    trace(`account effort ${own} not written back: a newer write took the session's level`);
+    return;
+  }
+  await handle.applyFlagSettings({ effortLevel: own });
 }
 
 /**
@@ -1599,7 +1606,7 @@ async function restoreAccountEffort(handle, ownsQueue) {
  * only takes the level on the paths that applied it. `switching.abandoned` = its start deadline
  * already answered for it (queueEffortSwitch); `switching.writing` = past that point, it finishes.
  */
-async function setCardEffort(level, ownsQueue, switching) {
+async function setCardEffort(level, switching) {
   if (level !== null && !EFFORT_LEVELS.has(level)) return { error: `unknown effort level: ${level}` };
   if (switching.abandoned) return { error: EFFORT_SWITCH_START_ERROR };
   const handle = currentQuery;
@@ -1616,9 +1623,10 @@ async function setCardEffort(level, ownsQueue, switching) {
   // on the `--effort` it was born with.
   if (!ready) return { error: "the session has not finished starting" };
   if (switching.abandoned) return { error: EFFORT_SWITCH_START_ERROR };
+  const isLatestWrite = claimEffortWrite();
   switching.writing = true;
   try {
-    const effortWrite = level === null ? restoreAccountEffort(handle, ownsQueue) : handle.applyFlagSettings({ effortLevel: level });
+    const effortWrite = level === null ? restoreAccountEffort(handle, isLatestWrite) : handle.applyFlagSettings({ effortLevel: level });
     await withDeadline(effortWrite, EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR);
   } catch (err) {
     if (currentQuery !== handle) return nextStreamTakesIt();
@@ -1662,23 +1670,31 @@ async function sessionEffort(handle) {
  * With the queue empty the task starts RIGHT AWAY, synchronously up to its first await: the
  * ultrathink of a live stream writes its control request before the message is pushed.
  *
- * A deadline frees the queue but cannot stop a trip already sent: the task gets `ownsQueue`, true
- * while no later task has started, and a write that comes after an await checks it first.
+ * A deadline frees the queue but cannot stop a trip already sent: see claimEffortWrite.
  */
 let effortWrites = Promise.resolve();
 let effortWritesPending = 0;
-let effortWritesStarted = 0;
 function inEffortQueue(task) {
-  const start = () => {
-    const position = ++effortWritesStarted;
-    return task(() => position === effortWritesStarted);
-  };
-  const run = effortWritesPending === 0 ? start() : effortWrites.then(start);
+  const run = effortWritesPending === 0 ? task() : effortWrites.then(() => task());
   effortWritesPending += 1;
   effortWrites = run
     .catch((err) => { trace(`effort write failed: ${err && err.message ? err.message : String(err)}`); })
     .finally(() => { effortWritesPending -= 1; });
   return run;
+}
+
+/**
+ * A deadline frees the queue but cannot stop a trip already sent, and the way back to the account's
+ * level reads the settings BEFORE its last write. So every write claims the session's level as it
+ * starts, and a write that comes after an await only goes out while its claim is still the latest.
+ * Only WRITES claim: a /btw read, a switch refused or abandoned before writing and a give-back with
+ * nothing to give left the level as it was, and the write they overtook still has the last word —
+ * counting them skipped the account's level in silence (review do PR #259, f10).
+ */
+let effortWriteClaims = 0;
+function claimEffortWrite() {
+  const claim = ++effortWriteClaims;
+  return () => claim === effortWriteClaims;
 }
 
 /**
@@ -1709,7 +1725,7 @@ function queueEffortSwitch(id, level) {
     switching.abandoned = true;
     answer({ error: EFFORT_SWITCH_START_ERROR });
   }, EFFORT_SWITCH_START_DEADLINE_MS);
-  inEffortQueue((ownsQueue) => setCardEffort(level, ownsQueue, switching))
+  inEffortQueue(() => setCardEffort(level, switching))
     .catch((err) => ({ error: err && err.message ? err.message : String(err) }))
     .then((outcome) => {
       clearTimeout(startDeadline);

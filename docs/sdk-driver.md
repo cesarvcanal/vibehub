@@ -458,8 +458,10 @@ gerada no instante da troca termina no nível antigo (o nível é parâmetro de 
   cada vez. A devolução e a volta ao padrão da conta são várias idas ao CLI, e uma escrita de fora
   no meio era desfeita pela última. Cada ida tem prazo (`EFFORT_STEP_TIMEOUT_MS`, 4 s): um control
   request sem resposta não trava a fila nem o /btw. O prazo solta a fila mas não para a ida já
-  enviada, então cada tarefa recebe `ownsQueue()`, e a escrita que vem depois de um `await` (a
-  última ida da volta ao nível da conta) só sai se nenhuma tarefa posterior começou. Um CLI que ainda
+  enviada, então cada ESCRITA marca o nível como seu ao começar (`claimEffortWrite`), e a escrita
+  que vem depois de um `await` (a última ida da volta ao nível da conta) só sai se nenhuma escrita
+  posterior começou, ou fica registrada no trace. Leitura (o /btw), troca recusada ou abandonada
+  antes de escrever e devolução sem nada a devolver não contam: não mexeram no nível. Um CLI que ainda
   não terminou de subir recusa a troca (a escrita se perderia), e o back cai no reinício para o
   nível novo.
 - **/btw:** o aviso da pergunta lateral leva o nível em que a sessão principal está agora — o nível
