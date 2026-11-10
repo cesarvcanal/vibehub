@@ -649,6 +649,11 @@ export interface ReviewResponse {
   review: Review | null;
   /** Absent when there is no review (and from a server that predates it: read as nobody working). */
   working?: ReviewWorking;
+  /**
+   * Whether a merge of the review is running on the server right now. False after a deploy killed one
+   * mid-way (the lock lives in memory). Absent from a server that predates it: read as unknown.
+   */
+  merging?: boolean;
 }
 
 /** Somebody who can take a role in a review. `canReview` = has a Claude account of their own. */

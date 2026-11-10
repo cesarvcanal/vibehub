@@ -57,6 +57,8 @@ export function useLiveReview(
   });
   const review = query.data?.review ?? null;
   const working = query.data?.working ?? NOBODY_WORKING;
+  /** A merge of it running on the server now; undefined = not said (a server that predates it). */
+  const merging = query.data?.merging;
   const outdated = review !== null && opts.summaryId !== undefined && opts.summaryId !== review.id && !reviewIsOpen(review.phase);
   const { refetch } = query;
   React.useEffect(() => {
@@ -83,5 +85,5 @@ export function useLiveReview(
     [queryClient, cardId, opts.pr],
   );
 
-  return { query, review, working, apply, outdated };
+  return { query, review, working, merging, apply, outdated };
 }
