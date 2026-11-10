@@ -425,8 +425,10 @@ com a palavra) já enviada, acha ainda o `max` do turno velho, e avisar ali apag
 mensagem nova, que a escalada dela põe em `max` logo depois.
 
 Com a fila do nível ocupada (uma troca, a devolução do turno anterior), a escalada de uma corrente
-viva espera a vez e pode cair uma ou duas chamadas depois do início do turno. É deliberado: segurar
-a mensagem até a escalada deixaria a mensagem seguinte, enviada na hora, passar na frente.
+viva espera a vez e pode cair com o turno já andando. A espera é limitada pelos prazos do que está à
+frente na fila, e o nível da palavra vale a partir de quando a escalada cai, salvo uma troca
+posterior do pill. É deliberado: segurar a mensagem até a escalada deixaria a mensagem seguinte,
+enviada na hora, passar na frente.
 
 Duas armadilhas que o teste cerca: a mensagem é empurrada num `finally`, então nenhuma falha da
 escalada pode engoli-la; e a primeira mensagem de uma corrente nova espera o
@@ -467,10 +469,10 @@ gerada no instante da troca termina no nível antigo (o nível é parâmetro de 
   request sem resposta não trava a fila nem o /btw. O prazo solta a fila mas não para a ida já
   enviada, então cada ESCRITA marca o nível como seu ao começar (`claimEffortWrite`), e a escrita
   que vem depois de um `await` (a última ida da volta ao nível da conta) só sai se nenhuma escrita
-  posterior começou, ou fica registrada no trace. Leitura (o /btw), troca recusada ou abandonada
-  antes de escrever e devolução sem nada a devolver não contam: não mexeram no nível. Um CLI que ainda
-  não terminou de subir recusa a troca (a escrita se perderia), e o back cai no reinício para o
-  nível novo.
+  posterior começou; pulada, fica registrada no trace. Leitura (o /btw), troca recusada ou
+  abandonada antes de escrever e devolução sem nada a devolver não contam: não mexeram no nível. Um
+  CLI que ainda não terminou de subir recusa a troca (a escrita se perderia), e o back cai no
+  reinício para o nível novo.
 - **/btw:** o aviso da pergunta lateral leva o nível em que a sessão principal está agora — o nível
   não está na conversa, e "em que nível você está?" ficava sem resposta. A leitura entra na fila do
   nível (nunca no meio da volta ao nível da conta, que passa pelo padrão do modelo). Vale o que a

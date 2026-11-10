@@ -1782,9 +1782,10 @@ function sendUser(text) {
     // A live CLI: with the effort queue empty (the usual case) the raise starts right away and its
     // control frame is written before the push below, so the effort is pinned by the time the
     // message reaches the model. With a write in flight (a switch, the previous turn's give-back) the
-    // raise waits its turn and may land a call or two into the turn: a deliberate trade. Holding the
-    // push for it would let the NEXT message, pushed at once, overtake this one; the queue bounds the
-    // wait to that write's own deadlines, and the turn still ends up on the keyword's level.
+    // raise waits its turn and may land with the turn already under way: a deliberate trade.
+    // Holding the push for it would let the NEXT message, pushed at once, overtake this one. The
+    // wait is bounded by the deadlines of whatever is ahead in the queue, and the keyword's level
+    // holds from when the raise lands, unless a later switch in the pill replaces it.
     const keyword = ++keywordMessages;
     void inEffortQueue(() => raiseUltra(ultra, false, keyword));
     myChannel.push(userMessage(text));
