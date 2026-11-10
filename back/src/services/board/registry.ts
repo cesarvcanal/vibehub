@@ -490,9 +490,10 @@ export interface Card {
   humanActiveAt?: number;
   /**
    * Last sign of life the BACK itself produced for this card (epoch ms): an open/wake, an instruction
-   * delivered to it. The idle sweep counts it ({@link lastActivityAt}) because the other clocks can
-   * all be silent while a card works: `openedAt` is stamped once, `humanActiveAt` needs a person,
-   * and `statusAt` needs the status hooks to reach the back — produção, 21/10/2026: with the hooks
+   * delivered to it. The idle sweep counts it ({@link lastActivityAt}), and so does the done-card
+   * retention (a finished card someone reopened or instructed must not be purged), because the
+   * other clocks can all be silent while a card works: `openedAt` is stamped once, `humanActiveAt`
+   * needs a person, and `statusAt` needs the status hooks to reach the back — produção, 21/10/2026: with the hooks
    * pointing at a dead blue/green port, a card opened and instructed by ChatGPT was hibernated by
    * the next sweep tick, mid-task. Absent = nothing since the field existed.
    */
@@ -501,8 +502,8 @@ export interface Card {
    * WHEN THE CARD WAS FINISHED — the moment it ENTERED `done` (epoch ms), cleared the moment it
    * leaves. It exists because `updatedAt` cannot answer "done since when": a rename, an account
    * switch or a model pin moves it, and the RETENTION SWEEP (services/board/retention.ts) deletes
-   * cards that have been done for six months. Absent on a card finished before this field existed
-   * — the sweep falls back to `updatedAt` there, which is the honest approximation.
+   * cards that have been done, and silent, for a day. Absent on a card finished before this field
+   * existed — the sweep falls back to `updatedAt` there, which is the honest approximation.
    */
   doneAt?: number;
   /**
