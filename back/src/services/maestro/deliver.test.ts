@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -241,11 +241,45 @@ describe("buildCiChecksScript", () => {
     expect(s).toContain(`gh pr checks '${PR}' --json name,bucket,link`);
     expect(s).toContain(`-lt ${Math.ceil(deliver.CI_WAIT_SECONDS / deliver.CI_POLL_SECONDS)} ] || break`);
     expect(s).toContain(`[ "$WF" = 1 ] && [ "$i" -lt ${Math.ceil(deliver.CI_APPEAR_SECONDS / deliver.CI_POLL_SECONDS)} ] || break`);
-    // each glob tested alone: a repo with only *.yml still counts as having workflows
-    expect(s).toContain('for f in .github/workflows/*.yml .github/workflows/*.yaml; do [ -e "$f" ] && WF=1; done');
+    expect(s).toContain(deliver.PR_WORKFLOWS_DETECT);
     // the checks are read only once the PR points at the pushed commit
     expect(s.indexOf(`gh pr view '${PR}' --json headRefOid`)).toBeGreaterThan(-1);
     expect(s.indexOf(`gh pr view '${PR}' --json headRefOid`)).toBeLessThan(s.indexOf("gh pr checks"));
+  });
+});
+
+describe("PR_WORKFLOWS_DETECT: só espera CI aparecer quando algum workflow roda em PR ou push", () => {
+  const detect = async (files: Record<string, string>): Promise<string> => {
+    const { deliver } = await load();
+    const repo = await mkdtemp(join(tmpdir(), "vibehub-wf-"));
+    try {
+      await mkdir(join(repo, ".github/workflows"), { recursive: true });
+      for (const [name, body] of Object.entries(files)) await writeFile(join(repo, ".github/workflows", name), body);
+      return execFileSync("bash", ["-c", `${deliver.PR_WORKFLOWS_DETECT}; echo "$WF"`], { cwd: repo }).toString().trim();
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  };
+
+  it("caso real (tech.multi #215): workflow só de agenda não faz o merge esperar 2 min por check que nunca vem", async () => {
+    expect(await detect({ "external-port-check.yml": "name: x\non:\n  schedule:\n    - cron: \"17 * * * *\"\n  workflow_dispatch:\n" })).toBe("0");
+  });
+
+  it("as formas de disparar em PR/push contam, em .yml e .yaml", async () => {
+    for (const body of [
+      "on: push\n",
+      "on: [push, pull_request]\n",
+      "\"on\":\n  pull_request:\n    branches: [main]\n",
+      "on:\n  - pull_request_target\n",
+      "on:\n  workflow_dispatch:\n  push:\n    branches: [main]\n",
+    ]) {
+      expect(await detect({ "ci.yaml": body })).toBe("1");
+    }
+  });
+
+  it("sem pasta de workflows, ou só com agenda e dispatch manual: não espera", async () => {
+    expect(await detect({})).toBe("0");
+    expect(await detect({ "a.yml": "on:\n  workflow_dispatch:\n", "b.yaml": "on: schedule\n" })).toBe("0");
   });
 });
 

@@ -421,6 +421,18 @@ export function buildMergeScript(
 }
 
 /**
+ * Sets `WF=1` when some workflow of the worktree runs on a pull request or a push — the only ones that
+ * put checks on a PR. A repo whose workflows are all scheduled or manual (tech.multi, PR #215: an
+ * hourly port scan) would otherwise make every delivery wait `CI_APPEAR_SECONDS` for checks that
+ * never come. Matches `on: push`, `on: [push, pull_request]`, an `on:` map or list with
+ * `push`/`pull_request`/`pull_request_target`, quoted `"on":` included. PURE (a constant).
+ */
+export const PR_WORKFLOWS_DETECT =
+  `WF=0; for f in .github/workflows/*.yml .github/workflows/*.yaml; do [ -e "$f" ] && ` +
+  `grep -Eq -e '^[[:space:]]*["]?on["]?[[:space:]]*:.*(push|pull_request)' ` +
+  `-e '^[[:space:]]*(-[[:space:]]*)?(push|pull_request|pull_request_target)[[:space:]]*:?[[:space:]]*$' "$f" && WF=1; done`;
+
+/**
  * Script for step (c) when the PR has CI: wait for the PR to point at the pushed commit, read `gh pr
  * checks` until nothing is pending (or the wait runs out), then print the last JSON read and a marker. While checks have not been registered yet,
  * a repo with workflows keeps asking for `CI_APPEAR_SECONDS`; one without stops at once.
@@ -436,7 +448,7 @@ export function buildCiChecksScript(
   const body = [
     ...ghTokenPreamble(token),
     `cd ${shQuote(cwd)} || { echo "${CI_MARKER} error"; exit 0; }`,
-    `WF=0; for f in .github/workflows/*.yml .github/workflows/*.yaml; do [ -e "$f" ] && WF=1; done`,
+    PR_WORKFLOWS_DETECT,
     headSha ? `HEAD=${shQuote(headSha)}` : `HEAD=$(git rev-parse HEAD)`,
     `i=0`,
     `while :; do`,
