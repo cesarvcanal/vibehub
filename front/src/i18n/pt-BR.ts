@@ -1582,6 +1582,7 @@ export const ptBR: Record<string, string> = {
   "review.merge.error.merger_sem_github": "Você não tem uma conexão GitHub própria no vibehub. Conecte a sua conta e tente de novo.",
   "review.merge.running": "O merge já está em andamento. Conferindo se ele terminou…",
   "review.merge.expired": "Não deu pra confirmar o merge — confira no GitHub",
+  "review.merge.stopped": "O merge parou no servidor antes de terminar (o vibehub reiniciou ou recusou no caminho) e o PR não foi mergeado. Clique de novo pra tentar.",
   "review.merge.error.not_ready": "A revisão não está mais pronta pra merge. A tela foi atualizada.",
   "review.retry": "Tentar de novo",
   "review.cancel": "Cancelar revisão",
