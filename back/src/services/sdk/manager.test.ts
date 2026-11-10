@@ -3283,9 +3283,9 @@ describe("compaction — a barra do /compact", () => {
     const s1 = fakeSocket();
     attachSocket(session, s1 as never);
     const before = Date.now();
-    spawned[0]!.stdout.emit("data", line({ type: "compaction", phase: "started" }));
+    spawned[0]!.stdout.emit("data", line({ type: "compaction", phase: "started", trigger: "manual" }));
     const started = parsed(s1)[0]!;
-    expect(started.phase).toBe("started");
+    expect(started).toMatchObject({ phase: "started", trigger: "manual" });
     expect(started.startedAt).toBeGreaterThanOrEqual(before);
 
     const late = fakeSocket();

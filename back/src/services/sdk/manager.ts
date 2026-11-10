@@ -147,7 +147,7 @@ export interface DriverSession {
    * Quando a compactação em andamento começou (ms) — ausente fora dela. Estado, como o medidor: quem
    * abre o card no meio do /compact recebe a barra contando desde aqui, e não um chat parado.
    */
-  compactingSince?: number;
+  compacting?: { startedAt: number; trigger?: "manual" | "auto" };
   /** Quando o conjunto deixou de ser vazio — o início da contagem de `BACKGROUND_HOLD_MAX_MS`. */
   backgroundSince?: number;
   /** O acerto do status do card depois que o segundo plano esvaziou (ver BACKGROUND_SETTLE_MS). */
@@ -813,10 +813,10 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
   }
   if (event.type === "compaction") {
     if (event.phase === "started") {
-      session.compactingSince = Date.now();
-      event = { ...event, startedAt: session.compactingSince };
+      session.compacting = { startedAt: Date.now(), ...(event.trigger ? { trigger: event.trigger } : {}) };
+      event = { ...event, ...session.compacting };
     } else {
-      session.compactingSince = undefined;
+      session.compacting = undefined;
     }
   }
   if (event.type === "turn_absorbed") {
@@ -831,7 +831,7 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
   if (event.type === "result") {
     session.activeTurns = Math.max(0, session.activeTurns - 1);
     // O driver já fecha a compactação antes do result; isto é a rede para um driver antigo.
-    session.compactingSince = undefined;
+    session.compacting = undefined;
     interruptNoteToFlush = session.pendingInterruptNote;
     session.pendingInterruptNote = undefined;
     session.autonomousTurn = false;
@@ -2112,8 +2112,8 @@ export function attachSocket(
   }
 
   // A compactação em andamento: a barra, contando desde quando começou.
-  if (session.compactingSince !== undefined) {
-    try { socket.send(JSON.stringify({ type: "compaction", phase: "started", startedAt: session.compactingSince })); } catch { /* going away */ }
+  if (session.compacting) {
+    try { socket.send(JSON.stringify({ type: "compaction", phase: "started", ...session.compacting })); } catch { /* going away */ }
   }
 
   // A frota do workflow é da mesma natureza do catálogo: estado, não conversa. Ela não está no
