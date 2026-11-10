@@ -195,6 +195,15 @@ Estas regras se aplicam **a qualquer tela ou módulo React atual ou futuro**:
 - **Pedido de diagnóstico é leitura e explicação**, não edição. Mudar código exige o pedido de mudança.
 - **Discordar com fundamento faz parte do trabalho:** apontar o caminho melhor e os riscos em vez de executar no automático o que foi pedido.
 
+1. **Inspecionar antes de editar:** identificar arquivos, fluxo, fonte de verdade, contratos, padrões e testes relevantes.
+2. **Localizar consumidores:** em mudança não trivial, encontrar chamadas, imports, schemas, rotas, integrações e interfaces impactadas.
+3. **Definir escopo:** escolher a menor alteração que resolva **o problema completo**. Não transformar correção pontual em refatoração geral.
+4. **Implementar de ponta a ponta:** atualizar consumidores internos, contratos, validações, autorização e testes pertinentes na mesma entrega.
+5. **Auditar o trecho tocado:** corrigir nomes, código morto, duplicação, fallback indevido, importação fora de padrão e consultas inúteis presentes na área modificada.
+6. **Não espalhar alterações:** se um problema vizinho demandar refatoração arriscada, identificar e comunicar em vez de alterar módulos não relacionados.
+7. **Validar:** executar os testes pertinentes, lint, tipos e build quando disponíveis e aplicáveis; revisar o diff.
+8. **Descrever o resultado:** informar arquivos/áreas alterados, comportamento entregue, verificações realizadas e limitações reais.
+
 ### Autonomia corretiva e preservação do escopo
 
 Pedir autorização e passar por brainstorming continua obrigatório para decisões de produto, mudança de escopo, funcionalidade nova, mudança de comportamento intencional e tudo cuja intenção não esteja clara. A exceção: **o agente corrige sozinho problema real naquilo que já foi definido, pedido ou implementado**, sem parar para pedir licença e sem brainstorming:
@@ -211,15 +220,6 @@ Pedir autorização e passar por brainstorming continua obrigatório para decis�
 **Na dúvida, pergunta:** se a correção exige decidir intenção, comportamento esperado ou direção do projeto, apresentar o problema e as consequências e perguntar antes de agir. Quando o comportamento esperado está claro e a falha é comprovada, corrigir sem transferir ao usuário uma decisão técnica que não precisa dele.
 
 **Princípio:** o agente tem autonomia para preservar, corrigir e garantir a integridade do que foi definido e construído, não para redefinir o que o projeto deve ser.
-
-1. **Inspecionar antes de editar:** identificar arquivos, fluxo, fonte de verdade, contratos, padrões e testes relevantes.
-2. **Localizar consumidores:** em mudança não trivial, encontrar chamadas, imports, schemas, rotas, integrações e interfaces impactadas.
-3. **Definir escopo:** escolher a menor alteração que resolva **o problema completo**. Não transformar correção pontual em refatoração geral.
-4. **Implementar de ponta a ponta:** atualizar consumidores internos, contratos, validações, autorização e testes pertinentes na mesma entrega.
-5. **Auditar o trecho tocado:** corrigir nomes, código morto, duplicação, fallback indevido, importação fora de padrão e consultas inúteis presentes na área modificada.
-6. **Não espalhar alterações:** se um problema vizinho demandar refatoração arriscada, identificar e comunicar em vez de alterar módulos não relacionados.
-7. **Validar:** executar os testes pertinentes, lint, tipos e build quando disponíveis e aplicáveis; revisar o diff.
-8. **Descrever o resultado:** informar arquivos/áreas alterados, comportamento entregue, verificações realizadas e limitações reais.
 
 **Operações de risco:** migrações com dados reais, exclusões, mudanças públicas incompatíveis, alterações de acesso, deploy e merge em produção exigem seguir as autorizações existentes e verificar impactos. Não presumir consentimento.
 
