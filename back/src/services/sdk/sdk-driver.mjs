@@ -607,12 +607,20 @@ function btwPrompt(question, mainEffort) {
 }
 
 /**
- * The main session's level: with a live stream, only what the session itself says (the card's pin is
- * not the level of an ultrathink turn); without one, the pin, which the next stream starts on.
- * Undefined = nobody knows.
+ * The main session's level, read INSIDE the effort queue: the way back to the account's level passes
+ * through `null` (the model's default), and a read in the middle of it said a level the session was
+ * only crossing. What the session itself says first; when it does not say (an SDK without
+ * `getSettings`, a read past its deadline), what this driver last wrote: the keyword's level while an
+ * ultrathink turn holds it, else the card's pin, which is also what a stream started now would use.
+ * Undefined = nobody knows (no pin, and the session silent).
  */
-async function mainSessionEffort() {
-  return currentQuery ? await sessionEffort(currentQuery) : EFFORT ?? undefined;
+function mainSessionEffort() {
+  return inEffortQueue(async () => {
+    const said = currentQuery ? await sessionEffort(currentQuery) : undefined;
+    if (said) return said;
+    if (currentQuery && ultraRaised && "effortLevel" in ultraRaised) return ultraRaised.effortLevel;
+    return EFFORT ?? undefined;
+  });
 }
 
 async function answerBtw(id, question) {

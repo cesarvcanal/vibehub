@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
  * GATE the test opens — a file in the sandbox. Fixed sleeps here made the tests a bet on the CI's load.
  */
 const FAKE_SDK = String.raw`
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 let created = 0;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -255,10 +255,14 @@ export function query({ prompt, options }) {
   // O nível que a CONTA define (o effortLevel dos settings) vem de um arquivo no sandbox; sem ele, o
   // padrão do modelo ("medium", como o CLI de verdade para o Opus). \`applied\` is what the real CLI
   // says the next call uses: the flag, else --effort, else the settings, else the model's default.
-  // "settings-hang": the read never answers. "settings-gate": it waits for "release-settings".
+  // "settings-hang": the read never answers. "settings-gate": it waits for "release-settings";
+  // "settings-gate-once": only the first read that sees it waits.
   handle.getSettings = async () => {
     if (existsSync(join(options.cwd, "settings-hang"))) return new Promise(() => {});
-    if (existsSync(join(options.cwd, "settings-gate"))) {
+    const once = join(options.cwd, "settings-gate-once");
+    const gatedOnce = existsSync(once);
+    if (gatedOnce) rmSync(once);
+    if (gatedOnce || existsSync(join(options.cwd, "settings-gate"))) {
       mark("settings:waiting");
       while (!existsSync(join(options.cwd, "release-settings"))) await sleep(20);
       mark("settings:answered");
@@ -322,7 +326,7 @@ afterEach(async () => {
   await rm(join(sandbox, "release-btw"), { force: true });
   await rm(join(sandbox, "account-effort"), { force: true });
   await rm(join(sandbox, "flags-fail"), { force: true });
-  for (const gate of ["flags-hang", "settings-hang", "settings-gate", "release-settings"]) await rm(join(sandbox, gate), { force: true });
+  for (const gate of ["flags-hang", "settings-hang", "settings-gate", "settings-gate-once", "release-settings"]) await rm(join(sandbox, gate), { force: true });
   await rm(join(sandbox, "context-fail"), { force: true });
   await rm(join(sandbox, "context-hang"), { force: true });
 });
@@ -1323,7 +1327,9 @@ describe("sdk-driver.mjs — /btw", () => {
     expect(String(second.text)).not.toContain("xhigh");
   }, 60_000);
 
-  it("uma sessão que não diz o nível não segura a pergunta lateral: ela responde sem a linha do nível", async () => {
+  it("uma sessão que não diz o nível não segura a pergunta lateral: ela responde com o nível que o driver escreveu", async () => {
+    // Review do PR #259 (f8): com a sessão muda (um SDK sem getSettings, uma leitura fora do prazo) o
+    // /btw omitia o nível, mesmo com o pin do card conhecido.
     const driver = startDriverWithEnv({ VIBEHUB_EFFORT_STEP_TIMEOUT_MS: "200" }, ["--effort", "low"]);
     await driver.waitFor((e) => e.type === "ready");
     driver.send({ type: "user", text: "hello" });
@@ -1332,8 +1338,42 @@ describe("sdk-driver.mjs — /btw", () => {
     driver.send({ type: "btw", id: "sem-nivel", question: "em que nível você está?" });
     const answer = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "sem-nivel");
     expect(String(answer.text)).toContain("em que nível você está?");
-    // Com a sessão viva e muda, o pin do card não é dito como o nível dela (num turno ultrathink, não é).
-    expect(String(answer.text)).not.toContain("sessão principal está agora");
+    expect(String(answer.text)).toContain("sessão principal está agora: low");
+  }, 60_000);
+
+  it("num turno ultrathink com a sessão muda, o /btw diz o nível da palavra, não o pin do card", async () => {
+    const driver = startDriverWithEnv({ VIBEHUB_EFFORT_STEP_TIMEOUT_MS: "200" }, ["--effort", "low"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "pensa nisso ultrathink slow" });
+    await driver.waitMark('flags:{"effortLevel":"max"}');
+    await driver.waitMark("slow:running");
+    await writeFile(join(sandbox, "settings-hang"), "");
+    driver.send({ type: "btw", id: "na-palavra", question: "em que nível você está?" });
+    const answer = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "na-palavra");
+    expect(String(answer.text)).toContain("sessão principal está agora: max");
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+  }, 60_000);
+
+  it("o /btw lê o nível na fila do nível: nunca no meio da volta ao nível da conta", async () => {
+    // A volta ao padrão da conta passa pelo null (o padrão do MODELO) antes do nível dos settings. Uma
+    // leitura no meio dizia o nível do modelo; na fila, ela espera a volta terminar.
+    await writeFile(join(sandbox, "account-effort"), "high");
+    const driver = startDriver(["--effort", "xhigh"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "hello" });
+    await driver.waitFor((e) => e.type === "result");
+    await writeFile(join(sandbox, "settings-gate-once"), "");
+    driver.send({ type: "set_effort", id: "pra-conta", effort: null });
+    await driver.waitMark("settings:waiting");
+    driver.send({ type: "btw", id: "no-meio", question: "em que nível você está?" });
+    // A barreira prova que o /btw já foi lido; a leitura dele fora da fila responderia agora, no null.
+    driver.send({ type: "permission_decision", id: "barreira-btw", allow: false });
+    await driver.waitFor((e) => e.type === "error" && String(e.message).includes("barreira-btw"));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await writeFile(join(sandbox, "release-settings"), "");
+    const answer = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "no-meio");
+    expect(String(answer.text)).toContain("sessão principal está agora: high");
   }, 60_000);
 
   it("UMA pergunta lateral por vez: a segunda espera a primeira responder", async () => {
