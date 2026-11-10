@@ -5,7 +5,7 @@ import { creatorAccountSlug, getUserGit } from "../auth/userGit.js";
 import type { PublicUser } from "../auth/users.js";
 import * as registry from "../services/board/registry.js";
 import {
-  cancelReview, decideQuestion, decideSuggestions, retryReview, syncReviewSoon,
+  cancelReview, decideQuestion, decideSuggestions, isMerging, retryReview, syncReviewSoon,
 } from "../services/review/orchestrator.js";
 import { reachingCard, startReviewChecked } from "../services/review/start.js";
 import { mergeReviewedPr } from "../services/review/merge.js";
@@ -106,7 +106,9 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
    * A revisão do card: a ativa, ou a última (de qualquer fase) — o painel mostra o histórico. Com
    * `?pr=N`, a daquele PR, entre as que o card acompanha (dele como autor ou de um PR que ele anexou):
    * é o que cada linha de PR e o painel dela leem. Junto,
-   * `working`: se a IA do autor e a do revisor estão trabalhando agora (ausente quando não há revisão).
+   * `working`: se a IA do autor e a do revisor estão trabalhando agora (ausente quando não há revisão);
+   * `merging`: se um merge dela está rodando agora no servidor (`isMerging`) — false depois de um
+   * deploy que matou o merge no meio, que é como o painel para de esperar uma resposta que não vem.
    * Uma revisão aberta é conferida no GitHub em segundo plano, no máximo uma vez por minuto
    * (`syncReviewSoon`): é o que faz um merge feito direto no GitHub aparecer no painel sozinho.
    */
@@ -118,7 +120,7 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
       : prReview(await listReviewsFollowedBy([req.params.id]), pr);
     if (!review) return await reply.send({ review: null });
     syncReviewSoon(review);
-    return await reply.send({ review, working: await sidesWorking(review) });
+    return await reply.send({ review, working: await sidesWorking(review), merging: isMerging(review.id) });
   });
 
   app.post<{ Params: { id: string }; Body: StartBody }>(

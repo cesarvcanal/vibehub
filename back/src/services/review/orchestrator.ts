@@ -1107,6 +1107,15 @@ export function releaseMerge(reviewId: string): void {
   merging.delete(reviewId);
 }
 
+/**
+ * Se um merge desta revisão está rodando AGORA neste processo. A trava mora só na memória: um deploy
+ * no meio do merge mata o pedido e leva a trava junto, e o processo novo responde false. É o que deixa
+ * o painel, que perdeu a resposta do merge, saber que não há mais nada a esperar.
+ */
+export function isMerging(reviewId: string): boolean {
+  return merging.has(reviewId);
+}
+
 /** De quanto em quanto tempo, no máximo, o painel aberto faz o servidor conferir o PR no GitHub. */
 export const GITHUB_SYNC_MS = 60_000;
 const lastGithubSync = new Map<string, number>();

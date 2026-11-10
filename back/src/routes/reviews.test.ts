@@ -509,6 +509,26 @@ describe("GET da revisão: quem está trabalhando agora", () => {
   });
 });
 
+describe("GET da revisão: se há merge rodando agora", () => {
+  it("diz merging enquanto um merge segura a vez, e false depois que ela é devolvida (ou que o servidor reiniciou)", async () => {
+    const w = await world();
+    const review = (await startReview(w)).json().review as { id: string };
+    const read = async () =>
+      (await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/review`, headers: { cookie: w.leitor.cookie } })).json();
+    expect((await read()).merging).toBe(false);
+
+    const orch = await orchestrator();
+    expect(orch.claimMerge(review.id)).toBe(true);
+    try {
+      expect((await read()).merging).toBe(true);
+    } finally {
+      orch.releaseMerge(review.id);
+    }
+    // A vez devolvida é o mesmo que um processo novo depois do deploy: nenhum merge rodando.
+    expect((await read()).merging).toBe(false);
+  });
+});
+
 describe("GET da revisão confere o PR no GitHub (merge feito fora do painel)", () => {
   it("o PR mergeado direto no GitHub aparece mergeado na próxima leitura, e o freio segura o gh por um minuto", async () => {
     const w = await world();
