@@ -82,6 +82,65 @@ export function anexoTemPreview(file: string): boolean {
   return UPLOAD_PREVIEW_RE.test(String(file ?? ""));
 }
 
+export type UploadKind = "image" | "audio" | "pdf" | "spreadsheet" | "document" | "presentation" | "text" | "file";
+
+/** What an attachment is, for its icon and label in the bubble. PURE, TOTAL. */
+export function uploadKind(file: string): UploadKind {
+  const name = String(file ?? "");
+  if (isUploadImage(name)) return "image";
+  if (anexoEhAudio(name)) return "audio";
+  if (name.endsWith(".pdf")) return "pdf";
+  if (/\.(?:xlsx|xlsm|xls|ods|csv)$/.test(name)) return "spreadsheet";
+  if (/\.(?:docx|doc|odt)$/.test(name)) return "document";
+  if (/\.(?:pptx|ppt|odp)$/.test(name)) return "presentation";
+  if (/\.(?:txt|md|json|log)$/.test(name)) return "text";
+  return "file";
+}
+
+type UploadToken = Extract<MdToken, { type: "image" | "file" }>;
+
+/**
+ * A user's message split into its words and its attachments. The composer appends the upload paths
+ * after the text, and rendering them where they stood put a 300px audio player in the middle of a
+ * line of prose; the bubble shows the words first and the attachments in a row of their own,
+ * grouped — pictures, then audios, then documents, each group in the order attached — so a wide
+ * screenshot does not split the audios from each other. The blank lines the paths leave behind go
+ * with them. PURE, TOTAL.
+ */
+export function splitAttachments(tokens: readonly MdToken[]): { words: MdToken[]; attachments: UploadToken[] } {
+  const group = (t: UploadToken) => (t.type === "image" ? 0 : anexoEhAudio(t.file) ? 1 : 2);
+  const attachments = tokens
+    .filter((t): t is UploadToken => t.type === "image" || t.type === "file")
+    .sort((a, b) => group(a) - group(b));
+  if (attachments.length === 0) return { words: [...tokens], attachments };
+  const words = tokens.filter((t) => t.type !== "image" && t.type !== "file");
+  while (words.length > 0) {
+    const last = words[words.length - 1] as MdToken;
+    if (last.type !== "text") break;
+    const trimmed = last.value.trimEnd();
+    if (trimmed) {
+      words[words.length - 1] = { type: "text", value: trimmed };
+      break;
+    }
+    words.pop();
+  }
+  return { words, attachments };
+}
+
+/**
+ * Seconds as the player shows them (`1:03`, `1:02:05`), or `null` for a length the browser does not
+ * know — an Ogg served without ranges reports `Infinity`, and printing that as `0:00` is what made a
+ * two-minute voice note look empty. PURE, TOTAL.
+ */
+export function formatAudioTime(seconds: number): string | null {
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  const total = Math.floor(seconds);
+  const s = String(total % 60).padStart(2, "0");
+  const m = Math.floor(total / 60) % 60;
+  const h = Math.floor(total / 3600);
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
+}
+
 /** Whether an upload name is one the chat shows as a picture. PURE, TOTAL. */
 export function isUploadImage(file: string): boolean {
   return UPLOAD_IMAGE_RE.test(String(file ?? ""));

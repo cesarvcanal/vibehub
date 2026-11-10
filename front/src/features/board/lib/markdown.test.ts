@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatAudioTime,
   isUploadImage,
   linkifyTokens,
+  splitAttachments,
+  uploadKind,
   parseUploadPath,
   safeUrl,
   uploadDisplayName,
@@ -156,5 +159,61 @@ describe("tipo de anexo no chat", () => {
       expect(anexoEhAudio(f)).toBe(false);
       expect(anexoTemPreview(f)).toBe(false);
     }
+  });
+});
+
+describe("splitAttachments", () => {
+  const card = "4ef6374b-6a1f-4fc1-b2c1-0ba4c377223f";
+  const up = (file: string) => `/work/.uploads/${card}/${file}`;
+
+  it("pulls every upload out of the words, grouped (pictures, audios, documents), and drops the blank lines", () => {
+    const text = `olha isso\n\n${up("1-a.ogg")}\n${up("2-b.png")} ${up("3-c.pdf")}\n${up("4-d.opus")}\n${up("5-e.xlsx")}\n`;
+    const { words, attachments } = splitAttachments(linkifyTokens(text));
+    expect(words).toEqual([{ type: "text", value: "olha isso" }]);
+    expect(attachments.map((a) => a.file)).toEqual(["2-b.png", "1-a.ogg", "4-d.opus", "3-c.pdf", "5-e.xlsx"]);
+  });
+
+  it("keeps the words around an upload in the middle of the sentence", () => {
+    const { words, attachments } = splitAttachments(linkifyTokens(`veja ${up("1-a.pdf")} e me diga`));
+    expect(words.map((w) => w.value).join("")).toBe("veja  e me diga");
+    expect(attachments).toHaveLength(1);
+  });
+
+  it("a message that is only attachments has no words", () => {
+    expect(splitAttachments(linkifyTokens(`${up("1-a.ogg")}\n${up("2-b.ogg")}`)).words).toEqual([]);
+  });
+
+  it("text without uploads comes back untouched", () => {
+    const tokens = linkifyTokens("só texto  \n");
+    expect(splitAttachments(tokens)).toEqual({ words: tokens, attachments: [] });
+  });
+});
+
+describe("uploadKind", () => {
+  it("names what each attachment is, by extension", () => {
+    expect(uploadKind("1-x.png")).toBe("image");
+    expect(uploadKind("1-x.opus")).toBe("audio");
+    expect(uploadKind("1-x.pdf")).toBe("pdf");
+    expect(uploadKind("1-x.xlsx")).toBe("spreadsheet");
+    expect(uploadKind("1-x.csv")).toBe("spreadsheet");
+    expect(uploadKind("1-x.docx")).toBe("document");
+    expect(uploadKind("1-x.pptx")).toBe("presentation");
+    expect(uploadKind("1-x.txt")).toBe("text");
+    expect(uploadKind("1-x.zip")).toBe("file");
+  });
+});
+
+describe("formatAudioTime", () => {
+  it("is m:ss, and h:mm:ss past the hour", () => {
+    expect(formatAudioTime(0)).toBe("0:00");
+    expect(formatAudioTime(9.7)).toBe("0:09");
+    expect(formatAudioTime(63)).toBe("1:03");
+    expect(formatAudioTime(3725)).toBe("1:02:05");
+  });
+
+  it("an unknown length is null, never 0:00 or Infinity", () => {
+    expect(formatAudioTime(Number.NaN)).toBeNull();
+    expect(formatAudioTime(Number.POSITIVE_INFINITY)).toBeNull();
+    expect(formatAudioTime(-1)).toBeNull();
   });
 });
