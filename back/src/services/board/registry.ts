@@ -2355,7 +2355,9 @@ export async function hibernateCard(cardId: string): Promise<Card | undefined> {
     // A restart that was waiting for the card to go idle has nothing left to restart.
     card.restartPendingAt = null;
     card.restartReason = undefined;
-    card.updatedAt = Date.now();
+    // No `updatedAt`: going cold is the OPPOSITE of a sign of life, and `updatedAt` is one of the
+    // stamps the done-card retention counts from (retention.ts) — a finished card hibernated an
+    // hour after `done` would otherwise get its purge pushed back by that hour.
     return card;
   });
 }

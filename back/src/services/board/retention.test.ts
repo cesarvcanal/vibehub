@@ -282,6 +282,55 @@ describe("sweepDoneCards — the purge of what has been done for a day", () => {
     expect(await reg.listAllCards()).toHaveLength(1);
   });
 
+  it("concluir põe o card na fila: um dia depois do done ele sai, apagando TUDO local e NADA remoto", async () => {
+    const project = await reg.createProject({
+      name: "erp-aux",
+      repoFullName: "acme/erp-aux",
+      cloneUrl: "https://github.com/acme/erp-aux.git",
+    });
+    const c = await reg.createCard({ projectId: project.id, title: "Entregue" });
+    await reg.updateCard(c.id, { column: "done" });
+    const concluido = await reg.getCard(c.id);
+    expect(concluido?.doneAt).toBeGreaterThan(0);
+    const ws = await import("./workspace.js");
+    const { cwd, repoDir } = ws.cardWorkPaths(project, concluido!);
+    runScript.mockClear();
+
+    expect(await retention.sweepDoneCards({ now: concluido!.doneAt! + DAY - HOUR })).toMatchObject({ purged: 0 });
+    expect(await reg.getCard(c.id)).toBeDefined();
+
+    expect(await retention.sweepDoneCards({ now: concluido!.doneAt! + DAY })).toMatchObject({ purged: 1, incomplete: 0 });
+    expect(await reg.getCard(c.id)).toBeUndefined();
+
+    const scripts = runScript.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(scripts).toContain(`git -C '${repoDir}' worktree remove --force '${cwd}'`);
+    expect(scripts).toContain(`git -C '${repoDir}' branch -D 'card/${c.worktreeSlug}'`);
+    expect(scripts).toContain(`rm -rf '${cwd}'`);
+    expect(scripts).toContain(`rm -rf '/work/.uploads/${c.id}'`);
+    expect(scripts).toContain(`rm -f '/root/.vibehub/gh/${c.id}.token'`);
+    expect(scripts).toContain(`/root/.vibehub/git/${c.id}.gitconfig`);
+    expect(scripts).toContain("$P/projects/");
+    expect(scripts).not.toMatch(/git\s+push|push\s+--delete|gh\s+api\s+-X\s+DELETE|git\/refs/);
+  });
+
+  it("a hibernação automática do card concluído não é sinal de vida: o prazo continua contando do done", async () => {
+    const project = await reg.createProject({ name: "erp-aux" });
+    const c = await reg.createCard({ projectId: project.id, title: "Entregue" });
+    await reg.applyOpenTerminal(c.id);
+    await reg.applyCardStatus(c.id, "waiting");
+    await reg.updateCard(c.id, { column: "done" });
+    const doneAt = (await reg.getCard(c.id))!.doneAt!;
+    const statusAt = (await reg.getCard(c.id))!.statusAt ?? 0;
+    const limite = Math.max(doneAt, statusAt) + DAY;
+
+    const relogio = vi.spyOn(Date, "now").mockReturnValue(doneAt + 2 * HOUR);
+    expect(await reg.hibernateCard(c.id)).toBeDefined();
+    relogio.mockRestore();
+
+    expect(await retention.sweepDoneCards({ now: limite })).toMatchObject({ purged: 1 });
+    expect(await reg.getCard(c.id)).toBeUndefined();
+  });
+
   it("the defaults are the ones the product promises: ONE day, a capped pass", () => {
     expect(DONE_RETENTION_DAYS).toBe(1);
     expect(DONE_SWEEP_MAX).toBeGreaterThan(0);
