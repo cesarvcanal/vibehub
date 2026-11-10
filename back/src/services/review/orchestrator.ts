@@ -7,7 +7,7 @@ import { cardBranch, resumeCard } from "../board/workspace.js";
 import { recordCardActor } from "../board/actor.js";
 import { findUser } from "../../auth/users.js";
 import { cardLevel } from "../../auth/access.js";
-import { creatorAccountSlug, getUserGit } from "../../auth/userGit.js";
+import { cardAccountSlug, getUserGit, linkedAccountSlug } from "../../auth/userGit.js";
 import { sendToTerminal, SEND_READY_WAIT_MS } from "../maestro/maestro.js";
 import { afterPrMerged, gateAtCommit, readPrApproval, readPrState, setPrPeople } from "../maestro/deliver.js";
 import type { GateResult } from "../maestro/gate.js";
@@ -512,7 +512,7 @@ async function cardOnBranch(projectId: string, branch: string): Promise<Card | u
  * `origin/<branch>`, e o push da correção cai no PR) e a base do PR como alvo. O PR fica registrado
  * nele, como se ele o tivesse entregado: é o que o deliver, a conferência do GitHub e a linha do PR leem.
  */
-async function createFixCard(hub: Card, pr: CardPr, accountSlug: string): Promise<Card> {
+async function createFixCard(hub: Card, pr: CardPr, accountSlug: string | undefined): Promise<Card> {
   const fix = await createCard(
     { projectId: hub.projectId, title: `Correção PR #${pr.number} · ${pr.title || hub.title}` },
     { base: pr.base, branch: pr.branch, accountSlug, column: "waiting" },
@@ -566,8 +566,10 @@ export async function startReview(input: {
     if (await activeReviewForPr(pr.url)) {
       throw new Error(`revisao_ativa: já existe uma revisão em andamento do PR #${pr.number}`);
     }
-    const accountSlug = await creatorAccountSlug(input.reviewerUserId);
-    if (!accountSlug) throw new Error("revisor_sem_conta: o revisor não tem uma conta Claude própria no vibehub");
+    // "Tem conta" é ter um vínculo, inclusive com a conta embutida ("default"): quem está nela revisa
+    // e corrige ali. Só quem não tem vínculo nenhum é recusado.
+    const reviewerAccount = await linkedAccountSlug(input.reviewerUserId);
+    if (!reviewerAccount) throw new Error("revisor_sem_conta: o revisor não tem uma conta Claude própria no vibehub");
 
     let authorCard = card;
     let fixCard: Card | undefined;
@@ -576,11 +578,11 @@ export async function startReview(input: {
       if (working) {
         authorCard = working;
       } else {
-        const authorAccount = await creatorAccountSlug(input.authorUserId);
+        const authorAccount = await linkedAccountSlug(input.authorUserId);
         if (!authorAccount) {
           throw new Error("autor_sem_conta: o autor não tem uma conta Claude própria no vibehub (a correção roda nela)");
         }
-        fixCard = await createFixCard(card, pr, authorAccount);
+        fixCard = await createFixCard(card, pr, cardAccountSlug(authorAccount));
         authorCard = fixCard;
       }
     }
@@ -588,7 +590,7 @@ export async function startReview(input: {
     let reviewerCard: Card | undefined;
     try {
       reviewerCard = await createReviewerCard({
-        authorCard, reviewerAccountSlug: accountSlug, prBranch: pr.branch, title: `Revisão PR #${pr.number} · ${pr.title || card.title}`,
+        authorCard, reviewerAccountSlug: cardAccountSlug(reviewerAccount), prBranch: pr.branch, title: `Revisão PR #${pr.number} · ${pr.title || card.title}`,
       });
       const now = Date.now();
       const fresh: Review = {

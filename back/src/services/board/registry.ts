@@ -1744,11 +1744,12 @@ export async function markCardPrMerged(cardId: string, base: string, number: num
  *  - `base` = the PR's branch, so the worktree is cut from exactly what is being reviewed;
  *  - `branch` = `review/<its own slug>`: a branch of its own, never the PR's (the reviewer pushes
  *    nothing — `deliver` refuses a card with `reviewOf`);
- *  - the reviewer's Claude account, the author's project, and `waiting` — it starts at once.
+ *  - the reviewer's Claude account (absent = the built-in one, like any card without a slug), the
+ *    author's project, and `waiting` — it starts at once.
  */
 export async function createReviewerCard(input: {
   authorCard: Card;
-  reviewerAccountSlug: string;
+  reviewerAccountSlug: string | undefined;
   prBranch: string;
   title: string;
 }): Promise<Card> {

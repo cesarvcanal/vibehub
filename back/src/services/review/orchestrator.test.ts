@@ -113,7 +113,7 @@ async function load() {
   }));
   vi.doMock("../../auth/userGit.js", async () => ({
     ...(await vi.importActual<typeof import("../../auth/userGit.js")>("../../auth/userGit.js")),
-    creatorAccountSlug: async (id: string | undefined) => (id ? accountOf[id] : undefined),
+    linkedAccountSlug: async (id: string | undefined) => (id ? accountOf[id] : undefined),
   }));
   const registry = await import("../board/registry.js");
   registry.resetForTesting();

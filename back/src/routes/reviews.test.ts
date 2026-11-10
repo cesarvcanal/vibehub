@@ -281,6 +281,19 @@ describe("iniciar a revisão", () => {
     expect(res.json().error).toMatch(/revisor_sem_conta/);
   });
 
+  it("revisor vinculado à conta embutida ('default') revisa, e o card dele roda nela", async () => {
+    const w = await world();
+    await app.inject({
+      method: "PATCH", url: `/api/users/${w.merger.id}`, headers: { cookie: w.owner.cookie }, payload: { claudeAccountSlug: "default" },
+    });
+    const res = await startReview(w, w.autor, { reviewerUserId: w.merger.id, mergerUserId: w.revisor.id });
+    expect(res.statusCode).toBe(200);
+    const reviewerCard = await (await registry()).getCard(res.json().review.reviewerCardId);
+    // a conta embutida é a ausência de slug no card, como a de um card criado por quem está em "default"
+    expect(reviewerCard).toMatchObject({ reviewOf: w.cardId });
+    expect(reviewerCard?.accountSlug).toBeUndefined();
+  });
+
   it("revisor sem conexão GitHub própria é recusado (os reviews do PR sairiam na conta de outra pessoa)", async () => {
     const w = await world();
     // "outro" alcança o projeto e tem conta Claude própria, mas nenhuma conexão GitHub dele
@@ -557,6 +570,23 @@ describe("PRs anexados: uma revisão por PR, acompanhada do card que anexou", ()
     expect(fix.reviews).toBeUndefined();
   });
 
+  it("autor vinculado à conta embutida ('default') num PR anexado ganha o card de correção nela", async () => {
+    const w = await world();
+    await app.inject({
+      method: "PATCH", url: `/api/users/${w.autor.id}`, headers: { cookie: w.owner.cookie }, payload: { claudeAccountSlug: "default" },
+    });
+    await (await registry()).attachCardPrs(w.cardId, [attached(599)]);
+    const res = await startReview(w, w.autor, { prNumber: 599 });
+    expect(res.statusCode).toBe(200);
+    const review = res.json().review;
+    expect(review).toMatchObject({ prNumber: 599, hubCardId: w.cardId });
+    const fix = await (await registry()).getCard(review.cardId);
+    expect(fix).toMatchObject({ branch: "feat/pr-599" });
+    expect(fix?.accountSlug).toBeUndefined();
+    // o revisor segue na conta com nome dele
+    expect((await (await registry()).getCard(review.reviewerCardId))?.accountSlug).toBe("mussa");
+  });
+
   it("autor sem conta Claude própria num PR anexado é recusado com autor_sem_conta", async () => {
     const w = await world();
     await (await registry()).attachCardPrs(w.cardId, [attached(599)]);
@@ -719,6 +749,18 @@ describe("pessoas do card", () => {
     expect(byName.autor!.githubLogin).toBeUndefined();
     expect(byName.autor!.canReview).toBe(false);
     expect(byName.cesar!.canReview).toBe(false);
+    // vincular a conta embutida ("default") é ter conta; voltar ao "Herdar" é não ter
+    await app.inject({
+      method: "PATCH", url: `/api/users/${w.owner.id}`, headers: { cookie: w.owner.cookie }, payload: { claudeAccountSlug: "default" },
+    });
+    const canReviewOf = async (name: string) =>
+      ((await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/people`, headers: { cookie: w.autor.cookie } }))
+        .json().people as { username: string; canReview: boolean }[]).find((p) => p.username === name)?.canReview;
+    expect(await canReviewOf("cesar")).toBe(true);
+    await app.inject({
+      method: "PATCH", url: `/api/users/${w.owner.id}`, headers: { cookie: w.owner.cookie }, payload: { claudeAccountSlug: null },
+    });
+    expect(await canReviewOf("cesar")).toBe(false);
     // quem não tem acesso ao card não entra (e nem vê a lista)
     expect(people.some((p) => p.id === w.outro.id)).toBe(false);
     expect((await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/people`, headers: { cookie: w.outro.cookie } })).statusCode)
