@@ -5256,6 +5256,24 @@ describe("SdkChatView — mensagem enviada durante o carregamento sobrevive ao F
     expect(screen.getByTestId("sdk-queued")).toHaveTextContent("segunda");
   });
 
+  // A mensagem escrita no "Preparando…" do card (CardTerminalView) espera nesta fila, antes de o
+  // chat existir: ele a encontra ao montar e a entrega quando o servidor fica pronto.
+  it("a fila deixada pelo 'Preparando…' do card sai quando o chat fica pronto", async () => {
+    localStorage.setItem(
+      "vibehub.sdkQueue.c1",
+      JSON.stringify([{ id: "q-prep", text: "comece pelo schema", at: Date.now() - 1_000 }]),
+    );
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    expect(screen.getByTestId("sdk-queued")).toHaveTextContent("comece pelo schema");
+    ws.deliver({ type: "ready" });
+
+    await waitFor(() => expect(ws.sent).toHaveLength(1));
+    expect(JSON.parse(ws.sent[0]!)).toMatchObject({ type: "user", text: "comece pelo schema" });
+    expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument();
+  });
+
   it("mensagem VELHA sem recibo (aba fechada há dias) não vira turno sozinha: volta marcada", async () => {
     localStorage.setItem(
       "vibehub.sdkOutbox.c1",

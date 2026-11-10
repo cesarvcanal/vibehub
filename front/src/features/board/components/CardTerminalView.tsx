@@ -38,6 +38,7 @@ import { VncPanel } from "@/features/board/components/VncPanel";
 import { PreviewChip, PreviewMenu } from "@/features/board/components/PreviewMenu";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
 import { CardOutbox } from "@/features/board/components/CardOutbox";
+import { SdkQueueTray } from "@/features/board/components/SdkQueueTray";
 import { PrReviewBlocks } from "@/features/board/components/PrReviewBlock";
 import { ReviewPanel } from "@/features/board/components/ReviewPanel";
 import { cardState, nextPosition, wantsReviewPanel, withoutReviewFlag } from "@/features/board/lib/board";
@@ -45,7 +46,8 @@ import { readsPerPr } from "@/features/board/lib/review";
 import { CardStateIcon } from "@/features/board/components/CardStateIcon";
 import { boardTitle, useDocumentTitle } from "@/features/board/lib/documentTitle";
 import type { ConnectionState } from "@/features/board/lib/reconnect";
-import { readCardMode, writeCardMode, type CardViewMode } from "@/features/board/lib/chat";
+import { personOrigin, readCardMode, writeCardMode, type CardViewMode } from "@/features/board/lib/chat";
+import { dequeue, enqueue, newQueueId, readQueue, writeQueue, type QueuedMessage } from "@/features/board/lib/sdkQueue";
 import {
   ACCOUNTS_KEY,
   ACCOUNT_USAGE_KEY,
@@ -155,7 +157,7 @@ export function CardTerminalView({
   // A member has been given this card to work on, not the install around it: the account pill reads
   // the owner's accounts and plan usage, and switching it is a `PATCH` with `accountSlug` — all
   // three answer 403 to anybody else. So a member gets the MODEL pill and no account pill at all.
-  const { isOwner } = useAuth();
+  const { isOwner, user } = useAuth();
   const isMobile = useIsMobile();
   const queryClient = useQueryClient();
   const boardKey = cardsKey(project.id);
@@ -674,6 +676,47 @@ export function CardTerminalView({
   );
 
   /**
+   * O "Preparando…" de um card que vai abrir no CHAT NATIVO. Lá quem fala com o Claude é o driver
+   * do SDK, filho do back — não o painel do tmux. O outbox do servidor entrega DIGITANDO no tmux, e
+   * a mensagem caía no Claude do terminal, uma sessão que o chat nativo não mostra: o card abria e
+   * ela tinha sumido (produção, 2026-11-10). Aqui ela espera na fila do próprio chat
+   * (lib/sdkQueue.ts, no localStorage), que ele lê ao montar e entrega quando estiver pronto.
+   *
+   * Sem o flag da instalação ainda (cache frio) não se escolhe no escuro: o Enter falha e o texto
+   * fica no campo.
+   */
+  const nativeChatPending = mode === "chat" && features.data?.sdkChat !== false;
+  const [chatQueue, setChatQueue] = React.useState<QueuedMessage[]>(() => readQueue(cardId));
+  React.useEffect(() => setChatQueue(readQueue(cardId)), [cardId]);
+  const queueForNativeChat = React.useCallback(
+    async (text: string) => {
+      if (features.data === undefined) {
+        toast.error(translate("outbox.sendError"));
+        throw new Error(translate("outbox.sendError"));
+      }
+      const body = text.trim();
+      if (!body) return;
+      const next = enqueue(readQueue(cardId), {
+        id: newQueueId(),
+        text: body,
+        at: Date.now(),
+        ...(user ? { from: personOrigin(user) } : {}),
+      });
+      writeQueue(cardId, next);
+      setChatQueue(next);
+    },
+    [cardId, features.data, user],
+  );
+  const removeFromChatQueue = React.useCallback(
+    (id: string) => {
+      const next = dequeue(readQueue(cardId), id);
+      writeQueue(cardId, next);
+      setChatQueue(next);
+    },
+    [cardId],
+  );
+
+  /**
    * A phone opens this screen as a FIXED page: the document must not scroll, because the thing that
    * should scroll is the terminal's own viewport, and a scrollable document steals the touch. The
    * class goes on `<html>` while the card is open and comes off when it closes or the window grows.
@@ -1186,12 +1229,16 @@ export function CardTerminalView({
               {t("cardView.firstCardNote")}
             </p>
           </div>
-          <CardOutbox cardId={cardId} />
+          {nativeChatPending ? (
+            chatQueue.length > 0 ? <SdkQueueTray queue={chatQueue} onRemove={removeFromChatQueue} /> : null
+          ) : (
+            <CardOutbox cardId={cardId} />
+          )}
           <TerminalComposer
             className="mt-1.5"
             cardId={cardId}
             active={active}
-            onSend={sendMessage}
+            onSend={nativeChatPending ? queueForNativeChat : sendMessage}
             onUploadImage={uploadAttachment}
           />
         </div>

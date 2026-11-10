@@ -10,6 +10,7 @@ import { get, patch, post } from "@/lib/api";
 import { cardsKey, type BoardCard, type BoardProject } from "@/features/board/api";
 import { writeCardMode, type CardViewMode } from "@/features/board/lib/chat";
 import { MOBILE_QUERY } from "@/lib/useIsMobile";
+import { readQueue } from "@/features/board/lib/sdkQueue";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -44,9 +45,11 @@ vi.mock("@/features/board/components/XTerminal", () => ({
 // thing on screen, and that the terminal is NOT (the whole point of switching is dropping that socket).
 // It carries the REAL composer, because the composer is the one thing the two panes share — and
 // what a half-written message survives is exactly the swap between them.
-vi.mock("@/features/board/components/ChatView", async () => {
+vi.mock("@/features/board/components/ChatView", async (importOriginal) => {
   const { TerminalComposer } = await import("@/features/board/components/TerminalComposer");
   return {
+    // The rest of the module (LinkifiedText) stays real: the queue tray renders with it.
+    ...(await importOriginal<typeof import("@/features/board/components/ChatView")>()),
     ChatView: ({ cardId, working, active, footer }: { cardId: string; working: boolean; active?: boolean; footer?: ReactNode }) => (
       <div data-testid="chat" data-card={cardId} data-working={String(working)}>
         {footer}
@@ -353,6 +356,36 @@ describe("CardTerminalView — which chat the Chat tab mounts (the INSTALL flag,
     renderWithCache([card({ openedAt: 10 })], testQueryClient(), "chat");
     expect(await screen.findByTestId("sdk-chat")).toBeInTheDocument();
     expect(screen.queryByTestId("claude-stopped-banner")).toBeNull();
+  });
+
+  // Produção, 2026-11-10: mensagem colada durante o "Preparando…" de um card recém-criado foi pro
+  // outbox do SERVIDOR, que a digitou no Claude do tmux — outra sessão, que o chat nativo não
+  // mostra. Quando o card abriu, ela tinha sumido. No chat nativo ela espera na fila DO CHAT.
+  it("no chat nativo, a mensagem escrita durante o 'Preparando…' espera na fila do chat, não no outbox do tmux", async () => {
+    serveFeaturesOn();
+    let resolveOpen: (value: unknown) => void = () => {};
+    mockPost.mockImplementation(() => new Promise((resolve) => (resolveOpen = resolve)));
+    renderWithCache([card({ column: "backlog" })], testQueryClient(), "chat");
+    await screen.findByText(/Preparing the worktree and session/i);
+    await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/features"));
+
+    const box = screen.getByTestId("terminal-composer").querySelector("textarea") as HTMLTextAreaElement;
+    await userEvent.type(box, "comece pelo schema{Enter}");
+
+    expect(await screen.findByTestId("sdk-queue")).toHaveTextContent(/comece pelo schema/);
+    expect(mockPost).not.toHaveBeenCalledWith("/cards/c1/messages", expect.anything());
+    expect(readQueue("c1").map((m) => [m.text, m.from?.name])).toEqual([["comece pelo schema", "operator"]]);
+
+    // O X ainda tira da fila antes de o chat abrir.
+    await userEvent.click(screen.getByTestId("sdk-queued-remove"));
+    expect(screen.queryByTestId("sdk-queue")).toBeNull();
+    expect(readQueue("c1")).toEqual([]);
+
+    await userEvent.type(box, "segunda{Enter}");
+    resolveOpen({ card: card({ openedAt: 99 }) });
+    // O chat nativo assume e encontra a mensagem na fila dele — é ele quem a entrega.
+    expect(await screen.findByTestId("sdk-chat")).toBeInTheDocument();
+    expect(readQueue("c1").map((m) => m.text)).toEqual(["segunda"]);
   });
 
   it("…mas na aba Terminal, onde se digita NO painel, o aviso continua", async () => {
