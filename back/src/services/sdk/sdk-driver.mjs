@@ -1501,11 +1501,15 @@ async function clearUltra() {
     // actually set are cleared: an `ultrathink` turn never touches `ultracode`.
     // EXCEPT the card's own level: clearing the flag does NOT bring `--effort` back (measured on
     // the real CLI, SDK 0.3.300: --effort low → flag max → flag null left the session on `medium`).
-    // So a card that pinned a level gets that level written back instead of a null.
-    const give = {};
-    for (const key of Object.keys(raised)) give[key] = null;
-    if ("effortLevel" in give && EFFORT) give.effortLevel = EFFORT;
-    await handle.applyFlagSettings(give);
+    // So a card that pinned a level gets that level written back instead of a null. And a card
+    // with NO level goes back to the ACCOUNT's (restoreAccountEffort): the null alone lands on the
+    // model's default, skipping the settings' effortLevel.
+    const { effortLevel: _nivelDaPalavra, ...outrasChaves } = raised;
+    const give = Object.fromEntries(Object.keys(outrasChaves).map((key) => [key, null]));
+    const devolveNivel = "effortLevel" in raised;
+    if (devolveNivel && EFFORT) give.effortLevel = EFFORT;
+    if (Object.keys(give).length > 0) await handle.applyFlagSettings(give);
+    if (devolveNivel && !EFFORT) await restoreAccountEffort(handle);
   } catch { /* the stream is gone, and a dead stream has no effort to give back */ }
 }
 

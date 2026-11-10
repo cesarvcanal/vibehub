@@ -868,6 +868,22 @@ describe("sdk-driver.mjs — a inteligência do card sobrevive ao ultrathink", (
     await driver.waitFor((e) => e.type === "result");
     await driver.waitMark('flags:{"effortLevel":null}');
   }, 60_000);
+
+  it("sem inteligência no card e com nível nos settings da CONTA, a devolução volta a ele, não ao padrão do modelo", async () => {
+    // O null sozinho leva ao padrão do MODELO e ignora os settings (medido no SDK 0.3.300, 29/10):
+    // um card sem pin numa conta em `high` saía de um turno ultrathink em `medium`.
+    await writeFile(join(sandbox, "account-effort"), "high");
+    const driver = startDriver();
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "pensa nisso ultrathink" });
+    await driver.waitFor((e) => e.type === "result");
+    await driver.waitMark('flags:{"effortLevel":"high"}');
+    expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual([
+      'flags:{"effortLevel":"max"}',
+      'flags:{"effortLevel":null}',
+      'flags:{"effortLevel":"high"}',
+    ]);
+  }, 60_000);
 });
 
 /**

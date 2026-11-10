@@ -487,7 +487,7 @@ describe("sdk-driver.mjs — ultrathink / ultracode", () => {
     // A devolução limpa SÓ o que o driver fixou: um turno com `ultrathink` não pode desligar um
     // `ultracode` que a sessão já tinha.
     expect(source).toContain("ultraRaised = settings;");
-    expect(source).toContain("for (const key of Object.keys(raised)) give[key] = null;");
+    expect(source).toContain("const give = Object.fromEntries(Object.keys(outrasChaves).map((key) => [key, null]));");
     expect(source).toContain("await handle.applyFlagSettings(give);");
   });
 
