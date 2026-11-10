@@ -1082,6 +1082,33 @@ export function uploadServedInline(contentType: string): boolean {
   return contentType !== UPLOAD_DOWNLOAD_TYPE;
 }
 
+/**
+ * The slice a `Range` header asks of an upload of `size` bytes: `{ start, end }` (inclusive), or
+ * `"unsatisfiable"` (416), or `null` to serve the whole file with 200.
+ *
+ * Why the route speaks Range at all: an attached voice note came back as `0:00 / 0:00` with a dead
+ * seek bar, and Safari would not play it. An Ogg has no duration in its header — the browser reads
+ * it from the LAST page, asking for it with a suffix range (`bytes=-N`); answered with the whole file
+ * it gives up on the duration, and Safari refuses media that is not served by range at all. Only one
+ * range is honoured: a multi-range request may be answered whole, which RFC 9110 allows. PURE, TOTAL.
+ */
+export function uploadByteRange(
+  header: string | undefined,
+  size: number,
+): { start: number; end: number } | "unsatisfiable" | null {
+  const m = /^bytes=(\d*)-(\d*)$/.exec(String(header ?? "").trim());
+  if (!m || (m[1] === "" && m[2] === "")) return null;
+  if (m[1] === "") {
+    const suffix = Number(m[2]);
+    if (suffix === 0 || size === 0) return "unsatisfiable";
+    return { start: Math.max(0, size - suffix), end: size - 1 };
+  }
+  const start = Number(m[1]);
+  const end = m[2] === "" ? size - 1 : Math.min(Number(m[2]), size - 1);
+  if (start >= size || end < start) return "unsatisfiable";
+  return { start, end };
+}
+
 /** Heredoc delimiter of the upload-read script — a reserved word, never derived from input. */
 const READ_DELIM = "VIBEHUB_READ";
 

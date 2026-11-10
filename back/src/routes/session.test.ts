@@ -293,6 +293,27 @@ describe("card lifecycle routes", () => {
     expect(res.statusCode).toBe(401);
   });
 
+  it("serve um pedaço do anexo com Range (206), que é o que faz o áudio ter duração e tocar no Safari", async () => {
+    const id = await makeCard();
+    const body = Buffer.from("0123456789");
+    const url = `/api/cards/${id}/uploads/1794341151810-cesar01.ogg`;
+    for (let i = 0; i < 3; i++) readCardUpload.mockResolvedValueOnce({ body, contentType: "audio/ogg" });
+
+    const inteiro = await app.inject({ method: "GET", url, headers: { cookie } });
+    expect(inteiro.statusCode).toBe(200);
+    expect(inteiro.headers["accept-ranges"]).toBe("bytes");
+
+    const fim = await app.inject({ method: "GET", url, headers: { cookie, range: "bytes=-3" } });
+    expect(fim.statusCode).toBe(206);
+    expect(fim.headers["content-range"]).toBe("bytes 7-9/10");
+    expect(fim.headers["content-type"]).toBe("audio/ogg");
+    expect(fim.rawPayload.toString()).toBe("789");
+
+    const fora = await app.inject({ method: "GET", url, headers: { cookie, range: "bytes=10-" } });
+    expect(fora.statusCode).toBe(416);
+    expect(fora.headers["content-range"]).toBe("bytes */10");
+  });
+
   it("404s an upload that is not there — the chat falls back to printing the path", async () => {
     const id = await makeCard();
     readCardUpload.mockRejectedValueOnce(new Error("upload not found"));

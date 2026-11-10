@@ -1595,6 +1595,24 @@ describe("image upload into the card", () => {
     expect(ws.uploadServedInline("image/png")).toBe(true);
   });
 
+  it("Range de um anexo: os três formatos de faixa única, o que não dá para servir e o que se ignora", () => {
+    expect(ws.uploadByteRange(undefined, 100)).toBeNull();
+    expect(ws.uploadByteRange("bytes=0-9", 100)).toEqual({ start: 0, end: 9 });
+    expect(ws.uploadByteRange("bytes=0-", 100)).toEqual({ start: 0, end: 99 });
+    // O sufixo é o que o navegador pede para achar a duração de um ogg: os últimos N bytes.
+    expect(ws.uploadByteRange("bytes=-10", 100)).toEqual({ start: 90, end: 99 });
+    expect(ws.uploadByteRange("bytes=-500", 100)).toEqual({ start: 0, end: 99 });
+    // Fim além do arquivo é cortado no último byte (RFC 9110 §14.1.2).
+    expect(ws.uploadByteRange("bytes=50-1000", 100)).toEqual({ start: 50, end: 99 });
+    expect(ws.uploadByteRange("bytes=100-", 100)).toBe("unsatisfiable");
+    expect(ws.uploadByteRange("bytes=-0", 100)).toBe("unsatisfiable");
+    expect(ws.uploadByteRange("bytes=9-3", 100)).toBe("unsatisfiable");
+    // Várias faixas ou unidade estranha: o arquivo inteiro com 200, que a RFC permite.
+    expect(ws.uploadByteRange("bytes=0-1,5-9", 100)).toBeNull();
+    expect(ws.uploadByteRange("items=0-9", 100)).toBeNull();
+    expect(ws.uploadByteRange("bytes=-", 100)).toBeNull();
+  });
+
   it("áudio anexado volta com o tipo de áudio, inline, para tocar no chat", () => {
     expect(ws.uploadContentType("1790375878344-voz.ogg")).toBe("audio/ogg");
     expect(ws.uploadContentType("1790375878344-ptt.opus")).toBe("audio/ogg");
