@@ -1765,6 +1765,19 @@ describe("doneAt — the stamp of entering (and leaving) Done", () => {
     expect(back.doneAt).toBeUndefined();
   });
 
+  it("the move to Done is ONE instant: doneAt and updatedAt match even when the clock ticks mid-mutation", async () => {
+    const { card } = await seedCard();
+    // Every Date.now() a millisecond later than the previous one: the worst case of a busy CI box.
+    let clock = 1_800_000_000_000;
+    const now = vi.spyOn(Date, "now").mockImplementation(() => (clock += 1));
+    try {
+      const done = await reg.updateCard(card.id, { column: "done" });
+      expect(done.updatedAt).toBe(done.doneAt);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("a move INSIDE Done (reordering) does not restart the clock", async () => {
     const { project, card } = await seedCard();
     const other = await reg.createCard({ projectId: project.id, title: "Outra" });
