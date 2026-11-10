@@ -9,7 +9,7 @@ import { resolveIdentity } from "../github/identity.js";
 import { getUserGit } from "../../auth/userGit.js";
 import { getSettings } from "../settings/settings.js";
 import { assertGhToken } from "../accounts/token.js";
-import { runGate, cleanOutput, type GateResult } from "./gate.js";
+import { runGate, cleanOutput, FULL_SHA_RE, type GateResult } from "./gate.js";
 import { activeReviewFor } from "../review/store.js";
 import {
   validatePrDocs, canOpenPr, undocumentedOutput, freshComments, reviewPayload,
@@ -151,9 +151,6 @@ export interface DeliverOpts {
 
 const MARKER = "__VIBEHUB_DELIVER__";
 const CI_MARKER = "__VIBEHUB_CI__";
-
-/** A full commit sha (SHA-1, or SHA-256 in a repo that uses it): an abbreviated one could match two commits. */
-const FULL_SHA_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
 
 /** How often the CI checks are re-read while some are still running. */
 export const CI_POLL_SECONDS = 20;
@@ -972,17 +969,21 @@ async function ciGate(
 /**
  * The gate a merge-only delivery would run, on its own: the CI of `sha` when the PR has CI, the local
  * gate of the card's worktree otherwise. What the PR review runs as soon as it becomes ready, so the
- * merge button already knows the verdict (and a green one is not run again: `gatePassed`). Throws when
- * the card or its project is gone, or the runner failed — a gate that did not run is not green.
+ * merge button already knows the verdict (and a green one is not run again: `gatePassed`). The local
+ * gate is held to `sha`: the author's worktree off that commit, or with anything uncommitted, is red —
+ * its green was recorded as the reviewed commit's while it tested other code. Throws when the sha is
+ * not a full one, the card or its project is gone, or the runner failed — a gate that did not run is
+ * not green.
  */
 export async function gateAtCommit(cardId: string, prUrl: string, sha: string): Promise<GateResult> {
+  if (!FULL_SHA_RE.test(sha)) throw new Error("gateAtCommit requires the full sha of the reviewed commit");
   const card = await getCard(cardId);
   if (!card) throw new Error("card not found");
   const project = await getProject(card.projectId);
   if (!project) throw new Error("project for this card not found");
   const { cwd } = cardWorkPaths(project, card);
   const token = await cardConnectionToken(card, project);
-  return (await ciGate(config.runner.container, card.id, token, cwd, prUrl, sha)) ?? (await runGate(card.id));
+  return (await ciGate(config.runner.container, card.id, token, cwd, prUrl, sha)) ?? (await runGate(card.id, { expectedSha: sha }));
 }
 
 /** The PR number out of its URL (`.../pull/123`); null when the URL is not a pull request's. PURE. */
@@ -1171,12 +1172,14 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
 
   // (c) the gate — the PR's CI when it has one, the local gate otherwise. A gate that errors
   // (runner blip) blocks the merge — deploying past an unknown state is worse than trying again.
-  // Merge-only reads the CI of the REVIEWED commit (nothing was pushed, the worktree's HEAD is not it).
+  // Merge-only reads the CI of the REVIEWED commit (nothing was pushed, the worktree's HEAD may not be
+  // it), and without CI holds the local gate to that commit.
   let gate: GateResult;
   try {
     gate = mergeOnly && opts.gatePassed
       ? { ran: false, passed: true, output: "" }
-      : (await ciGate(container, card.id, token, cwd, prUrl, mergeOnly ? expectedHead : undefined)) ?? (await runGate(card.id));
+      : (await ciGate(container, card.id, token, cwd, prUrl, mergeOnly ? expectedHead : undefined)) ??
+        (await runGate(card.id, mergeOnly ? { expectedSha: expectedHead } : {}));
   } catch (err) {
     logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "gate could not run — treating as red");
     return { prUrl, merged: false, reason: "gate", branch: target, cardBranch: source, ...lock, ...commented, output: (err as Error).message };
