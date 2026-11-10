@@ -401,9 +401,20 @@ async function usageFor(slug: string | undefined): Promise<{ result: AccountUsag
   if (result.error === "rate_limited") {
     const strikes = entry.strikes + 1;
     const blockedUntil = now + backoffMs(strikes);
+    logger.warn({ action: "account.usage", account: key, strikes, blockedUntil }, "usage endpoint rate-limited");
+    // Throttled with nothing to show — every deploy empties this cache, so the first poll after one
+    // used to paint "sem leitura" for the whole back-off. The inference headers are not throttled
+    // with the endpoint, and the login's own token carries `user:inference`.
+    if (!entry.good && token) {
+      const probeToken = (await resolveAccountToken(key).catch(() => undefined)) ?? token;
+      const probed = await probeViaInference(probeToken, now);
+      if (probed.available) {
+        cache.set(key, { good: probed, last: probed, freshUntil: now + PROBE_FRESH_MS, strikes, blockedUntil });
+        return { result: probed, called: true };
+      }
+    }
     const served = entry.good ? stale(entry.good, "rate_limited", blockedUntil) : { ...result, retryAt: blockedUntil };
     cache.set(key, { ...entry, last: served, freshUntil: 0, strikes, blockedUntil });
-    logger.warn({ action: "account.usage", account: key, strikes, blockedUntil }, "usage endpoint rate-limited");
     return { result: served, called: true };
   }
 
