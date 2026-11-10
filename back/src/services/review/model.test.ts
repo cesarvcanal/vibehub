@@ -179,6 +179,17 @@ describe("autoMergeEligible", () => {
     expect(autoMergeEligible({ ...ready([]), phase: "reviewing" })).toBe(false);
     expect(autoMergeEligible({ ...ready([]), reviewedSha: undefined })).toBe(false);
   });
+
+  it("merge já autorizado por quem mergeia: sugestão em pé não segura mais; bloqueante e dúvida seguram", () => {
+    const authorized = (findings: Finding[]): Review => ({ ...ready(findings), mergeAuthorized: true });
+    expect(autoMergeEligible(authorized([finding({ severity: "suggestion" })]))).toBe(true);
+    expect(autoMergeEligible(authorized([finding({ severity: "suggestion", status: "contested" })]))).toBe(true);
+    expect(autoMergeEligible(authorized([finding()]))).toBe(false);
+    expect(autoMergeEligible(authorized([finding({ status: "contested" })]))).toBe(false);
+    expect(autoMergeEligible(authorized([finding({ severity: "question" })]))).toBe(false);
+    expect(autoMergeEligible({ ...authorized([]), approvePending: true })).toBe(false);
+    expect(autoMergeEligible({ ...authorized([]), phase: "fixing" })).toBe(false);
+  });
 });
 
 describe("requested — o pedido ao autor acaba quando o achado muda de mão (f10)", () => {

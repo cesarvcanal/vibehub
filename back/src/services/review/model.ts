@@ -113,6 +113,14 @@ export interface Review {
    * não é tentado de novo e os textos voltam a dizer "merge pelo botão"; uma rodada nova zera o efeito.
    */
   autoMergeFailedRound?: number;
+  /**
+   * Quem mergeia JÁ deu a ordem do merge ao pedir a revisão ("terminando pode mergear"): não há a quem
+   * esperar para dizer "pode mergear", então uma sugestão em pé não segura o merge automático (ela é
+   * opcional por definição). Bloqueante, dúvida, Approve fora do GitHub, CI e conflito seguem segurando.
+   */
+  mergeAuthorized?: boolean;
+  /** A mesma ordem pediu para concluir o card: mergeada a revisão, o card do autor vai para `done`. */
+  concludeWhenMerged?: boolean;
   lastSubmitRound?: number;
   lastRespondRound?: number;
   nudges: number;
@@ -267,11 +275,13 @@ export function canMergeReview(
  * em pé, de nenhuma severidade — bloqueante, dúvida ou sugestão aberta/contestada. Sugestão não segura
  * o `ready`, mas segura o merge automático: ela é justamente o que alguém pode querer aplicar antes.
  * Sem isso o PR ficava "pronto pra merge" esperando alguém voltar ao card só para dizer "pode mergear".
+ * Com o merge já autorizado (`mergeAuthorized`) essa pessoa já disse: a sugestão em pé não segura.
  * PURE.
  */
 export function autoMergeEligible(review: Review): boolean {
+  const holds = (f: Finding): boolean => isOpen(f) && !(review.mergeAuthorized && f.severity === "suggestion");
   return (
-    review.phase === "ready" && !!review.reviewedSha && !review.findings.some(isOpen) &&
+    review.phase === "ready" && !!review.reviewedSha && !review.findings.some(holds) &&
     // Approve que não chegou ao GitHub: o PR segue com o "changes requested" da rodada 1 — o merge
     // automático não passa por cima disso; o "tentar de novo" do painel publica e o merge sai depois.
     !review.approvePending &&
