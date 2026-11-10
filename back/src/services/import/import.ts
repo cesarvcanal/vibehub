@@ -2,7 +2,7 @@ import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.
 import { config } from "../../config/env.js";
 import { runnerStatus } from "../../runtime/runner.js";
 import {
-  listProjects, createProject, listCards, createCard, updateCard,
+  listProjects, createProject, listCards, createCard,
   effectiveAccountSlug, assertSessionId,
   BOARD_COLUMNS, type BoardColumn, type Card, type Project,
 } from "../board/registry.js";
@@ -226,19 +226,15 @@ export async function importSessions(
 
       const sessionId = assertSessionId(item.sessionId);
 
-      // b) Card: reuse the one already carrying this session id, otherwise create and patch it.
+      // b) Card: reuse the one already carrying this session id, otherwise create it with every
+      //    field in ONE validated mutation. Creating first and patching after left a bare card
+      //    behind whenever the patch was refused (a bad branch), and since that card never got its
+      //    session id, the idempotency lookup above missed it and every re-send added another.
       const existing = (await listCards(project.id)).find((c) => c.resumeSessionId === sessionId);
-      let card: Card;
-      if (existing) {
-        card = existing;
-      } else {
-        card = await createCard({ projectId: project.id, title: item.title });
-        card = await updateCard(card.id, {
-          resumeSessionId: sessionId,
-          branch: item.branch ?? null,
-          column: item.column ?? IMPORT_COLUMN,
-        });
-      }
+      const card: Card = existing ?? await createCard(
+        { projectId: project.id, title: item.title },
+        { resumeSessionId: sessionId, branch: item.branch ?? null, column: item.column ?? IMPORT_COLUMN },
+      );
       r.cardId = card.id;
 
       // c) Destination: the `projects` directory of the card's EFFECTIVE profile, derived from the
