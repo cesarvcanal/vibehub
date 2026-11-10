@@ -1281,17 +1281,25 @@ function closeTurnAborted() {
 // Uma linha por compactação: o CLI repete o status "compacting" enquanto trabalha, e a tela só
 // precisa saber que começou e como acabou.
 let compacting = false;
+// A pessoa mandou `/compact`: a próxima compactação é a dela ("manual"). O status do CLI não diz o
+// gatilho — só o `compact_boundary` do FIM diz —, e a barra precisa do título certo desde o início.
+let compactRequested = false;
+
+function noteCompactRequest(text) {
+  if (/^\/compact(?:\s|$)/.test(String(text).trim())) compactRequested = true;
+}
 
 function compactionStarted() {
   if (compacting) return;
   compacting = true;
-  emit({ type: "compaction", phase: "started" });
+  emit({ type: "compaction", phase: "started", trigger: compactRequested ? "manual" : "auto" });
 }
 
 /** Fecha a linha. Um `done` vale mesmo sem `started` (o CLI pode compactar sem anunciar o status). */
 function compactionEnded(frame) {
   if (!compacting && frame.phase === "failed") return;
   compacting = false;
+  compactRequested = false;
   emit({ type: "compaction", ...frame });
 }
 
@@ -1898,6 +1906,7 @@ rl.on("line", (line) => {
     serialized(async () => {
       await reanchorIfStale();
       await reauthIfChanged();
+      noteCompactRequest(control.text);
       if (control.now === true) await sendUserNow(control.text);
       else sendUser(control.text);
       // A resposta tardia a um cartão já fechado (o back marca) não leva a pergunta seguinte junto.

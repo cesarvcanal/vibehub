@@ -794,7 +794,7 @@ describe("sdk-driver.mjs — compactação", () => {
     driver.send({ type: "user", text: "/compact" });
     await driver.waitFor((e) => e.type === "result", from);
     expect(compactions(driver.events.slice(from))).toEqual([
-      { type: "compaction", phase: "started" },
+      { type: "compaction", phase: "started", trigger: "manual" },
       { type: "compaction", phase: "done", trigger: "manual", preTokens: 180000, postTokens: 22000, durationMs: 14000 },
     ]);
   });
@@ -806,7 +806,7 @@ describe("sdk-driver.mjs — compactação", () => {
     await driver.waitFor((e) => e.type === "result", from);
     const after = driver.events.slice(from);
     expect(compactions(after)).toEqual([
-      { type: "compaction", phase: "started" },
+      { type: "compaction", phase: "started", trigger: "auto" },
       { type: "compaction", phase: "done", trigger: "auto", preTokens: 190000 },
     ]);
     expect(after.some((e) => e.type === "assistant_text" && e.text === "segui")).toBe(true);
@@ -818,7 +818,7 @@ describe("sdk-driver.mjs — compactação", () => {
     driver.send({ type: "user", text: "/compact fail" });
     await driver.waitFor((e) => e.type === "result", from);
     expect(compactions(driver.events.slice(from))).toEqual([
-      { type: "compaction", phase: "started" },
+      { type: "compaction", phase: "started", trigger: "manual" },
       { type: "compaction", phase: "failed", error: "Not enough messages to compact." },
     ]);
   });
