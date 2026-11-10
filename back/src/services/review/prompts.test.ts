@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Finding, Review } from "./model.js";
-import { authorSuggestionsPrompt, reviewerRoundPrompt } from "./prompts.js";
+import { authorSuggestionsPrompt, phaseNoticeText, reviewerApprovePrompt, reviewerRoundPrompt } from "./prompts.js";
 
 function review(findings: Finding[] = []): Review {
   return {
@@ -50,5 +50,21 @@ describe("prompts da revisão: achado explicado", () => {
       id: "f1", severity: "suggestion", title: "t", status: "open", introducedInRound: 1, requested: { by: "mussa", at: 1 },
     };
     expect(authorSuggestionsPrompt(review([f]), [f], { by: "mussa" })).toContain("- f1 [suggestion, aberto, pedida ao autor por mussa] t");
+  });
+});
+
+describe("merge autorizado com sugestão em pé: os textos não dizem 'nada em aberto'", () => {
+  const suggestion: Finding = { id: "f1", severity: "suggestion", title: "renomear", status: "open", introducedInRound: 1 };
+  const ready = (r: Partial<Review> = {}): Review => ({ ...review([suggestion]), phase: "ready", reviewedSha: "a".repeat(40), ...r });
+
+  it("aviso de fase e prompt do Approve contam as sugestões que não seguram", () => {
+    const r = ready({ mergeAuthorized: true });
+    expect(phaseNoticeText(r)).toMatch(/merge autorizado por quem mergeia; 1 sugestão em aberto não segura/);
+    expect(phaseNoticeText(r)).not.toMatch(/nada em aberto/);
+    expect(reviewerApprovePrompt(r)).toMatch(/merge autorizado por quem mergeia; 1 sugestão em aberto não segura/);
+  });
+
+  it("sem sugestão em pé, o texto de sempre", () => {
+    expect(phaseNoticeText({ ...ready({ mergeAuthorized: true }), findings: [] })).toMatch(/nada em aberto/);
   });
 });

@@ -1,4 +1,4 @@
-import { autoMergeEligible, MAX_ROUNDS, pendingQuestions, type Finding, type FindingStatus, type Review } from "./model.js";
+import { autoMergeEligible, waivedText, MAX_ROUNDS, pendingQuestions, type Finding, type FindingStatus, type Review } from "./model.js";
 
 /**
  * TEXTOS DA REVISÃO DE PR — o que o orquestrador digita no card do revisor e no do autor.
@@ -360,7 +360,7 @@ export function reviewerApprovePrompt(r: Review): string {
   return [
     header(r),
     autoMergeEligible(r)
-      ? "A revisão terminou sem nada em aberto: depois do seu Approve, o PAINEL mergeia sozinho (não você)."
+      ? `A revisão terminou ${waivedText(r) ? `sem bloqueante (${waivedText(r)})` : "sem nada em aberto"}: depois do seu Approve, o PAINEL mergeia sozinho (não você).`
       : "A revisão terminou sem bloqueante em aberto: o PR está pronto para o merge HUMANO.",
     rules(),
     "",
@@ -406,7 +406,7 @@ export function phaseNoticeText(r: Review): string {
   switch (r.phase) {
     case "ready":
       return autoMergeEligible(r)
-        ? `PR #${r.prNumber}: revisão pronta (${at}) — nada em aberto; o merge sai sozinho.`
+        ? `PR #${r.prNumber}: revisão pronta (${at}) — ${waivedText(r) ?? "nada em aberto"}; o merge sai sozinho.`
         : `PR #${r.prNumber}: revisão pronta (${at}) — sem bloqueante em aberto; o merge é do responsável.`;
     case "impasse":
       return `PR #${r.prNumber}: revisão em impasse (${at}) — ${impasseText(r.impasseReason)}.`;
