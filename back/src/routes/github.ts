@@ -85,8 +85,7 @@ export async function githubRoutes(app: FastifyInstance): Promise<void> {
     { preHandler: requireOwner },
     async (req, reply) => {
       try {
-        const branches = await github.listBranches(req.query?.connection ?? "", req.params.owner, req.params.repo);
-        return await reply.send({ branches });
+        return await reply.send(await github.listBranches(req.query?.connection ?? "", req.params.owner, req.params.repo));
       } catch (err) {
         const { code, body } = failure(err);
         return await reply.code(code).send(body);

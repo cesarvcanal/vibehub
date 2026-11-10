@@ -17,7 +17,6 @@ import {
   DEFAULT_ACCOUNT_SLUG,
   accountLabel,
   boardApi,
-  githubBranchesKey,
   projectAccountSlug,
   projectBaseBranch,
   splitRepo,
@@ -25,6 +24,9 @@ import {
   type BoardProject,
 } from "@/features/board/api";
 import { pillPercent } from "@/features/board/lib/usage";
+import { useBranchesDoRepo } from "@/features/board/lib/useBranchesDoRepo";
+import { manterDialogoNoEscDoSeletor } from "@/features/board/lib/useSeletorBranch";
+import SeletorBranch from "@/features/board/components/SeletorBranch";
 import type { NewCard } from "@/api/types";
 import { useT } from "@/i18n";
 
@@ -126,13 +128,13 @@ export function NewCardDialog({
    */
   const { owner, repo: repoName } = splitRepo(selectedProject?.repoFullName ?? "");
   const connection = selectedProject?.githubConnectionId ?? "";
-  const { data: branches } = useQuery({
-    queryKey: githubBranchesKey(connection, owner ?? "", repoName ?? ""),
-    queryFn: () => boardApi.githubBranches(connection, owner as string, repoName as string),
-    enabled: open && showOptions && Boolean(owner && repoName),
-    staleTime: 60_000,
-    retry: false,
+  const branchesDoRepo = useBranchesDoRepo({
+    connection,
+    owner,
+    repo: repoName,
+    habilitado: open && showOptions,
   });
+  const { branches } = branchesDoRepo;
 
   /**
    * What is wrong with the branch the card would be created ON, if anything. Three answers, and
@@ -216,7 +218,7 @@ export function NewCardDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent className="max-h-[90vh] max-w-md overflow-y-auto">
+      <DialogContent className="max-h-[90vh] max-w-md overflow-y-auto" onEscapeKeyDown={manterDialogoNoEscDoSeletor}>
         <DialogHeader>
           <DialogTitle>{t("newCard.title")}</DialogTitle>
           <DialogDescription>
@@ -314,19 +316,19 @@ export function NewCardDialog({
               <div className="space-y-1.5">
                 <Label htmlFor="new-card-base">{t("newCard.base")}</Label>
                 {branches?.length ? (
-                  <select
+                  <SeletorBranch
                     id="new-card-base"
-                    className={SELECT_CLASS}
-                    value={base}
-                    onChange={(e) => setBase(e.target.value)}
-                  >
-                    <option value="">{t("newCard.baseInherit", { branch: defaultBranch ?? "" })}</option>
-                    {branches.map((b) => (
-                      <option key={b} value={b}>
-                        {b}
-                      </option>
-                    ))}
-                  </select>
+                    valor={base}
+                    aoEscolher={setBase}
+                    branches={branches}
+                    branchPadrao={branchesDoRepo.branchPadrao}
+                    atualizando={branchesDoRepo.atualizando}
+                    falhouAoAtualizar={branchesDoRepo.falhou}
+                    truncada={branchesDoRepo.truncada}
+                    aoAbrir={branchesDoRepo.atualizarSeVelha}
+                    aoAtualizar={branchesDoRepo.forcarAtualizacao}
+                    rotuloSemEscolha={t("newCard.baseInherit", { branch: defaultBranch ?? "" })}
+                  />
                 ) : (
                   <Input
                     id="new-card-base"

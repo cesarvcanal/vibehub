@@ -337,7 +337,7 @@ describe("github connections (multiple accounts)", () => {
     const branches = await app.inject({
       method: "GET", url: `/api/github/repos/acme-inc/erp/branches?connection=${org.id}`, headers: { cookie },
     });
-    expect(branches.json().branches).toEqual(["dev", "prod"]);
+    expect(branches.json()).toEqual({ branches: ["dev", "prod"], defaultBranch: "dev", truncada: false });
     expect(seen.every((h) => h === "Bearer ghp_org")).toBe(true);
   });
 

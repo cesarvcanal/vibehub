@@ -276,6 +276,14 @@ export interface GithubRepo {
   updatedAt: string;
 }
 
+/** `GET /api/github/repos/:owner/:repo/branches` — todas as branches, a padrão primeiro. */
+export interface GithubBranches {
+  branches: string[];
+  defaultBranch: string | null;
+  /** O repo tem mais branches do que o back lê; a lista veio cortada. */
+  truncada: boolean;
+}
+
 /* ------------------------------------------------------- projects & cards */
 
 /**
