@@ -1,9 +1,12 @@
 import type { BranchClassificada, DestaqueBranch } from "@/features/board/types/branches";
 
+/** Branches de desenvolvimento que servem de base de projeto; staging/homolog só ganham destaque. */
+const NOMES_DESENVOLVIMENTO_BASE = ["dev", "develop", "development"] as const;
+
 const NOMES_POR_DESTAQUE: Record<Exclude<DestaqueBranch, "padrao">, readonly string[]> = {
   producao: ["prod", "production", "producao"],
   principal: ["main", "master"],
-  desenvolvimento: ["dev", "develop", "development", "staging", "homolog"],
+  desenvolvimento: [...NOMES_DESENVOLVIMENTO_BASE, "staging", "homolog"],
 };
 
 const DESTAQUES_POR_NOME = ["producao", "principal", "desenvolvimento"] as const;
@@ -30,7 +33,7 @@ export function classificarBranches(
 
 /** Branch base para um projeto novo: a de desenvolvimento, senão main/master, senão a padrão do repo. */
 export function branchBaseSugerida(branches: readonly string[], branchPadrao: string | null): string | undefined {
-  const preferidas = [...NOMES_POR_DESTAQUE.desenvolvimento, ...NOMES_POR_DESTAQUE.principal];
+  const preferidas = [...NOMES_DESENVOLVIMENTO_BASE, ...NOMES_POR_DESTAQUE.principal];
   return preferidas.find((nome) => branches.includes(nome)) ?? branchPadrao ?? branches[0];
 }
 

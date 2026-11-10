@@ -51,6 +51,11 @@ describe("branchBaseSugerida", () => {
     expect(branchBaseSugerida(["trunk", "feat/x"], "trunk")).toBe("trunk");
   });
 
+  it("staging e homolog não viram base sugerida: main ganha deles", () => {
+    expect(branchBaseSugerida(["main", "homolog", "staging"], "main")).toBe("main");
+    expect(branchBaseSugerida(["homolog", "feat/x"], "feat/x")).toBe("feat/x");
+  });
+
   it("sem padrão conhecida cai na primeira; lista vazia não sugere nada", () => {
     expect(branchBaseSugerida(["feat/x"], null)).toBe("feat/x");
     expect(branchBaseSugerida([], null)).toBeUndefined();
