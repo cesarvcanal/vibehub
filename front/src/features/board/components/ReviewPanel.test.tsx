@@ -772,20 +772,35 @@ describe("ReviewPanel — merge", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("caso real (PR #215): gate vermelho no commit aprovado — a falha aparece e o Mergear fica travado; Tentar de novo libera", async () => {
+  it("caso real (PR #215): gate vermelho esgotado no commit aprovado — a falha aparece e o Mergear fica travado; Tentar de novo libera", async () => {
     const sha = "a".repeat(40);
     open("mer", review({
       phase: "ready", reviewedSha: sha,
-      mergeGate: { sha, state: "failed", output: "dependência faltando na worktree (@vitejs/plugin-react)", at: 1 },
+      mergeGate: { sha, state: "failed", output: "dependência faltando na worktree (@vitejs/plugin-react)", at: 1, failures: 4, exhausted: true },
     }));
     await loaded();
     expect(screen.getByText("testes do merge falharam")).toBeInTheDocument();
     expect(screen.queryByText("pronto pra merge")).toBeNull();
-    expect(screen.getByText(/mas os testes do merge falharam no commit aprovado: o merge espera a correção/)).toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent("Os testes do merge falharam no commit aprovado");
+    expect(screen.getByText(/mas os testes do merge seguem falhando/)).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("rodarem de novo sozinhos 3 vezes");
     expect(screen.getByRole("alert")).toHaveTextContent("@vitejs/plugin-react");
     expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Tentar de novo" })).toBeEnabled();
+  });
+
+  it("caso real (PR #218): gate vermelho que a IA do autor está corrigindo — aviso calmo, sem alerta vermelho, saída recolhida e Mergear travado", async () => {
+    const sha = "a".repeat(40);
+    open("mer", review({
+      phase: "ready", reviewedSha: sha,
+      mergeGate: { sha, state: "failed", output: "FAIL src/services/apps/backup.test.ts", at: 1, failures: 2 },
+    }));
+    await loaded();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByText("IA corrigindo os testes")).toBeInTheDocument();
+    expect(screen.getByText(/a IA do autor está corrigindo e eles rodam de novo sozinhos \(tentativa 2 de 3\)/)).toBeInTheDocument();
+    expect(screen.getByText("Ver saída dos testes")).toBeInTheDocument();
+    expect(screen.getByText("FAIL src/services/apps/backup.test.ts")).not.toBeVisible();
+    expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeDisabled();
   });
 
   it("gate rodando no commit aprovado: o Mergear espera; verde, ou de um commit antigo, não segura", async () => {

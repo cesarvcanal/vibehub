@@ -11,7 +11,7 @@ import { reportCardStatus } from "../services/board/status.js";
 import { purgeRemovedCards } from "../services/board/purge.js";
 import { runnerToken } from "../runtime/runner.js";
 import { listReviewsFollowedBy } from "../services/review/store.js";
-import { pendingQuestions, type Review } from "../services/review/model.js";
+import { mergeGateSelfHealing, pendingQuestions, type Review } from "../services/review/model.js";
 import { logger } from "../utils/logger.js";
 import { isBusy } from "../services/maestro/maestro.js";
 
@@ -38,8 +38,11 @@ function badRequest(err: unknown): { code: number; body: { error: string } } {
 type ReviewSummary = Pick<Review, "id" | "prNumber" | "phase" | "round"> & {
   pendingQuestions?: number;
   authorWorking?: boolean;
-  /** Pronto, mas o gate do merge no commit aprovado ainda roda ou falhou: a linha não diz "pronto pra merge". */
-  mergeGateState?: "running" | "failed";
+  /**
+   * Pronto, mas o gate do merge no commit aprovado ainda roda, falhou e a IA do autor corrige (`fixing`:
+   * roda de novo sozinho) ou falhou e espera uma pessoa: a linha não diz "pronto pra merge".
+   */
+  mergeGateState?: "running" | "fixing" | "failed";
 };
 /**
  * `review` = the most recent; `reviews` = the most recent of EACH PR (only with more than one PR
@@ -78,8 +81,9 @@ async function withReviewSummary(cards: registry.Card[]): Promise<BoardCard[]> {
       // Pronto, com a IA do autor num turno (hooks ou chat nativo): a linha diz "IA trabalhando". Só quando
       // o autor é ESTE card; o de um PR anexado é outro, e a linha lê isso ao vivo.
       if (r.phase === "ready" && r.cardId === c.id && isBusy(c)) review.authorWorking = true;
-      const gate = r.mergeGate?.sha === r.reviewedSha ? r.mergeGate?.state : undefined;
-      if (r.phase === "ready" && (gate === "running" || gate === "failed")) review.mergeGateState = gate;
+      const gate = r.mergeGate?.sha === r.reviewedSha ? r.mergeGate : undefined;
+      if (r.phase === "ready" && gate?.state === "running") review.mergeGateState = "running";
+      if (r.phase === "ready" && gate?.state === "failed") review.mergeGateState = mergeGateSelfHealing(gate) ? "fixing" : "failed";
       return review;
     });
     return { ...c, review: summaries[0], ...(summaries.length > 1 ? { reviews: summaries } : {}) };

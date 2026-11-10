@@ -584,8 +584,11 @@ export interface ReviewSummary {
   pendingQuestions?: number;
   /** A `ready` review whose author's AI is in a turn right now (hooks or native chat): "IA trabalhando". */
   authorWorking?: boolean;
-  /** A `ready` review whose merge gate on the approved commit is still running, or failed: not "ready to merge". */
-  mergeGateState?: "running" | "failed";
+  /**
+   * A `ready` review whose merge gate on the approved commit is still running, failed while the author's
+   * AI fixes it (`fixing`: it reruns on its own), or failed and waits for a person: not "ready to merge".
+   */
+  mergeGateState?: "running" | "fixing" | "failed";
 }
 
 export interface FindingProof {
@@ -671,7 +674,12 @@ export interface MergeGate {
   /** The failing gate's output (redacted, capped). */
   output?: string;
   at: number;
+  /** This failure was already picked up to rerun on its own; on a failure without `failures`, the old one-rerun rule. */
   autoRetried?: true;
+  /** Consecutive failures on this commit since the last human "Try again"; absent on an older failure = 1. */
+  failures?: number;
+  /** Past the automatic reruns: nothing runs it again without a person. */
+  exhausted?: true;
 }
 
 /** Whether each side's AI is in a turn RIGHT NOW (the card's status), as `GET /cards/:id/review` reads it. */

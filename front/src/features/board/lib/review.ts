@@ -10,6 +10,8 @@ import type {
 
 /** The server's ceiling (`MAX_ROUNDS`): the pill reads "rodada 2/3" against it. */
 export const REVIEW_MAX_ROUNDS = 3;
+/** How many times a red merge gate reruns on its own, after the author's AI fixes it (the server's `MERGE_GATE_AUTO_RETRIES`). */
+export const MERGE_GATE_AUTO_RETRIES = 3;
 
 /**
  * How long the panel waits for a merge it cannot confirm (the answer got lost, or another click found
@@ -73,7 +75,7 @@ export function awaitingDecision(review: ReviewSummary & { findings?: Finding[] 
  */
 export function reviewPill(
   review: (ReviewSummary & { findings?: Finding[] }) | undefined,
-  live: { authorWorking?: boolean; gate?: "running" | "passed" | "failed" } = {},
+  live: { authorWorking?: boolean; gate?: MergeGateStatus | "passed" } = {},
 ): ReviewPill {
   switch (review?.phase) {
     case "reviewing":
@@ -84,6 +86,8 @@ export function reviewPill(
       if (live.authorWorking) return { key: "review.pill.authorWorking", tone: "warn" };
       // "Pronto pra merge" só com o gate do merge fora do caminho: rodando ou vermelho, o clique não mergearia.
       if (live.gate === "failed") return { key: "review.pill.gateFailed", tone: "critical" };
+      // Red, but the author's AI has it and the checks rerun on their own: work, not a stop.
+      if (live.gate === "fixing") return { key: "review.pill.gateFixing", tone: "warn" };
       if (live.gate === "running") return { key: "review.pill.gateRunning", tone: "info" };
       return { key: "review.pill.ready", tone: "ok" };
     // Blue = needs a person, the same colour the mockup gives it.
@@ -267,6 +271,21 @@ export function stuckItems(findings: Finding[]): Finding[] {
  */
 export function mergeGateOf(review: Pick<Review, "reviewedSha" | "mergeGate">): MergeGate | undefined {
   return review.mergeGate && review.mergeGate.sha === review.reviewedSha ? review.mergeGate : undefined;
+}
+
+export type MergeGateStatus = "running" | "fixing" | "failed";
+
+/**
+ * Where the merge gate on the approved commit holds the merge: running, red while the author's AI fixes
+ * it and it reruns on its own (`fixing`), or red waiting for a person (`failed`: past the automatic
+ * reruns, or a failure from when it reran only once). Undefined = it holds nothing. The server's
+ * `mergeGateSelfHealing` draws the same line for the board summary. PURE.
+ */
+export function mergeGateStatus(review: Pick<Review, "reviewedSha" | "mergeGate">): MergeGateStatus | undefined {
+  const gate = mergeGateOf(review);
+  if (gate?.state === "running") return "running";
+  if (gate?.state !== "failed") return undefined;
+  return gate.exhausted || (gate.autoRetried && gate.failures === undefined) ? "failed" : "fixing";
 }
 
 /** What the signed-in person may do to a review right now: their role AND the state it is in. */
