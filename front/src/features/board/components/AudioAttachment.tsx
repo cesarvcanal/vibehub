@@ -9,12 +9,18 @@ import { useT } from "@/i18n";
  *
  * The browser's own `<audio controls>` was the first version: a grey pill sized by the browser,
  * dropped in the middle of the sentence, reading `0:00 / 0:00` because the upload route did not
- * answer ranges (fixed in the back — see `uploadByteRange`). This player is the panel's own: one
+ * answer ranges (fixed in the back — see `parseUploadRange`). This player is the panel's own: one
  * round button, the name, the time and a seek bar, in the same card shape as the documents beside it.
  *
- * `preload="metadata"`: the duration costs a couple of small range requests, the audio itself only
- * comes on play. Who transcribes is the agent (vibehub_transcribe_audio), not the chat. A file the
- * browser cannot decode becomes a line saying so with the download — never a button that does nothing.
+ * `preload="none"`: every read is a `docker exec` on the shared runner, so a conversation with twenty
+ * voice notes must not fetch anything on open; the duration shows from the first play. Who
+ * transcribes is the agent (vibehub_transcribe_audio), not the chat.
+ *
+ * A failure becomes a line saying the audio could not be played, with the download — never a button
+ * that does nothing. It does not claim "unsupported format": Chrome reports a 404 (a file the sweep
+ * removed, a runner that is down) with the same MEDIA_ERR_SRC_NOT_SUPPORTED as a codec it lacks, so
+ * the error code cannot tell the two apart. An AbortError from `play()` is not a failure either: it
+ * is a Pause clicked before the first bytes arrived.
  */
 export function AudioAttachment({ cardId, file }: { cardId: string; file: string }) {
   const t = useT();
@@ -32,8 +38,11 @@ export function AudioAttachment({ cardId, file }: { cardId: string; file: string
   const toggle = () => {
     const audio = audioRef.current;
     if (!audio) return;
-    if (audio.paused) void audio.play().catch(() => setFailed(true));
-    else audio.pause();
+    if (audio.paused) {
+      audio.play().catch((err: unknown) => {
+        if ((err as { name?: string } | null)?.name !== "AbortError") setFailed(true);
+      });
+    } else audio.pause();
   };
 
   return (
@@ -95,7 +104,7 @@ export function AudioAttachment({ cardId, file }: { cardId: string; file: string
       <audio
         ref={audioRef}
         src={src}
-        preload="metadata"
+        preload="none"
         aria-label={t("chat.attachedAudio")}
         className="hidden"
         onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}

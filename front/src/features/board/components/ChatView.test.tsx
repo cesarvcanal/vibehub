@@ -212,8 +212,8 @@ describe("ChatView", () => {
     const player = await screen.findByTestId("chat-audio");
     const audio = player.querySelector("audio") as HTMLAudioElement;
     expect(audio).toHaveAttribute("src", `/api/cards/${card}/uploads/1793817742302-ptt-2026.opus`);
-    // Só os metadados: a duração vem de um Range pequeno, o áudio inteiro só no play.
-    expect(audio).toHaveAttribute("preload", "metadata");
+    // Nada é lido do runner ao abrir a conversa: cada leitura é um docker exec.
+    expect(audio).toHaveAttribute("preload", "none");
     expect(player).toHaveTextContent("ptt-2026.opus");
     // O player fica na faixa de anexos, depois do texto, não no meio da frase.
     const strip = screen.getByTestId("chat-attachments");
@@ -231,7 +231,7 @@ describe("ChatView", () => {
     play.mockRestore();
   });
 
-  it("áudio que o navegador não toca vira aviso com o download, não um player morto", async () => {
+  it("áudio que não toca (404, formato) vira aviso neutro com o download, não um player morto", async () => {
     renderChat();
     const ws = await socket();
     ws.accept();
@@ -240,11 +240,48 @@ describe("ChatView", () => {
 
     const player = await screen.findByTestId("chat-audio");
     fireEvent.error(player.querySelector("audio") as HTMLAudioElement);
-    expect(await within(player).findByText("This browser can't play this audio.")).toBeInTheDocument();
+    expect(await within(player).findByText("Could not play this audio. Download it to listen.")).toBeInTheDocument();
+    expect(player).toHaveTextContent("voz.ogg");
     expect(within(player).queryByRole("button", { name: "Play" })).not.toBeInTheDocument();
     expect(within(player).getByRole("link", { name: /Download/ })).toHaveAttribute(
       "href", `/api/cards/${card}/uploads/1793817742302-voz.ogg`,
     );
+  });
+
+  it("Pause logo depois do Play (AbortError do play()) não mata o player", async () => {
+    const abort = Object.assign(new Error("The play() request was interrupted by a call to pause()"), { name: "AbortError" });
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockRejectedValue(abort);
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    const card = "0a78f497-8bfd-4f0a-821b-2dbee5c8d9f9";
+    ws.deliver({ id: "u1", kind: "user", at: 1, text: `/work/.uploads/${card}/1793817742302-voz.ogg` });
+
+    const player = await screen.findByTestId("chat-audio");
+    await userEvent.click(within(player).getByRole("button", { name: "Play" }));
+    await waitFor(() => expect(play).toHaveBeenCalled());
+    expect(within(player).getByRole("button", { name: "Play" })).toBeInTheDocument();
+    expect(player).not.toHaveTextContent("Could not play");
+
+    // Outra rejeição (sem permissão de autoplay não é o caso aqui: o clique é do usuário) é falha de verdade.
+    play.mockRejectedValueOnce(Object.assign(new Error("no source"), { name: "NotSupportedError" }));
+    await userEvent.click(within(player).getByRole("button", { name: "Play" }));
+    expect(await within(player).findByText("Could not play this audio. Download it to listen.")).toBeInTheDocument();
+    play.mockRestore();
+  });
+
+  it("caminho no meio da frase fica na frase, como chip; só o bloco final vai para a faixa", async () => {
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    const card = "0a78f497-8bfd-4f0a-821b-2dbee5c8d9f9";
+    const up = (f: string) => `/work/.uploads/${card}/${f}`;
+    ws.deliver({ id: "u1", kind: "user", at: 1, text: `compare ${up("1-a.pdf")} com ${up("2-b.pdf")}, qual tá certo?\n\n${up("3-c.ogg")}` });
+
+    const strip = await screen.findByTestId("chat-attachments");
+    expect(within(strip).getByTestId("chat-audio")).toBeInTheDocument();
+    expect(within(strip).queryByTestId("chat-file")).not.toBeInTheDocument();
+    expect(screen.getByTestId("chat-user")).toHaveTextContent("compare a.pdf com b.pdf, qual tá certo?");
   });
 
   it("planilha anexada abre um preview com a tabela que o runner extraiu", async () => {

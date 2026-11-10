@@ -656,7 +656,8 @@ export function LinkifiedText({ text, compact = false }: { text: string; compact
   const { words, attachments } = splitAttachments(tokens);
   return (
     <>
-      {words.map((token, i) => renderUserToken(token, i, false))}
+      {/* A path left mid-sentence is drawn small (chip, thumbnail) so the sentence still reads. */}
+      {words.map((token, i) => renderUserToken(token, i, token.type === "image" || token.type === "file"))}
       {attachments.length > 0 && (
         <span
           data-testid="chat-attachments"
@@ -716,7 +717,7 @@ function UploadedImage({ cardId, file, compact = false }: { cardId: string; file
       href={src}
       target="_blank"
       rel="noreferrer noopener"
-      className={cn("mt-1 w-fit", compact ? "mr-1 inline-block align-top" : "block")}
+      className={cn("w-fit", compact ? "mr-1 mt-1 inline-block align-top" : "block")}
     >
       <img
         src={src}
@@ -734,14 +735,16 @@ function UploadedImage({ cardId, file, compact = false }: { cardId: string; file
   );
 }
 
-/** Icon, tint and label of each kind of attachment, so a PDF and a spreadsheet tell apart at a glance. */
-const ATTACHMENT_LOOK: Record<Exclude<UploadKind, "image">, { icon: LucideIcon; tone: string; label: string }> = {
+/**
+ * Icon, tint and label of each kind of attachment drawn as a card, so a PDF and a spreadsheet tell
+ * apart at a glance. Pictures and audios have their own renders (the image, the player).
+ */
+const ATTACHMENT_LOOK: Record<Exclude<UploadKind, "image" | "audio">, { icon: LucideIcon; tone: string; label: string }> = {
   pdf: { icon: FileText, tone: "bg-red-500/15 text-red-400", label: "chat.kind.pdf" },
   spreadsheet: { icon: FileSpreadsheet, tone: "bg-emerald-500/15 text-emerald-400", label: "chat.kind.spreadsheet" },
   document: { icon: FileText, tone: "bg-sky-500/15 text-sky-400", label: "chat.kind.document" },
   presentation: { icon: Presentation, tone: "bg-amber-500/15 text-amber-400", label: "chat.kind.presentation" },
   text: { icon: FileText, tone: "bg-muted text-muted-foreground", label: "chat.kind.text" },
-  audio: { icon: AudioLines, tone: "bg-primary/15 text-primary", label: "chat.kind.audio" },
   file: { icon: File, tone: "bg-muted text-muted-foreground", label: "chat.kind.file" },
 };
 
@@ -752,7 +755,7 @@ const ATTACHMENT_LOOK: Record<Exclude<UploadKind, "image">, { icon: LucideIcon; 
  * back as seven lines of `/work/.uploads/…/1793817742302-contrato.pdf`. In the bubble each one is a
  * card with its kind (icon, tint, label) and name: an audio plays there, an office document opens the
  * extracted text, anything else opens in a tab — the panel serves PDF and text inline, the rest as a
- * download. In the queue tray (`compact`) it is a one-line chip, audio included. A file that is gone
+ * download. In the queue tray, or left mid-sentence (`compact`), it is a one-line chip, audio included. A file that is gone
  * (card deleted, runner cleaned) answers 404 in that tab; there is no cheap way to know before the
  * click, and the name is still the truth.
  */
@@ -785,10 +788,11 @@ function attachmentFrame(compact: boolean): string {
 function AttachmentFace({ file, compact }: { file: string; compact: boolean }) {
   const t = useT();
   const kind = uploadKind(file);
-  const look = ATTACHMENT_LOOK[kind === "image" ? "file" : kind];
-  const Icon = look.icon;
+  const look = ATTACHMENT_LOOK[kind === "image" || kind === "audio" ? "file" : kind];
   const name = uploadDisplayName(file);
   if (compact) {
+    // In the tray an audio is a chip too (the player would break its height cap).
+    const Icon = kind === "audio" ? AudioLines : look.icon;
     return (
       <>
         <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
@@ -799,7 +803,7 @@ function AttachmentFace({ file, compact }: { file: string; compact: boolean }) {
   return (
     <>
       <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-md", look.tone)}>
-        <Icon className="h-5 w-5" aria-hidden />
+        <look.icon className="h-5 w-5" aria-hidden />
       </span>
       <span className="flex min-w-0 flex-col">
         <span className="truncate text-sm font-medium text-foreground" title={name}>{name}</span>
@@ -810,9 +814,9 @@ function AttachmentFace({ file, compact }: { file: string; compact: boolean }) {
 }
 
 /**
- * Planilha, Word ou PowerPoint anexado: o navegador não abre, então o card abre um preview com o texto
- * que o runner extraiu (o mesmo que o agente lê) e o download continua a um clique. O texto só é
- * buscado quando o preview abre.
+ * An attached spreadsheet, Word or PowerPoint file: the browser cannot open it, so the card opens a
+ * preview with the text the runner extracted (the same the agent reads), and the original is one
+ * click away. The text is only fetched when the preview opens.
  */
 function DocumentoAnexado({ cardId, file, compact }: { cardId: string; file: string; compact: boolean }) {
   const t = useT();
