@@ -213,8 +213,13 @@ export function findingCounts(findings: Finding[]): FindingCounts {
   return counts;
 }
 
-/** A finding still standing: open, or contested. Fixed, dropped, accepted risk and won't fix are closed. PURE. */
-export const findingIsOpen = (f: Pick<Finding, "status">): boolean => f.status === "open" || f.status === "contested";
+/**
+ * A finding still standing: open, or contested. Fixed, dropped, accepted risk and won't fix are closed,
+ * and so is a refuted one whatever its status — the server saves it "open", and counting it read as a
+ * pending item the person opened only to find knocked down. PURE.
+ */
+export const findingIsOpen = (f: Pick<Finding, "severity" | "status">): boolean =>
+  f.severity !== "refuted" && (f.status === "open" || f.status === "contested");
 const isOpen = findingIsOpen;
 
 /** The tone of each finding's severity and status, wherever a finding is drawn (the list, the conversation). */

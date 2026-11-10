@@ -7,6 +7,7 @@ import {
   cardPeopleKey,
   conversationRows,
   findingCounts,
+  findingIsOpen,
   mergeFailure,
   pendingQuestions,
   prStripCounts,
@@ -243,6 +244,18 @@ describe("findingCounts", () => {
 
   it("is all zeros for an empty list", () => {
     expect(findingCounts([])).toEqual({ blocking: 0, suggestion: 0, question: 0, refuted: 0 });
+  });
+});
+
+describe("findingIsOpen", () => {
+  it("is what still stands: open or contested", () => {
+    expect(findingIsOpen(finding({ status: "open" }))).toBe(true);
+    expect(findingIsOpen(finding({ status: "contested" }))).toBe(true);
+    expect(findingIsOpen(finding({ status: "fixed" }))).toBe(false);
+  });
+
+  it("never a refuted finding: the reviewer already knocked it down, whatever status it was saved with", () => {
+    expect(findingIsOpen(finding({ severity: "refuted", status: "open" }))).toBe(false);
   });
 });
 

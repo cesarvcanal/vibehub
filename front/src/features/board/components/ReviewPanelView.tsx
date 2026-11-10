@@ -545,9 +545,11 @@ function FindingCard({
             <Badge tone={FINDING_SEVERITY_TONE[f.severity]} className="px-1.5 text-[10px] font-semibold">
               {t(`review.severity.${f.severity}`)}
             </Badge>
-            <Badge tone={FINDING_STATUS_TONE[f.status]} className="px-1.5 text-[10px] transition-colors duration-500">
-              {t(`review.status.${f.status}`)}
-            </Badge>
+            {refuted ? null : (
+              <Badge tone={FINDING_STATUS_TONE[f.status]} className="px-1.5 text-[10px] transition-colors duration-500">
+                {t(`review.status.${f.status}`)}
+              </Badge>
+            )}
             {f.commit ? <code className="font-mono text-[10px] text-muted-foreground">{f.commit.slice(0, 7)}</code> : null}
             {f.requested && f.status === "open" ? (
               <Badge
