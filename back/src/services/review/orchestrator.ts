@@ -14,7 +14,6 @@ import type { GateResult } from "../maestro/gate.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { eventsAfter, onCardEvent, recordMessage, type CardEvent, type Severity } from "../events/cardEvents.js";
 import { logger } from "../../utils/logger.js";
-import { defuseUltraWords } from "../../utils/ultraWords.js";
 import {
   MAX_ROUNDS, applyAuthorResponses, applyReviewerVerdicts, autoMergeEligible, waivedText, type ReviewOrders, blockingOpen, normalizeSubmittedFindings, pendingQuestions,
   phaseAfterReviewerRound,
@@ -264,8 +263,7 @@ export async function relayReview(
   const samePlace = (x: Review) => x.phase === r.phase && x.round === r.round;
   try {
     if (side === "author" && opts.unpause) await unpauseAuthor(r);
-    // O texto carrega o que a outra IA e as pessoas escreveram: palavra reservada ali não é pedido deste turno.
-    await sendToTerminal(cardId, defuseUltraWords(text), {
+    await sendToTerminal(cardId, text, {
       by: `review:${r.id}`,
       origin: REVIEW_ORIGIN,
       // Card dormindo (hibernado, nunca aberto, sessão perdida num restart) é acordado.

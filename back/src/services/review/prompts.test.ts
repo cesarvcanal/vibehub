@@ -117,6 +117,25 @@ describe("prompts da revisão: tempo de cada rodada", () => {
       expect(text).toMatch(/A suíte inteira é do CI: confira com `gh pr checks`/);
     }
   });
+
+  it("palavra reservada na fala citada sai desarmada; branch, caminho e comandos do PR chegam intactos", () => {
+    // Achado f1 da revisão do #264: desarmar o prompt inteiro trocava a branch do card e o push criava outra.
+    const f: Finding = {
+      id: "f1", severity: "blocking", title: "o ultracode some", status: "open", introducedInRound: 1,
+      problem: "Sem o ULTRATHINK na barra.", fix: "Volte o ultracode em src/ultracode.ts.",
+      proof: { kind: "failing_test", ref: "src/ultracode.test.ts:3", detail: "falha com ultrathink" },
+      authorReply: "mantém o ultracode", reviewerReply: "o ultrathink segue",
+    };
+    const base = { ...review([f]), prBranch: "card/suporte-ultracode-ab12" };
+    const delta = { ...base, round: 2, reviewedSha: "a".repeat(40) };
+    for (const text of [reviewerDeltaPrompt(delta), authorFixPrompt(base)]) {
+      expect(text).toContain("src/ultracode.test.ts:3");
+      for (const piece of ["o ultra-code some", "Sem o ULTRA-THINK", "Volte o ultra-code em src/ultracode.ts", "falha com ultra-think",
+        "mantém o ultra-code", "o ultra-think segue"]) expect(text).toContain(piece);
+    }
+    expect(reviewerDeltaPrompt(delta)).toContain("git reset --hard origin/card/suporte-ultracode-ab12");
+    expect(authorFixPrompt(base)).toContain("git push origin HEAD:card/suporte-ultracode-ab12");
+  });
 });
 
 describe("prompts da revisão: bug não é sugestão", () => {
