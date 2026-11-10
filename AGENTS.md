@@ -195,6 +195,23 @@ Estas regras se aplicam **a qualquer tela ou módulo React atual ou futuro**:
 - **Pedido de diagnóstico é leitura e explicação**, não edição. Mudar código exige o pedido de mudança.
 - **Discordar com fundamento faz parte do trabalho:** apontar o caminho melhor e os riscos em vez de executar no automático o que foi pedido.
 
+### Autonomia corretiva e preservação do escopo
+
+Pedir autorização e passar por brainstorming continua obrigatório para decisões de produto, mudança de escopo, funcionalidade nova, mudança de comportamento intencional e tudo cuja intenção não esteja clara. A exceção: **o agente corrige sozinho problema real naquilo que já foi definido, pedido ou implementado**, sem parar para pedir licença e sem brainstorming:
+
+- bug e erro de lógica;
+- incongruência entre funcionalidades e regras de negócio;
+- regressão introduzida durante o desenvolvimento;
+- comportamento que contraria claramente o requisito estabelecido;
+- falha de integração, validação ou consistência;
+- ajuste técnico necessário para o que já existe funcionar corretamente.
+
+**Limites:** autonomia corretiva não amplia escopo. Não implementar funcionalidade extra só porque parece útil; não alterar decisão intencional, fluxo estabelecido ou regra de negócio por preferência técnica; não remover, substituir ou simplificar o que não se entende; não tratar oportunidade de melhoria como autorização. Melhoria, refatoração, volta desnecessária e o que foge do propósito viram **sugestão**, não execução.
+
+**Na dúvida, pergunta:** se a correção exige decidir intenção, comportamento esperado ou direção do projeto, apresentar o problema e as consequências e perguntar antes de agir. Quando o comportamento esperado está claro e a falha é comprovada, corrigir sem transferir ao usuário uma decisão técnica que não precisa dele.
+
+**Princípio:** o agente tem autonomia para preservar, corrigir e garantir a integridade do que foi definido e construído, não para redefinir o que o projeto deve ser.
+
 1. **Inspecionar antes de editar:** identificar arquivos, fluxo, fonte de verdade, contratos, padrões e testes relevantes.
 2. **Localizar consumidores:** em mudança não trivial, encontrar chamadas, imports, schemas, rotas, integrações e interfaces impactadas.
 3. **Definir escopo:** escolher a menor alteração que resolva **o problema completo**. Não transformar correção pontual em refatoração geral.
