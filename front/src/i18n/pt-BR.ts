@@ -1421,6 +1421,7 @@ export const ptBR: Record<string, string> = {
   "review.error.revisao_ativa": "Já existe uma revisão em andamento deste PR.",
   "review.error.autor_sem_conta": "Quem corrige não tem uma conta Claude própria no vibehub: a correção deste PR roda nela. Escolha outra pessoa.",
   "review.error.revisor_sem_conta": "O revisor não tem uma conta Claude própria no vibehub. Escolha outra pessoa.",
+  "review.error.merge_autorizado_de_outro": "Só quem mergeia pode mandar mergear (ou concluir o card) quando a revisão terminar.",
   "review.error.revisor_sem_github": "O revisor não tem uma conexão GitHub própria no vibehub: os reviews do PR sairiam na conta de outra pessoa. Conecte a conta dele ou escolha outra pessoa.",
   "review.error.papel_sem_work": "Só tem leitura neste card: {who}. Quem corrige e quem faz o merge precisam poder trabalhar nele. Compartilhe com acesso de trabalho e tente de novo.",
   "review.error.papel_sem_work.generic": "Quem corrige e quem faz o merge precisam poder trabalhar neste card. Compartilhe com acesso de trabalho e tente de novo.",

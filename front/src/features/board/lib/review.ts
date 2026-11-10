@@ -162,7 +162,7 @@ const ROLE_FIELDS: Record<string, ReviewRole> = {
 /** The codes `POST /api/cards/:id/review` answers with — each has its own sentence in i18n. */
 const START_CODES: ReadonlySet<string> = new Set([
   "revisor_igual_autor", "sem_pr", "pr_mergeado", "revisao_ativa", "revisor_sem_conta", "revisor_sem_github", "papel_sem_work",
-  "pessoa_sem_acesso", "autor_sem_conta",
+  "pessoa_sem_acesso", "autor_sem_conta", "merge_autorizado_de_outro",
 ]);
 
 interface ApiFailure {

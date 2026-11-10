@@ -34,7 +34,7 @@ const DECISIONS: ReadonlySet<string> = new Set<Decision>(["block", "drop", "keep
 
 /** Os códigos que `startReviewChecked`/`startReview` põem na mensagem: recusa do pedido, não falha do servidor. */
 const START_REFUSALS =
-  /^(revisor_igual_autor|sem_pr|pr_mergeado|revisao_ativa|revisor_sem_conta|autor_sem_conta|papeis_obrigatorios|card_de_revisor|pessoa_sem_acesso|papel_sem_work|revisor_sem_github)\b/;
+  /^(revisor_igual_autor|sem_pr|pr_mergeado|revisao_ativa|revisor_sem_conta|autor_sem_conta|papeis_obrigatorios|card_de_revisor|pessoa_sem_acesso|papel_sem_work|revisor_sem_github|merge_autorizado_de_outro)\b/;
 
 interface StartBody {
   prNumber?: unknown;

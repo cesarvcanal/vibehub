@@ -171,6 +171,11 @@ describe("visiblePrs", () => {
 });
 
 describe("startErrorCode", () => {
+  it("reconhece a recusa da ordem de merge dada por quem não mergeia", () => {
+    expect(startErrorCode({ response: { status: 400, data: { error: "merge_autorizado_de_outro: só quem mergeia" } } }))
+      .toBe("merge_autorizado_de_outro");
+  });
+
   it("reads the code the server puts before the colon", () => {
     expect(startErrorCode({ response: { status: 400, data: { error: "revisor_sem_conta: o revisor não tem uma conta" } } }))
       .toBe("revisor_sem_conta");
