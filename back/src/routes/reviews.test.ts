@@ -456,6 +456,21 @@ describe("iniciar a revisão pela IA do card (vibehub_review_start)", () => {
     expect((await (await registry()).getCard(w.cardId))?.column).toBe("done");
   });
 
+  it("resposta das tools em ready diz o motivo real de o merge não sair sozinho", async () => {
+    const { reviewToolAnswer } = await orchestrator();
+    const base = {
+      id: "r", cardId: "c", projectId: "p", prNumber: 7, prUrl: "u", prBranch: "b", base: "main",
+      reviewerUserId: "a", authorUserId: "b", mergerUserId: "c", reviewerCardId: "rc", round: 1,
+      phase: "ready" as const, reviewedSha: "a".repeat(40), log: [], nudges: 0, createdAt: 0, updatedAt: 0,
+      findings: [{ id: "f1", severity: "suggestion" as const, title: "t", status: "open" as const, introducedInRound: 1 }],
+    };
+    expect(reviewToolAnswer({ ...base, mergeAuthorized: true, approvePending: true }, "author", 1).next).toMatch(/Approve/);
+    expect(reviewToolAnswer({ ...base, mergeAuthorized: true, approvePending: true }, "author", 1).next).not.toMatch(/sugestão/);
+    expect(reviewToolAnswer({ ...base, autoMergeFailedRound: 1, findings: [] }, "author", 1).next).toMatch(/merge automático falhou/);
+    expect(reviewToolAnswer(base, "author", 1).next).toMatch(/sugestão em aberto/);
+    expect(reviewToolAnswer({ ...base, mergeAuthorized: true }, "author", 1).next).toMatch(/mergeia sozinho/);
+  });
+
   it("revisão sem a ordem de concluir, mergeada: o card do autor fica onde está", async () => {
     const w = await world();
     await actor(w.cardId, w.merger.id);
@@ -506,6 +521,19 @@ describe("PRs anexados: uma revisão por PR, acompanhada do card que anexou", ()
     expect((await read(w, "?pr=0")).statusCode).toBe(400);
     // sem `pr`, o de sempre: a revisão do card como autor (este card não é o autor de nenhuma)
     expect((await read(w, "")).json()).toEqual({ review: null });
+  });
+
+  it("'concluir o card' num PR anexado conclui o card que deu a ordem (o que anexou), não o de correção", async () => {
+    const w = await hub();
+    const review = await (await orchestrator()).startReview({
+      cardId: w.cardId, prNumber: 599, reviewerUserId: w.revisor.id, authorUserId: w.autor.id, mergerUserId: w.merger.id,
+      orders: { concludeWhenMerged: true }, by: "merger",
+    });
+    expect(review.hubCardId).toBe(w.cardId);
+    const fixColumn = (await (await registry()).getCard(review.cardId))?.column;
+    await (await orchestrator()).markReviewMerged(review.id, "merger");
+    expect((await (await registry()).getCard(w.cardId))?.column).toBe("done");
+    expect((await (await registry()).getCard(review.cardId))?.column).toBe(fixColumn);
   });
 
   it("o card que anexou carrega a revisão mais recente e uma por PR", async () => {

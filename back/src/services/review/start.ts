@@ -3,7 +3,7 @@ import { getUserGit } from "../../auth/userGit.js";
 import { findUser, listUsers, type PublicUser } from "../../auth/users.js";
 import * as registry from "../board/registry.js";
 import { ownGithubConnection } from "./merge.js";
-import type { Review } from "./model.js";
+import type { Review, ReviewOrders } from "./model.js";
 import { startReview } from "./orchestrator.js";
 
 /**
@@ -45,7 +45,7 @@ export async function startReviewChecked(input: {
   roles: ReviewRoles;
   requester: PublicUser;
   /** O que quem mergeia já mandou fazer no fim (ver {@link AgentReviewRequest}). */
-  orders?: { mergeAuthorized?: boolean; concludeWhenMerged?: boolean };
+  orders?: ReviewOrders;
 }): Promise<Review> {
   const { card, prNumber, roles, requester } = input;
   // Mergear e concluir no fim são ordens de quem mergeia: o merge sai em nome dele, e ninguém dá essa
@@ -83,8 +83,7 @@ export async function startReviewChecked(input: {
   }
   return await startReview({
     cardId: card.id, prNumber, ...required, ...(roles.coauthorUserId ? { coauthorUserId: roles.coauthorUserId } : {}),
-    ...(input.orders?.mergeAuthorized ? { mergeAuthorized: true } : {}),
-    ...(input.orders?.concludeWhenMerged ? { concludeWhenMerged: true } : {}),
+    ...(input.orders ? { orders: input.orders } : {}),
     by: requester.username,
   });
 }

@@ -14,7 +14,7 @@ import type { MessageOrigin } from "../chat/provenance.js";
 import { eventsAfter, onCardEvent, recordMessage, type CardEvent, type Severity } from "../events/cardEvents.js";
 import { logger } from "../../utils/logger.js";
 import {
-  MAX_ROUNDS, applyAuthorResponses, applyReviewerVerdicts, autoMergeEligible, blockingOpen, normalizeSubmittedFindings, pendingQuestions,
+  MAX_ROUNDS, applyAuthorResponses, applyReviewerVerdicts, autoMergeEligible, waivedText, type ReviewOrders, blockingOpen, normalizeSubmittedFindings, pendingQuestions,
   phaseAfterReviewerRound,
   type AuthorAnswerStatus, type Finding, type FindingStatus, type Review, type ReviewEvent, type ReviewEventItem, type ReviewPhase,
   type SubmittedFinding,
@@ -386,7 +386,7 @@ function outcomeNote(r: Review): string {
       return `${blocking} bloqueante(s) em aberto: a lista vai ao autor.${questions}`;
     case "ready":
       return autoMergeEligible(r)
-        ? "Sem nada em aberto: pronto, e o merge sai sozinho."
+        ? `${waivedText(r) ? `Sem bloqueante (${waivedText(r)})` : "Sem nada em aberto"}: pronto, e o merge sai sozinho.`
         : "Sem bloqueante em aberto: pronto para o merge humano.";
     case "impasse":
       return `Impasse: ${impasseText(r.impasseReason)}.`;
@@ -456,10 +456,8 @@ export async function startReview(input: {
   authorUserId: string;
   coauthorUserId?: string;
   mergerUserId: string;
-  /** Quem mergeia já mandou mergear quando terminar (`Review.mergeAuthorized`). */
-  mergeAuthorized?: boolean;
-  /** E concluir o card do autor quando mergear (`Review.concludeWhenMerged`). */
-  concludeWhenMerged?: boolean;
+  /** O que quem mergeia já mandou fazer no fim (`Review.mergeAuthorized`, `Review.concludeWhenMerged`). */
+  orders?: ReviewOrders;
   by: string;
 }): Promise<Review> {
   const review = await serialStart(async () => {
@@ -514,8 +512,8 @@ export async function startReview(input: {
         authorUserId: input.authorUserId,
         ...(input.coauthorUserId ? { coauthorUserId: input.coauthorUserId } : {}),
         mergerUserId: input.mergerUserId,
-        ...(input.mergeAuthorized ? { mergeAuthorized: true } : {}),
-        ...(input.concludeWhenMerged ? { concludeWhenMerged: true } : {}),
+        ...(input.orders?.mergeAuthorized ? { mergeAuthorized: true } : {}),
+        ...(input.orders?.concludeWhenMerged ? { concludeWhenMerged: true } : {}),
         reviewerCardId: reviewerCard.id,
         round: 1,
         phase: "reviewing",
@@ -526,10 +524,10 @@ export async function startReview(input: {
         updatedAt: now,
       };
       note(fresh, "system", `Revisão iniciada: o revisor confere o PR #${pr.number} (rodada 1 de ${MAX_ROUNDS}).`);
-      if (input.mergeAuthorized) {
+      if (input.orders?.mergeAuthorized) {
         note(fresh, "system", "Merge autorizado por quem mergeia: pronta sem bloqueante nem dúvida, o merge sai sozinho (sugestão em pé não segura).");
       }
-      if (input.concludeWhenMerged) note(fresh, "system", "Mergeada, o card do autor vai para Concluído.");
+      if (input.orders?.concludeWhenMerged) note(fresh, "system", "Mergeada, o card que deu a ordem vai para Concluído.");
       if (fixCard) note(fresh, "system", `A correção roda no card "${fixCard.title}", na conta Claude do autor.`);
       else if (authorCard.id !== card.id) note(fresh, "system", `A correção roda no card "${authorCard.title}", que já trabalha a branch do PR.`);
       // O revisor age no card dele pelo `recordCardActor` do relay, que só pousa com `work`. Owner e
@@ -950,13 +948,21 @@ export async function retryReview(reviewId: string, by: string): Promise<Review>
  * não o fechamento da revisão.
  */
 async function retireReviewerCard(r: Review): Promise<void> {
+  await moveCardToDone(r, r.reviewerCardId, "reviewer card");
+}
+
+/**
+ * Leva um card da revisão para `done`, a mesma escrita do arrastar no board. Card que sumiu ou que já
+ * está lá: nada. Nunca lança: a revisão já fechou, e uma escrita que falhou custa só a coluna.
+ */
+async function moveCardToDone(r: Review, cardId: string, what: string): Promise<void> {
   try {
-    const card = await getCard(r.reviewerCardId);
+    const card = await getCard(cardId);
     if (!card || card.column === "done") return;
     await updateCard(card.id, { column: "done" });
-    logger.info({ review: r.id, card: card.worktreeSlug, phase: r.phase }, "reviewer card moved to done");
+    logger.info({ audit: true, review: r.id, card: card.worktreeSlug, phase: r.phase }, `${what} moved to done`);
   } catch (err) {
-    logger.warn({ review: r.id, card: r.reviewerCardId, detail: (err as Error).message }, "could not move the reviewer card to done");
+    logger.warn({ review: r.id, card: cardId, detail: (err as Error).message }, `could not move the ${what} to done`);
   }
 }
 
@@ -1210,7 +1216,9 @@ export async function markReviewMerged(
       note(r, "system", `Mergeado em ${r.base} fora do painel, direto no GitHub (head ${opts.outsidePanel.headSha.slice(0, 7)}).`);
     } else {
       const head = r.reviewedSha ? ` (head ${r.reviewedSha.slice(0, 7)})` : "";
-      if (opts.auto) note(r, "system", `Mergeado em ${r.base} automaticamente, em nome de ${by}${head}: nada ficou em aberto.`);
+      if (opts.auto) {
+        note(r, "system", `Mergeado em ${r.base} automaticamente, em nome de ${by}${head}: ${waivedText(r) ?? "nada ficou em aberto"}.`);
+      }
       else note(r, "human", `Mergeado em ${r.base} por ${by}${head}.`, { by });
     }
     landed = true;
@@ -1225,24 +1233,10 @@ export async function markReviewMerged(
     }
     await announcePhase(after);
     await retireReviewerCard(after);
-    if (after.concludeWhenMerged) await concludeAuthorCard(after);
+    // "...e concluir o card": o card que deu a ordem, o que anexou o PR ou o do autor quando é o mesmo.
+    if (after.concludeWhenMerged) await moveCardToDone(after, after.hubCardId ?? after.cardId, "ordering card");
   }
   return after;
-}
-
-/**
- * A ordem do merge pediu também "concluir o card": mergeada a revisão, o card do autor vai para `done`,
- * a mesma escrita do arrastar no board (como o do revisor). Nunca lança: o merge já aconteceu.
- */
-async function concludeAuthorCard(r: Review): Promise<void> {
-  try {
-    const card = await getCard(r.cardId);
-    if (!card || card.column === "done") return;
-    await updateCard(card.id, { column: "done" });
-    logger.info({ audit: true, action: "review.conclude", review: r.id, card: card.worktreeSlug }, "author card concluded after the merge");
-  } catch (err) {
-    logger.warn({ review: r.id, card: r.cardId, detail: (err as Error).message }, "could not conclude the author card");
-  }
 }
 
 /* ------------------------------------------------------------------ fim de turno */
@@ -1358,9 +1352,14 @@ export function reviewToolAnswer(r: Review, side: Side, askedRound: number): Rec
     next = r.lastSubmitRound === r.round ? "esperando o revisor humano decidir as dúvidas" : "a vez é do revisor";
   } else if (r.phase === "fixing") next = "a vez é do autor";
   else if (r.phase === "ready") {
-    next = autoMergeEligible(r)
-      ? "pronto e sem nada em pé: o painel mergeia sozinho; nenhuma IA mergeia daqui"
-      : "pronto para o merge humano (há sugestão em aberto); ninguém mergeia daqui";
+    // O motivo real de o merge não sair sozinho: a IA repassa isso à pessoa.
+    if (r.approvePending) next = "pronto, mas o Approve do revisor não chegou ao GitHub: o merge espera o 'tentar de novo' do painel";
+    else if (r.autoMergeFailedRound === r.round) next = "pronto; o merge automático falhou nesta rodada: fica para o merge humano, pelo botão do responsável";
+    else if (autoMergeEligible(r)) {
+      const waived = waivedText(r);
+      next = `pronto${waived ? ` (${waived})` : " e sem nada em pé"}: o painel mergeia sozinho; nenhuma IA mergeia daqui`;
+    } else if (r.mergeAuthorized) next = "pronto para o merge humano (sugestão pedida ao autor ainda em pé); ninguém mergeia daqui";
+    else next = "pronto para o merge humano (há sugestão em aberto); ninguém mergeia daqui";
   }
   else if (r.phase === "impasse") next = `impasse: ${impasseText(r.impasseReason)}`;
   else next = `revisão encerrada (${r.phase})`;
