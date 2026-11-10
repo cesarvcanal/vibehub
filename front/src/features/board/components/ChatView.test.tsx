@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor, fireEvent } from "@testing-library/react";
+import { screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { act } from "react";
 import { ChatView } from "@/features/board/components/ChatView";
@@ -196,22 +196,55 @@ describe("ChatView", () => {
     expect(chip).toHaveAttribute("href", `/api/cards/${card}/uploads/1793817742302-contrato-de-trabalho.pdf`);
     expect(chip).toHaveAttribute("target", "_blank");
     expect(chip).toHaveTextContent("contrato-de-trabalho.pdf");
+    expect(chip).toHaveTextContent("PDF");
     expect(screen.getByTestId("chat-user")).not.toHaveTextContent("/work/.uploads");
     expect(screen.queryByTestId("chat-image")).not.toBeInTheDocument();
   });
 
-  it("áudio anexado vira um player no balão, sem baixar antes do play", async () => {
+  it("áudio anexado vira um player próprio, embaixo do texto, com duração e play", async () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     renderChat();
     const ws = await socket();
     ws.accept();
     const card = "0a78f497-8bfd-4f0a-821b-2dbee5c8d9f9";
-    ws.deliver({ id: "u1", kind: "user", at: 1, text: `ouve isso /work/.uploads/${card}/1793817742302-ptt-2026.opus` });
+    ws.deliver({ id: "u1", kind: "user", at: 1, text: `ouve isso\n\n/work/.uploads/${card}/1793817742302-ptt-2026.opus` });
 
-    const audio = (await screen.findByTestId("chat-audio")).querySelector("audio");
+    const player = await screen.findByTestId("chat-audio");
+    const audio = player.querySelector("audio") as HTMLAudioElement;
     expect(audio).toHaveAttribute("src", `/api/cards/${card}/uploads/1793817742302-ptt-2026.opus`);
-    expect(audio).toHaveAttribute("preload", "none");
-    expect(screen.getByTestId("chat-audio")).toHaveTextContent("ptt-2026.opus");
-    expect(screen.queryByTestId("chat-file")).not.toBeInTheDocument();
+    // Só os metadados: a duração vem de um Range pequeno, o áudio inteiro só no play.
+    expect(audio).toHaveAttribute("preload", "metadata");
+    expect(player).toHaveTextContent("ptt-2026.opus");
+    // O player fica na faixa de anexos, depois do texto, não no meio da frase.
+    const strip = screen.getByTestId("chat-attachments");
+    expect(strip).toContainElement(player);
+    expect(screen.getByTestId("chat-user").textContent?.startsWith("ouve isso")).toBe(true);
+
+    Object.defineProperty(audio, "duration", { configurable: true, value: 63 });
+    fireEvent.loadedMetadata(audio);
+    expect(player).toHaveTextContent("1:03");
+
+    await userEvent.click(within(player).getByRole("button", { name: "Play" }));
+    expect(play).toHaveBeenCalled();
+    fireEvent.play(audio);
+    expect(within(player).getByRole("button", { name: "Pause" })).toBeInTheDocument();
+    play.mockRestore();
+  });
+
+  it("áudio que o navegador não toca vira aviso com o download, não um player morto", async () => {
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    const card = "0a78f497-8bfd-4f0a-821b-2dbee5c8d9f9";
+    ws.deliver({ id: "u1", kind: "user", at: 1, text: `/work/.uploads/${card}/1793817742302-voz.ogg` });
+
+    const player = await screen.findByTestId("chat-audio");
+    fireEvent.error(player.querySelector("audio") as HTMLAudioElement);
+    expect(await within(player).findByText("This browser can't play this audio.")).toBeInTheDocument();
+    expect(within(player).queryByRole("button", { name: "Play" })).not.toBeInTheDocument();
+    expect(within(player).getByRole("link", { name: /Download/ })).toHaveAttribute(
+      "href", `/api/cards/${card}/uploads/1793817742302-voz.ogg`,
+    );
   });
 
   it("planilha anexada abre um preview com a tabela que o runner extraiu", async () => {
@@ -231,6 +264,7 @@ describe("ChatView", () => {
 
     const chip = await screen.findByTestId("chat-file-preview");
     expect(chip).toHaveTextContent("vendas-maio.xlsx");
+    expect(chip).toHaveTextContent("Spreadsheet");
     expect(mockGet).not.toHaveBeenCalledWith(`/cards/${card}/uploads/${arquivo}/preview`);
     await userEvent.click(chip);
 
