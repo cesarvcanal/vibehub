@@ -1159,6 +1159,25 @@ describe("sdk-driver.mjs — /btw", () => {
     await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:slow", from);
   }, 60_000);
 
+  it("diz à pergunta lateral o nível em que a sessão principal está AGORA", async () => {
+    // Produção, 10/11/2026: o nível trocado no pill e um /btw "em que nível você está?" logo depois.
+    // O nível não está na conversa, e a bifurcação não tinha como responder.
+    const driver = startDriver(["--effort", "xhigh"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "hello" });
+    await driver.waitFor((e) => e.type === "result");
+    driver.send({ type: "btw", id: "nivel-1", question: "em que nível você está?" });
+    const primeira = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "nivel-1");
+    expect(String(primeira.text)).toContain("sessão principal está agora: xhigh");
+
+    driver.send({ type: "set_effort", id: "pra-medio", effort: "medium" });
+    await driver.waitFor((e) => e.type === "effort_ack" && e.id === "pra-medio");
+    driver.send({ type: "btw", id: "nivel-2", question: "e agora?" });
+    const segunda = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "nivel-2");
+    expect(String(segunda.text)).toContain("sessão principal está agora: medium");
+    expect(String(segunda.text)).not.toContain("xhigh");
+  }, 60_000);
+
   it("UMA pergunta lateral por vez: a segunda espera a primeira responder", async () => {
     const driver = await driverAfterOneTurn();
     const from = driver.events.length;

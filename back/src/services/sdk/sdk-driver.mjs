@@ -591,14 +591,25 @@ async function warmCatalog() {
 /** Teto de uma resposta lateral: uma consulta pendurada não pode deixar a pergunta sem resposta. */
 const BTW_TIMEOUT_MS = 3 * 60_000;
 
-/** O que o modelo lê: a pergunta, com o aviso de que é lateral e de que não há ferramentas. */
-function btwPrompt(question) {
+/**
+ * O que o modelo lê: a pergunta, com o aviso de que é lateral e de que não há ferramentas. E o nível
+ * de raciocínio da sessão principal, quando se sabe: ele não está na conversa, e "em que nível você
+ * está?" logo depois de trocar no pill ficava sem resposta (produção, 10/11/2026).
+ */
+function btwPrompt(question, nivel) {
+  const nivelAgora = nivel ? ` Nível de raciocínio (effort) em que a sessão principal está agora: ${nivel}.` : "";
   return (
     "<system-reminder>Pergunta LATERAL do usuário, feita enquanto você trabalha na tarefa principal. " +
     "Responda curto e direto, só com o que já está nesta conversa. Aqui você NÃO tem ferramentas: não " +
     "tente ler arquivos nem rodar comandos — se o contexto não basta, diga isso. Esta resposta não " +
-    "interrompe nem muda a tarefa principal.</system-reminder>\n\n" + question
+    "interrompe nem muda a tarefa principal." + nivelAgora + "</system-reminder>\n\n" + question
   );
+}
+
+/** O nível da sessão principal: o que ela mesma diz, senão o fixado no card. Undefined = ninguém sabe. */
+async function nivelDaSessaoPrincipal() {
+  const daSessao = currentQuery ? await nivelDaSessao(currentQuery) : undefined;
+  return daSessao ?? EFFORT ?? undefined;
 }
 
 async function answerBtw(id, question) {
@@ -615,7 +626,8 @@ async function answerBtw(id, question) {
       options.resume = lastSessionId;
       options.forkSession = true;
     }
-    for await (const msg of query({ prompt: btwPrompt(question), options })) {
+    const nivel = await nivelDaSessaoPrincipal();
+    for await (const msg of query({ prompt: btwPrompt(question, nivel), options })) {
       if (msg.type === "assistant" && !msg.parent_tool_use_id) {
         const text = resultText(msg.message?.content).trim();
         if (text) texts.push(text);
