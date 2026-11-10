@@ -1142,6 +1142,48 @@ describe("restart (single and all) — a working card is protected", () => {
     off();
   });
 
+  it("applySessionChange: a card that starts WORKING while the switch waits for the driver is never restarted under the new turn", async () => {
+    // Review of PR #259 (f1): the wait for the driver's answer can last seconds, and the restart-or-
+    // pending decision read the card from BEFORE it. Idle → a message goes out during the wait → the
+    // driver refuses → the old snapshot said idle and the restart killed the turn that just began.
+    // `after` is the store's LIVE record only while the cache holds; the other back of a blue/green
+    // deploy writing board.json makes the store reload, and from then on `after` is a stale copy.
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "waiting");
+    const agent = await import("./agentState.js");
+    const off = agent.onCardEffortApplier(async () => {
+      reg.resetForTesting();
+      await reg.applyCardStatus(card.id, "working");
+      return false;
+    });
+    const before = { ...(await reg.getCard(card.id))! };
+    const after = await reg.updateCard(card.id, { effort: "medium" });
+    expect(after.status).toBe("waiting");
+    runScript.mockClear();
+    expect(await ws.applySessionChange(before, after)).toBe("pending");
+    expect(runScript).not.toHaveBeenCalled();
+    expect((await reg.getCard(card.id))?.restartReason).toBe("config");
+    off();
+  });
+
+  it("applySessionChange: a card deleted while the switch waits for the driver has nothing left to restart", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "waiting");
+    const agent = await import("./agentState.js");
+    const off = agent.onCardEffortApplier(async () => {
+      await reg.removeCard(card.id);
+      return false;
+    });
+    const before = { ...(await reg.getCard(card.id))! };
+    const after = await reg.updateCard(card.id, { effort: "medium" });
+    runScript.mockClear();
+    expect(await ws.applySessionChange(before, after)).toBe("none");
+    expect(runScript).not.toHaveBeenCalled();
+    off();
+  });
+
   it("applySessionChange: a TERMINAL card (no driver) switching effort while Claude WORKS waits for idle — the task is never cut", async () => {
     const { card } = await seed();
     await ws.openCard(card.id);
