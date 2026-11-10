@@ -1841,7 +1841,7 @@ export async function applySessionChange(before: Card | undefined, after: Card, 
     (before.model ?? null) === (after.model ?? null) &&
     (before.accountSlug ?? null) === (after.accountSlug ?? null);
   const level = after.effort ?? null;
-  if (effortOnly && (level === null || isValidEffort(level)) && applyLiveEffort(after.id, level)) {
+  if (effortOnly && (level === null || isValidEffort(level)) && (await applyLiveEffort(after.id, level))) {
     logger.info(
       { audit: true, action: "card.config.live", card: after.worktreeSlug, effort: level ?? "account-default", by },
       "intelligence switched — applied to the live native chat session, no restart",

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
 import * as registry from "../board/registry.js";
 import { syncPendingQuestion } from "./pendingQuestion.js";
@@ -20,7 +21,7 @@ import { mergeTaskEvent, taskSnapshot, toolResultEvent, type AgentTaskEvent, typ
 import { isHarnessFiller } from "../chat/chat.js";
 import {
   NOTE_CONVERSATION_CLEARED, buildLateAnswerText, buildOrphanAnswerText, mergePeerAnswers, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseQuestionDraftFrame, isEmptyQuestionDraft, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
-  type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type QuestionAnswerControl, type QuestionDraft, type StopHow, type UserQuestionItem,
+  type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type EffortAckEvent, type QuestionAnswerControl, type QuestionDraft, type StopHow, type UserQuestionItem,
   type WorkflowFeedEvent, type WorkflowFeedRequest, type DetailRequest, type ResultEvent,
 } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
@@ -161,6 +162,8 @@ export interface DriverSession {
   catalog?: CatalogEvent;
   /** The account's reasoning level, as the driver announced it at boot (`effort_default`). */
   defaultEffort?: string;
+  /** Trocas de nível esperando o `effort_ack` do driver, por id: quem responde, e com que desfecho. */
+  effortAcks: Map<string, (aplicado: boolean) => void>;
   idleTimer: NodeJS.Timeout | null;
   /** Rolling tail of the driver's stderr — what a post-mortem has to say (see STDERR_TAIL_MAX). */
   stderrTail: string;
@@ -715,6 +718,10 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
     if (typeof level === "string" && registry.isValidEffort(level)) session.defaultEffort = level;
     return;
   }
+  if (event.type === "effort_ack") {
+    confirmarTrocaDeNivel(session, event);
+    return;
+  }
   if (event.type === "catalog") {
     // Normalised HERE, on the side that talks to the browser: the driver forwards what the CLI
     // said, and this is where names are validated, descriptions flattened and the list capped.
@@ -1138,6 +1145,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     acceptedCids: new Map(),
     ownQuestions: new Set(),
     openAsks: new Set(),
+    effortAcks: new Map(),
     awaitingDecision: false,
     questionDrafts: new Map(),
     orphanAsks: new Set(),
@@ -1225,6 +1233,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     // a bolinha se não retomar (resume.ts).
     const crashWithWork = !deliberate && !succeeded && session.marker !== undefined && crashListeners.size > 0;
     if (!succeeded && session.boardStatus === "working" && !crashWithWork) syncBoardStatus(session, { force: true });
+    soltarTrocasDeNivel(session);
     // Com o driver morreu quem esperava as respostas: o card não espera mais decisão nenhuma dele.
     if (!succeeded) dropOpenAsks(session);
     else session.openAsks.clear();
@@ -2321,21 +2330,63 @@ export function stopCardDriver(cardId: string): void {
   session.marker = undefined;
   void clearInflightMarker(cardId);
   dropOpenAsks(session);
+  soltarTrocasDeNivel(session);
   // A sondagem da frota é filha deste driver: sem ele não há a quem publicar nem sessão para ler.
   forgetCardWorkflows(cardId);
   logger.debug({ card: session.label }, "sdk driver stopped");
 }
 
 /**
+ * Quanto quem trocou espera a confirmação do driver. Folga sobre os 10 s que o driver espera um CLI
+ * que acabou de nascer antes de aplicar (ULTRA_INIT_TIMEOUT_MS em sdk-driver.mjs).
+ */
+export const EFFORT_ACK_TIMEOUT_MS = 15_000;
+
+/**
  * A NOVA INTELIGÊNCIA DO CARD, na sessão viva: o driver a aplica com `applyFlagSettings` — no meio
  * do turno inclusive, a próxima chamada ao modelo já sai nela — e passa a usá-la em tudo o que vier
- * (um stream novo, a devolução do `ultrathink`). True = havia um driver para recebê-la; false = não
- * há, e quem trocou reinicia a sessão nela (`applySessionChange`).
+ * (um stream novo, a devolução do `ultrathink`).
+ *
+ * Resolve true só quando o driver CONFIRMA (`effort_ack` sem erro). Escrever no stdin não basta: a
+ * tela dizia "já valendo" antes de a sessão aceitar, e uma recusa ficava só no trace do driver.
+ * False = sem driver, recusada, driver morto ou prazo vencido; quem trocou reinicia a sessão no nível
+ * (`applySessionChange`).
  */
-export function applyDriverEffort(cardId: string, effort: string | null): boolean {
+export function applyDriverEffort(cardId: string, effort: string | null): Promise<boolean> {
   const session = sessions.get(cardId);
-  if (!session || !canAcceptTurn(session)) return false;
-  return writeToDriver(session, { type: "set_effort", effort });
+  if (!session || !canAcceptTurn(session)) return Promise.resolve(false);
+  const id = randomUUID();
+  return new Promise((resolve) => {
+    const prazo = setTimeout(() => {
+      logger.warn({ audit: true, action: "sdk.effort.timeout", card: session.label, effort }, "the driver never confirmed the intelligence switch");
+      responder(false);
+    }, EFFORT_ACK_TIMEOUT_MS);
+    const responder = (aplicado: boolean): void => {
+      clearTimeout(prazo);
+      session.effortAcks.delete(id);
+      resolve(aplicado);
+    };
+    session.effortAcks.set(id, responder);
+    if (!writeToDriver(session, { type: "set_effort", id, effort })) responder(false);
+  });
+}
+
+function confirmarTrocaDeNivel(session: DriverSession, ack: EffortAckEvent): void {
+  const responder = session.effortAcks.get(ack.id);
+  // Prazo vencido: quem trocou já seguiu pelo reinício.
+  if (!responder) return;
+  if (typeof ack.error === "string") {
+    logger.warn({ audit: true, action: "sdk.effort.refused", card: session.label, detail: ack.error }, "the live session refused the intelligence switch");
+    responder(false);
+    return;
+  }
+  logger.info({ audit: true, action: "sdk.effort.applied", card: session.label, effort: ack.effort ?? null }, "the live session confirmed the intelligence switch");
+  responder(true);
+}
+
+/** O driver acabou: nenhuma troca pendente vai ser confirmada por ele. */
+function soltarTrocasDeNivel(session: DriverSession): void {
+  for (const responder of [...session.effortAcks.values()]) responder(false);
 }
 
 /**

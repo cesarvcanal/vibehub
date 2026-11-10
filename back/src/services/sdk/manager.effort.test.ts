@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { config } from "../../config/env.js";
 import { applyLiveEffort, cardDefaultEffort, onCardStatusSink } from "../board/agentState.js";
 import {
+  EFFORT_ACK_TIMEOUT_MS,
   applyDriverEffort,
   driverDefaultEffort,
   ensureDriverSession,
@@ -88,34 +89,98 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
+/** The last `set_effort` written to the driver, with the id its confirmation has to carry. */
+const lastEffortFrame = () => frames().filter((f) => f.type === "set_effort").at(-1) as { type: string; id: string; effort: string | null };
+const confirm = (event: object) => spawned[0]!.stdout.emit("data", line({ type: "effort_ack", ...event }));
+
 describe("sdk manager — a inteligência trocada com o driver de pé", () => {
-  it("no meio do turno, o nível vai ao driver como set_effort e o turno segue aberto", async () => {
+  it("no meio do turno, o nível vai ao driver e só conta como aplicado quando ele CONFIRMA", async () => {
     const session = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
     spawned[0]!.stdout.emit("data", line({ type: "ready" }));
     handleClientFrame(session, `{"type":"user","text":"revisa os PRs"}`);
     await flush();
 
-    expect(applyDriverEffort(CARD, "high")).toBe(true);
-    expect(frames().at(-1)).toEqual({ type: "set_effort", effort: "high" });
+    const applied = applyDriverEffort(CARD, "high");
+    const frame = lastEffortFrame();
+    expect(frame).toMatchObject({ type: "set_effort", effort: "high" });
+    expect(frame.id).toMatch(/\S/);
+    let settled = false;
+    void applied.then(() => { settled = true; });
+    await flush();
+    expect(settled).toBe(false);
+
+    confirm({ id: frame.id, effort: "high" });
+    expect(await applied).toBe(true);
     // Nada foi parado: o mesmo driver, o mesmo turno.
     expect(spawned).toHaveLength(1);
     expect(session.closed).toBe(false);
     expect(session.activeTurns).toBe(1);
   });
 
-  it("é o aplicador que o board consulta (applyLiveEffort)", async () => {
+  it("a sessão recusou (confirmação com erro): não aplicado, e quem trocou cai no reinício", async () => {
     ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
-    expect(applyLiveEffort(CARD, "xhigh")).toBe(true);
-    expect(frames().at(-1)).toEqual({ type: "set_effort", effort: "xhigh" });
+    const applied = applyDriverEffort(CARD, "medium");
+    confirm({ id: lastEffortFrame().id, error: "control request failed" });
+    expect(await applied).toBe(false);
+  });
+
+  it("a confirmação de OUTRA troca não responde por esta", async () => {
+    ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
+    const primeira = applyDriverEffort(CARD, "low");
+    const idPrimeira = lastEffortFrame().id;
+    const segunda = applyDriverEffort(CARD, "max");
+    const idSegunda = lastEffortFrame().id;
+    expect(idSegunda).not.toBe(idPrimeira);
+
+    let primeiraRespondida = false;
+    void primeira.then(() => { primeiraRespondida = true; });
+    confirm({ id: idSegunda, error: "recusada" });
+    expect(await segunda).toBe(false);
+    await flush();
+    expect(primeiraRespondida).toBe(false);
+    confirm({ id: idPrimeira, effort: "low" });
+    expect(await primeira).toBe(true);
+  });
+
+  it("um driver que nunca confirma vence o prazo: não aplicado", async () => {
+    ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const applied = applyDriverEffort(CARD, "high");
+      await vi.advanceTimersByTimeAsync(EFFORT_ACK_TIMEOUT_MS);
+      expect(await applied).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("o driver morreu ou foi parado antes de confirmar: não aplicado, sem esperar o prazo", async () => {
+    ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
+    const caiu = applyDriverEffort(CARD, "high");
+    spawned[0]!.emit("close", 1);
+    expect(await caiu).toBe(false);
+
+    ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
+    const parado = applyDriverEffort(CARD, "high");
+    stopCardDriver(CARD);
+    expect(await parado).toBe(false);
+  });
+
+  it("é o aplicador que o board consulta (applyLiveEffort), e espera a mesma confirmação", async () => {
+    ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
+    const applied = applyLiveEffort(CARD, "xhigh");
+    expect(lastEffortFrame()).toMatchObject({ type: "set_effort", effort: "xhigh" });
+    confirm({ id: lastEffortFrame().id, effort: "xhigh" });
+    expect(await applied).toBe(true);
   });
 
   it("sem driver — nunca subiu, ou já parou — não há a quem aplicar: quem trocou reinicia", async () => {
-    expect(applyDriverEffort(CARD, "high")).toBe(false);
-    expect(applyLiveEffort(CARD, "high")).toBe(false);
+    expect(await applyDriverEffort(CARD, "high")).toBe(false);
+    expect(await applyLiveEffort(CARD, "high")).toBe(false);
 
     ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
     stopCardDriver(CARD);
-    expect(applyDriverEffort(CARD, "high")).toBe(false);
+    expect(await applyDriverEffort(CARD, "high")).toBe(false);
   });
 
   it("o caso do card e9146043: subagente em PRIMEIRO PLANO rodando, a troca vai ao driver e a chamada dele volta", async () => {
@@ -128,8 +193,9 @@ describe("sdk manager — a inteligência trocada com o driver de pé", () => {
     spawned[0]!.stdout.emit("data", line({ type: "tool_use", id: "task-fg", name: "Agent", input: { description: "Implement Task 1" } }));
     await flush();
 
-    expect(applyLiveEffort(CARD, "xhigh")).toBe(true);
-    expect(frames().at(-1)).toEqual({ type: "set_effort", effort: "xhigh" });
+    const applied = applyLiveEffort(CARD, "xhigh");
+    confirm({ id: lastEffortFrame().id, effort: "xhigh" });
+    expect(await applied).toBe(true);
     expect(session.closed).toBe(false);
     expect(session.activeTurns).toBe(1);
 
@@ -146,17 +212,29 @@ describe("sdk manager — a inteligência trocada com o driver de pé", () => {
     handleClientFrame(session, `{"type":"user","text":"revisa os PRs"}`);
     await flush();
 
-    expect(applyDriverEffort(CARD, null)).toBe(true);
-    expect(frames().at(-1)).toEqual({ type: "set_effort", effort: null });
-    expect(applyLiveEffort(CARD, null)).toBe(true);
+    const applied = applyDriverEffort(CARD, null);
+    expect(lastEffortFrame()).toMatchObject({ type: "set_effort", effort: null });
+    confirm({ id: lastEffortFrame().id, effort: "medium" });
+    expect(await applied).toBe(true);
     expect(session.closed).toBe(false);
     expect(spawned).toHaveLength(1);
+  });
+
+  it("a confirmação é estado, não conversa: nenhuma linha de histórico, nenhum frame no navegador", async () => {
+    const session = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
+    const sent: string[] = [];
+    session.sockets.add({ readyState: 1, send: (s: string) => sent.push(s) } as never);
+    const applied = applyDriverEffort(CARD, "high");
+    confirm({ id: lastEffortFrame().id, effort: "high" });
+    await applied;
+    await flush();
+    expect(sent.some((s) => s.includes("effort_ack"))).toBe(false);
   });
 
   it("um driver cujo processo já saiu não conta como vivo", async () => {
     ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
     spawned[0]!.exitCode = 1;
-    expect(applyDriverEffort(CARD, "high")).toBe(false);
+    expect(await applyDriverEffort(CARD, "high")).toBe(false);
   });
 });
 

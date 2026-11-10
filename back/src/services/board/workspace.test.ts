@@ -1042,7 +1042,7 @@ describe("restart (single and all) — a working card is protected", () => {
     await reg.applyCardStatus(card.id, "working");
     const applied: Array<[string, string]> = [];
     const agent = await import("./agentState.js");
-    agent.onCardEffortApplier((id, effort) => { applied.push([id, effort]); return true; });
+    agent.onCardEffortApplier((id, effort) => { applied.push([id, effort]); return Promise.resolve(true); });
     const before = { ...(await reg.getCard(card.id))! };
     const after = await reg.updateCard(card.id, { effort: "high" });
     runScript.mockClear();
@@ -1071,7 +1071,7 @@ describe("restart (single and all) — a working card is protected", () => {
     const agent = await import("./agentState.js");
     let driverUp = false;
     const applied: Array<string | null> = [];
-    const off = agent.onCardEffortApplier((_id, effort) => { applied.push(effort); return driverUp; });
+    const off = agent.onCardEffortApplier((_id, effort) => { applied.push(effort); return Promise.resolve(driverUp); });
 
     // No driver (a terminal card, a driver that idled out): the old restart, onto the pin.
     const b1 = { ...(await reg.getCard(card.id))! };
@@ -1109,7 +1109,7 @@ describe("restart (single and all) — a working card is protected", () => {
     await reg.applyCardStatus(card.id, "working");
     const agent = await import("./agentState.js");
     const applied: Array<[string, string | null]> = [];
-    const off = agent.onCardEffortApplier((id, effort) => { applied.push([id, effort]); return true; });
+    const off = agent.onCardEffortApplier((id, effort) => { applied.push([id, effort]); return Promise.resolve(true); });
     const before = { ...(await reg.getCard(card.id))! };
     const after = await reg.updateCard(card.id, { effort: null });
     runScript.mockClear();
@@ -1123,12 +1123,31 @@ describe("restart (single and all) — a working card is protected", () => {
     off();
   });
 
+  it("applySessionChange: a live driver that does NOT CONFIRM the switch never reads as live — mid-turn it waits for idle", async () => {
+    // The screen said "já valendo" as soon as the level was written to the driver's stdin; a session
+    // that refused it only left a line in the driver's trace. Now the driver's answer decides.
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "working");
+    const agent = await import("./agentState.js");
+    const asked: Array<string | null> = [];
+    const off = agent.onCardEffortApplier((_id, effort) => { asked.push(effort); return Promise.resolve(false); });
+    const before = { ...(await reg.getCard(card.id))! };
+    const after = await reg.updateCard(card.id, { effort: "medium" });
+    runScript.mockClear();
+    expect(await ws.applySessionChange(before, after)).toBe("pending");
+    expect(asked).toEqual(["medium"]);
+    expect(runScript).not.toHaveBeenCalled();
+    expect((await reg.getCard(card.id))?.restartReason).toBe("config");
+    off();
+  });
+
   it("applySessionChange: a TERMINAL card (no driver) switching effort while Claude WORKS waits for idle — the task is never cut", async () => {
     const { card } = await seed();
     await ws.openCard(card.id);
     await reg.applyCardStatus(card.id, "working");
     const agent = await import("./agentState.js");
-    const off = agent.onCardEffortApplier(() => false);
+    const off = agent.onCardEffortApplier(() => Promise.resolve(false));
     for (const level of ["high", null] as const) {
       const before = { ...(await reg.getCard(card.id))! };
       const after = await reg.updateCard(card.id, { effort: level });
