@@ -694,6 +694,54 @@ describe("ReviewPanel — merge", () => {
     expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeEnabled();
   });
 
+  it("merge que saiu no GitHub mas a leitura disse parado: o merged que vem depois é anunciado, sem afirmar que não mergeou", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    merging = false;
+    post.mockRejectedValue(failure(undefined));
+    open("mer", review({ phase: "ready" }));
+    await loaded();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await user.click(screen.getByRole("button", { name: "Mergear na dev" }));
+
+    const stopped = await screen.findByRole("alert");
+    expect(stopped).toHaveTextContent("O merge parou no servidor antes de terminar");
+    expect(stopped).not.toHaveTextContent(/não foi mergeado/);
+    // A conferência com o GitHub acha o PR mergeado: é o sucesso daquele clique.
+    current = review({ phase: "merged" });
+    await tick(10_100);
+
+    expect(await screen.findByText("Mergeado na dev")).toBeInTheDocument();
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("PR #553 mergeado na dev"));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("só leitura do servidor decide: uma ação que regrava a revisão no cache não conta como 'nenhum merge rodando'", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    merging = false;
+    // Uma sugestão em aberto: o merger decide enquanto espera o merge.
+    const withSuggestion = review({ phase: "ready", findings: [finding({ severity: "suggestion", title: "renomear" })] });
+    post.mockImplementation(async (url: string) => {
+      if (url.endsWith("/merge")) throw failure(409, { error: "merge já em andamento", reason: "merging" });
+      return { review: current };
+    });
+    open("mer", withSuggestion);
+    await loaded();
+    // A partir daqui o servidor não responde mais as leituras da revisão (lentas, no meio do merge).
+    const base = get.getMockImplementation()!;
+    get.mockImplementation(async (url: string) => (url === "/cards/c1/review" ? new Promise(() => {}) : await base(url)));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await user.click(screen.getByRole("button", { name: "Mergear na dev" }));
+    expect(await screen.findByText(/O merge já está em andamento/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: /Achados/ }));
+    await user.click(screen.getByRole("button", { name: /Fazer todas e enviar/ }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/reviews/r1/suggestions", expect.anything()));
+    await tick(3_100);
+
+    expect(screen.getByRole("button", { name: "Mergeando…" })).toBeDisabled();
+    expect(screen.queryByText(/O merge parou no servidor/)).toBeNull();
+  });
+
   it("a leitura de antes do clique (sem merge rodando) não solta o botão: só uma leitura nova decide", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     merging = false;
