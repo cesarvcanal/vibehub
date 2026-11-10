@@ -415,9 +415,14 @@ quando pinta a palavra no compositor. Então o driver:
 
 **Troca de nível no meio de um turno com a palavra:** a escolha no pill é a mais nova e vence. O
 nível entra na hora, sai do registro da palavra (`ultraRaised`), e a devolução no fim do turno limpa
-só o `ultracode`, se houver. A barra de atividade do chat deixa de dizer "esforço alto" a partir da
-troca, desde que ela tenha sido confirmada ao vivo e iniciada depois do envio da mensagem
-(`liveEffortSwitchAt`); o "ultracode" continua, porque a orquestração segue ligada.
+só o `ultracode`, se houver. Nesse momento o driver emite `keyword_effort_replaced` (vai ao
+navegador, não ao histórico), e a barra de atividade do chat deixa de dizer "esforço alto". Quem
+sabe se a troca veio antes ou depois da palavra é o driver, que serializa as duas; o relógio do
+navegador não sabe. O "ultracode" continua, porque a orquestração segue ligada.
+
+Com a fila do nível ocupada (uma troca, a devolução do turno anterior), a escalada de uma corrente
+viva espera a vez e pode cair uma ou duas chamadas depois do início do turno. É deliberado: segurar
+a mensagem até a escalada deixaria a mensagem seguinte, enviada na hora, passar na frente.
 
 Duas armadilhas que o teste cerca: a mensagem é empurrada num `finally`, então nenhuma falha da
 escalada pode engoli-la; e a primeira mensagem de uma corrente nova espera o
@@ -439,25 +444,38 @@ gerada no instante da troca termina no nível antigo (o nível é parâmetro de 
   `getSettings().effective.effortLevel` e, havendo nível nos settings, o reaplica por cima.
 - **Confirmação:** cada `set_effort` é respondido com `effort_ack { id, effort? | error? }`.
   `effort` = o nível que a própria sessão diz que a próxima chamada vai usar
-  (`getSettings().applied.effort`); `error` = a sessão recusou. O back espera essa resposta
-  (`EFFORT_ACK_TIMEOUT_MS`, 20 s: os 10 s que o driver espera um CLI recém-nascido, mais a troca e a
-  leitura do nível) e só então `applySessionChange` responde `live` e a tela diz "já
-  valendo". Recusa, prazo vencido ou driver morto = não aplicado, e a troca cai no caminho de
-  sempre (abaixo). Cada desfecho vira auditoria `sdk.effort.applied` / `refused` / `timeout`.
+  (`getSettings().applied.effort`); `error` = não aplicada, e nada mudou no driver. O driver
+  responde toda troca até o **prazo de início** (`EFFORT_SWITCH_START_DEADLINE_MS`, 12 s da chegada,
+  fila e subida do CLI incluídas); a que não começou a escrever até lá é recusada e **nunca grava
+  depois**. A que começou termina nos prazos das próprias idas. O back espera
+  (`EFFORT_ACK_TIMEOUT_MS`, 25 s: 12 s + escrita 4 s + leitura 4 s, mais folga) e só então
+  `applySessionChange` responde `live` e a tela diz "já valendo". Recusa, prazo vencido ou driver
+  morto = não aplicado, e a troca cai no caminho de sempre (abaixo), decidido pelo status do card
+  relido **depois** da espera (uma mensagem pode ter começado um turno nesse meio tempo). Cada
+  desfecho vira auditoria `sdk.effort.applied` / `refused` / `timeout`.
 - **Um escritor só para o nível:** a escalada do `ultrathink`, a devolução no fim do turno e a troca
   do pill passam pela mesma fila do driver (`inEffortQueue`, fora da fila das mensagens), uma de
   cada vez. A devolução e a volta ao padrão da conta são várias idas ao CLI, e uma escrita de fora
   no meio era desfeita pela última. Cada ida tem prazo (`EFFORT_STEP_TIMEOUT_MS`, 4 s): um control
-  request sem resposta não trava a fila nem o /btw. Um CLI que ainda não terminou de subir recusa a
-  troca (a escrita se perderia), e o back cai no reinício para o nível novo.
-- **/btw:** o aviso da pergunta lateral leva o nível em que a sessão principal está agora, dito pela
-  própria sessão (com ela de pé, nunca o pin do card) — o nível não está na conversa, e "em que nível
-  você está?" ficava sem resposta.
+  request sem resposta não trava a fila nem o /btw. O prazo solta a fila mas não para a ida já
+  enviada, então cada tarefa recebe `ownsQueue()`, e a escrita que vem depois de um `await` (a
+  última ida da volta ao nível da conta) só sai se nenhuma tarefa posterior começou. Um CLI que ainda
+  não terminou de subir recusa a troca (a escrita se perderia), e o back cai no reinício para o
+  nível novo.
+- **/btw:** o aviso da pergunta lateral leva o nível em que a sessão principal está agora — o nível
+  não está na conversa, e "em que nível você está?" ficava sem resposta. A leitura entra na fila do
+  nível (nunca no meio da volta ao nível da conta, que passa pelo padrão do modelo). Vale o que a
+  sessão diz; com ela muda, o que o driver escreveu: o nível da palavra num turno `ultrathink`,
+  senão o pin.
 - **Volta ao padrão da conta:** o nível que a sessão confirma vira o `defaultEffort` do card, que o
   pill de um card sem nível lê. Um nível confirmado diferente do pedido (plano que limita o esforço)
   conta como aplicado e sai em `warn` na auditoria; o pill se acerta pelo carimbo da próxima chamada.
 - Sem driver (card de terminal) a troca segue como antes: reinicia já se o card está livre, ou
   fica pendente até ele ficar livre (`restartPendingAt`) — nunca corta um turno.
+- **Variáveis de teste:** `VIBEHUB_EFFORT_STEP_TIMEOUT_MS` e `VIBEHUB_EFFORT_SWITCH_START_DEADLINE_MS`
+  sobrescrevem os dois prazos do driver (4 s e 12 s), lidas no boot dele. Existem para os testes
+  encurtarem os prazos (mesmo padrão de `VIBEHUB_CONTEXT_USAGE_TIMEOUT_MS`); em produção não se
+  definem, e o `EFFORT_ACK_TIMEOUT_MS` do back conta com os valores padrão.
 
 **O nível antes da primeira resposta.** Num card sem nível fixado, nada dizia o nível até a primeira
 resposta carimbar o transcript. A consulta descartável do catálogo (`warmCatalog`, no boot do
