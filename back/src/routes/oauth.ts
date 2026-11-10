@@ -4,7 +4,7 @@ import {
   validateAuthorizeRequest, originOf, MCP_SCOPE,
 } from "../auth/oauth.js";
 import { isUsername, verifyCredentials } from "../auth/users.js";
-import { AttemptLimiter, LOGIN_ATTEMPTS_PER_ACCOUNT } from "./auth.js";
+import { AttemptLimiter, LOGIN_ATTEMPTS_PER_ACCOUNT, chargeSignInTry, refundAddressTry } from "./auth.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -21,7 +21,11 @@ import { logger } from "../utils/logger.js";
  * stays wherever it was (a VPN, a LAN).
  */
 
-/** Failed sign-ins on the consent page per address+username, like the board's own sign-in. */
+/**
+ * Failed sign-ins on the consent page per address+username, like the board's own sign-in. The
+ * per-address ceiling is not this page's own but the board's (routes/auth.ts) — one budget per
+ * address across both forms: registration is open, so anyone reaches this POST.
+ */
 const limiter = new AttemptLimiter(LOGIN_ATTEMPTS_PER_ACCOUNT, 15 * 60_000);
 
 const ESCAPE: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
@@ -198,17 +202,24 @@ export async function oauthRoutes(app: FastifyInstance): Promise<void> {
 
     const username = String(req.body?.username ?? "").trim().toLowerCase();
     const password = String(req.body?.password ?? "");
+    // Refused before it becomes a counter key or is echoed into the page, as on the board's sign-in:
+    // a megabyte-long "username" would otherwise pin memory for the whole window and come back
+    // inside the answer. No scrypt runs for it, so nothing is charged.
+    if (!isUsername(username)) {
+      return await reply.code(401).send(loginPage(lang, p, clientName, { error: TEXT[lang].invalid }));
+    }
     const key = `${req.ip}|${username}`;
-    const wait = limiter.hit(key);
+    const wait = chargeSignInTry(req.ip, limiter, key);
     if (wait > 0) {
       return await reply.code(429).header("retry-after", String(wait))
         .send(loginPage(lang, p, clientName, { error: TEXT[lang].tooMany, username }));
     }
-    const user = isUsername(username) ? await verifyCredentials(username, password) : null;
+    const user = await verifyCredentials(username, password);
     if (!user) {
       return await reply.code(401).send(loginPage(lang, p, clientName, { error: TEXT[lang].invalid, username }));
     }
     limiter.clear(key);
+    refundAddressTry(req.ip);
 
     const code = issueCode({
       clientId: p.clientId, redirectUri: p.redirectUri, codeChallenge: p.codeChallenge, userId: user.id, scope: MCP_SCOPE,
