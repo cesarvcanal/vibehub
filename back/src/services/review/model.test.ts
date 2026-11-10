@@ -3,6 +3,7 @@ import {
   applyAuthorResponses,
   applyReviewerVerdicts,
   autoMergeEligible,
+  waivedSuggestions,
   blockingOpen,
   normalizeSubmittedFindings,
   pendingQuestions,
@@ -189,6 +190,20 @@ describe("autoMergeEligible", () => {
     expect(autoMergeEligible(authorized([finding({ severity: "question" })]))).toBe(false);
     expect(autoMergeEligible({ ...authorized([]), approvePending: true })).toBe(false);
     expect(autoMergeEligible({ ...authorized([]), phase: "fixing" })).toBe(false);
+  });
+
+  it("merge autorizado: a sugestão que alguém já mandou o autor aplicar ('Fazer') segura até ele subir", () => {
+    const authorized = (findings: Finding[]): Review => ({ ...ready(findings), mergeAuthorized: true });
+    const asked = finding({ severity: "suggestion", requested: { by: "mussa", at: 1 } });
+    expect(autoMergeEligible(authorized([asked]))).toBe(false);
+    expect(autoMergeEligible(authorized([asked, finding({ id: "f2", severity: "suggestion" })]))).toBe(false);
+  });
+
+  it("waivedSuggestions: as sugestões em pé que o merge autorizado deixa passar (para os textos dizerem)", () => {
+    const s1 = finding({ severity: "suggestion" });
+    const asked = finding({ id: "f2", severity: "suggestion", requested: { by: "mussa", at: 1 } });
+    expect(waivedSuggestions({ ...ready([s1, asked]), mergeAuthorized: true }).map((f) => f.id)).toEqual(["f1"]);
+    expect(waivedSuggestions(ready([s1]))).toEqual([]);
   });
 });
 
