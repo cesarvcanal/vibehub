@@ -47,6 +47,28 @@ describe("missingPrSections — the description has every section of the standar
     expect(missingPrSections(flat)).toEqual(PR_SECTIONS.map((s) => s.label));
   });
 
+  it("one heading counts for ONE section: '## Contexto e problema' does not stand for both", () => {
+    const body = BODY.replace("## Contexto", "## Contexto e problema").replace("## Problema identificado", "Problema (sem heading)");
+    expect(missingPrSections(body)).toEqual(["Problema identificado"]);
+  });
+
+  it("an ambiguous heading goes where it is needed: '## Problema e contexto' + '## Contexto' covers both", () => {
+    const body = BODY.replace("## Problema identificado", "## Problema e contexto");
+    expect(missingPrSections(body)).toEqual([]);
+    const reversed = BODY.replace("## Contexto", "## Problema e contexto").replace("## Problema identificado", "## Contexto");
+    expect(missingPrSections(reversed)).toEqual([]);
+  });
+
+  it("a # line inside a fenced code block is code, not a heading (``` and ~~~)", () => {
+    for (const fence of ["```", "~~~"]) {
+      const body = BODY.replace("## Objetivo", `${fence}bash\n# Objetivo\n${fence}`);
+      expect(missingPrSections(body), fence).toEqual(["Objetivo"]);
+    }
+    // after the fence closes, headings count again
+    const after = BODY.replace("## Contexto", "```\n# nada\n```\n## Contexto");
+    expect(missingPrSections(after)).toEqual([]);
+  });
+
   it("an empty body misses everything", () => {
     expect(missingPrSections("")).toHaveLength(PR_SECTIONS.length);
   });

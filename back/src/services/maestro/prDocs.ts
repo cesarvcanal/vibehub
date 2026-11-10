@@ -81,14 +81,51 @@ function normalizeHeading(text: string): string {
     .trim();
 }
 
-/** The sections of {@link PR_SECTIONS} that have no heading in `body`, by label. PURE. */
+/**
+ * The markdown headings of a body, normalized. A line inside a fenced code block (``` or ~~~) is code —
+ * a `# comment` in a bash sample is not a section. PURE.
+ */
+function headingsOf(body: string): string[] {
+  const out: string[] = [];
+  let fence: string | null = null;
+  for (const line of String(body ?? "").split(/\r?\n/)) {
+    const marker = /^\s{0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (marker) {
+      if (fence === null) fence = marker[0]!;
+      else if (marker[0] === fence) fence = null;
+      continue;
+    }
+    if (fence !== null) continue;
+    const heading = /^\s{0,3}#{1,6}\s+(.+)$/.exec(line)?.[1];
+    if (heading !== undefined) out.push(normalizeHeading(heading));
+  }
+  return out;
+}
+
+/**
+ * The sections of {@link PR_SECTIONS} that have no heading in `body`, by label. Each heading stands for
+ * ONE section ("## Contexto e problema" is not both): a bipartite matching (augmenting paths), so an
+ * ambiguous heading goes to the section that needs it — "## Problema e contexto" plus "## Contexto"
+ * covers both, whichever comes first. Nine sections and a handful of headings: trivially cheap. PURE.
+ */
 export function missingPrSections(body: string): string[] {
-  const headings = String(body ?? "")
-    .split(/\r?\n/)
-    .map((line) => /^\s{0,3}#{1,6}\s+(.+)$/.exec(line)?.[1])
-    .filter((h): h is string => h !== undefined)
-    .map(normalizeHeading);
-  return PR_SECTIONS.filter((s) => !headings.some((h) => s.match.some((m) => h.includes(m)))).map((s) => s.label);
+  const headings = headingsOf(body);
+  /** headingOwner[h] = the section heading h stands for. */
+  const headingOwner: (number | undefined)[] = headings.map(() => undefined);
+  const fits = (section: number, h: number) => PR_SECTIONS[section]!.match.some((m) => headings[h]!.includes(m));
+  const assign = (section: number, tried: Set<number>): boolean => {
+    for (let h = 0; h < headings.length; h++) {
+      if (tried.has(h) || !fits(section, h)) continue;
+      tried.add(h);
+      const owner = headingOwner[h];
+      if (owner === undefined || assign(owner, tried)) {
+        headingOwner[h] = section;
+        return true;
+      }
+    }
+    return false;
+  };
+  return PR_SECTIONS.filter((_, section) => !assign(section, new Set())).map((s) => s.label);
 }
 
 /** Where a comment points, for messages. PURE. */
