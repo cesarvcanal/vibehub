@@ -182,10 +182,11 @@ export function appendHistory(cardId: string, event: HistoryEvent): Promise<void
 }
 
 /**
- * The last `limit` replayable events of a card, oldest first — what a fresh connect sends to the
- * browser before the driver says `ready`. Reading is also when the file is COMPACTED: a log that
- * has grown past several times the replay window is rewritten to just that window, so the hot
- * append path never pays for a rewrite. Never throws — no file simply means no history yet.
+ * The replay window of a card, oldest first — what a fresh connect sends to the browser before the
+ * driver says `ready`: the last `limit` events of the MAIN agent plus the subagents' lines among
+ * them (see `replayWindow`). Reading is also when the file is COMPACTED: a log that has grown past
+ * several times the replay limit is rewritten to just that window, so the hot append path never
+ * pays for a rewrite. Never throws — no file simply means no history yet.
  *
  * `strict`: a read that FAILS (EBUSY, EMFILE…) throws instead of reading as "no history". For a
  * caller that decides something once from the answer (the orphan-question sweep), an empty list
@@ -214,10 +215,36 @@ export async function readHistory(
     await appendHistoryBarrier(cardId, async () => {
       const current = parseHistory(await readFile(file, "utf8"));
       if (current.length <= compactAbove) return; // a rewind already shrank it
-      await writeFileAtomic(file, current.slice(-limit).map((e) => JSON.stringify(e)).join("\n") + "\n");
+      await writeFileAtomic(file, replayWindow(current, limit).map((e) => JSON.stringify(e)).join("\n") + "\n");
     });
   }
-  return events.slice(-limit);
+  return replayWindow(events, limit);
+}
+
+/**
+ * The events a replay draws: the last `limit` of the MAIN agent and, from the first of those on, the
+ * last `limit` of the subagents (the rows under each Agent card — its action count, its last action).
+ *
+ * Two budgets, because one shared window was the bug: a fleet writes hundreds of subagent lines in a
+ * few minutes, and counted together with the conversation they pushed every message out of the
+ * replay — the F5 came back with the subagents' activity and not a word of the person's. A subagent
+ * line older than the main window has nothing on screen to hang under, so it goes with it. PURE.
+ */
+function replayWindow(events: HistoryEvent[], limit: number): HistoryEvent[] {
+  const kept: HistoryEvent[] = [];
+  let main = 0;
+  let sub = 0;
+  for (let i = events.length - 1; i >= 0 && main < limit; i -= 1) {
+    const event = events[i] as HistoryEvent;
+    if ((event as { parentToolUseId?: unknown }).parentToolUseId) {
+      if (sub >= limit) continue;
+      sub += 1;
+    } else {
+      main += 1;
+    }
+    kept.push(event);
+  }
+  return kept.reverse();
 }
 
 /** The log's lines as events. A torn line (a crash mid-append) is skipped, the rest kept. PURE. */

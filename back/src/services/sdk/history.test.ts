@@ -149,6 +149,72 @@ describe("appendHistory / readHistory", () => {
     expect((after[after.length - 1] as { text: string }).text).toBe("depois");
   });
 
+  /**
+   * Uma frota de subagentes grava centenas de `tool_use`/`assistant_text` com `parentToolUseId` em
+   * poucos minutos. Contados na mesma janela do principal, eles empurravam a conversa inteira para
+   * fora do replay: o F5 voltava só com a atividade dos subagentes, sem uma mensagem da pessoa.
+   */
+  describe("a janela do replay é contada pelo agente principal", () => {
+    const sub = (i: number, parent = "agent-1"): HistoryEvent =>
+      ({ type: "tool_use", id: `s${i}`, name: "Read", input: { file_path: `/f${i}` }, parentToolUseId: parent });
+    const texts = (events: HistoryEvent[]) =>
+      events.filter((e) => !(e as { parentToolUseId?: string }).parentToolUseId).map((e) => (e as { text?: string }).text);
+
+    it("uma frota maior que a janela não tira a conversa principal do replay", async () => {
+      await appendHistory(CARD, { type: "user", text: "faz a análise" });
+      await appendHistory(CARD, { type: "assistant_text", text: "vou disparar a frota" });
+      for (let i = 0; i < 600; i += 1) await appendHistory(CARD, sub(i));
+      await appendHistory(CARD, { type: "assistant_text", text: "a frota terminou" });
+
+      const replay = await readHistory(CARD);
+      expect(texts(replay)).toEqual(["faz a análise", "vou disparar a frota", "a frota terminou"]);
+    });
+
+    it("as linhas dos subagentes seguem no replay, na ordem, intercaladas com o principal", async () => {
+      await appendHistory(CARD, { type: "user", text: "u" });
+      await appendHistory(CARD, { type: "tool_use", id: "agent-1", name: "Agent", input: { description: "d" } });
+      await appendHistory(CARD, sub(0));
+      await appendHistory(CARD, { type: "assistant_text", text: "lendo", parentToolUseId: "agent-1" });
+      await appendHistory(CARD, { type: "assistant_text", text: "fim" });
+      const replay = await readHistory(CARD);
+      expect(replay.map((e) => e.type)).toEqual(["user", "tool_use", "tool_use", "assistant_text", "assistant_text"]);
+    });
+
+    it("conta `limit` eventos do principal e só os subagentes DEPOIS do primeiro deles", async () => {
+      const limit = 3;
+      await appendHistory(CARD, { type: "user", text: "m0" });
+      await appendHistory(CARD, sub(0)); // antes da janela do principal: fica de fora
+      for (let i = 1; i <= 3; i += 1) {
+        await appendHistory(CARD, { type: "user", text: `m${i}` });
+        await appendHistory(CARD, sub(i));
+      }
+      const replay = await readHistory(CARD, limit);
+      expect(replay.map((e) => (e as { text?: string; id?: string }).text ?? (e as { id: string }).id))
+        .toEqual(["m1", "s1", "m2", "s2", "m3", "s3"]);
+    });
+
+    it("os subagentes têm teto próprio: os `limit` mais recentes, sem inchar o frame do replay", async () => {
+      const limit = 3;
+      await appendHistory(CARD, { type: "user", text: "m0" });
+      for (let i = 0; i < 10; i += 1) await appendHistory(CARD, sub(i));
+      const replay = await readHistory(CARD, limit);
+      expect(replay.map((e) => (e as { text?: string; id?: string }).text ?? (e as { id: string }).id))
+        .toEqual(["m0", "s7", "s8", "s9"]);
+    });
+
+    it("a compactação grava a mesma janela que o replay mostra — a conversa principal fica no arquivo", async () => {
+      const limit = 2;
+      await appendHistory(CARD, { type: "user", text: "pergunta" });
+      await appendHistory(CARD, { type: "assistant_text", text: "resposta" });
+      for (let i = 0; i < limit * HISTORY_COMPACT_FACTOR + 5; i += 1) await appendHistory(CARD, sub(i));
+      const replay = await readHistory(CARD, limit);
+      const file = join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`);
+      const lines = (await readFile(file, "utf8")).split("\n").filter(Boolean).map((l) => JSON.parse(l) as HistoryEvent);
+      expect(lines).toEqual(replay);
+      expect(texts(lines)).toEqual(["pergunta", "resposta"]);
+    });
+  });
+
   it("interleaved appends serialize into whole lines", async () => {
     const writes: Promise<void>[] = [];
     for (let i = 0; i < 20; i += 1) writes.push(appendHistory(CARD, { type: "user", text: `p${i}` }));
