@@ -22,7 +22,6 @@ import { JumpToLatest, useStickToBottom } from "@/features/board/components/Jump
 import { createReconnectBackoff, type ConnectionState } from "@/features/board/lib/reconnect";
 import {
   groupChatRows,
-  mergeEvent,
   originRole,
   parseChatFrame,
   pendingPhase,
@@ -32,6 +31,7 @@ import {
   type MessageOrigin,
   type PendingMessage,
   unechoedPending,
+  unseenEvents,
   userEventIdsSaying,
 } from "@/features/board/lib/chat";
 import {
@@ -75,6 +75,9 @@ export const QUIET_HINT_MS = 60_000;
  * sit staring at a spinner.
  */
 export const REPLAY_GRACE_MS = 600;
+
+/** The longest a received event waits for its animation frame — a background tab gets none. */
+const EVENT_FLUSH_MAX_MS = 100;
 
 export interface ChatViewProps {
   cardId: string;
@@ -153,6 +156,39 @@ export function ChatView({
     const backoff = createReconnectBackoff(Math.random);
     let disposed = false;
     const setStatus = (state: ConnectionState): void => statusRef.current?.(state);
+    /**
+     * The stream REPLAYS its tail (up to 400 lines) on every connect, one socket frame per event —
+     * so what arrives waits here and lands once per animation frame, and only the events not drawn
+     * yet are news: a reconnect replaying the same history renders nothing and does not count as
+     * activity for the quiet hint. `seenIds` mirrors the ids in `events`, which only ever grow by
+     * the flush below and are cleared together with it when this effect re-runs.
+     */
+    const seenIds = new Set<string>();
+    let received: ChatEvent[] = [];
+    let flushFrame: number | null = null;
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    const cancelFlush = (): void => {
+      if (flushFrame !== null) cancelAnimationFrame(flushFrame);
+      if (flushTimer !== null) clearTimeout(flushTimer);
+      flushFrame = null;
+      flushTimer = null;
+    };
+    const flushReceived = (): void => {
+      cancelFlush();
+      const fresh = unseenEvents(received, seenIds);
+      received = [];
+      if (fresh.length === 0) return;
+      for (const event of fresh) seenIds.add(event.id);
+      setEvents((prev) => [...prev, ...fresh]);
+      setLastEventAt(Date.now());
+      setSettled(true);
+    };
+    const queueReceived = (event: ChatEvent): void => {
+      received.push(event);
+      if (flushTimer !== null) return;
+      if (typeof requestAnimationFrame === "function") flushFrame = requestAnimationFrame(flushReceived);
+      flushTimer = setTimeout(flushReceived, EVENT_FLUSH_MAX_MS);
+    };
 
     const connect = (): void => {
       if (disposed || socket || typeof WebSocket === "undefined") return;
@@ -176,11 +212,7 @@ export function ChatView({
         if (typeof event.data !== "string") return;
         const parsed = parseChatFrame(event.data);
         if (!parsed) return; // the heartbeat, or a line that is not an event
-        // The stream REPLAYS its tail on every connect, so merge-by-id is what makes a reconnect
-        // (or a new session file) idempotent instead of duplicating the history.
-        setEvents((prev) => mergeEvent(prev, parsed));
-        setLastEventAt(Date.now());
-        setSettled(true);
+        queueReceived(parsed);
       };
       next.onerror = () => {
         /* onclose always follows; the retry is decided there so it happens once */
@@ -205,6 +237,7 @@ export function ChatView({
     connect();
     return () => {
       disposed = true;
+      cancelFlush();
       if (grace) clearTimeout(grace);
       if (retry) clearTimeout(retry);
       backoff.dispose();

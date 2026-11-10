@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   groupChatRows,
-  mergeEvent,
+  unseenEvents,
   normalizeMessage,
   originRole,
   parseChatFrame,
@@ -93,19 +93,30 @@ describe("message provenance (from)", () => {
   });
 });
 
-describe("mergeEvent", () => {
-  it("appends what is new and ignores what it already has — the stream replays on every connect", () => {
-    const first = mergeEvent([], event({ id: "1" }));
-    const second = mergeEvent(first, event({ id: "2" }));
-    expect(second.map((e) => e.id)).toEqual(["1", "2"]);
-    // Same id again (a reconnect replaying the tail): the SAME array, so React re-renders nothing.
-    expect(mergeEvent(second, event({ id: "1", text: "different" }))).toBe(second);
+describe("unseenEvents", () => {
+  it("keeps what is new and ignores what it already has — the stream replays on every connect", () => {
+    const seen = new Set(["1"]);
+    const fresh = unseenEvents([event({ id: "1", text: "different" }), event({ id: "2" })], seen);
+    expect(fresh.map((e) => e.id)).toEqual(["2"]);
+    // A reconnect replaying the tail: nothing to append, so nothing to render.
+    expect(unseenEvents([event({ id: "1" }), event({ id: "2" })], new Set(["1", "2"]))).toEqual([]);
+  });
+
+  it("takes an id that repeats INSIDE the batch once, the first copy", () => {
+    const fresh = unseenEvents([event({ id: "3", text: "first" }), event({ id: "3", text: "second" })], new Set());
+    expect(fresh.map((e) => e.text)).toEqual(["first"]);
   });
 
   it("keeps transcript order instead of re-sorting by timestamp", () => {
     // A message and its tool calls share one millisecond; sorting would shuffle them every frame.
-    const list = [event({ id: "1", at: 5 }), event({ id: "2", at: 5 })];
-    expect(mergeEvent(list, event({ id: "3", at: 1 })).map((e) => e.id)).toEqual(["1", "2", "3"]);
+    const batch = [event({ id: "1", at: 5 }), event({ id: "2", at: 5 }), event({ id: "3", at: 1 })];
+    expect(unseenEvents(batch, new Set()).map((e) => e.id)).toEqual(["1", "2", "3"]);
+  });
+
+  it("does not touch the set it is given — the caller records what it appended", () => {
+    const seen = new Set<string>();
+    unseenEvents([event({ id: "1" })], seen);
+    expect(seen.size).toBe(0);
   });
 });
 

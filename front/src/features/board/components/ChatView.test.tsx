@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { act } from "react";
+import { act, Profiler } from "react";
 import { ChatView } from "@/features/board/components/ChatView";
 import { resetDraftsForTesting } from "@/features/board/components/TerminalComposer";
 import { renderApp } from "@/test/render";
@@ -56,8 +56,13 @@ class FakeSocket {
     this.readyState = 1;
     act(() => this.onopen?.());
   }
-  /** Delivers one transcript event, the way the server frames them. */
+  /** Delivers one transcript event, the way the server frames them, in an animation frame of its own. */
   deliver(event: ChatEvent): void {
+    this.replayFrame(event);
+    flushFrames();
+  }
+  /** Delivers one event WITHOUT letting a frame pass: a burst of these is what the replay looks like. */
+  replayFrame(event: ChatEvent): void {
     act(() => this.onmessage?.({ data: JSON.stringify(event) } as MessageEvent));
   }
   raw(data: string): void {
@@ -66,6 +71,17 @@ class FakeSocket {
 }
 
 const originalWebSocket = globalThis.WebSocket;
+
+let animationFrames = new Map<number, FrameRequestCallback>();
+let nextAnimationFrame = 1;
+/** Lets the browser paint: runs every animation frame requested so far. */
+function flushFrames(): void {
+  act(() => {
+    const due = [...animationFrames.values()];
+    animationFrames.clear();
+    for (const callback of due) callback(performance.now());
+  });
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -76,6 +92,15 @@ beforeEach(() => {
   resetDraftsForTesting();
   FakeSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeSocket);
+  animationFrames = new Map();
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    const id = nextAnimationFrame++;
+    animationFrames.set(id, callback);
+    return id;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => {
+    animationFrames.delete(id);
+  });
 });
 
 afterEach(() => {
@@ -818,5 +843,122 @@ describe("ChatView — 'ir pro fim' flutuante (mesmo comportamento do chat nativ
     await userEvent.click(screen.getByTestId("jump-latest"));
     expect(scrollTo).toHaveBeenCalledWith({ top: 1000, behavior: "smooth" });
     expect(screen.queryByTestId("jump-latest")).toBeNull();
+  });
+});
+
+/**
+ * The stream REPLAYS its tail (up to 400 lines) on every connect, one socket frame per event. Drawn
+ * one frame at a time that was a render per event on the first replay, and on a reconnect another
+ * render per event for a history that did not change at all.
+ */
+describe("ChatView — the replay renders per animation frame, not per socket frame", () => {
+  const REPLAY_SIZE = 30;
+  const replay: ChatEvent[] = Array.from({ length: REPLAY_SIZE }, (_, i) => ({
+    id: `e${i}`,
+    kind: i % 3 === 0 ? "user" : "assistant",
+    at: i + 1,
+    text: `linha ${i}`,
+  }));
+
+  function renderProfiled(props: Partial<React.ComponentProps<typeof ChatView>> = {}) {
+    const commits = { count: 0 };
+    const view = renderApp(
+      <Profiler id="chat" onRender={() => { commits.count += 1; }}>
+        <ChatView cardId="c1" working={false} {...props} />
+      </Profiler>,
+    );
+    return { commits, view };
+  }
+
+  it("the first replay lands in one commit per animation frame, all of it on screen", async () => {
+    const { commits } = renderProfiled();
+    const ws = await socket();
+    ws.accept();
+    commits.count = 0;
+
+    for (const event of replay) ws.replayFrame(event);
+    flushFrames();
+
+    expect(screen.getAllByTestId("chat-assistant")).toHaveLength(REPLAY_SIZE - REPLAY_SIZE / 3);
+    expect(screen.getAllByTestId("chat-user")).toHaveLength(REPLAY_SIZE / 3);
+    // One batch, plus the follow-up its effects set off — it was two commits per EVENT before.
+    expect(commits.count).toBeLessThanOrEqual(2);
+  });
+
+  it("the same replay again (a reconnect) changes nothing on screen and renders nothing", async () => {
+    const { commits } = renderProfiled();
+    const ws = await socket();
+    ws.accept();
+    for (const event of replay) ws.replayFrame(event);
+    flushFrames();
+    commits.count = 0;
+
+    for (const event of replay) ws.replayFrame(event);
+    flushFrames();
+
+    expect(commits.count).toBe(0);
+    expect(screen.getAllByTestId("chat-user")).toHaveLength(REPLAY_SIZE / 3);
+  });
+
+  it("a genuinely new event after the replay still shows up, once", async () => {
+    renderProfiled();
+    const ws = await socket();
+    ws.accept();
+    for (const event of replay) ws.replayFrame(event);
+    flushFrames();
+
+    for (const event of replay) ws.replayFrame(event);
+    ws.replayFrame({ id: "novo", kind: "assistant", at: 99, text: "resposta nova" });
+    ws.replayFrame({ id: "novo", kind: "assistant", at: 99, text: "resposta nova" });
+    flushFrames();
+
+    expect(screen.getAllByText("resposta nova")).toHaveLength(1);
+    const assistants = screen.getAllByTestId("chat-assistant");
+    expect(assistants[assistants.length - 1]).toHaveTextContent("resposta nova");
+  });
+
+  it("a replayed history is not news: it does not hold off the 'quiet' hint; a new event does", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderProfiled({ working: true });
+      const ws = await socket();
+      ws.accept();
+      for (const event of replay) ws.replayFrame(event);
+      flushFrames();
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(50_000); });
+      for (const event of replay) ws.replayFrame(event); // a reconnect, nothing new
+      flushFrames();
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); }); // ticks every 15s: ~75s after the replay, ~30s after the reconnect
+      expect(screen.getByText(/nothing new for a while/i)).toBeInTheDocument();
+
+      ws.deliver({ id: "novo", kind: "assistant", at: 99, text: "voltei" });
+      expect(screen.queryByText(/nothing new for a while/i)).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still draws when the tab is in the background and no animation frame comes", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderProfiled();
+      const ws = await socket();
+      ws.accept();
+      ws.replayFrame({ id: "a1", kind: "assistant", at: 1, text: "em segundo plano" });
+      await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+      expect(screen.getByTestId("chat-assistant")).toHaveTextContent("em segundo plano");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("unmounting with a frame still pending cancels it — nothing is drawn after the cleanup", async () => {
+    const { view } = renderProfiled();
+    const ws = await socket();
+    ws.accept();
+    ws.replayFrame({ id: "a1", kind: "assistant", at: 1, text: "tarde demais" });
+    view.unmount();
+    expect(animationFrames.size).toBe(0);
   });
 });
