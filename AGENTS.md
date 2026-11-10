@@ -126,7 +126,7 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 
 ## 10. Segurança, autorização e escopo
 
-- **Dois níveis de acesso, regras num lugar só** (`back/src/auth/access.ts`): o que é da INSTALAÇÃO exige dono (`requireOwner`); o que é TRABALHO (projeto, card) segue o compartilhamento — `requireCardAccess` para ler, `requireCardWork` para mudar qualquer coisa. Toda rota nova usa um desses; nunca decidir acesso dentro do handler.
+- **Dois níveis de acesso, decididos em `back/src/auth/`:** o que é da INSTALAÇÃO exige dono (`requireOwner`, em `session.ts`); o que é TRABALHO (projeto, card) segue o compartilhamento (`access.ts`) — `requireCardAccess` para ler, `requireCardWork` para mudar qualquer coisa. Toda rota nova usa um desses; nunca decidir acesso dentro do handler.
 - Permissão de leitura (`view`) nunca autoriza mutação. Listagens filtram pelo que o usuário alcança, não pelo que existe.
 - **Shell:** tudo que vira linha de `docker exec` ou script (ids de card, branch, sessão, container) é validado na fronteira e citado depois. Leia `back/src/runtime/host.ts` antes de montar um comando.
 - **Segredos por stdin, nunca argv** (`ps` é legível por todos). Credenciais moram no cofre criptografado (`back/src/secrets/`), nunca em log, resposta HTTP ou mensagem de erro.
