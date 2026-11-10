@@ -456,6 +456,10 @@ export async function startReview(input: {
   authorUserId: string;
   coauthorUserId?: string;
   mergerUserId: string;
+  /** Quem mergeia já mandou mergear quando terminar (`Review.mergeAuthorized`). */
+  mergeAuthorized?: boolean;
+  /** E concluir o card do autor quando mergear (`Review.concludeWhenMerged`). */
+  concludeWhenMerged?: boolean;
   by: string;
 }): Promise<Review> {
   const review = await serialStart(async () => {
@@ -510,6 +514,8 @@ export async function startReview(input: {
         authorUserId: input.authorUserId,
         ...(input.coauthorUserId ? { coauthorUserId: input.coauthorUserId } : {}),
         mergerUserId: input.mergerUserId,
+        ...(input.mergeAuthorized ? { mergeAuthorized: true } : {}),
+        ...(input.concludeWhenMerged ? { concludeWhenMerged: true } : {}),
         reviewerCardId: reviewerCard.id,
         round: 1,
         phase: "reviewing",
@@ -520,6 +526,10 @@ export async function startReview(input: {
         updatedAt: now,
       };
       note(fresh, "system", `Revisão iniciada: o revisor confere o PR #${pr.number} (rodada 1 de ${MAX_ROUNDS}).`);
+      if (input.mergeAuthorized) {
+        note(fresh, "system", "Merge autorizado por quem mergeia: pronta sem bloqueante nem dúvida, o merge sai sozinho (sugestão em pé não segura).");
+      }
+      if (input.concludeWhenMerged) note(fresh, "system", "Mergeada, o card do autor vai para Concluído.");
       if (fixCard) note(fresh, "system", `A correção roda no card "${fixCard.title}", na conta Claude do autor.`);
       else if (authorCard.id !== card.id) note(fresh, "system", `A correção roda no card "${authorCard.title}", que já trabalha a branch do PR.`);
       // O revisor age no card dele pelo `recordCardActor` do relay, que só pousa com `work`. Owner e
@@ -1215,8 +1225,24 @@ export async function markReviewMerged(
     }
     await announcePhase(after);
     await retireReviewerCard(after);
+    if (after.concludeWhenMerged) await concludeAuthorCard(after);
   }
   return after;
+}
+
+/**
+ * A ordem do merge pediu também "concluir o card": mergeada a revisão, o card do autor vai para `done`,
+ * a mesma escrita do arrastar no board (como o do revisor). Nunca lança: o merge já aconteceu.
+ */
+async function concludeAuthorCard(r: Review): Promise<void> {
+  try {
+    const card = await getCard(r.cardId);
+    if (!card || card.column === "done") return;
+    await updateCard(card.id, { column: "done" });
+    logger.info({ audit: true, action: "review.conclude", review: r.id, card: card.worktreeSlug }, "author card concluded after the merge");
+  } catch (err) {
+    logger.warn({ review: r.id, card: r.cardId, detail: (err as Error).message }, "could not conclude the author card");
+  }
 }
 
 /* ------------------------------------------------------------------ fim de turno */
