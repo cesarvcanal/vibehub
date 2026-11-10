@@ -332,20 +332,43 @@ export async function listRepos(connectionId?: string | null, q = "", limit = 10
   return filtered.slice(0, limit);
 }
 
-/** Branch names of a repository, default branch first. */
-export async function listBranches(connectionId: string | null | undefined, owner: string, repo: string): Promise<string[]> {
+export interface BranchesDoRepo {
+  branches: string[];
+  defaultBranch: string | null;
+}
+
+/** Teto de páginas de 100: um repo com mais de 2000 branches lista as 2000 primeiras. */
+const MAX_PAGINAS_BRANCHES = 20;
+
+/**
+ * Todas as branches do repositório, a padrão primeiro. Lê do GitHub a cada chamada (sem cache),
+ * então branch apagada some e branch nova aparece. A página 1 diz no `Link` quantas existem; as
+ * demais saem em paralelo.
+ */
+export async function listBranches(connectionId: string | null | undefined, owner: string, repo: string): Promise<BranchesDoRepo> {
   assertRepoPart(owner, "owner");
   assertRepoPart(repo, "repository");
   const token = await tokenFor(connectionId);
-  const [branchesRes, repoRes] = await Promise.all([
-    githubFetch(`/repos/${owner}/${repo}/branches?per_page=100`, token),
-    githubFetch(`/repos/${owner}/${repo}`, token),
-  ]);
-  if (!branchesRes.ok) throw new Error(`GitHub returned ${branchesRes.status} while listing branches`);
-  const branches = ((await branchesRes.json()) as { name: string }[]).map((b) => b.name);
+  const buscarPagina = (pagina: number) => githubFetch(`/repos/${owner}/${repo}/branches?per_page=100&page=${pagina}`, token);
+  const [primeiraPagina, repoRes] = await Promise.all([buscarPagina(1), githubFetch(`/repos/${owner}/${repo}`, token)]);
+  if (!primeiraPagina.ok) throw new Error(`GitHub returned ${primeiraPagina.status} while listing branches`);
+  const ultimaPagina = Math.min(ultimaPaginaDoLink(primeiraPagina.headers.get("link")), MAX_PAGINAS_BRANCHES);
+  const demaisPaginas = await Promise.all(
+    Array.from({ length: ultimaPagina - 1 }, (_, i) => buscarPagina(i + 2)),
+  );
+  const falha = demaisPaginas.find((res) => !res.ok);
+  if (falha) throw new Error(`GitHub returned ${falha.status} while listing branches`);
+  const paginas = await Promise.all([primeiraPagina, ...demaisPaginas].map((res) => res.json() as Promise<{ name: string }[]>));
+  const branches = paginas.flat().map((b) => b.name);
   const defaultBranch = repoRes.ok ? ((await repoRes.json()) as { default_branch: string }).default_branch : null;
-  if (!defaultBranch) return branches;
-  return [defaultBranch, ...branches.filter((b) => b !== defaultBranch)];
+  if (!defaultBranch) return { branches, defaultBranch: null };
+  return { branches: [defaultBranch, ...branches.filter((b) => b !== defaultBranch)], defaultBranch };
+}
+
+/** O número da página `rel="last"` do header `Link` do GitHub; sem ele, só existe uma página. */
+export function ultimaPaginaDoLink(link: string | null): number {
+  const ultima = link?.match(/[?&]page=(\d+)[^>]*>;\s*rel="last"/);
+  return ultima ? Number(ultima[1]) : 1;
 }
 
 /** GitHub path segments are `[A-Za-z0-9._-]` — anything else is someone probing the URL. */

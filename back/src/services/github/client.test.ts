@@ -327,7 +327,50 @@ describe("listBranches", () => {
       url.includes("/branches")
         ? jsonResponse([{ name: "feature" }, { name: "main" }])
         : jsonResponse({ default_branch: "main" })));
-    expect(await gh.listBranches("", "octocat", "hello")).toEqual(["main", "feature"]);
+    expect(await gh.listBranches("", "octocat", "hello")).toEqual({ branches: ["main", "feature"], defaultBranch: "main" });
+  });
+
+  it("lê todas as páginas, não só as 100 primeiras", async () => {
+    const { gh } = await fresh();
+    stubIdentity("octocat");
+    await gh.connect("personal", "ghp_token");
+    const pagina = (n: number) => Array.from({ length: n === 3 ? 7 : 100 }, (_, i) => ({ name: `b${n}-${i}` }));
+    const fetchMock = vi.fn(async (url: string) => {
+      if (!url.includes("/branches")) return jsonResponse({ default_branch: "b3-6" });
+      const numero = Number(new URL(url).searchParams.get("page"));
+      const link = numero === 1
+        ? '<https://api.github.com/repositories/1/branches?per_page=100&page=2>; rel="next", <https://api.github.com/repositories/1/branches?per_page=100&page=3>; rel="last"'
+        : "";
+      return jsonResponse(pagina(numero), { headers: link ? { link } : {} });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { branches, defaultBranch } = await gh.listBranches("", "octocat", "hello");
+    expect(branches).toHaveLength(207);
+    expect(branches[0]).toBe("b3-6");
+    expect(new Set(branches).size).toBe(207);
+    expect(defaultBranch).toBe("b3-6");
+    expect(fetchMock.mock.calls.filter(([url]) => url.includes("/branches"))).toHaveLength(3);
+  });
+
+  it("falha visível quando uma página do meio dá erro, em vez de devolver lista parcial", async () => {
+    const { gh } = await fresh();
+    stubIdentity("octocat");
+    await gh.connect("personal", "ghp_token");
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (!url.includes("/branches")) return jsonResponse({ default_branch: "main" });
+      if (url.includes("page=2")) return jsonResponse({ message: "boom" }, { status: 502 });
+      return jsonResponse([{ name: "main" }], { headers: { link: '<https://x/branches?page=2>; rel="last"' } });
+    }));
+    await expect(gh.listBranches("", "octocat", "hello")).rejects.toThrow(/502/);
+  });
+
+  it("sem branch padrão legível, devolve a lista como veio e defaultBranch null", async () => {
+    const { gh } = await fresh();
+    stubIdentity("octocat");
+    await gh.connect("personal", "ghp_token");
+    vi.stubGlobal("fetch", vi.fn(async (url: string) =>
+      url.includes("/branches") ? jsonResponse([{ name: "a" }, { name: "b" }]) : jsonResponse({}, { status: 404 })));
+    expect(await gh.listBranches("", "octocat", "hello")).toEqual({ branches: ["a", "b"], defaultBranch: null });
   });
 
   it("rejects path segments that are not repository names", async () => {
