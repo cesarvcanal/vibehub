@@ -226,8 +226,8 @@ export function buildPushAndPrScript(
     ? [
       `else`,
       `  if ! EDIT=$(gh pr edit "$URL" ${textFlags} 2>&1); then`,
-      // The PR is open: say which one, so the agent can fix its text by hand if it must.
-      `    printf '%s\\n' "$EDIT" "PR: $URL"; echo "${MARKER} error edit"; exit 0;`,
+      // The PR is open: the marker names it, so the delivery still records it and answers with its url.
+      `    printf '%s\\n' "$EDIT"; echo "${MARKER} error edit $URL"; exit 0;`,
       `  fi`,
     ]
     : [];
@@ -485,14 +485,19 @@ export function parseCiChecks(stdout: string): { verdict: "none" | "pass" | "fai
   return { verdict: "pass", output: `CI do PR verde: ${checks.map((c) => c.name || "?").join(", ")}` };
 }
 
-/** Parses the push+PR output into a resolved PR url or a staged error. PURE. */
-export function parsePushAndPr(stdout: string): { ok: true; prUrl: string } | { ok: false; stage: string; output: string } {
+/**
+ * Parses the push+PR output into a resolved PR url or a staged error. A failed `edit` happened on a PR
+ * that IS open: its url rides on the marker and comes back as `prUrl`. PURE.
+ */
+export function parsePushAndPr(
+  stdout: string,
+): { ok: true; prUrl: string } | { ok: false; stage: string; output: string; prUrl?: string } {
   const pr = new RegExp(`${MARKER} pr (\\S+)`).exec(stdout);
   if (pr && pr[1]) return { ok: true, prUrl: pr[1] };
-  const err = new RegExp(`${MARKER} error (\\S+)`).exec(stdout);
+  const err = new RegExp(`${MARKER} error (\\S+)(?: (https://\\S+))?`).exec(stdout);
   const stage = err?.[1] ?? "unknown";
   const output = stdout.replace(new RegExp(`${MARKER} (pr|error).*`, "g"), "").trimEnd();
-  return { ok: false, stage, output };
+  return { ok: false, stage, output, ...(err?.[2] ? { prUrl: err[2] } : {}) };
 }
 
 /** Parses the merge-only PR lookup into the PR url and its head, or a staged error. PURE. */
@@ -1064,7 +1069,10 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
         "deliver stopped before a PR",
       );
       const output = pr.stage === "undocumented" ? undocumentedOutput(docs) : cleanOutput(pr.output);
-      return { merged: false, reason: reasonForStage(pr.stage), branch: target, cardBranch: source, ...lock, output };
+      // A failed rewrite of an OPEN PR: the PR exists, so the card still learns of it and the answer names it.
+      if (pr.prUrl) await rememberPr(card, pr.prUrl, target, source);
+      const open = pr.prUrl ? { prUrl: pr.prUrl } : {};
+      return { ...open, merged: false, reason: reasonForStage(pr.stage), branch: target, cardBranch: source, ...lock, output };
     }
     prUrl = pr.prUrl;
     await rememberPr(card, prUrl, target, source);

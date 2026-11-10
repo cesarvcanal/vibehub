@@ -187,6 +187,12 @@ describe("buildMergeScript", () => {
 });
 
 describe("parsePushAndPr / parseMerge", () => {
+  it("a failed edit still names the open PR", async () => {
+    const { deliver } = await load();
+    expect(deliver.parsePushAndPr(`no permission\n__VIBEHUB_DELIVER__ error edit ${PR}`)).toEqual({
+      ok: false, stage: "edit", output: "no permission", prUrl: PR,
+    });
+  });
   it("reads the PR url or the failed stage", async () => {
     const { deliver } = await load();
     expect(deliver.parsePushAndPr(`x\n__VIBEHUB_DELIVER__ pr ${PR}`)).toEqual({ ok: true, prUrl: PR });
@@ -1033,10 +1039,10 @@ describe("buildPushAndPrScript executado de verdade (gh e git falsos): PR novo s
     expect(r.stdout).toContain(`__VIBEHUB_DELIVER__ pr ${PR}`);
   });
 
-  it("gh pr edit falhou: o erro diz QUAL PR está aberto", async () => {
+  it("gh pr edit falhou: o marcador do erro leva a URL do PR que está aberto", async () => {
     const r = await run(clean(DOCS), PR, "exit 1");
-    expect(r.stdout).toContain("__VIBEHUB_DELIVER__ error edit");
-    expect(r.stdout).toContain(`PR: ${PR}`);
+    expect(r.stdout).toContain(`__VIBEHUB_DELIVER__ error edit ${PR}`);
+    expect(r.stdout).toContain("no permission");
   });
 
   it("PR já aberto e nada de texto novo: reaproveitado sem tocar (a revisão empurra correção assim)", async () => {
@@ -1127,6 +1133,16 @@ describe("deliver abre PR documentado (diretriz de PR de todo repositório)", ()
     expect(out).toMatchObject({ reason: "comments_failed" });
     expect(out.output).toContain("HTTP 403");
     expect(out.output).not.toContain("tem que estar no diff");
+  });
+
+  it("gh pr edit falhou num PR aberto: pr_failed COM a URL, e o PR fica gravado no card", async () => {
+    const { deliver, registry, card } = await makeCard();
+    wire({ push: `no permission\n__VIBEHUB_DELIVER__ error edit ${PR}` });
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, docs: DOCS });
+    expect(out).toMatchObject({ merged: false, reason: "pr_failed", prUrl: PR });
+    expect(out.output).toContain("no permission");
+    expect((await registry.getCard(card.id))?.prs?.[0]?.number).toBe(7);
+    expect(mergeRan()).toBe(false);
   });
 
   it("o PR não chegou ao commit empurrado: comments_failed (as linhas seriam de outro diff)", async () => {
