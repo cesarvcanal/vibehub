@@ -1610,18 +1610,24 @@ async function setCardEffort(level, switching) {
   if (level !== null && !EFFORT_LEVELS.has(level)) return { error: `unknown effort level: ${level}` };
   if (switching.abandoned) return { error: EFFORT_SWITCH_START_ERROR };
   const handle = currentQuery;
-  // No stream, or the stream went away mid-switch (a rewind, a new sign-in, the CLI exiting): the
-  // next one starts with `effort: EFFORT` (sdkOptions), so the switch holds.
+  // No stream: the next one starts with `effort: EFFORT` (baseOptions), so the switch holds.
   const nextStreamTakesIt = () => {
     EFFORT = level;
     return { effort: EFFORT ?? undefined };
   };
+  // The stream went away while the switch waited on its CLI (a rewind, a new sign-in, the CLI
+  // exiting). With none in its place, the next one takes the level. One that took its place in the
+  // meantime was born on the OLD level, read outside this queue: the switch never reached it, so it
+  // is answered as not applied and the back falls back to restarting on the card's level (review do
+  // PR #259, f11: it was confirmed, "já valendo" with the session on the old level).
+  const streamChanged = () =>
+    currentQuery === null ? nextStreamTakesIt() : { error: "a new session started during the switch, on the previous level" };
   if (!handle || typeof handle.applyFlagSettings !== "function") return nextStreamTakesIt();
   const ready = await sessionReady(handle);
   // Already answered as not applied: it touches nothing from here, the level kept for a next stream
   // included.
   if (switching.abandoned) return { error: EFFORT_SWITCH_START_ERROR };
-  if (currentQuery !== handle) return nextStreamTakesIt();
+  if (currentQuery !== handle) return streamChanged();
   // Written into a CLI that is not listening, the switch would be lost and the session would stay
   // on the `--effort` it was born with.
   if (!ready) return { error: "the session has not finished starting" };
@@ -1631,11 +1637,12 @@ async function setCardEffort(level, switching) {
     const effortWrite = level === null ? restoreAccountEffort(handle, isLatestWrite) : handle.applyFlagSettings({ effortLevel: level });
     await withDeadline(effortWrite, EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR);
   } catch (err) {
-    if (currentQuery !== handle) return nextStreamTakesIt();
+    if (currentQuery !== handle) return streamChanged();
     const reason = err && err.message ? err.message : String(err);
     trace(`could not apply effort ${level ?? "default"} to the live session: ${reason}`);
     return { error: reason };
   }
+  if (currentQuery !== handle) return streamChanged();
   EFFORT = level;
   if (ultraRaised && "effortLevel" in ultraRaised) {
     const { effortLevel: _keywordEffort, ...keywordRest } = ultraRaised;

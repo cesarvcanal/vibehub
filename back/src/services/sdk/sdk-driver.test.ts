@@ -1299,6 +1299,57 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual([]);
   }, 60_000);
 
+  /** Card on low; a switch to high whose write waits on the CLI ("flags-gate-once") of a stream that dies under it. */
+  async function switchStuckOnADyingStream(id: string): Promise<RunningDriver> {
+    const driver = startDriverWithEnv({ VIBEHUB_EFFORT_STEP_TIMEOUT_MS: "30000" }, ["--effort", "low"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "hello" });
+    await driver.waitFor((e) => e.type === "result");
+    await writeFile(join(sandbox, "flags-gate-once"), "");
+    driver.send({ type: "set_effort", id, effort: "high" });
+    await driver.waitMark("flags-gate:waiting");
+    await runTurn(driver, "bg-die");
+    return driver;
+  }
+
+  async function runTurn(driver: RunningDriver, text: string): Promise<void> {
+    const from = driver.events.length;
+    driver.send({ type: "user", text });
+    await driver.waitFor((e) => e.type === "result", from);
+  }
+
+  it("um stream novo nasce enquanto a troca espera o CLI do que caiu: aceita pelo velho, ela não é confirmada", async () => {
+    // Review do PR #259 (f11): o stream novo lê o EFFORT ao nascer, fora da fila. A troca para high
+    // esperava o CLI velho, ele caía, a pessoa mandava outra mensagem e o stream novo nascia em low,
+    // e a troca respondia high: a tela dizia "já valendo" com a sessão em low até o próximo reinício.
+    const driver = await switchStuckOnADyingStream("aceita-no-velho");
+    await runTurn(driver, "depois");
+    await writeFile(join(sandbox, "release-flags"), "");
+    const ack = await driver.waitFor((e) => e.type === "effort_ack" && e.id === "aceita-no-velho");
+    expect(ack.effort).toBeUndefined();
+    expect(String(ack.error)).toMatch(/previous level/);
+    expect(driver.marks.filter((m) => m.startsWith("effort:"))).toEqual(["effort:none", "effort:low", "effort:low"]);
+  }, 60_000);
+
+  it("um stream novo nasce enquanto a troca espera o CLI do que caiu: recusada pelo velho, ela também não é confirmada", async () => {
+    const driver = await switchStuckOnADyingStream("recusada-no-velho");
+    await runTurn(driver, "depois");
+    await writeFile(join(sandbox, "flags-fail"), "");
+    await writeFile(join(sandbox, "release-flags"), "");
+    const ack = await driver.waitFor((e) => e.type === "effort_ack" && e.id === "recusada-no-velho");
+    expect(ack.effort).toBeUndefined();
+    expect(String(ack.error)).toMatch(/previous level/);
+  }, 60_000);
+
+  it("o stream cai enquanto a troca espera e nenhum outro nasceu: a troca vale e o próximo nasce nela", async () => {
+    const driver = await switchStuckOnADyingStream("sem-sucessor");
+    await writeFile(join(sandbox, "release-flags"), "");
+    expect(await driver.waitFor((e) => e.type === "effort_ack" && e.id === "sem-sucessor"))
+      .toEqual({ type: "effort_ack", id: "sem-sucessor", effort: "high" });
+    await runTurn(driver, "depois");
+    expect(driver.marks.filter((m) => m.startsWith("effort:"))).toEqual(["effort:none", "effort:low", "effort:high"]);
+  }, 60_000);
+
   it("um nível que não existe não chega ao CLI", async () => {
     const driver = startDriver(["--effort", "medium"]);
     await driver.waitFor((e) => e.type === "ready");
