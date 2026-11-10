@@ -509,17 +509,57 @@ describe("GET da revisão: quem está trabalhando agora", () => {
   });
 });
 
+describe("GET da revisão: se há merge rodando agora", () => {
+  it("em ready com o merge segurando a vez diz merging e nem vai ao GitHub; sem a vez, confere antes de dizer false", async () => {
+    const w = await world();
+    const ready = await readyReview(w);
+    const read = async () =>
+      (await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/review`, headers: { cookie: w.autor.cookie } })).json();
+    const orch = await orchestrator();
+    readPrState.mockClear();
+    expect(orch.claimMerge(ready.id)).toBe(true);
+    try {
+      expect(await read()).toMatchObject({ review: { phase: "ready" }, merging: true });
+      expect(readPrState).not.toHaveBeenCalled();
+    } finally {
+      orch.releaseMerge(ready.id);
+    }
+    // O PR segue aberto no GitHub no commit revisado: ready e merging false, com a conferência feita.
+    prState = { state: "OPEN", headSha: SHA1 };
+    expect(await read()).toMatchObject({ review: { phase: "ready" }, merging: false });
+    expect(readPrState).toHaveBeenCalledTimes(1);
+  });
+
+  it("diz merging enquanto um merge segura a vez, e false depois que ela é devolvida (ou que o servidor reiniciou)", async () => {
+    const w = await world();
+    const review = (await startReview(w)).json().review as { id: string };
+    const read = async () =>
+      (await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/review`, headers: { cookie: w.leitor.cookie } })).json();
+    expect((await read()).merging).toBe(false);
+
+    const orch = await orchestrator();
+    expect(orch.claimMerge(review.id)).toBe(true);
+    try {
+      expect((await read()).merging).toBe(true);
+    } finally {
+      orch.releaseMerge(review.id);
+    }
+    // A vez devolvida é o mesmo que um processo novo depois do deploy: nenhum merge rodando.
+    expect((await read()).merging).toBe(false);
+  });
+});
+
 describe("GET da revisão confere o PR no GitHub (merge feito fora do painel)", () => {
-  it("o PR mergeado direto no GitHub aparece mergeado na próxima leitura, e o freio segura o gh por um minuto", async () => {
+  it("o PR mergeado direto no GitHub aparece mergeado já na leitura em ready, e o freio segura o gh por um minuto", async () => {
     const w = await world();
     const ready = await readyReview(w);
     prState = { state: "MERGED", headSha: SHA1 };
     const read = async () =>
       (await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/review`, headers: { cookie: w.autor.cookie } })).json();
 
-    // A leitura responde na hora com o que tem; a conferência roda em segundo plano.
-    expect((await read()).review.phase).toBe("ready");
-    await vi.waitFor(async () => expect((await read()).review.phase).toBe("merged"));
+    // Em ready sem merge rodando a conferência vem antes da resposta: é também o caso do merge que
+    // saiu no GitHub e morreu num deploy antes de gravar merged — nunca sai `ready` + `merging:false`.
+    expect(await read()).toMatchObject({ review: { phase: "merged" }, merging: false });
     expect((await read()).review.log.at(-1).text).toMatch(/fora do painel/);
     await vi.waitFor(() => expect(afterPrMerged).toHaveBeenCalledTimes(1));
     // Várias leituras em seguida: uma ida só ao GitHub.

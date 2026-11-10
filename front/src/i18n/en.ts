@@ -1570,6 +1570,7 @@ export const en: Record<string, string> = {
   "review.merge.error.merger_sem_github": "You have no GitHub connection of your own in vibehub. Connect your account and try again.",
   "review.merge.running": "The merge is already running. Checking whether it finished…",
   "review.merge.expired": "Could not confirm the merge — check GitHub",
+  "review.merge.stopped": "The merge stopped on the server before finishing (vibehub restarted or refused it on the way). Check the PR before trying again.",
   "review.merge.error.not_ready": "The review is no longer ready to merge. The screen was refreshed.",
   "review.retry": "Try again",
   "review.cancel": "Cancel review",

@@ -1127,6 +1127,37 @@ export function syncReviewSoon(r: Review): void {
   });
 }
 
+/**
+ * A revisão para a LEITURA do painel, junto de se há merge dela rodando agora (`merging`).
+ *
+ * `merging: false` com a revisão em `ready` é o que faz o painel parar de esperar um merge cuja
+ * resposta se perdeu — então a fase que vai junto tem de ser no mínimo tão nova quanto a trava:
+ *  - a trava é olhada primeiro e a revisão é relida depois. Um merge que termina entre a primeira
+ *    leitura e a trava já gravou `merged` (o merge grava antes de soltar a trava);
+ *  - um merge que saiu no GitHub e morreu antes de gravar `merged` (deploy no meio: o `gh pr merge`
+ *    roda, o processo morre, a trava vai junto) só aparece no GitHub. Por isso, em `ready` sem merge
+ *    rodando, a conferência com o GitHub roda ANTES de responder (no mesmo freio de
+ *    {@link GITHUB_SYNC_MS}); o processo novo depois do deploy não tem freio, e a primeira leitura
+ *    já devolve `merged`.
+ * As outras fases seguem com a conferência em segundo plano ({@link syncReviewSoon}). Nunca lança.
+ */
+export async function reviewForRead(r: Review): Promise<{ review: Review; merging: boolean }> {
+  if (merging.has(r.id)) return { review: r, merging: true };
+  if (r.phase !== "ready") {
+    syncReviewSoon(r);
+    return { review: r, merging: false };
+  }
+  let now: Review | undefined;
+  try {
+    now = claimGithubSync(r.id) ? await syncReviewWithGithub(r.id, "painel aberto") : await getReview(r.id);
+  } catch (err) {
+    logger.warn({ review: r.id, detail: (err as Error).message }, "PR review could not sync with GitHub");
+    now = await getReview(r.id);
+  }
+  const review = now ?? r;
+  return { review, merging: merging.has(review.id) };
+}
+
 /** Marca a conferência de agora, se a última foi há mais de {@link GITHUB_SYNC_MS}. Devolve se pode ir. */
 function claimGithubSync(reviewId: string): boolean {
   const now = Date.now();
