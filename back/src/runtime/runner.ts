@@ -114,6 +114,9 @@ export interface RunnerSettingsOpts {
   autonomous: boolean;
 }
 
+/** How long Claude Code keeps an idle transcript in the runner (its `cleanupPeriodDays`). */
+export const TRANSCRIPT_RETENTION_DAYS = 365;
+
 /**
  * Claude Code settings.json inside the runner: status hooks + forced session persistence. PURE.
  *
@@ -136,6 +139,10 @@ export function runnerSettingsJson(opts: RunnerSettingsOpts = { autonomous: true
   return JSON.stringify(
     {
       env: { CLAUDE_CODE_FORCE_SESSION_PERSISTENCE: "1" },
+      // Claude Code deletes transcripts idle for 30 days by default, and a card idle that long could
+      // no longer `--resume` ("No conversation found", 2026-11-10). Dead cards are vibehub's to clean
+      // (board/purge.ts sweeps their transcripts), so the CLI only drops what nobody touched in a year.
+      cleanupPeriodDays: TRANSCRIPT_RETENTION_DAYS,
       ...(opts.autonomous
         ? { permissions: { defaultMode: "bypassPermissions" }, skipDangerousModePermissionPrompt: true }
         : {}),

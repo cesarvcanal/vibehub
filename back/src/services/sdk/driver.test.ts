@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { hostExecutor, type HostExecutor } from "../../runtime/host.js";
 import type { Card, Project } from "../board/registry.js";
 import {
@@ -1169,5 +1172,51 @@ describe("sdk-driver.mjs — o input de uma ferramenta sendo gerado", () => {
     expect(tracker.see({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, 0)).toEqual([]);
     expect(tracker.see({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "oi" } }, 0)).toEqual([]);
     expect(tracker.see(undefined, 0)).toEqual([]);
+  });
+});
+
+/**
+ * RETOMAR UMA SESSÃO QUE NÃO EXISTE MAIS. O Claude Code apaga sozinho os transcripts parados há
+ * semanas (`cleanupPeriodDays`); o card guarda o `resumeSessionId` para sempre. O `--resume` de um
+ * id sem arquivo morria com "No conversation found with session ID" em TODO turno — o card ficava
+ * inutilizável (produção, 2026-11-10: card parado desde 19/10, sessão 56c2c01d). O driver confere o
+ * arquivo antes de retomar; só um "não está" COMPROVADO derruba o resume.
+ */
+describe("sdk-driver.mjs — sessão cujo transcript sumiu", () => {
+  const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
+  const from = source.indexOf("function sessionTranscriptExists(");
+  const body = source.slice(from, source.indexOf("\n}", from) + 2);
+  const re = source.slice(source.indexOf("const SESSION_FILE_ID_RE ="), source.indexOf("\n", source.indexOf("const SESSION_FILE_ID_RE =")));
+  const exists = new Function("readdirSync", "existsSync", "join", `${re}\n${body}\nreturn sessionTranscriptExists;`)(
+    fs.readdirSync, fs.existsSync, path.join,
+  ) as (root: string, id: string) => boolean;
+
+  const ID = "56c2c01d-e142-4150-9618-c76ebbaa6bd4";
+  let root: string;
+  beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), "vh-resume-")); });
+  afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
+
+  it("acha o transcript em qualquer pasta de projeto", () => {
+    fs.mkdirSync(path.join(root, "-work-a"));
+    fs.mkdirSync(path.join(root, "-work-b"));
+    fs.writeFileSync(path.join(root, "-work-b", `${ID}.jsonl`), "{}\n");
+    expect(exists(root, ID)).toBe(true);
+  });
+
+  it("o caso de produção: pastas listadas, nenhuma tem o arquivo → não existe", () => {
+    fs.mkdirSync(path.join(root, "-work-a"));
+    expect(exists(root, ID)).toBe(false);
+  });
+
+  it("sem pasta de projeto nenhuma também é 'não existe' (a limpeza levou tudo)", () => {
+    expect(exists(root, ID)).toBe(false);
+  });
+
+  it("raiz ilegível NÃO é prova de ausência: mantém o resume como antes", () => {
+    expect(exists(path.join(root, "nao-existe"), ID)).toBe(true);
+  });
+
+  it("id que não é UUID nunca vira caminho, e não derruba nada", () => {
+    expect(exists(root, "../../etc/passwd")).toBe(true);
   });
 });
