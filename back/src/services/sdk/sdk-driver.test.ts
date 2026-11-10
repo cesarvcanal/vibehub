@@ -1182,6 +1182,37 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     ]);
   }, 60_000);
 
+  it("uma troca presa na fila além do prazo de início é recusada NA HORA e nunca grava depois", async () => {
+    // Review do PR #259 (f4): o back espera a confirmação por um prazo contado da escrita, e a troca
+    // podia ficar atrás de uma devolução lenta. O back desistia (pendente/reinício) e o driver
+    // aplicava a troca segundos depois, sem ninguém saber. Agora o driver responde dentro do prazo
+    // de início, e uma troca que não começou a tempo não escreve nunca mais.
+    await writeFile(join(sandbox, "account-effort"), "high");
+    const driver = startDriverWithEnv({ VIBEHUB_EFFORT_SWITCH_START_DEADLINE_MS: "300" });
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "pensa nisso ultrathink slow" });
+    await driver.waitMark("slow:running");
+    await writeFile(join(sandbox, "settings-gate"), "");
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+    await driver.waitMark("settings:waiting");
+    driver.send({ type: "set_effort", id: "atrasada", effort: "low" });
+    const late = await driver.waitFor((e) => e.type === "effort_ack" && e.id === "atrasada");
+    expect(late.effort).toBeUndefined();
+    expect(String(late.error)).toMatch(/did not start/);
+
+    await writeFile(join(sandbox, "release-settings"), "");
+    driver.send({ type: "set_effort", id: "seguinte", effort: "medium" });
+    expect(await driver.waitFor((e) => e.type === "effort_ack" && e.id === "seguinte"))
+      .toEqual({ type: "effort_ack", id: "seguinte", effort: "medium" });
+    expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual([
+      'flags:{"effortLevel":"max"}',
+      'flags:{"effortLevel":null}',
+      'flags:{"effortLevel":"high"}',
+      'flags:{"effortLevel":"medium"}',
+    ]);
+  }, 60_000);
+
   it("um nível que não existe não chega ao CLI", async () => {
     const driver = startDriver(["--effort", "medium"]);
     await driver.waitFor((e) => e.type === "ready");

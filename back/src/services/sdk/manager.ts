@@ -2337,11 +2337,13 @@ export function stopCardDriver(cardId: string): void {
 }
 
 /**
- * How long a switch waits for the driver's answer: the 10 s the driver gives a CLI that was just born
- * (ULTRA_INIT_TIMEOUT_MS in sdk-driver.mjs), plus the write and the read of the level, 4 s each
- * (EFFORT_STEP_TIMEOUT_MS), and slack.
+ * How long a switch waits for the driver's answer. The driver answers every switch by its start
+ * deadline (12 s from arrival, queue and CLI boot included: EFFORT_SWITCH_START_DEADLINE_MS in
+ * sdk-driver.mjs) and, once writing, within the write and the read of the level (4 s each,
+ * EFFORT_STEP_TIMEOUT_MS): 20 s at worst, plus slack. A switch that did not start in time never
+ * writes later, so giving up here and restarting onto the pin is the truth, not a guess.
  */
-export const EFFORT_ACK_TIMEOUT_MS = 20_000;
+export const EFFORT_ACK_TIMEOUT_MS = 25_000;
 
 /** An effort switch written to the driver, waiting for its `effort_ack`. */
 interface PendingEffortSwitch {

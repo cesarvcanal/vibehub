@@ -1587,21 +1587,28 @@ async function restoreAccountEffort(handle, ownsQueue) {
  * clears only `ultracode`.
  *
  * Answers what goes into the `effort_ack`: `{ effort }` = the level the session says the next call
- * uses (absent when nobody knows), `{ error }` = it was not applied.
+ * uses (absent when nobody knows), `{ error }` = it was not applied, and nothing changed here: EFFORT
+ * only takes the level on the paths that applied it. `switching.abandoned` = its start deadline
+ * already answered for it (queueEffortSwitch); `switching.writing` = past that point, it finishes.
  */
-async function setCardEffort(level, ownsQueue) {
+async function setCardEffort(level, ownsQueue, switching) {
   if (level !== null && !EFFORT_LEVELS.has(level)) return { error: `unknown effort level: ${level}` };
-  EFFORT = level;
+  if (switching.abandoned) return { error: EFFORT_SWITCH_START_ERROR };
   const handle = currentQuery;
   // No stream, or the stream went away mid-switch (a rewind, a new sign-in, the CLI exiting): the
   // next one starts with `effort: EFFORT` (sdkOptions), so the switch holds.
-  const nextStreamTakesIt = () => ({ effort: EFFORT ?? undefined });
+  const nextStreamTakesIt = () => {
+    EFFORT = level;
+    return { effort: EFFORT ?? undefined };
+  };
   if (!handle || typeof handle.applyFlagSettings !== "function") return nextStreamTakesIt();
   const ready = await sessionReady(handle);
   if (currentQuery !== handle) return nextStreamTakesIt();
   // Written into a CLI that is not listening, the switch would be lost and the session would stay
   // on the `--effort` it was born with.
   if (!ready) return { error: "the session has not finished starting" };
+  if (switching.abandoned) return { error: EFFORT_SWITCH_START_ERROR };
+  switching.writing = true;
   try {
     const effortWrite = level === null ? restoreAccountEffort(handle, ownsQueue) : handle.applyFlagSettings({ effortLevel: level });
     await withDeadline(effortWrite, EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR);
@@ -1611,6 +1618,7 @@ async function setCardEffort(level, ownsQueue) {
     trace(`could not apply effort ${level ?? "default"} to the live session: ${reason}`);
     return { error: reason };
   }
+  EFFORT = level;
   if (ultraRaised && "effortLevel" in ultraRaised) {
     const { effortLevel: _keywordEffort, ...keywordRest } = ultraRaised;
     ultraRaised = Object.keys(keywordRest).length > 0 ? keywordRest : null;
@@ -1663,13 +1671,39 @@ function inEffortQueue(task) {
 }
 
 /**
- * The pill's switch, ANSWERED (`effort_ack`): with the level the session says it will use, or with
- * the error of whoever refused it. The back only says "já valendo" holding this answer.
+ * How long a pill switch may wait, from its arrival, for its turn in the queue and for the CLI to
+ * boot. The back gives up on an answer after a fixed time (EFFORT_ACK_TIMEOUT_MS in manager.ts) and
+ * goes the restart way; a switch stuck behind a slow write used to be applied seconds after that,
+ * a level nobody was told about. Past this deadline the switch is answered as not applied, and it
+ * never writes afterwards. Once writing started it finishes on its own trips' deadlines.
+ */
+const EFFORT_SWITCH_START_DEADLINE_MS = Number(process.env.VIBEHUB_EFFORT_SWITCH_START_DEADLINE_MS) || 12_000;
+const EFFORT_SWITCH_START_ERROR = `the switch did not start within ${EFFORT_SWITCH_START_DEADLINE_MS} ms`;
+
+/**
+ * The pill's switch, ANSWERED (`effort_ack`) exactly once: with the level the session says it will
+ * use, or with the error of whoever refused it — at the latest by its start deadline. The back only
+ * says "já valendo" holding this answer.
  */
 function queueEffortSwitch(id, level) {
-  inEffortQueue((ownsQueue) => setCardEffort(level, ownsQueue))
+  const switching = { abandoned: false, writing: false };
+  let answered = false;
+  const answer = (outcome) => {
+    if (answered) return;
+    answered = true;
+    emit({ type: "effort_ack", id, ...outcome });
+  };
+  const startDeadline = setTimeout(() => {
+    if (switching.writing) return;
+    switching.abandoned = true;
+    answer({ error: EFFORT_SWITCH_START_ERROR });
+  }, EFFORT_SWITCH_START_DEADLINE_MS);
+  inEffortQueue((ownsQueue) => setCardEffort(level, ownsQueue, switching))
     .catch((err) => ({ error: err && err.message ? err.message : String(err) }))
-    .then((outcome) => emit({ type: "effort_ack", id, ...outcome }))
+    .then((outcome) => {
+      clearTimeout(startDeadline);
+      answer(outcome);
+    })
     .catch((err) => { trace(`effort switch failed: ${err && err.message ? err.message : String(err)}`); });
 }
 
