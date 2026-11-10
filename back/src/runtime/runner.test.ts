@@ -73,6 +73,9 @@ describe("runnerSettingsJson", () => {
   it("keeps sessions persistent so a card can be resumed", () => {
     expect(JSON.parse(runnerSettingsJson()).env).toEqual({ CLAUDE_CODE_FORCE_SESSION_PERSISTENCE: "1" });
   });
+  it("keeps transcripts far longer than Claude Code's 30-day default: a card idle for weeks must still resume", () => {
+    expect(JSON.parse(runnerSettingsJson()).cleanupPeriodDays).toBeGreaterThanOrEqual(365);
+  });
 });
 
 describe("buildRunScript", () => {

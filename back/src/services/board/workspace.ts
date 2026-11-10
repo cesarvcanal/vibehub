@@ -340,22 +340,23 @@ export interface OpenScriptOpts {
 }
 
 /**
- * Rewrites ONLY the `hooks` key of a settings.json (argv[1]) with the hooks of this build (argv[2],
- * JSON), and only when they differ — an unchanged reopen writes nothing. Same rules as the purge's
- * `.claude.json` edit: an unreadable file is left alone, and the write is atomic (tmp + rename).
+ * Rewrites ONLY the keys vibehub owns in a settings.json (argv[1]) — the status `hooks` and the
+ * transcript retention `cleanupPeriodDays` — with this build's values (argv[2], JSON), and only when
+ * they differ: an unchanged reopen writes nothing. Same rules as the purge's `.claude.json` edit:
+ * an unreadable file is left alone, and the write is atomic (tmp + rename).
  */
-const SYNC_HOOKS_JS = [
-  'const fs=require("fs"),f=process.argv[1],h=JSON.parse(process.argv[2]);',
+const SYNC_OWNED_KEYS_JS = [
+  'const fs=require("fs"),f=process.argv[1],o=JSON.parse(process.argv[2]);',
   'let c;try{c=JSON.parse(fs.readFileSync(f,"utf8"))}catch(e){process.exit(0)}',
-  "if(JSON.stringify(c.hooks)===JSON.stringify(h)){process.exit(0)}",
-  "c.hooks=h;",
+  "const k=Object.keys(o).filter((k)=>JSON.stringify(c[k])!==JSON.stringify(o[k]));if(!k.length){process.exit(0)}",
+  "for(const n of k)c[n]=o[n];",
   'const t=f+".vibehub-hooks-tmp";fs.writeFileSync(t,JSON.stringify(c,null,2),{mode:0o600});fs.renameSync(t,f)',
 ].join("");
 
-/** The shell line that re-syncs the status hooks of a profile's settings.json (see SYNC_HOOKS_JS). */
-function syncHooksLine(settingsPath: string): string {
-  const hooks = (JSON.parse(runnerSettingsJson()) as { hooks: unknown }).hooks;
-  return `  node -e ${shQuote(SYNC_HOOKS_JS)} ${settingsPath} ${shQuote(JSON.stringify(hooks))} >/dev/null 2>&1 || true`;
+/** The shell line that re-syncs vibehub's keys of a profile's settings.json (see SYNC_OWNED_KEYS_JS). */
+function syncOwnedKeysLine(settingsPath: string): string {
+  const { hooks, cleanupPeriodDays } = JSON.parse(runnerSettingsJson()) as { hooks: unknown; cleanupPeriodDays: number };
+  return `  node -e ${shQuote(SYNC_OWNED_KEYS_JS)} ${settingsPath} ${shQuote(JSON.stringify({ hooks, cleanupPeriodDays }))} >/dev/null 2>&1 || true`;
 }
 
 /**
@@ -416,8 +417,8 @@ export function buildOpenScript(opts: OpenScriptOpts): string {
     // from the default account — the STATUS HOOKS (the board's green/amber dot) live in that
     // settings.json; without the copy a new account is born without hooks and the mirror dies. The
     // copy is only the FIRST time (the -f guard): from then on the profile owns its settings (the
-    // account's own login/tweaks are never overwritten) — EXCEPT the `hooks` key, which is vibehub's
-    // and is re-synced on every open FROM THIS BUILD (not from /root/.claude, which is only rewritten
+    // account's own login/tweaks are never overwritten) — EXCEPT the keys vibehub owns (`hooks`,
+    // `cleanupPeriodDays`), which are re-synced on every open FROM THIS BUILD (not from /root/.claude, which is only rewritten
     // when somebody re-provisions the runner). Without that, a hook changed in a release never
     // reached an account that already existed (the card-reopened notice, 2026-10-30).
     inner.push(
@@ -427,14 +428,14 @@ export function buildOpenScript(opts: OpenScriptOpts): string {
       `  cp ${DEFAULT_CLAUDE_DIR}/settings.json "$CLAUDE_CFG/settings.json"`,
       `fi`,
       `if [ -f "$CLAUDE_CFG/settings.json" ]; then`,
-      syncHooksLine(`"$CLAUDE_CFG/settings.json"`),
+      syncOwnedKeysLine(`"$CLAUDE_CFG/settings.json"`),
       `fi`,
     );
   } else {
     // The default account reads /root/.claude directly: same re-sync, so a release reaches it too.
     inner.push(
       `if [ -f ${DEFAULT_CLAUDE_DIR}/settings.json ]; then`,
-      syncHooksLine(`${DEFAULT_CLAUDE_DIR}/settings.json`),
+      syncOwnedKeysLine(`${DEFAULT_CLAUDE_DIR}/settings.json`),
       `fi`,
     );
   }

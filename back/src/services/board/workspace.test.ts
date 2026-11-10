@@ -422,6 +422,9 @@ describe("the card's Claude account (CLAUDE_CONFIG_DIR per profile)", () => {
 
       const depois = JSON.parse(await readFile(join(padrao, "settings.json"), "utf8"));
       expect(depois.hooks).toEqual(JSON.parse(runnerSettingsJson()).hooks);
+      // A retenção de transcripts também é do vibehub: sem ela o Claude Code apaga a conversa de um
+      // card parado há semanas e o `--resume` dele morre ("No conversation found", 2026-11-10).
+      expect(depois.cleanupPeriodDays).toBeGreaterThanOrEqual(365);
       expect(depois.model).toBe("opus");
     } finally {
       await rm(padrao, { recursive: true, force: true });
@@ -474,6 +477,7 @@ describe("the card's Claude account (CLAUDE_CONFIG_DIR per profile)", () => {
 
       const perfilDepois = JSON.parse(await readFile(join(perfil, "settings.json"), "utf8"));
       expect(perfilDepois.hooks).toEqual(JSON.parse(runnerSettingsJson()).hooks);
+      expect(perfilDepois.cleanupPeriodDays).toBeGreaterThanOrEqual(365);
       expect(perfilDepois.model).toBe("opus");
       expect(perfilDepois.env).toEqual({ X: "1" });
     } finally {
