@@ -80,6 +80,7 @@ function probeAnswer(script: string, state: "idle" | "busy" | "gone" = "idle"): 
 let ptyCommand: ReturnType<typeof vi.fn>;
 let reg: typeof import("./registry.js");
 let ws: typeof import("./workspace.js");
+type UploadRangeRequest = import("./workspace.js").UploadRangeRequest;
 let host: typeof import("../../runtime/host.js");
 
 async function fresh(opts: { flakyRegistry?: boolean } = {}) {
@@ -1571,15 +1572,34 @@ describe("image upload into the card", () => {
   it("reads an upload back out of the runner, as the bytes plus what they are", async () => {
     const { card } = await seed();
     const bytes = Buffer.from("PNG-ish content");
-    runScript.mockResolvedValue({ stdout: `${bytes.toString("base64")}\n`, stderr: "" });
+    runScript.mockResolvedValue({ stdout: `${bytes.length} 0 ${bytes.length - 1}\n${bytes.toString("base64")}\n`, stderr: "" });
 
-    const { body, contentType } = await ws.readCardUpload(card.id, "1790375878344-shot.png");
+    const { body, contentType, size, range } = await ws.readCardUpload(card.id, "1790375878344-shot.png");
     expect(body.equals(bytes)).toBe(true);
     expect(contentType).toBe("image/png");
+    expect(size).toBe(bytes.length);
+    expect(range).toBeNull();
     const script = scriptAt(0);
     expect(script).toContain(`docker exec -i '${CONTAINER}' bash -s`);
     expect(script).toContain(`test -f '/work/.uploads/${card.id}/1790375878344-shot.png'`);
-    expect(script).toContain(`base64 -w0 '/work/.uploads/${card.id}/1790375878344-shot.png'`);
+    expect(script).toContain(`stat -c %s '/work/.uploads/${card.id}/1790375878344-shot.png'`);
+  });
+
+  it("uma faixa pedida volta como faixa, e a que cai fora do arquivo como 'unsatisfiable'", async () => {
+    const { card } = await seed();
+    runScript.mockResolvedValueOnce({ stdout: `5000 4990 4999\n${Buffer.from("0123456789").toString("base64")}`, stderr: "" });
+    const slice = await ws.readCardUpload(card.id, "1794341151810-voz.ogg", { suffix: 10 });
+    expect(slice).toMatchObject({ size: 5000, range: { start: 4990, end: 4999 } });
+    expect(slice.body.toString()).toBe("0123456789");
+    expect(scriptAt(0)).toContain("n=10");
+
+    runScript.mockResolvedValueOnce({ stdout: "5000 -\n", stderr: "" });
+    expect(await ws.readCardUpload(card.id, "1794341151810-voz.ogg", { start: 6000, end: null })).toMatchObject({
+      size: 5000, range: "unsatisfiable",
+    });
+    // Bytes que não batem com a faixa anunciada não viram uma resposta 206 mentirosa.
+    runScript.mockResolvedValueOnce({ stdout: `5000 0 99\n${Buffer.from("abc").toString("base64")}`, stderr: "" });
+    await expect(ws.readCardUpload(card.id, "1794341151810-voz.ogg", { start: 0, end: 99 })).rejects.toThrow(/upload not found/);
   });
 
   it("documentos também voltam: PDF e texto abrem no navegador, o resto vira download", () => {
@@ -1595,22 +1615,42 @@ describe("image upload into the card", () => {
     expect(ws.uploadServedInline("image/png")).toBe(true);
   });
 
-  it("Range de um anexo: os três formatos de faixa única, o que não dá para servir e o que se ignora", () => {
-    expect(ws.uploadByteRange(undefined, 100)).toBeNull();
-    expect(ws.uploadByteRange("bytes=0-9", 100)).toEqual({ start: 0, end: 9 });
-    expect(ws.uploadByteRange("bytes=0-", 100)).toEqual({ start: 0, end: 99 });
+  it("Range de um anexo: os três formatos de faixa única, e o que se ignora (arquivo inteiro com 200)", () => {
+    expect(ws.parseUploadRange(undefined)).toBeNull();
+    expect(ws.parseUploadRange("bytes=0-9")).toEqual({ start: 0, end: 9 });
+    expect(ws.parseUploadRange("bytes=0-")).toEqual({ start: 0, end: null });
     // O sufixo é o que o navegador pede para achar a duração de um ogg: os últimos N bytes.
-    expect(ws.uploadByteRange("bytes=-10", 100)).toEqual({ start: 90, end: 99 });
-    expect(ws.uploadByteRange("bytes=-500", 100)).toEqual({ start: 0, end: 99 });
-    // Fim além do arquivo é cortado no último byte (RFC 9110 §14.1.2).
-    expect(ws.uploadByteRange("bytes=50-1000", 100)).toEqual({ start: 50, end: 99 });
-    expect(ws.uploadByteRange("bytes=100-", 100)).toBe("unsatisfiable");
-    expect(ws.uploadByteRange("bytes=-0", 100)).toBe("unsatisfiable");
-    expect(ws.uploadByteRange("bytes=9-3", 100)).toBe("unsatisfiable");
-    // Várias faixas ou unidade estranha: o arquivo inteiro com 200, que a RFC permite.
-    expect(ws.uploadByteRange("bytes=0-1,5-9", 100)).toBeNull();
-    expect(ws.uploadByteRange("items=0-9", 100)).toBeNull();
-    expect(ws.uploadByteRange("bytes=-", 100)).toBeNull();
+    expect(ws.parseUploadRange("bytes=-10")).toEqual({ suffix: 10 });
+    // Faixa invertida é inválida e se ignora (RFC 9110 §14.1.1), não vira 416.
+    expect(ws.parseUploadRange("bytes=9-3")).toBeNull();
+    expect(ws.parseUploadRange("bytes=0-1,5-9")).toBeNull();
+    expect(ws.parseUploadRange("items=0-9")).toBeNull();
+    expect(ws.parseUploadRange("bytes=-")).toBeNull();
+    // Número que o bash não guarda em 64 bits não chega ao script.
+    expect(ws.parseUploadRange("bytes=99999999999999999999-")).toBeNull();
+  });
+
+  it("o script corta a faixa NO RUNNER: roda num arquivo de verdade e devolve só os bytes pedidos", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const dir = mkdtempSync("/tmp/vh-range-");
+    const file = `${dir}/1794341151810-voz.ogg`;
+    writeFileSync(file, "0123456789");
+    const run = (range: UploadRangeRequest | null) => {
+      const out = execFileSync("bash", ["-c", ws.buildUploadReadBody(file, range).join("\n")], { encoding: "utf8" });
+      const [head, b64 = ""] = out.split("\n");
+      return { head, bytes: Buffer.from(b64, "base64").toString() };
+    };
+    expect(run(null)).toEqual({ head: "10 0 9", bytes: "0123456789" });
+    expect(run({ start: 2, end: 4 })).toEqual({ head: "10 2 4", bytes: "234" });
+    expect(run({ start: 7, end: null })).toEqual({ head: "10 7 9", bytes: "789" });
+    expect(run({ start: 8, end: 1000 })).toEqual({ head: "10 8 9", bytes: "89" });
+    expect(run({ suffix: 3 })).toEqual({ head: "10 7 9", bytes: "789" });
+    expect(run({ suffix: 500 })).toEqual({ head: "10 0 9", bytes: "0123456789" });
+    expect(run({ start: 10, end: null }).head).toBe("10 -");
+    expect(run({ suffix: 0 }).head).toBe("10 -");
+    // Arquivo que sumiu é saída não-zero, não uma resposta vazia.
+    expect(() => execFileSync("bash", ["-c", ws.buildUploadReadBody(`${dir}/1-sumiu.ogg`, null).join("\n")], { stdio: "pipe" })).toThrow();
   });
 
   it("áudio anexado volta com o tipo de áudio, inline, para tocar no chat", () => {
@@ -1623,7 +1663,7 @@ describe("image upload into the card", () => {
 
   it("reads a PDF back with its type", async () => {
     const { card } = await seed();
-    runScript.mockResolvedValue({ stdout: Buffer.from("%PDF-1.7").toString("base64"), stderr: "" });
+    runScript.mockResolvedValue({ stdout: `8 0 7\n${Buffer.from("%PDF-1.7").toString("base64")}`, stderr: "" });
     const { contentType } = await ws.readCardUpload(card.id, "1793817742302-contrato.pdf");
     expect(contentType).toBe("application/pdf");
     expect(scriptAt(0)).toContain(`test -f '/work/.uploads/${card.id}/1793817742302-contrato.pdf'`);
@@ -1653,6 +1693,8 @@ describe("image upload into the card", () => {
     runScript.mockResolvedValue({ stdout: "", stderr: "" });
     await expect(ws.readCardUpload(card.id, "1790375878344-x.png")).rejects.toThrow(/upload not found/);
     runScript.mockResolvedValue({ stdout: "not base64 at all !!", stderr: "" });
+    await expect(ws.readCardUpload(card.id, "1790375878344-x.png")).rejects.toThrow(/upload not found/);
+    runScript.mockResolvedValue({ stdout: "20 0 19\nnot base64 at all !!", stderr: "" });
     await expect(ws.readCardUpload(card.id, "1790375878344-x.png")).rejects.toThrow(/upload not found/);
   });
 

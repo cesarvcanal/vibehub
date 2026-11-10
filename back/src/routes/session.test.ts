@@ -235,7 +235,7 @@ describe("card lifecycle routes", () => {
   it("serves an uploaded image back, as the image, cached for good", async () => {
     const id = await makeCard();
     const body = Buffer.from("PNG-ish content");
-    readCardUpload.mockResolvedValueOnce({ body, contentType: "image/png" });
+    readCardUpload.mockResolvedValueOnce({ body, contentType: "image/png", size: body.length, range: null });
     const res = await app.inject({
       method: "GET", url: `/api/cards/${id}/uploads/1790375878344-shot.png`, headers: { cookie },
     });
@@ -243,12 +243,12 @@ describe("card lifecycle routes", () => {
     expect(res.headers["content-type"]).toBe("image/png");
     expect(res.headers["cache-control"]).toContain("immutable");
     expect(res.rawPayload.equals(body)).toBe(true);
-    expect(readCardUpload).toHaveBeenCalledWith(id, "1790375878344-shot.png");
+    expect(readCardUpload).toHaveBeenCalledWith(id, "1790375878344-shot.png", null);
   });
 
   it("serves a PDF inline and an unknown type as a download, both pinned by nosniff", async () => {
     const id = await makeCard();
-    readCardUpload.mockResolvedValueOnce({ body: Buffer.from("%PDF"), contentType: "application/pdf" });
+    readCardUpload.mockResolvedValueOnce({ body: Buffer.from("%PDF"), contentType: "application/pdf", size: 4, range: null });
     const pdf = await app.inject({
       method: "GET", url: `/api/cards/${id}/uploads/1793817742302-contrato.pdf`, headers: { cookie },
     });
@@ -257,7 +257,7 @@ describe("card lifecycle routes", () => {
     expect(pdf.headers["content-disposition"]).toBe('inline; filename="1793817742302-contrato.pdf"');
     expect(pdf.headers["x-content-type-options"]).toBe("nosniff");
 
-    readCardUpload.mockResolvedValueOnce({ body: Buffer.from("<svg/>"), contentType: "application/octet-stream" });
+    readCardUpload.mockResolvedValueOnce({ body: Buffer.from("<svg/>"), contentType: "application/octet-stream", size: 6, range: null });
     const svg = await app.inject({
       method: "GET", url: `/api/cards/${id}/uploads/1793817742302-x.svg`, headers: { cookie },
     });
@@ -295,20 +295,23 @@ describe("card lifecycle routes", () => {
 
   it("serve um pedaço do anexo com Range (206), que é o que faz o áudio ter duração e tocar no Safari", async () => {
     const id = await makeCard();
-    const body = Buffer.from("0123456789");
     const url = `/api/cards/${id}/uploads/1794341151810-cesar01.ogg`;
-    for (let i = 0; i < 3; i++) readCardUpload.mockResolvedValueOnce({ body, contentType: "audio/ogg" });
 
+    readCardUpload.mockResolvedValueOnce({ body: Buffer.from("0123456789"), contentType: "audio/ogg", size: 10, range: null });
     const inteiro = await app.inject({ method: "GET", url, headers: { cookie } });
     expect(inteiro.statusCode).toBe(200);
     expect(inteiro.headers["accept-ranges"]).toBe("bytes");
 
+    // A faixa vai pedida ao workspace (que corta no runner), não recortada aqui.
+    readCardUpload.mockResolvedValueOnce({ body: Buffer.from("789"), contentType: "audio/ogg", size: 10, range: { start: 7, end: 9 } });
     const fim = await app.inject({ method: "GET", url, headers: { cookie, range: "bytes=-3" } });
+    expect(readCardUpload).toHaveBeenLastCalledWith(id, "1794341151810-cesar01.ogg", { suffix: 3 });
     expect(fim.statusCode).toBe(206);
     expect(fim.headers["content-range"]).toBe("bytes 7-9/10");
     expect(fim.headers["content-type"]).toBe("audio/ogg");
     expect(fim.rawPayload.toString()).toBe("789");
 
+    readCardUpload.mockResolvedValueOnce({ body: Buffer.alloc(0), contentType: "audio/ogg", size: 10, range: "unsatisfiable" });
     const fora = await app.inject({ method: "GET", url, headers: { cookie, range: "bytes=10-" } });
     expect(fora.statusCode).toBe(416);
     expect(fora.headers["content-range"]).toBe("bytes */10");
