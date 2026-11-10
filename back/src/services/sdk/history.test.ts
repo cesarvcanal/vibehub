@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { appendFile, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { config } from "../../config/env.js";
@@ -12,7 +12,9 @@ import {
   replayableHistoryEvent,
   rewindHistory,
   unwrapEditedMessage,
+  capToolInput,
   HISTORY_COMPACT_FACTOR,
+  TOOL_INPUT_TEXT_MAX,
   SDK_HISTORY_DIR,
   type HistoryEvent,
 } from "./history.js";
@@ -658,6 +660,74 @@ describe("unwrapEditedMessage — tira o invólucro de uma edição que foi limp
     await appendHistory(CARD, { type: "user", text: "B", sent: "[x]" } as HistoryEvent);
     expect(await unwrapEditedMessage(CARD, "A", "B")).toBe(false);
     expect((await read())[0]).toEqual({ type: "user", text: "B", sent: "[x]" });
+  });
+});
+
+/**
+ * O `tool_use` ia ao log com o input INTEIRO — o `content` de cada Write, o `old_string`/`new_string`
+ * de cada Edit. Vinte Writes de 500 KB davam um log de 10 MB com 20 eventos, que nunca compactava
+ * (a compactação era só por contagem) e que cada fim de turno relia e parseava inteiro.
+ */
+describe("input do tool_use no log", () => {
+  const BIG = TOOL_INPUT_TEXT_MAX * 25;
+  const rawLines = async (): Promise<HistoryEvent[]> => {
+    const raw = await readFile(join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`), "utf8");
+    return raw.split("\n").filter(Boolean).map((l) => JSON.parse(l) as HistoryEvent);
+  };
+
+  it("capToolInput corta só a folha de texto grande, com a marca do que ficou de fora, e mantém a forma", () => {
+    const input = {
+      file_path: "/a.ts",
+      content: "x".repeat(BIG),
+      edits: [{ old_string: "y".repeat(BIG), new_string: "curto", replace_all: true }],
+      todos: [{ content: "passo", status: "pending" }],
+      n: 3,
+      flag: false,
+      none: null,
+    };
+    const capped = capToolInput(input) as typeof input;
+    expect(capped.file_path).toBe("/a.ts");
+    expect(capped.content.length).toBeLessThanOrEqual(TOOL_INPUT_TEXT_MAX);
+    expect(capped.content.startsWith("x".repeat(1000))).toBe(true);
+    expect(capped.content).toContain(`+${BIG - capped.content.indexOf("\n…")}`);
+    expect(capped.edits[0]!.old_string.length).toBeLessThanOrEqual(TOOL_INPUT_TEXT_MAX);
+    expect(capped.edits[0]!.new_string).toBe("curto");
+    expect(capped.edits[0]!.replace_all).toBe(true);
+    expect(capped.todos).toEqual(input.todos);
+    expect([capped.n, capped.flag, capped.none]).toEqual([3, false, null]);
+  });
+
+  it("um texto no teto passa intacto, e cortar de novo o que já foi cortado não muda nada", () => {
+    const exact = "z".repeat(TOOL_INPUT_TEXT_MAX);
+    expect(capToolInput(exact)).toBe(exact);
+    const once = capToolInput("w".repeat(BIG));
+    expect(capToolInput(once)).toBe(once);
+  });
+
+  it("não parte um caractere fora do plano básico (par substituto) ao meio", () => {
+    const capped = capToolInput("😀".repeat(TOOL_INPUT_TEXT_MAX)) as string;
+    const kept = capped.slice(0, capped.indexOf("\n…"));
+    expect(kept.length % 2).toBe(0);
+    expect(kept).toBe("😀".repeat(kept.length / 2));
+  });
+
+  it("o tool_use vai ao log com o input capado; os outros eventos vão como vieram", async () => {
+    await appendHistory(CARD, { type: "tool_use", id: "w1", name: "Write", input: { file_path: "/a", content: "x".repeat(BIG) } });
+    const long = "palavra ".repeat(TOOL_INPUT_TEXT_MAX);
+    await appendHistory(CARD, { type: "assistant_text", text: long });
+    const [tool, text] = await rawLines();
+    const input = (tool as { input: { file_path: string; content: string } }).input;
+    expect(input.file_path).toBe("/a");
+    expect(input.content.length).toBeLessThanOrEqual(TOOL_INPUT_TEXT_MAX);
+    expect((text as { text: string }).text).toBe(long);
+  });
+
+  it("um log antigo, gravado sem o teto, chega ao replay já capado", async () => {
+    await mkdir(join(dir, SDK_HISTORY_DIR), { recursive: true });
+    const old = { type: "tool_use", id: "w1", name: "Write", input: { file_path: "/a", content: "x".repeat(BIG) } };
+    await appendFile(join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`), `${JSON.stringify(old)}\n`, "utf8");
+    const [tool] = await readHistory(CARD);
+    expect((tool as { input: { content: string } }).input.content.length).toBeLessThanOrEqual(TOOL_INPUT_TEXT_MAX);
   });
 });
 

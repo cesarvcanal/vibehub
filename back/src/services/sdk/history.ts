@@ -21,7 +21,9 @@ import { CARD_ID_RE } from "../board/cardId.js";
  *
  * One NDJSON file per card under `<dataDir>/sdk-history/`, append-only on the hot path. Only the
  * events worth re-drawing are kept (see `replayableHistoryEvent`): the consolidated text, never the
- * deltas; the request AND the decision of a permission, so a replayed card shows its outcome.
+ * deltas; the request AND the decision of a permission, so a replayed card shows its outcome. A
+ * tool call's input is kept with its long texts capped (`capToolInput`): the log is the screen's
+ * memory, the whole input lives in the transcript.
  */
 
 /** Where the logs live, under the data dir (survives container restarts like board.json does). */
@@ -136,6 +138,45 @@ export function replayableHistoryEvent(event: HistoryEvent): boolean {
 }
 
 /**
+ * Ceiling of each TEXT inside a stored `tool_use` input. The tool_result was already capped, but the
+ * call went in whole — the `content` of every Write, both sides of every Edit — and twenty 500 KB
+ * Writes made a 10 MB log that every turn's end re-parsed. 20k characters keeps what the screen
+ * draws from it intact: the Workflow plan is read from the script's first 20k, a diff card shows at
+ * most 200 lines, a Write its first 40. The whole input stays in the transcript (./detail.ts).
+ */
+export const TOOL_INPUT_TEXT_MAX = 20_000;
+
+/** Room kept under the ceiling for the marker, so a capped text is never capped again. */
+const TRUNCATION_MARK_ROOM = 40;
+
+/**
+ * The input with every string longer than `TOOL_INPUT_TEXT_MAX` cut, ending in a visible
+ * "… [+N chars]" with what was left out. Only string LEAVES: keys, arrays, numbers and booleans stay
+ * as they were, so whoever reads a field (file_path, todos, the question's options) finds it where
+ * it was. Idempotent — a capped text fits under the ceiling. PURE.
+ */
+export function capToolInput(input: unknown): unknown {
+  if (typeof input === "string") {
+    if (input.length <= TOOL_INPUT_TEXT_MAX) return input;
+    let cut = TOOL_INPUT_TEXT_MAX - TRUNCATION_MARK_ROOM;
+    // A cut between the two halves of a surrogate pair leaves a broken character behind it.
+    const code = input.charCodeAt(cut - 1);
+    if (code >= 0xd800 && code <= 0xdbff) cut -= 1;
+    return `${input.slice(0, cut)}\n… [+${input.length - cut} chars]`;
+  }
+  if (Array.isArray(input)) return input.map(capToolInput);
+  if (input && typeof input === "object") {
+    return Object.fromEntries(Object.entries(input).map(([key, value]) => [key, capToolInput(value)]));
+  }
+  return input;
+}
+
+/** The event as the log keeps it: a `tool_use` with its input capped, anything else as it came. PURE. */
+function storedEvent(event: HistoryEvent): HistoryEvent {
+  return event.type === "tool_use" ? { ...event, input: capToolInput(event.input) } : event;
+}
+
+/**
  * Appends are SERIALIZED per card: the bridge fires them without awaiting (an event stream must not
  * block on the disk), and two interleaved appendFile calls could still interleave their lines.
  */
@@ -155,7 +196,7 @@ export function appendHistoryReported(cardId: string, event: HistoryEvent): Prom
     .then(async () => {
       const file = historyFile(cardId);
       await mkdir(join(file, ".."), { recursive: true });
-      await appendFile(file, `${JSON.stringify(event)}\n`, "utf8");
+      await appendFile(file, `${JSON.stringify(storedEvent(event))}\n`, "utf8");
       written = true;
     })
     .catch((err: unknown) => {
@@ -215,10 +256,11 @@ export async function readHistory(
     await appendHistoryBarrier(cardId, async () => {
       const current = parseHistory(await readFile(file, "utf8"));
       if (current.length <= compactAbove) return; // a rewind already shrank it
-      await writeFileAtomic(file, replayWindow(current, limit).map((e) => JSON.stringify(e)).join("\n") + "\n");
+      await writeFileAtomic(file, replayWindow(current, limit).map((e) => JSON.stringify(storedEvent(e))).join("\n") + "\n");
     });
   }
-  return replayWindow(events, limit);
+  // A log written before the input ceiling replays capped too, not as a multi-megabyte frame.
+  return replayWindow(events, limit).map(storedEvent);
 }
 
 /**
