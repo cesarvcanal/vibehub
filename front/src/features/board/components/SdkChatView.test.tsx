@@ -5307,7 +5307,10 @@ describe("SdkChatView — /btw", () => {
     const frame = JSON.parse(ws.sent[1]!) as { type: string; id: string; question: string };
     expect(frame).toMatchObject({ type: "btw", question: "o que falta?" });
     expect(screen.queryByTestId("sdk-queue")).toBeNull();
-    expect(await screen.findByTestId("sdk-btw")).toHaveTextContent("o que falta?"); // pendente
+    const pendente = await screen.findByTestId("sdk-btw");
+    expect(pendente).toHaveTextContent("o que falta?");
+    expect(within(pendente).getByLabelText(/Answering…|Respondendo…/)).toBeInTheDocument();
+    expect(pendente).not.toHaveTextContent(/Side question|Pergunta lateral/);
 
     ws.deliver({ type: "btw_answer", id: frame.id, question: "o que falta?", text: "falta abrir o PR" });
     await waitFor(() => expect(screen.getByTestId("sdk-btw")).toHaveTextContent("falta abrir o PR"));
@@ -5315,6 +5318,7 @@ describe("SdkChatView — /btw", () => {
     const row = screen.getByTestId("sdk-btw");
     expect(row).toHaveTextContent("o que falta?");
     expect(row).toHaveTextContent("falta abrir o PR");
+    expect(within(row).queryByLabelText(/Answering…|Respondendo…/)).toBeNull();
   });
 });
 

@@ -529,7 +529,7 @@ export const en: Record<string, string> = {
   "sdk.compactSaved": "−{percent}%",
   "sdk.compactFailed": "Compaction did not finish",
   "sdk.compactInterrupted": "interrupted before it finished",
-  "sdk.btwLabel": "Side question (/btw) — answered on the side, the turn went on without it",
+  "sdk.btwLabel": "Side question: answered on the side, the turn went on without it",
   "sdk.btwError": "Could not answer: {error}",
   "sdk.btwPending": "Answering…",
   "sdk.btwExpired": "No answer — the side query never came back (the driver restarted or died). Ask again.",

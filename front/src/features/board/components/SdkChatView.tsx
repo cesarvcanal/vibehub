@@ -2470,20 +2470,20 @@ const SdkChatRow = React.memo(function SdkChatRow({
   }
 
   if (row.kind === "btw") {
-    // A resposta do /btw: emoldurada e com a pergunta, para nunca ser lida como o turno falando.
+    // A resposta do /btw: marcada à esquerda e com a pergunta, para nunca ser lida como o turno falando.
     return (
-      <div data-testid="sdk-btw" className="rounded-md border border-dashed border-border/70 bg-muted/30 px-3 py-2 text-sm">
-        <div className="text-xs text-muted-foreground">{t("sdk.btwLabel")}</div>
-        <div className="mt-1 whitespace-pre-wrap text-xs italic text-muted-foreground">{row.question}</div>
-        <div className="mt-2">
-          {row.text !== undefined ? (
-            <Markdown text={row.text} />
-          ) : row.error !== undefined ? (
-            t("sdk.btwError", { error: row.error })
-          ) : (
-            <span className="text-xs text-muted-foreground">{t("sdk.btwPending")}</span>
-          )}
+      <div data-testid="sdk-btw" className="border-l-2 border-primary/40 pl-3 text-sm">
+        <div className="flex items-baseline gap-2 text-xs text-muted-foreground">
+          <span title={t("sdk.btwLabel")} className="shrink-0 font-mono text-primary/80">/btw</span>
+          <span className="min-w-0 whitespace-pre-wrap">{row.question}</span>
         </div>
+        {row.text !== undefined ? (
+          <div className="mt-1"><Markdown text={row.text} /></div>
+        ) : row.error !== undefined ? (
+          <div className="mt-1 text-xs text-destructive">{t("sdk.btwError", { error: row.error })}</div>
+        ) : (
+          <Loader2 aria-label={t("sdk.btwPending")} className="mt-1 h-3.5 w-3.5 animate-spin text-muted-foreground" />
+        )}
       </div>
     );
   }
