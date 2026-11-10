@@ -254,20 +254,23 @@ const COMMENTS_HEAD_POLL_SECONDS = 5;
 
 /**
  * Before commenting: wait (bounded) for the PR to point at the commit just pushed — the comment lines
- * belong to THAT diff, and a reused PR moves to it a few seconds after the push — then list the review
+ * belong to THAT diff, and a reused PR moves to it a few seconds after the push. "Just pushed" is the
+ * tip of `branch` (what the push sent), not the worktree's HEAD, which may be on something else. Then list the review
  * comments already on the PR, so a repeated delivery does not post them again. Emits
  * `__VIBEHUB_DELIVER__ prcomments <head> <base64 of JSON lines {path, body}>` (`tojson`: one comment per
  * line whatever gh's own formatting, a body's newlines escaped), or `error stale` /
  * `error comments`. PURE.
  */
-export function buildPrCommentsReadScript(containerName: string, cardId: string, token: string, cwd: string, prUrl: string): string {
+export function buildPrCommentsReadScript(
+  containerName: string, cardId: string, token: string, cwd: string, prUrl: string, branch: string,
+): string {
   assertSafeRemotePath(cwd);
   const pr = parsePrUrl(prUrl);
   if (!pr) throw new Error(`not a GitHub PR url: ${prUrl}`);
   const body = [
     ...ghTokenPreamble(token),
     `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
-    `HEAD=$(git rev-parse HEAD)`,
+    `HEAD=$(git rev-parse ${shQuote(`refs/heads/${branch}`)})`,
     `i=0`,
     `while :; do`,
     `  i=$((i+1))`,
@@ -336,11 +339,11 @@ export function buildPrReviewScript(
  * pushed commit. Any failure comes back with what to tell the agent — the PR is open either way.
  */
 async function postPrComments(
-  container: string, cardId: string, token: string, cwd: string, prUrl: string, comments: CleanComment[],
+  container: string, cardId: string, token: string, cwd: string, prUrl: string, branch: string, comments: CleanComment[],
 ): Promise<{ ok: true; posted: number; skipped: number } | { ok: false; output: string }> {
   if (!parsePrUrl(prUrl)) return { ok: false, output: `a URL do PR não é do GitHub (${prUrl}): os comentários não foram publicados` };
   const read = await hostExecutor().runScript(
-    buildPrCommentsReadScript(container, cardId, token, cwd, prUrl),
+    buildPrCommentsReadScript(container, cardId, token, cwd, prUrl, branch),
     { timeoutMs: (COMMENTS_HEAD_ROUNDS * COMMENTS_HEAD_POLL_SECONDS + 60) * 1000 },
   );
   const found = parsePrComments(read.stdout);
@@ -1079,7 +1082,7 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     // The comments on the diff go up BEFORE the gate: a PR that gets merged already explains itself,
     // and one GitHub refused them on stops here — merging it undocumented is what the rule forbids.
     if (docs.comments.length) {
-      const posted = await postPrComments(container, card.id, token, cwd, prUrl, docs.comments);
+      const posted = await postPrComments(container, card.id, token, cwd, prUrl, source, docs.comments);
       logger.info(
         { audit: true, action: "maestro.deliver", card: card.worktreeSlug, comments: posted.ok ? posted.posted : "failed", by: opts.by },
         posted.ok ? "deliver posted the PR comments" : "deliver could not post the PR comments",

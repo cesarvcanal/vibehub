@@ -1154,6 +1154,14 @@ describe("deliver abre PR documentado (diretriz de PR de todo repositório)", ()
     expect(reviewPosted()).toBeUndefined();
   });
 
+  it("a espera compara o PR com a branch do card que foi empurrada", async () => {
+    const { deliver, card } = await makeCard();
+    wire();
+    await deliver.deliver(card.id, { branch: "dev", docs: DOCS });
+    const read = scripts().find((s) => s.includes("/comments' --paginate"))!;
+    expect(read).toContain(`git rev-parse 'refs/heads/${card.branch ?? `card/${card.worktreeSlug}`}'`);
+  });
+
   it("push-only (correção de PR em revisão) também publica os comentários que vierem", async () => {
     const { deliver, card } = await makeCard();
     wire();
@@ -1180,8 +1188,10 @@ describe("deliver abre PR documentado (diretriz de PR de todo repositório)", ()
 describe("buildPrCommentsReadScript / parsePrComments", () => {
   it("espera o PR apontar para o HEAD empurrado (limitado) e lê os comentários em base64", async () => {
     const { deliver } = await load();
-    const s = deliver.buildPrCommentsReadScript("vibehub-runner", "c1", TOKEN, "/work/x", PR);
-    expect(s).toContain("HEAD=$(git rev-parse HEAD)");
+    const s = deliver.buildPrCommentsReadScript("vibehub-runner", "c1", TOKEN, "/work/x", PR, "card/fix-1");
+    // the commit the push SENT (the card branch), not whatever the worktree has checked out
+    expect(s).toContain("HEAD=$(git rev-parse 'refs/heads/card/fix-1')");
+    expect(s).not.toContain("git rev-parse HEAD");
     expect(s).toContain(`gh pr view '${PR}' --json headRefOid`);
     expect(s).toContain("gh api 'repos/acme/repo/pulls/7/comments' --paginate --jq '.[] | {path, body} | tojson'");
     expect(s).toContain("base64 -w0");
