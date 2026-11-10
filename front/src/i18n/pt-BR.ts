@@ -956,6 +956,18 @@ export const ptBR: Record<string, string> = {
   "newCard.lockedHint":
     "O card trabalha na branch dele e entrega só como pull request para a branch de origem — nunca mergeia, nunca sobe pra outra branch. Quem revisa mergeia.",
   "newCard.create": "Criar card",
+  "branchPicker.placeholder": "Escolha uma branch",
+  "branchPicker.search": "Buscar branch…",
+  "branchPicker.refresh": "Atualizar a lista do GitHub",
+  "branchPicker.refreshing": "Atualizando…",
+  "branchPicker.featured": "Principais",
+  "branchPicker.others": "Outras branches ({n})",
+  "branchPicker.empty": "Nenhuma branch com esse nome.",
+  "branchPicker.total": "{n} branches no GitHub",
+  "branchPicker.badge.padrao": "padrão",
+  "branchPicker.badge.producao": "produção",
+  "branchPicker.badge.principal": "principal",
+  "branchPicker.badge.desenvolvimento": "desenvolvimento",
 
   /* ---------------------------------------------------------------- projeto */
   "project.settingsTitle": "Configurações do projeto",

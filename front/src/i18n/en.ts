@@ -950,6 +950,18 @@ export const en: Record<string, string> = {
   "newCard.lockedHint":
     "The card works on its own branch and delivers only as a pull request against the branch it was cut from — it never merges and never ships anywhere else. Whoever reviews it merges it.",
   "newCard.create": "Create card",
+  "branchPicker.placeholder": "Pick a branch",
+  "branchPicker.search": "Search branches…",
+  "branchPicker.refresh": "Refresh the list from GitHub",
+  "branchPicker.refreshing": "Refreshing…",
+  "branchPicker.featured": "Main branches",
+  "branchPicker.others": "Other branches ({n})",
+  "branchPicker.empty": "No branch with that name.",
+  "branchPicker.total": "{n} branches on GitHub",
+  "branchPicker.badge.padrao": "default",
+  "branchPicker.badge.producao": "production",
+  "branchPicker.badge.principal": "main",
+  "branchPicker.badge.desenvolvimento": "development",
 
   /* ---------------------------------------------------------- project form */
   "project.settingsTitle": "Project settings",
