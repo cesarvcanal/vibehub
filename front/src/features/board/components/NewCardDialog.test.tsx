@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NewCardDialog } from "@/features/board/components/NewCardDialog";
 import { renderApp } from "@/test/render";
+import { get } from "@/lib/api";
 
 // The shell's auth probe would otherwise reach for a real XHR under jsdom.
 vi.mock("@/lib/api", () => ({
@@ -10,7 +11,7 @@ vi.mock("@/lib/api", () => ({
   setUnauthorizedHandler: vi.fn(),
   get: vi.fn().mockImplementation((url: string) =>
     url === "/github/repos/acme/p1/branches"
-      ? Promise.resolve({ branches: ["dev", "main", "feat/pdv"] })
+      ? Promise.resolve({ branches: ["main", "dev", "feat/pdv", "prod", "fix/caixa"], defaultBranch: "main" })
       : url === "/accounts/usage"
       ? Promise.resolve({
           bySlug: {
@@ -25,6 +26,21 @@ vi.mock("@/lib/api", () => ({
   patch: vi.fn(),
   del: vi.fn(),
 }));
+
+async function escolherBase(user: ReturnType<typeof userEvent.setup>, nome: string) {
+  await user.click(await screen.findByLabelText("Cut from"));
+  const opcao = screen
+    .getAllByRole("option")
+    .find((o) => o.querySelector(".font-mono")?.textContent === nome || o.textContent === nome);
+  if (!opcao) throw new Error(`branch ${nome} não está na lista`);
+  await user.click(opcao);
+}
+
+function nomesDasOpcoes() {
+  return within(screen.getByRole("listbox"))
+    .getAllByRole("option")
+    .map((o) => o.querySelector(".font-mono")?.textContent ?? o.textContent);
+}
 
 function setup(overrides: Partial<React.ComponentProps<typeof NewCardDialog>> = {}) {
   const onSubmit = vi.fn();
@@ -206,7 +222,7 @@ describe("NewCardDialog", () => {
     await user.type(screen.getByLabelText("Title"), "ajuste do dev");
     await user.click(screen.getByRole("button", { name: "Options" }));
 
-    await user.selectOptions(await screen.findByLabelText("Cut from"), "dev");
+    await escolherBase(user, "dev");
     await user.click(screen.getByLabelText(/Lock the card to this branch/));
     await user.click(screen.getByRole("button", { name: "Create card" }));
 
@@ -235,12 +251,13 @@ describe("NewCardDialog", () => {
   it("clears the lock on Cancel, so it cannot ride along into the next card", async () => {
     const { user } = setup();
     await user.click(screen.getByRole("button", { name: "Options" }));
-    await user.selectOptions(await screen.findByLabelText("Cut from"), "main");
+    await escolherBase(user, "main");
+    expect(screen.getByLabelText("Cut from")).toHaveTextContent("main");
     await user.click(screen.getByLabelText(/Lock the card to this branch/));
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 
     await user.click(screen.getByRole("button", { name: "Options" }));
-    expect((await screen.findByLabelText("Cut from") as HTMLSelectElement).value).toBe("");
+    expect(await screen.findByLabelText("Cut from")).toHaveTextContent("The project's (dev)");
     expect((screen.getByLabelText(/Lock the card to this branch/) as HTMLInputElement).checked).toBe(false);
   });
 
@@ -248,18 +265,76 @@ describe("NewCardDialog", () => {
     const { user } = setup();
     await user.click(screen.getByRole("button", { name: "Options" }));
 
-    const base = (await screen.findByLabelText("Cut from")) as HTMLSelectElement;
-    await waitFor(() =>
-      expect(Array.from(base.options).map((o) => o.textContent)).toEqual([
-        "The project's (dev)",
-        "dev",
-        "main",
-        "feat/pdv",
-      ]),
-    );
-    // Picking one sends it; the inherit option sends nothing.
-    await user.selectOptions(base, "main");
-    expect(base.value).toBe("main");
+    await user.click(await screen.findByLabelText("Cut from"));
+    expect(nomesDasOpcoes()).toEqual(["The project's (dev)", "main", "prod", "dev", "feat/pdv", "fix/caixa"]);
+    expect(screen.getByText("Main branches")).toBeInTheDocument();
+    expect(screen.getByText("Other branches (2)")).toBeInTheDocument();
+    const prod = screen.getAllByRole("option").find((o) => o.querySelector(".font-mono")?.textContent === "prod");
+    expect(prod).toHaveTextContent("production");
+    const main = screen.getAllByRole("option").find((o) => o.querySelector(".font-mono")?.textContent === "main");
+    expect(main).toHaveTextContent("default");
+  });
+
+  it("busca a branch pelo nome e escolhe com Enter", async () => {
+    const { user, onSubmit } = setup();
+    await user.type(screen.getByLabelText("Title"), "caixa");
+    await user.click(screen.getByRole("button", { name: "Options" }));
+    await user.click(await screen.findByLabelText("Cut from"));
+
+    await user.type(screen.getByRole("searchbox"), "CAIXA");
+    expect(nomesDasOpcoes()).toEqual(["fix/caixa"]);
+    await user.keyboard("{Enter}");
+
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Cut from")).toHaveTextContent("fix/caixa");
+    await user.click(screen.getByRole("button", { name: "Create card" }));
+    expect(onSubmit).toHaveBeenCalledWith({ projectId: "p1", title: "caixa", base: "fix/caixa" });
+  });
+
+  it("busca sem resultado diz que não achou e Enter não escolhe nada", async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Options" }));
+    await user.click(await screen.findByLabelText("Cut from"));
+    await user.type(screen.getByRole("searchbox"), "nao-existe");
+
+    expect(screen.getByText("No branch with that name.")).toBeInTheDocument();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+  });
+
+  it("Esc fecha só a lista, não o diálogo", async () => {
+    const { user, onOpenChange } = setup();
+    await user.click(screen.getByRole("button", { name: "Options" }));
+    await user.click(await screen.findByLabelText("Cut from"));
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it("navega pelas setas a partir da branch escolhida", async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Options" }));
+    await escolherBase(user, "main");
+    await user.click(screen.getByLabelText("Cut from"));
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(screen.getByLabelText("Cut from")).toHaveTextContent("prod");
+  });
+
+  it("abrir com a lista fresca não vai ao GitHub de novo; o botão de atualizar vai", async () => {
+    const { user } = setup();
+    const chamadasBranches = () =>
+      vi.mocked(get).mock.calls.filter(([url]) => url === "/github/repos/acme/p1/branches").length;
+    const antes = chamadasBranches();
+    await user.click(screen.getByRole("button", { name: "Options" }));
+    await user.click(await screen.findByLabelText("Cut from"));
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByLabelText("Cut from"));
+    expect(chamadasBranches() - antes).toBe(1);
+
+    await user.click(screen.getByRole("button", { name: "Refresh the list from GitHub" }));
+    await waitFor(() => expect(chamadasBranches() - antes).toBe(2));
   });
 
   it("refuses a branch name the server would refuse, and says why", async () => {
@@ -278,7 +353,7 @@ describe("NewCardDialog", () => {
     const { user, onSubmit } = setup();
     await user.type(screen.getByLabelText("Title"), "direto na prod");
     await user.click(screen.getByRole("button", { name: "Options" }));
-    await user.selectOptions(await screen.findByLabelText("Cut from"), "main");
+    await escolherBase(user, "main");
     await user.type(screen.getByLabelText("Branch"), "main");
 
     expect(await screen.findByText(/cannot be the same as the base/)).toBeInTheDocument();
