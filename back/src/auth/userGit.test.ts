@@ -94,3 +94,39 @@ describe("identidade git por usuário", () => {
     expect((await getUserGit("u1"))?.githubConnectionId).toBe("c1");
   });
 });
+
+describe("conta Claude vinculada x conta em que o card nasce", () => {
+  async function withAccount() {
+    const mod = await load();
+    const registry = await import("../services/board/registry.js");
+    registry.resetForTesting();
+    await registry.createAccount({ name: "Mussa" });
+    return mod;
+  }
+
+  it("'default' é vínculo: tem conta, e o card nasce sem slug (conta embutida)", async () => {
+    const { setUserGit, linkedAccountSlug, creatorAccountSlug } = await withAccount();
+    await setUserGit("u1", { claudeAccountSlug: "default" });
+    expect(await linkedAccountSlug("u1")).toBe("default");
+    expect(await creatorAccountSlug("u1")).toBeUndefined();
+  });
+
+  it("sem vínculo (campo ausente, ou limpo de volta ao 'Herdar') não tem conta", async () => {
+    const { setUserGit, linkedAccountSlug } = await withAccount();
+    expect(await linkedAccountSlug("u1")).toBeUndefined();
+    expect(await linkedAccountSlug(undefined)).toBeUndefined();
+    await setUserGit("u1", { claudeAccountSlug: "mussa" });
+    await setUserGit("u1", { claudeAccountSlug: null });
+    expect(await linkedAccountSlug("u1")).toBeUndefined();
+  });
+
+  it("conta com nome: vínculo e conta do card são a mesma; a que sumiu não conta", async () => {
+    const { setUserGit, linkedAccountSlug, creatorAccountSlug } = await withAccount();
+    await setUserGit("u1", { claudeAccountSlug: "mussa" });
+    expect(await linkedAccountSlug("u1")).toBe("mussa");
+    expect(await creatorAccountSlug("u1")).toBe("mussa");
+    await setUserGit("u2", { claudeAccountSlug: "fantasma" });
+    expect(await linkedAccountSlug("u2")).toBeUndefined();
+    expect(await creatorAccountSlug("u2")).toBeUndefined();
+  });
+});

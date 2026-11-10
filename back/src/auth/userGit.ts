@@ -131,15 +131,31 @@ export async function removeUserGit(userId: string): Promise<void> {
 }
 
 /**
+ * The Claude account this person is TIED to: the slug they were given, `"default"` included, while
+ * that account still exists. Undefined = no link at all (never set, or cleared back to inheriting).
+ * This answers "does this person have an account?" — what the PR review demands of the reviewer and
+ * of the author; where their cards are born is {@link creatorAccountSlug}.
+ */
+export async function linkedAccountSlug(userId: string | undefined): Promise<string | undefined> {
+  const slug = userId ? (await getUserGit(userId))?.claudeAccountSlug : undefined;
+  if (!slug) return undefined;
+  if (slug === DEFAULT_ACCOUNT_SLUG) return slug;
+  return (await listAccounts()).some((a) => a.slug === slug) ? slug : undefined;
+}
+
+/** The slug a card carries for a linked account: the built-in one is the absence of a slug on the card. PURE. */
+export function cardAccountSlug(linked: string): string | undefined {
+  return linked === DEFAULT_ACCOUNT_SLUG ? undefined : linked;
+}
+
+/**
  * The account a card created by this person is BORN on: theirs, when it still exists. A slug whose
  * account is gone (removal refuses while a person holds it, but a hand-edited file does not) falls
  * back to inheriting instead of failing the creation.
  */
 export async function creatorAccountSlug(userId: string | undefined): Promise<string | undefined> {
-  const slug = userId ? (await getUserGit(userId))?.claudeAccountSlug : undefined;
-  // The built-in account is the absence of a slug on the card.
-  if (!slug || slug === DEFAULT_ACCOUNT_SLUG) return undefined;
-  return (await listAccounts()).some((a) => a.slug === slug) ? slug : undefined;
+  const linked = await linkedAccountSlug(userId);
+  return linked && cardAccountSlug(linked);
 }
 
 /** Who is tied to a Claude account — what removing that account would leave dangling. */
