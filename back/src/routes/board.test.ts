@@ -346,7 +346,7 @@ describe("revisão de PR no board", () => {
     expect(await read()).toEqual({ id: "r-ready", prNumber: 7, phase: "ready", round: 1, authorWorking: true });
   });
 
-  it("caso real (PR #247): pronta com o gate do merge vermelho ou rodando no commit aprovado — o resumo leva mergeGateState", async () => {
+  it("caso real (PR #247): pronta com o gate do merge vermelho ou rodando no commit aprovado — o resumo leva mergeGateState (corrigindo sozinho ≠ falhou)", async () => {
     const projectId = await makeProject();
     const authorId = await makeCard(projectId, "login");
     const sha = "a".repeat(40);
@@ -354,8 +354,11 @@ describe("revisão de PR no board", () => {
       id: "r-gate", phase: "ready", createdAt: 1_000, reviewedSha: sha, mergeGate: { sha, state: "failed", output: "CI do PR vermelho: back", at: 1 },
     } as never);
     const read = async () => (await app.inject({ method: "GET", url: "/api/cards", headers: { cookie } })).json().cards[0].review;
-    expect(await read()).toEqual({ id: "r-gate", prNumber: 7, phase: "ready", round: 1, mergeGateState: "failed" });
+    // vermelho que ainda volta sozinho (a IA do autor corrige): a linha diz que ela está corrigindo, não "falhou"
+    expect(await read()).toEqual({ id: "r-gate", prNumber: 7, phase: "ready", round: 1, mergeGateState: "fixing" });
     const store = await import("../services/review/store.js");
+    await store.mutateReview("r-gate", (r) => { r.mergeGate = { sha, state: "failed", at: 2, failures: 4, exhausted: true }; });
+    expect(await read()).toMatchObject({ mergeGateState: "failed" });
     await store.mutateReview("r-gate", (r) => { r.mergeGate = { sha, state: "running", at: 2 }; });
     expect(await read()).toMatchObject({ mergeGateState: "running" });
     // verde, ou um veredito de um commit que não é o aprovado: a linha volta a "pronto pra merge"
