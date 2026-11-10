@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { config } from "../../config/env.js";
 import { applyLiveEffort, cardDefaultEffort, onCardStatusSink } from "../board/agentState.js";
 import {
-  EFFORT_ACK_TIMEOUT_MS,
+  PRAZO_CONFIRMACAO_NIVEL_MS,
   applyDriverEffort,
   driverDefaultEffort,
   ensureDriverSession,
@@ -147,7 +147,7 @@ describe("sdk manager — a inteligência trocada com o driver de pé", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const applied = applyDriverEffort(CARD, "high");
-      await vi.advanceTimersByTimeAsync(EFFORT_ACK_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(PRAZO_CONFIRMACAO_NIVEL_MS);
       expect(await applied).toBe(false);
     } finally {
       vi.useRealTimers();
@@ -218,6 +218,23 @@ describe("sdk manager — a inteligência trocada com o driver de pé", () => {
     expect(await applied).toBe(true);
     expect(session.closed).toBe(false);
     expect(spawned).toHaveLength(1);
+  });
+
+  it("voltar ao padrão da conta: o nível que a sessão confirmou passa a ser o padrão que o pill lê", async () => {
+    // Um driver que subiu com --effort nunca anunciou o padrão da conta (effort_default só vem de um
+    // CLI sem nível). A confirmação da volta ao padrão diz qual é.
+    ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
+    expect(driverDefaultEffort(CARD)).toBeNull();
+    const applied = applyDriverEffort(CARD, null);
+    confirm({ id: lastEffortFrame().id, effort: "high" });
+    expect(await applied).toBe(true);
+    expect(driverDefaultEffort(CARD)).toBe("high");
+
+    // A confirmação de um nível FIXADO não é o padrão da conta.
+    const fixado = applyDriverEffort(CARD, "low");
+    confirm({ id: lastEffortFrame().id, effort: "low" });
+    await fixado;
+    expect(driverDefaultEffort(CARD)).toBe("high");
   });
 
   it("a confirmação é estado, não conversa: nenhuma linha de histórico, nenhum frame no navegador", async () => {

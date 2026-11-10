@@ -21,7 +21,7 @@ import { mergeTaskEvent, taskSnapshot, toolResultEvent, type AgentTaskEvent, typ
 import { isHarnessFiller } from "../chat/chat.js";
 import {
   NOTE_CONVERSATION_CLEARED, buildLateAnswerText, buildOrphanAnswerText, mergePeerAnswers, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseQuestionDraftFrame, isEmptyQuestionDraft, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
-  type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type EffortAckEvent, type QuestionAnswerControl, type QuestionDraft, type StopHow, type UserQuestionItem,
+  type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type ConfirmacaoDeNivelEvent, type QuestionAnswerControl, type QuestionDraft, type StopHow, type UserQuestionItem,
   type WorkflowFeedEvent, type WorkflowFeedRequest, type DetailRequest, type ResultEvent,
 } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
@@ -162,8 +162,8 @@ export interface DriverSession {
   catalog?: CatalogEvent;
   /** The account's reasoning level, as the driver announced it at boot (`effort_default`). */
   defaultEffort?: string;
-  /** Trocas de nível esperando o `effort_ack` do driver, por id: quem responde, e com que desfecho. */
-  effortAcks: Map<string, (aplicado: boolean) => void>;
+  /** Trocas de nível esperando o `effort_ack` do driver, por id: o nível pedido e quem responde. */
+  trocasDeNivelPendentes: Map<string, TrocaDeNivelPendente>;
   idleTimer: NodeJS.Timeout | null;
   /** Rolling tail of the driver's stderr — what a post-mortem has to say (see STDERR_TAIL_MAX). */
   stderrTail: string;
@@ -1145,7 +1145,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     acceptedCids: new Map(),
     ownQuestions: new Set(),
     openAsks: new Set(),
-    effortAcks: new Map(),
+    trocasDeNivelPendentes: new Map(),
     awaitingDecision: false,
     questionDrafts: new Map(),
     orphanAsks: new Set(),
@@ -2337,10 +2337,17 @@ export function stopCardDriver(cardId: string): void {
 }
 
 /**
- * Quanto quem trocou espera a confirmação do driver. Folga sobre os 10 s que o driver espera um CLI
- * que acabou de nascer antes de aplicar (ULTRA_INIT_TIMEOUT_MS em sdk-driver.mjs).
+ * Quanto quem trocou espera a confirmação do driver: os 10 s que ele espera um CLI que acabou de
+ * nascer (ULTRA_INIT_TIMEOUT_MS em sdk-driver.mjs), mais a troca e a leitura do nível, 4 s cada
+ * (PRAZO_IDA_AO_CLI_MS), e folga.
  */
-export const EFFORT_ACK_TIMEOUT_MS = 15_000;
+export const PRAZO_CONFIRMACAO_NIVEL_MS = 20_000;
+
+/** Uma troca de nível escrita no driver, esperando o `effort_ack` dele. */
+interface TrocaDeNivelPendente {
+  nivelPedido: string | null;
+  responder: (aplicado: boolean) => void;
+}
 
 /**
  * A NOVA INTELIGÊNCIA DO CARD, na sessão viva: o driver a aplica com `applyFlagSettings` — no meio
@@ -2360,33 +2367,43 @@ export function applyDriverEffort(cardId: string, effort: string | null): Promis
     const prazo = setTimeout(() => {
       logger.warn({ audit: true, action: "sdk.effort.timeout", card: session.label, effort }, "the driver never confirmed the intelligence switch");
       responder(false);
-    }, EFFORT_ACK_TIMEOUT_MS);
+    }, PRAZO_CONFIRMACAO_NIVEL_MS);
     const responder = (aplicado: boolean): void => {
       clearTimeout(prazo);
-      session.effortAcks.delete(id);
+      session.trocasDeNivelPendentes.delete(id);
       resolve(aplicado);
     };
-    session.effortAcks.set(id, responder);
+    session.trocasDeNivelPendentes.set(id, { nivelPedido: effort, responder });
     if (!writeToDriver(session, { type: "set_effort", id, effort })) responder(false);
   });
 }
 
-function confirmarTrocaDeNivel(session: DriverSession, ack: EffortAckEvent): void {
-  const responder = session.effortAcks.get(ack.id);
+function confirmarTrocaDeNivel(session: DriverSession, confirmacao: ConfirmacaoDeNivelEvent): void {
+  const pendente = session.trocasDeNivelPendentes.get(confirmacao.id);
   // Prazo vencido: quem trocou já seguiu pelo reinício.
-  if (!responder) return;
-  if (typeof ack.error === "string") {
-    logger.warn({ audit: true, action: "sdk.effort.refused", card: session.label, detail: ack.error }, "the live session refused the intelligence switch");
-    responder(false);
+  if (!pendente) return;
+  if (typeof confirmacao.error === "string") {
+    logger.warn({ audit: true, action: "sdk.effort.refused", card: session.label, effort: pendente.nivelPedido, detail: confirmacao.error }, "the live session refused the intelligence switch");
+    pendente.responder(false);
     return;
   }
-  logger.info({ audit: true, action: "sdk.effort.applied", card: session.label, effort: ack.effort ?? null }, "the live session confirmed the intelligence switch");
-  responder(true);
+  const nivelAplicado = typeof confirmacao.effort === "string" && registry.isValidEffort(confirmacao.effort) ? confirmacao.effort : null;
+  // A volta ao padrão da conta diz QUAL é o padrão: o pill de um card sem nível o lê daqui.
+  if (pendente.nivelPedido === null && nivelAplicado) session.defaultEffort = nivelAplicado;
+  // Um nível diferente do pedido (um plano que limita o esforço) ainda é a troca aplicada: o pill se
+  // acerta pelo carimbo da próxima chamada. Fica registrado para quem for investigar.
+  const divergiu = pendente.nivelPedido !== null && nivelAplicado !== null && nivelAplicado !== pendente.nivelPedido;
+  const registrar = divergiu ? logger.warn.bind(logger) : logger.info.bind(logger);
+  registrar(
+    { audit: true, action: "sdk.effort.applied", card: session.label, requested: pendente.nivelPedido, effort: nivelAplicado },
+    divergiu ? "the live session took the switch on another level" : "the live session confirmed the intelligence switch",
+  );
+  pendente.responder(true);
 }
 
 /** O driver acabou: nenhuma troca pendente vai ser confirmada por ele. */
 function soltarTrocasDeNivel(session: DriverSession): void {
-  for (const responder of [...session.effortAcks.values()]) responder(false);
+  for (const { responder } of [...session.trocasDeNivelPendentes.values()]) responder(false);
 }
 
 /**

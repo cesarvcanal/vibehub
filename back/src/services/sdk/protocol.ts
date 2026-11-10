@@ -248,7 +248,7 @@ export interface EffortDefaultEvent { type: "effort_default"; effort: string }
  * chamada ao modelo vai usar (ausente quando ela não diz); `error` = a sessão recusou a troca. Estado
  * para quem trocou, consumido pelo manager: nunca vai ao histórico nem ao navegador.
  */
-export interface EffortAckEvent { type: "effort_ack"; id: string; effort?: string; error?: string }
+export interface ConfirmacaoDeNivelEvent { type: "effort_ack"; id: string; effort?: string; error?: string }
 /**
  * Output of a LOCAL slash command (`/cost`, `/usage`): the CLI answers it itself, without a model
  * turn. Without this the chat swallowed the answer and the command looked like it did nothing.
@@ -347,7 +347,7 @@ export type DriverEvent =
   | RewoundEvent
   | CatalogEvent
   | EffortDefaultEvent
-  | EffortAckEvent
+  | ConfirmacaoDeNivelEvent
   | LocalOutputEvent
   | BtwAnswerEvent
   | CompactionEvent
