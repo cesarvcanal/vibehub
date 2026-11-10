@@ -1887,13 +1887,25 @@ function applyCompaction(state: SdkChatState, event: SdkEvent): SdkChatState {
   if (count(event.postTokens) !== undefined) outcome.postTokens = count(event.postTokens);
   if (count(event.durationMs) !== undefined) outcome.durationMs = count(event.durationMs);
   if (event.phase === "failed" && event.error) outcome.error = event.error;
+  const next = { ...state, contextUsage: compactedUsage(state.contextUsage, outcome) };
   if (at >= 0) {
     const rows = [...state.rows];
     rows[at] = { ...(rows[at] as CompactionRow), ...outcome };
-    return { ...state, rows };
+    return { ...next, rows };
   }
   const { id, seq } = nextId(state, "compact");
-  return { ...state, seq, rows: withSideRow(state.rows, { kind: "compaction", id, status: event.phase, ...outcome }) };
+  return { ...next, seq, rows: withSideRow(state.rows, { kind: "compaction", id, status: event.phase, ...outcome }) };
+}
+
+/**
+ * O medidor depois da compactação: o CLI diz quanto sobrou (`postTokens`), e o medidor cai NA HORA
+ * — a leitura de verdade só vem no fim do turno, e até lá ele mostraria a conversa velha. Sem
+ * leitura anterior não há janela para dividir: fica como está. PURE.
+ */
+function compactedUsage(usage: ContextUsageInfo | null, outcome: Partial<CompactionRow>): ContextUsageInfo | null {
+  if (!usage || outcome.status !== "done" || outcome.postTokens === undefined || usage.maxTokens <= 0) return usage;
+  const percent = Math.min(100, Math.round((outcome.postTokens / usage.maxTokens) * 100));
+  return { ...usage, usedTokens: outcome.postTokens, percent };
 }
 
 /** O turno fechou: uma barra ainda aberta não roda para sempre (o driver antigo não a fecha). PURE. */

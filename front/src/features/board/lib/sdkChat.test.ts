@@ -2055,3 +2055,20 @@ describe("compactação na tela", () => {
     expect(state.rows.map((r) => r.kind)).toEqual(["compaction", "assistant"]);
   });
 });
+
+describe("compactação — o medidor de contexto", () => {
+  it("o fim com postTokens já baixa o medidor, sem esperar a leitura do fim do turno", () => {
+    const state = feed([
+      { type: "context_usage", usedTokens: 180_000, maxTokens: 200_000, percent: 90 },
+      { type: "compaction", phase: "started", startedAt: 1 },
+      { type: "compaction", phase: "done", preTokens: 180_000, postTokens: 20_000 },
+    ]);
+    expect(state.contextUsage).toMatchObject({ usedTokens: 20_000, maxTokens: 200_000, percent: 10 });
+  });
+
+  it("sem postTokens, ou sem leitura anterior, o medidor fica como estava", () => {
+    const before = feed([{ type: "context_usage", usedTokens: 180_000, maxTokens: 200_000, percent: 90 }]);
+    expect(feed([{ type: "compaction", phase: "done", preTokens: 180_000 }], before).contextUsage).toEqual(before.contextUsage);
+    expect(feed([{ type: "compaction", phase: "done", postTokens: 5 }]).contextUsage).toBeNull();
+  });
+});
