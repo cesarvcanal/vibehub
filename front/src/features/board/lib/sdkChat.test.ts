@@ -2010,6 +2010,12 @@ describe("compactação na tela", () => {
     }]);
   });
 
+  it("o início já traz o gatilho: o /compact da pessoa ou a automática", () => {
+    const state = feed([{ type: "compaction", phase: "started", trigger: "auto", startedAt: 5_000 }]);
+    expect(rowsOf(state)[0]).toMatchObject({ status: "running", trigger: "auto" });
+    expect(rowsOf(feed([{ type: "compaction", phase: "started", trigger: "x" }]))[0]!.trigger).toBeUndefined();
+  });
+
   it("o início repetido (a aba que reconecta no meio) não abre uma segunda barra", () => {
     const state = feed([
       { type: "compaction", phase: "started", startedAt: 5_000 },

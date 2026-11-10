@@ -1876,6 +1876,7 @@ function applyCompaction(state: SdkChatState, event: SdkEvent): SdkChatState {
     const row: CompactionRow = {
       kind: "compaction", id, status: "running",
       ...(typeof event.startedAt === "number" ? { startedAt: event.startedAt } : {}),
+      ...(event.trigger === "manual" || event.trigger === "auto" ? { trigger: event.trigger } : {}),
     };
     return { ...state, seq, rows: withSideRow(state.rows, row) };
   }
