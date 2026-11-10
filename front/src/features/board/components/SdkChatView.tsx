@@ -166,6 +166,8 @@ import {
 } from "@/features/board/lib/sdkQueue";
 import { getLanguage, t as translate, useT } from "@/i18n";
 import { SdkCompactionRow } from "@/features/board/components/SdkCompactionRow";
+import { SdkCommandChip } from "@/features/board/components/SdkCommandChip";
+import { invokedCommand, type InvokedCommand } from "@/features/board/lib/slashMenu";
 
 /**
  * NATIVE CHAT (beta) — the card's conversation over the Agent SDK driver, not the tmux transcript.
@@ -1409,6 +1411,20 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   // turno, e também as tarefas em segundo plano, que ainda podem mudar o que a IA vai dizer.
   const settled = connected && !working && state.backgroundTasks.length === 0;
   const finishedAnswers = React.useMemo(() => finishedAnswerIds(state.rows, settled), [state.rows, settled]);
+  // Os envios que SÃO comandos do catálogo (o chip), e qual deles o turno em curso está rodando: o
+  // último enviado, enquanto houver turno.
+  const commandRows = React.useMemo(() => {
+    const found = new Map<string, InvokedCommand>();
+    let lastUser: string | undefined;
+    for (const row of state.rows) {
+      if (row.kind !== "user" || row.edited === true) continue;
+      lastUser = row.id;
+      const command = invokedCommand(row.text, state.commands);
+      if (command) found.set(row.id, command);
+    }
+    return { found, lastUser };
+  }, [state.rows, state.commands]);
+  const commandRunning = state.awaiting || state.turnActive;
   // Uma leitura em voz alta deste card não sobrevive ao card fechado nem a uma chamada de voz.
   React.useEffect(() => {
     setReadAloudErrorHandler((err) => toast.error(translate(readAloudError(err))));
@@ -1535,6 +1551,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
                 onResend={resendUndelivered}
                 onDiscard={discardUndelivered}
                 retrying={entry.row.kind === "user" && entry.row.cid !== undefined && resendPlan.pending.has(entry.row.cid)}
+                command={commandRows.found.get(entry.id)}
+                commandRunning={commandRunning && commandRows.lastUser === entry.id}
                 answerOf={finishedAnswers.has(entry.id) ? cardId : undefined}
                 trailing={meterInAnswer && entry === lastEntry ? <ContextMeter usage={state.contextUsage} /> : undefined}
               />
@@ -2294,6 +2312,8 @@ const SdkChatRow = React.memo(function SdkChatRow({
   onResend,
   onDiscard,
   retrying = false,
+  command,
+  commandRunning = false,
   answerOf,
   trailing,
 }: {
@@ -2320,6 +2340,10 @@ const SdkChatRow = React.memo(function SdkChatRow({
   onDiscard?: (cid: string) => void;
   /** On a message the server never took: the screen will resend it by itself (see `planAutoResend`). */
   retrying?: boolean;
+  /** On one's own message that IS a catalogue command: drawn as the command chip (`invokedCommand`). */
+  command?: InvokedCommand;
+  /** That command is the one the running turn is executing. */
+  commandRunning?: boolean;
   /** A FINISHED answer (`finishedAnswerIds`): the card it belongs to — it gets "copiar" and "ouvir". */
   answerOf?: string;
   /** Closes this answer's copiar/ouvir row on the right: the context meter, on the last answer. */
@@ -2551,6 +2575,14 @@ const SdkChatRow = React.memo(function SdkChatRow({
             {editedBadge}
             {undelivered}
           </div>
+        </div>
+      );
+    }
+    if (command && !reply && row.state !== "undelivered") {
+      return (
+        <div className="group flex flex-col items-end" data-revision={row.revision || undefined}>
+          <SdkCommandChip command={command} running={commandRunning} />
+          {editedBadge}
         </div>
       );
     }

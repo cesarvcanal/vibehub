@@ -5361,3 +5361,47 @@ describe("SdkChatView — compactação", () => {
     expect(screen.getByTestId("sdk-compaction")).toHaveTextContent("Not enough messages to compact.");
   });
 });
+
+/**
+ * O COMANDO ENVIADO (`/context`, `/compact`…) aparece como o comando que é — o chip com o estado —,
+ * não como uma frase solta que parecia não ter feito nada.
+ */
+describe("SdkChatView — comando do catálogo", () => {
+  beforeEach(() => setLanguage("pt-BR"));
+  afterEach(() => resetLanguage());
+
+  it("o /context enviado vira o chip, executando até o turno fechar", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "catalog", commands: [{ name: "context", source: "command" }] });
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    await userEvent.type(box, "/context{Escape}{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+
+    const chip = await screen.findByTestId("sdk-command");
+    expect(chip).toHaveAttribute("data-command", "context");
+    expect(chip).toHaveTextContent("/context");
+    expect(chip).toHaveTextContent("executando…");
+
+    ws.deliver({ type: "local_output", text: "Context Usage 84k/200k" });
+    ws.deliver({ type: "result", subtype: "success" });
+    await waitFor(() => expect(screen.getByTestId("sdk-command")).toHaveTextContent("executado"));
+    expect(screen.getByTestId("sdk-command")).not.toHaveAttribute("data-running");
+    expect(screen.getByTestId("sdk-command-output")).toHaveTextContent("Context Usage");
+  });
+
+  it("uma frase que só cita um comando continua sendo a bolha de sempre", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "catalog", commands: [{ name: "context", source: "command" }] });
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    await userEvent.type(box, "roda o /context depois{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    expect(await screen.findByTestId("sdk-user")).toHaveTextContent("roda o /context depois");
+    expect(screen.queryByTestId("sdk-command")).toBeNull();
+  });
+});
