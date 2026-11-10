@@ -2650,10 +2650,10 @@ describe("SdkChatView — the activity bar", () => {
     await waitFor(() => expect(screen.queryByTestId("sdk-activity-effort")).toBeNull());
   });
 
-  it("o nível trocado AO VIVO no meio de um turno ultrathink tira o 'esforço alto' da barra", async () => {
-    // A troca confirmada no meio do turno vence a palavra (sdk-driver.mjs, setCardEffort): a barra
-    // não pode seguir dizendo que o turno roda em esforço alto.
-    const view = renderSdkChat();
+  it("o driver avisa que a troca do pill tirou o turno do nível da palavra: o 'esforço alto' sai da barra", async () => {
+    // Review do #259 (f5): a ordem da troca e da palavra é a do DRIVER. O relógio do navegador não a
+    // conhece (o PATCH grava antes de mandar a troca, e a mensagem pode chegar primeiro).
+    renderSdkChat();
     const ws = await socket();
     ws.accept();
     ws.deliver({ type: "ready" });
@@ -2663,31 +2663,13 @@ describe("SdkChatView — the activity bar", () => {
     fireEvent.keyDown(field, { key: "Enter" });
     await waitFor(() => expect(screen.getByTestId("sdk-activity-effort")).toHaveTextContent("high effort"));
 
-    view.rerender(<SdkChatView cardId="c1" liveEffortSwitchAt={Date.now() + 1} />);
+    ws.deliver({ type: "keyword_effort_replaced" });
     await waitFor(() => expect(screen.queryByTestId("sdk-activity-effort")).toBeNull());
     expect(screen.getByTestId("sdk-activity-bar")).toBeInTheDocument();
   });
 
-  it("uma troca que começou ANTES da mensagem não desfaz o ultrathink dela", async () => {
-    // O pill espera a confirmação da sessão; uma mensagem com ultrathink mandada nessa espera sobe
-    // DEPOIS da troca (a fila do driver é uma só) e roda em esforço alto.
-    const beforeTheMessage = Date.now() - 1;
-    const view = renderSdkChat();
-    const ws = await socket();
-    ws.accept();
-    ws.deliver({ type: "ready" });
-
-    const field = screen.getByRole("textbox");
-    fireEvent.change(field, { target: { value: "ultrathink revisa o pdv" } });
-    fireEvent.keyDown(field, { key: "Enter" });
-    await waitFor(() => expect(screen.getByTestId("sdk-activity-effort")).toHaveTextContent("high effort"));
-
-    view.rerender(<SdkChatView cardId="c1" liveEffortSwitchAt={beforeTheMessage} />);
-    expect(screen.getByTestId("sdk-activity-effort")).toHaveTextContent("high effort");
-  });
-
-  it("o ultracode segue na barra depois de uma troca de nível — a orquestração continua ligada", async () => {
-    const view = renderSdkChat();
+  it("o ultracode segue na barra depois do aviso — a orquestração continua ligada", async () => {
+    renderSdkChat();
     const ws = await socket();
     ws.accept();
     ws.deliver({ type: "ready" });
@@ -2697,7 +2679,7 @@ describe("SdkChatView — the activity bar", () => {
     fireEvent.keyDown(field, { key: "Enter" });
     await waitFor(() => expect(screen.getByTestId("sdk-activity-effort")).toHaveTextContent("ultracode"));
 
-    view.rerender(<SdkChatView cardId="c1" liveEffortSwitchAt={Date.now() + 1} />);
+    ws.deliver({ type: "keyword_effort_replaced" });
     expect(screen.getByTestId("sdk-activity-effort")).toHaveTextContent("ultracode");
   });
 

@@ -458,6 +458,13 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
           if (feed) workflowFeedRef.current?.deliver(feed);
           return;
         }
+        // A level switched in the pill took this turn off the keyword's level. The driver says so, in
+        // ITS order of the switch and the keyword: the browser's clock cannot tell which came first.
+        // ultracode's orchestration stays on, so only ultrathink's "high effort" goes.
+        if (parsed.type === "keyword_effort_replaced") {
+          setEscalation((prev) => (prev?.ultracode ? prev : null));
+          return;
+        }
         // The RECEIPT: `user_ack` means the back gravou — this browser no longer needs its copy.
         // `user_nack` means it refused, so the copy STAYS (the bubble now says "não entregue").
         if (parsed.type === "user_ack" && parsed.cid) {
