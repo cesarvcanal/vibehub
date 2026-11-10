@@ -1,9 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NewCardDialog } from "@/features/board/components/NewCardDialog";
 import { renderApp } from "@/test/render";
 import { get } from "@/lib/api";
+
+const LISTA_PADRAO = { branches: ["main", "dev", "feat/pdv", "prod", "fix/caixa"], defaultBranch: "main", truncada: false };
+const respostasBranches = vi.hoisted(() => ({ proxima: [] as (() => Promise<unknown>)[] }));
 
 // The shell's auth probe would otherwise reach for a real XHR under jsdom.
 vi.mock("@/lib/api", () => ({
@@ -11,7 +14,7 @@ vi.mock("@/lib/api", () => ({
   setUnauthorizedHandler: vi.fn(),
   get: vi.fn().mockImplementation((url: string) =>
     url === "/github/repos/acme/p1/branches"
-      ? Promise.resolve({ branches: ["main", "dev", "feat/pdv", "prod", "fix/caixa"], defaultBranch: "main" })
+      ? (respostasBranches.proxima.shift()?.() ?? Promise.resolve(LISTA_PADRAO))
       : url === "/accounts/usage"
       ? Promise.resolve({
           bySlug: {
@@ -40,6 +43,16 @@ function nomesDasOpcoes() {
   return within(screen.getByRole("listbox"))
     .getAllByRole("option")
     .map((o) => o.querySelector(".font-mono")?.textContent ?? o.textContent);
+}
+
+afterEach(() => {
+  respostasBranches.proxima = [];
+});
+
+function opcaoDaBranch(nome: string) {
+  const opcao = screen.getAllByRole("option").find((o) => o.querySelector(".font-mono")?.textContent === nome);
+  if (!opcao) throw new Error(`branch ${nome} não está na lista`);
+  return opcao;
 }
 
 function setup(overrides: Partial<React.ComponentProps<typeof NewCardDialog>> = {}) {
@@ -320,6 +333,71 @@ describe("NewCardDialog", () => {
     await user.click(screen.getByLabelText("Cut from"));
     await user.keyboard("{ArrowDown}{Enter}");
     expect(screen.getByLabelText("Cut from")).toHaveTextContent("prod");
+  });
+
+  it("atualização que falha avisa no rodapé que a lista pode estar desatualizada", async () => {
+    respostasBranches.proxima = [() => Promise.resolve(LISTA_PADRAO), () => Promise.reject(new Error("403"))];
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Options" }));
+    await user.click(await screen.findByLabelText("Cut from"));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Refresh the list from GitHub" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not refresh the list from GitHub");
+    expect(opcaoDaBranch("prod")).toBeInTheDocument();
+  });
+
+  it("lista cortada pelo back avisa quantas está mostrando", async () => {
+    respostasBranches.proxima = [() => Promise.resolve({ ...LISTA_PADRAO, truncada: true })];
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Options" }));
+    await user.click(await screen.findByLabelText("Cut from"));
+    expect(screen.getByText("Showing the first 5 branches on GitHub")).toBeInTheDocument();
+  });
+
+  it("a linha ativa segue a mesma branch quando a lista muda com o seletor aberto", async () => {
+    respostasBranches.proxima = [
+      () => Promise.resolve(LISTA_PADRAO),
+      () => Promise.resolve({ ...LISTA_PADRAO, branches: ["production", "staging", ...LISTA_PADRAO.branches] }),
+    ];
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Options" }));
+    await user.click(await screen.findByLabelText("Cut from"));
+    await user.keyboard("{ArrowDown}{ArrowDown}");
+    expect(opcaoDaBranch("prod")).toHaveAttribute("data-ativo");
+
+    await user.click(screen.getByRole("button", { name: "Refresh the list from GitHub" }));
+    await waitFor(() => expect(opcaoDaBranch("production")).toBeInTheDocument());
+    await user.click(screen.getByRole("searchbox"));
+    await user.keyboard("{Enter}");
+    expect(screen.getByLabelText("Cut from").querySelector(".font-mono")).toHaveTextContent(/^prod$/);
+  });
+
+  it("anuncia a opção ativa ao leitor de tela pelo aria-activedescendant", async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Options" }));
+    await user.click(await screen.findByLabelText("Cut from"));
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("searchbox")).toHaveAttribute("aria-activedescendant", opcaoDaBranch("main").id);
+  });
+
+  it("Esc com o foco no botão de atualizar fecha só a lista", async () => {
+    const { user, onOpenChange } = setup();
+    await user.click(screen.getByRole("button", { name: "Options" }));
+    await user.click(await screen.findByLabelText("Cut from"));
+    screen.getByRole("button", { name: "Refresh the list from GitHub" }).focus();
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it("fecha a lista quando o foco sai do seletor", async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Options" }));
+    await user.click(await screen.findByLabelText("Cut from"));
+    await user.click(screen.getByLabelText("Branch"));
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
 
   it("abrir com a lista fresca não vai ao GitHub de novo; o botão de atualizar vai", async () => {

@@ -48,6 +48,7 @@ export function useBranchesDoRepo({
   return {
     branches: consulta.data?.branches,
     branchPadrao: consulta.data?.defaultBranch ?? null,
+    truncada: consulta.data?.truncada ?? false,
     atualizando: consulta.isFetching,
     falhou: consulta.isError,
     atualizarSeVelha,

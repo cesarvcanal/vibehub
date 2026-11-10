@@ -964,6 +964,8 @@ export const ptBR: Record<string, string> = {
   "branchPicker.others": "Outras branches ({n})",
   "branchPicker.empty": "Nenhuma branch com esse nome.",
   "branchPicker.total": "{n} branches no GitHub",
+  "branchPicker.truncated": "Mostrando as primeiras {n} branches do GitHub",
+  "branchPicker.refreshFailed": "Não deu pra atualizar a lista do GitHub; ela pode estar desatualizada.",
   "branchPicker.badge.padrao": "padrão",
   "branchPicker.badge.producao": "produção",
   "branchPicker.badge.principal": "principal",

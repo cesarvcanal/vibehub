@@ -958,6 +958,8 @@ export const en: Record<string, string> = {
   "branchPicker.others": "Other branches ({n})",
   "branchPicker.empty": "No branch with that name.",
   "branchPicker.total": "{n} branches on GitHub",
+  "branchPicker.truncated": "Showing the first {n} branches on GitHub",
+  "branchPicker.refreshFailed": "Could not refresh the list from GitHub; it may be out of date.",
   "branchPicker.badge.padrao": "default",
   "branchPicker.badge.producao": "production",
   "branchPicker.badge.principal": "main",

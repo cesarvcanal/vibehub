@@ -28,6 +28,12 @@ export function classificarBranches(
   return { destacadas, demais };
 }
 
+/** Branch base para um projeto novo: a de desenvolvimento, senão main/master, senão a padrão do repo. */
+export function branchBaseSugerida(branches: readonly string[], branchPadrao: string | null): string | undefined {
+  const preferidas = [...NOMES_POR_DESTAQUE.desenvolvimento, ...NOMES_POR_DESTAQUE.principal];
+  return preferidas.find((nome) => branches.includes(nome)) ?? branchPadrao ?? branches[0];
+}
+
 /** Busca por pedaço do nome, sem caixa e sem acento. */
 export function filtrarBranches(branches: readonly BranchClassificada[], busca: string): BranchClassificada[] {
   const termo = normalizar(busca.trim());

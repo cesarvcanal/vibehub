@@ -1,6 +1,6 @@
 import { Check, ChevronDown, GitBranch, RefreshCw, Search } from "lucide-react";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
-import { useSeletorBranch } from "@/features/board/lib/useSeletorBranch";
+import { idDaOpcao, useSeletorBranch } from "@/features/board/lib/useSeletorBranch";
 import type { BranchClassificada, DestaqueBranch, PropsSeletorBranch } from "@/features/board/types/branches";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -19,21 +19,23 @@ export default function SeletorBranch({
   branches,
   branchPadrao,
   atualizando,
+  falhouAoAtualizar,
+  truncada,
   aoAbrir,
   aoAtualizar,
   rotuloSemEscolha,
 }: PropsSeletorBranch) {
   const t = useT();
-  const seletor = useSeletorBranch({ valor, aoEscolher, branches, branchPadrao, aoAbrir, rotuloSemEscolha });
   const idLista = `${id}-lista`;
+  const seletor = useSeletorBranch({ idLista, valor, aoEscolher, branches, branchPadrao, aoAbrir, rotuloSemEscolha });
 
   const linha = (branch: BranchClassificada) => (
     <li
       key={branch.nome}
+      id={idDaOpcao(idLista, branch.nome)}
       role="option"
       aria-selected={branch.nome === valor}
       data-ativo={branch.nome === seletor.valorAtivo || undefined}
-      onPointerDown={(e) => e.preventDefault()}
       onClick={() => seletor.escolher(branch.nome)}
       className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm data-[ativo]:bg-accent"
     >
@@ -51,7 +53,13 @@ export default function SeletorBranch({
   const nadaEncontrado = seletor.destacadas.length === 0 && seletor.demais.length === 0;
 
   return (
-    <div ref={seletor.containerRef} data-seletor-branch-aberto={seletor.aberto || undefined} className="space-y-1.5">
+    <div
+      ref={seletor.containerRef}
+      data-seletor-branch-aberto={seletor.aberto || undefined}
+      onKeyDown={seletor.fecharNoEsc}
+      onBlur={seletor.fecharAoPerderFoco}
+      className="space-y-1.5"
+    >
       <button
         id={id}
         type="button"
@@ -88,7 +96,12 @@ export default function SeletorBranch({
       </button>
 
       {seletor.aberto ? (
-        <div className="overflow-hidden rounded-md border border-border/60 bg-popover shadow-lg">
+        <div
+          onPointerDown={(e) => {
+            if (!(e.target instanceof HTMLInputElement)) e.preventDefault();
+          }}
+          className="overflow-hidden rounded-md border border-border/60 bg-popover shadow-lg"
+        >
           <div className="flex items-center gap-2 border-b border-border/60 px-2.5">
             <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             <input
@@ -98,19 +111,20 @@ export default function SeletorBranch({
               role="searchbox"
               aria-label={t("branchPicker.search")}
               aria-controls={idLista}
+              aria-activedescendant={seletor.idDaOpcaoAtiva}
               placeholder={t("branchPicker.search")}
               value={seletor.busca}
               onChange={(e) => seletor.mudarBusca(e.target.value)}
-              onKeyDown={seletor.tratarTecla}
+              onKeyDown={seletor.tratarTeclaDaBusca}
               className="h-9 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
             />
             <button
               type="button"
               onClick={aoAtualizar}
-              disabled={atualizando}
+              aria-busy={atualizando}
               aria-label={t("branchPicker.refresh")}
               title={t("branchPicker.refresh")}
-              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default"
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground"
             >
               <RefreshCw className={cn("h-3.5 w-3.5", atualizando && "animate-spin")} />
             </button>
@@ -119,10 +133,10 @@ export default function SeletorBranch({
           <ul id={idLista} role="listbox" aria-label={t("branchPicker.search")} className="max-h-64 overflow-y-auto p-1">
             {seletor.temLinhaSemEscolha ? (
               <li
+                id={idDaOpcao(idLista, "")}
                 role="option"
                 aria-selected={valor === ""}
                 data-ativo={seletor.valorAtivo === "" || undefined}
-                onPointerDown={(e) => e.preventDefault()}
                 onClick={() => seletor.escolher("")}
                 className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-muted-foreground data-[ativo]:bg-accent"
               >
@@ -156,9 +170,18 @@ export default function SeletorBranch({
             ) : null}
           </ul>
 
-          <div className="flex items-center justify-between border-t border-border/60 px-2.5 py-1.5 text-[11px] text-muted-foreground">
-            <span>{t("branchPicker.total", { n: branches.length })}</span>
-            {atualizando ? <span>{t("branchPicker.refreshing")}</span> : null}
+          <div className="space-y-0.5 border-t border-border/60 px-2.5 py-1.5 text-[11px] text-muted-foreground">
+            <div className="flex items-center justify-between">
+              <span>
+                {truncada ? t("branchPicker.truncated", { n: branches.length }) : t("branchPicker.total", { n: branches.length })}
+              </span>
+              {atualizando ? <span>{t("branchPicker.refreshing")}</span> : null}
+            </div>
+            {falhouAoAtualizar && !atualizando ? (
+              <p role="alert" className="text-amber-600 dark:text-amber-400">
+                {t("branchPicker.refreshFailed")}
+              </p>
+            ) : null}
           </div>
         </div>
       ) : null}

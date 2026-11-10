@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classificarBranches, filtrarBranches } from "@/features/board/lib/branches";
+import { branchBaseSugerida, classificarBranches, filtrarBranches } from "@/features/board/lib/branches";
 
 describe("classificarBranches", () => {
   it("destaca padrão, produção, main e dev nessa ordem; o resto vai em ordem alfabética", () => {
@@ -41,5 +41,18 @@ describe("filtrarBranches", () => {
 
   it("busca em branco devolve tudo", () => {
     expect(filtrarBranches(branches, "   ")).toHaveLength(2);
+  });
+});
+
+describe("branchBaseSugerida", () => {
+  it("prefere a de desenvolvimento, depois main/master, depois a padrão do repo", () => {
+    expect(branchBaseSugerida(["main", "develop", "feat/x"], "main")).toBe("develop");
+    expect(branchBaseSugerida(["master", "feat/x"], "feat/x")).toBe("master");
+    expect(branchBaseSugerida(["trunk", "feat/x"], "trunk")).toBe("trunk");
+  });
+
+  it("sem padrão conhecida cai na primeira; lista vazia não sugere nada", () => {
+    expect(branchBaseSugerida(["feat/x"], null)).toBe("feat/x");
+    expect(branchBaseSugerida([], null)).toBeUndefined();
   });
 });

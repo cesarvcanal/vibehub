@@ -12,6 +12,8 @@ export interface PropsSeletorBranch {
   branches: readonly string[];
   branchPadrao: string | null;
   atualizando: boolean;
+  falhouAoAtualizar: boolean;
+  truncada: boolean;
   aoAbrir: () => void;
   aoAtualizar: () => void;
   /** Linha que representa `valor === ""` (ex.: herdar a branch do projeto). Sem ela, não há linha vazia. */

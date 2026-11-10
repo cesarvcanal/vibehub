@@ -12,6 +12,8 @@ function SeletorControlado(props: Partial<React.ComponentProps<typeof SeletorBra
       branches={BRANCHES}
       branchPadrao="main"
       atualizando={false}
+      falhouAoAtualizar={false}
+      truncada={false}
       aoAbrir={() => {}}
       aoAtualizar={() => {}}
       {...props}

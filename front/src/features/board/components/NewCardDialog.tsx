@@ -323,6 +323,8 @@ export function NewCardDialog({
                     branches={branches}
                     branchPadrao={branchesDoRepo.branchPadrao}
                     atualizando={branchesDoRepo.atualizando}
+                    falhouAoAtualizar={branchesDoRepo.falhou}
+                    truncada={branchesDoRepo.truncada}
                     aoAbrir={branchesDoRepo.atualizarSeVelha}
                     aoAtualizar={branchesDoRepo.forcarAtualizacao}
                     rotuloSemEscolha={t("newCard.baseInherit", { branch: defaultBranch ?? "" })}

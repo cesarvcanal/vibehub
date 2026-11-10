@@ -280,6 +280,8 @@ export interface GithubRepo {
 export interface GithubBranches {
   branches: string[];
   defaultBranch: string | null;
+  /** O repo tem mais branches do que o back lê; a lista veio cortada. */
+  truncada: boolean;
 }
 
 /* ------------------------------------------------------- projects & cards */

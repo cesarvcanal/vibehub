@@ -21,6 +21,7 @@ import { apiErrorMessage } from "@/lib/apiError";
 import { SELECT_CLASS } from "@/features/board/components/NewCardDialog";
 import SeletorBranch from "@/features/board/components/SeletorBranch";
 import { useBranchesDoRepo } from "@/features/board/lib/useBranchesDoRepo";
+import { branchBaseSugerida } from "@/features/board/lib/branches";
 import { manterDialogoNoEscDoSeletor } from "@/features/board/lib/useSeletorBranch";
 import {
   ACCOUNTS_KEY,
@@ -121,9 +122,8 @@ export function ProjectFormDialog({
     if (!selected || !branches) return;
     if (applied.current === selected.fullName) return;
     applied.current = selected.fullName;
-    const preferred = ["dev", "develop", "main", "master"].find((b) => branches.includes(b));
-    setBranch(preferred ?? selected.defaultBranch ?? branches[0] ?? "main");
-  }, [branches, selected]);
+    setBranch(branchBaseSugerida(branches, branchesDoRepo.branchPadrao ?? selected.defaultBranch) ?? "main");
+  }, [branches, branchesDoRepo.branchPadrao, selected]);
 
   // Reset means "back to what this dialog opened with": empty for a new project, the stored values
   // when editing one.
@@ -361,6 +361,8 @@ export function ProjectFormDialog({
                   branches={branches}
                   branchPadrao={branchesDoRepo.branchPadrao}
                   atualizando={branchesDoRepo.atualizando}
+                  falhouAoAtualizar={branchesDoRepo.falhou}
+                  truncada={branchesDoRepo.truncada}
                   aoAbrir={branchesDoRepo.atualizarSeVelha}
                   aoAtualizar={branchesDoRepo.forcarAtualizacao}
                 />
