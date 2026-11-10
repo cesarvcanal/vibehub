@@ -60,7 +60,6 @@ async function fresh() {
     kind: "local",
     label: "this machine",
     runScript,
-    writeFile: vi.fn(),
     scriptArgs: vi.fn(() => ["bash", "-s"]),
   });
   reg = await import("./registry.js");

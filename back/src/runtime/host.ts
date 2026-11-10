@@ -1,6 +1,4 @@
 import { spawn } from "node:child_process";
-import { writeFile, mkdir, chmod, rename } from "node:fs/promises";
-import { dirname } from "node:path";
 import { config } from "../config/env.js";
 
 /**
@@ -99,8 +97,6 @@ export interface HostExecutor {
   readonly label: string;
   /** Runs a bash script fed through STDIN. Rejects with HostExecError on non-zero exit. */
   runScript(script: string, opts?: ExecOpts): Promise<ExecResult>;
-  /** Writes a file on the host atomically, mode-controlled, contents via STDIN. */
-  writeFile(remotePath: string, content: string, opts?: { mode?: string; timeoutMs?: number }): Promise<void>;
   /**
    * argv for a LONG-LIVED bash script fed over STDIN (`bash -s`) — same transport as `runScript`,
    * but the caller owns the child (writes the script to stdin, reads stdout over time, kills it).
@@ -165,14 +161,6 @@ function runProcess(file: string, args: string[], stdin: string, opts: ExecOpts)
   });
 }
 
-/** Atomic write script: tmp file, chmod, rename. The path is validated; content comes from STDIN. */
-export function writeFileScript(remotePath: string, mode: string): string {
-  assertSafeRemotePath(remotePath);
-  if (!/^[0-7]{3,4}$/.test(mode)) throw new Error(`invalid file mode: ${mode}`);
-  const tmp = `${remotePath}.tmp`;
-  return `set -e; mkdir -p "$(dirname ${shQuote(remotePath)})"; umask 077; cat > ${shQuote(tmp)}; chmod ${mode} ${shQuote(tmp)}; mv -f ${shQuote(tmp)} ${shQuote(remotePath)}`;
-}
-
 /** ssh flags shared by every connection: batch mode, no host-key prompts, quiet. */
 export function sshArgs(extra: string[] = []): string[] {
   const { sshKeyPath, sshUser, sshHost } = config.runner;
@@ -198,20 +186,6 @@ class LocalExecutor implements HostExecutor {
   async runScript(script: string, opts: ExecOpts = {}): Promise<ExecResult> {
     return await runProcess("bash", ["-s"], script, opts);
   }
-  /**
-   * Local writes go through fs directly (tmp + chmod + rename) — same atomicity as the remote path,
-   * without paying for a shell. The path is still validated: callers derive it, but never trust it.
-   */
-  async writeFile(remotePath: string, content: string, opts: { mode?: string; timeoutMs?: number } = {}): Promise<void> {
-    assertSafeRemotePath(remotePath);
-    const mode = opts.mode ?? "600";
-    if (!/^[0-7]{3,4}$/.test(mode)) throw new Error(`invalid file mode: ${mode}`);
-    const tmp = `${remotePath}.tmp`;
-    await mkdir(dirname(remotePath), { recursive: true });
-    await writeFile(tmp, content, { encoding: "utf8", mode: Number.parseInt(mode, 8) });
-    await chmod(tmp, Number.parseInt(mode, 8));
-    await rename(tmp, remotePath);
-  }
   ptyCommand(remoteCommand: string): { file: string; args: string[] } {
     return { file: "bash", args: ["-lc", remoteCommand] };
   }
@@ -228,11 +202,6 @@ class SshExecutor implements HostExecutor {
   get label(): string { return `${config.runner.sshUser}@${config.runner.sshHost}`; }
   async runScript(script: string, opts: ExecOpts = {}): Promise<ExecResult> {
     return await runProcess("ssh", [...sshArgs(), "bash -s"], script, opts);
-  }
-  async writeFile(remotePath: string, content: string, opts: { mode?: string; timeoutMs?: number } = {}): Promise<void> {
-    await runProcess("ssh", [...sshArgs(), writeFileScript(remotePath, opts.mode ?? "600")], content, {
-      timeoutMs: opts.timeoutMs,
-    });
   }
   ptyCommand(remoteCommand: string): { file: string; args: string[] } {
     // -tt forces a tty even though stdin is a pipe; the command must come AFTER the hostname.

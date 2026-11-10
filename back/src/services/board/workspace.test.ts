@@ -94,7 +94,7 @@ async function fresh(opts: { flakyRegistry?: boolean } = {}) {
   runScript = vi.fn(async () => ({ stdout: "", stderr: "" }));
   ptyCommand = vi.fn((line: string) => ({ file: "bash", args: ["-lc", line] }));
   vi.mocked(host.hostExecutor).mockReturnValue({
-    kind: "local", label: "this machine", runScript, ptyCommand, writeFile: vi.fn(),
+    kind: "local", label: "this machine", runScript, ptyCommand,
   } as unknown as import("../../runtime/host.js").HostExecutor);
   const gh = await import("../github/client.js");
   vi.mocked(gh.gitAuthHeaderFor).mockResolvedValue(AUTH_HEADER);

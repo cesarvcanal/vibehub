@@ -1,20 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, readFile, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { describe, it, expect, beforeEach } from "vitest";
 import { config } from "../config/env.js";
 import {
-  hostExecutor, resetHostExecutorForTesting, shQuote, assertSafeRemotePath, writeFileScript,
+  hostExecutor, resetHostExecutorForTesting, shQuote, assertSafeRemotePath,
   isAccessError, sshArgs, HostExecError, containerScriptCommand, CONTAINER_DEADLINE_MARGIN_MS,
 } from "./host.js";
 
-let dir = "";
-beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "vibehub-host-"));
+beforeEach(() => {
   config.runner.kind = "local";
   resetHostExecutorForTesting();
 });
-afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
 describe("shQuote", () => {
   it("wraps a plain value", () => expect(shQuote("abc")).toBe("'abc'"));
@@ -28,16 +22,6 @@ describe("assertSafeRemotePath", () => {
   it("rejects relative paths", () => expect(() => assertSafeRemotePath("opt/x")).toThrow(/absolute/));
   it("rejects traversal", () => expect(() => assertSafeRemotePath("/opt/../etc/passwd")).toThrow(/\.\./));
   it("rejects shell metacharacters", () => expect(() => assertSafeRemotePath("/opt/$(id)")).toThrow(/invalid characters/));
-});
-
-describe("writeFileScript", () => {
-  it("is atomic: writes tmp, chmods, renames", () => {
-    const script = writeFileScript("/opt/vibehub/token", "600");
-    expect(script).toContain("/opt/vibehub/token.tmp");
-    expect(script).toContain("chmod 600");
-    expect(script).toContain("mv -f");
-  });
-  it("rejects a bogus mode", () => expect(() => writeFileScript("/opt/x", "rwx")).toThrow(/invalid file mode/));
 });
 
 describe("containerScriptCommand", () => {
@@ -120,17 +104,6 @@ describe("local executor", () => {
   it("never puts the payload in argv — the script arrives over stdin", async () => {
     const { stdout } = await hostExecutor().runScript("cat <<'EOS'\nfrom-stdin\nEOS");
     expect(stdout).toContain("from-stdin");
-  });
-
-  it("writes files atomically with the requested mode", async () => {
-    const file = join(dir, "secret.token");
-    await hostExecutor().writeFile(file, "s3cret", { mode: "600" });
-    expect(await readFile(file, "utf8")).toBe("s3cret");
-    expect((await stat(file)).mode & 0o777).toBe(0o600);
-  });
-
-  it("refuses an unsafe write path", async () => {
-    await expect(hostExecutor().writeFile("relative/path", "x")).rejects.toThrow(/absolute/);
   });
 
   it("builds a pty command for the local shell", () => {

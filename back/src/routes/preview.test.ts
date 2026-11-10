@@ -52,7 +52,6 @@ async function boot(): Promise<FastifyInstance> {
         kind: "local" as const,
         label: "test",
         runScript,
-        writeFile: vi.fn(),
         ptyCommand: (cmd: string) => ({ file: "bash", args: ["-lc", cmd] }),
         pipeCommand: relayArgv,
       }),

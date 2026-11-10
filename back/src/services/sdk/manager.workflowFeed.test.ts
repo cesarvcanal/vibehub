@@ -15,7 +15,7 @@ const { runScript } = vi.hoisted(() => ({
 }));
 vi.mock("../../runtime/host.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../runtime/host.js")>();
-  return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript, writeFile: vi.fn(), ptyCommand: vi.fn() }) };
+  return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript, ptyCommand: vi.fn() }) };
 });
 vi.mock("../board/registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../board/registry.js")>();

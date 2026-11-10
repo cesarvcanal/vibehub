@@ -24,7 +24,7 @@ const SECRET = "tok_SUPER_SECRET_987654321";
 const runScript = vi.fn();
 vi.mock("../../runtime/host.js", async (orig) => ({
   ...(await orig<typeof import("../../runtime/host.js")>()),
-  hostExecutor: () => ({ kind: "local", label: "this machine", runScript, ptyCommand: vi.fn(), writeFile: vi.fn() }),
+  hostExecutor: () => ({ kind: "local", label: "this machine", runScript, ptyCommand: vi.fn() }),
 }));
 
 let dir = "";

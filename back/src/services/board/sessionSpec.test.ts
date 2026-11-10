@@ -105,7 +105,7 @@ describe("restartSessionsIfSpecChanged — real sweep, runner mocked", () => {
     vi.doUnmock("./workspace.js");
     vi.doMock("../../runtime/host.js", async () => ({
       ...(await vi.importActual<typeof import("../../runtime/host.js")>("../../runtime/host.js")),
-      hostExecutor: () => ({ kind: "local", label: "this machine", runScript, writeFile: vi.fn() }),
+      hostExecutor: () => ({ kind: "local", label: "this machine", runScript }),
     }));
     vi.doMock("../github/client.js", () => ({ gitAuthHeaderFor: vi.fn(), tokenFor: vi.fn() }));
     const env = await import("../../config/env.js");

@@ -26,7 +26,7 @@ async function load() {
   env.config.runner.container = "vibehub-runner";
   vi.doMock("../runtime/host.js", async () => {
     const actual = await vi.importActual<typeof import("../runtime/host.js")>("../runtime/host.js");
-    return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript, writeFile: vi.fn(), ptyCommand: vi.fn(), pipeCommand: vi.fn((line: string) => ({ file: "sh", args: ["-c", line] })) }) };
+    return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript, ptyCommand: vi.fn(), pipeCommand: vi.fn((line: string) => ({ file: "sh", args: ["-c", line] })) }) };
   });
   vi.doMock("../services/github/client.js", () => ({ tokenFor: vi.fn(async () => "ghp_" + "C".repeat(36)), gitAuthHeaderFor: vi.fn() }));
   const registry = await import("../services/board/registry.js");

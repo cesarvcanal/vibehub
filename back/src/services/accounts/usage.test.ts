@@ -76,7 +76,7 @@ async function fresh(stdout = credentials()) {
   runScript = vi.fn(async () => ({ stdout, stderr: "" }));
   vi.mocked(host.hostExecutor).mockReturnValue({
     kind: "local", label: "this machine", runScript,
-    writeFile: vi.fn(), ptyCommand: () => ({ file: "bash", args: [] }),
+    ptyCommand: () => ({ file: "bash", args: [] }),
   } as unknown as import("../../runtime/host.js").HostExecutor);
 
   // Every log line this module writes is captured, so a test can assert the token is in none.
