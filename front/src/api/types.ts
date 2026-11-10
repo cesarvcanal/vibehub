@@ -562,6 +562,8 @@ export interface ReviewSummary {
   pendingQuestions?: number;
   /** A `ready` review whose author's AI is in a turn right now (hooks or native chat): "IA trabalhando". */
   authorWorking?: boolean;
+  /** A `ready` review whose merge gate on the approved commit is still running, or failed: not "ready to merge". */
+  mergeGateState?: "running" | "failed";
 }
 
 export interface FindingProof {

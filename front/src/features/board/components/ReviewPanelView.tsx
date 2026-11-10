@@ -211,7 +211,7 @@ function Header({
   const t = useT();
   const pill = review.phase === "cancelled"
     ? { key: "review.pill.cancelled", tone: "muted" as const }
-    : reviewPill(review, { authorWorking: working.author });
+    : reviewPill(review, { authorWorking: working.author, gate: mergeGateOf(review)?.state });
   const turn = reviewTurn(review, working);
   const live = (turn.who === "reviewer" || turn.who === "author") && turn.working;
   return (
@@ -926,7 +926,10 @@ function stageText(review: Review, authorWorking: boolean, t: typeof translate):
     case "fixing":
       return t("review.stage.fixing");
     case "ready":
-      return authorWorking ? t("review.stage.authorWorking") : t("review.stage.ready");
+      if (authorWorking) return t("review.stage.authorWorking");
+      if (mergeGateOf(review)?.state === "failed") return t("review.stage.gateFailed");
+      if (mergeGateOf(review)?.state === "running") return t("review.stage.gateRunning");
+      return t("review.stage.ready");
     case "impasse":
       return t("review.stage.impasse");
     case "merged":

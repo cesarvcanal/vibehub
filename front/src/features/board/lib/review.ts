@@ -73,7 +73,7 @@ export function awaitingDecision(review: ReviewSummary & { findings?: Finding[] 
  */
 export function reviewPill(
   review: (ReviewSummary & { findings?: Finding[] }) | undefined,
-  live: { authorWorking?: boolean } = {},
+  live: { authorWorking?: boolean; gate?: "running" | "passed" | "failed" } = {},
 ): ReviewPill {
   switch (review?.phase) {
     case "reviewing":
@@ -82,6 +82,9 @@ export function reviewPill(
       return { key: "review.pill.round", vars: { round: review.round, max: REVIEW_MAX_ROUNDS }, tone: "warn" };
     case "ready":
       if (live.authorWorking) return { key: "review.pill.authorWorking", tone: "warn" };
+      // "Pronto pra merge" só com o gate do merge fora do caminho: rodando ou vermelho, o clique não mergearia.
+      if (live.gate === "failed") return { key: "review.pill.gateFailed", tone: "critical" };
+      if (live.gate === "running") return { key: "review.pill.gateRunning", tone: "info" };
       return { key: "review.pill.ready", tone: "ok" };
     // Blue = needs a person, the same colour the mockup gives it.
     case "impasse":

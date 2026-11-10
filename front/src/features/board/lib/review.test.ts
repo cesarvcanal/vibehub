@@ -59,6 +59,15 @@ describe("reviewPill", () => {
     expect(reviewPill(review({ phase: "merged" }), { authorWorking: true })).toMatchObject({ key: "review.pill.merged" });
   });
 
+  it("caso real (PR #247): ready com o gate do merge vermelho ou rodando não diz 'pronto pra merge'", () => {
+    expect(reviewPill(review({ phase: "ready" }), { gate: "failed" })).toEqual({ key: "review.pill.gateFailed", tone: "critical" });
+    expect(reviewPill(review({ phase: "ready" }), { gate: "running" })).toEqual({ key: "review.pill.gateRunning", tone: "info" });
+    expect(reviewPill(review({ phase: "ready" }), { gate: "passed" })).toMatchObject({ key: "review.pill.ready", tone: "ok" });
+    // a IA do autor trabalhando segue na frente: o push dela muda o commit, e o gate com ele
+    expect(reviewPill(review({ phase: "ready" }), { authorWorking: true, gate: "failed" })).toMatchObject({ key: "review.pill.authorWorking" });
+    expect(reviewPill(review({ phase: "fixing", round: 2 }), { gate: "failed" })).toMatchObject({ key: "review.pill.round" });
+  });
+
   it("reviewIsOpen: every phase but merged and cancelled (and no review at all)", () => {
     for (const phase of ["reviewing", "fixing", "ready", "impasse"] as const) expect(reviewIsOpen(phase)).toBe(true);
     for (const phase of ["merged", "cancelled", undefined] as const) expect(reviewIsOpen(phase)).toBe(false);

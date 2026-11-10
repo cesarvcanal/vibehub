@@ -766,6 +766,9 @@ describe("ReviewPanel — merge", () => {
       mergeGate: { sha, state: "failed", output: "dependência faltando na worktree (@vitejs/plugin-react)", at: 1 },
     }));
     await loaded();
+    expect(screen.getByText("testes do merge falharam")).toBeInTheDocument();
+    expect(screen.queryByText("pronto pra merge")).toBeNull();
+    expect(screen.getByText(/mas os testes do merge falharam no commit aprovado: o merge espera a correção/)).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("Os testes do merge falharam no commit aprovado");
     expect(screen.getByRole("alert")).toHaveTextContent("@vitejs/plugin-react");
     expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeDisabled();
