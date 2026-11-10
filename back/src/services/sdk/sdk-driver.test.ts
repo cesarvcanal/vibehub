@@ -997,6 +997,7 @@ describe("sdk-driver.mjs — o nível padrão da conta, anunciado no boot", () =
     expect(def.effort).toBe("medium");
     expect(driver.events.some((e) => e.type === "result")).toBe(false);
     // A consulta descartável sobe sem o nível do card: é ela que diz o padrão.
+    await driver.waitMark("effort:none");
     expect(driver.marks.filter((m) => m.startsWith("effort:"))).toEqual(["effort:none"]);
   }, 60_000);
 
@@ -1116,7 +1117,8 @@ describe("sdk-driver.mjs — uso de contexto", () => {
     const usage = await driver.waitFor((e) => e.type === "context_usage");
     expect(usage).toMatchObject({ type: "context_usage", maxTokens: 200000, model: "claude-opus-5-5" });
     expect(typeof usage.usedTokens).toBe("number");
-    expect(driver.marks).toContain('context:{"detail":"summary"}');
+    // Marks ride stderr and events stdout: the usage event can arrive before its mark.
+    await driver.waitMark('context:{"detail":"summary"}');
     const resultAt = driver.events.findIndex((e) => e.type === "result");
     const lastUsageAt = driver.events.map((e) => e.type).lastIndexOf("context_usage");
     expect(lastUsageAt).toBeGreaterThan(resultAt);

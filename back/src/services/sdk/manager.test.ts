@@ -3300,9 +3300,10 @@ describe("compaction — a barra do /compact", () => {
     const late = fakeSocket();
     attachSocket(session, late as never);
     expect(parsed(late)).toEqual([]);
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    const logged = (await readHistory(CARD)).filter((e) => e.type === "compaction");
-    expect(logged).toEqual([expect.objectContaining({ phase: "done", preTokens: 180_000, postTokens: 22_000 })]);
+    await vi.waitFor(async () => {
+      const logged = (await readHistory(CARD)).filter((e) => e.type === "compaction");
+      expect(logged).toEqual([expect.objectContaining({ phase: "done", preTokens: 180_000, postTokens: 22_000 })]);
+    });
   });
 
   it("um result fecha a barra mesmo sem desfecho do driver", () => {
