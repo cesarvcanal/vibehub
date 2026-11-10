@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { requireSession, requestUser } from "../auth/session.js";
 import { requireCardAccess, requireCardWork } from "../auth/access.js";
-import { creatorAccountSlug, getUserGit } from "../auth/userGit.js";
+import { getUserGit, linkedAccountSlug } from "../auth/userGit.js";
 import type { PublicUser } from "../auth/users.js";
 import * as registry from "../services/board/registry.js";
 import {
@@ -45,8 +45,8 @@ interface StartBody {
 }
 
 /**
- * `canReview` = tem conta Claude própria (a sessão do revisor, e a do card de correção de um PR
- * anexado, rodam nela). `githubLogin` = o login da conexão GitHub PRÓPRIA dela, quando tem uma: é por
+ * `canReview` = tem conta Claude vinculada, a embutida ("default") inclusive (a sessão do revisor, e
+ * a do card de correção de um PR anexado, rodam nela). `githubLogin` = o login da conexão GitHub PRÓPRIA dela, quando tem uma: é por
  * ele que o diálogo acha o autor de um PR anexado (quem o abriu no GitHub).
  */
 interface Person { id: string; username: string; canReview: boolean; githubLogin?: string }
@@ -55,7 +55,7 @@ interface Person { id: string; username: string; canReview: boolean; githubLogin
 async function cardPeople(card: registry.Card): Promise<Person[]> {
   return await Promise.all(
     (await reachingCard(card)).map(async (u) => {
-      const person: Person = { id: u.id, username: u.username, canReview: !!(await creatorAccountSlug(u.id)) };
+      const person: Person = { id: u.id, username: u.username, canReview: !!(await linkedAccountSlug(u.id)) };
       const own = (await getUserGit(u.id))?.githubConnectionId;
       const login = own ? (await registry.getGithubConnection(own))?.login : undefined;
       if (login) person.githubLogin = login;
