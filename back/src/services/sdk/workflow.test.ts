@@ -198,6 +198,26 @@ describe("watchCardWorkflows — a sondagem e suas travas", () => {
     wf.resetWorkflowWatchesForTesting();
   });
 
+  it("a runner hiccup shorter than the failure budget is not read as the fleet ending", async () => {
+    vi.useFakeTimers();
+    const wf = await load();
+    const published: Array<{ finished: boolean }> = [];
+    const running = { stdout: probe([{ runId: "wf_a", at: 1, agents: [AGENT()] }]), stderr: "" };
+    runScript.mockResolvedValueOnce(running);
+    wf.watchCardWorkflows("c12", { label: "card", dirs, watchers: () => 1, publish: (r) => published.push(r) });
+    await vi.advanceTimersByTimeAsync(10);
+    // The probe now exits non-zero when docker exec fails, so the executor rejects: a FAILURE,
+    // which never adds to the "no journal" count that would close the fleet as finished.
+    for (let i = 0; i < wf.WATCH_MAX_FAILURES - 1; i++) runScript.mockRejectedValueOnce(new Error("container is restarting"));
+    runScript.mockResolvedValue(running);
+    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS * (wf.WATCH_MAX_FAILURES + 2));
+    expect(published.every((r) => !r.finished)).toBe(true);
+    const calls = runScript.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS);
+    expect(runScript.mock.calls.length).toBe(calls + 1); // still watching
+    wf.resetWorkflowWatchesForTesting();
+  });
+
   it("um Workflow que nunca escreve diário não fica batendo no runner até o teto de uma hora", async () => {
     vi.useFakeTimers();
     const wf = await load();
