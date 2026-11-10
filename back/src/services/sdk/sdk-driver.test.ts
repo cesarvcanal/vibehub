@@ -1115,6 +1115,36 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     await driver.waitFor((e) => e.type === "result");
   }, 60_000);
 
+  it("a escalada de uma mensagem ultrathink nova vence a volta atrasada ao nível da conta", async () => {
+    // Review do PR #259 (rodada 3): a escalada também marca a vez (claimEffortWrite). Sem isso, a
+    // leitura atrasada dos settings da devolução anterior voltava e gravava o high por cima do max.
+    await writeFile(join(sandbox, "account-effort"), "high");
+    const driver = startDriverWithEnv({ VIBEHUB_EFFORT_STEP_TIMEOUT_MS: "300" });
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "pensa nisso ultrathink slow" });
+    await driver.waitMark("slow:running");
+    await writeFile(join(sandbox, "settings-gate-once"), "");
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+    await driver.waitMark("settings:waiting");
+    await rm(join(sandbox, "release-slow"), { force: true });
+    driver.send({ type: "user", text: "de novo ultrathink slow" });
+    const raises = () => driver.marks.filter((m) => m === 'flags:{"effortLevel":"max"}').length;
+    while (raises() < 2) await new Promise((resolve) => setTimeout(resolve, 20));
+
+    await writeFile(join(sandbox, "release-settings"), "");
+    await driver.waitMark("settings:answered");
+    driver.send({ type: "btw", id: "no-max", question: "em que nível você está?" });
+    const answer = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "no-max");
+    expect(String(answer.text)).toContain("sessão principal está agora: max");
+    expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual([
+      'flags:{"effortLevel":"max"}',
+      'flags:{"effortLevel":null}',
+      'flags:{"effortLevel":"max"}',
+    ]);
+    await releaseSlowTurn();
+  }, 60_000);
+
   it("um turno ultracode em voo: o nível entra na hora e a devolução limpa só o ultracode", async () => {
     const driver = startDriver(["--effort", "low"]);
     await driver.waitFor((e) => e.type === "ready");
