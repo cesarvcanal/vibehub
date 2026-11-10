@@ -409,7 +409,15 @@ quando pinta a palavra no compositor. Então o driver:
    valia para AQUELE turno. **Exceção: o card que fixou uma inteligência** (`--effort`, campo
    `effort` do card). Limpar a flag NÃO traz o `--effort` de volta (medido no CLI real, SDK 0.3.300:
    `--effort low` → flag `max` → flag `null` deixou a sessão em `medium`), então nesse caso a
-   devolução escreve `effortLevel: <nível do card>` em vez de `null`.
+   devolução escreve `effortLevel: <nível do card>` em vez de `null`. **Card sem nível fixado:** o
+   `null` sozinho cai no padrão do **modelo** e pula o `effortLevel` dos settings da conta, então a
+   devolução usa `restoreAccountEffort` (limpa e reaplica o nível dos settings por cima).
+
+**Troca de nível no meio de um turno com a palavra:** a escolha no pill é a mais nova e vence. O
+nível entra na hora, sai do registro da palavra (`ultraRaised`), e a devolução no fim do turno limpa
+só o `ultracode`, se houver. A barra de atividade do chat deixa de dizer "esforço alto" a partir da
+troca (compara o `effortAt` do card com o do envio); o "ultracode" continua, porque a orquestração
+segue ligada.
 
 Duas armadilhas que o teste cerca: a mensagem é empurrada num `finally`, então nenhuma falha da
 escalada pode engoli-la; e a primeira mensagem de uma corrente nova espera o
@@ -418,16 +426,27 @@ escrito num CLI que ainda não existe se perde.
 
 ## A inteligência do card — troca a quente e o nível antes da primeira resposta
 
-Trocar a inteligência no pill com o driver de pé **nunca reinicia a sessão** (`applySessionChange`
-responde `live`): o back escreve `set_effort` no stdin e o driver aplica com `applyFlagSettings`,
-no meio do turno inclusive — subagente em primeiro plano rodando, a chamada dele volta no mesmo
-turno. Medido no CLI real (SDK 0.3.300): as chamadas seguintes do mesmo turno saem no nível novo.
+Trocar a inteligência no pill com o driver de pé **nunca reinicia a sessão**: o back escreve
+`set_effort` no stdin e o driver aplica com `applyFlagSettings`, no meio do turno inclusive —
+subagente em primeiro plano rodando, a chamada dele volta no mesmo turno. Medido no CLI real (SDK
+0.3.300): as chamadas seguintes do mesmo turno saem no nível novo. A chamada que já está sendo
+gerada no instante da troca termina no nível antigo (o nível é parâmetro de cada chamada à API).
 
-- `set_effort { effort: "<nível>" }` → `applyFlagSettings({ effortLevel })`.
-- `set_effort { effort: null }` ("Usar a inteligência padrão da conta") → também a quente:
+- `set_effort { id, effort: "<nível>" }` → `applyFlagSettings({ effortLevel })`.
+- `set_effort { id, effort: null }` ("Usar a inteligência padrão da conta") → também a quente:
   `effortLevel: null` leva ao padrão do **modelo** e ignora o `effortLevel` dos settings (medido,
   29/10: settings `high` → flag `xhigh` → null = `medium`), então o driver lê
   `getSettings().effective.effortLevel` e, havendo nível nos settings, o reaplica por cima.
+- **Confirmação:** cada `set_effort` é respondido com `effort_ack { id, effort? | error? }`.
+  `effort` = o nível que a própria sessão diz que a próxima chamada vai usar
+  (`getSettings().applied.effort`); `error` = a sessão recusou. O back espera essa resposta
+  (`EFFORT_ACK_TIMEOUT_MS`, 15 s) e só então `applySessionChange` responde `live` e a tela diz "já
+  valendo". Recusa, prazo vencido ou driver morto = não aplicado, e a troca cai no caminho de
+  sempre (abaixo). Cada desfecho vira auditoria `sdk.effort.applied` / `refused` / `timeout`.
+- **Uma troca por vez:** o driver enfileira os `set_effort` (fora da fila das mensagens). A volta
+  ao padrão da conta são três idas ao CLI, e uma troca logo atrás dela não pode passar no meio.
+- **/btw:** o aviso da pergunta lateral leva o nível em que a sessão principal está agora — o nível
+  não está na conversa, e "em que nível você está?" ficava sem resposta.
 - Sem driver (card de terminal) a troca segue como antes: reinicia já se o card está livre, ou
   fica pendente até ele ficar livre (`restartPendingAt`) — nunca corta um turno.
 
