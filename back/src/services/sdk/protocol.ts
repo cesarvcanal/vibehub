@@ -15,6 +15,7 @@ import type { WorkflowFeedItem, WorkflowRun } from "./workflowProbe.js";
 import type { RateLimitEvent } from "./rateLimit.js";
 import type { ContextUsageEvent } from "./contextUsage.js";
 import type { RawTaskEvent, RawToolResultEvent } from "./toolResult.js";
+import { defuseUltraWords } from "../../utils/ultraWords.js";
 
 /* ------------------------------------------------------------------ events */
 
@@ -578,7 +579,8 @@ export function buildOrphanAnswerText(
   if (lostBackground.length === 0) return text;
   // O reinício que deixou o cartão de pé também matou o que rodava em segundo plano — o aviso de
   // término disso nunca vai chegar, e o agente ficaria esperando por ele.
-  const list = lostBackground.slice(0, 8).map((t) => `- ${t}`).join("\n");
+  // Só o comando citado é desarmado; a resposta é fala da pessoa e vale como ela escreveu.
+  const list = lostBackground.slice(0, 8).map((t) => `- ${defuseUltraWords(t)}`).join("\n");
   return `${text}\n\nO reinício também encerrou o que estava rodando em segundo plano — o resultado disso não vai ` +
     `chegar:\n${list}\nConfira o estado atual, rode de novo o que ainda for necessário e siga até o fim.`;
 }

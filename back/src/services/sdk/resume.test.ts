@@ -226,6 +226,10 @@ describe("resumeInterruptedTurns — the boot sweep", () => {
     const text = resumeContinuationText({ startedAt: 1, attempts: 0, background: { tasks: many, since: 0, idle: true } });
     expect(text).toContain("- t7");
     expect(text).not.toContain("- t8"); // a lista é curta: contexto, não inventário
+    // Caso real (este card, 2026-11-10): a retomada citou um comando com "ULTRATHINK" e o turno subiu a max.
+    const cited = resumeContinuationText({ startedAt: 1, attempts: 0, background: { tasks: ["vitest -t ULTRATHINK"], since: 0, idle: false } });
+    expect(cited).toContain("- vitest -t ULTRA-THINK");
+    expect(cited).not.toMatch(/ultrathink/i);
     const now = 10 * BACKGROUND_HOLD_MAX_MS;
     expect(isStaleBackgroundOnly({ startedAt: 1, attempts: 0 }, now)).toBe(false);
     expect(isStaleBackgroundOnly({ startedAt: 1, attempts: 0, background: { tasks: ["x"], since: now - BACKGROUND_HOLD_MAX_MS, idle: true } }, now)).toBe(false);
