@@ -1985,3 +1985,73 @@ describe("/btw — prazo da tela", () => {
     expect(BTW_EXPIRE_MS).toBeGreaterThan(3 * 3 * 60_000);
   });
 });
+
+/**
+ * A COMPACTAÇÃO: o /compact (ou a automática) é uma linha própria — a barra rodando enquanto o CLI
+ * resume a conversa, e o divisor com quanto ela ocupava antes e depois quando acaba.
+ */
+describe("compactação na tela", () => {
+  type CompactionRow = Extract<SdkRow, { kind: "compaction" }>;
+  const rowsOf = (state: SdkChatState) => state.rows.filter((r): r is CompactionRow => r.kind === "compaction");
+
+  it("o início abre a linha rodando, com a hora em que começou", () => {
+    const state = feed([{ type: "ready" }, { type: "compaction", phase: "started", startedAt: 5_000 }]);
+    expect(rowsOf(state)).toEqual([{ kind: "compaction", id: expect.any(String), status: "running", startedAt: 5_000 }]);
+  });
+
+  it("o fim fecha a MESMA linha com os números", () => {
+    const state = feed([
+      { type: "compaction", phase: "started", startedAt: 5_000 },
+      { type: "compaction", phase: "done", trigger: "manual", preTokens: 180_000, postTokens: 22_000, durationMs: 14_000 },
+    ]);
+    expect(rowsOf(state)).toEqual([{
+      kind: "compaction", id: expect.any(String), status: "done", startedAt: 5_000,
+      trigger: "manual", preTokens: 180_000, postTokens: 22_000, durationMs: 14_000,
+    }]);
+  });
+
+  it("o início repetido (a aba que reconecta no meio) não abre uma segunda barra", () => {
+    const state = feed([
+      { type: "compaction", phase: "started", startedAt: 5_000 },
+      { type: "compaction", phase: "started", startedAt: 5_000 },
+    ]);
+    expect(rowsOf(state)).toHaveLength(1);
+  });
+
+  it("a falha fecha a linha com o motivo", () => {
+    const state = feed([
+      { type: "compaction", phase: "started", startedAt: 5_000 },
+      { type: "compaction", phase: "failed", error: "Not enough messages to compact." },
+    ]);
+    expect(rowsOf(state)[0]).toMatchObject({ status: "failed", error: "Not enough messages to compact." });
+  });
+
+  it("o replay (só o desfecho no log) desenha o divisor sem barra antes", () => {
+    const state = feed([{ type: "compaction", phase: "done", trigger: "auto", preTokens: 190_000 }]);
+    expect(rowsOf(state)).toEqual([{ kind: "compaction", id: expect.any(String), status: "done", trigger: "auto", preTokens: 190_000 }]);
+  });
+
+  it("o turno que fecha com a barra aberta a encerra: nunca rodando para sempre", () => {
+    const state = feed([
+      { type: "ready", turnActive: true },
+      { type: "compaction", phase: "started", startedAt: 5_000 },
+      { type: "result", subtype: "success" },
+    ]);
+    expect(rowsOf(state)[0]).toMatchObject({ status: "failed" });
+  });
+
+  it("um desfecho sem a compactação aberta nem números não vira linha", () => {
+    expect(rowsOf(feed([{ type: "compaction", phase: "failed" }]))).toEqual([{ kind: "compaction", id: expect.any(String), status: "failed" }]);
+    expect(rowsOf(feed([{ type: "compaction" } as SdkEvent]))).toEqual([]);
+  });
+
+  it("com o turno escrevendo, a linha entra antes do texto em curso", () => {
+    const state = feed([
+      { type: "ready" },
+      { type: "assistant_delta", text: "Vou " },
+      { type: "compaction", phase: "started", startedAt: 1 },
+      { type: "assistant_delta", text: "seguir" },
+    ]);
+    expect(state.rows.map((r) => r.kind)).toEqual(["compaction", "assistant"]);
+  });
+});

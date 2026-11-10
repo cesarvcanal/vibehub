@@ -2463,6 +2463,8 @@ const SdkChatRow = React.memo(function SdkChatRow({
     );
   }
 
+  if (row.kind === "compaction") return null;
+
   if (row.kind === "thinking") {
     return <SdkThinkingRow text={row.text} streaming={row.streaming} />;
   }
