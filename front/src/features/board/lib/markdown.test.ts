@@ -210,6 +210,11 @@ describe("uploadKind", () => {
     expect(uploadKind("1-x.pptx")).toBe("presentation");
     expect(uploadKind("1-x.txt")).toBe("text");
     expect(uploadKind("1-x.zip")).toBe("file");
+    // Nomes que existem no protótipo de Object não são tipo (a busca na tabela só vê chave própria).
+    for (const inherited of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+      expect(uploadKind(`1794341151810-a.${inherited.toLowerCase()}`)).toBe("file");
+    }
+    expect(uploadKind("1-sem-extensao")).toBe("file");
   });
 });
 

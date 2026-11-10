@@ -85,7 +85,9 @@ const UPLOAD_KIND_BY_EXTENSION: Record<string, UploadKind> = {
 export function uploadKind(file: string): UploadKind {
   const name = String(file ?? "");
   const dot = name.lastIndexOf(".");
-  return (dot >= 0 && UPLOAD_KIND_BY_EXTENSION[name.slice(dot + 1)]) || "file";
+  const extension = dot >= 0 ? name.slice(dot + 1) : "";
+  // Own keys only: `.constructor` is a valid upload name, and the inherited `Object` is not a kind.
+  return Object.hasOwn(UPLOAD_KIND_BY_EXTENSION, extension) ? (UPLOAD_KIND_BY_EXTENSION[extension] as UploadKind) : "file";
 }
 
 /** Office documents the browser cannot open: the chat shows the runner's text in a preview. PURE, TOTAL. */
