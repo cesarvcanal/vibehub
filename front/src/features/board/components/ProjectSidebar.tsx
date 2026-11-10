@@ -985,7 +985,7 @@ function SidebarCard({
   const review = card.review && card.review.phase !== "cancelled" ? card.review : null;
   // A ready PR whose author's AI is working reads "IA trabalhando" — the server's own rule (`isBusy`), sent
   // on the card's summary: what it pushes goes back to the reviewer.
-  const pill = reviewPill(review ?? undefined, { authorWorking: review?.authorWorking === true });
+  const pill = reviewPill(review ?? undefined, { authorWorking: review?.authorWorking === true, gate: review?.mergeGateState });
 
   return (
     <>

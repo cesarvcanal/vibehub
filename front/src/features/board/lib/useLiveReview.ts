@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { get } from "@/lib/api";
 import type { Review, ReviewResponse, ReviewWorking } from "@/api/types";
 import { CARDS_PREFIX_KEY } from "@/features/board/api";
-import { REVIEW_IDLE_POLL_MS, REVIEW_POLL_MS, cardReviewKey, reviewIsOpen, reviewIsWorking } from "@/features/board/lib/review";
+import { REVIEW_IDLE_POLL_MS, REVIEW_POLL_MS, cardReviewKey, mergeGateOf, reviewIsOpen, reviewIsWorking } from "@/features/board/lib/review";
 
 const NOBODY_WORKING: ReviewWorking = { author: false, reviewer: false };
 
@@ -65,7 +65,8 @@ export function useLiveReview(
     refetchInterval: (q) => {
       const data = q.state.data;
       if (!reviewIsOpen(data?.review?.phase)) return false;
-      const moving = opts.fast || reviewIsWorking(data?.review?.phase) || data?.working?.author || data?.working?.reviewer;
+      const gateRunning = data?.review ? mergeGateOf(data.review)?.state === "running" : false;
+      const moving = opts.fast || reviewIsWorking(data?.review?.phase) || data?.working?.author || data?.working?.reviewer || gateRunning;
       return moving ? REVIEW_POLL_MS : REVIEW_IDLE_POLL_MS;
     },
   });
