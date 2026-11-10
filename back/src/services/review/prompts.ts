@@ -62,6 +62,10 @@ function rules(): string {
       "arquivo:linha. Bug no código deste PR (comportamento errado, falha, quebra, brecha de segurança, perda de dado, " +
       "regressão) TEM essa prova: é bloqueante e se resolve neste PR, nunca sugestão. Sugestão é só o que não é bug no " +
       "escopo (estilo, nome, refatoração, melhoria opcional, problema antigo fora do diff): aparece, não bloqueia, não abre rodada.",
+    // Medido nos transcripts das revisões do erp-aux (PRs #599, #605, #624, #627): a maior parte da rodada
+    // ia em comando de 5 a 10 minutos (suíte inteira, `npm ci`, `tsc --force`), um atrás do outro.
+    "- Teste por recorte: rode só os testes do que o PR tocou (o arquivo ou a pasta). A suíte inteira é do CI: confira " +
+      "com `gh pr checks`. Comando que passaria de uns 3 minutos troca por um recorte menor.",
   ].join("\n");
 }
 

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Finding, Review } from "./model.js";
-import { authorFixPrompt, authorSuggestionsPrompt, phaseNoticeText, reviewerApprovePrompt, reviewerRoundPrompt } from "./prompts.js";
+import {
+  authorFixPrompt, authorSuggestionsPrompt, phaseNoticeText, reviewerApprovePrompt, reviewerDeltaPrompt, reviewerRoundPrompt,
+} from "./prompts.js";
 
 function review(findings: Finding[] = []): Review {
   return {
@@ -103,6 +105,16 @@ describe("prompts da revisão: o merge por ordem", () => {
       expect(text).toMatch(/authorized: true/);
       expect(text).toMatch(/Nunca por `gh pr merge`/);
       expect(text).not.toMatch(/nada de vibehub_deliver|não chame vibehub_deliver/);
+    }
+  });
+});
+
+describe("prompts da revisão: tempo de cada rodada", () => {
+  it("revisor e autor testam por recorte e deixam a suíte inteira com o CI", () => {
+    const delta = { ...review(), round: 2, reviewedSha: "a".repeat(40) };
+    for (const text of [reviewerRoundPrompt(review()), reviewerDeltaPrompt(delta), authorFixPrompt(review())]) {
+      expect(text).toMatch(/rode só os testes do que o PR tocou/);
+      expect(text).toMatch(/A suíte inteira é do CI: confira com `gh pr checks`/);
     }
   });
 });
