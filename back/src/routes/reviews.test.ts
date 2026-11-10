@@ -427,6 +427,45 @@ describe("iniciar a revisão pela IA do card (vibehub_review_start)", () => {
     expect((await (await registry()).listAllCards()).filter((c) => c.reviewOf)).toEqual([]);
   });
 
+  it("'terminando pode mergear e concluir o card': a ordem de quem mergeia fica gravada na revisão", async () => {
+    const w = await world();
+    await actor(w.cardId, w.merger.id);
+    const review = await (await byAgent())(w.cardId, {
+      reviewer: "revisor", author: "autor", mergeWhenReady: true, concludeWhenMerged: true,
+    });
+    expect(review).toMatchObject({ mergerUserId: w.merger.id, mergeAuthorized: true, concludeWhenMerged: true });
+    expect(review.log.some((e) => /merge autorizado/i.test(e.text))).toBe(true);
+  });
+
+  it("só quem mergeia autoriza o próprio merge: a ordem de outra pessoa é recusada, sem abrir nada", async () => {
+    const w = await world();
+    await actor(w.cardId, w.autor.id);
+    await expect((await byAgent())(w.cardId, { reviewer: "revisor", author: "autor", merger: "merger", mergeWhenReady: true }))
+      .rejects.toThrow(/^merge_autorizado_de_outro/);
+    await expect((await byAgent())(w.cardId, { reviewer: "revisor", author: "autor", merger: "merger", concludeWhenMerged: true }))
+      .rejects.toThrow(/^merge_autorizado_de_outro/);
+    expect(send).not.toHaveBeenCalled();
+    expect(await (await store()).activeReviewFor(w.cardId)).toBeUndefined();
+  });
+
+  it("revisão com 'concluir o card' mergeada: o card do autor vai para done", async () => {
+    const w = await world();
+    await actor(w.cardId, w.merger.id);
+    const review = await (await byAgent())(w.cardId, { reviewer: "revisor", author: "autor", concludeWhenMerged: true });
+    await (await orchestrator()).markReviewMerged(review.id, "merger");
+    expect((await (await registry()).getCard(w.cardId))?.column).toBe("done");
+  });
+
+  it("revisão sem a ordem de concluir, mergeada: o card do autor fica onde está", async () => {
+    const w = await world();
+    await actor(w.cardId, w.merger.id);
+    const plain = await (await byAgent())(w.cardId, { reviewer: "revisor", author: "autor" });
+    const before = (await (await registry()).getCard(w.cardId))?.column;
+    await (await orchestrator()).markReviewMerged(plain.id, "merger");
+    expect(before).not.toBe("done");
+    expect((await (await registry()).getCard(w.cardId))?.column).toBe(before);
+  });
+
   it("quem deu a ordem sem work no card não pede revisão em nome de ninguém", async () => {
     const w = await world();
     await actor(w.cardId, w.leitor.id);
