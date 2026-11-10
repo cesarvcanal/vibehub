@@ -5317,3 +5317,47 @@ describe("SdkChatView — /btw", () => {
     expect(row).toHaveTextContent("falta abrir o PR");
   });
 });
+
+/**
+ * O /compact: o CLI passa segundos a um minuto resumindo a conversa sem soltar uma palavra. A tela
+ * mostra a barra correndo enquanto isso e, no fim, o divisor com quanto a conversa ocupava.
+ */
+describe("SdkChatView — compactação", () => {
+  beforeEach(() => setLanguage("pt-BR"));
+  afterEach(() => resetLanguage());
+
+  it("a barra roda enquanto o CLI compacta e vira o divisor com os tokens quando termina", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "compaction", phase: "started", trigger: "manual", startedAt: Date.now() });
+
+    const running = await screen.findByTestId("sdk-compaction");
+    expect(running).toHaveAttribute("data-status", "running");
+    expect(running).toHaveTextContent("Compactando a conversa…");
+    expect(within(running).getByRole("progressbar")).toBeInTheDocument();
+    expect(screen.getByTestId("sdk-compaction-elapsed")).toHaveTextContent(/^0:0\d$/);
+
+    ws.deliver({ type: "compaction", phase: "done", trigger: "manual", preTokens: 180_000, postTokens: 22_000, durationMs: 14_000 });
+    await waitFor(() => expect(screen.getByTestId("sdk-compaction")).toHaveAttribute("data-status", "done"));
+    const done = screen.getByTestId("sdk-compaction");
+    expect(screen.getAllByTestId("sdk-compaction")).toHaveLength(1);
+    expect(done).toHaveTextContent("Conversa compactada");
+    expect(done).toHaveTextContent("180 mil → 22 mil tokens");
+    expect(done).toHaveTextContent("−88%");
+    expect(within(done).queryByRole("progressbar")).toBeNull();
+  });
+
+  it("a falha vira o divisor com o motivo do CLI", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "compaction", phase: "started", trigger: "manual", startedAt: Date.now() });
+    ws.deliver({ type: "compaction", phase: "failed", error: "Not enough messages to compact." });
+    await waitFor(() => expect(screen.getByTestId("sdk-compaction")).toHaveAttribute("data-status", "failed"));
+    expect(screen.getByTestId("sdk-compaction")).toHaveTextContent("Compactação não concluída");
+    expect(screen.getByTestId("sdk-compaction")).toHaveTextContent("Not enough messages to compact.");
+  });
+});

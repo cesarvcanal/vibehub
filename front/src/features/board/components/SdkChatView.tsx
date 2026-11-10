@@ -165,6 +165,7 @@ import {
   type QueuedMessage,
 } from "@/features/board/lib/sdkQueue";
 import { getLanguage, t as translate, useT } from "@/i18n";
+import { SdkCompactionRow } from "@/features/board/components/SdkCompactionRow";
 
 /**
  * NATIVE CHAT (beta) — the card's conversation over the Agent SDK driver, not the tmux transcript.
@@ -2463,7 +2464,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
     );
   }
 
-  if (row.kind === "compaction") return null;
+  if (row.kind === "compaction") return <SdkCompactionRow row={row} />;
 
   if (row.kind === "thinking") {
     return <SdkThinkingRow text={row.text} streaming={row.streaming} />;
