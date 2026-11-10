@@ -2495,7 +2495,59 @@ describe("gate do merge rodado quando a revisão fica pronta", () => {
     }
   });
 
-  it("o autor termina um turno com o gate vermelho: roda de novo UMA vez sozinho (o npm install dele chega ao veredito)", async () => {
+  it("o autor termina um turno com o gate vermelho: roda de novo sozinho, e o verde que a correção trouxe mergeia sem clique", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    gateAnswer = RED;
+    const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    try {
+      await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate).toMatchObject({ state: "failed", failures: 1 }));
+      expect((await o.store.getReview(review.id))?.mergeGate?.exhausted).toBeUndefined();
+      gateAnswer = { ran: true, passed: true, output: "" };
+      await authorTurnEnds(o, author.id);
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("passed"));
+      expect(gateSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      off();
+    }
+  });
+
+  it("caso real (PR #218): vermelho que a IA não conserta roda sozinho até 3 vezes; depois disso vira erro pra pessoa, e o 'Tentar de novo' zera a conta", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    gateAnswer = RED;
+    const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    try {
+      await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate).toMatchObject({ state: "failed", failures: 1 }));
+      for (const n of [2, 3, 4]) {
+        await authorTurnEnds(o, author.id);
+        await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate).toMatchObject({ state: "failed", failures: n }));
+      }
+      const exhausted = (await o.store.getReview(review.id))!;
+      expect(exhausted.mergeGate?.exhausted).toBe(true);
+      expect(gateSpy).toHaveBeenCalledTimes(4);
+      // as 3 primeiras falhas foram ao autor; a última não (ninguém roda de novo sozinho depois dela)
+      const gatePrompts = () => send.mock.calls.filter(([card, text]) => card === author.id && String(text).includes("os testes que o merge roda"));
+      await vi.waitFor(() => expect(gatePrompts()).toHaveLength(3));
+      expect(exhausted.log.at(-1)?.text).toMatch(/3 vezes/);
+      await authorTurnEnds(o, author.id);
+      await new Promise((r) => setTimeout(r, 40));
+      expect(gateSpy).toHaveBeenCalledTimes(4);
+      // a pessoa clica: os testes rodam, e um vermelho de novo devolve ao autor com a conta zerada
+      await o.orch.retryReview(review.id, "mussa");
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate).toMatchObject({ state: "failed", failures: 1 }));
+      expect((await o.store.getReview(review.id))?.mergeGate?.exhausted).toBeUndefined();
+      gateAnswer = { ran: true, passed: true, output: "" };
+      await authorTurnEnds(o, author.id);
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("passed"));
+    } finally {
+      off();
+    }
+  });
+
+  it("dois fins de turno juntos com o gate vermelho rodam o gate uma vez só", async () => {
     const o = await load();
     const { author, review } = await started(o);
     gateAnswer = RED;
@@ -2503,18 +2555,29 @@ describe("gate do merge rodado quando a revisão fica pronta", () => {
     try {
       await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
       await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("failed"));
-      expect(gateSpy).toHaveBeenCalledTimes(1);
-      await authorTurnEnds(o, author.id);
-      await vi.waitFor(() => expect(gateSpy).toHaveBeenCalledTimes(2));
-      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate).toMatchObject({ state: "failed", autoRetried: true }));
-      // vermelho de novo: o próximo turno do autor não roda outra vez (o "Tentar de novo" do painel roda)
-      await authorTurnEnds(o, author.id);
+      await Promise.all([authorTurnEnds(o, author.id), authorTurnEnds(o, author.id)]);
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate).toMatchObject({ state: "failed", failures: 2 }));
       await new Promise((r) => setTimeout(r, 40));
       expect(gateSpy).toHaveBeenCalledTimes(2);
-      gateAnswer = { ran: true, passed: true, output: "" };
-      await o.orch.retryReview(review.id, "mussa");
-      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("passed"));
-      expect(gateSpy).toHaveBeenCalledTimes(3);
+    } finally {
+      off();
+    }
+  });
+
+  it("falha gravada antes da conta (autoRetried, sem failures) não roda de novo sozinha", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    gateAnswer = RED;
+    const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    try {
+      await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("failed"));
+      await o.store.mutateReview(review.id, (x) => {
+        x.mergeGate = { sha: SHA1, state: "failed", output: "velho", at: 1, autoRetried: true };
+      });
+      await authorTurnEnds(o, author.id);
+      await new Promise((r) => setTimeout(r, 40));
+      expect(gateSpy).toHaveBeenCalledTimes(1);
     } finally {
       off();
     }

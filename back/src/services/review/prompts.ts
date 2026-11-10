@@ -1,5 +1,5 @@
 import { defuseUltraWords } from "../../utils/ultraWords.js";
-import { autoMergeEligible, waivedText, MAX_ROUNDS, pendingQuestions, type Finding, type FindingStatus, type Review } from "./model.js";
+import { autoMergeEligible, waivedText, MAX_ROUNDS, MERGE_GATE_AUTO_RETRIES, pendingQuestions, type Finding, type FindingStatus, type Review } from "./model.js";
 
 /**
  * TEXTOS DA REVISÃO DE PR — o que o orquestrador digita no card do revisor e no do autor.
@@ -454,7 +454,11 @@ export function phaseNoticeText(r: Review): string {
 
 /** O aviso, nos dois cards, de que o gate do merge falhou no commit aprovado. */
 export function mergeGateFailedText(r: Review): string {
-  return `PR #${r.prNumber}: os testes do merge falharam no commit aprovado — o merge espera a correção do autor.`;
+  if (r.mergeGate?.exhausted) {
+    return `PR #${r.prNumber}: os testes do merge seguem falhando depois de rodarem de novo sozinhos ${MERGE_GATE_AUTO_RETRIES} vezes — ` +
+      "o merge espera alguém conferir e clicar em \"Tentar de novo\".";
+  }
+  return `PR #${r.prNumber}: os testes do merge falharam no commit aprovado — a IA do autor está corrigindo, e eles rodam de novo sozinhos.`;
 }
 
 /**

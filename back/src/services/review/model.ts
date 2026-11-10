@@ -78,8 +78,33 @@ export interface MergeGate {
   /** A saída do gate que falhou (já redigida e com teto). */
   output?: string;
   at: number;
-  /** O gate já rodou de novo sozinho, no fim de um turno do autor, depois desta falha (uma vez só). */
+  /**
+   * Esta falha já foi pega para rodar de novo sozinha, no fim de um turno do autor: a marca que impede
+   * dois fins de turno juntos de rodarem o gate duas vezes. Falha gravada antes de `failures` com esta
+   * marca é de quando a volta sozinha era uma só, e não roda mais sozinha.
+   */
   autoRetried?: true;
+  /**
+   * Quantas vezes seguidas o gate falhou neste commit desde a última ordem humana ("Tentar de novo"
+   * zera). Carregado pelo `running`. Ausente numa falha gravada antes do campo = 1.
+   */
+  failures?: number;
+  /** A falha passou de {@link MERGE_GATE_AUTO_RETRIES} voltas sozinhas: ninguém roda de novo sem uma pessoa. */
+  exhausted?: true;
+}
+
+/**
+ * Quantas vezes o gate do merge roda de novo sozinho, cada uma depois de um turno do autor corrigindo
+ * a falha anterior. Teto para um teste que a IA não consegue consertar não prender o runner num laço.
+ */
+export const MERGE_GATE_AUTO_RETRIES = 3;
+
+/**
+ * O gate vermelho que ainda volta sozinho: a IA do autor está com a falha e, ao fim do turno dela, os
+ * testes rodam de novo. Falso = vermelho que espera uma pessoa. PURE.
+ */
+export function mergeGateSelfHealing(gate: MergeGate): boolean {
+  return gate.state === "failed" && !gate.exhausted && !(gate.autoRetried && gate.failures === undefined);
 }
 
 export interface Review {

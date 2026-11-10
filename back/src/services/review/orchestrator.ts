@@ -15,7 +15,7 @@ import type { MessageOrigin } from "../chat/provenance.js";
 import { eventsAfter, onCardEvent, recordMessage, type CardEvent, type Severity } from "../events/cardEvents.js";
 import { logger } from "../../utils/logger.js";
 import {
-  MAX_ROUNDS, applyAuthorResponses, applyReviewerVerdicts, autoMergeEligible, waivedText, type ReviewOrders, blockingOpen, normalizeSubmittedFindings, pendingQuestions,
+  MAX_ROUNDS, MERGE_GATE_AUTO_RETRIES, mergeGateSelfHealing, applyAuthorResponses, applyReviewerVerdicts, autoMergeEligible, waivedText, type ReviewOrders, blockingOpen, normalizeSubmittedFindings, pendingQuestions,
   phaseAfterReviewerRound,
   type AuthorAnswerStatus, type Finding, type FindingStatus, type Review, type ReviewEvent, type ReviewEventItem, type ReviewPhase,
   type SubmittedFinding,
@@ -414,8 +414,10 @@ export async function checkMergeGate(reviewId: string, opts: { again?: boolean; 
     if (!r || !needsMergeGate(r, opts.again === true)) return;
     sha = r.reviewedSha as string;
     mergeGatesRunning.add(reviewId);
+    const previous = r.mergeGate?.sha === sha ? r.mergeGate : undefined;
+    const failuresBefore = previous?.failures ?? (previous?.state === "failed" ? 1 : 0);
     await mutateReview(reviewId, (x) => {
-      x.mergeGate = { sha, state: "running", at: Date.now() };
+      x.mergeGate = { sha, state: "running", at: Date.now(), ...(failuresBefore ? { failures: failuresBefore } : {}) };
     });
     let verdict: GateResult;
     try {
@@ -424,14 +426,18 @@ export async function checkMergeGate(reviewId: string, opts: { again?: boolean; 
       verdict = { ran: true, passed: false, output: `o gate não chegou a rodar: ${(err as Error).message}` };
     }
     let landed = false as boolean;
+    const failures = failuresBefore + 1;
+    const exhausted = failures > MERGE_GATE_AUTO_RETRIES;
     const after = await mutateReview(reviewId, (x) => {
       if (x.phase !== "ready" || x.reviewedSha !== sha) return;
       x.mergeGate = verdict.passed
         ? { sha, state: "passed", at: Date.now() }
-        : { sha, state: "failed", output: verdict.output, at: Date.now(), ...(opts.again && r.mergeGate?.autoRetried ? { autoRetried: true as const } : {}) };
+        : { sha, state: "failed", output: verdict.output, at: Date.now(), failures, ...(exhausted ? { exhausted: true as const } : {}) };
       note(x, "system", verdict.passed
         ? `Testes do merge verdes no commit aprovado (${sha.slice(0, 7)}): o merge sai na hora.`
-        : `Testes do merge vermelhos no commit aprovado (${sha.slice(0, 7)}): o merge espera a correção, e o autor recebeu a falha.`,
+        : exhausted
+          ? `Testes do merge vermelhos no commit aprovado (${sha.slice(0, 7)}) depois de rodarem de novo sozinhos ${MERGE_GATE_AUTO_RETRIES} vezes: o merge espera uma pessoa.`
+          : `Testes do merge vermelhos no commit aprovado (${sha.slice(0, 7)}): o autor recebeu a falha e, ao fim do turno dele, os testes rodam de novo sozinhos.`,
       opts.by ? { by: opts.by } : {});
       landed = true;
     });
@@ -444,7 +450,8 @@ export async function checkMergeGate(reviewId: string, opts: { again?: boolean; 
       if (autoMergeEligible(after) && (await reviewerApproved(after))) await autoMerge(after);
       return;
     }
-    await notifyBoth(after, `review:${reviewId}:merge_gate_failed:${sha}:${after.mergeGate?.at}`, mergeGateFailedText(after), "warning");
+    await notifyBoth(after, `review:${reviewId}:merge_gate_failed:${sha}:${after.mergeGate?.at}`, mergeGateFailedText(after), exhausted ? "warning" : "info");
+    if (exhausted) return;
     await relayReview(after, "author", authorMergeGatePrompt(after), { unpause: true, optional: true }).catch((e: unknown) =>
       logger.warn({ review: reviewId, detail: (e as Error).message }, "could not send the merge gate failure to the author"));
   } catch (err) {
@@ -456,16 +463,21 @@ export async function checkMergeGate(reviewId: string, opts: { again?: boolean; 
 
 /**
  * O autor terminou um turno com o gate do merge vermelho no commit aprovado (e o PR ainda nele): roda
- * o gate de novo, UMA vez por falha — é como o "npm install" que ele fez chega ao veredito sem
- * ninguém clicar. Um push muda o head e reabre a revisão pelo caminho de sempre, não por aqui.
+ * o gate de novo, uma vez por falha e até {@link MERGE_GATE_AUTO_RETRIES} falhas seguidas — é como a
+ * correção que ele fez chega ao veredito sem ninguém clicar. A marca `autoRetried` é gravada dentro da
+ * mutação, então dois fins de turno juntos não rodam o gate duas vezes. Um push muda o head e reabre a
+ * revisão pelo caminho de sempre, não por aqui.
  */
 async function retryMergeGateAfterAuthorTurn(r: Review): Promise<void> {
-  const gate = r.mergeGate;
-  if (r.phase !== "ready" || !gate || gate.sha !== r.reviewedSha || gate.state !== "failed" || gate.autoRetried) return;
+  if (r.phase !== "ready" || !r.reviewedSha) return;
+  let claimed = false as boolean;
   await mutateReview(r.id, (x) => {
-    if (x.mergeGate?.sha === gate.sha && x.mergeGate.state === "failed") x.mergeGate.autoRetried = true;
+    const gate = x.mergeGate;
+    if (x.phase !== "ready" || !gate || gate.sha !== x.reviewedSha || gate.autoRetried || !mergeGateSelfHealing(gate)) return;
+    gate.autoRetried = true;
+    claimed = true;
   });
-  await checkMergeGate(r.id, { again: true, by: "fim do turno do autor" });
+  if (claimed) await checkMergeGate(r.id, { again: true, by: "fim do turno do autor" });
 }
 
 /** A linha de sistema que conta o resultado da rodada do revisor. */
@@ -1019,6 +1031,8 @@ export async function retryReview(reviewId: string, by: string): Promise<Review>
       side = "approve";
     } else if (r.phase === "ready" && r.mergeGate?.sha === r.reviewedSha && r.mergeGate?.state === "failed") {
       side = "gate";
+      // Ordem humana: a conta de voltas sozinhas recomeça (um vermelho de novo volta ao autor).
+      r.mergeGate.failures = 0;
       note(r, "human", "Tentar de novo: os testes do merge rodam de novo no commit aprovado.", { by });
       return;
     } else if (r.phase === "impasse" && r.impasseReason !== "rodadas" && r.impasseReason !== HEAD_MOVED) {
