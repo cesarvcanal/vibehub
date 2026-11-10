@@ -295,17 +295,21 @@ export function buildFollowCommand(containerName: string, transcriptDir: string,
   return `docker exec -i ${shQuote(containerName)} bash -c ${shQuote(inner)} _ ${shQuote(transcriptDir)}`;
 }
 
-/** Keys the chat may press in the session, by name. Nothing else reaches tmux. */
-export const CHAT_KEYS: Record<string, string> = {
+/**
+ * Keys the chat may press in the session, by name. Nothing else reaches tmux. A Map, not an object
+ * literal: looked up by a name from the request body, a literal also answered what its prototype
+ * holds — `__proto__` typed `[object Object]` into the card's prompt.
+ */
+export const CHAT_KEYS: ReadonlyMap<string, string> = new Map([
   /** Claude Code's own "stop what you are doing" — the chat's Stop button. */
-  escape: "Escape",
+  ["escape", "Escape"],
   /** The harder stop, for a session wedged in something that ignores Escape. */
-  interrupt: "C-c",
-};
+  ["interrupt", "C-c"],
+]);
 
 /** Script that presses ONE named key in a card's session. The name is whitelisted, never raw. PURE. */
 export function buildSendKeyScript(containerName: string, tmuxSession: string, key: string): string {
-  const tmuxKey = CHAT_KEYS[key];
+  const tmuxKey = CHAT_KEYS.get(key);
   if (!tmuxKey) throw new Error(`unknown key: '${key}'`);
   const inner = `tmux send-keys -t "$1" ${tmuxKey}`;
   return `docker exec ${shQuote(containerName)} bash -c ${shQuote(inner)} _ ${shQuote(tmuxSession)}`;

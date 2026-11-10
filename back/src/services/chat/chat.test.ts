@@ -287,6 +287,12 @@ describe("buildSendKeyScript", () => {
     expect(() => buildSendKeyScript("c", "card-1", "; rm -rf /")).toThrow(/unknown key/);
   });
 
+  it("a name only Object.prototype answers is no key — never `[object Object]` typed into the prompt", () => {
+    for (const key of ["__proto__", "toString", "valueOf", "constructor", "hasOwnProperty"]) {
+      expect(() => buildSendKeyScript("c", "card-1", key), key).toThrow(/unknown key/);
+    }
+  });
+
   it("quotes the session name instead of interpolating it", () => {
     expect(buildSendKeyScript("c", "s'; rm -rf /; '", "interrupt")).toContain(`'s'\\''; rm -rf /; '`);
   });

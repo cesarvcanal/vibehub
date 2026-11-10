@@ -162,7 +162,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     { preHandler: requireCardWork },
     async (req, reply) => {
       const key = String(req.body?.key ?? "");
-      if (!CHAT_KEYS[key]) return await reply.code(400).send({ error: `unknown key: '${key}'` });
+      if (!CHAT_KEYS.has(key)) return await reply.code(400).send({ error: `unknown key: '${key}'` });
       try {
         return await reply.send(await sendChatKey(req.params.id, key));
       } catch (err) {
