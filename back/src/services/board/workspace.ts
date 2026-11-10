@@ -932,9 +932,19 @@ export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
 /**
+ * The shape of a sanitized upload name — what `sanitizeUploadName` returns and what the read side
+ * (UPLOAD_FILE_RE) accepts after the stamp. One pattern for both: a written name the read refused
+ * came back as "upload not found" for a file the server had just stored.
+ */
+const UPLOAD_NAME_SOURCE = "[a-z0-9][a-z0-9._-]*\\.[a-z0-9]+";
+const UPLOAD_NAME_RE = new RegExp(`^${UPLOAD_NAME_SOURCE}$`);
+
+/**
  * Sanitizes an uploaded file name: lower case, only [a-z0-9._-], no `..` (assertSafeRemotePath would
- * reject it), never starting with `.`/`-` (no dotfiles, no flags), at most 80 characters (keeping
- * the END — that is where the extension lives). Empty after the cleanup → "image". PURE.
+ * reject it), never starting with `.`/`-`/`_` (no dotfiles, no flags), at most 80 characters before
+ * the extension check (keeping the END — that is where the extension lives). Empty after the cleanup
+ * → "image". A name still without an extension (`README`) gets `.bin`: an unknown type, served as a
+ * download and opened by its path in the runner. PURE.
  */
 export function sanitizeUploadName(name: string): string {
   let s = String(name ?? "")
@@ -943,10 +953,11 @@ export function sanitizeUploadName(name: string): string {
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/\.{2,}/g, ".")
     .replace(/-{2,}/g, "-")
-    .replace(/^[.-]+/, "")
+    .replace(/^[._-]+/, "")
     .replace(/[.-]+$/, "");
-  if (s.length > 80) s = s.slice(-80).replace(/^[.-]+/, "");
-  return s || "image";
+  if (s.length > 80) s = s.slice(-80).replace(/^[._-]+/, "");
+  s ||= "image";
+  return UPLOAD_NAME_RE.test(s) ? s : `${s}.bin`;
 }
 
 export interface UploadScriptOpts {
@@ -1066,7 +1077,7 @@ const UPLOAD_DOWNLOAD_TYPE = "application/octet-stream";
  * deliberately stricter than "no traversal" — it is the exact shape this server produces, so a
  * name that could not have come from the upload route is refused before it reaches a shell. PURE.
  */
-const UPLOAD_FILE_RE = /^\d+-[a-z0-9][a-z0-9._-]*\.[a-z0-9]+$/;
+const UPLOAD_FILE_RE = new RegExp(`^\\d+-${UPLOAD_NAME_SOURCE}$`);
 
 /**
  * The content type for an upload name, or `null` when the name is not one this server writes. A

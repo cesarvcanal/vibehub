@@ -1592,14 +1592,47 @@ describe("image upload into the card", () => {
   it("sanitizeUploadName: lower case, [a-z0-9._-], no '..', no dotfile, with a fallback", () => {
     expect(ws.sanitizeUploadName("Screen Shot 2026-08-14.PNG")).toBe("screen-shot-2026-08-14.png");
     const traversal = ws.sanitizeUploadName("../../etc/passwd");
-    expect(traversal).toBe("etc-passwd");
+    expect(traversal).toBe("etc-passwd.bin");
     expect(traversal).not.toContain("..");
     expect(ws.sanitizeUploadName("a..b...png")).toBe("a.b.png");
-    expect(ws.sanitizeUploadName(".hidden")).toBe("hidden");
-    expect(ws.sanitizeUploadName("💥 !!!")).toBe("image");
+    expect(ws.sanitizeUploadName(".hidden")).toBe("hidden.bin");
+    expect(ws.sanitizeUploadName("💥 !!!")).toBe("image.bin");
     const long = ws.sanitizeUploadName("a".repeat(200) + ".png");
     expect(long.length).toBeLessThanOrEqual(80);
     expect(long.endsWith(".png")).toBe(true);
+  });
+
+  /**
+   * The write and the read speak ONE rule. A name without an extension (`README`, an empty name)
+   * used to be written as `<stamp>-readme`, a shape uploadContentType refuses: the server answered
+   * "upload not found" for a file it had just stored. Such a name gets `.bin` — served as a
+   * download, and still opened by its path inside the runner.
+   */
+  it("sanitizeUploadName: every name it returns is one uploadContentType reads back", () => {
+    const cases: Array<[string, string]> = [
+      ["README", "readme.bin"],
+      ["", "image.bin"],
+      ["Makefile.", "makefile.bin"],
+      ["_notes.txt", "notes.txt"], // a leading `_` is not a first character the read accepts
+      ["dump.tar_gz", "dump.tar_gz.bin"], // `_` is not an extension character on the read side
+      ["a" + "_".repeat(100) + ".png", "png.bin"], // the cut keeps the end, then the extension check
+      ["foto.JPG", "foto.jpg"],
+    ];
+    for (const [original, expected] of cases) {
+      const name = ws.sanitizeUploadName(original);
+      expect(name).toBe(expected);
+      expect(ws.uploadContentType(`1731000000000-${name}`)).not.toBeNull();
+    }
+    expect(ws.uploadContentType("1731000000000-readme.bin")).toBe("application/octet-stream");
+    expect(ws.uploadContentType("1731000000000-foto.jpg")).toBe("image/jpeg");
+  });
+
+  it("an upload named without an extension is written under a name the read accepts", async () => {
+    const { card } = await seed();
+    const { path } = await ws.uploadCardImage(card.id, "README", Buffer.from("hello").toString("base64"));
+    const file = path.split("/").pop()!;
+    expect(file).toMatch(/^\d+-readme\.bin$/);
+    expect(ws.uploadContentType(file)).toBe("application/octet-stream");
   });
 
   it("the base64 rides on the script's stdin, after one exec line — never in argv nor in a heredoc; the path comes back", async () => {
