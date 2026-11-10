@@ -3269,3 +3269,48 @@ describe("/btw — pergunta lateral", () => {
     expect(driverControls()).toEqual([]);
   });
 });
+
+/**
+ * A COMPACTAÇÃO EM ANDAMENTO é estado da sessão: quem abre o card no meio dela vê a barra rodando
+ * desde quando começou; o desfecho vai ao log (o F5 redesenha o divisor).
+ */
+describe("compaction — a barra do /compact", () => {
+  const parsed = (socket: ReturnType<typeof fakeSocket>) =>
+    socket.sent.map((s) => JSON.parse(s) as { type: string; phase?: string; startedAt?: number }).filter((e) => e.type === "compaction");
+
+  it("o início sai com a hora em que começou, e quem conecta no meio recebe a barra", () => {
+    const session = ensure();
+    const s1 = fakeSocket();
+    attachSocket(session, s1 as never);
+    const before = Date.now();
+    spawned[0]!.stdout.emit("data", line({ type: "compaction", phase: "started" }));
+    const started = parsed(s1)[0]!;
+    expect(started.phase).toBe("started");
+    expect(started.startedAt).toBeGreaterThanOrEqual(before);
+
+    const late = fakeSocket();
+    attachSocket(session, late as never);
+    expect(parsed(late)).toEqual([started]);
+  });
+
+  it("depois do desfecho quem conecta não vê barra nenhuma, e o desfecho fica no log", async () => {
+    const session = ensure();
+    spawned[0]!.stdout.emit("data", line({ type: "compaction", phase: "started" }));
+    spawned[0]!.stdout.emit("data", line({ type: "compaction", phase: "done", trigger: "manual", preTokens: 180_000, postTokens: 22_000 }));
+    const late = fakeSocket();
+    attachSocket(session, late as never);
+    expect(parsed(late)).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const logged = (await readHistory(CARD)).filter((e) => e.type === "compaction");
+    expect(logged).toEqual([expect.objectContaining({ phase: "done", preTokens: 180_000, postTokens: 22_000 })]);
+  });
+
+  it("um result fecha a barra mesmo sem desfecho do driver", () => {
+    const session = ensure();
+    spawned[0]!.stdout.emit("data", line({ type: "compaction", phase: "started" }));
+    spawned[0]!.stdout.emit("data", line({ type: "result", subtype: "success", isError: false }));
+    const late = fakeSocket();
+    attachSocket(session, late as never);
+    expect(parsed(late)).toEqual([]);
+  });
+});

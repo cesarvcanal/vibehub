@@ -269,6 +269,8 @@ export interface CompactionEvent {
   postTokens?: number;
   durationMs?: number;
   error?: string;
+  /** Só no `started`, posto pelo back: quando começou (ms), para a barra contar o tempo certo. */
+  startedAt?: number;
 }
 /** One live background task, as the driver forwards it from the CLI. */
 export interface BackgroundTaskInfo { id: string; type: string; description: string; /** A chamada que disparou a tarefa — liga a bandeja ao card dela. */ toolUseId?: string }
