@@ -261,6 +261,7 @@ export function query({ prompt, options }) {
     if (existsSync(join(options.cwd, "settings-gate"))) {
       mark("settings:waiting");
       while (!existsSync(join(options.cwd, "release-settings"))) await sleep(20);
+      mark("settings:answered");
     }
     const file = join(options.cwd, "account-effort");
     const own = existsSync(file) ? readFileSync(file, "utf8").trim() : undefined;
@@ -1148,6 +1149,36 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
       'flags:{"effortLevel":null}',
       'flags:{"effortLevel":"high"}',
       'flags:{"effortLevel":"low"}',
+    ]);
+  }, 60_000);
+
+  it("uma devolução que estourou o prazo não escreve depois que a fila andou: a troca seguinte fica", async () => {
+    // Review do PR #259 (f2): o prazo solta a fila, mas a ida ao CLI atrasada seguia viva. A volta ao
+    // nível da conta lia os settings devagar, a troca para low entrava e confirmava, e a leitura
+    // atrasada voltava gravando o nível da conta por cima: o pill em Baixo, a sessão em high.
+    await writeFile(join(sandbox, "account-effort"), "high");
+    const driver = startDriverWithEnv({ VIBEHUB_EFFORT_STEP_TIMEOUT_MS: "300" });
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "pensa nisso ultrathink slow" });
+    await driver.waitMark("slow:running");
+    await writeFile(join(sandbox, "settings-gate"), "");
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+    await driver.waitMark("settings:waiting");
+    driver.send({ type: "set_effort", id: "pra-low", effort: "low" });
+    expect(await driver.waitFor((e) => e.type === "effort_ack" && e.id === "pra-low"))
+      .toEqual({ type: "effort_ack", id: "pra-low", effort: "low" });
+
+    await writeFile(join(sandbox, "release-settings"), "");
+    await driver.waitMark("settings:answered");
+    // Uma escrita atrasada sairia logo depois da leitura; a troca seguinte, no mesmo stderr, vem depois dela.
+    driver.send({ type: "set_effort", id: "pra-medio", effort: "medium" });
+    await driver.waitMark('flags:{"effortLevel":"medium"}');
+    expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual([
+      'flags:{"effortLevel":"max"}',
+      'flags:{"effortLevel":null}',
+      'flags:{"effortLevel":"low"}',
+      'flags:{"effortLevel":"medium"}',
     ]);
   }, 60_000);
 

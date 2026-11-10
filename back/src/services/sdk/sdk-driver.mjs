@@ -1513,7 +1513,7 @@ async function raiseUltra(kinds, waitForInit) {
 }
 
 /** Give the effort back at the end of the turn: the keyword was for THAT turn, not for the session. */
-async function clearUltra() {
+async function clearUltra(ownsQueue) {
   const raised = ultraRaised;
   if (!raised) return;
   ultraRaised = null;
@@ -1533,7 +1533,7 @@ async function clearUltra() {
     const givesEffortBack = "effortLevel" in raised;
     if (givesEffortBack && EFFORT) give.effortLevel = EFFORT;
     if (Object.keys(give).length > 0) await withDeadline(handle.applyFlagSettings(give), EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR);
-    if (givesEffortBack && !EFFORT) await withDeadline(restoreAccountEffort(handle), EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR);
+    if (givesEffortBack && !EFFORT) await withDeadline(restoreAccountEffort(handle, ownsQueue), EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR);
   } catch { /* the stream is gone, and a dead stream has no effort to give back */ }
 }
 
@@ -1556,11 +1556,16 @@ async function announceDefaultEffort(handle) {
  * takes it to the MODEL's default and skips the settings files (measured on the real CLI, SDK
  * 0.3.300, 2026-10-29: settings `high` → flag `xhigh` → null = `medium`). So the settings' own
  * level, when there is one, goes back on top — what a fresh start without `--effort` would read.
+ *
+ * Several trips, so the last write checks it still OWNS the effort queue (`ownsQueue`): past its
+ * deadline the queue moved on, and a slow settings read coming back late wrote the account's level
+ * over a switch that was already confirmed — the pill on one level, the session on another.
  */
-async function restoreAccountEffort(handle) {
+async function restoreAccountEffort(handle, ownsQueue) {
   await handle.applyFlagSettings({ effortLevel: null });
   if (typeof handle.getSettings !== "function") return;
   const own = (await handle.getSettings())?.effective?.effortLevel;
+  if (!ownsQueue()) return;
   if (EFFORT_LEVELS.has(own)) await handle.applyFlagSettings({ effortLevel: own });
 }
 
@@ -1584,7 +1589,7 @@ async function restoreAccountEffort(handle) {
  * Answers what goes into the `effort_ack`: `{ effort }` = the level the session says the next call
  * uses (absent when nobody knows), `{ error }` = it was not applied.
  */
-async function setCardEffort(level) {
+async function setCardEffort(level, ownsQueue) {
   if (level !== null && !EFFORT_LEVELS.has(level)) return { error: `unknown effort level: ${level}` };
   EFFORT = level;
   const handle = currentQuery;
@@ -1598,7 +1603,7 @@ async function setCardEffort(level) {
   // on the `--effort` it was born with.
   if (!ready) return { error: "the session has not finished starting" };
   try {
-    const effortWrite = level === null ? restoreAccountEffort(handle) : handle.applyFlagSettings({ effortLevel: level });
+    const effortWrite = level === null ? restoreAccountEffort(handle, ownsQueue) : handle.applyFlagSettings({ effortLevel: level });
     await withDeadline(effortWrite, EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR);
   } catch (err) {
     if (currentQuery !== handle) return nextStreamTakesIt();
@@ -1637,11 +1642,19 @@ async function sessionEffort(handle) {
  *
  * With the queue empty the task starts RIGHT AWAY, synchronously up to its first await: the
  * ultrathink of a live stream writes its control request before the message is pushed.
+ *
+ * A deadline frees the queue but cannot stop a trip already sent: the task gets `ownsQueue`, true
+ * while no later task has started, and a write that comes after an await checks it first.
  */
 let effortWrites = Promise.resolve();
 let effortWritesPending = 0;
+let effortWritesStarted = 0;
 function inEffortQueue(task) {
-  const run = effortWritesPending === 0 ? task() : effortWrites.then(task);
+  const start = () => {
+    const position = ++effortWritesStarted;
+    return task(() => position === effortWritesStarted);
+  };
+  const run = effortWritesPending === 0 ? start() : effortWrites.then(start);
   effortWritesPending += 1;
   effortWrites = run
     .catch((err) => { trace(`effort write failed: ${err && err.message ? err.message : String(err)}`); })
@@ -1654,7 +1667,7 @@ function inEffortQueue(task) {
  * the error of whoever refused it. The back only says "já valendo" holding this answer.
  */
 function queueEffortSwitch(id, level) {
-  inEffortQueue(() => setCardEffort(level))
+  inEffortQueue((ownsQueue) => setCardEffort(level, ownsQueue))
     .catch((err) => ({ error: err && err.message ? err.message : String(err) }))
     .then((outcome) => emit({ type: "effort_ack", id, ...outcome }))
     .catch((err) => { trace(`effort switch failed: ${err && err.message ? err.message : String(err)}`); });
