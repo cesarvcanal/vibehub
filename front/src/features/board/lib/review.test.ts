@@ -296,6 +296,13 @@ describe("reviewActions", () => {
     expect(reviewActions(full({ phase: "merged" }), as("mer")).merge).toBe(false);
   });
 
+  it("gate do merge vermelho no commit aprovado: retry aparece (roda os testes de novo); num commit antigo, não", () => {
+    const failed = { sha: "a".repeat(40), state: "failed" as const, output: "FAIL x", at: 1 };
+    expect(reviewActions(full({ phase: "ready", reviewedSha: "a".repeat(40), mergeGate: failed }), as("mer")).retry).toBe(true);
+    expect(reviewActions(full({ phase: "ready", reviewedSha: "b".repeat(40), mergeGate: failed }), as("mer")).retry).toBe(false);
+    expect(reviewActions(full({ phase: "ready", reviewedSha: "a".repeat(40), mergeGate: { ...failed, state: "passed" } }), as("mer")).retry).toBe(false);
+  });
+
   it("the co-author carries the work on: retry, cancel and request like the author and the merger", () => {
     const open = full({ phase: "fixing", coauthorUserId: "coa" });
     expect(reviewActions(open, as("coa"))).toMatchObject({ retry: true, cancel: true, request: true, decide: false });

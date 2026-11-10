@@ -759,6 +759,32 @@ describe("ReviewPanel — merge", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("caso real (PR #215): gate vermelho no commit aprovado — a falha aparece e o Mergear fica travado; Tentar de novo libera", async () => {
+    const sha = "a".repeat(40);
+    open("mer", review({
+      phase: "ready", reviewedSha: sha,
+      mergeGate: { sha, state: "failed", output: "dependência faltando na worktree (@vitejs/plugin-react)", at: 1 },
+    }));
+    await loaded();
+    expect(screen.getByRole("alert")).toHaveTextContent("Os testes do merge falharam no commit aprovado");
+    expect(screen.getByRole("alert")).toHaveTextContent("@vitejs/plugin-react");
+    expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Tentar de novo" })).toBeEnabled();
+  });
+
+  it("gate rodando no commit aprovado: o Mergear espera; verde, ou de um commit antigo, não segura", async () => {
+    const sha = "a".repeat(40);
+    open("mer", review({ phase: "ready", reviewedSha: sha, mergeGate: { sha, state: "running", at: 1 } }));
+    await loaded();
+    expect(screen.getByText(/Rodando os testes do merge no commit aprovado/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeDisabled();
+    cleanup();
+    open("mer", review({ phase: "ready", reviewedSha: sha, mergeGate: { sha, state: "passed", at: 1 } }));
+    await loaded();
+    expect(screen.queryByText(/Rodando os testes do merge/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeEnabled();
+  });
+
   it("cancelar e tentar de novo ficam desabilitados com o merge pendente e sem confirmação", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     // Responsável pelo merge: vê Mergear, Tentar de novo (Approve pendente) e Cancelar.

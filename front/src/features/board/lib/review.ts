@@ -1,6 +1,6 @@
 import type { BadgeTone } from "@/components/ui/badge";
 import type {
-  CardPr, Finding, FindingSeverity, FindingStatus, Review, ReviewEvent, ReviewPhase, ReviewSummary, ReviewWorking,
+  CardPr, Finding, FindingSeverity, FindingStatus, MergeGate, Review, ReviewEvent, ReviewPhase, ReviewSummary, ReviewWorking,
 } from "@/api/types";
 
 /**
@@ -253,6 +253,14 @@ export function stuckItems(findings: Finding[]): Finding[] {
   );
 }
 
+/**
+ * The merge gate's verdict on the APPROVED commit, or undefined when it has none for it (never run,
+ * or a verdict on an older commit). What the merge button waits on: running and failed hold it. PURE.
+ */
+export function mergeGateOf(review: Pick<Review, "reviewedSha" | "mergeGate">): MergeGate | undefined {
+  return review.mergeGate && review.mergeGate.sha === review.reviewedSha ? review.mergeGate : undefined;
+}
+
 /** What the signed-in person may do to a review right now: their role AND the state it is in. */
 export interface ReviewActions {
   decide: boolean;
@@ -270,7 +278,8 @@ export interface ReviewActions {
  *    without one, no) — only in `ready`; each merges on their own GitHub connection;
  *  - **decide** (questions, stuck items): the reviewer or an owner, while the review is open to it;
  *  - **retry**: the reviewer, the merger, the co-author or an owner, for an impasse that is a FAILURE (not "rodadas",
- *    not a push after ready: those have no turn to hand back), a `ready` whose Approve never got out,
+ *    not a push after ready: those have no turn to hand back), a `ready` whose Approve never got out
+ *    or whose merge gate failed on the approved commit (retry runs the gate again),
  *    or a turn an AI may have dropped — `fixing`, or `reviewing` before the reviewer's round is in
  *    (after it, only doubts are left and the turn is the human's);
  *  - **cancel**: the reviewer, the author, the co-author, the merger or an owner, while the review is active;
@@ -281,7 +290,7 @@ export function reviewActions(
   review: Pick<
     Review,
     | "phase" | "round" | "lastSubmitRound" | "reviewerUserId" | "authorUserId" | "coauthorUserId" | "mergerUserId"
-    | "impasseReason" | "approvePending"
+    | "impasseReason" | "approvePending" | "reviewedSha" | "mergeGate"
   >,
   me: { id: string; isOwner: boolean } | null,
 ): ReviewActions {
@@ -295,11 +304,12 @@ export function reviewActions(
   const failedImpasse =
     phase === "impasse" && review.impasseReason !== IMPASSE_ROUNDS && review.impasseReason !== IMPASSE_HEAD_MOVED;
   const approveStuck = phase === "ready" && review.approvePending === true;
+  const gateFailed = phase === "ready" && mergeGateOf(review)?.state === "failed";
   const turnOpen = phase === "fixing" || (phase === "reviewing" && review.lastSubmitRound !== review.round);
   return {
     merge: hasRole && phase === "ready",
     decide: (isReviewer || me.isOwner) && (reviewIsWorking(phase) || phase === "impasse"),
-    retry: (isReviewer || isMerger || isCoauthor || me.isOwner) && (failedImpasse || approveStuck || turnOpen),
+    retry: (isReviewer || isMerger || isCoauthor || me.isOwner) && (failedImpasse || approveStuck || gateFailed || turnOpen),
     cancel: (hasRole || me.isOwner) && reviewIsOpen(phase),
     request: (hasRole || me.isOwner) && reviewIsOpen(phase),
   };

@@ -1585,6 +1585,8 @@ export const ptBR: Record<string, string> = {
   "review.merge.expired": "Não deu pra confirmar o merge — confira no GitHub",
   "review.merge.stopped": "O merge parou no servidor antes de terminar (o vibehub reiniciou ou recusou no caminho). Confira o PR antes de tentar de novo.",
   "review.merge.error.not_ready": "A revisão não está mais pronta pra merge. A tela foi atualizada.",
+  "review.mergeGate.running": "Rodando os testes do merge no commit aprovado: o botão libera quando terminarem.",
+  "review.mergeGate.failed": "Os testes do merge falharam no commit aprovado. A IA do autor recebeu a falha; depois da correção, \"Tentar de novo\" roda os testes outra vez.",
   "review.retry": "Tentar de novo",
   "review.cancel": "Cancelar revisão",
   "review.cancel.confirm": "Cancelar a revisão do PR #{num}? As IAs param e o PR fica sem revisão.",

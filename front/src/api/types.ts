@@ -633,10 +633,21 @@ export interface Review extends ReviewSummary {
   prHeadSha?: string;
   impasseReason?: string;
   approvePending?: boolean;
+  /** The merge gate, run on the approved commit as soon as the review is ready (only valid for its `sha`). */
+  mergeGate?: MergeGate;
   /** The round the reviewer's AI last handed back: below `round`, the reviewer's turn is still open. */
   lastSubmitRound?: number;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface MergeGate {
+  sha: string;
+  state: "running" | "passed" | "failed";
+  /** The failing gate's output (redacted, capped). */
+  output?: string;
+  at: number;
+  autoRetried?: true;
 }
 
 /** Whether each side's AI is in a turn RIGHT NOW (the card's status), as `GET /cards/:id/review` reads it. */

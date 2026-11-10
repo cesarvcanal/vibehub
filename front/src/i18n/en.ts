@@ -1573,6 +1573,8 @@ export const en: Record<string, string> = {
   "review.merge.expired": "Could not confirm the merge — check GitHub",
   "review.merge.stopped": "The merge stopped on the server before finishing (vibehub restarted or refused it on the way). Check the PR before trying again.",
   "review.merge.error.not_ready": "The review is no longer ready to merge. The screen was refreshed.",
+  "review.mergeGate.running": "Running the merge checks on the approved commit: the button opens up when they finish.",
+  "review.mergeGate.failed": "The merge checks failed on the approved commit. The author's AI got the failure; once it is fixed, \"Try again\" runs them again.",
   "review.retry": "Try again",
   "review.cancel": "Cancel review",
   "review.cancel.confirm": "Cancel the review of PR #{num}? The AIs stop and the PR is left without a review.",
