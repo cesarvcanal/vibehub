@@ -79,8 +79,14 @@ export function useSeletorBranch({
     if (evento.key === "Escape" && aberto) fechar();
   };
 
+  // Clicar na barra de rolagem do diálogo (ou num espaço vazio dele) passa o foco ao próprio
+  // diálogo, que é ancestral do seletor: isso é rolar para ver a lista, não sair dela.
   const fecharAoPerderFoco = (evento: React.FocusEvent) => {
-    if (!containerRef.current?.contains(evento.relatedTarget as Node | null)) fechar();
+    const destino = evento.relatedTarget;
+    const container = containerRef.current;
+    if (!container || !(destino instanceof Node)) return fechar();
+    if (container.contains(destino) || destino.contains(container)) return;
+    fechar();
   };
 
   const selecionada = classificadas.destacadas.find((b) => b.nome === valor)

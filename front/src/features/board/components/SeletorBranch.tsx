@@ -58,7 +58,9 @@ export default function SeletorBranch({
       data-seletor-branch-aberto={seletor.aberto || undefined}
       onKeyDown={seletor.fecharNoEsc}
       onBlur={seletor.fecharAoPerderFoco}
-      className="space-y-1.5"
+      // Sem conter a largura, o nome de branch mais longo (texto sem quebra) vira a largura mínima
+      // da coluna do grid do Dialog, que estoura para o lado e ganha rolagem horizontal.
+      className="space-y-1.5 [contain:inline-size]"
     >
       <button
         id={id}
