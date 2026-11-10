@@ -493,7 +493,7 @@ describe("sdk-driver.mjs — ultrathink / ultracode", () => {
 
   it("a mensagem NUNCA é engolida por uma escalada que falhou (o push mora no finally)", () => {
     const send = source.slice(source.indexOf("function sendUser(text)"));
-    const tryAt = send.indexOf("await inEffortQueue(() => raiseUltra(ultra, true));");
+    const tryAt = send.indexOf("await inEffortQueue(() => raiseUltra(ultra, true, keyword));");
     const finallyAt = send.indexOf("} finally {");
     const pushAt = send.indexOf("myChannel.push(userMessage(text));", finallyAt);
     expect(tryAt).toBeGreaterThan(0);

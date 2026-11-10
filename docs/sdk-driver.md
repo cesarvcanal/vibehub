@@ -418,7 +418,11 @@ nível entra na hora, sai do registro da palavra (`ultraRaised`), e a devoluçã
 só o `ultracode`, se houver. Nesse momento o driver emite `keyword_effort_replaced` (vai ao
 navegador, não ao histórico), e a barra de atividade do chat deixa de dizer "esforço alto". Quem
 sabe se a troca veio antes ou depois da palavra é o driver, que serializa as duas; o relógio do
-navegador não sabe. O "ultracode" continua, porque a orquestração segue ligada.
+navegador não sabe. O "ultracode" continua, porque a orquestração segue ligada. O aviso só sai
+quando o nível tirado é o da mensagem com a palavra mais NOVA (o driver numera essas mensagens na
+chegada): uma troca presa na fila que cai depois do fim do turno, com a mensagem seguinte (também
+com a palavra) já enviada, acha ainda o `max` do turno velho, e avisar ali apagaria a barra da
+mensagem nova, que a escalada dela põe em `max` logo depois.
 
 Com a fila do nível ocupada (uma troca, a devolução do turno anterior), a escalada de uma corrente
 viva espera a vez e pode cair uma ou duas chamadas depois do início do turno. É deliberado: segurar

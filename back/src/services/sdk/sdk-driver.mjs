@@ -1460,6 +1460,14 @@ function ultraKeywords(text) {
  */
 let ultraRaised = null;
 
+/**
+ * Keyword messages received so far, numbered as they ARRIVE, and the one whose raise `ultraRaised`
+ * holds. A raise may run later than its message, behind a slow write in the effort queue, so only
+ * these numbers say which message a pinned level belongs to (see setCardEffort).
+ */
+let keywordMessages = 0;
+let ultraRaisedFor = 0;
+
 /** How long the first message of a fresh stream waits for the CLI to boot before going anyway. */
 const ULTRA_INIT_TIMEOUT_MS = 10_000;
 
@@ -1497,9 +1505,10 @@ async function sessionReady(handle) {
  * optional and a failure at any of them must NEVER cost the message — an older CLI without
  * `applyFlagSettings`, an account whose plan caps effort below `max`, a session with dynamic
  * workflows switched off (which is what refuses `ultracode`) all fall through to the next weaker
- * attempt and finally to sending the message exactly as it would have gone anyway.
+ * attempt and finally to sending the message exactly as it would have gone anyway. `keyword` is the
+ * number of the message that asked for it (keywordMessages).
  */
-async function raiseUltra(kinds, waitForInit) {
+async function raiseUltra(kinds, waitForInit, keyword) {
   const handle = currentQuery;
   if (!handle || typeof handle.applyFlagSettings !== "function") return;
   // A CLI that never answered the handshake still gets the attempt: the message goes either way.
@@ -1516,6 +1525,7 @@ async function raiseUltra(kinds, waitForInit) {
     try {
       await withDeadline(handle.applyFlagSettings(settings), EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR);
       ultraRaised = settings;
+      ultraRaisedFor = keyword;
       return;
     } catch { /* try the next, weaker one */ }
   }
@@ -1647,9 +1657,13 @@ async function setCardEffort(level, switching) {
   if (ultraRaised && "effortLevel" in ultraRaised) {
     const { effortLevel: _keywordEffort, ...keywordRest } = ultraRaised;
     ultraRaised = Object.keys(keywordRest).length > 0 ? keywordRest : null;
-    // The chat's bar says "high effort" for this turn; only the driver knows whether the switch came
-    // before or after the keyword, so it is the driver that tells the bar the keyword lost its level.
-    emit({ type: "keyword_effort_replaced" });
+    // The chat's bar says "high effort" for the newest keyword message; only the driver knows whether
+    // the switch came before or after the keyword, so it is the driver that tells the bar the keyword
+    // lost its level. Only when the level replaced IS the newest message's: an older one still pinned
+    // (its give-back queued behind this switch) belongs to a turn the bar no longer shows, and the
+    // newer message's raise is still to come, behind this switch (review do PR #259, f12: the notice
+    // switched off the bar of a message that ran on `max` right after).
+    if (ultraRaisedFor === keywordMessages) emit({ type: "keyword_effort_replaced" });
   }
   return { effort: (await sessionEffort(handle)) ?? EFFORT ?? undefined };
 }
@@ -1771,14 +1785,16 @@ function sendUser(text) {
     // raise waits its turn and may land a call or two into the turn: a deliberate trade. Holding the
     // push for it would let the NEXT message, pushed at once, overtake this one; the queue bounds the
     // wait to that write's own deadlines, and the turn still ends up on the keyword's level.
-    void inEffortQueue(() => raiseUltra(ultra, false));
+    const keyword = ++keywordMessages;
+    void inEffortQueue(() => raiseUltra(ultra, false, keyword));
     myChannel.push(userMessage(text));
   } else {
     // The FIRST message of a fresh stream has to wait for the CLI to exist. The push moves into
     // the continuation — `finally`, so no failure up there can ever swallow the message.
+    const keyword = ++keywordMessages;
     void (async () => {
       try {
-        await inEffortQueue(() => raiseUltra(ultra, true));
+        await inEffortQueue(() => raiseUltra(ultra, true, keyword));
       } finally {
         myChannel.push(userMessage(text));
       }
