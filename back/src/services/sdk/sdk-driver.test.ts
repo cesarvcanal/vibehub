@@ -358,6 +358,18 @@ async function releaseSlowTurn(): Promise<void> {
   await writeFile(join(sandbox, "release-slow"), "");
 }
 
+/**
+ * The marks starting with `prefix`, once there are `count` of them. The marks (stderr) and the events
+ * (stdout) are separate pipes: a mark the fake wrote BEFORE an event can still reach the test after it.
+ */
+async function marksOnceThere(driver: RunningDriver, prefix: string, count: number): Promise<string[]> {
+  for (;;) {
+    const found = driver.marks.filter((m) => m.startsWith(prefix));
+    if (found.length >= count) return found;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
 /** A line-fed list that can be waited on: `wait` resolves with the first item (from `from` on) that matches. */
 function waitableLines<T>(stream: NodeJS.ReadableStream, parse: (line: string) => T | null) {
   const items: T[] = [];
@@ -1331,7 +1343,7 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     from = driver.events.length;
     driver.send({ type: "user", text: "depois" });
     await driver.waitFor((e) => e.type === "result", from);
-    expect(driver.marks.filter((m) => m.startsWith("effort:"))).toEqual(["effort:none", "effort:low", "effort:low"]);
+    expect(await marksOnceThere(driver, "effort:", 3)).toEqual(["effort:none", "effort:low", "effort:low"]);
     expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual([]);
   }, 60_000);
 
@@ -1364,7 +1376,7 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     const ack = await driver.waitFor((e) => e.type === "effort_ack" && e.id === "aceita-no-velho");
     expect(ack.effort).toBeUndefined();
     expect(String(ack.error)).toMatch(/previous level/);
-    expect(driver.marks.filter((m) => m.startsWith("effort:"))).toEqual(["effort:none", "effort:low", "effort:low"]);
+    expect(await marksOnceThere(driver, "effort:", 3)).toEqual(["effort:none", "effort:low", "effort:low"]);
   }, 60_000);
 
   it("um stream novo nasce enquanto a troca espera o CLI do que caiu: recusada pelo velho, ela também não é confirmada", async () => {
@@ -1383,7 +1395,7 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     expect(await driver.waitFor((e) => e.type === "effort_ack" && e.id === "sem-sucessor"))
       .toEqual({ type: "effort_ack", id: "sem-sucessor", effort: "high" });
     await runTurn(driver, "depois");
-    expect(driver.marks.filter((m) => m.startsWith("effort:"))).toEqual(["effort:none", "effort:low", "effort:high"]);
+    expect(await marksOnceThere(driver, "effort:", 3)).toEqual(["effort:none", "effort:low", "effort:high"]);
   }, 60_000);
 
   it("um nível que não existe não chega ao CLI", async () => {
