@@ -1,8 +1,11 @@
 import * as React from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
-import { Bell, Bot, Check, ChevronRight, Copy, FileText, Loader2, MessageSquare, TerminalSquare, UserRound, Wrench } from "lucide-react";
+import {
+  Bell, Bot, Check, ChevronRight, Copy, Download, FileAudio, FileSpreadsheet, FileText, Loader2, MessageSquare, TerminalSquare,
+  UserRound, Wrench,
+} from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
@@ -10,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { wsUrl } from "@/lib/ws";
 import { apiErrorMessage } from "@/lib/apiError";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useAuth } from "@/providers/auth";
 import { boardApi } from "@/features/board/api";
 import { cardHref } from "@/features/board/lib/board";
@@ -35,6 +39,8 @@ import {
   remarkEscapeHtml,
   remarkPreviewPaths,
   safeUrl,
+  anexoEhAudio,
+  anexoTemPreview,
   uploadDisplayName,
   uploadImageUrl,
 } from "@/features/board/lib/markdown";
@@ -725,6 +731,12 @@ function UploadedImage({ cardId, file, compact = false }: { cardId: string; file
  * cheap way to know before the click, and the name in the chip is still the truth.
  */
 function UploadedFile({ cardId, file }: { cardId: string; file: string }) {
+  if (anexoEhAudio(file)) return <AudioAnexado cardId={cardId} file={file} />;
+  if (anexoTemPreview(file)) return <DocumentoAnexado cardId={cardId} file={file} />;
+  return <ArquivoAnexado cardId={cardId} file={file} />;
+}
+
+function ArquivoAnexado({ cardId, file }: { cardId: string; file: string }) {
   const t = useT();
   return (
     <a
@@ -738,6 +750,92 @@ function UploadedFile({ cardId, file }: { cardId: string; file: string }) {
       <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
       <span className="truncate">{uploadDisplayName(file)}</span>
     </a>
+  );
+}
+
+/**
+ * Um áudio anexado (nota de voz do WhatsApp, gravação de reunião): toca ali mesmo. `preload="none"`
+ * porque uma conversa com dez áudios não deve baixar os dez ao abrir; o nome fica embaixo, que é o que
+ * diz qual áudio é. Quem transcreve é o agente (vibehub_transcribe_audio), não o chat.
+ */
+function AudioAnexado({ cardId, file }: { cardId: string; file: string }) {
+  const t = useT();
+  return (
+    <span className="my-1 inline-flex max-w-full flex-col gap-1 align-middle" data-testid="chat-audio">
+      <audio controls preload="none" src={uploadImageUrl(cardId, file)} className="h-9 max-w-full" aria-label={t("chat.attachedAudio")} />
+      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+        <FileAudio className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        <span className="truncate">{uploadDisplayName(file)}</span>
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Planilha, Word ou PowerPoint anexado: o navegador não abre, então o chip abre um preview com o texto
+ * que o runner extraiu (o mesmo que o agente lê) e o download continua a um clique. O texto só é
+ * buscado quando o preview abre.
+ */
+function DocumentoAnexado({ cardId, file }: { cardId: string; file: string }) {
+  const t = useT();
+  const [aberto, setAberto] = React.useState(false);
+  const nome = uploadDisplayName(file);
+  const Icone = /\.(?:xlsx|xlsm|xls|ods)$/.test(file) ? FileSpreadsheet : FileText;
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setAberto(true)}
+        title={t("chat.previewAttachedFile")}
+        data-testid="chat-file-preview"
+        className="my-0.5 mr-1 inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/70 bg-muted/40 px-2 py-1 align-middle text-xs hover:bg-muted"
+      >
+        <Icone className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        <span className="truncate">{nome}</span>
+      </button>
+      <Dialog open={aberto} onOpenChange={setAberto}>
+        <DialogContent className="flex max-h-[85vh] max-w-5xl flex-col">
+          <DialogHeader>
+            <DialogTitle className="truncate pr-6">{nome}</DialogTitle>
+            <DialogDescription className="flex items-center gap-3">
+              {t("chat.previewHint")}
+              <a href={uploadImageUrl(cardId, file)} download={nome} className="inline-flex items-center gap-1 underline">
+                <Download className="h-3.5 w-3.5" aria-hidden />
+                {t("chat.downloadAttachedFile")}
+              </a>
+            </DialogDescription>
+          </DialogHeader>
+          {aberto && <ConteudoDoPreview cardId={cardId} file={file} />}
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function ConteudoDoPreview({ cardId, file }: { cardId: string; file: string }) {
+  const t = useT();
+  const preview = useQuery({
+    queryKey: ["anexo-preview", cardId, file],
+    queryFn: () => boardApi.lerPreviewDeAnexo(cardId, file),
+    staleTime: Infinity,
+    retry: false,
+  });
+  if (preview.isPending) {
+    return (
+      <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+        {t("chat.previewLoading")}
+      </div>
+    );
+  }
+  if (preview.isError) {
+    return <p className="py-4 text-sm text-destructive">{apiErrorMessage(preview.error, t("chat.previewFailed"))}</p>;
+  }
+  return (
+    <div className="min-h-0 overflow-auto text-sm" data-testid="chat-file-preview-body">
+      {preview.data.texto ? <Markdown text={preview.data.texto} /> : <p className="text-muted-foreground">{t("chat.previewEmpty")}</p>}
+      {preview.data.truncado && <p className="mt-3 text-xs text-muted-foreground">{t("chat.previewTruncated")}</p>}
+    </div>
   );
 }
 
