@@ -241,13 +241,28 @@ export function query({ prompt, options }) {
   const handle = run();
   handle.interrupt = () => { mark("interrupt"); onInterrupt(); return interruptAnswer; };
   handle.supportedCommands = async () => [];
-  handle.initializationResult = async () => ({});
+  // "init-gate": a CLI that has not finished starting until "release-init" exists.
+  handle.initializationResult = async () => {
+    if (existsSync(join(options.cwd, "init-gate"))) {
+      mark("init:waiting");
+      while (!existsSync(join(options.cwd, "release-init"))) await sleep(20);
+      mark("init:answered");
+    }
+    return {};
+  };
   // The level in the flag layer: undefined = none; null = cleared, and the real CLI falls to the
   // MODEL's default. "flags-fail" in the sandbox is the session refusing the switch; "flags-hang", a
-  // control request written into a CLI that is not listening (it never answers).
+  // control request written into a CLI that is not listening (it never answers); "flags-gate-once",
+  // the first write that sees it answers only once "release-flags" exists (a slow CLI).
   let flagEffort;
   handle.applyFlagSettings = async (settings) => {
     mark("flags:" + JSON.stringify(settings));
+    const once = join(options.cwd, "flags-gate-once");
+    if (existsSync(once)) {
+      rmSync(once);
+      mark("flags-gate:waiting");
+      while (!existsSync(join(options.cwd, "release-flags"))) await sleep(20);
+    }
     if (existsSync(join(options.cwd, "flags-fail"))) throw new Error("control request failed");
     if (existsSync(join(options.cwd, "flags-hang"))) return new Promise(() => {});
     if ("effortLevel" in settings) flagEffort = settings.effortLevel;
@@ -326,7 +341,10 @@ afterEach(async () => {
   await rm(join(sandbox, "release-btw"), { force: true });
   await rm(join(sandbox, "account-effort"), { force: true });
   await rm(join(sandbox, "flags-fail"), { force: true });
-  for (const gate of ["flags-hang", "settings-hang", "settings-gate", "settings-gate-once", "release-settings"]) await rm(join(sandbox, gate), { force: true });
+  for (const gate of [
+    "flags-hang", "flags-gate-once", "release-flags", "init-gate", "release-init",
+    "settings-hang", "settings-gate", "settings-gate-once", "release-settings",
+  ]) await rm(join(sandbox, gate), { force: true });
   await rm(join(sandbox, "context-fail"), { force: true });
   await rm(join(sandbox, "context-hang"), { force: true });
 });
@@ -1254,6 +1272,31 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
       'flags:{"effortLevel":"high"}',
       'flags:{"effortLevel":"medium"}',
     ]);
+  }, 60_000);
+
+  it("uma troca que venceu o prazo de início não grava o nível nem quando o stream cai enquanto ela espera o CLI", async () => {
+    // Review do PR #259 (f14): a troca já respondida como erro ainda gravava o EFFORT se o stream
+    // caísse durante a espera pelo CLI, e o stream seguinte nascia no nível que ela não aplicou.
+    const driver = startDriverWithEnv({ VIBEHUB_EFFORT_SWITCH_START_DEADLINE_MS: "300" }, ["--effort", "low"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "hello" });
+    await driver.waitFor((e) => e.type === "result");
+    await writeFile(join(sandbox, "init-gate"), "");
+    driver.send({ type: "set_effort", id: "sem-cli", effort: "high" });
+    await driver.waitMark("init:waiting");
+    const refused = await driver.waitFor((e) => e.type === "effort_ack" && e.id === "sem-cli");
+    expect(String(refused.error)).toMatch(/did not start/);
+
+    let from = driver.events.length;
+    driver.send({ type: "user", text: "bg-die" });
+    await driver.waitFor((e) => e.type === "result", from);
+    await writeFile(join(sandbox, "release-init"), "");
+    await driver.waitMark("init:answered");
+    from = driver.events.length;
+    driver.send({ type: "user", text: "depois" });
+    await driver.waitFor((e) => e.type === "result", from);
+    expect(driver.marks.filter((m) => m.startsWith("effort:"))).toEqual(["effort:none", "effort:low", "effort:low"]);
+    expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual([]);
   }, 60_000);
 
   it("um nível que não existe não chega ao CLI", async () => {

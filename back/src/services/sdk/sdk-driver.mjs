@@ -1618,11 +1618,13 @@ async function setCardEffort(level, switching) {
   };
   if (!handle || typeof handle.applyFlagSettings !== "function") return nextStreamTakesIt();
   const ready = await sessionReady(handle);
+  // Already answered as not applied: it touches nothing from here, the level kept for a next stream
+  // included.
+  if (switching.abandoned) return { error: EFFORT_SWITCH_START_ERROR };
   if (currentQuery !== handle) return nextStreamTakesIt();
   // Written into a CLI that is not listening, the switch would be lost and the session would stay
   // on the `--effort` it was born with.
   if (!ready) return { error: "the session has not finished starting" };
-  if (switching.abandoned) return { error: EFFORT_SWITCH_START_ERROR };
   const isLatestWrite = claimEffortWrite();
   switching.writing = true;
   try {
