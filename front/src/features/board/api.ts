@@ -11,6 +11,7 @@ import type {
   CardCapture,
   CardColumn,
   Credential,
+  GithubBranches,
   GithubConnection,
   GithubRepo,
   GithubState,
@@ -738,10 +739,10 @@ export const boardApi = {
     }).then((r) => (Array.isArray(r?.repos) ? r.repos : [])),
 
   githubBranches: (connection: string, owner: string, repo: string) =>
-    get<{ branches: string[] }>(
+    get<GithubBranches>(
       `/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches`,
       { params: connection ? { connection } : undefined },
-    ).then((r) => (Array.isArray(r?.branches) ? r.branches : [])),
+    ),
 };
 
 /* ---------------------------------------------------------------- helpers */
