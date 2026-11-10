@@ -68,7 +68,7 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 
 ## 5. Frontend, React e TypeScript
 
-1. **Exports nomeados**, que é o padrão do repositório. `export default` só onde uma ferramenta exige (stories, configs).
+1. **Código novo usa export nomeado**, a maioria do repositório. Os `export default` existentes (`App.tsx`, `BoardPage.tsx`, `LoginPage.tsx`, `SetupWizard.tsx` e outros) não são convertidos de carona (§12.6).
 2. **Componente focado em renderização e composição.** Regra de domínio vira função pura em `features/<área>/lib/*.ts`, com teste ao lado; orquestração com estado vira hook `use*.ts`; chamada HTTP fica em `api.ts` da feature.
 3. **Não criar hook artificial:** estado visual simples ou handler sem regra pode ficar no componente.
 4. **Contratos HTTP tipados num lugar só** (`front/src/api/types.ts`), espelhando o backend. Tipos locais de uma feature ficam fora do componente.
@@ -89,7 +89,7 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 - Contrato **interno** mudou: atualizar todos os consumidores na mesma alteração, sem `newField ?? oldField` nem shims automáticos.
 - **Dado persistido é contrato externo:** cada instalação auto-hospedada tem seu `board.json` e afins. Mudança de shape exige leitura compatível ou migração explícita e testada, nunca quebra silenciosa.
 - Contratos com terceiros (SDK e CLI do Claude, GitHub, Docker) seguem a especificação deles; mudança de versão exige conferir o comportamento real, não a memória.
-- Validar na entrada, com o padrão do ponto de entrada: ferramentas MCP com **zod** no schema da ferramenta; rotas HTTP chamam a função do registry/service que valida e lança, e a rota converte em 4xx (`badRequest`). Dentro do fluxo já validado, confiar no tipo.
+- Validar na entrada, com o padrão do ponto de entrada: ferramentas MCP com **zod** no schema da ferramenta; rotas HTTP chamam a função do registry/service que valida e lança, e a rota converte o erro de validação em 400 (e "not found" em 404). Dentro do fluxo já validado, confiar no tipo.
 - Comparar e referenciar entidades por **id**, nunca por nome ou título.
 - Centralizar enums e discriminantes (`as const` / union de literais). `switch` cobre todas as variantes; variante sem suporte falha visivelmente.
 - Campos opcionais novos ficam ausentes quando não informados, a menos que `null` seja um estado de domínio explícito.
@@ -98,7 +98,7 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 ## 7. Dados, fonte de verdade e consistência
 
 - Cada conceito tem uma **fonte de verdade identificável**. Não persistir cópias de valores que podem ser obtidos da fonte.
-- Gravação em disco passa pelo **store atômico** (`back/src/store/`). Não escrever arquivo de estado direto com `fs`.
+- Estado JSON do vibehub em `VIBEHUB_DATA_DIR` (`board.json` e afins) passa pelo **store** (`back/src/store/`: `JsonStore`, `writeFileAtomic`). Exceções intencionais ficam documentadas no próprio arquivo — ex.: os marcadores de `services/sdk/inflight.ts`, gravados com `writeFile` numa fila por card, e os arquivos que os scripts de `workspace.ts` gravam dentro do container.
 - **Não gravar durante leitura** para sincronizar cálculos.
 - Operações que podem rodar em paralelo ou repetir (hooks de status, retomada após deploy, deliver, provisionamento) precisam ser **idempotentes** e seguras em corrida. Vários cards trabalham ao mesmo tempo no mesmo runner.
 - Nunca introduzir migração, limpeza ou exclusão de dados reais (worktrees, transcripts, volumes, containers) sem avaliação, `dry-run` quando aplicável e autorização.
@@ -126,7 +126,7 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 
 ## 10. Segurança, autorização e escopo
 
-- **Dois níveis de acesso, decididos em `back/src/auth/`:** o que é da INSTALAÇÃO exige dono (`requireOwner`, em `session.ts`); o que é TRABALHO (projeto, card) segue o compartilhamento (`access.ts`) — `requireCardAccess` para ler, `requireCardWork` para mudar qualquer coisa. Toda rota nova usa um desses; nunca decidir acesso dentro do handler.
+- **Acesso decidido pelos preHandlers de `back/src/auth/`:** o que é da INSTALAÇÃO exige dono (`requireOwner`, em `session.ts`); o que é TRABALHO de um card segue o compartilhamento (`access.ts`) — `requireCardAccess` para ler, `requireCardWork` para mudar qualquer coisa; rota do próprio usuário, sem card (`/api/me/*`, listagens), exige só sessão (`requireSession`). Toda rota nova usa um desses. A checagem base vem do helper; filtro por usuário no handler (o que ele alcança, se é dono) só restringe o que o helper já liberou.
 - Permissão de leitura (`view`) nunca autoriza mutação. Listagens filtram pelo que o usuário alcança, não pelo que existe.
 - **Shell:** tudo que vira linha de `docker exec` ou script (ids de card, branch, sessão, container) é validado na fronteira e citado depois. Leia `back/src/runtime/host.ts` antes de montar um comando.
 - **Segredos por stdin, nunca argv** (`ps` é legível por todos). Credenciais moram no cofre criptografado (`back/src/secrets/`), nunca em log, resposta HTTP ou mensagem de erro.
@@ -148,7 +148,9 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 **Rodar testes no runner: curto, só do que você tocou.** A suíte inteira leva muitos minutos, disputa CPU com os outros cards e costuma ser morta por um deploy.
 
 1. **Enquanto trabalha:** só o arquivo do que mexeu, filtrado pelo caso — `cd back && npx vitest run src/services/sdk/manager.test.ts -t "órfã"`.
-2. **Antes de entregar:** `npm run test:changed` (raiz), o mesmo recorte do gate (`.vibehub/gate.json` → `scripts/gate-changed.sh`). Junto, o typecheck: `npx tsc -b` no pacote tocado — `tsc --noEmit -p` não checa nada aqui (o `tsconfig.json` é uma solution com project references).
+2. **Antes de entregar:** `npm run test:changed` (raiz), o mesmo recorte do gate (`.vibehub/gate.json` → `scripts/gate-changed.sh`). Junto, o typecheck do pacote tocado, o mesmo do CI:
+   - **front:** `npx tsc -b`. O `tsconfig.json` é uma solution com project references, então `tsc --noEmit -p` não checa nada e dá verde falso.
+   - **back:** `npx tsc --noEmit`. `tsc -b` emitiria JS em `back/dist`. O `tsconfig.json` do back exclui `*.test.ts`: erro de tipo em teste só aparece ao rodar o teste.
 3. **Nunca** `npm test` ou `npx vitest run` sem filtro no runner. A suíte inteira é do CI: confira com `gh pr checks <N>`.
 4. Teste de tempo (limite em ms) que falha de vez em quando sob carga não é regressão sua. Confirme rodando sem a sua mudança; se já era instável, diga no PR e siga.
 
@@ -182,7 +184,7 @@ Se um comando de teste for passar de ~2 min, troque por um recorte menor. Não a
 - [ ] Não dupliquei contrato, dado, estado ou fonte de verdade?
 - [ ] Dado persistido de instalações existentes continua legível?
 - [ ] Entrada validada na fronteira, shell citado, segredo fora de argv e de log?
-- [ ] Rota nova com `requireOwner` / `requireCardAccess` / `requireCardWork` adequado?
+- [ ] Rota nova com `requireOwner` / `requireCardAccess` / `requireCardWork` / `requireSession` adequado?
 - [ ] Operações repetíveis são idempotentes e seguras em corrida?
 - [ ] Rodei o recorte de testes e o `tsc -b`, e conferi o diff?
 - [ ] Afirmei apenas o que foi executado e verificado?
