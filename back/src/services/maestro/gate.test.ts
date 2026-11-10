@@ -386,6 +386,16 @@ describe("runGate reuses a GREEN verdict for the same commit on a clean tree", (
     expect(second.output).toContain("tests ran");
   });
 
+  it("every verdict names the commit it is about (the merge is pinned to it); unreadable = absent", async () => {
+    const { gate, card } = await cardFor();
+    probes = [probeOut(SHA_A, true), probeOut(SHA_A, true), '__VIBEHUB_GATE_JSON__\n{"checks":["npm test"]}', `head=${SHA_B}\n__VIBEHUB_GATE_JSON__\n`];
+    wireHost();
+    expect(await gate.runGate(card.id)).toMatchObject({ ran: true, headSha: SHA_A });
+    expect(await gate.runGate(card.id)).toMatchObject({ reused: true, headSha: SHA_A });
+    expect(await gate.runGate(card.id)).not.toHaveProperty("headSha");
+    expect(await gate.runGate(card.id)).toEqual({ ran: false, passed: true, output: "", headSha: SHA_B });
+  });
+
   it("a new commit runs the checks again", async () => {
     const { gate, card } = await cardFor();
     probes = [probeOut(SHA_A, true), probeOut(SHA_B, true)];

@@ -41,6 +41,11 @@ export interface GateResult {
   reused?: true;
   /** true = the checks hit `GATE_RUN_TIMEOUT_MS` and were KILLED inside the runner (a red verdict). */
   timedOut?: true;
+  /**
+   * The commit the verdict is about: the worktree's HEAD the probe read (the PR's head the CI was read
+   * on, in deliver.ts). Absent when it could not be read. A merge is pinned to it — nothing else.
+   */
+  headSha?: string;
 }
 
 /**
@@ -413,10 +418,11 @@ async function runGateNow(cardId: string): Promise<GateResult> {
   const probeOut = await hostExecutor().runScript(buildGateProbeScript(container, cwd), { timeoutMs: 30_000 });
   const probedAt = Date.now();
   const probe = parseGateProbe(probeOut.stdout);
+  const tested = probe.headSha ? { headSha: probe.headSha } : {};
   const plan = resolveGateChecks(probe);
   if (!plan.ran) {
     logger.info({ audit: true, action: "maestro.gate", card: card.worktreeSlug, ran: false }, "gate had nothing to run");
-    return { ran: false, passed: true, output: "" };
+    return { ran: false, passed: true, output: "", ...tested };
   }
 
   const reuseKey = gateReuseKey(probe, plan.checks);
@@ -426,7 +432,7 @@ async function runGateNow(cardId: string): Promise<GateResult> {
       { audit: true, action: "maestro.gate", card: card.worktreeSlug, ran: true, passed: true, reused: true, head: probe.headSha },
       "gate reused: same commit, clean tree, green moments ago",
     );
-    return { ran: true, passed: true, output: green.output, reused: true };
+    return { ran: true, passed: true, output: green.output, reused: true, ...tested };
   }
 
   const queuedAt = Date.now();
@@ -458,5 +464,5 @@ async function runGateNow(cardId: string): Promise<GateResult> {
     },
     timedOut ? "gate timed out — killed in the runner" : "gate ran",
   );
-  return { ran: true, passed, output: cleaned, ...(timedOut ? { timedOut: true as const } : {}) };
+  return { ran: true, passed, output: cleaned, ...(timedOut ? { timedOut: true as const } : {}), ...tested };
 }

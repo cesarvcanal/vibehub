@@ -39,7 +39,8 @@ import { logger } from "../../utils/logger.js";
  *      checks (gh SAYS so), the local gate runs as before (see gate.ts); a CI answer that could not be
  *      read is red, never "no CI". Red either way: STOP — do not merge.
  *   d. MERGE only when the caller passed `authorized: true` AND the gate is green. A merge commit,
- *      NEVER a squash.
+ *      NEVER a squash, pinned to the commit the gate passed on: a PR that moved meanwhile is
+ *      `head_moved`, never merged unchecked.
  *
  * `authorized` is the whole safety story: merging is deploying. The maestro persona passes it only
  * when the user named where to ship ("sobe pra dev"), and it is NEVER defaulted to true.
@@ -68,7 +69,10 @@ export type DeliverReason =
   | "push_failed"
   | "pr_failed"
   | "merge_failed"
-  /** Merge-only: the PR's head is not the commit the review approved (a push after `ready`). */
+  /**
+   * The PR's head is not the commit the merge is pinned to: the one the review approved (merge-only,
+   * a push after `ready`) or the one the gate passed on (a push while the gate ran). Nothing merged.
+   */
   | "head_moved"
   /** An authorized merge outside merge-only while the card has a PR review in progress. */
   | "review_active"
@@ -409,20 +413,29 @@ export function buildResolvePrScript(
 }
 
 /**
- * Script for step (d): merge the PR with a MERGE COMMIT (never squash). With `matchHead`, GitHub
- * itself refuses the merge if the PR's head is no longer that commit — the check and the merge are
- * one call, so a push landing between the gate and the merge cannot slip in. Emits
- * `__VIBEHUB_DELIVER__ merged` or `__VIBEHUB_DELIVER__ error merge`. PURE.
+ * Script for step (d): merge the PR with a MERGE COMMIT (never squash), ALWAYS pinned to `matchHead`
+ * — the commit the gate passed on. The CI wait can take 15 minutes, and a merge without the pin took
+ * whatever had been pushed to the PR meanwhile, unchecked. A PR already past it is answered as
+ * `__VIBEHUB_DELIVER__ error head_moved <sha>` without merging; for the push that lands between that
+ * read and the merge, GitHub itself refuses (`--match-head-commit`: the check and the merge are one
+ * call). Otherwise emits `__VIBEHUB_DELIVER__ merged` or `__VIBEHUB_DELIVER__ error merge`. PURE.
  */
 export function buildMergeScript(
-  containerName: string, cardId: string, token: string, cwd: string, prUrl: string, matchHead?: string,
+  containerName: string, cardId: string, token: string, cwd: string, prUrl: string, matchHead: string,
 ): string {
   assertSafeRemotePath(cwd);
-  const pin = matchHead ? ` --match-head-commit ${shQuote(matchHead)}` : "";
+  if (!FULL_SHA_RE.test(matchHead)) throw new Error("the merge must be pinned to the full sha the gate passed on");
+  const pin = shQuote(matchHead.toLowerCase());
   const body = [
     ...ghTokenPreamble(token),
     `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
-    `if gh pr merge ${shQuote(prUrl)} --merge${pin}; then echo "${MARKER} merged"; else echo "${MARKER} error merge"; fi`,
+    // stderr is not captured: it already goes to the output (`exec 2>&1`), and a warning there must not
+    // read as the PR having moved.
+    `if ! PH=$(gh pr view ${shQuote(prUrl)} --json headRefOid --jq .headRefOid) || [ -z "$PH" ]; then`,
+    `  echo "${MARKER} error merge"; exit 0;`,
+    `fi`,
+    `if [ "$PH" != ${pin} ]; then echo "${MARKER} error head_moved $PH"; exit 0; fi`,
+    `if gh pr merge ${shQuote(prUrl)} --merge --match-head-commit ${pin}; then echo "${MARKER} merged"; else echo "${MARKER} error merge"; fi`,
   ];
   return dockerBashScript(containerName, body);
 }
@@ -441,7 +454,8 @@ export const PR_WORKFLOWS_DETECT =
 
 /**
  * Script for step (c) when the PR has CI: wait for the PR to point at the pushed commit, read `gh pr
- * checks` until nothing is pending (or the wait runs out), then print the last JSON read and a marker. While checks have not been registered yet,
+ * checks` until nothing is pending (or the wait runs out), then print the last answer read and a marker
+ * naming the commit it is about (`__VIBEHUB_CI__ done <sha>`). While checks have not been registered yet,
  * a repo with workflows keeps asking for `CI_APPEAR_SECONDS`; one without stops at once.
  * `headSha` replaces the worktree's HEAD as "the pushed commit" in merge-only mode, where nothing was
  * pushed and the commit that counts is the reviewed one. PURE.
@@ -471,12 +485,14 @@ export function buildCiChecksScript(
     `  case "$J" in`,
     `    *'"bucket":"pending"'*) [ "$i" -lt ${rounds} ] || break ;;`,
     `    *"no checks reported"*) [ "$WF" = 1 ] && [ "$i" -lt ${appearRounds} ] || break ;;`,
+    // The verdict, or an error gh printed (502, rate limit): parseCiChecks tells them apart.
     `    *) break ;;`,
     `  esac`,
     `  sleep ${CI_POLL_SECONDS}`,
     `done`,
     `printf '%s\n' "$J"`,
-    `echo "${CI_MARKER} done"`,
+    // The commit these checks are about: the merge is pinned to it.
+    `echo "${CI_MARKER} done $HEAD"`,
   ];
   return dockerBashScript(containerName, body);
 }
@@ -484,7 +500,7 @@ export function buildCiChecksScript(
 /**
  * The CI verdict from what `gh pr checks --json name,bucket,link` printed:
  *  - `none`: gh said the PR has no checks ("no checks reported", or an empty list) — the local gate decides;
- *  - `pass`: every check passed or was skipped;
+ *  - `pass`: every check passed or was skipped — on `headSha`, the commit the script read them for;
  *  - `fail`: some check failed or was cancelled (named in `output`, each with its job link when GitHub
  *    gave one — the red then points straight at the log that failed);
  *  - `pending`: checks still running when the wait ran out, or the PR never moved to the pushed
@@ -493,7 +509,9 @@ export function buildCiChecksScript(
  *    was NOT read, so it is red, with what gh said. It used to be `none`: a 502 handed the PR to the
  *    local gate, which passes through in a repo with no local checks, and the PR merged unread. PURE.
  */
-export function parseCiChecks(stdout: string): { verdict: "none" | "pass" | "fail" | "pending" | "error"; output: string } {
+export function parseCiChecks(
+  stdout: string,
+): { verdict: "none" | "pass" | "fail" | "pending" | "error"; output: string; headSha?: string } {
   if (stdout.includes(`${CI_MARKER} stale`)) {
     return { verdict: "pending", output: "o PR ainda não aponta para o commit enviado — o CI dele não foi lido" };
   }
@@ -520,7 +538,8 @@ export function parseCiChecks(stdout: string): { verdict: "none" | "pass" | "fai
   }
   const pending = named(["pending"]);
   if (pending.length) return { verdict: "pending", output: `CI do PR ainda rodando: ${pending.join(", ")}` };
-  return { verdict: "pass", output: `CI do PR verde: ${checks.map((c) => c.name || "?").join(", ")}` };
+  const headSha = new RegExp(`${CI_MARKER} done ([0-9a-fA-F]{40,64})\\b`).exec(stdout)?.[1]?.toLowerCase();
+  return { verdict: "pass", output: `CI do PR verde: ${checks.map((c) => c.name || "?").join(", ")}`, ...(headSha ? { headSha } : {}) };
 }
 
 /**
@@ -549,11 +568,12 @@ export function parseResolvePr(
   return { ok: false, stage: err?.[1] ?? "unknown", output };
 }
 
-/** Parses the merge output. PURE. */
-export function parseMerge(stdout: string): { merged: boolean; output: string } {
+/** Parses the merge output; `movedTo` = the PR was already past the pinned commit (nothing merged). PURE. */
+export function parseMerge(stdout: string): { merged: boolean; output: string; movedTo?: string } {
   const merged = new RegExp(`${MARKER} merged`).test(stdout);
+  const moved = new RegExp(`${MARKER} error head_moved ([0-9a-fA-F]{40,64})\\b`).exec(stdout)?.[1];
   const output = stdout.replace(new RegExp(`${MARKER} (merged|error).*`, "g"), "").trimEnd();
-  return { merged, output };
+  return { merged, output, ...(moved ? { movedTo: moved.toLowerCase() } : {}) };
 }
 
 /** Which git stage failed maps to the reason a maestro reads. PURE. */
@@ -946,7 +966,7 @@ async function ciGate(
   );
   const ci = parseCiChecks(out.stdout);
   if (ci.verdict === "none") return null;
-  return { ran: true, passed: ci.verdict === "pass", output: ci.output };
+  return { ran: true, passed: ci.verdict === "pass", output: ci.output, ...(ci.headSha ? { headSha: ci.headSha } : {}) };
 }
 
 /**
@@ -1200,15 +1220,31 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     };
   }
 
+  // The merge goes out pinned to the commit the gate passed on — the reviewed one in merge-only. A
+  // green that cannot say which commit it was about has nothing to pin the merge to.
+  const pin = mergeOnly ? expectedHead : gate.headSha;
+  if (!pin) {
+    logger.warn({ card: card.worktreeSlug }, "deliver refused to merge: the gate did not say which commit it passed on");
+    return {
+      prUrl, merged: false, reason: "gate", branch: target, cardBranch: source, ...lock, ...commented,
+      output: "o gate não disse em que commit passou (o HEAD da worktree não foi lido): sem ele o merge não tem a que se prender",
+    };
+  }
   const mergeOut = await hostExecutor().runScript(
-    buildMergeScript(container, card.id, token, cwd, prUrl, mergeOnly ? expectedHead : undefined),
+    buildMergeScript(container, card.id, token, cwd, prUrl, pin),
     { timeoutMs: 120_000 },
   );
-  const { merged, output } = parseMerge(mergeOut.stdout);
+  const { merged, output, movedTo } = parseMerge(mergeOut.stdout);
   logger.info(
-    { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged, target, mergeOnly, by: opts.by },
+    { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged, target, mergeOnly, pin, ...(movedTo ? { movedTo } : {}), by: opts.by },
     merged ? "deliver merged the PR" : "deliver could not merge the PR",
   );
+  if (movedTo) {
+    return {
+      prUrl, merged: false, reason: "head_moved", branch: target, cardBranch: source, ...lock, ...commented,
+      output: `o PR está em ${movedTo.slice(0, 7)}, ${mergeOnly ? "a revisão aprovou" : "o gate passou em"} ${pin.slice(0, 7)}`,
+    };
+  }
   if (!merged) {
     return { prUrl, merged, reason: "merge_failed", branch: target, cardBranch: source, ...lock, ...commented, output: cleanOutput(output) };
   }
