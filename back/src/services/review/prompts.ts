@@ -1,3 +1,4 @@
+import { defuseUltraWords } from "../../utils/ultraWords.js";
 import { autoMergeEligible, waivedText, MAX_ROUNDS, pendingQuestions, type Finding, type FindingStatus, type Review } from "./model.js";
 
 /**
@@ -34,6 +35,15 @@ export function indentedBlock(text: string | undefined, indent: string, max = 20
   return capped.split("\n").map((l) => l.trimEnd()).filter((l, i, all) => l !== "" || (all[i - 1] ?? "") !== "").join(`\n${indent}`);
 }
 
+/**
+ * O que a outra IA ou uma pessoa escreveu, como entra no texto digitado no card: numa linha (ou em
+ * bloco) e com `ultrathink`/`ultracode` desarmados, que ali são citação, não pedido do turno. O molde
+ * (branch, sha, comandos) não passa por aqui: desarmá-lo trocaria a branch do push. PURE.
+ */
+const quoted = (text: string | undefined, max?: number): string => defuseUltraWords(oneLine(text, max));
+const quotedBlock = (text: string | undefined, indent: string, max?: number): string =>
+  defuseUltraWords(indentedBlock(text, indent, max));
+
 const STATUS_PT: Record<FindingStatus, string> = {
   open: "aberto",
   fixed: "corrigido",
@@ -62,6 +72,10 @@ function rules(): string {
       "arquivo:linha. Bug no código deste PR (comportamento errado, falha, quebra, brecha de segurança, perda de dado, " +
       "regressão) TEM essa prova: é bloqueante e se resolve neste PR, nunca sugestão. Sugestão é só o que não é bug no " +
       "escopo (estilo, nome, refatoração, melhoria opcional, problema antigo fora do diff): aparece, não bloqueia, não abre rodada.",
+    // Medido nos transcripts das revisões do erp-aux (PRs #599, #605, #624, #627): a maior parte da rodada
+    // ia em comando de 5 a 10 minutos (suíte inteira, `npm ci`, `tsc --force`), um atrás do outro.
+    "- Teste por recorte: rode só os testes do que o PR tocou (o arquivo ou a pasta). A suíte inteira é do CI: confira " +
+      "com `gh pr checks`. Comando que passaria de uns 3 minutos troca por um recorte menor.",
   ].join("\n");
 }
 
@@ -69,7 +83,7 @@ const where = (f: Finding): string => (f.file ? (f.line ? `${f.file}:${f.line}` 
 
 function proofText(f: Finding): string {
   if (!f.proof) return "sem prova";
-  const detail = f.proof.detail ? ` — ${oneLine(f.proof.detail, 200)}` : "";
+  const detail = f.proof.detail ? ` — ${quoted(f.proof.detail, 200)}` : "";
   return `${f.proof.kind} ${oneLine(f.proof.ref, 160)}${detail}`;
 }
 
@@ -80,13 +94,13 @@ function findingLine(f: Finding): string {
     f.severity, STATUS_PT[f.status], f.humanDecision ? `decisão humana: ${f.humanDecision}` : "",
     f.requested ? `pedida ao autor por ${oneLine(f.requested.by, 60)}` : "",
   ].filter(Boolean);
-  const head = `- ${f.id} [${tags.join(", ")}] ${oneLine(f.title, 200)}${loc ? ` (${loc})` : ""}`;
+  const head = `- ${f.id} [${tags.join(", ")}] ${quoted(f.title, 200)}${loc ? ` (${loc})` : ""}`;
   const parts = [`prova: ${proofText(f)}`];
-  if (f.authorReply !== undefined) parts.push(`autor: "${oneLine(f.authorReply)}"${f.commit ? ` (commit ${oneLine(f.commit, 60)})` : ""}`);
-  if (f.reviewerReply !== undefined) parts.push(`revisor: "${oneLine(f.reviewerReply)}"`);
+  if (f.authorReply !== undefined) parts.push(`autor: "${quoted(f.authorReply)}"${f.commit ? ` (commit ${oneLine(f.commit, 60)})` : ""}`);
+  if (f.reviewerReply !== undefined) parts.push(`revisor: "${quoted(f.reviewerReply)}"`);
   const blocks = [
-    f.problem ? `\n    problema: ${indentedBlock(f.problem, "      ")}` : "",
-    f.fix ? `\n    como resolver: ${indentedBlock(f.fix, "      ")}` : "",
+    f.problem ? `\n    problema: ${quotedBlock(f.problem, "      ")}` : "",
+    f.fix ? `\n    como resolver: ${quotedBlock(f.fix, "      ")}` : "",
   ].join("");
   return `${head}\n    ${parts.join("; ")}${blocks}`;
 }
@@ -456,7 +470,7 @@ export function authorMergeGatePrompt(r: Review): string {
     rules(),
     "",
     "Saída do gate:",
-    indentedBlock(r.mergeGate?.output, "  ", 4000),
+    quotedBlock(r.mergeGate?.output, "  ", 4000),
     "",
     "O que fazer:",
     "1. Leia a causa. Dependência faltando ou comando não encontrado é a worktree: rode npm install (na raiz e nos " +

@@ -658,6 +658,12 @@ describe("buildOrphanAnswerText", () => {
     expect(text).toMatch(/não vai chegar/);
     expect(buildOrphanAnswerText([{ question: "A?", options: [] }], [{ selected: ["sim"] }])).not.toMatch(/segundo plano/);
   });
+
+  it("comando citado com palavra reservada vai desarmado; a resposta da pessoa vai como ela escreveu", () => {
+    const text = buildOrphanAnswerText([{ question: "A?", options: [] }], [{ selected: ["ultrathink"] }], ["grep ultracode src"]);
+    expect(text).toContain("- grep ultra-code src");
+    expect(text).toContain("«A?» → ultrathink");
+  });
 });
 
 describe("mergePeerAnswers / buildLateAnswerText — várias pessoas no mesmo cartão", () => {
