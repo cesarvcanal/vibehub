@@ -2650,6 +2650,39 @@ describe("SdkChatView — the activity bar", () => {
     await waitFor(() => expect(screen.queryByTestId("sdk-activity-effort")).toBeNull());
   });
 
+  it("o nível trocado no pill no meio de um turno ultrathink tira o 'esforço alto' da barra", async () => {
+    // A troca no meio do turno vale na hora e vence a palavra (sdk-driver.mjs, setCardEffort): a
+    // barra não pode seguir dizendo que o turno roda em esforço alto.
+    const view = renderSdkChat({ effortAt: 1_000 });
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+
+    const field = screen.getByRole("textbox");
+    fireEvent.change(field, { target: { value: "ultrathink revisa o pdv" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    await waitFor(() => expect(screen.getByTestId("sdk-activity-effort")).toHaveTextContent("high effort"));
+
+    view.rerender(<SdkChatView cardId="c1" effortAt={2_000} />);
+    await waitFor(() => expect(screen.queryByTestId("sdk-activity-effort")).toBeNull());
+    expect(screen.getByTestId("sdk-activity-bar")).toBeInTheDocument();
+  });
+
+  it("o ultracode segue na barra depois de uma troca de nível — a orquestração continua ligada", async () => {
+    const view = renderSdkChat({ effortAt: 1_000 });
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+
+    const field = screen.getByRole("textbox");
+    fireEvent.change(field, { target: { value: "ultracode revisa o pdv" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    await waitFor(() => expect(screen.getByTestId("sdk-activity-effort")).toHaveTextContent("ultracode"));
+
+    view.rerender(<SdkChatView cardId="c1" effortAt={2_000} />);
+    expect(screen.getByTestId("sdk-activity-effort")).toHaveTextContent("ultracode");
+  });
+
   it("a click on the bar goes to the live edge of the conversation", async () => {
     renderSdkChat();
     const ws = await socket();

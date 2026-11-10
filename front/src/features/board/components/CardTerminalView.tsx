@@ -1239,6 +1239,7 @@ export function CardTerminalView({
                 onUploadImage={uploadAttachment}
                 onStatus={setConnection}
                 terminalWorking={working}
+                effortAt={card?.effortAt}
                 footer={prBlocks}
                 ariaLabel={t("chat.ariaFor", { title: card?.title ?? t("cardView.cardFallback") })}
               />

@@ -205,6 +205,12 @@ export interface SdkChatViewProps {
    *  espelha e o driver não diz nada): é a única fonte de que aquele turno ainda está de pé. */
   terminalWorking?: boolean;
   /**
+   * QUANDO a inteligência do card foi trocada pela última vez (`effortAt` do card, relógio do
+   * servidor). Uma troca no meio de um turno `ultrathink` vale na hora e vence a palavra, e a barra
+   * deixa de dizer "esforço alto" a partir dela.
+   */
+  effortAt?: number;
+  /**
    * Rendered right above the composer: what belongs to the CARD and not to the conversation (the
    * PR blocks). The composer lives in here, so this is the only way to sit next to it from outside.
    */
@@ -221,7 +227,7 @@ function ownSends(outbox: readonly OutboxMessage[], viewer: string | undefined):
   return outbox.filter((m) => !m.from || m.from.name === viewer);
 }
 
-export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, terminalWorking = false, footer, ariaLabel, className }: SdkChatViewProps) {
+export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, terminalWorking = false, effortAt, footer, ariaLabel, className }: SdkChatViewProps) {
   const t = useT();
   // Whose screen this is — the edit affordance belongs only to one's own messages.
   const me = useAuth().user;
@@ -237,6 +243,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   );
   const selfOriginRef = React.useRef(selfOrigin);
   selfOriginRef.current = selfOrigin;
+  const effortAtRef = React.useRef(effortAt);
+  effortAtRef.current = effortAt;
   /**
    * The account this socket speaks for. The back stamps the author ONCE per connection, so a switch
    * of account (SessionGuard revalidates `/auth/me` on focus) must open a NEW connection — the
@@ -809,8 +817,11 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   const [editing, setEditing] = React.useState<{ rowId: string; original: string } | null>(null);
   /** An edit waiting for the interrupted turn to END (its result/aborted) before it goes. */
   const [pendingEdit, setPendingEdit] = React.useState<{ original: string; text: string; cid: string; first: boolean } | null>(null);
-  /** The reserved word the CURRENT turn was sent with — what the activity bar reports as effort. */
-  const [escalation, setEscalation] = React.useState<{ ultrathink: boolean; ultracode: boolean } | null>(null);
+  /**
+   * The reserved word the CURRENT turn was sent with — what the activity bar reports as effort — and
+   * the card's `effortAt` at that moment: a level switched after it took the turn off `max`.
+   */
+  const [escalation, setEscalation] = React.useState<{ ultrathink: boolean; ultracode: boolean; effortAt?: number } | null>(null);
 
   /** Stop the running turn. `reason` tells the back which note narrates the cut. */
   const sendInterrupt = React.useCallback(
@@ -950,7 +961,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
       // barra de atividade é onde isso fica visível — o painel escalava em silêncio. Lido na
       // entrega, não na digitação: uma mensagem que esperou escala o turno que ELA abre.
       const ultra = ultraKeywords(text);
-      setEscalation(ultra.ultrathink || ultra.ultracode ? ultra : null);
+      setEscalation(ultra.ultrathink || ultra.ultracode ? { ...ultra, effortAt: effortAtRef.current } : null);
       // Drawn FIRST, as "sending": the bubble exists the instant it goes, but it only claims to be
       // sent when the back says it gravou (`user_ack`) — see lib/sdkOutbox.ts. `awaiting` starts
       // the status ladder: "Preparando…"/"Pensando…" until the driver's first event.
@@ -1459,6 +1470,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   React.useEffect(() => {
     if (!working) setEscalation(null);
   }, [working]);
+  // O ultracode segue ligado depois de uma troca de nível; o "esforço alto" do ultrathink, não.
+  const escalacaoVigente = escalation && (escalation.ultracode || escalation.effortAt === effortAt) ? escalation : null;
 
   // O MEDIDOR DE CONTEXTO fecha a linha do fim do log, à direita. Se ela é a resposta fechada, ele
   // entra NA linha do copiar/ouvir (mesma altura, nada flutuando). Com o "Trabalhando…" (que trunca
@@ -1497,7 +1510,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
           <SdkActivityBar
             activity={activity}
             startedAt={workStartedAt}
-            escalation={escalation}
+            escalation={escalacaoVigente}
             awaiting={state.awaiting}
             ready={state.ready}
             onJump={stick.scrollToBottom}
@@ -1574,7 +1587,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
             activity={activity}
             awaiting={state.awaiting}
             ready={state.ready}
-            escalation={escalation}
+            escalation={escalacaoVigente}
             detail={liveActivityDetail(state)}
           />
         ) : null}
