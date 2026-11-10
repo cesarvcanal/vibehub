@@ -1049,6 +1049,16 @@ async function runStream() {
         } else if (msg.subtype === "task_started" || msg.subtype === "task_progress" || msg.subtype === "task_notification") {
           const frame = taskFrame(msg);
           if (frame) emit(frame);
+        } else if (msg.subtype === "status") {
+          // A COMPACTAÇÃO (o /compact, ou a automática quando a janela enche): o CLI passa segundos
+          // ou minutos resumindo a conversa sem soltar uma palavra no stream — sem isto o chat lia
+          // aquilo como um turno travado. O fim bom vem pelo `compact_boundary`, com os números.
+          if (msg.status === "compacting") compactionStarted();
+          else if (msg.compact_result === "failed") {
+            compactionEnded({ phase: "failed", error: typeof msg.compact_error === "string" && msg.compact_error ? msg.compact_error : "falhou" });
+          }
+        } else if (msg.subtype === "compact_boundary") {
+          compactionEnded(compactionDone(msg.compact_metadata));
         } else if (msg.subtype === "local_command_output" && typeof msg.content === "string") {
           // A command the CLI answers itself (/cost, /usage): no turn, no assistant message — the
           // answer exists ONLY here, and swallowing it makes the command look broken.
@@ -1140,6 +1150,7 @@ async function runStream() {
         if (msg.session_id) lastSessionId = msg.session_id;
         turnActive = false;
         turnEnded();
+        settleCompaction();
         void clearUltra(); // the keyword was for THIS turn
         // An ABORTED turn is not a failed one: the turn ends because someone stopped it (the stop
         // button, an edit, a deploy), and the conversation already says so in its own words.
@@ -1260,9 +1271,45 @@ async function emitContextUsage(handle, force) {
  */
 function closeTurnAborted() {
   turnEnded();
+  settleCompaction();
   if (!turnActive) return;
   turnActive = false;
   emit({ type: "result", subtype: "aborted", isError: false, sessionId: lastSessionId });
+}
+
+/* ----------------------------------------------------- a compactação da conversa */
+// Uma linha por compactação: o CLI repete o status "compacting" enquanto trabalha, e a tela só
+// precisa saber que começou e como acabou.
+let compacting = false;
+
+function compactionStarted() {
+  if (compacting) return;
+  compacting = true;
+  emit({ type: "compaction", phase: "started" });
+}
+
+/** Fecha a linha. Um `done` vale mesmo sem `started` (o CLI pode compactar sem anunciar o status). */
+function compactionEnded(frame) {
+  if (!compacting && frame.phase === "failed") return;
+  compacting = false;
+  emit({ type: "compaction", ...frame });
+}
+
+/** O `done` a partir do `compact_metadata` do CLI — só os números que vieram. */
+function compactionDone(meta) {
+  const m = meta && typeof meta === "object" ? meta : {};
+  const count = (v) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.round(v) : undefined);
+  const frame = { phase: "done" };
+  if (m.trigger === "manual" || m.trigger === "auto") frame.trigger = m.trigger;
+  if (count(m.pre_tokens) !== undefined) frame.preTokens = count(m.pre_tokens);
+  if (count(m.post_tokens) !== undefined) frame.postTokens = count(m.post_tokens);
+  if (count(m.duration_ms) !== undefined) frame.durationMs = count(m.duration_ms);
+  return frame;
+}
+
+/** O turno fechou com a compactação ainda aberta: a barra não pode rodar para sempre. */
+function settleCompaction() {
+  if (compacting) compactionEnded({ phase: "failed", error: "interrompida" });
 }
 
 /* --------------------------------- the reserved words (ultrathink / ultracode) */

@@ -104,6 +104,33 @@ export function query({ prompt, options }) {
         yield { type: "result", subtype: "success", session_id: CLEARED, result: "" };
         continue;
       }
+      if (text === "/compact" || text === "/compact fail" || text === "compact-cut" || text === "autocompact") {
+        // A COMPACTAÇÃO como o SDK 0.3.300 a anuncia: status "compacting" (repetido, como o CLI faz),
+        // o status de volta a null com o resultado, e o compact_boundary com os tokens.
+        const status = (extra) => ({ type: "system", subtype: "status", status: "compacting", session_id: SESSION, uuid: "u-st", ...extra });
+        yield status({});
+        yield status({});
+        if (text === "/compact fail") {
+          yield { type: "system", subtype: "status", status: null, compact_result: "failed", compact_error: "Not enough messages to compact.", session_id: SESSION, uuid: "u-st2" };
+          yield { type: "result", subtype: "success", session_id: SESSION, result: "" };
+          continue;
+        }
+        if (text === "compact-cut") {
+          // O turno fecha sem nunca dizer como a compactação acabou.
+          yield { type: "result", subtype: "success", session_id: SESSION, result: "" };
+          continue;
+        }
+        yield { type: "system", subtype: "status", status: null, compact_result: "success", session_id: SESSION, uuid: "u-st2" };
+        yield {
+          type: "system", subtype: "compact_boundary", session_id: SESSION, uuid: "u-cb",
+          compact_metadata: text === "autocompact"
+            ? { trigger: "auto", pre_tokens: 190000 }
+            : { trigger: "manual", pre_tokens: 180000, post_tokens: 22000, duration_ms: 14000 },
+        };
+        if (text === "autocompact") yield { type: "assistant", uuid: "a-ac", message: { content: [{ type: "text", text: "segui" }] } };
+        yield { type: "result", subtype: "success", session_id: SESSION, result: "" };
+        continue;
+      }
       if (text === "bgstubborn") {
         // O stream DESERDADO que era dono do conjunto: anuncia uma tarefa, ignora interrupt e EOF, e
         // só depois de existir um stream mais novo anuncia o conjunto vazio — e fica pendurado.
@@ -756,6 +783,58 @@ describe("sdk-driver.mjs — /clear", () => {
     const rewound = await driver.waitFor((e) => e.type === "rewound", from);
     expect(rewound.ok).toBe(false);
   }, 30_000);
+});
+
+describe("sdk-driver.mjs — compactação", () => {
+  const compactions = (events: Array<Record<string, unknown>>) => events.filter((e) => e.type === "compaction");
+
+  it("o /compact abre a linha UMA vez e fecha com os tokens antes e depois", async () => {
+    const driver = await driverAfterOneTurn();
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "/compact" });
+    await driver.waitFor((e) => e.type === "result", from);
+    expect(compactions(driver.events.slice(from))).toEqual([
+      { type: "compaction", phase: "started" },
+      { type: "compaction", phase: "done", trigger: "manual", preTokens: 180000, postTokens: 22000, durationMs: 14000 },
+    ]);
+  });
+
+  it("a compactação automática no meio do turno também aparece, e o turno segue", async () => {
+    const driver = await driverAfterOneTurn();
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "autocompact" });
+    await driver.waitFor((e) => e.type === "result", from);
+    const after = driver.events.slice(from);
+    expect(compactions(after)).toEqual([
+      { type: "compaction", phase: "started" },
+      { type: "compaction", phase: "done", trigger: "auto", preTokens: 190000 },
+    ]);
+    expect(after.some((e) => e.type === "assistant_text" && e.text === "segui")).toBe(true);
+  });
+
+  it("o CLI que recusa compactar fecha a linha com o motivo dele", async () => {
+    const driver = await driverAfterOneTurn();
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "/compact fail" });
+    await driver.waitFor((e) => e.type === "result", from);
+    expect(compactions(driver.events.slice(from))).toEqual([
+      { type: "compaction", phase: "started" },
+      { type: "compaction", phase: "failed", error: "Not enough messages to compact." },
+    ]);
+  });
+
+  it("o turno que fecha sem dizer como a compactação acabou não deixa a barra rodando para sempre", async () => {
+    const driver = await driverAfterOneTurn();
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "compact-cut" });
+    await driver.waitFor((e) => e.type === "result", from);
+    const after = driver.events.slice(from);
+    const failed = after.findIndex((e) => e.type === "compaction" && e.phase === "failed");
+    expect(failed).toBeGreaterThanOrEqual(0);
+    // Antes do result: quem lê o result já encontra a linha fechada.
+    expect(failed).toBeLessThan(after.findIndex((e) => e.type === "result"));
+    expect(after[failed]!.error).toBe("interrompida");
+  });
 });
 
 describe("sdk-driver.mjs — a inteligência do card sobrevive ao ultrathink", () => {
