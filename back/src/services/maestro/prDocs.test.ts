@@ -104,6 +104,14 @@ describe("validatePrDocs", () => {
     expect(validatePrDocs({ comments: [{ ...COMMENT, line: 9, startLine: 5 }] }).ok).toBe(true);
   });
 
+  it("a path GitHub would not resolve is refused before the push; a leading ./ is just dropped", () => {
+    for (const path of ["x//y.ts", "back\\src\\x.ts", "a/./b.ts", "a/../b.ts", "src/", "./"]) {
+      expect(validatePrDocs({ comments: [{ ...COMMENT, path }] }).ok, path).toBe(false);
+    }
+    const v = validatePrDocs({ comments: [{ ...COMMENT, path: "././back/src/x.ts" }] });
+    expect(v.ok && v.docs.comments[0]!.path).toBe("back/src/x.ts");
+  });
+
   it("a blank title or body counts as not sent (MCP clients fill optional fields with \"\"): an open PR is reused", () => {
     expect(validatePrDocs({ title: "   ", body: "", comments: [] })).toEqual({ ok: true, docs: { comments: [] } });
   });

@@ -96,12 +96,24 @@ function where(c: { path: string; line: number }): string {
   return `${c.path || "?"}:${c.line}`;
 }
 
-/** The problems with one comment; empty when it can be posted. PURE. */
+/** A comment's path as the diff names it: trimmed, a leading `./` (any number of them) dropped. PURE. */
+function cleanPath(raw: unknown): string {
+  return String(raw ?? "").trim().replace(/^(\.\/)+/, "");
+}
+
+/**
+ * The problems with one comment; empty when it can be posted. The path must be the diff's own spelling
+ * (`back/src/x.ts`): GitHub resolves nothing else, and refusing here costs no push. PURE.
+ */
 function commentProblems(c: PrComment, body: string): string[] {
   const out: string[] = [];
-  const path = String(c.path ?? "").trim();
-  if (!path || path.startsWith("/") || path.split("/").includes("..")) {
-    out.push(`comentário em "${path}": path tem que ser relativo à raiz do repositório`);
+  const path = cleanPath(c.path);
+  const segments = path.split("/");
+  if (!path || path.startsWith("/") || path.includes("\\") || segments.some((s) => s === "" || s === "." || s === "..")) {
+    out.push(
+      `comentário em "${String(c.path ?? "")}": path tem que ser o caminho do arquivo no diff, relativo à raiz ` +
+        "(ex.: back/src/x.ts — sem / no início ou no fim, sem //, sem . ou .., sem barra invertida)",
+    );
   }
   if (!Number.isInteger(c.line) || c.line < 1) out.push(`${where(c)}: line tem que ser um número de linha (inteiro ≥ 1)`);
   if (c.startLine !== undefined && (!Number.isInteger(c.startLine) || c.startLine < 1 || c.startLine >= c.line)) {
@@ -157,7 +169,7 @@ export function validatePrDocs(docs: PrDocs | undefined): { ok: true; docs: Clea
       problems.push(...found);
       continue;
     }
-    const path = c.path.trim();
+    const path = cleanPath(c.path);
     const key = `${path}\n${text}`;
     if (seen.has(key)) continue;
     seen.add(key);
