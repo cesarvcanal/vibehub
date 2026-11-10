@@ -7,6 +7,17 @@ import { REVIEW_IDLE_POLL_MS, REVIEW_POLL_MS, cardReviewKey, reviewIsOpen, revie
 
 const NOBODY_WORKING: ReviewWorking = { author: false, reviewer: false };
 
+/** How many reads of a review were sent to the server, ever: numbers each one as it starts. */
+let readsStarted = 0;
+
+/**
+ * The number of the last read of a review sent so far. A caller that keeps it can later tell a read
+ * that LEFT after that moment (`readSeq` greater than it) from older ones and from an action's answer.
+ */
+export function reviewReadsStarted(): number {
+  return readsStarted;
+}
+
 /**
  * The card's PR review as it stands NOW, for everything on screen that shows it: the block above the
  * composer and the review panel. One query per card (`cardReviewKey`) — or per PR of a card that reads
@@ -45,8 +56,11 @@ export function useLiveReview(
   const key = cardReviewKey(cardId, opts.pr);
   const query = useQuery({
     queryKey: key,
-    queryFn: () =>
-      get<ReviewResponse>(`/cards/${encodeURIComponent(cardId)}/review${opts.pr === undefined ? "" : `?pr=${opts.pr}`}`),
+    queryFn: async () => {
+      const readSeq = ++readsStarted;
+      const answer = await get<ReviewResponse>(`/cards/${encodeURIComponent(cardId)}/review${opts.pr === undefined ? "" : `?pr=${opts.pr}`}`);
+      return { ...answer, readSeq };
+    },
     enabled: opts.enabled ?? true,
     refetchInterval: (q) => {
       const data = q.state.data;
@@ -59,6 +73,8 @@ export function useLiveReview(
   const working = query.data?.working ?? NOBODY_WORKING;
   /** A merge of it running on the server now; undefined = not said (a server that predates it). */
   const merging = query.data?.merging;
+  /** Which server read the data on screen came from (see {@link reviewReadsStarted}); 0 = none yet. */
+  const readSeq = query.data?.readSeq ?? 0;
   const outdated = review !== null && opts.summaryId !== undefined && opts.summaryId !== review.id && !reviewIsOpen(review.phase);
   const { refetch } = query;
   React.useEffect(() => {
@@ -85,5 +101,5 @@ export function useLiveReview(
     [queryClient, cardId, opts.pr],
   );
 
-  return { query, review, working, merging, apply, outdated };
+  return { query, review, working, merging, readSeq, apply, outdated };
 }
