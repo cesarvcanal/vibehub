@@ -270,6 +270,9 @@ export async function readHistory(
       const tooBig = currentRaw.length > HISTORY_COMPACT_SIZE && kept.length * HISTORY_COMPACT_FACTOR <= currentRaw.length;
       if (!tooMany && !tooBig) return;
       await writeFileAtomic(file, kept);
+    }).catch((err: unknown) => {
+      // The replay below does not depend on it: a compaction that failed is retried on the next read.
+      logger.warn({ card: cardId, detail: (err as Error).message }, "could not compact sdk chat history");
     });
   }
   // A log written before the input ceiling replays capped too, not as a multi-megabyte frame.
@@ -375,7 +378,9 @@ function parseHistory(raw: string): HistoryEvent[] {
  *
  * `first`: the edit was of the conversation's FIRST message (see `EditUserControl.first`).
  *
- * Returns how many events were dropped — 0 meaning "nothing cut".
+ * Returns how many events were dropped — 0 meaning "nothing cut". REJECTS when the log could not be
+ * read or rewritten: the screen has already cut those rows, and a rewind reported as done while the
+ * file kept them brought the edited-away conversation back on the next F5.
  */
 export function rewindHistory(
   cardId: string,
@@ -383,15 +388,10 @@ export function rewindHistory(
   replacementText?: string,
   opts: { first?: boolean } = {},
 ): Promise<number> {
-  let dropped = 0;
   return appendHistoryBarrier(cardId, async () => {
     const file = historyFile(cardId);
-    let raw: string;
-    try {
-      raw = await readFile(file, "utf8");
-    } catch {
-      return; // no log yet: nothing to rewind
-    }
+    const raw = await readLogIfAny(file);
+    if (raw === null) return 0; // no log yet: nothing to rewind
     const events = parseHistory(raw);
     // The LAST occurrence of each end, because the same words can be said twice in a conversation
     // and it is the most recent pair that was just edited — unless the edit says it was the FIRST
@@ -406,14 +406,15 @@ export function rewindHistory(
     }
     // One end missing, or an order that cannot be: NOTHING is rewritten — not the cut, not the
     // repair. The old rule, and still the right one; the file keeps even its torn lines.
-    if (start === -1 || mark === -1 || mark < start) return;
+    if (start === -1 || mark === -1 || mark < start) return 0;
     const tail = dropOrphanInterruptNotes(events.slice(mark + 1));
     const unwrapped = clearSupersedeWrapper(tail, replacementText);
     const kept = [...events.slice(0, start), ...tail];
-    dropped = events.length - kept.length;
-    if (dropped === 0 && !unwrapped) return; // a cut that removes nothing and nothing to repair
+    const dropped = events.length - kept.length;
+    if (dropped === 0 && !unwrapped) return 0; // a cut that removes nothing and nothing to repair
     await writeFileAtomic(file, kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length ? "\n" : ""));
-  }).then(() => dropped);
+    return dropped;
+  });
 }
 
 /**
@@ -424,33 +425,39 @@ export function rewindHistory(
  * Same reason as the repair in `rewindHistory` — `replayDedupeKey` matches the transcript by
  * `sent`, and a wrapper the model never got made the next connect draw the message twice.
  *
- * Returns whether the line was changed.
+ * Returns whether the line was changed; rejects, like `rewindHistory`, when the log could not be read
+ * or rewritten.
  */
 export function unwrapEditedMessage(cardId: string, originalText: string, replacementText: string): Promise<boolean> {
-  let changed = false;
   return appendHistoryBarrier(cardId, async () => {
     const file = historyFile(cardId);
-    let raw: string;
-    try {
-      raw = await readFile(file, "utf8");
-    } catch {
-      return;
-    }
+    const raw = await readLogIfAny(file);
+    if (raw === null) return false;
     const events = parseHistory(raw);
     let mark = -1;
     for (let i = 0; i < events.length; i += 1) {
       const e = events[i] as HistoryEvent;
       if (e.type === "message_edited" && e.originalText === originalText) mark = i;
     }
-    if (mark === -1) return;
+    if (mark === -1) return false;
     const at = events.findIndex((e, i) => i > mark && e.type === "user" && e.text === replacementText);
     const line = events[at] as (HistoryEvent & { sent?: string }) | undefined;
-    if (!line || line.sent === undefined) return;
+    if (!line || line.sent === undefined) return false;
     const { sent: _dropped, ...rest } = line;
     events[at] = rest as HistoryEvent;
-    changed = true;
     await writeFileAtomic(file, events.map((e) => JSON.stringify(e)).join("\n") + "\n");
-  }).then(() => changed);
+    return true;
+  });
+}
+
+/** The log's text, or null when the card has none yet. Any other read failure throws. */
+async function readLogIfAny(file: string): Promise<string | null> {
+  try {
+    return await readFile(file, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
 }
 
 /**
@@ -528,19 +535,23 @@ export function onExternalMessage(cardId: string, listener: (event: HistoryEvent
   return () => externalBus.off(cardId, listener);
 }
 
-/** Runs `work` inside the card's append chain (compaction must not interleave with an append). */
-function appendHistoryBarrier(cardId: string, work: () => Promise<void>): Promise<void> {
+/**
+ * Runs `work` inside the card's append chain (a rewrite must not interleave with an append) and
+ * hands its outcome to the caller — a failure included, because each rewrite means something
+ * different when it fails (a compaction is retried on the next read; a rewind left the screen and
+ * the file disagreeing). The CHAIN itself only waits for it to settle: the appends queued behind a
+ * failed rewrite still run.
+ */
+function appendHistoryBarrier<T>(cardId: string, work: () => Promise<T>): Promise<T> {
   const prev = chains.get(cardId) ?? Promise.resolve();
-  const next = prev
-    .then(work)
-    .catch((err: unknown) => {
-      logger.warn({ card: cardId, detail: (err as Error).message }, "could not compact sdk chat history");
-    })
+  const outcome = prev.then(work);
+  const next = outcome
+    .then(() => undefined, () => undefined)
     .finally(() => {
       if (chains.get(cardId) === next) chains.delete(cardId);
     });
   chains.set(cardId, next);
-  return next;
+  return outcome;
 }
 
 /**
@@ -555,17 +566,13 @@ function appendHistoryBarrier(cardId: string, work: () => Promise<void>): Promis
  *
  * Sem linha "/clear" no log (o comando veio da aba Terminal, por exemplo), não há fronteira: a
  * conversa inteira é da sessão apagada e sai toda. Na mesma fila dos appends — o "/clear" ainda
- * enfileirado é escrito antes do corte.
+ * enfileirado é escrito antes do corte. Rejeita quando o log não pôde ser lido ou reescrito.
  */
 export function clearHistoryBeforeLastClear(cardId: string): Promise<void> {
   return appendHistoryBarrier(cardId, async () => {
     const file = historyFile(cardId);
-    let raw: string;
-    try {
-      raw = await readFile(file, "utf8");
-    } catch {
-      return; // no log yet: nothing to clear
-    }
+    const raw = await readLogIfAny(file);
+    if (raw === null) return; // no log yet: nothing to clear
     const events = parseHistory(raw);
     let from = -1;
     for (let i = 0; i < events.length; i += 1) {
@@ -590,23 +597,15 @@ export function isClearCommand(text: string): boolean {
  * the desired end state, so "already gone" is success. The in-memory chain entry is dropped with
  * it, so nothing keeps the card alive in this module.
  */
-export async function removeHistory(cardId: string): Promise<void> {
-  // The barrier swallows what `work` throws (a compaction failure is not worth an exception on the
-  // hot path); a PURGE has to be able to say it failed, so the error is carried out by hand.
-  let failure: Error | undefined;
-  await appendHistoryBarrier(cardId, async () => {
-    try {
-      const file = historyFile(cardId);
-      await rm(file, { force: true });
-      // A rewrite the deploy SIGKILLed mid-way leaves its tmp — the whole conversation — behind.
-      const name = basename(file);
-      const leftovers = await readdir(dirname(file)).catch(() => [] as string[]);
-      for (const other of leftovers) {
-        if (isAtomicWriteTmp(other, name)) await rm(join(dirname(file), other), { force: true });
-      }
-    } catch (err) {
-      failure = err as Error;
+export function removeHistory(cardId: string): Promise<void> {
+  return appendHistoryBarrier(cardId, async () => {
+    const file = historyFile(cardId);
+    await rm(file, { force: true });
+    // A rewrite the deploy SIGKILLed mid-way leaves its tmp — the whole conversation — behind.
+    const name = basename(file);
+    const leftovers = await readdir(dirname(file)).catch(() => [] as string[]);
+    for (const other of leftovers) {
+      if (isAtomicWriteTmp(other, name)) await rm(join(dirname(file), other), { force: true });
     }
   });
-  if (failure) throw failure;
 }

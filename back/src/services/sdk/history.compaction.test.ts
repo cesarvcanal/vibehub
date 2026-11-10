@@ -16,7 +16,7 @@ import { config } from "../../config/env.js";
  * `readFile` dispara o append exatamente depois que a leitura da compactação terminou.
  */
 
-const h = vi.hoisted(() => ({ afterRead: null as null | (() => void), tornWrites: false }));
+const h = vi.hoisted(() => ({ afterRead: null as null | (() => void), tornWrites: false, failReads: false }));
 
 /**
  * Uma escrita que morre NO MEIO (OOM, SIGKILL do deploy): metade dos bytes chega ao arquivo que
@@ -46,6 +46,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       return handle;
     },
     readFile: async (...args: Parameters<typeof actual.readFile>) => {
+      if (h.failReads) throw Object.assign(new Error("too many open files"), { code: "EMFILE" });
       const out = await actual.readFile(...args);
       const hook = h.afterRead;
       h.afterRead = null;
@@ -55,7 +56,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
 });
 
-const { appendHistory, readHistory, rewindHistory, clearHistoryBeforeLastClear, HISTORY_COMPACT_FACTOR } = await import("./history.js");
+const { appendHistory, readHistory, rewindHistory, unwrapEditedMessage, clearHistoryBeforeLastClear, HISTORY_COMPACT_FACTOR } = await import("./history.js");
 
 const CARD = "abc498d1-98dd-44b6-97ee-c06a181c3769";
 
@@ -68,6 +69,7 @@ beforeEach(async () => {
   config.dataDir = dir;
   h.afterRead = null;
   h.tornWrites = false;
+  h.failReads = false;
 });
 afterEach(async () => {
   config.dataDir = savedDataDir;
@@ -126,5 +128,72 @@ describe("reescrita do log interrompida no meio", () => {
     h.tornWrites = false;
 
     expect(await readHistory(CARD, 100)).toHaveLength(3);
+  });
+});
+
+/**
+ * UMA REESCRITA QUE FALHOU NÃO PODE SE DIZER FEITA. O `rewindHistory` contava o corte antes de
+ * gravar e o `unwrapEditedMessage` marcava a troca antes de gravar; a fila engolia o erro (com a
+ * mensagem da compactação). O manager logava "dropped N", a tela já tinha cortado as linhas, e o
+ * próximo F5 devolvia a conversa que o rewind tirou.
+ */
+describe("reescrita do log que falha chega ao chamador", () => {
+  const conversaEditada = async () => {
+    await appendHistory(CARD, { type: "user", text: "errada" });
+    await appendHistory(CARD, { type: "assistant_text", text: "resposta" });
+    await appendHistory(CARD, { type: "message_edited", originalText: "errada" });
+    await appendHistory(CARD, { type: "user", text: "certa", sent: "[invólucro]" } as never);
+  };
+
+  it("o rewind rejeita, o log fica inteiro, e a fila segue gravando depois da falha", async () => {
+    await conversaEditada();
+    h.tornWrites = true;
+    await expect(rewindHistory(CARD, "errada", "certa")).rejects.toThrow("killed mid-write");
+    h.tornWrites = false;
+    expect(await readHistory(CARD, 100)).toHaveLength(4);
+
+    await appendHistory(CARD, { type: "assistant_text", text: "depois da falha" });
+    expect((await readHistory(CARD, 100)).at(-1)).toEqual({ type: "assistant_text", text: "depois da falha" });
+    // E a próxima reescrita da fila funciona: o corte que falhou pode ser refeito.
+    await expect(rewindHistory(CARD, "errada", "certa")).resolves.toBe(3);
+  });
+
+  it("o unwrap rejeita e o invólucro continua no arquivo", async () => {
+    await conversaEditada();
+    h.tornWrites = true;
+    await expect(unwrapEditedMessage(CARD, "errada", "certa")).rejects.toThrow("killed mid-write");
+    h.tornWrites = false;
+    expect((await readHistory(CARD, 100)).at(-1)).toMatchObject({ sent: "[invólucro]" });
+    await expect(unwrapEditedMessage(CARD, "errada", "certa")).resolves.toBe(true);
+  });
+
+  it("o corte do /clear rejeita e nada sai do log", async () => {
+    await appendHistory(CARD, { type: "user", text: "antes" });
+    await appendHistory(CARD, { type: "user", text: "/clear" });
+    h.tornWrites = true;
+    await expect(clearHistoryBeforeLastClear(CARD)).rejects.toThrow("killed mid-write");
+    h.tornWrites = false;
+    expect(await readHistory(CARD, 100)).toHaveLength(2);
+  });
+
+  it("um log que existe mas não pôde ser LIDO não vira \"nada a cortar\"", async () => {
+    await conversaEditada();
+    h.failReads = true;
+    await expect(rewindHistory(CARD, "errada", "certa")).rejects.toThrow("too many open files");
+    await expect(unwrapEditedMessage(CARD, "errada", "certa")).rejects.toThrow("too many open files");
+    await expect(clearHistoryBeforeLastClear(CARD)).rejects.toThrow("too many open files");
+    h.failReads = false;
+    await expect(rewindHistory(CARD, "errada", "certa")).resolves.toBe(3);
+  });
+
+  it("a compactação que falha continua sem derrubar a leitura: o replay sai igual", async () => {
+    const limit = 2;
+    for (let i = 0; i < limit * HISTORY_COMPACT_FACTOR + 1; i += 1) {
+      await appendHistory(CARD, { type: "assistant_text", text: `m${i}` });
+    }
+    h.tornWrites = true;
+    const replay = await readHistory(CARD, limit);
+    h.tornWrites = false;
+    expect(replay.map((e) => (e as { text: string }).text)).toEqual(["m7", "m8"]);
   });
 });
