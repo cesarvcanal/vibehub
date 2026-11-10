@@ -1574,8 +1574,12 @@ describe("restart (single and all) — a working card is protected", () => {
     runScript.mockClear();
     await ws.purgeCardWorkspace(card, { by: "tester" });
 
-    expect(scriptAt(0)).toContain(`tmux kill-session -t '${card.tmuxSession}-sh'`);
-    const drop = scriptAt(1);
+    // ONE exec (#284): the sessions end at the head of the purge, before anything is erased.
+    expect(runScript).toHaveBeenCalledTimes(1);
+    const drop = scriptAt(0);
+    expect(drop).toContain(`tmux kill-session -t '${card.tmuxSession}'`);
+    expect(drop.indexOf(`tmux kill-session -t '${card.tmuxSession}-sh'`)).toBeGreaterThan(-1);
+    expect(drop.indexOf("kill -KILL $PIDS")).toBeLessThan(drop.indexOf("worktree remove"));
     expect(drop).toContain(`git -C '/work/acme--erp-aux' worktree remove --force '/work/acme--erp-aux-worktrees/${card.worktreeSlug}'`);
     expect(drop).toContain("worktree prune");
     // The branch goes with the card: `worktree remove` only unregisters the worktree, and a new
@@ -2516,6 +2520,7 @@ describe("buildCardPurgeScript (everything the card left on the runner's disk)",
       repoDir: "/work/acme--erp-aux",
       branch: `card/deletar-card`,
       browserDataDir: "/work/.browser/card-e3f1ab5a",
+      sessions: ["card-e3f1ab5a", "card-e3f1ab5a-sh"],
     });
 
   it("erases the worktree, the branch, the uploads, the gh token and the browser profile", () => {
@@ -2592,6 +2597,7 @@ describe("buildCardPurgeScript (everything the card left on the runner's disk)",
       cardId: CARD_ID,
       cwd: "/work/scratch/ideia",
       browserDataDir: "/work/.browser/card-e3f1ab5a",
+      sessions: ["card-e3f1ab5a"],
     });
     expect(s).toContain(`rm -rf '/work/scratch/ideia'`);
     expect(s).not.toContain("git -C");
@@ -2599,7 +2605,7 @@ describe("buildCardPurgeScript (everything the card left on the runner's disk)",
   });
 
   it("refuses a card id or a path that is not id/path-shaped — nothing raw reaches a shell", () => {
-    const base = { containerName: CONTAINER, cwd: CWD, browserDataDir: "/work/.browser/card-x" };
+    const base = { containerName: CONTAINER, cwd: CWD, browserDataDir: "/work/.browser/card-x", sessions: ["card-x"] };
     expect(() => ws.buildCardPurgeScript({ ...base, cardId: "../../etc" })).toThrow(/invalid card id/);
     expect(() => ws.buildCardPurgeScript({ ...base, cardId: "a; rm -rf /" })).toThrow(/invalid card id/);
     expect(() => ws.buildCardPurgeScript({ ...base, cardId: CARD_ID, cwd: "/work/../etc" })).toThrow(/\.\./);
@@ -2638,6 +2644,7 @@ describe("ownBranch (what a delete may drop)", () => {
       cwd: "/work/acme--erp-aux-worktrees/x",
       repoDir: "/work/acme--erp-aux",
       browserDataDir: "/work/.browser/card-e3f1ab5a",
+      sessions: ["card-e3f1ab5a"],
     };
     for (const branch of ["dev", "prod", "main", "master", "feat/pdv", "release/1.0"]) {
       expect(() => ws.buildCardPurgeScript({ ...base, branch })).toThrow(/refusing to delete a branch/);

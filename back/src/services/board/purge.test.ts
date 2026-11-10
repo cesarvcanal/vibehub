@@ -169,7 +169,8 @@ describe("purgeCard — the card and everything that belonged to it", () => {
     // watching the removal against the order of the scripts.
     const order: string[] = [];
     runScript.mockImplementation(async (script: string) => {
-      order.push(/kill-session/.test(script) ? "kill" : /VIBEHUB_PURGE/.test(script) ? "erase" : "other");
+      // The erase ends the sessions too (in the same exec), so it is told apart by its delimiter.
+      order.push(/VIBEHUB_PURGE/.test(script) ? "erase" : /kill-session/.test(script) ? "kill" : "other");
       return { stdout: "", stderr: "" };
     });
     const removeCard = vi.spyOn(reg, "removeCard");
@@ -183,6 +184,23 @@ describe("purgeCard — the card and everything that belonged to it", () => {
     await purge.purgeCard(card.id);
     expect(order.indexOf("kill")).toBeLessThan(order.indexOf("board"));
     expect(order.indexOf("board")).toBeLessThan(order.lastIndexOf("erase"));
+  });
+
+  it("ONE kill exec per card: the erase ends the sessions in its own exec, right before the files go", async () => {
+    // #284: the erase used to fire a second kill exec of its own after the strict one. That second
+    // kill is not redundant in a delete — it is the only one after the card left the board, and a
+    // terminal pane reconnects in 400 ms and revives the session (`tmux new-session -A`) in between
+    // — so it now rides in the purge exec instead of costing one more docker exec.
+    const { card, project } = await seed();
+    await purge.purgeCard(card.id, "test");
+
+    const killsCard = (s: string) => s.includes(`tmux kill-session -t '${card.tmuxSession}'`);
+    expect(scripts().filter((s) => killsCard(s) && !s.includes("VIBEHUB_PURGE"))).toHaveLength(1);
+    const erase = scripts().find((s) => s.includes("VIBEHUB_PURGE"))!;
+    const cwd = ws.cardWorkPaths(project, card).cwd;
+    expect(erase.indexOf(`tmux kill-session -t '${card.tmuxSession}-sh'`)).toBeGreaterThan(-1);
+    expect(erase.indexOf(`tmux kill-session -t '${card.tmuxSession}-sh'`)).toBeLessThan(erase.indexOf("worktree remove"));
+    expect(erase.indexOf("kill -KILL $PIDS")).toBeLessThan(erase.indexOf(`rm -rf '${cwd}'`));
   });
 
   it("a card that never ran (no files, no session) purges cleanly — nothing to report", async () => {
@@ -307,6 +325,12 @@ describe("purgeCard — the card and everything that belonged to it", () => {
     expect(await dataFiles(provenance.PROVENANCE_DIR)).toEqual([]);
     expect(allScripts()).toContain(`rm -rf '/work/.uploads/${card.id}'`);
     expect(allScripts()).toContain(`rm -rf '/work/.uploads/${second.id}'`);
+    // One kill exec per card here too (#284); the erase of each ends that card's sessions itself.
+    for (const c of [card, second]) {
+      const killsCard = (s: string) => s.includes(`tmux kill-session -t '${c.tmuxSession}'`);
+      expect(scripts().filter((s) => killsCard(s) && !s.includes("VIBEHUB_PURGE"))).toHaveLength(1);
+      expect(scripts().filter((s) => killsCard(s) && s.includes("VIBEHUB_PURGE"))).toHaveLength(1);
+    }
   });
 });
 

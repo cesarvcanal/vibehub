@@ -1368,6 +1368,19 @@ export function notifyCardSessionKill(cardId: string): void {
 export function buildKillSessionScript(containerName: string, sessions: string[]): string {
   return [
     `docker exec -i ${shQuote(containerName)} bash -s <<'${KILL_DELIM}'`,
+    ...killSessionLines(sessions),
+    "true",
+    KILL_DELIM,
+  ].join("\n");
+}
+
+/**
+ * The body of {@link buildKillSessionScript}, to run INSIDE the container — shared with the purge
+ * script, which ends the card's sessions in its own exec right before erasing (see
+ * {@link purgeCardWorkspace}). Every line is `|| true`-shaped. PURE.
+ */
+function killSessionLines(sessions: readonly string[]): string[] {
+  return [
     // Every pid whose ancestry reaches a pane pid, panes included. One ps snapshot per pane; awk
     // walks each pid up the ppid chain (pgrep is not guaranteed in the image). A pid whose chain
     // ends elsewhere (0/1) is not printed.
@@ -1383,9 +1396,7 @@ export function buildKillSessionScript(containerName: string, sessions: string[]
     ...sessions.map((s) => `tmux kill-session -t ${shQuote(s)} 2>/dev/null || true; echo ${SESSION_ENDED_MARKER} ${shQuote(s)}`),
     // ...then KILL whatever ignored both the TERM and tmux's HUP (claude did, in production).
     'if [ -n "$PIDS" ]; then sleep 1; kill -KILL $PIDS 2>/dev/null || true; fi',
-    "true",
-    KILL_DELIM,
-  ].join("\n");
+  ];
 }
 
 /**
@@ -2098,6 +2109,8 @@ export interface CardPurgeScriptOpts {
   branch?: string;
   /** Chromium user-data-dir of the card's live browser (cookies, logins, history, cache). */
   browserDataDir: string;
+  /** The card's tmux sessions, ended — whole process tree — before anything is erased. */
+  sessions: string[];
 }
 
 /**
@@ -2127,6 +2140,9 @@ export function ownBranch(card: Pick<Card, "branch" | "worktreeSlug">): string |
  * behind — which is exactly how a delete ends up half done. Every line is `|| true`-shaped and the
  * script ends with `true`.
  *
+ * It FIRST ends the card's sessions (the kill script's body), so no `claude` is left writing into —
+ * or running in — what is about to be erased.
+ *
  * What it erases, and why each one is part of the card:
  *  - the git worktree, its directory and the card's branch — the code the card wrote;
  *  - `/work/.uploads/<cardId>` — the images the user attached to the conversation;
@@ -2151,7 +2167,7 @@ export function buildCardPurgeScript(o: CardPurgeScriptOpts): string {
   const uploads = `/work/.uploads/${o.cardId}`;
   assertSafeRemotePath(uploads);
   const transcriptDirName = claudeProjectsDirName(o.cwd);
-  const inner: string[] = [];
+  const inner: string[] = killSessionLines(o.sessions);
   if (o.repoDir) {
     assertSafeRemotePath(o.repoDir);
     // `worktree remove --force` unregisters it in .git/worktrees; `prune` cleans a stale entry when
@@ -2215,7 +2231,13 @@ export function buildCardPurgeScript(o: CardPurgeScriptOpts): string {
 
 /**
  * PURGES the card's side of the runner: both tmux sessions, then every file the card owns (see
- * {@link buildCardPurgeScript}).
+ * {@link buildCardPurgeScript}) — in ONE docker exec, the kill riding at the head of the purge.
+ *
+ * The kill stays HERE even though the card delete already ran its strict kill (#284): that one
+ * happens while the card is still on the board, and a pane's socket reconnects in under a second
+ * and revives the session with `tmux new-session -A` before the card leaves it. This kill is the
+ * one after the card is gone — and the provisioning teardown (`tearDownIfDeleted`) has no other.
+ * It used to be a docker exec of its own; inside the purge it costs nothing more.
  *
  * THROWS when the runner could not be reached or the script failed — the caller (the card purge)
  * turns that into a reported, retried step instead of a silent half-deletion. A card whose PROJECT
@@ -2232,8 +2254,10 @@ export async function purgeCardWorkspace(
   // its cards in ONE mutation, so by the time those cards are purged there is nothing to look up —
   // and without the project there are no paths, which used to leave every worktree behind.
   const project = opts.project ?? (await getProject(card.projectId));
-  await killCardSession(card, { includeShell: true });
-  if (!project) throw new Error("project for this card not found: its runner files cannot be resolved");
+  if (!project) {
+    await killCardSession(card, { includeShell: true });
+    throw new Error("project for this card not found: its runner files cannot be resolved");
+  }
   const paths = cardWorkPaths(project, card);
   const script = buildCardPurgeScript({
     containerName: config.runner.container,
@@ -2242,7 +2266,10 @@ export async function purgeCardWorkspace(
     repoDir: paths.repoDir,
     branch: paths.repoDir ? ownBranch(card) : undefined,
     browserDataDir: cardBrowserPorts(card.id).userDataDir,
+    sessions: [card.tmuxSession, `${card.tmuxSession}-sh`],
   });
+  // The kill listeners (the SDK driver) first, exactly as killCardSessionOrThrow does it.
+  notifyCardSessionKill(card.id);
   try {
     await hostExecutor().runScript(script, { timeoutMs: 180_000 });
   } catch (err) {
