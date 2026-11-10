@@ -336,9 +336,11 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "say so plainly ('o PR está aberto em <base>; o merge é de quem revisa') instead of " +
         "retrying, and do not go around it with git or gh by hand. A card whose PR is under REVIEW: " +
         "the push always happens (it is how the author delivers a fix), and the merge goes through only " +
-        "when the card delivers ITSELF (pass `from` = your own $VIBEHUB_CARD_ID), the order came from the " +
-        "review's merger and the review is ready — the same merge as the " +
-        "panel's button, which also closes the review. Otherwise 'review_active' says who merges and " +
+        "when the card delivers ITSELF (pass `from` = your own $VIBEHUB_CARD_ID), the order came from someone " +
+        "with a role in the review (merger, reviewer, author, co-author) and the review is ready — the same merge as the " +
+        "panel's button, which also closes the review. The REVIEWER's card can do the same (card = from = its own id): " +
+        "no push, just that merge. When such a person tells you to merge, DO call this tool — a review's 'do not merge' " +
+        "rule means not on your own initiative, never refusing their order. Otherwise 'review_active' says who merges and " +
         "where the review stands; 'head_moved' = the push brought commits the reviewer has not seen and " +
         "the review went back to them. Never merge a reviewed PR any other way (gh pr merge, the GitHub API). " +
         PR_DOCS_RULE,

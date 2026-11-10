@@ -548,6 +548,14 @@ export interface UploadResult {
   path: string;
 }
 
+/** Documento anexado convertido em texto pelo runner (`GET /cards/:id/uploads/:file/preview`). */
+export interface PreviewDeAnexo {
+  formato: string;
+  /** Markdown: planilha vira uma tabela por aba, Word vira parágrafos e tabelas. */
+  texto: string;
+  truncado: boolean;
+}
+
 /* --------------------------------------------------------------- PR review */
 
 /** `cancelled` exists on the server but never reaches a card summary. */
@@ -570,6 +578,8 @@ export interface ReviewSummary {
   pendingQuestions?: number;
   /** A `ready` review whose author's AI is in a turn right now (hooks or native chat): "IA trabalhando". */
   authorWorking?: boolean;
+  /** A `ready` review whose merge gate on the approved commit is still running, or failed: not "ready to merge". */
+  mergeGateState?: "running" | "failed";
 }
 
 export interface FindingProof {
@@ -641,10 +651,21 @@ export interface Review extends ReviewSummary {
   prHeadSha?: string;
   impasseReason?: string;
   approvePending?: boolean;
+  /** The merge gate, run on the approved commit as soon as the review is ready (only valid for its `sha`). */
+  mergeGate?: MergeGate;
   /** The round the reviewer's AI last handed back: below `round`, the reviewer's turn is still open. */
   lastSubmitRound?: number;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface MergeGate {
+  sha: string;
+  state: "running" | "passed" | "failed";
+  /** The failing gate's output (redacted, capped). */
+  output?: string;
+  at: number;
+  autoRetried?: true;
 }
 
 /** Whether each side's AI is in a turn RIGHT NOW (the card's status), as `GET /cards/:id/review` reads it. */

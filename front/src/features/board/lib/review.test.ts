@@ -60,6 +60,15 @@ describe("reviewPill", () => {
     expect(reviewPill(review({ phase: "merged" }), { authorWorking: true })).toMatchObject({ key: "review.pill.merged" });
   });
 
+  it("caso real (PR #247): ready com o gate do merge vermelho ou rodando não diz 'pronto pra merge'", () => {
+    expect(reviewPill(review({ phase: "ready" }), { gate: "failed" })).toEqual({ key: "review.pill.gateFailed", tone: "critical" });
+    expect(reviewPill(review({ phase: "ready" }), { gate: "running" })).toEqual({ key: "review.pill.gateRunning", tone: "info" });
+    expect(reviewPill(review({ phase: "ready" }), { gate: "passed" })).toMatchObject({ key: "review.pill.ready", tone: "ok" });
+    // a IA do autor trabalhando segue na frente: o push dela muda o commit, e o gate com ele
+    expect(reviewPill(review({ phase: "ready" }), { authorWorking: true, gate: "failed" })).toMatchObject({ key: "review.pill.authorWorking" });
+    expect(reviewPill(review({ phase: "fixing", round: 2 }), { gate: "failed" })).toMatchObject({ key: "review.pill.round" });
+  });
+
   it("reviewIsOpen: every phase but merged and cancelled (and no review at all)", () => {
     for (const phase of ["reviewing", "fixing", "ready", "impasse"] as const) expect(reviewIsOpen(phase)).toBe(true);
     for (const phase of ["merged", "cancelled", undefined] as const) expect(reviewIsOpen(phase)).toBe(false);
@@ -307,6 +316,13 @@ describe("reviewActions", () => {
     expect(reviewActions(ready, as("someone")).merge).toBe(false);
     expect(reviewActions(full({ phase: "fixing" }), as("mer")).merge).toBe(false);
     expect(reviewActions(full({ phase: "merged" }), as("mer")).merge).toBe(false);
+  });
+
+  it("gate do merge vermelho no commit aprovado: retry aparece (roda os testes de novo); num commit antigo, não", () => {
+    const failed = { sha: "a".repeat(40), state: "failed" as const, output: "FAIL x", at: 1 };
+    expect(reviewActions(full({ phase: "ready", reviewedSha: "a".repeat(40), mergeGate: failed }), as("mer")).retry).toBe(true);
+    expect(reviewActions(full({ phase: "ready", reviewedSha: "b".repeat(40), mergeGate: failed }), as("mer")).retry).toBe(false);
+    expect(reviewActions(full({ phase: "ready", reviewedSha: "a".repeat(40), mergeGate: { ...failed, state: "passed" } }), as("mer")).retry).toBe(false);
   });
 
   it("the co-author carries the work on: retry, cancel and request like the author and the merger", () => {

@@ -35,7 +35,12 @@ function badRequest(err: unknown): { code: number; body: { error: string } } {
  * `pendingQuestions` (only when there is one) counts the doubts no human decided yet — the line reads
  * "aguardando decisão" instead of the orange "rodada N/3" that means the AIs are on it.
  */
-type ReviewSummary = Pick<Review, "id" | "prNumber" | "phase" | "round"> & { pendingQuestions?: number; authorWorking?: boolean };
+type ReviewSummary = Pick<Review, "id" | "prNumber" | "phase" | "round"> & {
+  pendingQuestions?: number;
+  authorWorking?: boolean;
+  /** Pronto, mas o gate do merge no commit aprovado ainda roda ou falhou: a linha não diz "pronto pra merge". */
+  mergeGateState?: "running" | "failed";
+};
 /**
  * `review` = the most recent; `reviews` = the most recent of EACH PR (only with more than one PR
  * reviewed), the one line per PR of a card that attached several.
@@ -73,6 +78,8 @@ async function withReviewSummary(cards: registry.Card[]): Promise<BoardCard[]> {
       // Pronto, com a IA do autor num turno (hooks ou chat nativo): a linha diz "IA trabalhando". Só quando
       // o autor é ESTE card; o de um PR anexado é outro, e a linha lê isso ao vivo.
       if (r.phase === "ready" && r.cardId === c.id && isBusy(c)) review.authorWorking = true;
+      const gate = r.mergeGate?.sha === r.reviewedSha ? r.mergeGate?.state : undefined;
+      if (r.phase === "ready" && (gate === "running" || gate === "failed")) review.mergeGateState = gate;
       return review;
     });
     return { ...c, review: summaries[0], ...(summaries.length > 1 ? { reviews: summaries } : {}) };

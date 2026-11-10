@@ -8,7 +8,7 @@ import { ENTER, ReviewConversation, SAID_CLAMP_CHARS } from "@/features/board/co
 import { cardHref } from "@/features/board/lib/board";
 import {
   FINDING_SEVERITY_TONE, FINDING_STATUS_TONE, IMPASSE_ROUNDS, REVIEW_MAX_ROUNDS, awaitingDecision, findingIsOpen,
-  pendingQuestions, requestedAtText, reviewIsOpen, reviewPill, reviewTurn, stuckItems, type ReviewActions,
+  mergeGateOf, pendingQuestions, requestedAtText, reviewIsOpen, reviewPill, reviewTurn, stuckItems, type ReviewActions,
 } from "@/features/board/lib/review";
 import { t as translate, useT } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -117,6 +117,7 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
           {t("review.approvePending")}
         </p>
       ) : null}
+      {review.phase === "ready" ? <MergeGateBanner review={review} /> : null}
       <DecisionBanner
         review={review}
         waiting={waitingOnPeople}
@@ -210,7 +211,7 @@ function Header({
   const t = useT();
   const pill = review.phase === "cancelled"
     ? { key: "review.pill.cancelled", tone: "muted" as const }
-    : reviewPill(review, { authorWorking: working.author });
+    : reviewPill(review, { authorWorking: working.author, gate: mergeGateOf(review)?.state });
   const turn = reviewTurn(review, working);
   const live = (turn.who === "reviewer" || turn.who === "author") && turn.working;
   return (
@@ -792,6 +793,31 @@ const NOTICE_TONE: Record<PanelNotice["tone"], string> = {
   error: "border-destructive/40 bg-destructive/10 text-destructive",
 };
 
+/**
+ * The merge gate on the approved commit: running (the button waits for it) or failed (its output,
+ * scrolled, so nobody clicks into a minutes-long red). Passed or absent says nothing.
+ */
+function MergeGateBanner({ review }: { review: Review }) {
+  const t = useT();
+  const gate = mergeGateOf(review);
+  if (gate?.state === "running") {
+    return (
+      <p role="status" className="flex shrink-0 items-center gap-1.5 rounded-md border border-sky-500/30 bg-sky-500/10 px-2.5 py-1.5 text-xs text-sky-300">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" /> {t("review.mergeGate.running")}
+      </p>
+    );
+  }
+  if (gate?.state !== "failed") return null;
+  return (
+    <div role="alert" className="shrink-0 rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-xs text-destructive">
+      <p className="font-medium">{t("review.mergeGate.failed")}</p>
+      {gate.output ? (
+        <pre className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] text-destructive/90">{gate.output}</pre>
+      ) : null}
+    </div>
+  );
+}
+
 /** The human moves, pinned under the body: the merge is what the whole review is FOR. */
 function Footer({
   review, actions, busy, mergeBusy, holdMerge, notice, onMerge, onRetry, onCancel,
@@ -808,6 +834,8 @@ function Footer({
   onCancel: () => void;
 }) {
   const t = useT();
+  const gateState = mergeGateOf(review)?.state;
+  const gateHolds = gateState === "running" || gateState === "failed";
   return (
     <>
       {holdMerge && actions.merge ? (
@@ -830,7 +858,7 @@ function Footer({
             type="button"
             size="sm"
             className="h-8 bg-emerald-600 px-3 text-xs text-white hover:bg-emerald-500"
-            disabled={mergeBusy || holdMerge}
+            disabled={mergeBusy || holdMerge || gateHolds}
             onClick={onMerge}
           >
             {mergeBusy ? (
@@ -900,7 +928,10 @@ function stageText(review: Review, authorWorking: boolean, t: typeof translate):
     case "fixing":
       return t("review.stage.fixing");
     case "ready":
-      return authorWorking ? t("review.stage.authorWorking") : t("review.stage.ready");
+      if (authorWorking) return t("review.stage.authorWorking");
+      if (mergeGateOf(review)?.state === "failed") return t("review.stage.gateFailed");
+      if (mergeGateOf(review)?.state === "running") return t("review.stage.gateRunning");
+      return t("review.stage.ready");
     case "impasse":
       return t("review.stage.impasse");
     case "merged":

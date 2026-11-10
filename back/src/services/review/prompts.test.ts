@@ -59,7 +59,7 @@ describe("autonomia corretiva: bug no que o PR fez se corrige, melhoria fora do 
   it("o revisor classifica bug ou incongruência no que o PR fez como bloqueante ou dúvida, nunca como sugestão", () => {
     const text = reviewerRoundPrompt(review());
     expect(text).toContain("Bug ou incongruência no que o PR fez não é sugestão");
-    expect(text).toMatch(/fora do escopo do PR, volta desnecessária/);
+    expect(text).toMatch(/volta desnecessária, o que fica fora do escopo do PR/);
   });
 
   it("o autor corrige sem perguntar o que é bug, não amplia escopo, e na dúvida de intenção explica em vez de aplicar", () => {
@@ -91,5 +91,30 @@ describe("merge autorizado com sugestão em pé: os textos não dizem 'nada em a
 
   it("sem sugestão em pé, o texto de sempre", () => {
     expect(phaseNoticeText({ ...ready({ mergeAuthorized: true }), findings: [] })).toMatch(/nada em aberto/);
+  });
+});
+
+describe("prompts da revisão: o merge por ordem", () => {
+  it("caso real (PR #215): autor e revisor sabem que, mandados mergear por quem tem papel, mergeiam pelo vibehub_deliver", () => {
+    const ready = { ...review(), phase: "ready" as const, reviewedSha: "a".repeat(40) };
+    for (const text of [authorFixPrompt(review()), reviewerRoundPrompt(review()), reviewerApprovePrompt(ready)]) {
+      expect(text).toMatch(/Não mergeie o PR por conta própria/);
+      expect(text).toMatch(/mandar mergear NESTE card, mergeie: chame vibehub_deliver com card e from = o \$VIBEHUB_CARD_ID/);
+      expect(text).toMatch(/authorized: true/);
+      expect(text).toMatch(/Nunca por `gh pr merge`/);
+      expect(text).not.toMatch(/nada de vibehub_deliver|não chame vibehub_deliver/);
+    }
+  });
+});
+
+describe("prompts da revisão: bug não é sugestão", () => {
+  it("o revisor é instruído a bloquear bug real no escopo do PR (com cenário) e a deixar como sugestão só o que não é bug", () => {
+    for (const text of [reviewerRoundPrompt(review()), authorFixPrompt(review())]) {
+      expect(text).toMatch(/Bug no código deste PR \(comportamento errado, falha, quebra, brecha de segurança, perda de dado, regressão\) TEM essa prova: é bloqueante/);
+      expect(text).toMatch(/Sugestão é só o que não é bug no escopo/);
+    }
+    const round = reviewerRoundPrompt(review());
+    expect(round).toMatch(/- suggestion: SÓ o que não é bug no escopo do PR/);
+    expect(round).toContain("blocking com proof.kind = scenario (ref = arquivo:linha, detail = o caso que dá errado)");
   });
 });

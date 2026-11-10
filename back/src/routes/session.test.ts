@@ -50,6 +50,7 @@ const restartAllCards = vi.fn();
 const purgeCardWorkspace = vi.fn();
 const uploadCardImage = vi.fn();
 const readCardUpload = vi.fn();
+const lerAnexoDoCard = vi.fn();
 /** The terminal websocket's pty — never a real process here; see `fakeTerm`. */
 const ptySpawn = vi.fn();
 /** The VNC bridge's argv; each test picks the process standing in for `docker exec … socat`. */
@@ -90,6 +91,10 @@ async function boot(): Promise<FastifyInstance> {
       uploadCardImage, readCardUpload,
     };
   });
+  vi.doMock("../services/anexos/documento.js", async () => ({
+    ...(await vi.importActual<typeof import("../services/anexos/documento.js")>("../services/anexos/documento.js")),
+    lerAnexoDoCard,
+  }));
   vi.doMock("node-pty", () => ({ default: { spawn: ptySpawn } }));
   vi.doMock("../services/browser/browser.js", async () => {
     const actual = await vi.importActual<typeof import("../services/browser/browser.js")>(
@@ -258,6 +263,34 @@ describe("card lifecycle routes", () => {
     });
     expect(svg.headers["content-disposition"]).toBe('attachment; filename="1793817742302-x.svg"');
     expect(svg.headers["x-content-type-options"]).toBe("nosniff");
+  });
+
+  it("preview de documento anexado devolve o texto convertido", async () => {
+    const id = await makeCard();
+    lerAnexoDoCard.mockResolvedValueOnce({ formato: "xlsx", texto: "| a |", truncado: false });
+    const res = await app.inject({
+      method: "GET", url: `/api/cards/${id}/uploads/1793817742302-vendas.xlsx/preview`, headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ formato: "xlsx", texto: "| a |", truncado: false });
+    expect(lerAnexoDoCard).toHaveBeenCalledWith(id, "1793817742302-vendas.xlsx");
+  });
+
+  it("preview: anexo sumido é 404, formato que não converte é 422", async () => {
+    const id = await makeCard();
+    lerAnexoDoCard.mockRejectedValueOnce(new Error("upload not found"));
+    const sumido = await app.inject({ method: "GET", url: `/api/cards/${id}/uploads/1-x.xlsx/preview`, headers: { cookie } });
+    expect(sumido.statusCode).toBe(404);
+    lerAnexoDoCard.mockRejectedValueOnce(new Error("formato não suportado: .zip"));
+    const zip = await app.inject({ method: "GET", url: `/api/cards/${id}/uploads/1-x.zip/preview`, headers: { cookie } });
+    expect(zip.statusCode).toBe(422);
+    expect(zip.json()).toEqual({ error: "formato não suportado: .zip" });
+  });
+
+  it("preview exige acesso ao card", async () => {
+    const id = await makeCard();
+    const res = await app.inject({ method: "GET", url: `/api/cards/${id}/uploads/1-x.xlsx/preview` });
+    expect(res.statusCode).toBe(401);
   });
 
   it("404s an upload that is not there — the chat falls back to printing the path", async () => {

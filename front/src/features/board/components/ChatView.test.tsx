@@ -5,7 +5,7 @@ import { act } from "react";
 import { ChatView } from "@/features/board/components/ChatView";
 import { resetDraftsForTesting } from "@/features/board/components/TerminalComposer";
 import { renderApp } from "@/test/render";
-import { post } from "@/lib/api";
+import { get, post } from "@/lib/api";
 import { toast } from "sonner";
 import type { ChatEvent } from "@/features/board/lib/chat";
 import { STABLE_CONNECTION_MS } from "@/features/board/lib/reconnect";
@@ -30,6 +30,7 @@ vi.mock("sonner", () => ({
 }));
 
 const mockPost = vi.mocked(post);
+const mockGet = vi.mocked(get);
 
 /* -------------------------------------------------------- websocket stub */
 
@@ -197,6 +198,63 @@ describe("ChatView", () => {
     expect(chip).toHaveTextContent("contrato-de-trabalho.pdf");
     expect(screen.getByTestId("chat-user")).not.toHaveTextContent("/work/.uploads");
     expect(screen.queryByTestId("chat-image")).not.toBeInTheDocument();
+  });
+
+  it("áudio anexado vira um player no balão, sem baixar antes do play", async () => {
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    const card = "0a78f497-8bfd-4f0a-821b-2dbee5c8d9f9";
+    ws.deliver({ id: "u1", kind: "user", at: 1, text: `ouve isso /work/.uploads/${card}/1793817742302-ptt-2026.opus` });
+
+    const audio = (await screen.findByTestId("chat-audio")).querySelector("audio");
+    expect(audio).toHaveAttribute("src", `/api/cards/${card}/uploads/1793817742302-ptt-2026.opus`);
+    expect(audio).toHaveAttribute("preload", "none");
+    expect(screen.getByTestId("chat-audio")).toHaveTextContent("ptt-2026.opus");
+    expect(screen.queryByTestId("chat-file")).not.toBeInTheDocument();
+  });
+
+  it("planilha anexada abre um preview com a tabela que o runner extraiu", async () => {
+    const card = "0a78f497-8bfd-4f0a-821b-2dbee5c8d9f9";
+    const arquivo = "1793817742302-vendas-maio.xlsx";
+    mockGet.mockImplementation((url: string) =>
+      Promise.resolve(
+        url === `/cards/${card}/uploads/${arquivo}/preview`
+          ? { formato: "xlsx", texto: "## Maio\n\n| Filial | Valor |\n| --- | --- |\n| 5 | 1234.5 |", truncado: true }
+          : { available: false, proofread: false, language: null },
+      ),
+    );
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ id: "u1", kind: "user", at: 1, text: `confere /work/.uploads/${card}/${arquivo}` });
+
+    const chip = await screen.findByTestId("chat-file-preview");
+    expect(chip).toHaveTextContent("vendas-maio.xlsx");
+    expect(mockGet).not.toHaveBeenCalledWith(`/cards/${card}/uploads/${arquivo}/preview`);
+    await userEvent.click(chip);
+
+    const corpo = await screen.findByTestId("chat-file-preview-body");
+    await waitFor(() => expect(corpo.querySelector("table")).not.toBeNull());
+    expect(corpo).toHaveTextContent("1234.5");
+    expect(corpo).toHaveTextContent("the preview shows only the beginning");
+    expect(screen.getByRole("link", { name: /Download original/ })).toHaveAttribute("href", `/api/cards/${card}/uploads/${arquivo}`);
+  });
+
+  it("preview que falha mostra o erro do servidor, não fica girando", async () => {
+    const card = "0a78f497-8bfd-4f0a-821b-2dbee5c8d9f9";
+    mockGet.mockImplementation((url: string) =>
+      url.endsWith("/preview")
+        ? Promise.reject(Object.assign(new Error("422"), { response: { data: { error: "arquivo corrompido" } } }))
+        : Promise.resolve({ available: false, proofread: false, language: null }),
+    );
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ id: "u1", kind: "user", at: 1, text: `/work/.uploads/${card}/1793817742302-contrato.docx` });
+
+    await userEvent.click(await screen.findByTestId("chat-file-preview"));
+    expect(await screen.findByText("arquivo corrompido")).toBeInTheDocument();
   });
 
   it("falls back to the path when the image cannot be fetched — never a broken-image icon", async () => {

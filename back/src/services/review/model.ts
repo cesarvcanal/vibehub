@@ -72,6 +72,16 @@ export interface ReviewEvent {
   by?: string;
 }
 
+export interface MergeGate {
+  sha: string;
+  state: "running" | "passed" | "failed";
+  /** A saída do gate que falhou (já redigida e com teto). */
+  output?: string;
+  at: number;
+  /** O gate já rodou de novo sozinho, no fim de um turno do autor, depois desta falha (uma vez só). */
+  autoRetried?: true;
+}
+
 export interface Review {
   id: string;
   /** O card do AUTOR: onde a correção roda e o PR mora. */
@@ -113,6 +123,13 @@ export interface Review {
    * não é tentado de novo e os textos voltam a dizer "merge pelo botão"; uma rodada nova zera o efeito.
    */
   autoMergeFailedRound?: number;
+  /**
+   * O gate do merge (CI do PR, ou os testes da worktree do autor), rodado no commit aprovado assim que
+   * a revisão fica pronta, e não só no clique: o painel mostra o veredito antes do botão, um verde é
+   * reaproveitado pelo merge (que sai na hora) e um vermelho volta ao autor com a falha. Vale só para
+   * `sha`; um `running` que não está rodando neste processo é de antes de um deploy e roda de novo.
+   */
+  mergeGate?: MergeGate;
   /**
    * Quem mergeia JÁ deu a ordem do merge ao pedir a revisão ("terminando pode mergear"): não há a quem
    * esperar para dizer "pode mergear", então uma sugestão em pé não segura o merge automático (ela é

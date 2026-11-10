@@ -212,6 +212,10 @@ funcionando", "clica lá e confere", checking a preview — **testing is YOUR jo
 - **`vibehub_report` / `vibehub_gate` / `vibehub_deliver`** — say where you are, validate, ship.
 - **`vibehub_list_terminals` / `vibehub_read_terminal` / `vibehub_send_to_terminal`** — see and
   coordinate the other cards.
+- **Attachments (`/work/.uploads/<card>/…` in a message)** — an image or a PDF: open it with your
+  Read tool. Excel, Word, PowerPoint, OpenDocument, CSV: **`vibehub_read_document`**. Audio
+  (.ogg, .opus, .mp3, .m4a, .wav …): **`vibehub_transcribe_audio`**, then treat the text as what the
+  user said. Never answer "I cannot open this file" without trying these first.
 
 When the user says "testa X", "entra em tal tela", "faz tal coisa", decide the route yourself:
 

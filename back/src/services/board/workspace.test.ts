@@ -1595,6 +1595,14 @@ describe("image upload into the card", () => {
     expect(ws.uploadServedInline("image/png")).toBe(true);
   });
 
+  it("áudio anexado volta com o tipo de áudio, inline, para tocar no chat", () => {
+    expect(ws.uploadContentType("1790375878344-voz.ogg")).toBe("audio/ogg");
+    expect(ws.uploadContentType("1790375878344-ptt.opus")).toBe("audio/ogg");
+    expect(ws.uploadContentType("1790375878344-reuniao.mp3")).toBe("audio/mpeg");
+    expect(ws.uploadContentType("1790375878344-memo.m4a")).toBe("audio/mp4");
+    expect(ws.uploadServedInline("audio/ogg")).toBe(true);
+  });
+
   it("reads a PDF back with its type", async () => {
     const { card } = await seed();
     runScript.mockResolvedValue({ stdout: Buffer.from("%PDF-1.7").toString("base64"), stderr: "" });

@@ -9,7 +9,8 @@ import { findUser } from "../../auth/users.js";
 import { cardLevel } from "../../auth/access.js";
 import { creatorAccountSlug, getUserGit } from "../../auth/userGit.js";
 import { sendToTerminal, SEND_READY_WAIT_MS } from "../maestro/maestro.js";
-import { afterPrMerged, readPrApproval, readPrState, setPrPeople } from "../maestro/deliver.js";
+import { afterPrMerged, gateAtCommit, readPrApproval, readPrState, setPrPeople } from "../maestro/deliver.js";
+import type { GateResult } from "../maestro/gate.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { eventsAfter, onCardEvent, recordMessage, type CardEvent, type Severity } from "../events/cardEvents.js";
 import { logger } from "../../utils/logger.js";
@@ -23,7 +24,7 @@ import {
   activeReviewForPr, getReview, insertReview, listReviewsForCards, mutateReview, reviewByReviewerCard,
 } from "./store.js";
 import {
-  actionableForAuthor, approvePendingText, autoMergeFailedText, authorFixPrompt, authorQuestionNoticeText, authorSuggestionsPrompt, headMovedPrefix,
+  actionableForAuthor, approvePendingText, autoMergeFailedText, authorFixPrompt, authorMergeGatePrompt, mergeGateFailedText, authorQuestionNoticeText, authorSuggestionsPrompt, headMovedPrefix,
   impasseText, nudgePrefix, oneLine, phaseNoticeText, questionNoticeText, reviewerApprovePrompt, reviewerDeltaPrompt,
   reviewerRoundPrompt,
 } from "./prompts.js";
@@ -329,6 +330,7 @@ async function dispatch(r: Review): Promise<Review> {
     // ficaria presa até o fim do CI) e o Approve ainda nem foi publicado. Ele sai do fim do turno do
     // revisor que reporta `ready` (onTurnFinished), já com o Approve no GitHub.
     await relayReview(r, "reviewer", reviewerApprovePrompt(r), { approve: true });
+    void checkMergeGate(r.id);
   } else if (r.phase === "impasse") {
     await announcePhase(r);
   }
@@ -347,6 +349,9 @@ async function dispatch(r: Review): Promise<Review> {
 async function autoMerge(r: Review): Promise<void> {
   const now = (await getReview(r.id)) ?? r;
   if (!autoMergeEligible(now)) return;
+  // Gate do merge ainda rodando: o fim dele chama este merge de novo. Vermelho: o autor já foi avisado.
+  const gate = now.mergeGate?.sha === now.reviewedSha ? now.mergeGate : undefined;
+  if (gate && gate.state !== "passed") return;
   try {
     // O "ready" que o revisor reporta não prova o Approve: o prompt manda reportar mesmo quando o
     // `gh pr review --approve` falha (review do próprio PR, permissão). Quem prova é o GitHub — um
@@ -374,6 +379,93 @@ async function refuseAutoMerge(r: Review, why: string): Promise<void> {
     note(x, "system", `Merge automático não saiu (${oneLine(why, 200)}); o merge fica pelo botão.`);
   });
   await notifyBoth(after, `review:${r.id}:automerge_failed:${r.round}`, autoMergeFailedText(after, why), "warning");
+}
+
+/** Revisões com o gate do merge rodando NESTE processo: um `running` gravado e ausente daqui é de antes de um deploy. */
+const mergeGatesRunning = new Set<string>();
+
+/** Se o gate do merge daquela revisão está rodando agora, neste processo. */
+export function mergeGateRunning(reviewId: string): boolean {
+  return mergeGatesRunning.has(reviewId);
+}
+
+/**
+ * Se a revisão pronta precisa do gate do merge: nunca rodou no commit aprovado, ou ficou `running`
+ * órfão (o processo que rodava morreu num deploy). `again` = rodar mesmo depois de uma falha nesse
+ * commit (o "rodar de novo" do painel, ou o fim do turno do autor que consertou a worktree).
+ */
+function needsMergeGate(r: Review, again: boolean): boolean {
+  if (r.phase !== "ready" || !r.reviewedSha || mergeGatesRunning.has(r.id)) return false;
+  const gate = r.mergeGate?.sha === r.reviewedSha ? r.mergeGate : undefined;
+  if (!gate || gate.state === "running") return true;
+  return again && gate.state === "failed";
+}
+
+/**
+ * Roda o gate do merge no commit aprovado de uma revisão pronta ({@link Review.mergeGate}) e grava o
+ * veredito, se a revisão ainda está pronta naquele commit. Verde: o merge automático sai, se cabia.
+ * Vermelho: aviso nos dois cards e a falha ao autor, para consertar antes de alguém clicar. Um gate
+ * que nem rodou (runner fora, card sumido) é vermelho com o motivo. Nunca lança.
+ */
+export async function checkMergeGate(reviewId: string, opts: { again?: boolean; by?: string } = {}): Promise<void> {
+  let sha = "";
+  try {
+    const r = await getReview(reviewId);
+    if (!r || !needsMergeGate(r, opts.again === true)) return;
+    sha = r.reviewedSha as string;
+    mergeGatesRunning.add(reviewId);
+    await mutateReview(reviewId, (x) => {
+      x.mergeGate = { sha, state: "running", at: Date.now() };
+    });
+    let verdict: GateResult;
+    try {
+      verdict = await gateAtCommit(r.cardId, r.prUrl, sha);
+    } catch (err) {
+      verdict = { ran: true, passed: false, output: `o gate não chegou a rodar: ${(err as Error).message}` };
+    }
+    let landed = false as boolean;
+    const after = await mutateReview(reviewId, (x) => {
+      if (x.phase !== "ready" || x.reviewedSha !== sha) return;
+      x.mergeGate = verdict.passed
+        ? { sha, state: "passed", at: Date.now() }
+        : { sha, state: "failed", output: verdict.output, at: Date.now(), ...(opts.again && r.mergeGate?.autoRetried ? { autoRetried: true as const } : {}) };
+      note(x, "system", verdict.passed
+        ? `Testes do merge verdes no commit aprovado (${sha.slice(0, 7)}): o merge sai na hora.`
+        : `Testes do merge vermelhos no commit aprovado (${sha.slice(0, 7)}): o merge espera a correção, e o autor recebeu a falha.`,
+      opts.by ? { by: opts.by } : {});
+      landed = true;
+    });
+    logger.info(
+      { audit: true, action: "review.merge_gate", review: reviewId, sha, passed: verdict.passed, landed, again: opts.again === true, by: opts.by },
+      verdict.passed ? "PR review merge gate passed" : "PR review merge gate failed",
+    );
+    if (!landed) return;
+    if (verdict.passed) {
+      if (autoMergeEligible(after) && (await reviewerApproved(after))) await autoMerge(after);
+      return;
+    }
+    await notifyBoth(after, `review:${reviewId}:merge_gate_failed:${sha}:${after.mergeGate?.at}`, mergeGateFailedText(after), "warning");
+    await relayReview(after, "author", authorMergeGatePrompt(after), { unpause: true, optional: true }).catch((e: unknown) =>
+      logger.warn({ review: reviewId, detail: (e as Error).message }, "could not send the merge gate failure to the author"));
+  } catch (err) {
+    logger.warn({ review: reviewId, sha, detail: (err as Error).message }, "PR review merge gate failed to run");
+  } finally {
+    mergeGatesRunning.delete(reviewId);
+  }
+}
+
+/**
+ * O autor terminou um turno com o gate do merge vermelho no commit aprovado (e o PR ainda nele): roda
+ * o gate de novo, UMA vez por falha — é como o "npm install" que ele fez chega ao veredito sem
+ * ninguém clicar. Um push muda o head e reabre a revisão pelo caminho de sempre, não por aqui.
+ */
+async function retryMergeGateAfterAuthorTurn(r: Review): Promise<void> {
+  const gate = r.mergeGate;
+  if (r.phase !== "ready" || !gate || gate.sha !== r.reviewedSha || gate.state !== "failed" || gate.autoRetried) return;
+  await mutateReview(r.id, (x) => {
+    if (x.mergeGate?.sha === gate.sha && x.mergeGate.state === "failed") x.mergeGate.autoRetried = true;
+  });
+  await checkMergeGate(r.id, { again: true, by: "fim do turno do autor" });
 }
 
 /** A linha de sistema que conta o resultado da rodada do revisor. */
@@ -919,10 +1011,14 @@ export async function decideQuestion(reviewId: string, findingId: string, decisi
  * `reviewing` esperando a decisão humana das dúvidas) lança `nada_a_tentar`. Quem pode é a rota.
  */
 export async function retryReview(reviewId: string, by: string): Promise<Review> {
-  let side = null as Side | "approve" | null;
+  let side = null as Side | "approve" | "gate" | null;
   const after = await mutateReview(reviewId, (r) => {
     if (r.phase === "ready" && r.approvePending) {
       side = "approve";
+    } else if (r.phase === "ready" && r.mergeGate?.sha === r.reviewedSha && r.mergeGate?.state === "failed") {
+      side = "gate";
+      note(r, "human", "Tentar de novo: os testes do merge rodam de novo no commit aprovado.", { by });
+      return;
     } else if (r.phase === "impasse" && r.impasseReason !== "rodadas" && r.impasseReason !== HEAD_MOVED) {
       // "rodadas" e "push depois do pronto" não têm vez a devolver (a última rodada já foi): o revisor
       // humano decide os itens, ou cancela e pede uma revisão nova.
@@ -935,7 +1031,7 @@ export async function retryReview(reviewId: string, by: string): Promise<Review>
     } else {
       throw new Error(
         `nada_a_tentar: a revisão está em ${r.phase}${r.impasseReason ? ` (${r.impasseReason})` : ""}; ` +
-          "só impasse por falha/IA sem resposta, Approve pendente ou uma vez de IA parada têm o que tentar de novo",
+          "só impasse por falha/IA sem resposta, Approve pendente, testes do merge vermelhos ou uma vez de IA parada têm o que tentar de novo",
       );
     }
     r.nudges = 0;
@@ -944,7 +1040,8 @@ export async function retryReview(reviewId: string, by: string): Promise<Review>
       `Tentar de novo: a vez volta ao ${side === "reviewer" ? "revisor" : "autor"} (rodada ${r.round} de ${MAX_ROUNDS}).`, { by });
   });
   logger.info({ audit: true, action: "review.retry", review: reviewId, side, by }, "PR review retried");
-  if (side === "approve") await relayReview(after, "reviewer", reviewerApprovePrompt(after), { approve: true });
+  if (side === "gate") void checkMergeGate(reviewId, { again: true, by });
+  else if (side === "approve") await relayReview(after, "reviewer", reviewerApprovePrompt(after), { approve: true });
   else if (side) await relayReview(after, side, await promptFor(after, side));
   return (await getReview(reviewId)) ?? after;
 }
@@ -1181,6 +1278,9 @@ export async function reviewForRead(r: Review): Promise<{ review: Review; mergin
     now = await getReview(r.id);
   }
   const review = now ?? r;
+  // Revisão pronta sem veredito do gate no commit aprovado (pronta antes deste código, ou o gate
+  // morreu num deploy): roda agora, em segundo plano; o painel mostra "rodando" até o fim.
+  void checkMergeGate(review.id);
   return { review, merging: merging.has(review.id) };
 }
 
@@ -1287,6 +1387,7 @@ async function onTurnFinished(event: CardEvent): Promise<void> {
   if (asReviewer && awaitingTool(asReviewer, "reviewer")) waiting.push({ id: asReviewer.id, side: "reviewer" });
   for (const r of await listReviewsForCards([cardId])) {
     if (awaitingTool(r, "author")) waiting.push({ id: r.id, side: "author" });
+    void retryMergeGateAfterAuthorTurn(r);
   }
   if (waiting.length === 0) return;
   const skip = await notJudged(event);

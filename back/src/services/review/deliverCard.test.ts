@@ -67,6 +67,18 @@ async function cardUnderReview(phase: ReviewPhase, actor: string) {
   return { ...o, card };
 }
 
+/** O card do REVISOR do PR #7 (`reviewOf` = o card do autor), com a revisão na `phase` e a última ordem dada por `actor`. */
+async function reviewerCardOf(phase: ReviewPhase, actor: string) {
+  const o = await cardUnderReview(phase, "u-a");
+  await o.registry.createAccount({ name: "Mussa" });
+  const reviewer = await o.registry.createReviewerCard({
+    authorCard: o.card, reviewerAccountSlug: "mussa", prBranch: "card/x", title: "Revisão: Login",
+  });
+  await o.registry.stampCardActor(reviewer.id, actor);
+  await o.store.mutateReview("rev-1", (r) => { r.reviewerCardId = reviewer.id; });
+  return { ...o, reviewer };
+}
+
 describe("deliverCard — o vibehub_deliver com revisão de PR ativa", () => {
   it("caso real: ordem do responsável pelo merge com a revisão pronta — push, e o merge pelo caminho do botão", async () => {
     const { deliverCard, card } = await cardUnderReview("ready", "u-m");
@@ -230,5 +242,64 @@ describe("deliverCard — o vibehub_deliver com revisão de PR ativa", () => {
     await deliverCard(reviewed.id, { branch: "dev" });
     expect(deliver).toHaveBeenCalledWith(reviewed.id, { branch: "dev" });
     expect(mergeReviewedPr).not.toHaveBeenCalled();
+  });
+});
+
+describe("deliverCard — o card do REVISOR mandado mergear", () => {
+  const merged: ReviewMergeOutcome = {
+    kind: "merged", review: { phase: "merged" } as never,
+    result: { prUrl: PR, merged: true, reason: "merged", branch: "dev", cardBranch: "card/x", headBranch: "deleted" },
+  };
+
+  it("caso real (PR #215): quem tem papel manda o revisor mergear a revisão pronta — merge pelo caminho do botão, sem push", async () => {
+    for (const actor of ["u-m", "u-r"]) {
+      mergeReviewedPr.mockClear();
+      deliver.mockClear();
+      const { deliverCard, reviewer } = await reviewerCardOf("ready", actor);
+      mergeAnswer = merged;
+      const out = await deliverCard(reviewer.id, { authorized: true, from: reviewer.id });
+      expect(deliver).not.toHaveBeenCalled();
+      expect(mergeReviewedPr).toHaveBeenCalledWith("rev-1", actor);
+      expect(out).toMatchObject({ merged: true, reason: "merged", prUrl: PR, branch: "dev", headBranch: "deleted" });
+      await rm(dir, { recursive: true, force: true });
+      dir = await mkdtemp(join(tmpdir(), "vibehub-deliver-card-"));
+    }
+  });
+
+  it("revisão ainda não pronta: nada sai, e a resposta diz em que pé ela está", async () => {
+    const { deliverCard, reviewer } = await reviewerCardOf("fixing", "u-m");
+    const out = await deliverCard(reviewer.id, { authorized: true, from: reviewer.id });
+    expect(deliver).not.toHaveBeenCalled();
+    expect(mergeReviewedPr).not.toHaveBeenCalled();
+    expect(out).toMatchObject({ merged: false, reason: "review_active" });
+    expect(out.output).toMatch(/corrigindo/);
+  });
+
+  it("ordem de quem não tem papel, outro card entregando, ou sem authorized: o card do revisor segue sem push nem merge", async () => {
+    const { deliverCard, registry, reviewer } = await reviewerCardOf("ready", "u-x");
+    expect(await deliverCard(reviewer.id, { authorized: true, from: reviewer.id })).toMatchObject({ merged: false, reason: "review_active" });
+    expect(mergeReviewedPr).not.toHaveBeenCalled();
+
+    await registry.stampCardActor(reviewer.id, "u-m");
+    expect(await deliverCard(reviewer.id, { authorized: true, from: "outro-card" })).toMatchObject({ merged: false, reason: "review_active" });
+    expect(mergeReviewedPr).not.toHaveBeenCalled();
+    expect(deliver).not.toHaveBeenCalled();
+    // sem authorized é o deliver de sempre, que recusa o card do revisor (locked) antes de qualquer script
+    await deliverCard(reviewer.id, {});
+    expect(deliver).toHaveBeenCalledWith(reviewer.id, {});
+  });
+
+  it("entregar pra outra base pelo card do revisor: recusado, nada roda", async () => {
+    const { deliverCard, reviewer } = await reviewerCardOf("ready", "u-m");
+    const out = await deliverCard(reviewer.id, { branch: "prod", authorized: true, from: reviewer.id });
+    expect(out).toMatchObject({ merged: false, reason: "review_active", branch: "prod" });
+    expect(deliver).not.toHaveBeenCalled();
+    expect(mergeReviewedPr).not.toHaveBeenCalled();
+  });
+
+  it("CI vermelho no merge do revisor volta gate com o que falhou", async () => {
+    const { deliverCard, reviewer } = await reviewerCardOf("ready", "u-m");
+    mergeAnswer = { kind: "refused", status: 409, reason: "gate", error: "back: failing" };
+    expect(await deliverCard(reviewer.id, { authorized: true, from: reviewer.id })).toMatchObject({ merged: false, reason: "gate", output: "back: failing" });
   });
 });

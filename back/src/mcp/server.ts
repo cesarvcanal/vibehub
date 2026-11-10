@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerMaestroTools } from "./tools.js";
 import { registerCredentialTools } from "./credentialTools.js";
+import { registerAnexoTools } from "./anexoTools.js";
 import { registerExternalTools } from "./externalTools.js";
 import { registerEvents, type Principal } from "./events.js";
 import type { PublicUser } from "../auth/users.js";
@@ -77,6 +78,7 @@ export function createMcpServer(actor = "mcp", user?: PublicUser, principal?: Pr
   const server = new McpServer({ name: "vibehub", version: "0.1.0" }, { instructions: INSTRUCTIONS });
   registerMaestroTools(server, actor);
   registerCredentialTools(server, actor);
+  registerAnexoTools(server);
   registerEvents(server, null, principal);
   return server;
 }

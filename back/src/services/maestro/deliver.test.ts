@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -241,11 +241,45 @@ describe("buildCiChecksScript", () => {
     expect(s).toContain(`gh pr checks '${PR}' --json name,bucket,link`);
     expect(s).toContain(`-lt ${Math.ceil(deliver.CI_WAIT_SECONDS / deliver.CI_POLL_SECONDS)} ] || break`);
     expect(s).toContain(`[ "$WF" = 1 ] && [ "$i" -lt ${Math.ceil(deliver.CI_APPEAR_SECONDS / deliver.CI_POLL_SECONDS)} ] || break`);
-    // each glob tested alone: a repo with only *.yml still counts as having workflows
-    expect(s).toContain('for f in .github/workflows/*.yml .github/workflows/*.yaml; do [ -e "$f" ] && WF=1; done');
+    expect(s).toContain(deliver.PR_WORKFLOWS_DETECT);
     // the checks are read only once the PR points at the pushed commit
     expect(s.indexOf(`gh pr view '${PR}' --json headRefOid`)).toBeGreaterThan(-1);
     expect(s.indexOf(`gh pr view '${PR}' --json headRefOid`)).toBeLessThan(s.indexOf("gh pr checks"));
+  });
+});
+
+describe("PR_WORKFLOWS_DETECT: só espera CI aparecer quando algum workflow roda em PR ou push", () => {
+  const detect = async (files: Record<string, string>): Promise<string> => {
+    const { deliver } = await load();
+    const repo = await mkdtemp(join(tmpdir(), "vibehub-wf-"));
+    try {
+      await mkdir(join(repo, ".github/workflows"), { recursive: true });
+      for (const [name, body] of Object.entries(files)) await writeFile(join(repo, ".github/workflows", name), body);
+      return execFileSync("bash", ["-c", `${deliver.PR_WORKFLOWS_DETECT}; echo "$WF"`], { cwd: repo }).toString().trim();
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  };
+
+  it("caso real (tech.multi #215): workflow só de agenda não faz o merge esperar 2 min por check que nunca vem", async () => {
+    expect(await detect({ "external-port-check.yml": "name: x\non:\n  schedule:\n    - cron: \"17 * * * *\"\n  workflow_dispatch:\n" })).toBe("0");
+  });
+
+  it("as formas de disparar em PR/push contam, em .yml e .yaml", async () => {
+    for (const body of [
+      "on: push\n",
+      "on: [push, pull_request]\n",
+      "\"on\":\n  pull_request:\n    branches: [main]\n",
+      "on:\n  - pull_request_target\n",
+      "on:\n  workflow_dispatch:\n  push:\n    branches: [main]\n",
+    ]) {
+      expect(await detect({ "ci.yaml": body })).toBe("1");
+    }
+  });
+
+  it("sem pasta de workflows, ou só com agenda e dispatch manual: não espera", async () => {
+    expect(await detect({})).toBe("0");
+    expect(await detect({ "a.yml": "on:\n  workflow_dispatch:\n", "b.yaml": "on: schedule\n" })).toBe("0");
   });
 });
 
@@ -615,6 +649,25 @@ describe("deliver no modo só-merge (botão de merge da revisão de PR)", () => 
     for (const s of scripts()) {
       for (const line of s.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
     }
+  });
+
+  it("mergeOnly com o gate já verde no sha revisado (gatePassed): mergeia sem esperar CI nem rodar a suíte", async () => {
+    const { deliver, card } = await makeCard();
+    wireMergeOnly(REVIEWED, { ci: '[{"name":"back","bucket":"fail"}]' });
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: REVIEWED, gatePassed: true });
+    expect(out).toMatchObject({ merged: true, reason: "merged" });
+    expect(scripts().some((s) => s.includes("gh pr checks"))).toBe(false);
+    expect(localGateRan()).toBe(false);
+    // o merge segue preso ao commit em que o gate passou
+    expect(scripts().find((s) => s.includes("gh pr merge"))).toContain(`--match-head-commit '${REVIEWED}'`);
+  });
+
+  it("gatePassed fora do só-merge não pula o gate (só vale preso ao commit revisado)", async () => {
+    const { deliver, card } = await makeCard();
+    wire({ ci: '[{"name":"back","bucket":"fail"}]' });
+    const out = await deliver.deliver(card.id, { branch: "main", authorized: true, gatePassed: true });
+    expect(out).toMatchObject({ merged: false, reason: "gate" });
+    expect(mergeRan()).toBe(false);
   });
 
   it("mergeOnly: o merge grava mergedAt no PR do card (o PR #7 gravado pela entrega); head movido não grava", async () => {

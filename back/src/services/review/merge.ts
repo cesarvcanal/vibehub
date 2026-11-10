@@ -7,7 +7,7 @@ import { getSettings } from "../settings/settings.js";
 import { deliver, type DeliverResult } from "../maestro/deliver.js";
 import { logger } from "../../utils/logger.js";
 import { canMergeReview, type Review, type ReviewPhase } from "./model.js";
-import { claimMerge, markReviewMerged, releaseMerge, reopenAfterHeadMoved } from "./orchestrator.js";
+import { claimMerge, markReviewMerged, mergeGateRunning, releaseMerge, reopenAfterHeadMoved } from "./orchestrator.js";
 import { getReview } from "./store.js";
 
 /**
@@ -97,6 +97,21 @@ export async function mergeReviewedPr(
       error: "merger_sem_github: quem mergeia não tem uma conexão GitHub própria no vibehub",
     };
   }
+  // O gate do merge já rodou (ou roda) no commit aprovado desde que a revisão ficou pronta: o clique
+  // não espera minutos para descobrir o que já se sabe.
+  const gate = review.mergeGate?.sha === review.reviewedSha ? review.mergeGate : undefined;
+  if (gate?.state === "running" && mergeGateRunning(review.id)) {
+    return {
+      kind: "refused", status: 409, reason: "gate_running", phase: review.phase,
+      error: "os testes do merge ainda estão rodando no commit aprovado: o merge libera quando terminarem",
+    };
+  }
+  if (gate?.state === "failed") {
+    return {
+      kind: "refused", status: 409, reason: "gate", phase: review.phase,
+      error: `os testes do merge falharam no commit aprovado; o autor recebeu a falha. Depois da correção, "Tentar de novo" roda os testes outra vez.\n\n${gate.output ?? ""}`.trimEnd(),
+    };
+  }
   if (!claimMerge(review.id)) return { kind: "refused", status: 409, reason: "merging", error: "merge já em andamento" };
   try {
     // Relida com a trava na mão: um pedido anterior pode ter acabado (merged) entre a leitura e aqui.
@@ -112,6 +127,7 @@ export async function mergeReviewedPr(
     const by = opts.auto ? `${user.username} (merge automático)` : user.username;
     const result = await deliver(review.cardId, {
       authorized: true, mergeOnly: true, expectedHeadSha: review.reviewedSha, branch: review.base, connectionId, by,
+      gatePassed: now.mergeGate?.sha === now.reviewedSha && now.mergeGate?.state === "passed",
     });
     logger.info(
       {
