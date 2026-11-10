@@ -14,6 +14,7 @@ import {
   unwrapEditedMessage,
   capToolInput,
   HISTORY_COMPACT_FACTOR,
+  HISTORY_COMPACT_SIZE,
   TOOL_INPUT_TEXT_MAX,
   SDK_HISTORY_DIR,
   type HistoryEvent,
@@ -728,6 +729,44 @@ describe("input do tool_use no log", () => {
     await appendFile(join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`), `${JSON.stringify(old)}\n`, "utf8");
     const [tool] = await readHistory(CARD);
     expect((tool as { input: { content: string } }).input.content.length).toBeLessThanOrEqual(TOOL_INPUT_TEXT_MAX);
+  });
+
+  describe("compactação por tamanho", () => {
+    const file = () => join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`);
+    const writeRaw = async (events: object[]) => {
+      await mkdir(join(dir, SDK_HISTORY_DIR), { recursive: true });
+      await appendFile(file(), events.map((e) => `${JSON.stringify(e)}\n`).join(""), "utf8");
+    };
+    const write = (i: number, size: number) =>
+      ({ type: "tool_use", id: `w${i}`, name: "Write", input: { file_path: `/f${i}`, content: "x".repeat(size) } });
+
+    it("um log grande com poucos eventos é reescrito capado, sem perder um evento sequer", async () => {
+      const events = [{ type: "user", text: "escreve os arquivos" }, ...Array.from({ length: 20 }, (_, i) => write(i, 500_000))];
+      await writeRaw(events);
+      expect((await stat(file())).size).toBeGreaterThan(HISTORY_COMPACT_SIZE);
+
+      const replay = await readHistory(CARD);
+      expect(replay).toHaveLength(21);
+      expect((await stat(file())).size).toBeLessThan(TOOL_INPUT_TEXT_MAX * 21 + 10_000);
+      expect(await readHistory(CARD)).toEqual(replay);
+    });
+
+    it("abaixo do teto de tamanho e de contagem, nada é reescrito", async () => {
+      await writeRaw([write(0, 1_000), write(1, 1_000)]);
+      const before = (await stat(file())).ino;
+      await readHistory(CARD);
+      expect((await stat(file())).ino).toBe(before);
+    });
+
+    it("uma janela que já é grande não é reescrita a cada leitura — só quando a reescrita encolhe o arquivo", async () => {
+      // Cada evento já cabe no teto do input: cortar o que está fora da janela não ganharia quase nada.
+      const count = Math.ceil(HISTORY_COMPACT_SIZE / TOOL_INPUT_TEXT_MAX) + 10;
+      await writeRaw(Array.from({ length: count }, (_, i) => write(i, TOOL_INPUT_TEXT_MAX - 100)));
+      expect((await stat(file())).size).toBeGreaterThan(HISTORY_COMPACT_SIZE);
+      const before = (await stat(file())).ino;
+      expect(await readHistory(CARD)).toHaveLength(count);
+      expect((await stat(file())).ino).toBe(before);
+    });
   });
 });
 

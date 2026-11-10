@@ -36,6 +36,13 @@ export const HISTORY_REPLAY_LIMIT = 500;
 export const HISTORY_COMPACT_FACTOR = 4;
 
 /**
+ * Size threshold (characters of the file): past it, a log is compacted even below the count one.
+ * Counting events alone let a few dozen huge lines (inputs written before `capToolInput`) grow to
+ * tens of megabytes that every read parses in one go, blocking the event loop for everyone.
+ */
+export const HISTORY_COMPACT_SIZE = 4_000_000;
+
+/**
  * What the log stores: driver events, plus the user's own messages (they come from stdin, not
  * stdout). `from` is the message's PROVENANCE — who put it into this card: another person's chat
  * send, or another card's agent (`vibehub_send_to_terminal`). Absent on the card owner's own
@@ -226,8 +233,8 @@ export function appendHistory(cardId: string, event: HistoryEvent): Promise<void
  * The replay window of a card, oldest first — what a fresh connect sends to the browser before the
  * driver says `ready`: the last `limit` events of the MAIN agent plus the subagents' lines among
  * them (see `replayWindow`). Reading is also when the file is COMPACTED: a log that has grown past
- * several times the replay limit is rewritten to just that window, so the hot append path never
- * pays for a rewrite. Never throws — no file simply means no history yet.
+ * several times the replay limit, or past `HISTORY_COMPACT_SIZE`, is rewritten to just that window,
+ * so the hot append path never pays for a rewrite. Never throws — no file simply means no history yet.
  *
  * `strict`: a read that FAILS (EBUSY, EMFILE…) throws instead of reading as "no history". For a
  * caller that decides something once from the answer (the orphan-question sweep), an empty list
@@ -248,15 +255,21 @@ export async function readHistory(
   }
   const events = parseHistory(raw);
   const compactAbove = limit * HISTORY_COMPACT_FACTOR;
-  if (events.length > compactAbove) {
+  if (events.length > compactAbove || raw.length > HISTORY_COMPACT_SIZE) {
     // Chained like an append so a compaction never races one; best-effort like everything here.
     // The rewrite RE-READS the file inside the chain: the read above ran outside it, and whatever
     // was queued in between (an answer landing while someone opens the card, a rewind already
     // applied) would be overwritten by a tail computed before it existed.
     await appendHistoryBarrier(cardId, async () => {
-      const current = parseHistory(await readFile(file, "utf8"));
-      if (current.length <= compactAbove) return; // a rewind already shrank it
-      await writeFileAtomic(file, replayWindow(current, limit).map((e) => JSON.stringify(storedEvent(e))).join("\n") + "\n");
+      const currentRaw = await readFile(file, "utf8");
+      const current = parseHistory(currentRaw);
+      const kept = replayWindow(current, limit).map((e) => JSON.stringify(storedEvent(e))).join("\n") + "\n";
+      const tooMany = current.length > compactAbove; // false once a rewind already shrank it
+      // By size, only a rewrite that shrinks the file several times over: a window that is big on
+      // its own would otherwise be rewritten, whole, on every read.
+      const tooBig = currentRaw.length > HISTORY_COMPACT_SIZE && kept.length * HISTORY_COMPACT_FACTOR <= currentRaw.length;
+      if (!tooMany && !tooBig) return;
+      await writeFileAtomic(file, kept);
     });
   }
   // A log written before the input ceiling replays capped too, not as a multi-megabyte frame.
