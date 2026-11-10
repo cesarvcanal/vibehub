@@ -526,9 +526,16 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "one. The reviewer AI and the author's fixing AI then run by themselves; when the review ends ready " +
         "with nothing open (no blocking, question or suggestion standing, Approve on GitHub, gate green, no " +
         "conflict) the server MERGES BY ITSELF in the merger's name — nobody has to come back to press " +
-        "anything. Anything left standing goes to the merger's button. Refusals carry a code (pessoa_" +
+        "anything. Anything left standing goes to the merger's button. When the person giving the order IS " +
+        "the merger and already said to merge when it ends (\"terminando pode mergear\", \"mergeia quando " +
+        "ficar pronto\"), pass `mergeWhenReady: true`: that order is recorded on the review, so an open " +
+        "SUGGESTION no longer holds the automatic merge (blocking items, questions, a missing Approve, red CI " +
+        "still do) — never drop that order and leave the PR waiting for a button. \"…e concluir o card\" = " +
+        "`concludeWhenMerged: true`: once merged, this card moves to done by itself. Both are refused " +
+        "(merge_autorizado_de_outro) when the merger is someone else. Refusals carry a code (pessoa_" +
         "desconhecida, revisor_igual_autor, revisor_sem_conta, revisor_sem_github, papel_sem_work, " +
-        "revisao_ativa, sem_pr, ...): tell the user exactly that. Returns { review, phase, roles, next }.",
+        "revisao_ativa, sem_pr, merge_autorizado_de_outro, ...): tell the user exactly that. Returns " +
+        "{ review, phase, roles, next }.",
       inputSchema: {
         card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this terminal"),
         reviewer: z.string().min(1).describe("vibehub username of who reviews (e.g. 'albert')"),
@@ -536,21 +543,31 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         coauthor: z.string().optional().describe("username credited as co-author on the fix commits. Absent = nobody."),
         merger: z.string().optional().describe("username of the only person who merges. Absent = who gave the order."),
         pr: z.number().int().positive().optional().describe("the card's PR number. Absent = its only open PR."),
+        mergeWhenReady: z.boolean().optional()
+          .describe("true = the merger (the one giving the order) already said to merge when the review ends."),
+        concludeWhenMerged: z.boolean().optional()
+          .describe("true = the same order said to conclude the card once merged: it moves to done by itself."),
       },
     },
     async (a) => {
       try {
         const r = await startReviewByAgent(a.card, {
           reviewer: a.reviewer, author: a.author, coauthor: a.coauthor, merger: a.merger, pr: a.pr,
+          mergeWhenReady: a.mergeWhenReady, concludeWhenMerged: a.concludeWhenMerged,
         });
         return ok({
           review: r.id,
           pr: r.prNumber,
           phase: r.phase,
           roles: { reviewer: a.reviewer, author: a.author ?? "(padrão)", coauthor: a.coauthor ?? null, merger: a.merger ?? "(quem deu a ordem)" },
-          next:
-            "tell the user the review started with these roles; it runs by itself and merges by itself " +
-            "when it ends ready with nothing open — anything left standing waits for the merger's button",
+          mergeAuthorized: r.mergeAuthorized === true,
+          concludeWhenMerged: r.concludeWhenMerged === true,
+          next: r.mergeAuthorized
+            ? "tell the user the review started with these roles and the merge order recorded: it merges by itself " +
+              "when it ends ready with no blocking item or question (suggestions do not hold it)" +
+              (r.concludeWhenMerged ? ", and then this card moves to done" : "")
+            : "tell the user the review started with these roles; it runs by itself and merges by itself " +
+              "when it ends ready with nothing open — anything left standing waits for the merger's button",
         });
       } catch (e) {
         return fail(e);

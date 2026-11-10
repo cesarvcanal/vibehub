@@ -3,7 +3,7 @@ import { getUserGit } from "../../auth/userGit.js";
 import { findUser, listUsers, type PublicUser } from "../../auth/users.js";
 import * as registry from "../board/registry.js";
 import { ownGithubConnection } from "./merge.js";
-import type { Review } from "./model.js";
+import type { Review, ReviewOrders } from "./model.js";
 import { startReview } from "./orchestrator.js";
 
 /**
@@ -44,8 +44,15 @@ export async function startReviewChecked(input: {
   prNumber: number;
   roles: ReviewRoles;
   requester: PublicUser;
+  /** O que quem mergeia já mandou fazer no fim (ver {@link AgentReviewRequest}). */
+  orders?: ReviewOrders;
 }): Promise<Review> {
   const { card, prNumber, roles, requester } = input;
+  // Mergear e concluir no fim são ordens de quem mergeia: o merge sai em nome dele, e ninguém dá essa
+  // ordem por outra pessoa.
+  if ((input.orders?.mergeAuthorized || input.orders?.concludeWhenMerged) && roles.mergerUserId !== requester.id) {
+    throw new Error("merge_autorizado_de_outro: só quem mergeia pode mandar mergear (ou concluir o card) quando a revisão terminar");
+  }
   const required = { reviewerUserId: roles.reviewerUserId, authorUserId: roles.authorUserId, mergerUserId: roles.mergerUserId };
   const missing = Object.entries(required).filter(([, v]) => !v).map(([k]) => k);
   if (missing.length) throw new Error(`papeis_obrigatorios: ${missing.join(", ")}`);
@@ -76,6 +83,7 @@ export async function startReviewChecked(input: {
   }
   return await startReview({
     cardId: card.id, prNumber, ...required, ...(roles.coauthorUserId ? { coauthorUserId: roles.coauthorUserId } : {}),
+    ...(input.orders ? { orders: input.orders } : {}),
     by: requester.username,
   });
 }
@@ -90,6 +98,13 @@ export interface AgentReviewRequest {
   coauthor?: string;
   /** Quem mergeia. Ausente = quem deu a ordem. */
   merger?: string;
+  /**
+   * Quem deu a ordem já mandou mergear quando terminar ("terminando pode mergear"). Só vale quando ele
+   * é quem mergeia: ninguém autoriza o merge de outra pessoa (`merge_autorizado_de_outro`).
+   */
+  mergeWhenReady?: boolean;
+  /** E concluir o card quando mergear. Mesma regra: a ordem é de quem mergeia. */
+  concludeWhenMerged?: boolean;
 }
 
 /**
@@ -136,6 +151,7 @@ export async function startReviewByAgent(cardId: string, req: AgentReviewRequest
       ...(req.coauthor ? { coauthorUserId: byName("coautor", req.coauthor) } : {}),
       mergerUserId: req.merger ? byName("merger", req.merger) : requester.id,
     },
+    orders: { mergeAuthorized: req.mergeWhenReady === true, concludeWhenMerged: req.concludeWhenMerged === true },
   });
 }
 

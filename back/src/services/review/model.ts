@@ -113,6 +113,17 @@ export interface Review {
    * não é tentado de novo e os textos voltam a dizer "merge pelo botão"; uma rodada nova zera o efeito.
    */
   autoMergeFailedRound?: number;
+  /**
+   * Quem mergeia JÁ deu a ordem do merge ao pedir a revisão ("terminando pode mergear"): não há a quem
+   * esperar para dizer "pode mergear", então uma sugestão em pé não segura o merge automático (ela é
+   * opcional por definição). Bloqueante, dúvida, Approve fora do GitHub, CI e conflito seguem segurando.
+   */
+  mergeAuthorized?: boolean;
+  /**
+   * A mesma ordem pediu para concluir o card: mergeada a revisão, o card que deu a ordem vai para
+   * `done` (o que anexou o PR, `hubCardId`, ou o do autor quando é o mesmo).
+   */
+  concludeWhenMerged?: boolean;
   lastSubmitRound?: number;
   lastRespondRound?: number;
   nudges: number;
@@ -262,16 +273,44 @@ export function canMergeReview(
   return [review.mergerUserId, review.reviewerUserId, review.authorUserId, review.coauthorUserId].includes(userId);
 }
 
+/** As ordens que quem mergeia dá ao pedir a revisão (ver os campos de {@link Review}). */
+export type ReviewOrders = Pick<Review, "mergeAuthorized" | "concludeWhenMerged">;
+
+/** Sugestão que o merge autorizado deixa passar: em pé e não pedida ao autor. PURE. */
+function isWaived(review: Review, f: Finding): boolean {
+  return !!review.mergeAuthorized && f.severity === "suggestion" && !f.requested;
+}
+
+/**
+ * As sugestões em pé que o merge autorizado deixa passar, para os textos dizerem quantas ficaram em vez
+ * de "nada em aberto". Sem `mergeAuthorized`, nenhuma. PURE.
+ */
+export function waivedSuggestions(review: Review): Finding[] {
+  return review.findings.filter((f) => isOpen(f) && isWaived(review, f));
+}
+
+/** "merge autorizado por quem mergeia; N sugestão(ões) em aberto não segura(m)", ou null sem nenhuma. PURE. */
+export function waivedText(review: Review): string | null {
+  const n = waivedSuggestions(review).length;
+  if (!n) return null;
+  return n === 1
+    ? "merge autorizado por quem mergeia; 1 sugestão em aberto não segura"
+    : `merge autorizado por quem mergeia; ${n} sugestões em aberto não seguram`;
+}
+
 /**
  * O merge sai SOZINHO quando não sobrou nada para uma pessoa olhar: revisão em `ready` e nenhum achado
  * em pé, de nenhuma severidade — bloqueante, dúvida ou sugestão aberta/contestada. Sugestão não segura
  * o `ready`, mas segura o merge automático: ela é justamente o que alguém pode querer aplicar antes.
  * Sem isso o PR ficava "pronto pra merge" esperando alguém voltar ao card só para dizer "pode mergear".
+ * Com o merge já autorizado (`mergeAuthorized`) essa pessoa já disse: a sugestão em pé não segura,
+ * menos a que alguém já mandou o autor aplicar ("Fazer"), que segura até ele subir ({@link waivedSuggestions}).
  * PURE.
  */
 export function autoMergeEligible(review: Review): boolean {
+  const holds = (f: Finding): boolean => isOpen(f) && !isWaived(review, f);
   return (
-    review.phase === "ready" && !!review.reviewedSha && !review.findings.some(isOpen) &&
+    review.phase === "ready" && !!review.reviewedSha && !review.findings.some(holds) &&
     // Approve que não chegou ao GitHub: o PR segue com o "changes requested" da rodada 1 — o merge
     // automático não passa por cima disso; o "tentar de novo" do painel publica e o merge sai depois.
     !review.approvePending &&
