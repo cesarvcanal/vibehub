@@ -96,6 +96,14 @@ function where(c: { path: string; line: number }): string {
   return `${c.path || "?"}:${c.line}`;
 }
 
+/**
+ * The first line of a block, or undefined for a one-line comment: 0 (what a client that fills numeric
+ * defaults sends) and a value equal to `line` both mean "just this line". PURE.
+ */
+function blockStart(c: PrComment): number | undefined {
+  return c.startLine === undefined || c.startLine === 0 || c.startLine === c.line ? undefined : c.startLine;
+}
+
 /** A comment's path as the diff names it: trimmed, a leading `./` (any number of them) dropped. PURE. */
 function cleanPath(raw: unknown): string {
   return String(raw ?? "").trim().replace(/^(\.\/)+/, "");
@@ -116,8 +124,9 @@ function commentProblems(c: PrComment, body: string): string[] {
     );
   }
   if (!Number.isInteger(c.line) || c.line < 1) out.push(`${where(c)}: line tem que ser um número de linha (inteiro ≥ 1)`);
-  if (c.startLine !== undefined && (!Number.isInteger(c.startLine) || c.startLine < 1 || c.startLine >= c.line)) {
-    out.push(`${where(c)}: startLine tem que ser inteiro ≥ 1 e menor que line`);
+  const start = blockStart(c);
+  if (start !== undefined && (!Number.isInteger(start) || start < 1 || start > c.line)) {
+    out.push(`${where(c)}: startLine tem que ser inteiro ≥ 1 e menor que line (ou ausente, num comentário de uma linha)`);
   }
   if (c.side !== undefined && c.side !== "RIGHT" && c.side !== "LEFT") out.push(`${where(c)}: side é RIGHT ou LEFT`);
   if (body.length < MIN_COMMENT_CHARS) {
@@ -175,7 +184,7 @@ export function validatePrDocs(docs: PrDocs | undefined): { ok: true; docs: Clea
     seen.add(key);
     clean.comments.push({
       path, line: c.line, side: c.side ?? "RIGHT", body: text,
-      ...(c.startLine !== undefined ? { startLine: c.startLine } : {}),
+      ...(blockStart(c) !== undefined ? { startLine: blockStart(c) } : {}),
     });
   }
 

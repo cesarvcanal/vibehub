@@ -97,11 +97,20 @@ describe("validatePrDocs", () => {
       { ...COMMENT, path: "" },
       { ...COMMENT, line: 0 },
       { ...COMMENT, line: 2.5 },
-      { ...COMMENT, line: 5, startLine: 5 },
       { ...COMMENT, line: 5, startLine: 9 },
+      { ...COMMENT, line: 5, startLine: -1 },
+      { ...COMMENT, line: 5, startLine: 1.5 },
     ];
     for (const c of bad) expect(validatePrDocs({ comments: [c] }).ok, JSON.stringify(c)).toBe(false);
     expect(validatePrDocs({ comments: [{ ...COMMENT, line: 9, startLine: 5 }] }).ok).toBe(true);
+  });
+
+  it("startLine 0 (a client filling the default) or equal to line is a one-line comment, not an error", () => {
+    for (const startLine of [0, 10]) {
+      const v = validatePrDocs({ comments: [{ ...COMMENT, line: 10, startLine }] });
+      expect(v.ok, String(startLine)).toBe(true);
+      expect(v.ok && v.docs.comments[0], String(startLine)).not.toHaveProperty("startLine");
+    }
   });
 
   it("a path GitHub would not resolve is refused before the push; a leading ./ is just dropped", () => {
