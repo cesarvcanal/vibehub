@@ -40,7 +40,8 @@ import { logger } from "../../utils/logger.js";
  *     MAX_AUTO_RESUMES. Num dia de muitos deploys o trabalho segue até o fim (produção, 2026-10-19:
  *     a segunda atualização seguida largava a tarefa pela metade); o que não avança é o loop de
  *     verdade — a retomada que morre ao chegar — e esse para com a linha de sistema e o estado
- *     parado explícito. O teto cobre o caso que avança E derruba o painel a cada volta.
+ *     parado explícito. O teto cobre o caso que avança E derruba o painel a cada volta, logo depois
+ *     de voltar: a retomada que ficou de pé por SETTLED_RESUME_MS recomeça a cadeia (nextResumeAttempt).
  *  4. o turno estava PARADO num cartão de pergunta: nada a retomar — só a linha, e o cartão fica
  *     aberto para a pessoa responder (a resposta vai como mensagem, com o segundo plano que morreu;
  *     ver manager.ts).
@@ -88,13 +89,26 @@ export function isStaleBackgroundOnly(marker: InflightMarker, now: number): bool
 }
 
 
-/** Retomadas automáticas seguidas, no máximo, sem uma mensagem de pessoa no meio. */
+/** Retomadas automáticas seguidas, no máximo, que morrem logo depois de avançar. */
 export const MAX_AUTO_RESUMES = 5;
 
-/** O turno interrompido merece outra retomada automática? PURA. */
-export function mayResumeAgain(marker: InflightMarker): boolean {
-  if (marker.attempts === 0) return true;
-  return marker.progressed === true && marker.attempts < MAX_AUTO_RESUMES;
+/**
+ * A retomada que avançou e ficou de pé por este tempo trabalhou de verdade: o deploy que a matou é
+ * dos outros, e ela não gasta o teto. Num dia de deploy a cada ~5 min, a 5ª retomada de um trabalho
+ * longo parava o card no meio com `progressed: true` (produção, troca-de-effort-f121, 2026-11-10).
+ * O teto fica para o turno que derruba o painel logo depois de voltar.
+ */
+export const SETTLED_RESUME_MS = 2 * 60_000;
+
+/**
+ * O número da próxima retomada automática do turno interrompido, ou null quando não há outra. A que
+ * avançou e assentou recomeça a cadeia em 1 — ainda precisa avançar para ganhar a seguinte. PURA.
+ */
+export function nextResumeAttempt(marker: InflightMarker, now: number): number | null {
+  if (marker.attempts === 0) return 1;
+  if (marker.progressed !== true) return null;
+  if (now - marker.startedAt >= SETTLED_RESUME_MS) return 1;
+  return marker.attempts < MAX_AUTO_RESUMES ? marker.attempts + 1 : null;
 }
 
 /** As linhas de sistema que o card ganha, conforme o caso. */
@@ -400,7 +414,8 @@ async function resumeCard(
       logger.info({ audit: true, action: "sdk.resume.awaiting_answer", card: card.worktreeSlug }, "interrupted sdk turn was waiting on a question card — left open, not resumed");
       return "noted";
     }
-    if (!mayResumeAgain(marker)) {
+    const attempt = nextResumeAttempt(marker, Date.now());
+    if (attempt === null) {
       await deps.appendNote(cardId, texts.notAgain);
       await deps.clearMarker(cardId);
       logger.warn(
@@ -431,13 +446,13 @@ async function resumeCard(
       command,
       transcriptDir: transcriptDirFor(project, card, effectiveAccountSlug(card, project)),
     });
-    // attempts: marker.attempts + 1, SEM progresso — o marcador do turno retomado só ganha
-    // `progressed` quando a IA produzir algo (manager); se morrer antes disso, o próximo boot só anota.
-    deps.inject(session, resumeContinuationText(marker, texts.continuation), SYSTEM_ORIGIN, marker.attempts + 1);
+    // SEM progresso — o marcador do turno retomado só ganha `progressed` quando a IA produzir algo
+    // (manager); se morrer antes disso, o próximo boot só anota.
+    deps.inject(session, resumeContinuationText(marker, texts.continuation), SYSTEM_ORIGIN, attempt);
     logger.info(
       {
         audit: true, action: "sdk.resume", card: card.worktreeSlug, cause: texts.cause,
-        interruptedAt: marker.startedAt, preview: marker.preview, attempt: marker.attempts + 1,
+        interruptedAt: marker.startedAt, preview: marker.preview, attempt,
         background: marker.background?.tasks,
       },
       "interrupted sdk turn resumed",

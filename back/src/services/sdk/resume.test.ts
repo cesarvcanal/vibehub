@@ -20,6 +20,7 @@ import {
   CRASH_RESUME_DELAY_MS,
   CRASH_TEXTS,
   MAX_AUTO_RESUMES,
+  SETTLED_RESUME_MS,
   NOTE_AUTO_OFF,
   NOTE_AWAITING_ANSWER,
   NOTE_BACKGROUND_STALE,
@@ -30,6 +31,7 @@ import {
   awaitingAnswerInHistory,
   handOffSdkOnShutdown,
   isStaleBackgroundOnly,
+  nextResumeAttempt,
   openQuestionIds,
   resumeAfterDriverCrash,
   resumeContinuationText,
@@ -244,7 +246,7 @@ describe("resumeInterruptedTurns — the boot sweep", () => {
   });
 
   it("o turno retomado AVANÇOU e morreu em outro deploy: retoma de novo — o trabalho não fica pela metade", async () => {
-    await writeInflightMarker(CARD, { startedAt: 1, attempts: 1, progressed: true });
+    await writeInflightMarker(CARD, { startedAt: Date.now(), attempts: 1, progressed: true });
     const summary = await resumeInterruptedTurns(deps());
     expect(summary.resumed).toEqual([CARD]);
     expect(spawned.length).toBe(1);
@@ -274,12 +276,47 @@ describe("resumeInterruptedTurns — the boot sweep", () => {
   });
 
   it("o teto de retomadas seguidas para mesmo com progresso — um turno que derruba o próprio painel não vira loop", async () => {
-    await writeInflightMarker(CARD, { startedAt: 1, attempts: MAX_AUTO_RESUMES, progressed: true });
+    // Cada volta morre logo depois de avançar: é o painel caindo pelo próprio turno, não trabalho longo.
+    await writeInflightMarker(CARD, { startedAt: Date.now(), attempts: MAX_AUTO_RESUMES, progressed: true });
     const summary = await resumeInterruptedTurns(deps());
     expect(summary).toEqual({ resumed: [], noted: [CARD] });
     expect(spawned.length).toBe(0);
     const history = await readHistory(CARD);
     expect((history[0] as { text: string }).text).toBe(NOTE_NOT_AGAIN);
+  });
+
+  it("O CASO REAL (2026-11-10): dia de muitos deploys — a retomada que trabalhou por minutos não gasta o teto", async () => {
+    // troca-de-effort-f121: deploy a cada ~5 min, a 5ª retomada (progressed: true) parava o card no meio.
+    await writeInflightMarker(CARD, { startedAt: Date.now() - SETTLED_RESUME_MS - 1_000, attempts: MAX_AUTO_RESUMES, progressed: true });
+    const summary = await resumeInterruptedTurns(deps());
+    expect(summary.resumed).toEqual([CARD]);
+    expect(spawned.length).toBe(1);
+    // A cadeia recomeça: a nova retomada ainda precisa avançar, e o teto volta a contar dela.
+    await vi.waitFor(async () => {
+      const marker = await readInflightMarker(CARD);
+      expect(marker?.attempts).toBe(1);
+      expect(marker?.progressed).toBeUndefined();
+    });
+  });
+
+  it("trabalhou por minutos mas SEM avançar: continua sendo o loop, só a linha", async () => {
+    await writeInflightMarker(CARD, { startedAt: Date.now() - SETTLED_RESUME_MS - 1_000, attempts: 2 });
+    const summary = await resumeInterruptedTurns(deps());
+    expect(summary).toEqual({ resumed: [], noted: [CARD] });
+    expect(spawned.length).toBe(0);
+  });
+
+  it("nextResumeAttempt — pura: o número da próxima retomada, ou null", () => {
+    const now = 10 * SETTLED_RESUME_MS;
+    const fresh = now - 1_000;
+    const settled = now - SETTLED_RESUME_MS;
+    expect(nextResumeAttempt({ startedAt: fresh, attempts: 0 }, now)).toBe(1);
+    expect(nextResumeAttempt({ startedAt: fresh, attempts: 1 }, now)).toBeNull();
+    expect(nextResumeAttempt({ startedAt: settled, attempts: 1 }, now)).toBeNull();
+    expect(nextResumeAttempt({ startedAt: fresh, attempts: 1, progressed: true }, now)).toBe(2);
+    expect(nextResumeAttempt({ startedAt: fresh, attempts: MAX_AUTO_RESUMES - 1, progressed: true }, now)).toBe(MAX_AUTO_RESUMES);
+    expect(nextResumeAttempt({ startedAt: fresh, attempts: MAX_AUTO_RESUMES, progressed: true }, now)).toBeNull();
+    expect(nextResumeAttempt({ startedAt: settled, attempts: MAX_AUTO_RESUMES, progressed: true }, now)).toBe(1);
   });
 
   it("sdkAutoResume off: only the line saying so, marker consumed, no driver", async () => {

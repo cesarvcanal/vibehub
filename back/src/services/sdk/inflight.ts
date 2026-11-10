@@ -20,7 +20,8 @@ import { CARD_ID_RE } from "../board/cardId.js";
  * history and (once, never in a loop) an automatic resume.
  *
  * `attempts` + `progressed` are the loop-guard: 0 = a normal user turn; >=1 = this turn IS already
- * an automatic resume — it earns another one only if it made progress, up to MAX_AUTO_RESUMES.
+ * an automatic resume — it earns another one only if it made progress, up to MAX_AUTO_RESUMES
+ * resumes that die soon after progressing (see nextResumeAttempt in ./resume.ts).
  *
  * `owner` + o BATIMENTO: o deploy do tech.multi é BLUE/GREEN — o container novo sobe e fica saudável
  * com o antigo AINDA no ar, rodando o turno. "Existe marcador no boot" deixou de significar "o turno
