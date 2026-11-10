@@ -73,7 +73,7 @@ keeps the dialog's default (who works the card fixes; who gave the order merges)
 review runs on its own and, when it ends ready with nothing standing, the server merges it by itself
 in the merger's name — that is the "merge when it's all right" the user asked for; you do not merge
 it by hand. **If the one giving the order merges and already said to merge when it ends** ("terminando
-pode mergear", "faz merge pra prod direto"), pass `mergeWhenReady: true` — and `concludeWhenMerged: true`
+pode mergear", "mergeia quando ficar pronto"), pass `mergeWhenReady: true` — and `concludeWhenMerged: true`
 for "…e concluir o card". Without it, a single open suggestion leaves the PR waiting for a button the
 person already pressed in words. Report a refusal with its code and stop on it.
 
