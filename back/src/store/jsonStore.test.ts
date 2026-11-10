@@ -140,6 +140,19 @@ describe("JsonStore", () => {
     await store.mutate(() => undefined);
     expect(JSON.parse(await readFile(file, "utf8"))).toEqual({ items: [] });
   });
+
+  it("serializes the document once per mutation that writes", async () => {
+    await store.mutate((d) => d.items.push("a"));
+    const doc = await store.load();
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      await store.mutate((d) => d.items.push("b"));
+      expect(stringify.mock.calls.filter(([value]) => value === doc)).toHaveLength(1);
+    } finally {
+      stringify.mockRestore();
+    }
+    expect(JSON.parse(await readFile(file, "utf8"))).toEqual({ items: ["a", "b"] });
+  });
 });
 
 /**
