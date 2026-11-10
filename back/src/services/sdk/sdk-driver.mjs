@@ -1544,7 +1544,7 @@ async function restoreAccountEffort(handle) {
  * the session on another. The level leaves `ultraRaised`, so the give-back clears only `ultracode`.
  */
 async function setCardEffort(level) {
-  if (level !== null && !EFFORT_LEVELS.has(level)) return;
+  if (level !== null && !EFFORT_LEVELS.has(level)) return { error: `nível desconhecido: ${level}` };
   EFFORT = level;
   if (ultraRaised && "effortLevel" in ultraRaised) {
     const { effortLevel: _nivelDaPalavra, ...restoDaPalavra } = ultraRaised;
@@ -1552,7 +1552,7 @@ async function setCardEffort(level) {
   }
   const handle = currentQuery;
   // No stream yet: the next one starts with `effort: EFFORT` (sdkOptions).
-  if (!handle || typeof handle.applyFlagSettings !== "function") return;
+  if (!handle || typeof handle.applyFlagSettings !== "function") return { effort: EFFORT ?? undefined };
   if (typeof handle.initializationResult === "function") {
     // A stream that has only just been created has no CLI behind it yet (see raiseUltra).
     try {
@@ -1562,23 +1562,46 @@ async function setCardEffort(level) {
       ]);
     } catch { /* boot failed on its own terms */ }
   }
-  if (currentQuery !== handle) return; // the stream died while we waited; the next starts on EFFORT
+  // The stream died while we waited; the next starts on EFFORT.
+  if (currentQuery !== handle) return { effort: EFFORT ?? undefined };
   try {
     if (level === null) await restoreAccountEffort(handle);
     else await handle.applyFlagSettings({ effortLevel: level });
   } catch (err) {
-    trace(`could not apply effort ${level ?? "default"} to the live session: ${err && err.message ? err.message : String(err)}`);
+    const motivo = err && err.message ? err.message : String(err);
+    trace(`could not apply effort ${level ?? "default"} to the live session: ${motivo}`);
+    return { error: motivo };
+  }
+  return { effort: (await nivelDaSessao(handle)) ?? EFFORT ?? undefined };
+}
+
+/**
+ * O nível que a próxima chamada ao modelo vai usar, segundo a PRÓPRIA sessão (`getSettings`, que o
+ * SDK 0.3.300 tem sem tipar). Undefined quando ela não diz: um SDK sem a consulta, ou a consulta falhou.
+ */
+async function nivelDaSessao(handle) {
+  if (typeof handle.getSettings !== "function") return undefined;
+  try {
+    const level = (await handle.getSettings())?.applied?.effort;
+    return EFFORT_LEVELS.has(level) ? level : undefined;
+  } catch {
+    return undefined;
   }
 }
 
 /**
  * UMA troca por vez, na ordem em que chegaram. A volta ao padrão da conta são três idas ao CLI, e uma
  * troca logo atrás dela passava no meio: a última ida (o nível da conta) desfazia a escolha mais nova.
+ *
+ * Cada troca é CONFIRMADA (`effort_ack`): com o nível que a sessão diz que vai usar, ou com o erro
+ * de quem recusou. O back só diz "já valendo" com essa resposta na mão.
  */
 let effortChain = Promise.resolve();
-function queueCardEffort(level) {
+function queueCardEffort(id, level) {
   effortChain = effortChain
     .then(() => setCardEffort(level))
+    .catch((err) => ({ error: err && err.message ? err.message : String(err) }))
+    .then((desfecho) => emit({ type: "effort_ack", id, ...desfecho }))
     .catch((err) => { trace(`effort switch failed: ${err && err.message ? err.message : String(err)}`); });
 }
 
@@ -1970,9 +1993,9 @@ rl.on("line", (line) => {
     queueBtw(control.id, control.question);
     return;
   }
-  if (control && control.type === "set_effort" && (typeof control.effort === "string" || control.effort === null)) {
+  if (control && control.type === "set_effort" && typeof control.id === "string" && (typeof control.effort === "string" || control.effort === null)) {
     // FORA da fila `serialized`: a troca vale para o turno que já está rodando, não espera por ele.
-    queueCardEffort(control.effort);
+    queueCardEffort(control.id, control.effort);
     return;
   }
   if (control && control.type === "reanchor") {

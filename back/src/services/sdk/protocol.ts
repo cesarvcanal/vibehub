@@ -244,6 +244,12 @@ export interface CatalogEvent { type: "catalog"; commands: SlashCommandInfo[] }
  */
 export interface EffortDefaultEvent { type: "effort_default"; effort: string }
 /**
+ * A resposta a um `set_effort` (mesmo `id`): `effort` = o nível que a sessão diz que a próxima
+ * chamada ao modelo vai usar (ausente quando ela não diz); `error` = a sessão recusou a troca. Estado
+ * para quem trocou, consumido pelo manager: nunca vai ao histórico nem ao navegador.
+ */
+export interface EffortAckEvent { type: "effort_ack"; id: string; effort?: string; error?: string }
+/**
  * Output of a LOCAL slash command (`/cost`, `/usage`): the CLI answers it itself, without a model
  * turn. Without this the chat swallowed the answer and the command looked like it did nothing.
  */
@@ -341,6 +347,7 @@ export type DriverEvent =
   | RewoundEvent
   | CatalogEvent
   | EffortDefaultEvent
+  | EffortAckEvent
   | LocalOutputEvent
   | BtwAnswerEvent
   | CompactionEvent
@@ -377,6 +384,7 @@ const DRIVER_EVENT_TYPES = new Set([
   "rewound",
   "catalog",
   "effort_default",
+  "effort_ack",
   "local_output",
   "btw_answer",
   "compaction",
@@ -492,9 +500,9 @@ export interface BtwControl { type: "btw"; id: string; question: string }
  * A INTELIGÊNCIA DO CARD TROCOU com o driver de pé: o driver aplica o nível na sessão viva
  * (`applyFlagSettings`), no meio do turno inclusive — a próxima chamada ao modelo já sai nele, sem
  * reiniciar nada. `null` = de volta ao padrão da conta, também ao vivo. Nasce no back (troca no
- * pill), nunca no navegador.
+ * pill), nunca no navegador. O driver responde com um `effort_ack` do mesmo `id`.
  */
-export interface SetEffortControl { type: "set_effort"; effort: string | null }
+export interface SetEffortControl { type: "set_effort"; id: string; effort: string | null }
 export type DriverControl =
   | UserControl
   | BtwControl
