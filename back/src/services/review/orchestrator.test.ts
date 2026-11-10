@@ -1392,6 +1392,30 @@ describe("pedir ao autor aplicar as sugestões escolhidas", () => {
     expect(dropped.findings[1]?.requested).toBeUndefined();
   });
 
+  it("resposta do autor que deixa de fora uma sugestão pedida é recusada, sem gravar nada", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 1, findings: [SUGGESTION, { severity: "suggestion", title: "extrair helper" }], headSha: SHA1, summary: "só sugestões",
+    });
+    await o.orch.requestSuggestions(review.id, ["f1", "f2"], "mussa");
+    await expect(o.orch.submitAuthorResponse(author.id, {
+      round: 1, items: [{ id: "f1", status: "fixed", commit: "c1", reply: "renomeei" }], headSha: SHA2, reviewId: review.id,
+    })).rejects.toThrow(/sugestao_sem_resposta: f2/);
+    const untouched = await o.store.getReview(review.id);
+    expect(untouched?.findings.map((f) => [f.status, f.requested?.by])).toEqual([["open", "mussa"], ["open", "mussa"]]);
+    await o.orch.submitAuthorResponse(author.id, {
+      round: 1,
+      items: [
+        { id: "f1", status: "fixed", commit: "c1", reply: "renomeei" },
+        { id: "f2", status: "wontfix", reply: "fora do escopo deste PR" },
+      ],
+      headSha: SHA2, reviewId: review.id,
+    });
+    const answered = await o.store.getReview(review.id);
+    expect(answered?.findings.map((f) => [f.status, f.requested])).toEqual([["fixed", undefined], ["wontfix", undefined]]);
+  });
+
   it("sugestão pedida que o autor respondeu e o revisor reabriu pode ser pedida de novo (f10)", async () => {
     const o = await load();
     const { author, review } = await started(o);
