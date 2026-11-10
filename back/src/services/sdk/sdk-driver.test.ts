@@ -927,8 +927,11 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     await driver.waitMark("slow:running");
     driver.send({ type: "set_effort", id: "e1", effort: "high" });
     await driver.waitMark('flags:{"effortLevel":"high"}');
+    await driver.waitFor((e) => e.type === "effort_ack" && e.id === "e1");
     // Aplicado com o turno ainda aberto: nenhum result até aqui, nenhum stream novo.
     expect(driver.events.some((e) => e.type === "result")).toBe(false);
+    // Sem palavra no turno, não há nível de palavra a substituir: a tela não é avisada de nada.
+    expect(driver.events.some((e) => e.type === "keyword_effort_replaced")).toBe(false);
     await releaseSlowTurn();
     await driver.waitFor((e) => e.type === "result");
   }, 60_000);
@@ -1012,6 +1015,8 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     await driver.waitMark("slow:running");
     driver.send({ type: "set_effort", id: "e7", effort: "high" });
     await driver.waitMark('flags:{"effortLevel":"high"}');
+    // A tela fica sabendo, na ordem do DRIVER, que a troca tirou o turno do max (review do #259, f5).
+    await driver.waitFor((e) => e.type === "keyword_effort_replaced");
     expect(driver.events.some((e) => e.type === "result")).toBe(false);
     await releaseSlowTurn();
     await driver.waitFor((e) => e.type === "result");
@@ -1031,6 +1036,7 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     await driver.waitMark("slow:running");
     driver.send({ type: "set_effort", id: "e8", effort: "medium" });
     await driver.waitMark('flags:{"effortLevel":"medium"}');
+    await driver.waitFor((e) => e.type === "keyword_effort_replaced");
     expect(driver.events.some((e) => e.type === "result")).toBe(false);
     await releaseSlowTurn();
     await driver.waitFor((e) => e.type === "result");

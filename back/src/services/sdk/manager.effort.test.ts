@@ -15,6 +15,7 @@ import {
   setDriverSpawnerForTesting,
   stopCardDriver,
 } from "./manager.js";
+import { replayableHistoryEvent } from "./history.js";
 
 /**
  * A INTELIGÊNCIA TROCADA COM O CHAT DE PÉ. A troca no pill virava um reinício pendente que só vinha
@@ -246,6 +247,16 @@ describe("sdk manager — a inteligência trocada com o driver de pé", () => {
     await applied;
     await flush();
     expect(sent.some((s) => s.includes("effort_ack"))).toBe(false);
+  });
+
+  it("o aviso de que a troca tirou o turno do nível da palavra vai aos navegadores, não ao histórico", async () => {
+    const session = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
+    const sent: string[] = [];
+    session.sockets.add({ readyState: 1, send: (s: string) => sent.push(s) } as never);
+    spawned[0]!.stdout.emit("data", line({ type: "keyword_effort_replaced" }));
+    await flush();
+    expect(sent.map((s) => JSON.parse(s) as { type: string }).some((e) => e.type === "keyword_effort_replaced")).toBe(true);
+    expect(replayableHistoryEvent({ type: "keyword_effort_replaced" } as never)).toBe(false);
   });
 
   it("um driver cujo processo já saiu não conta como vivo", async () => {

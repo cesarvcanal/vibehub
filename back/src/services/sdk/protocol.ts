@@ -250,6 +250,13 @@ export interface EffortDefaultEvent { type: "effort_default"; effort: string }
  */
 export interface EffortAckEvent { type: "effort_ack"; id: string; effort?: string; error?: string }
 /**
+ * A level switched in the pill replaced the one an `ultrathink`/`ultracode` keyword raised for the
+ * turn in flight. The chat's activity bar drops its "high effort" on it: the order of the switch and
+ * the keyword is the driver's, and only the driver knows it. Forwarded to the browser, never written
+ * to the history (the bar is the live turn's).
+ */
+export interface KeywordEffortReplacedEvent { type: "keyword_effort_replaced" }
+/**
  * Output of a LOCAL slash command (`/cost`, `/usage`): the CLI answers it itself, without a model
  * turn. Without this the chat swallowed the answer and the command looked like it did nothing.
  */
@@ -348,6 +355,7 @@ export type DriverEvent =
   | CatalogEvent
   | EffortDefaultEvent
   | EffortAckEvent
+  | KeywordEffortReplacedEvent
   | LocalOutputEvent
   | BtwAnswerEvent
   | CompactionEvent
@@ -385,6 +393,7 @@ const DRIVER_EVENT_TYPES = new Set([
   "catalog",
   "effort_default",
   "effort_ack",
+  "keyword_effort_replaced",
   "local_output",
   "btw_answer",
   "compaction",

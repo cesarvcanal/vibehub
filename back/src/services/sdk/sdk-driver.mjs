@@ -1630,6 +1630,9 @@ async function setCardEffort(level, ownsQueue, switching) {
   if (ultraRaised && "effortLevel" in ultraRaised) {
     const { effortLevel: _keywordEffort, ...keywordRest } = ultraRaised;
     ultraRaised = Object.keys(keywordRest).length > 0 ? keywordRest : null;
+    // The chat's bar says "high effort" for this turn; only the driver knows whether the switch came
+    // before or after the keyword, so it is the driver that tells the bar the keyword lost its level.
+    emit({ type: "keyword_effort_replaced" });
   }
   return { effort: (await sessionEffort(handle)) ?? EFFORT ?? undefined };
 }

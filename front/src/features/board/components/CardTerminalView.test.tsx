@@ -78,16 +78,14 @@ vi.mock("@/features/board/components/SdkChatView", () => ({
     cardId,
     footer,
     onUploadImage,
-    liveEffortSwitchAt,
   }: {
     cardId: string;
     footer?: ReactNode;
     onUploadImage?: (file: File) => Promise<string | null>;
-    liveEffortSwitchAt?: number | null;
   }) => {
     sdkChatUpload.current = onUploadImage;
     return (
-      <div data-testid="sdk-chat" data-card={cardId} data-live-effort-switch-at={liveEffortSwitchAt ?? ""}>
+      <div data-testid="sdk-chat" data-card={cardId}>
         {footer}
         <div data-testid="sdk-composer-stub" />
       </div>
@@ -897,32 +895,6 @@ describe("CardTerminalView — the card bar", () => {
     expect(screen.getByLabelText("Model")).toHaveTextContent("Opus 5.5 · High");
     // Nothing was restarted, so there is no restart nonce: only the pin itself is in the key.
     expect(screen.getByTestId("xterm").getAttribute("data-reconnect")).toBe(before!.replace(":medium", ":high"));
-  });
-
-  it("the native chat learns when a LIVE switch started; a switch that only waits for idle tells it nothing", async () => {
-    // The chat's activity bar drops ultrathink's "high effort" only for a switch the session took.
-    const base = mockGet.getMockImplementation();
-    mockGet.mockImplementation((url: string, ...rest: unknown[]) =>
-      url === "/features" ? Promise.resolve({ sdkChat: true }) : (base as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest),
-    );
-    serveSession({ model: "claude-opus-5-5", modelLabel: "Opus 5.5", effort: "medium" });
-    const user = userEvent.setup();
-    renderWithCache([card({ openedAt: 10, effort: "medium" })], testQueryClient(), "chat");
-    const chat = await screen.findByTestId("sdk-chat");
-    expect(chat).toHaveAttribute("data-live-effort-switch-at", "");
-
-    mockPatch.mockResolvedValueOnce({ card: card({ openedAt: 10, effort: "high" }), session: "pending" });
-    const beforePending = Date.now();
-    await openMenu(user, "Model");
-    await user.click(screen.getByRole("menuitemcheckbox", { name: "High" }));
-    await waitFor(() => expect(toast.success).toHaveBeenCalled());
-    expect(screen.getByTestId("sdk-chat")).toHaveAttribute("data-live-effort-switch-at", "");
-
-    mockPatch.mockResolvedValueOnce({ card: card({ openedAt: 10, effort: "low" }), session: "live" });
-    await openMenu(user, "Model");
-    await user.click(screen.getByRole("menuitemcheckbox", { name: "Low" }));
-    await waitFor(() => expect(screen.getByTestId("sdk-chat").getAttribute("data-live-effort-switch-at")).not.toBe(""));
-    expect(Number(screen.getByTestId("sdk-chat").getAttribute("data-live-effort-switch-at"))).toBeGreaterThanOrEqual(beforePending);
   });
 
   it("an UNPINNED card still ticks the level its session runs on — read from the transcript", async () => {
