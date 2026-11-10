@@ -43,9 +43,6 @@ const UPLOAD_ID_SOURCE = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-
 const UPLOAD_FILE_SOURCE = "\\d+-[a-z0-9._-]+\\.[a-z0-9]+";
 const UPLOAD_SOURCE = `\\/work\\/\\.uploads\\/${UPLOAD_ID_SOURCE}\\/${UPLOAD_FILE_SOURCE}`;
 
-/** The extensions the chat shows as a picture; every other upload is a file chip. */
-const UPLOAD_IMAGE_RE = /\.(?:png|jpe?g|gif|webp|bmp|avif)$/;
-
 const LINK_SOURCE = `https?:\\/\\/[^\\s<>()]+[^\\s<>().,;:!?]|${PREVIEW_SOURCE}`;
 
 export type MdToken =
@@ -66,25 +63,85 @@ export function parseUploadPath(path: string): { cardId: string; file: string } 
   return { cardId, file };
 }
 
-/** Áudio que o navegador toca: o chat mostra um player. Espelha os tipos de áudio que o back serve inline. */
-const UPLOAD_AUDIO_RE = /\.(?:mp3|ogg|oga|opus|m4a|aac|wav|webm|flac)$/;
+export type UploadKind = "image" | "audio" | "pdf" | "spreadsheet" | "document" | "presentation" | "text" | "file";
 
-/** Documentos que o navegador não abre e o runner converte em texto: o chat abre um preview. */
-const UPLOAD_PREVIEW_RE = /\.(?:xlsx|xlsm|xls|docx|doc|pptx|ppt|odt|ods|odp)$/;
+/**
+ * What each upload extension is — the ONE table the chat reads to decide how an attachment shows:
+ * a picture, a player (the audio types mirror what the back serves inline), an office document the
+ * runner turns into text for a preview, or a card that opens the file. `.csv` is `text` because that
+ * is how the panel serves it (inline, as text in a tab), not through the spreadsheet preview.
+ */
+const UPLOAD_KIND_BY_EXTENSION: Record<string, UploadKind> = {
+  png: "image", jpg: "image", jpeg: "image", gif: "image", webp: "image", bmp: "image", avif: "image",
+  mp3: "audio", ogg: "audio", oga: "audio", opus: "audio", m4a: "audio", aac: "audio", wav: "audio", webm: "audio", flac: "audio",
+  pdf: "pdf",
+  xlsx: "spreadsheet", xlsm: "spreadsheet", xls: "spreadsheet", ods: "spreadsheet",
+  docx: "document", doc: "document", odt: "document",
+  pptx: "presentation", ppt: "presentation", odp: "presentation",
+  txt: "text", csv: "text", md: "text", json: "text", log: "text",
+};
 
-/** Se o anexo é um áudio que o chat toca. PURE, TOTAL. */
-export function anexoEhAudio(file: string): boolean {
-  return UPLOAD_AUDIO_RE.test(String(file ?? ""));
+/** What an attachment is, for how the bubble shows it (see the table above). PURE, TOTAL. */
+export function uploadKind(file: string): UploadKind {
+  const name = String(file ?? "");
+  const dot = name.lastIndexOf(".");
+  const extension = dot >= 0 ? name.slice(dot + 1) : "";
+  // Own keys only: `.constructor` is a valid upload name, and the inherited `Object` is not a kind.
+  return Object.hasOwn(UPLOAD_KIND_BY_EXTENSION, extension) ? (UPLOAD_KIND_BY_EXTENSION[extension] as UploadKind) : "file";
 }
 
-/** Se o anexo é um documento de escritório que o chat mostra em preview. PURE, TOTAL. */
+/** Office documents the browser cannot open: the chat shows the runner's text in a preview. PURE, TOTAL. */
 export function anexoTemPreview(file: string): boolean {
-  return UPLOAD_PREVIEW_RE.test(String(file ?? ""));
+  const kind = uploadKind(file);
+  return kind === "spreadsheet" || kind === "document" || kind === "presentation";
+}
+
+type UploadToken = Extract<MdToken, { type: "image" | "file" }>;
+
+/**
+ * A user's message split into its words and the attachments it ends with. The composer appends the
+ * upload paths after the text, and rendering them where they stood put a 300px audio player in the
+ * middle of a line of prose; the bubble shows the words first and those attachments in a row of
+ * their own, grouped — pictures, then audios, then documents, each group in the order attached — so a
+ * wide screenshot does not split the audios from each other. Only the TRAILING run of paths (with
+ * the blank lines between them) moves: a path someone wrote mid-sentence ("compare <a> with <b>")
+ * stays where it was, so the sentence still reads. PURE, TOTAL.
+ */
+export function splitAttachments(tokens: readonly MdToken[]): { words: MdToken[]; attachments: UploadToken[] } {
+  const isUpload = (t: MdToken): t is UploadToken => t.type === "image" || t.type === "file";
+  let tail = tokens.length;
+  while (tail > 0) {
+    const token = tokens[tail - 1] as MdToken;
+    if (!isUpload(token) && !(token.type === "text" && !token.value.trim())) break;
+    tail--;
+  }
+  const order: Partial<Record<UploadKind, number>> = { image: 0, audio: 1 };
+  const group = (t: UploadToken) => order[uploadKind(t.file)] ?? 2;
+  const attachments = tokens.slice(tail).filter(isUpload).sort((a, b) => group(a) - group(b));
+  if (attachments.length === 0) return { words: [...tokens], attachments };
+  const words = tokens.slice(0, tail);
+  const last = words[words.length - 1];
+  if (last?.type === "text") words[words.length - 1] = { type: "text", value: last.value.trimEnd() };
+  return { words, attachments };
+}
+
+/**
+ * Seconds as the player shows them (`1:03`, `1:02:05`), or `null` for a length the browser does not
+ * know — an Ogg served without ranges reports `Infinity`, and printing that as `0:00` is what made a
+ * two-minute voice note look empty. PURE, TOTAL.
+ */
+export function formatAudioTime(seconds: number): string | null {
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  const total = Math.floor(seconds);
+  const s = String(total % 60).padStart(2, "0");
+  const m = Math.floor(total / 60) % 60;
+  const h = Math.floor(total / 3600);
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
 }
 
 /** Whether an upload name is one the chat shows as a picture. PURE, TOTAL. */
 export function isUploadImage(file: string): boolean {
-  return UPLOAD_IMAGE_RE.test(String(file ?? ""));
+  return uploadKind(file) === "image";
 }
 
 /**

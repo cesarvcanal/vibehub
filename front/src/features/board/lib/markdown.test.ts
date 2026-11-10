@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatAudioTime,
   isUploadImage,
   linkifyTokens,
+  splitAttachments,
+  uploadKind,
   parseUploadPath,
   safeUrl,
   uploadDisplayName,
@@ -149,12 +152,83 @@ describe("uploaded images", () => {
 
 describe("tipo de anexo no chat", () => {
   it("áudio toca, documento de escritório abre preview, o resto continua chip/imagem", async () => {
-    const { anexoEhAudio, anexoTemPreview } = await import("@/features/board/lib/markdown");
-    for (const f of ["1-voz.ogg", "1-ptt.opus", "1-reuniao.mp3", "1-memo.m4a", "1-a.wav"]) expect(anexoEhAudio(f)).toBe(true);
+    const { anexoTemPreview } = await import("@/features/board/lib/markdown");
+    for (const f of ["1-voz.ogg", "1-ptt.opus", "1-reuniao.mp3", "1-memo.m4a", "1-a.wav"]) expect(uploadKind(f)).toBe("audio");
     for (const f of ["1-v.xlsx", "1-v.xls", "1-c.docx", "1-c.doc", "1-s.pptx", "1-o.odt", "1-o.ods"]) expect(anexoTemPreview(f)).toBe(true);
     for (const f of ["1-c.pdf", "1-i.png", "1-n.csv", "1-x.zip"]) {
-      expect(anexoEhAudio(f)).toBe(false);
+      expect(uploadKind(f)).not.toBe("audio");
       expect(anexoTemPreview(f)).toBe(false);
     }
+  });
+});
+
+describe("splitAttachments", () => {
+  const card = "4ef6374b-6a1f-4fc1-b2c1-0ba4c377223f";
+  const up = (file: string) => `/work/.uploads/${card}/${file}`;
+
+  it("pulls every upload out of the words, grouped (pictures, audios, documents), and drops the blank lines", () => {
+    const text = `olha isso\n\n${up("1-a.ogg")}\n${up("2-b.png")} ${up("3-c.pdf")}\n${up("4-d.opus")}\n${up("5-e.xlsx")}\n`;
+    const { words, attachments } = splitAttachments(linkifyTokens(text));
+    expect(words).toEqual([{ type: "text", value: "olha isso" }]);
+    expect(attachments.map((a) => a.file)).toEqual(["2-b.png", "1-a.ogg", "4-d.opus", "3-c.pdf", "5-e.xlsx"]);
+  });
+
+  it("a path written mid-sentence stays in the sentence; only the trailing run of paths moves", () => {
+    const text = `compare ${up("1-a.pdf")} com ${up("2-b.pdf")}, qual tá certo?\n\n${up("3-c.ogg")}`;
+    const { words, attachments } = splitAttachments(linkifyTokens(text));
+    expect(words.map((w) => (w.type === "file" ? `<${w.file}>` : w.value)).join("")).toBe(
+      "compare <1-a.pdf> com <2-b.pdf>, qual tá certo?",
+    );
+    expect(attachments.map((a) => a.file)).toEqual(["3-c.ogg"]);
+  });
+
+  it("a path at the very start stays inline, so no blank line is left on top", () => {
+    const { words, attachments } = splitAttachments(linkifyTokens(`${up("1-a.png")} olha esse print`));
+    expect(words[0]).toMatchObject({ type: "image", file: "1-a.png" });
+    expect(attachments).toEqual([]);
+  });
+
+  it("a message that is only attachments has no words", () => {
+    expect(splitAttachments(linkifyTokens(`${up("1-a.ogg")}\n${up("2-b.ogg")}`)).words).toEqual([]);
+  });
+
+  it("text without uploads comes back untouched", () => {
+    const tokens = linkifyTokens("só texto  \n");
+    expect(splitAttachments(tokens)).toEqual({ words: tokens, attachments: [] });
+  });
+});
+
+describe("uploadKind", () => {
+  it("names what each attachment is, by extension", () => {
+    expect(uploadKind("1-x.png")).toBe("image");
+    expect(uploadKind("1-x.opus")).toBe("audio");
+    expect(uploadKind("1-x.pdf")).toBe("pdf");
+    expect(uploadKind("1-x.xlsx")).toBe("spreadsheet");
+    // csv abre como texto numa aba (é como o back serve), não pelo preview de planilha.
+    expect(uploadKind("1-x.csv")).toBe("text");
+    expect(uploadKind("1-x.docx")).toBe("document");
+    expect(uploadKind("1-x.pptx")).toBe("presentation");
+    expect(uploadKind("1-x.txt")).toBe("text");
+    expect(uploadKind("1-x.zip")).toBe("file");
+    // Nomes que existem no protótipo de Object não são tipo (a busca na tabela só vê chave própria).
+    for (const inherited of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+      expect(uploadKind(`1794341151810-a.${inherited.toLowerCase()}`)).toBe("file");
+    }
+    expect(uploadKind("1-sem-extensao")).toBe("file");
+  });
+});
+
+describe("formatAudioTime", () => {
+  it("is m:ss, and h:mm:ss past the hour", () => {
+    expect(formatAudioTime(0)).toBe("0:00");
+    expect(formatAudioTime(9.7)).toBe("0:09");
+    expect(formatAudioTime(63)).toBe("1:03");
+    expect(formatAudioTime(3725)).toBe("1:02:05");
+  });
+
+  it("an unknown length is null, never 0:00 or Infinity", () => {
+    expect(formatAudioTime(Number.NaN)).toBeNull();
+    expect(formatAudioTime(Number.POSITIVE_INFINITY)).toBeNull();
+    expect(formatAudioTime(-1)).toBeNull();
   });
 });

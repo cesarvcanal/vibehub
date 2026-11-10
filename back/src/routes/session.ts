@@ -348,17 +348,28 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     "/api/cards/:id/uploads/:file", { preHandler: requireCardAccess },
     async (req, reply) => {
       try {
-        const { body, contentType } = await workspace.readCardUpload(req.params.id, req.params.file);
+        const { body, contentType, size, range } = await workspace.readCardUpload(
+          req.params.id,
+          req.params.file,
+          workspace.parseUploadRange(req.headers.range),
+        );
         // The file name is the upload's own (`[a-z0-9._-]`, checked by the workspace), so it goes
         // into the header as is. `nosniff` holds the browser to the type we chose: a download never
         // gets promoted to a page.
         const disposition = workspace.uploadServedInline(contentType) ? "inline" : "attachment";
-        return await reply
+        reply
           .header("content-type", contentType)
           .header("content-disposition", `${disposition}; filename="${req.params.file}"`)
           .header("x-content-type-options", "nosniff")
           .header("cache-control", "private, max-age=31536000, immutable")
-          .send(body);
+          .header("accept-ranges", "bytes");
+        // Ranges are what lets an attached audio show its duration and play in Safari (see
+        // `parseUploadRange`); the runner cuts the slice, so only the bytes asked for travel.
+        if (range === "unsatisfiable") return await reply.code(416).header("content-range", `bytes */${size}`).send();
+        if (range) {
+          return await reply.code(206).header("content-range", `bytes ${range.start}-${range.end}/${size}`).send(body);
+        }
+        return await reply.send(body);
       } catch {
         // Missing file, missing card, runner down: all one answer. The chat falls back to printing
         // the path, which is still the truth, and nothing here is worth an alarming status.

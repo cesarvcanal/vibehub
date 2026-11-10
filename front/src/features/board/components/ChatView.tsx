@@ -3,8 +3,8 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
 import {
-  Bell, Bot, Check, ChevronRight, Copy, Download, FileAudio, FileSpreadsheet, FileText, Loader2, MessageSquare, TerminalSquare,
-  UserRound, Wrench,
+  AudioLines, Bell, Bot, Check, ChevronRight, Copy, Download, File, FileSpreadsheet, FileText, Loader2, MessageSquare,
+  Presentation, TerminalSquare, UserRound, Wrench, type LucideIcon,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -39,11 +39,15 @@ import {
   remarkEscapeHtml,
   remarkPreviewPaths,
   safeUrl,
-  anexoEhAudio,
   anexoTemPreview,
+  splitAttachments,
   uploadDisplayName,
   uploadImageUrl,
+  uploadKind,
+  type MdToken,
+  type UploadKind,
 } from "@/features/board/lib/markdown";
+import { AudioAttachment } from "@/features/board/components/AudioAttachment";
 import { UltraText } from "@/features/board/components/UltraText";
 import { copyText } from "@/features/board/lib/terminalZoom";
 import { t as translate, useT } from "@/i18n";
@@ -646,34 +650,44 @@ function CopyButton({ text }: { text: string }) {
  * an href, so `javascript:` and friends stay literal text. Exported for the native SDK chat.
  */
 export function LinkifiedText({ text, compact = false }: { text: string; compact?: boolean }) {
+  const tokens = linkifyTokens(text);
+  // The tray (compact) keeps the attachments inline and small: it has a height cap to respect.
+  if (compact) return <>{tokens.map((token, i) => renderUserToken(token, i, true))}</>;
+  const { words, attachments } = splitAttachments(tokens);
   return (
     <>
-      {linkifyTokens(text).map((token, i) =>
-        token.type === "link" ? (
-          <a
-            key={i}
-            href={token.value}
-            target="_blank"
-            rel="noreferrer noopener"
-            className="text-primary underline underline-offset-2"
-          >
-            {token.value}
-          </a>
-        ) : token.type === "image" ? (
-          // Keyed by the path too: a queued row is rewritten IN PLACE (same id) when it is edited,
-          // and a new image at the same index must not inherit the old one's `broken`.
-          <UploadedImage key={`${i}:${token.value}`} cardId={token.cardId} file={token.file} compact={compact} />
-        ) : token.type === "file" ? (
-          <UploadedFile key={i} cardId={token.cardId} file={token.file} />
-        ) : compact ? (
-          // The two reserved words are painted only in the field and the bubble (see UltraText).
-          <React.Fragment key={i}>{token.value}</React.Fragment>
-        ) : (
-          <UltraText key={i} text={token.value} />
-        ),
+      {/* A path left mid-sentence is drawn small (chip, thumbnail) so the sentence still reads. */}
+      {words.map((token, i) => renderUserToken(token, i, token.type === "image" || token.type === "file"))}
+      {attachments.length > 0 && (
+        <span
+          data-testid="chat-attachments"
+          className={cn("flex flex-wrap items-start gap-2 whitespace-normal", words.length > 0 && "mt-2.5")}
+        >
+          {attachments.map((token, i) => renderUserToken(token, i, false))}
+        </span>
       )}
     </>
   );
+}
+
+function renderUserToken(token: MdToken, i: number, compact: boolean): React.ReactNode {
+  if (token.type === "link") {
+    return (
+      <a key={i} href={token.value} target="_blank" rel="noreferrer noopener" className="text-primary underline underline-offset-2">
+        {token.value}
+      </a>
+    );
+  }
+  if (token.type === "image") {
+    // Keyed by the path too: a queued row is rewritten IN PLACE (same id) when it is edited,
+    // and a new image at the same index must not inherit the old one's `broken`.
+    return <UploadedImage key={`${i}:${token.value}`} cardId={token.cardId} file={token.file} compact={compact} />;
+  }
+  if (token.type === "file") {
+    return <UploadedFile key={`${i}:${token.value}`} cardId={token.cardId} file={token.file} compact={compact} />;
+  }
+  // The two reserved words are painted only in the field and the bubble (see UltraText).
+  return compact ? <React.Fragment key={i}>{token.value}</React.Fragment> : <UltraText key={i} text={token.value} />;
 }
 
 /**
@@ -703,7 +717,7 @@ function UploadedImage({ cardId, file, compact = false }: { cardId: string; file
       href={src}
       target="_blank"
       rel="noreferrer noopener"
-      className={cn("mt-1 w-fit", compact ? "mr-1 inline-block align-top" : "block")}
+      className={cn("w-fit", compact ? "mr-1 mt-1 inline-block align-top" : "block")}
     >
       <img
         src={src}
@@ -722,22 +736,34 @@ function UploadedImage({ cardId, file, compact = false }: { cardId: string; file
 }
 
 /**
- * A document this composer uploaded (a PDF, a spreadsheet), shown as a chip that opens it.
+ * Icon, tint and label of each kind of attachment drawn as a card, so a PDF and a spreadsheet tell
+ * apart at a glance. Pictures and audios have their own renders (the image, the player).
+ */
+const ATTACHMENT_LOOK: Record<Exclude<UploadKind, "image" | "audio">, { icon: LucideIcon; tone: string; label: string }> = {
+  pdf: { icon: FileText, tone: "bg-red-500/15 text-red-400", label: "chat.kind.pdf" },
+  spreadsheet: { icon: FileSpreadsheet, tone: "bg-emerald-500/15 text-emerald-400", label: "chat.kind.spreadsheet" },
+  document: { icon: FileText, tone: "bg-sky-500/15 text-sky-400", label: "chat.kind.document" },
+  presentation: { icon: Presentation, tone: "bg-amber-500/15 text-amber-400", label: "chat.kind.presentation" },
+  text: { icon: FileText, tone: "bg-muted text-muted-foreground", label: "chat.kind.text" },
+  file: { icon: File, tone: "bg-muted text-muted-foreground", label: "chat.kind.file" },
+};
+
+/**
+ * A file this composer uploaded (a PDF, a spreadsheet, an audio), shown as what it is.
  *
  * Same story as the image: the message carries the runner path, and seven PDFs of an admission came
- * back as seven lines of `/work/.uploads/…/1793817742302-contrato.pdf`. The chip names the file as
- * it was attached and opens it in a tab — the panel serves PDF and text inline, anything else as a
- * download. A file that is gone (card deleted, runner cleaned) answers 404 in that tab; there is no
- * cheap way to know before the click, and the name in the chip is still the truth.
+ * back as seven lines of `/work/.uploads/…/1793817742302-contrato.pdf`. In the bubble each one is a
+ * card with its kind (icon, tint, label) and name: an audio plays there, an office document opens the
+ * extracted text, anything else opens in a tab — the panel serves PDF and text inline, the rest as a
+ * download. In the queue tray, or left mid-sentence (`compact`), it is a one-line chip, audio included. A file that is gone
+ * (card deleted, runner cleaned) answers 404 in that tab; there is no cheap way to know before the
+ * click, and the name is still the truth.
  */
-function UploadedFile({ cardId, file }: { cardId: string; file: string }) {
-  if (anexoEhAudio(file)) return <AudioAnexado cardId={cardId} file={file} />;
-  if (anexoTemPreview(file)) return <DocumentoAnexado cardId={cardId} file={file} />;
-  return <ArquivoAnexado cardId={cardId} file={file} />;
-}
-
-function ArquivoAnexado({ cardId, file }: { cardId: string; file: string }) {
+function UploadedFile({ cardId, file, compact }: { cardId: string; file: string; compact: boolean }) {
   const t = useT();
+  const kind = uploadKind(file);
+  if (kind === "audio" && !compact) return <AudioAttachment cardId={cardId} file={file} />;
+  if (anexoTemPreview(file)) return <DocumentoAnexado cardId={cardId} file={file} compact={compact} />;
   return (
     <a
       href={uploadImageUrl(cardId, file)}
@@ -745,42 +771,57 @@ function ArquivoAnexado({ cardId, file }: { cardId: string; file: string }) {
       rel="noreferrer noopener"
       title={t("chat.openAttachedFile")}
       data-testid="chat-file"
-      className="my-0.5 mr-1 inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/70 bg-muted/40 px-2 py-1 align-middle text-xs hover:bg-muted"
+      className={attachmentFrame(compact)}
     >
-      <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
-      <span className="truncate">{uploadDisplayName(file)}</span>
+      <AttachmentFace file={file} compact={compact} />
     </a>
   );
 }
 
-/**
- * Um áudio anexado (nota de voz do WhatsApp, gravação de reunião): toca ali mesmo. `preload="none"`
- * porque uma conversa com dez áudios não deve baixar os dez ao abrir; o nome fica embaixo, que é o que
- * diz qual áudio é. Quem transcreve é o agente (vibehub_transcribe_audio), não o chat.
- */
-function AudioAnexado({ cardId, file }: { cardId: string; file: string }) {
+function attachmentFrame(compact: boolean): string {
+  return compact
+    ? "my-0.5 mr-1 inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/70 bg-muted/40 px-2 py-1 align-middle text-xs hover:bg-muted"
+    : "flex w-64 max-w-full items-center gap-3 rounded-lg border border-border/70 bg-background/60 p-2 pr-3 text-left transition-colors hover:border-primary/40 hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+}
+
+/** The inside of a file's card (or chip): its kind's icon, its name, and in the card the kind's label. */
+function AttachmentFace({ file, compact }: { file: string; compact: boolean }) {
   const t = useT();
+  const kind = uploadKind(file);
+  const look = ATTACHMENT_LOOK[kind === "image" || kind === "audio" ? "file" : kind];
+  const name = uploadDisplayName(file);
+  if (compact) {
+    // In the tray an audio is a chip too (the player would break its height cap).
+    const Icon = kind === "audio" ? AudioLines : look.icon;
+    return (
+      <>
+        <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        <span className="truncate">{name}</span>
+      </>
+    );
+  }
   return (
-    <span className="my-1 inline-flex max-w-full flex-col gap-1 align-middle" data-testid="chat-audio">
-      <audio controls preload="none" src={uploadImageUrl(cardId, file)} className="h-9 max-w-full" aria-label={t("chat.attachedAudio")} />
-      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-        <FileAudio className="h-3.5 w-3.5 shrink-0" aria-hidden />
-        <span className="truncate">{uploadDisplayName(file)}</span>
+    <>
+      <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-md", look.tone)}>
+        <look.icon className="h-5 w-5" aria-hidden />
       </span>
-    </span>
+      <span className="flex min-w-0 flex-col">
+        <span className="truncate text-sm font-medium text-foreground" title={name}>{name}</span>
+        <span className="text-xs text-muted-foreground">{t(look.label)}</span>
+      </span>
+    </>
   );
 }
 
 /**
- * Planilha, Word ou PowerPoint anexado: o navegador não abre, então o chip abre um preview com o texto
- * que o runner extraiu (o mesmo que o agente lê) e o download continua a um clique. O texto só é
- * buscado quando o preview abre.
+ * An attached spreadsheet, Word or PowerPoint file: the browser cannot open it, so the card opens a
+ * preview with the text the runner extracted (the same the agent reads), and the original is one
+ * click away. The text is only fetched when the preview opens.
  */
-function DocumentoAnexado({ cardId, file }: { cardId: string; file: string }) {
+function DocumentoAnexado({ cardId, file, compact }: { cardId: string; file: string; compact: boolean }) {
   const t = useT();
   const [aberto, setAberto] = React.useState(false);
   const nome = uploadDisplayName(file);
-  const Icone = /\.(?:xlsx|xlsm|xls|ods)$/.test(file) ? FileSpreadsheet : FileText;
   return (
     <>
       <button
@@ -788,10 +829,9 @@ function DocumentoAnexado({ cardId, file }: { cardId: string; file: string }) {
         onClick={() => setAberto(true)}
         title={t("chat.previewAttachedFile")}
         data-testid="chat-file-preview"
-        className="my-0.5 mr-1 inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/70 bg-muted/40 px-2 py-1 align-middle text-xs hover:bg-muted"
+        className={attachmentFrame(compact)}
       >
-        <Icone className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
-        <span className="truncate">{nome}</span>
+        <AttachmentFace file={file} compact={compact} />
       </button>
       <Dialog open={aberto} onOpenChange={setAberto}>
         <DialogContent className="flex max-h-[85vh] max-w-5xl flex-col">

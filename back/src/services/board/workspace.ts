@@ -1082,35 +1082,104 @@ export function uploadServedInline(contentType: string): boolean {
   return contentType !== UPLOAD_DOWNLOAD_TYPE;
 }
 
+/**
+ * What a `Range` header asks of an upload, before anyone knows its size: from `start` to `end`
+ * (open when `end` is null), or the last `suffix` bytes. `null` = serve the whole file with 200.
+ *
+ * Why the route speaks Range at all: an attached voice note came back as `0:00 / 0:00` with a dead
+ * seek bar, and Safari would not play it. An Ogg has no duration in its header — the browser reads
+ * it from the LAST page, asking for it with a suffix range (`bytes=-N`); answered with the whole file
+ * it gives up on the duration, and Safari refuses media that is not served by range at all.
+ *
+ * Only one range is honoured; a multi-range request, another unit, an inverted range (`9-3`) or a
+ * number past 2^53 is ignored, and the whole file goes with 200 — which RFC 9110 §14.2 allows for
+ * any range it does not understand. The numbers go into the read script as bare digits. PURE, TOTAL.
+ */
+export type UploadRangeRequest = { start: number; end: number | null } | { suffix: number };
+
+export function parseUploadRange(header: string | undefined): UploadRangeRequest | null {
+  const m = /^bytes=(\d*)-(\d*)$/.exec(String(header ?? "").trim());
+  if (!m || (m[1] === "" && m[2] === "")) return null;
+  const [first, last] = [m[1] === "" ? null : Number(m[1]), m[2] === "" ? null : Number(m[2])];
+  if ([first, last].some((n) => n !== null && !Number.isSafeInteger(n))) return null;
+  if (first === null) return { suffix: last as number };
+  if (last !== null && last < first) return null;
+  return { start: first, end: last };
+}
+
 /** Heredoc delimiter of the upload-read script — a reserved word, never derived from input. */
 const READ_DELIM = "VIBEHUB_READ";
 
 /**
- * Script that reads one upload back as base64 (the transport is a text stdout, so the bytes have
- * to travel encoded). `test -f` first, so a missing file fails as a non-zero exit rather than an
- * empty answer that would reach the browser as a zero-byte image. PURE/testable.
+ * The part of the upload-read script that runs inside the runner, separate so a test can run it
+ * against a real file. It answers a first line `<size> <start> <end>` (or `<size> -` when the range
+ * falls outside the file) and then the slice as base64 — the transport is a text stdout, so the bytes
+ * travel encoded.
+ *
+ * The slice is cut HERE, not in the panel: reading the whole file to answer the few KB the player
+ * asks for would run a full `base64` of up to 10 MB in the shared runner for every range (§8). The
+ * size has to be known to clamp the range, so `stat` comes first in the same exec. `test -f` makes a
+ * missing file a non-zero exit rather than an empty answer. PURE/testable.
  */
-export function buildReadUploadScript(containerName: string, remotePath: string): string {
+export function buildUploadReadBody(remotePath: string, range: UploadRangeRequest | null): string[] {
   assertSafeRemotePath(remotePath);
+  const path = shQuote(remotePath);
+  const clamp =
+    range === null
+      ? ["start=0", "end=$((size - 1))"]
+      : "suffix" in range
+        ? [
+            `n=${range.suffix}`,
+            `if [ "$n" -eq 0 ] || [ "$size" -eq 0 ]; then echo "$size -"; exit 0; fi`,
+            "start=$(( size > n ? size - n : 0 ))",
+            "end=$((size - 1))",
+          ]
+        : [
+            `start=${range.start}`,
+            range.end === null ? "end=$((size - 1))" : `end=$(( ${range.end} < size - 1 ? ${range.end} : size - 1 ))`,
+            `if [ "$start" -ge "$size" ]; then echo "$size -"; exit 0; fi`,
+          ];
+  return [
+    "set -e",
+    `test -f ${path}`,
+    `size=$(stat -c %s ${path})`,
+    ...clamp,
+    'echo "$size $start $end"',
+    `tail -c +$((start + 1)) ${path} | head -c $((end - start + 1)) | base64 -w0`,
+  ];
+}
+
+/** The whole upload-read script, run on the host: the body above inside the runner container. PURE. */
+export function buildReadUploadScript(
+  containerName: string,
+  remotePath: string,
+  range: UploadRangeRequest | null = null,
+): string {
   return [
     "set -e",
     `docker exec -i ${shQuote(containerName)} bash -s <<'${READ_DELIM}'`,
-    "set -e",
-    `test -f ${shQuote(remotePath)}`,
-    `base64 -w0 ${shQuote(remotePath)}`,
+    ...buildUploadReadBody(remotePath, range),
     READ_DELIM,
   ].join("\n");
 }
 
 /**
- * One upload (image or document), back out of the runner, for the chat to show or open. The card is resolved first so
- * the path can only ever be built from a card that exists — the id in the URL never reaches the
- * filesystem as text.
+ * One upload (image, document, audio), back out of the runner, for the chat to show, open or play —
+ * whole, or the slice a `Range` asked for. `range` in the answer is what was served: `null` for the
+ * whole file, `{ start, end }` for a slice, `"unsatisfiable"` for a range past the end (416). The card
+ * is resolved first so the path can only ever be built from a card that exists — the id in the URL
+ * never reaches the filesystem as text.
  */
 export async function readCardUpload(
   cardId: string,
   file: string,
-): Promise<{ body: Buffer; contentType: string }> {
+  rangeRequest: UploadRangeRequest | null = null,
+): Promise<{
+  body: Buffer;
+  contentType: string;
+  size: number;
+  range: { start: number; end: number } | "unsatisfiable" | null;
+}> {
   const contentType = uploadContentType(file);
   if (!contentType) throw new Error("upload not found");
   const card = await getCard(cardId);
@@ -1119,19 +1188,28 @@ export async function readCardUpload(
   const remotePath = `/work/.uploads/${card.id}/${file}`;
   let stdout: string;
   try {
-    ({ stdout } = await hostExecutor().runScript(buildReadUploadScript(config.runner.container, remotePath), {
-      timeoutMs: 30_000,
-    }));
+    ({ stdout } = await hostExecutor().runScript(
+      buildReadUploadScript(config.runner.container, remotePath, rangeRequest),
+      { timeoutMs: 30_000 },
+    ));
   } catch (err) {
     // A file that is not there is the ordinary case (a deleted card, a cleaned-up runner), not an
     // outage: the chat falls back to printing the path, and nothing is worth a 502 here.
     throw new Error("upload not found", { cause: err });
   }
-  const b64 = stdout.replace(/\s+/g, "");
+  const newline = stdout.indexOf("\n");
+  const head = /^(\d+) (?:(\d+) (\d+)|-)$/.exec((newline < 0 ? stdout : stdout.slice(0, newline)).trim());
+  if (!head) throw new Error("upload not found");
+  const size = Number(head[1]);
+  if (size === 0 || size > UPLOAD_MAX_BYTES) throw new Error("upload not found");
+  if (head[2] === undefined) return { body: Buffer.alloc(0), contentType, size, range: "unsatisfiable" };
+
+  const b64 = stdout.slice(newline + 1).replace(/\s+/g, "");
   if (!b64 || !B64_RE.test(b64)) throw new Error("upload not found");
   const body = Buffer.from(b64, "base64");
-  if (body.length === 0 || body.length > UPLOAD_MAX_BYTES) throw new Error("upload not found");
-  return { body, contentType };
+  const [start, end] = [Number(head[2]), Number(head[3])];
+  if (body.length !== end - start + 1) throw new Error("upload not found");
+  return { body, contentType, size, range: rangeRequest ? { start, end } : null };
 }
 
 /* ------------------------------------------------------- the uploads sweep */
