@@ -949,25 +949,45 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     expect(driver.marks.filter((m) => m.startsWith("effort:")).at(-1)).toBe("effort:none");
   }, 60_000);
 
-  it("um turno ultrathink em voo segura o max; a devolução no fim dele já é o nível novo", async () => {
+  it("um turno ultrathink em voo: o nível escolhido no pill entra NA HORA e o fim do turno não o desfaz", async () => {
+    // A escolha no pill é mais nova que a palavra. Segurar o max até o fim do turno deixava o pill
+    // dizendo Alto com a sessão em max pelo resto do turno (análise de 10/11/2026).
     const driver = startDriver(["--effort", "low"]);
     await driver.waitFor((e) => e.type === "ready");
     driver.send({ type: "user", text: "pensa nisso ultrathink slow" });
     await driver.waitMark('flags:{"effortLevel":"max"}');
     await driver.waitMark("slow:running");
     driver.send({ type: "set_effort", effort: "high" });
-    // Com o max segurado, o set_effort não deixa rastro: soltar o turno logo em seguida corria com a
-    // leitura do stdin, e sob carga o turno acabava antes, devolvia o "low" (certo, para uma troca
-    // DEPOIS do turno) e o teste falhava. O driver lê o stdin em ordem e na hora: a resposta a uma
-    // linha seguinte prova que o set_effort já foi lido.
-    driver.send({ type: "permission_decision", id: "barreira-effort", allow: false });
-    await driver.waitFor((e) => e.type === "error" && String(e.message).includes("barreira-effort"));
+    await driver.waitMark('flags:{"effortLevel":"high"}');
+    expect(driver.events.some((e) => e.type === "result")).toBe(false);
     await releaseSlowTurn();
     await driver.waitFor((e) => e.type === "result");
-    await driver.waitMark('flags:{"effortLevel":"high"}');
-    // O max do ultrathink não foi cortado no meio do turno, e o nível velho não volta.
+    // Um turno a mais é a barreira: a devolução do ultrathink já teria escrito antes do result dele.
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "depois" });
+    await driver.waitFor((e) => e.type === "result", from);
     const flags = driver.marks.filter((m) => m.startsWith("flags:"));
     expect(flags).toEqual(['flags:{"effortLevel":"max"}', 'flags:{"effortLevel":"high"}']);
+  }, 60_000);
+
+  it("um turno ultracode em voo: o nível entra na hora e a devolução limpa só o ultracode", async () => {
+    const driver = startDriver(["--effort", "low"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "orquestra isso ultracode slow" });
+    await driver.waitMark('flags:{"effortLevel":"max","ultracode":true}');
+    await driver.waitMark("slow:running");
+    driver.send({ type: "set_effort", effort: "medium" });
+    await driver.waitMark('flags:{"effortLevel":"medium"}');
+    expect(driver.events.some((e) => e.type === "result")).toBe(false);
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+    await driver.waitMark('flags:{"ultracode":null}');
+    const flags = driver.marks.filter((m) => m.startsWith("flags:"));
+    expect(flags).toEqual([
+      'flags:{"effortLevel":"max","ultracode":true}',
+      'flags:{"effortLevel":"medium"}',
+      'flags:{"ultracode":null}',
+    ]);
   }, 60_000);
 
   it("um nível que não existe não chega ao CLI", async () => {

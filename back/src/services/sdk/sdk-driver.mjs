@@ -1539,13 +1539,17 @@ async function restoreAccountEffort(handle) {
  * (restoreAccountEffort). It used to restart the session — killing whatever the turn was doing.
  *
  * From here on EFFORT is this level: a new stream starts on it, and an `ultrathink` turn gives it
- * back at its end. That same `ultrathink` turn, while in flight, holds the flag at `max` — writing
- * the new level now would cut it short, so it is left to the give-back (clearUltra).
+ * back at its end. A switch made WHILE an `ultrathink`/`ultracode` turn runs wins over the keyword:
+ * it is the newer choice, and holding `max` until the turn ended left the pill saying one level with
+ * the session on another. The level leaves `ultraRaised`, so the give-back clears only `ultracode`.
  */
 async function setCardEffort(level) {
   if (level !== null && !EFFORT_LEVELS.has(level)) return;
   EFFORT = level;
-  if (ultraRaised && "effortLevel" in ultraRaised) return;
+  if (ultraRaised && "effortLevel" in ultraRaised) {
+    const { effortLevel: _nivelDaPalavra, ...restoDaPalavra } = ultraRaised;
+    ultraRaised = Object.keys(restoDaPalavra).length > 0 ? restoDaPalavra : null;
+  }
   const handle = currentQuery;
   // No stream yet: the next one starts with `effort: EFFORT` (sdkOptions).
   if (!handle || typeof handle.applyFlagSettings !== "function") return;
