@@ -344,9 +344,15 @@ export function CardTerminalView({
     onError: (error) => toast.error(apiErrorMessage(error, translate("cardView.modelSwitchError"))),
   });
 
+  /** When the last switch the live session confirmed was started — the chat's activity bar reads it. */
+  const [liveEffortSwitchAt, setLiveEffortSwitchAt] = React.useState<number | null>(null);
   const effortMutation = useMutation({
     mutationFn: (effort: string | null) => boardApi.patchCardSession(cardId, { effort }),
-    onSuccess: (result) => {
+    // The START of the switch, not its answer: the PATCH waits for the session to confirm, and an
+    // ultrathink message sent during that wait goes after the switch (one queue in the driver).
+    onMutate: () => Date.now(),
+    onSuccess: (result, _effort, startedAt) => {
+      if (result.session === "live" && startedAt !== undefined) setLiveEffortSwitchAt(startedAt);
       const level = pinnedEffort(result.card);
       const label = level ? effortLabel(level) : translate("cardView.accountDefault");
       // The pill reads the SESSION first, and its last reading is the old level until the refetch
@@ -1239,7 +1245,7 @@ export function CardTerminalView({
                 onUploadImage={uploadAttachment}
                 onStatus={setConnection}
                 terminalWorking={working}
-                effortAt={card?.effortAt}
+                liveEffortSwitchAt={liveEffortSwitchAt}
                 footer={prBlocks}
                 ariaLabel={t("chat.ariaFor", { title: card?.title ?? t("cardView.cardFallback") })}
               />

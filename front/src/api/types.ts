@@ -368,8 +368,6 @@ export interface Card {
   model?: string;
   /** Reasoning level the card pins (`low`…`max`). Absent = the account's own. */
   effort?: string;
-  /** WHEN the effort pin last changed (set or cleared), epoch ms on the server's clock. */
-  effortAt?: number;
   /** Claude session id this card resumes. */
   resumeSessionId?: string;
   /** Native chat (beta): this card's conversation runs over the Agent SDK driver socket. */
