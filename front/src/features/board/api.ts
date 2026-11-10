@@ -32,6 +32,7 @@ import type {
   RestartedPreview,
   RunnerStatus,
   UploadResult,
+  PreviewDeAnexo,
 } from "@/api/types";
 import { t } from "@/i18n";
 import { uploadWithWatchdog } from "@/features/board/lib/uploadWatchdog";
@@ -484,6 +485,10 @@ export const boardApi = {
         situation: r?.situation ?? "waiting",
       }),
     ),
+
+  /** O documento anexado (planilha, Word, PowerPoint) como texto, para ver sem baixar. */
+  lerPreviewDeAnexo: (cardId: string, file: string) =>
+    get<PreviewDeAnexo>(`/cards/${encodeURIComponent(cardId)}/uploads/${encodeURIComponent(file)}/preview`),
 
   /**
    * Uploads an image so the agent can read it. The running server takes JSON `{ name, content }`

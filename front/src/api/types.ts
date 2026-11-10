@@ -548,6 +548,14 @@ export interface UploadResult {
   path: string;
 }
 
+/** Documento anexado convertido em texto pelo runner (`GET /cards/:id/uploads/:file/preview`). */
+export interface PreviewDeAnexo {
+  formato: string;
+  /** Markdown: planilha vira uma tabela por aba, Word vira parágrafos e tabelas. */
+  texto: string;
+  truncado: boolean;
+}
+
 /* --------------------------------------------------------------- PR review */
 
 /** `cancelled` exists on the server but never reaches a card summary. */

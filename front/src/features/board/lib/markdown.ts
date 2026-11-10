@@ -66,6 +66,22 @@ export function parseUploadPath(path: string): { cardId: string; file: string } 
   return { cardId, file };
 }
 
+/** Áudio que o navegador toca: o chat mostra um player. Espelha os tipos de áudio que o back serve inline. */
+const UPLOAD_AUDIO_RE = /\.(?:mp3|ogg|oga|opus|m4a|aac|wav|webm|flac)$/;
+
+/** Documentos que o navegador não abre e o runner converte em texto: o chat abre um preview. */
+const UPLOAD_PREVIEW_RE = /\.(?:xlsx|xlsm|xls|docx|doc|pptx|ppt|odt|ods|odp)$/;
+
+/** Se o anexo é um áudio que o chat toca. PURE, TOTAL. */
+export function anexoEhAudio(file: string): boolean {
+  return UPLOAD_AUDIO_RE.test(String(file ?? ""));
+}
+
+/** Se o anexo é um documento de escritório que o chat mostra em preview. PURE, TOTAL. */
+export function anexoTemPreview(file: string): boolean {
+  return UPLOAD_PREVIEW_RE.test(String(file ?? ""));
+}
+
 /** Whether an upload name is one the chat shows as a picture. PURE, TOTAL. */
 export function isUploadImage(file: string): boolean {
   return UPLOAD_IMAGE_RE.test(String(file ?? ""));

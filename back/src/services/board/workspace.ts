@@ -1043,6 +1043,16 @@ const UPLOAD_CONTENT_TYPES: Record<string, string> = {
   md: "text/plain; charset=utf-8",
   json: "text/plain; charset=utf-8",
   log: "text/plain; charset=utf-8",
+  // Áudio toca no <audio> do chat; nenhum desses tipos executa nada na origem do painel.
+  mp3: "audio/mpeg",
+  ogg: "audio/ogg",
+  oga: "audio/ogg",
+  opus: "audio/ogg",
+  m4a: "audio/mp4",
+  aac: "audio/aac",
+  wav: "audio/wav",
+  webm: "audio/webm",
+  flac: "audio/flac",
 };
 
 /** Anything not in the table: bytes to save, never something the browser renders. */
