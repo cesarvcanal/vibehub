@@ -227,11 +227,16 @@ export function parseInstalledByProfile(stdout: string): Record<string, string[]
   return out;
 }
 
+/** Shell variable listing the profiles {@link reconcileLines} could not bring to the set — reserved. */
+const APPLY_FAILED_PROFILES = "VIBEHUB_PLUGINS_APPLY_FAILED";
+
 /**
  * The commands that make every profile match the wanted set: install what is missing, uninstall
- * what vibehub installed and nobody wants any more, and leave everything else alone. Each command
- * carries `|| true` — one profile that refuses (a clone that failed, a profile mid-creation) must
- * not abort the sweep over the others. PURE.
+ * what vibehub installed and nobody wants any more, and leave everything else alone. A command
+ * that fails never aborts the sweep (one profile that refuses — a clone that failed, a profile
+ * mid-creation — must not stop the others), but it is remembered, exactly as on the card-open path:
+ * that profile gets no marker, and the script ends non-zero naming it, so the apply reports the
+ * failure instead of a success the next card open would trust. PURE.
  */
 export function reconcileLines(
   profiles: McpProfile[],
@@ -240,7 +245,7 @@ export function reconcileLines(
 ): string[] {
   const want = wanted.map(assertPluginName);
   const signature = pluginsSignature(want);
-  const lines: string[] = [];
+  const lines: string[] = [`${APPLY_FAILED_PROFILES}=""`];
   for (const profile of profiles) {
     const dir = profile || DEFAULT_CLAUDE_DIR;
     assertSafeRemotePath(dir);
@@ -248,19 +253,30 @@ export function reconcileLines(
     const have = (installedByProfile[dir] ?? []).filter((n) => PLUGIN_NAME_RE.test(n));
     const missing = want.filter((n) => !have.includes(n));
     const extra = have.filter((n) => !want.includes(n));
-    if (want.length > 0) {
-      lines.push(`${prefix}claude plugin marketplace add ${shQuote(OFFICIAL_MARKETPLACE_SOURCE)} >/dev/null 2>&1 || true`);
-    }
-    for (const name of missing) {
-      lines.push(`${prefix}claude plugin install ${shQuote(pluginId(name))} >/dev/null 2>&1 || true`);
-    }
-    for (const name of extra) {
-      lines.push(`${prefix}claude plugin uninstall ${shQuote(pluginId(name))} >/dev/null 2>&1 || true`);
-    }
-    // The marker the card-open path checks: after a reconcile the profile IS the current set.
+    const body = [
+      ...(want.length > 0
+        ? [`${prefix}claude plugin marketplace add ${shQuote(OFFICIAL_MARKETPLACE_SOURCE)} >/dev/null 2>&1 || ${INSTALL_FAILED_FLAG}=1`]
+        : []),
+      ...missing.map((name) => `${prefix}claude plugin install ${shQuote(pluginId(name))} >/dev/null 2>&1 || ${INSTALL_FAILED_FLAG}=1`),
+      ...extra.map((name) => `${prefix}claude plugin uninstall ${shQuote(pluginId(name))} >/dev/null 2>&1 || ${INSTALL_FAILED_FLAG}=1`),
+    ];
+    // The old markers (and retry stamps) go first: one left from an earlier apply would still
+    // promise the set to the card-open path after a re-install that failed.
     lines.push(`rm -f ${shQuote(dir)}/.plugins-* 2>/dev/null || true`);
-    if (want.length > 0) lines.push(`: > ${shQuote(dir)}/.plugins-${signature}`);
+    if (want.length > 0) {
+      lines.push(...markedSetupLines({ dir, family: ".plugins-", signature, flag: INSTALL_FAILED_FLAG, body, force: true }));
+    } else {
+      // Nothing wanted: no marker to earn, only the uninstalls to check.
+      lines.push(`${INSTALL_FAILED_FLAG}=0`, ...body);
+    }
+    lines.push(`[ "$${INSTALL_FAILED_FLAG}" = 0 ] || ${APPLY_FAILED_PROFILES}="$${APPLY_FAILED_PROFILES} "${shQuote(dir)}`);
   }
+  lines.push(
+    `if [ -n "$${APPLY_FAILED_PROFILES}" ]; then`,
+    `echo "the runner could not apply the plugins in:$${APPLY_FAILED_PROFILES}" >&2`,
+    "exit 1",
+    "fi",
+  );
   return lines;
 }
 
@@ -319,7 +335,9 @@ export async function pluginCatalog(): Promise<PluginCatalogView> {
 /**
  * Makes every profile match the wanted list — the one place that touches the runner's plugins.
  * READS first (what each profile actually has), then sends exactly the installs and uninstalls
- * that change something. Returns how many plugins are wanted, for the log and the UI.
+ * that change something. Returns how many plugins are wanted, for the log and the UI; REJECTS when
+ * any profile could not be brought to the set (see reconcileLines), which the routes turn into
+ * `applied: false` (install/remove) or a 502 (the manual apply).
  */
 export async function applyPluginsEverywhere(by?: string): Promise<{ profiles: number; plugins: number }> {
   const wanted = await enabledPlugins();
