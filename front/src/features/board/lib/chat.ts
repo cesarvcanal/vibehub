@@ -8,6 +8,8 @@
  * disappear the moment the real message lands.
  */
 
+import type { User } from "@/api/types";
+
 export type ChatEventKind = "user" | "assistant" | "tool" | "system";
 
 /**
@@ -35,6 +37,11 @@ export function parseOrigin(value: unknown): MessageOrigin | undefined {
     sourceCardId: typeof o.sourceCardId === "string" ? o.sourceCardId : undefined,
     sourceProjectId: typeof o.sourceProjectId === "string" ? o.sourceProjectId : undefined,
   };
+}
+
+/** The stamp a person's own message carries — who wrote it, as the back records it. PURE. */
+export function personOrigin(user: Pick<User, "role" | "username">): MessageOrigin {
+  return { kind: user.role === "owner" ? "owner" : "user", name: user.username };
 }
 
 /**
