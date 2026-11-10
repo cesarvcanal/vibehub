@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Finding, Review } from "./model.js";
-import { authorSuggestionsPrompt, phaseNoticeText, reviewerApprovePrompt, reviewerRoundPrompt } from "./prompts.js";
+import { authorFixPrompt, authorSuggestionsPrompt, phaseNoticeText, reviewerApprovePrompt, reviewerRoundPrompt } from "./prompts.js";
 
 function review(findings: Finding[] = []): Review {
   return {
@@ -66,5 +66,18 @@ describe("merge autorizado com sugestão em pé: os textos não dizem 'nada em a
 
   it("sem sugestão em pé, o texto de sempre", () => {
     expect(phaseNoticeText({ ...ready({ mergeAuthorized: true }), findings: [] })).toMatch(/nada em aberto/);
+  });
+});
+
+describe("prompts da revisão: o merge por ordem", () => {
+  it("caso real (PR #215): autor e revisor sabem que, mandados mergear por quem tem papel, mergeiam pelo vibehub_deliver", () => {
+    const ready = { ...review(), phase: "ready" as const, reviewedSha: "a".repeat(40) };
+    for (const text of [authorFixPrompt(review()), reviewerRoundPrompt(review()), reviewerApprovePrompt(ready)]) {
+      expect(text).toMatch(/Não mergeie o PR por conta própria/);
+      expect(text).toMatch(/mandar mergear NESTE card, mergeie: chame vibehub_deliver com card e from = o \$VIBEHUB_CARD_ID/);
+      expect(text).toMatch(/authorized: true/);
+      expect(text).toMatch(/Nunca por `gh pr merge`/);
+      expect(text).not.toMatch(/nada de vibehub_deliver|não chame vibehub_deliver/);
+    }
   });
 });

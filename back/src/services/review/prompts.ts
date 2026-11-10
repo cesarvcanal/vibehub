@@ -5,7 +5,7 @@ import { autoMergeEligible, waivedText, MAX_ROUNDS, pendingQuestions, type Findi
  *
  * Cada texto é AUTOSSUFICIENTE: o card que recebe não tem o contexto da revisão (o do revisor nasceu
  * agora; o do autor pode estar há dias em outra conversa). Por isso todos dizem, com todas as letras,
- * as quatro coisas que o loop precisa: que a IA NUNCA mergeia, a regra de bloqueio por prova, onde
+ * as quatro coisas que o loop precisa: que a IA só mergeia por ordem, a regra de bloqueio por prova, onde
  * estamos (revisão, PR, rodada N de 3) e qual ferramenta chamar no fim, com o `card` exato.
  *
  * O que veio da outra IA (títulos, respostas, provas) entra numa linha só e com teto: o texto viaja
@@ -54,7 +54,10 @@ function header(r: Review): string {
 function rules(): string {
   return [
     "Regras desta revisão:",
-    "- NUNCA mergeie o PR: nada de `gh pr merge`, nada de vibehub_deliver. O merge é um botão humano no vibehub.",
+    "- Não mergeie o PR por conta própria. Se uma pessoa com papel na revisão (responsável, revisor, autor ou coautor) " +
+      "mandar mergear NESTE card, mergeie: chame vibehub_deliver com card e from = o $VIBEHUB_CARD_ID deste terminal e " +
+      "authorized: true. O vibehub só mergeia a revisão pronta, preso ao commit aprovado, e diz o motivo se recusar. " +
+      "Nunca por `gh pr merge` nem pela API do GitHub.",
     "- Só bloqueia com prova: teste que falha, regra escrita do repo citada (arquivo e trecho), ou risco concreto de quebrar " +
       "funcionalidade existente (cenário com arquivo:linha). O resto é sugestão: aparece, não bloqueia, não abre rodada.",
   ].join("\n");
@@ -158,7 +161,7 @@ function ghReviewFallback(tool: string): string {
 }
 
 function reviewerIdentity(): string {
-  return "Você é o REVISOR deste PR. Não escreva no código do autor: não faça commit, não faça push, não chame vibehub_deliver.";
+  return "Você é o REVISOR deste PR. Não escreva no código do autor: não faça commit, não faça push. vibehub_deliver aqui só serve para o merge por ordem (regras abaixo).";
 }
 
 /** Rodada 1: revisão completa do PR com o /code-review, publicada no GitHub e entregue estruturada. */
@@ -297,7 +300,7 @@ export function authorFixPrompt(r: Review, opts: { coauthorTrailer?: string } = 
       : []),
     "1. Rode os testes do que você mexeu.",
     `2. Faça push na branch do PR: git push origin HEAD:${r.prBranch}`,
-    "   Não use vibehub_deliver nesta revisão: o push é o git push acima, e o PR já existe. Se o push for recusado, " +
+    "   O push desta correção é o git push acima, não o vibehub_deliver: o PR já existe. Se o push for recusado, " +
       `responda com o erro no reply e chame ${TOOL_RESPOND} mesmo assim.`,
     `3. Responda cada achado no PR: gh pr comment ${r.prNumber} --body "<id>: corrigido em <commit> / contestado porque <prova>"`,
     "4. Guarde o sha: git rev-parse HEAD",
@@ -344,7 +347,7 @@ export function authorSuggestionsPrompt(r: Review, list: Finding[], opts: { by: 
     `   round: ${r.round}`,
     "   headSha: o sha do passo 3 (40 caracteres)",
     "   items: [{ id, status: \"fixed\" (com commit) | \"wontfix\" (reply com o motivo), commit?, reply }]",
-    "   O push faz a revisão voltar ao revisor, que confere o que entrou: é o esperado. Nunca mergeie.",
+    "   O push faz a revisão voltar ao revisor, que confere o que entrou: é o esperado. Não mergeie por conta própria.",
   ].join("\n");
 }
 
@@ -369,8 +372,8 @@ export function reviewerApprovePrompt(r: Review): string {
     ...(risks.length ? ["   Cite os riscos aceitos pelo revisor humano:", lines(risks, "")] : []),
     ghReviewFallback("vibehub_report"),
     autoMergeEligible(r)
-      ? "2. NÃO mergeie. Não rode `gh pr merge` e não chame vibehub_deliver: o merge sai do vibehub quando você reportar o passo 3."
-      : "2. NÃO mergeie. Não rode `gh pr merge` e não chame vibehub_deliver: o merge é o botão do responsável no vibehub.",
+      ? "2. Não mergeie por conta própria: o merge sai do vibehub quando você reportar o passo 3."
+      : "2. Não mergeie por conta própria: o merge é o botão do responsável no vibehub, ou seu se alguém com papel na revisão mandar (regras acima).",
     `3. No fim, chame a ferramenta MCP vibehub_report com card: "${r.reviewerCardId}", state: "ready", ` +
       `summary: "PR #${r.prNumber} aprovado no GitHub".`,
   ].join("\n");

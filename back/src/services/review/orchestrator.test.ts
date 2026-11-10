@@ -219,7 +219,7 @@ describe("iniciar a revisão", () => {
     for (const piece of [
       "/code-review high", "PR #7", PR.url, review.id, "rodada 1 de 3", `reset --hard origin/${PR.branch}`,
       "git rev-parse HEAD", "--request-changes", "--comment", "vibehub_review_submit", `card: "${reviewer!.id}"`,
-      "NUNCA", "teste que falha", "question",
+      "Não mergeie o PR por conta própria", "teste que falha", "question",
     ]) expect(text).toContain(piece);
     expect(lastOpts()).toMatchObject({
       wake: true, requireAgent: true, readyWaitMs: o.maestro.SEND_READY_WAIT_MS,
@@ -539,12 +539,12 @@ describe("rodada do revisor", () => {
     const text = lastText();
     for (const piece of [
       "f1", "token vaza no log", "src/auth.ts:42", "src/auth.test.ts:12", "receiving-code-review", "gh pr comment",
-      "vibehub_review_respond", `card: "${author.id}"`, review.id, "rodada 1 de 3", "NUNCA", PR.branch,
+      "vibehub_review_respond", `card: "${author.id}"`, review.id, "rodada 1 de 3", "Não mergeie o PR por conta própria", PR.branch,
     ]) expect(text).toContain(piece);
     expect(lastOpts()).toMatchObject({ wake: true, requireAgent: true, origin: { kind: "system", name: "revisão de PR" } });
     // o push é git push na branch do PR; vibehub_deliver não é caminho nesta revisão
     expect(text).toContain(`git push origin HEAD:${PR.branch}`);
-    expect(text.toLowerCase()).toContain("não use vibehub_deliver nesta revisão");
+    expect(text).toContain("O push desta correção é o git push acima, não o vibehub_deliver");
     expect(text).not.toMatch(/SEM authorized|vibehub_deliver com branch/);
     // a conversa das IAs ganhou a fala do revisor
     expect(after.log.some((e) => e.who === "reviewer" && e.text.includes("o token vaza no log"))).toBe(true);
@@ -639,7 +639,7 @@ describe("rodada do revisor", () => {
     expect(calls).toEqual([`actor:u-revisor:${review.reviewerCardId}`, `send:${review.reviewerCardId}`]);
     const text = lastText();
     expect(text).toContain("gh pr review 7 --approve");
-    expect(text).toMatch(/NÃO mergeie|NUNCA mergeie/);
+    expect(text).toMatch(/Não mergeie por conta própria/);
     expect(deliverSpy).not.toHaveBeenCalled();
   });
 
@@ -889,7 +889,7 @@ describe("resposta do autor", () => {
     const text = lastText();
     for (const piece of [
       `reset --hard origin/${PR.branch}`, SHA1, "rodada 2 de 3", "f1", "token removido", "c0ffee1",
-      "introducedInRound", "verdicts", "vibehub_review_submit", `card: "${review.reviewerCardId}"`, "NUNCA",
+      "introducedInRound", "verdicts", "vibehub_review_submit", `card: "${review.reviewerCardId}"`, "Não mergeie o PR por conta própria",
     ]) expect(text).toContain(piece);
     expect(after.log.some((e) => e.who === "author" && /1 corrigido/.test(e.text))).toBe(true);
 
