@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Finding, Review } from "./model.js";
-import { authorSuggestionsPrompt, phaseNoticeText, reviewerApprovePrompt, reviewerRoundPrompt } from "./prompts.js";
+import { authorFixPrompt, authorSuggestionsPrompt, phaseNoticeText, reviewerApprovePrompt, reviewerRoundPrompt } from "./prompts.js";
 
 function review(findings: Finding[] = []): Review {
   return {
@@ -50,6 +50,31 @@ describe("prompts da revisão: achado explicado", () => {
       id: "f1", severity: "suggestion", title: "t", status: "open", introducedInRound: 1, requested: { by: "mussa", at: 1 },
     };
     expect(authorSuggestionsPrompt(review([f]), [f], { by: "mussa" })).toContain("- f1 [suggestion, aberto, pedida ao autor por mussa] t");
+  });
+});
+
+describe("autonomia corretiva: bug no que o PR fez se corrige, melhoria fora do escopo é sugestão", () => {
+  const suggestion: Finding = { id: "f1", severity: "suggestion", title: "t", status: "open", introducedInRound: 1 };
+
+  it("o revisor classifica bug ou incongruência no que o PR fez como bloqueante ou dúvida, nunca como sugestão", () => {
+    const text = reviewerRoundPrompt(review());
+    expect(text).toContain("Bug ou incongruência no que o PR fez não é sugestão");
+    expect(text).toMatch(/fora do escopo do PR, volta desnecessária/);
+  });
+
+  it("o autor corrige sem perguntar o que é bug, não amplia escopo, e na dúvida de intenção explica em vez de aplicar", () => {
+    for (const text of [
+      authorFixPrompt(review([suggestion])),
+      authorSuggestionsPrompt(review([suggestion]), [suggestion], { by: "cesar" }),
+    ]) {
+      expect(text).toContain("Bug ou incongruência no que o PR fez: corrija sem perguntar");
+      expect(text).toContain("dúvida sobre a intenção");
+    }
+  });
+
+  it("toda sugestão pedida precisa de resposta na mesma chamada", () => {
+    const text = authorSuggestionsPrompt(review([suggestion]), [suggestion], { by: "cesar" });
+    expect(text).toContain("Responda TODAS as sugestões pedidas");
   });
 });
 
