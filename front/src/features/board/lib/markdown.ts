@@ -43,9 +43,6 @@ const UPLOAD_ID_SOURCE = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-
 const UPLOAD_FILE_SOURCE = "\\d+-[a-z0-9._-]+\\.[a-z0-9]+";
 const UPLOAD_SOURCE = `\\/work\\/\\.uploads\\/${UPLOAD_ID_SOURCE}\\/${UPLOAD_FILE_SOURCE}`;
 
-/** The extensions the chat shows as a picture; every other upload is a file chip. */
-const UPLOAD_IMAGE_RE = /\.(?:png|jpe?g|gif|webp|bmp|avif)$/;
-
 const LINK_SOURCE = `https?:\\/\\/[^\\s<>()]+[^\\s<>().,;:!?]|${PREVIEW_SOURCE}`;
 
 export type MdToken =
@@ -66,64 +63,63 @@ export function parseUploadPath(path: string): { cardId: string; file: string } 
   return { cardId, file };
 }
 
-/** Áudio que o navegador toca: o chat mostra um player. Espelha os tipos de áudio que o back serve inline. */
-const UPLOAD_AUDIO_RE = /\.(?:mp3|ogg|oga|opus|m4a|aac|wav|webm|flac)$/;
-
-/** Documentos que o navegador não abre e o runner converte em texto: o chat abre um preview. */
-const UPLOAD_PREVIEW_RE = /\.(?:xlsx|xlsm|xls|docx|doc|pptx|ppt|odt|ods|odp)$/;
-
-/** Se o anexo é um áudio que o chat toca. PURE, TOTAL. */
-export function anexoEhAudio(file: string): boolean {
-  return UPLOAD_AUDIO_RE.test(String(file ?? ""));
-}
-
-/** Se o anexo é um documento de escritório que o chat mostra em preview. PURE, TOTAL. */
-export function anexoTemPreview(file: string): boolean {
-  return UPLOAD_PREVIEW_RE.test(String(file ?? ""));
-}
-
 export type UploadKind = "image" | "audio" | "pdf" | "spreadsheet" | "document" | "presentation" | "text" | "file";
 
-/** What an attachment is, for its icon and label in the bubble. PURE, TOTAL. */
+/**
+ * What each upload extension is — the ONE table the chat reads to decide how an attachment shows:
+ * a picture, a player (the audio types mirror what the back serves inline), an office document the
+ * runner turns into text for a preview, or a card that opens the file. `.csv` is `text` because that
+ * is how the panel serves it (inline, as text in a tab), not through the spreadsheet preview.
+ */
+const UPLOAD_KIND_BY_EXTENSION: Record<string, UploadKind> = {
+  png: "image", jpg: "image", jpeg: "image", gif: "image", webp: "image", bmp: "image", avif: "image",
+  mp3: "audio", ogg: "audio", oga: "audio", opus: "audio", m4a: "audio", aac: "audio", wav: "audio", webm: "audio", flac: "audio",
+  pdf: "pdf",
+  xlsx: "spreadsheet", xlsm: "spreadsheet", xls: "spreadsheet", ods: "spreadsheet",
+  docx: "document", doc: "document", odt: "document",
+  pptx: "presentation", ppt: "presentation", odp: "presentation",
+  txt: "text", csv: "text", md: "text", json: "text", log: "text",
+};
+
+/** What an attachment is, for how the bubble shows it (see the table above). PURE, TOTAL. */
 export function uploadKind(file: string): UploadKind {
   const name = String(file ?? "");
-  if (isUploadImage(name)) return "image";
-  if (anexoEhAudio(name)) return "audio";
-  if (name.endsWith(".pdf")) return "pdf";
-  if (/\.(?:xlsx|xlsm|xls|ods|csv)$/.test(name)) return "spreadsheet";
-  if (/\.(?:docx|doc|odt)$/.test(name)) return "document";
-  if (/\.(?:pptx|ppt|odp)$/.test(name)) return "presentation";
-  if (/\.(?:txt|md|json|log)$/.test(name)) return "text";
-  return "file";
+  const dot = name.lastIndexOf(".");
+  return (dot >= 0 && UPLOAD_KIND_BY_EXTENSION[name.slice(dot + 1)]) || "file";
+}
+
+/** Office documents the browser cannot open: the chat shows the runner's text in a preview. PURE, TOTAL. */
+export function anexoTemPreview(file: string): boolean {
+  const kind = uploadKind(file);
+  return kind === "spreadsheet" || kind === "document" || kind === "presentation";
 }
 
 type UploadToken = Extract<MdToken, { type: "image" | "file" }>;
 
 /**
- * A user's message split into its words and its attachments. The composer appends the upload paths
- * after the text, and rendering them where they stood put a 300px audio player in the middle of a
- * line of prose; the bubble shows the words first and the attachments in a row of their own,
- * grouped — pictures, then audios, then documents, each group in the order attached — so a wide
- * screenshot does not split the audios from each other. The blank lines the paths leave behind go
- * with them. PURE, TOTAL.
+ * A user's message split into its words and the attachments it ends with. The composer appends the
+ * upload paths after the text, and rendering them where they stood put a 300px audio player in the
+ * middle of a line of prose; the bubble shows the words first and those attachments in a row of
+ * their own, grouped — pictures, then audios, then documents, each group in the order attached — so a
+ * wide screenshot does not split the audios from each other. Only the TRAILING run of paths (with
+ * the blank lines between them) moves: a path someone wrote mid-sentence ("compare <a> with <b>")
+ * stays where it was, so the sentence still reads. PURE, TOTAL.
  */
 export function splitAttachments(tokens: readonly MdToken[]): { words: MdToken[]; attachments: UploadToken[] } {
-  const group = (t: UploadToken) => (t.type === "image" ? 0 : anexoEhAudio(t.file) ? 1 : 2);
-  const attachments = tokens
-    .filter((t): t is UploadToken => t.type === "image" || t.type === "file")
-    .sort((a, b) => group(a) - group(b));
-  if (attachments.length === 0) return { words: [...tokens], attachments };
-  const words = tokens.filter((t) => t.type !== "image" && t.type !== "file");
-  while (words.length > 0) {
-    const last = words[words.length - 1] as MdToken;
-    if (last.type !== "text") break;
-    const trimmed = last.value.trimEnd();
-    if (trimmed) {
-      words[words.length - 1] = { type: "text", value: trimmed };
-      break;
-    }
-    words.pop();
+  const isUpload = (t: MdToken): t is UploadToken => t.type === "image" || t.type === "file";
+  let tail = tokens.length;
+  while (tail > 0) {
+    const token = tokens[tail - 1] as MdToken;
+    if (!isUpload(token) && !(token.type === "text" && !token.value.trim())) break;
+    tail--;
   }
+  const order: Partial<Record<UploadKind, number>> = { image: 0, audio: 1 };
+  const group = (t: UploadToken) => order[uploadKind(t.file)] ?? 2;
+  const attachments = tokens.slice(tail).filter(isUpload).sort((a, b) => group(a) - group(b));
+  if (attachments.length === 0) return { words: [...tokens], attachments };
+  const words = tokens.slice(0, tail);
+  const last = words[words.length - 1];
+  if (last?.type === "text") words[words.length - 1] = { type: "text", value: last.value.trimEnd() };
   return { words, attachments };
 }
 
@@ -143,7 +139,7 @@ export function formatAudioTime(seconds: number): string | null {
 
 /** Whether an upload name is one the chat shows as a picture. PURE, TOTAL. */
 export function isUploadImage(file: string): boolean {
-  return UPLOAD_IMAGE_RE.test(String(file ?? ""));
+  return uploadKind(file) === "image";
 }
 
 /**
