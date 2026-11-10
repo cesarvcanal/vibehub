@@ -174,7 +174,7 @@ commits). The AI that did the work sends the documentation with the delivery:
   implementada, Detalhamento técnico, Comportamento esperado, Impactos, Testes e validações, Pontos de
   atenção (English equivalents are accepted);
 - `comments` — `[{ path, line, body, side?, startLine? }]`, one per relevant block of the diff, each
-  at least 120 characters (what changed, why, how, responsibility, impact, rules).
+  120 to 8 000 characters (what changed, why, how, responsibility, impact, rules).
 
 A NEW PR needs all three. Invalid documentation is refused before anything runs; missing documentation
 with no open PR pushes the branch and stops at `{ reason: "undocumented" }`. An open PR is reused, and

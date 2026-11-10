@@ -66,11 +66,18 @@ export const PR_SECTIONS: ReadonlyArray<{ label: string; match: string[] }> = [
  * dados antes de continuar." (the standard's own example of a forbidden comment) is 66 characters.
  */
 export const MIN_COMMENT_CHARS = 120;
-/** GitHub's own limits: a PR title, and a PR body or comment body. */
+/** GitHub's own limits: a PR title, and a PR body. */
 const MAX_TITLE_CHARS = 256;
 const MAX_BODY_CHARS = 65_536;
 /** One review is one API call; past this the agent is commenting lines, not blocks. */
 const MAX_COMMENTS = 100;
+/**
+ * A comment explains ONE block — 8 000 characters is plenty. It also BOUNDS the review, which travels
+ * as one base64 payload inside the script's heredoc (parsed by the host's bash and the container's):
+ * at GitHub's own 65 536 per comment, 100 comments would be ~8.7 MB of base64 and blow the 60 s the
+ * post gets; capped here, the worst case is ~1 MB, a few seconds.
+ */
+export const MAX_COMMENT_CHARS = 8_000;
 
 /** Lower-case, accents stripped, markdown decoration and numbering gone. PURE. */
 function normalizeHeading(text: string): string {
@@ -174,7 +181,9 @@ function commentProblems(c: PrComment, body: string): string[] {
         "por que, como funciona, a responsabilidade do trecho, o impacto e as regras envolvidas",
     );
   }
-  if (body.length > MAX_BODY_CHARS) out.push(`${where(c)}: comentário passa do limite do GitHub (${MAX_BODY_CHARS} caracteres)`);
+  if (body.length > MAX_COMMENT_CHARS) {
+    out.push(`${where(c)}: comentário longo demais (${body.length} caracteres, máximo ${MAX_COMMENT_CHARS}) — um comentário explica UM bloco`);
+  }
   return out;
 }
 

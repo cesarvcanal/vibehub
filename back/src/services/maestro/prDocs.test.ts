@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   validatePrDocs, missingPrSections, canOpenPr, undocumentedOutput, freshComments, reviewPayload,
-  MIN_COMMENT_CHARS, PR_SECTIONS,
+  MIN_COMMENT_CHARS, MAX_COMMENT_CHARS, PR_SECTIONS,
 } from "./prDocs.js";
 
 /** A body with every section the standard asks for, as an agent following the tool would write it. */
@@ -127,6 +127,14 @@ describe("validatePrDocs", () => {
     ];
     for (const c of bad) expect(validatePrDocs({ comments: [c] }).ok, JSON.stringify(c)).toBe(false);
     expect(validatePrDocs({ comments: [{ ...COMMENT, line: 9, startLine: 5 }] }).ok).toBe(true);
+  });
+
+  it("a comment past MAX_COMMENT_CHARS is refused: the whole review travels in one script", () => {
+    const at = (n: number) => validatePrDocs({ comments: [{ ...COMMENT, body: `${EXPLAINED} ${"x".repeat(n)}`.slice(0, n) }] });
+    expect(at(MAX_COMMENT_CHARS).ok).toBe(true);
+    const over = at(MAX_COMMENT_CHARS + 1);
+    expect(over.ok).toBe(false);
+    expect(!over.ok && over.problems[0]).toContain(String(MAX_COMMENT_CHARS));
   });
 
   it("startLine 0 (a client filling the default) or equal to line is a one-line comment, not an error", () => {

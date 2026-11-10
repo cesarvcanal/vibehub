@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PR_SECTIONS, MIN_COMMENT_CHARS, type PrDocs } from "../services/maestro/prDocs.js";
+import { PR_SECTIONS, MIN_COMMENT_CHARS, MAX_COMMENT_CHARS, type PrDocs } from "../services/maestro/prDocs.js";
 
 /**
  * The PR documentation fields of `vibehub_deliver` — ONE definition for the card's MCP (tools.ts) and
@@ -31,7 +31,7 @@ export const prDocsInput = {
     path: z.string().describe("file path relative to the repository root, as it appears in the diff"),
     line: z.number().int().describe("line number in the file version of `side`; must be inside the PR's diff (last line of a block)"),
     body: z.string().describe(
-      `the explanation of THIS block (at least ${MIN_COMMENT_CHARS} characters): what changed, why, how it works, ` +
+      `the explanation of THIS block (${MIN_COMMENT_CHARS} to ${MAX_COMMENT_CHARS} characters): what changed, why, how it works, ` +
         "its responsibility in the flow, the impact on the rest of the system and the rules involved. Never generic.",
     ),
     side: z.enum(["RIGHT", "LEFT"]).optional().describe("RIGHT (default) = the new version; LEFT = a removed line, numbered in the old version"),
