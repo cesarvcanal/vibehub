@@ -20,7 +20,7 @@ Regra nova de código vai para o `AGENTS.md`; aprendizado de ambiente (porta, ru
 
 ## Workflows: skills da comunidade
 
-Habilitadas em [`settings.json`](settings.json). Use-as em vez de reinventar o passo a passo:
+Habilitadas em [`settings.json`](settings.json). O `enabledPlugins` só liga plugin **já instalado no perfil do Claude**; quem instala é a tela de Plugins do vibehub, por instalação. Se a skill não aparece na sua lista, o plugin falta naquele perfil: siga o mesmo processo à mão (debugar antes de corrigir, teste primeiro, plano, verificação) e avise quem cuida da instalação. Use-as em vez de reinventar o passo a passo:
 
 | Quando | Skill |
 |--------|-------|
@@ -44,7 +44,7 @@ Habilitadas em [`settings.json`](settings.json). Use-as em vez de reinventar o p
 
 **Risco antes de executar.** Antes de ação destrutiva ou irreversível (apagar worktree, volume ou dado de `VIBEHUB_DATA_DIR`, `rm`, force-push, migração de dado persistido, mexer no vibehub em produção), exponha os riscos ao usuário **antes** de agir, com o emoji escalando pela gravidade: 🚨 para risco grande/irreversível, ⚠️ para médio e pequeno. Só siga com o aval.
 
-**Paralelismo é multi-dispatch seu.** Subagente não abre executores paralelos por dentro (profundidade 2). Paralelismo real = vários agentes numa única mensagem, cada um dono de um pacote que não cruza com os outros; dois agentes na mesma working tree = sobrescrita silenciosa. Trabalho que precisa de branch própria vai para outro card do board (`vibehub_send_to_terminal`), não para um subagente.
+**Paralelismo é multi-dispatch seu.** O `settings.json` permite profundidade 2 (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`): um subagente pode abrir um nível a mais para ler ou pesquisar, mas não para paralelizar escrita. Paralelismo real = vários agentes numa única mensagem, cada um dono de um pacote que não cruza com os outros; dois agentes na mesma working tree = sobrescrita silenciosa. Trabalho que precisa de branch própria vai para outro card do board (`vibehub_send_to_terminal`), não para um subagente.
 
 ## Entrega
 
@@ -54,7 +54,7 @@ Habilitadas em [`settings.json`](settings.json). Use-as em vez de reinventar o p
 
 ## Review de diff
 
-Depois de implementar, ou em "audita" / "segue as regras?": `/code-review`. `/code-review ultra` (multi-agente na nuvem, faturado) só quando o usuário pedir.
+Depois de implementar, ou em "audita" / "segue as regras?": `/code-review` (o comando nativo do Claude Code, com níveis de esforço; o plugin `code-review` não é habilitado aqui para não disputar o nome). `/code-review ultra` (multi-agente na nuvem, faturado) só quando o usuário pedir.
 
 ## Comandos úteis
 
@@ -64,7 +64,7 @@ Depois de implementar, ou em "audita" / "segue as regras?": `/code-review`. `/co
 | `npm --prefix back run dev` · `npm --prefix front run dev` | Backend (tsx watch) e frontend (Vite) em dev |
 | `cd back && npx vitest run <arquivo> -t "<caso>"` | Teste do que você tocou (idem em `front/`) |
 | `npm run test:changed` | Testes afetados pela branch desde a `main`, o recorte do gate |
-| `npx tsc -b` (dentro de `back/` ou `front/`) | Typecheck real (nunca `tsc --noEmit -p`) |
+| `npx tsc -b` (em `front/`) · `npx tsc --noEmit` (em `back/`) | Typecheck, o mesmo do CI (no back não cobre `*.test.ts`) |
 | `npm run build` | Build de back + front |
 | `npm --prefix front run storybook` | Storybook dos componentes |
 | `gh pr checks <N>` | Suíte inteira, que só roda no CI |
