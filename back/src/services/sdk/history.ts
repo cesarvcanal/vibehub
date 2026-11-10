@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readdir, readFile, rm } from "node:fs/promises";
+import { appendFile, mkdir, open, readdir, readFile, rm, type FileHandle } from "node:fs/promises";
 import { EventEmitter } from "node:events";
 import { basename, dirname, join } from "node:path";
 import { dataPath } from "../../config/env.js";
@@ -300,6 +300,36 @@ function replayWindow(events: HistoryEvent[], limit: number): HistoryEvent[] {
     kept.push(event);
   }
   return kept.reverse();
+}
+
+/**
+ * The events in the last `bytes` of a card's log, oldest first, for a caller that only needs the END
+ * of the conversation (the question a turn closed on) — `readHistory` parses the whole file. `whole`
+ * says the read reached the start of the file; when it did not, finding nothing is not an answer and
+ * the caller asks for more. No compaction (a read, not upkeep); a failed read throws, except the
+ * missing file, which is an empty log.
+ */
+export async function readHistoryTail(cardId: string, bytes: number): Promise<{ events: HistoryEvent[]; whole: boolean }> {
+  let handle: FileHandle;
+  try {
+    handle = await open(historyFile(cardId), "r");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { events: [], whole: true };
+    throw err;
+  }
+  try {
+    const { size } = await handle.stat();
+    const start = Math.max(0, size - bytes);
+    const { bytesRead, buffer } = await handle.read(Buffer.alloc(size - start), 0, size - start, start);
+    const chunk = buffer.subarray(0, bytesRead);
+    // Mid-file, the chunk opens on a piece of a line: it goes, up to the first newline. A newline
+    // byte never occurs inside a multi-byte UTF-8 character, so the cut never splits one either.
+    const newline = start === 0 ? -1 : chunk.indexOf(0x0a);
+    const from = start === 0 ? 0 : newline === -1 ? chunk.length : newline + 1;
+    return { events: parseHistory(chunk.subarray(from).toString("utf8")), whole: start === 0 };
+  } finally {
+    await handle.close();
+  }
 }
 
 /** The log's lines as events. A torn line (a crash mid-append) is skipped, the rest kept. PURE. */

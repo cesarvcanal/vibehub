@@ -8,6 +8,7 @@ import {
   onExternalMessage,
   publishExternalMessage,
   readHistory,
+  readHistoryTail,
   removeHistory,
   replayableHistoryEvent,
   rewindHistory,
@@ -767,6 +768,60 @@ describe("input do tool_use no log", () => {
       expect(await readHistory(CARD)).toHaveLength(count);
       expect((await stat(file())).ino).toBe(before);
     });
+  });
+});
+
+/**
+ * Quem só precisa do FIM da conversa (a pergunta que fechou o turno) lia e parseava o log inteiro a
+ * cada fim de turno. O rabo é lido pelos bytes finais do arquivo.
+ */
+describe("readHistoryTail — só o rabo do log", () => {
+  const file = () => join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`);
+  const lineOf = (e: object) => `${JSON.stringify(e)}\n`;
+
+  it("um log menor que o rabo pedido vem inteiro, e diz que veio inteiro", async () => {
+    await appendHistory(CARD, { type: "user", text: "a" });
+    await appendHistory(CARD, { type: "assistant_text", text: "b" });
+    expect(await readHistoryTail(CARD, 1024 * 1024)).toEqual({
+      events: [{ type: "user", text: "a" }, { type: "assistant_text", text: "b" }],
+      whole: true,
+    });
+  });
+
+  it("começando no meio do arquivo, a linha partida do começo sai e o resto vem certo", async () => {
+    const last = { type: "assistant_text", text: "fechou" };
+    await appendHistory(CARD, { type: "user", text: "x".repeat(5_000) });
+    await appendHistory(CARD, last);
+    const tail = await readHistoryTail(CARD, Buffer.byteLength(lineOf(last)) + 100);
+    expect(tail).toEqual({ events: [last], whole: false });
+  });
+
+  it("o corte no meio de um caractere de vários bytes não vira lixo", async () => {
+    const last = { type: "assistant_text", text: "ação concluída 😀 — quer revisar?" };
+    await appendHistory(CARD, { type: "user", text: "ç😀".repeat(2_000) });
+    await appendHistory(CARD, last);
+    const lastBytes = Buffer.byteLength(lineOf(last));
+    // Todos os cortes possíveis dentro da linha de antes, inclusive no meio de um "😀" (4 bytes).
+    for (let extra = 1; extra <= 12; extra += 1) {
+      expect(await readHistoryTail(CARD, lastBytes + extra)).toEqual({ events: [last], whole: false });
+    }
+  });
+
+  it("um rabo que não chega a ter uma linha inteira volta vazio, sem fingir que é o log inteiro", async () => {
+    await appendHistory(CARD, { type: "user", text: "y".repeat(1_000) });
+    expect(await readHistoryTail(CARD, 100)).toEqual({ events: [], whole: false });
+  });
+
+  it("sem log, vazio e inteiro", async () => {
+    expect(await readHistoryTail(CARD, 1024)).toEqual({ events: [], whole: true });
+  });
+
+  it("não compacta: é leitura, não manutenção", async () => {
+    await mkdir(join(dir, SDK_HISTORY_DIR), { recursive: true });
+    await appendFile(file(), lineOf({ type: "user", text: "z".repeat(HISTORY_COMPACT_SIZE + 10) }), "utf8");
+    const before = (await stat(file())).ino;
+    await readHistoryTail(CARD, 1024);
+    expect((await stat(file())).ino).toBe(before);
   });
 });
 

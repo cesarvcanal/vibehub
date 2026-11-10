@@ -1,5 +1,5 @@
 import * as registry from "../board/registry.js";
-import { historySettled, readHistory, type HistoryEvent } from "./history.js";
+import { historySettled, readHistoryTail, type HistoryEvent } from "./history.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -64,16 +64,38 @@ export function proseQuestion(text: string): string | null {
  * are rows of their own, neither message nor answer. PURE.
  */
 export function pendingProseQuestion(events: readonly HistoryEvent[]): string | null {
+  const closing = closingMessage(events);
+  return closing?.type === "assistant_text" ? proseQuestion(closing.text) : null;
+}
+
+/** The newest event that decides the verdict — a message of the person's or the main agent's words. PURE. */
+function closingMessage(events: readonly HistoryEvent[]): { type: "user" } | { type: "assistant_text"; text: string } | null {
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i]!;
-    if (event.type === "user") return null;
+    if (event.type === "user") return { type: "user" };
     if (event.type !== "assistant_text") continue;
     if ((event as { parentToolUseId?: unknown }).parentToolUseId) continue;
     const text = (event as { text?: unknown }).text;
     if (typeof text !== "string" || text === "") continue;
-    return proseQuestion(text);
+    return { type: "assistant_text", text };
   }
   return null;
+}
+
+/** The first bite of the log's tail; the end of a turn almost always sits well inside it. */
+const TAIL_FIRST_BYTES = 64 * 1024;
+
+/**
+ * The prose question the log ends on, read from its TAIL: this runs at the end of every turn, and
+ * parsing the whole file to look at its last lines blocked the event loop on a big log. A tail with
+ * no deciding message (a fleet's subagent lines after the question) is no verdict yet: it grows
+ * until it has one or reaches the start of the file.
+ */
+async function pendingQuestionOnDisk(cardId: string): Promise<string | null> {
+  for (let bytes = TAIL_FIRST_BYTES; ; bytes *= 4) {
+    const { events, whole } = await readHistoryTail(cardId, bytes);
+    if (whole || closingMessage(events)) return pendingProseQuestion(events);
+  }
 }
 
 /**
@@ -84,7 +106,7 @@ export function pendingProseQuestion(events: readonly HistoryEvent[]): string | 
 export async function syncPendingQuestion(cardId: string): Promise<void> {
   try {
     await historySettled(cardId);
-    const question = pendingProseQuestion(await readHistory(cardId));
+    const question = await pendingQuestionOnDisk(cardId);
     await registry.setCardPendingQuestion(cardId, question ? Date.now() : null);
   } catch (err) {
     logger.debug({ card: cardId, detail: (err as Error).message }, "could not read the pending question of a card");
@@ -101,7 +123,7 @@ export async function backfillPendingQuestions(): Promise<number> {
   for (const card of await registry.listAllCards()) {
     if (card.column === "done" || card.status === "working") continue;
     try {
-      const question = pendingProseQuestion(await readHistory(card.id));
+      const question = await pendingQuestionOnDisk(card.id);
       if (Boolean(question) === Boolean(card.pendingQuestionAt)) continue;
       await registry.setCardPendingQuestion(card.id, question ? Date.now() : null);
       if (question) stamped += 1;
