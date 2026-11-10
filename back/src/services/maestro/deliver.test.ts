@@ -1145,6 +1145,21 @@ describe("deliver abre PR documentado (diretriz de PR de todo repositório)", ()
     expect(mergeRan()).toBe(false);
   });
 
+  it("a dica de linha só sai com palavra inteira: 'different', 'deadline' e 'pipeline' não a disparam", async () => {
+    const { deliver, card } = await makeCard();
+    for (const [answer, hint] of [
+      ["gh: token from a different account, deadline passed in pipeline (HTTP 403)", false],
+      ["gh: pull_request_review_thread.line must be part of the diff (HTTP 422)", true],
+      ["Unprocessable Entity (HTTP 422)", true],
+    ] as const) {
+      runScript.mockClear();
+      wire({ review: `${answer}\n__VIBEHUB_DELIVER__ error review` });
+      const out = await deliver.deliver(card.id, { branch: "dev", docs: DOCS });
+      expect(out.output, answer).toContain(answer);
+      expect(String(out.output).includes("tem que estar no diff"), answer).toBe(hint);
+    }
+  });
+
   it("o PR não chegou ao commit empurrado: comments_failed (as linhas seriam de outro diff)", async () => {
     const { deliver, card } = await makeCard();
     wire({ comments: "__VIBEHUB_DELIVER__ error stale" });
