@@ -530,7 +530,7 @@ export const ptBR: Record<string, string> = {
   "sdk.compactSaved": "−{percent}%",
   "sdk.compactFailed": "Compactação não concluída",
   "sdk.compactInterrupted": "interrompida antes de terminar",
-  "sdk.btwLabel": "Pergunta lateral (/btw) — respondida à parte, o turno seguiu sem ela",
+  "sdk.btwLabel": "Pergunta lateral: respondida à parte, o turno seguiu sem ela",
   "sdk.btwError": "Não deu para responder: {error}",
   "sdk.btwPending": "Respondendo…",
   "sdk.btwExpired": "Sem resposta — a consulta lateral não voltou (o driver reiniciou ou caiu). Pergunte de novo.",
