@@ -244,6 +244,19 @@ export interface CatalogEvent { type: "catalog"; commands: SlashCommandInfo[] }
  */
 export interface EffortDefaultEvent { type: "effort_default"; effort: string }
 /**
+ * The answer to a `set_effort` (same `id`): `effort` = the level the session says the next call to
+ * the model uses (absent when it does not say); `error` = the switch was not applied. State for the
+ * caller, consumed by the manager: never written to the history nor sent to a browser.
+ */
+export interface EffortAckEvent { type: "effort_ack"; id: string; effort?: string; error?: string }
+/**
+ * A level switched in the pill replaced the one an `ultrathink`/`ultracode` keyword raised for the
+ * turn in flight. The chat's activity bar drops its "high effort" on it: the order of the switch and
+ * the keyword is the driver's, and only the driver knows it. Forwarded to the browser, never written
+ * to the history (the bar is the live turn's).
+ */
+export interface KeywordEffortReplacedEvent { type: "keyword_effort_replaced" }
+/**
  * Output of a LOCAL slash command (`/cost`, `/usage`): the CLI answers it itself, without a model
  * turn. Without this the chat swallowed the answer and the command looked like it did nothing.
  */
@@ -341,6 +354,8 @@ export type DriverEvent =
   | RewoundEvent
   | CatalogEvent
   | EffortDefaultEvent
+  | EffortAckEvent
+  | KeywordEffortReplacedEvent
   | LocalOutputEvent
   | BtwAnswerEvent
   | CompactionEvent
@@ -377,6 +392,8 @@ const DRIVER_EVENT_TYPES = new Set([
   "rewound",
   "catalog",
   "effort_default",
+  "effort_ack",
+  "keyword_effort_replaced",
   "local_output",
   "btw_answer",
   "compaction",
@@ -492,9 +509,9 @@ export interface BtwControl { type: "btw"; id: string; question: string }
  * A INTELIGÊNCIA DO CARD TROCOU com o driver de pé: o driver aplica o nível na sessão viva
  * (`applyFlagSettings`), no meio do turno inclusive — a próxima chamada ao modelo já sai nele, sem
  * reiniciar nada. `null` = de volta ao padrão da conta, também ao vivo. Nasce no back (troca no
- * pill), nunca no navegador.
+ * pill), nunca no navegador. The driver answers with an `effort_ack` carrying the same `id`.
  */
-export interface SetEffortControl { type: "set_effort"; effort: string | null }
+export interface SetEffortControl { type: "set_effort"; id: string; effort: string | null }
 export type DriverControl =
   | UserControl
   | BtwControl

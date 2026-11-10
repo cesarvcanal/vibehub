@@ -232,12 +232,12 @@ export function cardDriverActivity(cardId: string): DriverActivity {
 }
 
 /**
- * Hands a card's new reasoning level to its native chat driver, LIVE: answers true when a running
- * driver took it (the very next call to the model already uses it, mid-turn included), false when
- * there is no driver to take it — the caller then restarts the session onto it, as before.
- * REGISTERED, for the same cycle as above.
+ * Hands a card's new reasoning level to its native chat driver, LIVE: resolves true once a running
+ * driver CONFIRMED the session took it (the very next call to the model already uses it, mid-turn
+ * included), false when there is no driver, the session refused it or never answered — the caller
+ * then restarts the session onto it, as before. REGISTERED, for the same cycle as above.
  */
-type EffortApplier = (cardId: string, effort: string | null) => boolean;
+type EffortApplier = (cardId: string, effort: string | null) => Promise<boolean>;
 const effortAppliers = new Set<EffortApplier>();
 
 export function onCardEffortApplier(applier: EffortApplier): () => void {
@@ -246,11 +246,11 @@ export function onCardEffortApplier(applier: EffortApplier): () => void {
 }
 
 /** `effort` null = back to the account's own level, live as well (see restoreAccountEffort in sdk-driver.mjs). */
-export function applyLiveEffort(cardId: string, effort: string | null): boolean {
+export async function applyLiveEffort(cardId: string, effort: string | null): Promise<boolean> {
   let applied = false;
   for (const applier of effortAppliers) {
     try {
-      if (applier(cardId, effort)) applied = true;
+      if (await applier(cardId, effort)) applied = true;
     } catch {
       /* a broken applier reads as "not applied": the session restarts onto the level instead */
     }

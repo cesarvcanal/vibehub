@@ -2650,6 +2650,39 @@ describe("SdkChatView — the activity bar", () => {
     await waitFor(() => expect(screen.queryByTestId("sdk-activity-effort")).toBeNull());
   });
 
+  it("o driver avisa que a troca do pill tirou o turno do nível da palavra: o 'esforço alto' sai da barra", async () => {
+    // Review do #259 (f5): a ordem da troca e da palavra é a do DRIVER. O relógio do navegador não a
+    // conhece (o PATCH grava antes de mandar a troca, e a mensagem pode chegar primeiro).
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+
+    const field = screen.getByRole("textbox");
+    fireEvent.change(field, { target: { value: "ultrathink revisa o pdv" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    await waitFor(() => expect(screen.getByTestId("sdk-activity-effort")).toHaveTextContent("high effort"));
+
+    ws.deliver({ type: "keyword_effort_replaced" });
+    await waitFor(() => expect(screen.queryByTestId("sdk-activity-effort")).toBeNull());
+    expect(screen.getByTestId("sdk-activity-bar")).toBeInTheDocument();
+  });
+
+  it("o ultracode segue na barra depois do aviso — a orquestração continua ligada", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+
+    const field = screen.getByRole("textbox");
+    fireEvent.change(field, { target: { value: "ultracode revisa o pdv" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    await waitFor(() => expect(screen.getByTestId("sdk-activity-effort")).toHaveTextContent("ultracode"));
+
+    ws.deliver({ type: "keyword_effort_replaced" });
+    expect(screen.getByTestId("sdk-activity-effort")).toHaveTextContent("ultracode");
+  });
+
   it("a click on the bar goes to the live edge of the conversation", async () => {
     renderSdkChat();
     const ws = await socket();

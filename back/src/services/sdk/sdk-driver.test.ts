@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
  * GATE the test opens — a file in the sandbox. Fixed sleeps here made the tests a bet on the CI's load.
  */
 const FAKE_SDK = String.raw`
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 let created = 0;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -241,15 +241,51 @@ export function query({ prompt, options }) {
   const handle = run();
   handle.interrupt = () => { mark("interrupt"); onInterrupt(); return interruptAnswer; };
   handle.supportedCommands = async () => [];
-  handle.initializationResult = async () => ({});
-  handle.applyFlagSettings = async (settings) => { mark("flags:" + JSON.stringify(settings)); };
+  // "init-gate": a CLI that has not finished starting until "release-init" exists.
+  handle.initializationResult = async () => {
+    if (existsSync(join(options.cwd, "init-gate"))) {
+      mark("init:waiting");
+      while (!existsSync(join(options.cwd, "release-init"))) await sleep(20);
+      mark("init:answered");
+    }
+    return {};
+  };
+  // The level in the flag layer: undefined = none; null = cleared, and the real CLI falls to the
+  // MODEL's default. "flags-fail" in the sandbox is the session refusing the switch; "flags-hang", a
+  // control request written into a CLI that is not listening (it never answers); "flags-gate-once",
+  // the first write that sees it answers only once "release-flags" exists (a slow CLI).
+  let flagEffort;
+  handle.applyFlagSettings = async (settings) => {
+    mark("flags:" + JSON.stringify(settings));
+    const once = join(options.cwd, "flags-gate-once");
+    if (existsSync(once)) {
+      rmSync(once);
+      mark("flags-gate:waiting");
+      while (!existsSync(join(options.cwd, "release-flags"))) await sleep(20);
+    }
+    if (existsSync(join(options.cwd, "flags-fail"))) throw new Error("control request failed");
+    if (existsSync(join(options.cwd, "flags-hang"))) return new Promise(() => {});
+    if ("effortLevel" in settings) flagEffort = settings.effortLevel;
+  };
   // O nível que a CONTA define (o effortLevel dos settings) vem de um arquivo no sandbox; sem ele, o
-  // padrão do modelo ("medium", como o CLI de verdade para o Opus). \`applied\` é o que o CLI de
-  // verdade diz que a próxima chamada vai usar: o --effort, senão os settings, senão o do modelo.
+  // padrão do modelo ("medium", como o CLI de verdade para o Opus). \`applied\` is what the real CLI
+  // says the next call uses: the flag, else --effort, else the settings, else the model's default.
+  // "settings-hang": the read never answers. "settings-gate": it waits for "release-settings";
+  // "settings-gate-once": only the first read that sees it waits.
   handle.getSettings = async () => {
+    if (existsSync(join(options.cwd, "settings-hang"))) return new Promise(() => {});
+    const once = join(options.cwd, "settings-gate-once");
+    const gatedOnce = existsSync(once);
+    if (gatedOnce) rmSync(once);
+    if (gatedOnce || existsSync(join(options.cwd, "settings-gate"))) {
+      mark("settings:waiting");
+      while (!existsSync(join(options.cwd, "release-settings"))) await sleep(20);
+      mark("settings:answered");
+    }
     const file = join(options.cwd, "account-effort");
     const own = existsSync(file) ? readFileSync(file, "utf8").trim() : undefined;
-    return { applied: { effort: options.effort ?? own ?? "medium" }, effective: own ? { effortLevel: own } : {} };
+    const applied = flagEffort === undefined ? (options.effort ?? own ?? "medium") : (flagEffort ?? "medium");
+    return { applied: { effort: applied }, effective: own ? { effortLevel: own } : {} };
   };
   // O /context: "nocontext" simula um SDK que falha na consulta (o medidor só não anda).
   let contextReads = 0;
@@ -304,6 +340,11 @@ afterEach(async () => {
   await rm(join(sandbox, "release-tool"), { force: true });
   await rm(join(sandbox, "release-btw"), { force: true });
   await rm(join(sandbox, "account-effort"), { force: true });
+  await rm(join(sandbox, "flags-fail"), { force: true });
+  for (const gate of [
+    "flags-hang", "flags-gate-once", "release-flags", "init-gate", "release-init",
+    "settings-hang", "settings-gate", "settings-gate-once", "release-settings",
+  ]) await rm(join(sandbox, gate), { force: true });
   await rm(join(sandbox, "context-fail"), { force: true });
   await rm(join(sandbox, "context-hang"), { force: true });
 });
@@ -315,6 +356,18 @@ afterAll(async () => {
 /** Opens the gate the fake SDK's "slow" turn is parked on. */
 async function releaseSlowTurn(): Promise<void> {
   await writeFile(join(sandbox, "release-slow"), "");
+}
+
+/**
+ * The marks starting with `prefix`, once there are `count` of them. The marks (stderr) and the events
+ * (stdout) are separate pipes: a mark the fake wrote BEFORE an event can still reach the test after it.
+ */
+async function marksOnceThere(driver: RunningDriver, prefix: string, count: number): Promise<string[]> {
+  for (;;) {
+    const found = driver.marks.filter((m) => m.startsWith(prefix));
+    if (found.length >= count) return found;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
 }
 
 /** A line-fed list that can be waited on: `wait` resolves with the first item (from `from` on) that matches. */
@@ -366,6 +419,20 @@ function startDriver(extraArgs: string[] = [], cwd = sandbox, configDir = sandbo
     },
     marks: marks.items,
   };
+}
+
+/** startDriver with extra environment for the driver process (its timeouts are read at boot). */
+function startDriverWithEnv(env: Record<string, string>, extraArgs: string[] = []): RunningDriver {
+  const saved = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, env);
+  try {
+    return startDriver(extraArgs);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 }
 
 /** Boots a driver and finishes one ordinary turn — the memory fork point a rewind needs. */
@@ -858,6 +925,22 @@ describe("sdk-driver.mjs — a inteligência do card sobrevive ao ultrathink", (
     await driver.waitFor((e) => e.type === "result");
     await driver.waitMark('flags:{"effortLevel":null}');
   }, 60_000);
+
+  it("sem inteligência no card e com nível nos settings da CONTA, a devolução volta a ele, não ao padrão do modelo", async () => {
+    // O null sozinho leva ao padrão do MODELO e ignora os settings (medido no SDK 0.3.300, 29/10):
+    // um card sem pin numa conta em `high` saía de um turno ultrathink em `medium`.
+    await writeFile(join(sandbox, "account-effort"), "high");
+    const driver = startDriver();
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "pensa nisso ultrathink" });
+    await driver.waitFor((e) => e.type === "result");
+    await driver.waitMark('flags:{"effortLevel":"high"}');
+    expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual([
+      'flags:{"effortLevel":"max"}',
+      'flags:{"effortLevel":null}',
+      'flags:{"effortLevel":"high"}',
+    ]);
+  }, 60_000);
 });
 
 /**
@@ -872,10 +955,13 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     await driver.waitFor((e) => e.type === "ready");
     driver.send({ type: "user", text: "revisa slow" });
     await driver.waitMark("slow:running");
-    driver.send({ type: "set_effort", effort: "high" });
+    driver.send({ type: "set_effort", id: "e1", effort: "high" });
     await driver.waitMark('flags:{"effortLevel":"high"}');
+    await driver.waitFor((e) => e.type === "effort_ack" && e.id === "e1");
     // Aplicado com o turno ainda aberto: nenhum result até aqui, nenhum stream novo.
     expect(driver.events.some((e) => e.type === "result")).toBe(false);
+    // Sem palavra no turno, não há nível de palavra a substituir: a tela não é avisada de nada.
+    expect(driver.events.some((e) => e.type === "keyword_effort_replaced")).toBe(false);
     await releaseSlowTurn();
     await driver.waitFor((e) => e.type === "result");
   }, 60_000);
@@ -883,7 +969,7 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
   it("sem stream de pé, o PRÓXIMO já nasce no nível novo", async () => {
     const driver = startDriver(["--effort", "medium"]);
     await driver.waitFor((e) => e.type === "ready");
-    driver.send({ type: "set_effort", effort: "xhigh" });
+    driver.send({ type: "set_effort", id: "e2", effort: "xhigh" });
     driver.send({ type: "user", text: "oi" });
     await driver.waitMark("effort:xhigh");
     await driver.waitFor((e) => e.type === "result");
@@ -899,7 +985,7 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     await driver.waitFor((e) => e.type === "ready");
     driver.send({ type: "user", text: "subslow" });
     await driver.waitMark("subslow:running");
-    driver.send({ type: "set_effort", effort: "xhigh" });
+    driver.send({ type: "set_effort", id: "e3", effort: "xhigh" });
     await driver.waitMark('flags:{"effortLevel":"xhigh"}');
     expect(driver.events.some((e) => e.type === "result")).toBe(false);
     await releaseSlowTurn();
@@ -920,7 +1006,7 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     await driver.waitFor((e) => e.type === "ready");
     driver.send({ type: "user", text: "revisa slow" });
     await driver.waitMark("slow:running");
-    driver.send({ type: "set_effort", effort: null });
+    driver.send({ type: "set_effort", id: "e4", effort: null });
     await driver.waitMark('flags:{"effortLevel":"high"}');
     expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual(['flags:{"effortLevel":null}', 'flags:{"effortLevel":"high"}']);
     expect(driver.events.some((e) => e.type === "result")).toBe(false);
@@ -933,7 +1019,7 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     await driver.waitFor((e) => e.type === "ready");
     driver.send({ type: "user", text: "revisa slow" });
     await driver.waitMark("slow:running");
-    driver.send({ type: "set_effort", effort: null });
+    driver.send({ type: "set_effort", id: "e5", effort: null });
     await driver.waitMark('flags:{"effortLevel":null}');
     await releaseSlowTurn();
     await driver.waitFor((e) => e.type === "result");
@@ -943,31 +1029,424 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
   it("voltar ao padrão sem stream de pé: o próximo nasce sem --effort", async () => {
     const driver = startDriver(["--effort", "xhigh"]);
     await driver.waitFor((e) => e.type === "ready");
-    driver.send({ type: "set_effort", effort: null });
+    driver.send({ type: "set_effort", id: "e6", effort: null });
     driver.send({ type: "user", text: "oi" });
     await driver.waitFor((e) => e.type === "result");
     expect(driver.marks.filter((m) => m.startsWith("effort:")).at(-1)).toBe("effort:none");
   }, 60_000);
 
-  it("um turno ultrathink em voo segura o max; a devolução no fim dele já é o nível novo", async () => {
+  it("um turno ultrathink em voo: o nível escolhido no pill entra NA HORA e o fim do turno não o desfaz", async () => {
+    // A escolha no pill é mais nova que a palavra. Segurar o max até o fim do turno deixava o pill
+    // dizendo Alto com a sessão em max pelo resto do turno (análise de 10/11/2026).
     const driver = startDriver(["--effort", "low"]);
     await driver.waitFor((e) => e.type === "ready");
     driver.send({ type: "user", text: "pensa nisso ultrathink slow" });
     await driver.waitMark('flags:{"effortLevel":"max"}');
     await driver.waitMark("slow:running");
-    driver.send({ type: "set_effort", effort: "high" });
-    // Com o max segurado, o set_effort não deixa rastro: soltar o turno logo em seguida corria com a
-    // leitura do stdin, e sob carga o turno acabava antes, devolvia o "low" (certo, para uma troca
-    // DEPOIS do turno) e o teste falhava. O driver lê o stdin em ordem e na hora: a resposta a uma
-    // linha seguinte prova que o set_effort já foi lido.
-    driver.send({ type: "permission_decision", id: "barreira-effort", allow: false });
-    await driver.waitFor((e) => e.type === "error" && String(e.message).includes("barreira-effort"));
+    driver.send({ type: "set_effort", id: "e7", effort: "high" });
+    await driver.waitMark('flags:{"effortLevel":"high"}');
+    // A tela fica sabendo, na ordem do DRIVER, que a troca tirou o turno do max (review do #259, f5).
+    await driver.waitFor((e) => e.type === "keyword_effort_replaced");
+    expect(driver.events.some((e) => e.type === "result")).toBe(false);
     await releaseSlowTurn();
     await driver.waitFor((e) => e.type === "result");
-    await driver.waitMark('flags:{"effortLevel":"high"}');
-    // O max do ultrathink não foi cortado no meio do turno, e o nível velho não volta.
+    // Um turno a mais é a barreira: a devolução do ultrathink já teria escrito antes do result dele.
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "depois" });
+    await driver.waitFor((e) => e.type === "result", from);
     const flags = driver.marks.filter((m) => m.startsWith("flags:"));
     expect(flags).toEqual(['flags:{"effortLevel":"max"}', 'flags:{"effortLevel":"high"}']);
+  }, 60_000);
+
+  it("a troca que atravessa o fim de um turno ultrathink não apaga o esforço alto da mensagem ultrathink seguinte", async () => {
+    // Review do PR #259 (f12): presa na fila durante um turno ultrathink, a troca caía depois do fim
+    // dele, ainda achava o max desse turno (a devolução estava atrás dela na fila) e avisava a tela.
+    // Com a mensagem seguinte, também ultrathink, já enviada, a barra apagava o "esforço alto" DELA,
+    // que rodava em max logo depois.
+    const driver = startDriverWithEnv({ VIBEHUB_EFFORT_STEP_TIMEOUT_MS: "30000" }, ["--effort", "low"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "pensa nisso ultrathink slow" });
+    await driver.waitMark("slow:running");
+    // Uma leitura do /btw presa segura a fila do nível: a troca espera atrás dela.
+    await writeFile(join(sandbox, "settings-gate"), "");
+    driver.send({ type: "btw", id: "segura-fila", question: "em que nível você está?" });
+    await driver.waitMark("settings:waiting");
+    driver.send({ type: "set_effort", id: "atravessa", effort: "high" });
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+    const afterFirstTurn = driver.events.length;
+    await rm(join(sandbox, "release-slow"), { force: true });
+    driver.send({ type: "user", text: "de novo ultrathink slow" });
+    // A barreira prova que a segunda mensagem foi lida antes de a fila andar.
+    driver.send({ type: "permission_decision", id: "barreira-palavra", allow: false });
+    await driver.waitFor((e) => e.type === "error" && String(e.message).includes("barreira-palavra"));
+    await writeFile(join(sandbox, "release-settings"), "");
+    await driver.waitFor((e) => e.type === "effort_ack" && e.id === "atravessa");
+    const raises = () => driver.marks.filter((m) => m === 'flags:{"effortLevel":"max"}').length;
+    while (raises() < 2) await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(driver.events.slice(afterFirstTurn).some((e) => e.type === "keyword_effort_replaced")).toBe(false);
+    expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual([
+      'flags:{"effortLevel":"max"}',
+      'flags:{"effortLevel":"high"}',
+      'flags:{"effortLevel":"max"}',
+    ]);
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result", afterFirstTurn);
+  }, 60_000);
+
+  it("uma mensagem ultrathink absorvida cuja escalada falha herda o max já fixado: a troca do pill avisa a tela", async () => {
+    // Review do PR #259 (rodada 3): a numeração das mensagens com a palavra deixava o max com a
+    // mensagem anterior quando a escalada da nova falhava. A troca tirava o max sem avisar, e a barra,
+    // acesa para a mensagem nova, seguia dizendo "esforço alto" com a sessão no nível escolhido.
+    const driver = startDriver(["--effort", "low"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "pensa nisso ultrathink slow" });
+    await driver.waitMark('flags:{"effortLevel":"max"}');
+    await driver.waitMark("slow:running");
+    await writeFile(join(sandbox, "flags-fail"), "");
+    driver.send({ type: "user", text: "mais isso ultrathink" });
+    await driver.waitMark('flags:{"effortLevel":"xhigh"}');
+    await rm(join(sandbox, "flags-fail"), { force: true });
+    driver.send({ type: "set_effort", id: "tira-o-max", effort: "high" });
+    expect(await driver.waitFor((e) => e.type === "effort_ack" && e.id === "tira-o-max"))
+      .toEqual({ type: "effort_ack", id: "tira-o-max", effort: "high" });
+    expect(driver.events.some((e) => e.type === "keyword_effort_replaced")).toBe(true);
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+  }, 60_000);
+
+  it("a escalada de uma mensagem ultrathink nova vence a volta atrasada ao nível da conta", async () => {
+    // Review do PR #259 (rodada 3): a escalada também marca a vez (claimEffortWrite). Sem isso, a
+    // leitura atrasada dos settings da devolução anterior voltava e gravava o high por cima do max.
+    await writeFile(join(sandbox, "account-effort"), "high");
+    const driver = startDriverWithEnv({ VIBEHUB_EFFORT_STEP_TIMEOUT_MS: "300" });
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "pensa nisso ultrathink slow" });
+    await driver.waitMark("slow:running");
+    await writeFile(join(sandbox, "settings-gate-once"), "");
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+    await driver.waitMark("settings:waiting");
+    await rm(join(sandbox, "release-slow"), { force: true });
+    driver.send({ type: "user", text: "de novo ultrathink slow" });
+    const raises = () => driver.marks.filter((m) => m === 'flags:{"effortLevel":"max"}').length;
+    while (raises() < 2) await new Promise((resolve) => setTimeout(resolve, 20));
+
+    await writeFile(join(sandbox, "release-settings"), "");
+    await driver.waitMark("settings:answered");
+    driver.send({ type: "btw", id: "no-max", question: "em que nível você está?" });
+    const answer = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "no-max");
+    expect(String(answer.text)).toContain("sessão principal está agora: max");
+    expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual([
+      'flags:{"effortLevel":"max"}',
+      'flags:{"effortLevel":null}',
+      'flags:{"effortLevel":"max"}',
+    ]);
+    await releaseSlowTurn();
+  }, 60_000);
+
+  it("um turno ultracode em voo: o nível entra na hora e a devolução limpa só o ultracode", async () => {
+    const driver = startDriver(["--effort", "low"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "orquestra isso ultracode slow" });
+    await driver.waitMark('flags:{"effortLevel":"max","ultracode":true}');
+    await driver.waitMark("slow:running");
+    driver.send({ type: "set_effort", id: "e8", effort: "medium" });
+    await driver.waitMark('flags:{"effortLevel":"medium"}');
+    await driver.waitFor((e) => e.type === "keyword_effort_replaced");
+    expect(driver.events.some((e) => e.type === "result")).toBe(false);
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+    await driver.waitMark('flags:{"ultracode":null}');
+    const flags = driver.marks.filter((m) => m.startsWith("flags:"));
+    expect(flags).toEqual([
+      'flags:{"effortLevel":"max","ultracode":true}',
+      'flags:{"effortLevel":"medium"}',
+      'flags:{"ultracode":null}',
+    ]);
+  }, 60_000);
+
+  it("trocas em rajada aplicam na ordem: a última escolha é a que fica", async () => {
+    // A volta ao padrão da conta são três idas ao CLI (null, leitura dos settings, nível da conta).
+    // Uma troca logo atrás dela passava no meio e a terceira ida a desfazia: o pill dizia Alto e a
+    // sessão ficava no nível da conta.
+    await writeFile(join(sandbox, "account-effort"), "low");
+    const driver = startDriver(["--effort", "xhigh"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "revisa slow" });
+    await driver.waitMark("slow:running");
+    driver.send({ type: "set_effort", id: "e9", effort: null });
+    driver.send({ type: "set_effort", id: "e10", effort: "high" });
+    await driver.waitMark('flags:{"effortLevel":"high"}');
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+    expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual([
+      'flags:{"effortLevel":null}',
+      'flags:{"effortLevel":"low"}',
+      'flags:{"effortLevel":"high"}',
+    ]);
+  }, 60_000);
+
+  it("confirma cada troca com o nível que a sessão diz que a próxima chamada vai usar", async () => {
+    await writeFile(join(sandbox, "account-effort"), "low");
+    const driver = startDriver(["--effort", "xhigh"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "revisa slow" });
+    await driver.waitMark("slow:running");
+    driver.send({ type: "set_effort", id: "pra-medio", effort: "medium" });
+    expect(await driver.waitFor((e) => e.type === "effort_ack" && e.id === "pra-medio"))
+      .toEqual({ type: "effort_ack", id: "pra-medio", effort: "medium" });
+    driver.send({ type: "set_effort", id: "pra-conta", effort: null });
+    expect(await driver.waitFor((e) => e.type === "effort_ack" && e.id === "pra-conta"))
+      .toEqual({ type: "effort_ack", id: "pra-conta", effort: "low" });
+    expect(driver.events.some((e) => e.type === "result")).toBe(false);
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+  }, 60_000);
+
+  it("a sessão recusou a troca: a confirmação traz o erro, não um nível", async () => {
+    const driver = startDriver(["--effort", "xhigh"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "revisa slow" });
+    await driver.waitMark("slow:running");
+    await writeFile(join(sandbox, "flags-fail"), "");
+    driver.send({ type: "set_effort", id: "recusada", effort: "medium" });
+    const ack = await driver.waitFor((e) => e.type === "effort_ack" && e.id === "recusada");
+    expect(ack.effort).toBeUndefined();
+    expect(String(ack.error)).toContain("control request failed");
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+  }, 60_000);
+
+  it("sem stream de pé, confirma o nível com que o próximo nasce", async () => {
+    const driver = startDriver(["--effort", "medium"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "set_effort", id: "sem-stream", effort: "xhigh" });
+    expect(await driver.waitFor((e) => e.type === "effort_ack" && e.id === "sem-stream"))
+      .toEqual({ type: "effort_ack", id: "sem-stream", effort: "xhigh" });
+  }, 60_000);
+
+  it("um nível desconhecido é recusado na confirmação, sem esperar prazo nenhum", async () => {
+    const driver = startDriver(["--effort", "medium"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "set_effort", id: "turbo", effort: "turbo" });
+    const ack = await driver.waitFor((e) => e.type === "effort_ack" && e.id === "turbo");
+    expect(String(ack.error)).toContain("turbo");
+  }, 60_000);
+
+  it("uma ida ao CLI que nunca responde vence o prazo: a confirmação traz o erro e a fila não trava", async () => {
+    const driver = startDriverWithEnv({ VIBEHUB_EFFORT_STEP_TIMEOUT_MS: "200" }, ["--effort", "xhigh"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "revisa slow" });
+    await driver.waitMark("slow:running");
+    await writeFile(join(sandbox, "flags-hang"), "");
+    driver.send({ type: "set_effort", id: "presa", effort: "medium" });
+    const stuck = await driver.waitFor((e) => e.type === "effort_ack" && e.id === "presa");
+    expect(stuck.effort).toBeUndefined();
+    expect(String(stuck.error)).toMatch(/did not answer/);
+
+    await rm(join(sandbox, "flags-hang"), { force: true });
+    driver.send({ type: "set_effort", id: "seguinte", effort: "high" });
+    expect(await driver.waitFor((e) => e.type === "effort_ack" && e.id === "seguinte"))
+      .toEqual({ type: "effort_ack", id: "seguinte", effort: "high" });
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+  }, 60_000);
+
+  it("a devolução do ultrathink e a troca do pill passam pela MESMA fila: a troca feita logo depois do turno fica", async () => {
+    // Card sem nível, conta em high: a devolução são três idas ao CLI (null, leitura, high). Uma
+    // troca para low no meio passava entre elas, e o high da devolução a desfazia.
+    await writeFile(join(sandbox, "account-effort"), "high");
+    const driver = startDriver();
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "pensa nisso ultrathink slow" });
+    await driver.waitMark("slow:running");
+    await writeFile(join(sandbox, "settings-gate"), "");
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+    await driver.waitMark("settings:waiting");
+    driver.send({ type: "set_effort", id: "pra-low", effort: "low" });
+    driver.send({ type: "permission_decision", id: "barreira-fila", allow: false });
+    await driver.waitFor((e) => e.type === "error" && String(e.message).includes("barreira-fila"));
+    await writeFile(join(sandbox, "release-settings"), "");
+    expect(await driver.waitFor((e) => e.type === "effort_ack" && e.id === "pra-low"))
+      .toEqual({ type: "effort_ack", id: "pra-low", effort: "low" });
+    expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual([
+      'flags:{"effortLevel":"max"}',
+      'flags:{"effortLevel":null}',
+      'flags:{"effortLevel":"high"}',
+      'flags:{"effortLevel":"low"}',
+    ]);
+  }, 60_000);
+
+  it("uma devolução que estourou o prazo não escreve depois que a fila andou: a troca seguinte fica", async () => {
+    // Review do PR #259 (f2): o prazo solta a fila, mas a ida ao CLI atrasada seguia viva. A volta ao
+    // nível da conta lia os settings devagar, a troca para low entrava e confirmava, e a leitura
+    // atrasada voltava gravando o nível da conta por cima: o pill em Baixo, a sessão em high.
+    await writeFile(join(sandbox, "account-effort"), "high");
+    const driver = startDriverWithEnv({ VIBEHUB_EFFORT_STEP_TIMEOUT_MS: "300" });
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "pensa nisso ultrathink slow" });
+    await driver.waitMark("slow:running");
+    await writeFile(join(sandbox, "settings-gate"), "");
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+    await driver.waitMark("settings:waiting");
+    driver.send({ type: "set_effort", id: "pra-low", effort: "low" });
+    expect(await driver.waitFor((e) => e.type === "effort_ack" && e.id === "pra-low"))
+      .toEqual({ type: "effort_ack", id: "pra-low", effort: "low" });
+
+    await writeFile(join(sandbox, "release-settings"), "");
+    await driver.waitMark("settings:answered");
+    // Uma escrita atrasada sairia logo depois da leitura; a troca seguinte, no mesmo stderr, vem depois dela.
+    driver.send({ type: "set_effort", id: "pra-medio", effort: "medium" });
+    await driver.waitMark('flags:{"effortLevel":"medium"}');
+    expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual([
+      'flags:{"effortLevel":"max"}',
+      'flags:{"effortLevel":null}',
+      'flags:{"effortLevel":"low"}',
+      'flags:{"effortLevel":"medium"}',
+    ]);
+  }, 60_000);
+
+  it("nem um /btw nem um turno comum no meio cancelam a volta atrasada ao nível da conta", async () => {
+    // Review do PR #259 (f10): a guarda contava QUALQUER tarefa posterior da fila como dona do nível,
+    // inclusive a leitura do /btw e a devolução vazia de um turno comum. Card sem nível, conta em high:
+    // a devolução gravava o null, a leitura dos settings passava do prazo, um /btw entrava na fila e a
+    // escrita do high era pulada em silêncio. A sessão ficava no padrão do modelo (medium).
+    await writeFile(join(sandbox, "account-effort"), "high");
+    const driver = startDriverWithEnv({ VIBEHUB_EFFORT_STEP_TIMEOUT_MS: "300" });
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "pensa nisso ultrathink slow" });
+    await driver.waitMark("slow:running");
+    await writeFile(join(sandbox, "settings-gate-once"), "");
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+    await driver.waitMark("settings:waiting");
+    // A fila só chega ao /btw depois que a devolução estourou o prazo: a resposta dele é a prova.
+    driver.send({ type: "btw", id: "no-meio", question: "em que nível você está?" });
+    await driver.waitFor((e) => e.type === "btw_answer" && e.id === "no-meio");
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "oi" });
+    await driver.waitFor((e) => e.type === "result", from);
+
+    await writeFile(join(sandbox, "release-settings"), "");
+    await driver.waitMark("settings:answered");
+    driver.send({ type: "btw", id: "depois", question: "e agora?" });
+    const after = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "depois");
+    expect(String(after.text)).toContain("sessão principal está agora: high");
+    expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual([
+      'flags:{"effortLevel":"max"}',
+      'flags:{"effortLevel":null}',
+      'flags:{"effortLevel":"high"}',
+    ]);
+  }, 60_000);
+
+  it("uma troca presa na fila além do prazo de início é recusada NA HORA e nunca grava depois", async () => {
+    // Review do PR #259 (f4): o back espera a confirmação por um prazo contado da escrita, e a troca
+    // podia ficar atrás de uma devolução lenta. O back desistia (pendente/reinício) e o driver
+    // aplicava a troca segundos depois, sem ninguém saber. Agora o driver responde dentro do prazo
+    // de início, e uma troca que não começou a tempo não escreve nunca mais.
+    await writeFile(join(sandbox, "account-effort"), "high");
+    const driver = startDriverWithEnv({ VIBEHUB_EFFORT_SWITCH_START_DEADLINE_MS: "300" });
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "pensa nisso ultrathink slow" });
+    await driver.waitMark("slow:running");
+    await writeFile(join(sandbox, "settings-gate"), "");
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+    await driver.waitMark("settings:waiting");
+    driver.send({ type: "set_effort", id: "atrasada", effort: "low" });
+    const late = await driver.waitFor((e) => e.type === "effort_ack" && e.id === "atrasada");
+    expect(late.effort).toBeUndefined();
+    expect(String(late.error)).toMatch(/did not start/);
+
+    await writeFile(join(sandbox, "release-settings"), "");
+    driver.send({ type: "set_effort", id: "seguinte", effort: "medium" });
+    expect(await driver.waitFor((e) => e.type === "effort_ack" && e.id === "seguinte"))
+      .toEqual({ type: "effort_ack", id: "seguinte", effort: "medium" });
+    expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual([
+      'flags:{"effortLevel":"max"}',
+      'flags:{"effortLevel":null}',
+      'flags:{"effortLevel":"high"}',
+      'flags:{"effortLevel":"medium"}',
+    ]);
+  }, 60_000);
+
+  it("uma troca que venceu o prazo de início não grava o nível nem quando o stream cai enquanto ela espera o CLI", async () => {
+    // Review do PR #259 (f14): a troca já respondida como erro ainda gravava o EFFORT se o stream
+    // caísse durante a espera pelo CLI, e o stream seguinte nascia no nível que ela não aplicou.
+    const driver = startDriverWithEnv({ VIBEHUB_EFFORT_SWITCH_START_DEADLINE_MS: "300" }, ["--effort", "low"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "hello" });
+    await driver.waitFor((e) => e.type === "result");
+    await writeFile(join(sandbox, "init-gate"), "");
+    driver.send({ type: "set_effort", id: "sem-cli", effort: "high" });
+    await driver.waitMark("init:waiting");
+    const refused = await driver.waitFor((e) => e.type === "effort_ack" && e.id === "sem-cli");
+    expect(String(refused.error)).toMatch(/did not start/);
+
+    let from = driver.events.length;
+    driver.send({ type: "user", text: "bg-die" });
+    await driver.waitFor((e) => e.type === "result", from);
+    await writeFile(join(sandbox, "release-init"), "");
+    await driver.waitMark("init:answered");
+    from = driver.events.length;
+    driver.send({ type: "user", text: "depois" });
+    await driver.waitFor((e) => e.type === "result", from);
+    expect(await marksOnceThere(driver, "effort:", 3)).toEqual(["effort:none", "effort:low", "effort:low"]);
+    expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual([]);
+  }, 60_000);
+
+  /** Card on low; a switch to high whose write waits on the CLI ("flags-gate-once") of a stream that dies under it. */
+  async function switchStuckOnADyingStream(id: string): Promise<RunningDriver> {
+    const driver = startDriverWithEnv({ VIBEHUB_EFFORT_STEP_TIMEOUT_MS: "30000" }, ["--effort", "low"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "hello" });
+    await driver.waitFor((e) => e.type === "result");
+    await writeFile(join(sandbox, "flags-gate-once"), "");
+    driver.send({ type: "set_effort", id, effort: "high" });
+    await driver.waitMark("flags-gate:waiting");
+    await runTurn(driver, "bg-die");
+    return driver;
+  }
+
+  async function runTurn(driver: RunningDriver, text: string): Promise<void> {
+    const from = driver.events.length;
+    driver.send({ type: "user", text });
+    await driver.waitFor((e) => e.type === "result", from);
+  }
+
+  it("um stream novo nasce enquanto a troca espera o CLI do que caiu: aceita pelo velho, ela não é confirmada", async () => {
+    // Review do PR #259 (f11): o stream novo lê o EFFORT ao nascer, fora da fila. A troca para high
+    // esperava o CLI velho, ele caía, a pessoa mandava outra mensagem e o stream novo nascia em low,
+    // e a troca respondia high: a tela dizia "já valendo" com a sessão em low até o próximo reinício.
+    const driver = await switchStuckOnADyingStream("aceita-no-velho");
+    await runTurn(driver, "depois");
+    await writeFile(join(sandbox, "release-flags"), "");
+    const ack = await driver.waitFor((e) => e.type === "effort_ack" && e.id === "aceita-no-velho");
+    expect(ack.effort).toBeUndefined();
+    expect(String(ack.error)).toMatch(/previous level/);
+    expect(await marksOnceThere(driver, "effort:", 3)).toEqual(["effort:none", "effort:low", "effort:low"]);
+  }, 60_000);
+
+  it("um stream novo nasce enquanto a troca espera o CLI do que caiu: recusada pelo velho, ela também não é confirmada", async () => {
+    const driver = await switchStuckOnADyingStream("recusada-no-velho");
+    await runTurn(driver, "depois");
+    await writeFile(join(sandbox, "flags-fail"), "");
+    await writeFile(join(sandbox, "release-flags"), "");
+    const ack = await driver.waitFor((e) => e.type === "effort_ack" && e.id === "recusada-no-velho");
+    expect(ack.effort).toBeUndefined();
+    expect(String(ack.error)).toMatch(/previous level/);
+  }, 60_000);
+
+  it("o stream cai enquanto a troca espera e nenhum outro nasceu: a troca vale e o próximo nasce nela", async () => {
+    const driver = await switchStuckOnADyingStream("sem-sucessor");
+    await writeFile(join(sandbox, "release-flags"), "");
+    expect(await driver.waitFor((e) => e.type === "effort_ack" && e.id === "sem-sucessor"))
+      .toEqual({ type: "effort_ack", id: "sem-sucessor", effort: "high" });
+    await runTurn(driver, "depois");
+    expect(await marksOnceThere(driver, "effort:", 3)).toEqual(["effort:none", "effort:low", "effort:high"]);
   }, 60_000);
 
   it("um nível que não existe não chega ao CLI", async () => {
@@ -975,8 +1454,8 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     await driver.waitFor((e) => e.type === "ready");
     driver.send({ type: "user", text: "revisa slow" });
     await driver.waitMark("slow:running");
-    driver.send({ type: "set_effort", effort: "turbo" });
-    driver.send({ type: "set_effort", effort: "low" });
+    driver.send({ type: "set_effort", id: "e11", effort: "turbo" });
+    driver.send({ type: "set_effort", id: "e12", effort: "low" });
     await driver.waitMark('flags:{"effortLevel":"low"}');
     expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual(['flags:{"effortLevel":"low"}']);
     await releaseSlowTurn();
@@ -1059,6 +1538,74 @@ describe("sdk-driver.mjs — /btw", () => {
     // O turno de verdade segue e fecha sozinho.
     await releaseSlowTurn();
     await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:slow", from);
+  }, 60_000);
+
+  it("diz à pergunta lateral o nível em que a sessão principal está AGORA", async () => {
+    // Produção, 10/11/2026: o nível trocado no pill e um /btw "em que nível você está?" logo depois.
+    // O nível não está na conversa, e a bifurcação não tinha como responder.
+    const driver = startDriver(["--effort", "xhigh"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "hello" });
+    await driver.waitFor((e) => e.type === "result");
+    driver.send({ type: "btw", id: "nivel-1", question: "em que nível você está?" });
+    const first = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "nivel-1");
+    expect(String(first.text)).toContain("sessão principal está agora: xhigh");
+
+    driver.send({ type: "set_effort", id: "pra-medio", effort: "medium" });
+    await driver.waitFor((e) => e.type === "effort_ack" && e.id === "pra-medio");
+    driver.send({ type: "btw", id: "nivel-2", question: "e agora?" });
+    const second = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "nivel-2");
+    expect(String(second.text)).toContain("sessão principal está agora: medium");
+    expect(String(second.text)).not.toContain("xhigh");
+  }, 60_000);
+
+  it("uma sessão que não diz o nível não segura a pergunta lateral: ela responde com o nível que o driver escreveu", async () => {
+    // Review do PR #259 (f8): com a sessão muda (um SDK sem getSettings, uma leitura fora do prazo) o
+    // /btw omitia o nível, mesmo com o pin do card conhecido.
+    const driver = startDriverWithEnv({ VIBEHUB_EFFORT_STEP_TIMEOUT_MS: "200" }, ["--effort", "low"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "hello" });
+    await driver.waitFor((e) => e.type === "result");
+    await writeFile(join(sandbox, "settings-hang"), "");
+    driver.send({ type: "btw", id: "sem-nivel", question: "em que nível você está?" });
+    const answer = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "sem-nivel");
+    expect(String(answer.text)).toContain("em que nível você está?");
+    expect(String(answer.text)).toContain("sessão principal está agora: low");
+  }, 60_000);
+
+  it("num turno ultrathink com a sessão muda, o /btw diz o nível da palavra, não o pin do card", async () => {
+    const driver = startDriverWithEnv({ VIBEHUB_EFFORT_STEP_TIMEOUT_MS: "200" }, ["--effort", "low"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "pensa nisso ultrathink slow" });
+    await driver.waitMark('flags:{"effortLevel":"max"}');
+    await driver.waitMark("slow:running");
+    await writeFile(join(sandbox, "settings-hang"), "");
+    driver.send({ type: "btw", id: "na-palavra", question: "em que nível você está?" });
+    const answer = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "na-palavra");
+    expect(String(answer.text)).toContain("sessão principal está agora: max");
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+  }, 60_000);
+
+  it("o /btw lê o nível na fila do nível: nunca no meio da volta ao nível da conta", async () => {
+    // A volta ao padrão da conta passa pelo null (o padrão do MODELO) antes do nível dos settings. Uma
+    // leitura no meio dizia o nível do modelo; na fila, ela espera a volta terminar.
+    await writeFile(join(sandbox, "account-effort"), "high");
+    const driver = startDriver(["--effort", "xhigh"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "hello" });
+    await driver.waitFor((e) => e.type === "result");
+    await writeFile(join(sandbox, "settings-gate-once"), "");
+    driver.send({ type: "set_effort", id: "pra-conta", effort: null });
+    await driver.waitMark("settings:waiting");
+    driver.send({ type: "btw", id: "no-meio", question: "em que nível você está?" });
+    // A barreira prova que o /btw já foi lido; a leitura dele fora da fila responderia agora, no null.
+    driver.send({ type: "permission_decision", id: "barreira-btw", allow: false });
+    await driver.waitFor((e) => e.type === "error" && String(e.message).includes("barreira-btw"));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await writeFile(join(sandbox, "release-settings"), "");
+    const answer = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "no-meio");
+    expect(String(answer.text)).toContain("sessão principal está agora: high");
   }, 60_000);
 
   it("UMA pergunta lateral por vez: a segunda espera a primeira responder", async () => {

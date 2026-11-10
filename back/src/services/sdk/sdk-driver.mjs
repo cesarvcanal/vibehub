@@ -591,14 +591,36 @@ async function warmCatalog() {
 /** Teto de uma resposta lateral: uma consulta pendurada não pode deixar a pergunta sem resposta. */
 const BTW_TIMEOUT_MS = 3 * 60_000;
 
-/** O que o modelo lê: a pergunta, com o aviso de que é lateral e de que não há ferramentas. */
-function btwPrompt(question) {
+/**
+ * O que o modelo lê: a pergunta, com o aviso de que é lateral e de que não há ferramentas. And the
+ * main session's reasoning level, when known: it is not in the conversation, so "em que nível você
+ * está?" right after a switch in the pill went unanswered (produção, 10/11/2026).
+ */
+function btwPrompt(question, mainEffort) {
+  const effortNote = mainEffort ? ` Nível de raciocínio (effort) em que a sessão principal está agora: ${mainEffort}.` : "";
   return (
     "<system-reminder>Pergunta LATERAL do usuário, feita enquanto você trabalha na tarefa principal. " +
     "Responda curto e direto, só com o que já está nesta conversa. Aqui você NÃO tem ferramentas: não " +
     "tente ler arquivos nem rodar comandos — se o contexto não basta, diga isso. Esta resposta não " +
-    "interrompe nem muda a tarefa principal.</system-reminder>\n\n" + question
+    "interrompe nem muda a tarefa principal." + effortNote + "</system-reminder>\n\n" + question
   );
+}
+
+/**
+ * The main session's level, read INSIDE the effort queue: the way back to the account's level passes
+ * through `null` (the model's default), and a read in the middle of it said a level the session was
+ * only crossing. What the session itself says first; when it does not say (an SDK without
+ * `getSettings`, a read past its deadline), what this driver last wrote: the keyword's level while an
+ * ultrathink turn holds it, else the card's pin, which is also what a stream started now would use.
+ * Undefined = nobody knows (no pin, and the session silent).
+ */
+function mainSessionEffort() {
+  return inEffortQueue(async () => {
+    const said = currentQuery ? await sessionEffort(currentQuery) : undefined;
+    if (said) return said;
+    if (currentQuery && ultraRaised && "effortLevel" in ultraRaised) return ultraRaised.effortLevel;
+    return EFFORT ?? undefined;
+  });
 }
 
 async function answerBtw(id, question) {
@@ -615,7 +637,8 @@ async function answerBtw(id, question) {
       options.resume = lastSessionId;
       options.forkSession = true;
     }
-    for await (const msg of query({ prompt: btwPrompt(question), options })) {
+    const mainEffort = await mainSessionEffort();
+    for await (const msg of query({ prompt: btwPrompt(question, mainEffort), options })) {
       if (msg.type === "assistant" && !msg.parent_tool_use_id) {
         const text = resultText(msg.message?.content).trim();
         if (text) texts.push(text);
@@ -1174,7 +1197,7 @@ async function runStream() {
         turnActive = false;
         turnEnded();
         settleCompaction();
-        void clearUltra(); // the keyword was for THIS turn
+        void inEffortQueue(clearUltra); // the keyword was for THIS turn
         // An ABORTED turn is not a failed one: the turn ends because someone stopped it (the stop
         // button, an edit, a deploy), and the conversation already says so in its own words.
         const aborted = wasAborted(msg.terminal_reason);
@@ -1437,29 +1460,59 @@ function ultraKeywords(text) {
  */
 let ultraRaised = null;
 
+/**
+ * Keyword messages received so far, numbered as they ARRIVE, and the one whose raise `ultraRaised`
+ * holds. A raise may run later than its message, behind a slow write in the effort queue, so only
+ * these numbers say which message a pinned level belongs to (see setCardEffort).
+ */
+let keywordMessages = 0;
+let ultraRaisedFor = 0;
+
 /** How long the first message of a fresh stream waits for the CLI to boot before going anyway. */
 const ULTRA_INIT_TIMEOUT_MS = 10_000;
+
+/**
+ * How long each write (or read) of the session's level may take. A control request written into a
+ * CLI that is not listening never answers, and without a deadline it would hold the effort queue (and
+ * the /btw) until the driver died.
+ */
+const EFFORT_STEP_TIMEOUT_MS = Number(process.env.VIBEHUB_EFFORT_STEP_TIMEOUT_MS) || 4_000;
+const EFFORT_STEP_TIMEOUT_ERROR = `the session did not answer within ${EFFORT_STEP_TIMEOUT_MS} ms`;
+
+/** `promise`, or an error saying `reason` once `ms` go by. */
+function withDeadline(promise, ms, reason) {
+  let timer;
+  const deadline = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(reason)), ms); });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Does this stream's CLI answer control requests yet? A stream that has only just been created has no
+ * CLI behind it, and a control request written into nothing is lost: this handshake says it listens.
+ */
+async function sessionReady(handle) {
+  if (typeof handle.initializationResult !== "function") return true;
+  try {
+    await withDeadline(handle.initializationResult(), ULTRA_INIT_TIMEOUT_MS, "the session did not finish starting");
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Raise the effort for the turn about to start. Best effort in the literal sense: every step is
  * optional and a failure at any of them must NEVER cost the message — an older CLI without
  * `applyFlagSettings`, an account whose plan caps effort below `max`, a session with dynamic
  * workflows switched off (which is what refuses `ultracode`) all fall through to the next weaker
- * attempt and finally to sending the message exactly as it would have gone anyway.
+ * attempt and finally to sending the message exactly as it would have gone anyway. `keyword` is the
+ * number of the message that asked for it (keywordMessages).
  */
-async function raiseUltra(kinds, waitForInit) {
+async function raiseUltra(kinds, waitForInit, keyword) {
   const handle = currentQuery;
   if (!handle || typeof handle.applyFlagSettings !== "function") return;
-  if (waitForInit && typeof handle.initializationResult === "function") {
-    // A stream that has only just been created has no CLI behind it yet, and a control request
-    // written into nothing is lost. This is the handshake that says the CLI is listening.
-    try {
-      await Promise.race([
-        handle.initializationResult(),
-        new Promise((resolve) => setTimeout(resolve, ULTRA_INIT_TIMEOUT_MS)),
-      ]);
-    } catch { /* boot failed on its own terms; the message still goes */ }
-  }
+  // A CLI that never answered the handshake still gets the attempt: the message goes either way.
+  if (waitForInit) await sessionReady(handle);
   if (currentQuery !== handle) return; // the stream died while we waited
   // Strongest first. `ultracode` is xhigh PLUS standing workflow orchestration, which is exactly
   // what the keyword means; where the session cannot have it, plain `max` effort still answers
@@ -1467,13 +1520,19 @@ async function raiseUltra(kinds, waitForInit) {
   const attempts = kinds.ultracode
     ? [{ effortLevel: "max", ultracode: true }, { effortLevel: "max" }, { effortLevel: "xhigh" }]
     : [{ effortLevel: "max" }, { effortLevel: "xhigh" }];
+  claimEffortWrite(); // a give-back still reading the account's level must not land over the keyword's
   for (const settings of attempts) {
     try {
-      await handle.applyFlagSettings(settings);
+      await withDeadline(handle.applyFlagSettings(settings), EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR);
       ultraRaised = settings;
+      ultraRaisedFor = keyword;
       return;
     } catch { /* try the next, weaker one */ }
   }
+  // Every attempt refused, with an earlier keyword's level still pinned (this message joined its
+  // turn): the turn goes on at that level for THIS message too, the newest one, whose "high effort"
+  // the bar now shows — so a switch that takes the level has to say so.
+  if (ultraRaised && "effortLevel" in ultraRaised) ultraRaisedFor = keyword;
 }
 
 /** Give the effort back at the end of the turn: the keyword was for THAT turn, not for the session. */
@@ -1483,17 +1542,22 @@ async function clearUltra() {
   ultraRaised = null;
   const handle = currentQuery;
   if (!handle || typeof handle.applyFlagSettings !== "function") return;
+  const isLatestWrite = claimEffortWrite();
   try {
     // `null` clears the key from the flag layer, so whatever the user's own settings say takes
     // over again — this restores a level, it does not impose one. Only the keys this driver
     // actually set are cleared: an `ultrathink` turn never touches `ultracode`.
     // EXCEPT the card's own level: clearing the flag does NOT bring `--effort` back (measured on
     // the real CLI, SDK 0.3.300: --effort low → flag max → flag null left the session on `medium`).
-    // So a card that pinned a level gets that level written back instead of a null.
-    const give = {};
-    for (const key of Object.keys(raised)) give[key] = null;
-    if ("effortLevel" in give && EFFORT) give.effortLevel = EFFORT;
-    await handle.applyFlagSettings(give);
+    // So a card that pinned a level gets that level written back instead of a null. And a card
+    // with NO level goes back to the ACCOUNT's (restoreAccountEffort): the null alone lands on the
+    // model's default, skipping the settings' effortLevel.
+    const { effortLevel: _keywordEffort, ...otherKeys } = raised;
+    const give = Object.fromEntries(Object.keys(otherKeys).map((key) => [key, null]));
+    const givesEffortBack = "effortLevel" in raised;
+    if (givesEffortBack && EFFORT) give.effortLevel = EFFORT;
+    if (Object.keys(give).length > 0) await withDeadline(handle.applyFlagSettings(give), EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR);
+    if (givesEffortBack && !EFFORT) await withDeadline(restoreAccountEffort(handle, isLatestWrite), EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR);
   } catch { /* the stream is gone, and a dead stream has no effort to give back */ }
 }
 
@@ -1507,11 +1571,8 @@ const EFFORT_LEVELS = new Set(["low", "medium", "high", "xhigh", "max"]);
  * SDK without it simply announces nothing, and the pill waits for the first reply as before.
  */
 async function announceDefaultEffort(handle) {
-  if (typeof handle.getSettings !== "function") return;
-  try {
-    const level = (await handle.getSettings())?.applied?.effort;
-    if (EFFORT_LEVELS.has(level)) emit({ type: "effort_default", effort: level });
-  } catch { /* a convenience for the pill, never the conversation */ }
+  const level = await sessionEffort(handle);
+  if (level) emit({ type: "effort_default", effort: level });
 }
 
 /**
@@ -1519,12 +1580,22 @@ async function announceDefaultEffort(handle) {
  * takes it to the MODEL's default and skips the settings files (measured on the real CLI, SDK
  * 0.3.300, 2026-10-29: settings `high` → flag `xhigh` → null = `medium`). So the settings' own
  * level, when there is one, goes back on top — what a fresh start without `--effort` would read.
+ *
+ * Several trips, so the last write checks it is still the LATEST write (`isLatestWrite`, see
+ * claimEffortWrite): past its deadline the queue moved on, and a slow settings read coming back late
+ * wrote the account's level over a switch that was already confirmed — the pill on one level, the
+ * session on another.
  */
-async function restoreAccountEffort(handle) {
+async function restoreAccountEffort(handle, isLatestWrite) {
   await handle.applyFlagSettings({ effortLevel: null });
   if (typeof handle.getSettings !== "function") return;
   const own = (await handle.getSettings())?.effective?.effortLevel;
-  if (EFFORT_LEVELS.has(own)) await handle.applyFlagSettings({ effortLevel: own });
+  if (!EFFORT_LEVELS.has(own)) return;
+  if (!isLatestWrite()) {
+    trace(`account effort ${own} not written back: a newer write took the session's level`);
+    return;
+  }
+  await handle.applyFlagSettings({ effortLevel: own });
 }
 
 /**
@@ -1539,32 +1610,155 @@ async function restoreAccountEffort(handle) {
  * (restoreAccountEffort). It used to restart the session — killing whatever the turn was doing.
  *
  * From here on EFFORT is this level: a new stream starts on it, and an `ultrathink` turn gives it
- * back at its end. That same `ultrathink` turn, while in flight, holds the flag at `max` — writing
- * the new level now would cut it short, so it is left to the give-back (clearUltra).
+ * back at its end. A switch made WHILE an `ultrathink`/`ultracode` turn runs wins over the keyword:
+ * it is the newer choice, and holding `max` until the turn ended left the pill saying one level with
+ * the session on another. Once the session took it, the level leaves `ultraRaised`, so the give-back
+ * clears only `ultracode`.
+ *
+ * Answers what goes into the `effort_ack`: `{ effort }` = the level the session says the next call
+ * uses (absent when nobody knows), `{ error }` = it was not applied, and nothing changed here: EFFORT
+ * only takes the level on the paths that applied it. `switching.abandoned` = its start deadline
+ * already answered for it (queueEffortSwitch); `switching.writing` = past that point, it finishes.
  */
-async function setCardEffort(level) {
-  if (level !== null && !EFFORT_LEVELS.has(level)) return;
-  EFFORT = level;
-  if (ultraRaised && "effortLevel" in ultraRaised) return;
+async function setCardEffort(level, switching) {
+  if (level !== null && !EFFORT_LEVELS.has(level)) return { error: `unknown effort level: ${level}` };
+  if (switching.abandoned) return { error: EFFORT_SWITCH_START_ERROR };
   const handle = currentQuery;
-  // No stream yet: the next one starts with `effort: EFFORT` (sdkOptions).
-  if (!handle || typeof handle.applyFlagSettings !== "function") return;
-  if (typeof handle.initializationResult === "function") {
-    // A stream that has only just been created has no CLI behind it yet (see raiseUltra).
-    try {
-      await Promise.race([
-        handle.initializationResult(),
-        new Promise((resolve) => setTimeout(resolve, ULTRA_INIT_TIMEOUT_MS)),
-      ]);
-    } catch { /* boot failed on its own terms */ }
-  }
-  if (currentQuery !== handle) return; // the stream died while we waited; the next starts on EFFORT
+  // No stream: the next one starts with `effort: EFFORT` (baseOptions), so the switch holds.
+  const nextStreamTakesIt = () => {
+    EFFORT = level;
+    return { effort: EFFORT ?? undefined };
+  };
+  // The stream went away while the switch waited on its CLI (a rewind, a new sign-in, the CLI
+  // exiting). With none in its place, the next one takes the level. One that took its place in the
+  // meantime was born on the OLD level, read outside this queue: the switch never reached it, so it
+  // is answered as not applied and the back falls back to restarting on the card's level (review do
+  // PR #259, f11: it was confirmed, "já valendo" with the session on the old level).
+  const streamChanged = () =>
+    currentQuery === null ? nextStreamTakesIt() : { error: "a new session started during the switch, on the previous level" };
+  if (!handle || typeof handle.applyFlagSettings !== "function") return nextStreamTakesIt();
+  const ready = await sessionReady(handle);
+  // Already answered as not applied: it touches nothing from here, the level kept for a next stream
+  // included.
+  if (switching.abandoned) return { error: EFFORT_SWITCH_START_ERROR };
+  if (currentQuery !== handle) return streamChanged();
+  // Written into a CLI that is not listening, the switch would be lost and the session would stay
+  // on the `--effort` it was born with.
+  if (!ready) return { error: "the session has not finished starting" };
+  const isLatestWrite = claimEffortWrite();
+  switching.writing = true;
   try {
-    if (level === null) await restoreAccountEffort(handle);
-    else await handle.applyFlagSettings({ effortLevel: level });
+    const effortWrite = level === null ? restoreAccountEffort(handle, isLatestWrite) : handle.applyFlagSettings({ effortLevel: level });
+    await withDeadline(effortWrite, EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR);
   } catch (err) {
-    trace(`could not apply effort ${level ?? "default"} to the live session: ${err && err.message ? err.message : String(err)}`);
+    if (currentQuery !== handle) return streamChanged();
+    const reason = err && err.message ? err.message : String(err);
+    trace(`could not apply effort ${level ?? "default"} to the live session: ${reason}`);
+    return { error: reason };
   }
+  if (currentQuery !== handle) return streamChanged();
+  EFFORT = level;
+  if (ultraRaised && "effortLevel" in ultraRaised) {
+    const { effortLevel: _keywordEffort, ...keywordRest } = ultraRaised;
+    ultraRaised = Object.keys(keywordRest).length > 0 ? keywordRest : null;
+    // The chat's bar says "high effort" for the newest keyword message; only the driver knows whether
+    // the switch came before or after the keyword, so it is the driver that tells the bar the keyword
+    // lost its level. Only when the level replaced IS the newest message's: an older one still pinned
+    // (its give-back queued behind this switch) belongs to a turn the bar no longer shows, and the
+    // newer message's raise is still to come, behind this switch (review do PR #259, f12: the notice
+    // switched off the bar of a message that ran on `max` right after).
+    if (ultraRaisedFor === keywordMessages) emit({ type: "keyword_effort_replaced" });
+  }
+  return { effort: (await sessionEffort(handle)) ?? EFFORT ?? undefined };
+}
+
+/**
+ * The level the next call to the model will use, as the session ITSELF says (`getSettings`, untyped
+ * in SDK 0.3.300). Undefined when it does not say: an SDK without the query, or a query that failed
+ * or ran out of time.
+ */
+async function sessionEffort(handle) {
+  if (typeof handle.getSettings !== "function") return undefined;
+  try {
+    const level = (await withDeadline(handle.getSettings(), EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR))?.applied?.effort;
+    return EFFORT_LEVELS.has(level) ? level : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The ONE WRITER of the session's level. Three things write it: the ultrathink raise at the start of
+ * a turn, its give-back at the end, and the switch in the pill. The give-back and the way back to the
+ * account's level take several trips to the CLI, and a write from outside landing between them was
+ * undone by the last trip (the pill saying one level, the session on another). Here they go one at a
+ * time, in arrival order, and every trip to the CLI has a deadline, so none holds the ones behind it.
+ *
+ * With the queue empty the task starts RIGHT AWAY, synchronously up to its first await: the
+ * ultrathink of a live stream writes its control request before the message is pushed.
+ *
+ * A deadline frees the queue but cannot stop a trip already sent: see claimEffortWrite.
+ */
+let effortWrites = Promise.resolve();
+let effortWritesPending = 0;
+function inEffortQueue(task) {
+  const run = effortWritesPending === 0 ? task() : effortWrites.then(() => task());
+  effortWritesPending += 1;
+  effortWrites = run
+    .catch((err) => { trace(`effort write failed: ${err && err.message ? err.message : String(err)}`); })
+    .finally(() => { effortWritesPending -= 1; });
+  return run;
+}
+
+/**
+ * A deadline frees the queue but cannot stop a trip already sent, and the way back to the account's
+ * level reads the settings BEFORE its last write. So every write claims the session's level as it
+ * starts, and a write that comes after an await only goes out while its claim is still the latest.
+ * Only WRITES claim: a /btw read, a switch refused or abandoned before writing and a give-back with
+ * nothing to give left the level as it was, and the write they overtook still has the last word —
+ * counting them skipped the account's level in silence (review do PR #259, f10).
+ */
+let effortWriteClaims = 0;
+function claimEffortWrite() {
+  const claim = ++effortWriteClaims;
+  return () => claim === effortWriteClaims;
+}
+
+/**
+ * How long a pill switch may wait, from its arrival, for its turn in the queue and for the CLI to
+ * boot. The back gives up on an answer after a fixed time (EFFORT_ACK_TIMEOUT_MS in manager.ts) and
+ * goes the restart way; a switch stuck behind a slow write used to be applied seconds after that,
+ * a level nobody was told about. Past this deadline the switch is answered as not applied, and it
+ * never writes afterwards. Once writing started it finishes on its own trips' deadlines.
+ */
+const EFFORT_SWITCH_START_DEADLINE_MS = Number(process.env.VIBEHUB_EFFORT_SWITCH_START_DEADLINE_MS) || 12_000;
+const EFFORT_SWITCH_START_ERROR = `the switch did not start within ${EFFORT_SWITCH_START_DEADLINE_MS} ms`;
+
+/**
+ * The pill's switch, ANSWERED (`effort_ack`) exactly once: with the level the session says it will
+ * use, or with the error of whoever refused it — at the latest by its start deadline. The back only
+ * says "já valendo" holding this answer.
+ */
+function queueEffortSwitch(id, level) {
+  const switching = { abandoned: false, writing: false };
+  let answered = false;
+  const answer = (outcome) => {
+    if (answered) return;
+    answered = true;
+    emit({ type: "effort_ack", id, ...outcome });
+  };
+  const startDeadline = setTimeout(() => {
+    if (switching.writing) return;
+    switching.abandoned = true;
+    answer({ error: EFFORT_SWITCH_START_ERROR });
+  }, EFFORT_SWITCH_START_DEADLINE_MS);
+  inEffortQueue(() => setCardEffort(level, switching))
+    .catch((err) => ({ error: err && err.message ? err.message : String(err) }))
+    .then((outcome) => {
+      clearTimeout(startDeadline);
+      answer(outcome);
+    })
+    .catch((err) => { trace(`effort switch failed: ${err && err.message ? err.message : String(err)}`); });
 }
 
 function sendUser(text) {
@@ -1589,16 +1783,23 @@ function sendUser(text) {
   if (!ultra.any) {
     myChannel.push(userMessage(text));
   } else if (!fresh) {
-    // A live CLI: the control frame is written before the push below, so the effort is already
-    // pinned by the time the message reaches the model.
-    void raiseUltra(ultra, false);
+    // A live CLI: with the effort queue empty (the usual case) the raise starts right away and its
+    // control frame is written before the push below, so the effort is pinned by the time the
+    // message reaches the model. With a write in flight (a switch, the previous turn's give-back) the
+    // raise waits its turn and may land with the turn already under way: a deliberate trade.
+    // Holding the push for it would let the NEXT message, pushed at once, overtake this one. The
+    // wait is bounded by the deadlines of whatever is ahead in the queue, and the keyword's level
+    // holds from when the raise lands, unless a later switch in the pill replaces it.
+    const keyword = ++keywordMessages;
+    void inEffortQueue(() => raiseUltra(ultra, false, keyword));
     myChannel.push(userMessage(text));
   } else {
     // The FIRST message of a fresh stream has to wait for the CLI to exist. The push moves into
     // the continuation — `finally`, so no failure up there can ever swallow the message.
+    const keyword = ++keywordMessages;
     void (async () => {
       try {
-        await raiseUltra(ultra, true);
+        await inEffortQueue(() => raiseUltra(ultra, true, keyword));
       } finally {
         myChannel.push(userMessage(text));
       }
@@ -1955,9 +2156,9 @@ rl.on("line", (line) => {
     queueBtw(control.id, control.question);
     return;
   }
-  if (control && control.type === "set_effort" && (typeof control.effort === "string" || control.effort === null)) {
+  if (control && control.type === "set_effort" && typeof control.id === "string" && (typeof control.effort === "string" || control.effort === null)) {
     // FORA da fila `serialized`: a troca vale para o turno que já está rodando, não espera por ele.
-    void setCardEffort(control.effort);
+    queueEffortSwitch(control.id, control.effort);
     return;
   }
   if (control && control.type === "reanchor") {

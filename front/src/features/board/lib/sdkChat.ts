@@ -87,6 +87,7 @@ export interface SdkEvent {
     | "background_tasks"
     | "rate_limit"
     | "context_usage"
+    | "keyword_effort_replaced"
     | "conversation_reset"
     | "result"
     | "workflow_progress"

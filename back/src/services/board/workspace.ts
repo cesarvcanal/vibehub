@@ -1841,14 +1841,20 @@ export async function applySessionChange(before: Card | undefined, after: Card, 
     (before.model ?? null) === (after.model ?? null) &&
     (before.accountSlug ?? null) === (after.accountSlug ?? null);
   const level = after.effort ?? null;
-  if (effortOnly && (level === null || isValidEffort(level)) && applyLiveEffort(after.id, level)) {
+  if (effortOnly && (level === null || isValidEffort(level)) && (await applyLiveEffort(after.id, level))) {
     logger.info(
       { audit: true, action: "card.config.live", card: after.worktreeSlug, effort: level ?? "account-default", by },
       "intelligence switched — applied to the live native chat session, no restart",
     );
     return "live";
   }
-  if (after.status === "working") {
+  // The driver's answer can take seconds, and a message may have started a turn meanwhile; `after`
+  // is a stale copy once the store reloaded the document (the other back of a blue/green deploy).
+  // Restarting on that copy killed the turn that just began. A card deleted during the wait took its
+  // session with it: nothing left to restart.
+  const current = await getCard(after.id);
+  if (!current) return "none";
+  if (current.status === "working") {
     await markRestartPending(after.id, "config");
     logger.info(
       { audit: true, action: "card.config.pending", card: after.worktreeSlug, model: after.model ?? null, effort: after.effort ?? null, account: after.accountSlug ?? null, by },
