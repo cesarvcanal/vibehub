@@ -737,3 +737,17 @@ describe("parseQuestionDraftFrame — o rascunho efêmero do cartão de pergunta
     expect(isEmptyQuestionDraft({ picked: [[]], other: ["x"] })).toBe(false);
   });
 });
+
+describe("compactação — o /compact (e a automática) como evento próprio", () => {
+  it("o driver anuncia o início, o fim com os tokens e a falha", () => {
+    expect(parseDriverLine(`{"type":"compaction","phase":"started","trigger":"manual"}`)).toEqual({
+      type: "compaction", phase: "started", trigger: "manual",
+    });
+    expect(parseDriverLine(`{"type":"compaction","phase":"done","trigger":"auto","preTokens":180000,"postTokens":22000,"durationMs":14000}`)).toEqual({
+      type: "compaction", phase: "done", trigger: "auto", preTokens: 180000, postTokens: 22000, durationMs: 14000,
+    });
+    expect(parseDriverLine(`{"type":"compaction","phase":"failed","error":"interrompida"}`)).toEqual({
+      type: "compaction", phase: "failed", error: "interrompida",
+    });
+  });
+});

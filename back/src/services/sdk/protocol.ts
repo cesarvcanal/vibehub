@@ -255,6 +255,21 @@ export interface LocalOutputEvent { type: "local_output"; text: string }
  * falhou. Fica no log do card: é conversa da pessoa, e o F5 redesenha pergunta e resposta.
  */
 export interface BtwAnswerEvent { type: "btw_answer"; id: string; question: string; text?: string; error?: string }
+/**
+ * A COMPACTAÇÃO da conversa — o `/compact` da pessoa ou a automática do CLI, quando a janela enche.
+ * O CLI resume a conversa em segundos ou minutos sem dizer nada no stream de texto, e no chat isso
+ * parecia um turno travado. `started` abre a linha com a barra; `done` a fecha com quanto a
+ * conversa ocupava antes e depois; `failed` com o motivo (o CLI recusou, ou o turno parou no meio).
+ */
+export interface CompactionEvent {
+  type: "compaction";
+  phase: "started" | "done" | "failed";
+  trigger?: "manual" | "auto";
+  preTokens?: number;
+  postTokens?: number;
+  durationMs?: number;
+  error?: string;
+}
 /** One live background task, as the driver forwards it from the CLI. */
 export interface BackgroundTaskInfo { id: string; type: string; description: string; /** A chamada que disparou a tarefa — liga a bandeja ao card dela. */ toolUseId?: string }
 /**
@@ -326,6 +341,7 @@ export type DriverEvent =
   | EffortDefaultEvent
   | LocalOutputEvent
   | BtwAnswerEvent
+  | CompactionEvent
   | BackgroundTasksEvent
   | RateLimitEvent
   | ContextUsageEvent
@@ -361,6 +377,7 @@ const DRIVER_EVENT_TYPES = new Set([
   "effort_default",
   "local_output",
   "btw_answer",
+  "compaction",
   "background_tasks",
   "rate_limit",
   "context_usage",
