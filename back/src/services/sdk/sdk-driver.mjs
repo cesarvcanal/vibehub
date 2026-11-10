@@ -1571,6 +1571,17 @@ async function setCardEffort(level) {
   }
 }
 
+/**
+ * UMA troca por vez, na ordem em que chegaram. A volta ao padrão da conta são três idas ao CLI, e uma
+ * troca logo atrás dela passava no meio: a última ida (o nível da conta) desfazia a escolha mais nova.
+ */
+let effortChain = Promise.resolve();
+function queueCardEffort(level) {
+  effortChain = effortChain
+    .then(() => setCardEffort(level))
+    .catch((err) => { trace(`effort switch failed: ${err && err.message ? err.message : String(err)}`); });
+}
+
 function sendUser(text) {
   const ultra = ultraKeywords(text);
   const fresh = !channel;
@@ -1961,7 +1972,7 @@ rl.on("line", (line) => {
   }
   if (control && control.type === "set_effort" && (typeof control.effort === "string" || control.effort === null)) {
     // FORA da fila `serialized`: a troca vale para o turno que já está rodando, não espera por ele.
-    void setCardEffort(control.effort);
+    queueCardEffort(control.effort);
     return;
   }
   if (control && control.type === "reanchor") {

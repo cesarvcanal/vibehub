@@ -990,6 +990,27 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     ]);
   }, 60_000);
 
+  it("trocas em rajada aplicam na ordem: a última escolha é a que fica", async () => {
+    // A volta ao padrão da conta são três idas ao CLI (null, leitura dos settings, nível da conta).
+    // Uma troca logo atrás dela passava no meio e a terceira ida a desfazia: o pill dizia Alto e a
+    // sessão ficava no nível da conta.
+    await writeFile(join(sandbox, "account-effort"), "low");
+    const driver = startDriver(["--effort", "xhigh"]);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "revisa slow" });
+    await driver.waitMark("slow:running");
+    driver.send({ type: "set_effort", effort: null });
+    driver.send({ type: "set_effort", effort: "high" });
+    await driver.waitMark('flags:{"effortLevel":"high"}');
+    await releaseSlowTurn();
+    await driver.waitFor((e) => e.type === "result");
+    expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual([
+      'flags:{"effortLevel":null}',
+      'flags:{"effortLevel":"low"}',
+      'flags:{"effortLevel":"high"}',
+    ]);
+  }, 60_000);
+
   it("um nível que não existe não chega ao CLI", async () => {
     const driver = startDriver(["--effort", "medium"]);
     await driver.waitFor((e) => e.type === "ready");
