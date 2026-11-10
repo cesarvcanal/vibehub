@@ -320,8 +320,19 @@ export function builtinBrowserInjection(): McpInjection {
   };
 }
 
-/** Every registered MCP as a resolved injection (name + JSON), plus the built-in servers. */
-export async function resolveMcpInjections(): Promise<McpInjection[]> {
+/**
+ * Every registered MCP as a resolved injection (name + JSON), plus the built-in servers.
+ *
+ * A registered MCP whose secrets do not resolve THROWS by default: the explicit apply must fail
+ * loudly, naming the missing value. The card open passes `onUnresolved` instead, and only THAT MCP
+ * is left out (and reported): one third-party MCP with a deleted secret used to throw the whole set
+ * away, so every card opened without the `vibehub_*` tools and the browser. The open's marker is the
+ * signature of the set it resolved, so the skip is not frozen into the profile: once the secret is
+ * stored the set changes, the marker no longer matches, and the next open injects that MCP.
+ */
+export async function resolveMcpInjections(
+  onUnresolved?: (name: string, error: Error) => void,
+): Promise<McpInjection[]> {
   const out: McpInjection[] = [];
   const builtin = await builtinMaestroInjection();
   if (builtin) out.push(builtin);
@@ -331,7 +342,15 @@ export async function resolveMcpInjections(): Promise<McpInjection[]> {
   for (const mcp of await listMcps()) {
     // Never let a registration shadow a built-in (by name).
     if (mcp.name === BUILTIN_MAESTRO_NAME || mcp.name === BUILTIN_BROWSER_NAME) continue;
-    out.push({ name: mcp.name, json: mcpServerJson(mcp, await resolveMcpSecrets(mcp)) });
+    let secrets: Record<string, string>;
+    try {
+      secrets = await resolveMcpSecrets(mcp);
+    } catch (e) {
+      if (!onUnresolved) throw e;
+      onUnresolved(mcp.name, e as Error);
+      continue;
+    }
+    out.push({ name: mcp.name, json: mcpServerJson(mcp, secrets) });
   }
   return out;
 }

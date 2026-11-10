@@ -1867,7 +1867,11 @@ describe("managed MCPs injected on open (into the card's effective profile)", ()
     await reg.createMcp({ name: "erp", kind: "stdio", command: "npx", envKeys: ["ERP_TOKEN"] }); // no value in the vault
     const updated = await ws.openCard(card.id);
     expect(updated.openedAt).toBeTypeOf("number"); // the card still opened
-    expect(scriptAt(1)).not.toContain("mcp add-json"); // but no MCP was injected
+    // Only the MCP without its secret is left out: the built-in browser and the other MCP still ship
+    // (one broken registration used to drop the whole set, built-ins included).
+    expect(scriptAt(1)).not.toContain("add-json -s user 'erp'");
+    expect(scriptAt(1)).toContain("CLAUDE_CONFIG_DIR='/root/.claude-profiles/personal' claude mcp add-json -s user 'tm'");
+    expect(scriptAt(1)).toContain("CLAUDE_CONFIG_DIR='/root/.claude-profiles/personal' claude mcp add-json -s user 'navegador'");
   });
 });
 

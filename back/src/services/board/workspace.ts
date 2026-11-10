@@ -764,11 +764,14 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
     } catch (e) {
       logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "GitHub connection token not resolved on open (ambient gh login)");
     }
-    // Managed MCPs: BEST-EFFORT on open (a missing secret must not stop a card from opening — the
-    // "apply" button in the UI is the path that fails loudly and names what is missing).
+    // Managed MCPs: BEST-EFFORT on open, PER MCP (a missing secret must not stop a card from opening,
+    // nor take the built-ins and the other MCPs down with it — the "apply" button in the UI is the
+    // path that fails loudly and names what is missing).
     let mcps: McpInjection[] = [];
     try {
-      mcps = await resolveMcpInjections();
+      mcps = await resolveMcpInjections((name, e) => {
+        logger.warn({ card: card.worktreeSlug, mcp: name, detail: e.message }, "managed MCP skipped on open (continuing)");
+      });
     } catch (e) {
       logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "managed MCPs not injected on open (continuing)");
     }
