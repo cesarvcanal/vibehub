@@ -53,6 +53,31 @@ describe("prompts da revisão: achado explicado", () => {
   });
 });
 
+describe("autonomia corretiva: bug no que o PR fez se corrige, melhoria fora do escopo é sugestão", () => {
+  const suggestion: Finding = { id: "f1", severity: "suggestion", title: "t", status: "open", introducedInRound: 1 };
+
+  it("o revisor classifica bug ou incongruência no que o PR fez como bloqueante ou dúvida, nunca como sugestão", () => {
+    const text = reviewerRoundPrompt(review());
+    expect(text).toContain("Bug ou incongruência no que o PR fez não é sugestão");
+    expect(text).toMatch(/volta desnecessária, o que fica fora do escopo do PR/);
+  });
+
+  it("o autor corrige sem perguntar o que é bug, não amplia escopo, e na dúvida de intenção explica em vez de aplicar", () => {
+    for (const text of [
+      authorFixPrompt(review([suggestion])),
+      authorSuggestionsPrompt(review([suggestion]), [suggestion], { by: "cesar" }),
+    ]) {
+      expect(text).toContain("Bug ou incongruência no que o PR fez: corrija sem perguntar");
+      expect(text).toContain("dúvida sobre a intenção");
+    }
+  });
+
+  it("toda sugestão pedida precisa de resposta na mesma chamada", () => {
+    const text = authorSuggestionsPrompt(review([suggestion]), [suggestion], { by: "cesar" });
+    expect(text).toContain("Responda TODAS as sugestões pedidas");
+  });
+});
+
 describe("merge autorizado com sugestão em pé: os textos não dizem 'nada em aberto'", () => {
   const suggestion: Finding = { id: "f1", severity: "suggestion", title: "renomear", status: "open", introducedInRound: 1 };
   const ready = (r: Partial<Review> = {}): Review => ({ ...review([suggestion]), phase: "ready", reviewedSha: "a".repeat(40), ...r });

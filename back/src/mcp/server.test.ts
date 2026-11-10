@@ -87,6 +87,14 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(INSTRUCTIONS).not.toContain("Ask when it blocks, not before");
   });
 
+  it("autonomia corretiva: bug no que já foi pedido se corrige sem pergunta; melhoria fora do escopo vira sugestão", () => {
+    // Pedido do dono da instalação (2026-11-10): brainstorming e confirmação valem para mudança de
+    // direção, não para consertar o que claramente quebra o que ele já pediu.
+    expect(INSTRUCTIONS).toContain("Corrective autonomy");
+    expect(INSTRUCTIONS).toContain("fix it without asking and without brainstorming");
+    expect(INSTRUCTIONS).toContain("an improvement is a suggestion, not an authorization");
+  });
+
   it("build a server that carries those instructions", () => {
     let server: ReturnType<typeof createMcpServer> | undefined;
     expect(() => {

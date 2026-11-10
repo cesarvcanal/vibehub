@@ -122,10 +122,10 @@ function classification(): string {
     "- blocking: SÓ com prova. proof.kind = failing_test (ref = o teste que falha, ex. src/x.test.ts:12), rule (ref = a regra " +
       "escrita do repo, ex. CLAUDE.md, com o trecho em detail) ou scenario (ref = arquivo:linha, detail = o cenário concreto " +
       "que quebra, inclusive funcionalidade que já existia). Bloqueante sem prova vira sugestão no servidor.",
-    "- suggestion: SÓ o que não é bug no escopo do PR: estilo, nome, legibilidade, refatoração, melhoria opcional, ou " +
-      "problema que já existia fora do que o PR mexe. Bug, falha ou correção urgente no que o PR mexe não é sugestão: é " +
-      "blocking com proof.kind = scenario (ref = arquivo:linha, detail = o caso que dá errado). Na dúvida entre os dois, " +
-      "e o defeito é real e alcançável, é blocking.",
+    "- suggestion: SÓ o que não é bug no escopo do PR: estilo, nome, legibilidade, refatoração, melhoria opcional, volta " +
+      "desnecessária, o que fica fora do escopo do PR, ou problema que já existia fora do que o PR mexe. Bug ou incongruência " +
+      "no que o PR fez não é sugestão: é blocking com proof.kind = scenario (ref = arquivo:linha, detail = o caso que dá " +
+      "errado). Na dúvida entre os dois, e o defeito é real e alcançável, é blocking.",
     "- question: risco que pode comprometer, mas você não tem certeza. Fica esperando decisão: o revisor humano decide no " +
       "painel, ou o autor resolve/explica e você confere na rodada seguinte. O ciclo segue com o resto.",
     "- refuted: achado que a verificação derrubou (fica só no histórico).",
@@ -264,6 +264,17 @@ export function reviewerDeltaPrompt(r: Review): string {
 }
 
 /**
+ * Autonomia corretiva (AGENTS.md §12): o que quebra o que o PR quis fazer se corrige sem perguntar; o
+ * que amplia escopo não se faz; dúvida de intenção é da pessoa, não da IA.
+ */
+const CORRECTIVE_AUTONOMY = [
+  "- Bug ou incongruência no que o PR fez: corrija sem perguntar, com commit e teste, mesmo que tenha vindo como sugestão.",
+  "- Fora do escopo, feature nova, volta desnecessária ou mudança de uma decisão intencional: não faça; responda explicando.",
+  "- Correção que exige decidir a intenção do PR: não aplique; responda com a dúvida sobre a intenção e as consequências de " +
+    "cada caminho, para a pessoa decidir no painel.",
+];
+
+/**
  * A lista fechada para o autor: corrigir o que é bug no escopo, contestar só com prova. Com co-autor
  * na revisão, `coauthorTrailer` é a linha `Co-authored-by: Nome <email>` que dá a ele o crédito no Git.
  */
@@ -279,8 +290,8 @@ export function authorFixPrompt(r: Review, opts: { coauthorTrailer?: string } = 
     "",
     "Para cada item da lista fechada:",
     "- Bug dentro do escopo do PR (inclusive criado pela sua correção): corrija com commit e com teste que prove a correção.",
-    "- Mudança fora do escopo ou feature nova: não faça; responda explicando.",
     "- Discorda: conteste só com prova (teste, regra escrita do repo, cenário com arquivo:linha). Contestação sem prova volta aberta.",
+    ...CORRECTIVE_AUTONOMY,
     "",
     "Lista fechada (responda cada um):",
     lines(todo, "nenhum item"),
@@ -336,8 +347,9 @@ export function authorSuggestionsPrompt(r: Review, list: Finding[], opts: { by: 
     "",
     "Para cada uma:",
     "- Cada sugestão traz o problema e como resolver: siga a proposta, ou resolva o mesmo problema de outro jeito melhor.",
+    ...CORRECTIVE_AUTONOMY,
     "- Aplicou: commit, com teste do que mudou.",
-    "- Não vai aplicar (fora do escopo, piora outra coisa, já resolvida): explique no reply.",
+    "- Não vai aplicar (fora do escopo, piora outra coisa, já resolvida, dúvida de intenção): explique no reply.",
     ...(opts.coauthorTrailer
       ? [`Em cada commit, termine a mensagem com esta linha (o crédito do co-autor no Git): ${opts.coauthorTrailer}`]
       : []),
@@ -352,6 +364,7 @@ export function authorSuggestionsPrompt(r: Review, list: Finding[], opts: { by: 
     `   round: ${r.round}`,
     "   headSha: o sha do passo 3 (40 caracteres)",
     "   items: [{ id, status: \"fixed\" (com commit) | \"wontfix\" (reply com o motivo), commit?, reply }]",
+    "   Responda TODAS as sugestões pedidas nesta mesma chamada: a que ficar de fora faz a ferramenta recusar a resposta.",
     "   O push faz a revisão voltar ao revisor, que confere o que entrou: é o esperado. Não mergeie por conta própria.",
   ].join("\n");
 }

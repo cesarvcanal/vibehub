@@ -173,6 +173,23 @@ Se um comando de teste for passar de ~2 min, troque por um recorte menor. Não a
 7. **Validar:** testes do recorte, typecheck e build quando aplicável; revisar o diff.
 8. **Descrever o resultado:** o que mudou, o que foi verificado e as limitações reais.
 
+### Autonomia corretiva e preservação do escopo
+
+Pedir autorização e passar por brainstorming continua obrigatório para decisões de produto, mudança de escopo, funcionalidade nova, mudança de comportamento intencional e tudo cuja intenção não esteja clara. A exceção: **o agente corrige sozinho problema real naquilo que já foi definido, pedido ou implementado**, sem parar para pedir licença e sem brainstorming:
+
+- bug e erro de lógica;
+- incongruência entre funcionalidades e regras de negócio;
+- regressão introduzida durante o desenvolvimento;
+- comportamento que contraria claramente o requisito estabelecido;
+- falha de integração, validação ou consistência;
+- ajuste técnico necessário para o que já existe funcionar corretamente.
+
+**Limites:** autonomia corretiva não amplia escopo. Não implementar funcionalidade extra só porque parece útil; não alterar decisão intencional, fluxo estabelecido ou regra de negócio por preferência técnica; não remover, substituir ou simplificar o que não se entende; não tratar oportunidade de melhoria como autorização. Melhoria, refatoração, volta desnecessária e o que foge do propósito viram **sugestão**, não execução.
+
+**Na dúvida, pergunta:** se a correção exige decidir intenção, comportamento esperado ou direção do projeto, apresentar o problema e as consequências e perguntar antes de agir. Quando o comportamento esperado está claro e a falha é comprovada, corrigir sem transferir ao usuário uma decisão técnica que não precisa dele.
+
+**Princípio:** o agente tem autonomia para preservar, corrigir e garantir a integridade do que foi definido e construído, não para redefinir o que o projeto deve ser.
+
 **Operações de risco:** exclusão de dados, mudança incompatível de contrato persistido, alteração de acesso, deploy e merge exigem as autorizações existentes. **Merge em `main` é deploy.** Não presumir consentimento.
 
 ## 13. Revisão final (antes de entregar)

@@ -794,6 +794,16 @@ export async function submitAuthorResponse(
     throw new Error(`status inválido (${bad.map((it) => it.id).join(", ")}): o autor responde fixed, contested ou wontfix`);
   }
   const headSha = assertHeadSha(payload.headSha);
+  // Sugestão pedida que fica sem resposta perde a marca no veredito seguinte do revisor e volta a ser
+  // escolha no painel: a pessoa a mandava de novo. Quem respondeu, responde a todas as que recebeu.
+  const answeredIds = new Set(payload.items.map((it) => it.id));
+  const unanswered = review.findings.filter((f) => f.requested && f.status === "open" && !answeredIds.has(f.id)).map((f) => f.id);
+  if (unanswered.length) {
+    throw new Error(
+      `sugestao_sem_resposta: ${unanswered.join(", ")} ${unanswered.length === 1 ? "foi pedida" : "foram pedidas"} a você e ` +
+        "precisa de resposta nesta mesma chamada (fixed com o commit, ou wontfix com o motivo)",
+    );
+  }
   const fresh = (r: Review) => r.phase === "fixing" && payload.round === r.round && r.lastRespondRound !== payload.round;
   // Na rodada vale o que bloqueia e as sugestões; fora dela, só as sugestões. O resto vai ao log.
   const answerableIn = (r: Review) => {

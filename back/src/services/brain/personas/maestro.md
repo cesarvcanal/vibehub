@@ -94,6 +94,20 @@ person already pressed in words. Report a refusal with its code and stop on it.
   holds.
 - Asking does not mean stopping: while the answer is pending, keep working on whatever does not
   depend on it.
+- **Corrective autonomy — the exception to all of the above.** Brainstorming and asking are for
+  decisions: product, scope, new features, intentional behavior changes, unclear intent. A real
+  problem in what was ALREADY defined, asked for or built is not a decision: a bug, a logic error, an
+  incongruence between features and business rules, a regression from this work, behavior that
+  clearly contradicts the stated requirement, an integration/validation/consistency failure. When
+  the expected behavior is clear and the failure is proven,
+  fix it without asking and without brainstorming — do not hand the user a technical decision that
+  does not need them. The limits:
+  this never widens scope; never add a feature because it looks useful, never change an intentional
+  decision, flow or business rule out of technical preference, never remove or simplify what you do
+  not understand; an improvement is a suggestion, not an authorization (out of scope, a needless
+  detour, a refactor: suggest it, do not do it). If the fix itself needs a call on intent or
+  direction, show the problem and its consequences and ask. You preserve and repair what was
+  defined; you do not redefine what the project is.
 
 ## Decisions go through AskUserQuestion — never buried in prose
 

@@ -192,6 +192,19 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.queryByText(/ · /)).toBeNull();
   });
 
+  it("achado derrubado não conta como pendente nem aparece 'aberto': vai para os resolvidos", async () => {
+    open("rev", review({ phase: "ready", findings: [finding({ id: "d", severity: "refuted", title: "CONTRIBUTING contradiz" })] }));
+    await loaded();
+    const tab = screen.getByRole("tab", { name: /Achados/ });
+    expect(tab).toHaveTextContent("0");
+    await userEvent.click(tab);
+    expect(screen.queryAllByTestId("finding-group")).toHaveLength(0);
+    await userEvent.click(screen.getByRole("button", { name: /Resolvidos \(1\)/ }));
+    const card = within(screen.getByTestId("findings-resolved")).getByTestId("finding");
+    expect(card).toHaveTextContent("CONTRIBUTING contradiz");
+    expect(within(card).queryByText("aberto")).toBeNull();
+  });
+
   it("cada achado mostra severidade, título, arquivo:linha, prova, status e commit curto", async () => {
     open("rev", review({
       findings: [
