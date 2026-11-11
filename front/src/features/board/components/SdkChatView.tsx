@@ -2363,23 +2363,27 @@ const SdkChatRow = React.memo(function SdkChatRow({
   }
 
   if (row.kind === "btw") {
-    // A resposta do /btw pende da pergunta por um fio à esquerda, num tom abaixo do turno, para nunca
-    // ser lida como o turno falando.
+    // A pergunta do /btw vive num card azul com cabeçalho próprio: no meio de um turno longo ela se
+    // perdia entre o raciocínio e as ferramentas, e a pessoa ficava caçando o que perguntou.
     return (
-      <div data-testid="sdk-btw" className="max-w-prose text-sm">
-        <div className="flex items-start gap-1.5 text-xs leading-5 text-muted-foreground">
-          <span title={t("sdk.btwLabel")} className="mt-[3px] shrink-0">
-            <MessageCircleQuestion aria-label={t("sdk.btwLabel")} className="h-3.5 w-3.5 text-primary/70" />
+      <div
+        data-testid="sdk-btw"
+        className="max-w-prose rounded-md border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-sm"
+      >
+        <div className="flex items-center gap-1.5 text-xs font-medium text-blue-500">
+          <span title={t("sdk.btwLabel")} className="shrink-0">
+            <MessageCircleQuestion aria-label={t("sdk.btwLabel")} className="h-3.5 w-3.5" />
           </span>
-          <span className="min-w-0 whitespace-pre-wrap">{row.question}</span>
+          {t("sdk.btwTitle")}
         </div>
-        <div className="ml-[6px] mt-1 border-l border-border pl-3.5">
+        <div className="mt-1 whitespace-pre-wrap text-foreground">{row.question}</div>
+        <div className="mt-2 border-t border-blue-500/25 pt-2">
           {row.text !== undefined ? (
             <div className="leading-relaxed text-foreground/85"><Markdown text={row.text} /></div>
           ) : row.error !== undefined ? (
             <div className="text-xs leading-5 text-destructive">{t("sdk.btwError", { error: row.error })}</div>
           ) : (
-            <Loader2 aria-label={t("sdk.btwPending")} className="my-0.5 h-3.5 w-3.5 animate-spin text-muted-foreground/70 motion-reduce:animate-none" />
+            <Loader2 aria-label={t("sdk.btwPending")} className="my-0.5 h-3.5 w-3.5 animate-spin text-blue-500/70 motion-reduce:animate-none" />
           )}
         </div>
       </div>

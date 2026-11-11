@@ -548,6 +548,7 @@ export const en: Record<string, string> = {
   "sdk.compactSaved": "−{percent}%",
   "sdk.compactFailed": "Compaction did not finish",
   "sdk.compactInterrupted": "interrupted before it finished",
+  "sdk.btwTitle": "/btw · you asked",
   "sdk.btwLabel": "Side question: answered on the side, the turn went on without it",
   "sdk.btwError": "Could not answer: {error}",
   "sdk.btwPending": "Answering…",
