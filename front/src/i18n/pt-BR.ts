@@ -549,6 +549,7 @@ export const ptBR: Record<string, string> = {
   "sdk.compactSaved": "−{percent}%",
   "sdk.compactFailed": "Compactação não concluída",
   "sdk.compactInterrupted": "interrompida antes de terminar",
+  "sdk.btwTitle": "/btw · você perguntou",
   "sdk.btwLabel": "Pergunta lateral: respondida à parte, o turno seguiu sem ela",
   "sdk.btwError": "Não deu para responder: {error}",
   "sdk.btwPending": "Respondendo…",
