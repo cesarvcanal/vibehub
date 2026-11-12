@@ -6,7 +6,7 @@
 >
 > **O projeto:** IDE hospedada para agentes de código — um kanban de terminais Claude Code reais rodando em containers no servidor do próprio usuário. Backend Fastify, servidor MCP próprio (`back/src/mcp/`), persistência em JSON atômico (`back/src/store/`), runner Docker local ou via SSH (`back/src/runtime/host.ts`). Frontend React + Vite + React Query + Radix/Tailwind. Projeto **público (MIT) e auto-hospedado**: cada instalação tem os próprios dados, então contrato persistido não muda sem migração.
 >
-> **Regra de aplicação:** as regras são **independentes do domínio** e não presumem entidades, telas, fluxos ou estruturas de um módulo: os contratos e padrões reais saem da inspeção do trecho modificado (§12, passo 1).
+> **Regra de aplicação:** as regras gerais são **independentes do domínio** e não presumem entidades, telas ou fluxos de um módulo. As referências concretas a arquivos do vibehub são exemplos e pontos de entrada; os contratos reais saem da inspeção do trecho modificado (§12, passo 1).
 >
 > **Fonte única:** este arquivo é a fonte das regras de código. O `CONTRIBUTING.md` é o resumo para contribuidores externos e não pode contradizê-lo.
 
