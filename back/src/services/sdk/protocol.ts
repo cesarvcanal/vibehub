@@ -848,22 +848,22 @@ export function parseWorkflowFeedFrame(raw: string): WorkflowFeedRequest | null 
   }
 }
 
+const DETAIL_KINDS = ["tool", "agent", "changes", "file"] as const;
+
 /**
  * O pedido de DETALHE — o que a tela abre quando alguém clica (ver ./detail.ts):
  * `{ "type": "detail", "req": "tool"|"agent"|"changes"|"file", "id"?: string, "path"?: string, "nonce"?: string }`.
  * Sob demanda e só para a aba que pediu, como o feed do workflow: não é turno, não vai ao driver nem
  * ao histórico. `null` = não é um pedido de detalhe. PURE.
  */
-export interface DetailRequest { req: "tool" | "agent" | "changes" | "file"; id: string; path: string; nonce: string }
-
-const DETAIL_KINDS = new Set(["tool", "agent", "changes", "file"]);
+export interface DetailRequest { req: (typeof DETAIL_KINDS)[number]; id: string; path: string; nonce: string }
 
 export function parseDetailFrame(raw: string): DetailRequest | null {
   const trimmed = raw.trim();
   if (!trimmed.startsWith("{")) return null;
   try {
     const parsed = JSON.parse(trimmed) as { type?: unknown; req?: unknown; id?: unknown; path?: unknown; nonce?: unknown };
-    if (parsed.type !== "detail" || typeof parsed.req !== "string" || !DETAIL_KINDS.has(parsed.req)) return null;
+    if (parsed.type !== "detail" || typeof parsed.req !== "string" || !(DETAIL_KINDS as readonly string[]).includes(parsed.req)) return null;
     return {
       req: parsed.req as DetailRequest["req"],
       id: typeof parsed.id === "string" ? parsed.id.slice(0, 200) : "",

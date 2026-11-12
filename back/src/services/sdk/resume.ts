@@ -1,5 +1,5 @@
 import * as registry from "../board/registry.js";
-import { getSettings } from "../settings/settings.js";
+import { getSettings, type Settings } from "../settings/settings.js";
 import { HISTORY_REPLAY_LIMIT, appendHistory, readHistory } from "./history.js";
 import {
   INFLIGHT_OWNER,
@@ -326,7 +326,7 @@ export async function resumeInterruptedTurns(deps: ResumeDeps = realDeps): Promi
   }
   if (markers.length === 0) return summary;
 
-  let settings: Awaited<ReturnType<typeof getSettings>>;
+  let settings: Settings;
   try {
     settings = await deps.settings();
   } catch (err) {
@@ -360,6 +360,9 @@ export async function resumeInterruptedTurns(deps: ResumeDeps = realDeps): Promi
   return summary;
 }
 
+/** O que coube a UM card cujo turno morreu (ver `resumeCard`). */
+type ResumeOutcome = "resumed" | "noted" | "skipped";
+
 /**
  * UM card cujo turno morreu: a linha visível e, se as regras deixam, a retomada. A mesma para o
  * boot (deploy) e para a queda do driver; só as palavras mudam. Nunca lança. "skipped" = nada a
@@ -369,11 +372,11 @@ export async function resumeInterruptedTurns(deps: ResumeDeps = realDeps): Promi
 async function resumeCard(
   cardId: string,
   marker: InflightMarker,
-  settings: Awaited<ReturnType<typeof getSettings>>,
+  settings: Settings,
   deps: ResumeDeps,
   installOnce: () => Promise<void>,
   texts: ResumeTexts,
-): Promise<"resumed" | "noted" | "skipped"> {
+): Promise<ResumeOutcome> {
   let announced = false;
   try {
     const card = await deps.getCard(cardId);
@@ -502,8 +505,8 @@ export async function resumeAfterDriverCrash(
   cardId: string,
   crashed: InflightMarker,
   deps: ResumeDeps = realDeps,
-): Promise<"resumed" | "noted" | "skipped"> {
-  let outcome: "resumed" | "noted" | "skipped" = "skipped";
+): Promise<ResumeOutcome> {
+  let outcome: ResumeOutcome = "skipped";
   try {
     await deps.wait(CRASH_RESUME_DELAY_MS);
     // SIGTERM na espera: o marcador é o recado para o processo novo, que retoma ele mesmo.
@@ -526,7 +529,7 @@ export async function resumeAfterDriverCrash(
  * O turno morto que NÃO virou retomada: sem turno vivo noutro driver, a bolinha vai a `waiting` — o
  * "turno terminou" de verdade, uma vez. Num SIGTERM quem decide é o processo novo.
  */
-function settleUnresumed(cardId: string, outcome: "resumed" | "noted" | "skipped", deps: ResumeDeps): void {
+function settleUnresumed(cardId: string, outcome: ResumeOutcome, deps: ResumeDeps): void {
   if (outcome !== "resumed" && !deps.stopping() && !deps.turnRunning(cardId)) deps.reportIdle(cardId);
 }
 

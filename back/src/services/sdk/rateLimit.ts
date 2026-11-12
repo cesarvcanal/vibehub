@@ -8,7 +8,9 @@
  * API). A tela recebe sempre percentual 0..100 e epoch em ms — a mesma unidade de `usage.ts`.
  */
 
-export type RateLimitStatus = "allowed" | "allowed_warning" | "rejected";
+const STATUSES = ["allowed", "allowed_warning", "rejected"] as const;
+
+export type RateLimitStatus = (typeof STATUSES)[number];
 
 export interface RateLimitInfo {
   status: RateLimitStatus;
@@ -21,8 +23,6 @@ export interface RateLimitInfo {
 }
 
 export interface RateLimitEvent extends RateLimitInfo { type: "rate_limit" }
-
-const STATUSES = new Set<RateLimitStatus>(["allowed", "allowed_warning", "rejected"]);
 
 /** Fração (0..1) ou percentual (>1) → 0..100. PURE. */
 function toPercent(value: unknown): number | undefined {
@@ -45,7 +45,7 @@ export function normalizeRateLimit(raw: unknown): RateLimitInfo | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
   const status = o.status;
-  if (typeof status !== "string" || !STATUSES.has(status as RateLimitStatus)) return null;
+  if (typeof status !== "string" || !(STATUSES as readonly string[]).includes(status)) return null;
   const windowRaw = typeof o.window === "string" ? o.window : o.rateLimitType;
   const window = typeof windowRaw === "string" && windowRaw.trim() ? windowRaw.trim().slice(0, 64) : "";
   if (!window) return null;
