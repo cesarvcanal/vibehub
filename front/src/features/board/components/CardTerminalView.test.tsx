@@ -239,7 +239,7 @@ function renderWithCache(
   client.setQueryData(cardsKey(project.id), seed);
   if (mode) writeCardMode("c1", mode);
   return renderApp(
-    <CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />,
+    <CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />,
     { queryClient: client },
   );
 }
@@ -324,7 +324,7 @@ describe("CardTerminalView — instant open", () => {
     // No cache seed at all: this is a refresh or a pasted link. The pane is named because what is
     // being asserted is the ATTACH, not which of the two views the card opens in.
     writeCardMode("c1", "terminal");
-    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />);
     expect(await screen.findByTestId("xterm")).toBeInTheDocument();
     localStorage.clear();
   });
@@ -727,7 +727,7 @@ describe("CardTerminalView — the card bar", () => {
     const user = userEvent.setup();
     const client = testQueryClient();
     client.setQueryData(cardsKey(project.id), [card({ openedAt: 10 })]);
-    renderApp(<CardTerminalView project={project} cardId="c1" onBack={onBack} onNewCard={vi.fn()} />, {
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={onBack} />, {
       queryClient: client,
     });
 
@@ -1197,7 +1197,6 @@ describe("CardTerminalView — narrow screens", () => {
         project={project}
         cardId="c1"
         onBack={vi.fn()}
-        onNewCard={vi.fn()}
         onOpenMenu={onOpenMenu}
       />,
     );
@@ -1210,7 +1209,7 @@ describe("CardTerminalView — narrow screens", () => {
   });
 
   it("renders no menu button when the page does not offer a drawer", async () => {
-    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />);
     await screen.findByTestId("card-bar");
     expect(screen.queryByRole("button", { name: "Open the card list" })).not.toBeInTheDocument();
   });
@@ -1258,7 +1257,7 @@ describe("CardTerminalView — the phone", () => {
       const user = userEvent.setup();
       const onBack = vi.fn();
       const { unmount } = renderApp(
-        <CardTerminalView project={project} cardId="c1" onBack={onBack} onNewCard={vi.fn()} />,
+        <CardTerminalView project={project} cardId="c1" onBack={onBack} />,
       );
 
       await user.click(await screen.findByTestId("card-back"));
@@ -1269,7 +1268,7 @@ describe("CardTerminalView — the phone", () => {
 
   it("splits the bar into identity and a row of icons on a phone", async () => {
     setViewport(true);
-    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />);
 
     const identity = await screen.findByTestId("card-bar-identity");
     const actions = screen.getByTestId("card-bar-actions");
@@ -1295,7 +1294,7 @@ describe("CardTerminalView — the phone", () => {
   it("keeps Browser, Shell, the model and the account behind the one overflow menu", async () => {
     setViewport(true);
     const user = userEvent.setup();
-    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />);
 
     await user.click(await screen.findByTestId("card-bar-more"));
     const menu = await screen.findByRole("menu");
@@ -1311,7 +1310,7 @@ describe("CardTerminalView — the phone", () => {
     serveMember();
     setViewport(true);
     const user = userEvent.setup();
-    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />);
     await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/auth/me"));
 
     await user.click(await screen.findByTestId("card-bar-more"));
@@ -1325,7 +1324,7 @@ describe("CardTerminalView — the phone", () => {
   it("opens the browser pane from the overflow menu", async () => {
     setViewport(true);
     const user = userEvent.setup();
-    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />);
 
     await user.click(await screen.findByTestId("card-bar-more"));
     await user.click(await screen.findByRole("menuitemcheckbox", { name: "Browser" }));
@@ -1337,14 +1336,14 @@ describe("CardTerminalView — the phone", () => {
     // card's Chat tab is the native chat; the `⋯` menus must not resurrect the per-card knob.
     setViewport(true);
     const user = userEvent.setup();
-    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />);
     await user.click(await screen.findByTestId("card-bar-more"));
     expect(screen.queryByTestId("card-native-chat-toggle")).toBeNull();
     expect(screen.queryByText(/native chat/i)).toBeNull();
   });
 
   it("leaves the desktop bar as the single row it has always been", async () => {
-    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />);
 
     const bar = await screen.findByTestId("card-bar");
     expect(screen.queryByTestId("card-bar-identity")).not.toBeInTheDocument();
@@ -1356,7 +1355,7 @@ describe("CardTerminalView — the phone", () => {
   it("locks the page while a card is open on a phone, and unlocks it on the way out", async () => {
     setViewport(true);
     const { unmount } = renderApp(
-      <CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />,
+      <CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />,
     );
 
     await screen.findByTestId("card-bar");
@@ -1368,7 +1367,7 @@ describe("CardTerminalView — the phone", () => {
   });
 
   it("never locks the page on a desktop, where the board behind still scrolls", async () => {
-    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />);
     await screen.findByTestId("card-bar");
     expect(document.documentElement.classList.contains("card-view-locked")).toBe(false);
   });
@@ -1530,7 +1529,7 @@ describe("CardTerminalView — the card's browser", () => {
     client.setQueryData(cardsKey(project.id), [card({ openedAt: 10 })]);
     writeCardMode("c1", "terminal");
     renderApp(
-      <CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} active={false} />,
+      <CardTerminalView project={project} cardId="c1" onBack={vi.fn()} active={false} />,
       { queryClient: client },
     );
     await screen.findByTestId("xterm");
@@ -1701,7 +1700,7 @@ describe("CardTerminalView — ?review=1 opens the panel", () => {
     return renderApp(
       <>
         <Url />
-        <CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />
+        <CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />
       </>,
       { queryClient: client, route },
     );

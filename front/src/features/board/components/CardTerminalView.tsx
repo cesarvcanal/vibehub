@@ -136,12 +136,6 @@ export function CardTerminalView({
   active?: boolean;
   onBack: () => void;
   /**
-   * Accepted so the page can keep passing it, but no longer rendered here: "New card" lives on the
-   * board's own chrome and in ⌘K, and a second copy in this footer only competed with Browser and
-   * Shell — the two things that belong to THIS card.
-   */
-  onNewCard?: () => void;
-  /**
    * Opens the navigation drawer. Only rendered on narrow screens, where the card list beside the
    * terminal is hidden and going "back to the board" is otherwise the only way to reach another
    * card — which is a long way round when the whole point is hopping between agents.

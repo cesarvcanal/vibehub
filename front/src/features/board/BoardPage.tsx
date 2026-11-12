@@ -452,7 +452,6 @@ export function BoardPage() {
           activeCardId={cardOpen ? cardId : null}
           projects={projects}
           onBack={(id) => go(id)}
-          onNewCard={(project) => askCard(project, true)}
           onOpenMenu={() => setMenuOpen(true)}
           onClose={closePane}
         />

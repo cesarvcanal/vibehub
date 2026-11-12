@@ -47,7 +47,6 @@ export function TerminalDeck({
   activeCardId,
   projects,
   onBack,
-  onNewCard,
   onOpenMenu,
   onClose,
 }: {
@@ -56,7 +55,6 @@ export function TerminalDeck({
   activeCardId: string | null;
   projects: readonly BoardProject[];
   onBack: (projectId: string) => void;
-  onNewCard: (project: BoardProject) => void;
   onOpenMenu: () => void;
   /** A card whose session is gone (paused): drop it from the deck instead of reconnecting to it. */
   onClose: (cardId: string) => void;
@@ -118,7 +116,6 @@ export function TerminalDeck({
               cardId={entry.cardId}
               active={active}
               onBack={() => onBack(project.id)}
-              onNewCard={() => onNewCard(project)}
               onOpenMenu={onOpenMenu}
               onClose={() => onClose(entry.cardId)}
             />
