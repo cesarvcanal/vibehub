@@ -34,11 +34,13 @@ import { logger } from "../../utils/logger.js";
  * read nothing until somebody sent a message (the vault token, the fallback below, can be revoked
  * too — in production it was). So an expired token is handed to `claude auth status` inside the
  * runner first: the CLI renews and rewrites its own `.credentials.json`, and we read it again. We
- * never touch the refresh token: using it from here would rotate it under the CLI.
+ * never touch the refresh token: using it from here would rotate it under the CLI. Two reads of one
+ * account at once share a single renewal, and a login the CLI could not renew (refresh token
+ * revoked) is not retried until the file holds a different one.
  *
- * WHERE THE TOKEN LIVES, AND FOR HOW LONG. It is read out of the runner with a READ-ONLY
- * `docker exec … cat` (every path validated and shell-quoted, nothing user-supplied reaching the
- * shell), held in a local variable for exactly one HTTPS call, and dropped. It is NEVER logged,
+ * WHERE THE TOKEN LIVES, AND FOR HOW LONG. It is read out of the runner with a `docker exec … cat`
+ * (read-only but for the CLI's own renewal above; every path validated and shell-quoted, nothing
+ * user-supplied reaching the shell), held in a local variable for exactly one HTTPS call, and dropped. It is NEVER logged,
  * NEVER returned by the API, NEVER written to disk on the vibehub side. The call is made from the
  * vibehub process rather than by a `curl` inside the container so that HTTP status handling (401 vs
  * 429 vs unreachable) is real code with real tests instead of exit-code archaeology, and so the
@@ -84,6 +86,9 @@ export const PROBE_FRESH_MS = 300_000;
 
 /** A single HTTPS call gets this long; the UI is polling and would rather have "unreachable". */
 const REQUEST_TIMEOUT_MS = 10_000;
+
+/** A token expiring within one call's time is renewed too: it would die on the way. */
+const EXPIRY_MARGIN_MS = REQUEST_TIMEOUT_MS;
 
 /** One metered window as the UI needs it: how much is gone, and when it comes back. */
 export interface UsageWindow {
@@ -134,9 +139,20 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>();
 
+/** The reading in progress per account, so two callers at once share one renewal and one call. */
+const inflight = new Map<string, Promise<{ result: AccountUsage; called: boolean }>>();
+
+/**
+ * Per profile, the expiry of a login the CLI could NOT renew (refresh token revoked). Until the file
+ * holds a different login, renewing again would only spend a CLI exec per poll on the same answer.
+ */
+const unrenewable = new Map<string, number>();
+
 /** Drops every cached reading. TEST SEAM, and what a token change would call. */
 export function resetUsageCache(): void {
   cache.clear();
+  inflight.clear();
+  unrenewable.clear();
 }
 
 /** Cache key of an account: a missing slug is the default profile. PURE. */
@@ -156,8 +172,8 @@ export function backoffMs(strikes: number): number {
 }
 
 /**
- * READ-ONLY script that prints a profile's credential file. `cat` and nothing else: this module
- * must never be able to change a byte inside the runner. Both paths are validated and quoted, and
+ * READ-ONLY script that prints a profile's credential file. `cat` and nothing else: the only write
+ * this module ever causes in the runner is Claude Code renewing its own login (`buildRenewLoginScript`). Both paths are validated and quoted, and
  * a missing file prints nothing instead of failing the exec (a profile with no login is normal).
  * PURE.
  */
@@ -339,17 +355,24 @@ async function readLogin(script: string, timeoutMs: number): Promise<{ login?: I
  * The profile's access token, renewed by Claude Code first when it has expired. Only the CLI
  * renews it, and only when the account is used — so an account idle for its 8h lifetime held a
  * dead token, the endpoint refused it, and the meter said "sem leitura" until somebody sent a
- * message. A renewal that does not produce a live token keeps the expired one: the endpoint then
- * says what is wrong.
+ * message. A renewal that does not produce a live token keeps the expired one (the endpoint then
+ * says what is wrong) and is not tried again for that same login.
  */
 async function readFreshAccessToken(profileDir: string, now: number): Promise<{ token?: string; runnerDown: boolean }> {
   const { login, runnerDown } = await readLogin(buildReadCredentialsScript(config.runner.container, profileDir), 15_000);
-  if (!login || login.expiresAt === null || login.expiresAt > now) return { token: login?.accessToken, runnerDown };
-  const renewed = (await readLogin(buildRenewLoginScript(config.runner.container, profileDir), RENEW_TIMEOUT_MS)).login;
-  if (!renewed || (renewed.expiresAt !== null && renewed.expiresAt <= now)) {
-    logger.warn({ action: "account.usage", profileDir }, "login renewal failed");
+  const live = (l: InteractiveLogin) => l.expiresAt === null || l.expiresAt > now + EXPIRY_MARGIN_MS;
+  if (!login || live(login) || unrenewable.get(profileDir) === login.expiresAt) {
+    return { token: login?.accessToken, runnerDown };
   }
-  return { token: renewed?.accessToken ?? login.accessToken, runnerDown: false };
+  const renewal = await readLogin(buildRenewLoginScript(config.runner.container, profileDir), RENEW_TIMEOUT_MS);
+  if (renewal.runnerDown) return { runnerDown: true };
+  if (renewal.login && live(renewal.login)) {
+    unrenewable.delete(profileDir);
+    return { token: renewal.login.accessToken, runnerDown: false };
+  }
+  logger.warn({ action: "account.usage", profileDir }, "login renewal failed");
+  unrenewable.set(profileDir, login.expiresAt!);
+  return { token: login.accessToken, runnerDown: false };
 }
 
 /** One HTTPS call. The token is a parameter and dies with the frame. */
@@ -420,12 +443,21 @@ async function probeViaInference(token: string, at: number): Promise<AccountUsag
 }
 
 /**
- * Usage of ONE account, cache first.
+ * Usage of ONE account, cache first; a caller arriving while a read is under way waits for it.
  *
  * Returns `{ result, called }` so the serial walk in `allAccountsUsage` only pauses when a real
  * HTTPS call happened — a listing served entirely from cache is instant.
  */
-async function usageFor(slug: string | undefined): Promise<{ result: AccountUsage; called: boolean }> {
+function usageFor(slug: string | undefined): Promise<{ result: AccountUsage; called: boolean }> {
+  const key = usageKey(slug);
+  const pending = inflight.get(key);
+  if (pending) return pending;
+  const read = readUsage(slug).finally(() => inflight.delete(key));
+  inflight.set(key, read);
+  return read;
+}
+
+async function readUsage(slug: string | undefined): Promise<{ result: AccountUsage; called: boolean }> {
   const key = usageKey(slug);
   const now = Date.now();
   const entry = cache.get(key) ?? { freshUntil: 0, strikes: 0, blockedUntil: 0 };
