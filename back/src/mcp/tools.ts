@@ -41,8 +41,12 @@ const reviewRound = z.number().int().min(1).max(MAX_ROUNDS).describe("the review
 const reviewHeadSha = z.string().regex(HEAD_SHA_RE, "the full sha of `git rev-parse HEAD`")
   .describe("full sha of `git rev-parse HEAD` after you finished (40 hex chars)");
 export const reviewFinding = z.object({
-  severity: z.enum(["blocking", "suggestion", "question", "refuted"])
-    .describe("blocking = only with proof | suggestion | question = a risk you are not sure about (a human decides) | refuted"),
+  severity: z.enum(["blocking", "improvement", "suggestion", "question", "refuted"])
+    .describe(
+      "blocking = a bug, only with proof (the author fixes it on its own) | improvement = a change in a file the PR " +
+        "touches that keeps rules and behavior (the author applies it on its own; needs `file`) | suggestion = optional, " +
+        "a person chooses | question = fixing it needs a decision on intent or product (a person decides) | refuted",
+    ),
   title: z.string().min(1).max(300).describe("short label of the finding (one line)"),
   problem: z.string().max(2000).optional()
     .describe("the problem in plain words for someone who will not open the code: what is wrong and what happens if it stays"),
@@ -65,8 +69,10 @@ export const reviewFinding = z.object({
   if (f.severity !== "refuted" && !f.problem?.trim()) {
     ctx.addIssue({ code: "custom", path: ["problem"], message: "problem is required: what is wrong and what happens if it stays, in plain words" });
   }
-  if ((f.severity === "blocking" || f.severity === "suggestion") && !f.fix?.trim()) {
-    ctx.addIssue({ code: "custom", path: ["fix"], message: "fix is required for blocking and suggestion: how to solve it, concretely" });
+  if ((f.severity === "blocking" || f.severity === "improvement" || f.severity === "suggestion") && !f.fix?.trim()) {
+    ctx.addIssue({
+      code: "custom", path: ["fix"], message: "fix is required for blocking, improvement and suggestion: how to solve it, concretely",
+    });
   }
 });
 
@@ -444,8 +450,9 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "fix itself created (`introducedInRound` = the round). A blocking finding needs `proof` " +
         "(failing_test, rule or scenario), or the server downgrades it to a suggestion. Every finding is read " +
         "by a person deciding from the panel, without the code: `problem` (what is wrong and what happens if it " +
-        "stays) is required except on refuted, and `fix` (how to solve it, concretely) on blocking and " +
-        "suggestion — a finding with only a title is refused. Calling twice for " +
+        "stays) is required except on refuted, and `fix` (how to solve it, concretely) on blocking, improvement and " +
+        "suggestion — a finding with only a title is refused. An improvement without `file` is downgraded to a " +
+        "suggestion (the author applies it on its own only inside the PR). Calling twice for " +
         "the same round is harmless. This never merges; the merge is a human button. Returns the review's " +
         "phase and `next`, or { error }.",
       inputSchema: {
@@ -481,8 +488,9 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "the PR branch. Only the author card of that review may call it (`card` = YOUR OWN " +
         "$VIBEHUB_CARD_ID). One item per blocking finding: `fixed` (with the `commit` and a short `reply`) " +
         "or `contested` (the `reply` carries the proof: a test, a written repo rule, a file:line scenario). " +
-        "Suggestions may be answered too — `fixed` (commit), `contested` or `wontfix` (the `reply` says why; " +
-        "wontfix is for suggestions only) — in the fixing round AND later, also after the review is ready " +
+        "Every open improvement must be answered in the fixing round — `fixed` (commit) or `wontfix` (the `reply` " +
+        "says why). Suggestions may be answered too — `fixed` (commit), `contested` or `wontfix` (the `reply` says why; " +
+        "wontfix is for suggestions and improvements only) — in the fixing round AND later, also after the review is ready " +
         "(e.g. you were asked to apply them): that closes them on the panel without opening a round. " +
         "Answers to closed items are ignored. Calling twice is harmless. This never merges; the merge is a human button " +
         "(the merger's). Returns the review's phase, `next` and `answered` (how many items this call " +

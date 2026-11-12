@@ -15,7 +15,7 @@ import type { MessageOrigin } from "../chat/provenance.js";
 import { eventsAfter, onCardEvent, recordMessage, type CardEvent, type Severity } from "../events/cardEvents.js";
 import { logger } from "../../utils/logger.js";
 import {
-  MAX_ROUNDS, MERGE_GATE_AUTO_RETRIES, mergeGateSelfHealing, applyAuthorResponses, applyReviewerVerdicts, autoMergeEligible, waivedText, type ReviewOrders, blockingOpen, normalizeSubmittedFindings, pendingQuestions,
+  MAX_ROUNDS, MERGE_GATE_AUTO_RETRIES, mergeGateSelfHealing, applyAuthorResponses, applyReviewerVerdicts, autoMergeEligible, waivedText, type ReviewOrders, blockingOpen, normalizeSubmittedFindings, pendingImprovements, pendingQuestions,
   phaseAfterReviewerRound,
   type AuthorAnswerStatus, type Finding, type FindingStatus, type Review, type ReviewEvent, type ReviewEventItem, type ReviewPhase,
   type SubmittedFinding,
@@ -486,8 +486,11 @@ function outcomeNote(r: Review): string {
   const waiting = pendingQuestions(r.findings).length;
   const questions = waiting ? ` ${waiting} dúvida(s) esperam o revisor humano.` : "";
   switch (r.phase) {
-    case "fixing":
-      return `${blocking} bloqueante(s) em aberto: a lista vai ao autor.${questions}`;
+    case "fixing": {
+      const improvements = pendingImprovements(r.findings).length;
+      const applies = improvements ? ` e ${improvements} melhoria(s) que ele aplica sozinho` : "";
+      return `${blocking} bloqueante(s) em aberto${applies}: a lista vai ao autor.${questions}`;
+    }
     case "ready":
       return autoMergeEligible(r)
         ? `${waivedText(r) ? `Sem bloqueante (${waivedText(r)})` : "Sem nada em aberto"}: pronto, e o merge sai sozinho.`
@@ -770,9 +773,9 @@ async function authorReview(authorCardId: string, reviewId?: string): Promise<Re
 type AuthorAnswer = { id: string; status: AuthorAnswerStatus; commit?: string; reply: string };
 const AUTHOR_ANSWERS: ReadonlySet<string> = new Set<AuthorAnswerStatus>(["fixed", "contested", "wontfix"]);
 
-/** Sugestão que ainda aceita resposta do autor: não foi retirada nem aceita como risco por ninguém. */
+/** Sugestão ou melhoria que ainda aceita resposta do autor: não foi retirada nem aceita como risco por ninguém. */
 const answerableSuggestion = (f: Finding): boolean =>
-  f.severity === "suggestion" && f.status !== "dropped" && f.status !== "accepted_risk";
+  (f.severity === "suggestion" || f.severity === "improvement") && f.status !== "dropped" && f.status !== "accepted_risk";
 
 /** Dúvida que o autor pode resolver ou explicar: nenhum humano decidiu, e ela segue em pé. */
 const answerableQuestion = (f: Finding): boolean => pendingQuestions([f]).length > 0;
@@ -819,6 +822,15 @@ export async function submitAuthorResponse(
     );
   }
   const fresh = (r: Review) => r.phase === "fixing" && payload.round === r.round && r.lastRespondRound !== payload.round;
+  // A melhoria é a vez do autor: a rodada que fechasse sem resposta a ela a deixaria pendente, e a fase
+  // seguinte daria a vez ao autor de novo pela mesma melhoria. Quem responde a rodada responde a todas.
+  const skipped = fresh(review) ? pendingImprovements(review.findings).filter((f) => !answeredIds.has(f.id)).map((f) => f.id) : [];
+  if (skipped.length) {
+    throw new Error(
+      `melhoria_sem_resposta: ${skipped.join(", ")} precisa de resposta nesta mesma chamada ` +
+        "(fixed com o commit, ou wontfix com o motivo)",
+    );
+  }
   // Na rodada vale o que bloqueia e as sugestões; fora dela, só as sugestões. O resto vai ao log.
   const answerableIn = (r: Review) => {
     const round = fresh(r);

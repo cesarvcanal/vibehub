@@ -2342,6 +2342,90 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
   });
 });
 
+describe("melhoria autônoma: o autor aplica sem esperar ninguém", () => {
+  const IMPROVEMENT: SubmittedFinding = {
+    severity: "improvement", title: "laço duplicado no login", file: "src/auth.ts", line: 30,
+    problem: "o mesmo laço aparece duas vezes", fix: "extrair para uma função no mesmo arquivo",
+  };
+
+  it("rodada só com melhoria vai direto ao autor, sem dúvida nem aviso a ninguém", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [IMPROVEMENT], headSha: SHA1, summary: "r1" });
+    expect(after).toMatchObject({ phase: "fixing", round: 1 });
+    expect(send.mock.calls.at(-1)![0]).toBe(author.id);
+    expect(lastText()).toContain("Melhorias autônomas (aplique agora, sem esperar ninguém");
+    expect(lastText()).toContain("laço duplicado no login");
+  });
+
+  it("o autor responde toda melhoria na rodada; a que falta recusa a resposta sem mexer em nada", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER, IMPROVEMENT], headSha: SHA1, summary: "r1" });
+    await expect(o.orch.submitAuthorResponse(author.id, {
+      round: 1, items: [{ id: "f1", status: "fixed", commit: "c1", reply: "feito" }], headSha: SHA2,
+    })).rejects.toThrow(/melhoria_sem_resposta: f2/);
+    expect(await o.store.getReview(review.id)).toMatchObject({ phase: "fixing", round: 1 });
+
+    const after = await o.orch.submitAuthorResponse(author.id, {
+      round: 1,
+      items: [
+        { id: "f1", status: "fixed", commit: "c1", reply: "feito" },
+        { id: "f2", status: "wontfix", reply: "extrair muda a ordem do log, que é contrato" },
+      ],
+      headSha: SHA2,
+    });
+    expect(after).toMatchObject({ phase: "reviewing", round: 2 });
+    expect(after.findings[1]).toMatchObject({ status: "wontfix", authorReply: "extrair muda a ordem do log, que é contrato" });
+    expect(lastText()).toContain("Melhorias que o autor respondeu");
+  });
+
+  it("aplicada e conferida, a revisão fica pronta e o merge sai sem ninguém", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [IMPROVEMENT], headSha: SHA1, summary: "r1" });
+    await o.orch.submitAuthorResponse(author.id, {
+      round: 1, items: [{ id: "f1", status: "fixed", commit: "c1", reply: "extraí" }], headSha: SHA2,
+    });
+    const ready = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 2, findings: [], verdicts: [{ id: "f1", status: "fixed" }], headSha: SHA2, summary: "ok",
+    });
+    expect(ready.phase).toBe("ready");
+    expect(ready.findings[0]).toMatchObject({ severity: "improvement", status: "fixed" });
+  });
+
+  it("melhoria sem arquivo do PR não vai ao autor: vira sugestão opcional e a revisão fica pronta", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    const { file: _file, line: _line, ...loose } = IMPROVEMENT;
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [loose], headSha: SHA1, summary: "r1" });
+    expect(after.phase).toBe("ready");
+    expect(after.findings[0]!.severity).toBe("suggestion");
+  });
+
+  it("na porta MCP, melhoria entra no enum e exige como resolver", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    const { registerMaestroTools } = await import("../../mcp/tools.js");
+    const server = new McpServer({ name: "t", version: "1" });
+    registerMaestroTools(server, "card");
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "agent", version: "1" });
+    await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
+    const call = async (args: Record<string, unknown>) => {
+      const res = await client.callTool({ name: "vibehub_review_submit", arguments: args });
+      return { isError: res.isError === true, text: (res.content as { text: string }[])[0]!.text };
+    };
+    const base = { card: review.reviewerCardId, round: 1, headSha: SHA1, summary: "x" };
+    const noFix = await call({ ...base, findings: [{ severity: "improvement", title: "t", problem: "p", file: "src/a.ts" }] });
+    expect(noFix.isError).toBe(true);
+    expect(noFix.text).toMatch(/fix/);
+    const ok = await call({ ...base, findings: [IMPROVEMENT] });
+    expect(ok.isError).toBe(false);
+    expect(JSON.parse(ok.text)).toMatchObject({ phase: "fixing" });
+  });
+});
+
 describe("ferramentas MCP", () => {
   async function connect() {
     const { registerMaestroTools } = await import("../../mcp/tools.js");
