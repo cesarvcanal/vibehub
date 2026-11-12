@@ -26,7 +26,6 @@ import {
 import { acquireTranscriptMirror } from "../services/sdk/mirror.js";
 import { parseTypingFrame } from "../services/sdk/protocol.js";
 import { transcriptDirFor } from "../services/maestro/cardSession.js";
-import { effectiveAccountSlug } from "../services/board/registry.js";
 import { config } from "../config/env.js";
 import { hostExecutor } from "../runtime/host.js";
 import { logger } from "../utils/logger.js";
@@ -154,11 +153,10 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       let tuiJsonl = "";
       // Hoisted out of the probe: the manager needs it too — it is the root under which the harness
       // writes a workflow's journal (the fleet panel's only source, see services/sdk/workflow.ts).
-      const transcriptDir = transcriptDirFor(project, card, effectiveAccountSlug(card, project));
+      const transcriptDir = transcriptDirFor(project, card, registry.effectiveAccountSlug(card, project));
       try {
-        const dir = transcriptDir;
         const { stdout } = await hostExecutor().runScript(
-          buildLatestTranscriptScript(config.runner.container, dir),
+          buildLatestTranscriptScript(config.runner.container, transcriptDir),
           { timeoutMs: 15_000 },
         );
         ({ sessionId: latestSessionId, jsonl: tuiJsonl } = parseLatestTranscript(stdout));
@@ -175,11 +173,10 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       const replayedIds: string[] = [];
       let replayed: object[] = [];
       try {
-        const sdkHistory = await readHistory(card.id);
         // TUI-era user lines carry no sender; the provenance log (best-effort text+time match, see
         // services/chat/provenance.ts) restores who really typed them. SDK-era events need nothing:
         // their `from` is on the ndjson line itself.
-        await primeProvenance(card.id).catch(() => undefined);
+        const [sdkHistory] = await Promise.all([readHistory(card.id), primeProvenance(card.id).catch(() => undefined)]);
         const replay = mergeTranscriptReplay(tuiJsonl, sdkHistory).map((past) => {
           if (past.type !== "user" || past.from || !past.tid) return past;
           const from = matchOrigin(card.id, past.text, past.at ?? 0);
@@ -195,14 +192,13 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       }
       // WHO is typing on this socket — stamped on their messages so OTHER readers of this card see
       // the name (their own render unlabelled: the front compares it). The gate resolved them.
-      const wsOrigin = originOfUser((await requestUser(req))!);
+      const wsOrigin = originOfUser(author!);
       // The last two reads of the setup happen HERE, before anything is acquired: the spawn command
       // (used only when the card has no live driver) and the "/" menu remembered on disk (see below).
-      const command = await sdkDriverCommand(project, {
-        ...card,
-        resumeSessionId: resumeTargetFor(card, latestSessionId),
-      });
-      const rememberedCatalog = await readCardCatalog(card.id);
+      const [command, rememberedCatalog] = await Promise.all([
+        sdkDriverCommand(project, { ...card, resumeSessionId: resumeTargetFor(card, latestSessionId) }),
+        readCardCatalog(card.id),
+      ]);
       // THE TAB MAY BE GONE BY NOW. Everything above awaited for seconds with no `close` listener,
       // so a socket closed in that window already fired its `close` — nobody will ever hear it
       // again. Acquiring past this point (the external bus, a mirror ref, a driver, a slot in

@@ -71,20 +71,24 @@ async function assertClaudeAccountPatch(slug: string | null | undefined): Promis
 }
 
 /**
- * Applies the git fields of a patch, if it carries any. Does NOT validate: every caller runs
- * {@link assertGitPatch} first — the owner's PATCH before its first write of anything — and checking
- * again here only read the connection list a second time.
+ * Applies the git fields of a patch, if it carries any, and the Claude account when the OWNER's
+ * PATCH passes one (`claudeAccountSlug`; the self-service door never does) — in one write. Does NOT
+ * validate: every caller runs {@link assertGitPatch} (and the owner {@link assertClaudeAccountPatch})
+ * first — the owner's PATCH before its first write of anything — and checking again here only read
+ * the connection list a second time.
  */
 async function applyGitPatch(
-  userId: string, body: UserPatchBody,
+  userId: string, body: UserPatchBody, claudeAccountSlug?: string | null,
 ): Promise<{ touched: boolean; identity: UserGitIdentity | null }> {
   const { githubConnectionId, gitName, gitEmail } = body;
-  const touched = githubConnectionId !== undefined || gitName !== undefined || gitEmail !== undefined;
-  if (!touched) return { touched: false, identity: await getUserGit(userId) };
-  const identity = await setUserGit(userId, { githubConnectionId, gitName, gitEmail });
-  // The cards this person is ALREADY working pick it up now, not on their next open. Fire and
-  // forget: a wedged runner must not fail the save the screen is waiting on.
-  void reapplyIdentityForUser(userId).catch(() => undefined);
+  const gitTouched = githubConnectionId !== undefined || gitName !== undefined || gitEmail !== undefined;
+  if (!gitTouched && claudeAccountSlug === undefined) return { touched: false, identity: await getUserGit(userId) };
+  const identity = await setUserGit(userId, { githubConnectionId, gitName, gitEmail, claudeAccountSlug });
+  // The cards this person is ALREADY working pick the git identity up now, not on their next open.
+  // Fire and forget: a wedged runner must not fail the save the screen is waiting on. The Claude
+  // account is not re-applied: it is read when a card is CREATED, so the cards this person already
+  // has keep the account they were born with.
+  if (gitTouched) void reapplyIdentityForUser(userId).catch(() => undefined);
   return { touched: true, identity };
 }
 
@@ -139,12 +143,7 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
           // ...and what the revoked sessions already have open (terminals, tunnels) ends now too.
           await endRevokedSessionSockets(req.params.id);
         }
-        let git = await applyGitPatch(req.params.id, body);
-        if (body.claudeAccountSlug !== undefined) {
-          // No re-application to live cards: the account is read when a card is CREATED, so the
-          // cards this person already has keep the account they were born with.
-          git = { touched: true, identity: await setUserGit(req.params.id, { claudeAccountSlug: body.claudeAccountSlug }) };
-        }
+        const git = await applyGitPatch(req.params.id, body, body.claudeAccountSlug);
         const user = await findUser(req.params.id);
         if (!user) return await reply.code(404).send({ error: "user not found" });
         logger.info(

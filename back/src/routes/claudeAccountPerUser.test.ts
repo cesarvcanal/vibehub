@@ -98,6 +98,22 @@ describe("o owner liga cada pessoa a uma conta Claude", () => {
     expect(list.json().users.find((u: { id: string }) => u.id === albert.id).git.claudeAccountSlug).toBe(slug);
   });
 
+  it("um PATCH com identidade git E conta grava as duas de uma vez", async () => {
+    const owner = await signUpOwner();
+    const albert = await addUser(owner, "albert", "owner");
+    const slug = await createAccount(owner, "albert");
+
+    const res = await app.inject({
+      method: "PATCH", url: `/api/users/${albert.id}`, headers: { cookie: owner },
+      payload: { gitName: "Albert R", gitEmail: "albert@example.com", claudeAccountSlug: slug },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().git).toMatchObject({ gitName: "Albert R", gitEmail: "albert@example.com", claudeAccountSlug: slug });
+    const list = await app.inject({ method: "GET", url: "/api/users", headers: { cookie: owner } });
+    expect(list.json().users.find((u: { id: string }) => u.id === albert.id).git)
+      .toMatchObject({ gitName: "Albert R", gitEmail: "albert@example.com", claudeAccountSlug: slug });
+  });
+
   it("recusa conta que não existe e não grava nada", async () => {
     const owner = await signUpOwner();
     const albert = await addUser(owner, "albert", "owner");
