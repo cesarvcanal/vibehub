@@ -1,8 +1,9 @@
 import { randomBytes, createCipheriv, createDecipheriv, scryptSync } from "node:crypto";
-import { readFile, writeFile, mkdir, chmod, rename } from "node:fs/promises";
+import { readFile, writeFile, mkdir, chmod } from "node:fs/promises";
 import { dirname } from "node:path";
 import { config, dataPath } from "../config/env.js";
 import { logger } from "../utils/logger.js";
+import { writeFileAtomic } from "../store/atomicWrite.js";
 
 /**
  * LOCAL VAULT — every secret vibehub holds (Claude long-lived tokens, GitHub token, MCP env values,
@@ -106,10 +107,7 @@ async function readFromDisk(): Promise<VaultDoc> {
 async function persist(doc: VaultDoc): Promise<void> {
   const file = VAULT_FILE();
   await mkdir(dirname(file), { recursive: true });
-  const tmp = `${file}.tmp`;
-  await writeFile(tmp, encrypt(await masterKey(), JSON.stringify(doc)), { encoding: "utf8", mode: 0o600 });
-  await chmod(tmp, 0o600);
-  await rename(tmp, file);
+  await writeFileAtomic(file, encrypt(await masterKey(), JSON.stringify(doc)), 0o600);
   cache = doc;
 }
 

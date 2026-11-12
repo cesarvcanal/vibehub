@@ -1,13 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm, readFile, stat, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /**
  * `readFile` passa pelo disco de verdade, mas pode SEGURAR a próxima leitura depois de ler — é assim
  * que se reproduz um leitor lento que leu o cofre velho e só devolve depois que uma escrita gravou.
+ * `failOpen` faz o próximo `open` (o tmp da escrita atômica) falhar como um disco cheio.
  */
-const fsHooks = vi.hoisted(() => ({ hold: null as Promise<void> | null }));
+const fsHooks = vi.hoisted(() => ({ hold: null as Promise<void> | null, failOpen: false }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   const readFile = async (...args: Parameters<typeof actual.readFile>) => {
@@ -17,8 +18,15 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     if (hold) await hold;
     return out;
   };
+  const open = async (...args: Parameters<typeof actual.open>) => {
+    if (fsHooks.failOpen) {
+      fsHooks.failOpen = false;
+      throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+    }
+    return await actual.open(...args);
+  };
   // Cast: readFile is overloaded and the wrapper only re-exposes its last overload.
-  return { ...actual, readFile: readFile as typeof actual.readFile };
+  return { ...actual, readFile: readFile as typeof actual.readFile, open };
 });
 
 let dir = "";
@@ -34,6 +42,7 @@ async function freshVault(secretKey = "") {
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "vibehub-vault-"));
   fsHooks.hold = null;
+  fsHooks.failOpen = false;
 });
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
@@ -106,12 +115,10 @@ describe("local vault", () => {
   it("a write that fails to persist is not served nor written by the next one", async () => {
     const v = await freshVault();
     await v.secretSet("A_KEY", "a");
-    // A directory squatting the tmp path makes the write fail like a full disk would.
-    await mkdir(join(dir, "secrets.enc.tmp"));
-    await expect(v.secretSet("LOST_KEY", "lost")).rejects.toThrow();
+    fsHooks.failOpen = true;
+    await expect(v.secretSet("LOST_KEY", "lost")).rejects.toThrow("ENOSPC");
     expect(await v.secretGet("LOST_KEY")).toBeUndefined();
 
-    await rm(join(dir, "secrets.enc.tmp"), { recursive: true });
     await v.secretSet("B_KEY", "b");
     const reopened = await freshVault();
     expect((await reopened.secretList()).map((s) => s.key)).toEqual(["A_KEY", "B_KEY"]);
