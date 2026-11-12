@@ -758,45 +758,39 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
     } catch (e) {
       logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "GitHub connection token not resolved on open (ambient gh login)");
     }
-    // Managed MCPs: BEST-EFFORT on open, PER MCP (a missing secret must not stop a card from opening,
-    // nor take the built-ins and the other MCPs down with it — the "apply" button in the UI is the
-    // path that fails loudly and names what is missing).
-    let mcps: McpInjection[] = [];
-    try {
-      mcps = await resolveMcpInjections((name, e) => {
+    // The reads below are independent and each one BEST-EFFORT on open: they run together, and a
+    // failure is logged and leaves its value absent instead of stopping the card from opening.
+    const [mcps, brain, plugins, resolvedProjectBrain] = await Promise.all([
+      // Managed MCPs: PER MCP (a missing secret must not take the built-ins and the other MCPs down
+      // with it — the "apply" button in the UI is the path that fails loudly and names what is missing).
+      resolveMcpInjections((name, e) => {
         logger.warn({ card: card.worktreeSlug, mcp: name, detail: e.message }, "managed MCP skipped on open (continuing)");
-      });
-    } catch (e) {
-      logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "managed MCPs not injected on open (continuing)");
-    }
-    // The brain (global CLAUDE.md): BEST-EFFORT on open (malformed text must not stop a card from
-    // opening — the UI's save is the path that validates and fails loudly).
-    let brain: string | undefined;
-    try {
-      brain = await resolveBrainText();
-    } catch (e) {
-      logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "brain not seeded on open (continuing)");
-    }
-    // The plugins this install wants: best-effort like the brain — a store that cannot be read
-    // must not stop a card from opening.
-    let plugins: string[] | undefined;
-    try {
-      plugins = await enabledPlugins();
-    } catch (e) {
-      logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "plugins not installed on open (continuing)");
-    }
-    // The PROJECT brain (CLAUDE.local.md in the worktree): same best-effort rule as the global one.
-    let projectBrain: string | undefined;
-    try {
-      projectBrain = await resolveProjectBrainText(project.id);
-    } catch (e) {
-      logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "project brain not seeded on open (continuing)");
-    }
+      }).catch((e: Error): McpInjection[] => {
+        logger.warn({ card: card.worktreeSlug, detail: e.message }, "managed MCPs not injected on open (continuing)");
+        return [];
+      }),
+      // The brain (global CLAUDE.md): malformed text must not stop a card from opening — the UI's
+      // save is the path that validates and fails loudly.
+      resolveBrainText().catch((e: Error) => {
+        logger.warn({ card: card.worktreeSlug, detail: e.message }, "brain not seeded on open (continuing)");
+        return undefined;
+      }),
+      // The plugins this install wants: a store that cannot be read must not stop a card from opening.
+      enabledPlugins().catch((e: Error) => {
+        logger.warn({ card: card.worktreeSlug, detail: e.message }, "plugins not installed on open (continuing)");
+        return undefined;
+      }),
+      // The PROJECT brain (CLAUDE.local.md in the worktree): same rule as the global one.
+      resolveProjectBrainText(project.id).catch((e: Error) => {
+        logger.warn({ card: card.worktreeSlug, detail: e.message }, "project brain not seeded on open (continuing)");
+        return undefined;
+      }),
+    ]);
     // A LOCKED card carries its rule INTO the session: the notice goes above the project's own text,
     // so the agent reads "this card only opens a PR against <base>" as project memory instead of
     // discovering it when the delivery refuses to merge. Skipped when the resolve above FAILED
     // (undefined): writing only the notice there would wipe the project brain already on disk.
-    if (projectBrain !== undefined) projectBrain = brainTextForCard(projectBrain, card);
+    const projectBrain = resolvedProjectBrain !== undefined ? brainTextForCard(resolvedProjectBrain, card) : undefined;
 
     const script = buildOpenScript({
       containerName: config.runner.container,
