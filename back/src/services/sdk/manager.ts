@@ -60,11 +60,11 @@ import { logger } from "../../utils/logger.js";
 export const DRIVER_IDLE_MS = 15 * 60_000;
 
 /**
- * Por quanto tempo uma tarefa em segundo plano segura sozinha um driver que ninguém está olhando.
- * Uma espera de deploy dura minutos; um `npm run dev` ou `tail -f` em background não acaba nunca, e
- * sem teto ele mantinha o driver (e o card) acordado para sempre — antes desta regra o idle stop o
- * derrubava em 15 min. Passado o teto vale o idle normal. Com uma aba aberta o driver vive de
- * qualquer jeito, como sempre.
+ * For how long a background task alone holds up a driver nobody is watching.
+ * A deploy wait lasts minutes; an `npm run dev` or `tail -f` in the background never ends, and
+ * without a cap it kept the driver (and the card) awake forever — before this rule the idle stop
+ * knocked it down in 15 min. Past the cap the normal idle applies. With a tab open the driver lives
+ * anyway, as always.
  */
 export const BACKGROUND_HOLD_MAX_MS = 3 * 60 * 60_000;
 
@@ -79,29 +79,29 @@ const KEEPALIVE_MS = 25_000;
 export const TYPING_RELAY_MIN_MS = 1_000;
 
 /**
- * Quanto esperar, depois que a última tarefa em segundo plano termina, antes de dar o card como
- * ocioso. Quase sempre o CLI abre um turno sozinho para contar o resultado — e o `Stop` desse turno
- * é quem diz "aguardando". Só quando nenhum turno abriu nesse intervalo o manager fala por ele.
+ * How long to wait, after the last background task finishes, before taking the card as
+ * idle. Almost always the CLI opens a turn on its own to report the result — and that turn's `Stop`
+ * is the one that says "aguardando". Only when no turn opened within this interval does the manager speak for it.
  */
 const BACKGROUND_SETTLE_MS = 15_000;
 
-/** Quantos subagentes/tarefas a sessão lembra (as terminadas mais antigas saem primeiro). */
+/** How many subagents/tasks the session remembers (the oldest finished ones go first). */
 const TASKS_MAX = 200;
 
 /**
- * A RETOMADA PRECISA PEGAR. O CLI que volta de um processo morto com trabalho em segundo plano abre
- * primeiro um turno SÓ DELE — a notificação de que a tarefa morreu — e o fecha com um `result`
- * vazio; às vezes a continuação injetada some junto e nunca vira turno (produção, 2026-10-20, card
- * 4f4b: 16 min parado com "Retomando a sessão…" como última linha). Depois de um `result` sem nada
- * do agente, a retomada espera este tempo por um sinal de vida antes de reenviar a ordem. É também o
- * custo do engano oposto: um turno de verdade que leve mais que isto para dar o primeiro sinal (CPU
- * disputada, MCP subindo) recebe a ordem duas vezes — por isso folgado, e nunca mais de um reenvio.
- * Limite conhecido: se o CLI responder com TEXTO à própria notificação e engolir a continuação, esse
- * texto conta como "pegou" — em produção só se viu o enchimento "No response requested.".
+ * THE RESUME HAS TO TAKE. The CLI coming back from a dead process with background work first opens
+ * a turn of ITS OWN — the notification that the task died — and closes it with an empty
+ * `result`; sometimes the injected continuation vanishes with it and never becomes a turn (production, 2026-10-20, card
+ * 4f4b: 16 min stopped with "Retomando a sessão…" as the last line). After a `result` with nothing
+ * from the agent, the resume waits this long for a sign of life before resending the order. It is also the
+ * cost of the opposite mistake: a real turn that takes longer than this to give its first sign (contended
+ * CPU, MCP coming up) gets the order twice — hence generous, and never more than one resend.
+ * Known limit: if the CLI answers its own notification with TEXT and swallows the continuation, that
+ * text counts as "it took" — in production only the "No response requested." filler was seen.
  */
 export const RESUME_CONFIRM_MS = 45_000;
 
-/** Quem assina as falas que o painel injeta (retomada, reengate): o painel, nunca uma pessoa. */
+/** Who signs the lines the panel injects (resume, re-engage): the panel, never a person. */
 export const SYSTEM_ORIGIN: MessageOrigin = { kind: "system", name: "vibehub" };
 
 export interface DriverSession {
@@ -124,35 +124,35 @@ export interface DriverSession {
   /** Turns in flight or queued in the driver: +1 per user send, -1 per result. */
   activeTurns: number;
   /**
-   * As tarefas EM SEGUNDO PLANO vivas no CLI deste driver (o último `background_tasks`): trabalho
-   * que segue depois do `result` do turno. Estado da sessão, como o catálogo — reenviado a quem
-   * conecta depois, nunca gravado — e, enquanto não estiver vazio, o driver NÃO está ocioso.
+   * The BACKGROUND tasks alive in this driver's CLI (the last `background_tasks`): work
+   * that goes on after the turn's `result`. Session state, like the catalog — resent to whoever
+   * connects later, never recorded — and, while it is not empty, the driver is NOT idle.
    */
   backgroundTasks: BackgroundTaskInfo[];
   /**
-   * O estado de cada SUBAGENTE (ou tarefa) disparado por uma chamada, pelo id dessa chamada — o que
-   * a frota e a bandeja mostram (contadores, a frase do que ele faz agora, o fim). Estado da sessão:
-   * reenviado a quem conecta; só o FIM entra no histórico.
+   * The state of each SUBAGENT (or task) spawned by a call, by that call's id — what
+   * the fleet and the tray show (counters, the sentence of what it is doing now, the end). Session state:
+   * resent to whoever connects; only the END goes into the history.
    */
   tasks: Map<string, AgentTaskEvent>;
   /**
-   * O último aviso de limite do plano POR JANELA (`five_hour`, `seven_day`, …), como o CLI emitiu.
-   * Estado da sessão: reenviado a quem conecta depois, nunca gravado.
+   * The last plan limit warning PER WINDOW (`five_hour`, `seven_day`, …), as the CLI emitted it.
+   * Session state: resent to whoever connects later, never recorded.
    */
   rateLimits: Map<string, RateLimitInfo>;
   /**
-   * A última leitura de quanto da janela de contexto a sessão ocupa (o medidor ao lado do "está
-   * digitando"). Estado da sessão, como o aviso de limite: reenviado a quem conecta, nunca gravado.
+   * The last reading of how much of the context window the session takes (the meter next to the "está
+   * digitando"). Session state, like the limit warning: resent to whoever connects, never recorded.
    */
   contextUsage?: ContextUsageInfo;
   /**
-   * Quando a compactação em andamento começou (ms) — ausente fora dela. Estado, como o medidor: quem
-   * abre o card no meio do /compact recebe a barra contando desde aqui, e não um chat parado.
+   * When the compaction in progress started (ms) — absent outside of it. State, like the meter: whoever
+   * opens the card in the middle of the /compact gets the bar counting from here, and not a stopped chat.
    */
   compacting?: { startedAt: number; trigger?: "manual" | "auto" };
-  /** Quando o conjunto deixou de ser vazio — o início da contagem de `BACKGROUND_HOLD_MAX_MS`. */
+  /** When the set stopped being empty — the start of the `BACKGROUND_HOLD_MAX_MS` count. */
   backgroundSince?: number;
-  /** O acerto do status do card depois que o segundo plano esvaziou (ver BACKGROUND_SETTLE_MS). */
+  /** The settling of the card's status after the background emptied (see BACKGROUND_SETTLE_MS). */
   backgroundSettleTimer?: NodeJS.Timeout;
   /**
    * The session's command CATALOGUE (what the chat's "/" menu offers), as last reported by the
@@ -178,8 +178,8 @@ export interface DriverSession {
    */
   pendingInterruptNote?: string;
   /**
-   * QUEM PAROU o turno em andamento e como — guardado até o turno fechar. Uma pergunta que o driver
-   * encerra sem resposta nesse meio-tempo foi cancelada por essa pessoa, e o cartão diz isso.
+   * WHO STOPPED the turn in progress and how — kept until the turn closes. A question the driver
+   * closes without an answer in the meantime was cancelled by that person, and the card says so.
    */
   stopCause?: { by?: string; how: StopHow };
   /**
@@ -196,25 +196,25 @@ export interface DriverSession {
    */
   resumeWatch?: { marker: InflightMarker; reengaged: boolean; timer?: NodeJS.Timeout };
   /**
-   * Turnos seguidos que a API derrubou com falha passageira (rede, DNS, sobrecarga, 5xx) e a nova
-   * tentativa agendada (ver API_RETRY_DELAYS_MS). Um turno que fecha sem erro, ou uma mensagem da
-   * pessoa, zera a conta.
+   * Consecutive turns the API knocked down with a transient failure (network, DNS, overload, 5xx) and the new
+   * scheduled attempt (see API_RETRY_DELAYS_MS). A turn that closes without error, or a message from the
+   * person, resets the count.
    */
   apiRetry?: { failures: number; timer?: NodeJS.Timeout };
-  /** Contador de sinais de vida do agente principal (delta, raciocínio, ferramenta) — o vigia compara. */
+  /** Counter of the main agent's signs of life (delta, reasoning, tool) — the watcher compares it. */
   agentSignals: number;
-  /** O marcador de trabalho em voo que este manager gravou por último (null/ausente = nenhum). */
+  /** The in-flight work marker this manager wrote last (null/absent = none). */
   marker?: InflightMarker;
   /**
-   * Um turno que o PRÓPRIO CLI abriu — sem mensagem no stdin: a tarefa em segundo plano acabou, o
-   * retorno agendado venceu. Não passa por `activeTurns` (ninguém mandou nada), mas é trabalho em
-   * voo igual: foi num turno destes que o agente chamou o deploy e o card parou calado (produção,
-   * 2026-10-19). Fecha no `result` dele.
+   * A turn the CLI ITSELF opened — with no message on stdin: the background task ended, the
+   * scheduled wakeup fired. It does not go through `activeTurns` (nobody sent anything), but it is work in
+   * flight all the same: it was in one of these turns that the agent called the deploy and the card stopped silently (production,
+   * 2026-10-19). It closes on its `result`.
    */
   autonomousTurn: boolean;
-  /** O status que este driver gravou por último na bolinha do card (ver `syncBoardStatus`). */
+  /** The status this driver last wrote to the card's dot (see `syncBoardStatus`). */
   boardStatus?: registry.CardStatus;
-  /** Um retorno agendado (ScheduleWakeup) ainda por vencer: o motivo, como o agente o descreveu. */
+  /** A scheduled wakeup (ScheduleWakeup) still to fire: the reason, as the agent described it. */
   pendingWakeup?: string;
   /**
    * THE EDITS IN FLIGHT, oldest first — one entry per `edit_user` written to stdin, consumed in
@@ -226,7 +226,7 @@ export interface DriverSession {
    * words — the clean text after a rewind, the supersede wrapper when the rewind is refused — and
    * only the driver chooses. The mirror's dedupe is registered at send time with the wrapper, so
    * a rewind left the transcript line unrecognised and the terminal mirror published the corrected
-   * message a second time: one more bubble UNDER the one just corrected (produção, 2026-10-01).
+   * message a second time: one more bubble UNDER the one just corrected (production, 2026-10-01).
    *
    * A QUEUE and not one slot because nothing stops a second edit from going out before the first
    * is answered (with no turn running the screen dispatches an edit immediately). With one slot
@@ -235,91 +235,91 @@ export interface DriverSession {
    */
   rewinds: Array<{ original: string; text: string; first?: boolean }>;
   /**
-   * OS RECIBOS JÁ EMITIDOS — `cid` → o envio que o driver já leu (`AcceptedSend`): a promessa de
-   * durabilidade que o primeiro envio ganhou e a linha que ela grava.
+   * THE RECEIPTS ALREADY ISSUED — `cid` → the send the driver already read (`AcceptedSend`): the durability
+   * promise the first send earned and the line it writes.
    *
-   * O "Reenviar" da bolha manda as MESMAS palavras com o MESMO `cid`, de propósito: ele existe para
-   * o caso em que o recibo se perdeu, não a mensagem (o socket caiu entre o append e o `user_ack`,
-   * que então é descartado em silêncio; ou o prazo do navegador venceu enquanto esta conexão ainda
-   * estava sendo montada). Sem esta memória o reenvio virava uma mensagem NOVA: segunda linha no
-   * histórico, segundo turno, e o agente executando duas vezes uma instrução que pode ser
-   * destrutiva. Um cid já aceito não é uma mensagem — é a cobrança de um recibo, e é só o recibo
-   * que ele recebe de volta.
+   * The bubble's "Reenviar" sends the SAME words with the SAME `cid`, on purpose: it exists for
+   * the case where the receipt was lost, not the message (the socket dropped between the append and the `user_ack`,
+   * which is then silently discarded; or the browser's deadline expired while this connection was still
+   * being set up). Without this memory the resend became a NEW message: a second line in the
+   * history, a second turn, and the agent executing twice an instruction that may be
+   * destructive. An already accepted cid is not a message — it is the claim for a receipt, and the receipt is all
+   * it gets back.
    */
   acceptedCids: Map<string, AcceptedSend>;
-  /** Cancela a inscrição no espelho (conversa vinda da aba Terminal). Vive o que o driver viver. */
+  /** Cancels the mirror subscription (conversation coming from the Terminal tab). Lives as long as the driver lives. */
   offOutside?: () => void;
   /**
-   * AS PERGUNTAS QUE ESTE DRIVER FEZ — todo `user_question` que ele emitiu, encerrado ou não. O
-   * driver guarda as dele só em memória; um cartão pendente no histórico que NÃO está aqui é
-   * ÓRFÃO: quem o abriu morreu (deploy, crash, hibernação) e este driver nunca ouviu falar dele.
-   * Nunca sai daqui ao ser encerrada: o `question_result` do driver chega ao disco DEPOIS de chegar
-   * aqui, e uma leitura no meio desse caminho tomaria a pergunta dele por órfã (resultado duplicado).
+   * THE QUESTIONS THIS DRIVER ASKED — every `user_question` it emitted, closed or not. The
+   * driver keeps its own only in memory; a pending card in the history that is NOT here is an
+   * ORPHAN: whoever opened it died (deploy, crash, hibernation) and this driver never heard of it.
+   * It never leaves here when closed: the driver's `question_result` reaches the disk AFTER reaching
+   * here, and a read in the middle of that path would take its question for an orphan (duplicated result).
    */
   ownQuestions: Set<string>;
   /**
-   * O QUE CADA PESSOA JÁ MARCOU num cartão de pergunta ainda aberto, por id da pergunta → nome de
-   * quem escreve. Para quem abre o card no meio da resposta de outra pessoa ver o rascunho dela no
-   * primeiro quadro, e para a resposta levar junto o que os outros marcaram (`mergePeerAnswers`).
-   * Espelhado em DISCO (./questionDrafts.ts): um deploy no meio de quatro perguntas apagava tudo
-   * (produção, 2026-11-03). Fechar a aba NÃO apaga — só a pergunta encerrada (`forgetQuestionDrafts`).
+   * WHAT EACH PERSON HAS ALREADY TICKED on a still open question card, by question id → name of
+   * whoever is writing. So that whoever opens the card in the middle of another person's answer sees their draft in the
+   * first frame, and so the answer carries along what the others ticked (`mergePeerAnswers`).
+   * Mirrored ON DISK (./questionDrafts.ts): a deploy in the middle of four questions erased everything
+   * (production, 2026-11-03). Closing the tab does NOT erase — only the closed question does (`forgetQuestionDrafts`).
    */
   questionDrafts: Map<string, Map<string, StoredQuestionDraft>>;
   /**
-   * Cartões de pergunta ÓRFÃOS ainda abertos (de um driver que morreu: o deploy). Contam como decisão
-   * pendente igual às do driver vivo — o card acende o "precisa de você" até alguém responder.
+   * ORPHAN question cards still open (from a driver that died: the deploy). They count as a pending
+   * decision just like the live driver's — the card lights up "precisa de você" until someone answers.
    */
   orphanAsks: Set<string>;
-  /** Quantas abas abertas de cada pessoa estão mexendo em cada cartão — 0 = ela saiu ("ausente"). */
+  /** How many open tabs of each person are touching each card — 0 = they left ("ausente"). */
   draftLive: Map<string, Map<string, number>>;
-  /** Os rascunhos guardados em disco já entraram em `questionDrafts`. */
+  /** The drafts stored on disk have already gone into `questionDrafts`. */
   draftsLoaded: Promise<void>;
   /**
-   * OS CARTÕES DESTE DRIVER e onde cada um está. Uma segunda resposta a um cartão já respondido vira
-   * mensagem para o modelo comparar (`answerLate`), em vez de morrer como "no pending question". Só
-   * memória, com teto (`QUESTION_CARDS_MAX`).
+   * THIS DRIVER'S CARDS and where each one stands. A second answer to an already answered card becomes a
+   * message for the model to compare (`answerLate`), instead of dying as "no pending question". Only
+   * memory, with a cap (`QUESTION_CARDS_MAX`).
    */
   questionCards: Map<string, QuestionCard>;
   /**
-   * AS DECISÕES QUE O TURNO ESPERA AGORA — os ids de `user_question` e `permission_request` que este
-   * driver abriu e que ainda não voltaram (`question_result` / `permission`). Não vazio = o turno
-   * está parado numa pessoa, e o card mostra "precisa de você" em vez do "trabalhando" (ver
-   * `syncAwaitingDecision`). Esvazia quando o turno fecha e quando o driver morre.
+   * THE DECISIONS THE TURN IS WAITING FOR NOW — the ids of `user_question` and `permission_request` this
+   * driver opened that have not come back yet (`question_result` / `permission`). Not empty = the turn
+   * is stopped on a person, and the card shows "precisa de você" instead of "trabalhando" (see
+   * `syncAwaitingDecision`). It empties when the turn closes and when the driver dies.
    */
   openAsks: Set<string>;
-  /** O que este driver gravou por último em `awaitingDecisionAt` do card (true = carimbado). */
+  /** What this driver last wrote to the card's `awaitingDecisionAt` (true = stamped). */
   awaitingDecision: boolean;
-  /** Órfãs que este manager já ENCERROU: um clique tardio nelas recebe o erro, nunca silêncio. */
+  /** Orphans this manager has already CLOSED: a late click on them gets the error, never silence. */
   settledOrphans: Set<string>;
-  /** Órfãs com uma resposta A CAMINHO: o segundo clique (outra aba, duplo clique) vira nada. */
+  /** Orphans with an answer ON ITS WAY: the second click (another tab, double click) becomes nothing. */
   answeringOrphans: Set<string>;
   /**
-   * A varredura de órfãs por mensagem já rodou. Órfã é pergunta de um driver ANTERIOR: depois que
-   * este driver subiu nenhuma nova pode nascer, então uma varredura basta — sem ler o histórico
-   * inteiro a cada mensagem da vida da sessão.
+   * The per-message orphan sweep has already run. An orphan is a question from a PREVIOUS driver: after
+   * this driver came up no new one can be born, so one sweep is enough — without reading the whole
+   * history on every message of the session's life.
    */
   orphansSwept: boolean;
 }
 
 /**
- * Quantos recibos uma sessão lembra. Alto o bastante para cobrir qualquer reenvio que uma pessoa
- * ainda faria (o outbox do navegador guarda poucos), baixo o bastante para a memória não crescer
- * com a conversa. O mais antigo sai primeiro: um cid esquecido só volta a ser uma mensagem nova.
+ * How many receipts a session remembers. High enough to cover any resend a person
+ * would still make (the browser's outbox keeps few), low enough for the memory not to grow
+ * with the conversation. The oldest goes first: a forgotten cid simply becomes a new message again.
  */
 const ACCEPTED_CIDS_MAX = 256;
 
 /**
- * Um envio que o driver JÁ leu: a promessa de durabilidade do seu recibo e a linha do histórico que
- * ela tenta gravar. A linha fica guardada porque a gravação pode falhar (disco cheio) DEPOIS de o
- * modelo ter recebido a mensagem — e aí o reenvio desse cid é a hora de gravá-la de novo, nunca de
- * mandá-la outra vez ao driver (ver `chargeReceipt`).
+ * A send the driver has ALREADY read: its receipt's durability promise and the history line
+ * it tries to write. The line is kept because the write may fail (full disk) AFTER the
+ * model has received the message — and then the resend of that cid is the time to write it again, never to
+ * send it to the driver once more (see `chargeReceipt`).
  */
 interface AcceptedSend {
   persisted: Promise<boolean>;
   line: HistoryEvent;
 }
 
-/** Lembra o recibo deste envio, descartando os mais antigos. A ordem do `Map` é a de inserção. */
+/** Remembers this send's receipt, discarding the oldest ones. The `Map`'s order is insertion order. */
 function rememberCid(session: DriverSession, cid: string | undefined, sent: AcceptedSend): void {
   if (!cid) return;
   session.acceptedCids.set(cid, sent);
@@ -329,7 +329,7 @@ function rememberCid(session: DriverSession, cid: string | undefined, sent: Acce
 /**
  * What became of ONE client frame, so the socket that sent it can be TOLD.
  *
- * The bug this exists for (produção, 2026-09-17): a send whose driver had just been killed — the
+ * The bug this exists for (production, 2026-09-17): a send whose driver had just been killed — the
  * idle sweep hibernating a card someone was chatting in — was written into a dead stdin inside a
  * `try {} catch {}`, persisted to the history anyway, and answered with silence. On screen it was
  * a message "enviada" that spun forever; on the next F5 it was either a message nobody ever
@@ -401,34 +401,34 @@ export function isCardChatInUse(cardId: string): boolean {
 }
 
 /**
- * O driver está TRABALHANDO: um turno em voo ou na fila, OU uma tarefa em segundo plano viva (um
- * `sleep 200` de espera de deploy, um subagente). Esta segunda metade é o que faltava: o turno que
- * dispara a tarefa fecha na hora, e um driver "ocioso" sem ninguém na aba era desligado — matando o
- * trabalho que o Claude tinha acabado de dizer que estava esperando.
+ * The driver is WORKING: a turn in flight or queued, OR a live background task (a
+ * deploy-wait `sleep 200`, a subagent). This second half is what was missing: the turn that
+ * fires the task closes right away, and an "idle" driver with nobody in the tab was shut down — killing the
+ * work Claude had just said it was waiting for.
  */
 function isDriverBusy(session: Pick<DriverSession, "activeTurns" | "autonomousTurn" | "resumeWatch" | "backgroundTasks" | "backgroundSince">): boolean {
-  // A retomada que o vigia ainda espera conta (ver `turnRunning`): hibernar ou desligar por
-  // ociosidade nessa janela mataria justamente a retomada.
+  // The resume the watcher is still waiting for counts (see `turnRunning`): hibernating or shutting down for
+  // idleness in that window would kill precisely the resume.
   return turnRunning(session) || backgroundHoldLeft(session) > 0;
 }
 
 /**
- * HÁ UM TURNO RODANDO: o de alguém (contado) ou o que o PRÓPRIO CLI abriu (tarefa em segundo plano
- * terminou, retorno agendado venceu, a retomada pós-deploy seguindo sozinha). Uma regra só para
- * todo lugar que pergunta isso — o `ready` de quem conecta, o idle stop, o status do board. Contar só
- * `activeTurns` fazia o chat reaberto nascer "parado" com a IA trabalhando (produção, 2026-10-20).
+ * A TURN IS RUNNING: someone's (counted) or the one the CLI ITSELF opened (a background task
+ * finished, a scheduled wakeup fired, the post-deploy resume going on by itself). A single rule for
+ * every place that asks this — the `ready` of whoever connects, the idle stop, the board status. Counting only
+ * `activeTurns` made the reopened chat be born "stopped" with the AI working (production, 2026-10-20).
  */
 function isTurnInFlight(session: Pick<DriverSession, "activeTurns" | "autonomousTurn">): boolean {
   return session.activeTurns > 0 || session.autonomousTurn;
 }
 
 /**
- * O STATUS DO CARD acompanha o segundo plano (produção, 2026-10-20: o board mostrava "aguardando" com
- * a suíte rodando em background). Enquanto há tarefa viva, o `waiting` do hook `Stop` vale como
- * `working` (services/board/status.ts); este é o outro lado — as bordas que nenhum hook cobre:
- *  - o conjunto deixou de ser vazio: `working`, porque o `Stop` pode ter chegado ANTES deste evento;
- *  - esvaziou e, passado BACKGROUND_SETTLE_MS, nenhum turno abriu: `waiting`, porque nenhum `Stop`
- *    virá dizer que o Claude chegou ao prompt. Só quando o card ainda está `working`.
+ * THE CARD'S STATUS follows the background (production, 2026-10-20: the board showed "aguardando" with
+ * the suite running in the background). While there is a live task, the `Stop` hook's `waiting` counts as
+ * `working` (services/board/status.ts); this is the other side — the edges no hook covers:
+ *  - the set stopped being empty: `working`, because the `Stop` may have arrived BEFORE this event;
+ *  - it emptied and, after BACKGROUND_SETTLE_MS, no turn opened: `waiting`, because no `Stop`
+ *    will come to say Claude reached the prompt. Only when the card is still `working`.
  */
 function syncBackgroundStatus(session: DriverSession, hadTasks: boolean): void {
   const hasTasks = session.backgroundTasks.length > 0;
@@ -450,14 +450,14 @@ function syncBackgroundStatus(session: DriverSession, hadTasks: boolean): void {
   session.backgroundSettleTimer.unref?.();
 }
 
-/** Uma tarefa viva, dentro do teto, segura o card em `working` (ver services/board/status.ts). */
+/** A live task, within the cap, holds the card at `working` (see services/board/status.ts). */
 function driverHoldsBackgroundWork(cardId: string): boolean {
   const session = sessions.get(cardId);
   if (!session || session.closed) return false;
   return backgroundHoldLeft(session) > 0;
 }
 
-/** Quanto falta do teto em que as tarefas em segundo plano seguram o driver (0 = não seguram). */
+/** How much is left of the cap during which background tasks hold the driver (0 = they do not). */
 function backgroundHoldLeft(session: Pick<DriverSession, "backgroundTasks" | "backgroundSince">): number {
   if (session.backgroundTasks.length === 0 || session.backgroundSince === undefined) return 0;
   return Math.max(0, session.backgroundSince + BACKGROUND_HOLD_MAX_MS - Date.now());
@@ -475,20 +475,20 @@ export function driverActivity(cardId: string): DriverActivity {
 }
 
 /**
- * Um turno rodando neste driver — o mesmo "Trabalhando…" que o chat mostra. A retomada que o vigia
- * ainda espera conta: o `result` vazio do arranque não é o fim dela, e uma bolinha que piscasse
- * "aguardando" ali soltaria o aviso de turno terminado no meio da retomada.
+ * A turn running in this driver — the same "Trabalhando…" the chat shows. The resume the watcher
+ * is still waiting for counts: the boot's empty `result` is not its end, and a dot that blinked
+ * "aguardando" there would release the turn-ended notice in the middle of the resume.
  */
 function turnRunning(session: Pick<DriverSession, "activeTurns" | "autonomousTurn" | "resumeWatch" | "apiRetry">): boolean {
-  // A nova tentativa agendada depois de uma falha passageira da API também: o turno não acabou, a
-  // rede é que caiu no meio dele (ver API_RETRY_DELAYS_MS).
+  // The new attempt scheduled after a transient API failure too: the turn has not ended, it is the
+  // network that went down in the middle of it (see API_RETRY_DELAYS_MS).
   return isTurnInFlight(session) || session.resumeWatch !== undefined || session.apiRetry?.timer !== undefined;
 }
 
 /**
- * O driver do chat nativo deste card tem um turno rodando agora? Um `waiting` que chega com o turno
- * em voo é hook atrasado — o SessionStart de uma sessão retomada aterrissando depois do turno já
- * ter começado, ou o `Stop` correndo na frente do `result` — e não pode apagar a bolinha (ver
+ * Does this card's native chat driver have a turn running now? A `waiting` that arrives with the turn
+ * in flight is a late hook — the SessionStart of a resumed session landing after the turn has
+ * already started, or the `Stop` racing ahead of the `result` — and must not clear the dot (see
  * services/board/status.ts).
  */
 export function driverTurnRunning(cardId: string): boolean {
@@ -497,11 +497,11 @@ export function driverTurnRunning(cardId: string): boolean {
 }
 
 /**
- * A BOLINHA DO CARD segue o driver, em processo. Ela vivia só dos hooks do CLI — um curl de dentro
- * do container, com 3s de prazo — e um hook perdido (deploy do back, rede, driver morto sem `Stop`)
- * deixava o card cinza com o chat trabalhando, ou verde com o chat parado (produção, 2026-10-20). O
- * manager sabe exatamente quando um turno abre e fecha, então reporta ele mesmo, só quando muda —
- * pelo mesmo caminho dos hooks, que executa pausa/restart pendente e a fila no `waiting`.
+ * THE CARD'S DOT follows the driver, in process. It lived only on the CLI's hooks — a curl from inside
+ * the container, with a 3s deadline — and a lost hook (back deploy, network, driver dead without `Stop`)
+ * left the card grey with the chat working, or green with the chat stopped (production, 2026-10-20). The
+ * manager knows exactly when a turn opens and closes, so it reports it itself, only when it changes —
+ * through the same path as the hooks, which runs a pending pause/restart and the queue on `waiting`.
  */
 function syncBoardStatus(session: DriverSession, opts: { force?: boolean } = {}): void {
   if (session.closed && !opts.force) return;
@@ -514,12 +514,12 @@ function syncBoardStatus(session: DriverSession, opts: { force?: boolean } = {})
 }
 
 /**
- * O CARD ESPERA UMA DECISÃO: enquanto uma pergunta ou pedido de permissão deste driver estiver
- * aberto, o card carrega `awaitingDecisionAt` e o ícone vira o "precisa de você" âmbar — o turno
- * segue aberto (a bolinha continua `working` de propósito: o `waiting` entrega a fila e executa
- * pausa/restart pendente, que atropelariam o cartão aberto), e o spinner fazia a pessoa achar que o
- * Claude estava trabalhando. Grava só quando muda; `force` vale para um driver já fechado (a saída
- * dele tem de apagar o carimbo).
+ * THE CARD IS WAITING FOR A DECISION: while a question or permission request from this driver is
+ * open, the card carries `awaitingDecisionAt` and the icon turns into the amber "precisa de você" — the turn
+ * stays open (the dot remains `working` on purpose: `waiting` delivers the queue and runs a
+ * pending pause/restart, which would run over the open card), and the spinner made the person think
+ * Claude was working. Writes only when it changes; `force` applies to an already closed driver (its exit
+ * has to clear the stamp).
  */
 function syncAwaitingDecision(session: DriverSession, opts: { force?: boolean } = {}): void {
   if (session.closed && !opts.force) return;
@@ -530,7 +530,7 @@ function syncAwaitingDecision(session: DriverSession, opts: { force?: boolean } 
     .catch(() => { /* best-effort, como a bolinha */ });
 }
 
-/** O driver acabou: nenhuma decisão dele segue pendente — o carimbo do card sai junto. */
+/** The driver ended: none of its decisions stays pending — the card's stamp goes with it. */
 function dropOpenAsks(session: DriverSession): void {
   session.openAsks.clear();
   syncAwaitingDecision(session, { force: true });
@@ -544,15 +544,15 @@ function disableNagle(socket: WebSocket): void {
   try { raw?.setNoDelay?.(true); } catch { /* the socket is already closing */ }
 }
 
-/** Cartões de pergunta com rascunho guardado, no máximo — o mais antigo sai primeiro. */
+/** Question cards with a stored draft, at most — the oldest goes first. */
 const QUESTION_DRAFTS_MAX = 20;
-/** Cartões deste driver lembrados para a resposta tardia, no máximo — o mais antigo sai primeiro. */
+/** This driver's cards remembered for the late answer, at most — the oldest goes first. */
 const QUESTION_CARDS_MAX = 50;
 
 /**
- * Um cartão de pergunta deste driver. `state`: "open" = ninguém respondeu; "answered" = uma resposta
- * foi ao driver (`by` = quem, null sem nome); "closed" = encerrou SEM resposta (prazo, mensagem,
- * parada) — aí não há com o que comparar, e a resposta tardia segue o caminho de sempre.
+ * A question card of this driver. `state`: "open" = nobody answered; "answered" = an answer
+ * went to the driver (`by` = who, null with no name); "closed" = closed WITHOUT an answer (deadline, message,
+ * stop) — then there is nothing to compare with, and the late answer follows the usual path.
  */
 interface QuestionCard {
   questions: UserQuestionItem[];
@@ -560,12 +560,12 @@ interface QuestionCard {
   by?: string | null;
 }
 
-/** Abre espaço para mais uma chave: o mais antigo sai quando o mapa está no teto. */
+/** Makes room for one more key: the oldest goes when the map is at the cap. */
 function makeRoom(map: Map<string, unknown>, max: number): void {
   dropOldest(map, max - 1);
 }
 
-/** A pergunta encerrou: o rascunho de ninguém importa mais (a tela já desenha o cartão respondido). */
+/** The question closed: nobody's draft matters any more (the screen already draws the answered card). */
 function forgetQuestionDrafts(session: DriverSession, questionId: string): void {
   if (!session.questionDrafts.delete(questionId)) return;
   session.draftLive.delete(questionId);
@@ -576,14 +576,14 @@ function persistQuestionDrafts(session: DriverSession): void {
   void saveQuestionDrafts(session.cardId, session.questionDrafts);
 }
 
-/** Alguma aba de `name` está mexendo neste cartão agora. */
+/** Some tab of `name` is touching this card right now. */
 function draftIsLive(session: DriverSession, id: string, name: string): boolean {
   return (session.draftLive.get(id)?.get(name) ?? 0) > 0;
 }
 
 /**
- * O frame que conta às outras abas o rascunho de `name` num cartão (rascunho vazio = apagou).
- * `away`: a pessoa fechou a aba — o que ela marcou continua valendo, só não está respondendo agora.
+ * The frame that tells the other tabs `name`'s draft on a card (empty draft = erased).
+ * `away`: the person closed the tab — what they ticked still counts, they are just not answering right now.
  */
 function peerQuestionDraftFrame(id: string, name: string, draft: StoredQuestionDraft, away = false): object {
   return {
@@ -594,8 +594,8 @@ function peerQuestionDraftFrame(id: string, name: string, draft: StoredQuestionD
 }
 
 /**
- * O que estava em disco entra na sessão nova — sem passar por cima do que já chegou nela — e vai às
- * abas já conectadas (elas chegaram antes da leitura terminar).
+ * What was on disk goes into the new session — without running over what already arrived in it — and goes to the
+ * already connected tabs (they arrived before the read finished).
  */
 async function restoreQuestionDrafts(session: DriverSession): Promise<void> {
   const stored = await loadQuestionDrafts(session.cardId);
@@ -639,7 +639,7 @@ function emitSystemNote(session: DriverSession, text: string): void {
   void appendHistory(session.cardId, { type: "system_note", text, at });
 }
 
-/** Todo relógio da sessão, numa saída só (close, stop, shutdown): nenhum sobrevive ao driver. */
+/** Every clock of the session, in a single exit (close, stop, shutdown): none survives the driver. */
 function clearSessionTimers(session: DriverSession): void {
   clearIdleTimer(session);
   clearTimeout(session.backgroundSettleTimer);
@@ -661,8 +661,8 @@ function clearIdleTimer(session: DriverSession): void {
 function maybeScheduleIdleStop(session: DriverSession): void {
   if (session.closed || session.sockets.size > 0 || isTurnInFlight(session)) return;
   if (session.idleTimer) return;
-  // Uma tarefa em segundo plano viva adia o relógio até o fim do teto dela (ver
-  // BACKGROUND_HOLD_MAX_MS) — e só então começam os 15 min de ociosidade.
+  // A live background task postpones the clock until the end of its cap (see
+  // BACKGROUND_HOLD_MAX_MS) — and only then do the 15 min of idleness start.
   session.idleTimer = setTimeout(() => {
     session.idleTimer = null;
     if (session.closed || session.sockets.size > 0 || isDriverBusy(session)) return;
@@ -689,7 +689,7 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
   if (event.type === "assistant_text" || event.type === "tool_use" || event.type === "thinking") {
     noteAgentWork(session, event);
   }
-  // Só o PRINCIPAL prova que a retomada pegou — um subagente falando não é o agente continuando.
+  // Only the MAIN agent proves the resume took — a subagent talking is not the agent continuing.
   if (session.resumeWatch && !(event as { parentToolUseId?: unknown }).parentToolUseId) {
     if (AGENT_SIGNALS.has(event.type)) session.agentSignals += 1;
     if (event.type === "assistant_text" || event.type === "tool_use") {
@@ -712,7 +712,7 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
     });
   }
   if (event.type === "effort_default") {
-    // Estado do pill, não conversa: fica na sessão e não segue para histórico nem navegador.
+    // Pill state, not conversation: it stays in the session and goes on neither to the history nor to the browser.
     const level = (event as { effort?: unknown }).effort;
     if (typeof level === "string" && registry.isValidEffort(level)) session.defaultEffort = level;
     return;
@@ -730,17 +730,17 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
       commands: withBtwCommand(normalizeSlashCommands(raw.commands, { skills: raw.skills, plugins: raw.plugins, hidden: raw.hidden })),
     };
     session.catalog = event;
-    // EM DISCO também: o driver anuncia o catálogo uma vez, ao subir, e o menu "/" precisa existir
-    // no INSTANTE do connect — não depois do boot do driver seguinte (ver ./catalog.ts).
+    // ON DISK too: the driver announces the catalog once, on boot, and the "/" menu needs to exist
+    // at the INSTANT of the connect — not after the next driver's boot (see ./catalog.ts).
     void writeCardCatalog(session.cardId, event);
   }
-  // A FROTA FICOU VISÍVEL. A tool `Workflow` devolve na hora e trabalha em segundo plano: o turno
-  // acaba, o modelo diz "te trago quando voltar" e o chat ficava mudo por minutos — lido do outro
-  // lado como "ele terminou" (produção, 2026-10-02). A sondagem do diário começa aqui, no instante
-  // da chamada, e se encerra sozinha (ver services/sdk/workflow.ts): é ela quem alimenta o painel.
+  // THE FLEET BECAME VISIBLE. The `Workflow` tool returns right away and works in the background: the turn
+  // ends, the model says "te trago quando voltar" and the chat went silent for minutes — read on the other
+  // side as "it finished" (production, 2026-10-02). The journal probe starts here, at the instant
+  // of the call, and closes on its own (see services/sdk/workflow.ts): it is what feeds the panel.
   if (event.type === "tool_use" && event.name === "Workflow") startWorkflowWatch(session);
   if (event.type === "tool_result") {
-    // O resultado CRU (texto + estruturado capados) vira o RESUMO da linha; o cru não sai daqui.
+    // The RAW result (capped text + structured) becomes the line's SUMMARY; the raw one does not leave here.
     event = toolResultEvent(event as RawToolResultEvent) as unknown as DriverEvent;
   }
   if (event.type === "task_started" || event.type === "task_progress" || event.type === "task_notification") {
@@ -749,7 +749,7 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
     const merged = key ? mergeTaskEvent(session.tasks.get(key), { ...raw, toolUseId: key }, Date.now()) : null;
     if (!merged) return;
     session.tasks.set(merged.toolUseId, merged);
-    // Teto: uma sessão longa dispara centenas de tarefas; as terminadas mais antigas saem primeiro.
+    // Cap: a long session fires hundreds of tasks; the oldest finished ones go first.
     if (session.tasks.size > TASKS_MAX) {
       for (const [id, task] of session.tasks) {
         if (session.tasks.size <= TASKS_MAX) break;
@@ -759,8 +759,8 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
     event = taskSnapshot(merged, Date.now()) as unknown as DriverEvent;
   }
   if (event.type === "background_tasks") {
-    // Normalizado AQUI, no lado que fala com o navegador (como o catálogo): o que sai é só o que a
-    // tela desenha, e um item torto do driver não derruba a aba de ninguém.
+    // Normalised HERE, on the side that talks to the browser (like the catalog): what goes out is only what the
+    // screen draws, and a crooked item from the driver does not knock down anybody's tab.
     const raw = (event as { tasks?: unknown }).tasks;
     const tasks: BackgroundTaskInfo[] = Array.isArray(raw)
       ? raw
@@ -790,16 +790,16 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
     session.backgroundTasks = tasks;
     syncBackgroundStatus(session, hadTasks);
     syncInflightMarker(session);
-    // O relógio do idle é refeito a cada mudança: com tarefa viva ele espera o teto dela; quando a
-    // última termina sem turno em voo e sem ninguém olhando, AGORA começam os 15 min — o mesmo
-    // ponto em que um `result` o arma.
+    // The idle clock is redone on every change: with a live task it waits for that task's cap; when the
+    // last one ends with no turn in flight and nobody watching, NOW the 15 min start — the same
+    // point at which a `result` arms it.
     clearIdleTimer(session);
     maybeScheduleIdleStop(session);
   }
   if (event.type === "error" && session.autonomousTurn && session.activeTurns === 0) {
-    // O stream caiu no meio de um turno que ninguém mandou: o driver fecha esse turno com um
-    // `result` aborted, mas um erro sem ele (driver antigo, stream que morreu calado) não pode
-    // deixar o card "trabalhando" para sempre — sem idle stop e com o marcador de deploy preso.
+    // The stream dropped in the middle of a turn nobody sent: the driver closes that turn with an
+    // aborted `result`, but an error without it (an old driver, a stream that died silently) must not
+    // leave the card "trabalhando" forever — with no idle stop and with the deploy marker stuck.
     session.autonomousTurn = false;
     syncInflightMarker(session);
     maybeScheduleIdleStop(session);
@@ -836,25 +836,25 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
   let interruptNoteToFlush: string | undefined;
   if (event.type === "result") {
     session.activeTurns = Math.max(0, session.activeTurns - 1);
-    // O driver já fecha a compactação antes do result; isto é a rede para um driver antigo.
+    // The driver already closes the compaction before the result; this is the safety net for an old driver.
     session.compacting = undefined;
     interruptNoteToFlush = session.pendingInterruptNote;
     session.pendingInterruptNote = undefined;
     session.autonomousTurn = false;
-    // O turno fechou: nada mais espera resposta dentro dele (o driver encerra os cartões que o
-    // turno deixou). Um turno ainda em voo (envio na fila) segue com os seus.
+    // The turn closed: nothing else waits for an answer inside it (the driver closes the cards the
+    // turn left). A turn still in flight (a queued send) keeps its own.
     if (!isTurnInFlight(session)) {
       session.openAsks.clear();
       session.stopCause = undefined;
       syncAwaitingDecision(session);
-      // A conversa parou: se a última fala do agente é uma pergunta para a pessoa, o card diz isso
-      // (o "precisa de você" da bandeja de decisões, no ícone do board).
+      // The conversation stopped: if the agent's last speech is a question for the person, the card says so
+      // (the decisions tray's "precisa de você", on the board icon).
       void syncPendingQuestion(session.cardId);
     }
-    // Uma retomada que fechou sem o agente produzir nada ainda não pegou: o vigia decide (ver
-    // RESUME_CONFIRM_MS) — e o marcador fica, para o próximo deploy saber dela.
+    // A resume that closed without the agent producing anything has not taken yet: the watcher decides (see
+    // RESUME_CONFIRM_MS) — and the marker stays, so the next deploy knows about it.
     if (session.resumeWatch && !isTurnInFlight(session)) armResumeWatch(session);
-    // Antes do marcador e da bolinha: a nova tentativa agendada mantém os dois como turno em voo.
+    // Before the marker and the dot: the new scheduled attempt keeps both as a turn in flight.
     noteApiOutcome(session, event);
     // The last turn in flight CLOSED: the durable marker comes off — unless work goes on in the
     // background (a task, a scheduled wake-up), which a deploy would kill just the same: then it
@@ -873,14 +873,14 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
       // it recognises as the driver's own: without this key it republished the corrected message
       // as if the terminal had just said it, drawing a SECOND bubble under the corrected one.
       if (edit.text !== "") noteDriverEventFor(session.cardId, { type: "user", text: edit.text });
-      // A nota do corte ("…a resposta acima ficou pela metade") perde o assunto: o rebobinar
-      // APAGOU essa meia resposta. Quase sempre ela já saiu antes daqui — o `endStream` do driver
-      // ESPERA o `result` do stream morrendo antes de anunciar o rebobinar, então o result (e a
-      // nota com ele) vem primeiro, e quem a tira é o corte do log (`dropOrphanInterruptNotes`).
-      // Isto cobre a outra janela: o stream que não solta dentro do prazo do `endStream`, e o
-      // `rewound` chega na frente — evita escrever uma linha que já nasceria órfã. Dentro do `if`
-      // do dono, como o corte: um frame que não pertence a edição nenhuma não apaga a nota de uma
-      // parada que foi de outra pessoa.
+      // The cut note ("…a resposta acima ficou pela metade") loses its subject: the rewind
+      // ERASED that half answer. Almost always it has already gone out before this point — the driver's `endStream`
+      // WAITS for the dying stream's `result` before announcing the rewind, so the result (and the
+      // note with it) comes first, and the one that removes it is the log cut (`dropOrphanInterruptNotes`).
+      // This covers the other window: the stream that does not let go within `endStream`'s deadline, and the
+      // `rewound` arrives first — it avoids writing a line that would already be born orphaned. Inside the owner's
+      // `if`, like the cut: a frame that belongs to no edit does not erase the note of a
+      // stop that was someone else's.
       session.pendingInterruptNote = undefined;
       // Which row is the edit's new message, for the screen's cut (see `RewoundEvent.text`).
       event = edit.first ? { ...event, text: edit.text, first: true } : { ...event, text: edit.text };
@@ -915,11 +915,11 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
         });
       }
     } else if (event.ok) {
-      // Um `ok: true` SEM dono (driver repetindo, frame atrasado) não chega à tela: lá ele não é
-      // inofensivo como aqui. `dropRewoundRows` corta da última linha "editada" até a última
-      // mensagem — e uma edição RECUSADA deixa essa marca para sempre —, então um frame perdido
-      // apagaria turnos inteiros que o modelo ainda tem. O log já se protege sozinho (sem dono,
-      // sem corte); a tela não tem como.
+      // An `ok: true` WITH NO OWNER (a driver repeating itself, a late frame) does not reach the screen: there it is not
+      // harmless as it is here. `dropRewoundRows` cuts from the last "edited" line to the last
+      // message — and a REFUSED edit leaves that mark forever —, so a lost frame would
+      // erase whole turns the model still has. The log already protects itself (no owner,
+      // no cut); the screen has no way to.
       silenced = true;
       logger.warn(
         { audit: true, action: "sdk.rewind.orphan", card: session.label },
@@ -931,17 +931,17 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
     session.ownQuestions.add(event.id);
     makeRoom(session.questionCards, QUESTION_CARDS_MAX);
     session.questionCards.set(event.id, { questions: event.questions, state: "open" });
-    // Uma pergunta NOVA é onde a conversa está: a órfã de antes do reinício já não é o que o agente
-    // espera (em geral é a mesma, refeita pela retomada). Respondida a nova pelo clique, a velha
-    // ficava cobrando na bandeja — só uma mensagem a varria.
+    // A NEW question is where the conversation is: the orphan from before the restart is no longer what the agent
+    // is waiting for (usually it is the same one, asked again by the resume). Once the new one was answered by a click, the old one
+    // kept nagging in the tray — only a message swept it.
     void settleOrphanQuestions(session);
   }
   if (event.type === "question_result") {
     forgetQuestionDrafts(session, event.id);
     const card = session.questionCards.get(event.id);
     if (card) {
-      // O VEREDITO É DO DRIVER: sem respostas, o cartão encerrou sem nada a comparar — mesmo que uma
-      // resposta tenha sido escrita no stdin (o prazo ou uma mensagem chegou antes dela).
+      // THE VERDICT IS THE DRIVER'S: with no answers, the card closed with nothing to compare — even if an
+      // answer was written to stdin (the deadline or a message arrived before it).
       if (!event.answers?.length) card.state = "closed";
       else if (card.state === "open") { card.state = "answered"; card.by = null; }
     }
@@ -961,18 +961,18 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
   }
   if (!silenced) broadcast(session, event);
   if (event.type === "conversation_reset" && (event.trigger === undefined || event.trigger === "clear")) {
-    // O /clear limpou o CONTEXTO do modelo; o log do card tem de ir junto, senão o F5 devolvia a
-    // conversa inteira e o /clear parecia não ter feito nada. Sai só o que veio ANTES do "/clear"
-    // (ver `clearHistoryBeforeLastClear`): o que foi mandado depois dele o CLI ainda vai rodar. O
-    // painel de workflow da conversa apagada também não volta num F5. O filtro de gatilho só separa
-    // algo se o CLI um dia disser a causa do reset: hoje o driver manda "clear" para todos (ver o
-    // `conversation_reset` em sdk-driver.mjs), sair do plan mode inclusive.
+    // The /clear cleared the model's CONTEXT; the card's log has to go with it, otherwise the F5 brought back the
+    // whole conversation and the /clear seemed to have done nothing. Only what came BEFORE the "/clear" goes
+    // (see `clearHistoryBeforeLastClear`): what was sent after it the CLI will still run. The
+    // erased conversation's workflow panel does not come back on an F5 either. The trigger filter only separates
+    // anything if the CLI one day says the cause of the reset: today the driver sends "clear" for all of them (see
+    // `conversation_reset` in sdk-driver.mjs), leaving plan mode included.
     void clearHistoryBeforeLastClear(session.cardId).catch((err: unknown) => {
       logger.warn({ card: session.label, detail: (err as Error).message }, "could not clear the sdk chat history");
     });
     forgetCardWorkflows(session.cardId);
-    // A conversa apagada não ocupa mais nada: o medidor dela sai junto (a leitura da sessão nova
-    // chega no fim do turno do /clear).
+    // The erased conversation takes up nothing any more: its meter goes with it (the new session's reading
+    // arrives at the end of the /clear's turn).
     session.contextUsage = undefined;
     lastContextByCard.delete(session.cardId);
     emitSystemNote(session, NOTE_CONVERSATION_CLEARED);
@@ -989,9 +989,9 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
 }
 
 /**
- * Onde a sessão ATUAL deste card guarda as rodadas de workflow e os scripts delas. Os dois caminhos
- * são do harness (`<transcriptDir>/<sessionId>/…`) e dependem do id de sessão, que só existe depois
- * do primeiro `session`/`result` — antes disso não há o que sondar. PURE (dado o estado da sessão).
+ * Where this card's CURRENT session keeps the workflow rounds and their scripts. Both paths
+ * belong to the harness (`<transcriptDir>/<sessionId>/…`) and depend on the session id, which only exists after
+ * the first `session`/`result` — before that there is nothing to probe. PURE (given the session state).
  */
 function workflowDirs(session: Pick<DriverSession, "transcriptDir" | "lastSessionId">): { runs: string; scripts: string } | null {
   const dir = session.transcriptDir;
@@ -1001,7 +1001,7 @@ function workflowDirs(session: Pick<DriverSession, "transcriptDir" | "lastSessio
   return { runs: `${base}/subagents/workflows`, scripts: `${base}/workflows/scripts` };
 }
 
-/** Liga a sondagem da frota deste card (idempotente — ver `watchCardWorkflows`). */
+/** Turns on this card's fleet probe (idempotent — see `watchCardWorkflows`). */
 function startWorkflowWatch(session: DriverSession): void {
   watchCardWorkflows(session.cardId, {
     label: session.label,
@@ -1011,7 +1011,7 @@ function startWorkflowWatch(session: DriverSession): void {
   });
 }
 
-/** O feed de um subagente para quem pediu, com o motivo quando vier vazio por erro. */
+/** A subagent's feed for whoever asked, with the reason when it comes back empty because of an error. */
 async function feedReply(session: DriverSession, request: WorkflowFeedRequest): Promise<WorkflowFeedEvent> {
   const reply = (items: WorkflowFeedEvent["items"], error?: WorkflowFeedEvent["error"]): WorkflowFeedEvent => ({
     type: "workflow_feed", runId: request.runId, agentId: request.agentId, items, ...(error ? { error } : {}),
@@ -1028,9 +1028,9 @@ async function feedReply(session: DriverSession, request: WorkflowFeedRequest): 
 }
 
 /**
- * Quem responde aos pedidos de feed de UM socket. Um `docker exec` por vez por aba: um pedido que
- * chega com outro em voo espera, e só o MAIS RECENTE espera (a pessoa trocou de agente — os do meio
- * já não interessam). Sem isso, cliques rápidos ou um socket teimoso empilhariam sondagens no runner.
+ * The one that answers ONE socket's feed requests. One `docker exec` at a time per tab: a request that
+ * arrives with another in flight waits, and only the MOST RECENT waits (the person switched agents — the ones in between
+ * no longer matter). Without this, quick clicks or a stubborn socket would pile up probes on the runner.
  */
 function createFeedResponder(session: DriverSession, socket: WebSocket): (request: WorkflowFeedRequest) => void {
   let busy = false;
@@ -1053,7 +1053,7 @@ function createFeedResponder(session: DriverSession, socket: WebSocket): (reques
   };
 }
 
-/** A resposta a um pedido de detalhe (ver `parseDetailFrame`), já com o motivo quando falhou. */
+/** The answer to a detail request (see `parseDetailFrame`), already with the reason when it failed. */
 async function detailReply(session: Pick<DriverSession, "cardId" | "label" | "transcriptDir">, request: DetailRequest): Promise<object> {
   const base = { type: "detail", req: request.req, ...(request.id ? { id: request.id } : {}), ...(request.path ? { path: request.path } : {}), ...(request.nonce ? { nonce: request.nonce } : {}) };
   try {
@@ -1071,9 +1071,9 @@ async function detailReply(session: Pick<DriverSession, "cardId" | "label" | "tr
 }
 
 /**
- * Quem responde aos pedidos de detalhe de UM socket: um `docker exec` por vez por aba, e da fila só
- * fica o MAIS RECENTE de cada pedido (a mesma ação pedida de novo, o mesmo subagente sendo
- * atualizado) — cliques rápidos ou a atualização de uma linha do tempo não empilham sondagens.
+ * The one that answers ONE socket's detail requests: one `docker exec` at a time per tab, and of the queue only
+ * the MOST RECENT of each request stays (the same action asked again, the same subagent being
+ * refreshed) — quick clicks or the refresh of a timeline do not pile up probes.
  */
 export function createDetailResponder(
   session: Pick<DriverSession, "cardId" | "label" | "transcriptDir">,
@@ -1101,20 +1101,20 @@ export function createDetailResponder(
       const key = `${request.req}:${request.id}:${request.path}`;
       queue.delete(key);
       queue.set(key, request);
-      // Teto: quem pede demais perde os mais velhos.
+      // Cap: whoever asks too much loses the oldest ones.
       dropOldest(queue, 8);
     } else void run(request);
   };
 }
 
 /**
- * A última leitura de contexto de cada card, PELA SESSÃO a que ela pertence — sobrevive ao fim do
- * driver (idle stop, pausa). Um card reaberto que retoma a mesma sessão (`--resume`) já mostra o
- * medidor, sem esperar a próxima mensagem; uma sessão diferente não herda o número de outra.
+ * Each card's last context reading, BY THE SESSION it belongs to — it survives the end of the
+ * driver (idle stop, pause). A reopened card that resumes the same session (`--resume`) already shows the
+ * meter, without waiting for the next message; a different session does not inherit another's number.
  */
 const lastContextByCard = new Map<string, { sessionId: string; info: ContextUsageInfo }>();
 
-/** O id que o driver vai retomar, lido do argv do spawn (`--resume <id>`). */
+/** The id the driver is going to resume, read from the spawn's argv (`--resume <id>`). */
 function resumeIdOf(args: readonly string[]): string | undefined {
   const i = args.indexOf("--resume");
   return i >= 0 ? args[i + 1] : undefined;
@@ -1176,23 +1176,23 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
   sessions.set(opts.cardId, session);
   const remembered = lastContextByCard.get(opts.cardId);
   if (remembered && remembered.sessionId === resumeIdOf(opts.command.args)) session.contextUsage = remembered.info;
-  // O que cada pessoa já tinha marcado nos cartões abertos, de antes do reinício (ou do driver anterior).
+  // What each person had already ticked on the open cards, from before the restart (or from the previous driver).
   session.draftsLoaded = restoreQuestionDrafts(session).catch((err: unknown) => {
     logger.warn({ card: opts.label, detail: (err as Error).message }, "could not restore the question drafts");
   });
-  // Um carimbo de "espera decisão" que sobrou de um driver que não pôde apagá-lo (o back caiu no
-  // meio de uma pergunta): este driver nasce sem nenhuma pendente.
+  // A "waiting for a decision" stamp left over from a driver that could not clear it (the back went down in the
+  // middle of a question): this driver is born with none pending.
   void registry.setCardAwaitingDecision(opts.cardId, null).catch(() => { /* best-effort */ });
-  // …exceto o cartão órfão ainda aberto (o deploy pegou o agente esperando): ele segue pedindo a pessoa.
+  // …except the orphan card still open (the deploy caught the agent waiting): it keeps asking for the person.
   void orphanQuestions(session).then((open) => {
     for (const id of open.keys()) {
       if (!session.settledOrphans.has(id)) session.orphanAsks.add(id);
     }
     syncAwaitingDecision(session);
-  }).catch(() => { /* sem leitura, sem carimbo: o caminho de antes */ });
-  // Conversa que entrou pela aba Terminal: a corrente aberta do driver está num ponto que já não é o
-  // fim do arquivo. Seguir dela órfã o turno do terminal, e turno órfão não tem ponto de volta — era
-  // por isso que editar aquela mensagem não rebobinava. O driver só MARCA; religa no próximo envio.
+  }).catch(() => { /* no read, no stamp: the previous path */ });
+  // Conversation that came in through the Terminal tab: the driver's open stream is at a point that is no longer the
+  // end of the file. Continuing from it orphans the terminal's turn, and an orphaned turn has no point to go back to — that was
+  // why editing that message did not rewind. The driver only MARKS; it reconnects on the next send.
   session.offOutside = onOutsideTurn(opts.cardId, () => { writeToDriver(session, { type: "reanchor" }); });
   logger.info({ card: opts.label }, "sdk driver spawned (card-owned, survives the page)");
 
@@ -1217,10 +1217,10 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     // SILENT death. The tail is the post-mortem the exit handler below reports.
     const text = chunk.toString();
     session.stderrTail = (session.stderrTail + text).slice(-STDERR_TAIL_MAX);
-    // O driver fala por `[sdk-driver] …` quando ENGOLE alguma coisa de propósito (um erro de
-    // stream que era teardown nosso, um diagnóstico interno do CLI). Engolir em nível `debug` é
-    // invisível em produção — exatamente o ponto cego do incidente da morte silenciosa —, então
-    // essas linhas sobem para `warn`. O resto do stderr segue sendo ruído de boot.
+    // The driver speaks through `[sdk-driver] …` when it SWALLOWS something on purpose (a stream
+    // error that was our own teardown, an internal CLI diagnostic). Swallowing at `debug` level is
+    // invisible in production — exactly the blind spot of the silent-death incident —, so
+    // those lines go up to `warn`. The rest of the stderr remains boot noise.
     const deliberate = text.includes("[sdk-driver] ");
     const log = deliberate ? logger.warn.bind(logger) : logger.debug.bind(logger);
     log({ card: opts.label, stderr: text.slice(0, 500) }, "sdk driver stderr");
@@ -1236,43 +1236,43 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     clearSessionTimers(session);
     session.closed = true;
     if (sessions.get(opts.cardId) === session) sessions.delete(opts.cardId);
-    // O estado POR CARD só é deste driver enquanto nenhum sucessor assumiu o card. Um `close` pode
-    // chegar segundos depois do `stopCardDriver` (o docker exec demora a morrer), quando a troca de
-    // modelo ou o reconnect já subiu o driver seguinte — e apagar agora seria apagar o DELE.
+    // The PER-CARD state only belongs to this driver while no successor has taken over the card. A `close` may
+    // arrive seconds after `stopCardDriver` (the docker exec takes a while to die), when the model
+    // switch or the reconnect has already brought up the next driver — and clearing now would be clearing ITS state.
     const succeeded = sessions.has(opts.cardId);
-    // A memória de dedupe é do DRIVER: ele acabou, ela acaba junto — o sucessor fala do zero.
+    // The dedupe memory belongs to the DRIVER: it ended, so the memory ends with it — the successor speaks from scratch.
     if (!succeeded) forgetDriverKeys(opts.cardId);
-    // Um driver que morre com turno aberto não manda `Stop`: sem isto a bolinha ficava verde num
-    // chat parado. Só sem sucessor — o seguinte já fala pelo card.
-    // Exceto numa QUEDA que alguém vai retomar (ver abaixo): ali `waiting` seria lido como "turno
-    // terminou" pela central de eventos, e 10 s depois o card voltava a trabalhar. Quem retoma acerta
-    // a bolinha se não retomar (resume.ts).
+    // A driver that dies with a turn open sends no `Stop`: without this the dot stayed green on a
+    // stopped chat. Only without a successor — the next one already speaks for the card.
+    // Except on a DROP someone is going to resume (see below): there `waiting` would be read as "turno
+    // terminou" by the events hub, and 10 s later the card went back to working. The resumer sets
+    // the dot right if it does not resume (resume.ts).
     const crashWithWork = !deliberate && !succeeded && session.marker !== undefined && crashListeners.size > 0;
     if (!succeeded && session.boardStatus === "working" && !crashWithWork) syncBoardStatus(session, { force: true });
     dropPendingEffortSwitches(session);
-    // Com o driver morreu quem esperava as respostas: o card não espera mais decisão nenhuma dele.
+    // Whoever was waiting for the answers died with the driver: the card no longer waits for any decision from it.
     if (!succeeded) dropOpenAsks(session);
     else session.openAsks.clear();
-    // A inscrição no espelho também: deixada de pé, ela escreveria no stdin de um driver morto.
+    // The mirror subscription too: left up, it would write to a dead driver's stdin.
     session.offOutside?.();
     delete session.offOutside;
-    // A sondagem da frota também: ela publica NESTA sessão. Deixada de pé, ela ainda recusaria ser
-    // substituída pela do driver seguinte (a segunda chamada só estende a primeira).
+    // The fleet probe too: it publishes to THIS session. Left up, it would still refuse to be
+    // replaced by the next driver's (the second call only extends the first).
     if (!succeeded) forgetCardWorkflows(opts.cardId);
-    // Uma QUEDA com trabalho em voo (OOM, kill, o docker exec que morreu) e o back de pé: o marcador
-    // deste processo vivo nunca seria órfão para o sweep de boot — quem retoma é avisado agora.
+    // A DROP with work in flight (OOM, kill, the docker exec that died) and the back up: this live
+    // process's marker would never be an orphan to the boot sweep — the resumer is warned now.
     if (crashWithWork) {
       const marker = session.marker!;
       for (const listener of crashListeners) {
         try { listener(opts.cardId, marker); } catch (err) {
-          // Um ouvinte não derruba o close — mas não some calado.
+          // A listener does not bring the close down — but it does not vanish silently either.
           logger.warn({ card: opts.label, detail: (err as Error).message }, "driver crash listener failed (continuing)");
         }
       }
     }
-    // Parada PEDIDA (troca de conta/modelo, pausa, restart, ocioso) não é falha: o kill chega como
-    // `code null` e o stderr só tem ruído de boot — anunciar "driver exited (code ?)" em vermelho a
-    // cada troca de conta era alarme falso. Só fecha os sockets; o reconnect do front sobe o sucessor.
+    // A REQUESTED stop (account/model switch, pause, restart, idle) is not a failure: the kill arrives as
+    // `code null` and the stderr has only boot noise — announcing "driver exited (code ?)" in red on
+    // every account switch was a false alarm. It only closes the sockets; the front's reconnect brings up the successor.
     if (!deliberate) {
       const stderrNote = session.stderrTail.trim() === "" ? "" : ` — stderr: ${session.stderrTail.trim().slice(-400)}`;
       broadcast(session, { type: "error", message: `driver exited (code ${code ?? "?"})${stderrNote}` });
@@ -1357,7 +1357,7 @@ function countSentTurn(session: DriverSession, sentText: string, by: "person" | 
  * A turn someone just sent, on the card's OTHER screens — the same frame the replay would draw.
  * The sender drew it already (its own bubble, settled by the receipt), so it never gets it back.
  * Without this, a second person on the card saw "está digitando…", then nothing — the answer arrived
- * without the question, and only an F5 (the replay) brought the message in (produção, 2026-10-08).
+ * without the question, and only an F5 (the replay) brought the message in (production, 2026-10-08).
  */
 function relayToPeers(session: DriverSession, sender: WebSocket | undefined, event: HistoryEvent): void {
   broadcast(session, event, sender);
@@ -1411,10 +1411,10 @@ export function dispatchClientFrame(
   const control = parseSdkClientFrame(raw);
   if (!control) return { kind: "ignored" };
   if (control.type === "user" || control.type === "edit_user") {
-    // UM RECIBO JÁ EMITIDO NÃO É UMA MENSAGEM NOVA — e vem ANTES de olhar para o driver, porque o
-    // recibo fala de DURABILIDADE, não de intenção: a mensagem está gravada, e isso segue verdade
-    // com o driver morto. Recusá-la aqui faria a bolha pedir uma terceira cópia de algo que o
-    // servidor tem. O "Reenviar" repete o mesmo `cid` de propósito: o que se perdeu foi o recibo.
+    // AN ALREADY ISSUED RECEIPT IS NOT A NEW MESSAGE — and it comes BEFORE looking at the driver, because the
+    // receipt speaks of DURABILITY, not of intention: the message is stored, and that remains true
+    // with the driver dead. Refusing it here would make the bubble ask for a third copy of something the
+    // server has. "Reenviar" repeats the same `cid` on purpose: what got lost was the receipt.
     const known = control.cid ? session.acceptedCids.get(control.cid) : undefined;
     if (known) return { kind: "accepted", cid: control.cid, persisted: chargeReceipt(session, known) };
     // The driver is GONE: refuse out loud instead of writing into a closed pipe. Nothing is
@@ -1462,8 +1462,8 @@ export function dispatchClientFrame(
     return { kind: "accepted", cid: control.cid, persisted };
   }
   if (control.type === "user") {
-    // O "enviar agora" com uma ferramenta rodando PARA o turno (ver `sendUserNow` no driver) — e com
-    // ele a pergunta que estiver aberta.
+    // The "enviar agora" with a tool running STOPS the turn (see `sendUserNow` in the driver) — and with
+    // it whatever question is open.
     if (control.now && session.openAsks.size > 0) noteStop(session, origin, "send_now");
     if (!writeToDriver(session, control)) return { kind: "refused", cid: control.cid, reason: "driver-gone" };
     countSentTurn(session, control.text, "person");
@@ -1480,10 +1480,10 @@ export function dispatchClientFrame(
     return { kind: "accepted", cid: control.cid, persisted };
   }
   if (control.type === "btw") {
-    // O /btw NÃO é turno: o driver o responde numa consulta à parte (ver `answerBtw` em
-    // sdk-driver.mjs). Nada de contagem de turno, marcador em voo ou log — só a resposta, que
-    // carrega a pergunta, entra no histórico. Driver morto: quem perguntou sabe na hora, em vez de
-    // ficar com a linha pendente para sempre.
+    // The /btw is NOT a turn: the driver answers it in a separate query (see `answerBtw` in
+    // sdk-driver.mjs). No turn count, in-flight marker or log — only the answer, which
+    // carries the question, goes into the history. Driver dead: whoever asked knows right away, instead of
+    // being left with the pending line forever.
     if (canAcceptTurn(session) && writeToDriver(session, control)) {
       noteChatActivity(session);
     } else {
@@ -1497,8 +1497,8 @@ export function dispatchClientFrame(
     return { kind: "ignored", sent: true };
   }
   if (control.type === "question_answer" && !session.ownQuestions.has(control.id)) {
-    // ÓRFÃ: este driver nunca fez esta pergunta. Repassá-la devolvia "no pending question with id"
-    // e a resposta se perdia — ela vira mensagem (ver `answerOrphanQuestion`).
+    // ORPHAN: this driver never asked this question. Passing it on returned "no pending question with id"
+    // and the answer was lost — it becomes a message (see `answerOrphanQuestion`).
     void answerOrphanQuestion(session, control, origin);
     return { kind: "ignored" };
   }
@@ -1509,8 +1509,8 @@ export function dispatchClientFrame(
       return { kind: "ignored" };
     }
     if (card?.state === "open") {
-      // O modelo lê junto o que os outros já marcaram/escreveram neste cartão, com o nome; o cartão
-      // segue desenhando só o que quem enviou marcou.
+      // The model also reads what the others have already ticked/written on this card, with the name; the card
+      // keeps drawing only what the sender ticked.
       const forModel = mergePeerAnswers(control.answers, origin?.name, session.questionDrafts.get(control.id));
       if (writeToDriver(session, { ...control, ...(forModel ? { forModel } : {}) })) {
         card.state = "answered";
@@ -1527,10 +1527,10 @@ export function dispatchClientFrame(
     // survive the interrupt and run; its extra result is absorbed by the floor-at-zero above.)
     // Clamping here keeps an abandoned backlog from pinning the driver past the idle stop forever.
     session.activeTurns = Math.min(session.activeTurns, 1);
-    // A pessoa mandou PARAR: a retomada que o vigia esperava acaba aqui — reenviar a ordem depois
-    // seria o painel desfazendo o clique dela.
+    // The person said STOP: the resume the watcher was waiting for ends here — resending the order afterwards
+    // would be the panel undoing their click.
     if (session.resumeWatch) abandonResumeWatch(session);
-    // O mesmo para a nova tentativa depois de uma falha da API: parar é parar.
+    // The same for the new attempt after an API failure: stopping is stopping.
     if (session.apiRetry?.timer) cancelApiRetry(session);
     // Only a stop that actually CUT something gets narrated — a stop click with nothing running
     // would otherwise write a note claiming a turn was interrupted when none was.
@@ -1540,11 +1540,11 @@ export function dispatchClientFrame(
 }
 
 /**
- * OUTRA PESSOA JÁ RESPONDEU ESTE CARTÃO: a resposta não se perde — vira um turno para o modelo
- * comparar com a anterior (e perguntar de novo se não combinarem). Não libera a pergunta que o
- * agente fez depois (`keepQuestions`). A mesma pessoa de novo (duas abas, duplo clique) e uma
- * resposta vazia não viram nada. A conversa mostra só o que a pessoa escolheu; `sent` guarda o que
- * o modelo leu.
+ * ANOTHER PERSON ALREADY ANSWERED THIS CARD: the answer is not lost — it becomes a turn for the model to
+ * compare with the previous one (and ask again if they do not match). It does not release the question the
+ * agent asked afterwards (`keepQuestions`). The same person again (two tabs, double click) and an
+ * empty answer become nothing. The conversation shows only what the person chose; `sent` keeps what
+ * the model read.
  */
 function answerLate(session: DriverSession, card: QuestionCard, control: QuestionAnswerControl, origin?: MessageOrigin): void {
   if ((origin?.name ?? null) === card.by) return;
@@ -1559,9 +1559,9 @@ function answerLate(session: DriverSession, card: QuestionCard, control: Questio
 }
 
 /**
- * QUEM PAROU O TURNO fica registrado — no log de auditoria e na sessão, para o cartão de pergunta que
- * cair junto dizer quem o cancelou. Antes nada disso ficava: a pergunta sumia "sem resposta" e não
- * havia como saber se tinha sido o prazo, um clique ou outra pessoa no mesmo card.
+ * WHO STOPPED THE TURN is recorded — in the audit log and in the session, so the question card that
+ * drops along with it says who cancelled it. Before, none of this was kept: the question vanished "sem resposta" and there
+ * was no way to know whether it had been the deadline, a click or another person on the same card.
  */
 function noteStop(session: DriverSession, origin: MessageOrigin | undefined, how: StopHow): void {
   session.stopCause = { ...(origin?.name ? { by: origin.name } : {}), how };
@@ -1571,24 +1571,24 @@ function noteStop(session: DriverSession, origin: MessageOrigin | undefined, how
   );
 }
 
-/** Um cartão de pergunta pendente sem o driver que o abriu. */
+/** A pending question card without the driver that opened it. */
 interface OrphanCard {
   questions: UserQuestionItem[];
-  /** O que rodava em segundo plano e morreu no reinício que deixou o cartão de pé. */
+  /** What was running in the background and died in the restart that left the card up. */
   lostBackground: string[];
 }
 
 /**
- * O que o histórico ainda mostra como pergunta PENDENTE e que o driver atual não espera — os
- * cartões órfãos, com o texto deles. Lido do disco: depois de um deploy o back novo não tem outra
- * memória deles, e o cartão que a tela redesenha vem exatamente daqui.
+ * What the history still shows as a PENDING question and the current driver is not waiting for — the
+ * orphan cards, with their text. Read from disk: after a deploy the new back has no other
+ * memory of them, and the card the screen redraws comes exactly from here.
  */
 async function orphanQuestions(session: DriverSession): Promise<Map<string, OrphanCard>> {
   const open = new Map<string, OrphanCard>();
   for (const event of await readHistory(session.cardId, HISTORY_REPLAY_LIMIT, { strict: true })) {
     if (event.type === "user_question") open.set(event.id, { questions: event.questions, lostBackground: [] });
     else if (event.type === "question_result") open.delete(event.id);
-    // O reinício que deixou o cartão de pé matou também o segundo plano (resume.ts): vai junto da resposta.
+    // The restart that left the card up also killed the background (resume.ts): it goes along with the answer.
     else if (event.type === "system_note" && event.lostBackground?.length) {
       for (const card of open.values()) card.lostBackground.push(...event.lostBackground);
     }
@@ -1599,7 +1599,7 @@ async function orphanQuestions(session: DriverSession): Promise<Map<string, Orph
   return open;
 }
 
-/** Encerra um cartão em todas as abas e no histórico (o F5 lê a mesma coisa). */
+/** Closes a card in every tab and in the history (the F5 reads the same thing). */
 function settleQuestionCard(session: DriverSession, result: Extract<DriverEvent, { type: "question_result" }>): void {
   forgetQuestionDrafts(session, result.id);
   if (session.orphanAsks.delete(result.id)) syncAwaitingDecision(session);
@@ -1609,11 +1609,11 @@ function settleQuestionCard(session: DriverSession, result: Extract<DriverEvent,
 }
 
 /**
- * FALAR É RESPONDER, também para a órfã — e a conversa SEGUIR também é: qualquer turno que entra
- * no modelo (mensagem, retomada automática, a resposta de outra órfã) ou uma pergunta nova do driver
- * vivo encerra as órfãs. Com o driver vivo, uma mensagem libera o cartão que ele
- * espera (`supersedePendingQuestions` no driver). A órfã não tem driver para isso: ficava pendente
- * no histórico e a bandeja voltava a pedir uma resposta que a pessoa acabara de dar.
+ * SPEAKING IS ANSWERING, for the orphan too — and the conversation MOVING ON is as well: any turn that enters
+ * the model (message, automatic resume, another orphan's answer) or a new question from the live
+ * driver closes the orphans. With the driver alive, a message releases the card it
+ * is waiting for (`supersedePendingQuestions` in the driver). The orphan has no driver for that: it stayed pending
+ * in the history and the tray asked again for an answer the person had just given.
  */
 async function settleOrphanQuestions(session: DriverSession): Promise<void> {
   if (session.orphansSwept) return;
@@ -1622,7 +1622,7 @@ async function settleOrphanQuestions(session: DriverSession): Promise<void> {
   try {
     orphans = await orphanQuestions(session);
   } catch (err) {
-    session.orphansSwept = false; // a próxima mensagem tenta de novo
+    session.orphansSwept = false; // the next message tries again
     logger.warn({ card: session.label, detail: (err as Error).message }, "could not sweep orphaned question cards");
     return;
   }
@@ -1634,17 +1634,17 @@ async function settleOrphanQuestions(session: DriverSession): Promise<void> {
 }
 
 /**
- * O CLIQUE NUMA ÓRFÃ (produção, 2026-10-07): o deploy matou o driver com o cartão de pé; o driver
- * novo retomou a conversa sem a chamada de ferramenta que a resposta deveria completar. As escolhas
- * ainda importam — elas vão ao modelo como MENSAGEM, cada pergunta citada ao lado do escolhido, e o
- * cartão se encerra como respondido. É um turno: conta, desarma o ocioso e ganha o marcador.
+ * THE CLICK ON AN ORPHAN (production, 2026-10-07): the deploy killed the driver with the card up; the new
+ * driver resumed the conversation without the tool call the answer was supposed to complete. The choices
+ * still matter — they go to the model as a MESSAGE, each question quoted next to the choice, and the
+ * card closes as answered. It is a turn: it counts, disarms the idle and gets the marker.
  */
 async function answerOrphanQuestion(session: DriverSession, control: QuestionAnswerControl, origin?: MessageOrigin): Promise<void> {
-  // Marcada ANTES de qualquer await: o segundo clique (outra aba, duplo clique) chega no meio da
-  // leitura do disco e precisa encontrar a vaga já tomada.
-  if (session.answeringOrphans.has(control.id)) return; // a mesma resposta já está a caminho
+  // Marked BEFORE any await: the second click (another tab, double click) arrives in the middle of the
+  // disk read and needs to find the slot already taken.
+  if (session.answeringOrphans.has(control.id)) return; // the same answer is already on its way
   if (session.settledOrphans.has(control.id)) {
-    // Encerrada aqui mesmo (por mensagem, ou por outra resposta): o veredito de sempre.
+    // Closed right here (by a message, or by another answer): the usual verdict.
     broadcast(session, { type: "error", message: `no pending question with id ${control.id}` });
     return;
   }
@@ -1662,17 +1662,17 @@ async function answerOrphanQuestion(session: DriverSession, control: QuestionAns
   }
   const orphan = orphans.get(control.id);
   if (!orphan) {
-    // Não está pendente no disco: já encerrada (aba velha) ou nunca existiu. Nada vai ao modelo —
-    // o mesmo veredito que o driver dava antes.
+    // It is not pending on disk: already closed (old tab) or it never existed. Nothing goes to the model —
+    // the same verdict the driver used to give.
     release(`no pending question with id ${control.id}`);
     return;
   }
   if (!canAcceptTurn(session)) {
-    // Sem driver não há a quem entregar: a tela é avisada e o cartão segue pendente para o próximo.
+    // With no driver there is nobody to deliver to: the screen is warned and the card stays pending for the next one.
     release("driver exited before the answer reached it — answer again once the chat reconnects");
     return;
   }
-  // O que os OUTROS marcaram neste cartão vai junto, com o nome — de antes do reinício inclusive.
+  // What the OTHERS ticked on this card goes along, with the name — from before the restart included.
   await session.draftsLoaded;
   const forModel = mergePeerAnswers(control.answers, origin?.name, session.questionDrafts.get(control.id));
   const text = buildOrphanAnswerText(orphan.questions, forModel ?? control.answers, orphan.lostBackground);
@@ -1685,8 +1685,8 @@ async function answerOrphanQuestion(session: DriverSession, control: QuestionAns
   session.answeringOrphans.delete(control.id);
   session.settledOrphans.add(control.id);
   settleQuestionCard(session, { type: "question_result", id: control.id, answers: control.answers, sent: text });
-  // A conversa seguiu com ESTA resposta: as outras órfãs (perguntas de drivers ainda mais antigos)
-  // saem junto, como sairiam com uma mensagem.
+  // The conversation went on with THIS answer: the other orphans (questions from even older drivers)
+  // go with it, as they would with a message.
   void settleOrphanQuestions(session);
   logger.info(
     { audit: true, action: "sdk.question.orphan", card: session.label },
@@ -1695,13 +1695,13 @@ async function answerOrphanQuestion(session: DriverSession, control: QuestionAns
 }
 
 /**
- * A COBRANÇA DE UM RECIBO (o mesmo `cid` de novo): a promessa que o primeiro envio ganhou — e, se a
- * gravação dele FALHOU, uma nova tentativa de gravar a mesma linha. O driver já leu a mensagem, então
- * ela nunca volta ao stdin; só o histórico estava devendo. Sem a nova tentativa, um disco cheio por
- * um instante deixava a bolha "não entregue" para sempre: cada Reenviar ganhava o mesmo `false`, e
- * Descartar + digitar de novo fazia o modelo executar a instrução duas vezes. A promessa guardada é
- * TROCADA pela nova antes de devolver, então dois reenvios seguidos encadeiam — a linha é gravada
- * uma vez só.
+ * CLAIMING A RECEIPT (the same `cid` again): the promise the first send earned — and, if its
+ * write FAILED, a new attempt to write the same line. The driver has already read the message, so
+ * it never goes back to stdin; only the history was in debt. Without the new attempt, a disk full for
+ * an instant left the bubble "não entregue" forever: every Reenviar got the same `false`, and
+ * Descartar + typing again made the model execute the instruction twice. The stored promise is
+ * SWAPPED for the new one before returning, so two resends in a row chain — the line is written
+ * only once.
  */
 function chargeReceipt(session: DriverSession, sent: AcceptedSend): Promise<boolean> {
   sent.persisted = sent.persisted.then((onDisk) => onDisk || appendHistoryReported(session.cardId, sent.line));
@@ -1718,8 +1718,8 @@ export function injectSystemTurn(session: DriverSession, text: string, origin: M
   // A refused write is logged by writeToDriver; the close event that follows cleans the session up.
   writeToDriver(session, { type: "user", text });
   recordInjectedTurn(session, text, origin);
-  // A retomada é um turno como outro qualquer: o agente refaz a pergunta que o reinício cortou, e a
-  // órfã não pode ficar de pé ao lado dela (produção, 2026-10-19 — a pessoa respondeu duas vezes).
+  // The resume is a turn like any other: the agent asks again the question the restart cut, and the
+  // orphan must not stay up next to it (production, 2026-10-19 — the person answered twice).
   void settleOrphanQuestions(session);
   const marker: InflightMarker = { startedAt: Date.now(), preview: inflightPreview(text), attempts };
   endResumeWatch(session);
@@ -1737,7 +1737,7 @@ function markPersonTurn(session: DriverSession, marker: InflightMarker): void {
   putMarker(session, marker);
 }
 
-/** O que conta como o agente principal dando sinal de vida — o raciocínio longo antes do texto, inclusive. */
+/** What counts as the main agent giving a sign of life — the long reasoning before the text included. */
 const AGENT_SIGNALS: ReadonlySet<string> = new Set([
   "assistant_delta", "assistant_text", "thinking_delta", "thinking", "tool_use_start", "tool_input_progress", "tool_use", "tool_progress",
 ]);
@@ -1747,13 +1747,13 @@ function endResumeWatch(session: DriverSession): void {
   session.resumeWatch = undefined;
 }
 
-/** A retomada acabou sem pegar (Parar, desistência): o marcador e a bolinha deixam de contar com ela. */
+/** The resume ended without taking (Parar, giving up): the marker and the dot stop counting on it. */
 function abandonResumeWatch(session: DriverSession): void {
   endResumeWatch(session);
   syncInflightMarker(session);
 }
 
-/** Arma (ou rearma) o prazo da retomada a partir de agora. */
+/** Arms (or re-arms) the resume's deadline from now. */
 function armResumeWatch(session: DriverSession): void {
   const watch = session.resumeWatch;
   if (!watch) return;
@@ -1764,18 +1764,18 @@ function armResumeWatch(session: DriverSession): void {
 }
 
 /**
- * O prazo venceu: houve sinal de vida (ou um turno abriu) desde então — espera mais; nada — a
- * continuação se perdeu no CLI e a ordem vai de novo, UMA vez, em palavras que não passam por aviso
- * automático (RESUME_REENGAGE_TEXT). Na segunda falta, uma linha no chat: o card nunca fica parado
- * calado, e nunca vira loop. Disparar já no `result` mandava a ordem em dobro: no CLI real o
- * `result` vazio do arranque chega segundos ANTES do turno de verdade (E2E, 2026-10-20).
+ * The deadline expired: there was a sign of life (or a turn opened) since then — wait more; nothing — the
+ * continuation got lost in the CLI and the order goes again, ONCE, in words that do not pass for an
+ * automatic notice (RESUME_REENGAGE_TEXT). On the second miss, a line in the chat: the card never sits stopped
+ * silently, and it never becomes a loop. Firing right on the `result` sent the order twice: on the real CLI the
+ * boot's empty `result` arrives seconds BEFORE the real turn (E2E, 2026-10-20).
  */
 function checkResumeWatch(session: DriverSession, signalsAtArm: number): void {
   const watch = session.resumeWatch;
   if (!watch || session.closed) return;
   watch.timer = undefined;
-  // Um turno aberto ou um sinal de vida: espera mais. Rearmar (e não esperar o `result` daquele
-  // turno) é o que impede um vigia preso — o turno pode acabar num erro de stream, sem `result`.
+  // An open turn or a sign of life: wait more. Re-arming (and not waiting for that turn's `result`)
+  // is what prevents a stuck watcher — the turn may end in a stream error, with no `result`.
   if (isTurnInFlight(session) || session.agentSignals !== signalsAtArm) { armResumeWatch(session); return; }
   if (!watch.reengaged && writeInjectedTurn(session, RESUME_REENGAGE_TEXT, SYSTEM_ORIGIN)) {
     watch.reengaged = true;
@@ -1793,8 +1793,8 @@ type CrashListener = (cardId: string, marker: InflightMarker) => void;
 const crashListeners = new Set<CrashListener>();
 
 /**
- * Quem quer saber de um driver que CAIU (sem ninguém pedir) com trabalho em voo — a retomada em
- * processo (resume.ts). Devolve o cancelamento da inscrição.
+ * Whoever wants to know about a driver that DROPPED (without anyone asking) with work in flight — the in-process
+ * resume (resume.ts). Returns the subscription's cancellation.
  */
 export function onDriverCrashWithWork(listener: CrashListener): () => void {
   crashListeners.add(listener);
@@ -1802,28 +1802,28 @@ export function onDriverCrashWithWork(listener: CrashListener): () => void {
 }
 
 /**
- * A espera antes de cada nova tentativa de um turno que a API derrubou com falha PASSAGEIRA — o CLI
- * já tentou por conta própria antes de desistir, então a rede costuma precisar de minutos, não de
- * segundos. Uma posição por tentativa: acabou a lista, acabou a insistência (NOTE_API_RETRY_EXHAUSTED).
+ * The wait before each new attempt of a turn the API knocked down with a TRANSIENT failure — the CLI
+ * has already tried on its own before giving up, so the network usually needs minutes, not
+ * seconds. One position per attempt: once the list is over, so is the insistence (NOTE_API_RETRY_EXHAUSTED).
  */
 export const API_RETRY_DELAYS_MS: readonly number[] = [30_000, 120_000, 300_000];
 
-/** A ordem que a nova tentativa manda: o turno anterior morreu no meio, não terminou. */
+/** The order the new attempt sends: the previous turn died midway, it did not finish. */
 export const API_RETRY_TEXT =
   "O turno anterior foi encerrado no meio por uma falha temporária da API da Anthropic (rede ou servidor). " +
   "Isto NÃO é uma notificação automática: é a ordem de continuar. Confira o estado atual e siga a tarefa " +
   "em andamento até o fim.";
 
-/** As tentativas acabaram (ou a última não pôde ir): a pessoa fica sabendo, o card não fica calado. */
+/** The attempts are over (or the last one could not go): the person is told, the card does not go silent. */
 export const NOTE_API_RETRY_EXHAUSTED =
   "A API da Anthropic falhou e as novas tentativas automáticas não fizeram o agente continuar. " +
   "Mande uma mensagem para ele seguir de onde parou.";
 
 /**
- * O turno terminou numa falha PASSAGEIRA da API? É o texto com que o CLI fecha o turno depois de
- * esgotar as próprias tentativas ("API Error: Can't reach the API server … (EAI_AGAIN)", "API Error:
- * 529 … overloaded_error", "API Error: Connection error."). Credencial, pedido inválido e limite do
- * plano (4xx) não passam com o tempo — esses ficam para a pessoa. PURE.
+ * Did the turn end in a TRANSIENT API failure? It is the text with which the CLI closes the turn after
+ * exhausting its own attempts ("API Error: Can't reach the API server … (EAI_AGAIN)", "API Error:
+ * 529 … overloaded_error", "API Error: Connection error."). Credentials, an invalid request and the plan
+ * limit (4xx) do not pass with time — those are left for the person. PURE.
  */
 export function isTransientApiFailure(result: string | undefined): boolean {
   const text = String(result ?? "").trim();
@@ -1833,7 +1833,7 @@ export function isTransientApiFailure(result: string | undefined): boolean {
     .test(text);
 }
 
-/** Desiste da nova tentativa agendada: a bolinha e o marcador deixam de contar com ela. */
+/** Gives up the scheduled new attempt: the dot and the marker stop counting on it. */
 function cancelApiRetry(session: DriverSession): void {
   clearTimeout(session.apiRetry?.timer);
   session.apiRetry = undefined;
@@ -1842,11 +1842,11 @@ function cancelApiRetry(session: DriverSession): void {
 }
 
 /**
- * O FIM DE UM TURNO, visto pela conta das falhas da API (produção, card 8f2a, 23/10/2026: o turno
- * fechou em EAI_AGAIN e o card ficou parado em "falhou" até alguém escrever "continua"). Falha
- * passageira: nota no chat agora e, passada a espera da vez, a ordem de continuar — a menos que
- * outro turno já esteja rodando (uma mensagem chegou) ou o driver tenha sido parado. Qualquer outro
- * fim sem erro zera a conta.
+ * THE END OF A TURN, as seen by the API failure count (production, card 8f2a, 23/10/2026: the turn
+ * closed on EAI_AGAIN and the card sat at "falhou" until someone wrote "continua"). Transient
+ * failure: a note in the chat now and, after that round's wait, the order to continue — unless
+ * another turn is already running (a message arrived) or the driver was stopped. Any other
+ * end without error resets the count.
  */
 function noteApiOutcome(session: DriverSession, event: ResultEvent): void {
   if (!event.isError || !isTransientApiFailure(event.result)) {
@@ -1867,7 +1867,7 @@ function noteApiOutcome(session: DriverSession, event: ResultEvent): void {
     return;
   }
   session.apiRetry = { failures };
-  // Uma mensagem já na fila é o próximo turno: ele mesmo segue o trabalho.
+  // A message already in the queue is the next turn: it carries the work on itself.
   if (isTurnInFlight(session)) return;
   emitSystemNote(session, `A API da Anthropic falhou por um erro temporário. Nova tentativa automática em ${Math.round(delay / 1000)} s.`);
   const timer = setTimeout(() => {
@@ -1876,7 +1876,7 @@ function noteApiOutcome(session: DriverSession, event: ResultEvent): void {
     retry.timer = undefined;
     if (session.closed || isTurnInFlight(session)) return;
     if (!writeInjectedTurn(session, API_RETRY_TEXT, SYSTEM_ORIGIN)) {
-      // O driver já não aceita turno: a falha que ficou calada esperando esta tentativa vai a público.
+      // The driver no longer accepts turns: the failure that stayed quiet waiting for this attempt goes public.
       cancelApiRetry(session);
       emitSystemNote(session, NOTE_API_RETRY_EXHAUSTED);
       void observeDriverEvent(session.cardId, event);
@@ -1893,28 +1893,28 @@ function noteApiOutcome(session: DriverSession, event: ResultEvent): void {
 }
 
 /**
- * A segunda chance de uma retomada que fechou SEM AVANÇAR — depois de um deploy ou de uma queda do
- * driver; por isso as palavras não dizem qual. Produção, 2026-10-20: depois de um deploy, o turno injetado voltou só com o filler do harness ("No response requested." — que o
- * manager esconde), e o card ficou parado até alguém escrever. Junto com os avisos de tarefa que o
- * CLI anexa ("NOT USER INPUT"), a continuação lia como mais um aviso automático. Este texto diz o
- * contrário com todas as letras.
+ * The second chance of a resume that closed WITHOUT ADVANCING — after a deploy or a driver
+ * drop; that is why the words do not say which. Production, 2026-10-20: after a deploy, the injected turn came back with only the harness's filler ("No response requested." — which the
+ * manager hides), and the card sat stopped until someone wrote. Together with the task notices the
+ * CLI attaches ("NOT USER INPUT"), the continuation read as just another automatic notice. This text says the
+ * opposite in so many words.
  */
 export const RESUME_REENGAGE_TEXT =
   "O painel retomou este card depois de uma interrupção e a sua última resposta não continuou o trabalho. " +
   "Isto NÃO é uma notificação automática: é a ordem de continuar. Confira o estado atual (git status, " +
   "testes, PRs, o que estava rodando) e siga a tarefa em andamento até o fim.";
 
-/** O reengate também não avançou: nada de terceiro envio — a pessoa fica sabendo. */
+/** The re-engage did not advance either: no third send — the person is told. */
 export const NOTE_RESUME_STALLED =
   "A retomada automática não fez o agente continuar. " +
   "Mande uma mensagem para ele seguir de onde parou.";
 
-/** O que o marcador diz de um turno que o próprio CLI abriu — ninguém escreveu nada. */
+/** What the marker says about a turn the CLI itself opened — nobody wrote anything. */
 const AUTONOMOUS_TURN_PREVIEW = "(turno aberto pelo próprio Claude: retorno de tarefa em segundo plano ou agendada)";
 
 /**
- * O TRABALHO EM SEGUNDO PLANO vivo agora, para o marcador: as tarefas do CLI e o retorno agendado.
- * Vazio = nada segue depois do turno.
+ * The BACKGROUND WORK alive now, for the marker: the CLI's tasks and the scheduled wakeup.
+ * Empty = nothing goes on after the turn.
  */
 function backgroundWork(session: DriverSession): string[] {
   const tasks = session.backgroundTasks.map((t) => t.description || t.type || "tarefa em segundo plano");
@@ -1923,7 +1923,7 @@ function backgroundWork(session: DriverSession): string[] {
   return tasks;
 }
 
-/** Grava o marcador com o segundo plano de agora, e lembra dele. */
+/** Writes the marker with the current background, and remembers it. */
 function putMarker(session: DriverSession, base: InflightMarker): void {
   const tasks = backgroundWork(session);
   const { background: previous, ...rest } = base;
@@ -1938,14 +1938,14 @@ function putMarker(session: DriverSession, base: InflightMarker): void {
 }
 
 /**
- * O marcador acompanha o estado da sessão: existe enquanto HÁ trabalho que um deploy mataria — um
- * turno de alguém, um turno que o próprio CLI abriu, uma tarefa em segundo plano, um retorno
- * agendado — e some quando não há mais nada. Só regrava quando o que ele diz mudou.
+ * The marker follows the session state: it exists while THERE IS work a deploy would kill — someone's
+ * turn, a turn the CLI itself opened, a background task, a scheduled
+ * wakeup — and goes away when there is nothing left. It only rewrites when what it says changed.
  */
 function syncInflightMarker(session: DriverSession): void {
   if (session.closed) return;
   syncBoardStatus(session);
-  // A retomada que ainda não pegou é trabalho em voo: o reenvio vem aí (ver RESUME_CONFIRM_MS).
+  // The resume that has not taken yet is work in flight: the resend is on its way (see RESUME_CONFIRM_MS).
   const running = turnRunning(session);
   const tasks = backgroundWork(session);
   if (!running && tasks.length === 0) {
@@ -1965,9 +1965,9 @@ function syncInflightMarker(session: DriverSession): void {
 }
 
 /**
- * Um passo do agente (texto, raciocínio, ferramenta). Do PRINCIPAL, sem turno contado, é um turno que
- * o CLI abriu sozinho — a notificação de uma tarefa em segundo plano, um retorno agendado vencendo.
- * E o ScheduleWakeup do principal agenda (ou cancela) um retorno: trabalho pendente igual.
+ * A step of the agent (text, reasoning, tool). From the MAIN agent, with no counted turn, it is a turn
+ * the CLI opened on its own — a background task's notification, a scheduled wakeup firing.
+ * And the main agent's ScheduleWakeup schedules (or cancels) a wakeup: pending work all the same.
  */
 function noteAgentWork(session: DriverSession, event: DriverEvent): void {
   if ((event as { parentToolUseId?: unknown }).parentToolUseId) return;
@@ -1976,7 +1976,7 @@ function noteAgentWork(session: DriverSession, event: DriverEvent): void {
     session.autonomousTurn = true;
     // The turn the CLI opens on its own is where the finished tasks' notices are delivered.
     session.pendingNotices = [];
-    // O retorno agendado que estava pendente é, quase sempre, o que acabou de abrir este turno.
+    // The scheduled wakeup that was pending is, almost always, what has just opened this turn.
     session.pendingWakeup = undefined;
     changed = true;
   }
@@ -2002,7 +2002,7 @@ function noteAgentWork(session: DriverSession, event: DriverEvent): void {
  * The turn gets the in-flight marker like any other: a deploy kills it just the same, and nobody on
  * the other side retries — the ChatGPT never learns the turn died, the sending agent reads a card
  * still "working". Without it the boot had nothing to resume and the board kept the dead process's
- * `working` (produção, card a28ffa23, 2026-10-20). A new order restarts the resume chain (attempts 0).
+ * `working` (production, card a28ffa23, 2026-10-20). A new order restarts the resume chain (attempts 0).
  * Returns false (nothing recorded) when the driver can no longer take a turn.
  */
 export function sendAgentTurn(session: DriverSession, text: string, origin: MessageOrigin): boolean {
@@ -2011,7 +2011,7 @@ export function sendAgentTurn(session: DriverSession, text: string, origin: Mess
   return true;
 }
 
-/** Um turno que o back escreve por conta própria: no stdin E no histórico, ou em nenhum. */
+/** A turn the back writes on its own: to stdin AND to the history, or to neither. */
 function writeInjectedTurn(session: DriverSession, text: string, origin: MessageOrigin): boolean {
   if (!canAcceptTurn(session) || !writeToDriver(session, { type: "user", text })) return false;
   recordInjectedTurn(session, text, origin);
@@ -2098,47 +2098,47 @@ export function attachSocket(
     sendFrame(socket, session.catalog);
   }
 
-  // As tarefas em segundo plano também são estado: uma aba que abre (ou recarrega) enquanto um
-  // `sleep` de deploy roda precisa ver isso no primeiro quadro — o aviso do CLI só vem na mudança.
+  // Background tasks are state too: a tab that opens (or reloads) while a deploy
+  // `sleep` runs needs to see that in the first frame — the CLI's notice only comes on change.
   if (session.backgroundTasks.length > 0) {
     sendFrame(socket, { type: "background_tasks", tasks: session.backgroundTasks });
   }
 
-  // O estado de cada subagente também (contadores, "o que ele faz agora"): o CLI só fala na mudança.
-  // O tempo vai até agora (taskSnapshot): a aba conta a partir do que recebe.
+  // Each subagent's state too (counters, "o que ele faz agora"): the CLI only speaks on change.
+  // The time goes up to now (taskSnapshot): the tab counts from what it receives.
   const now = Date.now();
   for (const task of session.tasks.values()) {
     sendFrame(socket, taskSnapshot(task, now));
   }
 
-  // O aviso de limite do plano também: o CLI só o emite quando a leitura muda, e quem abre o card
-  // com a sessão a 92% precisa ver a faixa no primeiro quadro, não depois da próxima resposta.
+  // The plan limit warning too: the CLI only emits it when the reading changes, and whoever opens the card
+  // with the session at 92% needs to see the strip in the first frame, not after the next answer.
   for (const info of session.rateLimits.values()) {
     sendFrame(socket, { type: "rate_limit", ...info });
   }
 
-  // O medidor de contexto também: a leitura só vem no fim de um turno, e quem abre o card parado
-  // precisa ver quanto a conversa já ocupa sem mandar mensagem nenhuma.
+  // The context meter too: the reading only comes at the end of a turn, and whoever opens the stopped card
+  // needs to see how much the conversation already takes without sending any message.
   if (session.contextUsage) {
     sendFrame(socket, { type: "context_usage", ...session.contextUsage });
   }
 
-  // A compactação em andamento: a barra, contando desde quando começou.
+  // The compaction in progress: the bar, counting since it started.
   if (session.compacting) {
     sendFrame(socket, { type: "compaction", phase: "started", ...session.compacting });
   }
 
-  // A frota do workflow é da mesma natureza do catálogo: estado, não conversa. Ela não está no
-  // histórico replayado, e uma aba que abre no meio de uma rodada (ou logo depois dela) precisa
-  // desenhar o painel no primeiro quadro — senão a tela volta a dizer, por 4 segundos ou para
-  // sempre, que não há nada acontecendo.
+  // The workflow fleet is of the same nature as the catalog: state, not conversation. It is not in the
+  // replayed history, and a tab that opens in the middle of a round (or right after it) needs to
+  // draw the panel in the first frame — otherwise the screen goes back to saying, for 4 seconds or
+  // forever, that nothing is happening.
   for (const run of lastWorkflowRuns(session.cardId)) {
     sendFrame(socket, { type: "workflow_progress", ...run });
   }
 
-  // OS RASCUNHOS dos cartões abertos: quem chega no meio da resposta de outra pessoa vê, de cara, o
-  // que ela já marcou e escreveu — senão só no próximo toque dela.
-  // Os de quem já fechou a aba (ou de antes do reinício) vão marcados como ausentes.
+  // THE DRAFTS of the open cards: whoever arrives in the middle of another person's answer sees, right away, what
+  // they have already ticked and written — otherwise only on their next touch.
+  // Those of whoever already closed the tab (or from before the restart) go marked as absent.
   for (const [id, byName] of session.questionDrafts) {
     for (const [name, draft] of byName) {
       sendFrame(socket, peerQuestionDraftFrame(id, name, draft, !draftIsLive(session, id, name)));
@@ -2174,10 +2174,10 @@ export function attachSocket(
     relayTyping(false);
   };
 
-  // O RASCUNHO DO CARTÃO DE PERGUNTA: como a digitação, vai às OUTRAS abas — mas com o conteúdo,
-  // para que duas pessoas no mesmo card vejam uma o que a outra está respondendo antes de alguém
-  // mandar (as respostas de todos vão juntas ao modelo, ver `mergePeerAnswers`). Fica guardado enquanto a pergunta está aberta, para quem
-  // abrir o card depois; nunca vai ao driver nem ao histórico.
+  // THE QUESTION CARD'S DRAFT: like typing, it goes to the OTHER tabs — but with the content,
+  // so that two people on the same card see what the other one is answering before anyone
+  // sends (everyone's answers go together to the model, see `mergePeerAnswers`). It stays stored while the question is open, for whoever
+  // opens the card later; it never goes to the driver nor to the history.
   const draftedHere = new Set<string>();
   const relayDraft = (id: string, name: string, draft: StoredQuestionDraft, away = false): void => {
     broadcast(session, peerQuestionDraftFrame(id, name, draft, away), socket);
@@ -2199,8 +2199,8 @@ export function attachSocket(
     const empty = isEmptyQuestionDraft(draft);
     let byName = session.questionDrafts.get(draft.id);
     const stored = byName?.get(origin.name);
-    // A MAIS NOVA VENCE: uma aba que volta com um rascunho mais velho (o notebook depois do celular)
-    // não apaga o que a pessoa fez em outro lugar — recebe de volta a versão nova.
+    // THE NEWEST WINS: a tab that comes back with an older draft (the laptop after the phone)
+    // does not erase what the person did elsewhere — it gets the new version back.
     if (stored?.at !== undefined && draft.at !== undefined && draft.at < stored.at) {
       sendFrame(socket, peerQuestionDraftFrame(draft.id, origin.name, stored));
       return;
@@ -2213,7 +2213,7 @@ export function attachSocket(
       if (byName.size === 0) session.questionDrafts.delete(draft.id);
     } else {
       if (!byName) {
-        // Teto: um cartão esquecido aberto não acumula para sempre.
+        // Cap: a card forgotten open does not accumulate forever.
         makeRoom(session.questionDrafts, QUESTION_DRAFTS_MAX);
         byName = new Map();
         session.questionDrafts.set(draft.id, byName);
@@ -2228,8 +2228,8 @@ export function attachSocket(
     relayDraft(draft.id, origin.name, next);
   };
   /**
-   * A aba fechou: o que a pessoa marcou FICA (guardado, e vai junto da resposta de quem enviar); as
-   * outras telas só deixam de mostrá-la como "respondendo" — se nenhuma outra aba dela segue no cartão.
+   * The tab closed: what the person ticked STAYS (stored, and it goes along with the sender's answer); the
+   * other screens only stop showing them as "respondendo" — if no other tab of theirs remains on the card.
    */
   const dropDraftsOfThisSocket = (): void => {
     if (!origin) return;
@@ -2264,8 +2264,8 @@ export function attachSocket(
       noteDraft(draft);
       return;
     }
-    // O feed de um subagente do workflow: sob demanda, só para esta aba — nem driver, nem histórico.
-    // O detalhe de uma ação, de um subagente ou das mudanças do card: idem, só para esta aba.
+    // A workflow subagent's feed: on demand, only for this tab — neither driver nor history.
+    // The detail of an action, of a subagent or of the card's changes: likewise, only for this tab.
     const detail = parseDetailFrame(text);
     if (detail !== null) {
       answerDetail(detail);
@@ -2333,7 +2333,7 @@ export function stopCardDriver(cardId: string): void {
   void clearInflightMarker(cardId);
   dropOpenAsks(session);
   dropPendingEffortSwitches(session);
-  // A sondagem da frota é filha deste driver: sem ele não há a quem publicar nem sessão para ler.
+  // The fleet probe is this driver's child: without it there is nobody to publish to and no session to read.
   forgetCardWorkflows(cardId);
   logger.debug({ card: session.label }, "sdk driver stopped");
 }
@@ -2354,9 +2354,9 @@ interface PendingEffortSwitch {
 }
 
 /**
- * A NOVA INTELIGÊNCIA DO CARD, na sessão viva: o driver a aplica com `applyFlagSettings` — no meio
- * do turno inclusive, a próxima chamada ao modelo já sai nela — e passa a usá-la em tudo o que vier
- * (um stream novo, a devolução do `ultrathink`).
+ * THE CARD'S NEW INTELLIGENCE, in the live session: the driver applies it with `applyFlagSettings` — in the middle
+ * of the turn included, the next call to the model already goes out on it — and starts using it for everything that comes
+ * (a new stream, the `ultrathink` give-back).
  *
  * Resolves true only once the driver CONFIRMS it (`effort_ack` with no error). Writing to stdin is
  * not enough: the screen said "já valendo" before the session took it, and a refusal only reached
@@ -2411,8 +2411,8 @@ function dropPendingEffortSwitches(session: DriverSession): void {
 }
 
 /**
- * O nível que uma sessão SEM nível fixado usa (o padrão da conta), como o driver vivo o anunciou ao
- * subir (`effort_default`). Null sem driver ou antes do anúncio.
+ * The level a session WITHOUT a pinned level uses (the account's default), as the live driver announced it on
+ * boot (`effort_default`). Null with no driver or before the announcement.
  */
 export function driverDefaultEffort(cardId: string): string | null {
   const session = sessions.get(cardId);
@@ -2450,19 +2450,19 @@ onCardSessionKill((cardId) => stopCardDriver(cardId));
 // nobody. Close the page and the driver idles out on its own; the card is hibernatable again.
 onCardInUseProbe((cardId) => isCardChatInUse(cardId));
 
-// …e a terceira: QUEM responde por este card. A sondagem do tmux não enxerga o driver (ele é filho
-// do back, não do painel do tmux), então sem isto a visão de sessão lia o card como "Claude saiu" —
-// o banner "Claude parou" por cima de uma conversa que estava respondendo.
+// …and the third: WHO answers for this card. The tmux probe does not see the driver (it is a child
+// of the back, not of the tmux pane), so without this the session view read the card as "Claude saiu" —
+// the "Claude parou" banner over a conversation that was answering.
 onCardDriverProbe((cardId) => driverActivity(cardId));
 
-// …a inteligência trocada no pill vai ao driver vivo, que a aplica na sessão sem reiniciar (ver
-// `applyDriverEffort`). Sem driver, quem troca reinicia a sessão nela, como sempre.
+// …the intelligence switched in the pill goes to the live driver, which applies it to the session without restarting (see
+// `applyDriverEffort`). With no driver, whoever switches restarts the session onto it, as always.
 onCardEffortApplier((cardId, effort) => applyDriverEffort(cardId, effort));
 
-// …e o nível padrão da conta, que o driver anuncia no boot, chega ao pill antes da primeira resposta.
+// …and the account's default level, which the driver announces on boot, reaches the pill before the first answer.
 onCardDefaultEffortProbe((cardId) => driverDefaultEffort(cardId));
 
-// …e a quarta: uma tarefa em segundo plano viva é trabalho — o `Stop` do turno que a disparou não
-// pode pôr o card em "aguardando" (ver services/board/status.ts).
-// O mesmo vale para um turno em voo: o `waiting` que chega com ele aberto é hook atrasado.
+// …and the fourth: a live background task is work — the `Stop` of the turn that fired it must not
+// put the card in "aguardando" (see services/board/status.ts).
+// The same holds for a turn in flight: the `waiting` that arrives with it open is a late hook.
 onCardBackgroundProbe((cardId) => driverHoldsBackgroundWork(cardId) || driverTurnRunning(cardId));
