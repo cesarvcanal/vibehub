@@ -30,7 +30,7 @@ Habilitadas em [`settings.json`](settings.json). O `enabledPlugins` só liga plu
 | Plano de várias etapas / executar plano | `superpowers:writing-plans` · `superpowers:executing-plans` |
 | Implementação test-first | `superpowers:test-driven-development` |
 | UI nova com alta qualidade visual | `frontend-design:frontend-design` |
-| Review independente de diff/PR | `/code-review` · `superpowers:requesting-code-review` |
+| Review independente de diff/PR | `/code-review` · `feature-dev:code-reviewer` · `superpowers:requesting-code-review` |
 | Simplificar código existente | `/simplify` · `code-simplifier:code-simplifier` |
 | Antes de afirmar que algo está pronto/passando | `superpowers:verification-before-completion` |
 
@@ -52,9 +52,17 @@ Habilitadas em [`settings.json`](settings.json). O `enabledPlugins` só liga plu
 - **Merge em `main` é deploy** do vibehub em produção.
 - PR documentado (seções e comentários por bloco do diff), commits atômicos, merge commit, nunca squash.
 
-## Review de diff
+## Fechamento: revisão agnóstica contra o AGENTS.md
 
-Depois de implementar, ou em "audita" / "segue as regras?": `/code-review` (o comando nativo do Claude Code, com níveis de esforço; o plugin `code-review` não é habilitado aqui para não disputar o nome). `/code-review ultra` (multi-agente na nuvem, faturado) só quando o usuário pedir.
+É o passo 8 do §12 do `AGENTS.md`, no Claude Code. Terminado **tudo** o que foi pedido, antes do `vibehub_deliver`, sem esperar ser mandado:
+
+1. **Simplificação:** um subagente `code-simplifier:code-simplifier` recebe só o diff (`git diff origin/main...HEAD`), o caminho do `AGENTS.md` e o pedido de confrontar cada trecho com as regras e aplicar o que simplifica sem mudar comportamento. Confira o que ele escreveu e rode o recorte de testes.
+2. **Code review**, só depois de o primeiro terminar: outro subagente (`feature-dev:code-reviewer`, ou o `/code-review` nativo) recebe o diff já simplificado e o `AGENTS.md` e procura bug, regra violada e o que foi inventado: teste que não testa, causa sem evidência, comentário que não bate com o código, API ou flag que não existe.
+3. Achado é candidato, não verdade: confira na fonte, corrija o confirmado em commit próprio e diga por que descartou cada um dos outros.
+
+**Agnóstico** = o prompt do subagente não leva a sua justificativa nem a conversa, só diff, regras e pedido. Quem escreveu não revisa o próprio raciocínio.
+
+Fora do fechamento, em "audita" / "segue as regras?": `/code-review` (o comando nativo, com níveis de esforço; o plugin `code-review` não é habilitado aqui para não disputar o nome). `/code-review ultra` (multi-agente na nuvem, faturado) só quando o usuário pedir.
 
 ## Comandos úteis
 
