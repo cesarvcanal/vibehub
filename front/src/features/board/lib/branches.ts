@@ -47,3 +47,40 @@ export function filtrarBranches(branches: readonly BranchClassificada[], busca: 
 function normalizar(texto: string): string {
   return texto.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
+
+/**
+ * A branch name the server will accept — the same rule as `assertBranchName` in the registry, which
+ * is what the card's open would hit later. Checked in the dialog so a typo is a red line under the
+ * field instead of a card that refuses to open minutes afterwards, in the runner, with a git message.
+ * PURE.
+ */
+export function isBranchName(name: string): boolean {
+  const v = name.trim();
+  return v !== "" && !v.startsWith("-") && !v.includes("..") && /^[\w./-]{1,80}$/.test(v);
+}
+
+export type NewCardBranchIssue = "invalid" | "isBase" | "exists";
+
+/**
+ * What is wrong with the branch a new card would be created ON, if anything. Three answers, and
+ * they do NOT weigh the same:
+ *  - `invalid` and `isBase` BLOCK the creation — the first would be refused by the server, and
+ *    the second would put the card's commits straight on the branch it is meant to deliver to
+ *    (a locked card pointed at `prod` would be working IN `prod`);
+ *  - `exists` only WARNS: opening a card on a branch that already exists is a real thing to want
+ *    (picking work back up), it just is not "create a new one", and the person should know which
+ *    of the two they are getting.
+ * PURE.
+ */
+export function newCardBranchIssue(
+  branch: string,
+  effectiveBase: string,
+  repoBranches: readonly string[] | undefined,
+): NewCardBranchIssue | null {
+  const name = branch.trim();
+  if (!name) return null;
+  if (!isBranchName(name)) return "invalid";
+  if (name === effectiveBase) return "isBase";
+  if (repoBranches?.includes(name)) return "exists";
+  return null;
+}

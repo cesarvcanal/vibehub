@@ -24,6 +24,7 @@ import {
   type BoardProject,
 } from "@/features/board/api";
 import { pillPercent } from "@/features/board/lib/usage";
+import { isBranchName, newCardBranchIssue } from "@/features/board/lib/branches";
 import { useBranchesDoRepo } from "@/features/board/lib/useBranchesDoRepo";
 import { manterDialogoNoEscDoSeletor } from "@/features/board/lib/useSeletorBranch";
 import SeletorBranch from "@/features/board/components/SeletorBranch";
@@ -33,17 +34,6 @@ import { useT } from "@/i18n";
 /** The native select, styled like the rest of the form controls. */
 export const SELECT_CLASS =
   "h-9 w-full rounded-md border border-input bg-background/60 px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50";
-
-/**
- * A branch name the server will accept — the same rule as `assertBranchName` in the registry, which
- * is what the card's open would hit later. Checked HERE so a typo is a red line under the field
- * instead of a card that refuses to open minutes afterwards, in the runner, with a git message.
- * PURE.
- */
-export function isBranchName(name: string): boolean {
-  const v = name.trim();
-  return v !== "" && !v.startsWith("-") && !v.includes("..") && /^[\w./-]{1,80}$/.test(v);
-}
 
 /**
  * New card. The title is the only thing that matters — the branch, worktree and tmux session are
@@ -136,26 +126,8 @@ export function NewCardDialog({
   });
   const { branches } = branchesDoRepo;
 
-  /**
-   * What is wrong with the branch the card would be created ON, if anything. Three answers, and
-   * they do NOT weigh the same:
-   *  - `invalid` and `isBase` BLOCK the creation — the first would be refused by the server, and
-   *    the second would put the card's commits straight on the branch it is meant to deliver to
-   *    (a locked card pointed at `prod` would be working IN `prod`);
-   *  - `exists` only WARNS: opening a card on a branch that already exists is a real thing to want
-   *    (picking work back up), it just is not "create a new one", and the person should know which
-   *    of the two they are getting.
-   */
   const effectiveBase = base.trim() || defaultBranch || "";
-  const branchIssue: "invalid" | "isBase" | "exists" | null = !branch.trim()
-    ? null
-    : !isBranchName(branch)
-      ? "invalid"
-      : branch.trim() === effectiveBase
-        ? "isBase"
-        : branches?.includes(branch.trim())
-          ? "exists"
-          : null;
+  const branchIssue = newCardBranchIssue(branch, effectiveBase, branches);
   /** A base typed by hand (no list) is taken on trust; one picked from the list cannot be wrong. */
   const baseInvalid = base.trim() !== "" && !isBranchName(base);
   const blocked = branchIssue === "invalid" || branchIssue === "isBase" || baseInvalid;
