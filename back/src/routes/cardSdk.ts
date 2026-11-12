@@ -25,7 +25,7 @@ import {
   resumeTargetFor,
 } from "../services/sdk/transcript.js";
 import { acquireTranscriptMirror } from "../services/sdk/mirror.js";
-import { parseSdkClientFrame, parseTypingFrame } from "../services/sdk/protocol.js";
+import { parseTypingFrame } from "../services/sdk/protocol.js";
 import { transcriptDirFor } from "../services/maestro/cardSession.js";
 import { effectiveAccountSlug } from "../services/board/registry.js";
 import { config } from "../config/env.js";
@@ -82,9 +82,6 @@ import { logger } from "../utils/logger.js";
  * answers ONLY this socket with `{ "type": "workflow_feed", "runId", "agentId", "items": [...],
  * "error"?: "invalid-id"|"no-session"|"probe-failed" }` — never the driver, never the history.
  */
-
-// Re-exported for compatibility (tests, callers): the parser moved into the pure protocol module.
-export { parseSdkClientFrame };
 
 export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>(

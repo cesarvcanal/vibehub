@@ -37,11 +37,6 @@ export function buildStatusUrlProbeScript(containerName: string, url: string): s
   return `docker exec ${shQuote(containerName)} curl -s -m 5 -o /dev/null -w '%{http_code}' -X POST ${shQuote(url)} 2>/dev/null || true`;
 }
 
-/** true = the probe got an HTTP answer back (any code but `000`). PURE. */
-export function statusUrlReachable(stdout: string): boolean {
-  return statusProbeVerdict(stdout) === "reachable";
-}
-
 /**
  * What the probe proves. `000` is curl itself failing to connect from inside the runner: the URL is
  * wrong. No code at all means curl never ran (runner down, no docker, no curl), which says nothing
@@ -65,7 +60,7 @@ let lastReach: boolean | null = null;
  */
 export async function checkStatusHookReach(): Promise<boolean> {
   const url = statusUrl();
-  let verdict: ReturnType<typeof statusProbeVerdict> = "unknown";
+  let verdict: ReturnType<typeof statusProbeVerdict>;
   try {
     const { stdout } = await hostExecutor().runScript(buildStatusUrlProbeScript(config.runner.container, url), { timeoutMs: 20_000 });
     verdict = statusProbeVerdict(stdout);
@@ -86,11 +81,6 @@ export async function checkStatusHookReach(): Promise<boolean> {
   }
   lastReach = reachable;
   return reachable;
-}
-
-/** The last verdict of {@link checkStatusHookReach}; null = not checked yet. */
-export function statusHookReach(): boolean | null {
-  return lastReach;
 }
 
 /**

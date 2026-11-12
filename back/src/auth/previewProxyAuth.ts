@@ -51,7 +51,3 @@ export async function previewProxyUser(req: FastifyRequest): Promise<PublicUser 
   }
   return await ensurePreviewOwner();
 }
-
-export function resetPreviewOwnerForTesting(): void {
-  ownerId = null;
-}

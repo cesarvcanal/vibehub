@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { parseSdkClientFrame } from "./cardSdk.js";
+import { parseSdkClientFrame } from "../services/sdk/protocol.js";
 
 // The driver↔socket wiring moved to services/sdk/manager.ts (one card-owned driver, multiplexed
 // sockets) — its behavior is pinned by services/sdk/manager.test.ts. What stays here is the pure
-// frame parser this route re-exports.
+// parser of the frames this route's socket receives (services/sdk/protocol.ts).
 
 describe("parseSdkClientFrame", () => {
   it("treats a bare string as a user message", () => {
