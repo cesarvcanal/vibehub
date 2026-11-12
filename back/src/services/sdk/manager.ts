@@ -445,7 +445,7 @@ function syncBackgroundStatus(session: DriverSession, hadTasks: boolean): void {
   session.backgroundSettleTimer = setTimeout(() => {
     session.backgroundSettleTimer = undefined;
     if (session.closed || session.backgroundTasks.length > 0) return;
-    if (session.activeTurns > 0 || session.autonomousTurn) return;
+    if (isTurnInFlight(session)) return;
     void registry.getCard(session.cardId).then((card) => {
       if (card?.status === "working") reportCardStatusFromDriver(session.cardId, "waiting");
     }).catch(() => { /* best-effort, like a hook */ });
@@ -1467,13 +1467,14 @@ export function handleClientFrame(
     clearIdleTimer(session);
     noteChatActivity(session);
     noteDriverEventFor(session.cardId, control);
-    const line: HistoryEvent = { type: "user", text: control.text, at: Date.now(), from: origin };
+    const at = Date.now();
+    const line: HistoryEvent = { type: "user", text: control.text, at, from: origin };
     const persisted = appendHistoryReported(session.cardId, line);
     relayToPeers(session, sender, line);
     // The durable "turn in flight" record: if a deploy kills the back (and this driver with it)
     // before the result arrives, the boot sweep finds this marker and the turn is not silently
     // lost. attempts: 0 — a person's own turn always earns one automatic resume.
-    markPersonTurn(session, { startedAt: Date.now(), preview: inflightPreview(control.text), attempts: 0 });
+    markPersonTurn(session, { startedAt: at, preview: inflightPreview(control.text), attempts: 0 });
     rememberCid(session, control.cid, { persisted, line });
     void settleOrphanQuestions(session);
     return { kind: "accepted", cid: control.cid, persisted };
@@ -1722,7 +1723,8 @@ function chargeReceipt(session: DriverSession, sent: AcceptedSend): Promise<bool
  * own words) and the in-flight marker carries the attempt count that stops a resume loop.
  */
 export function injectSystemTurn(session: DriverSession, text: string, origin: MessageOrigin, attempts: number): void {
-  try { session.child.stdin.write(encodeControl({ type: "user", text })); } catch { /* driver gone; close will fire */ }
+  // A refused write is logged by writeToDriver; the close event that follows cleans the session up.
+  writeToDriver(session, { type: "user", text });
   recordInjectedTurn(session, text, origin);
   // A retomada é um turno como outro qualquer: o agente refaz a pergunta que o reinício cortou, e a
   // órfã não pode ficar de pé ao lado dela (produção, 2026-10-19 — a pessoa respondeu duas vezes).

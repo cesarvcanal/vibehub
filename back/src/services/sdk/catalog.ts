@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { dataPath } from "../../config/env.js";
 import { withBtwCommand, type CatalogEvent } from "./protocol.js";
 import { CARD_ID_RE } from "../board/cardId.js";
+import { logger } from "../../utils/logger.js";
 
 /**
  * O CATÁLOGO DO CARD EM DISCO — o que o menu "/" oferece, sobrevivendo ao driver que o anunciou.
@@ -62,8 +63,9 @@ export async function writeCardCatalog(cardId: string, catalog: CatalogEvent): P
   try {
     await mkdir(join(file, ".."), { recursive: true });
     await writeFile(file, JSON.stringify(catalog), "utf8");
-  } catch {
-    /* sem durabilidade nesta instalação: a sessão em memória ainda serve esta conexão */
+  } catch (err) {
+    // Sem durabilidade nesta instalação: a sessão em memória ainda serve esta conexão.
+    logger.warn({ card: cardId, detail: (err as Error).message }, "could not write the sdk catalog");
   }
 }
 
