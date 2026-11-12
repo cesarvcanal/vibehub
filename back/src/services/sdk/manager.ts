@@ -590,12 +590,12 @@ function draftIsLive(session: DriverSession, id: string, name: string): boolean 
  * O frame que conta às outras abas o rascunho de `name` num cartão (rascunho vazio = apagou).
  * `away`: a pessoa fechou a aba — o que ela marcou continua valendo, só não está respondendo agora.
  */
-function peerQuestionDraftFrame(id: string, name: string, draft: StoredQuestionDraft, away = false): string {
-  return JSON.stringify({
+function peerQuestionDraftFrame(id: string, name: string, draft: StoredQuestionDraft, away = false): object {
+  return {
     type: "peer_question_draft", id, name, picked: draft.picked, other: draft.other,
     ...(draft.at !== undefined ? { at: draft.at } : {}),
     ...(away ? { away: true } : {}),
-  });
+  };
 }
 
 /**
@@ -614,17 +614,21 @@ async function restoreQuestionDrafts(session: DriverSession): Promise<void> {
         session.questionDrafts.set(id, mine);
       }
       mine.set(name, draft);
-      const frame = peerQuestionDraftFrame(id, name, draft, !draftIsLive(session, id, name));
-      for (const socket of session.sockets) {
-        try { socket.send(frame); } catch { /* going away */ }
-      }
+      broadcast(session, peerQuestionDraftFrame(id, name, draft, !draftIsLive(session, id, name)));
     }
   }
 }
 
-function broadcast(session: DriverSession, event: object): void {
+/** One frame to one socket. A socket going away is not an error: its close handler detaches it. */
+function sendFrame(socket: Pick<WebSocket, "send">, event: object): void {
+  try { socket.send(JSON.stringify(event)); } catch { /* going away */ }
+}
+
+/** One frame to every socket of the card — but `except`, the one that already drew it. */
+function broadcast(session: DriverSession, event: object, except?: WebSocket): void {
   const frame = JSON.stringify(event);
   for (const socket of session.sockets) {
+    if (socket === except) continue;
     try { socket.send(frame); } catch { /* that socket is going away; its close handler detaches it */ }
   }
 }
@@ -1040,7 +1044,7 @@ function createFeedResponder(session: DriverSession, socket: WebSocket): (reques
     busy = true;
     try {
       const frame = await feedReply(session, request);
-      try { socket.send(JSON.stringify(frame)); } catch { /* going away */ }
+      sendFrame(socket, frame);
     } finally {
       busy = false;
       const queued = next;
@@ -1087,7 +1091,7 @@ export function createDetailResponder(
     busy = true;
     try {
       const frame = await answer(request);
-      try { socket.send(JSON.stringify(frame)); } catch { /* going away */ }
+      sendFrame(socket, frame);
     } finally {
       busy = false;
       const next = queue.values().next();
@@ -1348,11 +1352,7 @@ function noteChatActivity(session: DriverSession): void {
  * without the question, and only an F5 (the replay) brought the message in (produção, 2026-10-08).
  */
 function relayToPeers(session: DriverSession, sender: WebSocket | undefined, event: HistoryEvent): void {
-  const frame = JSON.stringify(event);
-  for (const other of session.sockets) {
-    if (other === sender) continue;
-    try { other.send(frame); } catch { /* that socket is going away */ }
-  }
+  broadcast(session, event, sender);
   for (const listener of setupListeners.get(session.cardId) ?? []) listener(event);
 }
 
@@ -1487,12 +1487,12 @@ export function dispatchClientFrame(
     if (canAcceptTurn(session) && writeToDriver(session, control)) {
       noteChatActivity(session);
     } else {
-      try {
-        sender?.send(JSON.stringify({
+      if (sender) {
+        sendFrame(sender, {
           type: "btw_answer", id: control.id, question: control.question,
           error: "o agente deste card não está rodando — pergunte de novo daqui a pouco",
-        }));
-      } catch { /* that socket is going away */ }
+        });
+      }
     }
     return { kind: "ignored", sent: true };
   }
@@ -2048,11 +2048,8 @@ function recordInjectedTurn(session: DriverSession, text: string, origin: Messag
 function replyFrameOutcome(socket: WebSocket, outcome: ClientFrameOutcome): void {
   if (outcome.kind === "ignored" || !outcome.cid) return;
   const cid = outcome.cid;
-  const send = (frame: object): void => {
-    try { socket.send(JSON.stringify(frame)); } catch { /* going away; the browser resends on reconnect */ }
-  };
   if (outcome.kind === "refused") {
-    send({ type: "user_nack", cid, reason: outcome.reason });
+    sendFrame(socket, { type: "user_nack", cid, reason: outcome.reason });
     return;
   }
   // AFTER the append: the ack promises durability, not intention. A write that FAILED (a full
@@ -2060,7 +2057,7 @@ function replyFrameOutcome(socket: WebSocket, outcome: ClientFrameOutcome): void
   // browser keeps its copy. Its resend carries the same `cid`, so it never becomes a second turn: it
   // retries the history write and earns THAT verdict (see `chargeReceipt`).
   void outcome.persisted.then((onDisk) => {
-    send(onDisk ? { type: "user_ack", cid } : { type: "user_nack", cid, reason: "history-write-failed" });
+    sendFrame(socket, onDisk ? { type: "user_ack", cid } : { type: "user_nack", cid, reason: "history-write-failed" });
   });
 }
 
@@ -2102,46 +2099,44 @@ export function attachSocket(
   // manager's REAL state: a view remounting mid-turn (Terminal↔Chat, reload)
   // reset its own turn flag and nothing re-lit the "Trabalhando…" spinner until much later.
   if (session.ready) {
-    try {
-      socket.send(JSON.stringify({ type: "ready", resume: session.lastSessionId, turnActive: isTurnInFlight(session) }));
-    } catch { /* going away */ }
+    sendFrame(socket, { type: "ready", resume: session.lastSessionId, turnActive: isTurnInFlight(session) });
   }
 
   // The "/" menu is state, not conversation: it is not in the replayed history, and the driver
   // only announces it once per boot. Without this, a page opened on a card whose driver is already
   // up had no command list until the next turn's `init` — an empty menu on a session full of skills.
   if (session.catalog) {
-    try { socket.send(JSON.stringify(session.catalog)); } catch { /* going away */ }
+    sendFrame(socket, session.catalog);
   }
 
   // As tarefas em segundo plano também são estado: uma aba que abre (ou recarrega) enquanto um
   // `sleep` de deploy roda precisa ver isso no primeiro quadro — o aviso do CLI só vem na mudança.
   if (session.backgroundTasks.length > 0) {
-    try { socket.send(JSON.stringify({ type: "background_tasks", tasks: session.backgroundTasks })); } catch { /* going away */ }
+    sendFrame(socket, { type: "background_tasks", tasks: session.backgroundTasks });
   }
 
   // O estado de cada subagente também (contadores, "o que ele faz agora"): o CLI só fala na mudança.
   // O tempo vai até agora (taskSnapshot): a aba conta a partir do que recebe.
   const now = Date.now();
   for (const task of session.tasks.values()) {
-    try { socket.send(JSON.stringify(taskSnapshot(task, now))); } catch { /* going away */ }
+    sendFrame(socket, taskSnapshot(task, now));
   }
 
   // O aviso de limite do plano também: o CLI só o emite quando a leitura muda, e quem abre o card
   // com a sessão a 92% precisa ver a faixa no primeiro quadro, não depois da próxima resposta.
   for (const info of session.rateLimits.values()) {
-    try { socket.send(JSON.stringify({ type: "rate_limit", ...info })); } catch { /* going away */ }
+    sendFrame(socket, { type: "rate_limit", ...info });
   }
 
   // O medidor de contexto também: a leitura só vem no fim de um turno, e quem abre o card parado
   // precisa ver quanto a conversa já ocupa sem mandar mensagem nenhuma.
   if (session.contextUsage) {
-    try { socket.send(JSON.stringify({ type: "context_usage", ...session.contextUsage })); } catch { /* going away */ }
+    sendFrame(socket, { type: "context_usage", ...session.contextUsage });
   }
 
   // A compactação em andamento: a barra, contando desde quando começou.
   if (session.compacting) {
-    try { socket.send(JSON.stringify({ type: "compaction", phase: "started", ...session.compacting })); } catch { /* going away */ }
+    sendFrame(socket, { type: "compaction", phase: "started", ...session.compacting });
   }
 
   // A frota do workflow é da mesma natureza do catálogo: estado, não conversa. Ela não está no
@@ -2149,7 +2144,7 @@ export function attachSocket(
   // desenhar o painel no primeiro quadro — senão a tela volta a dizer, por 4 segundos ou para
   // sempre, que não há nada acontecendo.
   for (const run of lastWorkflowRuns(session.cardId)) {
-    try { socket.send(JSON.stringify({ type: "workflow_progress", ...run })); } catch { /* going away */ }
+    sendFrame(socket, { type: "workflow_progress", ...run });
   }
 
   // OS RASCUNHOS dos cartões abertos: quem chega no meio da resposta de outra pessoa vê, de cara, o
@@ -2157,7 +2152,7 @@ export function attachSocket(
   // Os de quem já fechou a aba (ou de antes do reinício) vão marcados como ausentes.
   for (const [id, byName] of session.questionDrafts) {
     for (const [name, draft] of byName) {
-      try { socket.send(peerQuestionDraftFrame(id, name, draft, !draftIsLive(session, id, name))); } catch { /* going away */ }
+      sendFrame(socket, peerQuestionDraftFrame(id, name, draft, !draftIsLive(session, id, name)));
     }
   }
 
@@ -2172,11 +2167,7 @@ export function attachSocket(
   let typingRelayedAt = 0;
   const relayTyping = (active: boolean): void => {
     if (!origin) return;
-    const frame = JSON.stringify({ type: "peer_typing", name: origin.name, active });
-    for (const other of session.sockets) {
-      if (other === socket) continue;
-      try { other.send(frame); } catch { /* that socket is going away */ }
-    }
+    broadcast(session, { type: "peer_typing", name: origin.name, active }, socket);
   };
   const noteTyping = (active: boolean): void => {
     if (active) {
@@ -2200,11 +2191,7 @@ export function attachSocket(
   // abrir o card depois; nunca vai ao driver nem ao histórico.
   const draftedHere = new Set<string>();
   const relayDraft = (id: string, name: string, draft: StoredQuestionDraft, away = false): void => {
-    const frame = peerQuestionDraftFrame(id, name, draft, away);
-    for (const other of session.sockets) {
-      if (other === socket) continue;
-      try { other.send(frame); } catch { /* that socket is going away */ }
-    }
+    broadcast(session, peerQuestionDraftFrame(id, name, draft, away), socket);
   };
   const countLive = (id: string, name: string, delta: 1 | -1): number => {
     let byName = session.draftLive.get(id);
@@ -2226,7 +2213,7 @@ export function attachSocket(
     // A MAIS NOVA VENCE: uma aba que volta com um rascunho mais velho (o notebook depois do celular)
     // não apaga o que a pessoa fez em outro lugar — recebe de volta a versão nova.
     if (stored?.at !== undefined && draft.at !== undefined && draft.at < stored.at) {
-      try { socket.send(peerQuestionDraftFrame(draft.id, origin.name, stored)); } catch { /* going away */ }
+      sendFrame(socket, peerQuestionDraftFrame(draft.id, origin.name, stored));
       return;
     }
     const next: StoredQuestionDraft = { picked: draft.picked, other: draft.other, ...(draft.at !== undefined ? { at: draft.at } : {}) };
