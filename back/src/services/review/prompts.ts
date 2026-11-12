@@ -19,8 +19,8 @@ import {
  * Funções puras: a revisão entra, o texto sai.
  */
 
-const TOOL_SUBMIT = "vibehub_review_submit";
-const TOOL_RESPOND = "vibehub_review_respond";
+export const TOOL_SUBMIT = "vibehub_review_submit";
+export const TOOL_RESPOND = "vibehub_review_respond";
 
 /**
  * Um texto explicativo do achado (o problema, como resolver) com as quebras de linha preservadas e

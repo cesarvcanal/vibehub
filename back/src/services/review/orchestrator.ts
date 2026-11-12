@@ -27,7 +27,7 @@ import {
 import {
   actionableForAuthor, approvePendingText, autoMergeFailedText, authorFixPrompt, authorMergeGatePrompt, mergeGateFailedText, authorQuestionNoticeText, authorSuggestionsPrompt, headMovedPrefix,
   impasseText, nudgePrefix, phaseNoticeText, questionNoticeText, reviewerApprovePrompt, reviewerDeltaPrompt,
-  reviewerRoundPrompt,
+  reviewerRoundPrompt, TOOL_RESPOND, TOOL_SUBMIT,
 } from "./prompts.js";
 
 /**
@@ -1426,7 +1426,7 @@ async function onTurnFinished(event: CardEvent): Promise<void> {
   }
   for (const { id, side } of waiting) {
     let action = null as "nudge" | "impasse" | null;
-    const tool = side === "reviewer" ? "vibehub_review_submit" : "vibehub_review_respond";
+    const tool = side === "reviewer" ? TOOL_SUBMIT : TOOL_RESPOND;
     const after = await mutateReview(id, (r) => {
       if (!awaitingTool(r, side)) return;
       if (r.nudges >= 1) {
@@ -1485,7 +1485,7 @@ export function startReviewOrchestrator(opts: { graceMs?: number } = {}): () => 
  */
 export function reviewToolAnswer(r: Review, side: Side, askedRound: number): Record<string, unknown> {
   const registered = side === "reviewer" ? r.lastSubmitRound === askedRound : r.lastRespondRound === askedRound;
-  const tool = side === "reviewer" ? "vibehub_review_submit" : "vibehub_review_respond";
+  const tool = side === "reviewer" ? TOOL_SUBMIT : TOOL_RESPOND;
   let next: string;
   if (awaitingTool(r, side)) next = `a vez é sua: rodada ${r.round}; chame ${tool} com round: ${r.round}`;
   else if (r.phase === "reviewing") {
