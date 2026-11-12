@@ -26,9 +26,9 @@ import {
 } from "@/features/board/api";
 import { pillPercent } from "@/features/board/lib/usage";
 import { isBranchName, newCardBranchIssue } from "@/features/board/lib/branches";
-import { useBranchesDoRepo } from "@/features/board/lib/useBranchesDoRepo";
-import { manterDialogoNoEscDoSeletor } from "@/features/board/lib/useSeletorBranch";
-import SeletorBranch from "@/features/board/components/SeletorBranch";
+import { useRepoBranches } from "@/features/board/lib/useRepoBranches";
+import { keepDialogOpenOnPickerEscape } from "@/features/board/lib/useBranchPicker";
+import BranchPicker from "@/features/board/components/BranchPicker";
 import type { NewCard } from "@/api/types";
 import { useT } from "@/i18n";
 
@@ -115,13 +115,13 @@ export function NewCardDialog({
    */
   const { owner, repo: repoName } = splitRepo(selectedProject?.repoFullName ?? "");
   const connection = selectedProject?.githubConnectionId ?? "";
-  const branchesDoRepo = useBranchesDoRepo({
+  const repoBranches = useRepoBranches({
     connection,
     owner,
     repo: repoName,
-    habilitado: open && showOptions,
+    enabled: open && showOptions,
   });
-  const { branches } = branchesDoRepo;
+  const { branches } = repoBranches;
 
   const effectiveBase = base.trim() || defaultBranch || "";
   const branchIssue = newCardBranchIssue(branch, effectiveBase, branches);
@@ -193,7 +193,7 @@ export function NewCardDialog({
           single column that hits the 90vh cap. */}
       <DialogContent
         className="grid-cols-1 max-h-[90vh] max-w-2xl overflow-y-auto overflow-x-hidden"
-        onEscapeKeyDown={manterDialogoNoEscDoSeletor}
+        onEscapeKeyDown={keepDialogOpenOnPickerEscape}
       >
         <DialogHeader>
           <DialogTitle>{t("newCard.title")}</DialogTitle>
@@ -292,18 +292,18 @@ export function NewCardDialog({
               <div className="min-w-0 space-y-1.5">
                 <Label htmlFor="new-card-base">{t("newCard.base")}</Label>
                 {branches?.length ? (
-                  <SeletorBranch
+                  <BranchPicker
                     id="new-card-base"
-                    valor={base}
-                    aoEscolher={setBase}
+                    value={base}
+                    onSelect={setBase}
                     branches={branches}
-                    branchPadrao={branchesDoRepo.branchPadrao}
-                    atualizando={branchesDoRepo.atualizando}
-                    falhouAoAtualizar={branchesDoRepo.falhou}
-                    truncada={branchesDoRepo.truncada}
-                    aoAbrir={branchesDoRepo.atualizarSeVelha}
-                    aoAtualizar={branchesDoRepo.forcarAtualizacao}
-                    rotuloSemEscolha={t("newCard.baseInherit", { branch: defaultBranch ?? "" })}
+                    defaultBranch={repoBranches.defaultBranch}
+                    refreshing={repoBranches.refreshing}
+                    refreshFailed={repoBranches.failed}
+                    truncated={repoBranches.truncated}
+                    onOpen={repoBranches.refreshIfStale}
+                    onRefresh={repoBranches.forceRefresh}
+                    noChoiceLabel={t("newCard.baseInherit", { branch: defaultBranch ?? "" })}
                   />
                 ) : (
                   <Input

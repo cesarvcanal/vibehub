@@ -1,51 +1,51 @@
-import type { BranchClassificada, DestaqueBranch } from "@/features/board/types/branches";
+import type { BranchHighlight, RankedBranch } from "@/features/board/types/branches";
 
-/** Branches de desenvolvimento que servem de base de projeto; staging/homolog só ganham destaque. */
-const NOMES_DESENVOLVIMENTO_BASE = ["dev", "develop", "development"] as const;
+/** Development branches that serve as a project's base; staging/homolog only get a badge. */
+const DEVELOPMENT_BASE_NAMES = ["dev", "develop", "development"] as const;
 
-const NOMES_POR_DESTAQUE: Record<Exclude<DestaqueBranch, "padrao">, readonly string[]> = {
+const NAMES_BY_HIGHLIGHT: Record<Exclude<BranchHighlight, "padrao">, readonly string[]> = {
   producao: ["prod", "production", "producao"],
   principal: ["main", "master"],
-  desenvolvimento: [...NOMES_DESENVOLVIMENTO_BASE, "staging", "homolog"],
+  desenvolvimento: [...DEVELOPMENT_BASE_NAMES, "staging", "homolog"],
 };
 
-const DESTAQUES_POR_NOME = ["producao", "principal", "desenvolvimento"] as const;
+const NAMED_HIGHLIGHTS = ["producao", "principal", "desenvolvimento"] as const;
 
-const ORDEM_DESTAQUE: readonly DestaqueBranch[] = ["padrao", ...DESTAQUES_POR_NOME];
+const HIGHLIGHT_ORDER: readonly BranchHighlight[] = ["padrao", ...NAMED_HIGHLIGHTS];
 
-function destaqueDe(nome: string, branchPadrao: string | null): DestaqueBranch | null {
-  if (nome === branchPadrao) return "padrao";
-  return DESTAQUES_POR_NOME.find((destaque) => NOMES_POR_DESTAQUE[destaque].includes(nome)) ?? null;
+function highlightOf(name: string, defaultBranch: string | null): BranchHighlight | null {
+  if (name === defaultBranch) return "padrao";
+  return NAMED_HIGHLIGHTS.find((highlight) => NAMES_BY_HIGHLIGHT[highlight].includes(name)) ?? null;
 }
 
-/** Destacadas (padrão do repo, produção, main/master, dev) na ordem de `ORDEM_DESTAQUE`; o resto em ordem alfabética. */
-export function classificarBranches(
+/** Featured (the repo's default, production, main/master, dev) in `HIGHLIGHT_ORDER`; the rest alphabetically. */
+export function rankBranches(
   branches: readonly string[],
-  branchPadrao: string | null,
-): { destacadas: BranchClassificada[]; demais: BranchClassificada[] } {
-  const classificadas = branches.map((nome) => ({ nome, destaque: destaqueDe(nome, branchPadrao) }));
-  const destacadas = ORDEM_DESTAQUE.flatMap((destaque) => classificadas.filter((b) => b.destaque === destaque));
-  const demais = classificadas
-    .filter((b) => b.destaque === null)
-    .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR", { sensitivity: "base" }));
-  return { destacadas, demais };
+  defaultBranch: string | null,
+): { featured: RankedBranch[]; others: RankedBranch[] } {
+  const ranked = branches.map((name) => ({ name, highlight: highlightOf(name, defaultBranch) }));
+  const featured = HIGHLIGHT_ORDER.flatMap((highlight) => ranked.filter((b) => b.highlight === highlight));
+  const others = ranked
+    .filter((b) => b.highlight === null)
+    .sort((a, b) => a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" }));
+  return { featured, others };
 }
 
-/** Branch base para um projeto novo: a de desenvolvimento, senão main/master, senão a padrão do repo. */
-export function branchBaseSugerida(branches: readonly string[], branchPadrao: string | null): string | undefined {
-  const preferidas = [...NOMES_DESENVOLVIMENTO_BASE, ...NOMES_POR_DESTAQUE.principal];
-  return preferidas.find((nome) => branches.includes(nome)) ?? branchPadrao ?? branches[0];
+/** Base branch for a new project: the development one, else main/master, else the repo's default. */
+export function suggestedBaseBranch(branches: readonly string[], defaultBranch: string | null): string | undefined {
+  const preferred = [...DEVELOPMENT_BASE_NAMES, ...NAMES_BY_HIGHLIGHT.principal];
+  return preferred.find((name) => branches.includes(name)) ?? defaultBranch ?? branches[0];
 }
 
-/** Busca por pedaço do nome, sem caixa e sem acento. */
-export function filtrarBranches(branches: readonly BranchClassificada[], busca: string): BranchClassificada[] {
-  const termo = normalizar(busca.trim());
-  if (!termo) return [...branches];
-  return branches.filter((b) => normalizar(b.nome).includes(termo));
+/** Search by any part of the name, ignoring case and accents. */
+export function filterBranches(branches: readonly RankedBranch[], search: string): RankedBranch[] {
+  const term = normalizeForSearch(search.trim());
+  if (!term) return [...branches];
+  return branches.filter((b) => normalizeForSearch(b.name).includes(term));
 }
 
-function normalizar(texto: string): string {
-  return texto.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+function normalizeForSearch(text: string): string {
+  return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
 
 /**

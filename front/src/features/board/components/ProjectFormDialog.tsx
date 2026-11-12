@@ -18,10 +18,10 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { apiErrorMessage } from "@/lib/apiError";
 import { SELECT_CLASS } from "@/components/ui/select";
-import SeletorBranch from "@/features/board/components/SeletorBranch";
-import { useBranchesDoRepo } from "@/features/board/lib/useBranchesDoRepo";
-import { branchBaseSugerida } from "@/features/board/lib/branches";
-import { manterDialogoNoEscDoSeletor } from "@/features/board/lib/useSeletorBranch";
+import BranchPicker from "@/features/board/components/BranchPicker";
+import { useRepoBranches } from "@/features/board/lib/useRepoBranches";
+import { suggestedBaseBranch } from "@/features/board/lib/branches";
+import { keepDialogOpenOnPickerEscape } from "@/features/board/lib/useBranchPicker";
 import {
   ACCOUNTS_KEY,
   GITHUB_KEY,
@@ -113,8 +113,8 @@ export function ProjectFormDialog({
   const selected = repos?.find((r) => r.fullName === repo);
   const { owner, repo: repoName } = splitRepo(repo);
 
-  const branchesDoRepo = useBranchesDoRepo({ connection: activeConnection, owner, repo: repoName, habilitado: open });
-  const { branches } = branchesDoRepo;
+  const repoBranches = useRepoBranches({ connection: activeConnection, owner, repo: repoName, enabled: open });
+  const { branches } = repoBranches;
 
   // Pick a sensible base branch ONCE per repository, then leave the operator's choice alone.
   const applied = React.useRef<string | null>(null);
@@ -122,8 +122,8 @@ export function ProjectFormDialog({
     if (!selected || !branches) return;
     if (applied.current === selected.fullName) return;
     applied.current = selected.fullName;
-    setBranch(branchBaseSugerida(branches, branchesDoRepo.branchPadrao ?? selected.defaultBranch) ?? "main");
-  }, [branches, branchesDoRepo.branchPadrao, selected]);
+    setBranch(suggestedBaseBranch(branches, repoBranches.defaultBranch ?? selected.defaultBranch) ?? "main");
+  }, [branches, repoBranches.defaultBranch, selected]);
 
   // Reset means "back to what this dialog opened with": empty for a new project, the stored values
   // when editing one.
@@ -221,7 +221,7 @@ export function ProjectFormDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent className="max-h-[85vh] max-w-md overflow-y-auto" onEscapeKeyDown={manterDialogoNoEscDoSeletor}>
+      <DialogContent className="max-h-[85vh] max-w-md overflow-y-auto" onEscapeKeyDown={keepDialogOpenOnPickerEscape}>
         <DialogHeader>
           <DialogTitle>{project ? t("project.settingsTitle") : t("project.newTitle")}</DialogTitle>
           <DialogDescription>
@@ -351,17 +351,17 @@ export function ProjectFormDialog({
             <div className="space-y-1.5">
               <Label htmlFor="project-branch">{t("project.baseBranch")}</Label>
               {branches?.length ? (
-                <SeletorBranch
+                <BranchPicker
                   id="project-branch"
-                  valor={branch}
-                  aoEscolher={setBranch}
+                  value={branch}
+                  onSelect={setBranch}
                   branches={branches}
-                  branchPadrao={branchesDoRepo.branchPadrao}
-                  atualizando={branchesDoRepo.atualizando}
-                  falhouAoAtualizar={branchesDoRepo.falhou}
-                  truncada={branchesDoRepo.truncada}
-                  aoAbrir={branchesDoRepo.atualizarSeVelha}
-                  aoAtualizar={branchesDoRepo.forcarAtualizacao}
+                  defaultBranch={repoBranches.defaultBranch}
+                  refreshing={repoBranches.refreshing}
+                  refreshFailed={repoBranches.failed}
+                  truncated={repoBranches.truncated}
+                  onOpen={repoBranches.refreshIfStale}
+                  onRefresh={repoBranches.forceRefresh}
                 />
               ) : (
                 <Input

@@ -384,7 +384,7 @@ describe("NewCardDialog", () => {
     await user.click(screen.getByRole("button", { name: "Options" }));
     await user.click(await screen.findByLabelText("Cut from"));
     await user.keyboard("{ArrowDown}{ArrowDown}");
-    expect(opcaoDaBranch("prod")).toHaveAttribute("data-ativo");
+    expect(opcaoDaBranch("prod")).toHaveAttribute("data-active");
 
     await user.click(screen.getByRole("button", { name: "Refresh the list from GitHub" }));
     await waitFor(() => expect(opcaoDaBranch("production")).toBeInTheDocument());
