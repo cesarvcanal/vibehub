@@ -7,7 +7,7 @@ import { config } from "../../config/env.js";
 import { onCardStatusSink } from "../board/agentState.js";
 import {
   ensureDriverSession,
-  handleClientFrame,
+  dispatchClientFrame,
   resetSdkSessionsForTesting,
   setDriverSpawnerForTesting,
 } from "./manager.js";
@@ -91,7 +91,7 @@ describe("sdk manager — o fim do turno relê a pergunta pendente", () => {
   it("o turno que fecha manda reler o log do card", async () => {
     const session = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
     spawned[0]!.stdout.emit("data", line({ type: "ready" }));
-    handleClientFrame(session, `{"type":"user","text":"revisa"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"revisa"}`);
     spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "Posso fazer o merge?" }));
     await flush();
     expect(synced).toEqual([]); // turno aberto: ainda não é o fim da fala
@@ -103,8 +103,8 @@ describe("sdk manager — o fim do turno relê a pergunta pendente", () => {
   it("um result com outra mensagem ainda na fila não é a conversa parando", async () => {
     const session = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
     spawned[0]!.stdout.emit("data", line({ type: "ready" }));
-    handleClientFrame(session, `{"type":"user","text":"um"}`);
-    handleClientFrame(session, `{"type":"user","text":"dois"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"um"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"dois"}`);
     spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
     await flush();
     expect(synced).toEqual([]);

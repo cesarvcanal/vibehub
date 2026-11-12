@@ -10,7 +10,7 @@ import {
   applyDriverEffort,
   driverDefaultEffort,
   ensureDriverSession,
-  handleClientFrame,
+  dispatchClientFrame,
   resetSdkSessionsForTesting,
   setDriverSpawnerForTesting,
   stopCardDriver,
@@ -98,7 +98,7 @@ describe("sdk manager — a inteligência trocada com o driver de pé", () => {
   it("no meio do turno, o nível vai ao driver e só conta como aplicado quando ele CONFIRMA", async () => {
     const session = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
     spawned[0]!.stdout.emit("data", line({ type: "ready" }));
-    handleClientFrame(session, `{"type":"user","text":"revisa os PRs"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"revisa os PRs"}`);
     await flush();
 
     const applied = applyDriverEffort(CARD, "high");
@@ -189,7 +189,7 @@ describe("sdk manager — a inteligência trocada com o driver de pé", () => {
     // CLI retomado devolve a chamada como "session ended before this call's result was recorded".
     const session = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
     spawned[0]!.stdout.emit("data", line({ type: "ready" }));
-    handleClientFrame(session, `{"type":"user","text":"executa o plano"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"executa o plano"}`);
     await flush();
     spawned[0]!.stdout.emit("data", line({ type: "tool_use", id: "task-fg", name: "Agent", input: { description: "Implement Task 1" } }));
     await flush();
@@ -210,7 +210,7 @@ describe("sdk manager — a inteligência trocada com o driver de pé", () => {
   it("voltar ao padrão da conta (null) também vai ao driver vivo, sem reiniciar", async () => {
     const session = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
     spawned[0]!.stdout.emit("data", line({ type: "ready" }));
-    handleClientFrame(session, `{"type":"user","text":"revisa os PRs"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"revisa os PRs"}`);
     await flush();
 
     const applied = applyDriverEffort(CARD, null);

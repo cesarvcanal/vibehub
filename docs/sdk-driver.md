@@ -239,7 +239,7 @@ edição não reescreve o passado — é um **supersede**:
     reporta essa morte como exceção, e ela é nossa. O que é engolido vai pro stderr com o prefixo
     `[sdk-driver]`, que o manager loga em `warn`.
   - Falha de verdade continua virando frase traduzida com o `subtype` e o que fazer.
-- O manager (`handleClientFrame`) embrulha o texto com `buildSupersedeText` (protocol.ts) e escreve
+- O manager (`dispatchClientFrame`) embrulha o texto com `buildSupersedeText` (protocol.ts) e escreve
   no stdin do driver **um turno `user` normal** — o driver não conhece `edit_user`:
 
   ```
@@ -556,7 +556,7 @@ The runner container is never recreated.
 ## Session persistence
 
 The driver emits the `session_id` (`session` / `result` events); the manager
-(`handleDriverEvent` in `services/sdk/manager.ts` — the side that survives the page) persists each
+(`applyDriverEvent` in `services/sdk/manager.ts` — the side that survives the page) persists each
 NEW id onto the card (`resumeSessionId` in board.json, deduplicated). The next driver spawn — a
 reconnect, the card reopened tomorrow — passes `--resume <id>` and continues the SAME conversation.
 The chat footer shows the short session id (the resume key you are on).
@@ -814,7 +814,7 @@ tivesse sido enviada. Reenviar o mesmo texto funciona. Dois furos, um em cada po
   `isCardChatInUse`: há aba conectada, ou há turno rodando. Fechada a aba, o driver se encerra pelo
   próprio idle stop e o card volta a ser hibernável. Além disso, `lastActivityAt` agora conta
   `humanActiveAt`, e uma mensagem no chat nativo passa a estampá-lo — conversar É sinal de vida.
-- **Envio nunca é engolido.** `handleClientFrame` devolve um veredito (`ClientFrameOutcome`): com o
+- **Envio nunca é engolido.** `dispatchClientFrame` devolve um veredito (`ClientFrameOutcome`): com o
   driver morto ele **recusa** (nada escrito, nada gravado, nenhum turno contado) e o socket recebe
   `user_nack`; aceito, o `user_ack` sai **depois** do append no histórico — o ack promete
   durabilidade, não intenção. Um append que FALHA (disco cheio) não ganha ack: sai `user_nack`
@@ -879,7 +879,7 @@ tivesse sido enviada. Reenviar o mesmo texto funciona. Dois furos, um em cada po
   envio vai para a **fila** — o mesmo lugar de quem escreveu durante um turno: editável, em disco,
   entregue sozinha pelo despacho quando houver conexão.
 - **`Reenviar` não roda o turno duas vezes.** O reenvio repete o MESMO `cid` de propósito: o que se
-  perdeu foi o recibo, não a mensagem. `handleClientFrame` lembra os recibos já emitidos
+  perdeu foi o recibo, não a mensagem. `dispatchClientFrame` lembra os recibos já emitidos
   (`acceptedCids`, os últimos `ACCEPTED_CIDS_MAX`) e devolve o `user_ack` sem tocar no driver — sem
   isso, reenviar "apaga a branch" executava a instrução duas vezes. Mesmas palavras com `cid` NOVO
   seguem sendo mensagem nova: mandar duas vezes é um direito. Se o recibo guardado é um
@@ -1094,7 +1094,7 @@ abas abertas NAQUELE card. Nada em disco, nenhum timer no back.
 **A mensagem enviada, ao vivo nas outras abas (2026-10-08).** O "digitando" chegava, mas o Enter
 não: o turno ia para o stdin do driver e para o histórico, e só quem enviou via a bolha (eco local).
 A resposta do modelo chegava a todos via `broadcast`, sem a pergunta que a gerou — só um F5 (o
-replay) trazia a mensagem. Agora `handleClientFrame` repassa a linha aceita (`relayToPeers`) às
+replay) trazia a mensagem. Agora `dispatchClientFrame` repassa a linha aceita (`relayToPeers`) às
 OUTRAS abas do card, no mesmo formato do replay (`{ type: "user", text, at, from }`; numa edição,
 antes, o `message_edited`). Nunca de volta ao remetente (ele já desenhou), nunca de novo num
 Reenviar com o mesmo `cid`, nunca quando a mensagem foi recusada. O transporte já era em tempo

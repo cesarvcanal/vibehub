@@ -7,7 +7,7 @@ import { config } from "../../config/env.js";
 import { onCardStatusSink } from "../board/agentState.js";
 import {
   ensureDriverSession,
-  handleClientFrame,
+  dispatchClientFrame,
   resetSdkSessionsForTesting,
   setDriverSpawnerForTesting,
   stopCardDriver,
@@ -94,7 +94,7 @@ afterEach(async () => {
 function startTurn() {
   const session = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
   emit({ type: "ready" });
-  handleClientFrame(session, `{"type":"user","text":"decide comigo"}`);
+  dispatchClientFrame(session, `{"type":"user","text":"decide comigo"}`);
   stamps.length = 0; // só interessa o que vem depois do turno aberto
   return session;
 }

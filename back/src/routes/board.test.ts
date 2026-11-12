@@ -472,7 +472,7 @@ describe("status callback", () => {
     manager.setDriverSpawnerForTesting(() => child as never);
     try {
       const session = manager.ensureDriverSession({ cardId: card, label: "t", command: { file: "docker", args: [] } });
-      manager.handleClientFrame(session, `{"type":"user","text":"oi"}`);
+      manager.dispatchClientFrame(session, `{"type":"user","text":"oi"}`);
       await vi.waitFor(async () => expect((await (await registry()).getCard(card))?.status).toBe("working"));
 
       await postStatus(card, "waiting", RUNNER_TOKEN);

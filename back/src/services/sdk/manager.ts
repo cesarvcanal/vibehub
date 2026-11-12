@@ -681,7 +681,7 @@ function maybeScheduleIdleStop(session: DriverSession): void {
 }
 
 /** One driver event, seen by the SURVIVING side: persist, remember, fan out. */
-function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
+function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
   // The harness's canned close-out for a turn that died mid-flight ("No response requested.") can
   // also arrive LIVE, as the resumed session's first assistant message. It is filler, not an
   // answer — shown, it reads as Claude dismissing the person's message (the production symptom).
@@ -1202,7 +1202,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
   child.stdout.on("data", (chunk: Buffer) => {
     for (const line of readLines(chunk)) {
       const event = parseDriverLine(line);
-      if (event) handleDriverEvent(session, event);
+      if (event) applyDriverEvent(session, event);
     }
   });
   // EPIPE on the way IN: the child (or the docker exec carrying it) is gone. Without this the
@@ -1394,7 +1394,7 @@ export function missedDuringSetup(heard: readonly HistoryEvent[], replay: readon
  * turn is only ever reported `accepted` when it is both in the driver's stdin and on its way to
  * disk — never because a `write()` did not happen to throw.
  */
-export function handleClientFrame(
+export function dispatchClientFrame(
   session: DriverSession,
   raw: string,
   origin?: MessageOrigin,
@@ -2269,7 +2269,7 @@ export function attachSocket(
   const answerDetail = createDetailResponder(session, socket);
 
   const deliver = (text: string): void => {
-    const outcome = handleClientFrame(session, text, origin, socket);
+    const outcome = dispatchClientFrame(session, text, origin, socket);
     // The message is out: whoever wrote it stopped typing — even if the front's own "parou" is lost.
     if (outcome.kind === "accepted" || (outcome.kind === "ignored" && outcome.sent)) noteTyping(false);
     replyFrameOutcome(socket, outcome);

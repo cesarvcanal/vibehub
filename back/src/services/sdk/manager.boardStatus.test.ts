@@ -8,7 +8,7 @@ import { onCardStatusSink } from "../board/agentState.js";
 import {
   driverTurnRunning,
   ensureDriverSession,
-  handleClientFrame,
+  dispatchClientFrame,
   injectSystemTurn,
   onDriverCrashWithWork,
   RESUME_CONFIRM_MS,
@@ -105,7 +105,7 @@ describe("sdk manager — a bolinha do card segue o driver", () => {
   it("grava working quando o turno abre e waiting quando o result fecha", async () => {
     const session = ensure();
     spawned[0]!.stdout.emit("data", line({ type: "ready" }));
-    handleClientFrame(session, `{"type":"user","text":"roda os testes"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"roda os testes"}`);
     await flush();
     expect(applied).toEqual([{ cardId: CARD, status: "working" }]);
     expect(driverTurnRunning(CARD)).toBe(true);
@@ -127,14 +127,14 @@ describe("sdk manager — a bolinha do card segue o driver", () => {
   it("não regrava o que o card já mostra", async () => {
     cards.get(CARD)!.status = "working";
     const session = ensure();
-    handleClientFrame(session, `{"type":"user","text":"oi"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"oi"}`);
     await flush();
     expect(applied).toEqual([]);
   });
 
   it("driver que morre com turno aberto devolve a bolinha para aguardando", async () => {
     const session = ensure();
-    handleClientFrame(session, `{"type":"user","text":"oi"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"oi"}`);
     await flush();
     spawned[0]!.emit("close", 1);
     await flush();
@@ -152,7 +152,7 @@ describe("sdk manager — a bolinha do card segue o driver", () => {
   it("pausa pendente: o fim do turno é reportado pelo caminho dos hooks, que executa a pausa", async () => {
     cards.get(CARD)!.column = "paused";
     const session = ensure();
-    handleClientFrame(session, `{"type":"user","text":"oi"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"oi"}`);
     await flush();
     spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
     await flush();
@@ -213,7 +213,7 @@ describe("sdk manager — a bolinha numa queda com trabalho em voo", () => {
     const off = onDriverCrashWithWork(() => undefined);
     try {
       const session = ensure();
-      handleClientFrame(session, `{"type":"user","text":"tarefa longa"}`);
+      dispatchClientFrame(session, `{"type":"user","text":"tarefa longa"}`);
       await flush();
       spawned[0]!.emit("close", 137);
       await flush();
@@ -225,7 +225,7 @@ describe("sdk manager — a bolinha numa queda com trabalho em voo", () => {
 
   it("sem ninguém para retomar: aguardando, como sempre", async () => {
     const session = ensure();
-    handleClientFrame(session, `{"type":"user","text":"tarefa longa"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"tarefa longa"}`);
     await flush();
     spawned[0]!.emit("close", 137);
     await flush();

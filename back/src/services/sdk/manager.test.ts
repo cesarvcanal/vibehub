@@ -15,7 +15,7 @@ import {
   driverActivity,
   driverTurnRunning,
   ensureDriverSession,
-  handleClientFrame,
+  dispatchClientFrame,
   hasDriverSession,
   isCardChatInUse,
   missedDuringSetup,
@@ -815,7 +815,7 @@ describe("end of life", () => {
     stopCardDriver(CARD); // troca de modelo: o velho recebe o kill, mas o processo ainda não fechou
     const successor = ensure();
     expect(spawned.length).toBe(2);
-    handleClientFrame(successor, `{"type":"user","text":"fala do sucessor"}`);
+    dispatchClientFrame(successor, `{"type":"user","text":"fala do sucessor"}`);
     expect(driverKeysFor(CARD).size).toBeGreaterThan(0);
     spawned[0]!.emit("close", null); // só agora o velho termina de morrer
     expect(driverKeysFor(CARD).size).toBeGreaterThan(0);
@@ -1027,12 +1027,12 @@ describe("inflight markers — a durabilidade do turno em voo (o bug do deploy)"
     });
   });
 
-  it("handleClientFrame delivers a frame buffered during the route's setup gap as a normal user turn", async () => {
+  it("dispatchClientFrame delivers a frame buffered during the route's setup gap as a normal user turn", async () => {
     // The production symptom: a message typed right after a reconnect (while the route was still
     // probing/replaying, with no listener attached) was silently dropped. The route now buffers
     // and drains through this same funnel.
     const session = ensure();
-    handleClientFrame(session, `{"type":"user","text":"e aí, como tá indo?"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"e aí, como tá indo?"}`);
     const frames = spawned[0]!.stdin.written.map((s) => JSON.parse(s) as { type: string; text?: string });
     expect(frames).toEqual([{ type: "user", text: "e aí, como tá indo?" }]);
     expect(session.activeTurns).toBe(1);
@@ -2189,7 +2189,7 @@ describe("attachSocket — \"está digitando\" entre as abas do card", () => {
  * A PERGUNTA QUE SUMIU "SEM RESPOSTA" (produção, 2026-10-26): alguém parou o turno e o cartão caiu na
  * tela da outra pessoa como se o prazo tivesse vencido. Agora o resultado diz quem parou e como.
  */
-describe("handleClientFrame — quem parou o turno cancela a pergunta, e o cartão diz quem", () => {
+describe("dispatchClientFrame — quem parou o turno cancela a pergunta, e o cartão diz quem", () => {
   const CESAR = { kind: "user" as const, name: "cesar" };
   const MUSSA = { kind: "owner" as const, name: "mussa" };
   const emit = (event: object) => spawned[0]!.stdout.emit("data", line(event as never));
@@ -2643,7 +2643,7 @@ describe("attachSocket — a mensagem enviada aparece ao vivo nas outras abas do
     const mussa = fakeSocket();
     attachSocket(session, albert as never, ALBERT);
     attachSocket(session, mussa as never, MUSSA);
-    handleClientFrame(session, `{"type":"user","text":"e aí, como tá indo?"}`, ALBERT, albert as never);
+    dispatchClientFrame(session, `{"type":"user","text":"e aí, como tá indo?"}`, ALBERT, albert as never);
     expect(frames(mussa, "user")).toEqual([expect.objectContaining({ text: "e aí, como tá indo?" })]);
     expect(frames(albert, "user")).toEqual([]);
   });
@@ -3139,7 +3139,7 @@ describe("retomada automática — confirmação de que pegou", () => {
     const session = ensure();
     injectSystemTurn(session, CONT, SYS, 1);
     emit({ type: "result", isError: false });
-    handleClientFrame(session, `{"type":"user","text":"e aí?"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"e aí?"}`);
     vi.advanceTimersByTime(RESUME_CONFIRM_MS * 3);
     expect(userWrites().map((f) => f.text)).toEqual([CONT, "e aí?"]);
   });
@@ -3177,7 +3177,7 @@ describe("retomada automática — confirmação de que pegou", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const session = ensure();
     injectSystemTurn(session, CONT, SYS, 1);
-    handleClientFrame(session, `{"type":"interrupt"}`);
+    dispatchClientFrame(session, `{"type":"interrupt"}`);
     emit({ type: "result", isError: false });
     vi.advanceTimersByTime(RESUME_CONFIRM_MS * 3);
     expect(userWrites()).toHaveLength(1);
@@ -3228,7 +3228,7 @@ describe("retomada automática — confirmação de que pegou", () => {
   it("turno de pessoa que fecha sem texto não é vigiado (o watchdog é só da retomada)", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const session = ensure();
-    handleClientFrame(session, `{"type":"user","text":"/compact"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"/compact"}`);
     emit({ type: "result", isError: false });
     vi.advanceTimersByTime(RESUME_CONFIRM_MS * 3);
     expect(userWrites()).toHaveLength(1);
@@ -3248,7 +3248,7 @@ describe("queda do driver com trabalho em voo", () => {
     const seen: Array<{ cardId: string; attempts: number }> = [];
     const off = onDriverCrashWithWork((cardId, marker) => seen.push({ cardId, attempts: marker.attempts }));
     const session = ensure();
-    handleClientFrame(session, `{"type":"user","text":"tarefa longa"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"tarefa longa"}`);
     spawned[0]!.emit("close", 137);
     off();
     expect(seen).toEqual([{ cardId: CARD, attempts: 0 }]);
@@ -3258,7 +3258,7 @@ describe("queda do driver com trabalho em voo", () => {
     const seen: string[] = [];
     const off = onDriverCrashWithWork((cardId) => seen.push(cardId));
     const session = ensure();
-    handleClientFrame(session, `{"type":"user","text":"tarefa longa"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"tarefa longa"}`);
     stopCardDriver(CARD);
     spawned[0]!.emit("close", null);
     off();
@@ -3269,7 +3269,7 @@ describe("queda do driver com trabalho em voo", () => {
     const seen: string[] = [];
     const off = onDriverCrashWithWork((cardId) => seen.push(cardId));
     const session = ensure();
-    handleClientFrame(session, `{"type":"user","text":"tarefa longa"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"tarefa longa"}`);
     shutdownAllDrivers();
     spawned[0]!.emit("close", null);
     off();
@@ -3280,7 +3280,7 @@ describe("queda do driver com trabalho em voo", () => {
     const seen: string[] = [];
     const off = onDriverCrashWithWork((cardId) => seen.push(cardId));
     const session = ensure();
-    handleClientFrame(session, `{"type":"user","text":"oi"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"oi"}`);
     emit({ type: "result", isError: false });
     spawned[0]!.emit("close", 1);
     off();
@@ -3301,7 +3301,7 @@ describe("/btw — pergunta lateral", () => {
 
   it("vai ao driver como controle btw, sem virar turno nem marcador de turno em voo", async () => {
     const session = ensure();
-    handleClientFrame(session, btwFrame);
+    dispatchClientFrame(session, btwFrame);
     expect(driverControls()).toEqual([{ type: "btw", id: "b1", question: "o que falta?" }]);
     expect(driverTurnRunning(CARD)).toBe(false);
     expect(await readInflightMarker(CARD)).toBeNull();
@@ -3309,9 +3309,9 @@ describe("/btw — pergunta lateral", () => {
 
   it("com um turno rodando, não mexe na contagem dele", () => {
     const session = ensure();
-    handleClientFrame(session, JSON.stringify({ type: "user", text: "roda os testes" }));
+    dispatchClientFrame(session, JSON.stringify({ type: "user", text: "roda os testes" }));
     expect(driverTurnRunning(CARD)).toBe(true);
-    handleClientFrame(session, btwFrame);
+    dispatchClientFrame(session, btwFrame);
     spawned[0]!.stdout.emit("data", line({ type: "result", subtype: "success" }));
     expect(driverTurnRunning(CARD)).toBe(false);
   });
@@ -3320,7 +3320,7 @@ describe("/btw — pergunta lateral", () => {
     const session = ensure();
     const socket = fakeSocket();
     attachSocket(session, socket as never);
-    handleClientFrame(session, btwFrame);
+    dispatchClientFrame(session, btwFrame);
     spawned[0]!.stdout.emit("data", line({ type: "btw_answer", id: "b1", question: "o que falta?", text: "falta o PR" }));
     expect(sentTypes(socket)).toContain("btw_answer");
     await vi.waitFor(async () => {
@@ -3334,7 +3334,7 @@ describe("/btw — pergunta lateral", () => {
     const socket = fakeSocket();
     attachSocket(session, socket as never);
     spawned[0]!.exitCode = 1;
-    handleClientFrame(session, btwFrame, undefined, socket as never);
+    dispatchClientFrame(session, btwFrame, undefined, socket as never);
     const answer = socket.sent.map((s) => JSON.parse(s) as Record<string, unknown>).find((e) => e.type === "btw_answer");
     expect(answer).toMatchObject({ id: "b1", question: "o que falta?", error: expect.any(String) });
     expect(String(answer!.error)).not.toBe("driver-gone"); // frase para a pessoa, não código interno
