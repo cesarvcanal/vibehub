@@ -1,6 +1,7 @@
 import { config } from "../../config/env.js";
 import { hostExecutor, shQuote } from "../../runtime/host.js";
 import { hasLiveSession, type Card } from "./registry.js";
+import { logger } from "../../utils/logger.js";
 
 /**
  * Whether Claude is alive in a card's terminal — shared by the OUTBOX (deliver now or queue) and the
@@ -304,9 +305,14 @@ export function onCardStatusSink(sink: StatusSink): () => void {
   return () => statusSinks.delete(sink);
 }
 
-/** Fire-and-forget: a failed write is logged by the sink's own caller path, never thrown here. */
+/**
+ * Fire-and-forget: the driver has no one to hand a failure to, so a sink that rejects is logged
+ * here and never thrown — best-effort, like a hook.
+ */
 export function reportCardStatusFromDriver(cardId: string, status: "working" | "waiting"): void {
   for (const sink of statusSinks) {
-    void sink(cardId, status).catch(() => { /* best-effort, like a hook */ });
+    void sink(cardId, status).catch((err: unknown) => {
+      logger.warn({ cardId, status, detail: (err as Error).message }, "could not report a card status from the driver");
+    });
   }
 }
