@@ -1,5 +1,8 @@
 import { defuseUltraWords } from "../../utils/ultraWords.js";
-import { autoMergeEligible, waivedText, MAX_ROUNDS, MERGE_GATE_AUTO_RETRIES, pendingQuestions, type Finding, type FindingStatus, type Review } from "./model.js";
+import {
+  autoMergeEligible, waivedText, MAX_ROUNDS, MERGE_GATE_AUTO_RETRIES, pendingImprovements, pendingQuestions, type Finding,
+  type FindingStatus, type Review,
+} from "./model.js";
 
 /**
  * TEXTOS DA REVISÃO DE PR — o que o orquestrador digita no card do revisor e no do autor.
@@ -71,7 +74,8 @@ function rules(): string {
     "- Só bloqueia com prova: teste que falha, regra escrita do repo citada (arquivo e trecho), ou cenário concreto com " +
       "arquivo:linha. Bug no código deste PR (comportamento errado, falha, quebra, brecha de segurança, perda de dado, " +
       "regressão) TEM essa prova: é bloqueante e se resolve neste PR, nunca sugestão. Sugestão é só o que não é bug no " +
-      "escopo (estilo, nome, refatoração, melhoria opcional, problema antigo fora do diff): aparece, não bloqueia, não abre rodada.",
+      "escopo (estilo, nome, refatoração, melhoria opcional, problema antigo fora do diff): aparece, não bloqueia, não abre rodada; " +
+      "a melhoria que preserva o comportamento no código do PR é improvement, que o autor aplica sozinho.",
     // Medido nos transcripts das revisões do erp-aux (PRs #599, #605, #624, #627): a maior parte da rodada
     // ia em comando de 5 a 10 minutos (suíte inteira, `npm ci`, `tsc --force`), um atrás do outro.
     "- Teste por recorte: rode só os testes do que o PR tocou (o arquivo ou a pasta). A suíte inteira é do CI: confira " +
@@ -126,13 +130,45 @@ function underReview(f: Finding): boolean {
   return blocks && f.status !== "accepted_risk" && f.status !== "dropped" && !humanClosed;
 }
 
+/**
+ * QUEM AGE em cada achado, com as mesmas palavras para o revisor (que classifica) e para o autor (que
+ * age): se cada lado lesse uma versão, o revisor mandaria como dúvida o que o autor corrigiria, e
+ * vice-versa. O corte é o da autonomia corretiva do AGENTS.md §12: comportamento esperado claro, a IA
+ * resolve; resolver exige decidir o que o sistema faz, uma pessoa decide. Os exemplos são do critério,
+ * não uma lista fechada (pedido do César, 2026-11-12).
+ */
+const FINDING_CLASSES = [
+  "Quem age em cada achado (o revisor classifica assim, e o autor age assim). A pergunta que separa: o comportamento " +
+    "esperado está claro? Se está, a IA resolve sozinha, e decide COMO resolver. Se resolver exige decidir O QUE o sistema " +
+    "deve fazer, uma pessoa decide. Autonomia técnica não é autonomia de produto.",
+  "- blocking — a IA do autor corrige sem perguntar: bug, erro de lógica, inconsistência, validação ausente, comportamento " +
+    "que contraria o que o PR quis fazer, contradição com uma solução evidente. Precisa de prova (regras acima).",
+  "- improvement — a IA do autor aplica sozinha, na mesma rodada: melhoria técnica válida no código que o PR já mexe, que " +
+    "preserva a regra de negócio, a intenção e o comportamento esperado (simplificar, tirar duplicação, deixar mais claro " +
+    "ou mais seguro o que o PR escreveu). file obrigatório, num arquivo que o PR altera. Não amplia escopo: se aplicar " +
+    "exigiria mexer fora do PR, mudar comportamento ou contrato, não é improvement.",
+  "- question — espera a decisão de uma pessoa, e só quando resolver exige decidir intenção ou produto: intenção ambígua; " +
+    "mudar regra de negócio ou o comportamento esperado; mudar arquitetura ou estrutura de forma relevante; fugir do padrão " +
+    "estabelecido do repo; caminhos razoáveis com impactos diferentes e nenhum tecnicamente evidente; ou o PR altera algo " +
+    "que já funcionava sem deixar claro que era a intenção, ou pode colidir com uma funcionalidade existente. Em problem, " +
+    "o conflito; em fix, as alternativas e o que cada uma causa. Dúvida não é saída fácil: erro comprovado com uma solução " +
+    "coerente com o que foi pedido é blocking.",
+  "- suggestion — opcional, uma pessoa escolhe no painel: o que não é preciso para corrigir nada e não justifica mudança " +
+    "automática (estilo, nome, refatoração maior, volta desnecessária, o que fica fora do escopo do PR, problema antigo " +
+    "fora do diff).",
+  "Os exemplos ilustram o critério; não são uma lista fechada.",
+].join("\n");
+
 const FINDING_FIELDS =
-  "findings: [{ severity: \"blocking\" | \"suggestion\" | \"question\" | \"refuted\", title, problem, file?, line?, " +
+  "findings: [{ severity: \"blocking\" | \"improvement\" | \"suggestion\" | \"question\" | \"refuted\", title, problem, file?, line?, " +
   "proof?: { kind: \"failing_test\" | \"rule\" | \"scenario\", ref, detail? }, fix }]";
 
 function classification(): string {
   return [
     "Classifique cada achado:",
+    FINDING_CLASSES,
+    "",
+    "Em detalhe:",
     "- blocking: SÓ com prova. proof.kind = failing_test (ref = o teste que falha, ex. src/x.test.ts:12), rule (ref = a regra " +
       "escrita do repo, ex. CLAUDE.md, com o trecho em detail) ou scenario (ref = arquivo:linha, detail = o cenário concreto " +
       "que quebra, inclusive funcionalidade que já existia). Bloqueante sem prova vira sugestão no servidor.",
@@ -140,8 +176,9 @@ function classification(): string {
       "desnecessária, o que fica fora do escopo do PR, ou problema que já existia fora do que o PR mexe. Bug ou incongruência " +
       "no que o PR fez não é sugestão: é blocking com proof.kind = scenario (ref = arquivo:linha, detail = o caso que dá " +
       "errado). Na dúvida entre os dois, e o defeito é real e alcançável, é blocking.",
-    "- question: risco que pode comprometer, mas você não tem certeza. Fica esperando decisão: o revisor humano decide no " +
-      "painel, ou o autor resolve/explica e você confere na rodada seguinte. O ciclo segue com o resto.",
+    "- improvement: o autor aplica na rodada seguinte e você confere; na última rodada ela fica só registrada. Nunca segura o merge.",
+    "- question: fica esperando decisão: o revisor humano decide no painel, ou o autor resolve/explica e você confere na " +
+      "rodada seguinte. O ciclo segue com o resto.",
     "- refuted: achado que a verificação derrubou (fica só no histórico).",
     "",
     "Escreva cada achado para uma pessoa que vai decidir pelo painel, sem abrir o código:",
@@ -149,7 +186,7 @@ function classification(): string {
     "- problem: o problema em português claro, 2 a 4 frases: o que está errado, em que situação aparece e o que " +
       "acontece se ficar assim (quem é afetado, o que quebra ou piora). Nada de jargão solto nem só o nome da função.",
     "- fix: como resolver, de forma concreta: o que mudar, em qual arquivo/função e o resultado esperado — o bastante " +
-      "para a IA do autor aplicar sem adivinhar. Obrigatório em toda sugestão.",
+      "para a IA do autor aplicar sem adivinhar. Obrigatório em todo blocking, improvement e suggestion.",
   ].join("\n");
 }
 
@@ -224,6 +261,7 @@ export function reviewerDeltaPrompt(r: Review): string {
   const answeredDoubts = r.findings.filter((f) => f.severity === "question" && !f.humanDecision && answered.has(f.id));
   const stillWaiting = waiting.filter((f) => !answered.has(f.id));
   const suggestions = r.findings.filter((f) => f.severity === "suggestion" && (f.status === "open" || answered.has(f.id)));
+  const improvements = r.findings.filter((f) => f.severity === "improvement" && answered.has(f.id));
   const since = r.reviewedSha
     ? `git diff ${r.reviewedSha}..HEAD`
     : "o PR inteiro (não há sha da rodada anterior)";
@@ -232,6 +270,8 @@ export function reviewerDeltaPrompt(r: Review): string {
     reviewerIdentity(),
     "O autor respondeu à lista da rodada anterior e empurrou as correções.",
     rules(),
+    "",
+    FINDING_CLASSES,
     "",
     "1. Ponha o worktree na cabeça do PR:",
     `   git fetch origin && git reset --hard origin/${r.prBranch}`,
@@ -263,6 +303,14 @@ export function reviewerDeltaPrompt(r: Review): string {
         lines(suggestions, ""),
       ]
       : []),
+    ...(improvements.length
+      ? [
+        "   Melhorias que o autor respondeu: fixed se aplicou de verdade, sem sair do escopo; open se disse que aplicou e " +
+          "não aplicou; dropped se aceita o motivo do wontfix. Se a melhoria saiu do escopo do PR ou mudou comportamento: " +
+          `achado novo blocking com introducedInRound: ${r.round}.`,
+        lines(improvements, ""),
+      ]
+      : []),
     "   Vereditos possíveis, e só estes: fixed (corrigido de verdade, conferido no diff), open (continua; diga o porquê em " +
       "reviewerReply), dropped (você aceita a contestação do autor).",
     `4. Achado novo só entra se a PRÓPRIA correção criou o bug: marque introducedInRound: ${r.round}. Qualquer outro achado ` +
@@ -283,9 +331,13 @@ export function reviewerDeltaPrompt(r: Review): string {
  */
 const CORRECTIVE_AUTONOMY = [
   "- Bug ou incongruência no que o PR fez: corrija sem perguntar, com commit e teste, mesmo que tenha vindo como sugestão.",
+  "- Melhoria autônoma (improvement): aplique sem esperar ninguém, só o que o item descreve e só nos arquivos que o PR já " +
+    "altera, sem mudar regra, contrato ou comportamento. Se aplicar exigir sair disso, não aplique: wontfix com o motivo.",
   "- Fora do escopo, feature nova, volta desnecessária ou mudança de uma decisão intencional: não faça; responda explicando.",
-  "- Correção que exige decidir a intenção do PR: não aplique; responda com a dúvida sobre a intenção e as consequências de " +
-    "cada caminho, para a pessoa decidir no painel.",
+  "- Você decide COMO resolver, não O QUE o sistema deve fazer. Correção que exige decidir a intenção do PR, muda regra de " +
+    "negócio ou comportamento esperado, ou altera algo que já funcionava e pode colidir com outra funcionalidade sem estar " +
+    "claro que era a intenção: não aplique; responda com a dúvida sobre a intenção e as consequências de cada caminho, para " +
+    "a pessoa decidir no painel.",
 ];
 
 /**
@@ -296,11 +348,14 @@ export function authorFixPrompt(r: Review, opts: { coauthorTrailer?: string } = 
   const todo = r.findings.filter(actionableForAuthor);
   const waiting = pendingQuestions(r.findings);
   const suggestions = r.findings.filter((f) => f.severity === "suggestion" && f.status === "open");
+  const improvements = pendingImprovements(r.findings);
   return [
     header(r),
     "O revisor encontrou problemas no seu PR. Siga a skill superpowers:receiving-code-review: confira cada item com rigor " +
       "técnico antes de agir, sem concordar por educação.",
     rules(),
+    "",
+    FINDING_CLASSES,
     "",
     "Para cada item da lista fechada:",
     "- Bug dentro do escopo do PR (inclusive criado pela sua correção): corrija com commit e com teste que prove a correção.",
@@ -309,6 +364,12 @@ export function authorFixPrompt(r: Review, opts: { coauthorTrailer?: string } = 
     "",
     "Lista fechada (responda cada um):",
     lines(todo, "nenhum item"),
+    ...(improvements.length
+      ? [
+        "Melhorias autônomas (aplique agora, sem esperar ninguém; responda TODAS: fixed com o commit, ou wontfix com o motivo):",
+        lines(improvements, ""),
+      ]
+      : []),
     ...(waiting.length
       ? [
         "Dúvidas (o revisor humano pode decidir no painel; se você resolver, responda fixed com o commit, ou contested com a " +
@@ -339,7 +400,7 @@ export function authorFixPrompt(r: Review, opts: { coauthorTrailer?: string } = 
     `   review: "${r.id}"`,
     `   round: ${r.round}`,
     "   headSha: o sha do passo 4 (40 caracteres)",
-    "   items: [{ id, status: \"fixed\" | \"contested\" | \"wontfix\" (wontfix só em sugestão), commit?, reply }]",
+    "   items: [{ id, status: \"fixed\" | \"contested\" | \"wontfix\" (wontfix só em sugestão e melhoria), commit?, reply }]",
     "   Não termine o turno sem chamar essa ferramenta: é ela que devolve a vez ao revisor.",
   ].join("\n");
 }
@@ -355,6 +416,8 @@ export function authorSuggestionsPrompt(r: Review, list: Finding[], opts: { by: 
     `${opts.by} pediu, no painel da revisão, que você aplique estas sugestões do revisor neste PR. Sugestão não bloqueia: ` +
       "aplique as que fazem sentido no escopo do PR; a que não fizer sentido, não aplique e diga por quê.",
     rules(),
+    "",
+    FINDING_CLASSES,
     "",
     "Sugestões pedidas:",
     lines(list, ""),
