@@ -7,6 +7,7 @@ import type { HistoryEvent } from "./history.js";
 import type { DriverEvent } from "./protocol.js";
 import { logger } from "../../utils/logger.js";
 import { createLineReader } from "../../utils/lineReader.js";
+import { dropOldest } from "./insertionOrder.js";
 
 /**
  * TRANSCRIPT MIRROR — what keeps the NATIVE chat honest while the conversation happens in the TUI.
@@ -63,15 +64,6 @@ export function createMirrorState(
   return { cutoffAt, seen: new Set(seenIds), driverKeys };
 }
 
-/** Sets have insertion order: dropping the oldest entries is how the dedupe memory stays bounded. */
-function capSet(set: Set<string>, max: number = MIRROR_DEDUPE_MAX): void {
-  while (set.size > max) {
-    const oldest = set.values().next().value;
-    if (oldest === undefined) return;
-    set.delete(oldest);
-  }
-}
-
 /** Records what the driver said (stdout event) or was told (a user send) into the dedupe set. PURE-ish. */
 export function noteDriverEvent(state: MirrorState, event: DriverEvent | { type: "user"; text: string }): void {
   noteDriverKeys(state.driverKeys, event);
@@ -83,7 +75,7 @@ function noteDriverKeys(keys: Set<string>, event: DriverEvent | { type: "user"; 
     keys.delete(key); // re-adding moves it to the newest slot
     keys.add(key);
   }
-  capSet(keys);
+  dropOldest(keys, MIRROR_DEDUPE_MAX);
 }
 
 /**
@@ -97,7 +89,7 @@ export function mirrorNewEvents(state: MirrorState, jsonl: string, cardId: strin
     if (!(event.at > state.cutoffAt)) continue;
     if (state.seen.has(event.id)) continue;
     state.seen.add(event.id);
-    capSet(state.seen);
+    dropOldest(state.seen, MIRROR_DEDUPE_MAX);
     const converted = chatEventToHistory(event);
     if (!converted) continue;
     // The driver already said this on stdout — including the case where Claude Code rewrote a slash
@@ -258,7 +250,7 @@ export async function acquireTranscriptMirror(cardId: string, opts: AcquireMirro
     // starting (two tabs connecting together still get ONE follow).
     if (!existing.child && !existing.starting) {
       for (const id of opts.seenIds ?? []) existing.state.seen.add(id);
-      capSet(existing.state.seen);
+      dropOldest(existing.state.seen, MIRROR_DEDUPE_MAX);
       await startFollow(cardId, existing);
     }
     return () => release(cardId, existing);

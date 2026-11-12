@@ -8,6 +8,7 @@ import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
 import { HISTORY_REPLAY_LIMIT, appendHistory, appendHistoryReported, clearHistoryBeforeLastClear, readHistory, replayableHistoryEvent, rewindHistory, unwrapEditedMessage, type HistoryEvent } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker, type InflightBackground, type InflightMarker } from "./inflight.js";
 import { forgetDriverKeys, noteDriverEventFor, onOutsideTurn } from "./mirror.js";
+import { dropOldest } from "./insertionOrder.js";
 import { loadQuestionDrafts, saveQuestionDrafts, type StoredQuestionDraft } from "./questionDrafts.js";
 import { createLineReader } from "../../utils/lineReader.js";
 import { writeCardCatalog } from "./catalog.js";
@@ -322,11 +323,7 @@ interface AcceptedSend {
 function rememberCid(session: DriverSession, cid: string | undefined, sent: AcceptedSend): void {
   if (!cid) return;
   session.acceptedCids.set(cid, sent);
-  while (session.acceptedCids.size > ACCEPTED_CIDS_MAX) {
-    const oldest = session.acceptedCids.keys().next();
-    if (oldest.done) break;
-    session.acceptedCids.delete(oldest.value);
-  }
+  dropOldest(session.acceptedCids, ACCEPTED_CIDS_MAX);
 }
 
 /**
@@ -565,9 +562,7 @@ interface QuestionCard {
 
 /** Abre espaço para mais uma chave: o mais antigo sai quando o mapa está no teto. */
 function makeRoom(map: Map<string, unknown>, max: number): void {
-  if (map.size < max) return;
-  const oldest = map.keys().next().value;
-  if (oldest !== undefined) map.delete(oldest);
+  dropOldest(map, max - 1);
 }
 
 /** A pergunta encerrou: o rascunho de ninguém importa mais (a tela já desenha o cartão respondido). */
@@ -1107,7 +1102,7 @@ export function createDetailResponder(
       queue.delete(key);
       queue.set(key, request);
       // Teto: quem pede demais perde os mais velhos.
-      while (queue.size > 8) queue.delete(queue.keys().next().value as string);
+      dropOldest(queue, 8);
     } else void run(request);
   };
 }
