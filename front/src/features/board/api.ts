@@ -63,13 +63,6 @@ export type BoardCard = Card;
 export type BoardAccount = Account;
 export type BoardMcp = Mcp;
 
-/**
- * The brain as the screen needs it: the stored view plus WHO saved it, when the server records that.
- * A shared instruction file that every terminal in the install obeys is not the kind of thing that
- * should have changed anonymously.
- */
-export type BoardBrain = Brain & { by?: string };
-
 /* -------------------------------------------------------------- accessors */
 
 /** `owner/repo` of a project, when it is backed by a repository. */
@@ -532,7 +525,7 @@ export const boardApi = {
   applyMcps: () => post<{ runners?: number; mcps?: number }>("/mcps/apply"),
 
   /* brain — the shared CLAUDE.md every card's profile gets */
-  brain: () => get<BoardBrain>("/brain"),
+  brain: () => get<Brain>("/brain"),
 
   /** Saves AND pushes: the response says how many terminals restarted and how many were deferred. */
   saveBrain: (text: string) => post<BrainWriteResult>("/brain", { text }),

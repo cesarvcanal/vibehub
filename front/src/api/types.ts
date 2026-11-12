@@ -944,6 +944,11 @@ export interface Brain {
   defaultText: string;
   /** Absent while nothing has been saved. */
   updatedAt?: string;
+  /**
+   * WHO saved it, when the server records that. A shared instruction file that every terminal in
+   * the install obeys is not the kind of thing that should have changed anonymously.
+   */
+  by?: string;
 }
 
 /**
