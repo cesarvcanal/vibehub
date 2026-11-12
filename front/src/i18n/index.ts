@@ -116,6 +116,9 @@ export function t(key: string, vars?: Vars): string {
   return interpolate(template, vars);
 }
 
+/** The translate function a view hands to pure helpers: the module `t` or the one from `useT`. */
+export type Translate = typeof t;
+
 /**
  * `t` bound to the component: identical to the module-level one, except the component re-renders
  * when the language changes. Use it anywhere the string is rendered; use `t` for one-shot text like

@@ -92,12 +92,6 @@ import {
 } from "@/features/board/lib/pendingDecisions";
 import {
   INITIAL_SDK_STATE,
-  SDK_ERROR_NO_DETAIL,
-  SDK_ERROR_TURN_FAILED,
-  TERMINAL_ACTIVITY_NOTE,
-  TURN_INTERRUPTED_EDIT_NOTE,
-  TURN_INTERRUPTED_NOTE,
-  CONVERSATION_CLEARED_NOTE,
   answerQuestion,
   applySdkEvent,
   appendBtwRow,
@@ -127,7 +121,9 @@ import {
   turnHasRoomForMore,
   type SdkActivity,
   type SdkChatState,
-  type QuestionCancel,
+  cancelledText,
+  errorText,
+  noteText,
   type SdkQuestionAnswer,
   type BackgroundTask,
   type SdkEvent,
@@ -2904,45 +2900,4 @@ function PeerAvatar({ name, small = false }: { name: string; small?: boolean }) 
       {peerDisplayName(name).charAt(0)}
     </span>
   );
-}
-
-/** Por que a pergunta caiu sem resposta, com o nome de quem parou o turno. */
-function cancelledText(cancel: QuestionCancel | undefined, t: ReturnType<typeof useT>): string {
-  const how = cancel?.how ?? "stop";
-  if (!cancel?.by) return t(`sdk.questionCancelled.${how}.anon`);
-  return t(`sdk.questionCancelled.${how}`, { name: peerDisplayName(cancel.by) });
-}
-
-/**
- * A note row's words. Some notes travel as CODES (the back writes them, the reader may be reading
- * in either language); anything else is already a sentence and passes through. PURE.
- */
-function noteText(text: string, t: ReturnType<typeof useT>): string {
-  if (text === TERMINAL_ACTIVITY_NOTE) return t("sdk.terminalActivity");
-  if (text === TURN_INTERRUPTED_EDIT_NOTE) return t("sdk.noteInterruptedEdit");
-  if (text === TURN_INTERRUPTED_NOTE) return t("sdk.noteInterrupted");
-  if (text === CONVERSATION_CLEARED_NOTE) return t("sdk.noteConversationCleared");
-  return text;
-}
-
-/**
- * WHAT WENT WRONG, IN WORDS. This chat once showed a red bubble reading literally "error" — the
- * turn's failure had no text of its own and the raw value was drawn as-is. Nothing reaches the
- * reader as jargon or as an empty word any more: the known refusals and the reducer's sentinels
- * (see sdkChat.ts) become a sentence that says what happened AND what to do. Anything already
- * written as a sentence by the driver passes through untouched. PURE.
- */
-function errorText(text: string, t: ReturnType<typeof useT>): string {
-  if (/sdkDriver setting/i.test(text)) return t("sdk.flagOff");
-  if (text === SDK_ERROR_NO_DETAIL) return t("sdk.errorNoDetail");
-  if (text.startsWith(SDK_ERROR_TURN_FAILED)) {
-    const subtype = text.slice(SDK_ERROR_TURN_FAILED.length + 1);
-    return subtype === "" ? t("sdk.turnFailed") : t("sdk.turnFailedWhy", { subtype });
-  }
-  // The driver's process died (idle stop, a crash, a deploy). The front reconnects on its own —
-  // which is exactly what the reader cannot tell from "driver exited (code 1)".
-  if (/^driver (exited|process error)/i.test(text)) return t("sdk.driverGone", { detail: text });
-  if (/^could not install the driver/i.test(text)) return t("sdk.driverInstallFailed", { detail: text });
-  if (/^this card no longer exists$/i.test(text)) return t("sdk.cardGone");
-  return text;
 }

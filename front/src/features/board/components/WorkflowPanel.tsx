@@ -2,7 +2,7 @@ import * as React from "react";
 import { Check, CheckCircle2, ChevronRight, Circle, CircleDot, Loader2, Waypoints } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useNow, usePageVisible } from "@/lib/useNow";
-import { useT } from "@/i18n";
+import { useT, type Translate } from "@/i18n";
 import { formatAgentResult, type SdkRow, type WorkflowAgentFrame } from "@/features/board/lib/sdkChat";
 import { WorkflowFeedContext, type WorkflowFeedResponse } from "@/features/board/lib/workflowFeed";
 import {
@@ -17,7 +17,6 @@ import {
 } from "@/features/board/lib/workflowPanel";
 
 type WorkflowRow = Extract<SdkRow, { kind: "workflow" }>;
-type Translate = ReturnType<typeof useT>;
 
 /** De quanto em quanto o feed de um agente aberto e ainda rodando é pedido de novo. */
 export const FEED_POLL_MS = 4_000;

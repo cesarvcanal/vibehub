@@ -3,7 +3,7 @@ import { Bot, Brain, ChevronLeft, ChevronRight, CircleCheck, CircleX, Copy, File
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { useNow, usePageVisible } from "@/lib/useNow";
-import { useT } from "@/i18n";
+import { useT, type Translate } from "@/i18n";
 import { Markdown } from "@/features/board/components/ChatView";
 import { toolHeadline, type AgentTask, type SdkRow, type ToolResultSummary } from "@/features/board/lib/sdkChat";
 import { hunksToRows, toolDiff } from "@/features/board/lib/toolDiff";
@@ -43,7 +43,6 @@ import {
  */
 
 type ToolRow = Extract<SdkRow, { kind: "tool" }>;
-type Translate = ReturnType<typeof useT>;
 
 export type DetailView =
   | { kind: "action"; id: string; seq?: string[]; owner?: string }

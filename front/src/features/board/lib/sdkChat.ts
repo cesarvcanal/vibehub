@@ -15,7 +15,8 @@ import type { ServerText } from "@/features/board/lib/sdkOutbox";
 import { hasToolDiff } from "@/features/board/lib/toolDiff";
 import type { RateLimitInfo } from "@/features/board/lib/planUsage";
 import { parseContextUsage, type ContextUsageInfo } from "@/features/board/lib/contextUsage";
-import { t as translate } from "@/i18n";
+import { t as translate, type Translate } from "@/i18n";
+import { peerDisplayName } from "@/features/board/lib/peerTyping";
 import type { LocalVoiceTurn } from "@/features/voice/voiceTurns";
 
 /* ----------------------------------------------------------------- events */
@@ -638,11 +639,52 @@ export const CONVERSATION_CLEARED_NOTE = "conversation-cleared";
 
 /**
  * Sentinels the reducer puts on an error row when the wire carried NO words of its own. The view
- * turns them into a sentence in the reader's language (see `errorText` in SdkChatView) — the fix
+ * turns them into a sentence in the reader's language (see `errorText` below) — the fix
  * for the mute "error" bubble: every error in this chat says what happened and what to do.
  */
 export const SDK_ERROR_TURN_FAILED = "sdk-error:turn-failed";
 export const SDK_ERROR_NO_DETAIL = "sdk-error:no-detail";
+
+/** Why the question ended unanswered, with the name of who stopped the turn. PURE. */
+export function cancelledText(cancel: QuestionCancel | undefined, t: Translate): string {
+  const how = cancel?.how ?? "stop";
+  if (!cancel?.by) return t(`sdk.questionCancelled.${how}.anon`);
+  return t(`sdk.questionCancelled.${how}`, { name: peerDisplayName(cancel.by) });
+}
+
+/**
+ * A note row's words. Some notes travel as CODES (the back writes them, the reader may be reading
+ * in either language); anything else is already a sentence and passes through. PURE.
+ */
+export function noteText(text: string, t: Translate): string {
+  if (text === TERMINAL_ACTIVITY_NOTE) return t("sdk.terminalActivity");
+  if (text === TURN_INTERRUPTED_EDIT_NOTE) return t("sdk.noteInterruptedEdit");
+  if (text === TURN_INTERRUPTED_NOTE) return t("sdk.noteInterrupted");
+  if (text === CONVERSATION_CLEARED_NOTE) return t("sdk.noteConversationCleared");
+  return text;
+}
+
+/**
+ * WHAT WENT WRONG, IN WORDS. This chat once showed a red bubble reading literally "error" — the
+ * turn's failure had no text of its own and the raw value was drawn as-is. Nothing reaches the
+ * reader as jargon or as an empty word any more: the known refusals and the reducer's sentinels
+ * (above) become a sentence that says what happened AND what to do. Anything already
+ * written as a sentence by the driver passes through untouched. PURE.
+ */
+export function errorText(text: string, t: Translate): string {
+  if (/sdkDriver setting/i.test(text)) return t("sdk.flagOff");
+  if (text === SDK_ERROR_NO_DETAIL) return t("sdk.errorNoDetail");
+  if (text.startsWith(SDK_ERROR_TURN_FAILED)) {
+    const subtype = text.slice(SDK_ERROR_TURN_FAILED.length + 1);
+    return subtype === "" ? t("sdk.turnFailed") : t("sdk.turnFailedWhy", { subtype });
+  }
+  // The driver's process died (idle stop, a crash, a deploy). The front reconnects on its own —
+  // which is exactly what the reader cannot tell from "driver exited (code 1)".
+  if (/^driver (exited|process error)/i.test(text)) return t("sdk.driverGone", { detail: text });
+  if (/^could not install the driver/i.test(text)) return t("sdk.driverInstallFailed", { detail: text });
+  if (/^this card no longer exists$/i.test(text)) return t("sdk.cardGone");
+  return text;
+}
 
 /** Mark that WE asked for the stop (see `interruptRequested`). PURE. */
 export function markInterruptRequested(state: SdkChatState): SdkChatState {
