@@ -1,6 +1,6 @@
 import { config } from "../../config/env.js";
 import { hostExecutor, shQuote } from "../../runtime/host.js";
-import { getCard, getProject } from "../board/registry.js";
+import { getCardWithProject } from "../board/registry.js";
 import { logger } from "../../utils/logger.js";
 import { cardBrowserPorts, type CardBrowserPorts } from "./ports.js";
 import { startCapture, stopCapture } from "../credentials/capture.js";
@@ -326,10 +326,7 @@ export interface ResolvedCardBrowser {
  * beats a confusing docker error later.
  */
 export async function resolveCardBrowser(cardId: string): Promise<ResolvedCardBrowser> {
-  const card = await getCard(cardId);
-  if (!card) throw new Error("card not found");
-  const project = await getProject(card.projectId);
-  if (!project) throw new Error("project for this card not found");
+  await getCardWithProject(cardId);
   return { containerName: config.runner.container, ports: cardBrowserPorts(cardId) };
 }
 

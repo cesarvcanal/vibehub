@@ -22,7 +22,7 @@ vi.mock("../../runtime/host.js", async (orig) => ({
   ...(await orig<typeof import("../../runtime/host.js")>()),
   hostExecutor: () => ({ kind: "local", label: "this machine", runScript, ptyCommand, pipeCommand }),
 }));
-vi.mock("../board/registry.js", () => ({ getCard: vi.fn(), getProject: vi.fn() }));
+vi.mock("../board/registry.js", () => ({ getCardWithProject: vi.fn() }));
 
 const CARD = "1a2b3c4d-1111-2222-3333-444455556666";
 const OTHER = "99887766-1111-2222-3333-444455556666";
@@ -38,8 +38,7 @@ const card = { id: CARD, projectId: "proj-1" } as never;
 const project = { id: "proj-1", name: "api" } as never;
 
 function wireOk(reg: Awaited<ReturnType<typeof load>>["reg"]) {
-  vi.mocked(reg.getCard).mockResolvedValue(card);
-  vi.mocked(reg.getProject).mockResolvedValue(project);
+  vi.mocked(reg.getCardWithProject).mockResolvedValue({ card, project });
 }
 
 beforeEach(() => {
@@ -264,17 +263,9 @@ describe("the vnc bridge", () => {
 });
 
 describe("resolveCardBrowser / open / close / cardVncBridge", () => {
-  it("missing card -> clear error, nothing runs on the host", async () => {
+  it("missing card or project -> the registry's error, nothing runs on the host", async () => {
     const { mod, reg } = await load();
-    vi.mocked(reg.getCard).mockResolvedValue(undefined);
-    await expect(mod.resolveCardBrowser(CARD)).rejects.toThrow("card not found");
-    expect(runScript).not.toHaveBeenCalled();
-  });
-
-  it("missing project -> clear error, nothing runs on the host", async () => {
-    const { mod, reg } = await load();
-    vi.mocked(reg.getCard).mockResolvedValue(card);
-    vi.mocked(reg.getProject).mockResolvedValue(undefined);
+    vi.mocked(reg.getCardWithProject).mockRejectedValue(new Error("project for this card not found"));
     await expect(mod.resolveCardBrowser(CARD)).rejects.toThrow(/project for this card/);
     expect(runScript).not.toHaveBeenCalled();
   });

@@ -1,6 +1,6 @@
 import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
-import { getCard, getProject, hasLiveSession, effectiveAccountSlug } from "../board/registry.js";
+import { getCard, getCardWithProject, hasLiveSession, effectiveAccountSlug } from "../board/registry.js";
 import { transcriptDirFor, sessionGoneError } from "../maestro/cardSession.js";
 import { logger } from "../../utils/logger.js";
 import { clipLine } from "../../utils/clipLine.js";
@@ -324,10 +324,7 @@ export interface ChatSource {
 
 /** The follow command for one card's transcript. THROWS when the card (or its project) is gone. */
 export async function chatSource(cardId: string): Promise<ChatSource> {
-  const card = await getCard(cardId);
-  if (!card) throw new Error("card not found");
-  const project = await getProject(card.projectId);
-  if (!project) throw new Error("project for this card not found");
+  const { card, project } = await getCardWithProject(cardId);
   const dir = transcriptDirFor(project, card, effectiveAccountSlug(card, project));
   return {
     cardId: card.id,
