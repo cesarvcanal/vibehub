@@ -15,14 +15,14 @@ import { cn } from "@/lib/utils";
 import { useT } from "@/i18n";
 
 /**
- * O MEDIDOR DE CONTEXTO — quanto da janela a conversa já ocupa, no canto inferior direito da caixa da conversa.
+ * THE CONTEXT METER — how much of the window the conversation already takes, in the bottom-right corner of the conversation box.
  *
- * A pílula carrega a cor CONTÍNUA do percentual (borda, fundo e a barrinha), e o número fica na cor
- * do texto para ler em qualquer tema. Passar o mouse (ou focar) abre o guia: a régua inteira com o
- * ponto de agora e as três faixas — inteligente, preocupante, perigoso — com a de agora em destaque.
+ * The pill carries the CONTINUOUS color of the percentage (border, background and the little bar), and the number stays in the
+ * text color so it reads in any theme. Hovering (or focusing) opens the guide: the whole ruler with the
+ * current point and the three bands — smart, worrying, dangerous — with the current one highlighted.
  *
- * Passou de 30% a pílula ganha um selo ("atenção", "perigo") e o número na cor da faixa; o recado por
- * extenso fica com o `ContextNotice`, acima do campo.
+ * Past 30% the pill gets a badge ("atenção", "perigo") and the number in the band's color; the spelled-out
+ * message is left to `ContextNotice`, above the field.
  */
 
 const ZONES: readonly { zone: ContextZone; mid: number }[] = [
@@ -33,8 +33,8 @@ const ZONES: readonly { zone: ContextZone; mid: number }[] = [
 
 export function ContextMeter({ usage, className }: { usage: ContextUsageInfo | null; className?: string }) {
   const t = useT();
-  // Controlado para abrir também no CLIQUE/TOQUE: o tooltip sozinho só abre no hover e no foco, e
-  // no celular (layout compacto) o guia nunca aparecia. Toque fora ou Esc fecha.
+  // Controlled so it also opens on CLICK/TAP: the tooltip alone only opens on hover and focus, and
+  // on mobile (compact layout) the guide never showed up. A tap outside or Esc closes it.
   const [open, setOpen] = React.useState(false);
   if (!usage) return null;
   const pct = usage.percent;
@@ -47,7 +47,7 @@ export function ContextMeter({ usage, className }: { usage: ContextUsageInfo | n
       <TooltipTrigger asChild>
         <button
           type="button"
-          // O gatilho do Radix fecha no clique; o preventDefault segura isso e o clique ABRE.
+          // Radix's trigger closes on click; the preventDefault holds that back and the click OPENS.
           onClick={(event) => {
             event.preventDefault();
             setOpen(true);
@@ -91,7 +91,7 @@ export function ContextMeter({ usage, className }: { usage: ContextUsageInfo | n
           </span>
         </div>
 
-        {/* A régua: o degradê que a cor do medidor percorre, as fronteiras e o ponto de agora. */}
+        {/* The ruler: the gradient the meter's color travels along, the boundaries and the current point. */}
         <div className="px-3 pb-1 pt-3">
           <div className="relative h-2 rounded-full" style={{ backgroundImage: contextGradient() }}>
             {[CONTEXT_WARN_AT, CONTEXT_DANGER_AT].map((at) => (
@@ -142,17 +142,17 @@ export function ContextMeter({ usage, className }: { usage: ContextUsageInfo | n
 }
 
 /**
- * O RECADO POR EXTENSO acima do campo, quando o contexto sai da faixa inteligente. Preocupante é um
- * aviso âmbar que o dev pode esconder (volta sozinho se a conversa chegar no perigo); perigoso é
- * uma faixa vermelha que não se esconde enquanto a conversa estiver lá.
+ * THE SPELLED-OUT MESSAGE above the field, when the context leaves the smart band. Worrying is an
+ * amber warning the dev can hide (it comes back on its own if the conversation reaches danger); dangerous is
+ * a red strip that does not hide while the conversation is there.
  */
 export function ContextNotice({ usage, className }: { usage: ContextUsageInfo | null; className?: string }) {
   const t = useT();
   const [dismissedWarn, setDismissedWarn] = React.useState(false);
   const zone = usage ? contextZone(usage.percent) : null;
-  // O "esconder" vale até a conversa sair da faixa preocupante — para a inteligente (um /compact, um
-  // /clear) ou para o perigo: na volta ao preocupante, o aviso aparece de novo. Só uma LEITURA conta:
-  // sem leitura (a reconexão zera e o back reenvia logo atrás) não é a conversa que mudou de faixa.
+  // The "hide" holds until the conversation leaves the worrying band — to the smart one (a /compact, a
+  // /clear) or to danger: on returning to worrying, the warning shows up again. Only a READING counts:
+  // no reading (the reconnection zeroes it and the back resends right after) is not the conversation changing band.
   React.useEffect(() => {
     if (zone === "smart" || zone === "danger") setDismissedWarn(false);
   }, [zone]);

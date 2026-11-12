@@ -120,8 +120,8 @@ export interface TerminalComposerProps {
     text: string;
     /**
      * What the indicator says, when it is not the default "editando mensagem". The native chat
-     * uses it to name the OTHER thing that can be under the caret: uma mensagem que ainda está na
-     * FILA, que o agente nunca leu — editá-la não corrige nada, só reescreve o que vai ser dito.
+     * uses it to name the OTHER thing that can be under the caret: a message that is still in the
+     * QUEUE, which the agent never read — editing it corrects nothing, it only rewrites what is going to be said.
      */
     hint?: string;
   } | null;
@@ -1050,7 +1050,7 @@ export function TerminalComposer({
   }, [autoFocus, isMobile, draftKey, active]);
 
   /**
-   * The FIRST focus of this field puts the caret at the END of what is there (produção, 2026-10-08).
+   * The FIRST focus of this field puts the caret at the END of what is there (production, 2026-10-08).
    *
    * A field mounted with a restored draft — the card finishing "Preparando…" swaps in a new
    * composer — starts with its selection at 0, and a bare `focus()` (the auto-focus above, the
@@ -1549,9 +1549,9 @@ export function TerminalComposer({
                 onEditLast();
               }
             } else if (e.key === "ArrowUp" && !editing && isEmptyDraft(text, attachments) && onEditLast) {
-              // A seta pra cima num campo VAZIO: a última mensagem volta pra edição — o "press up
-              // to edit queued messages" do Claude Code, e o histórico de qualquer terminal. Só
-              // com o campo vazio, porque aí não existe cursor pra ela mover.
+              // The up arrow in an EMPTY field: the last message comes back for editing — Claude Code's "press up
+              // to edit queued messages", and any terminal's history. Only
+              // with the field empty, because then there is no cursor for it to move.
               e.preventDefault();
               onEditLast();
             }

@@ -372,7 +372,7 @@ describe("RequestReviewDialog", () => {
   });
 
   describe("reabrir a janela", () => {
-    /** A janela como o bloco a usa: aberta e fechada de fora, a mesma instância. */
+    /** The dialog the way the block uses it: opened and closed from outside, the same instance. */
     function Harness({ onClose }: { onClose?: () => void }) {
       const [open, setOpen] = useState(true);
       return (
@@ -408,7 +408,7 @@ describe("RequestReviewDialog", () => {
       await userEvent.click(startButton());
       await userEvent.click(screen.getByRole("button", { name: "Cancelar" }));
 
-      // o servidor responde DEPOIS de a janela fechar
+      // the server answers AFTER the dialog closes
       await act(async () => {
         refuse(apiReject(400, "revisor_sem_conta: o revisor não tem uma conta Claude própria no vibehub"));
       });

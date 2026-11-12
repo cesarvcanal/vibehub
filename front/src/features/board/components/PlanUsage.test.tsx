@@ -7,8 +7,8 @@ import { PlanUsageMeter } from "@/features/board/components/PlanUsage";
 import { renderApp } from "@/test/render";
 
 /**
- * O MEDIDOR DO TOPO: o número é o do limite SEMANAL (é por ele que o dono acompanha a semana), a
- * cor esquenta com ele, e sem leitura ele diz isso — com o comando só para quem tem o shell.
+ * THE TOP METER: the number is the WEEKLY limit's (that is how the owner follows the week), the
+ * color heats up with it, and with no reading it says so — with the command only for whoever has the shell.
  */
 const iso = (ms: number) => new Date(Date.now() + ms).toISOString();
 

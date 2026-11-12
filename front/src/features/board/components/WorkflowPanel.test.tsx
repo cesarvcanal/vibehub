@@ -29,7 +29,7 @@ function workflowRow(over: Partial<WorkflowRow> = {}): WorkflowRow {
   };
 }
 
-/** O painel com um canal de feed de verdade, cujo `send` só registra o que a aba pediu. */
+/** The panel with a real feed channel, whose `send` only records what the tab asked for. */
 function renderPanel(row: WorkflowRow) {
   const sent: Array<{ type: string; runId: string; agentId: string }> = [];
   const channel = createWorkflowFeedChannel((frame) => { sent.push(frame); });
@@ -127,7 +127,7 @@ describe("WorkflowPanel — o feed de um agente, sob demanda", () => {
 
   it("abrir pede o feed UMA vez, mostra os itens, re-pede a cada 4s enquanto roda e para ao fechar", () => {
     const { sent, answer } = renderPanel(running());
-    expect(sent).toEqual([]); // sob demanda: nada sem abrir
+    expect(sent).toEqual([]); // on demand: nothing without opening
     const head = screen.getAllByTestId("sdk-workflow-agent")[0]!;
     fireEvent.click(head);
     expect(sent).toEqual([{ type: "workflow_feed", runId: "wf_abc", agentId: "a01f" }]);
@@ -251,8 +251,8 @@ describe("WorkflowPanel — quadro de um back antigo (blue/green)", () => {
 });
 
 /**
- * Produção, 17/10/2026: o painel ficou horas com spinner em agentes de rodadas que já tinham acabado
- * (uma MORTA, outra abandonada pela sondagem). Quadro terminado não pode girar nem contar tempo.
+ * Production, 17/10/2026: the panel spent hours with a spinner on agents of runs that had already ended
+ * (one DEAD, another abandoned by the polling). A finished board must not spin or count time.
  */
 describe("WorkflowPanel — rodada terminada com agente que nunca respondeu", () => {
   const spinners = () => document.querySelectorAll(".animate-spin").length;

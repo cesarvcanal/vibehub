@@ -479,9 +479,9 @@ describe("TerminalComposer", () => {
     expect(box).toHaveValue("first\nsecond");
   });
 
-  // Produção, 2026-10-08: o card termina de preparar (ou o chat nativo decide o modo) e o campo é
-  // REMONTADO noutro ramo da tela, com o rascunho restaurado. O foco automático de um textarea novo
-  // deixa o cursor na posição 0 — e o resto do que se digita entra NO COMEÇO da mensagem.
+  // Production, 2026-10-08: the card finishes preparing (or the native chat decides the mode) and the field is
+  // REMOUNTED in another branch of the screen, with the draft restored. The auto-focus of a new textarea
+  // leaves the caret at position 0 — and the rest of what is typed goes in AT THE START of the message.
   it("a remounted field takes the focus with the caret at the END of the restored draft", async () => {
     saveDraft("card-1", "metade de um pensamento", []);
     renderComposer(<TerminalComposer onSend={vi.fn()} cardId="card-1" />);
@@ -496,17 +496,17 @@ describe("TerminalComposer", () => {
     const box = screen.getByRole<HTMLTextAreaElement>("textbox");
     await waitFor(() => expect(box).toHaveFocus());
     await userEvent.type(box, "corrigindo o meio");
-    box.setSelectionRange(3, 3); // editando no meio da frase
+    box.setSelectionRange(3, 3); // editing in the middle of the sentence
     rerender(<TerminalComposer onSend={vi.fn()} cardId="card-1" active={false} />);
-    box.blur(); // o que o Pane do deck faz com o card que sai de cena
+    box.blur(); // what the deck's Pane does with the card that leaves the scene
     rerender(<TerminalComposer onSend={vi.fn()} cardId="card-1" active />);
     await waitFor(() => expect(box).toHaveFocus());
     expect(box.selectionStart).toBe(3);
   });
 
-  // O campo remontado nem sempre é focado pelo autofoco: no celular ele não roda, e o "Responder"
-  // da bandeja de decisões (SdkChatView) foca o textarea por fora. Qualquer PRIMEIRO foco que não
-  // venha de um clique tem que deixar o cursor no fim do rascunho restaurado.
+  // The remounted field is not always focused by the auto-focus: on mobile it does not run, and the "Responder"
+  // of the decisions tray (SdkChatView) focuses the textarea from outside. Any FIRST focus that does not
+  // come from a click has to leave the caret at the end of the restored draft.
   it("the FIRST focus from outside (not a click) puts the caret at the end of a restored draft", () => {
     saveDraft("card-1", "rascunho restaurado", []);
     renderComposer(<TerminalComposer onSend={vi.fn()} cardId="card-1" autoFocus={false} />);
@@ -519,8 +519,8 @@ describe("TerminalComposer", () => {
     saveDraft("card-1", "rascunho restaurado", []);
     renderComposer(<TerminalComposer onSend={vi.fn()} cardId="card-1" autoFocus={false} />);
     const box = screen.getByRole<HTMLTextAreaElement>("textbox");
-    // O ponteiro desce e o foco chega: quem decide o cursor é o ponto do clique (que o navegador
-    // põe sozinho), não o fim do texto — o composer não pode passar por cima.
+    // The pointer goes down and the focus arrives: what decides the caret is the click point (which the browser
+    // sets on its own), not the end of the text — the composer must not override it.
     fireEvent.pointerDown(box);
     box.focus();
     expect(box.selectionStart).toBe(0);
@@ -531,18 +531,18 @@ describe("TerminalComposer", () => {
     const box = screen.getByRole<HTMLTextAreaElement>("textbox");
     await waitFor(() => expect(box).toHaveFocus());
     await userEvent.type(box, "corrigindo o meio");
-    box.setSelectionRange(3, 3); // editando no meio da frase
-    // Algo acima re-renderiza e o efeito de foco roda de novo, com o campo AINDA focado.
+    box.setSelectionRange(3, 3); // editing in the middle of the sentence
+    // Something above re-renders and the focus effect runs again, with the field STILL focused.
     rerender(<TerminalComposer onSend={vi.fn()} cardId="card-1" active={false} />);
     rerender(<TerminalComposer onSend={vi.fn()} cardId="card-1" active />);
-    // O timer de 0ms do efeito foi agendado antes deste: quando este dispara, aquele já rodou.
+    // The effect's 0ms timer was scheduled before this one: when this one fires, that one has already run.
     await new Promise((r) => setTimeout(r, 0));
     expect(box).toHaveFocus();
     expect(box.selectionStart).toBe(3);
   });
 
-  // O card termina de preparar no meio de uma frase e o campo é trocado: uma tecla que chegue entre
-  // um campo e o outro não cai em nenhum ("teste da" vira "testeda").
+  // The card finishes preparing in the middle of a sentence and the field is swapped: a keystroke arriving between
+  // one field and the other lands in neither ("teste da" becomes "testeda").
   it("a field that replaces the focused one has the keyboard in the SAME commit — no keystroke falls in between", async () => {
     const { rerender } = renderComposer(<TerminalComposer key="preparing" onSend={vi.fn()} cardId="card-1" />);
     const before = screen.getByRole<HTMLTextAreaElement>("textbox");
@@ -557,9 +557,9 @@ describe("TerminalComposer", () => {
     expect(box.selectionStart).toBe("um teste".length);
   });
 
-  // A primeira mensagem é enviada durante o "Preparando…", a pessoa segue digitando a próxima, e o
-  // card fica pronto ANTES de o envio responder: o campo novo nasce do rascunho, que ainda tem as
-  // duas ("primeira" + "segunda").
+  // The first message is sent during the "Preparando…", the person keeps typing the next one, and the
+  // card becomes ready BEFORE the send answers: the new field is born from the draft, which still holds
+  // both ("primeira" + "segunda").
   it("a send that lands after the field was replaced takes the sent words out of the NEW field", async () => {
     let accept: () => void = () => {};
     const onSend = vi.fn(() => new Promise<void>((resolve) => (accept = resolve)));
@@ -627,8 +627,8 @@ describe("TerminalComposer", () => {
     expect(second).toHaveBeenCalledWith("primeira");
   });
 
-  // Fora do `act`, de propósito: a troca entra como transição, cujos efeitos passivos rodam numa
-  // tarefa DEPOIS do commit — e o envio é aceito bem nesse intervalo, com o campo novo já na tela.
+  // Outside `act`, on purpose: the swap goes in as a transition, whose passive effects run in a
+  // task AFTER the commit — and the send is accepted right in that gap, with the new field already on screen.
   it("a send that lands between the swap's commit and its effects still leaves what was typed after it", async () => {
     let accept: () => void = () => {};
     const onSend = vi.fn(() => new Promise<void>((resolve) => (accept = resolve)));
@@ -728,8 +728,8 @@ describe("TerminalComposer", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  /** Uma versão nova do vibehub recarrega a aba sozinha quando ociosa — nunca com um anexo subindo:
-   *  o F5 levaria a imagem embora (ela só existe no navegador até o upload terminar). */
+  /** A new vibehub version reloads the tab on its own when idle — never with an attachment uploading:
+   *  the F5 would take the image away (it only exists in the browser until the upload finishes). */
   it("an upload in flight HOLDS the automatic reload of a new version, and lets go when it lands", async () => {
     let land: (path: string) => void = () => {};
     const onUploadImage = vi.fn(() => new Promise<string>((resolve) => { land = resolve; }));
@@ -788,9 +788,9 @@ describe("TerminalComposer", () => {
   });
 
   it("Enter during an upload that then FAILS keeps the message — it does not go out without its image", async () => {
-    // Produção, 2026-10-31: uploads que travavam ganharam prazo (uploadWatchdog), então agora eles
-    // FALHAM onde antes giravam pra sempre. Quem apertou Enter mandou "texto + imagem": a mensagem
-    // espera no campo, com a imagem em erro e o Retry, em vez de sair pela metade.
+    // Production, 2026-10-31: uploads that hung got a deadline (uploadWatchdog), so now they
+    // FAIL where they used to spin forever. Whoever pressed Enter sent "text + image": the message
+    // waits in the field, with the image in error and the Retry, instead of going out half-done.
     const onSend = vi.fn();
     let land = (_path: string | null): void => undefined;
     const onUploadImage = vi.fn(() => new Promise<string | null>((resolve) => (land = resolve)));

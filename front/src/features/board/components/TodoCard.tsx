@@ -4,15 +4,15 @@ import { cn } from "@/lib/utils";
 import { useT } from "@/i18n";
 import { parseTodos, toolHeadline, type SdkRow, type SdkTodo } from "@/features/board/lib/sdkChat";
 
-/** O símbolo de cada estado — o mesmo vocabulário da lista do Claude Code no terminal. */
+/** The symbol of each state — the same vocabulary as Claude Code's list in the terminal. */
 const STATUS_MARK: Record<SdkTodo["status"], string> = { completed: "✓", in_progress: "●", pending: "○" };
 
 /**
- * A LISTA DE TAREFAS DO AGENTE (um TodoWrite).
+ * THE AGENT'S TASK LIST (a TodoWrite).
  *
- * A lista é o plano que quem acompanha quer ler: o que já foi, o que está sendo feito agora, o que
- * falta. Cada TodoWrite é a lista INTEIRA de novo, então só o mais recente (`latest`) nasce aberto:
- * os anteriores são versões velhas e ficam recolhidos, mostrando só a contagem. A escolha explícita da pessoa (abrir/fechar) vence o padrão.
+ * The list is the plan whoever is following wants to read: what is done, what is being done now, what is
+ * left. Each TodoWrite is the WHOLE list again, so only the most recent (`latest`) starts open:
+ * the earlier ones are old versions and stay collapsed, showing only the count. The person's explicit choice (open/close) beats the default.
  */
 export function TodoCard({ row, latest }: { row: Extract<SdkRow, { kind: "tool" }>; latest: boolean }) {
   const t = useT();

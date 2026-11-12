@@ -237,10 +237,10 @@ describe("ChatView", () => {
     const player = await screen.findByTestId("chat-audio");
     const audio = player.querySelector("audio") as HTMLAudioElement;
     expect(audio).toHaveAttribute("src", `/api/cards/${card}/uploads/1793817742302-ptt-2026.opus`);
-    // Nada é lido do runner ao abrir a conversa: cada leitura é um docker exec.
+    // Nothing is read from the runner when the conversation opens: every read is a docker exec.
     expect(audio).toHaveAttribute("preload", "none");
     expect(player).toHaveTextContent("ptt-2026.opus");
-    // O player fica na faixa de anexos, depois do texto, não no meio da frase.
+    // The player sits in the attachments strip, after the text, not in the middle of the sentence.
     const strip = screen.getByTestId("chat-attachments");
     expect(strip).toContainElement(player);
     expect(screen.getByTestId("chat-user").textContent?.startsWith("ouve isso")).toBe(true);
@@ -288,7 +288,7 @@ describe("ChatView", () => {
     expect(within(player).getByRole("button", { name: "Play" })).toBeInTheDocument();
     expect(player).not.toHaveTextContent("Could not play");
 
-    // Outra rejeição (sem permissão de autoplay não é o caso aqui: o clique é do usuário) é falha de verdade.
+    // Any other rejection (missing autoplay permission is not the case here: the click is the user's) is a real failure.
     play.mockRejectedValueOnce(Object.assign(new Error("no source"), { name: "NotSupportedError" }));
     await userEvent.click(within(player).getByRole("button", { name: "Play" }));
     expect(await within(player).findByText("Could not play this audio. Download it to listen.")).toBeInTheDocument();
@@ -804,8 +804,8 @@ describe("ChatView", () => {
 
 describe("ChatView — a conversa não estica a página", () => {
   it("o scroller é o bloco de contenção de tudo que é absoluto dentro dele", async () => {
-    // Mesmo defeito do chat nativo: um filho `absolute` se ancorava fora do scroller e a página
-    // ganhava rolagem vazia abaixo do composer.
+    // Same defect as the native chat: an `absolute` child anchored itself outside the scroller and the page
+    // gained empty scrolling below the composer.
     renderApp(<ChatView cardId="c1" working={false} />);
     await socket();
     expect(screen.getByTestId("chat-scroller")).toHaveClass("relative");
