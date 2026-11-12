@@ -17,6 +17,7 @@ import { inboxFor, markDelivered, takeUndelivered, type CardEvent } from "../ser
 import { sendAnswer } from "./events.js";
 import { moveCards, AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX, type CardMoveOutcome } from "./cardMove.js";
 import { logger } from "../utils/logger.js";
+import { ok, fail } from "./toolResult.js";
 
 /**
  * EXTERNAL TOOLS — the board as an app on the internet (ChatGPT, Claude.ai) sees it when a user
@@ -34,8 +35,6 @@ import { logger } from "../utils/logger.js";
  * that come out of the instruction carry their identity.
  */
 
-const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] });
-const fail = (e: unknown) => ok({ error: (e as Error).message });
 
 /**
  * Reads that change nothing. ChatGPT asks the user to CONFIRM every call to a tool that is not marked

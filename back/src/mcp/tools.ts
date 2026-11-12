@@ -15,6 +15,7 @@ import { submitReviewerRound, submitAuthorResponse, reviewToolAnswer, HEAD_SHA_R
 import { MAX_ROUNDS } from "../services/review/model.js";
 import { attachPrs } from "../services/review/attach.js";
 import { startReviewByAgent } from "../services/review/start.js";
+import { ok, fail } from "./toolResult.js";
 
 /**
  * MAESTRO TOOLS — what one card's agent can do to the OTHER cards.
@@ -27,8 +28,6 @@ import { startReviewByAgent } from "../services/review/start.js";
  * registry and runner code the UI uses.
  */
 
-const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] });
-const fail = (e: unknown) => ok({ error: (e as Error).message });
 
 /*
  * PR REVIEW — the shapes the two review AIs hand back. The enums are the server's contract, checked
