@@ -6,6 +6,7 @@ import {
   waivedSuggestions,
   blockingOpen,
   normalizeSubmittedFindings,
+  pendingImprovements,
   pendingQuestions,
   phaseAfterReviewerRound,
   type Finding,
@@ -93,6 +94,57 @@ describe("normalizeSubmittedFindings", () => {
   it("introducedInRound de outra rodada não vale como marca", () => {
     expect(() => normalizeSubmittedFindings([{ severity: "suggestion", title: "n", introducedInRound: 1 }], 2, []))
       .toThrow(/lista fechada/);
+  });
+});
+
+describe("melhoria autônoma (improvement)", () => {
+  const imp = { severity: "improvement" as const, title: "extrai o laço duplicado", problem: "p", fix: "x" };
+
+  it("entra presa ao arquivo que o PR mexe; sem arquivo, vira sugestão opcional", () => {
+    const [anchored] = normalizeSubmittedFindings([{ ...imp, file: "src/a.ts", line: 3 }], 1, []);
+    expect(anchored).toMatchObject({ severity: "improvement", status: "open", file: "src/a.ts" });
+    const [loose] = normalizeSubmittedFindings([imp], 1, []);
+    expect(loose.severity).toBe("suggestion");
+    const [blank] = normalizeSubmittedFindings([{ ...imp, file: "  " }], 1, []);
+    expect(blank.severity).toBe("suggestion");
+  });
+
+  it("o autor responde fixed ou wontfix com motivo", () => {
+    const r = review([finding({ severity: "improvement" })]);
+    expect(applyAuthorResponses(r, [{ id: "f1", status: "wontfix", reply: "mudaria o comportamento" }])[0].status).toBe("wontfix");
+    expect(() => applyAuthorResponses(r, [{ id: "f1", status: "wontfix", reply: "" }])).toThrow(/resposta/);
+  });
+
+  it("pendente = aberta e ainda sem resposta do autor", () => {
+    const fs = [
+      finding({ severity: "improvement" }),
+      finding({ id: "f2", severity: "improvement", authorReply: "apliquei" }),
+      finding({ id: "f3", severity: "improvement", status: "fixed" }),
+      finding({ id: "f4", severity: "suggestion" }),
+    ];
+    expect(pendingImprovements(fs).map((f) => f.id)).toEqual(["f1"]);
+  });
+
+  it("melhoria pendente leva a vez ao autor sem esperar ninguém; respondida, não segura", () => {
+    expect(phaseAfterReviewerRound(review([finding({ severity: "improvement" })], 1)).phase).toBe("fixing");
+    const answered = finding({ severity: "improvement", authorReply: "apliquei" });
+    expect(phaseAfterReviewerRound(review([answered], 2)).phase).toBe("ready");
+  });
+
+  it("na última rodada a melhoria não vira impasse nem rodada nova", () => {
+    expect(phaseAfterReviewerRound(review([finding({ severity: "improvement" })], 3)).phase).toBe("ready");
+    const q = finding({ id: "f2", severity: "question" });
+    expect(phaseAfterReviewerRound(review([finding({ severity: "improvement" }), q], 3)).phase).toBe("reviewing");
+  });
+
+  it("melhoria e dúvida juntas: o autor aplica a melhoria enquanto a dúvida espera a pessoa", () => {
+    const q = finding({ id: "f2", severity: "question" });
+    expect(phaseAfterReviewerRound(review([finding({ severity: "improvement" }), q], 1)).phase).toBe("fixing");
+  });
+
+  it("melhoria nunca segura o merge automático", () => {
+    const ready: Review = { ...review([finding({ severity: "improvement" })]), phase: "ready", reviewedSha: "a".repeat(40) };
+    expect(autoMergeEligible(ready)).toBe(true);
   });
 });
 

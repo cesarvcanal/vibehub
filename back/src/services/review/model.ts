@@ -2,13 +2,22 @@
  * REVISÃO DE PR — regras puras. Aqui moram as invariantes que o servidor impõe à IA do revisor e à do
  * autor, para que o loop não dependa de boa vontade de prompt: bloqueante só com prova, lista fechada
  * a partir da rodada 2 e teto de rodadas. Sem I/O; o orquestrador persiste e dispara os relays.
+ *
+ * A severidade separa quem age. O que tem comportamento esperado claro, a IA do autor resolve sozinha:
+ * `blocking` (bug, com prova) e `improvement` (melhoria no código que o PR mexe, preservando regra e
+ * comportamento). O que exige decidir o que o sistema deve fazer espera uma pessoa: `question`. O que é
+ * opcional espera uma pessoa escolher: `suggestion`. Autonomia técnica (como resolver) é da IA; decisão
+ * de produto (o que o sistema faz) é de gente.
  */
 
 export const MAX_ROUNDS = 3;
 
 export type ReviewPhase = "reviewing" | "fixing" | "ready" | "impasse" | "merged" | "cancelled";
-export type FindingSeverity = "blocking" | "suggestion" | "question" | "refuted";
-/** `wontfix`: o autor decidiu não aplicar uma SUGESTÃO, com o motivo (sugestão não bloqueia; bloqueante não aceita). */
+export type FindingSeverity = "blocking" | "improvement" | "suggestion" | "question" | "refuted";
+/**
+ * `wontfix`: o autor decidiu não aplicar uma sugestão ou melhoria, com o motivo (nenhuma das duas
+ * bloqueia; bloqueante não aceita).
+ */
 export type FindingStatus = "open" | "fixed" | "contested" | "accepted_risk" | "dropped" | "wontfix";
 
 /** O que o autor responde de um achado: corrigido, contestado (com prova) ou, só em sugestão, não vai aplicar. */
@@ -202,7 +211,11 @@ export function normalizeSubmittedFindings(input: SubmittedFinding[], round: num
           `(só o que a correção do autor introduziu): "${item.title}"`,
       );
     }
-    const severity = item.severity === "blocking" && !hasProof(item.proof) ? "suggestion" : item.severity;
+    const severity = item.severity === "blocking" && !hasProof(item.proof) ? "suggestion"
+      // A melhoria que a IA aplica sozinha só vale presa a um arquivo do PR: sem âncora, nada impede o
+      // autor de "melhorar" fora do escopo, e ela volta a ser opcional (uma pessoa escolhe).
+      : item.severity === "improvement" && !item.file?.trim() ? "suggestion"
+        : item.severity;
     // Allowlist explícita: humanDecision, commit, authorReply e reviewerReply são do servidor/humano/autor
     // e nunca podem vir da IA do revisor (uma dúvida já "decidida" liberaria o ready sem humano).
     const finding: Finding = {
@@ -246,7 +259,7 @@ export function applyReviewerVerdicts(
 
 /**
  * Respostas do autor. Contestar e não aplicar exigem justificativa: uma resposta muda não dá ao revisor
- * o que julgar. `wontfix` só vale para sugestão — bloqueante se corrige ou se contesta com prova.
+ * o que julgar. `wontfix` só vale para sugestão e melhoria — bloqueante se corrige ou se contesta com prova.
  */
 export function applyAuthorResponses(
   review: Review,
@@ -258,8 +271,8 @@ export function applyAuthorResponses(
     if (it.status !== "fixed" && (it.reply ?? "").trim() === "") {
       throw new Error(`${it.status === "wontfix" ? "não aplicar" : "contestar"} o achado ${it.id} exige uma resposta`);
     }
-    if (it.status === "wontfix" && f.severity !== "suggestion") {
-      throw new Error(`wontfix vale só para sugestão: ${it.id} é ${f.severity} (corrija ou conteste com prova)`);
+    if (it.status === "wontfix" && f.severity !== "suggestion" && f.severity !== "improvement") {
+      throw new Error(`wontfix vale só para sugestão e melhoria: ${it.id} é ${f.severity} (corrija ou conteste com prova)`);
     }
     f.status = it.status;
     f.authorReply = it.reply;
@@ -286,9 +299,19 @@ export function pendingQuestions(findings: Finding[]): Finding[] {
 }
 
 /**
+ * Melhorias que ainda esperam a vez do autor: abertas e sem resposta dele. Respondida (aplicada ou
+ * recusada com motivo), não volta a pedir rodada: o revisor confere, e o que ficar em pé só aparece.
+ */
+export function pendingImprovements(findings: Finding[]): Finding[] {
+  return findings.filter((f) => f.severity === "improvement" && f.status === "open" && f.authorReply === undefined);
+}
+
+/**
  * Próxima fase, chamada DEPOIS de aplicar a rodada do revisor (`review.round` = rodada recém-revisada).
  * Dúvida decidida como `block` pesa como bloqueante; `drop` conta como resolvida. Dúvida pendente
  * sozinha segura o ready sem gastar rodada (espera o humano); com bloqueante aberto a regra normal vence.
+ * Melhoria pendente dá a vez ao autor (ele aplica sem esperar ninguém), mas nunca vira impasse: na
+ * última rodada ela fica sem aplicar.
  */
 export function phaseAfterReviewerRound(review: Review): { phase: ReviewPhase; impasseReason?: string } {
   const blocking =
@@ -297,6 +320,7 @@ export function phaseAfterReviewerRound(review: Review): { phase: ReviewPhase; i
   if (blocking > 0) {
     return review.round >= MAX_ROUNDS ? { phase: "impasse", impasseReason: "rodadas" } : { phase: "fixing" };
   }
+  if (review.round < MAX_ROUNDS && pendingImprovements(review.findings).length > 0) return { phase: "fixing" };
   if (pendingQuestions(review.findings).length > 0) return { phase: "reviewing" };
   return { phase: "ready" };
 }
@@ -345,12 +369,13 @@ export function waivedText(review: Review): string | null {
  * em pé, de nenhuma severidade — bloqueante, dúvida ou sugestão aberta/contestada. Sugestão não segura
  * o `ready`, mas segura o merge automático: ela é justamente o que alguém pode querer aplicar antes.
  * Sem isso o PR ficava "pronto pra merge" esperando alguém voltar ao card só para dizer "pode mergear".
+ * Melhoria nunca segura: ela já teve a vez do autor, que decidiu sozinho, e não é escolha de ninguém.
  * Com o merge já autorizado (`mergeAuthorized`) essa pessoa já disse: a sugestão em pé não segura,
  * menos a que alguém já mandou o autor aplicar ("Fazer"), que segura até ele subir ({@link waivedSuggestions}).
  * PURE.
  */
 export function autoMergeEligible(review: Review): boolean {
-  const holds = (f: Finding): boolean => isOpen(f) && !isWaived(review, f);
+  const holds = (f: Finding): boolean => f.severity !== "improvement" && isOpen(f) && !isWaived(review, f);
   return (
     review.phase === "ready" && !!review.reviewedSha && !review.findings.some(holds) &&
     // Approve que não chegou ao GitHub: o PR segue com o "changes requested" da rodada 1 — o merge
