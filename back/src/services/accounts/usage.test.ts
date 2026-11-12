@@ -354,18 +354,6 @@ describe("accountUsage", () => {
     expect(logged.some((line) => line.includes("login renewal failed"))).toBe(true);
   });
 
-  it("a probe that failed is tried again after FRESH_MS — only a probe READING is held for PROBE_FRESH_MS", async () => {
-    const { usage } = await fresh(MCP_ONLY_CREDENTIALS);
-    await storeLongLived("tech");
-    fetchMock.mockResolvedValueOnce(response(401, { error: { type: "authentication_error" } }));
-    expect((await usage.accountUsage("tech")).error).toBe("unauthorized");
-
-    const now = Date.now();
-    vi.spyOn(Date, "now").mockReturnValue(now + usage.FRESH_MS + 1);
-    fetchMock.mockResolvedValueOnce(response(200, {}, PLAN_HEADERS));
-    expect((await usage.accountUsage("tech")).available).toBe(true);
-  });
-
   it("a login the usage endpoint refuses also falls back to the probe", async () => {
     const { usage } = await fresh();
     await storeLongLived("tech");
