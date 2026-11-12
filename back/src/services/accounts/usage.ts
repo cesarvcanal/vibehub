@@ -1,7 +1,8 @@
 import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import { listAccounts } from "../board/registry.js";
-import { DEFAULT_ACCOUNT_SLUG, profileDirFor, CREDENTIALS_FILE } from "./profiles.js";
+import { DEFAULT_ACCOUNT_SLUG, DEFAULT_CLAUDE_DIR, profileDirFor, CREDENTIALS_FILE } from "./profiles.js";
+import { resolvedClaudeCommand } from "./claudeCli.js";
 import { resolveAccountToken } from "./token.js";
 import { logger } from "../../utils/logger.js";
 
@@ -27,6 +28,13 @@ import { logger } from "../../utils/logger.js";
  * Claude Code blanked the access token) we spend ONE minimal call — Haiku, one output token — and
  * read the windows off the headers. Cheaper on the plan than it sounds (a few dozen tokens), and
  * cached for `PROBE_FRESH_MS` so a board left open is a handful of calls an hour, not one a minute.
+ *
+ * AN EXPIRED LOGIN IS RENEWED BY CLAUDE CODE, NOT BY US. The access token lives 8h and only the
+ * CLI renews it, when the account is used; an account left idle held a dead token and the meter
+ * read nothing until somebody sent a message (the vault token, the fallback below, can be revoked
+ * too — in production it was). So an expired token is handed to `claude auth status` inside the
+ * runner first: the CLI renews and rewrites its own `.credentials.json`, and we read it again. We
+ * never touch the refresh token: using it from here would rotate it under the CLI.
  *
  * WHERE THE TOKEN LIVES, AND FOR HOW LONG. It is read out of the runner with a READ-ONLY
  * `docker exec … cat` (every path validated and shell-quoted, nothing user-supplied reaching the
@@ -192,6 +200,19 @@ export function parseLogin(stdout: string): InteractiveLogin | undefined {
   }
 }
 
+/**
+ * Script that has Claude Code renew a profile's login: `claude auth status` refreshes an expired
+ * access token and writes the new pair back to `.credentials.json` itself — no inference, under a
+ * second. Renewing it from here instead (the refresh token over HTTP) would ROTATE the refresh token
+ * and leave the CLI holding a dead one, which is the one way to log a card out from a usage widget.
+ * The default profile runs with no CLAUDE_CONFIG_DIR, exactly as its sessions do. PURE.
+ */
+export function buildRenewLoginScript(containerName: string, profileDir: string): string {
+  assertSafeRemotePath(profileDir);
+  const env = profileDir === DEFAULT_CLAUDE_DIR ? "" : `-e CLAUDE_CONFIG_DIR=${shQuote(profileDir)} `;
+  return `docker exec ${env}${shQuote(containerName)} sh -c ${shQuote(resolvedClaudeCommand("auth status --json >/dev/null"))}`;
+}
+
 /** One window out of the payload, clamped to 0..100. Unknown shape → undefined. PURE. */
 export function parseWindow(value: unknown): UsageWindow | undefined {
   if (!value || typeof value !== "object") return undefined;
@@ -301,6 +322,26 @@ async function readLogin(profileDir: string): Promise<{ login?: InteractiveLogin
   }
 }
 
+/**
+ * The profile's access token, renewed by Claude Code first when it has expired. Only the CLI
+ * renews it, and only when the account is used — so an account idle for its 8h lifetime held a
+ * dead token, the endpoint refused it, and the meter said "sem leitura" until somebody sent a
+ * message. A renewal that fails keeps the expired token: the endpoint then says what is wrong.
+ */
+async function readFreshAccessToken(profileDir: string, now: number): Promise<{ token?: string; runnerDown: boolean }> {
+  const read = await readLogin(profileDir);
+  const expired = read.login?.expiresAt != null && read.login.expiresAt <= now;
+  if (!expired) return { token: read.login?.accessToken, runnerDown: read.runnerDown };
+  try {
+    await hostExecutor().runScript(buildRenewLoginScript(config.runner.container, profileDir), { timeoutMs: 30_000 });
+  } catch (err) {
+    logger.warn({ action: "account.usage", profileDir, err: (err as Error).message }, "login renewal failed");
+    return { token: read.login?.accessToken, runnerDown: false };
+  }
+  const renewed = await readLogin(profileDir);
+  return { token: renewed.login?.accessToken ?? read.login?.accessToken, runnerDown: renewed.runnerDown };
+}
+
 /** One HTTPS call. The token is a parameter and dies with the frame. */
 async function callUsageEndpoint(token: string, at: number): Promise<AccountUsage> {
   let res: Response;
@@ -390,8 +431,7 @@ async function usageFor(slug: string | undefined): Promise<{ result: AccountUsag
     return { result, called: false };
   }
 
-  const { login, runnerDown } = await readLogin(profileDirFor(slug));
-  const token = login?.accessToken;
+  const { token, runnerDown } = await readFreshAccessToken(profileDirFor(slug), now);
   let result: AccountUsage | undefined = token ? await callUsageEndpoint(token, now) : undefined;
   let freshMs = FRESH_MS;
 
