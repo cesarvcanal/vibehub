@@ -77,12 +77,11 @@ import {
   whitelistModel,
   type BoardCard,
   type BoardProject,
-  type CardSessionInfo,
 } from "@/features/board/api";
 import { AccountUsageBars, useMinuteTick } from "@/features/board/components/AccountUsageBars";
 import { PlanUsageMeter } from "@/features/board/components/PlanUsage";
 import { pillPercent } from "@/features/board/lib/usage";
-import type { CardColumn } from "@/api/types";
+import type { CardColumn, CardSessionInfo } from "@/api/types";
 import { t as translate, useT } from "@/i18n";
 
 /**

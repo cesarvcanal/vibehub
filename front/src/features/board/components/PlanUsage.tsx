@@ -1,7 +1,8 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Ban } from "lucide-react";
-import { boardApi, cardUsageKey, profilePathFor, type CardUsageResponse } from "@/features/board/api";
+import { boardApi, cardUsageKey, profilePathFor } from "@/features/board/api";
+import type { CardUsageResponse } from "@/api/types";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { minutesSince, usageErrorText } from "@/features/board/lib/usage";
 import {

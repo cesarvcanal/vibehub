@@ -1,4 +1,4 @@
-import type { AccountUsage } from "@/features/board/api";
+import type { AccountUsage } from "@/api/types";
 import { formatResetIn } from "@/features/board/lib/usage";
 import { getLanguage, t } from "@/i18n";
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { AccountUsage } from "@/features/board/api";
+import type { AccountUsage } from "@/api/types";
 import {
   alertSentence,
   peakWindow,

@@ -221,13 +221,6 @@ export interface CardBrowserStatus {
   controlBy: string | null;
 }
 
-/** `GET /api/transcribe` — voice input status. Key values never come back. */
-export interface TranscribeStatus {
-  available: boolean;
-  proofread: boolean;
-  language: string | null;
-}
-
 /** `PATCH /api/settings` — partial, only the keys you send are touched. */
 export interface SettingsPatch {
   git?: Partial<GitIdentity>;
@@ -239,6 +232,36 @@ export interface SettingsPatch {
   sdkPermissionMode?: "same-as-terminal" | "ask-sensitive";
   sdkAutoResume?: boolean;
   runner?: Partial<RunnerSettings>;
+}
+
+/** `GET /api/transcribe` — what voice input can do on THIS install. */
+export interface TranscribeStatus {
+  /** An OpenAI key is stored; without one the microphone has nothing to talk to. */
+  available: boolean;
+  /** A Claude key is stored too, so transcriptions get proofread before they come back. */
+  proofread: boolean;
+  /** ISO 639-1 hint sent to the recogniser, or null for auto-detect. */
+  language: string | null;
+}
+
+/** `POST /api/cards/:id/transcribe` */
+export interface Transcription {
+  text: string;
+  proofread: boolean;
+}
+
+/**
+ * `GET /api/features` — install-wide flags every signed-in user can read (settings stay
+ * owner-only). `sdkChat` true = the Chat tab of EVERY card is the native (SDK) chat; false = the
+ * classic transcript chat. It replaced the per-card `sdkChat` opt-in (2026-08-31).
+ */
+export interface InstallFeatures {
+  sdkChat: boolean;
+  /**
+   * How long a card sits untouched in `done` before the server purges it (days; 0 = never).
+   * Absent on a server older than the countdown — the card then shows none.
+   */
+  doneRetentionDays?: number;
 }
 
 /* ---------------------------------------------------------------- github */
@@ -331,8 +354,15 @@ export interface NewProject {
   githubConnectionId?: string | null;
 }
 
-/** `PATCH /api/projects/:id` */
-export type ProjectPatch = Partial<NewProject> & { position?: number };
+/** `PATCH /api/projects/:id` — the edit form's fields, in the wire names; null CLEARS a field. */
+export interface ProjectPatch {
+  name: string;
+  repoFullName: string | null;
+  cloneUrl: string | null;
+  baseBranch?: string;
+  defaultAccountSlug: string | null;
+  githubConnectionId: string | null;
+}
 
 /** `PATCH /api/projects/:id/order` — the sidebar reorder route. */
 export interface ReorderBody {
@@ -543,6 +573,54 @@ export interface CardPatch {
   locked?: boolean | null;
   resumeSessionId?: string | null;
 }
+
+/**
+ * `GET /api/cards/:id/session` — what the card is ACTUALLY running right now.
+ *
+ * The card record only says what was PINNED (`model`, `accountSlug`), and most cards pin nothing:
+ * they inherit. So the pills used to read "Default model" and "Main (default)", which is the one
+ * thing nobody wants from them — the question is always "which model is answering me", never
+ * "did somebody type a model into this card".
+ *
+ * `model` is read from the live session transcript (the last assistant turn), so it is the truth
+ * and not a guess; `account` is the effective account after card -> project -> default, already
+ * resolved to a display name. A card whose agent has not answered yet has no turn to read, and the
+ * route says so with nulls rather than inventing one.
+ */
+export interface CardSessionInfo {
+  /** Model id from the last assistant turn, or null while the session has not answered yet. */
+  model: string | null;
+  /** Display name for that model when the server knows one. */
+  modelLabel: string | null;
+  /**
+   * Reasoning level the session runs on, as the server read it (Claude Code stamps it on every
+   * assistant turn), or null while nothing says — a server that predates the field included.
+   */
+  effort: string | null;
+  /** The account the session is really using. */
+  account: { slug: string | null; name: string };
+  /**
+   * What the terminal is doing right now. The chat needs it: with no card list beside it (a phone
+   * has none) this poll is the only thing that says "the agent is still working".
+   */
+  situation: CardSituation;
+}
+
+/**
+ * What a model/account switch did to the LIVE session, straight from the server: `restarted` = the
+ * session was ended and the reattach starts Claude with the new one, in the same conversation;
+ * `pending` = Claude was working, so it applies the moment the card goes idle; `live` = the native
+ * chat took the new intelligence in place — nothing restarted, the turn in flight goes on already on
+ * it; `none` = there was no live session to change (the pin is simply what the next start uses).
+ */
+export type SessionChange = "none" | "restarted" | "pending" | "live";
+
+/**
+ * A terminal's current situation, as the server words it. `stopped` = the session is still there but
+ * Claude has EXITED, leaving a bare shell (a `/exit`, a crash) — the chat surfaces it as
+ * "Claude parou" with a Restart, instead of a silent shell that quietly swallows what you type.
+ */
+export type CardSituation = "working" | "waiting" | "paused" | "done" | "stopped" | "no session";
 
 export interface RestartAllResult {
   restarted: number;
@@ -779,6 +857,47 @@ export interface AccountsResponse {
   accounts: Account[];
   /** Display name of the built-in default profile. */
   defaultLabel: string;
+}
+
+/** One metered plan window: how much is gone, and when it empties again. */
+export interface UsageWindow {
+  /** 0..100 percent of the window consumed. */
+  utilization: number;
+  /** ISO instant it resets, or null when the server did not say. */
+  resetsAt: string | null;
+}
+
+/** Why an account has no numbers. Each one gets its OWN sentence — that is the point of the split. */
+export type UsageError = "no_credentials" | "rate_limited" | "unauthorized" | "unreachable";
+
+/**
+ * Plan usage of one account. `available` is the only branch the UI needs: with it, three bars;
+ * without it, the sentence for `error`.
+ */
+export interface AccountUsage {
+  available: boolean;
+  fiveHour?: UsageWindow;
+  sevenDay?: UsageWindow;
+  sevenDayOpus?: UsageWindow;
+  /** When the numbers were READ (not when they were served) — what makes `stale` legible. */
+  fetchedAt: number;
+  /** true = the last good reading, served while the server is backed off the usage endpoint. */
+  stale?: boolean;
+  /** Epoch ms the back-off lifts. */
+  retryAt?: number;
+  error?: UsageError;
+}
+
+/** `GET /cards/:id/usage`: the reading of the account this card runs on (`default` = built-in). */
+export interface CardUsageResponse {
+  slug: string;
+  usage: AccountUsage;
+}
+
+export interface AccountsUsageResponse {
+  /** Keyed by account slug, with `default` for the runner's built-in profile. */
+  bySlug: Record<string, AccountUsage>;
+  fetchedAt: number;
 }
 
 export type McpTransport = "stdio" | "http" | "sse";

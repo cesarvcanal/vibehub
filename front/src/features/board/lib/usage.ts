@@ -1,4 +1,4 @@
-import type { AccountUsage, UsageWindow } from "@/features/board/api";
+import type { AccountUsage, UsageWindow } from "@/api/types";
 import { t } from "@/i18n";
 
 /**

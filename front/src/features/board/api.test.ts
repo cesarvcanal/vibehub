@@ -12,7 +12,8 @@ import {
   effortInUse,
   whitelistModel,
 } from "@/features/board/api";
-import type { BoardAccount, BoardCard, BoardMcp, CardSessionInfo } from "@/features/board/api";
+import type { BoardAccount, BoardCard, BoardMcp } from "@/features/board/api";
+import type { CardSessionInfo } from "@/api/types";
 
 function mcp(overrides: Partial<BoardMcp> & { id: string }): BoardMcp {
   return { name: overrides.id, kind: "stdio", ...overrides };

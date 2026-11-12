@@ -13,7 +13,7 @@ import {
   usageRows,
 } from "@/features/board/lib/usage";
 import { setLanguage } from "@/i18n";
-import type { AccountUsage } from "@/features/board/api";
+import type { AccountUsage } from "@/api/types";
 
 /**
  * The rules behind the bars. Colour thresholds and a countdown are exactly the kind of thing that

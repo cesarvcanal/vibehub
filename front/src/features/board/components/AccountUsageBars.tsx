@@ -1,5 +1,5 @@
 import * as React from "react";
-import type { AccountUsage } from "@/features/board/api";
+import type { AccountUsage } from "@/api/types";
 import { profilePathFor } from "@/features/board/api";
 import {
   formatPercent,

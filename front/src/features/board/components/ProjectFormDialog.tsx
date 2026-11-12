@@ -31,9 +31,8 @@ import {
   githubReposKey,
   splitRepo,
   type BoardProject,
-  type ProjectPatchInput,
 } from "@/features/board/api";
-import type { GithubConnection } from "@/api/types";
+import type { GithubConnection, ProjectPatch } from "@/api/types";
 import { t as translate, useT } from "@/i18n";
 
 /**
@@ -148,7 +147,7 @@ export function ProjectFormDialog({
 
   const createMutation = useMutation({
     mutationFn: async (): Promise<BoardProject> => {
-      const body: ProjectPatchInput = {
+      const body: ProjectPatch = {
         name: name.trim(),
         repoFullName: repo || null,
         cloneUrl: (selected?.cloneUrl ?? cloneUrl.trim()) || null,

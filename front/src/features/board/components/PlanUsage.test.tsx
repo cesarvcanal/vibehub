@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { boardApi, type CardUsageResponse } from "@/features/board/api";
+import { boardApi } from "@/features/board/api";
+import type { CardUsageResponse } from "@/api/types";
 import { PlanUsageMeter } from "@/features/board/components/PlanUsage";
 import { renderApp } from "@/test/render";
 
