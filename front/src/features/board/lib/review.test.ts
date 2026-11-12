@@ -7,6 +7,7 @@ import {
   cardReviewKey,
   cardPeopleKey,
   conversationRows,
+  autonomySummary,
   findingCounts,
   findingIsOpen,
   mergeFailure,
@@ -265,11 +266,33 @@ describe("findingCounts", () => {
       finding({ id: "e", severity: "refuted", status: "dropped" }),
       finding({ id: "f", severity: "question" }),
     ];
-    expect(findingCounts(list)).toEqual({ blocking: 3, suggestion: 1, question: 1, refuted: 1 });
+    expect(findingCounts([...list, finding({ id: "g", severity: "improvement" })]))
+      .toEqual({ blocking: 3, improvement: 1, suggestion: 1, question: 1, refuted: 1 });
   });
 
   it("is all zeros for an empty list", () => {
-    expect(findingCounts([])).toEqual({ blocking: 0, suggestion: 0, question: 0, refuted: 0 });
+    expect(findingCounts([])).toEqual({ blocking: 0, improvement: 0, suggestion: 0, question: 0, refuted: 0 });
+  });
+});
+
+describe("autonomySummary", () => {
+  it("separates what the AI fixed, what it improved and what waits on a person", () => {
+    const list = [
+      finding({ id: "a", status: "fixed" }),
+      finding({ id: "b", status: "fixed" }),
+      // a person made this one block: fixed, but not on the AI's own call
+      finding({ id: "c", severity: "question", humanDecision: "block", status: "fixed" }),
+      finding({ id: "d", severity: "improvement", status: "fixed" }),
+      finding({ id: "e", severity: "improvement", status: "wontfix" }),
+      finding({ id: "f", severity: "question" }),
+      finding({ id: "g", severity: "question", humanDecision: "drop", status: "dropped" }),
+      finding({ id: "h" }),
+    ];
+    expect(autonomySummary(list)).toEqual({ fixed: 2, improved: 1, human: 1 });
+  });
+
+  it("is all zeros for an empty list", () => {
+    expect(autonomySummary([])).toEqual({ fixed: 0, improved: 0, human: 0 });
   });
 });
 

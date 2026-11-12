@@ -192,6 +192,36 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.queryByText(/ · /)).toBeNull();
   });
 
+  it("o resumo diz o que a IA corrigiu, o que melhorou sozinha e o que depende de uma pessoa; melhoria tem grupo próprio", async () => {
+    open("rev", review({
+      phase: "reviewing",
+      findings: [
+        finding({ id: "a", status: "fixed" }),
+        finding({ id: "b", severity: "improvement", status: "fixed" }),
+        finding({ id: "c", severity: "improvement", title: "Extrai o laço" }),
+        finding({ id: "d", severity: "question" }),
+      ],
+    }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    const summary = screen.getByTestId("review-autonomy");
+    expect(summary).toHaveTextContent("1 corrigido pela IA");
+    expect(summary).toHaveTextContent("1 melhoria aplicada pela IA");
+    expect(summary).toHaveTextContent("1 depende de decisão humana");
+    expect(screen.getAllByTestId("finding-group").map((g) => g.getAttribute("data-severity"))).toEqual(["question", "improvement"]);
+    const improvement = screen.getAllByTestId("finding-group").find((g) => g.getAttribute("data-severity") === "improvement")!;
+    expect(within(improvement).getByText(/A IA do autor aplica sozinha/)).toBeInTheDocument();
+    // melhoria não é escolha de ninguém: nada de "Fazer" nela
+    expect(within(improvement).queryByRole("radio")).toBeNull();
+  });
+
+  it("sem nada corrigido, melhorado ou esperando, o resumo não aparece", async () => {
+    open("rev", review({ phase: "reviewing", findings: [finding({ id: "a" })] }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    expect(screen.queryByTestId("review-autonomy")).toBeNull();
+  });
+
   it("achado derrubado não conta como pendente nem aparece 'aberto': vai para os resolvidos", async () => {
     open("rev", review({ phase: "ready", findings: [finding({ id: "d", severity: "refuted", title: "CONTRIBUTING contradiz" })] }));
     await loaded();

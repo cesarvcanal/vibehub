@@ -566,8 +566,12 @@ export interface PreviewDeAnexo {
 
 /** `cancelled` exists on the server but never reaches a card summary. */
 export type ReviewPhase = "reviewing" | "fixing" | "ready" | "impasse" | "merged" | "cancelled";
-export type FindingSeverity = "blocking" | "suggestion" | "question" | "refuted";
-/** `wontfix`: the author will not apply a SUGGESTION, and said why (suggestions only). */
+/**
+ * Who acts on it: `blocking` (a bug) and `improvement` (a change inside the PR that keeps behavior) the
+ * author's AI handles on its own; `question` waits for a person's decision; `suggestion` for a person's choice.
+ */
+export type FindingSeverity = "blocking" | "improvement" | "suggestion" | "question" | "refuted";
+/** `wontfix`: the author will not apply a suggestion or improvement, and said why (those two only). */
 export type FindingStatus = "open" | "fixed" | "contested" | "accepted_risk" | "dropped" | "wontfix";
 
 /** What a board card carries about its review: the line of the block and of the sidebar. */
