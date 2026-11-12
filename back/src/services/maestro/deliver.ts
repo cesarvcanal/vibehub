@@ -985,19 +985,14 @@ export async function gateAtCommit(cardId: string, prUrl: string, sha: string): 
   return (await ciGate(config.runner.container, token, cwd, prUrl, sha)) ?? (await runGate(card.id, { expectedSha: sha }));
 }
 
-/** The PR number out of its URL (`.../pull/123`); null when the URL is not a pull request's. PURE. */
-function prNumberFromUrl(prUrl: string): number | null {
-  return parsePrUrl(prUrl)?.number ?? null;
-}
-
 /**
  * Writes the PR on the card (one per base) so the review can start from it. Best-effort: the PR is
  * already open, and a delivery must not come back as a failure because a note about it could not be
  * written — the next delivery of the same base writes it again.
  */
 async function rememberPr(card: Card, prUrl: string, base: string, branch: string): Promise<void> {
-  const number = prNumberFromUrl(prUrl);
-  if (number === null) {
+  const number = parsePrUrl(prUrl)?.number;
+  if (number === undefined) {
     logger.warn({ card: card.worktreeSlug }, "the PR url has no number — not recorded on the card");
     return;
   }
@@ -1022,8 +1017,8 @@ async function rememberPr(card: Card, prUrl: string, base: string, branch: strin
 export async function afterPrMerged(
   cardId: string, prUrl: string, base: string, branch: string, connectionId?: string,
 ): Promise<"deleted" | "kept" | "failed"> {
-  const number = prNumberFromUrl(prUrl);
-  if (number !== null) {
+  const number = parsePrUrl(prUrl)?.number;
+  if (number !== undefined) {
     try {
       await markCardPrMerged(cardId, base, number, Date.now());
     } catch (err) {
