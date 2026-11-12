@@ -1,4 +1,5 @@
 import { shQuote } from "../../runtime/host.js";
+import { asFields, asInstant, asString, lastJsonLine, type Fields } from "./fields.js";
 
 /**
  * AS SONDAGENS DA FROTA — o JS que roda DENTRO do runner (por `docker exec … node -e`), os comandos
@@ -420,32 +421,6 @@ export function trimAgentLabel(raw: string): string {
 }
 
 /* ------------------------------------------------------------------ leitura das saídas */
-
-type Fields = Record<string, unknown>;
-
-function asFields(value: unknown): Fields | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Fields) : null;
-}
-
-function asString(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-/** Um instante em ms: número finito e positivo, ou nada. */
-function asInstant(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
-
-/** A última linha da saída como JSON — o docker pode imprimir avisos antes dela. */
-function lastJsonLine(stdout: string): unknown {
-  const text = String(stdout ?? "").trim();
-  if (!text) return undefined;
-  try {
-    return JSON.parse(text.slice(text.lastIndexOf("\n") + 1));
-  } catch {
-    return undefined;
-  }
-}
 
 function parseActivity(value: unknown): WorkflowActivity | undefined {
   const o = asFields(value);

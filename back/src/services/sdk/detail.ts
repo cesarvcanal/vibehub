@@ -1,5 +1,6 @@
 import { config } from "../../config/env.js";
 import { hostExecutor, shQuote } from "../../runtime/host.js";
+import { asFields, asInstant, asString, lastJsonLine, type Fields } from "./fields.js";
 import { summarizeToolResult, type ToolResultSummary } from "./toolResult.js";
 
 /**
@@ -195,21 +196,6 @@ export function buildDetailProbeScript(containerName: string, transcriptDir: str
 
 /* ------------------------------------------------------------------ leitura */
 
-type Fields = Record<string, unknown>;
-const asFields = (v: unknown): Fields | null => (v && typeof v === "object" && !Array.isArray(v) ? (v as Fields) : null);
-const str = (v: unknown): string => (typeof v === "string" ? v : "");
-const instant = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : undefined);
-
-function lastJson(stdout: string): Fields | null {
-  const text = String(stdout ?? "").trim();
-  if (!text) return null;
-  try {
-    return asFields(JSON.parse(text.slice(text.lastIndexOf("\n") + 1)));
-  } catch {
-    return null;
-  }
-}
-
 /** Uma ação, inteira. */
 export interface ToolDetail {
   found: boolean;
@@ -249,8 +235,8 @@ export interface BackgroundOutput {
 
 function parseBackground(v: unknown): BackgroundOutput | undefined {
   const o = asFields(v);
-  if (!o || !str(o.taskId)) return undefined;
-  const bg: BackgroundOutput = { taskId: str(o.taskId), status: str(o.status) || "running" };
+  if (!o || !asString(o.taskId)) return undefined;
+  const bg: BackgroundOutput = { taskId: asString(o.taskId), status: asString(o.status) || "running" };
   if (typeof o.output === "string") bg.output = o.output;
   if (typeof o.outputLength === "number") bg.outputLength = o.outputLength;
   if (o.missing === true) bg.missing = true;
@@ -259,26 +245,26 @@ function parseBackground(v: unknown): BackgroundOutput | undefined {
 
 /** Lê a saída da sondagem de uma ação. Lixo vira `{ found: false }`. PURE. */
 export function parseToolDetail(stdout: string): ToolDetail {
-  const o = lastJson(stdout);
+  const o = asFields(lastJsonLine(stdout));
   if (!o || o.found !== true) return { found: false };
   const detail: ToolDetail = { found: true, by: o.file === "subagent" ? "subagent" : "main" };
-  if (str(o.agentId)) detail.agentId = str(o.agentId);
-  if (str(o.agentDescription)) detail.agentDescription = str(o.agentDescription);
-  if (str(o.name)) detail.name = str(o.name);
+  if (asString(o.agentId)) detail.agentId = asString(o.agentId);
+  if (asString(o.agentDescription)) detail.agentDescription = asString(o.agentDescription);
+  if (asString(o.name)) detail.name = asString(o.name);
   if (o.input !== undefined) detail.input = o.input;
   const hasResult = typeof o.text === "string" || o.structured !== undefined || o.isError === true;
   if (hasResult) {
     detail.isError = o.isError === true;
-    detail.text = str(o.text);
+    detail.text = asString(o.text);
     if (typeof o.textLength === "number") detail.textLength = o.textLength;
     if (o.structured !== undefined) detail.structured = o.structured;
     detail.result = summarizeToolResult({ type: "tool_result", id: "", isError: detail.isError, text: detail.text, structured: detail.structured });
   }
-  if (str(o.thinking)) detail.thinking = str(o.thinking);
+  if (asString(o.thinking)) detail.thinking = asString(o.thinking);
   const background = parseBackground(o.background);
   if (background) detail.background = background;
-  const startedAt = instant(o.startedAt);
-  const endedAt = instant(o.endedAt);
+  const startedAt = asInstant(o.startedAt);
+  const endedAt = asInstant(o.endedAt);
   if (startedAt) detail.startedAt = startedAt;
   if (endedAt) detail.endedAt = endedAt;
   return detail;
@@ -306,37 +292,37 @@ export interface AgentTimeline {
 
 /** Lê a saída da sondagem da linha do tempo; o resultado de cada passo já sai resumido. PURE. */
 export function parseAgentTimeline(stdout: string): AgentTimeline {
-  const o = lastJson(stdout);
+  const o = asFields(lastJsonLine(stdout));
   if (!o || o.found !== true) return { found: false, items: [] };
   const items: TimelineItem[] = [];
   for (const raw of Array.isArray(o.items) ? o.items : []) {
     const it = asFields(raw);
     if (!it) continue;
-    const at = instant(it.at) ?? 0;
-    if ((it.kind === "thinking" || it.kind === "text") && str(it.text)) {
-      items.push({ kind: it.kind, at, text: str(it.text) });
-    } else if (it.kind === "tool" && str(it.id)) {
+    const at = asInstant(it.at) ?? 0;
+    if ((it.kind === "thinking" || it.kind === "text") && asString(it.text)) {
+      items.push({ kind: it.kind, at, text: asString(it.text) });
+    } else if (it.kind === "tool" && asString(it.id)) {
       const r = asFields(it.result);
-      const endedAt = instant(it.endedAt);
+      const endedAt = asInstant(it.endedAt);
       items.push({
         kind: "tool",
         at,
-        id: str(it.id),
-        name: str(it.name) || "?",
+        id: asString(it.id),
+        name: asString(it.name) || "?",
         ...(it.input !== undefined ? { input: it.input } : {}),
         ...(endedAt ? { endedAt } : {}),
-        ...(r ? { result: summarizeToolResult({ type: "tool_result", id: "", isError: r.isError === true, text: str(r.text), structured: r.structured, outputLines: typeof r.outputLines === "number" ? r.outputLines : undefined }) } : {}),
+        ...(r ? { result: summarizeToolResult({ type: "tool_result", id: "", isError: r.isError === true, text: asString(r.text), structured: r.structured, outputLines: typeof r.outputLines === "number" ? r.outputLines : undefined }) } : {}),
       });
     }
   }
   return {
     found: true,
-    ...(str(o.agentId) ? { agentId: str(o.agentId) } : {}),
-    ...(str(o.description) ? { description: str(o.description) } : {}),
-    ...(str(o.agentType) ? { agentType: str(o.agentType) } : {}),
-    ...(str(o.prompt) ? { prompt: str(o.prompt) } : {}),
-    ...(instant(o.startedAt) ? { startedAt: instant(o.startedAt) } : {}),
-    ...(instant(o.lastAt) ? { lastAt: instant(o.lastAt) } : {}),
+    ...(asString(o.agentId) ? { agentId: asString(o.agentId) } : {}),
+    ...(asString(o.description) ? { description: asString(o.description) } : {}),
+    ...(asString(o.agentType) ? { agentType: asString(o.agentType) } : {}),
+    ...(asString(o.prompt) ? { prompt: asString(o.prompt) } : {}),
+    ...(asInstant(o.startedAt) ? { startedAt: asInstant(o.startedAt) } : {}),
+    ...(asInstant(o.lastAt) ? { lastAt: asInstant(o.lastAt) } : {}),
     ...(typeof o.toolCount === "number" ? { toolCount: o.toolCount } : {}),
     ...(o.partial === true ? { partial: true } : {}),
     items,

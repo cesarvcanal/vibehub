@@ -8,6 +8,8 @@
  * (ver ./detail.ts). PURE.
  */
 
+import { asFields } from "./fields.js";
+
 /** O frame que o driver emite (stdout), antes do resumo. */
 export interface RawToolResultEvent {
   type: "tool_result";
@@ -54,8 +56,6 @@ export interface ToolResultEvent {
 
 const ERROR_MAX = 200;
 
-type Fields = Record<string, unknown>;
-const asFields = (v: unknown): Fields | null => (v && typeof v === "object" && !Array.isArray(v) ? (v as Fields) : null);
 const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : undefined);
 
 /** Quantas linhas um texto tem (sem contar a quebra final). PURE. */
