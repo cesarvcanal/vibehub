@@ -1342,16 +1342,6 @@ function noteChatActivity(session: DriverSession): void {
 }
 
 /**
- * ONE client frame (raw text from a websocket — live or buffered while the route was still setting
- * the connection up) funneled into the card's driver. A user message is a TURN: it goes to the
- * driver's stdin AS a user message (never converted, never wrapped), the turn count and the durable
- * in-flight marker (see ./inflight.ts) both move, and the history gets the line with its sender.
- *
- * Returns the frame's VERDICT so the caller can answer the browser (see `ClientFrameOutcome`): a
- * turn is only ever reported `accepted` when it is both in the driver's stdin and on its way to
- * disk — never because a `write()` did not happen to throw.
- */
-/**
  * A turn someone just sent, on the card's OTHER screens — the same frame the replay would draw.
  * The sender drew it already (its own bubble, settled by the receipt), so it never gets it back.
  * Without this, a second person on the card saw "está digitando…", then nothing — the answer arrived
@@ -1394,6 +1384,16 @@ export function missedDuringSetup(heard: readonly HistoryEvent[], replay: readon
   return heard.filter((e) => !replayed.has(key(e)));
 }
 
+/**
+ * ONE client frame (raw text from a websocket — live or buffered while the route was still setting
+ * the connection up) funneled into the card's driver. A user message is a TURN: it goes to the
+ * driver's stdin AS a user message (never converted, never wrapped), the turn count and the durable
+ * in-flight marker (see ./inflight.ts) both move, and the history gets the line with its sender.
+ *
+ * Returns the frame's VERDICT so the caller can answer the browser (see `ClientFrameOutcome`): a
+ * turn is only ever reported `accepted` when it is both in the driver's stdin and on its way to
+ * disk — never because a `write()` did not happen to throw.
+ */
 export function handleClientFrame(
   session: DriverSession,
   raw: string,

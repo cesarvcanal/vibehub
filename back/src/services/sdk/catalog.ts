@@ -20,7 +20,8 @@ import { CARD_ID_RE } from "../board/cardId.js";
  * a atualiza. Mesma durabilidade e mesmo formato de nome do `sdk-inflight`/`sdk-history`: um JSON
  * por card sob o data dir.
  *
- * Nada aqui lança: um menu vazio é um contratempo, uma conexão derrubada é um bug.
+ * Ler e gravar nunca lançam: um menu vazio é um contratempo, uma conexão derrubada é um bug. Só a
+ * remoção da purga lança (veja `removeCardCatalog`).
  */
 
 /** Onde os catálogos vivem, sob o data dir. */
