@@ -10,8 +10,8 @@ import {
 } from "./peerQuestionDraft";
 
 /**
- * Duas pessoas no mesmo card, uma pergunta: cada uma vê em tempo real o que a outra marca e escreve
- * no cartão, para não mandarem duas respostas diferentes (só a primeira vale).
+ * Two people on the same card, one question: each one sees in real time what the other ticks and
+ * writes on the card, so they do not send two different answers (only the first one counts).
  */
 
 const d = (other: string, picked: string[] = []): QuestionDraft => ({ picked: [picked], other: [other] });

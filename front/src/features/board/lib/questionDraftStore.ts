@@ -1,42 +1,43 @@
 /**
- * O RASCUNHO DE CADA CARTÃO DE PERGUNTA — o que a pessoa já marcou e escreveu num AskUserQuestion
- * que ainda não respondeu — guardado no localStorage, por card e por pergunta.
+ * THE DRAFT OF EACH QUESTION CARD — what the person already ticked and wrote in an AskUserQuestion
+ * they have not answered yet — kept in localStorage, per card and per question.
  *
- * Por que no disco: todo (re)connect limpa a tela e o replay redesenha o cartão, que desmonta e
- * remonta (produção, 2026-10-07, a primeira versão: um mapa do módulo, que bastava para isso). Mas
- * um deploy também RECARREGA a aba — a versão nova manda o F5 sozinho (lib/versionCheck.ts) — e o
- * mapa do módulo morre com ele: quatro perguntas marcadas viravam um cartão em branco (produção,
- * 2026-11-03). O localStorage é o que um F5 não apaga, como o rascunho do composer e o outbox.
+ * Why on disk: every (re)connect clears the screen and the replay redraws the card, which unmounts
+ * and remounts (production, 2026-10-07, the first version: a module map, which was enough for that).
+ * But a deploy also RELOADS the tab — the new version triggers the F5 by itself (lib/versionCheck.ts) —
+ * and the module map dies with it: four ticked questions turned into a blank card (production,
+ * 2026-11-03). localStorage is what an F5 does not erase, like the composer's draft and the outbox.
  *
- * A chave é card + pergunta: o id vem do driver (`q_<n>_<ms>`) e dois cards podem gerar o mesmo.
+ * The key is card + question: the id comes from the driver (`q_<n>_<ms>`) and two cards can generate
+ * the same one.
  *
- * Guardado também DEPOIS do clique em "Responder": o "respondida" da tela é otimista, e se o fio
- * cair junto com o driver antes da confirmação o replay redesenha o cartão pendente — com o que já
- * estava marcado. Por isso ninguém apaga na resposta: o que sai é o velho (`QUESTION_DRAFT_TTL_MS`)
- * e o excesso (`QUESTION_DRAFTS_MAX`, os mais antigos primeiro), a cada gravação.
+ * Also kept AFTER the click on "Responder": the screen's "respondida" is optimistic, and if the wire
+ * drops along with the driver before the confirmation, the replay redraws the pending card — with what
+ * was already ticked. That is why nobody erases on answer: what goes away is the old
+ * (`QUESTION_DRAFT_TTL_MS`) and the excess (`QUESTION_DRAFTS_MAX`, oldest first), on every write.
  *
- * Nunca lança: localStorage bloqueado (modo privado, cota) só tira a durabilidade — a memória da
- * aba segura o rascunho enquanto ela estiver aberta.
+ * Never throws: blocked localStorage (private mode, quota) only takes away the durability — the tab's
+ * memory holds the draft while it stays open.
  */
 
 import { isEmptyDraft, type QuestionDraft } from "@/features/board/lib/peerQuestionDraft";
 
 const STORAGE_KEY = "vibehub.questionDrafts";
 
-/** Quantos cartões o disco guarda, no máximo. */
+/** How many cards the disk keeps, at most. */
 export const QUESTION_DRAFTS_MAX = 50;
 
-/** Depois disso o rascunho sai: a pergunta já encerrou há muito (o prazo do cartão é 30 min). */
+/** After this the draft goes away: the question closed long ago (the card's deadline is 30 min). */
 export const QUESTION_DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 interface StoredQuestionDraft {
   picked: string[][];
   other: string[];
-  /** Quando a pessoa fez a mudança (epoch ms) — a ordem da poda, e o que decide contra a versão do servidor. */
+  /** When the person made the change (epoch ms) — the pruning order, and what decides against the server's version. */
   at: number;
 }
 
-/** A memória da aba: vale primeiro, e é o que sobra com o localStorage bloqueado. */
+/** The tab's memory: it counts first, and it is what is left when localStorage is blocked. */
 const memory = new Map<string, StoredQuestionDraft>();
 
 function keyOf(cardId: string, questionId: string): string {
@@ -46,7 +47,7 @@ function keyOf(cardId: string, questionId: string): string {
 const strings = (value: unknown): string[] | null =>
   Array.isArray(value) && value.every((v) => typeof v === "string") ? (value as string[]) : null;
 
-/** Uma entrada do disco, conferida — localStorage é entrada não confiável. PURE. */
+/** An entry from disk, checked — localStorage is untrusted input. PURE. */
 function parseEntry(value: unknown): StoredQuestionDraft | null {
   if (!value || typeof value !== "object") return null;
   const { picked, other, at } = value as { picked?: unknown; other?: unknown; at?: unknown };
@@ -78,11 +79,11 @@ function writeStored(drafts: Record<string, StoredQuestionDraft>): void {
     if (Object.keys(drafts).length === 0) localStorage.removeItem(STORAGE_KEY);
     else localStorage.setItem(STORAGE_KEY, JSON.stringify(drafts));
   } catch {
-    /* a memória da aba ainda segura o rascunho */
+    /* the tab's memory still holds the draft */
   }
 }
 
-/** Sem o velho e sem o excesso — os mais recentes ficam. PURE. */
+/** Without the old and without the excess — the most recent stay. PURE. */
 export function pruneQuestionDrafts<T extends { at: number }>(drafts: Record<string, T>, now: number): Record<string, T> {
   const kept = Object.entries(drafts)
     .filter(([, d]) => now - d.at <= QUESTION_DRAFT_TTL_MS)
@@ -91,7 +92,7 @@ export function pruneQuestionDrafts<T extends { at: number }>(drafts: Record<str
   return Object.fromEntries(kept);
 }
 
-/** O rascunho deste cartão, com o horário da última mudança: o da aba, ou o do disco (depois de um F5), ou nada. */
+/** This card's draft, with the time of the last change: the tab's, or the disk's (after an F5), or nothing. */
 export function readQuestionDraft(cardId: string, questionId: string): (QuestionDraft & { at: number }) | undefined {
   const key = keyOf(cardId, questionId);
   const live = memory.get(key);
@@ -100,9 +101,9 @@ export function readQuestionDraft(cardId: string, questionId: string): (Question
 }
 
 /**
- * Grava o rascunho de agora. `draft.at` é QUANDO a pessoa mudou (ausente = agora): regravar o mesmo
- * conteúdo não o rejuvenesce — senão um rascunho velho passaria por novo diante do servidor. Vazio =
- * a pessoa desmarcou e apagou tudo: a entrada sai.
+ * Saves the current draft. `draft.at` is WHEN the person changed it (absent = now): rewriting the same
+ * content does not make it younger — otherwise an old draft would pass for a new one against the server. Empty =
+ * the person unticked and erased everything: the entry goes away.
  */
 export function writeQuestionDraft(cardId: string, questionId: string, draft: QuestionDraft, now: number = Date.now()): void {
   const key = keyOf(cardId, questionId);
@@ -119,7 +120,7 @@ export function writeQuestionDraft(cardId: string, questionId: string, draft: Qu
   writeStored(pruneQuestionDrafts(stored, now));
 }
 
-/** Test hook: esquece a memória da aba — exatamente o que um F5 apaga (o localStorage fica). */
+/** Test hook: forgets the tab's memory — exactly what an F5 erases (localStorage stays). */
 export function forgetQuestionDraftMemoryForTesting(): void {
   memory.clear();
 }

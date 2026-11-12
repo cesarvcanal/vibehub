@@ -1,40 +1,40 @@
 /**
- * O QUE DIZER ENQUANTO O TURNO CORRE — o verbo e a nota de estado do indicador de trabalho.
+ * WHAT TO SAY WHILE THE TURN RUNS — the verb and the status note of the work indicator.
  *
- * O problema: "Trabalhando…" é a MESMA palavra no segundo 2 e no minuto 9. Quem olha a tela não
- * sabe se o agente está pensando, rodando uma ferramenta ou travado — e foi essa a reclamação: sem
- * retorno visual, um turno longo parece uma tela morta. O terminal do Claude Code resolve isso com
- * duas peças: um verbo que MUDA (a prova de que a coisa está viva) e uma cauda que ESCALA com o
- * tempo ("thinking" → "still thinking"), ao lado do relógio.
+ * The problem: "Trabalhando…" is the SAME word at second 2 and at minute 9. Whoever looks at the
+ * screen does not know whether the agent is thinking, running a tool or stuck — and that was the
+ * complaint: with no visual feedback, a long turn looks like a dead screen. Claude Code's terminal
+ * solves this with two pieces: a verb that CHANGES (the proof that the thing is alive) and a tail
+ * that ESCALATES with time ("thinking" → "still thinking"), next to the clock.
  *
- * Aqui é a mesma ideia, e é PURA: entra o que está acontecendo e há quantos segundos, saem as
- * CHAVES de i18n. Nada de Date.now(), nada de random — o mesmo segundo dá sempre a mesma frase, e
- * o teste roda sem relógio nem idioma.
+ * Here it is the same idea, and it is PURE: in goes what is happening and for how many seconds, out
+ * come the i18n KEYS. No Date.now(), no random — the same second always gives the same phrase, and
+ * the test runs with no clock and no language.
  */
 
-/** O que o turno está fazendo agora, na granularidade que o indicador sabe nomear. */
+/** What the turn is doing now, at the granularity the indicator knows how to name. */
 export type WorkingKind = "preparing" | "thinking" | "answering" | "tool" | "working";
 
 export interface WorkingStage {
-  /** Chave do verbo (o que aparece no lugar do antigo "Trabalhando…"). */
+  /** Key of the verb (what shows up in place of the old "Trabalhando…"). */
   verb: string;
-  /** Chave da nota de estado, a cauda que vai junto do relógio ("ainda pensando"). */
+  /** Key of the status note, the tail that goes along with the clock ("ainda pensando"). */
   note: string;
 }
 
 /**
- * De quanto em quanto tempo o verbo troca. Curto demais vira pisca-pisca; longo demais volta a
- * parecer congelado. 12s deixa a troca acontecer duas vezes antes da primeira escalada da nota.
+ * How often the verb changes. Too short becomes a flicker; too long goes back to looking frozen.
+ * 12s lets the change happen twice before the note's first escalation.
  */
 export const VERB_ROTATE_SECONDS = 12;
-/** A partir daqui a nota vira "ainda …" — o turno deixou de ser rápido. */
+/** From here on the note becomes "ainda …" — the turn stopped being quick. */
 export const STILL_AFTER_SECONDS = 20;
-/** E a partir daqui vira "há bastante tempo" — é longo mesmo, e dizer isso é honesto. */
+/** And from here on it becomes "há bastante tempo" — it really is long, and saying so is honest. */
 export const LONG_AFTER_SECONDS = 90;
 
 /**
- * Os verbos de cada fase, na ordem em que se revezam. Uma fase com um verbo só (preparar) nunca
- * troca: inventar sinônimo pra uma espera de boot não informa nada.
+ * The verbs of each phase, in the order they take turns. A phase with a single verb (preparing) never
+ * changes: inventing a synonym for a boot wait tells nothing.
  */
 const VERBS: Record<WorkingKind, readonly string[]> = {
   preparing: ["sdk.preparing"],
@@ -45,8 +45,8 @@ const VERBS: Record<WorkingKind, readonly string[]> = {
 };
 
 /**
- * O verbo e a nota deste instante. `seconds` negativo ou quebrado é tratado como 0 (o relógio da
- * view é inteiro, mas esta função não depende disso). PURE, TOTAL.
+ * The verb and the note for this instant. A negative or broken `seconds` is treated as 0 (the view's
+ * clock is an integer, but this function does not depend on that). PURE, TOTAL.
  */
 export function workingStage(kind: WorkingKind, seconds: number): WorkingStage {
   const elapsed = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;

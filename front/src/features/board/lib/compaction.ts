@@ -1,9 +1,9 @@
 /**
- * O QUE A LINHA DE COMPACTAÇÃO DIZ — o /compact (ou a automática) no chat.
+ * WHAT THE COMPACTION ROW SAYS — the /compact (or the automatic one) in the chat.
  *
- * Rodando: o título (pedida ou automática) e o relógio. Terminada: o divisor "antes disto, só o
- * resumo" com quanto a conversa ocupava antes e depois, quanto liberou e quanto levou. Falhou: o
- * motivo do CLI. O desenho mora em components/SdkCompactionRow.tsx.
+ * Running: the title (requested or automatic) and the clock. Finished: the divider "before this, only
+ * the summary" with how much the conversation took before and after, how much it freed and how long
+ * it took. Failed: the CLI's reason. The drawing lives in components/SdkCompactionRow.tsx.
  */
 
 import { t as translate } from "@/i18n";
@@ -12,14 +12,14 @@ import type { SdkRow } from "@/features/board/lib/sdkChat";
 
 type CompactionRow = Extract<SdkRow, { kind: "compaction" }>;
 
-/** O que a linha precisa ler da compactação. */
+/** What the row needs to read from the compaction. */
 export type CompactionView = Pick<CompactionRow, "status"> &
   Partial<Pick<CompactionRow, "trigger" | "preTokens" | "postTokens" | "durationMs" | "error">>;
 
-/** O motivo que o driver manda quando o turno fechou com a compactação aberta. */
+/** The reason the driver sends when the turn closed with the compaction still open. */
 const DRIVER_INTERRUPTED = "interrompida";
 
-/** Título e detalhes (cada um vira um pedaço separado por "·"). PURE. */
+/** Title and details (each one becomes a piece separated by "·"). PURE. */
 export function compactionSummary(row: CompactionView): { title: string; parts: string[] } {
   const auto = row.trigger === "auto";
   if (row.status === "running") {
@@ -41,7 +41,7 @@ export function compactionSummary(row: CompactionView): { title: string; parts: 
   return { title: translate(auto ? "sdk.compactDoneAuto" : "sdk.compactDone"), parts };
 }
 
-/** O relógio da barra: `m:ss` desde `startedAt`, nunca negativo (relógios de máquinas diferentes). PURE. */
+/** The bar's clock: `m:ss` since `startedAt`, never negative (clocks of different machines). PURE. */
 export function compactionElapsed(startedAt: number, now: number): string {
   const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;

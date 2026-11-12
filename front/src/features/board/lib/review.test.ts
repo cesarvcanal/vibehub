@@ -68,7 +68,7 @@ describe("reviewPill", () => {
     expect(reviewPill(review({ phase: "ready" }), { gate: "failed" })).toEqual({ key: "review.pill.gateFailed", tone: "critical" });
     expect(reviewPill(review({ phase: "ready" }), { gate: "running" })).toEqual({ key: "review.pill.gateRunning", tone: "info" });
     expect(reviewPill(review({ phase: "ready" }), { gate: "passed" })).toMatchObject({ key: "review.pill.ready", tone: "ok" });
-    // a IA do autor trabalhando segue na frente: o push dela muda o commit, e o gate com ele
+    // the author's AI working still comes first: its push changes the commit, and the gate with it
     expect(reviewPill(review({ phase: "ready" }), { authorWorking: true, gate: "failed" })).toMatchObject({ key: "review.pill.authorWorking" });
     expect(reviewPill(review({ phase: "fixing", round: 2 }), { gate: "failed" })).toMatchObject({ key: "review.pill.round" });
   });
@@ -172,7 +172,7 @@ describe("visiblePrs", () => {
   it("PR mergeado some da lista", () => {
     const merged = { ...pr(12, 300, "prod"), mergedAt: 999 };
     expect(visiblePrs({ prs: [pr(10, 100), merged] }).map((p) => p.number)).toEqual([10]);
-    // nenhum PR aberto sobrando: nada a mostrar
+    // no open PR left over: nothing to show
     expect(visiblePrs({ prs: [merged] })).toEqual([]);
   });
 
@@ -180,16 +180,16 @@ describe("visiblePrs", () => {
     const current = { ...pr(12, 300, "prod"), mergedAt: 999 };
     expect(visiblePrs({ prs: [pr(10, 100), current], review: review({ prNumber: 12, phase: "merged" }) }).map((p) => p.number)).toEqual([10]);
     expect(visiblePrs({ prs: [current], review: review({ prNumber: 12, phase: "merged" }) })).toEqual([]);
-    // uma revisão em andamento não devolve um PR já mergeado à lista
+    // a review in progress does not bring an already merged PR back to the list
     expect(visiblePrs({ prs: [current], review: review({ prNumber: 12, phase: "fixing" }) })).toEqual([]);
   });
 
   it("a revisão mergeada tira o PR dela mesmo sem a marca mergedAt (dado antigo, ou o board ainda não leu)", () => {
     const prs = [pr(552, 100), pr(553, 200, "prod")];
     expect(visiblePrs({ prs, review: review({ prNumber: 552, phase: "merged" }) }).map((p) => p.number)).toEqual([553]);
-    // só o PR daquela revisão: os outros, abertos, ficam
+    // only that review's PR: the others, open, stay
     expect(visiblePrs({ prs, review: review({ prNumber: 553, phase: "fixing" }) }).map((p) => p.number)).toEqual([553, 552]);
-    // revisão cancelada não diz nada sobre o PR: ele continua aberto
+    // a cancelled review says nothing about the PR: it is still open
     expect(visiblePrs({ prs, review: review({ prNumber: 552, phase: "cancelled" }) }).map((p) => p.number)).toEqual([553, 552]);
   });
 
@@ -412,7 +412,7 @@ describe("reviewActions", () => {
     expect(reviewActions(full(), as("mer")).cancel).toBe(true);
     expect(reviewActions(full(), as("own", true)).cancel).toBe(true);
     expect(reviewActions(full(), as("co")).cancel).toBe(false);
-    // o coautor dá continuidade sem o responsável (produção, 2026-11-09)
+    // the co-author carries on without the owner (production, 2026-11-09)
     expect(reviewActions(full({ coauthorUserId: "co" }), as("co")).cancel).toBe(true);
     expect(reviewActions(full({ phase: "merged" }), as("aut")).cancel).toBe(false);
     expect(reviewActions(full({ phase: "cancelled" }), as("aut")).cancel).toBe(false);

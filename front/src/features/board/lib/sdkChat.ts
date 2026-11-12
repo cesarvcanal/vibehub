@@ -24,9 +24,9 @@ import type { LocalVoiceTurn } from "@/features/voice/voiceTurns";
 /** One frame from the SDK socket — the driver's event contract, verbatim (`user` only on replay
  *  and for external sends: another card's agent, another person's message). */
 /**
- * Espelho dos tipos de back/src/services/sdk/workflow.ts (`WorkflowActivity`, `WorkflowAgent`,
- * `WorkflowFeedItem`). Os campos que o back passou a mandar depois ficam OPCIONAIS aqui: no deploy
- * blue/green um back antigo ainda publica quadros sem eles.
+ * Mirror of the types in back/src/services/sdk/workflow.ts (`WorkflowActivity`, `WorkflowAgent`,
+ * `WorkflowFeedItem`). The fields the back started sending later are OPTIONAL here: during a
+ * blue/green deploy an old back still publishes snapshots without them.
  */
 export type WorkflowActivity =
   | { kind: "tool"; tool: string; target: string }
@@ -36,7 +36,7 @@ export type WorkflowActivity =
 export interface WorkflowAgentFrame {
   id: string;
   label: string;
-  /** `stopped` = estava em voo quando a rodada acabou (morta, ou o back desistiu): não vai responder. */
+  /** `stopped` = it was in flight when the run ended (killed, or the back gave up): it will not answer. */
   status: "running" | "done" | "stopped";
   result?: string;
   phase?: string;
@@ -44,7 +44,7 @@ export interface WorkflowAgentFrame {
   lastAt?: number;
   endedAt?: number;
   toolCount?: number;
-  /** `toolCount` é um piso: o transcript é maior do que o back leu. */
+  /** `toolCount` is a floor: the transcript is longer than what the back read. */
   toolCountPartial?: boolean;
   activity?: WorkflowActivity;
 }
@@ -116,7 +116,7 @@ export interface SdkEvent {
   isError?: boolean;
   subtype?: string;
   result?: string;
-  /** On `btw_answer`: a pergunta lateral respondida, e o erro quando a consulta falhou. */
+  /** On `btw_answer`: the side question that was answered, and the error when the lookup failed. */
   question?: string;
   error?: string;
   /** On `workflow_progress` (synthesised by the BACK, see back/src/services/sdk/workflow.ts): the
@@ -127,20 +127,20 @@ export interface SdkEvent {
    *  latest steps, and why they came back empty when they did (see components/WorkflowPanel.tsx). */
   agentId?: string;
   items?: WorkflowFeedItem[];
-  /** Os títulos de `meta.phases` lidos do script pelo back, na ordem. */
+  /** The titles of `meta.phases` read from the script by the back, in order. */
   phases?: string[];
-  /** Quando a rodada começou (ms). */
+  /** When the run started (ms). */
   startedAt?: number;
-  /** On `agent_task`: quando ESTA aba recebeu o frame (relógio dela), carimbado na chegada. */
+  /** On `agent_task`: when THIS tab received the frame (its own clock), stamped on arrival. */
   receivedAt?: number;
-  /** On `agent_task`: há quanto tempo o subagente estava calado quando o back mandou o frame. */
+  /** On `agent_task`: how long the subagent had been silent when the back sent the frame. */
   quietMs?: number;
-  /** A contagem do diário INTEIRO — a lista de `agents` tem teto, ela não. */
+  /** The count over the WHOLE log — the `agents` list has a cap, this does not. */
   total?: number;
   done?: number;
   at?: number;
   finished?: boolean;
-  /** O desfecho que o harness gravou para a rodada (`workflow_progress`). Ausente enquanto roda. */
+  /** The outcome the harness recorded for the run (`workflow_progress`). Absent while it runs. */
   outcome?: WorkflowOutcome;
   message?: string;
   raw?: string;
@@ -160,9 +160,9 @@ export interface SdkEvent {
   window?: string;
   utilization?: number;
   resetsAt?: number;
-  /** On `compaction` (o /compact, ou a automática): a fase, e no fim quanto a conversa ocupava
-   *  antes e depois. Também lê `trigger` ("manual"/"auto"), `durationMs` e `startedAt` (posto pelo
-   *  back no `started`, para quem conecta no meio contar o tempo certo). */
+  /** On `compaction` (the /compact, or the automatic one): the phase, and at the end how much the
+   *  conversation took up before and after. Also reads `trigger` ("manual"/"auto"), `durationMs` and
+   *  `startedAt` (set by the back on `started`, so whoever connects midway counts the right time). */
   phase?: "started" | "done" | "failed";
   preTokens?: number;
   postTokens?: number;
@@ -178,14 +178,14 @@ export interface SdkEvent {
   /** On `question_result`: what the person picked (absent when it timed out / was cancelled). */
   answers?: SdkQuestionAnswer[];
   /**
-   * On `question_result`: a pessoa respondeu POR MENSAGEM em vez de clicar numa opção. Não é o
-   * mesmo que "sem resposta" — ela respondeu, só não pelo cartão —, e a linha precisa dizer isso.
+   * On `question_result`: the person answered BY MESSAGE instead of clicking an option. That is not
+   * the same as "no answer" — they answered, just not through the card —, and the row has to say so.
    */
   superseded?: boolean;
   /**
-   * On `question_result`: a pergunta caiu porque alguém PAROU o turno (o botão de parar, o "enviar
-   * agora", uma edição) — quem (`cancelledBy`) e como (`cancelledHow`). Sem isso ela parecia ter
-   * vencido o prazo.
+   * On `question_result`: the question dropped because someone STOPPED the turn (the stop button,
+   * "enviar agora", an edit) — who (`cancelledBy`) and how (`cancelledHow`). Without this it looked
+   * like it had timed out.
    */
   cancelledBy?: string;
   cancelledHow?: QuestionCancel["how"];
@@ -197,7 +197,7 @@ export interface SdkEvent {
   /**
    * On `message_edited` / `rewound`: the edit was of the conversation's FIRST message, so the row
    * is the FIRST with those words, not the newest — a message re-sent after an error has the same
-   * words (produção, 2026-10-19).
+   * words (production, 2026-10-19).
    */
   first?: boolean;
   /**
@@ -217,7 +217,7 @@ export interface SdkEvent {
    */
   cid?: string;
   /**
-   * On `tool_use`/`assistant_text`: said by a SUBAGENTE (Agent/Task), not by the main agent — the id
+   * On `tool_use`/`assistant_text`: said by a SUBAGENT (Agent/Task), not by the main agent — the id
    * of the tool call that started it. Becomes the row's `parent` (see back protocol `ToolUseEvent`).
    */
   parentToolUseId?: string;
@@ -227,11 +227,11 @@ export interface SdkEvent {
   filePath?: string;
   /** On `tool_progress`: how long the tool has been running. */
   elapsedSeconds?: number;
-  /** On `tool_result`: o RESUMO do que a ferramenta devolveu (o back resume; ver ToolResultSummary). */
+  /** On `tool_result`: the SUMMARY of what the tool returned (the back summarises; see ToolResultSummary). */
   toolResult?: ToolResultSummary;
-  /** On `agent_task` (e nas tarefas de `background_tasks`): a chamada que disparou o subagente. */
+  /** On `agent_task` (and in the tasks of `background_tasks`): the call that started the subagent. */
   toolUseId?: string;
-  /** On `agent_task`: os números e a frase do subagente (ver `AgentTask`). */
+  /** On `agent_task`: the subagent's numbers and sentence (see `AgentTask`). */
   taskId?: string;
   subagentType?: string;
   taskType?: string;
@@ -258,12 +258,12 @@ export interface SdkEvent {
 }
 
 /** One live background task (mirror of `BackgroundTaskInfo` in the back's protocol). `toolUseId` =
- *  a chamada que a disparou: é por ela que a bandeja abre o subagente (ou a ação). */
+ *  the call that started it: that is how the tray opens the subagent (or the action). */
 export interface BackgroundTask { id: string; type: string; description: string; toolUseId?: string }
 
 /**
- * O RESUMO do que uma ferramenta devolveu — espelho de `ToolResultSummary` do back
- * (back/src/services/sdk/toolResult.ts). Números, não frases: a tela traduz (`toolResultLine`).
+ * The SUMMARY of what a tool returned — mirror of the back's `ToolResultSummary`
+ * (back/src/services/sdk/toolResult.ts). Numbers, not sentences: the screen translates (`toolResultLine`).
  */
 export interface ToolResultSummary {
   isError?: boolean;
@@ -282,7 +282,7 @@ export interface ToolResultSummary {
   agent?: { toolUses?: number; durationMs?: number; tokens?: number };
 }
 
-/** O estado de UM subagente/tarefa (espelho de `AgentTaskEvent` do back), pela chamada que o disparou. */
+/** The state of ONE subagent/task (mirror of the back's `AgentTaskEvent`), keyed by the call that started it. */
 export interface AgentTask {
   toolUseId: string;
   taskId: string;
@@ -293,12 +293,12 @@ export interface AgentTask {
   tokens?: number;
   durationMs?: number;
   lastTool?: string;
-  /** Rodando: o que ele faz agora. Terminado: o resumo final. */
+  /** Running: what it is doing now. Finished: the final summary. */
   summary?: string;
   startedAt?: number;
-  /** Quando ESTA aba recebeu este estado, no relógio dela — de onde o tempo de quem roda conta. */
+  /** When THIS tab received this state, on its own clock — where the running time counts from. */
   receivedAt?: number;
-  /** Há quanto tempo o subagente estava calado quando o back mandou este estado. */
+  /** How long the subagent had been silent when the back sent this state. */
   quietMs?: number;
 }
 
@@ -361,13 +361,13 @@ export function coalesceDeltas(events: readonly SdkEvent[]): SdkEvent[] {
 export type PermissionOutcome = "pending" | "allowed" | "denied" | "timeout";
 
 /**
- * What one question card is showing: still waiting, answered, given up (timeout/cancel) — ou
- * SUBSTITUÍDO: a pessoa não clicou em opção nenhuma, escreveu no chat, e o que ela escreveu passou
- * a valer. "unanswered" seria mentira nesse caso: ela respondeu, só não pelo cartão.
+ * What one question card is showing: still waiting, answered, given up (timeout/cancel) — or
+ * SUPERSEDED: the person did not click any option, wrote in the chat, and what they wrote became
+ * the answer. "unanswered" would be a lie in that case: they answered, just not through the card.
  */
 export type QuestionOutcome = "pending" | "answered" | "unanswered" | "superseded" | "cancelled";
 
-/** Quem parou o turno e derrubou a pergunta junto (o back carimba no `question_result`). */
+/** Who stopped the turn and took the question down with it (the back stamps it on `question_result`). */
 export interface QuestionCancel {
   by?: string;
   how?: "stop" | "send_now" | "edit";
@@ -380,10 +380,10 @@ export type SdkRow =
    *  NOT drawn: an edit reads as the bubble changing, not as a second bubble under a greyed one.
    *  `revision` = this row IS the new version of an edited message (it carries the "editada" badge).
    *  `absorbed` = it arrived mid-turn and the driver folded it into the RUNNING turn (streaming
-   *  input). Bookkeeping only — the bubble is NOT labelled: quem está na conversa vê a mensagem
-   *  entrar no turno em andamento na própria tela, e a etiqueta só repetia isso por escrito. */
+   *  input). Bookkeeping only — the bubble is NOT labelled: whoever is in the conversation sees the
+   *  message enter the running turn on their own screen, and the label only repeated that in writing. */
   /** `state`: "sending" = no receipt yet (the socket took the frame, the back has not confirmed);
-   *  "sent" = the back gravou (a `user_ack`, or a replay — the only proofs an F5 respects);
+   *  "sent" = the back saved it (a `user_ack`, or a replay — the only proofs an F5 respects);
    *  "undelivered" = the back refused it (`user_nack`) or the receipt never came, so this browser
    *  holds the only copy and the bubble offers reenviar/descartar. `cid` pairs it with the outbox. */
   | {
@@ -401,17 +401,17 @@ export type SdkRow =
       at?: number;
     }
   /** Claude talking. `streaming` while deltas are still landing on it. `parent` = said by the
-   *  SUBAGENTE started by that tool call (never streaming: subagent deltas are not relayed). */
+   *  SUBAGENT started by that tool call (never streaming: subagent deltas are not relayed). */
   | { kind: "assistant"; id: string; text: string; streaming: boolean; parent?: string }
   /**
-   * O RACIOCÍNIO do modelo, enquanto ele pensa. Mesma mecânica de streaming da linha do assistente
-   * (`streaming` enquanto os deltas caem), mas desenhada em segundo plano: é contexto de espera, não
-   * a resposta. Existe porque um turno longo mostrava só "Trabalhando…" e quem esperava não fazia
-   * ideia do que estava acontecendo. Vive na sessão: não é gravado no histórico nem replayado.
+   * The model's REASONING, while it thinks. Same streaming mechanics as the assistant row
+   * (`streaming` while the deltas land), but drawn in the background: it is waiting context, not
+   * the answer. It exists because a long turn showed only "Trabalhando…" and whoever was waiting had
+   * no idea what was going on. Lives in the session: it is not saved to the history nor replayed.
    */
   | { kind: "thinking"; id: string; text: string; streaming: boolean }
   /** One tool call, compact: the name plus a one-line summary of its input. `parent` = made by the
-   *  SUBAGENTE started by that tool call (drawn under its card, not as the main agent's step).
+   *  SUBAGENT started by that tool call (drawn under its card, not as the main agent's step).
    *  `pending` = PROVISIONAL: the model opened the call (`tool_use_start`) and is still writing its
    *  input — `inputBytes`/`filePath` say how far it got; the complete `tool_use` replaces the row in
    *  place. `elapsedSeconds` = how long the tool has been running (`tool_progress`). */
@@ -426,9 +426,9 @@ export type SdkRow =
       inputBytes?: number;
       filePath?: string;
       elapsedSeconds?: number;
-      /** O que a ferramenta DEVOLVEU (resumo): é o que diz se deu certo — ausente enquanto roda. */
+      /** What the tool RETURNED (summary): it is what says whether it worked — absent while it runs. */
       result?: ToolResultSummary;
-      /** Nasceu ao vivo (não do replay): sem resultado, ela ESTÁ rodando — do replay, não se sabe. */
+      /** Born live (not from the replay): with no result, it IS running — from the replay, there is no telling. */
       live?: boolean;
     }
   /** The "Permitir / Negar" card — a sensitive call waiting on the human (or how it ended). */
@@ -465,31 +465,31 @@ export type SdkRow =
       save?: "saving" | "saved" | "failed";
     }
   /**
-   * A resposta de um `/btw`: a pergunta LATERAL feita com o turno rodando, respondida à parte (o
-   * agente principal nunca a leu). Linha própria, nunca bolha do Claude — não é o turno falando.
+   * The answer to a `/btw`: the SIDE question asked with the turn running, answered separately (the
+   * main agent never read it). Its own row, never a Claude bubble — it is not the turn speaking.
    */
   | {
       kind: "btw";
       id: string;
-      /** O id da pergunta (o do frame `btw`), que casa a resposta com esta linha. */
+      /** The question's id (the one from the `btw` frame), which matches the answer to this row. */
       btwId: string;
       question: string;
-      /** Quando ESTA aba perguntou (ms) — o relógio do prazo. Ausente na linha de outra aba/replay. */
+      /** When THIS tab asked (ms) — the deadline's clock. Absent on another tab's/replay's row. */
       askedAt?: number;
-      /** Sem `text` nem `error`: ainda respondendo. */
+      /** No `text` nor `error`: still answering. */
       text?: string;
       error?: string;
     }
   /**
-   * A COMPACTAÇÃO da conversa (o /compact, ou a automática quando a janela enche): a barra rodando
-   * enquanto o CLI resume, e depois o divisor "antes disto, só o resumo" com os tokens antes/depois.
-   * Sem ela o chat ficava parado por um minuto e parecia travado.
+   * The conversation's COMPACTION (the /compact, or the automatic one when the window fills up): the
+   * bar running while the CLI summarises, and then the divider "antes disto, só o resumo" with the
+   * tokens before/after. Without it the chat sat still for a minute and looked frozen.
    */
   | {
       kind: "compaction";
       id: string;
       status: "running" | "done" | "failed";
-      /** Quando começou (ms) — o relógio da barra. Ausente no replay (o log só guarda o desfecho). */
+      /** When it started (ms) — the bar's clock. Absent on replay (the log only keeps the outcome). */
       startedAt?: number;
       trigger?: "manual" | "auto";
       preTokens?: number;
@@ -498,14 +498,15 @@ export type SdkRow =
       error?: string;
     }
   /**
-   * A FROTA DE UM WORKFLOW, ao vivo — a linha que faltava.
+   * A WORKFLOW'S FLEET, live — the row that was missing.
    *
-   * A tool `Workflow` devolve na hora e trabalha em segundo plano: o turno acabava, o chat ficava
-   * mudo por minutos e quem estava do outro lado lia aquilo como "ele terminou" (produção,
-   * 2026-10-02). Esta linha é o instantâneo que o back lê do diário da rodada: quantos subagentes
-   * já responderam, quais ainda correm, o que cada um devolveu. `phases` é o plano declarado no
-   * script (`meta.phases`), que chega pela chamada da tool. Vive só na sessão — como o raciocínio,
-   * não é conversa gravada; quem reabre a aba recebe o último quadro do back.
+   * The `Workflow` tool returns at once and works in the background: the turn ended, the chat went
+   * silent for minutes and whoever was on the other side read that as "it's done" (production,
+   * 2026-10-02). This row is the snapshot the back reads from the run's log: how many subagents
+   * have already answered, which are still running, what each one returned. `phases` is the plan
+   * declared in the script (`meta.phases`), which arrives through the tool call. Lives only in the
+   * session — like the reasoning, it is not saved conversation; whoever reopens the tab gets the
+   * back's latest snapshot.
    */
   | {
       kind: "workflow";
@@ -514,10 +515,10 @@ export type SdkRow =
       name: string;
       description?: string;
       phases?: Array<{ title: string; detail?: string }>;
-      /** Quando a rodada começou (ms), segundo o back. Ausente num back antigo. */
+      /** When the run started (ms), according to the back. Absent on an old back. */
       startedAt?: number;
       agents: WorkflowAgentFrame[];
-      /** Quantos subagentes a rodada tem e quantos já responderam, contados no diário inteiro. */
+      /** How many subagents the run has and how many have already answered, counted over the whole log. */
       total: number;
       done: number;
       at: number;
@@ -576,34 +577,35 @@ export interface SdkChatState {
    */
   revisionPending?: boolean;
   /**
-   * O PLANO de cada workflow que esta sessão disparou, por `meta.name` — a descrição e as fases
-   * declaradas no script. Vem da CHAMADA da tool (o script inteiro está no `input`), e o progresso
-   * vem do back minutos depois, pelo nome: os dois lados se encontram aqui. Guardado no estado, e
-   * não na linha, porque a chamada acontece antes de existir linha de progresso alguma.
+   * The PLAN of each workflow this session started, by `meta.name` — the description and the phases
+   * declared in the script. It comes from the tool CALL (the whole script is in the `input`), and the
+   * progress comes from the back minutes later, by name: the two sides meet here. Kept in the state,
+   * and not on the row, because the call happens before any progress row exists.
    */
   workflowMeta: Record<string, { description?: string; phases?: Array<{ title: string; detail?: string }> }>;
   /**
-   * AS TAREFAS EM SEGUNDO PLANO vivas no CLI (um Bash com `run_in_background`, um subagente, um
-   * monitor). O turno que as dispara fecha na hora — o "Trabalhando…" apaga no `result` — e elas
-   * seguem por minutos: sem isto o chat ficava mudo e parecia que o Claude tinha parado (produção,
-   * 2026-10-07). Não é linha da conversa: é estado, mostrado numa faixa acima do campo enquanto
-   * houver algo vivo — o "1 background task" do rodapé do Claude Code.
+   * THE BACKGROUND TASKS alive in the CLI (a Bash with `run_in_background`, a subagent, a
+   * monitor). The turn that starts them closes at once — the "Trabalhando…" goes out on `result` — and
+   * they keep going for minutes: without this the chat went silent and it looked like Claude had
+   * stopped (production, 2026-10-07). It is not a conversation row: it is state, shown in a strip
+   * above the input while something is alive — the "1 background task" of Claude Code's footer.
    */
   backgroundTasks: BackgroundTask[];
   /**
-   * O ESTADO DE CADA SUBAGENTE pela chamada que o disparou (`agent_task`): status, contadores e a
-   * frase do que ele está fazendo agora. É o que a frota e a bandeja desenham.
+   * THE STATE OF EACH SUBAGENT keyed by the call that started it (`agent_task`): status, counters and
+   * the sentence of what it is doing now. It is what the fleet and the tray draw.
    */
   agentTasks: Record<string, AgentTask>;
   /**
-   * O AVISO DE LIMITE DO PLANO por janela (`five_hour`, `seven_day`, …), o último que o CLI emitiu —
-   * o "You've used 91% of your session limit" do rodapé do terminal. Estado, não conversa: vira a
-   * faixa colorida ao lado do "está digitando" (ver lib/planUsage.ts).
+   * THE PLAN LIMIT WARNING per window (`five_hour`, `seven_day`, …), the latest one the CLI emitted —
+   * the "You've used 91% of your session limit" of the terminal's footer. State, not conversation: it
+   * becomes the colored strip next to the "está digitando" (see lib/planUsage.ts).
    */
   rateLimits: Record<string, RateLimitInfo>;
   /**
-   * QUANTO DA JANELA DE CONTEXTO a conversa ocupa, a última leitura (o `/context`). Estado, não
-   * conversa: vira o medidor colorido no canto inferior direito do log (ver lib/contextUsage.ts).
+   * HOW MUCH OF THE CONTEXT WINDOW the conversation takes up, the latest reading (the `/context`).
+   * State, not conversation: it becomes the colored meter in the bottom right corner of the log (see
+   * lib/contextUsage.ts).
    */
   contextUsage: ContextUsageInfo | null;
   /** Monotonic counter for rows the driver did not name. */
@@ -776,7 +778,7 @@ function basename(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
-/** O que o script de um workflow DECLARA sobre si mesmo: o bloco `meta` do topo. */
+/** What a workflow's script DECLARES about itself: the `meta` block at the top. */
 export interface WorkflowScriptMeta {
   name: string;
   description?: string;
@@ -784,12 +786,12 @@ export interface WorkflowScriptMeta {
 }
 
 /**
- * Uma string literal de JS, aspas simples ou duplas, com escapes — DOIS grupos de captura. Crases
- * não entram de propósito: o `meta` é, por contrato do harness, um literal puro (sem interpolação).
+ * A JS string literal, single or double quotes, with escapes — TWO capture groups. Backticks are
+ * left out on purpose: the `meta` is, by the harness's contract, a pure literal (no interpolation).
  */
 const LITERAL = "(?:'((?:[^'\\\\]|\\\\.)*)'|\"((?:[^\"\\\\]|\\\\.)*)\")";
 
-/** O conteúdo do primeiro dos dois grupos que casou, com os escapes mais comuns desfeitos. PURE. */
+/** The content of whichever of the two groups matched, with the most common escapes undone. PURE. */
 function literal(match: RegExpMatchArray | null | undefined, first: number): string | undefined {
   if (!match) return undefined;
   const raw = match[first] ?? match[first + 1];
@@ -798,13 +800,13 @@ function literal(match: RegExpMatchArray | null | undefined, first: number): str
 }
 
 /**
- * Lê o `meta` do script do workflow — o PLANO que o modelo declarou ao disparar a frota: nome,
- * descrição e fases. O script chega inteiro no `input` da chamada da tool, e o `meta` é, por
- * contrato do harness, um literal puro no topo dele: nada é avaliado aqui, só lido.
+ * Reads the `meta` of the workflow's script — the PLAN the model declared when it started the fleet:
+ * name, description and phases. The script arrives whole in the tool call's `input`, and the `meta`
+ * is, by the harness's contract, a pure literal at its top: nothing is evaluated here, only read.
  *
- * Tolerante por desenho: um script sem `meta` (ou com um `meta` que esta leitura não entende)
- * devolve o que deu para entender e a tela desenha o resto — um painel sem as fases ainda é
- * infinitamente melhor do que a tela muda que existia antes dele. PURE.
+ * Tolerant by design: a script without `meta` (or with a `meta` this reading does not understand)
+ * returns what could be understood and the screen draws the rest — a panel without the phases is
+ * still infinitely better than the mute screen that existed before it. PURE.
  */
 export function parseWorkflowScriptMeta(script: unknown): WorkflowScriptMeta | null {
   const text = typeof script === "string" ? script.slice(0, 20_000) : "";
@@ -831,9 +833,9 @@ export function parseWorkflowScriptMeta(script: unknown): WorkflowScriptMeta | n
 }
 
 /**
- * As fases de uma rodada: as do QUADRO do back (lidas do script no runner — a única fonte quando a
- * aba abriu depois do disparo) mandam na ordem, com o detalhe do plano da chamada quando o título
- * bate. Um back antigo não manda `phases`: vale o plano da chamada, como antes. PURE.
+ * A run's phases: those of the back's SNAPSHOT (read from the script on the runner — the only source
+ * when the tab opened after the launch) rule the order, with the detail from the call's plan when the
+ * title matches. An old back does not send `phases`: the call's plan applies, as before. PURE.
  */
 function workflowPhases(
   fromBack: unknown,
@@ -848,10 +850,10 @@ function workflowPhases(
 }
 
 /**
- * O que um subagente devolveu, legível. Quase todo `agent()` de workflow volta com `schema`, então o
- * diário guarda um OBJETO — e cru na tela isso é uma linha de JSON cortada no meio. Vira
- * `chave: valor`, uma por linha, que é como a pessoa leria. Texto puro passa intacto, e um JSON que
- * esta leitura não entende volta exatamente como veio: melhor cru do que escondido. PURE.
+ * What a subagent returned, readable. Nearly every workflow `agent()` comes back with a `schema`, so
+ * the log keeps an OBJECT — and raw on screen that is a line of JSON cut in the middle. It becomes
+ * `key: value`, one per line, which is how a person would read it. Plain text passes intact, and a
+ * JSON this reading does not understand comes back exactly as it came: better raw than hidden. PURE.
  */
 export function formatAgentResult(raw: string): string {
   const text = String(raw ?? "").trim();
@@ -860,7 +862,7 @@ export function formatAgentResult(raw: string): string {
   try {
     parsed = JSON.parse(text);
   } catch {
-    return text; // cortado em 400 caracteres pela sonda, por exemplo
+    return text; // cut at 400 characters by the probe, for example
   }
   const one = (value: unknown): string => {
     if (value === null || value === undefined) return "";
@@ -949,7 +951,7 @@ export function toolHeadline(name: string, input: unknown): ToolHeadline {
         ...(doing ? { detail: line(doing) } : {}),
       };
     }
-    // `Agent` é o nome atual da tool de subagente no Claude Code; `Task`, o antigo.
+    // `Agent` is the current name of the subagent tool in Claude Code; `Task`, the old one.
     case "Task":
     case "Agent": {
       const agent = field(o, "subagent_type");
@@ -969,7 +971,7 @@ export function toolHeadline(name: string, input: unknown): ToolHeadline {
       };
     }
     case "Workflow": {
-      // O input real é `{script}`: nome e descrição moram no `meta` do script.
+      // The real input is `{script}`: name and description live in the script's `meta`.
       const meta = parseWorkflowScriptMeta(o.script);
       const what = meta?.name || field(o, "name") || field(o, "title") || field(o, "description");
       const about = meta?.description
@@ -1076,9 +1078,9 @@ export function currentActivity(state: SdkChatState): SdkActivity | null {
 }
 
 /**
- * A pergunta de um `/btw` — ou null quando a mensagem não é um. O comando é a mensagem INTEIRA
- * começando por ele, como no terminal; `/btw` sem pergunta segue como mensagem comum. Só o composer
- * pergunta isto: dali em diante o /btw é um frame e uma linha próprios. PURE.
+ * The question of a `/btw` — or null when the message is not one. The command is the WHOLE message
+ * starting with it, as in the terminal; `/btw` with no question goes on as a regular message. Only the
+ * composer asks this: from there on the /btw is a frame and a row of its own. PURE.
  */
 export function btwQuestion(text: string): string | null {
   const match = /^\/btw(?:\s+([\s\S]*))?$/.exec(text.trim());
@@ -1087,11 +1089,11 @@ export function btwQuestion(text: string): string | null {
 }
 
 /**
- * AS RESPOSTAS TERMINADAS — as que ganham "copiar" e "ouvir" embaixo, como no ChatGPT.
+ * THE FINISHED ANSWERS — the ones that get "copiar" and "ouvir" underneath, like in ChatGPT.
  *
- * Uma por rodada: a última fala do agente principal (subagente não conta) antes da próxima mensagem
- * da pessoa. As rodadas de trás já acabaram; a última só conta quando `settled` — nada rodando, nem
- * turno, nem tarefa em segundo plano. Enquanto a IA trabalha, a resposta ainda pode mudar. PURE.
+ * One per round: the main agent's last utterance (subagents do not count) before the person's next
+ * message. Earlier rounds are already over; the last one only counts when `settled` — nothing
+ * running, neither a turn nor a background task. While the AI works, the answer may still change. PURE.
  */
 export function finishedAnswerIds(rows: readonly SdkRow[], settled: boolean): Set<string> {
   const out = new Set<string>();
@@ -1109,76 +1111,75 @@ export function finishedAnswerIds(rows: readonly SdkRow[], settled: boolean): Se
 }
 
 /**
- * O turno tem ESPAÇO para mais uma mensagem — o RESPIRO em que a fila anda.
+ * The turn has ROOM for one more message — the BREATHER in which the queue moves.
  *
- * A fila esperava o turno FECHAR, e um turno de quinze minutos segurava por quinze minutos um
- * "para, tá errado". Então o respiro passou a ser o BLOCO FECHADO: entregue ali, a mensagem entra
- * no turno em andamento pelo streaming input (o `turn_absorbed`) em vez de virar uma interrupção
- * do raciocínio em curso.
+ * The queue used to wait for the turn to CLOSE, and a fifteen-minute turn held a "para, tá errado"
+ * for fifteen minutes. So the breather became the CLOSED BLOCK: delivered there, the message enters
+ * the running turn through streaming input (the `turn_absorbed`) instead of becoming an interruption
+ * of the reasoning in progress.
  *
- * O QUE ESTA REGRA NÃO PODE SER é "nada rodando" (produção, 13/10/2026: "passo uma tarefa e vejo
- * que ela demora um pouco"). Ler "ferramenta em curso" como "espera" devolvia quase toda a espera
- * antiga, porque é na ferramenta que o turno passa o tempo dele e a linha mais nova de um turno
- * trabalhando é quase sempre uma ferramenta: medido no transcript de uma sessão real deste painel,
- * de uma chamada de ferramenta até o próximo bloco fechado são 11s na mediana, 31s no p90 e 71s no
- * pior caso — com o fio de pé e o CLI pronto para receber. Pior: um turno que ACABA numa linha de
- * ferramenta (interrompido no meio de uma, um `result` sem texto final) deixava a fila parada sem
- * nada rodando e sem ninguém para desenhar a próxima linha — travada até a pessoa mandar outra
- * coisa.
+ * WHAT THIS RULE CANNOT BE is "nothing running" (production, 13/10/2026: "passo uma tarefa e vejo
+ * que ela demora um pouco"). Reading "tool in progress" as "wait" brought back nearly all of the old
+ * wait, because the tool is where the turn spends its time and the newest row of a working turn is
+ * almost always a tool: measured on the transcript of a real session of this panel, from a tool call
+ * to the next closed block is 11s at the median, 31s at p90 and 71s at worst — with the wire up and
+ * the CLI ready to receive. Worse: a turn that ENDS on a tool row (interrupted in the middle of one,
+ * a `result` with no final text) left the queue stuck with nothing running and nobody to draw the
+ * next row — frozen until the person sent something else.
  *
- * Então respiro é a ausência de uma FRASE PELA METADE, não a ausência de trabalho — lido na mesma
- * ordem que a barra de atividade usa (ver `currentActivity`): texto ou raciocínio ainda escorrendo,
- * não; "Preparando…" — a nossa última mensagem ainda nem foi lida —, não. Bloco fechado, sim; e
- * ferramenta em curso TAMBÉM sim, porque a mensagem entregue nela tem o mesmo destino que teria no
- * bloco fechado: o CLI a enfileira e o modelo a lê no passo seguinte.
+ * So a breather is the absence of a HALF-FINISHED SENTENCE, not the absence of work — read in the
+ * same order the activity bar uses (see `currentActivity`): text or reasoning still streaming, no;
+ * "Preparando…" — our last message has not even been read yet —, no. Closed block, yes; and tool in
+ * progress ALSO yes, because a message delivered during it has the same fate it would have at the
+ * closed block: the CLI queues it and the model reads it on the next step.
  *
- * E uma mensagem recém-entregue NÃO abre o respiro seguinte: ela é a linha mais nova e o turno
- * segue de pé, então a próxima só anda quando o modelo REAGIR (a linha dele). Sem isso a fila
- * inteira sairia de uma vez no mesmo instante, que é o oposto de "uma por vez, e as outras
- * continuam suas".
+ * And a freshly delivered message does NOT open the next breather: it is the newest row and the
+ * turn is still up, so the next one only moves when the model REACTS (its row). Without this the
+ * whole queue would go out at once in the same instant, which is the opposite of "uma por vez, e as
+ * outras continuam suas".
  *
- * O LIMITE CONHECIDO desse ritmo: ele conta LINHAS, não passos do modelo. Um passo que desenhasse
- * várias linhas de uma vez (texto + duas ferramentas em paralelo na MESMA mensagem) abriria um
- * respiro por linha e deixaria várias da fila subirem juntas. Fica documentado em vez de defendido
- * porque (a) o protocolo não tem marca de início de passo para ler, e (b) nos 1.677 passos de
- * assistente dos transcripts deste runner, TODOS trazem um bloco só — o CLI escreve uma mensagem
- * por bloco. E o pior caso é benigno: as mensagens chegam todas ao modelo, que é o destino que elas
- * já tinham; o que se perde é a chance de editar as de trás. PURE.
+ * THE KNOWN LIMIT of this rhythm: it counts ROWS, not model steps. A step that drew several rows at
+ * once (text + two parallel tools in the SAME message) would open one breather per row and let
+ * several from the queue go up together. It is documented instead of defended because (a) the
+ * protocol has no step-start mark to read, and (b) in the 1,677 assistant steps of this runner's
+ * transcripts, ALL of them carry a single block — the CLI writes one message per block. And the
+ * worst case is benign: the messages all reach the model, which is the destination they already had;
+ * what is lost is the chance to edit the ones behind. PURE.
  */
 export function turnHasRoomForMore(state: SdkChatState): boolean {
   if (state.awaiting) return false;
   for (let i = state.rows.length - 1; i >= 0; i -= 1) {
     const row = state.rows[i] as SdkRow;
-    // A última coisa dita é nossa: ou não há turno (a fila anda como sempre andou), ou ela acabou
-    // de ser entregue e o modelo ainda não reagiu — o respiro já foi dela.
+    // The last thing said is ours: either there is no turn (the queue moves as it always did), or it
+    // has just been delivered and the model has not reacted yet — the breather was already its own.
     if (row.kind === "user") return !state.turnActive;
-    // Ferramenta: trabalho em curso, não frase em curso — e é aqui que o turno passa o tempo dele.
+    // Tool: work in progress, not a sentence in progress — and this is where the turn spends its time.
     if (row.kind === "tool") return true;
     if (row.kind === "thinking" || row.kind === "assistant") return !row.streaming;
   }
-  return true; // conversa vazia: não há nada em curso para atrapalhar
+  return true; // empty conversation: nothing in progress to get in the way
 }
 
 /**
- * O QUE O MODELO ESTÁ DIZENDO AGORA — a palavra dele, para o indicador não falar por ele.
+ * WHAT THE MODEL IS SAYING NOW — its own words, so the indicator does not speak for it.
  *
- * O indicador dizia só verbo + relógio + uma cauda escolhida por tabela a partir do tempo
- * decorrido ("ferramenta demorada, ainda rodando"). Sendo a mesma frase em qualquer ferramenta e em
- * qualquer raciocínio, ela não informava nada — e o material de verdade estava ali do lado: a
- * descrição que o PRÓPRIO agente escreveu para o comando (`toolHeadline`, que já a extrai) e o
- * raciocínio que ele está escrevendo neste instante.
+ * The indicator used to say only verb + clock + a tail picked from a table based on the elapsed
+ * time ("ferramenta demorada, ainda rodando"). Being the same sentence for any tool and any
+ * reasoning, it said nothing — and the real material was right there: the description the agent
+ * ITSELF wrote for the command (`toolHeadline`, which already extracts it) and the reasoning it is
+ * writing at this very moment.
  *
- * Aqui sai a ÚLTIMA linha do que está em curso, porque é ela que está mudando — o começo de um
- * raciocínio de dez linhas é história, o fim é notícia. Um bloco já FECHADO não é atividade: virou
- * a saída do turno, e anunciá-lo seria anunciar algo que já está desenhado logo acima. Nesse caso
- * devolve `null`, e a frase enlatada volta a ser o que sempre deveria ter sido: o fallback de
- * quando não há nada a dizer. PURE.
+ * What comes out here is the LAST line of what is in progress, because that is what is changing —
+ * the start of a ten-line reasoning is history, the end is news. An already CLOSED block is not
+ * activity: it became the turn's output, and announcing it would be announcing something already
+ * drawn right above. In that case it returns `null`, and the canned sentence goes back to being what
+ * it always should have been: the fallback for when there is nothing to say. PURE.
  */
 export function liveActivityDetail(state: SdkChatState): string | null {
   for (let i = state.rows.length - 1; i >= 0; i -= 1) {
     const row = state.rows[i] as SdkRow;
-    if (row.kind === "user" && row.absorbed === true) continue; // entrou no turno, não o abriu
-    if (row.kind === "user") return null; // a mensagem do turno: nada depois dela para relatar
+    if (row.kind === "user" && row.absorbed === true) continue; // it entered the turn, it did not open it
+    if (row.kind === "user") return null; // the turn's message: nothing after it to report
     const subagent = subagentActivity(state.rows, row);
     if (subagent !== null) return subagent;
     if (row.kind === "tool") return toolLiveLabel(row) ?? lastLine(toolHeadline(row.name, row.input).title);
@@ -1190,22 +1191,22 @@ export function liveActivityDetail(state: SdkChatState): string | null {
 }
 
 /**
- * Quem é o subagente que a chamada `parentId` disparou: o tipo dele (`Explore`), ou a descrição, ou
- * o nome da tool — o que houver. PURE.
+ * Who the subagent started by the `parentId` call is: its type (`Explore`), or the description, or
+ * the tool's name — whatever there is. PURE.
  */
 export function subagentName(rows: readonly SdkRow[], parentId: string): string {
   const parent = rows.find((row) => row.kind === "tool" && row.id === parentId);
   return parent && parent.kind === "tool" ? subagentLabel(parent.name, parent.input) : "";
 }
 
-/** O nome de um subagente pela chamada que o disparou: tipo, descrição ou o nome da tool. PURE. */
+/** A subagent's name by the call that started it: type, description or the tool's name. PURE. */
 export function subagentLabel(tool: string, input: unknown): string {
   const o = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
   return field(o, "subagent_type") || field(o, "description") || tool;
 }
 
-/** O que uma linha de subagente está fazendo, em uma linha: a manchete da ferramenta, ou a última
- *  linha do que ele disse. Vazio vira null. PURE. */
+/** What a subagent row is doing, in one line: the tool's headline, or the last
+ *  line of what it said. Empty becomes null. PURE. */
 export function subagentAction(row: SdkRow): string | null {
   if (row.kind === "tool") return lastLine(toolHeadline(row.name, row.input).title);
   if (row.kind === "assistant") return lastLine(row.text);
@@ -1213,8 +1214,8 @@ export function subagentAction(row: SdkRow): string | null {
 }
 
 /**
- * A barra de atividade quando a última coisa é de um SUBAGENTE: "Subagente Explore: Read(x.ts)",
- * atribuída a ele e não ao principal. Null quando a linha não é de subagente. PURE.
+ * The activity bar when the last thing belongs to a SUBAGENT: "Subagente Explore: Read(x.ts)",
+ * attributed to it and not to the main agent. Null when the row is not a subagent's. PURE.
  */
 function subagentActivity(rows: readonly SdkRow[], row: SdkRow): string | null {
   if ((row.kind !== "tool" && row.kind !== "assistant") || !row.parent) return null;
@@ -1223,7 +1224,7 @@ function subagentActivity(rows: readonly SdkRow[], row: SdkRow): string | null {
   return translate("sdk.subagentRunning", { type: subagentName(rows, row.parent) || "?", action });
 }
 
-/** A última linha não vazia de um texto em curso, dobrada em espaço simples. Vazio vira null. PURE. */
+/** The last non-empty line of a text in progress, collapsed to single spaces. Empty becomes null. PURE. */
 function lastLine(text: string): string | null {
   const lines = String(text ?? "").split("\n");
   for (let i = lines.length - 1; i >= 0; i -= 1) {
@@ -1245,9 +1246,9 @@ function streamingRow(rows: SdkRow[]): { kind: "assistant"; id: string; text: st
 }
 
 /**
- * A linha de RACIOCÍNIO ainda aberta (a última, se for uma). Separada de `streamingRow` de
- * propósito: pensamento e resposta são duas correntes distintas, e uma nunca escreve na outra —
- * senão o primeiro token da resposta iria parar no fim do raciocínio. PURE.
+ * The REASONING row still open (the last one, if it is one). Kept apart from `streamingRow` on
+ * purpose: thought and answer are two distinct streams, and one never writes into the other —
+ * otherwise the answer's first token would end up at the end of the reasoning. PURE.
  */
 function streamingThinkingRow(rows: SdkRow[]): { kind: "thinking"; id: string; text: string; streaming: boolean } | null {
   const last = rows[rows.length - 1];
@@ -1272,11 +1273,11 @@ function appendErrorRow(state: SdkChatState, rows: SdkRow[], text: string): SdkC
 }
 
 /**
- * Uma linha de SUBAGENTE entra sem mexer na fala do principal: ela é desenhada sob o card do pai, e
- * fechar a linha que o principal está escrevendo faria o bloco consolidado dele virar uma SEGUNDA
- * linha (o mesmo cuidado do `workflow_progress`). Então a linha aberta continua sendo a última.
- * O turno e a espera também são do principal: um subagente em segundo plano não reabre o turno
- * depois do `result`, nem dá por respondido um envio que ainda espera o principal. PURE.
+ * A SUBAGENT row comes in without touching the main agent's speech: it is drawn under the parent's
+ * card, and closing the row the main agent is writing would turn its consolidated block into a
+ * SECOND row (the same care as `workflow_progress`). So the open row is still the last one.
+ * The turn and the wait also belong to the main agent: a background subagent does not reopen the
+ * turn after the `result`, nor mark as answered a send that is still waiting for the main agent. PURE.
  */
 function appendSubagentRow(state: SdkChatState, build: (id: string) => SdkRow, preferredId?: string): SdkChatState {
   const marked = markSource(state, false);
@@ -1316,9 +1317,9 @@ function replaceRowAt(rows: readonly SdkRow[], at: number, row: SdkRow): SdkRow[
  * forever — and the conversation never had that call, so a replay would not draw it either. PURE.
  */
 /**
- * O turno do principal ACABOU: uma ação dele que nasceu ao vivo e não teve resultado (interrompida,
- * o CLI morreu) não está mais rodando — sem isso o ícone girava para sempre. As de subagente seguem:
- * um subagente em segundo plano trabalha depois do `result` do turno. PURE.
+ * The main agent's turn ENDED: an action of its own that was born live and got no result (interrupted,
+ * the CLI died) is no longer running — without this the icon spun forever. The subagent ones stay:
+ * a background subagent works after the turn's `result`. PURE.
  */
 function settleLiveTools(rows: SdkRow[]): SdkRow[] {
   if (!rows.some((r) => r.kind === "tool" && r.live === true && !r.result && !r.parent)) return rows;
@@ -1364,11 +1365,11 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       return { ...state, commands: event.commands };
     }
     case "background_tasks": {
-      // Sinal de NÍVEL: o conjunto inteiro, para SUBSTITUIR. Não acende o spinner do turno — a
-      // tarefa não é um turno, e o turno que a disparou já pode ter acabado.
+      // LEVEL signal: the whole set, to REPLACE. It does not light the turn's spinner — the
+      // task is not a turn, and the turn that started it may already be over.
       if (!Array.isArray(event.tasks)) return state;
-      // Normalizado aqui também (fronteira do socket): a faixa lê `description` sem checar, e um
-      // campo ausente derrubava a árvore do chat inteira.
+      // Normalised here too (socket boundary): the strip reads `description` without checking, and a
+      // missing field brought down the whole chat tree.
       const tasks: BackgroundTask[] = event.tasks
         .filter((t) => typeof t === "object" && t !== null && typeof t.id === "string")
         .map((t) => ({
@@ -1381,8 +1382,8 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       return { ...state, backgroundTasks: tasks };
     }
     case "tool_result": {
-      // O resultado de uma ação: assenta a linha dela (principal ou subagente), no lugar. Linha que
-      // não está na tela (fora da janela do replay) não tem onde assentar — nada a fazer.
+      // An action's result: settles its row (main agent or subagent), in place. A row that
+      // is not on screen (outside the replay window) has nowhere to settle — nothing to do.
       if (!event.id || !event.toolResult || typeof event.toolResult !== "object") return state;
       const at = state.rows.findIndex((r) => r.kind === "tool" && r.id === event.id);
       const row = state.rows[at];
@@ -1390,7 +1391,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       return { ...state, rows: replaceRowAt(state.rows, at, { ...row, result: event.toolResult }) };
     }
     case "agent_task": {
-      // Estado, não conversa: substitui o do mesmo subagente.
+      // State, not conversation: replaces the same subagent's.
       if (!event.toolUseId || !event.taskId) return state;
       const status = event.status === "completed" || event.status === "failed" || event.status === "stopped" ? event.status : "running";
       const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
@@ -1412,8 +1413,8 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       return { ...state, agentTasks: { ...state.agentTasks, [task.toolUseId]: task } };
     }
     case "rate_limit": {
-      // Uma janela por vez, SUBSTITUINDO a leitura anterior dela. Normalizado na fronteira: um
-      // frame torto não pinta faixa nenhuma.
+      // One window at a time, REPLACING its previous reading. Normalised at the boundary: a
+      // malformed frame paints no strip at all.
       const status = event.status;
       if (status !== "allowed" && status !== "allowed_warning" && status !== "rejected") return state;
       if (typeof event.window !== "string" || !event.window) return state;
@@ -1426,17 +1427,17 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       return { ...state, rateLimits: { ...state.rateLimits, [info.window]: info } };
     }
     case "context_usage": {
-      // Substitui a leitura anterior. Uma torta não apaga a que vale.
+      // Replaces the previous reading. A malformed one does not erase the one that holds.
       const info = parseContextUsage(event);
       return info ? { ...state, contextUsage: info } : state;
     }
     case "conversation_reset": {
-      // /clear: o modelo começou do zero numa sessão nova. A tela esquece a conversa antiga como
-      // o Claude Code faz — senão o /clear parecia não ter feito nada. Fica o que é da SESSÃO do
-      // card e não da conversa: o menu "/", as tarefas em segundo plano ainda vivas, o turno.
-      // O filtro de gatilho é o mesmo do back (hoje todo reset chega como "clear" — o CLI não diz a
-      // causa), e o corte é no ÚLTIMO "/clear": o que foi mandado depois dele (a fila do CLI) é da
-      // conversa nova e fica.
+      // /clear: the model started from scratch in a new session. The screen forgets the old conversation
+      // the way Claude Code does — otherwise the /clear seemed to have done nothing. What stays is what
+      // belongs to the card's SESSION and not to the conversation: the "/" menu, the background tasks
+      // still alive, the turn. The trigger filter is the same as the back's (today every reset arrives as
+      // "clear" — the CLI does not say the cause), and the cut is at the LAST "/clear": what was sent
+      // after it (the CLI's queue) belongs to the new conversation and stays.
       if (event.trigger !== undefined && event.trigger !== "clear") return state;
       let from = -1;
       state.rows.forEach((row, i) => {
@@ -1449,7 +1450,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         workflowMeta: {},
         terminalBurst: false,
         awaiting: false,
-        // A conversa apagada não ocupa mais nada; a leitura da sessão nova vem no fim do turno.
+        // The erased conversation no longer takes up anything; the new session's reading comes at the end of the turn.
         contextUsage: null,
       };
     }
@@ -1468,9 +1469,9 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
     case "compaction":
       return applyCompaction(state, event);
     case "btw_answer": {
-      // Não toca em `awaiting` nem em `turnActive`: a pergunta lateral não é o turno, e o turno
-      // que estava rodando segue rodando. A pergunta desta aba já tem linha (pendente); a de outra
-      // aba, ou a do replay, ganha uma agora.
+      // Does not touch `awaiting` nor `turnActive`: the side question is not the turn, and the turn
+      // that was running keeps running. This tab's question already has a row (pending); another
+      // tab's, or the replay's, gets one now.
       if (typeof event.id !== "string" || typeof event.question !== "string" || (!event.text && !event.error)) return state;
       const outcome = event.text ? { text: event.text, error: undefined } : { error: event.error };
       const at = state.rows.findIndex((row) => row.kind === "btw" && row.btwId === event.id);
@@ -1529,18 +1530,18 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         // A (re)connect: whatever this view interrupted belongs to a turn that is already over —
         // the flag must not outlive it and swallow a later, REAL error result.
         interruptRequested: false,
-        // Um driver novo não tem as tarefas do anterior; numa reconexão o back reenvia o conjunto
-        // vigente logo atrás deste `ready` (ver `attachSocket`). Zerar aqui é o que impede uma faixa
-        // "rodando em segundo plano" pendurada depois que o processo que a rodava morreu.
+        // A new driver does not have the previous one's tasks; on a reconnect the back resends the
+        // current set right behind this `ready` (see `attachSocket`). Zeroing here is what prevents a
+        // "rodando em segundo plano" strip hanging around after the process running it died.
         backgroundTasks: [],
-        // Idem o aviso de limite: o back reenvia o vigente atrás do `ready`; um driver novo (conta
-        // trocada, inclusive) não herda o aviso da conta anterior.
+        // Same for the limit warning: the back resends the current one behind the `ready`; a new driver
+        // (a switched account, included) does not inherit the previous account's warning.
         rateLimits: {},
-        // Idem o medidor de contexto: o back reenvia a última leitura da sessão atrás do `ready`.
+        // Same for the context meter: the back resends the session's latest reading behind the `ready`.
         contextUsage: null,
         rows: event.turnActive === true ? settleStreaming(state.rows) : settleLiveTools(dropProvisionalTools(settleStreaming(state.rows))),
       };
-      // A sessão retomada é estado, não conversa: nenhuma linha "Retomando a sessão…" no log.
+      // The resumed session is state, not conversation: no "Retomando a sessão…" row in the log.
       if (event.resume) next.sessionId = event.resume;
       return next;
     }
@@ -1571,21 +1572,21 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         seq,
         turnActive: nextTurnActive(base, false),
         awaiting: false,
-        // `settleStreaming` e não um append cru: o que pode estar aberto aqui é a linha de
-        // RACIOCÍNIO (o modelo pensou e agora responde), e deixá-la "pensando" para sempre é a
-        // pulsação que nunca para. Uma linha de resposta aberta já teria sido usada acima.
+        // `settleStreaming` and not a raw append: what may be open here is the
+        // REASONING row (the model thought and now answers), and leaving it "pensando" forever is the
+        // pulse that never stops. An open answer row would already have been used above.
         rows: [...settleStreaming(base.rows), { kind: "assistant", id, text: event.text, streaming: true }],
       };
     }
     /**
-     * O RACIOCÍNIO ao vivo. Cai na sua própria linha, nunca na do assistente: são duas correntes
-     * (o modelo pensa, depois responde) e misturá-las colaria o primeiro token da resposta no fim
-     * do pensamento. Um delta de raciocínio FECHA uma resposta que ainda estivesse aberta — se o
-     * modelo voltou a pensar, aquele parágrafo acabou.
+     * The live REASONING. It lands on its own row, never on the assistant's: they are two streams
+     * (the model thinks, then answers) and mixing them would glue the answer's first token to the end
+     * of the thought. A reasoning delta CLOSES an answer that was still open — if the
+     * model went back to thinking, that paragraph is over.
      */
     case "thinking_delta": {
       if (!event.text) return state;
-      const base = markSource(state, false); // raciocínio é sempre o driver falando
+      const base = markSource(state, false); // reasoning is always the driver talking
       const live = streamingThinkingRow(base.rows);
       if (live) {
         const rows = [...base.rows.slice(0, -1), { ...live, text: live.text + event.text }];
@@ -1600,7 +1601,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         rows: [...settleStreaming(base.rows), { kind: "thinking", id, text: event.text, streaming: true }],
       };
     }
-    /** O bloco consolidado: mesmas palavras, agora fechadas — substitui os deltas que o montaram. */
+    /** The consolidated block: same words, now settled — it replaces the deltas that built it. */
     case "thinking": {
       const text = event.text ?? "";
       const live = streamingThinkingRow(state.rows);
@@ -1666,9 +1667,9 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       const marked = markSource(state, viaTerminal);
       const { id, seq } = nextId(marked, "t");
       const rows = settleStreaming(marked.rows);
-      // A chamada do Workflow carrega o PLANO (o `meta` do script). O progresso vem do back muito
-      // depois, só com o nome da rodada — é aqui que o plano fica guardado para encontrá-lo. Vale
-      // também no replay: um F5 no meio da frota reconstrói as fases a partir desta mesma linha.
+      // The Workflow call carries the PLAN (the script's `meta`). The progress comes from the back much
+      // later, only with the run's name — this is where the plan is kept so it can be found. It also
+      // holds on replay: an F5 in the middle of the fleet rebuilds the phases from this same row.
       const meta = event.name === "Workflow" ? parseWorkflowScriptMeta((event.input as { script?: unknown })?.script) : null;
       const workflowMeta = meta
         ? { ...marked.workflowMeta, [meta.name]: { description: meta.description, phases: meta.phases } }
@@ -1677,8 +1678,8 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         kind: "tool", id: event.id ?? id, name: event.name ?? "?", summary: toolSummary(event.input), input: event.input,
         ...(marked.ready && !viaTerminal ? { live: true } : {}),
       };
-      // O input completo da chamada que já está na tela como PROVISÓRIA: a mesma linha, no mesmo
-      // lugar — um card só, que agora sabe o que faz (o diff do Edit/Write aparece aqui).
+      // The full input of the call that is already on screen as PROVISIONAL: the same row, in the same
+      // place — a single card, which now knows what it does (the Edit/Write diff shows up here).
       const provisional = provisionalToolAt(rows, event.id);
       return {
         ...marked,
@@ -1690,9 +1691,9 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       };
     }
     case "tool_use_start": {
-      // O modelo ABRIU a chamada e ainda escreve o input (dezenas de segundos num Write grande). A
-      // linha nasce provisória e o `tool_use` completo a substitui. Só o principal: o driver não
-      // repassa o stream de subagente, e um frame repetido não abre uma segunda linha.
+      // The model OPENED the call and is still writing the input (tens of seconds on a big Write). The
+      // row is born provisional and the complete `tool_use` replaces it. Main agent only: the driver
+      // does not relay the subagent stream, and a repeated frame does not open a second row.
       if (!event.id || event.parentToolUseId || state.rows.some((row) => row.kind === "tool" && row.id === event.id)) return state;
       const marked = markSource(state, false);
       return {
@@ -1703,7 +1704,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       };
     }
     case "tool_input_progress": {
-      // Só a linha provisória: depois do `tool_use` completo, o tamanho do input já não é notícia.
+      // Only the provisional row: after the complete `tool_use`, the input's size is no longer news.
       const at = provisionalToolAt(state.rows, event.id);
       const row = state.rows[at];
       if (!row || row.kind !== "tool" || typeof event.bytes !== "number") return state;
@@ -1718,15 +1719,15 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       return { ...state, rows: replaceRowAt(state.rows, at, { ...row, elapsedSeconds: event.elapsedSeconds }) };
     }
     case "workflow_progress": {
-      // O back lendo o diário da frota (services/sdk/workflow.ts). NÃO mexe em `turnActive`: o
-      // turno que disparou o workflow já acabou — é exatamente por isso que esta linha existe.
-      // Uma rodada tem UMA linha: o quadro novo substitui o anterior, no lugar onde ele já estava.
+      // The back reading the fleet's log (services/sdk/workflow.ts). Does NOT touch `turnActive`: the
+      // turn that started the workflow is already over — that is exactly why this row exists.
+      // A run has ONE row: the new snapshot replaces the previous one, in the place it already was.
       const runId = event.runId;
       if (!runId) return state;
       const name = event.name ?? "";
       const metas = Object.keys(state.workflowMeta);
-      // Pelo nome; e quando o back não conseguiu lê-lo (script apagado, nome estranho) mas esta
-      // sessão só disparou UM workflow, é esse — melhor o plano certo do que painel sem plano.
+      // By name; and when the back could not read it (script deleted, odd name) but this
+      // session started only ONE workflow, it is that one — better the right plan than a panel with no plan.
       const meta = state.workflowMeta[name] ?? (metas.length === 1 ? state.workflowMeta[metas[0]!] : undefined);
       const agents = Array.isArray(event.agents) ? event.agents : [];
       const phases = workflowPhases(event.phases, meta?.phases);
@@ -1747,10 +1748,10 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       };
       const at = state.rows.findIndex((r) => r.kind === "workflow" && r.runId === runId);
       if (at >= 0) return { ...state, rows: [...state.rows.slice(0, at), row, ...state.rows.slice(at + 1)] };
-      // A frota chega por fora do turno, e pode cair EM CIMA de uma resposta em streaming. Fechar
-      // essa linha aqui (o `settleStreaming` de todas as outras) faria o bloco consolidado que vem
-      // logo depois virar uma SEGUNDA linha: a mesma frase duas vezes, com o painel no meio. Então
-      // a linha aberta continua sendo a última — o painel entra logo antes dela.
+      // The fleet arrives outside the turn, and may land ON TOP of a streaming answer. Closing
+      // that row here (the `settleStreaming` of all the others) would turn the consolidated block that
+      // comes right after into a SECOND row: the same sentence twice, with the panel in between. So
+      // the open row is still the last one — the panel goes in right before it.
       return { ...state, rows: withSideRow(state.rows, row) };
     }
     case "permission_request": {
@@ -1885,9 +1886,9 @@ export function appendUserRow(
 }
 
 /**
- * Uma linha do /btw entra ANTES do texto ainda escorrendo do turno (como a de um subagente): o fluxo
- * de deltas só escreve na ÚLTIMA linha, e uma linha lateral no fim partia a resposta em duas bolhas,
- * a primeira presa em "escrevendo" para sempre. PURE.
+ * A /btw row goes in BEFORE the turn's text still streaming (like a subagent's): the delta flow
+ * only writes into the LAST row, and a side row at the end split the answer into two bubbles,
+ * the first stuck at "escrevendo" forever. PURE.
  */
 function withSideRow(rows: SdkRow[], row: SdkRow): SdkRow[] {
   const last = rows[rows.length - 1];
@@ -1897,7 +1898,7 @@ function withSideRow(rows: SdkRow[], row: SdkRow): SdkRow[] {
 
 type CompactionRow = Extract<SdkRow, { kind: "compaction" }>;
 
-/** A compactação ainda rodando, se houver — a ÚLTIMA (só existe uma por vez). */
+/** The compaction still running, if any — the LAST one (only one exists at a time). */
 function runningCompactionAt(rows: SdkRow[]): number {
   for (let i = rows.length - 1; i >= 0; i -= 1) {
     const row = rows[i]!;
@@ -1907,9 +1908,9 @@ function runningCompactionAt(rows: SdkRow[]): number {
 }
 
 /**
- * O evento `compaction`: `started` abre a barra (uma só — o início repetido de quem reconecta não
- * abre outra); `done`/`failed` fecham a barra aberta, ou desenham o divisor sozinho (o replay, que
- * só tem o desfecho). PURE.
+ * The `compaction` event: `started` opens the bar (just one — the repeated start of whoever
+ * reconnects does not open another); `done`/`failed` close the open bar, or draw the divider on its
+ * own (the replay, which only has the outcome). PURE.
  */
 function applyCompaction(state: SdkChatState, event: SdkEvent): SdkChatState {
   const at = runningCompactionAt(state.rows);
@@ -1942,9 +1943,9 @@ function applyCompaction(state: SdkChatState, event: SdkEvent): SdkChatState {
 }
 
 /**
- * O medidor depois da compactação: o CLI diz quanto sobrou (`postTokens`), e o medidor cai NA HORA
- * — a leitura de verdade só vem no fim do turno, e até lá ele mostraria a conversa velha. Sem
- * leitura anterior não há janela para dividir: fica como está. PURE.
+ * The meter after the compaction: the CLI says how much is left (`postTokens`), and the meter drops
+ * AT ONCE — the real reading only comes at the end of the turn, and until then it would show the old
+ * conversation. With no previous reading there is no window to divide by: it stays as it is. PURE.
  */
 function compactedUsage(usage: ContextUsageInfo | null, outcome: Partial<CompactionRow>): ContextUsageInfo | null {
   if (!usage || outcome.status !== "done" || outcome.postTokens === undefined || usage.maxTokens <= 0) return usage;
@@ -1952,7 +1953,7 @@ function compactedUsage(usage: ContextUsageInfo | null, outcome: Partial<Compact
   return { ...usage, usedTokens: outcome.postTokens, percent };
 }
 
-/** O turno fechou: uma barra ainda aberta não roda para sempre (o driver antigo não a fecha). PURE. */
+/** The turn closed: a bar still open does not run forever (the old driver does not close it). PURE. */
 function settleCompaction(rows: SdkRow[]): SdkRow[] {
   const at = runningCompactionAt(rows);
   if (at < 0) return rows;
@@ -1968,24 +1969,24 @@ function pushBtwRow(state: SdkChatState, fields: Omit<BtwRow, "kind" | "id">): S
   return { ...state, seq, rows: withSideRow(state.rows, { kind: "btw", id, ...fields }) };
 }
 
-/** A pergunta de um /btw desta aba, pendente até a resposta (`btw_answer`) preenchê-la. PURE. */
+/** The question of a /btw from this tab, pending until the answer (`btw_answer`) fills it in. PURE. */
 export function appendBtwRow(state: SdkChatState, btwId: string, question: string, askedAt: number): SdkChatState {
   return pushBtwRow(state, { btwId, question, askedAt });
 }
 
-/** Uma pergunta DESTA aba ainda sem resposta nem erro. PURE. */
+/** A question from THIS tab with neither an answer nor an error yet. PURE. */
 function isPendingBtw(row: SdkRow): row is BtwRow & { askedAt: number } {
   return row.kind === "btw" && row.askedAt !== undefined && row.text === undefined && row.error === undefined;
 }
 
 /**
- * O prazo de uma pergunta lateral na TELA. O driver responde UMA por vez (até 3 na fila) e cada uma
- * tem 3 min — o prazo cobre a fila inteira e uma folga. Passado dele sem resposta, o driver que a
- * respondia morreu (deploy, hibernação) e ninguém mais vai responder.
+ * The deadline of a side question on the SCREEN. The driver answers ONE at a time (up to 3 queued) and
+ * each has 3 min — the deadline covers the whole queue plus some slack. Past it with no answer, the
+ * driver that was answering it died (deploy, hibernation) and nobody is going to answer anymore.
  */
 export const BTW_EXPIRE_MS = 10 * 60_000;
 
-/** As perguntas desta aba que passaram do prazo viram erro. Nada vencido = o MESMO estado. PURE. */
+/** This tab's questions that passed the deadline become errors. Nothing expired = the SAME state. PURE. */
 export function expireBtwRows(state: SdkChatState, now: number): SdkChatState {
   const stale = (row: SdkRow): boolean => isPendingBtw(row) && now - row.askedAt >= BTW_EXPIRE_MS;
   if (!state.rows.some(stale)) return state;
@@ -1993,7 +1994,7 @@ export function expireBtwRows(state: SdkChatState, now: number): SdkChatState {
 }
 
 /**
- * Settle one own send by its RECEIPT: delivered (the back gravou) or undelivered (it refused, or
+ * Settle one own send by its RECEIPT: delivered (the back saved it) or undelivered (it refused, or
  * the receipt never came). Unknown cid = nothing to settle — a receipt for a row this view no
  * longer holds (a reconnect wiped it) is not an error. PURE.
  */
@@ -2021,15 +2022,15 @@ export function dropUserRow(state: SdkChatState, cid: string): SdkChatState {
 }
 
 /**
- * Os `cid` que ESTA tela já tem desenhados — os envios com dono, que a reconciliação não julga.
+ * The `cid`s THIS screen already has drawn — the sends with an owner, which the reconciliation does not judge.
  *
- * Reconciliar é sobre o que sobrou de ANTES: mensagens de um navegador ou de uma conexão anterior,
- * cujas bolhas o (re)connect apagou e cujo destino só o replay conhece. Um envio feito NESTA
- * conexão já tem bolha e relógio próprio (o watchdog) — e o replay não pode contê-lo, porque o
- * servidor manda `ready` no attach e só depois responde os frames que ficaram bufferados durante o
- * setup. Sem esta fronteira, era exatamente a mensagem em voo que a reconciliação dava por perdida:
- * uma SEGUNDA bolha, marcada "não entregue" (produção, 2026-09-28). Linhas vindas do replay não
- * têm `cid` — são elas que a comparação por texto existe para casar. PURE.
+ * Reconciling is about what was left over from BEFORE: messages from a previous browser or connection,
+ * whose bubbles the (re)connect erased and whose fate only the replay knows. A send made ON THIS
+ * connection already has its own bubble and clock (the watchdog) — and the replay cannot contain it,
+ * because the server sends `ready` on attach and only afterwards answers the frames that were buffered
+ * during setup. Without this boundary, it was exactly the in-flight message that the reconciliation
+ * deemed lost: a SECOND bubble, marked "não entregue" (production, 2026-09-28). Rows coming from the
+ * replay have no `cid` — they are the ones the text comparison exists to match. PURE.
  */
 export function liveUserCids(rows: readonly SdkRow[]): Set<string> {
   const cids = new Set<string>();
@@ -2197,10 +2198,10 @@ export function answerQuestion(
 export type SdkRenderRow =
   | { kind: "row"; id: string; row: SdkRow }
   | { kind: "tools"; id: string; rows: SdkRow[] }
-  /** SUBAGENTES disparados em sequência: uma frota, cada um na sua linha (nunca dobrados em "N ações"). */
+  /** SUBAGENTS started in sequence: a fleet, each on its own row (never folded into "N ações"). */
   | { kind: "agents"; id: string; rows: SdkRow[] };
 
-/** As tools que disparam um subagente: `Agent` (nome atual no Claude Code) e `Task` (o antigo). */
+/** The tools that start a subagent: `Agent` (current name in Claude Code) and `Task` (the old one). */
 function isAgentCall(row: SdkRow): boolean {
   return row.kind === "tool" && !row.pending && (row.name === "Agent" || row.name === "Task");
 }

@@ -84,7 +84,7 @@ export function reviewPill(
       return { key: "review.pill.round", vars: { round: review.round, max: REVIEW_MAX_ROUNDS }, tone: "warn" };
     case "ready":
       if (live.authorWorking) return { key: "review.pill.authorWorking", tone: "warn" };
-      // "Pronto pra merge" só com o gate do merge fora do caminho: rodando ou vermelho, o clique não mergearia.
+      // "Pronto pra merge" only with the merge gate out of the way: running or red, the click would not merge.
       if (live.gate === "failed") return { key: "review.pill.gateFailed", tone: "critical" };
       // Red, but the author's AI has it and the checks rerun on their own: work, not a stop.
       if (live.gate === "fixing") return { key: "review.pill.gateFixing", tone: "warn" };
@@ -375,7 +375,7 @@ export function reviewActions(
   const isReviewer = me.id === review.reviewerUserId;
   const isMerger = me.id === review.mergerUserId;
   const isCoauthor = review.coauthorUserId !== undefined && me.id === review.coauthorUserId;
-  // Quem tem papel na revisão (o `canMergeReview` do servidor): o trabalho segue sem o responsável.
+  // Whoever has a role in the review (the server's `canMergeReview`): the work goes on without the person in charge.
   const hasRole = isReviewer || isMerger || isCoauthor || me.id === review.authorUserId;
   const { phase } = review;
   const failedImpasse =

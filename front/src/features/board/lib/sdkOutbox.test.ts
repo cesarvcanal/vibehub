@@ -19,17 +19,17 @@ import {
   type ServerText,
 } from "@/features/board/lib/sdkOutbox";
 
-/** O que o servidor tem, na ordem do replay. Sem `at`: o histórico antigo (ou um teste que não liga). */
+/** What the server has, in replay order. Without `at`: the old history (or a test that does not care). */
 function lines(...texts: string[]): ServerText[] {
   return texts.map((text) => ({ text }));
 }
 
 /**
- * O BUG QUE ESTE ARQUIVO FIXA (produção, 2026-09-17): "mando a mensagem, fica carregando sem nada
- * acontecer; dou F5 e é como se eu não tivesse enviado nada". A bolha era estado React desenhado
- * porque `socket.send()` não reclamou — e um socket meio-aberto aceita `send()` no vácuo. Sem
- * recibo do servidor e sem cópia em disco, a única testemunha da mensagem era a tela, que o F5
- * apagava. O outbox é essa cópia, e o `user_ack` é esse recibo.
+ * THE BUG THIS FILE PINS (production, 2026-09-17): "mando a mensagem, fica carregando sem nada
+ * acontecer; dou F5 e é como se eu não tivesse enviado nada". The bubble was React state drawn
+ * because `socket.send()` did not complain — and a half-open socket accepts `send()` into the void.
+ * With no receipt from the server and no copy on disk, the only witness of the message was the
+ * screen, which the F5 wiped. The outbox is that copy, and `user_ack` is that receipt.
  */
 
 const CARD = "card-1";
@@ -101,10 +101,10 @@ describe("a fila em si", () => {
   });
 
   /**
-   * O BUG DO HOTFIX (produção, 2026-09-17): a bolha "não entregue" fica na fila de propósito — é a
-   * cópia que o reenviar/descartar usa — e o `at` dela não muda mais. Sem marcar o veredito, ela
-   * seguia VENCIDA em todo tique do watchdog, que derrubava o socket a cada vez: a tela piscava
-   * "chat → Iniciando o agente… → histórico → chat" de 2 em 2 segundos, sem parar.
+   * THE HOTFIX BUG (production, 2026-09-17): the "não entregue" bubble stays in the queue on purpose
+   * — it is the copy that resend/discard uses — and its `at` no longer changes. Without marking the
+   * verdict, it stayed OVERDUE on every watchdog tick, which dropped the socket every time: the
+   * screen flashed "chat → Iniciando o agente… → histórico → chat" every 2 seconds, nonstop.
    */
   it("uma vencida JÁ cobrada não vence de novo (era o loop de reconexão a cada tique)", () => {
     const now = 100_000;
@@ -113,7 +113,7 @@ describe("a fila em si", () => {
     expect(cobrada[0]!.undelivered).toBe(true);
     expect(overdueMessages(cobrada, now)).toEqual([]);
     expect(overdueMessages(cobrada, now + 10 * OUTBOX_ACK_TIMEOUT_MS)).toEqual([]);
-    // …e a mensagem continua guardada: o veredito não apaga o texto.
+    // …and the message stays stored: the verdict does not erase the text.
     expect(cobrada[0]!.text).toBe("sem recibo há muito");
   });
 
@@ -121,7 +121,7 @@ describe("a fila em si", () => {
     const list = [msg("c1", "a"), msg("c2", "b")];
     const marked = markUndelivered(list, ["c1"]);
     expect(marked.map((m) => m.undelivered)).toEqual([true, undefined]);
-    expect(markUndelivered(marked, ["c1"])).toBe(marked); // nada mudou: mesma referência
+    expect(markUndelivered(marked, ["c1"])).toBe(marked); // nothing changed: same reference
     expect(markUndelivered(list, ["não-existe"])).toBe(list);
   });
 
@@ -130,30 +130,30 @@ describe("a fila em si", () => {
     const entry = msg("c1", "instrução longa", now - OUTBOX_ACK_TIMEOUT_MS - 1);
     const cobrada = markUndelivered([entry], ["c1"]);
     const reenviada = retryOutbox(cobrada, cobrada[0]!, now, {});
-    expect(reenviada).toHaveLength(1); // mesmo cid: uma bolha só, não duas
-    expect(overdueMessages(reenviada, now)).toEqual([]); // acabou de sair
+    expect(reenviada).toHaveLength(1); // same cid: a single bubble, not two
+    expect(overdueMessages(reenviada, now)).toEqual([]); // it just left
     expect(overdueMessages(reenviada, now + OUTBOX_ACK_TIMEOUT_MS).map((m) => m.cid)).toEqual(["c1"]);
   });
 
 
   /**
-   * O BUG DO CÉSAR (produção, 2026-09-28): mensagens marcadas "não entregue" com o servidor no ar.
+   * CÉSAR'S BUG (production, 2026-09-28): messages marked "não entregue" with the server up.
    *
-   * O prazo do recibo é uma acusação — "mandei e ninguém respondeu" — e ela só vale se havia alguém
-   * em condições de responder. Não havia: o `onopen` do navegador dispara no aperto de mão do
-   * websocket, mas o back só passa a ATENDER frames depois de um setup de vários segundos (install
-   * do driver por SSH+docker, sonda de transcript com timeout de 15s — sozinha maior que este
-   * prazo —, replay do histórico, spawn). Até lá o frame espera bufferado e É entregue depois.
+   * The receipt deadline is an accusation — "I sent it and nobody answered" — and it only holds if
+   * someone was in a position to answer. Nobody was: the browser's `onopen` fires on the websocket
+   * handshake, but the back only starts SERVING frames after a setup of several seconds (driver
+   * install over SSH+docker, transcript probe with a 15s timeout — alone longer than this
+   * deadline —, history replay, spawn). Until then the frame waits buffered and IS delivered later.
    *
-   * Então o relógio tem um PISO: o instante em que a conexão passou a poder responder (o `ready`).
-   * Antes dele nenhum silêncio prova nada.
+   * So the clock has a FLOOR: the instant the connection became able to answer (the `ready`).
+   * Before it, no silence proves anything.
    */
   it("o prazo conta a partir do instante em que a conexão pôde responder, não do envio", () => {
     const now = 100_000;
-    // Enviada 30s atrás, mas o servidor só assumiu o socket 2s atrás: ninguém deve nada ainda.
+    // Sent 30s ago, but the server only took over the socket 2s ago: nobody owes anything yet.
     const list = [msg("c1", "instrução longa", now - 30_000)];
     expect(overdueMessages(list, now, OUTBOX_ACK_TIMEOUT_MS, now - 2_000)).toEqual([]);
-    // Passado o prazo INTEIRO desde que a conexão está de pé, aí sim o silêncio é resposta.
+    // Once the WHOLE deadline has passed since the connection came up, then the silence is an answer.
     expect(
       overdueMessages(list, now, OUTBOX_ACK_TIMEOUT_MS, now - OUTBOX_ACK_TIMEOUT_MS - 1).map((m) => m.cid),
     ).toEqual(["c1"]);
@@ -161,7 +161,7 @@ describe("a fila em si", () => {
 
   it("o piso nunca ENCURTA o prazo de quem foi enviado com a conexão já de pé", () => {
     const now = 100_000;
-    // Conexão de pé há muito tempo; a mensagem é que acabou de sair — o prazo é dela, não do piso.
+    // Connection up for a long time; it is the message that just left — the deadline is its own, not the floor's.
     const list = [msg("c1", "instrução longa", now - 1_000)];
     expect(overdueMessages(list, now, OUTBOX_ACK_TIMEOUT_MS, now - 600_000)).toEqual([]);
   });
@@ -172,18 +172,19 @@ describe("a fila em si", () => {
 });
 
 /**
- * O BUG DO REENVIO NA MÃO (produção, 2026-10-27): a pessoa mandou a mensagem, a conexão falhou e a
- * bolha ficou "não entregue" com o botão Reenviar. Ela tinha ido embora; no dia seguinte a mensagem
- * estava lá, esperando um clique — horas de agente parado por uma mensagem que a primeira conexão
- * boa teria entregado.
+ * THE MANUAL RESEND BUG (production, 2026-10-27): the person sent the message, the connection failed
+ * and the bubble stayed "não entregue" with the Reenviar button. She had left; the next day the
+ * message was there, waiting for a click — hours of an idle agent over a message the first good
+ * connection would have delivered.
  *
- * Agora a própria tela reenvia, sozinha, com intervalos que crescem (`AUTO_RESEND_DELAYS_MS`) e um
- * teto duplo: tentativas contadas (nunca um laço) e idade da mensagem (`AUTO_RESEND_MAX_AGE_MS` —
- * uma ordem velha não vira turno sem a pessoa). Esgotado o plano, volta a ser o Reenviar de antes.
+ * Now the screen itself resends, on its own, with growing intervals (`AUTO_RESEND_DELAYS_MS`) and a
+ * double ceiling: counted attempts (never a loop) and message age (`AUTO_RESEND_MAX_AGE_MS` — an old
+ * order does not become a turn without the person). Once the plan runs out, it goes back to being
+ * the Reenviar from before.
  */
 describe("o reenvio automático — sozinho, espaçado e com fim", () => {
   const T0 = 1_000_000;
-  /** Uma mensagem que já levou o veredito "não entregue", enviada em `at`. */
+  /** A message that already got the "não entregue" verdict, sent at `at`. */
   function failed(cid: string, at: number, extra: Partial<OutboxMessage> = {}): OutboxMessage {
     return { cid, text: `texto ${cid}`, at, undelivered: true, ...extra };
   }
@@ -207,7 +208,7 @@ describe("o reenvio automático — sozinho, espaçado e com fim", () => {
       expect(planAutoResend(list, T0 + delay - 1).due).toEqual([]);
       expect(planAutoResend(list, T0 + delay).due.map((m) => m.cid)).toEqual(["c1"]);
     }
-    // O menor intervalo já é de segundos: mesmo um servidor que recusa na hora não vira martelo.
+    // The shortest interval is already seconds: even a server that refuses right away does not become a hammer.
     expect(AUTO_RESEND_DELAYS_MS[0]).toBeGreaterThanOrEqual(5_000);
   });
 
@@ -220,7 +221,7 @@ describe("o reenvio automático — sozinho, espaçado e com fim", () => {
   });
 
   it("a mensagem VELHA não sai sozinha: passou do teto de idade, a pessoa decide", () => {
-    // Escrita há mais que o teto — mesmo com tentativas sobrando e o intervalo vencido há muito.
+    // Written longer ago than the ceiling — even with attempts left and the interval long elapsed.
     const list = [failed("c1", T0)];
     const plan = planAutoResend(list, T0 + AUTO_RESEND_MAX_AGE_MS);
     expect(plan.due).toEqual([]);
@@ -230,13 +231,13 @@ describe("o reenvio automático — sozinho, espaçado e com fim", () => {
 
   it("a idade conta de quando foi ESCRITA (writtenAt), não do último reenvio", () => {
     const written = T0;
-    const lastTry = T0 + AUTO_RESEND_MAX_AGE_MS - 1_000; // o reenvio anterior rearmou o `at`
+    const lastTry = T0 + AUTO_RESEND_MAX_AGE_MS - 1_000; // the previous resend rearmed `at`
     const list = [failed("c1", lastTry, { writtenAt: written, autoRetries: 1 })];
     expect(planAutoResend(list, written + AUTO_RESEND_MAX_AGE_MS).pending.size).toBe(0);
   });
 
   it("acorda no que vier primeiro: o próximo vencimento ou a mensagem envelhecer (a bolha muda)", () => {
-    // Intervalo longo (a última tentativa) que só venceria DEPOIS do teto de idade.
+    // Long interval (the last attempt) that would only elapse AFTER the age ceiling.
     const spent = AUTO_RESEND_DELAYS_MS.length - 1;
     const at = T0 + AUTO_RESEND_MAX_AGE_MS - 60_000;
     const list = [failed("c1", at, { writtenAt: T0, autoRetries: spent })];
@@ -274,7 +275,7 @@ describe("o reenvio automático — sozinho, espaçado e com fim", () => {
     const manual = retryOutbox([entry], entry, T0 + 1_000, {});
     expect(manual[0]!.autoRetries).toBeUndefined();
     expect(manual[0]!.writtenAt).toBe(T0 + 1_000);
-    // …e se esse envio também falhar, o plano recomeça do primeiro intervalo.
+    // …and if this send also fails, the plan restarts from the first interval.
     const again = planAutoResend([{ ...manual[0]!, undelivered: true }], T0 + 1_000 + AUTO_RESEND_DELAYS_MS[0]!);
     expect(again.due.map((m) => m.cid)).toEqual(["c1"]);
   });
@@ -282,7 +283,7 @@ describe("o reenvio automático — sozinho, espaçado e com fim", () => {
   it("o plano sobrevive ao F5: tentativas e idade vão pro disco e voltam saneadas", () => {
     writeOutbox(CARD, [failed("c1", T0, { autoRetries: 3, writtenAt: T0 - 1_000 })]);
     expect(readOutbox(CARD)[0]).toMatchObject({ autoRetries: 3, writtenAt: T0 - 1_000 });
-    // localStorage é entrada não confiável: lixo vira "sem informação", nunca um plano infinito.
+    // localStorage is untrusted input: garbage becomes "no information", never an infinite plan.
     localStorage.setItem(
       "vibehub.sdkOutbox." + CARD,
       JSON.stringify([{ cid: "c1", text: "a", at: T0, undelivered: true, autoRetries: -4, writtenAt: "ontem" }]),
@@ -322,10 +323,10 @@ describe("reconciliação no reconnect — quem foi gravado e quem morreu no cam
   });
 
   /**
-   * O "SIM" DE ONTEM. O replay traz a conversa INTEIRA (a janela do histórico), não só o que veio
-   * depois do envio — e uma resposta curta se repete o tempo todo. Casar contra tudo dava o "sim"
-   * de hoje, perdido num socket meio-aberto, por entregue só porque ontem alguém disse "sim": a
-   * mensagem sumia em silêncio, que é exatamente o que o outbox existe para impedir.
+   * YESTERDAY'S "SIM". The replay brings the WHOLE conversation (the history window), not just what
+   * came after the send — and a short answer repeats all the time. Matching against everything
+   * counted today's "sim", lost in a half-open socket, as delivered just because yesterday someone
+   * said "sim": the message vanished silently, which is exactly what the outbox exists to prevent.
    */
   it("um 'sim' que JÁ estava na conversa no envio não entrega o 'sim' de agora", () => {
     const today = { ...msg("c1", "sim"), seenBefore: 1 };
@@ -340,7 +341,7 @@ describe("reconciliação no reconnect — quem foi gravado e quem morreu no cam
   });
 
   it("dois envios do mesmo texto: cada um precisa da SUA ocorrência depois do que já havia", () => {
-    // c1 saiu com um "sim" na conversa; c2 saiu depois que c1 foi gravado (dois "sim" na tela).
+    // c1 left with one "sim" in the conversation; c2 left after c1 was stored (two "sim" on screen).
     const pending = [{ ...msg("c1", "sim"), seenBefore: 1 }, { ...msg("c2", "sim"), seenBefore: 2 }];
     expect(reconcileOutbox(lines("sim", "sim", "sim"), pending).delivered.map((m) => m.cid)).toEqual(["c1", "c2"]);
     const partial = reconcileOutbox(lines("sim", "sim"), pending);
@@ -356,10 +357,10 @@ describe("reconciliação no reconnect — quem foi gravado e quem morreu no cam
   });
 
   /**
-   * A JANELA DO REPLAY ANDA. O replay é o fim do histórico, não o histórico inteiro: numa conversa
-   * longa, os "ok" mais antigos saem dela entre o envio e o reconnect. A marca do envio é então
-   * ANCORADA no relógio do SERVIDOR: `since` é o `at` mais novo que a tela conhecia, e só conta o
-   * que foi gravado depois dele — o que a janela descarta é sempre o mais VELHO, nunca isso.
+   * THE REPLAY WINDOW MOVES. The replay is the end of the history, not the whole history: in a long
+   * conversation, the oldest "ok" leave it between the send and the reconnect. The send's mark is
+   * therefore ANCHORED on the SERVER clock: `since` is the newest `at` the screen knew, and only what
+   * was stored after it counts — what the window discards is always the OLDEST, never that.
    */
   describe("a marca do envio (sendMark) contra uma janela que anda", () => {
     const seis = [1, 2, 3, 4, 5, 6].map((at) => ({ text: "ok", at }));

@@ -4,17 +4,18 @@ import type { AgentTask, SdkRow, ToolResultSummary } from "@/features/board/lib/
 import type { DiffRow } from "@/features/board/lib/toolDiff";
 
 /**
- * VER O QUE O CLAUDE ESTÁ FAZENDO — as regras puras do detalhe que abre quando se clica numa ação,
- * num subagente ou em "Mudanças", e o canal que pede esse detalhe ao back.
+ * SEEING WHAT CLAUDE IS DOING — the pure rules of the detail that opens when you click an action,
+ * a subagent or "Mudanças", and the channel that asks the back for that detail.
  *
- * O chat recebe só o RESUMO de cada resultado; o resto é pedido sob demanda pelo websocket
- * (`{ type: "detail", req }`) e o back lê do transcript da sessão no runner
- * (back/src/services/sdk/detail.ts). A resposta volta só para esta aba e nunca passa pelo reducer.
+ * The chat receives only the SUMMARY of each result; the rest is requested on demand over the
+ * websocket (`{ type: "detail", req }`) and the back reads it from the session transcript on the
+ * runner (back/src/services/sdk/detail.ts). The response comes back only to this tab and never goes
+ * through the reducer.
  */
 
-/* ------------------------------------------------------------ a linha de resultado */
+/* ------------------------------------------------------------ the result line */
 
-/** Duração legível: `850 ms`, `4,2 s`, `1m 24s`, `3h 07m`. PURE. */
+/** Readable duration: `850 ms`, `4,2 s`, `1m 24s`, `3h 07m`. PURE. */
 export function formatDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return "";
   if (ms < 1000) return `${Math.round(ms)} ms`;
@@ -26,10 +27,10 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
 }
 
-/** Quantos tokens, curto: `900`, `41 mil` / `41k`, `1 mi` / `1M`, `1,5 mi` / `1.5M`. PURE. */
+/** How many tokens, short: `900`, `41 mil` / `41k`, `1 mi` / `1M`, `1,5 mi` / `1.5M`. PURE. */
 export function formatTokens(n: number): string {
   if (!Number.isFinite(n) || n < 1000) return String(Math.max(0, Math.round(n || 0)));
-  // 999.500 arredondaria para "1000k": daí para cima a conta já é em milhões.
+  // 999,500 would round to "1000k": from there up the count is already in millions.
   if (n < 999_500) return translate("sdk.result.thousands", { n: Math.round(n / 1000) });
   const millions = Math.round(n / 100_000) / 10;
   const shown = Number.isInteger(millions) ? String(millions) : millions.toFixed(1).replace(".", translate("sdk.result.decimalSeparator"));
@@ -37,8 +38,8 @@ export function formatTokens(n: number): string {
 }
 
 /**
- * A LINHA DE RESULTADO de uma ação, como a do terminal: "7 linhas", "+3 −1", "linhas 60–80 de 290",
- * "9 ocorrências em 7 arquivos", "sem saída", "erro: …". Null = nada a dizer. PURE.
+ * The RESULT LINE of an action, like the terminal's: "7 linhas", "+3 −1", "linhas 60–80 de 290",
+ * "9 ocorrências em 7 arquivos", "sem saída", "erro: …". Null = nothing to say. PURE.
  */
 export function toolResultLine(name: string, r: ToolResultSummary | undefined): string | null {
   if (!r) return null;
@@ -69,7 +70,7 @@ export function toolResultLine(name: string, r: ToolResultSummary | undefined): 
   return null;
 }
 
-/** Em que pé uma ação está, para o ícone. PURE. */
+/** Where an action stands, for the icon. PURE. */
 export type ToolStatus = "running" | "ok" | "error" | "unknown";
 
 export function toolStatus(row: Extract<SdkRow, { kind: "tool" }>): ToolStatus {
@@ -78,9 +79,9 @@ export function toolStatus(row: Extract<SdkRow, { kind: "tool" }>): ToolStatus {
   return row.live ? "running" : "unknown";
 }
 
-/* ------------------------------------------------------------------- subagentes */
+/* ------------------------------------------------------------------- subagents */
 
-/** Em que pé um subagente está: o estado da tarefa manda; sem ela, o resultado da chamada. PURE. */
+/** Where a subagent stands: the task state rules; without it, the call's result. PURE. */
 export function agentStatus(row: Extract<SdkRow, { kind: "tool" }>, task: AgentTask | undefined): ToolStatus {
   if (task) return task.status === "running" ? "running" : task.status === "completed" ? "ok" : "error";
   if (row.result) {
@@ -91,17 +92,17 @@ export function agentStatus(row: Extract<SdkRow, { kind: "tool" }>, task: AgentT
 }
 
 /**
- * Silêncio do subagente além do qual o relógio para: quem morreu sem aviso não conta para sempre.
- * O mesmo teto do back (TASK_CLOCK_STALE_MS em back/src/services/sdk/toolResult.ts).
+ * Subagent silence beyond which the clock stops: one that died without notice does not count forever.
+ * The same ceiling as the back (TASK_CLOCK_STALE_MS in back/src/services/sdk/toolResult.ts).
  */
 export const AGENT_CLOCK_STALE_MS = 30 * 60_000;
 
 /**
- * Há quanto tempo o subagente trabalha. O back manda, em todo frame, o tempo até aquele instante
- * no relógio dele; rodando, a aba soma o tempo desde que recebeu o frame, no relógio DELA (sem
- * diferença entre os dois), até o teto de silêncio — que já começa gasto pelo `quietMs` com que o
- * frame saiu. Terminado, a duração final. Rodando, em segundos inteiros: um relógio que anda de
- * segundo em segundo não mostra décimos. PURE.
+ * How long the subagent has been working. The back sends, in every frame, the time up to that
+ * instant on its clock; while running, the tab adds the time since it received the frame, on ITS
+ * own clock (no skew between the two), up to the silence ceiling — which starts already spent by the
+ * `quietMs` the frame left with. When finished, the final duration. While running, in whole seconds:
+ * a clock that ticks second by second does not show tenths. PURE.
  */
 export function agentElapsedMs(
   status: ToolStatus,
@@ -116,16 +117,16 @@ export function agentElapsedMs(
   return Math.floor(((measured ?? 0) + silence) / 1000) * 1000;
 }
 
-/** O nome de um subagente pela chamada: a descrição que o modelo deu, senão o tipo. PURE. */
+/** A subagent's name from the call: the description the model gave, otherwise the type. PURE. */
 export function agentName(input: unknown): string {
   const o = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
   const pick = [o.description, o.subagent_type, o.name].find((v) => typeof v === "string" && v.trim() !== "");
   return typeof pick === "string" ? pick.trim() : "Agent";
 }
 
-/* ---------------------------------------------------------------- o canal */
+/* ---------------------------------------------------------------- the channel */
 
-/** As respostas do back, como chegam (`data` é o que a sondagem leu; `error` diz por que não). */
+/** The back's responses, as they arrive (`data` is what the probe read; `error` says why not). */
 export interface DetailResponse {
   type: "detail";
   req: "tool" | "agent" | "changes" | "file";
@@ -145,7 +146,7 @@ export interface DetailRequestFrame {
 }
 
 export interface DetailChannel {
-  /** Pede; devolve o `nonce` do pedido, ou null quando o socket está fechado. */
+  /** Requests; returns the request's `nonce`, or null when the socket is closed. */
   request(req: DetailResponse["req"], opts?: { id?: string; path?: string }): string | null;
   subscribe(listener: (response: DetailResponse) => void): () => void;
   deliver(response: DetailResponse): void;
@@ -176,7 +177,7 @@ export function createDetailChannel(send: (frame: DetailRequestFrame) => void): 
   };
 }
 
-/** Lê uma resposta de detalhe vinda do socket; forma torta vira null. PURE. */
+/** Reads a detail response from the socket; a malformed shape becomes null. PURE. */
 export function parseDetailResponse(event: { type?: string; req?: unknown; id?: unknown; path?: unknown; nonce?: unknown; data?: unknown; error?: unknown }): DetailResponse | null {
   if (event.type !== "detail") return null;
   if (event.req !== "tool" && event.req !== "agent" && event.req !== "changes" && event.req !== "file") return null;
@@ -193,12 +194,13 @@ export function parseDetailResponse(event: { type?: string; req?: unknown; id?: 
 
 export const DetailChannelContext = React.createContext<DetailChannel | null>(null);
 
-/** Quantos detalhes cada canal lembra (o mais antigo sai primeiro). */
+/** How many details each channel remembers (the oldest goes first). */
 export const DETAIL_CACHE_MAX = 200;
 
 /**
- * O último detalhe que chegou, por canal (card) e pedido: reabrir o modal mostra na hora o que já
- * veio, em vez de "Carregando…" de novo a cada abertura, e o pedido novo só atualiza por cima.
+ * The last detail that arrived, per channel (card) and request: reopening the modal shows right away
+ * what already came, instead of "Carregando…" again on every opening, and the new request just
+ * updates on top.
  */
 const detailCache = new WeakMap<DetailChannel, Map<string, unknown>>();
 
@@ -219,9 +221,10 @@ function remember(channel: DetailChannel, slot: string, data: unknown): void {
 }
 
 /**
- * Pede uma vez e escuta a resposta (e, com `pollMs`, pede de novo enquanto aberto). `key` muda =
- * pedido novo. Devolve o último dado e o estado do pedido; o que já veio antes para o mesmo pedido
- * aparece de cara enquanto o pedido novo corre. `nudge` muda = pede de novo na hora, mantendo o dado.
+ * Requests once and listens for the response (and, with `pollMs`, requests again while open). `key`
+ * changes = new request. Returns the latest data and the request state; what already came before for
+ * the same request shows up right away while the new request runs. `nudge` changes = requests again
+ * right away, keeping the data.
  */
 export function useDetail<T>(
   req: DetailResponse["req"],
@@ -262,14 +265,14 @@ export function useDetail<T>(
   return state.key === key ? { data: state.data, loading: state.loading, error: state.error } : { data: cached(), loading: key !== null, error: null };
 }
 
-/** A ação já tem resultado no transcript? Sem ele ela ainda roda (ou o transcript não gravou). PURE. */
+/** Does the action already have a result in the transcript? Without it, it is still running (or the transcript did not record it). PURE. */
 export function detailHasResult(detail: Pick<ToolDetailData, "result" | "endedAt" | "text" | "structured"> | null): boolean {
   return !!detail && (detail.result !== undefined || detail.endedAt !== undefined || detail.text !== undefined || detail.structured !== undefined);
 }
 
-/* ------------------------------------------------------- o que vem do back */
+/* ------------------------------------------------------- what comes from the back */
 
-/** Espelho de `ToolDetail` (back/src/services/sdk/detail.ts). */
+/** Mirror of `ToolDetail` (back/src/services/sdk/detail.ts). */
 export interface ToolDetailData {
   found: boolean;
   by?: "main" | "subagent";
@@ -285,11 +288,11 @@ export interface ToolDetailData {
   startedAt?: number;
   endedAt?: number;
   result?: ToolResultSummary;
-  /** Bash com `run_in_background`: a saída real, lida do arquivo da tarefa a cada sondagem. */
+  /** Bash with `run_in_background`: the real output, read from the task's file on every probe. */
   background?: BackgroundOutputData;
 }
 
-/** Espelho de `BackgroundOutput` (back). `status`: running | completed | failed | killed | stopped. */
+/** Mirror of `BackgroundOutput` (back). `status`: running | completed | failed | killed | stopped. */
 export interface BackgroundOutputData {
   taskId: string;
   status: string;
@@ -302,7 +305,7 @@ export type TimelineItem =
   | { kind: "thinking" | "text"; at: number; text: string }
   | { kind: "tool"; at: number; id: string; name: string; input?: unknown; endedAt?: number; result?: ToolResultSummary };
 
-/** Espelho de `AgentTimeline` (back). */
+/** Mirror of `AgentTimeline` (back). */
 export interface AgentTimelineData {
   found: boolean;
   agentId?: string;
@@ -327,7 +330,7 @@ export interface CardChangesData {
 
 export interface FileDiffData { path: string; diff: string; truncated: boolean }
 
-/* ------------------------------------------------------- leitura do detalhe */
+/* ------------------------------------------------------- reading the detail */
 
 type Fields = Record<string, unknown>;
 const asFields = (v: unknown): Fields => (v && typeof v === "object" && !Array.isArray(v) ? (v as Fields) : {});
@@ -335,11 +338,11 @@ const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
 export type { DiffRow };
 
-/** Um diff unificado (do git ou do `structuredPatch`) em linhas. Cabeçalhos de arquivo saem. PURE. */
+/** A unified diff (from git or from `structuredPatch`) as lines. File headers are dropped. PURE. */
 export function parseUnifiedDiff(diff: string): DiffRow[] {
   const out: DiffRow[] = [];
-  // Cabeçalho só existe ANTES do primeiro `@@` de cada arquivo: dentro do trecho, `--- x` é a linha
-  // `-- x` removida (um comentário SQL, um `---` de markdown), não o nome do arquivo.
+  // A header only exists BEFORE the first `@@` of each file: inside the hunk, `--- x` is the removed
+  // line `-- x` (a SQL comment, a markdown `---`), not the file name.
   let inHunk = false;
   for (const line of String(diff ?? "").split("\n")) {
     if (line.startsWith("diff --git")) {
@@ -361,7 +364,7 @@ export function parseUnifiedDiff(diff: string): DiffRow[] {
   return out;
 }
 
-/** O `structuredPatch` de um Edit/Write em linhas de diff. PURE. */
+/** The `structuredPatch` of an Edit/Write as diff lines. PURE. */
 export function patchRows(structured: unknown): DiffRow[] | null {
   const patch = asFields(structured).structuredPatch;
   if (!Array.isArray(patch) || patch.length === 0) return null;
@@ -383,25 +386,25 @@ export function patchRows(structured: unknown): DiffRow[] | null {
   return out;
 }
 
-/** A saída de um Bash: stdout e stderr separados, quando o estruturado tem; senão o texto. PURE. */
+/** A Bash's output: stdout and stderr separated, when the structured result has them; otherwise the text. PURE. */
 export function bashOutput(detail: Pick<ToolDetailData, "structured" | "text">): { stdout: string; stderr: string } {
   const s = asFields(detail.structured);
   if (typeof s.stdout === "string" || typeof s.stderr === "string") return { stdout: str(s.stdout), stderr: str(s.stderr) };
   return { stdout: str(detail.text), stderr: "" };
 }
 
-/** O conteúdo de um Read (sem os números que o CLI prefixa), com a linha inicial. PURE. */
+/** The content of a Read (without the numbers the CLI prefixes), with the starting line. PURE. */
 export function readContent(detail: Pick<ToolDetailData, "structured" | "text">): { content: string; startLine: number } {
   const file = asFields(asFields(detail.structured).file);
   if (typeof file.content === "string") return { content: file.content, startLine: typeof file.startLine === "number" ? file.startLine : 1 };
-  // Sem o estruturado: o texto vem como "   12→linha" (ou com tab); tira o prefixo.
+  // Without the structured result: the text comes as "   12→linha" (or with a tab); strip the prefix.
   const lines = str(detail.text).split("\n");
   const m = /^\s*(\d+)[→\t]/.exec(lines[0] ?? "");
   const start = m ? Number(m[1]) : 1;
   return { content: lines.map((l) => l.replace(/^\s*\d+[→\t]/, "")).join("\n"), startLine: start };
 }
 
-/** Os arquivos que o Claude e os subagentes ALTERARAM nesta conversa, pelas ações de edição. PURE. */
+/** The files Claude and the subagents CHANGED in this conversation, from the edit actions. PURE. */
 export interface ChangedFile {
   path: string;
   rows: Array<Extract<SdkRow, { kind: "tool" }>>;

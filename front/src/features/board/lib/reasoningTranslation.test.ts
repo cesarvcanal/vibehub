@@ -2,10 +2,11 @@ import { describe, it, expect, vi } from "vitest";
 import { createReasoningTranslator, type DetectorFactory, type TranslatorFactory } from "./reasoningTranslation";
 
 /**
- * O RACIOCÍNIO TRADUZIDO NO NAVEGADOR. Pedir ao modelo que pensasse em português era o gatilho do
- * bloqueio `[reasoning_extraction]` do Opus e nem funcionava direito (o resumo do raciocínio ora
- * vinha em português, ora em inglês). A tradução agora é do Chrome/Edge — `Translator` e
- * `LanguageDetector`, modelos locais: zero token, nada sai da máquina. Sem a API, o original.
+ * THE REASONING TRANSLATED IN THE BROWSER. Asking the model to think in Portuguese was the trigger
+ * of Opus's `[reasoning_extraction]` block and did not even work properly (the reasoning summary
+ * sometimes came in Portuguese, sometimes in English). The translation is now Chrome/Edge's —
+ * `Translator` and `LanguageDetector`, local models: zero tokens, nothing leaves the machine.
+ * Without the API, the original.
  */
 
 type Availability = "unavailable" | "downloadable" | "downloading" | "available";
@@ -95,9 +96,9 @@ describe("createReasoningTranslator", () => {
     const t = fakeTranslator({ availability: "downloadable" });
     t.availability.mockImplementationOnce(() => new Promise<Availability>((r) => { release = r; }));
     const tr = createReasoningTranslator({ translator: t.factory, userActive: () => false });
-    const first = tr.translate("I need to check what the user wants.");   // checagem pendente, sem gesto
+    const first = tr.translate("I need to check what the user wants.");   // pending check, no gesture
     await vi.waitFor(() => expect(t.availability).toHaveBeenCalled());
-    tr.prime();                                           // o clique chega AGORA
+    tr.prime();                                           // the click arrives NOW
     expect(t.create).toHaveBeenCalledTimes(1);
     release("downloadable");
     await first;
@@ -127,8 +128,8 @@ describe("createReasoningTranslator", () => {
     await expect(tr.translate(en)).resolves.toBe(`PT(${en})`);
   });
 
-  // Revisão adversarial (HIGH-1), provado no Chrome 154: com o detector indisponível, um raciocínio
-  // em PORTUGUÊS ia para o tradutor en→pt e voltava estragado ("...TESTES DO VOLTAR"), e ficava guardado.
+  // Adversarial review (HIGH-1), proven on Chrome 154: with the detector unavailable, a reasoning
+  // in PORTUGUESE went to the en→pt translator and came back ruined ("...TESTES DO VOLTAR"), and stayed cached.
   it("sem detector, um raciocínio que JÁ veio em português não passa pelo tradutor", async () => {
     const t = fakeTranslator();
     const tr = createReasoningTranslator({ translator: t.factory });
@@ -144,9 +145,9 @@ describe("createReasoningTranslator", () => {
     expect(t.translate).not.toHaveBeenCalled();
   });
 
-  // HIGH-2, provado no Chrome real: o PRIMEIRO create() que baixa um modelo consome o gesto — o
-  // segundo, no mesmo clique, leva NotAllowedError. Então é um download por gesto: tradutor primeiro,
-  // detector no gesto seguinte — e o prime() não pode desistir depois do primeiro.
+  // HIGH-2, proven on real Chrome: the FIRST create() that downloads a model consumes the gesture — the
+  // second, in the same click, gets NotAllowedError. So it is one download per gesture: translator first,
+  // detector on the next gesture — and prime() must not give up after the first.
   it("prime(): um download por gesto — o tradutor primeiro, o detector no gesto seguinte", async () => {
     const t = fakeTranslator({ availability: "downloadable" });
     const d = fakeDetector(EN);
@@ -167,7 +168,7 @@ describe("createReasoningTranslator", () => {
     expect(detectorCreate).toHaveBeenCalledTimes(1);
   });
 
-  // MEDIUM-3, provado no Chrome real: o tradutor junta as linhas de um parágrafo ("- a - b").
+  // MEDIUM-3, proven on real Chrome: the translator joins the lines of a paragraph ("- a - b").
   it("linha por linha: listas e passos continuam um por linha", async () => {
     const t = fakeTranslator();
     const tr = createReasoningTranslator({ translator: t.factory, detector: fakeDetector(EN).factory });
@@ -176,8 +177,8 @@ describe("createReasoningTranslator", () => {
     );
   });
 
-  // 3ª revisão (1, 2): português informal sem palavra da lista nem acento, e "me"/"do" contados
-  // como inglês. A LINHA precisa de prova positiva de inglês — sem ela, fica como veio.
+  // 3rd review (1, 2): informal Portuguese with no word from the list and no accent, and "me"/"do"
+  // counted as English. The LINE needs positive proof of English — without it, it stays as it came.
   it("linha sem prova de inglês fica como veio — português informal, 'Me ajuda aqui'", async () => {
     const t = fakeTranslator();
     const tr = createReasoningTranslator({ translator: t.factory });
@@ -215,7 +216,7 @@ describe("createReasoningTranslator", () => {
     );
   });
 
-  // 4ª revisão (a): "so" (só) e "to" (tô) sem acento contavam como inglês.
+  // 4th review (a): "so" (só) and "to" (tô) without accents counted as English.
   it("'so falta testar' e 'to indo testar' (português sem acento) ficam como vieram", async () => {
     const t = fakeTranslator();
     const tr = createReasoningTranslator({ translator: t.factory });
@@ -226,7 +227,7 @@ describe("createReasoningTranslator", () => {
     expect(t.translate).toHaveBeenCalledTimes(1);
   });
 
-  // 4ª revisão (d): com o detector dizendo "es", linhas inglesas iam para um tradutor es→pt.
+  // 4th review (d): with the detector saying "es", English lines went to an es→pt translator.
   it("só traduz inglês → português: outro idioma detectado fica como veio", async () => {
     const t = fakeTranslator();
     const tr = createReasoningTranslator({
@@ -237,7 +238,7 @@ describe("createReasoningTranslator", () => {
     expect(t.create).not.toHaveBeenCalled();
   });
 
-  // 4ª revisão (c): ">" e "##" iam junto para o tradutor.
+  // 4th review (c): ">" and "##" went along to the translator.
   it("citação '>' e título '##' ficam intactos — só o texto depois deles é traduzido", async () => {
     const t = fakeTranslator();
     const tr = createReasoningTranslator({ translator: t.factory });
@@ -246,7 +247,7 @@ describe("createReasoningTranslator", () => {
     );
   });
 
-  // 5ª revisão: marcadores empilhados e espaços depois de ">" ainda chegavam ao tradutor.
+  // 5th review: stacked markers and spaces after ">" still reached the translator.
   it("marcadores empilhados ('> - [ ]', '## 1.') e espaços depois de '>' ficam intactos", async () => {
     const t = fakeTranslator();
     const tr = createReasoningTranslator({ translator: t.factory });
@@ -302,10 +303,10 @@ describe("createReasoningTranslator", () => {
     expect(out).toBe(`PT(I will check what the test is doing.)\n${huge}\n${stack}`);
   });
 
-  // Re-revisão adversarial (MEDIUM-A), provado no Chrome 154: português que CITA saída em inglês
-  // ("O teste falhou com: Expected...") era classificado como inglês no bloco e virava
-  // "o testo falhou com:". O idioma é decidido por bloco, mas a tradução é por linha — então a linha
-  // também tem voto: qualquer sinal de português, ela fica como veio.
+  // Adversarial re-review (MEDIUM-A), proven on Chrome 154: Portuguese that QUOTES English output
+  // ("O teste falhou com: Expected...") was classified as English at the block level and became
+  // "o testo falhou com:". The language is decided per block, but the translation is per line — so the
+  // line also has a vote: any sign of Portuguese, it stays as it came.
   it("linha com sinal de português fica como veio, mesmo num bloco majoritariamente em inglês", async () => {
     const t = fakeTranslator();
     const tr = createReasoningTranslator({ translator: t.factory });
@@ -329,7 +330,7 @@ describe("createReasoningTranslator", () => {
     );
   });
 
-  // LOW-B, provado no Chrome 154: "await" virava "aguarde" e "- [ ]" virava "- []".
+  // LOW-B, proven on Chrome 154: "await" became "aguarde" and "- [ ]" became "- []".
   it("código não é traduzido: bloco ``` e linha com cara de código ficam como vieram", async () => {
     const t = fakeTranslator();
     const tr = createReasoningTranslator({ translator: t.factory });

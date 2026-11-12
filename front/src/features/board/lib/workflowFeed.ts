@@ -2,13 +2,13 @@ import * as React from "react";
 import type { WorkflowFeedItem } from "./sdkChat";
 
 /**
- * O CANAL DO FEED de um subagente do workflow, entre o socket do chat (SdkChatView) e o painel
- * (WorkflowPanel). O feed é sob demanda e só desta aba: o painel pede `{type:"workflow_feed"}` e o
- * back responde só a ela (back/src/services/sdk/manager.ts). A resposta não é conversa — não passa
- * pelo reducer nem vira linha; ela é entregue aqui, a quem estiver escutando.
+ * THE FEED CHANNEL of a workflow subagent, between the chat socket (SdkChatView) and the panel
+ * (WorkflowPanel). The feed is on demand and only for this tab: the panel asks for `{type:"workflow_feed"}`
+ * and the back answers only it (back/src/services/sdk/manager.ts). The answer is not conversation — it
+ * does not go through the reducer nor become a row; it is delivered here, to whoever is listening.
  *
- * Um contexto em vez de prop: a linha do workflow é desenhada por um `SdkChatRow` memoizado, e
- * passar o canal por lá mexeria em todo lugar que desenha uma linha.
+ * A context instead of a prop: the workflow row is drawn by a memoized `SdkChatRow`, and passing the
+ * channel through there would touch every place that draws a row.
  */
 
 export interface WorkflowFeedResponse {
@@ -26,11 +26,11 @@ export interface WorkflowFeedRequestFrame {
 }
 
 export interface WorkflowFeedChannel {
-  /** Pede o feed. `false` = não saiu (socket fechado): quem pede tenta de novo no próximo ciclo. */
+  /** Requests the feed. `false` = it did not go out (socket closed): the requester tries again on the next cycle. */
   request(runId: string, agentId: string): boolean;
-  /** Escuta as respostas; devolve o "pare de escutar". */
+  /** Listens to the answers; returns the "stop listening". */
   subscribe(listener: (response: WorkflowFeedResponse) => void): () => void;
-  /** Entrega uma resposta que chegou pelo socket a quem escuta. */
+  /** Delivers an answer that arrived through the socket to whoever is listening. */
   deliver(response: WorkflowFeedResponse): void;
 }
 
@@ -55,10 +55,10 @@ export function createWorkflowFeedChannel(send: (frame: WorkflowFeedRequestFrame
   };
 }
 
-/** Sem provedor (um painel desenhado fora do chat), não há feed: o painel mostra só o que o quadro traz. */
+/** Without a provider (a panel drawn outside the chat), there is no feed: the panel shows only what the board brings. */
 export const WorkflowFeedContext = React.createContext<WorkflowFeedChannel | null>(null);
 
-/** Lê uma resposta de feed vinda do socket. Qualquer forma torta vira `null`. PURE. */
+/** Reads a feed answer coming from the socket. Any malformed shape becomes `null`. PURE. */
 export function parseWorkflowFeedResponse(event: {
   type?: string; runId?: unknown; agentId?: unknown; items?: unknown; error?: unknown;
 }): WorkflowFeedResponse | null {

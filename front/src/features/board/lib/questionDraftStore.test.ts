@@ -44,7 +44,7 @@ describe("questionDraftStore", () => {
     writeQuestionDraft("c1", "q_1_1", { ...DRAFT, at: 1_000 }, 9_000);
     forgetQuestionDraftMemoryForTesting();
     expect(readQuestionDraft("c1", "q_1_1")?.at).toBe(1_000);
-    writeQuestionDraft("c1", "q_1_2", DRAFT, 7_000); // sem horário = agora
+    writeQuestionDraft("c1", "q_1_2", DRAFT, 7_000); // no time = now
     expect(readQuestionDraft("c1", "q_1_2")?.at).toBe(7_000);
   });
 

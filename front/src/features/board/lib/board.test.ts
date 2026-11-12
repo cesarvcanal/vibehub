@@ -226,7 +226,7 @@ describe("cardState", () => {
   });
 
   it("is needs_me once the turn ENDED on a question to the person — the chat's pending-decisions tray", () => {
-    // Produção, 2026-10-27 (card 37fa689a): "Quer que eu abra um PR pequeno…?" in the tray, and the
+    // Production, 2026-10-27 (card 37fa689a): "Quer que eu abra um PR pequeno…?" in the tray, and the
     // sidebar drew the neutral your-turn circle.
     expect(cardState(card({ id: "a", status: "waiting", openedAt: 1, pendingQuestionAt: 9 }))).toEqual({
       kind: "needs_me",

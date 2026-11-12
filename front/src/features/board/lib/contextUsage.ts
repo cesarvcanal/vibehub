@@ -1,28 +1,30 @@
 /**
- * QUANTO DA JANELA DE CONTEXTO A CONVERSA JÁ OCUPA — o medidor ao lado do "está digitando" no chat.
+ * HOW MUCH OF THE CONTEXT WINDOW THE CONVERSATION ALREADY TAKES — the meter next to "está digitando"
+ * in the chat.
  *
- * A régua é de QUALIDADE, não de capacidade: o modelo não "trava" perto do fim da janela, ele piora
- * bem antes — esquece instrução do começo, repete erro, confunde arquivo. Por isso as faixas são
- * baixas comparadas com o limite (o auto-compact do CLI só entra perto de ~80%):
+ * The scale is about QUALITY, not capacity: the model does not "lock up" near the end of the window,
+ * it gets worse well before that — forgets instructions from the start, repeats mistakes, mixes up
+ * files. That is why the bands are low compared with the limit (the CLI's auto-compact only kicks in
+ * near ~80%):
  *
- *   0–30%   inteligente   a conversa cabe folgada; o modelo segura tudo que foi dito
- *   30–60%  preocupante   já perde detalhe do início; bom momento para fechar a etapa ou /compact
- *   60%+    perigoso      respostas piores e mais erro; /compact ou um card novo
+ *   0–30%   smart         the conversation fits comfortably; the model holds everything that was said
+ *   30–60%  worrying      already losing detail from the start; good moment to close the step or /compact
+ *   60%+    dangerous     worse answers and more mistakes; /compact or a new card
  *
- * A cor NÃO pula na fronteira: o matiz desliza entre âncoras (verde → amarelo em 30% → laranja →
- * vermelho em 60%), então o medidor vai esquentando conforme a conversa cresce.
+ * The colour does NOT jump at the boundary: the hue glides between anchors (green → yellow at 30% →
+ * orange → red at 60%), so the meter warms up as the conversation grows.
  */
 
 import { interpolateHue } from "@/features/board/lib/planUsage";
 
-/** A conversa deixa de estar folgada aqui. */
+/** The conversation stops being comfortable here. */
 export const CONTEXT_WARN_AT = 30;
-/** Daqui pra cima a qualidade cai de verdade. */
+/** From here up the quality really drops. */
 export const CONTEXT_DANGER_AT = 60;
 
 export type ContextZone = "smart" | "warn" | "danger";
 
-/** A última leitura que o back mandou (ver back/src/services/sdk/contextUsage.ts). */
+/** The last reading the back sent (see back/src/services/sdk/contextUsage.ts). */
 export interface ContextUsageInfo {
   usedTokens: number;
   maxTokens: number;
@@ -31,7 +33,7 @@ export interface ContextUsageInfo {
   model?: string;
 }
 
-/** A faixa de um percentual. PURE. */
+/** The band of a percentage. PURE. */
 export function contextZone(percent: number): ContextZone {
   const pct = Number.isFinite(percent) ? percent : 0;
   if (pct >= CONTEXT_DANGER_AT) return "danger";
@@ -40,8 +42,8 @@ export function contextZone(percent: number): ContextZone {
 }
 
 /**
- * Âncoras do matiz. Verde firme até 15%; dali desliza para chegar AMARELO em 30% (a fronteira do
- * preocupante), laranja no meio da faixa e VERMELHO em 60%, onde o perigoso começa.
+ * Hue anchors. Solid green up to 15%; from there it glides to reach YELLOW at 30% (the boundary of
+ * worrying), orange in the middle of the band and RED at 60%, where dangerous begins.
  */
 const HUE_STOPS: readonly (readonly [pct: number, hue: number])[] = [
   [15, 142],
@@ -51,25 +53,25 @@ const HUE_STOPS: readonly (readonly [pct: number, hue: number])[] = [
   [100, 0],
 ];
 
-/** O matiz (hsl) de um percentual, contínuo. PURE. */
+/** The hue (hsl) of a percentage, continuous. PURE. */
 export function contextHue(percent: number): number {
   return interpolateHue(HUE_STOPS, percent);
 }
 
-/** `hsl(…)` do percentual, com alfa opcional (0..1). PURE. */
+/** `hsl(…)` of the percentage, with optional alpha (0..1). PURE. */
 export function contextColor(percent: number, alpha = 1): string {
   return `hsl(${contextHue(percent)} 80% 48% / ${alpha})`;
 }
 
-/** O degradê inteiro da régua, do frio ao quente — o mesmo caminho que a cor do medidor percorre. */
+/** The ruler's whole gradient, from cold to hot — the same path the meter's colour travels. */
 export function contextGradient(): string {
   const stops = [0, 15, 30, 45, 60, 100].map((p) => `${contextColor(p)} ${p}%`);
   return `linear-gradient(to right, ${stops.join(", ")})`;
 }
 
 /**
- * O que chegou no socket como leitura, ou null quando a forma não bate. O percentual é o do back
- * (back/src/services/sdk/contextUsage.ts, onde a regra mora); aqui só se confere a forma. PURE.
+ * What arrived on the socket as a reading, or null when the shape does not match. The percentage is the back's
+ * (back/src/services/sdk/contextUsage.ts, where the rule lives); here only the shape is checked. PURE.
  */
 export function parseContextUsage(raw: { usedTokens?: unknown; maxTokens?: unknown; percent?: unknown; model?: unknown }): ContextUsageInfo | null {
   const { usedTokens, maxTokens, percent, model } = raw;

@@ -1,19 +1,19 @@
 /**
- * Cor de sintaxe dos diffs, no padrão das IDEs (VS Code / Cursor): cada token na cor do tema
- * Dark+ (ou Light+ no tema claro) e o tipo da linha dito pelo FUNDO, não pelo texto.
+ * Syntax color for diffs, IDE-style (VS Code / Cursor): each token in the color of the Dark+ theme
+ * (or Light+ in the light theme) and the line's type told by the BACKGROUND, not by the text.
  *
- * O Shiki e as gramáticas só carregam quando um diff aparece na tela (import dinâmico): quem não
- * abre diff não paga o peso. Enquanto carrega, a linha sai na cor normal do texto.
+ * Shiki and the grammars only load when a diff appears on screen (dynamic import): whoever does not
+ * open a diff does not pay the weight. While it loads, the line comes out in the normal text color.
  */
 import type { HighlighterCore, LanguageInput } from "shiki/core";
 import type { DiffRow } from "@/features/board/lib/toolDiff";
 
-/** Um pedaço da linha com a cor dos dois temas (ausente = cor normal do texto). */
+/** A piece of the line with the color of both themes (absent = normal text color). */
 export interface SynToken { text: string; dark?: string; light?: string }
 
 type Loader = () => Promise<{ default: LanguageInput }>;
 
-/** Gramáticas suportadas. Explícitas para o bundler gerar só esses chunks. */
+/** Supported grammars. Explicit so the bundler generates only these chunks. */
 const LANGS: Record<string, Loader> = {
   typescript: () => import("shiki/langs/typescript.mjs"),
   tsx: () => import("shiki/langs/tsx.mjs"),
@@ -57,7 +57,7 @@ const BY_EXT: Record<string, string> = {
 
 const BY_NAME: Record<string, string> = { dockerfile: "dockerfile", ".bashrc": "shellscript", ".zshrc": "shellscript" };
 
-/** A linguagem pelo nome do arquivo; null quando não há gramática para ele. PURE. */
+/** The language from the file name; null when there is no grammar for it. PURE. */
 export function langFromPath(path: string | null | undefined): string | null {
   const name = String(path ?? "").split(/[\\/]/).pop()?.toLowerCase() ?? "";
   if (!name) return null;
@@ -65,11 +65,11 @@ export function langFromPath(path: string | null | undefined): string | null {
   const dot = name.lastIndexOf(".");
   const byExt = dot < 0 ? undefined : BY_EXT[name.slice(dot + 1)];
   if (byExt) return byExt;
-  // `Dockerfile.prod`, `dockerfile.dev`: o sufixo não é extensão de linguagem.
+  // `Dockerfile.prod`, `dockerfile.dev`: the suffix is not a language extension.
   return name.startsWith("dockerfile.") ? "dockerfile" : null;
 }
 
-/** Acima disso não colore: tokenizar um arquivo gigante trava a aba e ninguém lê tudo. */
+/** Above this it does not color: tokenizing a giant file freezes the tab and nobody reads it all. */
 const MAX_CHARS = 200_000;
 
 let core: Promise<HighlighterCore> | null = null;
@@ -87,7 +87,7 @@ function highlighter(): Promise<HighlighterCore> {
       engine: createJavaScriptRegexEngine({ forgiving: true }),
     });
   })();
-  // Falhou (rede, chunk de um deploy antigo): a próxima chamada tenta de novo em vez de herdar o erro.
+  // Failed (network, chunk from an old deploy): the next call tries again instead of inheriting the error.
   core.catch(() => {
     core = null;
   });
@@ -95,15 +95,15 @@ function highlighter(): Promise<HighlighterCore> {
 }
 
 /**
- * Tokens por linha de `code`, nas cores dos dois temas. null quando a linguagem não é suportada,
- * o texto é grande demais ou a gramática falhou — quem chama desenha sem cor.
+ * Tokens per line of `code`, in the colors of both themes. null when the language is not supported,
+ * the text is too big or the grammar failed — the caller draws without color.
  */
 export async function highlightLines(code: string, lang: string | null): Promise<SynToken[][] | null> {
   if (!lang || !LANGS[lang] || code.length > MAX_CHARS) return null;
   try {
     let ready = loaded.get(lang);
     if (!ready) {
-      // A gramática baixa junto com o núcleo, não depois dele.
+      // The grammar downloads together with the core, not after it.
       ready = Promise.all([highlighter(), LANGS[lang]!()]).then(([h, m]) => h.loadLanguage(m.default));
       ready.catch(() => loaded.delete(lang));
       loaded.set(lang, ready);
@@ -121,10 +121,10 @@ export async function highlightLines(code: string, lang: string | null): Promise
 }
 
 /**
- * Tokens para cada linha de um diff (null nas `hunk` ou sem cor). Cada trecho é colorido como os
- * dois pedaços de arquivo que forma — o antigo (contexto + removidas) e o novo (contexto +
- * adicionadas) — para um comentário ou string de várias linhas sair certo, como na IDE. Trechos são
- * independentes: um comentário aberto num não vaza para o próximo, que está longe no arquivo.
+ * Tokens for each line of a diff (null on `hunk` rows or without color). Each hunk is colored as the
+ * two file pieces it forms — the old one (context + removed) and the new one (context + added) — so
+ * a multi-line comment or string comes out right, as in the IDE. Hunks are independent: a comment
+ * opened in one does not leak into the next, which is far away in the file.
  */
 export async function highlightDiff(rows: readonly DiffRow[], lang: string | null): Promise<(SynToken[] | null)[] | null> {
   const segments: DiffRow[][] = [[]];
@@ -134,7 +134,7 @@ export async function highlightDiff(rows: readonly DiffRow[], lang: string | nul
   }
   const colored = await Promise.all(segments.map((seg) => highlightSegment(seg, lang)));
   if (colored.some((c) => c === null)) return null;
-  // Remonta na ordem original: cada `hunk` abre o próximo segmento.
+  // Reassembles in the original order: each `hunk` opens the next segment.
   const out: (SynToken[] | null)[] = [];
   let k = 0;
   let j = 0;
@@ -150,7 +150,7 @@ export async function highlightDiff(rows: readonly DiffRow[], lang: string | nul
   return out;
 }
 
-/** Tokens de um trecho sem separadores; o lado antigo só é tokenizado se houver removida. */
+/** Tokens of a hunk without separators; the old side is only tokenized if there is a removed line. */
 async function highlightSegment(rows: readonly DiffRow[], lang: string | null): Promise<(SynToken[] | null)[] | null> {
   if (rows.length === 0) return [];
   const before: string[] = [];
@@ -171,10 +171,10 @@ async function highlightSegment(rows: readonly DiffRow[], lang: string | null): 
   });
 }
 
-/** Um pedaço desenhável: o token (ou parte dele) e se cai no trecho que mudou dentro da linha. */
+/** A drawable piece: the token (or part of it) and whether it falls in the range that changed inside the line. */
 export interface SynPiece extends SynToken { marked: boolean }
 
-/** Corta os tokens no intervalo `mark` [início, fim) para o destaque da palavra não apagar a cor. PURE. */
+/** Cuts the tokens at the `mark` range [start, end) so the word highlight does not wipe the color. PURE. */
 export function splitByMark(tokens: readonly SynToken[], mark: readonly [number, number] | null): SynPiece[] {
   const out: SynPiece[] = [];
   let pos = 0;

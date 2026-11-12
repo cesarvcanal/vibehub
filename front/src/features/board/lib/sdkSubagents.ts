@@ -1,32 +1,33 @@
 /**
- * SUBAGENTES NO CHAT NATIVO — quem fez o quê.
+ * SUBAGENTS IN THE NATIVE CHAT — who did what.
  *
- * Um Agent/Task dispara um subagente, e o driver marca o que ele faz com `parentToolUseId` (a linha
- * guarda como `parent`). O fio é dividido: o principal segue como sempre (é ele que `groupSdkRows`
- * dobra), e o que é de cada subagente vai para debaixo do card da chamada que o disparou. PURE.
+ * An Agent/Task fires a subagent, and the driver tags what it does with `parentToolUseId` (the row
+ * stores it as `parent`). The thread is split: the main one goes on as always (it is the one
+ * `groupSdkRows` folds), and what belongs to each subagent goes under the card of the call that fired
+ * it. PURE.
  */
 
 import type { SdkRow } from "@/features/board/lib/sdkChat";
 
-/** As tools que disparam um subagente: `Agent` (nome atual no Claude Code) e `Task` (o antigo). */
+/** The tools that fire a subagent: `Agent` (current name in Claude Code) and `Task` (the old one). */
 export function isAgentTool(name: string): boolean {
   return name === "Agent" || name === "Task";
 }
 
 export interface SubagentSplit {
-  /** O fio principal: tudo que não é de um subagente com pai na tela. */
+  /** The main thread: everything that does not belong to a subagent whose parent is on screen. */
   main: SdkRow[];
-  /** As linhas de cada subagente, pelo id da chamada que o disparou, na ordem em que chegaram. */
+  /** Each subagent's rows, by the id of the call that fired it, in the order they arrived. */
   children: ReadonlyMap<string, readonly SdkRow[]>;
 }
 
 const NO_CHILDREN: ReadonlyMap<string, readonly SdkRow[]> = new Map();
 
 /**
- * Divide as linhas entre o fio principal e os subagentes. Uma filha cujo pai NÃO está na tela (o
- * replay tem janela e pode ter cortado a chamada) fica no fio principal: escondê-la seria apagar
- * trabalho que aconteceu. Sem subagente nenhum, devolve o MESMO array — o memo da tela não
- * redesenha a conversa por causa disto. PURE.
+ * Splits the rows between the main thread and the subagents. A child whose parent is NOT on screen
+ * (the replay has a window and may have cut the call) stays in the main thread: hiding it would erase
+ * work that happened. With no subagent at all, returns the SAME array — the screen's memo does not
+ * redraw the conversation because of this. PURE.
  */
 export function splitSubagentRows(
   rows: SdkRow[],
@@ -54,7 +55,7 @@ export function splitSubagentRows(
   return { main, children: previous && sameChildren(previous, children) ? previous : children };
 }
 
-/** Os dois mapas têm as mesmas linhas, pelas mesmas referências (o reducer preserva as intocadas). PURE. */
+/** The two maps have the same rows, by the same references (the reducer preserves the untouched ones). PURE. */
 function sameChildren(a: ReadonlyMap<string, readonly SdkRow[]>, b: ReadonlyMap<string, readonly SdkRow[]>): boolean {
   if (a.size !== b.size) return false;
   for (const [parent, list] of b) {
@@ -64,7 +65,7 @@ function sameChildren(a: ReadonlyMap<string, readonly SdkRow[]>, b: ReadonlyMap<
   return true;
 }
 
-/** O id do TodoWrite mais recente do fio principal — o único que a tela mostra aberto. PURE. */
+/** The id of the main thread's most recent TodoWrite — the only one the screen shows open. PURE. */
 export function latestTodoRowId(rows: readonly SdkRow[]): string | null {
   for (let i = rows.length - 1; i >= 0; i -= 1) {
     const row = rows[i] as SdkRow;

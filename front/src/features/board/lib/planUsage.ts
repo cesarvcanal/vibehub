@@ -3,15 +3,16 @@ import { formatResetIn } from "@/features/board/lib/usage";
 import { getLanguage, t } from "@/i18n";
 
 /**
- * QUANTO DO PLANO JÁ FOI, para quem trabalha no card — o medidor do topo e o aviso do chat.
+ * HOW MUCH OF THE PLAN IS ALREADY GONE, for whoever works on the card — the top meter and the chat
+ * warning.
  *
- * Duas fontes, a mesma conta: a leitura periódica (`GET /cards/:id/usage`, cache de 60s no back) e o
- * aviso AO VIVO do CLI (`rate_limit`, o "You've used 91% of your session limit" do rodapé do
- * terminal). O ao vivo é mais novo, então vence na janela que ele cobre; a leitura dá as janelas
- * sobre as quais o CLI ainda não falou. Nada aqui toca React nem rede.
+ * Two sources, the same count: the periodic reading (`GET /cards/:id/usage`, 60s cache in the back)
+ * and the CLI's LIVE warning (`rate_limit`, the "You've used 91% of your session limit" in the
+ * terminal's footer). The live one is newer, so it wins in the window it covers; the reading gives
+ * the windows the CLI has not spoken about yet. Nothing here touches React or the network.
  */
 
-/** O aviso ao vivo como o back o entrega: percentual 0..100 e epoch em ms. */
+/** The live warning as the back delivers it: percentage 0..100 and epoch in ms. */
 export interface RateLimitInfo {
   status: "allowed" | "allowed_warning" | "rejected";
   window: string;
@@ -20,8 +21,8 @@ export interface RateLimitInfo {
 }
 
 /**
- * Quatro tons, porque são quatro recados: tranquilo, fique de olho, está acabando, acabou (ou quase).
- * Amarelo e laranja são os dois degraus do "ainda tem, mas está indo" que o dono pediu.
+ * Four tones, because there are four messages: calm, keep an eye on it, running out, gone (or nearly).
+ * Yellow and orange are the two steps of "there is still some, but it is going" that the owner asked for.
  */
 export type UsageTone = "ok" | "yellow" | "orange" | "red";
 
@@ -29,7 +30,7 @@ export const YELLOW_AT = 70;
 export const ORANGE_AT = 85;
 export const RED_AT = 95;
 
-/** O tom de um percentual; `rejected` (limite estourado) é vermelho seja qual for o número. PURE. */
+/** The tone of a percentage; `rejected` (limit blown) is red whatever the number. PURE. */
 export function usageTone(utilization: number | null | undefined, rejected = false): UsageTone {
   if (rejected) return "red";
   if (typeof utilization !== "number" || !Number.isFinite(utilization)) return "ok";
@@ -41,25 +42,25 @@ export function usageTone(utilization: number | null | undefined, rejected = fal
 
 const TONE_RANK: Record<UsageTone, number> = { ok: 0, yellow: 1, orange: 2, red: 3 };
 
-/** Uma janela medida, já com o que a tela escreve. */
+/** A measured window, already with what the screen writes. */
 export interface PlanWindow {
-  /** A chave do CLI: `five_hour`, `seven_day`, `seven_day_opus`, … */
+  /** The CLI's key: `five_hour`, `seven_day`, `seven_day_opus`, … */
   key: string;
   label: string;
   /** 0..100 */
   utilization: number;
-  /** Epoch ms em que renova, ou null quando ninguém disse. */
+  /** Epoch ms at which it renews, or null when nobody said. */
   resetsAt: number | null;
 }
 
-/** As janelas da leitura periódica, na ordem de leitura, com a chave do CLI. */
+/** The windows of the periodic reading, in reading order, with the CLI's key. */
 const POLLED: readonly { key: string; field: "fiveHour" | "sevenDay" | "sevenDayOpus" }[] = [
   { key: "five_hour", field: "fiveHour" },
   { key: "seven_day", field: "sevenDay" },
   { key: "seven_day_opus", field: "sevenDayOpus" },
 ];
 
-/** O nome de uma janela, na frase "Sessão (5h)", "Semana", … Desconhecida = a própria chave. PURE. */
+/** The name of a window, in the sentence "Sessão (5h)", "Semana", … Unknown = the key itself. PURE. */
 export function windowLabel(key: string): string {
   switch (key) {
     case "five_hour":
@@ -78,7 +79,7 @@ export function windowLabel(key: string): string {
   }
 }
 
-/** O nome do LIMITE de uma janela, dentro de uma frase ("limite da sessão"). PURE. */
+/** The name of a window's LIMIT, inside a sentence ("limite da sessão"). PURE. */
 function limitName(key: string): string {
   switch (key) {
     case "five_hour":
@@ -94,14 +95,14 @@ function limitName(key: string): string {
   }
 }
 
-/** Um aviso ao vivo ainda vale: sem data, ou com a renovação no futuro. PURE. */
+/** A live warning still holds: no date, or with the renewal in the future. PURE. */
 function liveStillValid(info: RateLimitInfo, now: number): boolean {
   return info.resetsAt === undefined || info.resetsAt > now;
 }
 
 /**
- * As janelas a desenhar: as da leitura periódica, com o aviso ao vivo por cima onde ele tiver
- * número, mais as janelas que só o ao vivo conhece (o modelo médio, o excedente). PURE.
+ * The windows to draw: the ones from the periodic reading, with the live warning on top where it
+ * has a number, plus the windows only the live one knows (the mid model, the overage). PURE.
  */
 export function planWindows(
   usage: AccountUsage | undefined,
@@ -132,18 +133,18 @@ export function planWindows(
 }
 
 /**
- * A janela SEMANAL (todos os modelos) — o número que o medidor do topo mostra: é ela que diz se a
- * semana vai fechar, e é por ela que o dono acompanha o plano. Null sem leitura. PURE.
+ * The WEEKLY window (all models) — the number the top meter shows: it is the one that says whether
+ * the week will close out, and it is the one the owner follows the plan by. Null without a reading. PURE.
  */
 export function weeklyWindow(windows: readonly PlanWindow[]): PlanWindow | null {
   return windows.find((w) => w.key === "seven_day") ?? null;
 }
 
 /**
- * A cor de um percentual numa escala CONTÍNUA, verde → amarelo → laranja → vermelho: o medidor vai
- * esquentando conforme a semana enche, em vez de pular de cor em degraus. Verde até 50%; depois o
- * matiz desliza entre âncoras que batem com os tons do aviso — amarelo em 70%, laranja em 85%,
- * vermelho de 95% em diante. PURE.
+ * The colour of a percentage on a CONTINUOUS scale, green → yellow → orange → red: the meter warms
+ * up as the week fills, instead of jumping colour in steps. Green up to 50%; after that the hue
+ * glides between anchors that match the warning's tones — yellow at 70%, orange at 85%, red from
+ * 95% on. PURE.
  */
 const HUE_STOPS: readonly (readonly [pct: number, hue: number])[] = [
   [50, 142],
@@ -158,8 +159,8 @@ export function usageHue(utilization: number): number {
 }
 
 /**
- * O matiz de um percentual (preso em 0..100) entre âncoras `[pct, hue]` em ordem crescente: antes
- * da primeira, o matiz dela; entre duas, linear; depois da última, o matiz da última. PURE.
+ * The hue of a percentage (clamped to 0..100) between `[pct, hue]` anchors in ascending order: before
+ * the first, its hue; between two, linear; after the last, the last one's hue. PURE.
  */
 export function interpolateHue(stops: readonly (readonly [pct: number, hue: number])[], percent: number): number {
   const pct = Math.min(100, Math.max(0, Number.isFinite(percent) ? percent : 0));
@@ -174,32 +175,32 @@ export function interpolateHue(stops: readonly (readonly [pct: number, hue: numb
   return stops[stops.length - 1]![1];
 }
 
-/** `hsl(…)` do percentual, com alfa opcional (0..1). PURE. */
+/** `hsl(…)` of the percentage, with optional alpha (0..1). PURE. */
 export function usageColor(utilization: number, alpha = 1): string {
   return `hsl(${usageHue(utilization)} 80% 50% / ${alpha})`;
 }
 
-/** A janela mais cheia. Null sem nenhuma. PURE. */
+/** The fullest window. Null when there is none. PURE. */
 export function peakWindow(windows: readonly PlanWindow[]): PlanWindow | null {
   let peak: PlanWindow | null = null;
   for (const w of windows) if (!peak || w.utilization > peak.utilization) peak = w;
   return peak;
 }
 
-/** O aviso acima do campo do chat. */
+/** The warning above the chat's input field. */
 export interface PlanAlert {
   window: string;
   tone: Exclude<UsageTone, "ok">;
-  /** O limite estourou: o próximo turno não roda até renovar. */
+  /** The limit is blown: the next turn does not run until it renews. */
   rejected: boolean;
   utilization: number | null;
   resetsAt: number | null;
 }
 
 /**
- * O aviso a mostrar, ou null quando está tudo tranquilo. Um limite ESTOURADO (ao vivo) vem antes de
- * tudo; senão, a janela de tom mais grave (empate: a mais cheia). Um `allowed_warning` do CLI sem
- * número ainda é aviso — amarelo, o degrau mais baixo. PURE.
+ * The warning to show, or null when all is calm. A BLOWN limit (live) comes before
+ * everything; otherwise, the window with the most severe tone (tie: the fullest). A CLI `allowed_warning` with no
+ * number is still a warning — yellow, the lowest step. PURE.
  */
 export function planAlert(
   windows: readonly PlanWindow[],
@@ -233,8 +234,8 @@ export function planAlert(
 }
 
 /**
- * Quando a janela renova, em hora local: "17:59" se for hoje, "seg., 20/10 01:59" se não. PURE
- * (dado o fuso do navegador, que é o que a pessoa lê no relógio dela).
+ * When the window renews, in local time: "17:59" if it is today, "seg., 20/10 01:59" if not. PURE
+ * (given the browser's timezone, which is what the person reads on their own clock).
  */
 export function formatResetAt(at: number, now: number): string {
   const lang = getLanguage();
@@ -247,13 +248,13 @@ export function formatResetAt(at: number, now: number): string {
 
 const DAY_MS = 86_400_000;
 
-/** Uma espera de um dia ou mais: "1d 02h" — "26h 10m" obriga a fazer a conta de cabeça. PURE. */
+/** A wait of a day or more: "1d 02h" — "26h 10m" forces you to do the math in your head. PURE. */
 function formatDays(ms: number): string {
   const totalHours = Math.floor(ms / 3_600_000);
   return `${Math.floor(totalHours / 24)}d ${String(totalHours % 24).padStart(2, "0")}h`;
 }
 
-/** "renova em 1h 02m (17:59)" — ou "renova em instantes" quando a contagem já acabou. Null sem data. PURE. */
+/** "renova em 1h 02m (17:59)" — or "renova em instantes" when the countdown is already over. Null without a date. PURE. */
 export function resetPhrase(resetsAt: number | null, now: number): string | null {
   if (resetsAt === null) return null;
   const at = formatResetAt(resetsAt, now);
@@ -261,7 +262,7 @@ export function resetPhrase(resetsAt: number | null, now: number): string | null
   return inTime ? t("plan.resetsInAt", { time: inTime, at }) : t("plan.resetsSoon");
 }
 
-/** A frase do aviso do chat. PURE. */
+/** The sentence of the chat warning. PURE. */
 export function alertSentence(alert: PlanAlert, now: number): string {
   const limit = limitName(alert.window);
   const reset = resetPhrase(alert.resetsAt, now);

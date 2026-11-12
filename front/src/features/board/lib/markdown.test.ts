@@ -204,13 +204,13 @@ describe("uploadKind", () => {
     expect(uploadKind("1-x.opus")).toBe("audio");
     expect(uploadKind("1-x.pdf")).toBe("pdf");
     expect(uploadKind("1-x.xlsx")).toBe("spreadsheet");
-    // csv abre como texto numa aba (é como o back serve), não pelo preview de planilha.
+    // csv opens as text in a tab (that is how the back serves it), not through the spreadsheet preview.
     expect(uploadKind("1-x.csv")).toBe("text");
     expect(uploadKind("1-x.docx")).toBe("document");
     expect(uploadKind("1-x.pptx")).toBe("presentation");
     expect(uploadKind("1-x.txt")).toBe("text");
     expect(uploadKind("1-x.zip")).toBe("file");
-    // Nomes que existem no protótipo de Object não são tipo (a busca na tabela só vê chave própria).
+    // Names that exist on Object's prototype are not a type (the table lookup only sees own keys).
     for (const inherited of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
       expect(uploadKind(`1794341151810-a.${inherited.toLowerCase()}`)).toBe("file");
     }

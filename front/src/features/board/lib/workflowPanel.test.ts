@@ -38,7 +38,7 @@ describe("estimateWorkflowRemaining", () => {
       A("a3", { startedAt: 10_001 }),
       A("a4", { startedAt: 10_001 }),
     ];
-    // em voo 2 × 6s, fila 2 × 10s, concorrência observada 2 ⇒ 16s (o mesmo cálculo do back)
+    // in flight 2 × 6s, queue 2 × 10s, observed concurrency 2 ⇒ 16s (the same calculation as the back)
     expect(estimateWorkflowRemaining({ agents, total: 6, done: 2 }, 14_001)).toEqual({ remainingMs: 16_000, averageMs: 10_000 });
   });
 });
@@ -77,7 +77,7 @@ describe("groupAgentsByPhase / phasePills", () => {
   it("rodada terminada: fase com agente que não respondeu é 'stopped', não 'current'", () => {
     const agents = [A("a1", { phase: "Verify", status: "done" }), A("a2", { phase: "Verify" }), A("a3", { phase: "Review", status: "stopped" })];
     expect(phasePills(agents, ["Review", "Verify"], true).map((p) => p.state)).toEqual(["stopped", "stopped"]);
-    // Em andamento, quem roda segue 'current'; o 'stopped' explícito nunca é 'current'.
+    // In progress, whoever runs stays 'current'; the explicit 'stopped' is never 'current'.
     expect(phasePills(agents, ["Review", "Verify"]).map((p) => p.state)).toEqual(["stopped", "current"]);
   });
 });

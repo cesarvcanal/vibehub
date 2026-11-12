@@ -1,7 +1,7 @@
 /**
  * A deadline for the image upload, which used to have none.
  *
- * Produção, 2026-10-31: an image attached on the phone spun forever ("0 of 2 images uploaded…")
+ * Production, 2026-10-31: an image attached on the phone spun forever ("0 of 2 images uploaded…")
  * until the card was closed and opened again. The server logs show the original page's request
  * never arrived — only the re-send from the reopened page did. A request on a dead connection (iOS
  * putting the tab in the background, the VPN re-handshaking) neither answers nor fails, and with no
