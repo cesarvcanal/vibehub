@@ -854,14 +854,6 @@ export function modelLabelFor(model: string | null | undefined): string | null {
   return `${name} ${version[3] ? `${version[2]}.${version[3]}` : version[2]}`;
 }
 
-/**
- * The model of the LAST assistant turn in a transcript — what the session is actually using right
- * now, whatever the card or the account says it should be. Malformed lines are skipped. PURE.
- */
-export function parseLastModel(jsonl: string): string | null {
-  return parseLastTurn(jsonl).model;
-}
-
 /** Epoch ms of a transcript entry's `timestamp`, 0 when it has none. PURE. */
 function entryTime(obj: object): number {
   const ts = (obj as { timestamp?: unknown }).timestamp;

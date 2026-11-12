@@ -1622,10 +1622,10 @@ describe("board registry (persisted)", () => {
     it("a board.json from before the receipts (bare names) still owes — and settles — its removals", async () => {
       await writeFile(join(dir, "board.json"), JSON.stringify({ mcpDrops: ["erp", 7] }));
       const legacy = await freshRegistry();
-      expect(await legacy.pendingMcpDrops()).toEqual(["erp"]);
+      expect((await legacy.owedMcpDrops()).map((d) => d.name)).toEqual(["erp"]);
       const owed = await legacy.owedMcpDrops();
       await legacy.settleMcpDrops(owed);
-      expect(await legacy.pendingMcpDrops()).toEqual([]);
+      expect((await legacy.owedMcpDrops()).map((d) => d.name)).toEqual([]);
     });
   });
   it("stampCardActor: registra quem está trabalhando e diz quando MUDOU", async () => {
@@ -1714,7 +1714,6 @@ describe("board registry (persisted)", () => {
     it("REFUSES to remove an account a project still points at", async () => {
       const org = await connect("acme org", "acme-inc");
       const project = await seedProject({ githubConnectionId: org.id });
-      expect(await reg.projectsUsingGithubConnection(org.id)).toHaveLength(1);
       await expect(reg.removeGithubConnection(org.id)).rejects.toThrow(/in use by 1 project/);
 
       await reg.updateProject(project.id, { githubConnectionId: null });

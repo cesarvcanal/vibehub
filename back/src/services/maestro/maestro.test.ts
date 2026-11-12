@@ -768,9 +768,9 @@ describe("session introspection", () => {
       line({ type: "user", message: { content: "x" } }),
       line({ type: "assistant", message: { model: "claude-opus-5", content: [] } }),
     ].join("\n");
-    expect(maestro.parseLastModel(jsonl)).toBe("claude-opus-5");
-    expect(maestro.parseLastModel("")).toBeNull();
-    expect(maestro.parseLastModel('{"type":"assi')).toBeNull();
+    expect(maestro.parseLastTurn(jsonl).model).toBe("claude-opus-5");
+    expect(maestro.parseLastTurn("").model).toBeNull();
+    expect(maestro.parseLastTurn('{"type":"assi').model).toBeNull();
   });
 
   it("maps model ids to the names the UI shows, VERSION included, and passes unknown ids through", async () => {

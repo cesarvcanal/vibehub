@@ -1494,14 +1494,6 @@ const BUSY_MARKER = "esc to interrupt";
 /** How many lines of the pane bottom to look at: the footer, not the conversation. PURE. */
 const PANE_TAIL_LINES = 12;
 
-/** true = this pane capture shows Claude actually generating. PURE/testable. */
-export function paneLooksBusy(pane: string): boolean {
-  const lines = String(pane ?? "").split("\n");
-  return lines
-    .slice(-PANE_TAIL_LINES)
-    .some((line) => line.toLowerCase().includes(BUSY_MARKER));
-}
-
 /** Parses one `<session> <state>` line of the probe output. PURE. */
 export function parseProbeOutput(stdout: string): Map<string, SessionState> {
   const out = new Map<string, SessionState>();

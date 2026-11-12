@@ -2224,36 +2224,6 @@ describe("pre-provisioning (prepareCard) and the per-clone lock", () => {
  * means "not running".
  */
 describe("session probe (busy / idle / gone) and the pending-pause reconciler", () => {
-  /** The footer Claude Code prints WHILE it generates — the marker the probe keys on. */
-  const BUSY_PANE = [
-    "● Running the tests",
-    "✶ Thundering… (1m 8s · ↓ 3.6k tokens)",
-    "❯ ",
-    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ← for agents",
-  ].join("\n");
-  /** The same card one second later, with nothing running. */
-  const IDLE_PANE = [
-    "● OK",
-    "❯ ",
-    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents",
-  ].join("\n");
-  /** The screen a resumed card sits on until somebody answers it — no hook ever fires here. */
-  const RESUME_MENU = [
-    "  This session is 13h 56m old and 327.8k tokens.",
-    "  ❯ 1. Resume from summary (recommended)",
-    "    2. Resume full session as-is",
-    "  Enter to confirm · Esc to cancel",
-  ].join("\n");
-
-  it("paneLooksBusy: only the 'esc to interrupt' footer counts as working", () => {
-    expect(ws.paneLooksBusy(BUSY_PANE)).toBe(true);
-    expect(ws.paneLooksBusy(IDLE_PANE)).toBe(false);
-    expect(ws.paneLooksBusy(RESUME_MENU)).toBe(false);
-    expect(ws.paneLooksBusy("")).toBe(false);
-    // The marker in the SCROLLBACK is not the footer: only the bottom of the pane is the status line.
-    expect(ws.paneLooksBusy(["esc to interrupt", ...Array(30).fill("output")].join("\n"))).toBe(false);
-  });
-
   it("buildSessionProbeScript: read-only, session names quoted, one round trip for every card", () => {
     const script = ws.buildSessionProbeScript(CONTAINER, ["card-aaaa1111", "card-bbbb2222"]);
     expect(script).toContain(`docker exec '${CONTAINER}'`);

@@ -1309,11 +1309,6 @@ export async function updateGithubConnection(
   });
 }
 
-/** Projects that explicitly point at this connection — what makes a removal unsafe. */
-export async function projectsUsingGithubConnection(id: string): Promise<Project[]> {
-  return (await store.load()).projects.filter((p) => p.githubConnectionId === id);
-}
-
 /**
  * Removes a GitHub account. REFUSES while any project still points at it — dropping it blindly would
  * leave projects with a credential that no longer exists and every clone would fail at open time.
@@ -2476,11 +2471,6 @@ export async function removeMcp(id: string): Promise<McpServer> {
     doc.mcpDrops.push({ name: found.name, id: randomUUID() });
     return found;
   });
-}
-
-/** Names of deleted MCPs the runner has not removed yet (see `removeMcp`), each once. */
-export async function pendingMcpDrops(): Promise<string[]> {
-  return [...new Set((await store.load()).mcpDrops.map((d) => d.name))];
 }
 
 /** The removals owed right now, receipts included — what `dropDeletedMcps` pays and then settles. */
