@@ -4,7 +4,7 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { join } from "node:path";
 import { dataPath } from "../../config/env.js";
 import { logger } from "../../utils/logger.js";
-import { CARD_ID_RE } from "../board/cardId.js";
+import { CARD_ID_RE, UUID_RE } from "../board/cardId.js";
 
 /**
  * IN-FLIGHT TURN MARKERS — the durable record that a card's SDK driver has a turn RUNNING.
@@ -84,9 +84,7 @@ const OWNER_HEARTBEAT_MS = 3_000;
  */
 export const OWNER_STALE_MS = 12_000;
 
-/** O mesmo nome nos dois lados: só um id com cara de UUID vira caminho. */
-const OWNER_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
+/** Só um id com cara de UUID (`UUID_RE`) vira caminho: quem chama `ownerFile` com um de fora confere antes. */
 function ownerFile(owner: string): string {
   return dataPath(SDK_INFLIGHT_DIR, "owners", owner);
 }
@@ -242,7 +240,7 @@ export async function pruneStaleInflightOwners(): Promise<void> {
     return; // sem diretório, nada a recolher
   }
   for (const owner of owners) {
-    if (owner === INFLIGHT_OWNER || !OWNER_RE.test(owner)) continue;
+    if (owner === INFLIGHT_OWNER || !UUID_RE.test(owner)) continue;
     if (await isInflightOwnerAlive(owner)) continue;
     await rm(ownerFile(owner), { force: true }).catch(() => undefined);
   }
@@ -250,7 +248,7 @@ export async function pruneStaleInflightOwners(): Promise<void> {
 
 /** O processo que assinou um marcador ainda está vivo? Batimento ausente ou velho = não. */
 export async function isInflightOwnerAlive(owner: string): Promise<boolean> {
-  if (!OWNER_RE.test(owner)) return false;
+  if (!UUID_RE.test(owner)) return false;
   try {
     const { mtimeMs } = await stat(ownerFile(owner));
     return Date.now() - mtimeMs < OWNER_STALE_MS;

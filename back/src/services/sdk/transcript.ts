@@ -1,5 +1,6 @@
 import { shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { parseChatEvents, type ChatEvent } from "../chat/chat.js";
+import { UUID_RE } from "../board/cardId.js";
 import type { Card } from "../board/registry.js";
 import type { HistoryEvent } from "./history.js";
 
@@ -23,9 +24,6 @@ import type { HistoryEvent } from "./history.js";
 
 /** How many transcript lines one connect converts. Matches the old chat's replay window. */
 const TUI_TAIL_LINES = 400;
-
-/** Session ids are UUIDs minted by Claude Code — anything else is not a resume target. */
-const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Read-only probe: the newest transcript's SESSION ID (its basename) on the first line, then its
@@ -58,7 +56,8 @@ export function parseLatestTranscript(stdout: string): LatestTranscript {
   const nl = raw.indexOf("\n");
   const first = (nl < 0 ? raw : raw.slice(0, nl)).trim();
   const jsonl = nl < 0 ? "" : raw.slice(nl + 1);
-  return { sessionId: SESSION_ID_RE.test(first) ? first : null, jsonl };
+  // Session ids are UUIDs minted by Claude Code — anything else is not a resume target.
+  return { sessionId: UUID_RE.test(first) ? first : null, jsonl };
 }
 
 /**

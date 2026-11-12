@@ -5,3 +5,6 @@
  * One rule, here, instead of a copy per module that could drift.
  */
 export const CARD_ID_RE = /^[0-9a-zA-Z-]{8,64}$/;
+
+/** A UUID, any case — the shape of the ids Claude Code (session ids) and this back (owner ids) mint. */
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

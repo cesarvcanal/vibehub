@@ -3,6 +3,7 @@ import { JsonStore } from "../../store/jsonStore.js";
 import { dataPath } from "../../config/env.js";
 import { logger } from "../../utils/logger.js";
 import { allocateBrowserSlot, cardBrowserSlot, isBrowserSlotPort, rememberBrowserSlot, SLOT_SPACE } from "../browser/ports.js";
+import { UUID_RE } from "./cardId.js";
 
 /**
  * BOARD REGISTRY — the projects and cards of the kanban of Claude Code terminals.
@@ -938,8 +939,6 @@ export function assertBranchName(branch: string): string {
   }
   return v;
 }
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Claude session uuid (resumeSessionId) — becomes argv of `claude --resume`. THROWS otherwise. PURE. */
 export function assertSessionId(id: string): string {

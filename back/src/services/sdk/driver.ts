@@ -9,6 +9,7 @@ import { accountConfigDir } from "../accounts/profiles.js";
 import { oauthTokenGuard, DEFAULT_CLAUDE_DIR } from "../accounts/profiles.js";
 import { carryTranscriptsCommand } from "../accounts/carryTranscripts.js";
 import { effectiveAccountSlug, modelPin, isValidEffort, assertSessionId, type Card, type Project } from "../board/registry.js";
+import { CARD_ID_RE } from "../board/cardId.js";
 import { cardCdpEndpoint } from "../browser/ports.js";
 import { statusUrl } from "../../runtime/runner.js";
 import { getSettings } from "../settings/settings.js";
@@ -150,7 +151,6 @@ function assertSafeUrl(url: string): string {
   if (!SAFE_URL_RE.test(url)) throw new Error(`unsafe URL for the driver environment: '${url}'`);
   return url;
 }
-const CARD_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
  * The remote command line that runs the driver in the runner: `docker exec -i <c> bash -c '<guard>;

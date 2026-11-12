@@ -33,7 +33,7 @@ describe("sdkDriverCommand — o driver fala NDJSON por pipes, nunca por um tty"
       pipeCommand: (line: string) => ({ file: "ssh", args: ["runner", line] }),
     } as unknown as HostExecutor);
     const project = { id: "p1", name: "scratch" } as unknown as Project;
-    const card = { id: "card-1", projectId: "p1", worktreeSlug: "card-1" } as unknown as Card;
+    const card = { id: "card-0001", projectId: "p1", worktreeSlug: "card-0001" } as unknown as Card;
     const { file, args } = await sdkDriverCommand(project, card);
     expect(file).toBe("ssh");
     expect(args).not.toContain("-tt");
@@ -114,13 +114,13 @@ describe("buildSdkDriverCommandLine", () => {
     const line = buildSdkDriverCommandLine({
       ...base,
       cdpEndpoint: "http://127.0.0.1:39222",
-      cardId: "card-1",
+      cardId: "card-0001",
       statusUrl: "https://hub.example.com/api/runner/status",
     });
     expect(line).toContain("PW_CDP_ENDPOINT=");
     expect(line).toContain("http://127.0.0.1:39222");
     expect(line).toContain("VIBEHUB_CARD_ID=");
-    expect(line).toContain("card-1");
+    expect(line).toContain("card-0001");
     expect(line).toContain("VIBEHUB_STATUS_URL=");
     expect(line).toContain("https://hub.example.com/api/runner/status");
     // Without them, nothing is exported — a driver spawned by an older path stays valid.
@@ -130,13 +130,13 @@ describe("buildSdkDriverCommandLine", () => {
   });
 
   it("exports the card's git include — the native chat's git acts as the card's author in ANY repository", () => {
-    const line = buildSdkDriverCommandLine({ ...base, cardId: "card-1" });
+    const line = buildSdkDriverCommandLine({ ...base, cardId: "card-0001" });
     // The PATH, never a token: the identity behind it is rewritten in the file on every author switch.
     expect(line).toContain("GIT_CONFIG_COUNT=");
     expect(line).toContain("GIT_CONFIG_KEY_0=");
     expect(line).toContain("include.path");
     expect(line).toContain("GIT_CONFIG_VALUE_0=");
-    expect(line).toContain("/root/.vibehub/git/card-1.gitconfig");
+    expect(line).toContain("/root/.vibehub/git/card-0001.gitconfig");
     // A token exported at spawn would be frozen there — the gh wrapper reads the card's file instead.
     expect(line).not.toContain("GH_TOKEN");
     expect(buildSdkDriverCommandLine(base)).not.toContain("GIT_CONFIG_COUNT");
