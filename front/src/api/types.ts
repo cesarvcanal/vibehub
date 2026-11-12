@@ -297,11 +297,11 @@ export interface GithubRepo {
   updatedAt: string;
 }
 
-/** `GET /api/github/repos/:owner/:repo/branches` — todas as branches, a padrão primeiro. */
+/** `GET /api/github/repos/:owner/:repo/branches` — every branch, the default one first. */
 export interface GithubBranches {
   branches: string[];
   defaultBranch: string | null;
-  /** O repo tem mais branches do que o back lê; a lista veio cortada. */
+  /** The repo has more branches than the back reads; the list came truncated. */
   truncada: boolean;
 }
 

@@ -1,6 +1,6 @@
 import * as React from "react";
 
-/** `Date.now()` que se refaz a cada segundo enquanto `active` — e nenhum timer quando não. */
+/** `Date.now()` that refreshes every second while `active` — and no timer when not. */
 export function useNow(active: boolean): number {
   const [, setTick] = React.useState(0);
   React.useEffect(() => {
@@ -11,7 +11,7 @@ export function useNow(active: boolean): number {
   return Date.now();
 }
 
-/** A aba está à vista? Escondida, um relógio na tela não precisa andar. */
+/** Is the tab in view? When hidden, an on-screen clock does not need to tick. */
 export function usePageVisible(): boolean {
   const read = (): boolean => typeof document === "undefined" || document.visibilityState !== "hidden";
   const [visible, setVisible] = React.useState(read);

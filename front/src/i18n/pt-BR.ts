@@ -1,15 +1,15 @@
 /**
- * Português (Brasil).
+ * Portuguese (Brazil).
  *
- * Registro: direto e informal-profissional, do jeito que um dev brasileiro fala no dia a dia —
- * "Pausar", "Reiniciar", "Concluir", "Aplicar agora". Nomes de produto e termos técnicos ficam como
- * são (vibehub, GitHub, Claude, MCP, tmux, worktree, Shell, branch, token, runner): traduzir isso
- * não ajuda ninguém a achar o comando no terminal.
+ * Register: direct and informal-professional, the way a Brazilian dev talks day to day —
+ * "Pausar", "Reiniciar", "Concluir", "Aplicar agora". Product names and technical terms stay as
+ * they are (vibehub, GitHub, Claude, MCP, tmux, worktree, Shell, branch, token, runner): translating
+ * them helps nobody find the command in the terminal.
  *
- * Uma chave que faltar aqui cai no inglês de `en.ts` — nunca na chave crua.
+ * A key missing here falls back to the English of `en.ts` — never to the raw key.
  */
 export const ptBR: Record<string, string> = {
-  /* ------------------------------------------------------------------ comum */
+  /* ----------------------------------------------------------------- common */
   "error.crashTitle": "Alguma coisa quebrou nesta tela",
   "error.crashBody": "A página parou de renderizar. Recarregar costuma resolver na hora — o erro abaixo é o que aconteceu.",
   "error.crashReload": "Recarregar a página",
@@ -30,7 +30,7 @@ export const ptBR: Record<string, string> = {
   "common.checking": "Verificando…",
   "common.saving": "Salvando…",
 
-  /* ------------------------------------------------------------ erros da API */
+  /* -------------------------------------------------------------- api errors */
   "error.generic": "Algo deu errado",
   "apiError.notFound": "não encontrado",
   "apiError.notAuthenticated": "não autenticado",
@@ -63,7 +63,7 @@ export const ptBR: Record<string, string> = {
   "auth.forgot":
     "Esqueceu a senha? Não tem recuperação por e-mail — recupere pelo servidor, onde fica o diretório de dados.",
 
-  /* ----------------------------------------------------------------- conta */
+  /* --------------------------------------------------------------- account */
   "account.group": "Conta",
   "account.fallback": "conta",
   "account.signedIn": "Conectado como",
@@ -75,7 +75,7 @@ export const ptBR: Record<string, string> = {
   "account.editUserHint": "Sua conta ({name}): defina uma nova senha.",
   "account.access": "Acessos",
 
-  /* --------------------------------------------------------------- acessos */
+  /* ---------------------------------------------------------------- access */
   "access.title": "Acessos",
   "access.description": "Quem entra nesta instalação. Você cria a conta e passa usuário e senha — não existe cadastro nem convite por e-mail.",
   "access.memberDescription": "Sua conta nesta instalação.",
@@ -122,7 +122,7 @@ export const ptBR: Record<string, string> = {
   "access.projectShared": "Projeto compartilhado com {name}.",
   "access.projectUnshared": "Compartilhamento removido de {name}.",
 
-  /* ------------------------------------------------------ compartilhamento */
+  /* --------------------------------------------------------------- sharing */
   "share.cardTitle": "Compartilhar este card",
   "share.projectTitle": "Compartilhar este projeto",
   "share.cardHint": "Quem mais trabalha em \u201c{title}\u201d. A pessoa recebe este card e nada mais.",
@@ -137,13 +137,13 @@ export const ptBR: Record<string, string> = {
   "card.share": "Compartilhar…",
   "project.share": "Compartilhar…",
 
-  /* ------------------------------------------------------------------- tema */
+  /* ------------------------------------------------------------------ theme */
   "theme.system": "Sistema",
   "theme.dark": "Escuro",
   "theme.light": "Claro",
   "theme.menuLabel": "Tema",
 
-  /* ---------------------------------------------------------- configuração */
+  /* ----------------------------------------------------------------- setup */
   "setup.readingState": "Lendo o estado da configuração",
   "setup.firstRun": "configuração inicial",
   "setup.rail": "Etapas da configuração",
@@ -241,12 +241,12 @@ export const ptBR: Record<string, string> = {
   "github.addAccount": "+ conta",
   "github.connectFailed": "O GitHub não aceitou esse token.",
 
-  /* ------------------------------------------------------------ caixa de log */
+  /* ----------------------------------------------------------------- log box */
   "log.waiting": "Esperando a saída…",
   "log.aria": "Saída do provisionamento",
   "log.finished": "— provisionamento concluído —",
 
-  /* ---------------------------------------------------------------- colunas */
+  /* ---------------------------------------------------------------- columns */
   "column.backlog": "Backlog",
   "column.paused": "Pausados",
   "column.waiting": "Aguardando",
@@ -370,7 +370,7 @@ export const ptBR: Record<string, string> = {
   "sidebar.expandProject": "Mostrar os cards de {name}",
   "sidebar.collapseProject": "Ocultar os cards de {name}",
 
-  /* ---------------------------------------------------------- tela do card */
+  /* ------------------------------------------------------------- card view */
   "cardView.refreshError": "Não deu pra atualizar o card no runner",
   "cardView.restarting": "Reiniciando — a conversa continua de onde parou.",
   "cardView.restartError": "Não deu pra reiniciar o terminal",
@@ -505,7 +505,7 @@ export const ptBR: Record<string, string> = {
   "chat.systemSender": "Sistema (vibehub)",
   "chat.openSenderCard": "Abrir o card que enviou esta mensagem",
 
-  /* ------------------------------------------------------ chat nativo (SDK) */
+  /* ------------------------------------------------------ native chat (SDK) */
   "sdk.undelivered": "não entregue ao servidor",
   "sdk.undeliveredRetrying": "— tentando de novo sozinho",
   "sdk.queueTitle.one": "1 mensagem esperando",
@@ -596,8 +596,8 @@ export const ptBR: Record<string, string> = {
   "sdk.edit": "Editar mensagem",
   "sdk.edited": "editada",
   "sdk.preparing": "Preparando\u2026",
-  /* Verbos e notas do indicador de trabalho (lib/workingStage.ts): o verbo troca com o tempo e a
-     nota escala — é o que diz, num turno de 4 minutos, que a coisa continua viva. */
+  /* The working indicator's verbs and notes (lib/workingStage.ts): the verb changes over time and the
+     note escalates — it is what says, in a 4-minute turn, that the thing is still alive. */
   "sdk.verb.thinking": "Pensando…",
   "sdk.verb.reasoning": "Raciocinando…",
   "sdk.verb.pondering": "Elaborando…",
@@ -880,7 +880,7 @@ export const ptBR: Record<string, string> = {
   "terminal.largerHint": "Texto maior (Cmd/Ctrl +)",
   "terminal.jumpToLatest": "Ir pro fim",
 
-  /* ------------------------------------------------------------ faixa do runner */
+  /* -------------------------------------------------------------- runner banner */
   "runner.checking": "Verificando o runner…",
   "runner.chip": "runner",
   "runner.shellHeader": "Shell do runner",
@@ -944,7 +944,7 @@ export const ptBR: Record<string, string> = {
   "vnc.intro":
     "O Chromium do próprio card, ao vivo. Por padrão você só assiste — o agente dirige e o ponto laranja mostra onde ele clica. Quando precisar (uma senha, um captcha), clique em \"Assumir controle\".",
 
-  /* ------------------------------------------------------------- novo card */
+  /* -------------------------------------------------------------- new card */
   "newCard.title": "Novo card",
   "newCard.description":
     "Só a tarefa. A branch, o worktree e a sessão do terminal saem do título, dentro do runner.",
@@ -989,7 +989,7 @@ export const ptBR: Record<string, string> = {
   "branchPicker.badge.principal": "principal",
   "branchPicker.badge.desenvolvimento": "desenvolvimento",
 
-  /* ---------------------------------------------------------------- projeto */
+  /* ---------------------------------------------------------------- project */
   "project.settingsTitle": "Configurações do projeto",
   "project.newTitle": "Novo projeto",
   "project.description":
@@ -1015,7 +1015,7 @@ export const ptBR: Record<string, string> = {
   "project.save": "Salvar projeto",
   "project.create": "Criar projeto",
 
-  /* ---------------------------------------------------------- configurações */
+  /* --------------------------------------------------------------- settings */
   "settings.title": "Configurações",
   "settings.description":
     "As escolhas desta instalação. Segredos ficam guardados no cofre e nunca são mostrados de novo.",
@@ -1105,7 +1105,7 @@ export const ptBR: Record<string, string> = {
   "capture.dismiss": "Agora não",
   "capture.saved": "Acesso salvo no Cofre.",
 
-  /* ----------------------------------------------------------------- contas */
+  /* --------------------------------------------------------------- accounts */
   "accounts.aria": "Contas Claude",
   "accounts.title": "Contas Claude",
   "accounts.description1":
@@ -1135,7 +1135,7 @@ export const ptBR: Record<string, string> = {
   "accounts.removeToken": "Remover o token",
   "accounts.saveToken": "Salvar o token",
 
-  /* -------------------------------------------------------- uso do plano */
+  /* ---------------------------------------------------------- plan usage */
   "plan.window.fiveHour": "Sessão atual",
   "plan.window.sevenDay": "Semana, todos os modelos",
   "plan.window.sevenDayOpus": "Semana, modelo mais forte",
@@ -1198,7 +1198,7 @@ export const ptBR: Record<string, string> = {
     "o login guardado não consegue ler o uso — rode /login de novo em {path}",
   "usage.error.unreachable": "não deu pra ler o uso agora",
 
-  /* ---------------------------------------------------------------- cérebro */
+  /* ------------------------------------------------------------------ brain */
   /* ---------------------------------------------------------------- skills */
   "plugins.aria": "Skills",
   "plugins.buttonTitle": "Skills — plugins oficiais da Anthropic em todo card",
@@ -1257,7 +1257,7 @@ export const ptBR: Record<string, string> = {
     "{where}. {restarted} terminal(is) reiniciado(s), {skipped} seguem trabalhando.",
   "brain.appliedPlain": "{where}.",
 
-  /* ------------------------------------------------------ resultado do apply */
+  /* ----------------------------------------------------------- apply outcome */
   "applyOutcome.notPushed":
     "{subject} — salvo, mas não deu pra empurrar pro runner. Use “Aplicar em todo lugar”.",
   "applyOutcome.savedApplied": "{subject} — salvo e aplicado.",
@@ -1314,7 +1314,7 @@ export const ptBR: Record<string, string> = {
   "mcp.valuesSubject.one": "{n} valor em “{name}”",
   "mcp.valuesSubject.other": "{n} valores em “{name}”",
 
-  /* --------------------------------------------------------------- avisos */
+  /* -------------------------------------------------------------- notices */
   "toast.cardCreateError": "Não deu pra criar o card",
   "toast.projectDeleted": "Projeto excluído.",
   "toast.projectDeleteError": "Não deu pra excluir o projeto",
@@ -1369,11 +1369,11 @@ export const ptBR: Record<string, string> = {
   "toast.mcpApplyError": "Não deu pra aplicar os servidores MCP",
   "toast.mcpValuesSaveError": "Não deu pra salvar os valores",
 
-  /* ------------------------------------------------------------ confirmações */
+  /* ----------------------------------------------------------- confirmations */
   "confirm.restartWorking": "O Claude está trabalhando — reiniciar vai interromper. Continuar?",
   "confirm.restartWorkingAgent":
     "O agente está trabalhando — reiniciar interrompe. Continuar?",
-  /* modo de voz (POC) */
+  /* voice mode (POC) */
   "voice.mute": "Silenciar microfone",
   "voice.unmute": "Reativar microfone",
   "voice.err.startTimeout": "A sessão de voz demorou demais para começar.",
@@ -1412,7 +1412,7 @@ export const ptBR: Record<string, string> = {
   "voice.turn.unsaved": "Ainda não salvo — tentando de novo",
   "composer.voiceChat": "Conversar por voz (GPT-Live)",
 
-  /* ------------------------------------------------------- revisão de PR */
+  /* ----------------------------------------------------------- PR review */
   "review.pill.none": "sem revisão",
   "review.pill.round": "rodada {round}/{max}",
   "review.pill.ready": "pronto pra merge",
@@ -1468,7 +1468,7 @@ export const ptBR: Record<string, string> = {
   "review.role.coauthor": "co-autor",
   "review.role.merger": "responsável pelo merge",
 
-  /* painel de acompanhamento da revisão */
+  /* review follow-up panel */
   "review.pill.cancelled": "cancelada",
   "review.panel.title": "Revisão de PR",
   "review.panel.aria": "Revisão do PR #{n}",
@@ -1629,7 +1629,7 @@ export const ptBR: Record<string, string> = {
   "review.cancel.confirm": "Cancelar a revisão do PR #{num}? As IAs param e o PR fica sem revisão.",
   "review.sidebar.hint": "Abrir a revisão do PR #{num}",
 
-  /* ------------------------------------------------------- laboratório de voz */
+  /* ---------------------------------------------------------------- voice lab */
   "voiceLab.scalar.thickness": "Grossura",
   "voiceLab.scalar.flowSpeed": "Fluxo normal",
   "voiceLab.scalar.accelSpeed": "Velocidade máxima",

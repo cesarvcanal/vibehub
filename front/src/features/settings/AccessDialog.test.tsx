@@ -271,7 +271,7 @@ describe("AccessDialog — a identidade no GitHub de uma pessoa", () => {
     const before = asked();
     await userEvent.selectOptions(screen.getByTestId(`user-claude-account-${OWNER.id}`), "mussa");
     await userEvent.click(screen.getByTestId(`user-git-save-${OWNER.id}`));
-    // /auth/me é de onde o diálogo de novo card lê a conta da pessoa.
+    // /auth/me is where the new-card dialog reads the person's account from.
     await waitFor(() => expect(asked()).toBeGreaterThan(before));
   });
 

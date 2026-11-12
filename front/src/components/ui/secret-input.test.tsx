@@ -3,17 +3,17 @@ import { render, screen } from "@testing-library/react";
 import { SecretInput } from "./secret-input";
 
 /**
- * THE INCIDENT (produção, 02/10/2026): o formulário "adicionar conta do GitHub" abriu PREENCHIDO
- * com o login salvo do dono — o nome da conta veio "cesar" e a caixa do token veio com a senha do
- * painel. A segunda pessoa não conseguia cadastrar a conta dela, e apertar o botão teria mandado
- * uma senha pro GitHub como se fosse token. `autocomplete="off"` não segura: navegador ignora em
- * campo com cara de senha.
+ * THE INCIDENT (production, 02/10/2026): the "add GitHub account" form opened PREFILLED with the
+ * owner's saved login — the account name came as "cesar" and the token box came with the panel's
+ * password. The second person could not register their own account, and pressing the button would
+ * have sent a password to GitHub as if it were a token. `autocomplete="off"` does not hold: browsers
+ * ignore it on a field that looks like a password.
  */
 describe("SecretInput — segredo não é login", () => {
   it("pede ao navegador para NÃO tratar como credencial salva", () => {
     render(<SecretInput name="vibehub-github-token" aria-label="token" />);
     const field = screen.getByLabelText("token");
-    // `new-password` é o valor que os navegadores respeitam; `off` eles ignoram aqui.
+    // `new-password` is the value browsers respect; `off` they ignore here.
     expect(field).toHaveAttribute("autocomplete", "new-password");
     expect(field).toHaveAttribute("type", "password");
   });
