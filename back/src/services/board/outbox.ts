@@ -127,16 +127,6 @@ async function appendMessage(cardId: string, text: string, by?: string): Promise
   return message;
 }
 
-async function removeMessage(cardId: string, messageId: string): Promise<void> {
-  await store.mutate((doc) => {
-    const list = doc.byCard[cardId];
-    if (!list) return;
-    const next = list.filter((m) => m.id !== messageId);
-    if (next.length === 0) delete doc.byCard[cardId];
-    else doc.byCard[cardId] = next;
-  });
-}
-
 async function markAttempt(cardId: string, messageId: string, detail: string): Promise<void> {
   await store.mutate((doc) => {
     const message = doc.byCard[cardId]?.find((m) => m.id === messageId);
@@ -185,9 +175,7 @@ async function flushOnce(cardId: string): Promise<FlushResult> {
     const card = await getCard(cardId);
     if (!card) {
       // The card is gone (deleted while something was queued): so is the queue.
-      await store.mutate((doc) => {
-        delete doc.byCard[cardId];
-      });
+      await purgeCardQueue(cardId);
       return { delivered, agent: "none" };
     }
     agent = await cardAgentState(card);
@@ -211,7 +199,7 @@ async function flushOnce(cardId: string): Promise<FlushResult> {
           buildSendKeysScript(config.runner.container, card.tmuxSession, message.text),
           { timeoutMs: 30_000 },
         );
-        await removeMessage(cardId, message.id);
+        await cancelMessage(cardId, message.id);
         delivered += 1;
         await noteSender(cardId, message);
         logger.info(
