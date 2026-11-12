@@ -5,9 +5,9 @@ import { useT } from "@/i18n";
 const SOURCE_ICON = { command: SquareTerminal, skill: Sparkles, plugin: Puzzle } as const;
 
 /**
- * O ENVIO QUE É UM COMANDO (`/context`, `/compact`, `/code-review high`): desenhado como o comando
- * que é — monoespaçado, com o ícone do tipo (do Claude Code, skill, plugin) e o estado dele —, e não
- * como uma frase. "executando…" enquanto o turno que ele abriu roda; "executado" quando fecha.
+ * THE SEND THAT IS A COMMAND (`/context`, `/compact`, `/code-review high`): drawn as the command
+ * it is — monospaced, with the icon of its kind (Claude Code's, skill, plugin) and its state —, and not
+ * as a sentence. "executando…" while the turn it opened runs; "executado" when it closes.
  */
 export function SdkCommandChip({ command, running }: { command: InvokedCommand; running: boolean }) {
   const t = useT();

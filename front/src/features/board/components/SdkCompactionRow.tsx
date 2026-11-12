@@ -7,16 +7,16 @@ import { useT } from "@/i18n";
 type CompactionRow = Extract<SdkRow, { kind: "compaction" }>;
 
 /**
- * A LINHA DA COMPACTAÇÃO no chat — o /compact da pessoa ou a automática do CLI.
+ * THE COMPACTION ROW in the chat — the person's /compact or the CLI's automatic one.
  *
- * Rodando: um cartão com a barra indeterminada correndo e o relógio — o CLI passa de segundos a um
- * minuto resumindo sem soltar uma palavra, e sem isto o chat parecia travado. Terminada: vira um
- * DIVISOR de ponta a ponta, porque é isso que ela é na conversa ("daqui para cima, o modelo só
- * tem o resumo"), com quanto a conversa ocupava antes e depois. Falhou: o divisor em âmbar, com
- * o motivo.
+ * Running: a card with the indeterminate bar running and the clock — the CLI spends seconds to a
+ * minute summarizing without saying a word, and without this the chat looked frozen. Finished: it becomes an
+ * edge-to-edge DIVIDER, because that is what it is in the conversation ("from here up, the model only
+ * has the summary"), with how much the conversation took up before and after. Failed: the divider in amber, with
+ * the reason.
  */
 export const SdkCompactionRow = React.memo(function SdkCompactionRow({ row }: { row: CompactionRow }) {
-  useT(); // o resumo lê o idioma: trocar de idioma redesenha a linha
+  useT(); // the summary reads the language: switching language redraws the row
   const { title, parts } = compactionSummary(row);
 
   if (row.status === "running") return <RunningCompaction title={title} startedAt={row.startedAt} />;
@@ -47,10 +47,10 @@ export const SdkCompactionRow = React.memo(function SdkCompactionRow({ row }: { 
   );
 });
 
-/** A compactação em andamento: a barra correndo e o relógio, que anda sozinho a cada segundo. */
+/** The compaction in progress: the bar running and the clock, which ticks by itself every second. */
 function RunningCompaction({ title, startedAt }: { title: string; startedAt?: number }) {
   const t = useT();
-  // Sem `startedAt` (um back antigo), o relógio conta de quando a linha apareceu nesta aba.
+  // Without `startedAt` (an old back), the clock counts from when the row appeared in this tab.
   const [since] = React.useState(() => startedAt ?? Date.now());
   const [now, setNow] = React.useState(() => Date.now());
   React.useEffect(() => {
