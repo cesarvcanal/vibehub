@@ -17,7 +17,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { apiErrorMessage } from "@/lib/apiError";
-import { SELECT_CLASS } from "@/features/board/components/NewCardDialog";
+import { SELECT_CLASS } from "@/components/ui/select";
 import SeletorBranch from "@/features/board/components/SeletorBranch";
 import { useBranchesDoRepo } from "@/features/board/lib/useBranchesDoRepo";
 import { branchBaseSugerida } from "@/features/board/lib/branches";

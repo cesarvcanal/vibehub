@@ -10,6 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SELECT_CLASS } from "@/components/ui/select";
 import { useQuery } from "@tanstack/react-query";
 import {
   ACCOUNT_USAGE_KEY,
@@ -30,10 +31,6 @@ import { manterDialogoNoEscDoSeletor } from "@/features/board/lib/useSeletorBran
 import SeletorBranch from "@/features/board/components/SeletorBranch";
 import type { NewCard } from "@/api/types";
 import { useT } from "@/i18n";
-
-/** The native select, styled like the rest of the form controls. */
-export const SELECT_CLASS =
-  "h-9 w-full rounded-md border border-input bg-background/60 px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50";
 
 /**
  * New card. The title is the only thing that matters — the branch, worktree and tmux session are

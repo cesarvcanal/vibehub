@@ -8,7 +8,7 @@ import { get, post, del } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
 import type { Share, ShareLevel, SharesResponse, User } from "@/api/types";
 import { USERS_KEY, boardApi } from "@/features/board/api";
-import { SELECT_CLASS } from "@/features/board/components/NewCardDialog";
+import { SELECT_CLASS } from "@/components/ui/select";
 import { t as translate, useT } from "@/i18n";
 
 /**

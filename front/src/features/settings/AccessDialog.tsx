@@ -14,7 +14,7 @@ import { ME_KEY, rotateSession, useAuth } from "@/providers/auth";
 import { sharesKey } from "@/features/board/components/ShareDialog";
 import { ACCOUNTS_KEY, DEFAULT_ACCOUNT_SLUG, GITHUB_KEY, PROJECTS_KEY, USERS_KEY, accountLabel, boardApi } from "@/features/board/api";
 import type { Role, Share, ShareLevel, SharesResponse, User, UserGit } from "@/api/types";
-import { SELECT_CLASS } from "@/features/board/components/NewCardDialog";
+import { SELECT_CLASS } from "@/components/ui/select";
 import { t as translate, useT } from "@/i18n";
 
 /**

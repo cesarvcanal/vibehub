@@ -11,7 +11,7 @@ import { post } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
 import type { CardPr, Review, StartReviewBody } from "@/api/types";
 import { CARDS_PREFIX_KEY, boardApi } from "@/features/board/api";
-import { SELECT_CLASS } from "@/features/board/components/NewCardDialog";
+import { SELECT_CLASS } from "@/components/ui/select";
 import {
   cardPeopleKey, cardReviewKey, githubAuthor, startErrorCode, startErrorRoles, suggestedRoles, type ReviewRoles,
 } from "@/features/board/lib/review";

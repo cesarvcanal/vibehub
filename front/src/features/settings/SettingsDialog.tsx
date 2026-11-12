@@ -14,7 +14,7 @@ import { apiErrorMessage } from "@/lib/apiError";
 import type {
   Settings, SettingsPatch, GithubConnection, TranscribeStatus, Credential, CredentialType,
 } from "@/api/types";
-import { SELECT_CLASS } from "@/features/board/components/NewCardDialog";
+import { SELECT_CLASS } from "@/components/ui/select";
 import { AccountsManager } from "@/features/board/components/AccountsManager";
 import { McpManager } from "@/features/board/components/McpManager";
 import { BrainManager } from "@/features/board/components/BrainManager";
