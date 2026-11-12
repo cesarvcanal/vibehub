@@ -161,20 +161,32 @@ export function buildReadCredentialsScript(containerName: string, profileDir: st
   return `docker exec ${shQuote(containerName)} sh -c ${shQuote(inner)} _ ${shQuote(file)}`;
 }
 
+/** The interactive login as Claude Code keeps it: the access token and when it stops working. */
+export interface InteractiveLogin {
+  accessToken: string;
+  /** Epoch ms the access token expires, or null when the file does not say. */
+  expiresAt: number | null;
+}
+
 /**
- * The Claude Code access token inside a `.credentials.json`, or undefined.
+ * The Claude Code login inside a `.credentials.json`, or undefined.
  *
  * Undefined covers three real states that all mean the same thing to the operator: no file, a file
  * that is not JSON, and — the common one — a file holding only `mcpOAuth` because the account was
  * set up with a long-lived token and never went through `/login`. PURE.
  */
-export function parseAccessToken(stdout: string): string | undefined {
+export function parseLogin(stdout: string): InteractiveLogin | undefined {
   const raw = String(stdout ?? "").trim();
   if (!raw) return undefined;
   try {
-    const json = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: unknown } };
+    const json = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: unknown; expiresAt?: unknown } };
     const token = json?.claudeAiOauth?.accessToken;
-    return typeof token === "string" && token.trim() ? token.trim() : undefined;
+    if (typeof token !== "string" || !token.trim()) return undefined;
+    const expiresAt = json.claudeAiOauth?.expiresAt;
+    return {
+      accessToken: token.trim(),
+      expiresAt: typeof expiresAt === "number" && Number.isFinite(expiresAt) ? expiresAt : null,
+    };
   } catch {
     return undefined;
   }
@@ -272,16 +284,16 @@ async function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Reads a profile's access token out of the runner. Returns undefined when there is none AND when
- * the runner cannot be reached — the caller separates those two by `runnerDown`.
+ * Reads a profile's login out of the runner. Returns no login when there is none AND when the
+ * runner cannot be reached — the caller separates those two by `runnerDown`.
  */
-async function readAccessToken(profileDir: string): Promise<{ token?: string; runnerDown: boolean }> {
+async function readLogin(profileDir: string): Promise<{ login?: InteractiveLogin; runnerDown: boolean }> {
   try {
     const { stdout } = await hostExecutor().runScript(
       buildReadCredentialsScript(config.runner.container, profileDir),
       { timeoutMs: 15_000 },
     );
-    return { token: parseAccessToken(stdout), runnerDown: false };
+    return { login: parseLogin(stdout), runnerDown: false };
   } catch {
     // Deliberately swallowed: the detail could only ever be about docker, and a usage widget must
     // not be the thing that fails a page. The UI shows "unreachable".
@@ -378,7 +390,8 @@ async function usageFor(slug: string | undefined): Promise<{ result: AccountUsag
     return { result, called: false };
   }
 
-  const { token, runnerDown } = await readAccessToken(profileDirFor(slug));
+  const { login, runnerDown } = await readLogin(profileDirFor(slug));
+  const token = login?.accessToken;
   let result: AccountUsage | undefined = token ? await callUsageEndpoint(token, now) : undefined;
   let freshMs = FRESH_MS;
 

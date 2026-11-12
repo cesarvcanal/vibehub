@@ -21,10 +21,13 @@ vi.mock("../../runtime/host.js", async (orig) => ({
 
 const ACCESS_TOKEN = "sk-ant-oat-ACCESSTOKEN-do-not-leak-1234567890";
 
+/** Claude Code's access tokens live 8h; a login in use is renewed before that. */
+const LOGIN_TTL_MS = 8 * 3_600_000;
+
 /** A `.credentials.json` as Claude Code writes it after an interactive `/login`. */
-function credentials(token = ACCESS_TOKEN): string {
+function credentials(token = ACCESS_TOKEN, expiresAt = Date.now() + LOGIN_TTL_MS): string {
   return JSON.stringify({
-    claudeAiOauth: { accessToken: token, refreshToken: "rt", expiresAt: 1, scopes: ["user:profile"] },
+    claudeAiOauth: { accessToken: token, refreshToken: "rt", expiresAt, scopes: ["user:profile"] },
   });
 }
 
@@ -106,14 +109,19 @@ afterEach(async () => {
 });
 
 describe("pure parsing", () => {
-  it("reads the Claude Code access token, and only that one", async () => {
+  it("reads the Claude Code access token and its expiry, and only that login", async () => {
     const { usage } = await fresh();
-    expect(usage.parseAccessToken(credentials())).toBe(ACCESS_TOKEN);
+    expect(usage.parseLogin(credentials(ACCESS_TOKEN, 1_000))).toEqual({ accessToken: ACCESS_TOKEN, expiresAt: 1_000 });
+    // An expiry Claude Code did not write is unknown, not "expired": the endpoint gets to say.
+    expect(usage.parseLogin(JSON.stringify({ claudeAiOauth: { accessToken: "t" } }))).toEqual({
+      accessToken: "t",
+      expiresAt: null,
+    });
     // A setup-token profile: the file exists, the block does not.
-    expect(usage.parseAccessToken(MCP_ONLY_CREDENTIALS)).toBeUndefined();
-    expect(usage.parseAccessToken("")).toBeUndefined();
-    expect(usage.parseAccessToken("not json at all")).toBeUndefined();
-    expect(usage.parseAccessToken(JSON.stringify({ claudeAiOauth: { accessToken: "   " } }))).toBeUndefined();
+    expect(usage.parseLogin(MCP_ONLY_CREDENTIALS)).toBeUndefined();
+    expect(usage.parseLogin("")).toBeUndefined();
+    expect(usage.parseLogin("not json at all")).toBeUndefined();
+    expect(usage.parseLogin(JSON.stringify({ claudeAiOauth: { accessToken: "   " } }))).toBeUndefined();
   });
 
   it("clamps utilization and tolerates a window the payload did not send", async () => {
