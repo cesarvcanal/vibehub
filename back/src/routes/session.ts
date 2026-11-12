@@ -108,6 +108,19 @@ export function parseTerminalFrame(raw: string): { type: "resize"; cols: number;
 const KEEPALIVE_MS = 25_000;
 
 /**
+ * Spawns an interactive terminal (a card's tmux attach, the runner shell, an account login) the way
+ * every one of them is born: xterm-256color at 120x30 — the front resizes it on open — in UTF-8.
+ */
+export function spawnTerminalPty(file: string, args: string[]): IPty {
+  return pty.spawn(file, args, {
+    name: "xterm-256color",
+    cols: 120,
+    rows: 30,
+    env: { ...process.env, LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TERM: "xterm-256color" },
+  });
+}
+
+/**
  * Wires a pty to a websocket: output out, keystrokes and resizes in, both sides closing together.
  *
  * `onInput` (when given) is called with each DATA frame the browser sends — a human typing. The card
@@ -568,12 +581,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
         return;
       }
       const { file, args } = workspace.cardTerminalCommand(project, snapshot, { shell });
-      const term = pty.spawn(file, args, {
-        name: "xterm-256color",
-        cols: 120,
-        rows: 30,
-        env: { ...process.env, LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TERM: "xterm-256color" },
-      });
+      const term = spawnTerminalPty(file, args);
       logger.info({ card: card.worktreeSlug, shell }, "terminal attached");
       // A human typing here makes the card "human-active": a maestro must not send into it while a
       // person is at the prompt. Throttled to a write every few seconds, and fire-and-forget — a
