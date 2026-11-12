@@ -98,7 +98,6 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     setDefaultLabel(settings.data.defaultAccountLabel ?? "");
     setTranscribeLanguage(settings.data.transcribeLanguage ?? "");
     setIdleHibernate(String(settings.data.idleHibernateMinutes ?? 180));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, settings.data]);
 
   const save = useMutation({
