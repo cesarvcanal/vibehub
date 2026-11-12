@@ -547,38 +547,15 @@ const DATA_DIRS: ReadonlyArray<{ dir: string; suffix: string }> = [
 ];
 
 /**
- * Deletes the tmps of atomic writes a SIGKILL interrupted (the deploy kills the old back mid-write
- * now and then): every write takes milliseconds, so one older than the grace window is never in
- * progress — only garbage, often holding a whole conversation. Live cards' tmps go too.
+ * Deletes the data-dir files of cards that no longer exist, and — in the same listing of each
+ * directory, the data dir's root included — the tmps of atomic writes a SIGKILL interrupted (the
+ * deploy kills the old back mid-write now and then): every write takes milliseconds, so one older
+ * than the grace window is never in progress — only garbage, often holding a whole conversation.
+ * Live cards' tmps go too. Returns how many files went.
  */
-async function sweepStaleWriteTmps(now: number, graceMs: number): Promise<number> {
-  let removed = 0;
-  for (const dir of ["", ...DATA_DIRS.map((d) => d.dir)]) {
-    let names: string[];
-    try {
-      names = await readdir(dataPath(dir));
-    } catch {
-      continue;
-    }
-    for (const name of names) {
-      if (!isAtomicWriteTmp(name)) continue;
-      const file = dataPath(dir, name);
-      try {
-        if (now - (await stat(file)).mtimeMs < graceMs) continue;
-        await rm(file, { force: true });
-        removed += 1;
-      } catch (err) {
-        logger.warn({ file, detail: (err as Error).message }, "could not sweep a leftover write tmp");
-      }
-    }
-  }
-  return removed;
-}
-
-/** Deletes the data-dir files of cards that no longer exist. Returns how many went. */
 async function sweepDataDir(live: LiveCardArtifacts, now: number, graceMs: number): Promise<number> {
-  let removed = await sweepStaleWriteTmps(now, graceMs);
-  for (const { dir, suffix } of DATA_DIRS) {
+  let removed = 0;
+  for (const { dir, suffix } of [{ dir: "", suffix: null }, ...DATA_DIRS]) {
     let names: string[];
     try {
       names = await readdir(dataPath(dir));
@@ -586,10 +563,21 @@ async function sweepDataDir(live: LiveCardArtifacts, now: number, graceMs: numbe
       continue; // the directory does not exist yet: nothing to sweep
     }
     for (const name of names) {
-      if (!name.endsWith(suffix)) continue;
+      const file = dataPath(dir, name);
+      if (isAtomicWriteTmp(name)) {
+        try {
+          if (now - (await stat(file)).mtimeMs < graceMs) continue;
+          await rm(file, { force: true });
+          removed += 1;
+        } catch (err) {
+          logger.warn({ file, detail: (err as Error).message }, "could not sweep a leftover write tmp");
+        }
+        continue;
+      }
+      // The root holds no per-card files: only its leftover tmps are swept.
+      if (suffix === null || !name.endsWith(suffix)) continue;
       const cardId = name.slice(0, -suffix.length);
       if (!CARD_ID_RE.test(cardId) || live.ids.has(cardId)) continue;
-      const file = dataPath(dir, name);
       try {
         const info = await stat(file);
         if (now - info.mtimeMs < graceMs) continue;
