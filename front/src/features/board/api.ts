@@ -11,7 +11,7 @@ import type {
   Card,
   CardBrowserStatus,
   CardCapture,
-  CardColumn,
+  CardPatch,
   CardSessionInfo,
   CardUsageResponse,
   Credential,
@@ -272,21 +272,6 @@ export interface NewProjectInput {
   githubConnectionId?: string | null;
 }
 
-export interface CardPatchInput {
-  title?: string;
-  column?: CardColumn;
-  position?: number;
-  /** null clears it (inherit the project's account again). */
-  accountSlug?: string | null;
-  /** null clears it (back to the account default). */
-  model?: string | null;
-  /** Reasoning level; null clears it (back to the account's own). */
-  effort?: string | null;
-  /** Native chat (beta) opt-in for this card; false/null go back to the transcript chat. */
-  sdkChat?: boolean | null;
-  /** Locks the card to its base (deliver = a PR against it, never a merge); false/null unlocks. */
-  locked?: boolean | null;
-}
 
 /* --------------------------------------------------------------- requests */
 
@@ -339,7 +324,7 @@ export const boardApi = {
 
   createCard: (input: NewCard) => post<{ card: BoardCard }>("/cards", input).then((r) => r.card),
 
-  patchCard: (id: string, body: CardPatchInput) =>
+  patchCard: (id: string, body: CardPatch) =>
     patch<{ card: BoardCard }>(`/cards/${encodeURIComponent(id)}`, body).then((r) => r.card),
 
   /**
@@ -348,7 +333,7 @@ export const boardApi = {
    * Claude is working ("pending"). The screen has to say which — promising a switch that has not
    * happened yet is the whole bug this answers.
    */
-  patchCardSession: (id: string, body: CardPatchInput) =>
+  patchCardSession: (id: string, body: CardPatch) =>
     patch<{ card: BoardCard; session?: SessionChange }>(`/cards/${encodeURIComponent(id)}`, body),
 
   /**

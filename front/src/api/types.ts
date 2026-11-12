@@ -564,13 +564,20 @@ export interface CardPatch {
   title?: string;
   column?: CardColumn;
   position?: number;
+  /** null clears it (inherit the project's account again). */
   accountSlug?: string | null;
+  /** null clears it (back to the account default). */
   model?: string | null;
+  /** Reasoning level; null clears it (back to the account's own). */
+  effort?: string | null;
+  /** Native chat (beta) opt-in for this card; false/null go back to the transcript chat. */
+  sdkChat?: boolean | null;
   /** null clears it (back to the derived `card/<worktreeSlug>`). */
   branch?: string | null;
   base?: string;
-  /** null/false unlocks the card. Owner-only, like the branch and its base. */
+  /** Locks the card to its base (deliver = a PR against it, never a merge); false/null unlocks. Owner-only, like the branch and its base. */
   locked?: boolean | null;
+  /** Imported session; null clears it (back to `claude -c`). */
   resumeSessionId?: string | null;
 }
 
