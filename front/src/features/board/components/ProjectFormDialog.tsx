@@ -159,10 +159,10 @@ export function ProjectFormDialog({
       if (project) return await boardApi.updateProject(project.id, body);
       return await boardApi.createProject({
         name: body.name,
-        repo: repo || undefined,
+        repoFullName: repo || undefined,
         cloneUrl: body.cloneUrl ?? undefined,
-        defaultBranch: body.baseBranch,
-        accountSlug: account || undefined,
+        baseBranch: body.baseBranch,
+        defaultAccountSlug: account || undefined,
         githubConnectionId: connection || undefined,
       });
     },

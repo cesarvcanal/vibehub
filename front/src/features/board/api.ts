@@ -24,6 +24,7 @@ import type {
   McpSecretsResponse,
   McpTransport,
   NewCard,
+  NewProject,
   OutboxStatus,
   PeopleResponse,
   PluginCatalog,
@@ -257,22 +258,6 @@ export const githubReposKey = (connection: string, q: string) =>
 export const githubBranchesKey = (connection: string, owner: string, repo: string) =>
   ["board", "github", "branches", connection, owner, repo] as const;
 
-/* ---------------------------------------------------------------- inputs */
-
-export interface NewProjectInput {
-  name: string;
-  /** `owner/repo`. Absent = a scratch project with no repository. */
-  repo?: string;
-  cloneUrl?: string;
-  /** Branch card worktrees are cut from. */
-  defaultBranch?: string;
-  /** Claude account the project's cards inherit. */
-  accountSlug?: string;
-  /** GitHub account the repository is cloned with. Absent = the first connection. */
-  githubConnectionId?: string | null;
-}
-
-
 /* --------------------------------------------------------------- requests */
 
 export const boardApi = {
@@ -281,15 +266,8 @@ export const boardApi = {
   /* projects */
   listProjects: () => get<{ projects: BoardProject[] }>("/projects").then((r) => r.projects ?? []),
 
-  createProject: (input: NewProjectInput) =>
-    post<{ project: BoardProject }>("/projects", {
-      name: input.name,
-      repoFullName: input.repo,
-      cloneUrl: input.cloneUrl,
-      baseBranch: input.defaultBranch,
-      defaultAccountSlug: input.accountSlug,
-      githubConnectionId: input.githubConnectionId,
-    }).then((r) => r.project),
+  createProject: (input: NewProject) =>
+    post<{ project: BoardProject }>("/projects", input).then((r) => r.project),
 
   updateProject: (id: string, body: ProjectPatch) =>
     patch<{ project: BoardProject }>(`/projects/${encodeURIComponent(id)}`, body).then((r) => r.project),
