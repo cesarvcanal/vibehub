@@ -172,8 +172,7 @@ export function NewCardDialog({
       ...(locked ? { locked: true } : {}),
     });
     // Close on submit, not on success: the next card can be typed while this one is still cloning.
-    reset();
-    onOpenChange(false);
+    close();
   }
 
   return (

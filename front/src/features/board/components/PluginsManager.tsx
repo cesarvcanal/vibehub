@@ -80,10 +80,10 @@ export function PluginsManager({ trigger = "icon" }: { trigger?: "icon" | "row" 
   });
 
   /** The catalogue AND the board: an install flags cards for restart, and the tiles must say so. */
-  const refresh = React.useCallback(() => {
+  const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: PLUGINS_KEY });
     void queryClient.invalidateQueries({ queryKey: CARDS_PREFIX_KEY });
-  }, [queryClient]);
+  };
 
   const install = useMutation({
     mutationFn: (name: string) => boardApi.installPlugin(name),
