@@ -985,7 +985,7 @@ export async function uploadCardImage(
   base64: string,
   by?: string,
 ): Promise<{ path: string }> {
-  const { card, project } = await getCardWithProject(cardId);
+  const { card } = await getCardWithProject(cardId);
 
   const b64 = String(base64 ?? "").replace(/\s+/g, ""); // tolerate line breaks from encoders
   if (!B64_RE.test(b64)) throw new Error("invalid base64 content");
