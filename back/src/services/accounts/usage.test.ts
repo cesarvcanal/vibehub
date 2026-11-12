@@ -344,13 +344,24 @@ describe("accountUsage", () => {
     expect(init.headers.authorization).toBe(`Bearer ${ACCESS_TOKEN}`);
   });
 
-  it("a renewal exec that fails means the runner did not answer: unreachable, and no call goes out", async () => {
+  it("a renewal exec that fails (CLI hung, KILLed) is a failed renewal: the vault probe still runs, and the exec is not repeated", async () => {
     const { usage } = await fresh();
+    await storeLongLived("tech");
     runScript
       .mockResolvedValueOnce({ stdout: EXPIRED_CREDENTIALS, stderr: "" })
       .mockRejectedValueOnce(new Error("exit 137"));
-    expect((await usage.accountUsage("tech")).error).toBe("unreachable");
-    expect(fetchMock).not.toHaveBeenCalled();
+    fetchMock
+      .mockResolvedValueOnce(response(401, { error: { type: "authentication_error" } }))
+      .mockResolvedValueOnce(response(200, {}, PLAN_HEADERS));
+    expect((await usage.accountUsage("tech")).available).toBe(true);
+    expect(logged.some((line) => line.includes("login renewal failed"))).toBe(true);
+
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now + usage.PROBE_FRESH_MS + 1);
+    runScript.mockResolvedValueOnce({ stdout: EXPIRED_CREDENTIALS, stderr: "" });
+    await usage.accountUsage("tech");
+    expect(runScript).toHaveBeenCalledTimes(3);
+    expect(runScript.mock.calls[2][0]).not.toContain("auth status");
   });
 
   it("a renewal that did not take is not retried every poll — only once the login in the file changes", async () => {

@@ -366,8 +366,9 @@ async function readFreshAccessToken(profileDir: string, now: number): Promise<{ 
   if (!login || live(login) || unrenewable.get(profileDir) === login.expiresAt) {
     return { token: login?.accessToken, runnerDown };
   }
+  // The read above already proved the runner is up: an exec that fails here is the CLI hanging or
+  // erroring, i.e. a failed RENEWAL — the vault fallback still gets its turn.
   const renewal = await readLogin(buildRenewLoginScript(config.runner.container, profileDir), RENEW_TIMEOUT_MS);
-  if (renewal.runnerDown) return { runnerDown: true };
   if (renewal.login && live(renewal.login)) {
     unrenewable.delete(profileDir);
     return { token: renewal.login.accessToken, runnerDown: false };
