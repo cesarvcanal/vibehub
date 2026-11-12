@@ -1,9 +1,10 @@
 import { randomBytes, createCipheriv, createDecipheriv, scryptSync } from "node:crypto";
-import { readFile, writeFile, mkdir, chmod } from "node:fs/promises";
+import { readFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { config, dataPath } from "../config/env.js";
 import { logger } from "../utils/logger.js";
 import { writeFileAtomic } from "../store/atomicWrite.js";
+import { loadOrCreateKeyFile } from "../store/keyFile.js";
 
 /**
  * LOCAL VAULT — every secret vibehub holds (Claude long-lived tokens, GitHub token, MCP env values,
@@ -51,17 +52,8 @@ async function masterKey(): Promise<Buffer> {
 async function loadOrCreateKey(): Promise<Buffer> {
   if (config.secretKey) return scryptSync(config.secretKey, "vibehub-vault", 32);
   const file = KEY_FILE();
-  try {
-    const stored = (await readFile(file, "utf8")).trim();
-    if (stored) return Buffer.from(stored, "hex");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-  }
-  const key = randomBytes(32);
-  await mkdir(dirname(file), { recursive: true });
-  await writeFile(file, key.toString("hex"), { encoding: "utf8", mode: 0o600 });
-  await chmod(file, 0o600);
-  logger.warn({ file }, "generated a new vault master key — back this file up, secrets are lost without it");
+  const { key, created } = await loadOrCreateKeyFile(file);
+  if (created) logger.warn({ file }, "generated a new vault master key — back this file up, secrets are lost without it");
   return key;
 }
 

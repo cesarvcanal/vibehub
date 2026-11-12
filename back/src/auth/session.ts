@@ -1,8 +1,7 @@
 import { randomBytes, createHash, createHmac, timingSafeEqual } from "node:crypto";
-import { readFile, writeFile, mkdir, chmod } from "node:fs/promises";
-import { dirname } from "node:path";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { config, dataPath } from "../config/env.js";
+import { loadOrCreateKeyFile } from "../store/keyFile.js";
 import { sessionUser, type PublicUser } from "./users.js";
 import { previewProxyUser } from "./previewProxyAuth.js";
 
@@ -38,18 +37,7 @@ async function signingKey(): Promise<Buffer> {
 
 async function loadOrCreateKey(): Promise<Buffer> {
   if (config.sessionSecret) return Buffer.from(config.sessionSecret, "utf8");
-  const file = dataPath("session.key");
-  try {
-    const stored = (await readFile(file, "utf8")).trim();
-    if (stored) return Buffer.from(stored, "hex");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-  }
-  const key = randomBytes(32);
-  await mkdir(dirname(file), { recursive: true });
-  await writeFile(file, key.toString("hex"), { encoding: "utf8", mode: 0o600 });
-  await chmod(file, 0o600);
-  return key;
+  return (await loadOrCreateKeyFile(dataPath("session.key"))).key;
 }
 
 /** Builds the signed token for a user. PURE apart from reading the key. */
