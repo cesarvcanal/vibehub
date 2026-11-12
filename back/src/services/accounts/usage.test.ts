@@ -38,6 +38,13 @@ function credentials(token = ACCESS_TOKEN, expiresAt = Date.now() + LOGIN_TTL_MS
 /** The same login once its access token has expired — what an account nobody used for 8h holds. */
 const EXPIRED_CREDENTIALS = credentials(ACCESS_TOKEN, Date.now() - 60_000);
 
+/** The runner holds an expired login, and the renewal exec prints `afterRenewal`. */
+function renewsTo(afterRenewal: string) {
+  runScript
+    .mockResolvedValueOnce({ stdout: EXPIRED_CREDENTIALS, stderr: "" })
+    .mockResolvedValueOnce({ stdout: afterRenewal, stderr: "" });
+}
+
 /** The payload of a profile set up ONLY with a long-lived setup-token: no `claudeAiOauth` at all. */
 const MCP_ONLY_CREDENTIALS = JSON.stringify({ mcpOAuth: { "some-server": { accessToken: "x" } } });
 
@@ -194,25 +201,20 @@ describe("the docker command", () => {
     expect(() => usage.buildReadCredentialsScript("c", "/root/a b;rm -rf /")).toThrow(/invalid characters/);
   });
 
-  it("renews a login through Claude Code's own `auth status`, in the account's profile, fully quoted", async () => {
+  it("renews a login with Claude Code's own `auth status` and prints the file, in ONE exec killed in the runner", async () => {
     const { usage } = await fresh();
-    const { shQuote } = await import("../../runtime/host.js");
     const { resolvedClaudeCommand } = await import("./claudeCli.js");
     expect(usage.buildRenewLoginScript("vibehub-runner", "/root/.claude-profiles/tech")).toBe(
-      `docker exec -e CLAUDE_CONFIG_DIR='/root/.claude-profiles/tech' 'vibehub-runner' sh -c ` +
-        shQuote(resolvedClaudeCommand("auth status --json >/dev/null")),
+      [
+        `docker exec -i 'vibehub-runner' timeout -s KILL 15 bash -s <<'VIBEHUB_RENEW_LOGIN'`,
+        `export CLAUDE_CONFIG_DIR='/root/.claude-profiles/tech'`,
+        `{ ${resolvedClaudeCommand("auth status --json")}; } >/dev/null 2>&1`,
+        `cat '/root/.claude-profiles/tech/.credentials.json' 2>/dev/null || true`,
+        "VIBEHUB_RENEW_LOGIN",
+      ].join("\n"),
     );
-  });
-
-  it("renews the DEFAULT login with no CLAUDE_CONFIG_DIR, as its sessions run", async () => {
-    const { usage } = await fresh();
-    const script = usage.buildRenewLoginScript("vibehub-runner", "/root/.claude");
-    expect(script.startsWith("docker exec 'vibehub-runner' sh -c ")).toBe(true);
-    expect(script).not.toContain("CLAUDE_CONFIG_DIR");
-  });
-
-  it("refuses to renew a path that is not an absolute, sane remote path", async () => {
-    const { usage } = await fresh();
+    // The default login runs with no CLAUDE_CONFIG_DIR, as its sessions do.
+    expect(usage.buildRenewLoginScript("vibehub-runner", "/root/.claude")).not.toContain("CLAUDE_CONFIG_DIR");
     expect(() => usage.buildRenewLoginScript("c", "/root/a b;rm -rf /")).toThrow(/invalid characters/);
   });
 
@@ -307,16 +309,13 @@ describe("accountUsage", () => {
 
   it("an expired login is renewed by Claude Code first, then read with the renewed token", async () => {
     const { usage } = await fresh();
-    runScript
-      .mockResolvedValueOnce({ stdout: EXPIRED_CREDENTIALS, stderr: "" })
-      .mockResolvedValueOnce({ stdout: "", stderr: "" })
-      .mockResolvedValueOnce({ stdout: credentials(RENEWED_TOKEN), stderr: "" });
+    renewsTo(credentials(RENEWED_TOKEN));
 
     const result = await usage.accountUsage("tech");
     expect(result).toMatchObject({ available: true });
     expect(result.error).toBeUndefined();
 
-    expect(runScript).toHaveBeenCalledTimes(3);
+    expect(runScript).toHaveBeenCalledTimes(2);
     expect(runScript.mock.calls[1][0]).toContain("CLAUDE_CONFIG_DIR='/root/.claude-profiles/tech'");
     expect(runScript.mock.calls[1][0]).toContain("auth status --json");
     // The expired token is never spent on a call that can only fail.
@@ -332,15 +331,26 @@ describe("accountUsage", () => {
     expect(runScript).toHaveBeenCalledTimes(1);
   });
 
-  it("a renewal that fails leaves the expired token to the endpoint: unauthorized, not a crash", async () => {
+  it("a renewal that leaves the token expired hands it to the endpoint: unauthorized, logged, not a crash", async () => {
     const { usage } = await fresh();
-    runScript
-      .mockResolvedValueOnce({ stdout: EXPIRED_CREDENTIALS, stderr: "" })
-      .mockRejectedValueOnce(new Error("exit 1"));
+    // The refresh token itself was revoked: the CLI runs, the file comes back unchanged.
+    renewsTo(EXPIRED_CREDENTIALS);
     fetchMock.mockResolvedValueOnce(response(401, { error: { type: "authentication_error" } }));
 
     const result = await usage.accountUsage("tech");
     expect(result).toMatchObject({ available: false, error: "unauthorized" });
+    expect(logged.some((line) => line.includes("login renewal failed"))).toBe(true);
+    const [, init] = fetchMock.mock.calls[0] as [string, { headers: Record<string, string> }];
+    expect(init.headers.authorization).toBe(`Bearer ${ACCESS_TOKEN}`);
+  });
+
+  it("a renewal exec that fails is the same: the expired token goes on, the failure is logged", async () => {
+    const { usage } = await fresh();
+    runScript
+      .mockResolvedValueOnce({ stdout: EXPIRED_CREDENTIALS, stderr: "" })
+      .mockRejectedValueOnce(new Error("exit 137"));
+    fetchMock.mockResolvedValueOnce(response(401, { error: { type: "authentication_error" } }));
+    expect((await usage.accountUsage("tech")).error).toBe("unauthorized");
     expect(logged.some((line) => line.includes("login renewal failed"))).toBe(true);
   });
 
@@ -526,10 +536,7 @@ describe("the token never escapes", () => {
 
   it("neither the expired nor the renewed token is in a response, log line or argv", async () => {
     const { usage } = await fresh();
-    runScript
-      .mockResolvedValueOnce({ stdout: EXPIRED_CREDENTIALS, stderr: "" })
-      .mockResolvedValueOnce({ stdout: "", stderr: "" })
-      .mockResolvedValueOnce({ stdout: credentials(RENEWED_TOKEN), stderr: "" });
+    renewsTo(credentials(RENEWED_TOKEN));
     const ok = await usage.accountUsage("tech");
     for (const secret of [ACCESS_TOKEN, RENEWED_TOKEN]) {
       expect(JSON.stringify(ok)).not.toContain(secret);

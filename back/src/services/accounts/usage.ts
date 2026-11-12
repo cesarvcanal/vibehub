@@ -1,4 +1,4 @@
-import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
+import { hostExecutor, shQuote, assertSafeRemotePath, containerScriptCommand } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import { listAccounts } from "../board/registry.js";
 import { DEFAULT_ACCOUNT_SLUG, DEFAULT_CLAUDE_DIR, profileDirFor, CREDENTIALS_FILE } from "./profiles.js";
@@ -170,7 +170,7 @@ export function buildReadCredentialsScript(containerName: string, profileDir: st
 }
 
 /** The interactive login as Claude Code keeps it: the access token and when it stops working. */
-export interface InteractiveLogin {
+interface InteractiveLogin {
   accessToken: string;
   /** Epoch ms the access token expires, or null when the file does not say. */
   expiresAt: number | null;
@@ -187,10 +187,10 @@ export function parseLogin(stdout: string): InteractiveLogin | undefined {
   const raw = String(stdout ?? "").trim();
   if (!raw) return undefined;
   try {
-    const json = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: unknown; expiresAt?: unknown } };
-    const token = json?.claudeAiOauth?.accessToken;
+    const oauth = (JSON.parse(raw) as { claudeAiOauth?: { accessToken?: unknown; expiresAt?: unknown } })?.claudeAiOauth;
+    const token = oauth?.accessToken;
     if (typeof token !== "string" || !token.trim()) return undefined;
-    const expiresAt = json.claudeAiOauth?.expiresAt;
+    const expiresAt = oauth?.expiresAt;
     return {
       accessToken: token.trim(),
       expiresAt: typeof expiresAt === "number" && Number.isFinite(expiresAt) ? expiresAt : null,
@@ -200,17 +200,32 @@ export function parseLogin(stdout: string): InteractiveLogin | undefined {
   }
 }
 
+/** Heredoc delimiter of the renewal script; never a line of the script itself. */
+const RENEW_DELIM = "VIBEHUB_RENEW_LOGIN";
+
+/** Node deadline of the renewal exec; the in-container KILL fires CONTAINER_DEADLINE_MARGIN_MS sooner. */
+const RENEW_TIMEOUT_MS = 30_000;
+
 /**
- * Script that has Claude Code renew a profile's login: `claude auth status` refreshes an expired
- * access token and writes the new pair back to `.credentials.json` itself — no inference, under a
- * second. Renewing it from here instead (the refresh token over HTTP) would ROTATE the refresh token
- * and leave the CLI holding a dead one, which is the one way to log a card out from a usage widget.
+ * Script that has Claude Code renew a profile's login and then prints the credential file, in ONE
+ * exec: `claude auth status` refreshes an expired access token and writes the new pair back to
+ * `.credentials.json` itself — no inference, under a second. Renewing it from here instead (the
+ * refresh token over HTTP) would ROTATE the refresh token and leave the CLI holding a dead one,
+ * which is the one way to log a card out from a usage widget. The CLI's own output is discarded so
+ * stdout is the file and nothing else; a CLI that hangs is KILLed inside the runner, not orphaned.
  * The default profile runs with no CLAUDE_CONFIG_DIR, exactly as its sessions do. PURE.
  */
 export function buildRenewLoginScript(containerName: string, profileDir: string): string {
   assertSafeRemotePath(profileDir);
-  const env = profileDir === DEFAULT_CLAUDE_DIR ? "" : `-e CLAUDE_CONFIG_DIR=${shQuote(profileDir)} `;
-  return `docker exec ${env}${shQuote(containerName)} sh -c ${shQuote(resolvedClaudeCommand("auth status --json >/dev/null"))}`;
+  const file = `${profileDir}/${CREDENTIALS_FILE}`;
+  assertSafeRemotePath(file);
+  return [
+    `${containerScriptCommand(containerName, RENEW_TIMEOUT_MS)} <<'${RENEW_DELIM}'`,
+    ...(profileDir === DEFAULT_CLAUDE_DIR ? [] : [`export CLAUDE_CONFIG_DIR=${shQuote(profileDir)}`]),
+    `{ ${resolvedClaudeCommand("auth status --json")}; } >/dev/null 2>&1`,
+    `cat ${shQuote(file)} 2>/dev/null || true`,
+    RENEW_DELIM,
+  ].join("\n");
 }
 
 /** One window out of the payload, clamped to 0..100. Unknown shape → undefined. PURE. */
@@ -305,15 +320,13 @@ async function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Reads a profile's login out of the runner. Returns no login when there is none AND when the
- * runner cannot be reached — the caller separates those two by `runnerDown`.
+ * Runs a script that prints a profile's credential file and parses the login out of it. Returns no
+ * login when there is none AND when the runner cannot be reached — the caller separates those two
+ * by `runnerDown`.
  */
-async function readLogin(profileDir: string): Promise<{ login?: InteractiveLogin; runnerDown: boolean }> {
+async function readLogin(script: string, timeoutMs: number): Promise<{ login?: InteractiveLogin; runnerDown: boolean }> {
   try {
-    const { stdout } = await hostExecutor().runScript(
-      buildReadCredentialsScript(config.runner.container, profileDir),
-      { timeoutMs: 15_000 },
-    );
+    const { stdout } = await hostExecutor().runScript(script, { timeoutMs });
     return { login: parseLogin(stdout), runnerDown: false };
   } catch {
     // Deliberately swallowed: the detail could only ever be about docker, and a usage widget must
@@ -326,20 +339,17 @@ async function readLogin(profileDir: string): Promise<{ login?: InteractiveLogin
  * The profile's access token, renewed by Claude Code first when it has expired. Only the CLI
  * renews it, and only when the account is used — so an account idle for its 8h lifetime held a
  * dead token, the endpoint refused it, and the meter said "sem leitura" until somebody sent a
- * message. A renewal that fails keeps the expired token: the endpoint then says what is wrong.
+ * message. A renewal that does not produce a live token keeps the expired one: the endpoint then
+ * says what is wrong.
  */
 async function readFreshAccessToken(profileDir: string, now: number): Promise<{ token?: string; runnerDown: boolean }> {
-  const read = await readLogin(profileDir);
-  const expired = read.login?.expiresAt != null && read.login.expiresAt <= now;
-  if (!expired) return { token: read.login?.accessToken, runnerDown: read.runnerDown };
-  try {
-    await hostExecutor().runScript(buildRenewLoginScript(config.runner.container, profileDir), { timeoutMs: 30_000 });
-  } catch (err) {
-    logger.warn({ action: "account.usage", profileDir, err: (err as Error).message }, "login renewal failed");
-    return { token: read.login?.accessToken, runnerDown: false };
+  const { login, runnerDown } = await readLogin(buildReadCredentialsScript(config.runner.container, profileDir), 15_000);
+  if (!login || login.expiresAt === null || login.expiresAt > now) return { token: login?.accessToken, runnerDown };
+  const renewed = (await readLogin(buildRenewLoginScript(config.runner.container, profileDir), RENEW_TIMEOUT_MS)).login;
+  if (!renewed || (renewed.expiresAt !== null && renewed.expiresAt <= now)) {
+    logger.warn({ action: "account.usage", profileDir }, "login renewal failed");
   }
-  const renewed = await readLogin(profileDir);
-  return { token: renewed.login?.accessToken ?? read.login?.accessToken, runnerDown: renewed.runnerDown };
+  return { token: renewed?.accessToken ?? login.accessToken, runnerDown: false };
 }
 
 /** One HTTPS call. The token is a parameter and dies with the frame. */
