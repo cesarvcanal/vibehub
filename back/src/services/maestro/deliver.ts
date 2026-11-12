@@ -585,10 +585,12 @@ function reasonForStage(stage: string): DeliverReason {
  * behaves exactly as before: the project's connection.
  */
 export async function cardConnectionToken(card: Card, project: Project): Promise<string> {
-  const actor = card.actorUserId ? await getUserGit(card.actorUserId) : null;
-  const identity = resolveIdentity({
-    actor, project, settings: await getSettings(), connections: await listGithubConnections(),
-  });
+  const [actor, settings, connections] = await Promise.all([
+    card.actorUserId ? getUserGit(card.actorUserId) : null,
+    getSettings(),
+    listGithubConnections(),
+  ]);
+  const identity = resolveIdentity({ actor, project, settings, connections });
   return await tokenFor(identity.connectionId);
 }
 
