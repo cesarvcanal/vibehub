@@ -7,7 +7,7 @@ import type { WorkflowAgentFrame, WorkflowFeedItem } from "./sdkChat";
  */
 
 /** "45s", "3m 12s", "1h 04m". Negativo ou inválido vira "0s". */
-export function formatDuration(ms: number): string {
+export function formatWholeSeconds(ms: number): string {
   const seconds = Number.isFinite(ms) && ms > 0 ? Math.floor(ms / 1000) : 0;
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);

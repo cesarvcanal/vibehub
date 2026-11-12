@@ -8,7 +8,7 @@ import { WorkflowFeedContext, type WorkflowFeedResponse } from "@/features/board
 import {
   estimateWorkflowRemaining,
   feedLines,
-  formatDuration,
+  formatWholeSeconds,
   groupAgentsByPhase,
   phasePills,
   verbKey,
@@ -136,12 +136,12 @@ function WorkflowStatusLine({
   if (row.finished) {
     const end = Math.max(0, ...row.agents.map((a) => a.endedAt ?? a.lastAt ?? 0));
     if (startedAt !== undefined && end >= startedAt) {
-      eta = t(interrupted ? "sdk.workflowStoppedAfter" : "sdk.workflowDoneIn", { elapsed: formatDuration(end - startedAt) });
+      eta = t(interrupted ? "sdk.workflowStoppedAfter" : "sdk.workflowDoneIn", { elapsed: formatWholeSeconds(end - startedAt) });
     }
   } else {
     const estimate = estimateWorkflowRemaining(row, now);
     eta = estimate
-      ? t("sdk.workflowEta", { eta: formatDuration(estimate.remainingMs), avg: formatDuration(estimate.averageMs) })
+      ? t("sdk.workflowEta", { eta: formatWholeSeconds(estimate.remainingMs), avg: formatWholeSeconds(estimate.averageMs) })
       : t("sdk.workflowEtaPending");
   }
   const queued = Math.max(0, row.total - row.done - running);
@@ -149,7 +149,7 @@ function WorkflowStatusLine({
     <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
       {!row.finished && startedAt !== undefined ? (
         <span data-testid="workflow-elapsed" className="tabular-nums">
-          {t("sdk.workflowElapsed", { elapsed: formatDuration(now - startedAt) })}
+          {t("sdk.workflowElapsed", { elapsed: formatWholeSeconds(now - startedAt) })}
         </span>
       ) : null}
       {eta ? <span data-testid="workflow-eta" className="tabular-nums">{eta}</span> : null}
@@ -289,10 +289,10 @@ function agentTime(agent: WorkflowAgentFrame, now: number, stopped: boolean): st
   if (agent.startedAt === undefined) return "";
   if (stopped) {
     const end = agent.endedAt ?? agent.lastAt;
-    return end !== undefined && end >= agent.startedAt ? formatDuration(end - agent.startedAt) : "";
+    return end !== undefined && end >= agent.startedAt ? formatWholeSeconds(end - agent.startedAt) : "";
   }
-  if (agent.status === "running") return formatDuration(now - agent.startedAt);
-  return agent.endedAt !== undefined ? formatDuration(agent.endedAt - agent.startedAt) : "";
+  if (agent.status === "running") return formatWholeSeconds(now - agent.startedAt);
+  return agent.endedAt !== undefined ? formatWholeSeconds(agent.endedAt - agent.startedAt) : "";
 }
 
 /** Verbo humano + alvo em mono: "Leu /w/app.ts". */
@@ -314,7 +314,7 @@ function nowLine(agent: WorkflowAgentFrame, now: number, t: Translate): React.Re
   if (activity.kind === "tool") return <ToolAction tool={activity.tool} target={activity.target} t={t} />;
   if (activity.kind === "text") return activity.text;
   const since = activity.since || agent.lastAt || now;
-  return <em>{t("sdk.workflowThinkingFor", { elapsed: formatDuration(now - since) })}</em>;
+  return <em>{t("sdk.workflowThinkingFor", { elapsed: formatWholeSeconds(now - since) })}</em>;
 }
 
 /** Quantos pedidos de novo, que SAÍRAM, um agente CONCLUÍDO faz por um feed que não veio. */
@@ -368,7 +368,7 @@ function AgentFeed({
   const tools = agent.toolCount ?? 0;
   const footer = [
     t("sdk.workflowToolCount", { n: tools, count: agent.toolCountPartial ? `${tools}+` : String(tools) }),
-    ...(agent.startedAt !== undefined ? [t("sdk.workflowStartedAgo", { ago: formatDuration(now - agent.startedAt) })] : []),
+    ...(agent.startedAt !== undefined ? [t("sdk.workflowStartedAgo", { ago: formatWholeSeconds(now - agent.startedAt) })] : []),
   ].join(" · ");
   return (
     <div
@@ -427,8 +427,8 @@ function FeedLineView({ line, t }: { line: FeedLine; t: Translate }) {
     case "text":
       return <span className="min-w-0 whitespace-pre-wrap break-words text-foreground/80">{line.text}</span>;
     case "thought":
-      return <em className="text-muted-foreground/70">{t("sdk.workflowThoughtFor", { elapsed: formatDuration(line.ms) })}</em>;
+      return <em className="text-muted-foreground/70">{t("sdk.workflowThoughtFor", { elapsed: formatWholeSeconds(line.ms) })}</em>;
     case "thinking":
-      return <em className="text-muted-foreground/70">{t("sdk.workflowThinkingFor", { elapsed: formatDuration(line.ms) })}</em>;
+      return <em className="text-muted-foreground/70">{t("sdk.workflowThinkingFor", { elapsed: formatWholeSeconds(line.ms) })}</em>;
   }
 }

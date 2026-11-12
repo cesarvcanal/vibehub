@@ -3,7 +3,7 @@ import type { WorkflowAgentFrame } from "./sdkChat";
 import {
   estimateWorkflowRemaining,
   feedLines,
-  formatDuration,
+  formatWholeSeconds,
   groupAgentsByPhase,
   phasePills,
   verbKey,
@@ -13,15 +13,15 @@ const A = (id: string, over: Partial<WorkflowAgentFrame> = {}): WorkflowAgentFra
   id, label: id, status: "running", ...over,
 });
 
-describe("formatDuration", () => {
+describe("formatWholeSeconds", () => {
   it("segundos, minutos com segundos, horas com minutos", () => {
-    expect(formatDuration(0)).toBe("0s");
-    expect(formatDuration(45_400)).toBe("45s");
-    expect(formatDuration(192_000)).toBe("3m 12s");
-    expect(formatDuration(60_000)).toBe("1m 00s");
-    expect(formatDuration(3_840_000)).toBe("1h 04m");
-    expect(formatDuration(-5_000)).toBe("0s");
-    expect(formatDuration(Number.NaN)).toBe("0s");
+    expect(formatWholeSeconds(0)).toBe("0s");
+    expect(formatWholeSeconds(45_400)).toBe("45s");
+    expect(formatWholeSeconds(192_000)).toBe("3m 12s");
+    expect(formatWholeSeconds(60_000)).toBe("1m 00s");
+    expect(formatWholeSeconds(3_840_000)).toBe("1h 04m");
+    expect(formatWholeSeconds(-5_000)).toBe("0s");
+    expect(formatWholeSeconds(Number.NaN)).toBe("0s");
   });
 });
 
