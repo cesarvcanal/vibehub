@@ -2188,7 +2188,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
    *
    * A causa não é o servidor estar fora: é o RELÓGIO DO RECIBO correr num instante em que o
    * servidor ainda não tem como responder. O `onopen` do navegador dispara no aperto de mão do
-   * websocket, mas o back só chega ao `handleClientFrame` DEPOIS de um setup que leva segundos —
+   * websocket, mas o back só chega ao `dispatchClientFrame` DEPOIS de um setup que leva segundos —
    * `installCardSdkDriver` (dois `docker exec` por SSH, com `npm install` quando a versão mudou), a
    * sonda de transcript (timeout de 15s, sozinha maior que o prazo do recibo), a leitura e o replay
    * do histórico, o spawn do driver. Até lá o frame fica em `pendingFrames` (routes/cardSdk.ts), e
