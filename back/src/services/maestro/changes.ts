@@ -1,6 +1,6 @@
 import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
-import { getCard, getProject, assertBranchName } from "../board/registry.js";
+import { getCardWithProject, assertBranchName } from "../board/registry.js";
 import { cardWorkPaths, cardBranch } from "../board/workspace.js";
 import { cardConnectionToken, ghTokenPreamble } from "./deliver.js";
 import { logger } from "../../utils/logger.js";
@@ -168,10 +168,7 @@ export function parseChanges(stdout: string): CardChanges {
 
 /** What a card has produced so far (see the file header). Read-only. */
 export async function readCardChanges(cardId: string): Promise<CardChanges & { cardId: string; title: string }> {
-  const card = await getCard(cardId);
-  if (!card) throw new Error("card not found");
-  const project = await getProject(card.projectId);
-  if (!project) throw new Error("project for this card not found");
+  const { card, project } = await getCardWithProject(cardId);
   const { cwd } = cardWorkPaths(project, card);
   let token: string | null = null;
   try {
@@ -233,10 +230,7 @@ export function buildFileDiffScript(containerName: string, cwd: string, base: st
 
 /** O diff de um arquivo do card (texto unificado do git). Lança quando o worktree não está lá. */
 export async function readCardFileDiff(cardId: string, path: string): Promise<{ path: string; diff: string; truncated: boolean }> {
-  const card = await getCard(cardId);
-  if (!card) throw new Error("card not found");
-  const project = await getProject(card.projectId);
-  if (!project) throw new Error("project for this card not found");
+  const { card, project } = await getCardWithProject(cardId);
   const { cwd } = cardWorkPaths(project, card);
   const { stdout } = await hostExecutor().runScript(
     buildFileDiffScript(config.runner.container, cwd, card.base || project.baseBranch, path),

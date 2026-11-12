@@ -1,7 +1,7 @@
 import { hostExecutor, shQuote, assertSafeRemotePath, CONTAINER_DEADLINE_MARGIN_MS } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import { testWorkerExports } from "../../runtime/testWorkers.js";
-import { getCard, getProject, assertBranchName } from "../board/registry.js";
+import { getCardWithProject, assertBranchName } from "../board/registry.js";
 import { cardWorkPaths } from "../board/workspace.js";
 import { logger } from "../../utils/logger.js";
 
@@ -448,10 +448,7 @@ function offCommitOutput(expectedSha: string, probe: Pick<GateProbe, "headSha" |
 
 async function runGateNow(cardId: string, expectedSha?: string): Promise<GateResult> {
   if (expectedSha !== undefined && !FULL_SHA_RE.test(expectedSha)) throw new Error("the gate can only be held to a full commit sha");
-  const card = await getCard(cardId);
-  if (!card) throw new Error("card not found");
-  const project = await getProject(card.projectId);
-  if (!project) throw new Error("project for this card not found");
+  const { card, project } = await getCardWithProject(cardId);
   const { cwd } = cardWorkPaths(project, card);
   const container = config.runner.container;
 

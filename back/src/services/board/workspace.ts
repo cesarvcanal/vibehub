@@ -7,7 +7,7 @@ import { gitAuthHeaderFor, tokenFor } from "../github/client.js";
 import { resolveIdentity, type EffectiveIdentity } from "../github/identity.js";
 import { getUserGit, assertGitName, assertGitEmail } from "../../auth/userGit.js";
 import {
-  getCard, getProject, applyOpenTerminal, markPrepared, pauseCard as registryPauseCard,
+  getCard, getCardWithProject, getProject, applyOpenTerminal, markPrepared, pauseCard as registryPauseCard,
   listGithubConnections,
   hibernateCard as registryHibernateCard,
   listAllCards, markCardActivity, assertBranchName, assertSessionId, effectiveAccountSlug, modelPin, isValidEffort, hasLiveSession,
@@ -712,16 +712,10 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
   // The KEY is resolved before the queue is entered (it names the clone this script will write to);
   // the card and the project are read AGAIN inside, because what matters to the script is the state
   // in force after whoever was ahead in the queue has finished.
-  const pending = await getCard(cardId);
-  if (!pending) throw new Error("card not found");
-  const pendingProject = await getProject(pending.projectId);
-  if (!pendingProject) throw new Error("project for this card not found");
+  const { card: pending, project: pendingProject } = await getCardWithProject(cardId);
 
   return withProvisionLock(provisionLockKey(pendingProject, pending), async () => {
-    const card = await getCard(cardId);
-    if (!card) throw new Error("card not found");
-    const project = await getProject(card.projectId);
-    if (!project) throw new Error("project for this card not found");
+    const { card, project } = await getCardWithProject(cardId);
 
     const paths = cardWorkPaths(project, card);
     let repo: OpenScriptOpts["repo"];
@@ -997,10 +991,7 @@ export async function uploadCardImage(
   base64: string,
   by?: string,
 ): Promise<{ path: string }> {
-  const card = await getCard(cardId);
-  if (!card) throw new Error("card not found");
-  const project = await getProject(card.projectId);
-  if (!project) throw new Error("project for this card not found");
+  const { card, project } = await getCardWithProject(cardId);
 
   const b64 = String(base64 ?? "").replace(/\s+/g, ""); // tolerate line breaks from encoders
   if (!B64_RE.test(b64)) throw new Error("invalid base64 content");

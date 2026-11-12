@@ -1,7 +1,7 @@
 import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import {
-  getCard, getProject, assertBranchName, listGithubConnections, recordCardPr, markCardPrMerged, type Card, type Project,
+  getCard, getCardWithProject, getProject, assertBranchName, listGithubConnections, recordCardPr, markCardPrMerged, type Card, type Project,
 } from "../board/registry.js";
 import { cardWorkPaths, cardBranch } from "../board/workspace.js";
 import { tokenFor } from "../github/client.js";
@@ -977,10 +977,7 @@ async function ciGate(
  */
 export async function gateAtCommit(cardId: string, prUrl: string, sha: string): Promise<GateResult> {
   if (!FULL_SHA_RE.test(sha)) throw new Error("gateAtCommit requires the full sha of the reviewed commit");
-  const card = await getCard(cardId);
-  if (!card) throw new Error("card not found");
-  const project = await getProject(card.projectId);
-  if (!project) throw new Error("project for this card not found");
+  const { card, project } = await getCardWithProject(cardId);
   const { cwd } = cardWorkPaths(project, card);
   const token = await cardConnectionToken(card, project);
   return (await ciGate(config.runner.container, card.id, token, cwd, prUrl, sha)) ?? (await runGate(card.id, { expectedSha: sha }));

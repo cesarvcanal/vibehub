@@ -1579,6 +1579,15 @@ export async function getCard(id: string): Promise<Card | undefined> {
   return (await store.load()).cards.find((c) => c.id === id);
 }
 
+/** The card and its project, for a caller that cannot go on without both. Throws when either is gone. */
+export async function getCardWithProject(cardId: string): Promise<{ card: Card; project: Project }> {
+  const card = await getCard(cardId);
+  if (!card) throw new Error("card not found");
+  const project = await getProject(card.projectId);
+  if (!project) throw new Error("project for this card not found");
+  return { card, project };
+}
+
 /** EVERY card of every project, unordered. Used by bulk operations such as "restart everything". */
 export async function listAllCards(): Promise<Card[]> {
   return (await store.load()).cards;

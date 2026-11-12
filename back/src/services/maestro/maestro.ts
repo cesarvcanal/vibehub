@@ -1,7 +1,7 @@
 import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import {
-  listProjects, listAllCards, getCard, getProject, hasLiveSession, effectiveAccountSlug, markCardActivity,
+  listProjects, listAllCards, getCard, getCardWithProject, getProject, hasLiveSession, effectiveAccountSlug, markCardActivity,
   listAccounts, getConfig, isHumanActive, reportCardState, CLAUDE_MODELS, isValidEffort,
   type Card, type Project, type BoardColumn, type CardStatus, type DeclaredState,
 } from "../board/registry.js";
@@ -647,10 +647,7 @@ export async function readTerminal(cardId: string, last = 3): Promise<ReadResult
 
 /** The card and the tail of its newest transcript (read-only; no live session needed). */
 async function readCardTranscript(cardId: string): Promise<{ card: Card; transcript: string }> {
-  const card = await getCard(cardId);
-  if (!card) throw new Error("card not found");
-  const project = await getProject(card.projectId);
-  if (!project) throw new Error("project for this card not found");
+  const { card, project } = await getCardWithProject(cardId);
   const transcriptDir = transcriptDirFor(project, card, effectiveAccountSlug(card, project));
   const { stdout } = await hostExecutor().runScript(
     buildReadTranscriptScript(config.runner.container, transcriptDir, TAIL_LINES),
@@ -1015,10 +1012,7 @@ export interface SessionInfo {
 
 /** What a card's session is really running with. Read-only; tolerates a missing transcript. */
 export async function sessionInfo(cardId: string): Promise<SessionInfo> {
-  const card = await getCard(cardId);
-  if (!card) throw new Error("card not found");
-  const project = await getProject(card.projectId);
-  if (!project) throw new Error("project for this card not found");
+  const { card, project } = await getCardWithProject(cardId);
 
   const slug = effectiveAccountSlug(card, project);
   const accounts = await listAccounts();
