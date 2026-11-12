@@ -7,7 +7,7 @@ import type { Finding, FindingSeverity, Review, ReviewPhase, ReviewWorking } fro
 import { ENTER, ReviewConversation, SAID_CLAMP_CHARS } from "@/features/board/components/ReviewConversation";
 import { cardHref } from "@/features/board/lib/board";
 import {
-  FINDING_SEVERITY_TONE, FINDING_STATUS_TONE, IMPASSE_ROUNDS, REVIEW_MAX_ROUNDS, awaitingDecision, findingIsOpen,
+  FINDING_SEVERITY_TONE, FINDING_STATUS_TONE, IMPASSE_ROUNDS, REVIEW_MAX_ROUNDS, autonomySummary, awaitingDecision, findingIsOpen,
   MERGE_GATE_AUTO_RETRIES, mergeGateOf, mergeGateStatus, pendingQuestions, requestedAtText, reviewIsOpen, reviewPill, reviewTurn, stuckItems, type ReviewActions,
 } from "@/features/board/lib/review";
 import { t as translate, useT } from "@/i18n";
@@ -350,8 +350,11 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
   );
 }
 
-/** The closed list in the order that matters: what a person must decide, what blocks, the suggestions, what fell. */
-const GROUPS: FindingSeverity[] = ["question", "blocking", "suggestion", "refuted"];
+/**
+ * The closed list in the order that matters: what a person must decide, what blocks, what the author's
+ * AI applies on its own, the suggestions, what fell.
+ */
+const GROUPS: FindingSeverity[] = ["question", "blocking", "improvement", "suggestion", "refuted"];
 
 function FindingsList({
   review, busy, decisionsFor, canRequest, onDecide, onDecideSuggestions,
@@ -393,6 +396,7 @@ function FindingsList({
   }
   return (
     <div className="space-y-4 py-1 pr-1">
+      <AutonomyLine review={review} />
       {pending.length === 0 ? (
         <p className="py-4 text-center text-xs text-muted-foreground">{t("review.list.allResolved")}</p>
       ) : null}
@@ -482,6 +486,23 @@ function FindingsList({
         </section>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * At a glance, who settled what: the bugs and improvements the AIs handled on their own (folded into
+ * "Resolvidos" below, where they would go unseen) and the doubts that wait on a person. Nothing to say, no line.
+ */
+function AutonomyLine({ review }: { review: Review }) {
+  const t = useT();
+  const { fixed, improved, human } = autonomySummary(review.findings);
+  if (fixed + improved + human === 0) return null;
+  return (
+    <p data-testid="review-autonomy" className="flex flex-wrap gap-1.5">
+      {fixed > 0 ? <Badge tone="ok" className="px-1.5 text-[11px]">{t("review.autonomy.fixed", { n: fixed })}</Badge> : null}
+      {improved > 0 ? <Badge tone="ok" className="px-1.5 text-[11px]">{t("review.autonomy.improved", { n: improved })}</Badge> : null}
+      {human > 0 ? <Badge tone="info" className="px-1.5 text-[11px]">{t("review.autonomy.human", { n: human })}</Badge> : null}
+    </p>
   );
 }
 

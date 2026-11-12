@@ -149,3 +149,56 @@ describe("prompts da revisão: bug não é sugestão", () => {
     expect(round).toContain("blocking com proof.kind = scenario (ref = arquivo:linha, detail = o caso que dá errado)");
   });
 });
+
+describe("quem age em cada achado: revisor e autor leem as mesmas classes", () => {
+  const improvement: Finding = {
+    id: "f1", severity: "improvement", title: "tira a duplicação", status: "open", introducedInRound: 1, file: "src/a.ts", fix: "x",
+  };
+
+  it("o mesmo bloco de classes chega ao revisor (rodada e delta) e ao autor (correção e sugestões)", () => {
+    const delta = { ...review([improvement]), round: 2, reviewedSha: "a".repeat(40) };
+    const texts = [
+      reviewerRoundPrompt(review()), reviewerDeltaPrompt(delta), authorFixPrompt(review([improvement])),
+      authorSuggestionsPrompt(review([improvement]), [improvement], { by: "cesar" }),
+    ];
+    for (const text of texts) {
+      expect(text).toContain("Autonomia técnica não é autonomia de produto");
+      expect(text).toMatch(/- improvement — a IA do autor aplica sozinha/);
+      expect(text).toMatch(/- question — espera a decisão de uma pessoa/);
+    }
+  });
+
+  it("dúvida só para decisão de intenção ou produto, inclusive colisão com o que já funcionava; nunca como saída fácil", () => {
+    const text = reviewerRoundPrompt(review());
+    expect(text).toMatch(/mudar regra de negócio ou o comportamento esperado/);
+    expect(text).toMatch(/altera algo que já funcionava sem deixar claro que era a intenção, ou pode colidir com uma funcionalidade existente/);
+    expect(text).toMatch(/Dúvida não é saída fácil: erro comprovado com uma solução coerente com o que foi pedido é blocking/);
+    expect(text).toMatch(/Os exemplos ilustram o critério; não são uma lista fechada/);
+  });
+
+  it("melhoria presa ao escopo: o revisor ancora no arquivo do PR e o autor não sai dele", () => {
+    expect(reviewerRoundPrompt(review())).toMatch(/file obrigatório, num arquivo que o PR altera/);
+    expect(reviewerRoundPrompt(review())).toContain('severity: "blocking" | "improvement" | "suggestion" | "question" | "refuted"');
+    const text = authorFixPrompt(review([improvement]));
+    expect(text).toMatch(/Melhorias autônomas \(aplique agora, sem esperar ninguém/);
+    expect(text).toContain("- f1 [improvement, aberto] tira a duplicação (src/a.ts)");
+    expect(text).toMatch(/só nos arquivos que o PR já altera/);
+    expect(text).toMatch(/wontfix só em sugestão e melhoria/);
+  });
+
+  it("o autor decide como resolver, não o que o sistema faz", () => {
+    expect(authorFixPrompt(review())).toMatch(/Você decide COMO resolver, não O QUE o sistema deve fazer/);
+  });
+
+  it("no delta o revisor confere a melhoria aplicada e trata como bug novo a que saiu do escopo", () => {
+    const answered = { ...improvement, authorReply: "apliquei", commit: "abc" };
+    const r: Review = {
+      ...review([answered]), round: 2, reviewedSha: "a".repeat(40),
+      log: [{ at: 1, round: 1, who: "author", text: "x", items: [{ id: "f1", status: "open" }] }],
+    };
+    const text = reviewerDeltaPrompt(r);
+    expect(text).toMatch(/Melhorias que o autor respondeu/);
+    expect(text).toContain("- f1 [improvement, aberto] tira a duplicação");
+    expect(text).toMatch(/saiu do escopo do PR ou mudou comportamento: achado novo blocking com introducedInRound: 2/);
+  });
+});

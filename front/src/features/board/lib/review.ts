@@ -210,14 +210,32 @@ export const reviewIsOpen = (phase: ReviewPhase | undefined): boolean =>
 /** How many findings of each severity, whatever their status: the header of the closed list. PURE. */
 export interface FindingCounts {
   blocking: number;
+  improvement: number;
   suggestion: number;
   question: number;
   refuted: number;
 }
 export function findingCounts(findings: Finding[]): FindingCounts {
-  const counts: FindingCounts = { blocking: 0, suggestion: 0, question: 0, refuted: 0 };
+  const counts: FindingCounts = { blocking: 0, improvement: 0, suggestion: 0, question: 0, refuted: 0 };
   for (const f of findings) counts[f.severity] += 1;
   return counts;
+}
+
+/**
+ * What the AIs settled on their own and what waits on a person: bugs the author fixed (not the ones a
+ * person turned into a block), improvements it applied, and doubts no one decided yet. PURE.
+ */
+export interface AutonomySummary {
+  fixed: number;
+  improved: number;
+  human: number;
+}
+export function autonomySummary(findings: Finding[]): AutonomySummary {
+  return {
+    fixed: findings.filter((f) => f.severity === "blocking" && f.status === "fixed").length,
+    improved: findings.filter((f) => f.severity === "improvement" && f.status === "fixed").length,
+    human: pendingQuestions(findings).length,
+  };
 }
 
 /**
@@ -232,6 +250,7 @@ const isOpen = findingIsOpen;
 /** The tone of each finding's severity and status, wherever a finding is drawn (the list, the conversation). */
 export const FINDING_SEVERITY_TONE: Record<FindingSeverity, BadgeTone> = {
   blocking: "critical",
+  improvement: "ok",
   question: "info",
   suggestion: "muted",
   refuted: "muted",
