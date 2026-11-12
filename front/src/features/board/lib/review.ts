@@ -1,6 +1,6 @@
 import type { BadgeTone } from "@/components/ui/badge";
 import type {
-  CardPr, Finding, FindingSeverity, FindingStatus, MergeGate, Review, ReviewEvent, ReviewPhase, ReviewSummary, ReviewWorking,
+  CardPr, Finding, FindingSeverity, FindingStatus, MergeGate, Person, Review, ReviewEvent, ReviewPhase, ReviewSummary, ReviewWorking,
 } from "@/api/types";
 
 /**
@@ -196,6 +196,37 @@ export function startErrorCode(err: unknown): string | null {
 export function startErrorRoles(err: unknown): ReviewRole[] {
   const named = failureMessage(err).match(/\b(?:reviewer|author|coauthor|merger)UserId\b/g) ?? [];
   return named.map((field) => ROLE_FIELDS[field]);
+}
+
+/** Who holds each role in the review request: a user id, "" while nobody is picked. */
+export type ReviewRoles = Record<ReviewRole, string>;
+
+/**
+ * What the dialog starts with, so the common case is one click: you review and merge (unless you
+ * are the author, or have no Claude account to review on), and the card's actor fixes. A person who
+ * is not among the card's people cannot hold a role, so they never come out as a default. PURE.
+ */
+export function suggestedRoles(people: Person[], meId: string | undefined, actorUserId: string | undefined, pr: CardPr): ReviewRoles {
+  const me = people.find((p) => p.id === meId);
+  const author = pr.attached
+    ? githubAuthor(people, pr.author)?.id ?? ""
+    : actorUserId && people.some((p) => p.id === actorUserId) ? actorUserId : "";
+  return {
+    reviewer: me && me.canReview && me.id !== author ? me.id : "",
+    author,
+    coauthor: "",
+    merger: me?.id ?? "",
+  };
+}
+
+/**
+ * Who opened an attached PR, among the card's people: the one whose OWN GitHub connection has that
+ * login (GitHub logins are case-insensitive) and who has a Claude account for the fixes to run on. PURE.
+ */
+export function githubAuthor(people: Person[], login: string | undefined): Person | undefined {
+  if (!login) return undefined;
+  const wanted = login.toLowerCase();
+  return people.find((p) => p.canReview && p.githubLogin?.toLowerCase() === wanted);
 }
 
 /* ------------------------------------------------------------------ the panel */

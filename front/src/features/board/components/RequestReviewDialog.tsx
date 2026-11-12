@@ -9,11 +9,11 @@ import {
 import { Label } from "@/components/ui/label";
 import { post } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
-import type { CardPr, Person, Review, StartReviewBody } from "@/api/types";
+import type { CardPr, Review, StartReviewBody } from "@/api/types";
 import { CARDS_PREFIX_KEY, boardApi } from "@/features/board/api";
 import { SELECT_CLASS } from "@/features/board/components/NewCardDialog";
 import {
-  cardPeopleKey, cardReviewKey, startErrorCode, startErrorRoles,
+  cardPeopleKey, cardReviewKey, githubAuthor, startErrorCode, startErrorRoles, suggestedRoles, type ReviewRoles,
 } from "@/features/board/lib/review";
 import { useAuth } from "@/providers/auth";
 import { t as translate, useT } from "@/i18n";
@@ -39,41 +39,6 @@ import { t as translate, useT } from "@/i18n";
  * the login that opened the PR, and nobody without a Claude account can be the author.
  */
 
-interface Roles {
-  reviewer: string;
-  author: string;
-  coauthor: string;
-  merger: string;
-}
-
-/**
- * What the dialog starts with, so the common case is one click: you review and merge (unless you
- * are the author, or have no Claude account to review on), and the card's actor fixes. A person who
- * is not among the card's people cannot hold a role, so they never come out as a default. PURE.
- */
-function suggestedRoles(people: Person[], meId: string | undefined, actorUserId: string | undefined, pr: CardPr): Roles {
-  const me = people.find((p) => p.id === meId);
-  const author = pr.attached
-    ? githubAuthor(people, pr.author)?.id ?? ""
-    : actorUserId && people.some((p) => p.id === actorUserId) ? actorUserId : "";
-  return {
-    reviewer: me && me.canReview && me.id !== author ? me.id : "",
-    author,
-    coauthor: "",
-    merger: me?.id ?? "",
-  };
-}
-
-/**
- * Who opened an attached PR, among the card's people: the one whose OWN GitHub connection has that
- * login (GitHub logins are case-insensitive) and who has a Claude account for the fixes to run on. PURE.
- */
-function githubAuthor(people: Person[], login: string | undefined): Person | undefined {
-  if (!login) return undefined;
-  const wanted = login.toLowerCase();
-  return people.find((p) => p.canReview && p.githubLogin?.toLowerCase() === wanted);
-}
-
 export interface RequestReviewDialogProps {
   cardId: string;
   pr: CardPr;
@@ -97,13 +62,13 @@ export function RequestReviewDialog({ cardId, pr, actorUserId, open, onClose }: 
 
   // Only what the person changed is kept; the rest follows the suggestion, so it settles on its own
   // once the session and the people have both arrived.
-  const [picked, setPicked] = React.useState<Partial<Roles>>({});
+  const [picked, setPicked] = React.useState<Partial<ReviewRoles>>({});
   const [failure, setFailure] = React.useState<{ error: unknown } | null>(null);
   const suggested = React.useMemo(
     () => suggestedRoles(people.data ?? [], user?.id, actorUserId, pr),
     [people.data, user?.id, actorUserId, pr],
   );
-  const roles: Roles = { ...suggested, ...picked };
+  const roles: ReviewRoles = { ...suggested, ...picked };
 
   const start = useMutation({
     mutationFn: (body: StartReviewBody) => post<{ review: Review }>(`/cards/${encodeURIComponent(cardId)}/review`, body),
@@ -126,7 +91,7 @@ export function RequestReviewDialog({ cardId, pr, actorUserId, open, onClose }: 
     reset();
   }, [open, reset]);
 
-  const pick = (role: keyof Roles) => (e: React.ChangeEvent<HTMLSelectElement>) => {
+  const pick = (role: keyof ReviewRoles) => (e: React.ChangeEvent<HTMLSelectElement>) => {
     setPicked((current) => ({ ...current, [role]: e.target.value }));
     setFailure(null);
   };
@@ -148,7 +113,7 @@ export function RequestReviewDialog({ cardId, pr, actorUserId, open, onClose }: 
 
   const problem = reviewerIsAuthor ? t("review.error.revisor_igual_autor") : failure ? refusalMessage(failure.error) : null;
 
-  const field = (role: keyof Roles, label: string, children: React.ReactNode) => (
+  const field = (role: keyof ReviewRoles, label: string, children: React.ReactNode) => (
     <div className="space-y-1.5">
       <Label htmlFor={`${ids}-${role}`}>{label}</Label>
       <select
