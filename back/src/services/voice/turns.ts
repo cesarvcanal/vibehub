@@ -71,11 +71,6 @@ async function knownVids(cardId: string): Promise<Set<string>> {
   return pending;
 }
 
-export function resetVoiceTurns(): void {
-  known.clear();
-  loading.clear();
-}
-
 /**
  * Writes the turns not yet in the card's log and announces them to every open chat of the card
  * (the sender's own included — it reconciles by `vid`). Returns which ids were written now and which

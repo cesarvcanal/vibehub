@@ -61,10 +61,6 @@ export function takeSpeechSlot(user: string, now: number = Date.now()): void {
   recent.set(user, kept);
 }
 
-export function resetSpeechSlots(): void {
-  recent.clear();
-}
-
 export interface SynthesizeOptions {
   user: string;
   cardId?: string;
