@@ -1,6 +1,7 @@
 import { hostExecutor, shQuote } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import { TRANSCRIPT_FOLLOW_MARKER } from "../chat/chat.js";
+import { BROWSER_DATA_DIR } from "../browser/ports.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -115,7 +116,7 @@ export const REAP_TEST_RUN_AGE_S = 2 * 3600;
 export const REAP_STRAY_BROWSER_AGE_S = 6 * 3600;
 
 /** Where the card browsers live (the feature): their Chromiums are never this reaper's business. */
-export const CARD_BROWSER_DIR = "/work/.browser/";
+const CARD_BROWSER_DIR = `${BROWSER_DATA_DIR}/`;
 
 /**
  * A test runner or typechecker: vitest (main process and its `node (vitest N)` workers), jest, tsc,
