@@ -575,6 +575,7 @@ export function attachmentThumbUrl(a: Attachment): string | undefined {
 
 /** Tests only: forget every draft, in both layers. */
 export function resetDraftsForTesting(): void {
+  resetDictationsForTesting();
   memoryDrafts.clear();
   sendsInFlight.clear();
   chipFiles.clear();
@@ -712,6 +713,190 @@ export function formatElapsed(ms: number): string {
 }
 
 type RecordingState = "idle" | "recording" | "processing";
+
+/* ------------------------------------------------ a recording outlives the field it started in */
+
+/**
+ * The card's recording, by card id.
+ *
+ * Module-level, like the drafts and the chip bytes, and for the same reason: the field is swapped
+ * under a live microphone. A card that is still preparing has a composer of its own, and the moment
+ * Claude is up the chat mounts ANOTHER one. With the recorder inside the component, that swap
+ * unmounted it, and the unmount's cancel threw away everything said while the agent was loading —
+ * exactly when people dictate a card's first message. Now the new field finds the recording running
+ * and takes it over; only a card left with no field at all cancels it.
+ *
+ * Replaced (never mutated) on every state change: it is the `useSyncExternalStore` snapshot.
+ */
+interface Dictation {
+  state: "recording" | "processing";
+  startedAt: number;
+  stream: MediaStream;
+  recorder: MediaRecorder;
+  chunks: Blob[];
+  /** Set by Cancel: `onstop` throws the audio away instead of transcribing it. */
+  discard: boolean;
+  capTimer: ReturnType<typeof setTimeout> | null;
+}
+
+const dictations = new Map<string, Dictation>();
+/** Cards whose `getUserMedia` is still asking: a second press must not open a second microphone. */
+const dictationsStarting = new Set<string>();
+const dictationListeners = new Map<string, Set<() => void>>();
+/** The fields of a card on screen, newest last: a transcription lands in the newest. */
+const dictationSinks = new Map<string, Array<(spoken: string) => void>>();
+
+function setDictation(cardId: string, next: Dictation | null): void {
+  if (next) dictations.set(cardId, next);
+  else dictations.delete(cardId);
+  dictationListeners.get(cardId)?.forEach((listener) => listener());
+}
+
+function subscribeDictation(cardId: string, listener: () => void): () => void {
+  const set = dictationListeners.get(cardId) ?? new Set();
+  set.add(listener);
+  dictationListeners.set(cardId, set);
+  return () => {
+    set.delete(listener);
+    if (set.size === 0) dictationListeners.delete(cardId);
+  };
+}
+
+/**
+ * A field of this card is on screen, and takes what is transcribed. Leaving, it hands the recording
+ * over: the field that replaces it registers in the same React commit, BEFORE the microtask runs —
+ * only when none did is the card truly gone from the screen, and the microphone is then cancelled,
+ * never left on behind it.
+ */
+function attachDictationSink(cardId: string, sink: (spoken: string) => void): () => void {
+  dictationSinks.set(cardId, [...(dictationSinks.get(cardId) ?? []), sink]);
+  return () => {
+    const rest = (dictationSinks.get(cardId) ?? []).filter((s) => s !== sink);
+    if (rest.length > 0) dictationSinks.set(cardId, rest);
+    else dictationSinks.delete(cardId);
+    queueMicrotask(() => {
+      if (!dictationSinks.has(cardId)) stopDictation(cardId, true);
+    });
+  };
+}
+
+/**
+ * Appended, never sent: voice is the least reliable input there is, and the whole point of the
+ * field is that you read it before the agent does. With no field on screen (it left while the
+ * audio was being transcribed) the words go into the card's draft, where the next field finds them.
+ */
+function deliverSpoken(cardId: string, spoken: string): void {
+  const sink = dictationSinks.get(cardId)?.at(-1);
+  if (sink) {
+    sink(spoken);
+    return;
+  }
+  const draft = loadDraft(cardId);
+  saveDraft(cardId, appendFragment(draft.text, spoken), draft.attachments);
+}
+
+async function transcribeDictation(cardId: string, blob: Blob): Promise<void> {
+  if (blob.size === 0) return; // the browser gave us nothing — say nothing
+  if (blob.size > AUDIO_MAX_BYTES) {
+    toast.error(translate("composer.recordingTooBig"));
+    return;
+  }
+  // Recognition takes seconds, and a composer that just sits there looks broken.
+  const pending = toast.loading(translate("composer.transcribing"));
+  try {
+    const { text: spoken } = await boardApi.transcribeCardAudio(cardId, blob);
+    if (spoken) deliverSpoken(cardId, spoken);
+    else toast.error(translate("composer.nothingSaid"));
+  } catch (error) {
+    toast.error(apiErrorMessage(error, translate("composer.transcribeError")));
+  } finally {
+    toast.dismiss(pending);
+  }
+}
+
+async function startDictation(cardId: string): Promise<void> {
+  if (dictations.has(cardId) || dictationsStarting.has(cardId)) return;
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+    // Over plain http the browser hides the microphone API altogether, so no permission prompt
+    // ever shows up. That is the address's fault, not the phone's, and the fix is one tap away.
+    if (!window.isSecureContext) {
+      toast.error(translate("composer.micNeedsHttps"), {
+        action: {
+          label: translate("composer.openInHttps"),
+          onClick: () => window.location.assign(window.location.href.replace(/^http:/, "https:")),
+        },
+      });
+      return;
+    }
+    toast.error(translate("composer.cannotRecord"));
+    return;
+  }
+  dictationsStarting.add(cardId);
+  let stream: MediaStream | null = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // The permission prompt can outlast the card: nobody is left to record for.
+    if (!dictationSinks.has(cardId)) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    const mimeType = pickAudioMimeType();
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    const live = stream;
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) dictations.get(cardId)?.chunks.push(event.data);
+    };
+    recorder.onstop = () => {
+      live.getTracks().forEach((track) => track.stop());
+      const ended = dictations.get(cardId);
+      if (!ended) return;
+      const blob = new Blob(ended.chunks, { type: recorder.mimeType || mimeType || "audio/webm" });
+      if (ended.discard) {
+        setDictation(cardId, null);
+        return;
+      }
+      setDictation(cardId, { ...ended, state: "processing", chunks: [] });
+      void transcribeDictation(cardId, blob).finally(() => setDictation(cardId, null));
+    };
+    recorder.start();
+    setDictation(cardId, {
+      state: "recording",
+      startedAt: Date.now(),
+      stream,
+      recorder,
+      chunks: [],
+      discard: false,
+      // Hard stop: the five-minute cap finishes (transcribes), it does not cancel.
+      capTimer: setTimeout(() => stopDictation(cardId, false), AUDIO_MAX_RECORD_MS),
+    });
+  } catch {
+    toast.error(translate("composer.micBlocked"));
+    stream?.getTracks().forEach((track) => track.stop());
+  } finally {
+    dictationsStarting.delete(cardId);
+  }
+}
+
+/** Ends the card's recording: `discard` throws it away (Cancel), otherwise it is transcribed. */
+function stopDictation(cardId: string, discard: boolean): void {
+  const live = dictations.get(cardId);
+  if (!live || live.state !== "recording") return;
+  if (live.capTimer !== null) clearTimeout(live.capTimer);
+  live.capTimer = null;
+  live.discard = discard;
+  if (live.recorder.state === "recording") live.recorder.stop();
+}
+
+/** Tests only: no recording survives from one test into the next. */
+function resetDictationsForTesting(): void {
+  for (const live of dictations.values()) {
+    if (live.capTimer !== null) clearTimeout(live.capTimer);
+  }
+  dictations.clear();
+  dictationsStarting.clear();
+  dictationListeners.clear();
+  dictationSinks.clear();
+}
 
 export function TerminalComposer({
   onSend,
@@ -1101,7 +1286,12 @@ export function TerminalComposer({
   });
   const canRecord = Boolean(cardId && voice?.available);
 
-  const [recording, setRecording] = React.useState<RecordingState>("idle");
+  const subscribe = React.useCallback(
+    (listener: () => void) => (cardId ? subscribeDictation(cardId, listener) : () => undefined),
+    [cardId],
+  );
+  const liveDictation = React.useSyncExternalStore(subscribe, () => (cardId ? dictations.get(cardId) : undefined));
+  const recording: RecordingState = liveDictation?.state ?? "idle";
   // A new vibehub version reloads the tab on its own when it is idle — never while this field holds
   // something only the browser has: an image still uploading, or audio being recorded/transcribed.
   const holdId = React.useId();
@@ -1109,28 +1299,21 @@ export function TerminalComposer({
   /**
    * How long the current recording has been running. Without it a phone recording is a red button
    * and nothing else — you cannot tell a five-second thought from a two-minute one you forgot to
-   * stop, and the five-minute cap arrives as a surprise.
+   * stop, and the five-minute cap arrives as a surprise. Counted from the recording's own start, so
+   * a field that took it over mid-sentence shows the same clock.
    */
   const [elapsedMs, setElapsedMs] = React.useState(0);
   const [levels, setLevels] = React.useState<number[]>(() => barHeights(0));
-  const recorderRef = React.useRef<MediaRecorder | null>(null);
-  const streamRef = React.useRef<MediaStream | null>(null);
-  const chunksRef = React.useRef<Blob[]>([]);
-  const capTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Set by Cancel: the recording is thrown away in `onstop` instead of being transcribed.
-  const discardRef = React.useRef(false);
   const audioCtxRef = React.useRef<AudioContext | null>(null);
   const analyserRef = React.useRef<AnalyserNode | null>(null);
   const frameRef = React.useRef<number | null>(null);
-  const appendRef = React.useRef(append);
-  appendRef.current = append;
-  const cardRef = React.useRef(cardId);
-  cardRef.current = cardId;
 
-  const stopTracks = React.useCallback(() => {
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
-  }, []);
+  // This field takes what is transcribed for its card — and, leaving, hands a live recording to the
+  // field that replaces it (see `attachDictationSink`).
+  React.useEffect(() => {
+    if (!cardId) return;
+    return attachDictationSink(cardId, append);
+  }, [cardId, append]);
 
   const stopVisualiser = React.useCallback(() => {
     if (frameRef.current !== null) {
@@ -1171,134 +1354,44 @@ export function TerminalComposer({
     }
   }, []);
 
-  const clearCap = React.useCallback(() => {
-    if (capTimerRef.current !== null) {
-      clearTimeout(capTimerRef.current);
-      capTimerRef.current = null;
-    }
-  }, []);
-
-  /** Stop and transcribe. Also what the five-minute cap fires. */
-  const finishRecording = React.useCallback(() => {
-    clearCap();
-    discardRef.current = false;
-    if (recorderRef.current?.state === "recording") recorderRef.current.stop();
-  }, [clearCap]);
-
-  /** Stop and throw away: nothing is uploaded, nothing is transcribed, nothing is written. */
-  const cancelRecording = React.useCallback(() => {
-    clearCap();
-    discardRef.current = true;
-    if (recorderRef.current?.state === "recording") recorderRef.current.stop();
-  }, [clearCap]);
-
-  const transcribe = React.useCallback(async (blob: Blob) => {
-    const id = cardRef.current;
-    if (!id) return;
-    if (blob.size === 0) return; // the browser gave us nothing — say nothing
-    if (blob.size > AUDIO_MAX_BYTES) {
-      toast.error(translate("composer.recordingTooBig"));
-      return;
-    }
-    // Recognition takes seconds, and a composer that just sits there looks broken.
-    const pending = toast.loading(translate("composer.transcribing"));
-    try {
-      const { text: spoken } = await boardApi.transcribeCardAudio(id, blob);
-      // Appended, never sent: voice is the least reliable input there is, and the whole point of
-      // this field is that you read it before the agent does.
-      if (spoken) appendRef.current(spoken);
-      else toast.error(translate("composer.nothingSaid"));
-    } catch (error) {
-      toast.error(apiErrorMessage(error, translate("composer.transcribeError")));
-    } finally {
-      toast.dismiss(pending);
-    }
-  }, []);
-
-  const startRecording = React.useCallback(async () => {
-    if (recording !== "idle" || !cardRef.current) return;
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      // Over plain http the browser hides the microphone API altogether, so no permission prompt
-      // ever shows up. That is the address's fault, not the phone's, and the fix is one tap away.
-      if (!window.isSecureContext) {
-        toast.error(translate("composer.micNeedsHttps"), {
-          action: {
-            label: translate("composer.openInHttps"),
-            onClick: () => window.location.assign(window.location.href.replace(/^http:/, "https:")),
-          },
-        });
-        return;
-      }
-      toast.error(translate("composer.cannotRecord"));
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      startVisualiser(stream);
-      const mimeType = pickAudioMimeType();
-      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-      recorderRef.current = recorder;
-      chunksRef.current = [];
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) chunksRef.current.push(event.data);
-      };
-      recorder.onstop = () => {
-        stopTracks();
-        stopVisualiser();
-        const discarded = discardRef.current;
-        discardRef.current = false;
-        const blob = new Blob(chunksRef.current, {
-          type: recorder.mimeType || mimeType || "audio/webm",
-        });
-        chunksRef.current = [];
-        if (discarded) {
-          setRecording("idle");
-          return;
-        }
-        setRecording("processing");
-        void transcribe(blob).finally(() => setRecording("idle"));
-      };
-      recorder.start();
-      setRecording("recording");
-      capTimerRef.current = setTimeout(finishRecording, AUDIO_MAX_RECORD_MS);
-    } catch {
-      toast.error(translate("composer.micBlocked"));
-      stopTracks();
-      stopVisualiser();
-    }
-  }, [recording, startVisualiser, stopTracks, stopVisualiser, transcribe, finishRecording]);
-
+  // The bars belong to the field on screen, the stream to the card: a field that takes a recording
+  // over draws it from the same stream.
+  const liveStream = liveDictation?.state === "recording" ? liveDictation.stream : null;
   React.useEffect(() => {
-    if (recording !== "recording") {
+    if (!liveStream) return;
+    startVisualiser(liveStream);
+    return stopVisualiser;
+  }, [liveStream, startVisualiser, stopVisualiser]);
+
+  const startedAt = liveDictation?.state === "recording" ? liveDictation.startedAt : null;
+  React.useEffect(() => {
+    if (startedAt === null) {
       setElapsedMs(0);
       return;
     }
-    const started = Date.now();
-    setElapsedMs(0);
-    const id = setInterval(() => setElapsedMs(Date.now() - started), 250);
+    setElapsedMs(Date.now() - startedAt);
+    const id = setInterval(() => setElapsedMs(Date.now() - startedAt), 250);
     return () => clearInterval(id);
-  }, [recording]);
+  }, [startedAt]);
+
+  const startRecording = React.useCallback(() => {
+    if (cardId) void startDictation(cardId);
+  }, [cardId]);
+  /** Stop and transcribe. */
+  const finishRecording = React.useCallback(() => {
+    if (cardId) stopDictation(cardId, false);
+  }, [cardId]);
+  /** Stop and throw away: nothing is uploaded, nothing is transcribed, nothing is written. */
+  const cancelRecording = React.useCallback(() => {
+    if (cardId) stopDictation(cardId, true);
+  }, [cardId]);
 
   // Switching to another card mid-recording ends it the same way the Cancel button does. Nothing is
   // uploaded and nothing is written: a thought you stopped saying halfway through is not a message,
   // and the microphone must not stay live behind a screen you are no longer looking at.
   React.useEffect(() => {
-    if (active) return;
-    if (recorderRef.current?.state === "recording") cancelRecording();
+    if (!active) cancelRecording();
   }, [active, cancelRecording]);
-
-  // Leaving the card mid-recording must not leave the microphone light on, and must not fire a
-  // transcription into a screen that is gone: this cancels, it does not finish.
-  React.useEffect(() => {
-    return () => {
-      clearCap();
-      discardRef.current = true;
-      if (recorderRef.current?.state === "recording") recorderRef.current.stop();
-      stopTracks();
-      stopVisualiser();
-    };
-  }, [clearCap, stopTracks, stopVisualiser]);
 
   /**
    * Grow with the text, up to `max-h-48`. The field starts at three lines because that is roughly
@@ -1334,7 +1427,7 @@ export function TerminalComposer({
       levels={levels}
       mobile={isMobile}
       elapsed={formatElapsed(elapsedMs)}
-      onStart={() => void startRecording()}
+      onStart={startRecording}
       onFinish={finishRecording}
       onCancel={cancelRecording}
     />

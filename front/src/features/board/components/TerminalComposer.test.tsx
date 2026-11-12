@@ -1191,6 +1191,75 @@ describe("TerminalComposer — voice input", () => {
     }
   });
 
+  it("keeps recording when the card finishes preparing and the chat's field replaces the first one", async () => {
+    // Production, 2026-11-12: the person pressed the mic while the agent was still loading, to have
+    // the first message ready — and when the card came up, the "Preparando…" field was swapped for
+    // the chat's, whose unmount cancelled the recording and threw away everything said.
+    serveVoice(true);
+    mockPost.mockResolvedValue({ text: "fix the login page", proofread: true });
+    const user = userEvent.setup();
+    const { rerender } = renderComposer(
+      <div>
+        <TerminalComposer key="preparing" onSend={vi.fn()} cardId="c1" />
+      </div>,
+    );
+    await waitFor(() => expect(screen.getByTestId("composer-mic")).toBeEnabled());
+    await user.click(screen.getByTestId("composer-mic"));
+    await screen.findByTestId("composer-mic-recording");
+    const recorder = FakeRecorder.last;
+
+    // Claude is up: a different composer instance takes the seat, in the same commit.
+    rerender(
+      <div>
+        <TerminalComposer key="chat" onSend={vi.fn()} cardId="c1" />
+      </div>,
+    );
+    await act(async () => {});
+
+    // Still the same recording, still live, and the new field shows it.
+    expect(recorder?.state).toBe("recording");
+    expect(FakeRecorder.last).toBe(recorder);
+    expect(stopTrack).not.toHaveBeenCalled();
+    await user.click(await screen.findByTestId("composer-mic-finish"));
+
+    await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("fix the login page"));
+    expect(mockPost).toHaveBeenCalledWith("/cards/c1/transcribe", expect.anything());
+  });
+
+  it("still cancels when the card's field goes away with nothing to replace it", async () => {
+    serveVoice(true);
+    const user = userEvent.setup();
+    const { unmount } = renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" />);
+    await waitFor(() => expect(screen.getByTestId("composer-mic")).toBeEnabled());
+    await user.click(screen.getByTestId("composer-mic"));
+    await screen.findByTestId("composer-mic-recording");
+
+    unmount();
+    await act(async () => {});
+
+    // The microphone light goes off and nothing is uploaded: a cancel, not a finish.
+    expect(FakeRecorder.last?.state).toBe("inactive");
+    expect(stopTrack).toHaveBeenCalled();
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it("a transcription that lands after its field left goes into the card's draft", async () => {
+    serveVoice(true);
+    let answer: (value: { text: string; proofread: boolean }) => void = () => {};
+    mockPost.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+    const user = userEvent.setup();
+    const { unmount } = renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" />);
+    await waitFor(() => expect(screen.getByTestId("composer-mic")).toBeEnabled());
+    await user.click(screen.getByTestId("composer-mic"));
+    await user.click(await screen.findByTestId("composer-mic-finish"));
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+
+    unmount();
+    await act(async () => answer({ text: "what I said", proofread: true }));
+
+    expect(loadDraft("c1").text).toBe("what I said");
+  });
+
   it("discards a cancelled recording without uploading anything", async () => {
     serveVoice(true);
     const user = userEvent.setup();
