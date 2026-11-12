@@ -2332,18 +2332,25 @@ export function attachSocket(
 }
 
 /**
- * Stop a card's driver NOW (pause, hibernate, restart, delete, model/account switch, idle).
- * stdin first — EOF is the driver's own exit signal (`rl.on("close") → exit 0`), and it reaches
- * across the docker exec — then kill the local client. Best-effort and idempotent.
+ * End a driver's process: stdin first — EOF is the driver's own exit signal (`rl.on("close") →
+ * exit 0`), and it reaches across the docker exec — then kill the local client. Best-effort.
+ */
+function killDriverChild(session: DriverSession): void {
+  clearSessionTimers(session);
+  session.closed = true;
+  try { session.child.stdin.end(); } catch { /* already gone */ }
+  try { session.child.kill(); } catch { /* already gone */ }
+}
+
+/**
+ * Stop a card's driver NOW (pause, hibernate, restart, delete, model/account switch, idle), via
+ * `killDriverChild`. Best-effort and idempotent.
  */
 export function stopCardDriver(cardId: string): void {
   const session = sessions.get(cardId);
   if (!session) return;
   sessions.delete(cardId);
-  clearSessionTimers(session);
-  session.closed = true;
-  try { session.child.stdin.end(); } catch { /* already gone */ }
-  try { session.child.kill(); } catch { /* already gone */ }
+  killDriverChild(session);
   // A DELIBERATE stop (pause, hibernate, restart, delete, model switch, idle) abandons the turn on
   // purpose — the marker comes off so the next boot does not "resume" something a person ended.
   session.marker = undefined;
@@ -2446,10 +2453,7 @@ export function driverDefaultEffort(cardId: string): string | null {
  */
 export function shutdownAllDrivers(): void {
   for (const session of sessions.values()) {
-    clearSessionTimers(session);
-    session.closed = true;
-    try { session.child.stdin.end(); } catch { /* already gone */ }
-    try { session.child.kill(); } catch { /* already gone */ }
+    killDriverChild(session);
     if (session.activeTurns > 0) {
       logger.warn(
         { audit: true, action: "sdk.driver.shutdown", card: session.label, turnsInFlight: session.activeTurns },
