@@ -1,6 +1,6 @@
 import { JsonStore } from "../../store/jsonStore.js";
 import { dataPath } from "../../config/env.js";
-import type { Review } from "./model.js";
+import { isReviewClosed, type Review } from "./model.js";
 
 /**
  * STORE DAS REVISÕES — `reviews.json`, um arquivo próprio ao lado do `board.json`.
@@ -27,9 +27,6 @@ const store = new JsonStore<ReviewsDoc>(
   },
 );
 
-/** Revisão encerrada: o PR foi mergeado ou a revisão cancelada. `impasse` NÃO está aqui: espera um humano. */
-const FINISHED: ReadonlySet<Review["phase"]> = new Set(["merged", "cancelled"]);
-
 const copy = (r: Review): Review => structuredClone(r);
 
 /** A mais recente da lista (empate: a inserida depois). */
@@ -48,7 +45,7 @@ export async function getReview(id: string): Promise<Review | undefined> {
 export async function activeReviewFor(cardId: string, prNumber?: number): Promise<Review | undefined> {
   const found = newest(
     (await store.load()).reviews.filter(
-      (r) => r.cardId === cardId && !FINISHED.has(r.phase) && (prNumber === undefined || r.prNumber === prNumber),
+      (r) => r.cardId === cardId && !isReviewClosed(r.phase) && (prNumber === undefined || r.prNumber === prNumber),
     ),
   );
   return found && copy(found);
@@ -56,7 +53,7 @@ export async function activeReviewFor(cardId: string, prNumber?: number): Promis
 
 /** A revisão em andamento de um PR, pela URL, em qualquer card (a mais recente, se houver mais de uma). */
 export async function activeReviewForPr(prUrl: string): Promise<Review | undefined> {
-  const found = newest((await store.load()).reviews.filter((r) => r.prUrl === prUrl && !FINISHED.has(r.phase)));
+  const found = newest((await store.load()).reviews.filter((r) => r.prUrl === prUrl && !isReviewClosed(r.phase)));
   return found && copy(found);
 }
 

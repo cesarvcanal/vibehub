@@ -11,7 +11,7 @@ import { reachingCard, startReviewChecked } from "../services/review/start.js";
 import { mergeReviewedPr } from "../services/review/merge.js";
 import { isBusy } from "../services/maestro/maestro.js";
 import { activeReviewFor, getReview, listReviewsFollowedBy, listReviewsForCards } from "../services/review/store.js";
-import { canMergeReview, type Review } from "../services/review/model.js";
+import { canMergeReview, isReviewClosed, type Review } from "../services/review/model.js";
 import { sendError, type ErrorStatusRule } from "./httpError.js";
 
 /**
@@ -69,7 +69,7 @@ function newest(list: Review[]): Review | undefined {
 /** A revisão de um PR numa lista: a ativa, ou a última de qualquer fase. */
 function prReview(list: Review[], prNumber: number): Review | undefined {
   const ofPr = list.filter((r) => r.prNumber === prNumber);
-  return newest(ofPr.filter((r) => r.phase !== "merged" && r.phase !== "cancelled")) ?? newest(ofPr);
+  return newest(ofPr.filter((r) => !isReviewClosed(r.phase))) ?? newest(ofPr);
 }
 
 /**

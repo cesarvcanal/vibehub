@@ -2,7 +2,7 @@ import { findUser } from "../../auth/users.js";
 import { getCard, type Card } from "../board/registry.js";
 import { deliver, parsePrUrl, type DeliverOpts, type DeliverResult } from "../maestro/deliver.js";
 import { logger } from "../../utils/logger.js";
-import { canMergeReview, type Review } from "./model.js";
+import { canMergeReview, isReviewClosed, type Review } from "./model.js";
 import { mergeReviewedPr, type ReviewMergeOutcome } from "./merge.js";
 import { activeReviewFor, getReview, reviewByReviewerCard } from "./store.js";
 
@@ -46,7 +46,7 @@ export async function deliverCard(
   if (pushed.reason !== "pushed") return pushed;
   // O push leva até minutos: a revisão pode ter andado nesse meio (ficado pronta, fechado).
   const now = await getReview(review.id);
-  if (!now || now.phase === "merged" || now.phase === "cancelled") return await deliver(cardId, opts);
+  if (!now || isReviewClosed(now.phase)) return await deliver(cardId, opts);
   const card = await getCard(cardId);
   const ownCard = opts.from === cardId;
   const orderedBy = ownCard ? mergeOrderedBy(now, card) : undefined;
@@ -73,7 +73,7 @@ type DeliverCardOpts = Pick<DeliverOpts, "branch" | "authorized" | "by" | "docs"
  */
 async function mergeFromReviewerCard(card: Card, opts: DeliverCardOpts): Promise<DeliverResult> {
   const review = await reviewByReviewerCard(card.id);
-  if (!review || review.phase === "merged" || review.phase === "cancelled") return await deliver(card.id, opts);
+  if (!review || isReviewClosed(review.phase)) return await deliver(card.id, opts);
   const target = opts.branch ?? review.base;
   const prepared: DeliverResult = { prUrl: review.prUrl, merged: false, reason: "review_active", branch: target, cardBranch: review.prBranch };
   if (target !== review.base) {

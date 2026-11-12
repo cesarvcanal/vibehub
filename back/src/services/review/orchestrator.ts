@@ -16,8 +16,8 @@ import { eventsAfter, onCardEvent, recordMessage, type CardEvent, type Severity 
 import { logger } from "../../utils/logger.js";
 import {
   MAX_ROUNDS, MERGE_GATE_AUTO_RETRIES, mergeGateSelfHealing, applyAuthorResponses, applyReviewerVerdicts, autoMergeEligible, waivedText, type ReviewOrders, blockingOpen, normalizeSubmittedFindings, pendingImprovements, pendingQuestions,
-  phaseAfterReviewerRound,
-  type AuthorAnswerStatus, type Finding, type FindingStatus, type Review, type ReviewEvent, type ReviewEventItem, type ReviewPhase,
+  isReviewClosed, phaseAfterReviewerRound,
+  type AuthorAnswerStatus, type Finding, type FindingStatus, type Review, type ReviewEvent, type ReviewEventItem,
   type SubmittedFinding,
 } from "./model.js";
 import {
@@ -74,7 +74,6 @@ export const HEAD_SHA_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
 const NO_ANSWER = "IA não respondeu";
 /** Motivo do impasse quando o PR andou depois do `ready` e não sobra rodada para conferir o que entrou. */
 export const HEAD_MOVED = "push depois do pronto";
-const CLOSED: ReadonlySet<ReviewPhase> = new Set(["merged", "cancelled"]);
 
 type Side = "reviewer" | "author";
 type Decision = "block" | "drop" | "keep" | "accept_risk";
@@ -302,7 +301,7 @@ export async function relayReview(
       }
       let impasse = false as boolean;
       const after = await mutateReview(r.id, (x) => {
-        if (CLOSED.has(x.phase) || !samePlace(x)) {
+        if (isReviewClosed(x.phase) || !samePlace(x)) {
           note(x, "system", `Envio ao ${who} falhou depois que a revisão andou (${reason}); nada muda.`);
           return;
         }
@@ -761,7 +760,7 @@ async function authorReview(authorCardId: string, reviewId?: string): Promise<Re
     }
     return r;
   }
-  const active = (await listReviewsForCards([authorCardId])).filter((r) => !CLOSED.has(r.phase));
+  const active = (await listReviewsForCards([authorCardId])).filter((r) => !isReviewClosed(r.phase));
   if (active.length === 0) {
     throw new Error("nenhuma revisão ativa tem este card como autor: passe em `card` o $VIBEHUB_CARD_ID do card do autor");
   }
@@ -805,7 +804,7 @@ export async function submitAuthorResponse(
   payload: { round: number; items: AuthorAnswer[]; headSha: string; reviewId?: string },
 ): Promise<Review> {
   const review = await authorReview(authorCardId, payload.reviewId);
-  if (CLOSED.has(review.phase)) return review;
+  if (isReviewClosed(review.phase)) return review;
   const bad = payload.items.filter((it) => !AUTHOR_ANSWERS.has(it.status));
   if (bad.length) {
     throw new Error(`status inválido (${bad.map((it) => it.id).join(", ")}): o autor responde fixed, contested ou wontfix`);
@@ -846,7 +845,7 @@ export async function submitAuthorResponse(
 
   let opened = false as boolean;
   const after = await mutateReview(review.id, (r) => {
-    if (CLOSED.has(r.phase)) return;
+    if (isReviewClosed(r.phase)) return;
     const round = fresh(r);
     const known = new Map(r.findings.map((f) => [f.id, f]));
     const answerable = answerableIn(r);
@@ -908,7 +907,7 @@ export async function decideSuggestions(
 ): Promise<Review> {
   const review = await getReview(reviewId);
   if (!review) throw new Error("review not found");
-  if (CLOSED.has(review.phase)) throw new Error(`revisao_encerrada: a revisão já está em ${review.phase}`);
+  if (isReviewClosed(review.phase)) throw new Error(`revisao_encerrada: a revisão já está em ${review.phase}`);
   const apply = [...new Set(choice.apply ?? [])];
   const skip = [...new Set(choice.skip ?? [])];
   const open = new Set(review.findings.filter((f) => f.severity === "suggestion" && f.status === "open").map((f) => f.id));
@@ -1108,7 +1107,7 @@ async function moveCardToDone(r: Review, cardId: string, what: string): Promise<
  */
 export async function cancelReview(reviewId: string, by: string): Promise<Review> {
   const after = await mutateReview(reviewId, (r) => {
-    if (CLOSED.has(r.phase)) throw new Error(`revisao_encerrada: a revisão já está em ${r.phase}`);
+    if (isReviewClosed(r.phase)) throw new Error(`revisao_encerrada: a revisão já está em ${r.phase}`);
     r.phase = "cancelled";
     r.approvePending = undefined;
     note(r, "human", "Revisão cancelada.", { by });
@@ -1128,7 +1127,7 @@ async function cancelBySystem(
 ): Promise<{ review: Review; cancelled: boolean }> {
   let cancelled = false as boolean;
   const review = await mutateReview(reviewId, (x) => {
-    if (CLOSED.has(x.phase)) return;
+    if (isReviewClosed(x.phase)) return;
     x.phase = "cancelled";
     x.approvePending = undefined;
     note(x, "system", text);
@@ -1150,7 +1149,7 @@ export async function closeReviewsOfRemovedCard(cardId: string, by?: string): Pr
   const asAuthor = await listReviewsForCards([cardId]);
   const asReviewer = await reviewByReviewerCard(cardId);
   for (const r of [...asAuthor, ...(asReviewer ? [asReviewer] : [])]) {
-    if (CLOSED.has(r.phase)) continue;
+    if (isReviewClosed(r.phase)) continue;
     const side = r.cardId === cardId ? "autor" : "revisor";
     await cancelBySystem(r.id, `Revisão cancelada: o card do ${side} foi excluído.`, { reason: `${side} card removed`, card: cardId, by });
   }
@@ -1218,7 +1217,7 @@ export async function syncReviewWithGithub(reviewId: string, by = "conferência 
   const r = await getReview(reviewId);
   // Com o merge do botão em andamento, o PR aparece MERGED antes de o botão fechar a revisão: é ele
   // quem fecha (com o nome de quem mergeou), não esta conferência.
-  if (!r || CLOSED.has(r.phase) || merging.has(r.id)) return r;
+  if (!r || isReviewClosed(r.phase) || merging.has(r.id)) return r;
   const pr = await readPrState(r.cardId, r.prUrl);
   if (!pr || merging.has(r.id)) return r;
   if (pr.state === "MERGED") {
@@ -1236,7 +1235,7 @@ export async function syncReviewWithGithub(reviewId: string, by = "conferência 
   // O `gh pr view` leva segundos: se nesse meio alguém gravou um head (o autor ao responder), o dele é
   // o mais novo — a leitura daqui não o sobrescreve.
   const seen = r.prHeadSha === pr.headSha ? r : await mutateReview(r.id, (x) => {
-    if (!CLOSED.has(x.phase) && x.prHeadSha === r.prHeadSha) x.prHeadSha = pr.headSha;
+    if (!isReviewClosed(x.phase) && x.prHeadSha === r.prHeadSha) x.prHeadSha = pr.headSha;
   });
   if (seen.phase === "ready" && seen.reviewedSha && pr.headSha !== seen.reviewedSha) {
     return await reopenAfterHeadMoved(r.id, by, { cause: "push", headSha: pr.headSha });
@@ -1268,7 +1267,7 @@ const lastGithubSync = new Map<string, number>();
  * desperdício. É o que pega um merge feito direto no GitHub mesmo sem nenhum turno do autor.
  */
 export function syncReviewSoon(r: Review): void {
-  if (CLOSED.has(r.phase)) {
+  if (isReviewClosed(r.phase)) {
     lastGithubSync.delete(r.id);
     return;
   }
@@ -1328,7 +1327,7 @@ function claimGithubSync(reviewId: string): boolean {
  */
 async function checkAuthorPush(cardId: string): Promise<void> {
   for (const r of await listReviewsForCards([cardId])) {
-    if (CLOSED.has(r.phase)) continue;
+    if (isReviewClosed(r.phase)) continue;
     if (r.phase === "ready") lastGithubSync.set(r.id, Date.now());
     else if (!claimGithubSync(r.id)) continue;
     await syncReviewWithGithub(r.id, "fim do turno do autor");

@@ -13,6 +13,9 @@
 export const MAX_ROUNDS = 3;
 
 export type ReviewPhase = "reviewing" | "fixing" | "ready" | "impasse" | "merged" | "cancelled";
+/** Revisão encerrada: o PR foi mergeado ou a revisão cancelada. `impasse` NÃO está aqui: espera um humano. */
+export const isReviewClosed = (phase: ReviewPhase): boolean => phase === "merged" || phase === "cancelled";
+
 export type FindingSeverity = "blocking" | "improvement" | "suggestion" | "question" | "refuted";
 /**
  * `wontfix`: o autor decidiu não aplicar uma sugestão ou melhoria, com o motivo (nenhuma das duas
