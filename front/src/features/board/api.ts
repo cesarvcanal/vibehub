@@ -34,7 +34,7 @@ import type {
   RunnerStatus,
   UploadResult,
   UsersResponse,
-  PreviewDeAnexo,
+  AttachmentPreview,
 } from "@/api/types";
 import { t } from "@/i18n";
 import { uploadWithWatchdog } from "@/features/board/lib/uploadWatchdog";
@@ -510,9 +510,9 @@ export const boardApi = {
       }),
     ),
 
-  /** O documento anexado (planilha, Word, PowerPoint) como texto, para ver sem baixar. */
-  lerPreviewDeAnexo: (cardId: string, file: string) =>
-    get<PreviewDeAnexo>(`/cards/${encodeURIComponent(cardId)}/uploads/${encodeURIComponent(file)}/preview`),
+  /** The attached document (spreadsheet, Word, PowerPoint) as text, to read it without downloading. */
+  readAttachmentPreview: (cardId: string, file: string) =>
+    get<AttachmentPreview>(`/cards/${encodeURIComponent(cardId)}/uploads/${encodeURIComponent(file)}/preview`),
 
   /**
    * Uploads an image so the agent can read it. The running server takes JSON `{ name, content }`

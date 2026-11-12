@@ -152,12 +152,12 @@ describe("uploaded images", () => {
 
 describe("tipo de anexo no chat", () => {
   it("áudio toca, documento de escritório abre preview, o resto continua chip/imagem", async () => {
-    const { anexoTemPreview } = await import("@/features/board/lib/markdown");
+    const { hasAttachmentPreview } = await import("@/features/board/lib/markdown");
     for (const f of ["1-voz.ogg", "1-ptt.opus", "1-reuniao.mp3", "1-memo.m4a", "1-a.wav"]) expect(uploadKind(f)).toBe("audio");
-    for (const f of ["1-v.xlsx", "1-v.xls", "1-c.docx", "1-c.doc", "1-s.pptx", "1-o.odt", "1-o.ods"]) expect(anexoTemPreview(f)).toBe(true);
+    for (const f of ["1-v.xlsx", "1-v.xls", "1-c.docx", "1-c.doc", "1-s.pptx", "1-o.odt", "1-o.ods"]) expect(hasAttachmentPreview(f)).toBe(true);
     for (const f of ["1-c.pdf", "1-i.png", "1-n.csv", "1-x.zip"]) {
       expect(uploadKind(f)).not.toBe("audio");
-      expect(anexoTemPreview(f)).toBe(false);
+      expect(hasAttachmentPreview(f)).toBe(false);
     }
   });
 });

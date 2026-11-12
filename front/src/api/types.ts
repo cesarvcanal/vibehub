@@ -554,10 +554,10 @@ export interface UploadResult {
   path: string;
 }
 
-/** Documento anexado convertido em texto pelo runner (`GET /cards/:id/uploads/:file/preview`). */
-export interface PreviewDeAnexo {
+/** An attached document turned into text by the runner (`GET /cards/:id/uploads/:file/preview`). */
+export interface AttachmentPreview {
   formato: string;
-  /** Markdown: planilha vira uma tabela por aba, Word vira parágrafos e tabelas. */
+  /** Markdown: a spreadsheet becomes one table per sheet, Word becomes paragraphs and tables. */
   texto: string;
   truncado: boolean;
 }
