@@ -4,8 +4,8 @@ Thanks for taking a look.
 
 ## Ground rules
 
-- **Tests come with the change.** Vitest, co-located as `*.test.ts`. A bug fix should include the
-  test that fails without it.
+- **Tests come first.** Write the test, watch it fail for the right reason, then implement
+  (Vitest, co-located as `*.test.ts`). A bug fix includes the test that reproduces it.
 - **Anything that reaches a shell gets validated at the boundary**, and quoted after that. Card
   ids, branch names, session ids and container names all end up in a `docker exec` line. Read
   `back/src/runtime/host.ts` before writing code that builds one.
