@@ -4,9 +4,9 @@ import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { post } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
-import type { Person, Review, ReviewPhase } from "@/api/types";
+import type { FindingDecision, Person, Review, ReviewPhase } from "@/api/types";
 import { boardApi } from "@/features/board/api";
-import { PanelFrame, ReviewPanelView, type Decision, type PanelNotice } from "@/features/board/components/ReviewPanelView";
+import { PanelFrame, ReviewPanelView, type PanelNotice } from "@/features/board/components/ReviewPanelView";
 import { MERGE_CONFIRM_MS, cardPeopleKey, cardReviewKey, mergeFailure, reviewActions } from "@/features/board/lib/review";
 import { reviewReadsStarted, useLiveReview } from "@/features/board/lib/useLiveReview";
 import { useAuth } from "@/providers/auth";
@@ -101,7 +101,7 @@ export function ReviewPanel({ cardId, prNumber: pr, onClose }: {
   const act = useMutation({
     mutationFn: ({ path, body }: {
       path: string;
-      body?: { findingId: string; decision: Decision } | { apply: string[]; skip: string[] };
+      body?: { findingId: string; decision: FindingDecision } | { apply: string[]; skip: string[] };
     }) => {
       const url = `/reviews/${encodeURIComponent(review!.id)}/${path}`;
       return body === undefined ? post<{ review: Review }>(url) : post<{ review: Review }>(url, body);

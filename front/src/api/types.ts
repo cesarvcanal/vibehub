@@ -571,6 +571,8 @@ export type ReviewPhase = "reviewing" | "fixing" | "ready" | "impasse" | "merged
  * author's AI handles on its own; `question` waits for a person's decision; `suggestion` for a person's choice.
  */
 export type FindingSeverity = "blocking" | "improvement" | "suggestion" | "question" | "refuted";
+/** What a person decided about a finding. */
+export type FindingDecision = "keep" | "accept_risk" | "block" | "drop";
 /** `wontfix`: the author will not apply a suggestion or improvement, and said why (those two only). */
 export type FindingStatus = "open" | "fixed" | "contested" | "accepted_risk" | "dropped" | "wontfix";
 
@@ -616,7 +618,7 @@ export interface Finding {
   commit?: string;
   authorReply?: string;
   reviewerReply?: string;
-  humanDecision?: "keep" | "accept_risk" | "block" | "drop";
+  humanDecision?: FindingDecision;
   /** A suggestion someone already sent the author to apply; while it stays open it is not offered again. */
   requested?: { by: string; at: number };
 }

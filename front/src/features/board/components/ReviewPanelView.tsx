@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { Check, ChevronRight, ExternalLink, FileDiff, Loader2, SquareTerminal, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { Finding, FindingSeverity, Review, ReviewPhase, ReviewWorking } from "@/api/types";
+import type { Finding, FindingDecision, FindingSeverity, Review, ReviewPhase, ReviewWorking } from "@/api/types";
 import { ENTER, ReviewConversation, SAID_CLAMP_CHARS } from "@/features/board/components/ReviewConversation";
 import { cardHref } from "@/features/board/lib/board";
 import {
@@ -28,7 +28,6 @@ import { cn } from "@/lib/utils";
  * decision to make there, and the conversation otherwise.
  */
 
-export type Decision = "block" | "drop" | "keep" | "accept_risk";
 export type ReviewTab = "conversation" | "findings";
 type Tab = ReviewTab;
 
@@ -52,7 +51,7 @@ export interface ReviewPanelViewProps {
   onMerge: () => void;
   onRetry: () => void;
   onCancel: () => void;
-  onDecide: (finding: Finding, decision: Decision) => void;
+  onDecide: (finding: Finding, decision: FindingDecision) => void;
   /** What to do with open suggestions: `apply` goes to the author's AI, `skip` leaves the list. */
   /** `done` runs only when the server took it: a refused send keeps the person's choices. */
   onDecideSuggestions: (choice: { apply: string[]; skip: string[] }, done: () => void) => void;
@@ -81,7 +80,7 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
   // waits for it to finish instead of racing it.
   const authorOnReadyPr = review.phase === "ready" && working.author;
 
-  const decisionsFor = (f: Finding): Decision[] => {
+  const decisionsFor = (f: Finding): FindingDecision[] => {
     if (!actions.decide) return [];
     // Doubts wait for the human reviewer; in an impasse the stuck items wait for the same person.
     if (pending.has(f.id)) return ["block", "accept_risk", "drop"];
@@ -361,9 +360,9 @@ function FindingsList({
 }: {
   review: Review;
   busy: boolean;
-  decisionsFor: (f: Finding) => Decision[];
+  decisionsFor: (f: Finding) => FindingDecision[];
   canRequest: boolean;
-  onDecide: (finding: Finding, decision: Decision) => void;
+  onDecide: (finding: Finding, decision: FindingDecision) => void;
   onDecideSuggestions: (choice: { apply: string[]; skip: string[] }, done: () => void) => void;
 }) {
   const t = useT();
@@ -511,7 +510,7 @@ type SuggestionChoice = "apply" | "skip";
 const SUGGESTION_CHOICES: SuggestionChoice[] = ["apply", "skip"];
 
 /** What each decision means, said where it is chosen: the title, and the one line of what follows. */
-const CHOICES: Record<Decision, { title: string; desc: string }> = {
+const CHOICES: Record<FindingDecision, { title: string; desc: string }> = {
   block: { title: "review.choice.block.title", desc: "review.choice.block.desc" },
   keep: { title: "review.choice.keep.title", desc: "review.choice.keep.desc" },
   accept_risk: { title: "review.choice.accept_risk.title", desc: "review.choice.accept_risk.desc" },
@@ -530,15 +529,15 @@ function FindingCard({
   finding: f, decisions, busy, onDecide, suggestion,
 }: {
   finding: Finding;
-  decisions: Decision[];
+  decisions: FindingDecision[];
   busy: boolean;
-  onDecide: (decision: Decision) => void;
+  onDecide: (decision: FindingDecision) => void;
   /** An open suggestion this person can decide: do it, or not. */
   suggestion?: { choice: SuggestionChoice | null; onChoose: (choice: SuggestionChoice) => void };
 }) {
   const t = useT();
   const [open, setOpen] = React.useState(false);
-  const [choice, setChoice] = React.useState<Decision | null>(null);
+  const [choice, setChoice] = React.useState<FindingDecision | null>(null);
   const replies = [
     f.authorReply ? { who: "author" as const, text: f.authorReply } : null,
     f.reviewerReply ? { who: "reviewer" as const, text: f.reviewerReply } : null,
