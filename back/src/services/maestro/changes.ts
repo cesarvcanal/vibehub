@@ -68,7 +68,7 @@ export interface CardChanges {
  * (when there is one) goes through deliver's preamble, inside the heredoc on stdin. PURE.
  */
 export function buildChangesScript(
-  containerName: string, cardId: string, token: string | null, cwd: string, branch: string, base: string,
+  containerName: string, token: string | null, cwd: string, branch: string, base: string,
 ): string {
   assertSafeRemotePath(cwd);
   const head = assertBranchName(branch);
@@ -177,7 +177,7 @@ export async function readCardChanges(cardId: string): Promise<CardChanges & { c
     logger.info({ card: card.worktreeSlug, detail: (err as Error).message }, "card changes: no GitHub token, reading git only");
   }
   const { stdout } = await hostExecutor().runScript(
-    buildChangesScript(config.runner.container, card.id, token, cwd, cardBranch(card), card.base || project.baseBranch),
+    buildChangesScript(config.runner.container, token, cwd, cardBranch(card), card.base || project.baseBranch),
     { timeoutMs: 60_000 },
   );
   const changes = parseChanges(stdout);

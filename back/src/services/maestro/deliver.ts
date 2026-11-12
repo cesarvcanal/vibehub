@@ -217,7 +217,7 @@ function decoded(text: string): string {
  * push. An open PR is reused; given a title or body, it is rewritten with them (`gh pr edit`). PURE.
  */
 export function buildPushAndPrScript(
-  containerName: string, cardId: string, token: string, cwd: string, branch: string, target: string,
+  containerName: string, token: string, cwd: string, branch: string, target: string,
   docs: CleanPrDocs = { comments: [] },
 ): string {
   assertSafeRemotePath(cwd);
@@ -273,7 +273,7 @@ const COMMENTS_HEAD_POLL_SECONDS = 5;
  * `error comments`. PURE.
  */
 export function buildPrCommentsReadScript(
-  containerName: string, cardId: string, token: string, cwd: string, prUrl: string, branch: string,
+  containerName: string, token: string, cwd: string, prUrl: string, branch: string,
 ): string {
   assertSafeRemotePath(cwd);
   const pr = parsePrUrl(prUrl);
@@ -325,7 +325,7 @@ export function parsePrComments(
  * `__VIBEHUB_DELIVER__ review ok` or `error review` with GitHub's answer above it. PURE.
  */
 export function buildPrReviewScript(
-  containerName: string, cardId: string, token: string, cwd: string, prUrl: string, payload: unknown,
+  containerName: string, token: string, cwd: string, prUrl: string, payload: unknown,
 ): string {
   assertSafeRemotePath(cwd);
   const pr = parsePrUrl(prUrl);
@@ -350,11 +350,11 @@ export function buildPrReviewScript(
  * pushed commit. Any failure comes back with what to tell the agent — the PR is open either way.
  */
 async function postPrComments(
-  container: string, cardId: string, token: string, cwd: string, prUrl: string, branch: string, comments: CleanComment[],
+  container: string, token: string, cwd: string, prUrl: string, branch: string, comments: CleanComment[],
 ): Promise<{ ok: true; posted: number; skipped: number } | { ok: false; output: string }> {
   if (!parsePrUrl(prUrl)) return { ok: false, output: `a URL do PR não é do GitHub (${prUrl}): os comentários não foram publicados` };
   const read = await hostExecutor().runScript(
-    buildPrCommentsReadScript(container, cardId, token, cwd, prUrl, branch),
+    buildPrCommentsReadScript(container, token, cwd, prUrl, branch),
     { timeoutMs: (COMMENTS_HEAD_ROUNDS * COMMENTS_HEAD_POLL_SECONDS + 60) * 1000 },
   );
   const found = parsePrComments(read.stdout);
@@ -370,7 +370,7 @@ async function postPrComments(
   const skipped = comments.length - fresh.length;
   if (fresh.length === 0) return { ok: true, posted: 0, skipped };
   const post = await hostExecutor().runScript(
-    buildPrReviewScript(container, cardId, token, cwd, prUrl, reviewPayload(found.head, fresh)),
+    buildPrReviewScript(container, token, cwd, prUrl, reviewPayload(found.head, fresh)),
     { timeoutMs: 60_000 },
   );
   if (!new RegExp(`${MARKER} review ok`).test(post.stdout)) {
@@ -393,7 +393,7 @@ async function postPrComments(
  * `__VIBEHUB_DELIVER__ error <stage>` (`nopr` = no open PR there). PURE.
  */
 export function buildResolvePrScript(
-  containerName: string, cardId: string, token: string, cwd: string, branch: string, target: string,
+  containerName: string, token: string, cwd: string, branch: string, target: string,
 ): string {
   assertSafeRemotePath(cwd);
   const body = [
@@ -418,7 +418,7 @@ export function buildResolvePrScript(
  * call). Otherwise emits `__VIBEHUB_DELIVER__ merged` or `__VIBEHUB_DELIVER__ error merge`. PURE.
  */
 export function buildMergeScript(
-  containerName: string, cardId: string, token: string, cwd: string, prUrl: string, matchHead: string,
+  containerName: string, token: string, cwd: string, prUrl: string, matchHead: string,
 ): string {
   assertSafeRemotePath(cwd);
   if (!FULL_SHA_RE.test(matchHead)) throw new Error("the merge must be pinned to the full sha the gate passed on");
@@ -458,7 +458,7 @@ export const PR_WORKFLOWS_DETECT =
  * pushed and the commit that counts is the reviewed one. PURE.
  */
 export function buildCiChecksScript(
-  containerName: string, cardId: string, token: string, cwd: string, prUrl: string, headSha?: string,
+  containerName: string, token: string, cwd: string, prUrl: string, headSha?: string,
 ): string {
   assertSafeRemotePath(cwd);
   const rounds = Math.ceil(CI_WAIT_SECONDS / CI_POLL_SECONDS);
@@ -605,7 +605,7 @@ export function parsePrUrl(prUrl: string): { repo: string; number: number } | nu
  */
 async function runCardGhScript(
   cardId: string, what: string,
-  build: (ctx: { container: string; cardId: string; token: string; cwd: string }) => string,
+  build: (ctx: { container: string; token: string; cwd: string }) => string,
   connectionId?: string,
 ): Promise<{ stdout: string; slug: string } | null> {
   try {
@@ -614,7 +614,7 @@ async function runCardGhScript(
     if (!card || !project) return null;
     const { cwd } = cardWorkPaths(project, card);
     const token = connectionId ? await tokenFor(connectionId) : await cardConnectionToken(card, project);
-    const out = await hostExecutor().runScript(build({ container: config.runner.container, cardId: card.id, token, cwd }), { timeoutMs: 60_000 });
+    const out = await hostExecutor().runScript(build({ container: config.runner.container, token, cwd }), { timeoutMs: 60_000 });
     return { stdout: out.stdout, slug: card.worktreeSlug };
   } catch (err) {
     logger.warn({ card: cardId, detail: (err as Error).message }, `could not ${what}`);
@@ -627,7 +627,7 @@ async function runCardGhScript(
  * or `__VIBEHUB_DELIVER__ error view`. What the PR review checks to notice what happened on GitHub
  * outside the panel (a merge by hand, a closed PR, a push after ready). PURE.
  */
-export function buildPrStateScript(containerName: string, cardId: string, token: string, cwd: string, prUrl: string): string {
+export function buildPrStateScript(containerName: string, token: string, cwd: string, prUrl: string): string {
   assertSafeRemotePath(cwd);
   const body = [
     ...ghTokenPreamble(token),
@@ -658,7 +658,7 @@ export function parsePrState(
  * Null when the lookup failed (logged): the caller leaves things as they are.
  */
 export async function readPrState(cardId: string, prUrl: string): Promise<{ state: PrState; headSha: string } | null> {
-  const out = await runCardGhScript(cardId, "read the PR state", (c) => buildPrStateScript(c.container, c.cardId, c.token, c.cwd, prUrl));
+  const out = await runCardGhScript(cardId, "read the PR state", (c) => buildPrStateScript(c.container, c.token, c.cwd, prUrl));
   if (!out) return null;
   const found = parsePrState(out.stdout);
   if (found.ok) return { state: found.state, headSha: found.headSha };
@@ -678,7 +678,7 @@ export interface PrReview {
  * `__VIBEHUB_DELIVER__ error view`. `reviews` (not `latestReviews`) because only it carries the commit
  * each verdict was given on. PURE.
  */
-export function buildPrReviewsScript(containerName: string, cardId: string, token: string, cwd: string, prUrl: string): string {
+export function buildPrReviewsScript(containerName: string, token: string, cwd: string, prUrl: string): string {
   assertSafeRemotePath(cwd);
   const body = [
     ...ghTokenPreamble(token),
@@ -734,7 +734,7 @@ export function prApprovedAt(reviews: PrReview[], sha: string): boolean {
  * connection. Null when the lookup failed (logged): the auto-merge treats that as "no".
  */
 export async function readPrApproval(cardId: string, prUrl: string, sha: string): Promise<boolean | null> {
-  const out = await runCardGhScript(cardId, "read the PR reviews", (c) => buildPrReviewsScript(c.container, c.cardId, c.token, c.cwd, prUrl));
+  const out = await runCardGhScript(cardId, "read the PR reviews", (c) => buildPrReviewsScript(c.container, c.token, c.cwd, prUrl));
   if (!out) return null;
   const found = parsePrReviews(out.stdout);
   if (found.ok) return prApprovedAt(found.reviews, sha);
@@ -760,7 +760,7 @@ export interface PrInfo {
  * `__VIBEHUB_DELIVER__ prinfo <base64 of gh's JSON>`, or `__VIBEHUB_DELIVER__ error view`. The
  * reference is checked BEFORE it reaches the shell: a positive number or a GitHub PR URL. PURE.
  */
-export function buildPrInfoScript(containerName: string, cardId: string, token: string, cwd: string, ref: number | string): string {
+export function buildPrInfoScript(containerName: string, token: string, cwd: string, ref: number | string): string {
   assertSafeRemotePath(cwd);
   const value = prRef(ref);
   const body = [
@@ -822,7 +822,7 @@ export async function readPrInfo(cardId: string, ref: number | string): Promise<
   } catch {
     return { error: `referência inválida: ${String(ref)}` };
   }
-  const out = await runCardGhScript(cardId, "read the PR to attach", (c) => buildPrInfoScript(c.container, c.cardId, c.token, c.cwd, ref));
+  const out = await runCardGhScript(cardId, "read the PR to attach", (c) => buildPrInfoScript(c.container, c.token, c.cwd, ref));
   if (!out) return { error: "não consegui consultar o GitHub" };
   const found = parsePrInfo(out.stdout);
   if (found.ok) return { pr: found.pr };
@@ -841,7 +841,7 @@ const oneLineOf = (s: string): string => s.replace(/\s+/g, " ").trim().slice(0, 
  * is already gone (GitHub's own auto-delete) counts as deleted. PURE.
  */
 export function buildDeleteBranchScript(
-  containerName: string, cardId: string, token: string, cwd: string, prUrl: string, branch: string,
+  containerName: string, token: string, cwd: string, prUrl: string, branch: string,
 ): string {
   assertSafeRemotePath(cwd);
   const repo = parsePrUrl(prUrl)?.repo;
@@ -879,7 +879,7 @@ export async function deleteMergedBranch(
   cardId: string, prUrl: string, branch: string, connectionId?: string,
 ): Promise<"deleted" | "kept" | "failed"> {
   const out = await runCardGhScript(
-    cardId, "delete the merged branch", (c) => buildDeleteBranchScript(c.container, c.cardId, c.token, c.cwd, prUrl, branch), connectionId,
+    cardId, "delete the merged branch", (c) => buildDeleteBranchScript(c.container, c.token, c.cwd, prUrl, branch), connectionId,
   );
   if (!out) return "failed";
   const result = parseDeleteBranch(out.stdout);
@@ -906,7 +906,7 @@ export type PrPeopleResult = Partial<Record<keyof PrPeople, "ok" | "failed">>;
  * other with it. Emits `__VIBEHUB_DELIVER__ people <assignee|reviewer> <ok|error>`. PURE.
  */
 export function buildPrPeopleScript(
-  containerName: string, cardId: string, token: string, cwd: string, prUrl: string, people: PrPeople,
+  containerName: string, token: string, cwd: string, prUrl: string, people: PrPeople,
 ): string {
   assertSafeRemotePath(cwd);
   const steps: string[] = [];
@@ -939,7 +939,7 @@ export function parsePrPeople(stdout: string): PrPeopleResult {
 export async function setPrPeople(cardId: string, prUrl: string, people: PrPeople): Promise<PrPeopleResult> {
   if (!people.assignee && !people.reviewer) return {};
   const out = await runCardGhScript(
-    cardId, "name the PR's people on GitHub", (c) => buildPrPeopleScript(c.container, c.cardId, c.token, c.cwd, prUrl, people),
+    cardId, "name the PR's people on GitHub", (c) => buildPrPeopleScript(c.container, c.token, c.cwd, prUrl, people),
   );
   if (!out) return {};
   const result = parsePrPeople(out.stdout);
@@ -955,10 +955,10 @@ export async function setPrPeople(cardId: string, prUrl: string, people: PrPeopl
  * answer that could not be read: only gh saying "no checks" hands the PR to the local gate.
  */
 async function ciGate(
-  container: string, cardId: string, token: string, cwd: string, prUrl: string, headSha?: string,
+  container: string, token: string, cwd: string, prUrl: string, headSha?: string,
 ): Promise<GateResult | null> {
   const out = await hostExecutor().runScript(
-    buildCiChecksScript(container, cardId, token, cwd, prUrl, headSha),
+    buildCiChecksScript(container, token, cwd, prUrl, headSha),
     { timeoutMs: (CI_WAIT_SECONDS + 2 * CI_POLL_SECONDS) * 1000 + 60_000 },
   );
   const ci = parseCiChecks(out.stdout);
@@ -980,7 +980,7 @@ export async function gateAtCommit(cardId: string, prUrl: string, sha: string): 
   const { card, project } = await getCardWithProject(cardId);
   const { cwd } = cardWorkPaths(project, card);
   const token = await cardConnectionToken(card, project);
-  return (await ciGate(config.runner.container, card.id, token, cwd, prUrl, sha)) ?? (await runGate(card.id, { expectedSha: sha }));
+  return (await ciGate(config.runner.container, token, cwd, prUrl, sha)) ?? (await runGate(card.id, { expectedSha: sha }));
 }
 
 /** The PR number out of its URL (`.../pull/123`); null when the URL is not a pull request's. PURE. */
@@ -1106,7 +1106,7 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
   if (mergeOnly) {
     // (a)+(b) merge-only: nothing is pushed — the PR is read as GitHub has it.
     const out = await hostExecutor().runScript(
-      buildResolvePrScript(container, card.id, token, cwd, source, target),
+      buildResolvePrScript(container, token, cwd, source, target),
       { timeoutMs: 120_000 },
     );
     const found = parseResolvePr(out.stdout);
@@ -1132,7 +1132,7 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
   } else {
     // (a)+(b) push and resolve the PR.
     const prOut = await hostExecutor().runScript(
-      buildPushAndPrScript(container, card.id, token, cwd, source, target, docs),
+      buildPushAndPrScript(container, token, cwd, source, target, docs),
       { timeoutMs: 120_000 },
     );
     const pr = parsePushAndPr(prOut.stdout);
@@ -1152,7 +1152,7 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     // The comments on the diff go up BEFORE the gate: a PR that gets merged already explains itself,
     // and one GitHub refused them on stops here — merging it undocumented is what the rule forbids.
     if (docs.comments.length) {
-      const posted = await postPrComments(container, card.id, token, cwd, prUrl, source, docs.comments);
+      const posted = await postPrComments(container, token, cwd, prUrl, source, docs.comments);
       logger.info(
         { audit: true, action: "maestro.deliver", card: card.worktreeSlug, comments: posted.ok ? posted.posted : "failed", by: opts.by },
         posted.ok ? "deliver posted the PR comments" : "deliver could not post the PR comments",
@@ -1175,7 +1175,7 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
   try {
     gate = mergeOnly && opts.gatePassed
       ? { ran: false, passed: true, output: "" }
-      : (await ciGate(container, card.id, token, cwd, prUrl, mergeOnly ? expectedHead : undefined)) ??
+      : (await ciGate(container, token, cwd, prUrl, mergeOnly ? expectedHead : undefined)) ??
         (await runGate(card.id, mergeOnly ? { expectedSha: expectedHead } : {}));
   } catch (err) {
     logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "gate could not run — treating as red");
@@ -1231,7 +1231,7 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     };
   }
   const mergeOut = await hostExecutor().runScript(
-    buildMergeScript(container, card.id, token, cwd, prUrl, pin),
+    buildMergeScript(container, token, cwd, prUrl, pin),
     { timeoutMs: 120_000 },
   );
   const { merged, output, movedTo } = parseMerge(mergeOut.stdout);
