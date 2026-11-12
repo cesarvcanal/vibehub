@@ -2,7 +2,7 @@
 
 Roda DENTRO do runner (`python3 - <caminho> <limite>`, o fonte chega pelo stdin). Imprime um JSON
 `{"formato", "texto", "truncado"}`; formato não suportado ou arquivo ilegível sai com código != 0 e a
-mensagem no stderr. Só biblioteca padrão + os pacotes apt de PACOTES_LEITURA_ANEXOS.
+mensagem no stderr. Só biblioteca padrão + os pacotes apt de DOCUMENT_READER_PACKAGES.
 """
 import json
 import os
@@ -13,167 +13,167 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 
-def celula(valor):
-    if valor is None:
+def cell(value):
+    if value is None:
         return ""
-    texto = str(valor)
-    if isinstance(valor, float) and valor.is_integer():
-        texto = str(int(valor))
-    return texto.replace("|", "\\|").replace("\r", " ").replace("\n", " ").strip()
+    text = str(value)
+    if isinstance(value, float) and value.is_integer():
+        text = str(int(value))
+    return text.replace("|", "\\|").replace("\r", " ").replace("\n", " ").strip()
 
 
-def tabela_markdown(linhas):
-    linhas = [[celula(v) for v in linha] for linha in linhas]
-    linhas = [linha for linha in linhas if any(linha)]
-    if not linhas:
+def markdown_table(rows):
+    rows = [[cell(v) for v in row] for row in rows]
+    rows = [row for row in rows if any(row)]
+    if not rows:
         return "_(vazia)_"
-    largura = max(len(linha) for linha in linhas)
-    while largura > 1 and not any(len(linha) >= largura and linha[largura - 1] for linha in linhas):
-        largura -= 1
-    linhas = [(linha + [""] * largura)[:largura] for linha in linhas]
-    saida = ["| " + " | ".join(linhas[0]) + " |", "|" + " --- |" * largura]
-    saida += ["| " + " | ".join(linha) + " |" for linha in linhas[1:]]
-    return "\n".join(saida)
+    width = max(len(row) for row in rows)
+    while width > 1 and not any(len(row) >= width and row[width - 1] for row in rows):
+        width -= 1
+    rows = [(row + [""] * width)[:width] for row in rows]
+    out = ["| " + " | ".join(rows[0]) + " |", "|" + " --- |" * width]
+    out += ["| " + " | ".join(row) + " |" for row in rows[1:]]
+    return "\n".join(out)
 
 
-def planilha_xlsx(caminho):
+def xlsx_sheets(path):
     import openpyxl
 
-    livro = openpyxl.load_workbook(caminho, read_only=True, data_only=True)
+    workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
     return "\n\n".join(
-        f"## {aba.title}\n\n" + tabela_markdown(list(aba.iter_rows(values_only=True))) for aba in livro.worksheets
+        f"## {sheet.title}\n\n" + markdown_table(list(sheet.iter_rows(values_only=True))) for sheet in workbook.worksheets
     )
 
 
-def planilha_xls(caminho):
+def xls_sheets(path):
     import xlrd
 
-    livro = xlrd.open_workbook(caminho)
+    workbook = xlrd.open_workbook(path)
     return "\n\n".join(
-        f"## {aba.name}\n\n" + tabela_markdown([aba.row_values(i) for i in range(aba.nrows)]) for aba in livro.sheets()
+        f"## {sheet.name}\n\n" + markdown_table([sheet.row_values(i) for i in range(sheet.nrows)]) for sheet in workbook.sheets()
     )
 
 
-def documento_docx(caminho):
+def docx_document(path):
     import docx
     from docx.table import Table
     from docx.text.paragraph import Paragraph
 
-    documento = docx.Document(caminho)
-    blocos = []
-    for elemento in documento.element.body.iterchildren():
-        tag = elemento.tag.rsplit("}", 1)[-1]
+    document = docx.Document(path)
+    blocks = []
+    for element in document.element.body.iterchildren():
+        tag = element.tag.rsplit("}", 1)[-1]
         if tag == "p":
-            paragrafo = Paragraph(elemento, documento)
-            texto = paragrafo.text.strip()
-            if not texto:
+            paragraph = Paragraph(element, document)
+            text = paragraph.text.strip()
+            if not text:
                 continue
-            nivel = re.match(r"(?:Heading|Título)\s*(\d)", paragrafo.style.name or "")
-            blocos.append(("#" * int(nivel.group(1)) + " " + texto) if nivel else texto)
+            level = re.match(r"(?:Heading|Título)\s*(\d)", paragraph.style.name or "")
+            blocks.append(("#" * int(level.group(1)) + " " + text) if level else text)
         elif tag == "tbl":
-            tabela = Table(elemento, documento)
-            blocos.append(tabela_markdown([[c.text for c in linha.cells] for linha in tabela.rows]))
-    return "\n\n".join(blocos)
+            table = Table(element, document)
+            blocks.append(markdown_table([[c.text for c in row.cells] for row in table.rows]))
+    return "\n\n".join(blocks)
 
 
-def textos_xml(xml, tag_paragrafo, tag_texto):
-    raiz = ET.fromstring(xml)
-    paragrafos = []
-    for paragrafo in raiz.iter(tag_paragrafo):
-        texto = "".join(t.text or "" for t in paragrafo.iter(tag_texto)).strip()
-        if texto:
-            paragrafos.append(texto)
-    return paragrafos
+def xml_paragraphs(xml, paragraph_tag, text_tag):
+    root = ET.fromstring(xml)
+    paragraphs = []
+    for paragraph in root.iter(paragraph_tag):
+        text = "".join(t.text or "" for t in paragraph.iter(text_tag)).strip()
+        if text:
+            paragraphs.append(text)
+    return paragraphs
 
 
-def apresentacao_pptx(caminho):
+def pptx_slides(path):
     a = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
-    with zipfile.ZipFile(caminho) as pacote:
+    with zipfile.ZipFile(path) as package:
         slides = sorted(
-            (n for n in pacote.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)),
+            (n for n in package.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)),
             key=lambda n: int(re.search(r"(\d+)\.xml$", n).group(1)),
         )
         return "\n\n".join(
-            f"## Slide {i}\n\n" + "\n".join(textos_xml(pacote.read(n), a + "p", a + "t"))
+            f"## Slide {i}\n\n" + "\n".join(xml_paragraphs(package.read(n), a + "p", a + "t"))
             for i, n in enumerate(slides, 1)
         )
 
 
-def texto_odf(no):
+def odf_text(node):
     s = "{urn:oasis:names:tc:opendocument:xmlns:text:1.0}s"
-    partes = [no.text or ""]
-    for filho in no:
-        partes.append(" " if filho.tag == s else texto_odf(filho))
-        partes.append(filho.tail or "")
-    return "".join(partes)
+    parts = [node.text or ""]
+    for child in node:
+        parts.append(" " if child.tag == s else odf_text(child))
+        parts.append(child.tail or "")
+    return "".join(parts)
 
 
-def documento_odf(caminho):
-    texto = "{urn:oasis:names:tc:opendocument:xmlns:text:1.0}"
-    tabela = "{urn:oasis:names:tc:opendocument:xmlns:table:1.0}"
-    with zipfile.ZipFile(caminho) as pacote:
-        raiz = ET.fromstring(pacote.read("content.xml"))
-    abas = list(raiz.iter(tabela + "table"))
-    if caminho.lower().endswith(".ods"):
+def odf_document(path):
+    text = "{urn:oasis:names:tc:opendocument:xmlns:text:1.0}"
+    table = "{urn:oasis:names:tc:opendocument:xmlns:table:1.0}"
+    with zipfile.ZipFile(path) as package:
+        root = ET.fromstring(package.read("content.xml"))
+    sheets = list(root.iter(table + "table"))
+    if path.lower().endswith(".ods"):
         return "\n\n".join(
-            f"## {aba.get(tabela + 'name', '')}\n\n"
-            + tabela_markdown(
-                [[texto_odf(c).strip() for c in linha.iter(tabela + "table-cell")] for linha in aba.iter(tabela + "table-row")]
+            f"## {sheet.get(table + 'name', '')}\n\n"
+            + markdown_table(
+                [[odf_text(c).strip() for c in row.iter(table + "table-cell")] for row in sheet.iter(table + "table-row")]
             )
-            for aba in abas
+            for sheet in sheets
         )
-    blocos = []
-    for no in raiz.iter():
-        if no.tag in (texto + "p", texto + "h"):
-            conteudo = texto_odf(no).strip()
-            if conteudo:
-                blocos.append(conteudo)
-    return "\n\n".join(blocos)
+    blocks = []
+    for node in root.iter():
+        if node.tag in (text + "p", text + "h"):
+            content = odf_text(node).strip()
+            if content:
+                blocks.append(content)
+    return "\n\n".join(blocks)
 
 
-def comando(*argv):
+def run_command(*argv):
     return subprocess.run(argv, check=True, capture_output=True, text=True, errors="replace").stdout
 
 
-def texto_puro(caminho):
-    with open(caminho, encoding="utf-8", errors="replace") as arquivo:
-        return arquivo.read()
+def plain_text(path):
+    with open(path, encoding="utf-8", errors="replace") as file:
+        return file.read()
 
 
-CONVERSORES = {
-    "pdf": lambda c: comando("pdftotext", "-layout", c, "-"),
-    "xlsx": planilha_xlsx,
-    "xlsm": planilha_xlsx,
-    "xls": planilha_xls,
-    "docx": documento_docx,
-    "doc": lambda c: comando("catdoc", "-w", "-d", "utf-8", c),
-    "pptx": apresentacao_pptx,
-    "ppt": lambda c: comando("catppt", "-d", "utf-8", c),
-    "odt": documento_odf,
-    "ods": documento_odf,
-    "odp": documento_odf,
-    "csv": texto_puro,
-    "tsv": texto_puro,
-    "txt": texto_puro,
-    "md": texto_puro,
-    "json": texto_puro,
-    "xml": texto_puro,
-    "html": texto_puro,
-    "log": texto_puro,
+CONVERTERS = {
+    "pdf": lambda c: run_command("pdftotext", "-layout", c, "-"),
+    "xlsx": xlsx_sheets,
+    "xlsm": xlsx_sheets,
+    "xls": xls_sheets,
+    "docx": docx_document,
+    "doc": lambda c: run_command("catdoc", "-w", "-d", "utf-8", c),
+    "pptx": pptx_slides,
+    "ppt": lambda c: run_command("catppt", "-d", "utf-8", c),
+    "odt": odf_document,
+    "ods": odf_document,
+    "odp": odf_document,
+    "csv": plain_text,
+    "tsv": plain_text,
+    "txt": plain_text,
+    "md": plain_text,
+    "json": plain_text,
+    "xml": plain_text,
+    "html": plain_text,
+    "log": plain_text,
 }
 
 
 def main():
-    caminho, limite = sys.argv[1], int(sys.argv[2])
-    formato = os.path.splitext(caminho)[1].lower().lstrip(".")
-    conversor = CONVERSORES.get(formato)
-    if conversor is None:
-        sys.exit(f"formato não suportado: .{formato or '(sem extensão)'}")
-    if not os.path.isfile(caminho):
-        sys.exit(f"arquivo não encontrado: {caminho}")
-    texto = conversor(caminho).strip()
-    truncado = len(texto) > limite
-    print(json.dumps({"formato": formato, "texto": texto[:limite], "truncado": truncado}, ensure_ascii=False))
+    path, limit = sys.argv[1], int(sys.argv[2])
+    fmt = os.path.splitext(path)[1].lower().lstrip(".")
+    converter = CONVERTERS.get(fmt)
+    if converter is None:
+        sys.exit(f"formato não suportado: .{fmt or '(sem extensão)'}")
+    if not os.path.isfile(path):
+        sys.exit(f"arquivo não encontrado: {path}")
+    text = converter(path).strip()
+    truncated = len(text) > limit
+    print(json.dumps({"formato": fmt, "texto": text[:limit], "truncado": truncated}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

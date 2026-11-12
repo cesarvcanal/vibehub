@@ -50,7 +50,7 @@ const restartAllCards = vi.fn();
 const purgeCardWorkspace = vi.fn();
 const uploadCardImage = vi.fn();
 const readCardUpload = vi.fn();
-const lerAnexoDoCard = vi.fn();
+const readCardAttachment = vi.fn();
 /** The terminal websocket's pty — never a real process here; see `fakeTerm`. */
 const ptySpawn = vi.fn();
 /** The VNC bridge's argv; each test picks the process standing in for `docker exec … socat`. */
@@ -93,7 +93,7 @@ async function boot(): Promise<FastifyInstance> {
   });
   vi.doMock("../services/attachments/document.js", async () => ({
     ...(await vi.importActual<typeof import("../services/attachments/document.js")>("../services/attachments/document.js")),
-    lerAnexoDoCard,
+    readCardAttachment,
   }));
   vi.doMock("node-pty", () => ({ default: { spawn: ptySpawn } }));
   vi.doMock("../services/browser/browser.js", async () => {
@@ -267,21 +267,21 @@ describe("card lifecycle routes", () => {
 
   it("preview de documento anexado devolve o texto convertido", async () => {
     const id = await makeCard();
-    lerAnexoDoCard.mockResolvedValueOnce({ formato: "xlsx", texto: "| a |", truncado: false });
+    readCardAttachment.mockResolvedValueOnce({ formato: "xlsx", texto: "| a |", truncado: false });
     const res = await app.inject({
       method: "GET", url: `/api/cards/${id}/uploads/1793817742302-vendas.xlsx/preview`, headers: { cookie },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ formato: "xlsx", texto: "| a |", truncado: false });
-    expect(lerAnexoDoCard).toHaveBeenCalledWith(id, "1793817742302-vendas.xlsx");
+    expect(readCardAttachment).toHaveBeenCalledWith(id, "1793817742302-vendas.xlsx");
   });
 
   it("preview: anexo sumido é 404, formato que não converte é 422", async () => {
     const id = await makeCard();
-    lerAnexoDoCard.mockRejectedValueOnce(new Error("upload not found"));
+    readCardAttachment.mockRejectedValueOnce(new Error("upload not found"));
     const sumido = await app.inject({ method: "GET", url: `/api/cards/${id}/uploads/1-x.xlsx/preview`, headers: { cookie } });
     expect(sumido.statusCode).toBe(404);
-    lerAnexoDoCard.mockRejectedValueOnce(new Error("formato não suportado: .zip"));
+    readCardAttachment.mockRejectedValueOnce(new Error("formato não suportado: .zip"));
     const zip = await app.inject({ method: "GET", url: `/api/cards/${id}/uploads/1-x.zip/preview`, headers: { cookie } });
     expect(zip.statusCode).toBe(422);
     expect(zip.json()).toEqual({ error: "formato não suportado: .zip" });

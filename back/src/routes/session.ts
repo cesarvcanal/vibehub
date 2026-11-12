@@ -11,7 +11,7 @@ import * as workspace from "../services/board/workspace.js";
 import * as browser from "../services/browser/browser.js";
 import * as outbox from "../services/board/outbox.js";
 import { purgeCard } from "../services/board/purge.js";
-import { lerAnexoDoCard } from "../services/attachments/document.js";
+import { readCardAttachment } from "../services/attachments/document.js";
 import { observeCardStatus } from "../services/events/cardEvents.js";
 import { logger } from "../utils/logger.js";
 import { sendError } from "./httpError.js";
@@ -333,7 +333,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     "/api/cards/:id/uploads/:file/preview", { preHandler: requireCardAccess },
     async (req, reply) => {
       try {
-        return await reply.send(await lerAnexoDoCard(req.params.id, req.params.file));
+        return await reply.send(await readCardAttachment(req.params.id, req.params.file));
       } catch (err) {
         return await sendError(reply, err, { fallback: 422 });
       }

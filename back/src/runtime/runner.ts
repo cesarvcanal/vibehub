@@ -4,7 +4,7 @@ import { hostExecutor, shQuote, HostExecError } from "./host.js";
 import { secretEnsure, secretGet } from "../secrets/vault.js";
 import { logger } from "../utils/logger.js";
 import { installGhWrapperLines } from "../services/github/runnerIdentity.js";
-import { PACOTES_ANEXOS } from "../services/attachments/runner.js";
+import { ATTACHMENT_PACKAGES } from "../services/attachments/runner.js";
 
 /**
  * THE RUNNER — one container where every card's terminal lives. It is a plain Docker container
@@ -242,7 +242,7 @@ export function buildSetupScript(opts: {
     // cannot silently lose it). apt is idempotent, so re-runs are cheap.
     "apt-get install -y -qq tmux git ripgrep curl procps xvfb x11vnc novnc websockify socat >/dev/null",
     // Leitura de anexos (Excel, Word, PDF) e conversão de áudio para transcrição — ver services/attachments.
-    `apt-get install -y -qq ${PACOTES_ANEXOS.join(" ")} >/dev/null`,
+    `apt-get install -y -qq ${ATTACHMENT_PACKAGES.join(" ")} >/dev/null`,
     // gh CLI from the official repo — the agent opens PRs and checks CI. Auth is the user's own.
     'if ! command -v gh >/dev/null; then mkdir -p /etc/apt/keyrings && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list && apt-get update -qq && apt-get install -y -qq gh >/dev/null; fi',
     // Claude Code CLI (the account login terminal and the TUI sessions run it). An npm update cut
