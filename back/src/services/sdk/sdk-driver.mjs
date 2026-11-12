@@ -442,7 +442,7 @@ function baseOptions() {
     settingSources: ["user", "project", "local"],
     // The TUI's system prompt (Claude Code's own), which is also what loads CLAUDE.md — the brain
     // at the profile root and the repo's. Without it the driver ran on the bare SDK prompt.
-    // NOTHING appended, in any language: an instruction about the reasoning here was the trigger of
+    // NOTHING added on top, in any language: an instruction about the reasoning here was the trigger of
     // Opus's `[reasoning_extraction]` block (card #3684). The reasoning is translated in the BROWSER,
     // only on display — see front/src/features/board/lib/reasoningTranslation.ts.
     systemPrompt: { type: "preset", preset: "claude_code" },
