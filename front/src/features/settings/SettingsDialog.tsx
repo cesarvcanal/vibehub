@@ -26,7 +26,7 @@ import { ACCOUNTS_KEY, GITHUB_KEY, TRANSCRIBE_KEY, boardApi } from "@/features/b
 import {
   LANGUAGES,
   getLanguage,
-  setLanguage as applyLanguage,
+  setLanguage,
   t as translate,
   useT,
   type Language,
@@ -70,7 +70,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [sdkPermissionMode, setSdkPermissionMode] = React.useState<"same-as-terminal" | "ask-sensitive">("same-as-terminal");
   const [sdkAutoResume, setSdkAutoResume] = React.useState(true);
   const [defaultLabel, setDefaultLabel] = React.useState("");
-  const [language, setLanguage] = React.useState("");
+  const [transcribeLanguage, setTranscribeLanguage] = React.useState("");
   // Kept as a STRING: the field has to be clearable while you retype it, and "" is not 0.
   const [idleHibernate, setIdleHibernate] = React.useState("");
   const [githubLabel, setGithubLabel] = React.useState("");
@@ -96,7 +96,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     setSdkPermissionMode(settings.data.sdkPermissionMode ?? "same-as-terminal");
     setSdkAutoResume(settings.data.sdkAutoResume ?? true);
     setDefaultLabel(settings.data.defaultAccountLabel ?? "");
-    setLanguage(settings.data.transcribeLanguage ?? "");
+    setTranscribeLanguage(settings.data.transcribeLanguage ?? "");
     setIdleHibernate(String(settings.data.idleHibernateMinutes ?? 180));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, settings.data]);
@@ -196,7 +196,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
       sdkPermissionMode,
       sdkAutoResume,
       defaultAccountLabel: defaultLabel.trim() || null,
-      transcribeLanguage: language.trim() || null,
+      transcribeLanguage: transcribeLanguage.trim() || null,
       // A blank field is not "never" — it is a field being typed in. Leave the stored value alone.
       ...(idleHibernate.trim() === "" ? {} : { idleHibernateMinutes: Number(idleHibernate.trim()) }),
     });
@@ -229,7 +229,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               value={uiLanguage}
               onChange={(e) => {
                 const next = e.target.value as Language;
-                applyLanguage(next);
+                setLanguage(next);
                 setUiLanguage(next);
               }}
             >
@@ -355,8 +355,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               <Label htmlFor="settings-language">{t("settings.transcribeLanguage")}</Label>
               <Input
                 id="settings-language"
-                value={language}
-                onChange={(e) => setLanguage(e.target.value)}
+                value={transcribeLanguage}
+                onChange={(e) => setTranscribeLanguage(e.target.value)}
                 placeholder={t("settings.transcribePlaceholder")}
                 maxLength={2}
                 className="font-mono"
