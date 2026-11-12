@@ -12,7 +12,7 @@ import {
 import { get, patch, post, del } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
 import type {
-  Settings, SettingsPatch, GithubConnection, TranscribeStatus, Credential, CredentialType,
+  Settings, SettingsPatch, TranscribeStatus, Credential, CredentialType,
 } from "@/api/types";
 import { SELECT_CLASS } from "@/components/ui/select";
 import { AccountsManager } from "@/features/board/components/AccountsManager";
@@ -112,9 +112,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   });
 
   const addGithub = useMutation({
-    mutationFn: (body: { label: string; token: string }) =>
-      post<{ connection: GithubConnection }>("/github/connections", body),
-    onSuccess: (result) => {
+    mutationFn: (body: { label: string; token: string }) => boardApi.addGithubConnection(body.label, body.token),
+    onSuccess: (connection) => {
       setGithubToken("");
       setGithubLabel("");
       // A prefix: the connection list AND every repo/branch query hanging off an account.
@@ -122,8 +121,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
       void qc.invalidateQueries({ queryKey: SETTINGS_KEY });
       toast.success(
         translate("toast.githubAdded", {
-          label: result.connection.label,
-          login: result.connection.login,
+          label: connection.label,
+          login: connection.login,
         }),
       );
     },
@@ -133,7 +132,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   // The server REFUSES (409) while a project still points at the account — the message names how
   // many, which is exactly what the person needs to go and fix, so it is shown verbatim.
   const removeGithub = useMutation({
-    mutationFn: (id: string) => del<{ ok: true }>(`/github/connections/${encodeURIComponent(id)}`),
+    mutationFn: boardApi.removeGithubConnection,
     onSuccess: () => {
       // A prefix: the connection list AND every repo/branch query hanging off an account.
       void qc.invalidateQueries({ queryKey: GITHUB_KEY });
