@@ -22,7 +22,7 @@ import { PluginsManager } from "@/features/board/components/PluginsManager";
 import { RunnerBanner } from "@/features/board/components/RunnerBanner";
 // The SAME cache entries the board reads (the composer's microphone, the project picker): a save
 // here has to reach them, which two keys for one endpoint never did.
-import { GITHUB_KEY, TRANSCRIBE_KEY, boardApi } from "@/features/board/api";
+import { ACCOUNTS_KEY, GITHUB_KEY, TRANSCRIBE_KEY, boardApi } from "@/features/board/api";
 import {
   LANGUAGES,
   getLanguage,
@@ -105,7 +105,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     mutationFn: (body: SettingsPatch) => patch<Settings>("/settings", body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: SETTINGS_KEY });
-      void qc.invalidateQueries({ queryKey: ["board", "accounts"] });
+      void qc.invalidateQueries({ queryKey: ACCOUNTS_KEY });
       toast.success(translate("toast.settingsSaved"));
     },
     onError: (e) => toast.error(apiErrorMessage(e)),
