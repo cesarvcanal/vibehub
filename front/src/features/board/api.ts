@@ -24,6 +24,7 @@ import type {
   McpSecretsResponse,
   McpTransport,
   NewCard,
+  NewMcp,
   NewProject,
   OutboxStatus,
   PeopleResponse,
@@ -506,7 +507,7 @@ export const boardApi = {
       args: input.args,
       url: input.url,
       ...(input.transport === "stdio" ? { envKeys: input.keys } : { headerKeys: input.keys }),
-    }).then((r) => r.mcp),
+    } satisfies NewMcp).then((r) => r.mcp),
 
   deleteMcp: (id: string) => del<unknown>(`/mcps/${encodeURIComponent(id)}`),
 

@@ -68,11 +68,6 @@ export interface MeResponse {
   user: User;
 }
 
-export interface Credentials {
-  username: string;
-  password: string;
-}
-
 /* ----------------------------------------------------------------- setup */
 
 /**
@@ -315,14 +310,6 @@ export interface GithubBranches {
  */
 export type CardColumn = "backlog" | "waiting" | "working" | "paused" | "done";
 
-export const CARD_COLUMNS: readonly CardColumn[] = [
-  "backlog",
-  "waiting",
-  "working",
-  "paused",
-  "done",
-] as const;
-
 /** What the Claude hook callback (`POST /api/runner/status`) reports. */
 export type CardStatus = "working" | "waiting";
 
@@ -362,12 +349,6 @@ export interface ProjectPatch {
   baseBranch?: string;
   defaultAccountSlug: string | null;
   githubConnectionId: string | null;
-}
-
-/** `PATCH /api/projects/:id/order` — the sidebar reorder route. */
-export interface ReorderBody {
-  /** Target index in the sidebar (0-based). Matches `Project.position`. */
-  position: number;
 }
 
 export interface Card {
@@ -1029,15 +1010,6 @@ export interface McpSecretsResponse {
   byMcp: Record<string, Record<string, boolean>>;
 }
 
-/** `POST /api/import` — adopt Claude Code sessions that already exist on disk. */
-export interface ImportSession {
-  sessionId: string;
-  title?: string;
-  projectId?: string;
-  cwd?: string;
-  updatedAt?: number;
-}
-
 /** One TCP port listening inside the runner — `GET /api/preview/ports`. */
 export interface PreviewPort {
   port: number;
@@ -1046,11 +1018,4 @@ export interface PreviewPort {
   /** Best-effort process name ("node", "vite", …). */
   process?: string;
   pid?: number;
-}
-
-/* --------------------------------------------------------------- generic */
-
-/** Every non-2xx response body. */
-export interface ApiErrorBody {
-  error: string;
 }

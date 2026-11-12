@@ -1,4 +1,5 @@
 import * as React from "react";
+import type { RunnerLogEvent } from "@/api/types";
 import { wsUrl } from "@/lib/ws";
 import { t } from "@/i18n";
 
@@ -55,7 +56,7 @@ export function useRunnerLogs(enabled: boolean) {
       // The server may send bare text or a small JSON envelope; accept both.
       if (raw.startsWith("{")) {
         try {
-          const parsed = JSON.parse(raw) as { line?: string; error?: string; done?: boolean };
+          const parsed = JSON.parse(raw) as RunnerLogEvent;
           if (parsed.error) return append(parsed.error, true);
           if (typeof parsed.line === "string") return append(parsed.line);
           if (parsed.done) return append(t("log.finished"));
