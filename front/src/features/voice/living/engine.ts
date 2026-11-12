@@ -31,8 +31,8 @@ export interface StageDef {
 
 export type StageId = "accel" | "align" | "draw" | "finish" | "hold" | "slow" | "release" | "reform" | "settle";
 
-// V26: efeitos de formação podem se sobrepor. Hold e desaceleração começam após a formação,
-// mas também possuem deslocamentos individuais para calibragem fina.
+// V26: formation effects may overlap. Hold and deceleration start after the formation,
+// but they also have individual offsets for fine calibration.
 export const STAGE_DEFS: readonly StageDef[] = [
   { id: "accel", group: "fwd", name: "Impulso inicial", desc: "Energia e aceleração progressiva enquanto a esfera começa a reagir.", start: 0, ms: 150, max: 2200 },
   { id: "align", group: "fwd", name: "Abertura e alinhamento", desc: "Organiza a esfera na direção das três fitas. Pode coincidir com o desenho.", start: 0, ms: 450, max: 3000 },
@@ -356,12 +356,12 @@ export class LivingEngine {
   private beginSpinCycle(destination: LivingMode, scale = 1): void {
     const direction = destination === "talk" ? 1 : -1;
     const base = destination === "talk" ? this.settings.talkSpin : this.settings.listenSpin;
-    // Mantém fase e velocidade atuais quando a troca é interrompida no meio.
+    // Keeps the current phase and speed when the switch is interrupted midway.
     this.spinCycle = { at: this.t, from: this._sphereOmega, peak: direction * (base + this.settings.switchTurn * scale) * DEG };
   }
 
   private startSpeechColorCycle(): void {
-    // Snapshot das cores reais no momento do clique: pode inverter a troca a qualquer instante.
+    // Snapshot of the real colours at the moment of the click: the switch can reverse at any instant.
     for (const p of this.parts) {
       p.fromColorR = p.colorR === undefined ? 92 : p.colorR;
       p.fromColorG = p.colorG === undefined ? 187 : p.colorG;
@@ -378,11 +378,11 @@ export class LivingEngine {
       const peakTime = Math.min(s.spinPeakMs / 1000, duration * 0.6);
       const since = Math.max(0, this.t - this.spinCycle.at);
       if (since < peakTime) {
-        // Arranque perceptível já nos primeiros frames, pico sem tranco (ease-out seno).
+        // Noticeable start already in the first frames, peak without a jolt (ease-out sine).
         const jump = Math.sin((Math.PI / 2) * clamp(since / peakTime, 0, 1));
         this._sphereOmega = ease(this.spinCycle.from, this.spinCycle.peak, jump);
       } else if (since < duration) {
-        // Resquício de rotação por quase 2s; não zera nem inverte de repente.
+        // Residual rotation for almost 2s; it neither drops to zero nor reverses suddenly.
         const tail = smoothstep(0, 1, (since - peakTime) / (duration - peakTime));
         this._sphereOmega = ease(this.spinCycle.peak, dest, tail);
       } else {
@@ -443,7 +443,7 @@ export class LivingEngine {
       if (!movingOut && (mode === "listen" || mode === "talk")) {
         this.startSpeechColorCycle();
       } else {
-        // Na volta da Marca Viva, mantém a troca rápida de cor já aprovada.
+        // On the way back from the living mark, keeps the already approved fast colour switch.
         this.spinColorCycle = null;
       }
     }
@@ -503,7 +503,7 @@ export class LivingEngine {
     this.voiceFloor = ease(this.voiceFloor, voice, 1 - Math.exp(-dt / 0.3));
     // A syllable onset while replying sends a ring outward (at most ~5 per second).
     if (mode === "talk" && voice > this.voiceFloor + 0.08 && t - this.ring.at > 0.2) this.ring = { at: t, amp: Math.min(1, voice * 1.5) };
-    // Timeline de efeitos sobrepostos e coreografia de entrada UNIFICADA.
+    // Timeline of overlapping effects and a UNIFIED entry choreography.
     let bearingMix = 0, shapeMix = 0, visualBlend = 0, returnRelease = 0, returnReform = 0, returnSettle = 0;
     const elapsed = Math.max(0, t - this.transitionStartedAt);
     if (this._transition === "fwd" || this._transition === "steady") {
@@ -534,7 +534,7 @@ export class LivingEngine {
       returnRelease = s.stages.release.on ? phase.release : 1;
       returnReform = s.stages.reform.on ? phase.reform : returnRelease;
       returnSettle = s.stages.settle.on ? phase.settle : returnReform;
-      // Giro opcional acumulado: não usa senóide para voltar ao ângulo inicial.
+      // Accumulated optional spin: does not use a sinusoid to return to the initial angle.
       // Any optional extra rotation respects the *destination*, even when the
       // user moves the slider left: return arcs never counter-rotate.
       const targetSign = mode === "talk" ? 1 : -1;
@@ -557,9 +557,9 @@ export class LivingEngine {
     }
     const transition = this._transition;
     this.blend.logo = visualBlend;
-    // Giro da ida: em vez de congelar as posições capturadas no clique, damos um impulso
-    // rotacional curto, integrado por frame. O ângulo não é recalculado a partir do tempo
-    // global, portanto não acelera inexplicavelmente após uso prolongado.
+    // Spin on the way in: instead of freezing the positions captured at the click, we give a short
+    // rotational impulse, integrated per frame. The angle is not recomputed from the global
+    // time, so it does not inexplicably speed up after prolonged use.
     if (transition === "fwd") {
       const spinTime = Math.max(0.15, s.logoEntrySpinMs / 1000);
       const qtime = clamp(elapsed / spinTime, 0, 1);
@@ -569,9 +569,9 @@ export class LivingEngine {
     const speechTarget = mode === "talk" ? 1 : 0;
     // ~95% within selected time, including return from logo
     this.blend.talk = ease(this.blend.talk, speechTarget, 1 - Math.exp(-dt / Math.max(0.02, s.speechMorphMs / 3000)));
-    // Rotação acumulada por frame, com mudança de sentido e impulso transitório.
+    // Rotation accumulated per frame, with a change of direction and a transient impulse.
     this.updateSphereOmega(dt);
-    // Integra a fase ao longo do tempo: nunca recalcula posição usando um multiplicador acumulado.
+    // Integrates the phase over time: never recomputes position using an accumulated multiplier.
     const canMoveLogo = transition === "fwd" || transition === "steady" || mode === "logo";
     const drawingActivity = transition === "fwd" ? ease(s.tracking / 100, 1, shapeMix) : 1;
     if (canMoveLogo) this.logoClock += dt * (s.flowSpeed / 100) * 1.24 * this.flowTempo * drawingActivity;
@@ -599,8 +599,8 @@ export class LivingEngine {
       const p = this.parts[i];
       const q = p.target;
       const z = p.z;
-      // Sentido definido pelo estado de destino; rotação acumulada sem saltos.
-      // Deslocamentos internos são independentes do giro global.
+      // Direction defined by the destination state; accumulated rotation without jumps.
+      // Internal displacements are independent of the global spin.
       const orbitAngle = p.phi + spherePhase + (p.reentryOffset || 0) + returnTurn;
       const e0 = Math.cos(orbitAngle) * Math.sqrt(1 - z * z);
       const yr = Math.sin(orbitAngle) * Math.sqrt(1 - z * z);
@@ -608,7 +608,7 @@ export class LivingEngine {
       const sphereR = ease(0.92, 0.79, listeningShape) + energy * 0.05 * listeningShape;
       let sx = cx + e0 * sz * 0.34 * sphereR * depth;
       let sy = cy + yr * sz * 0.34 * sphereR * depth;
-      // Ao escutar: pequenas emissões locais, proporcionais ao microfone, sem girar a esfera inteira.
+      // While listening: small local emissions, proportional to the microphone, without spinning the whole sphere.
       const liquidX = Math.sin(t * (0.7 + p.drift * 0.11) + p.phase) * sz * 0.006 + Math.sin((yr + z) * 4.2 + t * 0.9 + p.seed) * sz * 0.003;
       const liquidY = Math.cos(t * (0.64 + p.drift * 0.12) + p.phase * 1.3) * sz * 0.006 + Math.cos((e0 - z) * 4.6 - t * 0.82 + p.seed * 0.7) * sz * 0.003;
       const liquidFactor = ease(1, 0.85 + voice * 0.65, listeningShape);
@@ -664,16 +664,16 @@ export class LivingEngine {
       const side = q[7] * bandWidth * 0.5 + smoothFlow;
       const lx = cx + (pp[0] - 530) * scale + normalX * side;
       const ly = cy + (pp[1] - 454) * scale + normalY * side;
-      // Evita pulso de encolhimento: a origem é SEMPRE o quadro real congelado no clique,
-      // sem voltar as partículas para o ângulo inicial p.phi nem para um raio canônico menor.
+      // Avoids a shrinking pulse: the origin is ALWAYS the real frame frozen at the click,
+      // without sending the particles back to the initial angle p.phi or to a smaller canonical radius.
       let srcScreenX = sx;
       let srcScreenY = sy;
       if (forming) {
         srcScreenX = Number.isFinite(p.morphFromX) ? p.morphFromX! : sx;
         srcScreenY = Number.isFinite(p.morphFromY) ? p.morphFromY! : sy;
       }
-      // Entrada mais sutil: cada partícula já começa acelerando no sentido da fita à qual pertence,
-      // com um empurrão tangencial desde o primeiro frame e uma atração leve para a própria fita.
+      // Subtler entry: each particle already starts accelerating in the direction of the ribbon it belongs to,
+      // with a tangential push from the first frame and a light pull toward its own ribbon.
       if (transition === "fwd") {
         const tangentKick = sz * 0.02 * (s.logoEntrySpin / 30) * early * (1 - shapeMix * 0.78);
         const ribbonPull = 0.055 * early * (1 - shapeMix * 0.55);
@@ -683,7 +683,7 @@ export class LivingEngine {
       const srcX = srcScreenX - cx;
       const srcY = srcScreenY - cy;
       const sourceR = Math.hypot(srcX, srcY);
-      // Na ida a origem gira um pouco desde o primeiro frame, sem interromper a formação.
+      // On the way in the origin spins a little from the first frame, without interrupting the formation.
       const entryAngle = transition === "fwd" ? logoEntryTurn : 0;
       const sourceA = Math.atan2(srcY, srcX) + entryAngle;
       const gx = lx - cx;
@@ -731,8 +731,8 @@ export class LivingEngine {
       alpha *= 1 + blend.logo * 0.13;
       // Replying, the particles brighten with the voice.
       alpha *= 1 + voice * 0.35 * talkResponse * blend.talk;
-      // A COR SEGUE O DESTINO, NÃO A ETAPA GEOMÉTRICA: vai direto ao destino, sem passar por
-      // outro estado. A cor de cada partícula é guardada para transições interrompidas.
+      // THE COLOUR FOLLOWS THE DESTINATION, NOT THE GEOMETRIC STAGE: it goes straight to the destination, without passing through
+      // another state. Each particle's colour is kept for interrupted transitions.
       let paletteR: number, paletteG: number, paletteB: number;
       if (mode === "logo") {
         paletteR = q[2];
@@ -755,7 +755,7 @@ export class LivingEngine {
         p.colorB = 244;
       }
       if (this.spinColorCycle && (mode === "listen" || mode === "talk")) {
-        // Cor evolui no mesmo relógio da rotação, em vez de mudar toda antes do movimento.
+        // Colour evolves on the same clock as the rotation, instead of changing all at once before the movement.
         p.colorR = ease(p.fromColorR!, paletteR, colorProgress);
         p.colorG = ease(p.fromColorG!, paletteG, colorProgress);
         p.colorB = ease(p.fromColorB!, paletteB, colorProgress);

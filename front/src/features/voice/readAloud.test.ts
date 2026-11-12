@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { ReadAloudPlayer, readAloudError, speakableText, speechChunks, type AudioLike } from "./readAloud";
 
 /**
- * LER EM VOZ ALTA: o markdown vira fala, a fala vira pedaços (o primeiro curto, para a voz começar
- * logo), e o player toca um por vez buscando o próximo enquanto toca. Parar corta tudo.
+ * READ ALOUD: the markdown becomes speech, the speech becomes pieces (the first one short, so the voice
+ * starts right away), and the player plays one at a time, fetching the next while it plays. Stop cuts it all.
  */
 
 describe("speakableText", () => {
