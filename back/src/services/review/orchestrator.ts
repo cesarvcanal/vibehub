@@ -55,8 +55,9 @@ import {
  *    `impasse` com o erro como motivo, aviso nos cards do autor e do revisor e warn no log; e todo
  *    impasse que não é de rodadas tem saída (`retryReview`), além do `cancelReview`.
  *
- * E uma ausência deliberada: nada aqui mergeia. O merge é a rota humana (`routes/reviews.ts`), que só
- * conta para cá o que aconteceu.
+ * O merge sai sempre por `mergeReviewedPr` (`merge.ts`): o clique humano (`routes/reviews.ts`) ou, com
+ * a revisão pronta, aprovada no GitHub e sem nada em pé, o `autoMerge` daqui, pelo mesmo caminho e em
+ * nome do responsável pelo merge.
  */
 
 /** Quem assina as falas que o orquestrador digita nos cards. */
