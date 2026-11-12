@@ -227,7 +227,7 @@ export function validatePrDocs(docs: PrDocs | undefined): { ok: true; docs: Clea
       continue;
     }
     const path = cleanPath(c.path);
-    const key = `${path}\n${text}`;
+    const key = commentKey(path, text);
     if (seen.has(key)) {
       clean.repeated = (clean.repeated ?? 0) + 1;
       continue;
@@ -264,6 +264,11 @@ export function undocumentedOutput(docs: CleanPrDocs): string {
   ].join("\n");
 }
 
+/** Same file and same text = the same comment: the key both the dedupe and `freshComments` compare. PURE. */
+function commentKey(path: string, body: string): string {
+  return `${path}\n${body}`;
+}
+
 /** A comment already on the PR, as GitHub lists it. */
 export interface PostedComment {
   path?: string;
@@ -275,8 +280,8 @@ export interface PostedComment {
  * (a later push moves lines; the explanation is the same). Makes a repeated delivery idempotent. PURE.
  */
 export function freshComments(posted: PostedComment[], wanted: CleanComment[]): CleanComment[] {
-  const have = new Set(posted.map((p) => `${String(p.path ?? "")}\n${String(p.body ?? "").trim()}`));
-  return wanted.filter((c) => !have.has(`${c.path}\n${c.body}`));
+  const have = new Set(posted.map((p) => commentKey(String(p.path ?? ""), String(p.body ?? "").trim())));
+  return wanted.filter((c) => !have.has(commentKey(c.path, c.body)));
 }
 
 /** The body of the review that carries the comments (GitHub wants one on a COMMENT review). */

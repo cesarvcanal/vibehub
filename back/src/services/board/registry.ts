@@ -1538,7 +1538,7 @@ export interface RemovedProject {
  * renumbered 0..n-1 so the sidebar keeps no gap.
  */
 export async function removeProject(id: string): Promise<RemovedProject> {
-  const result = await store.mutate((doc) => {
+  const removed = await store.mutate((doc) => {
     const project = doc.projects.find((p) => p.id === id);
     if (!project) throw new Error("project not found");
     const cards = doc.cards.filter((c) => c.projectId === id);
@@ -1552,10 +1552,10 @@ export async function removeProject(id: string): Promise<RemovedProject> {
     normalizeProjectPositions(doc.projects);
     return { project, cards };
   });
-  if (result.cards.length > 0) {
-    logger.info({ projectId: id, cards: result.cards.length }, "project removed with its cards");
+  if (removed.cards.length > 0) {
+    logger.info({ projectId: id, cards: removed.cards.length }, "project removed with its cards");
   }
-  return result;
+  return removed;
 }
 
 // ---------------------------------------------------------------------------

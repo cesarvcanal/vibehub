@@ -340,20 +340,20 @@ function gateHints(text: string): string[] {
 
 /** The error lines, strong first then weak, within the budget, in the order they appeared. PURE. */
 function errorLines(text: string): string[] {
-  const lines = text.replace(ANSI, "").split("\n").map((l, i) => ({ l: l.length > 300 ? `${l.slice(0, 299)}…` : l, i }));
+  const lines = text.replace(ANSI, "").split("\n").map((line, index) => ({ line: line.length > 300 ? `${line.slice(0, 299)}…` : line, index }));
   const seen = new Set<string>();
-  const picked: { l: string; i: number }[] = [];
+  const picked: { line: string; index: number }[] = [];
   let used = 0;
   for (const re of [STRONG_ERROR_LINE, WEAK_ERROR_LINE]) {
-    for (const x of lines) {
-      if (!re.test(x.l) || /^\s*✓/.test(x.l) || seen.has(x.l)) continue;
-      if (used + byteLength(x.l) + 1 > ERROR_LINES_BYTES) continue;
-      seen.add(x.l);
-      picked.push(x);
-      used += byteLength(x.l) + 1;
+    for (const entry of lines) {
+      if (!re.test(entry.line) || /^\s*✓/.test(entry.line) || seen.has(entry.line)) continue;
+      if (used + byteLength(entry.line) + 1 > ERROR_LINES_BYTES) continue;
+      seen.add(entry.line);
+      picked.push(entry);
+      used += byteLength(entry.line) + 1;
     }
   }
-  return picked.sort((a, b) => a.i - b.i).map((x) => x.l);
+  return picked.sort((a, b) => a.index - b.index).map((entry) => entry.line);
 }
 
 /**
