@@ -1,7 +1,7 @@
 /**
- * Leitura defensiva do JSON que vem de outro processo: a saída dos probes que rodam no container
- * (detail, workflowProbe) e os frames do driver (toolResult). Pode vir truncado ou com avisos do
- * docker antes, então cada campo é conferido no tipo antes de ser usado. PURE.
+ * Defensive reading of JSON that comes from another process: the output of the probes that run in
+ * the container (detail, workflowProbe) and the driver's frames (toolResult). It may come truncated
+ * or with docker warnings before it, so each field is checked for its type before being used. PURE.
  */
 
 export type Fields = Record<string, unknown>;
@@ -14,12 +14,12 @@ export function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-/** Um instante em ms: número finito e positivo, ou nada. */
+/** An instant in ms: a finite, positive number, or nothing. */
 export function asInstant(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-/** A última linha da saída como JSON — o docker pode imprimir avisos antes dela. */
+/** The last line of the output as JSON — docker may print warnings before it. */
 export function lastJsonLine(stdout: string): unknown {
   const text = String(stdout ?? "").trim();
   if (!text) return undefined;

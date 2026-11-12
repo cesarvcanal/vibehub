@@ -17,9 +17,9 @@ import {
 } from "./manager.js";
 
 /**
- * A BOLINHA DO CARD segue o driver do chat nativo (produção, 2026-10-20): o card ficava cinza com o
- * chat trabalhando, ou verde com o chat parado, porque a bolinha só ouvia os hooks HTTP do CLI — e
- * um hook perdido não tinha quem corrigisse. Aqui o board é observado, não gravado.
+ * THE CARD'S DOT follows the native chat's driver (production, 2026-10-20): the card stayed grey with
+ * the chat working, or green with the chat stopped, because the dot only listened to the CLI's HTTP
+ * hooks — and a lost hook had nobody to correct it. Here the board is observed, not written.
  */
 const { applied, cards } = vi.hoisted(() => ({
   applied: [] as Array<{ cardId: string; status: string }>,
@@ -35,7 +35,7 @@ vi.mock("../board/registry.js", async (importOriginal) => {
   };
 });
 
-/** O caminho dos hooks (services/board/status.ts), observado: o que o driver reporta chega aqui. */
+/** The hooks path (services/board/status.ts), observed: what the driver reports arrives here. */
 onCardStatusSink((cardId, status) => {
   applied.push({ cardId, status });
   const card = cards.get(cardId);
@@ -162,10 +162,10 @@ describe("sdk manager — a bolinha do card segue o driver", () => {
 });
 
 /**
- * A RETOMADA NÃO PISCA "AGUARDANDO". No CLI real, o turno vazio do arranque fecha com um `result`
- * segundos antes do turno de verdade (E2E, 2026-10-20). Contada como fim de turno, a bolinha ia a
- * `waiting` e voltava a `working` — e o aviso de "turno terminou" (services/events) saía no meio da
- * retomada. Enquanto o vigia espera, o card segue trabalhando; só a desistência o põe em espera.
+ * THE RESUME DOES NOT BLINK "AGUARDANDO". In the real CLI, the boot's empty turn closes with a `result`
+ * seconds before the real turn (E2E, 2026-10-20). Counted as the end of a turn, the dot went to
+ * `waiting` and back to `working` — and the "turno terminou" notice (services/events) went out in the
+ * middle of the resume. While the watcher waits, the card keeps working; only giving up puts it on hold.
  */
 describe("sdk manager — a bolinha durante a retomada", () => {
   const emit = (event: object) => spawned[0]!.stdout.emit("data", line(event));
@@ -203,10 +203,10 @@ describe("sdk manager — a bolinha durante a retomada", () => {
 });
 
 /**
- * A QUEDA DO DRIVER E A BOLINHA. O close forçava `waiting` — a transição que a central de eventos
- * (#182) lê como "turno terminou" — e 10 s depois a retomada da queda voltava a `working`: o aviso
- * já tinha saído para quem estava longe do quadro. Com quem retoma inscrito, a bolinha espera o
- * veredito dele (resume.ts acerta para `waiting` quando não retoma).
+ * THE DRIVER'S CRASH AND THE DOT. The close forced `waiting` — the transition the events hub
+ * (#182) reads as "turno terminou" — and 10 s later the crash resume went back to `working`: the
+ * notice had already gone out to whoever was away from the board. With a resumer subscribed, the
+ * dot waits for its verdict (resume.ts sets `waiting` when it does not resume).
  */
 describe("sdk manager — a bolinha numa queda com trabalho em voo", () => {
   it("com quem retome inscrito: segue trabalhando", async () => {

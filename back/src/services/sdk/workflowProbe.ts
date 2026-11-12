@@ -2,80 +2,80 @@ import { shQuote } from "../../runtime/host.js";
 import { asFields, asInstant, asString, lastJsonLine, type Fields } from "./fields.js";
 
 /**
- * AS SONDAGENS DA FROTA — o JS que roda DENTRO do runner (por `docker exec … node -e`), os comandos
- * que o embrulham e a leitura do que ele imprime. Tudo aqui é PURO: nada executa, nada guarda estado.
- * Quem roda, quando e com quais travas é o laço em ./workflow.ts — onde também está descrito o que é
- * lido (diário, meta.json e transcript de cada subagente).
+ * THE FLEET PROBES — the JS that runs INSIDE the runner (through `docker exec … node -e`), the commands
+ * that wrap it and the parsing of what it prints. Everything here is PURE: nothing executes, nothing keeps state.
+ * Who runs it, when and with which guards is the loop in ./workflow.ts — where what is
+ * read is also described (journal, meta.json and each subagent's transcript).
  */
 
 /**
- * O que o subagente está fazendo AGORA, do jeito que dá para ler. O raciocínio (`thinking`) chega
- * com o texto vazio no transcript — e mesmo que não chegasse, não é para a tela: só o marcador e
- * desde quando.
+ * What the subagent is doing NOW, in the form that can be read. The reasoning (`thinking`) arrives
+ * with empty text in the transcript — and even if it did not, it is not for the screen: only the marker and
+ * since when.
  */
 export type WorkflowActivity =
   | { kind: "tool"; tool: string; target: string }
   | { kind: "text"; text: string }
   | { kind: "thinking"; since: number };
 
-/** Um subagente da frota, como o diário o conhece. */
+/** A subagent of the fleet, as the journal knows it. */
 export interface WorkflowAgent {
-  /** `agentId` do harness — o nome do arquivo `agent-<id>.jsonl`. */
+  /** The harness's `agentId` — the name of the `agent-<id>.jsonl` file. */
   id: string;
-  /** O rótulo do diário (ou do meta, ou a tarefa calculada), em uma linha. Pode vir vazio. */
+  /** The journal's label (or the meta's, or the computed task), on one line. May come empty. */
   label: string;
-  /** A fase do script em que ele roda (`phase` do diário / `workflowPhase` do meta). "" = sem fase. */
+  /** The script phase it runs in (the journal's `phase` / the meta's `workflowPhase`). "" = no phase. */
   phase: string;
-  /** `stopped` = estava em voo quando a rodada acabou (morta, ou a sondagem desistiu): nunca vai responder. */
+  /** `stopped` = it was in flight when the round ended (killed, or the probe gave up): it will never answer. */
   status: "running" | "done" | "stopped";
-  /** O que ele devolveu, aparado — só nos que terminaram. */
+  /** What it returned, trimmed — only on the ones that finished. */
   result?: string;
-  /** Primeiro e último `timestamp` do transcript, em ms. Ausentes quando o arquivo não tem nenhum. */
+  /** First and last `timestamp` of the transcript, in ms. Absent when the file has none. */
   startedAt?: number;
   lastAt?: number;
-  /** Só nos que terminaram: o último `timestamp` do transcript. */
+  /** Only on the ones that finished: the transcript's last `timestamp`. */
   endedAt?: number;
-  /** Ferramentas chamadas no trecho lido do transcript. */
+  /** Tools called in the stretch of the transcript that was read. */
   toolCount: number;
-  /** `true` quando o transcript é maior que a cabeça + a cauda lidas: `toolCount` é um piso. */
+  /** `true` when the transcript is larger than the head + tail read: `toolCount` is a floor. */
   toolCountPartial?: boolean;
   activity?: WorkflowActivity;
 }
 
-/** O instantâneo de UMA rodada de workflow. */
+/** The snapshot of ONE workflow round. */
 export interface WorkflowRun {
-  /** `wf_…` — o diretório da rodada, e o id que o harness imprime no resultado da tool. */
+  /** `wf_…` — the round's directory, and the id the harness prints in the tool's result. */
   runId: string;
-  /** O nome do script (`meta.name`), lido do arquivo do script ao lado. "" quando não dá pra saber. */
+  /** The script's name (`meta.name`), read from the script file next to it. "" when it cannot be told. */
   name: string;
-  /** Os títulos de `meta.phases` do script, na ordem. [] quando não dá pra ler. */
+  /** The titles of the script's `meta.phases`, in order. [] when it cannot be read. */
   phases: string[];
-  /** Quando a rodada começou (o primeiro `timestamp` dos subagentes; senão o menor mtime), em ms. */
+  /** When the round started (the subagents' first `timestamp`; otherwise the smallest mtime), in ms. */
   startedAt?: number;
   /**
-   * TODOS os subagentes que a rodada começou, e quantos já responderam — contados no diário inteiro,
-   * não na lista abaixo. A lista é o que a tela desenha e tem teto; a contagem é a verdade, e é ela
-   * que decide se a frota acabou. Sem essa separação, uma frota maior que o teto era dada como
-   * concluída com meia dúzia de subagentes ainda trabalhando.
+   * ALL the subagents the round started, and how many have already answered — counted across the whole journal,
+   * not in the list below. The list is what the screen draws and it has a cap; the count is the truth, and it is what
+   * decides whether the fleet is done. Without this separation, a fleet larger than the cap was taken as
+   * completed with half a dozen subagents still working.
    */
   total: number;
   done: number;
   agents: WorkflowAgent[];
-  /** mtime do diário, em ms: a última vez que a rodada se mexeu. */
+  /** The journal's mtime, in ms: the last time the round moved. */
   at: number;
-  /** A rodada silenciou sem nada em voo — o painel pode parar o spinner. */
+  /** The round went quiet with nothing in flight — the panel may stop the spinner. */
   finished: boolean;
   /**
-   * O desfecho que o HARNESS gravou no snapshot da rodada (`<base>/workflows/<runId>.json`). Ausente
-   * enquanto ela roda. É a única fonte que sabe de uma rodada MORTA: o diário dela simplesmente para,
-   * sem o `result` de quem estava em voo.
+   * The outcome the HARNESS wrote in the round's snapshot (`<base>/workflows/<runId>.json`). Absent
+   * while it runs. It is the only source that knows about a KILLED round: its journal simply stops,
+   * without the `result` of those in flight.
    */
   outcome?: WorkflowOutcome;
 }
 
 export type WorkflowOutcome = "completed" | "killed" | "failed";
 
-/** O `status` do snapshot do harness, normalizado. Qualquer outra coisa (inclusive "running") = sem desfecho. PURE. */
+/** The harness snapshot's `status`, normalised. Anything else (including "running") = no outcome. PURE. */
 function workflowOutcome(status: unknown): WorkflowOutcome | undefined {
   if (typeof status !== "string") return undefined;
   const s = status.toLowerCase();
@@ -85,9 +85,9 @@ function workflowOutcome(status: unknown): WorkflowOutcome | undefined {
   return undefined;
 }
 
-/** Um passo do feed de UM subagente (sob demanda). `thinking` nunca carrega texto. */
+/** A step of ONE subagent's feed (on demand). `thinking` never carries text. */
 export interface WorkflowFeedItem {
-  /** `timestamp` da linha do transcript, em ms (0 quando a linha não tinha). */
+  /** The transcript line's `timestamp`, in ms (0 when the line had none). */
   at: number;
   kind: "tool" | "text" | "thinking" | "result";
   tool?: string;
@@ -95,28 +95,28 @@ export interface WorkflowFeedItem {
   text?: string;
 }
 
-/** Quantas rodadas a sondagem olha (as mais recentes). Duas cobrem "rodei de novo pra iterar". */
+/** How many rounds the probe looks at (the most recent). Two cover "I ran it again to iterate". */
 export const RUNS_PROBED = 2;
-/** Teto de subagentes LISTADOS por rodada — a contagem (`total`/`done`) é sempre do diário inteiro. */
+/** Cap on subagents LISTED per round — the count (`total`/`done`) is always from the whole journal. */
 const AGENTS_MAX = 200;
 /**
- * Quanto de cada transcript a sondagem lê: a cabeça (início, tarefa) e a cauda (o agora). Nunca o
- * arquivo inteiro — um transcript passa fácil de 600KB, e a sondagem roda a cada 4s por até 200.
+ * How much of each transcript the probe reads: the head (start, task) and the tail (the now). Never the
+ * whole file — a transcript easily goes past 600KB, and the probe runs every 4s for up to 200.
  */
 const AGENT_HEAD_BYTES = 65_536;
 const AGENT_TAIL_BYTES = 65_536;
-/** O feed de um subagente lê só a cauda do transcript. */
+/** A subagent's feed reads only the transcript's tail. */
 const FEED_TAIL_BYTES = 262_144;
-/** Teto de itens do feed. */
+/** Cap on feed items. */
 export const FEED_MAX_ITEMS = 200;
 
 const RUN_ID_RE = /^wf_[a-z0-9-]+$/;
 const AGENT_ID_RE = /^a[0-9a-f]+$/;
 
 /**
- * Peças comuns às duas sondagens (o instantâneo da frota e o feed de um agente): ler um trecho de
- * arquivo, separar linhas completas, e transformar um bloco do transcript em algo legível.
- * `String.raw`: as barras invertidas chegam ao node como estão escritas.
+ * Pieces common to both probes (the fleet snapshot and an agent's feed): read a stretch of a
+ * file, split complete lines, and turn a transcript block into something readable.
+ * `String.raw`: the backslashes reach node as written.
  */
 const PROBE_COMMON_JS = String.raw`
 const fs=require('fs'),p=require('path');
@@ -157,11 +157,11 @@ function step(b,textMax){
 `;
 
 /**
- * A sondagem, como ela roda DENTRO do runner. Node porque o diário e os rótulos são JSON: fazer
- * isso em awk seria ilegível e quebradiço. Só lê — `readdir`, `stat`, leituras com teto — e imprime
- * UMA linha JSON. Um diretório que não existe (nenhum workflow nesta sessão) imprime `[]`.
+ * The probe, as it runs INSIDE the runner. Node because the journal and the labels are JSON: doing
+ * this in awk would be unreadable and brittle. It only reads — `readdir`, `stat`, capped reads — and prints
+ * ONE JSON line. A directory that does not exist (no workflow in this session) prints `[]`.
  *
- * Argumentos: `process.argv[1]` = diretório das rodadas, `process.argv[2]` = diretório dos scripts.
+ * Arguments: `process.argv[1]` = rounds directory, `process.argv[2]` = scripts directory.
  */
 export const WORKFLOW_PROBE_JS = PROBE_COMMON_JS + String.raw`
 const PRE='computed task text follows:';
@@ -327,14 +327,14 @@ console.log(JSON.stringify(main(process.argv[1]||'',process.argv[2]||'',settled)
 `.trim();
 
 /**
- * `settled`: os concluídos que o back já tem inteiros, como "runId/agentId" — a sonda devolve só um
- * marcador para eles. Chave fora do formato do harness é descartada aqui.
+ * `settled`: the completed ones the back already has whole, as "runId/agentId" — the probe returns only a
+ * marker for them. A key outside the harness's format is discarded here.
  *
- * Sem `2>/dev/null || true`: o vazio legítimo (nenhuma rodada, diretório que ainda não existe) o
- * próprio script já imprime como `[]` com saída 0. O `|| true` transformava runner reiniciando,
- * container parado ou node ausente em stdout vazio — lido como "sem diário", até a sondagem dar a
- * frota por concluída enquanto ela seguia rodando. O código de saída chega ao executor, que
- * rejeita, e o tique conta FALHA, não vazio. PURE.
+ * No `2>/dev/null || true`: the legitimate empty case (no round, a directory that does not exist yet) the
+ * script itself already prints as `[]` with exit 0. The `|| true` turned a restarting runner, a
+ * stopped container or a missing node into empty stdout — read as "no journal", until the probe took the
+ * fleet as completed while it kept running. The exit code reaches the executor, which
+ * rejects, and the tick counts a FAILURE, not an empty result. PURE.
  */
 export function buildWorkflowProbeScript(
   containerName: string,
@@ -353,9 +353,9 @@ export function buildWorkflowProbeScript(
 }
 
 /**
- * O feed de UM subagente, como roda dentro do runner: os últimos N passos lidos da CAUDA do
- * transcript. Argumentos: diretório das rodadas, runId, agentId, N. Os ids são revalidados aqui
- * (a mesma regex do lado de fora) antes de virarem caminho.
+ * The feed of ONE subagent, as it runs inside the runner: the last N steps read from the transcript's
+ * TAIL. Arguments: rounds directory, runId, agentId, N. The ids are revalidated here
+ * (the same regex as outside) before they become a path.
  */
 export const AGENT_FEED_PROBE_JS = PROBE_COMMON_JS + String.raw`
 function resultText(c){
@@ -384,12 +384,12 @@ function main(dir,runId,agentId,max){
 console.log(JSON.stringify(main(process.argv[1]||'',process.argv[2]||'',process.argv[3]||'',process.argv[4]||'')));
 `.trim();
 
-/** Um id de rodada ou de subagente fora do formato que o harness gera — o pedido, não o runner, errou. */
+/** A round or subagent id outside the format the harness generates — the request, not the runner, got it wrong. */
 export class InvalidWorkflowIdError extends Error {}
 
 /**
- * O comando do feed de um subagente. Os ids viram caminho dentro do runner: só passam os formatos
- * que o harness gera — qualquer outra coisa é recusada AQUI, antes de existir um comando. PURE.
+ * The command for a subagent's feed. The ids become a path inside the runner: only the formats
+ * the harness generates pass — anything else is refused HERE, before a command exists. PURE.
  */
 export function buildAgentFeedProbeScript(
   containerName: string,
@@ -408,9 +408,9 @@ export function buildAgentFeedProbeScript(
 }
 
 /**
- * Tira do rótulo o cabeçalho que TODO subagente de workflow carrega — "Trabalhe em /work/…/x." é a
- * mesma frase em todos eles e empurra pra fora da linha a única parte que diferencia um do outro.
- * Sobrando nada, o rótulo original volta inteiro: é melhor do que uma linha vazia. PURE.
+ * Strips from the label the header EVERY workflow subagent carries — "Trabalhe em /work/…/x." is the
+ * same sentence in all of them and pushes off the line the only part that tells one from another.
+ * If nothing is left, the original label comes back whole: it is better than an empty line. PURE.
  */
 export function trimAgentLabel(raw: string): string {
   const flat = String(raw ?? "").replace(/\s+/g, " ").trim();
@@ -420,7 +420,7 @@ export function trimAgentLabel(raw: string): string {
   return text.length > 140 ? `${text.slice(0, 139)}…` : text;
 }
 
-/* ------------------------------------------------------------------ leitura das saídas */
+/* ------------------------------------------------------------------ parsing the outputs */
 
 function parseActivity(value: unknown): WorkflowActivity | undefined {
   const o = asFields(value);
@@ -433,12 +433,12 @@ function parseActivity(value: unknown): WorkflowActivity | undefined {
     const text = asString(o.text);
     return text ? { kind: "text", text } : undefined;
   }
-  // Só o marcador: um texto que viesse junto (não vem, mas) não passa daqui.
+  // Only the marker: a text that came along (it does not, but) does not get past here.
   if (o.kind === "thinking") return { kind: "thinking", since: asInstant(o.since) ?? 0 };
   return undefined;
 }
 
-/** Rodada acabada: quem não respondeu não vai mais responder. PURE. */
+/** Round over: whoever did not answer will not answer any more. PURE. */
 export function stopInFlight(agents: WorkflowAgent[]): WorkflowAgent[] {
   return agents.map((a) => (a.status === "running" ? { ...a, status: "stopped" as const } : a));
 }
@@ -471,16 +471,16 @@ function parseAgent(value: unknown): WorkflowAgent | null {
   };
 }
 
-/** O concluído que a sonda não releu (`settled`), tirado do quadro anterior da rodada. */
+/** The completed one the probe did not re-read (`settled`), taken from the round's previous frame. */
 function knownDoneAgent(value: unknown, previous: WorkflowRun | undefined): WorkflowAgent | null {
   const id = asString(asFields(value)?.id);
   return previous?.agents.find((a) => a.id === id && a.status === "done") ?? null;
 }
 
 /**
- * Lê a saída da sondagem. Lixo, vazio ou JSON quebrado viram `[]` — isto desenha uma tela. O
- * marcador de um concluído já conhecido vira o agente do quadro anterior (`previous`); sem ele, o
- * marcador some e o próximo tique o lê de novo. PURE.
+ * Parses the probe's output. Garbage, empty or broken JSON become `[]` — this draws a screen. The
+ * marker of an already known completed one becomes the agent from the previous frame (`previous`); without it, the
+ * marker goes away and the next tick reads it again. PURE.
  */
 export function parseWorkflowProbe(
   stdout: string,
@@ -507,7 +507,7 @@ export function parseWorkflowProbe(
     const done = typeof o.done === "number" && Number.isFinite(o.done)
       ? o.done
       : agents.filter((a) => a.status === "done").length;
-    // A sonda só mede o início pelos agentes que leu; os conhecidos entram com o que já se sabia.
+    // The probe only measures the start by the agents it read; the known ones come in with what was already known.
     const starts = [asInstant(o.startedAt), ...known.map((a) => a.startedAt)].filter((t): t is number => t !== undefined);
     const startedAt = starts.length > 0 ? Math.min(...starts) : undefined;
     const outcome = workflowOutcome(o.outcome);
@@ -518,8 +518,8 @@ export function parseWorkflowProbe(
       ...(startedAt !== undefined ? { startedAt } : {}),
       total,
       done,
-      // Morta/falhou: quem estava em voo morreu junto. "completed" não — o back dá um tique de graça
-      // para o último `result` do diário (ver workflow.ts) antes de dar alguém por parado.
+      // Killed/failed: those in flight died with it. "completed" does not — the back gives a free tick
+      // to the journal's last `result` (see workflow.ts) before taking anyone as stopped.
       agents: outcome === "killed" || outcome === "failed" ? stopInFlight(agents) : agents,
       at: typeof o.at === "number" && Number.isFinite(o.at) ? o.at : 0,
       finished: false,
@@ -556,7 +556,7 @@ function parseFeedItem(value: unknown): WorkflowFeedItem | null {
   }
 }
 
-/** Lê a saída do feed de um subagente. Lixo vira `[]`; item com tipo errado é descartado. PURE. */
+/** Parses a subagent feed's output. Garbage becomes `[]`; an item of the wrong type is discarded. PURE. */
 export function parseAgentFeed(stdout: string): WorkflowFeedItem[] {
   const parsed = lastJsonLine(stdout);
   if (!Array.isArray(parsed)) return [];

@@ -95,10 +95,10 @@ describe("mergeTaskEvent — o estado de um subagente", () => {
 });
 
 /**
- * O TEMPO QUE SAI PARA A ABA. O `durationMs` do CLI só vem com uso (`usage`), e o progresso que o
- * CLI manda a cada ~30s muitas vezes vem sem: repassar o guardado fazia a aba voltar no tempo. Todo
- * frame de subagente que sai (ao vivo ou ao conectar) leva o tempo de AGORA no relógio do back, e
- * há quanto tempo ele está calado — para a aba parar o relógio de quem morreu sem aviso.
+ * THE TIME THAT GOES OUT TO THE TAB. The CLI's `durationMs` only comes with usage (`usage`), and the progress the
+ * CLI sends every ~30s often comes without it: passing on the stored one made the tab go back in time. Every
+ * subagent frame that goes out (live or on connect) carries the time of NOW on the back's clock, and
+ * how long it has been quiet — so the tab stops the clock of one that died without warning.
  */
 describe("taskSnapshot — o subagente como sai para a aba", () => {
   const running = mergeTaskEvent(undefined, { type: "task_started", taskId: "k", toolUseId: "u" }, 1_000)!;
@@ -113,7 +113,7 @@ describe("taskSnapshot — o subagente como sai para a aba", () => {
   it("calado: diz há quanto tempo, e o tempo para no teto de silêncio", () => {
     const moving = mergeTaskEvent(running, { type: "task_progress", taskId: "k", durationMs: 50_000 }, 51_000)!;
     expect(taskSnapshot(moving, 51_000 + 60_000)).toMatchObject({ durationMs: 110_000, quietMs: 60_000 });
-    // morto sem aviso: cinco horas depois, uma aba que conecta não vê cinco horas
+    // dead without warning: five hours later, a tab that connects does not see five hours
     const later = taskSnapshot(moving, 51_000 + 5 * 3_600_000);
     expect(later.durationMs).toBe(50_000 + TASK_CLOCK_STALE_MS);
     expect(later.quietMs).toBe(5 * 3_600_000);

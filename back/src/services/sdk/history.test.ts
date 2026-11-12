@@ -64,16 +64,16 @@ describe("replayableHistoryEvent", () => {
   });
 
   /**
-   * O RACIOCÍNIO é de MOMENTO, como o `turn_absorbed`: serve a quem está esperando agora. Gravá-lo
-   * encheria o log (limite de replay: 500 eventos) com o pensamento de ontem, empurrando a conversa
-   * de verdade — mensagem, ferramenta, resposta — para fora do replay. Em disco fica a conversa.
+   * The REASONING is of the MOMENT, like `turn_absorbed`: it serves whoever is waiting right now.
+   * Recording it would fill the log (replay limit: 500 events) with yesterday's thinking, pushing the
+   * real conversation — message, tool, response — out of the replay. What stays on disk is the conversation.
    */
   it("NÃO grava o raciocínio: ele é orientação ao vivo, não conversa", () => {
     expect(replayableHistoryEvent({ type: "thinking", text: "vou ler o arquivo" })).toBe(false);
     expect(replayableHistoryEvent({ type: "thinking_delta", text: "vou " })).toBe(false);
   });
 
-  /** O progresso da ferramenta é do instante: o `tool_use` completo é o que a conversa guarda. */
+  /** The tool's progress is of the instant: the full `tool_use` is what the conversation keeps. */
   it("NÃO grava o começo nem o progresso de uma ferramenta", () => {
     expect(replayableHistoryEvent({ type: "tool_use_start", id: "t1", name: "Write" })).toBe(false);
     expect(replayableHistoryEvent({ type: "tool_input_progress", id: "t1", bytes: 10 })).toBe(false);
@@ -154,9 +154,9 @@ describe("appendHistory / readHistory", () => {
   });
 
   /**
-   * Uma frota de subagentes grava centenas de `tool_use`/`assistant_text` com `parentToolUseId` em
-   * poucos minutos. Contados na mesma janela do principal, eles empurravam a conversa inteira para
-   * fora do replay: o F5 voltava só com a atividade dos subagentes, sem uma mensagem da pessoa.
+   * A fleet of subagents writes hundreds of `tool_use`/`assistant_text` with `parentToolUseId` in
+   * a few minutes. Counted in the same window as the main agent, they pushed the whole conversation
+   * out of the replay: the F5 came back with only the subagents' activity, without one message from the person.
    */
   describe("a janela do replay é contada pelo agente principal", () => {
     const sub = (i: number, parent = "agent-1"): HistoryEvent =>
@@ -187,7 +187,7 @@ describe("appendHistory / readHistory", () => {
     it("conta `limit` eventos do principal e só os subagentes DEPOIS do primeiro deles", async () => {
       const limit = 3;
       await appendHistory(CARD, { type: "user", text: "m0" });
-      await appendHistory(CARD, sub(0)); // antes da janela do principal: fica de fora
+      await appendHistory(CARD, sub(0)); // before the main agent's window: left out
       for (let i = 1; i <= 3; i += 1) {
         await appendHistory(CARD, { type: "user", text: `m${i}` });
         await appendHistory(CARD, sub(i));
@@ -260,13 +260,13 @@ describe("external messages (an agent talking to this card)", () => {
 
 
 /**
- * REBOBINAR O LOG. Editar uma mensagem rebobina a sessão (`resumeSessionAt`): o modelo perde o
- * original, a resposta pela metade e as ferramentas do meio. O log TEM de perder também — senão um
- * F5 replays uma conversa que o modelo não tem, e a tela e o modelo passam a discordar sobre o que
- * foi dito, que é exatamente o bug que o rebobinar existia pra consertar.
+ * REWINDING THE LOG. Editing a message rewinds the session (`resumeSessionAt`): the model loses the
+ * original, the half answer and the tools in between. The log HAS to lose them too — otherwise an
+ * F5 replays a conversation the model does not have, and the screen and the model start disagreeing about what
+ * was said, which is exactly the bug the rewind existed to fix.
  *
- * O que estes testes atacam é o corte: cortar demais perde conversa de verdade (irrecuperável),
- * cortar de menos deixa a tela mentindo. Os casos abaixo são os que quebram um corte ingênuo.
+ * What these tests attack is the cut: cutting too much loses real conversation (unrecoverable),
+ * cutting too little leaves the screen lying. The cases below are the ones that break a naive cut.
  */
 describe("rewindHistory — o corte tem de ser exato nos dois sentidos", () => {
   const write = async (events: HistoryEvent[]) => {
@@ -335,7 +335,7 @@ describe("rewindHistory — o corte tem de ser exato nos dois sentidos", () => {
     ]);
     await rewindHistory(CARD, "roda os testes");
     const kept = await read();
-    // a primeira vez que a frase foi dita, e a resposta dela, continuam lá
+    // the first time the sentence was said, and its answer, are still there
     expect(kept.slice(0, 4)).toEqual([
       { type: "user", text: "roda os testes" },
       { type: "assistant_text", text: "verde" },
@@ -352,11 +352,11 @@ describe("rewindHistory — o corte tem de ser exato nos dois sentidos", () => {
       { type: "assistant_text", text: "meia" },
       { type: "user", text: "certa" },
     ];
-    await write(base); // sem o marcador message_edited
+    await write(base); // without the message_edited marker
     expect(await rewindHistory(CARD, "errada")).toBe(0);
     expect(await read()).toEqual(base);
 
-    // e sem o original (uma compactação já levou a mensagem embora)
+    // and without the original (a compaction already took the message away)
     await rm(join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`), { force: true });
     const semOriginal: HistoryEvent[] = [
       { type: "assistant_text", text: "meia" },
@@ -369,10 +369,10 @@ describe("rewindHistory — o corte tem de ser exato nos dois sentidos", () => {
   });
 
   it("marcador ANTES do original não corta NEM DUPLICA — a ordem impossível não corrompe o log", async () => {
-    // Com um evento ENTRE o marcador e o original, um corte ingênuo (slice(0,start) + slice(mark+1))
-    // devolveria esse evento duas vezes. Duas travas impedem: a checagem de ordem e a de "cortou
-    // menos que zero" — a segunda sozinha já salva, então este teste mira no SINTOMA (log intacto,
-    // sem duplicata) e não em qual das duas agiu.
+    // With an event BETWEEN the marker and the original, a naive cut (slice(0,start) + slice(mark+1))
+    // would return that event twice. Two guards prevent it: the order check and the "cut
+    // less than zero" one — the second alone already saves it, so this test aims at the SYMPTOM (log intact,
+    // no duplicate) and not at which of the two acted.
     const fora: HistoryEvent[] = [
       { type: "message_edited", originalText: "errada" },
       { type: "assistant_text", text: "no meio" },
@@ -399,8 +399,8 @@ describe("rewindHistory — o corte tem de ser exato nos dois sentidos", () => {
   });
 
   it("uma linha rasgada (crash no meio de um append) não sobrevive à reescrita — e nada mais se perde", async () => {
-    // Comportamento FIXADO aqui de propósito: a linha inválida já era invisível pro replay, e a
-    // reescrita a descarta. O que não pode é ela levar linhas boas junto.
+    // Behaviour PINNED here on purpose: the invalid line was already invisible to the replay, and the
+    // rewrite discards it. What must not happen is it taking good lines along.
     await write([{ type: "user", text: "errada" }]);
     const file = join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`);
     await appendFile(file, '{"type":"assistant_text","text":"rasg\n', "utf8");
@@ -427,13 +427,13 @@ describe("rewindHistory — o corte tem de ser exato nos dois sentidos", () => {
   });
 
   /**
-   * O `sent` DE UMA MENSAGEM EDITADA É UMA APOSTA, E O REBOBINAR DECIDE A APOSTA.
+   * AN EDITED MESSAGE'S `sent` IS A BET, AND THE REWIND SETTLES THE BET.
    *
-   * A linha nova de uma edição é gravada com `sent` = o invólucro de supersede, porque na hora de
-   * gravar ninguém ainda sabe qual das duas formas a edição vai tomar — quem escolhe é o driver.
-   * Se ele conseguiu rebobinar, o modelo leu o texto LIMPO e o invólucro nunca existiu: deixá-lo
-   * ali faz o `replayDedupeKey` procurar no transcript palavras que não estão lá, e o próximo
-   * connect desenha a mensagem corrigida DUAS vezes — uma do log, outra do transcript.
+   * An edit's new line is written with `sent` = the supersede wrapper, because at write time
+   * nobody knows yet which of the two forms the edit will take — the driver is the one that chooses.
+   * If it managed to rewind, the model read the CLEAN text and the wrapper never existed: leaving it
+   * there makes `replayDedupeKey` search the transcript for words that are not there, and the next
+   * connect draws the corrected message TWICE — once from the log, once from the transcript.
    */
   it("limpa o `sent` da mensagem nova: depois de rebobinar, o invólucro nunca foi dito", async () => {
     await write([
@@ -452,10 +452,10 @@ describe("rewindHistory — o corte tem de ser exato nos dois sentidos", () => {
   });
 
   /**
-   * A NOTA ÓRFÃ DO PRAZO DE CARÊNCIA. Quando o turno velho não fecha, a tela manda a edição assim
-   * mesmo — o marcador e a mensagem nova são gravados ANTES de o turno abortado reportar o fim, e
-   * a nota que narra a meia resposta aterrissa depois do marcador, fora do corte. Ela fala de uma
-   * resposta que o rebobinar apagou: tem de sair junto.
+   * THE GRACE PERIOD'S ORPHAN NOTE. When the old turn does not close, the screen sends the edit
+   * anyway — the marker and the new message are written BEFORE the aborted turn reports its end, and
+   * the note narrating the half answer lands after the marker, outside the cut. It talks about an
+   * answer the rewind erased: it has to go too.
    */
   it("tira a nota do corte que ficou DEPOIS do marcador — ela narra a resposta que sumiu", async () => {
     await write([
@@ -465,7 +465,7 @@ describe("rewindHistory — o corte tem de ser exato nos dois sentidos", () => {
       { type: "assistant_text", text: "meia" },
       { type: "message_edited", originalText: "errada" },
       { type: "user", text: "certa" },
-      { type: "system_note", text: "turn-interrupted-edit" }, // chegou tarde: o result veio depois
+      { type: "system_note", text: "turn-interrupted-edit" }, // arrived late: the result came afterwards
     ]);
     expect(await rewindHistory(CARD, "errada", "certa")).toBe(4);
     expect(await read()).toEqual([
@@ -494,7 +494,7 @@ describe("rewindHistory — o corte tem de ser exato nos dois sentidos", () => {
     await write([
       { type: "user", text: "errada" },
       { type: "assistant_text", text: "meia" },
-      { type: "system_note", text: "turn-interrupted-edit" }, // o caminho comum: antes do marcador
+      { type: "system_note", text: "turn-interrupted-edit" }, // the ordinary path: before the marker
       { type: "message_edited", originalText: "errada" },
       { type: "user", text: "certa" },
     ]);
@@ -503,10 +503,10 @@ describe("rewindHistory — o corte tem de ser exato nos dois sentidos", () => {
   });
 
   it("sem o corte não há reparo: o `sent` de uma edição ANTIGA não é dano colateral", async () => {
-    // O cenário que a busca sem âncora estragava: a linha desta edição já saiu numa compactação,
-    // e a mesma frase aparece numa edição ANTERIOR, onde o invólucro é verdadeiro (aquela foi um
-    // supersede de verdade). Limpar lá recriaria a bolha duplicada numa mensagem que ninguém
-    // tocou — então, sem as duas pontas do corte, o arquivo não é reescrito.
+    // The scenario the anchorless search spoiled: this edit's line already went out in a compaction,
+    // and the same sentence shows up in an EARLIER edit, where the wrapper is real (that one was a
+    // real supersede). Cleaning there would recreate the duplicated bubble on a message nobody
+    // touched — so, without both ends of the cut, the file is not rewritten.
     const base: HistoryEvent[] = [
       { type: "user", text: "certa", sent: "[correção do usuário…] certa" } as HistoryEvent,
     ];
@@ -517,11 +517,11 @@ describe("rewindHistory — o corte tem de ser exato nos dois sentidos", () => {
 
   it("limpa só dentro da CAUDA do corte — uma edição mais antiga com as mesmas palavras fica de pé", async () => {
     await write([
-      { type: "user", text: "certa", sent: "envolvida antiga" } as HistoryEvent, // supersede real, lá atrás
+      { type: "user", text: "certa", sent: "envolvida antiga" } as HistoryEvent, // real supersede, way back
       { type: "assistant_text", text: "resposta" },
       { type: "user", text: "errada" },
       { type: "message_edited", originalText: "errada" },
-      { type: "user", text: "certa", sent: "envolvida nova" } as HistoryEvent, // a edição de agora
+      { type: "user", text: "certa", sent: "envolvida nova" } as HistoryEvent, // the current edit
     ]);
     expect(await rewindHistory(CARD, "errada", "certa")).toBe(2);
     expect(await read()).toEqual([
@@ -560,8 +560,8 @@ describe("rewindHistory — o corte tem de ser exato nos dois sentidos", () => {
       { type: "message_edited", originalText: "errada" },
       { type: "user", text: "certa" },
     ]);
-    // disparadas juntas, sem await entre elas: a fila por card é o que impede o corte de
-    // sobrescrever um append que aconteceu no meio da leitura-escrita.
+    // fired together, with no await between them: the per-card queue is what keeps the cut from
+    // overwriting an append that happened in the middle of the read-write.
     const corte = rewindHistory(CARD, "errada");
     const chegando = appendHistory(CARD, { type: "user", text: "chegou no meio" });
     await Promise.all([corte, chegando]);
@@ -580,7 +580,7 @@ describe("rewindHistory — o corte tem de ser exato nos dois sentidos", () => {
     await rewindHistory(CARD, "errada");
     expect(await readHistory(CARD)).toEqual([{ type: "user", text: "certa" }]);
     const raw = await readFile(join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`), "utf8");
-    expect(raw.endsWith("\n")).toBe(true); // NDJSON: o próximo append não pode colar na última linha
+    expect(raw.endsWith("\n")).toBe(true); // NDJSON: the next append must not stick to the last line
     await appendHistory(CARD, { type: "assistant_text", text: "depois" });
     expect(await readHistory(CARD)).toEqual([
       { type: "user", text: "certa" },
@@ -617,9 +617,9 @@ describe("removeHistory (the card is being deleted)", () => {
 });
 
 /**
- * A edição de uma mensagem que o modelo NUNCA leu vai com o texto limpo. A linha da edição foi
- * gravada com `sent` = invólucro (ninguém sabia ainda a forma), e é por `sent` que o replay casa a
- * linha com o transcript: deixá-lo ali fazia a próxima conexão desenhar a mensagem DUAS vezes.
+ * The edit of a message the model NEVER read goes with the clean text. The edit's line was
+ * written with `sent` = wrapper (nobody knew the form yet), and it is by `sent` that the replay matches the
+ * line with the transcript: leaving it there made the next connection draw the message TWICE.
  */
 describe("unwrapEditedMessage — tira o invólucro de uma edição que foi limpa", () => {
   const read = async (): Promise<HistoryEvent[]> => {
@@ -666,9 +666,9 @@ describe("unwrapEditedMessage — tira o invólucro de uma edição que foi limp
 });
 
 /**
- * O `tool_use` ia ao log com o input INTEIRO — o `content` de cada Write, o `old_string`/`new_string`
- * de cada Edit. Vinte Writes de 500 KB davam um log de 10 MB com 20 eventos, que nunca compactava
- * (a compactação era só por contagem) e que cada fim de turno relia e parseava inteiro.
+ * The `tool_use` went to the log with the WHOLE input — the `content` of each Write, the `old_string`/`new_string`
+ * of each Edit. Twenty 500 KB Writes made a 10 MB log with 20 events, which never compacted
+ * (compaction was by count only) and which every turn end re-read and parsed whole.
  */
 describe("input do tool_use no log", () => {
   const BIG = TOOL_INPUT_TEXT_MAX * 25;
@@ -760,7 +760,7 @@ describe("input do tool_use no log", () => {
     });
 
     it("uma janela que já é grande não é reescrita a cada leitura — só quando a reescrita encolhe o arquivo", async () => {
-      // Cada evento já cabe no teto do input: cortar o que está fora da janela não ganharia quase nada.
+      // Each event already fits within the input cap: cutting what is outside the window would gain almost nothing.
       const count = Math.ceil(HISTORY_COMPACT_SIZE / TOOL_INPUT_TEXT_MAX) + 10;
       await writeRaw(Array.from({ length: count }, (_, i) => write(i, TOOL_INPUT_TEXT_MAX - 100)));
       expect((await stat(file())).size).toBeGreaterThan(HISTORY_COMPACT_SIZE);
@@ -772,8 +772,8 @@ describe("input do tool_use no log", () => {
 });
 
 /**
- * Quem só precisa do FIM da conversa (a pergunta que fechou o turno) lia e parseava o log inteiro a
- * cada fim de turno. O rabo é lido pelos bytes finais do arquivo.
+ * Whoever only needs the END of the conversation (the question that closed the turn) read and parsed the whole log
+ * at every turn end. The tail is read from the file's final bytes.
  */
 describe("readHistoryTail — só o rabo do log", () => {
   const file = () => join(dir, SDK_HISTORY_DIR, `${CARD}.ndjson`);
@@ -801,7 +801,7 @@ describe("readHistoryTail — só o rabo do log", () => {
     await appendHistory(CARD, { type: "user", text: "ç😀".repeat(2_000) });
     await appendHistory(CARD, last);
     const lastBytes = Buffer.byteLength(lineOf(last));
-    // Todos os cortes possíveis dentro da linha de antes, inclusive no meio de um "😀" (4 bytes).
+    // Every possible cut inside the line before, including in the middle of a "😀" (4 bytes).
     for (let extra = 1; extra <= 12; extra += 1) {
       expect(await readHistoryTail(CARD, lastBytes + extra)).toEqual({ events: [last], whole: false });
     }

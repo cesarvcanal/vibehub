@@ -211,17 +211,17 @@ describe("mergeTranscriptReplay (one timeline, nothing lost, nothing twice)", ()
 
 describe("edição (supersede) — o dedupe casa pelo texto EMBRULHADO", () => {
   it("comando de barra: o eco qualificado do transcript reconhece o que foi mandado sem prefixo", () => {
-    // O BUG (produção, 02/10/2026): a pessoa manda `/systematic-debugging …` pelo chat; o Claude Code
-    // reescreve pra forma qualificada do plugin antes de gravar no transcript; o espelho não
-    // reconhecia e desenhava a MESMA mensagem outra vez.
+    // THE BUG (production, 02/10/2026): the person sends `/systematic-debugging …` through the chat; Claude Code
+    // rewrites it to the plugin's qualified form before writing to the transcript; the mirror did not
+    // recognise it and drew the SAME message again.
     const mandado = dedupeNoteKeys({ type: "user", text: "/systematic-debugging apaga cards de 180 dias" });
     const eco = dedupeLookupKeys({ type: "user", text: "/superpowers:systematic-debugging apaga cards de 180 dias" });
     expect(eco.some((k) => mandado.includes(k))).toBe(true);
   });
 
   it("dois plugins com o MESMO comando não se confundem — mensagem diferente nunca é engolida", () => {
-    // Por que o casamento é assimétrico: colapsar o prefixo dos dois lados faria `/a:cmd x` e
-    // `/b:cmd x` dividirem uma chave, e o dedupe responde sim/não — a segunda mensagem sumiria.
+    // Why the matching is asymmetric: collapsing the prefix on both sides would make `/a:cmd x` and
+    // `/b:cmd x` share a key, and the dedupe answers yes/no — the second message would vanish.
     const mandado = dedupeNoteKeys({ type: "user", text: "/a:cmd mesmo texto" });
     const outra = dedupeLookupKeys({ type: "user", text: "/b:cmd mesmo texto" });
     expect(outra.some((k) => mandado.includes(k))).toBe(false);
@@ -255,25 +255,25 @@ describe("edição (supersede) — o dedupe casa pelo texto EMBRULHADO", () => {
   });
 
   /**
-   * E QUANDO A EDIÇÃO REBOBINOU, o invólucro nunca foi dito: o transcript carrega o texto LIMPO.
-   * Por isso `rewindHistory` apaga o `sent` da linha nova ao cortar — este é o estado em que o log
-   * fica, e é ele que tem de casar. Sem isso o replay desenhava a mensagem corrigida duas vezes,
-   * a segunda marcada como se tivesse vindo do terminal.
+   * AND WHEN THE EDIT REWOUND, the wrapper was never said: the transcript carries the CLEAN text.
+   * That is why `rewindHistory` erases the new line's `sent` when cutting — this is the state the log
+   * is left in, and it is the one that has to match. Without it the replay drew the corrected message twice,
+   * the second marked as if it had come from the terminal.
    */
   it("rebobinada, a linha do transcript vem LIMPA — e o log sem `sent` casa com ela", () => {
     const jsonl = JSON.stringify({
       type: "user", uuid: "u1", timestamp: "2026-09-01T12:00:00Z",
       message: { role: "user", content: "nova" },
     });
-    // como o log fica DEPOIS do corte: sem o original, sem o marcador, e sem o `sent`
+    // how the log looks AFTER the cut: without the original, without the marker, and without the `sent`
     const history = [{ type: "user" as const, text: "nova", at: Date.parse("2026-09-01T12:00:00Z") }];
     const merged = mergeTranscriptReplay(jsonl, history);
     expect(merged.filter((e) => e.type === "user")).toHaveLength(1);
-    expect(merged[0]).toEqual(history[0]); // a versão do log vence — ela sabe quem mandou
+    expect(merged[0]).toEqual(history[0]); // the log's version wins — it knows who sent it
   });
 
   it("o `sent` que ficou para trás é exatamente o que duplicava a bolha", () => {
-    // Fixa o DEFEITO que a limpeza do `sent` conserta: mesmo log, com o invólucro mentiroso.
+    // Pins the DEFECT that clearing `sent` fixes: same log, with the lying wrapper.
     const jsonl = JSON.stringify({
       type: "user", uuid: "u1", timestamp: "2026-09-01T12:00:00Z",
       message: { role: "user", content: "nova" },

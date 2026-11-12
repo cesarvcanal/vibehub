@@ -18,10 +18,11 @@ import {
 import { replayableHistoryEvent } from "./history.js";
 
 /**
- * A INTELIGÊNCIA TROCADA COM O CHAT DE PÉ. A troca no pill virava um reinício pendente que só vinha
- * no fim do turno — e um turno com subagentes em segundo plano não acabava a tempo: a sessão seguia
- * no nível velho (produção, 2026-10-27). O manager entrega o nível ao driver vivo, que o aplica na
- * sessão sem reiniciar; sem driver, a resposta é "não aplicado" e quem trocou reinicia, como antes.
+ * THE INTELLIGENCE SWITCHED WITH THE CHAT UP. A switch in the pill became a pending restart that only
+ * came at the end of the turn — and a turn with background subagents did not end in time: the session
+ * stayed on the old level (production, 2026-10-27). The manager hands the level to the live driver,
+ * which applies it to the session without restarting; with no driver, the answer is "não aplicado" and
+ * whoever switched restarts, as before.
  */
 vi.mock("../board/registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../board/registry.js")>();
@@ -112,7 +113,7 @@ describe("sdk manager — a inteligência trocada com o driver de pé", () => {
 
     confirm({ id: frame.id, effort: "high" });
     expect(await applied).toBe(true);
-    // Nada foi parado: o mesmo driver, o mesmo turno.
+    // Nothing was stopped: the same driver, the same turn.
     expect(spawned).toHaveLength(1);
     expect(session.closed).toBe(false);
     expect(session.activeTurns).toBe(1);
@@ -185,8 +186,8 @@ describe("sdk manager — a inteligência trocada com o driver de pé", () => {
   });
 
   it("o caso do card e9146043: subagente em PRIMEIRO PLANO rodando, a troca vai ao driver e a chamada dele volta", async () => {
-    // 29/10: Extra alto escolhido com a ferramenta Agent aberta. Nada pode matar o driver — senão o
-    // CLI retomado devolve a chamada como "session ended before this call's result was recorded".
+    // 29/10: Extra high chosen with the Agent tool open. Nothing may kill the driver — otherwise the
+    // resumed CLI returns the call as "session ended before this call's result was recorded".
     const session = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
     spawned[0]!.stdout.emit("data", line({ type: "ready" }));
     dispatchClientFrame(session, `{"type":"user","text":"executa o plano"}`);
@@ -204,7 +205,7 @@ describe("sdk manager — a inteligência trocada com o driver de pé", () => {
     spawned[0]!.stdout.emit("data", line({ type: "result", subtype: "success", isError: false }));
     await flush();
     expect(session.activeTurns).toBe(0);
-    expect(spawned).toHaveLength(1); // o mesmo driver do começo ao fim
+    expect(spawned).toHaveLength(1); // the same driver from start to finish
   });
 
   it("voltar ao padrão da conta (null) também vai ao driver vivo, sem reiniciar", async () => {
@@ -222,8 +223,8 @@ describe("sdk manager — a inteligência trocada com o driver de pé", () => {
   });
 
   it("voltar ao padrão da conta: o nível que a sessão confirmou passa a ser o padrão que o pill lê", async () => {
-    // Um driver que subiu com --effort nunca anunciou o padrão da conta (effort_default só vem de um
-    // CLI sem nível). A confirmação da volta ao padrão diz qual é.
+    // A driver that came up with --effort never announced the account's default (effort_default only
+    // comes from a CLI with no level). The confirmation of the return to the default says which one it is.
     ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
     expect(driverDefaultEffort(CARD)).toBeNull();
     const applied = applyDriverEffort(CARD, null);
@@ -231,7 +232,7 @@ describe("sdk manager — a inteligência trocada com o driver de pé", () => {
     expect(await applied).toBe(true);
     expect(driverDefaultEffort(CARD)).toBe("high");
 
-    // A confirmação de um nível FIXADO não é o padrão da conta.
+    // The confirmation of a PINNED level is not the account's default.
     const pinned = applyDriverEffort(CARD, "low");
     confirm({ id: lastEffortFrame().id, effort: "low" });
     await pinned;
@@ -267,9 +268,9 @@ describe("sdk manager — a inteligência trocada com o driver de pé", () => {
 });
 
 /**
- * O NÍVEL ANTES DA PRIMEIRA RESPOSTA: o driver anuncia no boot o padrão da conta (`effort_default`),
- * e o board o lê para o pill de um card sem nível fixado — que antes só sabia dele quando a primeira
- * resposta carimbava o transcript.
+ * THE LEVEL BEFORE THE FIRST RESPONSE: the driver announces the account's default at boot
+ * (`effort_default`), and the board reads it for the pill of a card with no pinned level — which
+ * before only knew it once the first response stamped the transcript.
  */
 describe("sdk manager — o nível padrão que o driver anuncia", () => {
   it("guarda o anunciado e o entrega ao board; um nível desconhecido não entra", async () => {

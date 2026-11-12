@@ -4,27 +4,27 @@ import { asFields, asInstant, asString, lastJsonLine, type Fields } from "./fiel
 import { summarizeToolResult, type ToolResultSummary } from "./toolResult.js";
 
 /**
- * O DETALHE SOB DEMANDA — o que abre quando alguém clica numa ação ou num subagente.
+ * THE ON-DEMAND DETAIL — what opens when someone clicks an action or a subagent.
  *
- * O chat recebe só o resumo de cada resultado (./toolResult.ts). O detalhe inteiro — o input, a
- * saída, o raciocínio que levou à ação, a linha do tempo de um subagente — já está gravado pelo
- * próprio Claude Code no transcript da sessão, dentro do runner:
+ * The chat gets only the summary of each result (./toolResult.ts). The whole detail — the input, the
+ * output, the reasoning that led to the action, a subagent's timeline — is already written by
+ * Claude Code itself in the session transcript, inside the runner:
  *
- *   <transcriptDir>/<sessionId>.jsonl                          a conversa principal
- *   <transcriptDir>/<sessionId>/subagents/agent-<id>.jsonl     cada subagente
- *   <transcriptDir>/<sessionId>/subagents/agent-<id>.meta.json `toolUseId` da chamada que o disparou
+ *   <transcriptDir>/<sessionId>.jsonl                          the main conversation
+ *   <transcriptDir>/<sessionId>/subagents/agent-<id>.jsonl     each subagent
+ *   <transcriptDir>/<sessionId>/subagents/agent-<id>.meta.json `toolUseId` of the call that spawned it
  *
- * Então nada novo é guardado: uma sondagem só-leitura (`docker exec … node -e`, como a do workflow)
- * procura pelo id e devolve o pedaço. Vale para conversas antigas, para o que foi feito pelo
- * Terminal e depois de qualquer F5 ou deploy. As funções de montar e ler são PURAS; quem executa é
- * `readToolDetail`/`readAgentTimeline`.
+ * So nothing new is stored: a read-only probe (`docker exec … node -e`, like the workflow one)
+ * searches by id and returns the piece. It works for old conversations, for what was done through
+ * the Terminal, and after any F5 or deploy. The build and parse functions are PURE; the ones that
+ * execute are `readToolDetail`/`readAgentTimeline`.
  */
 
-/** Ids de tool use do Claude (`toolu_…`) e, por garantia, qualquer id curto sem barra nem ponto. */
+/** Claude tool use ids (`toolu_…`) and, to be safe, any short id with no slash or dot. */
 const TOOL_ID_RE = /^[A-Za-z0-9_-]{6,100}$/;
 export class InvalidDetailIdError extends Error {}
 
-/** Tetos do que volta do runner (a saída passa pelo SSH e vira um frame de websocket). */
+/** Caps on what comes back from the runner (the output goes through SSH and becomes a websocket frame). */
 export const DETAIL_TEXT_MAX = 200_000;
 const DETAIL_INPUT_MAX = 60_000;
 const THINKING_MAX = 6_000;
@@ -58,8 +58,8 @@ function metaOf(f){try{return JSON.parse(fs.readFileSync(f.replace(/\.jsonl$/,'.
 `;
 
 /**
- * Uma AÇÃO pelo id: o `tool_use` (input), o `tool_result` (texto + estruturado), quando cada um
- * aconteceu, o raciocínio logo antes, e de quem é (principal ou qual subagente). Argumentos: dir, id.
+ * An ACTION by id: the `tool_use` (input), the `tool_result` (text + structured), when each one
+ * happened, the reasoning right before, and whose it is (main or which subagent). Arguments: dir, id.
  */
 export const TOOL_DETAIL_PROBE_JS = PROBE_COMMON + String.raw`
 function main(dir,id){
@@ -127,9 +127,9 @@ console.log(JSON.stringify(main(process.argv[1]||'',process.argv[2]||'')));
 `.trim();
 
 /**
- * A LINHA DO TEMPO de um subagente pela chamada que o disparou: acha o transcript dele (pelo
- * `toolUseId` do meta, ou pelo `agentId` que o resultado da chamada traz) e devolve os passos —
- * raciocínio, textos, ferramentas com o resultado cru e capado (o back resume). Argumentos: dir, id.
+ * A subagent's TIMELINE by the call that spawned it: finds its transcript (by the meta's
+ * `toolUseId`, or by the `agentId` the call's result carries) and returns the steps —
+ * reasoning, texts, tools with the raw, capped result (the back summarises). Arguments: dir, id.
  */
 export const AGENT_TIMELINE_PROBE_JS = PROBE_COMMON + String.raw`
 function findAgentFile(dir,id){
@@ -187,49 +187,49 @@ function main(dir,id){
 console.log(JSON.stringify(main(process.argv[1]||'',process.argv[2]||'')));
 `.trim();
 
-/** O comando de uma sondagem. O id é validado AQUI, antes de existir um comando. PURE. */
+/** A probe's command. The id is validated HERE, before a command exists. PURE. */
 export function buildDetailProbeScript(containerName: string, transcriptDir: string, id: string, which: "tool" | "agent"): string {
   if (!TOOL_ID_RE.test(id)) throw new InvalidDetailIdError(`invalid tool use id: ${JSON.stringify(id)}`);
   const js = which === "tool" ? TOOL_DETAIL_PROBE_JS : AGENT_TIMELINE_PROBE_JS;
   return `docker exec ${shQuote(containerName)} node -e ${shQuote(js)} ${shQuote(transcriptDir)} ${shQuote(id)}`;
 }
 
-/* ------------------------------------------------------------------ leitura */
+/* ------------------------------------------------------------------ reading */
 
-/** Uma ação, inteira. */
+/** An action, whole. */
 export interface ToolDetail {
   found: boolean;
-  /** De quem: o agente principal ou um subagente (com o id e a descrição dele). */
+  /** Whose: the main agent or a subagent (with its id and description). */
   by?: "main" | "subagent";
   agentId?: string;
   agentDescription?: string;
   name?: string;
   input?: unknown;
   isError?: boolean;
-  /** O que o modelo leu de volta. */
+  /** What the model read back. */
   text?: string;
-  /** Tamanho real do texto (o `text` pode ter vindo cortado). */
+  /** Real size of the text (`text` may have come truncated). */
   textLength?: number;
-  /** O `tool_use_result` da ferramenta (Read: arquivo; Edit: patch; Bash: stdout/stderr…). */
+  /** The tool's `tool_use_result` (Read: file; Edit: patch; Bash: stdout/stderr…). */
   structured?: unknown;
-  /** O raciocínio logo antes da chamada — o "por quê". */
+  /** The reasoning right before the call — the "why". */
   thinking?: string;
   startedAt?: number;
   endedAt?: number;
   result?: ToolResultSummary;
-  /** Bash com `run_in_background`: a saída real, lida do arquivo da tarefa a cada sondagem. */
+  /** Bash with `run_in_background`: the real output, read from the task's file on each probe. */
   background?: BackgroundOutput;
 }
 
-/** A saída de um comando em segundo plano. `status` vem da notificação da tarefa (sem ela: `running`). */
+/** The output of a background command. `status` comes from the task's notification (without it: `running`). */
 export interface BackgroundOutput {
   taskId: string;
   status: string;
-  /** O FIM da saída (até `DETAIL_TEXT_MAX`). */
+  /** The END of the output (up to `DETAIL_TEXT_MAX`). */
   output?: string;
-  /** Tamanho real do arquivo, em bytes. */
+  /** Real size of the file, in bytes. */
   outputLength?: number;
-  /** O arquivo de saída não existe mais no runner (o /tmp do container foi limpo). */
+  /** The output file no longer exists in the runner (the container's /tmp was cleaned). */
   missing?: boolean;
 }
 
@@ -243,7 +243,7 @@ function parseBackground(v: unknown): BackgroundOutput | undefined {
   return bg;
 }
 
-/** Lê a saída da sondagem de uma ação. Lixo vira `{ found: false }`. PURE. */
+/** Parses the output of an action's probe. Garbage becomes `{ found: false }`. PURE. */
 export function parseToolDetail(stdout: string): ToolDetail {
   const o = asFields(lastJsonLine(stdout));
   if (!o || o.found !== true) return { found: false };
@@ -270,7 +270,7 @@ export function parseToolDetail(stdout: string): ToolDetail {
   return detail;
 }
 
-/** Um passo da linha do tempo de um subagente. */
+/** A step in a subagent's timeline. */
 export type TimelineItem =
   | { kind: "thinking" | "text"; at: number; text: string }
   | { kind: "tool"; at: number; id: string; name: string; input?: unknown; endedAt?: number; result?: ToolResultSummary };
@@ -280,17 +280,17 @@ export interface AgentTimeline {
   agentId?: string;
   description?: string;
   agentType?: string;
-  /** A tarefa que ele recebeu (a primeira fala do transcript dele). */
+  /** The task it received (the first message of its transcript). */
   prompt?: string;
   startedAt?: number;
   lastAt?: number;
   toolCount?: number;
-  /** O transcript é maior do que a cauda lida: os passos mais antigos ficaram de fora. */
+  /** The transcript is larger than the tail read: the oldest steps were left out. */
   partial?: boolean;
   items: TimelineItem[];
 }
 
-/** Lê a saída da sondagem da linha do tempo; o resultado de cada passo já sai resumido. PURE. */
+/** Parses the output of the timeline probe; each step's result already comes out summarised. PURE. */
 export function parseAgentTimeline(stdout: string): AgentTimeline {
   const o = asFields(lastJsonLine(stdout));
   if (!o || o.found !== true) return { found: false, items: [] };
@@ -329,17 +329,17 @@ export function parseAgentTimeline(stdout: string): AgentTimeline {
   };
 }
 
-/** Teto de uma sondagem. Folgado: com o runner carregado, ler um transcript grande passa de 15s, e
- *  quem abriu o detalhe prefere esperar a ver "não deu para ler" (o front pede de novo sozinho). */
+/** A probe's ceiling. Generous: with the runner loaded, reading a large transcript takes over 15s, and
+ *  whoever opened the detail would rather wait than see "não deu para ler" (the front asks again on its own). */
 const DETAIL_PROBE_TIMEOUT_MS = 60_000;
 
-/** Lê uma ação do runner agora. Lança `InvalidDetailIdError` (id torto) ou o erro do executor. */
+/** Reads an action from the runner now. Throws `InvalidDetailIdError` (crooked id) or the executor's error. */
 export async function readToolDetail(transcriptDir: string, id: string): Promise<ToolDetail> {
   const { stdout } = await hostExecutor().runScript(buildDetailProbeScript(config.runner.container, transcriptDir, id, "tool"), { timeoutMs: DETAIL_PROBE_TIMEOUT_MS });
   return parseToolDetail(stdout);
 }
 
-/** Lê a linha do tempo de um subagente do runner agora. */
+/** Reads a subagent's timeline from the runner now. */
 export async function readAgentTimeline(transcriptDir: string, toolUseId: string): Promise<AgentTimeline> {
   const { stdout } = await hostExecutor().runScript(buildDetailProbeScript(config.runner.container, transcriptDir, toolUseId, "agent"), { timeoutMs: DETAIL_PROBE_TIMEOUT_MS });
   return parseAgentTimeline(stdout);

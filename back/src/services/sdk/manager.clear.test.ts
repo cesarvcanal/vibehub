@@ -6,9 +6,9 @@ import { join } from "node:path";
 import { config } from "../../config/env.js";
 
 /**
- * /clear e a FROTA DE WORKFLOW: o painel de uma rodada da conversa apagada não pode voltar num F5 —
- * a tela ao vivo já o tirou junto com as linhas. Arquivo à parte porque o módulo de workflow é
- * MOCKADO aqui (a sondagem real precisa de um runner), e o manager.test.ts usa o de verdade.
+ * /clear and the WORKFLOW FLEET: the panel of a round from the erased conversation must not come back
+ * on an F5 — the live screen already removed it together with the lines. A separate file because the
+ * workflow module is MOCKED here (the real probe needs a runner), and manager.test.ts uses the real one.
  */
 const { forgetCardWorkflows } = vi.hoisted(() => ({ forgetCardWorkflows: vi.fn() }));
 vi.mock("./workflow.js", async (importOriginal) => {

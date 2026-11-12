@@ -1,16 +1,17 @@
 /**
- * QUANTO DA JANELA DE CONTEXTO A SESSÃO JÁ OCUPA — o número do `/context` do Claude Code. O driver
- * pergunta à sessão no fim de cada turno (`getContextUsage`) e repassa como `context_usage`.
+ * HOW MUCH OF THE CONTEXT WINDOW THE SESSION ALREADY TAKES — the number from Claude Code's `/context`.
+ * The driver asks the session at the end of each turn (`getContextUsage`) and passes it on as
+ * `context_usage`.
  *
- * Normalizado AQUI, no lado que fala com o navegador: a tela recebe sempre tokens inteiros e um
- * percentual 0..100 calculado sobre a janela CRUA do modelo (200k, 1M), o mesmo denominador do
- * "84k/200k" que ela escreve ao lado.
+ * Normalised HERE, on the side that talks to the browser: the screen always gets whole tokens and a
+ * 0..100 percentage computed over the model's RAW window (200k, 1M), the same denominator as the
+ * "84k/200k" it writes next to it.
  */
 
 export interface ContextUsageInfo {
-  /** Tokens que a conversa ocupa agora. */
+  /** Tokens the conversation takes right now. */
   usedTokens: number;
-  /** O tamanho da janela do modelo, cru. */
+  /** The model's window size, raw. */
   maxTokens: number;
   /** 0..100. */
   percent: number;
@@ -24,7 +25,7 @@ function tokens(value: unknown): number | undefined {
   return Math.round(value);
 }
 
-/** O que chegou do driver como `ContextUsageInfo`, ou null quando não há janela para medir. PURE. */
+/** What arrived from the driver as `ContextUsageInfo`, or null when there is no window to measure. PURE. */
 export function normalizeContextUsage(raw: unknown): ContextUsageInfo | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;

@@ -6,26 +6,26 @@ import { CARD_ID_RE } from "../board/cardId.js";
 import { logger } from "../../utils/logger.js";
 
 /**
- * O CATÁLOGO DO CARD EM DISCO — o que o menu "/" oferece, sobrevivendo ao driver que o anunciou.
+ * THE CARD'S CATALOG ON DISK — what the "/" menu offers, outliving the driver that announced it.
  *
- * O bug que isto fecha (produção, 2026-09-28): "quando eu começava a digitar o /, de primeira não
- * apareciam as opções das skills ou plugins; eu tinha que apagar e tentar de novo ou dar F5". O
- * catálogo chega num evento que o driver anuncia UMA vez, ao subir, e vivia só na sessão em memória
- * (`session.catalog`). Num card cujo driver ainda estava bootando — ou que tinha sido hibernado
- * pelo idle stop — o primeiro `/` não tinha lista nenhuma para mostrar. Segundos depois o anúncio
- * chegava, e era por isso que "apagar e tentar de novo" resolvia: o menu nunca esteve quebrado, a
- * lista é que ainda não existia.
+ * The bug this closes (production, 2026-09-28): "quando eu começava a digitar o /, de primeira não
+ * apareciam as opções das skills ou plugins; eu tinha que apagar e tentar de novo ou dar F5". The
+ * catalog arrives in an event the driver announces ONCE, on boot, and it lived only in the in-memory
+ * session (`session.catalog`). On a card whose driver was still booting — or had been hibernated
+ * by the idle stop — the first `/` had no list at all to show. Seconds later the announcement
+ * arrived, and that is why "apagar e tentar de novo" worked: the menu was never broken, the list
+ * just did not exist yet.
  *
- * As skills e comandos de um card mudam de mês em mês, não de segundo em segundo — então a última
- * lista conhecida é uma resposta boa para o instante do connect, e o anúncio do driver novo apenas
- * a atualiza. Mesma durabilidade e mesmo formato de nome do `sdk-inflight`/`sdk-history`: um JSON
- * por card sob o data dir.
+ * A card's skills and commands change month to month, not second to second — so the last known
+ * list is a good answer for the instant of the connect, and the new driver's announcement merely
+ * updates it. Same durability and same naming as `sdk-inflight`/`sdk-history`: one JSON per card
+ * under the data dir.
  *
- * Ler e gravar nunca lançam: um menu vazio é um contratempo, uma conexão derrubada é um bug. Só a
- * remoção da purga lança (veja `removeCardCatalog`).
+ * Reading and writing never throw: an empty menu is a setback, a dropped connection is a bug. Only
+ * the purge's removal throws (see `removeCardCatalog`).
  */
 
-/** Onde os catálogos vivem, sob o data dir. */
+/** Where the catalogs live, under the data dir. */
 export const SDK_CATALOG_DIR = "sdk-catalog";
 
 function catalogFile(cardId: string): string | null {
@@ -33,7 +33,7 @@ function catalogFile(cardId: string): string | null {
   return dataPath(SDK_CATALOG_DIR, `${cardId}.json`);
 }
 
-/** A última lista conhecida deste card — `null` quando não há nenhuma (ou o arquivo está ilegível). */
+/** This card's last known list — `null` when there is none (or the file is unreadable). */
 export async function readCardCatalog(cardId: string): Promise<CatalogEvent | null> {
   const file = catalogFile(cardId);
   if (!file) return null;
@@ -42,19 +42,19 @@ export async function readCardCatalog(cardId: string): Promise<CatalogEvent | nu
     if (!parsed || typeof parsed !== "object") return null;
     const event = parsed as CatalogEvent;
     if (event.type !== "catalog" || !Array.isArray(event.commands)) return null;
-    // Um arquivo gravado antes do /btw existir não o tem — e quem o responde é o painel, não o CLI.
+    // A file written before /btw existed does not have it — and the one that answers it is the panel, not the CLI.
     return { ...event, commands: withBtwCommand(event.commands) };
   } catch {
-    return null; // sem arquivo, ou um arquivo torto: o driver anuncia o dele daqui a pouco
+    return null; // no file, or a crooked file: the driver announces its own in a moment
   }
 }
 
 /**
- * Guarda a lista que o driver acabou de anunciar.
+ * Stores the list the driver has just announced.
  *
- * Uma lista VAZIA não é gravada de propósito: ela apagaria um menu bom por causa de um driver que
- * subiu capenga (sem plugins montados, uma sessão que falhou o carregamento), e um menu vazio é
- * exatamente o sintoma que este módulo existe para não ter.
+ * An EMPTY list is deliberately not stored: it would erase a good menu because of a driver that
+ * came up crippled (no plugins mounted, a session that failed to load), and an empty menu is
+ * exactly the symptom this module exists to avoid.
  */
 export async function writeCardCatalog(cardId: string, catalog: CatalogEvent): Promise<void> {
   const file = catalogFile(cardId);
@@ -64,14 +64,14 @@ export async function writeCardCatalog(cardId: string, catalog: CatalogEvent): P
     await mkdir(join(file, ".."), { recursive: true });
     await writeFile(file, JSON.stringify(catalog), "utf8");
   } catch (err) {
-    // Sem durabilidade nesta instalação: a sessão em memória ainda serve esta conexão.
+    // No durability on this installation: the in-memory session still serves this connection.
     logger.warn({ card: cardId, detail: (err as Error).message }, "could not write the sdk catalog");
   }
 }
 
 /**
- * Apaga o catálogo do card — parte da PURGA (services/board/purge.ts). Lança quando o rm falha, para
- * que a purga reporte o passo em vez de dizer "apagado" por cima de um arquivo que ficou.
+ * Deletes the card's catalog — part of the PURGE (services/board/purge.ts). Throws when the rm fails, so
+ * the purge reports the step instead of saying "apagado" over a file that stayed.
  */
 export async function removeCardCatalog(cardId: string): Promise<void> {
   const file = catalogFile(cardId);

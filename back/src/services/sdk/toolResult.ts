@@ -1,16 +1,16 @@
 /**
- * O QUE CADA FERRAMENTA DEVOLVEU — a linha de resultado do chat, como a do terminal.
+ * WHAT EACH TOOL RETURNED — the chat's result line, like the terminal's.
  *
- * O driver repassa o resultado CRU e capado (`RawToolResultEvent`: o texto que o modelo leu e o
- * `tool_use_result` estruturado, podado). Aqui ele vira o RESUMO que a tela desenha sob a ação —
- * "7 linhas", "+3 −1", "9 ocorrências em 7 arquivos", "erro: …" — e só o resumo segue para o
- * navegador e para o histórico. O detalhe inteiro é lido do transcript quando alguém clica
- * (ver ./detail.ts). PURE.
+ * The driver passes on the RAW, capped result (`RawToolResultEvent`: the text the model read and the
+ * structured `tool_use_result`, pruned). Here it becomes the SUMMARY the screen draws under the action —
+ * "7 linhas", "+3 −1", "9 ocorrências em 7 arquivos", "erro: …" — and only the summary goes on to the
+ * browser and to the history. The whole detail is read from the transcript when someone clicks
+ * (see ./detail.ts). PURE.
  */
 
 import { asFields } from "./fields.js";
 
-/** O frame que o driver emite (stdout), antes do resumo. */
+/** The frame the driver emits (stdout), before the summary. */
 export interface RawToolResultEvent {
   type: "tool_result";
   id: string;
@@ -18,17 +18,17 @@ export interface RawToolResultEvent {
   text?: string;
   textLength?: number;
   structured?: unknown;
-  /** Linhas contadas ANTES do corte: stdout+stderr (Bash) ou, sem eles, o texto inteiro. */
+  /** Lines counted BEFORE the cut: stdout+stderr (Bash) or, without them, the whole text. */
   outputLines?: number;
   parentToolUseId?: string;
 }
 
-/** O resumo de um resultado — os números da linha; a tela traduz. */
+/** A result's summary — the line's numbers; the screen translates. */
 export interface ToolResultSummary {
   isError?: boolean;
-  /** Primeira linha útil do erro, capada. */
+  /** First useful line of the error, capped. */
   error?: string;
-  /** Linhas da saída (Bash), lidas (Read) ou de conteúdo (Grep). */
+  /** Lines of output (Bash), read (Read) or of content (Grep). */
   lines?: number;
   startLine?: number;
   totalLines?: number;
@@ -37,16 +37,16 @@ export interface ToolResultSummary {
   added?: number;
   removed?: number;
   created?: boolean;
-  /** Terminou sem imprimir nada. */
+  /** Finished without printing anything. */
   empty?: boolean;
   interrupted?: boolean;
-  /** Foi para o segundo plano (Bash com run_in_background, subagente assíncrono). */
+  /** Went to the background (Bash with run_in_background, async subagent). */
   background?: boolean;
-  /** Um subagente que terminou ali mesmo (primeiro plano). */
+  /** A subagent that finished right there (foreground). */
   agent?: { toolUses?: number; durationMs?: number; tokens?: number };
 }
 
-/** O que segue para o navegador e para o histórico. */
+/** What goes on to the browser and to the history. */
 export interface ToolResultEvent {
   type: "tool_result";
   id: string;
@@ -58,20 +58,20 @@ const ERROR_MAX = 200;
 
 const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : undefined);
 
-/** Quantas linhas um texto tem (sem contar a quebra final). PURE. */
+/** How many lines a text has (not counting the final line break). PURE. */
 export function lineCount(text: string): number {
   const t = text.replace(/\s+$/, "");
   return t === "" ? 0 : t.split("\n").length;
 }
 
-/** A primeira linha que diz alguma coisa de um erro — sem as etiquetas que o CLI põe em volta. PURE. */
+/** The first line of an error that says something — without the labels the CLI puts around it. PURE. */
 export function firstErrorLine(text: string): string {
   const clean = text.replace(/<\/?tool_use_error>/g, "");
   const line = clean.split("\n").map((l) => l.trim()).find((l) => l !== "") ?? "";
   return line.length > ERROR_MAX ? `${line.slice(0, ERROR_MAX - 1)}…` : line;
 }
 
-/** +/− de um `structuredPatch` (Edit/Write/MultiEdit). PURE. */
+/** +/− of a `structuredPatch` (Edit/Write/MultiEdit). PURE. */
 function patchCounts(patch: unknown): { added: number; removed: number } | null {
   if (!Array.isArray(patch)) return null;
   let added = 0;
@@ -89,15 +89,15 @@ function patchCounts(patch: unknown): { added: number; removed: number } | null 
 }
 
 /**
- * O resumo de um resultado, pela FORMA do estruturado (cada ferramenta tem a sua) e, sem ele, pelo
- * texto. Não depende do nome da ferramenta: um resultado de MCP cai no texto. PURE.
+ * A result's summary, by the SHAPE of the structured part (each tool has its own) and, without it, by the
+ * text. It does not depend on the tool's name: an MCP result falls into the text. PURE.
  */
 export function summarizeToolResult(raw: RawToolResultEvent): ToolResultSummary {
   const text = typeof raw.text === "string" ? raw.text : "";
   if (raw.isError === true) return { isError: true, error: firstErrorLine(text) || "error" };
   const s = asFields(raw.structured);
   if (s) {
-    // Subagente: no segundo plano, ou terminado ali mesmo.
+    // Subagent: in the background, or finished right there.
     if (s.status === "async_launched" || s.status === "remote_launched") return { background: true };
     if (s.status === "completed" && ("totalToolUseCount" in s || "totalDurationMs" in s)) {
       return { agent: { toolUses: num(s.totalToolUseCount), durationMs: num(s.totalDurationMs), tokens: num(s.totalTokens) } };
@@ -130,7 +130,7 @@ export function summarizeToolResult(raw: RawToolResultEvent): ToolResultSummary 
   return lines === 0 ? { empty: true } : { lines };
 }
 
-/** O frame resumido que vai para a tela e para o histórico. PURE. */
+/** The summarised frame that goes to the screen and to the history. PURE. */
 export function toolResultEvent(raw: RawToolResultEvent): ToolResultEvent {
   return {
     type: "tool_result",
@@ -140,9 +140,9 @@ export function toolResultEvent(raw: RawToolResultEvent): ToolResultEvent {
   };
 }
 
-/* ------------------------------------------------------------------ subagentes */
+/* ------------------------------------------------------------------ subagents */
 
-/** Os frames de tarefa que o driver emite (`task_started` / `task_progress` / `task_notification`). */
+/** The task frames the driver emits (`task_started` / `task_progress` / `task_notification`). */
 export interface RawTaskEvent {
   type: "task_started" | "task_progress" | "task_notification";
   taskId: string;
@@ -159,8 +159,8 @@ export interface RawTaskEvent {
 }
 
 /**
- * O estado de UM subagente (ou tarefa) disparado por uma chamada — o que a frota e a bandeja
- * mostram. Um evento só (`agent_task`) carrega o estado inteiro: a tela substitui, nunca soma.
+ * The state of ONE subagent (or task) spawned by a call — what the fleet and the tray
+ * show. A single event (`agent_task`) carries the whole state: the screen replaces, never adds.
  */
 export interface AgentTaskEvent {
   type: "agent_task";
@@ -174,19 +174,19 @@ export interface AgentTaskEvent {
   tokens?: number;
   durationMs?: number;
   lastTool?: string;
-  /** Rodando: a frase do que ele faz agora. Terminado: o resumo final do CLI. */
+  /** Running: the sentence of what it is doing now. Finished: the CLI's final summary. */
   summary?: string;
-  /** Quando o back viu a tarefa começar (ms) — o relógio da tela. */
+  /** When the back saw the task start (ms) — the screen's clock. */
   startedAt?: number;
-  /** Quando chegou o último frame do CLI desta tarefa (ms, relógio do back). */
+  /** When the CLI's last frame for this task arrived (ms, the back's clock). */
   lastAt?: number;
-  /** Só no que sai para a aba (taskSnapshot): há quanto tempo a tarefa está calada. */
+  /** Only in what goes out to the tab (taskSnapshot): how long the task has been quiet. */
   quietMs?: number;
 }
 
 const STATUSES = new Set(["completed", "failed", "stopped"]);
 
-/** Funde um frame de tarefa no estado anterior (ou null quando não dá pra ligar a uma chamada). PURE. */
+/** Merges a task frame into the previous state (or null when it cannot be tied to a call). PURE. */
 export function mergeTaskEvent(previous: AgentTaskEvent | undefined, raw: RawTaskEvent, now: number): AgentTaskEvent | null {
   const toolUseId = raw.toolUseId || previous?.toolUseId;
   if (!toolUseId || typeof raw.taskId !== "string") return null;
@@ -219,17 +219,17 @@ export function mergeTaskEvent(previous: AgentTaskEvent | undefined, raw: RawTas
 }
 
 /**
- * Silêncio do subagente além do qual o relógio para: quem morreu sem aviso (o driver caiu antes do
- * `task_notification`) não conta para sempre. O mesmo teto do front (AGENT_CLOCK_STALE_MS).
+ * Subagent silence past which the clock stops: one that died without warning (the driver dropped before the
+ * `task_notification`) does not count forever. The same cap as the front's (AGENT_CLOCK_STALE_MS).
  */
 export const TASK_CLOCK_STALE_MS = 30 * 60_000;
 
 /**
- * O subagente como sai para uma aba — ao vivo e ao conectar. O `durationMs` guardado é o do último
- * frame do CLI que trouxe uso, e o progresso periódico muitas vezes vem sem: repassá-lo fazia a aba
- * voltar no tempo. Rodando, o tempo vai até agora no relógio do back (o mesmo do `startedAt`, sem
- * diferença com o do navegador), nunca menos do que o CLI mediu e parado no teto de silêncio; e
- * `quietMs` diz à aba há quanto tempo ele está calado, para ela parar no mesmo teto. PURE.
+ * The subagent as it goes out to a tab — live and on connect. The stored `durationMs` is the one from the last
+ * CLI frame that brought usage, and the periodic progress often comes without it: passing it on made the tab
+ * go back in time. While running, the time goes up to now on the back's clock (the same as `startedAt`, with no
+ * skew against the browser's), never less than what the CLI measured and stopped at the silence cap; and
+ * `quietMs` tells the tab how long it has been quiet, so it stops at the same cap. PURE.
  */
 export function taskSnapshot(task: AgentTaskEvent, now: number): AgentTaskEvent {
   if (task.status !== "running" || task.startedAt === undefined) return task;

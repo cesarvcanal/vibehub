@@ -16,7 +16,7 @@ import { parseDetailFrame } from "./protocol.js";
 import { createDetailResponder } from "./manager.js";
 import { assertWorktreeRelativePath, buildFileDiffScript } from "../maestro/changes.js";
 
-/** Um transcript como o Claude Code grava: a conversa principal e um subagente em segundo plano. */
+/** A transcript as Claude Code writes it: the main conversation and a background subagent. */
 const SESSION = "11111111-2222-3333-4444-555555555555";
 const line = (o: object): string => JSON.stringify(o);
 let dir = "";
@@ -31,11 +31,11 @@ beforeAll(async () => {
     line({ type: "user", timestamp: "2026-10-19T20:41:07.000Z", message: { content: [{ type: "tool_result", tool_use_id: "toolu_bash1", content: "#510 a\n#511 b\n" }] }, toolUseResult: { stdout: "#510 a\n#511 b\n", stderr: "", interrupted: false } }),
     line({ type: "assistant", timestamp: "2026-10-19T20:47:50.000Z", message: { content: [{ type: "tool_use", id: "toolu_agent1", name: "Agent", input: { description: "Review PR 510", prompt: "Revise a #510", run_in_background: true } }] } }),
     line({ type: "user", timestamp: "2026-10-19T20:47:51.000Z", message: { content: [{ type: "tool_result", tool_use_id: "toolu_agent1", content: "Async agent launched successfully.\nagentId: a0abc123 (internal ID)" }] }, toolUseResult: { status: "async_launched", agentId: "a0abc123" } }),
-    // O que o Claude Code também grava e NÃO é a conversa: cópias da requisição sem timestamp nem
-    // `toolUseResult`. Não podem tomar o lugar da chamada/resultado de verdade.
+    // What Claude Code also writes and is NOT the conversation: copies of the request with no timestamp
+    // and no `toolUseResult`. They must not take the place of the real call/result.
     line({ type: "api-request-blob", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_bash1", name: "Bash", input: { command: "gh pr list" } }] } }),
     line({ type: "api-request-blob", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_bash1", content: "#510 a\n#511 b\n" }] } }),
-    // Comandos em segundo plano: o resultado só diz para onde a saída vai; a saída real está no arquivo.
+    // Background commands: the result only says where the output goes; the real output is in the file.
     line({ type: "assistant", timestamp: "2026-10-19T20:50:00.000Z", message: { content: [{ type: "tool_use", id: "toolu_bg1", name: "Bash", input: { command: "npm run dev", run_in_background: true } }] } }),
     line({ type: "user", timestamp: "2026-10-19T20:50:01.000Z", message: { content: [{ type: "tool_result", tool_use_id: "toolu_bg1", content: `Command running in background with ID: bgtask01. Output is being written to: ${BG_DIR()}/bgtask01.output. You will be notified when it completes.` }] }, toolUseResult: { stdout: "", stderr: "", interrupted: false, backgroundTaskId: "bgtask01" } }),
     line({ type: "assistant", timestamp: "2026-10-19T20:51:00.000Z", message: { content: [{ type: "tool_use", id: "toolu_bg2", name: "Bash", input: { command: "npm test", run_in_background: true } }] } }),
@@ -58,7 +58,7 @@ beforeAll(async () => {
     line({ type: "user", timestamp: "2026-10-19T20:48:14.000Z", message: { content: [{ type: "tool_result", tool_use_id: "toolu_test1", is_error: true, content: "Cannot find module 'x'\nstack" }] } }),
     line({ type: "assistant", timestamp: "2026-10-19T20:54:31.000Z", message: { content: [{ type: "text", text: "Aprovar com ajustes." }] } }),
   ].join("\n");
-  // Subagente em segundo plano: o meta diz qual chamada o disparou.
+  // Background subagent: the meta says which call spawned it.
   await writeFile(join(sub, "agent-a0abc123.jsonl"), agent + "\n");
   await writeFile(join(sub, "agent-a0abc123.meta.json"), JSON.stringify({ agentType: "general-purpose", description: "Review PR 510", toolUseId: "toolu_agent1" }));
 });

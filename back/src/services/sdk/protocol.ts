@@ -32,15 +32,15 @@ export interface AssistantTextEvent {
 /** A live text delta (only when the driver runs with partial messages on). */
 export interface AssistantDeltaEvent { type: "assistant_delta"; text: string }
 /**
- * O RACIOCÍNIO do modelo (bloco `thinking` consolidado) e o seu delta ao vivo.
+ * The model's REASONING (the consolidated `thinking` block) and its live delta.
  *
- * Por que existe: enquanto o agente trabalha, a tela só mostrava um spinner com "Trabalhando…" —
- * podia ser meio segundo ou dez minutos, e quem esperava não tinha como saber se ele estava no
- * caminho certo. O raciocínio é a única coisa que o modelo produz ANTES da resposta, então é ele
- * que transforma a espera em acompanhamento.
+ * Why it exists: while the agent works, the screen only showed a spinner with "Trabalhando…" —
+ * it could be half a second or ten minutes, and whoever was waiting had no way of knowing whether it was on
+ * the right track. The reasoning is the only thing the model produces BEFORE the answer, so it is what
+ * turns waiting into following along.
  *
- * NÃO é persistido no histórico (veja `replayableHistoryEvent`): é orientação do momento, como o
- * `turn_absorbed`. O que fica em disco é a conversa — mensagem, ferramenta, resposta.
+ * It is NOT persisted in the history (see `replayableHistoryEvent`): it is guidance of the moment, like
+ * `turn_absorbed`. What stays on disk is the conversation — message, tool, answer.
  */
 export interface ThinkingEvent { type: "thinking"; text: string }
 export interface ThinkingDeltaEvent { type: "thinking_delta"; text: string }
@@ -58,19 +58,19 @@ export interface ToolUseEvent {
   parentToolUseId?: string;
 }
 /**
- * A FERRAMENTA AINDA SENDO GERADA. O `tool_use` só existe quando o modelo termina de escrever o
- * input inteiro — num Write de 400 linhas, dezenas de segundos sem nada a mostrar. Estes três
- * sinais dizem o que está sendo gerado e há quanto tempo a ferramenta roda, e só para o agente
- * PRINCIPAL (os de subagente são descartados no driver, como os deltas de texto):
+ * THE TOOL STILL BEING GENERATED. The `tool_use` only exists when the model finishes writing the
+ * whole input — in a 400-line Write, tens of seconds with nothing to show. These three
+ * signals say what is being generated and how long the tool has been running, and only for the
+ * MAIN agent (the subagents' are discarded in the driver, like the text deltas):
  *
- * - `tool_use_start`: o modelo ABRIU o bloco da ferramenta — o mesmo `id` do `tool_use` que virá,
- *   e que a tela usa para trocar a linha provisória pela definitiva no lugar.
- * - `tool_input_progress`: quanto do input já saiu (bytes de JSON, com throttle no driver) e o
- *   arquivo, assim que o caminho aparece no JSON parcial. Nunca depois do `tool_use` completo.
- * - `tool_progress`: há quanto tempo a ferramenta roda (o `SDKToolProgressMessage` do CLI).
+ * - `tool_use_start`: the model OPENED the tool's block — the same `id` as the `tool_use` to come,
+ *   which the screen uses to swap the provisional line for the final one in place.
+ * - `tool_input_progress`: how much of the input is already out (JSON bytes, throttled in the driver) and the
+ *   file, as soon as the path shows up in the partial JSON. Never after the complete `tool_use`.
+ * - `tool_progress`: how long the tool has been running (the CLI's `SDKToolProgressMessage`).
  *
- * Efêmeros, como o raciocínio: NÃO entram no histórico (ver `replayableHistoryEvent`). O que a
- * conversa guarda é o `tool_use` completo.
+ * Ephemeral, like the reasoning: they do NOT go into the history (see `replayableHistoryEvent`). What the
+ * conversation keeps is the complete `tool_use`.
  */
 export interface ToolUseStartEvent { type: "tool_use_start"; id: string; name: string }
 export interface ToolInputProgressEvent { type: "tool_input_progress"; id: string; bytes: number; filePath?: string }
@@ -134,26 +134,26 @@ export interface QuestionResultEvent {
   answers?: UserQuestionAnswer[];
   /** True when nobody answered within the timeout (the model was told "no answer"). */
   timedOut?: boolean;
-  /** A pessoa respondeu POR MENSAGEM em vez de clicar: o cartão foi substituído pelo que ela disse. */
+  /** The person answered BY MESSAGE instead of clicking: the card was replaced by what they said. */
   superseded?: boolean;
   /**
-   * PERGUNTA ÓRFÃ: as palavras com que a resposta chegou ao modelo (`buildOrphanAnswerText`). Não há
-   * linha `user` no histórico para ela — o cartão assentado é o registro visível —, então é ESTA a
-   * chave que impede o transcript de republicá-la como fala do terminal num replay.
+   * ORPHAN QUESTION: the words with which the answer reached the model (`buildOrphanAnswerText`). There is no
+   * `user` line in the history for it — the settled card is the visible record —, so THIS is the
+   * key that keeps the transcript from republishing it as terminal speech on a replay.
    */
   sent?: string;
   /**
-   * CANCELADA POR ALGUÉM (produção, 2026-10-26): sem resposta, sem prazo vencido e sem mensagem que
-   * a substituísse, a pergunta só cai porque o turno foi PARADO — o botão de parar, o "enviar agora"
-   * da fila ou uma edição. Com duas pessoas no card, o cartão sumia da tela da outra como "sem
-   * resposta", que parece prazo vencido. O manager carimba quem parou (`cancelledBy`, ausente quando
-   * a aba não tem autor) e como (`cancelledHow`).
+   * CANCELLED BY SOMEONE (production, 2026-10-26): with no answer, no expired deadline and no message to
+   * replace it, the question only drops because the turn was STOPPED — the stop button, the queue's "enviar agora"
+   * or an edit. With two people on the card, the card vanished from the other one's screen as "sem
+   * resposta", which looks like an expired deadline. The manager stamps who stopped it (`cancelledBy`, absent when
+   * the tab has no author) and how (`cancelledHow`).
    */
   cancelledBy?: string;
   cancelledHow?: StopHow;
 }
 
-/** Como um turno foi parado: o botão de parar, o "enviar agora" da fila ou a edição de uma mensagem. */
+/** How a turn was stopped: the stop button, the queue's "enviar agora" or the edit of a message. */
 export type StopHow = "stop" | "send_now" | "edit";
 
 /**
@@ -263,17 +263,17 @@ export interface KeywordEffortReplacedEvent { type: "keyword_effort_replaced" }
  */
 export interface LocalOutputEvent { type: "local_output"; text: string }
 /**
- * A resposta de um `/btw` — a pergunta LATERAL que a pessoa fez com o turno rodando. Vem de uma
- * consulta à parte (a sessão bifurcada, sem ferramentas, sem gravar nada nela), então o agente
- * principal nunca a lê e o turno dele segue intocado. `error` no lugar de `text` quando a consulta
- * falhou. Fica no log do card: é conversa da pessoa, e o F5 redesenha pergunta e resposta.
+ * The answer to a `/btw` — the SIDE question the person asked with the turn running. It comes from a
+ * separate query (the forked session, no tools, recording nothing in it), so the main agent
+ * never reads it and its turn goes on untouched. `error` instead of `text` when the query
+ * failed. It stays in the card's log: it is the person's conversation, and the F5 redraws question and answer.
  */
 export interface BtwAnswerEvent { type: "btw_answer"; id: string; question: string; text?: string; error?: string }
 /**
- * A COMPACTAÇÃO da conversa — o `/compact` da pessoa ou a automática do CLI, quando a janela enche.
- * O CLI resume a conversa em segundos ou minutos sem dizer nada no stream de texto, e no chat isso
- * parecia um turno travado. `started` abre a linha com a barra; `done` a fecha com quanto a
- * conversa ocupava antes e depois; `failed` com o motivo (o CLI recusou, ou o turno parou no meio).
+ * The conversation's COMPACTION — the person's `/compact` or the CLI's automatic one, when the window fills up.
+ * The CLI summarises the conversation in seconds or minutes without saying anything on the text stream, and in the chat that
+ * looked like a stuck turn. `started` opens the line with the bar; `done` closes it with how much the
+ * conversation took before and after; `failed` with the reason (the CLI refused, or the turn stopped midway).
  */
 export interface CompactionEvent {
   type: "compaction";
@@ -283,32 +283,32 @@ export interface CompactionEvent {
   postTokens?: number;
   durationMs?: number;
   error?: string;
-  /** Só no `started`, posto pelo back: quando começou (ms), para a barra contar o tempo certo. */
+  /** Only on `started`, set by the back: when it started (ms), so the bar counts the right time. */
   startedAt?: number;
 }
 /** One live background task, as the driver forwards it from the CLI. */
-export interface BackgroundTaskInfo { id: string; type: string; description: string; /** A chamada que disparou a tarefa — liga a bandeja ao card dela. */ toolUseId?: string }
+export interface BackgroundTaskInfo { id: string; type: string; description: string; /** The call that spawned the task — ties the tray to its card. */ toolUseId?: string }
 /**
- * O conjunto VIVO de tarefas em segundo plano (um Bash com `run_in_background`, um subagente, um
- * monitor) — o trabalho que segue depois do `result` do turno. Sinal de NÍVEL vindo do CLI
- * (`background_tasks_changed`): cada evento SUBSTITUI o anterior; vazio = nada rodando. Estado da
- * sessão, como o catálogo: nunca entra no histórico.
+ * The LIVE set of background tasks (a Bash with `run_in_background`, a subagent, a
+ * monitor) — the work that goes on after the turn's `result`. A LEVEL signal coming from the CLI
+ * (`background_tasks_changed`): each event REPLACES the previous one; empty = nothing running. Session
+ * state, like the catalog: it never goes into the history.
  */
 export interface BackgroundTasksEvent { type: "background_tasks"; tasks: BackgroundTaskInfo[] }
 /**
- * O CLI ZEROU a conversa (`/clear`, ou outro fluxo de sessão nova): o modelo segue numa sessão NOVA,
- * sem o contexto anterior. A tela e o log do card têm de esquecer a conversa antiga junto — senão o
- * /clear parecia não ter funcionado, e o F5 trazia tudo de volta.
+ * The CLI RESET the conversation (`/clear`, or another new-session flow): the model goes on in a NEW session,
+ * without the previous context. The card's screen and log have to forget the old conversation too — otherwise the
+ * /clear seemed not to have worked, and the F5 brought everything back.
  */
 /**
- * O aviso de limite do plano, ao vivo (o `rate_limit_event` do CLI). Estado da SESSÃO, como as
- * tarefas em segundo plano: substitui a leitura anterior da mesma janela, nunca entra no histórico,
- * e é reenviado a quem conecta depois. Unidades já normalizadas pelo manager (ver ./rateLimit.ts).
+ * The plan limit warning, live (the CLI's `rate_limit_event`). SESSION state, like the
+ * background tasks: it replaces the previous reading of the same window, never goes into the history,
+ * and is resent to whoever connects later. Units already normalised by the manager (see ./rateLimit.ts).
  */
 export type { RateLimitEvent };
 /**
- * Quanto da janela de contexto a sessão ocupa (o `/context`), lido no fim de cada turno. Estado da
- * SESSÃO como o aviso de limite; tokens e percentual já normalizados pelo manager (./contextUsage.ts).
+ * How much of the context window the session takes (the `/context`), read at the end of each turn. SESSION
+ * state like the limit warning; tokens and percentage already normalised by the manager (./contextUsage.ts).
  */
 export type { ContextUsageEvent };
 export interface ConversationResetEvent { type: "conversation_reset"; trigger?: string }
@@ -322,16 +322,16 @@ export interface DriverErrorEvent { type: "error"; message: string }
 /** A line that was NOT valid JSON, or an unknown event — surfaced rather than swallowed. */
 export interface ParseErrorEvent { type: "parse_error"; raw: string }
 /**
- * A FROTA DO WORKFLOW, ao vivo. Sintetizado pelo BACK (como o `parse_error`), nunca pelo driver: a
- * tool `Workflow` devolve na hora e trabalha em segundo plano, então entre a chamada e a resposta
- * final o stream não traz nada — quem sabe o que está acontecendo é o diário em disco, lido pela
- * sondagem em services/sdk/workflow.ts. Vive só na tela: não entra no histórico (um instantâneo que
- * se move não é conversa), e uma aba que conecta no meio recebe o último de memória.
+ * THE WORKFLOW FLEET, live. Synthesised by the BACK (like `parse_error`), never by the driver: the
+ * `Workflow` tool returns right away and works in the background, so between the call and the final
+ * answer the stream brings nothing — the one who knows what is happening is the journal on disk, read by the
+ * probe in services/sdk/workflow.ts. It lives only on the screen: it does not go into the history (a snapshot that
+ * moves is not conversation), and a tab that connects midway gets the last one from memory.
  *
- * O frame É o `WorkflowRun` da sondagem com o `type` na frente (o manager o espalha inteiro:
- * `{ type: "workflow_progress", ...run }`), então o tipo é DERIVADO dele em vez de redeclarado. A
- * cópia à mão já tinha ficado para trás: não dizia nada de `total`/`done` — a contagem do diário
- * inteiro, que é o que decide se a frota acabou e que o front lê — embora os dois fossem na wire.
+ * The frame IS the probe's `WorkflowRun` with the `type` in front (the manager spreads it whole:
+ * `{ type: "workflow_progress", ...run }`), so the type is DERIVED from it instead of redeclared. The
+ * hand-made copy had already fallen behind: it said nothing about `total`/`done` — the count of the whole
+ * journal, which is what decides whether the fleet is done and which the front reads — even though both were on the wire.
  */
 export type WorkflowProgressEvent = { type: "workflow_progress" } & WorkflowRun;
 
@@ -442,15 +442,15 @@ export interface UserControl {
   text: string;
   cid?: string;
   /**
-   * O "Enviar agora" da fila: com uma ferramenta do principal rodando, o driver interrompe para a
-   * mensagem ser lida já — sem isso o CLI só a lê quando a ferramenta devolve (ver `sendUserNow`
-   * em sdk-driver.mjs). Ausente = o envio de sempre, que dobra no turno em andamento.
+   * The queue's "Enviar agora": with a main-agent tool running, the driver interrupts so the
+   * message is read right away — without it the CLI only reads it when the tool returns (see `sendUserNow`
+   * in sdk-driver.mjs). Absent = the usual send, which folds into the turn in progress.
    */
   now?: true;
   /**
-   * Só o back põe isto (o navegador não tem como: `parseSdkClientFrame` monta o controle do zero). A
-   * mensagem NÃO libera os cartões de pergunta abertos — é a resposta tardia de outra pessoa a um
-   * cartão já fechado (`buildLateAnswerText`), e a pergunta que o agente fez depois segue de pé.
+   * Only the back sets this (the browser has no way to: `parseSdkClientFrame` builds the control from scratch). The
+   * message does NOT release the open question cards — it is another person's late answer to an
+   * already closed card (`buildLateAnswerText`), and the question the agent asked afterwards still stands.
    */
   keepQuestions?: true;
 }
@@ -470,8 +470,8 @@ export interface QuestionAnswerControl {
   id: string;
   answers: UserQuestionAnswer[];
   /**
-   * Só o back põe isto: o que vai ao MODELO quando outras pessoas também responderam o cartão
-   * (`mergePeerAnswers`). `answers` segue limpo — é o que volta no `question_result` e o cartão desenha.
+   * Only the back sets this: what goes to the MODEL when other people also answered the card
+   * (`mergePeerAnswers`). `answers` stays clean — it is what comes back in the `question_result` and the card draws.
    */
   forModel?: UserQuestionAnswer[];
 }
@@ -490,27 +490,27 @@ export interface QuestionAnswerControl {
  *
  * `first`: the bubble edited is the FIRST message of the conversation on the screen. Words alone
  * cannot say which copy was clicked — a message re-sent after an error has the same words, and every
- * layer used to pick the NEWEST copy, so editing the first message rewound to the second (produção,
+ * layer used to pick the NEWEST copy, so editing the first message rewound to the second (production,
  * 2026-10-19). With `first` there is nothing before it to keep: the driver starts a new session and
  * the log and the screen cut from the first copy.
  */
 export interface EditUserControl { type: "edit_user"; original: string; text: string; cid?: string; fallback?: string; first?: boolean }
 /**
- * A conversa andou FORA do chat (a aba Terminal escreveu na mesma sessão): a corrente aberta do
- * driver não está mais no fim do arquivo. Ele marca e religa no PRÓXIMO envio — ver `staleView` no
- * sdk-driver.mjs. Nasce no back (espelho), nunca no navegador.
+ * The conversation moved OUTSIDE the chat (the Terminal tab wrote in the same session): the driver's open
+ * stream is no longer at the end of the file. It marks it and reconnects on the NEXT send — see `staleView` in
+ * sdk-driver.mjs. Born in the back (mirror), never in the browser.
  */
 export interface ReanchorControl { type: "reanchor" }
 /**
- * A pergunta de um `/btw`, já sem o comando — o composer reconhece o comando e manda este frame
- * próprio (nunca um `user`). `id` é do navegador e casa a resposta (`btw_answer`) com a linha dele.
+ * A `/btw`'s question, already without the command — the composer recognises the command and sends this frame
+ * of its own (never a `user`). `id` belongs to the browser and matches the answer (`btw_answer`) with its line.
  */
 export interface BtwControl { type: "btw"; id: string; question: string }
 /**
- * A INTELIGÊNCIA DO CARD TROCOU com o driver de pé: o driver aplica o nível na sessão viva
- * (`applyFlagSettings`), no meio do turno inclusive — a próxima chamada ao modelo já sai nele, sem
- * reiniciar nada. `null` = de volta ao padrão da conta, também ao vivo. Nasce no back (troca no
- * pill), nunca no navegador. The driver answers with an `effort_ack` carrying the same `id`.
+ * THE CARD'S INTELLIGENCE CHANGED with the driver up: the driver applies the level to the live session
+ * (`applyFlagSettings`), mid-turn included — the next call to the model already goes out on it, without
+ * restarting anything. `null` = back to the account's default, also live. Born in the back (switch in the
+ * pill), never in the browser. The driver answers with an `effort_ack` carrying the same `id`.
  */
 export interface SetEffortControl { type: "set_effort"; id: string; effort: string | null }
 export type DriverControl =
@@ -524,10 +524,10 @@ export type DriverControl =
   | ReanchorControl;
 
 /**
- * O `/btw` no menu "/". O CLI o trata como comando de terminal (ou nem o lista no modo SDK), e
- * quem responde aqui é o próprio painel — então a entrada é nossa, e substitui a do CLI se houver.
+ * The `/btw` in the "/" menu. The CLI treats it as a terminal command (or does not even list it in SDK mode), and
+ * the one that answers here is the panel itself — so the entry is ours, and replaces the CLI's if there is one.
  */
-/** Teto da pergunta lateral: ela vai ao prompt, ao log do card e a cada aba. */
+/** Cap on the side question: it goes to the prompt, to the card's log and to every tab. */
 export const BTW_QUESTION_MAX = 8_000;
 
 export const BTW_COMMAND: SlashCommandInfo = {
@@ -537,7 +537,7 @@ export const BTW_COMMAND: SlashCommandInfo = {
   argumentHint: "<pergunta>",
 };
 
-/** O catálogo com o `/btw` no fim, uma vez só. PURE. */
+/** The catalog with `/btw` at the end, only once. PURE. */
 export function withBtwCommand(commands: SlashCommandInfo[]): SlashCommandInfo[] {
   return [...commands.filter((c) => c.name !== BTW_COMMAND.name), BTW_COMMAND];
 }
@@ -577,15 +577,15 @@ export function buildOrphanAnswerText(
     `então ela vem por mensagem; siga com estas escolhas:]\n\n` +
     lines.join("\n");
   if (lostBackground.length === 0) return text;
-  // O reinício que deixou o cartão de pé também matou o que rodava em segundo plano — o aviso de
-  // término disso nunca vai chegar, e o agente ficaria esperando por ele.
-  // Só o comando citado é desarmado; a resposta é fala da pessoa e vale como ela escreveu.
+  // The restart that left the card up also killed what was running in the background — its completion
+  // notice will never arrive, and the agent would sit waiting for it.
+  // Only the quoted command is disarmed; the answer is the person's speech and counts as they wrote it.
   const list = defusedCommandList(lostBackground.slice(0, 8));
   return `${text}\n\nO reinício também encerrou o que estava rodando em segundo plano — o resultado disso não vai ` +
     `chegar:\n${list}\nConfira o estado atual, rode de novo o que ainda for necessário e siga até o fim.`;
 }
 
-/** O pedido que acompanha respostas de pessoas diferentes ao mesmo cartão. */
+/** The request that accompanies answers from different people to the same card. */
 const MULTI_ANSWER_NOTE =
   "(respostas de pessoas diferentes no mesmo card: analise todas juntas; se forem contraditórias ou " +
   "confusas, pergunte de novo com AskUserQuestion antes de seguir)";
@@ -596,7 +596,7 @@ function cleanChoices(list: readonly unknown[] | undefined): string[] {
     .filter((s) => s !== "");
 }
 
-/** Cada pergunta respondida citada ao lado do escolhido — o corpo das respostas que viram mensagem. */
+/** Each answered question quoted next to the choice — the body of the answers that become a message. */
 function answerLines(questions: UserQuestionItem[] | null, answers: UserQuestionAnswer[]): string[] {
   const lines: string[] = [];
   answers.forEach((answer, i) => {
@@ -609,10 +609,10 @@ function answerLines(questions: UserQuestionItem[] | null, answers: UserQuestion
 }
 
 /**
- * DUAS PESSOAS, UMA PERGUNTA (produção, 2026-11-03): o que vai ao MODELO quando a resposta enviada
- * encontra rascunhos de OUTRAS pessoas no cartão (os que a tela mostra) — cada escolha com o nome de
- * quem a fez e o pedido de analisar tudo e perguntar de novo se não fechar. Rascunho igual ao que foi
- * enviado não conta como outra opinião. Null = nenhuma outra opinião: vai a resposta de sempre. PURE.
+ * TWO PEOPLE, ONE QUESTION (production, 2026-11-03): what goes to the MODEL when the answer sent
+ * meets drafts from OTHER people on the card (the ones the screen shows) — each choice with the name of
+ * whoever made it and the request to analyse everything and ask again if it does not add up. A draft equal to what was
+ * sent does not count as another opinion. Null = no other opinion: the usual answer goes. PURE.
  */
 export function mergePeerAnswers(
   answers: UserQuestionAnswer[],
@@ -645,10 +645,10 @@ export function mergePeerAnswers(
 }
 
 /**
- * A RESPOSTA QUE CHEGA DEPOIS: outra pessoa respondeu o cartão que a primeira resposta já fechou. Não
- * se perde — vai ao modelo como mensagem (`sent`), citando cada pergunta, para ele comparar com a
- * anterior e perguntar de novo se as duas não combinarem. `shown` é a linha da conversa: só o que a
- * pessoa escolheu, sem a instrução ao modelo. Null = nada escolhido, nada a mandar. PURE.
+ * THE ANSWER THAT ARRIVES LATER: another person answered the card the first answer already closed. It is not
+ * lost — it goes to the model as a message (`sent`), quoting each question, so it compares it with the
+ * previous one and asks again if the two do not match. `shown` is the conversation line: only what the
+ * person chose, without the instruction to the model. Null = nothing chosen, nothing to send. PURE.
  */
 export function buildLateAnswerText(
   questions: UserQuestionItem[] | null,
@@ -677,7 +677,7 @@ export function buildLateAnswerText(
  */
 export const NOTE_TURN_INTERRUPTED = "turn-interrupted";
 export const NOTE_TURN_INTERRUPTED_EDIT = "turn-interrupted-edit";
-/** A nota que fica no lugar da conversa apagada por um `/clear`. Código, traduzido pelo front. */
+/** The note left in place of the conversation erased by a `/clear`. A code, translated by the front. */
 export const NOTE_CONVERSATION_CLEARED = "conversation-cleared";
 
 /** Which note narrates a stop. PURE. */
@@ -773,24 +773,24 @@ export function parseTypingFrame(raw: string): boolean | null {
 }
 
 /**
- * O RASCUNHO de um cartão de pergunta — `{ "type": "question_draft", "id": string, "picked":
- * string[][], "other": string[] }`: o que a pessoa já marcou e escreveu no cartão, antes de mandar.
- * Efêmero como a digitação: o back repassa às OUTRAS abas do card (`peer_question_draft`) para que
- * duas pessoas no mesmo card não respondam a mesma pergunta cada uma de um jeito sem saber.
+ * The DRAFT of a question card — `{ "type": "question_draft", "id": string, "picked":
+ * string[][], "other": string[] }`: what the person has already ticked and written on the card, before sending.
+ * Ephemeral like typing: the back relays it to the card's OTHER tabs (`peer_question_draft`) so that
+ * two people on the same card do not each answer the same question their own way without knowing.
  *
- * Os tamanhos são cortados aqui (é texto de pessoa repassado a outras telas, não conversa). Um
- * frame do tipo certo mas malformado ainda é rascunho — sai com o id vazio e o manager o ignora,
- * nunca vira mensagem para a IA. `null` = não é rascunho. PURE.
+ * Sizes are cut here (it is a person's text relayed to other screens, not conversation). A
+ * frame of the right type but malformed is still a draft — it goes out with an empty id and the manager ignores it,
+ * it never becomes a message for the AI. `null` = not a draft. PURE.
  */
 export interface QuestionDraft {
   id: string;
   picked: string[][];
   other: string[];
-  /** Quando a pessoa fez a mudança (epoch ms, relógio do navegador): entre duas versões, a mais nova vence. */
+  /** When the person made the change (epoch ms, the browser's clock): between two versions, the newest wins. */
   at?: number;
 }
 
-/** O AskUserQuestion manda até 4 perguntas por cartão; folga para o que vier depois. */
+/** AskUserQuestion sends up to 4 questions per card; slack for whatever comes later. */
 const DRAFT_MAX_QUESTIONS = 8;
 const DRAFT_MAX_PICKS = 32;
 const DRAFT_MAX_LABEL = 500;
@@ -817,19 +817,19 @@ export function parseQuestionDraftFrame(raw: string): QuestionDraft | null {
   return { id, picked, other, ...(at !== undefined ? { at } : {}) };
 }
 
-/** Nada marcado, nada escrito: o rascunho some (a pessoa desfez tudo). PURE. */
+/** Nothing ticked, nothing written: the draft goes away (the person undid everything). PURE. */
 export function isEmptyQuestionDraft(draft: Pick<QuestionDraft, "picked" | "other">): boolean {
   return draft.picked.every((sel) => sel.length === 0) && draft.other.every((text) => text.trim() === "");
 }
 
 /**
- * O pedido do FEED de um subagente — `{ "type": "workflow_feed", "runId": string, "agentId": string }`.
- * Sob demanda: a aba pede quando a pessoa abre um agente no painel do workflow, e só ela recebe a
- * resposta (`WorkflowFeedEvent`). Como a digitação, vive fora de `parseSdkClientFrame`: não é turno,
- * não vai ao driver nem ao histórico.
+ * The request for a subagent's FEED — `{ "type": "workflow_feed", "runId": string, "agentId": string }`.
+ * On demand: the tab asks when the person opens an agent in the workflow panel, and only it receives the
+ * answer (`WorkflowFeedEvent`). Like typing, it lives outside `parseSdkClientFrame`: it is not a turn,
+ * it goes neither to the driver nor to the history.
  *
- * Um pedido malformado ainda é um pedido (o front errou): os ids vêm vazios e quem monta o comando os
- * recusa — a resposta é um erro, nunca uma mensagem para a IA. `null` = não é um pedido de feed. PURE.
+ * A malformed request is still a request (the front got it wrong): the ids come empty and whoever builds the command
+ * refuses them — the answer is an error, never a message for the AI. `null` = not a feed request. PURE.
  */
 export interface WorkflowFeedRequest { runId: string; agentId: string }
 
@@ -851,10 +851,10 @@ export function parseWorkflowFeedFrame(raw: string): WorkflowFeedRequest | null 
 const DETAIL_KINDS = ["tool", "agent", "changes", "file"] as const;
 
 /**
- * O pedido de DETALHE — o que a tela abre quando alguém clica (ver ./detail.ts):
+ * The DETAIL request — what the screen opens when someone clicks (see ./detail.ts):
  * `{ "type": "detail", "req": "tool"|"agent"|"changes"|"file", "id"?: string, "path"?: string, "nonce"?: string }`.
- * Sob demanda e só para a aba que pediu, como o feed do workflow: não é turno, não vai ao driver nem
- * ao histórico. `null` = não é um pedido de detalhe. PURE.
+ * On demand and only for the tab that asked, like the workflow feed: it is not a turn, it goes neither to the driver nor
+ * to the history. `null` = not a detail request. PURE.
  */
 export interface DetailRequest { req: (typeof DETAIL_KINDS)[number]; id: string; path: string; nonce: string }
 
@@ -876,9 +876,9 @@ export function parseDetailFrame(raw: string): DetailRequest | null {
 }
 
 /**
- * A resposta a um `workflow_feed`, só para o socket que pediu. `error` diz por que veio vazia:
- * `invalid-id` (ids fora do formato do harness), `no-session` (a sessão ainda não tem id — não há
- * onde ler) ou `probe-failed` (o runner não respondeu).
+ * The answer to a `workflow_feed`, only for the socket that asked. `error` says why it came empty:
+ * `invalid-id` (ids outside the harness's format), `no-session` (the session has no id yet — there is
+ * nowhere to read) or `probe-failed` (the runner did not answer).
  */
 export interface WorkflowFeedEvent {
   type: "workflow_feed";
@@ -1054,10 +1054,10 @@ export function createPermissionBroker(timeoutMs: number = PERMISSION_TIMEOUT_MS
 export const QUESTION_TIMEOUT_MS = 30 * 60_000;
 
 /**
- * O que o MODELO lê quando a pessoa respondeu por mensagem em vez de clicar numa opção.
+ * What the MODEL reads when the person answered by message instead of clicking an option.
  *
- * Precisa dizer três coisas, senão o agente reabre a mesma pergunta em seguida e o incômodo volta:
- * que não houve escolha, que existe uma mensagem nova, e que ela manda. PURE.
+ * It needs to say three things, otherwise the agent reopens the same question right after and the annoyance comes back:
+ * that there was no choice, that there is a new message, and that it rules. PURE.
  */
 export const QUESTION_SUPERSEDED_MESSAGE =
   "The user did not pick any of the options: they answered by sending a message in the chat instead. " +
@@ -1207,12 +1207,12 @@ export interface QuestionWaitResult {
   answers: UserQuestionAnswer[] | null;
   timedOut: boolean;
   /**
-   * A pessoa NÃO clicou em nada: ela escreveu no chat, e o que ela escreveu vale mais que o cartão.
+   * The person did NOT click anything: they wrote in the chat, and what they wrote is worth more than the card.
    *
-   * O bug que isto fecha (produção, 2026-09-17): o agente propunha um plano com opções, a pessoa
-   * não gostava do plano e mandava uma mensagem redirecionando — e não acontecia NADA. O turno
-   * estava parado dentro do `canUseTool` esperando um clique, a mensagem ficava na fila do CLI sem
-   * ninguém para lê-la, e a tela ficava presa até o timeout de 30 MINUTOS. Falar é responder.
+   * The bug this closes (production, 2026-09-17): the agent proposed a plan with options, the person
+   * did not like the plan and sent a message redirecting — and NOTHING happened. The turn
+   * was stopped inside `canUseTool` waiting for a click, the message sat in the CLI's queue with
+   * nobody to read it, and the screen stayed stuck until the 30-MINUTE timeout. Speaking is answering.
    */
   superseded?: boolean;
 }
@@ -1225,8 +1225,8 @@ export interface QuestionBroker {
   /** Resolve everything still pending as unanswered (an interrupt kills the turn they belong to). */
   abandonAll(): void;
   /**
-   * Libera o que espera clique porque a PESSOA FALOU: a mensagem dela substitui o cartão. Devolve
-   * quantos cartões foram liberados (0 = não havia nenhum, o caminho comum de toda mensagem).
+   * Releases what is waiting for a click because the PERSON SPOKE: their message replaces the card. Returns
+   * how many cards were released (0 = there were none, the common path of every message).
    */
   supersedeAll(): number;
   /** How many questions are still waiting (observability + tests). */

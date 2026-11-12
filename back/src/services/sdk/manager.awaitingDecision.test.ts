@@ -14,10 +14,10 @@ import {
 } from "./manager.js";
 
 /**
- * O CARD QUE ESPERA UMA DECISÃO. Com um cartão de pergunta (AskUserQuestion) ou um pedido de
- * permissão aberto no chat nativo, o turno segue aberto — e o ícone do card mostrava o spinner de
- * "trabalhando": a pessoa achava que o Claude estava ocupado e não ia decidir. O driver carimba
- * `awaitingDecisionAt` no card enquanto houver pergunta dele pendente, e o front troca o ícone.
+ * THE CARD WAITING FOR A DECISION. With a question card (AskUserQuestion) or a permission request
+ * open in the native chat, the turn stays open — and the card's icon showed the "trabalhando"
+ * spinner: the person thought Claude was busy and would not decide. The driver stamps
+ * `awaitingDecisionAt` on the card while it has a pending question, and the front swaps the icon.
  */
 const { stamps } = vi.hoisted(() => ({ stamps: [] as Array<number | null> }));
 vi.mock("../board/registry.js", async (importOriginal) => {
@@ -67,7 +67,7 @@ let dir = "";
 let savedDataDir = "";
 let spawned: FakeChild[] = [];
 const emit = (event: object) => spawned[0]!.stdout.emit("data", line(event));
-/** Os carimbos que o driver gravou, como "set"/"clear" (o spawn limpa o resto de um driver anterior). */
+/** The stamps the driver wrote, as "set"/"clear" (the spawn clears what a previous driver left). */
 const writes = () => stamps.map((at) => (at === null ? "clear" : "set"));
 
 beforeEach(async () => {
@@ -95,7 +95,7 @@ function startTurn() {
   const session = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
   emit({ type: "ready" });
   dispatchClientFrame(session, `{"type":"user","text":"decide comigo"}`);
-  stamps.length = 0; // só interessa o que vem depois do turno aberto
+  stamps.length = 0; // only what comes after the open turn matters
   return session;
 }
 

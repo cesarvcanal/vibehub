@@ -13,9 +13,9 @@ import {
 } from "./manager.js";
 
 /**
- * A CONVERSA PAROU NUMA PERGUNTA: no fim de cada turno o manager pede a releitura do log do card,
- * que carimba (ou limpa) `pendingQuestionAt` — o ícone "precisa de você" do board. Só quando a
- * conversa PAROU de fato: um turno que fecha com outro ainda na fila não é o fim.
+ * THE CONVERSATION STOPPED ON A QUESTION: at the end of each turn the manager asks for a re-read of
+ * the card's log, which stamps (or clears) `pendingQuestionAt` — the board's "precisa de você" icon.
+ * Only when the conversation actually STOPPED: a turn that closes with another still queued is not the end.
  */
 const { synced } = vi.hoisted(() => ({ synced: [] as string[] }));
 vi.mock("./pendingQuestion.js", () => ({
@@ -94,7 +94,7 @@ describe("sdk manager — o fim do turno relê a pergunta pendente", () => {
     dispatchClientFrame(session, `{"type":"user","text":"revisa"}`);
     spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "Posso fazer o merge?" }));
     await flush();
-    expect(synced).toEqual([]); // turno aberto: ainda não é o fim da fala
+    expect(synced).toEqual([]); // open turn: not the end of the speech yet
     spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
     await flush();
     expect(synced).toEqual([CARD]);

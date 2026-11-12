@@ -190,8 +190,8 @@ export function mergeTranscriptReplay(jsonl: string, history: HistoryEvent[]): H
     for (const key of dedupeNoteKeys(event as HistoryEvent & { text?: string; id?: string })) {
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
-    // A resposta a uma pergunta ÓRFÃ foi ao modelo como mensagem, mas mora no `question_result`
-    // (`sent`), não numa linha `user`: é a mesma fala, e o transcript a traz de volta como tal.
+    // The answer to an ORPHAN question went to the model as a message, but lives in the `question_result`
+    // (`sent`), not in a `user` line: it is the same speech, and the transcript brings it back as such.
     const sent = event.type === "question_result" ? (event as { sent?: unknown }).sent : undefined;
     if (typeof sent === "string" && sent !== "") {
       for (const key of dedupeNoteKeys({ type: "user", text: sent })) counts.set(key, (counts.get(key) ?? 0) + 1);

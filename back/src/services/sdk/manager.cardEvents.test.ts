@@ -15,9 +15,9 @@ import {
 import { appendHistory } from "./history.js";
 
 /**
- * O CHAT NATIVO ALIMENTA A CENTRAL DE EVENTOS (services/events/cardEvents.ts): a pergunta e o pedido
- * de permissão do driver viram evento, e o desfecho deles (inclusive a pergunta que uma mensagem
- * superou) o encerra. A central é observada, não gravada.
+ * THE NATIVE CHAT FEEDS THE EVENTS HUB (services/events/cardEvents.ts): the driver's question and
+ * permission request become events, and their outcome (including the question a message
+ * superseded) closes them. The hub is observed, not written.
  */
 const { observed } = vi.hoisted(() => ({ observed: [] as Array<{ cardId: string; event: Record<string, unknown> }> }));
 vi.mock("../events/cardEvents.js", () => ({
@@ -40,7 +40,7 @@ vi.mock("../board/registry.js", async (importOriginal) => {
   };
 });
 
-/** O caminho dos hooks (services/board/status.ts), observado: o que o driver reporta chega aqui. */
+/** The hooks path (services/board/status.ts), observed: what the driver reports arrives here. */
 onCardStatusSink((cardId, status) => {
   applied.push({ cardId, status });
   const card = cards.get(cardId);

@@ -5,23 +5,24 @@ import { join } from "node:path";
 import { config } from "../../config/env.js";
 
 /**
- * A COMPACTAÇÃO NÃO PODE APAGAR O QUE CHEGOU DURANTE ELA.
+ * COMPACTION MUST NOT ERASE WHAT ARRIVED DURING IT.
  *
- * `readHistory` lê o log e, se ele passou do teto, reescreve-o só com a cauda. A leitura acontecia
- * FORA da fila de appends e a reescrita DENTRO: tudo o que entrasse na fila entre as duas (a resposta
- * do driver chegando enquanto alguém abre o card) era sobrescrito por uma cauda calculada antes — a
- * mensagem sumia do log, e um `rewindHistory` já aplicado era desfeito.
+ * `readHistory` reads the log and, if it went past the cap, rewrites it with only the tail. The read
+ * happened OUTSIDE the append queue and the rewrite INSIDE it: everything that entered the queue
+ * between the two (the driver's response arriving while someone opens the card) was overwritten by
+ * a tail computed earlier — the message vanished from the log, and an already applied
+ * `rewindHistory` was undone.
  *
- * A janela é de microssegundos com disco real, então o teste a abre de propósito: um gancho no
- * `readFile` dispara o append exatamente depois que a leitura da compactação terminou.
+ * The window is microseconds with a real disk, so the test opens it on purpose: a hook in
+ * `readFile` fires the append right after the compaction's read has finished.
  */
 
 const h = vi.hoisted(() => ({ afterRead: null as null | (() => void), tornWrites: false, failReads: false }));
 
 /**
- * Uma escrita que morre NO MEIO (OOM, SIGKILL do deploy): metade dos bytes chega ao arquivo que
- * estava sendo escrito e a chamada não volta. Vale para as duas formas de escrever um arquivo
- * inteiro — a função do módulo e o `writeFile` de um FileHandle aberto.
+ * A write that dies MIDWAY (OOM, the deploy's SIGKILL): half the bytes reach the file that was
+ * being written and the call never returns. It holds for both ways of writing a whole file — the
+ * module function and the `writeFile` of an open FileHandle.
  */
 async function tornWrite(write: (data: string) => Promise<void>, data: unknown): Promise<never> {
   const text = String(data);
@@ -132,10 +133,10 @@ describe("reescrita do log interrompida no meio", () => {
 });
 
 /**
- * UMA REESCRITA QUE FALHOU NÃO PODE SE DIZER FEITA. O `rewindHistory` contava o corte antes de
- * gravar e o `unwrapEditedMessage` marcava a troca antes de gravar; a fila engolia o erro (com a
- * mensagem da compactação). O manager logava "dropped N", a tela já tinha cortado as linhas, e o
- * próximo F5 devolvia a conversa que o rewind tirou.
+ * A REWRITE THAT FAILED MUST NOT CLAIM TO BE DONE. `rewindHistory` counted the cut before
+ * writing and `unwrapEditedMessage` marked the swap before writing; the queue swallowed the error (with
+ * the compaction's message). The manager logged "dropped N", the screen had already cut the lines, and the
+ * next F5 brought back the conversation the rewind had taken out.
  */
 describe("reescrita do log que falha chega ao chamador", () => {
   const conversaEditada = async () => {
@@ -154,7 +155,7 @@ describe("reescrita do log que falha chega ao chamador", () => {
 
     await appendHistory(CARD, { type: "assistant_text", text: "depois da falha" });
     expect((await readHistory(CARD, 100)).at(-1)).toEqual({ type: "assistant_text", text: "depois da falha" });
-    // E a próxima reescrita da fila funciona: o corte que falhou pode ser refeito.
+    // And the queue's next rewrite works: the cut that failed can be redone.
     await expect(rewindHistory(CARD, "errada", "certa")).resolves.toBe(3);
   });
 

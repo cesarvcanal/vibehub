@@ -70,8 +70,8 @@ export type HistoryEvent = (
       type: "system_note";
       text: string;
       /**
-       * Na nota de um reinício que deixou um cartão de pergunta aberto: o que rodava em segundo plano
-       * e morreu junto. Vai ao modelo com a resposta do cartão (`buildOrphanAnswerText`).
+       * In the note of a restart that left a question card open: what was running in the background
+       * and died with it. It goes to the model with the card's answer (`buildOrphanAnswerText`).
        */
       lostBackground?: string[];
     }
@@ -119,22 +119,22 @@ export function replayableHistoryEvent(event: HistoryEvent): boolean {
     // A spoken turn of a voice call held in this chat: the call ends, the conversation stays.
     case "voice_turn":
       return true;
-    // O /btw: a resposta carrega a pergunta — é a ÚNICA linha dele no log (a pergunta não entra
-    // como `user`, nem aqui nem no contexto do modelo). Só a que RESPONDEU: uma falha passageira
-    // (fila cheia, prazo) redesenhada em todo F5 seria um aviso eterno de algo que já passou.
+    // The /btw: the answer carries the question — it is its ONLY line in the log (the question does not go in
+    // as `user`, neither here nor in the model's context). Only the one that ANSWERED: a transient failure
+    // (queue full, deadline) redrawn on every F5 would be an eternal warning about something already past.
     case "btw_answer":
       return typeof (event as { text?: unknown }).text === "string";
-    // A compactação: o DESFECHO é o divisor da conversa ("antes disto, só o resumo") e vale em todo
-    // F5. O início não — uma barra replayada de semana passada rodaria para sempre; a compactação
-    // em andamento chega a quem conecta pelo estado da sessão (ver `connect` em ./manager.ts).
+    // The compaction: the OUTCOME is the conversation's divider ("antes disto, só o resumo") and holds on every
+    // F5. The start does not — a replayed bar from last week would spin forever; the compaction
+    // in progress reaches whoever connects through the session state (see `connect` in ./manager.ts).
     case "compaction":
       return (event as { phase?: unknown }).phase === "done" || (event as { phase?: unknown }).phase === "failed";
-    // O resumo do resultado (a linha "7 linhas" / "erro: …"): só do agente PRINCIPAL. O dos
-    // subagentes é muito (centenas por frota) e empurraria a conversa para fora da janela do
-    // replay — a linha do tempo de um subagente vem do transcript (./detail.ts).
+    // The result summary (the "7 linhas" / "erro: …" line): only for the MAIN agent. The subagents'
+    // are too many (hundreds per fleet) and would push the conversation out of the replay
+    // window — a subagent's timeline comes from the transcript (./detail.ts).
     case "tool_result":
       return !(event as { parentToolUseId?: unknown }).parentToolUseId && "toolResult" in event;
-    // O FIM de um subagente (concluído, falhou, parado), para o card dele assentar depois do F5.
+    // A subagent's END (completed, failed, stopped), so its card settles after the F5.
     case "agent_task":
       return (event as { status?: unknown }).status !== "running";
     case "permission":
@@ -555,18 +555,18 @@ function appendHistoryBarrier<T>(cardId: string, work: () => Promise<T>): Promis
 }
 
 /**
- * O CORTE DO /clear: apaga do log tudo o que veio ANTES da última mensagem "/clear" e mantém ela e
- * o que veio depois.
+ * THE /clear CUT: deletes from the log everything that came BEFORE the last "/clear" message and keeps it and
+ * what came after.
  *
- * Por que não apagar o arquivo inteiro: o /clear pode ter entrado na FILA do CLI no meio de um turno
- * longo, e a pessoa ter mandado mais coisa depois dele — mensagens que já estão no log e que o CLI
- * vai rodar na sessão nova. Apagá-las fazia a resposta aparecer sem a pergunta, e no F5 a pergunta
- * voltava atribuída ao terminal. Manter a própria linha "/clear" também é o que deixa o replay casá-la
- * com o `<command-name>/clear` que o CLI grava no transcript novo (uma bolha só, não duas).
+ * Why not delete the whole file: the /clear may have entered the CLI's QUEUE in the middle of a long
+ * turn, and the person may have sent more after it — messages that are already in the log and that the CLI
+ * will run in the new session. Deleting them made the answer show up without the question, and on F5 the question
+ * came back attributed to the terminal. Keeping the "/clear" line itself is also what lets the replay match it
+ * with the `<command-name>/clear` the CLI writes in the new transcript (a single bubble, not two).
  *
- * Sem linha "/clear" no log (o comando veio da aba Terminal, por exemplo), não há fronteira: a
- * conversa inteira é da sessão apagada e sai toda. Na mesma fila dos appends — o "/clear" ainda
- * enfileirado é escrito antes do corte. Rejeita quando o log não pôde ser lido ou reescrito.
+ * With no "/clear" line in the log (the command came from the Terminal tab, for example), there is no boundary: the
+ * whole conversation belongs to the erased session and all of it goes. On the same queue as the appends — a "/clear" still
+ * queued is written before the cut. Rejects when the log could not be read or rewritten.
  */
 export function clearHistoryBeforeLastClear(cardId: string): Promise<void> {
   return appendHistoryBarrier(cardId, async () => {
@@ -585,7 +585,7 @@ export function clearHistoryBeforeLastClear(cardId: string): Promise<void> {
   });
 }
 
-/** A mensagem É o comando /clear (não uma frase que o menciona). PURE. */
+/** The message IS the /clear command (not a sentence that mentions it). PURE. */
 function isClearCommand(text: string): boolean {
   return text.trim() === "/clear";
 }

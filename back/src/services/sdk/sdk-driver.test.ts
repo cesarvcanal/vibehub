@@ -7,12 +7,12 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
 /**
- * O DRIVER DE VERDADE, RODANDO. `driver.test.ts` recorta funções puras do .mjs; o que mora no laço
- * do stream e no teardown (`runStream`, `endStream`, `rewindAndSend`) só existe com estado vivo e
- * tempo passando. Aqui o .mjs roda como no runner — um processo node falando NDJSON por stdin/stdout
- * — contra um SDK FALSO plantado no `node_modules` ao lado dele (o mesmo lugar onde o runner tem o
- * de verdade). O SDK falso faz o que o CLI faz de pior: um stream que não solta, uma interrupção que
- * espera um hook, uma interrupção que nunca responde.
+ * THE REAL DRIVER, RUNNING. `driver.test.ts` cuts pure functions out of the .mjs; what lives in the stream
+ * loop and in the teardown (`runStream`, `endStream`, `rewindAndSend`) only exists with live state and
+ * time passing. Here the .mjs runs as in the runner — a node process speaking NDJSON over stdin/stdout
+ * — against a FAKE SDK planted in the `node_modules` next to it (the same place where the runner has the
+ * real one). The fake SDK does the worst the CLI does: a stream that does not let go, an interruption that
+ * waits on a hook, an interruption that never answers.
  */
 
 /**
@@ -445,10 +445,10 @@ async function driverAfterOneTurn(): Promise<RunningDriver> {
 }
 
 /**
- * A MENSAGEM QUE NUNCA CHEGOU (produção, 2026-10-19): o turno morreu antes de o CLI gravá-la, a
- * pessoa edita, e o modelo recebia "[correção do usuário — desconsidere a mensagem anterior…]" sobre
- * uma mensagem que nunca leu. Com o transcript dizendo que ela não está no ramo vivo, a edição É a
- * mensagem: texto limpo, turno normal, sem rebobinar.
+ * THE MESSAGE THAT NEVER ARRIVED (production, 2026-10-19): the turn died before the CLI wrote it, the
+ * person edits, and the model received "[correção do usuário — desconsidere a mensagem anterior…]" about
+ * a message it never read. With the transcript saying it is not on the live branch, the edit IS the
+ * message: clean text, normal turn, no rewind.
  */
 describe("sdk-driver.mjs — editar uma mensagem que o modelo nunca leu", () => {
   it("vai o texto LIMPO, como mensagem normal, e o driver diz `not-delivered`", async () => {
@@ -476,16 +476,16 @@ describe("sdk-driver.mjs — editar uma mensagem que o modelo nunca leu", () => 
 });
 
 /**
- * O BUG DO REENVIO (produção, 2026-10-19): a primeira mensagem morreu num erro de autenticação e foi
- * reenviada com as MESMAS palavras. Editar a primeira bolha procurava pelas palavras, achava a cópia
- * mais nova e rebobinava para depois da primeira resposta — "ficou como se eu tivesse editado a
- * segunda". Com `first`, não há o que procurar: nada antes dela fica, a conversa recomeça.
+ * THE RESEND BUG (production, 2026-10-19): the first message died on an authentication error and was
+ * resent with the SAME words. Editing the first bubble searched by the words, found the
+ * newest copy and rewound to after the first answer — "ficou como se eu tivesse editado a
+ * segunda". With `first`, there is nothing to search for: nothing before it stays, the conversation starts over.
  */
 /**
- * O LOGIN QUE SÓ VALIA DEPOIS DE "REINICIAR" (produção, 2026-10-19): o CLI nasce com o ambiente do
- * spawn e fica vivo entre as mensagens; a pessoa fazia `/login` e o chat seguia no token revogado
- * até alguém clicar em Reiniciar. O driver relê o perfil antes de cada envio e reabre o CLI quando
- * o login mudou — em segundo plano, na mesma sessão.
+ * THE LOGIN THAT ONLY TOOK EFFECT AFTER "REINICIAR" (production, 2026-10-19): the CLI is born with the
+ * spawn's environment and stays alive between messages; the person ran `/login` and the chat kept on the revoked token
+ * until someone clicked Reiniciar. The driver re-reads the profile before each send and reopens the CLI when
+ * the login changed — in the background, in the same session.
  */
 describe("sdk-driver.mjs — um login novo vale na próxima mensagem, sem Reiniciar", () => {
   const LOGIN = JSON.stringify({ claudeAiOauth: { accessToken: "a", refreshToken: "r-1", expiresAt: 1 } });
@@ -509,13 +509,13 @@ describe("sdk-driver.mjs — um login novo vale na próxima mensagem, sem Reinic
     expect(authMarks(driver).at(-1)).toBe("auth:sk-revogado");
     const before = authMarks(driver).length;
 
-    await writeFile(join(config, ".credentials.json"), LOGIN); // o /login, agora
+    await writeFile(join(config, ".credentials.json"), LOGIN); // the /login, now
     const from = driver.events.length;
     driver.send({ type: "user", text: "de novo" });
     await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:de novo", from);
     expect(authMarks(driver).length).toBe(before + 1);
     expect(authMarks(driver).at(-1)).toBe("auth:login");
-    // Na mesma conversa: o CLI novo retoma a sessão, não abre outra.
+    // In the same conversation: the new CLI resumes the session, it does not open another.
     expect(driver.events.slice(from).some((e) => e.type === "error")).toBe(false);
   }, 60_000);
 
@@ -635,10 +635,10 @@ describe("sdk-driver.mjs — editar com um turno parado não espera minutos", ()
 });
 
 /**
- * O "ENVIAR AGORA" DA FILA (2026-10-20): a mensagem entrava no CLI, mas o CLI só a lê quando a
- * ferramenta em curso devolve — com um vibehub_deliver preso 24 min, a pessoa falava sozinha esse
- * tempo todo. Com ferramenta do principal rodando, `now` interrompe e entrega a mensagem como turno
- * NOVO; sem ferramenta rodando, o modelo a lê no passo seguinte e ela continua dobrando no turno.
+ * THE QUEUE'S "ENVIAR AGORA" (2026-10-20): the message went into the CLI, but the CLI only reads it when the
+ * tool in progress returns — with a vibehub_deliver stuck for 24 min, the person talked to themselves all that
+ * time. With a main-agent tool running, `now` interrupts and delivers the message as a NEW
+ * turn; with no tool running, the model reads it on the next step and it keeps folding into the turn.
  */
 describe("sdk-driver.mjs — enviar agora", () => {
   it("com uma ferramenta presa, interrompe e o modelo responde à mensagem num turno próprio", async () => {
@@ -651,11 +651,11 @@ describe("sdk-driver.mjs — enviar agora", () => {
     const reply = await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:urgent", from);
     await driver.waitFor((e) => e.type === "result", driver.events.indexOf(reply));
     const after = driver.events.slice(from);
-    // Um turno próprio: dois results (o interrompido e o da mensagem), nenhum `turn_absorbed` —
-    // o manager conta o +1 do envio e fecha nos dois results, sem spinner eterno nem fechado cedo.
+    // A turn of its own: two results (the interrupted one and the message's), no `turn_absorbed` —
+    // the manager counts the send's +1 and closes on the two results, no eternal spinner nor early close.
     expect(after.filter((e) => e.type === "turn_absorbed")).toHaveLength(0);
     expect(after.filter((e) => e.type === "result")).toHaveLength(2);
-    expect(after.find((e) => e.type === "result")?.isError).toBe(false); // interrompido não é falha
+    expect(after.find((e) => e.type === "result")?.isError).toBe(false); // interrupted is not a failure
     expect(driver.marks).toContain("interrupt");
   }, 60_000);
 
@@ -733,9 +733,9 @@ describe("sdk-driver.mjs — tarefas em segundo plano", () => {
 });
 
 describe("sdk-driver.mjs — o turno que o CLI abre sozinho", () => {
-  // Produção, 2026-10-20: depois de uma retomada pós-deploy o CLI seguia num turno que ninguém
-  // mandou (a tarefa em segundo plano terminou). O driver não sabia desse turno: se o stream caísse
-  // no meio dele, nenhum `result` fechava — e o manager via o card "trabalhando" para sempre.
+  // Production, 2026-10-20: after a post-deploy resume the CLI went on in a turn nobody
+  // sent (the background task finished). The driver did not know about that turn: if the stream dropped
+  // in the middle of it, no `result` closed it — and the manager saw the card "trabalhando" forever.
   it("o stream que cai no meio do turno autônomo fecha esse turno com o result `aborted` que ele deve", async () => {
     const driver = startDriver();
     await driver.waitFor((e) => e.type === "ready");
@@ -748,9 +748,9 @@ describe("sdk-driver.mjs — o turno que o CLI abre sozinho", () => {
 });
 
 /**
- * O SUBAGENTE NÃO É O AGENTE PRINCIPAL. O driver ignorava `parent_tool_use_id`: o que um Agent/Task
- * fazia chegava na tela como se fosse o principal, e os deltas dele se misturavam à linha de
- * streaming do principal — a IA "parecia perdida".
+ * THE SUBAGENT IS NOT THE MAIN AGENT. The driver ignored `parent_tool_use_id`: what an Agent/Task
+ * did reached the screen as if it were the main agent, and its deltas got mixed into the main agent's
+ * streaming line — the AI "seemed lost".
  */
 describe("sdk-driver.mjs — subagentes", () => {
   it("marca tool_use e assistant_text de subagente com parentToolUseId e não repassa os deltas dele", async () => {
@@ -768,10 +768,10 @@ describe("sdk-driver.mjs — subagentes", () => {
     expect(after.filter((e) => e.type === "assistant_text")).toEqual([
       { type: "assistant_text", text: "achei o arquivo", parentToolUseId: "task1" },
     ]);
-    // Os deltas do subagente não saem; os do principal, sim.
+    // The subagent's deltas do not go out; the main agent's do.
     expect(after.filter((e) => e.type === "assistant_delta").map((e) => e.text)).toEqual(["MAINDELTA"]);
     expect(after.filter((e) => e.type === "thinking_delta" || e.type === "thinking")).toEqual([]);
-    // Mensagens de SESSÃO (system) continuam passando, mesmo vindas de dentro do subagente.
+    // SESSION (system) messages keep passing, even coming from inside the subagent.
     expect(after.some((e) => e.type === "background_tasks")).toBe(true);
   });
 
@@ -792,10 +792,10 @@ describe("sdk-driver.mjs — subagentes", () => {
 });
 
 /**
- * O CHAT MUDO NO WRITE GRANDE. O `tool_use` só saía quando o modelo terminava de gerar o input
- * inteiro: num arquivo de 400 linhas, dezenas de segundos de "Trabalhando…" sem um frame. Agora o
- * começo da ferramenta e o tamanho do input já gerado saem ENQUANTO o modelo escreve — e só do
- * agente principal, como os deltas de texto.
+ * THE CHAT SILENT ON THE LARGE WRITE. The `tool_use` only went out when the model finished generating the whole
+ * input: on a 400-line file, tens of seconds of "Trabalhando…" without a frame. Now the
+ * tool's start and the size of the input generated so far go out WHILE the model writes — and only for the
+ * main agent, like the text deltas.
  */
 describe("sdk-driver.mjs — ferramenta sendo gerada", () => {
   it("anuncia o tool_use e o progresso do input ANTES de o input inteiro chegar, só do principal", async () => {
@@ -803,7 +803,7 @@ describe("sdk-driver.mjs — ferramenta sendo gerada", () => {
     const from = driver.events.length;
     driver.send({ type: "user", text: "toolgen" });
     await driver.waitMark("toolgen:generating");
-    // O gate segura o resto do input: o que chegou até aqui saiu durante a geração.
+    // The gate holds the rest of the input: what arrived so far went out during generation.
     const started = await driver.waitFor((e) => e.type === "tool_use_start", from);
     expect(started).toEqual({ type: "tool_use_start", id: "toolu_1", name: "Write" });
     const progress = await driver.waitFor((e) => e.type === "tool_input_progress" && e.filePath !== undefined, from);
@@ -814,11 +814,11 @@ describe("sdk-driver.mjs — ferramenta sendo gerada", () => {
     await writeFile(join(sandbox, "release-tool"), "");
     await driver.waitFor((e) => e.type === "result", from);
     const after = driver.events.slice(from);
-    // Nada do subagente: nem o começo, nem o progresso do input, nem o relógio da ferramenta.
+    // Nothing from the subagent: neither the start, nor the input progress, nor the tool's clock.
     expect(after.filter((e) => e.type === "tool_use_start").map((e) => e.id)).toEqual(["toolu_1"]);
     expect(after.filter((e) => e.type === "tool_input_progress").every((e) => e.id === "toolu_1")).toBe(true);
     expect(after.filter((e) => e.type === "tool_progress")).toEqual([{ type: "tool_progress", id: "toolu_1", elapsedSeconds: 3 }]);
-    // O começo vem antes do tool_use completo, e nenhum progresso de input vem depois dele.
+    // The start comes before the complete tool_use, and no input progress comes after it.
     const full = after.findIndex((e) => e.type === "tool_use");
     expect(after.findIndex((e) => e.type === "tool_use_start")).toBeLessThan(full);
     expect(after.slice(full).some((e) => e.type === "tool_input_progress")).toBe(false);
@@ -835,13 +835,13 @@ describe("sdk-driver.mjs — /clear", () => {
     const reset = after.findIndex((e) => e.type === "conversation_reset");
     expect(reset).toBeGreaterThanOrEqual(0);
     expect(after[reset]!.trigger).toBe("clear");
-    // O PRIMEIRO `session` depois do reset já é o da sessão nova — nem o `new_conversation_id` nem o
-    // `session_id` antigo que o próprio frame do reset carrega viram a sessão do card.
+    // The FIRST `session` after the reset is already the new session's — neither the `new_conversation_id` nor the
+    // old `session_id` the reset frame itself carries become the card's session.
     expect(after.slice(reset).find((e) => e.type === "session")?.sessionId).toBe("99999999-2222-3333-4444-555555555555");
   });
 
   it("depois do /clear, editar uma mensagem de ANTES não rebobina para a conversa apagada", async () => {
-    const driver = await driverAfterOneTurn(); // "hello" -> fork point da sessão antiga
+    const driver = await driverAfterOneTurn(); // "hello" -> fork point of the old session
     driver.send({ type: "user", text: "/clear" });
     await driver.waitFor((e) => e.type === "conversation_reset");
     await driver.waitFor((e) => e.type === "result" && e.sessionId === "99999999-2222-3333-4444-555555555555");
@@ -898,7 +898,7 @@ describe("sdk-driver.mjs — compactação", () => {
     const after = driver.events.slice(from);
     const failed = after.findIndex((e) => e.type === "compaction" && e.phase === "failed");
     expect(failed).toBeGreaterThanOrEqual(0);
-    // Antes do result: quem lê o result já encontra a linha fechada.
+    // Before the result: whoever reads the result already finds the line closed.
     expect(failed).toBeLessThan(after.findIndex((e) => e.type === "result"));
     expect(after[failed]!.error).toBe("interrompida");
   });
@@ -906,8 +906,8 @@ describe("sdk-driver.mjs — compactação", () => {
 
 describe("sdk-driver.mjs — a inteligência do card sobrevive ao ultrathink", () => {
   it("o --effort do card vai para o SDK, e o fim de um turno ultrathink DEVOLVE esse nível, não o padrão", async () => {
-    // Medido no CLI de verdade (SDK 0.3.300, 2026-10-14): --effort low, flag max por cima e depois
-    // flag null deixava a sessão em `medium` — o card perdia a escolha no primeiro ultrathink.
+    // Measured on the real CLI (SDK 0.3.300, 2026-10-14): --effort low, flag max on top and then
+    // flag null left the session at `medium` — the card lost its choice on the first ultrathink.
     const driver = startDriver(["--effort", "low"]);
     await driver.waitFor((e) => e.type === "ready");
     driver.send({ type: "user", text: "pensa nisso ultrathink" });
@@ -927,8 +927,8 @@ describe("sdk-driver.mjs — a inteligência do card sobrevive ao ultrathink", (
   }, 60_000);
 
   it("sem inteligência no card e com nível nos settings da CONTA, a devolução volta a ele, não ao padrão do modelo", async () => {
-    // O null sozinho leva ao padrão do MODELO e ignora os settings (medido no SDK 0.3.300, 29/10):
-    // um card sem pin numa conta em `high` saía de um turno ultrathink em `medium`.
+    // The null alone goes to the MODEL's default and ignores the settings (measured on SDK 0.3.300, 29/10):
+    // an unpinned card on an account at `high` came out of an ultrathink turn at `medium`.
     await writeFile(join(sandbox, "account-effort"), "high");
     const driver = startDriver();
     await driver.waitFor((e) => e.type === "ready");
@@ -944,10 +944,10 @@ describe("sdk-driver.mjs — a inteligência do card sobrevive ao ultrathink", (
 });
 
 /**
- * A INTELIGÊNCIA TROCADA NO PILL COM O TURNO RODANDO (produção, 2026-10-27): ela esperava um
- * reinício que só vinha no fim do turno, e o turno seguia no nível velho. O `set_effort` entra na
- * sessão viva na hora — medido no CLI de verdade (SDK 0.3.300, 2026-10-27): `applyFlagSettings` no
- * meio do turno e as chamadas seguintes do MESMO turno saíram carimbadas no nível novo.
+ * THE INTELLIGENCE SWITCHED IN THE PILL WITH THE TURN RUNNING (production, 2026-10-27): it waited for a
+ * restart that only came at the end of the turn, and the turn went on at the old level. `set_effort` goes into the
+ * live session right away — measured on the real CLI (SDK 0.3.300, 2026-10-27): `applyFlagSettings` in the
+ * middle of the turn and the following calls of the SAME turn came out stamped with the new level.
  */
 describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () => {
   it("vai para a sessão viva NA HORA, sem esperar o turno acabar", async () => {
@@ -958,9 +958,9 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     driver.send({ type: "set_effort", id: "e1", effort: "high" });
     await driver.waitMark('flags:{"effortLevel":"high"}');
     await driver.waitFor((e) => e.type === "effort_ack" && e.id === "e1");
-    // Aplicado com o turno ainda aberto: nenhum result até aqui, nenhum stream novo.
+    // Applied with the turn still open: no result so far, no new stream.
     expect(driver.events.some((e) => e.type === "result")).toBe(false);
-    // Sem palavra no turno, não há nível de palavra a substituir: a tela não é avisada de nada.
+    // With no word in the turn, there is no word level to replace: the screen is told nothing.
     expect(driver.events.some((e) => e.type === "keyword_effort_replaced")).toBe(false);
     await releaseSlowTurn();
     await driver.waitFor((e) => e.type === "result");
@@ -973,13 +973,13 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     driver.send({ type: "user", text: "oi" });
     await driver.waitMark("effort:xhigh");
     await driver.waitFor((e) => e.type === "result");
-    // (O `effort:none` do boot é a consulta descartável do catálogo, que a primeira mensagem encerra.)
+    // (The boot's `effort:none` is the catalog's throwaway query, which the first message closes.)
     expect(driver.marks.filter((m) => m.startsWith("effort:")).at(-1)).toBe("effort:xhigh");
   }, 60_000);
 
   it("um subagente em PRIMEIRO PLANO rodando: o nível entra na hora e a chamada dele volta no mesmo turno", async () => {
-    // O relato do card e9146043 (29/10): Extra alto escolhido com a ferramenta Agent aberta. O que
-    // não pode acontecer é a sessão cair e a chamada voltar como "session ended before this call's
+    // Card e9146043's report (29/10): Extra high chosen with the Agent tool open. What
+    // must not happen is the session dropping and the call coming back as "session ended before this call's
     // result was recorded".
     const driver = startDriver(["--effort", "medium"]);
     await driver.waitFor((e) => e.type === "ready");
@@ -993,14 +993,14 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     expect(back.isError ?? false).toBe(false);
     await driver.waitFor((e) => e.type === "assistant_text" && e.text === "etapa 1 aprovada");
     await driver.waitFor((e) => e.type === "result");
-    // Um stream só (o da conversa) além do descartável do catálogo: nada reiniciou.
+    // A single stream (the conversation's) besides the catalog's throwaway one: nothing restarted.
     expect(driver.marks.filter((m) => m.startsWith("effort:"))).toEqual(["effort:none", "effort:medium"]);
   }, 60_000);
 
   it("voltar ao padrão da CONTA no meio do turno: limpa o flag e reaplica o nível dos settings, sem reiniciar", async () => {
-    // O `null` do applyFlagSettings leva ao padrão do MODELO e ignora o effortLevel dos settings
-    // (medido no CLI de verdade, SDK 0.3.300, 29/10: settings high → flag xhigh → null = medium).
-    // O padrão da conta é o dos settings: ele volta por cima.
+    // applyFlagSettings's `null` goes to the MODEL's default and ignores the settings' effortLevel
+    // (measured on the real CLI, SDK 0.3.300, 29/10: settings high → flag xhigh → null = medium).
+    // The account's default is the settings' one: it comes back on top.
     await writeFile(join(sandbox, "account-effort"), "high");
     const driver = startDriver(["--effort", "xhigh"]);
     await driver.waitFor((e) => e.type === "ready");
@@ -1036,8 +1036,8 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
   }, 60_000);
 
   it("um turno ultrathink em voo: o nível escolhido no pill entra NA HORA e o fim do turno não o desfaz", async () => {
-    // A escolha no pill é mais nova que a palavra. Segurar o max até o fim do turno deixava o pill
-    // dizendo Alto com a sessão em max pelo resto do turno (análise de 10/11/2026).
+    // The choice in the pill is newer than the word. Holding max until the end of the turn left the pill
+    // saying Alto with the session at max for the rest of the turn (analysis of 10/11/2026).
     const driver = startDriver(["--effort", "low"]);
     await driver.waitFor((e) => e.type === "ready");
     driver.send({ type: "user", text: "pensa nisso ultrathink slow" });
@@ -1045,12 +1045,12 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     await driver.waitMark("slow:running");
     driver.send({ type: "set_effort", id: "e7", effort: "high" });
     await driver.waitMark('flags:{"effortLevel":"high"}');
-    // A tela fica sabendo, na ordem do DRIVER, que a troca tirou o turno do max (review do #259, f5).
+    // The screen learns, in the DRIVER's order, that the switch took the turn off max (review of #259, f5).
     await driver.waitFor((e) => e.type === "keyword_effort_replaced");
     expect(driver.events.some((e) => e.type === "result")).toBe(false);
     await releaseSlowTurn();
     await driver.waitFor((e) => e.type === "result");
-    // Um turno a mais é a barreira: a devolução do ultrathink já teria escrito antes do result dele.
+    // One more turn is the barrier: the ultrathink's give-back would already have written before its result.
     const from = driver.events.length;
     driver.send({ type: "user", text: "depois" });
     await driver.waitFor((e) => e.type === "result", from);
@@ -1059,15 +1059,15 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
   }, 60_000);
 
   it("a troca que atravessa o fim de um turno ultrathink não apaga o esforço alto da mensagem ultrathink seguinte", async () => {
-    // Review do PR #259 (f12): presa na fila durante um turno ultrathink, a troca caía depois do fim
-    // dele, ainda achava o max desse turno (a devolução estava atrás dela na fila) e avisava a tela.
-    // Com a mensagem seguinte, também ultrathink, já enviada, a barra apagava o "esforço alto" DELA,
-    // que rodava em max logo depois.
+    // Review of PR #259 (f12): stuck in the queue during an ultrathink turn, the switch landed after its
+    // end, still found that turn's max (the give-back was behind it in the queue) and warned the screen.
+    // With the next message, also ultrathink, already sent, the bar cleared ITS "esforço alto",
+    // which was running at max right after.
     const driver = startDriverWithEnv({ VIBEHUB_EFFORT_STEP_TIMEOUT_MS: "30000" }, ["--effort", "low"]);
     await driver.waitFor((e) => e.type === "ready");
     driver.send({ type: "user", text: "pensa nisso ultrathink slow" });
     await driver.waitMark("slow:running");
-    // Uma leitura do /btw presa segura a fila do nível: a troca espera atrás dela.
+    // A stuck /btw read holds the level queue: the switch waits behind it.
     await writeFile(join(sandbox, "settings-gate"), "");
     driver.send({ type: "btw", id: "segura-fila", question: "em que nível você está?" });
     await driver.waitMark("settings:waiting");
@@ -1077,7 +1077,7 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     const afterFirstTurn = driver.events.length;
     await rm(join(sandbox, "release-slow"), { force: true });
     driver.send({ type: "user", text: "de novo ultrathink slow" });
-    // A barreira prova que a segunda mensagem foi lida antes de a fila andar.
+    // The barrier proves the second message was read before the queue moved.
     driver.send({ type: "permission_decision", id: "barreira-palavra", allow: false });
     await driver.waitFor((e) => e.type === "error" && String(e.message).includes("barreira-palavra"));
     await writeFile(join(sandbox, "release-settings"), "");
@@ -1095,9 +1095,9 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
   }, 60_000);
 
   it("uma mensagem ultrathink absorvida cuja escalada falha herda o max já fixado: a troca do pill avisa a tela", async () => {
-    // Review do PR #259 (rodada 3): a numeração das mensagens com a palavra deixava o max com a
-    // mensagem anterior quando a escalada da nova falhava. A troca tirava o max sem avisar, e a barra,
-    // acesa para a mensagem nova, seguia dizendo "esforço alto" com a sessão no nível escolhido.
+    // Review of PR #259 (round 3): numbering the messages with the word left max with the
+    // previous message when the new one's escalation failed. The switch took max off without warning, and the bar,
+    // lit for the new message, kept saying "esforço alto" with the session at the chosen level.
     const driver = startDriver(["--effort", "low"]);
     await driver.waitFor((e) => e.type === "ready");
     driver.send({ type: "user", text: "pensa nisso ultrathink slow" });
@@ -1116,8 +1116,8 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
   }, 60_000);
 
   it("a escalada de uma mensagem ultrathink nova vence a volta atrasada ao nível da conta", async () => {
-    // Review do PR #259 (rodada 3): a escalada também marca a vez (claimEffortWrite). Sem isso, a
-    // leitura atrasada dos settings da devolução anterior voltava e gravava o high por cima do max.
+    // Review of PR #259 (round 3): the escalation also claims the turn (claimEffortWrite). Without it, the
+    // previous give-back's late settings read came back and wrote high over max.
     await writeFile(join(sandbox, "account-effort"), "high");
     const driver = startDriverWithEnv({ VIBEHUB_EFFORT_STEP_TIMEOUT_MS: "300" });
     await driver.waitFor((e) => e.type === "ready");
@@ -1167,9 +1167,9 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
   }, 60_000);
 
   it("trocas em rajada aplicam na ordem: a última escolha é a que fica", async () => {
-    // A volta ao padrão da conta são três idas ao CLI (null, leitura dos settings, nível da conta).
-    // Uma troca logo atrás dela passava no meio e a terceira ida a desfazia: o pill dizia Alto e a
-    // sessão ficava no nível da conta.
+    // The return to the account's default is three trips to the CLI (null, settings read, account level).
+    // A switch right behind it slipped through the middle and the third trip undid it: the pill said Alto and the
+    // session stayed at the account's level.
     await writeFile(join(sandbox, "account-effort"), "low");
     const driver = startDriver(["--effort", "xhigh"]);
     await driver.waitFor((e) => e.type === "ready");
@@ -1254,8 +1254,8 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
   }, 60_000);
 
   it("a devolução do ultrathink e a troca do pill passam pela MESMA fila: a troca feita logo depois do turno fica", async () => {
-    // Card sem nível, conta em high: a devolução são três idas ao CLI (null, leitura, high). Uma
-    // troca para low no meio passava entre elas, e o high da devolução a desfazia.
+    // Card with no level, account at high: the give-back is three trips to the CLI (null, read, high). A
+    // switch to low in the middle slipped between them, and the give-back's high undid it.
     await writeFile(join(sandbox, "account-effort"), "high");
     const driver = startDriver();
     await driver.waitFor((e) => e.type === "ready");
@@ -1280,9 +1280,9 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
   }, 60_000);
 
   it("uma devolução que estourou o prazo não escreve depois que a fila andou: a troca seguinte fica", async () => {
-    // Review do PR #259 (f2): o prazo solta a fila, mas a ida ao CLI atrasada seguia viva. A volta ao
-    // nível da conta lia os settings devagar, a troca para low entrava e confirmava, e a leitura
-    // atrasada voltava gravando o nível da conta por cima: o pill em Baixo, a sessão em high.
+    // Review of PR #259 (f2): the deadline releases the queue, but the late trip to the CLI stayed alive. The return to the
+    // account's level read the settings slowly, the switch to low came in and confirmed, and the late
+    // read came back writing the account's level on top: the pill at Baixo, the session at high.
     await writeFile(join(sandbox, "account-effort"), "high");
     const driver = startDriverWithEnv({ VIBEHUB_EFFORT_STEP_TIMEOUT_MS: "300" });
     await driver.waitFor((e) => e.type === "ready");
@@ -1298,7 +1298,7 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
 
     await writeFile(join(sandbox, "release-settings"), "");
     await driver.waitMark("settings:answered");
-    // Uma escrita atrasada sairia logo depois da leitura; a troca seguinte, no mesmo stderr, vem depois dela.
+    // A late write would go out right after the read; the next switch, on the same stderr, comes after it.
     driver.send({ type: "set_effort", id: "pra-medio", effort: "medium" });
     await driver.waitMark('flags:{"effortLevel":"medium"}');
     expect(driver.marks.filter((m) => m.startsWith("flags:"))).toEqual([
@@ -1310,10 +1310,10 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
   }, 60_000);
 
   it("nem um /btw nem um turno comum no meio cancelam a volta atrasada ao nível da conta", async () => {
-    // Review do PR #259 (f10): a guarda contava QUALQUER tarefa posterior da fila como dona do nível,
-    // inclusive a leitura do /btw e a devolução vazia de um turno comum. Card sem nível, conta em high:
-    // a devolução gravava o null, a leitura dos settings passava do prazo, um /btw entrava na fila e a
-    // escrita do high era pulada em silêncio. A sessão ficava no padrão do modelo (medium).
+    // Review of PR #259 (f10): the guard counted ANY later task in the queue as the level's owner,
+    // including the /btw read and an ordinary turn's empty give-back. Card with no level, account at high:
+    // the give-back wrote the null, the settings read overran the deadline, a /btw entered the queue and the
+    // write of high was silently skipped. The session stayed at the model's default (medium).
     await writeFile(join(sandbox, "account-effort"), "high");
     const driver = startDriverWithEnv({ VIBEHUB_EFFORT_STEP_TIMEOUT_MS: "300" });
     await driver.waitFor((e) => e.type === "ready");
@@ -1323,7 +1323,7 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
     await releaseSlowTurn();
     await driver.waitFor((e) => e.type === "result");
     await driver.waitMark("settings:waiting");
-    // A fila só chega ao /btw depois que a devolução estourou o prazo: a resposta dele é a prova.
+    // The queue only reaches the /btw after the give-back overran the deadline: its answer is the proof.
     driver.send({ type: "btw", id: "no-meio", question: "em que nível você está?" });
     await driver.waitFor((e) => e.type === "btw_answer" && e.id === "no-meio");
     const from = driver.events.length;
@@ -1343,10 +1343,10 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
   }, 60_000);
 
   it("uma troca presa na fila além do prazo de início é recusada NA HORA e nunca grava depois", async () => {
-    // Review do PR #259 (f4): o back espera a confirmação por um prazo contado da escrita, e a troca
-    // podia ficar atrás de uma devolução lenta. O back desistia (pendente/reinício) e o driver
-    // aplicava a troca segundos depois, sem ninguém saber. Agora o driver responde dentro do prazo
-    // de início, e uma troca que não começou a tempo não escreve nunca mais.
+    // Review of PR #259 (f4): the back waits for the confirmation for a deadline counted from the write, and the switch
+    // could sit behind a slow give-back. The back gave up (pending/restart) and the driver
+    // applied the switch seconds later, without anyone knowing. Now the driver answers within the start
+    // deadline, and a switch that did not start in time never writes again.
     await writeFile(join(sandbox, "account-effort"), "high");
     const driver = startDriverWithEnv({ VIBEHUB_EFFORT_SWITCH_START_DEADLINE_MS: "300" });
     await driver.waitFor((e) => e.type === "ready");
@@ -1374,8 +1374,8 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
   }, 60_000);
 
   it("uma troca que venceu o prazo de início não grava o nível nem quando o stream cai enquanto ela espera o CLI", async () => {
-    // Review do PR #259 (f14): a troca já respondida como erro ainda gravava o currentEffort se o stream
-    // caísse durante a espera pelo CLI, e o stream seguinte nascia no nível que ela não aplicou.
+    // Review of PR #259 (f14): the switch already answered as an error still wrote currentEffort if the stream
+    // dropped while waiting for the CLI, and the next stream was born at the level it did not apply.
     const driver = startDriverWithEnv({ VIBEHUB_EFFORT_SWITCH_START_DEADLINE_MS: "300" }, ["--effort", "low"]);
     await driver.waitFor((e) => e.type === "ready");
     driver.send({ type: "user", text: "hello" });
@@ -1418,9 +1418,9 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
   }
 
   it("um stream novo nasce enquanto a troca espera o CLI do que caiu: aceita pelo velho, ela não é confirmada", async () => {
-    // Review do PR #259 (f11): o stream novo lê o currentEffort ao nascer, fora da fila. A troca para high
-    // esperava o CLI velho, ele caía, a pessoa mandava outra mensagem e o stream novo nascia em low,
-    // e a troca respondia high: a tela dizia "já valendo" com a sessão em low até o próximo reinício.
+    // Review of PR #259 (f11): the new stream reads currentEffort when it is born, outside the queue. The switch to high
+    // waited for the old CLI, it dropped, the person sent another message and the new stream was born at low,
+    // and the switch answered high: the screen said "já valendo" with the session at low until the next restart.
     const driver = await switchStuckOnADyingStream("aceita-no-velho");
     await runTurn(driver, "depois");
     await writeFile(join(sandbox, "release-flags"), "");
@@ -1464,10 +1464,10 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
 });
 
 /**
- * O NÍVEL ANTES DA PRIMEIRA RESPOSTA (29/10): num card sem nível fixado, nada dizia em qual a sessão
- * ia rodar até a primeira resposta carimbar o transcript — o pill mostrava só "Opus". O CLI responde
- * isso sem turno nenhum (`getSettings().applied.effort`, medido no SDK 0.3.300), então a consulta
- * descartável do catálogo já pergunta e o driver anuncia o padrão da conta.
+ * THE LEVEL BEFORE THE FIRST ANSWER (29/10): on a card with no pinned level, nothing said which one the session
+ * would run at until the first answer stamped the transcript — the pill showed only "Opus". The CLI answers
+ * that without any turn (`getSettings().applied.effort`, measured on SDK 0.3.300), so the catalog's
+ * throwaway query already asks and the driver announces the account's default.
  */
 describe("sdk-driver.mjs — o nível padrão da conta, anunciado no boot", () => {
   it("sai antes de qualquer mensagem, e é o da CONTA mesmo com o card fixado em outro", async () => {
@@ -1475,7 +1475,7 @@ describe("sdk-driver.mjs — o nível padrão da conta, anunciado no boot", () =
     const def = await driver.waitFor((e) => e.type === "effort_default");
     expect(def.effort).toBe("medium");
     expect(driver.events.some((e) => e.type === "result")).toBe(false);
-    // A consulta descartável sobe sem o nível do card: é ela que diz o padrão.
+    // The throwaway query comes up without the card's level: it is the one that tells the default.
     await driver.waitMark("effort:none");
     expect(driver.marks.filter((m) => m.startsWith("effort:"))).toEqual(["effort:none"]);
   }, 60_000);
@@ -1498,15 +1498,15 @@ describe("sdk-driver.mjs — a pasta do card sumiu", () => {
     expect(error.message).toContain(gone);
     expect(error.message).toMatch(/não existe mais/);
     expect(error.message).not.toMatch(/libc/);
-    // O turno fecha: sem isso o "Trabalhando…" girava para sempre.
+    // The turn closes: without it the "Trabalhando…" spun forever.
     await driver.waitFor((e) => e.type === "result");
   }, 60_000);
 });
 
 /**
- * O /btw: a pessoa pergunta algo enquanto o turno roda, e a resposta vem de uma consulta LATERAL —
- * a sessão bifurcada (o contexto todo), sem ferramentas, sem gravar nada na sessão de verdade e sem
- * tocar no turno em andamento.
+ * The /btw: the person asks something while the turn runs, and the answer comes from a SIDE query —
+ * the forked session (the whole context), no tools, recording nothing in the real session and without
+ * touching the turn in progress.
  */
 describe("sdk-driver.mjs — /btw", () => {
   it("responde com o turno rodando, sem interrompê-lo, numa bifurcação sem ferramentas", async () => {
@@ -1535,14 +1535,14 @@ describe("sdk-driver.mjs — /btw", () => {
     });
     expect(driver.marks).not.toContain("interrupt");
 
-    // O turno de verdade segue e fecha sozinho.
+    // The real turn goes on and closes on its own.
     await releaseSlowTurn();
     await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:slow", from);
   }, 60_000);
 
   it("diz à pergunta lateral o nível em que a sessão principal está AGORA", async () => {
-    // Produção, 10/11/2026: o nível trocado no pill e um /btw "em que nível você está?" logo depois.
-    // O nível não está na conversa, e a bifurcação não tinha como responder.
+    // Production, 10/11/2026: the level switched in the pill and a /btw "em que nível você está?" right after.
+    // The level is not in the conversation, and the fork had no way to answer.
     const driver = startDriver(["--effort", "xhigh"]);
     await driver.waitFor((e) => e.type === "ready");
     driver.send({ type: "user", text: "hello" });
@@ -1560,8 +1560,8 @@ describe("sdk-driver.mjs — /btw", () => {
   }, 60_000);
 
   it("uma sessão que não diz o nível não segura a pergunta lateral: ela responde com o nível que o driver escreveu", async () => {
-    // Review do PR #259 (f8): com a sessão muda (um SDK sem getSettings, uma leitura fora do prazo) o
-    // /btw omitia o nível, mesmo com o pin do card conhecido.
+    // Review of PR #259 (f8): with the session silent (an SDK without getSettings, a read past the deadline) the
+    // /btw left out the level, even with the card's pin known.
     const driver = startDriverWithEnv({ VIBEHUB_EFFORT_STEP_TIMEOUT_MS: "200" }, ["--effort", "low"]);
     await driver.waitFor((e) => e.type === "ready");
     driver.send({ type: "user", text: "hello" });
@@ -1588,8 +1588,8 @@ describe("sdk-driver.mjs — /btw", () => {
   }, 60_000);
 
   it("o /btw lê o nível na fila do nível: nunca no meio da volta ao nível da conta", async () => {
-    // A volta ao padrão da conta passa pelo null (o padrão do MODELO) antes do nível dos settings. Uma
-    // leitura no meio dizia o nível do modelo; na fila, ela espera a volta terminar.
+    // The return to the account's default goes through null (the MODEL's default) before the settings' level. A
+    // read in the middle said the model's level; in the queue, it waits for the return to finish.
     await writeFile(join(sandbox, "account-effort"), "high");
     const driver = startDriver(["--effort", "xhigh"]);
     await driver.waitFor((e) => e.type === "ready");
@@ -1599,7 +1599,7 @@ describe("sdk-driver.mjs — /btw", () => {
     driver.send({ type: "set_effort", id: "pra-conta", effort: null });
     await driver.waitMark("settings:waiting");
     driver.send({ type: "btw", id: "no-meio", question: "em que nível você está?" });
-    // A barreira prova que o /btw já foi lido; a leitura dele fora da fila responderia agora, no null.
+    // The barrier proves the /btw has already been read; its read outside the queue would answer now, at null.
     driver.send({ type: "permission_decision", id: "barreira-btw", allow: false });
     await driver.waitFor((e) => e.type === "error" && String(e.message).includes("barreira-btw"));
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -1614,7 +1614,7 @@ describe("sdk-driver.mjs — /btw", () => {
     driver.send({ type: "btw", id: "lenta", question: "btwslow" });
     driver.send({ type: "btw", id: "rapida", question: "e esta?" });
     while (!driver.marks.some((m) => m.startsWith("btw:"))) await new Promise((resolve) => setTimeout(resolve, 20));
-    // A ausência não tem evento para esperar: uma folga curta, e a prova de verdade é a ordem abaixo.
+    // The absence has no event to wait for: a short slack, and the real proof is the order below.
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(driver.marks.filter((m) => m.startsWith("btw:"))).toHaveLength(1);
     expect(driver.events.slice(from).some((e) => e.type === "btw_answer")).toBe(false);
@@ -1653,8 +1653,8 @@ describe("sdk-driver.mjs — /btw", () => {
 });
 
 /**
- * O MEDIDOR DE CONTEXTO: o fim de cada turno pergunta à sessão quanto da janela ela ocupa (o número
- * do /context) e repassa como `context_usage` — no modo "summary", que não gasta chamada de contagem.
+ * THE CONTEXT METER: the end of each turn asks the session how much of the window it takes (the
+ * /context number) and passes it on as `context_usage` — in "summary" mode, which spends no counting call.
  */
 describe("sdk-driver.mjs — uso de contexto", () => {
   it("depois do result, emite context_usage com o total e a janela CRUA, pedido em modo summary", async () => {
@@ -1698,7 +1698,7 @@ describe("sdk-driver.mjs — uso de contexto", () => {
     await driver.waitFor((e) => e.type === "result");
     await driver.waitMark('context:{"detail":"summary"}');
     await rm(join(sandbox, "context-hang"), { force: true });
-    // Passado o prazo, o próximo fim de turno lê de novo — e desta vez responde.
+    // Past the deadline, the next turn end reads again — and this time it answers.
     await new Promise((resolve) => setTimeout(resolve, 300));
     driver.send({ type: "user", text: "de novo" });
     const usage = await driver.waitFor((e) => e.type === "context_usage");

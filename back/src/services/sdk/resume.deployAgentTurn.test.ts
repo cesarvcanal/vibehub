@@ -5,15 +5,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /**
- * O DEPLOY NO MEIO DE UMA ORDEM DO MAESTRO (produção, card a28ffa23, 2026-10-20 21:56 UTC). A ordem
- * veio pelo MCP externo (ChatGPT, em nome do César) → `sendToTerminal` → `sendAgentTurn`. O blue/green
- * do #181 matou o back antigo com o CLI esperando a resposta da API logo depois de um commit; o turno
- * não tinha marcador em voo, então o boot novo não tinha o que retomar, e o board ficou `working`
- * (gravado pelo processo morto) até alguém escrever. O "No response requested." que o agente leu
- * depois era o filler `<synthetic>` que o CLI insere ao retomar a sessão — não uma decisão do modelo.
+ * THE DEPLOY IN THE MIDDLE OF A MAESTRO ORDER (production, card a28ffa23, 2026-10-20 21:56 UTC). The order
+ * came through the external MCP (ChatGPT, on César's behalf) → `sendToTerminal` → `sendAgentTurn`. The blue/green
+ * from #181 killed the old back with the CLI waiting for the API's answer right after a commit; the turn
+ * had no in-flight marker, so the new boot had nothing to resume, and the board stayed `working`
+ * (written by the dead process) until someone wrote. The "No response requested." the agent read
+ * afterwards was the `<synthetic>` filler the CLI inserts when resuming the session — not a decision of the model.
  *
- * Dois processos do back, de verdade: módulos recarregados (outra identidade de dono, memória
- * zerada), registry, marcadores e histórico REAIS na mesma pasta de dados. Só o driver é falso.
+ * Two back processes, for real: reloaded modules (another owner identity, memory
+ * reset), REAL registry, markers and history in the same data folder. Only the driver is fake.
  */
 
 let dir = "";
@@ -34,7 +34,7 @@ function fakeChild() {
 }
 type Child = ReturnType<typeof fakeChild>;
 
-/** Um processo do back: módulos novos sobre a mesma pasta de dados. */
+/** A back process: fresh modules over the same data folder. */
 async function bootProcess() {
   vi.resetModules();
   const env = await import("../../config/env.js");
@@ -47,7 +47,7 @@ async function bootProcess() {
   }));
   vi.doMock("../board/outbox.js", () => ({ flushCard: vi.fn(async () => undefined) }));
   const registry = await import("../board/registry.js");
-  await import("../board/status.js"); // registra o sink da bolinha, como o boot real
+  await import("../board/status.js"); // registers the dot's sink, like the real boot
   const manager = await import("./manager.js");
   const inflight = await import("./inflight.js");
   const resume = await import("./resume.js");
@@ -64,7 +64,7 @@ async function bootProcess() {
 }
 type Proc = Awaited<ReturnType<typeof bootProcess>>;
 
-/** O sweep de boot do processo novo com as peças reais; só o runner (install, comando) é falso. */
+/** The new process's boot sweep with the real pieces; only the runner (install, command) is fake. */
 function sweep(b: Proc, settings: { sdkDriver: boolean; sdkAutoResume: boolean }) {
   const { registry, manager, inflight, resume } = b;
   return resume.resumeInterruptedTurns({
@@ -95,9 +95,9 @@ const settle = () => new Promise((r) => setTimeout(r, 60));
 const OWNER_ORIGIN = { kind: "owner", name: "cesar" } as const;
 
 /**
- * O processo ANTIGO: card aberto, driver vivo, a ordem do ChatGPT entra pelo maestro e o agente
- * começa a trabalhar (commit). Depois disso o processo "morre": nada mais dele roda, e o batimento
- * dele nunca foi tocado (o SIGKILL do blue/green não larga nada).
+ * The OLD process: card open, driver alive, ChatGPT's order comes in through the maestro and the agent
+ * starts working (commit). After that the process "dies": nothing of it runs any more, and its
+ * heartbeat was never touched (blue/green's SIGKILL lets go of nothing).
  */
 async function oldProcessRunsAMaestroOrder() {
   const a = await bootProcess();
@@ -134,7 +134,7 @@ describe("deploy no meio de uma ordem do maestro (card a28ffa23)", () => {
     expect(marker).toMatchObject({ attempts: 0, preview: "implemente o adaptador MCP Events e commite" });
     expect((await a.registry.getCard(cardId))?.status).toBe("working");
 
-    // O turno fecha normalmente: o marcador sai, como o de qualquer turno.
+    // The turn closes normally: the marker goes away, like any turn's.
     a.emit(0, { type: "result", isError: false });
     await settle();
     expect(await a.inflight.readInflightMarker(cardId)).toBeNull();
@@ -151,14 +151,14 @@ describe("deploy no meio de uma ordem do maestro (card a28ffa23)", () => {
     await settle();
     expect((await b.registry.getCard(cardId))?.status).toBe("working");
 
-    // A retomada trabalha e fecha: o marcador sai e a bolinha apaga.
+    // The resume works and closes: the marker goes away and the dot clears.
     b.emit(0, { type: "tool_use", id: "t2", name: "Bash", input: { command: "git status" } });
     b.emit(0, { type: "result", isError: false });
     await settle();
     expect(await b.inflight.readInflightMarker(cardId)).toBeNull();
     expect((await b.registry.getCard(cardId))?.status).toBe("waiting");
 
-    // O deploy seguinte (outro processo) não tem o que retomar: nada é injetado de novo.
+    // The next deploy (another process) has nothing to resume: nothing is injected again.
     const c = await bootProcess();
     expect(await sweep(c, { sdkDriver: true, sdkAutoResume: true })).toEqual({ resumed: [], noted: [] });
     expect(c.children).toHaveLength(0);
@@ -172,14 +172,14 @@ describe("deploy no meio de uma ordem do maestro (card a28ffa23)", () => {
     expect(b.children).toHaveLength(0);
     await settle();
     const card = await b.registry.getCard(cardId);
-    expect(card?.status ?? null).toBeNull(); // a pausa apagou a bolinha com a sessão
+    expect(card?.status ?? null).toBeNull(); // the pause cleared the dot along with the session
     expect(card?.pausedAt).toBeTruthy();
     expect(await b.inflight.readInflightMarker(cardId)).toBeNull();
   });
 
   it("card hibernado com marcador órfão continua hibernado (nenhum relato o dá por vivo)", async () => {
     const { a, cardId } = await oldProcessRunsAMaestroOrder();
-    a.emit(0, { type: "result", isError: false }); // ocioso: só assim o sweep de ociosidade hiberna
+    a.emit(0, { type: "result", isError: false }); // idle: only then does the idle sweep hibernate
     await settle();
     await a.inflight.writeInflightMarker(cardId, { startedAt: Date.now(), preview: "turno morto", attempts: 0 });
     expect(await a.registry.hibernateCard(cardId)).toBeTruthy();
@@ -188,7 +188,7 @@ describe("deploy no meio de uma ordem do maestro (card a28ffa23)", () => {
     await settle();
     const card = await b.registry.getCard(cardId);
     expect(card?.hibernatedAt).toBeTruthy();
-    expect(card?.status ?? null).toBeNull(); // nenhum relato: a hibernação apagou a bolinha com a sessão
+    expect(card?.status ?? null).toBeNull(); // no report: the hibernation cleared the dot along with the session
   });
 
   it("sem retomada (auto-resume desligado), a bolinha não fica 'working' do processo morto", async () => {
@@ -206,7 +206,7 @@ describe("deploy no meio de uma ordem do maestro (card a28ffa23)", () => {
     const b = await bootProcess();
     expect((await sweep(b, { sdkDriver: true, sdkAutoResume: true })).resumed).toEqual([cardId]);
     await settle();
-    // B morre também, antes de o agente produzir qualquer coisa (o marcador diz attempts 1, sem progresso).
+    // B dies too, before the agent produces anything (the marker says attempts 1, no progress).
     const c = await bootProcess();
     const summary = await sweep(c, { sdkDriver: true, sdkAutoResume: true });
     expect(summary).toEqual({ resumed: [], noted: [cardId] });
@@ -217,9 +217,9 @@ describe("deploy no meio de uma ordem do maestro (card a28ffa23)", () => {
 });
 
 /**
- * O DEPLOY COM O CARTÃO DE PERGUNTA DE PÉ (produção, 2026-11-03): a pessoa marcava as opções de
- * quatro perguntas quando o painel atualizou. A retomada encerrava o cartão e o agente perguntava
- * de novo, em branco. Agora o processo novo deixa o cartão aberto e o clique chega ao modelo.
+ * THE DEPLOY WITH THE QUESTION CARD UP (production, 2026-11-03): the person was ticking the options of
+ * four questions when the panel updated. The resume closed the card and the agent asked
+ * again, blank. Now the new process leaves the card open and the click reaches the model.
  */
 describe("deploy com o agente esperando resposta num cartão", () => {
   const QUESTIONS = [
@@ -235,7 +235,7 @@ describe("deploy com o agente esperando resposta num cartão", () => {
     const b = await bootProcess();
     const summary = await sweep(b, { sdkDriver: true, sdkAutoResume: true });
     expect(summary).toEqual({ resumed: [], noted: [cardId] });
-    expect(b.children).toHaveLength(0); // nenhum "Continue de onde parou", nenhuma pergunta refeita
+    expect(b.children).toHaveLength(0); // no "Continue de onde parou", no question asked again
     await settle();
     const { readHistory } = await import("./history.js");
     const history = await readHistory(cardId);
@@ -244,7 +244,7 @@ describe("deploy com o agente esperando resposta num cartão", () => {
     expect((await b.registry.getCard(cardId))?.status).toBe("waiting");
     expect((await b.registry.getCard(cardId))?.awaitingDecisionAt).toBeTruthy(); // "precisa de você"
 
-    // A pessoa responde o MESMO cartão: o driver novo sobe e recebe as escolhas como mensagem.
+    // The person answers the SAME card: the new driver comes up and receives the choices as a message.
     const session = b.manager.ensureDriverSession({ cardId, label: "a28f", command: { file: "docker", args: ["exec"] } });
     const socket = Object.assign(new EventEmitter(), { readyState: 1, send: () => undefined, close: () => undefined });
     b.manager.attachSocket(session, socket as never, OWNER_ORIGIN);
@@ -258,7 +258,7 @@ describe("deploy com o agente esperando resposta num cartão", () => {
       expect(answer).toContain("Faixa de capacidade, pela placa");
       expect(answer).toContain("Bloqueia o envio");
     });
-    // respondido, o card apaga o "precisa de você"
+    // answered, the card clears the "precisa de você"
     await vi.waitFor(async () => expect((await b.registry.getCard(cardId))?.awaitingDecisionAt ?? null).toBeNull());
   });
 });

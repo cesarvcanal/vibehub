@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 
-/** Recorta do .mjs o bloco dos resultados e das tarefas (mesmo recurso de driver.test.ts). */
+/** Cuts the results-and-tasks block out of the .mjs (same device as driver.test.ts). */
 function load(): { toolResultFrames: (msg: unknown) => Array<Record<string, unknown>>; taskFrame: (msg: unknown) => Record<string, unknown> | null } {
   const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
   const from = source.indexOf("const RESULT_TEXT_MAX");

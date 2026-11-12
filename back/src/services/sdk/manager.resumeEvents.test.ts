@@ -5,12 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /**
- * A RETOMADA E O AVISO DE "TURNO TERMINOU" (services/events/cardEvents.ts, #182). No CLI real a
- * retomada fecha primeiro um turno vazio — o da notificação de que a tarefa de fundo morreu — e só
- * segundos depois roda a continuação (E2E, 2026-10-20). Esse `result` vazio e o `Stop` do CLI que vem
- * com ele não podem chegar a quem está longe do quadro como "o card terminou": o aviso sairia no meio
- * da retomada, e a pessoa voltaria a um card ainda trabalhando. Registry, status e log de eventos
- * REAIS contra uma pasta temporária; só o processo do driver é falso.
+ * THE RESUME AND THE "TURNO TERMINOU" NOTICE (services/events/cardEvents.ts, #182). In the real CLI
+ * the resume first closes an empty turn — the one for the notification that the background task
+ * died — and only seconds later runs the continuation (E2E, 2026-10-20). That empty `result` and the
+ * CLI's `Stop` that comes with it must not reach whoever is away from the board as "o card terminou":
+ * the notice would go out in the middle of the resume, and the person would come back to a card still
+ * working. REAL registry, status and event log against a temporary folder; only the driver process is fake.
  */
 
 let dir = "";
@@ -60,7 +60,7 @@ async function load() {
   return { manager, registry, reportCardStatus, card, session, emit, kinds };
 }
 
-/** Deixa as gravações fire-and-forget (bolinha, eventos) assentarem. */
+/** Lets the fire-and-forget writes (dot, events) settle. */
 const settle = () => new Promise((r) => setTimeout(r, 60));
 
 beforeEach(async () => {
@@ -81,13 +81,13 @@ describe("retomada × aviso de turno terminado", () => {
     const env = await load();
     env.manager.injectSystemTurn(env.session, "continue", env.manager.SYSTEM_ORIGIN, 1);
     await settle();
-    env.emit({ type: "result", isError: false }); // o turno vazio da notificação
-    await env.reportCardStatus(env.card.id, "waiting"); // o hook Stop que vem com ele
+    env.emit({ type: "result", isError: false }); // the notification's empty turn
+    await env.reportCardStatus(env.card.id, "waiting"); // the Stop hook that comes with it
     await settle();
     expect((await env.registry.getCard(env.card.id))?.status).toBe("working");
     expect(await env.kinds()).toEqual([]);
 
-    env.emit({ type: "tool_use", id: "t1", name: "Bash", input: {} }); // a continuação pegou
+    env.emit({ type: "tool_use", id: "t1", name: "Bash", input: {} }); // the continuation took
     env.emit({ type: "result", isError: false });
     await env.reportCardStatus(env.card.id, "waiting");
     await vi.waitFor(async () => expect(await env.kinds()).toEqual(["turn_finished"]));
@@ -96,7 +96,7 @@ describe("retomada × aviso de turno terminado", () => {
   it("a retomada que não pegou nem com o reenvio: aí sim o card para — e o aviso sai uma vez", async () => {
     const env = await load();
     env.manager.injectSystemTurn(env.session, "continue", env.manager.SYSTEM_ORIGIN, 1);
-    await settle(); // o `working` da retomada assenta antes (em produção, 90 s antes da desistência)
+    await settle(); // the resume's `working` settles first (in production, 90 s before giving up)
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     for (let i = 0; i < 2; i++) {
       env.emit({ type: "result", isError: false });
