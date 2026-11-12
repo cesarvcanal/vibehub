@@ -33,6 +33,7 @@ import type {
   RestartedPreview,
   RunnerStatus,
   UploadResult,
+  UsersResponse,
   PreviewDeAnexo,
 } from "@/api/types";
 import { t } from "@/i18n";
@@ -213,6 +214,8 @@ export const RUNNER_KEY = ["board", "runner"] as const;
 export const GITHUB_KEY = ["board", "github"] as const;
 export const PREVIEW_PORTS_KEY = ["board", "preview", "ports"] as const;
 export const FEATURES_KEY = ["board", "features"] as const;
+/** The install's members (`GET /api/users`, owner only) — read by sharing and by the access screen. */
+export const USERS_KEY = ["users"] as const;
 /** Prefix matching EVERY project's card list — for invalidating the whole board at once. */
 export const CARDS_PREFIX_KEY = ["board", "cards"] as const;
 /**
@@ -421,6 +424,9 @@ export const boardApi = {
     patch<{ projects: BoardProject[] }>(`/projects/${encodeURIComponent(id)}/order`, { position }).then(
       (r) => r.projects ?? [],
     ),
+
+  /* users */
+  listUsers: () => get<UsersResponse>("/users").then((r) => r.users),
 
   /* cards */
   listCards: (projectId: string) =>
