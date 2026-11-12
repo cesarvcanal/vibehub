@@ -6,13 +6,12 @@ import { endRevokedSessionSockets } from "../auth/sessionSockets.js";
 import {
   getUserGit, setUserGit, removeUserGit, assertGitName, assertGitEmail, type UserGitIdentity,
 } from "../auth/userGit.js";
-import { listGithubConnections, listAccounts } from "../services/board/registry.js";
+import { listGithubConnections, listAccounts, removeSharesForUser } from "../services/board/registry.js";
 import { DEFAULT_ACCOUNT_SLUG } from "../services/accounts/profiles.js";
 import { reapplyIdentityForUser } from "../services/board/workspace.js";
 import {
-  createUser, listUsers, findUser, changePassword, removeUser, setRole, assertRole, assertPassword,
+  createUser, listUsers, findUser, changePassword, removeUser, setRole, assertRole, assertPassword, publicUser,
 } from "../auth/users.js";
-import { removeSharesForUser } from "../services/board/registry.js";
 import { logger } from "../utils/logger.js";
 import { sendError } from "./httpError.js";
 
@@ -105,7 +104,7 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
       try {
         const user = await createUser(username, password, assertRole(role));
         logger.info({ audit: true, action: "user.create", user: user.username, role: user.role }, "user created");
-        return await reply.send({ user: { id: user.id, username: user.username, role: user.role, createdAt: user.createdAt } });
+        return await reply.send({ user: publicUser(user) });
       } catch (err) {
         return await reply.code(400).send({ error: (err as Error).message });
       }

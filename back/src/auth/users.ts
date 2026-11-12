@@ -94,8 +94,8 @@ async function hashPassword(password: string, salt: Buffer): Promise<string> {
   return (await scrypt(password, salt, KEY_LEN)).toString("hex");
 }
 
-/** Strips the credential material off a stored user. PURE. */
-export function publicUser(user: User): PublicUser {
+/** Strips the credential material off a stored user (a PublicUser comes back as a copy). PURE. */
+export function publicUser(user: PublicUser): PublicUser {
   const { id, username, role, createdAt } = user;
   return { id, username, role, createdAt };
 }

@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { FastifyRequest } from "fastify";
 import { config } from "../config/env.js";
-import { createUser, findUser, listUsers, type PublicUser } from "./users.js";
+import { createUser, findUser, listUsers, publicUser, type PublicUser } from "./users.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -33,7 +33,7 @@ export async function ensurePreviewOwner(): Promise<PublicUser> {
   const user = existing ?? (await createUser(PREVIEW_OWNER, randomBytes(32).toString("hex"), "owner"));
   ownerId = user.id;
   if (!existing) logger.info({ audit: true, action: "preview.owner" }, "preview proxy auth: local owner created");
-  return { id: user.id, username: user.username, role: user.role, createdAt: user.createdAt };
+  return publicUser(user);
 }
 
 /** Did this request come through a vibehub preview proxy? PURE. */
