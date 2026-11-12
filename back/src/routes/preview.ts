@@ -300,8 +300,7 @@ export async function previewRoutes(app: FastifyInstance): Promise<void> {
    * for a member, minus every port whose current card is not theirs to see (previewPortScope).
    */
   app.get("/api/preview/ports", { preHandler: requireSession }, async (req, reply) => {
-    const user = await requestUser(req);
-    if (!user) return await reply.code(401).send({ error: "not authenticated" });
+    const user = (await requestUser(req))!;
     try {
       const { stdout } = await hostExecutor().runScript(listPortsScript(config.runner.container), {
         timeoutMs: 20_000,

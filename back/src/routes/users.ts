@@ -168,15 +168,13 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
    * token. Role and password are NOT here: those stay the owner's.
    */
   app.get("/api/me/git", { preHandler: requireSession }, async (req, reply) => {
-    const me = await sessionUserId(req);
-    if (!me) return await reply.code(401).send({ error: "not authenticated" });
+    const me = (await sessionUserId(req))!;
     const git = await getUserGit(me);
     return await reply.send({ git: git ? publicGit(git) : undefined });
   });
 
   app.patch<{ Body: UserPatchBody }>("/api/me/git", { preHandler: requireSession }, async (req, reply) => {
-    const me = await sessionUserId(req);
-    if (!me) return await reply.code(401).send({ error: "not authenticated" });
+    const me = (await sessionUserId(req))!;
     try {
       await assertGitPatch(req.body ?? {});
       const git = await applyGitPatch(me, req.body ?? {});

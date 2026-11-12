@@ -225,8 +225,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post<{ Body: { password?: string } }>("/api/auth/password", { preHandler: requireSession }, async (req, reply) => {
-    const userId = (await requestUser(req))?.id;
-    if (!userId) return await reply.code(401).send({ error: "not authenticated" });
+    const userId = (await requestUser(req))!.id;
     try {
       await changePassword(userId, req.body?.password ?? "");
       // The change revoked every session signed before it — this one included. Hand the person who
