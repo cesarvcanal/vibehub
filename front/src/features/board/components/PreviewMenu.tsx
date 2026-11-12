@@ -70,7 +70,7 @@ export function previewState(port: number, scanned: readonly { port: number }[] 
 }
 
 /** Opens a preview in a new tab — one place, so every entry point behaves the same. */
-export function openPreviewTab(port: number): void {
+function openPreviewTab(port: number): void {
   window.open(previewUrl(port), "_blank", "noopener,noreferrer");
 }
 
@@ -96,7 +96,7 @@ function usePreviewScan(enabled: boolean) {
  * for the port and opens the tab; without one (an old/manual registration) it says the honest
  * thing — ask the card's agent to start it again. Stopping (kill + chip removal) also lives here.
  */
-export function PreviewRestartDialog({
+function PreviewRestartDialog({
   cardId,
   preview,
   open,

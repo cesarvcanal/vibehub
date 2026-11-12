@@ -301,7 +301,7 @@ export function composeMessage(text: string, attachments: readonly Attachment[])
 }
 
 /** true = something is still uploading, so a send has to wait for it. PURE. */
-export function hasPendingUpload(attachments: readonly Attachment[]): boolean {
+function hasPendingUpload(attachments: readonly Attachment[]): boolean {
   return attachments.some((a) => a.status === "uploading");
 }
 
@@ -489,7 +489,7 @@ export async function restoreInterruptedUploads(cardId: string): Promise<Attachm
 }
 
 /** A chip's upload answered: the path, or an error with Retry. PURE. */
-export function withUploadResult(list: readonly Attachment[], id: string, path: string | null): Attachment[] {
+function withUploadResult(list: readonly Attachment[], id: string, path: string | null): Attachment[] {
   return list.map((a) =>
     a.id === id ? { ...a, path: path ?? undefined, status: path ? ("ready" as const) : ("error" as const) } : a,
   );

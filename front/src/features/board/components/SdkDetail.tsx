@@ -210,7 +210,7 @@ export function fleetPropsEqual(a: FleetProps, b: FleetProps): boolean {
 
 export const SdkFleet = React.memo(SdkFleetView, fleetPropsEqual);
 
-export function SdkFleetView({ rows, tasks, children }: FleetProps) {
+function SdkFleetView({ rows, tasks, children }: FleetProps) {
   const t = useT();
   const { open } = React.useContext(SdkDetailContext);
   const agents = rows.filter((r): r is ToolRow => r.kind === "tool");
@@ -383,7 +383,7 @@ export function SdkDetailHost({ rows, tasks, stack, onStack }: HostProps) {
 }
 
 /** Por onde as setas andam: a sequência dada (passos de um subagente) ou as ações do mesmo fio. PURE. */
-export function actionSequence(view: Extract<DetailView, { kind: "action" }>, rows: readonly SdkRow[]): string[] {
+function actionSequence(view: Extract<DetailView, { kind: "action" }>, rows: readonly SdkRow[]): string[] {
   if (view.seq && view.seq.length) return view.seq;
   const row = rows.find((r) => r.kind === "tool" && r.id === view.id) as ToolRow | undefined;
   const parent = row?.parent;
@@ -856,7 +856,7 @@ function ChangesView({ rows, onOpenAction }: { rows: readonly SdkRow[]; onOpenAc
 }
 
 /** Os arquivos do branch e os não commitados, num só lista (o não commitado marcado). PURE. */
-export function mergeGitFiles(data: CardChangesData): Array<{ path: string; status: string; uncommitted: boolean }> {
+function mergeGitFiles(data: CardChangesData): Array<{ path: string; status: string; uncommitted: boolean }> {
   const out = new Map<string, { path: string; status: string; uncommitted: boolean }>();
   for (const f of data.files) out.set(f.path, { path: f.path, status: f.status.slice(0, 1), uncommitted: false });
   for (const f of data.uncommitted) {

@@ -1956,7 +1956,7 @@ function SdkWorkingLine({
  * QUAL FASE nomear agora. O que a barra sabe (a atividade viva, se a sessão ainda está subindo)
  * vira a fase que `workingStage` sabe descrever. PURE.
  */
-export function workingKindOf(
+function workingKindOf(
   activity: { kind: "tool" | "thinking" | "answering" } | null,
   awaiting: boolean,
   ready: boolean,
