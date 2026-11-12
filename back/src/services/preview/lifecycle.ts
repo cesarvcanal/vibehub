@@ -12,6 +12,7 @@ import {
 import { buildKillSessionScript } from "../board/workspace.js";
 import { previewPublicUrl, scanListeningPorts } from "./announce.js";
 import { logger } from "../../utils/logger.js";
+import { setTimeout as delay } from "node:timers/promises";
 
 /**
  * PREVIEW LIFECYCLE — a registered preview outlives the card session that started it.
@@ -194,7 +195,7 @@ export async function restartPreview(cardId: string, port: number): Promise<Rest
           (tail ? ` — last output:\n${tail}` : ""),
       );
     }
-    await new Promise((r) => setTimeout(r, RESTART_POLL_MS));
+    await delay(RESTART_POLL_MS);
   }
 
   logger.info(

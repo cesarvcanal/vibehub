@@ -15,6 +15,7 @@ import { readCardAttachment } from "../services/attachments/document.js";
 import { observeCardStatus } from "../services/events/cardEvents.js";
 import { logger } from "../utils/logger.js";
 import { sendError } from "./httpError.js";
+import { setTimeout as delay } from "node:timers/promises";
 
 /**
  * SESSION routes — everything that touches a live card: opening it in the runner, the xterm
@@ -212,9 +213,6 @@ export function needsProvisioning(card: Pick<registry.Card, "openedAt" | "prepar
  */
 export const PAUSED_ATTACH_GRACE_MS = 3_000;
 const PAUSED_ATTACH_POLL_MS = 200;
-
-/** Injected in the tests, so the grace period costs no real time there. */
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Is this card still paused after the grace period? Answers false as soon as the pause is lifted.
@@ -550,7 +548,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       // (`tmux new-session -A`), so the pause would undo itself the moment any pane reconnects —
       // see `stillPausedAfterGrace`. The grace period lets a genuine open (which clears `pausedAt`)
       // win the race; anything else is turned away and the card stays parked.
-      if (card.pausedAt && (await stillPausedAfterGrace(card.id, registry.getCard, sleep))) {
+      if (card.pausedAt && (await stillPausedAfterGrace(card.id, registry.getCard, delay))) {
         logger.info(
           { audit: true, action: "card.attach.refused", card: card.worktreeSlug, session: card.tmuxSession },
           "terminal attach refused — the card is paused and an attach must not resurrect it",

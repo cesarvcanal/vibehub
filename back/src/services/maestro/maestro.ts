@@ -20,6 +20,7 @@ import {
   activityFromTranscript, pendingPermissionFromHistory, pendingQuestionFromHistory, pendingQuestionFromTranscript,
   transcriptObjects, type ActivityEvent, type PendingPermission, type PendingQuestion,
 } from "./feed.js";
+import { setTimeout as delay } from "node:timers/promises";
 
 /**
  * MAESTRO — one card's agent coordinating the OTHER cards.
@@ -411,7 +412,7 @@ async function awaitTerminalReady(
       );
       throw blockerError(blocker, card.title, waitedMs);
     }
-    await sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())));
+    await delay(Math.min(pollMs, Math.max(0, deadline - Date.now())));
   }
 }
 
@@ -755,8 +756,6 @@ export interface WaitResult {
   now: number;
 }
 
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
 /**
  * Waits for a card's turn to end — or for it to need the user — and answers with what it said.
  *
@@ -802,7 +801,7 @@ export async function waitForTurn(
       break;
     }
     if (Date.now() >= deadline) break;
-    await sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())));
+    await delay(Math.min(pollMs, Math.max(0, deadline - Date.now())));
   }
 
   const { card, transcript } = await readCardTranscript(cardId);
