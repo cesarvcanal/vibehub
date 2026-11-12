@@ -17,7 +17,7 @@ import { logger } from "../utils/logger.js";
  * known device (see authRoutes): what a brute force gets.
  */
 export const LOGIN_ATTEMPTS_PER_ACCOUNT = 10;
-const ACCOUNT_WINDOW_MS = 15 * 60_000;
+export const ACCOUNT_WINDOW_MS = 15 * 60_000;
 /**
  * Failed scrypt-costing tries (sign-in + setup) per address per {@link ADDRESS_WINDOW_MS}, any
  * username — enforced only when VIBEHUB_TRUST_PROXY says who the client is (see authRoutes).

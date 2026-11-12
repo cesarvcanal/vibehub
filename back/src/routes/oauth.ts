@@ -4,7 +4,7 @@ import {
   validateAuthorizeRequest, originOf, MCP_SCOPE,
 } from "../auth/oauth.js";
 import { isUsername, verifyCredentials } from "../auth/users.js";
-import { AttemptLimiter, LOGIN_ATTEMPTS_PER_ACCOUNT, chargeSignInTry, refundAddressTry } from "./auth.js";
+import { ACCOUNT_WINDOW_MS, AttemptLimiter, LOGIN_ATTEMPTS_PER_ACCOUNT, chargeSignInTry, refundAddressTry } from "./auth.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -26,7 +26,7 @@ import { logger } from "../utils/logger.js";
  * per-address ceiling is not this page's own but the board's (routes/auth.ts) — one budget per
  * address across both forms: registration is open, so anyone reaches this POST.
  */
-const limiter = new AttemptLimiter(LOGIN_ATTEMPTS_PER_ACCOUNT, 15 * 60_000);
+const limiter = new AttemptLimiter(LOGIN_ATTEMPTS_PER_ACCOUNT, ACCOUNT_WINDOW_MS);
 
 const ESCAPE: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 const esc = (v: unknown): string => String(v ?? "").replace(/[&<>"']/g, (c) => ESCAPE[c] ?? c);

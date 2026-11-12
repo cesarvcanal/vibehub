@@ -90,7 +90,7 @@ export async function checkStatusHookReach(): Promise<boolean> {
  */
 export function hookCommand(status: "working" | "waiting", opts: { asText?: boolean } = {}): string {
   return (
-    `curl -s -m 3 -X POST "$VIBEHUB_STATUS_URL" -H "x-vibehub-token: $(cat /root/.vibehub-token)"` +
+    `curl -s -m 3 -X POST "$VIBEHUB_STATUS_URL" -H "x-vibehub-token: $(cat ${RUNNER_TOKEN_FILE})"` +
     (opts.asText ? ` -H "accept: text/plain"` : "") +
     ` -H "content-type: application/json" -d "{\\"card\\":\\"$VIBEHUB_CARD_ID\\",\\"status\\":\\"${status}\\"}" || true`
   );
