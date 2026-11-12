@@ -387,7 +387,7 @@ function lastPageFromLink(link: string | null): number {
 }
 
 /** GitHub path segments are `[A-Za-z0-9._-]` — anything else is someone probing the URL. */
-export function assertRepoPart(value: string, what: string): string {
+function assertRepoPart(value: string, what: string): string {
   const v = String(value ?? "").trim();
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(v)) throw new Error(`invalid ${what}: '${value}'`);
   return v;

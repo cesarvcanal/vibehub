@@ -27,7 +27,7 @@ export const TOOL_RESPOND = "vibehub_review_respond";
  * indentadas sob o achado: é o que a pessoa leu no painel, e passos numerados achatados numa linha
  * perdiam o sentido. Teto alto, o mesmo do schema da ferramenta. PURE.
  */
-export function indentedBlock(text: string | undefined, indent: string, max = 2000): string {
+function indentedBlock(text: string | undefined, indent: string, max = 2000): string {
   const t = String(text ?? "").replace(/\r/g, "").trim();
   const capped = t.length > max ? `${t.slice(0, max - 1)}…` : t;
   return capped.split("\n").map((l) => l.trimEnd()).filter((l, i, all) => l !== "" || (all[i - 1] ?? "") !== "").join(`\n${indent}`);

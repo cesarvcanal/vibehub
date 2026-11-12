@@ -225,7 +225,7 @@ export function buildMcpInjectScript(
 }
 
 /** Resolves an MCP's values from the vault. A missing secret THROWS, naming the variable. */
-export async function resolveMcpSecrets(mcp: McpServer): Promise<Record<string, string>> {
+async function resolveMcpSecrets(mcp: McpServer): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   for (const name of mcpSecretNames(mcp)) {
     const value = await secretGet(mcpSecretKey(mcp.id, name));
@@ -273,7 +273,7 @@ export async function builtinMaestroInjection(): Promise<McpInjection | undefine
  * that has to wait for the tests is the normal case here, not an edge one, so the ceiling is the
  * gate's honest worst case with room to spare.
  */
-export const MAESTRO_MCP_TIMEOUT_MS = 900_000;
+const MAESTRO_MCP_TIMEOUT_MS = 900_000;
 
 /** Reserved name of the built-in server, so a user-registered MCP cannot shadow it. */
 export const BUILTIN_MAESTRO_NAME = "vibehub";

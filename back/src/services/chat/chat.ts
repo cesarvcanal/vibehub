@@ -26,7 +26,7 @@ import { clipLine } from "../../utils/clipLine.js";
  */
 
 /** How much history a chat opens with. ~400 lines is several turns without being a download. */
-export const CHAT_TAIL_LINES = 400;
+const CHAT_TAIL_LINES = 400;
 
 /**
  * Marker embedded in the follow loop's command line (a no-op `:` argument), so a leaked watcher is
@@ -36,7 +36,7 @@ export const CHAT_TAIL_LINES = 400;
 export const TRANSCRIPT_FOLLOW_MARKER = "vibehub-transcript-follow";
 
 /** Longest tool detail we put on a collapsed line. Beyond this it stops being a summary. */
-export const TOOL_DETAIL_MAX = 160;
+const TOOL_DETAIL_MAX = 160;
 
 export type ChatEventKind = "user" | "assistant" | "tool" | "system";
 

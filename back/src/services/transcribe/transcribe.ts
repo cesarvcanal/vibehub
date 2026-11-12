@@ -18,7 +18,7 @@ import { logger } from "../../utils/logger.js";
  */
 
 export const OPENAI_KEY = "TRANSCRIBE_OPENAI_API_KEY";
-export const ANTHROPIC_KEY = "TRANSCRIBE_ANTHROPIC_API_KEY";
+const ANTHROPIC_KEY = "TRANSCRIBE_ANTHROPIC_API_KEY";
 const CLEANUP_MODEL = "claude-haiku-4-5-20251001";
 
 /**
@@ -26,7 +26,7 @@ const CLEANUP_MODEL = "claude-haiku-4-5-20251001";
  * holds the request (and the person staring at the microphone button) forever. Generous because a
  * 20 MB upload to Whisper is not instant; the GitHub client's 8 s would cut real recordings.
  */
-export const EXTERNAL_TIMEOUT_MS = 60_000;
+const EXTERNAL_TIMEOUT_MS = 60_000;
 
 /** Whisper accepts up to 25 MB; 20 MB leaves room for a recording of several minutes. */
 export const AUDIO_MAX_BYTES = 20 * 1024 * 1024;
@@ -236,7 +236,7 @@ export async function transcribeCardAudio(
 }
 
 /** Teto do Whisper para um arquivo: 25 MB. */
-export const WHISPER_MAX_BYTES = 25 * 1024 * 1024;
+const WHISPER_MAX_BYTES = 25 * 1024 * 1024;
 
 /** Um arquivo de áudio inteiro (minutos, não segundos de ditado) demora mais que uma gravação do microfone. */
 const AUDIO_FILE_TIMEOUT_MS = 300_000;

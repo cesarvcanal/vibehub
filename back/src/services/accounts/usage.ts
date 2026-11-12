@@ -58,7 +58,7 @@ import { logger } from "../../utils/logger.js";
 export const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 
 /** Beta header the endpoint requires alongside the OAuth bearer. */
-export const OAUTH_BETA = "oauth-2025-04-20";
+const OAUTH_BETA = "oauth-2025-04-20";
 
 /** Claude Code's own credential file inside a profile directory (owned by profiles.ts). */
 export { CREDENTIALS_FILE };
@@ -67,10 +67,10 @@ export { CREDENTIALS_FILE };
 export const FRESH_MS = 60_000;
 
 /** First back-off after a rate limit, doubling per consecutive strike. */
-export const BACKOFF_BASE_MS = 120_000;
+const BACKOFF_BASE_MS = 120_000;
 
 /** Ceiling for the back-off — beyond this, waiting longer buys nothing. */
-export const BACKOFF_MAX_MS = 1_800_000;
+const BACKOFF_MAX_MS = 1_800_000;
 
 /** Pause between accounts in `allAccountsUsage`, so a listing is a queue and not a fan-out. */
 export const SERIAL_DELAY_MS = 250;

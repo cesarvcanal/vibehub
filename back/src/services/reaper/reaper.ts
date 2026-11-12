@@ -36,7 +36,7 @@ import { logger } from "../../utils/logger.js";
 export const REAP_MIN_AGE_S = 3600;
 
 /** How often the reaper sweeps the runner. */
-export const REAPER_INTERVAL_MS = 10 * 60_000;
+const REAPER_INTERVAL_MS = 10 * 60_000;
 
 /** One process, as reported by `ps` inside the runner. */
 export interface RunnerProc {
@@ -124,7 +124,7 @@ const CARD_BROWSER_DIR = `${BROWSER_DATA_DIR}/`;
  * server, which legitimately runs all day. Matched on words, so a path or argument that merely
  * contains the letters does not. PURE.
  */
-export function isTestRunProcess(args: string): boolean {
+function isTestRunProcess(args: string): boolean {
   return (
     /(^|[\s/(])vitest(\s|\)|$)/.test(args) ||
     /(^|[\s/])jest(\s|$)/.test(args) ||
@@ -134,7 +134,7 @@ export function isTestRunProcess(args: string): boolean {
 }
 
 /** A Chromium main process outside the card browsers' directory (a stray, hand-started one). PURE. */
-export function isStrayBrowserProcess(args: string): boolean {
+function isStrayBrowserProcess(args: string): boolean {
   if (!/(^|\/)(chrome|chromium)(\s|$)/.test(args)) return false;
   if (/\s--type=/.test(args)) return false; // a renderer/gpu/zygote dies with its main process
   return !args.includes(`--user-data-dir=${CARD_BROWSER_DIR}`);

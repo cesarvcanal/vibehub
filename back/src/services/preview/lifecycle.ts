@@ -36,10 +36,10 @@ import { logger } from "../../utils/logger.js";
  */
 
 /** How long a relaunch may take to start listening before the restart reports failure. */
-export const RESTART_TIMEOUT_MS = 25_000;
+const RESTART_TIMEOUT_MS = 25_000;
 
 /** How often the relaunch polls the port scan while waiting. */
-export const RESTART_POLL_MS = 1_500;
+const RESTART_POLL_MS = 1_500;
 
 const SESSION_CARD_RE = /^[0-9a-f-]{8}/i;
 

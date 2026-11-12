@@ -12,16 +12,16 @@ import { VoiceLiveError, takeSlot, upstreamFailure, voiceApiKey } from "./live.j
  * Never logged: the key and the text.
  */
 
-export const SPEECH_URL = "https://api.openai.com/v1/audio/speech";
-export const SPEECH_MODEL = "gpt-4o-mini-tts";
-export const SPEECH_VOICE = "marin";
+const SPEECH_URL = "https://api.openai.com/v1/audio/speech";
+const SPEECH_MODEL = "gpt-4o-mini-tts";
+const SPEECH_VOICE = "marin";
 const SPEECH_INSTRUCTIONS = "Fale em português do Brasil, com tom natural, claro e num ritmo confortável de ouvir.";
 
 /** OpenAI's TTS takes at most 4096 characters per request. */
 export const SPEECH_MAX_CHARS = 4096;
 
 /** Until the first byte: a TTS that has not started answering by now is not coming back. */
-export const SPEECH_TIMEOUT_MS = 30_000;
+const SPEECH_TIMEOUT_MS = 30_000;
 
 /**
  * Pieces per person per minute. A long answer is a dozen pieces at most; this stops a stuck button
@@ -35,7 +35,7 @@ export async function speechAvailable(): Promise<boolean> {
 }
 
 /** The text as sent by the browser, or a 400. PURE. */
-export function validateSpeechText(text: unknown): string {
+function validateSpeechText(text: unknown): string {
   if (typeof text !== "string" || !text.trim()) throw new VoiceLiveError(400, "text is required");
   if (text.length > SPEECH_MAX_CHARS) throw new VoiceLiveError(400, `text is longer than ${SPEECH_MAX_CHARS} characters`);
   return text.trim();

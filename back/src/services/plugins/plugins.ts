@@ -29,7 +29,7 @@ import { logger } from "../../utils/logger.js";
 
 /** The only marketplace vibehub installs from, and where the CLI fetches it from. */
 export const OFFICIAL_MARKETPLACE = "claude-plugins-official";
-export const OFFICIAL_MARKETPLACE_SOURCE = "anthropics/claude-plugins-official";
+const OFFICIAL_MARKETPLACE_SOURCE = "anthropics/claude-plugins-official";
 
 /** Heredoc-free scripts, but the outer one still needs a delimiter. Reserved word, never input. */
 const OUTER_DELIM = "VIBEHUB_PLUGINS";

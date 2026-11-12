@@ -19,14 +19,14 @@ import { logger } from "../../utils/logger.js";
  * Never logged: the key, the SDP (it carries the client's network candidates) and any audio.
  */
 
-export const LIVE_MODEL = "gpt-live-1";
-export const LIVE_SESSIONS_URL = "https://api.openai.com/v1/live/sessions";
+const LIVE_MODEL = "gpt-live-1";
+const LIVE_SESSIONS_URL = "https://api.openai.com/v1/live/sessions";
 
 /** A browser offer is a few KB; the official sample caps the body at 64 KB. */
 export const SDP_MAX_BYTES = 64 * 1024;
 
 /** Session creation is a single SDP exchange — anything slower than this is not coming back. */
-export const LIVE_TIMEOUT_MS = 20_000;
+const LIVE_TIMEOUT_MS = 20_000;
 
 /**
  * Each creation bills 15 s of voice up front, so a stuck "start" button (or a script) must not open
@@ -83,7 +83,7 @@ export async function voiceLiveStatus(): Promise<VoiceLiveStatus> {
 }
 
 /** The offer as sent by the browser, or a 400. PURE. */
-export function validateOffer(sdp: unknown): string {
+function validateOffer(sdp: unknown): string {
   if (typeof sdp !== "string" || !sdp.trim()) throw new VoiceLiveError(400, "an SDP offer is required");
   if (Buffer.byteLength(sdp) > SDP_MAX_BYTES) throw new VoiceLiveError(400, "SDP offer is too large");
   if (!sdp.trimStart().startsWith("v=0")) throw new VoiceLiveError(400, "not an SDP offer");

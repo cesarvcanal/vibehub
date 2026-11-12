@@ -140,7 +140,7 @@ const invalid = (message: string) => new EventsError(ERR.INVALID_PARAMS, message
 const forbidden = (message: string) => new EventsError(ERR.FORBIDDEN, message);
 
 /** JSON with object keys sorted, recursively: what makes `{a,b}` and `{b,a}` the same subscription. */
-export function canonicalJson(value: unknown): string {
+function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (value && typeof value === "object") {
     return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson((value as Record<string, unknown>)[k])}`).join(",")}}`;

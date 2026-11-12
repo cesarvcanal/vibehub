@@ -65,7 +65,7 @@ import {
 const REVIEW_ORIGIN: MessageOrigin = { kind: "system", name: "revisão de PR" };
 
 /** O que o fim de turno espera antes de julgar: a chamada da ferramenta no mesmo turno ganha. */
-export const TURN_GRACE_MS = 1_500;
+const TURN_GRACE_MS = 1_500;
 
 /** Vereditos que a IA do revisor pode dar. `accepted_risk` é só de humano (decideQuestion). */
 const REVIEWER_VERDICTS: ReadonlySet<FindingStatus> = new Set(["fixed", "open", "dropped"]);
@@ -75,7 +75,7 @@ export const HEAD_SHA_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
 
 const NO_ANSWER = "IA não respondeu";
 /** Motivo do impasse quando o PR andou depois do `ready` e não sobra rodada para conferir o que entrou. */
-export const HEAD_MOVED = "push depois do pronto";
+const HEAD_MOVED = "push depois do pronto";
 
 type Side = "reviewer" | "author";
 type Decision = "block" | "drop" | "keep" | "accept_risk";
@@ -256,7 +256,7 @@ async function unpauseAuthor(r: Review): Promise<void> {
  * Qualquer outra falha vira `impasse` com o erro, mas só se a revisão ainda está na fase e na rodada
  * para as quais o texto saiu (uma resposta que pousou no meio ganha). Nunca lança. Devolve se entregou.
  */
-export async function relayReview(
+async function relayReview(
   r: Review, side: Side, text: string, opts: { unpause?: boolean; approve?: boolean; optional?: boolean } = {},
 ): Promise<boolean> {
   const cardId = side === "author" ? r.cardId : r.reviewerCardId;
@@ -408,7 +408,7 @@ function needsMergeGate(r: Review, again: boolean): boolean {
  * Vermelho: aviso nos dois cards e a falha ao autor, para consertar antes de alguém clicar. Um gate
  * que nem rodou (runner fora, card sumido) é vermelho com o motivo. Nunca lança.
  */
-export async function checkMergeGate(reviewId: string, opts: { again?: boolean; by?: string } = {}): Promise<void> {
+async function checkMergeGate(reviewId: string, opts: { again?: boolean; by?: string } = {}): Promise<void> {
   let sha = "";
   try {
     const r = await getReview(reviewId);
@@ -1260,7 +1260,7 @@ export function releaseMerge(reviewId: string): void {
 }
 
 /** De quanto em quanto tempo, no máximo, o painel aberto faz o servidor conferir o PR no GitHub. */
-export const GITHUB_SYNC_MS = 60_000;
+const GITHUB_SYNC_MS = 60_000;
 const lastGithubSync = new Map<string, number>();
 
 /**
