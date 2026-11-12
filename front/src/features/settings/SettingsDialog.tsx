@@ -12,7 +12,7 @@ import {
 import { get, patch, post, del } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
 import type {
-  Settings, SettingsPatch, TranscribeStatus, Credential, CredentialType,
+  Settings, SettingsPatch, TranscribeStatus, Credential, CredentialType, SdkPermissionMode,
 } from "@/api/types";
 import { SELECT_CLASS } from "@/components/ui/select";
 import { AccountsManager } from "@/features/board/components/AccountsManager";
@@ -67,7 +67,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [email, setEmail] = React.useState("");
   const [autonomous, setAutonomous] = React.useState(true);
   const [sdkDriver, setSdkDriver] = React.useState(false);
-  const [sdkPermissionMode, setSdkPermissionMode] = React.useState<"same-as-terminal" | "ask-sensitive">("same-as-terminal");
+  const [sdkPermissionMode, setSdkPermissionMode] = React.useState<SdkPermissionMode>("same-as-terminal");
   const [sdkAutoResume, setSdkAutoResume] = React.useState(true);
   const [defaultLabel, setDefaultLabel] = React.useState("");
   const [transcribeLanguage, setTranscribeLanguage] = React.useState("");
@@ -308,7 +308,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 className={SELECT_CLASS}
                 value={sdkPermissionMode}
                 disabled={!sdkDriver}
-                onChange={(e) => setSdkPermissionMode(e.target.value as "same-as-terminal" | "ask-sensitive")}
+                onChange={(e) => setSdkPermissionMode(e.target.value as SdkPermissionMode)}
               >
                 <option value="same-as-terminal">{t("settings.sdkPermissionSame")}</option>
                 <option value="ask-sensitive">{t("settings.sdkPermissionAsk")}</option>

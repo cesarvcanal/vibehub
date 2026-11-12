@@ -156,6 +156,9 @@ export interface GitIdentity {
   email: string;
 }
 
+/** Native chat permission gate: mirror the Terminal tab, or ask for the sensitive set in the chat. */
+export type SdkPermissionMode = "same-as-terminal" | "ask-sensitive";
+
 /** `GET /api/settings` */
 export interface Settings {
   git: GitIdentity;
@@ -172,7 +175,7 @@ export interface Settings {
   /** Native chat as the Chat tab of every card (default on). Off = classic chat everywhere. */
   sdkDriver?: boolean;
   /** Native chat permission gate: mirror the Terminal tab, or ask for the sensitive set in the chat. */
-  sdkPermissionMode?: "same-as-terminal" | "ask-sensitive";
+  sdkPermissionMode?: SdkPermissionMode;
   /** Resume automatically a native-chat turn a panel deploy interrupted (default on). */
   sdkAutoResume?: boolean;
   runner: RunnerSettings;
@@ -224,7 +227,7 @@ export interface SettingsPatch {
   transcribeLanguage?: string | null;
   idleHibernateMinutes?: number;
   sdkDriver?: boolean;
-  sdkPermissionMode?: "same-as-terminal" | "ask-sensitive";
+  sdkPermissionMode?: SdkPermissionMode;
   sdkAutoResume?: boolean;
   runner?: Partial<RunnerSettings>;
 }
