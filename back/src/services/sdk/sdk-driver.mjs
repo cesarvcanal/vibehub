@@ -43,10 +43,10 @@ import { join } from "node:path";
 
 delete process.env.ANTHROPIC_API_KEY;
 
-// O SDK avisa no stderr, a cada boot, que `bypassPermissions` faz o `canUseTool` não ser consultado
-// para PERMISSÃO — é a configuração deliberada daqui (o gate é o hook PreToolUse; o canUseTool só
-// recebe AskUserQuestion, que o SDK roteia em todo modo). O aviso caía na cauda do stderr que o
-// manager anexa ao relatório de morte do driver e se passava pela causa da morte.
+// The SDK warns on stderr, on every boot, that `bypassPermissions` makes `canUseTool` not be consulted
+// for PERMISSION — that is the deliberate configuration here (the gate is the PreToolUse hook; canUseTool only
+// receives AskUserQuestion, which the SDK routes in every mode). The warning landed in the stderr tail the
+// manager attaches to the driver's death report and passed itself off as the cause of death.
 const emitWarning = process.emitWarning.bind(process);
 process.emitWarning = (warning, options, ...rest) => {
   if (options?.code === "CLAUDE_SDK_CAN_USE_TOOL_SHADOWED") return;
@@ -91,7 +91,7 @@ function trace(line) {
  * `Error("Claude Code returned an error result: " + errors.join("; "))` — diagnostics included. An
  * INTERRUPTED turn is exactly that case (the CLI reports it as `error_during_execution` carrying
  * only the diagnostic), so editing a message mid-turn ended with a red banner reading engine
- * jargon under the note that had already explained the stop (produção, 2026-10-01).
+ * jargon under the note that had already explained the stop (production, 2026-10-01).
  *
  * ONLY `[ede_diagnostic]`. The CLI hides `[session_crash]` from its own UI as well, but a crash is
  * something that HAPPENED to this person's session: jargon they can act on (reopen the card) beats
@@ -123,13 +123,13 @@ function humanErrorText(message) {
 }
 
 /**
- * O FALSO POSITIVO CONHECIDO DO CLASSIFICADOR DE SEGURANÇA (card #3684: Opus bloqueando toda
- * mensagem do chat). O texto cru já vem claro ("this sometimes happens with safe, normal
- * conversations") mas só em inglês, e quem acompanha o chat pode não ler inglês — então esta função
- * ANEXA a mesma explicação em português, sem apagar o original (o Request ID nele é o que vale para
- * abrir chamado com a Anthropic). Documentado em dezenas de issues públicas do claude-code (#93584,
- * #89503, #95275, entre outras): é o SERVIDOR marcando uma conversa benigna, não o conteúdo dela —
- * às vezes dispara até num "Hi" sozinho. PURA, TOTAL.
+ * THE SAFETY CLASSIFIER'S KNOWN FALSE POSITIVE (card #3684: Opus blocking every chat
+ * message). The raw text is already clear ("this sometimes happens with safe, normal
+ * conversations") but only in English, and whoever follows the chat may not read English — so this function
+ * APPENDS the same explanation in Portuguese, without erasing the original (the Request ID in it is what counts for
+ * opening a ticket with Anthropic). Documented in dozens of public claude-code issues (#93584,
+ * #89503, #95275, among others): it is the SERVER flagging a benign conversation, not its content —
+ * sometimes it fires even on a lone "Hi". PURE, TOTAL.
  */
 function humanizeSafeguardError(text) {
   if (!/\[reasoning_extraction\]/.test(text) && !/safeguards flagged this message/i.test(text)) return text;
@@ -142,16 +142,16 @@ function humanizeSafeguardError(text) {
 }
 
 /**
- * A PASTA DO CARD SUMIU. O SDK sobe o CLI com `spawn(cwd)`, e um cwd inexistente dá ENOENT — que o
- * SDK relata como "native binary ... exists but failed to launch" e põe a culpa na libc (musl x
- * glibc). Quem lê isso vai atrás do binário, e o binário está bom: o que acontece de verdade é a
- * worktree do card ter sido apagada (branch mergeada e limpa) com o card ainda aberto, e alguém
- * mandar ou editar uma mensagem nele (produção, 2026-10-19). Com o cwd faltando, ESTE é o erro.
- * PURA a menos do `existsSync` e do trace.
+ * THE CARD'S FOLDER IS GONE. The SDK starts the CLI with `spawn(cwd)`, and a non-existent cwd gives ENOENT — which the
+ * SDK reports as "native binary ... exists but failed to launch" and blames on libc (musl vs
+ * glibc). Whoever reads that goes after the binary, and the binary is fine: what really happens is that the
+ * card's worktree was deleted (branch merged and cleaned up) with the card still open, and someone
+ * sends or edits a message in it (production, 2026-10-19). With the cwd missing, THIS is the error.
+ * PURE except for `existsSync` and the trace.
  */
 function missingCwdError(text) {
   if (existsSync(CWD)) return text;
-  // O texto do SDK fica só no log: na tela ele mandaria a pessoa atrás do binário errado.
+  // The SDK's text stays only in the log: on screen it would send the person after the wrong binary.
   trace(`cwd missing, SDK said: ${text}`);
   return (
     `A pasta de trabalho deste card não existe mais (${CWD}) — a worktree foi removida, ` +
@@ -258,12 +258,12 @@ function resolveQuestion(id, answers, forModel) {
   return true;
 }
 
-// Mirror de `supersedeAll` / QUESTION_SUPERSEDED_MESSAGE em protocol.ts.
+// Mirror of `supersedeAll` / QUESTION_SUPERSEDED_MESSAGE in protocol.ts.
 //
-// A pessoa não clicou: ela ESCREVEU. Enquanto um cartão de pergunta está de pé, o turno está parado
-// dentro do `canUseTool` — a mensagem nova entra na fila do CLI e fica lá, sem ninguém para lê-la,
-// até o timeout de 30 minutos. Era o "mando a mensagem e não acontece nada, fica preso nessa tela".
-// Falar é responder: a mensagem libera o cartão e passa a valer no lugar dele.
+// The person did not click: they WROTE. While a question card is up, the turn is stopped
+// inside `canUseTool` — the new message enters the CLI's queue and sits there, with nobody to read it,
+// until the 30-minute timeout. It was the "mando a mensagem e não acontece nada, fica preso nessa tela".
+// Speaking is answering: the message releases the card and takes effect in its place.
 function supersedePendingQuestions() {
   const waiting = pendingQuestions.size;
   for (const deliver of [...pendingQuestions.values()]) {
@@ -339,8 +339,8 @@ async function canUseTool(toolName, input) {
         ? QUESTION_SUPERSEDED_MESSAGE
         : "The question was cancelled (the turn was interrupted)." };
   }
-  // O cartão desenha `answers` (o que a pessoa marcou); o modelo lê `forModel` quando o back juntou
-  // as respostas de outras pessoas ao mesmo cartão (ver `mergePeerAnswers` em protocol.ts).
+  // The card draws `answers` (what the person ticked); the model reads `forModel` when the back merged
+  // other people's answers to the same card (see `mergePeerAnswers` in protocol.ts).
   emit({ type: "question_result", id, answers });
   const toModel = Array.isArray(forModel) ? forModel : answers;
   return { behavior: "allow", updatedInput: { questions: input.questions, answers: buildAskUserAnswers(questions, toModel) } };
@@ -429,9 +429,9 @@ function baseOptions() {
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
     includePartialMessages: true,
-    // O RACIOCÍNIO, ao vivo. `display: "summarized"` não é opcional: nos modelos atuais o padrão é
-    // "omitted", e aí os blocos de thinking CHEGAM VAZIOS — o driver encaminharia string vazia e a
-    // tela continuaria só com o spinner. Adaptive deixa o modelo decidir quando (e quanto) pensar.
+    // The REASONING, live. `display: "summarized"` is not optional: on current models the default is
+    // "omitted", and then the thinking blocks ARRIVE EMPTY — the driver would forward an empty string and the
+    // screen would keep showing only the spinner. Adaptive lets the model decide when (and how much) to think.
     thinking: { type: "adaptive", display: "summarized" },
     // The SAME configuration the card's TUI session loads, so the native chat has the same tools:
     // "user" brings the profile's managed MCPs (vibehub — whose MCP instructions ARE the maestro
@@ -442,12 +442,12 @@ function baseOptions() {
     settingSources: ["user", "project", "local"],
     // The TUI's system prompt (Claude Code's own), which is also what loads CLAUDE.md — the brain
     // at the profile root and the repo's. Without it the driver ran on the bare SDK prompt.
-    // NADA anexado, em idioma nenhum: uma instrução sobre o raciocínio aqui era o gatilho do
-    // bloqueio `[reasoning_extraction]` do Opus (card #3684). O raciocínio é traduzido no NAVEGADOR,
-    // só na exibição — ver front/src/features/board/lib/reasoningTranslation.ts.
+    // NOTHING appended, in any language: an instruction about the reasoning here was the trigger of
+    // Opus's `[reasoning_extraction]` block (card #3684). The reasoning is translated in the BROWSER,
+    // only on display — see front/src/features/board/lib/reasoningTranslation.ts.
     systemPrompt: { type: "preset", preset: "claude_code" },
-    // A frase "o que ele está fazendo agora" de cada subagente (`task_progress.summary`, ~30s),
-    // a mesma linha viva do terminal. Custo pequeno: reaproveita o cache do próprio subagente.
+    // Each subagent's "what it is doing now" sentence (`task_progress.summary`, ~30s),
+    // the same live line as the terminal's. Small cost: it reuses the subagent's own cache.
     agentProgressSummaries: true,
     hooks: { PreToolUse: [{ hooks: [preToolUse] }] },
     // AskUserQuestion always lands here (every permission mode) — the chat's question card.
@@ -500,9 +500,9 @@ async function emitCatalogFrom(init, queryHandle) {
 }
 
 /**
- * As opções de um CLI DESCARTÁVEL (o catálogo de aquecimento, o /btw): entra como o de verdade, mas
- * sem MCP nenhum e com os hooks de status mudos — não é um turno do card, e o painel não pode
- * ouvi-lo como se fosse.
+ * The options of a THROWAWAY CLI (the warm-up catalog, the /btw): it comes in like the real one, but
+ * with no MCP at all and with the status hooks muted — it is not a card turn, and the panel must not
+ * hear it as if it were.
  */
 function throwawayOptions(abort) {
   applyAuth(); // the throwaway CLI signs in like the real one would
@@ -511,8 +511,8 @@ function throwawayOptions(abort) {
   options.strictMcpConfig = true;
   options.mcpServers = {};
   options.abortController = abort;
-  // Nada do que só serve a um turno de verdade: sem gate de ferramenta, sem cartão de pergunta, sem
-  // deltas ao vivo nem resumos de subagente.
+  // None of what only serves a real turn: no tool gate, no question card, no
+  // live deltas nor subagent summaries.
   delete options.hooks;
   delete options.canUseTool;
   options.includePartialMessages = false;
@@ -521,36 +521,36 @@ function throwawayOptions(abort) {
 }
 
 /**
- * O MENU "/" ANTES DA PRIMEIRA MENSAGEM (produção, 26/09/2026: card novo, digitar "/code-re" não
- * oferecia nada). O catálogo só chegava pelo `init`, e o `init` só existe quando um turno começa —
- * ou seja, num card recém-aberto o menu ficava vazio justamente na hora em que a pessoa quer
- * escolher um comando.
+ * THE "/" MENU BEFORE THE FIRST MESSAGE (production, 26/09/2026: new card, typing "/code-re" offered
+ * nothing). The catalog only arrived through `init`, and `init` only exists when a turn starts —
+ * that is, on a freshly opened card the menu stayed empty precisely when the person wants to
+ * pick a command.
  *
- * O CLI responde `supportedCommands()` sem nenhum turno (verificado contra o SDK 0.3.246 antes
- * desta linha existir, e de novo no 0.3.300), então o driver sobe uma consulta DESCARTÁVEL só para perguntar isso e a
- * encerra em seguida. Três cuidados:
+ * The CLI answers `supportedCommands()` without any turn (verified against SDK 0.3.246 before
+ * this line existed, and again on 0.3.300), so the driver brings up a THROWAWAY query just to ask that and
+ * closes it right after. Three precautions:
  *
- *  - `VIBEHUB_STATUS_URL` vai VAZIO: os hooks de status do runner disparam no SessionStart desta
- *    consulta, e um card sem turno nenhum não pode sair mandando status pro painel;
- *  - nada de `resume`: é uma sessão jogada fora, e resumir a conversa real aqui seria carregá-la
- *    por nada;
- *  - `catalogAnnounced` fica FALSO: este catálogo é provisório (sem as listas do `init`, todo
- *    comando aparece como "comando"), e o primeiro `init` de verdade o substitui com os rótulos
- *    certos — skill, plugin, e os comandos que só fazem sentido num terminal, escondidos.
+ *  - `VIBEHUB_STATUS_URL` goes EMPTY: the runner's status hooks fire on this query's SessionStart,
+ *    and a card with no turn at all must not go around sending status to the panel;
+ *  - no `resume`: it is a throwaway session, and resuming the real conversation here would load it
+ *    for nothing;
+ *  - `catalogAnnounced` stays FALSE: this catalog is provisional (without the `init` lists, every
+ *    command shows up as "comando"), and the first real `init` replaces it with the right
+ *    labels — skill, plugin, and the commands that only make sense in a terminal, hidden.
  *
- * E é LEVE (produção, 2026-10-20: depois de um reinício do painel, a retomada de um card levou 81s só
- * para o CLI aceitar a mensagem). Cada aba que reconecta sobe um driver, e cada driver subia este CLI
- * com TODOS os MCPs do perfil — dois `npx @playwright/mcp`, as conexões HTTP —, dez de uma vez, ao lado
- * dos dez CLIs que retomavam de verdade. Agora:
- *  - nenhum MCP (`strictMcpConfig` + `mcpServers` vazio): o menu só perde os prompts de MCP até o
- *    primeiro `init`, que traz o catálogo completo de qualquer jeito;
- *  - a mensagem de verdade MATA esta consulta (abort), em vez de só fechar a entrada e deixá-la
- *    terminar de subir disputando CPU com o CLI que vai responder.
+ * And it is LIGHT (production, 2026-10-20: after a panel restart, a card's resume took 81s just
+ * for the CLI to accept the message). Every tab that reconnects brings up a driver, and every driver brought up this CLI
+ * with ALL the profile's MCPs — two `npx @playwright/mcp`, the HTTP connections —, ten at once, next to
+ * the ten CLIs that were really resuming. Now:
+ *  - no MCP (`strictMcpConfig` + empty `mcpServers`): the menu only loses the MCP prompts until the
+ *    first `init`, which brings the complete catalog anyway;
+ *  - the real message KILLS this query (abort), instead of just closing the input and letting it
+ *    finish coming up while competing for CPU with the CLI that is going to answer.
  *
- * Ela também responde O NÍVEL DE RACIOCÍNIO PADRÃO DA CONTA (29/10/2026: card novo sem nível fixado,
- * o pill dizia só "Opus" até a primeira resposta carimbar o transcript). Por isso sobe SEM o
- * `--effort` do card: o que ela diz é o que uma sessão sem nível fixado usa — o effortLevel dos
- * settings, senão o padrão do modelo —, o mesmo que "Usar a inteligência padrão da conta" escolhe.
+ * It also answers THE ACCOUNT'S DEFAULT REASONING LEVEL (29/10/2026: new card with no pinned level,
+ * the pill said only "Opus" until the first answer stamped the transcript). That is why it comes up WITHOUT the
+ * card's `--effort`: what it says is what a session with no pinned level uses — the settings'
+ * effortLevel, otherwise the model's default —, the same one "Usar a inteligência padrão da conta" picks.
  */
 let warmChannel = null;
 let warmAbort = null;
@@ -564,37 +564,37 @@ async function warmCatalog() {
     const options = throwawayOptions(abort);
     delete options.effort;
     const handle = query({ prompt: ch, options });
-    // A consulta só ganha vida sendo iterada — e nada do que ela diz interessa: o único objetivo é
-    // ter um CLI de pé para responder as perguntas abaixo.
+    // The query only comes alive by being iterated — and nothing it says matters: the only goal is
+    // to have a CLI up to answer the questions below.
     void (async () => { try { for await (const _ of handle) { /* descartado */ } } catch { /* idem */ } })();
     const commands = await handle.supportedCommands();
-    // Um turno de verdade começou no meio disso: o `init` dele traz o catálogo completo, e este
-    // aqui — sem rótulos — não tem por que passar na frente.
+    // A real turn started in the middle of this: its `init` brings the complete catalog, and this
+    // one — with no labels — has no reason to go first.
     if (!catalogAnnounced && !channel && Array.isArray(commands)) emit({ type: "catalog", commands });
     await announceDefaultEffort(handle);
   } catch (err) {
     process.stderr.write(`warm catalog unavailable: ${err && err.message ? err.message : String(err)}\n`);
   } finally {
-    ch.end(); // fecha a corrente de entrada: sem mais mensagens, o CLI descartável sai sozinho
+    ch.end(); // closes the input stream: with no more messages, the throwaway CLI exits on its own
     warmChannel = null;
     warmAbort = null;
   }
 }
 
-/* ------------------------------------------------- /btw (a pergunta lateral) */
-// O `/btw` do terminal: uma pergunta feita com o turno rodando, respondida SEM interrompê-lo e sem
-// entrar na conversa. No modo SDK o CLI não o oferece, então o driver faz o mesmo à mão: uma
-// consulta à parte que BIFURCA a sessão (`resume` + `forkSession` — o contexto inteiro, até onde o
-// transcript já foi gravado), sem ferramentas, sem MCP, sem hooks de status e sem gravar nada em
-// disco (`persistSession: false`). O turno de verdade nem fica sabendo.
+/* ------------------------------------------------- /btw (the side question) */
+// The terminal's `/btw`: a question asked with the turn running, answered WITHOUT interrupting it and without
+// entering the conversation. In SDK mode the CLI does not offer it, so the driver does the same by hand: a
+// separate query that FORKS the session (`resume` + `forkSession` — the whole context, as far as the
+// transcript has been written), no tools, no MCP, no status hooks and recording nothing on
+// disk (`persistSession: false`). The real turn does not even find out.
 
-/** Teto de uma resposta lateral: uma consulta pendurada não pode deixar a pergunta sem resposta. */
+/** Cap on a side answer: a hanging query must not leave the question unanswered. */
 const BTW_TIMEOUT_MS = 3 * 60_000;
 
 /**
- * O que o modelo lê: a pergunta, com o aviso de que é lateral e de que não há ferramentas. And the
+ * What the model reads: the question, with the notice that it is a side one and that there are no tools. And the
  * main session's reasoning level, when known: it is not in the conversation, so "em que nível você
- * está?" right after a switch in the pill went unanswered (produção, 10/11/2026).
+ * está?" right after a switch in the pill went unanswered (production, 10/11/2026).
  */
 function btwPrompt(question, mainEffort) {
   const effortNote = mainEffort ? ` Nível de raciocínio (effort) em que a sessão principal está agora: ${mainEffort}.` : "";
@@ -651,7 +651,7 @@ async function answerBtw(id, question) {
   } finally {
     clearTimeout(timer);
   }
-  // O prazo venceu: o SDK pode encerrar a consulta abortada calado ou lançando — o motivo é o prazo.
+  // The deadline expired: the SDK may end the aborted query silently or by throwing — the reason is the deadline.
   if (abort.signal.aborted && texts.length === 0) failure = `sem resposta em ${BTW_TIMEOUT_MS / 60_000} min`;
   const text = texts.join("\n\n");
   if (text) emit({ type: "btw_answer", id, question, text });
@@ -659,23 +659,23 @@ async function answerBtw(id, question) {
 }
 
 /**
- * UMA pergunta lateral por vez: cada uma sobe um CLI e lê a conversa inteira, então cinco perguntas
- * seguidas viram uma fila, não cinco processos disputando a CPU do runner com o turno de verdade.
+ * ONE side question at a time: each one brings up a CLI and reads the whole conversation, so five questions
+ * in a row become a queue, not five processes competing for the runner's CPU with the real turn.
  */
 let btwChain = Promise.resolve();
-/** Quantas perguntas laterais cabem de uma vez (a que roda + as que esperam). */
+/** How many side questions fit at once (the one running + the ones waiting). */
 const BTW_QUEUE_MAX = 3;
 let btwPending = 0;
 function queueBtw(id, question) {
-  // Além do teto, a recusa é imediata: cada uma pode levar minutos, e a quinta pergunta de uma rajada
-  // responderia quando ninguém mais se lembra dela.
+  // Beyond the cap, the refusal is immediate: each one may take minutes, and the fifth question of a burst
+  // would be answered when nobody remembers it any more.
   if (btwPending >= BTW_QUEUE_MAX) {
     emit({ type: "btw_answer", id, question, error: `fila cheia (${BTW_QUEUE_MAX} perguntas laterais em andamento)` });
     return;
   }
   btwPending += 1;
-  // O `catch` é o que mantém a fila viva: uma rejeição (um `emit` num stdout quebrado) deixaria a
-  // corrente rejeitada para sempre e toda pergunta seguinte sem resposta.
+  // The `catch` is what keeps the queue alive: a rejection (an `emit` on a broken stdout) would leave the
+  // chain rejected forever and every later question unanswered.
   btwChain = btwChain
     .then(() => answerBtw(id, question))
     .catch((err) => { process.stderr.write(`btw failed: ${err && err.message ? err.message : String(err)}\n`); })
@@ -685,33 +685,33 @@ function queueBtw(id, question) {
 let currentQuery = null; // the live query() iterator, so an interrupt can reach it mid-turn
 let channel = null; // feeds the live query's prompt stream (null = no stream running)
 let turnActive = false; // a turn is running, or a message is already fed and about to start one
-// As ferramentas do PRINCIPAL chamadas e ainda sem resultado. Enquanto há uma, o CLI não lê mensagem
-// nova nenhuma: a que chega fica parada até ela devolver (medido no SDK, 2026-10-20 — 51s cegos atrás
-// de um Bash de 60s). É o que o "Enviar agora" consulta para decidir se precisa interromper.
+// The MAIN agent's tools that were called and have no result yet. While there is one, the CLI reads no new
+// message at all: one that arrives sits still until it returns (measured on the SDK, 2026-10-20 — 51s blind behind
+// a 60s Bash). It is what "Enviar agora" checks to decide whether it needs to interrupt.
 const toolsInFlight = new Set();
-// Quem espera o turno corrente fechar (o "Enviar agora" que interrompeu): soltos no `result`.
+// Whoever is waiting for the current turn to close (the "Enviar agora" that interrupted): released on the `result`.
 let turnEndWaiters = [];
 let announcedSessionId = null; // last session id emitted as a `session` event (dedupe)
-// O stream (= processo do CLI) que anunciou o conjunto NÃO VAZIO de tarefas em segundo plano que a
-// tela está mostrando agora. Quando ESSE processo morre, as tarefas morrem com ele — e o CLI, morto,
-// não manda o aviso de conjunto vazio: quem manda é o driver (ver o `finally` de `runStream`).
+// The stream (= CLI process) that announced the NON-EMPTY set of background tasks the
+// screen is showing now. When THAT process dies, the tasks die with it — and the CLI, dead,
+// does not send the empty-set notice: the driver is the one that sends it (see the `finally` of `runStream`).
 let backgroundTasksOwner = null;
 
-/* ------------------------------------------------- o que cada ferramenta DEVOLVEU */
-// O chat só via a CHAMADA (nome + input): o resultado vinha numa mensagem `user` que o driver
-// descartava — nada de "deu certo", "7 linhas", "erro: …". Aqui o resultado sai CAPADO: o bastante
-// para o back resumir a linha da tela; o detalhe inteiro é lido do transcript sob demanda.
+/* ------------------------------------------------- what each tool RETURNED */
+// The chat only saw the CALL (name + input): the result came in a `user` message the driver
+// discarded — no "deu certo", "7 linhas", "erro: …". Here the result goes out CAPPED: enough
+// for the back to summarise the screen line; the whole detail is read from the transcript on demand.
 const RESULT_TEXT_MAX = 4000;
 const RESULT_FIELD_MAX = 2000;
 
-/** O texto de um `tool_result` (string ou blocos). */
+/** The text of a `tool_result` (string or blocks). */
 function resultText(content) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content.map((b) => (b && b.type === "text" && typeof b.text === "string" ? b.text : "")).join("\n");
 }
 
-/** O `tool_use_result` estruturado, podado: strings capadas, listas curtas, profundidade limitada. */
+/** The structured `tool_use_result`, pruned: capped strings, short lists, limited depth. */
 function prunedResult(value, depth = 0) {
   if (value === null || typeof value === "number" || typeof value === "boolean") return value;
   if (typeof value === "string") return value.length > RESULT_FIELD_MAX ? value.slice(0, RESULT_FIELD_MAX) : value;
@@ -725,19 +725,19 @@ function prunedResult(value, depth = 0) {
   return null;
 }
 
-/** Quantas linhas um texto tem (sem as quebras finais). */
+/** How many lines a text has (without the trailing line breaks). */
 function lineTotal(t) {
   const s = String(t ?? "").replace(/\s+$/, "");
   return s === "" ? 0 : s.split("\n").length;
 }
 
-/** Linhas de stdout+stderr de um resultado de Bash, contadas antes do corte; null se não é Bash. */
+/** Lines of stdout+stderr of a Bash result, counted before the cut; null if it is not Bash. */
 function outputLines(r) {
   if (!r || typeof r !== "object" || (typeof r.stdout !== "string" && typeof r.stderr !== "string")) return null;
   return lineTotal(r.stdout) + lineTotal(r.stderr);
 }
 
-/** Os frames `tool_result` de uma mensagem `user` do CLI (principal ou subagente). PURE. */
+/** The `tool_result` frames of a CLI `user` message (main agent or subagent). PURE. */
 function toolResultFrames(msg) {
   const content = msg && msg.message && msg.message.content;
   if (!Array.isArray(content)) return [];
@@ -746,7 +746,7 @@ function toolResultFrames(msg) {
   return blocks.map((b) => {
     const text = resultText(b.content);
     const frame = { type: "tool_result", id: b.tool_use_id, isError: b.is_error === true, text: text.slice(0, RESULT_TEXT_MAX), textLength: text.length, outputLines: lineTotal(text) };
-    // O estruturado é da MENSAGEM: só é deste bloco quando ele é o único.
+    // The structured part belongs to the MESSAGE: it is this block's only when it is the only one.
     if (blocks.length === 1 && msg.tool_use_result !== undefined && msg.tool_use_result !== null) {
       frame.structured = prunedResult(msg.tool_use_result);
       const lines = outputLines(msg.tool_use_result);
@@ -757,11 +757,11 @@ function toolResultFrames(msg) {
   });
 }
 
-/* ------------------------------------------------- subagentes: início, progresso, fim */
-// task_id → tool_use_id da chamada que o disparou: liga a bandeja de segundo plano ao card dele.
+/* ------------------------------------------------- subagents: start, progress, end */
+// task_id → tool_use_id of the call that spawned it: ties the background tray to its card.
 const taskTools = new Map();
 
-/** O frame de um `task_started`/`task_progress`/`task_notification` do CLI, ou null. PURE (fora o mapa). */
+/** The frame of a CLI `task_started`/`task_progress`/`task_notification`, or null. PURE (apart from the map). */
 function taskFrame(msg) {
   if (!msg || typeof msg.task_id !== "string" || msg.ambient === true || msg.skip_transcript === true) return null;
   const toolUseId = typeof msg.tool_use_id === "string" && msg.tool_use_id !== "" ? msg.tool_use_id : taskTools.get(msg.task_id);
@@ -817,22 +817,22 @@ let pendingResumeAt = null;
  * The stream `endStream` is taking down ON PURPOSE. The SDK ends a closed stream by THROWING — and
  * after an interrupted turn it throws the CLI's own error result verbatim — so without this the
  * rewind's teardown painted a red banner in the chat for a stream the driver itself had just asked
- * to close (produção, 2026-10-01).
+ * to close (production, 2026-10-01).
  */
 let closingQuery = null;
 /**
- * A CONVERSA ANDOU FORA DO CHAT — e a corrente aberta não sabe disso.
+ * THE CONVERSATION MOVED OUTSIDE THE CHAT — and the open stream does not know it.
  *
- * A aba Terminal fala com a MESMA sessão por OUTRO processo do CLI. A nossa corrente carrega a
- * conversa em MEMÓRIA: enquanto ela estiver aberta, a próxima mensagem continua do ponto que ela
- * guarda, não do fim do arquivo — e escreve um galho irmão, deixando o turno do terminal ÓRFÃO.
- * Uma mensagem órfã não está no ramo vivo, então `forkPointFromTranscript` não acha ponto de volta
- * e editá-la caía no supersede: a tela mostrava a mensagem, mas editar não rebobinava nada (bug do
- * César, produção 2026-10-05).
+ * The Terminal tab talks to the SAME session through ANOTHER CLI process. Our stream holds the
+ * conversation in MEMORY: while it is open, the next message continues from the point it
+ * keeps, not from the end of the file — and writes a sibling branch, leaving the terminal's turn ORPHANED.
+ * An orphaned message is not on the live branch, so `forkPointFromTranscript` finds no point to go back to
+ * and editing it fell into the supersede: the screen showed the message, but editing rewound nothing (César's
+ * bug, production 2026-10-05).
  *
- * A marca é PREGUIÇOSA de propósito: derrubar a corrente a cada linha que o terminal escreve
- * custaria um CLI novo por linha. Ela é paga no próximo envio, que é o único momento em que estar
- * no ponto certo importa.
+ * The mark is LAZY on purpose: knocking down the stream on every line the terminal writes
+ * would cost a new CLI per line. It is paid on the next send, which is the only moment when being
+ * at the right point matters.
  */
 let staleView = false;
 
@@ -966,20 +966,20 @@ function sessionTranscriptExists(root, sessionId) {
   return dirs.some((dir) => existsSync(join(root, dir, `${sessionId}.jsonl`)));
 }
 
-/** No máximo um `tool_input_progress` por bloco nesta janela: o modelo solta deltas às dezenas por segundo. */
+/** At most one `tool_input_progress` per block within this window: the model emits deltas by the dozen per second. */
 const TOOL_INPUT_PROGRESS_MS = 500;
 
 /**
- * A FERRAMENTA SENDO GERADA, lida do stream do agente principal. O `tool_use` só sai quando o modelo
- * termina o input inteiro — num Write grande, dezenas de segundos de tela muda. Isto transforma os
- * eventos parciais da Messages API em `tool_use_start` (o bloco abriu) e `tool_input_progress`
- * (bytes já gerados + o arquivo, assim que o caminho fecha no JSON parcial). O JSON parcial não é
- * parseado: só o começo dele é guardado, até o `file_path` aparecer.
+ * THE TOOL BEING GENERATED, read from the main agent's stream. The `tool_use` only goes out when the model
+ * finishes the whole input — on a large Write, tens of seconds of silent screen. This turns the
+ * Messages API's partial events into `tool_use_start` (the block opened) and `tool_input_progress`
+ * (bytes generated so far + the file, as soon as the path closes in the partial JSON). The partial JSON is not
+ * parsed: only its beginning is kept, until `file_path` shows up.
  *
- * O `input_json_delta` traz só o ÍNDICE do bloco, então o mapa índice→ferramenta vem do
- * `content_block_start`, e morre no `content_block_stop`, no `message_start` (os índices recomeçam
- * a cada mensagem) e no `done(id)` — chamado quando o `tool_use` completo sai: depois dele, nenhum
- * progresso. PURE (o relógio entra por `now`), autocontida para ser testada recortada.
+ * The `input_json_delta` carries only the block's INDEX, so the index→tool map comes from
+ * `content_block_start`, and dies on `content_block_stop`, on `message_start` (the indices restart
+ * with each message) and on `done(id)` — called when the complete `tool_use` goes out: after it, no
+ * progress. PURE (the clock comes in through `now`), self-contained so it can be tested cut out.
  */
 function createToolInputTracker(throttleMs) {
   const PATH_HEAD_MAX = 4096;
@@ -1014,7 +1014,7 @@ function createToolInputTracker(throttleMs) {
           foundPath = true;
         }
       }
-      // O caminho recém-achado fura a janela (uma vez por bloco): é ele que dá nome ao que está sendo escrito.
+      // The freshly found path breaks through the window (once per block): it is what names what is being written.
       if (!foundPath && now - block.lastAt < throttleMs) return [];
       block.lastAt = now;
       return [{ type: "tool_input_progress", id: block.id, bytes: block.bytes, ...(block.filePath !== null ? { filePath: block.filePath } : {}) }];
@@ -1051,11 +1051,11 @@ async function runStream() {
     currentQuery = query({ prompt: myChannel, options });
     myQuery = currentQuery;
     for await (const msg of currentQuery) {
-      // IDENTIDADE, de novo — agora no CORPO do laço. Um stream que `endStream` desistiu de esperar
-      // foi deserdado (ver lá) e pode seguir falando ao lado do que o substituiu: o `result` tardio
-      // dele fechava o turno NOVO (a próxima mensagem deixava de ser absorvida e o manager ficava
-      // com um turno a mais para sempre), devolvia o esforço do ultrathink do stream novo, e o
-      // `assistant` dele movia o ponto de volta para um galho morto. O que ele diz é só drenado.
+      // IDENTITY, again — now in the loop's BODY. A stream `endStream` gave up waiting for
+      // was disinherited (see there) and may keep talking next to the one that replaced it: its late
+      // `result` closed the NEW turn (the next message stopped being absorbed and the manager was left
+      // with one turn too many forever), gave back the new stream's ultrathink effort, and its
+      // `assistant` moved the fork point to a dead branch. What it says is only drained.
       if (currentQuery !== myQuery) continue;
       if (msg.type === "system") {
         if (msg.session_id) {
@@ -1078,10 +1078,10 @@ async function runStream() {
         } else if (msg.subtype === "commands_changed") {
           emitCatalogChanged(msg.commands);
         } else if (msg.subtype === "background_tasks_changed" && Array.isArray(msg.tasks)) {
-          // TAREFAS EM SEGUNDO PLANO (um Bash com run_in_background, um subagente, um monitor): o
-          // turno fecha e elas seguem. Sem este aviso o chat apagava o "Trabalhando…" no `result` e
-          // ficava mudo por minutos — lido do outro lado como "ele parou" (produção, 2026-10-07).
-          // É um sinal de NÍVEL: o conjunto inteiro a cada mudança, para SUBSTITUIR, nunca somar.
+          // BACKGROUND TASKS (a Bash with run_in_background, a subagent, a monitor): the
+          // turn closes and they go on. Without this notice the chat cleared the "Trabalhando…" on the `result` and
+          // went silent for minutes — read on the other side as "it stopped" (production, 2026-10-07).
+          // It is a LEVEL signal: the whole set on every change, to REPLACE, never add.
           const tasks = msg.tasks
             .filter((t) => t && typeof t.task_id === "string")
             .map((t) => ({
@@ -1096,9 +1096,9 @@ async function runStream() {
           const frame = taskFrame(msg);
           if (frame) emit(frame);
         } else if (msg.subtype === "status") {
-          // A COMPACTAÇÃO (o /compact, ou a automática quando a janela enche): o CLI passa segundos
-          // ou minutos resumindo a conversa sem soltar uma palavra no stream — sem isto o chat lia
-          // aquilo como um turno travado. O fim bom vem pelo `compact_boundary`, com os números.
+          // THE COMPACTION (the /compact, or the automatic one when the window fills up): the CLI spends seconds
+          // or minutes summarising the conversation without letting out a word on the stream — without this the chat read
+          // that as a stuck turn. The good end comes through `compact_boundary`, with the numbers.
           if (msg.status === "compacting") compactionStarted();
           else if (msg.compact_result === "failed") {
             compactionEnded({ phase: "failed", error: typeof msg.compact_error === "string" && msg.compact_error ? msg.compact_error : "falhou" });
@@ -1111,8 +1111,8 @@ async function runStream() {
           if (msg.content.trim() !== "") emit({ type: "local_output", text: msg.content });
         }
       } else if (msg.type === "rate_limit_event" && msg.rate_limit_info && typeof msg.rate_limit_info === "object") {
-        // O AVISO DE LIMITE DO PLANO (o "You've used 91% of your session limit" do rodapé do CLI).
-        // Repassado cru: as unidades (fração, epoch em segundos) são acertadas no back, em rateLimit.ts.
+        // THE PLAN LIMIT WARNING (the "You've used 91% of your session limit" in the CLI's footer).
+        // Passed on raw: the units (fraction, epoch in seconds) are fixed in the back, in rateLimit.ts.
         const info = msg.rate_limit_info;
         emit({
           type: "rate_limit",
@@ -1122,34 +1122,34 @@ async function runStream() {
           resetsAt: info.resetsAt,
         });
       } else if (msg.type === "conversation_reset") {
-        // /clear (ou outro fluxo de "sessão nova" do CLI): o modelo começa do zero numa sessão NOVA
-        // — a próxima mensagem `system` traz o id dela, e o `session` sai por lá. O que este driver
-        // guardava da conversa antiga morre aqui: um ponto de volta dela, usado num editar depois
-        // do /clear, rebobinaria a sessão nova para dentro da conversa que acabou de ser apagada.
+        // /clear (or another CLI "new session" flow): the model starts from scratch in a NEW session
+        // — the next `system` message carries its id, and the `session` goes out from there. What this driver
+        // kept of the old conversation dies here: a fork point from it, used in an edit after
+        // the /clear, would rewind the new session into the conversation that has just been erased.
         lastAssistantUuid = null;
         forkPoint = null;
         forkText = null;
         absorbedSinceFork = false;
-        // Hoje o frame do CLI chega sem a causa do reset (sem campo `trigger`), e todo reset vira
-        // "clear" — sair do plan mode inclusive. Se o CLI passar a mandar `trigger`, ele é repassado.
+        // Today the CLI's frame arrives without the reset's cause (no `trigger` field), and every reset becomes
+        // "clear" — leaving plan mode included. If the CLI starts sending `trigger`, it is passed on.
         emit({ type: "conversation_reset", trigger: typeof msg.trigger === "string" ? msg.trigger : "clear" });
       } else if (msg.type === "stream_event") {
-        // O stream de um SUBAGENTE (Agent/Task) não é a fala do principal e fica fora da linha de
-        // streaming. O que o subagente faz chega consolidado, marcado com `parentToolUseId` (ramo
-        // `assistant`).
+        // A SUBAGENT's (Agent/Task) stream is not the main agent's speech and stays out of the
+        // streaming line. What the subagent does arrives consolidated, marked with `parentToolUseId` (the
+        // `assistant` branch).
         if (msg.parent_tool_use_id) continue;
         const ev = msg.event;
         if (ev && ev.type === "content_block_delta" && ev.delta && ev.delta.type === "text_delta") {
           emit({ type: "assistant_delta", text: ev.delta.text });
         } else if (ev && ev.type === "content_block_delta" && ev.delta && ev.delta.type === "thinking_delta") {
-          // O campo é `thinking`, não `text` (ThinkingDelta da Messages API).
+          // The field is `thinking`, not `text` (the Messages API's ThinkingDelta).
           if (ev.delta.thinking) emit({ type: "thinking_delta", text: ev.delta.thinking });
         } else {
           for (const out of toolInput.see(ev, Date.now())) emit(out);
         }
       } else if (msg.type === "tool_progress") {
-        // Há quanto tempo a ferramenta roda (um Bash de dois minutos era indistinguível de um
-        // travamento). Só a do principal: a de um subagente não é um passo que a tela desenha.
+        // How long the tool has been running (a two-minute Bash was indistinguishable from a
+        // hang). Only the main agent's: a subagent's is not a step the screen draws.
         if (msg.parent_tool_use_id) continue;
         if (typeof msg.tool_use_id === "string" && typeof msg.elapsed_time_seconds === "number") {
           emit({ type: "tool_progress", id: msg.tool_use_id, elapsedSeconds: msg.elapsed_time_seconds });
@@ -1157,35 +1157,35 @@ async function runStream() {
       } else if (msg.type === "assistant") {
         // The fork point a later rewind will use. Recorded for EVERY assistant message, so the
         // point is always the tip of the last completed answer.
-        // A mensagem de um SUBAGENTE mora numa sidechain: rebobinar para o uuid dela levaria a sessão
-        // principal a um ponto que não é dela. Só o principal move o ponto de volta.
+        // A SUBAGENT's message lives on a sidechain: rewinding to its uuid would take the main
+        // session to a point that is not its own. Only the main agent moves the fork point.
         const parent = typeof msg.parent_tool_use_id === "string" && msg.parent_tool_use_id !== "" ? msg.parent_tool_use_id : null;
         if (msg.uuid && parent === null) lastAssistantUuid = msg.uuid;
-        // Fala do principal SEM turno aberto = o CLI abriu um turno sozinho (uma tarefa em segundo
-        // plano terminou, um ScheduleWakeup venceu). Ele passa a ser o turno em voo: uma mensagem
-        // agora é absorvida nele (`turn_absorbed`), e se o stream cair antes do `result` o finally
-        // fecha com o aborted que ele deve — senão o manager via o card trabalhando para sempre.
+        // Main-agent speech WITHOUT an open turn = the CLI opened a turn on its own (a background
+        // task finished, a ScheduleWakeup fired). It becomes the turn in flight: a message
+        // now is absorbed into it (`turn_absorbed`), and if the stream drops before the `result` the finally
+        // closes it with the aborted it owes — otherwise the manager saw the card working forever.
         if (parent === null && !turnActive) turnActive = true;
         const origin = parent === null ? {} : { parentToolUseId: parent };
         for (const block of msg.message.content) {
           if (block.type === "text") emit({ type: "assistant_text", text: block.text, ...origin });
-          // `redacted_thinking` não entra aqui de propósito: ele não carrega texto legível (só o
-          // payload cifrado), então não há o que mostrar — emitir uma linha vazia seria pior que
-          // nada. Um bloco vazio também é descartado: o spinner já diz que há trabalho em curso.
-          // O raciocínio de um subagente fica de fora: a linha de raciocínio da tela é a do principal.
+          // `redacted_thinking` does not come in here on purpose: it carries no readable text (only the
+          // encrypted payload), so there is nothing to show — emitting an empty line would be worse than
+          // nothing. An empty block is discarded too: the spinner already says there is work in progress.
+          // A subagent's reasoning stays out: the screen's reasoning line is the main agent's.
           else if (block.type === "thinking") { if (block.thinking && parent === null) emit({ type: "thinking", text: block.thinking }); }
           else if (block.type === "tool_use") {
             if (parent === null) {
-              toolInput.done(block.id); // o input está completo: acabou o progresso dele
+              toolInput.done(block.id); // the input is complete: its progress is over
               toolsInFlight.add(block.id);
             }
             emit({ type: "tool_use", id: block.id, name: block.name, input: block.input, ...origin });
           }
         }
-        // Cada resposta do principal muda o contexto; num turno longo o medidor anda junto (com teto).
+        // Each main-agent answer changes the context; on a long turn the meter moves along (with a throttle).
         if (parent === null) void emitContextUsage(myQuery, false);
       } else if (msg.type === "user") {
-        // O RESULTADO de cada ferramenta (do principal e dos subagentes) — ver `toolResultFrames`.
+        // The RESULT of each tool (the main agent's and the subagents') — see `toolResultFrames`.
         for (const frame of toolResultFrames(msg)) {
           if (!frame.parentToolUseId) toolsInFlight.delete(frame.id);
           emit(frame);
@@ -1230,15 +1230,15 @@ async function runStream() {
     // when the driver is idle. Whatever killed the stream, an open turn closes itself here; the
     // NEXT user message starts a fresh stream that resumes the same session (lastSessionId).
     //
-    // IDENTIDADE: só o stream VIGENTE encerra turno e larga o handle. `endStream` desiste de
-    // esperar depois de 3s, e aí o stream velho segue vivo ao lado do que o substituiu — estas
-    // duas linhas, sem guarda, fechavam o turno NOVO e zeravam o `currentQuery` VIVO (e com ele o
-    // botão de parar, que vira um no-op silencioso). Hazard anterior a esta mudança; a guarda
-    // custa uma comparação e no caminho normal não muda nada.
+    // IDENTITY: only the CURRENT stream closes a turn and drops the handle. `endStream` gives up
+    // waiting after 3s, and then the old stream stays alive next to the one that replaced it — these
+    // two lines, unguarded, closed the NEW turn and zeroed the LIVE `currentQuery` (and with it the
+    // stop button, which becomes a silent no-op). A hazard older than this change; the guard
+    // costs one comparison and changes nothing on the normal path.
     const stillOurs = currentQuery === myQuery;
     if (stillOurs) closeTurnAborted();
-    // O processo do CLI deste stream acabou, e as tarefas em segundo plano dele com ele: o conjunto
-    // que a tela mostra volta a vazio — senão o "rodando em segundo plano" ficava aceso para sempre.
+    // This stream's CLI process ended, and its background tasks with it: the set
+    // the screen shows goes back to empty — otherwise the "rodando em segundo plano" stayed lit forever.
     if (backgroundTasksOwner !== null && backgroundTasksOwner === myQuery) {
       backgroundTasksOwner = null;
       emit({ type: "background_tasks", tasks: [] });
@@ -1257,15 +1257,15 @@ async function runStream() {
 
 /* ------------------------------------------------------- context usage */
 
-// QUANTO DA JANELA DE CONTEXTO A SESSÃO JÁ OCUPA — o número do /context, para a tela pintar o medidor.
-// `detail: "summary"` responde da `usage` da última resposta + estimativa local, sem as chamadas de
-// contagem de tokens por categoria do modo "full": barato o bastante para correr a cada resposta.
-// Pedido no fim de cada turno e, durante um turno longo, no máximo a cada CONTEXT_USAGE_EVERY_MS.
+// HOW MUCH OF THE CONTEXT WINDOW THE SESSION ALREADY TAKES — the /context number, for the screen to paint the meter.
+// `detail: "summary"` answers from the last response's `usage` + a local estimate, without the "full" mode's
+// per-category token counting calls: cheap enough to run on every response.
+// Asked at the end of each turn and, during a long turn, at most every CONTEXT_USAGE_EVERY_MS.
 const CONTEXT_USAGE_EVERY_MS = 5_000;
 const CONTEXT_USAGE_TIMEOUT_MS = Number(process.env.VIBEHUB_CONTEXT_USAGE_TIMEOUT_MS) || 10_000;
 let contextUsageAt = 0;
 let contextUsageInFlight = false;
-let contextUsageAgain = false; // o fim do turno chegou com uma leitura em voo: refaz depois dela
+let contextUsageAgain = false; // the turn's end arrived with a reading in flight: redo it after that one
 
 /**
  * Asks the live session how full its context window is and emits `context_usage`. Best effort: an
@@ -1283,18 +1283,18 @@ async function emitContextUsage(handle, force) {
   contextUsageInFlight = true;
   contextUsageAt = now;
   try {
-    // Com prazo: uma consulta que nunca responde não pode prender o medidor para sempre (o
-    // `contextUsageInFlight` barraria todas as seguintes).
+    // With a deadline: a query that never answers must not hold the meter forever (the
+    // `contextUsageInFlight` would bar all the following ones).
     let timer;
     const usage = await Promise.race([
       handle.getContextUsage({ detail: "summary" }),
       new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer in ${CONTEXT_USAGE_TIMEOUT_MS}ms`)), CONTEXT_USAGE_TIMEOUT_MS); }),
     ]).finally(() => clearTimeout(timer));
-    // Um stream que foi trocado no meio fala da sessão VELHA: o número dele não vale mais.
+    // A stream that was swapped midway speaks of the OLD session: its number no longer counts.
     if (!usage || handle !== currentQuery) return;
     emit({
       type: "context_usage",
-      // A janela CRUA do modelo (200k, 1M) — a mesma base do "84k/200k" do /context.
+      // The model's RAW window (200k, 1M) — the same base as /context's "84k/200k".
       usedTokens: usage.totalTokens,
       maxTokens: usage.rawMaxTokens ?? usage.maxTokens,
       ...(typeof usage.model === "string" ? { model: usage.model } : {}),
@@ -1323,12 +1323,12 @@ function closeTurnAborted() {
   emit({ type: "result", subtype: "aborted", isError: false, sessionId: lastSessionId });
 }
 
-/* ----------------------------------------------------- a compactação da conversa */
-// Uma linha por compactação: o CLI repete o status "compacting" enquanto trabalha, e a tela só
-// precisa saber que começou e como acabou.
+/* ----------------------------------------------------- the conversation's compaction */
+// One line per compaction: the CLI repeats the "compacting" status while it works, and the screen only
+// needs to know that it started and how it ended.
 let compacting = false;
-// A pessoa mandou `/compact`: a próxima compactação é a dela ("manual"). O status do CLI não diz o
-// gatilho — só o `compact_boundary` do FIM diz —, e a barra precisa do título certo desde o início.
+// The person sent `/compact`: the next compaction is theirs ("manual"). The CLI's status does not say the
+// trigger — only the END's `compact_boundary` does —, and the bar needs the right title from the start.
 let compactRequested = false;
 
 function noteCompactRequest(text) {
@@ -1341,7 +1341,7 @@ function compactionStarted() {
   emit({ type: "compaction", phase: "started", trigger: compactRequested ? "manual" : "auto" });
 }
 
-/** Fecha a linha. Um `done` vale mesmo sem `started` (o CLI pode compactar sem anunciar o status). */
+/** Closes the line. A `done` counts even without `started` (the CLI may compact without announcing the status). */
 function compactionEnded(frame) {
   if (!compacting && frame.phase === "failed") return;
   compacting = false;
@@ -1349,7 +1349,7 @@ function compactionEnded(frame) {
   emit({ type: "compaction", ...frame });
 }
 
-/** O `done` a partir do `compact_metadata` do CLI — só os números que vieram. */
+/** The `done` from the CLI's `compact_metadata` — only the numbers that came. */
 function compactionDone(meta) {
   const m = meta && typeof meta === "object" ? meta : {};
   const count = (v) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.round(v) : undefined);
@@ -1361,7 +1361,7 @@ function compactionDone(meta) {
   return frame;
 }
 
-/** O turno fechou com a compactação ainda aberta: a barra não pode rodar para sempre. */
+/** The turn closed with the compaction still open: the bar must not spin forever. */
 function settleCompaction() {
   if (compacting) compactionEnded({ phase: "failed", error: "interrompida" });
 }
@@ -1409,14 +1409,14 @@ function ultraQuotedSpans(text) {
 }
 
 /**
- * Até onde vai o NOME de um slash command — 0 quando a mensagem não é um.
+ * Where a slash command's NAME ends — 0 when the message is not one.
  *
- * Espelha `commandNameEnd` em front/src/features/board/lib/ultraWords.ts, e tem de continuar
- * espelhando: esta detecção é a que ESCALA o turno, a da tela só pinta a palavra. A regra antiga
- * descartava a mensagem INTEIRA por causa da primeira letra, e uma mensagem que abria com
- * `/superpowers:systematic-debugging` e terminava em `ultracode` não escalava nada (produção,
- * 2026-09-28). O que é comando é o PRIMEIRO TOKEN; o resto são argumentos, que o comando expande
- * para dentro do prompt — prosa, onde a palavra vale como valeria em qualquer frase.
+ * Mirrors `commandNameEnd` in front/src/features/board/lib/ultraWords.ts, and has to keep
+ * mirroring it: this detection is the one that ESCALATES the turn, the screen's only paints the word. The old rule
+ * discarded the WHOLE message because of its first letter, and a message that opened with
+ * `/superpowers:systematic-debugging` and ended in `ultracode` escalated nothing (production,
+ * 2026-09-28). What is a command is the FIRST TOKEN; the rest are arguments, which the command expands
+ * into the prompt — prose, where the word counts as it would in any sentence.
  */
 function ultraCommandNameEnd(text) {
   if (!text.startsWith("/")) return 0;
@@ -1434,7 +1434,7 @@ function hasUltraKeyword(text, keyword) {
     if (m.index === undefined) continue;
     const start = m.index;
     const end = start + m[0].length;
-    if (start < nameEnd) continue; // dentro do nome do comando: é o nome, não o pedido
+    if (start < nameEnd) continue; // inside the command's name: it is the name, not the request
     if (spans.some((s) => start >= s.start && start < s.end)) continue;
     const before = source[start - 1];
     const after = source[end];
@@ -1602,7 +1602,7 @@ async function restoreAccountEffort(handle, isLatestWrite) {
  * The card's intelligence was switched in the pill with this driver up (`set_effort`). It used to
  * wait for a restart that only came once the turn ended — and a turn with subagents in the
  * background never ended in time: the session went on in the old level while the pill promised the
- * new one (produção, 2026-10-27). Now the level goes into the live stream's flag layer right away,
+ * new one (production, 2026-10-27). Now the level goes into the live stream's flag layer right away,
  * mid-turn included: the CLI reads the effort per request, so the next call to the model already
  * uses it, and the conversation goes on from exactly where it was.
  *
@@ -1632,7 +1632,7 @@ async function setCardEffort(level, switching) {
   // The stream went away while the switch waited on its CLI (a rewind, a new sign-in, the CLI
   // exiting). With none in its place, the next one takes the level. One that took its place in the
   // meantime was born on the OLD level, read outside this queue: the switch never reached it, so it
-  // is answered as not applied and the back falls back to restarting on the card's level (review do
+  // is answered as not applied and the back falls back to restarting on the card's level (review of
   // PR #259, f11: it was confirmed, "já valendo" with the session on the old level).
   const streamChanged = () =>
     currentQuery === null ? nextStreamTakesIt() : { error: "a new session started during the switch, on the previous level" };
@@ -1765,8 +1765,8 @@ function sendUser(text) {
   const ultra = ultraKeywords(text);
   const fresh = !channel;
   if (fresh) {
-    // A consulta descartável do catálogo (se ainda estiver de pé) não tem mais razão de existir —
-    // e deixá-la viva gastaria um CLI inteiro ao lado do que vai responder de verdade.
+    // The catalog's throwaway query (if it is still up) has no reason to exist any more —
+    // and leaving it alive would spend a whole CLI next to the one that is really going to answer.
     if (warmChannel) warmChannel.end();
     if (warmAbort) warmAbort.abort();
     channel = makeChannel();
@@ -1812,7 +1812,7 @@ function sendUser(text) {
   if (absorbed) emit({ type: "turn_absorbed" });
 }
 
-/** O turno corrente acabou (result ou stream morto): nenhuma ferramenta segue rodando, e quem esperava é solto. */
+/** The current turn ended (result or dead stream): no tool keeps running, and whoever was waiting is released. */
 function turnEnded() {
   toolsInFlight.clear();
   const waiters = turnEndWaiters;
@@ -1820,24 +1820,24 @@ function turnEnded() {
   for (const resolve of waiters) resolve();
 }
 
-/** Quanto o "Enviar agora" espera o turno interrompido fechar antes de mandar a mensagem assim mesmo. */
+/** How long "Enviar agora" waits for the interrupted turn to close before sending the message anyway. */
 const SEND_NOW_TIMEOUT_MS = 10_000;
 
 /**
- * O "ENVIAR AGORA" da fila. Com uma ferramenta do principal rodando, empurrar a mensagem não basta:
- * o CLI só a lê quando a ferramenta devolve — e um vibehub_deliver preso deixou a pessoa falando
- * sozinha por 24 min. Então interrompe (o que o Esc do terminal faz), espera o turno interrompido
- * fechar e manda a mensagem como turno NOVO, com result próprio. Sem ferramenta rodando o modelo lê
- * a mensagem no passo seguinte, em segundos: ela dobra no turno como qualquer outra, sem cortar nada.
- * O teto da espera nunca segura a mensagem: venceu, ela vai pelo caminho normal.
+ * The queue's "ENVIAR AGORA". With a main-agent tool running, pushing the message is not enough:
+ * the CLI only reads it when the tool returns — and a stuck vibehub_deliver left the person talking
+ * to themselves for 24 min. So it interrupts (what the terminal's Esc does), waits for the interrupted turn to
+ * close and sends the message as a NEW turn, with its own result. With no tool running the model reads
+ * the message on the next step, in seconds: it folds into the turn like any other, cutting nothing.
+ * The wait's cap never holds the message: once it expires, it goes the normal way.
  */
 async function sendUserNow(text) {
   if (turnActive && toolsInFlight.size > 0 && currentQuery && typeof currentQuery.interrupt === "function") {
     const closed = new Promise((resolve) => { turnEndWaiters.push(resolve); });
-    // Uma pergunta ou permissão pendente é desse turno que está sendo cortado.
+    // A pending question or permission belongs to the turn being cut.
     denyPendingPermissions();
     for (const id of [...pendingQuestions.keys()]) resolveQuestion(id, null);
-    currentQuery.interrupt().catch(() => { /* um turno que já acabou não se interrompe — e tudo bem */ });
+    currentQuery.interrupt().catch(() => { /* a turn that has already ended is not interrupted — and that is fine */ });
     await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, SEND_NOW_TIMEOUT_MS))]);
   }
   sendUser(text);
@@ -1885,9 +1885,9 @@ async function endStream() {
     currentQuery = null;
     ultraRaised = null; // pinned in that CLI's flag layer, which is no longer ours to give back
     closeTurnAborted();
-    // As tarefas em segundo plano dele também deixam de ser nossas: o que ele ainda anunciar é só
-    // drenado (inclusive o `[]` de quando elas acabam), e o `finally` dele pode nunca rodar — um
-    // processo pendurado deixava a faixa acesa e o driver "ocupado" para sempre.
+    // Its background tasks also stop being ours: whatever it still announces is only
+    // drained (including the `[]` from when they end), and its `finally` may never run — a
+    // hanging process left the strip lit and the driver "busy" forever.
     if (backgroundTasksOwner === dying) {
       backgroundTasksOwner = null;
       emit({ type: "background_tasks", tasks: [] });
@@ -1909,24 +1909,24 @@ async function endStream() {
  * the model about what is still in the conversation.
  */
 /**
- * Religa a conversa no FIM REAL do arquivo, quando ela andou por fora (ver `staleView`).
+ * Reconnects the conversation at the file's REAL END, when it moved outside (see `staleView`).
  *
- * Derrubar a corrente é tudo o que é preciso: sem `pendingResumeAt`, o próximo `runStream` abre com
- * `resume: lastSessionId` e o CLI retoma do fim do transcript — que já inclui o que o terminal
- * escreveu. O ponto de volta em memória morre junto: ele aponta para uma linha do tempo que não é
- * mais a vigente, e usá-lo rebobinaria para o lugar errado.
+ * Knocking down the stream is all it takes: without `pendingResumeAt`, the next `runStream` opens with
+ * `resume: lastSessionId` and the CLI resumes from the end of the transcript — which already includes what the terminal
+ * wrote. The in-memory fork point dies with it: it points to a timeline that is no longer
+ * the current one, and using it would rewind to the wrong place.
  *
- * Um turno NOSSO em voo manda mais que a marca: ele É o fim da conversa, e derrubá-lo perderia a
- * resposta que está sendo escrita. A marca fica para o próximo envio. Se o teardown falhar, a marca
- * TAMBÉM fica — religar na próxima é melhor que seguir achando que já religou.
+ * One of OUR turns in flight outranks the mark: it IS the end of the conversation, and knocking it down would lose the
+ * answer being written. The mark stays for the next send. If the teardown fails, the mark
+ * ALSO stays — reconnecting on the next one is better than going on thinking it already reconnected.
  */
 async function reanchorIfStale() {
   if (!staleView || turnActive) return;
-  if (!currentQuery) { staleView = false; return; } // sem corrente aberta: o próximo stream já nasce do fim do arquivo
+  if (!currentQuery) { staleView = false; return; } // no open stream: the next stream is already born from the end of the file
   try {
     await endStream();
   } catch {
-    return; // a corrente velha sobreviveu — tenta de novo no envio seguinte
+    return; // the old stream survived — try again on the next send
   }
   staleView = false;
   forkPoint = null;
@@ -1942,7 +1942,7 @@ async function reanchorIfStale() {
  * `.credentials.json` NEWER than it carries a refresh token (a `/login` made after the token).
  *
  * The spawn command decides only once, and the CLI process keeps the environment it was born with —
- * so a login made while the driver ran was ignored until someone clicked "Reiniciar" (produção,
+ * so a login made while the driver ran was ignored until someone clicked "Reiniciar" (production,
  * 2026-10-19: the person logged in again and the chat kept answering "OAuth token revoked"). The
  * driver re-reads the profile itself: before every stream (here) and before every send
  * (`reauthIfChanged`). PURE: the file facts come in, the decision comes out.
@@ -2037,7 +2037,7 @@ async function rewindAndSend(text, fallback, original, releaseQuestions = () => 
   // The FIRST message of the conversation needs no search at all: nothing before it is kept, so the
   // answer is always "start over". Searching by words was the bug — a message re-sent after an error
   // has the same words, the newest copy matched, and editing the first message rewound to the
-  // second (produção, 2026-10-19).
+  // second (production, 2026-10-19).
   const disk = first
     ? { found: true, uuid: null }
     : lastSessionId ? forkPointFromTranscript(await readSessionTranscript(lastSessionId), original) : { found: false };
@@ -2123,17 +2123,17 @@ rl.on("line", (line) => {
     return;
   }
   if (control && control.type === "user" && typeof control.text === "string") {
-    // ORDEM IMPORTA: a mensagem entra na corrente ANTES de o cartão ser liberado. Liberar primeiro
-    // solta o turno, que pode seguir e responder à pergunta sem nunca ter visto a mensagem nova —
-    // exatamente o contrário do que a pessoa pediu ao escrever. E ANTES das duas coisas, religar no
-    // fim real do arquivo: uma mensagem enviada de um ponto velho órfã o que o terminal escreveu.
+    // ORDER MATTERS: the message enters the stream BEFORE the card is released. Releasing first
+    // frees the turn, which may go on and answer the question without ever having seen the new message —
+    // exactly the opposite of what the person asked for by writing. And BEFORE both things, reconnect at the
+    // file's real end: a message sent from a stale point orphans what the terminal wrote.
     serialized(async () => {
       await reanchorIfStale();
       await reauthIfChanged();
       noteCompactRequest(control.text);
       if (control.now === true) await sendUserNow(control.text);
       else sendUser(control.text);
-      // A resposta tardia a um cartão já fechado (o back marca) não leva a pergunta seguinte junto.
+      // The late answer to an already closed card (the back marks it) does not take the next question along.
       if (control.keepQuestions !== true) supersedePendingQuestions();
     });
     return;
@@ -2142,8 +2142,8 @@ rl.on("line", (line) => {
     // Same ORDER as a plain user message: the message is on its way before the pending question
     // cards are released, so a turn parked on a question never answers without having read it.
     // rewindAndSend releases them itself, at the right moment of whichever path it takes.
-    // Religar ANTES de decidir: um supersede escrito na corrente velha órfã o turno do terminal
-    // outra vez, e o ponto em memória que a decisão consultaria é de uma linha do tempo vencida.
+    // Reconnect BEFORE deciding: a supersede written on the old stream orphans the terminal's turn
+    // again, and the in-memory point the decision would consult belongs to an expired timeline.
     serialized(async () => {
       await reanchorIfStale();
       await reauthIfChanged();
@@ -2152,17 +2152,17 @@ rl.on("line", (line) => {
     return;
   }
   if (control && control.type === "btw" && typeof control.id === "string" && typeof control.question === "string") {
-    // FORA da fila `serialized`: a pergunta lateral não espera nada nem segura nada.
+    // OUTSIDE the `serialized` queue: the side question waits for nothing and holds nothing.
     queueBtw(control.id, control.question);
     return;
   }
   if (control && control.type === "set_effort" && typeof control.id === "string" && (typeof control.effort === "string" || control.effort === null)) {
-    // FORA da fila `serialized`: a troca vale para o turno que já está rodando, não espera por ele.
+    // OUTSIDE the `serialized` queue: the switch applies to the turn already running, it does not wait for it.
     queueEffortSwitch(control.id, control.effort);
     return;
   }
   if (control && control.type === "reanchor") {
-    // O back viu o transcript andar fora do chat (espelho da aba Terminal). Só marca — ver `staleView`.
+    // The back saw the transcript move outside the chat (the Terminal tab's mirror). It only marks — see `staleView`.
     staleView = true;
     return;
   }
@@ -2198,7 +2198,7 @@ rl.on("close", () => process.exit(0));
 
 emit({ type: "ready", resume: INITIAL_RESUME });
 
-// O menu "/" não espera a primeira mensagem: assim que o driver está de pé, ele pergunta ao CLI
-// quais comandos esta sessão tem. Nunca bloqueia o boot — falhou, o chat segue sem menu até o
-// primeiro `init`, que é exatamente o comportamento antigo.
+// The "/" menu does not wait for the first message: as soon as the driver is up, it asks the CLI
+// which commands this session has. It never blocks the boot — if it fails, the chat goes on without a menu until the
+// first `init`, which is exactly the old behaviour.
 void warmCatalog();
