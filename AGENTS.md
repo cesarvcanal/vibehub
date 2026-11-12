@@ -49,7 +49,7 @@
 - Não criar `try/catch` que só captura e relança o mesmo erro sem acrescentar informação ou comportamento.
 - Não engolir erros, não retornar sucesso falso e não adicionar `setTimeout`/retries para esconder uma falha de fluxo.
 - Não criar flags, estados, campos ou leituras que ninguém consome.
-- Evitar efeitos colaterais implícitos: operação que altera estado ou dado é explícita no nome e na chamada.
+- Efeito colateral é explícito: função que grava, apaga ou muda estado diz isso no nome (`save`, `delete`, `set`…); um `get`/`read`/`parse` não grava nada.
 - Reaproveitar utilitários e dependências **realmente existentes** antes de escrever abstrações novas ou instalar bibliotecas.
 - Respeitar o formatter e a organização do repositório. Não reformatar arquivos inteiros que não participam da tarefa.
 - **Comentários:** acompanhar a densidade do arquivo tocado. Módulos centrais abrem com um bloco que explica a responsabilidade e as invariantes (veja `runtime/host.ts`, `auth/access.ts`) — ao mudar uma invariante, atualize o bloco. Não narrar linhas óbvias.
@@ -144,7 +144,7 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 
 ## 11. Testes e critérios de correção
 
-- **Teste sempre em TDD:** escrever o teste primeiro, rodar e ver falhar pelo motivo certo (em bug, reproduzindo o erro que aconteceu) e só então implementar até passar. Teste que nunca foi visto falhando não prova nada.
+- **Mudança de comportamento ou bug é sempre em TDD:** escrever o teste primeiro, rodar e ver falhar pelo motivo certo (em bug, reproduzindo o erro que aconteceu) e só então implementar até passar. Teste que nunca foi visto falhando não prova nada.
 - Mudança de comportamento exige testes proporcionais ao risco. **Vitest** nos dois pacotes, com o teste ao lado do código (`*.test.ts` / `*.test.tsx`). Priorizar o fluxo real; teste unitário complementa quando isola regra complexa.
 - Usar a infraestrutura de teste existente; não criar infraestrutura paralela. No front ela é Vitest + Testing Library + jsdom (`front/vitest.config.ts`, helper `renderApp` em `front/src/test/render.tsx`).
 - Dado de teste sai do fluxo real ou de fábrica fiel ao contrato; não inventar shape que não existe em produção.
@@ -168,8 +168,6 @@ Se um comando de teste for passar de ~2 min, troque por um recorte menor. Não a
 
 ## 12. Processo obrigatório de trabalho do agente
 
-**Não sair executando.** Feature, mudança de comportamento ou decisão que é do usuário: antes de escrever código, entender a demanda e fechar o caminho com ele. A correção dentro do que já foi definido segue a *Autonomia corretiva* abaixo.
-
 - **Teve dúvida, pergunta.** Requisito ambíguo, mais de um caminho razoável ou decisão que é do usuário: perguntar antes de implementar, com opções e uma recomendação.
 - **Explorar antes de construir.** Feature nova ou mudança de comportamento com alternativas passa por brainstorming: requisitos, abordagens com prós e contras, recomendação, e execução só com o caminho aprovado.
 - **Usar as skills de processo disponíveis** sem esperar ser mandado: debugging sistemático antes de propor fix, TDD na implementação, plano escrito para tarefa de várias etapas, verificação antes de declarar pronto, code review depois de implementar.
@@ -183,7 +181,7 @@ Se um comando de teste for passar de ~2 min, troque por um recorte menor. Não a
 5. **Auditar o trecho tocado:** nomes, código morto, duplicação, fallback indevido, leituras inúteis.
 6. **Não espalhar alterações:** problema vizinho que exige refatoração arriscada é comunicado, não corrigido de carona.
 7. **Validar:** testes do recorte, typecheck e build quando aplicável; revisar o diff.
-8. **Revisão independente antes de entregar:** terminado tudo o que foi pedido, o diff passa, nesta ordem, por **simplificação** (aplicada) e por **code review** (correção, aderência às regras e o que foi inventado), ambas feitas por um revisor SEM o contexto de quem escreveu e confrontando este arquivo. Achado confirmado é corrigido; o descartado tem o motivo dito. Como rodar isso em cada ferramenta fica no arquivo dela (no Claude Code, `.claude/CLAUDE.md`).
+8. **Revisão independente antes de entregar:** terminado tudo o que foi pedido, o diff passa, nesta ordem, por **simplificação** (aplicada) e por **code review** (correção, aderência às regras e o que foi inventado), ambas feitas por um revisor SEM o contexto de quem escreveu e confrontando este arquivo. Achado confirmado é corrigido; o descartado tem o motivo dito. O que a simplificação mudar volta pelo passo 7 antes do code review. Como rodar isso em cada ferramenta fica no arquivo dela (no Claude Code, `.claude/CLAUDE.md`).
 9. **Descrever o resultado:** o que mudou, o que foi verificado e as limitações reais.
 
 ### Autonomia corretiva e preservação do escopo

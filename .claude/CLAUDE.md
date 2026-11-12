@@ -30,7 +30,7 @@ Habilitadas em [`settings.json`](settings.json). O `enabledPlugins` só liga plu
 | Plano de várias etapas / executar plano | `superpowers:writing-plans` · `superpowers:executing-plans` |
 | Implementação test-first | `superpowers:test-driven-development` |
 | UI nova com alta qualidade visual | `frontend-design:frontend-design` |
-| Review independente de diff/PR | `/code-review` · `feature-dev:code-reviewer` · `superpowers:requesting-code-review` |
+| Review independente de diff/PR | `/code-review` · `superpowers:requesting-code-review` |
 | Simplificar código existente | `/simplify` · `code-simplifier:code-simplifier` |
 | Antes de afirmar que algo está pronto/passando | `superpowers:verification-before-completion` |
 
@@ -54,10 +54,10 @@ Habilitadas em [`settings.json`](settings.json). O `enabledPlugins` só liga plu
 
 ## Fechamento: revisão agnóstica contra o AGENTS.md
 
-É o passo 8 do §12 do `AGENTS.md` no Claude Code, antes do `vibehub_deliver`, sem esperar ser mandado. **Agnóstico** = o prompt de cada subagente leva só o diff (`git diff origin/main...HEAD`), o caminho do `AGENTS.md` e o pedido, nunca a sua justificativa nem a conversa: quem escreveu não revisa o próprio raciocínio.
+É o passo 8 do §12 do `AGENTS.md` no Claude Code, antes do `vibehub_deliver`, sem esperar ser mandado. **Agnóstico** = o prompt de cada subagente leva só o diff (`git fetch origin main` e então `git diff origin/main...HEAD`), o caminho do `AGENTS.md` e o pedido, nunca a sua justificativa nem a conversa: quem escreveu não revisa o próprio raciocínio.
 
 1. **Simplificação:** subagente `code-simplifier:code-simplifier`, com o pedido de confrontar cada trecho com as regras e aplicar o que simplifica sem mudar comportamento. Confira o que ele escreveu e rode o recorte de testes.
-2. **Code review**, só depois de o primeiro terminar, sobre o diff já simplificado: `feature-dev:code-reviewer` (ou o `/code-review` nativo) procura bug, regra violada e o que foi inventado: teste que não testa, causa sem evidência, comentário que não bate com o código, API ou flag que não existe.
+2. **Code review**, só depois de o primeiro terminar, sobre o diff já simplificado: subagente `feature-dev:code-reviewer` procura bug, regra violada e o que foi inventado: teste que não testa, causa sem evidência, comentário que não bate com o código, API ou flag que não existe.
 3. Cada achado se confere na fonte (veja *Verifique na fonte*); o confirmado se corrige em commit próprio.
 
 Fora do fechamento, em "audita" / "segue as regras?": `/code-review` (o comando nativo, com níveis de esforço; o plugin `code-review` não é habilitado aqui para não disputar o nome). `/code-review ultra` (multi-agente na nuvem, faturado) só quando o usuário pedir.
