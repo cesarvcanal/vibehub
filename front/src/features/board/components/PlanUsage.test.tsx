@@ -54,7 +54,7 @@ describe("PlanUsageMeter", () => {
   });
 
   it("leaves 'no reading' on the next poll once the server reads again, with no reload", async () => {
-    // Produção: login da conta expirado → `unauthorized`; o back renova e o poll seguinte já lê.
+    // Production: the account's login expired → `unauthorized`; the back renews it and the next poll reads.
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.spyOn(boardApi, "cardUsage")
       .mockResolvedValueOnce({ slug: "tech", usage: { available: false, error: "unauthorized", fetchedAt: Date.now() } })
