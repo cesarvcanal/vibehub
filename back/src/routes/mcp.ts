@@ -1,12 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { createHash } from "node:crypto";
 import { EXTERNAL_INSTRUCTIONS, INSTRUCTIONS, createMcpServer } from "../mcp/server.js";
 import { handleModern, isModernRequest } from "../mcp/modern.js";
 import type { WebhookPrincipal } from "../services/webhooks/subscriptions.js";
 import { runnerToken } from "../runtime/runner.js";
 import { currentUser, tokenMatches } from "../auth/session.js";
-import { accessTokenHash, originOf, userForAccessToken } from "../auth/oauth.js";
+import { hashToken, originOf, userForAccessToken } from "../auth/oauth.js";
 import type { PublicUser } from "../auth/users.js";
 import { logger } from "../utils/logger.js";
 
@@ -70,9 +69,9 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
       // A webhook subscription outlives the request: it keeps the account (or the board) and the
       // HASH of the credential, re-checked at every delivery. A browser session holds no such grant.
       const holder: WebhookPrincipal | null = actor === "external" && user && bearer
-        ? { key: `user:${user.id}`, user, credential: accessTokenHash(bearer) }
+        ? { key: `user:${user.id}`, user, credential: hashToken(bearer) }
         : actor === "card" && bearer
-          ? { key: "board", user: null, credential: createHash("sha256").update(bearer).digest("hex") }
+          ? { key: "board", user: null, credential: hashToken(bearer) }
           : null;
       const reply_ = await handleModern({
         headers: request.headers, body: request.body, server: make, principal: holder,
