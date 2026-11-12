@@ -503,14 +503,14 @@ function runUpload(
   cardId: string,
   id: string,
   file: File,
-  handler: (file: File) => Promise<string | null>,
+  uploadImage: (file: File) => Promise<string | null>,
 ): Promise<string | null> {
   const already = uploadsInFlight.get(id);
   if (already) return already;
   const flight = (async () => {
     let path: string | null = null;
     try {
-      path = await handler(file);
+      path = await uploadImage(file);
     } catch {
       path = null;
     }
@@ -1203,10 +1203,10 @@ export function TerminalComposer({
       while (queueRef.current.length > 0) {
         const job = queueRef.current.shift();
         if (!job) break;
-        const handler = uploadRef.current;
-        if (!handler) break;
+        const uploadImage = uploadRef.current;
+        if (!uploadImage) break;
         setAttachments((prev) => prev.map((a) => (a.id === job.id ? { ...a, status: "uploading" } : a)));
-        const path = await runUpload(job.cardId, job.id, job.file, handler);
+        const path = await runUpload(job.cardId, job.id, job.file, uploadImage);
         if (keyRef.current === job.cardId) setAttachments((prev) => withUploadResult(prev, job.id, path));
       }
     } finally {
@@ -1340,12 +1340,12 @@ export function TerminalComposer({
       ctx.createMediaStreamSource(stream).connect(analyser);
       audioCtxRef.current = ctx;
       analyserRef.current = analyser;
-      const data = new Uint8Array(analyser.frequencyBinCount);
+      const samples = new Uint8Array(analyser.frequencyBinCount);
       const loop = () => {
         const live = analyserRef.current;
         if (!live) return;
-        live.getByteTimeDomainData(data);
-        setLevels(barHeights(levelFromTimeDomain(data)));
+        live.getByteTimeDomainData(samples);
+        setLevels(barHeights(levelFromTimeDomain(samples)));
         frameRef.current = requestAnimationFrame(loop);
       };
       loop();
@@ -1742,7 +1742,7 @@ function AttachControl({ mobile, onPick }: { mobile: boolean; onPick: (files: Fi
 
   // The same input element is reused across picks, so clear it or choosing the same file twice in a
   // row fires no `change` and the second pick is silently lost.
-  const handlePicked = (input: HTMLInputElement | null) => {
+  const submitPickedFiles = (input: HTMLInputElement | null) => {
     const files = input?.files ? Array.from(input.files) : [];
     if (files.length > 0) onPick(files);
     if (input) input.value = "";
@@ -1759,7 +1759,7 @@ function AttachControl({ mobile, onPick }: { mobile: boolean; onPick: (files: Fi
         capture="environment"
         className="hidden"
         data-testid="composer-input-camera"
-        onChange={() => handlePicked(cameraRef.current)}
+        onChange={() => submitPickedFiles(cameraRef.current)}
       />
       <input
         ref={galleryRef}
@@ -1768,7 +1768,7 @@ function AttachControl({ mobile, onPick }: { mobile: boolean; onPick: (files: Fi
         multiple
         className="hidden"
         data-testid="composer-input-gallery"
-        onChange={() => handlePicked(galleryRef.current)}
+        onChange={() => submitPickedFiles(galleryRef.current)}
       />
       <input
         ref={fileRef}
@@ -1776,7 +1776,7 @@ function AttachControl({ mobile, onPick }: { mobile: boolean; onPick: (files: Fi
         multiple
         className="hidden"
         data-testid="composer-input-file"
-        onChange={() => handlePicked(fileRef.current)}
+        onChange={() => submitPickedFiles(fileRef.current)}
       />
 
       <DropdownMenu>

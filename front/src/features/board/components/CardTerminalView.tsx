@@ -656,10 +656,10 @@ export function CardTerminalView({
   const sendMessage = React.useCallback(
     async (text: string) => {
       try {
-        const result = await boardApi.sendCardMessage(cardId, text);
+        const sent = await boardApi.sendCardMessage(cardId, text);
         queryClient.setQueryData(cardMessagesKey(cardId), {
-          pending: result.pending,
-          agent: result.agent,
+          pending: sent.pending,
+          agent: sent.agent,
         });
       } catch (error) {
         toast.error(apiErrorMessage(error, translate("outbox.sendError")));

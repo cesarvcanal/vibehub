@@ -513,11 +513,11 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
       next.onmessage = (event: MessageEvent) => {
         // The bridge sends text, but a proxy may hand it over as binary. Duck-typed rather than
         // `instanceof`, because a buffer that crossed a realm boundary fails that check.
-        const data: unknown = event.data;
-        if (typeof data === "string") writeFromServer(data);
-        else if (ArrayBuffer.isView(data)) writeFromServer(decoder.decode(data as ArrayBufferView));
-        else if (data && typeof (data as ArrayBuffer).byteLength === "number") {
-          writeFromServer(decoder.decode(new Uint8Array(data as ArrayBuffer)));
+        const payload: unknown = event.data;
+        if (typeof payload === "string") writeFromServer(payload);
+        else if (ArrayBuffer.isView(payload)) writeFromServer(decoder.decode(payload as ArrayBufferView));
+        else if (payload && typeof (payload as ArrayBuffer).byteLength === "number") {
+          writeFromServer(decoder.decode(new Uint8Array(payload as ArrayBuffer)));
         }
       };
       next.onerror = () => {
@@ -612,11 +612,11 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(funct
     /* --------------------------------------------------- images: paste & drop */
 
     const takeImages = (files: File[]): boolean => {
-      const handler = uploadRef.current;
-      if (!handler || files.length === 0) return false;
+      const uploadImage = uploadRef.current;
+      if (!uploadImage || files.length === 0) return false;
       void (async () => {
         for (const file of files) {
-          const path = await handler(file);
+          const path = await uploadImage(file);
           // Typing the path is the whole point: it is what lets the agent read the image.
           if (path) term.paste(`${path} `);
         }
