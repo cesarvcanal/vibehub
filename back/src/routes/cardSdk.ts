@@ -2,7 +2,6 @@ import type { FastifyInstance } from "fastify";
 import { WebSocket } from "ws";
 import { requireCardWork } from "../auth/access.js";
 import { requestUser } from "../auth/session.js";
-import { findUser } from "../auth/users.js";
 import * as registry from "../services/board/registry.js";
 import { recordCardActor, authorsTheTurn, isCardActor } from "../services/board/actor.js";
 import { getSettings } from "../services/settings/settings.js";
@@ -17,7 +16,7 @@ import {
 } from "../services/sdk/manager.js";
 import { readCardCatalog } from "../services/sdk/catalog.js";
 import { onExternalMessage, readHistory, type HistoryEvent } from "../services/sdk/history.js";
-import { matchOrigin, primeProvenance, type MessageOrigin } from "../services/chat/provenance.js";
+import { matchOrigin, originOfUser, primeProvenance } from "../services/chat/provenance.js";
 import {
   buildLatestTranscriptScript,
   mergeTranscriptReplay,
@@ -195,15 +194,8 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
         logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not replay sdk chat history");
       }
       // WHO is typing on this socket — stamped on their messages so OTHER readers of this card see
-      // the name (their own render unlabelled: the front compares it). Resolved once per connect.
-      let wsOrigin: MessageOrigin | undefined;
-      const userId = (req as typeof req & { userId?: string }).userId;
-      if (userId) {
-        try {
-          const user = await findUser(userId);
-          if (user) wsOrigin = { kind: user.role === "owner" ? "owner" : "user", name: user.username };
-        } catch { /* unattributed beats broken */ }
-      }
+      // the name (their own render unlabelled: the front compares it). The gate resolved them.
+      const wsOrigin = originOfUser((await requestUser(req))!);
       // The last two reads of the setup happen HERE, before anything is acquired: the spawn command
       // (used only when the card has no live driver) and the "/" menu remembered on disk (see below).
       const command = await sdkDriverCommand(project, {

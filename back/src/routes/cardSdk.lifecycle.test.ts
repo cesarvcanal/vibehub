@@ -73,7 +73,8 @@ vi.mock("../services/sdk/history.js", async (importOriginal) => {
     onExternalMessage: () => { h.externalSubscriptions += 1; return () => { h.externalSubscriptions -= 1; }; },
   };
 });
-vi.mock("../services/chat/provenance.js", () => ({
+vi.mock("../services/chat/provenance.js", async (importOriginal) => ({
+  originOfUser: (await importOriginal<typeof import("../services/chat/provenance.js")>()).originOfUser,
   primeProvenance: () => Promise.resolve(),
   matchOrigin: () => undefined,
 }));

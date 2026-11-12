@@ -4,7 +4,7 @@ import { config, dataPath } from "../../config/env.js";
 import { hostExecutor } from "../../runtime/host.js";
 import { getCard } from "./registry.js";
 import { findUser } from "../../auth/users.js";
-import { recordOrigin } from "../chat/provenance.js";
+import { originOfUser, recordOrigin } from "../chat/provenance.js";
 import { buildSendKeysScript } from "../maestro/maestro.js";
 import { cardAgentState, cardPaneReadiness, type AgentState } from "./agentState.js";
 import { logger } from "../../utils/logger.js";
@@ -309,9 +309,6 @@ async function noteSender(cardId: string, message: OutboxMessage): Promise<void>
   try {
     const user = await findUser(message.by);
     if (!user) return;
-    void recordOrigin(cardId, message.text, {
-      kind: user.role === "owner" ? "owner" : "user",
-      name: user.username,
-    });
+    void recordOrigin(cardId, message.text, originOfUser(user));
   } catch { /* unattributed beats broken */ }
 }

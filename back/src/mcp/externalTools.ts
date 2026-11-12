@@ -11,6 +11,7 @@ import {
 } from "../services/maestro/maestro.js";
 import { readCardChanges } from "../services/maestro/changes.js";
 import { deliverCard } from "../services/review/deliverCard.js";
+import { originOfUser } from "../services/chat/provenance.js";
 import { prDocsInput, prDocsOf, PR_DOCS_RULE } from "./prDocsInput.js";
 import { inboxFor, markDelivered, takeUndelivered, type CardEvent } from "../services/events/cardEvents.js";
 import { sendAnswer } from "./events.js";
@@ -289,7 +290,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
           readyWaitMs: SEND_READY_WAIT_MS,
           wake: true,
           viaNativeChat: true,
-          origin: { kind: user.role === "owner" ? "owner" : "user", name: user.username },
+          origin: originOfUser(user),
         }));
         return ok({ ...sent, sentAt, next: "call vibehub_wait_for_card with this cardId and since=sentAt" });
       } catch (e) {

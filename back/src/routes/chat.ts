@@ -2,10 +2,10 @@ import { spawn } from "node:child_process";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { WebSocket } from "ws";
 import { requireCardAccess, requireCardWork } from "../auth/access.js";
-import { findUser } from "../auth/users.js";
+import { requestUser } from "../auth/session.js";
 import { sendToTerminal } from "../services/maestro/maestro.js";
 import { chatSource, sendChatKey, parseChatEvents, CHAT_KEYS } from "../services/chat/chat.js";
-import { matchOrigin, primeProvenance, type MessageOrigin } from "../services/chat/provenance.js";
+import { matchOrigin, originOfUser, primeProvenance } from "../services/chat/provenance.js";
 import { createLineReader } from "../utils/lineReader.js";
 import { logger } from "../utils/logger.js";
 import { NOT_FOUND, sendError } from "./httpError.js";
@@ -27,23 +27,6 @@ const KEEPALIVE_MS = 25_000;
 /** The websocket user, for the audit line. */
 function actorOf(req: FastifyRequest): string | undefined {
   return (req as FastifyRequest & { userId?: string }).userId;
-}
-
-/**
- * The PROVENANCE of a person's send: their username, so the other people reading this card's chat
- * see who said it (their OWN messages render unlabelled — the front compares the name). Null when
- * the user cannot be resolved: an unattributed message beats a failed send.
- */
-async function userOriginOf(req: FastifyRequest): Promise<MessageOrigin | undefined> {
-  const userId = actorOf(req);
-  if (!userId) return undefined;
-  try {
-    const user = await findUser(userId);
-    if (!user) return undefined;
-    return { kind: user.role === "owner" ? "owner" : "user", name: user.username };
-  } catch {
-    return undefined;
-  }
 }
 
 export async function chatRoutes(app: FastifyInstance): Promise<void> {
@@ -143,7 +126,9 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
           by: actorOf(req),
           guardInteractiveMenu: true,
           requireAgent: true,
-          origin: await userOriginOf(req),
+          // The PROVENANCE of the send: the username, so the other people reading this card's chat
+          // see who said it (their OWN messages render unlabelled — the front compares the name).
+          origin: originOfUser((await requestUser(req))!),
         });
         return await reply.send({ ok: true });
       } catch (err) {
