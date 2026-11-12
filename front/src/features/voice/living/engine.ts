@@ -175,10 +175,6 @@ function phaseFraction(e: ScheduleEntry, time: number): number {
   return smoothstep(0, 1, (time - e.start) / e.len);
 }
 
-export function activeStages(arr: ScheduleEntry[], time: number): ScheduleEntry[] {
-  return arr.filter((e) => e.on && e.len > 0 && time >= e.start && time < e.end);
-}
-
 export function scheduleDuration(arr: ScheduleEntry[]): number {
   return Math.max(0, ...arr.map((e) => e.end));
 }
