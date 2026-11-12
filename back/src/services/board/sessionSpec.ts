@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
+import { readFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { config } from "../../config/env.js";
+import { writeFileAtomic } from "../../store/atomicWrite.js";
 import { logger } from "../../utils/logger.js";
 import { buildSdkDriverCommandLine } from "../sdk/driver.js";
 import { statusUrl } from "../../runtime/runner.js";
@@ -61,9 +62,7 @@ async function readStoredFingerprint(): Promise<string | null> {
 
 async function storeFingerprint(fingerprint: string): Promise<void> {
   await mkdir(config.dataDir, { recursive: true });
-  const tmp = `${specFile()}.tmp`;
-  await writeFile(tmp, JSON.stringify({ fingerprint, at: Date.now() }), { mode: 0o600 });
-  await rename(tmp, specFile());
+  await writeFileAtomic(specFile(), JSON.stringify({ fingerprint, at: Date.now() }));
 }
 
 /**
