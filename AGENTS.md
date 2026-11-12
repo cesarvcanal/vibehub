@@ -6,6 +6,8 @@
 >
 > **O projeto:** IDE hospedada para agentes de código — um kanban de terminais Claude Code reais rodando em containers no servidor do próprio usuário. Backend Fastify, servidor MCP próprio (`back/src/mcp/`), persistência em JSON atômico (`back/src/store/`), runner Docker local ou via SSH (`back/src/runtime/host.ts`). Frontend React + Vite + React Query + Radix/Tailwind. Projeto **público (MIT) e auto-hospedado**: cada instalação tem os próprios dados, então contrato persistido não muda sem migração.
 >
+> **Regra de aplicação:** as regras são **independentes do domínio**. Não presumem nomes de entidades, telas, fluxos ou estruturas de um módulo específico: antes de implementar, descubra os contratos e padrões reais do trecho que está modificando.
+>
 > **Fonte única:** este arquivo é a fonte das regras de código. O `CONTRIBUTING.md` é o resumo para contribuidores externos e não pode contradizê-lo.
 
 ## 1. Regras inegociáveis
@@ -43,9 +45,11 @@
 - Usar retornos antecipados para reduzir aninhamento quando melhorar a leitura. Não comprimir regras complexas em ternários encadeados.
 - Não duplicar **regra de negócio** ou fonte de verdade. Repetição pequena e local pode ser melhor que uma abstração genérica sem significado.
 - Importações estáticas no topo. Import dinâmico só por carregamento sob demanda, dependência circular real ou outra restrição técnica fundamentada.
+- Usar `async` quando houver execução assíncrona ou obrigação de retornar `Promise`; não tornar uma função assíncrona por costume.
 - Não criar `try/catch` que só captura e relança o mesmo erro sem acrescentar informação ou comportamento.
 - Não engolir erros, não retornar sucesso falso e não adicionar `setTimeout`/retries para esconder uma falha de fluxo.
 - Não criar flags, estados, campos ou leituras que ninguém consome.
+- Evitar efeitos colaterais implícitos: operação que altera estado ou dado é explícita no nome e na chamada.
 - Reaproveitar utilitários e dependências **realmente existentes** antes de escrever abstrações novas ou instalar bibliotecas.
 - Respeitar o formatter e a organização do repositório. Não reformatar arquivos inteiros que não participam da tarefa.
 - **Comentários:** acompanhar a densidade do arquivo tocado. Módulos centrais abrem com um bloco que explica a responsabilidade e as invariantes (veja `runtime/host.ts`, `auth/access.ts`) — ao mudar uma invariante, atualize o bloco. Não narrar linhas óbvias.
@@ -63,6 +67,8 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 **Antes de criar uma abstração, responder:** que responsabilidade ela protege? O que pioraria se fosse removida? Existe mais de um comportamento real? Protege uma fronteira, uma invariante ou uma duplicação relevante?
 
 - Não criar factory, adapter, service, interface, helper, hook ou arquivo **só por padrão arquitetural**.
+- Não exigir dois consumidores como regra absoluta: uma abstração única pode ser necessária para isolar uma fronteira externa ou uma invariante.
+- Não juntar tudo num arquivo para "reduzir estrutura": separar responsabilidades reais continua obrigatório.
 - Uma camada que apenas encaminha argumentos sem decisão, transformação ou proteção de fronteira deve ser eliminada quando seguro.
 - **KISS**, **YAGNI** e **DRY** com julgamento. Entre duas opções igualmente corretas, preferir a que exige menos conceitos.
 
@@ -91,13 +97,17 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 - Contratos com terceiros (SDK e CLI do Claude, GitHub, Docker) seguem a especificação deles; mudança de versão exige conferir o comportamento real, não a memória.
 - Validar na entrada, com o padrão do ponto de entrada: ferramentas MCP com **zod** no schema da ferramenta; rotas HTTP chamam a função do registry/service que valida e lança, e a rota converte o erro de validação em 400 (e "not found" em 404). Dentro do fluxo já validado, confiar no tipo.
 - Comparar e referenciar entidades por **id**, nunca por nome ou título.
+- Dado editável vive na sua fonte (configuração, cadastro, store). Não congelar no código ids, nomes, listas ou códigos que mudam.
+- Não manter vários mapas descoordenados do mesmo discriminante quando uma definição única resolve.
+- Dado composto (autor, motivo, origem, instante, referência) vai em campos próprios, não concatenado num texto.
 - Centralizar enums e discriminantes (`as const` / union de literais). `switch` cobre todas as variantes; variante sem suporte falha visivelmente.
 - Campos opcionais novos ficam ausentes quando não informados, a menos que `null` seja um estado de domínio explícito.
 - Em atualização parcial, distinguir **campo não enviado** de campo enviado com `0`, `false`, `""` ou `null`.
 
 ## 7. Dados, fonte de verdade e consistência
 
-- Cada conceito tem uma **fonte de verdade identificável**. Não persistir cópias de valores que podem ser obtidos da fonte.
+- Cada conceito tem uma **fonte de verdade identificável**. Não persistir cópias de valores que podem ser obtidos da fonte. Snapshot ou materialização só como exceção explícita, com motivo, origem e regra de atualização definidos.
+- Não gravar as duas direções do mesmo relacionamento sem necessidade demonstrável.
 - Estado JSON do vibehub em `VIBEHUB_DATA_DIR` (`board.json` e afins) passa pelo **store** (`back/src/store/`: `JsonStore`, `writeFileAtomic`). Exceções intencionais ficam documentadas no próprio arquivo — ex.: os marcadores de `services/sdk/inflight.ts`, gravados com `writeFile` numa fila por card, e os arquivos que os scripts de `workspace.ts` gravam dentro do container.
 - **Não gravar durante leitura** para sincronizar cálculos.
 - Operações que podem rodar em paralelo ou repetir (hooks de status, retomada após deploy, deliver, provisionamento) precisam ser **idempotentes** e seguras em corrida. Vários cards trabalham ao mesmo tempo no mesmo runner.
@@ -118,7 +128,7 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 
 - Validar **nas fronteiras**: HTTP, websocket, hooks vindos do runner, ferramentas MCP, entrada de CLI e respostas de integrações.
 - **Guard impõe contrato; fallback mascara erro.** Campo obrigatório ausente vira erro observável, não `""`, `0`, `null` ou `[]`.
-- Usar `??`, `||` ou `?.` só quando a ausência faz parte do contrato real.
+- Usar `??`, `||` ou `?.` só quando a ausência faz parte do contrato real. Não encadear defaults para acomodar formatos antigos sem decisão explícita de contrato.
 - Distinguir presença de verdade lógica: `0` e `false` podem ser valores válidos.
 - Erro informa o suficiente para diagnóstico sem expor token, segredo ou caminho sensível.
 - Integração que falhou não aparece como concluída. Retry só limitado e idempotente.
@@ -136,8 +146,11 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 
 ## 11. Testes e critérios de correção
 
-- Mudança de comportamento exige testes proporcionais ao risco. **Vitest**, com o teste ao lado do código (`*.test.ts` / `*.test.tsx`). Correção de bug traz o teste que falha sem ela.
+- **Teste sempre em TDD:** escrever o teste primeiro, rodar e ver falhar pelo motivo certo (em bug, reproduzindo o erro que aconteceu) e só então implementar até passar. Teste que nunca foi visto falhando não prova nada.
+- Mudança de comportamento exige testes proporcionais ao risco. **Vitest** nos dois pacotes, com o teste ao lado do código (`*.test.ts` / `*.test.tsx`). Priorizar o fluxo real; teste unitário complementa quando isola regra complexa.
+- **Front:** Vitest + Testing Library + jsdom já configurados (`front/vitest.config.ts`, helper `renderApp` em `front/src/test/render.tsx`). Teste de componente usa essa base; não instalar outra.
 - Usar a infraestrutura de teste existente; não criar infraestrutura paralela.
+- Dado de teste sai do fluxo real ou de fábrica fiel ao contrato; não inventar shape que não existe em produção.
 - Mockar só **fronteiras externas**: host executor (Docker/SSH), rede, GitHub, SDK do Claude. Não mockar a lógica interna só para facilitar asserções.
 - Rotas HTTP: testar entrando pela rota real, com validação e acesso (dono, `work`, `view`, sem acesso).
 - Verificar efeitos observáveis: estado persistido, script enviado ao host, payload emitido, UI atualizada, erro esperado.
@@ -158,6 +171,8 @@ Se um comando de teste for passar de ~2 min, troque por um recorte menor. Não a
 
 ## 12. Processo obrigatório de trabalho do agente
 
+**Não sair executando.** Antes de escrever código, entender a demanda e fechar o caminho com o usuário.
+
 - **Teve dúvida, pergunta.** Requisito ambíguo, mais de um caminho razoável ou decisão que é do usuário: perguntar antes de implementar, com opções e uma recomendação.
 - **Explorar antes de construir.** Feature nova ou mudança de comportamento com alternativas passa por brainstorming: requisitos, abordagens com prós e contras, recomendação, e execução só com o caminho aprovado.
 - **Usar as skills de processo disponíveis** sem esperar ser mandado: debugging sistemático antes de propor fix, TDD na implementação, plano escrito para tarefa de várias etapas, verificação antes de declarar pronto, code review depois de implementar.
@@ -171,7 +186,8 @@ Se um comando de teste for passar de ~2 min, troque por um recorte menor. Não a
 5. **Auditar o trecho tocado:** nomes, código morto, duplicação, fallback indevido, leituras inúteis.
 6. **Não espalhar alterações:** problema vizinho que exige refatoração arriscada é comunicado, não corrigido de carona.
 7. **Validar:** testes do recorte, typecheck e build quando aplicável; revisar o diff.
-8. **Descrever o resultado:** o que mudou, o que foi verificado e as limitações reais.
+8. **Revisão independente antes de entregar:** terminado tudo o que foi pedido, o diff passa por duas revisões feitas por um revisor SEM o contexto de quem escreveu, ambas confrontando este arquivo, nesta ordem: primeiro **simplificação** (aplicada), depois **code review** (correção e aderência às regras, para pegar o que foi inventado). Achado confirmado é corrigido; achado descartado tem o motivo dito. Como rodar isso em cada ferramenta fica no arquivo dela (no Claude Code, `.claude/CLAUDE.md`).
+9. **Descrever o resultado:** o que mudou, o que foi verificado e as limitações reais.
 
 ### Autonomia corretiva e preservação do escopo
 
@@ -203,7 +219,9 @@ Pedir autorização e passar por brainstorming continua obrigatório para decis�
 - [ ] Entrada validada na fronteira, shell citado, segredo fora de argv e de log?
 - [ ] Rota nova com `requireOwner` / `requireCardAccess` / `requireCardWork` / `requireSession` adequado?
 - [ ] Operações repetíveis são idempotentes e seguras em corrida?
+- [ ] Escrevi o teste antes e o vi falhar pelo motivo certo?
 - [ ] Rodei o recorte de testes e o `tsc -b`, e conferi o diff?
+- [ ] O diff passou pela simplificação e pelo code review independentes contra este arquivo?
 - [ ] Afirmei apenas o que foi executado e verificado?
 
 **Regra de encerramento:** se o código funciona, mas exige conceitos, estados, leituras, arquivos ou indireções desnecessários, simplificar **antes de entregar**, preservando correção, integridade, segurança e testes.
