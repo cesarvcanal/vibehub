@@ -87,8 +87,8 @@ export function pendingPermissionFromHistory(events: readonly HistoryEvent[], no
   return null;
 }
 
-/** Transcript lines as objects; torn and malformed lines are skipped (`tail` cuts the first one). */
-function transcriptObjects(jsonl: string): Record<string, unknown>[] {
+/** Transcript lines as objects; torn and malformed lines are skipped (`tail` cuts the first one). PURE. */
+export function transcriptObjects(jsonl: string): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [];
   for (const raw of jsonl.split(/\r?\n/)) {
     const s = raw.trim();

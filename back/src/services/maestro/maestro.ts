@@ -18,7 +18,7 @@ import { observeDeclaredState } from "../events/cardEvents.js";
 import { logger } from "../../utils/logger.js";
 import {
   activityFromTranscript, pendingPermissionFromHistory, pendingQuestionFromHistory, pendingQuestionFromTranscript,
-  type ActivityEvent, type PendingPermission, type PendingQuestion,
+  transcriptObjects, type ActivityEvent, type PendingPermission, type PendingQuestion,
 } from "./feed.js";
 
 /**
@@ -145,16 +145,8 @@ function assistantText(content: unknown): string {
  */
 export function parseAssistantTranscript(jsonl: string, last: number): string[] {
   const texts: string[] = [];
-  for (const line of jsonl.split(/\r?\n/)) {
-    const s = line.trim();
-    if (!s) continue;
-    let obj: unknown;
-    try {
-      obj = JSON.parse(s);
-    } catch {
-      continue; // a truncated line from `tail` — skip it
-    }
-    if (!obj || typeof obj !== "object" || (obj as { type?: unknown }).type !== "assistant") continue;
+  for (const obj of transcriptObjects(jsonl)) {
+    if (obj.type !== "assistant") continue;
     const msg = obj as { message?: { content?: unknown }; content?: unknown };
     const text = assistantText(msg.message?.content ?? msg.content);
     if (text) texts.push(text);
@@ -633,13 +625,18 @@ export interface ReadResult {
   pendingQuestion: PendingQuestion | null;
 }
 
+/** How many assistant answers a read hands back: 3 by default, never fewer than 1 nor more than 20. PURE. */
+function clampAnswerCount(last: number | undefined): number {
+  return Math.max(1, Math.min(20, Math.floor(last ?? 3) || 3));
+}
+
 /**
  * Reads the last `last` assistant answers from a card's transcript, already stripped to text. Does
  * NOT require a live session: what was said is still readable after a pause or a restart.
  */
 export async function readTerminal(cardId: string, last = 3): Promise<ReadResult> {
   const { card, transcript } = await readCardTranscript(cardId);
-  const n = Math.max(1, Math.min(20, Math.floor(last) || 3));
+  const n = clampAnswerCount(last);
   const answers = parseAssistantTranscript(transcript, n);
   logger.info(
     { audit: true, action: "maestro.read", card: card.worktreeSlug, session: card.tmuxSession, answers: answers.length },
@@ -819,7 +816,7 @@ export async function waitForTurn(
       outcome = busy || sawBusy ? "timeout" : activity.some((e) => e.kind === "assistant") ? "finished" : "not_started";
     }
   }
-  const n = Math.max(1, Math.min(20, Math.floor(opts.last ?? 3) || 3));
+  const n = clampAnswerCount(opts.last);
   logger.info({ audit: true, action: "maestro.wait", card: card.worktreeSlug, outcome, waitedMs: Date.now() - started }, "card wait ended");
   return {
     cardId: card.id,
@@ -875,21 +872,12 @@ export function parseLastTurn(jsonl: string): { model: string | null; at: number
   let effort: string | null = null;
   let requestedAt = 0;
   let lastUserAt = 0;
-  for (const line of jsonl.split(/\r?\n/)) {
-    const s = line.trim();
-    if (!s) continue;
-    let obj: unknown;
-    try {
-      obj = JSON.parse(s);
-    } catch {
-      continue;
-    }
-    if (!obj || typeof obj !== "object") continue;
-    if ((obj as { type?: unknown }).type === "user") {
+  for (const obj of transcriptObjects(jsonl)) {
+    if (obj.type === "user") {
       lastUserAt = entryTime(obj);
       continue;
     }
-    if ((obj as { type?: unknown }).type !== "assistant") continue;
+    if (obj.type !== "assistant") continue;
     const m = (obj as { message?: { model?: unknown } }).message?.model;
     // Claude Code logs a "<synthetic>" assistant turn for its own notices (rate limit, errors) — it
     // is not a model the session is running, so it must not replace the real one.
