@@ -53,6 +53,25 @@ describe("PlanUsageMeter", () => {
     expect(within(panel).queryByText(/CLAUDE_CONFIG_DIR/)).toBeNull();
   });
 
+  it("leaves 'no reading' on the next poll once the server reads again, with no reload", async () => {
+    // The route answers `unauthorized` first and a reading next, as it did in production.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.spyOn(boardApi, "cardUsage")
+      .mockResolvedValueOnce({ slug: "tech", usage: { available: false, error: "unauthorized", fetchedAt: Date.now() } })
+      .mockResolvedValue({ slug: "tech", usage: { available: true, sevenDay: { utilization: 49, resetsAt: iso(86_400_000) }, fetchedAt: Date.now() } });
+    try {
+      renderApp(<PlanUsageMeter cardId="c1" accountName="tech" active isOwner />);
+      const meter = await screen.findByTestId("plan-meter");
+      await waitFor(() => expect(meter).toHaveTextContent("no reading"));
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await waitFor(() => expect(screen.getByTestId("plan-meter-value")).toHaveTextContent("49%"));
+      expect(meter).not.toHaveTextContent("no reading");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("the owner gets the command that fixes it", async () => {
     serve({ slug: "default", usage: { available: false, error: "no_credentials", fetchedAt: Date.now() } });
     const user = userEvent.setup();

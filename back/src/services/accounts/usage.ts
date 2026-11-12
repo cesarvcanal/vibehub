@@ -1,7 +1,8 @@
-import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
+import { hostExecutor, shQuote, assertSafeRemotePath, containerScriptCommand } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import { listAccounts } from "../board/registry.js";
-import { DEFAULT_ACCOUNT_SLUG, profileDirFor, CREDENTIALS_FILE } from "./profiles.js";
+import { DEFAULT_ACCOUNT_SLUG, DEFAULT_CLAUDE_DIR, profileDirFor, CREDENTIALS_FILE } from "./profiles.js";
+import { resolvedClaudeCommand } from "./claudeCli.js";
 import { resolveAccountToken } from "./token.js";
 import { logger } from "../../utils/logger.js";
 
@@ -28,10 +29,19 @@ import { logger } from "../../utils/logger.js";
  * read the windows off the headers. Cheaper on the plan than it sounds (a few dozen tokens), and
  * cached for `PROBE_FRESH_MS` so a board left open is a handful of calls an hour, not one a minute.
  *
- * WHERE THE TOKEN LIVES, AND FOR HOW LONG. It is read out of the runner with a READ-ONLY
- * `docker exec … cat` (every path validated and shell-quoted, nothing user-supplied reaching the
- * shell), held in a local variable for exactly one HTTPS call, and dropped. It is NEVER logged,
- * NEVER returned by the API, NEVER written to disk on the vibehub side. The call is made from the
+ * AN EXPIRED LOGIN IS RENEWED BY CLAUDE CODE, NOT BY US. The access token lives 8h and only the
+ * CLI renews it, when the account is used; an account left idle held a dead token and the meter
+ * read nothing until somebody sent a message (the vault token, the fallback below, can be revoked
+ * too — in production it was). So an expired token is handed to `claude auth status` inside the
+ * runner first: the CLI renews and rewrites its own `.credentials.json`, and we read it again. We
+ * never touch the refresh token: using it from here would rotate it under the CLI. Two reads of one
+ * account at once share a single renewal, and a login the CLI could not renew (refresh token
+ * revoked) is not retried until the file holds a different one.
+ *
+ * WHERE THE TOKEN LIVES, AND FOR HOW LONG. It is read out of the runner with a `docker exec … cat`
+ * (read-only but for the CLI's own renewal above; every path validated and shell-quoted, nothing
+ * user-supplied reaching the shell), held in a local variable for exactly one HTTPS call, and
+ * dropped. It is NEVER logged, NEVER returned by the API, NEVER written to disk on the vibehub side. The call is made from the
  * vibehub process rather than by a `curl` inside the container so that HTTP status handling (401 vs
  * 429 vs unreachable) is real code with real tests instead of exit-code archaeology, and so the
  * runner image needs no extra tool.
@@ -76,6 +86,9 @@ export const PROBE_FRESH_MS = 300_000;
 
 /** A single HTTPS call gets this long; the UI is polling and would rather have "unreachable". */
 const REQUEST_TIMEOUT_MS = 10_000;
+
+/** A token expiring within one call's time is renewed too: it would die on the way. */
+const EXPIRY_MARGIN_MS = REQUEST_TIMEOUT_MS;
 
 /** One metered window as the UI needs it: how much is gone, and when it comes back. */
 export interface UsageWindow {
@@ -126,9 +139,20 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>();
 
+/** The reading in progress per account, so two callers at once share one renewal and one call. */
+const inflight = new Map<string, Promise<{ result: AccountUsage; called: boolean }>>();
+
+/**
+ * Per profile, the expiry of a login the CLI could NOT renew (refresh token revoked). Until the file
+ * holds a different login, renewing again would only spend a CLI exec per poll on the same answer.
+ */
+const unrenewable = new Map<string, number>();
+
 /** Drops every cached reading. TEST SEAM, and what a token change would call. */
 export function resetUsageCache(): void {
   cache.clear();
+  inflight.clear();
+  unrenewable.clear();
 }
 
 /** Cache key of an account: a missing slug is the default profile. PURE. */
@@ -148,9 +172,10 @@ export function backoffMs(strikes: number): number {
 }
 
 /**
- * READ-ONLY script that prints a profile's credential file. `cat` and nothing else: this module
- * must never be able to change a byte inside the runner. Both paths are validated and quoted, and
- * a missing file prints nothing instead of failing the exec (a profile with no login is normal).
+ * READ-ONLY script that prints a profile's credential file. `cat` and nothing else: the only write
+ * this module ever causes in the runner is Claude Code renewing its own login
+ * (`buildRenewLoginScript`). Both paths are validated and quoted, and a missing file prints nothing
+ * instead of failing the exec (a profile with no login is normal).
  * PURE.
  */
 export function buildReadCredentialsScript(containerName: string, profileDir: string): string {
@@ -161,23 +186,64 @@ export function buildReadCredentialsScript(containerName: string, profileDir: st
   return `docker exec ${shQuote(containerName)} sh -c ${shQuote(inner)} _ ${shQuote(file)}`;
 }
 
+/** The interactive login as Claude Code keeps it: the access token and when it stops working. */
+interface InteractiveLogin {
+  accessToken: string;
+  /** Epoch ms the access token expires, or null when the file does not say. */
+  expiresAt: number | null;
+}
+
 /**
- * The Claude Code access token inside a `.credentials.json`, or undefined.
+ * The Claude Code login inside a `.credentials.json`, or undefined.
  *
  * Undefined covers three real states that all mean the same thing to the operator: no file, a file
  * that is not JSON, and — the common one — a file holding only `mcpOAuth` because the account was
  * set up with a long-lived token and never went through `/login`. PURE.
  */
-export function parseAccessToken(stdout: string): string | undefined {
+export function parseLogin(stdout: string): InteractiveLogin | undefined {
   const raw = String(stdout ?? "").trim();
   if (!raw) return undefined;
   try {
-    const json = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: unknown } };
-    const token = json?.claudeAiOauth?.accessToken;
-    return typeof token === "string" && token.trim() ? token.trim() : undefined;
+    const json = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: unknown; expiresAt?: unknown } };
+    const oauth = json?.claudeAiOauth;
+    const token = oauth?.accessToken;
+    if (typeof token !== "string" || !token.trim()) return undefined;
+    const expiresAt = oauth?.expiresAt;
+    return {
+      accessToken: token.trim(),
+      expiresAt: typeof expiresAt === "number" && Number.isFinite(expiresAt) ? expiresAt : null,
+    };
   } catch {
     return undefined;
   }
+}
+
+/** Heredoc delimiter of the renewal script; never a line of the script itself. */
+const RENEW_DELIM = "VIBEHUB_RENEW_LOGIN";
+
+/** Node deadline of the renewal exec; the in-container KILL fires CONTAINER_DEADLINE_MARGIN_MS sooner. */
+const RENEW_TIMEOUT_MS = 30_000;
+
+/**
+ * Script that has Claude Code renew a profile's login and then prints the credential file, in ONE
+ * exec: `claude auth status` refreshes an expired access token and writes the new pair back to
+ * `.credentials.json` itself — no inference, under a second. Renewing it from here instead (the
+ * refresh token over HTTP) would ROTATE the refresh token and leave the CLI holding a dead one,
+ * which is the one way to log a card out from a usage widget. The CLI's own output is discarded so
+ * stdout is the file and nothing else; a CLI that hangs is KILLed inside the runner, not orphaned.
+ * The default profile runs with no CLAUDE_CONFIG_DIR, exactly as its sessions do. PURE.
+ */
+export function buildRenewLoginScript(containerName: string, profileDir: string): string {
+  assertSafeRemotePath(profileDir);
+  const file = `${profileDir}/${CREDENTIALS_FILE}`;
+  assertSafeRemotePath(file);
+  return [
+    `${containerScriptCommand(containerName, RENEW_TIMEOUT_MS)} <<'${RENEW_DELIM}'`,
+    ...(profileDir === DEFAULT_CLAUDE_DIR ? [] : [`export CLAUDE_CONFIG_DIR=${shQuote(profileDir)}`]),
+    `{ ${resolvedClaudeCommand("auth status --json")}; } >/dev/null 2>&1`,
+    `cat ${shQuote(file)} 2>/dev/null || true`,
+    RENEW_DELIM,
+  ].join("\n");
 }
 
 /** One window out of the payload, clamped to 0..100. Unknown shape → undefined. PURE. */
@@ -272,21 +338,44 @@ async function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Reads a profile's access token out of the runner. Returns undefined when there is none AND when
- * the runner cannot be reached — the caller separates those two by `runnerDown`.
+ * Runs a script that prints a profile's credential file and parses the login out of it. Returns no
+ * login when there is none AND when the runner cannot be reached — the caller separates those two
+ * by `runnerDown`.
  */
-async function readAccessToken(profileDir: string): Promise<{ token?: string; runnerDown: boolean }> {
+async function readLogin(script: string, timeoutMs: number): Promise<{ login?: InteractiveLogin; runnerDown: boolean }> {
   try {
-    const { stdout } = await hostExecutor().runScript(
-      buildReadCredentialsScript(config.runner.container, profileDir),
-      { timeoutMs: 15_000 },
-    );
-    return { token: parseAccessToken(stdout), runnerDown: false };
+    const { stdout } = await hostExecutor().runScript(script, { timeoutMs });
+    return { login: parseLogin(stdout), runnerDown: false };
   } catch {
     // Deliberately swallowed: the detail could only ever be about docker, and a usage widget must
     // not be the thing that fails a page. The UI shows "unreachable".
     return { runnerDown: true };
   }
+}
+
+/**
+ * The profile's access token, renewed by Claude Code first when it has expired. Only the CLI
+ * renews it, and only when the account is used — so an account idle for its 8h lifetime held a
+ * dead token, the endpoint refused it, and the meter said "sem leitura" until somebody sent a
+ * message. A renewal that does not produce a live token keeps the expired one (the endpoint then
+ * says what is wrong) and is not tried again for that same login.
+ */
+async function readFreshAccessToken(profileDir: string, now: number): Promise<{ token?: string; runnerDown: boolean }> {
+  const { login, runnerDown } = await readLogin(buildReadCredentialsScript(config.runner.container, profileDir), 15_000);
+  const live = (l: InteractiveLogin) => l.expiresAt === null || l.expiresAt > now + EXPIRY_MARGIN_MS;
+  if (!login || live(login) || unrenewable.get(profileDir) === login.expiresAt) {
+    return { token: login?.accessToken, runnerDown };
+  }
+  // The read above already proved the runner is up: an exec that fails here is the CLI hanging or
+  // erroring, i.e. a failed RENEWAL — the vault fallback still gets its turn.
+  const renewal = await readLogin(buildRenewLoginScript(config.runner.container, profileDir), RENEW_TIMEOUT_MS);
+  if (renewal.login && live(renewal.login)) {
+    unrenewable.delete(profileDir);
+    return { token: renewal.login.accessToken, runnerDown: false };
+  }
+  logger.warn({ action: "account.usage", profileDir }, "login renewal failed");
+  unrenewable.set(profileDir, login.expiresAt!);
+  return { token: login.accessToken, runnerDown: false };
 }
 
 /** One HTTPS call. The token is a parameter and dies with the frame. */
@@ -357,12 +446,21 @@ async function probeViaInference(token: string, at: number): Promise<AccountUsag
 }
 
 /**
- * Usage of ONE account, cache first.
+ * Usage of ONE account, cache first; a caller arriving while a read is under way waits for it.
  *
  * Returns `{ result, called }` so the serial walk in `allAccountsUsage` only pauses when a real
  * HTTPS call happened — a listing served entirely from cache is instant.
  */
-async function usageFor(slug: string | undefined): Promise<{ result: AccountUsage; called: boolean }> {
+function usageFor(slug: string | undefined): Promise<{ result: AccountUsage; called: boolean }> {
+  const key = usageKey(slug);
+  const pending = inflight.get(key);
+  if (pending) return pending;
+  const read = readUsage(slug).finally(() => inflight.delete(key));
+  inflight.set(key, read);
+  return read;
+}
+
+async function readUsage(slug: string | undefined): Promise<{ result: AccountUsage; called: boolean }> {
   const key = usageKey(slug);
   const now = Date.now();
   const entry = cache.get(key) ?? { freshUntil: 0, strikes: 0, blockedUntil: 0 };
@@ -378,7 +476,7 @@ async function usageFor(slug: string | undefined): Promise<{ result: AccountUsag
     return { result, called: false };
   }
 
-  const { token, runnerDown } = await readAccessToken(profileDirFor(slug));
+  const { token, runnerDown } = await readFreshAccessToken(profileDirFor(slug), now);
   let result: AccountUsage | undefined = token ? await callUsageEndpoint(token, now) : undefined;
   let freshMs = FRESH_MS;
 

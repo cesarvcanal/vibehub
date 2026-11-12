@@ -6,7 +6,8 @@ import { join } from "node:path";
 /**
  * PLAN USAGE PER ACCOUNT. What is actually dangerous here — and therefore what is pinned:
  *  - the access token never reaches a log line, the response, or argv;
- *  - the docker command is READ-ONLY and fully quoted;
+ *  - the docker command is READ-ONLY and fully quoted; the only write is Claude Code renewing an
+ *    expired login itself (`auth status`), so an idle account still reads;
  *  - a profile logged in only by setup-token (no `claudeAiOauth`) is read off an inference call's
  *    rate-limit headers with the vault token — and is `no_credentials`, not a crash, without one;
  *  - a 429 backs off exponentially and keeps serving the last good numbers as stale;
@@ -21,11 +22,27 @@ vi.mock("../../runtime/host.js", async (orig) => ({
 
 const ACCESS_TOKEN = "sk-ant-oat-ACCESSTOKEN-do-not-leak-1234567890";
 
+/** The access token Claude Code writes after renewing an expired one. */
+const RENEWED_TOKEN = "sk-ant-oat-RENEWED-do-not-leak-1122334455";
+
+/** Claude Code's access tokens live 8h; a login in use is renewed before that. */
+const LOGIN_TTL_MS = 8 * 3_600_000;
+
 /** A `.credentials.json` as Claude Code writes it after an interactive `/login`. */
-function credentials(token = ACCESS_TOKEN): string {
+function credentials(token = ACCESS_TOKEN, expiresAt = Date.now() + LOGIN_TTL_MS): string {
   return JSON.stringify({
-    claudeAiOauth: { accessToken: token, refreshToken: "rt", expiresAt: 1, scopes: ["user:profile"] },
+    claudeAiOauth: { accessToken: token, refreshToken: "rt", expiresAt, scopes: ["user:profile"] },
   });
+}
+
+/** The same login once its access token has expired — what an account nobody used for 8h holds. */
+const EXPIRED_CREDENTIALS = credentials(ACCESS_TOKEN, Date.now() - 60_000);
+
+/** The runner holds an expired login, and the renewal exec prints `afterRenewal`. */
+function renewsTo(afterRenewal: string) {
+  runScript
+    .mockResolvedValueOnce({ stdout: EXPIRED_CREDENTIALS, stderr: "" })
+    .mockResolvedValueOnce({ stdout: afterRenewal, stderr: "" });
 }
 
 /** The payload of a profile set up ONLY with a long-lived setup-token: no `claudeAiOauth` at all. */
@@ -106,14 +123,19 @@ afterEach(async () => {
 });
 
 describe("pure parsing", () => {
-  it("reads the Claude Code access token, and only that one", async () => {
+  it("reads the Claude Code access token and its expiry, and only that login", async () => {
     const { usage } = await fresh();
-    expect(usage.parseAccessToken(credentials())).toBe(ACCESS_TOKEN);
+    expect(usage.parseLogin(credentials(ACCESS_TOKEN, 1_000))).toEqual({ accessToken: ACCESS_TOKEN, expiresAt: 1_000 });
+    // An expiry Claude Code did not write is unknown, not "expired": the endpoint gets to say.
+    expect(usage.parseLogin(JSON.stringify({ claudeAiOauth: { accessToken: "t" } }))).toEqual({
+      accessToken: "t",
+      expiresAt: null,
+    });
     // A setup-token profile: the file exists, the block does not.
-    expect(usage.parseAccessToken(MCP_ONLY_CREDENTIALS)).toBeUndefined();
-    expect(usage.parseAccessToken("")).toBeUndefined();
-    expect(usage.parseAccessToken("not json at all")).toBeUndefined();
-    expect(usage.parseAccessToken(JSON.stringify({ claudeAiOauth: { accessToken: "   " } }))).toBeUndefined();
+    expect(usage.parseLogin(MCP_ONLY_CREDENTIALS)).toBeUndefined();
+    expect(usage.parseLogin("")).toBeUndefined();
+    expect(usage.parseLogin("not json at all")).toBeUndefined();
+    expect(usage.parseLogin(JSON.stringify({ claudeAiOauth: { accessToken: "   " } }))).toBeUndefined();
   });
 
   it("clamps utilization and tolerates a window the payload did not send", async () => {
@@ -177,6 +199,23 @@ describe("the docker command", () => {
     expect(() => usage.buildReadCredentialsScript("c", "/root/../etc")).toThrow(/\.\./);
     expect(() => usage.buildReadCredentialsScript("c", "relative/dir")).toThrow(/absolute/);
     expect(() => usage.buildReadCredentialsScript("c", "/root/a b;rm -rf /")).toThrow(/invalid characters/);
+  });
+
+  it("renews a login with Claude Code's own `auth status` and prints the file, in ONE exec killed in the runner", async () => {
+    const { usage } = await fresh();
+    const { resolvedClaudeCommand } = await import("./claudeCli.js");
+    expect(usage.buildRenewLoginScript("vibehub-runner", "/root/.claude-profiles/tech")).toBe(
+      [
+        `docker exec -i 'vibehub-runner' timeout -s KILL 15 bash -s <<'VIBEHUB_RENEW_LOGIN'`,
+        `export CLAUDE_CONFIG_DIR='/root/.claude-profiles/tech'`,
+        `{ ${resolvedClaudeCommand("auth status --json")}; } >/dev/null 2>&1`,
+        `cat '/root/.claude-profiles/tech/.credentials.json' 2>/dev/null || true`,
+        "VIBEHUB_RENEW_LOGIN",
+      ].join("\n"),
+    );
+    // The default login runs with no CLAUDE_CONFIG_DIR, as its sessions do.
+    expect(usage.buildRenewLoginScript("vibehub-runner", "/root/.claude")).not.toContain("CLAUDE_CONFIG_DIR");
+    expect(() => usage.buildRenewLoginScript("c", "/root/a b;rm -rf /")).toThrow(/invalid characters/);
   });
 
   it("reads the EFFECTIVE profile: default outside the profiles dir, an account inside it", async () => {
@@ -266,6 +305,107 @@ describe("accountUsage", () => {
     await storeLongLived("default");
     fetchMock.mockResolvedValueOnce(response(200, {}, PLAN_HEADERS));
     expect((await usage.accountUsage(undefined)).sevenDay?.utilization).toBe(40);
+  });
+
+  it("an expired login is renewed by Claude Code first, then read with the renewed token", async () => {
+    const { usage } = await fresh();
+    renewsTo(credentials(RENEWED_TOKEN));
+
+    const result = await usage.accountUsage("tech");
+    expect(result).toMatchObject({ available: true });
+    expect(result.error).toBeUndefined();
+
+    expect(runScript).toHaveBeenCalledTimes(2);
+    expect(runScript.mock.calls[1][0]).toContain("CLAUDE_CONFIG_DIR='/root/.claude-profiles/tech'");
+    expect(runScript.mock.calls[1][0]).toContain("auth status --json");
+    // The expired token is never spent on a call that can only fail.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, { headers: Record<string, string> }];
+    expect(url).toBe(usage.USAGE_URL);
+    expect(init.headers.authorization).toBe(`Bearer ${RENEWED_TOKEN}`);
+  });
+
+  it("a login still valid is read as is: no renewal", async () => {
+    const { usage } = await fresh();
+    await usage.accountUsage("tech");
+    expect(runScript).toHaveBeenCalledTimes(1);
+  });
+
+  it("a renewal that leaves the token expired hands it to the endpoint: unauthorized, logged, not a crash", async () => {
+    const { usage } = await fresh();
+    // The refresh token itself was revoked: the CLI runs, the file comes back unchanged.
+    renewsTo(EXPIRED_CREDENTIALS);
+    fetchMock.mockResolvedValueOnce(response(401, { error: { type: "authentication_error" } }));
+
+    const result = await usage.accountUsage("tech");
+    expect(result).toMatchObject({ available: false, error: "unauthorized" });
+    expect(logged.some((line) => line.includes("login renewal failed"))).toBe(true);
+    const [, init] = fetchMock.mock.calls[0] as [string, { headers: Record<string, string> }];
+    expect(init.headers.authorization).toBe(`Bearer ${ACCESS_TOKEN}`);
+  });
+
+  it("a renewal exec that fails (CLI hung, KILLed) is a failed renewal: the vault probe still runs, and the exec is not repeated", async () => {
+    const { usage } = await fresh();
+    await storeLongLived("tech");
+    runScript
+      .mockResolvedValueOnce({ stdout: EXPIRED_CREDENTIALS, stderr: "" })
+      .mockRejectedValueOnce(new Error("exit 137"));
+    fetchMock
+      .mockResolvedValueOnce(response(401, { error: { type: "authentication_error" } }))
+      .mockResolvedValueOnce(response(200, {}, PLAN_HEADERS));
+    expect((await usage.accountUsage("tech")).available).toBe(true);
+    expect(logged.some((line) => line.includes("login renewal failed"))).toBe(true);
+
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now + usage.PROBE_FRESH_MS + 1);
+    runScript.mockResolvedValueOnce({ stdout: EXPIRED_CREDENTIALS, stderr: "" });
+    await usage.accountUsage("tech");
+    expect(runScript).toHaveBeenCalledTimes(3);
+    expect(runScript.mock.calls[2][0]).not.toContain("auth status");
+  });
+
+  it("a renewal that did not take is not retried every poll — only once the login in the file changes", async () => {
+    const { usage } = await fresh();
+    renewsTo(EXPIRED_CREDENTIALS);
+    fetchMock.mockResolvedValue(response(401, { error: { type: "authentication_error" } }));
+    await usage.accountUsage("tech");
+    expect(runScript).toHaveBeenCalledTimes(2);
+
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now + usage.FRESH_MS + 1);
+    runScript.mockResolvedValueOnce({ stdout: EXPIRED_CREDENTIALS, stderr: "" });
+    await usage.accountUsage("tech");
+    // Same dead login as last time: read it, do not run the CLI again.
+    expect(runScript).toHaveBeenCalledTimes(3);
+    expect(runScript.mock.calls[2][0]).not.toContain("auth status");
+
+    // Somebody logged in again (a new expiry in the file): it is worth one more renewal.
+    vi.spyOn(Date, "now").mockReturnValue(now + 2 * (usage.FRESH_MS + 1));
+    runScript
+      .mockResolvedValueOnce({ stdout: credentials(ACCESS_TOKEN, now - 1_000), stderr: "" })
+      .mockResolvedValueOnce({ stdout: credentials(RENEWED_TOKEN), stderr: "" });
+    fetchMock.mockResolvedValue(response(200, USAGE_BODY));
+    expect((await usage.accountUsage("tech")).available).toBe(true);
+    expect(runScript.mock.calls[4][0]).toContain("auth status");
+  });
+
+  it("a token about to expire is renewed too — it would die on the way to the endpoint", async () => {
+    const { usage } = await fresh();
+    runScript
+      .mockResolvedValueOnce({ stdout: credentials(ACCESS_TOKEN, Date.now() + 2_000), stderr: "" })
+      .mockResolvedValueOnce({ stdout: credentials(RENEWED_TOKEN), stderr: "" });
+    await usage.accountUsage("tech");
+    const [, init] = fetchMock.mock.calls[0] as [string, { headers: Record<string, string> }];
+    expect(init.headers.authorization).toBe(`Bearer ${RENEWED_TOKEN}`);
+  });
+
+  it("two reads of the same account at once share one renewal", async () => {
+    const { usage } = await fresh();
+    renewsTo(credentials(RENEWED_TOKEN));
+    const [a, b] = await Promise.all([usage.accountUsage("tech"), usage.accountUsage("tech")]);
+    expect(a).toEqual(b);
+    expect(runScript).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("a login the usage endpoint refuses also falls back to the probe", async () => {
@@ -434,6 +574,17 @@ describe("the token never escapes", () => {
     for (const line of logged) expect(line).not.toContain(ACCESS_TOKEN);
     // The script sent to the host only names the FILE; the value comes back on stdout.
     for (const call of runScript.mock.calls) expect(String(call[0])).not.toContain(ACCESS_TOKEN);
+  });
+
+  it("neither the expired nor the renewed token is in a response, log line or argv", async () => {
+    const { usage } = await fresh();
+    renewsTo(credentials(RENEWED_TOKEN));
+    const ok = await usage.accountUsage("tech");
+    for (const secret of [ACCESS_TOKEN, RENEWED_TOKEN]) {
+      expect(JSON.stringify(ok)).not.toContain(secret);
+      for (const line of logged) expect(line).not.toContain(secret);
+      for (const call of runScript.mock.calls) expect(String(call[0])).not.toContain(secret);
+    }
   });
 
   it("the long-lived token of the probe is in no response, log line or argv either", async () => {
