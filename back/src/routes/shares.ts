@@ -21,7 +21,7 @@ import { sendError } from "./httpError.js";
 
 interface ShareBody { userId?: string; level?: string }
 
-async function decorate(shares: registry.Share[]): Promise<
+async function withUsernames(shares: registry.Share[]): Promise<
   { userId: string; username: string; level: string; kind: ShareKind; targetId: string; createdAt: number }[]
 > {
   const users = await listUsers();
@@ -36,7 +36,7 @@ export async function sharesRoutes(app: FastifyInstance): Promise<void> {
     app.get<{ Params: { id: string } }>(
       `/api/${path}/:id/shares`, { preHandler: requireOwner },
       async (req, reply) => {
-        return await reply.send({ shares: await decorate(await registry.sharesForTarget(kind, req.params.id)) });
+        return await reply.send({ shares: await withUsernames(await registry.sharesForTarget(kind, req.params.id)) });
       },
     );
 
@@ -57,7 +57,7 @@ export async function sharesRoutes(app: FastifyInstance): Promise<void> {
             { audit: true, action: "share.add", kind, target: req.params.id, user: user.username, level: share.level },
             "shared",
           );
-          return await reply.send({ share: (await decorate([share]))[0] });
+          return await reply.send({ share: (await withUsernames([share]))[0] });
         } catch (err) {
           return await sendError(reply, err);
         }

@@ -61,7 +61,7 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
       if (actor === "external") return (await userForAccessToken(bearer)) ?? false;
       return (await currentUser(request))?.role === "owner" ? null : false;
     };
-    const make = () => (actor === "external" && user
+    const buildMcpServer = () => (actor === "external" && user
       ? createMcpServer("external", user, principal)
       : createMcpServer(actor!, undefined, principal));
 
@@ -73,15 +73,15 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
         : actor === "card" && bearer
           ? { key: "board", user: null, credential: hashToken(bearer) }
           : null;
-      const reply_ = await handleModern({
-        headers: request.headers, body: request.body, server: make, principal: holder,
+      const modernReply = await handleModern({
+        headers: request.headers, body: request.body, server: buildMcpServer, principal: holder,
         instructions: actor === "external" ? EXTERNAL_INSTRUCTIONS : INSTRUCTIONS,
       });
-      reply.code(reply_.status);
-      return reply_.body === undefined ? await reply.send() : await reply.type("application/json").send(reply_.body);
+      reply.code(modernReply.status);
+      return modernReply.body === undefined ? await reply.send() : await reply.type("application/json").send(modernReply.body);
     }
 
-    const server = make();
+    const server = buildMcpServer();
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     reply.raw.on("close", () => {
       void transport.close();

@@ -75,7 +75,7 @@ const STYLE =
   "input{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #333;background:#0e0e10;" +
   "color:#fff;font-size:14px}button{width:100%;margin-top:20px;padding:11px;border:0;border-radius:8px;" +
   "background:#4f46e5;color:#fff;font-size:14px;font-weight:600;cursor:pointer}" +
-  ".erro{background:#3a1212;color:#f5b5b5;padding:8px 10px;border-radius:8px;font-size:13px;margin-bottom:8px}";
+  ".error{background:#3a1212;color:#f5b5b5;padding:8px 10px;border-radius:8px;font-size:13px;margin-bottom:8px}";
 
 interface AuthorizeParams {
   clientId: string;
@@ -109,7 +109,7 @@ function loginPage(lang: Lang, p: AuthorizeParams, clientName: string, opts: { e
   return `<!doctype html><html lang="${lang === "pt" ? "pt-br" : "en"}"><head><meta charset="utf-8">` +
     `<meta name="viewport" content="width=device-width,initial-scale=1"><title>${t.title}</title><style>${STYLE}</style></head>` +
     `<body><form class="card" method="post" action="/oauth/authorize"><h1>${t.heading}</h1><p class="sub">${t.sub(clientName)}</p>` +
-    (opts.error ? `<div class="erro">${esc(opts.error)}</div>` : "") +
+    (opts.error ? `<div class="error">${esc(opts.error)}</div>` : "") +
     `<label>${t.user}</label><input name="username" value="${esc(opts.username ?? "")}" autofocus autocomplete="username" autocapitalize="none">` +
     `<label>${t.pass}</label><input name="password" type="password" autocomplete="current-password">` +
     `${hidden}<button type="submit">${t.submit}</button></form></body></html>`;
@@ -119,7 +119,7 @@ function loginPage(lang: Lang, p: AuthorizeParams, clientName: string, opts: { e
 function errorPage(lang: Lang, message: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
     `<title>${TEXT[lang].title}</title><style>${STYLE}</style></head><body><div class="card"><h1>${TEXT[lang].heading}</h1>` +
-    `<div class="erro">${esc(message)}</div></div></body></html>`;
+    `<div class="error">${esc(message)}</div></div></body></html>`;
 }
 
 /**

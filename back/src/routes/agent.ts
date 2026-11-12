@@ -344,11 +344,11 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
    */
   app.post<{ Body: ImportInput }>("/api/import", { preHandler: requireOwner }, async (req, reply) => {
     try {
-      const result = await importSessions(
+      const imported = await importSessions(
         req.body ?? { items: [] },
         (project, card) => cardWorkPaths(project, card).cwd,
       );
-      return await reply.send(result);
+      return await reply.send(imported);
     } catch (err) {
       return await sendError(reply, err, { rules: AGENT_ERROR_RULES });
     }
