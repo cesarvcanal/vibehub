@@ -147,29 +147,9 @@ export function buildMenuProbeScript(containerName: string, tmuxSession: string)
 }
 
 /**
- * True when the card's terminal is sitting on an interactive CHOICE (a menu), not its message
- * prompt. A card with no live session is never awaiting a choice. Never throws: if the probe fails
- * we do NOT block the send (an unreachable host is not a menu).
- */
-export async function cardAwaitingChoice(
-  card: Pick<Card, "openedAt" | "pausedAt" | "tmuxSession">,
-): Promise<boolean> {
-  if (!hasLiveSession(card)) return false;
-  try {
-    const { stdout } = await hostExecutor().runScript(
-      buildMenuProbeScript(config.runner.container, card.tmuxSession),
-      { timeoutMs: 15_000 },
-    );
-    return looksLikeInteractiveMenu(stdout);
-  } catch {
-    return false;
-  }
-}
-
-/**
  * The pane's readiness right now (one capture). A card with no live session reads as `booting` —
- * there is no frame to read — and so does a failed capture: unlike {@link cardAwaitingChoice}, the
- * caller here WAITS on the answer, and "could not see the pane" is not "the prompt is up".
+ * there is no frame to read — and so does a failed capture: the caller WAITS on the answer, and
+ * "could not see the pane" is not "the prompt is up".
  */
 export async function cardPaneReadiness(
   card: Pick<Card, "openedAt" | "pausedAt" | "tmuxSession">,
