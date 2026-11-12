@@ -264,6 +264,16 @@ export interface NewProjectInput {
   githubConnectionId?: string | null;
 }
 
+/** `PATCH /api/projects/:id` — the edit form's fields, in the wire names; null CLEARS a field. */
+export interface ProjectPatchInput {
+  name: string;
+  repoFullName: string | null;
+  cloneUrl: string | null;
+  baseBranch?: string;
+  defaultAccountSlug: string | null;
+  githubConnectionId: string | null;
+}
+
 /** `GET /api/transcribe` — what voice input can do on THIS install. */
 export interface TranscribeStatus {
   /** An OpenAI key is stored; without one the microphone has nothing to talk to. */
@@ -416,6 +426,9 @@ export const boardApi = {
       defaultAccountSlug: input.accountSlug,
       githubConnectionId: input.githubConnectionId,
     }).then((r) => r.project),
+
+  updateProject: (id: string, body: ProjectPatchInput) =>
+    patch<{ project: BoardProject }>(`/projects/${encodeURIComponent(id)}`, body).then((r) => r.project),
 
   deleteProject: (id: string) => del<{ ok: true }>(`/projects/${encodeURIComponent(id)}`),
 

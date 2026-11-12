@@ -15,7 +15,6 @@ import { Input } from "@/components/ui/input";
 import { SecretInput } from "@/components/ui/secret-input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { patch } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { apiErrorMessage } from "@/lib/apiError";
 import { SELECT_CLASS } from "@/features/board/components/NewCardDialog";
@@ -32,6 +31,7 @@ import {
   githubReposKey,
   splitRepo,
   type BoardProject,
+  type ProjectPatchInput,
 } from "@/features/board/api";
 import type { GithubConnection } from "@/api/types";
 import { t as translate, useT } from "@/i18n";
@@ -148,7 +148,7 @@ export function ProjectFormDialog({
 
   const createMutation = useMutation({
     mutationFn: async (): Promise<BoardProject> => {
-      const body = {
+      const body: ProjectPatchInput = {
         name: name.trim(),
         repoFullName: repo || null,
         cloneUrl: (selected?.cloneUrl ?? cloneUrl.trim()) || null,
@@ -157,10 +157,7 @@ export function ProjectFormDialog({
         // null CLEARS it: a project on the only account should not pin an id it does not need.
         githubConnectionId: connection || null,
       };
-      if (project) {
-        const r = await patch<{ project: BoardProject }>(`/projects/${encodeURIComponent(project.id)}`, body);
-        return r.project;
-      }
+      if (project) return await boardApi.updateProject(project.id, body);
       return await boardApi.createProject({
         name: body.name,
         repo: repo || undefined,
