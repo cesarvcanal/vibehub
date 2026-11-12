@@ -19,7 +19,7 @@ export function formatDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return "";
   if (ms < 1000) return `${Math.round(ms)} ms`;
   const s = ms / 1000;
-  if (s < 60) return `${s.toFixed(1).replace(".", translate("sdk.result.decimal"))} s`;
+  if (s < 60) return `${s.toFixed(1).replace(".", translate("sdk.result.decimalSeparator"))} s`;
   const whole = Math.floor(s);
   const minutes = Math.floor(whole / 60);
   if (minutes < 60) return `${minutes}m ${String(whole % 60).padStart(2, "0")}s`;
