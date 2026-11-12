@@ -7,10 +7,10 @@ import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { get, post } from "@/lib/api";
+import { post } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
-import type { CardPr, PeopleResponse, Person, Review, StartReviewBody } from "@/api/types";
-import { CARDS_PREFIX_KEY } from "@/features/board/api";
+import type { CardPr, Person, Review, StartReviewBody } from "@/api/types";
+import { CARDS_PREFIX_KEY, boardApi } from "@/features/board/api";
 import { SELECT_CLASS } from "@/features/board/components/NewCardDialog";
 import {
   cardPeopleKey, cardReviewKey, startErrorCode, startErrorRoles,
@@ -91,7 +91,7 @@ export function RequestReviewDialog({ cardId, pr, actorUserId, open, onClose }: 
 
   const people = useQuery({
     queryKey: cardPeopleKey(cardId),
-    queryFn: () => get<PeopleResponse>(`/cards/${encodeURIComponent(cardId)}/people`).then((r) => r.people),
+    queryFn: () => boardApi.listCardPeople(cardId),
     enabled: open,
   });
 

@@ -2,9 +2,10 @@ import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
-import { get, post } from "@/lib/api";
+import { post } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
-import type { PeopleResponse, Person, Review, ReviewPhase } from "@/api/types";
+import type { Person, Review, ReviewPhase } from "@/api/types";
+import { boardApi } from "@/features/board/api";
 import { PanelFrame, ReviewPanelView, type Decision, type PanelNotice } from "@/features/board/components/ReviewPanelView";
 import { MERGE_CONFIRM_MS, cardPeopleKey, cardReviewKey, mergeFailure, reviewActions } from "@/features/board/lib/review";
 import { reviewReadsStarted, useLiveReview } from "@/features/board/lib/useLiveReview";
@@ -91,7 +92,7 @@ export function ReviewPanel({ cardId, prNumber: pr, onClose }: {
   // The review carries user ids; the roles read better as names. Same key and shape as the request dialog's.
   const people = useQuery({
     queryKey: cardPeopleKey(cardId),
-    queryFn: () => get<PeopleResponse>(`/cards/${encodeURIComponent(cardId)}/people`).then((r) => r.people),
+    queryFn: () => boardApi.listCardPeople(cardId),
   });
 
   const reread = () => void qc.invalidateQueries({ queryKey: key });

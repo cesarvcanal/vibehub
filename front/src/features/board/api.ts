@@ -20,6 +20,7 @@ import type {
   McpTransport,
   NewCard,
   OutboxStatus,
+  PeopleResponse,
   PluginCatalog,
   PluginWriteResult,
   PreviewPort,
@@ -433,6 +434,10 @@ export const boardApi = {
 
   /** Light read of one card — it does NOT touch the runner, so a deep link can decide how to open. */
   getCard: (id: string) => get<{ card: BoardCard }>(`/cards/${encodeURIComponent(id)}`).then((r) => r.card),
+
+  /** Who can take part in this card's work — members can read it, unlike `GET /api/users`. */
+  listCardPeople: (cardId: string) =>
+    get<PeopleResponse>(`/cards/${encodeURIComponent(cardId)}/people`).then((r) => r.people),
 
   createCard: (input: NewCard) => post<{ card: BoardCard }>("/cards", input).then((r) => r.card),
 
