@@ -1016,15 +1016,15 @@ export async function sessionInfo(cardId: string): Promise<SessionInfo> {
 
   const slug = effectiveAccountSlug(card, project);
   const accounts = await listAccounts();
-  const config = await getConfig();
-  const name = slug ? (accounts.find((a) => a.slug === slug)?.name ?? slug) : (config.defaultAccountLabel ?? "default");
+  const boardConfig = await getConfig();
+  const name = slug ? (accounts.find((a) => a.slug === slug)?.name ?? slug) : (boardConfig.defaultAccountLabel ?? "default");
 
   let model: string | null = null;
   let effort: string | null = card.effort ?? null;
   try {
     const profileDir = profileDirFor(slug);
     const { stdout } = await hostExecutor().runScript(
-      buildReadSessionScript(config_runner_container(), transcriptDirFor(project, card, slug), profileDir, 200),
+      buildReadSessionScript(config.runner.container, transcriptDirFor(project, card, slug), profileDir, 200),
       { timeoutMs: 15_000 },
     );
     const { transcript, settings } = parseSessionOutput(stdout);
@@ -1072,8 +1072,4 @@ export async function sessionInfo(cardId: string): Promise<SessionInfo> {
     account: { slug: slug ?? null, name },
     situation,
   };
-}
-
-function config_runner_container(): string {
-  return config.runner.container;
 }
