@@ -253,9 +253,10 @@ export function installCardSdkDriver(): Promise<void> {
   // The cleanup is a `.finally` on the promise, not a try/finally in the body: the body runs
   // synchronously up to its first await, so a throw there (executor, driver source read) would
   // run the cleanup BEFORE the `set` below and leave the rejected promise "in flight" forever.
+  // One exec for both steps: each script is `set -e` + its own heredoc, so concatenated they still
+  // run in order and a failed plant stops before the npm step — one round trip instead of two.
   const run = (async () => {
-    await hostExecutor().runScript(buildInstallDriverScript(container, sdkDriverSource()));
-    await hostExecutor().runScript(buildEnsureSdkScript(container));
+    await hostExecutor().runScript(`${buildInstallDriverScript(container, sdkDriverSource())}\n${buildEnsureSdkScript(container)}`);
   })().finally(() => installsInFlight.delete(container));
   installsInFlight.set(container, run);
   return run;

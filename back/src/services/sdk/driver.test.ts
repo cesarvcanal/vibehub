@@ -218,8 +218,10 @@ describe("installCardSdkDriver — uma instalação por vez (single-flight)", ()
     const all = Promise.all([installCardSdkDriver(), installCardSdkDriver(), installCardSdkDriver()]);
     await drain();
     await all;
-    // one plant + one ensure, not three of each
-    expect(runScript).toHaveBeenCalledTimes(2);
+    // one exec (plant + ensure), not three
+    expect(runScript).toHaveBeenCalledTimes(1);
+    const script = String(runScript.mock.calls[0]![0]);
+    expect(script.indexOf(SDK_DRIVER_PATH)).toBeLessThan(script.indexOf("npm install"));
   });
 
   it("uma instalação TERMINADA não fica em cache: o próximo connect confere de novo (o marcador deixa isso barato)", async () => {
@@ -229,7 +231,7 @@ describe("installCardSdkDriver — uma instalação por vez (single-flight)", ()
     const second = installCardSdkDriver();
     await drain();
     await second;
-    expect(runScript).toHaveBeenCalledTimes(4);
+    expect(runScript).toHaveBeenCalledTimes(2);
   });
 
   it("uma instalação que FALHOU falha para todos que esperavam, e o connect seguinte tenta de novo", async () => {
@@ -242,7 +244,7 @@ describe("installCardSdkDriver — uma instalação por vez (single-flight)", ()
     const retry = installCardSdkDriver();
     await drain();
     await retry;
-    expect(runScript).toHaveBeenCalledTimes(3);
+    expect(runScript).toHaveBeenCalledTimes(2);
   });
 
   it("uma falha SÍNCRONA (antes do primeiro await) também não fica em cache", async () => {
@@ -254,7 +256,7 @@ describe("installCardSdkDriver — uma instalação por vez (single-flight)", ()
     const retry = installCardSdkDriver();
     await drain();
     await retry;
-    expect(runScript).toHaveBeenCalledTimes(2);
+    expect(runScript).toHaveBeenCalledTimes(1);
   });
 });
 
