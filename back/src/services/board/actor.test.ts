@@ -15,8 +15,8 @@ import { join } from "node:path";
 let dir = "";
 const reapply = vi.fn(async (_cardId: string) => undefined);
 /**
- * Uma falha do runner, entregue FORA do `vi.fn`: o mock do vitest pendura um `.then` na promise que
- * devolve (settledResults), e uma rejeição vinda dele nunca chega a ser "sem dono".
+ * A runner failure, delivered OUTSIDE the `vi.fn`: vitest's mock hangs a `.then` on the promise it
+ * returns (settledResults), and a rejection coming from it never gets to be "unhandled".
  */
 let reapplyFailure: Error | null = null;
 /** When set, the runner "takes" this long to apply the identity: the reapply settles with it. */
@@ -26,8 +26,8 @@ async function load() {
   vi.resetModules();
   const env = await import("../../config/env.js");
   env.config.dataDir = dir;
-  // O módulo REAL, com só o reapply por card trocado: o teste de propagação chama
-  // `reapplyIdentityForUser` de verdade e precisa que ele exista.
+  // The REAL module, with only the per-card reapply swapped: the propagation test calls
+  // `reapplyIdentityForUser` for real and needs it to exist.
   vi.doMock("./workspace.js", async () => {
     const actual = await vi.importActual<typeof import("./workspace.js")>("./workspace.js");
     return {
@@ -95,7 +95,7 @@ describe("o ator do card decide a identidade do commit", () => {
     const afterFirst = reapply.mock.calls.length;
     await recordCardActor(owner, card.id);
     await recordCardActor(owner, card.id);
-    // Mesmo ator: nada de docker exec por prompt.
+    // Same actor: no docker exec per prompt.
     expect(reapply.mock.calls.length).toBe(afterFirst);
 
     await registry.shareWith({ kind: "card", targetId: card.id, userId: mussa.id, level: "work" });
@@ -112,11 +112,11 @@ describe("o ator do card decide a identidade do commit", () => {
 });
 
 /**
- * AUTORIA POR MENSAGEM. O chat nativo carimbava o ator no CONNECT: com o César e o Mussa no mesmo
- * card ao mesmo tempo, o commit saía no nome de quem tinha aberto por último, não no de quem
- * mandou o pedido. Agora cada mensagem carimba — e por isso ela precisa ser BARATA: o board.json
- * inteiro é reescrito a cada mutação, e um write por mensagem (mais um docker exec) é justamente a
- * sobrecarga a evitar.
+ * AUTHORSHIP PER MESSAGE. The native chat stamped the actor on CONNECT: with César and Mussa on the same
+ * card at the same time, the commit went out in the name of whoever had opened it last, not of whoever
+ * sent the request. Now each message stamps — and that is why it needs to be CHEAP: the whole board.json
+ * is rewritten on every mutation, and one write per message (plus a docker exec) is exactly the
+ * overhead to avoid.
  */
 describe("autoria por mensagem — barata quando nada muda", () => {
   it("mensagem repetida do mesmo autor NÃO reescreve o board.json", async () => {
@@ -128,7 +128,7 @@ describe("autoria por mensagem — barata quando nada muda", () => {
     const before = (await stat(file)).mtimeMs;
     await new Promise((r) => setTimeout(r, 10));
 
-    // Dez mensagens seguidas da mesma pessoa: nada mudou, nada é escrito.
+    // Ten messages in a row from the same person: nothing changed, nothing is written.
     for (let i = 0; i < 10; i += 1) await recordCardActor(owner, card.id);
 
     expect((await stat(file)).mtimeMs).toBe(before);
@@ -160,7 +160,7 @@ describe("authorsTheTurn (pura) — que frame do chat é um pedido de trabalho",
 
   it("interromper, responder permissão ou pergunta NÃO troca a autoria", async () => {
     const { authorsTheTurn } = await load();
-    // Clicar em "permitir" no pedido de quem está trabalhando não torna o espectador o autor.
+    // Clicking "permitir" on the request of whoever is working does not make the spectator the author.
     expect(authorsTheTurn('{"type":"interrupt"}')).toBe(false);
     expect(authorsTheTurn('{"type":"permission_decision","id":"perm_1","allow":true}')).toBe(false);
     expect(authorsTheTurn('{"type":"question_answer","id":"q1","answers":[{"selected":["a"]}]}')).toBe(false);
@@ -189,9 +189,9 @@ describe("vincular identidade alcança os cards já abertos", () => {
     await registry.stampCardActor(outro.id, "u-cesar");
     await registry.stampCardActor(nuncaAberto.id, "u-mussa");
 
-    // O BUG: a identidade só era escrita na ABERTURA ou na troca de ator, e quem acabou de ganhar
-    // identidade JÁ É o ator do card em que está sentado. O dono salvava, a tela dizia salvo, e o
-    // commit seguinte continuava saindo com o padrão da instalação.
+    // THE BUG: the identity was only written on OPEN or on an actor switch, and whoever has just gained
+    // an identity ALREADY IS the actor of the card they are sitting on. The owner saved, the screen said saved, and the
+    // next commit kept going out with the installation's default.
     expect(await workspace.reapplyIdentityForUser("u-mussa")).toBe(1);
     expect(await workspace.reapplyIdentityForUser("u-cesar")).toBe(1);
     expect(await workspace.reapplyIdentityForUser("u-ninguem")).toBe(0);
@@ -200,9 +200,9 @@ describe("vincular identidade alcança os cards já abertos", () => {
 });
 
 /**
- * O CARIMBO SAI A CADA MENSAGEM DO CHAT, como `void recordCardActor(...)`. Uma promise rejeitada sem
- * dono derruba o processo no Node 24 — e com ele os terminais e os chats de todo mundo. Disco cheio
- * ou runner fora do ar viram uma linha de log, nunca uma rejeição.
+ * THE STAMP GOES OUT ON EVERY CHAT MESSAGE, as `void recordCardActor(...)`. An unhandled rejected
+ * promise brings the process down on Node 24 — and with it everyone's terminals and chats. A full disk
+ * or a runner that is down become a log line, never a rejection.
  */
 describe("o carimbo do autor nunca rejeita", () => {
   const unhandled: unknown[] = [];
@@ -210,7 +210,7 @@ describe("o carimbo do autor nunca rejeita", () => {
   beforeEach(() => { unhandled.length = 0; process.on("unhandledRejection", onUnhandled); });
   afterEach(() => { process.off("unhandledRejection", onUnhandled); vi.doUnmock("./registry.js"); });
 
-  /** Deixa as rejeições sem dono chegarem ao processo antes de olhar. */
+  /** Lets unhandled rejections reach the process before looking. */
   const settle = async (): Promise<void> => {
     for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve));
   };
@@ -244,8 +244,8 @@ describe("o carimbo do autor nunca rejeita", () => {
 });
 
 /**
- * A TROCA ATERRISSA ANTES DA ORDEM. A mensagem do Mussa só pode chegar ao agente depois que o token
- * e o autor dele estão no runner — senão o primeiro commit do pedido dele sai como o César.
+ * THE SWITCH LANDS BEFORE THE ORDER. Mussa's message may only reach the agent after his token
+ * and author are in the runner — otherwise the first commit of his request goes out as César.
  */
 describe("a troca de autor aterrissa antes da mensagem que a causou", () => {
   it("recordCardActor só resolve quando a identidade nova já está no runner", async () => {
@@ -279,7 +279,7 @@ describe("a troca de autor aterrissa antes da mensagem que a causou", () => {
     const { registry, recordCardActor, isCardActor } = await load();
     const card = await seed(registry);
     await registry.shareWith({ kind: "card", targetId: card.id, userId: mussa.id, level: "work" });
-    // Nada conhecido ainda: na dúvida, passa pelo caminho que confere.
+    // Nothing known yet: when in doubt, it goes through the path that checks.
     expect(isCardActor(owner, card.id)).toBe(false);
     await recordCardActor(owner, card.id);
     expect(isCardActor(owner, card.id)).toBe(true);
@@ -292,8 +292,8 @@ describe("a troca de autor aterrissa antes da mensagem que a causou", () => {
 });
 
 /**
- * O MAESTRO REPASSA A ORDEM DE UMA PESSOA. Quando o card do César delega ao card B, quem deu a ordem
- * foi o César: o trabalho de B que ela provoca sai com a conta dele.
+ * THE MAESTRO RELAYS A PERSON'S ORDER. When César's card delegates to card B, the one who gave the order
+ * was César: the work on B that it triggers goes out with his account.
  */
 describe("relayCardActor — a ordem delegada por outro card leva o autor junto", () => {
   it("o autor do card remetente vira o autor do destino", async () => {
@@ -322,7 +322,7 @@ describe("relayCardActor — a ordem delegada por outro card leva o autor junto"
     await relayCardActor(maestro.id, alvo.id);
     await relayCardActor(undefined, alvo.id);
     await relayCardActor("card-que-nao-existe", alvo.id);
-    // Um card de OUTRO projeto não empresta o autor dele (o `from` é declarado pelo próprio agente).
+    // A card from ANOTHER project does not lend its author (the `from` is declared by the agent itself).
     const outro = await registry.createProject({ name: "outro" });
     const deFora = await registry.createCard({ projectId: outro.id, title: "de fora" });
     await registry.stampCardActor(deFora.id, (await users.createUser("cesar", "senha-forte-1", "owner")).id);
@@ -334,9 +334,9 @@ describe("relayCardActor — a ordem delegada por outro card leva o autor junto"
 });
 
 /**
- * UMA APLICAÇÃO QUE FALHOU NÃO PODE VIRAR "JÁ É O AUTOR". O cache dizia que o Mussa já era o autor
- * antes de a identidade dele chegar ao runner; se o docker exec falhasse, nenhuma mensagem seguinte
- * dele tentava de novo — e os commits seguiam saindo como o César, em silêncio.
+ * AN APPLICATION THAT FAILED MUST NOT BECOME "ALREADY THE AUTHOR". The cache said Mussa was already the author
+ * before his identity reached the runner; if the docker exec failed, none of his following messages
+ * tried again — and the commits kept going out as César, silently.
  */
 describe("a troca que não aterrissou é tentada de novo na próxima ordem", () => {
   it("runner falhou: a próxima mensagem da mesma pessoa reaplica", async () => {
@@ -372,11 +372,11 @@ describe("a troca que não aterrissou é tentada de novo na próxima ordem", () 
 });
 
 /**
- * AGIR COMO QUEM JÁ DEU ORDEM NO CARD. O Albert pediu o trabalho; o Mussa entrou no card e disse
- * "commita e push como Albert, eu sou coautor". A mensagem do Mussa trocou a conta do card para a
- * dele, e o agente travou até o Albert voltar e mandar "faça o que o Mussa pediu". Agora o agente
- * volta para a conta do Albert sozinho, porque o Albert já deu ordem ali. A conta de quem nunca
- * falou no card continua fora de alcance.
+ * ACTING AS SOMEONE WHO ALREADY GAVE AN ORDER ON THE CARD. Albert asked for the work; Mussa joined the card and said
+ * "commita e push como Albert, eu sou coautor". Mussa's message switched the card's account to
+ * his, and the agent got stuck until Albert came back and sent "faça o que o Mussa pediu". Now the agent
+ * goes back to Albert's account on its own, because Albert has already given an order there. The account of someone who never
+ * spoke on the card stays out of reach.
  */
 describe("actAsParticipant — agir como quem já deu ordem no card", () => {
   async function cenario() {

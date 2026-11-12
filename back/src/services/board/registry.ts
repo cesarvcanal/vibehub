@@ -494,7 +494,7 @@ export interface Card {
    * delivered to it. The idle sweep counts it ({@link lastActivityAt}), and so does the done-card
    * retention (a finished card someone reopened or instructed must not be purged), because the
    * other clocks can all be silent while a card works: `openedAt` is stamped once, `humanActiveAt`
-   * needs a person, and `statusAt` needs the status hooks to reach the back — produção, 21/10/2026: with the hooks
+   * needs a person, and `statusAt` needs the status hooks to reach the back — production, 21/10/2026: with the hooks
    * pointing at a dead blue/green port, a card opened and instructed by ChatGPT was hibernated by
    * the next sweep tick, mid-task. Absent = nothing since the field existed.
    */
@@ -1023,10 +1023,10 @@ export function reactivatesOnActivity(
   status: CardStatus,
 ): boolean {
   if (card.pausedAt) return false;
-  // Só um turno NOVO (ocioso -> trabalhando) traz o card de volta. O agente que se conclui
-  // (`vibehub_move_cards`) o faz NO MEIO do turno, e cada ferramenta seguinte dele dispara um
-  // `working` (PreToolUse): sem isto o card saía de `done` no instante seguinte, e o "concluído"
-  // nunca ficava (produção, 2026-10-20). `card.status` aqui é o de ANTES do relato.
+  // Only a NEW turn (idle -> working) brings the card back. The agent that marks itself done
+  // (`vibehub_move_cards`) does so IN THE MIDDLE of the turn, and each of its following tools fires a
+  // `working` (PreToolUse): without this the card left `done` the very next instant, and the "concluído"
+  // never stuck (production, 2026-10-20). `card.status` here is the one from BEFORE the report.
   if (card.status === "working") return false;
   return status === "working" && card.column === "done";
 }
@@ -2177,9 +2177,9 @@ export async function markCardHumanActive(cardId: string, at: number = Date.now(
  * `markCardHumanActive` it never bumps updatedAt: an open question is not an edit of the card.
  */
 export async function setCardAwaitingDecision(cardId: string, at: number | null): Promise<void> {
-  // A conferência mora SÓ dentro do mutate (que não regrava quando nada muda): lida antes, fora da
-  // fila, um "abre" e um "fecha" seguidos (permissão respondida na hora) liam os dois o card ainda
-  // limpo — o "fecha" desistia e o card ficava âmbar para sempre.
+  // The check lives ONLY inside the mutate (which does not rewrite when nothing changes): read before, outside the
+  // queue, an "open" and a "close" in a row (permission answered right away) both read the card still
+  // clean — the "close" gave up and the card stayed amber forever.
   await store.mutate((doc) => {
     const card = doc.cards.find((c) => c.id === cardId);
     if (!card || Boolean(card.awaitingDecisionAt) === (at !== null)) return;

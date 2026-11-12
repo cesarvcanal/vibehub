@@ -327,9 +327,9 @@ describe("purgeCardQueue (the card is being deleted)", () => {
 
 describe("quem mandou a mensagem fica registrado", () => {
   it("a proveniência é gravada na ENTREGA, não no enfileiramento", async () => {
-    // O chat casa a atribuição com a LINHA DO TRANSCRIPT, que só existe quando a mensagem é
-    // entregue. Uma mensagem que ficou na fila (Claude fora do ar) e saiu horas depois cairia fora
-    // da janela de casamento — justamente o caso pro qual a fila existe.
+    // The chat matches the attribution with the TRANSCRIPT LINE, which only exists when the message is
+    // delivered. A message that sat in the queue (Claude down) and went out hours later would fall outside
+    // the matching window — precisely the case the queue exists for.
     const { registry, outbox } = await load();
     const users = await import("../../auth/users.js");
     const prov = await import("../chat/provenance.js");
@@ -338,10 +338,10 @@ describe("quem mandou a mensagem fica registrado", () => {
     const card = await registry.createCard({ projectId: project.id, title: "um card" });
     await registry.applyOpenTerminal(card.id);
 
-    // Resposta FIXA da sonda (não `agentIs`): `mockClear` não esvazia a fila de `…Once`, e uma
-    // sobra de teste anterior comia esta resposta.
+    // FIXED probe answer (not `agentIs`): `mockClear` does not empty the `…Once` queue, and a
+    // leftover from a previous test ate this answer.
     runScript.mockReset();
-    runScript.mockResolvedValue({ stdout: "bash\n", stderr: "" }); // Claude fora: a mensagem fica na fila
+    runScript.mockResolvedValue({ stdout: "bash\n", stderr: "" }); // Claude down: the message stays in the queue
     await outbox.queueMessage(card.id, "roda os testes", mussa.id);
     await prov.primeProvenance(card.id);
     expect(prov.matchOrigin(card.id, "roda os testes", Date.now())).toBeUndefined();

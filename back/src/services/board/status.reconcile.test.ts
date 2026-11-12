@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /**
- * A `working` DOT THE HOOKS NEVER CLOSED (produção, 22/10/2026): the card's hooks posted to a
+ * A `working` DOT THE HOOKS NEVER CLOSED (production, 22/10/2026): the card's hooks posted to a
  * blue/green port the app no longer listened on, the Stop that ended the turn was lost, and the
  * board kept the loader on a Claude idle at its prompt for a day. The sweep asks the runner and
  * delivers the `waiting` the hook could not. Real registry against a temp data dir; the runner probe,

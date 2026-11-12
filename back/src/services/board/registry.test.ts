@@ -591,13 +591,13 @@ describe("board registry (persisted)", () => {
         reviewOf: author.id,
         column: "waiting",
       });
-      // a branch do revisor é DELE (nunca a do PR: ele não empurra nada), derivada do slug do card novo
+      // the reviewer's branch is ITS OWN (never the PR's: it pushes nothing), derived from the new card's slug
       expect(reviewer.branch).toBe(`review/${reviewer.worktreeSlug}`);
       expect(reviewer.worktreeSlug).toBe(`revisao-login-${reviewer.id.slice(0, 4)}`);
       expect(reviewer.id).not.toBe(author.id);
-      // gravado de verdade: é o que a hidratação seguinte lê
+      // actually written: it is what the next hydration reads
       expect(await reg.getCard(reviewer.id)).toMatchObject({ reviewOf: author.id, branch: reviewer.branch, column: "waiting" });
-      // o autor não é tocado
+      // the author is not touched
       expect((await reg.getCard(author.id))?.reviewOf).toBeUndefined();
     });
 
@@ -610,7 +610,7 @@ describe("board registry (persisted)", () => {
       await expect(reg.createReviewerCard({ ...input, title: "  " })).rejects.toThrow(/title is required/);
       await expect(reg.createReviewerCard({ ...input, authorCard: { ...author, id: "sumiu" } })).rejects.toThrow(/author card not found/);
       const reviewer = await reg.createReviewerCard(input);
-      // revisar o card de um revisor não faz sentido (e abriria uma cadeia sem fim)
+      // reviewing a reviewer's card makes no sense (and would open an endless chain)
       await expect(reg.createReviewerCard({ ...input, authorCard: reviewer })).rejects.toThrow(/reviewer card/);
       expect((await reg.listAllCards()).filter((c) => c.projectId === p.id)).toHaveLength(before + 1);
     });
@@ -636,7 +636,7 @@ describe("board registry (persisted)", () => {
       now.mockReturnValue(2_000);
       await reg.recordCardPr(author.id, { ...AUTHOR_PR, number: 8, base: "prod", url: "https://github.com/acme/widgets/pull/8" });
       now.mockReturnValue(3_000);
-      // o mesmo `dev` de novo, agora outro PR (o anterior foi fechado): atualiza o item, não empilha
+      // the same `dev` again, now another PR (the previous one was closed): updates the item, does not stack
       await reg.recordCardPr(author.id, { number: 9, url: "https://github.com/acme/widgets/pull/9", base: "dev", branch: "card/login-v2" });
       now.mockRestore();
 
@@ -656,14 +656,14 @@ describe("board registry (persisted)", () => {
       await reg.markCardPrMerged(author.id, "dev", AUTHOR_PR.number, 5_000);
       const prs = (await reg.getCard(author.id))?.prs;
       expect(prs?.find((x) => x.base === "dev")?.mergedAt).toBe(5_000);
-      // só o PR da base mergeada: o outro segue aberto
+      // only the merged base's PR: the other one stays open
       expect(prs?.find((x) => x.base === "prod")?.mergedAt).toBeUndefined();
 
-      // o mesmo PR re-gravado (nova entrega no mesmo número) não perde a marca
+      // the same PR re-recorded (a new delivery on the same number) does not lose the mark
       await reg.recordCardPr(author.id, AUTHOR_PR);
       expect((await reg.getCard(author.id))?.prs?.find((x) => x.base === "dev")?.mergedAt).toBe(5_000);
 
-      // outro PR na mesma base (o anterior foi mergeado, este é novo): a marca era do PR velho
+      // another PR on the same base (the previous one was merged, this one is new): the mark belonged to the old PR
       await reg.recordCardPr(author.id, { number: 9, url: "https://github.com/acme/widgets/pull/9", base: "dev", branch: "card/login-v2" });
       expect((await reg.getCard(author.id))?.prs?.find((x) => x.base === "dev")).toMatchObject({ number: 9 });
       expect((await reg.getCard(author.id))?.prs?.find((x) => x.base === "dev")?.mergedAt).toBeUndefined();
@@ -671,7 +671,7 @@ describe("board registry (persisted)", () => {
 
     it("markCardPrMerged: número que não é o da base, base sem PR e card que sumiu são no-op", async () => {
       const { author } = await seedAuthor();
-      // card sem nenhum PR: não inventa um
+      // card with no PR at all: it does not make one up
       await reg.markCardPrMerged(author.id, "dev", AUTHOR_PR.number, 5_000);
       expect((await reg.getCard(author.id))?.prs).toBeUndefined();
 
@@ -727,13 +727,13 @@ describe("board registry (persisted)", () => {
       it("PR anexado não ocupa a vaga por base do PR entregue, e PR entregue não vira anexado", async () => {
         const { author } = await seedAuthor();
         await reg.attachCardPrs(author.id, [ALBERT_PR]);
-        // a entrega do próprio card na mesma base: linha própria, o anexado fica intacto
+        // the card's own delivery on the same base: a line of its own, the attached one stays intact
         await reg.recordCardPr(author.id, AUTHOR_PR);
         let prs = (await reg.getCard(author.id))?.prs;
         expect(prs).toHaveLength(2);
         expect(prs?.find((x) => x.number === 599)).toMatchObject({ attached: true, branch: "feat/aviso" });
         expect(prs?.find((x) => x.number === AUTHOR_PR.number)?.attached).toBeUndefined();
-        // anexar o PR que o card entregou não muda nada nele
+        // attaching the PR the card delivered changes nothing in it
         await reg.attachCardPrs(author.id, [{ ...ALBERT_PR, number: AUTHOR_PR.number, url: AUTHOR_PR.url }]);
         prs = (await reg.getCard(author.id))?.prs;
         expect(prs).toHaveLength(2);
@@ -782,7 +782,7 @@ describe("board registry (persisted)", () => {
 
     it("board.json antigo, sem prs nem reviewOf, hidrata e aceita o primeiro PR", async () => {
       const { p, author } = await seedAuthor();
-      // o documento como uma versão anterior o gravou: nenhum dos dois campos existe
+      // the document as an earlier version wrote it: neither of the two fields exists
       const raw = JSON.parse(await readFile(join(dir, "board.json"), "utf8")) as { cards: Record<string, unknown>[] };
       for (const c of raw.cards) {
         delete c.prs;
@@ -1638,7 +1638,7 @@ describe("board registry (persisted)", () => {
     expect(first?.card.actorUserId).toBe("u-cesar");
     expect(first?.card.actorAt).toBeGreaterThan(0);
 
-    // Mesmo ator de novo: nada mudou — o chamador pula a reaplicação no runner.
+    // Same actor again: nothing changed — the caller skips the reapplication in the runner.
     expect((await reg.stampCardActor(card.id, "u-cesar"))?.changed).toBe(false);
 
     const switched = await reg.stampCardActor(card.id, "u-mussa");

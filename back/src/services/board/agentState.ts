@@ -173,7 +173,7 @@ export async function cardPaneReadiness(
  * What a card's NATIVE CHAT driver is doing, as the backend already knows it in memory: `turn` = a
  * turn is in flight, `idle` = the driver is up and at the prompt, `none` = no driver right now.
  *
- * Why this exists (produção, 2026-10-02 — "Claude parou" com o Claude respondendo): the probe above
+ * Why this exists (production, 2026-10-02 — "Claude parou" with Claude answering): the probe above
  * walks the TMUX pane tree, and the native chat's claude is NOT in it — it is a child of the BACK
  * (docker exec, see services/sdk/driver.ts). A card whose conversation lives in the chat therefore
  * reads as "only shells in the tree" = Claude exited, and the chat hung a "Claude parou — Reiniciar"

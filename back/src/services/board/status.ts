@@ -11,12 +11,12 @@ import { logger } from "../../utils/logger.js";
  * the runner hooks (POST /api/runner/status) and the native chat's manager, when the last
  * background task of a turn that already closed ends with no hook to say so.
  *
- * TRABALHO EM SEGUNDO PLANO (produção, 2026-10-20): o turno dispara a suíte com `run_in_background`
- * e fecha; o hook `Stop` chega com `waiting` e o card virava "aguardando" no board enquanto o chat
- * mostrava "1 tarefa rodando em segundo plano — o Claude segue trabalhando". Enquanto o driver do
- * chat nativo segura uma tarefa viva (dentro do teto, ver BACKGROUND_HOLD_MAX_MS), `waiting` vale
- * como `working`: o Claude não chegou ao prompt de verdade, vai retomar quando ela terminar. Isso
- * também segura a pausa/reinício pendente e a fila, que matariam ou atropelariam a tarefa.
+ * BACKGROUND WORK (production, 2026-10-20): the turn fires the suite with `run_in_background`
+ * and closes; the `Stop` hook arrives with `waiting` and the card turned "aguardando" on the board while the chat
+ * showed "1 tarefa rodando em segundo plano — o Claude segue trabalhando". While the native chat's
+ * driver holds a live task (within the cap, see BACKGROUND_HOLD_MAX_MS), `waiting` counts
+ * as `working`: Claude has not really reached the prompt, it will resume when the task finishes. This
+ * also holds back the pending pause/restart and the queue, which would kill or run over the task.
  */
 export async function reportCardStatus(cardId: string, reported: registry.CardStatus): Promise<registry.Card | undefined> {
   const status: registry.CardStatus = reported === "waiting" && cardHoldsBackgroundWork(cardId) ? "working" : reported;
@@ -87,7 +87,7 @@ export async function reportCardStatus(cardId: string, reported: registry.CardSt
 export const STALE_WORKING_MS = 10 * 60_000;
 
 /**
- * THE `working` THE HOOKS NEVER CLOSED (produção, 22/10/2026): the status hooks post to the address
+ * THE `working` THE HOOKS NEVER CLOSED (production, 22/10/2026): the status hooks post to the address
  * baked into the card's environment when it opened; a deploy moved the app to another blue/green
  * port, the Stop that ended the turn died in a `curl … || true`, and the board kept the loader on a
  * Claude idle at its prompt for a day — while the restart that deploy left pending waited for that

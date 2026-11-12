@@ -881,7 +881,7 @@ export function buildWorkspaceProbeScript(containerName: string, cwd: string): s
 }
 
 /**
- * THE CARD'S FOLDER VANISHED UNDER IT (produção, 2026-10-19): asked to "merge and delete the
+ * THE CARD'S FOLDER VANISHED UNDER IT (production, 2026-10-19): asked to "merge and delete the
  * branch", the card's own agent ran `git worktree remove` on the directory it lived in. Every
  * message after that died spawning the CLI (cwd missing), behind the SDK's misleading libc error.
  *
@@ -963,7 +963,7 @@ export interface UploadScriptOpts {
  * The `exec` is the point. Bash reads a script from a pipe ONE BYTE PER read() — so the commands it
  * starts can inherit the rest of the stream — and the old shape put the payload inside a heredoc,
  * parsed twice (host bash, then the container's `bash -s`): ~19 s per level for a 5 MB screenshot,
- * the "colei a imagem e ela demora muito para carregar" of produção (2026-10-19). Here bash reads
+ * the "colei a imagem e ela demora muito para carregar" of production (2026-10-19). Here bash reads
  * only the first line and hands its stdin to `docker exec -i`, which streams the payload in blocks
  * straight into `base64 -d` (0.25 s for the same 5 MB). Nothing after the payload is ever parsed as
  * shell: the process reading it is base64, not bash. PURE/testable.
@@ -1042,7 +1042,7 @@ const UPLOAD_CONTENT_TYPES: Record<string, string> = {
   md: "text/plain; charset=utf-8",
   json: "text/plain; charset=utf-8",
   log: "text/plain; charset=utf-8",
-  // Áudio toca no <audio> do chat; nenhum desses tipos executa nada na origem do painel.
+  // Audio plays in the chat's <audio>; none of these types executes anything on the panel's origin.
   mp3: "audio/mpeg",
   ogg: "audio/ogg",
   oga: "audio/ogg",
@@ -1296,7 +1296,7 @@ export function onCardSessionKill(listener: CardSessionKillListener): () => void
 /**
  * Probes that answer "someone is USING this card right now, do not hibernate it".
  *
- * The incident (produção, 2026-09-17): a card whose whole conversation lives in the NATIVE CHAT
+ * The incident (production, 2026-09-17): a card whose whole conversation lives in the NATIVE CHAT
  * never touches tmux, so nothing refreshed its `statusAt`/`openedAt` — and `openedAt` is stamped
  * on the FIRST open and never re-stamped. The idle sweep therefore read a card the person was
  * typing into as "sem sinal de vida há 3 horas" and hibernated it, killing the SDK driver under a
@@ -1799,7 +1799,7 @@ async function sweepIdleCardsOnce(now: number): Promise<number> {
   if (candidates.length === 0) return 0;
   // The board's clocks say "silent"; ASK THE RUNNER before killing anything. The status hooks are a
   // network call from the runner back to us, and when they cannot reach the back (a public URL on a
-  // dead blue/green port — produção, 21/10/2026) a Claude in the middle of a task looks exactly like
+  // dead blue/green port — production, 21/10/2026) a Claude in the middle of a task looks exactly like
   // an abandoned one. A pane showing Claude generating (`busy`) or a runner that did not answer
   // (`unknown`) is spared; only `idle`/`gone` go to sleep. One round trip for the whole list.
   const states = await probeSessions(candidates.filter((c) => c.column !== "done").map((c) => c.tmuxSession));
@@ -1912,7 +1912,7 @@ export async function applySessionChange(before: Card | undefined, after: Card, 
   if (!before || !changed || !hasLiveSession(after)) return "none";
   // ONLY THE INTELLIGENCE changed, on a card whose conversation runs in the native chat: the driver
   // applies it to the live session (`applyFlagSettings`) — no restart, no waiting for the turn to
-  // end. The pending restart was the bug (produção, 2026-10-27, card review-prs-albert-ee7c): Alto
+  // end. The pending restart was the bug (production, 2026-10-27, card review-prs-albert-ee7c): Alto
   // picked mid-turn, the toast said it would apply when Claude finished, and with subagents running
   // in the background the turn never "finished" — the session went on in `medium` and the pill fell
   // back to Médio. A level cleared back to the account default goes live as well (null): the driver
