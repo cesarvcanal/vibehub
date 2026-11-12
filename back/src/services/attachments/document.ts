@@ -7,7 +7,7 @@ import {
   PACOTES_LEITURA_DOCUMENTO, extensaoDe, linhaGarantirPacotes, rodarNoRunner, scriptNoRunner, validarCaminhoNoRunner,
 } from "./runner.js";
 
-/** Formatos que `ler-documento.py` converte. Fonte única: a ferramenta MCP e o preview do chat leem daqui. */
+/** Formatos que `read-document.py` converte. Fonte única: a ferramenta MCP e o preview do chat leem daqui. */
 export const FORMATOS_DOCUMENTO = [
   "pdf", "xlsx", "xlsm", "xls", "docx", "doc", "pptx", "ppt", "odt", "ods", "odp",
   "csv", "tsv", "txt", "md", "json", "xml", "html", "log",
@@ -20,7 +20,7 @@ export const LIMITE_TEXTO_MAXIMO = 400_000;
 /** Primeira vez num runner antigo inclui o apt-get dos pacotes. */
 const TIMEOUT_LEITURA_MS = 300_000;
 
-const FONTE_CONVERSOR = join(dirname(fileURLToPath(import.meta.url)), "ler-documento.py");
+const FONTE_CONVERSOR = join(dirname(fileURLToPath(import.meta.url)), "read-document.py");
 let conversorEmCache: string | null = null;
 
 function fonteDoConversor(): string {

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildLerDocumentoScript, formatoDocumentoSuportado, interpretarSaidaDoConversor } from "./documento.js";
+import { buildLerDocumentoScript, formatoDocumentoSuportado, interpretarSaidaDoConversor } from "./document.js";
 import { buildExtrairAudioScript, interpretarAudioExtraido } from "./audio.js";
 import { extensaoDe, linhaGarantirPacotes, rodarNoRunner, scriptNoRunner, validarCaminhoNoRunner } from "./runner.js";
 
@@ -13,7 +13,7 @@ import { extensaoDe, linhaGarantirPacotes, rodarNoRunner, scriptNoRunner, valida
  * mesmo e um `dpkg` falso diz que os pacotes já estão instalados (o teste nunca chama apt-get).
  * Formatos que dependem de pacote apt (openpyxl, python-docx, ffmpeg) só rodam onde ele existe.
  */
-const FONTE = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "ler-documento.py"), "utf8");
+const FONTE = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "read-document.py"), "utf8");
 const temPython = spawnSync("python3", ["--version"]).status === 0;
 const temModulo = (m: string) => temPython && spawnSync("python3", ["-c", `import ${m}`]).status === 0;
 const temFfmpeg = spawnSync("ffmpeg", ["-version"]).status === 0;
@@ -22,7 +22,7 @@ let dir = "";
 let bin = "";
 
 beforeAll(() => {
-  dir = mkdtempSync(join(tmpdir(), "vh-anexos-"));
+  dir = mkdtempSync(join(tmpdir(), "vh-attachments-"));
   bin = join(dir, "bin");
   mkdirSync(bin);
   // Sem `exec`: como o cliente `docker exec`, ele sobrevive ao comando e devolve 137 quando o
@@ -59,7 +59,7 @@ function zipar(destino: string, arquivos: Record<string, string>): void {
   ].join("\n"), destino, JSON.stringify(arquivos)]);
 }
 
-describe("conversor de documentos (ler-documento.py)", () => {
+describe("conversor de documentos (read-document.py)", () => {
   it.skipIf(!temPython)("csv com espaço e acento no nome volta como veio", () => {
     const caminho = join(dir, "Relatório final.csv");
     writeFileSync(caminho, "filial;valor\n5;10,50\n");

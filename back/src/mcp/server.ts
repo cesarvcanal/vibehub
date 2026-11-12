@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerMaestroTools } from "./tools.js";
 import { registerCredentialTools } from "./credentialTools.js";
-import { registerAnexoTools } from "./anexoTools.js";
+import { registerAnexoTools } from "./attachmentTools.js";
 import { registerExternalTools } from "./externalTools.js";
 import { registerEvents, type Principal } from "./events.js";
 import type { PublicUser } from "../auth/users.js";

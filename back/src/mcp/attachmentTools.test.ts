@@ -5,15 +5,15 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 const lerDocumento = vi.fn();
 const transcreverAudioDoRunner = vi.fn();
-vi.mock("../services/anexos/documento.js", async (original) => ({
-  ...(await original<typeof import("../services/anexos/documento.js")>()),
+vi.mock("../services/attachments/document.js", async (original) => ({
+  ...(await original<typeof import("../services/attachments/document.js")>()),
   lerDocumento,
 }));
-vi.mock("../services/anexos/audio.js", () => ({ transcreverAudioDoRunner }));
+vi.mock("../services/attachments/audio.js", () => ({ transcreverAudioDoRunner }));
 
 /** As duas ferramentas de anexo pelo MCP: o que o agente manda e o texto que recebe de volta. */
 async function conectar() {
-  const { registerAnexoTools } = await import("./anexoTools.js");
+  const { registerAnexoTools } = await import("./attachmentTools.js");
   const server = new McpServer({ name: "t", version: "1" });
   registerAnexoTools(server);
   const [lado1, lado2] = InMemoryTransport.createLinkedPair();

@@ -91,8 +91,8 @@ async function boot(): Promise<FastifyInstance> {
       uploadCardImage, readCardUpload,
     };
   });
-  vi.doMock("../services/anexos/documento.js", async () => ({
-    ...(await vi.importActual<typeof import("../services/anexos/documento.js")>("../services/anexos/documento.js")),
+  vi.doMock("../services/attachments/document.js", async () => ({
+    ...(await vi.importActual<typeof import("../services/attachments/document.js")>("../services/attachments/document.js")),
     lerAnexoDoCard,
   }));
   vi.doMock("node-pty", () => ({ default: { spawn: ptySpawn } }));

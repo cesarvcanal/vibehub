@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { FORMATOS_DOCUMENTO, LIMITE_TEXTO_MAXIMO, LIMITE_TEXTO_PADRAO, lerDocumento } from "../services/anexos/documento.js";
-import { transcreverAudioDoRunner } from "../services/anexos/audio.js";
+import { FORMATOS_DOCUMENTO, LIMITE_TEXTO_MAXIMO, LIMITE_TEXTO_PADRAO, lerDocumento } from "../services/attachments/document.js";
+import { transcreverAudioDoRunner } from "../services/attachments/audio.js";
 
 /**
  * ANEXOS — o que o agente faz com um arquivo que a pessoa anexou (ou que ele mesmo baixou no runner).

@@ -11,7 +11,7 @@ import * as workspace from "../services/board/workspace.js";
 import * as browser from "../services/browser/browser.js";
 import * as outbox from "../services/board/outbox.js";
 import { purgeCard } from "../services/board/purge.js";
-import { lerAnexoDoCard } from "../services/anexos/documento.js";
+import { lerAnexoDoCard } from "../services/attachments/document.js";
 import { observeCardStatus } from "../services/events/cardEvents.js";
 import { logger } from "../utils/logger.js";
 import { sendError } from "./httpError.js";
