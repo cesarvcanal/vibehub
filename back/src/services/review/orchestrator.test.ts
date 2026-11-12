@@ -10,22 +10,22 @@ import type { PublicUser } from "../../auth/users.js";
 import type { SubmittedFinding } from "./model.js";
 
 /**
- * ORQUESTRADOR DA REVISÃO DE PR — o relay revisor <-> autor. O board, o store das revisões e o log de
- * eventos são REAIS (diretório temporário); o que sai para o runner é mock na fronteira do módulo:
- * `sendToTerminal` (digitar no card), `recordCardActor` (a identidade que pousa no runner),
- * `resumeCard` (recriar a sessão) e `deliver` (que nunca pode ser chamado: a IA não mergeia).
+ * PR REVIEW ORCHESTRATOR — the reviewer <-> author relay. The board, the reviews store and the event log
+ * are REAL (temporary directory); what goes out to the runner is mocked at the module's boundary:
+ * `sendToTerminal` (typing into the card), `recordCardActor` (the identity that lands on the runner),
+ * `resumeCard` (recreating the session) and `deliver` (which can never be called: the AI does not merge).
  *
- * O mock do envio chama o `beforeDeliver` antes de "entregar", como o de verdade: é o que prova a
- * ordem "ator primeiro, texto depois".
+ * The send mock calls `beforeDeliver` before "delivering", like the real one: it is what proves the
+ * order "actor first, text after".
  */
 
 let dir = "";
-/** A ordem do que aconteceu na fronteira: `actor:<user>:<card>`, `resume:<card>`, `send:<card>`. */
+/** The order of what happened at the boundary: `actor:<user>:<card>`, `resume:<card>`, `send:<card>`. */
 const calls: string[] = [];
 let sendFailure: Error | null = null;
-/** Roda uma vez antes do próximo envio (a corrida "a revisão andou enquanto o texto saía"). */
+/** Runs once before the next send (the race "the review moved while the text was going out"). */
 let sendHook: (() => Promise<void>) | null = null;
-/** O board real, para o mock recusar card pausado como o `sendToTerminal` de verdade (`wake` não despausa). */
+/** The real board, so the mock refuses a paused card like the real `sendToTerminal` (`wake` does not unpause). */
 let boardRef: { getCard: (id: string) => Promise<{ title: string; column: string; pausedAt?: number | null } | undefined> } | null = null;
 const send = vi.fn(async (cardId: string, _text: string, opts: SendOpts = {}): Promise<SendResult> => {
   const hook = sendHook;
@@ -55,7 +55,7 @@ type MergeOutcome = import("./merge.js").ReviewMergeOutcome;
 const REFUSED_NOT_READY: MergeOutcome = { kind: "refused", status: 409, reason: "not_ready", error: "não pronta" };
 let mergeAnswer: MergeOutcome = REFUSED_NOT_READY;
 const mergeSpy = vi.fn(async (_reviewId: string, _userId: string): Promise<MergeOutcome> => mergeAnswer);
-/** O PR no GitHub, como `readPrState` o leria: o head (null = leitura que falhou) e o estado. */
+/** The PR on GitHub, as `readPrState` would read it: the head (null = a read that failed) and the state. */
 let prHeadNow: string | null = null;
 let prStateNow: "OPEN" | "MERGED" | "CLOSED" = "OPEN";
 const prHead = vi.fn(async (_cardId: string, _prUrl: string) => (prHeadNow ? { state: prStateNow, headSha: prHeadNow } : null));
@@ -171,8 +171,8 @@ afterEach(async () => {
     "../maestro/maestro.js", "../board/actor.js", "../board/workspace.js", "../maestro/deliver.js",
     "../../auth/users.js", "../../auth/userGit.js", "./merge.js",
   ]) vi.doUnmock(m);
-  // Fechar uma revisão manda o card do revisor pra done, e o "concluído" dele é gravado numa
-  // microtask: uma escrita dessas pode chegar junto do rm.
+  // Closing a review sends the reviewer's card to done, and its "completed" is recorded in a
+  // microtask: one of those writes may arrive together with the rm.
   await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 });
 
@@ -186,7 +186,7 @@ async function seed(o: Loaded) {
   return { project, author: (await o.registry.getCard(author.id))! };
 }
 
-/** Uma revisão iniciada, com o envio da rodada 1 já fora dos contadores. */
+/** A started review, with round 1's send already out of the counters. */
 async function started(o: Loaded) {
   const { author } = await seed(o);
   const review = await o.orch.startReview({
@@ -217,12 +217,12 @@ describe("iniciar a revisão", () => {
       reviewerUserId: "u-revisor", authorUserId: "u-autor", mergerUserId: "u-merger",
       round: 1, phase: "reviewing", findings: [], nudges: 0,
     });
-    // o card do revisor: na conta do revisor, nascido da branch do PR, ligado ao autor
+    // the reviewer's card: on the reviewer's account, born from the PR's branch, linked to the author
     const reviewer = await o.registry.getCard(review.reviewerCardId);
     expect(reviewer).toMatchObject({ reviewOf: author.id, accountSlug: "mussa", base: PR.branch, projectId: author.projectId });
     expect(await o.store.getReview(review.id)).toMatchObject({ reviewerCardId: reviewer!.id });
 
-    // a rodada 1 vai pro card do revisor, com o revisor como ator antes do texto
+    // round 1 goes to the reviewer's card, with the reviewer as actor before the text
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]![0]).toBe(reviewer!.id);
     expect(calls).toEqual([`actor:u-revisor:${reviewer!.id}`, `send:${reviewer!.id}`]);
@@ -258,7 +258,7 @@ describe("iniciar a revisão", () => {
     const approve = lastText();
     expect(approve).toContain("--approve");
 
-    // o GitHub recusa review do próprio PR (ou falta permissão): a IA que parasse ali travaria a rodada
+    // GitHub refuses a review of one's own PR (or permission is missing): an AI that stopped there would lock the round
     for (const text of [round1, delta]) {
       expect(text).toContain("Se o `gh pr review` falhar");
       expect(text).toContain("chame vibehub_review_submit mesmo assim, com o erro no summary");
@@ -273,14 +273,14 @@ describe("iniciar a revisão", () => {
     const review = await o.orch.startReview({
       cardId: author.id, prNumber: 7, reviewerUserId: "u-revisor", authorUserId: "u-autor", mergerUserId: "u-merger", by: "u-autor",
     });
-    // o share existe antes do envio: o recordCardActor do relay precisa de work para pousar
+    // the share exists before the send: the relay's recordCardActor needs work to land
     expect(await o.registry.sharesForTarget("card", review.reviewerCardId)).toEqual([
       expect.objectContaining({ kind: "card", targetId: review.reviewerCardId, userId: "u-revisor", level: "work" }),
     ]);
-    // e nada além do card do revisor: o card do autor não ganhou share nenhum
+    // and nothing beyond the reviewer's card: the author's card got no share at all
     expect(await o.registry.sharesForTarget("card", author.id)).toEqual([]);
 
-    // um owner já tem work em tudo: nenhum share é escrito
+    // an owner already has work on everything: no share is written
     accountOf = { "u-merger": "mussa" };
     const other = await o.registry.createCard({ projectId: author.projectId, title: "Outro" });
     await o.registry.recordCardPr(other.id, { ...PR, number: 8, url: "https://github.com/acme/widgets/pull/8" });
@@ -297,12 +297,12 @@ describe("iniciar a revisão", () => {
     await o.registry.markCardPrMerged(author.id, PR.base, 7, Date.now());
 
     await expect(o.orch.startReview(base)).rejects.toThrow(/pr_mergeado/);
-    // recusado antes de criar o card do revisor, de escrever a revisão e de falar com qualquer IA
+    // refused before creating the reviewer's card, writing the review or talking to any AI
     expect((await o.registry.listAllCards()).filter((c) => c.reviewOf)).toEqual([]);
     expect(await o.store.activeReviewFor(author.id)).toBeUndefined();
     expect(send).not.toHaveBeenCalled();
 
-    // um PR novo no mesmo slot da base é outro PR: a marca de mergeado era do velho
+    // a new PR in the same base slot is another PR: the merged mark belonged to the old one
     await o.registry.recordCardPr(author.id, { ...PR, number: 8, url: "https://github.com/acme/widgets/pull/8" });
     await expect(o.orch.startReview({ ...base, prNumber: 8 })).resolves.toMatchObject({ prNumber: 8 });
   });
@@ -315,7 +315,7 @@ describe("iniciar a revisão", () => {
     await expect(o.orch.startReview({ ...base, prNumber: 99 })).rejects.toThrow(/sem_pr/);
     accountOf = {};
     await expect(o.orch.startReview(base)).rejects.toThrow(/revisor_sem_conta/);
-    // nada disso deixou card de revisor nem revisão pra trás
+    // none of this left a reviewer card or a review behind
     expect((await o.registry.listAllCards()).filter((c) => c.reviewOf)).toEqual([]);
     expect(await o.store.activeReviewFor(author.id)).toBeUndefined();
     expect(send).not.toHaveBeenCalled();
@@ -323,7 +323,7 @@ describe("iniciar a revisão", () => {
     accountOf = { "u-revisor": "mussa" };
     await o.orch.startReview(base);
     await expect(o.orch.startReview(base)).rejects.toThrow(/revisao_ativa/);
-    // dois cliques ao mesmo tempo: só um passa
+    // two clicks at the same time: only one gets through
     const other = await o.registry.createCard({ projectId: author.projectId, title: "Outro" });
     await o.registry.recordCardPr(other.id, { ...PR, number: 8, url: "https://github.com/acme/widgets/pull/8" });
     const twice = await Promise.allSettled([
@@ -367,16 +367,16 @@ describe("PR anexado: a correção roda no card da branch do PR, ou num card de 
       projectId: project.id, branch: "feat/aviso", base: "dev", accountSlug: "albert", column: "waiting", title: "Correção PR #599 · Aviso não saiu",
     });
     expect(fix?.reviewOf).toBeUndefined();
-    // o PR mora no card de correção como entregue por ele (é o que deliver e conferência do GitHub leem)
+    // the PR lives on the fix card as delivered by it (it is what deliver and the GitHub check read)
     expect(fix?.prs).toEqual([expect.objectContaining({ number: 599, branch: "feat/aviso", base: "dev" })]);
     expect(fix?.prs?.[0]?.attached).toBeUndefined();
-    // o revisor revisa o card de correção, na branch do PR
+    // the reviewer reviews the fix card, on the PR's branch
     expect(await o.registry.getCard(review.reviewerCardId)).toMatchObject({ reviewOf: fix!.id, base: "feat/aviso", accountSlug: "mussa" });
-    // visíveis no board: o hub, o de correção (o do revisor fica escondido)
+    // visible on the board: the hub, the fix card (the reviewer's stays hidden)
     expect((await o.registry.listCards(project.id)).length).toBe(before + 2);
     // a rodada 1 sai pro revisor
     expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
-    // o autor e o merger ganham work no card de correção (o autor é ator dele a cada relay; o merger mergeia de lá)
+    // the author and the merger get work on the fix card (the author is its actor at each relay; the merger merges from there)
     const shared = (await o.registry.sharesForTarget("card", fix!.id)).filter((x) => x.level === "work").map((x) => x.userId);
     expect(shared).toContain("u-autor");
   });
@@ -390,7 +390,7 @@ describe("PR anexado: a correção roda no card da branch do PR, ou num card de 
     await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "1 bloqueante" });
     expect(send.mock.calls.at(-1)![0]).toBe(review.cardId);
     expect(calls).toEqual([`actor:u-autor:${review.cardId}`, `send:${review.cardId}`]);
-    // e o card de correção responde como o autor da revisão
+    // and the fix card answers as the review's author
     const after = await o.orch.submitAuthorResponse(review.cardId, {
       round: 1, items: [{ id: "f1", status: "fixed", commit: "abc1234", reply: "tirei" }], headSha: SHA2,
     });
@@ -405,7 +405,7 @@ describe("PR anexado: a correção roda no card da branch do PR, ou num card de 
     const review = await o.orch.startReview({ cardId: hub.id, ...ROLES });
     expect(review).toMatchObject({ cardId: albert.id, hubCardId: hub.id });
     expect((await o.registry.listCards(project.id)).length).toBe(before + 1);
-    // o card do Albert não ganha o PR registrado por cima da vaga de entrega dele
+    // Albert's card does not get the PR recorded on top of its own delivery slot
     expect((await o.registry.getCard(albert.id))?.prs).toBeUndefined();
   });
 
@@ -451,7 +451,7 @@ describe("PR anexado: a correção roda no card da branch do PR, ou num card de 
   it("falha depois de criar o card de correção leva ele junto", async () => {
     const o = await load();
     const { hub } = await seedHub(o);
-    // a conta do revisor não existe: o card do revisor não nasce, e o de correção já tinha nascido
+    // the reviewer's account does not exist: the reviewer's card is not born, and the fix card had already been born
     accountOf = { "u-revisor": "fantasma", "u-autor": "albert" };
     const before = (await o.registry.listAllCards()).length;
     await expect(o.orch.startReview({ cardId: hub.id, ...ROLES })).rejects.toThrow(/does not exist/);
@@ -482,7 +482,7 @@ describe("PR anexado: a correção roda no card da branch do PR, ou num card de 
 });
 
 describe("os papéis no GitHub e o crédito do co-autor", () => {
-  /** Conexão GitHub própria e identidade git de uma pessoa (o que o vibehub guarda dela). */
+  /** A person's own GitHub connection and git identity (what vibehub keeps about them). */
   async function identity(o: Loaded, userId: string, login: string, git?: { gitName: string; gitEmail: string }) {
     const conn = await o.registry.addGithubConnection({ label: login, login });
     const { setUserGit } = await import("../../auth/userGit.js");
@@ -553,7 +553,7 @@ describe("rodada do revisor", () => {
       "vibehub_review_respond", `card: "${author.id}"`, review.id, "rodada 1 de 3", "Não mergeie o PR por conta própria", PR.branch,
     ]) expect(text).toContain(piece);
     expect(lastOpts()).toMatchObject({ wake: true, requireAgent: true, origin: { kind: "system", name: "revisão de PR" } });
-    // o push é git push na branch do PR; vibehub_deliver não é caminho nesta revisão
+    // the push is git push on the PR's branch; vibehub_deliver is not a path in this review
     expect(text).toContain(`git push origin HEAD:${PR.branch}`);
     expect(text).toContain("O push desta correção é o git push acima, não o vibehub_deliver");
     expect(text).not.toMatch(/SEM authorized|vibehub_deliver com branch/);
@@ -570,7 +570,7 @@ describe("rodada do revisor", () => {
     expect(send).toHaveBeenCalledTimes(1);
     expect(again.findings).toHaveLength(1);
     expect(again.updatedAt).toBe(first.updatedAt);
-    // rodada errada também não mexe em nada
+    // a wrong round does not touch anything either
     const wrong = await o.orch.submitReviewerRound(review.reviewerCardId, { ...payload, round: 2 });
     expect(wrong.findings).toHaveLength(1);
     expect(send).toHaveBeenCalledTimes(1);
@@ -655,8 +655,8 @@ describe("rodada do revisor", () => {
   });
 
   /**
-   * O revisor termina o turno do Approve declarando `ready` (o passo 3 do prompt de Approve), como em
-   * produção: o turno começa (limpa a declaração), o `vibehub_report` grava no card, o turno acaba.
+   * The reviewer ends the Approve turn declaring `ready` (step 3 of the Approve prompt), as in
+   * production: the turn starts (clears the declaration), `vibehub_report` records it on the card, the turn ends.
    */
   const approveTurnEnds = async (o: Loaded, reviewerCardId: string, state: "ready" | "working" = "ready") => {
     await o.registry.applyCardStatus(reviewerCardId, "working");
@@ -687,14 +687,14 @@ describe("rodada do revisor", () => {
     try {
       const after = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
       expect(after.phase).toBe("ready");
-      // a ferramenta do revisor volta já: o merge não roda dentro dela, e o Approve ainda não saiu
+      // the reviewer's tool returns right away: the merge does not run inside it, and the Approve has not gone out yet
       expect(mergeSpy).not.toHaveBeenCalled();
       expect(lastText()).toContain("o PAINEL mergeia sozinho");
-      // um fim de turno que não reporta ready (o do próprio submit) não dispara nada
+      // a turn ending that does not report ready (the submit's own) fires nothing
       await approveTurnEnds(o, review.reviewerCardId, "working");
       await new Promise((r) => setTimeout(r, 40));
       expect(mergeSpy).not.toHaveBeenCalled();
-      // o turno do Approve termina com ready: o merge sai, automático, em nome do responsável
+      // the Approve turn ends with ready: the merge goes out, automatically, on behalf of the owner
       await approveTurnEnds(o, review.reviewerCardId);
       await vi.waitFor(() => expect(mergeSpy).toHaveBeenCalledWith(review.id, "u-merger", { auto: true }));
       expect(mergeSpy).toHaveBeenCalledTimes(1);
@@ -717,7 +717,7 @@ describe("rodada do revisor", () => {
       const after = (await o.store.getReview(review.id))!;
       expect(after.phase).toBe("ready");
       expect(after.log.at(-1)!.text).toMatch(/o Approve do revisor não está no GitHub no commit revisado/);
-      // O aviso é gravado DEPOIS da marca na revisão: espera por ele, não lê no mesmo tique (corria no CI).
+      // The notice is recorded AFTER the mark on the review: wait for it, do not read it on the same tick (it raced on CI).
       await vi.waitFor(async () => expect((await messagesOn(o, author.id)).map((e) => e.text))
         .toContainEqual(expect.stringMatching(/PR #7: o merge automático não saiu \(o Approve do revisor não está no GitHub/)));
     } finally {
@@ -777,7 +777,7 @@ describe("rodada do revisor", () => {
       const notice = await noticeOf();
       expect(notice).toMatch(/^PR #7: o merge automático não saiu \(checks vermelhos/);
       expect(notice!.length).toBeLessThan(300);
-      // a mesma rodada não tenta de novo, e a resposta das tools já não promete o merge sozinho
+      // the same round does not try again, and the tools' answer no longer promises the merge on its own
       expect(o.orch.reviewToolAnswer(after, "reviewer", 1).next).toMatch(/merge humano/);
       await approveTurnEnds(o, review.reviewerCardId);
       await new Promise((r) => setTimeout(r, 40));
@@ -839,10 +839,10 @@ describe("rodada do revisor", () => {
     expect(notices[0]).toMatchObject({ messageType: "info", cardId: author.id, id: `message:${author.id}:review:${review.id}:ready:1:author` });
     expect(notices[0]!.text).toMatch(/PR #7/);
     expect(notices[0]!.text).toMatch(/pront/i);
-    // o card do revisor recebe o mesmo aviso, com a chave dele
+    // the reviewer's card gets the same notice, with its own key
     const theirs = await messagesOn(o, review.reviewerCardId);
     expect(theirs.map((e) => e.id)).toEqual([`message:${review.reviewerCardId}:review:${review.id}:ready:1:reviewer`]);
-    // anunciar de novo (replay) não duplica
+    // announcing again (replay) does not duplicate
     await o.orch.announcePhase(after);
     expect(await messagesOn(o, author.id)).toHaveLength(1);
     expect(await messagesOn(o, review.reviewerCardId)).toHaveLength(1);
@@ -923,12 +923,12 @@ describe("resposta do autor", () => {
       round: 1, items: [{ id: "f1", status: "fixed", commit: "c0ffee1", reply }], headSha: SHA2,
     });
     const text = lastText();
-    // O Claude Code lê as duas como pedido do turno: o revisor subia a max com orquestração multiagente e
-    // cada rodada de delta passou a levar 12 a 14 minutos num Workflow.
+    // Claude Code reads both as a request of the turn: the reviewer went up to max with multi-agent orchestration and
+    // each delta round started taking 12 to 14 minutes in a Workflow.
     expect(text).not.toMatch(/ultracode|ultrathink/i);
     expect(text).toContain("mantém o ultra-code");
     expect(text).toContain("o ultra-think some da barra");
-    // O registro guarda o que o autor escreveu: só o texto digitado no card é desarmado.
+    // The record keeps what the author wrote: only the text typed into the card is defused.
     expect(after.findings[0]?.authorReply).toBe(reply);
   });
 
@@ -987,10 +987,10 @@ describe("resposta do autor", () => {
     const said = after.log.filter((e) => e.who === "author");
     expect(said).toHaveLength(1);
     expect(said[0]!.items?.map((i) => [i.id, i.status])).toEqual([["f1", "fixed"], ["f2", "contested"], ["f3", "wontfix"]]);
-    // não abre rodada nem manda nada a ninguém: o push, se houve, a conferência do GitHub pega
+    // opens no round and sends nothing to anybody: the push, if there was one, is caught by the GitHub check
     expect(send).not.toHaveBeenCalled();
 
-    // a mesma resposta de novo não grava outra fala
+    // the same answer again does not record another message
     const again = await o.orch.submitAuthorResponse(author.id, {
       round: 1, items: [{ id: "f1", status: "fixed", commit: "8159653", reply: "renomeado" }], headSha: SHA2,
     });
@@ -1114,7 +1114,7 @@ describe("decisão humana", () => {
     const o = await load();
     const { author, review } = await started(o);
     const waiting = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [QUESTION], headSha: SHA1, summary: "uma dúvida" });
-    // só a dúvida: espera o humano, sem mandar nada a ninguém
+    // only the question: waits for the human, without sending anything to anybody
     expect(waiting.phase).toBe("reviewing");
     expect(send).not.toHaveBeenCalled();
 
@@ -1131,7 +1131,7 @@ describe("decisão humana", () => {
     const { author, review } = await started(o);
     const payload = { round: 1, findings: [BLOCKER, QUESTION], headSha: SHA1, summary: "um bloqueante e uma dúvida" };
     const after = await o.orch.submitReviewerRound(review.reviewerCardId, payload);
-    // o bloqueante segue para o autor; a dúvida espera o revisor humano, que fica sabendo pelo card dele
+    // the blocking one goes on to the author; the question waits for the human reviewer, who learns about it on their card
     expect(after.phase).toBe("fixing");
     const notices = await messagesOn(o, review.reviewerCardId);
     expect(notices).toEqual([
@@ -1141,11 +1141,11 @@ describe("decisão humana", () => {
         messageType: "info",
       }),
     ]);
-    // o card do revisor fica escondido do board: o aviso vai também ao card do autor, onde as pessoas
-    // olham, dizendo quem decide
+    // the reviewer's card is hidden from the board: the notice also goes to the author's card, where people
+    // look, saying who decides
     const onAuthor = (await messagesOn(o, author.id)).filter((e) => /dúvida/.test(e.text ?? ""));
     expect(onAuthor).toEqual([expect.objectContaining({ text: "PR #7: 1 dúvida esperando a decisão de revisor no painel da revisão" })]);
-    // o submit repetido (retry da IA) não duplica
+    // the repeated submit (an AI retry) does not duplicate
     await o.orch.submitReviewerRound(review.reviewerCardId, payload);
     expect(await messagesOn(o, review.reviewerCardId)).toHaveLength(1);
     expect((await messagesOn(o, author.id)).filter((e) => /dúvida/.test(e.text ?? ""))).toHaveLength(1);
@@ -1200,7 +1200,7 @@ describe("decisão humana", () => {
   it("decidir item em impasse por falha, com a rodada do revisor entregue, recalcula a fase", async () => {
     const o = await load();
     const { review } = await started(o);
-    // a rodada 1 do revisor pousou, mas a lista não chega ao autor: impasse com a conferência da rodada feita
+    // the reviewer's round 1 landed, but the list does not reach the author: impasse with the round's check done
     sendFailure = new Error("no agent running");
     const stuck = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
     expect(stuck).toMatchObject({ phase: "impasse", round: 1, lastSubmitRound: 1 });
@@ -1219,7 +1219,7 @@ describe("decisão humana", () => {
     const { author, review } = await started(o);
     const two = [BLOCKER, { ...BLOCKER, title: "sql sem bind", line: 80 }];
     await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: two, headSha: SHA1, summary: "r1" });
-    // o autor diz que corrigiu f1 e contesta f2; o delta não chega ao revisor: ninguém conferiu o "corrigido"
+    // the author says they fixed f1 and disputes f2; the delta does not reach the reviewer: nobody checked the "fixed"
     sendFailure = new Error("no agent running");
     const stuck = await o.orch.submitAuthorResponse(author.id, {
       round: 1,
@@ -1230,21 +1230,21 @@ describe("decisão humana", () => {
     sendFailure = null;
     send.mockClear();
 
-    // o humano libera o único item "travado": a decisão fica gravada, mas a fase não sai do impasse
+    // the human releases the only "stuck" item: the decision is recorded, but the phase does not leave the impasse
     const decided = await o.orch.decideQuestion(review.id, "f2", "accept_risk", "u-revisor");
     expect(decided.phase).toBe("impasse");
     expect(decided.impasseReason).toBe("no agent running");
     expect(decided.findings[1]).toMatchObject({ status: "accepted_risk", humanDecision: "accept_risk" });
     expect(send).not.toHaveBeenCalled();
 
-    // a saída é "tentar de novo": a vez volta ao revisor, que confere o f1 no diff
+    // the way out is "tentar de novo": the turn goes back to the reviewer, who checks f1 in the diff
     const retried = await o.orch.retryReview(review.id, "u-revisor");
     expect(retried).toMatchObject({ phase: "reviewing", round: 2 });
     expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
     expect(lastText()).toContain("rodada 2 de 3");
     expect(lastText()).toContain("f1");
 
-    // o submit do revisor honra a decisão humana (o open da IA sobre f2 é ignorado)
+    // the reviewer's submit honours the human decision (the AI's open on f2 is ignored)
     const ready = await o.orch.submitReviewerRound(review.reviewerCardId, {
       round: 2, findings: [], verdicts: [{ id: "f1", status: "fixed" }, { id: "f2", status: "open" }], headSha: SHA2, summary: "r2",
     });
@@ -1267,7 +1267,7 @@ describe("decisão humana", () => {
       headSha: SHA2,
     });
 
-    // rodada 2: o revisor recusa o "corrigido" do autor num item que um humano bloqueou -> vale
+    // round 2: the reviewer refuses the author's "fixed" on an item a human blocked -> it counts
     const r2 = await o.orch.submitReviewerRound(review.reviewerCardId, {
       round: 2, findings: [],
       verdicts: [
@@ -1278,17 +1278,17 @@ describe("decisão humana", () => {
       headSha: SHA2, summary: "r2",
     });
     expect(r2.findings.find((f) => f.id === "f2")).toMatchObject({ status: "open", humanDecision: "block", reviewerReply: "o ttl novo não cobre o refresh" });
-    // risco aceito por humano é final: o open da IA é ignorado
+    // risk accepted by a human is final: the AI's open is ignored
     expect(r2.findings.find((f) => f.id === "f3")).toMatchObject({ status: "accepted_risk", humanDecision: "accept_risk" });
     expect(r2.phase).toBe("fixing");
     expect(r2.log.some((e) => e.who === "system" && e.text.includes("f3 (open)") && /decisão humana/.test(e.text))).toBe(true);
-    // o delta mostrou ao revisor que f2 só aceita fixed ou open
+    // the delta showed the reviewer that f2 only accepts fixed or open
     await o.orch.submitAuthorResponse(author.id, {
       round: 2, items: [{ id: "f2", status: "contested", reply: "o refresh usa o mesmo ttl (src/session.ts:40)" }], headSha: SHA3,
     });
     expect(lastText()).toMatch(/f2: um humano mandou bloquear\. Só fixed ou open/);
 
-    // rodada 3: a IA aceita a contestação (dropped) de um item que um humano bloqueou -> ignorado
+    // round 3: the AI accepts the dispute (dropped) of an item a human blocked -> ignored
     const r3 = await o.orch.submitReviewerRound(review.reviewerCardId, {
       round: 3, findings: [], verdicts: [{ id: "f2", status: "dropped" }], headSha: SHA3, summary: "r3",
     });
@@ -1309,7 +1309,7 @@ describe("decisão humana", () => {
 });
 
 describe("dúvidas resolvidas pelas IAs (o autor corrige ou explica, o revisor confere)", () => {
-  /** Rodada 1 só com uma dúvida: a revisão fica esperando decisão. */
+  /** Round 1 with just one question: the review is left waiting for a decision. */
   async function waitingDoubt(o: Loaded) {
     const { author, review } = await started(o);
     const after = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [QUESTION], headSha: SHA1, summary: "uma dúvida" });
@@ -1401,7 +1401,7 @@ describe("pedir ao autor aplicar as sugestões escolhidas", () => {
     expect(lastText()).not.toContain("trocar lib");
     const human = after.log.filter((e) => e.who === "human");
     expect(human.map((e) => e.text)).toEqual(["Não fazer as sugestões f1, f3.", "Pediu ao autor aplicar a sugestão f2."]);
-    // só 'não fazer': nada vai ao autor
+    // only 'não fazer': nothing goes to the author
     send.mockClear();
     const o2 = await o.orch.decideSuggestions(review.id, { skip: ["f2"] }, "mussa");
     expect(o2.findings[1]).toMatchObject({ status: "dropped" });
@@ -1421,7 +1421,7 @@ describe("pedir ao autor aplicar as sugestões escolhidas", () => {
     expect(send).not.toHaveBeenCalled();
     const dropped = await o.orch.decideSuggestions(review.id, { skip: ["f2"] }, "mussa");
     expect(dropped.findings[1]).toMatchObject({ status: "dropped" });
-    // retirada, ela não está mais com o autor: a marca sai junto
+    // withdrawn, it is no longer with the author: the mark goes with it
     expect(dropped.findings[1]?.requested).toBeUndefined();
   });
 
@@ -1459,7 +1459,7 @@ describe("pedir ao autor aplicar as sugestões escolhidas", () => {
     });
     const answered = await o.store.getReview(review.id);
     expect(answered?.findings[0]?.requested).toBeUndefined();
-    // o push do autor depois do pronto devolve a revisão ao revisor (rodada 2), que reabre a sugestão
+    // the author's push after ready sends the review back to the reviewer (round 2), which reopens the suggestion
     const back = await o.orch.reopenAfterHeadMoved(review.id, "mussa");
     expect(back).toMatchObject({ phase: "reviewing", round: 2 });
     await o.orch.submitReviewerRound(review.reviewerCardId, {
@@ -1482,7 +1482,7 @@ describe("pedir ao autor aplicar as sugestões escolhidas", () => {
     sendFailure = new Error("card pausado");
     await expect(o.orch.decideSuggestions(review.id, { apply: ["f1"] }, "mussa")).rejects.toThrow(/envio_falhou/);
     expect((await o.store.getReview(review.id))?.findings[0]).toMatchObject({ status: "open" });
-    // o envio que falhou não deixa a sugestão marcada como pedida: dá para tentar de novo
+    // the send that failed does not leave the suggestion marked as requested: it can be tried again
     expect((await o.store.getReview(review.id))?.findings[0]?.requested).toBeUndefined();
   });
 
@@ -1509,13 +1509,13 @@ describe("tentar de novo e cancelar", () => {
     calls.length = 0;
 
     const after = await o.orch.retryReview(review.id, "u-autor");
-    // a rodada do revisor já tinha sido entregue: a vez volta ao autor, com a lista
+    // the reviewer's round had already been delivered: the turn goes back to the author, with the list
     expect(after).toMatchObject({ phase: "fixing", round: 1, nudges: 0 });
     expect(after.impasseReason).toBeUndefined();
     expect(calls).toEqual([`actor:u-autor:${author.id}`, `send:${author.id}`]);
     expect(lastText()).toContain("token vaza no log");
     expect(after.log.some((e) => e.who === "human")).toBe(true);
-    // em fixing, tentar de novo reenvia a lista (a IA do autor pode ter parado sem a ferramenta)
+    // in fixing, tentar de novo resends the list (the author's AI may have stopped without the tool)
     send.mockClear();
     await expect(o.orch.retryReview(review.id, "u-autor")).resolves.toMatchObject({ phase: "fixing", round: 1 });
     expect(send).toHaveBeenCalledTimes(1);
@@ -1526,7 +1526,7 @@ describe("tentar de novo e cancelar", () => {
     const o = await load();
     const { author, review } = await started(o);
     await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
-    // um lembrete já gasto: a IA do autor terminou um turno sem responder
+    // a reminder already spent: the author's AI finished a turn without answering
     await o.store.mutateReview(review.id, (r) => {
       r.nudges = 1;
     });
@@ -1541,10 +1541,10 @@ describe("tentar de novo e cancelar", () => {
     expect(lastText()).toContain("vibehub_review_respond");
     expect(after.log.at(-1)).toMatchObject({ who: "human" });
     expect(after.log.at(-1)?.text).toMatch(/autor/);
-    // o mesmo caminho do lembrete: não tira ninguém de Paused
+    // the same path as the reminder: does not take anybody out of Paused
     expect(resume).not.toHaveBeenCalled();
 
-    // a pessoa pausou o card do autor: o reenvio é recusado e vira impasse com o motivo
+    // the person paused the author's card: the resend is refused and becomes an impasse with the reason
     await o.registry.applyOpenTerminal(author.id);
     await o.registry.pauseCard(author.id, { effective: true });
     const paused = await o.orch.retryReview(review.id, "u-merger");
@@ -1565,7 +1565,7 @@ describe("tentar de novo e cancelar", () => {
     expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
     expect(lastText()).toContain("/code-review high");
 
-    // a rodada do revisor pousou e só sobrou dúvida: a vez é do humano, que decide no painel
+    // the reviewer's round landed and only a question was left: it is the human's turn, who decides on the panel
     const waiting = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [QUESTION], headSha: SHA1, summary: "uma dúvida" });
     expect(waiting).toMatchObject({ phase: "reviewing", lastSubmitRound: 1 });
     send.mockClear();
@@ -1603,7 +1603,7 @@ describe("tentar de novo e cancelar", () => {
     expect(cancelled.log.at(-1)).toMatchObject({ who: "human" });
     expect(await o.store.activeReviewFor(author.id, 7)).toBeUndefined();
     await expect(o.orch.cancelReview(review.id, "u-autor")).rejects.toThrow(/revisao_encerrada/);
-    // um submit atrasado da revisão cancelada não faz nada
+    // a late submit of the cancelled review does nothing
     const late = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "x" });
     expect(late.phase).toBe("cancelled");
 
@@ -1617,7 +1617,7 @@ describe("tentar de novo e cancelar", () => {
 });
 
 describe("merge humano: push depois do pronto e mergeado", () => {
-  /** Uma revisão em `ready` na rodada `round`, com SHA1 revisado; envios zerados. */
+  /** A review in `ready` at round `round`, with SHA1 reviewed; sends reset. */
   async function readyAt(o: Loaded, round: 1 | 3) {
     const { author, review } = await started(o);
     if (round === 3) {
@@ -1638,9 +1638,9 @@ describe("merge humano: push depois do pronto e mergeado", () => {
     const after = await o.orch.reopenAfterHeadMoved(review.id, "u-merger");
     expect(after).toMatchObject({ phase: "reviewing", round: 2, nudges: 0, reviewedSha: SHA1 });
     expect(after.approvePending).toBeUndefined();
-    // a vez é do revisor de novo: o fim de turno sem submit volta a ser cobrado
+    // it is the reviewer's turn again: the turn ending without a submit is demanded again
     expect(after.lastSubmitRound).toBe(1);
-    // pelo mesmo caminho do relay: revisor como ator, depois o texto do delta da rodada 2
+    // through the same path as the relay: reviewer as actor, then the text of round 2's delta
     expect(calls).toEqual([`actor:u-revisor:${review.reviewerCardId}`, `send:${review.reviewerCardId}`]);
     const text = lastText();
     for (const piece of ["rodada 2 de 3", `git diff ${SHA1}..HEAD`, "vibehub_review_submit", "push depois do pronto"]) {
@@ -1656,7 +1656,7 @@ describe("merge humano: push depois do pronto e mergeado", () => {
     const after = await o.orch.reopenAfterHeadMoved(review.id, "u-merger");
     expect(after).toMatchObject({ phase: "reviewing", round: 3, lastSubmitRound: 2 });
     expect(after.impasseReason).toBeUndefined();
-    // o revisor recebe o delta da rodada 3 e pode submeter de novo nela
+    // the reviewer gets round 3's delta and can submit again on it
     expect(send).toHaveBeenCalledTimes(1);
     expect(lastText()).toContain("rodada 3 de 3");
     expect(after.log.at(-1)?.text).toMatch(/conferência extra/);
@@ -1691,7 +1691,7 @@ describe("merge humano: push depois do pronto e mergeado", () => {
     expect(merged.log.at(-1)).toMatchObject({ who: "human" });
     expect((await messagesOn(o, author.id)).at(-1)?.text).toMatch(/PR #7: mergeado em dev/);
     expect((await messagesOn(o, review.reviewerCardId)).at(-1)?.text).toMatch(/PR #7: mergeado em dev/);
-    // merged não é ativa: o card volta a poder pedir revisão desse PR
+    // merged is not active: the card can ask for a review of that PR again
     expect(await o.store.activeReviewFor(author.id, 7)).toBeUndefined();
     const again = await o.orch.markReviewMerged(review.id, "merger");
     expect(again.log).toHaveLength(merged.log.length);
@@ -1700,7 +1700,7 @@ describe("merge humano: push depois do pronto e mergeado", () => {
 });
 
 describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
-  /** Uma revisão em `ready` na rodada `round`, com SHA1 revisado; envios zerados e o orquestrador ligado. */
+  /** A review in `ready` at round `round`, with SHA1 reviewed; sends reset and the orchestrator hooked up. */
   async function readyAt(o: Loaded, round: 1 | 3 = 1) {
     const { author, review } = await started(o);
     if (round === 3) {
@@ -1708,7 +1708,7 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
         r.round = 3;
       });
     }
-    // Da rodada 2 em diante a lista é fechada: a sugestão só entra na rodada 1.
+    // From round 2 on the list is closed: the suggestion only gets in on round 1.
     const ready = await o.orch.submitReviewerRound(review.reviewerCardId, {
       round, findings: round === 1 ? [SUGGESTION] : [], headSha: SHA1, summary: "sem bloqueante",
     });
@@ -1734,7 +1734,7 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
       expect(prHead).toHaveBeenCalledWith(author.id, PR.url);
       const after = (await o.store.getReview(review.id))!;
       expect(after).toMatchObject({ round: 2, reviewedSha: SHA1, lastSubmitRound: 1 });
-      // o revisor recebe o delta desde o commit aprovado, dizendo que foi o autor que empurrou
+      // the reviewer gets the delta since the approved commit, saying it was the author who pushed
       await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
       expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
       expect(calls).toEqual([`actor:u-revisor:${review.reviewerCardId}`, `send:${review.reviewerCardId}`]);
@@ -1823,7 +1823,7 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
       await endTurn(o, review.reviewerCardId);
       await settle();
       expect(prHead).not.toHaveBeenCalled();
-      // fixing: o autor corrige pela lista; o push dele é a resposta, não um push depois do pronto
+      // fixing: the author fixes through the list; their push is the answer, not a push after ready
       await o.registry.markCardHumanActive(author.id);
       await endTurn(o, author.id);
       await vi.waitFor(() => expect(prHead).toHaveBeenCalledTimes(1));
@@ -1888,9 +1888,9 @@ describe("o PR mudou no GitHub fora do painel (merge à mão, PR fechado)", () =
       const after = (await o.store.getReview(review.id))!;
       expect(after.log.at(-1)).toMatchObject({ who: "system" });
       expect(after.log.at(-1)?.text).toMatch(/Mergeado em dev fora do painel/);
-      // o mesmo pós-merge do deliver: PR do card marcado e a branch fora do GitHub
+      // the same post-merge as deliver: the card's PR marked and the branch off GitHub
       await vi.waitFor(() => expect(afterMerged).toHaveBeenCalledWith(author.id, PR.url, "dev", PR.branch));
-      // o card do revisor sai junto, como no botão
+      // the reviewer's card goes along, as with the button
       await vi.waitFor(async () => expect((await o.registry.getCard(review.reviewerCardId))?.column).toBe("done"));
       expect(send).not.toHaveBeenCalled();
       expect(deliverSpy).not.toHaveBeenCalled();
@@ -1927,7 +1927,7 @@ describe("o PR mudou no GitHub fora do painel (merge à mão, PR fechado)", () =
     const { author, review } = await started(o);
     await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
     prHead.mockImplementationOnce(async () => {
-      // enquanto o gh pr view demora, o autor responde com o head novo
+      // while gh pr view takes its time, the author answers with the new head
       await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "fixed", reply: "ok" }], headSha: SHA3 });
       return { state: "OPEN", headSha: SHA2 };
     });
@@ -1956,7 +1956,7 @@ describe("o PR mudou no GitHub fora do painel (merge à mão, PR fechado)", () =
     try {
       expect((await o.orch.syncReviewWithGithub(review.id))?.phase).toBe("ready");
       expect(afterMerged).not.toHaveBeenCalled();
-      // um segundo merge ao mesmo tempo não pega a vez
+      // a second merge at the same time does not get the turn
       expect(o.orch.claimMerge(review.id)).toBe(false);
     } finally {
       o.orch.releaseMerge(review.id);
@@ -2016,9 +2016,9 @@ describe("conversa das IAs: cada fala leva os achados de que trata", () => {
     });
     const second = r3.log.filter((e) => e.who === "reviewer").at(-1);
     expect(second).toMatchObject({ round: 2, items: [{ id: "f1", status: "open", reply: "ainda vaza no catch" }] });
-    // a fala da rodada 1 do autor continua com a resposta de então, mesmo depois da rodada 2
+    // the author's round 1 message keeps the answer from back then, even after round 2
     expect(r3.log.find((e) => e.who === "author")?.items?.[0]?.reply).toBe("token fora do log");
-    // falas de sistema não levam itens
+    // system messages carry no items
     expect(r3.log.filter((e) => e.who === "system").every((e) => e.items === undefined)).toBe(true);
   });
 
@@ -2039,7 +2039,7 @@ describe("conversa das IAs: cada fala leva os achados de que trata", () => {
 });
 
 describe("o card do revisor depois da revisão", () => {
-  /** Entrar em `done` grava o "concluído" do card numa microtask: o teste espera por ele (e o disco fica quieto). */
+  /** Entering `done` records the card's "completed" in a microtask: the test waits for it (and the disk goes quiet). */
   const concluded = async (o: Loaded, cardId: string) =>
     await vi.waitFor(async () =>
       expect((await o.events.eventsAfter(0)).events.some((e) => e.kind === "concluded" && e.cardId === cardId)).toBe(true));
@@ -2056,7 +2056,7 @@ describe("o card do revisor depois da revisão", () => {
     const card = await o.registry.getCard(review.reviewerCardId);
     expect(card).toMatchObject({ column: "done", reviewOf: review.cardId });
     expect(card?.doneAt).toBeGreaterThan(0);
-    // repetir não mexe (nem lança)
+    // repeating does not touch anything (nor throw)
     await expect(o.orch.markReviewMerged(review.id, "merger")).resolves.toMatchObject({ phase: "merged" });
     expect((await o.registry.getCard(review.reviewerCardId))?.doneAt).toBe(card?.doneAt);
   });
@@ -2081,7 +2081,7 @@ describe("o card do revisor depois da revisão", () => {
   it("card excluído: revisão ativa em que ele é autor ou revisor é cancelada; devolve os cards de revisor do autor", async () => {
     const o = await load();
     const { author, review } = await started(o);
-    // uma revisão antiga do mesmo card, já mergeada, também deixou um card de revisor
+    // an old review of the same card, already merged, also left a reviewer card
     const old = await o.store.mutateReview(review.id, (r) => {
       r.phase = "merged";
     });
@@ -2093,12 +2093,12 @@ describe("o card do revisor depois da revisão", () => {
     expect(reviewerCards.sort()).toEqual([old.reviewerCardId, current.reviewerCardId].sort());
     expect(await o.store.getReview(current.id)).toMatchObject({ phase: "cancelled" });
     expect((await o.store.getReview(current.id))?.log.at(-1)?.text).toMatch(/excluído/);
-    // a mergeada fica como está: o histórico não muda
+    // the merged one stays as it is: the history does not change
     expect(await o.store.getReview(old.id)).toMatchObject({ phase: "merged" });
     // de novo: nada a cancelar
     await expect(o.orch.closeReviewsOfRemovedCard(author.id, "u-owner")).resolves.toHaveLength(2);
 
-    // o card do revisor excluído sozinho: a revisão dele é cancelada, e não há card de revisor a levar junto
+    // the reviewer's card deleted on its own: its review is cancelled, and there is no reviewer card to take along
     const other = await o.registry.createCard({ projectId: author.projectId, title: "Outro" });
     await o.registry.recordCardPr(other.id, { ...PR, number: 8, url: "https://github.com/acme/widgets/pull/8" });
     const third = await o.orch.startReview({
@@ -2139,14 +2139,14 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
     expect(lastText()).toContain("--approve");
-    // sem pendência, não há o que tentar
+    // with nothing pending, there is nothing to retry
     await expect(o.orch.retryReview(review.id, "u-revisor")).rejects.toThrow(/nada_a_tentar/);
   });
 
   it("envio que falha depois que a revisão andou não vira impasse", async () => {
     const o = await load();
     const { review } = await started(o);
-    // enquanto a lista sai para o autor, a resposta dele pousa (rodada 2); o envio então falha
+    // while the list goes out to the author, their answer lands (round 2); the send then fails
     sendHook = async () => {
       await o.store.mutateReview(review.id, (r) => {
         r.lastRespondRound = 1;
@@ -2169,7 +2169,7 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
         await o.events.observeCardStatus(cardId, "waiting", "working");
         await o.events.observeCardStatus(cardId, "working", "waiting");
       };
-      // o revisor terminou o turno sem chamar vibehub_review_submit
+      // the reviewer finished the turn without calling vibehub_review_submit
       await turn(review.reviewerCardId);
       await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
       expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
@@ -2178,12 +2178,12 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
       expect(lastText()).toContain("/code-review high");
       expect((await o.store.getReview(review.id))?.nudges).toBe(1);
 
-      // de novo: impasse "IA não respondeu", sem mais envio
+      // again: impasse "IA não respondeu", with no more sends
       await turn(review.reviewerCardId);
       await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("impasse"));
       expect(await o.store.getReview(review.id)).toMatchObject({ impasseReason: "IA não respondeu" });
       expect(send).toHaveBeenCalledTimes(1);
-      // o aviso é gravado logo depois da mutação: espera por ele também
+      // the notice is recorded right after the mutation: wait for it too
       await vi.waitFor(async () =>
         expect((await messagesOn(o, author.id)).map((e) => e.text)).toEqual([expect.stringMatching(/impasse/i)]));
     } finally {
@@ -2200,19 +2200,19 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
         await o.events.observeCardStatus(cardId, "waiting", "working");
         await o.events.observeCardStatus(cardId, "working", "waiting");
       };
-      // um lembrete no revisor, depois o submit chega: nudges volta a 0
+      // a reminder to the reviewer, then the submit arrives: nudges goes back to 0
       await turn(review.reviewerCardId);
       await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
       await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
       expect((await o.store.getReview(review.id))?.nudges).toBe(0);
       expect(send).toHaveBeenCalledTimes(2); // a lista ao autor
 
-      // o turno do revisor que fez o submit acaba: nada a lembrar
+      // the turn of the reviewer who submitted ends: nothing to remind
       await turn(review.reviewerCardId);
       await new Promise((r) => setTimeout(r, 20));
       expect(send).toHaveBeenCalledTimes(2);
 
-      // o autor termina sem responder: lembrete com a lista de novo
+      // the author finishes without answering: a reminder with the list again
       await turn(author.id);
       await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(3));
       expect(send.mock.calls[2]![0]).toBe(author.id);
@@ -2221,7 +2221,7 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
       expect(lastText()).toContain("token vaza no log");
       expect((await o.store.getReview(review.id))?.nudges).toBe(1);
 
-      // um card sem revisão terminando o turno não mexe em nada (e o listener não lança)
+      // a card without a review finishing its turn touches nothing (and the listener does not throw)
       const other = await o.registry.createCard({ projectId: author.projectId, title: "Outro" });
       await turn(other.id);
       await new Promise((r) => setTimeout(r, 20));
@@ -2231,7 +2231,7 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
     }
   });
 
-  /** Autor em fixing (a lista já chegou), com o listener ligado. */
+  /** Author in fixing (the list has already arrived), with the listener hooked up. */
   async function fixing(o: Loaded) {
     const s = await started(o);
     await o.orch.submitReviewerRound(s.review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
@@ -2245,8 +2245,8 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
     await o.events.observeCardStatus(cardId, "working", "waiting", declared);
   };
   /**
-   * O turno com a condição de pular não conta: o turno seguinte, já sem ela, é o PRIMEIRO lembrete
-   * (se o primeiro tivesse contado, o segundo seria impasse).
+   * The turn with the skip condition does not count: the next turn, already without it, is the FIRST reminder
+   * (had the first one counted, the second would be an impasse).
    */
   async function expectOnlyTheSecondCounts(o: Loaded, reviewId: string) {
     await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
@@ -2290,12 +2290,12 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
     const o = await load();
     const { author, review, off } = await fixing(o);
     try {
-      // pergunta em prosa no fim do turno (o carimbo do chat nativo)
+      // a question in prose at the end of the turn (the native chat's stamp)
       await o.registry.setCardPendingQuestion(author.id, Date.now());
       await endTurn(o, author.id);
       await new Promise((r) => setTimeout(r, 30));
       await o.registry.setCardPendingQuestion(author.id, null);
-      // permissão aberta no log de eventos
+      // an open permission in the event log
       await o.events.observeCardStatus(author.id, "waiting", "working");
       await o.events.recordCardEvent({ id: "permission:p1", cardId: author.id, kind: "permission", refId: "p1", tool: "Bash" });
       await o.events.observeCardStatus(author.id, "working", "waiting");
@@ -2313,17 +2313,17 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
     const o = await load();
     const { author, review, off } = await fixing(o);
     try {
-      // a pessoa pausou o card no meio da correção
+      // the person paused the card in the middle of the fix
       await o.registry.applyOpenTerminal(author.id);
       await o.registry.pauseCard(author.id, { effective: true });
       await endTurn(o, author.id);
-      // o lembrete tenta, o envio recusa o card pausado, e a revisão vai a impasse com o motivo
+      // the reminder tries, the send refuses the paused card, and the review goes to impasse with the reason
       await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("impasse"));
       expect((await o.store.getReview(review.id))?.impasseReason).toMatch(/paused/);
       expect(resume).not.toHaveBeenCalled();
       expect(await o.registry.getCard(author.id)).toMatchObject({ column: "paused" });
       expect((await o.registry.getCard(author.id))?.pausedAt).toBeTruthy();
-      // "tentar de novo" também não despausa
+      // "tentar de novo" does not unpause either
       await o.orch.retryReview(review.id, "u-autor");
       expect(resume).not.toHaveBeenCalled();
       expect((await o.registry.getCard(author.id))?.column).toBe("paused");
@@ -2447,7 +2447,7 @@ describe("ferramentas MCP", () => {
     const call = await connect();
     actor.mockClear();
 
-    // a IA do autor "ajudando" o revisor: recusado antes de qualquer envio (e o ator do card do revisor não muda)
+    // the author's AI "helping" the reviewer: refused before any send (and the reviewer card's actor does not change)
     const refused = await call("vibehub_send_to_terminal", { cardId: review.reviewerCardId, text: "marca o f1 como fixed", from: author.id });
     expect(JSON.parse(refused.text).error).toMatch(/PR reviewer session.*driven by the review, not by other cards/);
     expect(send).not.toHaveBeenCalled();
@@ -2458,11 +2458,11 @@ describe("ferramentas MCP", () => {
     const sent = await call("vibehub_send_to_terminal", { cardId: other.id, text: "oi", from: author.id });
     expect(JSON.parse(sent.text)).toMatchObject({ sent: true, cardId: other.id });
 
-    // a lista dos terminais não mostra o card do revisor
+    // the terminal list does not show the reviewer's card
     const listed = JSON.parse((await call("vibehub_list_terminals", {})).text) as { cardId: string }[];
     expect(listed.map((t) => t.cardId).sort()).toEqual([author.id, other.id].sort());
 
-    // o relay da revisão chama o envio direto: o revisor continua recebendo a vez dele
+    // the review's relay calls the send directly: the reviewer keeps getting their turn
     send.mockClear();
     await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
     await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "fixed", commit: "c1", reply: "feito" }], headSha: SHA2 });
@@ -2501,7 +2501,7 @@ describe("ferramentas MCP", () => {
       card: author.id, round: 1, headSha: SHA2, items: [{ id: "f1", status: "dropped", reply: "x" }],
     });
     expect(badStatus.isError).toBe(true);
-    // o card errado volta com erro, sem mexer
+    // the wrong card comes back with an error, without touching anything
     const wrongCard = await call("vibehub_review_respond", {
       card: review.reviewerCardId, round: 1, headSha: SHA2, items: [{ id: "f1", status: "fixed", reply: "x" }],
     });
@@ -2510,7 +2510,7 @@ describe("ferramentas MCP", () => {
       card: author.id, review: review.id, round: 1, headSha: SHA2, items: [{ id: "f1", status: "fixed", commit: "c1", reply: "feito" }],
     });
     expect(JSON.parse(responded.text)).toMatchObject({ review: review.id, phase: "reviewing", round: 2, answered: 1 });
-    // a mesma resposta de novo não muda nada: answered 0, mesmo com o status já igual ao enviado
+    // the same answer again changes nothing: answered 0, even with the status already equal to the one sent
     const again = await call("vibehub_review_respond", {
       card: author.id, review: review.id, round: 1, headSha: SHA2, items: [{ id: "f1", status: "fixed", commit: "c1", reply: "feito" }],
     });
@@ -2612,14 +2612,14 @@ describe("gate do merge rodado quando a revisão fica pronta", () => {
       const exhausted = (await o.store.getReview(review.id))!;
       expect(exhausted.mergeGate?.exhausted).toBe(true);
       expect(gateSpy).toHaveBeenCalledTimes(4);
-      // as 3 primeiras falhas foram ao autor; a última não (ninguém roda de novo sozinho depois dela)
+      // the first 3 failures went to the author; the last did not (nobody runs it again on their own after it)
       const gatePrompts = () => send.mock.calls.filter(([card, text]) => card === author.id && String(text).includes("os testes que o merge roda"));
       await vi.waitFor(() => expect(gatePrompts()).toHaveLength(3));
       expect(exhausted.log.at(-1)?.text).toMatch(/3 vezes/);
       await authorTurnEnds(o, author.id);
       await new Promise((r) => setTimeout(r, 40));
       expect(gateSpy).toHaveBeenCalledTimes(4);
-      // a pessoa clica: os testes rodam, e um vermelho de novo devolve ao autor com a conta zerada
+      // the person clicks: the tests run, and a red again goes back to the author with the count reset
       await o.orch.retryReview(review.id, "mussa");
       await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate).toMatchObject({ state: "failed", failures: 1 }));
       expect((await o.store.getReview(review.id))?.mergeGate?.exhausted).toBeUndefined();
@@ -2674,7 +2674,7 @@ describe("gate do merge rodado quando a revisão fica pronta", () => {
     gateGate = new Promise((r) => { release = r; });
     await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [SUGGESTION], headSha: SHA1, summary: "s" });
     await vi.waitFor(() => expect(gateSpy).toHaveBeenCalledTimes(1));
-    // enquanto este processo roda o gate, ler o painel não dispara outro
+    // while this process runs the gate, reading the panel does not fire another one
     await o.orch.reviewForRead((await o.store.getReview(review.id))!);
     expect(gateSpy).toHaveBeenCalledTimes(1);
     release();
@@ -2685,7 +2685,7 @@ describe("gate do merge rodado quando a revisão fica pronta", () => {
     await o.orch.reviewForRead((await o.store.getReview(review.id))!);
     await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("passed"));
     expect(gateSpy).toHaveBeenCalledTimes(2);
-    // verde no commit aprovado: ler de novo não roda nada
+    // green on the approved commit: reading again runs nothing
     await o.orch.reviewForRead((await o.store.getReview(review.id))!);
     await new Promise((r) => setTimeout(r, 20));
     expect(gateSpy).toHaveBeenCalledTimes(2);

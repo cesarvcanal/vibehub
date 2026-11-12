@@ -5,8 +5,8 @@ import { join } from "node:path";
 import type { PrInfo } from "../maestro/deliver.js";
 
 /**
- * ANEXAR PRs — o board é REAL (diretório temporário); o GitHub é o `readPrInfo` mockado, com o PR que
- * cada referência devolveria.
+ * ATTACHING PRs — the board is REAL (temporary directory); GitHub is the mocked `readPrInfo`, with the PR
+ * each reference would return.
  */
 
 let dir = "";
@@ -62,7 +62,7 @@ describe("attachPrs", () => {
     expect(prs).toHaveLength(2);
     expect(prs?.every((p) => p.attached)).toBe(true);
     expect(prs?.find((p) => p.number === 599)).toMatchObject({ author: "outra-pessoa", branch: "feat/pr-599", title: "PR 599" });
-    // lido com a conexão do card (o id dele vai ao gh)
+    // read with the card's connection (its id goes to gh)
     expect(readPrInfo.mock.calls.every(([cardId]) => cardId === o.card.id)).toBe(true);
   });
 

@@ -11,24 +11,24 @@ import { claimMerge, markReviewMerged, mergeGateRunning, releaseMerge, reopenAft
 import { getReview } from "./store.js";
 
 /**
- * O MERGE DE UM PR REVISADO — um caminho só, chamado de três lugares: o botão "Mergear" do painel
- * (`POST /api/reviews/:id/merge`), o `vibehub_deliver` autorizado quando quem deu a ordem ao card é
- * o responsável pelo merge da revisão, e o merge automático da revisão pronta sem nada em pé (o
- * servidor, depois do Approve do revisor; decisão do usuário em 05/11/2026). Os três fazem
- * exatamente o mesmo, com as mesmas recusas:
+ * THE MERGE OF A REVIEWED PR — a single path, called from three places: the panel's "Mergear" button
+ * (`POST /api/reviews/:id/merge`), the authorised `vibehub_deliver` when whoever gave the order to the card
+ * is the review's merge owner, and the automatic merge of a ready review with nothing standing (the
+ * server, after the reviewer's Approve; the user's decision on 11/05/2026). All three do exactly the same,
+ * with the same refusals:
  *
- *  - só quem tem papel na revisão (`canMergeReview`: responsável, revisor, autor, coautor), só em
- *    `ready`, só com o commit revisado gravado;
- *  - quem mergeia precisa de `work` no card do autor (conferido de novo aqui: um share que caiu
- *    depois do início tira o merge também) e de uma conexão GitHub PRÓPRIA (`ownGithubConnection`);
- *  - um merge por vez por revisão (`claimMerge`): um segundo clique, ou o deliver junto do botão, não
- *    dispara um segundo — e a conferência do GitHub não fecha por fora um merge que está saindo;
- *  - o deliver roda em modo só-merge, preso ao commit que o revisor aprovou: um PR que andou volta
- *    `head_moved` e a revisão é reaberta (rodada seguinte, ou impasse na última); CI vermelho volta
- *    `gate`; mergeado, a revisão fecha como no botão (avisos, card do revisor para `done`).
+ *  - only whoever has a role in the review (`canMergeReview`: owner, reviewer, author, co-author), only in
+ *    `ready`, only with the reviewed commit recorded;
+ *  - whoever merges needs `work` on the author's card (checked again here: a share that dropped after the
+ *    start takes the merge away too) and their OWN GitHub connection (`ownGithubConnection`);
+ *  - one merge at a time per review (`claimMerge`): a second click, or the deliver together with the button,
+ *    does not fire a second one — and the GitHub check does not close from outside a merge that is going out;
+ *  - the deliver runs in merge-only mode, pinned to the commit the reviewer approved: a PR that moved returns
+ *    `head_moved` and the review is reopened (next round, or impasse on the last one); red CI returns
+ *    `gate`; once merged, the review closes as with the button (notices, the reviewer's card to `done`).
  *
- * Devolve o desfecho com o status HTTP que a rota responde, para a rota e o deliver contarem a mesma
- * história. Nunca mergeia nada fora disso.
+ * Returns the outcome with the HTTP status the route answers, so the route and the deliver tell the same
+ * story. Never merges anything outside this.
  */
 
 export type ReviewMergeOutcome =
@@ -44,13 +44,13 @@ export type ReviewMergeOutcome =
   };
 
 /**
- * A conexão GitHub PRÓPRIA de quem tem um papel que sai na conta dele: o merger (o merge) e o revisor
- * (os `gh pr review` do card do revisor). A própria, se ainda existe; não há queda para a do projeto —
- * o merge tem de passar pela permissão do merger no GitHub (um 403 lá é a resposta certa), e um review
- * na conta do projeto (que muitas vezes é a que abriu o PR) é recusado pelo GitHub como "review do
- * próprio PR" e trava a revisão a cada rodada. A exceção é o owner sem conexão própria: ele opera
- * com a do projeto, na mesma precedência da identidade de um card (projeto, depois a primeira da
- * instalação). Null = recusar.
+ * The OWN GitHub connection of whoever has a role that goes out on their account: the merger (the merge) and
+ * the reviewer (the `gh pr review` calls of the reviewer's card). Their own, if it still exists; there is no
+ * fallback to the project's — the merge has to go through the merger's permission on GitHub (a 403 there is
+ * the right answer), and a review on the project's account (which is often the one that opened the PR) is
+ * refused by GitHub as a "review of one's own PR" and locks the review every round. The exception is an owner
+ * with no connection of their own: they operate with the project's, in the same precedence as a card's
+ * identity (project, then the install's first one). Null = refuse.
  */
 export async function ownGithubConnection(user: PublicUser, card: registry.Card): Promise<string | null> {
   const [git, connections] = await Promise.all([getUserGit(user.id), registry.listGithubConnections()]);
@@ -63,9 +63,9 @@ export async function ownGithubConnection(user: PublicUser, card: registry.Card)
 }
 
 /**
- * Mergeia o PR da revisão `reviewId` em nome de `userId`, ou diz por que não. Ver o topo do arquivo.
- * `auto`: é o merge automático da revisão pronta sem nada em pé (orchestrator `autoMerge`), não um
- * clique — as mesmas travas, mas o log e a auditoria dizem que ninguém clicou.
+ * Merges the PR of review `reviewId` on behalf of `userId`, or says why not. See the top of the file.
+ * `auto`: it is the automatic merge of a ready review with nothing standing (orchestrator `autoMerge`), not a
+ * click — the same locks, but the log and the audit say nobody clicked.
  */
 export async function mergeReviewedPr(
   reviewId: string, userId: string, opts: { auto?: boolean } = {},
@@ -97,8 +97,8 @@ export async function mergeReviewedPr(
       error: "merger_sem_github: quem mergeia não tem uma conexão GitHub própria no vibehub",
     };
   }
-  // O gate do merge já rodou (ou roda) no commit aprovado desde que a revisão ficou pronta: o clique
-  // não espera minutos para descobrir o que já se sabe.
+  // The merge gate has already run (or is running) on the approved commit since the review became ready: the
+  // click does not wait minutes to find out what is already known.
   const gate = review.mergeGate?.sha === review.reviewedSha ? review.mergeGate : undefined;
   if (gate?.state === "running" && mergeGateRunning(review.id)) {
     return {
@@ -114,7 +114,7 @@ export async function mergeReviewedPr(
   }
   if (!claimMerge(review.id)) return { kind: "refused", status: 409, reason: "merging", error: "merge já em andamento" };
   try {
-    // Relida com a trava na mão: um pedido anterior pode ter acabado (merged) entre a leitura e aqui.
+    // Reread with the lock in hand: an earlier request may have finished (merged) between the read and here.
     const now = await getReview(review.id);
     if (now?.phase !== "ready" || now.reviewedSha !== review.reviewedSha) {
       return {
@@ -122,8 +122,8 @@ export async function mergeReviewedPr(
         error: `a revisão está em ${now?.phase ?? "?"}: o merge só sai em ready`,
       };
     }
-    // A conexão vai explícita: o ator do card (o autor) não muda, e uma mensagem no card durante o
-    // merge não troca a credencial debaixo dele.
+    // The connection goes explicitly: the card's actor (the author) does not change, and a message on the card
+    // during the merge does not swap the credential from under it.
     const by = opts.auto ? `${user.username} (merge automático)` : user.username;
     const result = await deliver(review.cardId, {
       authorized: true, mergeOnly: true, expectedHeadSha: review.reviewedSha, branch: review.base, connectionId, by,

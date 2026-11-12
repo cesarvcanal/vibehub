@@ -5,9 +5,9 @@ import { join } from "node:path";
 import type { Review } from "./model.js";
 
 /**
- * STORE DAS REVISÕES — `reviews.json`, o segundo arquivo do vibehub além do board. Mesmo padrão do
- * card-events: um JsonStore próprio, apontado pra um diretório temporário e recriado a cada teste
- * (`vi.resetModules`), sem tocar o board.
+ * REVIEWS STORE — `reviews.json`, vibehub's second file besides the board. Same pattern as
+ * card-events: a JsonStore of its own, pointed at a temporary directory and recreated on every test
+ * (`vi.resetModules`), without touching the board.
  */
 
 let dir = "";
@@ -62,16 +62,16 @@ describe("store das revisões", () => {
       r.round = 2;
     });
     expect(mutated).toMatchObject({ phase: "fixing", round: 2 });
-    // a mutação carimba o updatedAt: é o que o front usa pra ordenar e o orquestrador pra detectar parada
+    // the mutation stamps updatedAt: it is what the front uses to sort and the orchestrator to detect a stall
     expect(mutated.updatedAt).toBeGreaterThanOrEqual(before);
 
-    // a leitura devolve o que foi pro disco, e por qualquer das três chaves
+    // the read returns what went to disk, and by any of the three keys
     expect(await store.getReview("rev-1")).toMatchObject({ phase: "fixing", round: 2 });
     expect((await store.activeReviewFor("card-autor"))?.id).toBe("rev-1");
     expect((await store.activeReviewFor("card-autor", 7))?.id).toBe("rev-1");
     expect((await store.reviewByReviewerCard("card-revisor"))?.id).toBe("rev-1");
 
-    // e persistiu em reviews.json, não só na memória
+    // and it persisted in reviews.json, not only in memory
     const onDisk = JSON.parse(await readFile(join(dir, "reviews.json"), "utf8")) as { reviews: Review[] };
     expect(onDisk.reviews.map((r) => [r.id, r.phase])).toEqual([["rev-1", "fixing"]]);
   });
@@ -82,18 +82,18 @@ describe("store das revisões", () => {
     await store.insertReview(review({ id: "rev-c", cardId: "c-cancel", prNumber: 2, phase: "cancelled" }));
     expect(await store.activeReviewFor("c-merged")).toBeUndefined();
     expect(await store.activeReviewFor("c-cancel")).toBeUndefined();
-    // continuam acháveis pelo id e pelo card do revisor: o histórico não some
+    // still findable by id and by the reviewer's card: the history does not disappear
     expect((await store.getReview("rev-m"))?.phase).toBe("merged");
     expect((await store.reviewByReviewerCard("card-revisor"))?.id).toBeDefined();
 
-    // ready, impasse, fixing e reviewing seguem ativas (impasse espera a decisão humana)
+    // ready, impasse, fixing and reviewing stay active (impasse waits for the human decision)
     for (const phase of ["reviewing", "fixing", "ready", "impasse"] as const) {
       const cardId = `c-${phase}`;
       await store.insertReview(review({ id: `rev-${phase}`, cardId, prNumber: 3, phase }));
       expect((await store.activeReviewFor(cardId))?.id).toBe(`rev-${phase}`);
     }
 
-    // uma nova revisão do mesmo PR depois de uma merged/cancelled vira a ativa
+    // a new review of the same PR after a merged/cancelled one becomes the active one
     await store.insertReview(review({ id: "rev-m2", cardId: "c-merged", prNumber: 1, phase: "reviewing" }));
     expect((await store.activeReviewFor("c-merged"))?.id).toBe("rev-m2");
   });
@@ -152,7 +152,7 @@ describe("store das revisões", () => {
         throw new Error("falhou no meio");
       }),
     ).rejects.toThrow(/falhou no meio/);
-    // tudo ou nada: a fase alterada antes do throw não pode sobreviver nem no cache nem no disco
+    // all or nothing: the phase changed before the throw can survive neither in the cache nor on disk
     expect((await store.getReview("rev-1"))?.phase).toBe("reviewing");
     const onDisk = JSON.parse(await readFile(join(dir, "reviews.json"), "utf8")) as { reviews: Review[] };
     expect(onDisk.reviews[0]?.phase).toBe("reviewing");

@@ -7,21 +7,21 @@ import { mergeReviewedPr, type ReviewMergeOutcome } from "./merge.js";
 import { activeReviewFor, getReview, reviewByReviewerCard } from "./store.js";
 
 /**
- * O `vibehub_deliver` de um card — o deliver de sempre, com a regra da REVISÃO DE PR por cima, que o
- * deliver genérico não precisa conhecer:
+ * A card's `vibehub_deliver` — the usual deliver, with the PR REVIEW rule on top, which the generic
+ * deliver does not need to know about:
  *
- *  - sem revisão ativa, ou sem `authorized`: é o `deliver` de sempre (push → PR → gate → merge);
- *  - com revisão ativa e `authorized`: primeiro o PUSH (só ele, `pushOnly`) — é assim que o autor
- *    entrega a correção, e acontece quem quer que tenha pedido. Depois, o merge é da revisão: só
- *    quem tem papel nela (`canMergeReview`), na conta dela, só com a revisão pronta e deste PR, e pelo MESMO caminho do botão do
- *    painel (`mergeReviewedPr`: só-merge preso ao commit aprovado, conexão GitHub própria dele, a
- *    revisão fechando como mergeada). Quem deu a ordem é o ATOR do card (quem mandou a última
- *    mensagem) — e só quando é o PRÓPRIO card que se entrega (`from` = o card): a IA de outro card
- *    entregando este não carrega a ordem de quem falou com ele. Para qualquer outra pessoa, outro
- *    card, ou revisão que não está pronta, `review_active` dizendo quem mergeia, onde e em que pé a
- *    revisão está. Uma recusa do próprio merge chega com o motivo real (conflito, CI, conexão).
- *  - no card do REVISOR (`reviewOf`) com `authorized`: nunca há push (ele não empurra na branch que
- *    revisa), mas a mesma ordem de quem tem papel na revisão mergeia por ele, pelo mesmo caminho.
+ *  - no active review, or no `authorized`: it is the usual `deliver` (push → PR → gate → merge);
+ *  - with an active review and `authorized`: first the PUSH (only that, `pushOnly`) — that is how the author
+ *    delivers the fix, and it happens whoever asked for it. After that, the merge belongs to the review: only
+ *    whoever has a role in it (`canMergeReview`), on their account, only with the review ready and of this PR, and through the SAME path as the
+ *    panel's button (`mergeReviewedPr`: merge-only pinned to the approved commit, their own GitHub connection, the
+ *    review closing as merged). Whoever gave the order is the card's ACTOR (who sent the latest
+ *    message) — and only when it is the card ITSELF being delivered (`from` = the card): another card's AI
+ *    delivering this one does not carry the order of whoever spoke to it. For anybody else, another
+ *    card, or a review that is not ready, `review_active` saying who merges, where and how far along the
+ *    review is. A refusal of the merge itself arrives with the real reason (conflict, CI, connection).
+ *  - on the REVIEWER's card (`reviewOf`) with `authorized`: there is never a push (it does not push to the
+ *    branch it reviews), but the same order from whoever has a role in the review merges for it, by the same path.
  */
 export async function deliverCard(
   cardId: string, opts: DeliverCardOpts = {},
@@ -33,7 +33,7 @@ export async function deliverCard(
   const review = opts.authorized === true ? await activeReviewFor(cardId) : undefined;
   if (!review) return await deliver(cardId, opts);
 
-  // A entrega é do PR em revisão: outra base abriria um PR novo, solto, que ninguém revisou.
+  // The delivery belongs to the PR under review: another base would open a new, loose PR that nobody reviewed.
   const target = opts.branch ?? review.base;
   if (target !== review.base) {
     return {
@@ -41,10 +41,10 @@ export async function deliverCard(
       output: `o PR #${review.prNumber} pra ${review.base} está em revisão: entregar pra ${target} fica para depois do merge dele. Nada foi feito.`,
     };
   }
-  // A documentação vai junto: o autor que empurra a correção também explica no diff o que mudou.
+  // The documentation goes along: the author who pushes the fix also explains in the diff what changed.
   const pushed = await deliver(cardId, { branch: review.base, by: opts.by, docs: opts.docs, pushOnly: true });
   if (pushed.reason !== "pushed") return pushed;
-  // O push leva até minutos: a revisão pode ter andado nesse meio (ficado pronta, fechado).
+  // The push can take minutes: the review may have moved in the meantime (become ready, closed).
   const now = await getReview(review.id);
   if (!now || isReviewClosed(now.phase)) return await deliver(cardId, opts);
   const card = await getCard(cardId);
@@ -67,9 +67,9 @@ export async function deliverCard(
 type DeliverCardOpts = Pick<DeliverOpts, "branch" | "authorized" | "by" | "docs"> & { from?: string };
 
 /**
- * O card do revisor mandado mergear: sem push (a branch é a do PR em revisão), só o merge da revisão
- * pronta pelo caminho do botão, na conta de quem deu a ordem. Revisão já encerrada cai no deliver de
- * sempre, que recusa o card do revisor (`locked`).
+ * The reviewer's card told to merge: no push (the branch is the one of the PR under review), only the merge
+ * of the ready review through the button's path, on the account of whoever gave the order. An already closed
+ * review falls into the usual deliver, which refuses the reviewer's card (`locked`).
  */
 async function mergeFromReviewerCard(card: Card, opts: DeliverCardOpts): Promise<DeliverResult> {
   const review = await reviewByReviewerCard(card.id);
@@ -91,7 +91,7 @@ async function mergeFromReviewerCard(card: Card, opts: DeliverCardOpts): Promise
   return mergeResult(await mergeReviewedPr(review.id, orderedBy), prepared, review);
 }
 
-/** Quem deu a ordem ao card (o ator, quem mandou a última mensagem), se tem papel na revisão; o merge sai na conta dele. */
+/** Whoever gave the order to the card (the actor, who sent the latest message), if they have a role in the review; the merge goes out on their account. */
 function mergeOrderedBy(review: Review, card: Card | undefined): string | undefined {
   return canMergeReview(review, card?.actorUserId) ? card?.actorUserId : undefined;
 }
@@ -103,7 +103,7 @@ async function whoMerges(review: Review): Promise<string> {
     `card do autor ou no do revisor) quando a ordem vier de uma dessas pessoas com a revisão pronta`;
 }
 
-/** O desfecho do merge da revisão como resposta do deliver, sobre o que já tinha sido feito (`base`). */
+/** The outcome of the review's merge as the deliver's answer, on top of what had already been done (`base`). */
 function mergeResult(outcome: ReviewMergeOutcome, base: DeliverResult, review: Review): DeliverResult {
   if (outcome.kind === "merged") return { ...base, merged: true, reason: "merged", headBranch: outcome.result.headBranch };
   if (outcome.reason === "head_moved") {
@@ -117,9 +117,9 @@ function mergeResult(outcome: ReviewMergeOutcome, base: DeliverResult, review: R
 }
 
 /**
- * O motivo de um merge recusado, para a IA contar a verdade: o do próprio deliver quando ele rodou
- * (CI vermelho, conflito), "a revisão está ativa" quando ela não estava pronta ou outro merge está
- * saindo, e falha de merge no resto (conexão GitHub do responsável, permissão, erro).
+ * The reason for a refused merge, so the AI tells the truth: the deliver's own when it ran (red CI,
+ * conflict), "a revisão está ativa" when it was not ready or another merge is going out, and merge
+ * failure for the rest (the owner's GitHub connection, permission, error).
  */
 function refusalReason(outcome: Extract<ReviewMergeOutcome, { kind: "refused" }>): DeliverResult["reason"] {
   if (outcome.result) return outcome.result.reason;
@@ -128,7 +128,7 @@ function refusalReason(outcome: Extract<ReviewMergeOutcome, { kind: "refused" }>
   return "merge_failed";
 }
 
-/** Onde a revisão está, nas palavras que a recusa de um merge precisa. PURE. */
+/** Where the review is, in the words a merge refusal needs. PURE. */
 function reviewStage(r: Review): string {
   switch (r.phase) {
     case "reviewing":

@@ -3,13 +3,13 @@ import { parsePrUrl, readPrInfo } from "../maestro/deliver.js";
 import { logger } from "../../utils/logger.js";
 
 /**
- * ANEXAR PRs A UM CARD (`vibehub_attach_prs`) — o pedido "revisa os PRs #598 a #601" vira uma linha
- * de PR por item no card, cada uma com o seu "Pedir revisão". Nada é revisado aqui: anexar só traz o
- * PR do GitHub (com a conexão do card, a de quem deu a ordem) e grava. Quem inicia a revisão de cada
- * um é uma pessoa, no diálogo, escolhendo revisor e coautor.
+ * ATTACHING PRs TO A CARD (`vibehub_attach_prs`) — the request "revisa os PRs #598 a #601" becomes one PR
+ * line per item on the card, each with its own "Pedir revisão". Nothing is reviewed here: attaching only
+ * brings the PR from GitHub (with the card's connection, that of whoever gave the order) and records it.
+ * Whoever starts the review of each one is a person, in the dialog, choosing reviewer and co-author.
  *
- * Só entra PR ABERTO, do MESMO repositório do projeto e que não é de fork: a correção roda num card
- * deste repositório, empurrando na branch do PR — um PR de outro repo ou de fork não teria onde.
+ * Only an OPEN PR gets in, from the SAME repository as the project and not from a fork: the fix runs on a
+ * card of this repository, pushing to the PR's branch — a PR from another repo or from a fork would have nowhere to go.
  */
 
 export interface AttachedPr {
@@ -53,7 +53,7 @@ export async function attachPrs(cardId: string, refs: (number | string)[]): Prom
       out.refused.push({ pr: ref, reason });
       continue;
     }
-    // O mesmo PR pedido duas vezes (pelo número e pela URL) é uma linha só.
+    // The same PR asked for twice (by number and by URL) is a single line.
     if (toWrite.has(pr.number)) continue;
     toWrite.set(pr.number, { number: pr.number, url: pr.url, base: pr.base, branch: pr.branch, author: pr.author, title: pr.title });
     out.attached.push({ number: pr.number, title: pr.title, branch: pr.branch, base: pr.base, ...(pr.author ? { author: pr.author } : {}) });

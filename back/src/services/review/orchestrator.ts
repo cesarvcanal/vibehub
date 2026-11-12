@@ -31,50 +31,49 @@ import {
 } from "./prompts.js";
 
 /**
- * ORQUESTRADOR DA REVISÃO DE PR — o servidor é o carteiro entre a IA do revisor (num card escondido,
- * na conta Claude do revisor) e a IA do autor (no card do autor). Nenhuma pessoa leva recado.
+ * PR REVIEW ORCHESTRATOR — the server is the mail carrier between the reviewer's AI (on a hidden card,
+ * in the reviewer's Claude account) and the author's AI (on the author's card). No person carries messages.
  *
- *   startReview ──► card do revisor: rodada 1 (/code-review)
- *   vibehub_review_submit ──► fixing: lista fechada ao autor | ready: Approve no GitHub | impasse
- *   vibehub_review_respond ──► rodada N+1: o revisor confere só o diff
- *   turn_finished sem a ferramenta ──► um lembrete; no segundo, impasse "IA não respondeu"
- *   humano ──► decideQuestion | retryReview (impasse por falha, Approve pendente) | cancelReview
- *   botão de merge (rota) ──► markReviewMerged | head do PR andou: reopenAfterHeadMoved
- *   o PR no GitHub (fim de turno do autor; painel aberto, com freio) ──► syncReviewWithGithub:
- *     mergeado fora do painel → merged | fechado sem merge → cancelled | push depois do pronto → reopen
+ *   startReview ──► reviewer's card: round 1 (/code-review)
+ *   vibehub_review_submit ──► fixing: closed list to the author | ready: Approve on GitHub | impasse
+ *   vibehub_review_respond ──► round N+1: the reviewer checks only the diff
+ *   turn_finished without the tool ──► a reminder; on the second, impasse "IA não respondeu"
+ *   human ──► decideQuestion | retryReview (impasse from a failure, pending Approve) | cancelReview
+ *   merge button (route) ──► markReviewMerged | PR head moved: reopenAfterHeadMoved
+ *   the PR on GitHub (end of the author's turn; panel open, throttled) ──► syncReviewWithGithub:
+ *     merged outside the panel → merged | closed without merge → cancelled | push after ready → reopen
  *
- * As regras do jogo (prova, lista fechada, teto de rodadas) moram no modelo puro; aqui ficam a
- * persistência, quem pode chamar o quê e os relays. Três garantias atravessam o arquivo:
+ * The rules of the game (proof, closed list, cap on rounds) live in the pure model; here live the
+ * persistence, who may call what, and the relays. Three guarantees run through the file:
  *
- *  - IDEMPOTÊNCIA: a mesma rodada submetida/respondida duas vezes (retry da IA) não dispara um
- *    segundo relay. A checagem é refeita DENTRO da mutação, então dois submits simultâneos também
- *    viram um só.
- *  - AUTORIA: antes de cada texto, o ator do card destino vira a pessoa daquele lado (autor no card
- *    do autor, revisor no do revisor), no `beforeDeliver` do envio: um envio recusado não mexe na
- *    autoria, e o commit/push/review que o texto provocar sai na conta certa.
- *  - NUNCA PARADO EM SILÊNCIO: um envio que falha (card concluído, Claude que não sobe) vira
- *    `impasse` com o erro como motivo, aviso nos cards do autor e do revisor e warn no log; e todo
- *    impasse que não é de rodadas tem saída (`retryReview`), além do `cancelReview`.
+ *  - IDEMPOTENCY: the same round submitted/answered twice (an AI retry) does not fire a second relay.
+ *    The check is redone INSIDE the mutation, so two simultaneous submits also become one.
+ *  - AUTHORSHIP: before each text, the target card's actor becomes the person on that side (author on
+ *    the author's card, reviewer on the reviewer's), in the send's `beforeDeliver`: a refused send does
+ *    not touch the authorship, and the commit/push/review the text triggers goes out on the right account.
+ *  - NEVER STOPPED IN SILENCE: a send that fails (card completed, Claude that does not start) becomes
+ *    `impasse` with the error as the reason, a notice on the author's and reviewer's cards and a warn in
+ *    the log; and every impasse that is not about rounds has a way out (`retryReview`), besides `cancelReview`.
  *
- * O merge sai sempre por `mergeReviewedPr` (`merge.ts`): o clique humano (`routes/reviews.ts`) ou, com
- * a revisão pronta, aprovada no GitHub e sem nada em pé, o `autoMerge` daqui, pelo mesmo caminho e em
- * nome do responsável pelo merge.
+ * The merge always goes out through `mergeReviewedPr` (`merge.ts`): the human click (`routes/reviews.ts`)
+ * or, with the review ready, approved on GitHub and nothing standing, the `autoMerge` here, by the same
+ * path and on behalf of the merge owner.
  */
 
-/** Quem assina as falas que o orquestrador digita nos cards. */
+/** Who signs the messages the orchestrator types into the cards. */
 const REVIEW_ORIGIN: MessageOrigin = { kind: "system", name: "revisão de PR" };
 
-/** O que o fim de turno espera antes de julgar: a chamada da ferramenta no mesmo turno ganha. */
+/** What the end of a turn waits before judging: the tool call in the same turn wins. */
 const TURN_GRACE_MS = 1_500;
 
-/** Vereditos que a IA do revisor pode dar. `accepted_risk` é só de humano (decideQuestion). */
+/** Verdicts the reviewer's AI may give. `accepted_risk` is for humans only (decideQuestion). */
 const REVIEWER_VERDICTS: ReadonlySet<FindingStatus> = new Set(["fixed", "open", "dropped"]);
 
-/** Sha completo (SHA-1, ou SHA-256 num repo que use): o merge compara com o head do PR, abreviado não serve. */
+/** Full sha (SHA-1, or SHA-256 in a repo that uses it): the merge compares it with the PR head, an abbreviated one does not do. */
 export const HEAD_SHA_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
 
 const NO_ANSWER = "IA não respondeu";
-/** Motivo do impasse quando o PR andou depois do `ready` e não sobra rodada para conferir o que entrou. */
+/** Impasse reason when the PR moved after `ready` and no round is left to check what came in. */
 const HEAD_MOVED = "push depois do pronto";
 
 type Side = "reviewer" | "author";
@@ -82,12 +81,12 @@ type Decision = "block" | "drop" | "keep" | "accept_risk";
 
 /* ------------------------------------------------------------------ helpers */
 
-/** Teto de cada resposta citada numa fala: o bastante pra ler o argumento, sem virar página. */
+/** Cap on each answer quoted in a message: enough to read the argument, without turning into a page. */
 const REPLY_MAX = 600;
 
 /**
- * Uma fala no log da revisão. `items` são os achados de que ela trata, com a resposta de cada um
- * naquele momento (é o que a conversa das IAs mostra rodada a rodada); `by`, quem fez, numa fala humana.
+ * A message in the review log. `items` are the findings it is about, with each one's answer at that
+ * moment (it is what the AIs' conversation shows round by round); `by`, who did it, in a human message.
  */
 function note(r: Review, who: ReviewEvent["who"], text: string, extra: { items?: ReviewEventItem[]; by?: string } = {}): void {
   const event: ReviewEvent = { at: Date.now(), round: r.round, who, text: clipLine(text, 400) };
@@ -111,10 +110,10 @@ function assertHeadSha(sha: string): string {
   return v.toLowerCase();
 }
 
-/** O que bloqueia agora: bloqueante em pé ou dúvida que o humano decidiu bloquear. */
+/** What blocks now: a standing blocking finding or a question the human decided to block on. */
 const blockingNow = (r: Review): Finding[] => r.findings.filter(actionableForAuthor);
 
-/** Esperando a ferramenta deste lado, nesta rodada. É o que o fim de turno sem chamada cobra. */
+/** Waiting for this side's tool, in this round. It is what a turn ending without a call demands. */
 function awaitingTool(r: Review, side: Side): boolean {
   return side === "reviewer"
     ? r.phase === "reviewing" && r.lastSubmitRound !== r.round
@@ -122,8 +121,8 @@ function awaitingTool(r: Review, side: Side): boolean {
 }
 
 /**
- * A linha que dá ao CO-AUTOR o crédito no Git (`Co-authored-by: Nome <email>`), com a identidade git
- * que ele tem no vibehub. Sem co-autor, co-autor igual ao autor ou sem nome/e-mail: nenhuma.
+ * The line that gives the CO-AUTHOR credit in Git (`Co-authored-by: Nome <email>`), with the git identity
+ * they have on vibehub. No co-author, co-author equal to the author, or no name/e-mail: none.
  */
 async function coauthorTrailer(r: Review): Promise<string | undefined> {
   if (!r.coauthorUserId || r.coauthorUserId === r.authorUserId) return undefined;
@@ -132,25 +131,26 @@ async function coauthorTrailer(r: Review): Promise<string | undefined> {
 }
 
 /**
- * O texto que a vez deste lado pede: rodada 1 inteira, delta da 2 em diante, ou a lista do autor (com
- * a linha de crédito do co-autor, quando há uma).
+ * The text this side's turn asks for: the whole round 1, the delta from round 2 on, or the author's
+ * list (with the co-author's credit line, when there is one).
  */
 async function promptFor(r: Review, side: Side): Promise<string> {
   if (side === "author") return authorFixPrompt(r, { coauthorTrailer: await coauthorTrailer(r) });
   return r.round <= 1 ? reviewerRoundPrompt(r) : reviewerDeltaPrompt(r);
 }
 
-/** O login GitHub da conexão PRÓPRIA de uma pessoa no vibehub; sem uma, undefined. */
+/** The GitHub login of a person's OWN connection on vibehub; without one, undefined. */
 async function githubLogin(userId: string): Promise<string | undefined> {
   const own = (await getUserGit(userId))?.githubConnectionId;
   return own ? (await getGithubConnection(own))?.login : undefined;
 }
 
 /**
- * Os papéis da revisão que o GitHub também tem, gravados no PR: o RESPONSÁVEL (quem corrige, commita
- * e dá push) vira o assignee — o dono da entrega —, e o REVISOR vira o reviewer pedido. Co-autor e
- * quem faz o merge não têm campo no PR (o co-autor ganha o crédito nos commits, pela linha
- * Co-authored-by). A conversa conta o que saiu. Nunca lança: um PR sem os nomes não para a revisão.
+ * The review roles GitHub also has, recorded on the PR: the RESPONSIBLE one (who fixes, commits and
+ * pushes) becomes the assignee — the owner of the delivery —, and the REVIEWER becomes the requested
+ * reviewer. Co-author and whoever merges have no field on the PR (the co-author gets the credit in the
+ * commits, through the Co-authored-by line). The conversation tells what went out. Never throws: a PR
+ * without the names does not stop the review.
  */
 async function namePeopleOnGithub(r: Review): Promise<void> {
   try {
@@ -172,12 +172,12 @@ async function namePeopleOnGithub(r: Review): Promise<void> {
 /* ------------------------------------------------------------------ avisos */
 
 /**
- * Um aviso nos DOIS cards da revisão (autor e revisor) — e no card que anexou o PR, quando é outro —,
- * cada um com a sua chave: um replay não duplica. Nunca lança: um aviso que não grava custa o aviso,
- * não a revisão.
+ * A notice on BOTH review cards (author and reviewer) — and on the card that attached the PR, when it is
+ * another one —, each with its own key: a replay does not duplicate it. Never throws: a notice that does
+ * not get recorded costs the notice, not the review.
  */
 async function notifyBoth(r: Review, key: string, text: string, severity: Severity): Promise<void> {
-  // O card que ANEXOU o PR (quando não é o do autor) acompanha a revisão de lá: recebe o mesmo aviso.
+  // The card that ATTACHED the PR (when it is not the author's) follows the review from there: it gets the same notice.
   const sides: [string, string][] = [[r.cardId, "author"], [r.reviewerCardId, "reviewer"]];
   if (r.hubCardId && r.hubCardId !== r.cardId) sides.push([r.hubCardId, "hub"]);
   for (const [cardId, who] of sides) {
@@ -190,8 +190,8 @@ async function notifyBoth(r: Review, key: string, text: string, severity: Severi
 }
 
 /**
- * Mudança de fase pra `ready`, `impasse` ou `merged` vira um aviso nos cards do autor e do revisor (a
- * bandeja de avisos que já existe), com a chave `review:<id>:<fase>:<rodada>:<lado>`.
+ * A phase change to `ready`, `impasse` or `merged` becomes a notice on the author's and reviewer's cards
+ * (the notice tray that already exists), with the key `review:<id>:<phase>:<round>:<side>`.
  */
 export async function announcePhase(r: Review): Promise<void> {
   if (r.phase !== "ready" && r.phase !== "impasse" && r.phase !== "merged") return;
@@ -199,14 +199,14 @@ export async function announcePhase(r: Review): Promise<void> {
 }
 
 /**
- * A rodada do revisor deixou dúvida sem decisão: ela segura o `ready` até alguém decidir — o revisor
- * HUMANO no painel, ou as IAs (o autor resolve, o revisor confere). O aviso vai ao card do revisor e ao
- * do autor, uma vez por rodada (`review:<id>:question:<rodada>:<lado>`). Nunca lança.
+ * The reviewer's round left a question undecided: it holds `ready` until somebody decides — the HUMAN
+ * reviewer on the panel, or the AIs (the author resolves, the reviewer checks). The notice goes to the
+ * reviewer's card and to the author's, once per round (`review:<id>:question:<round>:<side>`). Never throws.
  */
 async function announceQuestions(r: Review): Promise<void> {
   if (pendingQuestions(r.findings).length === 0) return;
-  // O card do revisor fica escondido do board: o aviso vai também ao do autor, onde as pessoas olham,
-  // dizendo quem decide.
+  // The reviewer's card is hidden from the board: the notice also goes to the author's, where people look,
+  // saying who decides.
   const decider = (await findUser(r.reviewerUserId))?.username ?? "o revisor";
   for (const [cardId, side, text] of [
     [r.reviewerCardId, "reviewer", questionNoticeText(r)],
@@ -223,16 +223,16 @@ async function announceQuestions(r: Review): Promise<void> {
 /* ------------------------------------------------------------------ relays */
 
 /**
- * O card do autor estava PAUSADO: sai de Paused pra `waiting` (a mesma escrita do arrastar no board,
- * PATCH /api/cards/:id) e, se a sessão tinha morrido, é retomado. É o único caminho do vibehub que
- * tira um card de Paused sem uma pessoa — decisão do usuário (29/10: "Pedir revisão" autoriza gastar
- * a conta do autor neste ciclo) — e por isso fica no log de auditoria como `review.wake`.
- * Card dormindo (hibernado, nunca aberto) não passa por aqui: o `wake` do envio já acorda.
+ * The author's card was PAUSED: it leaves Paused for `waiting` (the same write as dragging on the board,
+ * PATCH /api/cards/:id) and, if the session had died, it is resumed. It is the only path in vibehub that
+ * takes a card out of Paused without a person — the user's decision (10/29: "Pedir revisão" authorises
+ * spending the author's account in this cycle) — and that is why it goes to the audit log as `review.wake`.
+ * A sleeping card (hibernated, never opened) does not go through here: the send's `wake` already wakes it.
  */
 async function unpauseAuthor(r: Review): Promise<void> {
   const live = await getCard(r.cardId);
   if (!live) throw new Error("o card do autor não existe mais");
-  // `done` é a conclusão de alguém: não sai dali por aqui (o envio recusa e a revisão vai a impasse).
+  // `done` is somebody's conclusion: it does not leave it through here (the send refuses and the review goes to impasse).
   if (live.column === "done" || (live.column !== "paused" && !live.pausedAt)) return;
   const before = { ...live };
   const effect = cardMoveEffect(before, { column: "waiting" });
@@ -245,16 +245,16 @@ async function unpauseAuthor(r: Review): Promise<void> {
 }
 
 /**
- * Entrega `text` ao card de um dos lados. O ator vira a pessoa daquele lado no `beforeDeliver`.
- *  - `unpause`: só o PRIMEIRO relay da rodada ao autor tira o card dele de Paused. Lembrete e
- *    "tentar de novo" não: uma pausa no meio da correção é decisão da pessoa, e o envio recusado
- *    vira impasse com o motivo (que o "tentar de novo" resolve depois que ela despausar).
- *  - `approve`: é o pedido de Approve. Falha mantém `ready` com `approvePending` e um aviso (o merge
- *    humano não fica preso por causa do GitHub); sucesso limpa a marca.
- *  - `optional`: um pedido que a revisão não espera (sugestões escolhidas por uma pessoa). Falha não
- *    mexe na revisão: lança o motivo, para quem pediu saber.
- * Qualquer outra falha vira `impasse` com o erro, mas só se a revisão ainda está na fase e na rodada
- * para as quais o texto saiu (uma resposta que pousou no meio ganha). Nunca lança. Devolve se entregou.
+ * Delivers `text` to the card of one of the sides. The actor becomes the person on that side in `beforeDeliver`.
+ *  - `unpause`: only the round's FIRST relay to the author takes their card out of Paused. A reminder and
+ *    "tentar de novo" do not: a pause in the middle of the fix is the person's decision, and the refused
+ *    send becomes an impasse with the reason (which "tentar de novo" resolves after they unpause).
+ *  - `approve`: it is the Approve request. A failure keeps `ready` with `approvePending` and a notice (the
+ *    human merge is not stuck because of GitHub); success clears the mark.
+ *  - `optional`: a request the review does not wait for (suggestions chosen by a person). A failure does
+ *    not touch the review: it throws the reason, so whoever asked knows.
+ * Any other failure becomes `impasse` with the error, but only if the review is still in the phase and
+ * round the text went out for (an answer that landed in between wins). Never throws. Returns whether it delivered.
  */
 async function relayReview(
   r: Review, side: Side, text: string, opts: { unpause?: boolean; approve?: boolean; optional?: boolean } = {},
@@ -267,16 +267,16 @@ async function relayReview(
     await sendToTerminal(cardId, text, {
       by: `review:${r.id}`,
       origin: REVIEW_ORIGIN,
-      // Card dormindo (hibernado, nunca aberto, sessão perdida num restart) é acordado.
+      // A sleeping card (hibernated, never opened, session lost in a restart) is woken up.
       wake: true,
-      // Claude tem de estar de pé pra ler: um shell nu engoliria o texto e a revisão ficaria parada.
+      // Claude has to be up to read: a bare shell would swallow the text and the review would stall.
       requireAgent: true,
-      // Nunca digitar num menu (o Enter escolheria a opção destacada); um card que acabou de subir
-      // ganha o tempo de desenhar o prompt.
+      // Never type into a menu (Enter would pick the highlighted option); a card that has just started
+      // gets the time to draw the prompt.
       guardInteractiveMenu: true,
       readyWaitMs: SEND_READY_WAIT_MS,
-      // Com o chat nativo em uso, o texto vira turno do driver; digitado no tmux iria para OUTRO
-      // processo Claude e a conversa bifurcaria.
+      // With the native chat in use, the text becomes a driver turn; typed into tmux it would go to ANOTHER
+      // Claude process and the conversation would fork.
       viaNativeChat: true,
       beforeDeliver: async () => recordCardActor(await findUser(userId), cardId),
     });
@@ -320,16 +320,16 @@ async function relayReview(
   }
 }
 
-/** O que a fase nova pede: a lista ao autor, o Approve ao revisor, ou só o aviso. Devolve a revisão atual. */
+/** What the new phase asks for: the list to the author, the Approve to the reviewer, or just the notice. Returns the current review. */
 async function dispatch(r: Review): Promise<Review> {
   if (r.phase === "fixing") {
-    // O primeiro relay da rodada: o único que tira o card do autor de Paused.
+    // The round's first relay: the only one that takes the author's card out of Paused.
     await relayReview(r, "author", await promptFor(r, "author"), { unpause: true });
   } else if (r.phase === "ready") {
     await announcePhase(r);
-    // O merge automático NÃO sai daqui: este é o caminho do submit do revisor (a ferramenta dele
-    // ficaria presa até o fim do CI) e o Approve ainda nem foi publicado. Ele sai do fim do turno do
-    // revisor que reporta `ready` (onTurnFinished), já com o Approve no GitHub.
+    // The automatic merge does NOT go out from here: this is the reviewer's submit path (their tool would
+    // be stuck until CI finished) and the Approve has not even been published. It goes out from the end of
+    // the reviewer's turn that reports `ready` (onTurnFinished), with the Approve already on GitHub.
     await relayReview(r, "reviewer", reviewerApprovePrompt(r), { approve: true });
     void checkMergeGate(r.id);
   } else if (r.phase === "impasse") {
@@ -339,24 +339,24 @@ async function dispatch(r: Review): Promise<Review> {
 }
 
 /**
- * O merge automático de uma revisão pronta sem nada em pé ({@link autoMergeEligible}): o MESMO caminho
- * do botão (`mergeReviewedPr`, em nome do responsável pelo merge, preso ao commit revisado, com gate).
- * Chamado DEPOIS do Approve: do fim de turno do revisor que reportou `ready`, ou de "não fazer" a
- * última sugestão de uma revisão já aprovada. Recusa "não está pronta"/"merge já saindo"/"head andou"
- * é corrida e fica calada; qualquer outra (CI vermelho, conflito, merger sem conexão GitHub) marca a
- * rodada (`autoMergeFailedRound`: não tenta de novo, e os textos voltam ao botão), vira nota na
- * revisão e aviso nos dois cards. Nunca lança. Import dinâmico: merge.ts importa este arquivo.
+ * The automatic merge of a ready review with nothing standing ({@link autoMergeEligible}): the SAME path
+ * as the button (`mergeReviewedPr`, on behalf of the merge owner, pinned to the reviewed commit, with gate).
+ * Called AFTER the Approve: from the end of the reviewer's turn that reported `ready`, or from "não fazer"
+ * on the last suggestion of an already approved review. A refusal of "not ready"/"merge already going out"/
+ * "head moved" is a race and stays quiet; any other (red CI, conflict, merger with no GitHub connection)
+ * marks the round (`autoMergeFailedRound`: does not try again, and the texts go back to the button), becomes
+ * a note on the review and a notice on both cards. Never throws. Dynamic import: merge.ts imports this file.
  */
 async function autoMerge(r: Review): Promise<void> {
   const now = (await getReview(r.id)) ?? r;
   if (!autoMergeEligible(now)) return;
-  // Gate do merge ainda rodando: o fim dele chama este merge de novo. Vermelho: o autor já foi avisado.
+  // The merge gate is still running: its end calls this merge again. Red: the author was already told.
   const gate = now.mergeGate?.sha === now.reviewedSha ? now.mergeGate : undefined;
   if (gate && gate.state !== "passed") return;
   try {
-    // O "ready" que o revisor reporta não prova o Approve: o prompt manda reportar mesmo quando o
-    // `gh pr review --approve` falha (review do próprio PR, permissão). Quem prova é o GitHub — um
-    // APPROVED no commit revisado e nenhum "changes requested" de pé. Leitura que falha = não.
+    // The "ready" the reviewer reports does not prove the Approve: the prompt says to report it even when
+    // `gh pr review --approve` fails (review of one's own PR, permission). GitHub is what proves it — an
+    // APPROVED on the reviewed commit and no "changes requested" standing. A read that fails = no.
     const approved = await readPrApproval(now.cardId, now.prUrl, now.reviewedSha as string);
     if (approved !== true) {
       const why = approved === null ? "não consegui ler as reviews do PR no GitHub" : "o Approve do revisor não está no GitHub no commit revisado";
@@ -372,7 +372,7 @@ async function autoMerge(r: Review): Promise<void> {
   }
 }
 
-/** O merge automático não sai nesta rodada: marca, conta no log da revisão e avisa os dois cards. */
+/** The automatic merge does not go out in this round: marks it, tells the review log and notifies both cards. */
 async function refuseAutoMerge(r: Review, why: string): Promise<void> {
   logger.info({ audit: true, action: "review.automerge", review: r.id, merged: false, reason: clipLine(why, 200) }, "PR review auto-merge refused");
   const after = await mutateReview(r.id, (x) => {
@@ -382,18 +382,18 @@ async function refuseAutoMerge(r: Review, why: string): Promise<void> {
   await notifyBoth(after, `review:${r.id}:automerge_failed:${r.round}`, autoMergeFailedText(after, why), "warning");
 }
 
-/** Revisões com o gate do merge rodando NESTE processo: um `running` gravado e ausente daqui é de antes de um deploy. */
+/** Reviews with the merge gate running in THIS process: a recorded `running` absent from here is from before a deploy. */
 const mergeGatesRunning = new Set<string>();
 
-/** Se o gate do merge daquela revisão está rodando agora, neste processo. */
+/** Whether that review's merge gate is running now, in this process. */
 export function mergeGateRunning(reviewId: string): boolean {
   return mergeGatesRunning.has(reviewId);
 }
 
 /**
- * Se a revisão pronta precisa do gate do merge: nunca rodou no commit aprovado, ou ficou `running`
- * órfão (o processo que rodava morreu num deploy). `again` = rodar mesmo depois de uma falha nesse
- * commit (o "rodar de novo" do painel, ou o fim do turno do autor que consertou a worktree).
+ * Whether the ready review needs the merge gate: it never ran on the approved commit, or it was left
+ * `running` orphaned (the process running it died in a deploy). `again` = run even after a failure on that
+ * commit (the panel's "rodar de novo", or the end of the author's turn that fixed the worktree).
  */
 function needsMergeGate(r: Review, again: boolean): boolean {
   if (r.phase !== "ready" || !r.reviewedSha || mergeGatesRunning.has(r.id)) return false;
@@ -403,10 +403,10 @@ function needsMergeGate(r: Review, again: boolean): boolean {
 }
 
 /**
- * Roda o gate do merge no commit aprovado de uma revisão pronta ({@link Review.mergeGate}) e grava o
- * veredito, se a revisão ainda está pronta naquele commit. Verde: o merge automático sai, se cabia.
- * Vermelho: aviso nos dois cards e a falha ao autor, para consertar antes de alguém clicar. Um gate
- * que nem rodou (runner fora, card sumido) é vermelho com o motivo. Nunca lança.
+ * Runs the merge gate on the approved commit of a ready review ({@link Review.mergeGate}) and records the
+ * verdict, if the review is still ready on that commit. Green: the automatic merge goes out, if it applied.
+ * Red: a notice on both cards and the failure to the author, to fix before somebody clicks. A gate that did
+ * not even run (runner down, card gone) is red with the reason. Never throws.
  */
 async function checkMergeGate(reviewId: string, opts: { again?: boolean; by?: string } = {}): Promise<void> {
   let sha = "";
@@ -463,11 +463,11 @@ async function checkMergeGate(reviewId: string, opts: { again?: boolean; by?: st
 }
 
 /**
- * O autor terminou um turno com o gate do merge vermelho no commit aprovado (e o PR ainda nele): roda
- * o gate de novo, uma vez por falha e até {@link MERGE_GATE_AUTO_RETRIES} falhas seguidas — é como a
- * correção que ele fez chega ao veredito sem ninguém clicar. A marca `autoRetried` é gravada dentro da
- * mutação, então dois fins de turno juntos não rodam o gate duas vezes. Um push muda o head e reabre a
- * revisão pelo caminho de sempre, não por aqui.
+ * The author finished a turn with the merge gate red on the approved commit (and the PR still on it): runs
+ * the gate again, once per failure and up to {@link MERGE_GATE_AUTO_RETRIES} failures in a row — it is how
+ * the fix they made reaches the verdict without anybody clicking. The `autoRetried` mark is recorded inside
+ * the mutation, so two turn endings together do not run the gate twice. A push changes the head and reopens
+ * the review through the usual path, not through here.
  */
 async function retryMergeGateAfterAuthorTurn(r: Review): Promise<void> {
   if (r.phase !== "ready" || !r.reviewedSha) return;
@@ -481,7 +481,7 @@ async function retryMergeGateAfterAuthorTurn(r: Review): Promise<void> {
   if (claimed) await checkMergeGate(r.id, { again: true, by: "fim do turno do autor" });
 }
 
-/** A linha de sistema que conta o resultado da rodada do revisor. */
+/** The system line that tells the result of the reviewer's round. */
 function outcomeNote(r: Review): string {
   const blocking = blockingNow(r).length;
   const waiting = pendingQuestions(r.findings).length;
@@ -505,7 +505,7 @@ function outcomeNote(r: Review): string {
 
 /* ------------------------------------------------------------------ iniciar */
 
-/** Serializa o "iniciar": a checagem de revisão ativa e a criação valem como uma coisa só. */
+/** Serialises "start": the active-review check and the creation count as one single thing. */
 let starting: Promise<unknown> = Promise.resolve();
 function serialStart<T>(work: () => Promise<T>): Promise<T> {
   const next = starting.then(work, work);
@@ -514,19 +514,20 @@ function serialStart<T>(work: () => Promise<T>): Promise<T> {
 }
 
 /**
- * O card onde a correção de um PR ANEXADO roda. Um card vivo do projeto (não revisor, fora de `done`)
- * que já trabalha na branch do PR é ele — inclusive o próprio card que anexou: dois worktrees na mesma
- * branch não coexistem no git, e esse card já é o lugar da correção. Sem um, nenhum (o chamador cria).
+ * The card where the fix of an ATTACHED PR runs. A live card of the project (not a reviewer, outside `done`)
+ * that already works on the PR's branch is it — including the very card that attached it: two worktrees on
+ * the same branch do not coexist in git, and that card already is the place for the fix. Without one, none
+ * (the caller creates it).
  */
 async function cardOnBranch(projectId: string, branch: string): Promise<Card | undefined> {
   return (await listCards(projectId)).find((c) => !c.reviewOf && c.column !== "done" && cardBranch(c) === branch);
 }
 
 /**
- * O CARD DE CORREÇÃO de um PR anexado que nenhum card trabalha: um card comum do projeto, visível no
- * board, na conta Claude do AUTOR escolhido, com a branch do PR como a dele (o worktree nasce de
- * `origin/<branch>`, e o push da correção cai no PR) e a base do PR como alvo. O PR fica registrado
- * nele, como se ele o tivesse entregado: é o que o deliver, a conferência do GitHub e a linha do PR leem.
+ * The FIX CARD of an attached PR that no card works on: a regular project card, visible on the board,
+ * in the chosen AUTHOR's Claude account, with the PR's branch as its own (the worktree is born from
+ * `origin/<branch>`, and the fix's push lands on the PR) and the PR's base as the target. The PR is
+ * recorded on it as if it had delivered it: it is what the deliver, the GitHub check and the PR line read.
  */
 async function createFixCard(hub: Card, pr: CardPr, accountSlug: string | undefined): Promise<Card> {
   const fix = await createCard(
@@ -537,7 +538,7 @@ async function createFixCard(hub: Card, pr: CardPr, accountSlug: string | undefi
   return fix;
 }
 
-/** Garante `work` a uma pessoa num card (share de card), quando ela ainda não tem. */
+/** Grants `work` to a person on a card (card share), when they do not have it yet. */
 async function ensureWork(userId: string, cardId: string): Promise<void> {
   const user = await findUser(userId);
   if (user && (await cardLevel(user, cardId)) !== "work") {
@@ -546,16 +547,16 @@ async function ensureWork(userId: string, cardId: string): Promise<void> {
 }
 
 /**
- * Abre a revisão do PR `prNumber` do card: cria o card do revisor (conta Claude do revisor, branch
- * do PR, escondido do board) e manda a rodada 1. Recusas com o código na mensagem, que a rota
- * traduz em 400: `revisor_igual_autor`, `sem_pr`, `pr_mergeado`, `revisao_ativa`, `revisor_sem_conta`,
- * `autor_sem_conta`.
+ * Opens the review of the card's PR `prNumber`: creates the reviewer's card (reviewer's Claude account,
+ * the PR's branch, hidden from the board) and sends round 1. Refusals with the code in the message, which
+ * the route translates into 400: `revisor_igual_autor`, `sem_pr`, `pr_mergeado`, `revisao_ativa`,
+ * `revisor_sem_conta`, `autor_sem_conta`.
  *
- * PR ANEXADO (`vibehub_attach_prs`): a correção não roda no card que anexou, mas no card que trabalha
- * a branch do PR ({@link cardOnBranch}) ou, sem um, num CARD DE CORREÇÃO novo na conta do autor
- * ({@link createFixCard}; autor sem conta Claude própria = `autor_sem_conta`). A revisão grava esse
- * card como o do autor (`cardId`: relays, resposta do autor, deliver e conferência do GitHub seguem
- * iguais) e o que anexou em `hubCardId`, de onde as pessoas acompanham.
+ * ATTACHED PR (`vibehub_attach_prs`): the fix does not run on the card that attached it, but on the card
+ * working on the PR's branch ({@link cardOnBranch}) or, without one, on a new FIX CARD in the author's
+ * account ({@link createFixCard}; author without their own Claude account = `autor_sem_conta`). The review
+ * records that card as the author's (`cardId`: relays, the author's answer, deliver and the GitHub check go
+ * on the same) and the one that attached it in `hubCardId`, from where people follow along.
  */
 export async function startReview(input: {
   cardId: string;
@@ -564,7 +565,7 @@ export async function startReview(input: {
   authorUserId: string;
   coauthorUserId?: string;
   mergerUserId: string;
-  /** O que quem mergeia já mandou fazer no fim (`Review.mergeAuthorized`, `Review.concludeWhenMerged`). */
+  /** What whoever merges already ordered for the end (`Review.mergeAuthorized`, `Review.concludeWhenMerged`). */
   orders?: ReviewOrders;
   by: string;
 }): Promise<Review> {
@@ -576,14 +577,14 @@ export async function startReview(input: {
     if (!card) throw new Error("card not found");
     const pr = card.prs?.find((p) => p.number === input.prNumber);
     if (!pr) throw new Error(`sem_pr: o card não tem o PR #${input.prNumber}`);
-    // Um PR já mergeado não tem o que revisar: revisar seria gastar duas IAs num diff que já está na base.
+    // An already merged PR has nothing to review: reviewing would spend two AIs on a diff already in the base.
     if (pr.mergedAt !== undefined) throw new Error(`pr_mergeado: o PR #${pr.number} já foi mergeado`);
-    // Pela URL, em qualquer card: o mesmo PR anexado em dois cards não ganha duas revisões.
+    // By URL, on any card: the same PR attached to two cards does not get two reviews.
     if (await activeReviewForPr(pr.url)) {
       throw new Error(`revisao_ativa: já existe uma revisão em andamento do PR #${pr.number}`);
     }
-    // "Tem conta" é ter um vínculo, inclusive com a conta embutida ("default"): quem está nela revisa
-    // e corrige ali. Só quem não tem vínculo nenhum é recusado.
+    // "Having an account" is having a link, including to the built-in account ("default"): whoever is on it
+    // reviews and fixes there. Only someone with no link at all is refused.
     const reviewerAccount = await linkedAccountSlug(input.reviewerUserId);
     if (!reviewerAccount) throw new Error("revisor_sem_conta: o revisor não tem uma conta Claude própria no vibehub");
 
@@ -640,12 +641,12 @@ export async function startReview(input: {
       if (input.orders?.concludeWhenMerged) note(fresh, "system", "Mergeada, o card que deu a ordem vai para Concluído.");
       if (fixCard) note(fresh, "system", `A correção roda no card "${fixCard.title}", na conta Claude do autor.`);
       else if (authorCard.id !== card.id) note(fresh, "system", `A correção roda no card "${authorCard.title}", que já trabalha a branch do PR.`);
-      // O revisor age no card dele pelo `recordCardActor` do relay, que só pousa com `work`. Owner e
-      // share de projeto já dão isso; quem só alcança o card do autor ganha um share `work` no card do
-      // revisor — senão o `gh pr review` sairia na conta de outra pessoa.
+      // The reviewer acts on their card through the relay's `recordCardActor`, which only lands with `work`.
+      // Owner and project share already give that; someone who only reaches the author's card gets a `work`
+      // share on the reviewer's card — otherwise `gh pr review` would go out on another person's account.
       await ensureWork(input.reviewerUserId, reviewerCard.id);
-      // A correção num card que não é o que pediu: o autor (ator a cada relay) e o merger (o merge
-      // opera no card do autor) precisam de `work` lá também — a rota só conferiu no card que pediu.
+      // The fix on a card that is not the one that asked: the author (actor at each relay) and the merger
+      // (the merge operates on the author's card) need `work` there too — the route only checked the asking card.
       if (authorCard.id !== card.id) {
         await ensureWork(input.authorUserId, authorCard.id);
         await ensureWork(input.mergerUserId, authorCard.id);
@@ -661,14 +662,14 @@ export async function startReview(input: {
       );
       return fresh;
     } catch (err) {
-      // Sem revisão, o card do revisor (e o de correção, se nasceu agora) é lixo: nunca foi aberto,
-      // então sai sem sessão pra matar.
+      // Without a review, the reviewer's card (and the fix card, if it was just born) is garbage: it was never
+      // opened, so it goes away with no session to kill.
       if (reviewerCard) await removeCard(reviewerCard.id).catch(() => undefined);
       if (fixCard) await removeCard(fixCard.id).catch(() => undefined);
       throw err;
     }
   });
-  // O GitHub não depende do relay (nem o relay dele): os dois saem juntos.
+  // GitHub does not depend on the relay (nor the relay on it): the two go out together.
   await Promise.all([relayReview(review, "reviewer", reviewerRoundPrompt(review)), namePeopleOnGithub(review)]);
   return (await getReview(review.id)) ?? review;
 }
@@ -676,9 +677,9 @@ export async function startReview(input: {
 /* ------------------------------------------------------------------ revisor */
 
 /**
- * A rodada do revisor (`vibehub_review_submit`). Só o card do revisor da revisão chama; rodada que não
- * é a atual, ou já submetida, devolve a revisão sem efeito. Achados passam pelo modelo (prova, lista
- * fechada); vereditos só `fixed|open|dropped`, e nunca sobre o que um humano já fechou.
+ * The reviewer's round (`vibehub_review_submit`). Only the review's reviewer card calls it; a round that is
+ * not the current one, or already submitted, returns the review with no effect. Findings go through the model
+ * (proof, closed list); verdicts only `fixed|open|dropped`, and never on what a human already closed.
  */
 export async function submitReviewerRound(
   reviewerCardId: string,
@@ -712,12 +713,12 @@ export async function submitReviewerRound(
 
   let landed = false as boolean;
   const after = await mutateReview(review.id, (r) => {
-    // De novo, dentro da fila: outro submit da mesma rodada pode ter pousado entre a leitura e aqui.
+    // Again, inside the queue: another submit of the same round may have landed between the read and here.
     if (!fresh(r)) return;
-    // O veredito da IA nunca desfaz um humano. Risco aceito e retirada humana são finais: qualquer
-    // veredito sobre eles é ignorado. Bloqueio humano (block/keep) só é protegido do `dropped` (a IA
-    // não retira o que um humano mandou bloquear); `open` e `fixed` valem, porque o revisor tem de
-    // poder recusar o "corrigido" do autor num item que um humano bloqueou.
+    // The AI's verdict never undoes a human. Accepted risk and human withdrawal are final: any verdict
+    // on them is ignored. A human block (block/keep) is only protected from `dropped` (the AI does not
+    // withdraw what a human ordered blocked); `open` and `fixed` count, because the reviewer has to be
+    // able to refuse the author's "fixed" on an item a human blocked.
     const overridesHuman = (v: { id: string; status: FindingStatus }) => {
       const f = r.findings.find((x) => x.id === v.id);
       if (!f) return false;
@@ -753,7 +754,7 @@ export async function submitReviewerRound(
 
 /* ------------------------------------------------------------------ autor */
 
-/** A revisão a que o card do autor responde: a nomeada, ou a única esperando correção dele. */
+/** The review the author's card answers: the named one, or the only one waiting for its fix. */
 async function authorReview(authorCardId: string, reviewId?: string): Promise<Review> {
   if (reviewId) {
     const r = await getReview(reviewId);
@@ -774,14 +775,14 @@ async function authorReview(authorCardId: string, reviewId?: string): Promise<Re
 type AuthorAnswer = { id: string; status: AuthorAnswerStatus; commit?: string; reply: string };
 const AUTHOR_ANSWERS: ReadonlySet<string> = new Set<AuthorAnswerStatus>(["fixed", "contested", "wontfix"]);
 
-/** Sugestão ou melhoria que ainda aceita resposta do autor: não foi retirada nem aceita como risco por ninguém. */
+/** A suggestion or improvement that still accepts the author's answer: nobody withdrew it or accepted it as a risk. */
 const answerableSuggestion = (f: Finding): boolean =>
   (f.severity === "suggestion" || f.severity === "improvement") && f.status !== "dropped" && f.status !== "accepted_risk";
 
-/** Dúvida que o autor pode resolver ou explicar: nenhum humano decidiu, e ela segue em pé. */
+/** A question the author can resolve or explain: no human decided it, and it is still standing. */
 const answerableQuestion = (f: Finding): boolean => pendingQuestions([f]).length > 0;
 
-/** "2 corrigido(s), 1 contestado(s), 1 não vai(ão) aplicar" — só o que houve. */
+/** "2 corrigido(s), 1 contestado(s), 1 não vai(ão) aplicar" — only what happened. */
 function answerCounts(items: AuthorAnswer[]): string {
   const n = (status: AuthorAnswerStatus) => items.filter((it) => it.status === status).length;
   const parts = [`${n("fixed")} corrigido(s)`, `${n("contested")} contestado(s)`];
@@ -790,16 +791,17 @@ function answerCounts(items: AuthorAnswer[]): string {
 }
 
 /**
- * A resposta do autor (`vibehub_review_respond`). Só o card do autor chama.
- *  - Na rodada de correção (`fixing`), idempotente pela rodada: responde ao que bloqueia (corrigido ou
- *    contestado) e, se quiser, às sugestões (corrigida, contestada ou `wontfix` com o motivo); abre a
- *    rodada seguinte, com o delta ao revisor.
- *  - Fora dela, com a revisão aberta (inclusive em `ready`, quando alguém mandou a IA aplicar as
- *    sugestões): só as respostas a SUGESTÕES valem — fecham o item no painel, sem abrir rodada e sem
- *    mandar nada a ninguém (um push que tenha vindo junto a conferência do GitHub pega). A mesma
- *    resposta de novo não grava outra fala.
- * Resposta a id desconhecido, a item fechado ou a bloqueante fora da rodada vai ao log, sem derrubar o
- * resto. `wontfix` em bloqueante e contestar/não aplicar sem motivo são recusados antes de mexer em nada.
+ * The author's answer (`vibehub_review_respond`). Only the author's card calls it.
+ *  - In the fix round (`fixing`), idempotent per round: answers what blocks (fixed or disputed) and,
+ *    optionally, the suggestions (fixed, disputed or `wontfix` with the reason); opens the next round,
+ *    with the delta to the reviewer.
+ *  - Outside it, with the review open (including `ready`, when somebody told the AI to apply the
+ *    suggestions): only the answers to SUGGESTIONS count — they close the item on the panel, without
+ *    opening a round and without sending anything to anybody (a push that came along is caught by the
+ *    GitHub check). The same answer again does not record another message.
+ * An answer to an unknown id, to a closed item or to a blocking one outside the round goes to the log,
+ * without bringing down the rest. `wontfix` on a blocking one and disputing/not applying without a reason
+ * are refused before anything is touched.
  */
 export async function submitAuthorResponse(
   authorCardId: string,
@@ -812,8 +814,8 @@ export async function submitAuthorResponse(
     throw new Error(`status inválido (${bad.map((it) => it.id).join(", ")}): o autor responde fixed, contested ou wontfix`);
   }
   const headSha = assertHeadSha(payload.headSha);
-  // Sugestão pedida que fica sem resposta perde a marca no veredito seguinte do revisor e volta a ser
-  // escolha no painel: a pessoa a mandava de novo. Quem respondeu, responde a todas as que recebeu.
+  // A requested suggestion left unanswered loses its mark on the reviewer's next verdict and becomes a choice
+  // on the panel again: the person would send it again. Whoever answered answers all the ones they got.
   const answeredIds = new Set(payload.items.map((it) => it.id));
   const unanswered = review.findings.filter((f) => f.requested && f.status === "open" && !answeredIds.has(f.id)).map((f) => f.id);
   if (unanswered.length) {
@@ -823,8 +825,8 @@ export async function submitAuthorResponse(
     );
   }
   const fresh = (r: Review) => r.phase === "fixing" && payload.round === r.round && r.lastRespondRound !== payload.round;
-  // A melhoria é a vez do autor: a rodada que fechasse sem resposta a ela a deixaria pendente, e a fase
-  // seguinte daria a vez ao autor de novo pela mesma melhoria. Quem responde a rodada responde a todas.
+  // The improvement is the author's turn: a round that closed without answering it would leave it pending,
+  // and the next phase would give the turn to the author again for the same improvement. Whoever answers the round answers them all.
   const skipped = fresh(review) ? pendingImprovements(review.findings).filter((f) => !answeredIds.has(f.id)).map((f) => f.id) : [];
   if (skipped.length) {
     throw new Error(
@@ -832,7 +834,7 @@ export async function submitAuthorResponse(
         "(fixed com o commit, ou wontfix com o motivo)",
     );
   }
-  // Na rodada vale o que bloqueia e as sugestões; fora dela, só as sugestões. O resto vai ao log.
+  // In the round, what blocks and the suggestions count; outside it, only the suggestions. The rest goes to the log.
   const answerableIn = (r: Review) => {
     const round = fresh(r);
     const known = new Map(r.findings.map((f) => [f.id, f]));
@@ -841,8 +843,8 @@ export async function submitAuthorResponse(
       return !!f && (answerableSuggestion(f) || answerableQuestion(f) || (round && actionableForAuthor(f)));
     };
   };
-  // As recusas valem antes da mutação, e só sobre o que ela vai aceitar: uma resposta mal formada a
-  // um item que seria ignorado não derruba as outras.
+  // The refusals apply before the mutation, and only to what it will accept: a malformed answer to an
+  // item that would be ignored does not bring down the others.
   applyAuthorResponses(review, payload.items.filter(answerableIn(review)));
 
   let opened = false as boolean;
@@ -851,7 +853,7 @@ export async function submitAuthorResponse(
     const round = fresh(r);
     const known = new Map(r.findings.map((f) => [f.id, f]));
     const answerable = answerableIn(r);
-    // Fora da rodada, a mesma resposta de novo não grava outra fala.
+    // Outside the round, the same answer again does not record another message.
     const changed = (it: AuthorAnswer) => {
       const f = known.get(it.id)!;
       return f.status !== it.status || f.authorReply !== it.reply || (it.commit !== undefined && f.commit !== it.commit);
@@ -859,8 +861,8 @@ export async function submitAuthorResponse(
     const allowed = payload.items.filter((it) => answerable(it) && (round || changed(it)));
     const ignored = payload.items.filter((it) => !answerable(it)).map((it) => it.id);
     if (!round && allowed.length === 0 && ignored.length === 0) return;
-    // Fora da rodada, resposta a DÚVIDA com a revisão esperando decisão: o revisor confere (rodada
-    // seguinte, ou conferência extra da última) em vez de a dúvida ficar parada esperando gente.
+    // Outside the round, an answer to a QUESTION with the review waiting for a decision: the reviewer checks
+    // (next round, or an extra check of the last one) instead of the question sitting there waiting for people.
     const doubts = !round && r.phase === "reviewing" && r.lastSubmitRound === r.round &&
       allowed.some((it) => known.get(it.id)!.severity === "question");
     if (allowed.length || round) {
@@ -897,12 +899,12 @@ export async function submitAuthorResponse(
 /* ------------------------------------------------------------------ humano */
 
 /**
- * Uma pessoa decidiu, no painel, o que fazer com sugestões do revisor (`POST
- * /api/reviews/:id/suggestions`; quem pode é a rota): `apply` vai ao autor aplicar, `skip` sai da lista
- * ("não fazer" — retirada por decisão humana, como o `drop` de uma dúvida). Só sugestão em aberto, e
- * nenhuma nos dois lados; revisão encerrada recusa. A entrega ao autor vem antes de qualquer registro:
- * se ela falhar, nada muda e o motivo volta. O autor aplica, empurra e responde item a item
- * (`fixed`/`wontfix`); o push depois do pronto volta a revisão ao revisor, que confere.
+ * A person decided, on the panel, what to do with the reviewer's suggestions (`POST
+ * /api/reviews/:id/suggestions`; who may is the route's call): `apply` goes to the author to apply, `skip`
+ * leaves the list ("não fazer" — withdrawn by human decision, like a question's `drop`). Only open
+ * suggestions, and none on both sides; a closed review refuses. The delivery to the author comes before any
+ * record: if it fails, nothing changes and the reason comes back. The author applies, pushes and answers item
+ * by item (`fixed`/`wontfix`); the push after ready sends the review back to the reviewer, who checks.
  */
 export async function decideSuggestions(
   reviewId: string, choice: { apply?: string[]; skip?: string[] }, by: string,
@@ -917,8 +919,8 @@ export async function decideSuggestions(
   if (all.length === 0 || all.some((id) => !open.has(id)) || apply.some((id) => skip.includes(id))) {
     throw new Error("sem_sugestao: escolha sugestões em aberto da revisão, cada uma para fazer ou para não fazer");
   }
-  // Já pedida e o autor ainda não respondeu: mandar de novo só duplica o trabalho dele. "Não fazer"
-  // continua valendo (a pessoa mudou de ideia).
+  // Already requested and the author has not answered yet: sending it again only duplicates their work.
+  // "Não fazer" still applies (the person changed their mind).
   const again = review.findings.filter((f) => apply.includes(f.id) && f.requested).map((f) => f.id);
   if (again.length) {
     throw new Error(`ja_pedida: ${again.join(", ")} já ${again.length === 1 ? "foi pedida" : "foram pedidas"} ao autor, que ainda não respondeu`);
@@ -935,7 +937,7 @@ export async function decideSuggestions(
         if (!skip.includes(f.id) || f.status !== "open") continue;
         f.status = "dropped";
         f.humanDecision = "drop";
-        // Retirada, ela não está mais com o autor (mesmo que tenha sido pedida antes).
+        // Withdrawn, it is no longer with the author (even if it was requested before).
         delete f.requested;
       }
       note(r, "human", `Não fazer ${skip.length === 1 ? "a sugestão" : "as sugestões"} ${skip.join(", ")}.`, {
@@ -950,8 +952,8 @@ export async function decideSuggestions(
       });
     }
   });
-  // "Não fazer" a última sugestão de uma revisão que o revisor JÁ aprovou: nada ficou em pé e o fim
-  // de turno que dispararia o merge já passou. Sem esperar: é o clique de uma pessoa, não o CI.
+  // "Não fazer" on the last suggestion of a review the reviewer ALREADY approved: nothing is left standing
+  // and the turn ending that would fire the merge has already passed. No waiting: it is a person's click, not CI.
   if (skip.length && apply.length === 0 && autoMergeEligible(after) && (await reviewerApproved(after))) {
     void autoMerge(after);
   }
@@ -964,18 +966,18 @@ async function reviewerApproved(r: Review): Promise<boolean> {
   return card?.declaredState === "ready" && card.status !== "working";
 }
 
-/** Só "fazer": as sugestões escolhidas vão ao autor ({@link decideSuggestions}). */
+/** "Fazer" only: the chosen suggestions go to the author ({@link decideSuggestions}). */
 export async function requestSuggestions(reviewId: string, findingIds: string[], by: string): Promise<Review> {
   return await decideSuggestions(reviewId, { apply: findingIds }, by);
 }
 
 /**
- * A decisão do revisor HUMANO sobre um item: uma dúvida (`question`) ou um bloqueante travado.
- *  - dúvida: `block` (passa a bloquear), `drop` (retirada) ou `accept_risk`; `keep` não vale aqui.
- *  - bloqueante: `keep`/`block` (segue bloqueando; o dev resolve), `accept_risk` ou `drop`.
- * Em `reviewing` com a rodada do revisor já entregue, a fase é recalculada (autor, Approve ou impasse).
- * Em `impasse` com a rodada do revisor entregue, de qualquer motivo, sai para `ready` quando o último
- * item travado é liberado; sem ela, só grava (a saída é o `retryReview`). Fora disso, só grava.
+ * The HUMAN reviewer's decision on an item: a question (`question`) or a stuck blocking one.
+ *  - question: `block` (becomes blocking), `drop` (withdrawn) or `accept_risk`; `keep` does not apply here.
+ *  - blocking: `keep`/`block` (keeps blocking; the dev resolves it), `accept_risk` or `drop`.
+ * In `reviewing` with the reviewer's round already delivered, the phase is recomputed (author, Approve or impasse).
+ * In `impasse` with the reviewer's round delivered, for whatever reason, it moves to `ready` when the last
+ * stuck item is released; without it, it only records (the way out is `retryReview`). Otherwise, it only records.
  */
 export async function decideQuestion(reviewId: string, findingId: string, decision: Decision, by: string): Promise<Review> {
   if (!["block", "drop", "keep", "accept_risk"].includes(decision)) throw new Error(`decisão inválida: ${String(decision)}`);
@@ -1000,19 +1002,19 @@ export async function decideQuestion(reviewId: string, findingId: string, decisi
     note(r, "human", `Decisão humana em ${findingId}: ${said[decision]}.`, { items: [{ id: f.id, status: f.status }], by });
 
     if (r.phase === "reviewing") {
-      // No meio da rodada do revisor, quem fecha a fase é o submit dele.
+      // In the middle of the reviewer's round, what closes the phase is their submit.
       if (r.lastSubmitRound !== r.round) return;
       const next = phaseAfterReviewerRound(r);
       if (next.phase === r.phase) return;
       r.phase = next.phase;
       if (next.impasseReason) r.impasseReason = next.impasseReason;
     } else if (r.phase === "impasse") {
-      // Sem a conferência do revisor nesta rodada, o "corrigido" do autor é palavra dele: ir a ready
-      // aqui pediria Approve de código que ninguém olhou (e um "fixed" sem commit mergearia o bug). A
-      // decisão fica gravada; a saída é o "tentar de novo", e o submit do revisor a honra.
+      // Without the reviewer's check in this round, the author's "fixed" is their word: going to ready
+      // here would ask for an Approve of code nobody looked at (and a "fixed" without a commit would merge
+      // the bug). The decision stays recorded; the way out is "tentar de novo", and the reviewer's submit honours it.
       if (r.lastSubmitRound !== r.round) return;
-      // Com a rodada conferida, o impasse (de qualquer motivo) sai pelo último item liberado;
-      // "manter" segura (o dev resolve na mão; o resto sai pelo retryReview).
+      // With the round checked, the impasse (for whatever reason) leaves with the last released item;
+      // "manter" holds it (the dev resolves it by hand; the rest leaves through retryReview).
       if (phaseAfterReviewerRound(r).phase !== "ready") return;
       r.phase = "ready";
       r.impasseReason = undefined;
@@ -1027,15 +1029,15 @@ export async function decideQuestion(reviewId: string, findingId: string, decisi
 }
 
 /**
- * "Tentar de novo" do painel: a saída de um impasse que não é de rodadas (envio que falhou, IA que
- * não respondeu), do Approve que não chegou e de uma vez parada. Zera os lembretes, limpa o motivo e
- * devolve a vez a quem deve: `reviewing` se a rodada do revisor não foi entregue, senão `fixing`; em
- * `ready` reenvia o pedido de Approve.
- * Em `reviewing`/`fixing` esperando a ferramenta daquele lado, reenvia o texto da vez sem mudar a fase:
- * o fim de turno que o orquestrador não julga (pessoa usando o card, agente que declarou needs_me) não
- * tem prazo, e sem isto a única saída de uma IA parada seria cancelar a revisão inteira.
- * Não tira ninguém de Paused (quem pausou despausa e tenta de novo). Qualquer outro estado (inclusive
- * `reviewing` esperando a decisão humana das dúvidas) lança `nada_a_tentar`. Quem pode é a rota.
+ * The panel's "Tentar de novo": the way out of an impasse that is not about rounds (a send that failed, an
+ * AI that did not answer), of the Approve that did not arrive and of a stalled turn. Resets the reminders,
+ * clears the reason and gives the turn back to whoever is due: `reviewing` if the reviewer's round was not
+ * delivered, otherwise `fixing`; in `ready` it resends the Approve request.
+ * In `reviewing`/`fixing` waiting for that side's tool, it resends the turn's text without changing the phase:
+ * the turn ending the orchestrator does not judge (a person using the card, an agent that declared needs_me)
+ * has no deadline, and without this the only way out of a stalled AI would be cancelling the whole review.
+ * Does not take anybody out of Paused (whoever paused unpauses and tries again). Any other state (including
+ * `reviewing` waiting for the human decision on questions) throws `nada_a_tentar`. Who may is the route's call.
  */
 export async function retryReview(reviewId: string, by: string): Promise<Review> {
   let side = null as Side | "approve" | "gate" | null;
@@ -1044,13 +1046,13 @@ export async function retryReview(reviewId: string, by: string): Promise<Review>
       side = "approve";
     } else if (r.phase === "ready" && r.mergeGate?.sha === r.reviewedSha && r.mergeGate?.state === "failed") {
       side = "gate";
-      // Ordem humana: a conta de voltas sozinhas recomeça (um vermelho de novo volta ao autor).
+      // A human order: the count of automatic retries starts over (a red again goes back to the author).
       r.mergeGate.failures = 0;
       note(r, "human", "Tentar de novo: os testes do merge rodam de novo no commit aprovado.", { by });
       return;
     } else if (r.phase === "impasse" && r.impasseReason !== "rodadas" && r.impasseReason !== HEAD_MOVED) {
-      // "rodadas" e "push depois do pronto" não têm vez a devolver (a última rodada já foi): o revisor
-      // humano decide os itens, ou cancela e pede uma revisão nova.
+      // "rodadas" and "push depois do pronto" have no turn to give back (the last round is over): the human
+      // reviewer decides the items, or cancels and asks for a new review.
       r.phase = r.lastSubmitRound !== r.round ? "reviewing" : "fixing";
       side = r.phase === "reviewing" ? "reviewer" : "author";
     } else if (awaitingTool(r, "reviewer")) {
@@ -1076,20 +1078,19 @@ export async function retryReview(reviewId: string, by: string): Promise<Review>
 }
 
 /**
- * A revisão fechou (`merged` ou `cancelled`): o card do revisor vai para `done`, a mesma escrita do
- * arrastar no board. Escondido do board, ninguém o veria nem apagaria, e cada revisão deixaria uma
- * worktree (mais o que a IA instalou para testar) no runner; em `done`, a hibernação e a retenção
- * cuidam dele como de qualquer card. O histórico da revisão (achados e conversa) mora no store das
- * revisões, não no card. Nunca lança: um card que sumiu, ou uma escrita que falhou, custa a faxina,
- * não o fechamento da revisão.
+ * The review closed (`merged` or `cancelled`): the reviewer's card goes to `done`, the same write as dragging
+ * on the board. Hidden from the board, nobody would see or delete it, and each review would leave a worktree
+ * (plus whatever the AI installed to test) on the runner; in `done`, hibernation and retention take care of it
+ * like any card. The review's history (findings and conversation) lives in the reviews store, not on the card.
+ * Never throws: a card that is gone, or a write that failed, costs the cleanup, not closing the review.
  */
 async function retireReviewerCard(r: Review): Promise<void> {
   await moveCardToDone(r, r.reviewerCardId, "reviewer card");
 }
 
 /**
- * Leva um card da revisão para `done`, a mesma escrita do arrastar no board. Card que sumiu ou que já
- * está lá: nada. Nunca lança: a revisão já fechou, e uma escrita que falhou custa só a coluna.
+ * Moves a review card to `done`, the same write as dragging on the board. A card that is gone or already
+ * there: nothing. Never throws: the review is already closed, and a write that failed costs only the column.
  */
 async function moveCardToDone(r: Review, cardId: string, what: string): Promise<void> {
   try {
@@ -1103,9 +1104,9 @@ async function moveCardToDone(r: Review, cardId: string, what: string): Promise<
 }
 
 /**
- * Cancela a revisão, de qualquer fase ativa. `cancelled` não é ativa (`activeReviewFor`), então o
- * mesmo PR pode ser revisado de novo. O card do revisor vai para `done` (`retireReviewerCard`); o
- * histórico fica na revisão.
+ * Cancels the review, from any active phase. `cancelled` is not active (`activeReviewFor`), so the same PR
+ * can be reviewed again. The reviewer's card goes to `done` (`retireReviewerCard`); the history stays in
+ * the review.
  */
 export async function cancelReview(reviewId: string, by: string): Promise<Review> {
   const after = await mutateReview(reviewId, (r) => {
@@ -1121,8 +1122,8 @@ export async function cancelReview(reviewId: string, by: string): Promise<Review
 }
 
 /**
- * Cancela a revisão por um motivo do SISTEMA (o card de um lado foi excluído, o PR foi fechado no
- * GitHub): a fala no log e a linha de auditoria. Idempotente — revisão já encerrada fica como está.
+ * Cancels the review for a SYSTEM reason (one side's card was deleted, the PR was closed on GitHub): the
+ * message in the log and the audit line. Idempotent — an already closed review stays as it is.
  */
 async function cancelBySystem(
   reviewId: string, text: string, audit: Record<string, unknown>,
@@ -1141,11 +1142,11 @@ async function cancelBySystem(
 }
 
 /**
- * Um card saiu do board (o botão de excluir, a retenção de `done`, o projeto excluído). Toda revisão
- * ATIVA em que ele é o autor ou o revisor é cancelada: sem o card, nenhum relay chega e o "tentar de
- * novo" não teria para onde ir. Devolve os cards de revisor das revisões em que ele era o AUTOR, de
- * qualquer fase, para quem exclui levá-los junto: sem o autor, o card do revisor é só uma worktree
- * escondida. Idempotente.
+ * A card left the board (the delete button, `done` retention, the project deleted). Every ACTIVE review in
+ * which it is the author or the reviewer is cancelled: without the card, no relay arrives and "tentar de novo"
+ * would have nowhere to go. Returns the reviewer cards of the reviews in which it was the AUTHOR, of any phase,
+ * so whoever deletes takes them along: without the author, the reviewer's card is just a hidden worktree.
+ * Idempotent.
  */
 export async function closeReviewsOfRemovedCard(cardId: string, by?: string): Promise<string[]> {
   const asAuthor = await listReviewsForCards([cardId]);
@@ -1161,14 +1162,14 @@ export async function closeReviewsOfRemovedCard(cardId: string, by?: string): Pr
 /* ------------------------------------------------------------------ merge humano */
 
 /**
- * O PR andou depois do `ready`: o botão de merge achou o PR num commit que não é o revisado
- * (`cause: "merge"`), ou o turno do autor terminou com um push novo no PR (`cause: "push"`,
- * {@link checkAuthorPush}). Numa mutação só, a revisão volta a `reviewing` e o revisor recebe o delta
- * (desde o `reviewedSha` aprovado) pelo mesmo relay das outras rodadas: na rodada seguinte, ou — sem
- * rodada sobrando — numa conferência extra da última (um bloqueante achado ali vira impasse pelo teto
- * de rodadas, como sempre). Só age em `ready`: o merge leva
- * minutos (o CI), e uma revisão que andou ou foi cancelada nesse meio fica como está. `headSha` (o
- * head lido) segura uma leitura velha: se a revisão já aprovou esse commit, não há o que reabrir.
+ * The PR moved after `ready`: the merge button found the PR on a commit that is not the reviewed one
+ * (`cause: "merge"`), or the author's turn ended with a new push on the PR (`cause: "push"`,
+ * {@link checkAuthorPush}). In a single mutation, the review goes back to `reviewing` and the reviewer gets
+ * the delta (since the approved `reviewedSha`) through the same relay as the other rounds: in the next round,
+ * or — with no round left — in an extra check of the last one (a blocking finding found there becomes an
+ * impasse through the cap on rounds, as always). It only acts in `ready`: the merge takes
+ * minutes (CI), and a review that moved or was cancelled in between stays as it is. `headSha` (the head
+ * read) holds off a stale read: if the review already approved that commit, there is nothing to reopen.
  */
 export async function reopenAfterHeadMoved(
   reviewId: string, by: string, opts: { cause?: "merge" | "push"; headSha?: string } = {},
@@ -1190,9 +1191,9 @@ export async function reopenAfterHeadMoved(
       r.round += 1;
       note(r, "system", `${why} Rodada ${r.round} de ${MAX_ROUNDS}: o revisor confere o que entrou.`);
     } else {
-      // Sem rodada sobrando, o revisor ainda confere o que entrou (aplicar sugestões depois do pronto
-      // não pode travar o PR): a última rodada reabre para ele. Se achar bloqueante, o teto de rodadas
-      // vale como sempre — impasse.
+      // With no round left, the reviewer still checks what came in (applying suggestions after ready must not
+      // lock the PR): the last round reopens for them. If they find a blocking one, the cap on rounds applies
+      // as always — impasse.
       r.lastSubmitRound = r.round - 1;
       note(r, "system", `${why} Rodada ${r.round} de ${MAX_ROUNDS} (conferência extra): o revisor confere o que entrou.`);
     }
@@ -1204,21 +1205,21 @@ export async function reopenAfterHeadMoved(
 }
 
 /**
- * O PR no GitHub, conferido contra a revisão: o que aconteceu lá FORA do painel, que nenhum clique
- * contou para cá.
- *  - MERGED: mergeado à mão, ou por uma IA pela API — a revisão fecha como mergeada (o mesmo
- *    `markReviewMerged` do botão: aviso nos dois cards, card do revisor para `done`), o PR do card
- *    ganha `mergedAt` e a branch dele sai do GitHub (o trabalho já está na base).
- *  - CLOSED sem merge: a revisão é cancelada (não há mais o que revisar nem mergear).
- *  - OPEN com o head diferente do aprovado, em `ready`: alguém mandou a IA do autor mexer no PR e
- *    ela empurrou — a revisão volta ao revisor na hora ({@link reopenAfterHeadMoved}), sem esperar
- *    o clique de merge para descobrir. Em `fixing`, push é a resposta à lista: nada muda.
- * Só revisão aberta vai ao GitHub. Nunca lança: uma leitura que falha deixa a revisão como está.
+ * The PR on GitHub, checked against the review: what happened there OUTSIDE the panel, which no click
+ * reported here.
+ *  - MERGED: merged by hand, or by an AI through the API — the review closes as merged (the same
+ *    `markReviewMerged` as the button: a notice on both cards, the reviewer's card to `done`), the card's PR
+ *    gets `mergedAt` and its branch leaves GitHub (the work is already in the base).
+ *  - CLOSED without merge: the review is cancelled (there is nothing left to review or merge).
+ *  - OPEN with a head different from the approved one, in `ready`: somebody told the author's AI to change
+ *    the PR and it pushed — the review goes back to the reviewer right away ({@link reopenAfterHeadMoved}),
+ *    without waiting for the merge click to find out. In `fixing`, a push is the answer to the list: nothing changes.
+ * Only an open review goes to GitHub. Never throws: a read that fails leaves the review as it is.
  */
 export async function syncReviewWithGithub(reviewId: string, by = "conferência do GitHub"): Promise<Review | undefined> {
   const r = await getReview(reviewId);
-  // Com o merge do botão em andamento, o PR aparece MERGED antes de o botão fechar a revisão: é ele
-  // quem fecha (com o nome de quem mergeou), não esta conferência.
+  // With the button's merge in progress, the PR shows up MERGED before the button closes the review: it is
+  // the button that closes it (with the name of whoever merged), not this check.
   if (!r || isReviewClosed(r.phase) || merging.has(r.id)) return r;
   const pr = await readPrState(r.cardId, r.prUrl);
   if (!pr || merging.has(r.id)) return r;
@@ -1234,8 +1235,8 @@ export async function syncReviewWithGithub(reviewId: string, by = "conferência 
     if (cancelled) await retireReviewerCard(after);
     return after;
   }
-  // O `gh pr view` leva segundos: se nesse meio alguém gravou um head (o autor ao responder), o dele é
-  // o mais novo — a leitura daqui não o sobrescreve.
+  // `gh pr view` takes seconds: if somebody recorded a head in the meantime (the author on answering), theirs
+  // is the newest — the read from here does not overwrite it.
   const seen = r.prHeadSha === pr.headSha ? r : await mutateReview(r.id, (x) => {
     if (!isReviewClosed(x.phase) && x.prHeadSha === r.prHeadSha) x.prHeadSha = pr.headSha;
   });
@@ -1245,10 +1246,10 @@ export async function syncReviewWithGithub(reviewId: string, by = "conferência 
   return seen;
 }
 
-/** Revisões com merge em andamento (o botão, ou o deliver do responsável): um por vez. */
+/** Reviews with a merge in progress (the button, or the owner's deliver): one at a time. */
 const merging = new Set<string>();
 
-/** Pega a vez do merge desta revisão; false = já há um em andamento. Devolva com {@link releaseMerge}. */
+/** Takes this review's merge turn; false = there is already one in progress. Give it back with {@link releaseMerge}. */
 export function claimMerge(reviewId: string): boolean {
   if (merging.has(reviewId)) return false;
   merging.add(reviewId);
@@ -1259,14 +1260,14 @@ export function releaseMerge(reviewId: string): void {
   merging.delete(reviewId);
 }
 
-/** De quanto em quanto tempo, no máximo, o painel aberto faz o servidor conferir o PR no GitHub. */
+/** How often, at most, an open panel makes the server check the PR on GitHub. */
 const GITHUB_SYNC_MS = 60_000;
 const lastGithubSync = new Map<string, number>();
 
 /**
- * O painel leu a revisão: confere o PR no GitHub em segundo plano, no máximo uma vez por
- * {@link GITHUB_SYNC_MS} por revisão — o painel relê a cada 3 s e um `gh` por leitura seria
- * desperdício. É o que pega um merge feito direto no GitHub mesmo sem nenhum turno do autor.
+ * The panel read the review: checks the PR on GitHub in the background, at most once per
+ * {@link GITHUB_SYNC_MS} per review — the panel rereads every 3 s and one `gh` per read would be
+ * waste. It is what catches a merge done directly on GitHub even without any author turn.
  */
 export function syncReviewSoon(r: Review): void {
   if (isReviewClosed(r.phase)) {
@@ -1280,18 +1281,18 @@ export function syncReviewSoon(r: Review): void {
 }
 
 /**
- * A revisão para a LEITURA do painel, junto de se há merge dela rodando agora (`merging`).
+ * The review for the panel's READ, along with whether a merge of it is running now (`merging`).
  *
- * `merging: false` com a revisão em `ready` é o que faz o painel parar de esperar um merge cuja
- * resposta se perdeu — então a fase que vai junto tem de ser no mínimo tão nova quanto a trava:
- *  - a trava é olhada primeiro e a revisão é relida depois. Um merge que termina entre a primeira
- *    leitura e a trava já gravou `merged` (o merge grava antes de soltar a trava);
- *  - um merge que saiu no GitHub e morreu antes de gravar `merged` (deploy no meio: o `gh pr merge`
- *    roda, o processo morre, a trava vai junto) só aparece no GitHub. Por isso, em `ready` sem merge
- *    rodando, a conferência com o GitHub roda ANTES de responder (no mesmo freio de
- *    {@link GITHUB_SYNC_MS}); o processo novo depois do deploy não tem freio, e a primeira leitura
- *    já devolve `merged`.
- * As outras fases seguem com a conferência em segundo plano ({@link syncReviewSoon}). Nunca lança.
+ * `merging: false` with the review in `ready` is what makes the panel stop waiting for a merge whose
+ * answer got lost — so the phase that goes along has to be at least as new as the lock:
+ *  - the lock is looked at first and the review is reread afterwards. A merge that ends between the first
+ *    read and the lock has already recorded `merged` (the merge records before releasing the lock);
+ *  - a merge that went out on GitHub and died before recording `merged` (a deploy in the middle: `gh pr merge`
+ *    runs, the process dies, the lock goes with it) only shows up on GitHub. That is why, in `ready` with no
+ *    merge running, the GitHub check runs BEFORE answering (under the same throttle of
+ *    {@link GITHUB_SYNC_MS}); the new process after the deploy has no throttle, and the first read
+ *    already returns `merged`.
+ * The other phases go on with the background check ({@link syncReviewSoon}). Never throws.
  */
 export async function reviewForRead(r: Review): Promise<{ review: Review; merging: boolean }> {
   if (merging.has(r.id)) return { review: r, merging: true };
@@ -1307,13 +1308,13 @@ export async function reviewForRead(r: Review): Promise<{ review: Review; mergin
     now = await getReview(r.id);
   }
   const review = now ?? r;
-  // Revisão pronta sem veredito do gate no commit aprovado (pronta antes deste código, ou o gate
-  // morreu num deploy): roda agora, em segundo plano; o painel mostra "rodando" até o fim.
+  // A ready review with no gate verdict on the approved commit (ready before this code, or the gate
+  // died in a deploy): runs it now, in the background; the panel shows "rodando" until the end.
   void checkMergeGate(review.id);
   return { review, merging: merging.has(review.id) };
 }
 
-/** Marca a conferência de agora, se a última foi há mais de {@link GITHUB_SYNC_MS}. Devolve se pode ir. */
+/** Marks the check as happening now, if the last one was more than {@link GITHUB_SYNC_MS} ago. Returns whether it may go. */
 function claimGithubSync(reviewId: string): boolean {
   const now = Date.now();
   if (now - (lastGithubSync.get(reviewId) ?? 0) < GITHUB_SYNC_MS) return false;
@@ -1322,10 +1323,10 @@ function claimGithubSync(reviewId: string): boolean {
 }
 
 /**
- * O fim de turno do card do AUTOR: cada revisão aberta dele é conferida no GitHub — em `ready` sempre
- * (um push ali devolve a revisão ao revisor, e isso tem de aparecer já), nas outras fases no máximo
- * uma vez por {@link GITHUB_SYNC_MS} (lá um push é a resposta à lista; o que importa é pegar um merge
- * ou um fechamento feito por fora). Nunca lança.
+ * The end of the AUTHOR card's turn: each of its open reviews is checked on GitHub — in `ready` always
+ * (a push there sends the review back to the reviewer, and that has to show up at once), in the other phases
+ * at most once per {@link GITHUB_SYNC_MS} (there a push is the answer to the list; what matters is catching a
+ * merge or a close done from outside). Never throws.
  */
 async function checkAuthorPush(cardId: string): Promise<void> {
   for (const r of await listReviewsForCards([cardId])) {
@@ -1337,9 +1338,9 @@ async function checkAuthorPush(cardId: string): Promise<void> {
 }
 
 /**
- * O merge humano saiu: a revisão fecha em `merged` (deixa de ser ativa), os dois cards recebem o
- * aviso e o card do revisor vai para `done`. Grava mesmo se a revisão foi cancelada durante o merge —
- * o PR foi mergeado, e é isso que o painel tem de dizer. Repetir não grava nada nem avisa de novo.
+ * The human merge went out: the review closes as `merged` (stops being active), both cards get the notice
+ * and the reviewer's card goes to `done`. Records even if the review was cancelled during the merge — the
+ * PR was merged, and that is what the panel has to say. Repeating records nothing and does not notify again.
  */
 export async function markReviewMerged(
   reviewId: string, by: string, opts: { outsidePanel?: { headSha: string }; auto?: boolean } = {},
@@ -1351,7 +1352,7 @@ export async function markReviewMerged(
     r.approvePending = undefined;
     r.impasseReason = undefined;
     if (opts.outsidePanel) {
-      // Ninguém clicou no botão: o PR apareceu mergeado no GitHub (à mão, ou por uma IA pela API).
+      // Nobody clicked the button: the PR showed up merged on GitHub (by hand, or by an AI through the API).
       note(r, "system", `Mergeado em ${r.base} fora do painel, direto no GitHub (head ${opts.outsidePanel.headSha.slice(0, 7)}).`);
     } else {
       const head = r.reviewedSha ? ` (head ${r.reviewedSha.slice(0, 7)})` : "";
@@ -1365,14 +1366,14 @@ export async function markReviewMerged(
   lastGithubSync.delete(reviewId);
   if (landed) {
     logger.info({ audit: true, action: "review.merged", review: reviewId, by, auto: opts.auto === true }, "PR review merged");
-    // O card que anexou o PR também o vê mergeado (a linha dele sai). Best-effort: o merge já aconteceu.
+    // The card that attached the PR also sees it merged (its line goes away). Best-effort: the merge already happened.
     if (after.hubCardId) {
       await markCardPrMerged(after.hubCardId, after.base, after.prNumber, Date.now()).catch((err: unknown) =>
         logger.warn({ review: reviewId, card: after.hubCardId, detail: (err as Error).message }, "could not mark the attached PR as merged"));
     }
     await announcePhase(after);
     await retireReviewerCard(after);
-    // "...e concluir o card": o card que deu a ordem, o que anexou o PR ou o do autor quando é o mesmo.
+    // "...e concluir o card": the card that gave the order, the one that attached the PR, or the author's when it is the same.
     if (after.concludeWhenMerged) await moveCardToDone(after, after.hubCardId ?? after.cardId, "ordering card");
   }
   return after;
@@ -1381,10 +1382,10 @@ export async function markReviewMerged(
 /* ------------------------------------------------------------------ fim de turno */
 
 /**
- * Por que este fim de turno NÃO conta como "terminou sem a ferramenta", ou null se conta. O fallback
- * só cobra turnos que o relay abriu; sem origem no evento, estes sinais dizem que o turno era de outra
- * coisa: uma pessoa usando o card agora, o agente que declarou precisar dela, ou uma pergunta/
- * permissão aberta esperando alguém.
+ * Why this turn ending does NOT count as "finished without the tool", or null if it counts. The fallback only
+ * demands turns the relay opened; with no origin on the event, these signals say the turn was about something
+ * else: a person using the card right now, the agent that declared it needs them, or an open question/
+ * permission waiting for somebody.
  */
 async function notJudged(event: CardEvent): Promise<string | null> {
   const card = await getCard(event.cardId);
@@ -1400,18 +1401,18 @@ async function notJudged(event: CardEvent): Promise<string | null> {
 }
 
 /**
- * Um card terminou o turno. Se for um lado que a revisão esperava (revisor em `reviewing` sem o submit
- * da rodada, autor em `fixing` sem a resposta) e o turno não é de outra coisa (`notJudged`), é
- * "terminou sem chamar a ferramenta": a primeira vez reenvia o texto da vez com o lembrete na frente
- * (sem tirar ninguém de Paused); a segunda vira impasse "IA não respondeu".
- * A decisão é tomada dentro da mutação, então dois fins de turno juntos não lembram duas vezes.
+ * A card finished its turn. If it is a side the review was waiting for (reviewer in `reviewing` without the
+ * round's submit, author in `fixing` without the answer) and the turn is not about something else (`notJudged`),
+ * it is "finished without calling the tool": the first time it resends the turn's text with the reminder in
+ * front (without taking anybody out of Paused); the second becomes the impasse "IA não respondeu".
+ * The decision is taken inside the mutation, so two turn endings together do not remind twice.
  */
 async function onTurnFinished(event: CardEvent): Promise<void> {
   const cardId = event.cardId;
   const waiting: { id: string; side: Side }[] = [];
   const asReviewer = await reviewByReviewerCard(cardId);
-  // O revisor terminou o turno do Approve (o prompt manda reportar `ready` no fim): é a vez do merge
-  // automático, se nada ficou em pé. Fora do caminho da ferramenta dele — aqui ninguém espera o CI.
+  // The reviewer finished the Approve turn (the prompt says to report `ready` at the end): it is the turn of
+  // the automatic merge, if nothing was left standing. Outside the path of their tool — here nobody waits for CI.
   if (asReviewer?.phase === "ready" && event.state === "ready") await autoMerge(asReviewer);
   if (asReviewer && awaitingTool(asReviewer, "reviewer")) waiting.push({ id: asReviewer.id, side: "reviewer" });
   for (const r of await listReviewsForCards([cardId])) {
@@ -1446,10 +1447,10 @@ async function onTurnFinished(event: CardEvent): Promise<void> {
 }
 
 /**
- * Liga o orquestrador ao feed de eventos dos cards (uma vez, no boot). O listener não lança e não
- * bloqueia: só agenda o julgamento (e a conferência do push do autor depois do pronto) para depois de
- * uma folga curta — a chamada da ferramenta que chegou no mesmo turno ganha — e engole qualquer erro
- * com um warn. Devolve o unsubscribe.
+ * Hooks the orchestrator to the cards' event feed (once, at boot). The listener does not throw and does not
+ * block: it only schedules the judgement (and the check of the author's push after ready) for after a short
+ * grace period — the tool call that arrived in the same turn wins — and swallows any error with a warn.
+ * Returns the unsubscribe.
  */
 export function startReviewOrchestrator(opts: { graceMs?: number } = {}): () => void {
   const graceMs = opts.graceMs ?? TURN_GRACE_MS;
@@ -1479,9 +1480,9 @@ export function startReviewOrchestrator(opts: { graceMs?: number } = {}): () => 
 }
 
 /**
- * Resposta curta das ferramentas MCP: se a rodada pedida está registrada, onde a revisão está e o que
- * a IA faz agora. Uma rodada que não pegou (errada, revisão em outra fase) diz qual é a vez de verdade,
- * em vez de um "ok" que deixaria a IA achar que entregou.
+ * Short answer of the MCP tools: whether the requested round is recorded, where the review is and what the
+ * AI does now. A round that did not take (wrong, review in another phase) says whose turn it really is,
+ * instead of an "ok" that would make the AI think it delivered.
  */
 export function reviewToolAnswer(r: Review, side: Side, askedRound: number): Record<string, unknown> {
   const registered = side === "reviewer" ? r.lastSubmitRound === askedRound : r.lastRespondRound === askedRound;
@@ -1492,7 +1493,7 @@ export function reviewToolAnswer(r: Review, side: Side, askedRound: number): Rec
     next = r.lastSubmitRound === r.round ? "esperando o revisor humano decidir as dúvidas" : "a vez é do revisor";
   } else if (r.phase === "fixing") next = "a vez é do autor";
   else if (r.phase === "ready") {
-    // O motivo real de o merge não sair sozinho: a IA repassa isso à pessoa.
+    // The real reason the merge does not go out on its own: the AI passes this on to the person.
     if (r.approvePending) next = "pronto, mas o Approve do revisor não chegou ao GitHub: o merge espera o 'tentar de novo' do painel";
     else if (r.autoMergeFailedRound === r.round) next = "pronto; o merge automático falhou nesta rodada: fica para o merge humano, pelo botão do responsável";
     else if (autoMergeEligible(r)) {
