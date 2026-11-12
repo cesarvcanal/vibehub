@@ -1,8 +1,5 @@
-import { config } from "../../config/env.js";
-import { secretGet } from "../../secrets/vault.js";
-import { OPENAI_KEY } from "../transcribe/transcribe.js";
 import { logger } from "../../utils/logger.js";
-import { VoiceLiveError, upstreamFailure } from "./live.js";
+import { VoiceLiveError, takeSlot, upstreamFailure, voiceApiKey } from "./live.js";
 
 /**
  * READ ALOUD — the speaker button under a finished answer in a card's chat, like ChatGPT's.
@@ -32,13 +29,9 @@ export const SPEECH_TIMEOUT_MS = 30_000;
  */
 export const SPEECH_PER_MINUTE = 40;
 
-async function speechApiKey(): Promise<string | null> {
-  return config.voiceLive.apiKey || (await secretGet(OPENAI_KEY)) || null;
-}
-
 /** Whether the server can read answers aloud — a key is reachable. Never the key itself. */
 export async function speechAvailable(): Promise<boolean> {
-  return Boolean(await speechApiKey());
+  return Boolean(await voiceApiKey());
 }
 
 /** The text as sent by the browser, or a 400. PURE. */
@@ -48,18 +41,8 @@ export function validateSpeechText(text: unknown): string {
   return text.trim();
 }
 
+/** Piece timestamps per user, for {@link SPEECH_PER_MINUTE}. */
 const recent = new Map<string, number[]>();
-
-/** Records one piece for `user`, or throws 429 past the ceiling. Exported for tests. */
-export function takeSpeechSlot(user: string, now: number = Date.now()): void {
-  const kept = (recent.get(user) ?? []).filter((at) => now - at < 60_000);
-  if (kept.length >= SPEECH_PER_MINUTE) {
-    recent.set(user, kept);
-    throw new VoiceLiveError(429, "too many read-aloud requests — wait a minute");
-  }
-  kept.push(now);
-  recent.set(user, kept);
-}
 
 export interface SynthesizeOptions {
   user: string;
@@ -75,9 +58,9 @@ export interface SynthesizeOptions {
  */
 export async function synthesizeSpeech(text: unknown, opts: SynthesizeOptions): Promise<ReadableStream<Uint8Array>> {
   const input = validateSpeechText(text);
-  const apiKey = await speechApiKey();
+  const apiKey = await voiceApiKey();
   if (!apiKey) throw new VoiceLiveError(503, "read aloud is not configured — set an OpenAI key");
-  takeSpeechSlot(opts.user);
+  takeSlot(recent, opts.user, SPEECH_PER_MINUTE, "too many read-aloud requests — wait a minute", Date.now());
 
   const signals = [AbortSignal.timeout(SPEECH_TIMEOUT_MS)];
   if (opts.signal) signals.push(opts.signal);

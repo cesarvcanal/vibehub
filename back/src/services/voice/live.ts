@@ -72,13 +72,14 @@ export interface VoiceLiveStatus {
   model: string;
 }
 
-async function liveApiKey(): Promise<string | null> {
+/** The OpenAI key the voice features use (live sessions and read-aloud): env first, then the vault. */
+export async function voiceApiKey(): Promise<string | null> {
   return config.voiceLive.apiKey || (await secretGet(OPENAI_KEY)) || null;
 }
 
 export async function voiceLiveStatus(): Promise<VoiceLiveStatus> {
   const enabled = config.voiceLive.enabled;
-  return { enabled, available: enabled && Boolean(await liveApiKey()), model: LIVE_MODEL };
+  return { enabled, available: enabled && Boolean(await voiceApiKey()), model: LIVE_MODEL };
 }
 
 /** The offer as sent by the browser, or a 400. PURE. */
@@ -92,15 +93,23 @@ export function validateOffer(sdp: unknown): string {
 /** Creation timestamps per user, for {@link CREATES_PER_MINUTE}. In memory: a POC on one process. */
 const recentCreates = new Map<string, number[]>();
 
-/** Records one creation for `user`, or throws 429 past the ceiling. Exported for tests. */
-export function takeCreateSlot(user: string, now: number = Date.now()): void {
-  const recent = (recentCreates.get(user) ?? []).filter((at) => now - at < 60_000);
-  if (recent.length >= CREATES_PER_MINUTE) {
-    recentCreates.set(user, recent);
-    throw new VoiceLiveError(429, "too many voice sessions — wait a minute");
+/**
+ * Records one call for `user` in `log` (timestamps per user, last minute), or throws 429 with
+ * `refusal` when `perMinute` calls are already there.
+ */
+export function takeSlot(log: Map<string, number[]>, user: string, perMinute: number, refusal: string, now: number): void {
+  const recent = (log.get(user) ?? []).filter((at) => now - at < 60_000);
+  if (recent.length >= perMinute) {
+    log.set(user, recent);
+    throw new VoiceLiveError(429, refusal);
   }
   recent.push(now);
-  recentCreates.set(user, recent);
+  log.set(user, recent);
+}
+
+/** Records one creation for `user`, or throws 429 past the ceiling. Exported for tests. */
+export function takeCreateSlot(user: string, now: number = Date.now()): void {
+  takeSlot(recentCreates, user, CREATES_PER_MINUTE, "too many voice sessions — wait a minute", now);
 }
 
 export function resetCreateSlots(): void {
@@ -150,7 +159,7 @@ export interface CreateLiveSessionOptions {
 export async function createLiveSession(offer: unknown, opts: CreateLiveSessionOptions): Promise<LiveSessionAnswer> {
   if (!config.voiceLive.enabled) throw new VoiceLiveError(404, "voice mode is disabled");
   const sdp = validateOffer(offer);
-  const apiKey = await liveApiKey();
+  const apiKey = await voiceApiKey();
   if (!apiKey) throw new VoiceLiveError(503, "voice mode is not configured — set VIBEHUB_VOICE_OPENAI_API_KEY");
   takeCreateSlot(opts.user);
 
