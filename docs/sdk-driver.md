@@ -457,7 +457,7 @@ gerada no instante da troca termina no nível antigo (o nível é parâmetro de 
   fila e subida do CLI incluídas); a que não começou a escrever até lá é recusada e **nunca grava
   depois**. A que começou termina nos prazos das próprias idas. Se o stream cai enquanto a troca
   espera o CLI dele e uma mensagem nova abre outro nesse meio tempo, o novo nasceu no nível antigo
-  (o `EFFORT` é lido ao nascer, fora da fila): a troca é respondida como não aplicada, e o back cai
+  (o `currentEffort` é lido ao nascer, fora da fila): a troca é respondida como não aplicada, e o back cai
   no reinício. Sem stream no lugar, o próximo nasce no nível novo e a troca vale. O back espera
   (`EFFORT_ACK_TIMEOUT_MS`, 25 s: 12 s + escrita 4 s + leitura 4 s, mais folga) e só então
   `applySessionChange` responde `live` e a tela diz "já valendo". Recusa, prazo vencido ou driver

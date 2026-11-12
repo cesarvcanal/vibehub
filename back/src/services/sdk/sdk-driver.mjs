@@ -65,7 +65,7 @@ const MODEL = argOf("--model");
 // The card's reasoning level (whitelisted by the back before it reaches this argv). Kept, not just
 // forwarded: the end of an `ultrathink` turn gives the session back THIS level (see clearUltra).
 // And it CHANGES: a switch in the pill arrives as `set_effort` and goes into the live session.
-let EFFORT = argOf("--effort");
+let currentEffort = argOf("--effort");
 // Mirror of `parseGateMode` in protocol.ts: anything unrecognised falls back to the STRICTER mode.
 const GATE_MODE = argOf("--permission-gate") === "same-as-terminal" ? "same-as-terminal" : "ask-sensitive";
 /* ------------------------------------------------------------- output */
@@ -454,7 +454,7 @@ function baseOptions() {
     canUseTool,
   };
   if (MODEL) opts.model = MODEL;
-  if (EFFORT) opts.effort = EFFORT;
+  if (currentEffort) opts.effort = currentEffort;
   return opts;
 }
 
@@ -619,7 +619,7 @@ function mainSessionEffort() {
     const said = currentQuery ? await sessionEffort(currentQuery) : undefined;
     if (said) return said;
     if (currentQuery && ultraRaised && "effortLevel" in ultraRaised) return ultraRaised.effortLevel;
-    return EFFORT ?? undefined;
+    return currentEffort ?? undefined;
   });
 }
 
@@ -1555,9 +1555,9 @@ async function clearUltra() {
     const { effortLevel: _keywordEffort, ...otherKeys } = raised;
     const give = Object.fromEntries(Object.keys(otherKeys).map((key) => [key, null]));
     const givesEffortBack = "effortLevel" in raised;
-    if (givesEffortBack && EFFORT) give.effortLevel = EFFORT;
+    if (givesEffortBack && currentEffort) give.effortLevel = currentEffort;
     if (Object.keys(give).length > 0) await withDeadline(handle.applyFlagSettings(give), EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR);
-    if (givesEffortBack && !EFFORT) await withDeadline(restoreAccountEffort(handle, isLatestWrite), EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR);
+    if (givesEffortBack && !currentEffort) await withDeadline(restoreAccountEffort(handle, isLatestWrite), EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR);
   } catch { /* the stream is gone, and a dead stream has no effort to give back */ }
 }
 
@@ -1609,14 +1609,14 @@ async function restoreAccountEffort(handle, isLatestWrite) {
  * `null` is "Usar a inteligência padrão da conta": the same live switch, onto the account's level
  * (restoreAccountEffort). It used to restart the session — killing whatever the turn was doing.
  *
- * From here on EFFORT is this level: a new stream starts on it, and an `ultrathink` turn gives it
+ * From here on currentEffort is this level: a new stream starts on it, and an `ultrathink` turn gives it
  * back at its end. A switch made WHILE an `ultrathink`/`ultracode` turn runs wins over the keyword:
  * it is the newer choice, and holding `max` until the turn ended left the pill saying one level with
  * the session on another. Once the session took it, the level leaves `ultraRaised`, so the give-back
  * clears only `ultracode`.
  *
  * Answers what goes into the `effort_ack`: `{ effort }` = the level the session says the next call
- * uses (absent when nobody knows), `{ error }` = it was not applied, and nothing changed here: EFFORT
+ * uses (absent when nobody knows), `{ error }` = it was not applied, and nothing changed here: currentEffort
  * only takes the level on the paths that applied it. `switching.abandoned` = its start deadline
  * already answered for it (queueEffortSwitch); `switching.writing` = past that point, it finishes.
  */
@@ -1624,10 +1624,10 @@ async function setCardEffort(level, switching) {
   if (level !== null && !EFFORT_LEVELS.has(level)) return { error: `unknown effort level: ${level}` };
   if (switching.abandoned) return { error: EFFORT_SWITCH_START_ERROR };
   const handle = currentQuery;
-  // No stream: the next one starts with `effort: EFFORT` (baseOptions), so the switch holds.
+  // No stream: the next one starts with `effort: currentEffort` (baseOptions), so the switch holds.
   const nextStreamTakesIt = () => {
-    EFFORT = level;
-    return { effort: EFFORT ?? undefined };
+    currentEffort = level;
+    return { effort: currentEffort ?? undefined };
   };
   // The stream went away while the switch waited on its CLI (a rewind, a new sign-in, the CLI
   // exiting). With none in its place, the next one takes the level. One that took its place in the
@@ -1657,7 +1657,7 @@ async function setCardEffort(level, switching) {
     return { error: reason };
   }
   if (currentQuery !== handle) return streamChanged();
-  EFFORT = level;
+  currentEffort = level;
   if (ultraRaised && "effortLevel" in ultraRaised) {
     const { effortLevel: _keywordEffort, ...keywordRest } = ultraRaised;
     ultraRaised = Object.keys(keywordRest).length > 0 ? keywordRest : null;
@@ -1669,7 +1669,7 @@ async function setCardEffort(level, switching) {
     // switched off the bar of a message that ran on `max` right after).
     if (ultraRaisedFor === keywordMessages) emit({ type: "keyword_effort_replaced" });
   }
-  return { effort: (await sessionEffort(handle)) ?? EFFORT ?? undefined };
+  return { effort: (await sessionEffort(handle)) ?? currentEffort ?? undefined };
 }
 
 /**

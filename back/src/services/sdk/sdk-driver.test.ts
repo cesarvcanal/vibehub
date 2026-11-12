@@ -1374,7 +1374,7 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
   }, 60_000);
 
   it("uma troca que venceu o prazo de início não grava o nível nem quando o stream cai enquanto ela espera o CLI", async () => {
-    // Review do PR #259 (f14): a troca já respondida como erro ainda gravava o EFFORT se o stream
+    // Review do PR #259 (f14): a troca já respondida como erro ainda gravava o currentEffort se o stream
     // caísse durante a espera pelo CLI, e o stream seguinte nascia no nível que ela não aplicou.
     const driver = startDriverWithEnv({ VIBEHUB_EFFORT_SWITCH_START_DEADLINE_MS: "300" }, ["--effort", "low"]);
     await driver.waitFor((e) => e.type === "ready");
@@ -1418,7 +1418,7 @@ describe("sdk-driver.mjs — a inteligência trocada com o turno rodando", () =>
   }
 
   it("um stream novo nasce enquanto a troca espera o CLI do que caiu: aceita pelo velho, ela não é confirmada", async () => {
-    // Review do PR #259 (f11): o stream novo lê o EFFORT ao nascer, fora da fila. A troca para high
+    // Review do PR #259 (f11): o stream novo lê o currentEffort ao nascer, fora da fila. A troca para high
     // esperava o CLI velho, ele caía, a pessoa mandava outra mensagem e o stream novo nascia em low,
     // e a troca respondia high: a tela dizia "já valendo" com a sessão em low até o próximo reinício.
     const driver = await switchStuckOnADyingStream("aceita-no-velho");
