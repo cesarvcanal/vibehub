@@ -1,4 +1,4 @@
-import { transcreverArquivoDeAudio } from "../transcribe/transcribe.js";
+import { transcribeAudioFile } from "../transcribe/transcribe.js";
 import {
   AUDIO_CONVERTER_PACKAGES, extensionOf, ensurePackagesLine, runOnRunner, runnerScript, validateRunnerPath,
 } from "./runner.js";
@@ -55,6 +55,6 @@ export async function transcribeRunnerAudio(givenPath: string): Promise<{ text: 
   const path = validateRunnerPath(givenPath);
   const stdout = await runOnRunner(buildExtractAudioScript(path), EXTRACT_TIMEOUT_MS);
   const { audio, fileName, converted } = parseExtractedAudio(stdout, path);
-  const text = await transcreverArquivoDeAudio(audio, fileName);
+  const text = await transcribeAudioFile(audio, fileName);
   return { text, converted };
 }
