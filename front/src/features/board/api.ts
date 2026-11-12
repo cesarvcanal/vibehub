@@ -81,16 +81,6 @@ export function projectAccountSlug(p: BoardProject | undefined): string | undefi
   return p?.defaultAccountSlug;
 }
 
-/** Worktree directory slug of a card inside the runner. */
-export function cardWorktree(c: BoardCard | undefined): string | undefined {
-  return c?.worktreeSlug;
-}
-
-/** tmux session name of a card inside the runner. */
-export function cardSession(c: BoardCard | undefined): string | undefined {
-  return c?.tmuxSession;
-}
-
 /**
  * Where a card lives inside the runner, as one line: worktree, base branch, tmux session.
  *
@@ -100,9 +90,11 @@ export function cardSession(c: BoardCard | undefined): string | undefined {
  */
 export function cardRunnerHint(c: BoardCard | undefined): string {
   if (!c) return "";
-  const worktree = cardWorktree(c);
-  const session = cardSession(c);
-  return [worktree ? `card/${worktree}` : "", c.base ? `base ${c.base}` : "", session ? `tmux ${session}` : ""]
+  return [
+    c.worktreeSlug ? `card/${c.worktreeSlug}` : "",
+    c.base ? `base ${c.base}` : "",
+    c.tmuxSession ? `tmux ${c.tmuxSession}` : "",
+  ]
     .filter(Boolean)
     .join(" · ");
 }

@@ -33,7 +33,7 @@ const DICTIONARIES: Record<Language, Record<string, string>> = { en, "pt-BR": pt
 export type Vars = Record<string, string | number | undefined | null>;
 
 /** A stored choice, when it is one of ours. Anything else (or no storage at all) is "not chosen". */
-export function storedLanguage(): Language | null {
+function storedLanguage(): Language | null {
   try {
     const raw = localStorage.getItem(LANGUAGE_KEY);
     return raw === "en" || raw === "pt-BR" ? raw : null;
