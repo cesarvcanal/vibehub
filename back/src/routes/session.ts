@@ -317,18 +317,6 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
   );
 
   /**
-   * The other half of the upload: the file (image, PDF, any document), back.
-   *
-   * What the composer puts in the message is the RUNNER path (`/work/.uploads/<card>/<file>`),
-   * because that is the only form Claude can open — the uploads live outside the card's worktree.
-   * For the person who attached it that read as a line of text and nothing else, so the chat now
-   * shows the picture and this is where it gets the bytes. Follows the card like the rest of the
-   * card-scoped routes: whoever may READ the conversation may see what was attached to it.
-   *
-   * Cached hard and forever on purpose — the name carries the upload's timestamp, so a given URL
-   * names one file that never changes.
-   */
-  /**
    * O anexo como texto (planilha, Word, PowerPoint): o navegador não abre esses formatos, então o chat
    * mostra o que o agente também lê. Mesmo acesso de quem pode ver o arquivo.
    */
@@ -344,6 +332,18 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  /**
+   * The other half of the upload: the file (image, PDF, any document), back.
+   *
+   * What the composer puts in the message is the RUNNER path (`/work/.uploads/<card>/<file>`),
+   * because that is the only form Claude can open — the uploads live outside the card's worktree.
+   * For the person who attached it that read as a line of text and nothing else, so the chat now
+   * shows the picture and this is where it gets the bytes. Follows the card like the rest of the
+   * card-scoped routes: whoever may READ the conversation may see what was attached to it.
+   *
+   * Cached hard and forever on purpose — the name carries the upload's timestamp, so a given URL
+   * names one file that never changes.
+   */
   app.get<{ Params: { id: string; file: string } }>(
     "/api/cards/:id/uploads/:file", { preHandler: requireCardAccess },
     async (req, reply) => {

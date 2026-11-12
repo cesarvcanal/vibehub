@@ -264,11 +264,11 @@ async function main(): Promise<void> {
   // loop's stdin check — this collects whatever slips through, every ten minutes. Started HERE
   // for the same reason as the others: tests must not inherit a timer that kills processes.
   startRunnerReaper();
-  // O batimento deste processo: enquanto ele bate, os marcadores que este processo assina são turnos
-  // VIVOS — o sweep do container novo de um deploy blue/green espera em vez de retomá-los.
   // A deploy that changed what a session is born with (env, flags) restarts the board's sessions,
   // staggered: idle now, working when they go idle. Fire-and-forget, after listen. See sessionSpec.ts.
   void restartSessionsIfSpecChanged();
+  // This process's heartbeat: while it beats, the markers this process signs are LIVE turns — the
+  // sweep of the new container in a blue/green deploy waits instead of resuming them.
   startInflightOwnerHeartbeat();
   void pruneStaleInflightOwners();
   // Turnos do chat nativo interrompidos pelo ÚLTIMO deploy (o back morre, os drivers — filhos dele —
