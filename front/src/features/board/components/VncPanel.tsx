@@ -364,8 +364,8 @@ export function CapturePrompt({ cardId, active }: { cardId: string; active: bool
   const t = useT();
   const qc = useQueryClient();
   const { isOwner } = useAuth();
-  const [name, setName] = React.useState("");
-  const [nameEdited, setNameEdited] = React.useState(false);
+  /** What the person typed, tied to the capture it was typed for: another capture starts from its own suggestion. */
+  const [typed, setTyped] = React.useState<{ captureId: string; suggestedName: string; text: string } | null>(null);
   const asking = active && isOwner;
 
   const captures = useQuery({
@@ -376,12 +376,9 @@ export function CapturePrompt({ cardId, active }: { cardId: string; active: bool
   });
 
   const top = captures.data?.[0];
-
-  // Seed the name field from the suggestion until the person edits it; reset when the capture changes.
-  React.useEffect(() => {
-    setNameEdited(false);
-    setName(top?.suggestedName ?? "");
-  }, [top?.id, top?.suggestedName]);
+  // The suggestion until the person edits the field; a new capture (or a new suggestion) starts over.
+  const typedForTop = typed !== null && typed.captureId === top?.id && typed.suggestedName === top.suggestedName;
+  const name = typedForTop ? typed.text : top?.suggestedName ?? "";
 
   const save = useMutation({
     mutationFn: () => boardApi.saveCapture(cardId, top!.id, name.trim() || undefined),
@@ -410,8 +407,7 @@ export function CapturePrompt({ cardId, active }: { cardId: string; active: bool
       <Input
         aria-label={t("capture.saveAs")}
         value={name}
-        onChange={(e) => { setName(e.target.value); setNameEdited(true); }}
-        onBlur={() => { if (!name.trim() && !nameEdited) setName(top.suggestedName); }}
+        onChange={(e) => setTyped({ captureId: top.id, suggestedName: top.suggestedName, text: e.target.value })}
         className="h-7 w-40 font-mono text-xs"
         maxLength={40}
       />
