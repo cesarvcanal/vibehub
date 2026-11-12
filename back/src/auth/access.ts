@@ -131,7 +131,13 @@ function stamp(req: FastifyRequest, user: PublicUser, level: ShareLevel): void {
   (req as FastifyRequest & { cardLevel?: ShareLevel }).cardLevel = level;
 }
 
-/** What the preHandler decided for this request — "work" unless a read-only share said otherwise. */
+/**
+ * What the preHandler decided for this request. THROWS when nothing was stamped: only a route behind
+ * requireCardAccess/requireCardWork may ask, and presuming `work` there would hand the most
+ * permissive level to a route that forgot its gate.
+ */
 export function requestCardLevel(req: FastifyRequest): ShareLevel {
-  return (req as FastifyRequest & { cardLevel?: ShareLevel }).cardLevel ?? "work";
+  const level = (req as FastifyRequest & { cardLevel?: ShareLevel }).cardLevel;
+  if (level === undefined) throw new Error("requestCardLevel outside requireCardAccess/requireCardWork: no card level stamped");
+  return level;
 }

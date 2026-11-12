@@ -54,3 +54,17 @@ describe("visibleProjects — a mesma regra de canAccessProject, numa leitura s�
     expect(spy).not.toHaveBeenCalled();
   });
 });
+
+describe("requestCardLevel — o nível que o gate do card carimbou", () => {
+  it("devolve o nível carimbado por requireCardAccess", async () => {
+    const { access } = await load();
+    const stamped = { cardLevel: "view" } as unknown as Parameters<typeof access.requestCardLevel>[0];
+    expect(access.requestCardLevel(stamped)).toBe("view");
+  });
+
+  it("sem carimbo (rota sem o gate do card) lança em vez de presumir `work`", async () => {
+    const { access } = await load();
+    const unstamped = {} as unknown as Parameters<typeof access.requestCardLevel>[0];
+    expect(() => access.requestCardLevel(unstamped)).toThrow(/requireCardAccess|requireCardWork/);
+  });
+});
