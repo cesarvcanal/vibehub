@@ -681,7 +681,12 @@ export function CardTerminalView({
    */
   const nativeChatPending = mode === "chat" && features.data?.sdkChat !== false;
   const [chatQueue, setChatQueue] = React.useState<QueuedMessage[]>(() => readQueue(cardId));
-  React.useEffect(() => setChatQueue(readQueue(cardId)), [cardId]);
+  // Another card's queue is re-read during the render that switches to it, not in an effect after it.
+  const [chatQueueCardId, setChatQueueCardId] = React.useState(cardId);
+  if (chatQueueCardId !== cardId) {
+    setChatQueueCardId(cardId);
+    setChatQueue(readQueue(cardId));
+  }
   const queueForNativeChat = React.useCallback(
     async (text: string) => {
       if (features.data === undefined) {
