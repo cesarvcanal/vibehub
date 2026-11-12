@@ -14,6 +14,7 @@ import type { GateResult } from "../maestro/gate.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { eventsAfter, onCardEvent, recordMessage, type CardEvent, type Severity } from "../events/cardEvents.js";
 import { logger } from "../../utils/logger.js";
+import { clipLine } from "../../utils/clipLine.js";
 import {
   MAX_ROUNDS, MERGE_GATE_AUTO_RETRIES, mergeGateSelfHealing, applyAuthorResponses, applyReviewerVerdicts, autoMergeEligible, waivedText, type ReviewOrders, blockingOpen, normalizeSubmittedFindings, pendingImprovements, pendingQuestions,
   isReviewClosed, phaseAfterReviewerRound,
@@ -25,7 +26,7 @@ import {
 } from "./store.js";
 import {
   actionableForAuthor, approvePendingText, autoMergeFailedText, authorFixPrompt, authorMergeGatePrompt, mergeGateFailedText, authorQuestionNoticeText, authorSuggestionsPrompt, headMovedPrefix,
-  impasseText, nudgePrefix, oneLine, phaseNoticeText, questionNoticeText, reviewerApprovePrompt, reviewerDeltaPrompt,
+  impasseText, nudgePrefix, phaseNoticeText, questionNoticeText, reviewerApprovePrompt, reviewerDeltaPrompt,
   reviewerRoundPrompt,
 } from "./prompts.js";
 
@@ -89,11 +90,11 @@ const REPLY_MAX = 600;
  * naquele momento (é o que a conversa das IAs mostra rodada a rodada); `by`, quem fez, numa fala humana.
  */
 function note(r: Review, who: ReviewEvent["who"], text: string, extra: { items?: ReviewEventItem[]; by?: string } = {}): void {
-  const event: ReviewEvent = { at: Date.now(), round: r.round, who, text: oneLine(text, 400) };
+  const event: ReviewEvent = { at: Date.now(), round: r.round, who, text: clipLine(text, 400) };
   const items = (extra.items ?? []).map((it) => {
     const item: ReviewEventItem = { id: it.id, status: it.status };
-    if (it.reply !== undefined && it.reply.trim() !== "") item.reply = oneLine(it.reply, REPLY_MAX);
-    if (it.commit !== undefined && it.commit.trim() !== "") item.commit = oneLine(it.commit, 64);
+    if (it.reply !== undefined && it.reply.trim() !== "") item.reply = clipLine(it.reply, REPLY_MAX);
+    if (it.commit !== undefined && it.commit.trim() !== "") item.commit = clipLine(it.commit, 64);
     if (it.isNew) item.isNew = true;
     return item;
   });
@@ -373,10 +374,10 @@ async function autoMerge(r: Review): Promise<void> {
 
 /** O merge automático não sai nesta rodada: marca, conta no log da revisão e avisa os dois cards. */
 async function refuseAutoMerge(r: Review, why: string): Promise<void> {
-  logger.info({ audit: true, action: "review.automerge", review: r.id, merged: false, reason: oneLine(why, 200) }, "PR review auto-merge refused");
+  logger.info({ audit: true, action: "review.automerge", review: r.id, merged: false, reason: clipLine(why, 200) }, "PR review auto-merge refused");
   const after = await mutateReview(r.id, (x) => {
     x.autoMergeFailedRound = x.round;
-    note(x, "system", `Merge automático não saiu (${oneLine(why, 200)}); o merge fica pelo botão.`);
+    note(x, "system", `Merge automático não saiu (${clipLine(why, 200)}); o merge fica pelo botão.`);
   });
   await notifyBoth(after, `review:${r.id}:automerge_failed:${r.round}`, autoMergeFailedText(after, why), "warning");
 }

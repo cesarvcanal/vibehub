@@ -1,3 +1,4 @@
+import { clipLine } from "../../utils/clipLine.js";
 import { defuseUltraWords } from "../../utils/ultraWords.js";
 import {
   autoMergeEligible, waivedText, MAX_ROUNDS, MERGE_GATE_AUTO_RETRIES, pendingImprovements, pendingQuestions, type Finding,
@@ -21,12 +22,6 @@ import {
 const TOOL_SUBMIT = "vibehub_review_submit";
 const TOOL_RESPOND = "vibehub_review_respond";
 
-/** Uma linha, sem quebras, com teto. O que a outra IA escreveu nunca vira um bloco solto no prompt. */
-export function oneLine(text: string | undefined, max = 300): string {
-  const flat = String(text ?? "").replace(/\s+/g, " ").trim();
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
-}
-
 /**
  * Um texto explicativo do achado (o problema, como resolver) com as quebras de linha preservadas e
  * indentadas sob o achado: é o que a pessoa leu no painel, e passos numerados achatados numa linha
@@ -43,7 +38,7 @@ export function indentedBlock(text: string | undefined, indent: string, max = 20
  * bloco) e com `ultrathink`/`ultracode` desarmados, que ali são citação, não pedido do turno. O molde
  * (branch, sha, comandos) não passa por aqui: desarmá-lo trocaria a branch do push. PURE.
  */
-const quoted = (text: string | undefined, max?: number): string => defuseUltraWords(oneLine(text, max));
+const quoted = (text: string | undefined, max = 300): string => defuseUltraWords(clipLine(text, max));
 const quotedBlock = (text: string | undefined, indent: string, max?: number): string =>
   defuseUltraWords(indentedBlock(text, indent, max));
 
@@ -88,7 +83,7 @@ const where = (f: Finding): string => (f.file ? (f.line ? `${f.file}:${f.line}` 
 function proofText(f: Finding): string {
   if (!f.proof) return "sem prova";
   const detail = f.proof.detail ? ` — ${quoted(f.proof.detail, 200)}` : "";
-  return `${f.proof.kind} ${oneLine(f.proof.ref, 160)}${detail}`;
+  return `${f.proof.kind} ${clipLine(f.proof.ref, 160)}${detail}`;
 }
 
 /** Um achado em uma linha de cabeçalho e uma de detalhes: o que é, onde, a prova e o que cada lado disse. */
@@ -96,11 +91,11 @@ function findingLine(f: Finding): string {
   const loc = where(f);
   const tags = [
     f.severity, STATUS_PT[f.status], f.humanDecision ? `decisão humana: ${f.humanDecision}` : "",
-    f.requested ? `pedida ao autor por ${oneLine(f.requested.by, 60)}` : "",
+    f.requested ? `pedida ao autor por ${clipLine(f.requested.by, 60)}` : "",
   ].filter(Boolean);
   const head = `- ${f.id} [${tags.join(", ")}] ${quoted(f.title, 200)}${loc ? ` (${loc})` : ""}`;
   const parts = [`prova: ${proofText(f)}`];
-  if (f.authorReply !== undefined) parts.push(`autor: "${quoted(f.authorReply)}"${f.commit ? ` (commit ${oneLine(f.commit, 60)})` : ""}`);
+  if (f.authorReply !== undefined) parts.push(`autor: "${quoted(f.authorReply)}"${f.commit ? ` (commit ${clipLine(f.commit, 60)})` : ""}`);
   if (f.reviewerReply !== undefined) parts.push(`revisor: "${quoted(f.reviewerReply)}"`);
   const blocks = [
     f.problem ? `\n    problema: ${quotedBlock(f.problem, "      ")}` : "",
@@ -552,7 +547,7 @@ export function authorMergeGatePrompt(r: Review): string {
 
 /** O aviso de que o merge automático não saiu: o motivo, e que o botão segue valendo. */
 export function autoMergeFailedText(r: Review, why: string): string {
-  return `PR #${r.prNumber}: o merge automático não saiu (${oneLine(why, 200)}) — mergeie pelo painel.`;
+  return `PR #${r.prNumber}: o merge automático não saiu (${clipLine(why, 200)}) — mergeie pelo painel.`;
 }
 
 /** O aviso de que o Approve não foi publicado: o PR está pronto, mas o GitHub ainda mostra o pedido de mudanças. */
@@ -570,5 +565,5 @@ export function impasseText(reason: string | undefined): string {
   if (reason === "rodadas") {
     return `${MAX_ROUNDS} rodadas com bloqueante aberto ou contestado; o revisor humano decide cada item travado`;
   }
-  return oneLine(reason || "motivo não informado", 200);
+  return clipLine(reason || "motivo não informado", 200);
 }

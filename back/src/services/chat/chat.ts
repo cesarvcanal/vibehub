@@ -3,6 +3,7 @@ import { config } from "../../config/env.js";
 import { getCard, getProject, hasLiveSession, effectiveAccountSlug } from "../board/registry.js";
 import { transcriptDirFor, sessionGoneError } from "../maestro/cardSession.js";
 import { logger } from "../../utils/logger.js";
+import { clipLine } from "../../utils/clipLine.js";
 
 /**
  * CHAT — the same session as the terminal, read as a conversation instead of as a screen.
@@ -52,9 +53,8 @@ export interface ChatEvent {
 }
 
 /** Clamps a summary to one readable line. PURE. */
-export function clampDetail(value: string, max = TOOL_DETAIL_MAX): string {
-  const one = value.replace(/\s+/g, " ").trim();
-  return one.length <= max ? one : `${one.slice(0, max - 1)}…`;
+export function clampDetail(value: string): string {
+  return clipLine(value, TOOL_DETAIL_MAX);
 }
 
 function str(value: unknown): string {

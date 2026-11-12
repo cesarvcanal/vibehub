@@ -1,4 +1,5 @@
 import { readHistory, type HistoryEvent } from "../sdk/history.js";
+import { clipLine } from "../../utils/clipLine.js";
 
 /**
  * What the voice assistant knows of the card's conversation when a call starts INSIDE that chat.
@@ -15,22 +16,17 @@ export const CONTEXT_MAX_CHARS = 6_000;
 /** One message longer than this is cut: a 3-page answer says enough in its first lines. */
 export const CONTEXT_ITEM_MAX_CHARS = 700;
 
-function clip(text: string, max: number): string {
-  const flat = text.replace(/\s+/g, " ").trim();
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
-}
-
 /** One history event as a line of the thread, or null when it is not conversation. PURE. */
 function line(event: HistoryEvent): string | null {
   switch (event.type) {
     case "user": {
-      const who = event.from?.kind === "agent" ? `Outro card (${clip(event.from.name || "agente", 60)})` : "Pessoa (digitou)";
-      return `${who}: ${clip(event.text, CONTEXT_ITEM_MAX_CHARS)}`;
+      const who = event.from?.kind === "agent" ? `Outro card (${clipLine(event.from.name || "agente", 60)})` : "Pessoa (digitou)";
+      return `${who}: ${clipLine(event.text, CONTEXT_ITEM_MAX_CHARS)}`;
     }
     case "assistant_text":
-      return `Agente do card (Claude): ${clip((event as { text: string }).text, CONTEXT_ITEM_MAX_CHARS)}`;
+      return `Agente do card (Claude): ${clipLine((event as { text: string }).text, CONTEXT_ITEM_MAX_CHARS)}`;
     case "voice_turn":
-      return `${event.role === "user" ? "Pessoa (falou)" : "Você (voz)"}: ${clip(event.text, CONTEXT_ITEM_MAX_CHARS)}`;
+      return `${event.role === "user" ? "Pessoa (falou)" : "Você (voz)"}: ${clipLine(event.text, CONTEXT_ITEM_MAX_CHARS)}`;
     default:
       return null;
   }
