@@ -441,7 +441,8 @@ async function usageFor(slug: string | undefined): Promise<{ result: AccountUsag
     const longLived = await resolveAccountToken(key).catch(() => undefined);
     if (longLived) {
       result = await probeViaInference(longLived, now);
-      freshMs = PROBE_FRESH_MS;
+      // Only a READING spent plan; a refused probe is retried on the endpoint's own rhythm.
+      if (result.available) freshMs = PROBE_FRESH_MS;
     }
   }
 
