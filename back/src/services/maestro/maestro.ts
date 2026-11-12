@@ -12,7 +12,7 @@ import { recordOrigin, type MessageOrigin } from "../chat/provenance.js";
 import { publishExternalMessage, readHistory } from "../sdk/history.js";
 import { liveDriverSession, sendAgentTurn } from "../sdk/manager.js";
 import { startCardDriver } from "../sdk/headless.js";
-import { openCard, probeCardSession } from "../board/workspace.js";
+import { openCard, probeCardSession, type SessionState } from "../board/workspace.js";
 import { getSettings } from "../settings/settings.js";
 import { observeDeclaredState } from "../events/cardEvents.js";
 import { logger } from "../../utils/logger.js";
@@ -511,12 +511,16 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
   // sitting in the pane. A TUI that is generating right now keeps the order (typed, queued by Claude),
   // so two Claudes never work the same worktree at once.
   let driver = fromAgent || viaNativeChat ? liveDriverSession(card.id) : null;
+  // One probe for both routes: when the driver route does not start a driver its answer was "busy"
+  // and nothing ran since, so the TUI route reuses it instead of paying a second docker exec.
+  let session: SessionState | undefined;
   if (!driver && wake && origin && (fromAgent || viaNativeChat) && (await getSettings()).sdkDriver) {
-    if ((await probeCardSession(card)) !== "busy") driver = await startCardDriver(card.id);
+    session = await probeCardSession(card);
+    if (session !== "busy") driver = await startCardDriver(card.id);
   }
   // The TUI route for an order from outside: a card the board calls live whose tmux session is GONE
   // (the runner restarted under it) is recreated — the same idempotent open — instead of refused.
-  if (!driver && wake && (await probeCardSession(card)) === "gone") {
+  if (!driver && wake && (session ?? (await probeCardSession(card))) === "gone") {
     card = await openCard(card.id, by);
     woke = true;
     logger.info({ audit: true, action: "maestro.wake", card: card.worktreeSlug, was: "session gone", by }, "card whose terminal was gone recreated for an order from outside the board");
