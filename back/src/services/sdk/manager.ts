@@ -82,10 +82,10 @@ export const TYPING_RELAY_MIN_MS = 1_000;
  * ocioso. Quase sempre o CLI abre um turno sozinho para contar o resultado — e o `Stop` desse turno
  * é quem diz "aguardando". Só quando nenhum turno abriu nesse intervalo o manager fala por ele.
  */
-export const BACKGROUND_SETTLE_MS = 15_000;
+const BACKGROUND_SETTLE_MS = 15_000;
 
 /** Quantos subagentes/tarefas a sessão lembra (as terminadas mais antigas saem primeiro). */
-export const TASKS_MAX = 200;
+const TASKS_MAX = 200;
 
 /**
  * A RETOMADA PRECISA PEGAR. O CLI que volta de um processo morto com trabalho em segundo plano abre
@@ -352,7 +352,7 @@ export type ClientFrameOutcome =
   | { kind: "ignored"; sent?: true };
 
 /** How much stderr the post-mortem keeps. Enough for a stack trace, bounded against a chatty child. */
-export const STDERR_TAIL_MAX = 2000;
+const STDERR_TAIL_MAX = 2000;
 
 const sessions = new Map<string, DriverSession>();
 
@@ -454,7 +454,7 @@ function syncBackgroundStatus(session: DriverSession, hadTasks: boolean): void {
 }
 
 /** Uma tarefa viva, dentro do teto, segura o card em `working` (ver services/board/status.ts). */
-export function driverHoldsBackgroundWork(cardId: string): boolean {
+function driverHoldsBackgroundWork(cardId: string): boolean {
   const session = sessions.get(cardId);
   if (!session || session.closed) return false;
   return backgroundHoldLeft(session) > 0;
@@ -994,7 +994,7 @@ function handleDriverEvent(session: DriverSession, event: DriverEvent): void {
  * são do harness (`<transcriptDir>/<sessionId>/…`) e dependem do id de sessão, que só existe depois
  * do primeiro `session`/`result` — antes disso não há o que sondar. PURE (dado o estado da sessão).
  */
-export function workflowDirs(session: Pick<DriverSession, "transcriptDir" | "lastSessionId">): { runs: string; scripts: string } | null {
+function workflowDirs(session: Pick<DriverSession, "transcriptDir" | "lastSessionId">): { runs: string; scripts: string } | null {
   const dir = session.transcriptDir;
   const sessionId = session.lastSessionId;
   if (!dir || !sessionId) return null;
@@ -1055,7 +1055,7 @@ function createFeedResponder(session: DriverSession, socket: WebSocket): (reques
 }
 
 /** A resposta a um pedido de detalhe (ver `parseDetailFrame`), já com o motivo quando falhou. */
-export async function detailReply(session: Pick<DriverSession, "cardId" | "label" | "transcriptDir">, request: DetailRequest): Promise<object> {
+async function detailReply(session: Pick<DriverSession, "cardId" | "label" | "transcriptDir">, request: DetailRequest): Promise<object> {
   const base = { type: "detail", req: request.req, ...(request.id ? { id: request.id } : {}), ...(request.path ? { path: request.path } : {}), ...(request.nonce ? { nonce: request.nonce } : {}) };
   try {
     if (request.req === "changes") return { ...base, data: await readCardChanges(session.cardId) };
@@ -1916,7 +1916,7 @@ export const NOTE_RESUME_STALLED =
   "Mande uma mensagem para ele seguir de onde parou.";
 
 /** O que o marcador diz de um turno que o próprio CLI abriu — ninguém escreveu nada. */
-export const AUTONOMOUS_TURN_PREVIEW = "(turno aberto pelo próprio Claude: retorno de tarefa em segundo plano ou agendada)";
+const AUTONOMOUS_TURN_PREVIEW = "(turno aberto pelo próprio Claude: retorno de tarefa em segundo plano ou agendada)";
 
 /**
  * O TRABALHO EM SEGUNDO PLANO vivo agora, para o marcador: as tarefas do CLI e o retorno agendado.
@@ -2043,7 +2043,7 @@ function recordInjectedTurn(session: DriverSession, text: string, origin: Messag
  * the browser's cue to keep the words and resend them onto the next driver. A frame with no `cid`
  * (an older client) gets no receipt and behaves exactly as before.
  */
-export function replyFrameOutcome(socket: WebSocket, outcome: ClientFrameOutcome): void {
+function replyFrameOutcome(socket: WebSocket, outcome: ClientFrameOutcome): void {
   if (outcome.kind === "ignored" || !outcome.cid) return;
   const cid = outcome.cid;
   const send = (frame: object): void => {

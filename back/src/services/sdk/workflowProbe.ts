@@ -75,7 +75,7 @@ export interface WorkflowRun {
 export type WorkflowOutcome = "completed" | "killed" | "failed";
 
 /** O `status` do snapshot do harness, normalizado. Qualquer outra coisa (inclusive "running") = sem desfecho. PURE. */
-export function workflowOutcome(status: unknown): WorkflowOutcome | undefined {
+function workflowOutcome(status: unknown): WorkflowOutcome | undefined {
   if (typeof status !== "string") return undefined;
   const s = status.toLowerCase();
   if (s === "completed") return "completed";

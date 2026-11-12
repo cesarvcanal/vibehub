@@ -586,7 +586,7 @@ export function clearHistoryBeforeLastClear(cardId: string): Promise<void> {
 }
 
 /** A mensagem É o comando /clear (não uma frase que o menciona). PURE. */
-export function isClearCommand(text: string): boolean {
+function isClearCommand(text: string): boolean {
   return text.trim() === "/clear";
 }
 

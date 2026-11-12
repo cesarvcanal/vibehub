@@ -318,7 +318,7 @@ export function watchCardWorkflows(cardId: string, deps: WatchDeps): void {
 }
 
 /** Quantos passos o feed de um subagente traz: as últimas ações, não o transcript inteiro. */
-export const FEED_REQUEST_ITEMS = 50;
+const FEED_REQUEST_ITEMS = 50;
 
 /**
  * O feed de UM subagente, lido agora do runner (mesmo executor da sondagem da frota). Sob demanda:
@@ -337,7 +337,7 @@ export function lastWorkflowRuns(cardId: string): WorkflowRun[] {
 }
 
 /** Encerra a sondagem (fim da rodada, driver morto, card pausado). Idempotente. */
-export function stopCardWorkflowWatch(cardId: string): void {
+function stopCardWorkflowWatch(cardId: string): void {
   const watch = watches.get(cardId);
   if (!watch) return;
   clearInterval(watch.timer);

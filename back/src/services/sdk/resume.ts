@@ -58,7 +58,7 @@ import { defusedCommandList } from "../../utils/ultraWords.js";
  */
 
 /** De quanto em quanto tempo o sweep reconsulta um marcador cujo dono ainda vive. */
-export const OWNER_POLL_MS = 2_000;
+const OWNER_POLL_MS = 2_000;
 
 /** A mensagem de continuação injetada no driver — proveniência de sistema, texto curto e direto. */
 export const RESUME_CONTINUATION_TEXT =
@@ -260,7 +260,7 @@ export function openQuestionIds(events: ReadonlyArray<{ type: string; id?: unkno
  * Os subagentes (Agent/Task) chamados desde `since` que não voltaram — rodavam em paralelo e morreram
  * com o reinício. PURA.
  */
-export function unfinishedSubagents(
+function unfinishedSubagents(
   events: ReadonlyArray<{ type: string; id?: unknown; name?: unknown; input?: unknown; at?: number }>,
   since: number,
 ): string[] {
@@ -304,7 +304,7 @@ async function orphanedMarker(cardId: string, first: InflightMarker, deps: Resum
   return null;
 }
 
-export interface ResumeSummary {
+interface ResumeSummary {
   /** Cards whose interrupted turn was resumed automatically. */
   resumed: string[];
   /** Cards that only got the system line (attempts spent, flag off, sdkDriver off, card gone). */

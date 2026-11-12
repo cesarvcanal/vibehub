@@ -74,7 +74,7 @@ export interface InflightBackground {
 export const INFLIGHT_OWNER = randomUUID();
 
 /** De quanto em quanto tempo o processo vivo toca o seu batimento. */
-export const OWNER_HEARTBEAT_MS = 3_000;
+const OWNER_HEARTBEAT_MS = 3_000;
 
 /**
  * Um batimento mais velho que isto é de um processo que morreu sem largar — o caso NORMAL do

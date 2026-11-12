@@ -22,7 +22,7 @@ import type { HistoryEvent } from "./history.js";
  */
 
 /** How many transcript lines one connect converts. Matches the old chat's replay window. */
-export const TUI_TAIL_LINES = 400;
+const TUI_TAIL_LINES = 400;
 
 /** Session ids are UUIDs minted by Claude Code — anything else is not a resume target. */
 const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

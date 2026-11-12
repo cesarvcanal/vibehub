@@ -25,7 +25,7 @@ export class InvalidDetailIdError extends Error {}
 
 /** Tetos do que volta do runner (a saída passa pelo SSH e vira um frame de websocket). */
 export const DETAIL_TEXT_MAX = 200_000;
-export const DETAIL_INPUT_MAX = 60_000;
+const DETAIL_INPUT_MAX = 60_000;
 const THINKING_MAX = 6_000;
 const TIMELINE_ITEMS_MAX = 400;
 const TIMELINE_TAIL_BYTES = 4 * 1024 * 1024;

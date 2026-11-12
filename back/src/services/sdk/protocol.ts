@@ -586,7 +586,7 @@ export function buildOrphanAnswerText(
 }
 
 /** O pedido que acompanha respostas de pessoas diferentes ao mesmo cartão. */
-export const MULTI_ANSWER_NOTE =
+const MULTI_ANSWER_NOTE =
   "(respostas de pessoas diferentes no mesmo card: analise todas juntas; se forem contraditórias ou " +
   "confusas, pergunte de novo com AskUserQuestion antes de seguir)";
 
@@ -696,7 +696,7 @@ export function encodeControl(control: DriverControl): string {
 }
 
 /** The receipt id the browser stamped on a frame, when it stamped one. PURE. */
-export function frameCid(raw: unknown): string | undefined {
+function frameCid(raw: unknown): string | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const cid = (raw as { cid?: unknown }).cid;
   return typeof cid === "string" && cid !== "" && cid.length <= 64 ? cid : undefined;
