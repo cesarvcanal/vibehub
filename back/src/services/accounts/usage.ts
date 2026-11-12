@@ -40,8 +40,8 @@ import { logger } from "../../utils/logger.js";
  *
  * WHERE THE TOKEN LIVES, AND FOR HOW LONG. It is read out of the runner with a `docker exec … cat`
  * (read-only but for the CLI's own renewal above; every path validated and shell-quoted, nothing
- * user-supplied reaching the shell), held in a local variable for exactly one HTTPS call, and dropped. It is NEVER logged,
- * NEVER returned by the API, NEVER written to disk on the vibehub side. The call is made from the
+ * user-supplied reaching the shell), held in a local variable for exactly one HTTPS call, and
+ * dropped. It is NEVER logged, NEVER returned by the API, NEVER written to disk on the vibehub side. The call is made from the
  * vibehub process rather than by a `curl` inside the container so that HTTP status handling (401 vs
  * 429 vs unreachable) is real code with real tests instead of exit-code archaeology, and so the
  * runner image needs no extra tool.
@@ -173,8 +173,9 @@ export function backoffMs(strikes: number): number {
 
 /**
  * READ-ONLY script that prints a profile's credential file. `cat` and nothing else: the only write
- * this module ever causes in the runner is Claude Code renewing its own login (`buildRenewLoginScript`). Both paths are validated and quoted, and
- * a missing file prints nothing instead of failing the exec (a profile with no login is normal).
+ * this module ever causes in the runner is Claude Code renewing its own login
+ * (`buildRenewLoginScript`). Both paths are validated and quoted, and a missing file prints nothing
+ * instead of failing the exec (a profile with no login is normal).
  * PURE.
  */
 export function buildReadCredentialsScript(containerName: string, profileDir: string): string {
@@ -203,7 +204,8 @@ export function parseLogin(stdout: string): InteractiveLogin | undefined {
   const raw = String(stdout ?? "").trim();
   if (!raw) return undefined;
   try {
-    const oauth = (JSON.parse(raw) as { claudeAiOauth?: { accessToken?: unknown; expiresAt?: unknown } })?.claudeAiOauth;
+    const json = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: unknown; expiresAt?: unknown } };
+    const oauth = json?.claudeAiOauth;
     const token = oauth?.accessToken;
     if (typeof token !== "string" || !token.trim()) return undefined;
     const expiresAt = oauth?.expiresAt;
