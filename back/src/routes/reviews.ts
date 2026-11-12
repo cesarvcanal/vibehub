@@ -10,7 +10,7 @@ import {
 import { reachingCard, startReviewChecked } from "../services/review/start.js";
 import { mergeReviewedPr } from "../services/review/merge.js";
 import { isBusy } from "../services/maestro/maestro.js";
-import { activeReviewFor, getReview, listReviewsFollowedBy, listReviewsForCards } from "../services/review/store.js";
+import { activeReviewFor, getReview, listReviewsFollowedBy, listReviewsForCards, newest } from "../services/review/store.js";
 import { canMergeReview, isReviewClosed, type Review } from "../services/review/model.js";
 import { sendError, type ErrorStatusRule } from "./httpError.js";
 
@@ -59,11 +59,6 @@ async function cardPeople(card: registry.Card): Promise<Person[]> {
       return person;
     }),
   );
-}
-
-/** A revisão mais recente da lista (empate: a inserida depois). */
-function newest(list: Review[]): Review | undefined {
-  return list.reduce<Review | undefined>((latest, r) => (!latest || r.createdAt >= latest.createdAt ? r : latest), undefined);
 }
 
 /** A revisão de um PR numa lista: a ativa, ou a última de qualquer fase. */

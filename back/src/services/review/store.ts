@@ -30,7 +30,7 @@ const store = new JsonStore<ReviewsDoc>(
 const copy = (r: Review): Review => structuredClone(r);
 
 /** A mais recente da lista (empate: a inserida depois). */
-const newest = (list: Review[]): Review | undefined =>
+export const newest = (list: Review[]): Review | undefined =>
   list.reduce<Review | undefined>((latest, r) => (!latest || r.createdAt >= latest.createdAt ? r : latest), undefined);
 
 export async function getReview(id: string): Promise<Review | undefined> {
