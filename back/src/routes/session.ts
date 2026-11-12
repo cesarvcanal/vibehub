@@ -14,6 +14,7 @@ import { purgeCard } from "../services/board/purge.js";
 import { lerAnexoDoCard } from "../services/anexos/documento.js";
 import { observeCardStatus } from "../services/events/cardEvents.js";
 import { logger } from "../utils/logger.js";
+import { sendError } from "./httpError.js";
 
 /**
  * SESSION routes — everything that touches a live card: opening it in the runner, the xterm
@@ -237,8 +238,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       // current author; the first message of whoever opened it makes them the author.
       return await reply.send({ card: await workspace.openCard(req.params.id) });
     } catch (err) {
-      const message = (err as Error).message;
-      return await reply.code(/not found/i.test(message) ? 404 : 502).send({ error: message });
+      return await sendError(reply, err, { fallback: 502 });
     }
   });
 
@@ -246,8 +246,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     try {
       return await reply.send({ card: await workspace.pauseCard(req.params.id) });
     } catch (err) {
-      const message = (err as Error).message;
-      return await reply.code(/not found/i.test(message) ? 404 : 502).send({ error: message });
+      return await sendError(reply, err, { fallback: 502 });
     }
   });
 
@@ -263,8 +262,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       if (!card) return await reply.code(404).send({ error: "card not found" });
       return await reply.send({ card });
     } catch (err) {
-      const message = (err as Error).message;
-      return await reply.code(/not found/i.test(message) ? 404 : 502).send({ error: message });
+      return await sendError(reply, err, { fallback: 502 });
     }
   });
 
@@ -272,8 +270,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     try {
       return await reply.send({ card: await workspace.restartCard(req.params.id) });
     } catch (err) {
-      const message = (err as Error).message;
-      return await reply.code(/not found/i.test(message) ? 404 : 502).send({ error: message });
+      return await sendError(reply, err, { fallback: 502 });
     }
   });
 
@@ -310,8 +307,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       try {
         return await reply.send(await workspace.uploadCardImage(req.params.id, name, content));
       } catch (err) {
-        const message = (err as Error).message;
-        return await reply.code(/not found/i.test(message) ? 404 : 400).send({ error: message });
+        return await sendError(reply, err);
       }
     },
   );
@@ -326,8 +322,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       try {
         return await reply.send(await lerAnexoDoCard(req.params.id, req.params.file));
       } catch (err) {
-        const message = (err as Error).message;
-        return await reply.code(/not found/i.test(message) ? 404 : 422).send({ error: message });
+        return await sendError(reply, err, { fallback: 422 });
       }
     },
   );
@@ -394,8 +389,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
         await recordCardActor(await requestUser(req), req.params.id);
         return await reply.send(await outbox.queueMessage(req.params.id, String(req.body?.text ?? ""), by));
       } catch (err) {
-        const message = (err as Error).message;
-        return await reply.code(/not found/i.test(message) ? 404 : 400).send({ error: message });
+        return await sendError(reply, err);
       }
     },
   );
@@ -407,8 +401,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       try {
         return await reply.send(await outbox.outboxStatus(req.params.id));
       } catch (err) {
-        const message = (err as Error).message;
-        return await reply.code(/not found/i.test(message) ? 404 : 502).send({ error: message });
+        return await sendError(reply, err, { fallback: 502 });
       }
     },
   );
@@ -465,8 +458,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     try {
       return await reply.send({ ports: await browser.openCardBrowser(req.params.id) });
     } catch (err) {
-      const message = (err as Error).message;
-      return await reply.code(/not found/i.test(message) ? 404 : 502).send({ error: message });
+      return await sendError(reply, err, { fallback: 502 });
     }
   });
 
@@ -475,8 +467,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       await browser.closeCardBrowser(req.params.id);
       return await reply.send({ ok: true });
     } catch (err) {
-      const message = (err as Error).message;
-      return await reply.code(/not found/i.test(message) ? 404 : 502).send({ error: message });
+      return await sendError(reply, err, { fallback: 502 });
     }
   });
 

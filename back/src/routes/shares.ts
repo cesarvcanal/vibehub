@@ -4,6 +4,7 @@ import { findUser, listUsers } from "../auth/users.js";
 import * as registry from "../services/board/registry.js";
 import type { ShareKind } from "../services/board/registry.js";
 import { logger } from "../utils/logger.js";
+import { sendError } from "./httpError.js";
 
 /**
  * SHARING — handing a card (or a whole project) to somebody who is not the owner.
@@ -28,11 +29,6 @@ async function decorate(shares: registry.Share[]): Promise<
     ...s,
     username: users.find((u) => u.id === s.userId)?.username ?? "(removed)",
   }));
-}
-
-function fail(err: unknown): { code: number; body: { error: string } } {
-  const message = (err as Error).message ?? "invalid request";
-  return { code: /not found/i.test(message) ? 404 : 400, body: { error: message } };
 }
 
 export async function sharesRoutes(app: FastifyInstance): Promise<void> {
@@ -63,8 +59,7 @@ export async function sharesRoutes(app: FastifyInstance): Promise<void> {
           );
           return await reply.send({ share: (await decorate([share]))[0] });
         } catch (err) {
-          const { code, body } = fail(err);
-          return await reply.code(code).send(body);
+          return await sendError(reply, err);
         }
       },
     );

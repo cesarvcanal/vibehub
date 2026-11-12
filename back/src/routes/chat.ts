@@ -8,6 +8,7 @@ import { chatSource, sendChatKey, parseChatEvents, CHAT_KEYS } from "../services
 import { matchOrigin, primeProvenance, type MessageOrigin } from "../services/chat/provenance.js";
 import { createLineReader } from "../utils/lineReader.js";
 import { logger } from "../utils/logger.js";
+import { NOT_FOUND, sendError } from "./httpError.js";
 
 /**
  * CHAT routes — the card's session read as a conversation and written to as one.
@@ -146,12 +147,12 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         });
         return await reply.send({ ok: true });
       } catch (err) {
-        const message = (err as Error).message;
         // "no live session" is not a server fault and not a missing card: it is a card that has to
         // be opened first, and the UI says exactly that.
-        const code = /not found/i.test(message) ? 404
-          : /no live session|empty text|awaiting choice|no agent running|terminal not ready/i.test(message) ? 409 : 502;
-        return await reply.code(code).send({ error: message });
+        return await sendError(reply, err, {
+          rules: [NOT_FOUND, [/no live session|empty text|awaiting choice|no agent running|terminal not ready/i, 409]],
+          fallback: 502,
+        });
       }
     },
   );
@@ -166,9 +167,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       try {
         return await reply.send(await sendChatKey(req.params.id, key));
       } catch (err) {
-        const message = (err as Error).message;
-        const code = /not found/i.test(message) ? 404 : /no live session/i.test(message) ? 409 : 502;
-        return await reply.code(code).send({ error: message });
+        return await sendError(reply, err, { rules: [NOT_FOUND, [/no live session/i, 409]], fallback: 502 });
       }
     },
   );

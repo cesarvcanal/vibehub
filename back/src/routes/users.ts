@@ -14,6 +14,7 @@ import {
 } from "../auth/users.js";
 import { removeSharesForUser } from "../services/board/registry.js";
 import { logger } from "../utils/logger.js";
+import { sendError } from "./httpError.js";
 
 /**
  * ACCESS — the install's people. Owner-only, all of it: creating an account, resetting somebody's
@@ -156,8 +157,7 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
         );
         return await reply.send({ user, git: git.identity ? publicGit(git.identity) : undefined });
       } catch (err) {
-        const message = (err as Error).message;
-        return await reply.code(/not found/i.test(message) ? 404 : 400).send({ error: message });
+        return await sendError(reply, err);
       }
     },
   );
@@ -206,8 +206,7 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
       logger.info({ audit: true, action: "user.remove", user: removed.username }, "user removed");
       return await reply.send({ ok: true, user: removed });
     } catch (err) {
-      const message = (err as Error).message;
-      return await reply.code(/not found/i.test(message) ? 404 : 400).send({ error: message });
+      return await sendError(reply, err);
     }
   });
 }

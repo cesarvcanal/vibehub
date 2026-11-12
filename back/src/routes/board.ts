@@ -14,6 +14,7 @@ import { listReviewsFollowedBy } from "../services/review/store.js";
 import { mergeGateSelfHealing, pendingQuestions, type Review } from "../services/review/model.js";
 import { logger } from "../utils/logger.js";
 import { isBusy } from "../services/maestro/maestro.js";
+import { sendError } from "./httpError.js";
 
 /**
  * BOARD — projects, cards, accounts, and the public status callback the runner's Claude hooks fire.
@@ -22,13 +23,6 @@ import { isBusy } from "../services/maestro/maestro.js";
  * agent's own configuration (tokens, MCP servers, brain) in `routes/agent.ts`; this file is the
  * board's data surface.
  */
-
-function badRequest(err: unknown): { code: number; body: { error: string } } {
-  const message = (err as Error).message ?? "invalid request";
-  // "not found" from the registry is a 404, everything else is the caller's fault.
-  const code = /not found/i.test(message) ? 404 : 400;
-  return { code, body: { error: message } };
-}
 
 /**
  * The PR review summary a board card carries: what the sidebar's "↳ PR #N · estado" line reads.
@@ -127,8 +121,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
     try {
       return await reply.send({ project: await registry.createProject(req.body ?? ({} as registry.CreateProjectInput)) });
     } catch (err) {
-      const { code, body } = badRequest(err);
-      return await reply.code(code).send(body);
+      return await sendError(reply, err);
     }
   });
 
@@ -138,8 +131,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
       try {
         return await reply.send({ project: await registry.updateProject(req.params.id, req.body ?? {}) });
       } catch (err) {
-        const { code, body } = badRequest(err);
-        return await reply.code(code).send(body);
+        return await sendError(reply, err);
       }
     },
   );
@@ -154,8 +146,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
       try {
         return await reply.send({ projects: await registry.reorderProject(req.params.id, position) });
       } catch (err) {
-        const { code, body } = badRequest(err);
-        return await reply.code(code).send(body);
+        return await sendError(reply, err);
       }
     },
   );
@@ -191,8 +182,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
       }
       return await reply.send({ ok: true, cards: removed.cards });
     } catch (err) {
-      const { code, body } = badRequest(err);
-      return await reply.code(code).send(body);
+      return await sendError(reply, err);
     }
   });
 
@@ -239,8 +229,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
         });
         return await reply.send({ card: created });
       } catch (err) {
-        const { code, body } = badRequest(err);
-        return await reply.code(code).send(body);
+        return await sendError(reply, err);
       }
     },
   );
@@ -303,8 +292,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
         }
         return await reply.send({ card, session });
       } catch (err) {
-        const { code, body } = badRequest(err);
-        return await reply.code(code).send(body);
+        return await sendError(reply, err);
       }
     },
   );
@@ -320,8 +308,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
     try {
       return await reply.send({ account: await registry.createAccount({ name: req.body?.name ?? "" }) });
     } catch (err) {
-      const { code, body } = badRequest(err);
-      return await reply.code(code).send(body);
+      return await sendError(reply, err);
     }
   });
 
@@ -335,8 +322,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
       }
       return await reply.send({ account: await registry.removeAccount(req.params.slug) });
     } catch (err) {
-      const { code, body } = badRequest(err);
-      return await reply.code(code).send(body);
+      return await sendError(reply, err);
     }
   });
 

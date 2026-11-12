@@ -12,6 +12,7 @@ import { mergeReviewedPr } from "../services/review/merge.js";
 import { isBusy } from "../services/maestro/maestro.js";
 import { activeReviewFor, getReview, listReviewsFollowedBy, listReviewsForCards } from "../services/review/store.js";
 import { canMergeReview, type Review } from "../services/review/model.js";
+import { sendError, type ErrorStatusRule } from "./httpError.js";
 
 /**
  * REVISÃO DE PR — a superfície HTTP do orquestrador e o ÚNICO caminho de merge de um PR revisado.
@@ -86,12 +87,8 @@ async function sidesWorking(r: Review): Promise<{ author: boolean; reviewer: boo
   return { author: !!author && isBusy(author), reviewer: !!reviewer && isBusy(reviewer) };
 }
 
-/** `not found` é 404, os códigos dados são 409, o resto é erro de quem pediu. */
-async function fail(reply: FastifyReply, err: unknown, conflict: RegExp | null = null): Promise<FastifyReply> {
-  const message = (err as Error).message ?? "invalid request";
-  const code = /not found|achado desconhecido/i.test(message) ? 404 : conflict?.test(message) ? 409 : 400;
-  return await reply.code(code).send({ error: message });
-}
+/** `not found` (and an unknown finding) is a 404; each route adds its own 409 codes after it. */
+const REVIEW_NOT_FOUND: ErrorStatusRule = [/not found|achado desconhecido/i, 404];
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
 
@@ -153,7 +150,7 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
       } catch (err) {
         const message = (err as Error).message ?? "";
         if (START_REFUSALS.test(message)) return await reply.code(400).send({ error: message });
-        return await fail(reply, err);
+        return await sendError(reply, err, { rules: [REVIEW_NOT_FOUND] });
       }
     },
   );
@@ -189,7 +186,7 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
       try {
         return await reply.send({ review: await decideQuestion(found.review.id, findingId, decision as Decision, found.user.username) });
       } catch (err) {
-        return await fail(reply, err, /não há decisão pendente/);
+        return await sendError(reply, err, { rules: [REVIEW_NOT_FOUND, [/não há decisão pendente/, 409]] });
       }
     },
   );
@@ -203,7 +200,7 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
     try {
       return await reply.send({ review: await retryReview(found.review.id, found.user.username) });
     } catch (err) {
-      return await fail(reply, err, /nada_a_tentar/);
+      return await sendError(reply, err, { rules: [REVIEW_NOT_FOUND, [/nada_a_tentar/, 409]] });
     }
   });
 
@@ -230,7 +227,7 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
         return await reply.send({ review: await decideSuggestions(found.review.id, { apply, skip }, found.user.username) });
       } catch (err) {
         // ja_pedida: outra pessoa (ou outra aba) já mandou a mesma sugestão ao autor — conflito, não pedido inválido.
-        return await fail(reply, err, /revisao_encerrada|envio_falhou|ja_pedida/);
+        return await sendError(reply, err, { rules: [REVIEW_NOT_FOUND, [/revisao_encerrada|envio_falhou|ja_pedida/, 409]] });
       }
     },
   );
@@ -244,7 +241,7 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
     try {
       return await reply.send({ review: await cancelReview(found.review.id, found.user.username) });
     } catch (err) {
-      return await fail(reply, err, /revisao_encerrada/);
+      return await sendError(reply, err, { rules: [REVIEW_NOT_FOUND, [/revisao_encerrada/, 409]] });
     }
   });
 
