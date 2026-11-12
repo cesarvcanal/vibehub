@@ -35,7 +35,7 @@ beforeEach(async () => {
   runScript.mockResolvedValue({ stdout: "", stderr: "" });
   pipeCommand.mockClear();
 });
-// reportState grava o evento needs_me fora do await (o card-events.json pode chegar junto do rm).
+// reportState writes the needs_me event outside the await (card-events.json may arrive together with the rm).
 afterEach(async () => { await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); });
 
 const card = (over: Record<string, unknown> = {}) => ({
@@ -643,7 +643,7 @@ describe("interactive-menu guard", () => {
 });
 
 /**
- * Produção, 21/10/2026 (card a8f0 do api-space): create_card(open) answered "opened", and every
+ * Production, 21/10/2026 (api-space's card a8f0): create_card(open) answered "opened", and every
  * vibehub_send_to_terminal after it failed with "awaiting choice" — the new card's Claude sat on the
  * folder-trust dialog, and a send right after an open also races Claude's boot. A waiting send
  * (readyWaitMs) holds while Claude boots, delivers once the prompt is drawn, and still NEVER types
@@ -807,8 +807,8 @@ describe("session introspection", () => {
   });
 
   it("a NEW card with no level pinned says its level BEFORE the first reply — the account default the driver announced", async () => {
-    // 29/10: card novo, o pill dizia só "Opus" até a primeira resposta carimbar o transcript — um
-    // `claude` aberto em qualquer terminal já mostra o nível ao subir.
+    // 29/10: new card, the pill said only "Opus" until the first answer stamped the transcript — a
+    // `claude` opened in any terminal already shows the level when it comes up.
     const { maestro, registry, agentState } = await load();
     const p = await registry.createProject({ name: "billing" });
     const c = await registry.createCard({ projectId: p.id, title: "novo" }, { model: "opus" });
@@ -895,7 +895,7 @@ describe("session introspection", () => {
   });
 
   it("a live driver at its prompt is 'waiting' — never the bare-shell verdict", async () => {
-    // Produção, 2026-10-02: the native chat's claude is a child of the BACK, invisible to the tmux
+    // Production, 2026-10-02: the native chat's claude is a child of the BACK, invisible to the tmux
     // probe — which read the bare pane under it as "Claude exited" and hung the "Claude parou"
     // banner over a session that was answering normally. A card being driven is being driven.
     const { maestro, registry, agentState } = await load();
@@ -1014,7 +1014,7 @@ describe("model signals", () => {
 
   it("a reply REQUESTED before the switch does not take the pill back to the old level", async () => {
     const { maestro } = await load();
-    // Produção, 2026-10-27: Médio → Alto with the turn running. The answer already on its way was
+    // Production, 2026-10-27: Médio → Alto with the turn running. The answer already on its way was
     // asked for in `medium` and lands AFTER the switch, stamped `medium` — it said nothing about the
     // session from the switch on, and the pill fell back to Médio.
     const inFlight = { effort: "medium", at: 3000, requestedAt: 1000 };
@@ -1035,9 +1035,9 @@ describe("model signals", () => {
 });
 
 /**
- * A TROCA DE AUTOR SÓ ACONTECE SE A ORDEM FOR ENTREGUE. O maestro carimbava o autor do remetente no
- * destino ANTES do envio — e um envio recusado (alguém digitando ali, sessão morta) deixava a autoria
- * trocada sem ordem nenhuma ter chegado.
+ * THE AUTHOR SWITCH ONLY HAPPENS IF THE ORDER IS DELIVERED. The maestro stamped the sender's author on the
+ * destination BEFORE the send — and a refused send (someone typing there, a dead session) left the authorship
+ * switched without any order having arrived.
  */
 describe("sendToTerminal — beforeDeliver roda só quando a mensagem vai mesmo", () => {
   it("envio recusado: o gancho não roda", async () => {

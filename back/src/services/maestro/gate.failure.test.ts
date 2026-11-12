@@ -2,9 +2,9 @@ import { describe, it, expect } from "vitest";
 import { GATE_OUTPUT_TAIL_BYTES, gateFailureOutput } from "./gate.js";
 
 /**
- * Produção, 2026-11-09 (PR #215 do tech.multi): `npm test --workspaces` roda o front e depois o back.
- * O front morreu na partida (dependência faltando), o back passou 240/240 e o npm saiu com 1. O gate
- * guardava só os últimos 4 KB: o painel mostrou um bloco vermelho só com testes verdes.
+ * Production, 2026-11-09 (tech.multi's PR #215): `npm test --workspaces` runs the front and then the back.
+ * The front died on startup (missing dependency), the back passed 240/240 and npm exited with 1. The gate
+ * kept only the last 4 KB: the panel showed a red block with nothing but green tests.
  */
 function npmWorkspacesRun(): string {
   const back = Array.from({ length: 1200 }, (_, i) => ` ✓ src/services/x${i}.test.ts (4 tests) 12ms`).join("\n");
@@ -36,7 +36,7 @@ describe("gateFailureOutput — o vermelho mostra o que falhou", () => {
     expect(out).toMatch(/^\[vibehub\] o gate falhou no check: npm test/);
     expect(out).toContain("Cannot find package '@vitejs/plugin-react'");
     expect(out).toContain("npm error workspace front@1.0.0");
-    // o fim continua lá: é ele que diz como terminou
+    // the end is still there: it is what says how it finished
     expect(out).toContain("Tests  2723 passed (2723)");
   });
 

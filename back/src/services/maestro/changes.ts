@@ -188,14 +188,14 @@ export async function readCardChanges(cardId: string): Promise<CardChanges & { c
   return { cardId: card.id, title: card.title, ...changes };
 }
 
-/* ------------------------------------------------------------- o diff de UM arquivo */
+/* ------------------------------------------------------------- the diff of ONE file */
 
-/** Teto do diff de um arquivo (vai inteiro para um frame do websocket). */
+/** Cap on a file's diff (it goes whole into one websocket frame). */
 export const FILE_DIFF_MAX_BYTES = 400_000;
 
 /**
- * Um caminho RELATIVO ao worktree, sem `..`, sem começar por `/` ou `-` (não pode virar flag do git)
- * e só com caracteres de nome de arquivo comuns. Lança no resto. PURE.
+ * A path RELATIVE to the worktree, with no `..`, not starting with `/` or `-` (it must not turn into a git flag)
+ * and with only ordinary file-name characters. Throws on anything else. PURE.
  */
 export function assertWorktreeRelativePath(path: string): string {
   const p = String(path ?? "");
@@ -206,8 +206,8 @@ export function assertWorktreeRelativePath(path: string): string {
 }
 
 /**
- * O que mudou em UM arquivo desde a base do branch: commitado E não commitado (o worktree contra o
- * merge-base). Arquivo que o git ainda não conhece vira o diff contra o vazio. Só leitura. PURE.
+ * What changed in ONE file since the branch's base: committed AND uncommitted (the worktree against the
+ * merge-base). A file git does not know yet becomes the diff against empty. Read-only. PURE.
  */
 export function buildFileDiffScript(containerName: string, cwd: string, base: string, path: string): string {
   assertSafeRemotePath(cwd);
@@ -228,7 +228,7 @@ export function buildFileDiffScript(containerName: string, cwd: string, base: st
   return [`docker exec -i ${shQuote(containerName)} bash -s <<'${DELIM}'`, ...body, DELIM].join("\n");
 }
 
-/** O diff de um arquivo do card (texto unificado do git). Lança quando o worktree não está lá. */
+/** The diff of one of the card's files (git's unified text). Throws when the worktree is not there. */
 export async function readCardFileDiff(cardId: string, path: string): Promise<{ path: string; diff: string; truncated: boolean }> {
   const { card, project } = await getCardWithProject(cardId);
   const { cwd } = cardWorkPaths(project, card);
