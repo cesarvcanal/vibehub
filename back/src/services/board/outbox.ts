@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { JsonStore } from "../../store/jsonStore.js";
 import { config, dataPath } from "../../config/env.js";
 import { hostExecutor } from "../../runtime/host.js";
-import { getCard, type Card } from "./registry.js";
+import { getCard } from "./registry.js";
 import { findUser } from "../../auth/users.js";
 import { recordOrigin } from "../chat/provenance.js";
 import { buildSendKeysScript } from "../maestro/maestro.js";

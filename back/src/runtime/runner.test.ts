@@ -130,7 +130,6 @@ describe("buildRunScript", () => {
 describe("buildSetupScript", () => {
   const base = {
     container: "vibehub-runner",
-    baseDir: "/opt/vibehub/runner",
     token: "tok-123",
     settingsJson: runnerSettingsJson(),
     git: { name: "Ada Lovelace", email: "ada@example.com" },

@@ -231,12 +231,11 @@ export function buildRunScript(opts: { container: string; image: string; baseDir
  */
 export function buildSetupScript(opts: {
   container: string;
-  baseDir: string;
   token: string;
   settingsJson: string;
   git: GitIdentity;
 }): string {
-  const { container, baseDir, token, settingsJson, git } = opts;
+  const { container, token, settingsJson, git } = opts;
   return [
     "set -e",
     "umask 077",
@@ -320,7 +319,6 @@ export async function provisionRunner(opts: ProvisionOpts): Promise<void> {
   await host.runScript(
     buildSetupScript({
       container,
-      baseDir,
       token,
       settingsJson: runnerSettingsJson({ autonomous: opts.autonomous ?? true }),
       git: opts.git,

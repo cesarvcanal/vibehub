@@ -3,7 +3,6 @@ import { logger } from "../../utils/logger.js";
 import {
   addGithubConnection,
   clearGithubConnections,
-  getGithubConnection,
   listGithubConnections,
   removeGithubConnection,
   updateGithubConnection,
