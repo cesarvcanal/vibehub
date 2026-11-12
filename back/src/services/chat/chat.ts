@@ -112,14 +112,6 @@ export function unwrapSlashCommand(text: string): string {
 }
 
 /**
- * A user-role line that is really the HARNESS talking, not the person: a background-task
- * notification and the "[SYSTEM NOTIFICATION - NOT USER INPUT]" envelope it arrives in. These land
- * in the transcript as `type:"user"` with no `toolUseResult`, so the chat used to draw them as the
- * user's own message — the thing that made a scheduled watcher's "task completed" look like the user
- * had typed it. Returns a SHORT human label to show as a muted event, or null when it is a real
- * message. PURE.
- */
-/**
  * Claude Code's own transcript FILLER, not conversation: when a session dies mid-turn (the deploy
  * killing the SDK driver, an interrupt), the harness closes the dangling turn on resume by writing
  * a canned user line "[Request interrupted by user…]" and a canned assistant line "No response
@@ -133,6 +125,14 @@ export function isHarnessFiller(kind: "user" | "assistant", text: string): boole
   return t === "No response requested.";
 }
 
+/**
+ * A user-role line that is really the HARNESS talking, not the person: a background-task
+ * notification and the "[SYSTEM NOTIFICATION - NOT USER INPUT]" envelope it arrives in. These land
+ * in the transcript as `type:"user"` with no `toolUseResult`, so the chat used to draw them as the
+ * user's own message — the thing that made a scheduled watcher's "task completed" look like the user
+ * had typed it. Returns a SHORT human label to show as a muted event, or null when it is a real
+ * message. PURE.
+ */
 export function systemNote(text: string): string | null {
   const t = text.trim();
   if (!/^\[SYSTEM NOTIFICATION\b/i.test(t) && !t.includes("<task-notification>")) return null;
