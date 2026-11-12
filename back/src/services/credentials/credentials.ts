@@ -183,9 +183,9 @@ export async function deleteCredential(id: string, by?: string): Promise<boolean
     return found;
   });
   if (!removed) return false;
-  await secretDelete(credentialSecretKey(id, "USER"));
-  await secretDelete(credentialSecretKey(id, "PASS"));
-  await secretDelete(credentialSecretKey(id, "VALUE"));
+  // Only the parts createCredential wrote for this type: each delete rewrites the whole vault.
+  const parts = removed.type === "userpass" ? (["USER", "PASS"] as const) : (["VALUE"] as const);
+  for (const part of parts) await secretDelete(credentialSecretKey(id, part));
   logger.info(
     { audit: true, action: "credential.delete", credential: removed.name, id, by },
     "credential removed from the vault",
@@ -233,8 +233,10 @@ export async function resolveCredential(name: string): Promise<ResolvedCredentia
     );
   }
   if (credential.type === "userpass") {
-    const username = await secretGet(credentialSecretKey(credential.id, "USER"));
-    const secret = await secretGet(credentialSecretKey(credential.id, "PASS"));
+    const [username, secret] = await Promise.all([
+      secretGet(credentialSecretKey(credential.id, "USER")),
+      secretGet(credentialSecretKey(credential.id, "PASS")),
+    ]);
     if (!username || !secret) throw new Error(`credential '${credential.name}' has no stored value — re-create it in Settings → Cofre`);
     return { credential, username, secret };
   }
