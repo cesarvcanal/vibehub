@@ -35,7 +35,6 @@ import { ok, fail } from "./toolResult.js";
  * that come out of the instruction carry their identity.
  */
 
-
 /**
  * Reads that change nothing. ChatGPT asks the user to CONFIRM every call to a tool that is not marked
  * read-only — by voice, a confirmation on every poll of a card would make following it unusable.

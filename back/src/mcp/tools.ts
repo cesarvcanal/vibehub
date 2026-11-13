@@ -28,7 +28,6 @@ import { ok, fail } from "./toolResult.js";
  * registry and runner code the UI uses.
  */
 
-
 /*
  * PR REVIEW — the shapes the two review AIs hand back. The enums are the server's contract, checked
  * here before anything reaches the orchestrator: a severity, proof kind or status outside the list is
