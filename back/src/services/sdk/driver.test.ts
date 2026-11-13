@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { hostExecutor, type HostExecutor } from "../../runtime/host.js";
+import { EXEC_TIMEOUT_MS, hostExecutor, type HostExecutor } from "../../runtime/host.js";
 import type { Card, Project } from "../board/registry.js";
 import {
   buildSdkDriverCommandLine,
@@ -222,6 +222,13 @@ describe("installCardSdkDriver — uma instalação por vez (single-flight)", ()
     expect(runScript).toHaveBeenCalledTimes(1);
     const script = String(runScript.mock.calls[0]![0]);
     expect(script.indexOf(SDK_DRIVER_PATH)).toBeLessThan(script.indexOf("npm install"));
+  });
+
+  it("o exec único leva o orçamento dos DOIS passos (antes cada um tinha o seu EXEC_TIMEOUT_MS)", async () => {
+    const run = installCardSdkDriver();
+    await drain();
+    await run;
+    expect(runScript.mock.calls[0]![1]).toEqual({ timeoutMs: 2 * EXEC_TIMEOUT_MS });
   });
 
   it("uma instalação TERMINADA não fica em cache: o próximo connect confere de novo (o marcador deixa isso barato)", async () => {

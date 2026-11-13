@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
+import { EXEC_TIMEOUT_MS, hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import { cardGitEnv } from "../github/runnerIdentity.js";
 import { cardWorkPaths } from "../board/workspace.js";
@@ -254,9 +254,14 @@ export function installCardSdkDriver(): Promise<void> {
   // synchronously up to its first await, so a throw there (executor, driver source read) would
   // run the cleanup BEFORE the `set` below and leave the rejected promise "in flight" forever.
   // One exec for both steps: each script is `set -e` + its own heredoc, so concatenated they still
-  // run in order and a failed plant stops before the npm step — one round trip instead of two.
+  // run in order and a failed plant stops before the npm step — one round trip instead of two. The
+  // timeout is the two steps' budget: each had its own EXEC_TIMEOUT_MS, and npm on a slow runner
+  // must not lose the slice the plant used to get.
   const run = (async () => {
-    await hostExecutor().runScript(`${buildInstallDriverScript(container, sdkDriverSource())}\n${buildEnsureSdkScript(container)}`);
+    await hostExecutor().runScript(
+      `${buildInstallDriverScript(container, sdkDriverSource())}\n${buildEnsureSdkScript(container)}`,
+      { timeoutMs: 2 * EXEC_TIMEOUT_MS },
+    );
   })().finally(() => installsInFlight.delete(container));
   installsInFlight.set(container, run);
   return run;
