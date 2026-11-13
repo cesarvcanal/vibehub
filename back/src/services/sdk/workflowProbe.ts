@@ -1,5 +1,5 @@
 import { shQuote } from "../../runtime/host.js";
-import { asFields, asInstant, asString, lastJsonLine, type Fields } from "./fields.js";
+import { asFields, asInstant, asString, lastJsonLine } from "./fields.js";
 
 /**
  * THE FLEET PROBES — the JS that runs INSIDE the runner (through `docker exec … node -e`), the commands

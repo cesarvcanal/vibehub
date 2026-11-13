@@ -1,6 +1,6 @@
 import { config } from "../../config/env.js";
 import { hostExecutor, shQuote } from "../../runtime/host.js";
-import { asFields, asInstant, asString, lastJsonLine, type Fields } from "./fields.js";
+import { asFields, asInstant, asString, lastJsonLine } from "./fields.js";
 import { summarizeToolResult, type ToolResultSummary } from "./toolResult.js";
 
 /**
