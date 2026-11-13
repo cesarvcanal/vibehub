@@ -530,6 +530,23 @@ describe("board registry (persisted)", () => {
     await expect(reg.updateProject("nope", { name: "x" })).rejects.toThrow(/project not found/);
   });
 
+  it("getCardWithProject: returns both, and names which one is missing (the 404 the routes map from)", async () => {
+    const p = await seedProject();
+    const card = await reg.createCard({ projectId: p.id, title: "pair" });
+    const found = await reg.getCardWithProject(card.id);
+    expect(found.card.id).toBe(card.id);
+    expect(found.project.id).toBe(p.id);
+
+    await expect(reg.getCardWithProject("00000000-0000-4000-8000-000000000000")).rejects.toThrow(/^card not found$/);
+
+    // A card left behind by a hand-edited board.json, its project gone.
+    const raw = JSON.parse(await readFile(join(dir, "board.json"), "utf8")) as { projects: unknown[] };
+    raw.projects = [];
+    await writeFile(join(dir, "board.json"), JSON.stringify(raw));
+    const reread = await freshRegistry();
+    await expect(reread.getCardWithProject(card.id)).rejects.toThrow(/^project for this card not found$/);
+  });
+
   it("createCard: lands at the TOP of the backlog with derived session/slug and inherited base", async () => {
     const p = await seedProject({ baseBranch: "main" });
     const a = await reg.createCard({ projectId: p.id, title: "First card" });
