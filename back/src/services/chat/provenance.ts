@@ -36,12 +36,12 @@ export interface MessageOrigin {
   sourceProjectId?: string;
 }
 
-/** One recorded send. `key` is the normalized text; `at` is when the send happened (epoch ms). */
 /** The origin of a message a PERSON sent: their role and username. */
 export function originOfUser(user: Pick<PublicUser, "role" | "username">): MessageOrigin {
   return { kind: user.role === "owner" ? "owner" : "user", name: user.username };
 }
 
+/** One recorded send. `key` is the normalized text; `at` is when the send happened (epoch ms). */
 export interface ProvenanceEntry {
   at: number;
   key: string;
