@@ -908,7 +908,7 @@ export function parseLastTurn(jsonl: string): { model: string | null; at: number
       at = entryTime(obj);
       requestedAt = lastUserAt;
       // Claude Code stamps every assistant turn with the session's reasoning level (`effort`) — the
-      // only place that says what an UNPINNED card is really running on.
+      // only place that says what an UNPINNED card is really running on — except a bumped turn (above).
       const e = (obj as { effort?: unknown }).effort;
       effort = !bumped && isValidEffort(typeof e === "string" ? e : null) ? (e as string) : null;
     }
