@@ -192,6 +192,45 @@ describe("a voice call inside the card's chat", () => {
     expect(thinkingSent().join(" ")).not.toContain("resposta antiga");
   });
 
+  it("a delegation from the voice goes to the card's agent, and its answer comes back for the voice to say", async () => {
+    // Production, 2026-11-13: the voice said "deixa eu recapitular rapidinho…" and went silent for
+    // good — GPT-Live had handed the task to this app (client delegation) and nobody answered.
+    const { ws } = await openChat();
+    await startCall();
+    act(() => channel().emit({ type: "session.input_transcript.delta", delta: "recapitula tudo que tem no chat", start_ms: 0, end_ms: 900 }));
+    act(() => channel().emit({ type: "session.delegation.created", offset_ms: 1000, delegation: { id: "item_d1", type: "delegation", target: "client" } }));
+    act(() => channel().emit({ type: "session.output_transcript.delta", delta: "Claro, deixa eu recapitular rapidinho...", start_ms: 1000, end_ms: 2000 }));
+
+    // The request reaches the agent through the chat's own flow, with what the person asked.
+    await waitFor(() => expect(ws.frames.some((f) => f.type === "user" && f.text?.includes("recapitula tudo que tem no chat"))).toBe(true));
+    // The voice knows the work started (silently, on that delegation) and the call shows it working
+    // once its spoken acknowledgement is over.
+    expect(channel().sent).toContainEqual(expect.objectContaining({ type: "session.thinking.append", delegation_id: "item_d1" }));
+    await waitFor(() => expect(screen.getByTestId("voice-call-bar")).toHaveAttribute("data-phase", "thinking"), { timeout: 3_000 });
+
+    ws.deliver({ type: "assistant_text", text: "Resumo: falta decidir o layout da planilha e quem aprova as metas." });
+    ws.deliver({ type: "result", isError: false });
+    await waitFor(() =>
+      expect(channel().sent).toContainEqual({
+        type: "session.commentary.append",
+        delegation_id: "item_d1",
+        content: "Resumo: falta decidir o layout da planilha e quem aprova as metas.",
+      }),
+    );
+    // Said once, on its delegation — not repeated as loose context.
+    expect(thinkingSent().join(" ")).not.toContain("falta decidir o layout");
+  });
+
+  it("a delegation the chat cannot hand over is answered anyway — the voice is never left waiting", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    ws.drop();
+    act(() => channel().emit({ type: "session.input_transcript.delta", delta: "roda os testes", start_ms: 0, end_ms: 500 }));
+    act(() => channel().emit({ type: "session.delegation.created", offset_ms: 600, delegation: { id: "item_d2", type: "delegation", target: "client" } }));
+    // Wire down: the request waits in the chat's queue like a typed message, and the voice is told so.
+    await waitFor(() => expect(channel().sent).toContainEqual(expect.objectContaining({ type: "session.thinking.append", delegation_id: "item_d2" })));
+  });
+
   it("leaving the chat (another card, the terminal tab) ends the call and releases the mic", async () => {
     const { rerender } = await openChat();
     await startCall();
