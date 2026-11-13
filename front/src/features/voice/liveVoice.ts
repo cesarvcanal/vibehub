@@ -83,6 +83,12 @@ export const CONTEXT_MAX_CHARS = 1_200;
 /** How an update about a delegation reaches the model: kept for later (`progress`) or said now (`result`). */
 export type DelegationUpdate = "progress" | "result";
 
+/**
+ * Takes a delegation: its id, and the call's turns at that moment — the event carries no task text,
+ * the task is what was just said.
+ */
+export type DelegationListener = (id: string, turns: VoiceTurn[]) => void;
+
 /** The answer to a delegation when nobody in this page can do the work (the calibration lab). */
 const NO_DELEGATE = "Não há quem faça isso nesta conversa: diga à pessoa, em poucas palavras, que você não consegue fazer isso aqui.";
 
@@ -129,7 +135,7 @@ export class LiveVoiceSession {
   private attempt = 0;
   private segmenter: TurnSegmenter | null = null;
   private readonly finalListeners = new Set<(turn: VoiceTurn) => void>();
-  private readonly delegationListeners = new Set<(id: string) => void>();
+  private readonly delegationListeners = new Set<DelegationListener>();
   /** The assistant "speaking" by its transcript — the orb's last resort when no audio is measurable. */
   readonly speech = new EventEnvelope();
 
@@ -159,7 +165,7 @@ export class LiveVoiceSession {
   }
 
   /** Called with the id of every delegation the model hands to this app (see the module comment). */
-  onDelegation(listener: (id: string) => void): () => void {
+  onDelegation(listener: DelegationListener): () => void {
     this.delegationListeners.add(listener);
     return () => this.delegationListeners.delete(listener);
   }
@@ -399,7 +405,8 @@ export class LiveVoiceSession {
         const id = event.delegation?.id;
         if (typeof id !== "string" || !id) break;
         if (this.delegationListeners.size === 0) this.answerDelegation(id, NO_DELEGATE, "result");
-        for (const listener of this.delegationListeners) listener(id);
+        const turns = this.segmenter?.turns.slice() ?? [];
+        for (const listener of this.delegationListeners) listener(id, turns);
         break;
       }
       case "session.input_audio.muted":

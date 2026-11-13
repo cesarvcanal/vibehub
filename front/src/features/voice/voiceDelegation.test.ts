@@ -38,9 +38,9 @@ describe("delegationReply", () => {
   const request = "[pedido por voz]\nroda os testes";
 
   it("waits until the request is in the chat and the agent's turn on it is over", () => {
-    expect(delegationReply([], request, false)).toEqual({ state: "waiting" });
+    expect(delegationReply([], request, false)).toEqual({ state: "waiting", answers: [] });
     const rows = [user("u1", request), answer("a1", "Rodando…")];
-    expect(delegationReply(rows, request, true)).toEqual({ state: "waiting" });
+    expect(delegationReply(rows, request, true)).toEqual({ state: "waiting", answers: ["Rodando…"] });
   });
 
   it("answers with the agent's LAST word on it — not a subagent's, not one still streaming, not the next request's", () => {

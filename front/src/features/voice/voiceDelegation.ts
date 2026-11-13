@@ -48,9 +48,9 @@ export function isAgentAnswer(row: SdkRow): row is Extract<SdkRow, { kind: "assi
   return row.kind === "assistant" && !row.parent && !row.streaming && row.text.trim() !== "";
 }
 
+/** `answers`: every answer the agent gave on the request so far — when it is over, the last one is `text`. */
 export type DelegationReply =
-  | { state: "waiting" }
-  /** `answers`: every answer the agent gave on the request — the last one is `text`. */
+  | { state: "waiting"; answers: string[] }
   | { state: "answered"; text: string; answers: string[] }
   | { state: "silent"; answers: [] };
 
@@ -61,10 +61,10 @@ export type DelegationReply =
  */
 export function delegationReply(rows: SdkRow[], request: string, turnRunning: boolean): DelegationReply {
   const at = rows.findLastIndex((row) => row.kind === "user" && row.text === request);
-  if (at < 0) return { state: "waiting" };
+  if (at < 0) return { state: "waiting", answers: [] };
   const next = rows.findIndex((row, i) => i > at && row.kind === "user");
-  if (next < 0 && turnRunning) return { state: "waiting" };
   const answers = rows.slice(at + 1, next < 0 ? rows.length : next).filter(isAgentAnswer).map((row) => row.text);
+  if (next < 0 && turnRunning) return { state: "waiting", answers };
   const last = answers.at(-1);
   return last === undefined ? { state: "silent", answers: [] } : { state: "answered", text: last, answers };
 }

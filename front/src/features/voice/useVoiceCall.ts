@@ -1,6 +1,6 @@
 import * as React from "react";
 import { api, post } from "@/lib/api";
-import { LiveVoiceSession, type LiveVoiceDeps, type LiveVoiceSnapshot } from "./liveVoice";
+import { LiveVoiceSession, type DelegationListener, type DelegationUpdate, type LiveVoiceDeps, type LiveVoiceSnapshot } from "./liveVoice";
 import { AI_TUNING, LevelMeter, MIC_TUNING, createCallAudioContext, visualLevel } from "./audioLevel";
 import { INITIAL_PHASE, nextPhase, type PhaseMemory, type VoicePhase } from "./voicePhase";
 import { TURN_TEXT_MAX, type LocalVoiceTurn, type TurnSave, type VoiceTurn } from "./voiceTurns";
@@ -330,13 +330,21 @@ export function useVoiceCall({
     session?.resumePlayback();
   }, [session]);
   const appendContext = React.useCallback((text: string) => session?.appendContext(text) ?? false, [session]);
+  const onDelegation = React.useCallback(
+    (listener: DelegationListener) => session?.onDelegation(listener) ?? (() => false),
+    [session],
+  );
+  const answerDelegation = React.useCallback(
+    (id: string, text: string, update: DelegationUpdate) => session?.answerDelegation(id, text, update) ?? false,
+    [session],
+  );
 
   const turns: LocalVoiceTurn[] = React.useMemo(
     () => snap.turns.map((t) => (saves[t.vid] ? { ...t, save: saves[t.vid] } : t)),
     [snap.turns, saves],
   );
 
-  return { snap, phase, turns, start, stop, setMuted, resumePlayback, appendContext, orbLevels, meterRef, active };
+  return { snap, phase, turns, start, stop, setMuted, resumePlayback, appendContext, onDelegation, answerDelegation, orbLevels, meterRef, active };
 }
 
 export type VoiceCall = ReturnType<typeof useVoiceCall>;

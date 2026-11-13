@@ -264,10 +264,12 @@ describe("LiveVoiceSession — while live", () => {
   it("a delegation goes to whoever took it, and its updates carry its id: progress silent, the result spoken", async () => {
     const { session, rig } = await liveSession();
     const ch = rig.peer().channel!;
-    const taken: string[] = [];
-    session.onDelegation((id) => taken.push(id));
+    const taken: { id: string; said: string[] }[] = [];
+    session.onDelegation((id, turns) => taken.push({ id, said: turns.map((t) => t.text) }));
+    ch.emit({ type: "session.input_transcript.delta", delta: "roda os testes" });
     ch.emit({ type: "session.delegation.created", offset_ms: 900, delegation: { id: "item_1", type: "delegation", target: "client" } });
-    expect(taken).toEqual(["item_1"]);
+    // The task is what was just said — the event carries none.
+    expect(taken).toEqual([{ id: "item_1", said: ["roda os testes"] }]);
 
     expect(session.answerDelegation("item_1", "Pedido   passado ao agente.", "progress")).toBe(true);
     expect(ch.sent).toContainEqual({ type: "session.thinking.append", delegation_id: "item_1", content: "Pedido passado ao agente." });
