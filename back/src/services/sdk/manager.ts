@@ -1343,13 +1343,13 @@ function noteChatActivity(session: DriverSession): void {
 /**
  * The bookkeeping of a turn the driver just accepted: one more turn running (board status, no idle
  * stop) and its words in the mirror's dedupe memory, so the transcript does not echo them back.
- * Only a PERSON's turn is a sign of life for the idle sweep — a turn the panel injected is not.
+ * A PERSON's turn is also a sign of life for the idle sweep: its callers stamp `noteChatActivity`
+ * themselves, so a turn the panel injects can never keep a card awake by passing the wrong flag.
  */
-function countSentTurn(session: DriverSession, sentText: string, by: "person" | "panel"): void {
+function countSentTurn(session: DriverSession, sentText: string): void {
   session.activeTurns += 1;
   syncBoardStatus(session);
   clearIdleTimer(session);
-  if (by === "person") noteChatActivity(session);
   noteDriverEventFor(session.cardId, { type: "user", text: sentText });
 }
 
@@ -1447,7 +1447,8 @@ export function dispatchClientFrame(
     // order, one per edit.
     session.rewinds.push({ original: control.original, text: control.text, ...first });
     // The transcript will carry the WRAPPED words — that is what the mirror must not re-emit.
-    countSentTurn(session, wrapped, "person");
+    countSentTurn(session, wrapped);
+    noteChatActivity(session);
     const at = Date.now();
     const edited: HistoryEvent = { type: "message_edited", originalText: control.original, ...first, at };
     void appendHistory(session.cardId, edited);
@@ -1466,7 +1467,8 @@ export function dispatchClientFrame(
     // it whatever question is open.
     if (control.now && session.openAsks.size > 0) noteStop(session, origin, "send_now");
     if (!writeToDriver(session, control)) return { kind: "refused", cid: control.cid, reason: "driver-gone" };
-    countSentTurn(session, control.text, "person");
+    countSentTurn(session, control.text);
+    noteChatActivity(session);
     const at = Date.now();
     const line: HistoryEvent = { type: "user", text: control.text, at, from: origin };
     const persisted = appendHistoryReported(session.cardId, line);
@@ -1551,7 +1553,8 @@ function answerLate(session: DriverSession, card: QuestionCard, control: Questio
   const late = buildLateAnswerText(card.questions, control.answers, origin?.name, card.by);
   if (!late || !canAcceptTurn(session)) return;
   if (!writeToDriver(session, { type: "user", text: late.sent, keepQuestions: true })) return;
-  countSentTurn(session, late.sent, "person");
+  countSentTurn(session, late.sent);
+  noteChatActivity(session);
   const line: HistoryEvent = { type: "user", text: late.shown, sent: late.sent, at: Date.now(), from: origin };
   void appendHistoryReported(session.cardId, line);
   relayToPeers(session, undefined, line);
@@ -1680,7 +1683,8 @@ async function answerOrphanQuestion(session: DriverSession, control: QuestionAns
     release("driver exited before the answer reached it — answer again once the chat reconnects");
     return;
   }
-  countSentTurn(session, text, "person");
+  countSentTurn(session, text);
+  noteChatActivity(session);
   markPersonTurn(session, { startedAt: Date.now(), preview: inflightPreview(text), attempts: 0 });
   session.answeringOrphans.delete(control.id);
   session.settledOrphans.add(control.id);
@@ -2019,7 +2023,7 @@ function writeInjectedTurn(session: DriverSession, text: string, origin: Message
 }
 
 function recordInjectedTurn(session: DriverSession, text: string, origin: MessageOrigin): void {
-  countSentTurn(session, text, "panel");
+  countSentTurn(session, text);
   const line: HistoryEvent = { type: "user", text, at: Date.now(), from: origin };
   void appendHistory(session.cardId, line);
   // Nobody typed it, so nobody drew it: every open tab gets it, or the answer arrives without it.
