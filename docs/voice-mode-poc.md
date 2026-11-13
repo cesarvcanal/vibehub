@@ -39,8 +39,19 @@ transcrição (fragmentos) → turnos → POST /api/cards/:id/voice/turns → sd
 - **Texto e anexos durante a chamada:** seguem pelo envio normal do chat, para o agente do card
   (Claude Code). O GPT-Live **não tem entrada de texto nem de arquivo/imagem**: a voz só fica sabendo
   que algo foi escrito e quantas imagens foram anexadas, e a faixa da chamada diz isso na tela.
-- **A voz não age no card:** é outro modelo; ela conversa sobre a thread, não roda comandos. Pedido
-  de ação se digita no campo (a voz orienta isso).
+- **Codar conversando (delegação):** a voz é outro modelo e não age no card sozinha; o que ela não
+  responde pela conversa recente (recapitular o chat, ver código, rodar testes, editar, commitar)
+  ela DELEGA. A sessão é criada com `delegation: { type: "client" }` e as instruções do card trazem
+  a `Delegation policy` com `<|SpawnThinking|>` (contrato de prompt do GPT-Live). Cada
+  `session.delegation.created` vira mensagem para o agente do card pelo envio do próprio chat
+  (`[pedido por voz]` + a última fala + a transcrição recente da chamada): entra na fila como uma
+  digitada, aparece na thread e a faixa mostra "pensando". A voz recebe na hora um progresso
+  silencioso (`session.thinking.append` com o id da delegação) e, quando o turno do agente sobre
+  aquele pedido termina, a última resposta dele volta para ser falada (`session.commentary.append`
+  com o mesmo id). Toda delegação recebe um resultado — pedido que não saiu, nada ouvido, agente
+  mudo, ou o laboratório sem agente —, porque o GPT-Live espera por ele: sem isso a voz dizia
+  "deixa eu recapitular" e ficava muda (produção, 13/11/2026). Arquivos: `voiceDelegation.ts`,
+  `useVoiceDelegation.ts`.
 - **Fases (orbe e status):** conectando → ouvindo → você falando → pensando → respondendo →
   interrompido / mudo / falha, dirigidas por eventos reais (`voicePhase.ts`) com histerese: a Marca
   Viva aparece só ao conectar ou quando há resposta devida (≥ 0,7 s de silêncio depois de você
@@ -67,7 +78,7 @@ transcrição (fragmentos) → turnos → POST /api/cards/:id/voice/turns → sd
 - **Custo:** cada criação cobra 15 s de voz adiantados; teto de 6 criações por pessoa por minuto.
 
 Arquivos: back `services/voice/{live,context,turns}.ts`, `routes/voice.ts`; front
-`features/voice/{useVoiceCall,liveVoice,audioLevel,voicePhase,voiceTurns,voiceContext}.ts`,
+`features/voice/{useVoiceCall,useVoiceDelegation,liveVoice,audioLevel,voicePhase,voiceTurns,voiceContext,voiceDelegation}.ts`,
 `VoiceCallBar.tsx`, `VoiceTurnBubble.tsx`, `ComposerVoiceButton.tsx`, `living/*`, e a integração em
 `features/board/components/SdkChatView.tsx`.
 
@@ -171,11 +182,13 @@ Playwright; o cabeçalho do arquivo tem o comando.
   navegador não entregar o track remoto ao Web Audio, a cadeia de fallback (RTP → eventos) assume e
   `data-ai-source` mostra qual está ativa. Os eventos seguem a documentação pública do GPT-Live
   (`session.started`, `session.*_transcript.delta` com `start_ms/end_ms`, `session.thinking.append`,
-  `error`, `session.closed`, `session.input_audio.mute`).
+  `session.commentary.append`, `session.delegation.created`, `error`, `session.closed`,
+  `session.input_audio.mute`).
 - GPT-Live não aceita texto, imagem nem arquivo: anexos vão para o agente do card pelo chat e a voz
   só recebe o aviso. Não há como a voz "ler" o anexo em tempo real.
-- A voz não executa ações no card (sem delegação para o Claude). Um próximo passo possível é a
-  delegação `client` do GPT-Live encaminhando o pedido falado ao agente, com confirmação.
+- A delegação não traz o texto da tarefa (só o id): o pedido é a última fala da pessoa. Se a
+  transcrição errou, o agente recebe o erro; a transcrição recente vai junto para ele desambiguar.
+- Pedido de ação por voz segue o que o agente faria se fosse digitado: não há confirmação extra.
 - Interromper é por voz (barge-in do modelo); não existe evento de "cancelar resposta" no GPT-Live
   com delegação `client`.
 - Teto de criações em memória, por processo: num deploy blue/green ou com várias réplicas ele não é

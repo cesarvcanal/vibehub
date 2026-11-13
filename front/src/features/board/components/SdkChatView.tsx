@@ -31,7 +31,8 @@ import { useVoiceCall } from "@/features/voice/useVoiceCall";
 import { VoiceCallBar } from "@/features/voice/VoiceCallBar";
 import { VoiceCallContext, type VoiceCallControl } from "@/features/voice/ComposerVoiceButton";
 import { VoiceTurnBubble } from "@/features/voice/VoiceTurnBubble";
-import { agentContext, typedContext } from "@/features/voice/voiceContext";
+import { typedContext } from "@/features/voice/voiceContext";
+import { useVoiceDelegation } from "@/features/voice/useVoiceDelegation";
 import { AnswerActions } from "@/features/voice/AnswerActions";
 import { readAloud, readAloudError, setReadAloudErrorHandler } from "@/features/voice/readAloud";
 import { PlanUsageAlert, cardRateLimitsKey, useCardPlanUsage } from "@/features/board/components/PlanUsage";
@@ -1168,17 +1169,24 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
       armBtwExpiry(askedAt);
       return;
     }
+    try {
+      sendOrQueue(text);
+    } catch (err) {
+      toast.error((err as Error).message);
+      throw err; // the composer keeps the words
+    }
+  };
+
+  /** A new message for the agent: it waits in the queue while it cannot go (see `send`), or goes now. Throws when it cannot. */
+  const sendOrQueue = (text: string): void => {
+    const chat = readSettledState();
+    const wireUp = connected && socketRef.current?.readyState === WebSocket.OPEN;
     const waits = !wireUp || !chat.ready || chat.turnActive || chat.awaiting || pendingEdit;
     if (waits && pendingRef.current.length === 0) {
       setQueue((prev) => enqueue(prev, { id: newQueueId(), text, at: Date.now(), from: selfOriginRef.current }));
       return;
     }
-    try {
-      dispatchTurn(text);
-    } catch (err) {
-      toast.error((err as Error).message);
-      throw err; // the composer keeps the words
-    }
+    dispatchTurn(text);
   };
 
   /*
@@ -1271,7 +1279,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
    * A VOICE CALL IN THIS CHAT (features/voice/useVoiceCall.ts). Same thread, same composer: the
    * spoken turns are drawn here as they are said and saved into this card's log; what is typed or
    * attached during the call goes to the agent exactly as always, and the voice is told about it
-   * (and about the agent's answers) as quiet context — it cannot read files or images itself.
+   * as quiet context — it cannot read files or images itself. What the voice delegates goes to the
+   * agent too, and the agent's answers come back to it (features/voice/useVoiceDelegation.ts).
    */
   const [sentDuringCall, setSentDuringCall] = React.useState(false);
   const callWorking = connected && (state.awaiting || state.turnActive);
@@ -1308,27 +1317,17 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [send, callLive, call.appendContext],
   );
-  // The agent's answers that land during the call reach the voice too. Keyed by TEXT: a reconnect
-  // replays the thread with new row ids, and must not re-tell the voice what it already knows.
-  const toldVoice = React.useRef<Set<string> | null>(null);
-  React.useEffect(() => {
-    if (!callLive) {
-      toldVoice.current = null;
-      return;
-    }
-    const answers = state.rows.filter(
-      (row): row is Extract<SdkRow, { kind: "assistant" }> => row.kind === "assistant" && !row.parent && !row.streaming && row.text.trim() !== "",
-    );
-    if (toldVoice.current === null) {
-      toldVoice.current = new Set(answers.map((row) => row.text));
-      return;
-    }
-    for (const row of answers) {
-      if (toldVoice.current.has(row.text)) continue;
-      toldVoice.current.add(row.text);
-      call.appendContext(agentContext(row.text));
-    }
-  }, [state.rows, callLive, call.appendContext]);
+  useVoiceDelegation({
+    call,
+    rows: state.rows,
+    // Not `callWorking`: a dropped wire clears `connected` but not the turn, and the delegation must
+    // wait for the turn's real end, not answer with whatever was said before the blip.
+    turnRunning: state.awaiting || state.turnActive,
+    sendToAgent: (text) => {
+      sendOrQueue(text);
+      setSentDuringCall(true);
+    },
+  });
   /** The thread as drawn: the saved rows plus the call's turns still being spoken or saved. */
   const displayRows = React.useMemo(() => mergeLiveVoiceTurns(state.rows, call.turns, selfOrigin), [state.rows, call.turns, selfOrigin]);
   const showCallBar = call.active || (call.phase === "error" && !callBarDismissed);

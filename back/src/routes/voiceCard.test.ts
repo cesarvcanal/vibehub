@@ -200,6 +200,10 @@ describe("POST /api/cards/:id/voice/sessions", () => {
     // Tool calls never reach the voice: noise, and sometimes secrets the agent printed.
     expect(instructions).not.toContain(".env");
     expect(instructions.indexOf("corrige")).toBeLessThan(instructions.indexOf("e o deploy?"));
+    // What the voice cannot answer from that thread it hands to the card's agent (client delegation).
+    expect(sent.session.delegation).toEqual({ type: "client" });
+    expect(instructions).toContain("Generate <|SpawnThinking|> when:");
+    expect(instructions).toContain("recapitular");
   });
 
   it("still 404s while the mode is off, without calling OpenAI", async () => {

@@ -13,8 +13,12 @@ import { logger } from "../../utils/logger.js";
  * Turn-taking and barge-in are the model's (GPT-Live is full duplex): there is nothing to configure.
  *
  * Off unless `VIBEHUB_VOICE_LIVE=1`. Held from a card's chat (`/api/cards/:id/voice/sessions`) it
- * knows that chat's recent thread and its turns are saved there (./context.ts, ./turns.ts); it
- * still never acts on the card. The bare `/api/voice/live/sessions` is the plain conversation the
+ * knows that chat's recent thread and its turns are saved there (./context.ts, ./turns.ts). It never
+ * acts on the card itself: what it cannot answer from that thread it DELEGATES, and delegation is
+ * the browser's (`client`) — the chat hands the task to the card's agent and returns the answer
+ * (front/src/features/voice/useVoiceDelegation.ts). A session with no `delegation` is client mode
+ * too, and nothing answered it: the voice promised "deixa eu recapitular" and waited forever
+ * (production, 2026-11-13). The bare `/api/voice/live/sessions` is the plain conversation the
  * calibration lab uses.
  * Never logged: the key, the SDP (it carries the client's network candidates) and any audio.
  */
@@ -34,23 +38,50 @@ const LIVE_TIMEOUT_MS = 20_000;
  */
 export const CREATES_PER_MINUTE = 6;
 
+/** Who delegated work goes to: always this app (see the module comment). */
+const DELEGATION = { type: "client" } as const;
+
 const INSTRUCTIONS =
   "Você é o assistente de voz do vibehub. Converse em português do Brasil, de forma natural e breve: " +
-  "respostas curtas, faladas, sem listas nem markdown. Se não souber, diga que não sabe.";
+  "respostas curtas, faladas, sem listas nem markdown. Se não souber, diga que não sabe.\n\n" +
+  "Delegation policy:\nBackend tools: nenhuma nesta conversa. Não gere <|SpawnThinking|>.";
 
 /**
- * A call held INSIDE a card's chat. The chat's own assistant is the card's Claude Code agent; the
- * voice is a separate model that talks ABOUT that conversation and cannot act on the card. What the
- * person types or attaches during the call goes to the agent through the chat, and reaches the
- * voice only as quiet context (`session.thinking.append`, see the browser's liveVoice.ts).
+ * A call held INSIDE a card's chat — the person codes by talking. The card's Claude Code agent does
+ * the work; the voice converses, asks what is missing and hands the work over (delegation), then
+ * says the result. What the person types or attaches during the call goes to the agent through the
+ * chat, and reaches the voice only as quiet context (`session.thinking.append`, see the browser's
+ * liveVoice.ts). The `Delegation policy` labels and `<|SpawnThinking|>` are GPT-Live's prompt
+ * contract (developers.openai.com/api/docs/guides/live-prompting): a spoken "vou ver" does not
+ * start any work, the token does.
  */
-const CARD_INSTRUCTIONS =
-  "Você é a voz do chat de um card do vibehub. Converse em português do Brasil, de forma natural e breve: " +
-  "respostas curtas, faladas, sem listas nem markdown. O assistente principal deste chat é o agente do card " +
-  "(Claude Code), que trabalha no código; você NÃO executa ações, não roda comandos e não vê arquivos nem " +
-  "imagens. Se a pessoa pedir uma ação no projeto, diga que ela pode digitar o pedido no chat (o campo " +
-  "continua disponível durante a chamada) para o agente fazer. Você recebe, como contexto silencioso, o que " +
-  "for escrito ou respondido no chat durante a chamada. Se não souber, diga que não sabe.";
+const CARD_INSTRUCTIONS = [
+  "Você é a voz do chat de um card do vibehub: a pessoa programa conversando com você. Fale em português " +
+    "do Brasil, de forma natural e breve: respostas curtas, faladas, sem listas nem markdown.",
+  "Quem trabalha no projeto é o agente do card (Claude Code): ele tem o histórico inteiro do chat, lê o " +
+    "código e os arquivos, roda comandos e testes, edita e commita. Você não vê arquivos nem imagens: você " +
+    "conversa, entende o que a pessoa quer, pergunta o que faltar e passa o trabalho para o agente.",
+  "Backchannel policy: use poucos sinais de escuta, sem competir com a fala da pessoa.",
+  "Interruption policy: pare de falar quando a pessoa interromper e escute.",
+  "Delegation policy:\n" +
+    "Backend tools:\n" +
+    "- Agente do card (Claude Code): responde sobre o projeto, o código e todo o histórico do chat — " +
+    "inclusive recapitular a conversa e levantar dúvidas e decisões pendentes; investiga, edita arquivos, " +
+    "roda comandos e testes, commita.\n\n" +
+    "Generate <|SpawnThinking|> when:\n" +
+    "- A pessoa pede informação que não está na conversa recente abaixo: histórico do chat, código, arquivos, testes, PRs.\n" +
+    "- A pessoa pede para recapitular ou resumir o chat, ou levantar dúvidas e decisões pendentes.\n" +
+    "- A pessoa pede uma ação no projeto: investigar, mudar código, rodar algo, commitar.\n" +
+    "- Uma correção muda um trabalho já pedido ao agente.\n\n" +
+    "Do not generate <|SpawnThinking|> when:\n" +
+    "- Você responde pela conversa recente ou por um resultado do agente que ainda vale.\n" +
+    "- Falta um detalhe para entender o pedido: pergunte antes.\n\n" +
+    "Generate <|SpawnThinking|> before giving an answer that depends on the agent. Do not guess the result " +
+    "while waiting: diga em poucas palavras que pediu ao agente e siga conversando. Quando o resultado " +
+    "chegar, conte em poucas frases.",
+  "Você recebe, como contexto silencioso, o que for escrito ou respondido no chat durante a chamada. " +
+    "Se não souber, diga que não sabe.",
+].join("\n\n");
 
 /** The instructions for a call in a card's chat: the base text plus the recent thread. PURE. */
 export function cardInstructions(context: string): string {
@@ -171,7 +202,7 @@ export async function createLiveSession(offer: unknown, opts: CreateLiveSessionO
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        session: { model: LIVE_MODEL, instructions: opts.instructions ?? INSTRUCTIONS },
+        session: { model: LIVE_MODEL, instructions: opts.instructions ?? INSTRUCTIONS, delegation: DELEGATION },
         transport: { type: "webrtc", sdp },
       }),
       signal: AbortSignal.any(signals),
