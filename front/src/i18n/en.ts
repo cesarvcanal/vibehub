@@ -978,10 +978,10 @@ export const en: Record<string, string> = {
   "branchPicker.total": "{n} branches on GitHub",
   "branchPicker.truncated": "Showing the first {n} branches on GitHub",
   "branchPicker.refreshFailed": "Could not refresh the list from GitHub; it may be out of date.",
-  "branchPicker.badge.padrao": "default",
-  "branchPicker.badge.producao": "production",
-  "branchPicker.badge.principal": "main",
-  "branchPicker.badge.desenvolvimento": "development",
+  "branchPicker.badge.default": "default",
+  "branchPicker.badge.production": "production",
+  "branchPicker.badge.main": "main",
+  "branchPicker.badge.development": "development",
 
   /* ---------------------------------------------------------- project form */
   "project.settingsTitle": "Project settings",

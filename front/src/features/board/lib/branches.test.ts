@@ -5,17 +5,17 @@ describe("rankBranches", () => {
   it("destaca padrão, produção, main e dev nessa ordem; o resto vai em ordem alfabética", () => {
     const { featured, others } = rankBranches(["feat/z", "dev", "prod", "Fix/a", "main", "develop"], "dev");
     expect(featured).toEqual([
-      { name: "dev", highlight: "padrao" },
-      { name: "prod", highlight: "producao" },
-      { name: "main", highlight: "principal" },
-      { name: "develop", highlight: "desenvolvimento" },
+      { name: "dev", highlight: "default" },
+      { name: "prod", highlight: "production" },
+      { name: "main", highlight: "main" },
+      { name: "develop", highlight: "development" },
     ]);
     expect(others.map((b) => b.name)).toEqual(["feat/z", "Fix/a"].sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" })));
   });
 
   it("sem branch padrão conhecida, nada ganha o selo de padrão", () => {
     const { featured } = rankBranches(["main", "prod"], null);
-    expect(featured.map((b) => b.highlight)).toEqual(["producao", "principal"]);
+    expect(featured.map((b) => b.highlight)).toEqual(["production", "main"]);
   });
 
   it("nome parecido não é destaque: prod-old e devtools ficam no resto", () => {

@@ -7,10 +7,10 @@ import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 const HIGHLIGHT_TONE: Record<BranchHighlight, BadgeTone> = {
-  padrao: "info",
-  producao: "critical",
-  principal: "ok",
-  desenvolvimento: "warn",
+  default: "info",
+  production: "critical",
+  main: "ok",
+  development: "warn",
 };
 
 // The name truncates with an ellipsis at the dialog's width; the tooltip gives the whole name back on hover.

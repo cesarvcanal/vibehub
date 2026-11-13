@@ -1,5 +1,5 @@
 /** The badge a branch gets in the picker. The values are also the i18n keys `branchPicker.badge.*`. */
-export type BranchHighlight = "padrao" | "producao" | "principal" | "desenvolvimento";
+export type BranchHighlight = "default" | "production" | "main" | "development";
 
 export interface RankedBranch {
   name: string;

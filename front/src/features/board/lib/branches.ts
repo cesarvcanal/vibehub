@@ -3,18 +3,18 @@ import type { BranchHighlight, RankedBranch } from "@/features/board/types/branc
 /** Development branches that serve as a project's base; staging/homolog only get a badge. */
 const DEVELOPMENT_BASE_NAMES = ["dev", "develop", "development"] as const;
 
-const NAMES_BY_HIGHLIGHT: Record<Exclude<BranchHighlight, "padrao">, readonly string[]> = {
-  producao: ["prod", "production", "producao"],
-  principal: ["main", "master"],
-  desenvolvimento: [...DEVELOPMENT_BASE_NAMES, "staging", "homolog"],
+const NAMES_BY_HIGHLIGHT: Record<Exclude<BranchHighlight, "default">, readonly string[]> = {
+  production: ["prod", "production", "producao"],
+  main: ["main", "master"],
+  development: [...DEVELOPMENT_BASE_NAMES, "staging", "homolog"],
 };
 
-const NAMED_HIGHLIGHTS = ["producao", "principal", "desenvolvimento"] as const;
+const NAMED_HIGHLIGHTS = ["production", "main", "development"] as const;
 
-const HIGHLIGHT_ORDER: readonly BranchHighlight[] = ["padrao", ...NAMED_HIGHLIGHTS];
+const HIGHLIGHT_ORDER: readonly BranchHighlight[] = ["default", ...NAMED_HIGHLIGHTS];
 
 function highlightOf(name: string, defaultBranch: string | null): BranchHighlight | null {
-  if (name === defaultBranch) return "padrao";
+  if (name === defaultBranch) return "default";
   return NAMED_HIGHLIGHTS.find((highlight) => NAMES_BY_HIGHLIGHT[highlight].includes(name)) ?? null;
 }
 
@@ -33,7 +33,7 @@ export function rankBranches(
 
 /** Base branch for a new project: the development one, else main/master, else the repo's default. */
 export function suggestedBaseBranch(branches: readonly string[], defaultBranch: string | null): string | undefined {
-  const preferred = [...DEVELOPMENT_BASE_NAMES, ...NAMES_BY_HIGHLIGHT.principal];
+  const preferred = [...DEVELOPMENT_BASE_NAMES, ...NAMES_BY_HIGHLIGHT.main];
   return preferred.find((name) => branches.includes(name)) ?? defaultBranch ?? branches[0];
 }
 
