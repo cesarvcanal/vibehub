@@ -24,8 +24,8 @@ const sdkDest = join(backRoot, "dist", sdkRel);
 mkdirSync(sdkDest, { recursive: true });
 cpSync(join(backRoot, "src", sdkRel, "sdk-driver.mjs"), join(sdkDest, "sdk-driver.mjs"));
 
-// O conversor de documentos (`services/attachments/read-document.py`) — lido por services/attachments/document.ts
-// e enviado ao runner pelo stdin. tsc ignora .py, então ele é copiado para o mesmo caminho em dist.
+// The document converter (`services/attachments/read-document.py`) — read by services/attachments/document.ts
+// and sent to the runner through stdin. tsc ignores .py, so it is copied to the same path in dist.
 const attachmentsRel = join("services", "attachments");
 const attachmentsDest = join(backRoot, "dist", attachmentsRel);
 mkdirSync(attachmentsDest, { recursive: true });

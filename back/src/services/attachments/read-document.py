@@ -1,8 +1,8 @@
-"""Converte um documento do runner em texto/markdown para o agente e para o preview do chat.
+"""Converts a document on the runner into text/markdown for the agent and for the chat preview.
 
-Roda DENTRO do runner (`python3 - <caminho> <limite>`, o fonte chega pelo stdin). Imprime um JSON
-`{"formato", "texto", "truncado"}`; formato não suportado ou arquivo ilegível sai com código != 0 e a
-mensagem no stderr. Só biblioteca padrão + os pacotes apt de DOCUMENT_READER_PACKAGES.
+Runs INSIDE the runner (`python3 - <caminho> <limite>`, the source arrives through stdin). Prints a JSON
+`{"formato", "texto", "truncado"}`; an unsupported format or an unreadable file exits with code != 0 and
+the message on stderr. Only the standard library + the apt packages of DOCUMENT_READER_PACKAGES.
 """
 import json
 import os
