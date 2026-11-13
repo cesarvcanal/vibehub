@@ -6,7 +6,7 @@
 >
 > **O projeto:** IDE hospedada para agentes de código — um kanban de terminais Claude Code reais rodando em containers no servidor do próprio usuário. Backend Fastify, servidor MCP próprio (`back/src/mcp/`), persistência em JSON atômico (`back/src/store/`), runner Docker local ou via SSH (`back/src/runtime/host.ts`). Frontend React + Vite + React Query + Radix/Tailwind. Projeto **público (MIT) e auto-hospedado**: cada instalação tem os próprios dados, então contrato persistido não muda sem migração.
 >
-> **Regra de aplicação:** as regras gerais são **independentes do domínio** e não presumem entidades, telas ou fluxos de um módulo. As referências concretas a arquivos do vibehub são exemplos e pontos de entrada; os contratos reais saem da inspeção do trecho modificado (§12, passo 1).
+> **Regra de aplicação:** as regras gerais são **independentes do domínio** e não presumem entidades, telas ou fluxos de um módulo. As referências concretas a arquivos do vibehub são exemplos e pontos de entrada; os contratos reais saem da inspeção do trecho modificado (§12, passo 1). **Cada regra vale pelo princípio, não pela lista de exemplos:** caso não citado se resolve pelo espírito da regra mais próxima, e na dúvida se pergunta.
 >
 > **Fonte única:** este arquivo é a fonte das regras de código. O `CONTRIBUTING.md` é o resumo para contribuidores externos e não pode contradizê-lo.
 
@@ -34,6 +34,7 @@
 - **Commits, PRs e documentação de processo (`docs/`, este arquivo) em pt-BR.**
 - Não renomear contratos persistidos (`board.json` e afins), rotas HTTP, ferramentas MCP ou variáveis de ambiente só por estética. Isso é mudança de contrato (§6).
 - Funções usam **verbo preciso + objeto** (`assertMovableColumn`, `normalizeCardIds`). Variáveis descrevem conteúdo e função. Evitar `data`, `tmp`, `result`, `x` e abreviações opacas.
+- **Todo nome se lê sem abrir a implementação**, inclusive parâmetro de callback e variável de laço (`row`, não `r`). Uma coisa tem um nome só no mesmo escopo.
 - Não usar verbos genéricos como `process`, `handle`, `manage` quando houver ação mais precisa.
 - Nomes de variantes deixam claras as duas diferenças (`originalValue` e `convertedValue`, não `value` e `convertedValue`).
 - Convenções: `camelCase` para funções/variáveis, `PascalCase` para componentes/classes/tipos, `UPPER_SNAKE_CASE` para constantes realmente estáticas (`EXEC_TIMEOUT_MS`); hooks começam com `use`.
@@ -50,6 +51,7 @@
 - Não engolir erros, não retornar sucesso falso e não adicionar `setTimeout`/retries para esconder uma falha de fluxo.
 - Não criar flags, estados, campos ou leituras que ninguém consome.
 - Efeito colateral é explícito: função que grava, apaga ou muda estado diz isso no nome (`save`, `delete`, `set`…); um `get`/`read`/`parse` não grava nada.
+- **Cálculo e efeito em etapas separadas:** o que calcula (incluindo callbacks de `filter`/`map`/`find`) só devolve valor; o que envia, grava ou notifica vem depois, em passo próprio.
 - Reaproveitar utilitários e dependências **realmente existentes** antes de escrever abstrações novas ou instalar bibliotecas.
 - Respeitar o formatter e a organização do repositório. Não reformatar arquivos inteiros que não participam da tarefa.
 - **Comentários:** acompanhar a densidade do arquivo tocado. Módulos centrais abrem com um bloco que explica a responsabilidade e as invariantes (veja `runtime/host.ts`, `auth/access.ts`) — ao mudar uma invariante, atualize o bloco. Não narrar linhas óbvias.
@@ -81,12 +83,13 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 5. Evitar `any`, casts sem fundamento, estados impossíveis e interfaces redundantes.
 6. Não usar `useMemo`, `useCallback` ou `React.memo` indiscriminadamente — só com cálculo custoso, identidade referencial relevante ou benefício demonstrável.
 7. Não suprimir regras de hooks nem remover dependências de efeitos para esconder renderizações. Corrigir o fluxo.
-8. Evitar lógica de negócio e transformação complexa dentro do JSX.
-9. Derivar valores da fonte em vez de manter estados sincronizados para o mesmo fato. Dado do servidor mora no React Query, não copiado em `useState`.
-10. Reutilizar as primitivas de `components/ui` (Radix + Tailwind) antes de criar versões novas.
-11. Tratar carregamento, vazio, erro, sucesso e envio duplicado quando pertinentes.
-12. Não disparar requisições em renderização nem por efeito descontrolado.
-13. Esconder ação na UI é experiência; quem autoriza é o backend.
+8. **Efeito e estado com papel único:** cada efeito sincroniza uma coisa; estado criado só para disparar outro código indica fluxo errado.
+9. Evitar lógica de negócio e transformação complexa dentro do JSX.
+10. Derivar valores da fonte em vez de manter estados sincronizados para o mesmo fato. Dado do servidor mora no React Query, não copiado em `useState`.
+11. Reutilizar as primitivas de `components/ui` (Radix + Tailwind) antes de criar versões novas.
+12. Tratar carregamento, vazio, erro, sucesso e envio duplicado quando pertinentes.
+13. Não disparar requisições em renderização nem por efeito descontrolado.
+14. Esconder ação na UI é experiência; quem autoriza é o backend.
 
 ## 6. Contratos, schemas e integrações
 
@@ -96,7 +99,7 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 - **Dado persistido é contrato externo:** cada instalação auto-hospedada tem seu `board.json` e afins. Mudança de shape exige leitura compatível ou migração explícita e testada, nunca quebra silenciosa.
 - Contratos com terceiros (SDK e CLI do Claude, GitHub, Docker) seguem a especificação deles; mudança de versão exige conferir o comportamento real, não a memória.
 - Validar na entrada, com o padrão do ponto de entrada: ferramentas MCP com **zod** no schema da ferramenta; rotas HTTP chamam a função do registry/service que valida e lança, e a rota converte o erro de validação em 400 (e "not found" em 404). Dentro do fluxo já validado, confiar no tipo.
-- Comparar e referenciar entidades por **id**, nunca por nome ou título.
+- Comparar e referenciar entidades por **id**, nunca por nome, título ou texto, inclusive o que o próprio código acabou de criar.
 - Dado editável vive na sua fonte (configuração, cadastro, store). Não congelar no código ids, nomes, listas ou códigos que mudam.
 - Dado composto (autor, motivo, origem, instante, referência) vai em campos próprios, não concatenado num texto.
 - Centralizar enums e discriminantes (`as const` / union de literais) numa definição única, sem mapas paralelos descoordenados. `switch` cobre todas as variantes; variante sem suporte falha visivelmente.
@@ -120,6 +123,7 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 - Não reler ou regravar o estado inteiro por item quando uma operação em lote resolve.
 - Websocket e polling: emitir só o que mudou e só para quem pode ver. Não criar polling para mascarar evento faltando.
 - No front, evitar fetch redundante, renders desnecessários e processamento caro em renderização. Paginar ou virtualizar só quando a escala justificar.
+- Código que roda a cada atualização e percorre uma coleção que cresce trabalha só sobre o que mudou, não refaz o todo.
 - Cache, deduplicação e batch só por benefício concreto, com invalidação e ciclo de vida definidos.
 
 ## 9. Validação, erros e fallback
@@ -127,6 +131,7 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 - Validar **nas fronteiras**: HTTP, websocket, hooks vindos do runner, ferramentas MCP, entrada de CLI e respostas de integrações.
 - **Guard impõe contrato; fallback mascara erro.** Campo obrigatório ausente vira erro observável, não `""`, `0`, `null` ou `[]`.
 - Usar `??`, `||` ou `?.` só quando a ausência faz parte do contrato real.
+- **Dependência ausente falha à vista:** chamada sem destino (sessão, conexão, ouvinte) gera erro ou é impedida pelo tipo, nunca vira no-op silencioso.
 - Distinguir presença de verdade lógica: `0` e `false` podem ser valores válidos.
 - Erro informa o suficiente para diagnóstico sem expor token, segredo ou caminho sensível.
 - Integração que falhou não aparece como concluída. Retry só limitado e idempotente.
@@ -206,7 +211,8 @@ Pedir autorização e passar por brainstorming continua obrigatório para decis�
 ## 13. Revisão final (antes de entregar)
 
 - [ ] Resolvi o problema sem voltas, camadas ou abstrações artificiais?
-- [ ] Nomes seguem o padrão do arquivo (inglês, claros) e todo texto de tela está no i18n nos dois idiomas?
+- [ ] Nomes seguem o padrão do arquivo (inglês, legíveis sem abrir a implementação) e todo texto de tela está no i18n nos dois idiomas?
+- [ ] Cálculo separado de efeito, cada estado e efeito com papel único?
 - [ ] `const` como padrão, sem `var`, comentário óbvio ou código morto? Invariante mudada teve o comentário de bloco atualizado?
 - [ ] Componentes renderizam; regra está em `lib/` ou hook; contratos em `api/types.ts`?
 - [ ] Não dupliquei contrato, dado, estado ou fonte de verdade?
