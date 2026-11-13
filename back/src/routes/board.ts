@@ -33,8 +33,8 @@ type ReviewSummary = Pick<Review, "id" | "prNumber" | "phase" | "round"> & {
   pendingQuestions?: number;
   authorWorking?: boolean;
   /**
-   * Pronto, mas o gate do merge no commit aprovado ainda roda, falhou e a IA do autor corrige (`fixing`:
-   * roda de novo sozinho) ou falhou e espera uma pessoa: a linha não diz "pronto pra merge".
+   * Ready, but the merge gate on the approved commit is still running, failed and the author's AI is fixing
+   * it (`fixing`: runs again on its own) or failed and waits for a person: the line does not say "pronto pra merge".
    */
   mergeGateState?: "running" | "fixing" | "failed";
 };
@@ -72,8 +72,8 @@ async function withReviewSummary(cards: registry.Card[]): Promise<BoardCard[]> {
       const waiting = pendingQuestions(r.findings).length;
       const review: ReviewSummary = { id: r.id, prNumber: r.prNumber, phase: r.phase, round: r.round };
       if (waiting > 0) review.pendingQuestions = waiting;
-      // Pronto, com a IA do autor num turno (hooks ou chat nativo): a linha diz "IA trabalhando". Só quando
-      // o autor é ESTE card; o de um PR anexado é outro, e a linha lê isso ao vivo.
+      // Ready, with the author's AI in a turn (hooks or native chat): the line says "IA trabalhando". Only when
+      // the author is THIS card; an attached PR's is another one, and the line reads that live.
       if (r.phase === "ready" && r.cardId === c.id && isBusy(c)) review.authorWorking = true;
       const gate = r.mergeGate?.sha === r.reviewedSha ? r.mergeGate : undefined;
       if (r.phase === "ready" && gate?.state === "running") review.mergeGateState = "running";

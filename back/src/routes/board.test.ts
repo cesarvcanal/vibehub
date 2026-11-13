@@ -281,7 +281,7 @@ describe("cards", () => {
 });
 
 describe("revisão de PR no board", () => {
-  /** Uma revisão gravada direto no store (as rotas e o orquestrador têm os testes deles). */
+  /** A review recorded directly in the store (the routes and the orchestrator have their own tests). */
   async function review(cardId: string, projectId: string, over: { id: string; phase: string; createdAt: number; round?: number; prNumber?: number }) {
     const store = await import("../services/review/store.js");
     await store.insertReview({
@@ -309,13 +309,13 @@ describe("revisão de PR no board", () => {
         { id: string; review?: unknown }[];
       expect(cards.map((c) => c.id).sort()).toEqual([authorId, otherId].sort());
       expect(cards.some((c) => c.id === reviewerCard.id)).toBe(false);
-      // a mais recente, só o resumo (a lista de achados e o log ficam no GET da revisão)
+      // the most recent one, only the summary (the findings list and the log stay in the review's GET)
       expect(cards.find((c) => c.id === authorId)!.review).toEqual({ id: "r-new", prNumber: 7, phase: "fixing", round: 2 });
       expect(cards.find((c) => c.id === otherId)!.review).toBeUndefined();
-      // uma leitura do store por pedido, não uma por card
+      // one store read per request, not one per card
       expect(listReviewsFollowedBy).toHaveBeenCalledTimes(1);
     }
-    // o card do revisor segue alcançável pelo id (o painel abre a sessão dele)
+    // the reviewer's card stays reachable by id (the panel opens its session)
     expect((await app.inject({ method: "GET", url: `/api/cards/${reviewerCard.id}`, headers: { cookie } })).statusCode).toBe(200);
   });
 
@@ -354,14 +354,14 @@ describe("revisão de PR no board", () => {
       id: "r-gate", phase: "ready", createdAt: 1_000, reviewedSha: sha, mergeGate: { sha, state: "failed", output: "CI do PR vermelho: back", at: 1 },
     } as never);
     const read = async () => (await app.inject({ method: "GET", url: "/api/cards", headers: { cookie } })).json().cards[0].review;
-    // vermelho que ainda volta sozinho (a IA do autor corrige): a linha diz que ela está corrigindo, não "falhou"
+    // a red that still comes back on its own (the author's AI is fixing it): the line says it is fixing, not "falhou"
     expect(await read()).toEqual({ id: "r-gate", prNumber: 7, phase: "ready", round: 1, mergeGateState: "fixing" });
     const store = await import("../services/review/store.js");
     await store.mutateReview("r-gate", (r) => { r.mergeGate = { sha, state: "failed", at: 2, failures: 4, exhausted: true }; });
     expect(await read()).toMatchObject({ mergeGateState: "failed" });
     await store.mutateReview("r-gate", (r) => { r.mergeGate = { sha, state: "running", at: 2 }; });
     expect(await read()).toMatchObject({ mergeGateState: "running" });
-    // verde, ou um veredito de um commit que não é o aprovado: a linha volta a "pronto pra merge"
+    // green, or a verdict from a commit that is not the approved one: the line goes back to "pronto pra merge"
     await store.mutateReview("r-gate", (r) => { r.mergeGate = { sha, state: "passed", at: 3 }; });
     expect(await read()).toEqual({ id: "r-gate", prNumber: 7, phase: "ready", round: 1 });
     await store.mutateReview("r-gate", (r) => { r.mergeGate = { sha: "b".repeat(40), state: "failed", at: 4 }; });
@@ -392,14 +392,14 @@ describe("revisão de PR no board", () => {
 
     listReviewsFollowedBy.mockClear();
     const one = (await app.inject({ method: "GET", url: `/api/cards/${authorId}`, headers: { cookie } })).json().card;
-    // a mesma regra da lista: a mais recente que não foi cancelada, só o resumo
+    // the same rule as the list: the most recent one that was not cancelled, only the summary
     expect(one.review).toEqual({ id: "r-new", prNumber: 7, phase: "fixing", round: 2 });
     expect(one.id).toBe(authorId);
     const listed = (await app.inject({ method: "GET", url: "/api/cards", headers: { cookie } })).json().cards
       .find((c: { id: string }) => c.id === authorId);
     expect(one.review).toEqual(listed.review);
 
-    // sem revisão (ou só cancelada): o campo não existe
+    // no review (or only a cancelled one): the field does not exist
     const bare = await makeCard(projectId, "sem revisão");
     expect((await app.inject({ method: "GET", url: `/api/cards/${bare}`, headers: { cookie } })).json().card.review).toBeUndefined();
     await review(bare, projectId, { id: "r-only", phase: "cancelled", createdAt: 4_000 });
@@ -418,7 +418,7 @@ describe("revisão de PR no board", () => {
     expect(created.json().card.reviewOf).toBeUndefined();
     expect(created.json().card.prs).toBeUndefined();
     const id = created.json().card.id as string;
-    // continua na lista: não virou card de revisor
+    // it stays in the list: it did not become a reviewer card
     const listed = (await app.inject({ method: "GET", url: "/api/cards", headers: { cookie } })).json().cards as { id: string }[];
     expect(listed.some((c) => c.id === id)).toBe(true);
 
@@ -427,7 +427,7 @@ describe("revisão de PR no board", () => {
     expect(patched.json().card.reviewOf).toBeUndefined();
     expect(patched.json().card.prs).toBeUndefined();
 
-    // e o PATCH não desfaz um card de revisor nem apaga o PR gravado de um autor
+    // and the PATCH neither undoes a reviewer card nor erases an author's recorded PR
     const reg = await registry();
     await reg.createAccount({ name: "Mussa" });
     await reg.recordCardPr(authorId, { number: 7, url: "https://github.com/acme/w/pull/7", base: "dev", branch: "card/login-ab12" });
@@ -484,7 +484,7 @@ describe("status callback", () => {
     } finally {
       manager.resetSdkSessionsForTesting();
       manager.setDriverSpawnerForTesting(null);
-      // o append do log do chat ainda pode estar na fila: deixa drenar antes do rm do afterEach
+      // the chat log append may still be in the queue: let it drain before the afterEach's rm
       await new Promise((r) => setTimeout(r, 200));
     }
   });
@@ -515,8 +515,8 @@ describe("status callback", () => {
   });
 
   it("a Stop while the native chat holds a background task keeps the card working", async () => {
-    // Produção, 2026-10-20: o turno disparou a suíte em background e fechou; o `Stop` punha o card
-    // em "aguardando" com o chat mostrando "1 tarefa rodando em segundo plano".
+    // Production, 2026-10-20: the turn fired the suite in the background and closed; `Stop` put the card
+    // in "aguardando" with the chat showing "1 tarefa rodando em segundo plano".
     const { onCardBackgroundProbe } = await import("../services/board/agentState.js");
     const projectId = await makeProject();
     const card = await makeCard(projectId);
@@ -530,7 +530,7 @@ describe("status callback", () => {
       expect(current.status).toBe("working");
       expect(current.column).toBe("working");
 
-      holding = false; // a tarefa terminou: o próximo Stop vale de novo
+      holding = false; // the task finished: the next Stop counts again
       await postStatus(card, "waiting", RUNNER_TOKEN);
       current = (await app.inject({ method: "GET", url: `/api/cards/${card}`, headers: { cookie } })).json().card;
       expect(current.status).toBe("waiting");
@@ -582,7 +582,7 @@ describe("status callback", () => {
     await app.inject({ method: "PATCH", url: `/api/cards/${card}`, headers: { cookie }, payload: { column: "done" } });
     const emTexto = { "x-vibehub-token": RUNNER_TOKEN, accept: "text/plain" };
 
-    // o manager do chat nativo reporta `working` (syncBoardStatus) antes de o CLI disparar o UserPromptSubmit
+    // the native chat's manager reports `working` (syncBoardStatus) before the CLI fires UserPromptSubmit
     const { reportCardStatus } = await import("../services/board/status.js");
     await reportCardStatus(card, "working");
     const hookDoPrompt = await app.inject({
@@ -604,7 +604,7 @@ describe("status callback", () => {
     const primeiroPrompt = await app.inject({
       method: "POST", url: "/api/runner/status", headers: emTexto, payload: { card, status: "working" },
     });
-    // concluído no meio do turno: as ferramentas seguintes do mesmo turno não o reabrem, nem avisam
+    // completed mid-turn: the following tools of the same turn neither reopen it nor notify
     await app.inject({ method: "PATCH", url: `/api/cards/${card}`, headers: { cookie }, payload: { column: "done" } });
     const mesmoTurno = await app.inject({
       method: "POST", url: "/api/runner/status", headers: emTexto, payload: { card, status: "working" },
@@ -618,7 +618,7 @@ describe("status callback", () => {
   it("um card concluído no meio do turno fica em done até a pessoa abrir um turno novo", async () => {
     const projectId = await makeProject();
     const card = await makeCard(projectId);
-    await postStatus(card, "working", RUNNER_TOKEN); // o turno em que o agente se conclui
+    await postStatus(card, "working", RUNNER_TOKEN); // the turn in which the agent completes itself
     await app.inject({ method: "PATCH", url: `/api/cards/${card}`, headers: { cookie }, payload: { column: "done" } });
     const column = async () => (await app.inject({ method: "GET", url: `/api/cards/${card}`, headers: { cookie } })).json().card.column;
     await postStatus(card, "working", RUNNER_TOKEN); // PreToolUse das ferramentas seguintes do mesmo turno

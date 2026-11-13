@@ -5,9 +5,9 @@ import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 
 /**
- * CONTA CLAUDE POR USUÁRIO — o card nasce na conta Claude de quem o criou. Sem isso, todo card de
- * quem não escolhia conta rodava no perfil padrão do runner (o do César): memória, histórico e cota
- * dele misturados com o trabalho dos outros.
+ * CLAUDE ACCOUNT PER USER — the card is born on the Claude account of whoever created it. Without this,
+ * every card of someone who did not pick an account ran on the runner's default profile (César's): his
+ * memory, history and quota mixed with the others' work.
  */
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
@@ -139,7 +139,7 @@ describe("o owner liga cada pessoa a uma conta Claude", () => {
     const res = await assignAccount(owner, me.json().user.id, "default");
     expect(res.statusCode).toBe(200);
     expect(res.json().git.claudeAccountSlug).toBe("default");
-    // /auth/me diz que ele TEM conta: o diálogo de novo card não avisa mais
+    // /auth/me says they HAVE an account: the new card dialog no longer warns
     const after = await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: owner } });
     expect(after.json().user.claudeAccountSlug).toBe("default");
   });
@@ -147,7 +147,7 @@ describe("o owner liga cada pessoa a uma conta Claude", () => {
   it("o membro NÃO escolhe a própria conta Claude pela porta de autoatendimento", async () => {
     const owner = await signUpOwner();
     const mussa = await addUser(owner, "mussa", "member");
-    // a conta do César existe com nome — o membro tentaria se apontar pra ela
+    // César's account exists with a name — the member would try to point at it
     const cesar = await createAccount(owner, "cesar");
     const res = await app.inject({
       method: "PATCH", url: "/api/me/git", headers: { cookie: mussa.cookie }, payload: { claudeAccountSlug: cesar },

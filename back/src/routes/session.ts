@@ -324,8 +324,8 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
   );
 
   /**
-   * O anexo como texto (planilha, Word, PowerPoint): o navegador não abre esses formatos, então o chat
-   * mostra o que o agente também lê. Mesmo acesso de quem pode ver o arquivo.
+   * The attachment as text (spreadsheet, Word, PowerPoint): the browser does not open those formats, so the
+   * chat shows what the agent also reads. Same access as whoever can see the file.
    */
   app.get<{ Params: { id: string; file: string } }>(
     "/api/cards/:id/uploads/:file/preview", { preHandler: requireCardAccess },

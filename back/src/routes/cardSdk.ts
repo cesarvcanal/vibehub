@@ -101,10 +101,10 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       const heardDuringSetup: HistoryEvent[] = [];
       const stopHearing = onPeerTurn(req.params.id, (event) => { heardDuringSetup.push(event); });
       socket.on("close", stopHearing);
-      // Quem está deste lado do socket. Resolvido UMA vez: a sessão do cookie não muda no meio da
-      // conexão, então cada mensagem que chegar por aqui é desta pessoa, sem nova consulta.
-      // Conectar NÃO carimba: abrir o card para olhar não é uma ordem, e tomaria a autoria do
-      // trabalho que outra pessoa pediu e ainda está rodando. Só a mensagem carimba (abaixo).
+      // Who is on this side of the socket. Resolved ONCE: the cookie's session does not change midway
+      // through the connection, so every message arriving here is from this person, with no new lookup.
+      // Connecting does NOT stamp: opening the card to look is not an order, and it would take the
+      // authorship of work another person asked for and that is still running. Only a message stamps (below).
       const author = await requestUser(req);
       const settings = await getSettings();
       if (!settings.sdkDriver) {
@@ -237,22 +237,22 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       // or spawn it resuming the newest transcript. History persistence, resume-id persistence and
       // the mirror's dedupe keys all live in the manager — the side that survives this socket.
       const session = ensureDriverSession({ cardId: card.id, label: card.worktreeSlug, transcriptDir, command });
-      // O MENU "/" ANTES DO DRIVER FALAR. `attachSocket` só reenvia o catálogo se a sessão já o
-      // tiver — e um driver recém-nascido ainda não anunciou nada, então o primeiro "/" abria vazio
-      // e a pessoa tinha que apagar e tentar de novo (produção, 2026-09-28). A última lista
-      // conhecida do card vale para este instante; o anúncio do driver, logo adiante, a atualiza.
+      // THE "/" MENU BEFORE THE DRIVER SPEAKS. `attachSocket` only resends the catalog if the session already
+      // has it — and a newborn driver has not announced anything yet, so the first "/" opened empty and the
+      // person had to delete it and try again (production, 2026-09-28). The card's last known list holds for
+      // this instant; the driver's announcement, right after, updates it.
       if (!session.catalog && rememberedCatalog) {
         try { socket.send(JSON.stringify(rememberedCatalog)); } catch { /* going away */ }
       }
       /**
-       * A AUTORIA SEGUE A ÚLTIMA MENSAGEM, não quem abriu o card. Com duas pessoas no mesmo card ao
-       * mesmo tempo, o carimbo no connect fazia o commit sair no nome de quem tinha conectado por
-       * último — quem mandou o pedido é que manda. Só mensagem conta (`authorsTheTurn`): responder
-       * permissão ou interromper não transfere autoria.
+       * AUTHORSHIP FOLLOWS THE LATEST MESSAGE, not whoever opened the card. With two people on the same card
+       * at the same time, stamping on connect made the commit go out under the name of whoever connected
+       * last — whoever sent the request is the one in charge. Only a message counts (`authorsTheTurn`):
+       * answering a permission or interrupting does not transfer authorship.
        *
-       * A mensagem de quem ASSUME o card espera a identidade dessa pessoa aterrissar no runner antes
-       * de chegar ao agente (`beforeTurn`) — senão o primeiro commit do pedido sairia como o autor
-       * anterior. A mesma pessoa de novo (o caso comum) não espera nada: `isCardActor` é síncrono.
+       * The message of whoever TAKES OVER the card waits for that person's identity to land on the runner
+       * before reaching the agent (`beforeTurn`) — otherwise the request's first commit would go out as the
+       * previous author. The same person again (the common case) waits for nothing: `isCardActor` is synchronous.
        */
       const beforeTurn = (raw: string): Promise<void> | undefined =>
         author && authorsTheTurn(raw) && !isCardActor(author, card.id) ? recordCardActor(author, card.id) : undefined;

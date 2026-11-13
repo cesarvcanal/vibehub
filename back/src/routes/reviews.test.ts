@@ -7,13 +7,13 @@ import type { SendOpts, SendResult } from "../services/maestro/maestro.js";
 import type { DeliverOpts, DeliverResult } from "../services/maestro/deliver.js";
 
 /**
- * ROTAS DA REVISÃO DE PR — quem pode iniciar, decidir, tentar de novo, cancelar e, sobretudo,
- * mergear. O servidor, o board, os shares e o store das revisões são REAIS; o que sai para o runner
- * é mock na fronteira: `sendToTerminal` (digitar num card), `deliver` (git/gh) e a aplicação da
- * identidade no runner (`reapplyCardIdentity`). O `recordCardActor` é o de verdade: é ele que diz se
- * o revisor vira o ator do card dele no relay. O merge não mexe no ator: leva a conexão do merger.
+ * PR REVIEW ROUTES — who may start, decide, retry, cancel and, above all, merge. The server, the board,
+ * the shares and the reviews store are REAL; what goes out to the runner is mocked at the boundary:
+ * `sendToTerminal` (typing into a card), `deliver` (git/gh) and applying the identity on the runner
+ * (`reapplyCardIdentity`). `recordCardActor` is the real one: it is what says whether the reviewer becomes
+ * their card's actor in the relay. The merge does not touch the actor: it carries the merger's connection.
  *
- * Cada teste sobe um servidor e faz scrypt de várias senhas: o orçamento é largo de propósito.
+ * Each test starts a server and runs scrypt on several passwords: the budget is generous on purpose.
  */
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 
@@ -24,14 +24,14 @@ const send = vi.fn(async (cardId: string, _text: string, opts: SendOpts = {}): P
   await opts.beforeDeliver?.();
   return { sent: true, cardId, title: "", project: "" };
 });
-/** O ator do card do autor no instante em que o deliver rodou (o token do merge sai dele). */
+/** The author card's actor at the instant the deliver ran (the merge's token comes from it). */
 let actorAtDeliver: string | undefined;
 let deliverResult: DeliverResult = { merged: true, reason: "merged", branch: "dev", cardBranch: "card/x" };
-/** O PR no GitHub, como `readPrState` o leria (null = leitura que falhou). */
+/** The PR on GitHub, as `readPrState` would read it (null = a read that failed). */
 let prState: { state: "OPEN" | "MERGED" | "CLOSED"; headSha: string } | null = null;
 const readPrState = vi.fn(async () => prState);
 const afterPrMerged = vi.fn(async () => "deleted" as const);
-/** O gate do merge no commit aprovado (rodado quando a revisão fica pronta). */
+/** The merge gate on the approved commit (run when the review becomes ready). */
 let gateAnswer = { ran: true, passed: true, output: "" };
 const gateAtCommit = vi.fn(async (_cardId: string, _prUrl: string, _sha: string) => gateAnswer);
 const deliver = vi.fn(async (cardId: string, _opts: DeliverOpts = {}): Promise<DeliverResult> => {
@@ -106,16 +106,16 @@ interface World {
   outro: Person;
   projectId: string;
   cardId: string;
-  /** Conexões GitHub: a do projeto e a própria do merger. */
+  /** GitHub connections: the project's and the merger's own. */
   gh: { project: string; merger: string };
 }
 
 /**
- * O dono, um projeto com o card do autor (com o PR #7 gravado) e cinco membros:
- *  - autor: `work` no card; revisor e merger: `work` no projeto; leitor: `view` no card; outro: nada.
- *  - o revisor tem conta Claude própria (`mussa`); os outros não.
- *  - o projeto tem a conexão GitHub da org; o merger e o revisor têm a deles (o revisor publica
- *    os reviews do PR na conta dele); ninguém mais tem conexão própria.
+ * The owner, a project with the author's card (with PR #7 recorded) and five members:
+ *  - author: `work` on the card; reviewer and merger: `work` on the project; reader: `view` on the card; other: nothing.
+ *  - the reviewer has their own Claude account (`mussa`); the others do not.
+ *  - the project has the org's GitHub connection; the merger and the reviewer have their own (the reviewer
+ *    publishes the PR reviews on their account); nobody else has their own connection.
  */
 async function world(): Promise<World> {
   const ownerRes = await app.inject({
@@ -166,7 +166,7 @@ async function world(): Promise<World> {
   };
 }
 
-/** O corpo de "Pedir revisão" com os papéis de sempre (autor corrige, revisor revisa, merger mergeia). */
+/** The body of "Pedir revisão" with the usual roles (author fixes, reviewer reviews, merger merges). */
 const roles = (w: World, over: Record<string, unknown> = {}) => ({
   prNumber: 7, reviewerUserId: w.revisor.id, authorUserId: w.autor.id, mergerUserId: w.merger.id, ...over,
 });
@@ -178,12 +178,12 @@ async function startReview(w: World, as: Person = w.autor, over: Record<string, 
 }
 
 /**
- * Uma sugestão em aberto: deixa a revisão em `ready` sem o merge automático (que só sai sem NADA em
- * pé), para os testes do botão exercitarem o botão.
+ * An open suggestion: leaves the review in `ready` without the automatic merge (which only goes out with
+ * NOTHING standing), so the button tests exercise the button.
  */
 const OPEN_SUGGESTION = [{ severity: "suggestion" as const, title: "nome confuso" }];
 
-/** Uma revisão iniciada e levada a `ready` (rodada 1 sem bloqueante, SHA1 revisado, merge pelo botão). */
+/** A review started and taken to `ready` (round 1 with no blocking finding, SHA1 reviewed, merge by button). */
 async function readyReview(w: World) {
   const started = await startReview(w);
   expect(started.statusCode).toBe(200);
@@ -192,7 +192,7 @@ async function readyReview(w: World) {
     round: 1, findings: OPEN_SUGGESTION, headSha: SHA1, summary: "nada bloqueia",
   });
   expect(ready.phase).toBe("ready");
-  // o gate do merge roda em segundo plano assim que fica pronta: a revisão entregue já tem o veredito
+  // the merge gate runs in the background as soon as it is ready: the delivered review already has the verdict
   await vi.waitFor(async () => expect((await (await store()).getReview(ready.id))?.mergeGate?.state).toMatch(/passed|failed/));
   send.mockClear();
   return (await (await store()).getReview(ready.id))!;
@@ -219,8 +219,8 @@ afterEach(async () => {
   for (const m of [
     "../runtime/runner.js", "../services/board/workspace.js", "../services/maestro/maestro.js", "../services/maestro/deliver.js",
   ]) vi.doUnmock(m);
-  // Fechar uma revisão manda o card do revisor pra done, e o "concluído" dele é gravado numa
-  // microtask: uma escrita dessas pode chegar junto do rm.
+  // Closing a review sends the reviewer's card to done, and its "completed" is recorded in a
+  // microtask: one of those writes may arrive together with the rm.
   await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 });
 
@@ -289,14 +289,14 @@ describe("iniciar a revisão", () => {
     const res = await startReview(w, w.autor, { reviewerUserId: w.merger.id, mergerUserId: w.revisor.id });
     expect(res.statusCode).toBe(200);
     const reviewerCard = await (await registry()).getCard(res.json().review.reviewerCardId);
-    // a conta embutida é a ausência de slug no card, como a de um card criado por quem está em "default"
+    // the built-in account is the absence of a slug on the card, like that of a card created by someone on "default"
     expect(reviewerCard).toMatchObject({ reviewOf: w.cardId });
     expect(reviewerCard?.accountSlug).toBeUndefined();
   });
 
   it("revisor sem conexão GitHub própria é recusado (os reviews do PR sairiam na conta de outra pessoa)", async () => {
     const w = await world();
-    // "outro" alcança o projeto e tem conta Claude própria, mas nenhuma conexão GitHub dele
+    // "outro" reaches the project and has their own Claude account, but no GitHub connection of their own
     await app.inject({
       method: "POST", url: `/api/projects/${w.projectId}/shares`, headers: { cookie: w.owner.cookie }, payload: { userId: w.outro.id, level: "work" },
     });
@@ -310,7 +310,7 @@ describe("iniciar a revisão", () => {
       expect({ githubConnectionId, status: res.statusCode }).toEqual({ githubConnectionId, status: 400 });
       expect(res.json().error).toMatch(/^revisor_sem_github/);
     }
-    // nada começou: nem card de revisor, nem revisão, nem rodada 1
+    // nothing started: no reviewer card, no review, no round 1
     expect(send).not.toHaveBeenCalled();
     expect(await (await store()).activeReviewFor(w.cardId)).toBeUndefined();
     expect((await (await registry()).listAllCards()).filter((c) => c.reviewOf)).toEqual([]);
@@ -330,7 +330,7 @@ describe("iniciar a revisão", () => {
     const w = await world();
     const res = await startReview(w, w.leitor);
     expect(res.statusCode).toBe(403);
-    // e quem não enxerga o card nem sabe que ele existe
+    // and whoever cannot see the card does not even know it exists
     expect((await startReview(w, w.outro)).statusCode).toBe(404);
     expect(send).not.toHaveBeenCalled();
     expect(await (await store()).activeReviewFor(w.cardId)).toBeUndefined();
@@ -349,7 +349,7 @@ describe("iniciar a revisão", () => {
 
   it("revisor com share só no card do autor ganha work no card do revisor e vira ator dele", async () => {
     const w = await world();
-    // "outro" passa a alcançar só o card do autor (view), com conta Claude própria
+    // "outro" now reaches only the author's card (view), with their own Claude account
     const share = await app.inject({
       method: "POST", url: `/api/cards/${w.cardId}/shares`, headers: { cookie: w.owner.cookie }, payload: { userId: w.outro.id, level: "view" },
     });
@@ -366,10 +366,10 @@ describe("iniciar a revisão", () => {
     expect(await reg.sharesForTarget("card", reviewerCardId)).toEqual([
       expect.objectContaining({ userId: w.outro.id, level: "work" }),
     ]);
-    // a rodada 1 saiu com o revisor como ator do card dele (o gh pr review vai na conta dele)
+    // round 1 went out with the reviewer as their card's actor (gh pr review goes on their account)
     expect(send).toHaveBeenCalledTimes(1);
     expect((await reg.getCard(reviewerCardId))?.actorUserId).toBe(w.outro.id);
-    // e ele enxerga o card do revisor (abrir a sessão dele pelo painel)
+    // and they see the reviewer's card (opening its session from the panel)
     expect((await app.inject({ method: "GET", url: `/api/cards/${reviewerCardId}`, headers: { cookie: w.outro.cookie } })).statusCode)
       .toBe(200);
   });
@@ -400,10 +400,10 @@ describe("iniciar a revisão", () => {
 });
 
 /**
- * A REVISÃO PEDIDA PELA IA DO CARD (`vibehub_review_start`): a pessoa disse no chat quem revisa, quem é
- * coautor e que pode mergear, e ainda teve que abrir o "Pedir revisão" e escolher tudo de novo
- * (produção, 2026-11-06). Agora a IA pede em nome de quem deu a ordem (o ator do card), com as MESMAS
- * conferências da rota e os padrões do diálogo para o que não foi dito.
+ * THE REVIEW ASKED FOR BY THE CARD'S AI (`vibehub_review_start`): the person said in the chat who reviews,
+ * who is co-author and that it may merge, and still had to open "Pedir revisão" and pick everything again
+ * (production, 2026-11-06). Now the AI asks on behalf of whoever gave the order (the card's actor), with the
+ * SAME checks as the route and the dialog's defaults for what was not said.
  */
 describe("iniciar a revisão pela IA do card (vibehub_review_start)", () => {
   const byAgent = async () => (await import("../services/review/start.js")).startReviewByAgent;
@@ -415,15 +415,15 @@ describe("iniciar a revisão pela IA do card (vibehub_review_start)", () => {
     await app.inject({
       method: "POST", url: `/api/projects/${w.projectId}/shares`, headers: { cookie: w.owner.cookie }, payload: { userId: w.outro.id, level: "view" },
     });
-    // a ordem veio do merger ("pede revisão pro revisor, coautor o outro, e mergeia quando estiver ok")
+    // the order came from the merger ("pede revisão pro revisor, coautor o outro, e mergeia quando estiver ok")
     await actor(w.cardId, w.merger.id);
     const review = await (await byAgent())(w.cardId, { reviewer: "REVISOR", coauthor: "@outro" });
     expect(review).toMatchObject({
       prNumber: 7, phase: "reviewing", reviewerUserId: w.revisor.id, coauthorUserId: w.outro.id,
-      // sem `merger`: quem deu a ordem; sem `author`: quem trabalha o card agora (o mesmo do diálogo)
+      // without `merger`: whoever gave the order; without `author`: whoever works the card now (the same as the dialog)
       mergerUserId: w.merger.id, authorUserId: w.merger.id,
     });
-    expect(send).toHaveBeenCalled(); // a rodada 1 saiu para o revisor, como pelo botão
+    expect(send).toHaveBeenCalled(); // round 1 went out to the reviewer, as through the button
     expect((await (await store()).activeReviewFor(w.cardId))?.id).toBe(review.id);
   });
 
@@ -540,7 +540,7 @@ describe("PRs anexados: uma revisão por PR, acompanhada do card que anexou", ()
     expect((await read(w, "?pr=600")).json()).toEqual({ review: null });
     expect((await read(w, "?pr=abc")).statusCode).toBe(400);
     expect((await read(w, "?pr=0")).statusCode).toBe(400);
-    // sem `pr`, o de sempre: a revisão do card como autor (este card não é o autor de nenhuma)
+    // without `pr`, the usual: the card's review as author (this card is not the author of any)
     expect((await read(w, "")).json()).toEqual({ review: null });
   });
 
@@ -564,7 +564,7 @@ describe("PRs anexados: uma revisão por PR, acompanhada do card que anexou", ()
     const card = (await app.inject({ method: "GET", url: `/api/cards/${w.cardId}`, headers: { cookie: w.leitor.cookie } })).json().card;
     expect(card.review).toMatchObject({ id: b.id, prNumber: 600 });
     expect(card.reviews.map((r: { id: string }) => r.id).sort()).toEqual([a.id, b.id].sort());
-    // e o card de correção, como autor, tem a dele
+    // and the fix card, as author, has its own
     const fix = (await app.inject({ method: "GET", url: `/api/cards/${a.cardId}`, headers: { cookie: w.owner.cookie } })).json().card;
     expect(fix.review).toMatchObject({ id: a.id, prNumber: 599 });
     expect(fix.reviews).toBeUndefined();
@@ -583,7 +583,7 @@ describe("PRs anexados: uma revisão por PR, acompanhada do card que anexou", ()
     const fix = await (await registry()).getCard(review.cardId);
     expect(fix).toMatchObject({ branch: "feat/pr-599" });
     expect(fix?.accountSlug).toBeUndefined();
-    // o revisor segue na conta com nome dele
+    // the reviewer stays on the account with their name
     expect((await (await registry()).getCard(review.reviewerCardId))?.accountSlug).toBe("mussa");
   });
 
@@ -629,7 +629,7 @@ describe("GET da revisão: se há merge rodando agora", () => {
     } finally {
       orch.releaseMerge(ready.id);
     }
-    // O PR segue aberto no GitHub no commit revisado: ready e merging false, com a conferência feita.
+    // The PR is still open on GitHub on the reviewed commit: ready and merging false, with the check done.
     prState = { state: "OPEN", headSha: SHA1 };
     expect(await read()).toMatchObject({ review: { phase: "ready" }, merging: false });
     expect(readPrState).toHaveBeenCalledTimes(1);
@@ -649,7 +649,7 @@ describe("GET da revisão: se há merge rodando agora", () => {
     } finally {
       orch.releaseMerge(review.id);
     }
-    // A vez devolvida é o mesmo que um processo novo depois do deploy: nenhum merge rodando.
+    // The turn given back is the same as a new process after the deploy: no merge running.
     expect((await read()).merging).toBe(false);
   });
 });
@@ -662,12 +662,12 @@ describe("GET da revisão confere o PR no GitHub (merge feito fora do painel)", 
     const read = async () =>
       (await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/review`, headers: { cookie: w.autor.cookie } })).json();
 
-    // Em ready sem merge rodando a conferência vem antes da resposta: é também o caso do merge que
-    // saiu no GitHub e morreu num deploy antes de gravar merged — nunca sai `ready` + `merging:false`.
+    // In ready with no merge running the check comes before the answer: it is also the case of the merge that
+    // went out on GitHub and died in a deploy before recording merged — `ready` + `merging:false` never goes out.
     expect(await read()).toMatchObject({ review: { phase: "merged" }, merging: false });
     expect((await read()).review.log.at(-1).text).toMatch(/fora do painel/);
     await vi.waitFor(() => expect(afterPrMerged).toHaveBeenCalledTimes(1));
-    // Várias leituras em seguida: uma ida só ao GitHub.
+    // Several reads in a row: a single trip to GitHub.
     expect(readPrState).toHaveBeenCalledTimes(1);
     expect(ready.id).toBeTruthy();
   });
@@ -738,18 +738,18 @@ describe("pedir ao autor aplicar sugestões", () => {
 describe("pessoas do card", () => {
   it("people lista owner e quem tem share, com canReview", async () => {
     const w = await world();
-    // member chama (GET /api/users é só do owner)
+    // a member calls it (GET /api/users is the owner's only)
     const res = await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/people`, headers: { cookie: w.autor.cookie } });
     expect(res.statusCode).toBe(200);
     const people = res.json().people as { id: string; username: string; canReview: boolean }[];
     const byName = Object.fromEntries(people.map((p) => [p.username, p]));
     expect(Object.keys(byName).sort()).toEqual(["autor", "cesar", "leitor", "merger", "revisor"]);
-    // o login da conexão GitHub própria vem junto: é por ele que o diálogo acha o autor de um PR anexado
+    // the login of their own GitHub connection comes along: it is how the dialog finds the author of an attached PR
     expect(byName.revisor).toEqual({ id: w.revisor.id, username: "revisor", canReview: true, githubLogin: "revisor-gh" });
     expect(byName.autor!.githubLogin).toBeUndefined();
     expect(byName.autor!.canReview).toBe(false);
     expect(byName.cesar!.canReview).toBe(false);
-    // vincular a conta embutida ("default") é ter conta; voltar ao "Herdar" é não ter
+    // linking the built-in account ("default") is having an account; going back to "Herdar" is not having one
     await app.inject({
       method: "PATCH", url: `/api/users/${w.owner.id}`, headers: { cookie: w.owner.cookie }, payload: { claudeAccountSlug: "default" },
     });
@@ -761,7 +761,7 @@ describe("pessoas do card", () => {
       method: "PATCH", url: `/api/users/${w.owner.id}`, headers: { cookie: w.owner.cookie }, payload: { claudeAccountSlug: null },
     });
     expect(await canReviewOf("cesar")).toBe(false);
-    // quem não tem acesso ao card não entra (e nem vê a lista)
+    // whoever has no access to the card does not get in (and does not even see the list)
     expect(people.some((p) => p.id === w.outro.id)).toBe(false);
     expect((await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/people`, headers: { cookie: w.outro.cookie } })).statusCode)
       .toBe(404);
@@ -781,23 +781,23 @@ describe("merge", () => {
     const res = await merge(review.id, w.merger);
     expect(res.statusCode).toBe(200);
     expect(res.json().review).toMatchObject({ id: review.id, phase: "merged" });
-    // só-merge, preso ao sha revisado, na base do PR, com o merger como ator do card do autor
+    // merge-only, pinned to the reviewed sha, on the PR's base, with the merger as the author card's actor
     expect(deliver).toHaveBeenCalledTimes(1);
     expect(deliver.mock.calls[0]![0]).toBe(w.cardId);
     expect(deliver.mock.calls[0]![1]).toMatchObject({
       authorized: true, mergeOnly: true, expectedHeadSha: SHA1, branch: "dev", connectionId: w.gh.merger,
     });
     expect((await (await store()).getReview(review.id))?.phase).toBe("merged");
-    // mergeada não é ativa, e não mergeia de novo
+    // merged is not active, and does not merge again
     expect((await merge(review.id, w.merger)).statusCode).toBe(409);
     expect(deliver).toHaveBeenCalledTimes(1);
   });
 
   /**
-   * CONTINUIDADE SEM O RESPONSÁVEL (produção, 2026-11-09): o César era o responsável pelo merge e o
-   * Albert, revisor e coautor, não tinha botão nenhum — a revisão pronta parava esperando o César
-   * voltar. Quem tem papel na revisão (revisor, autor, coautor) mergeia uma revisão PRONTA, com a
-   * conexão GitHub PRÓPRIA dele (o merge passa pela permissão dele no GitHub).
+   * CONTINUITY WITHOUT THE OWNER (production, 2026-11-09): César was the merge owner and Albert, reviewer
+   * and co-author, had no button at all — the ready review stopped waiting for César to come back. Whoever
+   * has a role in the review (reviewer, author, co-author) merges a READY review, with their OWN GitHub
+   * connection (the merge goes through their permission on GitHub).
    */
   it("revisor, autor e coautor também mergeiam a revisão pronta, cada um na própria conta GitHub", async () => {
     const w = await world();
@@ -812,7 +812,7 @@ describe("merge", () => {
   it("o coautor mergeia; papel sem conexão GitHub própria é recusado com o motivo, não 403", async () => {
     const w = await world();
     const started = await startReview(w, w.autor, { coauthorUserId: w.outro.id });
-    expect(started.statusCode).toBe(400); // "outro" não alcança o card: o coautor precisa alcançar
+    expect(started.statusCode).toBe(400); // "outro" does not reach the card: the co-author needs to reach it
     await app.inject({
       method: "POST", url: `/api/projects/${w.projectId}/shares`, headers: { cookie: w.owner.cookie }, payload: { userId: w.outro.id, level: "work" },
     });
@@ -822,7 +822,7 @@ describe("merge", () => {
     await (await orchestrator()).submitReviewerRound(ok.json().review.reviewerCardId, {
       round: 1, findings: OPEN_SUGGESTION, headSha: SHA1, summary: "nada bloqueia",
     });
-    // coautor e autor têm papel, mas nenhum dos dois tem conexão GitHub própria
+    // co-author and author have roles, but neither has their own GitHub connection
     for (const who of [w.outro, w.autor]) {
       const res = await merge(id, who);
       expect({ who: who.id, status: res.statusCode }).toEqual({ who: who.id, status: 400 });
@@ -854,7 +854,7 @@ describe("merge", () => {
     expect(res.json().error).toMatch(/os testes do merge falharam no commit aprovado/);
     expect(res.json().error).toContain("audit.test.ts");
     expect(deliver).not.toHaveBeenCalled();
-    // quem não tem papel segue levando 403, não a falha do gate
+    // whoever has no role still gets 403, not the gate's failure
     expect((await merge(review.id, w.outro)).statusCode).toBe(403);
   });
 
@@ -898,7 +898,7 @@ describe("merge", () => {
     expect(res.json()).toMatchObject({ reason: "head_moved", review: { phase: "reviewing", round: 2 } });
     const after = await (await store()).getReview(review.id);
     expect(after).toMatchObject({ phase: "reviewing", round: 2, reviewedSha: SHA1 });
-    // o revisor recebe o delta da rodada 2 (o mesmo caminho do relay)
+    // the reviewer gets round 2's delta (the same path as the relay)
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
     expect(String(send.mock.calls[0]![1])).toContain(`git diff ${SHA1}..HEAD`);
@@ -937,7 +937,7 @@ describe("merge", () => {
   it("responsável pelo merge que perdeu o work no card é recusado antes do deliver", async () => {
     const w = await world();
     const review = await readyReview(w);
-    // o share do projeto cai para view depois que a revisão começou
+    // the project share drops to view after the review started
     await app.inject({
       method: "POST", url: `/api/projects/${w.projectId}/shares`, headers: { cookie: w.owner.cookie },
       payload: { userId: w.merger.id, level: "view" },
@@ -955,7 +955,7 @@ describe("merge", () => {
     const res = await merge(review.id, w.merger);
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toMatch(/merger_sem_github/);
-    // uma conexão que o owner removeu também não vale: não cai para a do projeto
+    // a connection the owner removed does not count either: it does not fall back to the project's
     const gone = await (await registry()).addGithubConnection({ label: "velha", login: "merger-velho" });
     await userGit.setUserGit(w.merger.id, { githubConnectionId: gone.id });
     await (await registry()).removeGithubConnection(gone.id);
@@ -986,14 +986,14 @@ describe("merge", () => {
     const res = await merge(review.id, w.merger);
     expect(res.statusCode).toBe(200);
     expect(deliver.mock.calls[0]![1]).toMatchObject({ connectionId: w.gh.merger });
-    // o ator do card do autor não muda: nem durante o deliver, nem depois
+    // the author card's actor does not change: neither during the deliver nor after
     expect(actorAtDeliver).toBe(w.autor.id);
     expect((await reg.getCard(w.cardId))?.actorUserId).toBe(w.autor.id);
   });
 });
 
 describe("decidir, tentar de novo e cancelar", () => {
-  /** Uma revisão em reviewing com uma dúvida pendente (f1) esperando o revisor humano. */
+  /** A review in reviewing with a pending question (f1) waiting for the human reviewer. */
   async function withQuestion(w: World) {
     const review = (await startReview(w)).json().review as { id: string; reviewerCardId: string };
     await (await orchestrator()).submitReviewerRound(review.reviewerCardId, {
@@ -1014,8 +1014,8 @@ describe("decidir, tentar de novo e cancelar", () => {
     expect((await decide(review.id, w.revisor, { findingId: "f1" })).statusCode).toBe(400);
     const ok = await decide(review.id, w.revisor, { findingId: "f1", decision: "drop" });
     expect(ok.statusCode).toBe(200);
-    // Retirada a única dúvida, a revisão vai a ready; o merge automático espera o Approve do revisor
-    // (o fim de turno dele), então a rota responde na hora e nada é mergeado aqui.
+    // With the only question withdrawn, the review goes to ready; the automatic merge waits for the reviewer's
+    // Approve (the end of their turn), so the route answers right away and nothing is merged here.
     expect(ok.json().review.phase).toBe("ready");
     expect(deliver).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ mergeOnly: true }));
     expect((await decide("nao-existe", w.revisor, { findingId: "f1", decision: "drop" })).statusCode).toBe(404);
@@ -1031,7 +1031,7 @@ describe("decidir, tentar de novo e cancelar", () => {
 
   it("retry: revisor, merger ou owner; esperando a decisão humana é 409; vez parada ou impasse reenviam", async () => {
     const w = await world();
-    // só dúvida, com a rodada do revisor entregue: a vez é do humano, não há o que tentar
+    // only a question, with the reviewer's round delivered: it is the human's turn, there is nothing to retry
     const review = await withQuestion(w);
     const retry = async (as: Person) =>
       await app.inject({ method: "POST", url: `/api/reviews/${review.id}/retry`, headers: { cookie: as.cookie } });
@@ -1041,7 +1041,7 @@ describe("decidir, tentar de novo e cancelar", () => {
       expect(res.statusCode).toBe(409);
       expect(res.json().error).toMatch(/nada_a_tentar/);
     }
-    // a vez do revisor parada (a rodada não foi entregue): reenvia sem mudar a fase
+    // the reviewer's turn stalled (the round was not delivered): resends without changing the phase
     await (await store()).mutateReview(review.id, (r) => {
       r.lastSubmitRound = undefined;
     });

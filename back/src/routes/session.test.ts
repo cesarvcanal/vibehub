@@ -302,7 +302,7 @@ describe("card lifecycle routes", () => {
     expect(inteiro.statusCode).toBe(200);
     expect(inteiro.headers["accept-ranges"]).toBe("bytes");
 
-    // A faixa vai pedida ao workspace (que corta no runner), não recortada aqui.
+    // The range is requested from the workspace (which cuts it on the runner), not trimmed here.
     readCardUpload.mockResolvedValueOnce({ body: Buffer.from("789"), contentType: "audio/ogg", size: 10, range: { start: 7, end: 9 } });
     const fim = await app.inject({ method: "GET", url, headers: { cookie, range: "bytes=-3" } });
     expect(readCardUpload).toHaveBeenLastCalledWith(id, "1794341151810-cesar01.ogg", { suffix: 3 });
@@ -564,8 +564,8 @@ describe("terminal websocket setup", () => {
     ws.send("ls\r");
     await settle();
     release();
-    // 5 s, não o 1 s padrão: o caminho passa pela fila do board e pelo replay do pty, e com o runner
-    // ocupado (os outros cards rodando testes) 1 s não bastava — falhava na suíte, passava sozinho.
+    // 5 s, not the default 1 s: the path goes through the board's queue and the pty replay, and with the runner
+    // busy (the other cards running tests) 1 s was not enough — it failed in the suite, passed on its own.
     await vi.waitFor(() => expect(term.write).toHaveBeenCalledWith("ls\r"), { timeout: 5_000 });
     await vi.waitFor(() => expect(appliedStatus).toHaveBeenCalledWith(id, "working"), { timeout: 5_000 });
     ws.close();

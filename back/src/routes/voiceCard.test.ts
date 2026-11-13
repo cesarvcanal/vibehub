@@ -5,8 +5,8 @@ import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 
 /**
- * VOZ DENTRO DO CHAT DO CARD — a chamada nasce com o contexto da conversa do card, e os turnos
- * falados entram no MESMO log do chat (idempotentes por `vid`). O fetch da OpenAI é falso.
+ * VOICE INSIDE THE CARD'S CHAT — the call is born with the context of the card's conversation, and the
+ * spoken turns go into the SAME chat log (idempotent by `vid`). The OpenAI fetch is fake.
  */
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 
