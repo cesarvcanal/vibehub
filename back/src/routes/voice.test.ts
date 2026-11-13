@@ -92,6 +92,10 @@ describe("POST /api/voice/live/sessions", () => {
     expect(sent.transport).toEqual({ type: "webrtc", sdp: OFFER });
     // The HTTP request starts the session: no session.start, no audio format on WebRTC.
     expect(sent.session.audio).toBeUndefined();
+    // Delegation is OURS (client), said out loud: omitted means the same, silently. This plain
+    // conversation has no agent behind it, so the model is told not to hand anything over.
+    expect(sent.session.delegation).toEqual({ type: "client" });
+    expect(sent.session.instructions).toContain("Não gere <|SpawnThinking|>");
   });
 
   it("falls back to the voice-input key in the vault when the env has none", async () => {
