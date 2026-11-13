@@ -1320,7 +1320,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   useVoiceDelegation({
     call,
     rows: state.rows,
-    turnRunning: callWorking,
+    // Not `callWorking`: a dropped wire clears `connected` but not the turn, and the delegation must
+    // wait for the turn's real end, not answer with whatever was said before the blip.
+    turnRunning: state.awaiting || state.turnActive,
     sendToAgent: (text) => {
       sendOrQueue(text);
       setSentDuringCall(true);
