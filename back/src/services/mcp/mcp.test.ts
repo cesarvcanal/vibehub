@@ -601,7 +601,7 @@ describe("built-in browser server", () => {
     const parsed = JSON.parse(inj.json) as { type: string; command: string; args: string[] };
     expect(parsed.type).toBe("stdio");
     expect(parsed.command).toBe("npx");
-    // Versão exata: `@latest` faria o npx consultar o registro a cada boot de CLI.
+    // Exact version: `@latest` would make npx query the registry on every CLI boot.
     expect(parsed.args).toContain(mod.BROWSER_MCP_PACKAGE);
     expect(mod.BROWSER_MCP_PACKAGE).toMatch(/^@playwright\/mcp@\d+\.\d+\.\d+$/);
     const i = parsed.args.indexOf("--cdp-endpoint");

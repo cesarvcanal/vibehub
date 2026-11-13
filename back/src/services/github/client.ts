@@ -334,20 +334,20 @@ export async function listRepos(connectionId?: string | null, q = "", limit = 10
 export interface RepoBranches {
   branches: string[];
   defaultBranch: string | null;
-  /** O repo tem mais branches do que `MAX_BRANCH_PAGES` páginas comportam; a lista veio cortada. */
+  /** The repo has more branches than `MAX_BRANCH_PAGES` pages hold; the list came truncated. */
   truncada: boolean;
 }
 
-/** Teto de páginas de 100: um repo com mais de 2000 branches lista as 2000 primeiras. */
+/** Cap of pages of 100: a repo with more than 2000 branches lists the first 2000. */
 const MAX_BRANCH_PAGES = 20;
 
-/** Páginas buscadas ao mesmo tempo: rajada maior aciona o limite secundário do GitHub (403). */
+/** Pages fetched at the same time: a bigger burst triggers GitHub's secondary limit (403). */
 const CONCURRENT_PAGES = 4;
 
 /**
- * Todas as branches do repositório, na ordem do GitHub, com a padrão à parte (quem ordena para
- * exibir é o front). Lê do GitHub a cada chamada (sem cache), então branch apagada some e branch
- * nova aparece. A página 1 diz no `Link` quantas existem; as demais saem em lotes.
+ * All the repository's branches, in GitHub's order, with the default one apart (sorting for display is
+ * the front's job). Reads from GitHub on every call (no cache), so a deleted branch disappears and a new
+ * branch shows up. Page 1 says in `Link` how many there are; the rest come out in batches.
  */
 export async function listBranches(connectionId: string | null | undefined, owner: string, repo: string): Promise<RepoBranches> {
   assertRepoPart(owner, "owner");
@@ -380,7 +380,7 @@ export async function listBranches(connectionId: string | null | undefined, owne
   return { branches, defaultBranch, truncada: githubPages > MAX_BRANCH_PAGES };
 }
 
-/** O número da página `rel="last"` do header `Link` do GitHub; sem ele, só existe uma página. */
+/** The number of the `rel="last"` page of GitHub's `Link` header; without it, there is only one page. */
 function lastPageFromLink(link: string | null): number {
   const last = link?.match(/[?&]page=(\d+)[^>]*>;\s*rel="last"/);
   return last ? Number(last[1]) : 1;

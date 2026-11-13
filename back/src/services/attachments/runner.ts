@@ -2,19 +2,19 @@ import { config } from "../../config/env.js";
 import { hostExecutor, shQuote, HostExecError, CONTAINER_DEADLINE_MARGIN_MS } from "../../runtime/host.js";
 
 /**
- * Pacotes apt que o runner precisa para abrir anexos: PDF (poppler), planilhas (openpyxl/xlrd), Word
- * (python-docx, catdoc para .doc/.ppt antigos) e áudio fora do que o Whisper aceita (ffmpeg). O
- * provisionamento já instala; cada ferramenta ainda confere antes de rodar, porque um runner
- * provisionado antes desta lista existir só ganharia os pacotes num reprovisionamento manual.
+ * Apt packages the runner needs to open attachments: PDF (poppler), spreadsheets (openpyxl/xlrd), Word
+ * (python-docx, catdoc for old .doc/.ppt) and audio beyond what Whisper accepts (ffmpeg). Provisioning
+ * already installs them; each tool still checks before running, because a runner provisioned before this
+ * list existed would only get the packages in a manual reprovisioning.
  */
 export const DOCUMENT_READER_PACKAGES = ["poppler-utils", "python3-openpyxl", "python3-xlrd", "python3-docx", "catdoc"];
 export const AUDIO_CONVERTER_PACKAGES = ["ffmpeg"];
 export const ATTACHMENT_PACKAGES = [...DOCUMENT_READER_PACKAGES, ...AUDIO_CONVERTER_PACKAGES];
 
 /**
- * Linha de shell (dentro do runner) que instala os pacotes que faltarem. `dpkg -s` custa milissegundos
- * quando já está tudo lá; o lock timeout faz duas chamadas simultâneas esperarem a vez em vez de
- * falharem no lock do dpkg. stdin fechado: o resto do stdin é o payload do comando seguinte. PURE.
+ * Shell line (inside the runner) that installs the missing packages. `dpkg -s` costs milliseconds when
+ * everything is already there; the lock timeout makes two simultaneous calls wait their turn instead of
+ * failing on dpkg's lock. stdin closed: the rest of stdin is the next command's payload. PURE.
  */
 export function ensurePackagesLine(packages: readonly string[]): string {
   const list = packages.join(" ");
@@ -26,9 +26,9 @@ export function ensurePackagesLine(packages: readonly string[]): string {
 }
 
 /**
- * Caminho de arquivo DENTRO do runner, como o agente o informa. O agente já é root no runner, então
- * isto não é fronteira de acesso: só recusa o que quebraria o comando (relativo, quebra de linha, NUL).
- * Espaço e acento são legítimos ("Relatório final.xlsx") e seguem via shQuote. PURE.
+ * A file path INSIDE the runner, as the agent gives it. The agent is already root on the runner, so this
+ * is not an access boundary: it only refuses what would break the command (relative, line break, NUL).
+ * Spaces and accents are legitimate ("Relatório final.xlsx") and go through shQuote. PURE.
  */
 export function validateRunnerPath(path: string): string {
   const trimmed = String(path ?? "").trim();
@@ -37,7 +37,7 @@ export function validateRunnerPath(path: string): string {
   return trimmed;
 }
 
-/** Extensão em minúsculas, sem o ponto; "" quando não há. PURE. */
+/** Lowercase extension, without the dot; "" when there is none. PURE. */
 export function extensionOf(path: string): string {
   const name = path.slice(path.lastIndexOf("/") + 1);
   const dot = name.lastIndexOf(".");
@@ -45,16 +45,16 @@ export function extensionOf(path: string): string {
 }
 
 /**
- * Script de host que entrega o resto do stdin a um comando dentro do runner. Mesmo transporte do
- * upload (`buildUploadScript`): o bash do host lê só a primeira linha e o `exec` passa o stdin adiante,
- * então o payload nunca é interpretado como shell. `args` chegam ao `sh -c` como $0, $1…
+ * Host script that hands the rest of stdin to a command inside the runner. Same transport as the upload
+ * (`buildUploadScript`): the host's bash reads only the first line and `exec` passes stdin along, so the
+ * payload is never interpreted as shell. `args` reach `sh -c` as $0, $1…
  *
- * `timeoutMs` é o MESMO prazo passado ao `runOnRunner`. O timeout do Node mata só o cliente
- * `docker exec`, não o que ele iniciou no container (docs/runner-processes.md): um ffmpeg que estourou
- * o prazo seguia convertendo, e cada nova tentativa empilhava outro no runner. O `timeout -s KILL`
- * dentro do container mata o grupo inteiro (sh e filhos) com a margem do `containerScriptCommand`,
- * antes de o Node desistir — que aqui não serve como está porque lê o SCRIPT do stdin (`bash -s`), e
- * neste caminho o stdin é o payload. PURE; prazo curto demais para a margem LANÇA.
+ * `timeoutMs` is the SAME deadline passed to `runOnRunner`. Node's timeout kills only the `docker exec`
+ * client, not what it started in the container (docs/runner-processes.md): an ffmpeg that went past the
+ * deadline kept on converting, and each new attempt stacked another one on the runner. The `timeout -s KILL`
+ * inside the container kills the whole group (sh and children) with the margin of `containerScriptCommand`,
+ * before Node gives up — which does not work here as it is because it reads the SCRIPT from stdin
+ * (`bash -s`), and on this path stdin is the payload. PURE; a deadline too short for the margin THROWS.
  */
 export function runnerScript(innerCommand: string, args: readonly string[], timeoutMs: number, payload = ""): string {
   const seconds = Math.floor((timeoutMs - CONTAINER_DEADLINE_MARGIN_MS) / 1000);
@@ -66,13 +66,13 @@ export function runnerScript(innerCommand: string, args: readonly string[], time
   );
 }
 
-/** Roda um script no runner e devolve o stdout; a falha vira a última linha do stderr, legível pro agente. */
+/** Runs a script on the runner and returns stdout; a failure becomes the last line of stderr, readable for the agent. */
 export async function runOnRunner(script: string, timeoutMs: number): Promise<string> {
   try {
     const { stdout } = await hostExecutor().runScript(script, { timeoutMs });
     return stdout;
   } catch (err) {
-    // 137 é como o `timeout -s KILL` de runnerScript relata o prazo — e chega antes do do Node.
+    // 137 is how runnerScript's `timeout -s KILL` reports the deadline — and it arrives before Node's.
     if (err instanceof HostExecError && (err.timedOut || err.exitCode === 137)) throw new Error("o runner não respondeu a tempo");
     const lines = String((err as Error).message ?? err).split("\n").map((l) => l.trim()).filter(Boolean);
     throw new Error(lines.at(-1) ?? "falha ao rodar no runner", { cause: err });

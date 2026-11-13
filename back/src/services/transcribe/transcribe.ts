@@ -235,16 +235,16 @@ export async function transcribeCardAudio(
   return { text, proofread: didProofread };
 }
 
-/** Teto do Whisper para um arquivo: 25 MB. */
+/** Whisper's cap for a file: 25 MB. */
 const WHISPER_MAX_BYTES = 25 * 1024 * 1024;
 
-/** Um arquivo de áudio inteiro (minutos, não segundos de ditado) demora mais que uma gravação do microfone. */
+/** A whole audio file (minutes, not seconds of dictation) takes longer than a microphone recording. */
 const AUDIO_FILE_TIMEOUT_MS = 300_000;
 
 /**
- * Transcreve um ARQUIVO de áudio que o agente achou no runner (o anexo de uma conversa, um .ogg do
- * WhatsApp). Sem revisão pelo modelo pequeno: ela existe para ditado digitado no prompt, e aqui o
- * agente lê a fala crua. O Whisper detecta o formato pelo nome do arquivo, por isso `fileName`.
+ * Transcribes an audio FILE the agent found on the runner (a conversation's attachment, a WhatsApp .ogg).
+ * No review by the small model: that exists for dictation typed into the prompt, and here the agent reads
+ * the raw speech. Whisper detects the format by the file name, hence `fileName`.
  */
 export async function transcribeAudioFile(audio: Buffer, fileName: string): Promise<string> {
   if (audio.length > WHISPER_MAX_BYTES) throw new Error("o áudio passa de 25 MB, o limite do Whisper");

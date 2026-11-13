@@ -7,17 +7,17 @@ import {
   DOCUMENT_READER_PACKAGES, extensionOf, ensurePackagesLine, runOnRunner, runnerScript, validateRunnerPath,
 } from "./runner.js";
 
-/** Formatos que `read-document.py` converte. Fonte única: a ferramenta MCP e o preview do chat leem daqui. */
+/** Formats `read-document.py` converts. Single source: the MCP tool and the chat preview read from here. */
 export const DOCUMENT_FORMATS = [
   "pdf", "xlsx", "xlsm", "xls", "docx", "doc", "pptx", "ppt", "odt", "ods", "odp",
   "csv", "tsv", "txt", "md", "json", "xml", "html", "log",
 ] as const;
 
-/** Teto padrão do texto devolvido: cabe no contexto do agente sem afogar a conversa. */
+/** Default cap on the returned text: fits in the agent's context without drowning the conversation. */
 export const DEFAULT_TEXT_LIMIT = 100_000;
 export const MAX_TEXT_LIMIT = 400_000;
 
-/** Primeira vez num runner antigo inclui o apt-get dos pacotes. */
+/** The first time on an old runner includes the apt-get of the packages. */
 const READ_TIMEOUT_MS = 300_000;
 
 const CONVERTER_SOURCE_PATH = join(dirname(fileURLToPath(import.meta.url)), "read-document.py");
@@ -38,7 +38,7 @@ export function isSupportedDocument(path: string): boolean {
   return (DOCUMENT_FORMATS as readonly string[]).includes(extensionOf(path));
 }
 
-/** Script de host: garante os pacotes e roda o conversor (fonte pelo stdin) sobre o arquivo. PURE. */
+/** Host script: ensures the packages and runs the converter (source via stdin) on the file. PURE. */
 export function buildReadDocumentScript(path: string, limit: number, source: string): string {
   const inner = `${ensurePackagesLine(DOCUMENT_READER_PACKAGES)}; exec python3 - "$0" "$1"`;
   return runnerScript(inner, [path, String(limit)], READ_TIMEOUT_MS, source);
@@ -53,7 +53,7 @@ export function parseConverterOutput(stdout: string): DocumentText {
   return { formato: parsed.formato, texto: parsed.texto, truncado: parsed.truncado };
 }
 
-/** Lê um documento que está no runner (PDF, Excel, Word, PowerPoint, OpenDocument, texto) como markdown. */
+/** Reads a document that is on the runner (PDF, Excel, Word, PowerPoint, OpenDocument, text) as markdown. */
 export async function readDocument(givenPath: string, limit = DEFAULT_TEXT_LIMIT): Promise<DocumentText> {
   const path = validateRunnerPath(givenPath);
   if (!isSupportedDocument(path)) {
@@ -65,9 +65,9 @@ export async function readDocument(givenPath: string, limit = DEFAULT_TEXT_LIMIT
 }
 
 /**
- * O documento que a pessoa anexou a um card, como texto, para o preview do chat (planilha e Word não
- * abrem no navegador). Mesmas garantias da rota que serve o arquivo: o nome precisa ter a forma que o
- * upload grava e o caminho só é montado a partir de um card que existe.
+ * The document the person attached to a card, as text, for the chat preview (spreadsheets and Word do not
+ * open in the browser). Same guarantees as the route that serves the file: the name must have the shape the
+ * upload records and the path is only built from a card that exists.
  */
 export async function readCardAttachment(cardId: string, fileName: string): Promise<DocumentText> {
   if (!uploadContentType(fileName)) throw new Error("upload not found");

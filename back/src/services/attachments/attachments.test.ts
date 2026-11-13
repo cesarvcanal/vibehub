@@ -9,9 +9,9 @@ import { buildExtractAudioScript, parseExtractedAudio } from "./audio.js";
 import { extensionOf, ensurePackagesLine, runOnRunner, runnerScript, validateRunnerPath } from "./runner.js";
 
 /**
- * Os scripts de anexo RODANDO de verdade: um `docker` falso executa o comando do container aqui
- * mesmo e um `dpkg` falso diz que os pacotes já estão instalados (o teste nunca chama apt-get).
- * Formatos que dependem de pacote apt (openpyxl, python-docx, ffmpeg) só rodam onde ele existe.
+ * The attachment scripts RUNNING for real: a fake `docker` runs the container's command right here and a
+ * fake `dpkg` says the packages are already installed (the test never calls apt-get).
+ * Formats that depend on an apt package (openpyxl, python-docx, ffmpeg) only run where it exists.
  */
 const FONTE = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "read-document.py"), "utf8");
 const temPython = spawnSync("python3", ["--version"]).status === 0;
@@ -25,8 +25,8 @@ beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), "vh-attachments-"));
   bin = join(dir, "bin");
   mkdirSync(bin);
-  // Sem `exec`: como o cliente `docker exec`, ele sobrevive ao comando e devolve 137 quando o
-  // `timeout -s KILL` do container o mata (com `exec`, o próprio processo morreria por sinal).
+  // No `exec`: like the `docker exec` client, it outlives the command and returns 137 when the
+  // container's `timeout -s KILL` kills it (with `exec`, the process itself would die by signal).
   writeFileSync(join(bin, "docker"), "#!/bin/sh\nshift 3\n\"$@\"\n");
   writeFileSync(join(bin, "dpkg"), "#!/bin/sh\nexit 0\n");
   chmodSync(join(bin, "docker"), 0o755);
@@ -49,7 +49,7 @@ function lerAqui(caminho: string, limite = 10_000) {
   return parseConverterOutput(r.stdout);
 }
 
-/** Um zip montado pelo python da própria máquina — pptx e OpenDocument são zip + XML. */
+/** A zip built by the machine's own python — pptx and OpenDocument are zip + XML. */
 function zipar(destino: string, arquivos: Record<string, string>): void {
   execFileSync("python3", ["-c", [
     "import sys, json, zipfile",
@@ -171,7 +171,7 @@ describe("extração do áudio para o Whisper", () => {
 describe("prazo dentro do runner", () => {
   it("o comando roda sob `timeout -s KILL` com a margem do containerScriptCommand, nos dois chamadores", () => {
     const primeira = (script: string) => script.slice(0, script.indexOf("\n"));
-    // 600 s de extração e 300 s de leitura, menos os 15 s de margem: o runner mata antes do Node desistir.
+    // 600 s of extraction and 300 s of reading, minus the 15 s margin: the runner kills before Node gives up.
     expect(primeira(buildExtractAudioScript("/work/a.opus"))).toMatch(/^exec docker exec -i '[^']+' timeout -s KILL 585 sh -c '/);
     expect(primeira(buildReadDocumentScript("/work/a.pdf", 10, "print(1)"))).toMatch(/^exec docker exec -i '[^']+' timeout -s KILL 285 sh -c '/);
   });
@@ -179,7 +179,7 @@ describe("prazo dentro do runner", () => {
   it("estourado o prazo, o comando e o que ele iniciou morrem no runner — não ficam órfãos", () => {
     const pidFile = join(dir, "orfao.pid");
     const inicio = Date.now();
-    // 16 s de prazo no Node = 1 s dentro do runner. O `sleep` é o ffmpeg que seguia convertendo.
+    // A 16 s deadline in Node = 1 s inside the runner. The `sleep` is the ffmpeg that kept on converting.
     const r = rodar(runnerScript(`sleep 20 & echo $! > "$0"; wait`, [pidFile], 16_000));
     expect(r.status).not.toBe(0);
     expect(Date.now() - inicio).toBeLessThan(10_000);
@@ -189,10 +189,10 @@ describe("prazo dentro do runner", () => {
 
   it("o agente lê que o prazo estourou, não um código de saída cru", async () => {
     const pathOriginal = process.env.PATH;
-    process.env.PATH = `${bin}:${pathOriginal}`; // o executor local herda o PATH com o `docker` falso
+    process.env.PATH = `${bin}:${pathOriginal}`; // the local executor inherits the PATH with the fake `docker`
     try {
       await expect(runOnRunner(runnerScript("sleep 20", [], 16_000), 30_000)).rejects.toThrow("o runner não respondeu a tempo");
-      // Outra falha continua chegando com a última linha do stderr.
+      // Any other failure still arrives with the last line of stderr.
       await expect(runOnRunner(runnerScript(`echo "quebrou aqui" >&2; exit 3`, [], 30_000), 30_000)).rejects.toThrow("quebrou aqui");
     } finally {
       process.env.PATH = pathOriginal;

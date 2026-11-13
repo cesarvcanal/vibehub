@@ -282,10 +282,10 @@ export const BUILTIN_MAESTRO_NAME = "vibehub";
 export const BUILTIN_BROWSER_NAME = "navegador";
 
 /**
- * O pacote do MCP de navegador, em VERSÃO FIXA, nunca `@latest`: todo CLI que sobe (cada card, cada
- * retomada, cada reinício do painel) lança este MCP, e `npx -y …@latest` vai ao registro do npm a CADA
- * boot perguntar se há versão nova — medido no runner (2026-10-20): ~25s com `@latest` contra ~6s com
- * a versão exata, que sai do cache do npx. Subir a versão é trocar esta constante.
+ * The browser MCP package, at a FIXED VERSION, never `@latest`: every CLI that starts (each card, each
+ * resume, each panel restart) launches this MCP, and `npx -y …@latest` goes to the npm registry on EVERY
+ * boot to ask whether there is a new version — measured on the runner (2026-10-20): ~25s with `@latest`
+ * against ~6s with the exact version, which comes out of npx's cache. Bumping the version is changing this constant.
  */
 export const BROWSER_MCP_PACKAGE = "@playwright/mcp@0.0.83";
 

@@ -62,7 +62,7 @@ export const CREDENTIALS_FILE = ".credentials.json";
  * The variable beats `.credentials.json` inside Claude Code, so an account holding BOTH used to run
  * on the long-lived token forever: a revoked setup-token kept answering "OAuth token revoked" while
  * a fresh `/login` (account login terminal or a card's own terminal) sat unused next to it — the
- * login "did not stick" (produção, 2026-10-19, account `tech`). The rule is "the newest sign-in
+ * login "did not stick" (production, 2026-10-19, account `tech`). The rule is "the newest sign-in
  * wins": the token yields only to a credentials file that is NEWER than it and carries a refresh
  * token (a `.credentials.json` without one cannot keep itself alive, so it never wins). Saving a
  * token in the UI rewrites the file and takes the lead back; a card open re-seeds it only when the
