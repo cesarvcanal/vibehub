@@ -65,7 +65,7 @@ describe("identidade git por usuário", () => {
   it("sobrevive a um restart: o que foi gravado é lido do disco", async () => {
     const first = await load();
     await first.setUserGit("u1", { gitEmail: "xerif.off@gmail.com" });
-    const second = await load(); // módulo novo, cache novo, mesmo dataDir
+    const second = await load(); // new module, new cache, same dataDir
     expect((await second.getUserGit("u1"))?.gitEmail).toBe("xerif.off@gmail.com");
   });
 

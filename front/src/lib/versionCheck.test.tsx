@@ -14,10 +14,10 @@ import {
 vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }) }));
 
 /**
- * A ABA QUE FICA NO FRONT VELHO (produção, 2026-10-19): o deploy subiu a correção, a aba aberta
- * antes seguiu desenhando o bug, e a pessoa viu "não corrigiu". O painel tech.multi já resolvia
- * isso (useVersionCheck); o vibehub não tinha. Estes testes cercam o comportamento inteiro: aviso,
- * recarga sozinha só quando é seguro, e nunca no meio de um upload ou de uma gravação.
+ * THE TAB THAT STAYS ON THE OLD FRONT (production, 2026-10-19): the deploy shipped the fix, the tab
+ * opened before kept drawing the bug, and the person saw "it is not fixed". The tech.multi panel already
+ * solved this (useVersionCheck); the vibehub did not. These tests pin the whole behavior: notice,
+ * automatic reload only when it is safe, and never in the middle of an upload or a recording.
  */
 
 const html = (hash: string) => `<!doctype html><script type="module" src="/assets/index-${hash}.js"></script>`;
@@ -31,7 +31,7 @@ function Probe({ intervalMs = 1_000 }: { intervalMs?: number }) {
   return null;
 }
 
-/** Deixa as promessas do fetch assentarem com o relógio falso. */
+/** Lets the fetch promises settle with the fake clock. */
 async function flush(): Promise<void> {
   await act(async () => {
     for (let i = 0; i < 5; i += 1) await Promise.resolve();
@@ -91,7 +91,7 @@ describe("useVersionCheck", () => {
     expect(toast).toHaveBeenCalledTimes(1);
     expect(reload).not.toHaveBeenCalled();
 
-    // a pessoa está mexendo: cada interação adia a recarga
+    // the person is using it: each interaction postpones the reload
     await tick(VERSION_IDLE_MS - 2_000);
     window.dispatchEvent(new Event("keydown"));
     await tick(VERSION_IDLE_MS - 1_000);
@@ -99,7 +99,7 @@ describe("useVersionCheck", () => {
 
     await tick(1_001);
     expect(reload).toHaveBeenCalledTimes(1);
-    // e o aviso não se repete a cada sondagem
+    // and the notice does not repeat on every poll
     expect(toast).toHaveBeenCalledTimes(1);
   });
 
@@ -199,10 +199,10 @@ describe("useVersionCheck", () => {
   });
 
   /**
-   * O AVISO QUE DEMORAVA (ou não vinha). A referência era a PRIMEIRA sondagem, não o script que a
-   * aba carregou: uma aba que já abriu velha (cache, aba restaurada, deploy entre o load e a
-   * sondagem) tomava a versão nova por "a sua" e nunca avisava. E a sondagem era de minuto em
-   * minuto, sem olhar de novo quando a pessoa volta para a aba.
+   * THE NOTICE THAT TOOK TOO LONG (or never came). The reference was the FIRST poll, not the script the
+   * tab loaded: a tab that already opened stale (cache, restored tab, deploy between the load and the
+   * poll) took the new version for "its own" and never warned. And the polling was once a
+   * minute, without checking again when the person comes back to the tab.
    */
   it("a aba já roda um bundle velho: avisa na PRIMEIRA sondagem, sem esperar outra", async () => {
     const script = document.createElement("script");

@@ -4,6 +4,7 @@ import { findUser, listUsers } from "../auth/users.js";
 import * as registry from "../services/board/registry.js";
 import type { ShareKind } from "../services/board/registry.js";
 import { logger } from "../utils/logger.js";
+import { sendError } from "./httpError.js";
 
 /**
  * SHARING — handing a card (or a whole project) to somebody who is not the owner.
@@ -20,7 +21,7 @@ import { logger } from "../utils/logger.js";
 
 interface ShareBody { userId?: string; level?: string }
 
-async function decorate(shares: registry.Share[]): Promise<
+async function withUsernames(shares: registry.Share[]): Promise<
   { userId: string; username: string; level: string; kind: ShareKind; targetId: string; createdAt: number }[]
 > {
   const users = await listUsers();
@@ -30,17 +31,12 @@ async function decorate(shares: registry.Share[]): Promise<
   }));
 }
 
-function fail(err: unknown): { code: number; body: { error: string } } {
-  const message = (err as Error).message ?? "invalid request";
-  return { code: /not found/i.test(message) ? 404 : 400, body: { error: message } };
-}
-
 export async function sharesRoutes(app: FastifyInstance): Promise<void> {
   for (const [kind, path] of [["card", "cards"], ["project", "projects"]] as const) {
     app.get<{ Params: { id: string } }>(
       `/api/${path}/:id/shares`, { preHandler: requireOwner },
       async (req, reply) => {
-        return await reply.send({ shares: await decorate(await registry.sharesForTarget(kind, req.params.id)) });
+        return await reply.send({ shares: await withUsernames(await registry.sharesForTarget(kind, req.params.id)) });
       },
     );
 
@@ -61,10 +57,9 @@ export async function sharesRoutes(app: FastifyInstance): Promise<void> {
             { audit: true, action: "share.add", kind, target: req.params.id, user: user.username, level: share.level },
             "shared",
           );
-          return await reply.send({ share: (await decorate([share]))[0] });
+          return await reply.send({ share: (await withUsernames([share]))[0] });
         } catch (err) {
-          const { code, body } = fail(err);
-          return await reply.code(code).send(body);
+          return await sendError(reply, err);
         }
       },
     );

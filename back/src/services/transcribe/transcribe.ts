@@ -18,7 +18,7 @@ import { logger } from "../../utils/logger.js";
  */
 
 export const OPENAI_KEY = "TRANSCRIBE_OPENAI_API_KEY";
-export const ANTHROPIC_KEY = "TRANSCRIBE_ANTHROPIC_API_KEY";
+const ANTHROPIC_KEY = "TRANSCRIBE_ANTHROPIC_API_KEY";
 const CLEANUP_MODEL = "claude-haiku-4-5-20251001";
 
 /**
@@ -26,7 +26,7 @@ const CLEANUP_MODEL = "claude-haiku-4-5-20251001";
  * holds the request (and the person staring at the microphone button) forever. Generous because a
  * 20 MB upload to Whisper is not instant; the GitHub client's 8 s would cut real recordings.
  */
-export const EXTERNAL_TIMEOUT_MS = 60_000;
+const EXTERNAL_TIMEOUT_MS = 60_000;
 
 /** Whisper accepts up to 25 MB; 20 MB leaves room for a recording of several minutes. */
 export const AUDIO_MAX_BYTES = 20 * 1024 * 1024;
@@ -235,21 +235,21 @@ export async function transcribeCardAudio(
   return { text, proofread: didProofread };
 }
 
-/** Teto do Whisper para um arquivo: 25 MB. */
-export const WHISPER_MAX_BYTES = 25 * 1024 * 1024;
+/** Whisper's cap for a file: 25 MB. */
+const WHISPER_MAX_BYTES = 25 * 1024 * 1024;
 
-/** Um arquivo de áudio inteiro (minutos, não segundos de ditado) demora mais que uma gravação do microfone. */
-const TIMEOUT_ARQUIVO_MS = 300_000;
+/** A whole audio file (minutes, not seconds of dictation) takes longer than a microphone recording. */
+const AUDIO_FILE_TIMEOUT_MS = 300_000;
 
 /**
- * Transcreve um ARQUIVO de áudio que o agente achou no runner (o anexo de uma conversa, um .ogg do
- * WhatsApp). Sem revisão pelo modelo pequeno: ela existe para ditado digitado no prompt, e aqui o
- * agente lê a fala crua. O Whisper detecta o formato pelo nome do arquivo, por isso `nomeArquivo`.
+ * Transcribes an audio FILE the agent found on the runner (a conversation's attachment, a WhatsApp .ogg).
+ * No review by the small model: that exists for dictation typed into the prompt, and here the agent reads
+ * the raw speech. Whisper detects the format by the file name, hence `fileName`.
  */
-export async function transcreverArquivoDeAudio(audio: Buffer, nomeArquivo: string): Promise<string> {
+export async function transcribeAudioFile(audio: Buffer, fileName: string): Promise<string> {
   if (audio.length > WHISPER_MAX_BYTES) throw new Error("o áudio passa de 25 MB, o limite do Whisper");
   const openaiKey = await secretGet(OPENAI_KEY);
   if (!openaiKey) throw new Error("transcrição não configurada: falta a chave da OpenAI em Configurações");
   const settings = await getSettings();
-  return await whisper(openaiKey, audio, "application/octet-stream", settings.transcribeLanguage ?? null, nomeArquivo, TIMEOUT_ARQUIVO_MS);
+  return await whisper(openaiKey, audio, "application/octet-stream", settings.transcribeLanguage ?? null, fileName, AUDIO_FILE_TIMEOUT_MS);
 }

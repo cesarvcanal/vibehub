@@ -1,19 +1,20 @@
 import * as React from "react";
 
 /**
- * O RACIOCÍNIO TRADUZIDO NO NAVEGADOR — só na exibição, sem token nenhum.
+ * THE REASONING TRANSLATED IN THE BROWSER — display only, no tokens at all.
  *
- * Antes, o driver pedia ao modelo que pensasse em português (7bf6ace). Duas coisas erradas nisso:
- *   - o que a tela mostra é o RESUMO do raciocínio (`display: "summarized"`), e ele ora seguia a
- *     instrução, ora voltava em inglês;
- *   - uma instrução sobre o raciocínio no system prompt é o gatilho conhecido do bloqueio
- *     `[reasoning_extraction]` do Opus (card #3684).
+ * Before, the driver asked the model to think in Portuguese (7bf6ace). Two things were wrong with that:
+ *   - what the screen shows is the reasoning SUMMARY (`display: "summarized"`), and it sometimes
+ *     followed the instruction, sometimes came back in English;
+ *   - an instruction about the reasoning in the system prompt is the known trigger of Opus's
+ *     `[reasoning_extraction]` block (card #3684).
  *
- * Agora o modelo não fica sabendo de nada: o Chrome (138+) e o Edge (148+) trazem `Translator` e
- * `LanguageDetector`, modelos LOCAIS e pequenos (de tradução, não o Gemini Nano) — nada sai da
- * máquina e nada é cobrado. Sem a API (Firefox, Safari, navegador antigo), enquanto o pacote de
- * idioma não baixou, ou na dúvida sobre o idioma do texto, a tela mostra o original: a tradução é um
- * extra, nunca um ponto de falha — e nunca estraga um texto que já estava legível.
+ * Now the model knows nothing about it: Chrome (138+) and Edge (148+) ship `Translator` and
+ * `LanguageDetector`, small LOCAL models (translation ones, not Gemini Nano) — nothing leaves the
+ * machine and nothing is billed. Without the API (Firefox, Safari, old browser), while the language
+ * pack has not downloaded, or when in doubt about the text's language, the screen shows the
+ * original: the translation is an extra, never a point of failure — and it never ruins a text that
+ * was already readable.
  */
 
 type Availability = "unavailable" | "downloadable" | "downloading" | "available";
@@ -34,43 +35,44 @@ export interface TranslationEnv {
   translator?: TranslatorFactory;
   detector?: DetectorFactory;
   /**
-   * O navegador só BAIXA o modelo dentro de um gesto do usuário (clique, tecla). Fora dele, `create()`
-   * de um modelo ainda não baixado é recusado — então nem tentamos.
+   * The browser only DOWNLOADS the model inside a user gesture (click, key). Outside it, `create()`
+   * of a model not yet downloaded is refused — so we do not even try.
    */
   userActive?: () => boolean;
 }
 
 export interface ReasoningTranslator {
-  /** O navegador tem a API? Sem ela, ninguém nem tenta (nem agenda trabalho à toa). */
+  /** Does the browser have the API? Without it, nobody even tries (nor schedules pointless work). */
   readonly supported: boolean;
-  /** O texto em português, ou `null` = mostre o original (já é português, sem API, na dúvida...). */
+  /** The text in Portuguese, or `null` = show the original (already Portuguese, no API, in doubt...). */
   translate(text: string): Promise<string | null>;
   /**
-   * Chamado num gesto do usuário: baixa UM modelo por gesto (o tradutor, depois o detector) e avisa
-   * `onReady` quando cada um fica pronto. Baixar consome o gesto — um segundo `create()` no mesmo
-   * clique leva NotAllowedError (provado no Chrome 154) —, então insiste nos gestos seguintes.
+   * Called in a user gesture: downloads ONE model per gesture (the translator, then the detector) and
+   * notifies `onReady` when each one is ready. Downloading consumes the gesture — a second `create()`
+   * in the same click gets NotAllowedError (proven on Chrome 154) —, so it keeps trying on the next
+   * gestures.
    */
   prime(): void;
   onReady(listener: () => void): () => void;
 }
 
-/** O alvo é sempre português: só a interface em pt-BR traduz (inglês é o idioma em que o modelo pensa). */
+/** The target is always Portuguese: only the pt-BR interface translates (English is the language the model thinks in). */
 const TARGET = "pt";
-/** O idioma em que o modelo pensa por padrão — o par que o `prime()` baixa. */
+/** The language the model thinks in by default — the pair `prime()` downloads. */
 const DEFAULT_SOURCE = "en";
-/** Abaixo disso a detecção é chute (texto curto demais, misturado): decide a heurística local. */
+/** Below this the detection is a guess (text too short, mixed): the local heuristic decides. */
 const MIN_CONFIDENCE = 0.5;
-/** Blocos já traduzidos guardados: reabrir a conversa não refaz o trabalho. */
+/** Already-translated blocks kept: reopening the conversation does not redo the work. */
 const CACHE_LIMIT = 300;
 
-// "me", "do", "so" e "to" ficam de fora: são português comuníssimo, inclusive sem acento ("Me ajuda
-// aqui", "o log do build", "so falta testar" = só, "to indo" = tô).
+// "me", "do", "so" and "to" are left out: they are extremely common Portuguese, even without accents
+// ("Me ajuda aqui", "o log do build", "so falta testar" = só, "to indo" = tô).
 const EN_WORDS = new Set(
   ("the and of is that with this it for be need will what how should let from are not on i " +
     "i'll i'm we can if then which there have has was but does first now").split(" "),
 );
-// Só palavras que NÃO existem em inglês ("do", "as", "no", "se", "pro", "algo" existem e seguravam
-// linhas inglesas à toa) — incluindo o português informal, sem acento, de quem digita rápido.
+// Only words that do NOT exist in English ("do", "as", "no", "se", "pro", "algo" exist and held back
+// English lines for nothing) — including the informal, unaccented Portuguese of someone typing fast.
 const PT_WORDS = new Set(
   ("o os de da dos das que não nao para pra pras pros com um uma é em na nos nas por mais vou " +
     "preciso isso está esse essa este esta mas como já ja também tambem ao pelo pela foi ser tem " +
@@ -93,12 +95,12 @@ function score(text: string): { en: number; pt: number } {
 }
 
 /**
- * O PALPITE LOCAL para o BLOCO quando o detector não existe (Chrome com `LanguageDetector`
- * "unavailable" é real) ou não tem certeza: conta palavras-função de cada língua (e acento, que
- * inglês não tem). Na dúvida, `null` — e aí NÃO se traduz: passar português pelo tradutor en→pt o
- * estraga ("...os testes do VOLTAR", revisão adversarial HIGH-1). "en" basta haver UMA linha que
- * prove ser inglês: quem decide o que vai ao tradutor é cada linha (`isEnglishLine`), então um bloco
- * misto traduz só as linhas inglesas. PURA.
+ * The LOCAL GUESS for the BLOCK when the detector does not exist (Chrome with `LanguageDetector`
+ * "unavailable" is real) or is not sure: counts function words of each language (and accents, which
+ * English does not have). In doubt, `null` — and then it is NOT translated: running Portuguese
+ * through the en→pt translator ruins it ("...os testes do VOLTAR", adversarial review HIGH-1). For
+ * "en" it is enough for ONE line to prove it is English: what goes to the translator is decided by
+ * each line (`isEnglishLine`), so a mixed block translates only the English lines. PURE.
  */
 export function guessLanguage(text: string): "en" | "pt" | null {
   const { en, pt } = score(text);
@@ -108,22 +110,23 @@ export function guessLanguage(text: string): "en" | "pt" | null {
 }
 
 /**
- * A LINHA vai para o tradutor só com prova POSITIVA de inglês (alguma palavra-função inglesa) e
- * NENHUM sinal de português. Sem prova, fica como veio: português informal sem palavra conhecida
- * ("nao funciona aqui, testa ai pra mim") ou português citando inglês ("O teste falhou com:
- * Expected...") nunca passam por en→pt. Uma linha curta em inglês ficar em inglês é o preço. PURA.
+ * The LINE goes to the translator only with POSITIVE proof of English (some English function word)
+ * and NO sign of Portuguese. Without proof, it stays as it came: informal Portuguese with no known
+ * word ("nao funciona aqui, testa ai pra mim") or Portuguese quoting English ("O teste falhou com:
+ * Expected...") never go through en→pt. A short English line staying in English is the price. PURE.
  */
 function isEnglishLine(line: string): boolean {
   const { en, pt } = score(line);
   return en >= 1 && pt === 0;
 }
 
-/** Linha maior que isto fica como veio: nenhuma regex roda sobre ela (nada de travar a tela). */
+/** A line longer than this stays as it came: no regex runs over it (no freezing the screen). */
 const MAX_LINE = 2000;
 
 /**
- * Linha com cara de CÓDIGO, comando ou erro: o tradutor a estragaria ("await" → "aguarde", provado no
- * Chrome 154). Palavras-chave só em minúscula e seguidas de sintaxe — "If the test fails" é prosa.
+ * A line that looks like CODE, a command or an error: the translator would ruin it ("await" →
+ * "aguarde", proven on Chrome 154). Keywords only in lowercase and followed by syntax — "If the test
+ * fails" is prose.
  */
 const CODE_LINE = [
   /[;{}]\s*$/,
@@ -132,29 +135,29 @@ const CODE_LINE = [
   /^\s*at\s+\S.*:\d+(?::\d+)?\)?\s*$/, // stack trace JS
   /^\s*File\s+".*",\s+line\s+\d+/, // traceback Python
   /^\s*[\w.]*(?:Error|Exception)\b[^:]*:/, // "TypeError: ..."
-  /^\s*[\w.$[\]]+\s*[-+*/]?=(?!=)/, // atribuição
-  /^\s*[\w.$]+\([^()]*\)(?:\s*;)?\s*$/, // uma chamada sozinha (`\s*;?\s*` era quadrático)
+  /^\s*[\w.$[\]]+\s*[-+*/]?=(?!=)/, // assignment
+  /^\s*[\w.$]+\([^()]*\)(?:\s*;)?\s*$/, // a lone call (`\s*;?\s*` was quadratic)
   /^\s*(?:\$\s|(?:npm|pnpm|npx|yarn|git|node|python3?|pip|cd|ls|cat|grep|curl|docker|make|cargo|go)\s)/, // shell
 ];
 const FENCE = /^\s*(?:```|~~~)/;
 /**
- * Marcador de citação/título/lista/checkbox/numeração: fica intacto ("- [ ]" virava "- []"; ">" e
- * "##" iam junto para o tradutor). Sem backtracking.
+ * Quote/heading/list/checkbox/numbering marker: stays intact ("- [ ]" became "- []"; ">" and "##"
+ * went along to the translator). No backtracking.
  */
 const LIST_MARKER = /^(?:(?:>\s*)+|#{1,6}\s+|[-*+]\s+(?:\[[ xX]\](?:\s+|$))?|\d+[.)]\s+)/;
 
 /**
- * Traduz LINHA por linha: o tradutor local junta as linhas de um mesmo pedaço ("- a - b", provado no
- * Chrome 154), e o raciocínio é desenhado com `whitespace-pre-wrap` — listas e passos precisam
- * continuar um por linha. Fica como veio: bloco ``` / ~~~, linha de código, linha gigante e linha
- * sem prova de inglês. Indentação, marcador e espaço final sobrevivem (cortados com trim, sem regex
- * preguiçosa — ela era quadrática numa linha com muito espaço).
+ * Translates LINE by line: the local translator joins the lines of the same chunk ("- a - b", proven
+ * on Chrome 154), and the reasoning is drawn with `whitespace-pre-wrap` — lists and steps must stay
+ * one per line. Stays as it came: ``` / ~~~ block, code line, giant line and line without proof of
+ * English. Indentation, marker and trailing space survive (cut with trim, no lazy regex — it was
+ * quadratic on a line with lots of whitespace).
  */
 async function translateLines(translator: TranslatorLike, text: string): Promise<string> {
   const out: string[] = [];
   let inFence = false;
   for (const line of text.split("\n")) {
-    // a fence ANTES do limite de tamanho: uma linha ``` gigante ainda abre/fecha o bloco de código
+    // the fence BEFORE the size limit: a giant ``` line still opens/closes the code block
     if (FENCE.test(line)) {
       inFence = !inFence;
       out.push(line);
@@ -170,7 +173,7 @@ async function translateLines(translator: TranslatorLike, text: string): Promise
     }
     const body = line.trimStart();
     const indent = line.slice(0, line.length - body.length);
-    // marcadores EMPILHADOS ("> - [ ]", "## 1.") — consome um de cada vez; cada volta come ≥1 char
+    // STACKED markers ("> - [ ]", "## 1.") — consumes one at a time; each pass eats ≥1 char
     let marker = "";
     let rest = body;
     for (let m = LIST_MARKER.exec(rest)?.[0]; m; m = LIST_MARKER.exec(rest)?.[0]) {
@@ -187,9 +190,9 @@ export function createReasoningTranslator(env: TranslationEnv): ReasoningTransla
   const cache = new Map<string, string>();
   const translators = new Map<string, Promise<TranslatorLike | null>>();
   let detector: Promise<DetectorLike | null> | null = null;
-  /** Um download em andamento (um por gesto). */
+  /** A download in progress (one per gesture). */
   let priming = false;
-  /** Tradutor/detector PRONTOS — uma checagem ainda pendente não conta (ela pode dar em nada). */
+  /** Translator/detector READY — a still-pending check does not count (it may come to nothing). */
   let translatorReady = false;
   let detectorReady = false;
   const listeners = new Set<() => void>();
@@ -203,14 +206,14 @@ export function createReasoningTranslator(env: TranslationEnv): ReasoningTransla
     for (const listener of [...listeners]) listener();
   }
 
-  /** Guarda só o SUCESSO: uma falha (ou "ainda não baixou") tenta de novo na próxima vez. */
+  /** Keeps only SUCCESS: a failure (or "not downloaded yet") tries again next time. */
   function remember<T>(map: Map<string, Promise<T | null>>, key: string, make: () => Promise<T | null>): Promise<T | null> {
     const hit = map.get(key);
     if (hit) return hit;
     const pending: Promise<T | null> = make()
       .catch(() => null)
       .then((value) => {
-        // só apaga a SI MESMA: o prime() pode ter posto um tradutor pronto no lugar enquanto isto esperava
+        // only deletes ITSELF: prime() may have put a ready translator in its place while this was waiting
         if (value === null && map.get(key) === pending) map.delete(key);
         return value;
       });
@@ -248,7 +251,7 @@ export function createReasoningTranslator(env: TranslationEnv): ReasoningTransla
     return pending;
   }
 
-  /** O idioma do texto, ou `null` = não dá pra saber (e então não se traduz). */
+  /** The text's language, or `null` = no way to know (and then it is not translated). */
   async function sourceLanguageOf(text: string): Promise<string | null> {
     const d = await getDetector();
     if (d) {
@@ -258,7 +261,7 @@ export function createReasoningTranslator(env: TranslationEnv): ReasoningTransla
           return top.detectedLanguage.split("-")[0]!.toLowerCase();
         }
       } catch {
-        /* cai na heurística */
+        /* falls back to the heuristic */
       }
     }
     return guessLanguage(text);
@@ -272,8 +275,8 @@ export function createReasoningTranslator(env: TranslationEnv): ReasoningTransla
       const cached = cache.get(text);
       if (cached !== undefined) return cached;
       const source = await sourceLanguageOf(text);
-      // Só inglês → português: o filtro de linha (`isEnglishLine`) é de inglês, e com outro idioma
-      // detectado ele mandaria linhas inglesas a um tradutor es→pt (4ª revisão).
+      // Only English → Portuguese: the line filter (`isEnglishLine`) is for English, and with another
+      // language detected it would send English lines to an es→pt translator (4th review).
       if (source !== DEFAULT_SOURCE) return null;
       const translator = await getTranslator(source);
       if (!translator) return null;
@@ -291,8 +294,9 @@ export function createReasoningTranslator(env: TranslationEnv): ReasoningTransla
     prime() {
       const factory = env.translator;
       if (!factory || priming) return;
-      // `create()` chamado DENTRO do gesto — é o que o navegador exige para baixar o modelo. Um por
-      // gesto: o primeiro download consome o gesto, e um segundo create() aqui seria recusado.
+      // `create()` called INSIDE the gesture — it is what the browser requires to download the model.
+      // One per gesture: the first download consumes the gesture, and a second create() here would
+      // be refused.
       if (!translatorReady) {
         priming = true;
         factory
@@ -302,7 +306,7 @@ export function createReasoningTranslator(env: TranslationEnv): ReasoningTransla
             translators.set(DEFAULT_SOURCE, Promise.resolve(translator));
             announce();
           })
-          .catch(() => { /* sem modelo agora: o próximo gesto tenta de novo */ })
+          .catch(() => { /* no model now: the next gesture tries again */ })
           .finally(() => { priming = false; });
         return;
       }
@@ -316,7 +320,7 @@ export function createReasoningTranslator(env: TranslationEnv): ReasoningTransla
           detector = Promise.resolve(created);
           announce();
         })
-        .catch(() => { /* idem: o próximo gesto tenta de novo */ })
+        .catch(() => { /* same: the next gesture tries again */ })
         .finally(() => { priming = false; });
     },
 
@@ -327,11 +331,11 @@ export function createReasoningTranslator(env: TranslationEnv): ReasoningTransla
   };
 }
 
-/* ------------------------------------------------------------- o do navegador */
+/* ------------------------------------------------------------- the browser's */
 
 let shared: ReasoningTranslator | null = null;
 
-/** O tradutor deste navegador (um só, para o cache valer entre os cards). */
+/** This browser's translator (a single one, so the cache holds across cards). */
 export function reasoningTranslator(): ReasoningTranslator {
   if (!shared) {
     const g = globalThis as { Translator?: TranslatorFactory; LanguageDetector?: DetectorFactory };
@@ -346,15 +350,16 @@ export function reasoningTranslator(): ReasoningTranslator {
   return shared;
 }
 
-/** Test seam: esquece o tradutor (e o cache) para o próximo teste montar o seu. */
+/** Test seam: forgets the translator (and the cache) so the next test builds its own. */
 export function resetReasoningTranslatorForTesting(): void {
   shared = null;
 }
 
 /**
- * A tradução de `text`, ou `null` enquanto não há (ou não haverá) uma. `enabled` falso — o bloco
- * ainda chegando, a interface em inglês — não traduz nada: traduzir pedaço a pedaço faria o texto
- * pular na tela. Quando um modelo termina de baixar (`onReady`), tenta de novo sozinho.
+ * The translation of `text`, or `null` while there is not (or will not be) one. `enabled` false —
+ * the block still arriving, the interface in English — translates nothing: translating chunk by
+ * chunk would make the text jump on screen. When a model finishes downloading (`onReady`), it tries
+ * again on its own.
  */
 export function useReasoningTranslation(text: string, enabled: boolean): string | null {
   const translator = reasoningTranslator();
@@ -364,7 +369,7 @@ export function useReasoningTranslation(text: string, enabled: boolean): string 
   React.useEffect(() => translator.onReady(bump), [translator]);
 
   React.useEffect(() => {
-    // sem a API, nem agenda: nada a traduzir, e nenhum setState à toa depois do render
+    // without the API, does not even schedule: nothing to translate, and no pointless setState after render
     if (!enabled || !translator.supported) return;
     let live = true;
     void translator.translate(text).then((out) => {

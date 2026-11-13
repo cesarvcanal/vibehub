@@ -1,19 +1,19 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { FORMATOS_DOCUMENTO, LIMITE_TEXTO_MAXIMO, LIMITE_TEXTO_PADRAO, lerDocumento } from "../services/anexos/documento.js";
-import { transcreverAudioDoRunner } from "../services/anexos/audio.js";
+import { DOCUMENT_FORMATS, MAX_TEXT_LIMIT, DEFAULT_TEXT_LIMIT, readDocument } from "../services/attachments/document.js";
+import { transcribeRunnerAudio } from "../services/attachments/audio.js";
 
 /**
- * ANEXOS — o que o agente faz com um arquivo que a pessoa anexou (ou que ele mesmo baixou no runner).
+ * ATTACHMENTS — what the agent does with a file the person attached (or that it downloaded itself on the runner).
  *
- * O Read do Claude Code abre imagem e PDF, mas não planilha, Word nem áudio. Estas duas ferramentas
- * fecham o buraco: a conversão roda dentro do runner (o arquivo já está lá) e o agente recebe texto.
- * Resposta em texto puro, não JSON: uma tabela markdown escapada dentro de JSON é ilegível.
+ * Claude Code's Read opens images and PDFs, but not spreadsheets, Word or audio. These two tools close the
+ * gap: the conversion runs inside the runner (the file is already there) and the agent gets text.
+ * The answer is plain text, not JSON: a markdown table escaped inside JSON is unreadable.
  */
-const texto = (conteudo: string) => ({ content: [{ type: "text" as const, text: conteudo }] });
-const falha = (e: unknown) => ({ ...texto(`erro: ${(e as Error).message}`), isError: true });
+const textResult = (content: string) => ({ content: [{ type: "text" as const, text: content }] });
+const errorResult = (e: unknown) => ({ ...textResult(`erro: ${(e as Error).message}`), isError: true });
 
-export function registerAnexoTools(server: McpServer): void {
+export function registerAttachmentTools(server: McpServer): void {
   server.registerTool(
     "vibehub_read_document",
     {
@@ -23,20 +23,20 @@ export function registerAnexoTools(server: McpServer): void {
         "(.odt .ods .odp), PDF (text layer) and plain text (.csv .txt .json …). Use it for every file the " +
         "user attaches under /work/.uploads/ that is not an image, instead of improvising a parser. A " +
         "scanned PDF has no text layer: open it with your Read tool to see the pages. `limit` caps the " +
-        `characters returned (default ${LIMITE_TEXTO_PADRAO}); when the answer says it was truncated, ` +
-        `raise it or process the file with python. Formats: ${FORMATOS_DOCUMENTO.join(", ")}.`,
+        `characters returned (default ${DEFAULT_TEXT_LIMIT}); when the answer says it was truncated, ` +
+        `raise it or process the file with python. Formats: ${DOCUMENT_FORMATS.join(", ")}.`,
       inputSchema: {
         path: z.string().min(1).max(1000).describe("absolute path of the file on the runner"),
-        limit: z.number().int().min(1).max(LIMITE_TEXTO_MAXIMO).optional().describe("max characters to return"),
+        limit: z.number().int().min(1).max(MAX_TEXT_LIMIT).optional().describe("max characters to return"),
       },
     },
     async (a) => {
       try {
-        const lido = await lerDocumento(a.path, a.limit ?? LIMITE_TEXTO_PADRAO);
-        const aviso = lido.truncado ? `\n\n[truncado em ${a.limit ?? LIMITE_TEXTO_PADRAO} caracteres]` : "";
-        return texto(`${lido.texto || "(o documento não tem texto)"}${aviso}`);
+        const doc = await readDocument(a.path, a.limit ?? DEFAULT_TEXT_LIMIT);
+        const notice = doc.truncado ? `\n\n[truncado em ${a.limit ?? DEFAULT_TEXT_LIMIT} caracteres]` : "";
+        return textResult(`${doc.texto || "(o documento não tem texto)"}${notice}`);
       } catch (e) {
-        return falha(e);
+        return errorResult(e);
       }
     },
   );
@@ -56,10 +56,10 @@ export function registerAnexoTools(server: McpServer): void {
     },
     async (a) => {
       try {
-        const { texto: transcricao } = await transcreverAudioDoRunner(a.path);
-        return texto(transcricao || "(nenhuma fala reconhecida no áudio)");
+        const { text: transcript } = await transcribeRunnerAudio(a.path);
+        return textResult(transcript || "(nenhuma fala reconhecida no áudio)");
       } catch (e) {
-        return falha(e);
+        return errorResult(e);
       }
     },
   );

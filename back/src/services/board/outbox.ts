@@ -2,17 +2,12 @@ import { randomUUID } from "node:crypto";
 import { JsonStore } from "../../store/jsonStore.js";
 import { config, dataPath } from "../../config/env.js";
 import { hostExecutor } from "../../runtime/host.js";
-import { getCard, type Card } from "./registry.js";
+import { getCard } from "./registry.js";
 import { findUser } from "../../auth/users.js";
-import { recordOrigin } from "../chat/provenance.js";
+import { originOfUser, recordOrigin } from "../chat/provenance.js";
 import { buildSendKeysScript } from "../maestro/maestro.js";
 import { cardAgentState, cardPaneReadiness, type AgentState } from "./agentState.js";
 import { logger } from "../../utils/logger.js";
-
-// The agent probe used to live here; it moved to ./agentState.js so the session view can consult it
-// too without a cycle. Re-exported so existing importers (and tests) keep their old entry point.
-export { buildAgentProbeScript, classifyAgentState, cardAgentState, type AgentState } from "./agentState.js";
-export { looksLikeInteractiveMenu, buildMenuProbeScript, cardAwaitingChoice } from "./agentState.js";
 
 /**
  * THE OUTBOX — what you typed reaches the agent, or it waits until it can.
@@ -132,16 +127,6 @@ async function appendMessage(cardId: string, text: string, by?: string): Promise
   return message;
 }
 
-async function removeMessage(cardId: string, messageId: string): Promise<void> {
-  await store.mutate((doc) => {
-    const list = doc.byCard[cardId];
-    if (!list) return;
-    const next = list.filter((m) => m.id !== messageId);
-    if (next.length === 0) delete doc.byCard[cardId];
-    else doc.byCard[cardId] = next;
-  });
-}
-
 async function markAttempt(cardId: string, messageId: string, detail: string): Promise<void> {
   await store.mutate((doc) => {
     const message = doc.byCard[cardId]?.find((m) => m.id === messageId);
@@ -190,9 +175,7 @@ async function flushOnce(cardId: string): Promise<FlushResult> {
     const card = await getCard(cardId);
     if (!card) {
       // The card is gone (deleted while something was queued): so is the queue.
-      await store.mutate((doc) => {
-        delete doc.byCard[cardId];
-      });
+      await purgeCardQueue(cardId);
       return { delivered, agent: "none" };
     }
     agent = await cardAgentState(card);
@@ -216,7 +199,7 @@ async function flushOnce(cardId: string): Promise<FlushResult> {
           buildSendKeysScript(config.runner.container, card.tmuxSession, message.text),
           { timeoutMs: 30_000 },
         );
-        await removeMessage(cardId, message.id);
+        await cancelMessage(cardId, message.id);
         delivered += 1;
         await noteSender(cardId, message);
         logger.info(
@@ -326,9 +309,6 @@ async function noteSender(cardId: string, message: OutboxMessage): Promise<void>
   try {
     const user = await findUser(message.by);
     if (!user) return;
-    void recordOrigin(cardId, message.text, {
-      kind: user.role === "owner" ? "owner" : "user",
-      name: user.username,
-    });
+    void recordOrigin(cardId, message.text, originOfUser(user));
   } catch { /* unattributed beats broken */ }
 }

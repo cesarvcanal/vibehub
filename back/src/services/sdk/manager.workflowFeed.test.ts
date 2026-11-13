@@ -6,9 +6,9 @@ import { join } from "node:path";
 import { config } from "../../config/env.js";
 
 /**
- * O FEED DE UM SUBAGENTE, sob demanda: a aba pede `{type:"workflow_feed", runId, agentId}` e o
- * manager roda a sondagem do feed no runner e responde SÓ a quem pediu. Arquivo à parte porque o
- * executor do host é um dublê aqui (a sondagem real precisa de um runner); o resto é o de verdade.
+ * A SUBAGENT'S FEED, on demand: the tab asks for `{type:"workflow_feed", runId, agentId}` and the
+ * manager runs the feed probe in the runner and answers ONLY whoever asked. A separate file because the
+ * host executor is a stand-in here (the real probe needs a runner); the rest is the real one.
  */
 const { runScript } = vi.hoisted(() => ({
   runScript: vi.fn(async (_script: string, _opts?: unknown) => ({ stdout: "[]", stderr: "" })),
@@ -136,7 +136,7 @@ describe("workflow_feed — o feed de um subagente, sob demanda", () => {
     expect(feedFrames(socket)[0]).toMatchObject({ type: "workflow_feed", items: [], error: "invalid-id" });
     expect(runScript).not.toHaveBeenCalled();
     expect(socket.closed).toBe(false);
-    // O socket segue vivo: a mensagem seguinte é um turno normal.
+    // The socket stays alive: the next message is a normal turn.
     socket.emit("message", Buffer.from(JSON.stringify({ type: "user", text: "oi" })));
     expect(child.stdin.written.join("")).toContain('"text":"oi"');
   });

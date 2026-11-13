@@ -177,7 +177,7 @@ describe("pendingDecisions — a bandeja", () => {
   });
 });
 
-/* -------------------------------------------------------- resposta explícita */
+/* -------------------------------------------------------- explicit answer */
 
 describe("buildDecisionReply / parseDecisionReply — a resposta ancorada", () => {
   it("round-trips the question and the answer", () => {
@@ -227,16 +227,16 @@ describe("buildDecisionReply / parseDecisionReply — a resposta ancorada", () =
 });
 
 /**
- * O CUSTO POR TOKEN. Cada `assistant_delta` dá ao componente um array `rows` novo, e o mapa das
- * respostas é recalculado — mas as linhas fechadas são os MESMOS objetos de antes (o redutor só
- * troca a que mudou). Reler o texto inteiro de cada resposta antiga a cada token fazia o custo de
- * cada token crescer com o histórico do card.
+ * THE COST PER TOKEN. Each `assistant_delta` gives the component a new `rows` array, and the map of
+ * answers is recalculated — but the closed rows are the SAME objects as before (the reducer only
+ * swaps the one that changed). Rereading the whole text of every old answer on every token made the cost of
+ * each token grow with the card's history.
  */
 describe("decisionReplies — linhas que não mudaram não são relidas", () => {
   const closed = Array.from({ length: 50 }, (_, i) =>
     assistant(`a${i}`, `Resposta ${i}, com contexto.\n\nQual das opções você prefere no passo ${i}?`),
   );
-  /** Quantas vezes o texto de uma destas linhas foi quebrado em parágrafos. */
+  /** How many times the text of one of these rows was split into paragraphs. */
   function splitsOf(rows: readonly SdkRow[], run: () => void): number {
     const texts = new Set(rows.map((row) => ("text" in row ? row.text : "")));
     const split = vi.spyOn(String.prototype, "split");

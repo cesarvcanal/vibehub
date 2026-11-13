@@ -6,8 +6,9 @@ import {
 } from "@/components/ui/dialog";
 import { get, post, del } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
-import type { Share, ShareLevel, SharesResponse, User, UsersResponse } from "@/api/types";
-import { SELECT_CLASS } from "@/features/board/components/NewCardDialog";
+import type { Share, ShareLevel, SharesResponse, User } from "@/api/types";
+import { USERS_KEY, boardApi } from "@/features/board/api";
+import { SELECT_CLASS } from "@/components/ui/select";
 import { t as translate, useT } from "@/i18n";
 
 /**
@@ -27,7 +28,6 @@ import { t as translate, useT } from "@/i18n";
 export type ShareKind = "card" | "project";
 
 export const sharesKey = (kind: ShareKind, id: string) => ["shares", kind, id] as const;
-export const SHARE_USERS_KEY = ["users"] as const;
 
 const PATH: Record<ShareKind, string> = { card: "cards", project: "projects" };
 
@@ -46,8 +46,8 @@ export function ShareDialog({ kind, targetId, title, open, onOpenChange }: Share
   const base = `/${PATH[kind]}/${encodeURIComponent(targetId)}/shares`;
 
   const users = useQuery({
-    queryKey: SHARE_USERS_KEY,
-    queryFn: () => get<UsersResponse>("/users").then((r) => r.users),
+    queryKey: USERS_KEY,
+    queryFn: boardApi.listUsers,
     enabled: open,
   });
   const shares = useQuery({

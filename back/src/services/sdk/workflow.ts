@@ -15,40 +15,40 @@ import {
 } from "./workflowProbe.js";
 
 /**
- * O WORKFLOW VISÍVEL — o que a tela não tinha como saber.
+ * THE VISIBLE WORKFLOW — what the screen had no way of knowing.
  *
- * A tool `Workflow` devolve na hora ("Workflow launched in background. Run ID: wf_…") e o turno
- * ACABA: o modelo diz "te trago quando voltar" e fica calado por minutos enquanto uma frota de
- * subagentes trabalha. No terminal do Claude Code isso aparece como uma árvore viva; no chat do
- * painel não aparecia NADA — e quem estava do outro lado lia aquilo como "ele terminou" (produção,
- * 2026-10-02). O stream do driver também não ajuda: entre o `tool_use` e a notificação final não
- * passa um único evento.
+ * The `Workflow` tool returns right away ("Workflow launched in background. Run ID: wf_…") and the turn
+ * ENDS: the model says "te trago quando voltar" and goes quiet for minutes while a fleet of
+ * subagents works. In Claude Code's terminal this shows up as a live tree; in the panel's chat
+ * NOTHING showed up — and whoever was on the other side read that as "it finished" (production,
+ * 2026-10-02). The driver's stream does not help either: between the `tool_use` and the final notification
+ * not a single event goes by.
  *
- * O que existe de verdade é um DIÁRIO em disco, dentro do runner, escrito pelo harness:
+ * What really exists is a JOURNAL on disk, inside the runner, written by the harness:
  *
  *   <transcriptDir>/<sessionId>/subagents/workflows/<runId>/journal.jsonl
  *     {"type":"launched"}
  *     {"type":"started","key":"v2:…","agentId":"a3c4…","label":"varre:front","phase":"Varredura"}
  *     {"type":"result","key":"v2:…","agentId":"a3c4…","result":{…}}
  *
- * e, ao lado, por subagente, um `agent-<id>.meta.json` (`description`, `workflowPhase`) e um
- * `agent-<id>.jsonl` com o transcript dele, linha a linha e com `timestamp`. O rótulo vem do DIÁRIO;
- * o meta e a linha "computed task text follows:" do transcript são os fallbacks. A PRIMEIRA linha do
- * transcript não serve: no harness 2.1.x ela é o cabeçalho "[Workflow harness — user request]" com
- * o pedido do usuário — igual em todos os subagentes.
+ * and, next to it, per subagent, an `agent-<id>.meta.json` (`description`, `workflowPhase`) and an
+ * `agent-<id>.jsonl` with its transcript, line by line and with `timestamp`. The label comes from the JOURNAL;
+ * the meta and the transcript's "computed task text follows:" line are the fallbacks. The FIRST line of the
+ * transcript is no good: in harness 2.1.x it is the "[Workflow harness — user request]" header with
+ * the user's request — the same in every subagent.
  *
- * Este módulo lê isso de fora (uma sondagem só-leitura por `docker exec`, montada e lida em
- * ./workflowProbe.ts), transforma em um instantâneo e o manager publica no chat. Nada é escrito no
+ * This module reads that from outside (a read-only probe through `docker exec`, built and parsed in
+ * ./workflowProbe.ts), turns it into a snapshot and the manager publishes it in the chat. Nothing is written in the
  * runner.
  *
- * As travas são deliberadas (a frota pode durar uma hora e ninguém quer um laço no servidor): uma
- * sondagem por card, só enquanto alguém está com o chat aberto, parada sozinha quando o diário
- * silencia sem agente em voo (ou quando o harness grava o desfecho), desistência quando NADA muda por
- * tempo demais, e um teto duro de tempo além do qual ela desiste de qualquer jeito.
+ * The guards are deliberate (the fleet may last an hour and nobody wants a loop on the server): one
+ * probe per card, only while someone has the chat open, stopped on its own when the journal
+ * goes quiet with no agent in flight (or when the harness writes the outcome), giving up when NOTHING changes for
+ * too long, and a hard time cap beyond which it gives up no matter what.
  */
 
-/** Nada em voo: todo subagente que começou já devolveu (e pelo menos um começou). Conta pelo
- *  TOTAL do diário, não pela lista desenhada — a lista tem teto, a frota não. PURE. */
+/** Nothing in flight: every subagent that started has already returned (and at least one started). Counts by the
+ *  journal's TOTAL, not by the drawn list — the list has a cap, the fleet does not. PURE. */
 export function runSettled(run: WorkflowRun): boolean {
   return run.total > 0 && run.done >= run.total;
 }
@@ -69,8 +69,8 @@ function agentChanged(a: WorkflowAgent, b: WorkflowAgent | undefined): boolean {
   );
 }
 
-/** Mudou alguma coisa que valha um quadro novo na tela? `lastAt` sozinho não: ele anda a cada
- *  linha do transcript, e o que a tela mostra dele já vem pela atividade. PURE. */
+/** Did anything change that is worth a new frame on screen? `lastAt` alone does not: it moves with every
+ *  transcript line, and what the screen shows of it already comes through the activity. PURE. */
 export function runChanged(previous: WorkflowRun | undefined, next: WorkflowRun): boolean {
   if (!previous) return true;
   if (previous.runId !== next.runId || previous.at !== next.at) return true;
@@ -81,52 +81,52 @@ export function runChanged(previous: WorkflowRun | undefined, next: WorkflowRun)
   return previous.agents.some((a, i) => agentChanged(a, next.agents[i]));
 }
 
-/* ------------------------------------------------------------------ a sondagem */
+/* ------------------------------------------------------------------ the probe */
 
-/** De quanto em quanto a frota é relida. Um diário anda em segundos, não em milissegundos. */
+/** How often the fleet is re-read. A journal moves in seconds, not in milliseconds. */
 export const WATCH_INTERVAL_MS = 4_000;
-/** Diário parado por tanto tempo, sem nada em voo ⇒ a rodada acabou e a sondagem se encerra. */
+/** Journal stopped for this long, with nothing in flight ⇒ the round ended and the probe closes. */
 export const WATCH_QUIET_MS = 90_000;
 /**
- * Nenhuma rodada mudou NADA (diário, agente, ferramenta, atividade) por tanto tempo com agente em voo
- * ⇒ a frota está parada de verdade e a sondagem desiste. Conta do último MOVIMENTO, não do início:
- * contar do início abandonava, na marca de 1h, uma rodada de 1h43 que ainda andava (17/10/2026).
+ * No round changed ANYTHING (journal, agent, tool, activity) for this long with an agent in flight
+ * ⇒ the fleet is really stuck and the probe gives up. Counted from the last MOVEMENT, not from the start:
+ * counting from the start abandoned, at the 1h mark, a 1h43 round that was still moving (17/10/2026).
  */
 export const WATCH_STALL_MS = 60 * 60_000;
-/** Teto duro: nenhuma sondagem vive mais que isto, aconteça o que acontecer. */
+/** Hard cap: no probe lives longer than this, whatever happens. */
 export const WATCH_MAX_MS = 6 * 60 * 60_000;
 /**
- * Por quanto tempo a sondagem pode falhar SEM PARAR (contado da primeira falha da sequência, zerado
- * por qualquer sucesso) antes de desistir. É tempo, não número de tiques: um runner reiniciando leva
- * cerca de um minuto, e desistir em 5 tiques (20 s) publicava como concluída uma frota que seguia
- * rodando. Bater num `docker exec` que falha é barato, então os tiques seguem durante a sequência.
+ * For how long the probe may fail WITHOUT STOPPING (counted from the first failure of the streak, reset
+ * by any success) before giving up. It is time, not a number of ticks: a restarting runner takes
+ * about a minute, and giving up after 5 ticks (20 s) published as completed a fleet that was still
+ * running. Hitting a `docker exec` that fails is cheap, so the ticks go on during the streak.
  */
 export const WATCH_FAILURE_GRACE_MS = 3 * 60_000;
 /**
- * Sondagens seguidas SEM rodada nenhuma antes de desistir. Um `Workflow` que morre antes de escrever
- * o diário (script com erro de sintaxe) não deixa nada para ler: sem isto, a sondagem dele ficaria
- * batendo no runner de 4 em 4 segundos até o teto de uma hora, por nada.
+ * Consecutive probes WITHOUT any round before giving up. A `Workflow` that dies before writing
+ * the journal (a script with a syntax error) leaves nothing to read: without this, its probe would keep
+ * hitting the runner every 4 seconds up to the one-hour cap, for nothing.
  */
 export const WATCH_MAX_EMPTY = 15;
 
 interface TrackedRun {
   last: WorkflowRun;
-  /** A última vez que ESTA rodada se mexeu (ou que não havia ninguém olhando). */
+  /** The last time THIS round moved (or that nobody was watching). */
   movedAt: number;
-  /** O maior `lastAt` (timestamp do transcript) já visto nos agentes dela. */
+  /** The largest `lastAt` (transcript timestamp) seen so far among its agents. */
   lastAt: number;
 }
 
-/** O timestamp mais recente escrito por qualquer agente da rodada — é do ARQUIVO, não do relógio. */
+/** The most recent timestamp written by any agent of the round — it is the FILE's, not the clock's. */
 function latestAgentAt(run: WorkflowRun): number {
   return run.agents.reduce((max, a) => Math.max(max, a.lastAt ?? 0), 0);
 }
 
 /**
- * A rodada acabou? Morta/falhou: na hora. Concluída: com tudo assentado, ou no tique SEGUINTE ao
- * desfecho (o `result` do último agente pode estar a milissegundos do snapshot). Sem desfecho:
- * silenciosa há bastante tempo E sem nada em voo — as duas juntas, porque uma frota pode passar um
- * minuto inteiro sem escrever enquanto um subagente longo pensa. PURE.
+ * Did the round end? Killed/failed: right away. Completed: with everything settled, or on the tick AFTER the
+ * outcome (the last agent's `result` may be milliseconds away from the snapshot). No outcome:
+ * quiet for long enough AND with nothing in flight — both together, because a fleet may go a
+ * whole minute without writing while a long subagent thinks. PURE.
  */
 function runEnded(run: WorkflowRun, previous: WorkflowRun | undefined, quietFor: number): boolean {
   if (run.outcome === "killed" || run.outcome === "failed") return true;
@@ -136,15 +136,15 @@ function runEnded(run: WorkflowRun, previous: WorkflowRun | undefined, quietFor:
 
 interface Watch {
   timer: NodeJS.Timeout;
-  /** Quando a sondagem começou — o teto duro mede daqui. */
+  /** When the probe started — the hard cap measures from here. */
   startedAt: number;
-  /** A última vez que QUALQUER rodada mudou algo na tela — a desistência por parada mede daqui. */
+  /** The last time ANY round changed something on screen — the give-up for being stuck measures from here. */
   activeAt: number;
-  /** Início da sequência de falhas em curso; `null` = a última sondagem respondeu. */
+  /** Start of the ongoing failure streak; `null` = the last probe answered. */
   failingSince: number | null;
-  /** Tiques seguidos sem rodada nenhuma no diretório. */
+  /** Consecutive ticks with no round at all in the directory. */
   empty: number;
-  /** Uma sondagem em voo: o tique seguinte não abre outra em cima dela. */
+  /** A probe in flight: the next tick does not open another on top of it. */
   busy: boolean;
   runs: Map<string, TrackedRun>;
   publish: (run: WorkflowRun) => void;
@@ -153,25 +153,25 @@ interface Watch {
 const watches = new Map<string, Watch>();
 
 /**
- * O ÚLTIMO instantâneo publicado por card, vivo DEPOIS que a sondagem se encerra: é o que uma aba
- * que abre agora precisa receber para desenhar a frota que acabou de terminar (e a que ainda roda).
- * Some com o driver do card — nunca cresce além dos cards abertos.
+ * The LAST snapshot published per card, alive AFTER the probe closes: it is what a tab
+ * that opens now needs to receive to draw the fleet that has just finished (and the one still running).
+ * It goes away with the card's driver — it never grows beyond the open cards.
  */
 const lastRuns = new Map<string, WorkflowRun[]>();
 
 export interface WatchDeps {
-  /** Onde ficam as rodadas desta sessão, e os scripts ao lado. `null` = ainda não dá pra saber. */
+  /** Where this session's rounds live, and the scripts next to them. `null` = cannot tell yet. */
   dirs: () => { runs: string; scripts: string } | null;
-  /** Alguém está com o chat deste card aberto? Sem ninguém olhando, não se sonda. */
+  /** Does anyone have this card's chat open? With nobody watching, there is no probing. */
   watchers: () => number;
-  /** O instantâneo mudou: publique. */
+  /** The snapshot changed: publish it. */
   publish: (run: WorkflowRun) => void;
-  /** Rótulo de log (o slug do card). */
+  /** Log label (the card's slug). */
   label: string;
   now?: () => number;
 }
 
-/** Guarda o quadro publicado, para a aba que conectar depois. */
+/** Keeps the published frame, for the tab that connects later. */
 function remember(cardId: string, run: WorkflowRun): void {
   const kept = (lastRuns.get(cardId) ?? []).filter((r) => r.runId !== run.runId);
   kept.push(run);
@@ -179,24 +179,24 @@ function remember(cardId: string, run: WorkflowRun): void {
 }
 
 /**
- * Desliga a sondagem DIZENDO que desligou: toda rodada que ficou em aberto recebe um último quadro
- * marcado como terminado. Sem isto, desistir (teto de tempo, runner caído, frota que nunca escreveu)
- * deixava o painel — e toda aba que reconectasse depois — girando para sempre numa frota que já não
- * é acompanhada por ninguém.
+ * Turns the probe off SAYING it turned off: every round left open gets one last frame
+ * marked as finished. Without this, giving up (time cap, runner down, a fleet that never wrote)
+ * left the panel — and every tab that reconnected afterwards — spinning forever on a fleet that is no longer
+ * followed by anyone.
  */
 function closeWatch(cardId: string, reason: string, label: string): void {
   const watch = watches.get(cardId);
   if (!watch) return;
   for (const tracked of watch.runs.values()) {
     if (tracked.last.finished) continue;
-    // Quem estava em voo não é mais acompanhado: deixar "running" num quadro terminado é spinner eterno.
+    // Whoever was in flight is no longer followed: leaving "running" in a finished frame is an eternal spinner.
     const closed: WorkflowRun = { ...tracked.last, agents: stopInFlight(tracked.last.agents), finished: true };
     tracked.last = closed;
     remember(cardId, closed);
     try {
       watch.publish(closed);
     } catch {
-      /* a tela fechou primeiro — não é motivo para a sondagem morrer de pé */
+      /* the screen closed first — that is no reason for the probe to die standing */
     }
   }
   logger.info({ card: label, reason, runs: watch.runs.size }, "workflow watch stopped");
@@ -204,9 +204,9 @@ function closeWatch(cardId: string, reason: string, label: string): void {
 }
 
 /**
- * Começa (ou mantém) a sondagem da frota deste card. Chamada a cada `tool_use` de Workflow: uma
- * segunda chamada com a sondagem já de pé apenas ESTENDE o silêncio tolerado — nunca abre um
- * segundo laço, nunca reinicia o teto duro.
+ * Starts (or keeps) this card's fleet probe. Called on every Workflow `tool_use`: a
+ * second call with the probe already up only EXTENDS the tolerated silence — it never opens a
+ * second loop, never restarts the hard cap.
  */
 export function watchCardWorkflows(cardId: string, deps: WatchDeps): void {
   const now = deps.now ?? Date.now;
@@ -228,8 +228,8 @@ export function watchCardWorkflows(cardId: string, deps: WatchDeps): void {
     publish: deps.publish,
   };
   const tick = async (): Promise<void> => {
-    if (watches.get(cardId) !== watch) return; // parada entre um tique e outro
-    if (watch.busy) return; // a sondagem anterior ainda não voltou: duas em voo se ultrapassam
+    if (watches.get(cardId) !== watch) return; // stopped between one tick and the next
+    if (watch.busy) return; // the previous probe has not come back yet: two in flight overtake each other
     if (now() - watch.startedAt > WATCH_MAX_MS) {
       closeWatch(cardId, "ceiling", deps.label);
       return;
@@ -238,21 +238,21 @@ export function watchCardWorkflows(cardId: string, deps: WatchDeps): void {
       closeWatch(cardId, "stalled", deps.label);
       return;
     }
-    // Ninguém com o chat aberto: não se gasta um `docker exec` por ninguém. O relógio do silêncio
-    // anda junto, senão a rodada seria dada como terminada só porque ninguém estava olhando.
+    // Nobody with the chat open: no `docker exec` is spent for nobody. The silence clock
+    // moves along, otherwise the round would be taken as finished just because nobody was watching.
     if (deps.watchers() <= 0) {
       for (const tracked of watch.runs.values()) tracked.movedAt = now();
       watch.activeAt = now();
-      // Sem sondar, não se sabe se o runner seguiu caído: a sequência recomeça na próxima falha.
+      // Without probing, one does not know whether the runner stayed down: the streak restarts on the next failure.
       watch.failingSince = null;
       return;
     }
     const dirs = deps.dirs();
-    if (!dirs) return; // sem id de sessão ainda — o próximo tique tenta de novo
+    if (!dirs) return; // no session id yet — the next tick tries again
     let runs: WorkflowRun[];
     watch.busy = true;
     try {
-      // Só as rodadas que a sonda ainda lê (as mais recentes): as outras não precisam de marcador.
+      // Only the rounds the probe still reads (the most recent): the others do not need a marker.
       const settled = [...watch.runs.values()]
         .map(({ last }) => last)
         .sort((x, y) => y.at - x.at)
@@ -265,7 +265,7 @@ export function watchCardWorkflows(cardId: string, deps: WatchDeps): void {
       runs = parseWorkflowProbe(stdout, (runId) => watch.runs.get(runId)?.last);
       watch.failingSince = null;
     } catch (err) {
-      // Uma linha por sequência, não por tique: a desistência é registrada pelo closeWatch.
+      // One line per streak, not per tick: the give-up is logged by closeWatch.
       if (watch.failingSince === null) {
         watch.failingSince = now();
         logger.warn({ card: deps.label, detail: (err as Error).message }, "workflow probe failing");
@@ -285,12 +285,12 @@ export function watchCardWorkflows(cardId: string, deps: WatchDeps): void {
     for (const run of runs) {
       const tracked = watch.runs.get(run.runId);
       const movedAt = !tracked || tracked.last.at !== run.at ? now() : tracked.movedAt;
-      // Um agente em laço (mesma ferramenta, transcript além do que se lê) não muda nada que o
-      // runChanged compara; o timestamp do transcript dele anda — isso também é movimento.
+      // An agent in a loop (same tool, transcript beyond what is read) changes nothing that
+      // runChanged compares; its transcript timestamp moves — that is movement too.
       const lastAt = Math.max(tracked?.lastAt ?? 0, latestAgentAt(run));
       if (lastAt > (tracked?.lastAt ?? 0)) watch.activeAt = now();
-      // Terminada = o harness gravou o desfecho (inclusive MORTA: o diário dela nunca assenta), ou
-      // assentada e silenciosa. Quadro terminado nunca leva agente "running": seria spinner eterno.
+      // Finished = the harness wrote the outcome (including KILLED: its journal never settles), or
+      // settled and quiet. A finished frame never carries a "running" agent: it would be an eternal spinner.
       run.finished = runEnded(run, tracked?.last, now() - movedAt);
       if (run.finished) run.agents = stopInFlight(run.agents);
       if (runChanged(tracked?.last, run)) {
@@ -303,8 +303,8 @@ export function watchCardWorkflows(cardId: string, deps: WatchDeps): void {
         tracked.lastAt = lastAt;
       }
     }
-    // Só se encerra quando TODA rodada que esta sondagem acompanha chegou ao fim: um segundo
-    // workflow disparado no meio mantém o laço vivo pelos dois.
+    // It only closes when EVERY round this probe follows has reached its end: a second
+    // workflow fired midway keeps the loop alive for both.
     const live = [...watch.runs.values()];
     if (live.length > 0 && live.every((tracked) => tracked.last.finished)) {
       logger.info({ card: deps.label, runs: live.length }, "workflow finished — watch stopped");
@@ -317,13 +317,13 @@ export function watchCardWorkflows(cardId: string, deps: WatchDeps): void {
   void tick();
 }
 
-/** Quantos passos o feed de um subagente traz: as últimas ações, não o transcript inteiro. */
-export const FEED_REQUEST_ITEMS = 50;
+/** How many steps a subagent's feed brings: the latest actions, not the whole transcript. */
+const FEED_REQUEST_ITEMS = 50;
 
 /**
- * O feed de UM subagente, lido agora do runner (mesmo executor da sondagem da frota). Sob demanda:
- * só quando alguém abre o agente no painel. Lança `InvalidWorkflowIdError` para ids fora do formato
- * (antes de existir um comando) e o erro do executor quando o runner não responde.
+ * The feed of ONE subagent, read now from the runner (same executor as the fleet probe). On demand:
+ * only when someone opens the agent in the panel. Throws `InvalidWorkflowIdError` for ids outside the format
+ * (before a command exists) and the executor's error when the runner does not answer.
  */
 export async function readAgentFeed(runsDir: string, runId: string, agentId: string): Promise<WorkflowFeedItem[]> {
   const script = buildAgentFeedProbeScript(config.runner.container, runsDir, runId, agentId, FEED_REQUEST_ITEMS);
@@ -331,26 +331,26 @@ export async function readAgentFeed(runsDir: string, runId: string, agentId: str
   return parseAgentFeed(stdout);
 }
 
-/** Os últimos quadros publicados deste card — o que uma aba que acabou de abrir precisa ver. */
+/** This card's last published frames — what a tab that has just opened needs to see. */
 export function lastWorkflowRuns(cardId: string): WorkflowRun[] {
   return lastRuns.get(cardId) ?? [];
 }
 
-/** Encerra a sondagem (fim da rodada, driver morto, card pausado). Idempotente. */
-export function stopCardWorkflowWatch(cardId: string): void {
+/** Closes the probe (end of the round, dead driver, paused card). Idempotent. */
+function stopCardWorkflowWatch(cardId: string): void {
   const watch = watches.get(cardId);
   if (!watch) return;
   clearInterval(watch.timer);
   watches.delete(cardId);
 }
 
-/** O driver do card morreu: a frota dele não é mais assunto desta tela. */
+/** The card's driver died: its fleet is no longer this screen's business. */
 export function forgetCardWorkflows(cardId: string): void {
   stopCardWorkflowWatch(cardId);
   lastRuns.delete(cardId);
 }
 
-/** Test hook: derruba toda sondagem viva e esquece os instantâneos. */
+/** Test hook: knocks down every live probe and forgets the snapshots. */
 export function resetWorkflowWatchesForTesting(): void {
   for (const cardId of [...watches.keys()]) stopCardWorkflowWatch(cardId);
   lastRuns.clear();

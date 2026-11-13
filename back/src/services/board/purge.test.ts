@@ -334,9 +334,9 @@ describe("purgeCard — the card and everything that belonged to it", () => {
 });
 
 /**
- * REVISÃO DE PR — o card do revisor é escondido do board e só existe para a revisão de um card de
- * autor. Excluir o autor (botão, retenção ou o projeto inteiro) não pode deixar para trás nem a
- * revisão ativa (relays para um card que não existe) nem o card do revisor (worktree invisível).
+ * PR REVIEW — the reviewer's card is hidden from the board and only exists for the review of an author's
+ * card. Deleting the author (button, retention or the whole project) must not leave behind either the
+ * active review (relays to a card that does not exist) or the reviewer's card (invisible worktree).
  */
 describe("purgeCard — a revisão de PR do card", () => {
   async function withReview(phase: "reviewing" | "merged" = "reviewing") {
@@ -364,7 +364,7 @@ describe("purgeCard — a revisão de PR do card", () => {
     expect(await reg.getCard(card.id)).toBeUndefined();
     expect(await reg.getCard(reviewer.id)).toBeUndefined();
     expect(await store.getReview("r-reviewing")).toMatchObject({ phase: "cancelled" });
-    // o card do revisor passou pela mesma purga: sessão, arquivos do runner e conversa
+    // the reviewer's card went through the same purge: session, runner files and conversation
     expect(allScripts()).toContain(`tmux kill-session -t '${reviewer.tmuxSession}'`);
     expect(allScripts()).toContain(`rm -rf '/work/.uploads/${reviewer.id}'`);
     expect(await history.readHistory(reviewer.id)).toEqual([]);
@@ -692,8 +692,8 @@ describe("purgeCard — o tmp de uma reescrita que o SIGKILL interrompeu", () =>
   it("vai junto com a conversa: o tmp tem o histórico inteiro do card", async () => {
     const { card } = await seed();
     await fillCard(card.id);
-    // O que sobra quando o deploy mata o back no meio de uma compactação/rewind/clear: o tmp já
-    // tem a conversa inteira, e o rename nunca aconteceu.
+    // What is left when the deploy kills the back in the middle of a compaction/rewind/clear: the tmp already
+    // has the whole conversation, and the rename never happened.
     await writeFile(join(dir, history.SDK_HISTORY_DIR, `${card.id}.ndjson.4242.0a1b2c3d.tmp`), "segredo do chat", "utf8");
 
     await purge.purgeCard(card.id, "cesar");
@@ -740,7 +740,7 @@ describe("sweepOrphanCardData (the backstop: what earlier deletes left behind)",
     await stale(history.SDK_HISTORY_DIR, `${card.id}.ndjson.4242.0a1b2c3d.tmp`);
     await stale(history.SDK_HISTORY_DIR, `${ghost}.ndjson.4242.0a1b2c3d.tmp`);
     await stale("", "board.json.4242.0a1b2c3d.tmp");
-    // Uma escrita EM ANDAMENTO (mtime de agora) não é lixo: fica.
+    // A write IN PROGRESS (mtime of now) is not garbage: it stays.
     await writeFile(join(dir, "users.json.4243.deadbeef.tmp"), "{}", "utf8");
 
     await purge.sweepOrphanCardData();
@@ -799,9 +799,9 @@ describe("sweepOrphanCardData (the backstop: what earlier deletes left behind)",
 });
 
 /**
- * A FAXINA TAMBÉM NÃO PODE ENCOSTAR EM dev/prod. O que ela apaga vem do NOME da pasta órfã
- * (`/work/<repo>-worktrees/<slug>`), e o nome só produz `card/<slug>` — nunca a branch que estava
- * dentro daquela worktree.
+ * THE CLEANUP MUST NOT TOUCH dev/prod EITHER. What it deletes comes from the orphan folder's NAME
+ * (`/work/<repo>-worktrees/<slug>`), and the name only produces `card/<slug>` — never the branch that was
+ * inside that worktree.
  */
 describe("the sweep never deletes a person's branch", () => {
   it("only ever forms card/<slug> from the directory name", () => {
@@ -827,11 +827,11 @@ describe("the sweep never deletes a person's branch", () => {
 });
 
 /**
- * NUNCA `dev`, NUNCA `prod` — pelo caminho REAL da exclusão.
+ * NEVER `dev`, NEVER `prod` — through the REAL deletion path.
  *
- * Os testes acima cobrem as peças (a regra do chamador, a trava do construtor de script, a faxina).
- * Este cobre o que o botão faz: `purgeCard` num card apontado para uma branch de verdade. Se algum
- * dia alguém religar a exclusão de branch em outro ponto do caminho, é aqui que quebra.
+ * The tests above cover the pieces (the caller's rule, the script builder's guard, the cleanup).
+ * This one covers what the button does: `purgeCard` on a card pointed at a real branch. If some
+ * day someone wires branch deletion back in at another point of the path, this is where it breaks.
  */
 describe("purgeCard nunca apaga a branch de uma pessoa", () => {
   const PROTEGIDAS = ["dev", "prod", "main", "master", "release/1.0", "feat/pdv", "hotfix/nfe"];
@@ -845,12 +845,12 @@ describe("purgeCard nunca apaga a branch de uma pessoa", () => {
 
       const report = await purge.purgeCard(card.id, "cesar");
 
-      // A exclusão acontece por inteiro...
+      // The deletion happens in full...
       expect(report?.incomplete).toEqual([]);
       expect(await reg.getCard(card.id)).toBeUndefined();
       const s = allScripts();
       expect(s).toContain("worktree remove --force");
-      // ...e nenhum `branch -D` sai, de forma alguma: nem a protegida, nem qualquer outra.
+      // ...and no `branch -D` goes out, in any way: neither the protected one nor any other.
       expect(s).not.toContain("branch -D");
       expect(s).not.toContain(`'${branch}'`);
     }
@@ -871,8 +871,8 @@ describe("purgeCard nunca apaga a branch de uma pessoa", () => {
     await purge.purgeCard(emDev.id);
     await purge.purgeCard(normal.id);
 
-    // Varre TODA linha de exclusão de branch de TODOS os scripts enviados: cada uma tem de estar
-    // no namespace `card/`. Uma linha nova em qualquer ponto do caminho cai neste laço.
+    // Sweeps EVERY branch deletion line of ALL the scripts sent: each one has to be
+    // in the `card/` namespace. A new line at any point of the path falls into this loop.
     const linhas = allScripts().split("\n").filter((l) => l.includes("branch -D"));
     expect(linhas.length).toBeGreaterThan(0);
     for (const linha of linhas) expect(linha).toMatch(/branch -D 'card\//);

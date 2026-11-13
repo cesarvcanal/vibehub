@@ -2,14 +2,10 @@ import type { FastifyInstance } from "fastify";
 import { requireOwner } from "../auth/session.js";
 import * as github from "../services/github/client.js";
 import { getSettings, updateSettings } from "../services/settings/settings.js";
+import { NOT_FOUND, sendError, type ErrorStatusRule } from "./httpError.js";
 
 /** A registry refusal ("in use by N project(s)") is a conflict, not a bad request. */
-function failure(err: unknown): { code: number; body: { error: string } } {
-  const error = (err as Error).message ?? "invalid request";
-  if (/in use by/i.test(error)) return { code: 409, body: { error } };
-  if (/not found/i.test(error)) return { code: 404, body: { error } };
-  return { code: 400, body: { error } };
-}
+const GITHUB_ERROR_RULES: ErrorStatusRule[] = [[/in use by/i, 409], NOT_FOUND];
 
 /**
  * GITHUB — the accounts vibehub can clone as, plus the repository and branch pickers that read
@@ -30,8 +26,7 @@ export async function githubRoutes(app: FastifyInstance): Promise<void> {
         await seedGitIdentity(identity);
         return await reply.code(201).send({ connection });
       } catch (err) {
-        const { code, body } = failure(err);
-        return await reply.code(code).send(body);
+        return await sendError(reply, err, { rules: GITHUB_ERROR_RULES });
       }
     },
   );
@@ -44,8 +39,7 @@ export async function githubRoutes(app: FastifyInstance): Promise<void> {
         await github.removeConnection(req.params.id);
         return await reply.send({ ok: true });
       } catch (err) {
-        const { code, body } = failure(err);
-        return await reply.code(code).send(body);
+        return await sendError(reply, err, { rules: GITHUB_ERROR_RULES });
       }
     },
   );
@@ -75,8 +69,7 @@ export async function githubRoutes(app: FastifyInstance): Promise<void> {
       const repos = await github.listRepos(req.query?.connection ?? "", req.query?.q ?? "");
       return await reply.send({ repos });
     } catch (err) {
-      const { code, body } = failure(err);
-      return await reply.code(code).send(body);
+      return await sendError(reply, err, { rules: GITHUB_ERROR_RULES });
     }
   });
 
@@ -87,8 +80,7 @@ export async function githubRoutes(app: FastifyInstance): Promise<void> {
       try {
         return await reply.send(await github.listBranches(req.query?.connection ?? "", req.params.owner, req.params.repo));
       } catch (err) {
-        const { code, body } = failure(err);
-        return await reply.code(code).send(body);
+        return await sendError(reply, err, { rules: GITHUB_ERROR_RULES });
       }
     },
   );

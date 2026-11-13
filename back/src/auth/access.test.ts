@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /**
- * visibleProjects lê compartilhamentos e cards UMA vez para a lista inteira; a regra é a mesma de
- * canAccessProject, projeto a projeto. O teste confere as duas lado a lado em todos os casos.
+ * visibleProjects reads shares and cards ONCE for the whole list; the rule is the same as
+ * canAccessProject, project by project. The test checks the two side by side in every case.
  */
 
 let dir = "";
@@ -52,5 +52,19 @@ describe("visibleProjects — a mesma regra de canAccessProject, numa leitura s�
     const spy = vi.spyOn(registry, "listAllCards");
     expect(await access.visibleProjects(member, [p])).toEqual([]);
     expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe("requestCardLevel — o nível que o gate do card carimbou", () => {
+  it("devolve o nível carimbado por requireCardAccess", async () => {
+    const { access } = await load();
+    const stamped = { cardLevel: "view" } as unknown as Parameters<typeof access.requestCardLevel>[0];
+    expect(access.requestCardLevel(stamped)).toBe("view");
+  });
+
+  it("sem carimbo (rota sem o gate do card) lança em vez de presumir `work`", async () => {
+    const { access } = await load();
+    const unstamped = {} as unknown as Parameters<typeof access.requestCardLevel>[0];
+    expect(() => access.requestCardLevel(unstamped)).toThrow(/requireCardAccess|requireCardWork/);
   });
 });

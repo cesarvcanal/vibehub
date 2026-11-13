@@ -354,7 +354,7 @@ describe("PrReviewBlocks", () => {
       const header = screen.getByRole("button", { name: /3 PRs/ });
       expect(header).toHaveTextContent("1 pronto · 1 em correção · 1 sem revisão");
       expect(header).toHaveAttribute("aria-expanded", "true");
-      // a lista tem teto e rola por dentro: o chat não sai da tela
+      // the list has a ceiling and scrolls inside: the chat does not leave the screen
       expect(screen.getByTestId("pr-list-rows").className).toMatch(/max-h-\[8\.5rem\].*overflow-y-auto/);
       expect(screen.getAllByTestId("pr-review-block")).toHaveLength(3);
 
@@ -389,10 +389,10 @@ describe("PrReviewBlocks", () => {
       expect(await within(line(599)).findByText("pronto pra merge")).toBeInTheDocument();
       expect(within(line(598)).getByText("sem revisão")).toBeInTheDocument();
       expect(within(line(598)).getByRole("button", { name: "Pedir revisão" })).toBeInTheDocument();
-      // quem abriu cada PR no GitHub aparece na linha
+      // who opened each PR on GitHub shows on the line
       expect(within(line(598)).getByText("albert-gh")).toBeInTheDocument();
       expect([...new Set(prGets)].sort()).toEqual([599, 600]);
-      // a leitura de sempre, do card, não é feita
+      // the usual read, the card's, is not made
       expect(reviewGets).toBe(0);
 
       await userEvent.click(within(line(599)).getByRole("button", { name: /PR #599/ }));

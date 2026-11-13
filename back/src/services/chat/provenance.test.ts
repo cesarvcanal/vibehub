@@ -77,8 +77,8 @@ describe("recordOrigin + matchOrigin", () => {
   it("duas abas abrindo juntas: a SEGUNDA também espera a leitura do disco antes de casar", async () => {
     await recordOrigin(CARD, "oi", USER, 500);
     resetProvenanceCache(); // a backend restart
-    // A primeira aba começa a carregar; a segunda chega com a leitura ainda em voo. Sem esperar por
-    // ela, o replay da segunda saía sem o `from` de ninguém.
+    // The first tab starts loading; the second arrives with the read still in flight. Without waiting for
+    // it, the second one's replay went out without anybody's `from`.
     const first = primeProvenance(CARD);
     await primeProvenance(CARD);
     expect(matchOrigin(CARD, "oi", 600)).toEqual(USER);
@@ -141,8 +141,8 @@ describe("removeProvenance (the card is being deleted)", () => {
 
 describe("comando de barra na chave de proveniência", () => {
   it("o que foi digitado casa com o que o transcript devolve qualificado", () => {
-    // O Claude Code expande `/foo` pra `/ns:foo` antes de gravar no transcript, e é contra essa
-    // linha que a atribuição é casada — sem isso, TODO comando de barra ficava sem dono.
+    // Claude Code expands `/foo` to `/ns:foo` before writing it to the transcript, and it is against that
+    // line that the attribution is matched — without this, EVERY slash command was left without an owner.
     expect(normalizeProvenanceKey("/superpowers:systematic-debugging apaga cards"))
       .toBe(normalizeProvenanceKey("/systematic-debugging apaga cards"));
   });

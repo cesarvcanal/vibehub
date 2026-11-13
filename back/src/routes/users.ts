@@ -6,14 +6,14 @@ import { endRevokedSessionSockets } from "../auth/sessionSockets.js";
 import {
   getUserGit, setUserGit, removeUserGit, assertGitName, assertGitEmail, type UserGitIdentity,
 } from "../auth/userGit.js";
-import { listGithubConnections, listAccounts } from "../services/board/registry.js";
+import { listGithubConnections, listAccounts, removeSharesForUser } from "../services/board/registry.js";
 import { DEFAULT_ACCOUNT_SLUG } from "../services/accounts/profiles.js";
 import { reapplyIdentityForUser } from "../services/board/workspace.js";
 import {
-  createUser, listUsers, findUser, changePassword, removeUser, setRole, assertRole, assertPassword,
+  createUser, listUsers, findUser, changePassword, removeUser, setRole, assertRole, assertPassword, publicUser,
 } from "../auth/users.js";
-import { removeSharesForUser } from "../services/board/registry.js";
 import { logger } from "../utils/logger.js";
+import { sendError } from "./httpError.js";
 
 /**
  * ACCESS — the install's people. Owner-only, all of it: creating an account, resetting somebody's
@@ -71,20 +71,24 @@ async function assertClaudeAccountPatch(slug: string | null | undefined): Promis
 }
 
 /**
- * Applies the git fields of a patch, if it carries any. Does NOT validate: every caller runs
- * {@link assertGitPatch} first — the owner's PATCH before its first write of anything — and checking
- * again here only read the connection list a second time.
+ * Applies the git fields of a patch, if it carries any, and the Claude account when the OWNER's
+ * PATCH passes one (`claudeAccountSlug`; the self-service door never does) — in one write. Does NOT
+ * validate: every caller runs {@link assertGitPatch} (and the owner {@link assertClaudeAccountPatch})
+ * first — the owner's PATCH before its first write of anything — and checking again here only read
+ * the connection list a second time.
  */
 async function applyGitPatch(
-  userId: string, body: UserPatchBody,
+  userId: string, body: UserPatchBody, claudeAccountSlug?: string | null,
 ): Promise<{ touched: boolean; identity: UserGitIdentity | null }> {
   const { githubConnectionId, gitName, gitEmail } = body;
-  const touched = githubConnectionId !== undefined || gitName !== undefined || gitEmail !== undefined;
-  if (!touched) return { touched: false, identity: await getUserGit(userId) };
-  const identity = await setUserGit(userId, { githubConnectionId, gitName, gitEmail });
-  // The cards this person is ALREADY working pick it up now, not on their next open. Fire and
-  // forget: a wedged runner must not fail the save the screen is waiting on.
-  void reapplyIdentityForUser(userId).catch(() => undefined);
+  const gitTouched = githubConnectionId !== undefined || gitName !== undefined || gitEmail !== undefined;
+  if (!gitTouched && claudeAccountSlug === undefined) return { touched: false, identity: await getUserGit(userId) };
+  const identity = await setUserGit(userId, { githubConnectionId, gitName, gitEmail, claudeAccountSlug });
+  // The cards this person is ALREADY working pick the git identity up now, not on their next open.
+  // Fire and forget: a wedged runner must not fail the save the screen is waiting on. The Claude
+  // account is not re-applied: it is read when a card is CREATED, so the cards this person already
+  // has keep the account they were born with.
+  if (gitTouched) void reapplyIdentityForUser(userId).catch(() => undefined);
   return { touched: true, identity };
 }
 
@@ -104,7 +108,7 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
       try {
         const user = await createUser(username, password, assertRole(role));
         logger.info({ audit: true, action: "user.create", user: user.username, role: user.role }, "user created");
-        return await reply.send({ user: { id: user.id, username: user.username, role: user.role, createdAt: user.createdAt } });
+        return await reply.send({ user: publicUser(user) });
       } catch (err) {
         return await reply.code(400).send({ error: (err as Error).message });
       }
@@ -139,12 +143,7 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
           // ...and what the revoked sessions already have open (terminals, tunnels) ends now too.
           await endRevokedSessionSockets(req.params.id);
         }
-        let git = await applyGitPatch(req.params.id, body);
-        if (body.claudeAccountSlug !== undefined) {
-          // No re-application to live cards: the account is read when a card is CREATED, so the
-          // cards this person already has keep the account they were born with.
-          git = { touched: true, identity: await setUserGit(req.params.id, { claudeAccountSlug: body.claudeAccountSlug }) };
-        }
+        const git = await applyGitPatch(req.params.id, body, body.claudeAccountSlug);
         const user = await findUser(req.params.id);
         if (!user) return await reply.code(404).send({ error: "user not found" });
         logger.info(
@@ -156,8 +155,7 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
         );
         return await reply.send({ user, git: git.identity ? publicGit(git.identity) : undefined });
       } catch (err) {
-        const message = (err as Error).message;
-        return await reply.code(/not found/i.test(message) ? 404 : 400).send({ error: message });
+        return await sendError(reply, err);
       }
     },
   );
@@ -168,15 +166,13 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
    * token. Role and password are NOT here: those stay the owner's.
    */
   app.get("/api/me/git", { preHandler: requireSession }, async (req, reply) => {
-    const me = await sessionUserId(req);
-    if (!me) return await reply.code(401).send({ error: "not authenticated" });
+    const me = (await sessionUserId(req))!;
     const git = await getUserGit(me);
     return await reply.send({ git: git ? publicGit(git) : undefined });
   });
 
   app.patch<{ Body: UserPatchBody }>("/api/me/git", { preHandler: requireSession }, async (req, reply) => {
-    const me = await sessionUserId(req);
-    if (!me) return await reply.code(401).send({ error: "not authenticated" });
+    const me = (await sessionUserId(req))!;
     try {
       await assertGitPatch(req.body ?? {});
       const git = await applyGitPatch(me, req.body ?? {});
@@ -206,8 +202,7 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
       logger.info({ audit: true, action: "user.remove", user: removed.username }, "user removed");
       return await reply.send({ ok: true, user: removed });
     } catch (err) {
-      const message = (err as Error).message;
-      return await reply.code(/not found/i.test(message) ? 404 : 400).send({ error: message });
+      return await sendError(reply, err);
     }
   });
 }

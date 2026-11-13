@@ -193,7 +193,7 @@ describe("mcps", () => {
     // or its token stays in every profile's .claude.json. The board records that debt, and the
     // apply pays it (services/mcp: dropDeletedMcps).
     const registry = await import("../services/board/registry.js");
-    expect(await registry.pendingMcpDrops()).toEqual(["erp"]);
+    expect((await registry.owedMcpDrops()).map((d) => d.name)).toEqual(["erp"]);
     expect(applyMcpsEverywhere).toHaveBeenCalledTimes(1);
     expect(deleteMcpSecrets).toHaveBeenCalledWith(expect.objectContaining({ id }));
   });

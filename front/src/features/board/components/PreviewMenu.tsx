@@ -70,7 +70,7 @@ export function previewState(port: number, scanned: readonly { port: number }[] 
 }
 
 /** Opens a preview in a new tab — one place, so every entry point behaves the same. */
-export function openPreviewTab(port: number): void {
+function openPreviewTab(port: number): void {
   window.open(previewUrl(port), "_blank", "noopener,noreferrer");
 }
 
@@ -96,7 +96,7 @@ function usePreviewScan(enabled: boolean) {
  * for the port and opens the tab; without one (an old/manual registration) it says the honest
  * thing — ask the card's agent to start it again. Stopping (kill + chip removal) also lives here.
  */
-export function PreviewRestartDialog({
+function PreviewRestartDialog({
   cardId,
   preview,
   open,
@@ -298,10 +298,6 @@ export function PreviewMenu({
     },
   });
 
-  const openPreview = React.useCallback((port: number) => {
-    openPreviewTab(port);
-  }, []);
-
   const registered = sortPreviews(previews);
   // A registered port already has its own row above — repeating it in the scan is just noise.
   const registeredPorts = new Set(registered.map((p) => p.port));
@@ -310,7 +306,7 @@ export function PreviewMenu({
 
   function submitManual() {
     if (manualPort === null) return;
-    openPreview(manualPort);
+    openPreviewTab(manualPort);
     setOpen(false);
     setManual("");
   }
@@ -318,7 +314,7 @@ export function PreviewMenu({
   /** A stopped registered preview goes to the restart dialog; a live (or unscanned) one just opens. */
   function selectRegistered(p: CardPreview) {
     if (previewState(p.port, ports) === "down") setDialogFor(p);
-    else openPreview(p.port);
+    else openPreviewTab(p.port);
   }
 
   return (
@@ -395,7 +391,7 @@ export function PreviewMenu({
             <DropdownMenuItem disabled>{t("preview.none")}</DropdownMenuItem>
           ) : (
             detected.map((p) => (
-              <DropdownMenuItem key={p.port} onSelect={() => openPreview(p.port)}>
+              <DropdownMenuItem key={p.port} onSelect={() => openPreviewTab(p.port)}>
                 <ExternalLink className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
                 <span className="font-mono tabular-nums">:{p.port}</span>
                 {p.process ? (

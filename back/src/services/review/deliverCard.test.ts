@@ -7,9 +7,9 @@ import type { ReviewMergeOutcome } from "./merge.js";
 import type { ReviewPhase } from "./model.js";
 
 /**
- * O `vibehub_deliver` de um card com revisão de PR ativa (deliverCard). O board e o store das revisões
- * são REAIS (diretório temporário); o que vai ao runner é mock na fronteira: `deliver` (git/gh) e
- * `mergeReviewedPr` (o merge do botão do painel, que tem os próprios testes na rota).
+ * The `vibehub_deliver` of a card with an active PR review (deliverCard). The board and the reviews store
+ * are REAL (temporary directory); what goes to the runner is mocked at the boundary: `deliver` (git/gh) and
+ * `mergeReviewedPr` (the merge of the panel's button, which has its own tests in the route).
  */
 
 let dir = "";
@@ -52,7 +52,7 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 });
 
-/** Um card com o PR #7 em revisão na `phase`, o responsável pelo merge `u-m`, e quem deu a última ordem `actor`. */
+/** A card with PR #7 under review in `phase`, the merge owner `u-m`, and whoever gave the latest order `actor`. */
 async function cardUnderReview(phase: ReviewPhase, actor: string) {
   const o = await load();
   const project = await o.registry.createProject({ name: "widgets" });
@@ -67,7 +67,7 @@ async function cardUnderReview(phase: ReviewPhase, actor: string) {
   return { ...o, card };
 }
 
-/** O card do REVISOR do PR #7 (`reviewOf` = o card do autor), com a revisão na `phase` e a última ordem dada por `actor`. */
+/** The REVIEWER's card of PR #7 (`reviewOf` = the author's card), with the review in `phase` and the latest order given by `actor`. */
 async function reviewerCardOf(phase: ReviewPhase, actor: string) {
   const o = await cardUnderReview(phase, "u-a");
   await o.registry.createAccount({ name: "Mussa" });
@@ -148,7 +148,7 @@ describe("deliverCard — o vibehub_deliver com revisão de PR ativa", () => {
       const out = await deliverCard(card.id, { branch: "dev", authorized: true, from: card.id });
       expect(mergeReviewedPr).toHaveBeenCalledWith("rev-1", actor);
       expect(out).toMatchObject({ merged: true });
-      // cada papel num mundo limpo (o afterEach apaga o último)
+      // each role in a clean world (the afterEach deletes the last one)
       await rm(dir, { recursive: true, force: true });
       dir = await mkdtemp(join(tmpdir(), "vibehub-deliver-card-"));
     }
@@ -190,7 +190,7 @@ describe("deliverCard — o vibehub_deliver com revisão de PR ativa", () => {
     const { deliverCard, card } = await cardUnderReview("ready", "u-m");
     mergeAnswer = { kind: "refused", status: 409, reason: "gate", error: "back: failing" };
     expect(await deliverCard(card.id, { branch: "dev", authorized: true, from: card.id })).toMatchObject({ reason: "gate", output: "back: failing" });
-    // o motivo real chega à IA, não um "a revisão está ativa" genérico
+    // the real reason reaches the AI, not a generic "a revisão está ativa"
     mergeAnswer = { kind: "refused", status: 400, reason: "merger_sem_github", error: "merger_sem_github: sem conexão" };
     expect(await deliverCard(card.id, { branch: "dev", authorized: true, from: card.id })).toMatchObject({
       reason: "merge_failed", output: "merger_sem_github: sem conexão",
@@ -284,7 +284,7 @@ describe("deliverCard — o card do REVISOR mandado mergear", () => {
     expect(await deliverCard(reviewer.id, { authorized: true, from: "outro-card" })).toMatchObject({ merged: false, reason: "review_active" });
     expect(mergeReviewedPr).not.toHaveBeenCalled();
     expect(deliver).not.toHaveBeenCalled();
-    // sem authorized é o deliver de sempre, que recusa o card do revisor (locked) antes de qualquer script
+    // without authorized it is the usual deliver, which refuses the reviewer's card (locked) before any script
     await deliverCard(reviewer.id, {});
     expect(deliver).toHaveBeenCalledWith(reviewer.id, {});
   });

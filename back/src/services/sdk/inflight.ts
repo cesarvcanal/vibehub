@@ -4,14 +4,15 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { join } from "node:path";
 import { dataPath } from "../../config/env.js";
 import { logger } from "../../utils/logger.js";
-import { CARD_ID_RE } from "../board/cardId.js";
+import { CARD_ID_RE, UUID_RE } from "../board/cardId.js";
 
 /**
  * IN-FLIGHT TURN MARKERS — the durable record that a card's SDK driver has a turn RUNNING.
  *
- * The incident this closes (2x em produção, 2026-08-31): a deploy do painel reinicia o app-vibehub;
- * o driver SDK é filho do back (docker exec) e morre junto — e um turno em voo simplesmente sumia,
- * sem aviso, porque o próprio lado que avisaria (o back) estava morrendo. O card ficava mudo.
+ * The incident this closes (2x in production, 2026-08-31): a panel deploy restarts app-vibehub;
+ * the SDK driver is a child of the back (docker exec) and dies with it — and a turn in flight simply
+ * vanished, with no warning, because the very side that would warn (the back) was dying. The card
+ * went silent.
  *
  * The manager writes ONE marker file per card (`<dataDir>/sdk-inflight/<cardId>.json`) when a user
  * turn enters the driver's stdin and removes it when the driver's `result` closes the last turn in
@@ -23,14 +24,14 @@ import { CARD_ID_RE } from "../board/cardId.js";
  * an automatic resume — it earns another one only if it made progress, up to MAX_AUTO_RESUMES
  * resumes that die soon after progressing (see nextResumeAttempt in ./resume.ts).
  *
- * `owner` + o BATIMENTO: o deploy do tech.multi é BLUE/GREEN — o container novo sobe e fica saudável
- * com o antigo AINDA no ar, rodando o turno. "Existe marcador no boot" deixou de significar "o turno
- * morreu": o sweep do novo retomava um turno vivo, dois CLIs falavam na mesma sessão e o espelho do
- * back antigo gravava a fala de retomada como conversa do terminal — a mensagem de sistema duplicada
- * (produção, 2026-10-08). Cada processo assina os marcadores que escreve e toca um arquivo de
- * batimento (`sdk-inflight/owners/<owner>`) enquanto vive; o marcador só é órfão quando o dono deixa
- * de bater — o blue/green mata o antigo com SIGKILL — ou larga o batimento num SIGTERM
- * (`releaseInflightOwnerSync`, de um `docker stop`/restart).
+ * `owner` + the HEARTBEAT: the tech.multi deploy is BLUE/GREEN — the new container comes up and turns
+ * healthy with the old one STILL running, running the turn. "There is a marker at boot" stopped
+ * meaning "the turn died": the new one's sweep resumed a live turn, two CLIs spoke in the same
+ * session and the old back's mirror recorded the resume prompt as terminal conversation — the
+ * duplicated system message (production, 2026-10-08). Each process signs the markers it writes and
+ * touches a heartbeat file (`sdk-inflight/owners/<owner>`) while it lives; a marker is only orphaned
+ * when its owner stops beating — blue/green kills the old one with SIGKILL — or drops the heartbeat
+ * on a SIGTERM (`releaseInflightOwnerSync`, from a `docker stop`/restart).
  */
 
 /** Where the markers live, under the data dir (same durability story as sdk-history). */
@@ -52,14 +53,15 @@ export interface InflightMarker {
    * loop the guard exists for (see ./resume.ts).
    */
   progressed?: boolean;
-  /** O processo do back que escreveu o marcador. Ausente = escrito por uma versão sem dono. */
+  /** The back process that wrote the marker. Absent = written by a version with no owner. */
   owner?: string;
   /**
-   * TRABALHO EM SEGUNDO PLANO vivo quando o marcador foi gravado: as tarefas do CLI (Bash com
-   * run_in_background, subagente, monitor) e um retorno agendado (ScheduleWakeup). Elas morrem com o
-   * driver num deploy, e o turno que as esperava nunca vem — sem isto o card parava calado no meio
-   * da entrega (produção, 2026-10-19). `idle` = nenhum turno rodava, só o segundo plano; `since` =
-   * desde quando o segundo plano está vivo (o teto que separa espera de deploy de `npm run dev`).
+   * BACKGROUND WORK alive when the marker was written: the CLI's tasks (Bash with
+   * run_in_background, subagent, monitor) and a scheduled wakeup (ScheduleWakeup). They die with the
+   * driver on a deploy, and the turn that was waiting for them never comes — without this the card
+   * stopped silently in the middle of the delivery (production, 2026-10-19). `idle` = no turn was
+   * running, only the background; `since` = since when the background has been alive (the cap that
+   * separates a deploy wait from `npm run dev`).
    */
   background?: InflightBackground;
 }
@@ -70,23 +72,21 @@ export interface InflightBackground {
   idle: boolean;
 }
 
-/** A identidade DESTE processo do back — nasce no boot e assina os marcadores que ele escreve. */
+/** The identity of THIS back process — born at boot, it signs the markers it writes. */
 export const INFLIGHT_OWNER = randomUUID();
 
-/** De quanto em quanto tempo o processo vivo toca o seu batimento. */
-export const OWNER_HEARTBEAT_MS = 3_000;
+/** How often the live process touches its heartbeat. */
+const OWNER_HEARTBEAT_MS = 3_000;
 
 /**
- * Um batimento mais velho que isto é de um processo que morreu sem largar — o caso NORMAL do
- * blue/green, que remove o container antigo com `docker rm -f` (SIGKILL, sem SIGTERM). É o tempo que
- * a retomada espera depois da troca: curto o bastante para a pessoa, longo o bastante para uma pausa
- * do event loop não passar por morte.
+ * A heartbeat older than this belongs to a process that died without letting go — the NORMAL case of
+ * blue/green, which removes the old container with `docker rm -f` (SIGKILL, no SIGTERM). It is how
+ * long the resume waits after the switch: short enough for the person, long enough that an event
+ * loop pause is not mistaken for death.
  */
 export const OWNER_STALE_MS = 12_000;
 
-/** O mesmo nome nos dois lados: só um id com cara de UUID vira caminho. */
-const OWNER_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
+/** Only an id that looks like a UUID (`UUID_RE`) becomes a path: whoever calls `ownerFile` with an outside one checks it first. */
 function ownerFile(owner: string): string {
   return dataPath(SDK_INFLIGHT_DIR, "owners", owner);
 }
@@ -196,7 +196,7 @@ export function parseMarker(raw: string): InflightMarker | null {
   };
 }
 
-/** O bloco de segundo plano de um marcador, ou nada quando ele não tem a forma esperada. PURE. */
+/** A marker's background block, or nothing when it does not have the expected shape. PURE. */
 function parseBackground(raw: unknown): { background: InflightBackground } | null {
   if (!raw || typeof raw !== "object") return null;
   const b = raw as Partial<InflightBackground>;
@@ -206,7 +206,7 @@ function parseBackground(raw: unknown): { background: InflightBackground } | nul
   return { background: { tasks, since: b.since, idle: b.idle === true } };
 }
 
-/** Um batimento DESTE processo. Nunca lança: sem batimento, o pior caso é o comportamento antigo. */
+/** A heartbeat of THIS process. Never throws: with no heartbeat, the worst case is the old behaviour. */
 export async function touchInflightOwner(): Promise<void> {
   try {
     const file = ownerFile(INFLIGHT_OWNER);
@@ -217,7 +217,7 @@ export async function touchInflightOwner(): Promise<void> {
   }
 }
 
-/** Bate já e a cada `OWNER_HEARTBEAT_MS`, sem segurar o processo de pé. Devolve o desligamento. */
+/** Beats right away and every `OWNER_HEARTBEAT_MS`, without holding the process up. Returns the shutdown. */
 export function startInflightOwnerHeartbeat(): () => void {
   void touchInflightOwner();
   const timer = setInterval(() => { void touchInflightOwner(); }, OWNER_HEARTBEAT_MS);
@@ -226,31 +226,31 @@ export function startInflightOwnerHeartbeat(): () => void {
 }
 
 /**
- * O adeus do dono: some o batimento, e o processo novo de um deploy passa a ver os marcadores deste
- * como órfãos. SÍNCRONO de propósito — roda dentro do SIGTERM, que dá segundos, não promessas.
+ * The owner's goodbye: the heartbeat goes away, and a deploy's new process starts seeing this one's markers
+ * as orphans. SYNCHRONOUS on purpose — it runs inside the SIGTERM, which gives seconds, not promises.
  */
 export function releaseInflightOwnerSync(): void {
   try { rmSync(ownerFile(INFLIGHT_OWNER), { force: true }); } catch { /* best-effort by design */ }
 }
 
-/** Recolhe os batimentos de processos mortos — cada deploy blue/green deixa um (SIGKILL não larga). */
+/** Collects the heartbeats of dead processes — each blue/green deploy leaves one (SIGKILL does not let go). */
 export async function pruneStaleInflightOwners(): Promise<void> {
   let owners: string[];
   try {
     owners = await readdir(dataPath(SDK_INFLIGHT_DIR, "owners"));
   } catch {
-    return; // sem diretório, nada a recolher
+    return; // no directory, nothing to collect
   }
   for (const owner of owners) {
-    if (owner === INFLIGHT_OWNER || !OWNER_RE.test(owner)) continue;
+    if (owner === INFLIGHT_OWNER || !UUID_RE.test(owner)) continue;
     if (await isInflightOwnerAlive(owner)) continue;
     await rm(ownerFile(owner), { force: true }).catch(() => undefined);
   }
 }
 
-/** O processo que assinou um marcador ainda está vivo? Batimento ausente ou velho = não. */
+/** Is the process that signed a marker still alive? Missing or stale heartbeat = no. */
 export async function isInflightOwnerAlive(owner: string): Promise<boolean> {
-  if (!OWNER_RE.test(owner)) return false;
+  if (!UUID_RE.test(owner)) return false;
   try {
     const { mtimeMs } = await stat(ownerFile(owner));
     return Date.now() - mtimeMs < OWNER_STALE_MS;

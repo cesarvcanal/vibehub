@@ -25,9 +25,9 @@ vi.mock("@/lib/api", () => ({
   del: vi.fn(),
 }));
 
-// Passthrough com contador: o desenho é o de verdade, e quantas vezes uma bolha foi redesenhada
-// fica observável (o teste de custo do transcript, mais abaixo). O `Markdown` é um memo: o contador
-// fica DENTRO dele, então conta só os parses de verdade, não os renders que o memo pulou.
+// Passthrough with a counter: the rendering is the real one, and how many times a bubble was redrawn
+// becomes observable (the transcript cost test, further below). `Markdown` is a memo: the counter
+// lives INSIDE it, so it counts only real parses, not the renders the memo skipped.
 vi.mock("@/features/board/components/ChatView", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/features/board/components/ChatView")>();
   const { memo } = await import("react");
@@ -38,13 +38,13 @@ vi.mock("@/features/board/components/ChatView", async (importOriginal) => {
       + "o contador de parses deste arquivo precisa ser refeito para o novo formato.",
     );
   }
-  // Conferido acima que é função; a assinatura é a do componente que o memo embrulha.
+  // Checked above that it is a function; the signature is that of the component the memo wraps.
   const render = parse as (props: { text: string }) => React.ReactElement;
   return { ...actual, LinkifiedText: vi.fn(actual.LinkifiedText), Markdown: memo(vi.fn(render)) };
 });
 
-// Mesmo passthrough com contador, para o card do subagente: um token do principal não pode
-// redesenhá-lo.
+// Same passthrough with a counter, for the subagent card: a token from the main agent must not
+// redraw it.
 vi.mock("@/features/board/components/SdkAgentCard", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/features/board/components/SdkAgentCard")>();
   return actual;
@@ -67,11 +67,11 @@ class FakeSocket {
   static OPEN = 1;
 
   readyState = 0;
-  /** TUDO que saiu pelo socket, handshake incluído — o que os testes do handshake leem. */
+  /** EVERYTHING that went out through the socket, handshake included — what the handshake tests read. */
   rawSent: string[] = [];
   /**
-   * Os frames da CONVERSA. O `typing` é sinal efêmero entre abas, não fala de ninguém: contá-lo aqui
-   * faria cada teste que mede "saiu UMA mensagem" medir duas.
+   * The CONVERSATION frames. `typing` is an ephemeral signal between tabs, nobody's speech: counting it here
+   * would make every test that measures "ONE message went out" measure two.
    */
   get sent(): string[] {
     return this.rawSent.filter((raw) => {
@@ -81,7 +81,7 @@ class FakeSocket {
       } catch { return true; }
     });
   }
-  /** Só os sinais de "está digitando" que esta aba mandou, em ordem. */
+  /** Only the "está digitando" signals this tab sent, in order. */
   get typingSent(): boolean[] {
     return this.rawSent.flatMap((raw) => {
       try {
@@ -109,20 +109,20 @@ class FakeSocket {
     this.readyState = 1;
     act(() => this.onopen?.());
   }
-  /** Um frame do socket seguido de um frame de animação — o ritmo normal de um socket de verdade. */
+  /** A socket frame followed by an animation frame — the normal rhythm of a real socket. */
   deliver(event: SdkEvent): void {
     this.receive(event);
     runAnimationFrames();
   }
-  /** Só o frame do socket: o que chegar assim fica no mesmo frame de animação até `runAnimationFrames`. */
+  /** Only the socket frame: whatever arrives this way stays in the same animation frame until `runAnimationFrames`. */
   receive(event: SdkEvent): void {
     act(() => this.onmessage?.({ data: JSON.stringify(event) } as MessageEvent));
   }
 }
 
 /**
- * Os frames de animação ficam na mão do teste: o jsdom os dispara pelo relógio de verdade, o que
- * deixaria cada asserção logo depois de um `deliver` dependendo de 16ms terem passado ou não.
+ * Animation frames are in the test's hands: jsdom fires them on the real clock, which
+ * would leave every assertion right after a `deliver` depending on whether 16ms had passed or not.
  */
 let animationFrames = new Map<number, FrameRequestCallback>();
 let nextAnimationFrame = 1;
@@ -136,9 +136,9 @@ const originalWebSocket = globalThis.WebSocket;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // O composer guarda o rascunho de cada card num mapa do MÓDULO (sobrevive a um remount de
-  // propósito) — e todo teste aqui é o card "c1": o que um teste deixou no campo era digitado no
-  // seguinte ("vai pelo A mesmoinstrução longa", com a ordem embaralhada).
+  // The composer keeps each card's draft in a MODULE-level map (it survives a remount on
+  // purpose) — and every test here is card "c1": what one test left in the field got typed into the
+  // next one ("vai pelo A mesmoinstrução longa", with the order scrambled).
   resetDraftsForTesting();
   resetQuestionDraftsForTesting();
   FakeSocket.instances = [];
@@ -157,9 +157,9 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   globalThis.WebSocket = originalWebSocket;
-  // `setLanguage` grava a escolha no localStorage e `resetLanguage` a RELÊ de lá — e a limpeza do
-  // storage do setup só roda depois deste gancho. Sem limpar antes, um teste em pt-BR deixava o
-  // arquivo inteiro em pt-BR para quem viesse depois.
+  // `setLanguage` writes the choice to localStorage and `resetLanguage` RE-READS it from there — and the setup's
+  // storage cleanup only runs after this hook. Without clearing first, a test in pt-BR left the
+  // whole file in pt-BR for whoever came next.
   localStorage.clear();
   resetLanguage();
 });
@@ -192,8 +192,8 @@ describe("SdkChatView", () => {
   });
 
   it("spins the running tool's icon without a transform utility fighting the animation", async () => {
-    // `animate-spin` anima o `transform`; um `translate-*` no mesmo elemento virava o ponto de
-    // partida da animação e o spinner só deslizava 2px e voltava, sem girar.
+    // `animate-spin` animates `transform`; a `translate-*` on the same element became the
+    // animation's starting point and the spinner just slid 2px and back, without spinning.
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -415,10 +415,10 @@ describe("SdkChatView", () => {
   });
 
   /**
-   * O APERTO DE MÃO NÃO É SAÚDE. O back aceita o websocket e só DEPOIS descobre que não pode
-   * atendê-lo (driver desligado, card apagado, install falhou): manda o erro e fecha. Zerar o
-   * backoff no `onopen` fazia disso uma reconexão a ~2Hz para sempre — cada uma pagando o setup
-   * inteiro do servidor (sessão, settings, e no install, SSH+docker). Só o `ready` prova a conexão.
+   * THE HANDSHAKE IS NOT HEALTH. The back accepts the websocket and only AFTERWARDS finds out it cannot
+   * serve it (driver turned off, card deleted, install failed): it sends the error and closes. Resetting the
+   * backoff in `onopen` turned that into a reconnect at ~2Hz forever — each one paying the server's whole
+   * setup (session, settings, and on install, SSH+docker). Only `ready` proves the connection.
    */
   it("aceitar e recusar em seguida não zera o backoff — só o `ready` do servidor zera", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -434,13 +434,13 @@ describe("SdkChatView", () => {
       expect(FakeSocket.instances).toHaveLength(2);
 
       refuse(FakeSocket.instances[1] as FakeSocket);
-      // a segunda recusa espera MAIS que a primeira (o backoff andou), não volta aos 400ms
+      // the second refusal waits LONGER than the first (the backoff advanced), it does not go back to 400ms
       await act(async () => { await vi.advanceTimersByTimeAsync(600); });
       expect(FakeSocket.instances).toHaveLength(2);
       await act(async () => { await vi.advanceTimersByTimeAsync(600); });
       expect(FakeSocket.instances).toHaveLength(3);
 
-      // uma conexão que o servidor ASSUMIU (`ready`) zera: a queda seguinte volta a ser um piscar
+      // a connection the server TOOK OVER (`ready`) resets it: the next drop is a blink again
       const healthy = FakeSocket.instances[2] as FakeSocket;
       healthy.accept();
       healthy.deliver({ type: "ready" });
@@ -467,10 +467,10 @@ describe("SdkChatView", () => {
   });
 
   /**
-   * O TURNO QUE RODA NO TERMINAL. Depois de um deploy o card pode seguir no `claude` da aba Terminal
-   * (card "POC modo de voz", 2026-10-21): o chat só espelha, nenhum evento do driver acende o
-   * indicador, e a tela parecia parada com a IA trabalhando. Quem sabe que ela trabalha é o status do
-   * card (hooks): com ele em "working", o espelho acende o indicador e diz a ferramenta.
+   * THE TURN RUNNING IN THE TERMINAL. After a deploy the card may continue in the `claude` of the Terminal tab
+   * (card "POC modo de voz", 2026-10-21): the chat only mirrors, no driver event lights the
+   * indicator, and the screen looked idle with the AI working. What knows it is working is the card's
+   * status (hooks): with it on "working", the mirror lights the indicator and names the tool.
    */
   it("turno no terminal com o card trabalhando acende o indicador com a ferramenta; apaga quando o card para", async () => {
     const view = renderSdkChat({ terminalWorking: true });
@@ -596,8 +596,8 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
   });
 
   /**
-   * DUAS PESSOAS, UMA PERGUNTA: só a primeira resposta vale, e quem respondia não sabia que havia
-   * outra pessoa escrevendo outra coisa. O cartão mostra, em tempo real, o que a outra está fazendo.
+   * TWO PEOPLE, ONE QUESTION: only the first answer counts, and whoever was answering did not know there was
+   * another person writing something else. The card shows, in real time, what the other one is doing.
    */
   describe("rascunho de outra pessoa em tempo real", () => {
     const MULTI = {
@@ -619,15 +619,15 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
 
       ws.deliver({ type: "peer_question_draft", id: "q_peer", name: "albert", picked: [["Albert"], []], other: ["", "mussa faz review"] });
       expect(screen.getByTestId("sdk-question-peer-presence")).toHaveTextContent("Albert");
-      // só a pergunta em que ele ESCREVEU ganha o campo dele; a marcação fica na bolinha da opção
+      // only the question where he WROTE gets his field; the selection stays on the option's dot
       const lines = screen.getAllByTestId("sdk-question-peer-draft");
       expect(lines).toHaveLength(1);
       expect(lines[0]).toHaveTextContent("mussa faz review");
-      // sem nada escrito por mim, nada de aviso de conflito
+      // with nothing written by me, no conflict warning
       expect(screen.queryByTestId("sdk-question-peer-clash")).toBeNull();
       const [albertOption] = screen.getAllByRole("button", { name: "Albert" });
       expect(albertOption).toHaveAttribute("data-peer-picked", "true");
-      expect(albertOption).toHaveAttribute("aria-pressed", "false"); // marcado por ELE, não por mim
+      expect(albertOption).toHaveAttribute("aria-pressed", "false"); // selected by HIM, not by me
 
       ws.deliver({ type: "peer_question_draft", id: "q_peer", name: "albert", picked: [[], []], other: ["", ""] });
       expect(screen.queryByTestId("sdk-question-peer-presence")).toBeNull();
@@ -653,21 +653,21 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
       ws.deliver({ type: "ready" });
       ws.deliver(MULTI);
       const drafts = () => ws.sent.map((x) => JSON.parse(x)).filter((f) => f.type === "question_draft");
-      expect(drafts()).toEqual([]); // cartão vazio não anuncia nada ao nascer
+      expect(drafts()).toEqual([]); // an empty card announces nothing when it is born
 
       await userEvent.click(screen.getAllByRole("button", { name: "Mussa" })[0]!);
       await userEvent.type(screen.getAllByTestId("sdk-question-other")[1]!, "albert revisa");
       await waitFor(() =>
         expect(drafts().at(-1)).toEqual({ type: "question_draft", id: "q_peer", picked: [["Mussa"], []], other: ["", "albert revisa"], at: expect.any(Number) }),
       );
-      expect(drafts().length).toBeLessThan("albert revisa".length + 1); // não é um frame por tecla
+      expect(drafts().length).toBeLessThan("albert revisa".length + 1); // it is not one frame per keystroke
       expect(ws.sent.map((x) => JSON.parse(x)).some((f) => f.type === "question_answer")).toBe(false);
     });
 
     /**
-     * METADE DE CADA UM (produção, 2026-11-03): Albert respondeu a primeira pergunta, eu a segunda — o
-     * cartão inteiro tinha resposta, mas "Responder" seguia travado porque só contava o que EU marquei.
-     * O back já junta os rascunhos dos outros no que vai ao modelo (`mergePeerAnswers`).
+     * HALF EACH (production, 2026-11-03): Albert answered the first question, I the second — the
+     * whole card had an answer, but "Responder" stayed locked because it only counted what I selected.
+     * The back already merges the others' drafts into what goes to the model (`mergePeerAnswers`).
      */
     it("\"Responder\" libera quando cada pergunta tem resposta de alguém, mesmo metade minha e metade da outra pessoa", async () => {
       renderSdkChat();
@@ -677,13 +677,13 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
       ws.deliver(MULTI);
       const send = screen.getByTestId("sdk-question-send");
       ws.deliver({ type: "peer_question_draft", id: "q_peer", name: "albert", picked: [[], []], other: ["o caminhão define", ""] });
-      expect(send).toBeDisabled(); // a segunda ainda sem resposta de ninguém
+      expect(send).toBeDisabled(); // the second still without an answer from anyone
 
       await userEvent.click(screen.getAllByRole("button", { name: "Mussa" })[1]!);
       expect(send).toBeEnabled();
       await userEvent.click(send);
       const frame = ws.sent.map((s) => JSON.parse(s)).find((f) => f.type === "question_answer");
-      // vai o que EU marquei; a parte do Albert o back acrescenta com o nome dele
+      // what I selected goes; the back adds Albert's part with his name
       expect(frame).toEqual({ type: "question_answer", id: "q_peer", answers: [{ selected: [] }, { selected: ["Mussa"] }] });
     });
 
@@ -737,9 +737,9 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
   });
 
   /**
-   * O RECONNECT APAGAVA O CARTÃO (produção, 2026-10-07). Todo connect limpa a tela e o replay a
-   * redesenha do disco — o cartão desmonta e remonta, e o que a pessoa já tinha marcado e escrito
-   * vivia no estado local dele. Um deploy no meio de três perguntas = tudo de novo, do zero.
+   * THE RECONNECT WIPED THE CARD (production, 2026-10-07). Every connect clears the screen and the replay
+   * redraws it from disk — the card unmounts and remounts, and what the person had already selected and written
+   * lived in its local state. A deploy in the middle of three questions = everything again, from scratch.
    */
   it("o que foi marcado e escrito no cartão sobrevive ao reconnect", async () => {
     renderSdkChat();
@@ -758,11 +758,11 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
     await userEvent.click(screen.getByRole("button", { name: "No item" }));
     await userEvent.type(screen.getAllByTestId("sdk-question-other")[1]!, "72h pulando domingo");
 
-    act(() => { first.readyState = 3; first.onclose?.(); }); // o deploy derruba o fio
+    act(() => { first.readyState = 3; first.onclose?.(); }); // the deploy drops the wire
     await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: RECONNECT_MAX_MS });
     const second = FakeSocket.instances[1] as FakeSocket;
     second.accept();
-    second.deliver(MULTI); // o replay redesenha o cartão do disco
+    second.deliver(MULTI); // the replay redraws the card from disk
     second.deliver({ type: "ready" });
 
     expect(screen.getByRole("button", { name: "No item" })).toHaveAttribute("aria-pressed", "true");
@@ -770,8 +770,8 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
   });
 
   /**
-   * O DEPLOY RECARREGA A ABA (produção, 2026-11-03): a versão nova faz a aba recarregar sozinha
-   * (lib/versionCheck.ts) e a memória do módulo morre com o F5. Quatro perguntas marcadas = zero.
+   * THE DEPLOY RELOADS THE TAB (production, 2026-11-03): the new version makes the tab reload by itself
+   * (lib/versionCheck.ts) and the module's memory dies with the F5. Four questions answered = zero.
    */
   it("o que foi marcado e escrito no cartão sobrevive ao F5 (a recarga da versão nova)", async () => {
     const view = renderSdkChat();
@@ -791,19 +791,19 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
     await userEvent.type(screen.getAllByTestId("sdk-question-other")[0]!, "pela");
 
     view.unmount();
-    resetQuestionDraftsForTesting(); // o F5: a memória da aba some, o localStorage fica
+    resetQuestionDraftsForTesting(); // the F5: the tab's memory is gone, localStorage stays
 
     renderSdkChat();
     const second = FakeSocket.instances.at(-1) as FakeSocket;
     second.accept();
-    second.deliver(MULTI); // o replay redesenha o cartão do disco
+    second.deliver(MULTI); // the replay redraws the card from disk
     second.deliver({ type: "ready" });
 
     expect(screen.getByRole("button", { name: "Faixa de capacidade" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getAllByTestId("sdk-question-other")[0]).toHaveValue("pela");
   });
 
-  /** Achado F3 da revisão do PR #98: a resposta saiu, o driver morreu antes de recebê-la. */
+  /** Finding F3 from the review of PR #98: the answer went out, the driver died before receiving it. */
   it("respondeu e o fio caiu antes da confirmação: o cartão volta pendente COM o que foi marcado", async () => {
     renderSdkChat();
     const first = await socket();
@@ -822,7 +822,7 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
     await userEvent.type(screen.getAllByTestId("sdk-question-other")[1]!, "72h pulando domingo");
     await userEvent.click(screen.getByTestId("sdk-question-send"));
 
-    act(() => { first.readyState = 3; first.onclose?.(); }); // nenhum question_result voltou
+    act(() => { first.readyState = 3; first.onclose?.(); }); // no question_result came back
     await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: RECONNECT_MAX_MS });
     const second = FakeSocket.instances[1] as FakeSocket;
     second.accept();
@@ -847,9 +847,9 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
 
 describe("SdkChatView — a conversa não estica a página", () => {
   it("o scroller é o bloco de contenção de tudo que é absoluto dentro dele", async () => {
-    // O `sr-only` do card de diff é `position: absolute`. Com o scroller sem `relative`, ele se
-    // ancorava no wrapper de fora, ficava na altura dele na conversa e criava rolagem vazia na
-    // página inteira — uma tela de nada abaixo do composer.
+    // The diff card's `sr-only` is `position: absolute`. With the scroller lacking `relative`, it
+    // anchored to the outer wrapper, sat at its height in the conversation and created empty scrolling across the
+    // whole page — a screen of nothing below the composer.
     renderSdkChat();
     await socket();
     expect(screen.getByTestId("sdk-chat-scroller")).toHaveClass("relative");
@@ -1031,17 +1031,17 @@ describe("SdkChatView — editar mensagem enviada (supersede)", () => {
   });
 
   /**
-   * O PEDIDO DO CÉSAR (2026-09-28): "clico em editar, mudo de ideia, e o turno foi interrompido".
+   * CÉSAR'S REQUEST (2026-09-28): "I click edit, change my mind, and the turn got interrupted".
    *
-   * O lápis abria o campo E MATAVA o turno na hora — antes de existir um único caractere da nova
-   * versão. Só que clicar em editar não é uma decisão: é abrir a possibilidade de uma. Quem
-   * desistiu não pediu nada, e um turno cortado não se descorta — a tela ficava oferecendo
-   * "continuar de onde parou" para consertar um estrago que ela mesma tinha feito, e o histórico
-   * ganhava uma nota explicando uma interrupção que ninguém quis.
+   * The pencil opened the field AND KILLED the turn on the spot — before a single character of the new
+   * version existed. But clicking edit is not a decision: it is opening the possibility of one. Whoever
+   * gave up asked for nothing, and a cut turn cannot be uncut — the screen kept offering
+   * "continue where it left off" to fix damage it had done itself, and the history
+   * gained a note explaining an interruption nobody wanted.
    *
-   * A regra agora: quem para o turno é a CORREÇÃO ENVIADA, nunca o gesto de abrir o campo. O preço
-   * é conhecido e é o menor dos dois: entre o lápis e o Enter o agente segue trabalhando na
-   * mensagem antiga. Trabalho a mais é recuperável; um turno morto por engano, não.
+   * The rule now: what stops the turn is the SENT CORRECTION, never the gesture of opening the field. The price
+   * is known and is the smaller of the two: between the pencil and Enter the agent keeps working on the
+   * old message. Extra work is recoverable; a turn killed by mistake is not.
    */
   it("o lápis MID-TURN não para o turno — abrir o campo não é uma decisão", async () => {
     renderSdkChat();
@@ -1052,13 +1052,13 @@ describe("SdkChatView — editar mensagem enviada (supersede)", () => {
     const box = await textbox();
     await userEvent.type(box, "sobe pra prod{Enter}");
     await waitFor(() => expect(ws.sent.length).toBe(1));
-    ws.deliver({ type: "assistant_delta", text: "Subindo…" }); // o turno está visivelmente rodando
+    ws.deliver({ type: "assistant_delta", text: "Subindo…" }); // the turn is visibly running
 
     await userEvent.click(screen.getByTestId("sdk-edit"));
 
-    expect(ws.sent.length).toBe(1); // nada saiu além da própria mensagem: nenhum interrupt
-    expect(screen.getByTestId("composer-editing")).toBeInTheDocument(); // o campo abriu
-    expect(screen.getByTestId("sdk-chat-working")).toBeInTheDocument(); // e o turno segue de pé
+    expect(ws.sent.length).toBe(1); // nothing went out besides the message itself: no interrupt
+    expect(screen.getByTestId("composer-editing")).toBeInTheDocument(); // the field opened
+    expect(screen.getByTestId("sdk-chat-working")).toBeInTheDocument(); // and the turn is still standing
   });
 
   it("clicar em editar e DESISTIR não interrompe nada — não há estrago, nem o que continuar", async () => {
@@ -1073,12 +1073,12 @@ describe("SdkChatView — editar mensagem enviada (supersede)", () => {
     ws.deliver({ type: "assistant_delta", text: "Subindo…" });
     await userEvent.click(screen.getByTestId("sdk-edit"));
 
-    fireEvent.keyDown(box, { key: "Escape" }); // mudei de ideia
+    fireEvent.keyDown(box, { key: "Escape" }); // changed my mind
 
-    expect(ws.sent.length).toBe(1); // o turno nunca foi tocado
-    expect(screen.getByTestId("sdk-chat-working")).toBeInTheDocument(); // e continua rodando
+    expect(ws.sent.length).toBe(1); // the turn was never touched
+    expect(screen.getByTestId("sdk-chat-working")).toBeInTheDocument(); // and keeps running
     expect(screen.queryByTestId("composer-editing")).not.toBeInTheDocument();
-    // …e não sobra oferta nenhuma de "continuar": não houve o que interromper.
+    // …and no "continue" offer is left over: there was nothing to interrupt.
     expect(screen.queryByTestId("sdk-interrupted-banner")).toBeNull();
   });
 
@@ -1097,14 +1097,14 @@ describe("SdkChatView — editar mensagem enviada (supersede)", () => {
     await userEvent.clear(box);
     await userEvent.type(box, "sobe pra dev{Enter}");
 
-    // AGORA sim: a decisão foi tomada, e ela para o turno que responde a mensagem superada.
+    // NOW yes: the decision was made, and it stops the turn answering the superseded message.
     await waitFor(() => expect(ws.sent.length).toBe(2));
     expect(JSON.parse(ws.sent[1]!)).toEqual({ type: "interrupt", reason: "edit" });
 
     ws.deliver({ type: "result", isError: false, subtype: "aborted" });
     await waitFor(() => expect(ws.sent.length).toBe(3));
     expect(JSON.parse(ws.sent[2]!)).toMatchObject({ type: "edit_user", original: "sobe pra prod", text: "sobe pra dev" });
-    // a correção substituiu o turno interrompido: nada de oferta para continuar o antigo
+    // the correction replaced the interrupted turn: no offer to continue the old one
     expect(screen.queryByTestId("sdk-interrupted-banner")).toBeNull();
   });
 
@@ -1210,10 +1210,10 @@ describe("SdkChatView — editar mensagem enviada (supersede)", () => {
 
 describe("SdkChatView — mensagem dobrada no turno por OUTRO remetente (turn_absorbed)", () => {
   /**
-   * O próprio campo não dobra mais nada em turno rodando — o que ele escreve ESPERA na fila (ver o
-   * bloco "fila"). Mas a dobra continua existindo para quem manda por fora (o maestro, o MCP, outra
-   * aba): a bolha sobe na conversa, SEM etiqueta. Quem está na tela vê a mensagem entrar no turno
-   * em andamento; o "entrou no turno em andamento" por escrito só repetia o que já estava à vista.
+   * The field itself no longer folds anything into a running turn — what it writes WAITS in the queue (see the
+   * "fila" block). But folding still exists for whoever sends from outside (the maestro, the MCP, another
+   * tab): the bubble goes up in the conversation, WITHOUT a label. Whoever is on the screen sees the message enter the turn
+   * in progress; the written "entrou no turno em andamento" only repeated what was already in sight.
    */
   it("shows the folded bubble WITHOUT an 'entrou no turno em andamento' label", async () => {
     renderSdkChat();
@@ -1226,7 +1226,7 @@ describe("SdkChatView — mensagem dobrada no turno por OUTRO remetente (turn_ab
     await waitFor(() => expect(ws.sent.length).toBe(1));
     ws.deliver({ type: "assistant_delta", text: "Fazendo…" }); // the turn is visibly running
 
-    // outra origem mandou no meio do turno, e o driver dobrou no turno que já rodava
+    // another source sent mid-turn, and the driver folded it into the turn already running
     ws.deliver({ type: "user", text: "aproveita e ajusta o título", from: { kind: "agent", name: "maestro" } });
     ws.deliver({ type: "turn_absorbed" });
 
@@ -1245,7 +1245,7 @@ describe("SdkChatView — escada de estados (Preparando → Pensando → Respond
 
     const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
     await userEvent.type(box, "oi{Enter}");
-    // O back só guardaria o frame num buffer que um F5 joga fora: a fila é que sobrevive.
+    // The back would only keep the frame in a buffer that an F5 throws away: the queue is what survives.
     expect(ws.sent).toHaveLength(0);
     expect(screen.getByTestId("sdk-queued")).toHaveTextContent("oi");
 
@@ -1253,8 +1253,8 @@ describe("SdkChatView — escada de estados (Preparando → Pensando → Respond
     await waitFor(() => expect(ws.sent.length).toBe(1));
     expect(screen.getByTestId("sdk-chat-working")).toHaveAttribute("data-phase", "thinking");
 
-    // O primeiro token JÁ É a resposta sendo escrita — o indicador diz isso, em vez do
-    // "Trabalhando…" genérico que não separava pensar de responder.
+    // The first token ALREADY IS the answer being written — the indicator says so, instead of the
+    // generic "Trabalhando…" that did not tell thinking apart from answering.
     ws.deliver({ type: "assistant_delta", text: "olá" });
     expect(screen.getByTestId("sdk-chat-working")).toHaveAttribute("data-phase", "answering");
 
@@ -1263,8 +1263,8 @@ describe("SdkChatView — escada de estados (Preparando → Pensando → Respond
   });
 
   /**
-   * O que o César não tinha: retorno visual. "Trabalhando…" é a mesma palavra no segundo 2 e no
-   * minuto 9 — o indicador agora carrega o relógio e a nota de estado, e ela ESCALA.
+   * What César lacked: visual feedback. "Trabalhando…" is the same word at second 2 and at
+   * minute 9 — the indicator now carries the clock and the status note, and it ESCALATES.
    */
   it("carrega o relógio e a nota de estado, e a nota escala com o tempo", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -1278,8 +1278,8 @@ describe("SdkChatView — escada de estados (Preparando → Pensando → Respond
       await userEvent.type(box, "oi{Enter}");
       await waitFor(() => expect(ws.sent.length).toBe(1));
 
-      // O servidor confirma o recebimento, senão o outbox declara a mensagem não entregue no meio
-      // do relógio e o indicador some — o que este teste mede é o turno vivo, não o outbox.
+      // The server confirms receipt, otherwise the outbox declares the message undelivered in the middle
+      // of the clock and the indicator disappears — what this test measures is the live turn, not the outbox.
       const cid = (JSON.parse(ws.sent[0]!) as { cid: string }).cid;
       ws.deliver({ type: "user_ack", cid });
 
@@ -1287,7 +1287,7 @@ describe("SdkChatView — escada de estados (Preparando → Pensando → Respond
       expect(note).toHaveTextContent(/0s/);
       expect(note).toHaveTextContent(/pensando|thinking/);
 
-      // Passados 30s o mesmo turno passa a dizer que AINDA está nisso.
+      // After 30s the same turn starts saying it is STILL at it.
       await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
       expect(screen.getByTestId("sdk-working-note")).toHaveTextContent(/30s/);
       expect(screen.getByTestId("sdk-working-note")).toHaveTextContent(/ainda pensando|still thinking/);
@@ -1312,7 +1312,7 @@ describe("SdkChatView — escada de estados (Preparando → Pensando → Respond
   });
 });
 
-/* ------------------------------------------------- respondendo a uma decisão */
+/* ------------------------------------------------- answering a decision */
 
 describe("SdkChatView — responder A decisão (não um recado solto)", () => {
   const QUESTION = {
@@ -1327,8 +1327,8 @@ describe("SdkChatView — responder A decisão (não um recado solto)", () => {
     ws.accept();
     ws.deliver({ type: "ready" });
     ws.deliver({ type: "assistant_text", text: "Fiz A e B.\n\nQual dos dois você prefere?" });
-    // A pergunta FECHA o turno — é o que faz o Claude ficar esperando. Sem isto o chat acha que
-    // ainda tem trabalho rodando e um recado solto iria pra FILA, que é outro teste.
+    // The question CLOSES the turn — that is what makes Claude sit waiting. Without this the chat thinks it
+    // still has work running and a loose note would go to the QUEUE, which is another test.
     ws.deliver({ type: "result", isError: false });
     return ws;
   }
@@ -1478,19 +1478,19 @@ describe("SdkChatView — responder A decisão (não um recado solto)", () => {
 });
 
 /**
- * O BUG DO CÉSAR (produção, 2026-09-17, três vezes no mesmo dia): "escrevo uma instrução longa,
- * dou Enter, o chat entra num loop de carregando — às vezes por horas. Se eu dou F5, ou abro a
- * mesma conversa em outro computador, a mensagem simplesmente não está lá, como se eu nunca
- * tivesse enviado. Copio o texto, mando de novo, e aí funciona."
+ * CÉSAR'S BUG (production, 2026-09-17, three times on the same day): "I write a long instruction,
+ * press Enter, the chat goes into a loading loop — sometimes for hours. If I press F5, or open the
+ * same conversation on another computer, the message simply is not there, as if I had never
+ * sent it. I copy the text, send it again, and then it works."
  *
- * Duas causas, os dois lados do mesmo buraco: (1) no servidor, o idle sweep hibernava o card que a
- * pessoa estava usando — matando o driver — e a mensagem seguinte era escrita num stdin morto
- * dentro de um `try {} catch {}`, gravada no histórico e respondida por ninguém; (2) aqui, a bolha
- * era desenhada porque `socket.send()` não reclamou, e um socket meio-aberto aceita `send()` no
- * vácuo — sem recibo do servidor e sem cópia em disco, o F5 apagava a única testemunha.
+ * Two causes, the two sides of the same hole: (1) on the server, the idle sweep hibernated the card the
+ * person was using — killing the driver — and the next message was written to a dead stdin
+ * inside a `try {} catch {}`, recorded in the history and answered by no one; (2) here, the bubble
+ * was drawn because `socket.send()` did not complain, and a half-open socket accepts `send()` into the
+ * void — with no receipt from the server and no copy on disk, the F5 erased the only witness.
  *
- * O que estes testes fixam é o lado do navegador: TODA mensagem sai com recibo, e sem recibo ela
- * aparece marcada (com o texto inteiro, reenviável) em vez de girar para sempre.
+ * What these tests pin down is the browser side: EVERY message goes out with a receipt, and without a receipt it
+ * shows up flagged (with the full text, resendable) instead of spinning forever.
  */
 describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () => {
   beforeEach(() => localStorage.clear());
@@ -1505,7 +1505,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
       await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
       await waitFor(() => expect(ws.sent.length).toBe(1));
-      // Antes do prazo é honesto dizer "enviando" — o servidor pode só estar lento.
+      // Before the deadline it is honest to say "sending" — the server may just be slow.
       expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sending");
 
       await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS + OUTBOX_TICK_MS); });
@@ -1513,7 +1513,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
       expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered");
       expect(screen.getByTestId("sdk-user-undelivered")).toBeInTheDocument();
       expect(screen.getByTestId("sdk-user")).toHaveTextContent("instrução longa");
-      // …e o socket que engoliu a mensagem é derrubado: só o reconnect revela se ele estava vivo.
+      // …and the socket that swallowed the message is dropped: only the reconnect reveals whether it was alive.
       expect(ws.readyState).toBe(3);
     } finally {
       vi.useRealTimers();
@@ -1521,12 +1521,12 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
   });
 
   /**
-   * O BUG DO ALBERT (produção, 2026-11-06): a mensagem ficou "não entregue", o Reenviar devolveu o
-   * genérico "Sem conexão — a mensagem não foi enviada. Ela fica no campo." e ela só saiu sozinha um
-   * minuto depois. O watchdog derruba o socket com `close()`, mas um socket meio-aberto não termina
-   * de fechar: o navegador espera o aperto de mão de fechamento (no Chrome, até 60s) e só então
-   * dispara o `onclose` — que é quem agenda a reconexão. Nesse minuto o fio não estava OPEN nem
-   * voltando, e todo clique caía no erro. (O `FakeSocket.close()` é exatamente isso: não chama
+   * ALBERT'S BUG (production, 2026-11-06): the message stayed "não entregue", Reenviar returned the
+   * generic "Sem conexão — a mensagem não foi enviada. Ela fica no campo." and it only went out by itself a
+   * minute later. The watchdog drops the socket with `close()`, but a half-open socket does not finish
+   * closing: the browser waits for the closing handshake (in Chrome, up to 60s) and only then
+   * fires `onclose` — which is what schedules the reconnect. During that minute the wire was neither OPEN nor
+   * coming back, and every click fell into the error. (`FakeSocket.close()` is exactly that: it does not call
    * `onclose`.)
    */
   it("o watchdog condena o socket e reconecta JÁ, sem esperar o navegador terminar de fechá-lo", async () => {
@@ -1539,27 +1539,27 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
       await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
       await waitFor(() => expect(ws.sent.length).toBe(1));
-      // O handler que o navegador chamaria quando o socket condenado terminasse de fechar.
+      // The handler the browser would call when the condemned socket finished closing.
       const lateClose = ws.onclose;
 
       await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS + OUTBOX_TICK_MS); });
       expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered");
-      // O socket condenado não fala mais com a tela: os handlers saíram junto com ele.
+      // The condemned socket no longer talks to the screen: the handlers left along with it.
       expect(ws.onclose).toBeNull();
       expect(ws.onmessage).toBeNull();
-      // Só o tempo do backoff da primeira tentativa — nunca o minuto do handshake de fechamento.
+      // Only the backoff time of the first attempt — never the minute of the closing handshake.
       await act(async () => { await vi.advanceTimersByTimeAsync(RECONNECT_MAX_MS); });
       expect(FakeSocket.instances).toHaveLength(2);
 
       const fresh = FakeSocket.instances[1]!;
       fresh.accept();
       fresh.deliver({ type: "ready" });
-      // A conexão nova é boa: o reenvio sai por ela e o servidor confirma.
+      // The new connection is good: the resend goes out through it and the server confirms.
       await waitFor(() => expect(fresh.sent).toHaveLength(1));
       fresh.deliver({ type: "user_ack", cid: (JSON.parse(fresh.sent[0]!) as { cid: string }).cid } as SdkEvent);
       fresh.deliver({ type: "result", subtype: "success" } as SdkEvent);
-      // Mesmo que o fechamento tardio do condenado chegasse, ele não derruba a conexão nova: a tela
-      // continua se sabendo online, e o que se escreve sai por ela na hora (não fica na fila).
+      // Even if the late close of the condemned one arrived, it does not drop the new connection: the screen
+      // still knows it is online, and what is written goes out through it right away (it does not stay in the queue).
       act(() => { lateClose?.(); });
       await act(async () => { await vi.advanceTimersByTimeAsync(RECONNECT_MAX_MS); });
       expect(FakeSocket.instances).toHaveLength(2);
@@ -1585,7 +1585,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
       const cid = (JSON.parse(ws.sent[0]!) as { cid: string }).cid;
       await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS + OUTBOX_TICK_MS); });
 
-      // O fio ainda não voltou (a reconexão está no backoff ou no setup): o clique é um pedido.
+      // The wire has not come back yet (the reconnect is in backoff or in setup): the click is a request.
       await user.click(screen.getByTestId("sdk-user-resend"));
       expect(toast.error).not.toHaveBeenCalled();
 
@@ -1595,7 +1595,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
       fresh.accept();
       fresh.deliver({ type: "ready" });
 
-      // Na hora do `ready`, sem esperar o intervalo do reenvio automático — a pessoa já pediu.
+      // At the moment of `ready`, without waiting for the automatic resend's interval — the person already asked.
       await waitFor(() => expect(fresh.sent).toHaveLength(1));
       expect(JSON.parse(fresh.sent[0]!)).toMatchObject({ type: "user", text: "instrução longa", cid });
       expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sending");
@@ -1631,12 +1631,12 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
     ws.deliver({ type: "user_nack", cid, reason: "driver-gone" } as SdkEvent);
 
     await waitFor(() => expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered"));
-    // O spinner PARA de prometer trabalho que ninguém recebeu (era ele que "ficava carregando").
+    // The spinner STOPS promising work nobody received (it was what "kept loading").
     expect(screen.queryByTestId("sdk-chat-working")).not.toBeInTheDocument();
   });
 
   it("F5 com mensagem não confirmada: ela volta pra fila e sai sozinha quando o chat carrega", async () => {
-    // O que o navegador anterior deixou em disco, sem recibo e sem veredito.
+    // What the previous browser left on disk, with no receipt and no verdict.
     localStorage.setItem(
       "vibehub.sdkOutbox.c1",
       JSON.stringify([{ cid: "c-antigo", text: "a instrução longa que sumia", at: Date.now() }]),
@@ -1644,7 +1644,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
     renderSdkChat();
     const ws = await socket();
     ws.accept();
-    ws.deliver({ type: "ready" }); // o replay do servidor não traz a mensagem — ele nunca a recebeu
+    ws.deliver({ type: "ready" }); // the server's replay does not bring the message — it never received it
 
     await waitFor(() => expect(ws.sent).toHaveLength(1));
     expect(JSON.parse(ws.sent[0]!)).toMatchObject({ type: "user", text: "a instrução longa que sumia" });
@@ -1667,7 +1667,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
     const bubble = await screen.findByTestId("sdk-user");
     expect(bubble).toHaveTextContent("a instrução recusada");
     expect(bubble).toHaveAttribute("data-state", "undelivered");
-    // Nada na hora: o reenvio automático espera o intervalo dele (ver "o reenvio automático").
+    // Nothing right away: the automatic resend waits for its interval (see "o reenvio automático").
     expect(ws.sent).toHaveLength(0);
   });
 
@@ -1679,7 +1679,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
     renderSdkChat();
     const ws = await socket();
     ws.accept();
-    ws.deliver({ type: "user", text: "essa chegou" }); // veio do histórico do servidor
+    ws.deliver({ type: "user", text: "essa chegou" }); // came from the server's history
     ws.deliver({ type: "ready" });
 
     await waitFor(() => expect(screen.getAllByTestId("sdk-user")).toHaveLength(1));
@@ -1692,20 +1692,20 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
     renderSdkChat();
     const first = await socket();
     first.accept();
-    first.deliver({ type: "user", text: "sim" }); // a conversa já tinha um "sim" (o histórico)
+    first.deliver({ type: "user", text: "sim" }); // the conversation already had a "sim" (the history)
     first.deliver({ type: "ready" });
     await userEvent.type(screen.getByRole("textbox"), "sim{Enter}");
     await waitFor(() => expect(first.sent.length).toBe(1));
-    // o socket meio-aberto engoliu o envio: nenhum recibo, e o fio cai
+    // the half-open socket swallowed the send: no receipt, and the wire drops
     act(() => { first.readyState = 3; first.onclose?.(); });
 
     await waitFor(() => expect(FakeSocket.instances.length).toBe(2));
     const second = FakeSocket.instances[1] as FakeSocket;
     second.accept();
-    second.deliver({ type: "user", text: "sim" }); // o servidor só tem o "sim" de antes
+    second.deliver({ type: "user", text: "sim" }); // the server only has the "sim" from before
     second.deliver({ type: "ready" });
 
-    // o "sim" de agora SAI DE NOVO, sozinho — em vez de sumir como se tivesse chegado
+    // the "sim" from now GOES OUT AGAIN, by itself — instead of vanishing as if it had arrived
     await waitFor(() => expect(second.sent).toHaveLength(1));
     expect(JSON.parse(second.sent[0]!)).toMatchObject({ type: "user", text: "sim" });
     expect(screen.getAllByTestId("sdk-user")).toHaveLength(2);
@@ -1714,12 +1714,12 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
   });
 
   /**
-   * A CONVERSA LONGA. O replay é uma JANELA (as últimas centenas de eventos do histórico), e ela anda:
-   * seis "ok" na tela no envio, e no reconnect só os dois mais recentes ainda cabem — mais o "ok"
-   * novo. Contar "quantos 'ok' havia" na tela inteira dava 6 contra 3 no replay: a mensagem ENTREGUE
-   * voltava "não entregue", e o Reenviar duplicava o turno. O replay carrega o `at` do servidor em
-   * cada mensagem: o que prova a entrega é uma ocorrência gravada DEPOIS da última que a tela
-   * conhecia — relógio do servidor contra relógio do servidor, e a janela andar não muda isso.
+   * THE LONG CONVERSATION. The replay is a WINDOW (the last few hundred events of the history), and it moves:
+   * six "ok" on screen at send time, and on reconnect only the two most recent still fit — plus the new
+   * "ok". Counting "how many 'ok' there were" on the whole screen gave 6 against 3 in the replay: the DELIVERED message
+   * came back "não entregue", and Reenviar duplicated the turn. The replay carries the server's `at` on
+   * each message: what proves delivery is an occurrence recorded AFTER the last one the screen
+   * knew — server clock against server clock, and the window moving does not change that.
    */
   it("conversa longa: a janela do replay andou, e o 'ok' entregue NÃO volta como não entregue", async () => {
     renderSdkChat();
@@ -1730,15 +1730,15 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
     await waitFor(() => expect(screen.getAllByTestId("sdk-user")).toHaveLength(6));
     await userEvent.type(screen.getByRole("textbox"), "ok{Enter}");
     await waitFor(() => expect(first.sent.length).toBe(1));
-    // o recibo se perdeu junto com o fio — mas o servidor gravou
+    // the receipt was lost along with the wire — but the server recorded it
     act(() => { first.readyState = 3; first.onclose?.(); });
 
     await waitFor(() => expect(FakeSocket.instances.length).toBe(2));
     const second = FakeSocket.instances[1] as FakeSocket;
     second.accept();
-    second.deliver({ type: "user", text: "ok", at: 5 }); // os quatro mais antigos saíram da janela
+    second.deliver({ type: "user", text: "ok", at: 5 }); // the four oldest left the window
     second.deliver({ type: "user", text: "ok", at: 6 });
-    second.deliver({ type: "user", text: "ok", at: 100 }); // o de agora, gravado
+    second.deliver({ type: "user", text: "ok", at: 100 }); // the one from now, recorded
     second.deliver({ type: "ready" });
 
     await waitFor(() => expect(localStorage.getItem("vibehub.sdkOutbox.c1")).toBeNull());
@@ -1806,17 +1806,17 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
   });
 
   /**
-   * O BUG DO HOTFIX (produção, 2026-09-17, logo depois do recibo entrar no ar): com UMA mensagem
-   * não entregue na tela, o chat entrava num loop de ~2 em ~2 segundos — "chat → Iniciando o
-   * agente… → histórico inteiro de volta → chat", piscando sem parar até ficar inutilizável.
+   * THE HOTFIX BUG (production, 2026-09-17, right after the receipt went live): with ONE message
+   * undelivered on screen, the chat went into a loop every ~2 seconds — "chat → Iniciando o
+   * agente… → whole history back → chat", blinking nonstop until it became unusable.
    *
-   * A causa: a mensagem não entregue CONTINUA no outbox de propósito (é a cópia que o
-   * "reenviar/descartar" oferece), e o `at` dela nunca muda — então ela seguia vencida em TODO
-   * tique do watchdog, que a cada tique derrubava o socket "para descobrir se ele estava vivo".
-   * O veredito agora é dado uma vez por envio; só um reenvio volta a armar o relógio.
+   * The cause: the undelivered message STAYS in the outbox on purpose (it is the copy that
+   * "reenviar/descartar" offers), and its `at` never changes — so it stayed overdue on EVERY
+   * watchdog tick, which on each tick dropped the socket "to find out whether it was alive".
+   * The verdict is now given once per send; only a resend arms the clock again.
    */
   describe("o veredito é dado UMA vez (o loop de reconexão)", () => {
-    /** Quantos tiques um loop precisaria para se revelar — de sobra para vários prazos vencerem. */
+    /** How many ticks a loop would need to reveal itself — plenty for several deadlines to expire. */
     const MANY_TICKS = (OUTBOX_ACK_TIMEOUT_MS + OUTBOX_TICK_MS) * 5;
 
     it("user_nack e o tempo passando: o socket VIVO não é derrubado (sem loop de reconexão)", async () => {
@@ -1833,17 +1833,17 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
         ws.deliver({ type: "user_nack", cid, reason: "driver-gone" } as SdkEvent);
         await waitFor(() => expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered"));
 
-        // O reenvio automático tenta de novo (espaçado), e este servidor segue respondendo — recusando.
+        // The automatic resend tries again (spaced out), and this server keeps responding — refusing.
         for (let elapsed = 0; elapsed < MANY_TICKS; elapsed += OUTBOX_TICK_MS) {
           const before = ws.sent.length;
           await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_TICK_MS); });
           if (ws.sent.length > before) ws.deliver({ type: "user_nack", cid, reason: "driver-gone" } as SdkEvent);
         }
 
-        expect(ws.readyState).not.toBe(3); // o socket que acabou de responder não é suspeito
-        expect(FakeSocket.instances).toHaveLength(1); // nenhuma reconexão: nada pisca
-        expect(screen.getByTestId("sdk-user-undelivered")).toBeInTheDocument(); // e a bolha continua lá
-        // Os reenvios seguem o plano (intervalos de segundos a minutos), nunca o tique do watchdog.
+        expect(ws.readyState).not.toBe(3); // the socket that just responded is not suspect
+        expect(FakeSocket.instances).toHaveLength(1); // no reconnect: nothing blinks
+        expect(screen.getByTestId("sdk-user-undelivered")).toBeInTheDocument(); // and the bubble is still there
+        // The resends follow the plan (intervals from seconds to minutes), never the watchdog tick.
         expect(ws.sent.length - 1).toBeLessThanOrEqual(3);
       } finally {
         vi.useRealTimers();
@@ -1861,7 +1861,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
         await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
         await waitFor(() => expect(first.sent.length).toBe(1));
 
-        // Vence o prazo: o socket suspeito cai (isso é o certo) e o navegador reconecta.
+        // The deadline expires: the suspect socket drops (that is correct) and the browser reconnects.
         await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS + OUTBOX_TICK_MS); });
         expect(first.readyState).toBe(3);
         act(() => first.onclose?.());
@@ -1869,11 +1869,11 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
         await waitFor(() => expect(FakeSocket.instances.length).toBe(2));
         const second = FakeSocket.instances[1] as FakeSocket;
         second.accept();
-        second.deliver({ type: "ready" }); // o replay não traz a mensagem: o servidor nunca a teve
+        second.deliver({ type: "ready" }); // the replay does not bring the message: the server never had it
         await waitFor(() => expect(screen.getAllByTestId("sdk-user")).toHaveLength(1));
         const cid = (JSON.parse(first.sent[0]!) as { cid: string }).cid;
 
-        // A conexão nova responde (o reenvio automático leva um "não" — o driver ainda subindo).
+        // The new connection responds (the automatic resend gets a "no" — the driver still starting).
         let answered = 0;
         for (let elapsed = 0; elapsed < MANY_TICKS; elapsed += OUTBOX_TICK_MS) {
           if (second.sent.length > answered) {
@@ -1884,8 +1884,8 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
         }
 
         expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered");
-        expect(second.readyState).not.toBe(3); // a conexão nova não é derrubada de novo
-        expect(FakeSocket.instances).toHaveLength(2); // e nenhuma terceira nasce
+        expect(second.readyState).not.toBe(3); // the new connection is not dropped again
+        expect(FakeSocket.instances).toHaveLength(2); // and no third one is born
       } finally {
         vi.useRealTimers();
       }
@@ -1896,7 +1896,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
       try {
         localStorage.setItem(
           "vibehub.sdkOutbox.c1",
-          // Com o plano de reenvio automático já esgotado: o que sobra é só o veredito antigo.
+          // With the automatic resend plan already exhausted: all that is left is the old verdict.
           JSON.stringify([{
             cid: "c-antigo",
             text: "a instrução longa que sumia",
@@ -1942,7 +1942,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
         await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS + OUTBOX_TICK_MS); });
 
         expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered");
-        expect(ws.readyState).toBe(3); // desta vez ninguém respondeu: o socket é suspeito de novo
+        expect(ws.readyState).toBe(3); // this time nobody responded: the socket is suspect again
       } finally {
         vi.useRealTimers();
       }
@@ -1950,17 +1950,17 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
   });
 
   /**
-   * O BUG DO REENVIO NA MÃO (produção, 2026-10-27): a mensagem falhou, a bolha ficou "não entregue"
-   * com o Reenviar, e a pessoa — que já tinha ido embora — só a encontrou no dia seguinte, esperando
-   * um clique. A conexão boa tinha voltado em instantes.
+   * THE MANUAL RESEND BUG (production, 2026-10-27): the message failed, the bubble stayed "não entregue"
+   * with Reenviar, and the person — who had already left — only found it the next day, waiting for
+   * a click. The good connection had come back within moments.
    *
-   * A tela agora reenvia sozinha, com as mesmas palavras e o mesmo recibo (o back trata o cid repetido
-   * como cobrança, nunca como segundo turno), em intervalos que crescem e com fim — tentativas
-   * contadas e teto de idade. O que estes testes fixam: sai sozinha, não vira laço, fio caído não
-   * gasta tentativa, mensagem velha não sai sem a pessoa, e a ordem da conversa não embaralha.
+   * The screen now resends by itself, with the same words and the same receipt (the back treats the repeated cid
+   * as a reminder, never as a second turn), at growing intervals and with an end — counted
+   * attempts and an age ceiling. What these tests pin down: it goes out by itself, does not become a loop, a dropped wire does not
+   * spend an attempt, an old message does not go out without the person, and the conversation's order does not get scrambled.
    */
   describe("o reenvio automático (a mensagem que esperou um clique a noite toda)", () => {
-    /** Um envio que o servidor recusou: a bolha está "não entregue" e o cid é devolvido. */
+    /** A send the server refused: the bubble is "não entregue" and the cid is returned. */
     async function refusedSend(ws: FakeSocket, text: string, user: ReturnType<typeof userEvent.setup>): Promise<string> {
       await user.type(screen.getByRole("textbox"), `${text}{Enter}`);
       await waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
@@ -1979,9 +1979,9 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
         ws.deliver({ type: "ready" });
         const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
         const cid = await refusedSend(ws, "roda a migração", user);
-        // A bolha avisa que não precisa de ninguém: a tela vai tentar de novo.
+        // The bubble says it needs no one: the screen will try again.
         expect(screen.getByTestId("sdk-user-retrying")).toBeInTheDocument();
-        expect(ws.sent).toHaveLength(1); // nada na hora: o primeiro intervalo é de segundos
+        expect(ws.sent).toHaveLength(1); // nothing right away: the first interval is seconds
 
         await act(async () => { await vi.advanceTimersByTimeAsync(AUTO_RESEND_DELAYS_MS[0]!); });
 
@@ -1991,7 +1991,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
         ws.deliver({ type: "user_ack", cid } as SdkEvent);
         await waitFor(() => expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sent"));
         expect(localStorage.getItem("vibehub.sdkOutbox.c1")).toBeNull();
-        expect(screen.getAllByTestId("sdk-user")).toHaveLength(1); // uma bolha só, nunca duas
+        expect(screen.getAllByTestId("sdk-user")).toHaveLength(1); // only one bubble, never two
       } finally {
         vi.useRealTimers();
       }
@@ -2009,7 +2009,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
         await waitFor(() => expect(first.sent.length).toBe(1));
         const cid = (JSON.parse(first.sent[0]!) as { cid: string }).cid;
 
-        // Nenhum recibo: o watchdog dá o veredito e derruba o socket; o navegador reconecta.
+        // No receipt: the watchdog gives the verdict and drops the socket; the browser reconnects.
         await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS + OUTBOX_TICK_MS); });
         expect(first.readyState).toBe(3);
         act(() => first.onclose?.());
@@ -2017,7 +2017,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
         await waitFor(() => expect(FakeSocket.instances.length).toBe(2));
         const second = FakeSocket.instances[1] as FakeSocket;
         second.accept();
-        second.deliver({ type: "ready" }); // o replay não a traz: o servidor nunca a teve
+        second.deliver({ type: "ready" }); // the replay does not bring it: the server never had it
 
         await waitFor(() => expect(second.sent).toHaveLength(1));
         expect(JSON.parse(second.sent[0]!)).toEqual({ type: "user", text: "instrução longa", cid });
@@ -2040,7 +2040,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
         const cid = await refusedSend(ws, "instrução longa", user);
         const sentAt: number[] = [Date.now()];
 
-        // O servidor recusa toda tentativa, na hora. A tela não pode martelar.
+        // The server refuses every attempt, right away. The screen must not hammer.
         for (let step = 0; step < AUTO_RESEND_DELAYS_MS.length + 3; step += 1) {
           const before = ws.sent.length;
           await act(async () => { await vi.advanceTimersByTimeAsync(AUTO_RESEND_DELAYS_MS[step] ?? 30 * 60_000); });
@@ -2050,12 +2050,12 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
           }
         }
 
-        // 1 envio da pessoa + 1 por intervalo do plano. Nenhum a mais, por mais tempo que passe.
+        // 1 send by the person + 1 per plan interval. Not one more, however much time passes.
         expect(ws.sent).toHaveLength(1 + AUTO_RESEND_DELAYS_MS.length);
-        // …cada um esperando mais que o anterior (nunca várias por segundo).
+        // …each one waiting longer than the previous (never several per second).
         const gaps = sentAt.slice(1).map((t, i) => t - sentAt[i]!);
         gaps.forEach((gap, i) => expect(gap).toBeGreaterThanOrEqual(AUTO_RESEND_DELAYS_MS[i]!));
-        // Esgotado o plano: a bolha volta a ser só o Reenviar (a pessoa decide), e o socket fica quieto.
+        // Plan exhausted: the bubble goes back to being just Reenviar (the person decides), and the socket stays quiet.
         expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered");
         expect(screen.queryByTestId("sdk-user-retrying")).not.toBeInTheDocument();
         expect(screen.getByTestId("sdk-user-resend")).toBeInTheDocument();
@@ -2076,7 +2076,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
         const cid = await refusedSend(first, "instrução longa", user);
         act(() => { first.readyState = 3; first.onclose?.(); });
 
-        // A VPN caiu por mais tempo que o plano inteiro somado: as reconexões nunca completam.
+        // The VPN was down longer than the whole plan added up: the reconnects never complete.
         const outage = AUTO_RESEND_DELAYS_MS.reduce((a, b) => a + b, 0) + 10 * 60_000;
         await act(async () => { await vi.advanceTimersByTimeAsync(outage); });
         const back = FakeSocket.instances[FakeSocket.instances.length - 1] as FakeSocket;
@@ -2128,7 +2128,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
 
         await waitFor(() => expect(ws.sent).toHaveLength(1));
         expect(JSON.parse(ws.sent[0]!)).toEqual({ type: "user", text: "a instrução recusada", cid: "c-antigo" });
-        // A tentativa gasta vai pro disco: um F5 agora não recomeça a conta.
+        // The spent attempt goes to disk: an F5 now does not restart the count.
         await waitFor(() => expect(JSON.parse(localStorage.getItem("vibehub.sdkOutbox.c1")!)[0]).toMatchObject({ autoRetries: 2 }));
       } finally {
         vi.useRealTimers();
@@ -2144,7 +2144,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
         first.deliver({ type: "ready" });
         const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
         const cid = await refusedSend(first, "primeiro isso", user);
-        // O driver tinha morrido: o back fecha o socket. Com o fio caído, a próxima espera na fila.
+        // The driver had died: the back closes the socket. With the wire down, the next one waits in the queue.
         act(() => { first.readyState = 3; first.onclose?.(); });
         await user.type(screen.getByRole("textbox"), "depois isso{Enter}");
         await act(async () => { await vi.advanceTimersByTimeAsync(AUTO_RESEND_DELAYS_MS[0]! + RECONNECT_MAX_MS); });
@@ -2173,7 +2173,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
 
         expect(ws.sent).toHaveLength(2);
         expect(JSON.parse(ws.sent[1]!)).toMatchObject({ type: "user", text: "instrução longa", cid });
-        // …e o automático não manda uma terceira cópia em cima: essa está "enviando", com recibo armado.
+        // …and the automatic one does not send a third copy on top: this one is "enviando", with the receipt armed.
         await act(async () => { await vi.advanceTimersByTimeAsync(AUTO_RESEND_DELAYS_MS[0]!); });
         expect(ws.sent).toHaveLength(2);
       } finally {
@@ -2183,24 +2183,24 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
   });
 
   /**
-   * O BUG DO CÉSAR (produção, 2026-09-28): "toda hora" uma mensagem qualquer, no meio de uma
-   * conversa normal, nasce marcada "não entregue ao servidor" — com o servidor no ar 24h.
+   * CÉSAR'S BUG (production, 2026-09-28): "all the time" some message, in the middle of a
+   * normal conversation, is born flagged "não entregue ao servidor" — with the server up 24h.
    *
-   * A causa não é o servidor estar fora: é o RELÓGIO DO RECIBO correr num instante em que o
-   * servidor ainda não tem como responder. O `onopen` do navegador dispara no aperto de mão do
-   * websocket, mas o back só chega ao `handleClientFrame` DEPOIS de um setup que leva segundos —
-   * `installCardSdkDriver` (dois `docker exec` por SSH, com `npm install` quando a versão mudou), a
-   * sonda de transcript (timeout de 15s, sozinha maior que o prazo do recibo), a leitura e o replay
-   * do histórico, o spawn do driver. Até lá o frame fica em `pendingFrames` (routes/cardSdk.ts), e
-   * é entregue DE VERDADE quando o setup acaba.
+   * The cause is not the server being down: it is the RECEIPT CLOCK running at a moment when the
+   * server has no way to respond yet. The browser's `onopen` fires on the websocket's
+   * handshake, but the back only reaches `dispatchClientFrame` AFTER a setup that takes seconds —
+   * `installCardSdkDriver` (two `docker exec` over SSH, with `npm install` when the version changed), the
+   * transcript probe (15s timeout, alone longer than the receipt deadline), reading and replaying
+   * the history, spawning the driver. Until then the frame stays in `pendingFrames` (routes/cardSdk.ts), and
+   * it is delivered FOR REAL when the setup finishes.
    *
-   * Ou seja: a bolha acusava "não entregue" uma mensagem que o servidor recebeu — e o "Reenviar"
-   * que a pessoa clica manda a segunda cópia. Pior, o watchdog derrubava esse socket no meio do
-   * setup, e a reconexão paga o setup inteiro de novo: é esse o "toda hora".
+   * In other words: the bubble flagged as "não entregue" a message the server received — and the "Reenviar"
+   * the person clicks sends the second copy. Worse, the watchdog dropped that socket in the middle of
+   * setup, and the reconnect pays the whole setup again: that is the "all the time".
    *
-   * A regra que estes testes fixam: a ausência de recibo só é PROVA quando a conexão estava em
-   * condições de responder. O prazo conta a partir do `ready` — o instante em que o servidor
-   * assumiu este socket —, nunca de antes dele.
+   * The rule these tests pin down: the absence of a receipt is only PROOF when the connection was in
+   * a position to respond. The deadline counts from `ready` — the moment the server
+   * took over this socket —, never from before it.
    */
   describe("o prazo do recibo só corre quando o servidor pode responder", () => {
     it("escrita enquanto o back ainda monta a conexão: espera na fila, nada vence, nada é condenado", async () => {
@@ -2208,17 +2208,17 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
       try {
         renderSdkChat();
         const ws = await socket();
-        ws.accept(); // o aperto de mão terminou — mas o back ainda está no setup, sem `ready`
+        ws.accept(); // the handshake finished — but the back is still in setup, without `ready`
         const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
         await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
 
         await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS + OUTBOX_TICK_MS); });
 
-        // Nada saiu (um F5 aqui não perde nada) e nada é acusado: o servidor nem chegou a ouvir.
+        // Nothing went out (an F5 here loses nothing) and nothing is flagged: the server did not even get to hear.
         expect(ws.sent).toHaveLength(0);
         expect(screen.getByTestId("sdk-queued")).toHaveTextContent("instrução longa");
         expect(screen.queryByTestId("sdk-user-undelivered")).not.toBeInTheDocument();
-        expect(ws.readyState).not.toBe(3); // e o socket do setup em andamento NÃO é derrubado
+        expect(ws.readyState).not.toBe(3); // and the socket of the setup in progress is NOT dropped
       } finally {
         vi.useRealTimers();
       }
@@ -2233,9 +2233,9 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
         const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
         await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
 
-        // O setup do back (sonda de transcript + replay + spawn) demorou mais que o prazo…
+        // The back's setup (transcript probe + replay + spawn) took longer than the deadline…
         await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS * 2); });
-        // …e então ele atende o socket: a fila anda, e o recibo vem.
+        // …and then it serves the socket: the queue moves, and the receipt comes.
         ws.deliver({ type: "ready" });
         await waitFor(() => expect(ws.sent.length).toBe(1));
         const cid = (JSON.parse(ws.sent[0]!) as { cid: string }).cid;
@@ -2249,13 +2249,13 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
     });
 
     /**
-     * O `ready` chega ANTES dos recibos do que ficou bufferado: o back manda `ready` no attach
-     * (manager.ts) e só DEPOIS processa `pendingFrames` (routes/cardSdk.ts). Então o replay não
-     * pode conter a mensagem em voo — e a reconciliação, que compara por TEXTO, a dava como
-     * perdida: bolha duplicada, marcada "não entregue", para uma mensagem a caminho.
+     * `ready` arrives BEFORE the receipts of what was buffered: the back sends `ready` on attach
+     * (manager.ts) and only AFTERWARDS processes `pendingFrames` (routes/cardSdk.ts). So the replay
+     * cannot contain the in-flight message — and the reconciliation, which compares by TEXT, took it as
+     * lost: duplicated bubble, flagged "não entregue", for a message on its way.
      *
-     * A fronteira: reconciliar é sobre o que sobrou de ANTES. Um envio que já tem bolha nesta tela
-     * tem dono — o watchdog — e a reconciliação não opina sobre ele.
+     * The boundary: reconciling is about what was left over from BEFORE. A send that already has a bubble on this screen
+     * has an owner — the watchdog — and the reconciliation has no say about it.
      */
     it("a reconciliação não duplica nem condena o envio que ESTA conexão ainda espera", async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -2267,7 +2267,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
         await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
 
         await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS * 2); });
-        ws.deliver({ type: "ready" }); // o replay vem sem ela: ela ainda estava na fila
+        ws.deliver({ type: "ready" }); // the replay comes without it: it was still in the queue
 
         await waitFor(() => expect(ws.sent.length).toBe(1));
         expect(screen.getAllByTestId("sdk-user")).toHaveLength(1);
@@ -2287,14 +2287,14 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
         await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
 
         await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS * 2); });
-        ws.deliver({ type: "ready" }); // o servidor assumiu o socket AGORA: o prazo nasce aqui
+        ws.deliver({ type: "ready" }); // the server took over the socket NOW: the deadline is born here
         await waitFor(() => expect(ws.sent.length).toBe(1));
 
         await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS / 2); });
         expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "sending");
 
         await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS); });
-        // Agora sim: houve uma conexão de pé, com prazo inteiro, e ninguém respondeu.
+        // Now yes: there was a connection standing, with a full deadline, and nobody responded.
         expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-state", "undelivered");
         expect(ws.readyState).toBe(3);
       } finally {
@@ -2303,34 +2303,34 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
     });
 
     /**
-     * A OUTRA METADE do "toda hora": escrever durante a reconexão.
+     * THE OTHER HALF of the "all the time": writing during the reconnect.
      *
-     * Um socket cai o tempo todo por motivos banais — deploy, tampa do notebook, proxy cortando uma
-     * conexão ociosa — e a reconexão leva de 400ms a 15s (lib/reconnect.ts). Quem está escrevendo
-     * não vê nada disso: dá Enter e, até aqui, a mensagem nascia INSTANTANEAMENTE condenada ("não
-     * entregue ao servidor", com reenviar/descartar) por um fio que voltaria dois segundos depois —
-     * e o texto ficava em DOIS lugares ao mesmo tempo, na bolha e no campo, de onde um segundo
-     * Enter mandava a cópia.
+     * A socket drops all the time for mundane reasons — deploy, laptop lid, proxy cutting an
+     * idle connection — and the reconnect takes from 400ms to 15s (lib/reconnect.ts). Whoever is writing
+     * sees none of this: presses Enter and, until now, the message was born INSTANTLY condemned ("não
+     * entregue ao servidor", with reenviar/descartar) by a wire that would come back two seconds later —
+     * and the text stayed in TWO places at once, in the bubble and in the field, from where a second
+     * Enter sent the copy.
      *
-     * Uma mensagem que só precisa esperar o fio não é uma mensagem perdida: é a FILA — o mesmo
-     * lugar onde espera quem escreveu durante um turno, editável, guardada em disco, e entregue
-     * sozinha assim que a conexão volta a poder carregá-la.
+     * A message that only needs to wait for the wire is not a lost message: it is the QUEUE — the same
+     * place where whoever wrote during a turn waits, editable, saved on disk, and delivered
+     * by itself as soon as the connection can carry it again.
      */
     it("escrever com o fio caído: a mensagem espera na fila, e sobe sozinha quando o fio volta", async () => {
       renderSdkChat();
       const first = await socket();
       first.accept();
       first.deliver({ type: "ready" });
-      act(() => { first.readyState = 3; first.onclose?.(); }); // o fio caiu, sem ninguém perceber
+      act(() => { first.readyState = 3; first.onclose?.(); }); // the wire dropped, without anyone noticing
 
       await userEvent.type(screen.getByRole("textbox"), "instrução longa{Enter}");
 
       expect(first.sent).toHaveLength(0);
-      expect(screen.queryByTestId("sdk-user")).not.toBeInTheDocument(); // nada nasce condenado
+      expect(screen.queryByTestId("sdk-user")).not.toBeInTheDocument(); // nothing is born condemned
       expect(screen.getByTestId("sdk-queued")).toHaveTextContent("instrução longa");
-      expect(screen.getByRole("textbox")).toHaveValue(""); // e o texto não fica em dois lugares
+      expect(screen.getByRole("textbox")).toHaveValue(""); // and the text does not stay in two places
 
-      // O fio volta: a fila anda sozinha, e só agora a mensagem vira bolha de verdade.
+      // The wire comes back: the queue moves by itself, and only now does the message become a real bubble.
       await waitFor(() => expect(FakeSocket.instances.length).toBe(2));
       const second = FakeSocket.instances[1] as FakeSocket;
       second.accept();
@@ -2343,13 +2343,13 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
     });
 
     /**
-     * A EXCEÇÃO QUE NÃO PODE CAIR: com uma pergunta do agente esperando resposta, NADA é
-     * enfileirado — nem com o fio fora do ar.
+     * THE EXCEPTION THAT MUST NOT FALL: with a question from the agent waiting for an answer, NOTHING is
+     * queued — not even with the wire down.
      *
-     * Um `user_question` deixa o driver bloqueado com o turno ainda contado como ATIVO, e a única
-     * coisa que o solta é uma mensagem da pessoa. O despacho da fila só anda quando o turno fecha —
-     * então enfileirar aqui seria esperar por um fim de turno que só a própria mensagem enfileirada
-     * poderia causar: trava permanente, do tipo que fica meia hora até o timeout.
+     * A `user_question` leaves the driver blocked with the turn still counted as ACTIVE, and the only
+     * thing that releases it is a message from the person. The queue dispatch only moves when the turn closes —
+     * so queuing here would mean waiting for an end of turn that only the queued message itself
+     * could cause: a permanent lock, the kind that lasts half an hour until the timeout.
      */
     it("pergunta do agente na tela: a mensagem NÃO vai pra fila nem com o fio caído (seria deadlock)", async () => {
       renderSdkChat();
@@ -2362,7 +2362,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
         questions: [{ question: "Sigo pelo caminho A?", options: [{ label: "A" }, { label: "B" }] }],
       } as SdkEvent);
       await screen.findByTestId("sdk-question");
-      act(() => { ws.readyState = 3; ws.onclose?.(); }); // o fio cai com a pergunta de pé
+      act(() => { ws.readyState = 3; ws.onclose?.(); }); // the wire drops with the question standing
 
       const composer = screen.getByTestId("terminal-composer").querySelector("textarea")!;
       await userEvent.type(composer, "vai pelo A mesmo{Enter}");
@@ -2381,7 +2381,7 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
         await user.type(screen.getByRole("textbox"), "instrução longa{Enter}");
         await waitFor(() => expect(ws.sent.length).toBe(1));
 
-        // O fio cai logo depois do envio (deploy, VPN, wi-fi) — nada disso é culpa da mensagem.
+        // The wire drops right after the send (deploy, VPN, wi-fi) — none of that is the message's fault.
         act(() => { ws.readyState = 3; ws.onclose?.(); });
         await act(async () => { await vi.advanceTimersByTimeAsync(OUTBOX_ACK_TIMEOUT_MS + OUTBOX_TICK_MS); });
 
@@ -2394,32 +2394,32 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
   });
 
   /**
-   * O socket morto que o navegador ainda não percebeu (`readyState` fechado sem o `onclose` ter
-   * corrido): nada sai por ele. A bolha condenada que nascia aqui era um falso negativo duas vezes
-   * — o servidor não recusou nada, ele nem foi consultado — e deixava o texto em dois lugares, na
-   * bolha e no campo, de onde o Enter seguinte mandava a cópia. Uma mensagem que só precisa de um
-   * fio ESPERA: guardada em disco, editável, entregue pelo despacho quando houver conexão.
+   * The dead socket the browser has not noticed yet (`readyState` closed without `onclose` having
+   * run): nothing goes out through it. The condemned bubble that was born here was a false negative twice over
+   * — the server refused nothing, it was not even consulted — and it left the text in two places, in the
+   * bubble and in the field, from where the next Enter sent the copy. A message that only needs a
+   * wire WAITS: saved on disk, editable, delivered by the dispatch when there is a connection.
    */
   it("socket morto: a mensagem nem sai, espera na fila, e ninguém acusa entrega nenhuma", async () => {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
     ws.deliver({ type: "ready" });
-    ws.readyState = 3; // morto, sem o navegador ter percebido (o caso do socket meio-aberto)
+    ws.readyState = 3; // dead, without the browser having noticed (the half-open socket case)
 
     await userEvent.type(screen.getByRole("textbox"), "não vai sair{Enter}");
 
     expect(ws.sent.length).toBe(0);
-    expect(await screen.findByTestId("sdk-queued")).toHaveTextContent("não vai sair"); // guardada e editável
-    expect(screen.queryByTestId("sdk-user")).not.toBeInTheDocument(); // nada nasce condenado
-    expect(screen.getByRole("textbox")).toHaveValue(""); // e o texto não fica em dois lugares
+    expect(await screen.findByTestId("sdk-queued")).toHaveTextContent("não vai sair"); // saved and editable
+    expect(screen.queryByTestId("sdk-user")).not.toBeInTheDocument(); // nothing is born condemned
+    expect(screen.getByRole("textbox")).toHaveValue(""); // and the text does not stay in two places
   });
 });
 
 /**
- * "SÓ FICA UM LOADING ESCRITO 'TRABALHANDO…'" (pedido do César, 2026-09-17): um turno de dez minutos
- * e um de meio segundo eram idênticos na tela, e quem esperava não sabia se o agente tinha entendido
- * o pedido. O raciocínio é a única coisa que existe antes da resposta — então é ele que vira notícia.
+ * "SÓ FICA UM LOADING ESCRITO 'TRABALHANDO…'" (César's request, 2026-09-17): a ten-minute turn
+ * and a half-second one were identical on screen, and whoever was waiting did not know whether the agent had understood
+ * the request. The reasoning is the only thing that exists before the answer — so it is what becomes news.
  */
 describe("SdkChatView — o raciocínio durante a espera", () => {
   it("o pensamento aparece ao vivo, aberto, enquanto o modelo pensa", async () => {
@@ -2446,7 +2446,7 @@ describe("SdkChatView — o raciocínio durante a espera", () => {
 
     ws.deliver({ type: "thinking", text: "O teste falha por causa do timeout." } as SdkEvent);
 
-    // O fim do turno não esconde o raciocínio: é justamente aí que ele explica o que foi feito.
+    // The end of the turn does not hide the reasoning: that is exactly when it explains what was done.
     await waitFor(() =>
       expect(screen.getByTestId("sdk-thinking-text")).toHaveTextContent("O teste falha por causa do timeout."),
     );
@@ -2461,8 +2461,8 @@ describe("SdkChatView — o raciocínio durante a espera", () => {
     ws.deliver({ type: "ready" });
     ws.deliver({ type: "thinking_delta", text: "pensando" } as SdkEvent);
     await screen.findByTestId("sdk-thinking-text");
-    await userEvent.click(screen.getByTestId("sdk-thinking-toggle")); // fecha
-    await userEvent.click(screen.getByTestId("sdk-thinking-toggle")); // e reabre: escolha explícita
+    await userEvent.click(screen.getByTestId("sdk-thinking-toggle")); // closes
+    await userEvent.click(screen.getByTestId("sdk-thinking-toggle")); // and reopens: explicit choice
 
     ws.deliver({ type: "thinking", text: "decidido" } as SdkEvent);
 
@@ -2484,9 +2484,9 @@ describe("SdkChatView — o raciocínio durante a espera", () => {
 });
 
 /**
- * O cartão que prendia a tela (produção, 2026-09-17). O destravamento em si mora no driver — quem
- * está parado esperando o clique é o turno dentro do `canUseTool` —, e o que a TELA deve é contar a
- * verdade quando ele é liberado: a pessoa respondeu, só não pelo cartão.
+ * The card that locked the screen (production, 2026-09-17). The unlocking itself lives in the driver — what
+ * is stopped waiting for the click is the turn inside `canUseTool` —, and what the SCREEN owes is telling the
+ * truth when it is released: the person answered, just not through the card.
  */
 describe("SdkChatView — a pergunta respondida por mensagem", () => {
   const question = {
@@ -2505,7 +2505,7 @@ describe("SdkChatView — a pergunta respondida por mensagem", () => {
 
     ws.deliver({ type: "question_result", id: "q1", superseded: true } as unknown as SdkEvent);
 
-    // (a suíte roda no idioma padrão, en — o pt-BR diz "Você respondeu por mensagem")
+    // (the suite runs in the default language, en — pt-BR says "Você respondeu por mensagem")
     await waitFor(() => expect(screen.getByTestId("sdk-question")).toHaveTextContent("You answered with a message"));
     expect(screen.getByTestId("sdk-question")).not.toHaveTextContent("No answer");
   });
@@ -2651,8 +2651,8 @@ describe("SdkChatView — the activity bar", () => {
   });
 
   it("o driver avisa que a troca do pill tirou o turno do nível da palavra: o 'esforço alto' sai da barra", async () => {
-    // Review do #259 (f5): a ordem da troca e da palavra é a do DRIVER. O relógio do navegador não a
-    // conhece (o PATCH grava antes de mandar a troca, e a mensagem pode chegar primeiro).
+    // Review of #259 (f5): the order of the switch and the word is the DRIVER's. The browser's clock does not
+    // know it (the PATCH writes before sending the switch, and the message may arrive first).
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -2698,14 +2698,14 @@ describe("SdkChatView — the activity bar", () => {
 });
 
 /**
- * O LEITOR DE TELA. A conversa é um `role="log"` — uma região viva: tudo que muda lá dentro é
- * anunciado. O relógio do turno morava ali dentro (a barra fixa no topo e o "Trabalhando… 1m 24s"
- * no fim), então quem ouve a tela ouvia o cronômetro a cada segundo, por cima da conversa. O
- * cronômetro é para os olhos; para o ouvido vai a FASE (pensando, respondendo, executando), que só
- * muda quando o trabalho muda.
+ * THE SCREEN READER. The conversation is a `role="log"` — a live region: everything that changes inside it is
+ * announced. The turn's clock lived in there (the bar pinned at the top and the "Trabalhando… 1m 24s"
+ * at the end), so whoever listens to the screen heard the stopwatch every second, over the conversation. The
+ * stopwatch is for the eyes; for the ear goes the PHASE (thinking, answering, executing), which only
+ * changes when the work changes.
  */
 describe("SdkChatView — o que o leitor de tela anuncia", () => {
-  /** Está numa parte da conversa que o leitor de tela anuncia (dentro do log e sem aria-hidden)? */
+  /** Is it in a part of the conversation the screen reader announces (inside the log and without aria-hidden)? */
   function announcedInLog(el: Element): boolean {
     const log = screen.getByRole("log");
     if (!log.contains(el)) return false;
@@ -2750,7 +2750,7 @@ describe("SdkChatView — o que o leitor de tela anuncia", () => {
     ws.accept();
     ws.deliver({ type: "ready" });
     const log = screen.getByRole("log");
-    // `role="log"` já é uma região viva educada: o `aria-live` repetido não dizia nada a mais
+    // `role="log"` is already a polite live region: the repeated `aria-live` said nothing more
     expect(log).not.toHaveAttribute("aria-live");
     expect(log).not.toHaveAttribute("aria-busy", "true");
 
@@ -2763,9 +2763,9 @@ describe("SdkChatView — o que o leitor de tela anuncia", () => {
 });
 
 /**
- * QUEM ESTÁ FAZENDO O QUÊ. O que um subagente (Agent/Task) faz chega marcado com `parentToolUseId`
- * e é desenhado DENTRO do card da chamada que o disparou — recolhido, com quantas ações já foram e
- * a última —, nunca como passo ou resposta do agente principal.
+ * WHO IS DOING WHAT. What a subagent (Agent/Task) does arrives tagged with `parentToolUseId`
+ * and is drawn INSIDE the card of the call that triggered it — collapsed, with how many actions have run and
+ * the latest —, never as a step or answer of the main agent.
  */
 describe("SdkChatView — subagentes", () => {
   const agentCall: SdkEvent = {
@@ -2780,26 +2780,26 @@ describe("SdkChatView — subagentes", () => {
       ws.accept();
       ws.deliver({ type: "ready" });
       ws.deliver(agentCall);
-      // o relógio do runner não entra: um startedAt de outro relógio não muda o que a tela mostra
+      // the runner's clock does not come in: a startedAt from another clock does not change what the screen shows
       ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "running", toolUses: 18, durationMs: 186_000, startedAt: 1 });
       const agent = within(screen.getByTestId("sdk-fleet")).getByTestId("sdk-fleet-agent");
-      // o relógio real também anda com `shouldAdvanceTime`: um runner lento pode somar um segundo
+      // the real clock also moves with `shouldAdvanceTime`: a slow runner may add a second
       expect(agent).toHaveTextContent(/3m 0[67]s/);
 
       await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
       expect(agent).toHaveTextContent(/4m 0[67]s/);
 
-      // a faixa de segundo plano mostra o mesmo relógio
+      // the background strip shows the same clock
       ws.deliver({ type: "background_tasks", tasks: [{ id: "b1", type: "local_agent", description: "explora o chat", toolUseId: "t1" }] });
       expect(screen.getByTestId("sdk-background-task")).toHaveTextContent(/4m 0[678]s/);
 
-      // o modal do subagente conta junto com a linha da frota
+      // the subagent modal counts along with the fleet row
       fireEvent.click(agent);
       expect(await screen.findByTestId("sdk-agent-elapsed")).toHaveTextContent(/4m 0[678]s/);
       await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
       expect(screen.getByTestId("sdk-agent-elapsed")).toHaveTextContent(/5m 0[6789]s/);
 
-      // terminado, o relógio para na duração final
+      // finished, the clock stops at the final duration
       ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "completed", toolUses: 20, durationMs: 250_000 });
       await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
       expect(agent).toHaveTextContent("4m 10s");
@@ -2826,7 +2826,7 @@ describe("SdkChatView — subagentes", () => {
     expect(agent).toHaveTextContent("explora o chat");
     expect(agent).toHaveTextContent("Lendo o reducer");
     expect(agent).toHaveTextContent("2 actions");
-    // As ações do subagente não aparecem como passos do principal.
+    // The subagent's actions do not show up as steps of the main agent.
     expect(screen.queryAllByTestId("sdk-tool")).toHaveLength(0);
     expect(screen.queryByText("achei o reducer")).toBeNull();
 
@@ -2887,8 +2887,8 @@ describe("SdkChatView — subagentes", () => {
 });
 
 /**
- * A LISTA DE TAREFAS DO AGENTE. Um TodoWrite dizia só "TodoWrite"; agora diz quantas já foram e
- * mostra a lista — só a MAIS RECENTE aberta: as anteriores são versões velhas da mesma lista.
+ * THE AGENT'S TASK LIST. A TodoWrite said only "TodoWrite"; now it says how many are done and
+ * shows the list — only the MOST RECENT one open: the earlier ones are old versions of the same list.
  */
 describe("SdkChatView — TodoWrite", () => {
   const todos = (statuses: Array<"pending" | "in_progress" | "completed">) => statuses.map((status, i) => ({
@@ -2918,7 +2918,7 @@ describe("SdkChatView — TodoWrite", () => {
     expect(items[1]).toHaveTextContent("Fazendo a tarefa 2");
     expect(items[2]).toHaveTextContent("Tarefa 3");
 
-    // Quem quer ver a versão velha abre.
+    // Whoever wants to see the old version opens it.
     fireEvent.click(within(older).getByTestId("sdk-todos-toggle"));
     expect(within(older).getAllByTestId("sdk-todo-item")).toHaveLength(3);
   });
@@ -2946,15 +2946,15 @@ describe("SdkChatView — a tool call reads like the terminal's", () => {
 });
 
 /**
- * A FILA — o que você escreve enquanto o Claude trabalha.
+ * THE QUEUE — what you write while Claude works.
  *
- * O que estes testes fixam, na ordem em que o dono descreveu: a mensagem ESPERA (não vira bolha e
- * não vai pro socket), ela sobe pra conversa no instante em que é entregue, ela é editável
- * enquanto espera, e uma mensagem em edição NÃO pode ser entregue — nem que o turno acabe no meio
- * da correção.
+ * What these tests pin down, in the order the owner described: the message WAITS (it does not become a bubble and
+ * does not go to the socket), it goes up into the conversation the instant it is delivered, it is editable
+ * while it waits, and a message being edited CANNOT be delivered — not even if the turn ends in the middle
+ * of the correction.
  */
 describe("SdkChatView — a fila (mensagem escrita durante um turno)", () => {
-  /** Um chat com um turno visivelmente rodando e uma mensagem esperando na fila. */
+  /** A chat with a turn visibly running and a message waiting in the queue. */
   async function chatWithQueued(text = "aproveita e ajusta o título") {
     renderSdkChat();
     const ws = await socket();
@@ -2963,7 +2963,7 @@ describe("SdkChatView — a fila (mensagem escrita durante um turno)", () => {
     const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
     await userEvent.type(box, `faz a tarefa{Enter}`);
     await waitFor(() => expect(ws.sent.length).toBe(1));
-    ws.deliver({ type: "assistant_delta", text: "Fazendo…" }); // o turno está rodando
+    ws.deliver({ type: "assistant_delta", text: "Fazendo…" }); // the turn is running
     await userEvent.type(box, `${text}{Enter}`);
     await screen.findByTestId("sdk-queue");
     return { ws, box };
@@ -2971,9 +2971,9 @@ describe("SdkChatView — a fila (mensagem escrita durante um turno)", () => {
 
   it("com o turno rodando, a mensagem ESPERA: não vai pro socket e não vira bolha", async () => {
     const { ws } = await chatWithQueued();
-    expect(ws.sent).toHaveLength(1); // só a primeira mensagem foi entregue
+    expect(ws.sent).toHaveLength(1); // only the first message was delivered
     expect(screen.getByTestId("sdk-queued")).toHaveTextContent("aproveita e ajusta o título");
-    // a conversa tem UMA bolha do usuário — a que o Claude realmente leu
+    // the conversation has ONE user bubble — the one Claude actually read
     expect(screen.getAllByTestId("sdk-user")).toHaveLength(1);
     expect(screen.getByTestId("sdk-queue")).toHaveTextContent(/1 mensagem esperando|1 message waiting/);
   });
@@ -2998,7 +2998,7 @@ describe("SdkChatView — a fila (mensagem escrita durante um turno)", () => {
     ws.deliver({ type: "result", isError: false });
     await waitFor(() => expect(ws.sent.length).toBe(2));
     expect(JSON.parse(ws.sent[1]!)).toMatchObject({ text: "primeiro isto" });
-    // a segunda NÃO foi junto: ela espera o turno que a primeira acabou de abrir
+    // the second did NOT go along: it waits for the turn the first one just opened
     expect(screen.getAllByTestId("sdk-queued")).toHaveLength(1);
     expect(screen.getByTestId("sdk-queued")).toHaveTextContent("depois aquilo");
 
@@ -3023,11 +3023,11 @@ describe("SdkChatView — a fila (mensagem escrita durante um turno)", () => {
 
     expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("aproveita e ajusta o título");
     expect(screen.getByTestId("composer-editing")).toHaveTextContent(/fila|queued/);
-    // continua na fila, marcada: é o que faz um F5 devolver o texto em vez de apagá-lo
+    // it stays in the queue, flagged: that is what makes an F5 give the text back instead of erasing it
     expect(screen.getByTestId("sdk-queued")).toHaveAttribute("data-editing", "true");
     expect(screen.getByTestId("sdk-queued-editing")).toBeInTheDocument();
-    expect(screen.queryByTestId("sdk-queued-edit")).toBeNull(); // o campo é que manda agora
-    // e o texto NÃO está na conversa: o Claude continua sem ter lido nada disso
+    expect(screen.queryByTestId("sdk-queued-edit")).toBeNull(); // the field is in charge now
+    // and the text is NOT in the conversation: Claude still has not read any of this
     expect(screen.getAllByTestId("sdk-user")).toHaveLength(1);
     expect(ws.sent).toHaveLength(1);
   });
@@ -3050,7 +3050,7 @@ describe("SdkChatView — a fila (mensagem escrita durante um turno)", () => {
     await waitFor(() => expect(screen.getAllByTestId("sdk-queued")).toHaveLength(2));
 
     await userEvent.click(screen.getAllByTestId("sdk-queued-edit")[0]!);
-    await userEvent.click(screen.getByTestId("sdk-queued-edit")); // o único visível agora é o outro
+    await userEvent.click(screen.getByTestId("sdk-queued-edit")); // the only visible one now is the other
 
     const rows = screen.getAllByTestId("sdk-queued");
     expect(rows).toHaveLength(2);
@@ -3064,9 +3064,9 @@ describe("SdkChatView — a fila (mensagem escrita durante um turno)", () => {
     const { ws } = await chatWithQueued();
     await userEvent.click(screen.getByTestId("sdk-queued-edit"));
 
-    ws.deliver({ type: "result", isError: false }); // o Claude ficou livre no meio da digitação
+    ws.deliver({ type: "result", isError: false }); // Claude became free in the middle of the typing
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(ws.sent).toHaveLength(1); // nada saiu: a mensagem está no campo, sendo reescrita
+    expect(ws.sent).toHaveLength(1); // nothing went out: the message is in the field, being rewritten
 
     const box = screen.getByRole("textbox") as HTMLTextAreaElement;
     await userEvent.type(box, " e o subtítulo{Enter}");
@@ -3085,7 +3085,7 @@ describe("SdkChatView — a fila (mensagem escrita durante um turno)", () => {
 
     await waitFor(() => expect(screen.getByTestId("sdk-queued")).toHaveTextContent("aproveita e ajusta o título agora"));
     expect(ws.sent).toHaveLength(1);
-    expect(screen.getAllByTestId("sdk-queued")).toHaveLength(1); // volta como UMA, não como cópia
+    expect(screen.getAllByTestId("sdk-queued")).toHaveLength(1); // it comes back as ONE, not as a copy
     expect(screen.getByTestId("sdk-queued")).not.toHaveAttribute("data-editing");
   });
 
@@ -3122,7 +3122,7 @@ describe("SdkChatView — a fila (mensagem escrita durante um turno)", () => {
     await userEvent.type(box, "{ArrowUp}");
     expect(box.value).toBe("depois aquilo");
     const rows = screen.getAllByTestId("sdk-queued");
-    expect(rows[1]).toHaveAttribute("data-editing", "true"); // guarda o lugar dela, no campo
+    expect(rows[1]).toHaveAttribute("data-editing", "true"); // keeps its place, in the field
     expect(rows[0]).not.toHaveAttribute("data-editing");
   });
 
@@ -3131,8 +3131,8 @@ describe("SdkChatView — a fila (mensagem escrita durante um turno)", () => {
     const ws = await socket();
     ws.accept();
     ws.deliver({ type: "ready" });
-    // AskUserQuestion: o driver fica bloqueado esperando, com o turno ainda contado como ativo —
-    // e a única coisa que o solta é uma mensagem do usuário. Enfileirar aqui travaria até o timeout.
+    // AskUserQuestion: the driver stays blocked waiting, with the turn still counted as active —
+    // and the only thing that releases it is a message from the user. Queuing here would lock until the timeout.
     ws.deliver({
       type: "user_question",
       id: "q1",
@@ -3140,7 +3140,7 @@ describe("SdkChatView — a fila (mensagem escrita durante um turno)", () => {
     });
     await screen.findByTestId("pending-tray");
 
-    // o campo do chat, não o "outra resposta" do próprio card da pergunta
+    // the chat field, not the "outra resposta" of the question card itself
     await userEvent.type(screen.getByLabelText(/Enter/), "manda o A{Enter}");
     await waitFor(() => expect(ws.sent.length).toBe(1));
     expect(screen.queryByTestId("sdk-queue")).toBeNull();
@@ -3152,7 +3152,7 @@ describe("SdkChatView — a fila (mensagem escrita durante um turno)", () => {
     ws.accept();
     ws.deliver({ type: "ready" });
     ws.deliver({ type: "assistant_text", text: "Fiz A e B.\n\nQual dos dois você prefere?" });
-    // o turno segue ABERTO — é o caso em que o agente pergunta e fica esperando dentro do turno
+    // the turn stays OPEN — it is the case where the agent asks and stays waiting inside the turn
     await userEvent.click(await screen.findByTestId("pending-tray-item"));
     await userEvent.type(screen.getByRole("textbox"), "o B{Enter}");
 
@@ -3162,25 +3162,25 @@ describe("SdkChatView — a fila (mensagem escrita durante um turno)", () => {
   });
 
   /**
-   * UM CAMPO, UM MODO. Corrigir uma da fila, corrigir uma bolha enviada e responder uma decisão são
-   * três gestos que disputam o MESMO campo de texto — entrar num tem de sair dos outros. O lápis da
-   * fila já soltava os outros dois, mas o lápis da bolha e a bandeja de decisões não soltavam a
-   * fila: o Enter seguinte caía no `queueEdit` (testado primeiro) e a correção da bolha gravava
-   * POR CIMA da mensagem que esperava na fila, que sumia sem ninguém ter pedido.
+   * ONE FIELD, ONE MODE. Correcting one from the queue, correcting a sent bubble and answering a decision are
+   * three gestures that compete for the SAME text field — entering one has to leave the others. The queue's
+   * pencil already released the other two, but the bubble's pencil and the decisions tray did not release the
+   * queue: the next Enter fell into `queueEdit` (tested first) and the bubble's correction was written
+   * OVER the message waiting in the queue, which vanished without anyone having asked.
    */
   it("o lápis de uma bolha ENVIADA solta a da fila: a correção não grava por cima dela", async () => {
     const { ws, box } = await chatWithQueued();
     await userEvent.click(screen.getByTestId("sdk-queued-edit"));
-    await userEvent.click(screen.getByTestId("sdk-edit")); // mudou de ideia: corrige a enviada
+    await userEvent.click(screen.getByTestId("sdk-edit")); // changed my mind: corrects the sent one
     expect(box.value).toBe("faz a tarefa");
 
     await userEvent.clear(box);
     await userEvent.type(box, "faz a outra tarefa{Enter}");
 
-    // a correção da bolha seguiu o caminho dela (para o turno, e vai depois do result)…
+    // the bubble's correction followed its own path (it stops the turn, and goes after the result)…
     await waitFor(() => expect(ws.sent.length).toBe(2));
     expect(JSON.parse(ws.sent[1]!)).toEqual({ type: "interrupt", reason: "edit" });
-    // …e a da fila está intacta, de volta à espera
+    // …and the queued one is intact, back to waiting
     expect(screen.getByTestId("sdk-queued")).toHaveTextContent("aproveita e ajusta o título");
     expect(screen.getByTestId("sdk-queued")).not.toHaveTextContent("faz a outra tarefa");
     expect(screen.getByTestId("sdk-queued")).not.toHaveAttribute("data-editing");
@@ -3189,14 +3189,14 @@ describe("SdkChatView — a fila (mensagem escrita durante um turno)", () => {
   it("responder uma decisão pela bandeja solta a da fila: a resposta não grava por cima dela", async () => {
     const { ws, box } = await chatWithQueued();
     await userEvent.click(screen.getByTestId("sdk-queued-edit"));
-    // No meio da correção chega um AskUserQuestion (a da fila, no campo, não é despachada).
+    // In the middle of the correction an AskUserQuestion arrives (the queued one, in the field, is not dispatched).
     ws.deliver({
       type: "user_question",
       id: "q_1",
       questions: [{ question: "Formato do relatório?", options: [{ label: "Resumo" }, { label: "Detalhado" }] }],
     });
     await userEvent.click(await screen.findByTestId("pending-tray-item"));
-    expect(screen.queryByTestId("composer-editing")).toBeNull(); // o campo agora RESPONDE
+    expect(screen.queryByTestId("composer-editing")).toBeNull(); // the field now ANSWERS
 
     await userEvent.clear(box);
     await userEvent.type(box, "em tabela{Enter}");
@@ -3204,8 +3204,8 @@ describe("SdkChatView — a fila (mensagem escrita durante um turno)", () => {
     await waitFor(() => expect(ws.sent.some((raw) => JSON.parse(raw).type === "question_answer")).toBe(true));
     const frames = ws.sent.map((raw) => JSON.parse(raw) as { type: string; text?: string });
     expect(frames).toContainEqual({ type: "question_answer", id: "q_1", answers: [{ selected: ["em tabela"] }] });
-    // a da fila voltou a ser entregável com o texto DELA — e a pergunta respondida abre o respiro,
-    // então ela sai logo em seguida, intacta
+    // the queued one became deliverable again with ITS text — and the answered question opens the breather,
+    // so it goes out right after, intact
     await waitFor(() => expect(ws.sent.map((raw) => JSON.parse(raw) as { text?: string }))
       .toContainEqual(expect.objectContaining({ type: "user", text: "aproveita e ajusta o título" })));
     expect(frames.filter((f) => f.type === "user").map((f) => f.text)).not.toContain("em tabela");
@@ -3213,24 +3213,24 @@ describe("SdkChatView — a fila (mensagem escrita durante um turno)", () => {
 });
 
 /**
- * O BUG DO LAYOUT (produção, 2026-09-28): "mensagem grande quebra o layout, ela tá na fila e eu
- * não consigo subir para ver o que tá sendo dito".
+ * THE LAYOUT BUG (production, 2026-09-28): "a big message breaks the layout, it is in the queue and I
+ * cannot scroll up to see what is being said".
  *
- * A bandeja da fila mora entre a conversa e o campo de texto, como IRMÃ do scroller da conversa
- * num flex column. O texto da mensagem em espera era desenhado inteiro, sem teto — então uma
- * instrução de duzentas linhas esticava a bandeja até ela ocupar a tela toda, e o scroller
- * (`min-h-0 flex-1`) era espremido até quase zero. A conversa não sumiu: ela foi empurrada para
- * fora, e com ela a única forma de acompanhar o que o agente estava dizendo.
+ * The queue tray lives between the conversation and the text field, as a SIBLING of the conversation scroller
+ * in a flex column. The waiting message's text was drawn in full, with no ceiling — so a
+ * two-hundred-line instruction stretched the tray until it took the whole screen, and the scroller
+ * (`min-h-0 flex-1`) was squeezed almost to zero. The conversation did not vanish: it was pushed
+ * out, and with it the only way to follow what the agent was saying.
  *
- * A regra: a espera nunca pode roubar a tela da conversa. A bandeja tem TETO e rolagem própria, e
- * cada mensagem em espera também — uma gigante rola dentro do lugar dela em vez de empurrar as
- * outras (e o lápis continua sendo o caminho para lê-la inteira, no campo).
+ * The rule: waiting can never steal the screen from the conversation. The tray has a CEILING and its own scrolling, and
+ * each waiting message does too — a giant one scrolls inside its own place instead of pushing the
+ * others (and the pencil is still the way to read it in full, in the field).
  *
- * jsdom não calcula layout, então o que dá para travar aqui é a REGRA: os dois elementos carregam
- * teto de altura e rolagem própria, e a bandeja fica FORA do scroller da conversa.
+ * jsdom does not compute layout, so what can be pinned here is the RULE: both elements carry
+ * a height ceiling and their own scrolling, and the tray stays OUTSIDE the conversation scroller.
  */
 describe("SdkChatView — a fila não rouba a tela da conversa", () => {
-  /** Uma instrução de verdade, do tamanho das que quebraram o layout. */
+  /** A real instruction, the size of the ones that broke the layout. */
   const HUGE = Array.from({ length: 120 }, (_, i) => `linha ${i + 1} da instrução gigante`).join("\n");
 
   async function queueHuge() {
@@ -3241,7 +3241,7 @@ describe("SdkChatView — a fila não rouba a tela da conversa", () => {
     const box = screen.getByTestId("terminal-composer").querySelector("textarea")!;
     await userEvent.type(box, "primeira{Enter}");
     await waitFor(() => expect(ws.sent.length).toBe(1));
-    ws.deliver({ type: "assistant_delta", text: "trabalhando…" }); // turno rodando: o resto espera
+    ws.deliver({ type: "assistant_delta", text: "trabalhando…" }); // turn running: the rest waits
     fireEvent.change(box, { target: { value: HUGE } });
     fireEvent.keyDown(box, { key: "Enter" });
     await screen.findByTestId("sdk-queued");
@@ -3251,8 +3251,8 @@ describe("SdkChatView — a fila não rouba a tela da conversa", () => {
   it("a bandeja da fila tem teto de altura e rolagem própria", async () => {
     await queueHuge();
     const tray = screen.getByTestId("sdk-queue");
-    expect(tray.className).toMatch(/max-h-/); // sem teto ela cresce até engolir a conversa
-    expect(tray.className).toMatch(/overflow-y-auto/); // e o que não cabe rola AQUI dentro
+    expect(tray.className).toMatch(/max-h-/); // without a ceiling it grows until it swallows the conversation
+    expect(tray.className).toMatch(/overflow-y-auto/); // and what does not fit scrolls IN HERE
   });
 
   it("uma mensagem em espera gigante rola dentro do lugar dela, sem empurrar as outras", async () => {
@@ -3260,14 +3260,14 @@ describe("SdkChatView — a fila não rouba a tela da conversa", () => {
     const body = screen.getByTestId("sdk-queued-text");
     expect(body.className).toMatch(/max-h-/);
     expect(body.className).toMatch(/overflow-y-auto/);
-    expect(body).toHaveTextContent("linha 1 da instrução gigante"); // e o texto continua inteiro
+    expect(body).toHaveTextContent("linha 1 da instrução gigante"); // and the text is still whole
     expect(body).toHaveTextContent("linha 120 da instrução gigante");
   });
 
   const CARD = "2f76af45-3e76-4e32-a49d-bc30b799713d";
   const shot = (file: string) => `/work/.uploads/${CARD}/${file}`;
 
-  /** Um turno rodando e `text` esperando na fila. Devolve o campo, pra quem quiser editar. */
+  /** A turn running and `text` waiting in the queue. Returns the field, for whoever wants to edit. */
   async function queueText(text: string) {
     renderSdkChat();
     const ws = await socket();
@@ -3288,9 +3288,9 @@ describe("SdkChatView — a fila não rouba a tela da conversa", () => {
     const body = screen.getByTestId("sdk-queued-text");
     const image = within(body).getByTestId("chat-image");
     expect(image).toHaveAttribute("src", `/api/cards/${CARD}/uploads/1792422236057-image.png`);
-    // altura FIXA (não max): a imagem chegando depois não estica a bandeja nem esconde a conversa
+    // FIXED height (not max): the image arriving later does not stretch the tray nor hide the conversation
     expect(image.className).toMatch(/\bh-16\b/);
-    expect(image.closest("a")!.className).toMatch(/inline-block/); // duas lado a lado, não empilhadas
+    expect(image.closest("a")!.className).toMatch(/inline-block/); // two side by side, not stacked
     expect(body).toHaveTextContent("olha esse erro");
     expect(body).not.toHaveTextContent("/work/.uploads");
   });
@@ -3327,25 +3327,25 @@ describe("SdkChatView — a fila não rouba a tela da conversa", () => {
     await queueHuge();
     const scroller = screen.getByTestId("sdk-chat-scroller");
     expect(scroller.contains(screen.getByTestId("sdk-queue"))).toBe(false);
-    // e o scroller segue sendo quem rola a conversa
+    // and the scroller is still what scrolls the conversation
     expect(scroller.className).toMatch(/overflow-y-auto/);
-    expect(scroller.className).toMatch(/min-h-0/); // o que o impede de ser espremido a zero
+    expect(scroller.className).toMatch(/min-h-0/); // what keeps it from being squeezed to zero
   });
 });
 
 /**
- * "FORÇAR ENVIO" (pedido do César, 2026-09-28): "eu mando a mensagem pra você, você ainda tá no
- * turno mas pode receber a mensagem alguns segundos ou minutos depois — e não tem opção de forçar
- * envio, de já mandar a mensagem da fila para a IA receber".
+ * "FORÇAR ENVIO" (César's request, 2026-09-28): "I send the message to you, you are still in the
+ * turn but you can receive the message a few seconds or minutes later — and there is no option to force
+ * send, to send the queued message right away for the AI to receive".
  *
- * A fila espera o turno FECHAR, e essa é a regra certa por padrão: uma mensagem dobrada no meio de
- * um raciocínio em curso entra como interrupção de contexto, não como pergunta nova. Mas esperar
- * nem sempre é o que a pessoa quer — às vezes o recado é justamente para agora ("para, tá errado",
- * "o que você tá fazendo?"), e o driver ACEITA isso: a mensagem entra no turno em andamento e volta
- * marcada "entrou no turno em andamento" (o `turn_absorbed`).
+ * The queue waits for the turn to CLOSE, and that is the right rule by default: a message folded into the middle of
+ * an ongoing line of reasoning comes in as a context interruption, not as a new question. But waiting
+ * is not always what the person wants — sometimes the note is precisely for now ("para, tá errado",
+ * "o que você tá fazendo?"), and the driver ACCEPTS that: the message enters the turn in progress and comes back
+ * flagged "entrou no turno em andamento" (the `turn_absorbed`).
  *
- * Então a espera vira uma ESCOLHA, não uma sentença: cada mensagem da fila carrega o gesto de
- * atropelar a espera e ir agora.
+ * So waiting becomes a CHOICE, not a sentence: each queued message carries the gesture of
+ * overriding the wait and going now.
  */
 describe("SdkChatView — forçar o envio de uma mensagem da fila", () => {
   async function queueOne(text = "o que você tá fazendo ?") {
@@ -3356,7 +3356,7 @@ describe("SdkChatView — forçar o envio de uma mensagem da fila", () => {
     const box = screen.getByTestId("terminal-composer").querySelector("textarea")!;
     await userEvent.type(box, "primeira{Enter}");
     await waitFor(() => expect(ws.sent.length).toBe(1));
-    ws.deliver({ type: "assistant_delta", text: "trabalhando…" }); // turno rodando: o resto espera
+    ws.deliver({ type: "assistant_delta", text: "trabalhando…" }); // turn running: the rest waits
     await userEvent.type(box, `${text}{Enter}`);
     await screen.findByTestId("sdk-queued");
     return ws;
@@ -3373,25 +3373,25 @@ describe("SdkChatView — forçar o envio de uma mensagem da fila", () => {
     await userEvent.click(screen.getByTestId("sdk-queued-send-now"));
 
     await waitFor(() => expect(ws.sent.length).toBe(2));
-    // `now`: com uma ferramenta presa o driver interrompe para ela ser lida já (ver sendUserNow)
+    // `now`: with a tool stuck the driver interrupts so it is read right away (see sendUserNow)
     expect(JSON.parse(ws.sent[1]!)).toMatchObject({ type: "user", text: "o que você tá fazendo ?", now: true });
-    // saiu da espera e virou conversa: é isso que "foi entregue" significa nesta tela
+    // it left the wait and became conversation: that is what "was delivered" means on this screen
     await waitFor(() => expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument());
     const bubbles = screen.getAllByTestId("sdk-user");
     expect(bubbles[bubbles.length - 1]).toHaveTextContent("o que você tá fazendo ?");
   });
 
   /**
-   * "ONDE EU CLICO EM ENVIAR AGORA?" (César, 2026-09-28) — a pergunta que condena um gesto.
+   * "ONDE EU CLICO EM ENVIAR AGORA?" (César, 2026-09-28) — the question that condemns a gesture.
    *
-   * Os três botões da fila nasceram copiando o padrão das linhas da conversa: `md:opacity-0
-   * md:group-hover:opacity-100`, ou seja, invisíveis no desktop até o mouse passar por cima. Para
-   * um gesto que já se conhece isso é discrição; para um que acabou de existir é o mesmo que não
-   * ter sido feito. E "manda agora" é justamente o gesto com PRESSA — quem quer atropelar a espera
-   * não vai caçar um ícone escondido.
+   * The queue's three buttons were born copying the pattern of the conversation rows: `md:opacity-0
+   * md:group-hover:opacity-100`, that is, invisible on desktop until the mouse passes over them. For
+   * a gesture one already knows that is discretion; for one that has just come to exist it is the same as not
+   * having been made. And "manda agora" is precisely the gesture in a HURRY — whoever wants to override the wait
+   * will not hunt for a hidden icon.
    *
-   * A bandeja da fila não é a conversa: ela só aparece quando há algo esperando, e já existe para
-   * chamar atenção. Aqui os gestos ficam à vista.
+   * The queue tray is not the conversation: it only shows up when something is waiting, and it already exists to
+   * draw attention. Here the gestures stay in sight.
    */
   it("os gestos da fila ficam À VISTA — não escondidos atrás do hover", async () => {
     await queueOne();
@@ -3414,36 +3414,36 @@ describe("SdkChatView — forçar o envio de uma mensagem da fila", () => {
 
   it("sem fio, forçar não perde a mensagem: ela CONTINUA na fila", async () => {
     const ws = await queueOne();
-    act(() => { ws.readyState = 3; ws.onclose?.(); }); // o fio caiu antes do clique
+    act(() => { ws.readyState = 3; ws.onclose?.(); }); // the wire dropped before the click
 
     await userEvent.click(screen.getByTestId("sdk-queued-send-now"));
 
-    expect(ws.sent.length).toBe(1); // nada saiu
-    expect(screen.getByTestId("sdk-queued")).toHaveTextContent("o que você tá fazendo ?"); // e continua guardada
-    expect(screen.queryByTestId("sdk-user-undelivered")).not.toBeInTheDocument(); // sem bolha condenada
+    expect(ws.sent.length).toBe(1); // nothing went out
+    expect(screen.getByTestId("sdk-queued")).toHaveTextContent("o que você tá fazendo ?"); // and it stays saved
+    expect(screen.queryByTestId("sdk-user-undelivered")).not.toBeInTheDocument(); // no condemned bubble
   });
 });
 
 /**
- * A FILA ANDA NO RESPIRO (pedido do César, 2026-09-28): "no Cursor e no Claude Code as mensagens
- * ficam lá enquanto ele tá trabalhando, mas quando ele tiver tranquilo ele puxa as mensagens".
+ * THE QUEUE MOVES ON THE BREATHER (César's request, 2026-09-28): "in Cursor and in Claude Code the messages
+ * stay there while it is working, but when it is calm it pulls the messages".
  *
- * Antes daqui a fila esperava o `result` — o fim do turno inteiro. Um turno de quinze minutos
- * segurava por quinze minutos um "para, tá errado", e a pessoa ficava olhando a própria mensagem
- * parada enquanto o agente seguia no caminho errado. Agora ela sai no primeiro bloco FECHADO: o
- * turno continua de pé, e a mensagem entra nele pelo streaming input.
+ * Before this the queue waited for the `result` — the end of the whole turn. A fifteen-minute turn
+ * held back a "para, tá errado" for fifteen minutes, and the person kept looking at their own message
+ * sitting there while the agent went on down the wrong path. Now it goes out on the first CLOSED block: the
+ * turn keeps standing, and the message enters it through streaming input.
  */
 /**
- * O RESPIRO DO TURNO — e o que ele NÃO pode ser (produção, 13/10/2026: "passo uma tarefa e vejo que
- * ela demora um pouco").
+ * THE TURN'S BREATHER — and what it CANNOT be (production, 13/10/2026: "I hand over a task and see that
+ * it takes a while").
  *
- * A fila anda no respiro, não só no fim do turno. Só que "respiro" não é "nada rodando": a linha
- * mais nova de um turno trabalhando é quase sempre uma FERRAMENTA, que é justamente onde o tempo
- * passa — medido num transcript real deste painel, 11s na mediana de uma chamada de ferramenta até
- * o próximo bloco fechado, 31s no p90, 71s no pior caso. Esperar isso com o fio de pé e o CLI
- * pronto era a lentidão que o dono via. Respiro é a ausência de uma FRASE PELA METADE: texto ou
- * raciocínio escorrendo, espera; ferramenta em curso, vai — o CLI enfileira e o modelo lê no passo
- * seguinte (ver `turnHasRoomForMore`).
+ * The queue moves on the breather, not only at the end of the turn. But "breather" is not "nothing running": the
+ * newest line of a working turn is almost always a TOOL, which is exactly where the time
+ * goes — measured on a real transcript of this panel, 11s median from a tool call to
+ * the next closed block, 31s at p90, 71s in the worst case. Waiting that long with the wire up and the CLI
+ * ready was the slowness the owner saw. A breather is the absence of a HALF-FINISHED SENTENCE: text or
+ * reasoning streaming, wait; tool in progress, go — the CLI queues it and the model reads it on the next
+ * step (see `turnHasRoomForMore`).
  */
 describe("SdkChatView — a fila anda no respiro do turno, não só no fim", () => {
   it("ferramenta rodando: a mensagem SOBE na hora — é aí que o turno passa o tempo dele", async () => {
@@ -3458,13 +3458,13 @@ describe("SdkChatView — a fila anda no respiro do turno, não só no fim", () 
     ws.deliver({ type: "assistant_text", text: "vou olhar" });
     ws.deliver({ type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } });
 
-    // escrita COM a ferramenta já rodando: nada disso é uma frase pela metade
+    // written WITH the tool already running: none of this is a half-finished sentence
     await userEvent.type(box, "o que você tá fazendo ?{Enter}");
 
     await waitFor(() => expect(ws.sent.length).toBe(2));
     expect(JSON.parse(ws.sent[1]!)).toMatchObject({ type: "user", text: "o que você tá fazendo ?" });
     await waitFor(() => expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument());
-    // e nada disso precisou do fim do turno: NENHUM `result` foi entregue nesta conversa
+    // and none of this needed the end of the turn: NO `result` was delivered in this conversation
     expect(screen.getByTestId("sdk-chat-working")).toBeInTheDocument();
   });
 
@@ -3480,9 +3480,9 @@ describe("SdkChatView — a fila anda no respiro do turno, não só no fim", () 
 
     await userEvent.type(box, "o que você tá fazendo ?{Enter}");
     await screen.findByTestId("sdk-queued");
-    expect(ws.sent.length).toBe(1); // no meio de uma frase, não
+    expect(ws.sent.length).toBe(1); // in the middle of a sentence, no
 
-    ws.deliver({ type: "assistant_text", text: "os testes passaram" }); // o respiro
+    ws.deliver({ type: "assistant_text", text: "os testes passaram" }); // the breather
 
     await waitFor(() => expect(ws.sent.length).toBe(2));
     expect(JSON.parse(ws.sent[1]!)).toMatchObject({ type: "user", text: "o que você tá fazendo ?" });
@@ -3503,16 +3503,16 @@ describe("SdkChatView — a fila anda no respiro do turno, não só no fim", () 
     await userEvent.type(box, "recado dois{Enter}");
     await waitFor(() => expect(screen.getAllByTestId("sdk-queued")).toHaveLength(2));
 
-    ws.deliver({ type: "assistant_text", text: "os testes passaram" }); // um respiro
-    ws.deliver({ type: "turn_absorbed" }); // o driver confirma a dobra da primeira
+    ws.deliver({ type: "assistant_text", text: "os testes passaram" }); // a breather
+    ws.deliver({ type: "turn_absorbed" }); // the driver confirms the fold of the first one
 
     await waitFor(() => expect(ws.sent.length).toBe(2));
     expect(JSON.parse(ws.sent[1]!)).toMatchObject({ text: "recado um" });
-    // a segunda NÃO foi junto: a linha mais nova é a que subiu, e o modelo ainda não reagiu
+    // the second did NOT go along: the newest line is the one that went up, and the model has not reacted yet
     expect(screen.getAllByTestId("sdk-queued")).toHaveLength(1);
     expect(screen.getByTestId("sdk-queued")).toHaveTextContent("recado dois");
 
-    // o passo seguinte do modelo é a reação — e é ele que abre o respiro da próxima
+    // the model's next step is the reaction — and it is what opens the breather for the next one
     ws.deliver({ type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } });
     await waitFor(() => expect(ws.sent.length).toBe(3));
     expect(JSON.parse(ws.sent[2]!)).toMatchObject({ text: "recado dois" });
@@ -3520,13 +3520,13 @@ describe("SdkChatView — a fila anda no respiro do turno, não só no fim", () 
 });
 
 /**
- * "PARECE MENSAGEM GENÉRICA" (César, 2026-09-28): o que mais se via num turno longo era
- * "ferramenta demorada, ainda rodando" — a mesma frase para qualquer ferramenta, escolhida por uma
- * tabela a partir do relógio. O raciocínio do modelo e a descrição que ele mesmo escreveu para o
- * comando estavam a um passo dali, no estado, e nunca chegavam à tela.
+ * "PARECE MENSAGEM GENÉRICA" (César, 2026-09-28): what showed up most in a long turn was
+ * "ferramenta demorada, ainda rodando" — the same sentence for any tool, picked by a
+ * table from the clock. The model's reasoning and the description it wrote itself for the
+ * command were one step away, in the state, and never reached the screen.
  *
- * Agora a palavra do modelo ganha da frase pronta. A enlatada segue existindo para quando não há
- * nada a dizer — o "Preparando…" de uma sessão subindo não tem raciocínio nenhum para mostrar.
+ * Now the model's word beats the canned sentence. The canned one still exists for when there is
+ * nothing to say — the "Preparando…" of a session starting up has no reasoning at all to show.
  */
 describe("SdkChatView — o indicador diz o que a IA está dizendo", () => {
   it("ferramenta rodando: mostra a descrição do AGENTE, não 'rodando ferramenta'", async () => {
@@ -3579,8 +3579,8 @@ describe("SdkChatView — o indicador diz o que a IA está dizendo", () => {
     const ws = await socket();
     ws.accept();
     const box = screen.getByTestId("terminal-composer").querySelector("textarea")!;
-    await userEvent.type(box, "sobe pra prod{Enter}"); // sem `ready`: a sessão ainda está subindo
-    // forçada pela pessoa, ela sai mesmo assim — e a sessão ainda não tem o que dizer
+    await userEvent.type(box, "sobe pra prod{Enter}"); // no `ready`: the session is still starting up
+    // forced by the person, it goes out anyway — and the session has nothing to say yet
     await userEvent.click(screen.getByTestId("sdk-queued-send-now"));
     await waitFor(() => expect(ws.sent.length).toBe(1));
 
@@ -3646,7 +3646,7 @@ describe("SdkChatView — o painel da frota do Workflow", () => {
     expect(screen.queryByTestId("sdk-workflow-result")).toBeNull();
     await userEvent.click(agent);
     expect(await screen.findByTestId("sdk-workflow-result")).toHaveTextContent("estoque negativo");
-    await userEvent.click(agent); // e fecha de novo
+    await userEvent.click(agent); // and closes again
     expect(screen.queryByTestId("sdk-workflow-result")).toBeNull();
   });
 
@@ -3670,7 +3670,7 @@ describe("SdkChatView — o painel da frota do Workflow", () => {
     expect(await screen.findByTestId("sdk-workflow-agent")).toBeInTheDocument();
     ws.deliver({ ...run, at: 2, finished: true });
     await waitFor(() => expect(screen.getByTestId("sdk-workflow")).toHaveAttribute("data-finished", "true"));
-    expect(screen.queryByTestId("sdk-workflow-agent")).toBeNull(); // recolhida
+    expect(screen.queryByTestId("sdk-workflow-agent")).toBeNull(); // collapsed
     expect(screen.getByTestId("sdk-workflow-count")).toHaveTextContent(/1\/1/);
     expect(screen.getByTestId("sdk-workflow")).toHaveTextContent(/concluído|done/);
   });
@@ -3706,9 +3706,9 @@ describe("SdkChatView — o painel da frota do Workflow", () => {
 });
 
 /**
- * O RACIOCÍNIO TRADUZIDO NA TELA. O modelo não recebe mais instrução de idioma (era o gatilho do
- * bloqueio do Opus, e nem funcionava sempre): o navegador traduz o bloco TERMINADO, com o tradutor
- * local do Chrome/Edge — zero token. Sem a API, o original, e nada quebra.
+ * THE REASONING TRANSLATED ON SCREEN. The model no longer receives a language instruction (it was the trigger of
+ * Opus's blocking, and did not even always work): the browser translates the FINISHED block, with Chrome/Edge's
+ * local translator — zero tokens. Without the API, the original, and nothing breaks.
  */
 describe("SdkChatView — o raciocínio traduzido no navegador", () => {
   const translate = vi.fn(async (text: string) => `[pt] ${text}`);
@@ -3727,8 +3727,8 @@ describe("SdkChatView — o raciocínio traduzido no navegador", () => {
     vi.stubGlobal("Translator", Translator);
     vi.stubGlobal("LanguageDetector", LanguageDetector);
   });
-  // O idioma é global e persistido: deixá-lo trocado vazaria para os outros arquivos de teste.
-  // os globais (Translator, LanguageDetector) o afterEach de fora desfaz, junto com o WebSocket
+  // The language is global and persisted: leaving it switched would leak into the other test files.
+  // the globals (Translator, LanguageDetector) are undone by the outer afterEach, along with the WebSocket
   afterEach(() => {
     resetReasoningTranslatorForTesting();
     act(() => resetLanguage());
@@ -3792,8 +3792,8 @@ describe("SdkChatView — o raciocínio traduzido no navegador", () => {
     expect(screen.queryByTestId("sdk-thinking-original-toggle")).toBeNull();
   });
 
-  // LOW-4 da revisão: baixar o modelo CONSOME o gesto. No pointerdown em captura, o primeiro clique
-  // da pessoa perdia o gesto antes do próprio app (popup, tela cheia). No click, o app já agiu.
+  // LOW-4 from the review: downloading the model CONSUMES the gesture. On pointerdown in capture, the person's first
+  // click lost the gesture before the app itself (popup, fullscreen). On click, the app has already acted.
   it("o tradutor é preparado no click, DEPOIS do app — nunca no pointerdown em captura", async () => {
     setLanguage("pt-BR");
     renderSdkChat();
@@ -3814,7 +3814,7 @@ describe("SdkChatView — o raciocínio traduzido no navegador", () => {
   });
 });
 
-/* ------------------------------------------- duas pessoas no mesmo card */
+/* ------------------------------------------- two people on the same card */
 
 describe("SdkChatView — quem escreve e quem está digitando", () => {
   const OPERATOR = { id: "1", username: "operator", role: "owner" };
@@ -3824,7 +3824,7 @@ describe("SdkChatView — quem escreve e quem está digitando", () => {
   beforeEach(() => {
     me = OPERATOR;
     localStorage.clear();
-    // os blocos anteriores podem deixar o idioma em pt-BR; as frases aqui são afirmadas em inglês
+    // the previous blocks may leave the language in pt-BR; the sentences here are asserted in English
     setLanguage("en");
     vi.mocked(get).mockImplementation(((url: string) =>
       url === "/auth/me"
@@ -3838,7 +3838,7 @@ describe("SdkChatView — quem escreve e quem está digitando", () => {
     resetLanguage();
   });
 
-  /** Espera a tela saber quem é o leitor (o `/auth/me` resolveu). */
+  /** Waits for the screen to know who the reader is (`/auth/me` resolved). */
   async function signedIn(): Promise<void> {
     await waitFor(() => expect(vi.mocked(get)).toHaveBeenCalledWith("/auth/me"));
     await act(async () => { await Promise.resolve(); });
@@ -3858,7 +3858,7 @@ describe("SdkChatView — quem escreve e quem está digitando", () => {
     expect(await screen.findByTestId("sdk-user-undelivered")).toBeInTheDocument();
     expect(screen.getByTestId("sdk-user")).toHaveTextContent("de outra pessoa");
     expect(ws.sent).toHaveLength(0);
-    // Nem o reenvio automático a manda: sairia no nome de quem está na aba.
+    // Not even the automatic resend sends it: it would go out under the name of whoever is on the tab.
     expect(screen.queryByTestId("sdk-user-retrying")).not.toBeInTheDocument();
   });
 
@@ -3913,9 +3913,9 @@ describe("SdkChatView — quem escreve e quem está digitando", () => {
     await signedIn();
     await userEvent.type(screen.getByRole("textbox"), "continua nao para{Enter}");
     await waitFor(() => expect(ws.sent.length).toBe(1));
-    // para quem escreveu, é a própria bolha: sem nome de autor
+    // for whoever wrote it, it is their own bubble: no author name
     expect(screen.getByTestId("sdk-user")).not.toHaveAttribute("data-role");
-    // troca de conta antes do recibo: o outbox guarda a cópia, e a nova conexão a redesenha
+    // account switch before the receipt: the outbox keeps the copy, and the new connection redraws it
     me = CESAR;
     await act(async () => { await queryClient.invalidateQueries({ queryKey: ME_KEY }); });
     await waitFor(() => expect(FakeSocket.instances.length).toBe(2));
@@ -3923,7 +3923,7 @@ describe("SdkChatView — quem escreve e quem está digitando", () => {
     next.accept();
     next.deliver({ type: "ready" });
     await waitFor(() => expect(screen.getByTestId("sdk-user")).toHaveTextContent("continua nao para"));
-    // para o cesar, ela é do operator — com o nome, não como se fosse dele
+    // for cesar, it belongs to the operator — with the name, not as if it were his
     expect(screen.getByTestId("sdk-user")).toHaveAttribute("data-role", "user");
     expect(screen.getByTestId("sdk-user")).toHaveTextContent("operator");
   });
@@ -3940,7 +3940,7 @@ describe("SdkChatView — quem escreve e quem está digitando", () => {
     const next = FakeSocket.instances[1]!;
     next.accept();
     next.deliver({ type: "ready" });
-    // só agora o navegador entrega o close do socket velho
+    // only now does the browser deliver the old socket's close
     act(() => ws.onclose?.());
     await userEvent.type(screen.getByRole("textbox"), "oi do cesar{Enter}");
     await waitFor(() => expect(next.sent.some((raw) => raw.includes("oi do cesar"))).toBe(true));
@@ -3958,7 +3958,7 @@ describe("SdkChatView — quem escreve e quem está digitando", () => {
     ws.deliver({ type: "assistant_delta", text: "Fazendo…" });
     await userEvent.type(box, "isto é do operator{Enter}");
     await screen.findByTestId("sdk-queue");
-    // troca de conta com a mensagem ainda esperando
+    // account switch with the message still waiting
     me = CESAR;
     await act(async () => { await queryClient.invalidateQueries({ queryKey: ME_KEY }); });
     await waitFor(() => expect(FakeSocket.instances.length).toBe(2));
@@ -3967,13 +3967,13 @@ describe("SdkChatView — quem escreve e quem está digitando", () => {
     next.deliver({ type: "ready" });
     next.deliver({ type: "result", isError: false });
     await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
-    // nada do operator saiu assinado pela conexão do cesar
+    // nothing from the operator went out signed by cesar's connection
     expect(next.sent.some((raw) => raw.includes("isto é do operator"))).toBe(false);
-    // ela continua na tela, como do operator, não entregue — e sem "Reenviar" para o cesar
+    // it stays on screen, as the operator's, undelivered — and without "Reenviar" for cesar
     const bubble = screen.getAllByTestId("sdk-user").find((el) => el.textContent?.includes("isto é do operator"));
     expect(bubble).toBeDefined();
     expect(bubble).toHaveTextContent("operator");
-    // (a primeira, sem recibo, também é do operator: nenhuma das duas oferece "Reenviar" ao cesar)
+    // (the first one, with no receipt, is also the operator's: neither of the two offers "Reenviar" to cesar)
     expect(screen.queryByTestId("sdk-user-resend")).toBeNull();
     expect(within(bubble!).getByTestId("sdk-user-undelivered")).toBeInTheDocument();
     expect(screen.queryByTestId("sdk-queue")).toBeNull();
@@ -4053,8 +4053,8 @@ describe("SdkChatView — quem escreve e quem está digitando", () => {
   });
 
   /**
-   * O RASCUNHO DE QUALQUER PESSOA SOBREVIVE (produção, 2026-11-03): o servidor guarda o que cada um
-   * marcou e devolve no attach — inclusive o MEU, para o aparelho ou a aba que não o tinha.
+   * ANYONE'S DRAFT SURVIVES (production, 2026-11-03): the server keeps what each one
+   * selected and returns it on attach — including MINE, for the device or tab that did not have it.
    */
   describe("cartão de pergunta — o que foi marcado volta de onde estiver", () => {
     const Q = {
@@ -4076,7 +4076,7 @@ describe("SdkChatView — quem escreve e quem está digitando", () => {
       ws.deliver({ type: "peer_question_draft", id: "q_back", name: "operator", picked: [["Faixa de capacidade"], []], other: ["", "pela placa"], at: 5_000, away: true });
       expect(screen.getByRole("button", { name: "Faixa de capacidade" })).toHaveAttribute("aria-pressed", "true");
       expect(screen.getAllByTestId("sdk-question-other")[1]).toHaveValue("pela placa");
-      // o que veio do servidor não volta para ele
+      // what came from the server does not go back to it
       expect(ws.sent.map((x) => JSON.parse(x)).filter((f) => f.type === "question_draft")).toEqual([]);
     });
 
@@ -4093,7 +4093,7 @@ describe("SdkChatView — quem escreve e quem está digitando", () => {
       ws.deliver({ type: "peer_question_draft", id: "q_back", name: "operator", picked: [["Faixa de capacidade"], []], other: ["", ""], at: 5_000 });
       expect(screen.getByRole("button", { name: "Tipo no cadastro" })).toHaveAttribute("aria-pressed", "true");
       expect(screen.getByRole("button", { name: "Faixa de capacidade" })).toHaveAttribute("aria-pressed", "false");
-      // e a daqui, mais nova, vai ao servidor com o horário dela
+      // and the one from here, newer, goes to the server with its timestamp
       const sent = ws.sent.map((x) => JSON.parse(x)).filter((f) => f.type === "question_draft");
       expect(sent.at(-1)).toMatchObject({ picked: [["Tipo no cadastro"], []], at: 9_000 });
     });
@@ -4131,13 +4131,13 @@ describe("SdkChatView — quem escreve e quem está digitando", () => {
 });
 
 /**
- * O CUSTO DO TRANSCRIPT. Cada token que chega (`assistant_delta`) e cada segundo do relógio do
- * turno re-renderizavam a conversa INTEIRA — toda bolha antiga redesenhada e todo Markdown
- * re-parseado, dezenas de vezes por segundo numa conversa longa (e é no celular que isso dói).
- * Uma linha que não mudou não tem o que redesenhar.
+ * THE TRANSCRIPT COST. Every token that arrives (`assistant_delta`) and every second of the turn's
+ * clock re-rendered the WHOLE conversation — every old bubble redrawn and every Markdown
+ * re-parsed, dozens of times per second in a long conversation (and it is on the phone that it hurts).
+ * A row that did not change has nothing to redraw.
  */
 describe("SdkChatView — o custo do transcript", () => {
-  /** Quantas vezes a bolha com este texto foi desenhada até agora. */
+  /** How many times the bubble with this text has been drawn so far. */
   function drawsOf(text: string): number {
     return vi.mocked(LinkifiedText).mock.calls.filter(([props]) => props.text === text).length;
   }
@@ -4150,8 +4150,8 @@ describe("SdkChatView — o custo do transcript", () => {
     ws.deliver({ type: "assistant_text", text: "a resposta antiga" });
     ws.deliver({ type: "ready" });
     ws.deliver({ type: "assistant_delta", text: "Come" });
-    // As consultas da montagem (o /auth/me redesenha toda linha pelo contexto) assentam antes da
-    // contagem: a espera abaixo pela linha viva não pode medir isso como se fosse culpa do token.
+    // The mount's queries (/auth/me redraws every row through the context) settle before the
+    // count: the wait below for the live row must not measure that as if it were the token's fault.
     await waitFor(() => expect(queryClient.isFetching()).toBe(0));
     await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
     const before = drawsOf("a mensagem antiga");
@@ -4161,7 +4161,7 @@ describe("SdkChatView — o custo do transcript", () => {
     ws.deliver({ type: "assistant_delta", text: " a nova" });
     ws.deliver({ type: "assistant_delta", text: " resposta" });
 
-    // a linha viva é re-parseada no máximo a cada 100ms (ver "o ritmo do streaming")
+    // the live row is re-parsed at most every 100ms (see "o ritmo do streaming")
     await waitFor(() => expect(screen.getAllByTestId("sdk-assistant")[1]).toHaveTextContent("Começando a nova resposta"));
     expect(drawsOf("a mensagem antiga")).toBe(before);
   });
@@ -4255,13 +4255,13 @@ describe("SdkChatView — /clear", () => {
 });
 
 /**
- * O DIFF da edição, como no Cursor: quando a IA altera código, o chat mostra só os trechos
- * alterados (+ verde, − vermelho, contador no cabeçalho) em vez da linha "Edit(arquivo)".
+ * The edit DIFF, like in Cursor: when the AI changes code, the chat shows only the changed
+ * hunks (+ green, − red, counter in the header) instead of the "Edit(file)" line.
  */
 describe("SdkChatView — o diff do que a IA editou", () => {
   const lines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i}`).join("\n");
-  // Desmonta ANTES do `resetLanguage()` do arquivo: trocar o idioma com a tela montada redesenha
-  // todo assinante do `useT` fora de um act(...) — os avisos que este bloco não pode somar.
+  // Unmounts BEFORE the file's `resetLanguage()`: switching the language with the screen mounted redraws
+  // every `useT` subscriber outside an act(...) — warnings this block cannot add.
   afterEach(() => cleanup());
 
   it("um Edit vira o card de diff: +1 −1, as linhas com sinal e o contexto", async () => {
@@ -4289,7 +4289,7 @@ describe("SdkChatView — o diff do que a IA editou", () => {
       ["del", "−const b = 2;"],
       ["add", "+const b = 3;"],
     ]);
-    // O que mudou dentro da linha vem destacado, dos dois lados.
+    // What changed inside the line comes highlighted, on both sides.
     expect(within(card).getAllByTestId("sdk-diff-mark").map((mark) => mark.textContent)).toEqual(["2", "3"]);
   });
 
@@ -4339,9 +4339,9 @@ describe("SdkChatView — o diff do que a IA editou", () => {
   });
 
   /**
-   * A IA "ENGASGADA": enquanto o modelo escrevia o input de um Write grande, a tela ficava só em
-   * "Trabalhando…" por dezenas de segundos. Agora a linha provisória diz o que está sendo escrito e
-   * quanto, e o `tool_use` completo vira o card de diff NO LUGAR dela — nunca um segundo card.
+   * THE "CHOKING" AI: while the model wrote the input of a large Write, the screen stayed only on
+   * "Trabalhando…" for dozens of seconds. Now the provisional row says what is being written and
+   * how much, and the complete `tool_use` becomes the diff card IN ITS PLACE — never a second card.
    */
   it("durante a geração mostra 'Writing x… N KB'; com o tool_use completo fica um único card de diff", async () => {
     renderSdkChat();
@@ -4392,12 +4392,12 @@ describe("SdkChatView — o diff do que a IA editou", () => {
 });
 
 /**
- * O RITMO DO STREAMING. O driver manda um frame de socket por token, e cada frame virava um
- * setState: um render da conversa inteira por token, e o Markdown da resposta re-parseado do zero
- * a cada um — a resposta longa "engasgava" na tela e o campo de texto atrasava junto.
+ * THE STREAMING RHYTHM. The driver sends one socket frame per token, and each frame became a
+ * setState: one render of the whole conversation per token, and the answer's Markdown re-parsed from scratch
+ * on each one — the long answer "choked" on screen and the text field lagged along with it.
  */
 describe("SdkChatView — o ritmo do streaming", () => {
-  /** Quantas vezes o Markdown parseou um texto que começa assim. */
+  /** How many times Markdown parsed a text that starts like this. */
   function parsesOf(prefix: string): number {
     const inner = (Markdown as unknown as { type: { mock: { calls: [{ text: string }][] } } }).type;
     return inner.mock.calls.filter(([props]) => props.text.startsWith(prefix)).length;
@@ -4435,7 +4435,7 @@ describe("SdkChatView — o ritmo do streaming", () => {
     ws.receive({ type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } });
     ws.receive({ type: "assistant_delta", text: "Depois" });
 
-    // Sem nenhum frame de animação: o texto antes da ferramenta já está na tela, e no lugar dele.
+    // Without any animation frame: the text before the tool is already on screen, and in its place.
     const answer = screen.getAllByTestId("sdk-assistant")[0]!;
     expect(answer).toHaveTextContent("Vou rodar os testes.");
     expect(answer.compareDocumentPosition(screen.getByTestId("sdk-tool")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -4469,14 +4469,14 @@ describe("SdkChatView — o ritmo do streaming", () => {
     vi.useFakeTimers();
     try {
       ws.deliver({ type: "assistant_delta", text: "Resposta:" });
-      // 40 tokens, cada um no seu frame de animação, em menos de 100ms de relógio
+      // 40 tokens, each in its own animation frame, in under 100ms of clock
       for (let i = 0; i < 40; i++) {
         ws.deliver({ type: "assistant_delta", text: ` p${i}` });
         act(() => { vi.advanceTimersByTime(2); });
       }
       expect(parsesOf("Resposta:")).toBeLessThanOrEqual(3);
 
-      // passada a janela, a linha viva alcança o texto inteiro, mesmo sem token novo
+      // once the window has passed, the live row catches up with the whole text, even without a new token
       act(() => { vi.advanceTimersByTime(200); });
       expect(screen.getByTestId("sdk-assistant")).toHaveTextContent("p39");
     } finally {
@@ -4490,9 +4490,9 @@ describe("SdkChatView — o ritmo do streaming", () => {
 });
 
 /**
- * OS TOKENS DO FRAME E A AÇÃO LOCAL. Os tokens esperam o próximo frame de animação num buffer — e
- * uma ação da pessoa nesse meio-tempo (Enter, a correção, o Esc, o "enviar agora") não pode ser
- * julgada pela tela de um frame atrás, nem escrever na conversa ANTES do que já tinha chegado.
+ * THE FRAME'S TOKENS AND THE LOCAL ACTION. Tokens wait for the next animation frame in a buffer — and
+ * an action by the person in the meantime (Enter, the correction, Esc, "enviar agora") cannot be
+ * judged by the screen from one frame behind, nor write into the conversation BEFORE what had already arrived.
  */
 describe("SdkChatView — o buffer de tokens diante de uma ação local", () => {
   function follows(first: Element, second: Element): boolean {
@@ -4512,7 +4512,7 @@ describe("SdkChatView — o buffer de tokens diante de uma ação local", () => 
     const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
     await userEvent.type(box, "oi");
 
-    ws.receive({ type: "assistant_delta", text: "Começando" }); // sem frame de animação ainda
+    ws.receive({ type: "assistant_delta", text: "Começando" }); // no animation frame yet
     await userEvent.type(box, "{Enter}");
     runAnimationFrames();
 
@@ -4523,7 +4523,7 @@ describe("SdkChatView — o buffer de tokens diante de uma ação local", () => 
 
   it("a correção enviada com um turno aberto só no buffer PARA o turno antes — e nasce depois da resposta", async () => {
     const ws = await readyChat();
-    ws.deliver({ type: "user", text: "sobe pra prod" }); // replay: nenhum turno rodando
+    ws.deliver({ type: "user", text: "sobe pra prod" }); // replay: no turn running
     ws.deliver({ type: "ready" });
     const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
     await userEvent.click(screen.getByTestId("sdk-edit"));
@@ -4563,12 +4563,12 @@ describe("SdkChatView — o buffer de tokens diante de uma ação local", () => 
     ws.deliver({ type: "assistant_delta", text: "Fazendo…" });
     await userEvent.type(box, "depois isto{Enter}");
     await screen.findByTestId("sdk-queued");
-    await userEvent.click(screen.getByTestId("sdk-edit")); // a correção armada segura a fila
+    await userEvent.click(screen.getByTestId("sdk-edit")); // the armed correction holds the queue
     ws.deliver({ type: "result", isError: false });
     expect(ws.sent).toHaveLength(1);
 
-    ws.receive({ type: "assistant_delta", text: "Outro turno começando" }); // frase pela metade, no buffer
-    fireEvent.keyDown(box, { key: "Escape" }); // desisti da correção: a fila volta a poder andar
+    ws.receive({ type: "assistant_delta", text: "Outro turno começando" }); // half-finished sentence, in the buffer
+    fireEvent.keyDown(box, { key: "Escape" }); // gave up on the correction: the queue can move again
     runAnimationFrames();
 
     expect(ws.sent).toHaveLength(1);
@@ -4584,13 +4584,13 @@ describe("SdkChatView — o buffer de tokens diante de uma ação local", () => 
     ws.deliver({ type: "assistant_delta", text: "Fazendo…" });
     await userEvent.type(box, "o que você tá fazendo ?{Enter}");
     await screen.findByTestId("sdk-queued");
-    ws.receive({ type: "assistant_delta", text: " Analisando a saída" }); // ainda a mesma frase, no buffer
+    ws.receive({ type: "assistant_delta", text: " Analisando a saída" }); // still the same sentence, in the buffer
     await userEvent.click(screen.getByTestId("sdk-queued-send-now"));
     runAnimationFrames();
 
     await waitFor(() => expect(ws.sent.length).toBe(2));
-    // A resposta que ainda escorre é redesenhada a cada STREAMING_MARKDOWN_MS: o texto novo pode
-    // levar até essa janela para aparecer. Um token perdido no buffer nunca aparece — e falha aqui.
+    // The answer still streaming is redrawn every STREAMING_MARKDOWN_MS: the new text may
+    // take up to that window to appear. A token lost in the buffer never appears — and fails here.
     const answer = await waitFor(() => {
       const found = screen.getAllByTestId("sdk-assistant").find((el) => el.textContent?.includes("Analisando a saída"));
       expect(found).toBeDefined();
@@ -4607,7 +4607,7 @@ describe("SdkChatView — o buffer de tokens e a troca de conexão", () => {
     const ws = await socket();
     ws.accept();
     ws.deliver({ type: "ready" });
-    ws.receive({ type: "assistant_delta", text: "TOKEN-DO-CARD-1" }); // sem frame de animação ainda
+    ws.receive({ type: "assistant_delta", text: "TOKEN-DO-CARD-1" }); // no animation frame yet
 
     rerender(<SdkChatView cardId="c2" />);
     await waitFor(() => expect(FakeSocket.instances).toHaveLength(2));
@@ -4622,13 +4622,13 @@ describe("SdkChatView — o buffer de tokens e a troca de conexão", () => {
 
 describe("SdkChatView — o buffer de tokens e a queda do fio", () => {
   /**
-   * O que garante isto é a ORDEM dos timers: o do buffer (100ms) nasce antes do da reconexão (400ms
-   * no mínimo) e dispara primeiro, então o `onopen` seguinte — que limpa a tela para o replay —
-   * nunca encontra token da conexão morta para pingar por cima do histórico.
+   * What guarantees this is the ORDER of the timers: the buffer's (100ms) is born before the reconnect's (400ms
+   * at minimum) and fires first, so the next `onopen` — which clears the screen for the replay —
+   * never finds a token from the dead connection to drip on top of the history.
    */
   it("o token que estava no buffer quando o fio caiu não reaparece por cima do replay", async () => {
-    // Só o relógio é falso: o frame de animação continua na mão do teste e NÃO dispara (a aba em
-    // segundo plano) — quem esvazia o buffer aqui é o timer.
+    // Only the clock is fake: the animation frame stays in the test's hands and does NOT fire (the tab in
+    // the background) — what empties the buffer here is the timer.
     vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
     try {
       renderSdkChat();
@@ -4636,13 +4636,13 @@ describe("SdkChatView — o buffer de tokens e a queda do fio", () => {
       first.accept();
       first.deliver({ type: "ready" });
       first.deliver({ type: "assistant_delta", text: "Começo" });
-      first.receive({ type: "assistant_delta", text: " da resposta" }); // sem frame de animação
+      first.receive({ type: "assistant_delta", text: " da resposta" }); // no animation frame
 
       act(() => { first.readyState = 3; first.onclose?.(); });
       await act(async () => { await vi.advanceTimersByTimeAsync(RECONNECT_MAX_MS); });
       const second = FakeSocket.instances[1] as FakeSocket;
       second.accept();
-      second.deliver({ type: "user", text: "explica o deploy" }); // o replay do disco
+      second.deliver({ type: "user", text: "explica o deploy" }); // the replay from disk
       second.deliver({ type: "assistant_text", text: "Começo da resposta" });
       second.deliver({ type: "ready" });
       runAnimationFrames();
@@ -4656,8 +4656,8 @@ describe("SdkChatView — o buffer de tokens e a queda do fio", () => {
 });
 
 /**
- * O AVISO DE LIMITE DO PLANO — o "You've used 91% of your session limit" do rodapé do terminal, no
- * canto direito da faixa do "está digitando", na cor de quanto falta.
+ * THE PLAN LIMIT WARNING — the "You've used 91% of your session limit" from the terminal's footer, in the
+ * right corner of the "está digitando" strip, in the color of how much is left.
  */
 describe("SdkChatView — o aviso de limite do plano", () => {
   afterEach(() => cleanup());
@@ -4695,8 +4695,8 @@ describe("SdkChatView — o aviso de limite do plano", () => {
 });
 
 /**
- * O MEDIDOR DE CONTEXTO — quanto da janela a conversa ocupa, no canto inferior direito do log. A cor
- * desliza com o percentual; o guia (tooltip) mostra as três faixas com a de agora em destaque.
+ * THE CONTEXT METER — how much of the window the conversation takes, in the bottom right corner of the log. The color
+ * slides with the percentage; the guide (tooltip) shows the three bands with the current one highlighted.
  */
 describe("SdkChatView — o medidor de contexto", () => {
   afterEach(() => cleanup());
@@ -4720,7 +4720,7 @@ describe("SdkChatView — o medidor de contexto", () => {
     expect(screen.getByTestId("context-meter").getAttribute("data-zone")).toBe("danger");
     expect(screen.getByTestId("context-meter-fill").style.backgroundColor).not.toBe(cool);
 
-    // Uma leitura torta não apaga a que vale.
+    // A skewed reading does not erase the one that counts.
     ws.deliver({ type: "context_usage", usedTokens: 10 } as SdkEvent);
     expect(screen.getByTestId("context-meter-value")).toHaveTextContent("70%");
 
@@ -4737,7 +4737,7 @@ describe("SdkChatView — o medidor de contexto", () => {
     const corner = screen.getByTestId("sdk-context-corner");
     expect(corner).toContainElement(screen.getByTestId("context-meter"));
     expect(corner).toHaveClass("absolute", "bottom-3", "right-4");
-    // Mesma caixa do log: o canto é irmão do scroller, dentro do mesmo invólucro.
+    // Same box as the log: the corner is a sibling of the scroller, inside the same wrapper.
     expect(corner.parentElement).toContainElement(screen.getByTestId("sdk-chat-scroller"));
     expect(screen.getByTestId("terminal-composer").previousElementSibling).not.toContainElement(screen.getByTestId("context-meter"));
   });
@@ -4749,17 +4749,17 @@ describe("SdkChatView — o medidor de contexto", () => {
     ws.deliver({ type: "user", text: "oi" });
     ws.deliver({ type: "assistant_text", text: "Pronto." });
     ws.deliver({ type: "result", isError: false });
-    // A retomada da sessão não vira linha no log: a resposta continua sendo a última.
+    // Resuming the session does not become a row in the log: the answer is still the last one.
     ws.deliver({ type: "ready", resume: "bfe63d25-95df-4c86-bf34-047b1366cc02" } as SdkEvent);
     ws.deliver({ type: "context_usage", usedTokens: 24_000, maxTokens: 200_000, percent: 12 } as SdkEvent);
     const scroller = screen.getByTestId("sdk-chat-scroller");
     expect(screen.queryByText(/Retomando a sessão/)).toBeNull();
-    // Mesma linha dos ícones, sem faixa extra nem pílula flutuando.
+    // Same row as the icons, with no extra strip nor floating pill.
     expect(screen.getByTestId("sdk-answer-actions")).toContainElement(screen.getByTestId("context-meter"));
     expect(screen.queryByTestId("sdk-context-corner")).toBeNull();
     expect(scroller).not.toHaveClass("pb-10");
 
-    // A última linha agora é a bolha do usuário, à direita: o medidor vai ao canto e o log reserva a faixa.
+    // The last row is now the user's bubble, on the right: the meter goes to the corner and the log reserves the strip.
     ws.deliver({ type: "user", text: "mais uma" });
     expect(screen.getByTestId("sdk-context-corner")).toContainElement(screen.getByTestId("context-meter"));
     expect(screen.getByTestId("sdk-answer-actions")).not.toContainElement(screen.queryByTestId("context-meter"));
@@ -4827,10 +4827,10 @@ describe("SdkChatView — o medidor de contexto", () => {
 
     fireEvent.click(screen.getByTestId("context-notice-dismiss"));
     expect(screen.queryByTestId("context-notice")).toBeNull();
-    // Escondido o aviso, o medidor continua dizendo "atenção".
+    // With the warning hidden, the meter still says "attention".
     expect(screen.getByTestId("context-meter")).toHaveTextContent("attention");
 
-    // Chegou no perigo: a faixa volta, vermelha, e sem botão de esconder.
+    // It reached danger: the strip comes back, red, and without a hide button.
     ws.deliver({ type: "context_usage", usedTokens: 130_000, maxTokens: 200_000, percent: 65 } as SdkEvent);
     const danger = screen.getByTestId("context-notice");
     expect(danger.getAttribute("data-zone")).toBe("danger");
@@ -4839,7 +4839,7 @@ describe("SdkChatView — o medidor de contexto", () => {
     expect(screen.queryByTestId("context-notice-dismiss")).toBeNull();
     expect(screen.getByTestId("context-meter")).toHaveTextContent("danger");
 
-    // Um /compact traz de volta à faixa inteligente: some tudo, e o próximo aviso volta a aparecer.
+    // A /compact brings it back to the smart band: everything goes away, and the next warning shows up again.
     ws.deliver({ type: "context_usage", usedTokens: 20_000, maxTokens: 200_000, percent: 10 } as SdkEvent);
     expect(screen.queryByTestId("context-notice")).toBeNull();
     ws.deliver({ type: "context_usage", usedTokens: 70_000, maxTokens: 200_000, percent: 35 } as SdkEvent);
@@ -4855,12 +4855,12 @@ describe("SdkChatView — o medidor de contexto", () => {
     fireEvent.click(screen.getByTestId("context-notice-dismiss"));
     expect(screen.queryByTestId("context-notice")).toBeNull();
 
-    // Reconexão: o `ready` zera a leitura e o back reenvia a mesma logo atrás.
+    // Reconnect: `ready` resets the reading and the back resends the same one right behind it.
     ws.deliver({ type: "ready" });
     ws.deliver({ type: "context_usage", usedTokens: 86_000, maxTokens: 200_000, percent: 43 } as SdkEvent);
     expect(screen.queryByTestId("context-notice")).toBeNull();
 
-    // Foi ao perigo e voltou (um /compact parcial): o aviso preocupante aparece de novo.
+    // It went to danger and came back (a partial /compact): the worrying warning shows up again.
     ws.deliver({ type: "context_usage", usedTokens: 130_000, maxTokens: 200_000, percent: 65 } as SdkEvent);
     ws.deliver({ type: "context_usage", usedTokens: 100_000, maxTokens: 200_000, percent: 50 } as SdkEvent);
     expect(screen.getByTestId("context-notice").getAttribute("data-zone")).toBe("warn");
@@ -4891,10 +4891,10 @@ describe("SdkChatView — o medidor de contexto", () => {
 });
 
 /**
- * A SEQUÊNCIA DE PRODUÇÃO (card review-entrada-mercadoria-albert, 2026-10-19): a mensagem não foi
- * por causa de um erro, a pessoa editou, e depois editou DE NOVO a editada — sem mudar as palavras.
- * Era para ser UMA mensagem sobrescrita; a tela chegou a mostrar três. Aqui, os eventos exatos que o
- * log daquele card tem, ao vivo e depois de uma reconexão.
+ * THE PRODUCTION SEQUENCE (card review-entrada-mercadoria-albert, 2026-10-19): the message did not go
+ * because of an error, the person edited it, and then edited the edited one AGAIN — without changing the words.
+ * It should have been ONE overwritten message; the screen got to show three. Here, the exact events that
+ * card's log has, live and after a reconnect.
  */
 describe("SdkChatView — editar de novo a mensagem editada sobrescreve, não empilha", () => {
   const A = "eu preciso que voce seja mais clara";
@@ -4949,9 +4949,9 @@ describe("SdkChatView — editar de novo a mensagem editada sobrescreve, não em
 });
 
 /**
- * A SEQUÊNCIA DE PRODUÇÃO (card mcp-chat-gpt, 2026-10-19): a primeira mensagem morreu num erro de
- * autenticação e foi reenviada com as MESMAS palavras. Editar a PRIMEIRA bolha tinha de deixar só a
- * versão nova — mas tela, log e driver acham a mensagem pelas palavras e pegavam a cópia mais nova:
+ * THE PRODUCTION SEQUENCE (card mcp-chat-gpt, 2026-10-19): the first message died on an
+ * authentication error and was resent with the SAME words. Editing the FIRST bubble had to leave only the
+ * new version — but screen, log and driver find the message by its words and picked the newest copy:
  * "ficou como se eu tivesse editado a segunda".
  */
 describe("SdkChatView — editar a PRIMEIRA mensagem, reenviada com as mesmas palavras", () => {
@@ -5009,10 +5009,10 @@ describe("SdkChatView — editar a PRIMEIRA mensagem, reenviada com as mesmas pa
 });
 
 /**
- * RECARREGAR NÃO PARA A IA. A aba recarrega sozinha numa versão nova do vibehub (lib/versionCheck)
- * e a pessoa dá F5 quando quer: nenhum dos dois pode interromper o trabalho. O turno vive no
- * servidor (manager.test: "sem página, turno vivo"); o lado da tela é este — sair da página no meio
- * de um turno só fecha o socket, nunca manda `interrupt`.
+ * RELOADING DOES NOT STOP THE AI. The tab reloads by itself on a new vibehub version (lib/versionCheck)
+ * and the person presses F5 whenever they want: neither of the two may interrupt the work. The turn lives on the
+ * server (manager.test: "sem página, turno vivo"); the screen side is this one — leaving the page in the middle
+ * of a turn only closes the socket, never sends `interrupt`.
  */
 describe("SdkChatView — sair da página no meio de um turno não interrompe nada", () => {
   it("desmontar com o turno rodando não manda interrupt", async () => {
@@ -5032,7 +5032,7 @@ describe("SdkChatView — sair da página no meio de um turno não interrompe na
   });
 });
 
-/** VER O QUE O CLAUDE ESTÁ FAZENDO: cada ação diz como terminou, e o clique abre o detalhe. */
+/** SEE WHAT CLAUDE IS DOING: each action says how it ended, and the click opens the detail. */
 describe("SdkChatView — o detalhe de cada ação", () => {
   const detailAsks = (ws: FakeSocket) =>
     ws.sent.map((f) => JSON.parse(f) as { type: string; req?: string; id?: string; nonce?: string }).filter((f) => f.type === "detail");
@@ -5079,13 +5079,13 @@ describe("SdkChatView — o detalhe de cada ação", () => {
     const dialog = await screen.findByTestId("sdk-detail");
     await waitFor(() => expect(detailAsks(ws).filter((f) => f.id === "r1")).toHaveLength(1));
     const first = detailAsks(ws).find((f) => f.id === "r1")!;
-    // O transcript só tem a chamada: sem resultado ainda.
+    // The transcript only has the call: no result yet.
     ws.deliver({ type: "detail", req: "tool", id: "r1", nonce: first.nonce, data: { found: true, by: "main", name: "Bash", input: { command: "npx vitest run" }, startedAt: 1 } } as never);
     expect(await within(dialog).findByTestId("sdk-detail-pending")).toHaveTextContent("Still running");
     expect(within(dialog).queryByText("The command finished without printing anything.")).toBeNull();
     expect(within(dialog).queryByTestId("sdk-detail-missing")).toBeNull();
 
-    // O comando termina: o modal pede de novo sozinho e mostra a saída.
+    // The command finishes: the modal asks again by itself and shows the output.
     ws.deliver({ type: "tool_result", id: "r1", toolResult: { lines: 1 } });
     await waitFor(() => expect(detailAsks(ws).filter((f) => f.id === "r1").length).toBeGreaterThan(1));
     const again = detailAsks(ws).filter((f) => f.id === "r1").at(-1)!;
@@ -5128,7 +5128,7 @@ describe("SdkChatView — o detalhe de cada ação", () => {
       expect(within(dialog).getByTestId("sdk-detail-bg")).toHaveAttribute("data-bg-status", "running");
       expect(within(dialog).queryByText("The command finished without printing anything.")).toBeNull();
 
-      // Rodando em segundo plano: pede de novo sozinho e a saída cresce na tela.
+      // Running in the background: it asks again by itself and the output grows on screen.
       const asked = detailAsks(ws).filter((f) => f.id === "g1").length;
       await act(async () => { await vi.advanceTimersByTimeAsync(ACTION_POLL_MS + 100); });
       await waitFor(() => expect(detailAsks(ws).filter((f) => f.id === "g1").length).toBeGreaterThan(asked));
@@ -5136,7 +5136,7 @@ describe("SdkChatView — o detalhe de cada ação", () => {
       expect(await within(dialog).findByText("pronto")).toBeInTheDocument();
       await waitFor(() => expect(within(dialog).getByTestId("sdk-detail-status")).toHaveAttribute("data-status", "ok"));
 
-      // Terminou: para de pedir.
+      // Finished: it stops asking.
       const done = detailAsks(ws).filter((f) => f.id === "g1").length;
       await act(async () => { await vi.advanceTimersByTimeAsync(ACTION_POLL_MS * 3); });
       expect(detailAsks(ws).filter((f) => f.id === "g1").length).toBe(done);
@@ -5200,7 +5200,7 @@ describe("SdkChatView — o detalhe de cada ação", () => {
     dialog = await screen.findByTestId("sdk-detail");
     expect(within(dialog).getByText("README.md")).toBeInTheDocument();
     expect(within(dialog).queryByTestId("sdk-detail-loading")).toBeNull();
-    // E ainda pede de novo, para atualizar por cima.
+    // And it still asks again, to refresh on top.
     await waitFor(() => expect(detailAsks(ws).filter((f) => f.id === "c1")).toHaveLength(2));
   });
 
@@ -5233,27 +5233,27 @@ describe("SdkChatView — o detalhe de cada ação", () => {
   });
 });
 
-/** O F5 no meio do carregamento (produção, 2026-10-20) — ver `send` e `outboxToQueue`. */
+/** The F5 in the middle of loading (production, 2026-10-20) — see `send` and `outboxToQueue`. */
 describe("SdkChatView — mensagem enviada durante o carregamento sobrevive ao F5", () => {
   beforeEach(() => localStorage.clear());
 
   it("enviada com o chat carregando, F5 antes do recibo: no reload ela sai sozinha, sem 'não entregue'", async () => {
     const { unmount } = renderSdkChat();
     const first = await socket();
-    first.accept(); // o aperto de mão terminou, mas o back ainda monta a conexão (sem `ready`)
+    first.accept(); // the handshake finished, but the back is still setting up the connection (no `ready`)
     first.deliver({ type: "user", text: "pedido antigo", at: 1 });
     await userEvent.type(screen.getByRole("textbox"), "atualize meus prs com dev{Enter}");
-    // Nada sai antes do `ready`: o back só a guardaria num buffer que o F5 joga fora.
+    // Nothing goes out before `ready`: the back would only keep it in a buffer that the F5 throws away.
     expect(first.sent).toHaveLength(0);
     expect(screen.getByTestId("sdk-queued")).toHaveTextContent("atualize meus prs com dev");
 
-    // F5 antes do `ready`.
+    // F5 before `ready`.
     unmount();
     renderSdkChat();
     await waitFor(() => expect(FakeSocket.instances.length).toBe(2));
     const second = FakeSocket.instances[1] as FakeSocket;
     second.accept();
-    second.deliver({ type: "user", text: "pedido antigo", at: 1 }); // o servidor não tem a nova
+    second.deliver({ type: "user", text: "pedido antigo", at: 1 }); // the server does not have the new one
     second.deliver({ type: "ready" });
 
     await waitFor(() => expect(second.sent).toHaveLength(1));
@@ -5264,7 +5264,7 @@ describe("SdkChatView — mensagem enviada durante o carregamento sobrevive ao F
     expect(screen.queryByTestId("sdk-user-undelivered")).not.toBeInTheDocument();
     expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument();
 
-    // O recibo chega: a cópia em disco é esquecida, a bolha é uma mensagem normal.
+    // The receipt arrives: the copy on disk is forgotten, the bubble is a normal message.
     second.deliver({ type: "user_ack", cid: frame.cid } as SdkEvent);
     await waitFor(() => expect(screen.getAllByTestId("sdk-user")[1]).toHaveAttribute("data-state", "sent"));
     await waitFor(() => expect(localStorage.getItem("vibehub.sdkOutbox.c1")).toBeNull());
@@ -5289,8 +5289,8 @@ describe("SdkChatView — mensagem enviada durante o carregamento sobrevive ao F
     expect(screen.getByTestId("sdk-queued")).toHaveTextContent("segunda");
   });
 
-  // A mensagem escrita no "Preparando…" do card (CardTerminalView) espera nesta fila, antes de o
-  // chat existir: ele a encontra ao montar e a entrega quando o servidor fica pronto.
+  // The message written during the card's "Preparando…" (CardTerminalView) waits in this queue, before the
+  // chat exists: it finds it when mounting and delivers it when the server becomes ready.
   it("a fila deixada pelo 'Preparando…' do card sai quando o chat fica pronto", async () => {
     localStorage.setItem(
       "vibehub.sdkQueue.c1",
@@ -5323,9 +5323,9 @@ describe("SdkChatView — mensagem enviada durante o carregamento sobrevive ao F
 });
 
 /**
- * O /btw: a pergunta LATERAL, feita justamente com o turno rodando. Esperar na fila seria esperar o
- * fim do turno — o oposto do comando —, então ela sai na hora, não acende o "Preparando…" e a
- * resposta aparece como linha própria, nunca como bolha do Claude.
+ * The /btw: the SIDE question, asked precisely with the turn running. Waiting in the queue would mean waiting for the
+ * end of the turn — the opposite of the command —, so it goes out right away, does not light "Preparando…" and the
+ * answer shows up as its own row, never as a Claude bubble.
  */
 describe("SdkChatView — /btw", () => {
   it("com o fio caído NÃO vai pra fila (lá viraria um turno do agente): avisa e mantém as palavras", async () => {
@@ -5351,7 +5351,7 @@ describe("SdkChatView — /btw", () => {
     const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
     await userEvent.type(box, "faz a tarefa{Enter}");
     await waitFor(() => expect(ws.sent.length).toBe(1));
-    ws.deliver({ type: "assistant_delta", text: "Fazendo…" }); // o turno está rodando
+    ws.deliver({ type: "assistant_delta", text: "Fazendo…" }); // the turn is running
 
     await userEvent.type(box, "/btw o que falta?{Enter}");
     await waitFor(() => expect(ws.sent.length).toBe(2));
@@ -5363,7 +5363,7 @@ describe("SdkChatView — /btw", () => {
     expect(within(pendente).getByLabelText(/Answering…|Respondendo…/)).toBeInTheDocument();
     expect(pendente).not.toHaveTextContent(/Side question|Pergunta lateral/);
     expect(within(pendente).getByTitle(/Side question|Pergunta lateral/)).toBeInTheDocument();
-    // Destacada com cabeçalho próprio, para não se perder no meio do raciocínio do turno.
+    // Highlighted with its own header, so it does not get lost in the middle of the turn's reasoning.
     expect(pendente).toHaveTextContent(/\/btw · (you asked|você perguntou)/);
 
     ws.deliver({ type: "btw_answer", id: frame.id, question: "o que falta?", text: "falta abrir o PR" });
@@ -5377,8 +5377,8 @@ describe("SdkChatView — /btw", () => {
 });
 
 /**
- * O /compact: o CLI passa segundos a um minuto resumindo a conversa sem soltar uma palavra. A tela
- * mostra a barra correndo enquanto isso e, no fim, o divisor com quanto a conversa ocupava.
+ * The /compact: the CLI spends seconds to a minute summarizing the conversation without saying a word. The screen
+ * shows the bar running meanwhile and, at the end, the divider with how much the conversation took up.
  */
 describe("SdkChatView — compactação", () => {
   beforeEach(() => setLanguage("pt-BR"));
@@ -5421,8 +5421,8 @@ describe("SdkChatView — compactação", () => {
 });
 
 /**
- * O COMANDO ENVIADO (`/context`, `/compact`…) aparece como o comando que é — o chip com o estado —,
- * não como uma frase solta que parecia não ter feito nada.
+ * THE SENT COMMAND (`/context`, `/compact`…) shows up as the command it is — the chip with the status —,
+ * not as a loose sentence that seemed to have done nothing.
  */
 describe("SdkChatView — comando do catálogo", () => {
   beforeEach(() => setLanguage("pt-BR"));

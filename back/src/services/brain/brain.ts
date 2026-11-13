@@ -232,7 +232,7 @@ export function brainTextForCard(text: string, card: { locked?: boolean; base: s
 /* --------------------------------------------------------------- learnings */
 
 /** Heading of the append-only section `vibehub_brain_learn` is allowed to touch. */
-export const LEARNINGS_HEADING = "## Aprendizados";
+const LEARNINGS_HEADING = "## Aprendizados";
 const LEARNINGS_HEADING_RE = /^##\s+Aprendizados\s*$/i;
 /** A learning entry line: `- YYYY-MM-DD: <text>`. */
 const LEARNING_LINE_RE = /^-\s*\d{4}-\d{2}-\d{2}:\s*(.*)$/;

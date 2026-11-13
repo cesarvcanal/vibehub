@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { dataPath } from "../../config/env.js";
 import { logger } from "../../utils/logger.js";
 import { CARD_ID_RE } from "../board/cardId.js";
+import type { PublicUser } from "../../auth/users.js";
 
 /**
  * MESSAGE PROVENANCE — who put a message into a card's conversation.
@@ -33,6 +34,11 @@ export interface MessageOrigin {
   sourceCardId?: string;
   /** For `agent`: that card's project, so the front can build the `?project&card` link. */
   sourceProjectId?: string;
+}
+
+/** The origin of a message a PERSON sent: their role and username. */
+export function originOfUser(user: Pick<PublicUser, "role" | "username">): MessageOrigin {
+  return { kind: user.role === "owner" ? "owner" : "user", name: user.username };
 }
 
 /** One recorded send. `key` is the normalized text; `at` is when the send happened (epoch ms). */

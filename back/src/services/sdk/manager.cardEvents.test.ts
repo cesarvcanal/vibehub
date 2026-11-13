@@ -8,16 +8,16 @@ import { onCardStatusSink } from "../board/agentState.js";
 import {
   driverTurnRunning,
   ensureDriverSession,
-  handleClientFrame,
+  dispatchClientFrame,
   resetSdkSessionsForTesting,
   setDriverSpawnerForTesting,
 } from "./manager.js";
 import { appendHistory } from "./history.js";
 
 /**
- * O CHAT NATIVO ALIMENTA A CENTRAL DE EVENTOS (services/events/cardEvents.ts): a pergunta e o pedido
- * de permissão do driver viram evento, e o desfecho deles (inclusive a pergunta que uma mensagem
- * superou) o encerra. A central é observada, não gravada.
+ * THE NATIVE CHAT FEEDS THE EVENTS HUB (services/events/cardEvents.ts): the driver's question and
+ * permission request become events, and their outcome (including the question a message
+ * superseded) closes them. The hub is observed, not written.
  */
 const { observed } = vi.hoisted(() => ({ observed: [] as Array<{ cardId: string; event: Record<string, unknown> }> }));
 vi.mock("../events/cardEvents.js", () => ({
@@ -40,7 +40,7 @@ vi.mock("../board/registry.js", async (importOriginal) => {
   };
 });
 
-/** O caminho dos hooks (services/board/status.ts), observado: o que o driver reporta chega aqui. */
+/** The hooks path (services/board/status.ts), observed: what the driver reports arrives here. */
 onCardStatusSink((cardId, status) => {
   applied.push({ cardId, status });
   const card = cards.get(cardId);
@@ -139,7 +139,7 @@ describe("sdk manager — a central de eventos ouve o chat nativo", () => {
     await appendHistory(CARD, { type: "user_question", id: "q0", questions: [{ question: "Qual banco?", options: [{ label: "Mongo" }] }], at: Date.now() });
     const session = ensure();
     spawned[0]!.stdout.emit("data", line({ type: "ready" }));
-    handleClientFrame(session, `{"type":"user","text":"use o mysql"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"use o mysql"}`);
     await vi.waitFor(() => expect(kinds()).toContainEqual([CARD, "question_result", "q0"]));
   });
 });

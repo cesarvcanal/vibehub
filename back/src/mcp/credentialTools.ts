@@ -5,6 +5,7 @@ import {
 } from "../services/credentials/credentials.js";
 import { fillCredential } from "../services/credentials/fill.js";
 import { listCaptures, saveCaptureForCard } from "../services/credentials/capture.js";
+import { ok, fail } from "./toolResult.js";
 
 /**
  * COFRE TOOLS — how a card's agent signs into a website WITHOUT ever seeing the password.
@@ -21,8 +22,6 @@ import { listCaptures, saveCaptureForCard } from "../services/credentials/captur
 /** What a write returns: the metadata, never a value. */
 const view = (c: { id: string; name: string; type: string; createdAt: number }) =>
   ({ id: c.id, name: c.name, type: c.type, createdAt: c.createdAt });
-const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] });
-const fail = (e: unknown) => ok({ error: (e as Error).message });
 
 export function registerCredentialTools(server: McpServer, actor: string): void {
   server.registerTool(

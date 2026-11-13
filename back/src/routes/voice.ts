@@ -6,7 +6,7 @@ import { cardVoiceContext } from "../services/voice/context.js";
 import { parseVoiceTurns, saveVoiceTurns } from "../services/voice/turns.js";
 import { speechAvailable, synthesizeSpeech, SPEECH_MAX_CHARS } from "../services/voice/speech.js";
 import { Readable } from "node:stream";
-import type { MessageOrigin } from "../services/chat/provenance.js";
+import { originOfUser } from "../services/chat/provenance.js";
 import * as registry from "../services/board/registry.js";
 
 /**
@@ -83,8 +83,7 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
         const turns = parseVoiceTurns(req.body);
         if (turns.length === 0) return await reply.send({ saved: [], duplicate: [] });
         const user = await requestUser(req);
-        const from: MessageOrigin | undefined = user ? { kind: user.role === "owner" ? "owner" : "user", name: user.username } : undefined;
-        return await reply.send(await saveVoiceTurns(req.params.id, turns, from));
+        return await reply.send(await saveVoiceTurns(req.params.id, turns, user ? originOfUser(user) : undefined));
       } catch (err) {
         if (err instanceof VoiceLiveError) return await reply.code(err.status).send({ error: err.message });
         throw err;

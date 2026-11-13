@@ -50,7 +50,7 @@ const restartAllCards = vi.fn();
 const purgeCardWorkspace = vi.fn();
 const uploadCardImage = vi.fn();
 const readCardUpload = vi.fn();
-const lerAnexoDoCard = vi.fn();
+const readCardAttachment = vi.fn();
 /** The terminal websocket's pty — never a real process here; see `fakeTerm`. */
 const ptySpawn = vi.fn();
 /** The VNC bridge's argv; each test picks the process standing in for `docker exec … socat`. */
@@ -91,9 +91,9 @@ async function boot(): Promise<FastifyInstance> {
       uploadCardImage, readCardUpload,
     };
   });
-  vi.doMock("../services/anexos/documento.js", async () => ({
-    ...(await vi.importActual<typeof import("../services/anexos/documento.js")>("../services/anexos/documento.js")),
-    lerAnexoDoCard,
+  vi.doMock("../services/attachments/document.js", async () => ({
+    ...(await vi.importActual<typeof import("../services/attachments/document.js")>("../services/attachments/document.js")),
+    readCardAttachment,
   }));
   vi.doMock("node-pty", () => ({ default: { spawn: ptySpawn } }));
   vi.doMock("../services/browser/browser.js", async () => {
@@ -267,21 +267,21 @@ describe("card lifecycle routes", () => {
 
   it("preview de documento anexado devolve o texto convertido", async () => {
     const id = await makeCard();
-    lerAnexoDoCard.mockResolvedValueOnce({ formato: "xlsx", texto: "| a |", truncado: false });
+    readCardAttachment.mockResolvedValueOnce({ formato: "xlsx", texto: "| a |", truncado: false });
     const res = await app.inject({
       method: "GET", url: `/api/cards/${id}/uploads/1793817742302-vendas.xlsx/preview`, headers: { cookie },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ formato: "xlsx", texto: "| a |", truncado: false });
-    expect(lerAnexoDoCard).toHaveBeenCalledWith(id, "1793817742302-vendas.xlsx");
+    expect(readCardAttachment).toHaveBeenCalledWith(id, "1793817742302-vendas.xlsx");
   });
 
   it("preview: anexo sumido é 404, formato que não converte é 422", async () => {
     const id = await makeCard();
-    lerAnexoDoCard.mockRejectedValueOnce(new Error("upload not found"));
+    readCardAttachment.mockRejectedValueOnce(new Error("upload not found"));
     const sumido = await app.inject({ method: "GET", url: `/api/cards/${id}/uploads/1-x.xlsx/preview`, headers: { cookie } });
     expect(sumido.statusCode).toBe(404);
-    lerAnexoDoCard.mockRejectedValueOnce(new Error("formato não suportado: .zip"));
+    readCardAttachment.mockRejectedValueOnce(new Error("formato não suportado: .zip"));
     const zip = await app.inject({ method: "GET", url: `/api/cards/${id}/uploads/1-x.zip/preview`, headers: { cookie } });
     expect(zip.statusCode).toBe(422);
     expect(zip.json()).toEqual({ error: "formato não suportado: .zip" });
@@ -302,7 +302,7 @@ describe("card lifecycle routes", () => {
     expect(inteiro.statusCode).toBe(200);
     expect(inteiro.headers["accept-ranges"]).toBe("bytes");
 
-    // A faixa vai pedida ao workspace (que corta no runner), não recortada aqui.
+    // The range is requested from the workspace (which cuts it on the runner), not trimmed here.
     readCardUpload.mockResolvedValueOnce({ body: Buffer.from("789"), contentType: "audio/ogg", size: 10, range: { start: 7, end: 9 } });
     const fim = await app.inject({ method: "GET", url, headers: { cookie, range: "bytes=-3" } });
     expect(readCardUpload).toHaveBeenLastCalledWith(id, "1794341151810-cesar01.ogg", { suffix: 3 });
@@ -564,8 +564,8 @@ describe("terminal websocket setup", () => {
     ws.send("ls\r");
     await settle();
     release();
-    // 5 s, não o 1 s padrão: o caminho passa pela fila do board e pelo replay do pty, e com o runner
-    // ocupado (os outros cards rodando testes) 1 s não bastava — falhava na suíte, passava sozinho.
+    // 5 s, not the default 1 s: the path goes through the board's queue and the pty replay, and with the runner
+    // busy (the other cards running tests) 1 s was not enough — it failed in the suite, passed on its own.
     await vi.waitFor(() => expect(term.write).toHaveBeenCalledWith("ls\r"), { timeout: 5_000 });
     await vi.waitFor(() => expect(appliedStatus).toHaveBeenCalledWith(id, "working"), { timeout: 5_000 });
     ws.close();

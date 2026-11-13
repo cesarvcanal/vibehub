@@ -10,6 +10,7 @@ import {
   autonomySummary,
   findingCounts,
   findingIsOpen,
+  githubAuthor,
   mergeFailure,
   pendingQuestions,
   prStripCounts,
@@ -22,10 +23,11 @@ import {
   startErrorCode,
   startErrorRoles,
   stuckItems,
+  suggestedRoles,
   summaryForPr,
   visiblePrs,
 } from "@/features/board/lib/review";
-import type { CardPr, Finding, MergeGate, Review, ReviewSummary } from "@/api/types";
+import type { CardPr, Finding, MergeGate, Person, Review, ReviewSummary } from "@/api/types";
 
 function pr(number: number, openedAt: number, base = "dev"): CardPr {
   return { number, url: `https://github.com/acme/x/pull/${number}`, base, branch: "card/x", openedAt };
@@ -66,7 +68,7 @@ describe("reviewPill", () => {
     expect(reviewPill(review({ phase: "ready" }), { gate: "failed" })).toEqual({ key: "review.pill.gateFailed", tone: "critical" });
     expect(reviewPill(review({ phase: "ready" }), { gate: "running" })).toEqual({ key: "review.pill.gateRunning", tone: "info" });
     expect(reviewPill(review({ phase: "ready" }), { gate: "passed" })).toMatchObject({ key: "review.pill.ready", tone: "ok" });
-    // a IA do autor trabalhando segue na frente: o push dela muda o commit, e o gate com ele
+    // the author's AI working still comes first: its push changes the commit, and the gate with it
     expect(reviewPill(review({ phase: "ready" }), { authorWorking: true, gate: "failed" })).toMatchObject({ key: "review.pill.authorWorking" });
     expect(reviewPill(review({ phase: "fixing", round: 2 }), { gate: "failed" })).toMatchObject({ key: "review.pill.round" });
   });
@@ -170,7 +172,7 @@ describe("visiblePrs", () => {
   it("PR mergeado some da lista", () => {
     const merged = { ...pr(12, 300, "prod"), mergedAt: 999 };
     expect(visiblePrs({ prs: [pr(10, 100), merged] }).map((p) => p.number)).toEqual([10]);
-    // nenhum PR aberto sobrando: nada a mostrar
+    // no open PR left over: nothing to show
     expect(visiblePrs({ prs: [merged] })).toEqual([]);
   });
 
@@ -178,16 +180,16 @@ describe("visiblePrs", () => {
     const current = { ...pr(12, 300, "prod"), mergedAt: 999 };
     expect(visiblePrs({ prs: [pr(10, 100), current], review: review({ prNumber: 12, phase: "merged" }) }).map((p) => p.number)).toEqual([10]);
     expect(visiblePrs({ prs: [current], review: review({ prNumber: 12, phase: "merged" }) })).toEqual([]);
-    // uma revisão em andamento não devolve um PR já mergeado à lista
+    // a review in progress does not bring an already merged PR back to the list
     expect(visiblePrs({ prs: [current], review: review({ prNumber: 12, phase: "fixing" }) })).toEqual([]);
   });
 
   it("a revisão mergeada tira o PR dela mesmo sem a marca mergedAt (dado antigo, ou o board ainda não leu)", () => {
     const prs = [pr(552, 100), pr(553, 200, "prod")];
     expect(visiblePrs({ prs, review: review({ prNumber: 552, phase: "merged" }) }).map((p) => p.number)).toEqual([553]);
-    // só o PR daquela revisão: os outros, abertos, ficam
+    // only that review's PR: the others, open, stay
     expect(visiblePrs({ prs, review: review({ prNumber: 553, phase: "fixing" }) }).map((p) => p.number)).toEqual([553, 552]);
-    // revisão cancelada não diz nada sobre o PR: ele continua aberto
+    // a cancelled review says nothing about the PR: it is still open
     expect(visiblePrs({ prs, review: review({ prNumber: 552, phase: "cancelled" }) }).map((p) => p.number)).toEqual([553, 552]);
   });
 
@@ -410,7 +412,7 @@ describe("reviewActions", () => {
     expect(reviewActions(full(), as("mer")).cancel).toBe(true);
     expect(reviewActions(full(), as("own", true)).cancel).toBe(true);
     expect(reviewActions(full(), as("co")).cancel).toBe(false);
-    // o coautor dá continuidade sem o responsável (produção, 2026-11-09)
+    // the co-author carries on without the owner (production, 2026-11-09)
     expect(reviewActions(full({ coauthorUserId: "co" }), as("co")).cancel).toBe(true);
     expect(reviewActions(full({ phase: "merged" }), as("aut")).cancel).toBe(false);
     expect(reviewActions(full({ phase: "cancelled" }), as("aut")).cancel).toBe(false);
@@ -531,5 +533,60 @@ describe("requestedAtText", () => {
   it("dá a hora de São Paulo, qualquer que seja o fuso do navegador", () => {
     expect(requestedAtText(Date.UTC(2026, 10, 9, 22, 40))).toBe("09/11/2026 19:40");
     expect(requestedAtText(Date.UTC(2026, 10, 10, 2, 5))).toBe("09/11/2026 23:05");
+  });
+});
+
+describe("githubAuthor", () => {
+  const people: Person[] = [
+    { id: "u1", username: "ana", canReview: true, githubLogin: "Ana-GH" },
+    { id: "u2", username: "bia", canReview: false, githubLogin: "bia-gh" },
+  ];
+
+  it("finds the person whose own GitHub login opened the PR, ignoring case", () => {
+    expect(githubAuthor(people, "ana-gh")?.id).toBe("u1");
+  });
+
+  it("skips somebody without a Claude account for the fixes", () => {
+    expect(githubAuthor(people, "bia-gh")).toBeUndefined();
+  });
+
+  it("no login, or nobody with it, is nobody", () => {
+    expect(githubAuthor(people, undefined)).toBeUndefined();
+    expect(githubAuthor(people, "outro")).toBeUndefined();
+  });
+});
+
+describe("suggestedRoles", () => {
+  const me: Person = { id: "me", username: "eu", canReview: true };
+  const actor: Person = { id: "actor", username: "ator", canReview: true, githubLogin: "ator-gh" };
+  const delivered = pr(7, 1);
+
+  it("I review and merge, the card's actor fixes", () => {
+    expect(suggestedRoles([me, actor], "me", "actor", delivered)).toEqual({
+      reviewer: "me", author: "actor", coauthor: "", merger: "me",
+    });
+  });
+
+  it("an actor who is not among the card's people is not suggested", () => {
+    expect(suggestedRoles([me], "me", "actor", delivered).author).toBe("");
+  });
+
+  it("I am not the reviewer when I am the author or cannot review", () => {
+    expect(suggestedRoles([me], "me", "me", delivered).reviewer).toBe("");
+    expect(suggestedRoles([{ ...me, canReview: false }], "me", undefined, delivered)).toEqual({
+      reviewer: "", author: "", coauthor: "", merger: "me",
+    });
+  });
+
+  it("an attached PR suggests its GitHub author, not the card's actor", () => {
+    const attached: CardPr = { ...delivered, attached: true, author: "ATOR-GH" };
+    expect(suggestedRoles([me, actor], "me", "me", attached).author).toBe("actor");
+    expect(suggestedRoles([me, actor], "me", "actor", { ...attached, author: "ninguem" }).author).toBe("");
+  });
+
+  it("nobody signed in among the people: no reviewer, no merger", () => {
+    expect(suggestedRoles([actor], undefined, "actor", delivered)).toEqual({
+      reviewer: "", author: "actor", coauthor: "", merger: "",
+    });
   });
 });

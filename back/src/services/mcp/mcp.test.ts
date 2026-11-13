@@ -395,7 +395,7 @@ describe("dropDeletedMcps (deleting an MCP)", () => {
     expect(script).toMatch(/^claude mcp remove -s user 'erp' >\/dev\/null 2>&1 \|\| true$/m);
     expect(script).toContain("CLAUDE_CONFIG_DIR='/root/.claude-profiles/work' claude mcp remove -s user 'erp'");
     expect(script).not.toContain("add-json");
-    expect(await reg.pendingMcpDrops()).toEqual([]); // paid
+    expect((await reg.owedMcpDrops()).map((d) => d.name)).toEqual([]); // paid
   });
 
   /**
@@ -423,7 +423,7 @@ describe("dropDeletedMcps (deleting an MCP)", () => {
     }
     await mod.dropDeletedMcps();
     expect(runScript).not.toHaveBeenCalled();
-    expect(await reg.pendingMcpDrops()).toEqual([]);
+    expect((await reg.owedMcpDrops()).map((d) => d.name)).toEqual([]);
   });
 
   /**
@@ -440,10 +440,10 @@ describe("dropDeletedMcps (deleting an MCP)", () => {
       return { stdout: "", stderr: "" };
     });
     await mod.dropDeletedMcps();
-    expect(await reg.pendingMcpDrops()).toEqual(["erp"]);
+    expect((await reg.owedMcpDrops()).map((d) => d.name)).toEqual(["erp"]);
 
     await mod.dropDeletedMcps(); // the next apply pays the new one
-    expect(await reg.pendingMcpDrops()).toEqual([]);
+    expect((await reg.owedMcpDrops()).map((d) => d.name)).toEqual([]);
   });
 
   it("propagates a runner that could not be reached — and the removal stays owed", async () => {
@@ -451,7 +451,7 @@ describe("dropDeletedMcps (deleting an MCP)", () => {
     await reg.removeMcp((await reg.createMcp({ name: "erp", kind: "stdio", command: "npx" })).id);
     runScript.mockRejectedValue(new Error("host command timed out"));
     await expect(mod.dropDeletedMcps()).rejects.toThrow("host command timed out");
-    expect(await reg.pendingMcpDrops()).toEqual(["erp"]);
+    expect((await reg.owedMcpDrops()).map((d) => d.name)).toEqual(["erp"]);
   });
 
   /**
@@ -492,7 +492,7 @@ describe("dropDeletedMcps (deleting an MCP)", () => {
     await expect(mod.applyMcpsEverywhere()).rejects.toThrow(/ERP_TOKEN/);
     expect(runScript).toHaveBeenCalledTimes(1); // the removal — the injection never ran
     expect(String(runScript.mock.calls[0]![0])).toMatch(/^claude mcp remove -s user 'erp' >\/dev\/null 2>&1 \|\| true$/m);
-    expect(await reg.pendingMcpDrops()).toEqual([]);
+    expect((await reg.owedMcpDrops()).map((d) => d.name)).toEqual([]);
   });
 
   it("a name registered again is removed, then injected anew by the same apply", async () => {
@@ -601,7 +601,7 @@ describe("built-in browser server", () => {
     const parsed = JSON.parse(inj.json) as { type: string; command: string; args: string[] };
     expect(parsed.type).toBe("stdio");
     expect(parsed.command).toBe("npx");
-    // Versão exata: `@latest` faria o npx consultar o registro a cada boot de CLI.
+    // Exact version: `@latest` would make npx query the registry on every CLI boot.
     expect(parsed.args).toContain(mod.BROWSER_MCP_PACKAGE);
     expect(mod.BROWSER_MCP_PACKAGE).toMatch(/^@playwright\/mcp@\d+\.\d+\.\d+$/);
     const i = parsed.args.indexOf("--cdp-endpoint");

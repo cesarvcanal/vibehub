@@ -15,6 +15,7 @@ import { submitReviewerRound, submitAuthorResponse, reviewToolAnswer, HEAD_SHA_R
 import { MAX_ROUNDS } from "../services/review/model.js";
 import { attachPrs } from "../services/review/attach.js";
 import { startReviewByAgent } from "../services/review/start.js";
+import { ok, fail } from "./toolResult.js";
 
 /**
  * MAESTRO TOOLS — what one card's agent can do to the OTHER cards.
@@ -26,9 +27,6 @@ import { startReviewByAgent } from "../services/review/start.js";
  * The tools reimplement nothing: they call `services/maestro/maestro.ts`, which reuses the same
  * registry and runner code the UI uses.
  */
-
-const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] });
-const fail = (e: unknown) => ok({ error: (e as Error).message });
 
 /*
  * PR REVIEW — the shapes the two review AIs hand back. The enums are the server's contract, checked
@@ -513,7 +511,7 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         const { card, review, ...payload } = a;
         const since = Date.now();
         const after = await submitAuthorResponse(card, { ...payload, reviewId: review });
-        // O que ESTA chamada registrou: os itens da fala do autor gravada agora (repetida não grava).
+        // What THIS call recorded: the items of the author's message recorded now (a repeated one is not recorded).
         const answered = after.log.filter((e) => e.who === "author" && e.at >= since).reduce((n, e) => n + (e.items?.length ?? 0), 0);
         return ok({ ...reviewToolAnswer(after, "author", a.round), answered });
       } catch (e) {
@@ -561,21 +559,21 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     },
     async (a) => {
       try {
-        const r = await startReviewByAgent(a.card, {
+        const review = await startReviewByAgent(a.card, {
           reviewer: a.reviewer, author: a.author, coauthor: a.coauthor, merger: a.merger, pr: a.pr,
           mergeWhenReady: a.mergeWhenReady, concludeWhenMerged: a.concludeWhenMerged,
         });
         return ok({
-          review: r.id,
-          pr: r.prNumber,
-          phase: r.phase,
+          review: review.id,
+          pr: review.prNumber,
+          phase: review.phase,
           roles: { reviewer: a.reviewer, author: a.author ?? "(padrão)", coauthor: a.coauthor ?? null, merger: a.merger ?? "(quem deu a ordem)" },
-          mergeAuthorized: r.mergeAuthorized === true,
-          concludeWhenMerged: r.concludeWhenMerged === true,
-          next: r.mergeAuthorized
+          mergeAuthorized: review.mergeAuthorized === true,
+          concludeWhenMerged: review.concludeWhenMerged === true,
+          next: review.mergeAuthorized
             ? "tell the user the review started with these roles and the merge order recorded: it merges by itself " +
               "when it ends ready with no blocking item or question (suggestions do not hold it)" +
-              (r.concludeWhenMerged ? ", and then this card moves to done" : "")
+              (review.concludeWhenMerged ? ", and then this card moves to done" : "")
             : "tell the user the review started with these roles; it runs by itself and merges by itself " +
               "when it ends ready with nothing open — anything left standing waits for the merger's button",
         });
@@ -605,12 +603,12 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     },
     async (a) => {
       try {
-        const out = await attachPrs(a.card, a.prs);
-        const next = out.attached.length
+        const attachment = await attachPrs(a.card, a.prs);
+        const next = attachment.attached.length
           ? "tell the user the PRs are on the card, each with its line: pick the reviewer and the co-author on each " +
             "and press \"Pedir revisão\". Do not review them yourself."
           : "nothing was attached: tell the user why (refused)";
-        return ok({ ...out, next });
+        return ok({ ...attachment, next });
       } catch (e) {
         return fail(e);
       }

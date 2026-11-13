@@ -204,7 +204,7 @@ describe("a person's git identity (commit author + GitHub connection)", () => {
     });
     expect(other.statusCode).toBe(403);
 
-    // ...e a dele próprio NÃO aceita papel nem senha de carona.
+    // ...and their own does NOT accept a role or a password riding along.
     const escalate = await app.inject({
       method: "PATCH", url: "/api/me/git", headers: { cookie: member },
       payload: { role: "owner", password: "outrasenha123", gitName: "mussa" },
@@ -212,7 +212,7 @@ describe("a person's git identity (commit author + GitHub connection)", () => {
     expect(escalate.statusCode).toBe(200);
     const me = await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: member } });
     expect(me.json().user.role).toBe("member");
-    // a senha antiga continua valendo: o PATCH de identidade não a trocou
+    // the old password still works: the identity PATCH did not change it
     const login = await app.inject({
       method: "POST", url: "/api/auth/login", payload: { username: "mussa", password: "supersecret" },
     });
@@ -228,7 +228,7 @@ describe("a person's git identity (commit author + GitHub connection)", () => {
     });
     await app.inject({ method: "DELETE", url: `/api/users/${id}`, headers: { cookie: owner } });
 
-    // Recriado com o MESMO nome, ganha id novo e NÃO herda a identidade antiga.
+    // Recreated with the SAME name, it gets a new id and does NOT inherit the old identity.
     await addMember(app, owner, "mussa");
     const again = await memberId(owner, "mussa");
     const list = await app.inject({ method: "GET", url: "/api/users", headers: { cookie: owner } });

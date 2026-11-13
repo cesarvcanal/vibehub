@@ -21,9 +21,9 @@ import {
 import { t as translate, useT } from "@/i18n";
 
 function metaFor(id: SetupStepId) {
-  // SETUP_STEPS covers every SetupStepId, so this always resolves; the fallback keeps TS honest
-  // about the array lookup rather than asserting non-null.
-  return SETUP_STEPS.find((s) => s.id === id) ?? SETUP_STEPS[0]!;
+  const meta = SETUP_STEPS.find((s) => s.id === id);
+  if (!meta) throw new Error(`setup step without metadata: ${id}`);
+  return meta;
 }
 
 /**
@@ -42,19 +42,19 @@ export function SetupWizard() {
   const step = currentStep(setup, overrides);
   const meta = metaFor(step);
 
-  const advance = React.useCallback(async () => {
+  const advance = async (): Promise<void> => {
     // Both probes: creating the owner also signs you in, so the session is stale too.
     await Promise.all([refreshSetup(), refreshSession()]);
-  }, [refreshSetup, refreshSession]);
+  };
 
-  const skipGithub = React.useCallback(() => {
+  const skipGithub = (): void => {
     setOverrides((prev) => ({ ...prev, githubSkipped: true }));
     toast(translate("setup.githubSkipped"));
-  }, []);
+  };
 
-  const finish = React.useCallback(() => {
+  const finish = (): void => {
     navigate(Paths.BOARD, { replace: true });
-  }, [navigate]);
+  };
 
   if (isLoading && !setup) return <FullScreenLoader label={t("setup.readingState")} />;
 

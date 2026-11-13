@@ -5,8 +5,8 @@ import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 
 /**
- * O modo de voz (POC): a rota que troca a oferta SDP do navegador pela resposta do GPT-Live.
- * O fetch da OpenAI é falso — nenhum teste aqui fala com a rede nem gasta crédito.
+ * Voice mode (POC): the route that trades the browser's SDP offer for GPT-Live's answer.
+ * The OpenAI fetch is fake — no test here talks to the network or spends credit.
  */
 
 const OFFER = "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\n";

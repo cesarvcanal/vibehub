@@ -40,14 +40,14 @@ import {
 } from "./resume.js";
 
 /**
- * THE BUG THIS FILE PINS (2x em produção, 2026-08-31): um deploy do painel reinicia o back, o
- * driver SDK morre junto NO MEIO DE UM TURNO e o card fica mudo — sem linha de aviso, sem retomada.
- * O sweep de boot transforma o marcador durável do turno em (1) uma linha de sistema visível no
- * histórico e (2) UMA retomada automática — nunca duas (loop deploy→resume→deploy→resume).
+ * THE BUG THIS FILE PINS (2x in production, 2026-08-31): a panel deploy restarts the back, the
+ * SDK driver dies with it IN THE MIDDLE OF A TURN and the card goes silent — no warning line, no resume.
+ * The boot sweep turns the turn's durable marker into (1) a visible system line in the
+ * history and (2) ONE automatic resume — never two (deploy→resume→deploy→resume loop).
  */
 
 const CARD = "eeee498d-98dd-44b6-97ee-c06a181c3769";
-/** O processo antigo e o novo de um deploy blue/green — ids no formato que o back gera. */
+/** The old and the new process of a blue/green deploy — ids in the format the back generates. */
 const ANTIGO = "0a1b2c3d-0000-4000-8000-00000000a171";
 const NOVO = "0a1b2c3d-0000-4000-8000-0000000000e0";
 
@@ -104,8 +104,8 @@ function deps(over: Partial<ResumeDeps> = {}, settings: Settings = settingsWith(
     ensureSession: ensureDriverSession,
     inject: injectSystemTurn,
     readMarker: readInflightMarker,
-    // Os marcadores que os testes escrevem são assinados por ESTE processo (INFLIGHT_OWNER), que
-    // não bate: é o processo antigo de um deploy, já morto. O sweep sob teste faz o papel do NOVO.
+    // The markers the tests write are signed by THIS process (INFLIGHT_OWNER), which
+    // does not beat: it is a deploy's old process, already dead. The sweep under test plays the NEW one.
     selfOwner: NOVO,
     ownerAlive: isInflightOwnerAlive,
     turnRunning: () => false,
@@ -225,8 +225,8 @@ describe("resumeInterruptedTurns — the boot sweep", () => {
     const many = Array.from({ length: 12 }, (_, i) => `t${i}`);
     const text = resumeContinuationText({ startedAt: 1, attempts: 0, background: { tasks: many, since: 0, idle: true } });
     expect(text).toContain("- t7");
-    expect(text).not.toContain("- t8"); // a lista é curta: contexto, não inventário
-    // Caso real (este card, 2026-11-10): a retomada citou um comando com "ULTRATHINK" e o turno subiu a max.
+    expect(text).not.toContain("- t8"); // the list is short: context, not an inventory
+    // Real case (this card, 2026-11-10): the resume quoted a command with "ULTRATHINK" and the turn went up to max.
     const cited = resumeContinuationText({ startedAt: 1, attempts: 0, background: { tasks: ["vitest -t ULTRATHINK"], since: 0, idle: false } });
     expect(cited).toContain("- vitest -t ULTRA-THINK");
     expect(cited).not.toMatch(/ultrathink/i);
@@ -254,7 +254,7 @@ describe("resumeInterruptedTurns — the boot sweep", () => {
     const summary = await resumeInterruptedTurns(deps());
     expect(summary.resumed).toEqual([CARD]);
     expect(spawned.length).toBe(1);
-    // A nova retomada nasce SEM progresso: se morrer antes de fazer qualquer coisa, a próxima só anota.
+    // The new resume is born WITHOUT progress: if it dies before doing anything, the next one only takes note.
     await vi.waitFor(async () => {
       const marker = await readInflightMarker(CARD);
       expect(marker?.attempts).toBe(2);
@@ -280,7 +280,7 @@ describe("resumeInterruptedTurns — the boot sweep", () => {
   });
 
   it("o teto de retomadas seguidas para mesmo com progresso — um turno que derruba o próprio painel não vira loop", async () => {
-    // Cada volta morre logo depois de avançar: é o painel caindo pelo próprio turno, não trabalho longo.
+    // Each round dies right after advancing: it is the panel going down because of the turn itself, not long work.
     await writeInflightMarker(CARD, { startedAt: Date.now(), attempts: MAX_AUTO_RESUMES, progressed: true });
     const summary = await resumeInterruptedTurns(deps());
     expect(summary).toEqual({ resumed: [], noted: [CARD] });
@@ -290,12 +290,12 @@ describe("resumeInterruptedTurns — the boot sweep", () => {
   });
 
   it("O CASO REAL (2026-11-10): dia de muitos deploys — a retomada que trabalhou por minutos não gasta o teto", async () => {
-    // troca-de-effort-f121: deploy a cada ~5 min, a 5ª retomada (progressed: true) parava o card no meio.
+    // troca-de-effort-f121: a deploy every ~5 min, the 5th resume (progressed: true) stopped the card midway.
     await writeInflightMarker(CARD, { startedAt: Date.now() - SETTLED_RESUME_MS - 1_000, attempts: MAX_AUTO_RESUMES, progressed: true });
     const summary = await resumeInterruptedTurns(deps());
     expect(summary.resumed).toEqual([CARD]);
     expect(spawned.length).toBe(1);
-    // A cadeia recomeça: a nova retomada ainda precisa avançar, e o teto volta a contar dela.
+    // The chain restarts: the new resume still needs to advance, and the cap counts from it again.
     await vi.waitFor(async () => {
       const marker = await readInflightMarker(CARD);
       expect(marker?.attempts).toBe(1);
@@ -369,19 +369,19 @@ describe("resumeInterruptedTurns — the boot sweep", () => {
     // re-note the same interruption forever.
     const history = await readHistory(CARD);
     expect((history[0] as { text: string }).text).toBe(NOTE_RESUMING);
-    // …e o card não fica dizendo "retomando…" para sempre: a linha seguinte diz que não deu.
+    // …and the card does not keep saying "retomando…" forever: the next line says it did not work.
     expect(history.map((e) => (e as { text?: string }).text)).toEqual([NOTE_RESUMING, NOTE_RESUME_FAILED]);
     expect(await readInflightMarker(CARD)).toBeNull();
   });
 });
 
 /**
- * O DEPLOY COM O CARTÃO DE PÉ (produção, 2026-11-03): o agente fez quatro perguntas, a pessoa marcou
- * as opções, e um deploy matou o driver no meio. A retomada mandava "Continue de onde parou" — que
- * encerrava o cartão como "Você respondeu por mensagem" — e o agente perguntava de NOVO, num cartão
- * novo e em branco: tudo o que estava marcado se perdia. Um turno parado numa pergunta não tem o que
- * retomar: ele espera a pessoa. O cartão fica aberto e o clique vai ao modelo como mensagem (a
- * resposta da órfã, ver manager.ts).
+ * THE DEPLOY WITH THE CARD UP (production, 2026-11-03): the agent asked four questions, the person ticked
+ * the options, and a deploy killed the driver midway. The resume sent "Continue de onde parou" — which
+ * closed the card as "Você respondeu por mensagem" — and the agent asked AGAIN, on a new,
+ * blank card: everything that had been ticked was lost. A turn stopped on a question has nothing to
+ * resume: it waits for the person. The card stays open and the click goes to the model as a message (the
+ * orphan's answer, see manager.ts).
  */
 const QUESTIONS = [
   { question: "Como marcamos o trucado?", header: "Trucado", options: [{ label: "Tipo no cadastro" }, { label: "Faixa de capacidade" }] },
@@ -405,13 +405,13 @@ describe("resumeInterruptedTurns — o turno parado numa pergunta", () => {
     expect(summary).toEqual({ resumed: [], noted: [CARD] });
     expect(spawned).toHaveLength(0);
     expect(installed).toBe(0);
-    expect(awaiting).toEqual([CARD]); // revisão #222, f1: o card acende o "precisa de você"
+    expect(awaiting).toEqual([CARD]); // review #222, f1: the card lights up "precisa de você"
     const history = await readHistory(CARD);
-    // o cartão segue pendente: nenhum question_result o encerrou
+    // the card stays pending: no question_result closed it
     expect(history.some((e) => e.type === "question_result")).toBe(false);
     expect((history.at(-1) as { text?: string }).text).toBe(NOTE_AWAITING_ANSWER);
     expect(await readInflightMarker(CARD)).toBeNull();
-    expect(idle).toEqual([CARD]); // a bolinha vai a aguardando: é a vez da pessoa
+    expect(idle).toEqual([CARD]); // the dot goes to waiting: it is the person's turn
   });
 
   it("vale também para um turno que já era retomada — esperar a pessoa não é loop", async () => {
@@ -496,13 +496,13 @@ describe("resumeInterruptedTurns — o turno parado numa pergunta", () => {
   });
 });
 
-/** Um marcador escrito por OUTRO processo do back (o container antigo de um blue/green). */
+/** A marker written by ANOTHER back process (a blue/green's old container). */
 async function markerFrom(owner: string, cardId = CARD): Promise<void> {
   await mkdir(join(dir, SDK_INFLIGHT_DIR), { recursive: true });
   await writeFile(join(dir, SDK_INFLIGHT_DIR, `${cardId}.json`), JSON.stringify({ startedAt: 1, preview: "jest longo", attempts: 0, owner }), "utf8");
 }
 
-/** O batimento que o processo `owner` mantém enquanto vive — `null` = ele morreu (SIGKILL). */
+/** The heartbeat the `owner` process keeps while it lives — `null` = it died (SIGKILL). */
 async function heartbeat(owner: string, alive: boolean): Promise<void> {
   const file = join(dir, SDK_INFLIGHT_DIR, "owners", owner);
   if (!alive) { await rm(file, { force: true }); return; }
@@ -511,13 +511,13 @@ async function heartbeat(owner: string, alive: boolean): Promise<void> {
 }
 
 /**
- * O BUG DA PRINT (produção, 2026-10-08): "Continue de onde parou" aparecia como `Sistema (vibehub)`
- * e de novo como bolha, depois de "Atividade no terminal". O deploy do tech.multi é BLUE/GREEN: o
- * container novo sobe e fica saudável com o ANTIGO ainda no ar, rodando o turno. O sweep do novo
- * via o marcador, concluía "interrompido" e retomava um turno VIVO — e o espelho do back antigo, que
- * não conhecia aquela fala, gravava a linha que o CLI escreveu como conversa do terminal.
+ * THE SCREENSHOT BUG (production, 2026-10-08): "Continue de onde parou" showed up as `Sistema (vibehub)`
+ * and again as a bubble, after "Atividade no terminal". The tech.multi deploy is BLUE/GREEN: the
+ * new container comes up and turns healthy with the OLD one still up, running the turn. The new one's sweep
+ * saw the marker, concluded "interrupted" and resumed a LIVE turn — and the old back's mirror, which
+ * did not know that speech, recorded the line the CLI wrote as terminal conversation.
  *
- * Um marcador só é órfão quando o processo que o escreveu já não está vivo.
+ * A marker is only orphaned when the process that wrote it is no longer alive.
  */
 describe("resumeInterruptedTurns — o turno ainda vivo na instância antiga (deploy blue/green)", () => {
   it("espera o dono morrer: nada de nota nem de retomada enquanto ele bate, e retoma UMA vez depois", async () => {
@@ -526,11 +526,11 @@ describe("resumeInterruptedTurns — o turno ainda vivo na instância antiga (de
     let esperas = 0;
     const summary = await resumeInterruptedTurns(deps({
       wait: async () => {
-        // Enquanto o antigo bate, o card não ganhou nada: nem a nota, nem o driver novo.
+        // While the old one beats, the card got nothing: neither the note nor the new driver.
         expect(await readHistory(CARD)).toEqual([]);
         expect(spawned.length).toBe(0);
         esperas += 1;
-        if (esperas === 2) await heartbeat(ANTIGO, false); // o `docker rm -f` do tech.multi
+        if (esperas === 2) await heartbeat(ANTIGO, false); // tech.multi's `docker rm -f`
       },
     }));
 
@@ -547,7 +547,7 @@ describe("resumeInterruptedTurns — o turno ainda vivo na instância antiga (de
     await heartbeat(ANTIGO, true);
     const { clearInflightMarker } = await import("./inflight.js");
     const summary = await resumeInterruptedTurns(deps({
-      // O `result` do turno chega no back antigo, que apaga o marcador — o sweep relê e vê que acabou.
+      // The turn's `result` arrives at the old back, which deletes the marker — the sweep re-reads and sees it is over.
       wait: async () => { await clearInflightMarker(CARD); },
     }));
 
@@ -579,7 +579,7 @@ describe("resumeInterruptedTurns — o turno ainda vivo na instância antiga (de
     const OUTRO = "ffff498d-98dd-44b6-97ee-c06a181c3769";
     await markerFrom(ANTIGO);
     await heartbeat(ANTIGO, true);
-    await writeInflightMarker(OUTRO, { startedAt: 1, attempts: 0 }); // dono morto: órfão já
+    await writeInflightMarker(OUTRO, { startedAt: 1, attempts: 0 }); // dead owner: orphaned right away
     const viuOutroRetomado: boolean[] = [];
     const summary = await resumeInterruptedTurns(deps({
       listMarkers: async () => [
@@ -616,10 +616,10 @@ describe("handOffSdkOnShutdown — o adeus do processo antigo", () => {
 });
 
 /**
- * O DRIVER CAIU com o back de pé (OOM, kill, o docker exec que morreu): o marcador é deste processo,
- * que segue vivo — o sweep de boot nunca o veria como órfão. A retomada acontece aqui, na hora, com
- * as mesmas regras do boot (nota visível, continuação de sistema, trava anti-loop) e as palavras
- * certas: não houve atualização do painel nenhuma.
+ * THE DRIVER DROPPED with the back up (OOM, kill, the docker exec that died): the marker belongs to this process,
+ * which is still alive — the boot sweep would never see it as an orphan. The resume happens here, right away, with
+ * the same rules as the boot (visible note, system continuation, anti-loop guard) and the right
+ * words: there was no panel update at all.
  */
 describe("resumeAfterDriverCrash — o driver caiu, o back não", () => {
   const crashDeps = (over: Partial<ResumeDeps> = {}) => deps({ selfOwner: INFLIGHT_OWNER, ...over });
@@ -678,7 +678,7 @@ describe("resumeAfterDriverCrash — o driver caiu, o back não", () => {
     const marker = { startedAt: 5, attempts: 0 };
     await writeInflightMarker(CARD, marker);
     const outcome = await resumeAfterDriverCrash(CARD, marker, crashDeps({
-      // Enquanto o comando do driver é montado, o front reconecta e a pessoa manda a dela.
+      // While the driver's command is being built, the front reconnects and the person sends theirs.
       commandFor: async () => {
         await writeInflightMarker(CARD, { startedAt: 9, preview: "a da pessoa", attempts: 0 });
         return { file: "docker", args: ["exec"] };

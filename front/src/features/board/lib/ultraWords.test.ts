@@ -31,15 +31,15 @@ describe("findUltraWords", () => {
   });
 
   /**
-   * O BUG DO CÉSAR (produção, 2026-09-28): ele mandou uma mensagem que começava com
-   * `/superpowers:systematic-debugging`, escreveu parágrafos de contexto e terminou com
-   * `ultracode` — e o painel não escalou nada. A regra antiga descartava a mensagem INTEIRA por
-   * causa da primeira letra: "começou com barra, então nada aqui é palavra reservada".
+   * CÉSAR'S BUG (production, 2026-09-28): he sent a message that started with
+   * `/superpowers:systematic-debugging`, wrote paragraphs of context and ended with
+   * `ultracode` — and the panel escalated nothing. The old rule discarded the WHOLE message because
+   * of the first letter: "it started with a slash, so nothing here is a reserved word".
    *
-   * O que é comando é o PRIMEIRO TOKEN, não a mensagem. O que vem depois dele são os argumentos —
-   * prosa, que o comando expande para dentro do prompt, e onde a palavra reservada vale como
-   * valeria em qualquer outra frase. O nome do comando segue de fora: `/ultracode-review` é o nome
-   * de um comando, não um pedido de esforço.
+   * What is a command is the FIRST TOKEN, not the message. What comes after it is the arguments —
+   * prose, which the command expands into the prompt, and where the reserved word counts as it
+   * would in any other sentence. The command name stays out: `/ultracode-review` is the name
+   * of a command, not a request for effort.
    */
   it("o NOME do comando não é palavra reservada — mas o que vem depois dele é prosa", () => {
     expect(findUltraWords("/ultrathink")).toEqual([]);

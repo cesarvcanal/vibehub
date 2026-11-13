@@ -5,8 +5,8 @@ import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 
 /**
- * LER EM VOZ ALTA — o alto-falante embaixo de uma resposta terminada. O texto vai à TTS da OpenAI
- * com a chave do servidor e o MP3 volta em stream. O fetch da OpenAI é falso.
+ * READ ALOUD — the speaker under a finished answer. The text goes to OpenAI's TTS with the server's key
+ * and the MP3 comes back as a stream. The OpenAI fetch is fake.
  */
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 

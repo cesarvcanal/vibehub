@@ -45,8 +45,8 @@ describe("MCP server instructions (the maestro persona)", () => {
   });
 
   it("toda entrega de PR é documentação: o vibehub_deliver pede título, corpo e comentários", () => {
-    // Diretriz de 2026-11-09: "isso precisa ser em qualquer PR de qualquer repositório, pois a tool de
-    // abrir PR não tá boa a explicação e contexto nela" — o deliver abria com --fill (lista de commits).
+    // Guideline of 2026-11-09: "isso precisa ser em qualquer PR de qualquer repositório, pois a tool de
+    // abrir PR não tá boa a explicação e contexto nela" — the deliver opened with --fill (the list of commits).
     const server = createMcpServer("test") as unknown as {
       _registeredTools?: Record<string, { description?: string; inputSchema?: { shape?: Record<string, unknown> } }>;
     };
@@ -75,7 +75,7 @@ describe("MCP server instructions (the maestro persona)", () => {
   });
 
   it("planejar começa no brainstorming; dúvida ou contradição viram pergunta — nunca decisão por conta própria", () => {
-    // Pedido do dono da instalação (2026-11-03): "sempre use brainstorming quando estivermos
+    // Request from the install owner (2026-11-03): "sempre use brainstorming quando estivermos
     // planejando… se não ficar claro, NUNCA tomar decisões por conta própria… se entrar em
     // contradição, ir perguntando".
     expect(INSTRUCTIONS).toContain("Planning ALWAYS starts with brainstorming");
@@ -83,13 +83,13 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(INSTRUCTIONS).toContain("You NEVER decide on your own");
     expect(INSTRUCTIONS).toContain("keep asking until it is clear");
     expect(INSTRUCTIONS).toContain("Contradiction = ask");
-    // O antigo "pergunte só quando bloquear" deixava a IA escolher sozinha a leitura do pedido.
+    // The old "pergunte só quando bloquear" let the AI pick on its own how to read the request.
     expect(INSTRUCTIONS).not.toContain("Ask when it blocks, not before");
   });
 
   it("autonomia corretiva: bug no que já foi pedido se corrige sem pergunta; melhoria fora do escopo vira sugestão", () => {
-    // Pedido do dono da instalação (2026-11-10): brainstorming e confirmação valem para mudança de
-    // direção, não para consertar o que claramente quebra o que ele já pediu.
+    // Request from the install owner (2026-11-10): brainstorming and confirmation apply to a change of
+    // direction, not to fixing what clearly breaks what they already asked for.
     expect(INSTRUCTIONS).toContain("Corrective autonomy");
     expect(INSTRUCTIONS).toContain("fix it without asking and without brainstorming");
     expect(INSTRUCTIONS).toContain("an improvement is a suggestion, not an authorization");

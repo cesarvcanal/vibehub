@@ -1,3 +1,4 @@
+import { clipLine } from "../../utils/clipLine.js";
 import { defuseUltraWords } from "../../utils/ultraWords.js";
 import {
   autoMergeEligible, waivedText, MAX_ROUNDS, MERGE_GATE_AUTO_RETRIES, pendingImprovements, pendingQuestions, type Finding,
@@ -5,45 +6,40 @@ import {
 } from "./model.js";
 
 /**
- * TEXTOS DA REVISÃO DE PR — o que o orquestrador digita no card do revisor e no do autor.
+ * PR REVIEW TEXTS — what the orchestrator types into the reviewer's card and into the author's.
  *
- * Cada texto é AUTOSSUFICIENTE: o card que recebe não tem o contexto da revisão (o do revisor nasceu
- * agora; o do autor pode estar há dias em outra conversa). Por isso todos dizem, com todas as letras,
- * as quatro coisas que o loop precisa: que a IA só mergeia por ordem, a regra de bloqueio por prova, onde
- * estamos (revisão, PR, rodada N de 3) e qual ferramenta chamar no fim, com o `card` exato.
+ * Each text is SELF-SUFFICIENT: the card that receives it does not have the review's context (the
+ * reviewer's was just born; the author's may have been in another conversation for days). That is why
+ * all of them spell out the four things the loop needs: that the AI only merges on order, the rule of
+ * blocking only with proof, where we are (review, PR, round N of 3) and which tool to call at the end,
+ * with the exact `card`.
  *
- * O que veio da outra IA (títulos, respostas, provas) entra numa linha só e com teto: o texto viaja
- * por um heredoc até o tmux, e uma resposta de várias páginas não ajuda ninguém a decidir.
+ * What came from the other AI (titles, answers, proofs) goes in on a single line and capped: the text
+ * travels through a heredoc to tmux, and a multi-page answer helps nobody decide.
  *
- * Funções puras: a revisão entra, o texto sai.
+ * Pure functions: the review goes in, the text comes out.
  */
 
-const TOOL_SUBMIT = "vibehub_review_submit";
-const TOOL_RESPOND = "vibehub_review_respond";
-
-/** Uma linha, sem quebras, com teto. O que a outra IA escreveu nunca vira um bloco solto no prompt. */
-export function oneLine(text: string | undefined, max = 300): string {
-  const flat = String(text ?? "").replace(/\s+/g, " ").trim();
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
-}
+export const TOOL_SUBMIT = "vibehub_review_submit";
+export const TOOL_RESPOND = "vibehub_review_respond";
 
 /**
- * Um texto explicativo do achado (o problema, como resolver) com as quebras de linha preservadas e
- * indentadas sob o achado: é o que a pessoa leu no painel, e passos numerados achatados numa linha
- * perdiam o sentido. Teto alto, o mesmo do schema da ferramenta. PURE.
+ * An explanatory text of the finding (the problem, how to solve it) with its line breaks preserved and
+ * indented under the finding: it is what the person read on the panel, and numbered steps flattened onto
+ * one line lost their meaning. A high cap, the same as the tool's schema. PURE.
  */
-export function indentedBlock(text: string | undefined, indent: string, max = 2000): string {
+function indentedBlock(text: string | undefined, indent: string, max = 2000): string {
   const t = String(text ?? "").replace(/\r/g, "").trim();
   const capped = t.length > max ? `${t.slice(0, max - 1)}…` : t;
   return capped.split("\n").map((l) => l.trimEnd()).filter((l, i, all) => l !== "" || (all[i - 1] ?? "") !== "").join(`\n${indent}`);
 }
 
 /**
- * O que a outra IA ou uma pessoa escreveu, como entra no texto digitado no card: numa linha (ou em
- * bloco) e com `ultrathink`/`ultracode` desarmados, que ali são citação, não pedido do turno. O molde
- * (branch, sha, comandos) não passa por aqui: desarmá-lo trocaria a branch do push. PURE.
+ * What the other AI or a person wrote, as it goes into the text typed into the card: on one line (or as
+ * a block) and with `ultrathink`/`ultracode` defused, since there they are a quote, not a request of the
+ * turn. The template (branch, sha, commands) does not go through here: defusing it would change the push's branch. PURE.
  */
-const quoted = (text: string | undefined, max?: number): string => defuseUltraWords(oneLine(text, max));
+const quoted = (text: string | undefined, max = 300): string => defuseUltraWords(clipLine(text, max));
 const quotedBlock = (text: string | undefined, indent: string, max?: number): string =>
   defuseUltraWords(indentedBlock(text, indent, max));
 
@@ -63,7 +59,7 @@ function header(r: Review): string {
   );
 }
 
-/** As regras que valem para os dois lados, ditas igual nos quatro textos. */
+/** The rules that apply to both sides, said the same way in the four texts. */
 function rules(): string {
   return [
     "Regras desta revisão:",
@@ -76,8 +72,8 @@ function rules(): string {
       "regressão) TEM essa prova: é bloqueante e se resolve neste PR, nunca sugestão. Sugestão é só o que não é bug no " +
       "escopo (estilo, nome, refatoração, melhoria opcional, problema antigo fora do diff): aparece, não bloqueia, não abre rodada; " +
       "a melhoria que preserva o comportamento no código do PR é improvement, que o autor aplica sozinho.",
-    // Medido nos transcripts das revisões do erp-aux (PRs #599, #605, #624, #627): a maior parte da rodada
-    // ia em comando de 5 a 10 minutos (suíte inteira, `npm ci`, `tsc --force`), um atrás do outro.
+    // Measured in the transcripts of the erp-aux reviews (PRs #599, #605, #624, #627): most of the round
+    // went into 5-to-10-minute commands (the whole suite, `npm ci`, `tsc --force`), one after the other.
     "- Teste por recorte: rode só os testes do que o PR tocou (o arquivo ou a pasta). A suíte inteira é do CI: confira " +
       "com `gh pr checks`. Comando que passaria de uns 3 minutos troca por um recorte menor.",
   ].join("\n");
@@ -88,19 +84,19 @@ const where = (f: Finding): string => (f.file ? (f.line ? `${f.file}:${f.line}` 
 function proofText(f: Finding): string {
   if (!f.proof) return "sem prova";
   const detail = f.proof.detail ? ` — ${quoted(f.proof.detail, 200)}` : "";
-  return `${f.proof.kind} ${oneLine(f.proof.ref, 160)}${detail}`;
+  return `${f.proof.kind} ${clipLine(f.proof.ref, 160)}${detail}`;
 }
 
-/** Um achado em uma linha de cabeçalho e uma de detalhes: o que é, onde, a prova e o que cada lado disse. */
+/** A finding in one header line and one details line: what it is, where, the proof and what each side said. */
 function findingLine(f: Finding): string {
   const loc = where(f);
   const tags = [
     f.severity, STATUS_PT[f.status], f.humanDecision ? `decisão humana: ${f.humanDecision}` : "",
-    f.requested ? `pedida ao autor por ${oneLine(f.requested.by, 60)}` : "",
+    f.requested ? `pedida ao autor por ${clipLine(f.requested.by, 60)}` : "",
   ].filter(Boolean);
   const head = `- ${f.id} [${tags.join(", ")}] ${quoted(f.title, 200)}${loc ? ` (${loc})` : ""}`;
   const parts = [`prova: ${proofText(f)}`];
-  if (f.authorReply !== undefined) parts.push(`autor: "${quoted(f.authorReply)}"${f.commit ? ` (commit ${oneLine(f.commit, 60)})` : ""}`);
+  if (f.authorReply !== undefined) parts.push(`autor: "${quoted(f.authorReply)}"${f.commit ? ` (commit ${clipLine(f.commit, 60)})` : ""}`);
   if (f.reviewerReply !== undefined) parts.push(`revisor: "${quoted(f.reviewerReply)}"`);
   const blocks = [
     f.problem ? `\n    problema: ${quotedBlock(f.problem, "      ")}` : "",
@@ -112,8 +108,8 @@ function findingLine(f: Finding): string {
 const lines = (list: Finding[], empty: string): string => (list.length ? list.map(findingLine).join("\n") : `  (${empty})`);
 
 /**
- * O que o autor precisa resolver (e o revisor julgar): bloqueante, ou dúvida que o humano decidiu
- * bloquear, ainda em pé. Sugestões e itens fechados (corrigidos, retirados, risco aceito) ficam fora.
+ * What the author needs to resolve (and the reviewer to judge): blocking, or a question the human decided
+ * to block on, still standing. Suggestions and closed items (fixed, withdrawn, accepted risk) stay out.
  */
 export function actionableForAuthor(f: Finding): boolean {
   const blocks = f.severity === "blocking" || (f.severity === "question" && f.humanDecision === "block");
@@ -121,8 +117,8 @@ export function actionableForAuthor(f: Finding): boolean {
 }
 
 /**
- * O que o revisor julga numa rodada de delta: o que bloqueia e não foi retirado nem aceito como risco
- * (por humano ou não). Item que um humano mandou bloquear entra: o revisor confere o "corrigido" dele.
+ * What the reviewer judges in a delta round: what blocks and was not withdrawn or accepted as a risk
+ * (by a human or not). An item a human ordered blocked is in: the reviewer checks its "fixed".
  */
 function underReview(f: Finding): boolean {
   const blocks = f.severity === "blocking" || (f.severity === "question" && f.humanDecision === "block");
@@ -131,11 +127,11 @@ function underReview(f: Finding): boolean {
 }
 
 /**
- * QUEM AGE em cada achado, com as mesmas palavras para o revisor (que classifica) e para o autor (que
- * age): se cada lado lesse uma versão, o revisor mandaria como dúvida o que o autor corrigiria, e
- * vice-versa. O corte é o da autonomia corretiva do AGENTS.md §12: comportamento esperado claro, a IA
- * resolve; resolver exige decidir o que o sistema faz, uma pessoa decide. Os exemplos são do critério,
- * não uma lista fechada (pedido do César, 2026-11-12).
+ * WHO ACTS on each finding, in the same words for the reviewer (who classifies) and for the author (who
+ * acts): if each side read a different version, the reviewer would send as a question what the author
+ * would fix, and vice versa. The cut is the corrective autonomy of AGENTS.md §12: clear expected behaviour,
+ * the AI resolves it; resolving it requires deciding what the system does, a person decides. The examples
+ * illustrate the criterion, they are not a closed list (César's request, 2026-11-12).
  */
 const FINDING_CLASSES = [
   "Quem age em cada achado (o revisor classifica assim, e o autor age assim). A pergunta que separa: o comportamento " +
@@ -204,10 +200,10 @@ function submitCall(r: Review, extra: string): string {
 }
 
 /**
- * O que fazer quando o `gh pr review` falha. O GitHub recusa review (e Approve) do próprio PR, e a
- * conta do revisor pode não ter permissão: a IA que parasse no erro terminaria o turno sem a
- * ferramenta, e a revisão iria a impasse "IA não respondeu" a cada rodada. O registro no vibehub é o
- * que leva o loop adiante; o GitHub é a vitrine.
+ * What to do when `gh pr review` fails. GitHub refuses a review (and an Approve) of one's own PR, and the
+ * reviewer's account may lack permission: an AI that stopped at the error would end the turn without the
+ * tool, and the review would go to the impasse "IA não respondeu" every round. The record on vibehub is
+ * what moves the loop forward; GitHub is the shop window.
  */
 function ghReviewFallback(tool: string): string {
   return (
@@ -220,7 +216,7 @@ function reviewerIdentity(): string {
   return "Você é o REVISOR deste PR. Não escreva no código do autor: não faça commit, não faça push. vibehub_deliver aqui só serve para o merge por ordem (regras abaixo).";
 }
 
-/** Rodada 1: revisão completa do PR com o /code-review, publicada no GitHub e entregue estruturada. */
+/** Round 1: full review of the PR with /code-review, published on GitHub and delivered structured. */
 export function reviewerRoundPrompt(r: Review): string {
   return [
     header(r),
@@ -240,7 +236,7 @@ export function reviewerRoundPrompt(r: Review): string {
   ].join("\n");
 }
 
-/** Os achados que o autor respondeu depois da última fala do revisor: o que o revisor ainda não conferiu. */
+/** The findings the author answered after the reviewer's last message: what the reviewer has not checked yet. */
 function answeredSinceReviewer(r: Review): Set<string> {
   const lastReviewer = r.log.map((e) => e.who).lastIndexOf("reviewer");
   const ids = new Set<string>();
@@ -250,14 +246,14 @@ function answeredSinceReviewer(r: Review): Set<string> {
   return ids;
 }
 
-/** Rodada 2+: só o diff desde a rodada anterior, contra a lista fechada. */
+/** Round 2+: only the diff since the previous round, against the closed list. */
 export function reviewerDeltaPrompt(r: Review): string {
   const judged = r.findings.filter(underReview);
   const humanBlocked = judged.filter((f) => f.humanDecision === "block" || f.humanDecision === "keep");
   const waiting = pendingQuestions(r.findings);
-  // As sugestões em aberto, e as que o autor respondeu depois da última fala do revisor (ele ainda não conferiu).
+  // The open suggestions, and the ones the author answered after the reviewer's last message (not yet checked by them).
   const answered = answeredSinceReviewer(r);
-  // Dúvida que o autor respondeu (resolvida ou explicada) e nenhum humano decidiu: o revisor confere.
+  // A question the author answered (resolved or explained) and no human decided: the reviewer checks.
   const answeredDoubts = r.findings.filter((f) => f.severity === "question" && !f.humanDecision && answered.has(f.id));
   const stillWaiting = waiting.filter((f) => !answered.has(f.id));
   const suggestions = r.findings.filter((f) => f.severity === "suggestion" && (f.status === "open" || answered.has(f.id)));
@@ -326,8 +322,8 @@ export function reviewerDeltaPrompt(r: Review): string {
 }
 
 /**
- * Autonomia corretiva (AGENTS.md §12): o que quebra o que o PR quis fazer se corrige sem perguntar; o
- * que amplia escopo não se faz; dúvida de intenção é da pessoa, não da IA.
+ * Corrective autonomy (AGENTS.md §12): what breaks what the PR meant to do gets fixed without asking;
+ * what widens the scope is not done; a doubt about intent belongs to the person, not the AI.
  */
 const CORRECTIVE_AUTONOMY = [
   "- Bug ou incongruência no que o PR fez: corrija sem perguntar, com commit e teste, mesmo que tenha vindo como sugestão.",
@@ -341,8 +337,8 @@ const CORRECTIVE_AUTONOMY = [
 ];
 
 /**
- * A lista fechada para o autor: corrigir o que é bug no escopo, contestar só com prova. Com co-autor
- * na revisão, `coauthorTrailer` é a linha `Co-authored-by: Nome <email>` que dá a ele o crédito no Git.
+ * The closed list for the author: fix what is a bug within the scope, dispute only with proof. With a
+ * co-author on the review, `coauthorTrailer` is the `Co-authored-by: Nome <email>` line that gives them the credit in Git.
  */
 export function authorFixPrompt(r: Review, opts: { coauthorTrailer?: string } = {}): string {
   const todo = r.findings.filter(actionableForAuthor);
@@ -406,9 +402,9 @@ export function authorFixPrompt(r: Review, opts: { coauthorTrailer?: string } = 
 }
 
 /**
- * Uma pessoa escolheu, no painel, sugestões do revisor para o autor aplicar. Sugestão não bloqueia: o
- * autor aplica as que fazem sentido no escopo e diz por que não aplica as outras (`wontfix`). O push
- * depois do pronto volta a revisão ao revisor, que confere o que entrou.
+ * A person chose, on the panel, reviewer suggestions for the author to apply. A suggestion does not block:
+ * the author applies the ones that make sense within the scope and says why they do not apply the others
+ * (`wontfix`). The push after ready sends the review back to the reviewer, who checks what came in.
  */
 export function authorSuggestionsPrompt(r: Review, list: Finding[], opts: { by: string; coauthorTrailer?: string }): string {
   return [
@@ -446,13 +442,13 @@ export function authorSuggestionsPrompt(r: Review, list: Finding[], opts: { by: 
   ].join("\n");
 }
 
-/** O aviso, no card do autor (o do revisor fica escondido do board), de dúvida esperando quem decide. */
+/** The notice, on the author's card (the reviewer's stays hidden from the board), of a question waiting for whoever decides. */
 export function authorQuestionNoticeText(r: Review, decider: string): string {
   const n = pendingQuestions(r.findings).length;
   return `PR #${r.prNumber}: ${n} ${n === 1 ? "dúvida" : "dúvidas"} esperando a decisão de ${decider} no painel da revisão`;
 }
 
-/** Pronto: o revisor aprova no GitHub. Aprovar não é mergear. */
+/** Ready: the reviewer approves on GitHub. Approving is not merging. */
 export function reviewerApprovePrompt(r: Review): string {
   const risks = r.findings.filter((f) => f.status === "accepted_risk");
   return [
@@ -474,7 +470,7 @@ export function reviewerApprovePrompt(r: Review): string {
   ].join("\n");
 }
 
-/** A linha que abre o lembrete: o card terminou o turno sem a ferramenta que leva a rodada adiante. */
+/** The line that opens the reminder: the card finished its turn without the tool that moves the round forward. */
 export function nudgePrefix(tool: typeof TOOL_SUBMIT | typeof TOOL_RESPOND): string {
   return (
     `Lembrete do vibehub: você terminou o turno sem chamar a ferramenta ${tool}. A revisão está parada esperando essa ` +
@@ -483,9 +479,9 @@ export function nudgePrefix(tool: typeof TOOL_SUBMIT | typeof TOOL_RESPOND): str
 }
 
 /**
- * A linha que vai na frente do delta quando o PR andou depois do `ready`: o revisor precisa saber que a
- * rodada nova não veio de uma resposta do autor à lista. `merge` = o merge humano foi recusado por
- * isso; `push` = o turno do autor terminou com um push novo (alguém mandou a IA dele mexer no PR).
+ * The line that goes in front of the delta when the PR moved after `ready`: the reviewer needs to know the
+ * new round did not come from an author's answer to the list. `merge` = the human merge was refused because
+ * of it; `push` = the author's turn ended with a new push (somebody told their AI to change the PR).
  */
 export function headMovedPrefix(r: Review, cause: "merge" | "push" = "merge"): string {
   const approved = r.reviewedSha ? ` (${r.reviewedSha.slice(0, 7)})` : "";
@@ -498,7 +494,7 @@ export function headMovedPrefix(r: Review, cause: "merge" | "push" = "merge"): s
   );
 }
 
-/** O aviso de mudança de fase, gravado no card do autor: PR, fase e o motivo numa linha. */
+/** The phase change notice, recorded on the author's card: PR, phase and the reason on one line. */
 export function phaseNoticeText(r: Review): string {
   const at = `rodada ${r.round} de ${MAX_ROUNDS}`;
   switch (r.phase) {
@@ -515,7 +511,7 @@ export function phaseNoticeText(r: Review): string {
   }
 }
 
-/** O aviso, nos dois cards, de que o gate do merge falhou no commit aprovado. */
+/** The notice, on both cards, that the merge gate failed on the approved commit. */
 export function mergeGateFailedText(r: Review): string {
   if (r.mergeGate?.exhausted) {
     return `PR #${r.prNumber}: os testes do merge seguem falhando depois de rodarem de novo sozinhos ${MERGE_GATE_AUTO_RETRIES} vezes — ` +
@@ -525,9 +521,9 @@ export function mergeGateFailedText(r: Review): string {
 }
 
 /**
- * O gate do merge falhou no commit aprovado: o autor recebe a saída e conserta. Quase sempre é a
- * worktree (dependência não instalada) ou um teste instável sob carga, não o código revisado; o texto
- * diz isso para a IA não sair caçando bug no diff.
+ * The merge gate failed on the approved commit: the author gets the output and fixes it. It is almost always
+ * the worktree (a dependency not installed) or a test that is flaky under load, not the reviewed code; the
+ * text says so, so the AI does not go hunting for a bug in the diff.
  */
 export function authorMergeGatePrompt(r: Review): string {
   return [
@@ -550,25 +546,25 @@ export function authorMergeGatePrompt(r: Review): string {
   ].join("\n");
 }
 
-/** O aviso de que o merge automático não saiu: o motivo, e que o botão segue valendo. */
+/** The notice that the automatic merge did not go out: the reason, and that the button still works. */
 export function autoMergeFailedText(r: Review, why: string): string {
-  return `PR #${r.prNumber}: o merge automático não saiu (${oneLine(why, 200)}) — mergeie pelo painel.`;
+  return `PR #${r.prNumber}: o merge automático não saiu (${clipLine(why, 200)}) — mergeie pelo painel.`;
 }
 
-/** O aviso de que o Approve não foi publicado: o PR está pronto, mas o GitHub ainda mostra o pedido de mudanças. */
+/** The notice that the Approve was not published: the PR is ready, but GitHub still shows the change request. */
 export function approvePendingText(r: Review): string {
   return `PR #${r.prNumber}: Approve não publicado no GitHub — tente de novo pelo painel.`;
 }
 
-/** O aviso ao revisor humano de que a rodada deixou dúvida esperando a decisão dele no painel. */
+/** The notice to the human reviewer that the round left a question waiting for their decision on the panel. */
 export function questionNoticeText(r: Review): string {
   return `PR #${r.prNumber}: dúvida esperando sua decisão no painel`;
 }
 
-/** O motivo do impasse em palavras: "rodadas" é o código do modelo, o resto já vem escrito. */
+/** The impasse reason in words: "rodadas" is the model's code, the rest already comes written. */
 export function impasseText(reason: string | undefined): string {
   if (reason === "rodadas") {
     return `${MAX_ROUNDS} rodadas com bloqueante aberto ou contestado; o revisor humano decide cada item travado`;
   }
-  return oneLine(reason || "motivo não informado", 200);
+  return clipLine(reason || "motivo não informado", 200);
 }

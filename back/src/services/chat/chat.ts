@@ -1,8 +1,9 @@
 import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
-import { getCard, getProject, hasLiveSession, effectiveAccountSlug } from "../board/registry.js";
+import { getCard, getCardWithProject, hasLiveSession, effectiveAccountSlug } from "../board/registry.js";
 import { transcriptDirFor, sessionGoneError } from "../maestro/cardSession.js";
 import { logger } from "../../utils/logger.js";
+import { clipLine } from "../../utils/clipLine.js";
 
 /**
  * CHAT — the same session as the terminal, read as a conversation instead of as a screen.
@@ -25,7 +26,7 @@ import { logger } from "../../utils/logger.js";
  */
 
 /** How much history a chat opens with. ~400 lines is several turns without being a download. */
-export const CHAT_TAIL_LINES = 400;
+const CHAT_TAIL_LINES = 400;
 
 /**
  * Marker embedded in the follow loop's command line (a no-op `:` argument), so a leaked watcher is
@@ -35,7 +36,7 @@ export const CHAT_TAIL_LINES = 400;
 export const TRANSCRIPT_FOLLOW_MARKER = "vibehub-transcript-follow";
 
 /** Longest tool detail we put on a collapsed line. Beyond this it stops being a summary. */
-export const TOOL_DETAIL_MAX = 160;
+const TOOL_DETAIL_MAX = 160;
 
 export type ChatEventKind = "user" | "assistant" | "tool" | "system";
 
@@ -52,9 +53,8 @@ export interface ChatEvent {
 }
 
 /** Clamps a summary to one readable line. PURE. */
-export function clampDetail(value: string, max = TOOL_DETAIL_MAX): string {
-  const one = value.replace(/\s+/g, " ").trim();
-  return one.length <= max ? one : `${one.slice(0, max - 1)}…`;
+export function clampDetail(value: string): string {
+  return clipLine(value, TOOL_DETAIL_MAX);
 }
 
 function str(value: unknown): string {
@@ -112,14 +112,6 @@ export function unwrapSlashCommand(text: string): string {
 }
 
 /**
- * A user-role line that is really the HARNESS talking, not the person: a background-task
- * notification and the "[SYSTEM NOTIFICATION - NOT USER INPUT]" envelope it arrives in. These land
- * in the transcript as `type:"user"` with no `toolUseResult`, so the chat used to draw them as the
- * user's own message — the thing that made a scheduled watcher's "task completed" look like the user
- * had typed it. Returns a SHORT human label to show as a muted event, or null when it is a real
- * message. PURE.
- */
-/**
  * Claude Code's own transcript FILLER, not conversation: when a session dies mid-turn (the deploy
  * killing the SDK driver, an interrupt), the harness closes the dangling turn on resume by writing
  * a canned user line "[Request interrupted by user…]" and a canned assistant line "No response
@@ -133,6 +125,14 @@ export function isHarnessFiller(kind: "user" | "assistant", text: string): boole
   return t === "No response requested.";
 }
 
+/**
+ * A user-role line that is really the HARNESS talking, not the person: a background-task
+ * notification and the "[SYSTEM NOTIFICATION - NOT USER INPUT]" envelope it arrives in. These land
+ * in the transcript as `type:"user"` with no `toolUseResult`, so the chat used to draw them as the
+ * user's own message — the thing that made a scheduled watcher's "task completed" look like the user
+ * had typed it. Returns a SHORT human label to show as a muted event, or null when it is a real
+ * message. PURE.
+ */
 export function systemNote(text: string): string | null {
   const t = text.trim();
   if (!/^\[SYSTEM NOTIFICATION\b/i.test(t) && !t.includes("<task-notification>")) return null;
@@ -324,10 +324,7 @@ export interface ChatSource {
 
 /** The follow command for one card's transcript. THROWS when the card (or its project) is gone. */
 export async function chatSource(cardId: string): Promise<ChatSource> {
-  const card = await getCard(cardId);
-  if (!card) throw new Error("card not found");
-  const project = await getProject(card.projectId);
-  if (!project) throw new Error("project for this card not found");
+  const { card, project } = await getCardWithProject(cardId);
   const dir = transcriptDirFor(project, card, effectiveAccountSlug(card, project));
   return {
     cardId: card.id,

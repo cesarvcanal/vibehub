@@ -102,12 +102,12 @@ export function BrainManager({ trigger = "icon" }: { trigger?: "icon" | "row" } 
     if (open && text === null && brain) setText(brain.text);
   }, [open, text, brain]);
 
-  /** Every board query, so a flagged card shows its pending line without waiting for the poll. */
-  const refreshBoards = React.useCallback(() => {
+  /** The brain (both scopes) and every card list, so a flagged card shows its pending line without waiting for the poll. */
+  const refreshBoards = () => {
     // BRAIN_KEY is a prefix of every projectBrainKey, so one invalidation covers both scopes.
     void queryClient.invalidateQueries({ queryKey: BRAIN_KEY });
     void queryClient.invalidateQueries({ queryKey: CARDS_PREFIX_KEY });
-  }, [queryClient]);
+  };
 
   const saveMutation = useMutation({
     mutationFn: (): Promise<ProjectBrainWriteResult> =>

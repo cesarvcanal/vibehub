@@ -170,8 +170,8 @@ describe("watchCardWorkflows — a sondagem e suas travas", () => {
     expect(runScript.mock.calls.length).toBe(calls);
   });
   it("giving up SAYS so: the ceiling publishes a last frame marked finished", async () => {
-    // Sem isto, desistir deixava o painel — e toda aba que reconectasse depois — girando para
-    // sempre numa frota que ninguém mais acompanha.
+    // Without this, giving up left the panel — and every tab that reconnected afterwards — spinning
+    // forever on a fleet nobody follows any more.
     vi.useFakeTimers();
     const wf = await load();
     const published: Array<{ finished: boolean }> = [];
@@ -273,13 +273,13 @@ describe("watchCardWorkflows — a sondagem e suas travas", () => {
     wf.watchCardWorkflows("c12", { label: "card", dirs, watchers: () => 1, publish: (r) => published.push(r) });
     await vi.advanceTimersByTimeAsync(10);
     expect(published.map((p) => p.runId).sort()).toEqual(["wf_new", "wf_old"]);
-    // A velha silencia e é dada por encerrada; a nova continua, e a sondagem com ela.
+    // The old one goes quiet and is taken as closed; the new one goes on, and the probe with it.
     await vi.advanceTimersByTimeAsync(wf.WATCH_QUIET_MS + wf.WATCH_INTERVAL_MS);
     expect(published.filter((p) => p.runId === "wf_old").at(-1)!.finished).toBe(true);
     expect(published.filter((p) => p.runId === "wf_new").at(-1)!.finished).toBe(false);
     const calls = runScript.mock.calls.length;
     await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS * 2);
-    expect(runScript.mock.calls.length).toBeGreaterThan(calls); // ainda sondando pela nova
+    expect(runScript.mock.calls.length).toBeGreaterThan(calls); // still probing for the new one
     wf.resetWorkflowWatchesForTesting();
   });
 
@@ -330,7 +330,7 @@ describe("watchCardWorkflows — a sondagem e suas travas", () => {
     );
     wf.watchCardWorkflows("c13", { label: "card", dirs, watchers: () => 1, publish: () => {} });
     await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS * 3);
-    expect(runScript.mock.calls.length).toBe(1); // três tiques, UMA sondagem em voo
+    expect(runScript.mock.calls.length).toBe(1); // three ticks, ONE probe in flight
     release?.();
     wf.resetWorkflowWatchesForTesting();
   });
@@ -351,10 +351,10 @@ describe("runChanged — atividade, fase e ferramentas também redesenham", () =
 });
 
 /**
- * Produção, 17/10/2026: uma rodada de review durou 1h43 (4 subagentes) e o painel congelou com spinner
- * na marca de 1h — o teto contava do INÍCIO da sondagem, com o diário ainda andando. Duas outras
- * (35 subagentes) foram mortas: sem `result` para quem estava em voo, nunca "assentavam" e a tela
- * girava até o teto. Estes testes reproduzem os dois congelamentos.
+ * Production, 17/10/2026: a review round lasted 1h43 (4 subagents) and the panel froze with a spinner
+ * at the 1h mark — the cap counted from the probe's START, with the journal still moving. Two others
+ * (35 subagents) were killed: with no `result` for those in flight, they never "settled" and the screen
+ * spun until the cap. These tests reproduce both freezes.
  */
 describe("watchCardWorkflows — rodada longa e rodada morta", () => {
   const dirs = () => ({ runs: "/runs", scripts: "/scripts" });
@@ -368,7 +368,7 @@ describe("watchCardWorkflows — rodada longa e rodada morta", () => {
     runScript.mockImplementation(async () => ({ stdout: probe([{ runId: "wf_a", at: (moving += 1), agents: [AGENT()] }]), stderr: "" }));
     wf.watchCardWorkflows("l1", { label: "card", dirs, watchers: () => 1, publish: (r) => published.push(r), now: () => clock });
     await vi.advanceTimersByTimeAsync(10);
-    // 1h43 em passos de 5 min, o diário mexendo a cada tique.
+    // 1h43 in 5-min steps, the journal moving on every tick.
     for (let t = 0; t < 103; t += 5) {
       clock += 5 * 60_000;
       await vi.advanceTimersByTimeAsync(wf.WATCH_INTERVAL_MS);
@@ -453,8 +453,8 @@ describe("watchCardWorkflows — rodada longa e rodada morta", () => {
   });
 
   it("transcript grande (toolCount saturado, mesma ferramenta): o lastAt andando ainda é movimento", async () => {
-    // Revisão: um agente em laço de espera (`Bash sleep 60` aguardando CI) não muda nada que o
-    // runChanged compara — só o último timestamp do transcript anda.
+    // Review: an agent in a wait loop (`Bash sleep 60` waiting for CI) changes nothing that
+    // runChanged compares — only the transcript's last timestamp moves.
     vi.useFakeTimers();
     const wf = await load();
     const published: Array<{ finished: boolean }> = [];

@@ -3,18 +3,18 @@ import { historySettled, readHistoryTail, type HistoryEvent } from "./history.js
 import { logger } from "../../utils/logger.js";
 
 /**
- * A CONVERSA PAROU NUMA PERGUNTA PARA A PESSOA — o que a bandeja "Decisões pendentes" do chat chama
- * de pergunta em prosa, dito ao BOARD.
+ * THE CONVERSATION STOPPED ON A QUESTION FOR THE PERSON — what the chat's "Decisões pendentes" tray calls
+ * a prose question, told to the BOARD.
  *
- * A bandeja nasce no navegador, das linhas do chat (front/src/features/board/lib/pendingDecisions.ts),
- * e só existe com o card aberto. O ícone do card na barra lateral, no board e nos recentes não tinha
- * como saber dela: o turno acabou, o status é `waiting`, e o card mostrava o círculo neutro de "sua
- * vez" com uma decisão esperando (produção, 2026-10-27, card 37fa689a — "Quer que eu abra um PR
- * pequeno para a mensagem de HTTPS?"). O servidor lê o MESMO log com a MESMA regra e carimba
- * `pendingQuestionAt` no card; o front mostra o "precisa de você" de qualquer pergunta aberta.
+ * The tray is born in the browser, from the chat's lines (front/src/features/board/lib/pendingDecisions.ts),
+ * and only exists with the card open. The card's icon in the sidebar, on the board and in the recents had no
+ * way of knowing about it: the turn ended, the status is `waiting`, and the card showed the neutral "sua
+ * vez" circle with a decision waiting (production, 2026-10-27, card 37fa689a — "Quer que eu abra um PR
+ * pequeno para a mensagem de HTTPS?"). The server reads the SAME log with the SAME rule and stamps
+ * `pendingQuestionAt` on the card; the front shows the "precisa de você" for any open question.
  *
- * `proseQuestion` ESPELHA a do front, e tem de continuar espelhando: é a mesma pergunta que a bandeja
- * mostra que acende o ícone. Mude as duas juntas.
+ * `proseQuestion` MIRRORS the front's, and has to keep mirroring it: it is the same question the tray
+ * shows that lights up the icon. Change both together.
  */
 
 /**

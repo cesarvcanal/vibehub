@@ -3,44 +3,44 @@ import { toast } from "sonner";
 import { t } from "@/i18n";
 
 /**
- * NOVA VERSÃO DO VIBEHUB, enquanto a aba está aberta.
+ * NEW VIBEHUB VERSION, while the tab is open.
  *
- * Um deploy troca o back e o front, mas a aba aberta antes segue rodando o JavaScript velho até um
- * F5 — e quem olha vê o bug "ainda lá" depois de corrigido (produção, 2026-10-19). Mesmo desenho do
- * `useVersionCheck` do painel tech.multi: sonda o `index.html` (no-store) e compara o bundle de
- * entrada do Vite (`/assets/index-<hash>.js`, muda a cada build). Mudou → um aviso com
- * "Recarregar agora", e a recarga sozinha no primeiro momento SEGURO:
+ * A deploy swaps the back and the front, but a tab opened before keeps running the old JavaScript until
+ * an F5 — and whoever is looking sees the bug "still there" after it was fixed (production, 2026-10-19).
+ * Same design as the tech.multi panel's `useVersionCheck`: polls `index.html` (no-store) and compares the
+ * Vite entry bundle (`/assets/index-<hash>.js`, changes on every build). Changed → a notice with
+ * "Recarregar agora", and the automatic reload at the first SAFE moment:
  *
- *  - a aba em segundo plano (na hora, ou quando ela for para lá);
- *  - ou `VERSION_IDLE_MS` sem interação com a aba visível — quem está mexendo não é interrompido.
+ *  - the tab in the background (right away, or when it goes there);
+ *  - or `VERSION_IDLE_MS` without interaction with the tab visible — whoever is using it is not interrupted.
  *
- * Recarregar não para o trabalho de ninguém: o turno do chat vive no servidor (fechar o socket só
- * o desconecta), e rascunho, fila e outbox moram no localStorage. O que um F5 PERDE é o que está
- * acontecendo NO navegador — um anexo subindo, um áudio sendo gravado. Esses seguram a recarga
- * sozinha (`holdReload`) até terminarem; o botão do aviso continua sendo escolha da pessoa.
+ * Reloading stops nobody's work: the chat turn lives on the server (closing the socket only
+ * disconnects it), and draft, queue and outbox live in localStorage. What an F5 LOSES is what is
+ * happening IN the browser — an attachment uploading, an audio being recorded. Those hold the automatic
+ * reload (`holdReload`) until they finish; the notice's button remains the person's choice.
  */
 
-/** Sem interação por este tempo, com a aba visível, a recarga sozinha acontece. */
+/** With no interaction for this long, with the tab visible, the automatic reload happens. */
 export const VERSION_IDLE_MS = 90_000;
 
 /**
- * De quanto em quanto tempo o `index.html` é sondado. Era 60s e o aviso chegava tarde demais; a
- * sonda é um GET de um HTML pequeno, 20s não pesa em nada.
+ * How often `index.html` is polled. It was 60s and the notice arrived far too late; the
+ * probe is a GET of a small HTML, 20s weighs nothing.
  */
 export const VERSION_POLL_MS = 20_000;
 
 const BUNDLE_RE = /\/assets\/index-[A-Za-z0-9_-]+\.js/;
 
-/** O bundle de entrada citado num `index.html`, ou null (dev server, página de erro). PURA. */
+/** The entry bundle cited in an `index.html`, or null (dev server, error page). PURE. */
 export function bundleFromHtml(html: string): string | null {
   const m = html.match(BUNDLE_RE);
   return m ? m[0] : null;
 }
 
 /**
- * O bundle que ESTA aba está rodando, lido do próprio `<script>` que o carregou. É ele a referência,
- * não a primeira sondagem: uma aba que já abriu velha (cache, aba restaurada, deploy entre o load e
- * a sondagem) tomaria a versão nova por "a sua" e nunca avisaria. Null no dev server.
+ * The bundle THIS tab is running, read from the very `<script>` that loaded it. It is the reference,
+ * not the first poll: a tab that already opened stale (cache, restored tab, deploy between the load and
+ * the poll) would take the new version for "its own" and never warn. Null on the dev server.
  */
 function runningBundle(): string | null {
   for (const el of document.querySelectorAll<HTMLScriptElement>("script[src]")) {
@@ -65,12 +65,12 @@ async function currentBundle(): Promise<string | null> {
 const holds = new Set<string>();
 const holdListeners = new Set<() => void>();
 
-/** Algo em andamento no navegador que um F5 perderia (`key` único: "upload:<card>"). */
+/** Something in progress in the browser that an F5 would lose (unique `key`: "upload:<card>"). */
 export function holdReload(key: string): void {
   holds.add(key);
 }
 
-/** Terminou: a recarga pendente, se houver, volta a poder acontecer. */
+/** Finished: the pending reload, if any, may happen again. */
 export function releaseReload(key: string): void {
   if (!holds.delete(key)) return;
   for (const notify of [...holdListeners]) notify();
@@ -85,7 +85,7 @@ export function resetReloadHoldsForTesting(): void {
   holdListeners.clear();
 }
 
-/** Liga/desliga uma retenção conforme `active`, e solta ao desmontar. */
+/** Turns a hold on/off according to `active`, and releases it on unmount. */
 export function useReloadHold(key: string, active: boolean): void {
   React.useEffect(() => {
     if (!active) return;
@@ -113,7 +113,7 @@ export function useVersionCheck(opts: { intervalMs?: number; reload?: () => void
       alive = false;
       reloadRef.current();
     };
-    /** A recarga SOZINHA: só com a versão nova detectada, nada segurando e a aba sem uso. */
+    /** The AUTOMATIC reload: only with the new version detected, nothing holding and the tab idle. */
     const maybeReload = (): void => {
       if (!alive || !pending || reloadHeld()) return;
       if (document.hidden || Date.now() - lastInteraction >= VERSION_IDLE_MS) reloadNow();
@@ -127,7 +127,7 @@ export function useVersionCheck(opts: { intervalMs?: number; reload?: () => void
       lastInteraction = Date.now();
       armIdle();
     };
-    // Voltar para a aba confere na hora: é quando a pessoa vai olhar a tela.
+    // Coming back to the tab checks right away: that is when the person is going to look at the screen.
     const onVisibility = (): void => {
       maybeReload();
       if (!document.hidden) void check();
@@ -141,7 +141,7 @@ export function useVersionCheck(opts: { intervalMs?: number; reload?: () => void
       const cur = await currentBundle();
       if (!alive || !cur) return;
       if (loaded === null) {
-        loaded = cur; // sem o script na página (dev server): a primeira leitura boa é a referência
+        loaded = cur; // no script on the page (dev server): the first good read is the reference
         return;
       }
       if (cur === loaded) return;
@@ -176,7 +176,7 @@ export function useVersionCheck(opts: { intervalMs?: number; reload?: () => void
   }, [intervalMs]);
 }
 
-/** Montado uma vez no app: a sondagem não desenha nada, só o aviso quando houver. */
+/** Mounted once in the app: the polling draws nothing, only the notice when there is one. */
 export function VersionWatcher(): null {
   useVersionCheck();
   return null;

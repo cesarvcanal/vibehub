@@ -2,10 +2,10 @@ import { describe, it, expect } from "vitest";
 import { nextIdentity } from "./viewerIdentity";
 
 /**
- * O chat reconecta quando a CONTA muda — o servidor carimba o autor por conexão, então um socket
- * aberto como "mussa" continua escrevendo como "mussa" depois que a aba virou "cesar". Mas só
- * quando muda de verdade: o /auth/me chegando (nada → alguém) ou a sessão caindo (alguém → nada)
- * não são troca de conta, e reconectar nesses casos só faria a conversa piscar.
+ * The chat reconnects when the ACCOUNT changes — the server stamps the author per connection, so a
+ * socket opened as "mussa" keeps writing as "mussa" after the tab became "cesar". But only when
+ * it really changes: /auth/me arriving (nothing → someone) or the session dropping (someone → nothing)
+ * are not an account switch, and reconnecting in those cases would only make the conversation flicker.
  */
 describe("nextIdentity — quando a troca de conta exige uma conexão nova", () => {
   const start = { id: null, epoch: 0 };

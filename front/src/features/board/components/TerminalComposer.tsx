@@ -120,8 +120,8 @@ export interface TerminalComposerProps {
     text: string;
     /**
      * What the indicator says, when it is not the default "editando mensagem". The native chat
-     * uses it to name the OTHER thing that can be under the caret: uma mensagem que ainda está na
-     * FILA, que o agente nunca leu — editá-la não corrige nada, só reescreve o que vai ser dito.
+     * uses it to name the OTHER thing that can be under the caret: a message that is still in the
+     * QUEUE, which the agent never read — editing it corrects nothing, it only rewrites what is going to be said.
      */
     hint?: string;
   } | null;
@@ -301,7 +301,7 @@ export function composeMessage(text: string, attachments: readonly Attachment[])
 }
 
 /** true = something is still uploading, so a send has to wait for it. PURE. */
-export function hasPendingUpload(attachments: readonly Attachment[]): boolean {
+function hasPendingUpload(attachments: readonly Attachment[]): boolean {
   return attachments.some((a) => a.status === "uploading");
 }
 
@@ -489,7 +489,7 @@ export async function restoreInterruptedUploads(cardId: string): Promise<Attachm
 }
 
 /** A chip's upload answered: the path, or an error with Retry. PURE. */
-export function withUploadResult(list: readonly Attachment[], id: string, path: string | null): Attachment[] {
+function withUploadResult(list: readonly Attachment[], id: string, path: string | null): Attachment[] {
   return list.map((a) =>
     a.id === id ? { ...a, path: path ?? undefined, status: path ? ("ready" as const) : ("error" as const) } : a,
   );
@@ -503,14 +503,14 @@ function runUpload(
   cardId: string,
   id: string,
   file: File,
-  handler: (file: File) => Promise<string | null>,
+  uploadImage: (file: File) => Promise<string | null>,
 ): Promise<string | null> {
   const already = uploadsInFlight.get(id);
   if (already) return already;
   const flight = (async () => {
     let path: string | null = null;
     try {
-      path = await handler(file);
+      path = await uploadImage(file);
     } catch {
       path = null;
     }
@@ -1050,7 +1050,7 @@ export function TerminalComposer({
   }, [autoFocus, isMobile, draftKey, active]);
 
   /**
-   * The FIRST focus of this field puts the caret at the END of what is there (produção, 2026-10-08).
+   * The FIRST focus of this field puts the caret at the END of what is there (production, 2026-10-08).
    *
    * A field mounted with a restored draft — the card finishing "Preparando…" swaps in a new
    * composer — starts with its selection at 0, and a bare `focus()` (the auto-focus above, the
@@ -1203,10 +1203,10 @@ export function TerminalComposer({
       while (queueRef.current.length > 0) {
         const job = queueRef.current.shift();
         if (!job) break;
-        const handler = uploadRef.current;
-        if (!handler) break;
+        const uploadImage = uploadRef.current;
+        if (!uploadImage) break;
         setAttachments((prev) => prev.map((a) => (a.id === job.id ? { ...a, status: "uploading" } : a)));
-        const path = await runUpload(job.cardId, job.id, job.file, handler);
+        const path = await runUpload(job.cardId, job.id, job.file, uploadImage);
         if (keyRef.current === job.cardId) setAttachments((prev) => withUploadResult(prev, job.id, path));
       }
     } finally {
@@ -1340,12 +1340,12 @@ export function TerminalComposer({
       ctx.createMediaStreamSource(stream).connect(analyser);
       audioCtxRef.current = ctx;
       analyserRef.current = analyser;
-      const data = new Uint8Array(analyser.frequencyBinCount);
+      const samples = new Uint8Array(analyser.frequencyBinCount);
       const loop = () => {
         const live = analyserRef.current;
         if (!live) return;
-        live.getByteTimeDomainData(data);
-        setLevels(barHeights(levelFromTimeDomain(data)));
+        live.getByteTimeDomainData(samples);
+        setLevels(barHeights(levelFromTimeDomain(samples)));
         frameRef.current = requestAnimationFrame(loop);
       };
       loop();
@@ -1549,9 +1549,9 @@ export function TerminalComposer({
                 onEditLast();
               }
             } else if (e.key === "ArrowUp" && !editing && isEmptyDraft(text, attachments) && onEditLast) {
-              // A seta pra cima num campo VAZIO: a última mensagem volta pra edição — o "press up
-              // to edit queued messages" do Claude Code, e o histórico de qualquer terminal. Só
-              // com o campo vazio, porque aí não existe cursor pra ela mover.
+              // The up arrow in an EMPTY field: the last message comes back for editing — Claude Code's "press up
+              // to edit queued messages", and any terminal's history. Only
+              // with the field empty, because then there is no cursor for it to move.
               e.preventDefault();
               onEditLast();
             }
@@ -1742,7 +1742,7 @@ function AttachControl({ mobile, onPick }: { mobile: boolean; onPick: (files: Fi
 
   // The same input element is reused across picks, so clear it or choosing the same file twice in a
   // row fires no `change` and the second pick is silently lost.
-  const handlePicked = (input: HTMLInputElement | null) => {
+  const submitPickedFiles = (input: HTMLInputElement | null) => {
     const files = input?.files ? Array.from(input.files) : [];
     if (files.length > 0) onPick(files);
     if (input) input.value = "";
@@ -1759,7 +1759,7 @@ function AttachControl({ mobile, onPick }: { mobile: boolean; onPick: (files: Fi
         capture="environment"
         className="hidden"
         data-testid="composer-input-camera"
-        onChange={() => handlePicked(cameraRef.current)}
+        onChange={() => submitPickedFiles(cameraRef.current)}
       />
       <input
         ref={galleryRef}
@@ -1768,7 +1768,7 @@ function AttachControl({ mobile, onPick }: { mobile: boolean; onPick: (files: Fi
         multiple
         className="hidden"
         data-testid="composer-input-gallery"
-        onChange={() => handlePicked(galleryRef.current)}
+        onChange={() => submitPickedFiles(galleryRef.current)}
       />
       <input
         ref={fileRef}
@@ -1776,7 +1776,7 @@ function AttachControl({ mobile, onPick }: { mobile: boolean; onPick: (files: Fi
         multiple
         className="hidden"
         data-testid="composer-input-file"
-        onChange={() => handlePicked(fileRef.current)}
+        onChange={() => submitPickedFiles(fileRef.current)}
       />
 
       <DropdownMenu>

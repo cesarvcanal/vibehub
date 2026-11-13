@@ -1,12 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
-import pty from "node-pty";
 import { requireOwner } from "../auth/session.js";
 import { provisionRunner, runnerStatus, startRunner } from "../runtime/runner.js";
 import { runnerProcessStats } from "../services/reaper/reaper.js";
 import { hostExecutor, shQuote } from "../runtime/host.js";
 import { config } from "../config/env.js";
-import { bridgePty } from "./session.js";
+import { bridgePty, spawnTerminalPty } from "./session.js";
 import { getSettings } from "../services/settings/settings.js";
 import { isFreshInstall } from "../auth/users.js";
 import * as github from "../services/github/client.js";
@@ -58,12 +57,7 @@ export async function runnerRoutes(app: FastifyInstance): Promise<void> {
     const pick = "if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh";
     const line = `docker exec -it ${shQuote(config.runner.container)} env LANG=C.UTF-8 LC_ALL=C.UTF-8 sh -c ${shQuote(pick)}`;
     const { file, args } = hostExecutor().ptyCommand(line);
-    const term = pty.spawn(file, args, {
-      name: "xterm-256color",
-      cols: 120,
-      rows: 30,
-      env: { ...process.env, LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TERM: "xterm-256color" },
-    });
+    const term = spawnTerminalPty(file, args);
     logger.info({ container: config.runner.container }, "runner shell attached");
     bridgePty(socket, term, "runner-shell");
   });

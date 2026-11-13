@@ -1,45 +1,45 @@
 /**
- * O diff que o chat nativo desenha quando a IA altera código (o card estilo Cursor). PURE.
+ * The diff the native chat draws when the AI changes code (the Cursor-style card). PURE.
  *
- * A chamada da ferramenta já traz tudo: o Edit manda o trecho antigo e o novo, o Write manda o
- * arquivo inteiro. Não há leitura de disco nem pedido ao back — o diff sai do `input` da linha.
- * Linhas espelhadas do terminal só têm `{description}`: sem trechos, sem diff (null).
+ * The tool call already carries everything: Edit sends the old and the new snippet, Write sends the
+ * whole file. There is no disk read and no request to the back — the diff comes from the row's
+ * `input`. Rows mirrored from the terminal only have `{description}`: no snippets, no diff (null).
  */
 
 export type DiffLine = { kind: "add" | "del" | "ctx"; text: string };
 
 /**
- * Uma linha desenhável de diff: as do arquivo e o separador de trecho (`hunk`), que traz onde o
- * trecho começa em cada lado quando o diff diz (`@@ -a,b +c,d @@`).
+ * A drawable diff line: the file's lines and the hunk separator (`hunk`), which carries where the
+ * hunk starts on each side when the diff says so (`@@ -a,b +c,d @@`).
  */
 export type DiffRow = DiffLine | { kind: "hunk"; text: string; oldStart?: number; newStart?: number };
 
 export type LineDiff = {
-  /** Trechos alterados, cada um com suas linhas de contexto. Vazio quando nada mudou. */
+  /** Changed hunks, each with its context lines. Empty when nothing changed. */
   hunks: DiffLine[][];
   added: number;
   removed: number;
-  /** Parte do diff não está na tela (ver `hidden`). */
+  /** Part of the diff is not on screen (see `hidden`). */
   truncated?: boolean;
-  /** Quantas linhas de diff ficaram de fora do que é desenhado. */
+  /** How many diff lines were left out of what is drawn. */
   hidden?: number;
 };
 
 export type ToolDiff = LineDiff & {
   file: string;
-  /** Write: o arquivo inteiro é conteúdo novo. */
+  /** Write: the whole file is new content. */
   created?: boolean;
   replaceAll?: boolean;
 };
 
-/** Teto de linhas desenhadas num card de diff: o DOM de um diff de 10 mil linhas trava a conversa. */
+/** Ceiling of lines drawn in a diff card: the DOM of a 10-thousand-line diff freezes the conversation. */
 export const DIFF_SHOWN_MAX = 200;
-/** Um Write é o arquivo inteiro; o começo basta para saber o que foi escrito. */
+/** A Write is the whole file; the beginning is enough to know what was written. */
 export const WRITE_SHOWN_MAX = 40;
-/** Teto da tabela do LCS (linhas antigas × novas do miolo). Acima disso: tudo removido + tudo adicionado. */
+/** Ceiling of the LCS table (old × new lines of the middle). Above it: everything removed + everything added. */
 const LCS_CELLS_MAX = 400 * 400;
 
-/** Linhas de um texto, com CRLF igual a LF e sem a linha vazia fantasma do `\n` final. */
+/** Lines of a text, with CRLF same as LF and without the phantom empty line of the trailing `\n`. */
 function splitLines(text: string): string[] {
   if (text === "") return [];
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
@@ -47,12 +47,12 @@ function splitLines(text: string): string[] {
   return lines;
 }
 
-/** Diff linha a linha do miolo por LCS em programação dinâmica (O(m·n), só abaixo do teto). */
+/** Line-by-line diff of the middle via LCS with dynamic programming (O(m·n), only below the ceiling). */
 function lcsOps(before: readonly string[], after: readonly string[]): DiffLine[] {
   const m = before.length;
   const n = after.length;
   const width = n + 1;
-  // table[i*width + j] = LCS de before[i..] e after[j..].
+  // table[i*width + j] = LCS of before[i..] and after[j..].
   const table = new Uint32Array((m + 1) * width);
   for (let i = m - 1; i >= 0; i--) {
     for (let j = n - 1; j >= 0; j--) {
@@ -80,7 +80,7 @@ function lcsOps(before: readonly string[], after: readonly string[]): DiffLine[]
   return ops;
 }
 
-/** Agrupa a sequência completa em trechos: cada mudança com `context` linhas iguais em volta. */
+/** Groups the full sequence into hunks: each change with `context` equal lines around it. */
 function toHunks(ops: readonly DiffLine[], context: number): DiffLine[][] {
   const keep = new Array<boolean>(ops.length).fill(false);
   ops.forEach((op, index) => {
@@ -105,7 +105,7 @@ function toHunks(ops: readonly DiffLine[], context: number): DiffLine[][] {
   return hunks;
 }
 
-/** Corta o que é desenhado em `max` linhas no total; o resto vira contagem em `hidden`. */
+/** Cuts what is drawn to `max` lines in total; the rest becomes a count in `hidden`. */
 function capHunks(diff: LineDiff, max: number): LineDiff {
   const total = diff.hunks.reduce((sum, hunk) => sum + hunk.length, 0);
   if (total <= max) return diff;
@@ -119,7 +119,7 @@ function capHunks(diff: LineDiff, max: number): LineDiff {
   return { ...diff, hunks, truncated: true, hidden: (diff.hidden ?? 0) + total - max };
 }
 
-/** Diff de linhas entre dois textos, em trechos com `context` linhas de contexto. PURE. */
+/** Line diff between two texts, in hunks with `context` context lines. PURE. */
 export function lineDiff(before: string, after: string, context: number = 2): LineDiff {
   const a = splitLines(before);
   const b = splitLines(after);
@@ -142,7 +142,7 @@ export function lineDiff(before: string, after: string, context: number = 2): Li
       ]
     : lcsOps(midBefore, midAfter);
 
-  // Só as linhas iguais que podem virar contexto entram na sequência; o resto do prefixo/sufixo nunca aparece.
+  // Only the equal lines that can become context enter the sequence; the rest of the prefix/suffix never shows up.
   const head = a.slice(Math.max(0, prefix - context), prefix).map((text): DiffLine => ({ kind: "ctx", text }));
   const tail = a.slice(a.length - suffix, a.length - suffix + context).map((text): DiffLine => ({ kind: "ctx", text }));
   const ops = [...head, ...middle, ...tail];
@@ -153,14 +153,15 @@ export function lineDiff(before: string, after: string, context: number = 2): Li
   return capHunks(coarse ? { ...diff, truncated: true } : diff, DIFF_SHOWN_MAX);
 }
 
-/** Trecho `[início, fim)` de uma linha que de fato mudou em relação ao seu par do outro lado. */
+/** Range `[start, end)` of a line that actually changed relative to its pair on the other side. */
 export type InlineMark = readonly [start: number, end: number];
 
 /**
- * O que mudou DENTRO de cada linha de um trecho: um bloco de `−` seguido de um bloco de `+` do mesmo
- * tamanho é pareado linha a linha, e de cada par sai o miolo entre o começo e o fim em comum. É o
- * que deixa ver `2` → `3` numa linha longa sem comparar as duas no olho. Blocos de tamanhos
- * diferentes, linha toda trocada ou sem par: null (a cor da linha já diz tudo). PURE.
+ * What changed INSIDE each line of a hunk: a block of `−` followed by a block of `+` of the same size
+ * is paired line by line, and from each pair comes the middle between the common start and end. It
+ * is what lets you see `2` → `3` in a long line without comparing the two by eye. Blocks of
+ * different sizes, a fully replaced line or one without a pair: null (the line's color already says
+ * it all). PURE.
  */
 export function inlineMarks(hunk: readonly DiffLine[]): (InlineMark | null)[] {
   const marks: (InlineMark | null)[] = hunk.map(() => null);
@@ -192,7 +193,7 @@ export function inlineMarks(hunk: readonly DiffLine[]): (InlineMark | null)[] {
   return marks;
 }
 
-/** Texto inteiro como linhas adicionadas, desenhando no máximo `max`. */
+/** Whole text as added lines, drawing at most `max`. */
 function allAdded(text: string, max: number): LineDiff {
   const lines = splitLines(text);
   const diff: LineDiff = {
@@ -211,7 +212,7 @@ function isEdit(value: unknown): value is EditInput {
   return typeof o.old_string === "string" && typeof o.new_string === "string";
 }
 
-/** O que uma chamada de edição traz de texto, já validado. Só a forma — nenhum diff calculado. */
+/** The text an edit call carries, already validated. Only the shape — no diff computed. */
 type EditCall =
   | { kind: "edits"; file: string; edits: EditInput[] }
   | { kind: "content"; file: string; content: string; created: boolean };
@@ -230,7 +231,7 @@ function parseEditCall(name: string, input: unknown): EditCall | null {
     case "Write":
       return file && typeof o.content === "string" ? { kind: "content", file, content: o.content, created: true } : null;
     case "NotebookEdit":
-      // Apagar uma célula não traz o que foi apagado: não há diff honesto a desenhar.
+      // Deleting a cell does not carry what was deleted: there is no honest diff to draw.
       if (typeof o.notebook_path !== "string" || typeof o.new_source !== "string" || o.edit_mode === "delete") return null;
       return { kind: "content", file: o.notebook_path, content: o.new_source, created: false };
     default:
@@ -241,7 +242,7 @@ function parseEditCall(name: string, input: unknown): EditCall | null {
 function editsDiff(edits: readonly EditInput[]): LineDiff {
   const diffs = edits.map((edit) => lineDiff(edit.old_string, edit.new_string));
   if (diffs.length === 1) return diffs[0]!;
-  // Cada edição já vem com seu teto; o total ganha o mesmo teto para o card não crescer por edição.
+  // Each edit already comes with its ceiling; the total gets the same ceiling so the card does not grow per edit.
   const hidden = diffs.reduce((n, d) => n + (d.hidden ?? 0), 0);
   return capHunks(
     {
@@ -255,14 +256,14 @@ function editsDiff(edits: readonly EditInput[]): LineDiff {
 }
 
 /**
- * Esta chamada vira um card de diff? Mesma resposta que `toolDiff(...) !== null`, sem calcular o
- * diff — barato o bastante para rodar sobre a conversa inteira a cada token que chega. PURE.
+ * Does this call become a diff card? Same answer as `toolDiff(...) !== null`, without computing the
+ * diff — cheap enough to run over the whole conversation on every incoming token. PURE.
  */
 export function hasToolDiff(name: string, input: unknown): boolean {
   return parseEditCall(name, input) !== null;
 }
 
-/** O diff que uma chamada de ferramenta representa, ou null quando ela não altera código. PURE. */
+/** The diff a tool call represents, or null when it does not change code. PURE. */
 export function toolDiff(name: string, input: unknown): ToolDiff | null {
   const call = parseEditCall(name, input);
   if (!call) return null;
@@ -273,17 +274,17 @@ export function toolDiff(name: string, input: unknown): ToolDiff | null {
   return { file: call.file, ...editsDiff(call.edits), ...(replaceAll ? { replaceAll: true } : {}) };
 }
 
-/** Os trechos de um `ToolDiff` como linhas desenháveis, com `⋯` entre um trecho e outro. PURE. */
+/** The hunks of a `ToolDiff` as drawable lines, with `⋯` between one hunk and the next. PURE. */
 export function hunksToRows(hunks: readonly DiffLine[][]): DiffRow[] {
   return hunks.flatMap((hunk, i): DiffRow[] => (i > 0 ? [{ kind: "hunk", text: "⋯" }, ...hunk] : [...hunk]));
 }
 
-/** O que a calha e o destaque precisam de cada linha: número (null = desconhecido) e trecho alterado. */
+/** What the gutter and the highlight need from each line: number (null = unknown) and changed range. */
 export type DiffRowView = { num: number | null; mark: InlineMark | null };
 
 /**
- * Para cada linha: o número no arquivo (o antigo nas removidas, o novo nas demais), contado a partir
- * do começo do trecho, e o trecho que mudou dentro dela (`inlineMarks` por trecho). PURE.
+ * For each line: the number in the file (the old one on removed lines, the new one on the rest),
+ * counted from the start of the hunk, and the range that changed inside it (`inlineMarks` per hunk). PURE.
  */
 export function diffRowsView(rows: readonly DiffRow[]): DiffRowView[] {
   const marks: (InlineMark | null)[] = [];

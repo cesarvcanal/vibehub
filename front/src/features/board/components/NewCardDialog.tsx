@@ -10,6 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SELECT_CLASS } from "@/components/ui/select";
 import { useQuery } from "@tanstack/react-query";
 import {
   ACCOUNT_USAGE_KEY,
@@ -24,26 +25,12 @@ import {
   type BoardProject,
 } from "@/features/board/api";
 import { pillPercent } from "@/features/board/lib/usage";
-import { useBranchesDoRepo } from "@/features/board/lib/useBranchesDoRepo";
-import { manterDialogoNoEscDoSeletor } from "@/features/board/lib/useSeletorBranch";
-import SeletorBranch from "@/features/board/components/SeletorBranch";
+import { isBranchName, newCardBranchIssue } from "@/features/board/lib/branches";
+import { useRepoBranches } from "@/features/board/lib/useRepoBranches";
+import { keepDialogOpenOnPickerEscape } from "@/features/board/lib/useBranchPicker";
+import BranchPicker from "@/features/board/components/BranchPicker";
 import type { NewCard } from "@/api/types";
 import { useT } from "@/i18n";
-
-/** The native select, styled like the rest of the form controls. */
-export const SELECT_CLASS =
-  "h-9 w-full rounded-md border border-input bg-background/60 px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50";
-
-/**
- * A branch name the server will accept — the same rule as `assertBranchName` in the registry, which
- * is what the card's open would hit later. Checked HERE so a typo is a red line under the field
- * instead of a card that refuses to open minutes afterwards, in the runner, with a git message.
- * PURE.
- */
-export function isBranchName(name: string): boolean {
-  const v = name.trim();
-  return v !== "" && !v.startsWith("-") && !v.includes("..") && /^[\w./-]{1,80}$/.test(v);
-}
 
 /**
  * New card. The title is the only thing that matters — the branch, worktree and tmux session are
@@ -128,34 +115,16 @@ export function NewCardDialog({
    */
   const { owner, repo: repoName } = splitRepo(selectedProject?.repoFullName ?? "");
   const connection = selectedProject?.githubConnectionId ?? "";
-  const branchesDoRepo = useBranchesDoRepo({
+  const repoBranches = useRepoBranches({
     connection,
     owner,
     repo: repoName,
-    habilitado: open && showOptions,
+    enabled: open && showOptions,
   });
-  const { branches } = branchesDoRepo;
+  const { branches } = repoBranches;
 
-  /**
-   * What is wrong with the branch the card would be created ON, if anything. Three answers, and
-   * they do NOT weigh the same:
-   *  - `invalid` and `isBase` BLOCK the creation — the first would be refused by the server, and
-   *    the second would put the card's commits straight on the branch it is meant to deliver to
-   *    (a locked card pointed at `prod` would be working IN `prod`);
-   *  - `exists` only WARNS: opening a card on a branch that already exists is a real thing to want
-   *    (picking work back up), it just is not "create a new one", and the person should know which
-   *    of the two they are getting.
-   */
   const effectiveBase = base.trim() || defaultBranch || "";
-  const branchIssue: "invalid" | "isBase" | "exists" | null = !branch.trim()
-    ? null
-    : !isBranchName(branch)
-      ? "invalid"
-      : branch.trim() === effectiveBase
-        ? "isBase"
-        : branches?.includes(branch.trim())
-          ? "exists"
-          : null;
+  const branchIssue = newCardBranchIssue(branch, effectiveBase, branches);
   /** A base typed by hand (no list) is taken on trust; one picked from the list cannot be wrong. */
   const baseInvalid = base.trim() !== "" && !isBranchName(base);
   const blocked = branchIssue === "invalid" || branchIssue === "isBase" || baseInvalid;
@@ -203,8 +172,7 @@ export function NewCardDialog({
       ...(locked ? { locked: true } : {}),
     });
     // Close on submit, not on success: the next card can be typed while this one is still cloning.
-    reset();
-    onOpenChange(false);
+    close();
   }
 
   return (
@@ -224,7 +192,7 @@ export function NewCardDialog({
           single column that hits the 90vh cap. */}
       <DialogContent
         className="grid-cols-1 max-h-[90vh] max-w-2xl overflow-y-auto overflow-x-hidden"
-        onEscapeKeyDown={manterDialogoNoEscDoSeletor}
+        onEscapeKeyDown={keepDialogOpenOnPickerEscape}
       >
         <DialogHeader>
           <DialogTitle>{t("newCard.title")}</DialogTitle>
@@ -323,18 +291,18 @@ export function NewCardDialog({
               <div className="min-w-0 space-y-1.5">
                 <Label htmlFor="new-card-base">{t("newCard.base")}</Label>
                 {branches?.length ? (
-                  <SeletorBranch
+                  <BranchPicker
                     id="new-card-base"
-                    valor={base}
-                    aoEscolher={setBase}
+                    value={base}
+                    onSelect={setBase}
                     branches={branches}
-                    branchPadrao={branchesDoRepo.branchPadrao}
-                    atualizando={branchesDoRepo.atualizando}
-                    falhouAoAtualizar={branchesDoRepo.falhou}
-                    truncada={branchesDoRepo.truncada}
-                    aoAbrir={branchesDoRepo.atualizarSeVelha}
-                    aoAtualizar={branchesDoRepo.forcarAtualizacao}
-                    rotuloSemEscolha={t("newCard.baseInherit", { branch: defaultBranch ?? "" })}
+                    defaultBranch={repoBranches.defaultBranch}
+                    refreshing={repoBranches.refreshing}
+                    refreshFailed={repoBranches.failed}
+                    truncated={repoBranches.truncated}
+                    onOpen={repoBranches.refreshIfStale}
+                    onRefresh={repoBranches.forceRefresh}
+                    noChoiceLabel={t("newCard.baseInherit", { branch: defaultBranch ?? "" })}
                   />
                 ) : (
                   <Input

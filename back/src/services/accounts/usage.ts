@@ -5,6 +5,7 @@ import { DEFAULT_ACCOUNT_SLUG, DEFAULT_CLAUDE_DIR, profileDirFor, CREDENTIALS_FI
 import { resolvedClaudeCommand } from "./claudeCli.js";
 import { resolveAccountToken } from "./token.js";
 import { logger } from "../../utils/logger.js";
+import { setTimeout as delay } from "node:timers/promises";
 
 /**
  * PLAN USAGE PER CLAUDE ACCOUNT — "how much of this account's plan is gone, and when does it come
@@ -58,7 +59,7 @@ import { logger } from "../../utils/logger.js";
 export const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 
 /** Beta header the endpoint requires alongside the OAuth bearer. */
-export const OAUTH_BETA = "oauth-2025-04-20";
+const OAUTH_BETA = "oauth-2025-04-20";
 
 /** Claude Code's own credential file inside a profile directory (owned by profiles.ts). */
 export { CREDENTIALS_FILE };
@@ -67,10 +68,10 @@ export { CREDENTIALS_FILE };
 export const FRESH_MS = 60_000;
 
 /** First back-off after a rate limit, doubling per consecutive strike. */
-export const BACKOFF_BASE_MS = 120_000;
+const BACKOFF_BASE_MS = 120_000;
 
 /** Ceiling for the back-off — beyond this, waiting longer buys nothing. */
-export const BACKOFF_MAX_MS = 1_800_000;
+const BACKOFF_MAX_MS = 1_800_000;
 
 /** Pause between accounts in `allAccountsUsage`, so a listing is a queue and not a fan-out. */
 export const SERIAL_DELAY_MS = 250;
@@ -333,10 +334,6 @@ export function parseRateLimitHeaders(
   return out.fiveHour || out.sevenDay || out.sevenDayOpus ? out : undefined;
 }
 
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 /**
  * Runs a script that prints a profile's credential file and parses the login out of it. Returns no
  * login when there is none AND when the runner cannot be reached — the caller separates those two
@@ -546,7 +543,7 @@ export async function allAccountsUsage(): Promise<{ bySlug: Record<string, Accou
   for (const slug of slugs) {
     const { result, called } = await usageFor(slug);
     bySlug[slug] = result;
-    if (called && slug !== slugs[slugs.length - 1]) await sleep(SERIAL_DELAY_MS);
+    if (called && slug !== slugs[slugs.length - 1]) await delay(SERIAL_DELAY_MS);
   }
   return { bySlug, fetchedAt: Date.now() };
 }

@@ -72,7 +72,7 @@ const CRED_ID_RE = /^[0-9a-f]{12}$/;
 /** Names the agent can type without quoting games; also what shows in the UI list. */
 const CRED_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{1,39}$/;
 
-export function assertCredentialName(name: string): string {
+function assertCredentialName(name: string): string {
   const v = String(name ?? "").trim();
   if (!CRED_NAME_RE.test(v)) {
     throw new Error(
@@ -98,7 +98,7 @@ export function suggestCredentialName(hint: string): string {
 }
 
 /** Vault key of one part of a credential: `CRED_<ID_UPPER>_<PART>`. PURE. */
-export function credentialSecretKey(id: string, part: "USER" | "PASS" | "VALUE"): string {
+function credentialSecretKey(id: string, part: "USER" | "PASS" | "VALUE"): string {
   if (!CRED_ID_RE.test(String(id ?? ""))) throw new Error(`invalid credential id: '${id}'`);
   return `CRED_${id.toUpperCase()}_${part}`;
 }
@@ -183,9 +183,9 @@ export async function deleteCredential(id: string, by?: string): Promise<boolean
     return found;
   });
   if (!removed) return false;
-  await secretDelete(credentialSecretKey(id, "USER"));
-  await secretDelete(credentialSecretKey(id, "PASS"));
-  await secretDelete(credentialSecretKey(id, "VALUE"));
+  // Only the parts createCredential wrote for this type: each delete rewrites the whole vault.
+  const parts = removed.type === "userpass" ? (["USER", "PASS"] as const) : (["VALUE"] as const);
+  for (const part of parts) await secretDelete(credentialSecretKey(id, part));
   logger.info(
     { audit: true, action: "credential.delete", credential: removed.name, id, by },
     "credential removed from the vault",

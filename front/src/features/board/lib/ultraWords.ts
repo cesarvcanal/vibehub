@@ -145,17 +145,17 @@ function quotedSpans(text: string): { start: number; end: number }[] {
 }
 
 /**
- * Até onde vai o NOME de um slash command — 0 quando a mensagem não é um.
+ * How far the NAME of a slash command goes — 0 when the message is not one.
  *
- * A regra antiga descartava a mensagem INTEIRA por causa da primeira letra: "começou com barra,
- * então nada aqui é palavra reservada". O preço apareceu em produção (2026-09-28): uma mensagem
- * que abria com `/superpowers:systematic-debugging`, trazia parágrafos de contexto e terminava em
- * `ultracode` não escalava nada — a palavra estava a duas linhas do comando e foi descartada junto
- * com ele.
+ * The old rule discarded the WHOLE message because of the first letter: "it started with a slash,
+ * so nothing here is a reserved word". The price showed up in production (2026-09-28): a message
+ * that opened with `/superpowers:systematic-debugging`, carried paragraphs of context and ended in
+ * `ultracode` escalated nothing — the word was two lines away from the command and was discarded along
+ * with it.
  *
- * O que é comando é o PRIMEIRO TOKEN. O que vem depois são os argumentos, que o comando expande
- * para dentro do prompt — prosa, onde a palavra reservada vale como valeria em qualquer frase. O
- * nome em si segue de fora: `/ultracode-review` é o nome de um comando, não um pedido de esforço.
+ * What is the command is the FIRST TOKEN. What comes after are the arguments, which the command
+ * expands into the prompt — prose, where the reserved word counts as it would in any sentence. The
+ * name itself stays out: `/ultracode-review` is the name of a command, not a request for effort.
  * PURE, TOTAL.
  */
 function commandNameEnd(text: string): number {
@@ -166,7 +166,7 @@ function commandNameEnd(text: string): number {
 
 /**
  * Every occurrence of one keyword, under the CLI's rules:
- *  - o NOME de um slash command não é palavra reservada — só ele, não a mensagem toda (ver
+ *  - the NAME of a slash command is not a reserved word — only it, not the whole message (see
  *    `commandNameEnd`);
  *  - a hit inside a quote/bracket/tag does not count (see `quotedSpans`);
  *  - a hit glued to a path or a flag does not count either — `-ultracode`, `ultracode/x`,
@@ -184,7 +184,7 @@ export function findKeyword(text: string, keyword: UltraKeyword): UltraMatch[] {
     if (m.index === undefined) continue;
     const start = m.index;
     const end = start + m[0].length;
-    if (start < nameEnd) continue; // dentro do nome do comando: é o nome, não o pedido
+    if (start < nameEnd) continue; // inside the command name: it is the name, not the request
     if (spans.some((s) => start >= s.start && start < s.end)) continue;
     const before = source[start - 1];
     const after = source[end];

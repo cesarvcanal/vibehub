@@ -281,7 +281,7 @@ export function cardState(
   // The conversation STOPPED on a question to the person — what the chat's pending-decisions tray
   // lists. It waits on them whether or not a process is still warm behind it; only their own filing
   // (done, paused) outranks it. The neutral "your turn" circle there read as "nothing to decide"
-  // (produção, 2026-10-27).
+  // (production, 2026-10-27).
   const asks = !!card.pendingQuestionAt && card.status !== "working" && card.column !== "done" && !card.pausedAt;
   // No process behind it: a spinner over a dead session would be a lie, whatever the last hook said.
   if (card.hibernatedAt) return make(asks ? "needs_me" : "hibernated");

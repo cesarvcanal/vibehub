@@ -21,10 +21,10 @@ import {
 } from "./manager.js";
 
 /**
- * O TURNO QUE A REDE DERRUBOU (produção, card 8f2a, 23/10/2026 18:46): o CLI esgotou as próprias
- * tentativas e fechou o turno com "API Error: Can't reach the API server — check your internet or
- * DNS (EAI_AGAIN)". Nada tentava de novo: o card ficou parado em "falhou" até alguém escrever
- * "continua". Uma falha TRANSITÓRIA da API agora volta sozinha, com espera crescente e teto.
+ * THE TURN THE NETWORK KNOCKED DOWN (production, card 8f2a, 23/10/2026 18:46): the CLI exhausted its
+ * own attempts and closed the turn with "API Error: Can't reach the API server — check your internet or
+ * DNS (EAI_AGAIN)". Nothing tried again: the card sat at "falhou" until someone wrote
+ * "continua". A TRANSIENT API failure now comes back on its own, with a growing wait and a cap.
  */
 
 const { observed } = vi.hoisted(() => ({ observed: [] as Array<{ type: string; isError?: boolean }> }));
@@ -135,8 +135,8 @@ describe("falha transitória da API — o turno volta sozinho", () => {
     sendAgentTurn(session, "roda a suíte e abre o PR", ORDER);
     emit({ type: "result", subtype: "success", isError: true, result: EAI });
     expect(userWrites()).toEqual(["roda a suíte e abre o PR"]);
-    // a espera é parte do turno: a bolinha segue "trabalhando", o marcador fica para um deploy no
-    // meio dela, e quem acompanha de fora não recebe um "falhou" que o painel já está resolvendo
+    // the wait is part of the turn: the dot stays "trabalhando", the marker stays in case a deploy lands
+    // in the middle of it, and whoever follows from outside does not get a "falhou" the panel is already resolving
     expect(driverTurnRunning(CARD)).toBe(true);
     expect(observed.filter((e) => e.type === "result")).toEqual([]);
     vi.advanceTimersByTime(API_RETRY_DELAYS_MS[0]! - 1);
@@ -158,7 +158,7 @@ describe("falha transitória da API — o turno volta sozinho", () => {
     const session = ensure();
     sendAgentTurn(session, "roda a suíte e abre o PR", ORDER);
     emit({ type: "result", subtype: "success", isError: true, result: EAI });
-    await new Promise((r) => setTimeout(r, 100)); // dá tempo de um apagar indevido acontecer
+    await new Promise((r) => setTimeout(r, 100)); // gives time for a wrongful delete to happen
     expect((await readInflightMarker(CARD))?.preview).toBe("roda a suíte e abre o PR");
     expect(userWrites()).toHaveLength(1);
   });
@@ -235,11 +235,11 @@ describe("falha transitória da API — o turno volta sozinho", () => {
       vi.advanceTimersByTime(delay);
     }
     expect(userWrites()).toHaveLength(1 + API_RETRY_DELAYS_MS.length);
-    // o teto: mais uma falha vira nota, nunca outro envio
+    // the cap: one more failure becomes a note, never another send
     emit({ type: "result", subtype: "success", isError: true, result: EAI });
     vi.advanceTimersByTime(10 * API_RETRY_DELAYS_MS.at(-1)!);
     expect(userWrites()).toHaveLength(1 + API_RETRY_DELAYS_MS.length);
-    // desistiu: agora sim o card para e o "falhou" sai, uma vez
+    // gave up: now the card does stop and the "falhou" goes out, once
     expect(driverTurnRunning(CARD)).toBe(false);
     expect(observed.filter((e) => e.type === "result")).toHaveLength(1);
     vi.useRealTimers();
@@ -248,7 +248,7 @@ describe("falha transitória da API — o turno volta sozinho", () => {
       expect(history.some((e) => e.type === "system_note" && (e as { text?: string }).text === NOTE_API_RETRY_EXHAUSTED)).toBe(true);
     });
 
-    // depois de um turno que deu certo, a próxima queda começa a contagem do zero
+    // after a turn that succeeded, the next drop starts the count from zero
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     sendAgentTurn(session, "de novo", ORDER);
     emit({ type: "result", subtype: "success", isError: false, result: "feito" });

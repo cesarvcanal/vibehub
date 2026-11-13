@@ -28,16 +28,16 @@ function DiffBody({ diff }: { diff: ToolDiff }) {
 }
 
 /**
- * O card de uma ferramenta que alterou código, no estilo do Cursor: o arquivo, o contador `+N −M`
- * e só os trechos alterados. Mesmo esqueleto visual do `SdkWorkflowCard` (cabeçalho-botão com
- * chevron). Nasce aberto — o que a IA mudou é o que se quer ver; o corpo tem altura máxima e rola.
+ * The card of a tool that changed code, in the Cursor style: the file, the `+N −M` counter
+ * and only the changed hunks. Same visual skeleton as `SdkWorkflowCard` (button header with
+ * chevron). It starts open — what the AI changed is what one wants to see; the body has a max height and scrolls.
  */
 export function ToolDiffCard({ row, diff }: { row: Extract<SdkRow, { kind: "tool" }>; diff: ToolDiff }) {
   const t = useT();
   const [open, setOpen] = React.useState(true);
   const detail = React.useContext(SdkDetailContext);
   const status = toolStatus(row);
-  // Uma edição que FALHOU (trecho não encontrado, arquivo mudou) não pode parecer feita.
+  // An edit that FAILED (snippet not found, file changed) must not look done.
   const failed = row.result?.isError === true;
   const Icon = diff.created ? FilePlus : FilePen;
   const badge = diff.created ? t("sdk.diffWrote") : diff.replaceAll ? t("sdk.diffReplaceAll") : null;

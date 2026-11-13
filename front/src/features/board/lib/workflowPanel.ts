@@ -1,13 +1,13 @@
 import type { WorkflowAgentFrame, WorkflowFeedItem } from "./sdkChat";
 
 /**
- * As contas do PAINEL DO WORKFLOW (components/WorkflowPanel.tsx), fora do componente para serem
- * testáveis sem tela: tempos legíveis, quanto falta, agrupamento por fase e o feed de um subagente.
- * Tudo PURE.
+ * The calculations of the WORKFLOW PANEL (components/WorkflowPanel.tsx), kept out of the component so
+ * they are testable without a screen: readable times, how much is left, grouping by phase and a
+ * subagent's feed. All PURE.
  */
 
-/** "45s", "3m 12s", "1h 04m". Negativo ou inválido vira "0s". */
-export function formatDuration(ms: number): string {
+/** "45s", "3m 12s", "1h 04m". Negative or invalid becomes "0s". */
+export function formatWholeSeconds(ms: number): string {
   const seconds = Number.isFinite(ms) && ms > 0 ? Math.floor(ms / 1000) : 0;
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
@@ -15,7 +15,7 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
 }
 
-/** Quantos subagentes trabalharam AO MESMO TEMPO no pico (o fim conta antes do começo no empate). */
+/** How many subagents worked AT THE SAME TIME at the peak (on a tie, the end counts before the start). */
 function observedConcurrency(agents: readonly WorkflowAgentFrame[], now: number): number {
   const edges: Array<[number, 1 | -1]> = [];
   for (const a of agents) {
@@ -34,10 +34,10 @@ function observedConcurrency(agents: readonly WorkflowAgentFrame[], now: number)
 }
 
 /**
- * Quanto falta, pela média de quem já terminou — calculado na tela, porque o relógio que anda é o
- * dela. Em voo: a média menos o que já correu; na fila (contados no diário, fora da lista): a média
- * inteira; tudo dividido pela concorrência observada. Sem concluído com tempo conhecido não há
- * base: `null`.
+ * How much is left, by the average of those already finished — calculated on screen, because the
+ * clock that moves is the screen's. In flight: the average minus what has already run; in the queue
+ * (counted in the journal, outside the list): the whole average; all divided by the observed
+ * concurrency. With no finished agent of known duration there is no basis: `null`.
  */
 export function estimateWorkflowRemaining(
   run: { agents: readonly WorkflowAgentFrame[]; total: number; done: number },
@@ -58,7 +58,7 @@ export function estimateWorkflowRemaining(
   return { remainingMs: Math.round((inFlight + queued * averageMs) / lanes), averageMs: Math.round(averageMs) };
 }
 
-/** As fases na ordem em que o painel as desenha: o plano primeiro, depois as que só os agentes citam. */
+/** The phases in the order the panel draws them: the plan first, then the ones only the agents mention. */
 function orderedPhases(agents: readonly WorkflowAgentFrame[], plan: readonly string[]): string[] {
   const order = [...plan];
   for (const a of agents) {
@@ -68,7 +68,7 @@ function orderedPhases(agents: readonly WorkflowAgentFrame[], plan: readonly str
   return order;
 }
 
-/** Os agentes agrupados por fase, só os grupos com alguém; os sem fase vão por último (fase ""). */
+/** The agents grouped by phase, only the groups with someone in them; those without a phase go last (phase ""). */
 export function groupAgentsByPhase(
   agents: readonly WorkflowAgentFrame[],
   plan: readonly string[],
@@ -83,15 +83,15 @@ export interface PhasePill {
   done: number;
   total: number;
   /**
-   * done = todos os que começaram nela terminaram; current = alguém rodando; waiting = ninguém ainda;
-   * stopped = ninguém rodando, mas alguém parou sem responder (rodada morta ou abandonada).
+   * done = everyone who started in it has finished; current = someone running; waiting = nobody yet;
+   * stopped = nobody running, but someone stopped without answering (dead or abandoned run).
    */
   state: "done" | "current" | "waiting" | "stopped";
 }
 
 /**
- * Uma pílula por fase do plano (inclusive as que ainda não começaram) e por fase só citada.
- * `finished`: numa rodada terminada, quem não respondeu não está mais rodando.
+ * One pill per phase of the plan (including the ones that have not started yet) and per phase only mentioned.
+ * `finished`: in a finished run, whoever did not answer is no longer running.
  */
 export function phasePills(agents: readonly WorkflowAgentFrame[], plan: readonly string[], finished = false): PhasePill[] {
   return orderedPhases(agents, plan).map((title) => {
@@ -104,7 +104,7 @@ export function phasePills(agents: readonly WorkflowAgentFrame[], plan: readonly
   });
 }
 
-/** Uma linha do feed na tela. `thinking` = ainda pensando (há `ms`); `thought` = pensou por `ms`. */
+/** A line of the feed on screen. `thinking` = still thinking (for `ms`); `thought` = thought for `ms`. */
 export type FeedLine =
   | { kind: "tool"; tool: string; target: string }
   | { kind: "text"; text: string }
@@ -112,9 +112,9 @@ export type FeedLine =
   | { kind: "thinking"; ms: number };
 
 /**
- * O feed lido pela pessoa. O resultado cru de cada ferramenta fica de fora (é ruído: o verbo e o
- * alvo já contam a ação). O raciocínio NUNCA mostra texto — o CLI grava vazio, e mesmo um texto
- * que viesse não é para a tela: vira só quanto durou, até o passo seguinte.
+ * The feed as the person reads it. Each tool's raw result is left out (it is noise: the verb and the
+ * target already tell the action). Reasoning NEVER shows text — the CLI writes it empty, and even a text
+ * that did come is not for the screen: it becomes only how long it lasted, until the next step.
  */
 export function feedLines(
   items: readonly WorkflowFeedItem[],
@@ -137,7 +137,7 @@ export function feedLines(
 const VERB_TOOLS = new Set(["Read", "Edit", "Write", "Grep", "Glob", "Bash", "Agent", "WebFetch", "WebSearch", "TodoWrite"]);
 const VERB_ALIASES: Record<string, string> = { MultiEdit: "Edit", NotebookEdit: "Edit", Task: "Agent" };
 
-/** A chave i18n do verbo humano de uma ferramenta ("Leu", "Editou"…); desconhecida → genérico. */
+/** The i18n key of a tool's human verb ("Leu", "Editou"…); unknown → generic. */
 export function verbKey(tool: string): string {
   const name = VERB_ALIASES[tool] ?? tool;
   return VERB_TOOLS.has(name) ? `sdk.verb.${name}` : "sdk.verb.default";

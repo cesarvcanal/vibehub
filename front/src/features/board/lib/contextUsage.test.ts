@@ -29,7 +29,7 @@ describe("contextHue — a cor desliza, não pula", () => {
     for (let p = 1; p <= 100; p++) {
       const h = contextHue(p);
       expect(h).toBeLessThanOrEqual(prev);
-      // Um degrau visível seria um salto grande entre dois pontos vizinhos.
+      // A visible step would be a big jump between two neighbouring points.
       expect(prev - h).toBeLessThan(10);
       prev = h;
     }

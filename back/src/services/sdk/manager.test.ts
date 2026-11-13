@@ -15,7 +15,7 @@ import {
   driverActivity,
   driverTurnRunning,
   ensureDriverSession,
-  handleClientFrame,
+  dispatchClientFrame,
   hasDriverSession,
   isCardChatInUse,
   missedDuringSetup,
@@ -157,12 +157,12 @@ afterEach(async () => {
   disk.failRewrites = false;
   resetSdkSessionsForTesting();
   setDriverSpawnerForTesting(null);
-  // DRENA a fila de appends do log antes de trocar a pasta de dados. `appendHistory` resolve o
-  // caminho do arquivo DENTRO da fila, já na hora de escrever: um append ainda enfileirado aqui
-  // acordaria no teste seguinte e escreveria na pasta temporária DELE (e, no caminho do rm,
-  // recriaria o diretório no meio da remoção — o ENOTEMPTY intermitente). `rewindHistory` com um
-  // texto que não existe não escreve nada: ele só entra na fila e espera a vez, que é o que
-  // precisamos. Um flake de ORDEM é pior que lento — ele muda de teste a cada rodada.
+  // DRAINS the log's append queue before switching the data folder. `appendHistory` resolves the
+  // file path INSIDE the queue, right when it writes: an append still queued here would wake up in
+  // the next test and write to THAT test's temporary folder (and, on the rm path, would recreate the
+  // directory in the middle of the removal — the intermittent ENOTEMPTY). `rewindHistory` with a
+  // text that does not exist writes nothing: it just enters the queue and waits its turn, which is
+  // what we need. An ORDER flake is worse than a slow one — it moves from test to test on each run.
   await Promise.all([rewindHistory(CARD, ""), rewindHistory(CARD2, ""), questionDraftsSettled(CARD), questionDraftsSettled(CARD2)]);
   config.dataDir = savedDataDir;
   await rm(dir, { recursive: true, force: true });
@@ -272,10 +272,10 @@ describe("attachSocket — multiplexing (duas abas = uma sessão)", () => {
     expect(ready.turnActive).toBe(false);
   });
 
-  // Produção, 2026-10-20 (cards cfb8 e 4f4b): depois da retomada pós-deploy o CLI seguiu num turno
-  // que ele mesmo abriu (a tarefa em segundo plano tinha morrido). Quem abria ou recarregava o card
-  // recebia `turnActive: false`: o chat nascia parado, a ferramenta rodando sem spinner, e a pessoa
-  // mandava "continue" para um card que estava trabalhando.
+  // Production, 2026-10-20 (cards cfb8 and 4f4b): after the post-deploy resume the CLI went on in a turn
+  // it opened itself (the background task had died). Whoever opened or reloaded the card got
+  // `turnActive: false`: the chat was born stopped, the tool running with no spinner, and the person
+  // sent "continue" to a card that was working.
   it("the synthesized `ready` says a turn is IN FLIGHT during a turn the CLI opened by itself", () => {
     const session = ensure();
     const s1 = fakeSocket();
@@ -283,14 +283,14 @@ describe("attachSocket — multiplexing (duas abas = uma sessão)", () => {
     spawned[0]!.stdout.emit("data", line({ type: "ready" }));
     s1.emit("message", Buffer.from(`{"type":"user","text":"roda a suíte em background"}`));
     spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
-    // a tarefa terminou: o CLI acorda o modelo sem mensagem nenhuma
+    // the task finished: the CLI wakes the model with no message at all
     spawned[0]!.stdout.emit("data", line({ type: "tool_use", id: "toolu_w", name: "Bash", input: { command: "npx vitest run" } }));
     const s2 = fakeSocket();
     attachSocket(session, s2 as never);
     const ready = JSON.parse(s2.sent[0]!) as { type: string; turnActive?: boolean };
     expect(ready.type).toBe("ready");
     expect(ready.turnActive).toBe(true);
-    // o result desse turno fecha: quem chega depois vê o card parado de verdade
+    // that turn's result closes: whoever arrives afterwards sees the card truly stopped
     spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
     const s3 = fakeSocket();
     attachSocket(session, s3 as never);
@@ -389,7 +389,7 @@ describe("the turn survives the page (o bug do Cmd+Shift+R)", () => {
     const socket = fakeSocket();
     attachSocket(session, socket as never);
     const bytes = line({ type: "assistant_text", text: "ação" });
-    // O pipe corta onde quiser: aqui, no meio dos dois bytes do "ç".
+    // The pipe cuts wherever it likes: here, in the middle of the two bytes of the "ç".
     const cut = bytes.indexOf(Buffer.from("ç")) + 1;
     spawned[0]!.stdout.emit("data", bytes.subarray(0, cut));
     spawned[0]!.stdout.emit("data", bytes.subarray(cut));
@@ -401,8 +401,8 @@ describe("the turn survives the page (o bug do Cmd+Shift+R)", () => {
     const session = ensure();
     const socket = fakeSocket();
     attachSocket(session, socket as never);
-    // ~8 MB de texto num único `assistant_text`, entregue em chunks de 1 KB (o tamanho de um pipe
-    // sob carga). Reprocurar o buffer inteiro a cada chunk soma dezenas de GB varridos.
+    // ~8 MB of text in a single `assistant_text`, delivered in 1 KB chunks (the size of a pipe
+    // under load). Re-searching the whole buffer on every chunk adds up to tens of GB scanned.
     const big = "x".repeat(8 * 1024 * 1024);
     const bytes = line({ type: "assistant_text", text: big });
     const started = performance.now();
@@ -499,12 +499,12 @@ describe("question_answer — reaches the LIVE driver", () => {
 });
 
 /**
- * A PERGUNTA ÓRFÃ (produção, 2026-10-07). O driver morreu com um cartão de pergunta de pé (um
- * deploy reiniciou o back às 16:50; a pergunta era das 16:41). O histórico redesenha o cartão como
- * pendente — mas o driver novo guarda as perguntas só em memória e nunca ouviu falar dela:
- *  - o CLIQUE ia ao driver novo e voltava "no pending question with id q_3_…" — resposta perdida;
- *  - a MENSAGEM escrita no lugar não encerrava o cartão (só o driver que o abriu sabe fazer isso),
- *    e a bandeja seguia pedindo a resposta de algo já respondido.
+ * THE ORPHAN QUESTION (production, 2026-10-07). The driver died with a question card up (a deploy
+ * restarted the back at 16:50; the question was from 16:41). The history redraws the card as
+ * pending — but the new driver keeps questions only in memory and never heard of it:
+ *  - the CLICK went to the new driver and came back "no pending question with id q_3_…" — answer lost;
+ *  - the MESSAGE written instead did not close the card (only the driver that opened it knows how),
+ *    and the tray kept asking for the answer to something already answered.
  */
 describe("pergunta órfã — o cartão sobreviveu ao driver que o abriu", () => {
   const QUESTIONS = [
@@ -535,7 +535,7 @@ describe("pergunta órfã — o cartão sobreviveu ao driver que o abriu", () =>
     albert.emit("message", Buffer.from(JSON.stringify({ type: "question_draft", id: "q_3_1791402112898", picked: [["No cabeçalho"], []], other: ["", ""] })));
     await vi.waitFor(async () => expect((await readHistory(CARD)).some((e) => e.type === "user_question")).toBe(true));
     await questionDraftsSettled(CARD);
-    resetSdkSessionsForTesting(); // o deploy
+    resetSdkSessionsForTesting(); // the deploy
     const successor = ensure();
     const socket = fakeSocket();
     attachSocket(successor, socket as never, { kind: "user", name: "cesar" });
@@ -600,7 +600,7 @@ describe("pergunta órfã — o cartão sobreviveu ao driver que o abriu", () =>
     expect(sentTypes(socket)).toContain("question_result");
   });
 
-  // ---- achados da revisão adversarial do PR #98 ----
+  // ---- findings from the adversarial review of PR #98 ----
 
   it("F1: depois de um F5, a resposta da órfã NÃO volta do transcript como bolha 'do terminal'", async () => {
     const { socket } = await orphanedCard();
@@ -614,7 +614,7 @@ describe("pergunta órfã — o cartão sobreviveu ao driver que o abriu", () =>
       sent = user!.text!;
     });
     await vi.waitFor(async () => expect((await readHistory(CARD)).some((e) => e.type === "question_result")).toBe(true));
-    // o CLI grava a mensagem no transcript; o próximo connect funde transcript + histórico
+    // the CLI writes the message to the transcript; the next connect merges transcript + history
     const jsonl = JSON.stringify({ type: "user", uuid: "t-1", timestamp: new Date(Date.now() + 1000).toISOString(), message: { role: "user", content: sent } });
     expect(mergeTranscriptReplay(jsonl, await readHistory(CARD)).filter((e) => e.type === "user")).toEqual([]);
   });
@@ -639,13 +639,13 @@ describe("pergunta órfã — o cartão sobreviveu ao driver que o abriu", () =>
 
   it("F4: clicar a órfã com o driver já morto avisa a tela — a resposta não some calada", async () => {
     const { successor, socket } = await orphanedCard();
-    spawned[1]!.exitCode = 1; // morreu, e o close ainda não chegou
+    spawned[1]!.exitCode = 1; // it died, and the close has not arrived yet
     socket.emit("message", Buffer.from(JSON.stringify({ type: "question_answer", id: "q_3_1791402112898", answers: [{ selected: ["No item"] }] })));
     await vi.waitFor(() => expect(sentTypes(socket)).toContain("error"));
-    expect(successor.settledOrphans.has("q_3_1791402112898")).toBe(false); // o próximo driver ainda a recebe
+    expect(successor.settledOrphans.has("q_3_1791402112898")).toBe(false); // the next driver still receives it
   });
 
-  // ---- achados da 2ª rodada adversarial do PR #98 ----
+  // ---- findings from the 2nd adversarial round of PR #98 ----
 
   it("R1: uma leitura do histórico que FALHA não dá a varredura por feita — a próxima mensagem encerra a órfã", async () => {
     const { socket } = await orphanedCard();
@@ -669,7 +669,7 @@ describe("pergunta órfã — o cartão sobreviveu ao driver que o abriu", () =>
     await vi.waitFor(async () => expect((await readHistory(CARD)).some((e) => e.type === "question_result")).toBe(true));
     socket.emit("message", Buffer.from(JSON.stringify({ type: "question_answer", id: "q_3_1791402112898", answers: [{ selected: ["No item"] }] })));
     await vi.waitFor(() => expect(socket.sent.some((s) => s.includes("no pending question with id q_3_1791402112898"))).toBe(true));
-    expect(spawned[1]!.stdin.written.filter((w) => w.includes(`"type":"user"`))).toHaveLength(1); // só a mensagem escrita
+    expect(spawned[1]!.stdin.written.filter((w) => w.includes(`"type":"user"`))).toHaveLength(1); // only the written message
   });
 
   it("a pergunta que o driver VIVO acabou de encerrar não vira órfã na corrida com o disco", async () => {
@@ -678,19 +678,19 @@ describe("pergunta órfã — o cartão sobreviveu ao driver que o abriu", () =>
     attachSocket(session, socket as never);
     spawned[0]!.stdout.emit("data", line({ type: "user_question", id: "q_1_1", questions: QUESTIONS }));
     await vi.waitFor(async () => expect((await readHistory(CARD)).some((e) => e.type === "user_question")).toBe(true));
-    // a mensagem libera o cartão: o driver responde NA HORA, antes de o append dele chegar ao disco
+    // the message releases the card: the driver answers RIGHT AWAY, before its append reaches the disk
     socket.emit("message", Buffer.from(`{"type":"user","text":"outra coisa"}`));
     spawned[0]!.stdout.emit("data", line({ type: "question_result", id: "q_1_1", superseded: true }));
     const results = async () => (await readHistory(CARD)).filter((e) => e.type === "question_result");
     await vi.waitFor(async () => expect((await results()).length).toBeGreaterThan(0));
-    await new Promise((resolve) => setTimeout(resolve, 200)); // a leitura do manager, se houver, já terminou
+    await new Promise((resolve) => setTimeout(resolve, 200)); // the manager's read, if any, has already finished
     expect(await results()).toHaveLength(1);
   });
 
-  // ---- produção, 2026-10-19 (cards 98f4e270 e 8c417f8e): a bandeja cobrava a pergunta VELHA ----
-  // O deploy matou o driver com a pergunta Q1 de pé; a retomada automática fez o Claude perguntar
-  // de novo (Q2), a pessoa respondeu Q2 CLICANDO — e Q1 seguiu pendente para sempre, porque só uma
-  // MENSAGEM varria as órfãs. Meia hora depois a bandeja ainda mandava responder Q1.
+  // ---- production, 2026-10-19 (cards 98f4e270 and 8c417f8e): the tray demanded the OLD question ----
+  // The deploy killed the driver with question Q1 up; the automatic resume made Claude ask
+  // again (Q2), the person answered Q2 by CLICKING — and Q1 stayed pending forever, because only a
+  // MESSAGE swept the orphans. Half an hour later the tray still asked to answer Q1.
 
   const orphanResult = async () =>
     (await readHistory(CARD)).find((e) => e.type === "question_result" && (e as { id?: string }).id === "q_3_1791402112898") as
@@ -707,7 +707,7 @@ describe("pergunta órfã — o cartão sobreviveu ao driver que o abriu", () =>
     await orphanedCard();
     spawned[1]!.stdout.emit("data", line({ type: "user_question", id: "q_1_1792423287705", questions: QUESTIONS }));
     await vi.waitFor(async () => expect(await orphanResult()).toMatchObject({ superseded: true }));
-    // a nova é do driver vivo: só ele a encerra
+    // the new one belongs to the live driver: only it closes it
     expect((await readHistory(CARD)).some((e) => e.type === "question_result" && (e as { id?: string }).id === "q_1_1792423287705")).toBe(false);
   });
 
@@ -798,8 +798,8 @@ describe("streaming input — mensagem no meio do turno (turn_absorbed)", () => 
     socket.emit("message", Buffer.from(`{"type":"user","text":"um"}`));
     socket.emit("message", Buffer.from(`{"type":"user","text":"dois"}`));
     spawned[0]!.stdout.emit("data", line({ type: "turn_absorbed" }));
-    // Esperar os DOIS envios assentarem, e não um prazo fixo: a fila de append por card é async, e
-    // um `setTimeout(10)` sob carga lia o log no meio (falha intermitente da suíte inteira).
+    // Wait for BOTH sends to settle, not a fixed deadline: the per-card append queue is async, and
+    // a `setTimeout(10)` under load read the log midway (intermittent failure of the whole suite).
     await vi.waitFor(async () => {
       expect((await readHistory(CARD)).filter((e) => e.type === "user").length).toBe(2);
     });
@@ -812,12 +812,12 @@ describe("end of life", () => {
   it("o close ATRASADO do driver velho não apaga a memória de dedupe do sucessor", () => {
     forgetDriverKeys(CARD);
     ensure();
-    stopCardDriver(CARD); // troca de modelo: o velho recebe o kill, mas o processo ainda não fechou
+    stopCardDriver(CARD); // model switch: the old one gets the kill, but the process has not closed yet
     const successor = ensure();
     expect(spawned.length).toBe(2);
-    handleClientFrame(successor, `{"type":"user","text":"fala do sucessor"}`);
+    dispatchClientFrame(successor, `{"type":"user","text":"fala do sucessor"}`);
     expect(driverKeysFor(CARD).size).toBeGreaterThan(0);
-    spawned[0]!.emit("close", null); // só agora o velho termina de morrer
+    spawned[0]!.emit("close", null); // only now does the old one finish dying
     expect(driverKeysFor(CARD).size).toBeGreaterThan(0);
     expect(hasDriverSession(CARD)).toBe(true);
   });
@@ -857,8 +857,8 @@ describe("end of life", () => {
     const socket = fakeSocket();
     attachSocket(session, socket as never);
     spawned[0]!.stderr.emit("data", Buffer.from("Warning: canUseTool will not be invoked\n"));
-    notifyCardSessionKill(CARD); // o que applySessionChange → killCardSession faz na troca de conta
-    spawned[0]!.emit("close", null); // o kill chega como sinal: code null
+    notifyCardSessionKill(CARD); // what applySessionChange → killCardSession does on an account switch
+    spawned[0]!.emit("close", null); // the kill arrives as a signal: code null
     expect(sentTypes(socket)).not.toContain("error");
     expect(socket.closed).toBe(true);
   });
@@ -1027,12 +1027,12 @@ describe("inflight markers — a durabilidade do turno em voo (o bug do deploy)"
     });
   });
 
-  it("handleClientFrame delivers a frame buffered during the route's setup gap as a normal user turn", async () => {
+  it("dispatchClientFrame delivers a frame buffered during the route's setup gap as a normal user turn", async () => {
     // The production symptom: a message typed right after a reconnect (while the route was still
     // probing/replaying, with no listener attached) was silently dropped. The route now buffers
     // and drains through this same funnel.
     const session = ensure();
-    handleClientFrame(session, `{"type":"user","text":"e aí, como tá indo?"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"e aí, como tá indo?"}`);
     const frames = spawned[0]!.stdin.written.map((s) => JSON.parse(s) as { type: string; text?: string });
     expect(frames).toEqual([{ type: "user", text: "e aí, como tá indo?" }]);
     expect(session.activeTurns).toBe(1);
@@ -1040,11 +1040,11 @@ describe("inflight markers — a durabilidade do turno em voo (o bug do deploy)"
 });
 
 /**
- * O CASO QUE ESCAPOU DE DOIS PRS (produção, 2026-10-19, card e35d): o turno da pessoa fechou com
- * os testes rodando em segundo plano; quando eles acabaram, o PRÓPRIO CLI abriu um turno novo, o
- * agente chamou o deploy (vibehub_deliver) e o deploy matou esse turno. Só mensagem de pessoa ou de
- * sistema gravava o marcador — o turno autônomo e o segundo plano não tinham nenhum, então o boot
- * não retomou nada e o card ficou 44 min parado até alguém perguntar "eai?".
+ * THE CASE THAT SLIPPED PAST TWO PRS (production, 2026-10-19, card e35d): the person's turn closed with
+ * the tests running in the background; when they finished, the CLI ITSELF opened a new turn, the
+ * agent called the deploy (vibehub_deliver) and the deploy killed that turn. Only a person's or a
+ * system message wrote the marker — the autonomous turn and the background had none, so the boot
+ * resumed nothing and the card sat stopped for 44 min until someone asked "eai?".
  */
 describe("inflight markers — trabalho que nenhuma mensagem abriu (segundo plano, turno do próprio CLI)", () => {
   const settle = () => new Promise((r) => setTimeout(r, 20));
@@ -1067,18 +1067,18 @@ describe("inflight markers — trabalho que nenhuma mensagem abriu (segundo plan
       const marker = await readInflightMarker(CARD);
       expect(marker?.background).toEqual({ tasks: ["suíte do front"], since: expect.any(Number), idle: true });
     });
-    // a suíte acaba: o CLI abre o turno sozinho, sem nada no stdin
+    // the suite ends: the CLI opens the turn on its own, with nothing on stdin
     emit({ type: "background_tasks", tasks: [] });
     emit({ type: "assistant_text", text: "Front verde. Entregando." });
     emit({ type: "tool_use", id: "t2", name: "mcp__vibehub__vibehub_deliver", input: { branch: "main" } });
-    // ESPERA a gravação, não um relógio: o marcador vai a disco por uma fila assíncrona, e os 20 ms
-    // fixos que estavam aqui não bastam numa máquina ocupada (falhava rodando o arquivo sozinho).
+    // WAITS for the write, not a clock: the marker goes to disk through an async queue, and the fixed
+    // 20 ms that used to be here are not enough on a busy machine (it failed running the file alone).
     await vi.waitFor(async () => {
       const marker = await readInflightMarker(CARD);
       expect(marker).not.toBeNull();
       expect(marker!.background).toBeUndefined();
     });
-    // o deploy: SIGTERM no back
+    // the deploy: SIGTERM on the back
     shutdownAllDrivers();
     await settle();
     await vi.waitFor(async () => expect(await readInflightMarker(CARD)).not.toBeNull());
@@ -1114,7 +1114,7 @@ describe("inflight markers — trabalho que nenhuma mensagem abriu (segundo plan
     emit({ type: "result", isError: false });
     await vi.waitFor(async () => expect((await readInflightMarker(CARD))?.background?.idle).toBe(true));
     emit({ type: "background_tasks", tasks: [] });
-    // Antes o marcador saía aqui — e um deploy nesse intervalo apagava o aviso sem retomada.
+    // Before, the marker went away here — and a deploy in this interval erased the notice with no resume.
     await vi.waitFor(async () => {
       expect((await readInflightMarker(CARD))?.background?.tasks).toEqual(["aviso de término ainda não entregue: review"]);
     });
@@ -1129,7 +1129,7 @@ describe("inflight markers — trabalho que nenhuma mensagem abriu (segundo plan
     await vi.waitFor(async () => {
       expect((await readInflightMarker(CARD))?.background?.tasks).toEqual(["retorno agendado (ScheduleWakeup): esperar o CI"]);
     });
-    // o retorno vence: o CLI abre o turno; ele não reagenda e para o loop
+    // the wakeup wins: the CLI opens the turn; it does not reschedule and stops the loop
     emit({ type: "tool_use", id: "w2", name: "ScheduleWakeup", input: { stop: true } });
     await vi.waitFor(async () => expect((await readInflightMarker(CARD))?.background).toBeUndefined());
     emit({ type: "result", isError: false });
@@ -1173,11 +1173,11 @@ describe("inflight markers — trabalho que nenhuma mensagem abriu (segundo plan
   });
 
   /**
-   * A RETOMADA QUE NÃO RETOMOU (produção, 2026-10-20). Depois de um deploy, o turno injetado
-   * fechou só com o filler "No response requested." — que o manager esconde — e o card ficou parado
-   * até alguém escrever. Um turno de retomada que fecha SEM progresso, e segue sem sinal de vida por
-   * RESUME_CONFIRM_MS, ganha a ordem de novo — uma vez, dizendo com todas as letras que não é
-   * notificação automática.
+   * THE RESUME THAT DID NOT RESUME (production, 2026-10-20). After a deploy, the injected turn
+   * closed with only the filler "No response requested." — which the manager hides — and the card sat stopped
+   * until someone wrote. A resume turn that closes WITHOUT progress, and goes on with no sign of life for
+   * RESUME_CONFIRM_MS, gets the order again — once, saying in so many words that it is not an
+   * automatic notification.
    */
   it("retomada que fecha sem avançar (só o filler) é reenviada UMA vez, com o texto de reengate", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -1185,14 +1185,14 @@ describe("inflight markers — trabalho que nenhuma mensagem abriu (segundo plan
     injectSystemTurn(session, "continue de onde parou", { kind: "system", name: "vibehub" }, 1);
     emit({ type: "assistant_text", text: "No response requested." });
     emit({ type: "result", isError: false });
-    // Não no `result`: o reenvio espera a janela sem sinal de vida (ver RESUME_CONFIRM_MS).
+    // Not on the `result`: the resend waits out the window with no sign of life (see RESUME_CONFIRM_MS).
     vi.advanceTimersByTime(RESUME_CONFIRM_MS + 1);
     const sends = spawned[0]!.stdin.written.map((w) => JSON.parse(w) as { type: string; text?: string })
       .filter((f) => f.type === "user");
     expect(sends.length).toBe(2);
     expect(sends[1]!.text).toBe(RESUME_REENGAGE_TEXT);
     expect(session.activeTurns).toBe(1);
-    // O reengate também não avançou: agora é nota visível, não um terceiro envio.
+    // The re-engage did not advance either: now it is a visible note, not a third send.
     emit({ type: "result", isError: false });
     vi.advanceTimersByTime(RESUME_CONFIRM_MS + 1);
     vi.useRealTimers();
@@ -1204,10 +1204,10 @@ describe("inflight markers — trabalho que nenhuma mensagem abriu (segundo plan
   });
 
   /**
-   * O FALSO POSITIVO (produção, 2026-10-20, logo depois do fix): ao retomar, o CLI primeiro FECHA o
-   * turno velho com o filler ("No response requested.") — um `result` que chega antes de a
-   * continuação ser lida. Reenviar ali mandava a ordem duas vezes. O reenvio espera a janela e só
-   * vai se nada andou nesse meio-tempo.
+   * THE FALSE POSITIVE (production, 2026-10-20, right after the fix): when resuming, the CLI first CLOSES the
+   * old turn with the filler ("No response requested.") — a `result` that arrives before the
+   * continuation is read. Resending there sent the order twice. The resend waits out the window and only
+   * goes if nothing moved in the meantime.
    */
   it("o result do turno velho chega antes da continuação andar: NÃO reenvia", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -1215,7 +1215,7 @@ describe("inflight markers — trabalho que nenhuma mensagem abriu (segundo plan
     injectSystemTurn(session, "continue de onde parou", { kind: "system", name: "vibehub" }, 1);
     emit({ type: "assistant_text", text: "No response requested." });
     emit({ type: "result", isError: false });
-    // A continuação começa a andar dentro da janela.
+    // The continuation starts moving inside the window.
     emit({ type: "tool_use", id: "t1", name: "Bash", input: {} });
     vi.advanceTimersByTime(RESUME_CONFIRM_MS * 3);
     expect(spawned[0]!.stdin.written.filter((w) => w.includes('"type":"user"')).length).toBe(1);
@@ -1243,10 +1243,10 @@ describe("inflight markers — trabalho que nenhuma mensagem abriu (segundo plan
   });
 
   /**
-   * O AVISO QUE O DEPLOY APAGOU (produção, 2026-10-20, card comando-btw): o último revisor em
-   * segundo plano terminou, a IA fechou o turno dizendo "falta altitude" — o aviso de término ainda
-   * na fila do CLI, à espera do próximo turno — e o deploy veio antes. Sem tarefa viva e sem turno,
-   * o marcador tinha saído: nada a retomar, card parado. O aviso pendente agora É trabalho.
+   * THE NOTICE THE DEPLOY ERASED (production, 2026-10-20, card comando-btw): the last background
+   * reviewer finished, the AI closed the turn saying "falta altitude" — the completion notice still
+   * in the CLI's queue, waiting for the next turn — and the deploy came first. With no live task and no turn,
+   * the marker had gone away: nothing to resume, card stopped. The pending notice now IS work.
    */
   it("tarefa de segundo plano que termina deixa o aviso PENDENTE no marcador até um turno começar", async () => {
     await personTurnThatClosed();
@@ -1257,7 +1257,7 @@ describe("inflight markers — trabalho que nenhuma mensagem abriu (segundo plan
       const marker = await readInflightMarker(CARD);
       expect(marker?.background?.tasks).toEqual(["aviso de término ainda não entregue: Altitude review"]);
     });
-    // O CLI abre o turno do aviso: entregue — e quando esse turno fecha, nada mais fica.
+    // The CLI opens the notice's turn: delivered — and when that turn closes, nothing else remains.
     emit({ type: "assistant_text", text: "Altitude chegou." });
     emit({ type: "result", isError: false });
     await vi.waitFor(async () => expect(await readInflightMarker(CARD)).toBeNull());
@@ -1302,10 +1302,10 @@ describe("edit_user — a edição vai ao driver com as DUAS formas, e ele escol
     const turns = spawned[0]!.stdin.written.map((w) => JSON.parse(w) as { type: string; text: string; original?: string; fallback?: string });
     expect(turns.length).toBe(1);
     expect(turns[0]!.type).toBe("edit_user");
-    // o texto que o modelo lê num rebobinar é a versão LIMPA: o original deixou de existir
+    // the text the model reads on a rewind is the CLEAN version: the original ceased to exist
     expect(turns[0]!.text).toBe("sobe pra dev");
     expect(turns[0]!.original).toBe("sobe pra prod");
-    // e o plano B continua sendo o supersede de sempre — quem decide é o driver
+    // and plan B is still the usual supersede — the driver is the one that decides
     expect(turns[0]!.fallback).toContain("correção do usuário");
     expect(turns[0]!.fallback).toContain("«sobe pra prod»");
     expect(turns[0]!.fallback!.endsWith("sobe pra dev")).toBe(true);
@@ -1378,13 +1378,13 @@ describe("warm-up — subir o driver no connect não conta turno", () => {
 });
 
 /**
- * THE INCIDENT THIS BLOCK PINS (produção, 2026-09-17 — "mandei a mensagem e ficou carregando; dei
+ * THE INCIDENT THIS BLOCK PINS (production, 2026-09-17 — "mandei a mensagem e ficou carregando; dei
  * F5 e era como se eu não tivesse enviado nada").
  *
  * A idle sweep hibernated the very card the person was chatting with, which killed its driver. The
  * message typed a second later was written into the dead stdin inside a `try {} catch {}`,
  * persisted to the history ANYWAY, counted as a turn in flight — and answered by nobody. On screen:
- * "enviando…" para sempre. No F5: ou uma mensagem que ninguém respondeu, ou nada.
+ * "enviando…" forever. On F5: either a message nobody answered, or nothing.
  *
  * The rule now: a turn is only ever recorded when the driver actually took it, and every send gets
  * an explicit receipt (`user_ack` after it is on disk, `user_nack` when it was refused).
@@ -1423,8 +1423,8 @@ describe("o recibo de entrega — nenhuma mensagem some em silêncio", () => {
   });
 
   it("disco cheio: a gravação falhou, então NÃO há user_ack — o navegador recebe user_nack e guarda as palavras", async () => {
-    // O diretório de dados vira um ARQUIVO: qualquer mkdir/append debaixo dele falha (ENOTDIR),
-    // como um disco cheio ou sem permissão — o que importa é que a linha não chega ao log.
+    // The data directory becomes a FILE: any mkdir/append under it fails (ENOTDIR),
+    // like a full disk or no permission — what matters is that the line does not reach the log.
     const blocked = join(dir, "not-a-dir");
     await writeFile(blocked, "");
     config.dataDir = blocked;
@@ -1442,9 +1442,9 @@ describe("o recibo de entrega — nenhuma mensagem some em silêncio", () => {
   });
 
   it("disco cheio que passa: o Reenviar do mesmo cid GRAVA a linha que faltou — sem segundo turno", async () => {
-    // O driver JÁ leu a mensagem; só o histórico falhou. O reenvio carrega o mesmo cid, e devolver
-    // para sempre o veredito velho (`false`) deixava a bolha "não entregue" sem saída: cada
-    // Reenviar ganhava outro nack, e Descartar + digitar de novo fazia o modelo trabalhar em dobro.
+    // The driver ALREADY read the message; only the history failed. The resend carries the same cid, and returning
+    // the old verdict (`false`) forever left the "não entregue" bubble with no way out: each
+    // Reenviar got another nack, and Descartar + typing again made the model work twice.
     const blocked = join(dir, "not-a-dir");
     await writeFile(blocked, "");
     config.dataDir = blocked;
@@ -1455,13 +1455,13 @@ describe("o recibo de entrega — nenhuma mensagem some em silêncio", () => {
     socket.emit("message", frame);
     await vi.waitFor(() => expect(sentTypes(socket)).toContain("user_nack"));
 
-    config.dataDir = dir; // o disco liberou
+    config.dataDir = dir; // the disk freed up
     socket.emit("message", frame);
 
     await vi.waitFor(() => expect(sentTypes(socket)).toContain("user_ack"));
     const events = await readHistory(CARD);
     expect(events).toEqual([expect.objectContaining({ type: "user", text: "some no F5?" })]);
-    expect(session.activeTurns).toBe(1); // um turno só
+    expect(session.activeTurns).toBe(1); // a single turn
     expect(spawned[0]!.stdin.written.join("").match(/some no F5\?/g) ?? []).toHaveLength(1);
   });
 
@@ -1497,18 +1497,18 @@ describe("o recibo de entrega — nenhuma mensagem some em silêncio", () => {
   });
 
   /**
-   * "REENVIAR" NÃO PODE RODAR O TURNO DUAS VEZES.
+   * "REENVIAR" MUST NOT RUN THE TURN TWICE.
    *
-   * O botão existe para o caso em que o RECIBO se perdeu, não a mensagem: o socket caiu entre o
-   * `appendHistory` e o `user_ack` (a resposta é jogada fora em silêncio quando o socket já
-   * fechou), ou o prazo venceu enquanto o back ainda montava a conexão. Nos dois casos o servidor
-   * TEM a mensagem — e clicar em "Reenviar" mandava o mesmo texto ao driver outra vez: uma segunda
-   * linha no histórico, um segundo turno, e o agente executando duas vezes uma instrução que pode
-   * ser destrutiva ("apaga a branch", "faz o deploy").
+   * The button exists for the case where the RECEIPT was lost, not the message: the socket dropped between
+   * `appendHistory` and `user_ack` (the answer is silently thrown away when the socket has already
+   * closed), or the deadline expired while the back was still setting up the connection. In both cases the server
+   * HAS the message — and clicking "Reenviar" sent the same text to the driver again: a second
+   * line in the history, a second turn, and the agent executing twice an instruction that may
+   * be destructive ("apaga a branch", "faz o deploy").
    *
-   * O `cid` é o que resolve: o front reenvia com o MESMO recibo, de propósito. Um cid já aceito não
-   * é uma mensagem nova — é a cobrança de um recibo que se perdeu. O back devolve o recibo e não
-   * toca no driver.
+   * The `cid` is what solves it: the front resends with the SAME receipt, on purpose. An already accepted cid is not
+   * a new message — it is the claim for a receipt that got lost. The back returns the receipt and does not
+   * touch the driver.
    */
   describe("o mesmo recibo, duas vezes — o Reenviar não duplica o trabalho", () => {
     it("cid repetido: o recibo é reemitido, mas o driver não lê a mensagem de novo", async () => {
@@ -1518,15 +1518,15 @@ describe("o recibo de entrega — nenhuma mensagem some em silêncio", () => {
       socket.emit("message", Buffer.from(`{"type":"user","text":"apaga a branch","cid":"c-r1"}`));
       await vi.waitFor(async () => expect((await readHistory(CARD)).length).toBe(1));
 
-      // O ack se perdeu no socket derrubado; a pessoa clica "Reenviar" — mesmas palavras, mesmo cid.
+      // The ack got lost on the dropped socket; the person clicks "Reenviar" — same words, same cid.
       socket.emit("message", Buffer.from(`{"type":"user","text":"apaga a branch","cid":"c-r1"}`));
       await new Promise((r) => setImmediate(r));
 
-      expect(await readHistory(CARD)).toHaveLength(1); // uma linha só no histórico
-      expect(session.activeTurns).toBe(1); // um turno só em voo
+      expect(await readHistory(CARD)).toHaveLength(1); // a single line in the history
+      expect(session.activeTurns).toBe(1); // a single turn in flight
       const written = spawned[0]!.stdin.written.join("");
-      expect(written.match(/apaga a branch/g) ?? []).toHaveLength(1); // o driver leu uma vez
-      // …e o recibo, que era o que faltava, é devolvido.
+      expect(written.match(/apaga a branch/g) ?? []).toHaveLength(1); // the driver read it once
+      // …and the receipt, which was what was missing, is returned.
       await vi.waitFor(() => {
         const acks = socket.sent
           .map((s) => JSON.parse(s) as { type: string; cid?: string })
@@ -1541,18 +1541,18 @@ describe("o recibo de entrega — nenhuma mensagem some em silêncio", () => {
       attachSocket(session, socket as never);
       socket.emit("message", Buffer.from(`{"type":"user","text":"já está no disco","cid":"c-r5"}`));
       await vi.waitFor(async () => expect((await readHistory(CARD)).length).toBe(1));
-      stopCardDriver(CARD); // hibernação, deploy, crash — depois do append
+      stopCardDriver(CARD); // hibernation, deploy, crash — after the append
 
       socket.emit("message", Buffer.from(`{"type":"user","text":"já está no disco","cid":"c-r5"}`));
 
-      // O recibo fala de DURABILIDADE, não do driver: a mensagem está gravada, e é isso que ele diz.
+      // The receipt speaks of DURABILITY, not of the driver: the message is stored, and that is what it says.
       await vi.waitFor(() => {
         const acks = socket.sent
           .map((s) => JSON.parse(s) as { type: string; cid?: string })
           .filter((f) => f.type === "user_ack" && f.cid === "c-r5");
         expect(acks.length).toBeGreaterThanOrEqual(2);
       });
-      expect(sentTypes(socket)).not.toContain("user_nack"); // recusar seria pedir a terceira cópia
+      expect(sentTypes(socket)).not.toContain("user_nack"); // refusing would be asking for the third copy
       expect(await readHistory(CARD)).toHaveLength(1);
     });
 
@@ -1576,15 +1576,15 @@ describe("o recibo de entrega — nenhuma mensagem some em silêncio", () => {
       socket.emit("message", Buffer.from(`{"type":"edit_user","original":"a","text":"b","cid":"c-r4"}`));
       await new Promise((r) => setImmediate(r));
 
-      expect(await readHistory(CARD)).toHaveLength(2); // message_edited + user, uma vez cada
+      expect(await readHistory(CARD)).toHaveLength(2); // message_edited + user, once each
       expect(session.activeTurns).toBe(1);
     });
   });
 
   /**
-   * O menu "/" precisa existir no INSTANTE do connect. O driver anuncia o catálogo uma vez, ao
-   * subir; guardá-lo em disco é o que faz a lista estar lá antes de o driver novo falar (ver
-   * ./catalog.ts e a rota, que o serve quando a sessão ainda não tem o seu).
+   * The "/" menu needs to exist at the INSTANT of the connect. The driver announces the catalog once, on
+   * boot; keeping it on disk is what makes the list be there before the new driver speaks (see
+   * ./catalog.ts and the route, which serves it when the session does not have its own yet).
    */
   it("o catálogo anunciado pelo driver é guardado em disco para o próximo connect", async () => {
     const session = ensure();
@@ -1627,8 +1627,8 @@ describe("o recibo de entrega — nenhuma mensagem some em silêncio", () => {
 });
 
 /**
- * O VETO DE HIBERNAÇÃO (a causa-raiz do incidente): o idle sweep hibernava o card que a pessoa
- * estava usando — e hibernar mata o driver. O card em uso agora é vetado; um driver ocioso, não.
+ * THE HIBERNATION VETO (the incident's root cause): the idle sweep hibernated the card the person
+ * was using — and hibernating kills the driver. The card in use is now vetoed; an idle driver is not.
  */
 describe("isCardChatInUse — o que impede o idle sweep de matar a conversa", () => {
   it("card com aba conectada: EM USO", () => {
@@ -1666,11 +1666,11 @@ describe("isCardChatInUse — o que impede o idle sweep de matar a conversa", ()
     vi.useFakeTimers();
     const session = ensure();
     const socket = fakeSocket();
-    socket.close(); // fechou durante o setup da rota — o evento já passou
+    socket.close(); // closed during the route's setup — the event has already passed
     attachSocket(session, socket as never);
     expect(session.sockets.size).toBe(0);
     expect(isCardChatInUse(CARD)).toBe(false);
-    // Ninguém mais segura o driver: o idle stop arma como se o socket nunca tivesse vindo.
+    // Nobody holds the driver any more: the idle stop arms as if the socket had never come.
     vi.advanceTimersByTime(DRIVER_IDLE_MS + 1);
     expect(hasDriverSession(CARD)).toBe(false);
   });
@@ -1678,16 +1678,16 @@ describe("isCardChatInUse — o que impede o idle sweep de matar a conversa", ()
 
 
 /**
- * REBOBINAR. Editar uma mensagem pode REBOBINAR a sessão: o modelo perde o original e tudo que veio
- * depois. Quando isso acontece o LOG tem de perder também — um replay que devolve linhas que o
- * modelo não tem faz a tela e o modelo discordarem sobre a conversa, que é o bug que o rebobinar
- * existe pra consertar.
+ * REWIND. Editing a message can REWIND the session: the model loses the original and everything that came
+ * after. When that happens the LOG has to lose it too — a replay that brings back lines the
+ * model does not have makes the screen and the model disagree about the conversation, which is the bug the rewind
+ * exists to fix.
  *
- * O perigo aqui é o corte disparar quando NÃO devia: um `rewound` de outro turno, um frame
- * repetido, ou o driver dizendo que não conseguiu rebobinar. Cada um desses apagaria conversa viva.
+ * The danger here is the cut firing when it should NOT: a `rewound` from another turn, a repeated
+ * frame, or the driver saying it could not rewind. Each of these would erase live conversation.
  */
 describe("rewound — o log só é cortado quando o driver confirma que rebobinou", () => {
-  /** A conversa com a edição já ENVIADA e o log assentado — o estado de onde cada caso parte. */
+  /** The conversation with the edit already SENT and the log settled — the state each case starts from. */
   const ANTES_DO_REWOUND = ["user", "assistant_text", "user", "assistant_text", "message_edited", "user"];
 
   async function conversaComEdicao(): Promise<void> {
@@ -1700,18 +1700,18 @@ describe("rewound — o log só é cortado quando o driver confirma que rebobino
     socket.emit("message", Buffer.from(`{"type":"user","text":"errada"}`));
     spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "meia resposta" }));
     socket.emit("message", Buffer.from(`{"type":"edit_user","original":"errada","text":"certa"}`));
-    // Esperar o log ASSENTAR antes de mandar o `rewound` é o que torna os casos negativos
-    // honestos: sem isso, "não cortou nada" e "o append ainda não chegou" são indistinguíveis.
+    // Waiting for the log to SETTLE before sending the `rewound` is what makes the negative cases
+    // honest: without it, "cut nothing" and "the append has not arrived yet" are indistinguishable.
     await vi.waitFor(async () => expect((await readHistory(CARD)).map((e) => e.type)).toEqual(ANTES_DO_REWOUND));
   }
 
   const emit = (frame: unknown): void => { spawned[0]!.stdout.emit("data", line(frame as never)); };
-  /** O corte do log é disparado sem await: esperá-lo ASSENTAR evita um append caindo no tmp já
-   *  removido pelo afterEach (ENOTEMPTY) e, pior, um teste medindo o log do teste anterior. */
+  /** The log cut is fired without await: waiting for it to SETTLE avoids an append landing in the tmp already
+   *  removed by the afterEach (ENOTEMPTY) and, worse, a test measuring the previous test's log. */
   const logAssentado = async (): Promise<void> => {
     await vi.waitFor(async () => expect((await readHistory(CARD)).map((e) => e.type)).toEqual(["user", "assistant_text", "user"]));
   };
-  /** Dá tempo de um corte indevido acontecer, para que o "não cortou" signifique alguma coisa. */
+  /** Gives a wrongful cut time to happen, so that "did not cut" means something. */
   const deixaCortarSeForCortar = async (): Promise<void> => {
     for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 10));
   };
@@ -1761,8 +1761,8 @@ describe("rewound — o log só é cortado quando o driver confirma que rebobino
   });
 
   /**
-   * O DISCO RECUSOU O CORTE (ENOSPC): a tela já cortou as linhas e o modelo já foi rebobinado, mas o
-   * arquivo continua com tudo. Auditar "dropped N" aqui era mentira — e o F5 devolvia a conversa.
+   * THE DISK REFUSED THE CUT (ENOSPC): the screen has already cut the lines and the model has already been rewound, but the
+   * file still has everything. Auditing "dropped N" here was a lie — and the F5 brought the conversation back.
    */
   it("um corte que o disco recusa sai como FALHA, não como rewind feito, e a fila segue gravando", async () => {
     await conversaComEdicao();
@@ -1810,9 +1810,9 @@ describe("rewound — o log só é cortado quando o driver confirma que rebobino
   });
 
   /**
-   * O ORIGINAL NUNCA CHEGOU AO MODELO: o driver mandou o texto limpo (`not-delivered`). Nada é
-   * cortado — o resto da conversa ainda vale —, mas o texto limpo é fala do driver (senão o espelho
-   * o republica do transcript) e o log perde o invólucro (senão o replay o desenha duas vezes).
+   * THE ORIGINAL NEVER REACHED THE MODEL: the driver sent the clean text (`not-delivered`). Nothing is
+   * cut — the rest of the conversation still holds —, but the clean text is the driver's speech (otherwise the mirror
+   * republishes it from the transcript) and the log loses the wrapper (otherwise the replay draws it twice).
    */
   it("ok: false `not-delivered`: nada cortado, texto limpo conhecido e o log sem invólucro", async () => {
     forgetDriverKeys(CARD);
@@ -1834,23 +1834,23 @@ describe("rewound — o log só é cortado quando o driver confirma que rebobino
     socket.emit("message", Buffer.from(`{"type":"user","text":"errada"}`));
     spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "resposta" }));
     await vi.waitFor(async () => expect((await readHistory(CARD)).length).toBe(2));
-    // nenhuma edição foi enviada: este frame é ruído (driver velho, reconexão, bug)
+    // no edit was sent: this frame is noise (old driver, reconnection, bug)
     emit({ type: "rewound", ok: true, uuid: "abc" });
     await deixaCortarSeForCortar();
     expect((await readHistory(CARD)).map((e) => e.type)).toEqual(["user", "assistant_text"]);
   });
 
   /**
-   * O alvo ser consumido no primeiro frame é proteção DUPLA: mesmo que não fosse, o corte exige as
-   * duas pontas no log (a mensagem original E o marcador), e depois do primeiro corte nenhuma das
-   * duas existe mais. Este teste cobra o resultado observável — o log sobrevive a um frame
-   * repetido — e não qual das duas travas agiu.
+   * The target being consumed on the first frame is a DOUBLE protection: even if it were not, the cut requires both
+   * ends in the log (the original message AND the marker), and after the first cut neither of the
+   * two exists any more. This test checks the observable result — the log survives a repeated
+   * frame — and not which of the two guards acted.
    */
   it("um segundo `rewound` repetido não corta de novo", async () => {
     await conversaComEdicao();
     emit({ type: "rewound", ok: true, uuid: "abc" });
     await vi.waitFor(async () => expect((await readHistory(CARD)).length).toBe(3));
-    // agora a conversa segue, e um frame repetido chega atrasado
+    // now the conversation goes on, and a repeated frame arrives late
     emit({ type: "assistant_text", text: "resposta da certa" });
     await vi.waitFor(async () => expect((await readHistory(CARD)).length).toBe(4));
     emit({ type: "rewound", ok: true, uuid: "abc" });
@@ -1871,26 +1871,26 @@ describe("rewound — o log só é cortado quando o driver confirma que rebobino
   });
 
   /**
-   * A SEGUNDA BOLHA (produção, 2026-10-01 — "era para a mensagem ali em cima atualizar e não gerar
+   * THE SECOND BUBBLE (production, 2026-10-01 — "era para a mensagem ali em cima atualizar e não gerar
    * uma nova por baixo").
    *
-   * Uma edição é escrita no stdin do driver com as DUAS formas, e só ele escolhe: o texto LIMPO se
-   * conseguir rebobinar, o invólucro de supersede se não. O espelho do transcript, porém, era
-   * avisado só do invólucro — então, quando o rebobinar dava certo, a linha que o CLI escrevia no
-   * transcript (com o texto limpo) não era reconhecida como fala do próprio driver e voltava para
-   * a conversa como se o TERMINAL tivesse acabado de dizê-la: uma segunda bolha, idêntica, logo
-   * abaixo da mensagem que acabara de ser corrigida.
+   * An edit is written to the driver's stdin in BOTH forms, and only it chooses: the CLEAN text if it
+   * manages to rewind, the supersede wrapper if not. The transcript mirror, however, was
+   * told only about the wrapper — so, when the rewind worked, the line the CLI wrote in the
+   * transcript (with the clean text) was not recognised as the driver's own speech and came back into
+   * the conversation as if the TERMINAL had just said it: a second, identical bubble, right
+   * below the message that had just been corrected.
    */
   it("depois de rebobinar, o texto LIMPO também é fala conhecida do driver", async () => {
-    forgetDriverKeys(CARD); // a memória do card é do MÓDULO: este caso parte de uma folha em branco
+    forgetDriverKeys(CARD); // the card's memory belongs to the MODULE: this case starts from a blank sheet
     await conversaComEdicao();
     const antes = new Set(driverKeysFor(CARD));
-    expect(antes.has("user:certa")).toBe(false); // antes do `rewound` só o invólucro é conhecido
+    expect(antes.has("user:certa")).toBe(false); // before the `rewound` only the wrapper is known
     expect([...antes].some((k) => k.includes("correção do usuário"))).toBe(true);
 
     emit({ type: "rewound", ok: true, uuid: "abc" });
     await vi.waitFor(() => expect(driverKeysFor(CARD).has("user:certa")).toBe(true));
-    // e o invólucro segue conhecido: um `rewound` não desfaz o que já foi registrado
+    // and the wrapper stays known: a `rewound` does not undo what was already registered
     expect([...driverKeysFor(CARD)].some((k) => k.includes("correção do usuário"))).toBe(true);
     await logAssentado();
   });
@@ -1901,7 +1901,7 @@ describe("rewound — o log só é cortado quando o driver confirma que rebobino
     await vi.waitFor(() => expect(driverKeysFor(CARD).has("user:certa")).toBe(true));
     await logAssentado();
 
-    // o transcript do CLI carrega o texto limpo — é ele que o espelho vê a seguir
+    // the CLI's transcript carries the clean text — that is what the mirror sees next
     const state = createMirrorState(0, [], driverKeysFor(CARD));
     const out = mirrorNewEvents(state, JSON.stringify({
       type: "user", uuid: "u-certa", timestamp: "2026-10-01T12:00:00Z",
@@ -1924,14 +1924,14 @@ describe("rewound — o log só é cortado quando o driver confirma que rebobino
   });
 
   /**
-   * A NOTA DO CORTE NÃO SOBREVIVE AO REBOBINAR.
+   * THE CUT NOTE DOES NOT SURVIVE THE REWIND.
    *
-   * No caminho comum a nota já saiu antes do `rewound` (a tela só manda a edição quando o turno
-   * fecha, e é o fechamento que solta a nota). Mas a tela tem um prazo de carência: se o turno
-   * velho não fecha, ela manda a edição assim mesmo — e aí a nota ainda está na agulha. Escrevê-la
-   * depois a colocaria DEPOIS do marcador, fora do corte, e um F5 traria de volta "a resposta
-   * acima ficou pela metade" pendurada sob a mensagem corrigida, falando de uma resposta que o
-   * rebobinar apagou.
+   * On the ordinary path the note already went out before the `rewound` (the screen only sends the edit when the turn
+   * closes, and it is the closing that releases the note). But the screen has a grace period: if the old
+   * turn does not close, it sends the edit anyway — and then the note is still in the pipeline. Writing it
+   * afterwards would place it AFTER the marker, outside the cut, and an F5 would bring back "a resposta
+   * acima ficou pela metade" hanging under the corrected message, talking about an answer the
+   * rewind erased.
    */
   it("a edição pelo prazo de carência: a nota do corte não sobra no log", async () => {
     const session = ensure();
@@ -1939,17 +1939,17 @@ describe("rewound — o log só é cortado quando o driver confirma que rebobino
     attachSocket(session, socket as never);
     socket.emit("message", Buffer.from(`{"type":"user","text":"errada"}`));
     spawned[0]!.stdout.emit("data", line({ type: "assistant_text", text: "meia resposta" }));
-    // o turno NÃO fecha: a tela desiste de esperar e manda a edição com ele ainda aberto
+    // the turn does NOT close: the screen gives up waiting and sends the edit with it still open
     socket.emit("message", Buffer.from(`{"type":"interrupt","reason":"edit"}`));
     socket.emit("message", Buffer.from(`{"type":"edit_user","original":"errada","text":"certa"}`));
     await vi.waitFor(async () => {
       expect((await readHistory(CARD)).map((e) => e.type))
         .toEqual(["user", "assistant_text", "message_edited", "user"]);
     });
-    // ORDEM REAL do driver: `endStream` ESPERA o `result` do stream morrendo antes de o
-    // `rewindAndSend` anunciar o rebobinar — então o result (e a nota que ele solta) vem PRIMEIRO,
-    // e a nota aterrissa DEPOIS do marcador, fora do alcance do corte. Inverter os dois aqui
-    // testaria uma sequência que o driver não produz.
+    // The driver's REAL ORDER: `endStream` WAITS for the dying stream's `result` before
+    // `rewindAndSend` announces the rewind — so the result (and the note it releases) comes FIRST,
+    // and the note lands AFTER the marker, out of the cut's reach. Swapping the two here would
+    // test a sequence the driver does not produce.
     emit({ type: "result", isError: false });
     await vi.waitFor(async () => {
       expect((await readHistory(CARD)).some((e) => e.type === "system_note")).toBe(true);
@@ -1979,10 +1979,10 @@ describe("rewound — o log só é cortado quando o driver confirma que rebobino
   });
 
   /**
-   * DUAS EDIÇÕES EM VOO. Nada impede a pessoa de corrigir uma segunda mensagem antes de a primeira
-   * ser respondida: sem turno rodando, a tela despacha a edição na hora. Com um ÚNICO slot, a
-   * segunda sobrescrevia a primeira — e aí o primeiro `rewound` cortava o log na mensagem ERRADA,
-   * apagando uma correção que a pessoa escreveu e o modelo já tinha lido.
+   * TWO EDITS IN FLIGHT. Nothing stops the person from correcting a second message before the first
+   * is answered: with no turn running, the screen dispatches the edit right away. With a SINGLE slot, the
+   * second overwrote the first — and then the first `rewound` cut the log at the WRONG message,
+   * erasing a correction the person wrote and the model had already read.
    */
   it("duas edições em voo: cada `rewound` corta a SUA, na ordem em que foram mandadas", async () => {
     const session = ensure();
@@ -1998,9 +1998,9 @@ describe("rewound — o log só é cortado quando o driver confirma que rebobino
     socket.emit("message", Buffer.from(`{"type":"edit_user","original":"m2","text":"n2"}`));
     await vi.waitFor(async () => expect((await readHistory(CARD)).length).toBe(8));
 
-    // O primeiro `rewound` é da PRIMEIRA edição: ele corta em "m1" e deixa "n1" de pé. Com um slot
-    // só, ele cortaria em "m2" (a segunda edição teria sobrescrito o alvo) e levaria "n1" junto —
-    // uma correção que a pessoa escreveu e o modelo leu, apagada do histórico.
+    // The first `rewound` belongs to the FIRST edit: it cuts at "m1" and leaves "n1" standing. With a single
+    // slot, it would cut at "m2" (the second edit would have overwritten the target) and take "n1" along —
+    // a correction the person wrote and the model read, erased from the history.
     emit({ type: "rewound", ok: true, uuid: "u1" });
     await vi.waitFor(async () => {
       const texts = (await readHistory(CARD)).filter((e) => e.type === "user").map((e) => (e as { text: string }).text);
@@ -2008,7 +2008,7 @@ describe("rewound — o log só é cortado quando o driver confirma que rebobino
       expect(texts).not.toContain("m1");
     });
     expect(driverKeysFor(CARD).has("user:n1")).toBe(true);
-    expect(driverKeysFor(CARD).has("user:n2")).toBe(false); // a segunda ainda não foi respondida
+    expect(driverKeysFor(CARD).has("user:n2")).toBe(false); // the second has not been answered yet
 
     emit({ type: "rewound", ok: true, uuid: "u2" }); // e agora a SEGUNDA
     await vi.waitFor(() => expect(driverKeysFor(CARD).has("user:n2")).toBe(true));
@@ -2017,10 +2017,10 @@ describe("rewound — o log só é cortado quando o driver confirma que rebobino
   });
 
   /**
-   * UM `rewound: ok` SEM DONO NÃO CHEGA À TELA. No log ele já era inofensivo (sem as duas pontas,
-   * nada é cortado), mas `dropRewoundRows` corta da última linha "editada" até a última mensagem —
-   * e uma edição RECUSADA deixa essa marca para sempre. Um frame perdido apagaria da tela turnos
-   * inteiros que o modelo ainda tem.
+   * A `rewound: ok` WITH NO OWNER DOES NOT REACH THE SCREEN. In the log it was already harmless (without both ends,
+   * nothing is cut), but `dropRewoundRows` cuts from the last "edited" line to the last message —
+   * and a REFUSED edit leaves that mark forever. A lost frame would erase from the screen whole
+   * turns the model still has.
    */
   it("um `rewound: ok` que não pertence a edição nenhuma não é repassado à tela", async () => {
     const session = ensure();
@@ -2112,7 +2112,7 @@ describe("attachSocket — \"está digitando\" entre as abas do card", () => {
       cesar.emit("message", typing(true));
       cesar.emit("message", typing(false));
     }
-    // um "digitando" e o seu "parou" — o resto do loop, dentro da janela, não sai do servidor
+    // one "digitando" and its "parou" — the rest of the loop, inside the window, does not leave the server
     expect(peerFrames(mussa)).toEqual([
       { type: "peer_typing", name: "cesar", active: true },
       { type: "peer_typing", name: "cesar", active: false },
@@ -2186,10 +2186,10 @@ describe("attachSocket — \"está digitando\" entre as abas do card", () => {
 });
 
 /**
- * A PERGUNTA QUE SUMIU "SEM RESPOSTA" (produção, 2026-10-26): alguém parou o turno e o cartão caiu na
- * tela da outra pessoa como se o prazo tivesse vencido. Agora o resultado diz quem parou e como.
+ * THE QUESTION THAT VANISHED "SEM RESPOSTA" (production, 2026-10-26): someone stopped the turn and the card dropped on
+ * the other person's screen as if the deadline had expired. Now the result says who stopped it and how.
  */
-describe("handleClientFrame — quem parou o turno cancela a pergunta, e o cartão diz quem", () => {
+describe("dispatchClientFrame — quem parou o turno cancela a pergunta, e o cartão diz quem", () => {
   const CESAR = { kind: "user" as const, name: "cesar" };
   const MUSSA = { kind: "owner" as const, name: "mussa" };
   const emit = (event: object) => spawned[0]!.stdout.emit("data", line(event as never));
@@ -2208,7 +2208,7 @@ describe("handleClientFrame — quem parou o turno cancela a pergunta, e o cart�
     mussa.emit("message", Buffer.from(`{"type":"interrupt"}`));
     emit({ type: "question_result", id: "q1", timedOut: false, superseded: false });
     expect(results(cesar)).toEqual([expect.objectContaining({ id: "q1", cancelledBy: "mussa", cancelledHow: "stop" })]);
-    for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 10)); // o histórico grava em segundo plano
+    for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 10)); // the history writes in the background
     expect((await readHistory(CARD)).find((e) => e.type === "question_result")).toMatchObject({ cancelledBy: "mussa" });
   });
 
@@ -2249,8 +2249,8 @@ describe("handleClientFrame — quem parou o turno cancela a pergunta, e o cart�
 });
 
 /**
- * DUAS PESSOAS, UMA PERGUNTA: só a primeira resposta vale. O rascunho do cartão vai às outras abas
- * enquanto a pessoa marca e escreve, para ninguém mandar uma resposta diferente sem saber.
+ * TWO PEOPLE, ONE QUESTION: only the first answer counts. The card's draft goes to the other tabs
+ * while the person ticks and writes, so nobody sends a different answer without knowing.
  */
 describe("attachSocket — rascunho do cartão de pergunta em tempo real", () => {
   const CESAR = { kind: "user" as const, name: "cesar" };
@@ -2335,7 +2335,7 @@ describe("attachSocket — rascunho do cartão de pergunta em tempo real", () =>
     cesar.emit("close");
     expect(draftFrames(albert).at(-1)).toEqual({ type: "peer_question_draft", id: "q1", name: "cesar", picked: [[]], other: ["meio"], away: true });
     expect(session.questionDrafts.get("q1")?.get("cesar")).toMatchObject({ other: ["meio"] });
-    // quem chega depois também vê — como ausente
+    // whoever arrives later sees it too — as absent
     const late = fakeSocket();
     attachSocket(session, late as never, ALBERT);
     expect(draftFrames(late)).toEqual([{ type: "peer_question_draft", id: "q1", name: "cesar", picked: [[]], other: ["meio"], away: true }]);
@@ -2364,7 +2364,7 @@ describe("attachSocket — rascunho do cartão de pergunta em tempo real", () =>
     cesar.emit("message", draft("q1", [["Faixa de capacidade"], []], ["pela placa", ""]));
     albert.emit("message", draft("q1", [[], ["Bloqueia"]], ["", ""]));
     await questionDraftsSettled(CARD);
-    // o deploy: o processo morre com tudo o que tinha em memória
+    // the deploy: the process dies with everything it had in memory
     resetSdkSessionsForTesting();
     const next = ensure();
     await next.draftsLoaded;
@@ -2385,7 +2385,7 @@ describe("attachSocket — rascunho do cartão de pergunta em tempo real", () =>
     resetSdkSessionsForTesting();
     const next = ensure();
     const early = fakeSocket();
-    attachSocket(next, early as never, ALBERT); // antes de a leitura terminar
+    attachSocket(next, early as never, ALBERT); // before the read finishes
     await next.draftsLoaded;
     expect(draftFrames(early)).toEqual([{ type: "peer_question_draft", id: "q1", name: "cesar", picked: [["A"]], other: [""], away: true }]);
   });
@@ -2431,10 +2431,10 @@ describe("attachSocket — rascunho do cartão de pergunta em tempo real", () =>
 });
 
 /**
- * DUAS PESSOAS, UMA PERGUNTA — TODAS AS RESPOSTAS VALEM (produção, 2026-11-03): César e Albert
- * respondiam o mesmo cartão; a primeira resposta enviada fechava a pergunta e o que o outro tinha
- * escrito se perdia. Agora a resposta leva junto o que os outros já marcaram/escreveram, com o nome,
- * e quem envia DEPOIS vira mensagem para a IA comparar — se contradizer, ela pergunta de novo.
+ * TWO PEOPLE, ONE QUESTION — ALL ANSWERS COUNT (production, 2026-11-03): César and Albert
+ * were answering the same card; the first answer sent closed the question and what the other had
+ * written was lost. Now the answer carries along what the others already ticked/wrote, with the name,
+ * and whoever sends AFTERWARDS becomes a message for the AI to compare — if it contradicts, it asks again.
  */
 describe("attachSocket — respostas de várias pessoas ao mesmo cartão", () => {
   const CESAR = { kind: "user" as const, name: "cesar" };
@@ -2466,7 +2466,7 @@ describe("attachSocket — respostas de várias pessoas ao mesmo cartão", () =>
     albert.emit("message", draft("q1", [[], ["Sim"]], ["a space tem os pesos", "10 pallets"]));
     cesar.emit("message", answer("q1", [["Bloqueia"], ["Não"]]));
     const sent = written().find((c) => c.type === "question_answer")!;
-    // O que volta no question_result e o cartão desenha: só o que quem enviou marcou.
+    // What comes back in the question_result and the card draws: only what the sender ticked.
     expect(sent.answers).toEqual([{ selected: ["Bloqueia"] }, { selected: ["Não"] }]);
     expect(sent.forModel![0]!.selected).toEqual([
       "cesar: Bloqueia",
@@ -2496,7 +2496,7 @@ describe("attachSocket — respostas de várias pessoas ao mesmo cartão", () =>
     expect(msg.text).toContain("«O limite de paletes continua?» → Sim");
     expect(msg.text).toMatch(/contradit/);
     expect(session.activeTurns).toBe(1);
-    // A conversa mostra só o que o Albert escolheu, em nome dele; o que o modelo leu fica em `sent`.
+    // The conversation shows only what Albert chose, in his name; what the model read stays in `sent`.
     await vi.waitFor(async () => {
       const row = (await readHistory(CARD)).find((e) => e.type === "user") as { text: string; sent?: string; from?: { name: string } };
       expect(row.from?.name).toBe("albert");
@@ -2550,10 +2550,10 @@ describe("attachSocket — respostas de várias pessoas ao mesmo cartão", () =>
 });
 
 /**
- * A MENSAGEM DE UMA PESSOA NA TELA DAS OUTRAS (produção, 2026-10-08): o Albert digitou — o
- * "está digitando…" apareceu para os outros —, deu Enter, e a mensagem não apareceu para ninguém
- * além dele até um F5. O turno ia para o driver e para o disco, mas o envio nunca era repassado às
- * outras abas do card: só a resposta do modelo chegava, sem a pergunta que a gerou.
+ * ONE PERSON'S MESSAGE ON THE OTHERS' SCREENS (production, 2026-10-08): Albert typed — the
+ * "está digitando…" showed up for the others —, hit Enter, and the message showed up for nobody
+ * but him until an F5. The turn went to the driver and to disk, but the send was never relayed to the
+ * card's other tabs: only the model's answer arrived, without the question that produced it.
  */
 describe("attachSocket — a mensagem enviada aparece ao vivo nas outras abas do card", () => {
   const ALBERT = { kind: "user" as const, name: "albert" };
@@ -2643,16 +2643,16 @@ describe("attachSocket — a mensagem enviada aparece ao vivo nas outras abas do
     const mussa = fakeSocket();
     attachSocket(session, albert as never, ALBERT);
     attachSocket(session, mussa as never, MUSSA);
-    handleClientFrame(session, `{"type":"user","text":"e aí, como tá indo?"}`, ALBERT, albert as never);
+    dispatchClientFrame(session, `{"type":"user","text":"e aí, como tá indo?"}`, ALBERT, albert as never);
     expect(frames(mussa, "user")).toEqual([expect.objectContaining({ text: "e aí, como tá indo?" })]);
     expect(frames(albert, "user")).toEqual([]);
   });
 });
 
 /**
- * TAREFAS EM SEGUNDO PLANO (produção, 2026-10-07): o Claude disparou um `sleep 200` em background, o
- * turno fechou e o chat ficou mudo — "parece que ela parou, mas está rodando". O conjunto vivo vem
- * do CLI (`background_tasks`, semântica de SUBSTITUIR) e é ESTADO da sessão, como o catálogo.
+ * BACKGROUND TASKS (production, 2026-10-07): Claude fired a `sleep 200` in the background, the
+ * turn closed and the chat went silent — "parece que ela parou, mas está rodando". The live set comes
+ * from the CLI (`background_tasks`, REPLACE semantics) and is session STATE, like the catalog.
  */
 describe("background_tasks — o trabalho que segue depois do turno", () => {
   const running = { type: "background_tasks", tasks: [{ id: "b1", type: "local_bash", description: "Aguarda o deploy" }] };
@@ -2741,11 +2741,11 @@ describe("background_tasks — o trabalho que segue depois do turno", () => {
     expect(spawned[0]!.killed).toBe(true);
   });
 
-  // O TURNO QUE O CLI ABRE SOZINHO (a tarefa terminou e o modelo foi acordado) NÃO é contado pelo
-  // manager: inferi-lo pelo tipo de evento prendia a contagem em 1 — o driver não sabe desse turno
-  // (seu `turnActive` só nasce em `sendUser`), então uma mensagem no meio dele não vira
-  // `turn_absorbed` e um CLI que cai no meio não paga o `result`. Contar esse turno é tarefa do
-  // DRIVER (fora do escopo deste PR); até lá, a contagem fica exatamente como na main.
+  // THE TURN THE CLI OPENS ON ITS OWN (the task finished and the model was woken up) is NOT counted by the
+  // manager: inferring it from the event type stuck the count at 1 — the driver does not know about this turn
+  // (its `turnActive` is only born in `sendUser`), so a message in the middle of it does not become
+  // `turn_absorbed` and a CLI that drops midway does not pay the `result`. Counting that turn is the
+  // DRIVER's job (outside this PR's scope); until then, the count stays exactly as on main.
   it("mensagem enviada no meio do turno autônomo não prende a contagem: um result e volta a zero", () => {
     const session = ensure();
     const socket = fakeSocket();
@@ -2814,9 +2814,9 @@ describe("background_tasks — o trabalho que segue depois do turno", () => {
 });
 
 /**
- * /clear (produção, 2026-10-08): o CLI limpa o contexto e abre uma sessão nova, mas a tela e o log
- * do card seguiam com a conversa inteira — no F5 ela voltava, e para quem olhava o /clear "não
- * funcionava". O reset apaga o LOG (o replay) e deixa uma nota dizendo que a conversa foi limpa.
+ * /clear (production, 2026-10-08): the CLI clears the context and opens a new session, but the card's screen and log
+ * kept the whole conversation — on F5 it came back, and to whoever was watching the /clear "não
+ * funcionava". The reset deletes the LOG (the replay) and leaves a note saying the conversation was cleared.
  */
 describe("conversation_reset — o /clear limpa a conversa de verdade", () => {
   it("repassa o reset às abas, apaga o log da conversa antiga e grava a nota do /clear", async () => {
@@ -2904,8 +2904,8 @@ describe("conversation_reset — o /clear limpa a conversa de verdade", () => {
 });
 
 /**
- * O AVISO DE LIMITE DO PLANO (o "You've used 91% of your session limit" do rodapé do CLI): estado da
- * sessão, como as tarefas em segundo plano — normalizado, reenviado a quem conecta, nunca gravado.
+ * THE PLAN LIMIT WARNING (the "You've used 91% of your session limit" in the CLI's footer): session
+ * state, like the background tasks — normalised, resent to whoever connects, never recorded.
  */
 describe("rate_limit — o aviso de limite do plano", () => {
   const warn = { type: "rate_limit", status: "allowed_warning", window: "five_hour", utilization: 0.91, resetsAt: 1_792_440_000 };
@@ -2941,8 +2941,8 @@ describe("rate_limit — o aviso de limite do plano", () => {
 });
 
 /**
- * O MEDIDOR DE CONTEXTO: a última leitura de quanto da janela a sessão ocupa — normalizada,
- * reenviada a quem conecta (a leitura só vem no fim de um turno), nunca gravada no histórico.
+ * THE CONTEXT METER: the last reading of how much of the window the session takes — normalised,
+ * resent to whoever connects (the reading only comes at the end of a turn), never recorded in the history.
  */
 describe("context_usage — o medidor de contexto", () => {
   const parsed = (socket: ReturnType<typeof fakeSocket>) =>
@@ -3017,9 +3017,9 @@ describe("context_usage — o medidor de contexto", () => {
 });
 
 /**
- * A ORDEM ESPERA A IDENTIDADE DE QUEM A DEU. Quando a mensagem é de outra pessoa (troca de autor), o
- * driver só a recebe depois que o token e o autor dela aterrissaram no runner — e o que vem depois,
- * desse socket, não passa na frente dela.
+ * THE ORDER WAITS FOR THE IDENTITY OF WHOEVER GAVE IT. When the message is from another person (author switch), the
+ * driver only receives it after their token and author have landed in the runner — and what comes after,
+ * from that socket, does not jump ahead of it.
  */
 describe("attachSocket — beforeTurn segura a mensagem até a identidade aterrissar", () => {
   const writesOf = (text: string) => spawned[0]!.stdin.written.filter((w) => w.includes(text));
@@ -3074,12 +3074,12 @@ describe("attachSocket — beforeTurn segura a mensagem até a identidade aterri
 });
 
 /**
- * A RETOMADA QUE NÃO PEGOU (produção, 2026-10-20, card 4f4b, 18:18 e 19:02): o boot retomou o turno,
- * mas o CLI recém-subido abriu primeiro um turno SÓ DELE — a notificação de que o subagente morreu
- * com o processo anterior — e fechou com um `result` vazio ("No response requested."). A
- * continuação nunca virou turno; o manager contou aquele `result` como o fim da retomada, apagou o
- * marcador e o card ficou 16 min parado, com "Retomando a sessão…" como última linha, até a pessoa
- * escrever. Reproduzido no CLI real (SDK 0.3.300): o `result ""` do arranque chega antes do turno.
+ * THE RESUME THAT DID NOT TAKE (production, 2026-10-20, card 4f4b, 18:18 and 19:02): the boot resumed the turn,
+ * but the freshly started CLI first opened a turn of ITS OWN — the notification that the subagent died
+ * with the previous process — and closed it with an empty `result` ("No response requested."). The
+ * continuation never became a turn; the manager counted that `result` as the end of the resume, deleted the
+ * marker and the card sat stopped for 16 min, with "Retomando a sessão…" as the last line, until the person
+ * wrote. Reproduced on the real CLI (SDK 0.3.300): the boot's `result ""` arrives before the turn.
  */
 describe("retomada automática — confirmação de que pegou", () => {
   const CONT = "Continue de onde parou";
@@ -3093,7 +3093,7 @@ describe("retomada automática — confirmação de que pegou", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const session = ensure();
     injectSystemTurn(session, CONT, SYS, 1);
-    emit({ type: "assistant_text", text: "No response requested." }); // o enchimento do harness
+    emit({ type: "assistant_text", text: "No response requested." }); // the harness filler
     emit({ type: "result", isError: false });
     vi.advanceTimersByTime(RESUME_CONFIRM_MS - 1);
     expect(userWrites()).toHaveLength(1);
@@ -3139,7 +3139,7 @@ describe("retomada automática — confirmação de que pegou", () => {
     const session = ensure();
     injectSystemTurn(session, CONT, SYS, 1);
     emit({ type: "result", isError: false });
-    handleClientFrame(session, `{"type":"user","text":"e aí?"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"e aí?"}`);
     vi.advanceTimersByTime(RESUME_CONFIRM_MS * 3);
     expect(userWrites().map((f) => f.text)).toEqual([CONT, "e aí?"]);
   });
@@ -3177,7 +3177,7 @@ describe("retomada automática — confirmação de que pegou", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const session = ensure();
     injectSystemTurn(session, CONT, SYS, 1);
-    handleClientFrame(session, `{"type":"interrupt"}`);
+    dispatchClientFrame(session, `{"type":"interrupt"}`);
     emit({ type: "result", isError: false });
     vi.advanceTimersByTime(RESUME_CONFIRM_MS * 3);
     expect(userWrites()).toHaveLength(1);
@@ -3189,9 +3189,9 @@ describe("retomada automática — confirmação de que pegou", () => {
     const session = ensure();
     injectSystemTurn(session, CONT, SYS, 1);
     emit({ type: "result", isError: false });
-    emit({ type: "thinking", text: "hmm" }); // o CLI abriu um turno sozinho
+    emit({ type: "thinking", text: "hmm" }); // the CLI opened a turn on its own
     vi.advanceTimersByTime(RESUME_CONFIRM_MS + 1);
-    emit({ type: "error", message: "stream caiu" }); // …que morreu sem result
+    emit({ type: "error", message: "stream caiu" }); // …which died without a result
     vi.advanceTimersByTime(RESUME_CONFIRM_MS + 1);
     expect(userWrites().map((f) => f.text)).toEqual([CONT, RESUME_REENGAGE_TEXT]);
   });
@@ -3228,7 +3228,7 @@ describe("retomada automática — confirmação de que pegou", () => {
   it("turno de pessoa que fecha sem texto não é vigiado (o watchdog é só da retomada)", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const session = ensure();
-    handleClientFrame(session, `{"type":"user","text":"/compact"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"/compact"}`);
     emit({ type: "result", isError: false });
     vi.advanceTimersByTime(RESUME_CONFIRM_MS * 3);
     expect(userWrites()).toHaveLength(1);
@@ -3236,10 +3236,10 @@ describe("retomada automática — confirmação de que pegou", () => {
 });
 
 /**
- * O DRIVER CAIU SOZINHO (OOM, kill, docker exec que morreu) com o back de pé: o marcador ficava no
- * disco assinado por um processo VIVO — o sweep de boot não o via como órfão — e o turno só
- * "voltava" no próximo deploy, horas depois e fora de contexto. A queda com trabalho em voo agora
- * avisa quem cuida da retomada (resume.ts), na hora.
+ * THE DRIVER DROPPED ON ITS OWN (OOM, kill, a docker exec that died) with the back up: the marker stayed on
+ * disk signed by a LIVE process — the boot sweep did not see it as an orphan — and the turn only
+ * "came back" on the next deploy, hours later and out of context. A drop with work in flight now
+ * warns whoever handles the resume (resume.ts), right away.
  */
 describe("queda do driver com trabalho em voo", () => {
   const emit = (event: object) => spawned[0]!.stdout.emit("data", line(event));
@@ -3248,7 +3248,7 @@ describe("queda do driver com trabalho em voo", () => {
     const seen: Array<{ cardId: string; attempts: number }> = [];
     const off = onDriverCrashWithWork((cardId, marker) => seen.push({ cardId, attempts: marker.attempts }));
     const session = ensure();
-    handleClientFrame(session, `{"type":"user","text":"tarefa longa"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"tarefa longa"}`);
     spawned[0]!.emit("close", 137);
     off();
     expect(seen).toEqual([{ cardId: CARD, attempts: 0 }]);
@@ -3258,7 +3258,7 @@ describe("queda do driver com trabalho em voo", () => {
     const seen: string[] = [];
     const off = onDriverCrashWithWork((cardId) => seen.push(cardId));
     const session = ensure();
-    handleClientFrame(session, `{"type":"user","text":"tarefa longa"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"tarefa longa"}`);
     stopCardDriver(CARD);
     spawned[0]!.emit("close", null);
     off();
@@ -3269,7 +3269,7 @@ describe("queda do driver com trabalho em voo", () => {
     const seen: string[] = [];
     const off = onDriverCrashWithWork((cardId) => seen.push(cardId));
     const session = ensure();
-    handleClientFrame(session, `{"type":"user","text":"tarefa longa"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"tarefa longa"}`);
     shutdownAllDrivers();
     spawned[0]!.emit("close", null);
     off();
@@ -3280,7 +3280,7 @@ describe("queda do driver com trabalho em voo", () => {
     const seen: string[] = [];
     const off = onDriverCrashWithWork((cardId) => seen.push(cardId));
     const session = ensure();
-    handleClientFrame(session, `{"type":"user","text":"oi"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"oi"}`);
     emit({ type: "result", isError: false });
     spawned[0]!.emit("close", 1);
     off();
@@ -3289,9 +3289,9 @@ describe("queda do driver com trabalho em voo", () => {
 });
 
 /**
- * O /btw: uma pergunta LATERAL, feita com o turno rodando, que o agente principal nunca lê. Chega
- * num frame próprio, vai ao driver como controle próprio, não conta turno e só a resposta (que
- * carrega a pergunta) fica no log do card.
+ * The /btw: a SIDE question, asked with the turn running, that the main agent never reads. It arrives
+ * in a frame of its own, goes to the driver as a control of its own, does not count as a turn and only the answer (which
+ * carries the question) stays in the card's log.
  */
 describe("/btw — pergunta lateral", () => {
   function driverControls(): Array<Record<string, unknown>> {
@@ -3301,7 +3301,7 @@ describe("/btw — pergunta lateral", () => {
 
   it("vai ao driver como controle btw, sem virar turno nem marcador de turno em voo", async () => {
     const session = ensure();
-    handleClientFrame(session, btwFrame);
+    dispatchClientFrame(session, btwFrame);
     expect(driverControls()).toEqual([{ type: "btw", id: "b1", question: "o que falta?" }]);
     expect(driverTurnRunning(CARD)).toBe(false);
     expect(await readInflightMarker(CARD)).toBeNull();
@@ -3309,9 +3309,9 @@ describe("/btw — pergunta lateral", () => {
 
   it("com um turno rodando, não mexe na contagem dele", () => {
     const session = ensure();
-    handleClientFrame(session, JSON.stringify({ type: "user", text: "roda os testes" }));
+    dispatchClientFrame(session, JSON.stringify({ type: "user", text: "roda os testes" }));
     expect(driverTurnRunning(CARD)).toBe(true);
-    handleClientFrame(session, btwFrame);
+    dispatchClientFrame(session, btwFrame);
     spawned[0]!.stdout.emit("data", line({ type: "result", subtype: "success" }));
     expect(driverTurnRunning(CARD)).toBe(false);
   });
@@ -3320,7 +3320,7 @@ describe("/btw — pergunta lateral", () => {
     const session = ensure();
     const socket = fakeSocket();
     attachSocket(session, socket as never);
-    handleClientFrame(session, btwFrame);
+    dispatchClientFrame(session, btwFrame);
     spawned[0]!.stdout.emit("data", line({ type: "btw_answer", id: "b1", question: "o que falta?", text: "falta o PR" }));
     expect(sentTypes(socket)).toContain("btw_answer");
     await vi.waitFor(async () => {
@@ -3334,17 +3334,17 @@ describe("/btw — pergunta lateral", () => {
     const socket = fakeSocket();
     attachSocket(session, socket as never);
     spawned[0]!.exitCode = 1;
-    handleClientFrame(session, btwFrame, undefined, socket as never);
+    dispatchClientFrame(session, btwFrame, undefined, socket as never);
     const answer = socket.sent.map((s) => JSON.parse(s) as Record<string, unknown>).find((e) => e.type === "btw_answer");
     expect(answer).toMatchObject({ id: "b1", question: "o que falta?", error: expect.any(String) });
-    expect(String(answer!.error)).not.toBe("driver-gone"); // frase para a pessoa, não código interno
+    expect(String(answer!.error)).not.toBe("driver-gone"); // a sentence for the person, not internal code
     expect(driverControls()).toEqual([]);
   });
 });
 
 /**
- * A COMPACTAÇÃO EM ANDAMENTO é estado da sessão: quem abre o card no meio dela vê a barra rodando
- * desde quando começou; o desfecho vai ao log (o F5 redesenha o divisor).
+ * THE COMPACTION IN PROGRESS is session state: whoever opens the card in the middle of it sees the bar running
+ * since it started; the outcome goes to the log (the F5 redraws the divider).
  */
 describe("compaction — a barra do /compact", () => {
   const parsed = (socket: ReturnType<typeof fakeSocket>) =>

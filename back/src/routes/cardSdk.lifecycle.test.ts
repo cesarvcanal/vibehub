@@ -4,17 +4,17 @@ import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 
 /**
- * O CICLO DE VIDA DO SOCKET DURANTE O SETUP da rota `/api/cards/:id/sdk`.
+ * THE SOCKET'S LIFECYCLE DURING THE SETUP of the `/api/cards/:id/sdk` route.
  *
- * O handler gasta segundos em `await` (settings, instalação do driver, a sonda do transcript, o
- * replay) antes de se ligar ao driver do card. Uma aba que fecha NESSE intervalo dispara o `close`
- * antes de alguém escutá-lo — e a rota, sem saber, seguia em frente: assinava o barramento externo,
- * pegava uma referência do espelho (um `docker exec` de follow eterno), subia um driver e prendia o
- * socket morto em `session.sockets`. Esse conjunto nunca mais esvaziava: o idle stop nunca armava,
- * `isCardChatInUse` dizia "em uso" para sempre (o card nunca hibernava) e o ping vazava.
+ * The handler spends seconds in `await` (settings, installing the driver, the transcript probe, the
+ * replay) before hooking up to the card's driver. A tab that closes IN THAT window fires `close` before
+ * anybody listens to it — and the route, unaware, went ahead: it subscribed to the external bus, took a
+ * reference to the mirror (a `docker exec` with an endless follow), started a driver and held the dead
+ * socket in `session.sockets`. That set never emptied again: the idle stop never armed,
+ * `isCardChatInUse` said "em uso" forever (the card never hibernated) and the ping leaked.
  *
- * Aqui o handler é chamado direto, com as dependências de I/O trocadas por dublês: o que importa é
- * o que a rota ADQUIRE depois de um `close` que aconteceu no meio do setup.
+ * Here the handler is called directly, with the I/O dependencies swapped for doubles: what matters is
+ * what the route ACQUIRES after a `close` that happened in the middle of the setup.
  */
 
 const CARD = "eeee498d-98dd-44b6-97ee-c06a181c3769";
@@ -27,7 +27,7 @@ const h = vi.hoisted(() => ({
   stamps: [] as string[],
 }));
 
-// A rota lê o autor com `requestUser` (o usuário que o gate já resolveu); sem gate aqui, ninguém.
+// The route reads the author with `requestUser` (the user the gate already resolved); with no gate here, nobody.
 vi.mock("../auth/session.js", () => ({
   requestUser: () => Promise.resolve({ id: "u-mussa", username: "mussa", role: "member", createdAt: "" }),
 }));
@@ -73,7 +73,8 @@ vi.mock("../services/sdk/history.js", async (importOriginal) => {
     onExternalMessage: () => { h.externalSubscriptions += 1; return () => { h.externalSubscriptions -= 1; }; },
   };
 });
-vi.mock("../services/chat/provenance.js", () => ({
+vi.mock("../services/chat/provenance.js", async (importOriginal) => ({
+  originOfUser: (await importOriginal<typeof import("../services/chat/provenance.js")>()).originOfUser,
   primeProvenance: () => Promise.resolve(),
   matchOrigin: () => undefined,
 }));
@@ -91,7 +92,7 @@ const { hasDriverSession, isCardChatInUse, resetSdkSessionsForTesting, setDriver
 
 type Handler = (socket: WebSocket, req: { params: { id: string } }) => Promise<void>;
 
-/** O handler da rota, capturado sem subir um servidor. */
+/** The route's handler, captured without starting a server. */
 async function captureHandler(): Promise<Handler> {
   let handler: Handler | null = null;
   const app = { get: (_path: string, _opts: unknown, fn: Handler) => { handler = fn; } };
@@ -109,7 +110,7 @@ interface FakeSocket extends EventEmitter {
   ping: () => void;
 }
 
-/** Um socket `ws` mínimo: `readyState` segue o ciclo real (OPEN=1 → CLOSED=3, e então o `close`). */
+/** A minimal `ws` socket: `readyState` follows the real cycle (OPEN=1 → CLOSED=3, and then `close`). */
 function fakeSocket(): FakeSocket {
   const socket = new EventEmitter() as FakeSocket;
   socket.readyState = 1;
@@ -158,7 +159,7 @@ describe("/api/cards/:id/sdk — a aba que fecha no meio do setup", () => {
     const handler = await captureHandler();
     const socket = fakeSocket();
     const done = handler(socket as unknown as WebSocket, { params: { id: CARD } });
-    // O setup está parado na instalação do driver quando a pessoa fecha a aba.
+    // The setup is stuck installing the driver when the person closes the tab.
     await new Promise((r) => setTimeout(r, 0));
     socket.close();
     h.install?.resolve();
@@ -198,7 +199,7 @@ describe("/api/cards/:id/sdk — só a ORDEM troca o autor do card", () => {
     h.install?.resolve();
     await handler(socket as unknown as WebSocket, { params: { id: CARD } });
     await new Promise((r) => setTimeout(r, 0));
-    // O Mussa só abriu o card em que o César pediu um review: a autoria do review segue do César.
+    // Mussa only opened the card in which César asked for a review: the review's authorship stays César's.
     expect(h.stamps).toEqual([]);
 
     socket.emit("message", Buffer.from(`{"type":"interrupt"}`));

@@ -1,17 +1,17 @@
 import { JsonStore } from "../../store/jsonStore.js";
 import { dataPath } from "../../config/env.js";
-import type { Review } from "./model.js";
+import { isReviewClosed, type Review } from "./model.js";
 
 /**
- * STORE DAS REVISÕES — `reviews.json`, um arquivo próprio ao lado do `board.json`.
+ * REVIEWS STORE — `reviews.json`, a file of its own next to `board.json`.
  *
- * Fica fora do board de propósito: o orquestrador muta a revisão a cada rodada (achados, log, fase) e
- * não deve disputar a fila de escrita do board, que os hooks de status martelam. Mesmo molde do
- * `card-events.json`: um JsonStore, hidratação tolerante e a fila de mutações do store pra que duas
- * escritas simultâneas (o revisor submetendo e o autor respondendo) nunca se desfaçam.
+ * It stays out of the board on purpose: the orchestrator mutates the review every round (findings, log,
+ * phase) and must not compete for the board's write queue, which the status hooks hammer. Same mould as
+ * `card-events.json`: a JsonStore, tolerant hydration and the store's mutation queue so that two
+ * simultaneous writes (the reviewer submitting and the author answering) never undo each other.
  *
- * Quem lê recebe CÓPIA. O store guarda objetos vivos no cache; devolver o próprio objeto deixaria um
- * chamador alterar a revisão fora da fila e fazer a próxima mutação gravar a alteração dele.
+ * Readers get a COPY. The store keeps live objects in the cache; returning the object itself would let a
+ * caller change the review outside the queue and make the next mutation record that change.
  */
 
 interface ReviewsDoc {
@@ -27,13 +27,10 @@ const store = new JsonStore<ReviewsDoc>(
   },
 );
 
-/** Revisão encerrada: o PR foi mergeado ou a revisão cancelada. `impasse` NÃO está aqui: espera um humano. */
-const FINISHED: ReadonlySet<Review["phase"]> = new Set(["merged", "cancelled"]);
-
 const copy = (r: Review): Review => structuredClone(r);
 
-/** A mais recente da lista (empate: a inserida depois). */
-const newest = (list: Review[]): Review | undefined =>
+/** The most recent one in the list (tie: the one inserted later). */
+export const newest = (list: Review[]): Review | undefined =>
   list.reduce<Review | undefined>((latest, r) => (!latest || r.createdAt >= latest.createdAt ? r : latest), undefined);
 
 export async function getReview(id: string): Promise<Review | undefined> {
@@ -42,40 +39,40 @@ export async function getReview(id: string): Promise<Review | undefined> {
 }
 
 /**
- * A revisão em andamento do card (e do PR, quando dado). Mais de uma não deveria existir; se existir,
- * a mais recente vence, que é a que o autor está olhando.
+ * The card's review in progress (and the PR's, when given). There should never be more than one; if there
+ * is, the most recent wins, which is the one the author is looking at.
  */
 export async function activeReviewFor(cardId: string, prNumber?: number): Promise<Review | undefined> {
   const found = newest(
     (await store.load()).reviews.filter(
-      (r) => r.cardId === cardId && !FINISHED.has(r.phase) && (prNumber === undefined || r.prNumber === prNumber),
+      (r) => r.cardId === cardId && !isReviewClosed(r.phase) && (prNumber === undefined || r.prNumber === prNumber),
     ),
   );
   return found && copy(found);
 }
 
-/** A revisão em andamento de um PR, pela URL, em qualquer card (a mais recente, se houver mais de uma). */
+/** A PR's review in progress, by URL, on any card (the most recent, if there is more than one). */
 export async function activeReviewForPr(prUrl: string): Promise<Review | undefined> {
-  const found = newest((await store.load()).reviews.filter((r) => r.prUrl === prUrl && !FINISHED.has(r.phase)));
+  const found = newest((await store.load()).reviews.filter((r) => r.prUrl === prUrl && !isReviewClosed(r.phase)));
   return found && copy(found);
 }
 
 /**
- * As revisões que um card ACOMPANHA, de qualquer fase: as dele como autor e as dos PRs que ele anexou
- * (`hubCardId`). É o que o card mostra numa linha por PR.
+ * The reviews a card FOLLOWS, of any phase: its own as the author and those of the PRs it attached
+ * (`hubCardId`). It is what the card shows, one line per PR.
  */
 export async function listReviewsFollowedBy(cardIds: string[]): Promise<Review[]> {
   const ids = new Set(cardIds);
   return (await store.load()).reviews.filter((r) => ids.has(r.cardId) || (r.hubCardId !== undefined && ids.has(r.hubCardId))).map(copy);
 }
 
-/** A revisão a que um card de revisor pertence (ativa ou já encerrada: o histórico não some). */
+/** The review a reviewer card belongs to (active or already closed: the history does not disappear). */
 export async function reviewByReviewerCard(reviewerCardId: string): Promise<Review | undefined> {
   const found = newest((await store.load()).reviews.filter((r) => r.reviewerCardId === reviewerCardId));
   return found && copy(found);
 }
 
-/** As revisões dos cards pedidos, de qualquer fase, na ordem em que foram criadas. */
+/** The reviews of the requested cards, of any phase, in the order they were created. */
 export async function listReviewsForCards(cardIds: string[]): Promise<Review[]> {
   if (cardIds.length === 0) return [];
   const wanted = new Set(cardIds);
@@ -90,8 +87,8 @@ export async function insertReview(r: Review): Promise<void> {
 }
 
 /**
- * Muta a revisão dentro da fila do store e carimba `updatedAt`. Tudo ou nada: se `fn` lança, nada do
- * que ela alterou chega ao disco (o JsonStore descarta o cache). Devolve a revisão já mutada.
+ * Mutates the review inside the store's queue and stamps `updatedAt`. All or nothing: if `fn` throws, none
+ * of what it changed reaches the disk (the JsonStore discards the cache). Returns the already mutated review.
  */
 export async function mutateReview(id: string, fn: (r: Review) => void): Promise<Review> {
   return await store.mutate((doc) => {

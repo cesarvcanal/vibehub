@@ -6,11 +6,11 @@ import { subagentAction, subagentLabel, toolHeadline, type SdkRow } from "@/feat
 import { SdkThreadContext } from "@/features/board/components/sdkThreadContext";
 
 /**
- * UM SUBAGENTE (Agent/Task) NO CHAT: a chamada, e debaixo dela o que ELE fez.
+ * A SUBAGENT (Agent/Task) IN THE CHAT: the call, and under it what IT did.
  *
- * As ferramentas e o texto do subagente ficam recuados sob o card que as disparou, fora do fio da
- * conversa principal, e recolhidos por padrão: o contador de ações e a última delas dizem que ele
- * está trabalhando e em quê, sem enterrar o que o agente principal diz.
+ * The subagent's tools and text sit indented under the card that fired them, outside the main
+ * conversation's thread, and collapsed by default: the action counter and the latest one say that it
+ * is working and on what, without burying what the main agent says.
  */
 export function SdkAgentCard({ row }: { row: Extract<SdkRow, { kind: "tool" }> }) {
   const t = useT();
@@ -24,8 +24,8 @@ export function SdkAgentCard({ row }: { row: Extract<SdkRow, { kind: "tool" }> }
   const who = subagentLabel(row.name, row.input);
   return (
     <div data-testid="sdk-agent" data-tool={row.name} className="min-w-0 pl-0.5 text-xs">
-      {/* O mesmo desenho de uma ferramenta (manchete + "rodando em segundo plano"), com o robô no
-          lugar da chave: é um agente, não um comando. */}
+      {/* The same design as a tool (headline + "rodando em segundo plano"), with the robot in
+          place of the wrench: it is an agent, not a command. */}
       <div data-testid="sdk-tool" data-tool={row.name}>
         <div className="flex items-baseline gap-1.5 text-muted-foreground">
           <Bot className="h-3 w-3 shrink-0 translate-y-0.5 opacity-70" />

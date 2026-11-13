@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
+import { EXEC_TIMEOUT_MS, hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import { cardGitEnv } from "../github/runnerIdentity.js";
 import { cardWorkPaths } from "../board/workspace.js";
@@ -9,6 +9,7 @@ import { accountConfigDir } from "../accounts/profiles.js";
 import { oauthTokenGuard, DEFAULT_CLAUDE_DIR } from "../accounts/profiles.js";
 import { carryTranscriptsCommand } from "../accounts/carryTranscripts.js";
 import { effectiveAccountSlug, modelPin, isValidEffort, assertSessionId, type Card, type Project } from "../board/registry.js";
+import { CARD_ID_RE } from "../board/cardId.js";
 import { cardCdpEndpoint } from "../browser/ports.js";
 import { statusUrl } from "../../runtime/runner.js";
 import { getSettings } from "../settings/settings.js";
@@ -150,7 +151,6 @@ function assertSafeUrl(url: string): string {
   if (!SAFE_URL_RE.test(url)) throw new Error(`unsafe URL for the driver environment: '${url}'`);
   return url;
 }
-const CARD_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
  * The remote command line that runs the driver in the runner: `docker exec -i <c> bash -c '<guard>;
@@ -253,9 +253,15 @@ export function installCardSdkDriver(): Promise<void> {
   // The cleanup is a `.finally` on the promise, not a try/finally in the body: the body runs
   // synchronously up to its first await, so a throw there (executor, driver source read) would
   // run the cleanup BEFORE the `set` below and leave the rejected promise "in flight" forever.
+  // One exec for both steps: each script is `set -e` + its own heredoc, so concatenated they still
+  // run in order and a failed plant stops before the npm step — one round trip instead of two. The
+  // timeout is the two steps' budget: each had its own EXEC_TIMEOUT_MS, and npm on a slow runner
+  // must not lose the slice the plant used to get.
   const run = (async () => {
-    await hostExecutor().runScript(buildInstallDriverScript(container, sdkDriverSource()));
-    await hostExecutor().runScript(buildEnsureSdkScript(container));
+    await hostExecutor().runScript(
+      `${buildInstallDriverScript(container, sdkDriverSource())}\n${buildEnsureSdkScript(container)}`,
+      { timeoutMs: 2 * EXEC_TIMEOUT_MS },
+    );
   })().finally(() => installsInFlight.delete(container));
   installsInFlight.set(container, run);
   return run;

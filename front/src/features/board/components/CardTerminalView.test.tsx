@@ -239,7 +239,7 @@ function renderWithCache(
   client.setQueryData(cardsKey(project.id), seed);
   if (mode) writeCardMode("c1", mode);
   return renderApp(
-    <CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />,
+    <CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />,
     { queryClient: client },
   );
 }
@@ -324,7 +324,7 @@ describe("CardTerminalView — instant open", () => {
     // No cache seed at all: this is a refresh or a pasted link. The pane is named because what is
     // being asserted is the ATTACH, not which of the two views the card opens in.
     writeCardMode("c1", "terminal");
-    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />);
     expect(await screen.findByTestId("xterm")).toBeInTheDocument();
     localStorage.clear();
   });
@@ -347,10 +347,10 @@ describe("CardTerminalView — which chat the Chat tab mounts (the INSTALL flag,
   }
 
   it("no chat NATIVO não existe 'Claude parou': o painel do tmux não é com quem se está falando", async () => {
-    // Produção, 2026-10-02: o claude do chat nativo é filho do BACK, não do painel do tmux — a sonda
-    // do servidor lê o `bash` pelado embaixo dele como "Claude saiu" e o aviso ficava pendurado por
-    // cima de uma conversa que estava respondendo normalmente. Aqui ele não se desenha: a próxima
-    // mensagem sobe um driver e retoma a mesma conversa; não há terminal mudo para avisar.
+    // Production, 2026-10-02: the native chat's claude is a child of the BACK, not of the tmux pane — the
+    // server's probe reads the bare `bash` under it as "Claude saiu" and the warning hung over
+    // a conversation that was answering normally. Here it is not drawn: the next
+    // message spawns a driver and resumes the same conversation; there is no silent terminal to warn about.
     serveFeaturesOn();
     serveSession({ situation: "stopped" });
     renderWithCache([card({ openedAt: 10 })], testQueryClient(), "chat");
@@ -358,9 +358,9 @@ describe("CardTerminalView — which chat the Chat tab mounts (the INSTALL flag,
     expect(screen.queryByTestId("claude-stopped-banner")).toBeNull();
   });
 
-  // Produção, 2026-11-10: mensagem colada durante o "Preparando…" de um card recém-criado foi pro
-  // outbox do SERVIDOR, que a digitou no Claude do tmux — outra sessão, que o chat nativo não
-  // mostra. Quando o card abriu, ela tinha sumido. No chat nativo ela espera na fila DO CHAT.
+  // Production, 2026-11-10: a message pasted during the "Preparando…" of a freshly created card went to
+  // the SERVER's outbox, which typed it into the tmux Claude — another session, which the native chat does not
+  // show. When the card opened, it was gone. In the native chat it waits in the CHAT's queue.
   it("no chat nativo, a mensagem escrita durante o 'Preparando…' espera na fila do chat, não no outbox do tmux", async () => {
     serveFeaturesOn();
     let resolveOpen: (value: unknown) => void = () => {};
@@ -376,14 +376,14 @@ describe("CardTerminalView — which chat the Chat tab mounts (the INSTALL flag,
     expect(mockPost).not.toHaveBeenCalledWith("/cards/c1/messages", expect.anything());
     expect(readQueue("c1").map((m) => [m.text, m.from?.name])).toEqual([["comece pelo schema", "operator"]]);
 
-    // O X ainda tira da fila antes de o chat abrir.
+    // The X still removes it from the queue before the chat opens.
     await userEvent.click(screen.getByTestId("sdk-queued-remove"));
     expect(screen.queryByTestId("sdk-queue")).toBeNull();
     expect(readQueue("c1")).toEqual([]);
 
     await userEvent.type(box, "segunda{Enter}");
     resolveOpen({ card: card({ openedAt: 99 }) });
-    // O chat nativo assume e encontra a mensagem na fila dele — é ele quem a entrega.
+    // The native chat takes over and finds the message in its queue — it is the one that delivers it.
     expect(await screen.findByTestId("sdk-chat")).toBeInTheDocument();
     expect(readQueue("c1").map((m) => m.text)).toEqual(["segunda"]);
   });
@@ -396,9 +396,9 @@ describe("CardTerminalView — which chat the Chat tab mounts (the INSTALL flag,
   });
 
   it("an image attached in the native chat says nothing while it goes up — the chip's spinner is the whole story", async () => {
-    // Produção, 2026-10-31: "Uploading image…" ficou no topo da tela junto com o spinner do chip, e
-    // os dois giraram pra sempre. O composer já desenha a espera em cima da miniatura; o toast é do
-    // terminal cru, onde não há miniatura nenhuma.
+    // Production, 2026-10-31: "Uploading image…" stayed at the top of the screen along with the chip's spinner, and
+    // both spun forever. The composer already draws the wait over the thumbnail; the toast belongs to the
+    // raw terminal, where there is no thumbnail at all.
     serveFeaturesOn();
     vi.mocked(toast.loading).mockClear();
     mockPost.mockImplementation((url: string) =>
@@ -623,9 +623,9 @@ describe("CardTerminalView — composing a message", () => {
     resolveOpen({ card: card({ openedAt: 10 }) });
   });
 
-  // Produção, 2026-10-08: digitando durante o "Preparando…", o card fica pronto, o campo é trocado
-  // pelo do painel de verdade e o cursor pulava pro COMEÇO do rascunho — o resto da frase entrava
-  // antes do que já estava escrito.
+  // Production, 2026-10-08: typing during the "Preparando…", the card becomes ready, the field is swapped
+  // for the real pane's and the caret jumped to the START of the draft — the rest of the sentence went in
+  // before what was already written.
   it("a message half-typed while the card prepares keeps the caret at its END when the card opens", async () => {
     let resolveOpen: (value: unknown) => void = () => {};
     mockPost.mockImplementation(() => new Promise((resolve) => (resolveOpen = resolve)));
@@ -639,14 +639,14 @@ describe("CardTerminalView — composing a message", () => {
     await screen.findByTestId("xterm");
 
     const box = screen.getByTestId("terminal-composer").querySelector("textarea") as HTMLTextAreaElement;
-    expect(box).not.toBe(before); // um campo NOVO, com o rascunho restaurado
+    expect(box).not.toBe(before); // a NEW field, with the draft restored
     await waitFor(() => expect(document.activeElement).toBe(box));
     expect(box).toHaveValue("comece pelo schema");
     expect(box.selectionStart).toBe("comece pelo schema".length);
   });
 
-  // A primeira mensagem sai durante o "Preparando…", a pessoa já está na próxima, e o card abre
-  // ANTES de o outbox responder: o campo do painel nasce do rascunho, que ainda tem as duas.
+  // The first message goes out during the "Preparando…", the person is already on the next one, and the card opens
+  // BEFORE the outbox answers: the pane's field is born from the draft, which still holds both.
   it("a message sent while the card prepares, accepted after it opened, leaves only the NEXT one in the field", async () => {
     let resolveOpen: (value: unknown) => void = () => {};
     const messages: ((value: unknown) => void)[] = [];
@@ -668,7 +668,7 @@ describe("CardTerminalView — composing a message", () => {
     expect(box).not.toBe(before);
     expect(box).toHaveValue("schema testes");
 
-    // O Enter no campo novo não reenvia o que ainda está a caminho.
+    // Enter in the new field does not resend what is still on its way.
     fireEvent.keyDown(box, { key: "Enter" });
     expect(messages).toHaveLength(1);
 
@@ -727,7 +727,7 @@ describe("CardTerminalView — the card bar", () => {
     const user = userEvent.setup();
     const client = testQueryClient();
     client.setQueryData(cardsKey(project.id), [card({ openedAt: 10 })]);
-    renderApp(<CardTerminalView project={project} cardId="c1" onBack={onBack} onNewCard={vi.fn()} />, {
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={onBack} />, {
       queryClient: client,
     });
 
@@ -905,7 +905,7 @@ describe("CardTerminalView — the card bar", () => {
   });
 
   it("a level the native chat took LIVE says so, keeps the terminal attached, and the pill shows it at once", async () => {
-    // Produção, 2026-10-27: Médio → Alto with the turn running read "vale assim que o Claude terminar"
+    // Production, 2026-10-27: Médio → Alto with the turn running read "vale assim que o Claude terminar"
     // and the pill went on saying Médio. Now the driver applies it in place, and the bar follows the click.
     serveSession({ model: "claude-opus-5-5", modelLabel: "Opus 5.5", effort: "medium" });
     mockPatch.mockResolvedValue({ card: card({ openedAt: 10, effort: "high" }), session: "live" });
@@ -1197,7 +1197,6 @@ describe("CardTerminalView — narrow screens", () => {
         project={project}
         cardId="c1"
         onBack={vi.fn()}
-        onNewCard={vi.fn()}
         onOpenMenu={onOpenMenu}
       />,
     );
@@ -1210,7 +1209,7 @@ describe("CardTerminalView — narrow screens", () => {
   });
 
   it("renders no menu button when the page does not offer a drawer", async () => {
-    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />);
     await screen.findByTestId("card-bar");
     expect(screen.queryByRole("button", { name: "Open the card list" })).not.toBeInTheDocument();
   });
@@ -1258,7 +1257,7 @@ describe("CardTerminalView — the phone", () => {
       const user = userEvent.setup();
       const onBack = vi.fn();
       const { unmount } = renderApp(
-        <CardTerminalView project={project} cardId="c1" onBack={onBack} onNewCard={vi.fn()} />,
+        <CardTerminalView project={project} cardId="c1" onBack={onBack} />,
       );
 
       await user.click(await screen.findByTestId("card-back"));
@@ -1269,7 +1268,7 @@ describe("CardTerminalView — the phone", () => {
 
   it("splits the bar into identity and a row of icons on a phone", async () => {
     setViewport(true);
-    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />);
 
     const identity = await screen.findByTestId("card-bar-identity");
     const actions = screen.getByTestId("card-bar-actions");
@@ -1295,7 +1294,7 @@ describe("CardTerminalView — the phone", () => {
   it("keeps Browser, Shell, the model and the account behind the one overflow menu", async () => {
     setViewport(true);
     const user = userEvent.setup();
-    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />);
 
     await user.click(await screen.findByTestId("card-bar-more"));
     const menu = await screen.findByRole("menu");
@@ -1311,7 +1310,7 @@ describe("CardTerminalView — the phone", () => {
     serveMember();
     setViewport(true);
     const user = userEvent.setup();
-    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />);
     await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/auth/me"));
 
     await user.click(await screen.findByTestId("card-bar-more"));
@@ -1325,7 +1324,7 @@ describe("CardTerminalView — the phone", () => {
   it("opens the browser pane from the overflow menu", async () => {
     setViewport(true);
     const user = userEvent.setup();
-    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />);
 
     await user.click(await screen.findByTestId("card-bar-more"));
     await user.click(await screen.findByRole("menuitemcheckbox", { name: "Browser" }));
@@ -1337,14 +1336,14 @@ describe("CardTerminalView — the phone", () => {
     // card's Chat tab is the native chat; the `⋯` menus must not resurrect the per-card knob.
     setViewport(true);
     const user = userEvent.setup();
-    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />);
     await user.click(await screen.findByTestId("card-bar-more"));
     expect(screen.queryByTestId("card-native-chat-toggle")).toBeNull();
     expect(screen.queryByText(/native chat/i)).toBeNull();
   });
 
   it("leaves the desktop bar as the single row it has always been", async () => {
-    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />);
 
     const bar = await screen.findByTestId("card-bar");
     expect(screen.queryByTestId("card-bar-identity")).not.toBeInTheDocument();
@@ -1356,7 +1355,7 @@ describe("CardTerminalView — the phone", () => {
   it("locks the page while a card is open on a phone, and unlocks it on the way out", async () => {
     setViewport(true);
     const { unmount } = renderApp(
-      <CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />,
+      <CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />,
     );
 
     await screen.findByTestId("card-bar");
@@ -1368,7 +1367,7 @@ describe("CardTerminalView — the phone", () => {
   });
 
   it("never locks the page on a desktop, where the board behind still scrolls", async () => {
-    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />);
+    renderApp(<CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />);
     await screen.findByTestId("card-bar");
     expect(document.documentElement.classList.contains("card-view-locked")).toBe(false);
   });
@@ -1530,7 +1529,7 @@ describe("CardTerminalView — the card's browser", () => {
     client.setQueryData(cardsKey(project.id), [card({ openedAt: 10 })]);
     writeCardMode("c1", "terminal");
     renderApp(
-      <CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} active={false} />,
+      <CardTerminalView project={project} cardId="c1" onBack={vi.fn()} active={false} />,
       { queryClient: client },
     );
     await screen.findByTestId("xterm");
@@ -1572,7 +1571,7 @@ describe("CardTerminalView — the PR blocks above the composer", () => {
   });
 
   it("no modo chat o bloco do PR fica logo acima do composer", async () => {
-    // O composer do chat mora dentro da view do chat: o bloco chega a ela pelo slot `footer`.
+    // The chat's composer lives inside the chat view: the block reaches it through the `footer` slot.
     renderWithCache([card({ openedAt: 10, prs: [PR] })], testQueryClient(), "chat");
     const block = await screen.findByTestId("pr-review-block");
     expect(block.nextElementSibling).toBe(screen.getByTestId("terminal-composer"));
@@ -1701,7 +1700,7 @@ describe("CardTerminalView — ?review=1 opens the panel", () => {
     return renderApp(
       <>
         <Url />
-        <CardTerminalView project={project} cardId="c1" onBack={vi.fn()} onNewCard={vi.fn()} />
+        <CardTerminalView project={project} cardId="c1" onBack={vi.fn()} />
       </>,
       { queryClient: client, route },
     );

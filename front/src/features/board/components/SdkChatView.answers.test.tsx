@@ -11,8 +11,8 @@ import { api, get } from "@/lib/api";
 import { resetLanguage, setLanguage } from "@/i18n";
 
 /**
- * "COPIAR" E "OUVIR" EMBAIXO DA RESPOSTA, como no ChatGPT: só na resposta final de cada rodada, e a
- * da rodada atual só quando a IA parou de vez — sem turno rodando e sem tarefa em segundo plano.
+ * "COPIAR" AND "OUVIR" UNDER THE ANSWER, like in ChatGPT: only on each round's final answer, and the
+ * current round's only once the AI has stopped for good — no turn running and no background task.
  */
 
 vi.mock("@/lib/api", () => ({

@@ -6,9 +6,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { buildUploadScript } from "./workspace.js";
 
 /**
- * O script de upload RODANDO de verdade num bash, com um `docker` falso que só executa o comando
- * do container aqui mesmo. É o que prova o conserto da lentidão: o payload não é mais lido pelo
- * bash (1 byte por read()), e os bytes chegam inteiros.
+ * The upload script RUNNING for real in a bash, with a fake `docker` that only executes the container's
+ * command right here. It is what proves the slowness fix: the payload is no longer read by
+ * bash (1 byte per read()), and the bytes arrive whole.
  */
 describe("buildUploadScript — executado num bash de verdade", () => {
   let dir = "";

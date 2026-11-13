@@ -1,26 +1,29 @@
 /**
- * REVISÃO DE PR — regras puras. Aqui moram as invariantes que o servidor impõe à IA do revisor e à do
- * autor, para que o loop não dependa de boa vontade de prompt: bloqueante só com prova, lista fechada
- * a partir da rodada 2 e teto de rodadas. Sem I/O; o orquestrador persiste e dispara os relays.
+ * PR REVIEW — pure rules. This is where the invariants the server imposes on the reviewer's AI and on
+ * the author's live, so the loop does not depend on the prompt's goodwill: blocking only with proof, a
+ * closed list from round 2 onwards, and a cap on rounds. No I/O; the orchestrator persists and fires the relays.
  *
- * A severidade separa quem age. O que tem comportamento esperado claro, a IA do autor resolve sozinha:
- * `blocking` (bug, com prova) e `improvement` (melhoria no código que o PR mexe, preservando regra e
- * comportamento). O que exige decidir o que o sistema deve fazer espera uma pessoa: `question`. O que é
- * opcional espera uma pessoa escolher: `suggestion`. Autonomia técnica (como resolver) é da IA; decisão
- * de produto (o que o sistema faz) é de gente.
+ * Severity separates who acts. What has a clear expected behaviour, the author's AI resolves on its own:
+ * `blocking` (a bug, with proof) and `improvement` (an improvement in the code the PR touches, preserving
+ * rule and behaviour). What requires deciding what the system should do waits for a person: `question`.
+ * What is optional waits for a person to choose: `suggestion`. Technical autonomy (how to solve it) is the
+ * AI's; a product decision (what the system does) belongs to people.
  */
 
 export const MAX_ROUNDS = 3;
 
 export type ReviewPhase = "reviewing" | "fixing" | "ready" | "impasse" | "merged" | "cancelled";
+/** Review closed: the PR was merged or the review cancelled. `impasse` is NOT here: it waits for a human. */
+export const isReviewClosed = (phase: ReviewPhase): boolean => phase === "merged" || phase === "cancelled";
+
 export type FindingSeverity = "blocking" | "improvement" | "suggestion" | "question" | "refuted";
 /**
- * `wontfix`: o autor decidiu não aplicar uma sugestão ou melhoria, com o motivo (nenhuma das duas
- * bloqueia; bloqueante não aceita).
+ * `wontfix`: the author decided not to apply a suggestion or improvement, with the reason (neither of
+ * the two blocks; a blocking one does not accept it).
  */
 export type FindingStatus = "open" | "fixed" | "contested" | "accepted_risk" | "dropped" | "wontfix";
 
-/** O que o autor responde de um achado: corrigido, contestado (com prova) ou, só em sugestão, não vai aplicar. */
+/** What the author answers about a finding: fixed, disputed (with proof) or, for a suggestion only, will not apply. */
 export type AuthorAnswerStatus = "fixed" | "contested" | "wontfix";
 
 export interface FindingProof {
@@ -34,8 +37,8 @@ export interface Finding {
   severity: FindingSeverity;
   title: string;
   /**
-   * O problema explicado para quem decide sem abrir o código: o que está errado e o que acontece se
-   * ficar assim. O título sozinho não dizia isso (produção, 2026-11-09). Ausente nos achados antigos.
+   * The problem explained for whoever decides without opening the code: what is wrong and what happens
+   * if it stays that way. The title alone did not say that (production, 2026-11-09). Absent in old findings.
    */
   problem?: string;
   file?: string;
@@ -49,24 +52,24 @@ export interface Finding {
   reviewerReply?: string;
   humanDecision?: "keep" | "accept_risk" | "block" | "drop";
   /**
-   * Sugestão que uma pessoa já mandou o autor aplicar (quem e quando). Enquanto ela segue em aberto, o
-   * painel não oferece "fazer" de novo e o servidor recusa o reenvio: sem isso, a lista enviada voltava
-   * com as mesmas escolhas e dava para mandar a mesma coisa ao autor duas vezes (produção, 2026-11-09).
-   * Some quando o achado muda de mão: a resposta do autor ou o veredito do revisor apagam a marca.
+   * A suggestion a person already told the author to apply (who and when). While it stays open, the
+   * panel does not offer "fazer" again and the server refuses the resend: without this, the list sent
+   * came back with the same choices and the same thing could be sent to the author twice (production, 2026-11-09).
+   * Disappears when the finding changes hands: the author's answer or the reviewer's verdict clears the mark.
    */
   requested?: { by: string; at: number };
 }
 
 /**
- * Um achado citado numa fala, com o que aquele lado disse dele NAQUELE momento: o achado guarda só a
- * última resposta de cada lado, e a conversa das IAs precisa da de cada rodada.
+ * A finding cited in a message, with what that side said about it AT THAT moment: the finding keeps only
+ * the latest answer from each side, and the AIs' conversation needs the one from each round.
  */
 export interface ReviewEventItem {
   id: string;
   status: FindingStatus;
   reply?: string;
   commit?: string;
-  /** O achado nasceu nesta fala (a rodada do revisor que o abriu). */
+  /** The finding was born in this message (the reviewer's round that opened it). */
   isNew?: boolean;
 }
 
@@ -75,42 +78,42 @@ export interface ReviewEvent {
   round: number;
   who: "reviewer" | "author" | "system" | "human";
   text: string;
-  /** Os achados de que a fala trata. Ausente nas falas de sistema e nas gravadas antes deste campo. */
+  /** The findings the message is about. Absent in system messages and in those recorded before this field. */
   items?: ReviewEventItem[];
-  /** Quem fez, nas falas humanas (o username). */
+  /** Who did it, in human messages (the username). */
   by?: string;
 }
 
 export interface MergeGate {
   sha: string;
   state: "running" | "passed" | "failed";
-  /** A saída do gate que falhou (já redigida e com teto). */
+  /** The output of the gate that failed (already redacted and capped). */
   output?: string;
   at: number;
   /**
-   * Esta falha já foi pega para rodar de novo sozinha, no fim de um turno do autor: a marca que impede
-   * dois fins de turno juntos de rodarem o gate duas vezes. Falha gravada antes de `failures` com esta
-   * marca é de quando a volta sozinha era uma só, e não roda mais sozinha.
+   * This failure was already picked up to run again on its own, at the end of an author's turn: the mark
+   * that stops two turn endings together from running the gate twice. A failure recorded before `failures`
+   * with this mark is from when the automatic retry happened only once, and no longer runs on its own.
    */
   autoRetried?: true;
   /**
-   * Quantas vezes seguidas o gate falhou neste commit desde a última ordem humana ("Tentar de novo"
-   * zera). Carregado pelo `running`. Ausente numa falha gravada antes do campo = 1.
+   * How many times in a row the gate failed on this commit since the last human order ("Tentar de novo"
+   * resets it). Carried by `running`. Absent in a failure recorded before the field = 1.
    */
   failures?: number;
-  /** A falha passou de {@link MERGE_GATE_AUTO_RETRIES} voltas sozinhas: ninguém roda de novo sem uma pessoa. */
+  /** The failure went past {@link MERGE_GATE_AUTO_RETRIES} automatic retries: nobody runs it again without a person. */
   exhausted?: true;
 }
 
 /**
- * Quantas vezes o gate do merge roda de novo sozinho, cada uma depois de um turno do autor corrigindo
- * a falha anterior. Teto para um teste que a IA não consegue consertar não prender o runner num laço.
+ * How many times the merge gate runs again on its own, each one after an author turn fixing the previous
+ * failure. A cap so a test the AI cannot fix does not trap the runner in a loop.
  */
 export const MERGE_GATE_AUTO_RETRIES = 3;
 
 /**
- * O gate vermelho que ainda volta sozinho: a IA do autor está com a falha e, ao fim do turno dela, os
- * testes rodam de novo. Falso = vermelho que espera uma pessoa. PURE.
+ * The red gate that still comes back on its own: the author's AI has the failure and, at the end of its
+ * turn, the tests run again. False = red that waits for a person. PURE.
  */
 export function mergeGateSelfHealing(gate: MergeGate): boolean {
   return gate.state === "failed" && !gate.exhausted && !(gate.autoRetried && gate.failures === undefined);
@@ -118,11 +121,11 @@ export function mergeGateSelfHealing(gate: MergeGate): boolean {
 
 export interface Review {
   id: string;
-  /** O card do AUTOR: onde a correção roda e o PR mora. */
+  /** The AUTHOR's card: where the fix runs and the PR lives. */
   cardId: string;
   /**
-   * O card que ANEXOU o PR e pediu a revisão, quando não é o do autor (`vibehub_attach_prs`): de lá as
-   * pessoas acompanham a linha do PR, e lá chegam os avisos de fase. Ausente = pedida no próprio card do autor.
+   * The card that ATTACHED the PR and asked for the review, when it is not the author's (`vibehub_attach_prs`):
+   * from there people follow the PR line, and the phase notices land there. Absent = asked on the author's own card.
    */
   hubCardId?: string;
   projectId: string;
@@ -141,38 +144,38 @@ export interface Review {
   log: ReviewEvent[];
   reviewedSha?: string;
   /**
-   * O head do PR na última vez que alguém o viu (o revisor ao submeter, o autor ao responder, a
-   * conferência do GitHub). Diferente de `reviewedSha` = o PR andou depois da revisão: o painel mostra.
+   * The PR head the last time someone saw it (the reviewer on submitting, the author on answering, the
+   * GitHub check). Different from `reviewedSha` = the PR moved after the review: the panel shows it.
    */
   prHeadSha?: string;
   impasseReason?: string;
   /**
-   * `ready`, mas o pedido de Approve não chegou ao card do revisor: o PR segue com o
-   * `--request-changes` da rodada 1 no GitHub. O merge humano não fica preso; o painel oferece
-   * "tentar de novo" (retryReview), e o relay que dá certo limpa a marca.
+   * `ready`, but the Approve request did not reach the reviewer's card: the PR still has round 1's
+   * `--request-changes` on GitHub. The human merge is not blocked; the panel offers
+   * "tentar de novo" (retryReview), and the relay that succeeds clears the mark.
    */
   approvePending?: boolean;
   /**
-   * A rodada em que o merge automático foi tentado e recusado (CI, conflito, conexão). Nessa rodada ele
-   * não é tentado de novo e os textos voltam a dizer "merge pelo botão"; uma rodada nova zera o efeito.
+   * The round in which the automatic merge was tried and refused (CI, conflict, connection). In that round
+   * it is not tried again and the texts go back to saying "merge pelo botão"; a new round resets the effect.
    */
   autoMergeFailedRound?: number;
   /**
-   * O gate do merge (CI do PR, ou os testes da worktree do autor), rodado no commit aprovado assim que
-   * a revisão fica pronta, e não só no clique: o painel mostra o veredito antes do botão, um verde é
-   * reaproveitado pelo merge (que sai na hora) e um vermelho volta ao autor com a falha. Vale só para
-   * `sha`; um `running` que não está rodando neste processo é de antes de um deploy e roda de novo.
+   * The merge gate (the PR's CI, or the tests of the author's worktree), run on the approved commit as soon
+   * as the review is ready, and not only on the click: the panel shows the verdict before the button, a green
+   * is reused by the merge (which goes out right away) and a red goes back to the author with the failure.
+   * Valid only for `sha`; a `running` that is not running in this process is from before a deploy and runs again.
    */
   mergeGate?: MergeGate;
   /**
-   * Quem mergeia JÁ deu a ordem do merge ao pedir a revisão ("terminando pode mergear"): não há a quem
-   * esperar para dizer "pode mergear", então uma sugestão em pé não segura o merge automático (ela é
-   * opcional por definição). Bloqueante, dúvida, Approve fora do GitHub, CI e conflito seguem segurando.
+   * Whoever merges ALREADY gave the merge order when asking for the review ("terminando pode mergear"):
+   * there is nobody to wait for to say "pode mergear", so a standing suggestion does not hold the automatic
+   * merge (it is optional by definition). Blocking, question, Approve missing on GitHub, CI and conflict still hold it.
    */
   mergeAuthorized?: boolean;
   /**
-   * A mesma ordem pediu para concluir o card: mergeada a revisão, o card que deu a ordem vai para
-   * `done` (o que anexou o PR, `hubCardId`, ou o do autor quando é o mesmo).
+   * The same order asked to complete the card: once the review is merged, the card that gave the order
+   * goes to `done` (the one that attached the PR, `hubCardId`, or the author's when it is the same one).
    */
   concludeWhenMerged?: boolean;
   lastSubmitRound?: number;
@@ -182,7 +185,7 @@ export interface Review {
   updatedAt: number;
 }
 
-/** `introducedInRound` é opcional na entrada: na rodada 2+ ele é a marca "criado pela correção". */
+/** `introducedInRound` is optional on input: from round 2 on it is the "created by the fix" mark. */
 export type SubmittedFinding = Omit<Finding, "id" | "status" | "introducedInRound"> & {
   id?: string;
   introducedInRound?: number;
@@ -195,10 +198,10 @@ function hasProof(p: FindingProof | undefined): boolean {
 }
 
 /**
- * Transforma o que a IA do revisor mandou em achados novos. Bloqueante sem prova é rebaixado a
- * sugestão (o servidor, não o prompt, garante). Da rodada 2 em diante a lista é fechada: só entra
- * achado novo que o revisor marcou como criado pela correção (`introducedInRound === round`); itens
- * que citam um id já existente são vereditos (vão por `applyReviewerVerdicts`) e não geram achado novo.
+ * Turns what the reviewer's AI sent into new findings. Blocking without proof is downgraded to a
+ * suggestion (the server guarantees it, not the prompt). From round 2 on the list is closed: a new
+ * finding only gets in if the reviewer marked it as created by the fix (`introducedInRound === round`);
+ * items that cite an existing id are verdicts (they go through `applyReviewerVerdicts`) and create no new finding.
  */
 export function normalizeSubmittedFindings(input: SubmittedFinding[], round: number, existing: Finding[]): Finding[] {
   const known = new Set(existing.map((f) => f.id));
@@ -212,12 +215,12 @@ export function normalizeSubmittedFindings(input: SubmittedFinding[], round: num
       );
     }
     const severity = item.severity === "blocking" && !hasProof(item.proof) ? "suggestion"
-      // A melhoria que a IA aplica sozinha só vale presa a um arquivo do PR: sem âncora, nada impede o
-      // autor de "melhorar" fora do escopo, e ela volta a ser opcional (uma pessoa escolhe).
+      // The improvement the AI applies on its own only counts when pinned to a file of the PR: without an
+      // anchor, nothing stops the author from "improving" outside the scope, and it becomes optional again (a person chooses).
       : item.severity === "improvement" && !item.file?.trim() ? "suggestion"
         : item.severity;
-    // Allowlist explícita: humanDecision, commit, authorReply e reviewerReply são do servidor/humano/autor
-    // e nunca podem vir da IA do revisor (uma dúvida já "decidida" liberaria o ready sem humano).
+    // Explicit allowlist: humanDecision, commit, authorReply and reviewerReply belong to the server/human/author
+    // and can never come from the reviewer's AI (a question already "decided" would release ready without a human).
     const finding: Finding = {
       id: `f${existing.length + out.length + 1}`,
       severity,
@@ -241,7 +244,7 @@ function mustFind(findings: Finding[], id: string): Finding {
   return f;
 }
 
-/** Vereditos do revisor sobre achados existentes. Devolve a lista nova; não muta a revisão. */
+/** Reviewer verdicts on existing findings. Returns the new list; does not mutate the review. */
 export function applyReviewerVerdicts(
   review: Review,
   updates: { id: string; status: FindingStatus; reviewerReply?: string }[],
@@ -250,7 +253,7 @@ export function applyReviewerVerdicts(
   for (const u of updates) {
     const f = mustFind(out, u.id);
     f.status = u.status;
-    // O pedido ao autor acabou: um "open" do revisor é uma sugestão nova a decidir, não a mesma pendente.
+    // The request to the author is over: an "open" from the reviewer is a new suggestion to decide, not the same pending one.
     delete f.requested;
     if (u.reviewerReply !== undefined) f.reviewerReply = u.reviewerReply;
   }
@@ -258,8 +261,8 @@ export function applyReviewerVerdicts(
 }
 
 /**
- * Respostas do autor. Contestar e não aplicar exigem justificativa: uma resposta muda não dá ao revisor
- * o que julgar. `wontfix` só vale para sugestão e melhoria — bloqueante se corrige ou se contesta com prova.
+ * The author's answers. Disputing and not applying require a justification: a silent answer gives the
+ * reviewer nothing to judge. `wontfix` only applies to suggestion and improvement — a blocking one is fixed or disputed with proof.
  */
 export function applyAuthorResponses(
   review: Review,
@@ -276,7 +279,7 @@ export function applyAuthorResponses(
     }
     f.status = it.status;
     f.authorReply = it.reply;
-    // O autor respondeu: o pedido foi atendido (ou recusado com motivo) e não segura mais a escolha.
+    // The author answered: the request was fulfilled (or refused with a reason) and no longer holds the choice.
     delete f.requested;
     if (it.commit !== undefined) f.commit = it.commit;
   }
@@ -285,33 +288,33 @@ export function applyAuthorResponses(
 
 const isOpen = (f: Finding): boolean => f.status === "open" || f.status === "contested";
 
-/** Bloqueantes ainda em pé (abertos ou contestados). */
+/** Blocking findings still standing (open or disputed). */
 export function blockingOpen(findings: Finding[]): Finding[] {
   return findings.filter((f) => f.severity === "blocking" && isOpen(f));
 }
 
 /**
- * Dúvidas que esperam decisão: nenhum humano decidiu e ainda estão em pé. Uma dúvida que o autor
- * resolveu e o revisor conferiu (`fixed`), ou que o revisor retirou (`dropped`), não espera ninguém.
+ * Questions waiting for a decision: no human decided them and they are still standing. A question the
+ * author resolved and the reviewer checked (`fixed`), or that the reviewer withdrew (`dropped`), waits for nobody.
  */
 export function pendingQuestions(findings: Finding[]): Finding[] {
   return findings.filter((f) => f.severity === "question" && !f.humanDecision && isOpen(f));
 }
 
 /**
- * Melhorias que ainda esperam a vez do autor: abertas e sem resposta dele. Respondida (aplicada ou
- * recusada com motivo), não volta a pedir rodada: o revisor confere, e o que ficar em pé só aparece.
+ * Improvements still waiting for the author's turn: open and without an answer from them. Once answered
+ * (applied or refused with a reason), it does not ask for a round again: the reviewer checks, and whatever stays standing only shows up.
  */
 export function pendingImprovements(findings: Finding[]): Finding[] {
   return findings.filter((f) => f.severity === "improvement" && f.status === "open" && f.authorReply === undefined);
 }
 
 /**
- * Próxima fase, chamada DEPOIS de aplicar a rodada do revisor (`review.round` = rodada recém-revisada).
- * Dúvida decidida como `block` pesa como bloqueante; `drop` conta como resolvida. Dúvida pendente
- * sozinha segura o ready sem gastar rodada (espera o humano); com bloqueante aberto a regra normal vence.
- * Melhoria pendente dá a vez ao autor (ele aplica sem esperar ninguém), mas nunca vira impasse: na
- * última rodada ela fica sem aplicar.
+ * Next phase, called AFTER applying the reviewer's round (`review.round` = the round just reviewed).
+ * A question decided as `block` weighs as blocking; `drop` counts as resolved. A pending question alone
+ * holds ready without spending a round (it waits for the human); with an open blocking one the normal rule wins.
+ * A pending improvement gives the turn to the author (they apply it without waiting for anyone), but never
+ * becomes an impasse: on the last round it stays unapplied.
  */
 export function phaseAfterReviewerRound(review: Review): { phase: ReviewPhase; impasseReason?: string } {
   const blocking =
@@ -326,10 +329,10 @@ export function phaseAfterReviewerRound(review: Review): { phase: ReviewPhase; i
 }
 
 /**
- * QUEM PODE MERGEAR uma revisão pronta: qualquer pessoa com papel nela — o responsável pelo merge,
- * o revisor, o autor e o coautor. O responsável segue sendo quem o merge automático usa; os outros
- * existem para o trabalho continuar quando ele não está (produção, 2026-11-09: o Albert, revisor e
- * coautor, não tinha botão e a revisão pronta parou esperando o César). PURE.
+ * WHO MAY MERGE a ready review: anybody with a role in it — the merge owner, the reviewer, the author
+ * and the co-author. The owner is still the one the automatic merge uses; the others exist so the work
+ * goes on when they are not around (production, 2026-11-09: Albert, reviewer and co-author, had no button
+ * and the ready review stopped waiting for César). PURE.
  */
 export function canMergeReview(
   review: Pick<Review, "reviewerUserId" | "authorUserId" | "coauthorUserId" | "mergerUserId">,
@@ -339,23 +342,23 @@ export function canMergeReview(
   return [review.mergerUserId, review.reviewerUserId, review.authorUserId, review.coauthorUserId].includes(userId);
 }
 
-/** As ordens que quem mergeia dá ao pedir a revisão (ver os campos de {@link Review}). */
+/** The orders whoever merges gives when asking for the review (see the fields of {@link Review}). */
 export type ReviewOrders = Pick<Review, "mergeAuthorized" | "concludeWhenMerged">;
 
-/** Sugestão que o merge autorizado deixa passar: em pé e não pedida ao autor. PURE. */
+/** A suggestion the authorised merge lets through: standing and not requested from the author. PURE. */
 function isWaived(review: Review, f: Finding): boolean {
   return !!review.mergeAuthorized && f.severity === "suggestion" && !f.requested;
 }
 
 /**
- * As sugestões em pé que o merge autorizado deixa passar, para os textos dizerem quantas ficaram em vez
- * de "nada em aberto". Sem `mergeAuthorized`, nenhuma. PURE.
+ * The standing suggestions the authorised merge lets through, so the texts say how many were left instead
+ * of "nada em aberto". Without `mergeAuthorized`, none. PURE.
  */
 export function waivedSuggestions(review: Review): Finding[] {
   return review.findings.filter((f) => isOpen(f) && isWaived(review, f));
 }
 
-/** "merge autorizado por quem mergeia; N sugestão(ões) em aberto não segura(m)", ou null sem nenhuma. PURE. */
+/** "merge autorizado por quem mergeia; N sugestão(ões) em aberto não segura(m)", or null when there is none. PURE. */
 export function waivedText(review: Review): string | null {
   const n = waivedSuggestions(review).length;
   if (!n) return null;
@@ -365,21 +368,21 @@ export function waivedText(review: Review): string | null {
 }
 
 /**
- * O merge sai SOZINHO quando não sobrou nada para uma pessoa olhar: revisão em `ready` e nenhum achado
- * em pé, de nenhuma severidade — bloqueante, dúvida ou sugestão aberta/contestada. Sugestão não segura
- * o `ready`, mas segura o merge automático: ela é justamente o que alguém pode querer aplicar antes.
- * Sem isso o PR ficava "pronto pra merge" esperando alguém voltar ao card só para dizer "pode mergear".
- * Melhoria nunca segura: ela já teve a vez do autor, que decidiu sozinho, e não é escolha de ninguém.
- * Com o merge já autorizado (`mergeAuthorized`) essa pessoa já disse: a sugestão em pé não segura,
- * menos a que alguém já mandou o autor aplicar ("Fazer"), que segura até ele subir ({@link waivedSuggestions}).
+ * The merge goes out ON ITS OWN when nothing is left for a person to look at: review in `ready` and no
+ * finding standing, of any severity — blocking, question or open/disputed suggestion. A suggestion does not
+ * hold `ready`, but it holds the automatic merge: it is precisely what somebody may want applied first.
+ * Without this the PR sat "pronto pra merge" waiting for somebody to come back to the card just to say "pode mergear".
+ * An improvement never holds: it already had the author's turn, who decided on their own, and it is nobody's choice.
+ * With the merge already authorised (`mergeAuthorized`) that person has already spoken: a standing suggestion does
+ * not hold, except one somebody already told the author to apply ("Fazer"), which holds until they push ({@link waivedSuggestions}).
  * PURE.
  */
 export function autoMergeEligible(review: Review): boolean {
   const holds = (f: Finding): boolean => f.severity !== "improvement" && isOpen(f) && !isWaived(review, f);
   return (
     review.phase === "ready" && !!review.reviewedSha && !review.findings.some(holds) &&
-    // Approve que não chegou ao GitHub: o PR segue com o "changes requested" da rodada 1 — o merge
-    // automático não passa por cima disso; o "tentar de novo" do painel publica e o merge sai depois.
+    // An Approve that did not reach GitHub: the PR still has round 1's "changes requested" — the automatic
+    // merge does not override that; the panel's "tentar de novo" publishes it and the merge goes out afterwards.
     !review.approvePending &&
     review.autoMergeFailedRound !== review.round
   );

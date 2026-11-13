@@ -3,7 +3,7 @@ import type { WorkflowAgentFrame } from "./sdkChat";
 import {
   estimateWorkflowRemaining,
   feedLines,
-  formatDuration,
+  formatWholeSeconds,
   groupAgentsByPhase,
   phasePills,
   verbKey,
@@ -13,15 +13,15 @@ const A = (id: string, over: Partial<WorkflowAgentFrame> = {}): WorkflowAgentFra
   id, label: id, status: "running", ...over,
 });
 
-describe("formatDuration", () => {
+describe("formatWholeSeconds", () => {
   it("segundos, minutos com segundos, horas com minutos", () => {
-    expect(formatDuration(0)).toBe("0s");
-    expect(formatDuration(45_400)).toBe("45s");
-    expect(formatDuration(192_000)).toBe("3m 12s");
-    expect(formatDuration(60_000)).toBe("1m 00s");
-    expect(formatDuration(3_840_000)).toBe("1h 04m");
-    expect(formatDuration(-5_000)).toBe("0s");
-    expect(formatDuration(Number.NaN)).toBe("0s");
+    expect(formatWholeSeconds(0)).toBe("0s");
+    expect(formatWholeSeconds(45_400)).toBe("45s");
+    expect(formatWholeSeconds(192_000)).toBe("3m 12s");
+    expect(formatWholeSeconds(60_000)).toBe("1m 00s");
+    expect(formatWholeSeconds(3_840_000)).toBe("1h 04m");
+    expect(formatWholeSeconds(-5_000)).toBe("0s");
+    expect(formatWholeSeconds(Number.NaN)).toBe("0s");
   });
 });
 
@@ -38,7 +38,7 @@ describe("estimateWorkflowRemaining", () => {
       A("a3", { startedAt: 10_001 }),
       A("a4", { startedAt: 10_001 }),
     ];
-    // em voo 2 × 6s, fila 2 × 10s, concorrência observada 2 ⇒ 16s (o mesmo cálculo do back)
+    // in flight 2 × 6s, queue 2 × 10s, observed concurrency 2 ⇒ 16s (the same calculation as the back)
     expect(estimateWorkflowRemaining({ agents, total: 6, done: 2 }, 14_001)).toEqual({ remainingMs: 16_000, averageMs: 10_000 });
   });
 });
@@ -77,7 +77,7 @@ describe("groupAgentsByPhase / phasePills", () => {
   it("rodada terminada: fase com agente que não respondeu é 'stopped', não 'current'", () => {
     const agents = [A("a1", { phase: "Verify", status: "done" }), A("a2", { phase: "Verify" }), A("a3", { phase: "Review", status: "stopped" })];
     expect(phasePills(agents, ["Review", "Verify"], true).map((p) => p.state)).toEqual(["stopped", "stopped"]);
-    // Em andamento, quem roda segue 'current'; o 'stopped' explícito nunca é 'current'.
+    // In progress, whoever runs stays 'current'; the explicit 'stopped' is never 'current'.
     expect(phasePills(agents, ["Review", "Verify"]).map((p) => p.state)).toEqual(["stopped", "current"]);
   });
 });

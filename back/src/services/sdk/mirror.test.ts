@@ -87,9 +87,9 @@ describe("mirrorNewEvents", () => {
   });
 
   it("comando de barra mandado pelo chat NÃO volta do transcript como mensagem nova", () => {
-    // O INCIDENTE (produção, 02/10/2026): a pessoa mandou "/systematic-debugging …" pelo chat
-    // nativo e viu a MESMA mensagem duas vezes. O Claude Code reescreve o comando para a forma
-    // qualificada do plugin antes de gravar no transcript, e o dedupe comparava texto literal.
+    // THE INCIDENT (production, 02/10/2026): the person sent "/systematic-debugging …" through the native
+    // chat and saw the SAME message twice. Claude Code rewrites the command to the plugin's qualified
+    // form before writing to the transcript, and the dedupe compared literal text.
     const state = createMirrorState(T0);
     noteDriverEvent(state, { type: "user", text: "/systematic-debugging apaga cards de 180 dias" });
     const out = mirrorNewEvents(
@@ -155,20 +155,20 @@ describe("noteDriverEvent", () => {
 });
 
 /**
- * O BUG DO CÉSAR (produção, 2026-09-28): depois de um deploy, a mensagem de sistema "Continue de
- * onde parou" aparecia DUAS VEZES — uma como `Sistema (vibehub)` e outra como bolha, precedida de
+ * CÉSAR'S BUG (production, 2026-09-28): after a deploy, the system message "Continue de
+ * onde parou" showed up TWICE — once as `Sistema (vibehub)` and once as a bubble, preceded by
  * "Atividade no terminal — a conversa seguiu na aba Terminal".
  *
- * A segunda cópia é o ESPELHO do transcript. Toda mensagem entregue ao driver é reportada em
- * `noteDriverEventFor` justamente para o espelho reconhecê-la quando ela voltar pelo arquivo — só
- * que esse registro era um NO-OP quando não havia espelho vivo, e o espelho só nasce no primeiro
- * connect de um chat. O sweep de boot (`resumeInterruptedTurns`, disparado logo após o `listen`)
- * injeta o turno de retomada quando nenhum browser conectou ainda: a chave era jogada fora, o
- * espelho nascia com a memória vazia, e a linha que o CLI escreveu no transcript passava como se
- * fosse conversa nova.
+ * The second copy is the transcript's MIRROR. Every message delivered to the driver is reported in
+ * `noteDriverEventFor` precisely so the mirror recognises it when it comes back through the file — except
+ * that this registration was a NO-OP when there was no live mirror, and the mirror is only born on a chat's first
+ * connect. The boot sweep (`resumeInterruptedTurns`, fired right after `listen`)
+ * injects the resume turn when no browser has connected yet: the key was thrown away, the
+ * mirror was born with an empty memory, and the line the CLI wrote in the transcript passed as if it
+ * were new conversation.
  *
- * A vida dessas chaves é a do DRIVER, não a do espelho: o que foi entregue ao driver segue tendo
- * sido entregue, com ou sem alguém olhando. Elas moram por CARD e o espelho as adota ao nascer.
+ * The lifetime of these keys is the DRIVER's, not the mirror's: what was delivered to the driver has still
+ * been delivered, with or without someone watching. They live per CARD and the mirror adopts them when it is born.
  */
 describe("a memória de dedupe sobrevive ao espelho (a mensagem de sistema duplicada do deploy)", () => {
   const RESUME = "Continue de onde parou: o processo anterior foi interrompido por um reinício do servidor do painel (deploy). Retome a tarefa em andamento e conclua o que estava fazendo.";
@@ -177,10 +177,10 @@ describe("a memória de dedupe sobrevive ao espelho (a mensagem de sistema dupli
   afterEach(() => forgetDriverKeys(CARD));
 
   it("reportada SEM espelho vivo, a chave não se perde: o espelho que nascer depois já a conhece", () => {
-    // o sweep de boot entrega o turno ao driver — nenhum chat conectado, nenhum espelho existe
+    // the boot sweep delivers the turn to the driver — no chat connected, no mirror exists
     noteDriverEventFor(CARD, { type: "user", text: RESUME });
 
-    // só AGORA alguém abre o card: o espelho nasce e adota o que o driver já foi mandado fazer
+    // only NOW does someone open the card: the mirror is born and adopts what the driver was already told to do
     const state = createMirrorState(T0, [], driverKeysFor(CARD));
     const out = mirrorNewEvents(
       state,
@@ -188,16 +188,16 @@ describe("a memória de dedupe sobrevive ao espelho (a mensagem de sistema dupli
       CARD,
     );
 
-    expect(out).toEqual([]); // nada a espelhar: essa fala já está na conversa
+    expect(out).toEqual([]); // nothing to mirror: that speech is already in the conversation
   });
 
   it("sem a adoção o duplicado apareceria — é exatamente essa a diferença", () => {
     noteDriverEventFor(CARD, { type: "user", text: RESUME });
 
-    const cego = createMirrorState(T0); // um espelho que nasce de memória vazia
+    const cego = createMirrorState(T0); // a mirror born from an empty memory
     const out = mirrorNewEvents(cego, userLine("u-resume", new Date(T0 + 5_000).toISOString(), RESUME), CARD);
 
-    expect(out).toHaveLength(1); // a segunda cópia da print
+    expect(out).toHaveLength(1); // the screenshot's second copy
     expect(out[0]!.source).toBe("terminal");
   });
 
@@ -219,12 +219,12 @@ describe("a memória de dedupe sobrevive ao espelho (a mensagem de sistema dupli
 });
 
 /**
- * O AVISO QUE IMPEDE O GALHO MORTO (produção, 2026-10-05).
+ * THE NOTICE THAT PREVENTS THE DEAD BRANCH (production, 2026-10-05).
  *
- * O espelho é o único que enxerga conversa entrando por OUTRO processo do CLI (a aba Terminal, na
- * MESMA sessão). O driver do chat mantém a conversa em memória enquanto a corrente está aberta: sem
- * este aviso a próxima mensagem dele continua de um ponto velho e deixa o turno do terminal órfão —
- * e turno órfão não está no ramo vivo do transcript, então editar aquela mensagem não rebobinava.
+ * The mirror is the only one that sees conversation coming in through ANOTHER CLI process (the Terminal tab, in the
+ * SAME session). The chat's driver keeps the conversation in memory while the stream is open: without
+ * this notice its next message continues from a stale point and leaves the terminal's turn orphaned —
+ * and an orphaned turn is not on the transcript's live branch, so editing that message did not rewind.
  */
 describe("o espelho avisa quando a conversa anda FORA do chat", () => {
   const CARD_OUT = "card-fora";
@@ -268,9 +268,9 @@ describe("o espelho avisa quando a conversa anda FORA do chat", () => {
   });
 
   it("o resumo da auto-compactação NÃO é conversa de fora — senão o CLI vivo cai e a próxima mensagem sobe outro do zero", () => {
-    // Forma real: depois do `compact_boundary` o CLI grava o resumo como linha `type:"user"` marcada
-    // `isCompactSummary`. Ninguém digitou aquilo; tratado como fala do terminal, virava bolha gigante
-    // e disparava o reanchor, que derruba a corrente do driver.
+    // Real shape: after the `compact_boundary` the CLI writes the summary as a `type:"user"` line marked
+    // `isCompactSummary`. Nobody typed that; treated as terminal speech, it became a giant bubble
+    // and fired the reanchor, which knocks down the driver's stream.
     let avisos = 0;
     const off = onOutsideTurn(CARD_OUT, () => { avisos += 1; });
     const state = createMirrorState(T0);

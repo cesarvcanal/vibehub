@@ -265,7 +265,8 @@ function pkceMatches(verifier: string, challenge: string): boolean {
   return computed.length === expected.length && timingSafeEqual(computed, expected);
 }
 
-const hashToken = (token: string): string => createHash("sha256").update(token).digest("hex");
+/** The hash a token is stored under — what a long-lived grant (a webhook subscription) keeps instead of the token. */
+export const hashToken = (token: string): string => createHash("sha256").update(token).digest("hex");
 
 /**
  * Redeems a code for an access token (RFC 6749 §4.1.3 + PKCE). The code is gone after the first
@@ -322,9 +323,6 @@ export async function userForAccessToken(token: string | undefined, now: number 
   if (!looksLikeAccessToken(token)) return null;
   return await userForAccessTokenHash(hashToken(token as string), now);
 }
-
-/** The hash a token is stored under — what a long-lived grant (a webhook subscription) keeps instead of the token. */
-export const accessTokenHash = (token: string): string => hashToken(token);
 
 /** {@link userForAccessToken}, from the stored hash: the same checks, re-run whenever the grant is used. */
 export async function userForAccessTokenHash(hash: string, now: number = Date.now()): Promise<PublicUser | null> {

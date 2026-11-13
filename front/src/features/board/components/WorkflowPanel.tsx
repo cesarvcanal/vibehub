@@ -2,13 +2,13 @@ import * as React from "react";
 import { Check, CheckCircle2, ChevronRight, Circle, CircleDot, Loader2, Waypoints } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useNow, usePageVisible } from "@/lib/useNow";
-import { useT } from "@/i18n";
+import { useT, type Translate } from "@/i18n";
 import { formatAgentResult, type SdkRow, type WorkflowAgentFrame } from "@/features/board/lib/sdkChat";
 import { WorkflowFeedContext, type WorkflowFeedResponse } from "@/features/board/lib/workflowFeed";
 import {
   estimateWorkflowRemaining,
   feedLines,
-  formatDuration,
+  formatWholeSeconds,
   groupAgentsByPhase,
   phasePills,
   verbKey,
@@ -17,26 +17,25 @@ import {
 } from "@/features/board/lib/workflowPanel";
 
 type WorkflowRow = Extract<SdkRow, { kind: "workflow" }>;
-type Translate = ReturnType<typeof useT>;
 
-/** De quanto em quanto o feed de um agente aberto e ainda rodando é pedido de novo. */
+/** How often the feed of an open, still-running agent is requested again. */
 export const FEED_POLL_MS = 4_000;
 
 /**
- * O PAINEL DA FROTA — o workflow organizado como nas IDEs.
+ * THE FLEET PANEL — the workflow organized the way IDEs do it.
  *
- * A tool `Workflow` devolve na hora e trabalha em segundo plano: o turno acaba e, sem isto, a tela
- * ficava muda por minutos (produção, 2026-10-02). O painel mostra a frota viva: há quanto tempo
- * roda e quanto falta, as fases do plano (inclusive as que não começaram), cada agente pelo NOME
- * com o que está fazendo agora, e — sob demanda, um por vez — o feed do agente aberto. Enquanto
- * roda fica aberto; terminado, recolhe sozinho UMA vez. O quadro vem do back lendo o diário da
- * rodada (back/src/services/sdk/workflow.ts); o feed, de um pedido desta aba (lib/workflowFeed.ts).
+ * The `Workflow` tool returns right away and works in the background: the turn ends and, without this, the screen
+ * stayed silent for minutes (production, 2026-10-02). The panel shows the live fleet: how long it has
+ * been running and how much is left, the plan's phases (including the ones that have not started), each agent by NAME
+ * with what it is doing now, and — on demand, one at a time — the open agent's feed. While it
+ * runs it stays open; once finished, it collapses on its own ONCE. The board comes from the back reading the run's
+ * journal (back/src/services/sdk/workflow.ts); the feed, from a request by this tab (lib/workflowFeed.ts).
  */
 export function WorkflowPanel({ row }: { row: WorkflowRow }) {
   const t = useT();
   const [open, setOpen] = React.useState(!row.finished);
   const [openAgent, setOpenAgent] = React.useState<string | null>(null);
-  // Recolhe só uma vez: reabrir e continuar lendo é direito de quem lê.
+  // Collapses only once: reopening and continuing to read is the reader's right.
   const collapsed = React.useRef(false);
   React.useEffect(() => {
     if (row.finished && !collapsed.current) {
@@ -49,7 +48,7 @@ export function WorkflowPanel({ row }: { row: WorkflowRow }) {
   const visible = usePageVisible();
   const now = useNow(!row.finished && running > 0 && visible);
   const percent = row.total > 0 ? Math.round((row.done / row.total) * 100) : 0;
-  // Acabou sem todos responderem (morta, falhou, ou o back desistiu de acompanhar): não é "concluído".
+  // It ended without everyone answering (dead, failed, or the back gave up following): it is not "concluído".
   const interrupted = row.finished && (row.outcome === "killed" || row.outcome === "failed" || row.agents.some((a) => isStopped(a, true)));
   const plan = (row.phases ?? []).map((p) => p.title);
   const pills = phasePills(row.agents, plan, row.finished);
@@ -137,12 +136,12 @@ function WorkflowStatusLine({
   if (row.finished) {
     const end = Math.max(0, ...row.agents.map((a) => a.endedAt ?? a.lastAt ?? 0));
     if (startedAt !== undefined && end >= startedAt) {
-      eta = t(interrupted ? "sdk.workflowStoppedAfter" : "sdk.workflowDoneIn", { elapsed: formatDuration(end - startedAt) });
+      eta = t(interrupted ? "sdk.workflowStoppedAfter" : "sdk.workflowDoneIn", { elapsed: formatWholeSeconds(end - startedAt) });
     }
   } else {
     const estimate = estimateWorkflowRemaining(row, now);
     eta = estimate
-      ? t("sdk.workflowEta", { eta: formatDuration(estimate.remainingMs), avg: formatDuration(estimate.averageMs) })
+      ? t("sdk.workflowEta", { eta: formatWholeSeconds(estimate.remainingMs), avg: formatWholeSeconds(estimate.averageMs) })
       : t("sdk.workflowEtaPending");
   }
   const queued = Math.max(0, row.total - row.done - running);
@@ -150,7 +149,7 @@ function WorkflowStatusLine({
     <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
       {!row.finished && startedAt !== undefined ? (
         <span data-testid="workflow-elapsed" className="tabular-nums">
-          {t("sdk.workflowElapsed", { elapsed: formatDuration(now - startedAt) })}
+          {t("sdk.workflowElapsed", { elapsed: formatWholeSeconds(now - startedAt) })}
         </span>
       ) : null}
       {eta ? <span data-testid="workflow-eta" className="tabular-nums">{eta}</span> : null}
@@ -278,25 +277,25 @@ function AgentItem({
 }
 
 /**
- * Não respondeu e não vai mais responder: `stopped` do back, ou ainda "running" num quadro TERMINADO
- * (um back antigo no blue/green não marca). Sem isto, spinner e relógio andando para sempre.
+ * Did not answer and will not answer anymore: `stopped` from the back, or still "running" on a FINISHED board
+ * (an old back in the blue/green does not mark it). Without this, spinner and clock running forever.
  */
 function isStopped(agent: WorkflowAgentFrame, finished: boolean): boolean {
   return agent.status === "stopped" || (finished && agent.status !== "done");
 }
 
-/** Decorrido para quem roda, duração para quem terminou ou parou; "" quando o quadro não traz tempo. */
+/** Elapsed for whoever is running, duration for whoever finished or stopped; "" when the board carries no time. */
 function agentTime(agent: WorkflowAgentFrame, now: number, stopped: boolean): string {
   if (agent.startedAt === undefined) return "";
   if (stopped) {
     const end = agent.endedAt ?? agent.lastAt;
-    return end !== undefined && end >= agent.startedAt ? formatDuration(end - agent.startedAt) : "";
+    return end !== undefined && end >= agent.startedAt ? formatWholeSeconds(end - agent.startedAt) : "";
   }
-  if (agent.status === "running") return formatDuration(now - agent.startedAt);
-  return agent.endedAt !== undefined ? formatDuration(agent.endedAt - agent.startedAt) : "";
+  if (agent.status === "running") return formatWholeSeconds(now - agent.startedAt);
+  return agent.endedAt !== undefined ? formatWholeSeconds(agent.endedAt - agent.startedAt) : "";
 }
 
-/** Verbo humano + alvo em mono: "Leu /w/app.ts". */
+/** Human verb + target in mono: "Leu /w/app.ts". */
 function ToolAction({ tool, target, t }: { tool: string; target: string; t: Translate }) {
   return (
     <>
@@ -307,7 +306,7 @@ function ToolAction({ tool, target, t }: { tool: string; target: string; t: Tran
   );
 }
 
-/** A segunda linha do agente: o que ele faz agora (ou, terminado, o começo do que devolveu). */
+/** The agent's second line: what it is doing now (or, once finished, the beginning of what it returned). */
 function nowLine(agent: WorkflowAgentFrame, now: number, t: Translate): React.ReactNode {
   if (agent.status === "done") return agent.result ? formatAgentResult(agent.result).split("\n")[0] : null;
   const activity = agent.activity;
@@ -315,19 +314,19 @@ function nowLine(agent: WorkflowAgentFrame, now: number, t: Translate): React.Re
   if (activity.kind === "tool") return <ToolAction tool={activity.tool} target={activity.target} t={t} />;
   if (activity.kind === "text") return activity.text;
   const since = activity.since || agent.lastAt || now;
-  return <em>{t("sdk.workflowThinkingFor", { elapsed: formatDuration(now - since) })}</em>;
+  return <em>{t("sdk.workflowThinkingFor", { elapsed: formatWholeSeconds(now - since) })}</em>;
 }
 
-/** Quantos pedidos de novo, que SAÍRAM, um agente CONCLUÍDO faz por um feed que não veio. */
+/** How many re-requests, that WENT OUT, a FINISHED agent makes for a feed that did not arrive. */
 export const FEED_RETRY_MAX = 3;
 
 /**
- * O feed SOB DEMANDA do agente aberto: pede ao abrir e de novo a cada `FEED_POLL_MS` enquanto ele
- * roda. Um CONCLUÍDO pede de novo só enquanto não veio resposta (pedido perdido, ignorado por um
- * back antigo) ou veio `probe-failed` — e no máximo `FEED_RETRY_MAX` pedidos que SAÍRAM, para um
- * runner caído não virar um `docker exec` a cada 4s. Com o socket fechado nada sai e nada é gasto:
- * a volta do fio retoma os pedidos. `invalid-id` e `no-session` não mudam
- * pedindo de novo. Fechar ou desmontar para de pedir. Só a resposta deste agente conta.
+ * The ON-DEMAND feed of the open agent: requests it on open and again every `FEED_POLL_MS` while it
+ * runs. A FINISHED one requests again only while no answer came (request lost, ignored by an
+ * old back) or `probe-failed` came — and at most `FEED_RETRY_MAX` requests that WENT OUT, so a
+ * downed runner does not become a `docker exec` every 4s. With the socket closed nothing goes out and nothing is spent:
+ * the wire coming back resumes the requests. `invalid-id` and `no-session` do not change
+ * by asking again. Closing or unmounting stops the requests. Only this agent's answer counts.
  */
 function useAgentFeed(runId: string, agentId: string, polling: boolean): WorkflowFeedResponse | null {
   const channel = React.useContext(WorkflowFeedContext);
@@ -369,7 +368,7 @@ function AgentFeed({
   const tools = agent.toolCount ?? 0;
   const footer = [
     t("sdk.workflowToolCount", { n: tools, count: agent.toolCountPartial ? `${tools}+` : String(tools) }),
-    ...(agent.startedAt !== undefined ? [t("sdk.workflowStartedAgo", { ago: formatDuration(now - agent.startedAt) })] : []),
+    ...(agent.startedAt !== undefined ? [t("sdk.workflowStartedAgo", { ago: formatWholeSeconds(now - agent.startedAt) })] : []),
   ].join(" · ");
   return (
     <div
@@ -428,8 +427,8 @@ function FeedLineView({ line, t }: { line: FeedLine; t: Translate }) {
     case "text":
       return <span className="min-w-0 whitespace-pre-wrap break-words text-foreground/80">{line.text}</span>;
     case "thought":
-      return <em className="text-muted-foreground/70">{t("sdk.workflowThoughtFor", { elapsed: formatDuration(line.ms) })}</em>;
+      return <em className="text-muted-foreground/70">{t("sdk.workflowThoughtFor", { elapsed: formatWholeSeconds(line.ms) })}</em>;
     case "thinking":
-      return <em className="text-muted-foreground/70">{t("sdk.workflowThinkingFor", { elapsed: formatDuration(line.ms) })}</em>;
+      return <em className="text-muted-foreground/70">{t("sdk.workflowThinkingFor", { elapsed: formatWholeSeconds(line.ms) })}</em>;
   }
 }

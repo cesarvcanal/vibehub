@@ -92,12 +92,6 @@ import {
 } from "@/features/board/lib/pendingDecisions";
 import {
   INITIAL_SDK_STATE,
-  SDK_ERROR_NO_DETAIL,
-  SDK_ERROR_TURN_FAILED,
-  TERMINAL_ACTIVITY_NOTE,
-  TURN_INTERRUPTED_EDIT_NOTE,
-  TURN_INTERRUPTED_NOTE,
-  CONVERSATION_CLEARED_NOTE,
   answerQuestion,
   applySdkEvent,
   appendBtwRow,
@@ -127,7 +121,9 @@ import {
   turnHasRoomForMore,
   type SdkActivity,
   type SdkChatState,
-  type QuestionCancel,
+  cancelledText,
+  errorText,
+  noteText,
   type SdkQuestionAnswer,
   type BackgroundTask,
   type SdkEvent,
@@ -200,8 +196,8 @@ export interface SdkChatViewProps {
   /** Uploads an image and resolves with its path inside the runner (appended to the message). */
   onUploadImage?: (file: File) => Promise<string | null>;
   onStatus?: (state: ConnectionState) => void;
-  /** O card está trabalhando pelos hooks. Só vale para um turno que roda na aba Terminal (o chat
-   *  espelha e o driver não diz nada): é a única fonte de que aquele turno ainda está de pé. */
+  /** The card is working, per the hooks. Only matters for a turn running in the Terminal tab (the chat
+   *  mirrors it and the driver says nothing): it is the only source that the turn is still alive. */
   terminalWorking?: boolean;
   /**
    * Rendered right above the composer: what belongs to the CARD and not to the conversation (the
@@ -213,8 +209,8 @@ export interface SdkChatViewProps {
 }
 
 /**
- * As mensagens guardadas que ESTA conta pode mandar de novo: as dela, e as sem autor (gravadas
- * antes do campo existir). Uma de outra conta, saindo por esta conexão, ficaria no nome errado. PURE.
+ * The stored messages THIS account may send again: its own, and the ones with no author (recorded
+ * before the field existed). One from another account, going out over this connection, would end up under the wrong name. PURE.
  */
 function ownSends(outbox: readonly OutboxMessage[], viewer: string | undefined): OutboxMessage[] {
   return outbox.filter((m) => !m.from || m.from.name === viewer);
@@ -248,30 +244,30 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   /** "Cesar está digitando…" — who else is writing in this card (see lib/peerTyping.ts). */
   const [peers, setPeers] = React.useState<PeerTyping>({});
   const [peersNow, setPeersNow] = React.useState(() => Date.now());
-  /** O que as outras pessoas do card estão respondendo nos cartões de pergunta (lib/peerQuestionDraft.ts). */
+  /** What the other people on the card are answering in the question cards (lib/peerQuestionDraft.ts). */
   const [peerDrafts, setPeerDrafts] = React.useState<PeerQuestionDrafts>({});
   /** This tab's own outbound typing signal (created below, once `sendFrame` exists). */
   const typingRef = React.useRef<TypingSignal | null>(null);
-  /** `commitState` é do socket (o único que conhece a ordem do stream); todo o resto usa `setState`. */
+  /** `commitState` belongs to the socket (the only one that knows the stream's order); everything else uses `setState`. */
   const [state, commitState] = React.useState<SdkChatState>(INITIAL_SDK_STATE);
   const stateRef = React.useRef(state);
   stateRef.current = state;
-  /** As linhas de AGORA, para os callbacks que as leem sem precisar ser recriados a cada evento. */
+  /** The rows of RIGHT NOW, for the callbacks that read them without having to be recreated on every event. */
   const rowsRef = React.useRef(state.rows);
   rowsRef.current = state.rows;
   /**
-   * Esvazia os tokens que esperam o frame de animação (ver o efeito do websocket) e diz se havia
-   * algum. Eles já CHEGARAM: uma ação local que decidisse ou escrevesse sem eles seria julgada pela
-   * tela de um frame atrás — o Enter que vai direto pro socket com um turno acabando de abrir, a
-   * bolha que nasce antes da resposta que chegou primeiro.
+   * Flushes the tokens waiting for the animation frame (see the websocket effect) and says whether there
+   * were any. They have already ARRIVED: a local action that decided or wrote without them would be judged by
+   * a screen one frame behind — the Enter that goes straight to the socket with a turn just opening, the
+   * bubble born before the answer that arrived first.
    */
   const flushStreamRef = React.useRef<() => boolean>(() => false);
-  /** Toda escrita local na conversa entra DEPOIS dos tokens que já chegaram. */
+  /** Every local write to the conversation goes in AFTER the tokens that have already arrived. */
   const setState = React.useCallback((update: React.SetStateAction<SdkChatState>): void => {
     flushStreamRef.current();
     commitState(update);
   }, []);
-  /** A conversa com os tokens já chegados dentro — o que um gesto lê para decidir. Só em handler. */
+  /** The conversation with the already-arrived tokens inside — what a gesture reads to decide. Handlers only. */
   const readSettledState = React.useCallback((): SdkChatState => {
     flushSync(() => {
       flushStreamRef.current();
@@ -280,13 +276,13 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   }, []);
   const socketRef = React.useRef<WebSocket | null>(null);
   /**
-   * CONDENAR o socket atual e reconectar já (ver o watchdog). Preenchido pela conexão viva; fora
-   * dela não faz nada.
+   * CONDEMN the current socket and reconnect right away (see the watchdog). Filled in by the live connection;
+   * outside it, does nothing.
    */
   const abandonSocketRef = React.useRef<() => void>(() => {});
-  /** Onde a resposta de um `workflow_feed` é entregue (o painel do workflow escuta; ver lib/workflowFeed.ts). */
+  /** Where the response to a `workflow_feed` is delivered (the workflow panel listens; see lib/workflowFeed.ts). */
   const workflowFeedRef = React.useRef<WorkflowFeedChannel | null>(null);
-  /** Onde a resposta de um `detail` é entregue (os modais escutam; ver lib/sdkDetail.ts). */
+  /** Where the response to a `detail` is delivered (the modals listen; see lib/sdkDetail.ts). */
   const detailChannelRef = React.useRef<DetailChannel | null>(null);
   const statusRef = React.useRef<SdkChatViewProps["onStatus"]>(onStatus);
   statusRef.current = onStatus;
@@ -305,37 +301,38 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   /** Reconciliation runs ONCE per connection, when the replay has landed (`ready`). */
   const reconciledRef = React.useRef(false);
   /**
-   * Desde quando esta conexão pode RESPONDER — o piso do relógio do recibo (ver lib/sdkOutbox.ts).
+   * Since when this connection can ANSWER — the floor of the receipt clock (see lib/sdkOutbox.ts).
    *
-   * `connected` só diz que o aperto de mão do websocket terminou; o servidor ainda leva segundos
-   * até ATENDER o socket (install do driver por SSH+docker, sonda de transcript com timeout de 15s,
-   * replay do histórico, spawn) e até lá guarda os frames num buffer, entregando-os depois. O
-   * `ready` é o instante em que ele assumiu esta conexão — e é dele, não do envio, que o prazo
-   * conta. `null` = nada aqui pode acusar ninguém.
+   * `connected` only says the websocket handshake finished; the server still takes seconds
+   * to SERVE the socket (driver install over SSH+docker, transcript probe with a 15s timeout,
+   * history replay, spawn) and until then keeps the frames in a buffer, delivering them later. The
+   * `ready` is the instant it took over this connection — and it is from it, not from the send, that the deadline
+   * counts. `null` = nothing here can accuse anyone.
    */
   const answerableSinceRef = React.useRef<number | null>(null);
   /**
-   * A FILA — o que foi escrito com um turno ainda rodando (ver lib/sdkQueue.ts).
+   * THE QUEUE — what was written while a turn was still running (see lib/sdkQueue.ts).
    *
-   * Nada daqui foi para o servidor ainda: são mensagens ESPERANDO, desenhadas logo acima do campo
-   * de texto e ainda editáveis. Cada uma sai daqui uma de cada vez, quando o turno anterior fecha —
-   * e é só nesse instante que ela sobe pra conversa, como bolha de verdade, com recibo.
+   * Nothing in here has gone to the server yet: these are messages WAITING, drawn right above the text
+   * field and still editable. Each one leaves here one at a time, when the previous turn closes —
+   * and only at that instant does it move up into the conversation, as a real bubble, with a receipt.
    */
   const [queue, setQueue] = React.useState<QueuedMessage[]>(() => releaseEditing(readQueue(cardId)));
-  /** O que a fila tem AGORA, sem re-armar os callbacks a cada mensagem escrita. */
+  /** What the queue holds RIGHT NOW, without re-arming the callbacks on every message written. */
   const queueRef = React.useRef(queue);
   queueRef.current = queue;
   React.useEffect(() => {
     writeQueue(cardId, queue);
   }, [cardId, queue]);
   /**
-   * A mensagem da fila que está SENDO EDITADA — ela saiu da fila e está no campo de texto.
+   * The queued message that is BEING EDITED — it left the queue and is in the text field.
    *
-   * Enquanto está aqui ela NÃO pode ser entregue: é exatamente isso que o dono pediu ("se eu clicar
-   * em editar e ela tiver na fila ela não pode ser enviada, pois é como se estivesse cancelada").
-   * Ela CONTINUA na fila, marcada (`editing`) e pulada pelo despacho — nunca fora dela: é isso que
-   * faz um F5 no meio da correção devolver o texto em vez de apagá-lo, e que faz o cancelamento
-   * devolvê-la ao lugar dela em vez de mandá-la pro fim. Aqui fica só o que o CAMPO precisa saber.
+   * While it is here it CANNOT be delivered: that is exactly what the owner asked for ("se eu clicar
+   * em editar e ela tiver na fila ela não pode ser enviada, pois é como se estivesse cancelada" — "if I
+   * click edit and it is in the queue it cannot be sent, because it is as if it were cancelled").
+   * It STAYS in the queue, marked (`editing`) and skipped by the dispatch — never out of it: that is what
+   * makes an F5 in the middle of the correction give the text back instead of erasing it, and what makes cancelling
+   * put it back in its place instead of sending it to the end. Only what the FIELD needs to know lives here.
    */
   const [queueEdit, setQueueEdit] = React.useState<{ id: string; text: string } | null>(null);
 
@@ -347,29 +344,29 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     // The old socket's close no longer reports (it is disposed): this connection starts offline.
     setConnected(false);
     setOutbox(readOutbox(cardId));
-    // Um reload apaga o campo de texto, então nada está sendo reescrito: a mensagem que estava lá
-    // volta a ser uma espera normal, com o texto que tinha antes da correção.
+    // A reload clears the text field, so nothing is being rewritten: the message that was there
+    // goes back to being a normal wait, with the text it had before the correction.
     setQueue(releaseEditing(readQueue(cardId)));
     setQueueEdit(null);
     let socket: WebSocket | null = null;
     let retry: ReturnType<typeof setTimeout> | null = null;
     /**
-     * O backoff só zera quando o SERVIDOR assume a conexão (`ready`), nunca no `onopen`: o back
-     * aceita o websocket e só depois descobre que não pode atendê-lo (driver desligado, card
-     * apagado, install que falhou) — manda o erro e fecha. Zerado no aperto de mão, isso virava
-     * uma reconexão a ~2Hz para sempre, cada uma pagando o setup inteiro do servidor.
+     * The backoff only resets when the SERVER takes over the connection (`ready`), never on `onopen`: the back
+     * accepts the websocket and only afterwards finds out it cannot serve it (driver off, card
+     * deleted, install that failed) — it sends the error and closes. Reset on the handshake, this became
+     * a reconnect at ~2Hz forever, each one paying the server's whole setup.
      */
     const backoff = createReconnectBackoff(Math.random);
     let disposed = false;
     const setStatus = (s: ConnectionState): void => statusRef.current?.(s);
     /**
-     * Os TOKENS que chegaram neste frame de animação. O driver manda um frame de socket por token;
-     * eles entram de uma vez, no próximo frame, para que a conversa inteira renderize uma vez por
-     * frame e não uma vez por token. O timer cobre a aba em segundo plano, onde o rAF não dispara.
+     * The TOKENS that arrived in this animation frame. The driver sends one socket frame per token;
+     * they go in all at once, on the next frame, so the whole conversation renders once per
+     * frame and not once per token. The timer covers the background tab, where rAF does not fire.
      *
-     * A queda do fio não mexe aqui: o timer desta espera nasce antes do timer da reconexão e é mais
-     * curto (`DELTA_FLUSH_MAX_MS` < `RECONNECT_BASE_MS`), então dispara primeiro — o `onopen` da
-     * conexão seguinte sempre encontra o buffer vazio. Só a troca de card/conta (o cleanup) DESCARTA.
+     * The wire dropping does not touch this: this wait's timer is born before the reconnect timer and is
+     * shorter (`DELTA_FLUSH_MAX_MS` < `RECONNECT_BASE_MS`), so it fires first — the next
+     * connection's `onopen` always finds the buffer empty. Only a card/account switch (the cleanup) DISCARDS.
      */
     let pendingDeltas: SdkEvent[] = [];
     let deltaFrame: number | null = null;
@@ -420,7 +417,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
         // history.ts), so the slate is wiped here — otherwise a reconnect would draw the whole
         // conversation twice. What was on screen comes right back, from disk instead of memory.
         commitState(INITIAL_SDK_STATE);
-        // Os rascunhos dos outros também: o back reenvia os que ainda valem logo no attach.
+        // The others' drafts too: the back resends the ones still valid right at attach.
         setPeerDrafts({});
         // The replay tells the story again from disk (the interrupt note included) — a stale
         // "continuar?" offer from before the drop would be guessing about a turn we no longer see.
@@ -445,8 +442,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
           if (peer) setPeerDrafts((prev) => applyPeerQuestionDraft(prev, peer.id, peer.name, peer.draft));
           return;
         }
-        // O feed de um subagente que ESTA aba pediu: vai ao painel, nunca ao reducer nem às linhas.
-        // O detalhe que ESTA aba pediu (uma ação, um subagente, as mudanças): vai ao modal.
+        // The feed of a subagent THIS tab asked for: goes to the panel, never to the reducer or the rows.
+        // The detail THIS tab asked for (an action, a subagent, the changes): goes to the modal.
         if (parsed.type === "detail") {
           const detail = parseDetailResponse(parsed as Parameters<typeof parseDetailResponse>[0]);
           if (detail) detailChannelRef.current?.deliver(detail);
@@ -464,15 +461,15 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
           setEscalation((prev) => (prev?.ultracode ? prev : null));
           return;
         }
-        // The RECEIPT: `user_ack` means the back gravou — this browser no longer needs its copy.
+        // The RECEIPT: `user_ack` means the back recorded it — this browser no longer needs its copy.
         // `user_nack` means it refused, so the copy STAYS (the bubble now says "não entregue").
         if (parsed.type === "user_ack" && parsed.cid) {
           const cid = parsed.cid;
           setOutbox((prev) => dropFromOutbox(prev, cid));
         }
-        // A recusa também é uma RESPOSTA: o veredito desta mensagem já saiu, e a fila precisa
-        // saber disso — senão ela seguiria "sem recibo" e o watchdog derrubaria este socket (que
-        // acabou de provar que está vivo) a cada tique.
+        // The refusal is also an ANSWER: this message's verdict is already out, and the queue needs
+        // to know it — otherwise it would stay "without receipt" and the watchdog would drop this socket (which
+        // has just proven it is alive) on every tick.
         if (parsed.type === "user_nack" && parsed.cid) {
           const cid = parsed.cid;
           setOutbox((prev) => markUndelivered(prev, [cid]));
@@ -481,10 +478,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
           queueDelta(parsed);
           return;
         }
-        // Qualquer outro evento entra DEPOIS dos tokens que chegaram antes dele.
+        // Any other event goes in AFTER the tokens that arrived before it.
         flushDeltas();
-        // O estado de um subagente leva a hora em que chegou, no relógio desta aba: é dali que o
-        // tempo de quem roda conta (o relógio do runner pode não bater com o do navegador).
+        // A subagent's state carries the time it arrived, on this tab's clock: that is where the
+        // running time counts from (the runner's clock may not match the browser's).
         const stamped = parsed.type === "agent_task" ? { ...parsed, receivedAt: Date.now() } : parsed;
         commitState((prev) => applySdkEvent(prev, stamped));
       };
@@ -501,7 +498,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
       };
     };
 
-    /** O fio `dead` caiu (ou foi condenado): a tela fica offline e a reconexão é agendada. */
+    /** The wire `dead` dropped (or was condemned): the screen goes offline and the reconnect is scheduled. */
     const dropConnection = (dead: WebSocket): void => {
       if (socket === dead) socket = null;
       if (socketRef.current === dead) socketRef.current = null;
@@ -514,12 +511,12 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     };
 
     /**
-     * O watchdog CONDENOU este socket. `close()` sozinho não basta: num socket meio-aberto o
-     * navegador espera o aperto de mão de fechamento que nunca vem (no Chrome, até 60s) e só então
-     * dispara o `onclose` — o único que agendava a reconexão. Nesse minuto o fio não estava OPEN nem
-     * voltando, e todo Reenviar caía no "Sem conexão" (produção, 2026-11-06). Então ele é soltado
-     * aqui: os handlers saem (o fechamento tardio não fala por cima da conexão nova) e a reconexão
-     * sai pelo backoff de sempre.
+     * The watchdog CONDEMNED this socket. `close()` alone is not enough: on a half-open socket the
+     * browser waits for the closing handshake that never comes (in Chrome, up to 60s) and only then
+     * fires `onclose` — the only thing that scheduled the reconnect. During that minute the wire was neither OPEN nor
+     * coming back, and every Reenviar fell into "Sem conexão" (production, 2026-11-06). So it is let go
+     * here: the handlers come off (the late close does not talk over the new connection) and the reconnect
+     * goes out through the usual backoff.
      */
     abandonSocketRef.current = () => {
       const dead = socket;
@@ -555,13 +552,13 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   }, [cardId, identity.epoch]);
 
   /**
-   * O tradutor local do navegador só BAIXA o pacote de idioma dentro de um gesto (clique, tecla) —
-   * então os gestos na página, com a interface em português, o preparam (um modelo por gesto). Depois
-   * de pronto, `prime()` não faz nada; o raciocínio que esperava se traduz sozinho (`onReady`).
+   * The browser's local translator only DOWNLOADS the language pack inside a gesture (click, key) —
+   * so the gestures on the page, with the interface in Portuguese, prepare it (one model per gesture). Once
+   * ready, `prime()` does nothing; the reasoning that was waiting translates itself (`onReady`).
    *
-   * `click`/`keyup` na fase de BOLHA, de propósito: baixar consome o gesto, e o app age antes (no
-   * pointerdown em captura, o primeiro clique da pessoa perdia o gesto — popup, tela cheia). O `click`
-   * também cobre o toque, onde o pointerdown nem conta como gesto.
+   * `click`/`keyup` in the BUBBLE phase, on purpose: downloading consumes the gesture, and the app acts first (on
+   * pointerdown in capture, the person's first click lost the gesture — popup, fullscreen). `click`
+   * also covers touch, where pointerdown does not even count as a gesture.
    */
   React.useEffect(() => {
     const prime = (): void => {
@@ -591,13 +588,13 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   workflowFeedRef.current = workflowFeed;
   const detailChannel = React.useMemo(() => createDetailChannel(sendFrame), [sendFrame]);
   detailChannelRef.current = detailChannel;
-  /** A pilha de modais abertos (ação aberta de dentro de um subagente volta para ele). */
+  /** The stack of open modals (an action opened from inside a subagent goes back to it). */
   const [detailStack, setDetailStack] = React.useState<DetailView[]>([]);
   const detailApi = React.useMemo(() => ({ open: (view: DetailView) => setDetailStack((prev) => [...prev, view]) }), []);
 
   /**
-   * "Está digitando" para as outras abas do card: um frame na primeira tecla, um a cada poucos
-   * segundos enquanto a pessoa escreve, e o "parou" — nunca um por tecla (ver lib/peerTyping.ts).
+   * "Está digitando" for the card's other tabs: one frame on the first key, one every few
+   * seconds while the person writes, and the "stopped" — never one per key (see lib/peerTyping.ts).
    */
   const typingSignal = React.useMemo(
     () => createTypingSignal((active) => sendFrame({ type: "typing", active })),
@@ -608,8 +605,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   React.useEffect(() => () => typingSignal.stop(), [cardId, typingSignal]);
 
   /**
-   * O RASCUNHO DESTA ABA num cartão de pergunta, para as outras: o que a pessoa marca e escreve
-   * aparece na tela de quem mais estiver no card, em tempo real (ver lib/peerQuestionDraft.ts).
+   * THIS TAB'S DRAFT on a question card, for the others: what the person marks and writes
+   * shows up on the screen of whoever else is on the card, in real time (see lib/peerQuestionDraft.ts).
    */
   const draftSender = React.useMemo(
     () => createDraftSender((id, draft) => sendFrame({
@@ -620,7 +617,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   React.useEffect(() => () => draftSender.dispose(), [cardId, draftSender]);
   const sendQuestionDraft = React.useCallback((id: string, draft: QuestionDraft) => draftSender.push(id, draft), [draftSender]);
 
-  /** The soonest typing indicator to expire re-renders the view, so a lost "parou" clears itself. */
+  /** The soonest typing indicator to expire re-renders the view, so a lost "stopped" clears itself. */
   React.useEffect(() => {
     const expiry = nextPeerExpiry(peers, peersNow);
     if (expiry === null) return;
@@ -630,23 +627,23 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   const typingPeers = typingNames(peers, peersNow, viewer);
 
   /**
-   * O AVISO DE LIMITE DO PLANO, no canto direito da faixa do "está digitando". Os avisos ao vivo
-   * chegam por ESTE socket; publicados no cache, o medidor do topo do card lê os mesmos (ver
-   * PlanUsage.tsx). A leitura periódica cobre as janelas sobre as quais o CLI ainda não falou.
+   * THE PLAN LIMIT WARNING, in the right corner of the "está digitando" strip. The live warnings
+   * arrive over THIS socket; published to the cache, the meter at the top of the card reads the same ones (see
+   * PlanUsage.tsx). The periodic read covers the windows the CLI has not spoken about yet.
    */
   const queryClient = useQueryClient();
   React.useEffect(() => {
     queryClient.setQueryData(cardRateLimitsKey(cardId), state.rateLimits);
   }, [queryClient, cardId, state.rateLimits]);
   const plan = useCardPlanUsage(cardId, active);
-  // O chat redesenha a cada frame do socket; a contagem "renova em" anda junto, sem relógio próprio.
+  // The chat redraws on every socket frame; the "renova em" countdown moves along, with no clock of its own.
   const alertNow = Date.now();
   const usageAlert = planAlert(planWindows(plan.data?.usage, state.rateLimits, alertNow), state.rateLimits, alertNow);
 
   /**
    * A TURN goes out with a receipt: the words are written to the outbox (disk) BEFORE the frame
-   * leaves, and only a `user_ack` takes them off it. This is the whole difference between "o
-   * socket aceitou" (which a half-open connection also does, into the void) and "o servidor tem".
+   * leaves, and only a `user_ack` takes them off it. This is the whole difference between "the
+   * socket accepted" (which a half-open connection also does, into the void) and "the server has it".
    */
   const sendTurn = React.useCallback(
     (frame: { type: "user" | "edit_user"; text: string; original?: string; first?: boolean; now?: boolean }, shown: string, cid: string): void => {
@@ -657,9 +654,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
         original: frame.original,
         ...(frame.first ? { first: true } : {}),
         from: selfOriginRef.current,
-        // O que o servidor JÁ tinha com estas palavras, ancorado no relógio dele: a reconciliação
-        // só aceita uma ocorrência além destas como prova de entrega (o "sim" de ontem não entrega
-        // o de hoje, e a janela do replay andar não condena o que chegou — ver `sendMark`).
+        // What the server ALREADY had with these words, anchored to its clock: the reconciliation
+        // only accepts an occurrence beyond these as proof of delivery (yesterday's "sim" does not deliver
+        // today's, and the replay window moving does not condemn what arrived — see `sendMark`).
         ...sendMark(deliveredUserTexts(rowsRef.current, viewer), shown),
       };
       setOutbox((prev) => addToOutbox(prev, entry));
@@ -677,11 +674,11 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   );
 
   /**
-   * MANDAR DE NOVO uma mensagem não entregue: as mesmas palavras, o mesmo recibo — o back nunca a
-   * teve, ou teve e perdeu o recibo (aí o cid repetido é só a cobrança dele, nunca um segundo turno).
+   * SEND AGAIN an undelivered message: the same words, the same receipt — the back never had
+   * it, or had it and lost the receipt (then the repeated cid is just its receipt being chased, never a second turn).
    *
-   * `auto` é o reenvio que a tela faz sozinha (ver `planAutoResend`): gasta uma tentativa do plano
-   * e não grita — uma falha dele só reagenda. O da pessoa (o botão) zera o plano e avisa o erro.
+   * `auto` is the resend the screen does on its own (see `planAutoResend`): it spends one attempt of the plan
+   * and does not shout — a failure of it just reschedules. The person's one (the button) resets the plan and reports the error.
    */
   const resendEntry = React.useCallback((entry: OutboxMessage, auto: boolean): void => {
     const { cid } = entry;
@@ -692,8 +689,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
         ? { type: "edit_user", original: entry.original, text: entry.text, cid, ...(entry.first ? { first: true } : {}) }
         : { type: "user", text: entry.text, cid });
     } catch {
-      // Sem fio no meio do caminho: nada de erro. O clique da pessoa vira PEDIDO (sai sozinho no
-      // primeiro portão aberto); o automático só reagenda.
+      // No wire along the way: no error. The person's click becomes a REQUEST (it goes out by itself at the
+      // first open gate); the automatic one just reschedules.
       setOutbox((prev) => {
         const failed = markUndelivered(prev, [cid]);
         return auto ? failed : askResend(failed, cid, Date.now());
@@ -711,32 +708,32 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   React.useEffect(() => {
     if (!state.ready || reconciledRef.current) return;
     reconciledRef.current = true;
-    // Só os ÓRFÃOS: uma entrada cujo cid ainda tem bolha nesta tela pertence a ESTA conexão e tem
-    // dono (o watchdog). O `ready` chega antes dos recibos do que ficou bufferado no setup, então o
-    // replay não PODE trazer o envio em voo — julgá-lo aqui era duplicá-lo e condená-lo.
+    // Only the ORPHANS: an entry whose cid still has a bubble on this screen belongs to THIS connection and has
+    // an owner (the watchdog). The `ready` arrives before the receipts of what was buffered during setup, so the
+    // replay CANNOT bring the in-flight send — judging it here was duplicating it and condemning it.
     const live = liveUserCids(state.rows);
     const pending = outboxRef.current.filter((m) => !live.has(m.cid));
     if (pending.length === 0) return;
     const { delivered, missing: lost } = reconcileOutbox(deliveredUserTexts(state.rows, viewer), pending);
-    // A que se perdeu sem veredito volta pra FILA e sai sozinha quando o chat estiver pronto — na
-    // frente do que foi escrito depois dela (ver `outboxToQueue`).
+    // The one lost without a verdict goes back to the QUEUE and leaves by itself when the chat is ready — ahead
+    // of what was written after it (see `outboxToQueue`).
     const { queued, kept: missing } = outboxToQueue(lost, viewer, Date.now());
     if (queued.length > 0) {
-      // O ref já na hora: o despacho roda neste MESMO commit (também acordado pelo `ready`) e, lendo
-      // a fila de antes, mandaria na frente o que foi escrito depois.
+      // The ref right away: the dispatch runs in this SAME commit (also woken by `ready`) and, reading
+      // the queue from before, would send ahead what was written after.
       queueRef.current = [...queued, ...queueRef.current];
       setQueue(queueRef.current);
     }
     if (delivered.length > 0 || lost.length > 0) {
-      // Entregue (ou devolvida à fila) sai do outbox; a que o servidor não tem FICA, já com o
-      // veredito dado — o outbox é a cópia recuperável dela, e uma entrada vencida que ninguém
-      // marca é o que fazia o watchdog derrubar o socket em todo tique.
+      // Delivered (or returned to the queue) leaves the outbox; the one the server does not have STAYS, already with the
+      // verdict given — the outbox is its recoverable copy, and an expired entry that nobody
+      // marks is what made the watchdog drop the socket on every tick.
       const gone = new Set([...delivered.map((m) => m.cid), ...queued.map((q) => q.cid)]);
       const settle = (prev: OutboxMessage[]): OutboxMessage[] =>
         markUndelivered(prev.filter((m) => !gone.has(m.cid)), missing.map((m) => m.cid));
-      // O ref já na hora, pelo mesmo motivo da fila: o reenvio automático sai do despacho deste
-      // MESMO commit, e lendo o outbox de antes reenviaria uma mensagem que o replay acabou de dar
-      // por entregue — num driver novo, que não conhece o cid, isso é um segundo turno.
+      // The ref right away, for the same reason as the queue: the automatic resend goes out of this
+      // SAME commit's dispatch, and reading the outbox from before it would resend a message the replay has just declared
+      // delivered — on a new driver, which does not know the cid, that is a second turn.
       outboxRef.current = settle(outboxRef.current);
       setOutbox(settle);
     }
@@ -749,9 +746,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   }, [state.ready, state.rows, viewer]);
 
   /**
-   * O relógio do recibo NASCE quando o SERVIDOR assume esta conexão (o `ready`, que ele só manda
-   * depois do setup inteiro), não quando o `onopen` do navegador dispara — e morre junto com ela.
-   * Enquanto não existe, nenhum silêncio é cobrável: não há de quem cobrar.
+   * The receipt clock is BORN when the SERVER takes over this connection (the `ready`, which it only sends
+   * after the whole setup), not when the browser's `onopen` fires — and dies with it.
+   * While it does not exist, no silence can be charged: there is no one to charge.
    */
   React.useEffect(() => {
     const answerable = connected && state.ready;
@@ -765,19 +762,19 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
    * declared undelivered AND the socket is dropped, so the reconnect either proves the message
    * landed (the replay carries it) or brings it back marked, on a connection that works.
    *
-   * O veredito é dado UMA vez por envio (`markUndelivered` na fila). A mensagem não entregue
-   * continua guardada — é o que a bolha "reenviar/descartar" oferece —, mas o relógio dela já
-   * venceu: sem essa marca ela estaria vencida em todo tique, e o watchdog derrubava a cada 2s um
-   * socket perfeitamente vivo. Era esse o loop "chat → Iniciando o agente… → histórico inteiro →
-   * chat" que deixava a tela piscando (produção, 2026-09-17). Um reenvio zera o relógio e volta a
-   * ser cobrável.
+   * The verdict is given ONCE per send (`markUndelivered` in the queue). The undelivered message
+   * stays stored — it is what the "reenviar/descartar" bubble offers —, but its clock has already
+   * expired: without that mark it would be expired on every tick, and the watchdog dropped every 2s a
+   * perfectly live socket. That was the "chat → Iniciando o agente… → whole history →
+   * chat" loop that left the screen flickering (production, 2026-09-17). A resend resets the clock and makes it
+   * chargeable again.
    *
-   * E o veredito só é dado sobre uma conexão que PODIA ter respondido (`answerableSinceRef`):
-   * silêncio de um servidor que ainda está montando a conexão — ou de um fio que caiu — não é
-   * prova de nada, e tratá-lo como prova era o que marcava "não entregue" mensagens que o servidor
-   * tinha recebido, derrubando no meio do setup um socket cuja reconexão paga o setup inteiro de
-   * novo (produção, 2026-09-28). Com o fio caído quem dá o veredito é a reconciliação do reconnect,
-   * que pergunta ao replay o que o servidor realmente gravou — uma resposta, não um palpite.
+   * And the verdict is only given about a connection that COULD have answered (`answerableSinceRef`):
+   * silence from a server that is still setting up the connection — or from a wire that dropped — is not
+   * proof of anything, and treating it as proof was what marked as "não entregue" messages the server
+   * had received, dropping mid-setup a socket whose reconnect pays the whole setup
+   * again (production, 2026-09-28). With the wire down, the verdict is given by the reconnect's reconciliation,
+   * which asks the replay what the server really recorded — an answer, not a guess.
    */
   React.useEffect(() => {
     if (outbox.length === 0) return;
@@ -797,9 +794,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   }, [outbox.length]);
 
   /**
-   * O RELÓGIO DO REENVIO AUTOMÁTICO — um timer só, armado para o próximo instante em que o plano
-   * muda (um intervalo vence, uma mensagem passa do teto de idade), nunca um tique fixo. Ele não
-   * envia nada: só acorda o despacho, que é quem sabe se dá para enviar agora (ver abaixo).
+   * THE AUTOMATIC RESEND CLOCK — a single timer, armed for the next instant at which the plan
+   * changes (an interval expires, a message passes the age ceiling), never a fixed tick. It does not
+   * send anything: it only wakes the dispatch, which is the one that knows whether it can send now (see below).
    */
   const [resendClock, setResendClock] = React.useState(0);
   const resendPlan = planAutoResend(ownSends(outbox, viewer), Date.now());
@@ -866,15 +863,15 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     return () => clearTimeout(timer);
   }, [pendingEdit, state.turnActive, dispatchEditFrame]);
 
-  // O prazo das perguntas laterais desta aba: a que o driver nunca respondeu (morreu no meio, um
-  // deploy) vira erro em vez de "Respondendo…" para sempre. Um timer por pergunta, armado no envio.
+  // This tab's side-question deadline: the one the driver never answered (died midway, a
+  // deploy) becomes an error instead of "Respondendo…" forever. One timer per question, armed on send.
   const btwTimersRef = React.useRef(new Set<ReturnType<typeof setTimeout>>());
   React.useEffect(() => {
     const timers = btwTimersRef.current;
     return () => { for (const timer of timers) clearTimeout(timer); };
   }, []);
   const armBtwExpiry = React.useCallback((askedAt: number): void => {
-    // Do MESMO `askedAt` da linha: o timer nunca dispara um instante antes do prazo que ela conta.
+    // From the row's SAME `askedAt`: the timer never fires an instant before the deadline the row counts.
     const timer = setTimeout(() => {
       btwTimersRef.current.delete(timer);
       setState((prev) => expireBtwRows(prev, Date.now()));
@@ -893,11 +890,11 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   const [replyTo, setReplyTo] = React.useState<PendingDecision | null>(null);
 
   /**
-   * UM CAMPO, UM MODO. Corrigir uma mensagem da fila (`queueEdit`), corrigir uma bolha enviada
-   * (`editing`) e responder uma decisão (`replyTo`) disputam o MESMO campo de texto — e o `send`
-   * resolve o Enter testando um modo depois do outro. Dois armados ao mesmo tempo é o Enter caindo
-   * no modo errado: a correção de uma bolha gravava POR CIMA da mensagem que esperava na fila. Todo
-   * gesto que entra num modo passa por aqui primeiro; a da fila volta a ser entregável, no lugar dela.
+   * ONE FIELD, ONE MODE. Correcting a queued message (`queueEdit`), correcting a sent bubble
+   * (`editing`) and answering a decision (`replyTo`) compete for the SAME text field — and `send`
+   * resolves the Enter by testing one mode after another. Two armed at the same time is the Enter landing
+   * in the wrong mode: correcting a bubble wrote OVER the message waiting in the queue. Every
+   * gesture that enters a mode goes through here first; the queued one becomes deliverable again, in its place.
    */
   const leaveComposerModes = React.useCallback((): void => {
     setReplyTo(null);
@@ -907,15 +904,15 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   }, []);
 
   /**
-   * O lápis abre o campo — e SÓ. Ele não para o turno.
+   * The pencil opens the field — and ONLY that. It does not stop the turn.
    *
-   * Parava (o pedido anterior: "cliquei pra editar e ele continua respondendo"), e o preço apareceu
-   * em produção: clicar em editar e MUDAR DE IDEIA matava um turno que ninguém quis matar, e um
-   * turno cortado não se descorta — sobrava uma oferta de "continuar de onde parou" para consertar
-   * um estrago que a própria tela tinha feito. Clicar em editar não é uma decisão; é abrir a
-   * possibilidade de uma. Quem para o turno é a correção ENVIADA (ver `send`), e o custo dessa
-   * escolha é conhecido: entre o lápis e o Enter o agente segue trabalhando na mensagem antiga.
-   * Trabalho a mais é recuperável; um turno morto por engano, não.
+   * It used to (the earlier request: "cliquei pra editar e ele continua respondendo" — "I clicked to edit and it keeps answering"), and the price showed up
+   * in production: clicking edit and CHANGING YOUR MIND killed a turn nobody wanted killed, and a
+   * cut turn cannot be uncut — what was left was an offer to "continuar de onde parou" to fix
+   * damage the screen itself had done. Clicking edit is not a decision; it is opening the
+   * possibility of one. What stops the turn is the SENT correction (see `send`), and the cost of that
+   * choice is known: between the pencil and the Enter the agent keeps working on the old message.
+   * Extra work is recoverable; a turn killed by mistake is not.
    */
   const beginEdit = React.useCallback((rowId: string, original: string): void => {
     leaveComposerModes();
@@ -925,11 +922,11 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   /* ------------------------------------------------------------ a fila */
 
   /**
-   * A TROCA DE CONTA com mensagens esperando na fila: as de OUTRA conta saem da fila e viram cópias
-   * "não entregue" no outbox (ver `foreignToOutbox`) — na tela com o nome de quem escreveu, nunca
-   * despachadas por esta conexão. E o que estava no campo (qualquer modo) era da conta anterior:
-   * sai junto — uma correção da fila armada aqui faria o Enter da conta nova reescrever (ou recriar
-   * sem autor) a mensagem de outra pessoa.
+   * THE ACCOUNT SWITCH with messages waiting in the queue: those of ANOTHER account leave the queue and become
+   * "não entregue" copies in the outbox (see `foreignToOutbox`) — on screen with the name of who wrote them, never
+   * dispatched over this connection. And what was in the field (any mode) belonged to the previous account:
+   * it goes too — a queue correction armed here would make the new account's Enter rewrite (or recreate
+   * with no author) another person's message.
    */
   React.useEffect(() => {
     const { own, foreign } = foreignToOutbox(queueRef.current, viewer);
@@ -942,23 +939,23 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     leaveComposerModes();
     setPendingEdit(null);
   }, [identity.epoch, leaveComposerModes]);
-  /** As decisões ainda paradas na pessoa (preenchido abaixo, onde elas são derivadas das linhas). */
+  /** The decisions still waiting on the person (filled in below, where they are derived from the rows). */
   const pendingRef = React.useRef<PendingDecision[]>([]);
 
   /**
-   * ENTREGAR um turno: a bolha nasce na conversa, o recibo é armado e as palavras vão pro socket.
-   * É o único ponto em que uma mensagem deixa de ser sua e vira conversa — venha ela direto do
-   * campo (nada rodando) ou da fila (o turno anterior acabou de fechar).
+   * DELIVER a turn: the bubble is born in the conversation, the receipt is armed and the words go to the socket.
+   * It is the only point at which a message stops being yours and becomes conversation — whether it comes straight from the
+   * field (nothing running) or from the queue (the previous turn has just closed).
    */
   const dispatchTurn = React.useCallback(
     (text: string, now = false, cid: string = newCid()): void => {
-      // `ultrathink` / `ultracode` no que está indo AGORA: o driver sobe o esforço DESTE turno, e a
-      // barra de atividade é onde isso fica visível — o painel escalava em silêncio. Lido na
-      // entrega, não na digitação: uma mensagem que esperou escala o turno que ELA abre.
+      // `ultrathink` / `ultracode` in what is going out NOW: the driver raises the effort of THIS turn, and the
+      // activity bar is where that becomes visible — the panel used to escalate silently. Read on
+      // delivery, not on typing: a message that waited escalates the turn that IT opens.
       const ultra = ultraKeywords(text);
       setEscalation(ultra.ultrathink || ultra.ultracode ? ultra : null);
       // Drawn FIRST, as "sending": the bubble exists the instant it goes, but it only claims to be
-      // sent when the back says it gravou (`user_ack`) — see lib/sdkOutbox.ts. `awaiting` starts
+      // sent when the back says it recorded it (`user_ack`) — see lib/sdkOutbox.ts. `awaiting` starts
       // the status ladder: "Preparando…"/"Pensando…" until the driver's first event.
       setState((prev) => appendUserRow(prev, text, selfOriginRef.current, { awaiting: true, cid, state: "sending" }));
       sendTurn(now ? { type: "user", text, now: true } : { type: "user", text }, text, cid);
@@ -966,33 +963,33 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     [sendTurn],
   );
 
-  /** O lápis de uma mensagem da fila: ela vai pro CAMPO, e fica marcada na fila (não sai dela). */
+  /** The pencil of a queued message: it goes to the FIELD, and stays marked in the queue (does not leave it). */
   const beginQueueEdit = React.useCallback((id: string): void => {
     const target = queueRef.current.find((m) => m.id === id);
     if (!target) return;
     leaveComposerModes();
     setQueueEdit({ id, text: target.text });
-    setQueue((prev) => markEditing(prev, id)); // só uma por vez: só existe um campo de texto
+    setQueue((prev) => markEditing(prev, id)); // only one at a time: there is only one text field
   }, [leaveComposerModes]);
 
-  /** O X da fila: a pessoa desistiu dessa mensagem antes de o Claude a ler. */
+  /** The queue's X: the person gave up on this message before Claude read it. */
   const removeQueued = React.useCallback((id: string): void => {
     setQueue((prev) => dequeue(prev, id));
   }, []);
 
   /**
-   * FORÇAR O ENVIO: esta mensagem não espera o turno fechar, vai agora.
+   * FORCE THE SEND: this message does not wait for the turn to close, it goes now.
    *
-   * Esperar é o padrão certo — uma mensagem dobrada no meio de um raciocínio entra como interrupção
-   * de contexto, não como pergunta nova. Mas nem todo recado quer esperar: "para, tá errado", "o
-   * que você tá fazendo?" são justamente para AGORA. Vai com `now`: se uma ferramenta está rodando,
-   * o driver a interrompe e a mensagem abre um turno novo — empurrada sem isso, o CLI só a lia quando
-   * a ferramenta devolvesse (um deploy preso deixou a pessoa falando sozinha por 24 min). Sem
-   * ferramenta rodando, ela entra no turno em andamento (o `turn_absorbed`). Então a espera é uma
-   * ESCOLHA da pessoa, não uma sentença da tela.
+   * Waiting is the right default — a message folded into the middle of a reasoning comes in as a context
+   * interruption, not as a new question. But not every note wants to wait: "para, tá errado", "o
+   * que você tá fazendo?" are meant precisely for NOW. It goes with `now`: if a tool is running,
+   * the driver interrupts it and the message opens a new turn — pushed without that, the CLI only read it when
+   * the tool returned (a stuck deploy left the person talking to themselves for 24 min). With no
+   * tool running, it joins the turn in progress (the `turn_absorbed`). So waiting is the
+   * person's CHOICE, not the screen's sentence.
    *
-   * Sem fio de pé nada sai da fila: forçar um envio que não pode acontecer só trocaria uma mensagem
-   * guardada por uma bolha condenada — exatamente o que a fila existe para não fazer.
+   * With no wire up nothing leaves the queue: forcing a send that cannot happen would only swap a stored
+   * message for a condemned bubble — exactly what the queue exists not to do.
    */
   const sendQueuedNow = React.useCallback((id: string): void => {
     const target = queueRef.current.find((m) => m.id === id);
@@ -1010,56 +1007,56 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   }, [connected, dispatchTurn]);
 
   /**
-   * SAIR do modo edição sem enviar. Uma mensagem da fila volta a ser entregável, no lugar dela e
-   * com o texto que tinha — o X aqui é "desisti de reescrever", nunca "joga fora o que escrevi".
+   * LEAVE edit mode without sending. A queued message becomes deliverable again, in its place and
+   * with the text it had — the X here is "I gave up rewriting", never "throw away what I wrote".
    */
   const cancelEdit = leaveComposerModes;
 
   /**
-   * O DESPACHO — a fila anda sozinha, UMA mensagem por vez, assim que o turno anterior fecha.
+   * THE DISPATCH — the queue moves by itself, ONE message at a time, as soon as the previous turn closes.
    *
-   * Uma por vez porque é o que "se o Claude ler a mensagem ela sobe" quer dizer: a que foi entregue
-   * vira bolha, as outras continuam esperando ali embaixo, ainda editáveis. Uma correção de
-   * mensagem já enviada (`editing`/`pendingEdit`) passa na frente: ela é dona do próximo turno.
+   * One at a time because that is what "se o Claude ler a mensagem ela sobe" ("if Claude reads the message it moves up") means: the delivered one
+   * becomes a bubble, the others keep waiting down there, still editable. A correction of an
+   * already-sent message (`editing`/`pendingEdit`) goes first: it owns the next turn.
    */
   React.useEffect(() => {
-    // Sem fio ninguém entrega nada — e "fio" é o `readyState`, não o `connected`. Um socket morto
-    // que o navegador ainda não percebeu passa por `connected`, e o despacho puxava a mensagem da
-    // fila para entregá-la nele: ela saía da espera e virava a bolha condenada que a fila existe
-    // para evitar. As duas pontas (o que entra na fila, o que sai dela) leem a MESMA verdade.
+    // With no wire nobody delivers anything — and "wire" is `readyState`, not `connected`. A dead socket
+    // the browser has not noticed yet passes `connected`, and the dispatch pulled the message from the
+    // queue to deliver it on it: it left the wait and became the condemned bubble the queue exists
+    // to avoid. Both ends (what enters the queue, what leaves it) read the SAME truth.
     if (!connected || socketRef.current?.readyState !== WebSocket.OPEN) return;
-    // Uma frase que só está no buffer de tokens também é frase pela metade: esvaziá-lo muda o
-    // `state`, e este efeito roda de novo já sabendo dela.
+    // A sentence that is only in the token buffer is also a half-written sentence: flushing it changes
+    // `state`, and this effect runs again already knowing about it.
     if (flushStreamRef.current()) return;
     if (!state.ready) return;
-    // O RESPIRO, não o fim do turno (ver `turnHasRoomForMore`): um turno de quinze minutos segurava
-    // por quinze minutos um "para, tá errado". Respiro é não haver uma FRASE PELA METADE — uma
-    // ferramenta em curso não é —, e a mensagem entregue aí entra no turno em andamento pelo
-    // streaming input: o CLI a enfileira e o modelo a lê no passo seguinte.
+    // The BREATHER, not the end of the turn (see `turnHasRoomForMore`): a fifteen-minute turn held
+    // back a "para, tá errado" for fifteen minutes. A breather is there being no HALF-WRITTEN SENTENCE — a
+    // tool in progress is not one —, and the message delivered then joins the turn in progress through
+    // streaming input: the CLI queues it and the model reads it on the next step.
     if (!turnHasRoomForMore(state)) return;
     if (editing || pendingEdit) return;
-    // O REENVIO AUTOMÁTICO passa na frente da fila: a mensagem que falhou foi escrita antes de tudo
-    // que está esperando ali, e a conversa não pode chegar ao Claude embaralhada. Ele sai pelo mesmo
-    // portão da fila — fio de pé, servidor pronto (a reconciliação já disse o que ele tem), turno
-    // com espaço —, então nunca dispara contra uma conexão que não pode responder, e o fio caído
-    // não gasta tentativa. Uma correção (`original`) é um supersede: só com o turno parado.
+    // The AUTOMATIC RESEND goes ahead of the queue: the message that failed was written before everything
+    // waiting there, and the conversation cannot reach Claude scrambled. It goes out through the same
+    // gate as the queue — wire up, server ready (the reconciliation has already said what it has), turn
+    // with room —, so it never fires against a connection that cannot answer, and the dropped wire
+    // does not spend an attempt. A correction (`original`) is a supersede: only with the turn stopped.
     const retry = planAutoResend(ownSends(outboxRef.current, viewer), Date.now()).due
       .find((m) => m.original === undefined || !state.turnActive);
     if (retry) {
-      // Um pedido da pessoa (`asked`) sai como o clique que ele é: zera o plano automático.
+      // A request from the person (`asked`) goes out as the click it is: it resets the automatic plan.
       resendEntry(retry, retry.asked !== true);
       return;
     }
-    // Só o que é DESTA conta sai por esta conexão (o servidor carimba o autor pela conexão).
+    // Only what belongs to THIS account goes out over this connection (the server stamps the author by the connection).
     const head = headOfQueue(foreignToOutbox(queueRef.current, viewer).own);
     if (!head) return;
     setQueue((prev) => dequeue(prev, head.id));
     try {
-      // Uma que voltou do outbox sai com o recibo de origem: se o servidor a tinha, é só o recibo.
+      // One that came back from the outbox goes out with its original receipt: if the server had it, it is just the receipt.
       dispatchTurn(head.text, false, head.cid);
     } catch (err) {
-      // `sendTurn` já marcou a bolha como NÃO ENTREGUE, com reenviar/descartar: o texto está na
-      // conversa, recuperável. Ela não volta pra fila — duas cópias da mesma mensagem é pior.
+      // `sendTurn` has already marked the bubble as NOT DELIVERED, with resend/discard: the text is in the
+      // conversation, recoverable. It does not go back to the queue — two copies of the same message is worse.
       toast.error((err as Error).message);
     }
   }, [queue, connected, state, editing, pendingEdit, dispatchTurn, viewer, outbox, resendClock, resendEntry]);
@@ -1071,8 +1068,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     typingSignal.stop();
     // Anything the person sends REPLACES the interrupted turn — the "continuar?" offer is moot.
     if (queueEdit) {
-      // Terminou de editar uma mensagem da fila: o texto novo entra NO LUGAR do antigo, e só agora
-      // ela volta a ser entregável — enquanto estava no campo, nem um turno fechando a soltava.
+      // Finished editing a queued message: the new text goes IN PLACE of the old one, and only now
+      // does it become deliverable again — while it was in the field, not even a closing turn released it.
       setQueue((prev) => updateQueued(prev, queueEdit.id, text, Date.now()));
       setQueueEdit(null);
       return;
@@ -1089,8 +1086,8 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
         setReplyTo(null);
         return;
       }
-      // NUNCA enfileirada: a pergunta que ela responde é o que está segurando o turno. Guardar a
-      // resposta até o turno acabar seria esperar por algo que só acontece DEPOIS dela.
+      // NEVER queued: the question it answers is what is holding the turn. Keeping the
+      // answer until the turn ends would be waiting for something that only happens AFTER it.
       const wrapped = buildDecisionReply(replyTo.text, text);
       try {
         dispatchTurn(wrapped);
@@ -1107,14 +1104,14 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
       const editCid = newCid();
       // Words alone cannot say WHICH copy was clicked: a message re-sent after an error has the
       // same ones, and every layer picked the newest — editing the first message edited the second
-      // (produção, 2026-10-19). The first message is named as such, and the conversation restarts.
+      // (production, 2026-10-19). The first message is named as such, and the conversation restarts.
       const first = isFirstUserRow(rowsRef.current, editing.rowId);
       if (chat.turnActive) {
-        // AQUI é onde o turno para — no envio da correção, não no clique do lápis (ver `beginEdit`).
-        // A decisão foi tomada: a mensagem que está sendo respondida foi superada, e deixar o turno
-        // correr seria gastar raciocínio numa pergunta que já não existe. A correção só VAI quando
-        // esse turno reportar seu fim (o efeito acima): ela nunca pode aterrissar como resposta de
-        // um turno que a mensagem superada ainda está dirigindo.
+        // HERE is where the turn stops — on sending the correction, not on the pencil click (see `beginEdit`).
+        // The decision has been made: the message being answered was superseded, and letting the turn
+        // run would be spending reasoning on a question that no longer exists. The correction only GOES when
+        // that turn reports its end (the effect above): it can never land as the answer of
+        // a turn the superseded message is still driving.
         if (!sendInterrupt("edit")) {
           throw new Error(translate("sdk.offline")); // the composer keeps the words
         }
@@ -1134,33 +1131,33 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
       setEditing(null);
       return;
     }
-    // TEM TURNO RODANDO: a mensagem ESPERA, logo acima do campo, em vez de ir direto pro CLI e ser
-    // dobrada no raciocínio em curso (o antigo `turn_absorbed`). Enquanto espera ela ainda é sua —
-    // editável, descartável — e ela só sobe pra conversa quando for entregue de verdade.
+    // A TURN IS RUNNING: the message WAITS, right above the field, instead of going straight to the CLI and being
+    // folded into the reasoning in progress (the old `turn_absorbed`). While it waits it is still yours —
+    // editable, discardable — and it only moves up into the conversation when it is truly delivered.
     //
-    // MENOS quando o turno está PARADO esperando a pessoa. Um `user_question` deixa o driver
-    // bloqueado dentro do `canUseTool`/`waitQuestion` com o turno ainda contado como ativo, e a
-    // única coisa que o solta é uma mensagem do usuário. Enfileirar aqui seria esperar por um fim
-    // de turno que só a própria mensagem pode causar — trava de meia hora, até o timeout.
+    // EXCEPT when the turn is STOPPED waiting for the person. A `user_question` leaves the driver
+    // blocked inside `canUseTool`/`waitQuestion` with the turn still counted as active, and the
+    // only thing that releases it is a user message. Queuing here would be waiting for an end
+    // of turn that only the message itself can cause — a half-hour lock, until the timeout.
     //
-    // E o FIO CAÍDO é a mesma espera. Um socket cai por motivos banais — deploy, tampa do notebook,
-    // proxy cortando conexão ociosa — e volta em 400ms a 15s (lib/reconnect.ts). Quem escreve não vê
-    // nada disso: até aqui a mensagem nascia instantaneamente condenada ("não entregue ao servidor",
-    // com reenviar/descartar) por um fio que voltava dois segundos depois, e o texto ficava em dois
-    // lugares ao mesmo tempo — na bolha e no campo, de onde o segundo Enter mandava a cópia. Quem só
-    // precisa esperar o fio não está perdido: espera na fila, e o despacho a entrega quando der.
-    // A exceção da decisão pendente vale para as DUAS esperas, e é o que a mantém segura: o despacho
-    // da fila só anda quando o turno fecha, então enfileirar com uma pergunta de pé — inclusive com
-    // o fio fora do ar — seria esperar por um fim de turno que só a própria mensagem pode causar.
+    // And the DROPPED WIRE is the same wait. A socket drops for mundane reasons — deploy, laptop lid,
+    // proxy cutting an idle connection — and comes back in 400ms to 15s (lib/reconnect.ts). Whoever is writing sees
+    // none of that: until now the message was born instantly condemned ("não entregue ao servidor",
+    // with reenviar/descartar) by a wire that came back two seconds later, and the text was in two
+    // places at the same time — in the bubble and in the field, from where the second Enter sent the copy. Whoever only
+    // needs to wait for the wire is not lost: it waits in the queue, and the dispatch delivers it when it can.
+    // The pending-decision exception applies to BOTH waits, and it is what keeps it safe: the queue's
+    // dispatch only moves when the turn closes, so queuing with a question standing — including with
+    // the wire down — would be waiting for an end of turn that only the message itself can cause.
     //
-    // E o CHAT CARREGANDO também (fio de pé, servidor ainda no setup, sem `ready`): o back só guarda
-    // o frame num buffer que um F5 joga fora — a fila é que sobrevive a ele (produção, 2026-10-20).
+    // And the CHAT LOADING too (wire up, server still in setup, no `ready`): the back only keeps
+    // the frame in a buffer that an F5 throws away — the queue is what survives it (production, 2026-10-20).
     const wireUp = connected && socketRef.current?.readyState === WebSocket.OPEN;
-    // O /btw é a pergunta feita JUSTAMENTE com o turno rodando: esperar o fim do turno na fila seria
-    // o oposto do comando. Sai na hora, num frame próprio, e vira uma linha pendente — quem responde
-    // é uma consulta à parte, não o turno (ver `answerBtw` em sdk-driver.mjs).
-    // Com o fio caído ela NÃO espera na fila: de lá ela sairia como mensagem comum — um turno do
-    // agente, o oposto do comando. Fica no campo, com o aviso, para a pessoa mandar quando voltar.
+    // /btw is the question asked PRECISELY with the turn running: waiting for the end of the turn in the queue would be
+    // the opposite of the command. It goes out right away, in its own frame, and becomes a pending row — what answers
+    // is a separate query, not the turn (see `answerBtw` in sdk-driver.mjs).
+    // With the wire down it does NOT wait in the queue: from there it would go out as a plain message — an
+    // agent turn, the opposite of the command. It stays in the field, with the warning, for the person to send when it comes back.
     const btw = btwQuestion(text);
     if (btw !== null) {
       if (!wireUp) throw new Error(translate("sdk.offline")); // the composer keeps the words
@@ -1192,12 +1189,12 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
 
   /** "Reenviar": the same words, the same receipt id — the back never had them, so this is not a copy. */
   const resendUndelivered = React.useCallback((cid: string): void => {
-    // Reenviar a mensagem de OUTRA conta a gravaria no nome de quem está na aba agora.
+    // Resending ANOTHER account's message would record it under the name of whoever is on the tab now.
     const entry = ownSends(outboxRef.current, viewer).find((m) => m.cid === cid);
     if (!entry) return;
-    // SEM FIO (o socket condenado, a reconexão no backoff, o servidor no setup) o clique não tenta o
-    // socket — tentar era o "Sem conexão… Ela fica no campo" de 2026-11-06. Vira pedido, e o despacho
-    // o manda assim que o chat estiver pronto, na frente da fila.
+    // WITH NO WIRE (the socket condemned, the reconnect in backoff, the server in setup) the click does not try the
+    // socket — trying was the "Sem conexão… Ela fica no campo" of 2026-11-06. It becomes a request, and the dispatch
+    // sends it as soon as the chat is ready, ahead of the queue.
     const wireUp = socketRef.current?.readyState === WebSocket.OPEN && readSettledState().ready;
     if (!wireUp) {
       setOutbox((prev) => askResend(prev, cid, Date.now()));
@@ -1243,9 +1240,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
 
   /** The terminal's Esc gesture: an empty field steps into editing the LAST message of one's own. */
   const editLast = React.useCallback((): void => {
-    // A FILA VEM PRIMEIRO. A última coisa que a pessoa escreveu é a que está ali embaixo esperando,
-    // e editá-la não custa nada — nenhum turno é interrompido, porque o Claude ainda não a leu. É
-    // também o único jeito de corrigi-la sem tirar a mão do teclado enquanto um turno roda.
+    // THE QUEUE COMES FIRST. The last thing the person wrote is the one waiting down there,
+    // and editing it costs nothing — no turn is interrupted, because Claude has not read it yet. It is
+    // also the only way to correct it without taking your hand off the keyboard while a turn runs.
     const queued = lastQueued(queueRef.current);
     if (queued) {
       beginQueueEdit(queued.id);
@@ -1354,7 +1351,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   // Derived from the rows — which the sdk-history replays on every connect, so the tray survives
   // F5 exactly like the question cards do.
   const pending = React.useMemo(() => pendingDecisions(state.rows), [state.rows]);
-  // Lido pelo `send` (declarado acima): uma pergunta parada muda o que o Enter significa.
+  // Read by `send` (declared above): a standing question changes what Enter means.
   pendingRef.current = pending;
   /** The explicit replies already given — what anchors an answer under the question it answered. */
   const replies = React.useMemo(() => decisionReplies(state.rows), [state.rows]);
@@ -1387,9 +1384,9 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     toast.message(translate("sdk.replyGone"));
   }, [pending, replyTo]);
 
-  // O que é de um SUBAGENTE sai do fio principal e vai para debaixo do card que o disparou.
-  // O mapa anterior entra para ser REUSADO quando nenhum subagente mudou: assim um token da resposta
-  // do principal não troca o valor do contexto nem redesenha os cards de subagente.
+  // What belongs to a SUBAGENT leaves the main thread and goes under the card that fired it.
+  // The previous map goes in to be REUSED when no subagent changed: that way a token of the main
+  // agent's answer does not swap the context value nor redraw the subagent cards.
   const subagentRowsRef = React.useRef<SubagentSplit["children"] | undefined>(undefined);
   const split = React.useMemo(() => {
     const next = splitSubagentRows(displayRows, subagentRowsRef.current);
@@ -1409,17 +1406,17 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
 
   // The activity bar's three facts: WHAT (the newest tool/reasoning/answer of this turn), for HOW
   // LONG, and whether the turn was escalated by a reserved word.
-  // O turno que roda na aba Terminal (o `claude` interativo; o chat só espelha) não acende
-  // `turnActive` — quem garante que ele segue de pé são os hooks do card. Sem isso a tela parecia
-  // parada com a IA trabalhando (card "POC modo de voz", 2026-10-21).
+  // The turn running in the Terminal tab (the interactive `claude`; the chat only mirrors) does not light
+  // `turnActive` — what guarantees it is still alive are the card's hooks. Without this the screen looked
+  // idle with the AI working (card "POC modo de voz", 2026-10-21).
   const working = connected && (state.awaiting || state.turnActive || (state.terminalBurst && terminalWorking));
   const activity = React.useMemo(() => (working ? currentActivity(state) : null), [working, state]);
-  // "Copiar" e "ouvir" só embaixo de resposta TERMINADA: a da rodada atual espera tudo parar —
-  // turno, e também as tarefas em segundo plano, que ainda podem mudar o que a IA vai dizer.
+  // "Copiar" and "ouvir" only under a FINISHED answer: the current round's waits for everything to stop —
+  // the turn, and also the background tasks, which may still change what the AI will say.
   const settled = connected && !working && state.backgroundTasks.length === 0;
   const finishedAnswers = React.useMemo(() => finishedAnswerIds(state.rows, settled), [state.rows, settled]);
-  // Os envios que SÃO comandos do catálogo (o chip), e qual deles o turno em curso está rodando: o
-  // último enviado, enquanto houver turno.
+  // The sends that ARE catalogue commands (the chip), and which of them the current turn is running: the
+  // last one sent, while there is a turn.
   const commandRows = React.useMemo(() => {
     const found = new Map<string, InvokedCommand>();
     let lastUser: string | undefined;
@@ -1432,7 +1429,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     return { found, lastUser };
   }, [state.rows, state.commands]);
   const commandRunning = state.awaiting || state.turnActive;
-  // Uma leitura em voz alta deste card não sobrevive ao card fechado nem a uma chamada de voz.
+  // A read-aloud of this card does not survive the card being closed nor a voice call.
   React.useEffect(() => {
     setReadAloudErrorHandler((err) => toast.error(translate(readAloudError(err))));
     return () => {
@@ -1444,21 +1441,21 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     if (callLive) readAloud.stop();
   }, [callLive]);
   /*
-   * QUANDO o trabalho começou — e só isso mora aqui. O relógio que anda a cada segundo vive nos dois
-   * mostradores (`useTurnClock`): aqui em cima ele redesenhava a conversa INTEIRA uma vez por
-   * segundo, durante o turno todo. Ajustado no render (não num efeito), para o primeiro quadro do
-   * turno já sair com o relógio certo.
+   * WHEN the work started — and only that lives here. The clock that ticks every second lives in the two
+   * dials (`useTurnClock`): up here it redrew the WHOLE conversation once per
+   * second, for the whole turn. Adjusted in render (not in an effect), so the turn's first frame
+   * already comes out with the right clock.
    */
   const [workStartedAt, setWorkStartedAt] = React.useState<number | null>(null);
   if (working && workStartedAt === null) setWorkStartedAt(Date.now());
   if (!working && workStartedAt !== null) setWorkStartedAt(null);
   const workingKind = workingKindOf(activity, state.awaiting, state.ready);
   /*
-   * O LEITOR DE TELA. A conversa é um `role="log"` (região viva): tudo que muda lá dentro é
-   * anunciado. Por isso os mostradores do relógio ficam `aria-hidden` — o cronômetro é para os
-   * olhos, anunciado a cada segundo ele falava por cima da conversa — e para o ouvido vai só a FASE,
-   * numa região de status fora do log, que muda quando o trabalho muda. E um texto chegando token a
-   * token deixa o log OCUPADO (`aria-busy`): ele é lido inteiro quando fecha, não em pedaços.
+   * THE SCREEN READER. The conversation is a `role="log"` (live region): everything that changes inside it is
+   * announced. That is why the clock dials are `aria-hidden` — the stopwatch is for the
+   * eyes; announced every second it talked over the conversation — and only the PHASE goes to the ear,
+   * in a status region outside the log, which changes when the work changes. And text arriving token by
+   * token leaves the log BUSY (`aria-busy`): it is read whole when it closes, not in pieces.
    */
   const lastRow = state.rows[state.rows.length - 1];
   const streaming = lastRow !== undefined && (lastRow.kind === "assistant" || lastRow.kind === "thinking") && lastRow.streaming;
@@ -1466,10 +1463,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
     if (!working) setEscalation(null);
   }, [working]);
 
-  // O MEDIDOR DE CONTEXTO fecha a linha do fim do log, à direita. Se ela é a resposta fechada, ele
-  // entra NA linha do copiar/ouvir (mesma altura, nada flutuando). Com o "Trabalhando…" (que trunca
-  // antes dele) ele senta no canto, por cima. Qualquer outra última linha (a bolha do usuário, um
-  // erro, uma ferramenta) ficaria por baixo dele — aí o log reserva uma faixa no fim (`pb-10`).
+  // THE CONTEXT METER closes the line at the end of the log, on the right. If it is the closed answer, it
+  // goes INTO the copiar/ouvir row (same height, nothing floating). With "Trabalhando…" (which truncates
+  // before it) it sits in the corner, on top. Any other last row (the user's bubble, an
+  // error, a tool) would sit under it — then the log reserves a strip at the end (`pb-10`).
   const lastEntry = rendered[rendered.length - 1];
   const meterInAnswer = state.contextUsage !== null && lastEntry?.kind === "row" && finishedAnswers.has(lastEntry.id);
   const meterInCorner = state.contextUsage !== null && !meterInAnswer;
@@ -1588,10 +1585,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
       <span role="status" data-testid="sdk-working-status" className="sr-only">
         {working ? t(workingStage(workingKind, 0).verb) : ""}
       </span>
-      {/* Com o medidor no canto, o "ir pro fim" sobe uma faixa: num painel estreito os dois se tocavam. */}
+      {/* With the meter in the corner, the "ir pro fim" moves up a strip: in a narrow panel the two touched. */}
       <JumpToLatest stick={stick} className={meterInCorner ? "bottom-11" : undefined} />
-      {/* Fora da resposta fechada, o medidor mora no canto inferior direito da caixa da conversa, por
-          cima do log (como o "ir para o fim"), com fundo opaco para o texto rolando não vazar por trás. */}
+      {/* Outside the closed answer, the meter lives in the bottom-right corner of the conversation box, on
+          top of the log (like the "ir para o fim"), with an opaque background so the scrolling text does not leak through. */}
       {meterInCorner ? (
         <div data-testid="sdk-context-corner" className="absolute bottom-3 right-4 z-10 rounded-full bg-background">
           <ContextMeter usage={state.contextUsage} />
@@ -1599,10 +1596,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
       ) : null}
       </div>
 
-      {/* O TRABALHO QUE SEGUE DEPOIS DO TURNO — um `sleep` esperando o deploy, um subagente. O
-          "Trabalhando…" apagou com o `result`, e sem esta faixa o chat parecia parado enquanto o
-          Claude ainda esperava algo (produção, 2026-10-07). Só com a wire de pé: uma tela
-          desconectada não pode garantir nada; a reconexão reacende pelo reenvio do back. */}
+      {/* THE WORK THAT CONTINUES AFTER THE TURN — a `sleep` waiting for the deploy, a subagent. The
+          "Trabalhando…" went out with the `result`, and without this strip the chat looked idle while
+          Claude was still waiting for something (production, 2026-10-07). Only with the wire up: a
+          disconnected screen cannot guarantee anything; the reconnect relights it via the back's resend. */}
       {connected && state.backgroundTasks.length > 0 ? <SdkBackgroundTray tasks={state.backgroundTasks} agentTasks={state.agentTasks} rows={state.rows} /> : null}
 
       {/* PENDING DECISIONS — the questions still waiting on the user, surfaced right above the
@@ -1637,18 +1634,18 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
       ) : null}
 
 
-      {/* A FILA — o que foi escrito enquanto o Claude trabalha, de prontidão logo acima do campo,
-          na mesma faixa em que o status "Trabalhando… 1m20s" vive. Não está na conversa porque o
-          Claude ainda não a leu: ela sobe pra lá no instante em que for entregue. Até então é da
-          pessoa — o lápis a traz de volta pro campo, o X a joga fora. */}
+      {/* THE QUEUE — what was written while Claude works, at the ready right above the field,
+          in the same strip where the "Trabalhando… 1m20s" status lives. It is not in the conversation because
+          Claude has not read it yet: it moves up there the instant it is delivered. Until then it belongs to the
+          person — the pencil brings it back to the field, the X throws it away. */}
       {queue.length > 0 ? <SdkQueueTray queue={queue} onEdit={beginQueueEdit} onRemove={removeQueued} onSendNow={sendQueuedNow} /> : null}
 
       {/* The interrupt button lives INSIDE the composer — right column, above the microphone —
           in the same seat as the transcript chat's stop. The interrupt frame is still this view's. */}
-      {/* O contexto saiu da faixa inteligente: o recado por extenso, acima da faixa do medidor. */}
+      {/* The context left the smart strip: the full message, above the meter's strip. */}
       <ContextNotice usage={state.contextUsage} className="mt-1.5" />
 
-      {/* Uma faixa, dois recados: quem está digitando à esquerda; à direita o aviso do plano. */}
+      {/* One strip, two messages: who is typing on the left; on the right the plan warning. */}
       <div className="mt-1.5 flex items-center justify-between gap-2">
         <div className="min-w-0 flex-1">
           <PeerTypingIndicator names={typingPeers} />
@@ -1709,7 +1706,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   );
 }
 
-/** "Mudanças": os arquivos que o Claude e os subagentes alteraram nesta conversa — abre o modal. */
+/** "Mudanças": the files Claude and the subagents changed in this conversation — opens the modal. */
 function SdkChangesButton({ rows }: { rows: readonly SdkRow[] }) {
   const t = useT();
   const { open } = React.useContext(SdkDetailContext);
@@ -1731,15 +1728,15 @@ function SdkChangesButton({ rows }: { rows: readonly SdkRow[] }) {
 }
 
 /**
- * A FAIXA "RODANDO EM SEGUNDO PLANO" — o equivalente do "1 background task" no rodapé do Claude
- * Code. Lista o que está vivo pela descrição que o próprio modelo deu à tarefa, com o MESMO desenho
- * do painel de subagentes da conversa: fixa acima do campo enquanto houver trabalho rodando. Teto de
- * altura pelo mesmo motivo da fila: irmã do scroller, ela não pode espremer a conversa.
+ * THE "RODANDO EM SEGUNDO PLANO" STRIP — the equivalent of the "1 background task" in Claude
+ * Code's footer. Lists what is alive by the description the model itself gave the task, with the SAME design
+ * as the conversation's subagent panel: pinned above the field while there is work running. Height
+ * ceiling for the same reason as the queue: a sibling of the scroller, it must not squeeze the conversation.
  */
 function SdkBackgroundTray({ tasks, agentTasks, rows }: { tasks: readonly BackgroundTask[]; agentTasks: SdkChatState["agentTasks"]; rows: readonly SdkRow[] }) {
   const t = useT();
   const { open } = React.useContext(SdkDetailContext);
-  // A faixa só existe com trabalho rodando: o relógio anda enquanto ela está à vista.
+  // The strip only exists with work running: the clock ticks while it is in view.
   const now = useNow(usePageVisible());
   return (
     <FleetPanel
@@ -1752,8 +1749,8 @@ function SdkBackgroundTray({ tasks, agentTasks, rows }: { tasks: readonly Backgr
       className="mt-1.5 max-h-[20vh] shrink-0 overflow-y-auto overscroll-contain"
     >
       {tasks.map((task) => {
-        // A tarefa liga à chamada que a disparou: um subagente abre a linha do tempo dele; um Bash
-        // em segundo plano abre a ação. Sem a ligação (CLI antigo), é só a descrição — sem clique.
+        // The task links to the call that fired it: a subagent opens its timeline; a background Bash
+        // opens the action. Without the link (old CLI), it is just the description — no click.
         const id = task.toolUseId;
         const call = id ? rows.find((r) => r.kind === "tool" && r.id === id) : undefined;
         const isAgent = call?.kind === "tool" ? isAgentTool(call.name) : task.type === "local_agent";
@@ -1919,30 +1916,30 @@ function SdkWorkingLine({
   awaiting: boolean;
   ready: boolean;
   escalation: { ultrathink: boolean; ultracode: boolean } | null;
-  /** O que o modelo está dizendo AGORA (ver `liveActivityDetail`) — null quando não há palavra dele. */
+  /** What the model is saying NOW (see `liveActivityDetail`) — null when there is no word of its own. */
   detail: string | null;
 }) {
   const t = useT();
   const seconds = useTurnClock(startedAt);
   const kind = workingKindOf(activity, awaiting, ready);
-  /* O verbo e a nota deste instante: é o que troca "Trabalhando…" parado por algo que anda. */
+  /* This instant's verb and note: it is what swaps a static "Trabalhando…" for something that moves. */
   const stage = workingStage(kind, seconds);
   return (
-    // Para os olhos: dentro do log o relógio seria anunciado a cada segundo (a fase vai pelo status).
+    // For the eyes: inside the log the clock would be announced every second (the phase goes through the status).
     <div
       aria-hidden="true"
-      // `pr-36`: o canto direito desta linha é do medidor de contexto; a nota trunca antes dele.
+      // `pr-36`: the right corner of this row belongs to the context meter; the note truncates before it.
       className="flex items-center gap-2 pr-36 text-xs text-muted-foreground"
       data-testid="sdk-chat-working"
       data-phase={kind}
     >
       <Loader2 className="h-3.5 w-3.5 animate-spin" />
       <span className="text-foreground/90">{t(stage.verb)}</span>
-      {/* A PALAVRA DO MODELO ganha da frase pronta. A cauda enlatada era a mesma em qualquer
-          ferramenta e em qualquer raciocínio — escolhida por uma tabela a partir do relógio —,
-          e o que a pessoa queria ler ("Medindo o tamanho do módulo PDV", o raciocínio em
-          curso) estava a um passo dali, no estado. A enlatada segue sendo o fallback de quando
-          não há nada a dizer: uma sessão subindo não tem raciocínio para mostrar. */}
+      {/* THE MODEL'S WORD beats the canned phrase. The canned tail was the same for any
+          tool and any reasoning — picked by a table from the clock —,
+          and what the person wanted to read ("Medindo o tamanho do módulo PDV", the reasoning in
+          progress) was one step away, in the state. The canned one remains the fallback for when
+          there is nothing to say: a session starting up has no reasoning to show. */}
       <span data-testid="sdk-working-note" className="min-w-0 truncate opacity-80">
         {escalation
           ? t("sdk.workingWithEffort", {
@@ -1957,10 +1954,10 @@ function SdkWorkingLine({
 }
 
 /**
- * QUAL FASE nomear agora. O que a barra sabe (a atividade viva, se a sessão ainda está subindo)
- * vira a fase que `workingStage` sabe descrever. PURE.
+ * WHICH PHASE to name now. What the bar knows (the live activity, whether the session is still starting up)
+ * becomes the phase `workingStage` knows how to describe. PURE.
  */
-export function workingKindOf(
+function workingKindOf(
   activity: { kind: "tool" | "thinking" | "answering" } | null,
   awaiting: boolean,
   ready: boolean,
@@ -2001,8 +1998,8 @@ function SdkActivityBar({
 }) {
   const t = useT();
   const seconds = useTurnClock(startedAt);
-  /* O nome da ferramenta ganha do verbo — "Rodando testes" diz mais que "Executando…". Fora isso,
-     é o mesmo vocabulário do indicador lá embaixo (workingStage): verbo que troca, nota que escala. */
+  /* The tool's name beats the verb — "Rodando testes" says more than "Executando…". Other than that,
+     it is the same vocabulary as the indicator down below (workingStage): a verb that changes, a note that escalates. */
   const stage = workingStage(workingKindOf(activity, awaiting, ready), seconds);
   const label = activity?.kind === "tool" && !(awaiting && !ready) ? activity.label : t(stage.verb);
   const effort = escalation ? (escalation.ultracode ? t("sdk.ultracodeOn") : t("sdk.effortHigh")) : null;
@@ -2055,7 +2052,7 @@ function SdkToolRow({ row }: { row: Extract<SdkRow, { kind: "tool" }> }) {
   const headline = toolHeadline(row.name, row.input);
   const status = toolStatus(row);
   const detail = headline.background ? t("sdk.toolBackground") : headline.detail;
-  // PROVISÓRIA: o modelo ainda escreve o input — a linha diz o quê e quanto ("Escrevendo x.ts… 12 KB").
+  // PROVISIONAL: the model is still writing the input — the row says what and how much ("Escrevendo x.ts… 12 KB").
   const pending = row.pending === true;
   return (
     <button
@@ -2070,8 +2067,8 @@ function SdkToolRow({ row }: { row: Extract<SdkRow, { kind: "tool" }> }) {
       className="group -ml-1 block w-[calc(100%+0.25rem)] min-w-0 rounded border border-transparent py-0.5 pl-1.5 pr-1 text-left text-xs enabled:hover:border-border/70 enabled:hover:bg-muted/50"
     >
       <div className="flex items-baseline gap-1.5 text-muted-foreground">
-        {/* Desce o ícone até a linha do texto com `top`, não com `translate`: o `animate-spin` é
-            dono do `transform`, e um translate ali fazia o spinner só deslizar 2px e voltar, sem girar. */}
+        {/* Moves the icon down to the text line with `top`, not with `translate`: `animate-spin`
+            owns `transform`, and a translate there made the spinner just slide 2px and back, without spinning. */}
         <StatusIcon status={status} className="relative top-0.5" />
         <span data-testid="sdk-tool-title" className="min-w-0 flex-1 truncate font-medium text-foreground/90">
           {pending ? toolLiveLabel(row) : headline.title}
@@ -2094,26 +2091,26 @@ function SdkToolRow({ row }: { row: Extract<SdkRow, { kind: "tool" }> }) {
 }
 
 /**
- * O RACIOCÍNIO do modelo, enquanto ele trabalha.
+ * THE model's REASONING, while it works.
  *
- * O que isto resolve: um turno longo mostrava só um spinner e a palavra "Trabalhando…" — podia ser
- * meio segundo ou dez minutos, e quem esperava não tinha como saber se o agente entendeu o pedido.
- * Agora o pensamento aparece ao vivo, em segundo plano (menor, em itálico, sem o peso da resposta).
+ * What this solves: a long turn showed only a spinner and the word "Trabalhando…" — it could be
+ * half a second or ten minutes, and whoever was waiting had no way of knowing whether the agent understood the request.
+ * Now the thinking shows up live, in the background (smaller, in italics, without the weight of the answer).
  *
- * ABERTO POR PADRÃO, e continua aberto quando o turno acaba (pedido do César, 26/09/2026): ele lê
- * o raciocínio pra saber o que a IA está fazendo, e recolher sozinho no fim escondia justamente a
- * explicação do que acabou de acontecer. Quem não quer ler fecha — e o fechado daquela linha fica
- * fechado.
+ * OPEN BY DEFAULT, and stays open when the turn ends (César's request, 26/09/2026): he reads
+ * the reasoning to know what the AI is doing, and collapsing by itself at the end hid precisely the
+ * explanation of what had just happened. Whoever does not want to read closes it — and that row's closed state stays
+ * closed.
  */
 function SdkThinkingRow({ text, streaming }: { text: string; streaming: boolean }): React.ReactElement {
   const t = useT();
-  // Só a escolha EXPLÍCITA da pessoa manda; sem ela, fica aberto — antes ele seguia o turno e se
-  // recolhia sozinho no fim, que é exatamente o que estava escondendo o raciocínio.
+  // Only the person's EXPLICIT choice rules; without it, it stays open — before, it followed the turn and
+  // collapsed by itself at the end, which is exactly what was hiding the reasoning.
   const [choice, setChoice] = React.useState<boolean | null>(null);
   const open = choice ?? true;
-  // EM PORTUGUÊS, traduzido no navegador (zero token — ver lib/reasoningTranslation). Só o bloco
-  // TERMINADO: traduzir pedaço a pedaço faria o texto pular enquanto chega. `useT()` reassina
-  // este componente quando o idioma troca, então `getLanguage()` aqui acompanha.
+  // IN PORTUGUESE, translated in the browser (zero tokens — see lib/reasoningTranslation). Only the
+  // FINISHED block: translating piece by piece would make the text jump while it arrives. `useT()` re-subscribes
+  // this component when the language changes, so `getLanguage()` here keeps up.
   const translated = useReasoningTranslation(text, !streaming && getLanguage() === "pt-BR");
   const [showOriginal, setShowOriginal] = React.useState(false);
   const shown = translated !== null && !showOriginal ? translated : text;
@@ -2152,7 +2149,7 @@ function SdkThinkingRow({ text, streaming }: { text: string; streaming: boolean 
   );
 }
 
-/** O TodoWrite da conversa: aberto só quando é o mais recente (ver `TodoCard`). */
+/** The conversation's TodoWrite: open only when it is the most recent (see `TodoCard`). */
 function SdkTodoRow({ row }: { row: Extract<SdkRow, { kind: "tool" }> }) {
   const { latestTodoId } = React.useContext(SdkThreadContext);
   return <TodoCard row={row} latest={latestTodoId === row.id} />;
@@ -2245,7 +2242,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
   const t = useT();
   // Whose screen this is — their own messages render unlabelled, everyone else's carry the sender.
   const viewer = useAuth().user?.username;
-  // Antes dos returns (regra dos hooks). Uma vez por linha: o memo da linha e o `row` estável seguram.
+  // Before the returns (rules of hooks). Once per row: the row's memo and the stable `row` hold it.
   const diff = React.useMemo(() => (row.kind === "tool" ? toolDiff(row.name, row.input) : null), [row]);
 
   if (row.kind === "question") {
@@ -2262,7 +2259,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
   }
 
   if (row.kind === "tool") {
-    // Sem input ainda, o card do subagente ou da lista sairia vazio: a provisória é a linha viva.
+    // With no input yet, the subagent's or the list's card would come out empty: the provisional one is the live row.
     if (row.pending) return <SdkToolRow row={row} />;
     if (isAgentTool(row.name)) return <SdkAgentCard row={row} />;
     if (row.name === "TodoWrite") return <SdkTodoRow row={row} />;
@@ -2363,8 +2360,8 @@ const SdkChatRow = React.memo(function SdkChatRow({
   }
 
   if (row.kind === "btw") {
-    // A pergunta do /btw vive num card azul com cabeçalho próprio: no meio de um turno longo ela se
-    // perdia entre o raciocínio e as ferramentas, e a pessoa ficava caçando o que perguntou.
+    // The /btw question lives in a blue card with its own header: in the middle of a long turn it got
+    // lost among the reasoning and the tools, and the person was left hunting for what they asked.
     return (
       <div
         data-testid="sdk-btw"
@@ -2411,7 +2408,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
       </div>
     ) : null;
     // An ANSWER to a decision, not a loose message: the bubble carries the question it answered, so
-    // "respondi ou só mandei um recado?" is settled by looking at what was sent. The wrapper the
+    // "did I answer or just send a note?" is settled by looking at what was sent. The wrapper the
     // model received is unwrapped here — the person reads their own words, with the question above.
     const reply = parseDecisionReply(row.text);
     const replyHeader = reply ? (
@@ -2423,7 +2420,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
     const bodyText = reply ? reply.answer : row.text;
     /**
      * A message the SERVER never took (it refused it, or the receipt never came). The bubble says
-     * so and hands back the two things the person actually needs: mandar de novo, ou desistir. The
+     * so and hands back the two things the person actually needs: send again, or give up. The
      * words are on disk until one of those happens — the F5 that used to erase them now brings
      * this very bubble back (see lib/sdkOutbox.ts).
      */
@@ -2434,14 +2431,14 @@ const SdkChatRow = React.memo(function SdkChatRow({
       >
         <AlertTriangle className="h-3 w-3 shrink-0" />
         <span className="min-w-0 text-right italic">{t("sdk.undelivered")}</span>
-        {/* Ninguém precisa ficar olhando: a tela tenta de novo sozinha. O botão segue lá para quem
-            não quer esperar o intervalo. */}
+        {/* Nobody needs to keep watching: the screen tries again by itself. The button stays there for whoever
+            does not want to wait for the interval. */}
         {retrying ? (
           <span data-testid="sdk-user-retrying" className="min-w-0 text-right italic">
             {t("sdk.undeliveredRetrying")}
           </span>
         ) : null}
-        {/* Só quem escreveu reenvia: daqui a mensagem sairia no nome de quem está na aba. */}
+        {/* Only the author resends: from here the message would go out under the name of whoever is on the tab. */}
         {role === "self" ? (
           <button
             type="button"
@@ -2526,7 +2523,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
   const actions = row.kind === "assistant" && answerOf ? <AnswerActions id={row.id} cardId={answerOf} text={row.text} trailing={trailing} /> : null;
   if (prose) {
     // What this question RECEIVED (`answered`), anchored to it — the third question the screen owes
-    // the person ("pronto, respondi"). Survives a reload: the answer is read back out of the sent message.
+    // the person ("pronto, respondi" — "done, I answered"). Survives a reload: the answer is read back out of the sent message.
     return (
       <div data-testid="sdk-assistant" className="max-w-full select-text text-sm leading-relaxed">
         {prose.body !== "" ? <Markdown text={prose.body} /> : null}
@@ -2580,8 +2577,8 @@ const SdkChatRow = React.memo(function SdkChatRow({
 });
 
 /**
- * Test hook: esquece a memória da aba dos rascunhos de cartão — o que um F5 apaga. O disco
- * (localStorage, lib/questionDraftStore.ts) o setup dos testes já limpa a cada teste.
+ * Test hook: forgets the tab's in-memory card drafts — what an F5 erases. The disk
+ * (localStorage, lib/questionDraftStore.ts) is already cleared by the test setup on every test.
  */
 export function resetQuestionDraftsForTesting(): void {
   forgetQuestionDraftMemoryForTesting();
@@ -2604,32 +2601,32 @@ function SdkQuestionCard({
   own,
   onDraft,
 }: {
-  /** O card da conversa: o rascunho guardado é por card + pergunta (lib/questionDraftStore.ts). */
+  /** The conversation's card: the stored draft is per card + question (lib/questionDraftStore.ts). */
   cardId: string;
   row: Extract<SdkRow, { kind: "question" }>;
   onAnswer?: (id: string, answers: SdkQuestionAnswer[]) => void;
-  /** Quem MAIS está respondendo este cartão agora, e o quê (lib/peerQuestionDraft.ts). */
+  /** Who ELSE is answering this card right now, and what (lib/peerQuestionDraft.ts). */
   peers?: Array<{ name: string; draft: QuestionDraft }>;
-  /** O rascunho DESTA pessoa guardado no servidor — feito em outro aparelho, ou antes de o navegador perdê-lo. */
+  /** THIS person's draft stored on the server — made on another device, or before the browser lost it. */
   own?: QuestionDraft;
-  /** Conta às outras abas o que esta pessoa já marcou e escreveu. */
+  /** Tells the other tabs what this person has already marked and written. */
   onDraft?: (id: string, draft: QuestionDraft) => void;
 }) {
   const t = useT();
-  // O que já estava marcado e escrito volta depois de um reconnect, de um F5 e do deploy que recarrega
-  // a aba — e continua guardado depois do clique em "Responder" (ver lib/questionDraftStore.ts).
+  // What was already marked and written comes back after a reconnect, an F5 and the deploy that reloads
+  // the tab — and stays stored after the click on "Responder" (see lib/questionDraftStore.ts).
   const [initial] = React.useState(() => readQuestionDraft(cardId, row.id));
   const [picked, setPicked] = React.useState<string[][]>(() => initial?.picked ?? row.questions.map(() => []));
   const [other, setOther] = React.useState<string[]>(() => initial?.other ?? row.questions.map(() => ""));
-  // QUANDO esta pessoa mudou o rascunho pela última vez (o do disco traz o seu). Contra a versão do
-  // servidor, a mais nova vence: o que foi feito em outro aparelho não é atropelado por um velho daqui.
+  // WHEN this person last changed the draft (the one from disk brings its own). Against the
+  // server's version, the newest wins: what was done on another device is not run over by an old one from here.
   const changedAt = React.useRef(initial?.at ?? 0);
   const touch = (): void => { changedAt.current = Date.now(); };
   React.useEffect(() => {
     writeQuestionDraft(cardId, row.id, { picked, other, at: changedAt.current || undefined });
   }, [cardId, row.id, picked, other]);
-  // O MEU rascunho guardado no servidor (o deploy, a aba fechada, o outro aparelho): volta para o
-  // cartão quando é mais novo que o daqui — ou quando aqui não há nada.
+  // MY draft stored on the server (the deploy, the closed tab, the other device): comes back to the
+  // card when it is newer than the one here — or when there is nothing here.
   const adopted = React.useRef<QuestionDraft | null>(null);
   React.useEffect(() => {
     if (!own || isEmptyDraft(own)) return;
@@ -2639,12 +2636,12 @@ function SdkQuestionCard({
     adopted.current = own;
     setPicked(row.questions.map((_, i) => [...(own.picked[i] ?? [])]));
     setOther(row.questions.map((_, i) => own.other[i] ?? ""));
-    // Só a chegada de uma versão nova decide; o estado de agora é lido, não observado.
+    // Only the arrival of a new version decides; the current state is read, not observed.
   }, [own]);
-  // O MESMO rascunho, para quem mais está no card — duas pessoas respondendo a mesma pergunta cada
-  // uma de um jeito era o problema: só a primeira resposta vale. Ao montar, só sai se já houver
-  // algo (o cartão que volta depois de um reconnect reanuncia o que tinha); vazio de nascença, não.
-  // O que acabou de vir do servidor não volta para ele.
+  // The SAME draft, for whoever else is on the card — two people answering the same question each
+  // in their own way was the problem: only the first answer counts. On mount, it only goes out if there is already
+  // something (the card coming back after a reconnect re-announces what it had); empty from birth, no.
+  // What has just come from the server does not go back to it.
   const pending = row.outcome === "pending";
   const announced = React.useRef(false);
   React.useEffect(() => {
@@ -2669,8 +2666,8 @@ function SdkQuestionCard({
       return { selected: [...(pickedNow[i] ?? []), ...(text !== "" ? [text] : [])] };
     });
 
-  // Respondida por ALGUÉM: metade minha e metade de outra pessoa já fecha o cartão — o back junta os
-  // rascunhos dos outros no que vai ao modelo (mergePeerAnswers), com o nome de cada um.
+  // Answered by SOMEONE: half mine and half another person's already closes the card — the back merges the
+  // others' drafts into what goes to the model (mergePeerAnswers), with each one's name.
   const hasAnswer = (draft: Pick<QuestionDraft, "picked" | "other">, i: number): boolean =>
     (draft.picked[i]?.length ?? 0) > 0 || (draft.other[i] ?? "").trim() !== "";
   const complete = row.questions.every((_, i) => hasAnswer({ picked, other }, i) || peers.some((p) => hasAnswer(p.draft, i)));
@@ -2722,7 +2719,7 @@ function SdkQuestionCard({
     );
   }
 
-  /** Copia para o MEU cartão o que a outra pessoa marcou e escreveu nesta pergunta ("Usar esta"). */
+  /** Copies to MY card what the other person marked and wrote on this question ("Usar esta"). */
   const adopt = (qi: number, draft: QuestionDraft): void => {
     touch();
     if (!single) setPicked((prev) => prev.map((sel, i) => (i === qi ? [...(draft.picked[qi] ?? [])] : sel)));
@@ -2730,8 +2727,8 @@ function SdkQuestionCard({
   };
   const mine = !isEmptyDraft({ picked, other });
   const peerNames = peers.map((p) => peerDisplayName(p.name)).join(", ");
-  // "Respondendo" é quem está com o card aberto agora. Quem fechou a aba (ou estava aqui antes de um
-  // deploy) segue com as marcações visíveis e indo para a IA — só não aparece como presente.
+  // "Respondendo" is whoever has the card open right now. Whoever closed the tab (or was here before a
+  // deploy) keeps their marks visible and going to the AI — just does not show as present.
   const present = peers.filter((p) => !p.draft.away);
   const presentNames = present.map((p) => peerDisplayName(p.name)).join(", ");
 
@@ -2745,8 +2742,8 @@ function SdkQuestionCard({
         <CircleHelp className="h-3.5 w-3.5 shrink-0" />
         {t("sdk.questionTitle")}
         {present.length > 0 ? (
-          // QUEM MAIS está respondendo, no canto do cabeçalho: avatar na cor da pessoa e os mesmos
-          // pontinhos do "está digitando" — presença, não alarme.
+          // WHO ELSE is answering, in the corner of the header: an avatar in the person's color and the same
+          // dots as "está digitando" — presence, not alarm.
           <span data-testid="sdk-question-peer-presence" className="ml-auto flex min-w-0 items-center gap-1.5 font-normal">
             <span className="flex -space-x-1">
               {present.map((p) => <PeerAvatar key={p.name} name={p.name} />)}
@@ -2771,7 +2768,7 @@ function SdkQuestionCard({
           <div className="flex flex-wrap gap-1.5">
             {q.options.map((opt) => {
               const selected = (picked[qi] ?? []).includes(opt.label);
-              // Marcado por OUTRA pessoa: a bolinha dela no canto da opção, na cor dela.
+              // Marked by ANOTHER person: their dot in the corner of the option, in their color.
               const pickedBy = peers.filter((p) => (p.draft.picked[qi] ?? []).includes(opt.label));
               return (
                 <Button
@@ -2820,8 +2817,8 @@ function SdkQuestionCard({
             const text = (draft.other[qi] ?? "").trim();
             if (text === "") return null;
             const tone = peerTone(name);
-            // O CAMPO DA OUTRA PESSOA, logo abaixo do meu: tracejado na cor dela, com o que ela
-            // está escrevendo ao vivo — e um clique para adotar a resposta dela no meu cartão.
+            // THE OTHER PERSON'S FIELD, right below mine: dashed in their color, with what they
+            // are writing live — and one click to adopt their answer on my card.
             return (
               <div
                 key={name}
@@ -2845,7 +2842,7 @@ function SdkQuestionCard({
         </div>
       ))}
       {peers.length > 0 && mine ? (
-        // Só no CONFLITO: as duas pessoas com algo escrito. Antes a faixa ficava de pé sempre.
+        // Only on CONFLICT: both people with something written. Before, the strip was always up.
         <div data-testid="sdk-question-peer-clash" role="status" className="flex items-center gap-1.5 text-amber-500">
           <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
           {t("sdk.questionPeerClash", { names: peerNames })}
@@ -2874,8 +2871,8 @@ function SdkQuestionCard({
 }
 
 /**
- * A COR DE CADA PESSOA no cartão de pergunta — como cursor em documento compartilhado: fixa por nome,
- * nunca o âmbar de alerta nem o azul do próprio cartão. Classes inteiras (o Tailwind só gera o que lê).
+ * EACH PERSON'S COLOR on the question card — like a cursor in a shared document: fixed by name,
+ * never the alert amber nor the card's own blue. Whole classes (Tailwind only generates what it reads).
  */
 const PEER_TONES = [
   { text: "text-violet-400", border: "border-violet-400/60", bg: "bg-violet-400/10", dot: "bg-violet-400", solid: "bg-violet-400 text-violet-950" },
@@ -2890,7 +2887,7 @@ function peerTone(name: string): (typeof PEER_TONES)[number] {
   return PEER_TONES[hash % PEER_TONES.length]!;
 }
 
-/** A bolinha com a inicial da pessoa, na cor dela. */
+/** The dot with the person's initial, in their color. */
 function PeerAvatar({ name, small = false }: { name: string; small?: boolean }) {
   return (
     <span
@@ -2904,45 +2901,4 @@ function PeerAvatar({ name, small = false }: { name: string; small?: boolean }) 
       {peerDisplayName(name).charAt(0)}
     </span>
   );
-}
-
-/** Por que a pergunta caiu sem resposta, com o nome de quem parou o turno. */
-function cancelledText(cancel: QuestionCancel | undefined, t: ReturnType<typeof useT>): string {
-  const how = cancel?.how ?? "stop";
-  if (!cancel?.by) return t(`sdk.questionCancelled.${how}.anon`);
-  return t(`sdk.questionCancelled.${how}`, { name: peerDisplayName(cancel.by) });
-}
-
-/**
- * A note row's words. Some notes travel as CODES (the back writes them, the reader may be reading
- * in either language); anything else is already a sentence and passes through. PURE.
- */
-function noteText(text: string, t: ReturnType<typeof useT>): string {
-  if (text === TERMINAL_ACTIVITY_NOTE) return t("sdk.terminalActivity");
-  if (text === TURN_INTERRUPTED_EDIT_NOTE) return t("sdk.noteInterruptedEdit");
-  if (text === TURN_INTERRUPTED_NOTE) return t("sdk.noteInterrupted");
-  if (text === CONVERSATION_CLEARED_NOTE) return t("sdk.noteConversationCleared");
-  return text;
-}
-
-/**
- * WHAT WENT WRONG, IN WORDS. This chat once showed a red bubble reading literally "error" — the
- * turn's failure had no text of its own and the raw value was drawn as-is. Nothing reaches the
- * reader as jargon or as an empty word any more: the known refusals and the reducer's sentinels
- * (see sdkChat.ts) become a sentence that says what happened AND what to do. Anything already
- * written as a sentence by the driver passes through untouched. PURE.
- */
-function errorText(text: string, t: ReturnType<typeof useT>): string {
-  if (/sdkDriver setting/i.test(text)) return t("sdk.flagOff");
-  if (text === SDK_ERROR_NO_DETAIL) return t("sdk.errorNoDetail");
-  if (text.startsWith(SDK_ERROR_TURN_FAILED)) {
-    const subtype = text.slice(SDK_ERROR_TURN_FAILED.length + 1);
-    return subtype === "" ? t("sdk.turnFailed") : t("sdk.turnFailedWhy", { subtype });
-  }
-  // The driver's process died (idle stop, a crash, a deploy). The front reconnects on its own —
-  // which is exactly what the reader cannot tell from "driver exited (code 1)".
-  if (/^driver (exited|process error)/i.test(text)) return t("sdk.driverGone", { detail: text });
-  if (/^could not install the driver/i.test(text)) return t("sdk.driverInstallFailed", { detail: text });
-  if (/^this card no longer exists$/i.test(text)) return t("sdk.cardGone");
-  return text;
 }

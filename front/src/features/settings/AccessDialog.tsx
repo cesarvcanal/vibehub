@@ -12,9 +12,9 @@ import { get, patch, post, del } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
 import { ME_KEY, rotateSession, useAuth } from "@/providers/auth";
 import { sharesKey } from "@/features/board/components/ShareDialog";
-import { ACCOUNTS_KEY, DEFAULT_ACCOUNT_SLUG, GITHUB_KEY, PROJECTS_KEY, accountLabel, boardApi } from "@/features/board/api";
-import type { Role, Share, ShareLevel, SharesResponse, User, UserGit, UsersResponse } from "@/api/types";
-import { SELECT_CLASS } from "@/features/board/components/NewCardDialog";
+import { ACCOUNTS_KEY, DEFAULT_ACCOUNT_SLUG, GITHUB_KEY, PROJECTS_KEY, USERS_KEY, accountLabel, boardApi } from "@/features/board/api";
+import type { Role, Share, ShareLevel, SharesResponse, User, UserGit } from "@/api/types";
+import { SELECT_CLASS } from "@/components/ui/select";
 import { t as translate, useT } from "@/i18n";
 
 /**
@@ -28,8 +28,6 @@ import { t as translate, useT } from "@/i18n";
  * role select are the owner's, and the server enforces the same split on every route — this only
  * decides what is worth drawing.
  */
-
-export const USERS_KEY = ["users"] as const;
 
 export interface AccessDialogProps {
   open: boolean;
@@ -51,7 +49,7 @@ export function AccessDialog({ open, onOpenChange }: AccessDialogProps) {
 
   const users = useQuery({
     queryKey: USERS_KEY,
-    queryFn: () => get<UsersResponse>("/users").then((r) => r.users),
+    queryFn: boardApi.listUsers,
     enabled: open && isOwner,
   });
 

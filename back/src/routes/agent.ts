@@ -17,6 +17,7 @@ import {
 import { importSessions, type ImportInput } from "../services/import/import.js";
 import { transcribeCardAudio, transcribeStatus, setTranscribeKeys, AUDIO_MAX_BYTES } from "../services/transcribe/transcribe.js";
 import { logger } from "../utils/logger.js";
+import { NOT_FOUND, sendError, type ErrorStatusRule } from "./httpError.js";
 
 /**
  * AGENT CONFIGURATION — the things that shape how Claude runs inside the runner rather than what the
@@ -24,14 +25,9 @@ import { logger } from "../utils/logger.js";
  * already exist elsewhere.
  */
 
-function fail(err: unknown): { code: number; body: { error: string } } {
-  const message = (err as Error).message ?? "invalid request";
-  if (/not found/i.test(message)) return { code: 404, body: { error: message } };
-  // "the runner is not provisioned / not running / unreachable" is an environment problem, not a
-  // malformed request — the UI shows those differently.
-  if (/runner/i.test(message)) return { code: 502, body: { error: message } };
-  return { code: 400, body: { error: message } };
-}
+// "the runner is not provisioned / not running / unreachable" is an environment problem, not a
+// malformed request — the UI shows those differently.
+const AGENT_ERROR_RULES: ErrorStatusRule[] = [NOT_FOUND, [/runner/i, 502]];
 
 /** What every auto-applying save reports back, so the UI can say what actually happened. */
 interface AutoApplyResult {
@@ -91,8 +87,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       try {
         return await reply.send(await setAccountToken(req.params.slug, req.body?.token ?? ""));
       } catch (err) {
-        const { code, body } = fail(err);
-        return await reply.code(code).send(body);
+        return await sendError(reply, err, { rules: AGENT_ERROR_RULES });
       }
     },
   );
@@ -103,8 +98,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       try {
         return await reply.send(await removeAccountToken(req.params.slug));
       } catch (err) {
-        const { code, body } = fail(err);
-        return await reply.code(code).send(body);
+        return await sendError(reply, err, { rules: AGENT_ERROR_RULES });
       }
     },
   );
@@ -123,8 +117,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       // which applies again.
       return await reply.send({ mcp, ...(await autoApply("mcp", applyMcpsEverywhere)) });
     } catch (err) {
-      const { code, body } = fail(err);
-      return await reply.code(code).send(body);
+      return await sendError(reply, err, { rules: AGENT_ERROR_RULES });
     }
   });
 
@@ -140,8 +133,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       // — "apply now" included — pays it.
       return await reply.send({ mcp, ...(await autoApply("mcp", applyMcpsEverywhere)) });
     } catch (err) {
-      const { code, body } = fail(err);
-      return await reply.code(code).send(body);
+      return await sendError(reply, err, { rules: AGENT_ERROR_RULES });
     }
   });
 
@@ -154,8 +146,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
         // into the runner + staggered restart. The value itself is never logged.
         return await reply.send({ ok: true, ...(await autoApply("mcp", applyMcpsEverywhere)) });
       } catch (err) {
-        const { code, body } = fail(err);
-        return await reply.code(code).send(body);
+        return await sendError(reply, err, { rules: AGENT_ERROR_RULES });
       }
     },
   );
@@ -174,8 +165,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     try {
       return await reply.send({ ok: true, ...(await applyMcpsEverywhere()) });
     } catch (err) {
-      const { code, body } = fail(err);
-      return await reply.code(code).send(body);
+      return await sendError(reply, err, { rules: AGENT_ERROR_RULES });
     }
   });
 
@@ -195,8 +185,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       const saved = await setBrainText(req.body?.text ?? "");
       return await reply.send({ ...saved, ...(await autoApply("brain", applyBrainEverywhere)) });
     } catch (err) {
-      const { code, body } = fail(err);
-      return await reply.code(code).send(body);
+      return await sendError(reply, err, { rules: AGENT_ERROR_RULES });
     }
   });
 
@@ -211,8 +200,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     try {
       return await reply.send({ ok: true, ...(await applyBrainEverywhere()) });
     } catch (err) {
-      const { code, body } = fail(err);
-      return await reply.code(code).send(body);
+      return await sendError(reply, err, { rules: AGENT_ERROR_RULES });
     }
   });
 
@@ -228,8 +216,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     try {
       return await reply.send(await pluginCatalog());
     } catch (err) {
-      const { code, body } = fail(err);
-      return await reply.code(code).send(body);
+      return await sendError(reply, err, { rules: AGENT_ERROR_RULES });
     }
   });
 
@@ -244,8 +231,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       const enabled = await enablePlugin(req.params.name);
       return await reply.send({ enabled, ...(await autoApply("plugin", applyPluginsEverywhere)) });
     } catch (err) {
-      const { code, body } = fail(err);
-      return await reply.code(code).send(body);
+      return await sendError(reply, err, { rules: AGENT_ERROR_RULES });
     }
   });
 
@@ -255,8 +241,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       const enabled = await disablePlugin(req.params.name);
       return await reply.send({ enabled, ...(await autoApply("plugin", applyPluginsEverywhere)) });
     } catch (err) {
-      const { code, body } = fail(err);
-      return await reply.code(code).send(body);
+      return await sendError(reply, err, { rules: AGENT_ERROR_RULES });
     }
   });
 
@@ -265,8 +250,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     try {
       return await reply.send({ ok: true, ...(await applyPluginsEverywhere()) });
     } catch (err) {
-      const { code, body } = fail(err);
-      return await reply.code(code).send(body);
+      return await sendError(reply, err, { rules: AGENT_ERROR_RULES });
     }
   });
 
@@ -296,8 +280,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
         });
         return await reply.send({ ...saved, ...effect });
       } catch (err) {
-        const { code, body } = fail(err);
-        return await reply.code(code).send(body);
+        return await sendError(reply, err, { rules: AGENT_ERROR_RULES });
       }
     },
   );
@@ -308,8 +291,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       try {
         return await reply.send({ ok: true, ...(await applyProjectBrainEverywhere(req.params.id)) });
       } catch (err) {
-        const { code, body } = fail(err);
-        return await reply.code(code).send(body);
+        return await sendError(reply, err, { rules: AGENT_ERROR_RULES });
       }
     },
   );
@@ -331,8 +313,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       try {
         return await reply.send(await setTranscribeKeys(req.body ?? {}));
       } catch (err) {
-        const { code, body } = fail(err);
-        return await reply.code(code).send(body);
+        return await sendError(reply, err, { rules: AGENT_ERROR_RULES });
       }
     },
   );
@@ -349,9 +330,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
         const out = await transcribeCardAudio(req.params.id, req.body?.base64 ?? "", req.body?.mimeType ?? "audio/webm");
         return await reply.send(out);
       } catch (err) {
-        const message = (err as Error).message;
-        const code = /not found/i.test(message) ? 404 : /not configured/i.test(message) ? 503 : 400;
-        return await reply.code(code).send({ error: message });
+        return await sendError(reply, err, { rules: [NOT_FOUND, [/not configured/i, 503]] });
       }
     },
   );
@@ -365,14 +344,13 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
    */
   app.post<{ Body: ImportInput }>("/api/import", { preHandler: requireOwner }, async (req, reply) => {
     try {
-      const result = await importSessions(
+      const imported = await importSessions(
         req.body ?? { items: [] },
         (project, card) => cardWorkPaths(project, card).cwd,
       );
-      return await reply.send(result);
+      return await reply.send(imported);
     } catch (err) {
-      const { code, body } = fail(err);
-      return await reply.code(code).send(body);
+      return await sendError(reply, err, { rules: AGENT_ERROR_RULES });
     }
   });
 

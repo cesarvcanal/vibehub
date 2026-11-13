@@ -3,7 +3,7 @@ import { JsonStore } from "../../store/jsonStore.js";
 import { dataPath } from "../../config/env.js";
 import { visibleCards } from "../../auth/access.js";
 import type { PublicUser } from "../../auth/users.js";
-import { getCard, listAllCards, onCardConcluded, type Card, type CardStatus, type DeclaredState } from "../board/registry.js";
+import { getCard, listAllCards, onCardConcluded, type CardStatus, type DeclaredState } from "../board/registry.js";
 import type { DriverEvent, UserQuestionItem } from "../sdk/protocol.js";
 import { logger } from "../../utils/logger.js";
 

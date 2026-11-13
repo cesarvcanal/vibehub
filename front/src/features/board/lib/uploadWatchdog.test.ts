@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UploadStalledError, uploadWithWatchdog, type UploadAttempt } from "./uploadWatchdog";
 
 /**
- * Produção, 2026-10-31: uma imagem colada no chat do celular ficou girando ("0 of 2 images
- * uploaded…", "Uploading image…") até a pessoa fechar e reabrir o card. Os logs do servidor
- * mostram que a requisição da página original NUNCA chegou — só o reenvio da página reaberta. Uma
- * requisição travada (conexão morta depois de o iOS pôr a aba em segundo plano) não falha nunca, e
- * sem prazo nenhum o spinner esperava por ela para sempre.
+ * Production, 2026-10-31: an image pasted in the chat on the phone kept spinning ("0 of 2 images
+ * uploaded…", "Uploading image…") until the person closed and reopened the card. The server logs
+ * show that the original page's request NEVER arrived — only the re-send from the reopened page. A
+ * stuck request (connection dead after iOS put the tab in the background) never fails, and
+ * with no deadline at all the spinner waited for it forever.
  */
 
 const STALL = 30_000;

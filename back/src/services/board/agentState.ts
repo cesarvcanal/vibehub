@@ -1,6 +1,7 @@
 import { config } from "../../config/env.js";
 import { hostExecutor, shQuote } from "../../runtime/host.js";
 import { hasLiveSession, type Card } from "./registry.js";
+import { logger } from "../../utils/logger.js";
 
 /**
  * Whether Claude is alive in a card's terminal — shared by the OUTBOX (deliver now or queue) and the
@@ -147,29 +148,9 @@ export function buildMenuProbeScript(containerName: string, tmuxSession: string)
 }
 
 /**
- * True when the card's terminal is sitting on an interactive CHOICE (a menu), not its message
- * prompt. A card with no live session is never awaiting a choice. Never throws: if the probe fails
- * we do NOT block the send (an unreachable host is not a menu).
- */
-export async function cardAwaitingChoice(
-  card: Pick<Card, "openedAt" | "pausedAt" | "tmuxSession">,
-): Promise<boolean> {
-  if (!hasLiveSession(card)) return false;
-  try {
-    const { stdout } = await hostExecutor().runScript(
-      buildMenuProbeScript(config.runner.container, card.tmuxSession),
-      { timeoutMs: 15_000 },
-    );
-    return looksLikeInteractiveMenu(stdout);
-  } catch {
-    return false;
-  }
-}
-
-/**
  * The pane's readiness right now (one capture). A card with no live session reads as `booting` —
- * there is no frame to read — and so does a failed capture: unlike {@link cardAwaitingChoice}, the
- * caller here WAITS on the answer, and "could not see the pane" is not "the prompt is up".
+ * there is no frame to read — and so does a failed capture: the caller WAITS on the answer, and
+ * "could not see the pane" is not "the prompt is up".
  */
 export async function cardPaneReadiness(
   card: Pick<Card, "openedAt" | "pausedAt" | "tmuxSession">,
@@ -192,7 +173,7 @@ export async function cardPaneReadiness(
  * What a card's NATIVE CHAT driver is doing, as the backend already knows it in memory: `turn` = a
  * turn is in flight, `idle` = the driver is up and at the prompt, `none` = no driver right now.
  *
- * Why this exists (produção, 2026-10-02 — "Claude parou" com o Claude respondendo): the probe above
+ * Why this exists (production, 2026-10-02 — "Claude parou" with Claude answering): the probe above
  * walks the TMUX pane tree, and the native chat's claude is NOT in it — it is a child of the BACK
  * (docker exec, see services/sdk/driver.ts). A card whose conversation lives in the chat therefore
  * reads as "only shells in the tree" = Claude exited, and the chat hung a "Claude parou — Reiniciar"
@@ -324,9 +305,14 @@ export function onCardStatusSink(sink: StatusSink): () => void {
   return () => statusSinks.delete(sink);
 }
 
-/** Fire-and-forget: a failed write is logged by the sink's own caller path, never thrown here. */
+/**
+ * Fire-and-forget: the driver has no one to hand a failure to, so a sink that rejects is logged
+ * here and never thrown — best-effort, like a hook.
+ */
 export function reportCardStatusFromDriver(cardId: string, status: "working" | "waiting"): void {
   for (const sink of statusSinks) {
-    void sink(cardId, status).catch(() => { /* best-effort, like a hook */ });
+    void sink(cardId, status).catch((err: unknown) => {
+      logger.warn({ cardId, status, detail: (err as Error).message }, "could not report a card status from the driver");
+    });
   }
 }

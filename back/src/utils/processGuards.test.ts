@@ -3,9 +3,9 @@ import { logger } from "./logger.js";
 import { logUnownedRejections } from "./processGuards.js";
 
 /**
- * UMA PROMISE REJEITADA SEM DONO ENCERRA O NODE 24 — e o back leva junto os terminais, os chats e os
- * turnos em voo de todo mundo. O processo passa a registrar a rejeição como erro e seguir: quem
- * esqueceu o `.catch` aparece no log com o motivo, em vez de derrubar a instalação.
+ * AN UNOWNED REJECTED PROMISE KILLS NODE 24 — and the back takes down with it everybody's terminals,
+ * chats and in-flight turns. The process now logs the rejection as an error and carries on: whoever
+ * forgot the `.catch` shows up in the log with the reason, instead of bringing down the install.
  */
 describe("logUnownedRejections", () => {
   let uninstall: (() => void) | null = null;

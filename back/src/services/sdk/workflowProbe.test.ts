@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-/** O módulo é puro (nada executa): importado como está, sem dublê do executor. */
+/** The module is pure (nothing executes): imported as is, without an executor stand-in. */
 const load = async () => await import("./workflowProbe.js");
 
 /** One probe payload, as the runner prints it. */
@@ -124,11 +124,11 @@ describe("buildWorkflowProbeScript", () => {
   });
 });
 
-/* ------------------------------------------------------------------ a sondagem DE VERDADE */
+/* ------------------------------------------------------------------ the REAL probe */
 
-// O JS da sondagem roda aqui como roda no runner (`node -e <js> <args…>`), contra um diretório com
-// o formato que o harness do Claude Code 2.1.x escreve de fato: diário com label/phase, meta.json
-// ao lado, e agent-<id>.jsonl cujo PRIMEIRO registro é o cabeçalho com o pedido do usuário.
+// The probe's JS runs here as it runs in the runner (`node -e <js> <args…>`), against a directory with
+// the format Claude Code 2.1.x's harness actually writes: a journal with label/phase, meta.json
+// next to it, and agent-<id>.jsonl whose FIRST record is the header with the user's request.
 
 const T0 = Date.parse("2026-10-14T12:00:00.000Z");
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -164,7 +164,7 @@ function fleetFixture(): Fixture {
     { type: "started", key: "v2:3", agentId: "a03f" },
     { type: "result", key: "v2:1", agentId: "a01f", result: { ok: true } },
   ]));
-  // a01: label no diário; terminou com um texto.
+  // a01: label in the journal; finished with a text.
   writeFileSync(join(run, "agent-a01f.jsonl"), jsonl([
     HEADER(T0), TASK(T0 + 1_000, "Varra o front procurando render caro"),
     ASSISTANT(T0 + 2_000, [THINKING]),
@@ -172,7 +172,7 @@ function fleetFixture(): Fixture {
     TOOL_RESULT(T0 + 5_000, "t1", "22 passed"),
     ASSISTANT(T0 + 10_000, [{ type: "text", text: "Achei   2 problemas\nno render" }]),
   ]));
-  // a02: sem label no diário — o meta.json ao lado sabe; última coisa: um Bash em andamento.
+  // a02: no label in the journal — the meta.json next to it knows; last thing: a Bash in progress.
   writeFileSync(join(run, "agent-a02f.meta.json"), JSON.stringify({ agentType: "workflow-subagent", description: "varre:back-api", workflowPhase: "Varredura" }));
   writeFileSync(join(run, "agent-a02f.jsonl"), jsonl([
     HEADER(T0 + 500), TASK(T0 + 600, "Varra o back"),
@@ -180,7 +180,7 @@ function fleetFixture(): Fixture {
     TOOL_RESULT(T0 + 2_500, "t2", "conteúdo"),
     ASSISTANT(T0 + 4_000, [TOOL("t3", "Bash", { command: "grep -rn foo src", description: "Procura foo no back" })]),
   ]));
-  // a03: nem diário nem meta — só a linha da tarefa calculada; está pensando agora.
+  // a03: neither journal nor meta — only the computed task line; it is thinking now.
   writeFileSync(join(run, "agent-a03f.jsonl"), jsonl([
     HEADER(T0 + 700), TASK(T0 + 800, "Confere os testes de integração"),
     ASSISTANT(T0 + 9_000, [THINKING]),
@@ -249,7 +249,7 @@ describe("WORKFLOW_PROBE_JS — a sondagem lendo um diário real", () => {
     expect(agent("a01f").toolCount).toBe(1);
     expect(agent("a02f").toolCount).toBe(2);
     expect(agent("a03f").toolCount).toBe(0);
-    expect(agent("a02f").toolCountPartial).toBeUndefined(); // arquivo pequeno: a contagem é exata
+    expect(agent("a02f").toolCountPartial).toBeUndefined(); // small file: the count is exact
   });
 
   it("as fases vêm do meta.phases do script, na ordem — e só do meta", async () => {
@@ -273,7 +273,7 @@ describe("WORKFLOW_PROBE_JS — a sondagem lendo um diário real", () => {
     writeFileSync(join(fx.run, "agent-a03f.jsonl"), jsonl(rows));
     const { agent } = await snapshot();
     expect(agent("a03f")).toMatchObject({ startedAt: T0, lastAt: T0 + 99_000, activity: { kind: "text", text: "fim" } });
-    // Não leu o arquivo inteiro: a contagem é parcial — e diz que é.
+    // It did not read the whole file: the count is partial — and says so.
     expect(agent("a03f").toolCountPartial).toBe(true);
     expect(agent("a03f").toolCount).toBeGreaterThan(0);
     expect(agent("a03f").toolCount).toBeLessThan(2_000);
@@ -287,7 +287,7 @@ describe("agentes concluídos já conhecidos — a sondagem não relê o transcr
 
   it("um concluído conhecido sai como marcador, sem abrir o arquivo; os outros continuam inteiros", async () => {
     const wf = await load();
-    rmSync(join(fx.run, "agent-a01f.jsonl")); // se a sonda tentasse ler, a01f viria sem tempos
+    rmSync(join(fx.run, "agent-a01f.jsonl")); // if the probe tried to read it, a01f would come without times
     const raw = JSON.parse(runProbe(wf.WORKFLOW_PROBE_JS, [fx.runs, fx.scripts, "wf_abc12/a01f"]).trim()) as Array<{
       agents: Array<Record<string, unknown>>;
     }>;
@@ -317,7 +317,7 @@ describe("agentes concluídos já conhecidos — a sondagem não relê o transcr
     const [run] = parseWorkflowProbe(stdout, (runId) => (runId === "wf_abc12" ? before : undefined));
     expect(run!.agents.map((a) => a.id)).toEqual(["a01f", "a02f"]);
     expect(run!.agents[0]).toEqual(before.agents[0]);
-    expect(run!.startedAt).toBe(T0); // o início da rodada conta o concluído que não foi relido
+    expect(run!.startedAt).toBe(T0); // the round's start counts the completed one that was not re-read
     expect(parseWorkflowProbe(stdout)[0]!.agents.map((a) => a.id)).toEqual(["a02f"]);
   });
 
@@ -359,10 +359,10 @@ describe("feed de UM agente — sob demanda", () => {
     const script = buildAgentFeedProbeScript("runner", "/root/x/workflows", "wf_abc-12", "a01f", 20);
     expect(script).toContain("docker exec 'runner' node -e ");
     expect(script).toContain("'/root/x/workflows' 'wf_abc-12' 'a01f' '20'");
-    // Uma falha do runner (sem node, container parado) tem de virar erro, não um feed vazio.
+    // A runner failure (no node, stopped container) has to become an error, not an empty feed.
     expect(script).not.toMatch(/\|\|\s*true/);
     expect(script).not.toContain("2>/dev/null");
-    // maxItems vira um inteiro dentro do teto.
+    // maxItems becomes an integer within the cap.
     expect(buildAgentFeedProbeScript("runner", "/r", "wf_a", "a1", 9_999)).toContain("'wf_a' 'a1' '200'");
     expect(buildAgentFeedProbeScript("runner", "/r", "wf_a", "a1", -3)).toContain("'wf_a' 'a1' '1'");
   });
@@ -392,7 +392,7 @@ describe("feed de UM agente — sob demanda", () => {
       expect(all[7]!.target!.startsWith("echo zzz")).toBe(true);
       expect(all[7]!.target!.length).toBeLessThanOrEqual(120);
       expect(all[8]).toEqual({ at: T0 + 8_000, kind: "text", text: "pronto" });
-      // Nenhum item vem do cabeçalho do pedido do usuário.
+      // No item comes from the header of the user's request.
       expect(JSON.stringify(all)).not.toContain("Workflow harness");
       const last2 = wf.parseAgentFeed(runProbe(wf.AGENT_FEED_PROBE_JS, [fx.runs, "wf_abc12", "a03f", "2"]));
       expect(last2.map((i) => i.kind)).toEqual(["tool", "text"]);
@@ -437,10 +437,10 @@ describe("feed de UM agente — sob demanda", () => {
 });
 
 /**
- * O DESFECHO da rodada (17/10/2026): duas frotas de 35 subagentes foram MORTAS (`status: "killed"` no
- * `<base>/workflows/<runId>.json` que o harness grava ao lado de `scripts/`). Uma frota morta nunca
- * escreve o `result` dos agentes que estavam em voo — pelo diário ela ficava "rodando" para sempre,
- * e o painel girava spinner em agente que não existia mais. O desfecho vem do snapshot, não do diário.
+ * The round's OUTCOME (17/10/2026): two fleets of 35 subagents were KILLED (`status: "killed"` in the
+ * `<base>/workflows/<runId>.json` the harness writes next to `scripts/`). A killed fleet never
+ * writes the `result` of the agents that were in flight — by the journal it stayed "running" forever,
+ * and the panel spun a spinner on agents that no longer existed. The outcome comes from the snapshot, not the journal.
  */
 describe("desfecho da rodada — o snapshot do harness diz se ela acabou", () => {
   let fx: Fixture;
@@ -466,14 +466,14 @@ describe("desfecho da rodada — o snapshot do harness diz se ela acabou", () =>
     const run = await probeRun();
     expect(run.outcome).toBe("killed");
     expect(run.agents.map((a) => [a.id, a.status])).toEqual([["a01f", "done"], ["a02f", "stopped"], ["a03f", "stopped"]]);
-    // O concluído segue com o que devolveu; o interrompido não inventa resultado.
+    // The completed one keeps what it returned; the interrupted one does not make up a result.
     expect(run.agents[0]!.result).toBeTruthy();
     expect(run.agents[1]!.result).toBeUndefined();
   });
 
   it("completed: o desfecho chega, mas a sonda NÃO dá por parado quem não respondeu — o back espera um tique", async () => {
-    // O snapshot "completed" sai 8ms depois da última linha do diário (produção): uma corrida
-    // de leitura não pode carimbar "interrompido" num agente que respondeu.
+    // The "completed" snapshot comes out 8ms after the journal's last line (production): a read race
+    // must not stamp "interrompido" on an agent that answered.
     snapshotFile("completed");
     const run = await probeRun();
     expect(run.outcome).toBe("completed");

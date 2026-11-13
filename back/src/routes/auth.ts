@@ -17,7 +17,7 @@ import { logger } from "../utils/logger.js";
  * known device (see authRoutes): what a brute force gets.
  */
 export const LOGIN_ATTEMPTS_PER_ACCOUNT = 10;
-const ACCOUNT_WINDOW_MS = 15 * 60_000;
+export const ACCOUNT_WINDOW_MS = 15 * 60_000;
 /**
  * Failed scrypt-costing tries (sign-in + setup) per address per {@link ADDRESS_WINDOW_MS}, any
  * username — enforced only when VIBEHUB_TRUST_PROXY says who the client is (see authRoutes).
@@ -225,8 +225,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post<{ Body: { password?: string } }>("/api/auth/password", { preHandler: requireSession }, async (req, reply) => {
-    const userId = (await requestUser(req))?.id;
-    if (!userId) return await reply.code(401).send({ error: "not authenticated" });
+    const userId = (await requestUser(req))!.id;
     try {
       await changePassword(userId, req.body?.password ?? "");
       // The change revoked every session signed before it — this one included. Hand the person who

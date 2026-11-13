@@ -1,7 +1,7 @@
 import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import {
-  listProjects, listAllCards, getCard, getProject, hasLiveSession, effectiveAccountSlug, markCardActivity,
+  listProjects, listAllCards, getCard, getCardWithProject, getProject, hasLiveSession, effectiveAccountSlug, markCardActivity,
   listAccounts, getConfig, isHumanActive, reportCardState, CLAUDE_MODELS, isValidEffort,
   type Card, type Project, type BoardColumn, type CardStatus, type DeclaredState,
 } from "../board/registry.js";
@@ -12,14 +12,15 @@ import { recordOrigin, type MessageOrigin } from "../chat/provenance.js";
 import { publishExternalMessage, readHistory } from "../sdk/history.js";
 import { liveDriverSession, sendAgentTurn } from "../sdk/manager.js";
 import { startCardDriver } from "../sdk/headless.js";
-import { openCard, probeCardSession } from "../board/workspace.js";
+import { openCard, probeCardSession, type SessionState } from "../board/workspace.js";
 import { getSettings } from "../settings/settings.js";
 import { observeDeclaredState } from "../events/cardEvents.js";
 import { logger } from "../../utils/logger.js";
 import {
   activityFromTranscript, pendingPermissionFromHistory, pendingQuestionFromHistory, pendingQuestionFromTranscript,
-  type ActivityEvent, type PendingPermission, type PendingQuestion,
+  transcriptObjects, type ActivityEvent, type PendingPermission, type PendingQuestion,
 } from "./feed.js";
+import { setTimeout as delay } from "node:timers/promises";
 
 /**
  * MAESTRO — one card's agent coordinating the OTHER cards.
@@ -145,16 +146,8 @@ function assistantText(content: unknown): string {
  */
 export function parseAssistantTranscript(jsonl: string, last: number): string[] {
   const texts: string[] = [];
-  for (const line of jsonl.split(/\r?\n/)) {
-    const s = line.trim();
-    if (!s) continue;
-    let obj: unknown;
-    try {
-      obj = JSON.parse(s);
-    } catch {
-      continue; // a truncated line from `tail` — skip it
-    }
-    if (!obj || typeof obj !== "object" || (obj as { type?: unknown }).type !== "assistant") continue;
+  for (const obj of transcriptObjects(jsonl)) {
+    if (obj.type !== "assistant") continue;
     const msg = obj as { message?: { content?: unknown }; content?: unknown };
     const text = assistantText(msg.message?.content ?? msg.content);
     if (text) texts.push(text);
@@ -419,7 +412,7 @@ async function awaitTerminalReady(
       );
       throw blockerError(blocker, card.title, waitedMs);
     }
-    await sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())));
+    await delay(Math.min(pollMs, Math.max(0, deadline - Date.now())));
   }
 }
 
@@ -511,12 +504,16 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
   // sitting in the pane. A TUI that is generating right now keeps the order (typed, queued by Claude),
   // so two Claudes never work the same worktree at once.
   let driver = fromAgent || viaNativeChat ? liveDriverSession(card.id) : null;
+  // One probe for both routes: when the driver route does not start a driver its answer was "busy"
+  // and nothing ran since, so the TUI route reuses it instead of paying a second docker exec.
+  let session: SessionState | undefined;
   if (!driver && wake && origin && (fromAgent || viaNativeChat) && (await getSettings()).sdkDriver) {
-    if ((await probeCardSession(card)) !== "busy") driver = await startCardDriver(card.id);
+    session = await probeCardSession(card);
+    if (session !== "busy") driver = await startCardDriver(card.id);
   }
   // The TUI route for an order from outside: a card the board calls live whose tmux session is GONE
   // (the runner restarted under it) is recreated — the same idempotent open — instead of refused.
-  if (!driver && wake && (await probeCardSession(card)) === "gone") {
+  if (!driver && wake && (session ?? (await probeCardSession(card))) === "gone") {
     card = await openCard(card.id, by);
     woke = true;
     logger.info({ audit: true, action: "maestro.wake", card: card.worktreeSlug, was: "session gone", by }, "card whose terminal was gone recreated for an order from outside the board");
@@ -629,13 +626,18 @@ export interface ReadResult {
   pendingQuestion: PendingQuestion | null;
 }
 
+/** How many assistant answers a read hands back: 3 by default, never fewer than 1 nor more than 20. PURE. */
+function clampAnswerCount(last: number | undefined): number {
+  return Math.max(1, Math.min(20, Math.floor(last ?? 3) || 3));
+}
+
 /**
  * Reads the last `last` assistant answers from a card's transcript, already stripped to text. Does
  * NOT require a live session: what was said is still readable after a pause or a restart.
  */
 export async function readTerminal(cardId: string, last = 3): Promise<ReadResult> {
   const { card, transcript } = await readCardTranscript(cardId);
-  const n = Math.max(1, Math.min(20, Math.floor(last) || 3));
+  const n = clampAnswerCount(last);
   const answers = parseAssistantTranscript(transcript, n);
   logger.info(
     { audit: true, action: "maestro.read", card: card.worktreeSlug, session: card.tmuxSession, answers: answers.length },
@@ -647,10 +649,7 @@ export async function readTerminal(cardId: string, last = 3): Promise<ReadResult
 
 /** The card and the tail of its newest transcript (read-only; no live session needed). */
 async function readCardTranscript(cardId: string): Promise<{ card: Card; transcript: string }> {
-  const card = await getCard(cardId);
-  if (!card) throw new Error("card not found");
-  const project = await getProject(card.projectId);
-  if (!project) throw new Error("project for this card not found");
+  const { card, project } = await getCardWithProject(cardId);
   const transcriptDir = transcriptDirFor(project, card, effectiveAccountSlug(card, project));
   const { stdout } = await hostExecutor().runScript(
     buildReadTranscriptScript(config.runner.container, transcriptDir, TAIL_LINES),
@@ -757,8 +756,6 @@ export interface WaitResult {
   now: number;
 }
 
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
 /**
  * Waits for a card's turn to end — or for it to need the user — and answers with what it said.
  *
@@ -804,7 +801,7 @@ export async function waitForTurn(
       break;
     }
     if (Date.now() >= deadline) break;
-    await sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())));
+    await delay(Math.min(pollMs, Math.max(0, deadline - Date.now())));
   }
 
   const { card, transcript } = await readCardTranscript(cardId);
@@ -818,7 +815,7 @@ export async function waitForTurn(
       outcome = busy || sawBusy ? "timeout" : activity.some((e) => e.kind === "assistant") ? "finished" : "not_started";
     }
   }
-  const n = Math.max(1, Math.min(20, Math.floor(opts.last ?? 3) || 3));
+  const n = clampAnswerCount(opts.last);
   logger.info({ audit: true, action: "maestro.wait", card: card.worktreeSlug, outcome, waitedMs: Date.now() - started }, "card wait ended");
   return {
     cardId: card.id,
@@ -857,14 +854,6 @@ export function modelLabelFor(model: string | null | undefined): string | null {
   return `${name} ${version[3] ? `${version[2]}.${version[3]}` : version[2]}`;
 }
 
-/**
- * The model of the LAST assistant turn in a transcript — what the session is actually using right
- * now, whatever the card or the account says it should be. Malformed lines are skipped. PURE.
- */
-export function parseLastModel(jsonl: string): string | null {
-  return parseLastTurn(jsonl).model;
-}
-
 /** Epoch ms of a transcript entry's `timestamp`, 0 when it has none. PURE. */
 function entryTime(obj: object): number {
   const ts = (obj as { timestamp?: unknown }).timestamp;
@@ -882,21 +871,12 @@ export function parseLastTurn(jsonl: string): { model: string | null; at: number
   let effort: string | null = null;
   let requestedAt = 0;
   let lastUserAt = 0;
-  for (const line of jsonl.split(/\r?\n/)) {
-    const s = line.trim();
-    if (!s) continue;
-    let obj: unknown;
-    try {
-      obj = JSON.parse(s);
-    } catch {
-      continue;
-    }
-    if (!obj || typeof obj !== "object") continue;
-    if ((obj as { type?: unknown }).type === "user") {
+  for (const obj of transcriptObjects(jsonl)) {
+    if (obj.type === "user") {
       lastUserAt = entryTime(obj);
       continue;
     }
-    if ((obj as { type?: unknown }).type !== "assistant") continue;
+    if (obj.type !== "assistant") continue;
     const m = (obj as { message?: { model?: unknown } }).message?.model;
     // Claude Code logs a "<synthetic>" assistant turn for its own notices (rate limit, errors) — it
     // is not a model the session is running, so it must not replace the real one.
@@ -923,7 +903,7 @@ export function parseLastTurn(jsonl: string): { model: string | null; at: number
  * "Newer than the last reply" is counted from the REQUEST, not from the reply landing: an answer
  * already on its way when the level changed was asked for in the old one, and arrives stamped with
  * it. Dated by its arrival it beat the switch and the pill fell back to the old level with the
- * session already on the new one (produção, 2026-10-27 — Médio → Alto mid-turn, back to Médio).
+ * session already on the new one (production, 2026-10-27 — Médio → Alto mid-turn, back to Médio).
  */
 export function pickEffort(
   lastTurn: { effort: string | null; at: number; requestedAt?: number },
@@ -1015,22 +995,19 @@ export interface SessionInfo {
 
 /** What a card's session is really running with. Read-only; tolerates a missing transcript. */
 export async function sessionInfo(cardId: string): Promise<SessionInfo> {
-  const card = await getCard(cardId);
-  if (!card) throw new Error("card not found");
-  const project = await getProject(card.projectId);
-  if (!project) throw new Error("project for this card not found");
+  const { card, project } = await getCardWithProject(cardId);
 
   const slug = effectiveAccountSlug(card, project);
   const accounts = await listAccounts();
-  const config = await getConfig();
-  const name = slug ? (accounts.find((a) => a.slug === slug)?.name ?? slug) : (config.defaultAccountLabel ?? "default");
+  const boardConfig = await getConfig();
+  const name = slug ? (accounts.find((a) => a.slug === slug)?.name ?? slug) : (boardConfig.defaultAccountLabel ?? "default");
 
   let model: string | null = null;
   let effort: string | null = card.effort ?? null;
   try {
     const profileDir = profileDirFor(slug);
     const { stdout } = await hostExecutor().runScript(
-      buildReadSessionScript(config_runner_container(), transcriptDirFor(project, card, slug), profileDir, 200),
+      buildReadSessionScript(config.runner.container, transcriptDirFor(project, card, slug), profileDir, 200),
       { timeoutMs: 15_000 },
     );
     const { transcript, settings } = parseSessionOutput(stdout);
@@ -1052,7 +1029,7 @@ export async function sessionInfo(cardId: string): Promise<SessionInfo> {
   // or "no session" when the runner lost the session entirely. Only "waiting" is refined, so working/
   // paused/done never pay for the probe.
   //
-  // WHO the probe may speak for, though, is the native chat's undoing (produção, 2026-10-02): the
+  // WHO the probe may speak for, though, is the native chat's undoing (production, 2026-10-02): the
   // conversation's claude is a child of the BACK, not of the tmux pane — the pane under it is a bare
   // `bash`, which the probe reads as "Claude exited". The chat then hung a "Claude parou —
   // Reiniciar" banner over a session that was answering normally. So the DRIVER is asked first (free,
@@ -1078,8 +1055,4 @@ export async function sessionInfo(cardId: string): Promise<SessionInfo> {
     account: { slug: slug ?? null, name },
     situation,
   };
-}
-
-function config_runner_container(): string {
-  return config.runner.container;
 }

@@ -1,7 +1,8 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Ban } from "lucide-react";
-import { boardApi, cardUsageKey, profilePathFor, type CardUsageResponse } from "@/features/board/api";
+import { boardApi, cardUsageKey, profilePathFor } from "@/features/board/api";
+import type { CardUsageResponse } from "@/api/types";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { minutesSince, usageErrorText } from "@/features/board/lib/usage";
 import {
@@ -22,20 +23,20 @@ import { cn } from "@/lib/utils";
 import { useT } from "@/i18n";
 
 /**
- * QUANTO DO PLANO JÁ FOI — o medidor do topo do card e o aviso acima do campo do chat.
+ * HOW MUCH OF THE PLAN IS ALREADY USED — the meter at the top of the card and the warning above the chat field.
  *
- * O medidor é um anel: o número de uma janela só (a mais cheia) cabe na barra sem brigar com os
- * pills, e a cor diz o recado antes do número. Clicar abre as janelas uma a uma, cada barra com as
- * marcas onde o tom muda — o mesmo que o `/usage` do terminal mostra, legível.
+ * The meter is a ring: the number of a single window (the fullest) fits in the bar without fighting the
+ * pills, and the color says the message before the number. Clicking opens the windows one by one, each bar with the
+ * marks where the tone changes — the same as the terminal's `/usage` shows, readable.
  */
 
-/** Os avisos do plano ao vivo de um card, compartilhados entre o chat (que os recebe) e o topo. */
+/** A card's live plan warnings, shared between the chat (which receives them) and the top. */
 export const cardRateLimitsKey = (cardId: string) => ["board", "card", cardId, "rateLimits"] as const;
 
 /**
- * A leitura do plano da conta deste card (60s, o mesmo cache do back — o endpoint de uso limita por
- * quem chama) mais os avisos ao vivo que o chat publicou. Uma consulta só por card, o topo e o chat
- * a dividem pela chave.
+ * The plan reading of this card's account (60s, the same cache as the back — the usage endpoint rate-limits per
+ * caller) plus the live warnings the chat published. A single query per card; the top and the chat
+ * share it through the key.
  */
 export function useCardPlanUsage(cardId: string, enabled: boolean) {
   const usage = useQuery({
@@ -46,7 +47,7 @@ export function useCardPlanUsage(cardId: string, enabled: boolean) {
     staleTime: 55_000,
     retry: false,
   });
-  // Sem queryFn de verdade: quem escreve é o chat (`setQueryData`), aqui só se lê.
+  // No real queryFn: the chat is the one that writes (`setQueryData`), here it is only read.
   const live = useQuery<Record<string, RateLimitInfo>>({
     queryKey: cardRateLimitsKey(cardId),
     queryFn: () => ({}),
@@ -57,8 +58,8 @@ export function useCardPlanUsage(cardId: string, enabled: boolean) {
 }
 
 /**
- * O anel: trilho apagado, arco na cor CONTÍNUA do percentual (verde → vermelho). Sem leitura, ou em
- * 0%, só o trilho — a ponta arredondada de um arco de comprimento zero virava um ponto solto.
+ * The ring: a dimmed track, an arc in the CONTINUOUS color of the percentage (green → red). With no reading, or at
+ * 0%, only the track — the rounded cap of a zero-length arc turned into a stray dot.
  */
 function Ring({ value, size, stroke }: { value: number | null; size: number; stroke: number }) {
   const r = (size - stroke) / 2;
@@ -85,7 +86,7 @@ function Ring({ value, size, stroke }: { value: number | null; size: number; str
   );
 }
 
-/** Uma janela no painel: nome, %, a barra com as marcas dos tons, e quando renova. */
+/** One window in the panel: name, %, the bar with the tone marks, and when it renews. */
 function WindowRow({ window: w, now }: { window: PlanWindow; now: number }) {
   const t = useT();
   const tone = usageTone(w.utilization);
@@ -113,7 +114,7 @@ function WindowRow({ window: w, now }: { window: PlanWindow; now: number }) {
           className="h-full rounded-full transition-[width,background-color] duration-500 motion-reduce:transition-none"
           style={{ width: `${Math.min(100, Math.max(0, w.utilization))}%`, backgroundColor: usageColor(w.utilization) }}
         />
-        {/* Onde o tom muda: amarelo, laranja, vermelho. Dizem "falta quanto até apertar". */}
+        {/* Where the tone changes: yellow, orange, red. They say "how much is left until it gets tight". */}
         {[YELLOW_AT, ORANGE_AT, RED_AT].map((at) => (
           <span key={at} aria-hidden className="absolute inset-y-0 w-px bg-background/80" style={{ left: `${at}%` }} />
         ))}
@@ -124,9 +125,9 @@ function WindowRow({ window: w, now }: { window: PlanWindow; now: number }) {
 }
 
 /**
- * O medidor do topo: anel + % do limite SEMANAL — é por ele que se acompanha se a semana vai
- * fechar. A cor esquenta junto com o número (verde → amarelo → laranja → vermelho); o clique abre
- * todas as janelas. Sem leitura ele ainda abre, para dizer por quê.
+ * The top meter: ring + % of the WEEKLY limit — that is how one follows whether the week is going to
+ * close. The color heats up along with the number (green → yellow → orange → red); the click opens
+ * all the windows. With no reading it still opens, to say why.
  */
 export function PlanUsageMeter({
   cardId,
@@ -137,16 +138,16 @@ export function PlanUsageMeter({
 }: {
   cardId: string;
   accountName: string;
-  /** Só o card na tela consulta: seis cards escondidos fazendo poll é tráfego que ninguém vê. */
+  /** Only the card on screen queries: six hidden cards polling is traffic nobody sees. */
   active: boolean;
-  /** Só o dono tem o shell do runner: só para ele a falta de leitura vira um comando. */
+  /** Only the owner has the runner's shell: only for them does the missing reading become a command. */
   isOwner: boolean;
   className?: string;
 }) {
   const t = useT();
   const { data, live } = useCardPlanUsage(cardId, active);
   const [now, setNow] = React.useState(() => Date.now());
-  // As contagens são em minutos; um relógio por minuto basta.
+  // The countdowns are in minutes; a clock ticking once a minute is enough.
   React.useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 60_000);
     return () => clearInterval(id);
@@ -159,7 +160,7 @@ export function PlanUsageMeter({
   const tone = usageTone(value, blown);
   const label = value === null ? null : `${Math.round(value)}%`;
   const failed = Boolean(data?.usage && !data.usage.available && windows.length === 0);
-  // A pílula ganha a cor quando a semana começa a apertar; antes disso fica discreta como as vizinhas.
+  // The pill gets its color when the week starts getting tight; before that it stays discreet like its neighbors.
   const heated = value !== null && value >= 60;
 
   return (
@@ -225,7 +226,7 @@ export function PlanUsageMeter({
                 ? t("plan.updatedNow")
                 : t("plan.updated", { n: minutesSince(data.usage.fetchedAt, now) })}
             </span>
-            {/* A escala da cor, do frio ao quente — a mesma que o anel e as barras percorrem. */}
+            {/* The color scale, from cold to hot — the same one the ring and the bars travel along. */}
             <span
               aria-hidden
               title={t("plan.thresholds")}
@@ -240,9 +241,9 @@ export function PlanUsageMeter({
 }
 
 /**
- * O AVISO acima do campo do chat, no canto direito da faixa do "está digitando": o recado que o
- * Claude Code escreve no rodapé do terminal quando a cota aperta. Amarelo e laranja enquanto ainda
- * há margem, vermelho no fim — e, estourado, um ícone de bloqueio, porque o próximo turno não roda.
+ * THE WARNING above the chat field, in the right corner of the "está digitando" strip: the message that
+ * Claude Code writes in the terminal's footer when the quota gets tight. Yellow and orange while there is still
+ * room, red at the end — and, once exceeded, a lock icon, because the next turn does not run.
  */
 export function PlanUsageAlert({ alert, now, className }: { alert: PlanAlert | null; now: number; className?: string }) {
   if (!alert) return null;

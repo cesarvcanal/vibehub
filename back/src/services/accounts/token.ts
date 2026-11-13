@@ -102,7 +102,7 @@ export function removeGhTokenLines(cardId: string): string[] {
  * a refreshable `/login`: any write there makes the token "newer" than the login and hands the
  * session back to it. Moving a revoked token out of the way (the file missing) used to count as "the
  * value changed", and the next re-provision brought the revoked token back over a working login
- * (produção, 2026-10-19, conta `tech`). Without a login, it rewrites only when the VALUE changed.
+ * (production, 2026-10-19, account `tech`). Without a login, it rewrites only when the VALUE changed.
  * Saving a token in the UI (`force`) always rewrites: it is the person choosing that token now.
  */
 export function writeTokenLines(profileDir: string, token: string, opts: { force?: boolean } = {}): string[] {

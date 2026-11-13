@@ -83,6 +83,17 @@ describe("credentials validation and lifecycle", () => {
     expect(await c.deleteCredential(cred.id)).toBe(false);
   });
 
+  it("delete leaves no vault key behind, for either type", async () => {
+    const c = await fresh();
+    const pair = await c.createCredential({ name: "pair", type: "userpass", username: "u", password: "p" });
+    const token = await c.createCredential({ name: "tok", type: "token", value: "t" });
+    const { secretList } = await import("../../secrets/vault.js");
+    expect((await secretList()).filter((s) => s.key.startsWith("CRED_"))).toHaveLength(3);
+    await c.deleteCredential(pair.id);
+    await c.deleteCredential(token.id);
+    expect((await secretList()).filter((s) => s.key.startsWith("CRED_"))).toEqual([]);
+  });
+
   it("resolving a missing credential points at Settings, never asks for the value", async () => {
     const c = await fresh();
     await expect(c.resolveCredential("nope")).rejects.toThrow(/Settings . Cofre/);

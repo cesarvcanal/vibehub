@@ -12,9 +12,9 @@ import {
 import { get, patch, post, del } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
 import type {
-  Settings, SettingsPatch, GithubConnection, TranscribeStatus, Credential, CredentialType,
+  Settings, SettingsPatch, TranscribeStatus, Credential, CredentialType, SdkPermissionMode,
 } from "@/api/types";
-import { SELECT_CLASS } from "@/features/board/components/NewCardDialog";
+import { SELECT_CLASS } from "@/components/ui/select";
 import { AccountsManager } from "@/features/board/components/AccountsManager";
 import { McpManager } from "@/features/board/components/McpManager";
 import { BrainManager } from "@/features/board/components/BrainManager";
@@ -22,11 +22,11 @@ import { PluginsManager } from "@/features/board/components/PluginsManager";
 import { RunnerBanner } from "@/features/board/components/RunnerBanner";
 // The SAME cache entries the board reads (the composer's microphone, the project picker): a save
 // here has to reach them, which two keys for one endpoint never did.
-import { GITHUB_KEY, TRANSCRIBE_KEY, boardApi } from "@/features/board/api";
+import { ACCOUNTS_KEY, GITHUB_KEY, TRANSCRIBE_KEY, boardApi } from "@/features/board/api";
 import {
   LANGUAGES,
   getLanguage,
-  setLanguage as applyLanguage,
+  setLanguage,
   t as translate,
   useT,
   type Language,
@@ -67,10 +67,10 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [email, setEmail] = React.useState("");
   const [autonomous, setAutonomous] = React.useState(true);
   const [sdkDriver, setSdkDriver] = React.useState(false);
-  const [sdkPermissionMode, setSdkPermissionMode] = React.useState<"same-as-terminal" | "ask-sensitive">("same-as-terminal");
+  const [sdkPermissionMode, setSdkPermissionMode] = React.useState<SdkPermissionMode>("same-as-terminal");
   const [sdkAutoResume, setSdkAutoResume] = React.useState(true);
   const [defaultLabel, setDefaultLabel] = React.useState("");
-  const [language, setLanguage] = React.useState("");
+  const [transcribeLanguage, setTranscribeLanguage] = React.useState("");
   // Kept as a STRING: the field has to be clearable while you retype it, and "" is not 0.
   const [idleHibernate, setIdleHibernate] = React.useState("");
   const [githubLabel, setGithubLabel] = React.useState("");
@@ -96,25 +96,23 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     setSdkPermissionMode(settings.data.sdkPermissionMode ?? "same-as-terminal");
     setSdkAutoResume(settings.data.sdkAutoResume ?? true);
     setDefaultLabel(settings.data.defaultAccountLabel ?? "");
-    setLanguage(settings.data.transcribeLanguage ?? "");
+    setTranscribeLanguage(settings.data.transcribeLanguage ?? "");
     setIdleHibernate(String(settings.data.idleHibernateMinutes ?? 180));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, settings.data]);
 
   const save = useMutation({
     mutationFn: (body: SettingsPatch) => patch<Settings>("/settings", body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: SETTINGS_KEY });
-      void qc.invalidateQueries({ queryKey: ["board", "accounts"] });
+      void qc.invalidateQueries({ queryKey: ACCOUNTS_KEY });
       toast.success(translate("toast.settingsSaved"));
     },
     onError: (e) => toast.error(apiErrorMessage(e)),
   });
 
   const addGithub = useMutation({
-    mutationFn: (body: { label: string; token: string }) =>
-      post<{ connection: GithubConnection }>("/github/connections", body),
-    onSuccess: (result) => {
+    mutationFn: (body: { label: string; token: string }) => boardApi.addGithubConnection(body.label, body.token),
+    onSuccess: (connection) => {
       setGithubToken("");
       setGithubLabel("");
       // A prefix: the connection list AND every repo/branch query hanging off an account.
@@ -122,8 +120,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
       void qc.invalidateQueries({ queryKey: SETTINGS_KEY });
       toast.success(
         translate("toast.githubAdded", {
-          label: result.connection.label,
-          login: result.connection.login,
+          label: connection.label,
+          login: connection.login,
         }),
       );
     },
@@ -133,7 +131,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   // The server REFUSES (409) while a project still points at the account — the message names how
   // many, which is exactly what the person needs to go and fix, so it is shown verbatim.
   const removeGithub = useMutation({
-    mutationFn: (id: string) => del<{ ok: true }>(`/github/connections/${encodeURIComponent(id)}`),
+    mutationFn: boardApi.removeGithubConnection,
     onSuccess: () => {
       // A prefix: the connection list AND every repo/branch query hanging off an account.
       void qc.invalidateQueries({ queryKey: GITHUB_KEY });
@@ -197,7 +195,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
       sdkPermissionMode,
       sdkAutoResume,
       defaultAccountLabel: defaultLabel.trim() || null,
-      transcribeLanguage: language.trim() || null,
+      transcribeLanguage: transcribeLanguage.trim() || null,
       // A blank field is not "never" — it is a field being typed in. Leave the stored value alone.
       ...(idleHibernate.trim() === "" ? {} : { idleHibernateMinutes: Number(idleHibernate.trim()) }),
     });
@@ -230,7 +228,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               value={uiLanguage}
               onChange={(e) => {
                 const next = e.target.value as Language;
-                applyLanguage(next);
+                setLanguage(next);
                 setUiLanguage(next);
               }}
             >
@@ -310,7 +308,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 className={SELECT_CLASS}
                 value={sdkPermissionMode}
                 disabled={!sdkDriver}
-                onChange={(e) => setSdkPermissionMode(e.target.value as "same-as-terminal" | "ask-sensitive")}
+                onChange={(e) => setSdkPermissionMode(e.target.value as SdkPermissionMode)}
               >
                 <option value="same-as-terminal">{t("settings.sdkPermissionSame")}</option>
                 <option value="ask-sensitive">{t("settings.sdkPermissionAsk")}</option>
@@ -356,8 +354,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               <Label htmlFor="settings-language">{t("settings.transcribeLanguage")}</Label>
               <Input
                 id="settings-language"
-                value={language}
-                onChange={(e) => setLanguage(e.target.value)}
+                value={transcribeLanguage}
+                onChange={(e) => setTranscribeLanguage(e.target.value)}
                 placeholder={t("settings.transcribePlaceholder")}
                 maxLength={2}
                 className="font-mono"

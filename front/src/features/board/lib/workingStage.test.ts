@@ -16,7 +16,7 @@ describe("workingStage — o que o indicador diz enquanto o turno corre", () => 
     expect(second).not.toBe(first);
     const third = workingStage("thinking", VERB_ROTATE_SECONDS * 2).verb;
     expect(third).not.toBe(second);
-    // Dá a volta — o revezamento não tem fim, e o verbo nunca fica indefinido.
+    // It wraps around — the rotation has no end, and the verb is never undefined.
     expect(workingStage("thinking", VERB_ROTATE_SECONDS * 3).verb).toBe(first);
   });
 
@@ -32,7 +32,7 @@ describe("workingStage — o que o indicador diz enquanto o turno corre", () => 
     expect(workingStage("tool", 0).note).toBe("sdk.note.tool");
     expect(workingStage("answering", STILL_AFTER_SECONDS).note).toBe("sdk.note.answeringStill");
     expect(workingStage("working", LONG_AFTER_SECONDS).note).toBe("sdk.note.workingLong");
-    // Esperar o agente subir não ganha sinônimo: um verbo só, sempre o mesmo.
+    // Waiting for the agent to come up gets no synonym: a single verb, always the same.
     expect(workingStage("preparing", 0).verb).toBe("sdk.preparing");
     expect(workingStage("preparing", VERB_ROTATE_SECONDS * 5).verb).toBe("sdk.preparing");
   });

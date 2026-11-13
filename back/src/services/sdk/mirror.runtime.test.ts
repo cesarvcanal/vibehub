@@ -3,9 +3,9 @@ import { EventEmitter } from "node:events";
 import type { HistoryEvent } from "./history.js";
 
 /**
- * O RUNTIME DO ESPELHO — o processo de follow por card, não a filtragem pura (essa está em
- * mirror.test.ts). Aqui o `spawn` é um dublê: o que se testa é o que o espelho faz com os bytes que
- * o follow entrega, com a morte dele e com a memória de dedupe do card ao longo da vida do driver.
+ * THE MIRROR'S RUNTIME — the per-card follow process, not the pure filtering (that is in
+ * mirror.test.ts). Here `spawn` is a stand-in: what is tested is what the mirror does with the bytes
+ * the follow delivers, with its death and with the card's dedupe memory over the driver's lifetime.
  */
 
 const CARD = "77fc53c6-ff44-484c-b2c3-e5576b6760e7";
@@ -88,7 +88,7 @@ describe("acquireTranscriptMirror — o que o follow entrega", () => {
 
   it("uma linha de MB em muitos chunks custa linear: o \\n é procurado só no pedaço novo", async () => {
     await acquireTranscriptMirror(CARD, { cutoffAt: T0 });
-    // Um tool_result de vários MB no transcript, entregue pelo follow em chunks de 1 KB.
+    // A tool_result of several MB in the transcript, delivered by the follow in 1 KB chunks.
     const big = "x".repeat(4 * 1024 * 1024);
     const bytes = Buffer.from(userLine("u-big", T0 + 1_000, big));
     const started = performance.now();
@@ -115,7 +115,7 @@ describe("acquireTranscriptMirror — o follow que falha não derruba o back", (
 describe("acquireTranscriptMirror — o follow que morreu sozinho volta no próximo connect", () => {
   it("com outra aba segurando o espelho, um connect novo sobe o follow de novo", async () => {
     await acquireTranscriptMirror(CARD, { cutoffAt: T0 });
-    follow(0).emit("close"); // runner reiniciado, reaper: o follow acabou, a aba antiga segue aberta
+    follow(0).emit("close"); // runner restarted, reaper: the follow ended, the old tab stays open
     await acquireTranscriptMirror(CARD, { cutoffAt: T0 });
     expect(h.spawned.length).toBe(2);
     follow(1).stdout.emit("data", Buffer.from(userLine("u-volta", T0 + 1_000, "voltou")));
@@ -142,9 +142,9 @@ describe("acquireTranscriptMirror — o follow que morreu sozinho volta no próx
 describe("acquireTranscriptMirror — a memória de dedupe ao longo da vida do driver", () => {
   it("o driver morre e outro sobe com o espelho vivo: a fala do SUCESSOR não volta como 'terminal'", async () => {
     await acquireTranscriptMirror(CARD, { cutoffAt: T0 });
-    // O driver velho acabou: a memória dele vai junto (manager.ts, no close do processo)...
+    // The old driver ended: its memory goes with it (manager.ts, on the process close)...
     forgetDriverKeys(CARD);
-    // ...e o sucessor manda a mensagem da pessoa. O espelho, que nasceu antes, tem de reconhecê-la.
+    // ...and the successor sends the person's message. The mirror, which was born earlier, has to recognise it.
     noteDriverEventFor(CARD, { type: "user", text: "oi do sucessor" });
     follow(0).stdout.emit("data", Buffer.from(userLine("u-suc", T0 + 1_000, "oi do sucessor")));
     expect(publishedTexts()).toEqual([]);
@@ -152,10 +152,10 @@ describe("acquireTranscriptMirror — a memória de dedupe ao longo da vida do d
 });
 
 /**
- * O SHUTDOWN DE UM DEPLOY BLUE/GREEN: o processo antigo larga o card para o novo retomar o turno. Um
- * espelho que seguisse vivo até o exit lia a fala de retomada que o processo NOVO injetou — fala que
- * a memória deste processo nunca viu — e a gravava como conversa do terminal (a bolha duplicada da
- * print de 2026-10-08). Antes de largar, os espelhos param.
+ * A BLUE/GREEN DEPLOY'S SHUTDOWN: the old process lets go of the card for the new one to resume the turn. A
+ * mirror that stayed alive until the exit read the resume prompt the NEW process injected — speech that
+ * this process's memory never saw — and recorded it as terminal conversation (the duplicated bubble of the
+ * 2026-10-08 screenshot). Before letting go, the mirrors stop.
  */
 describe("stopAllMirrors — o espelho do processo que está saindo", () => {
   it("mata o follow, e o que chegar depois não é publicado", async () => {
@@ -172,7 +172,7 @@ describe("acquireTranscriptMirror — quem solta é o espelho que pegou", () => 
   it("o release de uma aba de um espelho já parado não derruba o espelho que nasceu depois", async () => {
     const releaseVelho = await acquireTranscriptMirror(CARD, { cutoffAt: T0 });
     stopAllMirrors();
-    await acquireTranscriptMirror(CARD, { cutoffAt: T0 }); // uma aba que conectou depois do stop
+    await acquireTranscriptMirror(CARD, { cutoffAt: T0 }); // a tab that connected after the stop
 
     releaseVelho(); // a aba antiga fecha agora
     expect(follow(1).killed).toBe(false);

@@ -1,4 +1,3 @@
-import pty from "node-pty";
 import type { FastifyInstance } from "fastify";
 import { requireOwner } from "../auth/session.js";
 import { hostExecutor, shQuote } from "../runtime/host.js";
@@ -7,7 +6,7 @@ import { assertAccountSlug } from "../services/board/registry.js";
 import { profileDirFor, DEFAULT_ACCOUNT_SLUG } from "../services/accounts/profiles.js";
 import { firstRunSeedCommand } from "../services/accounts/firstRun.js";
 import { resolvedClaudeCommand } from "../services/accounts/claudeCli.js";
-import { bridgePty } from "./session.js";
+import { bridgePty, spawnTerminalPty } from "./session.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -54,12 +53,7 @@ export async function accountLoginRoutes(app: FastifyInstance): Promise<void> {
         `env LANG=C.UTF-8 LC_ALL=C.UTF-8 CLAUDE_CONFIG_DIR=${shQuote(profileDir)} ` +
         `bash -lc ${shQuote(inner)}`;
       const { file, args } = hostExecutor().ptyCommand(line);
-      const term = pty.spawn(file, args, {
-        name: "xterm-256color",
-        cols: 120,
-        rows: 30,
-        env: { ...process.env, LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TERM: "xterm-256color" },
-      });
+      const term = spawnTerminalPty(file, args);
       logger.info({ audit: true, action: "account.login.terminal", account: raw }, "interactive login terminal opened");
       bridgePty(socket, term, `login-${raw}`);
     },

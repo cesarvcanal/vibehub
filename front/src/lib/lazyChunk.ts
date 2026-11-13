@@ -1,22 +1,22 @@
 /**
- * LAZY CHUNKS QUE SOBREVIVEM A UM DEPLOY.
+ * LAZY CHUNKS THAT SURVIVE A DEPLOY.
  *
- * Um `import()` dinâmico baixa um pedaço do bundle sob demanda (o noVNC do Navegador, por exemplo).
- * Se ele acontece no instante em que o vibehub está reiniciando para um deploy, a requisição falha —
- * e o navegador GUARDA essa falha para aquela URL: o mesmo `import()` continua falhando depois que o
- * servidor volta, até a página ser recarregada (verificado no Chromium 153: mesma URL falha de novo,
- * URL nova carrega). Foi o "Failed to fetch dynamically imported module" com um "Tentar de novo" que
- * nunca funcionava (produção, 2026-10-19).
+ * A dynamic `import()` downloads a piece of the bundle on demand (the Navegador's noVNC, for example).
+ * If it happens at the instant the vibehub is restarting for a deploy, the request fails —
+ * and the browser CACHES that failure for that URL: the same `import()` keeps failing after the
+ * server is back, until the page is reloaded (checked on Chromium 153: same URL fails again,
+ * new URL loads). It was the "Failed to fetch dynamically imported module" with a "Tentar de novo" that
+ * never worked (production, 2026-10-19).
  *
- * A recuperação, em ordem:
- *  1. não é falha de chunk → o erro sobe intacto (não é problema de rede, não há o que tentar);
- *  2. espera o servidor responder `/api/health` (o reinício leva segundos);
- *  3. carrega o MESMO chunk por uma URL nova (`?retry=<agora>`), que o cache de falhas não conhece;
- *  4. se nem assim → `ChunkLoadFailure`: o deploy trocou os arquivos (o hash do chunk mudou) e só
- *     uma recarga da página, que traz o `index.html` novo, resolve. Quem chama oferece o botão.
+ * The recovery, in order:
+ *  1. not a chunk failure → the error propagates intact (not a network problem, nothing to retry);
+ *  2. waits for the server to answer `/api/health` (the restart takes seconds);
+ *  3. loads the SAME chunk under a new URL (`?retry=<now>`), which the failure cache does not know;
+ *  4. if not even then → `ChunkLoadFailure`: the deploy swapped the files (the chunk's hash changed) and only
+ *     a page reload, which brings the new `index.html`, fixes it. The caller offers the button.
  */
 
-/** Por que a recuperação desistiu: o servidor não voltou, ou a página está numa versão velha. */
+/** Why the recovery gave up: the server did not come back, or the page is on an old version. */
 export type ChunkFailureReason = "server_down" | "stale";
 
 export class ChunkLoadFailure extends Error {
@@ -27,15 +27,15 @@ export class ChunkLoadFailure extends Error {
   }
 }
 
-/** A mensagem de falha de carga de módulo de cada motor (Chromium, Safari, Firefox). */
+/** Each engine's module-load failure message (Chromium, Safari, Firefox). */
 const CHUNK_ERROR_RE = /Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module/i;
 
-/** É a falha de carregar um chunk (rede/servidor), e não um erro do próprio módulo? PURA. */
+/** Is it a failure to load a chunk (network/server), and not an error of the module itself? PURE. */
 export function isChunkLoadError(err: unknown): boolean {
   return err instanceof Error && CHUNK_ERROR_RE.test(err.message);
 }
 
-/** A URL do chunk, quando o motor a cita na mensagem (Chromium e Firefox citam). PURA. */
+/** The chunk's URL, when the engine cites it in the message (Chromium and Firefox do). PURE. */
 export function chunkUrlOf(err: unknown): string | null {
   if (!(err instanceof Error)) return null;
   return /(https?:\/\/\S+?\.m?js(?:\?\S*)?)(?=\s|$)/.exec(err.message)?.[1] ?? null;
@@ -49,11 +49,11 @@ export interface WaitForServerOpts {
   intervalMs?: number;
 }
 
-/** Quanto se espera o servidor voltar: um deploy do vibehub leva de segundos a um minuto e pouco. */
+/** How long to wait for the server to come back: a vibehub deploy takes from seconds to a little over a minute. */
 export const SERVER_WAIT_MS = 90_000;
 const SERVER_POLL_MS = 2_000;
 
-/** Sonda `/api/health` até responder ok ou o prazo acabar. */
+/** Polls `/api/health` until it answers ok or the deadline runs out. */
 export async function waitForServer(opts: WaitForServerOpts = {}): Promise<boolean> {
   const fetcher = opts.fetcher ?? ((url, init) => fetch(url, init));
   const sleep = opts.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
@@ -65,7 +65,7 @@ export async function waitForServer(opts: WaitForServerOpts = {}): Promise<boole
     try {
       if ((await fetcher("/api/health", { cache: "no-store" })).ok) return true;
     } catch {
-      /* ainda reiniciando */
+      /* still restarting */
     }
     if (now() + interval > deadline) return false;
     await sleep(interval);
@@ -73,15 +73,15 @@ export async function waitForServer(opts: WaitForServerOpts = {}): Promise<boole
 }
 
 export interface ImportChunkDeps {
-  /** Importa por URL crua — o caminho que o Vite não reescreve. */
+  /** Imports by raw URL — the path Vite does not rewrite. */
   importUrl?: (url: string) => Promise<unknown>;
   waitForServer?: () => Promise<boolean>;
-  /** Avisado quando a primeira tentativa falhou e a recuperação começou (a tela diz "reconectando"). */
+  /** Notified when the first attempt failed and the recovery started (the screen says "reconectando"). */
   onRecovering?: () => void;
   now?: () => number;
 }
 
-/** `load` com a recuperação descrita no topo do arquivo. */
+/** `load` with the recovery described at the top of the file. */
 export async function importChunk<T>(load: () => Promise<T>, deps: ImportChunkDeps = {}): Promise<T> {
   try {
     return await load();

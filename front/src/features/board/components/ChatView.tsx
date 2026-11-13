@@ -39,7 +39,7 @@ import {
   remarkEscapeHtml,
   remarkPreviewPaths,
   safeUrl,
-  anexoTemPreview,
+  hasAttachmentPreview,
   splitAttachments,
   uploadDisplayName,
   uploadImageUrl,
@@ -796,7 +796,7 @@ function UploadedFile({ cardId, file, compact }: { cardId: string; file: string;
   const t = useT();
   const kind = uploadKind(file);
   if (kind === "audio" && !compact) return <AudioAttachment cardId={cardId} file={file} />;
-  if (anexoTemPreview(file)) return <DocumentoAnexado cardId={cardId} file={file} compact={compact} />;
+  if (hasAttachmentPreview(file)) return <AttachedDocument cardId={cardId} file={file} compact={compact} />;
   return (
     <a
       href={uploadImageUrl(cardId, file)}
@@ -851,45 +851,45 @@ function AttachmentFace({ file, compact }: { file: string; compact: boolean }) {
  * preview with the text the runner extracted (the same the agent reads), and the original is one
  * click away. The text is only fetched when the preview opens.
  */
-function DocumentoAnexado({ cardId, file, compact }: { cardId: string; file: string; compact: boolean }) {
+function AttachedDocument({ cardId, file, compact }: { cardId: string; file: string; compact: boolean }) {
   const t = useT();
-  const [aberto, setAberto] = React.useState(false);
-  const nome = uploadDisplayName(file);
+  const [open, setOpen] = React.useState(false);
+  const displayName = uploadDisplayName(file);
   return (
     <>
       <button
         type="button"
-        onClick={() => setAberto(true)}
+        onClick={() => setOpen(true)}
         title={t("chat.previewAttachedFile")}
         data-testid="chat-file-preview"
         className={attachmentFrame(compact)}
       >
         <AttachmentFace file={file} compact={compact} />
       </button>
-      <Dialog open={aberto} onOpenChange={setAberto}>
+      <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="flex max-h-[85vh] max-w-5xl flex-col">
           <DialogHeader>
-            <DialogTitle className="truncate pr-6">{nome}</DialogTitle>
+            <DialogTitle className="truncate pr-6">{displayName}</DialogTitle>
             <DialogDescription className="flex items-center gap-3">
               {t("chat.previewHint")}
-              <a href={uploadImageUrl(cardId, file)} download={nome} className="inline-flex items-center gap-1 underline">
+              <a href={uploadImageUrl(cardId, file)} download={displayName} className="inline-flex items-center gap-1 underline">
                 <Download className="h-3.5 w-3.5" aria-hidden />
                 {t("chat.downloadAttachedFile")}
               </a>
             </DialogDescription>
           </DialogHeader>
-          {aberto && <ConteudoDoPreview cardId={cardId} file={file} />}
+          {open && <AttachmentPreviewBody cardId={cardId} file={file} />}
         </DialogContent>
       </Dialog>
     </>
   );
 }
 
-function ConteudoDoPreview({ cardId, file }: { cardId: string; file: string }) {
+function AttachmentPreviewBody({ cardId, file }: { cardId: string; file: string }) {
   const t = useT();
   const preview = useQuery({
-    queryKey: ["anexo-preview", cardId, file],
-    queryFn: () => boardApi.lerPreviewDeAnexo(cardId, file),
+    queryKey: ["attachment-preview", cardId, file],
+    queryFn: () => boardApi.readAttachmentPreview(cardId, file),
     staleTime: Infinity,
     retry: false,
   });

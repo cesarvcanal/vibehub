@@ -83,4 +83,23 @@ describe("CapturePrompt", () => {
     expect(screen.queryByTestId("capture-prompt")).toBeNull();
     expect(mockGet).not.toHaveBeenCalledWith("/cards/c1/captures");
   });
+
+  it("keeps what the person typed while the same capture is pending, and a new capture starts from its own suggestion", async () => {
+    let captures = [CAP];
+    mockGet.mockImplementation((url: string) =>
+      Promise.resolve(url === "/auth/me" ? { user: { id: "u1", username: "ada", role: "owner" } } : { captures }),
+    );
+    const { queryClient } = renderApp(<CapturePrompt cardId="c1" active />);
+    const nameField = (await screen.findByLabelText("Save as")) as HTMLInputElement;
+    await waitFor(() => expect(nameField.value).toBe("erp.multi"));
+
+    await userEvent.clear(nameField);
+    await userEvent.type(nameField, "meu erp");
+    await queryClient.refetchQueries({ queryKey: ["captures", "c1"] });
+    expect(nameField.value).toBe("meu erp");
+
+    captures = [{ ...CAP, id: "cap2", suggestedName: "banco" }];
+    await queryClient.refetchQueries({ queryKey: ["captures", "c1"] });
+    await waitFor(() => expect(nameField.value).toBe("banco"));
+  });
 });

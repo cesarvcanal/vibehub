@@ -120,13 +120,13 @@ describe("ProjectSidebar — a linha do PR embaixo do card", () => {
     const impasse = screen.getByRole("link", { name: "PR #551 · impasse" });
     const merged = screen.getByRole("link", { name: "PR #550 · mergeado" });
 
-    // Cor pela fase: pronto verde, em andamento laranja, impasse azul, mergeado apagado.
+    // Color by phase: ready green, in progress orange, impasse blue, merged dimmed.
     expect(ready).toHaveClass("text-emerald-400");
     expect(fixing).toHaveClass("text-amber-400");
     expect(impasse).toHaveClass("text-sky-400");
     expect(merged).toHaveClass("text-muted-foreground");
 
-    // Fica embaixo do próprio card, e só os cards com revisão ganham a linha.
+    // It sits under its own card, and only the cards with a review get the line.
     const title = screen.getByRole("link", { name: "realtime" });
     expect(title.compareDocumentPosition(fixing) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(title.parentElement).toBe(fixing.parentElement);
@@ -150,7 +150,7 @@ describe("ProjectSidebar — a linha do PR embaixo do card", () => {
     renderSidebar([card("c1", "realtime", { id: "r1", prNumber: 552, phase: "fixing", round: 2 })]);
     const line = await screen.findByRole("link", { name: "PR #552 · rodada 2/3" });
     expect(line).toHaveAttribute("href", "?project=p1&card=c1&review=1");
-    // O link do card segue o mesmo de antes, sem a marca.
+    // The card's link stays the same as before, without the mark.
     expect(screen.getByRole("link", { name: "realtime" })).toHaveAttribute("href", "?project=p1&card=c1");
   });
 
@@ -160,11 +160,11 @@ describe("ProjectSidebar — a linha do PR embaixo do card", () => {
     ]);
     const line = await screen.findByRole("link", { name: "PR #552 · rodada 2/3" });
 
-    // fireEvent devolve false quando o handler cancelou a navegação do navegador.
+    // fireEvent returns false when the handler cancelled the browser's navigation.
     expect(fireEvent.click(line)).toBe(false);
 
     expect(onOpenReview).toHaveBeenCalledWith("p1", "c1");
-    // Não é o clique do card: aquele alterna (abre/fecha), este só abre.
+    // It is not the card's click: that one toggles (opens/closes), this one only opens.
     expect(onOpenCard).not.toHaveBeenCalled();
   });
 
@@ -217,7 +217,7 @@ describe("ProjectSidebar — a linha do PR embaixo do card", () => {
     );
     const title = await screen.findByRole("link", { name: "realtime" });
     expect(title).toHaveAttribute("aria-current", "true");
-    // O realce é da linha inteira (card + PR), não de uma metade só.
+    // The highlight covers the whole row (card + PR), not just one half.
     const row = title.parentElement as HTMLElement;
     expect(row.className).toMatch(/bg-primary/);
     expect(row).toContainElement(screen.getByRole("link", { name: "PR #552 · rodada 2/3" }));

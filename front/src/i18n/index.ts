@@ -33,7 +33,7 @@ const DICTIONARIES: Record<Language, Record<string, string>> = { en, "pt-BR": pt
 export type Vars = Record<string, string | number | undefined | null>;
 
 /** A stored choice, when it is one of ours. Anything else (or no storage at all) is "not chosen". */
-export function storedLanguage(): Language | null {
+function storedLanguage(): Language | null {
   try {
     const raw = localStorage.getItem(LANGUAGE_KEY);
     return raw === "en" || raw === "pt-BR" ? raw : null;
@@ -115,6 +115,9 @@ export function t(key: string, vars?: Vars): string {
   const template = dict[resolved] ?? en[resolved] ?? resolved;
   return interpolate(template, vars);
 }
+
+/** The translate function a view hands to pure helpers: the module `t` or the one from `useT`. */
+export type Translate = typeof t;
 
 /**
  * `t` bound to the component: identical to the module-level one, except the component re-renders

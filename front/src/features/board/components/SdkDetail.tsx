@@ -3,7 +3,7 @@ import { Bot, Brain, ChevronLeft, ChevronRight, CircleCheck, CircleX, Copy, File
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { useNow, usePageVisible } from "@/lib/useNow";
-import { useT } from "@/i18n";
+import { useT, type Translate } from "@/i18n";
 import { Markdown } from "@/features/board/components/ChatView";
 import { toolHeadline, type AgentTask, type SdkRow, type ToolResultSummary } from "@/features/board/lib/sdkChat";
 import { hunksToRows, toolDiff } from "@/features/board/lib/toolDiff";
@@ -34,16 +34,15 @@ import {
 } from "@/features/board/lib/sdkDetail";
 
 /**
- * VER O QUE O CLAUDE ESTÁ FAZENDO — o clique que o terminal tem e o chat não tinha.
+ * SEEING WHAT CLAUDE IS DOING — the click the terminal has and the chat did not.
  *
- * Cada ação da conversa abre um modal com o que foi chamado, o que voltou (a saída inteira, o
- * arquivo lido, o diff aplicado) e o raciocínio de logo antes; as setas andam pelas ações. Cada
- * subagente abre a linha do tempo dele, ao vivo enquanto roda. "Mudanças" junta os arquivos que o
- * Claude alterou. O detalhe vem do transcript no runner, sob demanda (lib/sdkDetail.ts).
+ * Each action in the conversation opens a modal with what was called, what came back (the whole output, the
+ * file read, the diff applied) and the reasoning right before it; the arrows walk through the actions. Each
+ * subagent opens its own timeline, live while it runs. "Mudanças" gathers the files
+ * Claude changed. The detail comes from the transcript on the runner, on demand (lib/sdkDetail.ts).
  */
 
 type ToolRow = Extract<SdkRow, { kind: "tool" }>;
-type Translate = ReturnType<typeof useT>;
 
 export type DetailView =
   | { kind: "action"; id: string; seq?: string[]; owner?: string }
@@ -56,12 +55,12 @@ export interface SdkDetailApi {
 
 export const SdkDetailContext = React.createContext<SdkDetailApi>({ open: () => {} });
 
-/** De quanto em quanto a linha do tempo de um subagente rodando é pedida de novo. */
+/** How often the timeline of a running subagent is requested again. */
 export const AGENT_POLL_MS = 4_000;
-/** De quanto em quanto uma ação ainda sem resultado é pedida de novo. */
+/** How often an action still without a result is requested again. */
 export const ACTION_POLL_MS = 4_000;
 
-/* --------------------------------------------------------------------- peças */
+/* -------------------------------------------------------------------- pieces */
 
 export function StatusIcon({ status, className }: { status: ToolStatus; className?: string }) {
   if (status === "running") return <Loader2 aria-hidden className={cn("h-3 w-3 shrink-0 animate-spin text-primary", className)} />;
@@ -97,7 +96,7 @@ function CodeBlock({ text, start = 1, numbered = true, tone, path, follow }: { t
   const code = text.replace(/\n$/, "");
   const lines = code.split("\n");
   const tokens = useCodeTokens(code, path);
-  // Saída ao vivo: acompanha o fim como um terminal, a menos que a pessoa tenha subido para ler.
+  // Live output: follows the end like a terminal, unless the person has scrolled up to read.
   const box = React.useRef<HTMLDivElement>(null);
   const pinned = React.useRef(true);
   React.useLayoutEffect(() => {
@@ -171,11 +170,11 @@ function formatTime(ms: number | undefined): string {
   return new Date(ms).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
-/* ------------------------------------------------------------ a linha de ação */
+/* ------------------------------------------------------------- the action row */
 
 /**
- * O que a linha da ação mostra sob a manchete: o resultado ("7 linhas", "erro: …"). Exportado para
- * a linha da conversa e para a linha do tempo do subagente usarem a mesma frase.
+ * What the action row shows under the headline: the result ("7 linhas", "erro: …"). Exported so
+ * the conversation row and the subagent's timeline use the same phrase.
  */
 export function ToolResultText({ name, result }: { name: string; result?: ToolResultSummary }) {
   const line = toolResultLine(name, result);
@@ -192,17 +191,17 @@ export function ToolResultText({ name, result }: { name: string; result?: ToolRe
   );
 }
 
-/* ------------------------------------------------------------------ a frota */
+/* ---------------------------------------------------------------- the fleet */
 
 /**
- * OS SUBAGENTES disparados em sequência: uma linha por subagente, com o que ele faz agora, quantas
- * ações fez e há quanto tempo. No lugar do "6 ações" que escondia todos eles atrás de um clique.
+ * THE SUBAGENTS fired in sequence: one row per subagent, with what it is doing now, how many
+ * actions it did and how long ago. In place of the "6 ações" that hid all of them behind a click.
  */
 interface FleetProps { rows: SdkRow[]; tasks: Record<string, AgentTask>; children: ReadonlyMap<string, readonly SdkRow[]> }
 
 /**
- * A frota só redesenha quando ALGO DELA mudou: um token da resposta do principal recria o array de
- * linhas a cada delta, mas as linhas dos subagentes são as mesmas referências. PURE.
+ * The fleet only redraws when SOMETHING OF IT changed: a token of the main agent's answer recreates the array of
+ * rows on every delta, but the subagents' rows are the same references. PURE.
  */
 export function fleetPropsEqual(a: FleetProps, b: FleetProps): boolean {
   if (a.tasks !== b.tasks || a.rows.length !== b.rows.length || a.rows.some((row, i) => row !== b.rows[i])) return false;
@@ -211,7 +210,7 @@ export function fleetPropsEqual(a: FleetProps, b: FleetProps): boolean {
 
 export const SdkFleet = React.memo(SdkFleetView, fleetPropsEqual);
 
-export function SdkFleetView({ rows, tasks, children }: FleetProps) {
+function SdkFleetView({ rows, tasks, children }: FleetProps) {
   const t = useT();
   const { open } = React.useContext(SdkDetailContext);
   const agents = rows.filter((r): r is ToolRow => r.kind === "tool");
@@ -255,8 +254,8 @@ export function SdkFleetView({ rows, tasks, children }: FleetProps) {
 }
 
 /**
- * A MOLDURA da frota: cabeçalho, barra de progresso opcional e as linhas. Exportada para a faixa de
- * segundo plano usar o mesmo desenho — o trabalho em andamento tem uma cara só na tela.
+ * The fleet's FRAME: header, optional progress bar and the rows. Exported so the background
+ * strip uses the same design — work in progress has a single look on screen.
  */
 export function FleetPanel({
   testId,
@@ -274,7 +273,7 @@ export function FleetPanel({
   icon: React.ReactNode;
   title: React.ReactNode;
   subtitle?: React.ReactNode;
-  /** 0..1; sem valor, sem barra. */
+  /** 0..1; no value, no bar. */
   progress?: number;
   role?: string;
   className?: string;
@@ -297,7 +296,7 @@ export function FleetPanel({
   );
 }
 
-/** Uma linha da frota: status, nome, o que faz agora, "N ações · tempo". Sem `onClick`, não é botão. */
+/** One fleet row: status, name, what it does now, "N ações · tempo". Without `onClick`, it is not a button. */
 export function FleetRow({
   testId,
   status,
@@ -336,7 +335,7 @@ export function FleetRow({
   );
 }
 
-/* --------------------------------------------------------------- os modais */
+/* -------------------------------------------------------------- the modals */
 
 interface HostProps {
   rows: readonly SdkRow[];
@@ -345,7 +344,7 @@ interface HostProps {
   onStack: (stack: DetailView[]) => void;
 }
 
-/** O lugar onde os modais vivem: uma pilha (ação aberta de dentro de um subagente volta para ele). */
+/** Where the modals live: a stack (an action opened from inside a subagent goes back to it). */
 export function SdkDetailHost({ rows, tasks, stack, onStack }: HostProps) {
   const t = useT();
   const view = stack[stack.length - 1];
@@ -383,8 +382,8 @@ export function SdkDetailHost({ rows, tasks, stack, onStack }: HostProps) {
   );
 }
 
-/** Por onde as setas andam: a sequência dada (passos de um subagente) ou as ações do mesmo fio. PURE. */
-export function actionSequence(view: Extract<DetailView, { kind: "action" }>, rows: readonly SdkRow[]): string[] {
+/** Where the arrows walk: the given sequence (a subagent's steps) or the actions of the same thread. PURE. */
+function actionSequence(view: Extract<DetailView, { kind: "action" }>, rows: readonly SdkRow[]): string[] {
   if (view.seq && view.seq.length) return view.seq;
   const row = rows.find((r) => r.kind === "tool" && r.id === view.id) as ToolRow | undefined;
   const parent = row?.parent;
@@ -401,7 +400,7 @@ function BackButton({ back, label }: { back?: () => void; label: string }) {
   );
 }
 
-/* ------------------------------------------------------------- uma ação */
+/* ----------------------------------------------------------- one action */
 
 function ActionView({
   view, rows, tasks, back, onNav, onOpenAgent,
@@ -416,14 +415,14 @@ function ActionView({
   const t = useT();
   const row = rows.find((r) => r.kind === "tool" && r.id === view.id) as ToolRow | undefined;
   const rowStatus: ToolStatus | null = row ? (row.name === "Agent" || row.name === "Task" ? agentStatus(row, tasks[row.id]) : toolStatus(row)) : null;
-  // Enquanto houver o que esperar, o detalhe é pedido de novo, sem prazo: a ação rodando (ou o
-  // transcript ainda sem o resultado), um comando em segundo plano vivo, ou o detalhe que ainda não
-  // veio (sondagem falhou, sem conexão, ação da tela que o transcript ainda não gravou). Abrir o
-  // modal é querer ver — "não deu para ler" não é resposta. Um pedido por vez por aba (no back).
+  // While there is something to wait for, the detail is requested again, with no deadline: the running action (or the
+  // transcript still without the result), a live background command, or the detail that has not
+  // come yet (probe failed, no connection, an on-screen action the transcript has not recorded yet). Opening the
+  // modal is wanting to see — "não deu para ler" is not an answer. One request at a time per tab (in the back).
   const [waiting, setWaiting] = React.useState(false);
   const { data, loading, error } = useDetail<ToolDetailData>("tool", { id: view.id }, view.id, rowStatus === "running" || waiting ? ACTION_POLL_MS : undefined, rowStatus ?? "");
   const detail = data && data.found ? data : null;
-  // Rodando e ainda sem resultado — ou nem gravada no transcript ainda: é espera, não "sem saída".
+  // Running and still without a result — or not even recorded in the transcript yet: it is waiting, not "sem saída".
   const pendingResult = detail !== null ? !detailHasResult(detail) : rowStatus === "running" && data !== null;
   const background = detail?.background;
   const backgroundRunning = background?.status === "running";
@@ -504,7 +503,7 @@ function backgroundLine(bg: BackgroundOutputData, t: Translate): string {
     : t("sdk.detail.bg.stopped");
 }
 
-/** A saída de um comando em segundo plano: o arquivo da tarefa, ao vivo enquanto ela roda. */
+/** The output of a background command: the task's file, live while it runs. */
 function BackgroundOutput({ bg }: { bg: BackgroundOutputData }) {
   const t = useT();
   const running = bg.status === "running";
@@ -598,7 +597,7 @@ function ActionBody({ name, input, detail, row, onOpenAgent }: { name: string; i
       </>
     );
   }
-  // Qualquer outra (Skill, WebFetch, MCP…): o input e o texto devolvido, sem fingir que sabe mais.
+  // Any other (Skill, WebFetch, MCP…): the input and the text returned, without pretending to know more.
   return (
     <>
       {input !== undefined ? <Section label={t("sdk.detail.input")}><CodeBlock text={JSON.stringify(input, null, 2) ?? ""} numbered={false} /></Section> : null}
@@ -620,7 +619,7 @@ function ErrorBox({ text, label }: { text: string; label?: string }) {
   );
 }
 
-/* ----------------------------------------------------------- um subagente */
+/* ----------------------------------------------------------- one subagent */
 
 function AgentView({
   id, rows, tasks, back, onOpenStep,
@@ -650,7 +649,7 @@ function AgentView({
   const scroller = React.useRef<HTMLDivElement | null>(null);
   const count = timeline?.items.length ?? 0;
   React.useEffect(() => {
-    // Rodando: a ponta viva é o que interessa, como no terminal.
+    // Running: the live tail is what matters, like in the terminal.
     if (running && tab === "timeline" && scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
   }, [count, running, tab]);
   const seq = timeline ? timeline.items.filter((i) => i.kind === "tool").map((i) => (i as { id: string }).id) : [];
@@ -754,7 +753,7 @@ function TimelineEntry({ item, onOpen }: { item: TimelineItem; onOpen: (id: stri
   );
 }
 
-/* --------------------------------------------------------------- mudanças */
+/* ---------------------------------------------------------------- changes */
 
 export function useChangedFiles(rows: readonly SdkRow[]) {
   return React.useMemo(() => changedFiles(rows, (name, input) => {
@@ -856,8 +855,8 @@ function ChangesView({ rows, onOpenAction }: { rows: readonly SdkRow[]; onOpenAc
   );
 }
 
-/** Os arquivos do branch e os não commitados, num só lista (o não commitado marcado). PURE. */
-export function mergeGitFiles(data: CardChangesData): Array<{ path: string; status: string; uncommitted: boolean }> {
+/** The branch's files and the uncommitted ones, in a single list (the uncommitted one marked). PURE. */
+function mergeGitFiles(data: CardChangesData): Array<{ path: string; status: string; uncommitted: boolean }> {
   const out = new Map<string, { path: string; status: string; uncommitted: boolean }>();
   for (const f of data.files) out.set(f.path, { path: f.path, status: f.status.slice(0, 1), uncommitted: false });
   for (const f of data.uncommitted) {

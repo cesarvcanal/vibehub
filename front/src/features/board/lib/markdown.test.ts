@@ -152,12 +152,12 @@ describe("uploaded images", () => {
 
 describe("tipo de anexo no chat", () => {
   it("áudio toca, documento de escritório abre preview, o resto continua chip/imagem", async () => {
-    const { anexoTemPreview } = await import("@/features/board/lib/markdown");
+    const { hasAttachmentPreview } = await import("@/features/board/lib/markdown");
     for (const f of ["1-voz.ogg", "1-ptt.opus", "1-reuniao.mp3", "1-memo.m4a", "1-a.wav"]) expect(uploadKind(f)).toBe("audio");
-    for (const f of ["1-v.xlsx", "1-v.xls", "1-c.docx", "1-c.doc", "1-s.pptx", "1-o.odt", "1-o.ods"]) expect(anexoTemPreview(f)).toBe(true);
+    for (const f of ["1-v.xlsx", "1-v.xls", "1-c.docx", "1-c.doc", "1-s.pptx", "1-o.odt", "1-o.ods"]) expect(hasAttachmentPreview(f)).toBe(true);
     for (const f of ["1-c.pdf", "1-i.png", "1-n.csv", "1-x.zip"]) {
       expect(uploadKind(f)).not.toBe("audio");
-      expect(anexoTemPreview(f)).toBe(false);
+      expect(hasAttachmentPreview(f)).toBe(false);
     }
   });
 });
@@ -204,13 +204,13 @@ describe("uploadKind", () => {
     expect(uploadKind("1-x.opus")).toBe("audio");
     expect(uploadKind("1-x.pdf")).toBe("pdf");
     expect(uploadKind("1-x.xlsx")).toBe("spreadsheet");
-    // csv abre como texto numa aba (é como o back serve), não pelo preview de planilha.
+    // csv opens as text in a tab (that is how the back serves it), not through the spreadsheet preview.
     expect(uploadKind("1-x.csv")).toBe("text");
     expect(uploadKind("1-x.docx")).toBe("document");
     expect(uploadKind("1-x.pptx")).toBe("presentation");
     expect(uploadKind("1-x.txt")).toBe("text");
     expect(uploadKind("1-x.zip")).toBe("file");
-    // Nomes que existem no protótipo de Object não são tipo (a busca na tabela só vê chave própria).
+    // Names that exist on Object's prototype are not a type (the table lookup only sees own keys).
     for (const inherited of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
       expect(uploadKind(`1794341151810-a.${inherited.toLowerCase()}`)).toBe("file");
     }

@@ -583,12 +583,12 @@ describe("escada de estados — awaiting (Preparando/Pensando antes do primeiro 
 });
 
 /**
- * O RACIOCÍNIO NA TELA (pedido do César, 2026-09-17): "só fica um loading escrito 'Trabalhando…' e
+ * THE REASONING ON SCREEN (César's request, 2026-09-17): "só fica um loading escrito 'Trabalhando…' e
  * eu não sei o que está acontecendo. Se ela estiver pensando, mostra o pensamento ali."
  *
- * O pensamento é a única coisa que o modelo produz ANTES da resposta, então é ele que transforma a
- * espera em acompanhamento. Regra central: pensamento e resposta são DUAS correntes — uma nunca
- * escreve na linha da outra.
+ * The thought is the only thing the model produces BEFORE the answer, so it is what turns the
+ * wait into following along. Core rule: thought and answer are TWO streams — one never
+ * writes into the other's row.
  */
 describe("raciocínio ao vivo (o que a espera mostra)", () => {
   it("deltas de raciocínio se acumulam numa linha própria, marcada como em curso", () => {
@@ -649,7 +649,7 @@ describe("raciocínio ao vivo (o que a espera mostra)", () => {
       { type: "ready" },
       { type: "thinking_delta", text: "hmm" },
     ], { ...INITIAL_SDK_STATE, awaiting: true });
-    expect(after.awaiting).toBe(false); // o texto na tela substitui a promessa do spinner
+    expect(after.awaiting).toBe(false); // the text on screen replaces the spinner's promise
     expect(after.turnActive).toBe(true);
   });
 
@@ -665,12 +665,12 @@ describe("raciocínio ao vivo (o que a espera mostra)", () => {
 });
 
 /**
- * "MANDEI A MENSAGEM E NADA ACONTECE, FICA PRESO NESSA TELA" (produção, 2026-09-17): com um plano de
- * opções na tela, quem não gostava do plano escrevia no chat para mudar o rumo — e o turno seguia
- * parado, esperando um clique que não viria, até o timeout de 30 minutos.
+ * "MANDEI A MENSAGEM E NADA ACONTECE, FICA PRESO NESSA TELA" (production, 2026-09-17): with a plan of
+ * options on screen, whoever did not like the plan wrote in the chat to change course — and the turn
+ * stayed stopped, waiting for a click that would never come, until the 30-minute timeout.
  *
- * A regra agora: falar É responder. O cartão se resolve como SUBSTITUÍDO — que não é o mesmo que
- * "sem resposta": a pessoa respondeu, só não pelo cartão, e a tela não pode dizer o contrário.
+ * The rule now: speaking IS answering. The card resolves as SUPERSEDED — which is not the same as
+ * "no answer": the person answered, just not through the card, and the screen cannot say otherwise.
  */
 describe("a mensagem substitui o cartão de pergunta", () => {
   const question: SdkEvent = {
@@ -745,13 +745,13 @@ describe("the session's command catalogue", () => {
 
 
 /**
- * REBOBINAR NA TELA. Quando a edição rebobina a sessão, o modelo perde o original, a resposta pela
- * metade e as ferramentas do meio — e a tela tem de perder também, ou ela fica mostrando uma
- * conversa que o modelo não tem.
+ * REWINDING ON SCREEN. When the edit rewinds the session, the model loses the original, the half
+ * answer and the tools in between — and the screen has to lose them too, or it keeps showing a
+ * conversation the model does not have.
  *
- * Os dois erros aqui têm custos MUITO diferentes: apagar de menos deixa uma linha velha na tela
- * (feio); apagar de mais some com a mensagem que a pessoa acabou de escrever (perda). Por isso a
- * maior parte do que está abaixo tenta fazer a função apagar demais.
+ * The two errors here have VERY different costs: erasing too little leaves a stale row on screen
+ * (ugly); erasing too much makes the message the person just wrote disappear (loss). That is why
+ * most of what is below tries to make the function erase too much.
  */
 describe("dropRewoundRows — apagar de menos é feio, apagar de mais é perda", () => {
   const edited = (text: string) => markUserEdited(appendUserRow(INITIAL_SDK_STATE, text), text);
@@ -768,8 +768,8 @@ describe("dropRewoundRows — apagar de menos é feio, apagar de mais é perda",
   });
 
   it("com o texto do original, corta da mensagem DESTA edição — não de uma editada (supersede) mais abaixo", () => {
-    // A, B, C; C foi editada por supersede (fica na tela, "editada") e virou C'. Agora B é editada e
-    // o driver rebobina para antes de B: B, a resposta, C, C' — tudo some; fica A e a B nova.
+    // A, B, C; C was edited by supersede (stays on screen, "editada") and became C'. Now B is edited and
+    // the driver rewinds to before B: B, the answer, C, C' — all gone; A and the new B remain.
     let state = appendUserRow(INITIAL_SDK_STATE, "A");
     state = applySdkEvent(state, { type: "assistant_text", text: "resposta A" });
     state = appendUserRow(state, "B");
@@ -823,13 +823,13 @@ describe("dropRewoundRows — apagar de menos é feio, apagar de mais é perda",
 
     const after = dropRewoundRows(state);
     const texts = after.rows.map((r) => (r.kind === "user" ? `u:${r.text}` : r.kind === "assistant" ? `a:${r.text}` : r.kind));
-    // a edição antiga e sua resposta continuam lá; só o miolo da segunda sai
+    // the old edit and its answer are still there; only the middle of the second one goes
     expect(texts).toEqual(["u:errada 1", "u:certa 1", "a:resposta da certa 1", "u:certa 2"]);
   });
 
   it("a linha editada sendo a ÚLTIMA mensagem, nada é cortado — nunca some a mensagem de quem escreveu", () => {
-    // Ordem que o fluxo real não produz (a nova mensagem é sempre acrescentada depois). Se um dia
-    // produzir, o pior resultado aceitável é NÃO cortar nada.
+    // An order the real flow does not produce (the new message is always appended afterwards). If it ever
+    // does, the worst acceptable result is to cut NOTHING.
     let state = edited("errada");
     state = applySdkEvent(state, { type: "assistant_text", text: "meia" });
     expect(dropRewoundRows(state)).toBe(state);
@@ -837,12 +837,12 @@ describe("dropRewoundRows — apagar de menos é feio, apagar de mais é perda",
   });
 
   /**
-   * A NOTA ÓRFÃ. "Turno interrompido para você editar a mensagem — a resposta acima ficou pela
-   * metade" chega DEPOIS da bolha nova: a bolha é desenhada no instante do Enter, enquanto a nota
-   * ainda tem de voltar do driver. O rebobinar apaga a meia resposta que ela narra — e a nota
-   * sobrevivia, pendurada embaixo da mensagem corrigida, apontando para uma resposta COMPLETA.
-   * O log do back já corta essa nota (ela fica entre o original e o marcador), então mantê-la na
-   * tela também discordava do que um F5 mostraria.
+   * THE ORPHAN NOTE. "Turno interrompido para você editar a mensagem — a resposta acima ficou pela
+   * metade" arrives AFTER the new bubble: the bubble is drawn the instant Enter is pressed, while the
+   * note still has to come back from the driver. The rewind erases the half answer it narrates — and
+   * the note survived, hanging under the corrected message, pointing at a COMPLETE answer.
+   * The back's log already cuts that note (it sits between the original and the marker), so keeping
+   * it on screen also disagreed with what an F5 would show.
    */
   it("a nota que narrava o turno cortado sai junto, mesmo tendo chegado depois da bolha nova", () => {
     let state = appendUserRow(INITIAL_SDK_STATE, "primeira");
@@ -850,7 +850,7 @@ describe("dropRewoundRows — apagar de menos é feio, apagar de mais é perda",
     state = markUserEdited(appendUserRow(state, "errada"), "errada");
     state = applySdkEvent(state, { type: "assistant_text", text: "meia resposta" });
     state = appendUserRow(state, "certa");
-    // ordem REAL: a nota do back chega depois que a bolha corrigida já está na tela
+    // REAL order: the back's note arrives after the corrected bubble is already on screen
     state = applySdkEvent(state, { type: "system_note", text: "turn-interrupted-edit" });
 
     const after = dropRewoundRows(state);
@@ -885,11 +885,11 @@ describe("dropRewoundRows — apagar de menos é feio, apagar de mais é perda",
   });
 
   /**
-   * A trava de ordem (`editedAt >= lastUserAt`) é defendida DUAS vezes no código — pela própria
-   * checagem e pela de "não cortou nada" —, então nenhum caso isolado consegue provar que ela
-   * existe. Em vez de fingir que prova, este teste ataca a CLASSE do erro: monta centenas de
-   * conversas diferentes (determinísticas) e cobra as duas invariantes que, se quebrarem, custam
-   * uma mensagem de gente.
+   * The order lock (`editedAt >= lastUserAt`) is defended TWICE in the code — by the check itself
+   * and by the "nothing was cut" one —, so no single case can prove it exists. Instead of
+   * pretending to prove it, this test attacks the CLASS of the error: it builds hundreds of
+   * different (deterministic) conversations and enforces the two invariants that, if they break,
+   * cost a person's message.
    */
   it("invariante, em centenas de conversas: a última mensagem do usuário e tudo antes da editada sobrevivem", () => {
     let seed = 20260926;
@@ -917,11 +917,11 @@ describe("dropRewoundRows — apagar de menos é feio, apagar de mais é perda",
       const editedAt = before.map((r) => r.kind === "user" && r.edited === true).lastIndexOf(true);
       const after = dropRewoundRows(state).rows;
 
-      // 1. a mensagem que a pessoa acabou de escrever NUNCA some
+      // 1. the message the person just wrote NEVER disappears
       if (lastUser) expect(after).toContain(lastUser);
-      // 2. tudo que vem antes da linha editada é conversa que o modelo ainda tem — fica igual
+      // 2. everything before the edited row is conversation the model still has — it stays the same
       if (editedAt > 0) expect(after.slice(0, editedAt)).toEqual(before.slice(0, editedAt));
-      // 3. nada é inventado nem duplicado
+      // 3. nothing is invented or duplicated
       expect(after.length).toBeLessThanOrEqual(before.length);
       expect(new Set(after).size).toBe(after.length);
       for (const row of after) expect(before).toContain(row);
@@ -1060,11 +1060,11 @@ describe("toolHeadline", () => {
       { content: "Implementar", activeForm: "Implementando", status: "pending" },
     ];
     expect(toolHeadline("TodoWrite", { todos })).toEqual({ title: "Tasks 1/3", detail: "Escrevendo o teste" });
-    // Nada em andamento: só a contagem.
+    // Nothing in progress: only the count.
     expect(toolHeadline("TodoWrite", { todos: [{ content: "a", activeForm: "A", status: "pending" }] })).toEqual({
       title: "Tasks 0/1",
     });
-    // Input torto não derruba a manchete.
+    // Malformed input does not bring the headline down.
     expect(toolHeadline("TodoWrite", { todos: "x" })).toEqual({ title: "TodoWrite" });
   });
 
@@ -1117,9 +1117,9 @@ describe("currentActivity (what the sticky bar reports)", () => {
     expect(currentActivity(state)).toBeNull();
   });
 
-  /* Produção, 19/10/2026: o modelo rodava a suíte de testes havia 9 minutos e a tela dizia
-     "Executando… 27m · turno longo, ainda trabalhando" — porque a pessoa mandou mensagens no meio
-     do turno, e a barra parava na bolha dela como se fosse a que ABRIU o turno. */
+  /* Production, 19/10/2026: the model had been running the test suite for 9 minutes and the screen said
+     "Executando… 27m · turno longo, ainda trabalhando" — because the person sent messages in the middle
+     of the turn, and the bar stopped at their bubble as if it were the one that OPENED the turn. */
   it("a mensagem ABSORVIDA no turno em curso não esconde a ferramenta que segue rodando", () => {
     let state = ready();
     state = appendUserRow(state, "roda os testes", undefined, { awaiting: true });
@@ -1145,14 +1145,14 @@ describe("currentActivity (what the sticky bar reports)", () => {
 });
 
 /**
- * A RECONCILIAÇÃO é sobre o que sobrou de ANTES: as mensagens que um navegador anterior (ou uma
- * conexão anterior) enviou e cujo destino esta tela não conhece. Um envio que ESTA conexão ainda
- * espera não é assunto dela — ele tem bolha na tela e relógio próprio no watchdog.
+ * The RECONCILIATION is about what was left over from BEFORE: the messages a previous browser (or a
+ * previous connection) sent and whose fate this screen does not know. A send that THIS connection is
+ * still waiting on is none of its business — it has a bubble on screen and its own clock in the watchdog.
  *
- * Sem essa fronteira a reconciliação condenava exatamente os envios em voo: o `ready` chega ANTES
- * de o servidor responder os frames que ficaram bufferados durante o setup (back/routes/cardSdk.ts
- * manda `ready` no attach e só depois processa o buffer), então o replay não podia conter a
- * mensagem — e ela virava uma SEGUNDA bolha, marcada "não entregue" (produção, 2026-09-28).
+ * Without this boundary the reconciliation condemned exactly the in-flight sends: the `ready` arrives
+ * BEFORE the server answers the frames that were buffered during setup (back/routes/cardSdk.ts
+ * sends `ready` on attach and only afterwards processes the buffer), so the replay could not contain the
+ * message — and it became a SECOND bubble, marked "não entregue" (production, 2026-09-28).
  */
 describe("liveUserCids — o que esta conexão ainda está esperando", () => {
   it("lista os cids que já têm bolha na tela, entregues ou não", () => {
@@ -1168,16 +1168,16 @@ describe("liveUserCids — o que esta conexão ainda está esperando", () => {
 });
 
 /**
- * O RESPIRO DO TURNO (pedido do César, 2026-09-28): "no Cursor e no Claude Code as mensagens ficam
+ * THE TURN'S BREATHER (César's request, 2026-09-28): "no Cursor e no Claude Code as mensagens ficam
  * lá enquanto ele tá trabalhando, mas quando ele tiver tranquilo ele puxa as mensagens da fila".
  *
- * A fila esperava o turno FECHAR — e um turno de quinze minutos segurava por quinze minutos um
- * "para, tá errado". Mas um turno não é um bloco maciço: entre uma ferramenta e a próxima o modelo
- * FECHA um bloco de resposta, e esse instante é o lugar certo de entregar. Uma mensagem entregue aí
- * entra no turno em andamento pelo streaming input, exatamente como no Claude Code.
+ * The queue used to wait for the turn to CLOSE — and a fifteen-minute turn held a "para, tá errado"
+ * for fifteen minutes. But a turn is not a solid block: between one tool and the next the model
+ * CLOSES an answer block, and that instant is the right place to deliver. A message delivered there
+ * enters the running turn through streaming input, exactly as in Claude Code.
  *
- * O que conta como respiro: nada em curso. Ferramenta rodando, não; texto ou raciocínio ainda
- * escorrendo, não; "Preparando…" (o turno nem começou), não. Bloco fechado, sim.
+ * What counts as a breather: nothing in progress. Tool running, no; text or reasoning still
+ * streaming, no; "Preparando…" (the turn has not even started), no. Closed block, yes.
  */
 describe("turnHasRoomForMore — o respiro em que a fila anda", () => {
   const ready = (): SdkChatState => applySdkEvent(INITIAL_SDK_STATE, { type: "ready" });
@@ -1192,18 +1192,18 @@ describe("turnHasRoomForMore — o respiro em que a fila anda", () => {
   });
 
   /**
-   * FERRAMENTA RODANDO É O RESPIRO MAIS COMUM QUE EXISTE (produção, 13/10/2026: "passo uma tarefa e
+   * A RUNNING TOOL IS THE MOST COMMON BREATHER THERE IS (production, 13/10/2026: "passo uma tarefa e
    * vejo que ela demora um pouco").
    *
-   * A regra antiga lia "ferramenta em curso" como "não está tranquilo" e segurava a mensagem — mas
-   * é justamente aí que o turno PASSA o tempo dele, e a linha mais nova de um turno trabalhando é
-   * quase sempre uma ferramenta. Medido no transcript de uma sessão real deste painel: de uma
-   * chamada de ferramenta até o próximo bloco fechado são 11s na mediana, 31s no p90 e 71s no pior
-   * caso — o tempo que a mensagem ficava parada na tela com o fio de pé e o CLI pronto para
-   * recebê-la. E uma ferramenta não é uma frase pela metade: a mensagem entregue aqui entra pelo
-   * streaming input e o CLI a dobra no passo seguinte do modelo (o `turn_absorbed`), que é
-   * exatamente o que aconteceria num "bloco fechado". O ritmo de uma por vez não vem daqui — vem da
-   * regra da linha `user` logo abaixo.
+   * The old rule read "tool in progress" as "not settled" and held the message — but that is
+   * precisely where the turn SPENDS its time, and the newest row of a working turn is almost always
+   * a tool. Measured on the transcript of a real session of this panel: from a tool call to the next
+   * closed block is 11s at the median, 31s at p90 and 71s at worst — the time the message sat
+   * stopped on screen with the wire up and the CLI ready to receive it. And a tool is not a
+   * half-finished sentence: the message delivered here enters through streaming input and the CLI
+   * folds it into the model's next step (the `turn_absorbed`), which is exactly what would happen at
+   * a "closed block". The one-at-a-time rhythm does not come from here — it comes from the
+   * `user` row rule right below.
    */
   it("ferramenta rodando: a fila ANDA — a mensagem é dobrada no próximo passo do modelo", () => {
     const state = feed([
@@ -1217,10 +1217,10 @@ describe("turnHasRoomForMore — o respiro em que a fila anda", () => {
   });
 
   /**
-   * E o caso em que a espera não tinha fim: o turno ACABOU com uma ferramenta como última linha (um
-   * turno interrompido no meio de uma, um `result` que chega sem texto final). Nada estava rodando,
-   * ninguém ia desenhar outra linha, e a mensagem da fila ficava parada até a pessoa mandar algo
-   * de novo — a fila travada com o agente ocioso.
+   * And the case where the wait had no end: the turn ENDED with a tool as its last row (a turn
+   * interrupted in the middle of one, a `result` that arrives with no final text). Nothing was running,
+   * nobody was going to draw another row, and the queued message sat there until the person sent
+   * something again — the queue stuck with the agent idle.
    */
   it("turno fechado com uma ferramenta como última linha: a fila NÃO fica travada", () => {
     const state = feed([
@@ -1250,8 +1250,8 @@ describe("turnHasRoomForMore — o respiro em que a fila anda", () => {
       { type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } },
       { type: "assistant_text", text: "os testes passaram" },
     ]);
-    expect(state.turnActive).toBe(true); // o turno NÃO acabou…
-    expect(turnHasRoomForMore(state)).toBe(true); // …e mesmo assim há espaço
+    expect(state.turnActive).toBe(true); // the turn has NOT ended…
+    expect(turnHasRoomForMore(state)).toBe(true); // …and still there is room
   });
 
   it("mensagem recém-entregue no meio do turno: o respiro foi dela, a próxima espera a próxima", () => {
@@ -1260,33 +1260,33 @@ describe("turnHasRoomForMore — o respiro em que a fila anda", () => {
       { type: "assistant_delta", text: "vou olhar" },
       { type: "assistant_text", text: "os testes passaram" },
     ]);
-    // entregamos uma da fila e o driver confirmou a dobra (o `awaiting` cai com o turn_absorbed)
+    // we delivered one from the queue and the driver confirmed the fold (`awaiting` drops with turn_absorbed)
     const sent = applySdkEvent(appendUserRow(base, "o que você tá fazendo ?", undefined, { awaiting: true }), {
       type: "turn_absorbed",
     });
     expect(sent.turnActive).toBe(true);
-    expect(sent.awaiting).toBe(false); // nada mais "preparando"…
-    expect(turnHasRoomForMore(sent)).toBe(false); // …mas o modelo ainda não reagiu a ela
+    expect(sent.awaiting).toBe(false); // no longer "preparando"…
+    expect(turnHasRoomForMore(sent)).toBe(false); // …but the model has not reacted to it yet
 
-    // E o ritmo é esse: UM passo do modelo, UMA mensagem. A ferramenta que ele chama em seguida é
-    // a reação à que acabou de subir — e abre o respiro da próxima.
+    // And this is the rhythm: ONE model step, ONE message. The tool it calls next is
+    // the reaction to the one that just went up — and it opens the next one's breather.
     const reacted = applySdkEvent(sent, { type: "tool_use", id: "t9", name: "Read", input: { file_path: "a.ts" } });
     expect(turnHasRoomForMore(reacted)).toBe(true);
   });
 });
 
 /**
- * O PEDIDO DO CÉSAR (2026-09-28): "fica 'ferramenta demorada, ainda rodando' — parece mensagem
+ * CÉSAR'S REQUEST (2026-09-28): "fica 'ferramenta demorada, ainda rodando' — parece mensagem
  * genérica. Eu consigo ver o raciocínio dela; poderia mostrar o que a IA tá dizendo mesmo ali.
  * Confere se não é pré-setada e sim dinâmica da IA."
  *
- * O indicador dizia só verbo + relógio + uma cauda enlatada, escolhida por uma tabela a partir do
- * tempo decorrido. E o material de verdade estava ali do lado o tempo todo: a descrição que o
- * PRÓPRIO agente escreveu para o comando ("Measuring PDV module size", via `toolHeadline`) e o
- * raciocínio que ele está escrevendo agora. Nada disso precisa ser inventado — precisa ser lido.
+ * The indicator used to say only verb + clock + a canned tail, picked from a table based on the
+ * elapsed time. And the real material was right there all along: the description the agent
+ * ITSELF wrote for the command ("Measuring PDV module size", via `toolHeadline`) and the
+ * reasoning it is writing now. None of it needs to be invented — it needs to be read.
  *
- * A regra: quando existe palavra do modelo, é ela que aparece. A frase enlatada vira o que sempre
- * deveria ter sido — o fallback de quando não há nada a dizer.
+ * The rule: when there are words from the model, they are what shows up. The canned sentence becomes
+ * what it always should have been — the fallback for when there is nothing to say.
  */
 describe("liveActivityDetail — a palavra do modelo, não a frase pronta", () => {
   it("ferramenta rodando: aparece a descrição que o AGENTE escreveu para o comando", () => {
@@ -1431,7 +1431,7 @@ describe("workflow — a frota visível no chat", () => {
     ] })], state);
     expect(state.rows.length).toBe(before);
     expect(state.rows.filter((r) => r.kind === "workflow")).toHaveLength(1);
-    // e continua ANTES da fala do assistente: a linha fica onde nasceu, não pula para o fim
+    // and it stays BEFORE the assistant's speech: the row stays where it was born, it does not jump to the end
     expect(state.rows.findIndex((r) => r.kind === "workflow")).toBeLessThan(
       state.rows.findIndex((r) => r.kind === "assistant"),
     );
@@ -1453,7 +1453,7 @@ describe("workflow — a frota visível no chat", () => {
   });
 
   it("as fases e o início da rodada vêm do quadro do back (o script lido no runner)", () => {
-    // Sem a chamada da tool nesta sessão (aba aberta depois do disparo): só o back sabe o plano.
+    // Without the tool call in this session (tab opened after the launch): only the back knows the plan.
     const state = feed([progress({ phases: ["Varredura", "Síntese"], startedAt: 1_000 })]);
     expect(state.rows.find((r) => r.kind === "workflow")).toMatchObject({
       phases: [{ title: "Varredura" }, { title: "Síntese" }],
@@ -1482,8 +1482,8 @@ describe("workflow — a frota visível no chat", () => {
   });
 
   it("um quadro que cai em cima de uma resposta em streaming não duplica a frase", () => {
-    // O painel chega por fora do turno e pode cair entre o último delta e o bloco consolidado.
-    // Fechando a linha aberta ali, o bloco virava uma SEGUNDA linha com o mesmo texto.
+    // The panel arrives outside the turn and may land between the last delta and the consolidated block.
+    // Closing the open row there, the block became a SECOND row with the same text.
     let state = feed([call(SCRIPT), { type: "assistant_delta", text: "Disparei a " }]);
     state = feed([progress()], state);
     state = feed([{ type: "assistant_delta", text: "frota." }], state);
@@ -1601,9 +1601,9 @@ describe("conversation_reset — /clear", () => {
 });
 
 /**
- * MENSAGENS DE OUTRAS PESSOAS AO VIVO (2026-10-08): o back passou a repassar o envio de uma aba às
- * outras do card. A tela tinha regras escritas para um mundo em que só existiam linhas do replay e
- * os próprios envios — estas são as que a mensagem alheia ao vivo quebrava.
+ * OTHER PEOPLE'S MESSAGES LIVE (2026-10-08): the back started relaying one tab's send to the card's
+ * other tabs. The screen had rules written for a world where only replay rows and one's own sends
+ * existed — these are the ones someone else's live message broke.
  */
 describe("mensagem de outra pessoa chegando ao vivo", () => {
   const BOB = { kind: "user" as const, name: "bob" };
@@ -1632,7 +1632,7 @@ describe("mensagem de outra pessoa chegando ao vivo", () => {
     let state = appendUserRow(INITIAL_SDK_STATE, "ok", undefined, { cid: "c1", state: "sent" });
     state = applySdkEvent(state, { type: "user", text: "valeu", at: 1500, from: BOB });
     const entry = { cid: "c2", text: "ok", at: 3000, ...sendMark(deliveredUserTexts(state.rows, "alice"), "ok") };
-    // O reconnect: o replay traz o primeiro "ok" (gravado em 2000) — e é a mesma tela que filtra.
+    // The reconnect: the replay brings the first "ok" (saved at 2000) — and it is the same screen that filters.
     let replay = applySdkEvent(INITIAL_SDK_STATE, { type: "user", text: "valeu", at: 1500, from: BOB });
     replay = applySdkEvent(replay, { type: "user", text: "ok", at: 2000, from: ALICE });
     const { missing } = reconcileOutbox(deliveredUserTexts(replay.rows, "alice"), [entry as never]);
@@ -1646,9 +1646,9 @@ describe("mensagem de outra pessoa chegando ao vivo", () => {
 });
 
 /**
- * O SUBAGENTE NÃO FALA PELO PRINCIPAL. O driver agora marca com `parentToolUseId` o que um
- * Agent/Task fez; a tela guarda a marca na linha (`parent`) para desenhá-la sob o card do pai, e a
- * barra de atividade diz que é o subagente trabalhando — não o principal.
+ * THE SUBAGENT DOES NOT SPEAK FOR THE MAIN AGENT. The driver now marks with `parentToolUseId` what an
+ * Agent/Task did; the screen keeps the mark on the row (`parent`) to draw it under the parent's card,
+ * and the activity bar says it is the subagent working — not the main agent.
  */
 describe("subagentes (parentToolUseId)", () => {
   const ready = (): SdkChatState => applySdkEvent(INITIAL_SDK_STATE, { type: "ready" });
@@ -1718,11 +1718,11 @@ describe("subagentes (parentToolUseId)", () => {
 });
 
 /**
- * A FERRAMENTA SENDO GERADA. O `tool_use` só chega quando o modelo termina o input inteiro — num
- * Write de 400 linhas, dezenas de segundos de "Trabalhando…" em que a IA parecia engasgada. O
- * driver agora avisa o começo (`tool_use_start`), o tamanho já gerado (`tool_input_progress`) e há
- * quanto tempo a ferramenta roda (`tool_progress`). A linha provisória mostra isso, e o `tool_use`
- * completo a SUBSTITUI no lugar: um card só.
+ * THE TOOL BEING GENERATED. The `tool_use` only arrives when the model finishes the whole input — on a
+ * 400-line Write, tens of seconds of "Trabalhando…" in which the AI seemed to be choking. The
+ * driver now reports the start (`tool_use_start`), the size generated so far (`tool_input_progress`)
+ * and how long the tool has been running (`tool_progress`). The provisional row shows that, and the
+ * complete `tool_use` REPLACES it in place: a single card.
  */
 describe("ferramenta sendo gerada (tool_use_start → progresso → tool_use)", () => {
   const ready = (): SdkChatState => applySdkEvent(INITIAL_SDK_STATE, { type: "ready" });
@@ -1744,14 +1744,14 @@ describe("ferramenta sendo gerada (tool_use_start → progresso → tool_use)", 
     const after = applySdkEvent(before, { type: "tool_input_progress", id: "w1", bytes: 12_288, filePath: "/w/src/sdkChat.ts" });
     expect(after.rows.at(-1)).toMatchObject({ id: "w1", pending: true, inputBytes: 12_288, filePath: "/w/src/sdkChat.ts" });
     expect(after.rows.slice(0, -1).every((row, i) => row === before.rows[i])).toBe(true);
-    // O mesmo progresso de novo não muda nada: o mesmo estado, nenhum render.
+    // The same progress again changes nothing: the same state, no render.
     expect(applySdkEvent(after, { type: "tool_input_progress", id: "w1", bytes: 12_288, filePath: "/w/src/sdkChat.ts" })).toBe(after);
   });
 
   it("o tool_use completo SUBSTITUI a provisória no lugar: uma linha só, com o input final", () => {
     const generating = feed([
       { type: "tool_input_progress", id: "w1", bytes: 4_000, filePath: "/w/a.ts" },
-      // Uma linha que cai DEPOIS da provisória (o painel de workflow) não pode empurrar o card para o fim.
+      // A row that lands AFTER the provisional one (the workflow panel) cannot push the card to the end.
       { type: "workflow_progress", runId: "r1", name: "x", agents: [] },
     ], started());
     const input = { file_path: "/w/a.ts", content: "linha\n" };
@@ -1766,8 +1766,8 @@ describe("ferramenta sendo gerada (tool_use_start → progresso → tool_use)", 
   });
 
   it("o bloco consolidado que chega DEPOIS do começo da ferramenta não duplica a fala nem o raciocínio", () => {
-    // O `tool_use_start` fecha a linha que escorria; se o CLI mandar o `assistant` do bloco de texto
-    // só depois dele, o bloco consolidado tem de cair na MESMA linha, não numa segunda bolha.
+    // The `tool_use_start` closes the row that was streaming; if the CLI sends the text block's `assistant`
+    // only after it, the consolidated block has to land on the SAME row, not on a second bubble.
     const state = feed([
       { type: "user", text: "cria" },
       { type: "thinking_delta", text: "vou pensar" },
@@ -1808,7 +1808,7 @@ describe("ferramenta sendo gerada (tool_use_start → progresso → tool_use)", 
     expect(cut.rows.some((row) => row.kind === "tool" && row.pending)).toBe(false);
     const crashed = applySdkEvent(started(), { type: "error", message: "o CLI caiu" });
     expect(crashed.rows.some((row) => row.kind === "tool" && row.pending)).toBe(false);
-    // Um driver novo, sem turno em voo: a ferramenta pela metade morreu com o anterior.
+    // A new driver, with no turn in flight: the half-finished tool died with the previous one.
     const rebooted = applySdkEvent(started(), { type: "ready" });
     expect(rebooted.rows.some((row) => row.kind === "tool" && row.pending)).toBe(false);
   });
@@ -1860,9 +1860,9 @@ describe("ferramenta sendo gerada (tool_use_start → progresso → tool_use)", 
 });
 
 /**
- * Um frame do socket por token: aplicar cada um com seu próprio setState era um render da conversa
- * por token. A view junta o que chegou no mesmo frame de animação — e juntar só pode mudar QUANTAS
- * vezes se desenha, nunca O QUE fica na tela.
+ * One socket frame per token: applying each one with its own setState was one conversation render
+ * per token. The view batches what arrived in the same animation frame — and batching can only change
+ * HOW MANY times it draws, never WHAT ends up on screen.
  */
 describe("coalesceDeltas — os tokens de um frame viram um evento só", () => {
   const replay = (events: SdkEvent[]) => events.reduce(applySdkEvent, INITIAL_SDK_STATE);
@@ -1918,9 +1918,9 @@ describe("coalesceDeltas — os tokens de um frame viram um evento só", () => {
 });
 
 /**
- * O /btw: pergunta LATERAL, respondida por uma consulta à parte enquanto o turno segue. É uma linha
- * própria — pendente ao sair, preenchida quando a resposta chega — e nunca o turno: não acende o
- * "Preparando…", não segura a fila e não apaga o que a barra de atividade está mostrando.
+ * The /btw: a SIDE question, answered by a separate lookup while the turn goes on. It is a row of
+ * its own — pending when it goes out, filled in when the answer arrives — and never the turn: it does not
+ * light the "Preparando…", does not hold the queue and does not erase what the activity bar is showing.
  */
 describe("/btw na tela", () => {
   it("reconhece o comando: a mensagem inteira começa por ele, e precisa de pergunta", () => {
@@ -1963,7 +1963,7 @@ describe("/btw na tela", () => {
     expect(expireBtwRows(asked, 1_000 + BTW_EXPIRE_MS - 1)).toBe(asked);
     const expired = expireBtwRows(asked, 1_000 + BTW_EXPIRE_MS);
     expect(expired.rows[0]).toMatchObject({ kind: "btw", btwId: "b1", error: expect.any(String) });
-    // a resposta que chegar atrasada ainda vale mais que o aviso
+    // the answer that arrives late is still worth more than the warning
     const late = feed([{ type: "btw_answer", id: "b1", question: "q", text: "veio" }], expired);
     expect(late.rows[0]).toMatchObject({ text: "veio" });
     expect((late.rows[0] as { error?: string }).error).toBeUndefined();
@@ -1987,8 +1987,8 @@ describe("/btw — prazo da tela", () => {
 });
 
 /**
- * A COMPACTAÇÃO: o /compact (ou a automática) é uma linha própria — a barra rodando enquanto o CLI
- * resume a conversa, e o divisor com quanto ela ocupava antes e depois quando acaba.
+ * THE COMPACTION: the /compact (or the automatic one) is a row of its own — the bar running while the CLI
+ * summarises the conversation, and the divider with how much it took up before and after when it ends.
  */
 describe("compactação na tela", () => {
   type CompactionRow = Extract<SdkRow, { kind: "compaction" }>;

@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { JsonStore } from "./jsonStore.js";
 
 /**
- * `readFile` passa pelo disco de verdade, mas conta as chamadas e pode SEGURAR a próxima leitura
- * depois de ler — é assim que se reproduz um leitor lento que leu a versão velha do arquivo e só
- * devolve depois que uma mutação já gravou a nova.
+ * `readFile` goes through the real disk, but counts the calls and can HOLD the next read after reading —
+ * that is how a slow reader is reproduced, one that read the old version of the file and only returns
+ * after a mutation has already written the new one.
  */
 const fsHooks = vi.hoisted(() => ({ reads: 0, hold: null as Promise<void> | null, renames: 0, failRename: false }));
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -156,14 +156,14 @@ describe("JsonStore", () => {
 });
 
 /**
- * O DEPLOY BLUE/GREEN: o back novo e o antigo convivem alguns segundos sobre o MESMO /data. A fila
- * de mutações só serializa dentro de um processo — aqui, dois JsonStore no mesmo arquivo fazem o
- * papel dos dois processos.
+ * THE BLUE/GREEN DEPLOY: the new back and the old one live together for a few seconds over the SAME /data.
+ * The mutation queue only serialises within one process — here, two JsonStores on the same file play the
+ * part of the two processes.
  */
 describe("JsonStore — dois processos no mesmo arquivo", () => {
   it("a mutação de um não apaga o que o outro gravou depois que ele leu", async () => {
     const other = new JsonStore<Doc>(file, () => ({ items: [] }));
-    await store.load(); // o back novo sobe e lê o arquivo
+    await store.load(); // the new back starts and reads the file
     await other.mutate((d) => d.items.push("antigo")); // o back antigo, ainda vivo, grava
     await store.mutate((d) => d.items.push("novo"));
     expect(JSON.parse(await readFile(file, "utf8"))).toEqual({ items: ["antigo", "novo"] });
@@ -171,8 +171,8 @@ describe("JsonStore — dois processos no mesmo arquivo", () => {
 
   it("o arquivo temporário de um não atrapalha a gravação do outro", async () => {
     await store.mutate((d) => d.items.push("a"));
-    // O tmp do outro processo, no meio da escrita dele, ocupando o caminho (um diretório basta
-    // para o open/rename de um tmp de nome FIXO falhar).
+    // The other process's tmp, in the middle of its write, taking up the path (a directory is enough
+    // for the open/rename of a FIXED-name tmp to fail).
     await mkdir(`${file}.tmp`);
     await store.mutate((d) => d.items.push("b"));
     expect(JSON.parse(await readFile(file, "utf8"))).toEqual({ items: ["a", "b"] });

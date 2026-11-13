@@ -4,7 +4,7 @@ import { hostExecutor, shQuote, HostExecError } from "./host.js";
 import { secretEnsure, secretGet } from "../secrets/vault.js";
 import { logger } from "../utils/logger.js";
 import { installGhWrapperLines } from "../services/github/runnerIdentity.js";
-import { PACOTES_ANEXOS } from "../services/anexos/runner.js";
+import { ATTACHMENT_PACKAGES } from "../services/attachments/runner.js";
 
 /**
  * THE RUNNER — one container where every card's terminal lives. It is a plain Docker container
@@ -37,11 +37,6 @@ export function buildStatusUrlProbeScript(containerName: string, url: string): s
   return `docker exec ${shQuote(containerName)} curl -s -m 5 -o /dev/null -w '%{http_code}' -X POST ${shQuote(url)} 2>/dev/null || true`;
 }
 
-/** true = the probe got an HTTP answer back (any code but `000`). PURE. */
-export function statusUrlReachable(stdout: string): boolean {
-  return statusProbeVerdict(stdout) === "reachable";
-}
-
 /**
  * What the probe proves. `000` is curl itself failing to connect from inside the runner: the URL is
  * wrong. No code at all means curl never ran (runner down, no docker, no curl), which says nothing
@@ -57,7 +52,7 @@ let lastReach: boolean | null = null;
 
 /**
  * Checks that the runner reaches the status URL every card's hooks POST to, and SAYS SO when it does
- * not. Produção, 21/10/2026: the public URL pointed at a blue/green port the app no longer listened
+ * not. Production, 21/10/2026: the public URL pointed at a blue/green port the app no longer listened
  * on; every hook failed in silence (`curl … || true`), the board never saw a TUI card working, and
  * the idle sweep hibernated cards mid-task. Logs an error on the first failure (and each failure
  * after a recovery), an info on recovery. A probe that never reached curl decides nothing. Never throws.
@@ -65,7 +60,7 @@ let lastReach: boolean | null = null;
  */
 export async function checkStatusHookReach(): Promise<boolean> {
   const url = statusUrl();
-  let verdict: ReturnType<typeof statusProbeVerdict> = "unknown";
+  let verdict: ReturnType<typeof statusProbeVerdict>;
   try {
     const { stdout } = await hostExecutor().runScript(buildStatusUrlProbeScript(config.runner.container, url), { timeoutMs: 20_000 });
     verdict = statusProbeVerdict(stdout);
@@ -88,11 +83,6 @@ export async function checkStatusHookReach(): Promise<boolean> {
   return reachable;
 }
 
-/** The last verdict of {@link checkStatusHookReach}; null = not checked yet. */
-export function statusHookReach(): boolean | null {
-  return lastReach;
-}
-
 /**
  * The hook command: report card status over HTTP. `$VIBEHUB_STATUS_URL` and `$VIBEHUB_CARD_ID` come
  * from the tmux session environment (set when the card is opened); the token is READ FROM THE FILE
@@ -100,7 +90,7 @@ export function statusHookReach(): boolean | null {
  */
 export function hookCommand(status: "working" | "waiting", opts: { asText?: boolean } = {}): string {
   return (
-    `curl -s -m 3 -X POST "$VIBEHUB_STATUS_URL" -H "x-vibehub-token: $(cat /root/.vibehub-token)"` +
+    `curl -s -m 3 -X POST "$VIBEHUB_STATUS_URL" -H "x-vibehub-token: $(cat ${RUNNER_TOKEN_FILE})"` +
     (opts.asText ? ` -H "accept: text/plain"` : "") +
     ` -H "content-type: application/json" -d "{\\"card\\":\\"$VIBEHUB_CARD_ID\\",\\"status\\":\\"${status}\\"}" || true`
   );
@@ -231,12 +221,11 @@ export function buildRunScript(opts: { container: string; image: string; baseDir
  */
 export function buildSetupScript(opts: {
   container: string;
-  baseDir: string;
   token: string;
   settingsJson: string;
   git: GitIdentity;
 }): string {
-  const { container, baseDir, token, settingsJson, git } = opts;
+  const { container, token, settingsJson, git } = opts;
   return [
     "set -e",
     "umask 077",
@@ -252,8 +241,8 @@ export function buildSetupScript(opts: {
     // process reaper depend on (present in the full node image, but stated so a slimmer image
     // cannot silently lose it). apt is idempotent, so re-runs are cheap.
     "apt-get install -y -qq tmux git ripgrep curl procps xvfb x11vnc novnc websockify socat >/dev/null",
-    // Leitura de anexos (Excel, Word, PDF) e conversão de áudio para transcrição — ver services/anexos.
-    `apt-get install -y -qq ${PACOTES_ANEXOS.join(" ")} >/dev/null`,
+    // Reading attachments (Excel, Word, PDF) and converting audio for transcription — see services/attachments.
+    `apt-get install -y -qq ${ATTACHMENT_PACKAGES.join(" ")} >/dev/null`,
     // gh CLI from the official repo — the agent opens PRs and checks CI. Auth is the user's own.
     'if ! command -v gh >/dev/null; then mkdir -p /etc/apt/keyrings && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list && apt-get update -qq && apt-get install -y -qq gh >/dev/null; fi',
     // Claude Code CLI (the account login terminal and the TUI sessions run it). An npm update cut
@@ -320,7 +309,6 @@ export async function provisionRunner(opts: ProvisionOpts): Promise<void> {
   await host.runScript(
     buildSetupScript({
       container,
-      baseDir,
       token,
       settingsJson: runnerSettingsJson({ autonomous: opts.autonomous ?? true }),
       git: opts.git,

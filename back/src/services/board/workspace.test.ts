@@ -423,8 +423,8 @@ describe("the card's Claude account (CLAUDE_CONFIG_DIR per profile)", () => {
 
       const depois = JSON.parse(await readFile(join(padrao, "settings.json"), "utf8"));
       expect(depois.hooks).toEqual(JSON.parse(runnerSettingsJson()).hooks);
-      // A retenção de transcripts também é do vibehub: sem ela o Claude Code apaga a conversa de um
-      // card parado há semanas e o `--resume` dele morre ("No conversation found", 2026-11-10).
+      // Transcript retention also belongs to vibehub: without it Claude Code deletes the conversation of a
+      // card idle for weeks and its `--resume` dies ("No conversation found", 2026-11-10).
       expect(depois.cleanupPeriodDays).toBeGreaterThanOrEqual(365);
       expect(depois.model).toBe("opus");
     } finally {
@@ -460,11 +460,11 @@ describe("the card's Claude account (CLAUDE_CONFIG_DIR per profile)", () => {
     const perfil = await mkdtemp(join(tmpdir(), "vh-perfil-"));
     try {
       const { writeFile, readFile } = await import("node:fs/promises");
-      // perfil criado numa versão antiga: hook velho, e o padrão do runner também velho (ninguém reprovisionou)
+      // profile created on an old version: old hook, and the runner's default also old (nobody reprovisioned)
       const hooksVelhos = { UserPromptSubmit: [{ hooks: [{ type: "command", command: "hook-velho" }] }] };
       await writeFile(join(perfil, "settings.json"), JSON.stringify({ hooks: hooksVelhos, model: "opus", env: { X: "1" } }));
 
-      // O trecho REAL do script de abertura que cuida do perfil, apontado para o diretório temporário.
+      // The REAL stretch of the open script that takes care of the profile, pointed at the temporary directory.
       const linhas = scriptAt(0).split("\n");
       const inicio = linhas.findIndex((linha) => linha.startsWith("CLAUDE_CFG="));
       const ultimaDoSettings = linhas.findLastIndex((linha) => linha.includes("settings.json"));
@@ -874,7 +874,7 @@ describe("restart (single and all) — a working card is protected", () => {
   });
 
   /**
-   * THE INCIDENT (produção, 2026-09-17): `openedAt` is stamped on the FIRST open and never
+   * THE INCIDENT (production, 2026-09-17): `openedAt` is stamped on the FIRST open and never
    * re-stamped, and a conversation held in the NATIVE CHAT never moves the hook-reported
    * `statusAt`. So the sweep measured a card someone was actively typing into as "sem sinal de
    * vida há horas" and hibernated it — which kills the SDK driver under a live conversation and
@@ -1035,7 +1035,7 @@ describe("restart (single and all) — a working card is protected", () => {
   });
 
   it("applySessionChange: an EFFORT switch MID-TURN goes into the native chat's live session — no restart, nothing pending", async () => {
-    // Produção, 2026-10-27 (card review-prs-albert-ee7c): Médio → Alto with the turn running became
+    // Production, 2026-10-27 (card review-prs-albert-ee7c): Médio → Alto with the turn running became
     // a pending restart, the turn went on with subagents in the background and never let it happen —
     // the session stayed on `medium`. The driver takes the level in place now.
     const { card } = await seed();
@@ -1326,7 +1326,7 @@ describe("restart (single and all) — a working card is protected", () => {
   });
 
   it("sweepIdleCards: ASKS THE RUNNER first — a card generating with silent hooks is spared, a runner that cannot answer too", async () => {
-    // Produção, 21/10/2026 (card de voz 7d49): the TUI's status hooks pointed at a dead blue/green
+    // Production, 21/10/2026 (voice card 7d49): the TUI's status hooks pointed at a dead blue/green
     // port, so the board never saw `working`; the sweep hibernated the card 5 s after a Write, mid-task.
     const p = await reg.createProject({ name: "voz" });
     const busy = await reg.createCard({ projectId: p.id, title: "redesenhando a esfera" });
@@ -1710,7 +1710,7 @@ describe("image upload into the card", () => {
     expect(await ws.readCardUpload(card.id, "1794341151810-voz.ogg", { start: 6000, end: null })).toMatchObject({
       size: 5000, range: "unsatisfiable",
     });
-    // Bytes que não batem com a faixa anunciada não viram uma resposta 206 mentirosa.
+    // Bytes that do not match the announced range do not become a lying 206 response.
     runScript.mockResolvedValueOnce({ stdout: `5000 0 99\n${Buffer.from("abc").toString("base64")}`, stderr: "" });
     await expect(ws.readCardUpload(card.id, "1794341151810-voz.ogg", { start: 0, end: 99 })).rejects.toThrow(/upload not found/);
   });
@@ -1732,14 +1732,14 @@ describe("image upload into the card", () => {
     expect(ws.parseUploadRange(undefined)).toBeNull();
     expect(ws.parseUploadRange("bytes=0-9")).toEqual({ start: 0, end: 9 });
     expect(ws.parseUploadRange("bytes=0-")).toEqual({ start: 0, end: null });
-    // O sufixo é o que o navegador pede para achar a duração de um ogg: os últimos N bytes.
+    // The suffix is what the browser asks for to find an ogg's duration: the last N bytes.
     expect(ws.parseUploadRange("bytes=-10")).toEqual({ suffix: 10 });
-    // Faixa invertida é inválida e se ignora (RFC 9110 §14.1.1), não vira 416.
+    // An inverted range is invalid and is ignored (RFC 9110 §14.1.1), it does not become 416.
     expect(ws.parseUploadRange("bytes=9-3")).toBeNull();
     expect(ws.parseUploadRange("bytes=0-1,5-9")).toBeNull();
     expect(ws.parseUploadRange("items=0-9")).toBeNull();
     expect(ws.parseUploadRange("bytes=-")).toBeNull();
-    // Número que o bash não guarda em 64 bits não chega ao script.
+    // A number bash cannot hold in 64 bits does not reach the script.
     expect(ws.parseUploadRange("bytes=99999999999999999999-")).toBeNull();
   });
 
@@ -1762,7 +1762,7 @@ describe("image upload into the card", () => {
     expect(run({ suffix: 500 })).toEqual({ head: "10 0 9", bytes: "0123456789" });
     expect(run({ start: 10, end: null }).head).toBe("10 -");
     expect(run({ suffix: 0 }).head).toBe("10 -");
-    // Arquivo que sumiu é saída não-zero, não uma resposta vazia.
+    // A file that vanished is a non-zero exit, not an empty response.
     expect(() => execFileSync("bash", ["-c", ws.buildUploadReadBody(`${dir}/1-sumiu.ogg`, null).join("\n")], { stdio: "pipe" })).toThrow();
   });
 
@@ -1824,7 +1824,7 @@ describe("image upload into the card", () => {
     await ws.sweepCardUploads();
     const script = lastScript();
     expect(script).toContain(`docker exec -i '${CONTAINER}' bash -s`);
-    // -mindepth 2: nunca apaga a própria /work/.uploads, só o que está dentro de uma pasta de card
+    // -mindepth 2: never deletes /work/.uploads itself, only what is inside a card folder
     expect(script).toContain(`find /work/.uploads -mindepth 2 -type f -mtime +${ws.UPLOAD_RETENTION_DAYS} -delete`);
     expect(script).toContain("find /work/.uploads -mindepth 1 -maxdepth 1 -type d -empty -delete");
     expect(script).toContain("if [ -d /work/.uploads ]; then");
@@ -2224,36 +2224,6 @@ describe("pre-provisioning (prepareCard) and the per-clone lock", () => {
  * means "not running".
  */
 describe("session probe (busy / idle / gone) and the pending-pause reconciler", () => {
-  /** The footer Claude Code prints WHILE it generates — the marker the probe keys on. */
-  const BUSY_PANE = [
-    "● Running the tests",
-    "✶ Thundering… (1m 8s · ↓ 3.6k tokens)",
-    "❯ ",
-    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ← for agents",
-  ].join("\n");
-  /** The same card one second later, with nothing running. */
-  const IDLE_PANE = [
-    "● OK",
-    "❯ ",
-    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents",
-  ].join("\n");
-  /** The screen a resumed card sits on until somebody answers it — no hook ever fires here. */
-  const RESUME_MENU = [
-    "  This session is 13h 56m old and 327.8k tokens.",
-    "  ❯ 1. Resume from summary (recommended)",
-    "    2. Resume full session as-is",
-    "  Enter to confirm · Esc to cancel",
-  ].join("\n");
-
-  it("paneLooksBusy: only the 'esc to interrupt' footer counts as working", () => {
-    expect(ws.paneLooksBusy(BUSY_PANE)).toBe(true);
-    expect(ws.paneLooksBusy(IDLE_PANE)).toBe(false);
-    expect(ws.paneLooksBusy(RESUME_MENU)).toBe(false);
-    expect(ws.paneLooksBusy("")).toBe(false);
-    // The marker in the SCROLLBACK is not the footer: only the bottom of the pane is the status line.
-    expect(ws.paneLooksBusy(["esc to interrupt", ...Array(30).fill("output")].join("\n"))).toBe(false);
-  });
-
   it("buildSessionProbeScript: read-only, session names quoted, one round trip for every card", () => {
     const script = ws.buildSessionProbeScript(CONTAINER, ["card-aaaa1111", "card-bbbb2222"]);
     expect(script).toContain(`docker exec '${CONTAINER}'`);
@@ -2570,20 +2540,20 @@ describe("buildCardPurgeScript (everything the card left on the runner's disk)",
   });
 
   /**
-   * SÓ LOCAL — o medo aqui não é a worktree, é o GitHub: um card aberto numa branch que já existia
-   * não pode, de forma alguma, levar essa branch remota junto quando for excluído.
+   * LOCAL ONLY — the fear here is not the worktree, it is GitHub: a card opened on a branch that already existed
+   * must not, in any way, take that remote branch along when it is deleted.
    *
-   * A garantia é estrutural, não de intenção: `git branch -D` é local por definição (apagar remota
-   * exige `git push origin --delete`), e o script de purga não carrega UM comando que alcance a
-   * rede. Este teste é o cadeado: se algum dia entrar um `push`, um `fetch`, um `origin` ou um `gh`
-   * no caminho da exclusão, ele quebra aqui.
+   * The guarantee is structural, not one of intent: `git branch -D` is local by definition (deleting a remote one
+   * requires `git push origin --delete`), and the purge script does not carry ONE command that reaches the
+   * network. This test is the padlock: if some day a `push`, a `fetch`, an `origin` or a `gh` gets into
+   * the deletion path, it breaks here.
    */
   it("não alcança a rede: nada de push, fetch, origin ou gh — o remoto é intocável", () => {
     const s = script();
     for (const proibido of ["push", "fetch", "origin", "gh ", "remote ", "curl", "--delete"]) {
       expect(s).not.toContain(proibido);
     }
-    // O que ele faz com git é só isto, e as três coisas são locais.
+    // What it does with git is only this, and all three things are local.
     const gitLines = s.split("\n").filter((l) => l.startsWith("git -C"));
     expect(gitLines).toHaveLength(3);
     expect(gitLines[0]).toContain("worktree remove --force");
@@ -2699,22 +2669,22 @@ describe("aplicar identidade na worktree", () => {
     expect(s).toContain("git -C '/work/widgets/um-card-ab12' config --worktree user.name 'wellesley-mussolini'");
     expect(s).toContain("git -C '/work/widgets/um-card-ab12' config --worktree user.email 'xerif.off@gmail.com'");
     expect(s).not.toContain("--global");
-    // `--local` só pode aparecer pra LIGAR a extensão; jamais pra gravar identidade.
+    // `--local` may only appear to TURN ON the extension; never to write an identity.
     expect(s).not.toContain("--local user.");
     expect(s).toContain("config --local extensions.worktreeConfig true");
   });
 
   it("GIT DE VERDADE: a identidade de um card não vaza para outro card do MESMO projeto", async () => {
-    // Cada card é uma worktree do MESMO clone, e worktrees compartilham .git/config. Um `--local`
-    // aqui entregaria a identidade de uma pessoa a todos os outros cards daquele projeto. Este
-    // teste roda git de verdade porque o bug é de SEMÂNTICA do git, não do texto do comando — a
-    // asserção de string acima passava com o código errado.
+    // Each card is a worktree of the SAME clone, and worktrees share .git/config. A `--local`
+    // here would hand one person's identity to every other card of that project. This
+    // test runs real git because the bug is about git's SEMANTICS, not the command's text — the
+    // string assertion above passed with the wrong code.
     const { buildIdentityScript } = await import("./workspace.js");
     const { execFile } = await import("node:child_process");
     const { promisify } = await import("node:util");
     const { mkdtemp: mkTemp } = await import("node:fs/promises");
-    // Git com ambiente LIMPO: rodando dentro de um card, o processo herda o include git do próprio card
-    // (GIT_CONFIG_COUNT/KEY_0/VALUE_0, escopo de comando) — ele ganharia de tudo que este teste grava.
+    // Git with a CLEAN environment: running inside a card, the process inherits the card's own git include
+    // (GIT_CONFIG_COUNT/KEY_0/VALUE_0, command scope) — it would win over everything this test writes.
     const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_CONFIG")));
     const exec = promisify(execFile);
     const run = (file: string, args: string[]) => exec(file, args, { env });
@@ -2740,16 +2710,16 @@ describe("aplicar identidade na worktree", () => {
         const m = /^git -C '\/work\/placeholder' config (.*?)(?: \|\| true)?$/.exec(line);
         if (!m) continue;
         const args = m[1]!.match(/'[^']*'|\S+/g)!.map((a) => a.replace(/^'|'$/g, ""));
-        // `|| true` no script de verdade: `--unset-all` de uma chave que não existe sai 5.
+        // `|| true` in the real script: `--unset-all` of a key that does not exist exits 5.
         await run("git", ["-C", cwd, "config", ...args]).catch(() => undefined);
       }
     };
 
     await apply(cardA, "wellesley-mussolini", "xerif.off@gmail.com");
     await apply(cardB, "César Canal", "cesarvcanal@gmail.com");
-    // Roda de novo (toda abertura de card e toda troca de ator rodam): não pode acumular helper.
+    // Runs again (every card open and every actor switch runs it): it must not accumulate helpers.
     await apply(cardA, "wellesley-mussolini", "xerif.off@gmail.com");
-    // `--worktree`: sem escopo, isso contaria também os helpers do sistema e do global da máquina.
+    // `--worktree`: without a scope, this would also count the system's and the machine's global helpers.
     const helpers = (await run("git", ["-C", cardA, "config", "--worktree", "--get-all", "credential.https://github.com.helper"])).stdout
       .split("\n").filter((l) => l.trim() !== "");
     expect(helpers).toHaveLength(1);
@@ -2759,20 +2729,20 @@ describe("aplicar identidade na worktree", () => {
     expect(await emailOf(cardA)).toBe("xerif.off@gmail.com");
     expect(await emailOf(cardB)).toBe("cesarvcanal@gmail.com");
 
-    // E o commit de cada card sai com o autor do card, não com o da instalação.
+    // And each card's commit goes out with the card's author, not the installation's.
     await run("git", ["-C", cardA, "commit", "-q", "--allow-empty", "-m", "do mussa"]);
     const author = (await run("git", ["-C", cardA, "log", "-1", "--format=%an <%ae>"])).stdout.trim();
     expect(author).toBe("wellesley-mussolini <xerif.off@gmail.com>");
 
     await rm(root, { recursive: true, force: true });
-    // Git de verdade: init + duas worktrees + três aplicações = ~20 processos. O orçamento padrão
-    // de 5s é apertado numa máquina ocupada, e o que importa aqui é a asserção, não o relógio.
+    // Real git: init + two worktrees + three applications = ~20 processes. The default budget
+    // of 5s is tight on a busy machine, and what matters here is the assertion, not the clock.
   }, 60_000);
 
   it("sem token, a worktree NÃO zera os helpers — o login que a instalação tem continua valendo", async () => {
     const { buildIdentityScript } = await import("./workspace.js");
     const s = buildIdentityScript(base);
-    // Zerar e instalar um helper que não acha arquivo deixava o push SEM credencial nenhuma.
+    // Resetting and installing a helper that finds no file left the push with NO credential at all.
     expect(s).toContain("config --worktree --unset-all credential.https://github.com.helper || true");
     expect(s).not.toContain("--add credential.https://github.com.helper");
   });
@@ -2784,8 +2754,8 @@ describe("aplicar identidade na worktree", () => {
     const unsetAll = s.indexOf(`--unset-all ${key}`);
     const reset = s.indexOf(`--add ${key} ''`);
     const install = s.indexOf(`--add ${key} '!f()`);
-    // Sem o reset primeiro, o `gh auth git-credential` global responde antes, com o login do runner
-    // (a conta da org) — e o push sai como outra pessoa, sem erro nenhum.
+    // Without the reset first, the global `gh auth git-credential` answers first, with the runner's login
+    // (the org's account) — and the push goes out as someone else, with no error at all.
     expect(unsetAll).toBeGreaterThan(-1);
     expect(reset).toBeGreaterThan(unsetAll);
     expect(install).toBeGreaterThan(reset);
@@ -2794,9 +2764,9 @@ describe("aplicar identidade na worktree", () => {
   it("o token do card só é oferecido ao github.com — e o helper genérico de versões anteriores é removido", async () => {
     const { buildIdentityScript } = await import("./workspace.js");
     const s = buildIdentityScript({ ...base, token: TOKEN });
-    // O helper genérico respondia a QUALQUER host: um remote que pedisse credencial levava o PAT.
+    // The generic helper answered ANY host: a remote that asked for a credential took the PAT.
     expect(s).not.toMatch(/--add credential\.helper /);
-    // Worktrees configuradas antes disto têm o genérico gravado: sai, senão continua respondendo.
+    // Worktrees configured before this have the generic one written: it goes, otherwise it keeps answering.
     expect(s).toContain("config --worktree --unset-all credential.helper || true");
   });
 
@@ -2807,7 +2777,7 @@ describe("aplicar identidade na worktree", () => {
     expect(withToken).toContain(`git config --file "$T" user.email 'xerif.off@gmail.com'`);
     expect(withToken).toContain(`git config --file "$T" --add credential.https://github.com.helper ''`);
     expect(withToken).toContain(`mv -f "$T" '/root/.vibehub/git/card-1.gitconfig'`);
-    // Sem token, o include só leva o autor: a credencial fica como a instalação já tinha.
+    // Without a token, the include only carries the author: the credential stays as the installation already had it.
     const without = buildIdentityScript(base);
     expect(without).toContain(`mv -f "$T" '/root/.vibehub/git/card-1.gitconfig'`);
     expect(without).not.toContain(`git config --file "$T" --add credential`);
@@ -2824,7 +2794,7 @@ describe("aplicar identidade na worktree", () => {
     const { buildIdentityScript } = await import("./workspace.js");
     const s = buildIdentityScript({ ...base, token: TOKEN });
     expect(s).toContain("cat /root/.vibehub/gh/card-1.token");
-    // O token aparece UMA vez só: na escrita do arquivo (stdin do docker exec), nunca no helper.
+    // The token appears ONCE only: in the file write (the docker exec's stdin), never in the helper.
     expect(s.split(TOKEN).length - 1).toBe(1);
   });
 
@@ -2854,8 +2824,8 @@ describe("a identidade do card é aplicada uma de cada vez — sempre com o auto
     await people();
     const { card } = await seed();
     await reg.applyOpenTerminal(card.id);
-    // O runner segura a PRIMEIRA aplicação: sem fila, a segunda correria ao lado dela e quem
-    // terminasse por último decidiria a autoria — a ordem das mensagens não valeria nada.
+    // The runner holds the FIRST application: without a queue, the second would run next to it and whoever
+    // finished last would decide the authorship — the order of the messages would count for nothing.
     let release!: () => void;
     const held = new Promise<void>((r) => { release = r; });
     runScript.mockImplementationOnce(async () => { await held; return { stdout: "", stderr: "" }; });
@@ -2889,7 +2859,7 @@ describe("a identidade do card é aplicada uma de cada vez — sempre com o auto
     await people();
     const { card } = await seed();
     await reg.stampCardActor(card.id, "u-cesar");
-    // O Mussa manda mensagem enquanto o clone roda (o script de abertura está no runner).
+    // Mussa sends a message while the clone runs (the open script is in the runner).
     runScript.mockImplementationOnce(async () => {
       await reg.stampCardActor(card.id, "u-mussa");
       return { stdout: "", stderr: "" };
@@ -2901,9 +2871,9 @@ describe("a identidade do card é aplicada uma de cada vez — sempre com o auto
 });
 
 describe("restoreMissingWorkspace — a IA apagou a própria worktree", () => {
-  // Produção, 2026-10-19: pediram "mergeia e apaga a branch" e a IA do card rodou
-  // `git worktree remove` na pasta em que ela mesma vivia. Dali em diante toda mensagem do card
-  // morria no spawn do CLI (cwd inexistente), com o falso erro de libc do SDK.
+  // Production, 2026-10-19: they asked "mergeia e apaga a branch" and the card's AI ran
+  // `git worktree remove` on the folder it itself lived in. From then on every message of the card
+  // died on the CLI spawn (cwd missing), with the SDK's false libc error.
   it("pasta presente: só a sondagem, nada reprovisionado", async () => {
     const { card } = await seed();
     runScript.mockResolvedValueOnce({ stdout: "present\n", stderr: "" });
@@ -2917,7 +2887,7 @@ describe("restoreMissingWorkspace — a IA apagou a própria worktree", () => {
     const { card } = await seed();
     runScript.mockResolvedValueOnce({ stdout: "missing\n", stderr: "" });
     expect(await ws.restoreMissingWorkspace(card.id)).toBe(true);
-    expect(runScript.mock.calls.length).toBeGreaterThanOrEqual(2); // sondagem, abertura (+ identidade, se houver)
+    expect(runScript.mock.calls.length).toBeGreaterThanOrEqual(2); // probe, open (+ identity, if any)
     expect(scriptAt(1)).toContain("worktree add");
     const after = await reg.getCard(card.id);
     expect(after?.column).toBe(card.column);

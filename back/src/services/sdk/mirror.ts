@@ -7,6 +7,7 @@ import type { HistoryEvent } from "./history.js";
 import type { DriverEvent } from "./protocol.js";
 import { logger } from "../../utils/logger.js";
 import { createLineReader } from "../../utils/lineReader.js";
+import { dropOldest } from "./insertionOrder.js";
 
 /**
  * TRANSCRIPT MIRROR — what keeps the NATIVE chat honest while the conversation happens in the TUI.
@@ -51,9 +52,9 @@ export interface MirrorState {
 }
 
 /**
- * `driverKeys` é RECEBIDO, não criado: ele pertence ao card (ver `driverKeysFor`), não a este
- * espelho. Um espelho nasce no primeiro connect e morre no último disconnect, mas o que o driver
- * já foi mandado dizer segue tendo sido dito — com ou sem alguém olhando.
+ * `driverKeys` is RECEIVED, not created: it belongs to the card (see `driverKeysFor`), not to this
+ * mirror. A mirror is born on the first connect and dies on the last disconnect, but what the driver
+ * has already been told to say has still been said — with or without someone watching.
  */
 export function createMirrorState(
   cutoffAt: number,
@@ -63,27 +64,18 @@ export function createMirrorState(
   return { cutoffAt, seen: new Set(seenIds), driverKeys };
 }
 
-/** Sets have insertion order: dropping the oldest entries is how the dedupe memory stays bounded. */
-function capSet(set: Set<string>, max: number = MIRROR_DEDUPE_MAX): void {
-  while (set.size > max) {
-    const oldest = set.values().next().value;
-    if (oldest === undefined) return;
-    set.delete(oldest);
-  }
-}
-
 /** Records what the driver said (stdout event) or was told (a user send) into the dedupe set. PURE-ish. */
 export function noteDriverEvent(state: MirrorState, event: DriverEvent | { type: "user"; text: string }): void {
   noteDriverKeys(state.driverKeys, event);
 }
 
-/** O mesmo registro, sobre o Set cru — é ele que o card guarda entre um espelho e o próximo. PURE-ish. */
+/** The same registration, on the raw Set — it is what the card keeps between one mirror and the next. PURE-ish. */
 function noteDriverKeys(keys: Set<string>, event: DriverEvent | { type: "user"; text: string }): void {
   for (const key of dedupeNoteKeys(event as { type: HistoryEvent["type"]; text?: string; id?: string })) {
     keys.delete(key); // re-adding moves it to the newest slot
     keys.add(key);
   }
-  capSet(keys);
+  dropOldest(keys, MIRROR_DEDUPE_MAX);
 }
 
 /**
@@ -97,7 +89,7 @@ export function mirrorNewEvents(state: MirrorState, jsonl: string, cardId: strin
     if (!(event.at > state.cutoffAt)) continue;
     if (state.seen.has(event.id)) continue;
     state.seen.add(event.id);
-    capSet(state.seen);
+    dropOldest(state.seen, MIRROR_DEDUPE_MAX);
     const converted = chatEventToHistory(event);
     if (!converted) continue;
     // The driver already said this on stdout — including the case where Claude Code rewrote a slash
@@ -109,10 +101,10 @@ export function mirrorNewEvents(state: MirrorState, jsonl: string, cardId: strin
       const from = matchOrigin(cardId, mirrored.text, mirrored.at ?? 0);
       if (from) mirrored.from = from;
     }
-    // CONVERSA QUE O CHAT NÃO PRODUZIU: ela entrou no transcript por outro processo do CLI (a aba
-    // Terminal). Quem mantém uma corrente aberta precisa saber — ver `onOutsideTurn`. O aviso sai
-    // daqui, e não de quem lê o stdout do follow, porque é AQUI que se decide que a linha é nova,
-    // externa e de uma pessoa: o leitor só repassa o que esta função já julgou.
+    // CONVERSATION THE CHAT DID NOT PRODUCE: it entered the transcript through another CLI process (the
+    // Terminal tab). Whoever keeps a stream open needs to know — see `onOutsideTurn`. The notice goes out
+    // from here, and not from whoever reads the follow's stdout, because it is HERE that one decides the line is new,
+    // external and from a person: the reader only passes on what this function has already judged.
     if (mirrored.type === "user") noteOutsideTurn(cardId);
     out.push(mirrored);
   }
@@ -133,18 +125,18 @@ interface CardMirror {
 const mirrors = new Map<string, CardMirror>();
 
 /**
- * A memória de dedupe de um CARD — o que o driver dele já disse, ou já foi mandado dizer.
+ * A CARD's dedupe memory — what its driver has already said, or has already been told to say.
  *
- * Ela mora aqui, e não dentro do espelho, porque as duas vidas são diferentes: o espelho começa no
- * primeiro chat conectado e acaba no último que fecha, enquanto o driver fala desde o boot. O sweep
- * de retomada (`resumeInterruptedTurns`, logo depois do `listen`) injeta um turno quando nenhum
- * browser conectou ainda — e com a memória presa ao espelho essa chave era jogada fora, o espelho
- * nascia cego, e a linha que o CLI escreveu no transcript voltava como se fosse conversa nova: a
- * mensagem de sistema do deploy aparecia DUAS vezes (produção, 2026-09-28).
+ * It lives here, and not inside the mirror, because the two lifetimes are different: the mirror starts on the
+ * first connected chat and ends on the last one that closes, while the driver speaks from boot. The resume
+ * sweep (`resumeInterruptedTurns`, right after `listen`) injects a turn when no
+ * browser has connected yet — and with the memory tied to the mirror that key was thrown away, the mirror
+ * was born blind, and the line the CLI wrote in the transcript came back as if it were new conversation: the
+ * deploy's system message showed up TWICE (production, 2026-09-28).
  */
 const driverKeysByCard = new Map<string, Set<string>>();
 
-/** A memória do card, criada na primeira vez que alguém tem algo a lembrar. */
+/** The card's memory, created the first time someone has something to remember. */
 export function driverKeysFor(cardId: string): Set<string> {
   const known = driverKeysByCard.get(cardId);
   if (known) return known;
@@ -154,27 +146,27 @@ export function driverKeysFor(cardId: string): Set<string> {
 }
 
 /**
- * A CONVERSA ANDOU FORA DO CHAT — quem precisa saber se inscreve aqui.
+ * THE CONVERSATION MOVED OUTSIDE THE CHAT — whoever needs to know subscribes here.
  *
- * O espelho é o único que enxerga isso: ele lê o transcript e reconhece o que o driver já disse, de
- * modo que o que sobra veio de OUTRO processo do CLI (a aba Terminal, falando com a MESMA sessão).
- * O driver do chat mantém a conversa em memória enquanto a corrente está aberta; sem este aviso a
- * próxima mensagem dele continua de um ponto velho e deixa o turno do terminal órfão — e mensagem
- * órfã não tem ponto de volta, então editá-la não rebobinava (ver `staleView` no sdk-driver.mjs).
+ * The mirror is the only one that sees it: it reads the transcript and recognises what the driver has already said, so
+ * that what is left came from ANOTHER CLI process (the Terminal tab, talking to the SAME session).
+ * The chat's driver keeps the conversation in memory while the stream is open; without this notice its
+ * next message continues from a stale point and leaves the terminal's turn orphaned — and an orphaned
+ * message has no point to go back to, so editing it did not rewind (see `staleView` in sdk-driver.mjs).
  *
- * O sentido é mirror → manager, nunca o contrário: `manager.ts` já importa este módulo, e um
- * import de volta fecharia um ciclo.
+ * The direction is mirror → manager, never the other way: `manager.ts` already imports this module, and an
+ * import back would close a cycle.
  */
 const outsideListeners = new Map<string, Set<() => void>>();
 
-/** Avisa que o card teve conversa vinda de fora do chat. Nunca deixa um ouvinte derrubar o espelho. */
+/** Warns that the card had conversation coming from outside the chat. Never lets a listener knock down the mirror. */
 function noteOutsideTurn(cardId: string): void {
   for (const listener of outsideListeners.get(cardId) ?? []) {
-    try { listener(); } catch { /* um ouvinte quebrado não para o espelho */ }
+    try { listener(); } catch { /* a broken listener does not stop the mirror */ }
   }
 }
 
-/** Escuta a conversa que entra por fora neste card. Devolve o cancelamento. */
+/** Listens to the conversation that comes in from outside on this card. Returns the cancellation. */
 export function onOutsideTurn(cardId: string, listener: () => void): () => void {
   const set = outsideListeners.get(cardId) ?? new Set<() => void>();
   outsideListeners.set(cardId, set);
@@ -188,29 +180,29 @@ export function onOutsideTurn(cardId: string, listener: () => void): () => void 
 }
 
 /**
- * O card acabou (driver encerrado, card apagado): a memória dele vai junto.
+ * The card is over (driver closed, card deleted): its memory goes with it.
  *
- * ESVAZIADA, não trocada: um espelho vivo adotou este MESMO Set ao nascer (`createMirrorState`) e
- * segue lendo dele. Trocar o Set do mapa deixava o espelho com a memória do driver morto, enquanto
- * o sucessor escrevia num Set novo que ninguém lia — e cada fala do sucessor voltava pelo transcript
- * como se fosse do terminal, uma bolha duplicada. A entrada só sai do mapa sem espelho que a use.
+ * EMPTIED, not swapped: a live mirror adopted this SAME Set when it was born (`createMirrorState`) and
+ * keeps reading from it. Swapping the Set in the map left the mirror with the dead driver's memory, while
+ * the successor wrote into a new Set nobody read — and each of the successor's lines came back through the transcript
+ * as if it were the terminal's, a duplicated bubble. The entry only leaves the map with no mirror using it.
  */
 export function forgetDriverKeys(cardId: string): void {
   driverKeysByCard.get(cardId)?.clear();
   if (!mirrors.has(cardId)) driverKeysByCard.delete(cardId);
 }
 
-/** Reports a driver event/user send of a card into its dedupe memory — haja espelho ou não. */
+/** Reports a driver event/user send of a card into its dedupe memory — whether there is a mirror or not. */
 export function noteDriverEventFor(cardId: string, event: DriverEvent | { type: "user"; text: string }): void {
   noteDriverKeys(driverKeysFor(cardId), event);
 }
 
 /**
- * Para TODO espelho deste processo — o SIGTERM de um deploy. No blue/green o processo NOVO retoma o
- * turno logo que este larga o card, e a fala de retomada que ele injeta é desconhecida da memória de
- * dedupe DESTE: um espelho que seguisse vivo até o exit a gravaria como conversa do terminal (a
- * mensagem de sistema duplicada, produção 2026-10-08). Num SIGTERM (`docker stop`, restart), por
- * isso, os espelhos param ANTES de o batimento ser largado (ver `handOffSdkOnShutdown`).
+ * Stops EVERY mirror of this process — a deploy's SIGTERM. On blue/green the NEW process resumes the
+ * turn as soon as this one lets go of the card, and the resume prompt it injects is unknown to THIS one's dedupe
+ * memory: a mirror that stayed alive until the exit would record it as terminal conversation (the
+ * duplicated system message, production 2026-10-08). On a SIGTERM (`docker stop`, restart), therefore,
+ * the mirrors stop BEFORE the heartbeat is released (see `handOffSdkOnShutdown`).
  */
 export function stopAllMirrors(): void {
   for (const mirror of mirrors.values()) stopChild(mirror);
@@ -258,13 +250,13 @@ export async function acquireTranscriptMirror(cardId: string, opts: AcquireMirro
     // starting (two tabs connecting together still get ONE follow).
     if (!existing.child && !existing.starting) {
       for (const id of opts.seenIds ?? []) existing.state.seen.add(id);
-      capSet(existing.state.seen);
+      dropOldest(existing.state.seen, MIRROR_DEDUPE_MAX);
       await startFollow(cardId, existing);
     }
     return () => release(cardId, existing);
   }
-  // O espelho ADOTA a memória do card: o que o driver já foi mandado dizer antes de alguém abrir
-  // esta tela (o turno do sweep de boot, por exemplo) segue reconhecível quando voltar pelo arquivo.
+  // The mirror ADOPTS the card's memory: what the driver had already been told to say before someone opened
+  // this screen (the boot sweep's turn, for example) stays recognisable when it comes back through the file.
   const mirror: CardMirror = {
     refs: 1,
     state: createMirrorState(opts.cutoffAt ?? Date.now(), opts.seenIds, driverKeysFor(cardId)),
@@ -282,13 +274,13 @@ async function startFollow(cardId: string, mirror: CardMirror): Promise<void> {
   try {
     await primeProvenance(cardId).catch(() => undefined);
     const source = await chatSource(cardId);
-    // Parado enquanto subia (o último release, ou o shutdown): um follow nascido agora não teria dono.
+    // Stopped while it was coming up (the last release, or the shutdown): a follow born now would have no owner.
     if (mirrors.get(cardId) !== mirror) return;
     const child = spawn(source.command.file, source.command.args, { stdio: ["pipe", "pipe", "ignore"] });
     mirror.child = child;
     const readLines = createLineReader();
     child.stdout?.on("data", (chunk: Buffer) => {
-      // Espelho parado (último release, shutdown): o que o follow ainda despeja do buffer não tem dono.
+      // Mirror stopped (last release, shutdown): what the follow still dumps from its buffer has no owner.
       if (mirrors.get(cardId) !== mirror) return;
       const batch = readLines(chunk).join("\n");
       if (batch.trim() === "") return;
@@ -318,7 +310,7 @@ async function startFollow(cardId: string, mirror: CardMirror): Promise<void> {
   }
 }
 
-/** Solta UM ref do espelho que a aba pegou — um espelho já parado não tem o que soltar. */
+/** Releases ONE ref of the mirror the tab took — an already stopped mirror has nothing to release. */
 function release(cardId: string, mirror: CardMirror): void {
   if (mirrors.get(cardId) !== mirror) return;
   mirror.refs -= 1;

@@ -5,9 +5,9 @@ import { join } from "node:path";
 import type { HistoryEvent } from "./history.js";
 
 /**
- * O CARD QUE PAROU NUMA PERGUNTA (produção, 2026-10-27, card 37fa689a): a bandeja do chat mostrava
- * "Quer que eu abra um PR pequeno para a mensagem de HTTPS?" e o ícone do card na barra lateral era o
- * círculo neutro de "sua vez". O servidor lê o mesmo log com a mesma regra e carimba o card.
+ * THE CARD THAT STOPPED ON A QUESTION (production, 2026-10-27, card 37fa689a): the chat's tray showed
+ * "Quer que eu abra um PR pequeno para a mensagem de HTTPS?" and the card's icon in the sidebar was the
+ * neutral "sua vez" circle. The server reads the same log with the same rule and stamps the card.
  */
 
 let dir = "";
@@ -116,8 +116,8 @@ describe("syncPendingQuestion / backfillPendingQuestions — o carimbo no card",
   });
 
   /**
-   * O fim do turno lia o log INTEIRO (readFile + JSON.parse de todas as linhas) para olhar só o fim.
-   * Agora lê o rabo — e cresce o rabo quando nele não há fala do principal nem mensagem da pessoa.
+   * The turn end read the WHOLE log (readFile + JSON.parse of every line) to look only at the end.
+   * Now it reads the tail — and grows the tail when it has no speech from the main agent nor a message from the person.
    */
   describe("lendo só o rabo do log", () => {
     const subagent = (i: number): HistoryEvent =>
@@ -140,7 +140,7 @@ describe("syncPendingQuestion / backfillPendingQuestions — o carimbo no card",
 
     it("não passa pela leitura do replay: um log grande não é compactado no fim do turno", async () => {
       const { registry, history, pending, card } = await cardWithLog([]);
-      // Um log de antes do teto do input: o replay o reescreveria capado (compactação por tamanho).
+      // A log from before the input cap: the replay would rewrite it capped (compaction by size).
       const file = join(dir, history.SDK_HISTORY_DIR, `${card.id}.ndjson`);
       const write = { type: "tool_use", id: "w1", name: "Write", input: { file_path: "/a", content: "x".repeat(history.HISTORY_COMPACT_SIZE) } };
       await mkdir(join(dir, history.SDK_HISTORY_DIR), { recursive: true });

@@ -77,12 +77,11 @@ import {
   whitelistModel,
   type BoardCard,
   type BoardProject,
-  type CardSessionInfo,
 } from "@/features/board/api";
 import { AccountUsageBars, useMinuteTick } from "@/features/board/components/AccountUsageBars";
 import { PlanUsageMeter } from "@/features/board/components/PlanUsage";
 import { pillPercent } from "@/features/board/lib/usage";
-import type { CardColumn } from "@/api/types";
+import type { CardColumn, CardSessionInfo } from "@/api/types";
 import { t as translate, useT } from "@/i18n";
 
 /**
@@ -135,12 +134,6 @@ export function CardTerminalView({
    */
   active?: boolean;
   onBack: () => void;
-  /**
-   * Accepted so the page can keep passing it, but no longer rendered here: "New card" lives on the
-   * board's own chrome and in ⌘K, and a second copy in this footer only competed with Browser and
-   * Shell — the two things that belong to THIS card.
-   */
-  onNewCard?: () => void;
   /**
    * Opens the navigation drawer. Only rendered on narrow screens, where the card list beside the
    * terminal is hidden and going "back to the board" is otherwise the only way to reach another
@@ -502,7 +495,7 @@ export function CardTerminalView({
   // without this it is a mute terminal that silently queues whatever you type — J. The banner turns
   // that into "Claude parou — Reiniciar".
   //
-  // Only where the bare shell is the thing being TYPED INTO, though (produção, 2026-10-02): the
+  // Only where the bare shell is the thing being TYPED INTO, though (production, 2026-10-02): the
   // native chat talks to a driver that is a child of the back, not to this pane, and its next
   // message spawns one and resumes the same conversation. On that screen the banner was a false
   // alarm hanging over a session that was answering normally — so in the native chat it is not
@@ -662,10 +655,10 @@ export function CardTerminalView({
   const sendMessage = React.useCallback(
     async (text: string) => {
       try {
-        const result = await boardApi.sendCardMessage(cardId, text);
+        const sent = await boardApi.sendCardMessage(cardId, text);
         queryClient.setQueryData(cardMessagesKey(cardId), {
-          pending: result.pending,
-          agent: result.agent,
+          pending: sent.pending,
+          agent: sent.agent,
         });
       } catch (error) {
         toast.error(apiErrorMessage(error, translate("outbox.sendError")));
@@ -676,18 +669,23 @@ export function CardTerminalView({
   );
 
   /**
-   * O "Preparando…" de um card que vai abrir no CHAT NATIVO. Lá quem fala com o Claude é o driver
-   * do SDK, filho do back — não o painel do tmux. O outbox do servidor entrega DIGITANDO no tmux, e
-   * a mensagem caía no Claude do terminal, uma sessão que o chat nativo não mostra: o card abria e
-   * ela tinha sumido (produção, 2026-11-10). Aqui ela espera na fila do próprio chat
-   * (lib/sdkQueue.ts, no localStorage), que ele lê ao montar e entrega quando estiver pronto.
+   * The "Preparando…" of a card that will open in the NATIVE CHAT. There, the one talking to Claude is
+   * the SDK driver, a child of the back — not the tmux pane. The server's outbox delivers by TYPING into
+   * tmux, and the message landed in the terminal's Claude, a session the native chat does not show: the
+   * card opened and it was gone (production, 2026-11-10). Here it waits in the chat's own queue
+   * (lib/sdkQueue.ts, in localStorage), which the chat reads on mount and delivers when it is ready.
    *
-   * Sem o flag da instalação ainda (cache frio) não se escolhe no escuro: o Enter falha e o texto
-   * fica no campo.
+   * Without the installation's flag yet (cold cache) nothing is chosen in the dark: Enter fails and the
+   * text stays in the field.
    */
   const nativeChatPending = mode === "chat" && features.data?.sdkChat !== false;
   const [chatQueue, setChatQueue] = React.useState<QueuedMessage[]>(() => readQueue(cardId));
-  React.useEffect(() => setChatQueue(readQueue(cardId)), [cardId]);
+  // Another card's queue is re-read during the render that switches to it, not in an effect after it.
+  const [chatQueueCardId, setChatQueueCardId] = React.useState(cardId);
+  if (chatQueueCardId !== cardId) {
+    setChatQueueCardId(cardId);
+    setChatQueue(readQueue(cardId));
+  }
   const queueForNativeChat = React.useCallback(
     async (text: string) => {
       if (features.data === undefined) {
@@ -1030,15 +1028,15 @@ export function CardTerminalView({
               </DropdownMenuContent>
             </DropdownMenu>
           ) : null}
-          {/* O MEMBRO não troca a conta (é do dono), mas precisa saber em qual conta o card roda: o
-              mesmo pill, só leitura. */}
+          {/* The MEMBER does not switch the account (it is the owner's), but needs to know which account the
+              card runs on: the same pill, read-only. */}
           {card && !isOwner ? (
             <span data-testid="card-account-readonly" title={t("plan.accountReadOnly")} className={cn(PILL, "inline-flex items-center hover:border-border/60 hover:text-muted-foreground")}>
               <span className="sr-only">{t("plan.account")}: </span>
               {accountName}
             </span>
           ) : null}
-          {/* Quanto do plano dessa conta já foi — para todo mundo que trabalha no card. */}
+          {/* How much of this account's plan is already used — for everyone who works on the card. */}
           {card ? <PlanUsageMeter cardId={cardId} accountName={accountName} active={active} isOwner={isOwner} /> : null}
           {showTerminal ? <ConnectionIndicator state={connection} /> : null}
         </div>

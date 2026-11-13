@@ -7,14 +7,14 @@ import type { Review, ReviewOrders } from "./model.js";
 import { startReview } from "./orchestrator.js";
 
 /**
- * QUEM PODE PEDIR UMA REVISÃO, e com quais papéis — a mesma regra para o "Pedir revisão" do painel
- * (`POST /api/cards/:id/review`) e para a IA do card (`vibehub_review_start`), que pede pela pessoa que
- * deu a ordem no chat. Antes a regra morava na rota, e a IA não tinha por onde pedir: a pessoa dizia
- * "o albert revisa e é coautor, pode mergear" e ainda tinha que abrir o diálogo e escolher tudo de novo
- * (produção, 2026-11-06).
+ * WHO MAY ASK FOR A REVIEW, and with which roles — the same rule for the panel's "Pedir revisão"
+ * (`POST /api/cards/:id/review`) and for the card's AI (`vibehub_review_start`), which asks on behalf of
+ * the person who gave the order in the chat. The rule used to live in the route, and the AI had no way to
+ * ask: the person would say "o albert revisa e é coautor, pode mergear" and still had to open the dialog
+ * and pick everything again (production, 2026-11-06).
  *
- * Recusas com o código na mensagem (a rota traduz em 400): `papeis_obrigatorios`, `card_de_revisor`,
- * `pessoa_sem_acesso`, `papel_sem_work`, `revisor_sem_github`, mais as do `startReview`.
+ * Refusals with the code in the message (the route translates them into 400): `papeis_obrigatorios`,
+ * `card_de_revisor`, `pessoa_sem_acesso`, `papel_sem_work`, `revisor_sem_github`, plus those of `startReview`.
  */
 
 export interface ReviewRoles {
@@ -24,7 +24,7 @@ export interface ReviewRoles {
   mergerUserId: string;
 }
 
-/** Quem alcança o card: os owners (veem tudo) e quem tem share no card ou no projeto dele. */
+/** Who reaches the card: the owners (they see everything) and whoever has a share on the card or on its project. */
 export async function reachingCard(card: registry.Card): Promise<PublicUser[]> {
   const [users, onCard, onProject] = await Promise.all([
     listUsers(),
@@ -36,20 +36,20 @@ export async function reachingCard(card: registry.Card): Promise<PublicUser[]> {
 }
 
 /**
- * Confere os papéis e abre a revisão. `requester` é quem pede (a sessão do painel, ou a pessoa que deu
- * a ordem ao card): precisa de `work` no card, como na rota.
+ * Checks the roles and opens the review. `requester` is who asks (the panel's session, or the person who
+ * gave the order to the card): it needs `work` on the card, as in the route.
  */
 export async function startReviewChecked(input: {
   card: registry.Card;
   prNumber: number;
   roles: ReviewRoles;
   requester: PublicUser;
-  /** O que quem mergeia já mandou fazer no fim (ver {@link AgentReviewRequest}). */
+  /** What whoever merges already ordered for the end (see {@link AgentReviewRequest}). */
   orders?: ReviewOrders;
 }): Promise<Review> {
   const { card, prNumber, roles, requester } = input;
-  // Mergear e concluir no fim são ordens de quem mergeia: o merge sai em nome dele, e ninguém dá essa
-  // ordem por outra pessoa.
+  // Merging and completing at the end are orders of whoever merges: the merge goes out on their behalf, and
+  // nobody gives that order for somebody else.
   if ((input.orders?.mergeAuthorized || input.orders?.concludeWhenMerged) && roles.mergerUserId !== requester.id) {
     throw new Error("merge_autorizado_de_outro: só quem mergeia pode mandar mergear (ou concluir o card) quando a revisão terminar");
   }
@@ -60,23 +60,23 @@ export async function startReviewChecked(input: {
   if ((await cardLevel(requester, card.id)) !== "work") {
     throw new Error(`pessoa_sem_acesso: ${requester.username} não tem work neste card para pedir a revisão`);
   }
-  // Cada papel é alguém que alcança o card; quem não está na lista de pessoas não teria por onde acompanhar.
+  // Each role is somebody who reaches the card; whoever is not on the people list would have no way to follow along.
   const reaching = new Map((await reachingCard(card)).map((u) => [u.id, u]));
   const outside = Object.entries({ ...required, ...(roles.coauthorUserId ? { coauthorUserId: roles.coauthorUserId } : {}) })
     .filter(([, id]) => !reaching.has(id))
     .map(([k]) => k);
   if (outside.length) throw new Error(`pessoa_sem_acesso: ${outside.join(", ")} não alcança este card`);
-  // O autor vira ator do card a cada relay (commit e push na conta dele) e o merger opera nele: os
-  // dois precisam de `work` aqui, senão a revisão roda inteira e trava no papel de quem não pode.
-  // O revisor age no card DELE, e o orquestrador garante o `work` lá.
+  // The author becomes the card's actor at each relay (commit and push on their account) and the merger
+  // operates on it: both need `work` here, otherwise the review runs all the way and gets stuck on the role
+  // of whoever cannot. The reviewer acts on THEIR card, and the orchestrator guarantees the `work` there.
   const withoutWork: string[] = [];
   for (const key of ["authorUserId", "mergerUserId"] as const) {
     if ((await cardLevel(reaching.get(roles[key]) ?? null, card.id)) !== "work") withoutWork.push(key);
   }
   if (withoutWork.length) throw new Error(`papel_sem_work: ${withoutWork.join(", ")} só tem leitura neste card`);
-  // Os reviews do PR saem do card do revisor, na identidade dele: sem conexão própria, iriam na do
-  // projeto (a regra do merger vale aqui também; owner sem conexão usa a do projeto). Revisor igual
-  // ao autor fica com a recusa própria, do `startReview`.
+  // The PR reviews go out from the reviewer's card, under their identity: without their own connection,
+  // they would go on the project's (the merger's rule applies here too; an owner with no connection uses
+  // the project's). A reviewer equal to the author gets its own refusal, from `startReview`.
   const reviewer = reaching.get(roles.reviewerUserId);
   if (reviewer && reviewer.id !== roles.authorUserId && !(await ownGithubConnection(reviewer, card))) {
     throw new Error("revisor_sem_github: o revisor não tem uma conexão GitHub própria no vibehub (os reviews do PR sairiam na conta de outra pessoa)");
@@ -88,30 +88,30 @@ export async function startReviewChecked(input: {
   });
 }
 
-/** O que a IA do card passa: nomes de usuário do vibehub, como a pessoa falou no chat. */
+/** What the card's AI passes: vibehub usernames, as the person said them in the chat. */
 export interface AgentReviewRequest {
-  /** O PR do card a revisar. Ausente = o único PR aberto do card (mais de um: tem que dizer qual). */
+  /** The card's PR to review. Absent = the card's only open PR (more than one: it has to say which). */
   pr?: number;
   reviewer: string;
-  /** Quem corrige. Ausente = o mesmo que o diálogo sugere (autor do PR anexado, ou quem trabalha o card). */
+  /** Who fixes. Absent = the same one the dialog suggests (the attached PR's author, or whoever works the card). */
   author?: string;
   coauthor?: string;
   /** Quem mergeia. Ausente = quem deu a ordem. */
   merger?: string;
   /**
-   * Quem deu a ordem já mandou mergear quando terminar ("terminando pode mergear"). Só vale quando ele
-   * é quem mergeia: ninguém autoriza o merge de outra pessoa (`merge_autorizado_de_outro`).
+   * Whoever gave the order already said to merge when done ("terminando pode mergear"). Only valid when
+   * they are the one who merges: nobody authorises somebody else's merge (`merge_autorizado_de_outro`).
    */
   mergeWhenReady?: boolean;
-  /** E concluir o card quando mergear. Mesma regra: a ordem é de quem mergeia. */
+  /** And complete the card when merged. Same rule: the order belongs to whoever merges. */
   concludeWhenMerged?: boolean;
 }
 
 /**
- * A REVISÃO PEDIDA PELA IA do card, em nome de quem deu a ordem (o ator: quem mandou a última mensagem).
- * Os padrões são os do diálogo do painel — o que a pessoa não falou fica como ela veria pré-escolhido —
- * e as conferências, as mesmas (`startReviewChecked`). O merge continua sendo o de sempre: o automático
- * quando a revisão fica pronta sem nada em pé, ou o botão de quem mergeia.
+ * THE REVIEW ASKED FOR BY THE card's AI, on behalf of whoever gave the order (the actor: who sent the latest
+ * message). The defaults are the panel dialog's — whatever the person did not say stays as they would see
+ * it pre-selected — and the checks are the same (`startReviewChecked`). The merge is still the usual one:
+ * the automatic one when the review is ready with nothing standing, or the button of whoever merges.
  */
 export async function startReviewByAgent(cardId: string, req: AgentReviewRequest): Promise<Review> {
   const card = await registry.getCard(cardId);
@@ -155,7 +155,7 @@ export async function startReviewByAgent(cardId: string, req: AgentReviewRequest
   });
 }
 
-/** O autor que o diálogo pré-escolhe: quem abriu o PR anexado (pela conexão GitHub), senão o ator do card. */
+/** The author the dialog pre-selects: whoever opened the attached PR (through the GitHub connection), otherwise the card's actor. */
 async function defaultAuthor(card: registry.Card, pr: registry.CardPr, reaching: PublicUser[]): Promise<string | undefined> {
   if (!pr.attached) return card.actorUserId;
   if (!pr.author) return undefined;

@@ -90,7 +90,7 @@ export function applySlashPick(command: SlashCommandInfo): string {
   return `/${command.name} `;
 }
 
-/** A mensagem enviada que É um comando do catálogo: o nome como foi digitado e os argumentos. */
+/** The sent message that IS a catalogue command: the name as it was typed, and the arguments. */
 export interface InvokedCommand {
   name: string;
   args: string;
@@ -98,10 +98,10 @@ export interface InvokedCommand {
 }
 
 /**
- * Esta mensagem invoca um comando do catálogo? Só quando ela COMEÇA pelo nome (`/context`,
- * `/compact foca no PR`), o nome existe no catálogo da sessão (ou é apelido de um) — um caminho
- * (`/etc/hosts`) ou um nome que a sessão não conhece segue sendo texto. É o que faz o chat desenhar
- * o envio como o comando que ele é, e não como uma frase. PURE.
+ * Does this message invoke a catalogue command? Only when it STARTS with the name (`/context`,
+ * `/compact foca no PR`) and the name exists in the session's catalogue (or is an alias of one) — a path
+ * (`/etc/hosts`) or a name the session does not know stays text. It is what makes the chat draw
+ * the send as the command it is, and not as a sentence. PURE.
  */
 export function invokedCommand(text: string, commands: readonly SlashCommandInfo[]): InvokedCommand | null {
   const trimmed = text.trim();

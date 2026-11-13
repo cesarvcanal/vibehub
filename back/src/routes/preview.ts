@@ -150,8 +150,8 @@ const MAX_HEAD_BYTES = 64 * 1024;
  * response is fetched again internally at the path the app asked for. ONE hop, always: if the
  * second answer redirects too, it is relayed as it is and the browser decides.
  */
-function relayHttp(socket: Duplex, x: HttpExchange): void {
-  const child = openTunnel(x.port);
+function relayHttp(socket: Duplex, exchange: HttpExchange): void {
+  const child = openTunnel(exchange.port);
   let sawBytes = false;
   let stderr = "";
   let pending: Buffer[] = [];
@@ -171,8 +171,8 @@ function relayHttp(socket: Duplex, x: HttpExchange): void {
   };
 
   child.stdin.on("error", () => { /* tunnel died first; the close handler reports */ });
-  child.stdin.write(x.head);
-  if (x.body && x.body.length > 0) child.stdin.write(x.body);
+  child.stdin.write(exchange.head);
+  if (exchange.body && exchange.body.length > 0) child.stdin.write(exchange.body);
 
   child.stdout.on("data", (chunk: Buffer) => {
     sawBytes = true;
@@ -186,9 +186,9 @@ function relayHttp(socket: Duplex, x: HttpExchange): void {
     }
     const parsed = parseResponseHead(raw);
     if (!parsed) return; // head still arriving
-    const rehead = x.rehead;
+    const rehead = exchange.rehead;
     const follow = rehead
-      ? loopingRedirectPath({ status: parsed.status, location: parsed.headers.location, method: x.method, port: x.port, path: x.path })
+      ? loopingRedirectPath({ status: parsed.status, location: parsed.headers.location, method: exchange.method, port: exchange.port, path: exchange.path })
       : null;
     if (!follow || !rehead) {
       relayFrom(raw);
@@ -196,16 +196,16 @@ function relayHttp(socket: Duplex, x: HttpExchange): void {
     }
     abandoned = true;
     child.kill("SIGKILL");
-    logger.info({ port: x.port, from: x.path, to: follow }, "preview absorbed a redirect onto its own prefix");
+    logger.info({ port: exchange.port, from: exchange.path, to: follow }, "preview absorbed a redirect onto its own prefix");
     // No body on the hop: only GET/HEAD get here, and the app already answered the original one.
-    relayHttp(socket, { ...x, path: follow, head: rehead(follow), body: undefined, rehead: undefined });
+    relayHttp(socket, { ...exchange, path: follow, head: rehead(follow), body: undefined, rehead: undefined });
   });
   child.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
 
   child.on("error", (err) => {
     if (abandoned) return;
-    logger.warn({ err: err.message, port: x.port }, "preview tunnel failed to spawn");
-    socket.end(x.fallback);
+    logger.warn({ err: err.message, port: exchange.port }, "preview tunnel failed to spawn");
+    socket.end(exchange.fallback);
   });
   child.on("close", (code) => {
     if (abandoned) return;
@@ -216,8 +216,8 @@ function relayHttp(socket: Duplex, x: HttpExchange): void {
       return;
     }
     // socat could not connect (nothing listening) — it exits without writing a byte.
-    if (code !== 0) logger.info({ port: x.port, detail: stderr.trim().slice(0, 300) }, "preview target unreachable");
-    socket.end(x.fallback);
+    if (code !== 0) logger.info({ port: exchange.port, detail: stderr.trim().slice(0, 300) }, "preview target unreachable");
+    socket.end(exchange.fallback);
   });
   // The browser gave up (tab closed, navigation) — the tunnel must not outlive it.
   socket.on("close", () => { child.kill("SIGKILL"); });
@@ -300,8 +300,7 @@ export async function previewRoutes(app: FastifyInstance): Promise<void> {
    * for a member, minus every port whose current card is not theirs to see (previewPortScope).
    */
   app.get("/api/preview/ports", { preHandler: requireSession }, async (req, reply) => {
-    const user = await requestUser(req);
-    if (!user) return await reply.code(401).send({ error: "not authenticated" });
+    const user = (await requestUser(req))!;
     try {
       const { stdout } = await hostExecutor().runScript(listPortsScript(config.runner.container), {
         timeoutMs: 20_000,

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { AccountUsage } from "@/features/board/api";
+import type { AccountUsage } from "@/api/types";
 import {
   alertSentence,
   peakWindow,
@@ -137,9 +137,9 @@ describe("usageHue", () => {
     expect(usageHue(50)).toBe(142);
     const hues = [60, 70, 85, 95, 100].map(usageHue);
     expect(hues).toEqual([...hues].sort((a, b) => b - a));
-    expect(usageHue(70)).toBe(50); // amarelo
-    expect(usageHue(85)).toBe(28); // laranja
-    expect(usageHue(95)).toBe(4); // vermelho
+    expect(usageHue(70)).toBe(50); // yellow
+    expect(usageHue(85)).toBe(28); // orange
+    expect(usageHue(95)).toBe(4); // red
     expect(usageHue(100)).toBe(0);
   });
 

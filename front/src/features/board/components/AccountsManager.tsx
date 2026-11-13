@@ -95,9 +95,9 @@ export function AccountsManager({ trigger = "icon" }: { trigger?: "icon" | "row"
   const [labelDraft, setLabelDraft] = React.useState<string | null>(null);
   const labelValue = labelDraft ?? savedLabel;
 
-  const invalidate = React.useCallback(() => {
+  const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY });
-  }, [queryClient]);
+  };
 
   const labelMutation = useMutation({
     mutationFn: (value: string) => boardApi.setDefaultAccountLabel(value),

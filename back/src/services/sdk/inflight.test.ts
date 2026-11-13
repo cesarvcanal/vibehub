@@ -117,13 +117,13 @@ describe("inflight markers", () => {
 });
 
 /**
- * O DONO DO MARCADOR (produção, 2026-10-08): o deploy do tech.multi é BLUE/GREEN — o container novo
- * sobe e fica saudável enquanto o antigo SEGUE no ar, rodando o turno. O sweep de boot do novo via o
- * marcador e concluía "o turno morreu", retomava um turno vivo, e o espelho do back antigo gravava a
- * mensagem de retomada como conversa do terminal: a mensagem de sistema aparecia DUAS vezes.
+ * THE MARKER'S OWNER (production, 2026-10-08): the tech.multi deploy is BLUE/GREEN — the new container
+ * comes up and turns healthy while the old one STAYS up, running the turn. The new one's boot sweep saw the
+ * marker and concluded "the turn died", resumed a live turn, and the old back's mirror recorded the
+ * resume message as terminal conversation: the system message showed up TWICE.
  *
- * "Existe marcador" não basta: é preciso saber se quem o escreveu ainda está vivo. Cada processo
- * assina os marcadores que escreve e mantém um batimento no volume compartilhado.
+ * "There is a marker" is not enough: one needs to know whether whoever wrote it is still alive. Each process
+ * signs the markers it writes and keeps a heartbeat on the shared volume.
  */
 describe("o dono do marcador — quem escreveu o turno ainda está vivo?", () => {
   it("sem batimento, o dono é dado como morto (um crash, ou um processo que nunca bateu)", async () => {
@@ -136,7 +136,7 @@ describe("o dono do marcador — quem escreveu o turno ainda está vivo?", () =>
 
     releaseInflightOwnerSync();
     expect(await isInflightOwnerAlive(INFLIGHT_OWNER)).toBe(false);
-    releaseInflightOwnerSync(); // idempotente: um segundo sinal no shutdown não pode lançar
+    releaseInflightOwnerSync(); // idempotent: a second signal at shutdown must not throw
   });
 
   it("um batimento VELHO é de um processo que morreu sem largar (kill -9, OOM)", async () => {

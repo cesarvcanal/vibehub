@@ -119,7 +119,7 @@ describe("prompts da revisão: tempo de cada rodada", () => {
   });
 
   it("palavra reservada na fala citada sai desarmada; branch, caminho e comandos do PR chegam intactos", () => {
-    // Achado f1 da revisão do #264: desarmar o prompt inteiro trocava a branch do card e o push criava outra.
+    // Finding f1 of the review of #264: defusing the whole prompt changed the card's branch and the push created another one.
     const f: Finding = {
       id: "f1", severity: "blocking", title: "o ultracode some", status: "open", introducedInRound: 1,
       problem: "Sem o ULTRATHINK na barra.", fix: "Volte o ultracode em src/ultracode.ts.",

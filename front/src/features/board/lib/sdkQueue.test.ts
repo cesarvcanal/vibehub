@@ -86,17 +86,18 @@ describe("sdkQueue — durabilidade (o F5 no meio de um turno longo)", () => {
 });
 
 /**
- * EM EDIÇÃO — a mensagem que está no campo de texto.
+ * BEING EDITED — the message that is in the text field.
  *
- * Ela não sai da fila: guarda o lugar dela (senão cancelar a edição a mandaria pro fim, atrás de
- * quem chegou depois) e guarda o texto (senão um F5 no meio da correção apagaria justamente o que
- * a fila existe pra não perder). O que muda é só isto: o despacho a pula.
+ * It does not leave the queue: it keeps its place (otherwise cancelling the edit would send it to the
+ * end, behind whoever arrived later) and keeps the text (otherwise an F5 in the middle of the
+ * correction would erase precisely what the queue exists not to lose). Only this changes: dispatch
+ * skips it.
  */
 describe("sdkQueue — a mensagem que está no campo", () => {
   it("o despacho pula quem está sendo reescrita, sem furar a ordem dos outros", () => {
     const q = markEditing([msg("a", "um"), msg("b", "dois")], "a");
     expect(headOfQueue(q)).toMatchObject({ id: "b" });
-    expect(q.map((m) => m.id)).toEqual(["a", "b"]); // ninguém saiu do lugar
+    expect(q.map((m) => m.id)).toEqual(["a", "b"]); // nobody moved
   });
 
   it("uma fila inteiramente em edição não tem o que despachar", () => {
@@ -115,7 +116,7 @@ describe("sdkQueue — a mensagem que está no campo", () => {
   it("soltar devolve todo mundo ao jogo, sem remexer na ordem (o F5 no meio da correção)", () => {
     const q = releaseEditing(markEditing([msg("a", "um"), msg("b", "dois")], "a"));
     expect(headOfQueue(q)).toMatchObject({ id: "a" });
-    expect(releaseEditing(q)).toBe(q); // nada a soltar: a mesma lista, sem re-render à toa
+    expect(releaseEditing(q)).toBe(q); // nothing to release: the same list, no pointless re-render
   });
 
   it("o texto reescrito entra NO LUGAR do antigo — cancelar ou salvar não reordena nada", () => {
@@ -153,10 +154,10 @@ describe("a fila de OUTRA conta (a aba trocou de conta com mensagens esperando)"
       { id: "q3", text: "antiga, sem autor", at: 3 },
     ];
     const { own, foreign } = foreignToOutbox(queue, "cesar");
-    // sem autor = de antes desta versão: continua com quem está na aba (o comportamento de sempre)
+    // no author = from before this version: stays with whoever is in the tab (the usual behavior)
     expect(own.map((m) => m.id)).toEqual(["q2", "q3"]);
-    // `unsent`: ela nunca saiu deste navegador — a reconciliação jamais a casa com um "da mussa"
-    // que já esteja na conversa (sem a marca, o próximo F5 a dava por entregue e ela sumia).
+    // `unsent`: it never left this browser — the reconciliation never matches it with a "da mussa"
+    // already in the conversation (without the mark, the next F5 considered it delivered and it vanished).
     expect(foreign).toEqual([{ cid: "q1", text: "da mussa", at: 1, from: MUSSA, undelivered: true, unsent: true }]);
   });
 

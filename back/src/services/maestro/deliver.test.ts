@@ -77,7 +77,7 @@ async function makeCard() {
 describe("buildPushAndPrScript", () => {
   it("carries the token over stdin, NEVER in a docker exec argv line", async () => {
     const { deliver } = await load();
-    const s = deliver.buildPushAndPrScript("vibehub-runner", "card-1", TOKEN, "/work/scratch/x", "card/fix-1", "dev");
+    const s = deliver.buildPushAndPrScript("vibehub-runner", TOKEN, "/work/scratch/x", "card/fix-1", "dev");
     const dockerLine = s.split("\n").find((l) => l.startsWith("docker exec")) ?? "";
     expect(dockerLine).toContain("docker exec -i");
     expect(dockerLine).not.toContain(TOKEN);
@@ -169,7 +169,7 @@ describe("forgetDeletedRemoteBranch — a branch the merge deleted on GitHub doe
 
   it("runs before the push, on the quoted branch", async () => {
     const { deliver } = await load();
-    const lines = deliver.buildPushAndPrScript("vibehub-runner", "card-1", TOKEN, "/work/scratch/x", "card/fix-1", "dev").split("\n");
+    const lines = deliver.buildPushAndPrScript("vibehub-runner", TOKEN, "/work/scratch/x", "card/fix-1", "dev").split("\n");
     const guard = lines.findIndex((l) => l.includes("git ls-remote --exit-code origin 'refs/heads/card/fix-1'"));
     const push = lines.findIndex((l) => l.includes("git push --force-with-lease origin 'card/fix-1'"));
     expect(guard).toBeGreaterThan(-1);
@@ -181,7 +181,7 @@ describe("forgetDeletedRemoteBranch — a branch the merge deleted on GitHub doe
 describe("buildMergeScript", () => {
   it("merges with a merge commit, never a squash, token over stdin", async () => {
     const { deliver } = await load();
-    const s = deliver.buildMergeScript("vibehub-runner", "card-1", TOKEN, "/work/scratch/x", PR, HEAD_SHA);
+    const s = deliver.buildMergeScript("vibehub-runner", TOKEN, "/work/scratch/x", PR, HEAD_SHA);
     expect(s).toContain(`gh pr merge '${PR}' --merge --match-head-commit '${HEAD_SHA}'`);
     expect(s).not.toContain("--squash");
     const dockerLine = s.split("\n").find((l) => l.startsWith("docker exec")) ?? "";
@@ -190,7 +190,7 @@ describe("buildMergeScript", () => {
 
   it("always pinned: a merge without the full sha the gate passed on is refused before any shell", async () => {
     const { deliver } = await load();
-    const build = (sha: string) => deliver.buildMergeScript("vibehub-runner", "card-1", TOKEN, "/work/scratch/x", PR, sha);
+    const build = (sha: string) => deliver.buildMergeScript("vibehub-runner", TOKEN, "/work/scratch/x", PR, sha);
     expect(() => build("")).toThrow(/sha/);
     expect(() => build("abc1234")).toThrow(/sha/);
     expect(() => build(`${HEAD_SHA}'; rm -rf /; '`)).toThrow(/sha/);
@@ -210,7 +210,7 @@ describe("buildMergeScript", () => {
         '  "pr merge") echo "Merged" ;;',
         "esac",
       ].join("\n"), { mode: 0o755 });
-      const lines = deliver.buildMergeScript("vibehub-runner", "card-1", TOKEN, root, PR, pin).split("\n");
+      const lines = deliver.buildMergeScript("vibehub-runner", TOKEN, root, PR, pin).split("\n");
       const inner = lines.slice(lines.findIndex((l) => l.startsWith("docker exec")) + 1, -1).join("\n");
       const env = { PATH: `${join(root, "bin")}:${process.env.PATH}`, ROOT: root, PR_HEAD: prHead };
       const stdout = execFileSync("bash", ["-s"], { input: inner, env, encoding: "utf8" });
@@ -271,7 +271,7 @@ describe("parseCiChecks", () => {
     expect(p('[{"name":"back","bucket":"pass"},{"name":"lint","bucket":"skipping"}]\n__VIBEHUB_CI__ done')).toMatchObject({ verdict: "pass" });
     expect(p('[{"name":"back","bucket":"pass"},{"name":"front","bucket":"fail"}]')).toEqual({ verdict: "fail", output: "CI do PR vermelho: front" });
     expect(p('[{"name":"e2e","bucket":"cancel"}]').verdict).toBe("fail");
-    // com o link do job, o vermelho leva a quem lê direto ao log que falhou
+    // with the job's link, the red takes whoever reads it straight to the log that failed
     expect(p('[{"name":"back","bucket":"fail","link":"https://github.com/o/r/actions/runs/1/job/2"},{"name":"front","bucket":"pass"}]'))
       .toEqual({ verdict: "fail", output: "CI do PR vermelho: back\n  back: https://github.com/o/r/actions/runs/1/job/2" });
     expect(p('[{"name":"front","bucket":"pending"}]')).toEqual({ verdict: "pending", output: "CI do PR ainda rodando: front" });
@@ -311,7 +311,7 @@ describe("parseCiChecks", () => {
 describe("buildCiChecksScript", () => {
   it("polls with the card's token over stdin, bounded, and waits for checks to appear only when the repo has workflows", async () => {
     const { deliver } = await load();
-    const s = deliver.buildCiChecksScript("vibehub-runner", "card1", TOKEN, "/work/scratch/x", PR);
+    const s = deliver.buildCiChecksScript("vibehub-runner", TOKEN, "/work/scratch/x", PR);
     const dockerLine = s.split("\n").find((l) => l.startsWith("docker exec")) ?? "";
     expect(dockerLine).not.toContain(TOKEN);
     expect(s).toContain(`gh pr checks '${PR}' --json name,bucket,link`);
@@ -617,11 +617,11 @@ describe("deliver grava o PR no card (revisão de PR)", () => {
 
     const prs = (await registry.getCard(card.id))?.prs;
     expect(prs).toHaveLength(2);
-    // a head é a branch do card; a base é o alvo da entrega; o número sai da URL do PR
+    // the head is the card's branch; the base is the delivery's target; the number comes from the PR's URL
     expect(prs?.find((p) => p.base === "dev")).toMatchObject({ number: 7, url: prUrl(7), branch: card.branch ?? `card/${card.worktreeSlug}` });
     expect(prs?.find((p) => p.base === "prod")).toMatchObject({ number: 8, url: prUrl(8) });
 
-    // repetir `dev` (o PR foi fechado e outro aberto) atualiza o item em vez de empilhar
+    // repeating `dev` (the PR was closed and another opened) updates the item instead of stacking
     const firstOpenedAt = prs!.find((p) => p.base === "dev")!.openedAt;
     wire({ push: pushOut(9) });
     await deliver.deliver(card.id, { branch: "dev" });
@@ -674,7 +674,7 @@ describe("deliver grava o PR no card (revisão de PR)", () => {
     expect(dev).toMatchObject({ number: 7 });
     expect(dev?.mergedAt).toBeGreaterThanOrEqual(before);
 
-    // o próximo PR da mesma base é outro PR: nasce sem a marca do anterior
+    // the next PR on the same base is another PR: it is born without the previous one's mark
     wire({ push: pushOut(8) });
     await deliver.deliver(card.id, { branch: "dev" });
     expect((await registry.getCard(card.id))?.prs?.find((p) => p.base === "dev")).toMatchObject({ number: 8 });
@@ -705,7 +705,7 @@ describe("deliver grava o PR no card (revisão de PR)", () => {
       authorCard: card, reviewerAccountSlug: "mussa", prBranch: "card/the-fix-ab12", title: "Revisão: the fix",
     });
     wire({ push: pushOut(7) });
-    // nem a autorização do agente nem o alvo pedido mudam nada: o revisor não tem saída
+    // neither the agent's authorization nor the requested target change anything: the reviewer has no way out
     const out = await deliver.deliver(reviewer.id, { branch: "prod", authorized: true });
     expect(out).toMatchObject({
       merged: false,
@@ -725,7 +725,7 @@ describe("deliver grava o PR no card (revisão de PR)", () => {
 describe("deliver no modo só-merge (botão de merge da revisão de PR)", () => {
   const REVIEWED = "a".repeat(40);
   const MOVED = "b".repeat(40);
-  /** O runner do modo só-merge: resolver o PR (sem push), CI, merge. */
+  /** The runner of the merge-only mode: resolve the PR (no push), CI, merge. */
   function wireMergeOnly(head: string, over: { ci?: string; merge?: string; resolve?: string } = {}) {
     runScript.mockImplementation(async (script: string) => {
       if (script.includes("gh pr merge")) return { stdout: over.merge ?? "Merged\n__VIBEHUB_DELIVER__ merged\n", stderr: "" };
@@ -741,9 +741,9 @@ describe("deliver no modo só-merge (botão de merge da revisão de PR)", () => 
     const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: REVIEWED });
     expect(out).toMatchObject({ merged: false, reason: "head_moved", prUrl: PR, branch: "dev" });
     expect(out.output).toContain(MOVED.slice(0, 7));
-    // nenhum script empurra: o push carregaria um commit que ninguém revisou
+    // no script pushes: the push would carry a commit nobody reviewed
     expect(scripts().some((s) => s.includes("git push"))).toBe(false);
-    // o PR é achado pela branch do card E pela base pedida (dois PRs da mesma branch não se confundem)
+    // the PR is found by the card's branch AND by the requested base (two PRs from the same branch do not get mixed up)
     const resolve = scripts().find((s) => s.includes("gh pr list"))!;
     expect(resolve).toContain(`--head '${card.branch ?? `card/${card.worktreeSlug}`}'`);
     expect(resolve).toContain("--base 'dev'");
@@ -758,17 +758,17 @@ describe("deliver no modo só-merge (botão de merge da revisão de PR)", () => 
     const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: REVIEWED });
     expect(out).toMatchObject({ merged: true, reason: "merged", prUrl: PR, branch: "dev" });
     expect(scripts().some((s) => s.includes("git push"))).toBe(false);
-    // o CI espera o PR apontar para o sha REVISADO (não para o HEAD do worktree do autor)
+    // the CI waits for the PR to point at the REVIEWED sha (not at the HEAD of the author's worktree)
     const ci = scripts().find((s) => s.includes("gh pr checks"))!;
     expect(ci).toContain(`HEAD='${REVIEWED}'`);
     expect(ci).not.toContain("git rev-parse HEAD");
-    // e o merge só passa se o GitHub ainda vir esse head (um push entre o gate e o merge é recusado lá)
+    // and the merge only goes through if GitHub still sees that head (a push between the gate and the merge is refused there)
     const merge = scripts().find((s) => s.includes("gh pr merge"))!;
     expect(merge).toContain(`--merge --match-head-commit '${REVIEWED}'`);
     expect(merge).not.toContain("--squash");
-    // só-merge não regrava o PR do card (não abriu nem empurrou nada)
+    // merge-only does not rewrite the card's PR (it neither opened nor pushed anything)
     expect((await registry.getCard(card.id))?.prs).toBeUndefined();
-    // e o token segue fora do argv em todos os scripts, o de achar o PR inclusive
+    // and the token stays out of argv in every script, the one that finds the PR included
     for (const s of scripts()) {
       for (const line of s.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
     }
@@ -781,7 +781,7 @@ describe("deliver no modo só-merge (botão de merge da revisão de PR)", () => 
     expect(out).toMatchObject({ merged: true, reason: "merged" });
     expect(scripts().some((s) => s.includes("gh pr checks"))).toBe(false);
     expect(localGateRan()).toBe(false);
-    // o merge segue preso ao commit em que o gate passou
+    // the merge stays pinned to the commit on which the gate passed
     expect(scripts().find((s) => s.includes("gh pr merge"))).toContain(`--match-head-commit '${REVIEWED}'`);
   });
 
@@ -795,7 +795,7 @@ describe("deliver no modo só-merge (botão de merge da revisão de PR)", () => 
 
   it("mergeOnly: o merge grava mergedAt no PR do card (o PR #7 gravado pela entrega); head movido não grava", async () => {
     const { deliver, registry, card } = await makeCard();
-    // a entrega que abriu o PR gravou o slot da base
+    // the delivery that opened the PR recorded the base's slot
     wire({ push: `pushed\n__VIBEHUB_DELIVER__ pr ${PR}` });
     await deliver.deliver(card.id, { branch: "dev" });
     const mergedAt = async () => (await registry.getCard(card.id))?.prs?.[0]?.mergedAt;
@@ -858,7 +858,7 @@ describe("deliver no modo só-merge (botão de merge da revisão de PR)", () => 
     await registry.updateCard(card.id, { base: "dev", locked: true });
     wireMergeOnly(REVIEWED);
     const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: REVIEWED });
-    // o merge de um card trancado é de quem revisa: o botão do responsável é essa saída
+    // a locked card's merge belongs to whoever reviews: the owner's button is that way out
     expect(out).toMatchObject({ merged: true, reason: "merged", branch: "dev", locked: true });
     expect(mergeRan()).toBe(true);
   });
@@ -917,7 +917,7 @@ describe("a branch do card sai do GitHub depois do merge (o trabalho já está n
     const script = deleteScript()!;
     expect(script).toContain(`git/refs/heads/${out.cardBranch}`);
     expect(script).toContain("repos/acme/repo/");
-    // o token vai pelo stdin, nunca no argv do docker exec
+    // the token goes through stdin, never in the docker exec's argv
     for (const line of script.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
   });
 
@@ -955,14 +955,14 @@ describe("a branch do card sai do GitHub depois do merge (o trabalho já está n
 describe("buildDeleteBranchScript / parseDeleteBranch", () => {
   it("guarda a branch padrão e a que ainda tem PR aberto; apaga pela API com o token do stdin", async () => {
     const { deliver } = await load();
-    const script = deliver.buildDeleteBranchScript("vibehub-runner", "c1", TOKEN, "/work/x", PR, "card/the-fix-ab12");
+    const script = deliver.buildDeleteBranchScript("vibehub-runner", TOKEN, "/work/x", PR, "card/the-fix-ab12");
     expect(script).toContain("defaultBranchRef");
-    // sem conseguir ler a branch padrão, não apaga nada (a trava não pode falhar aberta)
+    // unable to read the default branch, it deletes nothing (the guard must not fail open)
     expect(script).toContain('if [ -z "$DEF" ]; then');
     expect(script).toContain("gh pr list --repo 'acme/repo' --head 'card/the-fix-ab12' --state open");
     expect(script).toContain("gh api -X DELETE 'repos/acme/repo/git/refs/heads/card/the-fix-ab12'");
     for (const line of script.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
-    expect(() => deliver.buildDeleteBranchScript("vibehub-runner", "c1", TOKEN, "/work/x", "https://example.com/x", "b")).toThrow(/PR/);
+    expect(() => deliver.buildDeleteBranchScript("vibehub-runner", TOKEN, "/work/x", "https://example.com/x", "b")).toThrow(/PR/);
   });
 
   it("lê o resultado: apagada, mantida ou falha (uma branch que já não existe conta como apagada)", async () => {
@@ -977,7 +977,7 @@ describe("buildDeleteBranchScript / parseDeleteBranch", () => {
 describe("buildPrStateScript / parsePrState", () => {
   it("lê o estado e o head do PR pela URL, com o token do stdin", async () => {
     const { deliver } = await load();
-    const script = deliver.buildPrStateScript("vibehub-runner", "c1", TOKEN, "/work/x", PR);
+    const script = deliver.buildPrStateScript("vibehub-runner", TOKEN, "/work/x", PR);
     expect(script).toContain(`gh pr view '${PR}' --json state,headRefOid`);
     for (const line of script.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
     const sha = "b".repeat(40);
@@ -994,7 +994,7 @@ describe("reviews do PR: o Approve que o merge automático exige", () => {
 
   it("lê as reviews com o commit de cada uma, com o token do stdin", async () => {
     const { deliver } = await load();
-    const script = deliver.buildPrReviewsScript("vibehub-runner", "c1", TOKEN, "/work/x", PR);
+    const script = deliver.buildPrReviewsScript("vibehub-runner", TOKEN, "/work/x", PR);
     expect(script).toContain(`gh pr view '${PR}' --json reviews`);
     for (const line of script.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
     expect(deliver.parsePrReviews(`__VIBEHUB_DELIVER__ prreviews ${enc([{ a: "albert", s: "APPROVED", c: SHA.toUpperCase() }])}`))
@@ -1007,18 +1007,18 @@ describe("reviews do PR: o Approve que o merge automático exige", () => {
   it("aprovado = APPROVED no commit revisado e nenhum changes requested de pé", async () => {
     const { deliver } = await load();
     const r = (author: string, state: string, commit = SHA) => ({ author, state, commit });
-    // o caso real do f9: a rodada 1 pediu mudanças e o Approve falhou — só o CHANGES_REQUESTED existe
+    // the real case of f9: round 1 requested changes and the Approve failed — only the CHANGES_REQUESTED exists
     expect(deliver.prApprovedAt([r("albert", "CHANGES_REQUESTED", OLD), r("albert", "COMMENTED")], SHA)).toBe(false);
     expect(deliver.prApprovedAt([], SHA)).toBe(false);
-    // pediu mudanças e depois aprovou o commit revisado: aprovado (comentário depois não muda o veredito)
+    // requested changes and then approved the reviewed commit: approved (a comment afterwards does not change the verdict)
     expect(deliver.prApprovedAt([r("albert", "CHANGES_REQUESTED", OLD), r("albert", "APPROVED"), r("albert", "COMMENTED")], SHA)).toBe(true);
-    // Approve de OUTRO commit não aprova o código revisado
+    // An Approve of ANOTHER commit does not approve the reviewed code
     expect(deliver.prApprovedAt([r("albert", "APPROVED", OLD)], SHA)).toBe(false);
-    // outra pessoa com changes requested de pé segura
+    // another person with changes requested still standing holds it
     expect(deliver.prApprovedAt([r("albert", "APPROVED"), r("mussa", "CHANGES_REQUESTED")], SHA)).toBe(false);
-    // aprovou e depois pediu mudanças: o veredito que vale é o último
+    // approved and then requested changes: the verdict that counts is the last one
     expect(deliver.prApprovedAt([r("albert", "APPROVED"), r("albert", "CHANGES_REQUESTED")], SHA)).toBe(false);
-    // Approve dispensado (DISMISSED) não conta
+    // a dismissed Approve (DISMISSED) does not count
     expect(deliver.prApprovedAt([r("albert", "APPROVED"), r("albert", "DISMISSED")], SHA)).toBe(false);
     expect(deliver.prApprovedAt([r("albert", "APPROVED")], "")).toBe(false);
   });
@@ -1033,12 +1033,12 @@ describe("buildPrInfoScript / parsePrInfo (anexar um PR ao card)", () => {
 
   it("lê o PR pelo número ou pela URL, com o token do stdin; referência fora do formato é recusada antes do shell", async () => {
     const { deliver } = await load();
-    const byNumber = deliver.buildPrInfoScript("vibehub-runner", "c1", TOKEN, "/work/x", 599);
+    const byNumber = deliver.buildPrInfoScript("vibehub-runner", TOKEN, "/work/x", 599);
     expect(byNumber).toContain("gh pr view '599' --json number,url,headRefName,baseRefName,author,state,title,isCrossRepository");
     for (const line of byNumber.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
-    expect(deliver.buildPrInfoScript("vibehub-runner", "c1", TOKEN, "/work/x", PR)).toContain(`gh pr view '${PR}'`);
-    expect(() => deliver.buildPrInfoScript("vibehub-runner", "c1", TOKEN, "/work/x", "1;rm -rf /")).toThrow(/PR/);
-    expect(() => deliver.buildPrInfoScript("vibehub-runner", "c1", TOKEN, "/work/x", 0)).toThrow(/PR/);
+    expect(deliver.buildPrInfoScript("vibehub-runner", TOKEN, "/work/x", PR)).toContain(`gh pr view '${PR}'`);
+    expect(() => deliver.buildPrInfoScript("vibehub-runner", TOKEN, "/work/x", "1;rm -rf /")).toThrow(/PR/);
+    expect(() => deliver.buildPrInfoScript("vibehub-runner", TOKEN, "/work/x", 0)).toThrow(/PR/);
   });
 
   it("devolve o PR como o card guarda: branch, base, autor, título, estado e se é de fork", async () => {
@@ -1101,15 +1101,15 @@ describe("gateAtCommit (o gate do merge da revisão, no commit aprovado)", () =>
 describe("buildPrPeopleScript / parsePrPeople (assignee e reviewer do PR)", () => {
   it("marca o assignee e pede o reviewer em chamadas separadas, com o token do stdin", async () => {
     const { deliver } = await load();
-    const script = deliver.buildPrPeopleScript("vibehub-runner", "c1", TOKEN, "/work/x", PR, { assignee: "wellesley-mussolini", reviewer: "albert-gh" });
+    const script = deliver.buildPrPeopleScript("vibehub-runner", TOKEN, "/work/x", PR, { assignee: "wellesley-mussolini", reviewer: "albert-gh" });
     expect(script).toContain(`gh pr edit '${PR}' --add-assignee 'wellesley-mussolini'`);
     expect(script).toContain(`gh pr edit '${PR}' --add-reviewer 'albert-gh'`);
     for (const line of script.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
-    // um só, quando só um é conhecido
-    const onlyReviewer = deliver.buildPrPeopleScript("vibehub-runner", "c1", TOKEN, "/work/x", PR, { reviewer: "albert-gh" });
+    // a single one, when only one is known
+    const onlyReviewer = deliver.buildPrPeopleScript("vibehub-runner", TOKEN, "/work/x", PR, { reviewer: "albert-gh" });
     expect(onlyReviewer).not.toContain("--add-assignee");
-    // login com caractere fora do padrão do GitHub é recusado antes de virar shell
-    expect(() => deliver.buildPrPeopleScript("vibehub-runner", "c1", TOKEN, "/work/x", PR, { reviewer: "a b;rm" })).toThrow(/login/);
+    // a login with a character outside GitHub's pattern is refused before it becomes shell
+    expect(() => deliver.buildPrPeopleScript("vibehub-runner", TOKEN, "/work/x", PR, { reviewer: "a b;rm" })).toThrow(/login/);
   });
 
   it("lê o resultado de cada um", async () => {
@@ -1152,7 +1152,7 @@ describe("deliver com revisão de PR ativa no card", () => {
     expect(pushRan()).toBe(true);
     expect(scripts().some((s) => s.includes("gh pr checks") || s.includes("__VIBEHUB_GATE_JSON__"))).toBe(false);
     expect(mergeRan()).toBe(false);
-    // o PR fica gravado no card, como em toda entrega
+    // the PR is recorded on the card, as in every delivery
     expect((await registry.getCard(card.id))?.prs?.[0]).toMatchObject({ number: 7, base: "dev" });
   });
 
@@ -1162,7 +1162,7 @@ describe("deliver com revisão de PR ativa no card", () => {
     runScript.mockImplementation(async (script: string) => {
       if (script.includes("gh pr merge")) return { stdout: "__VIBEHUB_DELIVER__ merged\n", stderr: "" };
       if (script.includes("gh pr checks")) {
-        // alguém pede revisão enquanto o deliver espera o CI
+        // someone requests a review while the deliver waits for the CI
         const now = Date.now();
         await store.insertReview({
           id: "rev-late", cardId: card.id, projectId: project.id, prNumber: 7, prUrl: PR, prBranch: "card/x", base: "dev",
@@ -1242,7 +1242,7 @@ describe("buildPushAndPrScript executado de verdade (gh e git falsos): PR novo s
       '    echo "https://github.com/acme/repo/pull/9"; exit 0 ;;',
       "esac",
     ].join("\n"));
-    const script = deliver.buildPushAndPrScript("vibehub-runner", "card-1", TOKEN, root, "card/x", "dev", docs);
+    const script = deliver.buildPushAndPrScript("vibehub-runner", TOKEN, root, "card/x", "dev", docs);
     const lines = script.split("\n");
     const inner = lines.slice(lines.findIndex((l) => l.startsWith("docker exec")) + 1, -1).join("\n");
     const env = { PATH: `${bin}:${process.env.PATH}`, ROOT: root, EXISTING: existing, EDIT_RESULT: editResult };
@@ -1451,7 +1451,7 @@ describe("deliver abre PR documentado (diretriz de PR de todo repositório)", ()
 describe("buildPrCommentsReadScript / parsePrComments", () => {
   it("espera o PR apontar para o HEAD empurrado (limitado) e lê os comentários em base64", async () => {
     const { deliver } = await load();
-    const s = deliver.buildPrCommentsReadScript("vibehub-runner", "c1", TOKEN, "/work/x", PR, "card/fix-1");
+    const s = deliver.buildPrCommentsReadScript("vibehub-runner", TOKEN, "/work/x", PR, "card/fix-1");
     // the commit the push SENT (the card branch), not whatever the worktree has checked out
     expect(s).toContain("HEAD=$(git rev-parse 'refs/heads/card/fix-1')");
     expect(s).not.toContain("git rev-parse HEAD");
@@ -1477,7 +1477,7 @@ describe("buildPrReviewScript", () => {
   it("publica UMA revisão pela API com o payload em base64, token só pelo stdin", async () => {
     const { deliver } = await load();
     const payload = { commit_id: HEAD_SHA, event: "COMMENT", body: "b", comments: [{ path: "a.ts", line: 1, side: "RIGHT", body: "it's $(x)" }] };
-    const s = deliver.buildPrReviewScript("vibehub-runner", "c1", TOKEN, "/work/x", PR, payload);
+    const s = deliver.buildPrReviewScript("vibehub-runner", TOKEN, "/work/x", PR, payload);
     expect(s).toContain("gh api --method POST 'repos/acme/repo/pulls/7/reviews' --input \"$F\"");
     expect(s).toContain(`trap 'rm -f "$F"' EXIT`);
     const b64 = /printf '%s' '([A-Za-z0-9+/=]+)' \| base64 -d > "\$F"/.exec(s)![1]!;
@@ -1485,6 +1485,6 @@ describe("buildPrReviewScript", () => {
     // the comment text is never shell source
     expect(s).not.toContain("$(x)");
     for (const line of s.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
-    expect(() => deliver.buildPrReviewScript("vibehub-runner", "c1", TOKEN, "/work/x", "https://example.com/x", payload)).toThrow(/PR/);
+    expect(() => deliver.buildPrReviewScript("vibehub-runner", TOKEN, "/work/x", "https://example.com/x", payload)).toThrow(/PR/);
   });
 });

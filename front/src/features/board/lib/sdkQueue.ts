@@ -1,65 +1,66 @@
 /**
- * A FILA — o que você escreveu enquanto o Claude ainda estava trabalhando.
+ * THE QUEUE — what you wrote while Claude was still working.
  *
- * Antes, uma mensagem mandada no meio de um turno ia DIRETO pro CLI, que a dobrava no turno em
- * andamento (o `turn_absorbed` do driver): a bolha subia na conversa na hora, com a etiqueta
- * "entrou no turno em andamento", e a partir dali a mensagem era do modelo — não dava pra corrigir
- * uma palavra, não dava pra desistir, e o que você escreveu virava um adendo no meio de um
- * raciocínio que já estava em curso.
+ * Before, a message sent in the middle of a turn went STRAIGHT to the CLI, which folded it into the
+ * running turn (the driver's `turn_absorbed`): the bubble rose into the conversation right away, with
+ * the label "entrou no turno em andamento", and from then on the message belonged to the model — you
+ * could not fix a word, could not give up on it, and what you wrote became an addendum in the middle
+ * of a line of reasoning that was already under way.
  *
- * Agora ela ESPERA, do lado de fora da conversa, logo acima do campo de texto — onde o Claude Code
- * e o Cursor a põem. Enquanto está aqui ela ainda é sua: dá pra editar (ela volta pro campo) e dá
- * pra tirar. Ela só SOBE pro chat no instante em que é entregue de verdade, quando o turno anterior
- * termina — e aí vira uma bolha como qualquer outra, com o recibo do outbox (ver ./sdkOutbox.ts)
- * garantindo que o servidor a gravou.
+ * Now it WAITS, outside the conversation, right above the text field — where Claude Code and Cursor
+ * put it. While it is here it is still yours: you can edit it (it goes back to the field) and you can
+ * remove it. It only RISES into the chat at the instant it is actually delivered, when the previous
+ * turn ends — and then it becomes a bubble like any other, with the outbox receipt (see
+ * ./sdkOutbox.ts) guaranteeing that the server stored it.
  *
- * Mora no localStorage pelo mesmo motivo do outbox: um F5 no meio de um turno longo não pode
- * apagar o que você já tinha escrito.
+ * It lives in localStorage for the same reason as the outbox: an F5 in the middle of a long turn must
+ * not erase what you had already written.
  *
- * Tudo aqui é puro ou trivialmente falsificável — as regras são testes, não capturas de tela.
+ * Everything here is pure or trivially fakeable — the rules are tests, not screenshots.
  */
 
 import { originRole, parseOrigin, type MessageOrigin } from "@/features/board/lib/chat";
 import type { OutboxMessage } from "@/features/board/lib/sdkOutbox";
 
-/** Uma mensagem escrita, ainda não entregue, ainda editável. */
+/** A written message, not yet delivered, still editable. */
 export interface QueuedMessage {
-  /** Identidade local desta espera — some quando a mensagem é despachada. */
+  /** Local identity of this wait — gone once the message is dispatched. */
   id: string;
-  /** O texto como a pessoa escreveu. */
+  /** The text as the person wrote it. */
   text: string;
-  /** Quando entrou na fila (epoch ms) — a ordem é a da entrada. */
+  /** When it entered the queue (epoch ms) — the order is the order of entry. */
   at: number;
   /**
-   * Está NO CAMPO, sendo reescrita — e por isso não pode ser entregue.
+   * It is IN THE FIELD, being rewritten — and therefore cannot be delivered.
    *
-   * Ela continua na fila, no lugar dela: é o que mantém a promessa de durabilidade (um F5 no meio
-   * da correção devolve o texto original em vez de perdê-lo) e a ordem (cancelar a edição não
-   * manda a mensagem pro fim da fila). O despacho simplesmente pula quem está aqui.
+   * It stays in the queue, in its place: that is what keeps the durability promise (an F5 in the
+   * middle of the correction gives back the original text instead of losing it) and the order
+   * (cancelling the edit does not send the message to the end of the queue). Dispatch simply skips
+   * whoever is here.
    */
   editing?: boolean;
   /**
-   * QUEM escreveu. A fila mora no navegador, não na conta: sem isto, uma espera da conta anterior
-   * saía pela conexão da conta nova depois de uma troca de conta — e o servidor a gravava no nome
-   * errado (ver `foreignToOutbox`).
+   * WHO wrote it. The queue lives in the browser, not in the account: without this, a wait from the
+   * previous account went out over the new account's connection after an account switch — and the
+   * server stored it under the wrong name (see `foreignToOutbox`).
    */
   from?: MessageOrigin;
   /**
-   * O recibo de um envio que JÁ saiu e voltou pra cá (ver `outboxToQueue`). Despachada com ele, a
-   * mensagem que o servidor afinal tinha é só a cobrança do recibo (`acceptedCids` no back), nunca
-   * um segundo turno. Some quando o texto é reescrito: aí é outra mensagem.
+   * The receipt of a send that ALREADY went out and came back here (see `outboxToQueue`). Dispatched
+   * with it, the message the server had after all is just the claim of the receipt (`acceptedCids` on
+   * the back), never a second turn. Gone when the text is rewritten: then it is another message.
    */
   cid?: string;
 }
 
 const QUEUE_PREFIX = "vibehub.sdkQueue.";
 
-/** Um id por espera. `rand` é injetável para o teste ser determinístico. PURE. */
+/** One id per wait. `rand` is injectable so the test is deterministic. PURE. */
 export function newQueueId(now: number = Date.now(), rand: () => number = Math.random): string {
   return `q${now.toString(36)}-${Math.floor(rand() * 1e9).toString(36)}`;
 }
 
-/** Nunca lança: um localStorage bloqueado só significa "sem durabilidade nesta sessão". */
+/** Never throws: a blocked localStorage just means "no durability in this session". */
 export function readQueue(cardId: string): QueuedMessage[] {
   try {
     const raw = localStorage.getItem(QUEUE_PREFIX + cardId);
@@ -76,7 +77,7 @@ export function readQueue(cardId: string): QueuedMessage[] {
       .map((m) => ({
         ...m,
         at: typeof m.at === "number" ? m.at : Date.now(),
-        // localStorage é entrada não confiável: um autor malformado vira "sem autor", nunca lixo.
+        // localStorage is untrusted input: a malformed author becomes "no author", never garbage.
         from: parseOrigin(m.from),
         cid: typeof m.cid === "string" ? m.cid : undefined,
       }));
@@ -90,41 +91,42 @@ export function writeQueue(cardId: string, messages: readonly QueuedMessage[]): 
     if (messages.length === 0) localStorage.removeItem(QUEUE_PREFIX + cardId);
     else localStorage.setItem(QUEUE_PREFIX + cardId, JSON.stringify(messages));
   } catch {
-    /* a fila ainda vale para esta tela */
+    /* the queue still holds for this screen */
   }
 }
 
 /**
- * Entra no FIM da fila — a ordem de entrega é a ordem em que você escreveu.
+ * Enters at the END of the queue — the delivery order is the order in which you wrote.
  *
- * Uma mensagem que volta de uma edição também entra por aqui: ela saiu da fila quando o lápis foi
- * clicado (estava no campo, sendo reescrita) e a que volta é outra, com o texto novo. PURE.
+ * A message coming back from an edit also enters here: it left the queue when the pencil was
+ * clicked (it was in the field, being rewritten) and the one coming back is another, with the new
+ * text. PURE.
  */
 export function enqueue(messages: readonly QueuedMessage[], message: QueuedMessage): QueuedMessage[] {
   return [...messages.filter((m) => m.id !== message.id), message];
 }
 
-/** Tira uma da fila — despachada, editada (voltou pro campo) ou descartada. PURE. */
+/** Takes one out of the queue — dispatched, edited (went back to the field) or discarded. PURE. */
 export function dequeue(messages: readonly QueuedMessage[], id: string): QueuedMessage[] {
   return messages.filter((m) => m.id !== id);
 }
 
-/** A próxima a ir: a primeira que não está sendo reescrita. PURE. */
+/** The next to go: the first one that is not being rewritten. PURE. */
 export function headOfQueue(messages: readonly QueuedMessage[]): QueuedMessage | null {
   return messages.find((m) => m.editing !== true) ?? null;
 }
 
-/** A última que você escreveu — a que a seta pra cima abre pra editar. PURE. */
+/** The last one you wrote — the one the up arrow opens for editing. PURE. */
 export function lastQueued(messages: readonly QueuedMessage[]): QueuedMessage | null {
   const open = messages.filter((m) => m.editing !== true);
   return open.length === 0 ? null : open[open.length - 1]!;
 }
 
 /**
- * Põe UMA mensagem no campo (e tira de lá qualquer outra): só existe um campo de texto.
+ * Puts ONE message in the field (and takes any other out of it): there is only one text field.
  *
- * Clicar o lápis de uma segunda mensagem devolve a primeira à fila, no lugar dela, com o texto que
- * ela tinha — o que estava sendo digitado nela se perde, mas a mensagem não. PURE.
+ * Clicking the pencil of a second message returns the first to the queue, in its place, with the
+ * text it had — what was being typed into it is lost, but the message is not. PURE.
  */
 export function markEditing(messages: readonly QueuedMessage[], id: string): QueuedMessage[] {
   return messages.map((m) => {
@@ -134,7 +136,7 @@ export function markEditing(messages: readonly QueuedMessage[], id: string): Que
   });
 }
 
-/** Ninguém está no campo: o que estava sendo reescrito volta a ser entregável, onde estava. PURE. */
+/** Nobody is in the field: whatever was being rewritten becomes deliverable again, where it was. PURE. */
 export function releaseEditing(messages: readonly QueuedMessage[]): QueuedMessage[] {
   return messages.some((m) => m.editing === true)
     ? messages.map((m) => (m.editing === true ? { ...m, editing: false } : m))
@@ -142,11 +144,11 @@ export function releaseEditing(messages: readonly QueuedMessage[]): QueuedMessag
 }
 
 /**
- * Terminou de reescrever: o texto novo entra NO LUGAR do antigo — mesma posição na fila, porque
- * uma correção não é uma mensagem nova e não pode furar a ordem de quem veio depois.
+ * Finished rewriting: the new text takes the PLACE of the old one — same position in the queue,
+ * because a correction is not a new message and cannot jump ahead of whoever came after.
  *
- * Uma mensagem que não está mais na fila (a pessoa a descartou enquanto editava) entra como nova,
- * no fim: um Enter nunca pode fazer palavras sumirem. PURE.
+ * A message that is no longer in the queue (the person discarded it while editing) enters as new,
+ * at the end: an Enter can never make words disappear. PURE.
  */
 export function updateQueued(
   messages: readonly QueuedMessage[],
@@ -159,15 +161,17 @@ export function updateQueued(
 }
 
 /**
- * A TROCA DE CONTA com mensagens esperando: o que é de OUTRA conta não pode sair por esta conexão
- * (o servidor carimba o autor pela conexão, e a mensagem ficaria no nome de quem não a escreveu).
- * Ela vira uma cópia "não entregue" no outbox — continua na tela, com o nome de quem escreveu, e
- * pode ser descartada; só a conta dona dela pode reenviá-la. E sai marcada `unsent`: ela nunca foi
- * enviada, então nenhuma reconciliação pode dá-la por entregue só porque o mesmo texto está na
- * conversa — sem a marca, o F5 seguinte a casava com qualquer "ok" do replay e ela sumia.
+ * THE ACCOUNT SWITCH with messages waiting: what belongs to ANOTHER account cannot go out over this
+ * connection (the server stamps the author from the connection, and the message would end up under
+ * the name of someone who did not write it). It becomes an "undelivered" copy in the outbox — it
+ * stays on screen, with the name of whoever wrote it, and can be discarded; only the account that
+ * owns it can resend it. And it goes out marked `unsent`: it was never sent, so no reconciliation can
+ * consider it delivered just because the same text is in the conversation — without the mark, the
+ * next F5 matched it against any "ok" from the replay and it vanished.
  *
- * Sem autor (gravada antes desta versão) segue com quem está na aba, como sempre foi; sem leitor
- * conhecido ainda (`/auth/me` em voo) nada é separado — não se decide no escuro. PURE.
+ * Without an author (stored before this version) it stays with whoever is in the tab, as it always
+ * did; with no known viewer yet (`/auth/me` in flight) nothing is separated — no deciding in the
+ * dark. PURE.
  */
 export function foreignToOutbox(
   messages: readonly QueuedMessage[],
@@ -186,31 +190,34 @@ export function foreignToOutbox(
   return { own, foreign };
 }
 
-/** Até quando uma mensagem perdida sem veredito volta pra fila sozinha (ver `outboxToQueue`). */
+/** Until when a lost message with no verdict goes back to the queue on its own (see `outboxToQueue`). */
 export const REQUEUE_MAX_AGE_MS = 10 * 60_000;
 
 /**
- * O CAMINHO DE VOLTA: uma mensagem que o servidor NÃO tem (a reconciliação do reconnect a deu por
- * `missing`) e que nunca recebeu veredito volta pra FILA — e o despacho a entrega quando o chat
- * terminar de carregar, como qualquer outra espera.
+ * THE WAY BACK: a message the server does NOT have (the reconnect reconciliation reported it as
+ * `missing`) and that never received a verdict goes back to the QUEUE — and dispatch delivers it when
+ * the chat finishes loading, like any other wait.
  *
- * O bug que isto fecha (produção, 2026-10-20): o chat estava recarregando (reconexão, setup do
- * driver) e a pessoa mandou uma mensagem. O frame ficou no buffer do back, o F5 fechou o socket no
- * meio do setup e o back o descartou ("closed during setup — nothing attached"). No reload ela
- * voltava "não entregue ao servidor", pedindo um Reenviar para algo que só precisava ESPERAR.
+ * The bug this closes (production, 2026-10-20): the chat was reloading (reconnection, driver setup)
+ * and the person sent a message. The frame stayed in the back's buffer, the F5 closed the socket in
+ * the middle of setup and the back discarded it ("closed during setup — nothing attached"). On
+ * reload it came back "não entregue ao servidor", asking for a Resend for something that only needed
+ * to WAIT.
  *
- * Fica de fora, como bolha "não entregue" com reenviar/descartar:
- * - a que já levou veredito (`undelivered`: recusa do back ou prazo vencido numa conexão que podia
- *   responder) — o servidor falhou com ela, e quem a manda de novo é o reenvio automático, espaçado
- *   e com fim (`planAutoResend` em ./sdkOutbox.ts), nunca a fila em laço;
- * - a que nunca saiu deste navegador (`unsent`) ou é de OUTRA conta — sair por esta conexão a
- *   gravaria no nome errado. Sem leitor conhecido ainda (`/auth/me` em voo) ela VAI pra fila: é a
- *   fila que separa as de outra conta quando ele chega (`foreignToOutbox`), e a reconciliação roda
- *   uma vez só — decidir "não é minha" no escuro a condenava para sempre;
- * - a correção de mensagem já enviada (`original`): ela não é um texto solto, é um supersede;
- * - a VELHA (`REQUEUE_MAX_AGE_MS`): ela volta marcada, e o que a manda é o reenvio automático, só
- *   dentro do teto de idade dele (`AUTO_RESEND_MAX_AGE_MS`) — um "sobe pra prod" de três dias atrás,
- *   de uma aba fechada antes do recibo, não vira turno sozinho ao abrir o card: a pessoa decide.
+ * Left out, as an "undelivered" bubble with resend/discard:
+ * - one that already got a verdict (`undelivered`: refusal from the back or deadline expired on a
+ *   connection that could answer) — the server failed it, and what sends it again is the automatic
+ *   resend, spaced out and bounded (`planAutoResend` in ./sdkOutbox.ts), never the queue in a loop;
+ * - one that never left this browser (`unsent`) or belongs to ANOTHER account — going out over this
+ *   connection would store it under the wrong name. With no known viewer yet (`/auth/me` in flight)
+ *   it DOES go to the queue: it is the queue that separates the ones from another account when the
+ *   viewer arrives (`foreignToOutbox`), and the reconciliation runs only once — deciding "not mine"
+ *   in the dark condemned it forever;
+ * - the correction of an already-sent message (`original`): it is not a loose text, it is a supersede;
+ * - the OLD one (`REQUEUE_MAX_AGE_MS`): it comes back marked, and what sends it is the automatic
+ *   resend, only within its age ceiling (`AUTO_RESEND_MAX_AGE_MS`) — a "sobe pra prod" from three
+ *   days ago, from a tab closed before the receipt, does not become a turn on its own when the card
+ *   is opened: the person decides.
  * PURE.
  */
 export function outboxToQueue(

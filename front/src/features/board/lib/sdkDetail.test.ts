@@ -163,10 +163,10 @@ describe("o que vem do detalhe", () => {
 });
 
 /**
- * O RELÓGIO DA FROTA. O `durationMs` do CLI só chega com um `task_progress`, e um subagente parado
- * numa ação longa (um jest de minutos) não manda nenhum: o tempo da linha congelava. Rodando, a
- * tela soma ao que o CLI mediu o tempo desde que ESTA aba recebeu a medida; terminado, vale a
- * duração final.
+ * THE FLEET CLOCK. The CLI's `durationMs` only arrives with a `task_progress`, and a subagent stuck
+ * on a long action (a jest run of minutes) sends none: the row's time froze. While running, the
+ * screen adds to what the CLI measured the time since THIS tab received the measurement; when
+ * finished, the final duration applies.
  */
 describe("agentElapsedMs", () => {
   const task = (over: Partial<AgentTask> = {}): AgentTask => ({ toolUseId: "t1", taskId: "k1", status: "running", ...over });
@@ -176,7 +176,7 @@ describe("agentElapsedMs", () => {
   });
 
   it("conta no relógio da aba: o startedAt do runner (outro relógio) não entra na conta", () => {
-    // o runner está 3 min atrás do navegador: contar do startedAt dele inflaria o tempo
+    // the runner is 3 min behind the browser: counting from its startedAt would inflate the time
     expect(agentElapsedMs("running", task({ startedAt: 0, durationMs: 10_000, receivedAt: 180_000 }), undefined, 180_000)).toBe(10_000);
   });
 
@@ -197,7 +197,7 @@ describe("agentElapsedMs", () => {
   it("o teto já começa gasto pelo silêncio com que o frame saiu do back", () => {
     const quiet = task({ durationMs: 60_000, receivedAt: 0, quietMs: AGENT_CLOCK_STALE_MS - 60_000 });
     expect(agentElapsedMs("running", quiet, undefined, 5 * 60_000)).toBe(120_000);
-    // calado além do teto ao sair: não anda nada
+    // silent beyond the ceiling when it left: it does not move at all
     expect(agentElapsedMs("running", task({ durationMs: 60_000, receivedAt: 0, quietMs: 5 * 3_600_000 }), undefined, 60_000)).toBe(60_000);
   });
 

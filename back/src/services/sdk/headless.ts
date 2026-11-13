@@ -59,13 +59,14 @@ async function prepareAndSpawn(cardId: string): Promise<DriverSession> {
     // The card's own resumeSessionId is the fallback resumeTargetFor already applies.
     logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not read the card transcript before a headless driver start");
   }
-  const command = await sdkDriverCommand(project, { ...card, resumeSessionId: resumeTargetFor(card, latestSessionId) });
+  const resumeTarget = resumeTargetFor(card, latestSessionId);
+  const command = await sdkDriverCommand(project, { ...card, resumeSessionId: resumeTarget });
   // Re-check: a chat tab may have spawned the driver while this one was preparing.
   const raced = liveDriverSession(card.id);
   if (raced) return raced;
   const session = ensureDriverSession({ cardId: card.id, label: card.worktreeSlug, command, transcriptDir });
   logger.info(
-    { audit: true, action: "sdk.driver.headless", card: card.worktreeSlug, resume: resumeTargetFor(card, latestSessionId) ?? null },
+    { audit: true, action: "sdk.driver.headless", card: card.worktreeSlug, resume: resumeTarget ?? null },
     "native chat driver started for an order from outside the board (no browser)",
   );
   return session;

@@ -15,6 +15,7 @@ let dir = "";
 let app: FastifyInstance;
 let owner = "";
 const runScript = vi.fn(async () => ({ stdout: "", stderr: "" }));
+const sendToTerminal = vi.fn(async (..._args: unknown[]) => undefined);
 
 async function boot(): Promise<FastifyInstance> {
   vi.resetModules();
@@ -40,6 +41,10 @@ async function boot(): Promise<FastifyInstance> {
   vi.doMock("../runtime/host.js", async () => {
     const actual = await vi.importActual<typeof import("../runtime/host.js")>("../runtime/host.js");
     return { ...actual, hostExecutor: () => ({ ...actual.hostExecutor(), runScript }) };
+  });
+  vi.doMock("../services/maestro/maestro.js", async () => {
+    const actual = await vi.importActual<typeof import("../services/maestro/maestro.js")>("../services/maestro/maestro.js");
+    return { ...actual, sendToTerminal };
   });
   const { buildServer } = await import("../index.js");
   const server = await buildServer();
@@ -71,6 +76,7 @@ function pressKey(cardId: string, key: unknown, cookie = owner) {
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "vibehub-chat-key-"));
   runScript.mockClear();
+  sendToTerminal.mockClear();
   app = await boot();
   owner = cookieOf(await app.inject({
     method: "POST", url: "/api/setup/owner", payload: { username: "owner", password: "supersecret" },
@@ -117,5 +123,29 @@ describe("POST /api/cards/:id/chat/key", () => {
     expect((await pressKey(id, "__proto__", member)).statusCode).toBe(403);
     expect((await pressKey(id, "escape", "")).statusCode).toBe(401);
     expect(runScript).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/cards/:id/chat — who sent it", () => {
+  it("the send carries the sender the gate resolved: owner as `owner`, a member as `user`, by username", async () => {
+    const id = await liveCard();
+    const memberId = (await app.inject({
+      method: "POST", url: "/api/users", headers: { cookie: owner },
+      payload: { username: "alex", password: "supersecret", role: "member" },
+    })).json().user.id as string;
+    await app.inject({
+      method: "POST", url: `/api/cards/${id}/shares`, headers: { cookie: owner }, payload: { userId: memberId, level: "work" },
+    });
+    const member = cookieOf(await app.inject({
+      method: "POST", url: "/api/auth/login", payload: { username: "alex", password: "supersecret" },
+    }));
+
+    for (const cookie of [owner, member]) {
+      const res = await app.inject({ method: "POST", url: `/api/cards/${id}/chat`, headers: { cookie }, payload: { text: "oi" } });
+      expect(res.statusCode).toBe(200);
+    }
+    const origins = sendToTerminal.mock.calls.map((call) => (call[2] as { origin?: unknown; by?: string }));
+    expect(origins.map((o) => o.origin)).toEqual([{ kind: "owner", name: "owner" }, { kind: "user", name: "alex" }]);
+    expect(origins[1]?.by).toBe(memberId);
   });
 });

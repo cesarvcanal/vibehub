@@ -10,31 +10,28 @@ import {
 import { reachingCard, startReviewChecked } from "../services/review/start.js";
 import { mergeReviewedPr } from "../services/review/merge.js";
 import { isBusy } from "../services/maestro/maestro.js";
-import { activeReviewFor, getReview, listReviewsFollowedBy, listReviewsForCards } from "../services/review/store.js";
-import { canMergeReview, type Review } from "../services/review/model.js";
+import { activeReviewFor, getReview, listReviewsFollowedBy, listReviewsForCards, newest } from "../services/review/store.js";
+import { canMergeReview, isReviewClosed, type Review } from "../services/review/model.js";
+import { sendError, type ErrorStatusRule } from "./httpError.js";
 
 /**
- * REVISÃO DE PR — a superfície HTTP do orquestrador e o ÚNICO caminho de merge de um PR revisado.
+ * PR REVIEW — the orchestrator's HTTP surface and the ONLY merge path of a reviewed PR.
  *
- *  - quem escolhe os papéis: `GET /api/cards/:id/people` (member também chama: `GET /api/users` é do owner);
- *  - quem inicia: quem tem `work` no card do autor; o revisor precisa de conexão GitHub própria
- *    (`revisor_sem_github`), como o merger;
- *  - quem decide uma dúvida/item travado: o revisor humano (ou um owner);
- *  - quem tenta de novo: revisor, responsável pelo merge ou owner; quem cancela: esses e o autor;
- *  - quem MERGEIA: quem tem papel na revisão (`canMergeReview`), só em `ready`, só se o head do PR ainda é o commit revisado,
- *    e com a conexão GitHub DELE (nunca a do ator do card nem a do projeto, salvo owner sem conexão).
+ *  - who picks the roles: `GET /api/cards/:id/people` (a member may call it too: `GET /api/users` is the owner's);
+ *  - who starts: whoever has `work` on the author's card; the reviewer needs their own GitHub connection
+ *    (`revisor_sem_github`), like the merger;
+ *  - who decides a question/stuck item: the human reviewer (or an owner);
+ *  - who retries: reviewer, merge owner or owner; who cancels: those and the author;
+ *  - who MERGES: whoever has a role in the review (`canMergeReview`), only in `ready`, only if the PR head is still the reviewed commit,
+ *    and with THEIR GitHub connection (never the card actor's nor the project's, except an owner with no connection).
  *
- * As regras de estado (fases, rodadas, relays) moram no orquestrador; aqui ficam quem pode chamar o
- * quê e a tradução dos erros em HTTP. Nenhuma IA chega aqui: o merge é o clique de uma pessoa, ou o
- * merge automático do servidor quando a revisão fica pronta sem nada em pé (orchestrator `autoMerge`).
+ * The state rules (phases, rounds, relays) live in the orchestrator; here live who may call what and the
+ * translation of errors into HTTP. No AI gets here: the merge is a person's click, or the server's
+ * automatic merge when the review becomes ready with nothing standing (orchestrator `autoMerge`).
  */
 
 type Decision = "block" | "drop" | "keep" | "accept_risk";
 const DECISIONS: ReadonlySet<string> = new Set<Decision>(["block", "drop", "keep", "accept_risk"]);
-
-/** Os códigos que `startReviewChecked`/`startReview` põem na mensagem: recusa do pedido, não falha do servidor. */
-const START_REFUSALS =
-  /^(revisor_igual_autor|sem_pr|pr_mergeado|revisao_ativa|revisor_sem_conta|autor_sem_conta|papeis_obrigatorios|card_de_revisor|pessoa_sem_acesso|papel_sem_work|revisor_sem_github|merge_autorizado_de_outro)\b/;
 
 interface StartBody {
   prNumber?: unknown;
@@ -45,13 +42,13 @@ interface StartBody {
 }
 
 /**
- * `canReview` = tem conta Claude vinculada, a embutida ("default") inclusive (a sessão do revisor, e
- * a do card de correção de um PR anexado, rodam nela). `githubLogin` = o login da conexão GitHub PRÓPRIA dela, quando tem uma: é por
- * ele que o diálogo acha o autor de um PR anexado (quem o abriu no GitHub).
+ * `canReview` = has a linked Claude account, the built-in one ("default") included (the reviewer's session,
+ * and that of an attached PR's fix card, run on it). `githubLogin` = the login of their OWN GitHub connection, when they have one: it is
+ * how the dialog finds the author of an attached PR (whoever opened it on GitHub).
  */
 interface Person { id: string; username: string; canReview: boolean; githubLogin?: string }
 
-/** As pessoas do card para a janela de papéis (ver {@link Person}). */
+/** The card's people for the roles window (see {@link Person}). */
 async function cardPeople(card: registry.Card): Promise<Person[]> {
   return await Promise.all(
     (await reachingCard(card)).map(async (u) => {
@@ -64,34 +61,25 @@ async function cardPeople(card: registry.Card): Promise<Person[]> {
   );
 }
 
-/** A revisão mais recente da lista (empate: a inserida depois). */
-function newest(list: Review[]): Review | undefined {
-  return list.reduce<Review | undefined>((latest, r) => (!latest || r.createdAt >= latest.createdAt ? r : latest), undefined);
-}
-
-/** A revisão de um PR numa lista: a ativa, ou a última de qualquer fase. */
+/** A PR's review in a list: the active one, or the latest of any phase. */
 function prReview(list: Review[], prNumber: number): Review | undefined {
   const ofPr = list.filter((r) => r.prNumber === prNumber);
-  return newest(ofPr.filter((r) => r.phase !== "merged" && r.phase !== "cancelled")) ?? newest(ofPr);
+  return newest(ofPr.filter((r) => !isReviewClosed(r.phase))) ?? newest(ofPr);
 }
 
 /**
- * Se a IA de cada lado está num turno AGORA (`isBusy`: o status dos hooks, ou o turno do chat nativo).
- * A fase só muda quando uma ferramenta pousa; isto muda no instante em que a IA começa ou para de
- * trabalhar, e é o que deixa o painel dizer "IA trabalhando" com a revisão ainda em `ready`. Card que
- * sumiu = parado.
+ * Whether each side's AI is in a turn RIGHT NOW (`isBusy`: the hooks' status, or the native chat's turn).
+ * The phase only changes when a tool lands; this changes the instant the AI starts or stops working, and
+ * it is what lets the panel say "IA trabalhando" with the review still in `ready`. A card that is gone =
+ * stopped.
  */
 async function sidesWorking(r: Review): Promise<{ author: boolean; reviewer: boolean }> {
   const [author, reviewer] = await Promise.all([registry.getCard(r.cardId), registry.getCard(r.reviewerCardId)]);
   return { author: !!author && isBusy(author), reviewer: !!reviewer && isBusy(reviewer) };
 }
 
-/** `not found` é 404, os códigos dados são 409, o resto é erro de quem pediu. */
-async function fail(reply: FastifyReply, err: unknown, conflict: RegExp | null = null): Promise<FastifyReply> {
-  const message = (err as Error).message ?? "invalid request";
-  const code = /not found|achado desconhecido/i.test(message) ? 404 : conflict?.test(message) ? 409 : 400;
-  return await reply.code(code).send({ error: message });
-}
+/** `not found` (and an unknown finding) is a 404; each route adds its own 409 codes after it. */
+const REVIEW_NOT_FOUND: ErrorStatusRule = [/not found|achado desconhecido/i, 404];
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
 
@@ -103,15 +91,15 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
-   * A revisão do card: a ativa, ou a última (de qualquer fase) — o painel mostra o histórico. Com
-   * `?pr=N`, a daquele PR, entre as que o card acompanha (dele como autor ou de um PR que ele anexou):
-   * é o que cada linha de PR e o painel dela leem. Junto,
-   * `working`: se a IA do autor e a do revisor estão trabalhando agora (ausente quando não há revisão);
-   * `merging`: se um merge dela está rodando agora no servidor — false depois de um deploy que matou
-   * o merge no meio, que é como o painel para de esperar uma resposta que não vem.
-   * Uma revisão aberta é conferida no GitHub no máximo uma vez por minuto: é o que faz um merge feito
-   * direto no GitHub aparecer no painel sozinho. Em `ready` sem merge rodando a conferência vem ANTES
-   * da resposta, para `merging: false` nunca sair junto de um `ready` velho (`reviewForRead`).
+   * The card's review: the active one, or the latest (of any phase) — the panel shows the history. With
+   * `?pr=N`, that PR's, among the ones the card follows (its own as author or of a PR it attached):
+   * it is what each PR line and its panel read. Along with it,
+   * `working`: whether the author's and the reviewer's AIs are working right now (absent when there is no review);
+   * `merging`: whether a merge of it is running right now on the server — false after a deploy that killed
+   * the merge midway, which is how the panel stops waiting for an answer that is not coming.
+   * An open review is checked on GitHub at most once a minute: it is what makes a merge done directly on
+   * GitHub show up on the panel by itself. In `ready` with no merge running the check comes BEFORE the
+   * answer, so `merging: false` never goes out together with a stale `ready` (`reviewForRead`).
    */
   app.get<{ Params: { id: string }; Querystring: { pr?: string } }>("/api/cards/:id/review", { preHandler: requireCardAccess }, async (req, reply) => {
     const pr = req.query?.pr === undefined ? undefined : Number(req.query.pr);
@@ -151,16 +139,16 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
         });
         return await reply.send({ review });
       } catch (err) {
-        const message = (err as Error).message ?? "";
-        if (START_REFUSALS.test(message)) return await reply.code(400).send({ error: message });
-        return await fail(reply, err);
+        // The refusal codes of startReviewChecked/startReview (revisor_igual_autor, sem_pr…) are the
+        // requester's fault and fall through to the 400.
+        return await sendError(reply, err, { rules: [REVIEW_NOT_FOUND] });
       }
     },
   );
 
-  /* ------------------------------------------------------------- por revisão */
+  /* ------------------------------------------------------------- per review */
 
-  /** A revisão e quem chama, ou a resposta de erro já enviada (404 sem revisão, 403 fora dos papéis). */
+  /** The review and the caller, or the error response already sent (404 without a review, 403 outside the roles). */
   async function reviewFor(
     id: string, user: PublicUser | null, allowed: (r: Review, u: PublicUser) => boolean, reply: FastifyReply,
   ): Promise<{ review: Review; user: PublicUser } | null> {
@@ -189,7 +177,7 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
       try {
         return await reply.send({ review: await decideQuestion(found.review.id, findingId, decision as Decision, found.user.username) });
       } catch (err) {
-        return await fail(reply, err, /não há decisão pendente/);
+        return await sendError(reply, err, { rules: [REVIEW_NOT_FOUND, [/não há decisão pendente/, 409]] });
       }
     },
   );
@@ -203,13 +191,13 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
     try {
       return await reply.send({ review: await retryReview(found.review.id, found.user.username) });
     } catch (err) {
-      return await fail(reply, err, /nada_a_tentar/);
+      return await sendError(reply, err, { rules: [REVIEW_NOT_FOUND, [/nada_a_tentar/, 409]] });
     }
   });
 
   /**
-   * O que fazer com sugestões, escolhido no painel: `apply` (o autor aplica; `findingIds` é o nome
-   * antigo) e `skip` ("não fazer", sai da lista). Quem pode: revisor, autor, merger ou owner.
+   * What to do with suggestions, chosen on the panel: `apply` (the author applies; `findingIds` is the old
+   * name) and `skip` ("não fazer", leaves the list). Who may: reviewer, author, merger or owner.
    */
   app.post<{ Params: { id: string }; Body: { findingIds?: unknown; apply?: unknown; skip?: unknown } }>(
     "/api/reviews/:id/suggestions", { preHandler: requireSession },
@@ -229,8 +217,8 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
       try {
         return await reply.send({ review: await decideSuggestions(found.review.id, { apply, skip }, found.user.username) });
       } catch (err) {
-        // ja_pedida: outra pessoa (ou outra aba) já mandou a mesma sugestão ao autor — conflito, não pedido inválido.
-        return await fail(reply, err, /revisao_encerrada|envio_falhou|ja_pedida/);
+        // ja_pedida: another person (or another tab) already sent the same suggestion to the author — a conflict, not an invalid request.
+        return await sendError(reply, err, { rules: [REVIEW_NOT_FOUND, [/revisao_encerrada|envio_falhou|ja_pedida/, 409]] });
       }
     },
   );
@@ -244,18 +232,18 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
     try {
       return await reply.send({ review: await cancelReview(found.review.id, found.user.username) });
     } catch (err) {
-      return await fail(reply, err, /revisao_encerrada/);
+      return await sendError(reply, err, { rules: [REVIEW_NOT_FOUND, [/revisao_encerrada/, 409]] });
     }
   });
 
   /**
-   * O MERGE. Quem tem papel na revisão (`canMergeReview`: responsável, revisor, autor, coautor — o
-   * owner sem papel, não), só em `ready`, e preso ao commit que o revisor aprovou: o deliver roda em
-   * modo só-merge (sem push) e recusa `head_moved` quando o PR andou — aí a revisão volta à rodada
-   * seguinte, ou a impasse na última. O deliver recebe a conexão GitHub de quem clicou
-   * (`ownGithubConnection`); sem uma, 400 `merger_sem_github` e nada roda. Uma recusa do GitHub (403)
-   * volta como veio, sem outra credencial. As regras moram em `mergeReviewedPr`
-   * (services/review/merge.ts): o `vibehub_deliver` de quem tem papel passa pelo mesmo caminho.
+   * THE MERGE. Whoever has a role in the review (`canMergeReview`: owner, reviewer, author, co-author — the
+   * install owner without a role, not), only in `ready`, and pinned to the commit the reviewer approved: the
+   * deliver runs in merge-only mode (no push) and refuses with `head_moved` when the PR moved — then the
+   * review goes back to the next round, or to impasse on the last one. The deliver gets the GitHub connection
+   * of whoever clicked (`ownGithubConnection`); without one, 400 `merger_sem_github` and nothing runs. A refusal
+   * from GitHub (403) comes back as it came, with no other credential. The rules live in `mergeReviewedPr`
+   * (services/review/merge.ts): the `vibehub_deliver` of whoever has a role goes through the same path.
    */
   app.post<{ Params: { id: string } }>("/api/reviews/:id/merge", { preHandler: requireSession }, async (req, reply) => {
     const found = await reviewFor(req.params.id, await requestUser(req), (r, u) => canMergeReview(r, u.id), reply);

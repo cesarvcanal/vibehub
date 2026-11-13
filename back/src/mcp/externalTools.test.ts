@@ -309,7 +309,7 @@ describe("the inbox — what happened on the board while the user was not asking
 });
 
 /**
- * Produção, 21/10/2026: create_card(open) and then send_to_terminal answered "awaiting choice" until
+ * Production, 21/10/2026: create_card(open) and then send_to_terminal answered "awaiting choice" until
  * someone opened the card by hand. The open now reports whether Claude can take a message, and the
  * send WAITS for a card that is still booting instead of failing (or typing into an undrawn pane).
  */
@@ -368,7 +368,7 @@ describe("external MCP — open/send right after creating a card", () => {
 });
 
 /**
- * Produção, 21/10/2026 (card de voz 7d49): ChatGPT's orders reached a card only after someone opened
+ * Production, 21/10/2026 (voice card 7d49): ChatGPT's orders reached a card only after someone opened
  * it — a hibernated card answered "no live session", and one woken by vibehub_open_card had its order
  * typed into a TUI whose status hooks could not reach the back (so the next idle sweep killed it
  * mid-task). An order from outside the board now WAKES an eligible card and lands as a turn of a

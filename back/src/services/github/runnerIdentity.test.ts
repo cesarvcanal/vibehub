@@ -15,12 +15,12 @@ import {
 } from "./runnerIdentity.js";
 
 /**
- * A AUTORIA SEGUE QUEM DEU A ÚLTIMA ORDEM — em TODO git e TODO gh do card, não só na worktree.
+ * AUTHORSHIP FOLLOWS WHOEVER GAVE THE LATEST ORDER — in EVERY git and EVERY gh of the card, not only in the worktree.
  *
- * Os scripts gerados aqui rodam no runner, em caminhos absolutos (/root/.vibehub, /usr/local/bin).
- * Estes testes os executam DE VERDADE (sh e git reais), com esses caminhos trocados por um diretório
- * temporário: o bug que importa é de semântica do git/gh, e uma asserção só de texto passaria com o
- * comportamento errado (foi assim que o `--local` vazou identidade entre cards).
+ * The scripts generated here run on the runner, at absolute paths (/root/.vibehub, /usr/local/bin).
+ * These tests run them FOR REAL (real sh and git), with those paths swapped for a temporary directory:
+ * the bug that matters is about git/gh semantics, and a text-only assertion would pass with the wrong
+ * behaviour (that is how `--local` leaked identity between cards).
  */
 
 const run = promisify(execFile);
@@ -109,7 +109,7 @@ describe("o include git do card — vale para QUALQUER repositório que o card t
 
   it("GIT DE VERDADE: um clone extra do card (fora da worktree) commita como o ator, não como a instalação", async () => {
     await sh(writeCardGitConfigLines(CARD, { name: "wellesley-mussolini", email: "xerif.off@gmail.com" }, true));
-    // `_repos/<outro>`: o clone que a regra "terminal sem cerca" manda fazer. Nenhuma config local.
+    // `_repos/<outro>`: the clone the "terminal sem cerca" rule says to make. No local config.
     const extra = await freshRepo("_repos/bank-api");
     await git(extra, ["commit", "-q", "--allow-empty", "-m", "fix"], cardEnv());
     expect(await git(extra, ["log", "-1", "--format=%an <%ae>"])).toBe("wellesley-mussolini <xerif.off@gmail.com>");
@@ -125,14 +125,14 @@ describe("o include git do card — vale para QUALQUER repositório que o card t
 
   it("GIT DE VERDADE: o push pede a credencial ao arquivo do card, e a troca de ator vale SEM reiniciar nada", async () => {
     const repo = await freshRepo("push");
-    // O helper ambiente do runner (o `gh auth git-credential` da org) estaria aqui: tem que ser ZERADO.
+    // The runner's ambient helper (the org's `gh auth git-credential`) would be here: it has to be RESET.
     await git(repo, ["config", "credential.helper", "!f() { echo username=u; echo password=token-da-org; }; f"]);
     await writeToken(CARD, TOKEN_CESAR);
     await sh(writeCardGitConfigLines(CARD, { name: "César Canal", email: "cesarvcanal@gmail.com" }, true));
     expect(await fill(repo, "github.com")).toBe(TOKEN_CESAR);
 
-    // O Mussa manda a próxima mensagem: o vibehub reescreve o token e o include — o MESMO processo
-    // (mesmo ambiente) passa a empurrar como ele.
+    // Mussa sends the next message: vibehub rewrites the token and the include — the SAME process
+    // (same environment) starts pushing as him.
     await writeToken(CARD, TOKEN_MUSSA);
     await sh(writeCardGitConfigLines(CARD, { name: "wellesley-mussolini", email: "xerif.off@gmail.com" }, true));
     expect(await fill(repo, "github.com")).toBe(TOKEN_MUSSA);
@@ -161,7 +161,7 @@ describe("o include git do card — vale para QUALQUER repositório que o card t
     await sh(writeCardGitConfigLines(CARD, id, true));
     const repo = await freshRepo("idem");
     const helpers = (await git(repo, ["config", "--get-all", "credential.https://github.com.helper"], cardEnv())).split("\n");
-    // O reset ('') e o do card: exatamente dois, por mais que o script rode.
+    // The reset ('') and the card's: exactly two, however many times the script runs.
     expect(helpers).toEqual(["", expect.stringContaining(`${root}/vibehub/gh/${CARD}.token`)]);
   });
 

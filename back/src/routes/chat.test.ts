@@ -4,16 +4,16 @@ import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 
 /**
- * O websocket do chat legado (`/api/cards/:id/chat`) e o follow do transcript que ele carrega.
+ * The legacy chat's websocket (`/api/cards/:id/chat`) and the transcript follow it carries.
  *
- * Dois buracos do mesmo handler:
- *  - a aba que fecha enquanto `chatSource`/`primeProvenance` ainda estão em voo dispara o `close`
- *    antes de o handler escutá-lo; o handler seguia, subia o `docker exec` de follow e registrava um
- *    teardown que nunca mais rodaria — um follow eterno no runner por aba fechada cedo;
- *  - o filho sem ouvinte de `error`: uma falha assíncrona de spawn (EAGAIN, EMFILE) vira um `error`
- *    sem ninguém escutando, que o Node transforma em exceção não tratada — e derruba o back inteiro.
- *    O mesmo vale para o STDIN do filho: o teardown o fecha, e se o follow já morreu o EPIPE chega
- *    como `error` no stream.
+ * Two holes in the same handler:
+ *  - a tab that closes while `chatSource`/`primeProvenance` are still in flight fires `close` before the
+ *    handler listens to it; the handler went on, started the follow's `docker exec` and registered a
+ *    teardown that would never run again — an endless follow on the runner per tab closed early;
+ *  - the child with no `error` listener: an asynchronous spawn failure (EAGAIN, EMFILE) becomes an `error`
+ *    with nobody listening, which Node turns into an unhandled exception — and it brings down the whole back.
+ *    The same goes for the child's STDIN: the teardown closes it, and if the follow already died the EPIPE
+ *    arrives as an `error` on the stream.
  */
 
 const CARD = "ffff498d-98dd-44b6-97ee-c06a181c3769";
@@ -30,8 +30,8 @@ vi.mock("node:child_process", async (importOriginal) => {
     spawn: () => {
       const child = new EventEmitter() as EventEmitter & Record<string, unknown>;
       child.stdout = new EventEmitter();
-      // O stdin é um stream de verdade no Node: um EPIPE (o follow já morreu quando o teardown o
-      // fecha) chega como `error` NELE, não no filho.
+      // stdin is a real stream in Node: an EPIPE (the follow already died when the teardown closes
+      // it) arrives as an `error` ON IT, not on the child.
       child.stdin = Object.assign(new EventEmitter(), { end: () => undefined });
       child.killed = false;
       child.kill = () => { child.killed = true; };
@@ -54,7 +54,7 @@ const { chatRoutes } = await import("./chat.js");
 
 type Handler = (socket: WebSocket, req: { params: { id: string } }) => Promise<void>;
 
-/** O handler do websocket, capturado sem subir um servidor (as rotas POST são ignoradas). */
+/** The websocket handler, captured without starting a server (the POST routes are ignored). */
 async function captureSocketHandler(): Promise<Handler> {
   let handler: Handler | null = null;
   const app = {
@@ -74,7 +74,7 @@ interface FakeSocket extends EventEmitter {
   ping: () => void;
 }
 
-/** Um socket `ws` mínimo: `readyState` segue o ciclo real (OPEN=1 → CLOSED=3, e então o `close`). */
+/** A minimal `ws` socket: `readyState` follows the real cycle (OPEN=1 → CLOSED=3, and then `close`). */
 function fakeSocket(): FakeSocket {
   const socket = new EventEmitter() as FakeSocket;
   socket.readyState = 1;
@@ -124,7 +124,7 @@ describe("/api/cards/:id/chat — o follow do transcript", () => {
     const socket = fakeSocket();
     h.source?.resolve(SOURCE);
     await handler(socket as unknown as WebSocket, { params: { id: CARD } });
-    socket.close(); // teardown → stdin.end() num pipe cujo leitor já se foi
+    socket.close(); // teardown → stdin.end() on a pipe whose reader is already gone
     const stdin = (h.spawned[0] as { stdin: EventEmitter }).stdin;
     const epipe = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
     expect(() => stdin.emit("error", epipe)).not.toThrow();

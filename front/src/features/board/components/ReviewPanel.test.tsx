@@ -38,7 +38,7 @@ function review(overrides: Partial<Review> = {}): Review {
     findings: [], log: [], createdAt: 1, updatedAt: 2, ...overrides,
   };
 }
-/** Os achados resolvidos ficam recolhidos em "Resolvidos", na aba Achados: abre os dois. */
+/** Resolved findings stay collapsed under "Resolvidos", in the Achados tab: opens both. */
 async function openResolved() {
   await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
   await userEvent.click(screen.getByRole("button", { name: /Resolvidos/ }));
@@ -140,7 +140,7 @@ describe("ReviewPanel — o que mostra", () => {
     expect(within(roles).getByText("Responsável").parentElement).toHaveTextContent("albert");
     expect(within(roles).getByText("Co-autor").parentElement).toHaveTextContent("bia");
     expect(within(roles).getByText("Faz o merge").parentElement).toHaveTextContent("kim");
-    // Cada papel traz o nome que o GitHub dá a ele, e passar o mouse explica o que faz.
+    // Each role carries the name GitHub gives it, and hovering explains what it does.
     expect(within(roles).getByText("Responsável").parentElement).toHaveTextContent("assignee");
     expect(within(roles).getByText("Responsável").parentElement).toHaveAttribute("title", expect.stringMatching(/committer e o pusher/));
     expect(within(roles).getByText("Revisor").parentElement).toHaveTextContent("reviewer");
@@ -188,7 +188,7 @@ describe("ReviewPanel — o que mostra", () => {
     expect(within(blocking).getByText(/Impedem o merge até serem corrigidos/)).toBeInTheDocument();
     const suggestions = screen.getAllByTestId("finding-group").find((g) => g.getAttribute("data-severity") === "suggestion")!;
     expect(within(suggestions).getByText(/Melhorias que não impedem o merge/)).toBeInTheDocument();
-    // nada de linha de contagem com pontinhos nem rótulo em caixa alta
+    // no count line with little dots nor an all-caps label
     expect(screen.queryByText(/ · /)).toBeNull();
   });
 
@@ -211,7 +211,7 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.getAllByTestId("finding-group").map((g) => g.getAttribute("data-severity"))).toEqual(["question", "improvement"]);
     const improvement = screen.getAllByTestId("finding-group").find((g) => g.getAttribute("data-severity") === "improvement")!;
     expect(within(improvement).getByText(/A IA do autor aplica sozinha/)).toBeInTheDocument();
-    // melhoria não é escolha de ninguém: nada de "Fazer" nela
+    // an improvement is nobody's choice: no "Fazer" on it
     expect(within(improvement).queryByRole("radio")).toBeNull();
   });
 
@@ -314,7 +314,7 @@ describe("ReviewPanel — o que mostra", () => {
     const row = screen.getByText("Link abrir entrada").closest("[data-testid=finding]") as HTMLElement;
     expect(within(row).getByText("derrubado")).toBeInTheDocument();
     expect(screen.getByText("Link abrir entrada")).toHaveClass("line-through");
-    // Só o derrubado é riscado.
+    // Only the overturned one is struck through.
     expect(screen.getByText("Bloqueio real")).not.toHaveClass("line-through");
   });
 
@@ -350,7 +350,7 @@ describe("ReviewPanel — o que mostra", () => {
     await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
     expect(screen.getByRole("tab", { name: /Achados/ })).toHaveAttribute("aria-selected", "true");
     expect(screen.getAllByTestId("finding-group").map((g) => g.getAttribute("data-severity"))).toEqual(["blocking", "suggestion"]);
-    // A conversa continua montada (escondida): voltar a ela não perde a rolagem.
+    // The conversation stays mounted (hidden): going back to it does not lose the scroll.
     expect(screen.getByTestId("review-conversation")).toBeInTheDocument();
   });
 
@@ -368,7 +368,7 @@ describe("ReviewPanel — o que mostra", () => {
     await loaded();
     const lines = screen.getAllByTestId("review-line");
     expect(lines.map((l) => l.textContent)).toEqual([expect.stringContaining("achei duas coisas"), expect.stringContaining("corrigi o bloqueio")]);
-    // O resumo não carrega mais a lista: ela está nas mensagens seguintes.
+    // The summary no longer carries the list: it is in the following messages.
     expect(lines[0]).not.toHaveTextContent("Bloqueio A");
 
     const items = screen.getAllByTestId("review-line-item");
@@ -385,7 +385,7 @@ describe("ReviewPanel — o que mostra", () => {
     // A ordem na conversa: resumo, achados dele, resumo do autor, achado dele.
     const order = screen.getAllByTestId(/^review-line(-item)?$/).map((el) => el.getAttribute("data-testid"));
     expect(order).toEqual(["review-line", "review-line-item", "review-line-item", "review-line", "review-line-item"]);
-    // Os achados de uma fala formam uma lista: o leitor de tela anuncia o grupo, não pedaços soltos.
+    // The findings of one message form a list: the screen reader announces the group, not loose pieces.
     const groups = screen.getAllByRole("list", { name: /Achados/ });
     expect(groups).toHaveLength(2);
     expect(within(groups[0]).getAllByRole("listitem")).toHaveLength(2);
@@ -462,7 +462,7 @@ describe("ReviewPanel — o que mostra", () => {
   it("abre a sessão do revisor (o card escondido) e o diff do PR numa aba nova", async () => {
     open("rev", review({ projectId: "p1", reviewerCardId: "rc1" }));
     await loaded();
-    // O card do revisor não está no board: este link é o único caminho até o terminal dele.
+    // The reviewer's card is not on the board: this link is the only way to its terminal.
     const session = screen.getByRole("link", { name: "Abrir sessão do revisor" });
     expect(session).toHaveAttribute("href", "/?project=p1&card=rc1");
     const diff = screen.getByRole("link", { name: "Ver diff" });
@@ -519,7 +519,7 @@ describe("ReviewPanel — merge", () => {
     expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeInTheDocument();
     cleanup();
 
-    // Em qualquer outra fase, nem o responsável vê.
+    // In any other phase, not even the assignee sees it.
     for (const phase of ["reviewing", "fixing", "impasse", "merged"] as const) {
       open("mer", review({ phase }));
       await loaded();
@@ -527,8 +527,8 @@ describe("ReviewPanel — merge", () => {
       cleanup();
     }
 
-    // Em ready, revisor, autor e coautor também veem: o trabalho segue sem o responsável
-    // (produção, 2026-11-09). O owner sem papel na revisão, não.
+    // In ready, reviewer, author and co-author see it too: the work goes on without the assignee
+    // (production, 2026-11-09). The owner with no role in the review does not.
     for (const who of ["rev", "aut", "co"] as const) {
       open(who, review({ phase: "ready", coauthorUserId: "u-co" }));
       await loaded();
@@ -557,19 +557,19 @@ describe("ReviewPanel — merge", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Mergear na dev" }));
 
-    // Pendente: o botão muda de texto e não aceita outro clique.
+    // Pending: the button changes its text and does not accept another click.
     const pending = await screen.findByRole("button", { name: "Mergeando…" });
     expect(pending).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Mergear na dev" })).toBeNull();
 
-    // O servidor devolveu a revisão pra conferir o que mudou (rodada 3 de 3 -> aqui, reviewing).
+    // The server sent the review back to check what changed (round 3 of 3 -> here, reviewing).
     refuse(failure(409, {
       error: "o PR andou depois do pronto", reason: "head_moved", review: review({ phase: "reviewing", round: 2 }),
     }));
 
     expect(await screen.findByText("Houve push depois da revisão — a revisão voltou pra conferir o que mudou.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Mergeando…" })).toBeNull();
-    // A revisão voltou: já não há merge a fazer.
+    // The review went back: there is no merge to do anymore.
     expect(screen.queryByRole("button", { name: /Mergear na/ })).toBeNull();
     expect(screen.getByText("rodada 2/3")).toBeInTheDocument();
   });
@@ -595,7 +595,7 @@ describe("ReviewPanel — merge", () => {
     open("mer", review({ phase: "ready" }));
     await loaded();
 
-    // O merge saiu no servidor enquanto o pedido se perdia no meio do caminho.
+    // The merge went through on the server while the request got lost along the way.
     current = review({ phase: "merged" });
     await userEvent.click(screen.getByRole("button", { name: "Mergear na dev" }));
 
@@ -616,7 +616,7 @@ describe("ReviewPanel — merge", () => {
 
     expect(await screen.findByText(/A conexão caiu antes da resposta do merge/)).toBeInTheDocument();
     const before = reviewGets;
-    // O merge terminou depois: a próxima leitura traz merged e o aviso dá lugar ao sucesso.
+    // The merge finished later: the next read brings merged and the warning gives way to success.
     current = review({ phase: "merged" });
     await tick(3_100);
 
@@ -634,13 +634,13 @@ describe("ReviewPanel — merge", () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await user.click(screen.getByRole("button", { name: "Mergear na dev" }));
 
-    // Um merge já corre no servidor: nem erro, nem botão livre. Fica conferindo.
+    // A merge is already running on the server: neither an error nor a free button. It keeps checking.
     expect(await screen.findByText(/O merge já está em andamento/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Mergeando…" })).toBeDisabled();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(toast.error).not.toHaveBeenCalled();
 
-    // Segue lendo: a fase ainda é ready, e o merge termina no servidor.
+    // It keeps reading: the phase is still ready, and the merge finishes on the server.
     const before = reviewGets;
     await tick(3_100);
     expect(reviewGets).toBeGreaterThan(before);
@@ -692,7 +692,7 @@ describe("ReviewPanel — merge", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Não deu pra confirmar o merge — confira no GitHub");
     expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeEnabled();
-    // Sem sucesso falso se um merged aparecer depois (ninguém está mais conferindo).
+    // No false success if a merged shows up later (nobody is checking anymore).
     current = review({ phase: "merged" });
     await tick(10_100);
     expect(await screen.findByText("Mergeado na dev")).toBeInTheDocument();
@@ -708,8 +708,8 @@ describe("ReviewPanel — merge", () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await user.click(screen.getByRole("button", { name: "Mergear na dev" }));
 
-    // O processo que rodava o merge morreu no deploy: a leitura seguinte diz que nada roda e o PR
-    // segue em ready. Não espera os 16 min: diz o que houve e devolve o botão.
+    // The process running the merge died in the deploy: the next read says nothing is running and the PR
+    // stays in ready. It does not wait the 16 min: it says what happened and gives the button back.
     expect(await screen.findByRole("alert")).toHaveTextContent("O merge parou no servidor antes de terminar");
     expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeEnabled();
     expect(toast.error).not.toHaveBeenCalled();
@@ -730,7 +730,7 @@ describe("ReviewPanel — merge", () => {
     expect(screen.getByRole("button", { name: "Mergeando…" })).toBeDisabled();
     expect(screen.queryByRole("alert")).toBeNull();
 
-    // O merge parou no servidor (gate vermelho, deploy) e o PR não foi mergeado.
+    // The merge stopped on the server (red gate, deploy) and the PR was not merged.
     merging = false;
     await tick(3_100);
     expect(await screen.findByRole("alert")).toHaveTextContent("O merge parou no servidor antes de terminar");
@@ -749,7 +749,7 @@ describe("ReviewPanel — merge", () => {
     const stopped = await screen.findByRole("alert");
     expect(stopped).toHaveTextContent("O merge parou no servidor antes de terminar");
     expect(stopped).not.toHaveTextContent(/não foi mergeado/);
-    // A conferência com o GitHub acha o PR mergeado: é o sucesso daquele clique.
+    // The check against GitHub finds the PR merged: that is the success of that click.
     current = review({ phase: "merged" });
     await tick(10_100);
 
@@ -761,7 +761,7 @@ describe("ReviewPanel — merge", () => {
   it("só leitura do servidor decide: uma ação que regrava a revisão no cache não conta como 'nenhum merge rodando'", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     merging = false;
-    // Uma sugestão em aberto: o merger decide enquanto espera o merge.
+    // An open suggestion: the merger decides while waiting for the merge.
     const withSuggestion = review({ phase: "ready", findings: [finding({ severity: "suggestion", title: "renomear" })] });
     post.mockImplementation(async (url: string) => {
       if (url.endsWith("/merge")) throw failure(409, { error: "merge já em andamento", reason: "merging" });
@@ -769,7 +769,7 @@ describe("ReviewPanel — merge", () => {
     });
     open("mer", withSuggestion);
     await loaded();
-    // A partir daqui o servidor não responde mais as leituras da revisão (lentas, no meio do merge).
+    // From here on the server no longer answers the review reads (slow, in the middle of the merge).
     const base = get.getMockImplementation()!;
     get.mockImplementation(async (url: string) => (url === "/cards/c1/review" ? new Promise(() => {}) : await base(url)));
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
@@ -791,7 +791,7 @@ describe("ReviewPanel — merge", () => {
     post.mockRejectedValue(failure(409, { error: "merge já em andamento", reason: "merging" }));
     open("mer", review({ phase: "ready" }));
     await loaded();
-    // O servidor passa a dizer que um merge roda (o do outro clique) — mas a leitura em cache ainda é a velha.
+    // The server starts saying a merge is running (the other click's) — but the cached read is still the old one.
     merging = true;
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await user.click(screen.getByRole("button", { name: "Mergear na dev" }));
@@ -848,7 +848,7 @@ describe("ReviewPanel — merge", () => {
 
   it("cancelar e tentar de novo ficam desabilitados com o merge pendente e sem confirmação", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    // Responsável pelo merge: vê Mergear, Tentar de novo (Approve pendente) e Cancelar.
+    // The one responsible for the merge: sees Mergear, Tentar de novo (Approve pending) and Cancelar.
     let lose: (e: unknown) => void = () => {};
     post.mockImplementation(() => new Promise((_, reject) => { lose = reject; }));
     open("mer", review({ phase: "ready", approvePending: true }));
@@ -864,7 +864,7 @@ describe("ReviewPanel — merge", () => {
     expect(screen.getByRole("button", { name: "Tentar de novo" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Cancelar revisão" })).toBeDisabled();
 
-    // Resposta perdida: continua sem confirmação, ainda desabilitados.
+    // Lost answer: still unconfirmed, still disabled.
     await act(async () => { lose(failure(undefined)); });
     await screen.findByText(/A conexão caiu antes da resposta do merge/);
     expect(screen.getByRole("button", { name: "Tentar de novo" })).toBeDisabled();
@@ -883,12 +883,12 @@ describe("ReviewPanel — merge", () => {
     const notice = "Houve push depois da revisão — a revisão voltou pra conferir o que mudou.";
     expect(await screen.findByText(notice)).toBeInTheDocument();
 
-    // Nada mudou na leitura seguinte (reviewing, rodada 2): o aviso fica.
+    // Nothing changed in the next read (reviewing, round 2): the warning stays.
     current = review({ phase: "reviewing", round: 2 });
     await tick(3_100);
     expect(screen.getByText(notice)).toBeInTheDocument();
 
-    // A fase muda (o autor corrige): o aviso sai.
+    // The phase changes (the author fixes): the warning goes away.
     current = review({ phase: "fixing", round: 2 });
     await tick(3_100);
     await waitFor(() => expect(screen.queryByText(notice)).toBeNull());
@@ -930,7 +930,7 @@ describe("ReviewPanel — merge", () => {
     await userEvent.click(screen.getByRole("button", { name: "Mergear na dev" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("gate vermelho");
 
-    // Nada mudou ainda: continua. Depois o responsável cancela e a fase muda.
+    // Nothing changed yet: it stays. Then the assignee cancels and the phase changes.
     expect(screen.getByRole("alert")).toBeInTheDocument();
     post.mockResolvedValueOnce({ review: review({ phase: "cancelled" }) });
     await userEvent.click(screen.getByRole("button", { name: "Cancelar revisão" }));
@@ -1004,20 +1004,20 @@ describe("ReviewPanel — dúvidas e impasse", () => {
     expect(screen.getByTestId("decision-banner")).toHaveTextContent("Precisa da sua decisão: 1 dúvida do revisor");
     const card = cardOf("O cálculo está certo?");
     expect(within(card).getAllByRole("radio").map((r) => r.getAttribute("value"))).toEqual(["block", "accept_risk", "drop"]);
-    // cada escolha diz o que faz
+    // each choice says what it does
     expect(within(card).getByText("É problema: o autor corrige")).toBeInTheDocument();
     expect(within(card).getByText(/Vira bloqueante/)).toBeInTheDocument();
-    // sem escolha, não confirma
+    // without a choice, it does not confirm
     expect(within(card).getByRole("button", { name: "Confirmar decisão" })).toBeDisabled();
     cleanup();
 
-    // O owner também decide.
+    // The owner decides too.
     open("own", review({ phase: "reviewing", findings: [doubt()] }));
     await loaded();
     expect(within(cardOf("O cálculo está certo?")).getAllByRole("radio")).toHaveLength(3);
     cleanup();
 
-    // Autor, responsável pelo merge e co-autor veem a dúvida e por quem ela espera, sem as escolhas.
+    // Author, merge assignee and co-author see the doubt and whom it waits for, without the choices.
     for (const who of ["aut", "mer", "co"] as const) {
       open(who, review({ phase: "reviewing", findings: [doubt()] }));
       await loaded();
@@ -1132,13 +1132,13 @@ describe("ReviewPanel — dúvidas e impasse", () => {
     }));
     await loaded();
     expect(screen.getByTestId("decision-banner")).toHaveTextContent("O impasse precisa da sua decisão em 2 itens travados");
-    // Um par de escolhas por item travado (aberto ou contestado), nenhum nos outros.
+    // One pair of choices per stuck item (open or disputed), none on the others.
     expect(screen.getAllByRole("radio", { name: /Manter o bloqueio/ })).toHaveLength(2);
     expect(screen.getAllByRole("radio", { name: /Aceitar o risco/ })).toHaveLength(2);
-    // O corrigido saiu para "Resolvidos" e lá não pede decisão.
+    // The fixed one moved to "Resolvidos" and asks for no decision there.
     await openResolved();
     expect(within(cardOf("Já corrigido")).queryByRole("radio")).toBeNull();
-    // a sugestão não é item travado: só tem o "fazer / não fazer" dela
+    // the suggestion is not a stuck item: it only has its own "fazer / não fazer"
     expect(within(cardOf("Só sugestão")).queryByRole("radio", { name: /Manter o bloqueio|Aceitar o risco/ })).toBeNull();
 
     await decide("Travado contestado", /Manter o bloqueio/);
@@ -1224,7 +1224,7 @@ describe("ReviewPanel — sugestões: fazer ou não fazer", () => {
     open("mer", review({ phase: "ready", findings: suggestions }));
     await loaded();
     await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
-    // só as em aberto têm escolha
+    // only the open ones have a choice
     expect(screen.getAllByRole("radiogroup", { name: /O que fazer com/ })).toHaveLength(2);
     expect(within(choices("Renomear pump")).getByText("A IA do autor aplica e o revisor confere.")).toBeInTheDocument();
     expect(within(choices("Renomear pump")).getByText("Sai da lista; o PR segue sem ela.")).toBeInTheDocument();
@@ -1380,7 +1380,7 @@ describe("ReviewPanel — tentar de novo e cancelar", () => {
     expect(screen.getByRole("button", { name: "Tentar de novo" })).toBeInTheDocument();
     cleanup();
 
-    // A rodada do revisor já entrou e só sobrou dúvida: a vez é de quem decide, não há o que tentar.
+    // The reviewer's round is already in and only a doubt is left: it is the decider's turn, there is nothing to retry.
     open("rev", review({ phase: "reviewing", round: 2, lastSubmitRound: 2, findings: [finding({ severity: "question" })] }));
     await loaded();
     expect(screen.queryByRole("button", { name: "Tentar de novo" })).toBeNull();
@@ -1437,7 +1437,7 @@ describe("ReviewPanel — tentar de novo e cancelar", () => {
     open("aut", review({ phase: "fixing" }));
     await loaded();
 
-    // Dizendo que não, nada sai.
+    // Saying no, nothing goes out.
     vi.mocked(window.confirm).mockReturnValueOnce(false);
     await userEvent.click(screen.getByRole("button", { name: "Cancelar revisão" }));
     expect(window.confirm).toHaveBeenCalledTimes(1);
@@ -1549,7 +1549,7 @@ describe("ReviewPanel — leitura periódica", () => {
     expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeDisabled();
     expect(screen.getByText(/Espere a IA do autor terminar/)).toBeInTheDocument();
 
-    // Terminou sem empurrar nada: volta a pronto e o merge libera.
+    // It finished without pushing anything: back to ready and the merge is released.
     working = { author: false, reviewer: false };
     await tick(3_100);
     expect(await screen.findByText("pronto pra merge")).toBeInTheDocument();
@@ -1583,7 +1583,7 @@ describe("ReviewPanel — leitura periódica", () => {
 
     current = review({ phase: "ready", round: 2, findings: [{ ...suggestion, status: "fixed", reviewerReply: "renomeado" }] });
     await tick(3_100);
-    // Corrigida, ela sai da lista de pendentes e vai para "Resolvidos".
+    // Once fixed, it leaves the pending list and goes to "Resolvidos".
     await waitFor(() => expect(screen.queryByText("nome de variável confuso")).toBeNull());
     await openResolved();
     await waitFor(() => expect(row()).toHaveAttribute("data-status", "fixed"));

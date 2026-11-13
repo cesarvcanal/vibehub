@@ -1,21 +1,22 @@
-export type DestaqueBranch = "padrao" | "producao" | "principal" | "desenvolvimento";
+/** The badge a branch gets in the picker. The values are also the i18n keys `branchPicker.badge.*`. */
+export type BranchHighlight = "default" | "production" | "main" | "development";
 
-export interface BranchClassificada {
-  nome: string;
-  destaque: DestaqueBranch | null;
+export interface RankedBranch {
+  name: string;
+  highlight: BranchHighlight | null;
 }
 
-export interface PropsSeletorBranch {
+export interface BranchPickerProps {
   id: string;
-  valor: string;
-  aoEscolher: (branch: string) => void;
+  value: string;
+  onSelect: (branch: string) => void;
   branches: readonly string[];
-  branchPadrao: string | null;
-  atualizando: boolean;
-  falhouAoAtualizar: boolean;
-  truncada: boolean;
-  aoAbrir: () => void;
-  aoAtualizar: () => void;
-  /** Linha que representa `valor === ""` (ex.: herdar a branch do projeto). Sem ela, não há linha vazia. */
-  rotuloSemEscolha?: string;
+  defaultBranch: string | null;
+  refreshing: boolean;
+  refreshFailed: boolean;
+  truncated: boolean;
+  onOpen: () => void;
+  onRefresh: () => void;
+  /** The row that stands for `value === ""` (e.g. inherit the project's branch). Without it, there is no empty row. */
+  noChoiceLabel?: string;
 }

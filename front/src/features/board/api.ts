@@ -2,24 +2,32 @@ import { del, get, patch, post } from "@/lib/api";
 import type {
   Account,
   AccountsResponse,
+  AccountsUsageResponse,
   ApplyOutcome,
+  AttachmentPreview,
   Brain,
   BrainApplyResult,
   BrainWriteResult,
   Card,
   CardBrowserStatus,
   CardCapture,
-  CardColumn,
+  CardPatch,
+  CardSessionInfo,
+  CardUsageResponse,
   Credential,
   GithubBranches,
   GithubConnection,
   GithubRepo,
   GithubState,
+  InstallFeatures,
   Mcp,
   McpSecretsResponse,
   McpTransport,
   NewCard,
+  NewMcp,
+  NewProject,
   OutboxStatus,
+  PeopleResponse,
   PluginCatalog,
   PluginWriteResult,
   PreviewPort,
@@ -27,12 +35,16 @@ import type {
   ProjectBrain,
   ProjectBrainApplyResult,
   ProjectBrainWriteResult,
+  ProjectPatch,
   QueueMessageResult,
   RestartAllResult,
   RestartedPreview,
   RunnerStatus,
+  SessionChange,
+  TranscribeStatus,
+  Transcription,
   UploadResult,
-  PreviewDeAnexo,
+  UsersResponse,
 } from "@/api/types";
 import { t } from "@/i18n";
 import { uploadWithWatchdog } from "@/features/board/lib/uploadWatchdog";
@@ -52,13 +64,6 @@ export type BoardCard = Card;
 export type BoardAccount = Account;
 export type BoardMcp = Mcp;
 
-/**
- * The brain as the screen needs it: the stored view plus WHO saved it, when the server records that.
- * A shared instruction file that every terminal in the install obeys is not the kind of thing that
- * should have changed anonymously.
- */
-export type BoardBrain = Brain & { by?: string };
-
 /* -------------------------------------------------------------- accessors */
 
 /** `owner/repo` of a project, when it is backed by a repository. */
@@ -76,16 +81,6 @@ export function projectAccountSlug(p: BoardProject | undefined): string | undefi
   return p?.defaultAccountSlug;
 }
 
-/** Worktree directory slug of a card inside the runner. */
-export function cardWorktree(c: BoardCard | undefined): string | undefined {
-  return c?.worktreeSlug;
-}
-
-/** tmux session name of a card inside the runner. */
-export function cardSession(c: BoardCard | undefined): string | undefined {
-  return c?.tmuxSession;
-}
-
 /**
  * Where a card lives inside the runner, as one line: worktree, base branch, tmux session.
  *
@@ -95,9 +90,11 @@ export function cardSession(c: BoardCard | undefined): string | undefined {
  */
 export function cardRunnerHint(c: BoardCard | undefined): string {
   if (!c) return "";
-  const worktree = cardWorktree(c);
-  const session = cardSession(c);
-  return [worktree ? `card/${worktree}` : "", c.base ? `base ${c.base}` : "", session ? `tmux ${session}` : ""]
+  return [
+    c.worktreeSlug ? `card/${c.worktreeSlug}` : "",
+    c.base ? `base ${c.base}` : "",
+    c.tmuxSession ? `tmux ${c.tmuxSession}` : "",
+  ]
     .filter(Boolean)
     .join(" · ");
 }
@@ -212,6 +209,8 @@ export const RUNNER_KEY = ["board", "runner"] as const;
 export const GITHUB_KEY = ["board", "github"] as const;
 export const PREVIEW_PORTS_KEY = ["board", "preview", "ports"] as const;
 export const FEATURES_KEY = ["board", "features"] as const;
+/** The install's members (`GET /api/users`, owner only) — read by sharing and by the access screen. */
+export const USERS_KEY = ["users"] as const;
 /** Prefix matching EVERY project's card list — for invalidating the whole board at once. */
 export const CARDS_PREFIX_KEY = ["board", "cards"] as const;
 /**
@@ -245,156 +244,6 @@ export const githubReposKey = (connection: string, q: string) =>
 export const githubBranchesKey = (connection: string, owner: string, repo: string) =>
   ["board", "github", "branches", connection, owner, repo] as const;
 
-/* ---------------------------------------------------------------- inputs */
-
-export interface NewProjectInput {
-  name: string;
-  /** `owner/repo`. Absent = a scratch project with no repository. */
-  repo?: string;
-  cloneUrl?: string;
-  /** Branch card worktrees are cut from. */
-  defaultBranch?: string;
-  /** Claude account the project's cards inherit. */
-  accountSlug?: string;
-  /** GitHub account the repository is cloned with. Absent = the first connection. */
-  githubConnectionId?: string | null;
-}
-
-/** `GET /api/transcribe` — what voice input can do on THIS install. */
-export interface TranscribeStatus {
-  /** An OpenAI key is stored; without one the microphone has nothing to talk to. */
-  available: boolean;
-  /** A Claude key is stored too, so transcriptions get proofread before they come back. */
-  proofread: boolean;
-  /** ISO 639-1 hint sent to the recogniser, or null for auto-detect. */
-  language: string | null;
-}
-
-/** `POST /api/cards/:id/transcribe` */
-export interface Transcription {
-  text: string;
-  proofread: boolean;
-}
-
-/**
- * `GET /api/cards/:id/session` — what the card is ACTUALLY running right now.
- *
- * The card record only says what was PINNED (`model`, `accountSlug`), and most cards pin nothing:
- * they inherit. So the pills used to read "Default model" and "Main (default)", which is the one
- * thing nobody wants from them — the question is always "which model is answering me", never
- * "did somebody type a model into this card".
- *
- * `model` is read from the live session transcript (the last assistant turn), so it is the truth
- * and not a guess; `account` is the effective account after card -> project -> default, already
- * resolved to a display name. A card whose agent has not answered yet has no turn to read, and the
- * route says so with nulls rather than inventing one.
- */
-export interface CardSessionInfo {
-  /** Model id from the last assistant turn, or null while the session has not answered yet. */
-  model: string | null;
-  /** Display name for that model when the server knows one. */
-  modelLabel: string | null;
-  /**
-   * Reasoning level the session runs on, as the server read it (Claude Code stamps it on every
-   * assistant turn), or null while nothing says — a server that predates the field included.
-   */
-  effort: string | null;
-  /** The account the session is really using. */
-  account: { slug: string | null; name: string };
-  /**
-   * What the terminal is doing right now. The chat needs it: with no card list beside it (a phone
-   * has none) this poll is the only thing that says "the agent is still working".
-   */
-  situation: CardSituation;
-}
-
-/**
- * What a model/account switch did to the LIVE session, straight from the server: `restarted` = the
- * session was ended and the reattach starts Claude with the new one, in the same conversation;
- * `pending` = Claude was working, so it applies the moment the card goes idle; `live` = the native
- * chat took the new intelligence in place — nothing restarted, the turn in flight goes on already on
- * it; `none` = there was no live session to change (the pin is simply what the next start uses).
- */
-export type SessionChange = "none" | "restarted" | "pending" | "live";
-
-/**
- * A terminal's current situation, as the server words it. `stopped` = the session is still there but
- * Claude has EXITED, leaving a bare shell (a `/exit`, a crash) — the chat surfaces it as
- * "Claude parou" with a Restart, instead of a silent shell that quietly swallows what you type.
- */
-export type CardSituation = "working" | "waiting" | "paused" | "done" | "stopped" | "no session";
-
-/** One metered plan window: how much is gone, and when it empties again. */
-export interface UsageWindow {
-  /** 0..100 percent of the window consumed. */
-  utilization: number;
-  /** ISO instant it resets, or null when the server did not say. */
-  resetsAt: string | null;
-}
-
-/** Why an account has no numbers. Each one gets its OWN sentence — that is the point of the split. */
-export type UsageError = "no_credentials" | "rate_limited" | "unauthorized" | "unreachable";
-
-/**
- * Plan usage of one account. `available` is the only branch the UI needs: with it, three bars;
- * without it, the sentence for `error`.
- */
-export interface AccountUsage {
-  available: boolean;
-  fiveHour?: UsageWindow;
-  sevenDay?: UsageWindow;
-  sevenDayOpus?: UsageWindow;
-  /** When the numbers were READ (not when they were served) — what makes `stale` legible. */
-  fetchedAt: number;
-  /** true = the last good reading, served while the server is backed off the usage endpoint. */
-  stale?: boolean;
-  /** Epoch ms the back-off lifts. */
-  retryAt?: number;
-  error?: UsageError;
-}
-
-/** `GET /cards/:id/usage`: the reading of the account this card runs on (`default` = built-in). */
-export interface CardUsageResponse {
-  slug: string;
-  usage: AccountUsage;
-}
-
-export interface AccountsUsageResponse {
-  /** Keyed by account slug, with `default` for the runner's built-in profile. */
-  bySlug: Record<string, AccountUsage>;
-  fetchedAt: number;
-}
-
-export interface CardPatchInput {
-  title?: string;
-  column?: CardColumn;
-  position?: number;
-  /** null clears it (inherit the project's account again). */
-  accountSlug?: string | null;
-  /** null clears it (back to the account default). */
-  model?: string | null;
-  /** Reasoning level; null clears it (back to the account's own). */
-  effort?: string | null;
-  /** Native chat (beta) opt-in for this card; false/null go back to the transcript chat. */
-  sdkChat?: boolean | null;
-  /** Locks the card to its base (deliver = a PR against it, never a merge); false/null unlocks. */
-  locked?: boolean | null;
-}
-
-/**
- * `GET /api/features` — install-wide flags every signed-in user can read (settings stay
- * owner-only). `sdkChat` true = the Chat tab of EVERY card is the native (SDK) chat; false = the
- * classic transcript chat. It replaced the per-card `sdkChat` opt-in (2026-08-31).
- */
-export interface InstallFeatures {
-  sdkChat: boolean;
-  /**
-   * How long a card sits untouched in `done` before the server purges it (days; 0 = never).
-   * Absent on a server older than the countdown — the card then shows none.
-   */
-  doneRetentionDays?: number;
-}
-
 /* --------------------------------------------------------------- requests */
 
 export const boardApi = {
@@ -403,15 +252,11 @@ export const boardApi = {
   /* projects */
   listProjects: () => get<{ projects: BoardProject[] }>("/projects").then((r) => r.projects ?? []),
 
-  createProject: (input: NewProjectInput) =>
-    post<{ project: BoardProject }>("/projects", {
-      name: input.name,
-      repoFullName: input.repo,
-      cloneUrl: input.cloneUrl,
-      baseBranch: input.defaultBranch,
-      defaultAccountSlug: input.accountSlug,
-      githubConnectionId: input.githubConnectionId,
-    }).then((r) => r.project),
+  createProject: (input: NewProject) =>
+    post<{ project: BoardProject }>("/projects", input).then((r) => r.project),
+
+  updateProject: (id: string, body: ProjectPatch) =>
+    patch<{ project: BoardProject }>(`/projects/${encodeURIComponent(id)}`, body).then((r) => r.project),
 
   deleteProject: (id: string) => del<{ ok: true }>(`/projects/${encodeURIComponent(id)}`),
 
@@ -420,6 +265,9 @@ export const boardApi = {
     patch<{ projects: BoardProject[] }>(`/projects/${encodeURIComponent(id)}/order`, { position }).then(
       (r) => r.projects ?? [],
     ),
+
+  /* users */
+  listUsers: () => get<UsersResponse>("/users").then((r) => r.users),
 
   /* cards */
   listCards: (projectId: string) =>
@@ -434,9 +282,13 @@ export const boardApi = {
   /** Light read of one card — it does NOT touch the runner, so a deep link can decide how to open. */
   getCard: (id: string) => get<{ card: BoardCard }>(`/cards/${encodeURIComponent(id)}`).then((r) => r.card),
 
+  /** Who can take part in this card's work — members can read it, unlike `GET /api/users`. */
+  listCardPeople: (cardId: string) =>
+    get<PeopleResponse>(`/cards/${encodeURIComponent(cardId)}/people`).then((r) => r.people),
+
   createCard: (input: NewCard) => post<{ card: BoardCard }>("/cards", input).then((r) => r.card),
 
-  patchCard: (id: string, body: CardPatchInput) =>
+  patchCard: (id: string, body: CardPatch) =>
     patch<{ card: BoardCard }>(`/cards/${encodeURIComponent(id)}`, body).then((r) => r.card),
 
   /**
@@ -445,7 +297,7 @@ export const boardApi = {
    * Claude is working ("pending"). The screen has to say which — promising a switch that has not
    * happened yet is the whole bug this answers.
    */
-  patchCardSession: (id: string, body: CardPatchInput) =>
+  patchCardSession: (id: string, body: CardPatch) =>
     patch<{ card: BoardCard; session?: SessionChange }>(`/cards/${encodeURIComponent(id)}`, body),
 
   /**
@@ -486,9 +338,9 @@ export const boardApi = {
       }),
     ),
 
-  /** O documento anexado (planilha, Word, PowerPoint) como texto, para ver sem baixar. */
-  lerPreviewDeAnexo: (cardId: string, file: string) =>
-    get<PreviewDeAnexo>(`/cards/${encodeURIComponent(cardId)}/uploads/${encodeURIComponent(file)}/preview`),
+  /** The attached document (spreadsheet, Word, PowerPoint) as text, to read it without downloading. */
+  readAttachmentPreview: (cardId: string, file: string) =>
+    get<AttachmentPreview>(`/cards/${encodeURIComponent(cardId)}/uploads/${encodeURIComponent(file)}/preview`),
 
   /**
    * Uploads an image so the agent can read it. The running server takes JSON `{ name, content }`
@@ -647,7 +499,7 @@ export const boardApi = {
       args: input.args,
       url: input.url,
       ...(input.transport === "stdio" ? { envKeys: input.keys } : { headerKeys: input.keys }),
-    }).then((r) => r.mcp),
+    } satisfies NewMcp).then((r) => r.mcp),
 
   deleteMcp: (id: string) => del<unknown>(`/mcps/${encodeURIComponent(id)}`),
 
@@ -666,7 +518,7 @@ export const boardApi = {
   applyMcps: () => post<{ runners?: number; mcps?: number }>("/mcps/apply"),
 
   /* brain — the shared CLAUDE.md every card's profile gets */
-  brain: () => get<BoardBrain>("/brain"),
+  brain: () => get<Brain>("/brain"),
 
   /** Saves AND pushes: the response says how many terminals restarted and how many were deferred. */
   saveBrain: (text: string) => post<BrainWriteResult>("/brain", { text }),

@@ -7,18 +7,18 @@ import { config } from "../../config/env.js";
 import { withBtwCommand, type CatalogEvent } from "./protocol.js";
 
 /**
- * O BUG DO CÉSAR (produção, 2026-09-28): "quando eu começava a digitar o /, de primeira não
+ * CÉSAR'S BUG (production, 2026-09-28): "quando eu começava a digitar o /, de primeira não
  * apareciam as opções das skills ou plugins; eu tinha que apagar e tentar de novo ou dar F5".
  *
- * O menu "/" é alimentado pelo evento `catalog`, que o driver anuncia UMA vez, ao subir. Ele vivia
- * só na sessão em memória (`session.catalog`), então num card cujo driver ainda estava bootando —
- * ou que tinha acabado de ser hibernado — o primeiro `/` não tinha o que mostrar. Segundos depois o
- * catálogo chegava, e por isso "apagar e tentar de novo" resolvia: não era o menu que estava
- * quebrado, era a lista que ainda não existia.
+ * The "/" menu is fed by the `catalog` event, which the driver announces ONCE, on boot. It lived
+ * only in the in-memory session (`session.catalog`), so on a card whose driver was still booting —
+ * or had just been hibernated — the first `/` had nothing to show. Seconds later the catalog
+ * arrived, which is why "apagar e tentar de novo" worked: it was not the menu that was broken, it
+ * was the list that did not exist yet.
  *
- * A lista de skills e comandos de um card muda de mês em mês, não de segundo em segundo. Guardá-la
- * em disco faz o menu existir no INSTANTE do connect, com a última lista conhecida, e o anúncio do
- * driver novo só a atualiza.
+ * A card's list of skills and commands changes month to month, not second to second. Keeping it on
+ * disk makes the menu exist at the INSTANT of the connect, with the last known list, and the new
+ * driver's announcement only updates it.
  */
 
 const CARD = "56fc53c6-ff44-484c-b2c3-e5576b6760e7";
@@ -44,7 +44,7 @@ describe("o catálogo do card sobrevive ao driver (o menu '/' que não abria de 
     ],
   };
 
-  /** O que o connect entrega: a lista gravada, sempre com o /btw (o painel é quem o responde). */
+  /** What the connect delivers: the stored list, always with /btw (the panel is the one that answers it). */
   const menu = (catalog: CatalogEvent): CatalogEvent => ({ ...catalog, commands: withBtwCommand(catalog.commands) });
 
   it("um arquivo gravado antes do /btw existir também o oferece — sem esperar o driver anunciar", async () => {
@@ -85,6 +85,6 @@ describe("o catálogo do card sobrevive ao driver (o menu '/' que não abria de 
 
   it("id fora do formato de card nunca vira caminho de arquivo", async () => {
     expect(await readCardCatalog("../../etc/passwd")).toBeNull();
-    await writeCardCatalog("../../etc/passwd", CATALOG); // não lança
+    await writeCardCatalog("../../etc/passwd", CATALOG); // does not throw
   });
 });

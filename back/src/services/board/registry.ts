@@ -3,6 +3,7 @@ import { JsonStore } from "../../store/jsonStore.js";
 import { dataPath } from "../../config/env.js";
 import { logger } from "../../utils/logger.js";
 import { allocateBrowserSlot, cardBrowserSlot, isBrowserSlotPort, rememberBrowserSlot, SLOT_SPACE } from "../browser/ports.js";
+import { UUID_RE } from "./cardId.js";
 
 /**
  * BOARD REGISTRY — the projects and cards of the kanban of Claude Code terminals.
@@ -493,7 +494,7 @@ export interface Card {
    * delivered to it. The idle sweep counts it ({@link lastActivityAt}), and so does the done-card
    * retention (a finished card someone reopened or instructed must not be purged), because the
    * other clocks can all be silent while a card works: `openedAt` is stamped once, `humanActiveAt`
-   * needs a person, and `statusAt` needs the status hooks to reach the back — produção, 21/10/2026: with the hooks
+   * needs a person, and `statusAt` needs the status hooks to reach the back — production, 21/10/2026: with the hooks
    * pointing at a dead blue/green port, a card opened and instructed by ChatGPT was hibernated by
    * the next sweep tick, mid-task. Absent = nothing since the field existed.
    */
@@ -939,8 +940,6 @@ export function assertBranchName(branch: string): string {
   return v;
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** Claude session uuid (resumeSessionId) — becomes argv of `claude --resume`. THROWS otherwise. PURE. */
 export function assertSessionId(id: string): string {
   const v = String(id ?? "").trim().toLowerCase();
@@ -1024,10 +1023,10 @@ export function reactivatesOnActivity(
   status: CardStatus,
 ): boolean {
   if (card.pausedAt) return false;
-  // Só um turno NOVO (ocioso -> trabalhando) traz o card de volta. O agente que se conclui
-  // (`vibehub_move_cards`) o faz NO MEIO do turno, e cada ferramenta seguinte dele dispara um
-  // `working` (PreToolUse): sem isto o card saía de `done` no instante seguinte, e o "concluído"
-  // nunca ficava (produção, 2026-10-20). `card.status` aqui é o de ANTES do relato.
+  // Only a NEW turn (idle -> working) brings the card back. The agent that marks itself done
+  // (`vibehub_move_cards`) does so IN THE MIDDLE of the turn, and each of its following tools fires a
+  // `working` (PreToolUse): without this the card left `done` the very next instant, and the "concluído"
+  // never stuck (production, 2026-10-20). `card.status` here is the one from BEFORE the report.
   if (card.status === "working") return false;
   return status === "working" && card.column === "done";
 }
@@ -1310,11 +1309,6 @@ export async function updateGithubConnection(
   });
 }
 
-/** Projects that explicitly point at this connection — what makes a removal unsafe. */
-export async function projectsUsingGithubConnection(id: string): Promise<Project[]> {
-  return (await store.load()).projects.filter((p) => p.githubConnectionId === id);
-}
-
 /**
  * Removes a GitHub account. REFUSES while any project still points at it — dropping it blindly would
  * leave projects with a credential that no longer exists and every clone would fail at open time.
@@ -1544,7 +1538,7 @@ export interface RemovedProject {
  * renumbered 0..n-1 so the sidebar keeps no gap.
  */
 export async function removeProject(id: string): Promise<RemovedProject> {
-  const result = await store.mutate((doc) => {
+  const removed = await store.mutate((doc) => {
     const project = doc.projects.find((p) => p.id === id);
     if (!project) throw new Error("project not found");
     const cards = doc.cards.filter((c) => c.projectId === id);
@@ -1558,10 +1552,10 @@ export async function removeProject(id: string): Promise<RemovedProject> {
     normalizeProjectPositions(doc.projects);
     return { project, cards };
   });
-  if (result.cards.length > 0) {
-    logger.info({ projectId: id, cards: result.cards.length }, "project removed with its cards");
+  if (removed.cards.length > 0) {
+    logger.info({ projectId: id, cards: removed.cards.length }, "project removed with its cards");
   }
-  return result;
+  return removed;
 }
 
 // ---------------------------------------------------------------------------
@@ -1578,6 +1572,15 @@ export async function listCards(projectId: string): Promise<Card[]> {
 
 export async function getCard(id: string): Promise<Card | undefined> {
   return (await store.load()).cards.find((c) => c.id === id);
+}
+
+/** The card and its project, for a caller that cannot go on without both. Throws when either is gone. */
+export async function getCardWithProject(cardId: string): Promise<{ card: Card; project: Project }> {
+  const card = await getCard(cardId);
+  if (!card) throw new Error("card not found");
+  const project = await getProject(card.projectId);
+  if (!project) throw new Error("project for this card not found");
+  return { card, project };
 }
 
 /** EVERY card of every project, unordered. Used by bulk operations such as "restart everything". */
@@ -2174,9 +2177,9 @@ export async function markCardHumanActive(cardId: string, at: number = Date.now(
  * `markCardHumanActive` it never bumps updatedAt: an open question is not an edit of the card.
  */
 export async function setCardAwaitingDecision(cardId: string, at: number | null): Promise<void> {
-  // A conferência mora SÓ dentro do mutate (que não regrava quando nada muda): lida antes, fora da
-  // fila, um "abre" e um "fecha" seguidos (permissão respondida na hora) liam os dois o card ainda
-  // limpo — o "fecha" desistia e o card ficava âmbar para sempre.
+  // The check lives ONLY inside the mutate (which does not rewrite when nothing changes): read before, outside the
+  // queue, an "open" and a "close" in a row (permission answered right away) both read the card still
+  // clean — the "close" gave up and the card stayed amber forever.
   await store.mutate((doc) => {
     const card = doc.cards.find((c) => c.id === cardId);
     if (!card || Boolean(card.awaitingDecisionAt) === (at !== null)) return;
@@ -2468,11 +2471,6 @@ export async function removeMcp(id: string): Promise<McpServer> {
     doc.mcpDrops.push({ name: found.name, id: randomUUID() });
     return found;
   });
-}
-
-/** Names of deleted MCPs the runner has not removed yet (see `removeMcp`), each once. */
-export async function pendingMcpDrops(): Promise<string[]> {
-  return [...new Set((await store.load()).mcpDrops.map((d) => d.name))];
 }
 
 /** The removals owed right now, receipts included — what `dropDeletedMcps` pays and then settles. */

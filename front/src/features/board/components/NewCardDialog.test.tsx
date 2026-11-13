@@ -330,7 +330,7 @@ describe("NewCardDialog", () => {
     const { user } = setup();
     await user.click(screen.getByRole("button", { name: "Options" }));
     await user.click(await screen.findByLabelText("Cut from"));
-    // Clicar na barra de rolagem do diálogo põe o foco no próprio diálogo, ancestral do seletor.
+    // Clicking the dialog's scrollbar puts focus on the dialog itself, the picker's ancestor.
     act(() => screen.getByRole("dialog").focus());
 
     expect(document.activeElement).toBe(screen.getByRole("dialog"));
@@ -384,7 +384,7 @@ describe("NewCardDialog", () => {
     await user.click(screen.getByRole("button", { name: "Options" }));
     await user.click(await screen.findByLabelText("Cut from"));
     await user.keyboard("{ArrowDown}{ArrowDown}");
-    expect(opcaoDaBranch("prod")).toHaveAttribute("data-ativo");
+    expect(opcaoDaBranch("prod")).toHaveAttribute("data-active");
 
     await user.click(screen.getByRole("button", { name: "Refresh the list from GitHub" }));
     await waitFor(() => expect(opcaoDaBranch("production")).toBeInTheDocument());
@@ -511,7 +511,7 @@ describe("NewCardDialog", () => {
       const { user, onSubmit } = setup({ ownAccountSlug: "personal" });
       await user.click(screen.getByRole("button", { name: "Options" }));
       expect(screen.getByRole("option", { name: /^Your account \(Personal\)/ })).toBeInTheDocument();
-      // Nada de conta no corpo: quem carimba a conta do criador é o servidor.
+      // No account in the body: the server is the one that stamps the creator's account.
       await user.type(screen.getByLabelText("Title"), "x");
       await user.click(screen.getByRole("button", { name: "Create card" }));
       expect(onSubmit).toHaveBeenCalledWith({ projectId: "p1", title: "x" });

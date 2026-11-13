@@ -98,7 +98,7 @@ describe("parseChanges", () => {
 describe("buildChangesScript", () => {
   it("is read-only and carries the token over stdin, never in the docker argv", async () => {
     const { changes } = await load();
-    const s = changes.buildChangesScript("vibehub-runner", "card-1", TOKEN, "/work/acme-worktrees/fix-1a2b", "card/fix-1a2b", "dev");
+    const s = changes.buildChangesScript("vibehub-runner", TOKEN, "/work/acme-worktrees/fix-1a2b", "card/fix-1a2b", "dev");
     const firstLine = s.split("\n").find((l) => l.startsWith("docker exec"))!;
     expect(firstLine).not.toContain(TOKEN);
     expect(s).toContain("bash -s <<'");
@@ -110,15 +110,15 @@ describe("buildChangesScript", () => {
 
   it("without a token it still reads git, and says why there is no PR", async () => {
     const { changes } = await load();
-    const s = changes.buildChangesScript("vibehub-runner", "card-1", null, "/work/x-worktrees/a-1a2b", "card/a-1a2b", "main");
+    const s = changes.buildChangesScript("vibehub-runner", null, "/work/x-worktrees/a-1a2b", "card/a-1a2b", "main");
     expect(s).not.toContain("gh pr list");
     expect(s).toContain("no GitHub connection");
   });
 
   it("refuses an unsafe path or branch", async () => {
     const { changes } = await load();
-    expect(() => changes.buildChangesScript("vibehub-runner", "card-1", null, "/work/x; rm -rf /", "card/a", "main")).toThrow();
-    expect(() => changes.buildChangesScript("vibehub-runner", "card-1", null, "/work/x", "card/a;rm", "main")).toThrow();
+    expect(() => changes.buildChangesScript("vibehub-runner", null, "/work/x; rm -rf /", "card/a", "main")).toThrow();
+    expect(() => changes.buildChangesScript("vibehub-runner", null, "/work/x", "card/a;rm", "main")).toThrow();
   });
 });
 
@@ -172,7 +172,7 @@ describe("the script against a REAL repository (git, no docker)", () => {
     git("commit", "-q", "-m", "fix: two lines");
     await writeFile(join(repo, "c.txt"), "draft\n");
 
-    const script = changes.buildChangesScript("vibehub-runner", "card-1", null, repo, "card/fix-1a2b", "dev")
+    const script = changes.buildChangesScript("vibehub-runner", null, repo, "card/fix-1a2b", "dev")
       .replace(/^docker exec -i \S+ bash -s/m, "bash -s");
     const out = changes.parseChanges(execFileSync("bash", ["-c", script], { encoding: "utf8" }));
 
@@ -189,7 +189,7 @@ describe("the script against a REAL repository (git, no docker)", () => {
   it("a worktree that is not there is the clear error, not empty sections", async () => {
     const { changes } = await load();
     const { execFileSync } = await import("node:child_process");
-    const script = changes.buildChangesScript("vibehub-runner", "card-1", null, join(dir, "gone"), "card/x-1", "dev")
+    const script = changes.buildChangesScript("vibehub-runner", null, join(dir, "gone"), "card/x-1", "dev")
       .replace(/^docker exec -i \S+ bash -s/m, "bash -s");
     expect(() => changes.parseChanges(execFileSync("bash", ["-c", script], { encoding: "utf8" }))).toThrow(/worktree/);
   });

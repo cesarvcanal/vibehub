@@ -75,9 +75,9 @@ describe("parseDriverLine", () => {
 });
 
 /**
- * O RACIOCÍNIO NO CHAT (pedido do César, 2026-09-17): a espera mostrava só "Trabalhando…". O
- * pensamento do modelo é a única coisa que existe antes da resposta — sem ele, um turno de dez
- * minutos e um de meio segundo são idênticos na tela.
+ * THE REASONING IN THE CHAT (César's request, 2026-09-17): the wait showed only "Trabalhando…". The
+ * model's thinking is the only thing that exists before the answer — without it, a ten-minute turn
+ * and a half-second one are identical on screen.
  */
 describe("raciocínio do modelo", () => {
   it("reconhece o bloco consolidado e o delta ao vivo", () => {
@@ -89,9 +89,9 @@ describe("raciocínio do modelo", () => {
 });
 
 /**
- * A FERRAMENTA AINDA SENDO GERADA: enquanto o modelo escreve o input de um Write grande (ou um Bash
- * longo roda), o driver diz que ela começou e quanto já saiu. Sem estes tipos no contrato, cada um
- * desses frames virava `parse_error` no back — um banner de erro no lugar do progresso.
+ * THE TOOL STILL BEING GENERATED: while the model writes the input of a large Write (or a long Bash
+ * runs), the driver says it started and how much is already out. Without these types in the contract, each of
+ * these frames became a `parse_error` in the back — an error banner in place of the progress.
  */
 describe("progresso da ferramenta", () => {
   it("reconhece o começo, o progresso do input e o relógio da ferramenta", () => {
@@ -395,10 +395,10 @@ describe("createQuestionBroker", () => {
   });
 
   /**
-   * O BUG (produção, 2026-09-17): o agente propunha um plano com opções, o César não gostava do
-   * plano e mandava uma mensagem redirecionando — e não acontecia NADA. O turno estava parado
-   * dentro do `canUseTool` esperando um clique; a mensagem entrava na fila do CLI sem ninguém para
-   * lê-la, e a tela ficava presa até o timeout de 30 MINUTOS. Falar é responder.
+   * THE BUG (production, 2026-09-17): the agent proposed a plan with options, César did not like the
+   * plan and sent a message redirecting — and NOTHING happened. The turn was stopped
+   * inside `canUseTool` waiting for a click; the message entered the CLI's queue with nobody to
+   * read it, and the screen stayed stuck until the 30-MINUTE timeout. Speaking is answering.
    */
   it("supersedeAll: quem escreveu no chat respondeu — o cartão é liberado, não 'sem resposta'", async () => {
     const broker = createQuestionBroker(60_000);
@@ -421,7 +421,7 @@ describe("createQuestionBroker", () => {
     broker.abandonAll();
     expect((await superseded).superseded).toBe(true);
     expect((await abandoned).superseded).toBeUndefined();
-    // …e a mensagem que vai ao modelo diz as três coisas: não houve escolha, há mensagem, ela manda.
+    // …and the message that goes to the model says the three things: there was no choice, there is a message, it rules.
     expect(QUESTION_SUPERSEDED_MESSAGE).toContain("did not pick any of the options");
     expect(QUESTION_SUPERSEDED_MESSAGE).toContain("SUPERSEDES");
     expect(QUESTION_SUPERSEDED_MESSAGE).toContain("do not ask it again");
@@ -546,9 +546,9 @@ describe("normalizeSlashCommands — the chat's \"/\" catalogue", () => {
 });
 
 /**
- * O CONTROLE DE IDIOMA MORREU: ele só existia para pôr uma instrução de idioma no system prompt do
- * driver, o gatilho do bloqueio do Opus. Uma aba aberta ANTES do deploy ainda manda o frame ao
- * conectar — ele precisa sumir em silêncio: nem chegar ao driver, nem virar mensagem do usuário.
+ * THE LANGUAGE CONTROL IS DEAD: it only existed to put a language instruction in the driver's system prompt,
+ * the trigger of Opus's block. A tab opened BEFORE the deploy still sends the frame on
+ * connect — it needs to vanish silently: neither reach the driver nor become a user message.
  */
 describe("parseSdkClientFrame — o frame de idioma de uma aba antiga", () => {
   it("é descartado (null), com ou sem tag", () => {
@@ -560,7 +560,7 @@ describe("parseSdkClientFrame — o frame de idioma de uma aba antiga", () => {
 describe("parseSdkClientFrame — reanchor", () => {
   it("`reanchor` nasce no BACK, nunca no navegador: o parser de frames não o inventa", () => {
     expect(parseSdkClientFrame(JSON.stringify({ type: "reanchor" }))).toBe(null);
-    // mas o back sabe escrevê-lo
+    // but the back knows how to write it
     expect(encodeControl({ type: "reanchor" })).toBe('{"type":"reanchor"}\n');
   });
 });
@@ -579,11 +579,11 @@ describe("parseTypingFrame — o sinal efêmero de \"está digitando\"", () => {
   });
 
   it("um frame de digitação malformado é DESCARTADO, nunca vira mensagem para a IA", () => {
-    // `active` ausente ou com o tipo errado: ainda é um frame de digitação (o front errou), então
-    // é consumido como "parou" — o pior caso é um indicador que some cedo, não um turno fantasma.
+    // `active` missing or of the wrong type: it is still a typing frame (the front got it wrong), so
+    // it is consumed as "parou" — the worst case is an indicator that vanishes early, not a phantom turn.
     expect(parseTypingFrame(`{"type":"typing"}`)).toBe(false);
     expect(parseTypingFrame(`{"type":"typing","active":"sim"}`)).toBe(false);
-    // e o parser de controles não o confunde com uma mensagem do usuário
+    // and the controls parser does not mistake it for a user message
     expect(parseSdkClientFrame(`{"type":"typing","active":true}`)).toBe(null);
   });
 });
@@ -621,10 +621,10 @@ describe("parseDriverLine — /clear", () => {
 });
 
 /**
- * A PERGUNTA ÓRFÃ (produção, 2026-10-07): o driver morreu (deploy, crash, hibernação) com um cartão
- * de pergunta de pé. O histórico redesenha o cartão como pendente, mas o driver novo nunca ouviu
- * falar dele — a resposta clicada virava "no pending question with id …" e se perdia. A resposta
- * agora chega ao modelo como MENSAGEM, e este é o texto dela.
+ * THE ORPHAN QUESTION (production, 2026-10-07): the driver died (deploy, crash, hibernation) with a question
+ * card up. The history redraws the card as pending, but the new driver never heard
+ * of it — the clicked answer became "no pending question with id …" and was lost. The answer
+ * now reaches the model as a MESSAGE, and this is its text.
  */
 describe("buildOrphanAnswerText", () => {
   it("quotes each question next to what the person chose — free text included", () => {

@@ -52,36 +52,36 @@ afterEach(async () => {
 
 describe("classifyAgentState", () => {
   it("reads a shell pane as 'the agent is not here'", async () => {
-    const { outbox } = await load();
-    expect(outbox.classifyAgentState("bash\n")).toBe("shell");
-    expect(outbox.classifyAgentState("  zsh  ")).toBe("shell");
+    const agentState = await import("./agentState.js");
+    expect(agentState.classifyAgentState("bash\n")).toBe("shell");
+    expect(agentState.classifyAgentState("  zsh  ")).toBe("shell");
   });
 
   it("treats anything that is not a shell as the agent", async () => {
-    const { outbox } = await load();
-    expect(outbox.classifyAgentState("node\n")).toBe("running");
-    expect(outbox.classifyAgentState("claude\n")).toBe("running");
+    const agentState = await import("./agentState.js");
+    expect(agentState.classifyAgentState("node\n")).toBe("running");
+    expect(agentState.classifyAgentState("claude\n")).toBe("running");
   });
 
   it("the K bug: a shell in the foreground but claude in the tree is RUNNING, not shell", async () => {
-    const { outbox } = await load();
+    const agentState = await import("./agentState.js");
     // Exactly what the tree probe returns while Claude runs a Bash tool: the pane's foreground is a
     // shell, but `claude` is right there underneath. The old foreground-only probe read this as
     // "shell" and queued the message; the tree probe must read it as "running".
-    expect(outbox.classifyAgentState("bash\nclaude\nnpm exec @playw\nsh\nbash\n")).toBe("running");
+    expect(agentState.classifyAgentState("bash\nclaude\nnpm exec @playw\nsh\nbash\n")).toBe("running");
   });
 
   it("empty output is no session at all", async () => {
-    const { outbox } = await load();
-    expect(outbox.classifyAgentState("")).toBe("none");
-    expect(outbox.classifyAgentState("\n \n")).toBe("none");
+    const agentState = await import("./agentState.js");
+    expect(agentState.classifyAgentState("")).toBe("none");
+    expect(agentState.classifyAgentState("\n \n")).toBe("none");
   });
 });
 
 describe("buildAgentProbeScript", () => {
   it("is read-only and never fails on a missing session", async () => {
-    const { outbox } = await load();
-    const script = outbox.buildAgentProbeScript("vibehub-runner", "card-1234abcd");
+    const agentState = await import("./agentState.js");
+    const script = agentState.buildAgentProbeScript("vibehub-runner", "card-1234abcd");
     expect(script).toContain("tmux list-panes");
     // Walks the pane's process TREE (pane_pid + ps), not just the foreground command, so a Claude
     // busy in a Bash tool is still seen as running.
@@ -92,8 +92,8 @@ describe("buildAgentProbeScript", () => {
   });
 
   it("quotes a hostile session name into one argument", async () => {
-    const { outbox } = await load();
-    expect(outbox.buildAgentProbeScript("c", "s'; rm -rf /; '")).toContain(`'s'\\''; rm -rf /; '\\'''`);
+    const agentState = await import("./agentState.js");
+    expect(agentState.buildAgentProbeScript("c", "s'; rm -rf /; '")).toContain(`'s'\\''; rm -rf /; '\\'''`);
   });
 });
 
@@ -114,26 +114,26 @@ describe("interactiveMenuKind / paneReadiness", () => {
 
 describe("looksLikeInteractiveMenu", () => {
   it("catches the session-resume menu, the permission prompt and the confirm/cancel footer", async () => {
-    const { outbox } = await load();
-    expect(outbox.looksLikeInteractiveMenu("❯ 1. Resume from summary (recommended)\n  2. Resume full")).toBe(true);
-    expect(outbox.looksLikeInteractiveMenu("Do you want to proceed?\n❯ 1. Yes\n  2. No")).toBe(true);
-    expect(outbox.looksLikeInteractiveMenu("some text\nEnter to confirm · Esc to cancel")).toBe(true);
+    const agentState = await import("./agentState.js");
+    expect(agentState.looksLikeInteractiveMenu("❯ 1. Resume from summary (recommended)\n  2. Resume full")).toBe(true);
+    expect(agentState.looksLikeInteractiveMenu("Do you want to proceed?\n❯ 1. Yes\n  2. No")).toBe(true);
+    expect(agentState.looksLikeInteractiveMenu("some text\nEnter to confirm · Esc to cancel")).toBe(true);
     // A navigable slash-command menu: "select" (not "confirm") + the ↑/↓ hint. Was a false negative.
-    expect(outbox.looksLikeInteractiveMenu("  5. Chat about this\nEnter to select · ↑/↓ to navigate · Esc to cancel")).toBe(true);
+    expect(agentState.looksLikeInteractiveMenu("  5. Chat about this\nEnter to select · ↑/↓ to navigate · Esc to cancel")).toBe(true);
   });
   it("leaves the normal prompt, the busy spinner and a bare shell alone", async () => {
-    const { outbox } = await load();
-    expect(outbox.looksLikeInteractiveMenu("> \n? for shortcuts")).toBe(false);
-    expect(outbox.looksLikeInteractiveMenu("Brewing… (esc to interrupt)")).toBe(false);
-    expect(outbox.looksLikeInteractiveMenu("❯ ls -la")).toBe(false); // a zsh prompt, no numbered option
-    expect(outbox.looksLikeInteractiveMenu("")).toBe(false);
+    const agentState = await import("./agentState.js");
+    expect(agentState.looksLikeInteractiveMenu("> \n? for shortcuts")).toBe(false);
+    expect(agentState.looksLikeInteractiveMenu("Brewing… (esc to interrupt)")).toBe(false);
+    expect(agentState.looksLikeInteractiveMenu("❯ ls -la")).toBe(false); // a zsh prompt, no numbered option
+    expect(agentState.looksLikeInteractiveMenu("")).toBe(false);
   });
 });
 
 describe("buildMenuProbeScript", () => {
   it("captures the pane tail, read-only, and never fails on a missing session", async () => {
-    const { outbox } = await load();
-    const script = outbox.buildMenuProbeScript("vibehub-runner", "card-1234abcd");
+    const agentState = await import("./agentState.js");
+    const script = agentState.buildMenuProbeScript("vibehub-runner", "card-1234abcd");
     expect(script).toContain("capture-pane");
     expect(script).toContain("|| true");
     expect(script).not.toMatch(/\brm\b|\bkill\b|send-keys/);
@@ -327,9 +327,9 @@ describe("purgeCardQueue (the card is being deleted)", () => {
 
 describe("quem mandou a mensagem fica registrado", () => {
   it("a proveniência é gravada na ENTREGA, não no enfileiramento", async () => {
-    // O chat casa a atribuição com a LINHA DO TRANSCRIPT, que só existe quando a mensagem é
-    // entregue. Uma mensagem que ficou na fila (Claude fora do ar) e saiu horas depois cairia fora
-    // da janela de casamento — justamente o caso pro qual a fila existe.
+    // The chat matches the attribution with the TRANSCRIPT LINE, which only exists when the message is
+    // delivered. A message that sat in the queue (Claude down) and went out hours later would fall outside
+    // the matching window — precisely the case the queue exists for.
     const { registry, outbox } = await load();
     const users = await import("../../auth/users.js");
     const prov = await import("../chat/provenance.js");
@@ -338,10 +338,10 @@ describe("quem mandou a mensagem fica registrado", () => {
     const card = await registry.createCard({ projectId: project.id, title: "um card" });
     await registry.applyOpenTerminal(card.id);
 
-    // Resposta FIXA da sonda (não `agentIs`): `mockClear` não esvazia a fila de `…Once`, e uma
-    // sobra de teste anterior comia esta resposta.
+    // FIXED probe answer (not `agentIs`): `mockClear` does not empty the `…Once` queue, and a
+    // leftover from a previous test ate this answer.
     runScript.mockReset();
-    runScript.mockResolvedValue({ stdout: "bash\n", stderr: "" }); // Claude fora: a mensagem fica na fila
+    runScript.mockResolvedValue({ stdout: "bash\n", stderr: "" }); // Claude down: the message stays in the queue
     await outbox.queueMessage(card.id, "roda os testes", mussa.id);
     await prov.primeProvenance(card.id);
     expect(prov.matchOrigin(card.id, "roda os testes", Date.now())).toBeUndefined();

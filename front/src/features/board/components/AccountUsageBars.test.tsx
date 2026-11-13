@@ -3,7 +3,7 @@ import { screen } from "@testing-library/react";
 import { renderApp } from "@/test/render";
 import { AccountUsageBars } from "@/features/board/components/AccountUsageBars";
 import { setLanguage } from "@/i18n";
-import type { AccountUsage } from "@/features/board/api";
+import type { AccountUsage } from "@/api/types";
 
 /**
  * The three bars, as rendered. What is pinned here is what an operator READS off them: a width that

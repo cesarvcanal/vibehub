@@ -5,16 +5,16 @@ import { logger } from "../../utils/logger.js";
 import { CARD_ID_RE } from "../board/cardId.js";
 
 /**
- * O QUE CADA PESSOA JÁ MARCOU num cartão de pergunta aberto, em DISCO — por card, pergunta e nome.
+ * WHAT EACH PERSON HAS ALREADY TICKED on an open question card, ON DISK — per card, question and name.
  *
- * O incidente (produção, 2026-11-03): quatro perguntas marcadas, um deploy, tudo em branco. O manager
- * guardava os rascunhos só em memória (para quem abre o card no meio da resposta de outra pessoa) e
- * o deploy reinicia o back. Aqui eles sobrevivem ao deploy, à aba fechada e à troca de aparelho — o
- * que eu marquei, o que os outros marcaram — até a pergunta encerrar (`forgetQuestionDrafts`).
+ * The incident (production, 2026-11-03): four questions ticked, a deploy, everything blank. The manager
+ * kept the drafts only in memory (for whoever opens the card in the middle of another person's answer) and
+ * the deploy restarts the back. Here they survive the deploy, the closed tab and the switch of device — what
+ * I ticked, what the others ticked — until the question closes (`forgetQuestionDrafts`).
  *
- * As gravações de um card são ENCADEADAS e COALESCIDAS: um rascunho chega a cada ~150 ms enquanto
- * alguém digita, e só o último estado importa — no máximo uma escrita em voo e uma na fila, sempre a
- * mais nova. A leitura espera a fila do card: o driver sucessor não pode ler um arquivo velho.
+ * A card's writes are CHAINED and COALESCED: a draft arrives every ~150 ms while
+ * someone types, and only the last state matters — at most one write in flight and one queued, always the
+ * newest. The read waits for the card's queue: the successor driver must not read a stale file.
  */
 
 export const SDK_QUESTION_DRAFTS_DIR = "sdk-question-drafts";
@@ -22,11 +22,11 @@ export const SDK_QUESTION_DRAFTS_DIR = "sdk-question-drafts";
 export interface StoredQuestionDraft {
   picked: string[][];
   other: string[];
-  /** Quando a pessoa fez a mudança (relógio do navegador dela) — a mais nova vence. */
+  /** When the person made the change (their browser's clock) — the newest wins. */
   at?: number;
 }
 
-/** `id da pergunta → nome → rascunho`. */
+/** `question id → name → draft`. */
 export type CardQuestionDrafts = Map<string, Map<string, StoredQuestionDraft>>;
 
 function draftsFile(cardId: string): string {
@@ -37,7 +37,7 @@ function draftsFile(cardId: string): string {
 const strings = (value: unknown): string[] | null =>
   Array.isArray(value) && value.every((v) => typeof v === "string") ? (value as string[]) : null;
 
-/** Um rascunho do disco, conferido. PURE. */
+/** A draft from disk, checked. PURE. */
 function parseDraft(value: unknown): StoredQuestionDraft | null {
   if (!value || typeof value !== "object") return null;
   const { picked, other, at } = value as { picked?: unknown; other?: unknown; at?: unknown };
@@ -48,7 +48,7 @@ function parseDraft(value: unknown): StoredQuestionDraft | null {
   return { picked: pickedLists as string[][], other: otherList, ...(typeof at === "number" && Number.isFinite(at) ? { at } : {}) };
 }
 
-/** O conteúdo do arquivo, ou null quando não há nada a guardar. PURE. */
+/** The file's content, or null when there is nothing to keep. PURE. */
 export function serializeQuestionDrafts(drafts: CardQuestionDrafts): string | null {
   const out: Record<string, Record<string, StoredQuestionDraft>> = {};
   for (const [id, byName] of drafts) {
@@ -58,7 +58,7 @@ export function serializeQuestionDrafts(drafts: CardQuestionDrafts): string | nu
   return Object.keys(out).length === 0 ? null : JSON.stringify(out);
 }
 
-/** O texto do arquivo, conferido — o que não bate é ignorado, nunca lança. PURE. */
+/** The file's text, checked — what does not match is ignored, never throws. PURE. */
 export function parseQuestionDrafts(raw: string): CardQuestionDrafts {
   const drafts: CardQuestionDrafts = new Map();
   let parsed: unknown;
@@ -80,7 +80,7 @@ export function parseQuestionDrafts(raw: string): CardQuestionDrafts {
   return drafts;
 }
 
-/** Por card: a escrita em voo e o próximo conteúdo (null = apagar o arquivo). */
+/** Per card: the write in flight and the next content (null = delete the file). */
 const writing = new Map<string, Promise<void>>();
 const nextContent = new Map<string, string | null>();
 
@@ -98,7 +98,7 @@ async function writeNow(cardId: string, content: string | null): Promise<void> {
   }
 }
 
-/** Grava o estado de agora dos rascunhos do card. Nunca lança; a promessa resolve quando estiver em disco. */
+/** Writes the current state of the card's drafts. Never throws; the promise resolves when it is on disk. */
 export function saveQuestionDrafts(cardId: string, drafts: CardQuestionDrafts): Promise<void> {
   nextContent.set(cardId, serializeQuestionDrafts(drafts));
   const running = writing.get(cardId);
@@ -115,7 +115,7 @@ export function saveQuestionDrafts(cardId: string, drafts: CardQuestionDrafts): 
   return loop;
 }
 
-/** Os rascunhos guardados do card (vazio quando não há, ou quando o arquivo não se lê). Nunca lança. */
+/** The card's stored drafts (empty when there are none, or when the file cannot be read). Never throws. */
 export async function loadQuestionDrafts(cardId: string): Promise<CardQuestionDrafts> {
   await writing.get(cardId);
   try {
@@ -128,12 +128,12 @@ export async function loadQuestionDrafts(cardId: string): Promise<CardQuestionDr
   }
 }
 
-/** Resolve quando as gravações pendentes do card estiverem em disco. */
+/** Resolves when the card's pending writes are on disk. */
 export function questionDraftsSettled(cardId: string): Promise<void> {
   return writing.get(cardId) ?? Promise.resolve();
 }
 
-/** O card foi apagado: os rascunhos dele também. Nunca lança. */
+/** The card was deleted: its drafts too. Never throws. */
 export async function removeQuestionDrafts(cardId: string): Promise<void> {
   nextContent.set(cardId, null);
   await (writing.get(cardId) ?? saveQuestionDrafts(cardId, new Map()));

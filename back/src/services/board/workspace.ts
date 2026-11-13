@@ -7,7 +7,7 @@ import { gitAuthHeaderFor, tokenFor } from "../github/client.js";
 import { resolveIdentity, type EffectiveIdentity } from "../github/identity.js";
 import { getUserGit, assertGitName, assertGitEmail } from "../../auth/userGit.js";
 import {
-  getCard, getProject, applyOpenTerminal, markPrepared, pauseCard as registryPauseCard,
+  getCard, getCardWithProject, getProject, applyOpenTerminal, markPrepared, pauseCard as registryPauseCard,
   listGithubConnections,
   hibernateCard as registryHibernateCard,
   listAllCards, markCardActivity, assertBranchName, assertSessionId, effectiveAccountSlug, modelPin, isValidEffort, hasLiveSession,
@@ -712,16 +712,10 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
   // The KEY is resolved before the queue is entered (it names the clone this script will write to);
   // the card and the project are read AGAIN inside, because what matters to the script is the state
   // in force after whoever was ahead in the queue has finished.
-  const pending = await getCard(cardId);
-  if (!pending) throw new Error("card not found");
-  const pendingProject = await getProject(pending.projectId);
-  if (!pendingProject) throw new Error("project for this card not found");
+  const { card: pending, project: pendingProject } = await getCardWithProject(cardId);
 
   return withProvisionLock(provisionLockKey(pendingProject, pending), async () => {
-    const card = await getCard(cardId);
-    if (!card) throw new Error("card not found");
-    const project = await getProject(card.projectId);
-    if (!project) throw new Error("project for this card not found");
+    const { card, project } = await getCardWithProject(cardId);
 
     const paths = cardWorkPaths(project, card);
     let repo: OpenScriptOpts["repo"];
@@ -764,45 +758,39 @@ async function provisionWorkspace(cardId: string): Promise<ProvisionResult> {
     } catch (e) {
       logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "GitHub connection token not resolved on open (ambient gh login)");
     }
-    // Managed MCPs: BEST-EFFORT on open, PER MCP (a missing secret must not stop a card from opening,
-    // nor take the built-ins and the other MCPs down with it — the "apply" button in the UI is the
-    // path that fails loudly and names what is missing).
-    let mcps: McpInjection[] = [];
-    try {
-      mcps = await resolveMcpInjections((name, e) => {
+    // The reads below are independent and each one BEST-EFFORT on open: they run together, and a
+    // failure is logged and leaves its value absent instead of stopping the card from opening.
+    const [mcps, brain, plugins, resolvedProjectBrain] = await Promise.all([
+      // Managed MCPs: PER MCP (a missing secret must not take the built-ins and the other MCPs down
+      // with it — the "apply" button in the UI is the path that fails loudly and names what is missing).
+      resolveMcpInjections((name, e) => {
         logger.warn({ card: card.worktreeSlug, mcp: name, detail: e.message }, "managed MCP skipped on open (continuing)");
-      });
-    } catch (e) {
-      logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "managed MCPs not injected on open (continuing)");
-    }
-    // The brain (global CLAUDE.md): BEST-EFFORT on open (malformed text must not stop a card from
-    // opening — the UI's save is the path that validates and fails loudly).
-    let brain: string | undefined;
-    try {
-      brain = await resolveBrainText();
-    } catch (e) {
-      logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "brain not seeded on open (continuing)");
-    }
-    // The plugins this install wants: best-effort like the brain — a store that cannot be read
-    // must not stop a card from opening.
-    let plugins: string[] | undefined;
-    try {
-      plugins = await enabledPlugins();
-    } catch (e) {
-      logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "plugins not installed on open (continuing)");
-    }
-    // The PROJECT brain (CLAUDE.local.md in the worktree): same best-effort rule as the global one.
-    let projectBrain: string | undefined;
-    try {
-      projectBrain = await resolveProjectBrainText(project.id);
-    } catch (e) {
-      logger.warn({ card: card.worktreeSlug, detail: (e as Error).message }, "project brain not seeded on open (continuing)");
-    }
+      }).catch((e: Error): McpInjection[] => {
+        logger.warn({ card: card.worktreeSlug, detail: e.message }, "managed MCPs not injected on open (continuing)");
+        return [];
+      }),
+      // The brain (global CLAUDE.md): malformed text must not stop a card from opening — the UI's
+      // save is the path that validates and fails loudly.
+      resolveBrainText().catch((e: Error) => {
+        logger.warn({ card: card.worktreeSlug, detail: e.message }, "brain not seeded on open (continuing)");
+        return undefined;
+      }),
+      // The plugins this install wants: a store that cannot be read must not stop a card from opening.
+      enabledPlugins().catch((e: Error) => {
+        logger.warn({ card: card.worktreeSlug, detail: e.message }, "plugins not installed on open (continuing)");
+        return undefined;
+      }),
+      // The PROJECT brain (CLAUDE.local.md in the worktree): same rule as the global one.
+      resolveProjectBrainText(project.id).catch((e: Error) => {
+        logger.warn({ card: card.worktreeSlug, detail: e.message }, "project brain not seeded on open (continuing)");
+        return undefined;
+      }),
+    ]);
     // A LOCKED card carries its rule INTO the session: the notice goes above the project's own text,
     // so the agent reads "this card only opens a PR against <base>" as project memory instead of
     // discovering it when the delivery refuses to merge. Skipped when the resolve above FAILED
     // (undefined): writing only the notice there would wipe the project brain already on disk.
-    if (projectBrain !== undefined) projectBrain = brainTextForCard(projectBrain, card);
+    const projectBrain = resolvedProjectBrain !== undefined ? brainTextForCard(resolvedProjectBrain, card) : undefined;
 
     const script = buildOpenScript({
       containerName: config.runner.container,
@@ -893,7 +881,7 @@ export function buildWorkspaceProbeScript(containerName: string, cwd: string): s
 }
 
 /**
- * THE CARD'S FOLDER VANISHED UNDER IT (produção, 2026-10-19): asked to "merge and delete the
+ * THE CARD'S FOLDER VANISHED UNDER IT (production, 2026-10-19): asked to "merge and delete the
  * branch", the card's own agent ran `git worktree remove` on the directory it lived in. Every
  * message after that died spawning the CLI (cwd missing), behind the SDK's misleading libc error.
  *
@@ -975,7 +963,7 @@ export interface UploadScriptOpts {
  * The `exec` is the point. Bash reads a script from a pipe ONE BYTE PER read() — so the commands it
  * starts can inherit the rest of the stream — and the old shape put the payload inside a heredoc,
  * parsed twice (host bash, then the container's `bash -s`): ~19 s per level for a 5 MB screenshot,
- * the "colei a imagem e ela demora muito para carregar" of produção (2026-10-19). Here bash reads
+ * the "colei a imagem e ela demora muito para carregar" of production (2026-10-19). Here bash reads
  * only the first line and hands its stdin to `docker exec -i`, which streams the payload in blocks
  * straight into `base64 -d` (0.25 s for the same 5 MB). Nothing after the payload is ever parsed as
  * shell: the process reading it is base64, not bash. PURE/testable.
@@ -997,10 +985,7 @@ export async function uploadCardImage(
   base64: string,
   by?: string,
 ): Promise<{ path: string }> {
-  const card = await getCard(cardId);
-  if (!card) throw new Error("card not found");
-  const project = await getProject(card.projectId);
-  if (!project) throw new Error("project for this card not found");
+  const { card } = await getCardWithProject(cardId);
 
   const b64 = String(base64 ?? "").replace(/\s+/g, ""); // tolerate line breaks from encoders
   if (!B64_RE.test(b64)) throw new Error("invalid base64 content");
@@ -1057,7 +1042,7 @@ const UPLOAD_CONTENT_TYPES: Record<string, string> = {
   md: "text/plain; charset=utf-8",
   json: "text/plain; charset=utf-8",
   log: "text/plain; charset=utf-8",
-  // Áudio toca no <audio> do chat; nenhum desses tipos executa nada na origem do painel.
+  // Audio plays in the chat's <audio>; none of these types executes anything on the panel's origin.
   mp3: "audio/mpeg",
   ogg: "audio/ogg",
   oga: "audio/ogg",
@@ -1311,7 +1296,7 @@ export function onCardSessionKill(listener: CardSessionKillListener): () => void
 /**
  * Probes that answer "someone is USING this card right now, do not hibernate it".
  *
- * The incident (produção, 2026-09-17): a card whose whole conversation lives in the NATIVE CHAT
+ * The incident (production, 2026-09-17): a card whose whole conversation lives in the NATIVE CHAT
  * never touches tmux, so nothing refreshed its `statusAt`/`openedAt` — and `openedAt` is stamped
  * on the FIRST open and never re-stamped. The idle sweep therefore read a card the person was
  * typing into as "sem sinal de vida há 3 horas" and hibernated it, killing the SDK driver under a
@@ -1502,14 +1487,6 @@ const BUSY_MARKER = "esc to interrupt";
 
 /** How many lines of the pane bottom to look at: the footer, not the conversation. PURE. */
 const PANE_TAIL_LINES = 12;
-
-/** true = this pane capture shows Claude actually generating. PURE/testable. */
-export function paneLooksBusy(pane: string): boolean {
-  const lines = String(pane ?? "").split("\n");
-  return lines
-    .slice(-PANE_TAIL_LINES)
-    .some((line) => line.toLowerCase().includes(BUSY_MARKER));
-}
 
 /** Parses one `<session> <state>` line of the probe output. PURE. */
 export function parseProbeOutput(stdout: string): Map<string, SessionState> {
@@ -1822,7 +1799,7 @@ async function sweepIdleCardsOnce(now: number): Promise<number> {
   if (candidates.length === 0) return 0;
   // The board's clocks say "silent"; ASK THE RUNNER before killing anything. The status hooks are a
   // network call from the runner back to us, and when they cannot reach the back (a public URL on a
-  // dead blue/green port — produção, 21/10/2026) a Claude in the middle of a task looks exactly like
+  // dead blue/green port — production, 21/10/2026) a Claude in the middle of a task looks exactly like
   // an abandoned one. A pane showing Claude generating (`busy`) or a runner that did not answer
   // (`unknown`) is spared; only `idle`/`gone` go to sleep. One round trip for the whole list.
   const states = await probeSessions(candidates.filter((c) => c.column !== "done").map((c) => c.tmuxSession));
@@ -1935,7 +1912,7 @@ export async function applySessionChange(before: Card | undefined, after: Card, 
   if (!before || !changed || !hasLiveSession(after)) return "none";
   // ONLY THE INTELLIGENCE changed, on a card whose conversation runs in the native chat: the driver
   // applies it to the live session (`applyFlagSettings`) — no restart, no waiting for the turn to
-  // end. The pending restart was the bug (produção, 2026-10-27, card review-prs-albert-ee7c): Alto
+  // end. The pending restart was the bug (production, 2026-10-27, card review-prs-albert-ee7c): Alto
   // picked mid-turn, the toast said it would apply when Claude finished, and with subagents running
   // in the background the turn never "finished" — the session went on in `medium` and the pill fell
   // back to Médio. A level cleared back to the account default goes live as well (null): the driver

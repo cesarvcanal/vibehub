@@ -47,7 +47,7 @@ describe("splitSubagentRows(rows, previous) — um token do principal não redes
     const streaming: SdkRow = { kind: "assistant", id: "a1", text: "oi", streaming: true };
     const second = splitSubagentRows([agent, child, streaming], first.children);
     expect(second.children).toBe(first.children);
-    // Uma filha nova é mudança de verdade: mapa novo.
+    // A new child is a real change: new map.
     const third = splitSubagentRows([agent, child, tool("c2", "Grep", "t1")], second.children);
     expect(third.children).not.toBe(second.children);
     expect(third.children.get("t1")?.map((r) => r.id)).toEqual(["c1", "c2"]);

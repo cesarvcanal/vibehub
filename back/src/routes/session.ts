@@ -11,9 +11,11 @@ import * as workspace from "../services/board/workspace.js";
 import * as browser from "../services/browser/browser.js";
 import * as outbox from "../services/board/outbox.js";
 import { purgeCard } from "../services/board/purge.js";
-import { lerAnexoDoCard } from "../services/anexos/documento.js";
+import { readCardAttachment } from "../services/attachments/document.js";
 import { observeCardStatus } from "../services/events/cardEvents.js";
 import { logger } from "../utils/logger.js";
+import { sendError } from "./httpError.js";
+import { setTimeout as delay } from "node:timers/promises";
 
 /**
  * SESSION routes — everything that touches a live card: opening it in the runner, the xterm
@@ -105,6 +107,19 @@ export function parseTerminalFrame(raw: string): { type: "resize"; cols: number;
 }
 
 const KEEPALIVE_MS = 25_000;
+
+/**
+ * Spawns an interactive terminal (a card's tmux attach, the runner shell, an account login) the way
+ * every one of them is born: xterm-256color at 120x30 — the front resizes it on open — in UTF-8.
+ */
+export function spawnTerminalPty(file: string, args: string[]): IPty {
+  return pty.spawn(file, args, {
+    name: "xterm-256color",
+    cols: 120,
+    rows: 30,
+    env: { ...process.env, LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TERM: "xterm-256color" },
+  });
+}
 
 /**
  * Wires a pty to a websocket: output out, keystrokes and resizes in, both sides closing together.
@@ -199,9 +214,6 @@ export function needsProvisioning(card: Pick<registry.Card, "openedAt" | "prepar
 export const PAUSED_ATTACH_GRACE_MS = 3_000;
 const PAUSED_ATTACH_POLL_MS = 200;
 
-/** Injected in the tests, so the grace period costs no real time there. */
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
 /**
  * Is this card still paused after the grace period? Answers false as soon as the pause is lifted.
  *
@@ -237,8 +249,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       // current author; the first message of whoever opened it makes them the author.
       return await reply.send({ card: await workspace.openCard(req.params.id) });
     } catch (err) {
-      const message = (err as Error).message;
-      return await reply.code(/not found/i.test(message) ? 404 : 502).send({ error: message });
+      return await sendError(reply, err, { fallback: 502 });
     }
   });
 
@@ -246,8 +257,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     try {
       return await reply.send({ card: await workspace.pauseCard(req.params.id) });
     } catch (err) {
-      const message = (err as Error).message;
-      return await reply.code(/not found/i.test(message) ? 404 : 502).send({ error: message });
+      return await sendError(reply, err, { fallback: 502 });
     }
   });
 
@@ -263,8 +273,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       if (!card) return await reply.code(404).send({ error: "card not found" });
       return await reply.send({ card });
     } catch (err) {
-      const message = (err as Error).message;
-      return await reply.code(/not found/i.test(message) ? 404 : 502).send({ error: message });
+      return await sendError(reply, err, { fallback: 502 });
     }
   });
 
@@ -272,8 +281,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     try {
       return await reply.send({ card: await workspace.restartCard(req.params.id) });
     } catch (err) {
-      const message = (err as Error).message;
-      return await reply.code(/not found/i.test(message) ? 404 : 502).send({ error: message });
+      return await sendError(reply, err, { fallback: 502 });
     }
   });
 
@@ -310,8 +318,22 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       try {
         return await reply.send(await workspace.uploadCardImage(req.params.id, name, content));
       } catch (err) {
-        const message = (err as Error).message;
-        return await reply.code(/not found/i.test(message) ? 404 : 400).send({ error: message });
+        return await sendError(reply, err);
+      }
+    },
+  );
+
+  /**
+   * The attachment as text (spreadsheet, Word, PowerPoint): the browser does not open those formats, so the
+   * chat shows what the agent also reads. Same access as whoever can see the file.
+   */
+  app.get<{ Params: { id: string; file: string } }>(
+    "/api/cards/:id/uploads/:file/preview", { preHandler: requireCardAccess },
+    async (req, reply) => {
+      try {
+        return await reply.send(await readCardAttachment(req.params.id, req.params.file));
+      } catch (err) {
+        return await sendError(reply, err, { fallback: 422 });
       }
     },
   );
@@ -328,22 +350,6 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
    * Cached hard and forever on purpose — the name carries the upload's timestamp, so a given URL
    * names one file that never changes.
    */
-  /**
-   * O anexo como texto (planilha, Word, PowerPoint): o navegador não abre esses formatos, então o chat
-   * mostra o que o agente também lê. Mesmo acesso de quem pode ver o arquivo.
-   */
-  app.get<{ Params: { id: string; file: string } }>(
-    "/api/cards/:id/uploads/:file/preview", { preHandler: requireCardAccess },
-    async (req, reply) => {
-      try {
-        return await reply.send(await lerAnexoDoCard(req.params.id, req.params.file));
-      } catch (err) {
-        const message = (err as Error).message;
-        return await reply.code(/not found/i.test(message) ? 404 : 422).send({ error: message });
-      }
-    },
-  );
-
   app.get<{ Params: { id: string; file: string } }>(
     "/api/cards/:id/uploads/:file", { preHandler: requireCardAccess },
     async (req, reply) => {
@@ -394,8 +400,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
         await recordCardActor(await requestUser(req), req.params.id);
         return await reply.send(await outbox.queueMessage(req.params.id, String(req.body?.text ?? ""), by));
       } catch (err) {
-        const message = (err as Error).message;
-        return await reply.code(/not found/i.test(message) ? 404 : 400).send({ error: message });
+        return await sendError(reply, err);
       }
     },
   );
@@ -407,8 +412,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       try {
         return await reply.send(await outbox.outboxStatus(req.params.id));
       } catch (err) {
-        const message = (err as Error).message;
-        return await reply.code(/not found/i.test(message) ? 404 : 502).send({ error: message });
+        return await sendError(reply, err, { fallback: 502 });
       }
     },
   );
@@ -465,8 +469,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     try {
       return await reply.send({ ports: await browser.openCardBrowser(req.params.id) });
     } catch (err) {
-      const message = (err as Error).message;
-      return await reply.code(/not found/i.test(message) ? 404 : 502).send({ error: message });
+      return await sendError(reply, err, { fallback: 502 });
     }
   });
 
@@ -475,8 +478,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       await browser.closeCardBrowser(req.params.id);
       return await reply.send({ ok: true });
     } catch (err) {
-      const message = (err as Error).message;
-      return await reply.code(/not found/i.test(message) ? 404 : 502).send({ error: message });
+      return await sendError(reply, err, { fallback: 502 });
     }
   });
 
@@ -546,7 +548,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       // (`tmux new-session -A`), so the pause would undo itself the moment any pane reconnects —
       // see `stillPausedAfterGrace`. The grace period lets a genuine open (which clears `pausedAt`)
       // win the race; anything else is turned away and the card stays parked.
-      if (card.pausedAt && (await stillPausedAfterGrace(card.id, registry.getCard, sleep))) {
+      if (card.pausedAt && (await stillPausedAfterGrace(card.id, registry.getCard, delay))) {
         logger.info(
           { audit: true, action: "card.attach.refused", card: card.worktreeSlug, session: card.tmuxSession },
           "terminal attach refused — the card is paused and an attach must not resurrect it",
@@ -577,12 +579,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
         return;
       }
       const { file, args } = workspace.cardTerminalCommand(project, snapshot, { shell });
-      const term = pty.spawn(file, args, {
-        name: "xterm-256color",
-        cols: 120,
-        rows: 30,
-        env: { ...process.env, LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TERM: "xterm-256color" },
-      });
+      const term = spawnTerminalPty(file, args);
       logger.info({ card: card.worktreeSlug, shell }, "terminal attached");
       // A human typing here makes the card "human-active": a maestro must not send into it while a
       // person is at the prompt. Throttled to a write every few seconds, and fire-and-forget — a

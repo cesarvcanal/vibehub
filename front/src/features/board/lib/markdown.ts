@@ -91,7 +91,7 @@ export function uploadKind(file: string): UploadKind {
 }
 
 /** Office documents the browser cannot open: the chat shows the runner's text in a preview. PURE, TOTAL. */
-export function anexoTemPreview(file: string): boolean {
+export function hasAttachmentPreview(file: string): boolean {
   const kind = uploadKind(file);
   return kind === "spreadsheet" || kind === "document" || kind === "presentation";
 }

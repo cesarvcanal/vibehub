@@ -14,6 +14,7 @@ import { listReviewsFollowedBy } from "../services/review/store.js";
 import { mergeGateSelfHealing, pendingQuestions, type Review } from "../services/review/model.js";
 import { logger } from "../utils/logger.js";
 import { isBusy } from "../services/maestro/maestro.js";
+import { sendError } from "./httpError.js";
 
 /**
  * BOARD — projects, cards, accounts, and the public status callback the runner's Claude hooks fire.
@@ -22,13 +23,6 @@ import { isBusy } from "../services/maestro/maestro.js";
  * agent's own configuration (tokens, MCP servers, brain) in `routes/agent.ts`; this file is the
  * board's data surface.
  */
-
-function badRequest(err: unknown): { code: number; body: { error: string } } {
-  const message = (err as Error).message ?? "invalid request";
-  // "not found" from the registry is a 404, everything else is the caller's fault.
-  const code = /not found/i.test(message) ? 404 : 400;
-  return { code, body: { error: message } };
-}
 
 /**
  * The PR review summary a board card carries: what the sidebar's "↳ PR #N · estado" line reads.
@@ -39,8 +33,8 @@ type ReviewSummary = Pick<Review, "id" | "prNumber" | "phase" | "round"> & {
   pendingQuestions?: number;
   authorWorking?: boolean;
   /**
-   * Pronto, mas o gate do merge no commit aprovado ainda roda, falhou e a IA do autor corrige (`fixing`:
-   * roda de novo sozinho) ou falhou e espera uma pessoa: a linha não diz "pronto pra merge".
+   * Ready, but the merge gate on the approved commit is still running, failed and the author's AI is fixing
+   * it (`fixing`: runs again on its own) or failed and waits for a person: the line does not say "pronto pra merge".
    */
   mergeGateState?: "running" | "fixing" | "failed";
 };
@@ -78,8 +72,8 @@ async function withReviewSummary(cards: registry.Card[]): Promise<BoardCard[]> {
       const waiting = pendingQuestions(r.findings).length;
       const review: ReviewSummary = { id: r.id, prNumber: r.prNumber, phase: r.phase, round: r.round };
       if (waiting > 0) review.pendingQuestions = waiting;
-      // Pronto, com a IA do autor num turno (hooks ou chat nativo): a linha diz "IA trabalhando". Só quando
-      // o autor é ESTE card; o de um PR anexado é outro, e a linha lê isso ao vivo.
+      // Ready, with the author's AI in a turn (hooks or native chat): the line says "IA trabalhando". Only when
+      // the author is THIS card; an attached PR's is another one, and the line reads that live.
       if (r.phase === "ready" && r.cardId === c.id && isBusy(c)) review.authorWorking = true;
       const gate = r.mergeGate?.sha === r.reviewedSha ? r.mergeGate : undefined;
       if (r.phase === "ready" && gate?.state === "running") review.mergeGateState = "running";
@@ -127,8 +121,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
     try {
       return await reply.send({ project: await registry.createProject(req.body ?? ({} as registry.CreateProjectInput)) });
     } catch (err) {
-      const { code, body } = badRequest(err);
-      return await reply.code(code).send(body);
+      return await sendError(reply, err);
     }
   });
 
@@ -138,8 +131,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
       try {
         return await reply.send({ project: await registry.updateProject(req.params.id, req.body ?? {}) });
       } catch (err) {
-        const { code, body } = badRequest(err);
-        return await reply.code(code).send(body);
+        return await sendError(reply, err);
       }
     },
   );
@@ -154,8 +146,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
       try {
         return await reply.send({ projects: await registry.reorderProject(req.params.id, position) });
       } catch (err) {
-        const { code, body } = badRequest(err);
-        return await reply.code(code).send(body);
+        return await sendError(reply, err);
       }
     },
   );
@@ -191,8 +182,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
       }
       return await reply.send({ ok: true, cards: removed.cards });
     } catch (err) {
-      const { code, body } = badRequest(err);
-      return await reply.code(code).send(body);
+      return await sendError(reply, err);
     }
   });
 
@@ -239,8 +229,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
         });
         return await reply.send({ card: created });
       } catch (err) {
-        const { code, body } = badRequest(err);
-        return await reply.code(code).send(body);
+        return await sendError(reply, err);
       }
     },
   );
@@ -303,8 +292,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
         }
         return await reply.send({ card, session });
       } catch (err) {
-        const { code, body } = badRequest(err);
-        return await reply.code(code).send(body);
+        return await sendError(reply, err);
       }
     },
   );
@@ -320,8 +308,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
     try {
       return await reply.send({ account: await registry.createAccount({ name: req.body?.name ?? "" }) });
     } catch (err) {
-      const { code, body } = badRequest(err);
-      return await reply.code(code).send(body);
+      return await sendError(reply, err);
     }
   });
 
@@ -335,8 +322,7 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
       }
       return await reply.send({ account: await registry.removeAccount(req.params.slug) });
     } catch (err) {
-      const { code, body } = badRequest(err);
-      return await reply.code(code).send(body);
+      return await sendError(reply, err);
     }
   });
 

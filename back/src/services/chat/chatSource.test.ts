@@ -12,8 +12,7 @@ import { resetHostExecutorForTesting } from "../../runtime/host.js";
 
 vi.mock("../board/registry.js", async (orig) => ({
   ...(await orig<typeof import("../board/registry.js")>()),
-  getCard: vi.fn(async () => ({ id: "c1", title: "a card", projectId: "p1" })),
-  getProject: vi.fn(async () => ({ id: "p1" })),
+  getCardWithProject: vi.fn(async () => ({ card: { id: "c1", title: "a card", projectId: "p1" }, project: { id: "p1" } })),
 }));
 vi.mock("../maestro/cardSession.js", async (orig) => ({
   ...(await orig<typeof import("../maestro/cardSession.js")>()),

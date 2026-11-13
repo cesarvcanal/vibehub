@@ -10,9 +10,9 @@ import {
 } from "./peerTyping";
 
 /**
- * "Cesar está digitando…" — quem está escrevendo NESTE card, visto de outra aba. Dois lados:
- * o que chega (o mapa de quem digita, que expira sozinho) e o que sai (o sinal desta aba,
- * econômico de propósito: um frame a cada poucos segundos, nunca um por tecla).
+ * "Cesar está digitando…" — who is writing ON THIS card, seen from another tab. Two sides:
+ * what comes in (the map of who is typing, which expires on its own) and what goes out (this tab's
+ * signal, frugal on purpose: one frame every few seconds, never one per key).
  */
 
 describe("applyPeerTyping / typingNames — quem está digitando agora", () => {
@@ -53,7 +53,7 @@ describe("applyPeerTyping / typingNames — quem está digitando agora", () => {
 });
 
 describe("createTypingSignal — o que esta aba diz para as outras", () => {
-  // restaura os timers mesmo quando uma asserção falha no meio — senão eles vazam para o próximo teste
+  // restore the timers even when an assertion fails midway — otherwise they leak into the next test
   afterEach(() => { vi.useRealTimers(); });
 
   function harness() {
@@ -87,7 +87,7 @@ describe("createTypingSignal — o que esta aba diz para as outras", () => {
     vi.advanceTimersByTime(TYPING_IDLE_MS - 100);
     signal.input("oi");
     vi.advanceTimersByTime(TYPING_IDLE_MS - 100);
-    // passou do intervalo, então um "digitando" de renovação saiu — mas NENHUM "parou"
+    // the interval passed, so a renewal "digitando" went out — but NO "parou"
     expect(sent).not.toContain(false);
     vi.advanceTimersByTime(100);
     expect(sent.at(-1)).toBe(false);

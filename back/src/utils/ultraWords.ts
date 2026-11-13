@@ -1,16 +1,16 @@
 /**
- * Desarma `ultrathink` e `ultracode` num texto que o vibehub digita num card em nome de outro: o Claude
- * Code lê as duas como PEDIDO do turno onde aparecem, citadas ou não. Texto repassado (a fala da outra
- * IA numa revisão, o comando que a retomada cita) não pede nada; só a pessoa pede.
+ * Defuses `ultrathink` and `ultracode` in a text vibehub types into a card on someone else's behalf: Claude
+ * Code reads both as a REQUEST of the turn they appear in, quoted or not. Relayed text (the other AI's
+ * message in a review, the command the resume quotes) requests nothing; only the person requests.
  *
- * Cicatrizes: no PR #259 (que mexia justamente nelas) a resposta do autor citou a palavra, o revisor
- * subiu a max com orquestração multiagente e cada rodada de delta virou um Workflow de 12 a 14 minutos;
- * e a retomada pós-deploy que citava um comando com a palavra pôs o turno em esforço máximo.
+ * Scars: in PR #259 (which touched precisely them) the author's answer quoted the word, the reviewer went
+ * up to max with multi-agent orchestration and each delta round turned into a 12-to-14-minute Workflow;
+ * and the post-deploy resume that quoted a command containing the word put the turn on maximum effort.
  *
- * Só quebra a palavra onde o detector a reconhece (as fronteiras de `findKeyword` em
- * front/src/features/board/lib/ultraWords.ts): caminho, flag e branch (`src/x.ts`, `--x-y`,
- * `card/suporte-...-ab12`) não são pedido e ficam como estão. Mesmo assim, aplique só ao texto livre,
- * nunca a um comando montado. O hífen quebra a palavra e a IA ainda lê o que é. PURE.
+ * It only breaks the word where the detector recognises it (the boundaries of `findKeyword` in
+ * front/src/features/board/lib/ultraWords.ts): path, flag and branch (`src/x.ts`, `--x-y`,
+ * `card/suporte-...-ab12`) are not a request and stay as they are. Even so, apply it only to free text,
+ * never to an assembled command. The hyphen breaks the word and the AI still reads what it is. PURE.
  */
 const ULTRA_WORD_RE = /(?<![/\\-])\b(ultra)(think|code)\b(?![/\\\-?]|\.[\p{L}\p{N}_])/giu;
 
@@ -19,8 +19,8 @@ export function defuseUltraWords(text: string): string {
 }
 
 /**
- * A lista de comandos interrompidos que a retomada cita, desarmada. Se algum comando mudou, a lista
- * diz isso: a IA que rodar a linha de novo tira o hífen em vez de rodar outro filtro. PURE.
+ * The list of interrupted commands the resume quotes, defused. If any command changed, the list says so:
+ * the AI that runs the line again removes the hyphen instead of running another filter. PURE.
  */
 export function defusedCommandList(commands: readonly string[]): string {
   const lines = commands.map((c) => `- ${defuseUltraWords(c)}`);

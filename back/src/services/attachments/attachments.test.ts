@@ -4,16 +4,16 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildLerDocumentoScript, formatoDocumentoSuportado, interpretarSaidaDoConversor } from "./documento.js";
-import { buildExtrairAudioScript, interpretarAudioExtraido } from "./audio.js";
-import { extensaoDe, linhaGarantirPacotes, rodarNoRunner, scriptNoRunner, validarCaminhoNoRunner } from "./runner.js";
+import { buildReadDocumentScript, isSupportedDocument, parseConverterOutput } from "./document.js";
+import { buildExtractAudioScript, parseExtractedAudio } from "./audio.js";
+import { extensionOf, ensurePackagesLine, runOnRunner, runnerScript, validateRunnerPath } from "./runner.js";
 
 /**
- * Os scripts de anexo RODANDO de verdade: um `docker` falso executa o comando do container aqui
- * mesmo e um `dpkg` falso diz que os pacotes já estão instalados (o teste nunca chama apt-get).
- * Formatos que dependem de pacote apt (openpyxl, python-docx, ffmpeg) só rodam onde ele existe.
+ * The attachment scripts RUNNING for real: a fake `docker` runs the container's command right here and a
+ * fake `dpkg` says the packages are already installed (the test never calls apt-get).
+ * Formats that depend on an apt package (openpyxl, python-docx, ffmpeg) only run where it exists.
  */
-const FONTE = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "ler-documento.py"), "utf8");
+const FONTE = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "read-document.py"), "utf8");
 const temPython = spawnSync("python3", ["--version"]).status === 0;
 const temModulo = (m: string) => temPython && spawnSync("python3", ["-c", `import ${m}`]).status === 0;
 const temFfmpeg = spawnSync("ffmpeg", ["-version"]).status === 0;
@@ -22,11 +22,11 @@ let dir = "";
 let bin = "";
 
 beforeAll(() => {
-  dir = mkdtempSync(join(tmpdir(), "vh-anexos-"));
+  dir = mkdtempSync(join(tmpdir(), "vh-attachments-"));
   bin = join(dir, "bin");
   mkdirSync(bin);
-  // Sem `exec`: como o cliente `docker exec`, ele sobrevive ao comando e devolve 137 quando o
-  // `timeout -s KILL` do container o mata (com `exec`, o próprio processo morreria por sinal).
+  // No `exec`: like the `docker exec` client, it outlives the command and returns 137 when the
+  // container's `timeout -s KILL` kills it (with `exec`, the process itself would die by signal).
   writeFileSync(join(bin, "docker"), "#!/bin/sh\nshift 3\n\"$@\"\n");
   writeFileSync(join(bin, "dpkg"), "#!/bin/sh\nexit 0\n");
   chmodSync(join(bin, "docker"), 0o755);
@@ -44,12 +44,12 @@ function rodar(script: string): { stdout: string; stderr: string; status: number
 }
 
 function lerAqui(caminho: string, limite = 10_000) {
-  const r = rodar(buildLerDocumentoScript(caminho, limite, FONTE));
+  const r = rodar(buildReadDocumentScript(caminho, limite, FONTE));
   if (r.status !== 0) throw new Error(r.stderr.trim());
-  return interpretarSaidaDoConversor(r.stdout);
+  return parseConverterOutput(r.stdout);
 }
 
-/** Um zip montado pelo python da própria máquina — pptx e OpenDocument são zip + XML. */
+/** A zip built by the machine's own python — pptx and OpenDocument are zip + XML. */
 function zipar(destino: string, arquivos: Record<string, string>): void {
   execFileSync("python3", ["-c", [
     "import sys, json, zipfile",
@@ -59,7 +59,7 @@ function zipar(destino: string, arquivos: Record<string, string>): void {
   ].join("\n"), destino, JSON.stringify(arquivos)]);
 }
 
-describe("conversor de documentos (ler-documento.py)", () => {
+describe("conversor de documentos (read-document.py)", () => {
   it.skipIf(!temPython)("csv com espaço e acento no nome volta como veio", () => {
     const caminho = join(dir, "Relatório final.csv");
     writeFileSync(caminho, "filial;valor\n5;10,50\n");
@@ -132,55 +132,55 @@ describe("extração do áudio para o Whisper", () => {
   it("formato aceito pelo Whisper vai como veio, com a extensão original", () => {
     const caminho = join(dir, "voz.ogg");
     writeFileSync(caminho, "OggS-bytes");
-    const r = rodar(buildExtrairAudioScript(caminho));
+    const r = rodar(buildExtractAudioScript(caminho));
     expect(r.status).toBe(0);
-    const extraido = interpretarAudioExtraido(r.stdout, caminho);
-    expect(extraido).toMatchObject({ nomeArquivo: "audio.ogg", convertido: false });
+    const extraido = parseExtractedAudio(r.stdout, caminho);
+    expect(extraido).toMatchObject({ fileName: "audio.ogg", converted: false });
     expect(extraido.audio.toString()).toBe("OggS-bytes");
   });
 
   it.skipIf(!temFfmpeg)(".opus (fora da lista do Whisper) é convertido para mp3", () => {
     const caminho = join(dir, "zap.opus");
     execFileSync("ffmpeg", ["-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "libopus", "-y", caminho]);
-    const extraido = interpretarAudioExtraido(rodar(buildExtrairAudioScript(caminho)).stdout, caminho);
-    expect(extraido).toMatchObject({ nomeArquivo: "audio.mp3", convertido: true });
+    const extraido = parseExtractedAudio(rodar(buildExtractAudioScript(caminho)).stdout, caminho);
+    expect(extraido).toMatchObject({ fileName: "audio.mp3", converted: true });
     expect(extraido.audio.length).toBeGreaterThan(100);
   });
 
   it.skipIf(!temFfmpeg)("áudio corrompido falha dizendo que o ffmpeg não leu, sem base64 vazio", () => {
     const caminho = join(dir, "ruim.amr");
     writeFileSync(caminho, "lixo");
-    const r = rodar(buildExtrairAudioScript(caminho));
+    const r = rodar(buildExtractAudioScript(caminho));
     expect(r.status).not.toBe(0);
     expect(r.stderr).toContain("o ffmpeg não conseguiu ler este áudio");
   });
 
   it("arquivo que não existe falha antes de qualquer conversão", () => {
-    const r = rodar(buildExtrairAudioScript(join(dir, "nada.mp3")));
+    const r = rodar(buildExtractAudioScript(join(dir, "nada.mp3")));
     expect(r.status).not.toBe(0);
     expect(r.stderr).toContain("arquivo não encontrado");
   });
 
   it("saída sem marca ou sem conteúdo é recusada", () => {
-    expect(() => interpretarAudioExtraido("", "/x.ogg")).toThrow("vazio ou ilegível");
-    expect(() => interpretarAudioExtraido("original\n", "/x.ogg")).toThrow("vazio ou ilegível");
-    expect(() => interpretarAudioExtraido("outra\nAAAA", "/x.ogg")).toThrow("vazio ou ilegível");
+    expect(() => parseExtractedAudio("", "/x.ogg")).toThrow("vazio ou ilegível");
+    expect(() => parseExtractedAudio("original\n", "/x.ogg")).toThrow("vazio ou ilegível");
+    expect(() => parseExtractedAudio("outra\nAAAA", "/x.ogg")).toThrow("vazio ou ilegível");
   });
 });
 
 describe("prazo dentro do runner", () => {
   it("o comando roda sob `timeout -s KILL` com a margem do containerScriptCommand, nos dois chamadores", () => {
     const primeira = (script: string) => script.slice(0, script.indexOf("\n"));
-    // 600 s de extração e 300 s de leitura, menos os 15 s de margem: o runner mata antes do Node desistir.
-    expect(primeira(buildExtrairAudioScript("/work/a.opus"))).toMatch(/^exec docker exec -i '[^']+' timeout -s KILL 585 sh -c '/);
-    expect(primeira(buildLerDocumentoScript("/work/a.pdf", 10, "print(1)"))).toMatch(/^exec docker exec -i '[^']+' timeout -s KILL 285 sh -c '/);
+    // 600 s of extraction and 300 s of reading, minus the 15 s margin: the runner kills before Node gives up.
+    expect(primeira(buildExtractAudioScript("/work/a.opus"))).toMatch(/^exec docker exec -i '[^']+' timeout -s KILL 585 sh -c '/);
+    expect(primeira(buildReadDocumentScript("/work/a.pdf", 10, "print(1)"))).toMatch(/^exec docker exec -i '[^']+' timeout -s KILL 285 sh -c '/);
   });
 
   it("estourado o prazo, o comando e o que ele iniciou morrem no runner — não ficam órfãos", () => {
     const pidFile = join(dir, "orfao.pid");
     const inicio = Date.now();
-    // 16 s de prazo no Node = 1 s dentro do runner. O `sleep` é o ffmpeg que seguia convertendo.
-    const r = rodar(scriptNoRunner(`sleep 20 & echo $! > "$0"; wait`, [pidFile], 16_000));
+    // A 16 s deadline in Node = 1 s inside the runner. The `sleep` is the ffmpeg that kept on converting.
+    const r = rodar(runnerScript(`sleep 20 & echo $! > "$0"; wait`, [pidFile], 16_000));
     expect(r.status).not.toBe(0);
     expect(Date.now() - inicio).toBeLessThan(10_000);
     const pid = Number(readFileSync(pidFile, "utf8").trim());
@@ -189,49 +189,49 @@ describe("prazo dentro do runner", () => {
 
   it("o agente lê que o prazo estourou, não um código de saída cru", async () => {
     const pathOriginal = process.env.PATH;
-    process.env.PATH = `${bin}:${pathOriginal}`; // o executor local herda o PATH com o `docker` falso
+    process.env.PATH = `${bin}:${pathOriginal}`; // the local executor inherits the PATH with the fake `docker`
     try {
-      await expect(rodarNoRunner(scriptNoRunner("sleep 20", [], 16_000), 30_000)).rejects.toThrow("o runner não respondeu a tempo");
-      // Outra falha continua chegando com a última linha do stderr.
-      await expect(rodarNoRunner(scriptNoRunner(`echo "quebrou aqui" >&2; exit 3`, [], 30_000), 30_000)).rejects.toThrow("quebrou aqui");
+      await expect(runOnRunner(runnerScript("sleep 20", [], 16_000), 30_000)).rejects.toThrow("o runner não respondeu a tempo");
+      // Any other failure still arrives with the last line of stderr.
+      await expect(runOnRunner(runnerScript(`echo "quebrou aqui" >&2; exit 3`, [], 30_000), 30_000)).rejects.toThrow("quebrou aqui");
     } finally {
       process.env.PATH = pathOriginal;
     }
   });
 
   it("o stdin continua chegando ao comando (é por ele que vai a fonte do conversor)", () => {
-    const r = rodar(scriptNoRunner(`cat`, [], 60_000, "linha do payload\n"));
+    const r = rodar(runnerScript(`cat`, [], 60_000, "linha do payload\n"));
     expect(r).toMatchObject({ status: 0, stdout: "linha do payload\n" });
   });
 
   it("prazo curto demais para manter a margem é recusado antes de existir um comando", () => {
-    expect(() => scriptNoRunner("true", [], 15_500)).toThrow(/curto/);
+    expect(() => runnerScript("true", [], 15_500)).toThrow(/curto/);
   });
 });
 
 describe("contratos puros", () => {
   it("caminho precisa ser absoluto e de uma linha só; espaço e acento passam", () => {
-    expect(validarCaminhoNoRunner(" /work/Relatório final.xlsx ")).toBe("/work/Relatório final.xlsx");
-    expect(() => validarCaminhoNoRunner("relativo.xlsx")).toThrow("absoluto");
-    expect(() => validarCaminhoNoRunner("/work/a\nrm -rf /")).toThrow("inválidos");
+    expect(validateRunnerPath(" /work/Relatório final.xlsx ")).toBe("/work/Relatório final.xlsx");
+    expect(() => validateRunnerPath("relativo.xlsx")).toThrow("absoluto");
+    expect(() => validateRunnerPath("/work/a\nrm -rf /")).toThrow("inválidos");
   });
 
   it("extensão em minúsculas, sem confundir dotfile ou pasta com ponto", () => {
-    expect(extensaoDe("/work/a/Planilha.XLSX")).toBe("xlsx");
-    expect(extensaoDe("/work/.uploads/sem-extensao")).toBe("");
-    expect(extensaoDe("/work/.bashrc")).toBe("");
-    expect(formatoDocumentoSuportado("/work/x.docx")).toBe(true);
-    expect(formatoDocumentoSuportado("/work/x.png")).toBe(false);
+    expect(extensionOf("/work/a/Planilha.XLSX")).toBe("xlsx");
+    expect(extensionOf("/work/.uploads/sem-extensao")).toBe("");
+    expect(extensionOf("/work/.bashrc")).toBe("");
+    expect(isSupportedDocument("/work/x.docx")).toBe(true);
+    expect(isSupportedDocument("/work/x.png")).toBe(false);
   });
 
   it("instalação de pacotes só roda quando o dpkg diz que falta algo, e espera o lock", () => {
-    const linha = linhaGarantirPacotes(["ffmpeg"]);
+    const linha = ensurePackagesLine(["ffmpeg"]);
     expect(linha).toMatch(/^dpkg -s ffmpeg >\/dev\/null 2>&1 \|\| /);
     expect(linha).toContain("DPkg::Lock::Timeout");
     expect(linha).toContain("</dev/null");
   });
 
   it("JSON do conversor fora do contrato é recusado", () => {
-    expect(() => interpretarSaidaDoConversor('{"texto":"x"}')).toThrow("resposta inválida");
+    expect(() => parseConverterOutput('{"texto":"x"}')).toThrow("resposta inválida");
   });
 });

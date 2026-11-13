@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { hostExecutor, type HostExecutor } from "../../runtime/host.js";
+import { EXEC_TIMEOUT_MS, hostExecutor, type HostExecutor } from "../../runtime/host.js";
 import type { Card, Project } from "../board/registry.js";
 import {
   buildSdkDriverCommandLine,
@@ -33,7 +33,7 @@ describe("sdkDriverCommand — o driver fala NDJSON por pipes, nunca por um tty"
       pipeCommand: (line: string) => ({ file: "ssh", args: ["runner", line] }),
     } as unknown as HostExecutor);
     const project = { id: "p1", name: "scratch" } as unknown as Project;
-    const card = { id: "card-1", projectId: "p1", worktreeSlug: "card-1" } as unknown as Card;
+    const card = { id: "card-0001", projectId: "p1", worktreeSlug: "card-0001" } as unknown as Card;
     const { file, args } = await sdkDriverCommand(project, card);
     expect(file).toBe("ssh");
     expect(args).not.toContain("-tt");
@@ -114,13 +114,13 @@ describe("buildSdkDriverCommandLine", () => {
     const line = buildSdkDriverCommandLine({
       ...base,
       cdpEndpoint: "http://127.0.0.1:39222",
-      cardId: "card-1",
+      cardId: "card-0001",
       statusUrl: "https://hub.example.com/api/runner/status",
     });
     expect(line).toContain("PW_CDP_ENDPOINT=");
     expect(line).toContain("http://127.0.0.1:39222");
     expect(line).toContain("VIBEHUB_CARD_ID=");
-    expect(line).toContain("card-1");
+    expect(line).toContain("card-0001");
     expect(line).toContain("VIBEHUB_STATUS_URL=");
     expect(line).toContain("https://hub.example.com/api/runner/status");
     // Without them, nothing is exported — a driver spawned by an older path stays valid.
@@ -130,13 +130,13 @@ describe("buildSdkDriverCommandLine", () => {
   });
 
   it("exports the card's git include — the native chat's git acts as the card's author in ANY repository", () => {
-    const line = buildSdkDriverCommandLine({ ...base, cardId: "card-1" });
+    const line = buildSdkDriverCommandLine({ ...base, cardId: "card-0001" });
     // The PATH, never a token: the identity behind it is rewritten in the file on every author switch.
     expect(line).toContain("GIT_CONFIG_COUNT=");
     expect(line).toContain("GIT_CONFIG_KEY_0=");
     expect(line).toContain("include.path");
     expect(line).toContain("GIT_CONFIG_VALUE_0=");
-    expect(line).toContain("/root/.vibehub/git/card-1.gitconfig");
+    expect(line).toContain("/root/.vibehub/git/card-0001.gitconfig");
     // A token exported at spawn would be frozen there — the gh wrapper reads the card's file instead.
     expect(line).not.toContain("GH_TOKEN");
     expect(buildSdkDriverCommandLine(base)).not.toContain("GIT_CONFIG_COUNT");
@@ -178,9 +178,9 @@ describe("buildInstallDriverScript", () => {
   });
 
   it("each install writes its OWN tmp file — two installs at once never share (nor steal) one", () => {
-    // Um deploy derruba todos os drivers e as abas reconectam juntas: com um `.tmp` fixo, a
-    // segunda instalação truncava o arquivo que a primeira estava escrevendo e tomava ENOENT no
-    // chmod/mv do tmp que a primeira já tinha movido (set -e) — "could not install the driver".
+    // A deploy knocks down every driver and the tabs reconnect together: with a fixed `.tmp`, the
+    // second install truncated the file the first one was writing and hit ENOENT on the
+    // chmod/mv of the tmp the first one had already moved (set -e) — "could not install the driver".
     const script = buildInstallDriverScript("vibehub-runner", "x\n");
     expect(script).toContain(`tmp="$(mktemp '${SDK_DRIVER_PATH}.XXXXXX')"`);
     expect(script).not.toContain(`'${SDK_DRIVER_PATH}.tmp'`);
@@ -218,8 +218,17 @@ describe("installCardSdkDriver — uma instalação por vez (single-flight)", ()
     const all = Promise.all([installCardSdkDriver(), installCardSdkDriver(), installCardSdkDriver()]);
     await drain();
     await all;
-    // one plant + one ensure, not three of each
-    expect(runScript).toHaveBeenCalledTimes(2);
+    // one exec (plant + ensure), not three
+    expect(runScript).toHaveBeenCalledTimes(1);
+    const script = String(runScript.mock.calls[0]![0]);
+    expect(script.indexOf(SDK_DRIVER_PATH)).toBeLessThan(script.indexOf("npm install"));
+  });
+
+  it("o exec único leva o orçamento dos DOIS passos (antes cada um tinha o seu EXEC_TIMEOUT_MS)", async () => {
+    const run = installCardSdkDriver();
+    await drain();
+    await run;
+    expect(runScript.mock.calls[0]![1]).toEqual({ timeoutMs: 2 * EXEC_TIMEOUT_MS });
   });
 
   it("uma instalação TERMINADA não fica em cache: o próximo connect confere de novo (o marcador deixa isso barato)", async () => {
@@ -229,7 +238,7 @@ describe("installCardSdkDriver — uma instalação por vez (single-flight)", ()
     const second = installCardSdkDriver();
     await drain();
     await second;
-    expect(runScript).toHaveBeenCalledTimes(4);
+    expect(runScript).toHaveBeenCalledTimes(2);
   });
 
   it("uma instalação que FALHOU falha para todos que esperavam, e o connect seguinte tenta de novo", async () => {
@@ -242,19 +251,19 @@ describe("installCardSdkDriver — uma instalação por vez (single-flight)", ()
     const retry = installCardSdkDriver();
     await drain();
     await retry;
-    expect(runScript).toHaveBeenCalledTimes(3);
+    expect(runScript).toHaveBeenCalledTimes(2);
   });
 
   it("uma falha SÍNCRONA (antes do primeiro await) também não fica em cache", async () => {
-    // O corpo async roda síncrono até o primeiro await: se o executor (ou a leitura do fonte do
-    // driver) estoura ali, o finally roda ANTES do set no mapa — e a promessa rejeitada ficava
-    // guardada como "em voo" para sempre: todo connect seguinte recebia a mesma falha velha.
+    // The async body runs synchronously up to the first await: if the executor (or reading the
+    // driver's source) blows up there, the finally runs BEFORE the set in the map — and the rejected
+    // promise stayed stored as "in flight" forever: every later connect got the same old failure.
     vi.mocked(hostExecutor).mockImplementationOnce(() => { throw new Error("no executor"); });
     await expect(installCardSdkDriver()).rejects.toThrow("no executor");
     const retry = installCardSdkDriver();
     await drain();
     await retry;
-    expect(runScript).toHaveBeenCalledTimes(2);
+    expect(runScript).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -302,15 +311,15 @@ describe("buildEnsureSdkScript — the automatic, idempotent SDK install", () =>
 });
 
 /**
- * O DRIVER NÃO É IMPORTÁVEL (é um .mjs que roda dentro do runner, onde o SDK está instalado), então
- * o que dá para cercar aqui é o SEU TEXTO. Não é preciosismo: este trecho tem duas armadilhas que
- * não fazem barulho nenhum quando quebram.
+ * THE DRIVER IS NOT IMPORTABLE (it is an .mjs that runs inside the runner, where the SDK is installed), so
+ * what can be pinned here is ITS TEXT. It is not fussiness: this stretch has two traps that
+ * make no noise at all when they break.
  *
- * 1. `display: "summarized"` — nos modelos atuais o padrão é `omitted`, e aí os blocos de thinking
- *    chegam VAZIOS. Sem essa linha o driver segue "funcionando", emitindo nada, e a tela volta a
- *    mostrar só o spinner: um sumiço silencioso, do tipo que só aparece em produção.
- * 2. O delta carrega o texto em `delta.thinking`, NÃO em `delta.text` (ThinkingDelta da Messages
- *    API). Copiar a linha do texto e trocar o tipo devolve `undefined` a cada token.
+ * 1. `display: "summarized"` — on current models the default is `omitted`, and then the thinking blocks
+ *    arrive EMPTY. Without this line the driver keeps "working", emitting nothing, and the screen goes
+ *    back to showing only the spinner: a silent disappearance, the kind that only shows up in production.
+ * 2. The delta carries the text in `delta.thinking`, NOT in `delta.text` (the Messages API's
+ *    ThinkingDelta). Copying the text line and changing the type returns `undefined` on every token.
  */
 describe("sdk-driver.mjs — o raciocínio que a tela mostra", () => {
   const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
@@ -335,15 +344,15 @@ describe("sdk-driver.mjs — o raciocínio que a tela mostra", () => {
 });
 
 /**
- * O MENU "/" DE UM CARD NOVO (produção, 26/09/2026): abrir um card, digitar "/code-re" e não ser
- * oferecido nada. O catálogo vinha só do `init`, que só acontece quando um turno começa — então o
- * card recém-aberto, que é exatamente onde se quer escolher um comando, ficava sem menu.
+ * THE "/" MENU OF A NEW CARD (production, 26/09/2026): open a card, type "/code-re" and be
+ * offered nothing. The catalog came only from `init`, which only happens when a turn starts — so the
+ * freshly opened card, which is exactly where one wants to pick a command, was left with no menu.
  *
- * O `.mjs` não é importável, então o que se cerca é o texto — e aqui há três armadilhas mudas:
- * perguntar o catálogo sem encerrar a consulta descartável deixaria um CLI vivo por card; deixar
- * `VIBEHUB_STATUS_URL` passar faria o hook de SessionStart mandar status de um card sem turno
- * nenhum; e marcar `catalogAnnounced` aqui congelaria o catálogo provisório (sem skill/plugin) no
- * lugar do completo que o primeiro `init` traz.
+ * The `.mjs` is not importable, so what gets pinned is the text — and there are three silent traps here:
+ * asking for the catalog without closing the throwaway query would leave one live CLI per card; letting
+ * `VIBEHUB_STATUS_URL` through would make the SessionStart hook send status for a card with no turn
+ * at all; and setting `catalogAnnounced` here would freeze the provisional catalog (no skill/plugin) in
+ * place of the complete one the first `init` brings.
  */
 describe("sdk-driver.mjs — o menu \"/\" antes da primeira mensagem", () => {
   const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
@@ -379,11 +388,11 @@ describe("sdk-driver.mjs — o menu \"/\" antes da primeira mensagem", () => {
 });
 
 /**
- * A MENSAGEM QUE DESTRAVA O CARTÃO (produção, 2026-09-17): com um plano de opções na tela, escrever
- * no chat não fazia nada — o turno estava parado dentro do `canUseTool` e a mensagem ficava na fila
- * do CLI até o timeout de 30 minutos. O `.mjs` não é importável, então o que se cerca é o texto: as
- * duas armadilhas aqui são a ORDEM (liberar antes de empurrar deixa o turno seguir sem ler a
- * mensagem — o oposto do que a pessoa pediu) e a mensagem que o modelo lê no lugar da escolha.
+ * THE MESSAGE THAT UNBLOCKS THE CARD (production, 2026-09-17): with an options plan on screen, writing
+ * in the chat did nothing — the turn was stopped inside `canUseTool` and the message sat in the CLI's
+ * queue until the 30-minute timeout. The `.mjs` is not importable, so what gets pinned is the text: the
+ * two traps here are the ORDER (releasing before pushing lets the turn go on without reading the
+ * message — the opposite of what the person asked) and the message the model reads instead of the choice.
  */
 describe("sdk-driver.mjs — falar é responder (o cartão de pergunta não prende mais)", () => {
   const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
@@ -414,20 +423,20 @@ describe("sdk-driver.mjs — falar é responder (o cartão de pergunta não pren
 });
 
 /**
- * AS DUAS PALAVRAS RESERVADAS. `ultrathink` e `ultracode` não são texto: o CLI lê as duas do que
- * você escreve e age — a primeira pede raciocínio mais fundo no turno, a segunda opta o turno pela
- * orquestração multi-agente. O que o CLI NÃO faz é subir o NÍVEL de esforço, e é isso que o painel
- * promete quando pinta a palavra no compositor; o driver é quem cumpre.
+ * THE TWO RESERVED WORDS. `ultrathink` and `ultracode` are not text: the CLI reads both from what
+ * you write and acts — the first asks for deeper reasoning in the turn, the second opts the turn into
+ * multi-agent orchestration. What the CLI does NOT do is raise the effort LEVEL, and that is what the
+ * panel promises when it paints the word in the composer; the driver is the one that delivers.
  *
- * O `.mjs` não é importável, então a detecção — que precisa bater EXATAMENTE com
- * `front/src/features/board/lib/ultraWords.ts`, senão a tela pinta uma palavra que o back ignora —
- * é recortada do fonte e executada aqui. O resto são invariantes de fiação, incluindo a única que
- * pode custar caro: a mensagem tem de ser empurrada mesmo quando a escalada falha.
+ * The `.mjs` is not importable, so the detection — which must match EXACTLY
+ * `front/src/features/board/lib/ultraWords.ts`, otherwise the screen paints a word the back ignores —
+ * is cut out of the source and executed here. The rest are wiring invariants, including the only one
+ * that can be costly: the message has to be pushed even when the escalation fails.
  */
 describe("sdk-driver.mjs — ultrathink / ultracode", () => {
   const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
 
-  /** A detecção, recortada do driver e executada de verdade. */
+  /** The detection, cut out of the driver and actually executed. */
   const ultraKeywords = ((): ((text: string) => { ultrathink: boolean; ultracode: boolean; any: boolean }) => {
     const from = source.indexOf("const ULTRA_CLOSERS");
     const to = source.indexOf("let ultraRaised"); // the detection ends where the escalation state begins
@@ -458,13 +467,13 @@ describe("sdk-driver.mjs — ultrathink / ultracode", () => {
   });
 
   /**
-   * O BUG DO CÉSAR (produção, 2026-09-28): uma mensagem que abria com
-   * `/superpowers:systematic-debugging`, trazia parágrafos de contexto e terminava em `ultracode`
-   * não escalava nada — a regra descartava a mensagem INTEIRA por causa da primeira letra.
+   * CÉSAR'S BUG (production, 2026-09-28): a message that opened with
+   * `/superpowers:systematic-debugging`, carried paragraphs of context and ended in `ultracode`
+   * escalated nothing — the rule discarded the WHOLE message because of its first letter.
    *
-   * O que é comando é o PRIMEIRO TOKEN; o que vem depois são os argumentos, que o comando expande
-   * para dentro do prompt. Esta detecção é a que ESCALA de verdade (a da tela só pinta), então ela
-   * tem de concordar com `front/src/features/board/lib/ultraWords.ts` letra por letra.
+   * What is a command is the FIRST TOKEN; what comes after are the arguments, which the command expands
+   * into the prompt. This detection is the one that ACTUALLY ESCALATES (the screen's only paints), so it
+   * has to agree with `front/src/features/board/lib/ultraWords.ts` letter by letter.
    */
   it("argumento de slash command é prosa: a palavra reservada no fim ainda vale", () => {
     const real = [
@@ -484,8 +493,8 @@ describe("sdk-driver.mjs — ultrathink / ultracode", () => {
 
   it("devolve o esforço no fim do turno — a palavra valia para AQUELE turno", () => {
     expect(source).toContain("void inEffortQueue(clearUltra); // the keyword was for THIS turn");
-    // A devolução limpa SÓ o que o driver fixou: um turno com `ultrathink` não pode desligar um
-    // `ultracode` que a sessão já tinha.
+    // The give-back clears ONLY what the driver set: a turn with `ultrathink` must not switch off an
+    // `ultracode` the session already had.
     expect(source).toContain("ultraRaised = settings;");
     expect(source).toContain("const give = Object.fromEntries(Object.keys(otherKeys).map((key) => [key, null]));");
     expect(source).toContain("withDeadline(handle.applyFlagSettings(give), EFFORT_STEP_TIMEOUT_MS, EFFORT_STEP_TIMEOUT_ERROR)");
@@ -508,19 +517,19 @@ describe("sdk-driver.mjs — ultrathink / ultracode", () => {
 });
 
 /**
- * EDITAR = REBOBINAR. A edição leva a sessão de volta pra antes da mensagem corrigida
- * (`resumeSessionAt`), e aí o modelo nunca leu a versão errada. Medido contra o SDK antes de
- * escrever: rebobinar no uuid do ASSISTANT do turno mantido traz a resposta antiga de volta;
- * rebobinar no uuid do `result` é recusado com `error_during_execution`.
+ * EDIT = REWIND. The edit takes the session back to before the corrected message
+ * (`resumeSessionAt`), and then the model never read the wrong version. Measured against the SDK before
+ * writing: rewinding to the ASSISTANT uuid of the kept turn brings the old answer back;
+ * rewinding to the `result` uuid is refused with `error_during_execution`.
  *
- * O que estes testes atacam é a única forma de PERDER dado aqui: rebobinar quando não se pode.
- * Uma mensagem que entrou no meio do turno seria descartada junto, sem bolha e sem linha no log —
- * e é uma mensagem que uma PESSOA escreveu. A decisão é uma função pura, e ela é executada aqui.
+ * What these tests attack is the only way to LOSE data here: rewinding when one cannot.
+ * A message that came in mid-turn would be discarded along with it, with no bubble and no log line —
+ * and it is a message a PERSON wrote. The decision is a pure function, and it is executed here.
  */
 describe("sdk-driver.mjs — editar rebobina, mas só quando é seguro", () => {
   const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
 
-  /** A decisão, recortada do driver e executada de verdade. */
+  /** The decision, cut out of the driver and actually executed. */
   const rewindDecision = ((): ((s: unknown, f: unknown, a: unknown, last?: unknown) => { rewind: boolean; reason?: string }) => {
     const from = source.indexOf("function rewindDecision(");
     expect(from).toBeGreaterThan(0);
@@ -543,24 +552,24 @@ describe("sdk-driver.mjs — editar rebobina, mas só quando é seguro", () => {
   });
 
   it("qualquer valor vazio conta como ausente — string vazia não é um uuid", () => {
-    // O driver zera essas variáveis com null, mas uma string vazia vinda de um frame torto não
-    // pode virar um `resumeSessionAt` inválido: isso mata o turno com error_during_execution.
+    // The driver resets these variables with null, but an empty string coming from a crooked frame must
+    // not turn into an invalid `resumeSessionAt`: that kills the turn with error_during_execution.
     expect(rewindDecision("", "uuid", false).rewind).toBe(false);
     expect(rewindDecision("sess", "", false).rewind).toBe(false);
     expect(rewindDecision(undefined, undefined, undefined).rewind).toBe(false);
   });
 
   it("a recusa por absorção só vale quando HÁ como rebobinar — sem ponto de volta a razão é outra", () => {
-    // Ordem das travas importa pro que a tela mostra: "absorbed" é uma decisão, "no-fork-point" é
-    // uma impossibilidade, e trocá-las faria o painel explicar a coisa errada.
+    // The order of the guards matters for what the screen shows: "absorbed" is a decision, "no-fork-point" is
+    // an impossibility, and swapping them would make the panel explain the wrong thing.
     expect(rewindDecision(null, null, true)).toEqual({ rewind: false, reason: "no-fork-point" });
   });
 
   it("o ponto de volta é o uuid do ASSISTANT — o do result é recusado pelo CLI", () => {
-    // Só a mensagem do PRINCIPAL (`parent === null`): a de um subagente mora numa sidechain — o
-    // comportamento está coberto, com o driver rodando, em sdk-driver.test.ts ("subagentes").
+    // Only the MAIN agent's message (`parent === null`): a subagent's lives on a sidechain — the
+    // behaviour is covered, with the driver running, in sdk-driver.test.ts ("subagentes").
     expect(source).toContain("if (msg.uuid && parent === null) lastAssistantUuid = msg.uuid;");
-    // e ele é gravado no ramo do assistant, não no do result
+    // and it is recorded on the assistant's branch, not on the result's
     const assistantBranch = source.slice(source.indexOf('} else if (msg.type === "assistant")'), source.indexOf('} else if (msg.type === "result")'));
     expect(assistantBranch).toContain("lastAssistantUuid");
     const resultBranch = source.slice(source.indexOf('} else if (msg.type === "result")'));
@@ -569,7 +578,7 @@ describe("sdk-driver.mjs — editar rebobina, mas só quando é seguro", () => {
 
   it("uma mensagem absorvida ARMA a trava e não move o ponto de volta", () => {
     expect(source).toContain("if (absorbed) absorbedSinceFork = true;");
-    // e guarda DE QUEM é o ponto: a memória só rebobina essa mensagem
+    // and it keeps WHOSE point it is: the memory only rewinds that message
     expect(source).toContain("else { forkPoint = lastAssistantUuid; forkText = text; absorbedSinceFork = false; }");
   });
 
@@ -578,20 +587,20 @@ describe("sdk-driver.mjs — editar rebobina, mas só quando é seguro", () => {
     const set = run.indexOf("options.resumeSessionAt = pendingResumeAt;");
     const clear = run.indexOf("pendingResumeAt = null;");
     expect(set).toBeGreaterThan(0);
-    expect(clear).toBeGreaterThan(set); // consumido na hora em que é usado
-    // e nunca sem sessão: um resumeSessionAt sem resume não tem o que truncar
+    expect(clear).toBeGreaterThan(set); // consumed right when it is used
+    // and never without a session: a resumeSessionAt without resume has nothing to truncate
     expect(run).toContain("if (pendingResumeAt && lastSessionId) {");
   });
 
   it("a edição NUNCA some: os dois caminhos terminam mandando a mensagem", () => {
     const fn = source.slice(source.indexOf("async function rewindAndSend("), source.indexOf("/* ------------------------------------------------------------- stdin */"));
-    // recusa -> supersede; falha ao derrubar o stream -> supersede; sucesso -> texto limpo;
-    // original que nunca chegou -> texto limpo, sem rebobinar
+    // refusal -> supersede; failure to knock down the stream -> supersede; success -> clean text;
+    // original that never arrived -> clean text, without rewinding
     expect(fn.match(/sendUser\(/g) ?? []).toHaveLength(3);
-    expect(fn.match(/\bsupersede\("/g) ?? []).toHaveLength(1); // falha ao derrubar
+    expect(fn.match(/\bsupersede\("/g) ?? []).toHaveLength(1); // failure to knock down
     expect(fn).toContain("supersede(decision.reason)"); // recusa
     expect(fn).toContain("} catch {");
-    // e o plano B cai pro texto limpo se o manager não mandou fallback nenhum
+    // and plan B falls back to clean text if the manager sent no fallback at all
     expect(fn.match(/typeof fallback === "string" && fallback !== "" \? fallback : text/g) ?? []).toHaveLength(1);
   });
 
@@ -600,17 +609,17 @@ describe("sdk-driver.mjs — editar rebobina, mas só quando é seguro", () => {
     const branch = fn.slice(fn.indexOf("disk.absent"), fn.indexOf("await endStream()"));
     expect(branch).toContain('emit({ type: "rewound", ok: false, reason: "not-delivered" })');
     expect(branch).toContain("sendUser(text)");
-    // as palavras entram ANTES de soltar os cartões, como no envio normal
+    // the words go in BEFORE releasing the cards, as in the normal send
     expect(branch.indexOf("releaseQuestions()")).toBeGreaterThan(branch.indexOf("sendUser(text)"));
     expect(branch.indexOf("return;")).toBeGreaterThan(branch.indexOf("releaseQuestions()"));
   });
 
   it("a mensagem vai ANTES de liberar os cartões de pergunta (mesma ordem do envio normal)", () => {
-    // A janela é o RAMO do `edit_user`, não um número de caracteres: um comentário a mais ali
-    // dentro não é uma regressão, e foi o que esta medida de 600 chars passou a chamar de uma.
+    // The window is the `edit_user` BRANCH, not a number of characters: one more comment in
+    // there is not a regression, and that is what this 600-char measure had started calling one.
     const handler = source.slice(source.indexOf('control.type === "edit_user"'), source.indexOf('control.type === "permission_decision"'));
     expect(handler).toContain("rewindAndSend(control.text, control.fallback, control.original, supersedePendingQuestions, control.first === true)");
-    // supersede: as palavras entram ANTES de soltar; rebobinar: solta antes de derrubar o turno
+    // supersede: the words go in BEFORE releasing; rewind: releases before knocking down the turn
     const fn = source.slice(source.indexOf("async function rewindAndSend("), source.indexOf("/* ------------------------------------------------------------- stdin */"));
     const sup = fn.slice(fn.indexOf("const supersede = "), fn.indexOf("};", fn.indexOf("const supersede = ")));
     expect(sup.indexOf("releaseQuestions()")).toBeGreaterThan(sup.indexOf("sendUser("));
@@ -623,8 +632,8 @@ describe("sdk-driver.mjs — editar rebobina, mas só quando é seguro", () => {
     const memory = fn.indexOf("rewindDecision(");
     const teardown = fn.indexOf("await endStream()");
     expect(disk).toBeGreaterThan(0);
-    expect(memory).toBeGreaterThan(disk); // a memória só decide quando o disco não achou
-    expect(teardown).toBeGreaterThan(memory); // e o stream só cai quando VAI rebobinar
+    expect(memory).toBeGreaterThan(disk); // the memory only decides when the disk did not find it
+    expect(teardown).toBeGreaterThan(memory); // and the stream only drops when it IS going to rewind
     expect(fn.match(/await endStream\(\)/g) ?? []).toHaveLength(1);
   });
 
@@ -647,17 +656,17 @@ describe("sdk-driver.mjs — editar rebobina, mas só quando é seguro", () => {
     const fn = source.slice(source.indexOf("async function endStream()"), source.indexOf("async function rewindAndSend("));
     expect(fn).toContain("currentQuery === dying");
     expect(fn).toContain("ch.end()");
-    // com teto: um stream que nunca solta não pode travar a edição pra sempre
+    // with a ceiling: a stream that never lets go must not lock the edit forever
     expect(fn).toMatch(/i < \d+ && currentQuery === dying/);
   });
 });
 
 /**
- * EDITAR = VOLTAR NO TEMPO, para QUALQUER mensagem e depois de QUALQUER reinício. O bug reportado:
- * editar uma mensagem criava uma mensagem nova embaixo (supersede) em vez de apagar o que veio
- * depois — porque o ponto de volta só existia na memória do driver, só para a última mensagem, e
- * sumia quando o driver era derrubado por ociosidade ou deploy. O transcript da sessão em disco tem
- * a cadeia inteira; daqui sai o ponto de volta de qualquer mensagem.
+ * EDIT = GO BACK IN TIME, for ANY message and after ANY restart. The reported bug:
+ * editing a message created a new message below (supersede) instead of erasing what came
+ * after — because the point to go back to only existed in the driver's memory, only for the last message, and
+ * vanished when the driver was knocked down by idleness or a deploy. The session transcript on disk has
+ * the whole chain; the point to go back to for any message comes from there.
  */
 describe("sdk-driver.mjs — forkPointFromTranscript acha o ponto de volta no disco", () => {
   const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
@@ -708,7 +717,7 @@ describe("sdk-driver.mjs — forkPointFromTranscript acha o ponto de volta no di
   });
 
   it("só olha o RAMO VIVO: um rewind anterior deixa um galho morto no arquivo que não pode ser achado", () => {
-    // "velha" foi editada antes: a sessão voltou para a1 e seguiu por "nova". O arquivo guarda os dois.
+    // "velha" was edited earlier: the session went back to a1 and continued through "nova". The file keeps both.
     const jsonl = [
       user("u1", null, "oi"),
       assistant("a1", "u1"),
@@ -717,7 +726,7 @@ describe("sdk-driver.mjs — forkPointFromTranscript acha o ponto de volta no di
       user("new", "a1", "nova"),
       assistant("anew", "new"),
     ].join("\n");
-    // o modelo não tem "velha" no ramo vivo: para ele essa mensagem não existe
+    // the model does not have "velha" on the live branch: for it that message does not exist
     expect(forkPointFromTranscript(jsonl, "velha")).toEqual({ found: false, absent: true });
     expect(forkPointFromTranscript(jsonl, "nova")).toEqual({ found: true, uuid: "a1" });
   });
@@ -750,8 +759,8 @@ describe("sdk-driver.mjs — forkPointFromTranscript acha o ponto de volta no di
   });
 
   it("uma mensagem ABSORVIDA mais nova com o mesmo texto é a que foi editada — e o disco não a vê como prompt: não achou", () => {
-    // "continua" foi um turno (u2) e depois entrou de novo no meio de outro turno (queued_command).
-    // A tela edita a MAIS NOVA; casar com u2 rebobinaria turnos que a tela vai manter.
+    // "continua" was a turn (u2) and then came in again in the middle of another turn (queued_command).
+    // The screen edits the NEWEST one; matching u2 would rewind turns the screen is going to keep.
     const jsonl = [
       user("u1", null, "oi"),
       assistant("a1", "u1"),
@@ -786,11 +795,11 @@ describe("sdk-driver.mjs — forkPointFromTranscript acha o ponto de volta no di
   });
 
   /**
-   * A MENSAGEM QUE NUNCA CHEGOU (produção, 2026-10-19): o turno morreu antes de o CLI gravá-la
-   * ("No conversation found with session ID", depois de trocar a conta do card). A pessoa edita, e
-   * o modelo recebia "[correção do usuário — desconsidere a mensagem anterior: «…»]" falando de uma
-   * mensagem que ele nunca leu. Só quando o ramo vivo foi lido INTEIRO até a raiz dá pra afirmar
-   * que ela não está lá — compactação e cadeia cortada continuam "não sei" (testes acima).
+   * THE MESSAGE THAT NEVER ARRIVED (production, 2026-10-19): the turn died before the CLI wrote it
+   * ("No conversation found with session ID", after switching the card's account). The person edits, and
+   * the model received "[correção do usuário — desconsidere a mensagem anterior: «…»]" talking about a
+   * message it never read. Only when the live branch was read WHOLE up to the root can one claim
+   * that it is not there — compaction and a cut chain remain "don't know" (tests above).
    */
   it("o ramo vivo lido até a raiz sem a mensagem: ela nunca chegou ao modelo (absent)", () => {
     expect(forkPointFromTranscript(conversa, "nunca dita")).toEqual({ found: false, absent: true });
@@ -799,24 +808,24 @@ describe("sdk-driver.mjs — forkPointFromTranscript acha o ponto de volta no di
 });
 
 /**
- * A EDIÇÃO NÃO DEIXA UM ERRO VERMELHO PRA TRÁS.
+ * THE EDIT DOES NOT LEAVE A RED ERROR BEHIND.
  *
- * Editar uma mensagem no meio de um turno termina em dois balões vermelhos que não deveriam
- * existir, e os dois saem do mesmo lugar: o CLI encerra um turno INTERROMPIDO como
- * `error_during_execution` carregando só um diagnóstico interno
- * (`[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use`), e o Agent SDK,
- * quando a corrente fecha depois disso, troca o erro de saída por
- * `Error("Claude Code returned an error result: " + errors.join("; "))`. O rebobinar FECHA a
- * corrente de propósito — logo, ele mesmo provocava o banner (produção, 2026-10-01).
+ * Editing a message in the middle of a turn ends in two red balloons that should not
+ * exist, and both come from the same place: the CLI ends an INTERRUPTED turn as
+ * `error_during_execution` carrying only an internal diagnostic
+ * (`[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use`), and the Agent SDK,
+ * when the stream closes after that, replaces the exit error with
+ * `Error("Claude Code returned an error result: " + errors.join("; "))`. The rewind CLOSES the
+ * stream on purpose — so it was causing the banner itself (production, 2026-10-01).
  *
- * O próprio CLI não mostra nada disso a ninguém: ele filtra `[ede_diagnostic]` da sua saída e só
- * exibe um `error_during_execution` quando o fim NÃO foi um abort. Estes testes rodam as duas
- * funções puras que põem o driver na mesma régua.
+ * The CLI itself shows none of this to anyone: it filters `[ede_diagnostic]` out of its output and only
+ * displays an `error_during_execution` when the end was NOT an abort. These tests run the two
+ * pure functions that put the driver on the same yardstick.
  */
 describe("sdk-driver.mjs — um turno interrompido não é um turno que falhou", () => {
   const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
 
-  /** Recorta uma função pura do driver e a executa de verdade (como o `rewindDecision` acima). */
+  /** Cuts a pure function out of the driver and actually executes it (like `rewindDecision` above). */
   function cut<T>(name: string): T {
     const from = source.indexOf(`function ${name}(`);
     expect(from).toBeGreaterThan(0);
@@ -838,16 +847,16 @@ describe("sdk-driver.mjs — um turno interrompido não é um turno que falhou",
   });
 
   it("um CRASH não é engolido: jargão que a pessoa pode agir em cima vale mais que silêncio", () => {
-    // O CLI esconde `[session_crash]` da própria UI, mas ali ele tem outras formas de contar. Aqui,
-    // engolir significaria um turno que para sem resposta, sem erro e sem explicação nenhuma.
+    // The CLI hides `[session_crash]` from its own UI, but there it has other ways of telling. Here,
+    // swallowing it would mean a turn that stops with no answer, no error and no explanation at all.
     expect(humanErrorText("[session_crash] worker died")).toBe("[session_crash] worker died");
     expect(humanErrorText("Claude Code returned an error result: [session_crash] worker died"))
       .toBe("Claude Code returned an error result: [session_crash] worker died");
   });
 
   it("um diagnóstico com ponto e vírgula dentro não vaza o rabo como se fosse erro", () => {
-    // O corte é no separador do SDK ("; "), não em qualquer ";": senão a metade de um diagnóstico
-    // virava uma frase vermelha sozinha na conversa.
+    // The cut is at the SDK's separator ("; "), not at any ";": otherwise half a diagnostic
+    // would become a red sentence on its own in the conversation.
     expect(humanErrorText("Claude Code returned an error result: [ede_diagnostic] a;b stop_reason=x")).toBe("");
   });
 
@@ -889,14 +898,14 @@ describe("sdk-driver.mjs — um turno interrompido não é um turno que falhou",
   });
 
   it("uma corrente que nem CHEGOU a nascer continua virando erro — null não é 'fechada de propósito'", () => {
-    // `query()` estoura SÍNCRONO (opção inválida, binário faltando) e nessa hora `myQuery` ainda é
-    // null — o mesmo valor de `closingQuery` em repouso. Sem a trava, o erro de partida seria lido
-    // como teardown nosso: sem `error`, sem `result` (o `finally` não fecha um turno que ainda não
-    // tinha sido marcado) e a mensagem sumindo com o spinner preso.
+    // `query()` blows up SYNCHRONOUSLY (invalid option, missing binary) and at that moment `myQuery` is still
+    // null — the same value as `closingQuery` at rest. Without the guard, the startup error would be read
+    // as our own teardown: no `error`, no `result` (the `finally` does not close a turn that had not
+    // been marked yet) and the message vanishing with the spinner stuck.
     const run = source.slice(source.indexOf("async function runStream()"));
     expect(run).toContain("let myQuery = null;");
     expect(run).toContain("if (myQuery !== null && closingQuery === myQuery) trace(");
-    // e `myQuery` só existe DEPOIS de `query()` ter devolvido sem estourar
+    // and `myQuery` only exists AFTER `query()` has returned without blowing up
     const assign = run.indexOf("currentQuery = query({ prompt: myChannel, options });");
     expect(run.indexOf("myQuery = currentQuery;")).toBeGreaterThan(assign);
   });
@@ -904,24 +913,24 @@ describe("sdk-driver.mjs — um turno interrompido não é um turno que falhou",
   it("a corrente derrubada pelo rebobinar não vira erro na tela", () => {
     const teardown = source.slice(source.indexOf("async function endStream()"), source.indexOf("async function rewindAndSend("));
     expect(teardown).toContain("closingQuery = dying;");
-    // reivindicada ANTES do primeiro passo que pode matá-la
+    // claimed BEFORE the first step that can kill it
     expect(teardown.indexOf("closingQuery = dying;")).toBeLessThan(teardown.indexOf("dying.interrupt()"));
 
     const run = source.slice(source.indexOf("async function runStream()"));
     expect(run).toContain("closingQuery === myQuery) trace(");
-    // e a reivindicação não vaza para a corrente seguinte
+    // and the claim does not leak into the next stream
     expect(run).toContain("if (closingQuery === myQuery) closingQuery = null;");
   });
 
   it("só o stream VIGENTE encerra turno e larga o handle — o que sobreviveu ao teardown não manda", () => {
-    // Quando `endStream` desiste de esperar, o stream velho segue vivo ao lado do novo. Sem a
-    // guarda de identidade, o `finally` dele fechava o turno NOVO e zerava o `currentQuery` VIVO —
-    // e com ele o botão de parar, que vira um no-op sem dizer nada a ninguém.
+    // When `endStream` gives up waiting, the old stream stays alive next to the new one. Without the
+    // identity guard, its `finally` closed the NEW turn and zeroed the LIVE `currentQuery` —
+    // and with it the stop button, which becomes a no-op without telling anyone.
     const run = source.slice(source.indexOf("async function runStream()"));
     expect(run).toContain("const stillOurs = currentQuery === myQuery;");
     expect(run).toContain("if (stillOurs) closeTurnAborted();");
     expect(run).toMatch(/if \(stillOurs\) \{\s*currentQuery = null;/);
-    // e o CORPO do laço também: o que um stream deserdado diz é só drenado (ver sdk-driver.test.ts)
+    // and the loop BODY too: what a disinherited stream says is only drained (see sdk-driver.test.ts)
     expect(run).toContain("if (currentQuery !== myQuery) continue;");
   });
 
@@ -933,15 +942,15 @@ describe("sdk-driver.mjs — um turno interrompido não é um turno que falhou",
 });
 
 /**
- * A CONVERSA QUE ANDOU FORA DO CHAT (produção, 2026-10-05). O César editou uma mensagem e nada
- * rebobinou: ela tinha vindo da aba Terminal, que fala com a MESMA sessão por OUTRO processo do
- * CLI. A corrente aberta do chat carrega a conversa em memória, então a mensagem seguinte do chat
- * continuou de um ponto ANTERIOR e deixou o turno do terminal num galho morto — e galho morto não
- * tem ponto de volta (`forkPointFromTranscript` só anda no ramo vivo, de propósito), então a edição
- * caía no supersede.
+ * THE CONVERSATION THAT MOVED OUTSIDE THE CHAT (production, 2026-10-05). César edited a message and
+ * nothing rewound: it had come from the Terminal tab, which talks to the SAME session through ANOTHER
+ * CLI process. The chat's open stream holds the conversation in memory, so the chat's next message
+ * continued from an EARLIER point and left the terminal's turn on a dead branch — and a dead branch
+ * has no way back (`forkPointFromTranscript` only walks the live branch, on purpose), so the edit
+ * fell into the supersede.
  *
- * O conserto não é afrouxar o fork point: é não deixar o galho morto nascer. O back avisa
- * (`reanchor`), o driver MARCA, e o próximo envio reabre a corrente no fim real do arquivo.
+ * The fix is not to loosen the fork point: it is to keep the dead branch from being born. The back
+ * warns (`reanchor`), the driver MARKS it, and the next send reopens the stream at the real end of the file.
  */
 describe("sdk-driver.mjs — religar no fim real quando a conversa anda fora do chat", () => {
   const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
@@ -983,7 +992,7 @@ describe("sdk-driver.mjs — religar no fim real quando a conversa anda fora do 
     const fn = source.slice(source.indexOf("async function reanchorIfStale()"), source.indexOf("async function rewindAndSend("));
     const catchAt = fn.indexOf("} catch {");
     expect(catchAt).toBeGreaterThan(0);
-    // o `return` do catch vem ANTES de a marca ser baixada
+    // the catch's `return` comes BEFORE the mark is lowered
     expect(fn.indexOf("return;", catchAt)).toBeLessThan(fn.indexOf("staleView = false;", catchAt));
   });
 
@@ -1001,11 +1010,12 @@ describe("sdk-driver.mjs — religar no fim real quando a conversa anda fora do 
 });
 
 /**
- * O PROMPT DO OPUS NÃO FALA DO RACIOCÍNIO. A instrução "escreva seu raciocínio em português"
- * (7bf6ace, suavizada em 4403c05) era o gatilho conhecido do bloqueio `[reasoning_extraction]` do
- * Opus — e nem funcionava direito: com `display: "summarized"` o texto que chega é um RESUMO, que
- * ora seguia a instrução, ora voltava em inglês. A tradução agora acontece no NAVEGADOR, só na
- * exibição (front/src/features/board/lib/reasoningTranslation.ts); o modelo não fica sabendo.
+ * THE OPUS PROMPT DOES NOT TALK ABOUT THE REASONING. The instruction "escreva seu raciocínio em português"
+ * (7bf6ace, softened in 4403c05) was the known trigger of Opus's `[reasoning_extraction]` block —
+ * and it did not even work properly: with `display: "summarized"` the text that arrives is a SUMMARY,
+ * which sometimes followed the instruction and sometimes came back in English. The translation now
+ * happens in the BROWSER, only on display (front/src/features/board/lib/reasoningTranslation.ts); the
+ * model never knows.
  */
 describe("sdk-driver.mjs — o prompt não mexe no raciocínio", () => {
   const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
@@ -1028,19 +1038,19 @@ describe("sdk-driver.mjs — o prompt não mexe no raciocínio", () => {
 });
 
 /**
- * O OPUS BLOQUEAVA TODA MENSAGEM DO CHAT (card #3684, 2026-10-06). O erro cru da Anthropic —
- * `safeguards flagged this message ... [reasoning_extraction]` — é um falso positivo DOCUMENTADO do
- * classificador de segurança do Opus (claude-code#93584, #89503, #95275, entre outras dezenas de
- * issues públicas): o SERVIDOR marca uma conversa benigna, não o conteúdo dela. Não há como o
- * driver evitar o bloqueio em si (ele nasce do lado da Anthropic, antes da resposta chegar), mas
- * duas coisas estavam no alcance do código:
+ * OPUS BLOCKED EVERY CHAT MESSAGE (card #3684, 2026-10-06). Anthropic's raw error —
+ * `safeguards flagged this message ... [reasoning_extraction]` — is a DOCUMENTED false positive of
+ * Opus's safety classifier (claude-code#93584, #89503, #95275, among dozens of other public
+ * issues): the SERVER flags a benign conversation, not its content. There is no way for the
+ * driver to avoid the block itself (it is born on Anthropic's side, before the response arrives), but
+ * two things were within the code's reach:
  *
- *   1. a instrução de idioma do raciocínio citava "os blocos de thinking" — vocabulário técnico
- *      que o próprio #93584 mostra como gatilho conhecido. Suavizada aqui e, depois, REMOVIDA de vez
- *      (o raciocínio passou a ser traduzido no navegador — ver o describe "o prompt não mexe no
- *      raciocínio", acima).
- *   2. a mensagem que chega ao humano trazia só o texto cru em inglês, sem explicar que é um bug
- *      conhecido do classificador e não algo sobre a pergunta feita.
+ *   1. the reasoning-language instruction mentioned "os blocos de thinking" — technical vocabulary
+ *      that #93584 itself shows as a known trigger. Softened here and, later, REMOVED for good
+ *      (the reasoning started being translated in the browser — see the describe "o prompt não mexe
+ *      no raciocínio", above).
+ *   2. the message that reached the human carried only the raw English text, without explaining that
+ *      it is a known classifier bug and not something about the question asked.
  */
 describe("sdk-driver.mjs — o Opus bloqueava toda mensagem (card #3684)", () => {
   const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
@@ -1089,12 +1099,12 @@ describe("sdk-driver.mjs — o Opus bloqueava toda mensagem (card #3684)", () =>
 });
 
 /**
- * A IA "ENGASGADA" NO WRITE GRANDE. Enquanto o modelo gerava o input de um Write/Edit (dezenas de
- * segundos num arquivo de 400 linhas), o driver descartava o `content_block_start` do tool_use e
- * todos os `input_json_delta`: a tela ficava só em "Trabalhando…" até o input inteiro chegar. O
- * rastreador transforma esse stream em dois sinais efêmeros — a ferramenta COMEÇOU, e quanto do
- * input já saiu (com o arquivo, assim que ele aparece no JSON parcial) — com o relógio injetado,
- * para o throttle ser provado sem depender do tempo da máquina.
+ * THE AI "CHOKING" ON THE LARGE WRITE. While the model generated the input of a Write/Edit (tens of
+ * seconds for a 400-line file), the driver discarded the tool_use's `content_block_start` and
+ * all the `input_json_delta`s: the screen sat on "Trabalhando…" until the whole input arrived. The
+ * tracker turns that stream into two ephemeral signals — the tool STARTED, and how much of the
+ * input is already out (with the file, as soon as it shows up in the partial JSON) — with the clock injected,
+ * so the throttle is proven without depending on the machine's time.
  */
 describe("sdk-driver.mjs — o input de uma ferramenta sendo gerado", () => {
   const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
@@ -1124,8 +1134,8 @@ describe("sdk-driver.mjs — o input de uma ferramenta sendo gerado", () => {
     const tracker = createToolInputTracker(500);
     tracker.see(start(1, "toolu_1", "Write"), 0);
     expect(tracker.see(delta(1, '{"file_'), 0)).toEqual([{ type: "tool_input_progress", id: "toolu_1", bytes: 7 }]);
-    // O caminho fecha neste pedaço: sai na hora, mesmo dentro da janela do throttle — é ele que
-    // vira "Escrevendo sdkChat.ts…". O "é" do fim conta 2 bytes: é tamanho em UTF-8, não em caracteres.
+    // The path closes in this chunk: it goes out right away, even inside the throttle window — it is what
+    // becomes "Escrevendo sdkChat.ts…". The "é" at the end counts 2 bytes: it is size in UTF-8, not in characters.
     expect(tracker.see(delta(1, 'path": "/w/src/sdkChat.ts", "content": "é'), 10)).toEqual([
       { type: "tool_input_progress", id: "toolu_1", bytes: 7 + 42, filePath: "/w/src/sdkChat.ts" },
     ]);
@@ -1136,7 +1146,7 @@ describe("sdk-driver.mjs — o input de uma ferramenta sendo gerado", () => {
     tracker.see(start(0, "toolu_1", "Write"), 0);
     const out: TrackerEvent[] = [];
     for (let now = 0; now < 1200; now += 50) out.push(...tracker.see(delta(0, "xx"), now));
-    // 0, 500 e 1000: três janelas, três progressos — os outros 21 deltas só contam bytes.
+    // 0, 500 and 1000: three windows, three progress events — the other 21 deltas only count bytes.
     expect(out.map((e) => e.bytes)).toEqual([2, 22, 42]);
   });
 
@@ -1176,11 +1186,11 @@ describe("sdk-driver.mjs — o input de uma ferramenta sendo gerado", () => {
 });
 
 /**
- * RETOMAR UMA SESSÃO QUE NÃO EXISTE MAIS. O Claude Code apaga sozinho os transcripts parados há
- * semanas (`cleanupPeriodDays`); o card guarda o `resumeSessionId` para sempre. O `--resume` de um
- * id sem arquivo morria com "No conversation found with session ID" em TODO turno — o card ficava
- * inutilizável (produção, 2026-11-10: card parado desde 19/10, sessão 56c2c01d). O driver confere o
- * arquivo antes de retomar; só um "não está" COMPROVADO derruba o resume.
+ * RESUMING A SESSION THAT NO LONGER EXISTS. Claude Code deletes on its own the transcripts idle for
+ * weeks (`cleanupPeriodDays`); the card keeps the `resumeSessionId` forever. The `--resume` of an
+ * id with no file died with "No conversation found with session ID" on EVERY turn — the card became
+ * unusable (production, 2026-11-10: card idle since 19/10, session 56c2c01d). The driver checks the
+ * file before resuming; only a PROVEN "it is not there" drops the resume.
  */
 describe("sdk-driver.mjs — sessão cujo transcript sumiu", () => {
   const source = readFileSync(new URL("./sdk-driver.mjs", import.meta.url), "utf8");
