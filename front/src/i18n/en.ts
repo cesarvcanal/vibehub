@@ -1618,6 +1618,15 @@ export const en: Record<string, string> = {
   "review.sidebar.hint": "Open the review of PR #{num}",
 
   /* ------------------------------------------------------- voice lab */
+  "voiceLab.stage.accel": "Initial push",
+  "voiceLab.stage.align": "Opening and alignment",
+  "voiceLab.stage.draw": "Drawing the three lines",
+  "voiceLab.stage.finish": "Finish the silhouette",
+  "voiceLab.stage.hold": "Sustain fast flow",
+  "voiceLab.stage.slow": "Deceleration",
+  "voiceLab.stage.release": "Release the ribbons",
+  "voiceLab.stage.reform": "Rebuild the sphere",
+  "voiceLab.stage.settle": "Settle the sphere",
   "voiceLab.scalar.thickness": "Thickness",
   "voiceLab.scalar.flowSpeed": "Normal flow",
   "voiceLab.scalar.accelSpeed": "Top speed",

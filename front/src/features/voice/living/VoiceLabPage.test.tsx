@@ -35,6 +35,14 @@ describe("VoiceLabPage", () => {
     expect((screen.getByRole("textbox", { name: "Parameters" }) as HTMLTextAreaElement).value).toContain("listenSpin: 13");
   });
 
+  it("names the calibration stages in the interface language", async () => {
+    const user = userEvent.setup();
+    renderApp(<VoiceLabPage />, { route: "/voice/lab" });
+    await user.click(screen.getByRole("button", { name: "Show parameters" }));
+    expect(screen.getByText("Initial push")).toBeInTheDocument();
+    expect(screen.queryByText("Impulso inicial")).not.toBeInTheDocument();
+  });
+
   it("asks for the microphone once, and releases it when switched off and on leaving", async () => {
     const user = userEvent.setup();
     const { unmount } = renderApp(<VoiceLabPage />, { route: "/voice/lab" });

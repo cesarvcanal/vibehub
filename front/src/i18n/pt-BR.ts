@@ -1630,6 +1630,15 @@ export const ptBR: Record<string, string> = {
   "review.sidebar.hint": "Abrir a revisão do PR #{num}",
 
   /* ---------------------------------------------------------------- voice lab */
+  "voiceLab.stage.accel": "Impulso inicial",
+  "voiceLab.stage.align": "Abertura e alinhamento",
+  "voiceLab.stage.draw": "Desenho das três linhas",
+  "voiceLab.stage.finish": "Finalizar silhueta",
+  "voiceLab.stage.hold": "Sustentar fluxo rápido",
+  "voiceLab.stage.slow": "Desaceleração",
+  "voiceLab.stage.release": "Liberar as fitas",
+  "voiceLab.stage.reform": "Reconstruir a esfera",
+  "voiceLab.stage.settle": "Estabilizar a esfera",
   "voiceLab.scalar.thickness": "Grossura",
   "voiceLab.scalar.flowSpeed": "Fluxo normal",
   "voiceLab.scalar.accelSpeed": "Velocidade máxima",

@@ -289,7 +289,7 @@ export function VoiceLabPage() {
                   return (
                     <div key={d.id} className={cn("mb-2 rounded-xl border border-[#28536e] bg-[rgba(4,16,29,.58)] p-2.5", !st.on && "opacity-55")}>
                       <div className="flex items-center justify-between text-xs font-bold text-[#d5f1ff]">
-                        {d.name}
+                        {t(`voiceLab.stage.${d.id}`)}
                         <label className="flex items-center gap-1 text-[11px] font-normal text-[#9cc2d6]">
                           <input
                             type="checkbox"
