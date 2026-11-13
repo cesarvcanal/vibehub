@@ -404,7 +404,10 @@ export class LiveVoiceSession {
       case "session.delegation.created": {
         const id = event.delegation?.id;
         if (typeof id !== "string" || !id) break;
-        if (this.delegationListeners.size === 0) this.answerDelegation(id, NO_DELEGATE, "result");
+        if (this.delegationListeners.size === 0) {
+          this.answerDelegation(id, NO_DELEGATE, "result");
+          break;
+        }
         const turns = this.segmenter?.turns.slice() ?? [];
         for (const listener of this.delegationListeners) listener(id, turns);
         break;
