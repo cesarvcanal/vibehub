@@ -261,6 +261,36 @@ describe("LiveVoiceSession — while live", () => {
     expect(session.appendContext("depois")).toBe(false);
   });
 
+  it("a delegation goes to whoever took it, and its updates carry its id: progress silent, the result spoken", async () => {
+    const { session, rig } = await liveSession();
+    const ch = rig.peer().channel!;
+    const taken: string[] = [];
+    session.onDelegation((id) => taken.push(id));
+    ch.emit({ type: "session.delegation.created", offset_ms: 900, delegation: { id: "item_1", type: "delegation", target: "client" } });
+    expect(taken).toEqual(["item_1"]);
+
+    expect(session.answerDelegation("item_1", "Pedido   passado ao agente.", "progress")).toBe(true);
+    expect(ch.sent).toContainEqual({ type: "session.thinking.append", delegation_id: "item_1", content: "Pedido passado ao agente." });
+    expect(session.answerDelegation("item_1", "y".repeat(5_000), "result")).toBe(true);
+    const result = ch.sent[ch.sent.length - 1] as { type: string; delegation_id: string; content: string };
+    expect(result).toMatchObject({ type: "session.commentary.append", delegation_id: "item_1" });
+    expect(result.content.length).toBe(CONTEXT_MAX_CHARS);
+    ch.emit({ type: "session.commentary.appended", client_event_id: "e2" });
+    expect(session.snapshot().diag).toMatchObject({ contextSent: 2, contextAcked: 1 });
+    session.dispose();
+    expect(session.answerDelegation("item_1", "tarde demais", "result")).toBe(false);
+  });
+
+  it("a delegation nobody can take is answered at once — GPT-Live would otherwise wait for it forever", async () => {
+    const { session, rig } = await liveSession();
+    const ch = rig.peer().channel!;
+    ch.emit({ type: "session.delegation.created", delegation: { id: "item_2", type: "delegation", target: "client" } });
+    expect(ch.sent).toContainEqual(expect.objectContaining({ type: "session.commentary.append", delegation_id: "item_2" }));
+    // A malformed one (no id) has nothing to answer to: ignored, not thrown.
+    ch.emit({ type: "session.delegation.created", delegation: {} });
+    expect(session.snapshot().state).toBe("live");
+  });
+
   it("each spoken fragment pulses the fallback envelope (the orb's last resort)", async () => {
     const { session, rig } = await liveSession();
     expect(session.speech.read(0)).toBe(0);

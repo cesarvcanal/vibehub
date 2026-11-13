@@ -16,6 +16,12 @@ import { TurnSegmenter, newCallId, type VoiceTurn } from "./voiceTurns";
  * The transcript is settled into TURNS here (./voiceTurns.ts): the snapshot carries them as they
  * grow, and every turn that closes is handed to {@link LiveVoiceSession.onFinalTurn} listeners —
  * the chat saves those. The call ending, by any path, closes the open ones first.
+ *
+ * DELEGATION is this app's (the session is created with `delegation: client`): when the model wants
+ * work done it emits `session.delegation.created` and WAITS for updates carrying that id. Every
+ * delegation is answered — by the {@link LiveVoiceSession.onDelegation} listener (the card's chat,
+ * ./useVoiceDelegation.ts) or, with none, at once with {@link NO_DELEGATE}: an unanswered one left
+ * the voice promising "deixa eu recapitular" and silent for good (production, 2026-11-13).
  */
 
 export type LiveVoiceState = "idle" | "connecting" | "live" | "closing" | "error";
@@ -61,7 +67,7 @@ export interface LiveVoiceDiag {
   lastOutputAt: number | null;
   /** The last `error` event's code or type (not its message). */
   lastErrorCode: string | null;
-  /** Quiet context appended to the model (`session.thinking.append`): sent / acknowledged. */
+  /** Context appended to the model (`session.thinking.append` / `session.commentary.append`): sent / acknowledged. */
   contextSent: number;
   contextAcked: number;
 }
@@ -73,6 +79,12 @@ export interface LiveVoiceDiag {
 export const STATS_INTERVAL_MS = 250;
 /** `session.thinking.append` takes up to 500 tokens; this many characters stays well inside. */
 export const CONTEXT_MAX_CHARS = 1_200;
+
+/** How an update about a delegation reaches the model: kept for later (`progress`) or said now (`result`). */
+export type DelegationUpdate = "progress" | "result";
+
+/** The answer to a delegation when nobody in this page can do the work (the calibration lab). */
+const NO_DELEGATE = "Não há quem faça isso nesta conversa: diga à pessoa, em poucas palavras, que você não consegue fazer isso aqui.";
 
 const EMPTY_DIAG: LiveVoiceDiag = {
   peer: null, ice: null, channel: null, micTrack: null, remoteAudio: false, playback: "none",
@@ -117,6 +129,7 @@ export class LiveVoiceSession {
   private attempt = 0;
   private segmenter: TurnSegmenter | null = null;
   private readonly finalListeners = new Set<(turn: VoiceTurn) => void>();
+  private readonly delegationListeners = new Set<(id: string) => void>();
   /** The assistant "speaking" by its transcript — the orb's last resort when no audio is measurable. */
   readonly speech = new EventEnvelope();
 
@@ -145,17 +158,35 @@ export class LiveVoiceSession {
     return () => this.finalListeners.delete(listener);
   }
 
+  /** Called with the id of every delegation the model hands to this app (see the module comment). */
+  onDelegation(listener: (id: string) => void): () => void {
+    this.delegationListeners.add(listener);
+    return () => this.delegationListeners.delete(listener);
+  }
+
   /**
    * Quiet context for the model — what was typed or answered in the chat during the call. GPT-Live
    * has no text input: `session.thinking.append` is the documented way to tell it something without
    * making it speak. Clipped to {@link CONTEXT_MAX_CHARS}. False when the call is not up.
    */
   appendContext(text: string): boolean {
+    return this.append("session.thinking.append", null, text);
+  }
+
+  /**
+   * An update about the delegation `id`: `progress` is kept for later replies (thinking), the
+   * `result` is said aloud, paraphrased (commentary). Same clipping and liveness as {@link appendContext}.
+   */
+  answerDelegation(id: string, text: string, update: DelegationUpdate): boolean {
+    return this.append(update === "result" ? "session.commentary.append" : "session.thinking.append", id, text);
+  }
+
+  private append(type: "session.thinking.append" | "session.commentary.append", delegationId: string | null, text: string): boolean {
     if (this.snap.state !== "live") return false;
     const flat = text.replace(/\s+/g, " ").trim();
     if (!flat) return false;
     const content = flat.length > CONTEXT_MAX_CHARS ? `${flat.slice(0, CONTEXT_MAX_CHARS - 1)}…` : flat;
-    const ok = this.send({ type: "session.thinking.append", delegation_id: null, content });
+    const ok = this.send({ type, delegation_id: delegationId, content });
     if (ok) this.setDiag({ contextSent: this.snap.diag.contextSent + 1 });
     return ok;
   }
@@ -309,6 +340,7 @@ export class LiveVoiceSession {
     this.teardown();
     this.listeners.clear();
     this.finalListeners.clear();
+    this.delegationListeners.clear();
   }
 
   private send(event: Record<string, unknown>): boolean {
@@ -330,6 +362,7 @@ export class LiveVoiceSession {
       end_ms?: unknown;
       error?: { message?: unknown; code?: unknown; type?: unknown };
       reason?: unknown;
+      delegation?: { id?: unknown };
     };
     try {
       event = JSON.parse(String(raw));
@@ -359,8 +392,16 @@ export class LiveVoiceSession {
         this.appendTranscript("assistant", event);
         break;
       case "session.thinking.appended":
+      case "session.commentary.appended":
         this.setDiag({ contextAcked: this.snap.diag.contextAcked + 1 });
         break;
+      case "session.delegation.created": {
+        const id = event.delegation?.id;
+        if (typeof id !== "string" || !id) break;
+        if (this.delegationListeners.size === 0) this.answerDelegation(id, NO_DELEGATE, "result");
+        for (const listener of this.delegationListeners) listener(id);
+        break;
+      }
       case "session.input_audio.muted":
         this.set({ muted: true });
         break;
