@@ -861,9 +861,26 @@ function entryTime(obj: object): number {
 }
 
 /**
+ * A user entry the PERSON sent (a prompt), as opposed to what the CLI feeds back mid-turn: a tool
+ * result, or a META text entry (the body of a skill the turn loaded). PURE.
+ */
+function isPrompt(obj: object): boolean {
+  if ((obj as { isMeta?: unknown }).isMeta === true) return false;
+  const content = (obj as { message?: { content?: unknown } }).message?.content;
+  if (typeof content === "string") return true;
+  return Array.isArray(content) && !content.some((b) => (b as { type?: unknown })?.type === "tool_result");
+}
+
+/**
  * The last assistant turn's model and WHEN it happened (epoch ms, 0 when unknown) — and when it was
  * ASKED FOR: `requestedAt` is the user entry (a message or a tool result) right before it, the one
- * whose arrival made the CLI call the model; 0 when the tail does not reach back to it. PURE.
+ * whose arrival made the CLI call the model; 0 when the tail does not reach back to it.
+ *
+ * `effort` is null for a turn `ultrathink` bumped: Claude Code logs an `ultrathink_effort` attachment
+ * after that prompt and stamps every reply of the turn (tool loop included) with the bumped level,
+ * which the next prompt drops. Read as the session's level, the pill said "Máximo" on a "Médio"
+ * session until the next prompt (production, 13/11/2026). A bumped turn whose prompt fell out of the
+ * tail is still read as stamped. PURE.
  */
 export function parseLastTurn(jsonl: string): { model: string | null; at: number; effort: string | null; requestedAt: number } {
   let model: string | null = null;
@@ -871,9 +888,15 @@ export function parseLastTurn(jsonl: string): { model: string | null; at: number
   let effort: string | null = null;
   let requestedAt = 0;
   let lastUserAt = 0;
+  let bumped = false;
   for (const obj of transcriptObjects(jsonl)) {
     if (obj.type === "user") {
       lastUserAt = entryTime(obj);
+      if (isPrompt(obj)) bumped = false;
+      continue;
+    }
+    if (obj.type === "attachment") {
+      if ((obj as { attachment?: { type?: unknown } }).attachment?.type === "ultrathink_effort") bumped = true;
       continue;
     }
     if (obj.type !== "assistant") continue;
@@ -887,7 +910,7 @@ export function parseLastTurn(jsonl: string): { model: string | null; at: number
       // Claude Code stamps every assistant turn with the session's reasoning level (`effort`) — the
       // only place that says what an UNPINNED card is really running on.
       const e = (obj as { effort?: unknown }).effort;
-      effort = isValidEffort(typeof e === "string" ? e : null) ? (e as string) : null;
+      effort = !bumped && isValidEffort(typeof e === "string" ? e : null) ? (e as string) : null;
     }
   }
   return { model, at, effort, requestedAt };

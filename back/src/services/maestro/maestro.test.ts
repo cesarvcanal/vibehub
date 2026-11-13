@@ -974,6 +974,67 @@ describe("model signals", () => {
     expect(maestro.parseLastTurn(line({ type: "assistant", effort: "turbo", message: { model: "claude-opus-5" } })).effort).toBeNull();
   });
 
+  it("a turn that `ultrathink` bumped does not speak for the session's level (production, 13/11/2026)", async () => {
+    // Shapes copied from the transcript of card bug-voice-chat: the prompt carried the word, Claude Code
+    // logged an `ultrathink_effort` attachment and stamped that turn's replies (and their tool loop) "max";
+    // the next prompt ran on the session's "medium" again. The pill read "Opus 5.5 · Máximo" meanwhile.
+    const { maestro } = await load();
+    const line = (obj: unknown) => JSON.stringify(obj);
+    const prompt = (text: string, ts: string) => line({ type: "user", timestamp: ts, message: { role: "user", content: text } });
+    const reply = (effort: string, ts: string) =>
+      line({ type: "assistant", timestamp: ts, effort, perTurnEffort: effort, message: { model: "claude-opus-5-5", content: [] } });
+    const toolResult = (ts: string) =>
+      line({ type: "user", timestamp: ts, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] } });
+    const bump = line({ type: "attachment", timestamp: "2026-11-13T21:16:07Z", attachment: { type: "ultrathink_effort" } });
+
+    const bumpedTurn = [
+      reply("medium", "2026-11-13T21:10:00Z"),
+      prompt("tem um bug no voice chat ultrathink", "2026-11-13T21:16:07Z"),
+      bump,
+      reply("max", "2026-11-13T21:16:12Z"),
+      // A skill the turn loaded lands as a META user text entry — part of the same turn, not a prompt.
+      line({ type: "user", isMeta: true, timestamp: "2026-11-13T21:16:12Z", message: { role: "user", content: [{ type: "text", text: "Base directory for this skill: …" }] } }),
+      reply("max", "2026-11-13T21:16:13Z"),
+      toolResult("2026-11-13T21:16:15Z"),
+      reply("max", "2026-11-13T21:16:20Z"),
+    ];
+    const read = maestro.parseLastTurn(bumpedTurn.join("\n"));
+    expect(read.effort).toBeNull();
+    // The rest of the reading is still the last reply's: the model, and when it was asked for.
+    expect(read.model).toBe("claude-opus-5-5");
+    expect(read.requestedAt).toBe(Date.parse("2026-11-13T21:16:15Z"));
+
+    // The next prompt without the word is a reading again.
+    const after = [...bumpedTurn, prompt("e agora?", "2026-11-13T21:18:10Z"), reply("medium", "2026-11-13T21:18:18Z")];
+    expect(maestro.parseLastTurn(after.join("\n")).effort).toBe("medium");
+  });
+
+  it("sessionInfo keeps the session's level through an `ultrathink` turn — unpinned and pinned", async () => {
+    const { maestro, registry, agentState } = await load();
+    const line = (obj: unknown) => JSON.stringify(obj);
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "voz" }, { model: "opus" });
+    const off = agentState.onCardDefaultEffortProbe((cardId) => (cardId === c.id ? "medium" : null));
+    // Dated after any pin set below, so the pin does not win the contest just by being newer.
+    const later = (s: number) => new Date(Date.now() + s * 1000).toISOString();
+    const transcript = [
+      line({ type: "user", timestamp: later(60), message: { role: "user", content: "ultrathink nisso" } }),
+      line({ type: "attachment", timestamp: later(60), attachment: { type: "ultrathink_effort" } }),
+      line({ type: "assistant", timestamp: later(65), effort: "max", perTurnEffort: "max", message: { model: "claude-opus-5-5", content: [] } }),
+    ].join("\n");
+    try {
+      // Unpinned: the account's level the driver announced, not the turn's bump.
+      runScript.mockResolvedValueOnce({ stdout: transcript, stderr: "" });
+      expect((await maestro.sessionInfo(c.id)).effort).toBe("medium");
+      // Pinned before that turn: the pin, which the bump did not change.
+      await registry.updateCard(c.id, { effort: "high" });
+      runScript.mockResolvedValueOnce({ stdout: transcript, stderr: "" });
+      expect((await maestro.sessionInfo(c.id)).effort).toBe("high");
+    } finally {
+      off();
+    }
+  });
+
   it("picks the effort in use: a newer pin change, else the last reply, else the pin, else settings", async () => {
     const { maestro } = await load();
     const turn = { effort: "medium", at: 1000 };
