@@ -903,7 +903,7 @@ export function parseLastTurn(jsonl: string): { model: string | null; at: number
  * "Newer than the last reply" is counted from the REQUEST, not from the reply landing: an answer
  * already on its way when the level changed was asked for in the old one, and arrives stamped with
  * it. Dated by its arrival it beat the switch and the pill fell back to the old level with the
- * session already on the new one (produção, 2026-10-27 — Médio → Alto mid-turn, back to Médio).
+ * session already on the new one (production, 2026-10-27 — Médio → Alto mid-turn, back to Médio).
  */
 export function pickEffort(
   lastTurn: { effort: string | null; at: number; requestedAt?: number },
@@ -1029,7 +1029,7 @@ export async function sessionInfo(cardId: string): Promise<SessionInfo> {
   // or "no session" when the runner lost the session entirely. Only "waiting" is refined, so working/
   // paused/done never pay for the probe.
   //
-  // WHO the probe may speak for, though, is the native chat's undoing (produção, 2026-10-02): the
+  // WHO the probe may speak for, though, is the native chat's undoing (production, 2026-10-02): the
   // conversation's claude is a child of the BACK, not of the tmux pane — the pane under it is a bare
   // `bash`, which the probe reads as "Claude exited". The chat then hung a "Claude parou —
   // Reiniciar" banner over a session that was answering normally. So the DRIVER is asked first (free,
