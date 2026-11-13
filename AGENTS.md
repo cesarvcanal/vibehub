@@ -123,7 +123,7 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 - Não reler ou regravar o estado inteiro por item quando uma operação em lote resolve.
 - Websocket e polling: emitir só o que mudou e só para quem pode ver. Não criar polling para mascarar evento faltando.
 - No front, evitar fetch redundante, renders desnecessários e processamento caro em renderização. Paginar ou virtualizar só quando a escala justificar.
-- Código que roda a cada atualização trabalha só sobre o que mudou, não refaz o todo.
+- Código que roda a cada atualização e percorre uma coleção que cresce trabalha só sobre o que mudou, não refaz o todo.
 - Cache, deduplicação e batch só por benefício concreto, com invalidação e ciclo de vida definidos.
 
 ## 9. Validação, erros e fallback
