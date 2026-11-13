@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /**
- * `readFile` passa pelo disco de verdade, mas pode SEGURAR a próxima leitura depois de ler — é assim
- * que se reproduz um leitor lento que leu o cofre velho e só devolve depois que uma escrita gravou.
- * `failOpen` faz o próximo `open` (o tmp da escrita atômica) falhar como um disco cheio.
+ * `readFile` goes through the real disk, but can HOLD the next read after reading — that is how a slow
+ * reader is reproduced, one that read the old vault and only returns after a write has saved.
+ * `failOpen` makes the next `open` (the atomic write's tmp) fail like a full disk.
  */
 const fsHooks = vi.hoisted(() => ({ hold: null as Promise<void> | null, failOpen: false }));
 vi.mock("node:fs/promises", async (importOriginal) => {

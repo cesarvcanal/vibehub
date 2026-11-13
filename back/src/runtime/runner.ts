@@ -52,7 +52,7 @@ let lastReach: boolean | null = null;
 
 /**
  * Checks that the runner reaches the status URL every card's hooks POST to, and SAYS SO when it does
- * not. Produção, 21/10/2026: the public URL pointed at a blue/green port the app no longer listened
+ * not. Production, 21/10/2026: the public URL pointed at a blue/green port the app no longer listened
  * on; every hook failed in silence (`curl … || true`), the board never saw a TUI card working, and
  * the idle sweep hibernated cards mid-task. Logs an error on the first failure (and each failure
  * after a recovery), an info on recovery. A probe that never reached curl decides nothing. Never throws.
@@ -241,7 +241,7 @@ export function buildSetupScript(opts: {
     // process reaper depend on (present in the full node image, but stated so a slimmer image
     // cannot silently lose it). apt is idempotent, so re-runs are cheap.
     "apt-get install -y -qq tmux git ripgrep curl procps xvfb x11vnc novnc websockify socat >/dev/null",
-    // Leitura de anexos (Excel, Word, PDF) e conversão de áudio para transcrição — ver services/attachments.
+    // Reading attachments (Excel, Word, PDF) and converting audio for transcription — see services/attachments.
     `apt-get install -y -qq ${ATTACHMENT_PACKAGES.join(" ")} >/dev/null`,
     // gh CLI from the official repo — the agent opens PRs and checks CI. Auth is the user's own.
     'if ! command -v gh >/dev/null; then mkdir -p /etc/apt/keyrings && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list && apt-get update -qq && apt-get install -y -qq gh >/dev/null; fi',

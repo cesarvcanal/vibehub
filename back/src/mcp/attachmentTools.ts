@@ -4,11 +4,11 @@ import { DOCUMENT_FORMATS, MAX_TEXT_LIMIT, DEFAULT_TEXT_LIMIT, readDocument } fr
 import { transcribeRunnerAudio } from "../services/attachments/audio.js";
 
 /**
- * ANEXOS — o que o agente faz com um arquivo que a pessoa anexou (ou que ele mesmo baixou no runner).
+ * ATTACHMENTS — what the agent does with a file the person attached (or that it downloaded itself on the runner).
  *
- * O Read do Claude Code abre imagem e PDF, mas não planilha, Word nem áudio. Estas duas ferramentas
- * fecham o buraco: a conversão roda dentro do runner (o arquivo já está lá) e o agente recebe texto.
- * Resposta em texto puro, não JSON: uma tabela markdown escapada dentro de JSON é ilegível.
+ * Claude Code's Read opens images and PDFs, but not spreadsheets, Word or audio. These two tools close the
+ * gap: the conversion runs inside the runner (the file is already there) and the agent gets text.
+ * The answer is plain text, not JSON: a markdown table escaped inside JSON is unreadable.
  */
 const textResult = (content: string) => ({ content: [{ type: "text" as const, text: content }] });
 const errorResult = (e: unknown) => ({ ...textResult(`erro: ${(e as Error).message}`), isError: true });

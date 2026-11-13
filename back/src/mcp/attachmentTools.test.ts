@@ -11,7 +11,7 @@ vi.mock("../services/attachments/document.js", async (original) => ({
 }));
 vi.mock("../services/attachments/audio.js", () => ({ transcribeRunnerAudio }));
 
-/** As duas ferramentas de anexo pelo MCP: o que o agente manda e o texto que recebe de volta. */
+/** The two attachment tools over MCP: what the agent sends and the text it gets back. */
 async function conectar() {
   const { registerAttachmentTools } = await import("./attachmentTools.js");
   const server = new McpServer({ name: "t", version: "1" });

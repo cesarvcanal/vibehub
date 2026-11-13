@@ -5,10 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /**
- * UM 500 SEM NENHUMA LINHA DE LOG. O servidor sobe com `logger: false`, e o handler de erro padrão
- * do Fastify loga pelo logger DELE — ou seja, em lugar nenhum: a pessoa via "erro interno" e a
- * produção não tinha rastro do que quebrou. Erro de servidor (5xx) vai para o logger do app; erro do
- * cliente (4xx: validação, 404) é resposta normal e não polui o log.
+ * A 500 WITHOUT A SINGLE LOG LINE. The server starts with `logger: false`, and Fastify's default error
+ * handler logs through ITS logger — that is, nowhere: the person saw "erro interno" and production had no
+ * trace of what broke. A server error (5xx) goes to the app's logger; a client error (4xx: validation,
+ * 404) is a normal response and does not pollute the log.
  */
 
 let dir = "";

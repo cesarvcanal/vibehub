@@ -236,8 +236,8 @@ async function main(): Promise<void> {
   startOutboxFlusher();
   // MCP Events webhook deliveries (services/webhooks): same reasoning — a test drives its own passes.
   startWebhookDispatcher();
-  // Revisão de PR: o fim de turno de um card de revisão (ou do autor) sem a ferramenta da rodada vira
-  // lembrete e, na segunda vez, impasse. Mesmo motivo dos outros: teste que sobe o app não herda o listener.
+  // PR review: the end of a turn of a review card (or of the author's) without the round's tool becomes a
+  // reminder and, the second time, an impasse. Same reason as the others: a test that starts the app does not inherit the listener.
   startReviewOrchestrator();
   await app.listen({ port: config.port, host: config.host });
   const trustWarning = trustProxyBootWarning(config.trustProxy);
@@ -271,27 +271,27 @@ async function main(): Promise<void> {
   // sweep of the new container in a blue/green deploy waits instead of resuming them.
   startInflightOwnerHeartbeat();
   void pruneStaleInflightOwners();
-  // Turnos do chat nativo interrompidos pelo ÚLTIMO deploy (o back morre, os drivers — filhos dele —
-  // morrem juntos): o sweep acha os marcadores duráveis, escreve a linha de sistema no chat do card
-  // e retoma o turno automaticamente (uma vez, nunca em loop). Depois do listen, fire-and-forget:
-  // aceitar conexões não espera o runner. Ver services/sdk/resume.ts.
+  // Native chat turns interrupted by the LAST deploy (the back dies, the drivers — its children — die
+  // with it): the sweep finds the durable markers, writes the system line in the card's chat and resumes
+  // the turn automatically (once, never in a loop). After listen, fire-and-forget: accepting connections
+  // does not wait for the runner. See services/sdk/resume.ts.
   void resumeInterruptedTurns().then((summary) => {
     if (summary.resumed.length > 0 || summary.noted.length > 0) {
       logger.info({ resumed: summary.resumed.length, noted: summary.noted.length }, "sdk boot resume done");
     }
   });
-  // Os cards cujo último turno acabou numa pergunta para a pessoa ANTES deste servidor saber ler
-  // uma: o carimbo vem agora, não no próximo turno (ver services/sdk/pendingQuestion.ts).
+  // The cards whose last turn ended in a question for the person BEFORE this server knew how to read
+  // one: the stamp comes now, not on the next turn (see services/sdk/pendingQuestion.ts).
   void backfillPendingQuestions().then((stamped) => {
     if (stamped > 0) logger.info({ stamped }, "cards waiting on a question to the person marked");
   });
-  // …e o driver que CAI sozinho com o back de pé (OOM, kill, o docker exec que morreu): a mesma
-  // retomada, na hora — sem isto o turno esperava um deploy para voltar. Ver resumeAfterDriverCrash.
+  // …and the driver that DIES on its own with the back still up (OOM, kill, the docker exec that died): the
+  // same resume, right away — without this the turn waited for a deploy to come back. See resumeAfterDriverCrash.
   onDriverCrashWithWork((cardId, marker) => { void resumeAfterDriverCrash(cardId, marker); });
-  // Graceful shutdown (melhor esforço): o docker stop de um deploy manda SIGTERM e dá uns segundos.
-  // Encerrar o stdin dos drivers é o adeus limpo (EOF = exit do driver, atravessa o docker exec);
-  // os marcadores de turno em voo FICAM no disco — são eles que contam ao próximo boot o que este
-  // shutdown interrompeu. Nada aqui bloqueia a saída.
+  // Graceful shutdown (best effort): a deploy's docker stop sends SIGTERM and gives a few seconds.
+  // Closing the drivers' stdin is the clean goodbye (EOF = the driver exits, it goes through the docker exec);
+  // the in-flight turn markers STAY on disk — they are what tells the next boot what this shutdown
+  // interrupted. Nothing here blocks the exit.
   const shutdown = (signal: NodeJS.Signals): void => {
     logger.info({ signal }, "vibehub shutting down — closing sdk drivers (inflight markers kept)");
     handOffSdkOnShutdown();

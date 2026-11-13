@@ -14,7 +14,7 @@ describe("statusProbeVerdict", () => {
     // 401 without a token is the route alive
     expect(statusProbeVerdict("401")).toBe("reachable");
     expect(statusProbeVerdict("400\n")).toBe("reachable");
-    expect(statusProbeVerdict("000")).toBe("unreachable"); // produção, 21/10/2026: the dead blue/green port
+    expect(statusProbeVerdict("000")).toBe("unreachable"); // production, 21/10/2026: the dead blue/green port
     // docker exec never ran curl (runner down, no docker): nothing proves the URL is wrong
     expect(statusProbeVerdict("")).toBe("unknown");
     expect(statusProbeVerdict("curl: (7) refused")).toBe("unknown");

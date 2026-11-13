@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /**
- * visibleProjects lê compartilhamentos e cards UMA vez para a lista inteira; a regra é a mesma de
- * canAccessProject, projeto a projeto. O teste confere as duas lado a lado em todos os casos.
+ * visibleProjects reads shares and cards ONCE for the whole list; the rule is the same as
+ * canAccessProject, project by project. The test checks the two side by side in every case.
  */
 
 let dir = "";

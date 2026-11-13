@@ -512,7 +512,7 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         const { card, review, ...payload } = a;
         const since = Date.now();
         const after = await submitAuthorResponse(card, { ...payload, reviewId: review });
-        // O que ESTA chamada registrou: os itens da fala do autor gravada agora (repetida não grava).
+        // What THIS call recorded: the items of the author's message recorded now (a repeated one is not recorded).
         const answered = after.log.filter((e) => e.who === "author" && e.at >= since).reduce((n, e) => n + (e.items?.length ?? 0), 0);
         return ok({ ...reviewToolAnswer(after, "author", a.round), answered });
       } catch (e) {

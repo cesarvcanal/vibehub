@@ -5,9 +5,9 @@ import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 
 /**
- * Um vibehub servido pelo preview de OUTRO vibehub: com VIBEHUB_PREVIEW_PROXY_AUTH=1, o que chega
- * pelo proxy (x-forwarded-prefix: /preview/<porta>) já entra como o owner local — sem setup e sem
- * login. Desligado, ou sem o cabeçalho do proxy, nada muda.
+ * A vibehub served by ANOTHER vibehub's preview: with VIBEHUB_PREVIEW_PROXY_AUTH=1, whatever arrives
+ * through the proxy (x-forwarded-prefix: /preview/<porta>) comes in as the local owner — no setup and no
+ * login. Turned off, or without the proxy's header, nothing changes.
  */
 
 const PROXIED = { "x-forwarded-prefix": "/preview/4317" };
