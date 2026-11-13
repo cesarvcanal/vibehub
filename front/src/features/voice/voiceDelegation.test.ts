@@ -43,7 +43,7 @@ describe("delegationReply", () => {
     expect(delegationReply(rows, request, true)).toEqual({ state: "waiting", answers: ["Rodando…"] });
   });
 
-  it("answers with the agent's LAST word on it — not a subagent's, not one still streaming, not the next request's", () => {
+  it("answers with the agent's LAST word on it — not a subagent's, not one still streaming", () => {
     const rows = [
       user("u0", "mensagem antiga"),
       answer("a0", "resposta antiga"),
@@ -51,11 +51,17 @@ describe("delegationReply", () => {
       answer("a1", "Vou rodar."),
       answer("s1", "subagente falando", { parent: "tool_1" }),
       answer("a2", "12 testes verdes."),
-      user("u2", "outra coisa"),
-      answer("a3", "Resposta da outra coisa", { streaming: true }),
+      answer("a3", "e mais", { streaming: true }),
     ];
-    // The next message started: the request's turn is over even with a turn running.
-    expect(delegationReply(rows, request, true)).toEqual({ state: "answered", text: "12 testes verdes.", answers: ["Vou rodar.", "12 testes verdes."] });
+    expect(delegationReply(rows, request, false)).toEqual({ state: "answered", text: "12 testes verdes.", answers: ["Vou rodar.", "12 testes verdes."] });
+  });
+
+  it("a message that joins the running turn does not end it: the request waits for the turn's last word", () => {
+    // The chat delivers a queued message at a breather of the running turn (turnHasRoomForMore).
+    const rows = [user("u1", request), answer("a1", "Vou rodar os testes."), user("u2", "e depois commita"), answer("a2", "Rodando…")];
+    expect(delegationReply(rows, request, true)).toEqual({ state: "waiting", answers: ["Vou rodar os testes.", "Rodando…"] });
+    const over = [...rows, answer("a3", "12 verdes e commitado.")];
+    expect(delegationReply(over, request, false)).toMatchObject({ state: "answered", text: "12 verdes e commitado." });
   });
 
   it("a turn that ends with nothing said is told as such", () => {

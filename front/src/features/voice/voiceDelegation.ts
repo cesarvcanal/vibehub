@@ -55,16 +55,15 @@ export type DelegationReply =
   | { state: "silent"; answers: [] };
 
 /**
- * Where the agent's work on a delegated request stands, read off the chat. It is over once a later
- * message started or no turn is running; its answers are the ones between the request and that next
- * message. PURE.
+ * Where the agent's work on a delegated request stands, read off the chat. It is over only when no
+ * turn is running: a later message does not end it, because the chat delivers queued messages into
+ * the running turn at a breather (`turnHasRoomForMore`) — that turn's last word answers both. PURE.
  */
 export function delegationReply(rows: SdkRow[], request: string, turnRunning: boolean): DelegationReply {
   const at = rows.findLastIndex((row) => row.kind === "user" && row.text === request);
   if (at < 0) return { state: "waiting", answers: [] };
-  const next = rows.findIndex((row, i) => i > at && row.kind === "user");
-  const answers = rows.slice(at + 1, next < 0 ? rows.length : next).filter(isAgentAnswer).map((row) => row.text);
-  if (next < 0 && turnRunning) return { state: "waiting", answers };
+  const answers = rows.slice(at + 1).filter(isAgentAnswer).map((row) => row.text);
+  if (turnRunning) return { state: "waiting", answers };
   const last = answers.at(-1);
   return last === undefined ? { state: "silent", answers: [] } : { state: "answered", text: last, answers };
 }
