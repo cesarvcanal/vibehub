@@ -233,10 +233,8 @@ export async function resolveCredential(name: string): Promise<ResolvedCredentia
     );
   }
   if (credential.type === "userpass") {
-    const [username, secret] = await Promise.all([
-      secretGet(credentialSecretKey(credential.id, "USER")),
-      secretGet(credentialSecretKey(credential.id, "PASS")),
-    ]);
+    const username = await secretGet(credentialSecretKey(credential.id, "USER"));
+    const secret = await secretGet(credentialSecretKey(credential.id, "PASS"));
     if (!username || !secret) throw new Error(`credential '${credential.name}' has no stored value — re-create it in Settings → Cofre`);
     return { credential, username, secret };
   }
