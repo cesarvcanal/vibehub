@@ -83,7 +83,7 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 5. Evitar `any`, casts sem fundamento, estados impossíveis e interfaces redundantes.
 6. Não usar `useMemo`, `useCallback` ou `React.memo` indiscriminadamente — só com cálculo custoso, identidade referencial relevante ou benefício demonstrável.
 7. Não suprimir regras de hooks nem remover dependências de efeitos para esconder renderizações. Corrigir o fluxo.
-8. **Efeito e estado com papel único:** cada efeito sincroniza uma coisa; todo estado é lido por alguém. Estado criado só para disparar outro código indica fluxo errado.
+8. **Efeito e estado com papel único:** cada efeito sincroniza uma coisa; estado criado só para disparar outro código indica fluxo errado.
 9. Evitar lógica de negócio e transformação complexa dentro do JSX.
 10. Derivar valores da fonte em vez de manter estados sincronizados para o mesmo fato. Dado do servidor mora no React Query, não copiado em `useState`.
 11. Reutilizar as primitivas de `components/ui` (Radix + Tailwind) antes de criar versões novas.
