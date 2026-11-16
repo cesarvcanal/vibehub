@@ -8,7 +8,7 @@ import {
   recordCardPr, sharesForTarget, updateCard, type Card, type GithubConnection, type Project,
 } from "../board/registry.js";
 import { recordMessage } from "../events/cardEvents.js";
-import { listOpenPulls, readPull, resolveConnection, splitRepo, type OpenPull } from "../github/client.js";
+import { listOpenPulls, readPull, splitRepo, type OpenPull } from "../github/client.js";
 import { resolveIdentity } from "../github/identity.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { sendToTerminal, SEND_READY_WAIT_MS } from "../maestro/maestro.js";
@@ -79,8 +79,9 @@ async function projectRepoAccess(projectId: string, user: PublicUser): Promise<{
   if (!project) throw new Error("project not found");
   if (!project.repoFullName) throw new Error("sem_repositorio: o projeto não tem repositório no GitHub");
   const { owner, repo } = splitRepo(project.repoFullName);
-  // No connection resolved = none in the install: `resolveConnection` says so instead of reading GitHub as nobody.
-  const connection = await resolveConnection((await connectionOf(user.id, await identityContext(project)))?.id);
+  // `connectionOf` falls back to the install's first account: none resolved = no account at all.
+  const connection = await connectionOf(user.id, await identityContext(project));
+  if (!connection) throw new Error("GitHub is not connected — paste a token in Settings");
   return { project, connection, owner, repo };
 }
 
