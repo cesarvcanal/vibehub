@@ -629,8 +629,6 @@ export async function startReview(input: {
         authorUserId: input.authorUserId,
         ...(input.coauthorUserId ? { coauthorUserId: input.coauthorUserId } : {}),
         mergerUserId: input.mergerUserId,
-        ...(input.orders?.mergeAuthorized ? { mergeAuthorized: true } : {}),
-        ...(input.orders?.concludeWhenMerged ? { concludeWhenMerged: true } : {}),
         reviewerCardId: reviewerCard.id,
         round: 1,
         phase: "reviewing",
@@ -641,10 +639,7 @@ export async function startReview(input: {
         updatedAt: now,
       };
       note(fresh, "system", `Revisão iniciada: o revisor confere o PR #${pr.number} (rodada 1 de ${MAX_ROUNDS}).`);
-      if (input.orders?.mergeAuthorized) {
-        note(fresh, "system", "Merge autorizado por quem mergeia: pronta sem bloqueante nem dúvida, o merge sai sozinho (sugestão em pé não segura).");
-      }
-      if (input.orders?.concludeWhenMerged) note(fresh, "system", "Mergeada, o card que deu a ordem vai para Concluído.");
+      if (input.orders) applyReviewOrders(fresh, input.orders);
       if (fixCard) note(fresh, "system", `A correção roda no card "${fixCard.title}", na conta Claude do autor.`);
       else if (authorCard.id !== card.id) note(fresh, "system", `A correção roda no card "${authorCard.title}", que já trabalha a branch do PR.`);
       // The reviewer acts on their card through the relay's `recordCardActor`, which only lands with `work`.
@@ -1393,16 +1388,19 @@ export async function markReviewMerged(
  * card any role that can merge may ask for. Repeating records nothing new.
  */
 export async function recordReviewOrders(reviewId: string, orders: ReviewOrders): Promise<Review> {
-  return await mutateReview(reviewId, (r) => {
-    if (orders.mergeAuthorized && !r.mergeAuthorized) {
-      r.mergeAuthorized = true;
-      note(r, "system", "Merge autorizado por quem mergeia: pronta sem bloqueante nem dúvida, o merge sai sozinho (sugestão em pé não segura).");
-    }
-    if (orders.concludeWhenMerged && !r.concludeWhenMerged) {
-      r.concludeWhenMerged = true;
-      note(r, "system", "Mergeada, o card que deu a ordem vai para Concluído.");
-    }
-  });
+  return await mutateReview(reviewId, (r) => applyReviewOrders(r, orders));
+}
+
+/** Sets on the review the orders it does not hold yet, each with its note in the log; shared by `startReview`. */
+function applyReviewOrders(review: Review, orders: ReviewOrders): void {
+  if (orders.mergeAuthorized && !review.mergeAuthorized) {
+    review.mergeAuthorized = true;
+    note(review, "system", "Merge autorizado por quem mergeia: pronta sem bloqueante nem dúvida, o merge sai sozinho (sugestão em pé não segura).");
+  }
+  if (orders.concludeWhenMerged && !review.concludeWhenMerged) {
+    review.concludeWhenMerged = true;
+    note(review, "system", "Mergeada, o card que deu a ordem vai para Concluído.");
+  }
 }
 
 /* ------------------------------------------------------------------ fim de turno */
