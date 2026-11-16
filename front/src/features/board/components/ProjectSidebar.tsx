@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Check, ChevronDown, ChevronRight, ChevronUp, FolderGit2, Moon, Pause, Pencil, Plus, RotateCw, Share2, Trash2 } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, ChevronUp, FolderGit2, GitPullRequest, Moon, Pause, Pencil, Plus, RotateCw, Share2, Trash2 } from "lucide-react";
 import { cn, isNewTabClick } from "@/lib/utils";
 import { apiErrorMessage } from "@/lib/apiError";
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,7 @@ import { BADGE_TEXT } from "@/components/ui/badge";
 import { useExpandedProjects } from "@/features/board/lib/sidebarExpanded";
 import { RecentCards } from "@/features/board/components/RecentCards";
 import { ShareDialog } from "@/features/board/components/ShareDialog";
+import { ProjectPrsDialog } from "@/features/board/components/ProjectPrsDialog";
 import {
   boardApi,
   cardRunnerHint,
@@ -260,6 +261,7 @@ export function ProjectSidebar({
             onShowAll={onShowAllProjects}
             onNewCard={() => onNewCard(focusedProject)}
             onNewProject={onNewProject}
+            onOpenCard={(cardId) => onOpenCard(focusedProject.id, cardId)}
             canManage={canManage}
           />
         ) : (
@@ -383,6 +385,7 @@ function ProjectSwitcher({
   onShowAll,
   onNewCard,
   onNewProject,
+  onOpenCard,
   canManage = true,
 }: {
   current: BoardProject;
@@ -391,6 +394,8 @@ function ProjectSwitcher({
   onShowAll?: () => void;
   onNewCard: () => void;
   onNewProject: () => void;
+  /** Opens a card of this project — where the PR analysis lands once it is started. */
+  onOpenCard: (cardId: string) => void;
   /** false = a member: no "new project" row, no new-card `+` — the routes behind both answer 403. */
   canManage?: boolean;
 }) {
@@ -399,6 +404,7 @@ function ProjectSwitcher({
   // SKIPS its own onSelect when the click was defaultPrevented — so we close the menu ourselves.
   const [open, setOpen] = React.useState(false);
   const [shareOpen, setShareOpen] = React.useState(false);
+  const [prsOpen, setPrsOpen] = React.useState(false);
   return (
     <div className="flex shrink-0 items-center gap-0.5 border-b border-border/60 py-1 pl-1.5 pr-1.5">
       <DropdownMenu open={open} onOpenChange={setOpen}>
@@ -500,6 +506,29 @@ function ProjectSwitcher({
       ) : null}
       {shareOpen ? (
         <ShareDialog kind="project" targetId={current.id} title={current.name} open onOpenChange={setShareOpen} />
+      ) : null}
+      {/* For everyone who sees the project: reading the list needs no more, and the server refuses the
+          analysis to a read-only share. Only a project on GitHub has PRs to list. */}
+      {current.repoFullName ? (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
+          aria-label={t("sidebar.projectPrs", { name: current.name })}
+          title={t("sidebar.projectPrs", { name: current.name })}
+          onClick={() => setPrsOpen(true)}
+        >
+          <GitPullRequest className="h-3.5 w-3.5" />
+        </Button>
+      ) : null}
+      {prsOpen ? (
+        <ProjectPrsDialog
+          projectId={current.id}
+          projectName={current.name}
+          open
+          onOpenChange={setPrsOpen}
+          onOpenCard={onOpenCard}
+        />
       ) : null}
     </div>
   );

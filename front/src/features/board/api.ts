@@ -31,11 +31,13 @@ import type {
   PluginCatalog,
   PluginWriteResult,
   PreviewPort,
+  PrAnalysisStart,
   Project,
   ProjectBrain,
   ProjectBrainApplyResult,
   ProjectBrainWriteResult,
   ProjectPatch,
+  ProjectPull,
   QueueMessageResult,
   RestartAllResult,
   RestartedPreview,
@@ -207,6 +209,8 @@ export const projectBrainKey = (projectId: string) => ["board", "brain", "projec
 export const TRANSCRIBE_KEY = ["board", "transcribe"] as const;
 export const RUNNER_KEY = ["board", "runner"] as const;
 export const GITHUB_KEY = ["board", "github"] as const;
+/** Outside ["board"] on purpose: every board refresh would otherwise re-read GitHub while the list is open. */
+export const projectPullsKey = (projectId: string) => ["projectPulls", projectId] as const;
 export const PREVIEW_PORTS_KEY = ["board", "preview", "ports"] as const;
 export const FEATURES_KEY = ["board", "features"] as const;
 /** The install's members (`GET /api/users`, owner only) — read by sharing and by the access screen. */
@@ -259,6 +263,14 @@ export const boardApi = {
     patch<{ project: BoardProject }>(`/projects/${encodeURIComponent(id)}`, body).then((r) => r.project),
 
   deleteProject: (id: string) => del<{ ok: true }>(`/projects/${encodeURIComponent(id)}`),
+
+  /** The project's open PRs, read from GitHub on every call. */
+  listProjectPulls: (id: string) =>
+    get<{ pulls: ProjectPull[] }>(`/projects/${encodeURIComponent(id)}/prs`).then((r) => r.pulls),
+
+  /** Opens the analysis card of a PR (or answers with the one already open). */
+  startPrAnalysis: (id: string, prNumber: number) =>
+    post<PrAnalysisStart>(`/projects/${encodeURIComponent(id)}/prs/${prNumber}/analysis`, {}),
 
   /** Moves a project to `position` in the sidebar; the server renumbers and returns the new list. */
   reorderProject: (id: string, position: number) =>

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   getCard, createCard, createReviewerCard, removeCard, updateCard, cardMoveEffect, isHumanActive, shareWith, getGithubConnection,
-  listCards, recordCardPr, markCardPrMerged, type Card, type CardPr,
+  listCards, openAnalysisCard, recordCardPr, markCardPrMerged, type Card, type CardPr,
 } from "../board/registry.js";
 import { cardBranch, resumeCard } from "../board/workspace.js";
 import { recordCardActor } from "../board/actor.js";
@@ -582,6 +582,12 @@ export async function startReview(input: {
     // By URL, on any card: the same PR attached to two cards does not get two reviews.
     if (await activeReviewForPr(pr.url)) {
       throw new Error(`revisao_ativa: já existe uma revisão em andamento do PR #${pr.number}`);
+    }
+    // An analysis card never merges (see `deliver`): a review started on it could never end.
+    if (card.pushBranch !== undefined) throw new Error("card_de_analise: o card de uma análise de PR não é revisado");
+    // An open analysis pushes its fixes onto this PR: a review now would see the head move under it.
+    if (openAnalysisCard(await listCards(card.projectId), pr.url)) {
+      throw new Error(`analise_ativa: o PR #${pr.number} tem uma análise em andamento; revise depois que ela terminar`);
     }
     // "Having an account" is having a link, including to the built-in account ("default"): whoever is on it
     // reviews and fixes there. Only someone with no link at all is refused.

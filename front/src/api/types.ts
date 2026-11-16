@@ -474,6 +474,34 @@ export interface Card {
   updatedAt?: number;
 }
 
+/** An open pull request of a project's repository, as GitHub has it right now (`GET /projects/:id/prs`). */
+export interface ProjectPull {
+  number: number;
+  title: string;
+  url: string;
+  /** GitHub login of who opened it. */
+  author: string;
+  /** The PR's head branch. */
+  branch: string;
+  /** The branch it targets. */
+  base: string;
+  /** The head lives in another repository: it cannot be analysed (the fixes would have nowhere to go). */
+  fromFork: boolean;
+  draft: boolean;
+  /** ISO timestamp of the last update on GitHub. */
+  updatedAt: string;
+  /** The card analysing it right now, when there is one. */
+  analysisCardId?: string;
+  /** Its branch has a name vibehub refuses for a card (accents, `+`, over 80 chars): it cannot be analysed. */
+  unsupportedBranch?: true;
+}
+
+/** What `POST /projects/:id/prs/:number/analysis` answers: the analysis card, new or the one already open. */
+export interface PrAnalysisStart {
+  card: Card;
+  created: boolean;
+}
+
 /** A pull request the card delivered — see `Card.prs`. */
 export interface CardPr {
   number: number;

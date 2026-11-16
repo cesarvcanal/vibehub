@@ -1,0 +1,44 @@
+import type { FastifyInstance } from "fastify";
+import { canAccessProject, canWorkOnProject } from "../auth/access.js";
+import { requestUser, requireSession } from "../auth/session.js";
+import { listProjectPulls, startAnalysis } from "../services/review/analysis.js";
+import { NOT_FOUND, sendError } from "./httpError.js";
+
+/** GitHub failing to answer is not the caller's fault: the list is not there to give. */
+const GITHUB_FAILED = [/^GitHub returned/, 502] as const;
+
+/**
+ * PR ANALYSIS — the project's open PRs and the button that analyses one (`services/review/analysis.ts`).
+ * Whoever reaches the project sees the list; starting an analysis creates a card, so it takes `work` on
+ * the project (the owner, or a project share with `work`). A project the user does not reach is a 404,
+ * as everywhere else.
+ */
+export async function prAnalysisRoutes(app: FastifyInstance): Promise<void> {
+  app.get<{ Params: { id: string } }>("/api/projects/:id/prs", { preHandler: requireSession }, async (req, reply) => {
+    const user = await requestUser(req);
+    if (!(await canAccessProject(user, req.params.id))) return await reply.code(404).send({ error: "project not found" });
+    try {
+      return await reply.send({ pulls: await listProjectPulls(req.params.id, user!) });
+    } catch (err) {
+      return await sendError(reply, err, { rules: [GITHUB_FAILED, NOT_FOUND] });
+    }
+  });
+
+  app.post<{ Params: { id: string; number: string } }>(
+    "/api/projects/:id/prs/:number/analysis", { preHandler: requireSession },
+    async (req, reply) => {
+      const user = await requestUser(req);
+      if (!(await canAccessProject(user, req.params.id))) return await reply.code(404).send({ error: "project not found" });
+      if (!(await canWorkOnProject(user, req.params.id))) {
+        return await reply.code(403).send({ error: "this project is shared with you read-only" });
+      }
+      const prNumber = Number(req.params.number);
+      if (!Number.isInteger(prNumber) || prNumber <= 0) return await reply.code(400).send({ error: "número de PR inválido" });
+      try {
+        return await reply.send(await startAnalysis({ projectId: req.params.id, prNumber, requester: user! }));
+      } catch (err) {
+        return await sendError(reply, err, { rules: [GITHUB_FAILED, NOT_FOUND] });
+      }
+    },
+  );
+}

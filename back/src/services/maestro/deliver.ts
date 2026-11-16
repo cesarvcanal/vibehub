@@ -215,12 +215,24 @@ function decoded(text: string): string {
  * The PR's text comes from `docs` (already validated, prDocs.ts) — never `--fill`, whose body is the
  * list of commits. No open PR and not enough to open a documented one: `error undocumented`, after the
  * push. An open PR is reused; given a title or body, it is rewritten with them (`gh pr edit`). PURE.
+ *
+ * `pushHeadOnto`: the card works on a local branch of its own and `branch` is SOMEBODY ELSE's (the PR an
+ * analysis card fixes, `Card.pushBranch`): its HEAD goes onto that branch WITHOUT force, so a commit the
+ * author pushed meanwhile makes the push fail visibly instead of being overwritten, and a branch that is
+ * gone from GitHub is never recreated.
  */
 export function buildPushAndPrScript(
   containerName: string, token: string, cwd: string, branch: string, target: string,
-  docs: CleanPrDocs = { comments: [] },
+  docs: CleanPrDocs = { comments: [] }, opts: { pushHeadOnto?: boolean } = {},
 ): string {
   assertSafeRemotePath(cwd);
+  const pushCommand = opts.pushHeadOnto
+    ? `git push origin ${shQuote(`HEAD:refs/heads/${branch}`)}`
+    // `--force-if-includes`: every card of a project shares one clone, so another card's push onto this
+    // branch (an analysis card fixing the PR) moves the `origin/<branch>` this lease compares against.
+    // Without it the lease passes and the force wipes those commits; with it, a remote tip this branch
+    // never had is refused (git >= 2.30).
+    : `git push --force-with-lease --force-if-includes origin ${shQuote(branch)}`;
   const textFlags = [
     docs.title !== undefined ? `--title "$TITLE"` : "",
     docs.body !== undefined ? `--body-file "$BODY"` : "",
@@ -246,7 +258,13 @@ export function buildPushAndPrScript(
     ...ghTokenPreamble(token),
     `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
     forgetDeletedRemoteBranch(branch),
-    `if ! git push --force-with-lease origin ${shQuote(branch)}; then echo "${MARKER} error push"; exit 0; fi`,
+    // The PR's branch gone from GitHub = the PR was merged or closed meanwhile: pushing would recreate it
+    // as an orphan carrying the fixes. A card's own branch is recreated on purpose (a new delivery).
+    ...(opts.pushHeadOnto
+      ? [`if ! git ls-remote --exit-code origin ${shQuote(`refs/heads/${branch}`)} >/dev/null 2>&1; then ` +
+        `echo "a branch da PR não existe mais no GitHub (mergeada ou fechada)"; echo "${MARKER} error push"; exit 0; fi`]
+      : []),
+    `if ! ${pushCommand}; then echo "${MARKER} error push"; exit 0; fi`,
     ...(docs.title !== undefined ? [`TITLE=$(${decoded(docs.title)})`] : []),
     ...(docs.body !== undefined ? [`BODY=$(mktemp)`, `trap 'rm -f "$BODY"' EXIT`, `${decoded(docs.body)} > "$BODY"`] : []),
     `URL=$(gh pr list --head ${shQuote(branch)} --base ${shQuote(target)} --state open --json url --jq '.[0].url' 2>/dev/null)`,
@@ -1056,10 +1074,21 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     );
     return { merged: false, reason: "locked", branch: card.base, cardBranch: cardBranch(card), locked: true };
   }
+  // An ANALYSIS card (`Card.pushBranch`) pushes its fixes onto somebody else's PR and never merges it:
+  // the merge is a person's (César and Albert, 2026-11-16). Merge-only has nothing for it to do.
+  if (card.pushBranch !== undefined && mergeOnly) {
+    logger.info(
+      { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, reason: "locked", mergeOnly, by: opts.by },
+      "merge-only refused: an analysis card never merges the PR it fixes",
+    );
+    return { merged: false, reason: "locked", branch: card.base, cardBranch: card.pushBranch, locked: true };
+  }
   const project = await getProject(card.projectId);
   if (!project) throw new Error("project for this card not found");
 
-  const source = cardBranch(card);
+  // An analysis card delivers onto the PR's branch, not its local one (`Card.pushBranch`): every remote
+  // step below — push, PR lookup, merge — names the PR's branch.
+  const source = card.pushBranch ?? cardBranch(card);
   // A LOCKED card has exactly one exit: a pull request back to the branch it was cut from. The
   // target it was ASKED for is ignored rather than refused — the point of the lock is that the
   // delivery still works, it just cannot land anywhere else. See `Card.locked` in registry.ts.
@@ -1129,7 +1158,7 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
   } else {
     // (a)+(b) push and resolve the PR.
     const prOut = await hostExecutor().runScript(
-      buildPushAndPrScript(container, token, cwd, source, target, docs),
+      buildPushAndPrScript(container, token, cwd, source, target, docs, { pushHeadOnto: card.pushBranch !== undefined }),
       { timeoutMs: 120_000 },
     );
     const pr = parsePushAndPr(prOut.stdout);
@@ -1198,10 +1227,12 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     );
     return { prUrl, merged: false, reason: "locked", branch: target, cardBranch: source, locked: true, ...commented };
   }
-  if (opts.authorized !== true) {
+  if (opts.authorized !== true || card.pushBranch !== undefined) {
     logger.info(
       { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, reason: "unauthorized", by: opts.by },
-      "deliver prepared a PR but was not authorized to merge",
+      card.pushBranch !== undefined
+        ? "analysis card delivered its fixes onto the PR; it never merges"
+        : "deliver prepared a PR but was not authorized to merge",
     );
     return { prUrl, merged: false, reason: "unauthorized", branch: target, cardBranch: source, ...commented };
   }

@@ -415,6 +415,92 @@ describe("listBranches", () => {
   });
 });
 
+describe("listOpenPulls", () => {
+  const pull = (n: number, over: Record<string, unknown> = {}) => ({
+    number: n,
+    title: `PR ${n}`,
+    html_url: `https://github.com/octocat/hello/pull/${n}`,
+    draft: false,
+    updated_at: "2026-11-16T12:00:00Z",
+    user: { login: "alice" },
+    head: { ref: `feat-${n}`, repo: { full_name: "octocat/hello" } },
+    base: { ref: "main", repo: { full_name: "octocat/hello" } },
+    ...over,
+  });
+
+  it("lê as PRs abertas do GitHub e marca a que vem de fork", async () => {
+    const { gh } = await fresh();
+    stubIdentity("octocat");
+    await gh.connect("personal", "ghp_token");
+    const fetchMock = vi.fn(async () => jsonResponse([
+      pull(7),
+      pull(8, { draft: true, head: { ref: "patch", repo: { full_name: "stranger/hello" } } }),
+      pull(9, { head: { ref: "gone", repo: null } }),
+    ]));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await gh.listOpenPulls("", "octocat", "hello")).toEqual([
+      { number: 7, title: "PR 7", url: "https://github.com/octocat/hello/pull/7", author: "alice", branch: "feat-7", base: "main", fromFork: false, draft: false, updatedAt: "2026-11-16T12:00:00Z" },
+      { number: 8, title: "PR 8", url: "https://github.com/octocat/hello/pull/8", author: "alice", branch: "patch", base: "main", fromFork: true, draft: true, updatedAt: "2026-11-16T12:00:00Z" },
+      { number: 9, title: "PR 9", url: "https://github.com/octocat/hello/pull/9", author: "alice", branch: "gone", base: "main", fromFork: true, draft: false, updatedAt: "2026-11-16T12:00:00Z" },
+    ]);
+    const [url] = fetchMock.mock.calls[0] as unknown as [string];
+    expect(url).toContain("/repos/octocat/hello/pulls?state=open");
+  });
+
+  it("lê todas as páginas, não só as 100 primeiras", async () => {
+    const { gh } = await fresh();
+    stubIdentity("octocat");
+    await gh.connect("personal", "ghp_token");
+    vi.stubGlobal("fetch", vi.fn(async (url: string) =>
+      url.includes("page=2")
+        ? jsonResponse([pull(101)])
+        : jsonResponse(Array.from({ length: 100 }, (_, i) => pull(i + 1)))));
+    expect(await gh.listOpenPulls("", "octocat", "hello")).toHaveLength(101);
+  });
+
+  it("erro do GitHub falha à vista, nunca vira lista vazia", async () => {
+    const { gh } = await fresh();
+    stubIdentity("octocat");
+    await gh.connect("personal", "ghp_token");
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ message: "Not Found" }, { status: 404 })));
+    await expect(gh.listOpenPulls("", "octocat", "hello")).rejects.toThrow(/404/);
+  });
+
+  it("rejects path segments that are not repository names", async () => {
+    const { gh } = await fresh();
+    await expect(gh.listOpenPulls("", "../../etc", "repo")).rejects.toThrow(/invalid owner/);
+  });
+});
+
+describe("readPull", () => {
+  const row = (over: Record<string, unknown> = {}) => ({
+    number: 7, title: "PR 7", html_url: "https://github.com/octocat/hello/pull/7", draft: false, state: "open",
+    updated_at: "2026-11-16T12:00:00Z", user: { login: "alice" },
+    head: { ref: "feat-7", repo: { full_name: "octocat/hello" } }, base: { ref: "main" }, ...over,
+  });
+
+  it("lê UMA PR pelo número, dizendo se está aberta", async () => {
+    const { gh } = await fresh();
+    stubIdentity("octocat");
+    await gh.connect("personal", "ghp_token");
+    const fetchMock = vi.fn(async () => jsonResponse(row({ state: "closed" })));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await gh.readPull("", "octocat", "hello", 7)).toMatchObject({ number: 7, branch: "feat-7", base: "main", fromFork: false, open: false });
+    const [url] = fetchMock.mock.calls[0] as unknown as [string];
+    expect(url).toMatch(/\/repos\/octocat\/hello\/pulls\/7$/);
+  });
+
+  it("PR inexistente é null; outro erro do GitHub falha à vista", async () => {
+    const { gh } = await fresh();
+    stubIdentity("octocat");
+    await gh.connect("personal", "ghp_token");
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ message: "Not Found" }, { status: 404 })));
+    expect(await gh.readPull("", "octocat", "hello", 7)).toBeNull();
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ message: "boom" }, { status: 502 })));
+    await expect(gh.readPull("", "octocat", "hello", 7)).rejects.toThrow(/502/);
+  });
+});
+
 describe("splitRepo", () => {
   it("splits and validates owner/repo", async () => {
     const { gh } = await fresh();

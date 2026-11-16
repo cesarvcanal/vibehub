@@ -444,6 +444,14 @@ export interface Card {
    */
   reviewOf?: string;
   /**
+   * ANALYSIS CARD — the remote branch its deliveries push to, when it is not the card's own: the branch
+   * of the PR it analyses. The card works on its own derived branch (`card/<slug>`, cut from the
+   * PR's head) because git refuses a second worktree on a branch, and the author's card usually still
+   * holds the PR's. Set only by {@link createAnalysisCard}, at creation, never through the HTTP edit.
+   * Absent = the card pushes its own branch, as always.
+   */
+  pushBranch?: string;
+  /**
    * DECLARED STATE reported by the agent through `vibehub_report` — its own judgement of where the
    * task stands ({@link DeclaredState}). ORTHOGONAL to `status`/`column`: reporting it never moves
    * the card. Absent = the agent has said nothing yet.
@@ -778,8 +786,17 @@ function readReviewFields(cards: Card[]): Card[] {
       card.prs = valid.length > 0 ? valid : undefined;
     }
     if (card.reviewOf !== undefined && (typeof card.reviewOf !== "string" || !card.reviewOf)) card.reviewOf = undefined;
+    if (card.pushBranch !== undefined && !isBranchName(card.pushBranch)) card.pushBranch = undefined;
   }
   return cards;
+}
+
+function isBranchName(v: unknown): boolean {
+  try {
+    return typeof v === "string" && assertBranchName(v) === v;
+  } catch {
+    return false;
+  }
 }
 
 function isCardPr(v: unknown): v is CardPr {
@@ -1603,6 +1620,8 @@ interface ServerCardInit {
   reviewOf?: string;
   /** The card's own branch, derived from its slug — which does not exist before the id is drawn. */
   branchFor?: (worktreeSlug: string) => string;
+  /** Makes this an ANALYSIS card that pushes to that branch (see `Card.pushBranch`). */
+  pushBranch?: string;
 }
 
 /**
@@ -1648,6 +1667,7 @@ export async function createCard(input: CreateCardInput, fields: UpdateCardInput
       if (author.reviewOf) throw new Error("a reviewer card cannot be reviewed");
       card.reviewOf = author.id;
     }
+    if (server.pushBranch !== undefined) card.pushBranch = assertBranchName(server.pushBranch);
     const { next, move } = validateCardPatch(doc, card, withModel);
     Object.assign(card, next);
     doc.cards.push(card);
@@ -1763,6 +1783,36 @@ export async function createReviewerCard(input: {
     { base: input.prBranch, accountSlug: input.reviewerAccountSlug, column: "waiting" },
     { reviewOf: authorCard.id, branchFor: (slug) => `review/${slug}` },
   );
+}
+
+/**
+ * Creates the card that ANALYSES a PR and fixes what it finds on the PR itself. Through {@link createCard}:
+ *  - `base` = the PR's branch, so the worktree is cut from exactly what is analysed;
+ *  - its own derived branch locally (`card/<slug>`, the one a delete drops, so a purge leaves no ref
+ *    behind), and `pushBranch` = the PR's branch: the fixes land on the PR without a second worktree on
+ *    its branch (see `Card.pushBranch`);
+ *  - the Claude account of whoever asked, and `waiting` — it starts at once.
+ */
+export async function createAnalysisCard(input: {
+  projectId: string;
+  accountSlug: string | undefined;
+  prBranch: string;
+  title: string;
+}): Promise<Card> {
+  return createCard(
+    { projectId: input.projectId, title: input.title },
+    { base: input.prBranch, accountSlug: input.accountSlug, column: "waiting" },
+    { pushBranch: input.prBranch },
+  );
+}
+
+/**
+ * The OPEN analysis card of a PR among `cards`: an analysis card (`pushBranch`) not done that recorded this
+ * PR's URL. Compared by URL, never by title. One rule for whoever asks: the analysis (one card per PR) and
+ * the two-AI review (which must not start while an analysis pushes onto the same PR). PURE.
+ */
+export function openAnalysisCard(cards: Card[], prUrl: string): Card | undefined {
+  return cards.find((c) => c.pushBranch !== undefined && c.column !== "done" && (c.prs ?? []).some((p) => p.url === prUrl));
 }
 
 export interface UpdateCardInput {

@@ -218,6 +218,21 @@ describe("the focused project's header — sharing in the open", () => {
     expect(await screen.findByTestId("share-dialog")).toBeInTheDocument();
   });
 
+  it("gives a member, too, the project's open PRs: the list is read-only, the server guards the analysis", async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/auth/me") return Promise.resolve({ user: { id: "u1", username: "person", role: "member" } });
+      if (url === "/setup/state") return Promise.resolve(setupState());
+      if (url === "/projects/p1/cards") return Promise.resolve({ cards });
+      if (url === "/projects/p1/prs") return Promise.resolve({ pulls: [] });
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+    renderFocused(false);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Open pull requests of billing" }));
+    expect(await screen.findByTestId("project-prs-dialog")).toBeInTheDocument();
+    expect(await screen.findByText("No open pull requests in this repository.")).toBeInTheDocument();
+  });
+
   it("offers no share button to a member", async () => {
     serveAs("member");
     renderFocused(false);

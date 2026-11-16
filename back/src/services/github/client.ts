@@ -380,6 +380,93 @@ export async function listBranches(connectionId: string | null | undefined, owne
   return { branches, defaultBranch, truncada: githubPages > MAX_BRANCH_PAGES };
 }
 
+export interface OpenPull {
+  number: number;
+  title: string;
+  url: string;
+  author: string;
+  branch: string;
+  base: string;
+  /** The head lives in another repository (a fork, or one GitHub no longer shows): nowhere to push a fix. */
+  fromFork: boolean;
+  draft: boolean;
+  updatedAt: string;
+}
+
+/** The fields of a GitHub pull request read here (REST `pulls` endpoints). */
+interface GithubPullRow {
+  number: number; title: string; html_url: string; draft: boolean; updated_at: string; state: string;
+  user: { login: string } | null;
+  head: { ref: string; repo: { full_name: string } | null };
+  base: { ref: string };
+}
+
+/** A GitHub pull request row as {@link OpenPull}. `fullName` is the project's `owner/repo`, lowercased. PURE. */
+function openPullOf(row: GithubPullRow, fullName: string): OpenPull {
+  return {
+    number: row.number,
+    title: row.title,
+    url: row.html_url,
+    author: row.user?.login ?? "",
+    branch: row.head.ref,
+    base: row.base.ref,
+    fromFork: row.head.repo?.full_name.toLowerCase() !== fullName,
+    draft: row.draft,
+    updatedAt: row.updated_at,
+  };
+}
+
+/** Cap of pages of 100 open PRs: more than 500 open at once is not a list anyone picks from. */
+const MAX_PULL_PAGES = 5;
+
+/**
+ * The repository's OPEN pull requests, read from GitHub on every call: the PR analysis picks from what
+ * is on GitHub right now, never from a list kept by vibehub (a PR opened by hand shows up at once).
+ */
+export async function listOpenPulls(connectionId: string | null | undefined, owner: string, repo: string): Promise<OpenPull[]> {
+  assertRepoPart(owner, "owner");
+  assertRepoPart(repo, "repository");
+  const token = await tokenFor(connectionId);
+  const fullName = `${owner}/${repo}`.toLowerCase();
+  const pulls: OpenPull[] = [];
+  const perPage = 100;
+  for (let page = 1; page <= MAX_PULL_PAGES; page += 1) {
+    const res = await githubFetch(`/repos/${owner}/${repo}/pulls?state=open&per_page=${perPage}&page=${page}&sort=updated&direction=desc`, token);
+    if (!res.ok) {
+      await res.body?.cancel();
+      throw new Error(`GitHub returned ${res.status} while listing pull requests`);
+    }
+    const body = (await res.json()) as GithubPullRow[];
+    pulls.push(...body.map((row) => openPullOf(row, fullName)));
+    if (body.length < perPage) break;
+  }
+  return pulls;
+}
+
+/**
+ * ONE pull request by number, as GitHub has it now, with whether it is still open. `null` = GitHub does
+ * not know it (404); any other failure throws. Starting an analysis reads only the PR it was asked for.
+ */
+export async function readPull(
+  connectionId: string | null | undefined, owner: string, repo: string, number: number,
+): Promise<(OpenPull & { open: boolean }) | null> {
+  assertRepoPart(owner, "owner");
+  assertRepoPart(repo, "repository");
+  if (!Number.isInteger(number) || number <= 0) throw new Error(`invalid pull request number: '${number}'`);
+  const token = await tokenFor(connectionId);
+  const res = await githubFetch(`/repos/${owner}/${repo}/pulls/${number}`, token);
+  if (res.status === 404) {
+    await res.body?.cancel();
+    return null;
+  }
+  if (!res.ok) {
+    await res.body?.cancel();
+    throw new Error(`GitHub returned ${res.status} while reading the pull request`);
+  }
+  const row = (await res.json()) as GithubPullRow;
+  return { ...openPullOf(row, `${owner}/${repo}`.toLowerCase()), open: row.state === "open" };
+}
+
 /** The number of the `rel="last"` page of GitHub's `Link` header; without it, there is only one page. */
 function lastPageFromLink(link: string | null): number {
   const last = link?.match(/[?&]page=(\d+)[^>]*>;\s*rel="last"/);

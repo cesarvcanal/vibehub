@@ -56,7 +56,7 @@ function wire(over: { push?: string; probe?: string; run?: string; merge?: strin
     if (script.includes("/reviews' --input")) return { stdout: over.review ?? "__VIBEHUB_DELIVER__ review ok", stderr: "" };
     if (script.includes("gh pr merge")) return { stdout: merge, stderr: "" };
     if (script.includes("gh pr checks")) return { stdout: `${over.ci ?? NO_CHECKS}\n__VIBEHUB_CI__ done ${HEAD_SHA}\n`, stderr: "" };
-    if (script.includes("git push --force-with-lease")) return { stdout: push, stderr: "" };
+    if (script.includes("git push ")) return { stdout: push, stderr: "" };
     if (script.includes("__VIBEHUB_GATE_JSON__")) return { stdout: probe, stderr: "" };
     if (script.includes('echo "__VIBEHUB_GATE__ pass"')) return { stdout: run, stderr: "" };
     return { stdout: "", stderr: "" };
@@ -88,8 +88,8 @@ describe("buildPushAndPrScript", () => {
     // and the CARD's token file is not touched: rewriting it here raced the card's own author
     // switch and could leave the next author's commits pushing with this delivery's token
     expect(s).not.toContain("/root/.vibehub/gh/");
-    // git push is force-with-lease, and the PR targets the given branch
-    expect(s).toContain("git push --force-with-lease origin 'card/fix-1'");
+    // git push is force-with-lease (and if-includes: another card may have pushed onto it), and the PR targets the given branch
+    expect(s).toContain("git push --force-with-lease --force-if-includes origin 'card/fix-1'");
     // never --fill: its body is the list of commits, the undocumented PR the team rule forbids
     expect(s).not.toContain("--fill");
   });
@@ -171,10 +171,87 @@ describe("forgetDeletedRemoteBranch — a branch the merge deleted on GitHub doe
     const { deliver } = await load();
     const lines = deliver.buildPushAndPrScript("vibehub-runner", TOKEN, "/work/scratch/x", "card/fix-1", "dev").split("\n");
     const guard = lines.findIndex((l) => l.includes("git ls-remote --exit-code origin 'refs/heads/card/fix-1'"));
-    const push = lines.findIndex((l) => l.includes("git push --force-with-lease origin 'card/fix-1'"));
+    const push = lines.findIndex((l) => l.includes("git push --force-with-lease --force-if-includes origin 'card/fix-1'"));
     expect(guard).toBeGreaterThan(-1);
     expect(guard).toBeLessThan(push);
     expect(lines[guard]).toContain("git update-ref -d 'refs/remotes/origin/card/fix-1'");
+  });
+});
+
+describe("buildPushAndPrScript de um card de análise (push na branch da PR)", () => {
+  it("empurra o HEAD da branch local para a branch da PR, sem force: commit alheio na PR nunca é sobrescrito", async () => {
+    const { deliver } = await load();
+    const s = deliver.buildPushAndPrScript("vibehub-runner", TOKEN, "/work/scratch/x", "feat-7", "main", { comments: [] }, { pushHeadOnto: true });
+    expect(s).toContain("git push origin 'HEAD:refs/heads/feat-7'");
+    expect(s).not.toContain("--force-with-lease");
+    // the PR is found by the PR's branch, the remote one
+    expect(s).toContain("gh pr list --head 'feat-7' --base 'main'");
+  });
+});
+
+describe("push do card do autor depois da análise (git de verdade, um repositório com duas worktrees)", () => {
+  /**
+   * All cards of a project share ONE clone, so they share `refs/remotes/origin/*`. The analysis card
+   * pushes its fixes onto the PR's branch and that moves `origin/<branch>` for the author's worktree too:
+   * a bare `--force-with-lease` would lease against the moved ref and overwrite the fixes.
+   */
+  const roots: string[] = [];
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  it("o push do autor é recusado em vez de apagar as correções que a análise subiu", async () => {
+    const { deliver } = await load();
+    const root = await mkdtemp(join(tmpdir(), "vibehub-analysis-push-"));
+    roots.push(root);
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
+    const gitEnv = { ...env, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+    const sh = (cwd: string, script: string) => execFileSync("bash", ["-c", script], { cwd, encoding: "utf8", env: gitEnv });
+    const commit = (m: string) => `git -c user.name=t -c user.email=t@t commit -q --allow-empty -m ${m}`;
+    const pushLine = (opts: { pushHeadOnto?: boolean }) =>
+      deliver.buildPushAndPrScript("vibehub-runner", TOKEN, "/work/scratch/x", "card/x", "main", { comments: [] }, opts)
+        .split("\n").find((l) => l.startsWith("if ! git push"))!.replace(/echo "[^"]*error push"/, "echo refused");
+    sh(root, "git init -q --bare remote.git && git clone -q remote.git repo 2>/dev/null");
+    const repo = join(root, "repo");
+    sh(repo, `${commit("base")} && git push -q origin HEAD:main && git checkout -q -b card/x && ${commit("pr")} && git push -q origin card/x`);
+    // the analysis card: its own local branch from the PR's head, in a second worktree of the same clone
+    sh(repo, "git worktree add -q ../analysis -b analysis/a origin/card/x");
+    const analysis = join(root, "analysis");
+    sh(analysis, `${commit("fix")} && ${pushLine({ pushHeadOnto: true })}`);
+    const fixed = sh(root, "git --git-dir=remote.git rev-parse refs/heads/card/x").trim();
+    expect(fixed).toBe(sh(analysis, "git rev-parse HEAD").trim());
+    // the author's card, never having fetched the fix, delivers again
+    sh(repo, commit("late"));
+    expect(sh(repo, `${pushLine({})} 2>/dev/null; true`)).toContain("refused");
+    expect(sh(root, "git --git-dir=remote.git rev-parse refs/heads/card/x").trim()).toBe(fixed);
+  });
+});
+
+describe("push do card de análise numa PR que já foi mergeada (git de verdade)", () => {
+  const roots: string[] = [];
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  it("branch da PR apagada no GitHub: recusa o push em vez de recriar a branch órfã", async () => {
+    const { deliver } = await load();
+    const root = await mkdtemp(join(tmpdir(), "vibehub-analysis-gone-"));
+    roots.push(root);
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
+    const gitEnv = { ...env, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+    const sh = (cwd: string, script: string) => execFileSync("bash", ["-c", script], { cwd, encoding: "utf8", env: gitEnv });
+    const commit = (m: string) => `git -c user.name=t -c user.email=t@t commit -q --allow-empty -m ${m}`;
+    sh(root, "git init -q --bare remote.git && git clone -q remote.git repo 2>/dev/null");
+    const repo = join(root, "repo");
+    sh(repo, `${commit("base")} && git push -q origin HEAD:main && git checkout -q -b feat-7 origin/main && ${commit("pr")} && git push -q origin feat-7`);
+    sh(repo, `git checkout -q -b card/a origin/feat-7 && ${commit("fix")}`);
+    // the PR was merged meanwhile and GitHub deleted its branch
+    sh(root, "git --git-dir=remote.git update-ref -d refs/heads/feat-7");
+    const body = deliver.buildPushAndPrScript("vibehub-runner", TOKEN, "/work/scratch/x", "feat-7", "main", { comments: [] }, { pushHeadOnto: true })
+      .split("\n");
+    const steps = body.filter((l) => l.includes("ls-remote") || l.startsWith("if ! git push")).join("\n");
+    expect(sh(repo, `${steps}\necho continued`)).toContain("__VIBEHUB_DELIVER__ error push");
+    expect(sh(root, "git --git-dir=remote.git rev-parse --verify -q refs/heads/feat-7 || echo gone").trim()).toBe("gone");
   });
 });
 
@@ -1142,6 +1219,28 @@ describe("deliver com revisão de PR ativa no card", () => {
     expect(out).toMatchObject({ merged: false, reason: "review_active", branch: "dev", prUrl: PR });
     expect(pushRan()).toBe(true);
     expect(mergeRan()).toBe(false);
+  });
+
+  it("card de análise: empurra o HEAD na branch da PR e grava o PR com a branch dela", async () => {
+    const { deliver, registry, project } = await makeCard();
+    const analysis = await registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" });
+    wire();
+    const out = await deliver.deliver(analysis.id, { branch: "dev", pushOnly: true });
+    expect(out).toMatchObject({ reason: "pushed", prUrl: PR, cardBranch: "feat-7" });
+    expect(scripts().some((s) => s.includes("git push origin 'HEAD:refs/heads/feat-7'"))).toBe(true);
+    expect((await registry.getCard(analysis.id))?.prs?.[0]).toMatchObject({ number: 7, branch: "feat-7" });
+  });
+
+  it("card de análise nunca mergeia, nem autorizado nem pelo merge-only: o merge da PR é de uma pessoa", async () => {
+    const { deliver, registry, project } = await makeCard();
+    const analysis = await registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" });
+    wire();
+    expect(await deliver.deliver(analysis.id, { branch: "dev", authorized: true })).toMatchObject({ merged: false, reason: "unauthorized", prUrl: PR });
+    expect(mergeRan()).toBe(false);
+    runScript.mockClear();
+    const mergeOnly = await deliver.deliver(analysis.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: HEAD_SHA });
+    expect(mergeOnly).toMatchObject({ merged: false, reason: "locked" });
+    expect(runScript).not.toHaveBeenCalled();
   });
 
   it("pushOnly: empurra e acha o PR, sem gate e sem merge, mesmo autorizado", async () => {
