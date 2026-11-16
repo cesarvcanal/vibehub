@@ -225,6 +225,9 @@ export function buildPushAndPrScript(
   docs: CleanPrDocs = { comments: [] }, opts: { pushHeadOnto?: boolean } = {},
 ): string {
   assertSafeRemotePath(cwd);
+  const pushCommand = opts.pushHeadOnto
+    ? `git push origin ${shQuote(`HEAD:refs/heads/${branch}`)}`
+    : `git push --force-with-lease origin ${shQuote(branch)}`;
   const textFlags = [
     docs.title !== undefined ? `--title "$TITLE"` : "",
     docs.body !== undefined ? `--body-file "$BODY"` : "",
@@ -250,9 +253,7 @@ export function buildPushAndPrScript(
     ...ghTokenPreamble(token),
     `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
     forgetDeletedRemoteBranch(branch),
-    opts.pushHeadOnto
-      ? `if ! git push origin ${shQuote(`HEAD:refs/heads/${branch}`)}; then echo "${MARKER} error push"; exit 0; fi`
-      : `if ! git push --force-with-lease origin ${shQuote(branch)}; then echo "${MARKER} error push"; exit 0; fi`,
+    `if ! ${pushCommand}; then echo "${MARKER} error push"; exit 0; fi`,
     ...(docs.title !== undefined ? [`TITLE=$(${decoded(docs.title)})`] : []),
     ...(docs.body !== undefined ? [`BODY=$(mktemp)`, `trap 'rm -f "$BODY"' EXIT`, `${decoded(docs.body)} > "$BODY"`] : []),
     `URL=$(gh pr list --head ${shQuote(branch)} --base ${shQuote(target)} --state open --json url --jq '.[0].url' 2>/dev/null)`,

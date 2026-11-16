@@ -40,19 +40,18 @@ function openAnalysisOf(cards: Card[], prUrl: string): Card | undefined {
   return cards.find((c) => c.pushBranch !== undefined && c.column !== "done" && (c.prs ?? []).some((p) => p.url === prUrl));
 }
 
-async function readProjectPulls(projectId: string, user: PublicUser): Promise<{ pulls: OpenPull[]; cards: Card[] }> {
+async function readOpenPulls(projectId: string, user: PublicUser): Promise<OpenPull[]> {
   const project = await getProject(projectId);
   if (!project) throw new Error("project not found");
   if (!project.repoFullName) throw new Error("sem_repositorio: o projeto não tem repositório no GitHub");
   const { owner, repo } = splitRepo(project.repoFullName);
   const [actor, settings, connections] = await Promise.all([getUserGit(user.id), getSettings(), listGithubConnections()]);
   const { connectionId } = resolveIdentity({ actor, project, settings, connections });
-  const [pulls, cards] = await Promise.all([listOpenPulls(connectionId, owner, repo), listCards(projectId)]);
-  return { pulls, cards };
+  return await listOpenPulls(connectionId, owner, repo);
 }
 
 export async function listProjectPulls(projectId: string, user: PublicUser): Promise<ProjectPull[]> {
-  const { pulls, cards } = await readProjectPulls(projectId, user);
+  const [pulls, cards] = await Promise.all([readOpenPulls(projectId, user), listCards(projectId)]);
   return pulls.map((pull) => {
     const card = openAnalysisOf(cards, pull.url);
     return card ? { ...pull, analysisCardId: card.id } : pull;
@@ -81,7 +80,7 @@ export async function startAnalysis(input: {
   prNumber: number;
   requester: PublicUser;
 }): Promise<{ card: Card; created: boolean }> {
-  const { pulls } = await readProjectPulls(input.projectId, input.requester);
+  const pulls = await readOpenPulls(input.projectId, input.requester);
   const pull = pulls.find((p) => p.number === input.prNumber);
   if (!pull) throw new Error(`pr_nao_aberta: o PR #${input.prNumber} não está aberto neste repositório`);
   if (pull.fromFork) throw new Error(`pr_fork: o PR #${pull.number} vem de outro repositório, e a correção não tem onde ser empurrada`);

@@ -34,21 +34,20 @@ export function ProjectPrsDialog({ projectId, projectName, open, onOpenChange, o
     enabled: open,
   });
 
+  const openCard = (cardId: string) => {
+    onOpenChange(false);
+    onOpenCard(cardId);
+  };
+
   const analyse = useMutation({
     mutationFn: (prNumber: number) => boardApi.startPrAnalysis(projectId, prNumber),
     onSuccess: ({ card }) => {
       void qc.invalidateQueries({ queryKey: projectPullsKey(projectId) });
       void qc.invalidateQueries({ queryKey: ["board"] });
-      onOpenChange(false);
-      onOpenCard(card.id);
+      openCard(card.id);
     },
     onError: (e) => toast.error(apiErrorMessage(e)),
   });
-
-  const openCard = (cardId: string) => {
-    onOpenChange(false);
-    onOpenCard(cardId);
-  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
