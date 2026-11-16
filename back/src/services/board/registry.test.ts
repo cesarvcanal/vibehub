@@ -639,7 +639,10 @@ describe("board registry (persisted)", () => {
       });
       expect(card).toMatchObject({ projectId: p.id, base: "card/login-ab12", accountSlug: "mussa", pushBranch: "card/login-ab12", column: "waiting" });
       // the PR's branch is usually still checked out by the author's card: git refuses a second worktree on it
-      expect(card.branch).toBe(`analysis/${card.worktreeSlug}`);
+      // its own branch is the derived card/<slug>: the one a delete drops, so nothing is left behind on purge
+      expect(card.branch).toBeUndefined();
+      const ws = await import("./workspace.js");
+      expect(ws.ownBranch(card)).toBe(`card/${card.worktreeSlug}`);
       expect(card.reviewOf).toBeUndefined();
       expect(await reg.getCard(card.id)).toMatchObject({ pushBranch: "card/login-ab12" });
       await expect(reg.createAnalysisCard({ projectId: p.id, accountSlug: undefined, prBranch: "a;rm -rf", title: "x" })).rejects.toThrow(/invalid branch/);

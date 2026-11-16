@@ -445,7 +445,7 @@ export interface Card {
   reviewOf?: string;
   /**
    * ANALYSIS CARD — the remote branch its deliveries push to, when it is not the card's own: the branch
-   * of the PR it analyses. The card works on a local branch of its own (`analysis/<slug>`, cut from the
+   * of the PR it analyses. The card works on its own derived branch (`card/<slug>`, cut from the
    * PR's head) because git refuses a second worktree on a branch, and the author's card usually still
    * holds the PR's. Set only by {@link createAnalysisCard}, at creation, never through the HTTP edit.
    * Absent = the card pushes its own branch, as always.
@@ -1788,8 +1788,9 @@ export async function createReviewerCard(input: {
 /**
  * Creates the card that ANALYSES a PR and fixes what it finds on the PR itself. Through {@link createCard}:
  *  - `base` = the PR's branch, so the worktree is cut from exactly what is analysed;
- *  - `branch` = `analysis/<its own slug>` locally, and `pushBranch` = the PR's branch: the fixes land on
- *    the PR without a second worktree on its branch (see `Card.pushBranch`);
+ *  - its own derived branch locally (`card/<slug>`, the one a delete drops, so a purge leaves no ref
+ *    behind), and `pushBranch` = the PR's branch: the fixes land on the PR without a second worktree on
+ *    its branch (see `Card.pushBranch`);
  *  - the Claude account of whoever asked, and `waiting` — it starts at once.
  */
 export async function createAnalysisCard(input: {
@@ -1801,7 +1802,7 @@ export async function createAnalysisCard(input: {
   return createCard(
     { projectId: input.projectId, title: input.title },
     { base: input.prBranch, accountSlug: input.accountSlug, column: "waiting" },
-    { branchFor: (slug) => `analysis/${slug}`, pushBranch: input.prBranch },
+    { pushBranch: input.prBranch },
   );
 }
 

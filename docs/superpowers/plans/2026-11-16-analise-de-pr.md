@@ -99,7 +99,7 @@ isso com um helper de nível por projeto em `auth/access.ts`, ao lado do `cardLe
 O usuário escolheu commitar na própria branch da PR: quando a PR é aberta o autor já terminou, então
 não há edição concorrente. Restrição técnica que sobra: o git não deixa duas worktrees na mesma
 branch, e o card do autor costuma continuar com ela. Por isso o card de análise tem branch LOCAL
-própria (`analysis/<slug>`, nascida de `origin/<branch da PR>`) e um campo opcional novo no card,
+própria (a derivada `card/<slug>`, nascida de `origin/<branch da PR>`, que o purge já apaga) e um campo opcional novo no card,
 `pushBranch` (a branch da PR), que o `deliver` usa como destino do push
 (`git push --force-with-lease origin HEAD:refs/heads/<pushBranch>`) e como `--head` na busca da PR.
 Card sem o campo segue exatamente como hoje (leitura compatível do `board.json`).
