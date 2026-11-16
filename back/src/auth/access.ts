@@ -52,6 +52,18 @@ export async function canAccessProject(user: PublicUser | null, projectId: strin
 }
 
 /**
+ * May this user WORK on this project as a whole (start something new in it, like a PR analysis)? The
+ * owner, or a member with a `work` share on the PROJECT. A share on one of its cards reaches that card,
+ * not the project: it lets the project be seen ({@link canAccessProject}), never worked on.
+ */
+export async function canWorkOnProject(user: PublicUser | null, projectId: string): Promise<boolean> {
+  if (!user) return false;
+  if (user.role === "owner") return true;
+  const shares = await registry.sharesForUser(user.id);
+  return shares.some((s) => s.kind === "project" && s.targetId === projectId && s.level === "work");
+}
+
+/**
  * Narrows a project list to what this user may see — the rule of {@link canAccessProject}, with the
  * shares and the cards read ONCE for the whole list (per project, it reloaded both and scanned every
  * card again: projects x cards on every board load of a member).
