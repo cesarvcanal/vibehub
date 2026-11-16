@@ -16,7 +16,7 @@ import { eventsAfter, onCardEvent, recordMessage, type CardEvent, type Severity 
 import { logger } from "../../utils/logger.js";
 import { clipLine } from "../../utils/clipLine.js";
 import {
-  MAX_ROUNDS, MERGE_GATE_AUTO_RETRIES, mergeGateSelfHealing, applyAuthorResponses, applyReviewerVerdicts, autoMergeEligible, waivedText, type ReviewOrders, blockingOpen, normalizeSubmittedFindings, pendingImprovements, pendingQuestions,
+  MAX_ROUNDS, MERGE_GATE_AUTO_RETRIES, mergeGateSelfHealing, applyAuthorResponses, applyReviewerVerdicts, autoMergeEligible, cardsToConclude, waivedText, type ReviewOrders, blockingOpen, normalizeSubmittedFindings, pendingImprovements, pendingQuestions,
   isReviewClosed, phaseAfterReviewerRound,
   type AuthorAnswerStatus, type Finding, type FindingStatus, type Review, type ReviewEvent, type ReviewEventItem,
   type SubmittedFinding,
@@ -639,7 +639,7 @@ export async function startReview(input: {
         updatedAt: now,
       };
       note(fresh, "system", `Revisão iniciada: o revisor confere o PR #${pr.number} (rodada 1 de ${MAX_ROUNDS}).`);
-      if (input.orders) applyReviewOrders(fresh, input.orders);
+      if (input.orders) applyReviewOrders(fresh, input.orders, card.id);
       if (fixCard) note(fresh, "system", `A correção roda no card "${fixCard.title}", na conta Claude do autor.`);
       else if (authorCard.id !== card.id) note(fresh, "system", `A correção roda no card "${authorCard.title}", que já trabalha a branch do PR.`);
       // The reviewer acts on their card through the relay's `recordCardActor`, which only lands with `work`.
@@ -1374,31 +1374,35 @@ export async function markReviewMerged(
     }
     await announcePhase(after);
     await retireReviewerCard(after);
-    // "...e concluir o card": the card that gave the order, the one that attached the PR, or the author's when it is the same.
-    if (after.concludeWhenMerged) await moveCardToDone(after, after.hubCardId ?? after.cardId, "ordering card");
+    // "...e concluir o card": each card that gave that order.
+    for (const cardId of cardsToConclude(after)) await moveCardToDone(after, cardId, "ordering card");
   }
   return after;
 }
 
 /**
- * The orders for the end ("mergeia e conclui o card") that reach an ALREADY running review through the card's
+ * The orders for the end ("mergeia e conclui o card") that reach an ALREADY running review through a card's
  * own `vibehub_deliver` (see `deliverCard`), recorded as if they had come with "Pedir revisão": without this
  * the deliver answered `review_active` and the order died there — the review merged by itself later and the
- * card stayed open (PR #301). `mergeAuthorized` stays the merger's alone, as in `startReview`; concluding the
- * card any role that can merge may ask for. Repeating records nothing new.
+ * card stayed open (PR #301). Who may give them is the caller's check (the merger, as in `startReview`). A
+ * review that closed in the meantime records nothing: there is no merge ahead to carry them out.
  */
-export async function recordReviewOrders(reviewId: string, orders: ReviewOrders): Promise<Review> {
-  return await mutateReview(reviewId, (r) => applyReviewOrders(r, orders));
+export async function recordReviewOrders(reviewId: string, orders: ReviewOrders, orderingCardId: string): Promise<Review> {
+  return await mutateReview(reviewId, (r) => {
+    if (!isReviewClosed(r.phase)) applyReviewOrders(r, orders, orderingCardId);
+  });
 }
 
 /** Sets on the review the orders it does not hold yet, each with its note in the log; shared by `startReview`. */
-function applyReviewOrders(review: Review, orders: ReviewOrders): void {
+function applyReviewOrders(review: Review, orders: ReviewOrders, orderingCardId: string): void {
   if (orders.mergeAuthorized && !review.mergeAuthorized) {
     review.mergeAuthorized = true;
     note(review, "system", "Merge autorizado por quem mergeia: pronta sem bloqueante nem dúvida, o merge sai sozinho (sugestão em pé não segura).");
   }
-  if (orders.concludeWhenMerged && !review.concludeWhenMerged) {
-    review.concludeWhenMerged = true;
+  const toConclude = cardsToConclude(review);
+  if (orders.concludeWhenMerged && !toConclude.includes(orderingCardId)) {
+    review.concludeCardIds = [...toConclude, orderingCardId];
+    delete review.concludeWhenMerged;
     note(review, "system", "Mergeada, o card que deu a ordem vai para Concluído.");
   }
 }

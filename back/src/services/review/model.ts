@@ -174,8 +174,15 @@ export interface Review {
    */
   mergeAuthorized?: boolean;
   /**
-   * The same order asked to complete the card: once the review is merged, the card that gave the order
-   * goes to `done` (the one that attached the PR, `hubCardId`, or the author's when it is the same one).
+   * The cards whose order asked to complete them ("…e concluir o card"): once the review is merged, each goes
+   * to `done`. The card that asked for the review (`hubCardId ?? cardId`) when the order came with it, or the
+   * card that delivered itself with the order while the review was running (author's or reviewer's, see
+   * `deliverCard`) — which is why it is the card's id and not a flag: with an attached PR they are different cards.
+   */
+  concludeCardIds?: string[];
+  /**
+   * LEGACY, read only: reviews recorded before `concludeCardIds` wrote this flag, which meant the card that
+   * asked for the review ({@link cardsToConclude}). Never written again; the next order replaces it.
    */
   concludeWhenMerged?: boolean;
   lastSubmitRound?: number;
@@ -342,8 +349,17 @@ export function canMergeReview(
   return [review.mergerUserId, review.reviewerUserId, review.authorUserId, review.coauthorUserId].includes(userId);
 }
 
-/** The orders whoever merges gives when asking for the review (see the fields of {@link Review}). */
-export type ReviewOrders = Pick<Review, "mergeAuthorized" | "concludeWhenMerged">;
+/** The orders whoever merges gives for the end of the review: merge when ready, and conclude the ordering card. */
+export interface ReviewOrders {
+  mergeAuthorized?: boolean;
+  concludeWhenMerged?: boolean;
+}
+
+/** The cards that go to `done` when the review is merged, legacy flag included ({@link Review.concludeCardIds}). PURE. */
+export function cardsToConclude(review: Review): string[] {
+  if (review.concludeCardIds) return review.concludeCardIds;
+  return review.concludeWhenMerged ? [review.hubCardId ?? review.cardId] : [];
+}
 
 /** A suggestion the authorised merge lets through: standing and not requested from the author. PURE. */
 function isWaived(review: Review, f: Finding): boolean {
