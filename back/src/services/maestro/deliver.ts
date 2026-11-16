@@ -215,10 +215,14 @@ function decoded(text: string): string {
  * The PR's text comes from `docs` (already validated, prDocs.ts) — never `--fill`, whose body is the
  * list of commits. No open PR and not enough to open a documented one: `error undocumented`, after the
  * push. An open PR is reused; given a title or body, it is rewritten with them (`gh pr edit`). PURE.
+ *
+ * `pushHeadOnto`: the card works on a local branch of its own and `branch` is SOMEBODY ELSE's (the PR an
+ * analysis card fixes, `Card.pushBranch`): its HEAD goes onto that branch WITHOUT force, so a commit the
+ * author pushed meanwhile makes the push fail visibly instead of being overwritten.
  */
 export function buildPushAndPrScript(
   containerName: string, token: string, cwd: string, branch: string, target: string,
-  docs: CleanPrDocs = { comments: [] },
+  docs: CleanPrDocs = { comments: [] }, opts: { pushHeadOnto?: boolean } = {},
 ): string {
   assertSafeRemotePath(cwd);
   const textFlags = [
@@ -246,7 +250,9 @@ export function buildPushAndPrScript(
     ...ghTokenPreamble(token),
     `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
     forgetDeletedRemoteBranch(branch),
-    `if ! git push --force-with-lease origin ${shQuote(branch)}; then echo "${MARKER} error push"; exit 0; fi`,
+    opts.pushHeadOnto
+      ? `if ! git push origin ${shQuote(`HEAD:refs/heads/${branch}`)}; then echo "${MARKER} error push"; exit 0; fi`
+      : `if ! git push --force-with-lease origin ${shQuote(branch)}; then echo "${MARKER} error push"; exit 0; fi`,
     ...(docs.title !== undefined ? [`TITLE=$(${decoded(docs.title)})`] : []),
     ...(docs.body !== undefined ? [`BODY=$(mktemp)`, `trap 'rm -f "$BODY"' EXIT`, `${decoded(docs.body)} > "$BODY"`] : []),
     `URL=$(gh pr list --head ${shQuote(branch)} --base ${shQuote(target)} --state open --json url --jq '.[0].url' 2>/dev/null)`,
@@ -1059,7 +1065,9 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
   const project = await getProject(card.projectId);
   if (!project) throw new Error("project for this card not found");
 
-  const source = cardBranch(card);
+  // An analysis card delivers onto the PR's branch, not its local one (`Card.pushBranch`): every remote
+  // step below — push, PR lookup, merge — names the PR's branch.
+  const source = card.pushBranch ?? cardBranch(card);
   // A LOCKED card has exactly one exit: a pull request back to the branch it was cut from. The
   // target it was ASKED for is ignored rather than refused — the point of the lock is that the
   // delivery still works, it just cannot land anywhere else. See `Card.locked` in registry.ts.
@@ -1129,7 +1137,7 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
   } else {
     // (a)+(b) push and resolve the PR.
     const prOut = await hostExecutor().runScript(
-      buildPushAndPrScript(container, token, cwd, source, target, docs),
+      buildPushAndPrScript(container, token, cwd, source, target, docs, { pushHeadOnto: card.pushBranch !== undefined }),
       { timeoutMs: 120_000 },
     );
     const pr = parsePushAndPr(prOut.stdout);

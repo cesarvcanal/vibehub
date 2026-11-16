@@ -56,7 +56,7 @@ function wire(over: { push?: string; probe?: string; run?: string; merge?: strin
     if (script.includes("/reviews' --input")) return { stdout: over.review ?? "__VIBEHUB_DELIVER__ review ok", stderr: "" };
     if (script.includes("gh pr merge")) return { stdout: merge, stderr: "" };
     if (script.includes("gh pr checks")) return { stdout: `${over.ci ?? NO_CHECKS}\n__VIBEHUB_CI__ done ${HEAD_SHA}\n`, stderr: "" };
-    if (script.includes("git push --force-with-lease")) return { stdout: push, stderr: "" };
+    if (script.includes("git push ")) return { stdout: push, stderr: "" };
     if (script.includes("__VIBEHUB_GATE_JSON__")) return { stdout: probe, stderr: "" };
     if (script.includes('echo "__VIBEHUB_GATE__ pass"')) return { stdout: run, stderr: "" };
     return { stdout: "", stderr: "" };
@@ -175,6 +175,17 @@ describe("forgetDeletedRemoteBranch — a branch the merge deleted on GitHub doe
     expect(guard).toBeGreaterThan(-1);
     expect(guard).toBeLessThan(push);
     expect(lines[guard]).toContain("git update-ref -d 'refs/remotes/origin/card/fix-1'");
+  });
+});
+
+describe("buildPushAndPrScript de um card de análise (push na branch da PR)", () => {
+  it("empurra o HEAD da branch local para a branch da PR, sem force: commit alheio na PR nunca é sobrescrito", async () => {
+    const { deliver } = await load();
+    const s = deliver.buildPushAndPrScript("vibehub-runner", TOKEN, "/work/scratch/x", "feat-7", "main", { comments: [] }, { pushHeadOnto: true });
+    expect(s).toContain("git push origin 'HEAD:refs/heads/feat-7'");
+    expect(s).not.toContain("--force-with-lease");
+    // the PR is found by the PR's branch, the remote one
+    expect(s).toContain("gh pr list --head 'feat-7' --base 'main'");
   });
 });
 
@@ -1142,6 +1153,16 @@ describe("deliver com revisão de PR ativa no card", () => {
     expect(out).toMatchObject({ merged: false, reason: "review_active", branch: "dev", prUrl: PR });
     expect(pushRan()).toBe(true);
     expect(mergeRan()).toBe(false);
+  });
+
+  it("card de análise: empurra o HEAD na branch da PR e grava o PR com a branch dela", async () => {
+    const { deliver, registry, project } = await makeCard();
+    const analysis = await registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" });
+    wire();
+    const out = await deliver.deliver(analysis.id, { branch: "dev", pushOnly: true });
+    expect(out).toMatchObject({ reason: "pushed", prUrl: PR, cardBranch: "feat-7" });
+    expect(scripts().some((s) => s.includes("git push origin 'HEAD:refs/heads/feat-7'"))).toBe(true);
+    expect((await registry.getCard(analysis.id))?.prs?.[0]).toMatchObject({ number: 7, branch: "feat-7" });
   });
 
   it("pushOnly: empurra e acha o PR, sem gate e sem merge, mesmo autorizado", async () => {
