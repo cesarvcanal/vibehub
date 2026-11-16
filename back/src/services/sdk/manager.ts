@@ -14,6 +14,7 @@ import { createLineReader } from "../../utils/lineReader.js";
 import { writeCardCatalog } from "./catalog.js";
 import { normalizeRateLimit, type RateLimitInfo } from "./rateLimit.js";
 import { normalizeContextUsage, type ContextUsageInfo } from "./contextUsage.js";
+import { saveLastContext, type StoredContext } from "./lastContext.js";
 import { forgetCardWorkflows, lastWorkflowRuns, readAgentFeed, watchCardWorkflows } from "./workflow.js";
 import { InvalidWorkflowIdError } from "./workflowProbe.js";
 import { InvalidDetailIdError, readAgentTimeline, readToolDetail } from "./detail.js";
@@ -371,7 +372,6 @@ export function setDriverSpawnerForTesting(fn: DriverSpawner | null): void {
 export function resetSdkSessionsForTesting(): void {
   for (const cardId of [...sessions.keys()]) stopCardDriver(cardId);
   sessions.clear();
-  lastContextByCard.clear();
 }
 
 /** Whether a card has a LIVE driver right now. */
@@ -814,7 +814,7 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
     const info = normalizeContextUsage(event);
     if (!info) return;
     session.contextUsage = info;
-    if (session.lastSessionId) lastContextByCard.set(session.cardId, { sessionId: session.lastSessionId, info });
+    if (session.lastSessionId) void saveLastContext(session.cardId, { sessionId: session.lastSessionId, info });
     event = { type: "context_usage", ...info };
   }
   if (event.type === "compaction") {
@@ -960,6 +960,13 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
     syncAwaitingDecision(session);
   }
   if (!silenced) broadcast(session, event);
+  // The front zeroes the meter on `ready` (a new driver does not inherit a reading) and counts on the back to
+  // resend the session's one behind it. `attachSocket` does that on a reconnect; a socket that attached while
+  // this driver was still booting got the remembered reading BEFORE this `ready` — and lost it until the next
+  // message (production, 2026-11-16: "eu preciso mandar mensagem para aparecer").
+  if (event.type === "ready" && session.contextUsage) {
+    broadcast(session, { type: "context_usage", ...session.contextUsage });
+  }
   if (event.type === "conversation_reset" && (event.trigger === undefined || event.trigger === "clear")) {
     // The /clear cleared the model's CONTEXT; the card's log has to go with it, otherwise the F5 brought back the
     // whole conversation and the /clear seemed to have done nothing. Only what came BEFORE the "/clear" goes
@@ -974,7 +981,7 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
     // The erased conversation takes up nothing any more: its meter goes with it (the new session's reading
     // arrives at the end of the /clear's turn).
     session.contextUsage = undefined;
-    lastContextByCard.delete(session.cardId);
+    void saveLastContext(session.cardId, null);
     emitSystemNote(session, NOTE_CONVERSATION_CLEARED);
   }
   if (interruptNoteToFlush) emitSystemNote(session, interruptNoteToFlush);
@@ -1107,19 +1114,6 @@ export function createDetailResponder(
   };
 }
 
-/**
- * Each card's last context reading, BY THE SESSION it belongs to — it survives the end of the
- * driver (idle stop, pause). A reopened card that resumes the same session (`--resume`) already shows the
- * meter, without waiting for the next message; a different session does not inherit another's number.
- */
-const lastContextByCard = new Map<string, { sessionId: string; info: ContextUsageInfo }>();
-
-/** The id the driver is going to resume, read from the spawn's argv (`--resume <id>`). */
-function resumeIdOf(args: readonly string[]): string | undefined {
-  const i = args.indexOf("--resume");
-  return i >= 0 ? args[i + 1] : undefined;
-}
-
 /* ------------------------------------------------------------------- API */
 
 export interface EnsureDriverOpts {
@@ -1130,6 +1124,18 @@ export interface EnsureDriverOpts {
   command: { file: string; args: string[] };
   /** The card's transcript dir in the runner — where a workflow's journal lives (optional). */
   transcriptDir?: string;
+  /**
+   * The session `command` resumes — the same id the caller gave `sdkDriverCommand`. It cannot be read back
+   * from the command: the real spawn is `bash -lc '<whole line>'` (or ssh with the line as one string), so
+   * `--resume` is never an argv element of its own.
+   */
+  resumeSessionId?: string;
+  /**
+   * The card's last context reading, from disk (./lastContext.ts): a reopened card that resumes THAT session
+   * shows the meter without waiting for the next message — after an idle stop, a pause or a deploy. A
+   * different session does not inherit another's number.
+   */
+  rememberedContext?: StoredContext | null;
 }
 
 /**
@@ -1174,8 +1180,9 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     ...(opts.transcriptDir ? { transcriptDir: opts.transcriptDir } : {}),
   };
   sessions.set(opts.cardId, session);
-  const remembered = lastContextByCard.get(opts.cardId);
-  if (remembered && remembered.sessionId === resumeIdOf(opts.command.args)) session.contextUsage = remembered.info;
+  if (opts.rememberedContext && opts.resumeSessionId && opts.rememberedContext.sessionId === opts.resumeSessionId) {
+    session.contextUsage = opts.rememberedContext.info;
+  }
   // What each person had already ticked on the open cards, from before the restart (or from the previous driver).
   session.draftsLoaded = restoreQuestionDrafts(session).catch((err: unknown) => {
     logger.warn({ card: opts.label, detail: (err as Error).message }, "could not restore the question drafts");

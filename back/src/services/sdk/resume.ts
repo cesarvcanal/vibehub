@@ -15,6 +15,7 @@ import { restoreMissingWorkspace } from "../board/workspace.js";
 import { reportCardStatusFromDriver } from "../board/agentState.js";
 import { BACKGROUND_HOLD_MAX_MS, SYSTEM_ORIGIN, driverTurnRunning, ensureDriverSession, injectSystemTurn, shutdownAllDrivers } from "./manager.js";
 import { stopAllMirrors } from "./mirror.js";
+import { readLastContext } from "./lastContext.js";
 import { transcriptDirFor } from "../maestro/cardSession.js";
 import { effectiveAccountSlug } from "../board/registry.js";
 import { logger } from "../../utils/logger.js";
@@ -436,7 +437,7 @@ async function resumeCard(
     // The resume uses the key persisted on the card (resumeSessionId — written by the manager on every
     // session/result). The connect's transcript probe does not run here: it is the same target in practice,
     // and the boot must not depend on an ls in the runner for each card.
-    const command = await deps.commandFor(project, card);
+    const [command, rememberedContext] = await Promise.all([deps.commandFor(project, card), readLastContext(card.id)]);
     // The preparation takes seconds (install, workspace, command): if in the meantime the conversation
     // MOVED ON — the person wrote in a driver the reconnect brought up, and the marker is already their turn —
     // the continuation would land on top of someone's turn. Checked here, right before injecting.
@@ -450,6 +451,10 @@ async function resumeCard(
       label: card.worktreeSlug,
       command,
       transcriptDir: transcriptDirFor(project, card, effectiveAccountSlug(card, project)),
+      // The meter of the resumed session: whoever opens the card reuses THIS driver, and without it there would be
+      // no reading until the continued turn ends.
+      ...(card.resumeSessionId ? { resumeSessionId: card.resumeSessionId } : {}),
+      rememberedContext,
     });
     // WITHOUT progress — the resumed turn's marker only gets `progressed` when the AI produces something
     // (manager); if it dies before that, the next boot only takes note.

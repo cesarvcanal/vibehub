@@ -25,6 +25,9 @@ const h = vi.hoisted(() => ({
   externalSubscriptions: 0,
   /** Who the route stamped as the card's author, in order. */
   stamps: [] as string[],
+  /** The `--resume` target the spawn command carries, and the context reading on disk. */
+  resumeId: undefined as string | undefined,
+  rememberedContext: null as null | { sessionId: string; info: { usedTokens: number; maxTokens: number; percent: number } },
 }));
 
 // The route reads the author with `requestUser` (the user the gate already resolved); with no gate here, nobody.
@@ -41,7 +44,7 @@ vi.mock("../services/board/registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../services/board/registry.js")>();
   return {
     ...actual,
-    getCard: () => Promise.resolve({ id: CARD, projectId: "p1", worktreeSlug: "t" }),
+    getCard: () => Promise.resolve({ id: CARD, projectId: "p1", worktreeSlug: "t", ...(h.resumeId ? { resumeSessionId: h.resumeId } : {}) }),
     getProject: () => Promise.resolve({ id: "p1" }),
     effectiveAccountSlug: () => undefined,
     updateCard: () => Promise.resolve(undefined),
@@ -50,7 +53,9 @@ vi.mock("../services/board/registry.js", async (importOriginal) => {
 });
 vi.mock("../services/sdk/driver.js", () => ({
   installCardSdkDriver: () => h.install?.promise ?? Promise.resolve(),
-  sdkDriverCommand: () => Promise.resolve({ file: "docker", args: ["exec"] }),
+  // The real shape: the whole line in one `bash -lc` argument (LocalExecutor.pipeCommand).
+  sdkDriverCommand: (_project: unknown, card: { resumeSessionId?: string }) =>
+    Promise.resolve({ file: "bash", args: ["-lc", `docker exec -i runner node sdk-driver.mjs${card.resumeSessionId ? ` --resume ${card.resumeSessionId}` : ""}`] }),
 }));
 vi.mock("../services/board/workspace.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../services/board/workspace.js")>()),
@@ -63,6 +68,10 @@ vi.mock("../services/maestro/cardSession.js", () => ({ transcriptDirFor: () => "
 vi.mock("../services/sdk/catalog.js", () => ({
   readCardCatalog: () => Promise.resolve(null),
   writeCardCatalog: () => Promise.resolve(),
+}));
+vi.mock("../services/sdk/lastContext.js", () => ({
+  readLastContext: () => Promise.resolve(h.rememberedContext),
+  saveLastContext: () => Promise.resolve(),
 }));
 vi.mock("../services/sdk/history.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../services/sdk/history.js")>();
@@ -143,6 +152,8 @@ beforeEach(() => {
   h.acquireCalls = 0;
   h.externalSubscriptions = 0;
   h.stamps = [];
+  h.resumeId = undefined;
+  h.rememberedContext = null;
   let resolve: () => void = () => undefined;
   const promise = new Promise<void>((r) => { resolve = r; });
   h.install = { promise, resolve };
@@ -206,6 +217,41 @@ describe("/api/cards/:id/sdk — só a ORDEM troca o autor do card", () => {
     expect(h.stamps).toEqual([]);
     socket.emit("message", Buffer.from(`{"type":"user","text":"corrige o que o review apontou"}`));
     expect(h.stamps).toEqual(["u-mussa"]);
+    socket.close();
+  });
+});
+
+/**
+ * "O contexto não aparece… eu preciso mandar mensagem para aparecer" (production, 2026-11-16): the reading lived
+ * only in the back's memory, and the deploy (the merge of the card's own PR included) wiped it. The route reads the
+ * one on disk before bringing the driver up, so the first frame already carries the meter.
+ */
+describe("/api/cards/:id/sdk — o medidor de contexto depois do deploy", () => {
+  const meterFrames = (socket: FakeSocket) =>
+    socket.sent.map((s) => JSON.parse(s) as { type: string }).filter((e) => e.type === "context_usage");
+  const reading = { sessionId: "s-1", info: { usedTokens: 52_000, maxTokens: 200_000, percent: 26 } };
+
+  it("card que retoma a sessão da leitura gravada mostra o medidor sem mandar mensagem", async () => {
+    h.resumeId = "s-1";
+    h.rememberedContext = reading;
+    const handler = await captureHandler();
+    const socket = fakeSocket();
+    h.install?.resolve();
+    await handler(socket as unknown as WebSocket, { params: { id: CARD } });
+
+    expect(meterFrames(socket)).toEqual([{ type: "context_usage", ...reading.info }]);
+    socket.close();
+  });
+
+  it("a leitura de outra sessão não aparece", async () => {
+    h.resumeId = "s-2";
+    h.rememberedContext = reading;
+    const handler = await captureHandler();
+    const socket = fakeSocket();
+    h.install?.resolve();
+    await handler(socket as unknown as WebSocket, { params: { id: CARD } });
+
+    expect(meterFrames(socket)).toEqual([]);
     socket.close();
   });
 });

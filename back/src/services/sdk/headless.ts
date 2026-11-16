@@ -3,6 +3,7 @@ import { effectiveAccountSlug } from "../board/registry.js";
 import { reapplyCardIdentity, restoreMissingWorkspace } from "../board/workspace.js";
 import { installCardSdkDriver, sdkDriverCommand } from "./driver.js";
 import { ensureDriverSession, liveDriverSession, type DriverSession } from "./manager.js";
+import { readLastContext } from "./lastContext.js";
 import { buildLatestTranscriptScript, parseLatestTranscript, resumeTargetFor } from "./transcript.js";
 import { transcriptDirFor } from "../maestro/cardSession.js";
 import { config } from "../../config/env.js";
@@ -60,11 +61,14 @@ async function prepareAndSpawn(cardId: string): Promise<DriverSession> {
     logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not read the card transcript before a headless driver start");
   }
   const resumeTarget = resumeTargetFor(card, latestSessionId);
-  const command = await sdkDriverCommand(project, { ...card, resumeSessionId: resumeTarget });
+  const [command, rememberedContext] = await Promise.all([
+    sdkDriverCommand(project, { ...card, resumeSessionId: resumeTarget }),
+    readLastContext(card.id),
+  ]);
   // Re-check: a chat tab may have spawned the driver while this one was preparing.
   const raced = liveDriverSession(card.id);
   if (raced) return raced;
-  const session = ensureDriverSession({ cardId: card.id, label: card.worktreeSlug, command, transcriptDir });
+  const session = ensureDriverSession({ cardId: card.id, label: card.worktreeSlug, command, transcriptDir, resumeSessionId: resumeTarget, rememberedContext });
   logger.info(
     { audit: true, action: "sdk.driver.headless", card: card.worktreeSlug, resume: resumeTarget ?? null },
     "native chat driver started for an order from outside the board (no browser)",
