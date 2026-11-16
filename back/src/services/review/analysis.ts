@@ -1,6 +1,7 @@
 import { creatorAccountSlug, getUserGit } from "../../auth/userGit.js";
 import type { PublicUser } from "../../auth/users.js";
 import { recordCardActor } from "../board/actor.js";
+import { purgeCard } from "../board/purge.js";
 import {
   createAnalysisCard, getProject, listCards, listGithubConnections, recordCardPr, type Card,
 } from "../board/registry.js";
@@ -10,6 +11,7 @@ import type { MessageOrigin } from "../chat/provenance.js";
 import { sendToTerminal, SEND_READY_WAIT_MS } from "../maestro/maestro.js";
 import { getSettings } from "../settings/settings.js";
 import { analysisPrompt } from "./prompts.js";
+import { activeReviewForPr } from "./store.js";
 
 /**
  * PR ANALYSIS FROM THE PANEL — the project's open PRs, read from GitHub on every call, and the card that
@@ -73,7 +75,10 @@ function serialPerPr<T>(key: string, run: () => Promise<T>): Promise<T> {
 
 /**
  * Opens the analysis of PR `prNumber`, or returns the one already open (`created: false`). Refusals with
- * the code in the message, which the route turns into 400: `sem_repositorio`, `pr_nao_aberta`, `pr_fork`.
+ * the code in the message, which the route turns into 400: `sem_repositorio`, `pr_nao_aberta`, `pr_fork`,
+ * `revisao_ativa` (a two-AI review of the same PR is running: the analysis' push would move the head it
+ * reviews). A card whose prompt could not be delivered is purged and the error goes up: left behind, the
+ * next click would find it and answer "already open" for an analysis that never started.
  */
 export async function startAnalysis(input: {
   projectId: string;
@@ -84,6 +89,7 @@ export async function startAnalysis(input: {
   const pull = pulls.find((p) => p.number === input.prNumber);
   if (!pull) throw new Error(`pr_nao_aberta: o PR #${input.prNumber} não está aberto neste repositório`);
   if (pull.fromFork) throw new Error(`pr_fork: o PR #${pull.number} vem de outro repositório, e a correção não tem onde ser empurrada`);
+  if (await activeReviewForPr(pull.url)) throw new Error(`revisao_ativa: o PR #${pull.number} está em revisão; a análise mexeria no que está sendo revisado`);
 
   return await serialPerPr(pull.url, async () => {
     const existing = openAnalysisOf(await listCards(input.projectId), pull.url);
@@ -95,19 +101,24 @@ export async function startAnalysis(input: {
       prBranch: pull.branch,
       title: `Análise PR #${pull.number} · ${pull.title}`,
     });
-    await recordCardPr(card.id, { number: pull.number, url: pull.url, base: pull.base, branch: pull.branch, title: pull.title, author: pull.author });
-    await sendToTerminal(card.id, analysisPrompt({ cardId: card.id, prNumber: pull.number, prUrl: pull.url, branch: pull.branch, base: pull.base }), {
-      by: `analysis:${input.requester.username}`,
-      origin: ANALYSIS_ORIGIN,
-      // Same delivery as the review's relay: wake the new card, wait for Claude, never type into a menu,
-      // and go through the native chat so the conversation does not fork.
-      wake: true,
-      requireAgent: true,
-      guardInteractiveMenu: true,
-      readyWaitMs: SEND_READY_WAIT_MS,
-      viaNativeChat: true,
-      beforeDeliver: async () => recordCardActor(input.requester, card.id),
-    });
+    try {
+      await recordCardPr(card.id, { number: pull.number, url: pull.url, base: pull.base, branch: pull.branch, title: pull.title, author: pull.author });
+      await sendToTerminal(card.id, analysisPrompt({ cardId: card.id, prNumber: pull.number, prUrl: pull.url, branch: pull.branch, base: pull.base }), {
+        by: `analysis:${input.requester.username}`,
+        origin: ANALYSIS_ORIGIN,
+        // Same delivery as the review's relay: wake the new card, wait for Claude, never type into a menu,
+        // and go through the native chat so the conversation does not fork.
+        wake: true,
+        requireAgent: true,
+        guardInteractiveMenu: true,
+        readyWaitMs: SEND_READY_WAIT_MS,
+        viaNativeChat: true,
+        beforeDeliver: async () => recordCardActor(input.requester, card.id),
+      });
+    } catch (err) {
+      await purgeCard(card.id, `analysis:${input.requester.username}`);
+      throw err;
+    }
     return { card, created: true };
   });
 }

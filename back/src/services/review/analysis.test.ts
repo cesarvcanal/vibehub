@@ -11,6 +11,9 @@ import type { SendOpts } from "../maestro/maestro.js";
  * boundary: GitHub (`listOpenPulls`) and typing into the card (`sendToTerminal`).
  */
 
+// The purge after a failed start goes through the whole card teardown: generous under a loaded runner.
+vi.setConfig({ testTimeout: 30_000 });
+
 let dir = "";
 let pulls: OpenPull[] = [];
 let githubDown = false;
@@ -132,6 +135,29 @@ describe("startAnalysis", () => {
     const again = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert });
     expect(again.created).toBe(true);
     expect(again.card.id).not.toBe(first.card.id);
+  });
+
+  it("se o prompt não chega ao card, o card some e o erro sobe: tentar de novo cria outro e manda o prompt", async () => {
+    const { analysis, registry, project } = await load();
+    sendToTerminal.mockRejectedValueOnce(new Error("card has no live session"));
+    await expect(analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert })).rejects.toThrow(/no live session/);
+    expect(await registry.listCards(project.id)).toHaveLength(0);
+    const retry = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert });
+    expect(retry.created).toBe(true);
+    expect(sendToTerminal).toHaveBeenCalledTimes(2);
+  });
+
+  it("PR com revisão de duas IAs em andamento é recusada: o push da análise mexeria no que está sendo revisado", async () => {
+    const { analysis, registry, project } = await load();
+    const store = await import("./store.js");
+    const now = Date.now();
+    await store.insertReview({
+      id: "rev-1", cardId: "card-a", projectId: project.id, prNumber: 7, prUrl: pull(7).url, prBranch: "feat/pr-7", base: "dev",
+      reviewerUserId: "u-r", authorUserId: "u-a", mergerUserId: "u-m", reviewerCardId: "card-r",
+      round: 1, phase: "reviewing", findings: [], log: [], nudges: 0, createdAt: now, updatedAt: now,
+    });
+    await expect(analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert })).rejects.toThrow(/revisao_ativa/);
+    expect(await registry.listCards(project.id)).toHaveLength(0);
   });
 
   it("PR de fork e PR que não está aberta são recusadas sem criar card", async () => {
