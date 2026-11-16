@@ -230,7 +230,7 @@ describe("the focused project's header — sharing in the open", () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Open pull requests of billing" }));
     expect(await screen.findByTestId("project-prs-dialog")).toBeInTheDocument();
-    expect(await screen.findByText("No open pull requests in this repository.")).toBeInTheDocument();
+    expect(await screen.findByText("No open pull requests")).toBeInTheDocument();
   });
 
   it("offers no share button to a member", async () => {
