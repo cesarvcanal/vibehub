@@ -184,6 +184,17 @@ describe("ProjectPrsDialog", () => {
     await waitFor(() => expect(get.mock.calls.filter(([url]) => url === "/projects/p1/prs")).toHaveLength(2));
   });
 
+  it("an account without access to the repository is told so at once, with the server's reason", async () => {
+    serve(Object.assign(new Error("Request failed with status code 403"), {
+      response: { status: 403, data: { error: "sem_acesso_repo: a conta GitHub albert-gh não tem acesso a acme/erp" } },
+    }));
+    open();
+    expect(await screen.findByText("Your GitHub account cannot see this repository's pull requests")).toBeInTheDocument();
+    expect(screen.getByText(/albert-gh não tem acesso a acme\/erp/)).toBeInTheDocument();
+    // a 403 is not retried: it is shown on the first answer
+    expect(get.mock.calls.filter(([url]) => url === "/projects/p1/prs")).toHaveLength(1);
+  });
+
   it("shows the error when GitHub does not answer", async () => {
     serve(new Error("GitHub returned 502 while listing pull requests"));
     open();

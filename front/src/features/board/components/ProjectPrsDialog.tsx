@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
-import { GitPullRequest, Loader2, RotateCw } from "lucide-react";
+import { GitPullRequest, Loader2, Lock, RotateCw } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -108,6 +108,14 @@ export function ProjectPrsDialog({ projectId, open, onOpenChange, onOpenCard }: 
 
         {pulls.isPending ? (
           <p className="py-6 text-center text-sm text-muted-foreground">{t("common.loading")}</p>
+        ) : pulls.isError && isForbidden(pulls.error) ? (
+          // The asker's GitHub account does not see the repository: theirs to fix, so it says what to do.
+          <div className="flex flex-col items-center gap-1 py-8 text-center">
+            <Lock className="mb-1 h-6 w-6 text-muted-foreground" />
+            <p className="text-sm font-medium">{t("prs.noAccess")}</p>
+            <p className="text-sm text-muted-foreground">{apiErrorMessage(pulls.error)}</p>
+            <p className="text-sm text-muted-foreground">{t("prs.noAccessHint")}</p>
+          </div>
         ) : pulls.isError ? (
           <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {apiErrorMessage(pulls.error)}
@@ -138,6 +146,11 @@ export function ProjectPrsDialog({ projectId, open, onOpenChange, onOpenCard }: 
       </DialogContent>
     </Dialog>
   );
+}
+
+/** The list was refused with 403: the asker's GitHub account does not see the project's repository. */
+function isForbidden(err: unknown): boolean {
+  return (err as { response?: { status?: number } } | null)?.response?.status === 403;
 }
 
 /** Why a PR cannot be analysed, when it cannot. */

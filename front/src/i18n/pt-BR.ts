@@ -362,6 +362,8 @@ export const ptBR: Record<string, string> = {
   "prs.unsupportedBranch": "Nome de branch não suportado",
   "prs.emptyHint": "Abra uma no GitHub e atualize a lista.",
   "prs.refresh": "Atualizar lista",
+  "prs.noAccess": "Sua conta do GitHub não enxerga as pull requests deste repositório",
+  "prs.noAccessHint": "Peça acesso ao repositório no GitHub, ou conecte no vibehub uma conta GitHub que o alcance.",
   "prs.analysing": "Analisando",
   "prs.alreadyOpen": "A PR #{number} já tem análise aberta; o revisor e o coautor escolhidos não foram aplicados",
   "prs.starting": "Iniciando…",

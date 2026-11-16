@@ -458,12 +458,20 @@ describe("listOpenPulls", () => {
     expect(await gh.listOpenPulls("", "octocat", "hello")).toHaveLength(101);
   });
 
-  it("erro do GitHub falha à vista, nunca vira lista vazia", async () => {
+  it("repositório que a conta não enxerga (404) é null, não lista vazia", async () => {
     const { gh } = await fresh();
     stubIdentity("octocat");
     await gh.connect("personal", "ghp_token");
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ message: "Not Found" }, { status: 404 })));
-    await expect(gh.listOpenPulls("", "octocat", "hello")).rejects.toThrow(/404/);
+    expect(await gh.listOpenPulls("", "octocat", "hello")).toBeNull();
+  });
+
+  it("erro do GitHub falha à vista, nunca vira lista vazia", async () => {
+    const { gh } = await fresh();
+    stubIdentity("octocat");
+    await gh.connect("personal", "ghp_token");
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ message: "Server Error" }, { status: 500 })));
+    await expect(gh.listOpenPulls("", "octocat", "hello")).rejects.toThrow(/500/);
   });
 
   it("rejects path segments that are not repository names", async () => {

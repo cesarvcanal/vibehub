@@ -17,9 +17,11 @@ vi.setConfig({ testTimeout: 30_000 });
 let dir = "";
 let pulls: OpenPull[] = [];
 let githubDown = false;
-const listOpenPulls = vi.fn(async () => {
+/** The asker's GitHub account does not see the repository: GitHub answers 404 and the client gives null. */
+let repoHidden = false;
+const listOpenPulls = vi.fn(async (): Promise<OpenPull[] | null> => {
   if (githubDown) throw new Error("GitHub returned 502 while listing pull requests");
-  return pulls;
+  return repoHidden ? null : pulls;
 });
 /** One PR by number, as GitHub would answer: the open ones come from `pulls`, the rest is closed or unknown. */
 let closed: OpenPull[] = [];
@@ -94,6 +96,7 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "vibehub-analysis-"));
   pulls = [pull(7), pull(8, { fromFork: true, branch: "patch" })];
   githubDown = false;
+  repoHidden = false;
   closed = [pull(5)];
   listOpenPulls.mockClear();
   readPull.mockClear();
@@ -133,6 +136,12 @@ describe("listProjectPulls", () => {
     await expect(analysis.listProjectPulls(bare.id, albert)).rejects.toThrow(/sem_repositorio/);
     githubDown = true;
     await expect(analysis.listProjectPulls(project.id, albert)).rejects.toThrow(/502/);
+  });
+
+  it("repositório que a conta de quem pede não enxerga é recusado dizendo a conta e o repositório", async () => {
+    const { analysis, project } = await load();
+    repoHidden = true;
+    await expect(analysis.listProjectPulls(project.id, albert)).rejects.toThrow(/^sem_acesso_repo: .*albert-gh.*acme\/widgets/);
   });
 });
 

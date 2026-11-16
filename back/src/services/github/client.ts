@@ -422,8 +422,10 @@ const MAX_PULL_PAGES = 5;
 /**
  * The repository's OPEN pull requests, read from GitHub on every call: the PR analysis picks from what
  * is on GitHub right now, never from a list kept by vibehub (a PR opened by hand shows up at once).
+ * `null` = the account does not see the repository: GitHub answers 404 for a private repository the
+ * token does not reach, never 403. Any other failure throws.
  */
-export async function listOpenPulls(connectionId: string | null | undefined, owner: string, repo: string): Promise<OpenPull[]> {
+export async function listOpenPulls(connectionId: string | null | undefined, owner: string, repo: string): Promise<OpenPull[] | null> {
   assertRepoPart(owner, "owner");
   assertRepoPart(repo, "repository");
   const token = await tokenFor(connectionId);
@@ -432,6 +434,10 @@ export async function listOpenPulls(connectionId: string | null | undefined, own
   const perPage = 100;
   for (let page = 1; page <= MAX_PULL_PAGES; page += 1) {
     const res = await githubFetch(`/repos/${owner}/${repo}/pulls?state=open&per_page=${perPage}&page=${page}&sort=updated&direction=desc`, token);
+    if (res.status === 404) {
+      await res.body?.cancel();
+      return null;
+    }
     if (!res.ok) {
       await res.body?.cancel();
       throw new Error(`GitHub returned ${res.status} while listing pull requests`);

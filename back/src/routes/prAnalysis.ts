@@ -6,6 +6,8 @@ import { NOT_FOUND, sendError } from "./httpError.js";
 
 /** GitHub failing to answer is not the caller's fault: the list is not there to give. */
 const GITHUB_FAILED = [/^GitHub returned/, 502] as const;
+/** The asker's GitHub account does not see the repository: theirs to fix (ask for access), not GitHub's. */
+const NO_REPO_ACCESS = [/^sem_acesso_repo/, 403] as const;
 
 /**
  * PR ANALYSIS — the project's open PRs and the button that analyses one (`services/review/analysis.ts`).
@@ -20,7 +22,7 @@ export async function prAnalysisRoutes(app: FastifyInstance): Promise<void> {
     try {
       return await reply.send({ pulls: await listProjectPulls(req.params.id, user!) });
     } catch (err) {
-      return await sendError(reply, err, { rules: [GITHUB_FAILED, NOT_FOUND] });
+      return await sendError(reply, err, { rules: [NO_REPO_ACCESS, GITHUB_FAILED, NOT_FOUND] });
     }
   });
 
