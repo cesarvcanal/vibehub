@@ -6,7 +6,7 @@ import type { ProjectPull } from "@/api/types";
 import { toast } from "sonner";
 import { ProjectPrsDialog } from "./ProjectPrsDialog";
 
-vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
+vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { success: vi.fn(), info: vi.fn(), error: vi.fn() }) }));
 
 vi.setConfig({ testTimeout: 30_000 });
 configure({ asyncUtilTimeout: 8_000 });
@@ -32,11 +32,11 @@ const pull = (n: number, extra: Partial<ProjectPull> = {}): ProjectPull => ({
   branch: `feat/${n}`, base: "dev", fromFork: false, draft: false, updatedAt: "2026-11-16T12:00:00Z", ...extra,
 });
 
-function serve(pulls: ProjectPull[] | Error) {
+function serve(pulls: ProjectPull[] | Error, people: () => unknown = () => ({ people: PEOPLE })) {
   get.mockImplementation(async (url: string) => {
     if (url === "/auth/me") return { user: OWNER };
     if (url === "/setup/state") return setupState();
-    if (url === "/projects/p1/analysis-people") return { people: PEOPLE };
+    if (url === "/projects/p1/analysis-people") return people();
     if (url === "/projects/p1/prs") {
       if (pulls instanceof Error) throw pulls;
       return { pulls };
@@ -89,6 +89,48 @@ describe("ProjectPrsDialog", () => {
     open();
     await userEvent.click(await screen.findByRole("button", { name: "Analyse PR #636" }));
     await userEvent.click(await screen.findByRole("button", { name: "Start analysis" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/projects/p1/prs/636/analysis", { reviewerUserId: "u1" }));
+  });
+
+  it("a PR already under analysis says so instead of 'started', and that the chosen roles were not applied", async () => {
+    serve([pull(636)]);
+    post.mockResolvedValue({ card: { id: "c7", projectId: "p1" }, created: false });
+    const onOpenCard = open();
+    await userEvent.click(await screen.findByRole("button", { name: "Analyse PR #636" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Start analysis" }));
+    await waitFor(() => expect(toast.info).toHaveBeenCalledWith(
+      "PR #636 already has an analysis open; the roles you picked were not applied", expect.anything(),
+    ));
+    expect(toast.success).not.toHaveBeenCalled();
+    const { action } = vi.mocked(toast.info).mock.calls[0]![1] as unknown as { action: { onClick: () => void } };
+    action.onClick();
+    expect(onOpenCard).toHaveBeenCalledWith("c7");
+  });
+
+  it("when the people cannot be loaded, the row says so and can try again", async () => {
+    let fail = true;
+    serve([pull(636)], () => {
+      if (fail) throw new Error("server returned 500");
+      return { people: PEOPLE };
+    });
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: "Analyse PR #636" }));
+    expect(await screen.findByText(/server returned 500/)).toBeInTheDocument();
+    fail = false;
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByLabelText("Reviewer")).toHaveValue("u1");
+  });
+
+  it("picking the co-author as reviewer clears the co-author, so it never comes back unpicked", async () => {
+    serve([pull(636)]);
+    post.mockResolvedValue({ card: { id: "c9", projectId: "p1" }, created: true });
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: "Analyse PR #636" }));
+    await userEvent.selectOptions(await screen.findByLabelText("Co-author"), "u3");
+    await userEvent.selectOptions(screen.getByLabelText("Reviewer"), "u3");
+    await userEvent.selectOptions(screen.getByLabelText("Reviewer"), "u1");
+    expect(screen.getByLabelText("Co-author")).toHaveValue("");
+    await userEvent.click(screen.getByRole("button", { name: "Start analysis" }));
     await waitFor(() => expect(post).toHaveBeenCalledWith("/projects/p1/prs/636/analysis", { reviewerUserId: "u1" }));
   });
 

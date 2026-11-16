@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { GitPullRequest, Loader2, RotateCw } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -63,12 +63,13 @@ export function ProjectPrsDialog({ projectId, open, onOpenChange, onOpenCard }: 
       setChoosing(null);
       setStarting((current) => new Set(current).add(prNumber));
     },
-    onSuccess: ({ card }, { prNumber }) => {
+    onSuccess: ({ card, created }, { prNumber }) => {
       void qc.invalidateQueries({ queryKey: projectPullsKey(projectId) });
       void qc.invalidateQueries({ queryKey: ["board"] });
-      toast.success(translate("prs.started", { number: prNumber }), {
-        action: { label: translate("prs.openAnalysis"), onClick: () => openCard(card.id) },
-      });
+      const action = { label: translate("prs.openAnalysis"), onClick: () => openCard(card.id) };
+      // Already open (a stale list, or someone else a moment before): that card keeps its own roles.
+      if (created) toast.success(translate("prs.started", { number: prNumber }), { action });
+      else toast.info(translate("prs.alreadyOpen", { number: prNumber }), { action });
     },
     onError: (e) => toast.error(apiErrorMessage(e)),
     onSettled: (_data, _error, { prNumber }) =>
@@ -125,7 +126,7 @@ export function ProjectPrsDialog({ projectId, open, onOpenChange, onOpenCard }: 
                 pull={pull}
                 starting={starting.has(pull.number)}
                 choosing={choosing === pull.number}
-                people={people.data}
+                people={people}
                 onChoose={() => setChoosing(pull.number)}
                 onCancel={() => setChoosing(null)}
                 onStart={(roles) => analyse.mutate({ prNumber: pull.number, roles })}
@@ -150,8 +151,8 @@ function PullRow({ pull, starting, choosing, people, onChoose, onCancel, onStart
   pull: ProjectPull;
   starting: boolean;
   choosing: boolean;
-  /** Who can review or co-author; absent while it loads. */
-  people: AnalysisPerson[] | undefined;
+  /** Who can review or co-author. */
+  people: UseQueryResult<AnalysisPerson[]>;
   onChoose: () => void;
   onCancel: () => void;
   onStart: (roles: AnalysisRoles) => void;
@@ -219,8 +220,15 @@ function PullRow({ pull, starting, choosing, people, onChoose, onCancel, onStart
       </div>
       {choosing ? (
         // Mounted only once the people are there, so its first render already picks the default reviewer.
-        people ? (
-          <RolesPicker pull={pull} people={people} onCancel={onCancel} onStart={onStart} />
+        people.data ? (
+          <RolesPicker pull={pull} people={people.data} onCancel={onCancel} onStart={onStart} />
+        ) : people.isError ? (
+          <div className="mt-2 flex items-center gap-2 text-xs text-destructive">
+            <span className="min-w-0 flex-1">{apiErrorMessage(people.error)}</span>
+            <Button type="button" size="sm" variant="ghost" disabled={people.isFetching} onClick={() => void people.refetch()}>
+              {t("common.tryAgain")}
+            </Button>
+          </div>
         ) : (
           <p className="mt-2 text-xs text-muted-foreground">{t("common.loading")}</p>
         )
@@ -241,11 +249,16 @@ function RolesPicker({ pull, people, onCancel, onStart }: {
   const ids = React.useId();
   const [reviewer, setReviewer] = React.useState(() => defaultReviewerId(people, user?.id, pull));
   const [coauthor, setCoauthor] = React.useState("");
+  // The reviewer already signs the commits: picked as reviewer, they stop being the co-author.
+  const pickReviewer = (id: string) => {
+    setReviewer(id);
+    if (id === coauthor) setCoauthor("");
+  };
   return (
     <div className="mt-2 flex flex-wrap items-end gap-2 rounded-md bg-muted/40 p-2">
       <label className="flex min-w-[9rem] flex-1 flex-col gap-1 text-xs text-muted-foreground" htmlFor={`${ids}-reviewer`}>
         {t("prs.reviewer")}
-        <select id={`${ids}-reviewer`} className={SELECT_CLASS} value={reviewer} onChange={(e) => setReviewer(e.target.value)}>
+        <select id={`${ids}-reviewer`} className={SELECT_CLASS} value={reviewer} onChange={(e) => pickReviewer(e.target.value)}>
           <option value="" disabled>{t("prs.pickReviewer")}</option>
           {people.map((person) => (
             <option key={person.id} value={person.id} disabled={isPrAuthor(person, pull)}>
@@ -269,7 +282,7 @@ function RolesPicker({ pull, people, onCancel, onStart }: {
           type="button"
           size="sm"
           disabled={!reviewer}
-          onClick={() => onStart({ reviewerUserId: reviewer, ...(coauthor && coauthor !== reviewer ? { coauthorUserId: coauthor } : {}) })}
+          onClick={() => onStart({ reviewerUserId: reviewer, ...(coauthor ? { coauthorUserId: coauthor } : {}) })}
         >
           {t("prs.start")}
         </Button>

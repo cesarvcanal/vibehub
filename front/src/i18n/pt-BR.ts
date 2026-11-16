@@ -363,6 +363,7 @@ export const ptBR: Record<string, string> = {
   "prs.emptyHint": "Abra uma no GitHub e atualize a lista.",
   "prs.refresh": "Atualizar lista",
   "prs.analysing": "Analisando",
+  "prs.alreadyOpen": "A PR #{number} já tem análise aberta; o revisor e o coautor escolhidos não foram aplicados",
   "prs.starting": "Iniciando…",
   "prs.started": "Análise da PR #{number} iniciada",
   "prs.reviewer": "Revisor",

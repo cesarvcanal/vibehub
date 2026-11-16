@@ -362,6 +362,7 @@ export const en: Record<string, string> = {
   "prs.emptyHint": "Open one on GitHub and refresh the list.",
   "prs.refresh": "Refresh list",
   "prs.analysing": "Analysing",
+  "prs.alreadyOpen": "PR #{number} already has an analysis open; the roles you picked were not applied",
   "prs.starting": "Starting…",
   "prs.started": "Analysis of PR #{number} started",
   "prs.reviewer": "Reviewer",
