@@ -102,7 +102,7 @@ export async function startAnalysis(input: {
       title: `Análise PR #${pull.number} · ${pull.title}`,
     });
     try {
-      await recordCardPr(card.id, { number: pull.number, url: pull.url, base: pull.base, branch: pull.branch, title: pull.title, author: pull.author });
+      await recordCardPr(card.id, { number: pull.number, url: pull.url, base: pull.base, branch: pull.branch });
       await sendToTerminal(card.id, analysisPrompt({ cardId: card.id, prNumber: pull.number, prUrl: pull.url, branch: pull.branch, base: pull.base }), {
         by: `analysis:${input.requester.username}`,
         origin: ANALYSIS_ORIGIN,
