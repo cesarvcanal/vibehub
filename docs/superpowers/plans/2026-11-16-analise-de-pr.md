@@ -103,3 +103,18 @@ própria (`analysis/<slug>`, nascida de `origin/<branch da PR>`) e um campo opci
 `pushBranch` (a branch da PR), que o `deliver` usa como destino do push
 (`git push --force-with-lease origin HEAD:refs/heads/<pushBranch>`) e como `--head` na busca da PR.
 Card sem o campo segue exatamente como hoje (leitura compatível do `board.json`).
+
+## O que mudou na implementação (16/11/2026)
+
+- **Push do autor protegido** (achado do code review): todos os cards de um projeto dividem um clone, então
+  o push da análise move o `origin/<branch>` também para a worktree do autor, e o `--force-with-lease` do
+  autor passaria e apagaria as correções. O push de todo card passou a usar também `--force-if-includes`
+  (git >= 2.30): ponta remota que a branch local nunca teve é recusada. Teste com git de verdade.
+- **Análise nunca mergeia no código**, não só no prompt: o `deliver` ignora `authorized` e recusa o
+  merge-only num card com `pushBranch`.
+- **PR com revisão de duas IAs ativa é recusada** (`revisao_ativa`): o push da análise mexeria no head
+  em revisão.
+- **Falha ao entregar o prompt apaga o card** (`purgeCard`) e devolve o erro: senão o próximo clique
+  acharia o card e responderia "já em análise" para uma análise que nunca começou.
+- A aba de mudanças do card de análise procura a PR pela branch da PR (`pushBranch`).
+- Storybook do diálogo não foi feito: os diálogos irmãos (`ShareDialog`, `RequestReviewDialog`) também não têm.
