@@ -1067,6 +1067,15 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     );
     return { merged: false, reason: "locked", branch: card.base, cardBranch: cardBranch(card), locked: true };
   }
+  // An ANALYSIS card (`Card.pushBranch`) pushes its fixes onto somebody else's PR and never merges it:
+  // the merge is a person's (César and Albert, 2026-11-16). Merge-only has nothing for it to do.
+  if (card.pushBranch !== undefined && mergeOnly) {
+    logger.info(
+      { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, reason: "locked", mergeOnly, by: opts.by },
+      "merge-only refused: an analysis card never merges the PR it fixes",
+    );
+    return { merged: false, reason: "locked", branch: card.base, cardBranch: card.pushBranch, locked: true };
+  }
   const project = await getProject(card.projectId);
   if (!project) throw new Error("project for this card not found");
 
@@ -1211,10 +1220,12 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     );
     return { prUrl, merged: false, reason: "locked", branch: target, cardBranch: source, locked: true, ...commented };
   }
-  if (opts.authorized !== true) {
+  if (opts.authorized !== true || card.pushBranch !== undefined) {
     logger.info(
       { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, reason: "unauthorized", by: opts.by },
-      "deliver prepared a PR but was not authorized to merge",
+      card.pushBranch !== undefined
+        ? "analysis card delivered its fixes onto the PR; it never merges"
+        : "deliver prepared a PR but was not authorized to merge",
     );
     return { prUrl, merged: false, reason: "unauthorized", branch: target, cardBranch: source, ...commented };
   }

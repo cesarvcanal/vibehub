@@ -1203,6 +1203,18 @@ describe("deliver com revisão de PR ativa no card", () => {
     expect((await registry.getCard(analysis.id))?.prs?.[0]).toMatchObject({ number: 7, branch: "feat-7" });
   });
 
+  it("card de análise nunca mergeia, nem autorizado nem pelo merge-only: o merge da PR é de uma pessoa", async () => {
+    const { deliver, registry, project } = await makeCard();
+    const analysis = await registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" });
+    wire();
+    expect(await deliver.deliver(analysis.id, { branch: "dev", authorized: true })).toMatchObject({ merged: false, reason: "unauthorized", prUrl: PR });
+    expect(mergeRan()).toBe(false);
+    runScript.mockClear();
+    const mergeOnly = await deliver.deliver(analysis.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: HEAD_SHA });
+    expect(mergeOnly).toMatchObject({ merged: false, reason: "locked" });
+    expect(runScript).not.toHaveBeenCalled();
+  });
+
   it("pushOnly: empurra e acha o PR, sem gate e sem merge, mesmo autorizado", async () => {
     const { deliver, registry, card } = await makeCard();
     wire();
