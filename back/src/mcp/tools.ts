@@ -549,7 +549,9 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "ficar pronto\"), pass `mergeWhenReady: true`: that order is recorded on the review, so an open " +
         "SUGGESTION no longer holds the automatic merge (blocking items, questions, a missing Approve, red CI " +
         "still do) — never drop that order and leave the PR waiting for a button. \"…e concluir o card\" = " +
-        "`concludeWhenMerged: true`: once merged, this card moves to done by itself. Both are refused " +
+        "`concludeWhenMerged: true`: once merged — by itself, by the button or outside the panel — this card moves to " +
+        "done by itself. A review ALREADY running (revisao_ativa) takes the same orders through vibehub_deliver " +
+        "(authorized + from + concludeWhenMerged). Both are refused " +
         "(merge_autorizado_de_outro) when the merger is someone else. Refusals carry a code (pessoa_" +
         "desconhecida, revisor_igual_autor, revisor_sem_conta, revisor_sem_github, papel_sem_work, " +
         "revisao_ativa, sem_pr, merge_autorizado_de_outro, ...): tell the user exactly that. Returns " +
