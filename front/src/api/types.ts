@@ -461,6 +461,11 @@ export interface Card {
    */
   prs?: CardPr[];
   /**
+   * ANALYSIS CARD: the branch of the PR it analyses and fixes (the panel's "Analisar"). Its PR line offers
+   * no "Pedir revisão": the card itself is that PR's analysis. Absent = a regular card.
+   */
+  pushBranch?: string;
+  /**
    * Summary of the card's most recent review that was not cancelled — enough for the block and the
    * sidebar line; the full thing is `GET /api/cards/:id/review`. Absent = never reviewed.
    */

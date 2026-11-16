@@ -75,6 +75,15 @@ describe("PrReviewBlock", () => {
     expect(screen.getByRole("link", { name: /GitHub/ })).toHaveAttribute("href", PR.url);
   });
 
+  it("no card de análise a PR não oferece Pedir revisão: o próprio card já é a análise dela", async () => {
+    renderApp(<PrReviewBlocks card={{ id: "c1", prs: [PR], pushBranch: PR.branch }} onOpenPanel={() => {}} />);
+
+    expect(await screen.findByText("PR #553")).toBeInTheDocument();
+    expect(screen.getByText("análise neste card")).toBeInTheDocument();
+    expect(screen.queryByText("sem revisão")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Pedir revisão" })).toBeNull();
+  });
+
   it("Pedir revisão abre a janela de papéis para este PR", async () => {
     renderApp(<PrReviewBlock cardId="c1" pr={PR} onOpenPanel={() => {}} />);
     expect(screen.queryByRole("dialog")).toBeNull();

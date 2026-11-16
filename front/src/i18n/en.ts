@@ -1438,6 +1438,7 @@ export const en: Record<string, string> = {
   "review.list.unfold": "Show the PRs",
   "review.dialog.openedBy": "Opened by {login} on GitHub. The fixes run in a card of their own, on the Claude account of whoever fixes.",
   "review.dialog.authorUnknown": "Nobody on vibehub has the GitHub connection {login}: pick who fixes.",
+  "review.analysisCard": "analysed in this card",
   "review.ask": "Request review",
   "review.openPanel": "Open this PR's review",
   "review.github": "Open PR #{n} on GitHub",

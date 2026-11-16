@@ -1450,6 +1450,7 @@ export const ptBR: Record<string, string> = {
   "review.list.unfold": "Mostrar os PRs",
   "review.dialog.openedBy": "Aberto por {login} no GitHub. A correção roda num card próprio, na conta Claude de quem corrige.",
   "review.dialog.authorUnknown": "Ninguém no vibehub tem a conexão GitHub {login}: escolha quem corrige.",
+  "review.analysisCard": "análise neste card",
   "review.ask": "Pedir revisão",
   "review.openPanel": "Abrir a revisão deste PR",
   "review.github": "Abrir o PR #{n} no GitHub",
