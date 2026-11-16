@@ -88,9 +88,8 @@ duas IAs (`startReview`) não muda.
 - [ ] Revisão agnóstica (simplificação → code review) contra o `AGENTS.md`.
 - [ ] `vibehub_deliver` com PR documentado (sem `authorized` até ordem de merge).
 
-## Ponto em aberto
+## Decisão: quem pode disparar a análise (16/11/2026)
 
-**Quem pode disparar a análise.** Criar card hoje é só do dono da instalação (`POST /api/cards` com
-`requireOwner`). Opções:
-1. Dono **ou** quem tem share `work` no projeto (recomendado: devs do time analisam sem ser dono).
-2. Só o dono, igual criar card hoje.
+Qualquer pessoa que trabalha no projeto: o dono da instalação **ou** quem tem share `work` no
+projeto. Share só de `view` não dispara (leitura nunca autoriza mutação). Na tarefa 5, a rota checa
+isso com um helper de nível por projeto em `auth/access.ts`, ao lado do `cardLevel`.
