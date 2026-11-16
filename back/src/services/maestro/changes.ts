@@ -177,7 +177,8 @@ export async function readCardChanges(cardId: string): Promise<CardChanges & { c
     logger.info({ card: card.worktreeSlug, detail: (err as Error).message }, "card changes: no GitHub token, reading git only");
   }
   const { stdout } = await hostExecutor().runScript(
-    buildChangesScript(config.runner.container, token, cwd, cardBranch(card), card.base || project.baseBranch),
+    // An analysis card's PR is the one on the branch it pushes to (`Card.pushBranch`), not its local one.
+    buildChangesScript(config.runner.container, token, cwd, card.pushBranch ?? cardBranch(card), card.base || project.baseBranch),
     { timeoutMs: 60_000 },
   );
   const changes = parseChanges(stdout);

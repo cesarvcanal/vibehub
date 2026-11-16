@@ -610,7 +610,8 @@ export function analysisPrompt(a: AnalysisInput): string {
       "(body, commit_id = o sha do passo 1, path, line). Achado sem linha vai no resumo do passo 7.",
     "5. blocking e improvement: corrija agora, um commit atômico por achado. Em bug, escreva antes o teste que reproduz " +
       "a falha, veja falhar pelo motivo certo, corrija e veja passar. Responda no comentário do achado com o sha do commit " +
-      "(gh api .../pulls/comments/<id>/replies). question: não mexa; pergunte no chat deste card, com o conflito e as " +
+      `(gh api repos/{owner}/{repo}/pulls/${a.prNumber}/comments/<id>/replies). question: não mexa; pergunte no chat deste ` +
+      "card, com o conflito e as " +
       "alternativas, e siga com o resto. suggestion: só no resumo.",
     `6. Entregue as correções: chame vibehub_deliver com card = "${a.cardId}" e branch = "${a.base}", sem title nem body ` +
       "(a descrição do PR é do autor) e sem authorized (o merge é de uma pessoa). Os commits vão para a branch da PR. " +

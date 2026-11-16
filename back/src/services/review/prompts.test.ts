@@ -235,6 +235,8 @@ describe("prompt da análise de PR", () => {
     const text = analysisPrompt(input);
     expect(text).toMatch(/teste que reproduz/);
     expect(text).toContain("pulls/636/comments");
+    expect(text).toContain("pulls/636/comments/<id>/replies");
+    expect(text).not.toContain("${");
     expect(text).toContain("gh pr review 636 --comment");
     expect(text).toContain('vibehub_deliver com card = "card-9" e branch = "dev"');
     expect(text).not.toMatch(/authorized: true/);

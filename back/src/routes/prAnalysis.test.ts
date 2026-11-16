@@ -145,6 +145,17 @@ describe("POST /api/projects/:id/prs/:number/analysis", () => {
     expect((await analyse(w.member, w.projectId, 636)).json()).toMatchObject({ created: false, card: { id: card.id } });
   });
 
+  it("um card compartilhado mostra o projeto, mas não dá trabalho no projeto: vê a lista, não dispara", async () => {
+    const w = await world();
+    const cardId = (await app.inject({
+      method: "POST", url: "/api/cards", headers: { cookie: w.owner }, payload: { projectId: w.projectId, title: "conciliação" },
+    })).json().card.id as string;
+    await app.inject({ method: "POST", url: `/api/cards/${cardId}/shares`, headers: { cookie: w.owner }, payload: { userId: w.memberId, level: "work" } });
+    expect((await list(w.member, w.projectId)).statusCode).toBe(200);
+    expect((await analyse(w.member, w.projectId, 636)).statusCode).toBe(403);
+    expect(sendToTerminal).not.toHaveBeenCalled();
+  });
+
   it("leitura não dispara (403), sem acesso é 404, PR inválida ou fechada é 400", async () => {
     const w = await world();
     expect((await analyse(w.member, w.projectId, 636)).statusCode).toBe(404);
