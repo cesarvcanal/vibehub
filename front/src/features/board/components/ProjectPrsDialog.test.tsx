@@ -81,6 +81,13 @@ describe("ProjectPrsDialog", () => {
     expect(post).not.toHaveBeenCalled();
   });
 
+  it("a PR whose branch name vibehub refuses cannot be analysed, and says why", async () => {
+    serve([pull(642, { branch: "feat/ação-estoque", unsupportedBranch: true })]);
+    open();
+    expect(await screen.findByRole("button", { name: "Analyse PR #642" })).toBeDisabled();
+    expect(screen.getByText("Its branch name is not one vibehub accepts for a card")).toBeInTheDocument();
+  });
+
   it("says when there are no open PRs, and shows GitHub's failure instead of an empty list", async () => {
     serve([]);
     open();

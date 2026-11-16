@@ -359,6 +359,7 @@ export const en: Record<string, string> = {
   "prs.empty": "No open pull requests in this repository.",
   "prs.meta": "{author} · {branch} → {base}",
   "prs.fork": "From a fork: the fixes would have nowhere to go",
+  "prs.unsupportedBranch": "Its branch name is not one vibehub accepts for a card",
   "prs.draft": "Draft",
   "prs.analyse": "Analyse",
   "prs.analyseOf": "Analyse PR #{number}",

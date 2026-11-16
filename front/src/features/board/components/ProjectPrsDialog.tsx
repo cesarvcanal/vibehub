@@ -109,6 +109,7 @@ function PullRow({ pull, busy, onAnalyse, onOpenAnalysis }: {
           {t("prs.meta", { author: pull.author, branch: pull.branch, base: pull.base })}
         </p>
         {pull.fromFork ? <p className="text-xs text-muted-foreground">{t("prs.fork")}</p> : null}
+        {pull.unsupportedBranch ? <p className="text-xs text-muted-foreground">{t("prs.unsupportedBranch")}</p> : null}
       </div>
       {analysisCardId ? (
         <Button
@@ -125,7 +126,7 @@ function PullRow({ pull, busy, onAnalyse, onOpenAnalysis }: {
           type="button"
           size="sm"
           aria-label={t("prs.analyseOf", { number: pull.number })}
-          disabled={busy || pull.fromFork}
+          disabled={busy || pull.fromFork || pull.unsupportedBranch === true}
           onClick={onAnalyse}
         >
           {t("prs.analyse")}

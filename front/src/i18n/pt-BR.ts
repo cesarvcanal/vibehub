@@ -360,6 +360,7 @@ export const ptBR: Record<string, string> = {
   "prs.empty": "Nenhuma pull request aberta neste repositório.",
   "prs.meta": "{author} · {branch} → {base}",
   "prs.fork": "Vem de um fork: a correção não teria onde ser empurrada",
+  "prs.unsupportedBranch": "O nome da branch não é um que o vibehub aceita para um card",
   "prs.draft": "Rascunho",
   "prs.analyse": "Analisar",
   "prs.analyseOf": "Analisar a PR #{number}",

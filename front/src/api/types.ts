@@ -492,6 +492,8 @@ export interface ProjectPull {
   updatedAt: string;
   /** The card analysing it right now, when there is one. */
   analysisCardId?: string;
+  /** Its branch has a name vibehub refuses for a card (accents, `+`, over 80 chars): it cannot be analysed. */
+  unsupportedBranch?: true;
 }
 
 /** What `POST /projects/:id/prs/:number/analysis` answers: the analysis card, new or the one already open. */
