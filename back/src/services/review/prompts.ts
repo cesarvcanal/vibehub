@@ -615,7 +615,9 @@ export function analysisPrompt(a: AnalysisInput): string {
       "alternativas, e siga com o resto. suggestion: só no resumo.",
     `6. Entregue as correções: chame vibehub_deliver com card = "${a.cardId}" e branch = "${a.base}", sem title nem body ` +
       "(a descrição do PR é do autor) e sem authorized (o merge é de uma pessoa). Os commits vão para a branch da PR. " +
-      "Se o push for recusado porque a PR andou, refaça o passo 1 sobre o código novo antes de seguir.",
+      // Never the step-1 reset here: it would drop the fix commits that have not gone up yet.
+      `Se o push for recusado porque a PR andou, traga o código novo sem perder as correções: git fetch origin && git rebase origin/${a.branch}, ` +
+      "resolva os conflitos, rode de novo os testes do que mudou e entregue outra vez.",
     `7. Publique o resumo como review da PR: gh pr review ${a.prNumber} --comment --body "<resumo>", com o que achou, o ` +
       "que corrigiu (sha), as perguntas em aberto e as sugestões. O mesmo resumo, curto, no chat deste card.",
   ].join("\n");

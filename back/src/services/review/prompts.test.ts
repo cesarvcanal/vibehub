@@ -242,4 +242,12 @@ describe("prompt da análise de PR", () => {
     expect(text).not.toMatch(/authorized: true/);
     expect(text).toMatch(/sem title nem body/);
   });
+
+  it("push recusado porque a PR andou: rebase sobre o código novo, nunca o reset que apagaria as correções", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    const step6 = analysisPrompt(input).split("\n").find((l) => l.startsWith("6."))!;
+    expect(step6).toContain("git fetch origin && git rebase origin/feat-x");
+    expect(step6).not.toMatch(/reset|passo 1/);
+    expect(analysisPrompt(input).match(/reset --hard/g)).toHaveLength(1);
+  });
 });
