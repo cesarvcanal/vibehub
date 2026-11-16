@@ -103,6 +103,7 @@ function installFakes() {
       const event = JSON.parse(data);
       if (event.type === "session.close") setTimeout(() => this.emit({ type: "session.closed", reason: "close_requested" }), 50);
       if (event.type === "session.thinking.append") setTimeout(() => this.emit({ type: "session.thinking.appended" }), 20);
+      if (event.type === "session.commentary.append") setTimeout(() => this.emit({ type: "session.commentary.appended" }), 20);
     }
     close() {
       this.readyState = "closed";
@@ -310,14 +311,14 @@ const after = page.getByTestId("voice-call-orb");
 check("silence: the reply's intensity falls back to zero (no clock-driven motion)", Number(await after.getAttribute("data-ai-visual")) < 0.05, `visual=${await after.getAttribute("data-ai-visual")}`);
 check("the assistant's words are in the thread, as ONE turn", await scroller.getByText("Sim, os testes do recorte passaram todos.").isVisible());
 
-// Typing during the call: the chat's own flow, and the voice is told quietly.
+// Typing during the call: the chat's own flow, and the voice is told to say it got a text.
 const box = page.getByRole("textbox");
 await box.fill("roda o gate antes do PR");
 await box.press("Enter");
 await page.waitForTimeout(400);
 check("typed text goes through the chat's websocket (same flow)", typedFrames.some((f) => f.text === "roda o gate antes do PR"));
-const thinking = await page.evaluate(() => window.__e2e.sent.filter((e) => e.type === "session.thinking.append").map((e) => e.content));
-check("the voice is told what was typed (session.thinking.append)", thinking.some((c) => c.includes("roda o gate antes do PR")));
+const announced = await page.evaluate(() => window.__e2e.sent.filter((e) => e.type === "session.commentary.append" && e.delegation_id === null).map((e) => e.content));
+check("the voice is told to say what was typed (session.commentary.append)", announced.some((c) => c.includes("roda o gate antes do PR")));
 await page.waitForFunction(() => document.querySelector("[data-testid=voice-call-bar]")?.dataset.phase === "thinking", null, { timeout: 3_000 }).catch(() => undefined);
 await page.screenshot({ path: join(OUT, "06-digitando-durante-chamada.png") });
 await page.getByText("129 testes verdes no front").waitFor({ timeout: 5_000 });

@@ -169,13 +169,22 @@ describe("a voice call inside the card's chat", () => {
     expect(within(log).getByText("mensagem digitada antes")).toBeInTheDocument();
   });
 
-  it("typing during the call goes through the chat's own flow, and the voice is told — quietly", async () => {
+  it("typing during the call goes through the chat's own flow, and the voice is told to say it got a text", async () => {
+    // Production, 2026-11-16: sent as quiet context (thinking), the voice never mentioned the text
+    // the person had just typed — it looked ignored.
     const { ws } = await openChat();
     await startCall();
     await userEvent.type(screen.getByRole("textbox"), "roda os testes{Enter}");
     await waitFor(() => expect(ws.frames.some((f) => f.type === "user" && f.text === "roda os testes")).toBe(true));
     expect(screen.getByTestId("sdk-user")).toHaveTextContent("roda os testes");
-    await waitFor(() => expect(thinkingSent()).toEqual([expect.stringContaining("«roda os testes»")]));
+    await waitFor(() =>
+      expect(channel().sent).toContainEqual({
+        type: "session.commentary.append",
+        delegation_id: null,
+        content: expect.stringContaining("«roda os testes»"),
+      }),
+    );
+    expect(thinkingSent()).toEqual([]);
     // Waiting on the agent: the call shows it is processing (the living mark), not a frozen sphere.
     await waitFor(() => expect(screen.getByTestId("voice-call-bar")).toHaveAttribute("data-phase", "thinking"));
     expect(screen.getByTestId("voice-call-orb")).toHaveAttribute("data-orb", "logo");
