@@ -227,6 +227,34 @@ describe("push do card do autor depois da análise (git de verdade, um repositó
   });
 });
 
+describe("push do card de análise numa PR que já foi mergeada (git de verdade)", () => {
+  const roots: string[] = [];
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  it("branch da PR apagada no GitHub: recusa o push em vez de recriar a branch órfã", async () => {
+    const { deliver } = await load();
+    const root = await mkdtemp(join(tmpdir(), "vibehub-analysis-gone-"));
+    roots.push(root);
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
+    const gitEnv = { ...env, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+    const sh = (cwd: string, script: string) => execFileSync("bash", ["-c", script], { cwd, encoding: "utf8", env: gitEnv });
+    const commit = (m: string) => `git -c user.name=t -c user.email=t@t commit -q --allow-empty -m ${m}`;
+    sh(root, "git init -q --bare remote.git && git clone -q remote.git repo 2>/dev/null");
+    const repo = join(root, "repo");
+    sh(repo, `${commit("base")} && git push -q origin HEAD:main && git checkout -q -b feat-7 origin/main && ${commit("pr")} && git push -q origin feat-7`);
+    sh(repo, `git checkout -q -b card/a origin/feat-7 && ${commit("fix")}`);
+    // the PR was merged meanwhile and GitHub deleted its branch
+    sh(root, "git --git-dir=remote.git update-ref -d refs/heads/feat-7");
+    const body = deliver.buildPushAndPrScript("vibehub-runner", TOKEN, "/work/scratch/x", "feat-7", "main", { comments: [] }, { pushHeadOnto: true })
+      .split("\n");
+    const steps = body.filter((l) => l.includes("ls-remote") || l.startsWith("if ! git push")).join("\n");
+    expect(sh(repo, `${steps}\necho continued`)).toContain("__VIBEHUB_DELIVER__ error push");
+    expect(sh(root, "git --git-dir=remote.git rev-parse --verify -q refs/heads/feat-7 || echo gone").trim()).toBe("gone");
+  });
+});
+
 describe("buildMergeScript", () => {
   it("merges with a merge commit, never a squash, token over stdin", async () => {
     const { deliver } = await load();

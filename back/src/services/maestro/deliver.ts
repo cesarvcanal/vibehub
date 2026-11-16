@@ -218,7 +218,8 @@ function decoded(text: string): string {
  *
  * `pushHeadOnto`: the card works on a local branch of its own and `branch` is SOMEBODY ELSE's (the PR an
  * analysis card fixes, `Card.pushBranch`): its HEAD goes onto that branch WITHOUT force, so a commit the
- * author pushed meanwhile makes the push fail visibly instead of being overwritten.
+ * author pushed meanwhile makes the push fail visibly instead of being overwritten, and a branch that is
+ * gone from GitHub is never recreated.
  */
 export function buildPushAndPrScript(
   containerName: string, token: string, cwd: string, branch: string, target: string,
@@ -257,6 +258,12 @@ export function buildPushAndPrScript(
     ...ghTokenPreamble(token),
     `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
     forgetDeletedRemoteBranch(branch),
+    // The PR's branch gone from GitHub = the PR was merged or closed meanwhile: pushing would recreate it
+    // as an orphan carrying the fixes. A card's own branch is recreated on purpose (a new delivery).
+    ...(opts.pushHeadOnto
+      ? [`if ! git ls-remote --exit-code origin ${shQuote(`refs/heads/${branch}`)} >/dev/null 2>&1; then ` +
+        `echo "a branch da PR não existe mais no GitHub (mergeada ou fechada)"; echo "${MARKER} error push"; exit 0; fi`]
+      : []),
     `if ! ${pushCommand}; then echo "${MARKER} error push"; exit 0; fi`,
     ...(docs.title !== undefined ? [`TITLE=$(${decoded(docs.title)})`] : []),
     ...(docs.body !== undefined ? [`BODY=$(mktemp)`, `trap 'rm -f "$BODY"' EXIT`, `${decoded(docs.body)} > "$BODY"`] : []),
