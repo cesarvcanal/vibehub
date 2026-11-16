@@ -51,9 +51,10 @@ const INSTRUCTIONS =
  * the work; the voice converses, asks what is missing and hands the work over (delegation), then
  * says the result. What the person types or attaches during the call goes to the agent through the
  * chat, and the voice is told to say it got that text (`session.commentary.append`); the agent's
- * answers reach it as quiet context (`session.thinking.append`) — see the browser's voiceContext.ts. The `Delegation policy` labels and `<|SpawnThinking|>` are GPT-Live's prompt
- * contract (developers.openai.com/api/docs/guides/live-prompting): a spoken "vou ver" does not
- * start any work, the token does.
+ * answers reach it as quiet context (`session.thinking.append`) — see the browser's voiceContext.ts.
+ * The `Delegation policy` labels and `<|SpawnThinking|>` are GPT-Live's prompt contract
+ * (developers.openai.com/api/docs/guides/live-prompting): a spoken "vou ver" does not start any
+ * work, the token does.
  */
 const CARD_INSTRUCTIONS = [
   "Você é a voz do chat de um card do vibehub: a pessoa programa conversando com você. Fale em português " +
