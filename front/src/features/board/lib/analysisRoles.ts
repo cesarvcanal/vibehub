@@ -1,8 +1,8 @@
 import type { AnalysisPerson, ProjectPull } from "@/api/types";
 
 /**
- * Whoever opened a PR does not review it: compared by the GitHub login their commits would carry, the
- * same check the server makes (`revisor_igual_autor`). PURE.
+ * Whoever opened a PR neither reviews nor co-authors it: compared by the GitHub login their commits would
+ * carry, the same check the server makes (`revisor_igual_autor`, `coautor_igual_autor`). PURE.
  */
 export function isPrAuthor(person: AnalysisPerson, pull: Pick<ProjectPull, "author">): boolean {
   return !!person.githubLogin && person.githubLogin.toLowerCase() === pull.author.toLowerCase();
