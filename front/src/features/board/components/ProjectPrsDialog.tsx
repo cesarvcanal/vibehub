@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
-import { GitPullRequest, Loader2, RotateCw } from "lucide-react";
+import { GitPullRequest, Loader2, Lock, RotateCw } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import { SELECT_CLASS } from "@/components/ui/select";
 import type { AnalysisPerson, AnalysisRoles, ProjectPull } from "@/api/types";
 import { analysisPeopleKey, boardApi, projectPullsKey } from "@/features/board/api";
 import { defaultReviewerId, isPrAuthor } from "@/features/board/lib/analysisRoles";
+import { repoAccessRefusal } from "@/features/board/lib/repoAccess";
 import { useAuth } from "@/providers/auth";
 import { t as translate, useT } from "@/i18n";
 
@@ -81,6 +82,7 @@ export function ProjectPrsDialog({ projectId, open, onOpenChange, onOpenCard }: 
   });
 
   const count = pulls.data?.length;
+  const noAccess = pulls.isError ? repoAccessRefusal(pulls.error) : null;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="gap-3 sm:max-w-xl" data-testid="project-prs-dialog">
@@ -108,6 +110,14 @@ export function ProjectPrsDialog({ projectId, open, onOpenChange, onOpenCard }: 
 
         {pulls.isPending ? (
           <p className="py-6 text-center text-sm text-muted-foreground">{t("common.loading")}</p>
+        ) : noAccess ? (
+          // The GitHub account the list was read with does not see the repository: it says what to do.
+          <div className="flex flex-col items-center gap-1 py-8 text-center">
+            <Lock className="mb-1 h-6 w-6 text-muted-foreground" />
+            <p className="text-sm font-medium">{t("prs.noAccess")}</p>
+            <p className="text-sm text-muted-foreground">{t("prs.noAccessDetail", { login: noAccess.login, repo: noAccess.repo })}</p>
+            <p className="text-sm text-muted-foreground">{t("prs.noAccessHint")}</p>
+          </div>
         ) : pulls.isError ? (
           <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {apiErrorMessage(pulls.error)}

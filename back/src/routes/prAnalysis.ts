@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { canAccessProject, canWorkOnProject } from "../auth/access.js";
 import { requestUser, requireSession } from "../auth/session.js";
-import { analysisPeople, listProjectPulls, startAnalysis } from "../services/review/analysis.js";
+import { analysisPeople, listProjectPulls, RepoAccessError, startAnalysis } from "../services/review/analysis.js";
 import { NOT_FOUND, sendError } from "./httpError.js";
 
 /** GitHub failing to answer is not the caller's fault: the list is not there to give. */
@@ -20,6 +20,8 @@ export async function prAnalysisRoutes(app: FastifyInstance): Promise<void> {
     try {
       return await reply.send({ pulls: await listProjectPulls(req.params.id, user!) });
     } catch (err) {
+      // The asker's GitHub account does not see the repository: theirs to fix (ask for access), not GitHub's.
+      if (err instanceof RepoAccessError) return await reply.code(403).send({ error: err.message, login: err.login, repo: err.repo });
       return await sendError(reply, err, { rules: [GITHUB_FAILED, NOT_FOUND] });
     }
   });

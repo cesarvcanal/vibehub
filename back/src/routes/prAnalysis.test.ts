@@ -17,13 +17,14 @@ vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 let dir = "";
 let app: FastifyInstance;
 let githubDown = false;
+let repoHidden = false;
 const PULL: OpenPull = {
   number: 636, title: "Conciliação", url: "https://github.com/acme/erp/pull/636", author: "albert-gh",
   branch: "feat/conciliacao", base: "dev", fromFork: false, draft: false, updatedAt: "2026-11-16T12:00:00Z",
 };
-const listOpenPulls = vi.fn(async () => {
+const listOpenPulls = vi.fn(async (): Promise<OpenPull[] | null> => {
   if (githubDown) throw new Error("GitHub returned 502 while listing pull requests");
-  return [PULL];
+  return repoHidden ? null : [PULL];
 });
 const readPull = vi.fn(async (_c: unknown, _o: string, _r: string, n: number) => (n === PULL.number ? { ...PULL, open: true } : null));
 const sendToTerminal = vi.fn(async (cardId: string) => ({ sent: true, cardId, title: "", project: "" }));
@@ -89,6 +90,8 @@ async function world() {
     method: "POST", url: `/api/projects/${projectId}/shares`, headers: { cookie: owner }, payload: { userId: memberId, level },
   });
   const ownerId = (await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: owner } })).json().user.id as string;
+  // The install's GitHub account: whoever has none of their own reads GitHub through it.
+  await (await import("../services/board/registry.js")).addGithubConnection({ login: "acme-bot" });
   return { owner, ownerId, member, memberId, projectId, shareProject };
 }
 
@@ -102,6 +105,7 @@ const people = (cookie: string, projectId: string) =>
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "vibehub-pr-analysis-"));
   githubDown = false;
+  repoHidden = false;
   listOpenPulls.mockClear();
   sendToTerminal.mockClear();
   app = await boot();
@@ -132,6 +136,15 @@ describe("GET /api/projects/:id/prs", () => {
     const res = await list(w.owner, w.projectId);
     expect(res.statusCode).toBe(502);
     expect(res.json().error).toMatch(/502/);
+  });
+
+  it("conta GitHub sem acesso ao repositório é 403 com o motivo, não 502", async () => {
+    const w = await world();
+    repoHidden = true;
+    const res = await list(w.owner, w.projectId);
+    expect(res.statusCode).toBe(403);
+    // the account and the repository in their own fields, for the panel to say it in the person's language
+    expect(res.json()).toMatchObject({ error: expect.stringMatching(/^sem_acesso_repo:/), login: "acme-bot", repo: "acme/erp" });
   });
 });
 

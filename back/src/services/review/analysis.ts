@@ -74,12 +74,25 @@ async function connectionOf(userId: string, ctx: IdentityContext): Promise<Githu
 }
 
 /** The project's repository and the GitHub connection of whoever asks. */
-async function projectRepoAccess(projectId: string, user: PublicUser): Promise<{ project: Project; connectionId?: string; owner: string; repo: string }> {
+async function projectRepoAccess(projectId: string, user: PublicUser): Promise<{ project: Project; connection: GithubConnection; owner: string; repo: string }> {
   const project = await getProject(projectId);
   if (!project) throw new Error("project not found");
   if (!project.repoFullName) throw new Error("sem_repositorio: o projeto não tem repositório no GitHub");
   const { owner, repo } = splitRepo(project.repoFullName);
-  return { project, connectionId: (await connectionOf(user.id, await identityContext(project)))?.id, owner, repo };
+  // `connectionOf` falls back to the install's first account: none resolved = no account at all.
+  const connection = await connectionOf(user.id, await identityContext(project));
+  if (!connection) throw new Error("GitHub is not connected — paste a token in Settings");
+  return { project, connection, owner, repo };
+}
+
+/**
+ * The asker's GitHub account does not see the project's repository. The route turns it into 403 with
+ * `login` and `repo` in their own fields, for the panel to say it in the person's language.
+ */
+export class RepoAccessError extends Error {
+  constructor(readonly login: string, readonly repo: string) {
+    super(`sem_acesso_repo: a conta GitHub ${login} não tem acesso a ${repo}`);
+  }
 }
 
 export interface AnalysisPerson {
@@ -112,9 +125,15 @@ async function peopleOf(project: Project): Promise<AnalysisPerson[]> {
   );
 }
 
+/**
+ * Refuses with {@link RepoAccessError} when the asker's GitHub account does not see the repository: it
+ * used to come out as "GitHub returned 404", a 502 the panel retried before showing, which read as GitHub
+ * being down when the person simply has no access (production, 2026-11-16).
+ */
 export async function listProjectPulls(projectId: string, user: PublicUser): Promise<ProjectPull[]> {
-  const { connectionId, owner, repo } = await projectRepoAccess(projectId, user);
-  const [pulls, cards] = await Promise.all([listOpenPulls(connectionId, owner, repo), listCards(projectId)]);
+  const { connection, owner, repo } = await projectRepoAccess(projectId, user);
+  const [pulls, cards] = await Promise.all([listOpenPulls(connection.id, owner, repo), listCards(projectId)]);
+  if (!pulls) throw new RepoAccessError(connection.login, `${owner}/${repo}`);
   // Only the cards this user reaches: a card-only share sees the project, never the others' cards.
   const reachable = await visibleCards(user, cards);
   return pulls.map((pull) => {
@@ -164,7 +183,7 @@ export async function startAnalysis(input: {
   /** Credited on every commit of the analysis (`Co-authored-by`). */
   coauthorUserId?: string;
 }): Promise<{ card: Card; created: boolean; prompt: Promise<void> }> {
-  const { project, connectionId, owner, repo } = await projectRepoAccess(input.projectId, input.requester);
+  const { project, connection, owner, repo } = await projectRepoAccess(input.projectId, input.requester);
   const people = new Map((await peopleOf(project)).map((p) => [p.id, p]));
   const reviewer = people.get(input.reviewerUserId);
   // Read before any card exists: a reviewer deleted meanwhile is refused, never left holding a card.
@@ -175,7 +194,7 @@ export async function startAnalysis(input: {
   }
   const coauthor = input.coauthorUserId === undefined ? undefined : people.get(input.coauthorUserId);
   const coauthorTrailer = coauthor ? await coauthorTrailerOf(coauthor.id) : undefined;
-  const pull = await readPull(connectionId, owner, repo, input.prNumber);
+  const pull = await readPull(connection.id, owner, repo, input.prNumber);
   if (!pull?.open) throw new Error(`pr_nao_aberta: o PR #${input.prNumber} não está aberto neste repositório`);
   if (pull.fromFork) throw new Error(`pr_fork: o PR #${pull.number} vem de outro repositório, e a correção não tem onde ser empurrada`);
   if (!isSupportedBranch(pull.branch)) {

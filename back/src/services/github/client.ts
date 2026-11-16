@@ -422,8 +422,13 @@ const MAX_PULL_PAGES = 5;
 /**
  * The repository's OPEN pull requests, read from GitHub on every call: the PR analysis picks from what
  * is on GitHub right now, never from a list kept by vibehub (a PR opened by hand shows up at once).
+ * `null` = the account does not see the repository, on the first page: 404 for a private repository the
+ * token does not reach (or one that is gone), 403 for an organization's SAML SSO not authorized or a
+ * fine-grained token without "Pull requests: read". A rate limit is also a 403 — the quota at zero, a
+ * `retry-after`, or only the body's message for the secondary limit, which may come with quota left and
+ * no `retry-after`: that one throws, like any other failure.
  */
-export async function listOpenPulls(connectionId: string | null | undefined, owner: string, repo: string): Promise<OpenPull[]> {
+export async function listOpenPulls(connectionId: string | null | undefined, owner: string, repo: string): Promise<OpenPull[] | null> {
   assertRepoPart(owner, "owner");
   assertRepoPart(repo, "repository");
   const token = await tokenFor(connectionId);
@@ -432,6 +437,10 @@ export async function listOpenPulls(connectionId: string | null | undefined, own
   const perPage = 100;
   for (let page = 1; page <= MAX_PULL_PAGES; page += 1) {
     const res = await githubFetch(`/repos/${owner}/${repo}/pulls?state=open&per_page=${perPage}&page=${page}&sort=updated&direction=desc`, token);
+    if (page === 1 && (res.status === 404 || res.status === 403)) {
+      if (!(await isRateLimited(res))) return null;
+      throw new Error(`GitHub returned ${res.status} while listing pull requests`);
+    }
     if (!res.ok) {
       await res.body?.cancel();
       throw new Error(`GitHub returned ${res.status} while listing pull requests`);
@@ -441,6 +450,17 @@ export async function listOpenPulls(connectionId: string | null | undefined, own
     if (body.length < perPage) break;
   }
   return pulls;
+}
+
+/**
+ * Whether a 403 is GitHub's rate limit rather than a refusal of the repository (see {@link listOpenPulls}).
+ * Reads (and so consumes) the body: the secondary limit only says so in its `message`.
+ */
+async function isRateLimited(res: Response): Promise<boolean> {
+  const body = await res.text();
+  if (res.status !== 403) return false;
+  if (res.headers.get("x-ratelimit-remaining") === "0" || res.headers.has("retry-after")) return true;
+  return /rate limit/i.test(body);
 }
 
 /**
