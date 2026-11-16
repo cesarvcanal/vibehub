@@ -178,6 +178,52 @@ describe("deliverCard — o vibehub_deliver com revisão de PR ativa", () => {
     }
   });
 
+  it("caso real (PR #301): a ordem de mergear e concluir chega com a revisão ainda correndo — fica gravada nela", async () => {
+    const { deliverCard, store, card } = await cardUnderReview("fixing", "u-m");
+    const out = await deliverCard(card.id, { branch: "dev", authorized: true, from: card.id, concludeWhenMerged: true });
+    expect(out).toMatchObject({ merged: false, reason: "review_active" });
+    expect(out.output).toMatch(/ordem ficou registrada/);
+    expect(out.output).toMatch(/Concluído/);
+    const review = await store.getReview("rev-1");
+    expect(review).toMatchObject({ mergeAuthorized: true, concludeWhenMerged: true });
+    expect(review?.log.at(-1)?.text).toMatch(/Concluído/);
+    expect(mergeReviewedPr).not.toHaveBeenCalled();
+  });
+
+  it("revisão pronta: a ordem de concluir é gravada ANTES do merge, que é quem move o card", async () => {
+    const { deliverCard, store, card } = await cardUnderReview("ready", "u-m");
+    mergeReviewedPr.mockImplementationOnce(async () => {
+      expect(await store.getReview("rev-1")).toMatchObject({ concludeWhenMerged: true });
+      return { kind: "merged", review: { phase: "merged" } as never, result: { prUrl: PR, merged: true, reason: "merged", branch: "dev", cardBranch: "card/x" } };
+    });
+    expect(await deliverCard(card.id, { branch: "dev", authorized: true, from: card.id, concludeWhenMerged: true })).toMatchObject({ merged: true });
+  });
+
+  it("ordem de outro papel (autor): grava o concluir, mas a autorização do merge segue só de quem mergeia", async () => {
+    const { deliverCard, store, card } = await cardUnderReview("fixing", "u-a");
+    await deliverCard(card.id, { branch: "dev", authorized: true, from: card.id, concludeWhenMerged: true });
+    const review = await store.getReview("rev-1");
+    expect(review?.concludeWhenMerged).toBe(true);
+    expect(review?.mergeAuthorized).toBeUndefined();
+  });
+
+  it("sem papel na revisão, ou outro card entregando: nenhuma ordem é gravada", async () => {
+    const { deliverCard, store, card, registry } = await cardUnderReview("fixing", "u-x");
+    await deliverCard(card.id, { branch: "dev", authorized: true, from: card.id, concludeWhenMerged: true });
+    await registry.stampCardActor(card.id, "u-m");
+    await deliverCard(card.id, { branch: "dev", authorized: true, from: "outro-card", concludeWhenMerged: true });
+    const review = await store.getReview("rev-1");
+    expect(review?.concludeWhenMerged).toBeUndefined();
+    expect(review?.mergeAuthorized).toBeUndefined();
+    expect(review?.log).toEqual([]);
+  });
+
+  it("repetir a ordem não duplica o registro na revisão", async () => {
+    const { deliverCard, store, card } = await cardUnderReview("fixing", "u-m");
+    for (let i = 0; i < 2; i++) await deliverCard(card.id, { branch: "dev", authorized: true, from: card.id, concludeWhenMerged: true });
+    expect((await store.getReview("rev-1"))?.log).toHaveLength(2);
+  });
+
   it("o push trouxe commit que o revisor não viu: volta head_moved, com a revisão de volta ao revisor", async () => {
     const { deliverCard, card } = await cardUnderReview("ready", "u-m");
     mergeAnswer = { kind: "refused", status: 409, reason: "head_moved", error: "o PR andou", review: { phase: "reviewing", round: 3 } as never };

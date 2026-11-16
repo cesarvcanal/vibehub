@@ -1385,6 +1385,26 @@ export async function markReviewMerged(
   return after;
 }
 
+/**
+ * The orders for the end ("mergeia e conclui o card") that reach an ALREADY running review through the card's
+ * own `vibehub_deliver` (see `deliverCard`), recorded as if they had come with "Pedir revisão": without this
+ * the deliver answered `review_active` and the order died there — the review merged by itself later and the
+ * card stayed open (PR #301). `mergeAuthorized` stays the merger's alone, as in `startReview`; concluding the
+ * card any role that can merge may ask for. Repeating records nothing new.
+ */
+export async function recordReviewOrders(reviewId: string, orders: ReviewOrders): Promise<Review> {
+  return await mutateReview(reviewId, (r) => {
+    if (orders.mergeAuthorized && !r.mergeAuthorized) {
+      r.mergeAuthorized = true;
+      note(r, "system", "Merge autorizado por quem mergeia: pronta sem bloqueante nem dúvida, o merge sai sozinho (sugestão em pé não segura).");
+    }
+    if (orders.concludeWhenMerged && !r.concludeWhenMerged) {
+      r.concludeWhenMerged = true;
+      note(r, "system", "Mergeada, o card que deu a ordem vai para Concluído.");
+    }
+  });
+}
+
 /* ------------------------------------------------------------------ fim de turno */
 
 /**

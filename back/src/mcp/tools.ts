@@ -347,6 +347,11 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "rule means not on your own initiative, never refusing their order. Otherwise 'review_active' says who merges and " +
         "where the review stands; 'head_moved' = the push brought commits the reviewer has not seen and " +
         "the review went back to them. Never merge a reviewed PR any other way (gh pr merge, the GitHub API). " +
+        "That order is not lost when the review is not ready yet: from the merger it is recorded on the review, " +
+        "which then merges by itself when it ends ready with no blocking item or question. When the order also " +
+        "said to conclude the card (\"mergeia e conclui o card\"), pass `concludeWhenMerged: true` together: it is " +
+        "recorded too, and once the PR is merged — by itself, by the button or by you — this card moves to done " +
+        "with nobody coming back to it. Then tell the user what was recorded instead of promising to do it later. " +
         PR_DOCS_RULE,
       inputSchema: {
         card: z.string().describe("id of the card to deliver (from vibehub_list_terminals)"),
@@ -355,12 +360,17 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         from: z.string().optional().describe(
           "YOUR OWN card id ($VIBEHUB_CARD_ID). A PR under review merges only when a card delivers ITSELF (from = card) by order of the review's merger.",
         ),
+        concludeWhenMerged: z.boolean().optional().describe(
+          "PR under review, with authorized + from: true = the order also said to conclude this card; recorded on the review, the card moves to done once it is merged.",
+        ),
         ...prDocsInput,
       },
     },
     async (a) => {
       try {
-        return ok(await deliverCard(a.card, { branch: a.branch, authorized: a.authorized === true, by: actor, from: a.from, docs: prDocsOf(a) }));
+        return ok(await deliverCard(a.card, {
+          branch: a.branch, authorized: a.authorized === true, by: actor, from: a.from, concludeWhenMerged: a.concludeWhenMerged, docs: prDocsOf(a),
+        }));
       } catch (e) {
         return fail(e);
       }

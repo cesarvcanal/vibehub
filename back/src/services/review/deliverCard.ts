@@ -4,6 +4,7 @@ import { deliver, parsePrUrl, type DeliverOpts, type DeliverResult } from "../ma
 import { logger } from "../../utils/logger.js";
 import { canMergeReview, isReviewClosed, type Review } from "./model.js";
 import { mergeReviewedPr, type ReviewMergeOutcome } from "./merge.js";
+import { recordReviewOrders } from "./orchestrator.js";
 import { activeReviewFor, getReview, reviewByReviewerCard } from "./store.js";
 
 /**
@@ -20,6 +21,9 @@ import { activeReviewFor, getReview, reviewByReviewerCard } from "./store.js";
  *    delivering this one does not carry the order of whoever spoke to it. For anybody else, another
  *    card, or a review that is not ready, `review_active` saying who merges, where and how far along the
  *    review is. A refusal of the merge itself arrives with the real reason (conflict, CI, connection).
+ *    That same order (a role, the card itself, this PR) is also RECORDED on the review (`recordReviewOrders`):
+ *    from the merger, the merge authorisation; with `concludeWhenMerged`, the conclusion of the card. A review
+ *    that is not ready yet then merges by itself and concludes the card, with nobody coming back to it.
  *  - on the REVIEWER's card (`reviewOf`) with `authorized`: there is never a push (it does not push to the
  *    branch it reviews), but the same order from whoever has a role in the review merges for it, by the same path.
  */
@@ -51,6 +55,9 @@ export async function deliverCard(
   const ownCard = opts.from === cardId;
   const orderedBy = ownCard ? mergeOrderedBy(now, card) : undefined;
   const samePr = parsePrUrl(pushed.prUrl ?? "")?.number === now.prNumber;
+  const orders = orderedBy && samePr
+    ? await recordReviewOrders(now.id, { mergeAuthorized: orderedBy === now.mergerUserId, concludeWhenMerged: opts.concludeWhenMerged })
+    : undefined;
   if (!orderedBy || !samePr || now.phase !== "ready") {
     logger.info(
       { audit: true, action: "maestro.deliver", card: cardId, merged: false, reason: "review_active", phase: now.phase, ownCard, by: opts.by },
@@ -58,13 +65,27 @@ export async function deliverCard(
     );
     return {
       ...pushed, reason: "review_active",
-      output: `revisão do PR #${now.prNumber} ${reviewStage(now)}: ${await whoMerges(now)}. O push foi feito: o PR já tem estes commits.`,
+      output: `revisão do PR #${now.prNumber} ${reviewStage(now)}: ${await whoMerges(now)}. O push foi feito: o PR já tem estes commits.` +
+        (orders ? recordedOrdersText(orders) : ""),
     };
   }
   return mergeResult(await mergeReviewedPr(now.id, orderedBy), pushed, now);
 }
 
-type DeliverCardOpts = Pick<DeliverOpts, "branch" | "authorized" | "by" | "docs"> & { from?: string };
+type DeliverCardOpts = Pick<DeliverOpts, "branch" | "authorized" | "by" | "docs"> & {
+  from?: string;
+  /** "…e concluir o card": with the card's PR under review, recorded on it, and the card goes to done once merged. */
+  concludeWhenMerged?: boolean;
+};
+
+/** What the review now holds of the order, so the AI tells the user it does not have to come back. PURE. */
+function recordedOrdersText(review: Review): string {
+  const parts = [
+    ...(review.mergeAuthorized ? ["o merge sai sozinho quando ela ficar pronta sem bloqueante nem dúvida"] : []),
+    ...(review.concludeWhenMerged ? ["mergeada, o card vai para Concluído"] : []),
+  ];
+  return parts.length ? ` A ordem ficou registrada na revisão: ${parts.join("; ")}.` : "";
+}
 
 /**
  * The reviewer's card told to merge: no push (the branch is the one of the PR under review), only the merge

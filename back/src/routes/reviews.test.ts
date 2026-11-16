@@ -477,6 +477,16 @@ describe("iniciar a revisão pela IA do card (vibehub_review_start)", () => {
     expect((await (await registry()).getCard(w.cardId))?.column).toBe("done");
   });
 
+  it("caso real (PR #301): 'concluir o card' gravado numa revisão JÁ em andamento — mergeada sozinha, o card vai para done", async () => {
+    const w = await world();
+    await actor(w.cardId, w.merger.id);
+    const review = await (await byAgent())(w.cardId, { reviewer: "revisor", author: "autor" });
+    expect(review.concludeWhenMerged).toBeUndefined();
+    await (await orchestrator()).recordReviewOrders(review.id, { concludeWhenMerged: true });
+    await (await orchestrator()).markReviewMerged(review.id, "merger", { auto: true });
+    expect((await (await registry()).getCard(w.cardId))?.column).toBe("done");
+  });
+
   it("resposta das tools em ready diz o motivo real de o merge não sair sozinho", async () => {
     const { reviewToolAnswer } = await orchestrator();
     const base = {
