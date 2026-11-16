@@ -960,6 +960,13 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
     syncAwaitingDecision(session);
   }
   if (!silenced) broadcast(session, event);
+  // The front zeroes the meter on `ready` (a new driver does not inherit a reading) and counts on the back to
+  // resend the session's one behind it. `attachSocket` does that on a reconnect; a socket that attached while
+  // this driver was still booting got the remembered reading BEFORE this `ready` — and lost it until the next
+  // message (production, 2026-11-16: "eu preciso mandar mensagem para aparecer").
+  if (event.type === "ready" && session.contextUsage) {
+    broadcast(session, { type: "context_usage", ...session.contextUsage });
+  }
   if (event.type === "conversation_reset" && (event.trigger === undefined || event.trigger === "clear")) {
     // The /clear cleared the model's CONTEXT; the card's log has to go with it, otherwise the F5 brought back the
     // whole conversation and the /clear seemed to have done nothing. Only what came BEFORE the "/clear" goes

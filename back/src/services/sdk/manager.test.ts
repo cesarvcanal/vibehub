@@ -2996,6 +2996,18 @@ describe("context_usage — o medidor de contexto", () => {
     expect(parsed(s2)).toEqual([]);
   });
 
+  it("driver recém-nascido: a leitura volta DEPOIS do ready dele (o front zera o medidor ao receber o ready)", () => {
+    const remembered = { sessionId: "s-1", info: { usedTokens: 52_000, maxTokens: 200_000, percent: 26 } };
+    const session = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec", "--resume", "s-1"] }, rememberedContext: remembered });
+    const s1 = fakeSocket();
+    attachSocket(session, s1 as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready", resume: "s-1" }));
+    const frames = s1.sent.map((s) => JSON.parse(s) as { type: string });
+    const readyAt = frames.findIndex((e) => e.type === "ready");
+    expect(readyAt).toBeGreaterThanOrEqual(0);
+    expect(frames.slice(readyAt + 1).filter((e) => e.type === "context_usage")).toEqual([{ type: "context_usage", ...remembered.info }]);
+  });
+
   it("o /clear apaga a leitura, também do disco: quem conecta depois não vê o medidor da conversa apagada", async () => {
     const session = ensure();
     spawned[0]!.stdout.emit("data", line({ type: "session", sessionId: "s-1" }));
