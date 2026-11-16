@@ -1,3 +1,4 @@
+import { visibleCards } from "../../auth/access.js";
 import { creatorAccountSlug, getUserGit } from "../../auth/userGit.js";
 import type { PublicUser } from "../../auth/users.js";
 import { recordCardActor } from "../board/actor.js";
@@ -54,8 +55,10 @@ async function readOpenPulls(projectId: string, user: PublicUser): Promise<OpenP
 
 export async function listProjectPulls(projectId: string, user: PublicUser): Promise<ProjectPull[]> {
   const [pulls, cards] = await Promise.all([readOpenPulls(projectId, user), listCards(projectId)]);
+  // Only the cards this user reaches: a card-only share sees the project, never the others' cards.
+  const reachable = await visibleCards(user, cards);
   return pulls.map((pull) => {
-    const card = openAnalysisOf(cards, pull.url);
+    const card = openAnalysisOf(reachable, pull.url);
     return card ? { ...pull, analysisCardId: card.id } : pull;
   });
 }

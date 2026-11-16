@@ -154,6 +154,10 @@ describe("POST /api/projects/:id/prs/:number/analysis", () => {
     expect((await list(w.member, w.projectId)).statusCode).toBe(200);
     expect((await analyse(w.member, w.projectId, 636)).statusCode).toBe(403);
     expect(sendToTerminal).not.toHaveBeenCalled();
+    // the owner's analysis card was not shared with this member: the list does not reveal it
+    const ownersCard = (await analyse(w.owner, w.projectId, 636)).json().card.id as string;
+    expect((await list(w.owner, w.projectId)).json().pulls[0].analysisCardId).toBe(ownersCard);
+    expect((await list(w.member, w.projectId)).json().pulls[0].analysisCardId).toBeUndefined();
   });
 
   it("leitura não dispara (403), sem acesso é 404, PR inválida ou fechada é 400", async () => {
