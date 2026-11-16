@@ -90,6 +90,8 @@ async function world() {
     method: "POST", url: `/api/projects/${projectId}/shares`, headers: { cookie: owner }, payload: { userId: memberId, level },
   });
   const ownerId = (await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: owner } })).json().user.id as string;
+  // The install's GitHub account: whoever has none of their own reads GitHub through it.
+  await (await import("../services/board/registry.js")).addGithubConnection({ login: "acme-bot" });
   return { owner, ownerId, member, memberId, projectId, shareProject };
 }
 
@@ -141,7 +143,8 @@ describe("GET /api/projects/:id/prs", () => {
     repoHidden = true;
     const res = await list(w.owner, w.projectId);
     expect(res.statusCode).toBe(403);
-    expect(res.json().error).toMatch(/^sem_acesso_repo:/);
+    // the account and the repository in their own fields, for the panel to say it in the person's language
+    expect(res.json()).toMatchObject({ error: expect.stringMatching(/^sem_acesso_repo:/), login: "acme-bot", repo: "acme/erp" });
   });
 });
 

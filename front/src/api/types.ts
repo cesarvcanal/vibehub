@@ -479,6 +479,13 @@ export interface Card {
   updatedAt?: number;
 }
 
+/** The 403 of `GET /projects/:id/prs`: the asker's GitHub account (`login`) does not see the project's `repo`. */
+export interface RepoAccessRefusal {
+  error: string;
+  login: string;
+  repo: string;
+}
+
 /** An open pull request of a project's repository, as GitHub has it right now (`GET /projects/:id/prs`). */
 export interface ProjectPull {
   number: number;

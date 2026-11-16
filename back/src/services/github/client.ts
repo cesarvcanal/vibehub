@@ -422,8 +422,10 @@ const MAX_PULL_PAGES = 5;
 /**
  * The repository's OPEN pull requests, read from GitHub on every call: the PR analysis picks from what
  * is on GitHub right now, never from a list kept by vibehub (a PR opened by hand shows up at once).
- * `null` = the account does not see the repository: GitHub answers 404 for a private repository the
- * token does not reach, never 403. Any other failure throws.
+ * `null` = the account does not see the repository, on the first page: 404 for a private repository the
+ * token does not reach (or one that is gone), 403 for an organization's SAML SSO not authorized or a
+ * fine-grained token without "Pull requests: read". A rate limit is also a 403, but with the quota at zero
+ * or a `retry-after`: that one throws, like any other failure.
  */
 export async function listOpenPulls(connectionId: string | null | undefined, owner: string, repo: string): Promise<OpenPull[] | null> {
   assertRepoPart(owner, "owner");
@@ -434,7 +436,7 @@ export async function listOpenPulls(connectionId: string | null | undefined, own
   const perPage = 100;
   for (let page = 1; page <= MAX_PULL_PAGES; page += 1) {
     const res = await githubFetch(`/repos/${owner}/${repo}/pulls?state=open&per_page=${perPage}&page=${page}&sort=updated&direction=desc`, token);
-    if (res.status === 404) {
+    if (page === 1 && isRepoUnreachable(res)) {
       await res.body?.cancel();
       return null;
     }
@@ -447,6 +449,13 @@ export async function listOpenPulls(connectionId: string | null | undefined, own
     if (body.length < perPage) break;
   }
   return pulls;
+}
+
+/** GitHub refusing the repository to this token (see {@link listOpenPulls}), as opposed to a rate limit. */
+function isRepoUnreachable(res: Response): boolean {
+  if (res.status === 404) return true;
+  const rateLimited = res.headers.get("x-ratelimit-remaining") === "0" || res.headers.has("retry-after");
+  return res.status === 403 && !rateLimited;
 }
 
 /**

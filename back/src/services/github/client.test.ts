@@ -458,12 +458,35 @@ describe("listOpenPulls", () => {
     expect(await gh.listOpenPulls("", "octocat", "hello")).toHaveLength(101);
   });
 
-  it("repositório que a conta não enxerga (404) é null, não lista vazia", async () => {
+  it("repositório que a conta não enxerga é null, não lista vazia: 404 (privado) e 403 (SSO, permissão)", async () => {
     const { gh } = await fresh();
     stubIdentity("octocat");
     await gh.connect("personal", "ghp_token");
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ message: "Not Found" }, { status: 404 })));
     expect(await gh.listOpenPulls("", "octocat", "hello")).toBeNull();
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ message: "Resource protected by organization SAML enforcement" }, { status: 403 })));
+    expect(await gh.listOpenPulls("", "octocat", "hello")).toBeNull();
+  });
+
+  it("limite de uso (403 com a cota zerada ou retry-after) não é falta de acesso: falha à vista", async () => {
+    const { gh } = await fresh();
+    stubIdentity("octocat");
+    await gh.connect("personal", "ghp_token");
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({}, { status: 403, headers: { "x-ratelimit-remaining": "0" } })));
+    await expect(gh.listOpenPulls("", "octocat", "hello")).rejects.toThrow(/403/);
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({}, { status: 403, headers: { "retry-after": "60" } })));
+    await expect(gh.listOpenPulls("", "octocat", "hello")).rejects.toThrow(/403/);
+  });
+
+  it("404 numa página seguinte não descarta as lidas como se fosse falta de acesso", async () => {
+    const { gh } = await fresh();
+    stubIdentity("octocat");
+    await gh.connect("personal", "ghp_token");
+    vi.stubGlobal("fetch", vi.fn(async (url: string) =>
+      url.includes("page=2")
+        ? jsonResponse({ message: "Not Found" }, { status: 404 })
+        : jsonResponse(Array.from({ length: 100 }, (_, i) => pull(i + 1)))));
+    await expect(gh.listOpenPulls("", "octocat", "hello")).rejects.toThrow(/404/);
   });
 
   it("erro do GitHub falha à vista, nunca vira lista vazia", async () => {

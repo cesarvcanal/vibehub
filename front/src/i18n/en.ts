@@ -362,6 +362,7 @@ export const en: Record<string, string> = {
   "prs.emptyHint": "Open one on GitHub and refresh the list.",
   "prs.refresh": "Refresh list",
   "prs.noAccess": "Your GitHub account cannot see this repository's pull requests",
+  "prs.noAccessDetail": "The account {login} has no access to {repo}.",
   "prs.noAccessHint": "Ask for access to the repository on GitHub, or connect to vibehub a GitHub account that reaches it.",
   "prs.analysing": "Analysing",
   "prs.alreadyOpen": "PR #{number} already has an analysis open; the roles you picked were not applied",
