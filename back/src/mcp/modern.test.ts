@@ -215,6 +215,38 @@ describe("version negotiation on the same authenticated /mcp", () => {
     const ev = await legacy(OWNER, "events/list");
     expect(ev.body.result.events[0].delivery).toEqual(["push"]);
   });
+
+  // vibehub_deliver waits for the card's gate (minutes): the bridge answered "-32001 Request timed out" at
+  // 60s while the deliver kept going, so the agent never saw the gate's verdict nor the merge.
+  it("a tool that runs past 60s still answers with its result (the bridge sets no deadline of its own)", async () => {
+    const { handleModern } = await import("./modern.js");
+    const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
+    let finishTool!: () => void;
+    const toolFinished = new Promise<void>((resolve) => { finishTool = resolve; });
+    const slowServer = () => {
+      const server = new McpServer({ name: "slow", version: "1" });
+      server.registerTool("slow_deliver", { description: "waits for the gate" }, async () => {
+        await toolFinished;
+        return { content: [{ type: "text" as const, text: "merged" }] };
+      });
+      return server;
+    };
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const reply = handleModern({
+        headers: { "mcp-protocol-version": V },
+        body: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "slow_deliver", arguments: {}, _meta: META } },
+        server: slowServer, instructions: "", principal: null,
+      });
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      finishTool();
+      const answered = (await reply).body as { result?: { content: { text: string }[] }; error?: unknown };
+      expect(answered.error).toBeUndefined();
+      expect(answered.result?.content[0]?.text).toBe("merged");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("webhook lifecycle over /mcp (2026-07-28)", () => {
