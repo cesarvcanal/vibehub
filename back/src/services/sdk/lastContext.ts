@@ -16,7 +16,9 @@ import { normalizeContextUsage, type ContextUsageInfo } from "./contextUsage.js"
  * bringing a driver up, and the manager only shows it when the driver resumes THAT session.
  *
  * A card's writes are CHAINED and COALESCED (a long turn sends a reading every ~5 s): at most one write in
- * flight and one queued, always the newest. The read waits for the card's queue.
+ * flight and one queued, always the newest — and a reading equal to the one already on disk is not rewritten.
+ * Only the SOURCE goes to the file (tokens, window, model): the percentage is derived on the read, by the
+ * back's own rule. The read waits for the card's queue.
  */
 
 export const SDK_CONTEXT_DIR = "sdk-context";
@@ -47,19 +49,29 @@ function parseStoredContext(raw: string): StoredContext | null {
   return usage ? { sessionId, info: usage } : null;
 }
 
-/** Per card: the write in flight and the next content (null = delete the file). */
+/** Per card: the write in flight, the next content (null = delete the file) and what is on disk now. */
 const writing = new Map<string, Promise<void>>();
 const nextContent = new Map<string, string | null>();
+/** By FILE, not by card: what this process last wrote there (the dedupe of equal readings). */
+const onDisk = new Map<string, string | null>();
+
+/** The file's text: the reading's source fields, never the derived percentage. PURE. */
+function serializeStoredContext({ sessionId, info }: StoredContext): string {
+  const { usedTokens, maxTokens, model } = info;
+  return JSON.stringify({ sessionId, info: { usedTokens, maxTokens, ...(model ? { model } : {}) } });
+}
 
 async function writeNow(file: string, cardId: string, content: string | null): Promise<void> {
   try {
     if (content === null) {
       await rm(file, { force: true });
-      return;
+    } else {
+      await mkdir(join(file, ".."), { recursive: true });
+      await writeFileAtomic(file, content);
     }
-    await mkdir(join(file, ".."), { recursive: true });
-    await writeFileAtomic(file, content);
+    onDisk.set(file, content);
   } catch (err) {
+    onDisk.delete(file);
     // No durability on this installation: the live session still holds the reading in memory.
     logger.warn({ card: cardId, detail: (err as Error).message }, "could not write the context reading");
   }
@@ -69,14 +81,16 @@ async function writeNow(file: string, cardId: string, content: string | null): P
 export function saveLastContext(cardId: string, reading: StoredContext | null): Promise<void> {
   const file = contextFile(cardId);
   if (!file) return Promise.resolve();
-  nextContent.set(cardId, reading ? JSON.stringify(reading) : null);
+  const content = reading ? serializeStoredContext(reading) : null;
   const running = writing.get(cardId);
+  if (!running && onDisk.has(file) && onDisk.get(file) === content) return Promise.resolve();
+  nextContent.set(cardId, content);
   if (running) return running;
   const loop = (async () => {
     while (nextContent.has(cardId)) {
-      const content = nextContent.get(cardId)!;
+      const queued = nextContent.get(cardId)!;
       nextContent.delete(cardId);
-      await writeNow(file, cardId, content);
+      await writeNow(file, cardId, queued);
     }
     writing.delete(cardId);
   })();
@@ -112,5 +126,6 @@ export async function removeLastContext(cardId: string): Promise<void> {
   const file = contextFile(cardId);
   if (!file) return;
   await lastContextSettled(cardId);
+  onDisk.delete(file);
   await rm(file, { force: true });
 }

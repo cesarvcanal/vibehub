@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -58,6 +58,29 @@ describe("a última leitura do contexto sobrevive ao restart do back", () => {
     void saveLastContext(CARD, { sessionId: "s-1", info: { usedTokens: 1_000, maxTokens: 200_000, percent: 0.5 } });
     void saveLastContext(CARD, { sessionId: "s-1", info: { usedTokens: 2_000, maxTokens: 200_000, percent: 1 } });
     void saveLastContext(CARD, READING);
+    expect(await readLastContext(CARD)).toEqual(READING);
+  });
+
+  it("grava só a origem: o percentual é derivado e sai da regra do back na leitura", async () => {
+    await saveLastContext(CARD, READING);
+    expect(JSON.parse(await readFile(fileOf(CARD), "utf8"))).toEqual({
+      sessionId: "s-1", info: { usedTokens: 84_000, maxTokens: 200_000, model: "claude-opus-5-5" },
+    });
+  });
+
+  it("leitura igual à gravada não reescreve o arquivo (o turno longo mede a cada ~5 s)", async () => {
+    await saveLastContext(CARD, READING);
+    const before = await stat(fileOf(CARD));
+    await saveLastContext(CARD, { ...READING, info: { ...READING.info } });
+    expect((await stat(fileOf(CARD))).ino).toBe(before.ino);
+    await saveLastContext(CARD, { ...READING, sessionId: "s-2" });
+    expect((await stat(fileOf(CARD))).ino).not.toBe(before.ino);
+  });
+
+  it("depois de apagar, a mesma leitura volta a ser gravada", async () => {
+    await saveLastContext(CARD, READING);
+    await saveLastContext(CARD, null);
+    await saveLastContext(CARD, READING);
     expect(await readLastContext(CARD)).toEqual(READING);
   });
 
