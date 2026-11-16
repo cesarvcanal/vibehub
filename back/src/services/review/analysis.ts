@@ -1,11 +1,11 @@
 import { visibleCards } from "../../auth/access.js";
 import { creatorAccountSlug, getUserGit } from "../../auth/userGit.js";
-import type { PublicUser } from "../../auth/users.js";
+import { findUser, listUsers, type PublicUser } from "../../auth/users.js";
 import { recordCardActor } from "../board/actor.js";
 import { purgeCard } from "../board/purge.js";
 import {
-  assertBranchName, createAnalysisCard, getProject, listCards, listGithubConnections, openAnalysisCard, recordCardPr,
-  type Card,
+  assertBranchName, createAnalysisCard, getGithubConnection, getProject, listCards, listGithubConnections, openAnalysisCard,
+  recordCardPr, sharesForTarget, type Card, type Project,
 } from "../board/registry.js";
 import { listOpenPulls, readPull, splitRepo, type OpenPull } from "../github/client.js";
 import { resolveIdentity } from "../github/identity.js";
@@ -53,15 +53,46 @@ function isSupportedBranch(branch: string): boolean {
   }
 }
 
-/** The project's repository and the GitHub connection of whoever asks (theirs, falling back to the project's). */
-async function projectRepoAccess(projectId: string, user: PublicUser): Promise<{ connectionId?: string; owner: string; repo: string }> {
+/** The GitHub connection a person's git and gh run as on this project: theirs, falling back to the project's. */
+async function connectionOf(userId: string, project: Project): Promise<string | undefined> {
+  const [actor, settings, connections] = await Promise.all([getUserGit(userId), getSettings(), listGithubConnections()]);
+  return resolveIdentity({ actor, project, settings, connections }).connectionId;
+}
+
+/** The project's repository and the GitHub connection of whoever asks. */
+async function projectRepoAccess(projectId: string, user: PublicUser): Promise<{ project: Project; connectionId?: string; owner: string; repo: string }> {
   const project = await getProject(projectId);
   if (!project) throw new Error("project not found");
   if (!project.repoFullName) throw new Error("sem_repositorio: o projeto não tem repositório no GitHub");
   const { owner, repo } = splitRepo(project.repoFullName);
-  const [actor, settings, connections] = await Promise.all([getUserGit(user.id), getSettings(), listGithubConnections()]);
-  const { connectionId } = resolveIdentity({ actor, project, settings, connections });
-  return { connectionId, owner, repo };
+  return { project, connectionId: await connectionOf(user.id, project), owner, repo };
+}
+
+export interface AnalysisPerson {
+  id: string;
+  username: string;
+  /** The GitHub login their commits and PR comments would go out as (their connection, else the project's). */
+  githubLogin?: string;
+}
+
+/**
+ * Who can take part in an analysis of this project: whoever WORKS on it — the owners and the members with
+ * a `work` share on the project. The reviewer works the card on their behalf (it needs `work`), and the
+ * co-author is credited on its commits. `githubLogin` is what lets the dialog tell the PR's author apart:
+ * whoever opened a PR does not review it.
+ */
+export async function analysisPeople(projectId: string): Promise<AnalysisPerson[]> {
+  const project = await getProject(projectId);
+  if (!project) throw new Error("project not found");
+  const [users, shares] = await Promise.all([listUsers(), sharesForTarget("project", projectId)]);
+  const working = new Set(shares.filter((s) => s.level === "work").map((s) => s.userId));
+  return await Promise.all(
+    users.filter((u) => u.role === "owner" || working.has(u.id)).map(async (u) => {
+      const connectionId = await connectionOf(u.id, project);
+      const login = connectionId ? (await getGithubConnection(connectionId))?.login : undefined;
+      return { id: u.id, username: u.username, ...(login ? { githubLogin: login } : {}) };
+    }),
+  );
 }
 
 export async function listProjectPulls(projectId: string, user: PublicUser): Promise<ProjectPull[]> {
@@ -108,13 +139,29 @@ export async function startAnalysis(input: {
   projectId: string;
   prNumber: number;
   requester: PublicUser;
+  /** Who analyses: the card works on their behalf (their Claude account, their commits and PR comments). */
+  reviewerUserId: string;
+  /** Credited on every commit of the analysis (`Co-authored-by`). */
+  coauthorUserId?: string;
 }): Promise<{ card: Card; created: boolean; prompt: Promise<void> }> {
   const { connectionId, owner, repo } = await projectRepoAccess(input.projectId, input.requester);
+  const people = new Map((await analysisPeople(input.projectId)).map((p) => [p.id, p]));
+  const reviewer = people.get(input.reviewerUserId);
+  if (!reviewer) throw new Error("pessoa_sem_acesso: o revisor escolhido não trabalha neste projeto");
+  if (input.coauthorUserId !== undefined && !people.has(input.coauthorUserId)) {
+    throw new Error("pessoa_sem_acesso: o coautor escolhido não trabalha neste projeto");
+  }
+  if (input.coauthorUserId === reviewer.id) throw new Error("coautor_igual_revisor: o revisor já assina os commits");
+  const coauthorTrailer = input.coauthorUserId ? await coauthorTrailerOf(input.coauthorUserId) : undefined;
   const pull = await readPull(connectionId, owner, repo, input.prNumber);
   if (!pull?.open) throw new Error(`pr_nao_aberta: o PR #${input.prNumber} não está aberto neste repositório`);
   if (pull.fromFork) throw new Error(`pr_fork: o PR #${pull.number} vem de outro repositório, e a correção não tem onde ser empurrada`);
   if (!isSupportedBranch(pull.branch)) {
     throw new Error(`branch_invalida: a branch do PR #${pull.number} (${pull.branch}) tem um nome que o vibehub não aceita para um card`);
+  }
+  // Whoever opened the PR does not review it: compared by the GitHub login the reviewer's commits would carry.
+  if (reviewer.githubLogin && reviewer.githubLogin.toLowerCase() === pull.author.toLowerCase()) {
+    throw new Error(`revisor_igual_autor: ${reviewer.username} abriu o PR #${pull.number} e não pode revisá-lo`);
   }
   if (await activeReviewForPr(pull.url)) throw new Error(`revisao_ativa: o PR #${pull.number} está em revisão; a análise mexeria no que está sendo revisado`);
 
@@ -125,7 +172,7 @@ export async function startAnalysis(input: {
 
     const card = await createAnalysisCard({
       projectId: input.projectId,
-      accountSlug: await creatorAccountSlug(input.requester.id),
+      accountSlug: await creatorAccountSlug(reviewer.id),
       prBranch: pull.branch,
       title: `Análise PR #${pull.number} · ${pull.title}`,
     });
@@ -136,7 +183,9 @@ export async function startAnalysis(input: {
       await purgeCard(card.id, by);
       throw err;
     }
-    const prompt = deliverAnalysisPrompt(card, pull, input.requester).catch(async (err: unknown) => {
+    const reviewerUser = await findUser(reviewer.id);
+    if (!reviewerUser) throw new Error("pessoa_sem_acesso: o revisor escolhido não existe mais");
+    const prompt = deliverAnalysisPrompt(card, pull, reviewerUser, coauthorTrailer).catch(async (err: unknown) => {
       logger.warn({ card: card.worktreeSlug, pr: pull.number, detail: (err as Error).message }, "PR analysis prompt not delivered — the card is purged");
       await purgeCard(card.id, by);
     });
@@ -144,10 +193,14 @@ export async function startAnalysis(input: {
   });
 }
 
-/** Types the analysis prompt into the new card, on behalf of whoever asked. Same delivery as the review's relay. */
-async function deliverAnalysisPrompt(card: Card, pull: OpenPull, requester: PublicUser): Promise<void> {
-  await sendToTerminal(card.id, analysisPrompt({ cardId: card.id, prNumber: pull.number, prUrl: pull.url, branch: pull.branch, base: pull.base }), {
-    by: `analysis:${requester.username}`,
+/** Types the analysis prompt into the new card, on behalf of the reviewer. Same delivery as the review's relay. */
+async function deliverAnalysisPrompt(card: Card, pull: OpenPull, reviewer: PublicUser, coauthorTrailer?: string): Promise<void> {
+  const text = analysisPrompt({
+    cardId: card.id, prNumber: pull.number, prUrl: pull.url, branch: pull.branch, base: pull.base,
+    ...(coauthorTrailer ? { coauthorTrailer } : {}),
+  });
+  await sendToTerminal(card.id, text, {
+    by: `analysis:${reviewer.username}`,
     origin: ANALYSIS_ORIGIN,
     // Wake the new card, wait for Claude, never type into a menu, and go through the native chat so the
     // conversation does not fork.
@@ -156,6 +209,15 @@ async function deliverAnalysisPrompt(card: Card, pull: OpenPull, requester: Publ
     guardInteractiveMenu: true,
     readyWaitMs: SEND_READY_WAIT_MS,
     viaNativeChat: true,
-    beforeDeliver: async () => recordCardActor(requester, card.id),
+    beforeDeliver: async () => recordCardActor(reviewer, card.id),
   });
+}
+
+/** `Co-authored-by: Nome <email>` from the co-author's git identity on vibehub. Without one, refused. */
+async function coauthorTrailerOf(userId: string): Promise<string> {
+  const git = await getUserGit(userId);
+  if (!git?.gitName || !git.gitEmail) {
+    throw new Error("coautor_sem_identidade: o coautor não tem nome e e-mail de git no vibehub; sem eles não há crédito no commit");
+  }
+  return `Co-authored-by: ${git.gitName} <${git.gitEmail}>`;
 }

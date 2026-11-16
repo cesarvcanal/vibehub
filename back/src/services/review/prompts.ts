@@ -575,6 +575,8 @@ export interface AnalysisInput {
   prUrl: string;
   branch: string;
   base: string;
+  /** `Co-authored-by: Nome <email>` of the co-author chosen for the analysis, when there is one. */
+  coauthorTrailer?: string;
 }
 
 /**
@@ -613,6 +615,7 @@ export function analysisPrompt(a: AnalysisInput): string {
       `(gh api repos/{owner}/{repo}/pulls/${a.prNumber}/comments/<id>/replies). question: não mexa; pergunte no chat deste ` +
       "card, com o conflito e as " +
       "alternativas, e siga com o resto. suggestion: só no resumo.",
+    ...(a.coauthorTrailer ? [`   Em cada commit, termine a mensagem com esta linha (o crédito do coautor no Git): ${a.coauthorTrailer}`] : []),
     `6. Entregue as correções: chame vibehub_deliver com card = "${a.cardId}" e branch = "${a.base}", sem title nem body ` +
       "(a descrição do PR é do autor) e sem authorized (o merge é de uma pessoa). Os commits vão para a branch da PR. " +
       // Never the step-1 reset here: it would drop the fix commits that have not gone up yet.

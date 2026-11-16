@@ -88,13 +88,16 @@ async function world() {
   const shareProject = (level: "work" | "view") => app.inject({
     method: "POST", url: `/api/projects/${projectId}/shares`, headers: { cookie: owner }, payload: { userId: memberId, level },
   });
-  return { owner, member, memberId, projectId, shareProject };
+  const ownerId = (await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: owner } })).json().user.id as string;
+  return { owner, ownerId, member, memberId, projectId, shareProject };
 }
 
 const list = (cookie: string, projectId: string) =>
   app.inject({ method: "GET", url: `/api/projects/${projectId}/prs`, headers: { cookie } });
-const analyse = (cookie: string, projectId: string, pr: number | string) =>
-  app.inject({ method: "POST", url: `/api/projects/${projectId}/prs/${pr}/analysis`, headers: { cookie } });
+const analyse = (cookie: string, projectId: string, pr: number | string, body: Record<string, unknown>) =>
+  app.inject({ method: "POST", url: `/api/projects/${projectId}/prs/${pr}/analysis`, headers: { cookie }, payload: body });
+const people = (cookie: string, projectId: string) =>
+  app.inject({ method: "GET", url: `/api/projects/${projectId}/analysis-people`, headers: { cookie } });
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "vibehub-pr-analysis-"));
@@ -136,7 +139,7 @@ describe("POST /api/projects/:id/prs/:number/analysis", () => {
   it("quem trabalha no projeto dispara a análise; a PR passa a apontar para o card", async () => {
     const w = await world();
     await w.shareProject("work");
-    const res = await analyse(w.member, w.projectId, 636);
+    const res = await analyse(w.member, w.projectId, 636, { reviewerUserId: w.memberId });
     expect(res.statusCode).toBe(200);
     const { card, created } = res.json() as { card: { id: string; title: string }; created: boolean };
     expect(created).toBe(true);
@@ -144,7 +147,7 @@ describe("POST /api/projects/:id/prs/:number/analysis", () => {
     expect(sendToTerminal).toHaveBeenCalledTimes(1);
     expect((await list(w.member, w.projectId)).json().pulls[0].analysisCardId).toBe(card.id);
     // the second click answers with the same card
-    expect((await analyse(w.member, w.projectId, 636)).json()).toMatchObject({ created: false, card: { id: card.id } });
+    expect((await analyse(w.member, w.projectId, 636, { reviewerUserId: w.memberId })).json()).toMatchObject({ created: false, card: { id: card.id } });
   });
 
   it("um card compartilhado mostra o projeto, mas não dá trabalho no projeto: vê a lista, não dispara", async () => {
@@ -154,23 +157,45 @@ describe("POST /api/projects/:id/prs/:number/analysis", () => {
     })).json().card.id as string;
     await app.inject({ method: "POST", url: `/api/cards/${cardId}/shares`, headers: { cookie: w.owner }, payload: { userId: w.memberId, level: "work" } });
     expect((await list(w.member, w.projectId)).statusCode).toBe(200);
-    expect((await analyse(w.member, w.projectId, 636)).statusCode).toBe(403);
+    expect((await analyse(w.member, w.projectId, 636, { reviewerUserId: w.memberId })).statusCode).toBe(403);
     expect(sendToTerminal).not.toHaveBeenCalled();
     // the owner's analysis card was not shared with this member: the list does not reveal it
-    const ownersCard = (await analyse(w.owner, w.projectId, 636)).json().card.id as string;
+    const ownersCard = (await analyse(w.owner, w.projectId, 636, { reviewerUserId: w.ownerId })).json().card.id as string;
     expect((await list(w.owner, w.projectId)).json().pulls[0].analysisCardId).toBe(ownersCard);
     expect((await list(w.member, w.projectId)).json().pulls[0].analysisCardId).toBeUndefined();
   });
 
   it("leitura não dispara (403), sem acesso é 404, PR inválida ou fechada é 400", async () => {
     const w = await world();
-    expect((await analyse(w.member, w.projectId, 636)).statusCode).toBe(404);
+    expect((await analyse(w.member, w.projectId, 636, { reviewerUserId: w.memberId })).statusCode).toBe(404);
     await w.shareProject("view");
-    expect((await analyse(w.member, w.projectId, 636)).statusCode).toBe(403);
-    expect((await analyse(w.owner, w.projectId, "abc")).statusCode).toBe(400);
-    const closed = await analyse(w.owner, w.projectId, 999);
+    expect((await analyse(w.member, w.projectId, 636, { reviewerUserId: w.memberId })).statusCode).toBe(403);
+    expect((await analyse(w.owner, w.projectId, "abc", { reviewerUserId: w.ownerId })).statusCode).toBe(400);
+    const closed = await analyse(w.owner, w.projectId, 999, { reviewerUserId: w.ownerId });
     expect(closed.statusCode).toBe(400);
     expect(closed.json().error).toMatch(/pr_nao_aberta/);
     expect(sendToTerminal).not.toHaveBeenCalled();
+  });
+});
+
+describe("pessoas e papéis da análise", () => {
+  it("lista quem trabalha no projeto para escolher revisor e coautor; quem não alcança o projeto não lista", async () => {
+    const w = await world();
+    expect((await people(w.member, w.projectId)).statusCode).toBe(404);
+    await w.shareProject("work");
+    const res = await people(w.member, w.projectId);
+    expect(res.statusCode).toBe(200);
+    expect((res.json().people as { username: string }[]).map((p) => p.username).sort()).toEqual(["albert", "owner"]);
+  });
+
+  it("revisor é obrigatório e o coautor vai junto para o card", async () => {
+    const w = await world();
+    expect((await analyse(w.owner, w.projectId, 636, {})).statusCode).toBe(400);
+    expect((await analyse(w.owner, w.projectId, 636, { reviewerUserId: w.ownerId, coauthorUserId: 7 })).statusCode).toBe(400);
+    await w.shareProject("work");
+    const res = await analyse(w.owner, w.projectId, 636, { reviewerUserId: w.memberId, coauthorUserId: w.ownerId });
+    // the owner has no git identity in this install: no credit to give, so it is refused rather than dropped
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/coautor_sem_identidade/);
   });
 });
