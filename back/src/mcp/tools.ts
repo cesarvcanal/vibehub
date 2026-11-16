@@ -12,7 +12,7 @@ import { announcePreview } from "../services/preview/announce.js";
 import { recordLearning } from "../services/brain/learn.js";
 import { moveCards, AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX } from "./cardMove.js";
 import { submitReviewerRound, submitAuthorResponse, reviewToolAnswer, HEAD_SHA_RE } from "../services/review/orchestrator.js";
-import { MAX_ROUNDS } from "../services/review/model.js";
+import { MAX_ROUNDS, cardsToConclude } from "../services/review/model.js";
 import { attachPrs } from "../services/review/attach.js";
 import { startReviewByAgent } from "../services/review/start.js";
 import { ok, fail } from "./toolResult.js";
@@ -347,11 +347,13 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "rule means not on your own initiative, never refusing their order. Otherwise 'review_active' says who merges and " +
         "where the review stands; 'head_moved' = the push brought commits the reviewer has not seen and " +
         "the review went back to them. Never merge a reviewed PR any other way (gh pr merge, the GitHub API). " +
-        "That order is not lost when the review is not ready yet: from the merger it is recorded on the review, " +
-        "which then merges by itself when it ends ready with no blocking item or question. When the order also " +
-        "said to conclude the card (\"mergeia e conclui o card\"), pass `concludeWhenMerged: true` together: it is " +
-        "recorded too, and once the PR is merged — by itself, by the button or by you — this card moves to done " +
-        "with nobody coming back to it. Then tell the user what was recorded instead of promising to do it later. " +
+        "The MERGER's order is not lost when the review is not ready yet (on the author's card or the reviewer's): " +
+        "it is recorded on the review, which then merges by itself when it ends ready with no blocking item or " +
+        "question, Approve on GitHub and green CI (an automatic merge that fails waits for the merger's button). When " +
+        "the order also said to conclude the card (\"mergeia e conclui o card\"), pass `concludeWhenMerged: true` " +
+        "together: it is recorded too, and once the PR is merged — by itself, by the button, outside the panel or by " +
+        "you — this card moves to done with nobody coming back to it. Tell the user what the answer says was recorded " +
+        "instead of promising to do it later; when it says the conclusion was NOT recorded, conclude by hand after the merge. " +
         PR_DOCS_RULE,
       inputSchema: {
         card: z.string().describe("id of the card to deliver (from vibehub_list_terminals)"),
@@ -581,11 +583,11 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
           phase: review.phase,
           roles: { reviewer: a.reviewer, author: a.author ?? "(padrão)", coauthor: a.coauthor ?? null, merger: a.merger ?? "(quem deu a ordem)" },
           mergeAuthorized: review.mergeAuthorized === true,
-          concludeWhenMerged: review.concludeWhenMerged === true,
+          concludeWhenMerged: cardsToConclude(review).length > 0,
           next: review.mergeAuthorized
             ? "tell the user the review started with these roles and the merge order recorded: it merges by itself " +
               "when it ends ready with no blocking item or question (suggestions do not hold it)" +
-              (review.concludeWhenMerged ? ", and then this card moves to done" : "")
+              (cardsToConclude(review).length > 0 ? ", and then this card moves to done" : "")
             : "tell the user the review started with these roles; it runs by itself and merges by itself " +
               "when it ends ready with nothing open — anything left standing waits for the merger's button",
         });
