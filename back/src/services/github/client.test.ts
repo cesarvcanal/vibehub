@@ -472,6 +472,35 @@ describe("listOpenPulls", () => {
   });
 });
 
+describe("readPull", () => {
+  const row = (over: Record<string, unknown> = {}) => ({
+    number: 7, title: "PR 7", html_url: "https://github.com/octocat/hello/pull/7", draft: false, state: "open",
+    updated_at: "2026-11-16T12:00:00Z", user: { login: "alice" },
+    head: { ref: "feat-7", repo: { full_name: "octocat/hello" } }, base: { ref: "main" }, ...over,
+  });
+
+  it("lê UMA PR pelo número, dizendo se está aberta", async () => {
+    const { gh } = await fresh();
+    stubIdentity("octocat");
+    await gh.connect("personal", "ghp_token");
+    const fetchMock = vi.fn(async () => jsonResponse(row({ state: "closed" })));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await gh.readPull("", "octocat", "hello", 7)).toMatchObject({ number: 7, branch: "feat-7", base: "main", fromFork: false, open: false });
+    const [url] = fetchMock.mock.calls[0] as unknown as [string];
+    expect(url).toMatch(/\/repos\/octocat\/hello\/pulls\/7$/);
+  });
+
+  it("PR inexistente é null; outro erro do GitHub falha à vista", async () => {
+    const { gh } = await fresh();
+    stubIdentity("octocat");
+    await gh.connect("personal", "ghp_token");
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ message: "Not Found" }, { status: 404 })));
+    expect(await gh.readPull("", "octocat", "hello", 7)).toBeNull();
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ message: "boom" }, { status: 502 })));
+    await expect(gh.readPull("", "octocat", "hello", 7)).rejects.toThrow(/502/);
+  });
+});
+
 describe("splitRepo", () => {
   it("splits and validates owner/repo", async () => {
     const { gh } = await fresh();

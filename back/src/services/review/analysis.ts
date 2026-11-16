@@ -4,9 +4,9 @@ import type { PublicUser } from "../../auth/users.js";
 import { recordCardActor } from "../board/actor.js";
 import { purgeCard } from "../board/purge.js";
 import {
-  createAnalysisCard, getProject, listCards, listGithubConnections, recordCardPr, type Card,
+  assertBranchName, createAnalysisCard, getProject, listCards, listGithubConnections, recordCardPr, type Card,
 } from "../board/registry.js";
-import { listOpenPulls, splitRepo, type OpenPull } from "../github/client.js";
+import { listOpenPulls, readPull, splitRepo, type OpenPull } from "../github/client.js";
 import { resolveIdentity } from "../github/identity.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { sendToTerminal, SEND_READY_WAIT_MS } from "../maestro/maestro.js";
@@ -36,30 +36,49 @@ const ANALYSIS_ORIGIN: MessageOrigin = { kind: "system", name: "análise de PR" 
 export interface ProjectPull extends OpenPull {
   /** The open analysis card of this PR, when there is one. */
   analysisCardId?: string;
+  /**
+   * The PR's branch is a name vibehub refuses (`assertBranchName`: accents, `+`, `@`, over 80 chars): the
+   * analysis card could not be cut from it. Present only when true.
+   */
+  unsupportedBranch?: true;
 }
 
 /** The open analysis card of a PR: an analysis card (`pushBranch`) not done that recorded this PR's URL. */
-function openAnalysisOf(cards: Card[], prUrl: string): Card | undefined {
+export function openAnalysisCard(cards: Card[], prUrl: string): Card | undefined {
   return cards.find((c) => c.pushBranch !== undefined && c.column !== "done" && (c.prs ?? []).some((p) => p.url === prUrl));
 }
 
-async function readOpenPulls(projectId: string, user: PublicUser): Promise<OpenPull[]> {
+function isSupportedBranch(branch: string): boolean {
+  try {
+    return assertBranchName(branch) === branch;
+  } catch {
+    return false;
+  }
+}
+
+/** The project's repository and the GitHub connection of whoever asks (theirs, falling back to the project's). */
+async function projectRepoAccess(projectId: string, user: PublicUser): Promise<{ connectionId?: string; owner: string; repo: string }> {
   const project = await getProject(projectId);
   if (!project) throw new Error("project not found");
   if (!project.repoFullName) throw new Error("sem_repositorio: o projeto não tem repositório no GitHub");
   const { owner, repo } = splitRepo(project.repoFullName);
   const [actor, settings, connections] = await Promise.all([getUserGit(user.id), getSettings(), listGithubConnections()]);
   const { connectionId } = resolveIdentity({ actor, project, settings, connections });
-  return await listOpenPulls(connectionId, owner, repo);
+  return { connectionId, owner, repo };
 }
 
 export async function listProjectPulls(projectId: string, user: PublicUser): Promise<ProjectPull[]> {
-  const [pulls, cards] = await Promise.all([readOpenPulls(projectId, user), listCards(projectId)]);
+  const { connectionId, owner, repo } = await projectRepoAccess(projectId, user);
+  const [pulls, cards] = await Promise.all([listOpenPulls(connectionId, owner, repo), listCards(projectId)]);
   // Only the cards this user reaches: a card-only share sees the project, never the others' cards.
   const reachable = await visibleCards(user, cards);
   return pulls.map((pull) => {
-    const card = openAnalysisOf(reachable, pull.url);
-    return card ? { ...pull, analysisCardId: card.id } : pull;
+    const card = openAnalysisCard(reachable, pull.url);
+    return {
+      ...pull,
+      ...(card ? { analysisCardId: card.id } : {}),
+      ...(isSupportedBranch(pull.branch) ? {} : { unsupportedBranch: true as const }),
+    };
   });
 }
 
@@ -79,7 +98,7 @@ function serialPerPr<T>(key: string, run: () => Promise<T>): Promise<T> {
 /**
  * Opens the analysis of PR `prNumber`, or returns the one already open (`created: false`). Refusals with
  * the code in the message, which the route turns into 400: `sem_repositorio`, `pr_nao_aberta`, `pr_fork`,
- * `revisao_ativa` (a two-AI review of the same PR is running: the analysis' push would move the head it
+ * `branch_invalida`, `revisao_ativa` (a two-AI review of the same PR is running: the analysis' push would move the head it
  * reviews). A card whose prompt could not be delivered is purged and the error goes up: left behind, the
  * next click would find it and answer "already open" for an analysis that never started.
  */
@@ -88,14 +107,17 @@ export async function startAnalysis(input: {
   prNumber: number;
   requester: PublicUser;
 }): Promise<{ card: Card; created: boolean }> {
-  const pulls = await readOpenPulls(input.projectId, input.requester);
-  const pull = pulls.find((p) => p.number === input.prNumber);
-  if (!pull) throw new Error(`pr_nao_aberta: o PR #${input.prNumber} não está aberto neste repositório`);
+  const { connectionId, owner, repo } = await projectRepoAccess(input.projectId, input.requester);
+  const pull = await readPull(connectionId, owner, repo, input.prNumber);
+  if (!pull?.open) throw new Error(`pr_nao_aberta: o PR #${input.prNumber} não está aberto neste repositório`);
   if (pull.fromFork) throw new Error(`pr_fork: o PR #${pull.number} vem de outro repositório, e a correção não tem onde ser empurrada`);
+  if (!isSupportedBranch(pull.branch)) {
+    throw new Error(`branch_invalida: a branch do PR #${pull.number} (${pull.branch}) tem um nome que o vibehub não aceita para um card`);
+  }
   if (await activeReviewForPr(pull.url)) throw new Error(`revisao_ativa: o PR #${pull.number} está em revisão; a análise mexeria no que está sendo revisado`);
 
   return await serialPerPr(pull.url, async () => {
-    const existing = openAnalysisOf(await listCards(input.projectId), pull.url);
+    const existing = openAnalysisCard(await listCards(input.projectId), pull.url);
     if (existing) return { card: existing, created: false };
 
     const card = await createAnalysisCard({

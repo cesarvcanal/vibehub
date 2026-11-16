@@ -25,6 +25,7 @@ const listOpenPulls = vi.fn(async () => {
   if (githubDown) throw new Error("GitHub returned 502 while listing pull requests");
   return [PULL];
 });
+const readPull = vi.fn(async (_c: unknown, _o: string, _r: string, n: number) => (n === PULL.number ? { ...PULL, open: true } : null));
 const sendToTerminal = vi.fn(async (cardId: string) => ({ sent: true, cardId, title: "", project: "" }));
 
 async function boot(): Promise<FastifyInstance> {
@@ -52,6 +53,7 @@ async function boot(): Promise<FastifyInstance> {
   vi.doMock("../services/github/client.js", async () => ({
     ...(await vi.importActual<typeof import("../services/github/client.js")>("../services/github/client.js")),
     listOpenPulls,
+    readPull,
   }));
   vi.doMock("../services/maestro/maestro.js", async () => ({
     ...(await vi.importActual<typeof import("../services/maestro/maestro.js")>("../services/maestro/maestro.js")),

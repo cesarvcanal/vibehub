@@ -21,6 +21,15 @@ const listOpenPulls = vi.fn(async () => {
   if (githubDown) throw new Error("GitHub returned 502 while listing pull requests");
   return pulls;
 });
+/** One PR by number, as GitHub would answer: the open ones come from `pulls`, the rest is closed or unknown. */
+let closed: OpenPull[] = [];
+const readPull = vi.fn(async (_c: unknown, _o: string, _r: string, n: number) => {
+  if (githubDown) throw new Error("GitHub returned 502 while reading the pull request");
+  const open = pulls.find((p) => p.number === n);
+  if (open) return { ...open, open: true };
+  const gone = closed.find((p) => p.number === n);
+  return gone ? { ...gone, open: false } : null;
+});
 const sendToTerminal = vi.fn(async (cardId: string, _text: string, opts: SendOpts = {}) => {
   await opts.beforeDeliver?.();
   return { sent: true, cardId, title: "", project: "" };
@@ -41,6 +50,7 @@ async function load() {
   vi.doMock("../github/client.js", async () => ({
     ...(await vi.importActual<typeof import("../github/client.js")>("../github/client.js")),
     listOpenPulls,
+    readPull,
   }));
   vi.doMock("../maestro/maestro.js", async () => ({
     ...(await vi.importActual<typeof import("../maestro/maestro.js")>("../maestro/maestro.js")),
@@ -65,7 +75,9 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "vibehub-analysis-"));
   pulls = [pull(7), pull(8, { fromFork: true, branch: "patch" })];
   githubDown = false;
+  closed = [pull(5)];
   listOpenPulls.mockClear();
+  readPull.mockClear();
   sendToTerminal.mockClear();
 });
 afterEach(async () => {
@@ -83,6 +95,14 @@ describe("listProjectPulls", () => {
     expect(listOpenPulls).toHaveBeenCalledWith(undefined, "acme", "widgets");
     expect(listed.find((p) => p.number === 7)?.analysisCardId).toBe(started.card.id);
     expect(listed.find((p) => p.number === 8)?.analysisCardId).toBeUndefined();
+  });
+
+  it("marca a PR cuja branch o vibehub não aceita, para a tela não oferecer uma análise que falharia", async () => {
+    const { analysis, project } = await load();
+    pulls.push(pull(9, { branch: "feat/ação-estoque" }));
+    const listed = await analysis.listProjectPulls(project.id, albert);
+    expect(listed.find((p) => p.number === 9)?.unsupportedBranch).toBe(true);
+    expect(listed.find((p) => p.number === 7)).not.toHaveProperty("unsupportedBranch");
   });
 
   it("projeto sem repositório no GitHub é recusado, e GitHub fora do ar falha à vista", async () => {
@@ -160,10 +180,16 @@ describe("startAnalysis", () => {
     expect(await registry.listCards(project.id)).toHaveLength(0);
   });
 
-  it("PR de fork e PR que não está aberta são recusadas sem criar card", async () => {
+  it("PR de fork, fechada, inexistente ou com branch que o vibehub não aceita é recusada sem criar card", async () => {
     const { analysis, registry, project } = await load();
+    pulls.push(pull(9, { branch: "feat/ação-estoque" }));
     await expect(analysis.startAnalysis({ projectId: project.id, prNumber: 8, requester: albert })).rejects.toThrow(/pr_fork/);
+    await expect(analysis.startAnalysis({ projectId: project.id, prNumber: 5, requester: albert })).rejects.toThrow(/pr_nao_aberta/);
     await expect(analysis.startAnalysis({ projectId: project.id, prNumber: 99, requester: albert })).rejects.toThrow(/pr_nao_aberta/);
+    await expect(analysis.startAnalysis({ projectId: project.id, prNumber: 9, requester: albert })).rejects.toThrow(/branch_invalida/);
+    // only the PR asked for is read, never the whole list
+    expect(listOpenPulls).not.toHaveBeenCalled();
+    expect(readPull).toHaveBeenCalledWith(undefined, "acme", "widgets", 9);
     expect(await registry.listCards(project.id)).toHaveLength(0);
     expect(sendToTerminal).not.toHaveBeenCalled();
   });
