@@ -261,6 +261,15 @@ describe("LiveVoiceSession — while live", () => {
     expect(session.appendContext("depois")).toBe(false);
   });
 
+  it("announces what the model must say aloud with session.commentary.append, tied to no delegation", async () => {
+    const { session, rig } = await liveSession();
+    const ch = rig.peer().channel!;
+    expect(session.announceContext("  Chegou uma   mensagem ")).toBe(true);
+    expect(ch.sent).toContainEqual({ type: "session.commentary.append", delegation_id: null, content: "Chegou uma mensagem" });
+    session.dispose();
+    expect(session.announceContext("depois")).toBe(false);
+  });
+
   it("a delegation goes to whoever took it, and its updates carry its id: progress silent, the result spoken", async () => {
     const { session, rig } = await liveSession();
     const ch = rig.peer().channel!;

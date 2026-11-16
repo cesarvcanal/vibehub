@@ -171,12 +171,21 @@ export class LiveVoiceSession {
   }
 
   /**
-   * Quiet context for the model — what was typed or answered in the chat during the call. GPT-Live
+   * Quiet context for the model — what the card's agent answered in the chat during the call. GPT-Live
    * has no text input: `session.thinking.append` is the documented way to tell it something without
    * making it speak. Clipped to {@link CONTEXT_MAX_CHARS}. False when the call is not up.
    */
   appendContext(text: string): boolean {
     return this.append("session.thinking.append", null, text);
+  }
+
+  /**
+   * Context the model should SAY aloud, paraphrased (`session.commentary.append`, tied to no
+   * delegation) — a message typed in the chat during the call. Same clipping and liveness as
+   * {@link appendContext}.
+   */
+  announceContext(text: string): boolean {
+    return this.append("session.commentary.append", null, text);
   }
 
   /**

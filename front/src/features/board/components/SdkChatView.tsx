@@ -1312,10 +1312,10 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
       await send(raw);
       if (!callLive) return;
       const note = typedContext(raw);
-      if (note && call.appendContext(note)) setSentDuringCall(true);
+      if (note && call.announceContext(note)) setSentDuringCall(true);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [send, callLive, call.appendContext],
+    [send, callLive, call.announceContext],
   );
   useVoiceDelegation({
     call,
