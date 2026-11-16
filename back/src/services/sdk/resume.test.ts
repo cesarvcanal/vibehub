@@ -8,6 +8,7 @@ import type { Card, Project } from "../board/registry.js";
 import type { Settings } from "../settings/settings.js";
 import { BACKGROUND_HOLD_MAX_MS, SYSTEM_ORIGIN, attachSocket, ensureDriverSession, injectSystemTurn, resetSdkSessionsForTesting, setDriverSpawnerForTesting } from "./manager.js";
 import { readHistory } from "./history.js";
+import { saveLastContext } from "./lastContext.js";
 import {
   INFLIGHT_OWNER,
   SDK_INFLIGHT_DIR,
@@ -175,6 +176,15 @@ describe("resumeInterruptedTurns — the boot sweep", () => {
     await vi.waitFor(async () => {
       expect((await readInflightMarker(CARD))?.attempts).toBe(1);
     });
+  });
+
+  it("o driver da retomada já nasce com o medidor da sessão retomada (quem abre o card reaproveita ESTE driver)", async () => {
+    const info = { usedTokens: 52_000, maxTokens: 200_000, percent: 26 };
+    await saveLastContext(CARD, { sessionId: card.resumeSessionId!, info });
+    await writeInflightMarker(CARD, { startedAt: 1, preview: "trabalho longo", attempts: 0 });
+    let session: ReturnType<typeof ensureDriverSession> | undefined;
+    await resumeInterruptedTurns(deps({ ensureSession: (opts) => (session = ensureDriverSession(opts)) }));
+    expect(session?.contextUsage).toEqual(info);
   });
 
   it("O CASO REAL (2026-10-19): turno com segundo plano morto pelo deploy é retomado, e o agente sabe o que morreu", async () => {
