@@ -192,7 +192,7 @@ describe("ProjectPrsDialog", () => {
       },
     }));
     open();
-    expect(await screen.findByText("Your GitHub account cannot see this repository's pull requests")).toBeInTheDocument();
+    expect(await screen.findByText("The GitHub account used on this project cannot see this repository's pull requests")).toBeInTheDocument();
     expect(screen.getByText("The account albert-gh has no access to acme/erp.")).toBeInTheDocument();
     expect(screen.queryByText(/sem_acesso_repo/)).not.toBeInTheDocument();
   });
