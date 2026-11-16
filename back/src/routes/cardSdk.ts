@@ -15,6 +15,7 @@ import {
   onPeerTurn,
 } from "../services/sdk/manager.js";
 import { readCardCatalog } from "../services/sdk/catalog.js";
+import { readLastContext } from "../services/sdk/lastContext.js";
 import { onExternalMessage, readHistory, type HistoryEvent } from "../services/sdk/history.js";
 import { matchOrigin, originOfUser, primeProvenance } from "../services/chat/provenance.js";
 import {
@@ -193,11 +194,13 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       // WHO is typing on this socket — stamped on their messages so OTHER readers of this card see
       // the name (their own render unlabelled: the front compares it). The gate resolved them.
       const wsOrigin = originOfUser(author!);
-      // The last two reads of the setup happen HERE, before anything is acquired: the spawn command
-      // (used only when the card has no live driver) and the "/" menu remembered on disk (see below).
-      const [command, rememberedCatalog] = await Promise.all([
+      // The last reads of the setup happen HERE, before anything is acquired: the spawn command and the
+      // context meter remembered on disk (both used only when the card has no live driver), and the "/"
+      // menu remembered on disk (see below).
+      const [command, rememberedCatalog, rememberedContext] = await Promise.all([
         sdkDriverCommand(project, { ...card, resumeSessionId: resumeTargetFor(card, latestSessionId) }),
         readCardCatalog(card.id),
+        readLastContext(card.id),
       ]);
       // THE TAB MAY BE GONE BY NOW. Everything above awaited for seconds with no `close` listener,
       // so a socket closed in that window already fired its `close` — nobody will ever hear it
@@ -236,7 +239,7 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       // The card's ONE driver: reuse it live (mid-turn included — the reconnect after the reload),
       // or spawn it resuming the newest transcript. History persistence, resume-id persistence and
       // the mirror's dedupe keys all live in the manager — the side that survives this socket.
-      const session = ensureDriverSession({ cardId: card.id, label: card.worktreeSlug, transcriptDir, command });
+      const session = ensureDriverSession({ cardId: card.id, label: card.worktreeSlug, transcriptDir, command, rememberedContext });
       // THE "/" MENU BEFORE THE DRIVER SPEAKS. `attachSocket` only resends the catalog if the session already
       // has it — and a newborn driver has not announced anything yet, so the first "/" opened empty and the
       // person had to delete it and try again (production, 2026-09-28). The card's last known list holds for

@@ -9,6 +9,7 @@ import { removeHistory, SDK_HISTORY_DIR } from "../sdk/history.js";
 import { removeQuestionDrafts, SDK_QUESTION_DRAFTS_DIR } from "../sdk/questionDrafts.js";
 import { clearInflightMarker, SDK_INFLIGHT_DIR } from "../sdk/inflight.js";
 import { removeCardCatalog, SDK_CATALOG_DIR } from "../sdk/catalog.js";
+import { removeLastContext, SDK_CONTEXT_DIR } from "../sdk/lastContext.js";
 import { removeProvenance, PROVENANCE_DIR } from "../chat/provenance.js";
 import { stopCardBrowser } from "../browser/browser.js";
 import { markBrowserDown } from "../browser/activity.js";
@@ -197,6 +198,9 @@ async function eraseEverything(card: Card, steps: PurgeStep[], by?: string, proj
   });
   await step(steps, "catalog", async () => {
     await removeCardCatalog(card.id);
+  });
+  await step(steps, "context", async () => {
+    await removeLastContext(card.id);
   });
   await step(steps, "outbox", async () => {
     const dropped = await purgeCardQueue(card.id);
@@ -543,6 +547,7 @@ const DATA_DIRS: ReadonlyArray<{ dir: string; suffix: string }> = [
   { dir: PROVENANCE_DIR, suffix: ".ndjson" },
   { dir: SDK_INFLIGHT_DIR, suffix: ".json" },
   { dir: SDK_CATALOG_DIR, suffix: ".json" },
+  { dir: SDK_CONTEXT_DIR, suffix: ".json" },
   { dir: SDK_QUESTION_DRAFTS_DIR, suffix: ".json" },
 ];
 

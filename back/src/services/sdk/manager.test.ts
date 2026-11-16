@@ -33,6 +33,7 @@ import {
 } from "./manager.js";
 import { readInflightMarker } from "./inflight.js";
 import { loadQuestionDrafts, questionDraftsSettled } from "./questionDrafts.js";
+import { lastContextSettled, readLastContext } from "./lastContext.js";
 import { BTW_COMMAND } from "./protocol.js";
 import { createMirrorState, driverKeysFor, forgetDriverKeys, mirrorNewEvents } from "./mirror.js";
 import { notifyCardSessionKill } from "../board/workspace.js";
@@ -2974,26 +2975,28 @@ describe("context_usage — o medidor de contexto", () => {
     expect(parsed(s1)).toEqual([{ type: "context_usage", usedTokens: 10_000, maxTokens: 100_000, percent: 10 }]);
   });
 
-  it("card reaberto que retoma a MESMA sessão já mostra a última leitura; outra sessão não herda", () => {
-    const first = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec"] } });
+  it("a leitura vai para o disco com a sessão dela (o deploy reinicia o back e a memória vai junto)", async () => {
+    ensure();
     spawned[0]!.stdout.emit("data", line({ type: "session", sessionId: "s-1" }));
     spawned[0]!.stdout.emit("data", line({ type: "context_usage", usedTokens: 130_000, maxTokens: 200_000 }));
-    stopCardDriver(CARD);
-    expect(first.closed).toBe(true);
+    expect(await readLastContext(CARD)).toEqual({ sessionId: "s-1", info: { usedTokens: 130_000, maxTokens: 200_000, percent: 65 } });
+  });
 
-    const resumed = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec", "--resume", "s-1"] } });
+  it("card reaberto que retoma a MESMA sessão já mostra a leitura do disco; outra sessão não herda", () => {
+    const remembered = { sessionId: "s-1", info: { usedTokens: 130_000, maxTokens: 200_000, percent: 65 } };
+    const resumed = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec", "--resume", "s-1"] }, rememberedContext: remembered });
     const s1 = fakeSocket();
     attachSocket(resumed, s1 as never);
     expect(parsed(s1)).toEqual([{ type: "context_usage", usedTokens: 130_000, maxTokens: 200_000, percent: 65 }]);
     stopCardDriver(CARD);
 
-    const other = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec", "--resume", "s-2"] } });
+    const other = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec", "--resume", "s-2"] }, rememberedContext: remembered });
     const s2 = fakeSocket();
     attachSocket(other, s2 as never);
     expect(parsed(s2)).toEqual([]);
   });
 
-  it("o /clear apaga a leitura: quem conecta depois não vê o medidor da conversa apagada", () => {
+  it("o /clear apaga a leitura, também do disco: quem conecta depois não vê o medidor da conversa apagada", async () => {
     const session = ensure();
     spawned[0]!.stdout.emit("data", line({ type: "session", sessionId: "s-1" }));
     spawned[0]!.stdout.emit("data", line({ type: "context_usage", usedTokens: 130_000, maxTokens: 200_000 }));
@@ -3001,11 +3004,8 @@ describe("context_usage — o medidor de contexto", () => {
     const late = fakeSocket();
     attachSocket(session, late as never);
     expect(parsed(late)).toEqual([]);
-    stopCardDriver(CARD);
-    const resumed = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec", "--resume", "s-1"] } });
-    const s2 = fakeSocket();
-    attachSocket(resumed, s2 as never);
-    expect(parsed(s2)).toEqual([]);
+    await lastContextSettled(CARD);
+    expect(await readLastContext(CARD)).toBeNull();
   });
 
   it("uma sessão sem leitura não manda medidor nenhum a quem conecta", () => {

@@ -46,6 +46,7 @@ let provenance: typeof import("../chat/provenance.js");
 let inflight: typeof import("../sdk/inflight.js");
 let outbox: typeof import("./outbox.js");
 let catalog: typeof import("../sdk/catalog.js");
+let lastContext: typeof import("../sdk/lastContext.js");
 
 async function fresh() {
   vi.resetModules();
@@ -70,6 +71,7 @@ async function fresh() {
   inflight = await import("../sdk/inflight.js");
   outbox = await import("./outbox.js");
   catalog = await import("../sdk/catalog.js");
+  lastContext = await import("../sdk/lastContext.js");
 }
 
 beforeEach(async () => {
@@ -102,6 +104,7 @@ async function fillCard(cardId: string): Promise<void> {
   await inflight.writeInflightMarker(cardId, { startedAt: 1, preview: "segredo do chat", attempts: 0 });
   await outbox.queueMessage(cardId, "mensagem que nunca foi entregue");
   await catalog.writeCardCatalog(cardId, { type: "catalog", commands: [{ name: "deploy-interno" }] } as never);
+  await lastContext.saveLastContext(cardId, { sessionId: "s-1", info: { usedTokens: 84_000, maxTokens: 200_000, percent: 42 } });
 }
 
 const dataFiles = async (sub: string): Promise<string[]> => {
@@ -126,6 +129,7 @@ describe("purgeCard — the card and everything that belonged to it", () => {
     expect(await inflight.readInflightMarker(card.id)).not.toBeNull();
     expect(await outbox.pendingMessages(card.id)).toHaveLength(1);
     expect(await catalog.readCardCatalog(card.id)).not.toBeNull();
+    expect(await lastContext.readLastContext(card.id)).not.toBeNull();
 
     const report = await purge.purgeCard(card.id, "cesar");
 
@@ -140,6 +144,7 @@ describe("purgeCard — the card and everything that belonged to it", () => {
     expect(await dataFiles(inflight.SDK_INFLIGHT_DIR)).toEqual([]);
     // The "/" menu the card's driver announced: its skills and commands, keyed by the card id.
     expect(await dataFiles(catalog.SDK_CATALOG_DIR)).toEqual([]);
+    expect(await dataFiles(lastContext.SDK_CONTEXT_DIR)).toEqual([]);
   });
 
   it("kills every process of the card and erases its files in the runner", async () => {
@@ -721,14 +726,16 @@ describe("sweepOrphanCardData (the backstop: what earlier deletes left behind)",
     await stale(provenance.PROVENANCE_DIR, `${ghost}.ndjson`, '{"at":1,"key":"x","origin":{"kind":"owner","name":"c"}}\n');
     await stale(inflight.SDK_INFLIGHT_DIR, `${ghost}.json`, '{"startedAt":1,"attempts":0}');
     await stale(catalog.SDK_CATALOG_DIR, `${ghost}.json`, '{"type":"catalog","commands":[]}');
+    await stale(lastContext.SDK_CONTEXT_DIR, `${ghost}.json`, '{"sessionId":"s-1","info":{"usedTokens":1,"maxTokens":2}}');
 
     const summary = await purge.sweepOrphanCardData();
 
-    expect(summary.dataFiles).toBe(4);
+    expect(summary.dataFiles).toBe(5);
     expect(await dataFiles(history.SDK_HISTORY_DIR)).toEqual([`${card.id}.ndjson`]);
     expect(await dataFiles(provenance.PROVENANCE_DIR)).toEqual([`${card.id}.ndjson`]);
     expect(await dataFiles(inflight.SDK_INFLIGHT_DIR)).toEqual([`${card.id}.json`]);
     expect(await dataFiles(catalog.SDK_CATALOG_DIR)).toEqual([`${card.id}.json`]);
+    expect(await dataFiles(lastContext.SDK_CONTEXT_DIR)).toEqual([`${card.id}.json`]);
     // The live card's conversation is untouched.
     expect(await history.readHistory(card.id)).toHaveLength(2);
   });
