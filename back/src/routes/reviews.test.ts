@@ -454,7 +454,7 @@ describe("iniciar a revisão pela IA do card (vibehub_review_start)", () => {
     const review = await (await byAgent())(w.cardId, {
       reviewer: "revisor", author: "autor", mergeWhenReady: true, concludeWhenMerged: true,
     });
-    expect(review).toMatchObject({ mergerUserId: w.merger.id, mergeAuthorized: true, concludeWhenMerged: true });
+    expect(review).toMatchObject({ mergerUserId: w.merger.id, mergeAuthorized: true, concludeCardIds: [w.cardId] });
     expect(review.log.some((e) => /merge autorizado/i.test(e.text))).toBe(true);
   });
 
@@ -473,6 +473,32 @@ describe("iniciar a revisão pela IA do card (vibehub_review_start)", () => {
     const w = await world();
     await actor(w.cardId, w.merger.id);
     const review = await (await byAgent())(w.cardId, { reviewer: "revisor", author: "autor", concludeWhenMerged: true });
+    await (await orchestrator()).markReviewMerged(review.id, "merger");
+    expect((await (await registry()).getCard(w.cardId))?.column).toBe("done");
+  });
+
+  for (const [how, opts] of [
+    ["pelo botão", {}], ["sozinha (merge automático)", { auto: true }], ["fora do painel", { outsidePanel: { headSha: "abc1234def" } }],
+  ] as const) {
+    it(`caso real (PR #301): "mergeia e conclui" dado ao card com a revisão JÁ em andamento — mergeada ${how}, o card vai para done`, async () => {
+      const w = await world();
+      await actor(w.cardId, w.merger.id);
+      const review = await (await byAgent())(w.cardId, { reviewer: "revisor", author: "autor" });
+      expect(review.concludeCardIds).toBeUndefined();
+      deliverResult = { prUrl: PR.url, merged: false, reason: "pushed", branch: "dev", cardBranch: PR.branch };
+      const { deliverCard } = await import("../services/review/deliverCard.js");
+      const out = await deliverCard(w.cardId, { authorized: true, from: w.cardId, concludeWhenMerged: true });
+      expect(out).toMatchObject({ reason: "review_active" });
+      await (await orchestrator()).markReviewMerged(review.id, "merger", opts);
+      expect((await (await registry()).getCard(w.cardId))?.column).toBe("done");
+    });
+  }
+
+  it("revisão gravada antes deste campo (concludeWhenMerged legado): mergeada, o card que deu a ordem ainda vai para done", async () => {
+    const w = await world();
+    await actor(w.cardId, w.merger.id);
+    const review = await (await byAgent())(w.cardId, { reviewer: "revisor", author: "autor" });
+    await (await store()).mutateReview(review.id, (r) => { (r as { concludeWhenMerged?: boolean }).concludeWhenMerged = true; });
     await (await orchestrator()).markReviewMerged(review.id, "merger");
     expect((await (await registry()).getCard(w.cardId))?.column).toBe("done");
   });
@@ -555,6 +581,22 @@ describe("PRs anexados: uma revisão por PR, acompanhada do card que anexou", ()
     await (await orchestrator()).markReviewMerged(review.id, "merger");
     expect((await (await registry()).getCard(w.cardId))?.column).toBe("done");
     expect((await (await registry()).getCard(review.cardId))?.column).toBe(fixColumn);
+  });
+
+  it("PR anexado: 'mergeia e conclui' dado no card de CORREÇÃO conclui ele, não o card que anexou", async () => {
+    const w = await hub();
+    const review = await (await orchestrator()).startReview({
+      cardId: w.cardId, prNumber: 599, reviewerUserId: w.revisor.id, authorUserId: w.autor.id, mergerUserId: w.merger.id, by: "merger",
+    });
+    expect(review.cardId).not.toBe(w.cardId);
+    await (await registry()).stampCardActor(review.cardId, w.merger.id);
+    deliverResult = { prUrl: attached(599).url, merged: false, reason: "pushed", branch: "dev", cardBranch: attached(599).branch };
+    const { deliverCard } = await import("../services/review/deliverCard.js");
+    await deliverCard(review.cardId, { authorized: true, from: review.cardId, concludeWhenMerged: true });
+    const hubColumn = (await (await registry()).getCard(w.cardId))?.column;
+    await (await orchestrator()).markReviewMerged(review.id, "merger");
+    expect((await (await registry()).getCard(review.cardId))?.column).toBe("done");
+    expect((await (await registry()).getCard(w.cardId))?.column).toBe(hubColumn);
   });
 
   it("o card que anexou carrega a revisão mais recente e uma por PR", async () => {

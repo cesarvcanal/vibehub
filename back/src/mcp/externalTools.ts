@@ -447,11 +447,18 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
         "`authorized:true` ONLY when the user explicitly named where to ship ('sobe pra dev'); a " +
         "merge is a deploy, never a default. A PR under review: the push always happens; the merge only " +
         "when you are the review's merger and it is ready ('review_active' otherwise, naming who merges; " +
-        "'head_moved' = new commits went back to the reviewer). " + PR_DOCS_RULE,
+        "'head_moved' = new commits went back to the reviewer). The merger's merge order that finds the review " +
+        "not ready is recorded on it: it merges by itself once ready with no blocking item or question, Approve on " +
+        "GitHub and green CI (an automatic merge that fails waits for the merger's button); `concludeWhenMerged: true` " +
+        "(\"…e concluir o card\") records that the card moves to done then. The answer says what was recorded, and " +
+        "when the conclusion was not. " + PR_DOCS_RULE,
       inputSchema: {
         cardId: z.string().describe("id of the card to deliver (from vibehub_list_terminals)"),
         branch: z.string().optional().describe("target branch. Absent = the project's base branch."),
         authorized: z.boolean().optional().describe("true = merge (deploy). Only when the user named the target."),
+        concludeWhenMerged: z.boolean().optional().describe(
+          "PR under review, with authorized: true = also conclude the card; recorded on the review, the card moves to done once it is merged.",
+        ),
         ...prDocsInput,
       },
     },
@@ -461,7 +468,9 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
         // Ordering the delivery IS an order: the push, the PR and the merge go out as this person.
         await recordCardActor(user, a.cardId);
         // The person IS the caller here (and was just made the card's actor): the order is theirs.
-        return ok(await deliverCard(a.cardId, { branch: a.branch, authorized: a.authorized === true, by: user.id, from: a.cardId, docs: prDocsOf(a) }));
+        return ok(await deliverCard(a.cardId, {
+          branch: a.branch, authorized: a.authorized === true, by: user.id, from: a.cardId, concludeWhenMerged: a.concludeWhenMerged, docs: prDocsOf(a),
+        }));
       } catch (e) {
         return fail(e);
       }
