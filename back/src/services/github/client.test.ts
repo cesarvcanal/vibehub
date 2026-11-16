@@ -476,6 +476,12 @@ describe("listOpenPulls", () => {
     await expect(gh.listOpenPulls("", "octocat", "hello")).rejects.toThrow(/403/);
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({}, { status: 403, headers: { "retry-after": "60" } })));
     await expect(gh.listOpenPulls("", "octocat", "hello")).rejects.toThrow(/403/);
+    // the secondary limit may come with quota left and no retry-after: only the body says it
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(
+      { message: "You have exceeded a secondary rate limit. Please wait a few minutes before you try again." },
+      { status: 403, headers: { "x-ratelimit-remaining": "4000" } },
+    )));
+    await expect(gh.listOpenPulls("", "octocat", "hello")).rejects.toThrow(/403/);
   });
 
   it("404 numa página seguinte não descarta as lidas como se fosse falta de acesso", async () => {
