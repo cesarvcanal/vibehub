@@ -439,6 +439,23 @@ describe("PR anexado: a correção roda no card da branch do PR, ou num card de 
     expect(project).toBeDefined();
   });
 
+  it("PR com análise aberta não ganha revisão de duas IAs, e um card de análise não é revisado", async () => {
+    const o = await load();
+    const { author } = await seed(o);
+    accountOf = { "u-revisor": "mussa" };
+    const base = { cardId: author.id, prNumber: 7, reviewerUserId: "u-revisor", authorUserId: "u-autor", mergerUserId: "u-merger", by: "u-autor" };
+    const analysis = await o.registry.createAnalysisCard({ projectId: author.projectId, accountSlug: undefined, prBranch: PR.branch, title: "Análise PR #7" });
+    await o.registry.recordCardPr(analysis.id, PR);
+    // the analysis pushes onto the PR: a review would see its head move under it
+    await expect(o.orch.startReview(base)).rejects.toThrow(/analise_ativa/);
+    // and the analysis card itself never merges, so a review started on it could never end
+    await expect(o.orch.startReview({ ...base, cardId: analysis.id })).rejects.toThrow(/card_de_analise/);
+    expect((await o.registry.listAllCards()).filter((c) => c.reviewOf)).toEqual([]);
+    // the analysis done, the PR can be reviewed
+    await o.registry.updateCard(analysis.id, { column: "done" });
+    await expect(o.orch.startReview(base)).resolves.toMatchObject({ prNumber: 7 });
+  });
+
   it("o mesmo PR anexado em dois cards não ganha duas revisões", async () => {
     const o = await load();
     const { project, hub } = await seedHub(o);

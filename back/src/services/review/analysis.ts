@@ -4,7 +4,8 @@ import type { PublicUser } from "../../auth/users.js";
 import { recordCardActor } from "../board/actor.js";
 import { purgeCard } from "../board/purge.js";
 import {
-  assertBranchName, createAnalysisCard, getProject, listCards, listGithubConnections, recordCardPr, type Card,
+  assertBranchName, createAnalysisCard, getProject, listCards, listGithubConnections, openAnalysisCard, recordCardPr,
+  type Card,
 } from "../board/registry.js";
 import { listOpenPulls, readPull, splitRepo, type OpenPull } from "../github/client.js";
 import { resolveIdentity } from "../github/identity.js";
@@ -41,11 +42,6 @@ export interface ProjectPull extends OpenPull {
    * analysis card could not be cut from it. Present only when true.
    */
   unsupportedBranch?: true;
-}
-
-/** The open analysis card of a PR: an analysis card (`pushBranch`) not done that recorded this PR's URL. */
-export function openAnalysisCard(cards: Card[], prUrl: string): Card | undefined {
-  return cards.find((c) => c.pushBranch !== undefined && c.column !== "done" && (c.prs ?? []).some((p) => p.url === prUrl));
 }
 
 function isSupportedBranch(branch: string): boolean {
