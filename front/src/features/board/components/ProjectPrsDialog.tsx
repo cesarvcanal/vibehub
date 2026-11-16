@@ -9,9 +9,10 @@ import {
 } from "@/components/ui/dialog";
 import { apiErrorMessage } from "@/lib/apiError";
 import { SELECT_CLASS } from "@/components/ui/select";
-import type { AnalysisPerson, AnalysisRoles, ProjectPull, RepoAccessRefusal } from "@/api/types";
+import type { AnalysisPerson, AnalysisRoles, ProjectPull } from "@/api/types";
 import { analysisPeopleKey, boardApi, projectPullsKey } from "@/features/board/api";
 import { defaultReviewerId, isPrAuthor } from "@/features/board/lib/analysisRoles";
+import { repoAccessRefusal } from "@/features/board/lib/repoAccess";
 import { useAuth } from "@/providers/auth";
 import { t as translate, useT } from "@/i18n";
 
@@ -110,7 +111,7 @@ export function ProjectPrsDialog({ projectId, open, onOpenChange, onOpenCard }: 
         {pulls.isPending ? (
           <p className="py-6 text-center text-sm text-muted-foreground">{t("common.loading")}</p>
         ) : noAccess ? (
-          // The asker's GitHub account does not see the repository: theirs to fix, so it says what to do.
+          // The GitHub account the list was read with does not see the repository: it says what to do.
           <div className="flex flex-col items-center gap-1 py-8 text-center">
             <Lock className="mb-1 h-6 w-6 text-muted-foreground" />
             <p className="text-sm font-medium">{t("prs.noAccess")}</p>
@@ -147,12 +148,6 @@ export function ProjectPrsDialog({ projectId, open, onOpenChange, onOpenCard }: 
       </DialogContent>
     </Dialog>
   );
-}
-
-/** The list's 403: the asker's GitHub account does not see the project's repository. Null = any other failure. */
-function repoAccessRefusal(err: unknown): RepoAccessRefusal | null {
-  const response = (err as { response?: { status?: number; data?: RepoAccessRefusal } } | null)?.response;
-  return response?.status === 403 && response.data ? response.data : null;
 }
 
 /** Why a PR cannot be analysed, when it cannot. */
