@@ -11,6 +11,7 @@ import { listOpenPulls, readPull, splitRepo, type OpenPull } from "../github/cli
 import { resolveIdentity } from "../github/identity.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { sendToTerminal, SEND_READY_WAIT_MS } from "../maestro/maestro.js";
+import { logger } from "../../utils/logger.js";
 import { getSettings } from "../settings/settings.js";
 import { analysisPrompt } from "./prompts.js";
 import { activeReviewForPr } from "./store.js";
@@ -94,15 +95,20 @@ function serialPerPr<T>(key: string, run: () => Promise<T>): Promise<T> {
 /**
  * Opens the analysis of PR `prNumber`, or returns the one already open (`created: false`). Refusals with
  * the code in the message, which the route turns into 400: `sem_repositorio`, `pr_nao_aberta`, `pr_fork`,
- * `branch_invalida`, `revisao_ativa` (a two-AI review of the same PR is running: the analysis' push would move the head it
- * reviews). A card whose prompt could not be delivered is purged and the error goes up: left behind, the
- * next click would find it and answer "already open" for an analysis that never started.
+ * `branch_invalida`, `revisao_ativa` (a two-AI review of the same PR is running: the analysis' push would
+ * move the head it reviews).
+ *
+ * It answers as soon as the card exists and holds the PR: bringing a new card up (clone, worktree,
+ * Claude) and waiting for it to take the prompt can last minutes, and the panel's dialog sat locked all
+ * that time, with every other PR's button disabled (production, 2026-11-16). `prompt` is that delivery,
+ * running on: a card whose prompt could not be delivered is purged — left behind, the next click would
+ * find it and answer "already open" for an analysis that never started. It never rejects.
  */
 export async function startAnalysis(input: {
   projectId: string;
   prNumber: number;
   requester: PublicUser;
-}): Promise<{ card: Card; created: boolean }> {
+}): Promise<{ card: Card; created: boolean; prompt: Promise<void> }> {
   const { connectionId, owner, repo } = await projectRepoAccess(input.projectId, input.requester);
   const pull = await readPull(connectionId, owner, repo, input.prNumber);
   if (!pull?.open) throw new Error(`pr_nao_aberta: o PR #${input.prNumber} não está aberto neste repositório`);
@@ -112,9 +118,10 @@ export async function startAnalysis(input: {
   }
   if (await activeReviewForPr(pull.url)) throw new Error(`revisao_ativa: o PR #${pull.number} está em revisão; a análise mexeria no que está sendo revisado`);
 
+  const by = `analysis:${input.requester.username}`;
   return await serialPerPr(pull.url, async () => {
     const existing = openAnalysisCard(await listCards(input.projectId), pull.url);
-    if (existing) return { card: existing, created: false };
+    if (existing) return { card: existing, created: false, prompt: Promise.resolve() };
 
     const card = await createAnalysisCard({
       projectId: input.projectId,
@@ -123,23 +130,32 @@ export async function startAnalysis(input: {
       title: `Análise PR #${pull.number} · ${pull.title}`,
     });
     try {
+      // Recorded before answering: it is what makes the next click find this card instead of opening another.
       await recordCardPr(card.id, { number: pull.number, url: pull.url, base: pull.base, branch: pull.branch });
-      await sendToTerminal(card.id, analysisPrompt({ cardId: card.id, prNumber: pull.number, prUrl: pull.url, branch: pull.branch, base: pull.base }), {
-        by: `analysis:${input.requester.username}`,
-        origin: ANALYSIS_ORIGIN,
-        // Same delivery as the review's relay: wake the new card, wait for Claude, never type into a menu,
-        // and go through the native chat so the conversation does not fork.
-        wake: true,
-        requireAgent: true,
-        guardInteractiveMenu: true,
-        readyWaitMs: SEND_READY_WAIT_MS,
-        viaNativeChat: true,
-        beforeDeliver: async () => recordCardActor(input.requester, card.id),
-      });
     } catch (err) {
-      await purgeCard(card.id, `analysis:${input.requester.username}`);
+      await purgeCard(card.id, by);
       throw err;
     }
-    return { card, created: true };
+    const prompt = deliverAnalysisPrompt(card, pull, input.requester).catch(async (err: unknown) => {
+      logger.warn({ card: card.worktreeSlug, pr: pull.number, detail: (err as Error).message }, "PR analysis prompt not delivered — the card is purged");
+      await purgeCard(card.id, by);
+    });
+    return { card, created: true, prompt };
+  });
+}
+
+/** Types the analysis prompt into the new card, on behalf of whoever asked. Same delivery as the review's relay. */
+async function deliverAnalysisPrompt(card: Card, pull: OpenPull, requester: PublicUser): Promise<void> {
+  await sendToTerminal(card.id, analysisPrompt({ cardId: card.id, prNumber: pull.number, prUrl: pull.url, branch: pull.branch, base: pull.base }), {
+    by: `analysis:${requester.username}`,
+    origin: ANALYSIS_ORIGIN,
+    // Wake the new card, wait for Claude, never type into a menu, and go through the native chat so the
+    // conversation does not fork.
+    wake: true,
+    requireAgent: true,
+    guardInteractiveMenu: true,
+    readyWaitMs: SEND_READY_WAIT_MS,
+    viaNativeChat: true,
+    beforeDeliver: async () => recordCardActor(requester, card.id),
   });
 }

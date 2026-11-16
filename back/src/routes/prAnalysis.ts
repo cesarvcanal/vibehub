@@ -35,7 +35,9 @@ export async function prAnalysisRoutes(app: FastifyInstance): Promise<void> {
       const prNumber = Number(req.params.number);
       if (!Number.isInteger(prNumber) || prNumber <= 0) return await reply.code(400).send({ error: "número de PR inválido" });
       try {
-        return await reply.send(await startAnalysis({ projectId: req.params.id, prNumber, requester: user! }));
+        // The prompt's delivery runs on in the background (see `startAnalysis`): the answer is the card.
+        const { card, created } = await startAnalysis({ projectId: req.params.id, prNumber, requester: user! });
+        return await reply.send({ card, created });
       } catch (err) {
         return await sendError(reply, err, { rules: [GITHUB_FAILED, NOT_FOUND] });
       }

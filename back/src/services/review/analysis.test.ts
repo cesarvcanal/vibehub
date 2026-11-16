@@ -91,6 +91,7 @@ describe("listProjectPulls", () => {
   it("devolve as PRs abertas do GitHub e marca a que já tem análise aberta", async () => {
     const { analysis, project } = await load();
     const started = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert });
+    await started.prompt;
     const listed = await analysis.listProjectPulls(project.id, albert);
     expect(listOpenPulls).toHaveBeenCalledWith(undefined, "acme", "widgets");
     expect(listed.find((p) => p.number === 7)?.analysisCardId).toBe(started.card.id);
@@ -117,7 +118,8 @@ describe("listProjectPulls", () => {
 describe("startAnalysis", () => {
   it("cria o card na branch da PR, grava a PR e manda o prompt em nome de quem pediu", async () => {
     const { analysis, registry, project } = await load();
-    const { card, created } = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert });
+    const { card, created, prompt } = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert });
+    await prompt;
     expect(created).toBe(true);
     expect(card).toMatchObject({ projectId: project.id, title: "Análise PR #7 · PR 7", base: "feat/pr-7", pushBranch: "feat/pr-7" });
     expect((await registry.getCard(card.id))?.prs?.[0]).toMatchObject({ number: 7, url: pull(7).url, base: "dev", branch: "feat/pr-7" });
@@ -133,6 +135,7 @@ describe("startAnalysis", () => {
   it("repetir a mesma PR devolve o card que já existe, sem outro prompt", async () => {
     const { analysis, project } = await load();
     const first = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert });
+    await first.prompt;
     const again = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert });
     expect(again).toMatchObject({ created: false, card: { id: first.card.id } });
     expect(sendToTerminal).toHaveBeenCalledTimes(1);
@@ -144,6 +147,7 @@ describe("startAnalysis", () => {
       analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert }),
       analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert }),
     ]);
+    await Promise.all([a.prompt, b.prompt]);
     expect(a.card.id).toBe(b.card.id);
     expect((await registry.listCards(project.id)).filter((c) => c.pushBranch === "feat/pr-7")).toHaveLength(1);
   });
@@ -151,19 +155,38 @@ describe("startAnalysis", () => {
   it("análise concluída não segura a PR: pedir de novo abre um card novo", async () => {
     const { analysis, registry, project } = await load();
     const first = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert });
+    await first.prompt;
     await registry.updateCard(first.card.id, { column: "done" });
     const again = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert });
     expect(again.created).toBe(true);
     expect(again.card.id).not.toBe(first.card.id);
   });
 
-  it("se o prompt não chega ao card, o card some e o erro sobe: tentar de novo cria outro e manda o prompt", async () => {
+  it("responde assim que o card existe: subir o card e entregar o prompt não seguram o pedido", async () => {
+    const { analysis, project } = await load();
+    let deliver!: () => void;
+    sendToTerminal.mockImplementationOnce(async (cardId: string) => {
+      await new Promise<void>((resolve) => { deliver = resolve; });
+      return { sent: true, cardId, title: "", project: "" };
+    });
+    const started = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert });
+    expect(started.created).toBe(true);
+    expect(sendToTerminal).toHaveBeenCalledTimes(1);
+    // the prompt is still on its way, and a second click already answers with the same card
+    expect(await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert })).toMatchObject({ created: false, card: { id: started.card.id } });
+    deliver();
+    await started.prompt;
+  });
+
+  it("se o prompt não chega ao card, o card some em segundo plano: tentar de novo cria outro e manda o prompt", async () => {
     const { analysis, registry, project } = await load();
     sendToTerminal.mockRejectedValueOnce(new Error("card has no live session"));
-    await expect(analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert })).rejects.toThrow(/no live session/);
+    const first = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert });
+    await first.prompt;
     expect(await registry.listCards(project.id)).toHaveLength(0);
     const retry = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert });
     expect(retry.created).toBe(true);
+    await retry.prompt;
     expect(sendToTerminal).toHaveBeenCalledTimes(2);
   });
 
