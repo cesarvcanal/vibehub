@@ -632,6 +632,30 @@ describe("board registry (persisted)", () => {
       expect((await reg.listAllCards()).filter((c) => c.projectId === p.id)).toHaveLength(before + 1);
     });
 
+    it("card de análise: branch local própria, nascida da PR, e o push volta para a branch da PR", async () => {
+      const { p } = await seedAuthor();
+      const card = await reg.createAnalysisCard({
+        projectId: p.id, accountSlug: "mussa", prBranch: "card/login-ab12", title: "Análise PR #7",
+      });
+      expect(card).toMatchObject({ projectId: p.id, base: "card/login-ab12", accountSlug: "mussa", pushBranch: "card/login-ab12", column: "waiting" });
+      // the PR's branch is usually still checked out by the author's card: git refuses a second worktree on it
+      expect(card.branch).toBe(`analysis/${card.worktreeSlug}`);
+      expect(card.reviewOf).toBeUndefined();
+      expect(await reg.getCard(card.id)).toMatchObject({ pushBranch: "card/login-ab12" });
+      await expect(reg.createAnalysisCard({ projectId: p.id, accountSlug: undefined, prBranch: "a;rm -rf", title: "x" })).rejects.toThrow(/invalid branch/);
+    });
+
+    it("pushBranch não entra pelas portas do HTTP e, malformado no disco, é descartado", async () => {
+      const { p } = await seedAuthor();
+      const created = await reg.createCard({ projectId: p.id, title: "intruso" }, { pushBranch: "main" } as never);
+      expect(created.pushBranch).toBeUndefined();
+      expect((await reg.updateCard(created.id, { pushBranch: "main" } as never)).pushBranch).toBeUndefined();
+      const raw = JSON.parse(await readFile(join(dir, "board.json"), "utf8")) as { cards: Record<string, unknown>[] };
+      raw.cards.find((c) => c.id === created.id)!.pushBranch = "a;rm -rf";
+      await writeFile(join(dir, "board.json"), JSON.stringify(raw));
+      expect((await (await freshRegistry()).getCard(created.id))?.pushBranch).toBeUndefined();
+    });
+
     it("reviewOf e prs não entram pelas portas do HTTP (createCard e updateCard ignoram)", async () => {
       const { p, author } = await seedAuthor();
       const smuggled = { reviewOf: author.id, prs: [{ number: 1, url: "x", base: "dev", branch: "b", openedAt: 1 }] };
