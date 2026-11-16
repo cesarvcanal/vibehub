@@ -1114,12 +1114,6 @@ export function createDetailResponder(
   };
 }
 
-/** The id the driver is going to resume, read from the spawn's argv (`--resume <id>`). */
-function resumeIdOf(args: readonly string[]): string | undefined {
-  const i = args.indexOf("--resume");
-  return i >= 0 ? args[i + 1] : undefined;
-}
-
 /* ------------------------------------------------------------------- API */
 
 export interface EnsureDriverOpts {
@@ -1131,9 +1125,15 @@ export interface EnsureDriverOpts {
   /** The card's transcript dir in the runner — where a workflow's journal lives (optional). */
   transcriptDir?: string;
   /**
+   * The session `command` resumes — the same id the caller gave `sdkDriverCommand`. It cannot be read back
+   * from the command: the real spawn is `bash -lc '<whole line>'` (or ssh with the line as one string), so
+   * `--resume` is never an argv element of its own.
+   */
+  resumeSessionId?: string;
+  /**
    * The card's last context reading, from disk (./lastContext.ts): a reopened card that resumes THAT session
-   * (`--resume`) shows the meter without waiting for the next message — after an idle stop, a pause or a
-   * deploy. A different session does not inherit another's number.
+   * shows the meter without waiting for the next message — after an idle stop, a pause or a deploy. A
+   * different session does not inherit another's number.
    */
   rememberedContext?: StoredContext | null;
 }
@@ -1180,7 +1180,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     ...(opts.transcriptDir ? { transcriptDir: opts.transcriptDir } : {}),
   };
   sessions.set(opts.cardId, session);
-  if (opts.rememberedContext && opts.rememberedContext.sessionId === resumeIdOf(opts.command.args)) {
+  if (opts.rememberedContext && opts.resumeSessionId && opts.rememberedContext.sessionId === opts.resumeSessionId) {
     session.contextUsage = opts.rememberedContext.info;
   }
   // What each person had already ticked on the open cards, from before the restart (or from the previous driver).

@@ -197,8 +197,9 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       // The last reads of the setup happen HERE, before anything is acquired: the spawn command and the
       // context meter remembered on disk (both used only when the card has no live driver), and the "/"
       // menu remembered on disk (see below).
+      const resumeSessionId = resumeTargetFor(card, latestSessionId);
       const [command, rememberedCatalog, rememberedContext] = await Promise.all([
-        sdkDriverCommand(project, { ...card, resumeSessionId: resumeTargetFor(card, latestSessionId) }),
+        sdkDriverCommand(project, { ...card, resumeSessionId }),
         readCardCatalog(card.id),
         readLastContext(card.id),
       ]);
@@ -239,7 +240,7 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       // The card's ONE driver: reuse it live (mid-turn included — the reconnect after the reload),
       // or spawn it resuming the newest transcript. History persistence, resume-id persistence and
       // the mirror's dedupe keys all live in the manager — the side that survives this socket.
-      const session = ensureDriverSession({ cardId: card.id, label: card.worktreeSlug, transcriptDir, command, rememberedContext });
+      const session = ensureDriverSession({ cardId: card.id, label: card.worktreeSlug, transcriptDir, command, resumeSessionId, rememberedContext });
       // THE "/" MENU BEFORE THE DRIVER SPEAKS. `attachSocket` only resends the catalog if the session already
       // has it — and a newborn driver has not announced anything yet, so the first "/" opened empty and the
       // person had to delete it and try again (production, 2026-09-28). The card's last known list holds for

@@ -44,7 +44,7 @@ vi.mock("../services/board/registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../services/board/registry.js")>();
   return {
     ...actual,
-    getCard: () => Promise.resolve({ id: CARD, projectId: "p1", worktreeSlug: "t" }),
+    getCard: () => Promise.resolve({ id: CARD, projectId: "p1", worktreeSlug: "t", ...(h.resumeId ? { resumeSessionId: h.resumeId } : {}) }),
     getProject: () => Promise.resolve({ id: "p1" }),
     effectiveAccountSlug: () => undefined,
     updateCard: () => Promise.resolve(undefined),
@@ -53,7 +53,9 @@ vi.mock("../services/board/registry.js", async (importOriginal) => {
 });
 vi.mock("../services/sdk/driver.js", () => ({
   installCardSdkDriver: () => h.install?.promise ?? Promise.resolve(),
-  sdkDriverCommand: () => Promise.resolve({ file: "docker", args: h.resumeId ? ["exec", "--resume", h.resumeId] : ["exec"] }),
+  // The real shape: the whole line in one `bash -lc` argument (LocalExecutor.pipeCommand).
+  sdkDriverCommand: (_project: unknown, card: { resumeSessionId?: string }) =>
+    Promise.resolve({ file: "bash", args: ["-lc", `docker exec -i runner node sdk-driver.mjs${card.resumeSessionId ? ` --resume ${card.resumeSessionId}` : ""}`] }),
 }));
 vi.mock("../services/board/workspace.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../services/board/workspace.js")>()),

@@ -2982,15 +2982,19 @@ describe("context_usage — o medidor de contexto", () => {
     expect(await readLastContext(CARD)).toEqual({ sessionId: "s-1", info: { usedTokens: 130_000, maxTokens: 200_000, percent: 65 } });
   });
 
+  // The REAL spawn shape: the whole line in one `bash -lc` argument (LocalExecutor.pipeCommand), so
+  // `--resume` is never an argv element of its own — the session to compare comes in its own field.
+  const realCommand = (resume: string) => ({ file: "bash", args: ["-lc", `docker exec -i runner node sdk-driver.mjs --resume ${resume}`] });
+
   it("card reaberto que retoma a MESMA sessão já mostra a leitura do disco; outra sessão não herda", () => {
     const remembered = { sessionId: "s-1", info: { usedTokens: 130_000, maxTokens: 200_000, percent: 65 } };
-    const resumed = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec", "--resume", "s-1"] }, rememberedContext: remembered });
+    const resumed = ensureDriverSession({ cardId: CARD, label: "t", command: realCommand("s-1"), resumeSessionId: "s-1", rememberedContext: remembered });
     const s1 = fakeSocket();
     attachSocket(resumed, s1 as never);
     expect(parsed(s1)).toEqual([{ type: "context_usage", usedTokens: 130_000, maxTokens: 200_000, percent: 65 }]);
     stopCardDriver(CARD);
 
-    const other = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec", "--resume", "s-2"] }, rememberedContext: remembered });
+    const other = ensureDriverSession({ cardId: CARD, label: "t", command: realCommand("s-2"), resumeSessionId: "s-2", rememberedContext: remembered });
     const s2 = fakeSocket();
     attachSocket(other, s2 as never);
     expect(parsed(s2)).toEqual([]);
@@ -2998,7 +3002,7 @@ describe("context_usage — o medidor de contexto", () => {
 
   it("driver recém-nascido: a leitura volta DEPOIS do ready dele (o front zera o medidor ao receber o ready)", () => {
     const remembered = { sessionId: "s-1", info: { usedTokens: 52_000, maxTokens: 200_000, percent: 26 } };
-    const session = ensureDriverSession({ cardId: CARD, label: "t", command: { file: "docker", args: ["exec", "--resume", "s-1"] }, rememberedContext: remembered });
+    const session = ensureDriverSession({ cardId: CARD, label: "t", command: realCommand("s-1"), resumeSessionId: "s-1", rememberedContext: remembered });
     const s1 = fakeSocket();
     attachSocket(session, s1 as never);
     spawned[0]!.stdout.emit("data", line({ type: "ready", resume: "s-1" }));
