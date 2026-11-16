@@ -501,6 +501,20 @@ export interface ProjectPull {
   unsupportedBranch?: true;
 }
 
+/** Who can review or co-author an analysis of a project (`GET /projects/:id/analysis-people`). */
+export interface AnalysisPerson {
+  id: string;
+  username: string;
+  /** The GitHub login their commits would go out as: the PR's author never reviews their own PR. */
+  githubLogin?: string;
+}
+
+/** The people of an analysis: who works the card, and who is credited on its commits. */
+export interface AnalysisRoles {
+  reviewerUserId: string;
+  coauthorUserId?: string;
+}
+
 /** What `POST /projects/:id/prs/:number/analysis` answers: the analysis card, new or the one already open. */
 export interface PrAnalysisStart {
   card: Card;

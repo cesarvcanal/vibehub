@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { configure, screen, waitFor } from "@testing-library/react";
+import { configure, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderApp, setupState } from "@/test/render";
 import type { ProjectPull } from "@/api/types";
@@ -21,6 +21,12 @@ vi.mock("@/lib/api", () => ({
 }));
 
 const OWNER = { id: "u1", username: "sam", role: "owner" };
+/** Sam is signed in; Albert opened the PRs on GitHub (`albert-gh`). */
+const PEOPLE = [
+  { id: "u1", username: "sam", githubLogin: "sam-gh" },
+  { id: "u2", username: "albert", githubLogin: "albert-gh" },
+  { id: "u3", username: "mussa", githubLogin: "mussa-gh" },
+];
 const pull = (n: number, extra: Partial<ProjectPull> = {}): ProjectPull => ({
   number: n, title: `Conciliação ${n}`, url: `https://github.com/acme/erp/pull/${n}`, author: "albert-gh",
   branch: `feat/${n}`, base: "dev", fromFork: false, draft: false, updatedAt: "2026-11-16T12:00:00Z", ...extra,
@@ -30,6 +36,7 @@ function serve(pulls: ProjectPull[] | Error) {
   get.mockImplementation(async (url: string) => {
     if (url === "/auth/me") return { user: OWNER };
     if (url === "/setup/state") return setupState();
+    if (url === "/projects/p1/analysis-people") return { people: PEOPLE };
     if (url === "/projects/p1/prs") {
       if (pulls instanceof Error) throw pulls;
       return { pulls };
@@ -54,12 +61,18 @@ describe("ProjectPrsDialog", () => {
     expect(screen.getAllByRole("button", { name: /Analyse/ })).toHaveLength(2);
   });
 
-  it("starts an analysis and keeps the list open for the next PR, with a toast that opens the card", async () => {
+  it("Analyse asks for the reviewer and the co-author, then starts and keeps the list open", async () => {
     serve([pull(636), pull(640)]);
     post.mockResolvedValue({ card: { id: "c9", projectId: "p1" }, created: true });
     const onOpenCard = open();
     await userEvent.click(await screen.findByRole("button", { name: "Analyse PR #636" }));
-    await waitFor(() => expect(post).toHaveBeenCalledWith("/projects/p1/prs/636/analysis", {}));
+    const reviewer = await screen.findByLabelText("Reviewer");
+    // the one signed in comes picked; whoever opened the PR cannot review it
+    expect(reviewer).toHaveValue("u1");
+    expect(within(reviewer).getByRole("option", { name: /albert/ })).toBeDisabled();
+    await userEvent.selectOptions(screen.getByLabelText("Co-author"), "u3");
+    await userEvent.click(screen.getByRole("button", { name: "Start analysis" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/projects/p1/prs/636/analysis", { reviewerUserId: "u1", coauthorUserId: "u3" }));
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Analysis of PR #636 started", expect.anything()));
     // the dialog stays: the next PR can be started right away
     expect(screen.getByTestId("project-prs-dialog")).toBeInTheDocument();
@@ -70,15 +83,34 @@ describe("ProjectPrsDialog", () => {
     expect(onOpenCard).toHaveBeenCalledWith("c9");
   });
 
+  it("without a co-author the request carries only the reviewer", async () => {
+    serve([pull(636)]);
+    post.mockResolvedValue({ card: { id: "c9", projectId: "p1" }, created: true });
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: "Analyse PR #636" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Start analysis" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/projects/p1/prs/636/analysis", { reviewerUserId: "u1" }));
+  });
+
+  it("the author of the PR cannot be picked as reviewer: nothing is preselected and Start waits", async () => {
+    serve([pull(636, { author: "sam-gh" })]);
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: "Analyse PR #636" }));
+    expect(await screen.findByLabelText("Reviewer")).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Start analysis" })).toBeDisabled();
+    await userEvent.selectOptions(screen.getByLabelText("Reviewer"), "u3");
+    expect(screen.getByRole("button", { name: "Start analysis" })).toBeEnabled();
+  });
+
   it("only the PR being started waits: the others stay clickable, and a second click on it sends nothing", async () => {
     serve([pull(636), pull(640)]);
     post.mockReturnValue(new Promise(() => {}));
     open();
-    const button = await screen.findByRole("button", { name: "Analyse PR #636" });
-    await userEvent.click(button);
-    await userEvent.click(button);
+    await userEvent.click(await screen.findByRole("button", { name: "Analyse PR #636" }));
+    const start = await screen.findByRole("button", { name: "Start analysis" });
+    await userEvent.click(start);
+    await userEvent.click(start);
     expect(post).toHaveBeenCalledTimes(1);
-    expect(button).toBeDisabled();
     expect(screen.getByText("Starting…")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Analyse PR #640" })).toBeEnabled();
   });
