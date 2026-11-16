@@ -50,8 +50,8 @@ const INSTRUCTIONS =
  * A call held INSIDE a card's chat — the person codes by talking. The card's Claude Code agent does
  * the work; the voice converses, asks what is missing and hands the work over (delegation), then
  * says the result. What the person types or attaches during the call goes to the agent through the
- * chat, and reaches the voice only as quiet context (`session.thinking.append`, see the browser's
- * liveVoice.ts). The `Delegation policy` labels and `<|SpawnThinking|>` are GPT-Live's prompt
+ * chat, and the voice is told to say it got that text (`session.commentary.append`); the agent's
+ * answers reach it as quiet context (`session.thinking.append`) — see the browser's voiceContext.ts. The `Delegation policy` labels and `<|SpawnThinking|>` are GPT-Live's prompt
  * contract (developers.openai.com/api/docs/guides/live-prompting): a spoken "vou ver" does not
  * start any work, the token does.
  */
@@ -79,7 +79,9 @@ const CARD_INSTRUCTIONS = [
     "Generate <|SpawnThinking|> before giving an answer that depends on the agent. Do not guess the result " +
     "while waiting: diga em poucas palavras que pediu ao agente e siga conversando. Quando o resultado " +
     "chegar, conte em poucas frases.",
-  "Você recebe, como contexto silencioso, o que for escrito ou respondido no chat durante a chamada. " +
+  "Quando a pessoa escrever no chat durante a chamada, você recebe a mensagem: diga em poucas palavras " +
+    "que chegou uma mensagem de texto e do que ela trata, sem cortar a fala da pessoa; o agente do card " +
+    "cuida do pedido. As respostas do agente no chat chegam como contexto silencioso. " +
     "Se não souber, diga que não sabe.",
 ].join("\n\n");
 
