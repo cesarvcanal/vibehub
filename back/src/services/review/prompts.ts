@@ -568,3 +568,54 @@ export function impasseText(reason: string | undefined): string {
   }
   return clipLine(reason || "motivo não informado", 200);
 }
+
+export interface AnalysisInput {
+  cardId: string;
+  prNumber: number;
+  prUrl: string;
+  branch: string;
+  base: string;
+}
+
+/**
+ * PR ANALYSIS — the text that starts an analysis card (`createAnalysisCard`). One card both reviews and
+ * fixes, on the PR itself: by the time a PR is opened its author has finished, so whoever finds a clear
+ * failure fixes it at once instead of sending a report to another developer (César and Albert,
+ * 2026-11-16). The cut between fixing and asking is the review's own ({@link FINDING_CLASSES}), and the
+ * skills installed on the runner do the reading: without them the analysis misses things.
+ *
+ * The card has none of the author's context on purpose (agnostic): only the PR and the repo's rules.
+ * It never merges, and it never rewrites the PR's title or body — they are the author's. PURE.
+ */
+export function analysisPrompt(a: AnalysisInput): string {
+  return [
+    `[vibehub · análise de PR] PR #${a.prNumber} (${a.prUrl}) · branch ${a.branch} -> ${a.base}.`,
+    "Você analisa este PR sem o contexto de quem o escreveu: só o código, o diff e as regras do repositório. O objetivo " +
+      "é revisar de verdade (bug, incoerência, colisão com o que já existe, testes, qualidade), não reescrever o PR.",
+    "",
+    "1. Ponha o worktree no código atual da PR e leia as regras:",
+    `   git fetch origin && git reset --hard origin/${a.branch}`,
+    "   Leia o AGENTS.md (e o CLAUDE.md, se houver) da raiz: é contra eles que o código é julgado.",
+    `2. Rode as skills sobre o PR #${a.prNumber}, nesta ordem:`,
+    "   - /code-review high (com a etapa de verificação que tenta derrubar cada achado);",
+    "   - /security-review, quando o diff toca autenticação, permissão, shell, segredos ou rotas;",
+    "   - /simplify sobre o código que o PR mexe: o que preserva o comportamento entra como improvement;",
+    "   - testes (TDD): mudança de comportamento sem teste, teste que não testa de verdade (só confirma a hipótese), " +
+      "bordas, falhas, corrida e permissão faltando. Rode só o recorte do que o PR tocou; a suíte inteira é do CI.",
+    "3. Classifique cada achado. Aqui não há outra IA nem rodadas: quem age no achado é você.",
+    FINDING_CLASSES,
+    "   blocking só com prova: o teste que falha, a regra escrita do repo (arquivo e trecho) ou o cenário concreto " +
+      "(arquivo:linha e o caso que dá errado). Achado que a verificação derrubou sai da lista.",
+    `4. Comente cada achado na linha do diff, na sua conta: gh api repos/{owner}/{repo}/pulls/${a.prNumber}/comments ` +
+      "(body, commit_id = o sha do passo 1, path, line). Achado sem linha vai no resumo do passo 7.",
+    "5. blocking e improvement: corrija agora, um commit atômico por achado. Em bug, escreva antes o teste que reproduz " +
+      "a falha, veja falhar pelo motivo certo, corrija e veja passar. Responda no comentário do achado com o sha do commit " +
+      "(gh api .../pulls/comments/<id>/replies). question: não mexa; pergunte no chat deste card, com o conflito e as " +
+      "alternativas, e siga com o resto. suggestion: só no resumo.",
+    `6. Entregue as correções: chame vibehub_deliver com card = "${a.cardId}" e branch = "${a.base}", sem title nem body ` +
+      "(a descrição do PR é do autor) e sem authorized (o merge é de uma pessoa). Os commits vão para a branch da PR. " +
+      "Se o push for recusado porque a PR andou, refaça o passo 1 sobre o código novo antes de seguir.",
+    `7. Publique o resumo como review da PR: gh pr review ${a.prNumber} --comment --body "<resumo>", com o que achou, o ` +
+      "que corrigiu (sha), as perguntas em aberto e as sugestões. O mesmo resumo, curto, no chat deste card.",
+  ].join("\n");
+}

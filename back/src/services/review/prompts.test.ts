@@ -202,3 +202,42 @@ describe("quem age em cada achado: revisor e autor leem as mesmas classes", () =
     expect(text).toMatch(/saiu do escopo do PR ou mudou comportamento: achado novo blocking com introducedInRound: 2/);
   });
 });
+
+describe("prompt da análise de PR", () => {
+  const input = { cardId: "card-9", prNumber: 636, prUrl: "https://github.com/acme/erp/pull/636", branch: "feat-x", base: "dev" };
+
+  it("parte do código atual da PR e lê as regras do repositório antes de julgar", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    const text = analysisPrompt(input);
+    expect(text).toContain("git fetch origin && git reset --hard origin/feat-x");
+    expect(text).toContain("AGENTS.md");
+  });
+
+  it("usa as skills instaladas: code review, security review, simplify, e confere os testes", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    const text = analysisPrompt(input);
+    expect(text).toContain("/code-review high");
+    expect(text).toContain("/security-review");
+    expect(text).toContain("/simplify");
+    expect(text).toMatch(/TDD/);
+  });
+
+  it("classifica com o mesmo critério da revisão e só pergunta o que é de intenção", async () => {
+    const { analysisPrompt, reviewerRoundPrompt: round } = await import("./prompts.js");
+    const text = analysisPrompt(input);
+    const classes = round(review()).match(/Quem age em cada achado[^]*?não são uma lista fechada\./)?.[0];
+    expect(classes).toBeDefined();
+    expect(text).toContain(classes!);
+  });
+
+  it("corrige com teste primeiro, comenta tudo na PR e entrega sem merge nem reescrever a descrição", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    const text = analysisPrompt(input);
+    expect(text).toMatch(/teste que reproduz/);
+    expect(text).toContain("pulls/636/comments");
+    expect(text).toContain("gh pr review 636 --comment");
+    expect(text).toContain('vibehub_deliver com card = "card-9" e branch = "dev"');
+    expect(text).not.toMatch(/authorized: true/);
+    expect(text).toMatch(/sem title nem body/);
+  });
+});
