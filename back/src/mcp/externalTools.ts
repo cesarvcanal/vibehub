@@ -447,8 +447,8 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
         "`authorized:true` ONLY when the user explicitly named where to ship ('sobe pra dev'); a " +
         "merge is a deploy, never a default. A PR under review: the push always happens; the merge only " +
         "when you are the review's merger and it is ready ('review_active' otherwise, naming who merges; " +
-        "'head_moved' = new commits went back to the reviewer). A merge order that finds the review not ready " +
-        "is recorded on it and carried out when it is merged; `concludeWhenMerged: true` (\"…e concluir o card\") " +
+        "'head_moved' = new commits went back to the reviewer). The merger's merge order that finds the review " +
+        "not ready is recorded on it, and it merges by itself once ready; `concludeWhenMerged: true` (\"…e concluir o card\") " +
         "records that the card moves to done then. " + PR_DOCS_RULE,
       inputSchema: {
         cardId: z.string().describe("id of the card to deliver (from vibehub_list_terminals)"),
