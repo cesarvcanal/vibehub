@@ -40,6 +40,9 @@ const pull = (n: number, extra: Partial<OpenPull> = {}): OpenPull => ({
   branch: `feat/pr-${n}`, base: "dev", fromFork: false, draft: false, updatedAt: "2026-11-16T12:00:00Z", ...extra,
 });
 
+/** A user `findUser` no longer finds (deleted mid-request); the listing still had them. */
+let vanished: string | undefined;
+
 /** Albert opened the PRs (`albert-gh`); Mussa reviews them. Both are real users with a GitHub connection each. */
 let albert: PublicUser;
 let mussa: PublicUser;
@@ -62,6 +65,10 @@ async function load() {
     ...(await vi.importActual<typeof import("../board/workspace.js")>("../board/workspace.js")),
     reapplyCardIdentity: vi.fn(async () => true),
   }));
+  vi.doMock("../../auth/users.js", async () => {
+    const actual = await vi.importActual<typeof import("../../auth/users.js")>("../../auth/users.js");
+    return { ...actual, findUser: async (id: string) => (id === vanished ? undefined : actual.findUser(id)) };
+  });
   const registry = await import("../board/registry.js");
   registry.resetForTesting();
   const analysis = await import("./analysis.js");
@@ -91,11 +98,13 @@ beforeEach(async () => {
   listOpenPulls.mockClear();
   readPull.mockClear();
   sendToTerminal.mockClear();
+  vanished = undefined;
 });
 afterEach(async () => {
   vi.doUnmock("../github/client.js");
   vi.doUnmock("../maestro/maestro.js");
   vi.doUnmock("../board/workspace.js");
+  vi.doUnmock("../../auth/users.js");
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -199,16 +208,33 @@ describe("startAnalysis", () => {
     await started.prompt;
   });
 
-  it("se o prompt não chega ao card, o card some em segundo plano: tentar de novo cria outro e manda o prompt", async () => {
+  it("se o prompt não chega ao card, o card vai para concluído com o motivo para quem pediu: tentar de novo cria outro", async () => {
     const { analysis, registry, project } = await load();
     sendToTerminal.mockRejectedValueOnce(new Error("card has no live session"));
+    const events = await import("../events/cardEvents.js");
+    const heard: import("../events/cardEvents.js").CardEvent[] = [];
+    const stop = events.onCardEvent((e) => void heard.push(e));
     const first = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert, reviewerUserId: mussa.id });
     await first.prompt;
-    expect(await registry.listCards(project.id)).toHaveLength(0);
+    stop();
+    expect((await registry.getCard(first.card.id))?.column).toBe("done");
+    // the one who asked hears why, instead of the card vanishing after the "started" toast
+    const notice = heard.find((e) => e.cardId === first.card.id && e.kind === "message");
+    expect(notice).toMatchObject({ messageType: "error", text: expect.stringMatching(/PR #7 não começou.*card has no live session/) });
+    expect(await events.canHear(albert, notice!)).toBe(true);
     const retry = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert, reviewerUserId: mussa.id });
     expect(retry.created).toBe(true);
     await retry.prompt;
     expect(sendToTerminal).toHaveBeenCalledTimes(2);
+  });
+
+  it("revisor que some no meio do pedido é recusado antes de criar o card", async () => {
+    const { analysis, registry, project } = await load();
+    vanished = mussa.id;
+    await expect(analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert, reviewerUserId: mussa.id }))
+      .rejects.toThrow(/pessoa_sem_acesso/);
+    expect(await registry.listCards(project.id)).toHaveLength(0);
+    expect(sendToTerminal).not.toHaveBeenCalled();
   });
 
   it("quem abriu a PR não a revisa: escolher o autor como revisor é recusado", async () => {

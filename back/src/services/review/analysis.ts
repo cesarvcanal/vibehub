@@ -4,15 +4,16 @@ import { findUser, listUsers, type PublicUser } from "../../auth/users.js";
 import { recordCardActor } from "../board/actor.js";
 import { purgeCard } from "../board/purge.js";
 import {
-  assertBranchName, createAnalysisCard, getGithubConnection, getProject, listCards, listGithubConnections, openAnalysisCard,
-  recordCardPr, sharesForTarget, type Card, type Project,
+  assertBranchName, createAnalysisCard, getProject, listCards, listGithubConnections, openAnalysisCard,
+  recordCardPr, sharesForTarget, updateCard, type Card, type GithubConnection, type Project,
 } from "../board/registry.js";
+import { recordMessage } from "../events/cardEvents.js";
 import { listOpenPulls, readPull, splitRepo, type OpenPull } from "../github/client.js";
 import { resolveIdentity } from "../github/identity.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { sendToTerminal, SEND_READY_WAIT_MS } from "../maestro/maestro.js";
 import { logger } from "../../utils/logger.js";
-import { getSettings } from "../settings/settings.js";
+import { getSettings, type Settings } from "../settings/settings.js";
 import { analysisPrompt } from "./prompts.js";
 import { activeReviewForPr } from "./store.js";
 
@@ -29,8 +30,9 @@ import { activeReviewForPr } from "./store.js";
  *    "done" no longer holds the PR: asking again opens a new analysis.
  *  - Only a PR from the project's own repository: the fixes are pushed to its branch, and a fork's
  *    branch is not ours to push to (the same rule as `attachPrs`).
- *  - GitHub is read with the identity of whoever asks (their connection, falling back to the project's),
- *    and the card works on their behalf: its first message is theirs.
+ *  - GitHub is read with the identity of whoever asks (their connection, falling back to the project's).
+ *    The card works on behalf of the REVIEWER chosen for it (their Claude account, their GitHub), never
+ *    of whoever clicked, and whoever opened the PR is never its reviewer.
  */
 
 const ANALYSIS_ORIGIN: MessageOrigin = { kind: "system", name: "análise de PR" };
@@ -53,10 +55,22 @@ function isSupportedBranch(branch: string): boolean {
   }
 }
 
+/** What resolving anyone's GitHub identity on a project reads once, however many people are resolved. */
+interface IdentityContext {
+  project: Project;
+  settings: Settings;
+  connections: GithubConnection[];
+}
+
+async function identityContext(project: Project): Promise<IdentityContext> {
+  const [settings, connections] = await Promise.all([getSettings(), listGithubConnections()]);
+  return { project, settings, connections };
+}
+
 /** The GitHub connection a person's git and gh run as on this project: theirs, falling back to the project's. */
-async function connectionOf(userId: string, project: Project): Promise<string | undefined> {
-  const [actor, settings, connections] = await Promise.all([getUserGit(userId), getSettings(), listGithubConnections()]);
-  return resolveIdentity({ actor, project, settings, connections }).connectionId;
+async function connectionOf(userId: string, ctx: IdentityContext): Promise<GithubConnection | undefined> {
+  const connectionId = resolveIdentity({ actor: await getUserGit(userId), ...ctx }).connectionId;
+  return ctx.connections.find((c) => c.id === connectionId);
 }
 
 /** The project's repository and the GitHub connection of whoever asks. */
@@ -65,7 +79,7 @@ async function projectRepoAccess(projectId: string, user: PublicUser): Promise<{
   if (!project) throw new Error("project not found");
   if (!project.repoFullName) throw new Error("sem_repositorio: o projeto não tem repositório no GitHub");
   const { owner, repo } = splitRepo(project.repoFullName);
-  return { project, connectionId: await connectionOf(user.id, project), owner, repo };
+  return { project, connectionId: (await connectionOf(user.id, await identityContext(project)))?.id, owner, repo };
 }
 
 export interface AnalysisPerson {
@@ -84,12 +98,15 @@ export interface AnalysisPerson {
 export async function analysisPeople(projectId: string): Promise<AnalysisPerson[]> {
   const project = await getProject(projectId);
   if (!project) throw new Error("project not found");
-  const [users, shares] = await Promise.all([listUsers(), sharesForTarget("project", projectId)]);
+  return await peopleOf(project);
+}
+
+async function peopleOf(project: Project): Promise<AnalysisPerson[]> {
+  const [users, shares, ctx] = await Promise.all([listUsers(), sharesForTarget("project", project.id), identityContext(project)]);
   const working = new Set(shares.filter((s) => s.level === "work").map((s) => s.userId));
   return await Promise.all(
     users.filter((u) => u.role === "owner" || working.has(u.id)).map(async (u) => {
-      const connectionId = await connectionOf(u.id, project);
-      const login = connectionId ? (await getGithubConnection(connectionId))?.login : undefined;
+      const login = (await connectionOf(u.id, ctx))?.login;
       return { id: u.id, username: u.username, ...(login ? { githubLogin: login } : {}) };
     }),
   );
@@ -124,16 +141,19 @@ function serialPerPr<T>(key: string, run: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Opens the analysis of PR `prNumber`, or returns the one already open (`created: false`). Refusals with
- * the code in the message, which the route turns into 400: `sem_repositorio`, `pr_nao_aberta`, `pr_fork`,
- * `branch_invalida`, `revisao_ativa` (a two-AI review of the same PR is running: the analysis' push would
- * move the head it reviews).
+ * Opens the analysis of PR `prNumber`, or returns the one already open (`created: false`, with the roles
+ * it was opened with: the ones asked now are not applied). Refusals with the code in the message, which
+ * the route turns into 400: `sem_repositorio`, `pr_nao_aberta`, `pr_fork`, `branch_invalida`,
+ * `revisao_ativa` (a two-AI review of the same PR is running: the analysis' push would move the head it
+ * reviews), `pessoa_sem_acesso` (the reviewer or co-author does not work on the project),
+ * `coautor_igual_revisor`, `coautor_sem_identidade` and `revisor_igual_autor`.
  *
  * It answers as soon as the card exists and holds the PR: bringing a new card up (clone, worktree,
  * Claude) and waiting for it to take the prompt can last minutes, and the panel's dialog sat locked all
  * that time, with every other PR's button disabled (production, 2026-11-16). `prompt` is that delivery,
- * running on: a card whose prompt could not be delivered is purged — left behind, the next click would
- * find it and answer "already open" for an analysis that never started. It never rejects.
+ * running on: a card whose prompt could not be delivered goes to "done" with the reason as a notice —
+ * left open, the next click would find it and answer "already open" for an analysis that never started;
+ * erased, it would vanish after the "started" toast without anyone being told. It never rejects.
  */
 export async function startAnalysis(input: {
   projectId: string;
@@ -144,10 +164,12 @@ export async function startAnalysis(input: {
   /** Credited on every commit of the analysis (`Co-authored-by`). */
   coauthorUserId?: string;
 }): Promise<{ card: Card; created: boolean; prompt: Promise<void> }> {
-  const { connectionId, owner, repo } = await projectRepoAccess(input.projectId, input.requester);
-  const people = new Map((await analysisPeople(input.projectId)).map((p) => [p.id, p]));
+  const { project, connectionId, owner, repo } = await projectRepoAccess(input.projectId, input.requester);
+  const people = new Map((await peopleOf(project)).map((p) => [p.id, p]));
   const reviewer = people.get(input.reviewerUserId);
-  if (!reviewer) throw new Error("pessoa_sem_acesso: o revisor escolhido não trabalha neste projeto");
+  // Read before any card exists: a reviewer deleted meanwhile is refused, never left holding a card.
+  const reviewerUser = reviewer ? await findUser(reviewer.id) : undefined;
+  if (!reviewer || !reviewerUser) throw new Error("pessoa_sem_acesso: o revisor escolhido não trabalha neste projeto");
   if (input.coauthorUserId !== undefined && !people.has(input.coauthorUserId)) {
     throw new Error("pessoa_sem_acesso: o coautor escolhido não trabalha neste projeto");
   }
@@ -183,14 +205,29 @@ export async function startAnalysis(input: {
       await purgeCard(card.id, by);
       throw err;
     }
-    const reviewerUser = await findUser(reviewer.id);
-    if (!reviewerUser) throw new Error("pessoa_sem_acesso: o revisor escolhido não existe mais");
-    const prompt = deliverAnalysisPrompt(card, pull, reviewerUser, coauthorTrailer).catch(async (err: unknown) => {
-      logger.warn({ card: card.worktreeSlug, pr: pull.number, detail: (err as Error).message }, "PR analysis prompt not delivered — the card is purged");
-      await purgeCard(card.id, by);
-    });
+    const prompt = deliverAnalysisPrompt(card, pull, reviewerUser, coauthorTrailer).catch((err: unknown) =>
+      concludeUnstartedAnalysis(card, pull.number, (err as Error).message));
     return { card, created: true, prompt };
   });
+}
+
+/**
+ * The prompt never reached the card: it goes to "done", which frees the PR for a new click, with the
+ * reason as a notice on the card — what tells whoever asked (they already saw "started") to try again.
+ */
+async function concludeUnstartedAnalysis(card: Card, prNumber: number, reason: string): Promise<void> {
+  logger.warn({ card: card.worktreeSlug, pr: prNumber, detail: reason }, "PR analysis prompt not delivered — the card is concluded");
+  try {
+    await updateCard(card.id, { column: "done" });
+    await recordMessage({
+      cardId: card.id, type: "error", severity: "warning",
+      text: `A análise do PR #${prNumber} não começou: ${reason}. Peça de novo na lista de PRs do projeto.`,
+      idempotencyKey: "analysis-not-started",
+    });
+  } catch (err) {
+    // `prompt` is dropped by the route: a rejection here would be unhandled and the card would keep the PR.
+    logger.error({ card: card.worktreeSlug, pr: prNumber, detail: (err as Error).message }, "could not conclude the PR analysis that did not start");
+  }
 }
 
 /** Types the analysis prompt into the new card, on behalf of the reviewer. Same delivery as the review's relay. */
