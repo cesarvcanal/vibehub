@@ -34,8 +34,10 @@ transcrição (fragmentos) → turnos → POST /api/cards/:id/voice/turns → sd
   a mesma linha é substituída (sem duplicar).
 - **Contexto:** a sessão é criada já com a conversa recente do card nas instruções (digitadas,
   respostas do agente, turnos falados; nunca chamadas de ferramenta). Durante a chamada, o que for
-  digitado/anexado e as respostas do agente vão para a voz como contexto silencioso
-  (`session.thinking.append`, até ~1200 caracteres).
+  digitado/anexado vai para a voz para ela avisar em voz alta que chegou uma mensagem de texto
+  (`session.commentary.append` sem delegação: como contexto silencioso a voz nunca mencionava o texto
+  e parecia ignorá-lo, produção, 16/11/2026); as respostas do agente vão como contexto silencioso
+  (`session.thinking.append`). Os dois com até ~1200 caracteres.
 - **Texto e anexos durante a chamada:** seguem pelo envio normal do chat, para o agente do card
   (Claude Code). O GPT-Live **não tem entrada de texto nem de arquivo/imagem**: a voz só fica sabendo
   que algo foi escrito e quantas imagens foram anexadas, e a faixa da chamada diz isso na tela.
@@ -186,6 +188,9 @@ Playwright; o cabeçalho do arquivo tem o comando.
   `session.input_audio.mute`).
 - GPT-Live não aceita texto, imagem nem arquivo: anexos vão para o agente do card pelo chat e a voz
   só recebe o aviso. Não há como a voz "ler" o anexo em tempo real.
+- O aviso da mensagem digitada é `session.commentary.append`: a documentação diz que o modelo o fala
+  parafraseando, mas não diz se ele espera uma pausa ou corta a própria fala para isso. As instruções
+  pedem que não corte a fala da pessoa; o comportamento real só se confirma numa chamada de verdade.
 - A delegação não traz o texto da tarefa (só o id): o pedido é a última fala da pessoa. Se a
   transcrição errou, o agente recebe o erro; a transcrição recente vai junto para ele desambiguar.
 - Pedido de ação por voz segue o que o agente faria se fosse digitado: não há confirmação extra.
