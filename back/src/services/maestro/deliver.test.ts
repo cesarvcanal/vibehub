@@ -88,8 +88,8 @@ describe("buildPushAndPrScript", () => {
     // and the CARD's token file is not touched: rewriting it here raced the card's own author
     // switch and could leave the next author's commits pushing with this delivery's token
     expect(s).not.toContain("/root/.vibehub/gh/");
-    // git push is force-with-lease, and the PR targets the given branch
-    expect(s).toContain("git push --force-with-lease origin 'card/fix-1'");
+    // git push is force-with-lease (and if-includes: another card may have pushed onto it), and the PR targets the given branch
+    expect(s).toContain("git push --force-with-lease --force-if-includes origin 'card/fix-1'");
     // never --fill: its body is the list of commits, the undocumented PR the team rule forbids
     expect(s).not.toContain("--fill");
   });
@@ -171,7 +171,7 @@ describe("forgetDeletedRemoteBranch — a branch the merge deleted on GitHub doe
     const { deliver } = await load();
     const lines = deliver.buildPushAndPrScript("vibehub-runner", TOKEN, "/work/scratch/x", "card/fix-1", "dev").split("\n");
     const guard = lines.findIndex((l) => l.includes("git ls-remote --exit-code origin 'refs/heads/card/fix-1'"));
-    const push = lines.findIndex((l) => l.includes("git push --force-with-lease origin 'card/fix-1'"));
+    const push = lines.findIndex((l) => l.includes("git push --force-with-lease --force-if-includes origin 'card/fix-1'"));
     expect(guard).toBeGreaterThan(-1);
     expect(guard).toBeLessThan(push);
     expect(lines[guard]).toContain("git update-ref -d 'refs/remotes/origin/card/fix-1'");
@@ -186,6 +186,44 @@ describe("buildPushAndPrScript de um card de análise (push na branch da PR)", (
     expect(s).not.toContain("--force-with-lease");
     // the PR is found by the PR's branch, the remote one
     expect(s).toContain("gh pr list --head 'feat-7' --base 'main'");
+  });
+});
+
+describe("push do card do autor depois da análise (git de verdade, um repositório com duas worktrees)", () => {
+  /**
+   * All cards of a project share ONE clone, so they share `refs/remotes/origin/*`. The analysis card
+   * pushes its fixes onto the PR's branch and that moves `origin/<branch>` for the author's worktree too:
+   * a bare `--force-with-lease` would lease against the moved ref and overwrite the fixes.
+   */
+  const roots: string[] = [];
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  it("o push do autor é recusado em vez de apagar as correções que a análise subiu", async () => {
+    const { deliver } = await load();
+    const root = await mkdtemp(join(tmpdir(), "vibehub-analysis-push-"));
+    roots.push(root);
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
+    const gitEnv = { ...env, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+    const sh = (cwd: string, script: string) => execFileSync("bash", ["-c", script], { cwd, encoding: "utf8", env: gitEnv });
+    const commit = (m: string) => `git -c user.name=t -c user.email=t@t commit -q --allow-empty -m ${m}`;
+    const pushLine = (opts: { pushHeadOnto?: boolean }) =>
+      deliver.buildPushAndPrScript("vibehub-runner", TOKEN, "/work/scratch/x", "card/x", "main", { comments: [] }, opts)
+        .split("\n").find((l) => l.startsWith("if ! git push"))!.replace(/echo "[^"]*error push"/, "echo refused");
+    sh(root, "git init -q --bare remote.git && git clone -q remote.git repo 2>/dev/null");
+    const repo = join(root, "repo");
+    sh(repo, `${commit("base")} && git push -q origin HEAD:main && git checkout -q -b card/x && ${commit("pr")} && git push -q origin card/x`);
+    // the analysis card: its own local branch from the PR's head, in a second worktree of the same clone
+    sh(repo, "git worktree add -q ../analysis -b analysis/a origin/card/x");
+    const analysis = join(root, "analysis");
+    sh(analysis, `${commit("fix")} && ${pushLine({ pushHeadOnto: true })}`);
+    const fixed = sh(root, "git --git-dir=remote.git rev-parse refs/heads/card/x").trim();
+    expect(fixed).toBe(sh(analysis, "git rev-parse HEAD").trim());
+    // the author's card, never having fetched the fix, delivers again
+    sh(repo, commit("late"));
+    expect(sh(repo, `${pushLine({})} 2>/dev/null; true`)).toContain("refused");
+    expect(sh(root, "git --git-dir=remote.git rev-parse refs/heads/card/x").trim()).toBe(fixed);
   });
 });
 

@@ -227,7 +227,11 @@ export function buildPushAndPrScript(
   assertSafeRemotePath(cwd);
   const pushCommand = opts.pushHeadOnto
     ? `git push origin ${shQuote(`HEAD:refs/heads/${branch}`)}`
-    : `git push --force-with-lease origin ${shQuote(branch)}`;
+    // `--force-if-includes`: every card of a project shares one clone, so another card's push onto this
+    // branch (an analysis card fixing the PR) moves the `origin/<branch>` this lease compares against.
+    // Without it the lease passes and the force wipes those commits; with it, a remote tip this branch
+    // never had is refused (git >= 2.30).
+    : `git push --force-with-lease --force-if-includes origin ${shQuote(branch)}`;
   const textFlags = [
     docs.title !== undefined ? `--title "$TITLE"` : "",
     docs.body !== undefined ? `--body-file "$BODY"` : "",
