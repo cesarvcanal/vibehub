@@ -71,6 +71,15 @@ export interface ModernReply { status: number; body?: unknown }
 const error = (status: number, id: unknown, code: number, message: string, data?: unknown): ModernReply =>
   ({ status, body: { jsonrpc: "2.0", id: id ?? null, error: { code, message, ...(data === undefined ? {} : { data }) } } });
 
+/**
+ * The in-process client's wait for an answer: the largest delay `setTimeout` takes (~24.8 days, beyond it
+ * Node fires at once), i.e. no deadline of the bridge's own. The SDK otherwise gives up at 60s with
+ * "-32001 Request timed out" while the tool keeps running: `vibehub_deliver` waits for the card's gate for
+ * minutes, so the agent never saw the gate's verdict nor the merge, and kept retrying. How long to wait is
+ * the remote caller's decision (its per-server timeout, 15 min for the cards), as on the legacy path.
+ */
+const BRIDGE_TIMEOUT_MS = 2 ** 31 - 1;
+
 /** Calls the caller's own SDK server in process, as a legacy client would. */
 async function viaSdk(make: () => McpServer, method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
   const { _meta: _ignored, ...rest } = params;
@@ -80,7 +89,7 @@ async function viaSdk(make: () => McpServer, method: string, params: Record<stri
   try {
     await server.connect(serverSide);
     await client.connect(clientSide);
-    return await client.request({ method, params: rest } as never, z.object({}).passthrough());
+    return await client.request({ method, params: rest } as never, z.object({}).passthrough(), { timeout: BRIDGE_TIMEOUT_MS });
   } finally {
     await client.close();
     await server.close();
