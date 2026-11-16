@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { canAccessProject, canWorkOnProject } from "../auth/access.js";
 import { requestUser, requireSession } from "../auth/session.js";
-import { listProjectPulls, startAnalysis } from "../services/review/analysis.js";
+import { analysisPeople, listProjectPulls, startAnalysis } from "../services/review/analysis.js";
 import { NOT_FOUND, sendError } from "./httpError.js";
 
 /** GitHub failing to answer is not the caller's fault: the list is not there to give. */
@@ -24,7 +24,18 @@ export async function prAnalysisRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.post<{ Params: { id: string; number: string } }>(
+  /** Who can be the reviewer or the co-author of an analysis here: whoever works on the project. */
+  app.get<{ Params: { id: string } }>("/api/projects/:id/analysis-people", { preHandler: requireSession }, async (req, reply) => {
+    const user = await requestUser(req);
+    if (!(await canAccessProject(user, req.params.id))) return await reply.code(404).send({ error: "project not found" });
+    try {
+      return await reply.send({ people: await analysisPeople(req.params.id) });
+    } catch (err) {
+      return await sendError(reply, err);
+    }
+  });
+
+  app.post<{ Params: { id: string; number: string }; Body: { reviewerUserId?: unknown; coauthorUserId?: unknown } }>(
     "/api/projects/:id/prs/:number/analysis", { preHandler: requireSession },
     async (req, reply) => {
       const user = await requestUser(req);
@@ -34,8 +45,17 @@ export async function prAnalysisRoutes(app: FastifyInstance): Promise<void> {
       }
       const prNumber = Number(req.params.number);
       if (!Number.isInteger(prNumber) || prNumber <= 0) return await reply.code(400).send({ error: "número de PR inválido" });
+      const { reviewerUserId, coauthorUserId } = req.body ?? {};
+      if (typeof reviewerUserId !== "string" || !reviewerUserId) return await reply.code(400).send({ error: "revisor obrigatório" });
+      if (coauthorUserId !== undefined && (typeof coauthorUserId !== "string" || !coauthorUserId)) {
+        return await reply.code(400).send({ error: "coautor inválido" });
+      }
       try {
-        return await reply.send(await startAnalysis({ projectId: req.params.id, prNumber, requester: user! }));
+        // The prompt's delivery runs on in the background (see `startAnalysis`): the answer is the card.
+        const { card, created } = await startAnalysis({
+          projectId: req.params.id, prNumber, requester: user!, reviewerUserId, ...(coauthorUserId ? { coauthorUserId } : {}),
+        });
+        return await reply.send({ card, created });
       } catch (err) {
         return await sendError(reply, err, { rules: [GITHUB_FAILED, NOT_FOUND] });
       }

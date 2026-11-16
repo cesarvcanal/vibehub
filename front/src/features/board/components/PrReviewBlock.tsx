@@ -15,6 +15,8 @@ import { useT } from "@/i18n";
  *
  *  - NO review: the pill reads "sem revisão" and the line offers "Pedir revisão", which opens the
  *    dialog where the roles are chosen;
+ *  - an ANALYSIS card's PR (`Card.pushBranch`): the pill reads "análise neste card" and nothing is
+ *    offered — the card already is that PR's analysis, and the server refuses a review of it;
  *  - a review exists: the line IS the way into it — the pill says where it stands (round N of 3,
  *    ready to merge, impasse…) and clicking anywhere on it asks the screen for the review's panel.
  *
@@ -34,10 +36,12 @@ export interface PrReviewBlockProps {
   onOpenPanel: () => void;
   /** `row`: a line inside the card's PR list ({@link PrList}), which draws the frame around them all. */
   variant?: "block" | "row";
+  /** The card is this PR's ANALYSIS card (`Card.pushBranch`): no "Pedir revisão", the card already is it. */
+  analysis?: boolean;
 }
 
 export function PrReviewBlock({
-  cardId, pr, review: summary, authorWorking = false, actorUserId, onOpenPanel, variant = "block",
+  cardId, pr, review: summary, authorWorking = false, actorUserId, onOpenPanel, variant = "block", analysis = false,
 }: PrReviewBlockProps) {
   const t = useT();
   const [asking, setAsking] = React.useState(false);
@@ -60,9 +64,13 @@ export function PrReviewBlock({
           {pr.author}
         </span>
       ) : null}
-      <Badge tone={pill.tone} className="ml-auto shrink-0 transition-colors duration-500">
-        {t(pill.key, pill.vars)}
-      </Badge>
+      {analysis && !review ? (
+        <Badge tone="info" className="ml-auto shrink-0">{t("review.analysisCard")}</Badge>
+      ) : (
+        <Badge tone={pill.tone} className="ml-auto shrink-0 transition-colors duration-500">
+          {t(pill.key, pill.vars)}
+        </Badge>
+      )}
     </>
   );
 
@@ -101,18 +109,20 @@ export function PrReviewBlock({
       >
         <ExternalLink className="h-3.5 w-3.5" />
       </a>
-      {review ? null : (
-        <Button type="button" size="sm" className="h-7 shrink-0 px-3 text-xs" onClick={() => setAsking(true)}>
-          {t("review.ask")}
-        </Button>
+      {review || analysis ? null : (
+        <>
+          <Button type="button" size="sm" className="h-7 shrink-0 px-3 text-xs" onClick={() => setAsking(true)}>
+            {t("review.ask")}
+          </Button>
+          <RequestReviewDialog
+            cardId={cardId}
+            pr={pr}
+            actorUserId={actorUserId}
+            open={asking}
+            onClose={() => setAsking(false)}
+          />
+        </>
       )}
-      <RequestReviewDialog
-        cardId={cardId}
-        pr={pr}
-        actorUserId={actorUserId}
-        open={asking}
-        onClose={() => setAsking(false)}
-      />
     </div>
   );
 }
@@ -185,7 +195,7 @@ function PrList({ cardId, count, summaries, children }: {
  * the line away.
  */
 function LivePrLine({ card, pr, row, onOpenPanel }: {
-  card: Pick<Card, "id" | "review" | "reviews" | "actorUserId">;
+  card: Pick<Card, "id" | "review" | "reviews" | "actorUserId" | "pushBranch">;
   pr: CardPr;
   row: boolean;
   onOpenPanel: (prNumber?: number) => void;
@@ -205,6 +215,7 @@ function LivePrLine({ card, pr, row, onOpenPanel }: {
       actorUserId={card.actorUserId}
       onOpenPanel={() => onOpenPanel(pr.number)}
       variant={row ? "row" : "block"}
+      analysis={card.pushBranch !== undefined}
     />
   );
 }
@@ -224,7 +235,7 @@ export function PrReviewBlocks({
   card,
   onOpenPanel,
 }: {
-  card: Pick<Card, "id" | "prs" | "review" | "reviews" | "actorUserId">;
+  card: Pick<Card, "id" | "prs" | "review" | "reviews" | "actorUserId" | "pushBranch">;
   /** Show the review's panel — of THIS PR, on a card that reads one review per PR. */
   onOpenPanel: (prNumber?: number) => void;
 }) {
@@ -233,7 +244,7 @@ export function PrReviewBlocks({
 
 /** A card with several PRs under review, or attached ones: every line reads its own review. */
 function PerPrBlocks({ card, onOpenPanel }: {
-  card: Pick<Card, "id" | "prs" | "review" | "reviews" | "actorUserId">;
+  card: Pick<Card, "id" | "prs" | "review" | "reviews" | "actorUserId" | "pushBranch">;
   onOpenPanel: (prNumber?: number) => void;
 }) {
   const prs = visiblePrs(card);
@@ -248,7 +259,7 @@ function PerPrBlocks({ card, onOpenPanel }: {
 
 /** The card's own PRs with (at most) one reviewed: the single live read of the card's review, as always. */
 function CardReviewBlocks({ card, onOpenPanel }: {
-  card: Pick<Card, "id" | "prs" | "review" | "actorUserId">;
+  card: Pick<Card, "id" | "prs" | "review" | "actorUserId" | "pushBranch">;
   onOpenPanel: () => void;
 }) {
   const reviewed = card.review !== undefined && card.review.phase !== "cancelled";
@@ -276,6 +287,7 @@ function CardReviewBlocks({ card, onOpenPanel }: {
           actorUserId={card.actorUserId}
           onOpenPanel={() => onOpenPanel()}
           variant={row ? "row" : "block"}
+          analysis={card.pushBranch !== undefined}
         />
       ))}
     </PrList>

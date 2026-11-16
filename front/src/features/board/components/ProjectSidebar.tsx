@@ -524,7 +524,6 @@ function ProjectSwitcher({
       {prsOpen ? (
         <ProjectPrsDialog
           projectId={current.id}
-          projectName={current.name}
           open
           onOpenChange={setPrsOpen}
           onOpenCard={onOpenCard}

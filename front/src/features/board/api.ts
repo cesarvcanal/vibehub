@@ -3,6 +3,8 @@ import type {
   Account,
   AccountsResponse,
   AccountsUsageResponse,
+  AnalysisPerson,
+  AnalysisRoles,
   ApplyOutcome,
   AttachmentPreview,
   Brain,
@@ -211,6 +213,7 @@ export const RUNNER_KEY = ["board", "runner"] as const;
 export const GITHUB_KEY = ["board", "github"] as const;
 /** Outside ["board"] on purpose: every board refresh would otherwise re-read GitHub while the list is open. */
 export const projectPullsKey = (projectId: string) => ["projectPulls", projectId] as const;
+export const analysisPeopleKey = (projectId: string) => ["analysisPeople", projectId] as const;
 export const PREVIEW_PORTS_KEY = ["board", "preview", "ports"] as const;
 export const FEATURES_KEY = ["board", "features"] as const;
 /** The install's members (`GET /api/users`, owner only) — read by sharing and by the access screen. */
@@ -268,9 +271,13 @@ export const boardApi = {
   listProjectPulls: (id: string) =>
     get<{ pulls: ProjectPull[] }>(`/projects/${encodeURIComponent(id)}/prs`).then((r) => r.pulls),
 
+  /** Who can review or co-author an analysis in this project. */
+  listAnalysisPeople: (id: string) =>
+    get<{ people: AnalysisPerson[] }>(`/projects/${encodeURIComponent(id)}/analysis-people`).then((r) => r.people),
+
   /** Opens the analysis card of a PR (or answers with the one already open). */
-  startPrAnalysis: (id: string, prNumber: number) =>
-    post<PrAnalysisStart>(`/projects/${encodeURIComponent(id)}/prs/${prNumber}/analysis`, {}),
+  startPrAnalysis: (id: string, prNumber: number, roles: AnalysisRoles) =>
+    post<PrAnalysisStart>(`/projects/${encodeURIComponent(id)}/prs/${prNumber}/analysis`, roles),
 
   /** Moves a project to `position` in the sidebar; the server renumbers and returns the new list. */
   reorderProject: (id: string, position: number) =>

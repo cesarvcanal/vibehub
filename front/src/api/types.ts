@@ -461,6 +461,11 @@ export interface Card {
    */
   prs?: CardPr[];
   /**
+   * ANALYSIS CARD: the branch of the PR it analyses and fixes (the panel's "Analisar"). Its PR line offers
+   * no "Pedir revisão": the card itself is that PR's analysis. Absent = a regular card.
+   */
+  pushBranch?: string;
+  /**
    * Summary of the card's most recent review that was not cancelled — enough for the block and the
    * sidebar line; the full thing is `GET /api/cards/:id/review`. Absent = never reviewed.
    */
@@ -494,6 +499,20 @@ export interface ProjectPull {
   analysisCardId?: string;
   /** Its branch has a name vibehub refuses for a card (accents, `+`, over 80 chars): it cannot be analysed. */
   unsupportedBranch?: true;
+}
+
+/** Who can review or co-author an analysis of a project (`GET /projects/:id/analysis-people`). */
+export interface AnalysisPerson {
+  id: string;
+  username: string;
+  /** The GitHub login their commits would go out as: the PR's author never reviews their own PR. */
+  githubLogin?: string;
+}
+
+/** The people of an analysis: who works the card, and who is credited on its commits. */
+export interface AnalysisRoles {
+  reviewerUserId: string;
+  coauthorUserId?: string;
 }
 
 /** What `POST /projects/:id/prs/:number/analysis` answers: the analysis card, new or the one already open. */
