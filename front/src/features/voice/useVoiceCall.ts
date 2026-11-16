@@ -330,6 +330,7 @@ export function useVoiceCall({
     session?.resumePlayback();
   }, [session]);
   const appendContext = React.useCallback((text: string) => session?.appendContext(text) ?? false, [session]);
+  const announceContext = React.useCallback((text: string) => session?.announceContext(text) ?? false, [session]);
   const onDelegation = React.useCallback(
     (listener: DelegationListener) => session?.onDelegation(listener) ?? (() => false),
     [session],
@@ -344,7 +345,7 @@ export function useVoiceCall({
     [snap.turns, saves],
   );
 
-  return { snap, phase, turns, start, stop, setMuted, resumePlayback, appendContext, onDelegation, answerDelegation, orbLevels, meterRef, active };
+  return { snap, phase, turns, start, stop, setMuted, resumePlayback, appendContext, announceContext, onDelegation, answerDelegation, orbLevels, meterRef, active };
 }
 
 export type VoiceCall = ReturnType<typeof useVoiceCall>;
