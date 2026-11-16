@@ -380,6 +380,63 @@ export async function listBranches(connectionId: string | null | undefined, owne
   return { branches, defaultBranch, truncada: githubPages > MAX_BRANCH_PAGES };
 }
 
+export interface OpenPull {
+  number: number;
+  title: string;
+  url: string;
+  author: string;
+  branch: string;
+  base: string;
+  /** The head lives in another repository (a fork, or one GitHub no longer shows): nowhere to push a fix. */
+  fromFork: boolean;
+  draft: boolean;
+  updatedAt: string;
+}
+
+/** Cap of pages of 100 open PRs: more than 500 open at once is not a list anyone picks from. */
+const MAX_PULL_PAGES = 5;
+
+/**
+ * The repository's OPEN pull requests, read from GitHub on every call: the PR analysis picks from what
+ * is on GitHub right now, never from a list kept by vibehub (a PR opened by hand shows up at once).
+ */
+export async function listOpenPulls(connectionId: string | null | undefined, owner: string, repo: string): Promise<OpenPull[]> {
+  assertRepoPart(owner, "owner");
+  assertRepoPart(repo, "repository");
+  const token = await tokenFor(connectionId);
+  const fullName = `${owner}/${repo}`.toLowerCase();
+  const pulls: OpenPull[] = [];
+  const perPage = 100;
+  for (let page = 1; page <= MAX_PULL_PAGES; page += 1) {
+    const res = await githubFetch(`/repos/${owner}/${repo}/pulls?state=open&per_page=${perPage}&page=${page}&sort=updated&direction=desc`, token);
+    if (!res.ok) {
+      await res.body?.cancel();
+      throw new Error(`GitHub returned ${res.status} while listing pull requests`);
+    }
+    const body = (await res.json()) as {
+      number: number; title: string; html_url: string; draft: boolean; updated_at: string;
+      user: { login: string } | null;
+      head: { ref: string; repo: { full_name: string } | null };
+      base: { ref: string };
+    }[];
+    for (const row of body) {
+      pulls.push({
+        number: row.number,
+        title: row.title,
+        url: row.html_url,
+        author: row.user?.login ?? "",
+        branch: row.head.ref,
+        base: row.base.ref,
+        fromFork: row.head.repo?.full_name.toLowerCase() !== fullName,
+        draft: row.draft,
+        updatedAt: row.updated_at,
+      });
+    }
+    if (body.length < perPage) break;
+  }
+  return pulls;
+}
+
 /** The number of the `rel="last"` page of GitHub's `Link` header; without it, there is only one page. */
 function lastPageFromLink(link: string | null): number {
   const last = link?.match(/[?&]page=(\d+)[^>]*>;\s*rel="last"/);
