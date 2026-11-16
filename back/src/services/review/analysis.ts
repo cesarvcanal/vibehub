@@ -32,7 +32,7 @@ import { activeReviewForPr } from "./store.js";
  *    branch is not ours to push to (the same rule as `attachPrs`).
  *  - GitHub is read with the identity of whoever asks (their connection, falling back to the project's).
  *    The card works on behalf of the REVIEWER chosen for it (their Claude account, their GitHub), never
- *    of whoever clicked, and whoever opened the PR is never its reviewer.
+ *    of whoever clicked, and whoever opened the PR is never its reviewer nor its co-author (the reviewer may be).
  */
 
 const ANALYSIS_ORIGIN: MessageOrigin = { kind: "system", name: "análise de PR" };
@@ -146,7 +146,7 @@ function serialPerPr<T>(key: string, run: () => Promise<T>): Promise<T> {
  * the route turns into 400: `sem_repositorio`, `pr_nao_aberta`, `pr_fork`, `branch_invalida`,
  * `revisao_ativa` (a two-AI review of the same PR is running: the analysis' push would move the head it
  * reviews), `pessoa_sem_acesso` (the reviewer or co-author does not work on the project),
- * `coautor_igual_revisor`, `coautor_sem_identidade` and `revisor_igual_autor`.
+ * `coautor_sem_identidade`, `revisor_igual_autor` and `coautor_igual_autor`.
  *
  * It answers as soon as the card exists and holds the PR: bringing a new card up (clone, worktree,
  * Claude) and waiting for it to take the prompt can last minutes, and the panel's dialog sat locked all
@@ -173,8 +173,8 @@ export async function startAnalysis(input: {
   if (input.coauthorUserId !== undefined && !people.has(input.coauthorUserId)) {
     throw new Error("pessoa_sem_acesso: o coautor escolhido não trabalha neste projeto");
   }
-  if (input.coauthorUserId === reviewer.id) throw new Error("coautor_igual_revisor: o revisor já assina os commits");
-  const coauthorTrailer = input.coauthorUserId ? await coauthorTrailerOf(input.coauthorUserId) : undefined;
+  const coauthor = input.coauthorUserId === undefined ? undefined : people.get(input.coauthorUserId);
+  const coauthorTrailer = coauthor ? await coauthorTrailerOf(coauthor.id) : undefined;
   const pull = await readPull(connectionId, owner, repo, input.prNumber);
   if (!pull?.open) throw new Error(`pr_nao_aberta: o PR #${input.prNumber} não está aberto neste repositório`);
   if (pull.fromFork) throw new Error(`pr_fork: o PR #${pull.number} vem de outro repositório, e a correção não tem onde ser empurrada`);
@@ -184,6 +184,10 @@ export async function startAnalysis(input: {
   // Whoever opened the PR does not review it: compared by the GitHub login the reviewer's commits would carry.
   if (reviewer.githubLogin && reviewer.githubLogin.toLowerCase() === pull.author.toLowerCase()) {
     throw new Error(`revisor_igual_autor: ${reviewer.username} abriu o PR #${pull.number} e não pode revisá-lo`);
+  }
+  // Nor is it their co-author: the credit goes to whoever worked on it with them, the reviewer included.
+  if (coauthor?.githubLogin && coauthor.githubLogin.toLowerCase() === pull.author.toLowerCase()) {
+    throw new Error(`coautor_igual_autor: ${coauthor.username} abriu o PR #${pull.number} e não é coautor dele`);
   }
   if (await activeReviewForPr(pull.url)) throw new Error(`revisao_ativa: o PR #${pull.number} está em revisão; a análise mexeria no que está sendo revisado`);
 

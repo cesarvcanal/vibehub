@@ -83,6 +83,19 @@ describe("ProjectPrsDialog", () => {
     expect(onOpenCard).toHaveBeenCalledWith("c9");
   });
 
+  it("the reviewer can also be the co-author; whoever opened the PR is neither", async () => {
+    serve([pull(636)]);
+    post.mockResolvedValue({ card: { id: "c9", projectId: "p1" }, created: true });
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: "Analyse PR #636" }));
+    const coauthor = await screen.findByLabelText("Co-author");
+    expect(within(coauthor).getByRole("option", { name: /albert/ })).toBeDisabled();
+    expect(within(coauthor).getByRole("option", { name: "sam" })).toBeEnabled();
+    await userEvent.selectOptions(coauthor, "u1");
+    await userEvent.click(screen.getByRole("button", { name: "Start analysis" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/projects/p1/prs/636/analysis", { reviewerUserId: "u1", coauthorUserId: "u1" }));
+  });
+
   it("without a co-author the request carries only the reviewer", async () => {
     serve([pull(636)]);
     post.mockResolvedValue({ card: { id: "c9", projectId: "p1" }, created: true });
@@ -119,19 +132,6 @@ describe("ProjectPrsDialog", () => {
     fail = false;
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByLabelText("Reviewer")).toHaveValue("u1");
-  });
-
-  it("picking the co-author as reviewer clears the co-author, so it never comes back unpicked", async () => {
-    serve([pull(636)]);
-    post.mockResolvedValue({ card: { id: "c9", projectId: "p1" }, created: true });
-    open();
-    await userEvent.click(await screen.findByRole("button", { name: "Analyse PR #636" }));
-    await userEvent.selectOptions(await screen.findByLabelText("Co-author"), "u3");
-    await userEvent.selectOptions(screen.getByLabelText("Reviewer"), "u3");
-    await userEvent.selectOptions(screen.getByLabelText("Reviewer"), "u1");
-    expect(screen.getByLabelText("Co-author")).toHaveValue("");
-    await userEvent.click(screen.getByRole("button", { name: "Start analysis" }));
-    await waitFor(() => expect(post).toHaveBeenCalledWith("/projects/p1/prs/636/analysis", { reviewerUserId: "u1" }));
   });
 
   it("the author of the PR cannot be picked as reviewer: nothing is preselected and Start waits", async () => {

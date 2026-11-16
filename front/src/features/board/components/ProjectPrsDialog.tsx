@@ -249,31 +249,26 @@ function RolesPicker({ pull, people, onCancel, onStart }: {
   const ids = React.useId();
   const [reviewer, setReviewer] = React.useState(() => defaultReviewerId(people, user?.id, pull));
   const [coauthor, setCoauthor] = React.useState("");
-  // The reviewer already signs the commits: picked as reviewer, they stop being the co-author.
-  const pickReviewer = (id: string) => {
-    setReviewer(id);
-    if (id === coauthor) setCoauthor("");
-  };
+  // Whoever opened the PR neither reviews it nor co-authors it; the reviewer may be the co-author.
+  const choices = people.map((person) => (
+    <option key={person.id} value={person.id} disabled={isPrAuthor(person, pull)}>
+      {isPrAuthor(person, pull) ? t("prs.prAuthor", { name: person.username }) : person.username}
+    </option>
+  ));
   return (
     <div className="mt-2 flex flex-wrap items-end gap-2 rounded-md bg-muted/40 p-2">
       <label className="flex min-w-[9rem] flex-1 flex-col gap-1 text-xs text-muted-foreground" htmlFor={`${ids}-reviewer`}>
         {t("prs.reviewer")}
-        <select id={`${ids}-reviewer`} className={SELECT_CLASS} value={reviewer} onChange={(e) => pickReviewer(e.target.value)}>
+        <select id={`${ids}-reviewer`} className={SELECT_CLASS} value={reviewer} onChange={(e) => setReviewer(e.target.value)}>
           <option value="" disabled>{t("prs.pickReviewer")}</option>
-          {people.map((person) => (
-            <option key={person.id} value={person.id} disabled={isPrAuthor(person, pull)}>
-              {isPrAuthor(person, pull) ? t("prs.prAuthor", { name: person.username }) : person.username}
-            </option>
-          ))}
+          {choices}
         </select>
       </label>
       <label className="flex min-w-[9rem] flex-1 flex-col gap-1 text-xs text-muted-foreground" htmlFor={`${ids}-coauthor`}>
         {t("prs.coauthor")}
         <select id={`${ids}-coauthor`} className={SELECT_CLASS} value={coauthor} onChange={(e) => setCoauthor(e.target.value)}>
           <option value="">{t("prs.noCoauthor")}</option>
-          {people.filter((person) => person.id !== reviewer).map((person) => (
-            <option key={person.id} value={person.id}>{person.username}</option>
-          ))}
+          {choices}
         </select>
       </label>
       <div className="flex gap-1">

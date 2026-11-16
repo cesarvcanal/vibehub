@@ -87,7 +87,7 @@ async function load() {
   };
   albert = await person("albert", "albert-gh", "Albert-Reginato", "albert@example.com");
   mussa = await person("mussa", "mussa-gh", "wellesley-mussolini", "xerif.off@gmail.com");
-  return { registry, analysis, project, users, userGit };
+  return { registry, analysis, project, users, userGit, person };
 }
 
 beforeEach(async () => {
@@ -245,21 +245,36 @@ describe("startAnalysis", () => {
   });
 
   it("o coautor ganha o crédito em cada commit da análise", async () => {
-    const { analysis, project } = await load();
-    const { prompt } = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert, reviewerUserId: mussa.id, coauthorUserId: albert.id });
+    const { analysis, project, person } = await load();
+    const cesar = await person("cesar", "cesar-gh", "Cesar Canal", "cesar@example.com");
+    const { prompt } = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert, reviewerUserId: mussa.id, coauthorUserId: cesar.id });
     await prompt;
-    expect(sendToTerminal.mock.calls[0]![1]).toContain("Co-authored-by: Albert-Reginato <albert@example.com>");
+    expect(sendToTerminal.mock.calls[0]![1]).toContain("Co-authored-by: Cesar Canal <cesar@example.com>");
   });
 
-  it("revisor sem trabalho no projeto, coautor igual ao revisor ou sem identidade git são recusados", async () => {
+  it("o revisor também pode ser o coautor: revisou e escreveu junto com quem abriu a PR", async () => {
+    const { analysis, project } = await load();
+    const { created, prompt } = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: mussa, reviewerUserId: mussa.id, coauthorUserId: mussa.id });
+    await prompt;
+    expect(created).toBe(true);
+    expect(sendToTerminal.mock.calls[0]![1]).toContain("Co-authored-by: wellesley-mussolini <xerif.off@gmail.com>");
+  });
+
+  it("quem abriu a PR não é coautor dela: escolher o autor como coautor é recusado", async () => {
+    const { analysis, registry, project } = await load();
+    await expect(analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: mussa, reviewerUserId: mussa.id, coauthorUserId: albert.id }))
+      .rejects.toThrow(/coautor_igual_autor/);
+    expect(await registry.listCards(project.id)).toHaveLength(0);
+    expect(sendToTerminal).not.toHaveBeenCalled();
+  });
+
+  it("revisor sem trabalho no projeto ou coautor sem identidade git são recusados", async () => {
     const { analysis, registry, project, users, userGit } = await load();
     const outsider = (await users.createUser("kim", "supersecret1")).id;
     await expect(analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert, reviewerUserId: outsider }))
       .rejects.toThrow(/pessoa_sem_acesso/);
-    await expect(analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert, reviewerUserId: mussa.id, coauthorUserId: mussa.id }))
-      .rejects.toThrow(/coautor_igual_revisor/);
-    await userGit.setUserGit(albert.id, { gitEmail: null });
-    await expect(analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert, reviewerUserId: mussa.id, coauthorUserId: albert.id }))
+    await userGit.setUserGit(mussa.id, { gitEmail: null });
+    await expect(analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: mussa, reviewerUserId: mussa.id, coauthorUserId: mussa.id }))
       .rejects.toThrow(/coautor_sem_identidade/);
     expect(await registry.listCards(project.id)).toHaveLength(0);
   });
