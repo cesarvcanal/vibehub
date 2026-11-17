@@ -107,7 +107,7 @@
 | `back/src/auth/` | Contas, sessão e os preHandlers de acesso | Regra de board |
 | `back/src/secrets/` | Cofre criptografado | Leitura de segredo para log ou resposta |
 | `back/src/mcp/` | Servidor MCP e as ferramentas | Regra duplicada de service |
-| `back/src/utils/` | Operações técnicas compartilhadas, sem regra de domínio (§4, "Utilitário × regra de negócio") | Regra de uma área; código que lê o store ou chama o host |
+| `back/src/utils/` | Operações técnicas e infraestrutura compartilhadas (logger, guardas do processo), sem regra de domínio (§4, "Utilitário × regra de negócio") | Regra de uma área; código que lê o store ou chama o host |
 | `back/src/testkit/` | Infra de teste compartilhada | Testes |
 
 - **Teste mental, antes de criar qualquer abstração:** "se eu escrever isto direto, no lugar onde é usado, o que fica pior **hoje**?" Se a resposta é "nada" ou "talvez um dia", escreva direto.
@@ -125,14 +125,14 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 
 ### Utilitário × regra de negócio
 
-**O util executa uma operação técnica; quem decide é a camada de regra da área** (o service no backend; o hook ou a função de `features/<área>/lib/` no frontend). Vale para `back/src/utils/`, `front/src/lib/` e qualquer outra pasta de utilitários.
+**A pasta compartilhada guarda o técnico; quem decide é a camada de regra da área** (o service no backend; o hook ou a função de `features/<área>/lib/` no frontend). Vale para `back/src/utils/` e `front/src/lib/`. Elas guardam operações técnicas (texto, data, lista, stream, conversão de formato) e infraestrutura que toda área usa (logger, guardas do processo, cliente HTTP, websocket, tema, hooks genéricos como `useNow`). Infraestrutura pode ter efeito colateral; o que as duas pastas não guardam é **regra de domínio**.
 
-- **O util não conhece o domínio.** Ele transforma ou calcula: texto, data, número, lista, stream, codificação, conversão de formato. Não conhece card, conta, sessão, permissão nem fluxo; não lê o store, não chama o host nem serviço externo; não decide se uma operação pode acontecer; não tem efeito colateral.
-- **Entrada impossível não é regra de negócio.** O util pode recusar a entrada tecnicamente impossível para a operação dele (texto ausente numa função de texto); "este card pode ser movido" é regra e mora na camada de regra.
-- **A dependência vai só da área para o util.** O util nunca importa service, hook, store ou componente; quando chamá-lo, com qual dado e o que fazer com o resultado fica na camada de regra.
-- **Ser reutilizável não faz da função um util.** Função que duas áreas usam e que carrega regra continua sendo regra: mora na área dona, ou numa pasta compartilhada de regra quando ninguém é dono, nunca em `utils/`. Montar a URL, o comando ou a mensagem no formato de um terceiro (GitHub, Docker, CLI do Claude) é integração: mora no client ou no service da integração.
-- **Teste mental:** "esta função pode ser copiada para outro repositório sem levar nenhum módulo nem nenhuma regra deste?" Se não pode, ela não é util.
-- **Util fora deste padrão que o PR toca** (regra de domínio dentro de `utils/`) é movido para a área dona no mesmo PR, junto com os imports, ou vira pendência deliberada no PR com o motivo.
+- **Não conhece o domínio.** Não conhece card, conta, sessão, review nem permissão, e não decide se uma operação pode acontecer. Pode usar biblioteca, outro util, a configuração e o i18n; ler o relógio vale quando a operação é sobre o instante atual.
+- **Entrada impossível não é regra de negócio.** A função pode recusar a entrada tecnicamente impossível para a operação dela (texto ausente numa função de texto); "este card pode ser movido" é regra e mora na camada de regra.
+- **A dependência vai só da área para a pasta compartilhada.** Nada em `utils/` ou `lib/` importa service, store, componente ou hook de uma área; quando chamar, com qual dado e o que fazer com o resultado fica na camada de regra.
+- **Ser reutilizável não faz da função um util.** Função que duas áreas usam e que carrega regra continua sendo regra e mora na área dona; quando nenhuma área é dona, onde criar o lugar comum é decisão do usuário (§12). Montar a URL, o comando ou a mensagem no formato de um terceiro (GitHub, Docker, CLI do Claude) é integração: mora no client ou no service da integração.
+- **Teste mental:** "esta função pode ser copiada para outro repositório levando só bibliotecas, outros utils, configuração e i18n, sem nenhuma regra deste?" Se não pode, ela não é util.
+- **Regra de domínio dentro de `utils/` ou `lib/` que o PR toca** é movida para a área dona no mesmo PR, junto com os imports, ou vira pendência deliberada no PR com o motivo.
 
 ## 5. Frontend, React e TypeScript
 
@@ -155,7 +155,7 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 |---------------|--------|------------|
 | `front/src/features/<área>/` | Tudo de uma área: `components/`, `lib/` (funções puras e hooks da área), `types/`, `api.ts`, testes ao lado | Código usado por mais de uma área |
 | `front/src/components/` | Componentes de mais de uma área; `ui/` = primitivas | Componente de uma área só |
-| `front/src/lib/` | Cliente HTTP, utilitários e hooks compartilhados | Regra de uma área |
+| `front/src/lib/` | Cliente HTTP, websocket, tema, utilitários e hooks genéricos compartilhados, sem regra de domínio (§4) | Regra de uma área |
 | `front/src/api/types.ts` | Contratos HTTP | Tipo local de componente |
 | `front/src/providers/` | Providers da aplicação (auth, query) | Regra de feature |
 | `front/src/i18n/` | Textos nos dois idiomas | Lógica |
