@@ -1162,7 +1162,11 @@ async function runStream() {
         // session to a point that is not its own. Only the main agent moves the fork point.
         const parent = typeof msg.parent_tool_use_id === "string" && msg.parent_tool_use_id !== "" ? msg.parent_tool_use_id : null;
         if (msg.uuid && parent === null) lastAssistantUuid = msg.uuid;
-        if (msg.error === "authentication_failed") streamLoginFailed = true;
+        if (msg.error === "authentication_failed") {
+          // The CLI's own words still go to the conversation below; this is what tells the screen it is the ACCOUNT.
+          streamLoginFailed = true;
+          emit({ type: "login_failed" });
+        }
         // Main-agent speech WITHOUT an open turn = the CLI opened a turn on its own (a background
         // task finished, a ScheduleWakeup fired). It becomes the turn in flight: a message
         // now is absorbed into it (`turn_absorbed`), and if the stream drops before the `result` the finally

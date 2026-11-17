@@ -50,6 +50,13 @@ vi.mock("@/features/board/components/SdkAgentCard", async (importOriginal) => {
   return actual;
 });
 
+// The real xterm needs a canvas and a WebSocket; what matters here is WHERE the reconnect points it.
+vi.mock("@/features/board/components/XTerminal", () => ({
+  XTerminal: ({ wsPath, ariaLabel }: { wsPath: string; ariaLabel?: string }) => (
+    <div data-testid="xterm" data-ws={wsPath} aria-label={ariaLabel} />
+  ),
+}));
+
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), {
     success: vi.fn(),
@@ -5461,5 +5468,70 @@ describe("SdkChatView — comando do catálogo", () => {
     await waitFor(() => expect(ws.sent.length).toBe(1));
     expect(await screen.findByTestId("sdk-user")).toHaveTextContent("roda o /context depois");
     expect(screen.queryByTestId("sdk-command")).toBeNull();
+  });
+});
+
+/**
+ * THE ACCOUNT'S LOGIN DIED (production, 2026-11-17): the chat only showed the CLI's "Failed to authenticate…" as
+ * one more line, and nothing said that the ACCOUNT had to be reconnected — or where. The warning names the
+ * account and, for whoever can do it (the owner: the login terminal is an owner route), opens the login right there.
+ */
+describe("SdkChatView — o login da conta morreu", () => {
+  const OWNER = { id: "1", username: "operator", role: "owner" };
+  const MEMBER = { id: "2", username: "cesar", role: "user" };
+  let me: typeof OWNER = OWNER;
+
+  beforeEach(() => {
+    me = OWNER;
+    setLanguage("en");
+    vi.mocked(get).mockImplementation(((url: string) =>
+      url === "/auth/me"
+        ? Promise.resolve({ user: me })
+        : Promise.resolve({ available: false, proofread: false, language: null })) as never);
+  });
+
+  afterEach(() => {
+    vi.mocked(get).mockImplementation((() => Promise.resolve({ available: false, proofread: false, language: null })) as never);
+    resetLanguage();
+    cleanup();
+  });
+
+  async function signedIn(): Promise<void> {
+    await waitFor(() => expect(vi.mocked(get)).toHaveBeenCalledWith("/auth/me"));
+    await act(async () => { await Promise.resolve(); });
+  }
+
+  it("o dono vê o aviso com o nome da conta, e Reconectar abre o login DAQUELA conta", async () => {
+    const user = userEvent.setup();
+    renderSdkChat({ account: { slug: "tech", name: "Tech" } });
+    const ws = await socket();
+    ws.accept();
+    await signedIn();
+    ws.deliver({ type: "ready" });
+    expect(screen.queryByTestId("login-alert")).toBeNull();
+
+    ws.deliver({ type: "login_failed" });
+    const alert = screen.getByTestId("login-alert");
+    expect(alert).toHaveTextContent("The Claude account “Tech” lost its login");
+
+    await user.click(within(alert).getByRole("button", { name: "Reconnect" }));
+    const term = await screen.findByTestId("xterm");
+    expect(term).toHaveAttribute("data-ws", "/api/accounts/tech/login-terminal");
+
+    ws.deliver({ type: "login_restored" });
+    expect(screen.queryByTestId("login-alert")).toBeNull();
+  });
+
+  it("quem não é dono vê o aviso, sem o botão (o login é rota do dono), e sabe a quem pedir", async () => {
+    me = MEMBER;
+    renderSdkChat({ account: { slug: "tech", name: "Tech" } });
+    const ws = await socket();
+    ws.accept();
+    await signedIn();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "login_failed" });
+    const alert = screen.getByTestId("login-alert");
+    expect(alert).toHaveTextContent("Ask the panel owner to reconnect it.");
+    expect(within(alert).queryByRole("button", { name: "Reconnect" })).toBeNull();
   });
 });

@@ -312,6 +312,13 @@ export type { RateLimitEvent };
  */
 export type { ContextUsageEvent };
 export interface ConversationResetEvent { type: "conversation_reset"; trigger?: string }
+/**
+ * The ACCOUNT's login died: the CLI answered `authentication_failed` (the OAuth stopped renewing, the token was
+ * revoked). SESSION state like the limit warning: resent to whoever connects, never recorded. `login_restored`
+ * is the back's, never the driver's: the first turn that works after it.
+ */
+export interface LoginFailedEvent { type: "login_failed" }
+export interface LoginRestoredEvent { type: "login_restored" }
 /** The driver is up and ready to accept the first user message. The back stamps `turnActive` on
  *  every `ready` it sends (real or synthesized on reattach) with the manager's live turn count, so
  *  a view mounting mid-turn knows work is running (reattach mid-turn: Terminal↔Chat during a turn
@@ -362,6 +369,7 @@ export type DriverEvent =
   | CompactionEvent
   | BackgroundTasksEvent
   | RateLimitEvent
+  | LoginFailedEvent
   | ContextUsageEvent
   | ConversationResetEvent
   | ResultEvent
@@ -400,6 +408,7 @@ const DRIVER_EVENT_TYPES = new Set([
   "compaction",
   "background_tasks",
   "rate_limit",
+  "login_failed",
   "context_usage",
   "conversation_reset",
   "result",

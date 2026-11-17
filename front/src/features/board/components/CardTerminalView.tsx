@@ -1285,6 +1285,7 @@ export function CardTerminalView({
                 onStatus={setConnection}
                 terminalWorking={working}
                 footer={prBlocks}
+                account={{ slug: inUseSlug, name: accountName }}
                 ariaLabel={t("chat.ariaFor", { title: card?.title ?? t("cardView.cardFallback") })}
               />
             ) : mode === "chat" ? (

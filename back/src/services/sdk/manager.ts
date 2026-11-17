@@ -142,6 +142,12 @@ export interface DriverSession {
    */
   rateLimits: Map<string, RateLimitInfo>;
   /**
+   * The account's LOGIN DIED in this driver (`login_failed`): what the chat's reconnect warning reads. Session
+   * state like the limit warning: resent to whoever connects, never recorded, and cleared by the first turn that
+   * works again (that one sends `login_restored`).
+   */
+  loginFailed: boolean;
+  /**
    * The last reading of how much of the context window the session takes (the meter next to the "está
    * digitando"). Session state, like the limit warning: resent to whoever connects, never recorded.
    */
@@ -804,6 +810,10 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
     syncInflightMarker(session);
     maybeScheduleIdleStop(session);
   }
+  if (event.type === "login_failed") session.loginFailed = true;
+  // A turn that WORKED after the login died: the account is back. Only the screen's warning has to go.
+  const loginRestored = event.type === "result" && session.loginFailed && !event.isError && event.subtype !== "aborted";
+  if (loginRestored) session.loginFailed = false;
   if (event.type === "rate_limit") {
     const info = normalizeRateLimit(event);
     if (!info) return;
@@ -985,6 +995,7 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
     emitSystemNote(session, NOTE_CONVERSATION_CLEARED);
   }
   if (interruptNoteToFlush) emitSystemNote(session, interruptNoteToFlush);
+  if (loginRestored) broadcast(session, { type: "login_restored" });
   // History + mirror dedupe are MANAGER duties, not socket duties: they must keep happening while
   // no page is open — that is the whole point of the detach.
   noteDriverEventFor(session.cardId, event);
@@ -1160,6 +1171,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     pendingNotices: [],
     tasks: new Map(),
     rateLimits: new Map(),
+    loginFailed: false,
     rewinds: [],
     idleTimer: null,
     stderrTail: "",
@@ -2127,6 +2139,10 @@ export function attachSocket(
   for (const info of session.rateLimits.values()) {
     sendFrame(socket, { type: "rate_limit", ...info });
   }
+
+  // The dead login too: a tab opened after the failure must say that the ACCOUNT needs reconnecting, not just
+  // show the CLI's sentence somewhere up in the conversation.
+  if (session.loginFailed) sendFrame(socket, { type: "login_failed" });
 
   // The context meter too: the reading only comes at the end of a turn, and whoever opens the stopped card
   // needs to see how much the conversation already takes without sending any message.

@@ -551,6 +551,22 @@ describe("sdk-driver.mjs — um login novo vale na próxima mensagem, sem Reinic
     expect(authMarks(driver).at(-1)).toBe("auth:login");
   }, 60_000);
 
+  it("o login que morreu é DITO à tela (login_failed), antes do result do turno — e só ele", async () => {
+    const config = await profileWithToken("profile-login-failed");
+    const driver = startDriver([], sandbox, config);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "hello" });
+    await driver.waitFor((e) => e.type === "result");
+    expect(driver.events.some((e) => e.type === "login_failed")).toBe(false);
+
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "authfail" });
+    await driver.waitFor((e) => e.type === "result", from);
+    const types = driver.events.slice(from).map((e) => e.type);
+    expect(types.filter((t) => t === "login_failed")).toHaveLength(1);
+    expect(types.indexOf("login_failed")).toBeLessThan(types.indexOf("result"));
+  }, 60_000);
+
   it("login mudou com uma tarefa em segundo plano viva e o login do CLI SÃO: a tarefa segue (o CLI não é reaberto)", async () => {
     const config = await profileWithToken("profile-relogin-bg-ok");
     const driver = startDriver([], sandbox, config);
