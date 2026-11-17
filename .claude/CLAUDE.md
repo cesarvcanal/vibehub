@@ -81,7 +81,7 @@ O comando nativo `/code-review` tem níveis de esforço; o plugin `code-review` 
 É o passo 8 da §12 do `AGENTS.md`, antes da entrega, sem esperar ser mandado. **Agnóstico** = o prompt de cada subagente leva só o diff (`git fetch origin main` e então `git diff origin/main...HEAD`), o caminho do `AGENTS.md` e o pedido, nunca a sua justificativa nem a conversa: quem escreveu não revisa o próprio raciocínio.
 
 1. **Simplificação:** subagente `code-simplifier:code-simplifier`, com o pedido de confrontar cada trecho com as regras e aplicar o que simplifica sem mudar comportamento. Confira o que ele escreveu e rode o recorte de testes.
-2. **Code review**, só depois de o primeiro terminar, sobre o diff já simplificado: subagente `feature-dev:code-reviewer` procura bug, trabalho desperdiçado (§8), regra violada e o que foi inventado: teste que não testa, causa sem evidência, comentário fora das exceções da §3, API ou flag que não existe.
+2. **Code review**, só depois de o primeiro terminar, sobre o diff já simplificado: subagente `feature-dev:code-reviewer`, com o pedido de seguir "Como revisar um PR" (§14 do `AGENTS.md`) e entregar os achados com severidade e o veredito apto ou não apto.
 3. Cada achado se confere na fonte; o confirmado se corrige em commit próprio, com o teste que o prova.
 
 ## 7. Entrega

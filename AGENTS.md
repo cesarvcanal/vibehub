@@ -302,7 +302,7 @@ Se um comando de teste for passar de ~2 min, troque por um recorte menor. Não a
 5. **Auditar o trecho tocado:** nomes, `let`, comentário fora das exceções, código morto, duplicação, fallback indevido, leituras e execuções inúteis.
 6. **Não espalhar alterações:** problema vizinho que exige refatoração arriscada é comunicado, não corrigido de carona.
 7. **Validar:** testes do recorte, typecheck e build quando aplicável; revisar o diff (comandos abaixo).
-8. **Revisão independente antes de entregar:** o diff passa, nesta ordem, por **simplificação** (aplicada) e por **code review** (correção, performance, aderência às regras e o que foi inventado), ambas feitas por um revisor SEM o contexto de quem escreveu, que recebe só o diff e este arquivo. Achado confirmado é corrigido; o descartado tem o motivo dito. O que a simplificação mudar volta pelo passo 7 antes do code review.
+8. **Revisão independente antes de entregar:** o diff passa, nesta ordem, por **simplificação** (aplicada) e por **code review** (correção, performance, aderência às regras e o que foi inventado), ambas feitas por um revisor SEM o contexto de quem escreveu, que recebe só o diff e este arquivo; o code review segue "Como revisar um PR" (§14). Achado confirmado é corrigido; o descartado tem o motivo dito. O que a simplificação mudar volta pelo passo 7 antes do code review.
 9. **Descrever o resultado:** o que mudou, o que foi verificado e as limitações reais. Quando a entrega é um PR, ele segue a §14.
 
 ### Autonomia corretiva e preservação do escopo
@@ -564,7 +564,7 @@ com login saudável a tarefa em segundo plano continua protegida.
 - **Merge só com autorização explícita** (§12). Autorizado, o merge é **merge commit, nunca squash**, com o SHA verificado e o título no padrão Gitmoji: `gh pr merge <N> --merge --match-head-commit <sha> --subject "🔀 merge: ..."`. Depois do merge, confira o pipeline pós-merge (CI e publicação da imagem).
 - **Identidade git de quem fez o trabalho:** não commitar com conta de terceiros nem da organização.
 - **Testes e CI verdes antes do merge**, sem warning novo no CI.
-- **Revisão independente antes do merge:** o diff passa por um revisor (pessoa ou agente) sem o contexto de quem o escreveu, que recebe só o diff, o PR e este arquivo, e confronta um com o outro.
+- **Revisão independente antes do merge:** o diff passa por um revisor (pessoa ou agente) sem o contexto de quem o escreveu, que recebe só o diff, o PR e este arquivo e segue "Como revisar um PR", abaixo.
 
 ### Checklist antes de pedir revisão
 
@@ -578,3 +578,35 @@ Releia o PR como um estranho leria:
 - [ ] Os testes separam o executado do recomendado e mostram o antes e depois?
 - [ ] Os pontos de atenção começam dizendo se o merge tem volta e até onde vai o estrago?
 - [ ] Nada foi inventado, e o que não está confirmado está dito?
+
+### Como revisar um PR
+
+Quem revisa (pessoa ou agente) é o **portão do merge**, não um leitor de cortesia. Recebe só o diff, o PR e este arquivo, sem a conversa de quem escreveu, e trabalha para **achar o que está errado**, não para confirmar o que o PR diz. "Passa nos testes" não aprova sozinho, e "o autor explicou" não substitui conferir.
+
+- **Tente quebrar.** Para cada bloco relevante, procure a entrada, o estado, a ordem de eventos ou a corrida (dois cards, dois backends, reconexão no meio do turno) que produz resultado errado. Achado sem cenário concreto de falha (entrada ou estado → resultado errado) é opinião, não achado.
+- **Prove cada achado.** Aponte o `arquivo:linha`. Em achado de comportamento, a prova é um teste que falha hoje. Separe o fato confirmado da hipótese e diga o que não verificou.
+- **Confira o que o PR afirma.** Cada causa, número, linha citada, resultado de teste, medição de performance, pendência e justificativa da descrição e dos comentários no diff se confere no código. Afirmação falsa ou sem sustentação é achado, mesmo quando o código está certo.
+- **Leia além do diff.** Confira:
+  - quem chama e quem é chamado pelo trecho alterado;
+  - quem consome o que mudou: o front, as ferramentas MCP, os scripts plantados nos containers e os pontos compartilhados (store, host executor, broadcast do websocket);
+  - o contrato com terceiro (SDK e CLI do Claude, GitHub, Docker) pela documentação ou pela versão instalada (§6);
+  - os dados já gravados nas instalações que o código novo vai ler (§6, §7);
+  - o que acontece no deploy: cards e turnos em andamento, retomada após o reinício, runner reaproveitado e limites de terceiros (rate limit do GitHub, cota da conta Claude).
+- **Confronte cada linha `+` com este arquivo**, seção por seção: nomes e arquivos (§2), `const` e comentários (§3), lugar, simplicidade e util (§4), frontend (§5), contratos e integrações (§6), dados (§7), performance (§8), erros (§9), acesso, shell e segredos (§10), testes (§11) e PR e commits (§14). Vale "trecho tocado = trecho auditado": o que o PR acrescentou ou alterou responde às regras como código novo; o que ficou fora do diff não entra.
+- **O teste tem de provar.** Confira três coisas:
+  - se ele falha sem a correção, pelo motivo certo;
+  - se cobre o fluxo real, em vez de mockar a lógica interna (§11);
+  - se o resultado depende do código, e não do relógio, da carga da máquina ou da ordem de execução.
+
+  Teste que passa sem afirmar nada, ou cujo nome promete mais do que ele verifica, é achado.
+- **A pendência deliberada é julgada.** Ela só é aceita quando o motivo é verdadeiro e corrigir agora traz mais risco do que esperar. Pendência com motivo falso, ou que esconde uma violação simples de corrigir, é achado.
+- **Violação de regra bloqueia o merge.** Todo achado que contraria este arquivo, e toda regressão em relação à `main`, mesmo pequena, bloqueia até ser corrigido ou virar pendência aceita no PR, com o motivo. Não é sugestão.
+- **Entregue** a lista do mais grave para o menos grave. Cada achado tem:
+  - a severidade (**bloqueia**, **deveria corrigir** ou **menor**);
+  - o `arquivo:linha`;
+  - o defeito numa frase e o cenário de falha;
+  - a evidência;
+  - se é regressão em relação à `main`.
+
+  Feche com o veredito: **apto** ou **não apto**, com o motivo.
+- **Depois da correção, revise de novo** só o que mudou, até uma rodada voltar sem achado que bloqueie. Cada achado tem resposta na thread dele: o commit e o teste que o resolvem, ou o motivo de ter virado pendência.
