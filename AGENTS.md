@@ -52,7 +52,7 @@
 - Importações estáticas no topo. Import dinâmico só por carregamento sob demanda (dependência pesada fora do caminho inicial), dependência circular real ou outra restrição técnica fundamentada.
 - Usar `async` quando houver execução assíncrona ou obrigação de retornar `Promise`; não tornar uma função assíncrona por costume.
 - Não criar `try/catch` que só captura e relança o mesmo erro sem acrescentar informação ou comportamento.
-- Não engolir erros, não retornar sucesso falso e não adicionar `setTimeout`/retries para esconder uma falha de fluxo.
+- Não engolir erros (a §9 traz a única exceção, o melhor esforço, e diz quando o `catch` de uma tarefa de fundo não conta como engolir), não retornar sucesso falso e não adicionar `setTimeout`/retries para esconder uma falha de fluxo.
 - Não criar flags, estados, campos ou leituras que ninguém consome.
 - Efeito colateral é explícito: função que grava, apaga ou muda estado diz isso no nome (`save`, `delete`, `set`…); um `get`/`read`/`parse` não grava nada.
 - **Cálculo e efeito em etapas separadas:** o que calcula (incluindo callbacks de `filter`/`map`/`find`) só devolve valor; o que envia, grava ou notifica vem depois, em passo próprio.
@@ -107,7 +107,7 @@
 | `back/src/auth/` | Contas, sessão e os preHandlers de acesso | Regra de board |
 | `back/src/secrets/` | Cofre criptografado | Leitura de segredo para log ou resposta |
 | `back/src/mcp/` | Servidor MCP e as ferramentas | Regra duplicada de service |
-| `back/src/utils/` | Funções puras compartilhadas | Código de uma área só |
+| `back/src/utils/` | Operações técnicas e infraestrutura compartilhadas (logger, guardas do processo), sem regra de domínio (§4, "Utilitário × regra de negócio") | Regra de uma área; código que lê o store ou chama o host |
 | `back/src/testkit/` | Infra de teste compartilhada | Testes |
 
 - **Teste mental, antes de criar qualquer abstração:** "se eu escrever isto direto, no lugar onde é usado, o que fica pior **hoje**?" Se a resposta é "nada" ou "talvez um dia", escreva direto.
@@ -122,6 +122,17 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 - **D — Inversão de dependência:** isolar dependências externas ou instáveis (Docker, SSH, GitHub, SDK do Claude) quando isso trouxer testabilidade ou proteção de fronteira.
 
 **Antes de criar uma abstração, responder:** que responsabilidade ela protege? O que pioraria se fosse removida? Existe mais de um comportamento real? Protege uma fronteira, uma invariante ou uma duplicação relevante? Uma camada que apenas encaminha argumentos sem decisão, transformação ou proteção de fronteira deve ser eliminada quando seguro. Entre duas opções igualmente corretas, preferir a que exige menos conceitos.
+
+### Utilitário × regra de negócio
+
+**A pasta compartilhada guarda o técnico; quem decide é a camada de regra da área** (o service no backend; o hook ou a função de `features/<área>/lib/` no frontend). Vale para `back/src/utils/` e `front/src/lib/`. Elas guardam operações técnicas (texto, data, lista, stream, conversão de formato) e infraestrutura que toda área usa (logger, guardas do processo, cliente HTTP, websocket, tema, hooks genéricos como `useNow`). Infraestrutura pode ter efeito colateral; o que as duas pastas não guardam é **regra de domínio**.
+
+- **Não conhece o domínio.** Não conhece card, conta, sessão, review nem permissão, e não decide se uma operação pode acontecer. Pode usar biblioteca, outro util, a configuração e o i18n; ler o relógio vale quando a operação é sobre o instante atual.
+- **Entrada impossível não é regra de negócio.** A função pode recusar a entrada tecnicamente impossível para a operação dela (texto ausente numa função de texto); "este card pode ser movido" é regra e mora na camada de regra.
+- **A dependência vai só da área para a pasta compartilhada.** Nada em `utils/` ou `lib/` importa service, store, componente ou hook de uma área; quando chamar, com qual dado e o que fazer com o resultado fica na camada de regra.
+- **Ser reutilizável não faz da função um util.** Função que duas áreas usam e que carrega regra continua sendo regra e mora na área dona; quando nenhuma área é dona, onde criar o lugar comum é decisão do usuário (§12). Montar a URL, o comando ou a mensagem no formato de um terceiro (GitHub, Docker, CLI do Claude) é integração: mora no client ou no service da integração.
+- **Teste mental:** "esta função pode ser copiada para outro repositório levando só bibliotecas, outros utils, configuração e i18n, sem nenhuma regra deste?" Se não pode, ela não é util.
+- **Regra de domínio dentro de `utils/` ou `lib/` que o PR toca** é movida para a área dona no mesmo PR, junto com os imports, ou vira pendência deliberada no PR com o motivo.
 
 ## 5. Frontend, React e TypeScript
 
@@ -142,16 +153,16 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 
 | Pasta (front) | Guarda | Não guarda |
 |---------------|--------|------------|
-| `front/src/features/<área>/` | Tudo de uma área: `components/`, `lib/` (funções puras e hooks da área), `types/`, `api.ts`, testes ao lado | Código usado por mais de uma área |
+| `front/src/features/<área>/` | Tudo de uma área: `components/`, `lib/` (funções puras e hooks da área), `types/`, `api.ts`, testes ao lado; a regra de domínio da área, mesmo quando outra área também a usa (§4) | Código técnico usado por mais de uma área |
 | `front/src/components/` | Componentes de mais de uma área; `ui/` = primitivas | Componente de uma área só |
-| `front/src/lib/` | Cliente HTTP, utilitários e hooks compartilhados | Regra de uma área |
+| `front/src/lib/` | Cliente HTTP, websocket, tema, utilitários e hooks genéricos compartilhados, sem regra de domínio (§4) | Regra de uma área |
 | `front/src/api/types.ts` | Contratos HTTP | Tipo local de componente |
 | `front/src/providers/` | Providers da aplicação (auth, query) | Regra de feature |
 | `front/src/i18n/` | Textos nos dois idiomas | Lógica |
 | `front/src/types/` | Declarações de módulos de terceiros (`*.d.ts`) | Tipos de domínio |
 | `front/src/test/` | Setup do Vitest e o helper `renderApp` | Testes de feature |
 
-Código de uma área só mora dentro dela; sobe para a pasta compartilhada quando uma segunda área passa a usá-lo.
+Código de uma área só mora dentro dela. O código técnico sobe para a pasta compartilhada quando uma segunda área passa a usá-lo; a regra de domínio fica na área dona (§4, "Utilitário × regra de negócio").
 
 ## 6. Contratos, schemas e integrações
 
@@ -233,7 +244,11 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 - Distinguir presença de verdade lógica: `0` e `false` podem ser valores válidos.
 - Erro informa o suficiente para diagnóstico sem expor token, segredo ou caminho sensível.
 - Integração que falhou não aparece como concluída, nem para o usuário: falha de login, de runner ou de integração vira aviso visível com a ação que resolve. Retry só limitado e idempotente.
-- Exceção não é ignorada: registrar e propagar até a fronteira responsável.
+- **O erro chega a quem chamou, não só ao log.** Uma exceção ou é propagada até a fronteira responsável ou é traduzida para o chamador (exceção com mensagem própria, resposta HTTP de erro, evento de erro no websocket). Uma linha de log não faz nenhuma das duas coisas: o log do pino é a trilha de diagnóstico e de auditoria (as entradas `audit: true`) de quem opera a instalação e acompanha o erro, nunca o substitui.
+- **Engolir o erro só em melhor esforço.** `catch` vazio, em qualquer forma (`.catch(() => {})`, `.catch(() => undefined)`, `try { … } catch { }`), é aceito apenas em efeito colateral cuja falha não muda o resultado da operação e que outro caminho cobre: aviso em tempo real que o próximo attach reenvia, limpeza que a próxima rodada refaz, gatilho antecipado de algo que também roda por agendamento. O porquê vai para o commit e o PR (§3). Falha que o chamador precisa saber nunca é engolida.
+- **Fila de promises não engole.** Em `queue = next.catch(() => undefined); return next;`, o erro chega a quem chamou pelo `next`; o `catch` só impede que a falha de um item trave os seguintes. É o padrão das filas por card e do store, e não precisa de justificativa.
+- **Tarefa de fundo sem chamador** (timer, reaper, retomada após deploy, rotina disparada sem esperar resposta): não há a quem propagar. Um `catch` que **altera o estado que decide o próximo passo, em relação ao que a tarefa faria sem o erro** (a marca da próxima tentativa, um contador de falhas, a parada da tarefa, o aviso ao card), não é engolir o erro, desde que esse caminho de falha tenha teste com um nome que diz o que acontece. Voltar a tentar só porque o timer bate de novo não conta: `catch` vazio, ou que só registra no log sem alterar esse estado, é engolir. Disparar sem `catch` (`void tarefa()`) dá no mesmo, porque a falha cai no handler global do processo e só vira log: a tarefa de fundo nova segue esta regra com ou sem `catch` escrito.
+- `catch` vazio antigo fora do diff, em qualquer forma, fica como está; o que o PR toca é julgado por estas regras.
 
 ## 10. Segurança, autorização e escopo
 
@@ -288,7 +303,7 @@ Se um comando de teste for passar de ~2 min, troque por um recorte menor. Não a
 5. **Auditar o trecho tocado:** nomes, `let`, comentário fora das exceções, código morto, duplicação, fallback indevido, leituras e execuções inúteis.
 6. **Não espalhar alterações:** problema vizinho que exige refatoração arriscada é comunicado, não corrigido de carona.
 7. **Validar:** testes do recorte, typecheck e build quando aplicável; revisar o diff (comandos abaixo).
-8. **Revisão independente antes de entregar:** o diff passa, nesta ordem, por **simplificação** (aplicada) e por **code review** (correção, performance, aderência às regras e o que foi inventado), ambas feitas por um revisor SEM o contexto de quem escreveu, que recebe só o diff e este arquivo. Achado confirmado é corrigido; o descartado tem o motivo dito. O que a simplificação mudar volta pelo passo 7 antes do code review.
+8. **Revisão independente antes de entregar:** o diff passa, nesta ordem, por **simplificação** (aplicada) e por **code review** (correção, performance, aderência às regras e o que foi inventado), ambas feitas por um revisor SEM o contexto de quem escreveu, que recebe o diff, as mensagens dos commits e este arquivo; o code review segue "Como revisar um PR" (§14). Achado confirmado segue a severidade dele (§14, "As severidades"): o que bloqueia é corrigido ou vira pendência aceita com o motivo, o que deveria corrigir é aplicado, a decisão vira pergunta ao usuário e o menor fica registrado no PR. O descartado tem o motivo dito. O que a simplificação mudar volta pelo passo 7 antes do code review.
 9. **Descrever o resultado:** o que mudou, o que foi verificado e as limitações reais. Quando a entrega é um PR, ele segue a §14.
 
 ### Autonomia corretiva e preservação do escopo
@@ -302,7 +317,7 @@ Pedir autorização e passar por brainstorming continua obrigatório para decis�
 - falha de integração, validação ou consistência;
 - ajuste técnico necessário para o que já existe funcionar corretamente.
 
-**Limites:** autonomia corretiva não amplia escopo. Não implementar funcionalidade extra só porque parece útil; não alterar decisão intencional, fluxo estabelecido ou regra de negócio por preferência técnica; não remover, substituir ou simplificar o que não se entende. Melhoria, refatoração e o que foge do propósito viram **sugestão**, não execução. Se a correção exige decidir intenção ou direção do projeto, pergunte.
+**Limites:** autonomia corretiva não amplia escopo. Não implementar funcionalidade extra só porque parece útil; não alterar decisão intencional, fluxo estabelecido ou regra de negócio por preferência técnica; não remover, substituir ou simplificar o que não se entende. Melhoria fora do código que o PR já escreve, refatoração e o que foge do propósito viram **sugestão**, não execução (a melhoria dentro do que o PR escreveu é o "deveria corrigir" da §14). Se a correção exige decidir intenção ou direção do projeto, pergunte.
 
 **Princípio:** o agente tem autonomia para preservar, corrigir e garantir a integridade do que foi definido e construído, não para redefinir o que o projeto deve ser.
 
@@ -550,7 +565,7 @@ com login saudável a tarefa em segundo plano continua protegida.
 - **Merge só com autorização explícita** (§12). Autorizado, o merge é **merge commit, nunca squash**, com o SHA verificado e o título no padrão Gitmoji: `gh pr merge <N> --merge --match-head-commit <sha> --subject "🔀 merge: ..."`. Depois do merge, confira o pipeline pós-merge (CI e publicação da imagem).
 - **Identidade git de quem fez o trabalho:** não commitar com conta de terceiros nem da organização.
 - **Testes e CI verdes antes do merge**, sem warning novo no CI.
-- **Revisão independente antes do merge:** o diff passa por um revisor (pessoa ou agente) sem o contexto de quem o escreveu, que recebe só o diff, o PR e este arquivo, e confronta um com o outro.
+- **Revisão independente antes do merge:** o diff passa por um revisor (pessoa ou agente) sem o contexto de quem o escreveu, que recebe só o diff, o PR e este arquivo e segue "Como revisar um PR", abaixo.
 
 ### Checklist antes de pedir revisão
 
@@ -564,3 +579,41 @@ Releia o PR como um estranho leria:
 - [ ] Os testes separam o executado do recomendado e mostram o antes e depois?
 - [ ] Os pontos de atenção começam dizendo se o merge tem volta e até onde vai o estrago?
 - [ ] Nada foi inventado, e o que não está confirmado está dito?
+
+### Como revisar um PR
+
+Quem revisa (pessoa ou agente) é o **portão do merge**, não um leitor de cortesia. Recebe o diff, este arquivo e o que o autor afirma (a descrição do PR, ou as mensagens dos commits quando o PR ainda não existe, como no fechamento da §12), sem a conversa de quem escreveu, e trabalha para **achar o que está errado**, não para confirmar o que o PR diz. "Passa nos testes" não aprova sozinho, e "o autor explicou" não substitui conferir.
+
+- **Tente quebrar.** Para cada bloco relevante, procure a entrada, o estado, a ordem de eventos ou a corrida (dois cards, dois backends, reconexão no meio do turno) que produz resultado errado. Achado sem cenário concreto de falha (entrada ou estado → resultado errado) é opinião, não achado.
+- **Prove cada achado.** Aponte o `arquivo:linha`. Em achado de comportamento, a prova mais forte é um teste que falha hoje; quando o revisor não pode escrever ou rodar o teste, vale o cenário concreto (entrada ou estado → resultado errado, com `arquivo:linha`). Violação de regra se prova citando a regra escrita deste arquivo e o trecho do diff que a viola. Separe o fato confirmado da hipótese e diga o que não verificou.
+- **Confira o que o PR afirma.** Cada causa, número, linha citada, resultado de teste, medição de performance, pendência e justificativa da descrição e dos comentários no diff se confere no código. Afirmação falsa ou sem sustentação é achado, mesmo quando o código está certo.
+- **Leia além do diff.** Confira:
+  - quem chama e quem é chamado pelo trecho alterado;
+  - quem consome o que mudou: o front, as ferramentas MCP, os scripts plantados nos containers e os pontos compartilhados (store, host executor, broadcast do websocket);
+  - o contrato com terceiro (SDK e CLI do Claude, GitHub, Docker) pela documentação ou pela versão instalada (§6);
+  - os dados já gravados nas instalações que o código novo vai ler (§6, §7);
+  - o que acontece no deploy: cards e turnos em andamento, retomada após o reinício, runner reaproveitado e limites de terceiros (rate limit do GitHub, cota da conta Claude).
+- **Confronte cada linha `+` com este arquivo**, seção por seção: nomes e arquivos (§2), `const` e comentários (§3), lugar, simplicidade e util (§4), frontend (§5), contratos e integrações (§6), dados (§7), performance (§8), erros (§9), acesso, shell e segredos (§10), testes (§11) e PR e commits (§14). Vale "trecho tocado = trecho auditado": o que o PR acrescentou ou alterou responde às regras como código novo; o que ficou fora do diff não entra.
+- **O teste tem de provar.** Confira três coisas:
+  - se ele falha sem a correção, pelo motivo certo;
+  - se cobre o fluxo real, em vez de mockar a lógica interna (§11);
+  - se o resultado depende do código, e não do relógio, da carga da máquina ou da ordem de execução.
+
+  Teste que passa sem afirmar nada, ou cujo nome promete mais do que ele verifica, é achado.
+- **A pendência deliberada é julgada.** Ela está registrada no PR, ou na mensagem do commit quando o PR ainda não existe, e só é aceita quando o motivo é verdadeiro e corrigir agora traz mais risco do que esperar. Pendência com motivo falso, ou que esconde uma violação simples de corrigir, é achado.
+- **Defeito e violação de regra bloqueiam o merge.** Defeito real no que o PR escreveu (comportamento errado, falha, brecha, perda de dado), linha do diff que viola uma regra escrita deste arquivo e toda regressão em relação à `main`, mesmo pequena, bloqueiam até serem corrigidos ou virarem pendência aceita, com o motivo. Não é sugestão. O que não viola regra nenhuma não bloqueia: é **deveria corrigir** ou **menor**, pelo critério abaixo.
+- **As severidades, e o que acontece com cada uma:**
+  - **bloqueia**: o item anterior, sempre com prova. É corrigido antes do merge, com o teste que prova o defeito quando ele é de comportamento, ou vira pendência aceita, com o motivo (item da pendência deliberada, acima). Código mais complicado que o necessário (§1.1, §4, §13) e nome que batiza com outro termo um conceito que o repo já nomeia (§1.7, §2) violam regra escrita e caem aqui.
+  - **deveria corrigir**: melhoria no código que o próprio PR escreveu, que preserva o comportamento, que **nenhuma regra escrita exige** (se uma regra cobre o caso, é **bloqueia**) e que não depende de gosto: quem lê concordaria sem precisar escolher (uma mensagem de erro que já basta para o diagnóstico, mas pode citar o id que falta; a ordem dos casos de um teste que acompanha melhor o fluxo). O autor aplica sem perguntar e não segura o merge.
+  - **decisão**: o que exige decidir intenção ou produto. Vira pergunta ao usuário (§12) e, enquanto estiver em aberto, o veredito é **não apto**.
+  - **menor**: preferência ou troca (a repetição pequena que a §3 permite manter, um nome alternativo igualmente claro, uma refatoração maior) e o que está fora do escopo do PR (problema antigo fora do diff). Não é aplicado: fica registrado no PR como sugestão.
+- **O formato da entrega segue o fluxo onde a revisão roda.** Os cards do vibehub que revisam PR, o de análise (`[vibehub · análise de PR]`) e o revisor da revisão em rodadas (`[vibehub · revisão de PR]`), seguem o contrato do prompt deles (`back/src/services/review/prompts.ts`): o JSON que o servidor lê, os vereditos por rodada e quem corrige (na análise, o próprio card; na revisão em rodadas, a IA do autor). As classes correspondem uma a uma: **bloqueia** = `blocking` com prova (`failing_test`, `rule` ou `scenario`), **deveria corrigir** = `improvement`, **decisão** = `question`, **menor** = `suggestion`; o achado que a verificação derrubou é `refuted` (na análise ele sai da lista; na revisão em rodadas ele vai no JSON, para ficar no histórico). Fora desses cards (o fechamento da §12, a revisão de uma pessoa), vale a lista abaixo.
+- **Entregue** a lista do mais grave para o menos grave. Cada achado tem:
+  - a severidade (**bloqueia**, **deveria corrigir**, **decisão** ou **menor**);
+  - o `arquivo:linha`;
+  - o defeito numa frase e o cenário de falha;
+  - a evidência;
+  - se é regressão em relação à `main`.
+
+  Feche com o veredito: **apto** ou **não apto**, com o motivo.
+- **Depois da correção, revise de novo** só o que mudou, até uma rodada voltar sem achado que bloqueie. Cada achado tem resposta na thread dele: o commit e o teste que o resolvem, ou o motivo de ter virado pendência.
