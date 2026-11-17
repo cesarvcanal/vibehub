@@ -153,7 +153,7 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 
 | Pasta (front) | Guarda | Não guarda |
 |---------------|--------|------------|
-| `front/src/features/<área>/` | Tudo de uma área: `components/`, `lib/` (funções puras e hooks da área), `types/`, `api.ts`, testes ao lado | Código usado por mais de uma área |
+| `front/src/features/<área>/` | Tudo de uma área: `components/`, `lib/` (funções puras e hooks da área), `types/`, `api.ts`, testes ao lado; a regra de domínio da área, mesmo quando outra área também a usa (§4) | Código técnico usado por mais de uma área |
 | `front/src/components/` | Componentes de mais de uma área; `ui/` = primitivas | Componente de uma área só |
 | `front/src/lib/` | Cliente HTTP, websocket, tema, utilitários e hooks genéricos compartilhados, sem regra de domínio (§4) | Regra de uma área |
 | `front/src/api/types.ts` | Contratos HTTP | Tipo local de componente |
@@ -162,7 +162,7 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 | `front/src/types/` | Declarações de módulos de terceiros (`*.d.ts`) | Tipos de domínio |
 | `front/src/test/` | Setup do Vitest e o helper `renderApp` | Testes de feature |
 
-Código de uma área só mora dentro dela; sobe para a pasta compartilhada quando uma segunda área passa a usá-lo.
+Código de uma área só mora dentro dela. O código técnico sobe para a pasta compartilhada quando uma segunda área passa a usá-lo; a regra de domínio fica na área dona (§4, "Utilitário × regra de negócio").
 
 ## 6. Contratos, schemas e integrações
 
