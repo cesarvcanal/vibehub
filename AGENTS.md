@@ -601,10 +601,15 @@ Quem revisa (pessoa ou agente) é o **portão do merge**, não um leitor de cort
 
   Teste que passa sem afirmar nada, ou cujo nome promete mais do que ele verifica, é achado.
 - **A pendência deliberada é julgada.** Ela está registrada no PR, ou na mensagem do commit quando o PR ainda não existe, e só é aceita quando o motivo é verdadeiro e corrigir agora traz mais risco do que esperar. Pendência com motivo falso, ou que esconde uma violação simples de corrigir, é achado.
-- **Violação de regra bloqueia o merge.** Linha do diff que viola uma regra escrita deste arquivo, e toda regressão em relação à `main`, mesmo pequena, bloqueia até ser corrigida ou virar pendência aceita, com o motivo. Não é sugestão. O que só poderia ser melhor sem violar regra nenhuma (um nome que já passa na §2, mas tem alternativa melhor) é sugestão.
-- **O formato da entrega segue o fluxo onde a revisão roda.** No card de análise de PR do vibehub vale o contrato do prompt dele (`back/src/services/review/prompts.ts`): as classes `blocking`, `improvement`, `question` e `suggestion` no JSON que o servidor lê, e o card corrige o que o prompt manda corrigir. A correspondência com este método: o que **bloqueia** é `blocking` com prova (`failing_test`, `rule` ou `scenario`); o que **deveria corrigir** sem mudar comportamento é `improvement`; a decisão de produto é `question`; o **menor** é `suggestion`. Fora do card (o fechamento da §12, a revisão de uma pessoa), vale a lista abaixo.
+- **Defeito e violação de regra bloqueiam o merge.** Defeito real no que o PR escreveu (comportamento errado, falha, brecha, perda de dado), linha do diff que viola uma regra escrita deste arquivo e toda regressão em relação à `main`, mesmo pequena, bloqueiam até serem corrigidos ou virarem pendência aceita, com o motivo. Não é sugestão. O que só poderia ser melhor sem violar regra nenhuma (um nome que já passa na §2, mas tem alternativa melhor) é sugestão.
+- **As severidades:**
+  - **bloqueia**: o item anterior, sempre com prova;
+  - **deveria corrigir**: melhoria no código que o PR já mexe e que preserva o comportamento (simplificar, tirar duplicação, deixar mais claro); não segura o merge;
+  - **decisão**: o que exige decidir intenção ou produto, que só uma pessoa resolve;
+  - **menor**: opcional, ou fora do escopo do PR.
+- **O formato da entrega segue o fluxo onde a revisão roda.** Os cards do vibehub que revisam PR, o de análise (`[vibehub · análise de PR]`) e o revisor da revisão em rodadas (`[vibehub · revisão de PR]`), seguem o contrato do prompt deles (`back/src/services/review/prompts.ts`): o JSON que o servidor lê, os vereditos por rodada e quem corrige (na análise, o próprio card; na revisão em rodadas, a IA do autor). As classes correspondem uma a uma: **bloqueia** = `blocking` com prova (`failing_test`, `rule` ou `scenario`), **deveria corrigir** = `improvement`, **decisão** = `question`, **menor** = `suggestion`; o achado que a verificação derrubou é `refuted` e sai da lista. Fora desses cards (o fechamento da §12, a revisão de uma pessoa), vale a lista abaixo.
 - **Entregue** a lista do mais grave para o menos grave. Cada achado tem:
-  - a severidade (**bloqueia**, **deveria corrigir** ou **menor**);
+  - a severidade (**bloqueia**, **deveria corrigir**, **decisão** ou **menor**);
   - o `arquivo:linha`;
   - o defeito numa frase e o cenário de falha;
   - a evidência;
