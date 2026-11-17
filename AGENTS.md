@@ -52,7 +52,7 @@
 - Importações estáticas no topo. Import dinâmico só por carregamento sob demanda (dependência pesada fora do caminho inicial), dependência circular real ou outra restrição técnica fundamentada.
 - Usar `async` quando houver execução assíncrona ou obrigação de retornar `Promise`; não tornar uma função assíncrona por costume.
 - Não criar `try/catch` que só captura e relança o mesmo erro sem acrescentar informação ou comportamento.
-- Não engolir erros, não retornar sucesso falso e não adicionar `setTimeout`/retries para esconder uma falha de fluxo.
+- Não engolir erros (a §9 traz a única exceção, o melhor esforço, e diz quando o `catch` de uma tarefa de fundo não conta como engolir), não retornar sucesso falso e não adicionar `setTimeout`/retries para esconder uma falha de fluxo.
 - Não criar flags, estados, campos ou leituras que ninguém consome.
 - Efeito colateral é explícito: função que grava, apaga ou muda estado diz isso no nome (`save`, `delete`, `set`…); um `get`/`read`/`parse` não grava nada.
 - **Cálculo e efeito em etapas separadas:** o que calcula (incluindo callbacks de `filter`/`map`/`find`) só devolve valor; o que envia, grava ou notifica vem depois, em passo próprio.
@@ -233,7 +233,10 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 - Distinguir presença de verdade lógica: `0` e `false` podem ser valores válidos.
 - Erro informa o suficiente para diagnóstico sem expor token, segredo ou caminho sensível.
 - Integração que falhou não aparece como concluída, nem para o usuário: falha de login, de runner ou de integração vira aviso visível com a ação que resolve. Retry só limitado e idempotente.
-- Exceção não é ignorada: registrar e propagar até a fronteira responsável.
+- **O erro chega a quem chamou, não só ao log.** Uma exceção ou é propagada até a fronteira responsável ou é traduzida para o chamador (exceção com mensagem própria, resposta HTTP de erro, evento de erro no websocket). Uma linha de log não faz nenhuma das duas coisas: o log é a trilha de diagnóstico de quem opera a instalação e acompanha o erro, nunca o substitui.
+- **Engolir o erro só em melhor esforço.** `catch` vazio ou `.catch(() => {})` são aceitos apenas em efeito colateral cuja falha não muda o resultado da operação e que outro caminho cobre: aviso em tempo real que o próximo attach reenvia, limpeza que a próxima rodada refaz, gatilho antecipado de algo que também roda por agendamento. O porquê vai para o commit e o PR (§3). Falha que o chamador precisa saber nunca é engolida.
+- **Tarefa de fundo sem chamador** (timer, reaper, retomada após deploy, rotina disparada sem esperar resposta): não há a quem propagar. Um `catch` que **altera o estado que decide o próximo passo, em relação ao que a tarefa faria sem o erro** (a marca da próxima tentativa, um contador de falhas, a parada da tarefa, o aviso ao card), não é engolir o erro, desde que esse caminho de falha tenha teste com um nome que diz o que acontece. Voltar a tentar só porque o timer bate de novo não conta: `catch` vazio, ou que só registra no log sem alterar esse estado, é engolir.
+- `.catch(() => {})` antigo fora do diff fica como está; o que o PR toca é julgado por estas regras.
 
 ## 10. Segurança, autorização e escopo
 
