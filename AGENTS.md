@@ -29,7 +29,7 @@
 
 ## 2. Idioma e nomenclatura
 
-- **Código em inglês:** variáveis, funções, tipos, componentes, campos persistidos e nomes de teste seguem o padrão do repositório, que é público. Não misturar identificadores em português num arquivo em inglês.
+- **Código em inglês:** variáveis, funções, tipos, componentes e campos persistidos seguem o padrão do repositório, que é público. Não misturar identificadores em português num arquivo em inglês. A descrição de `describe`/`it` é texto, não identificador: segue o idioma do arquivo de teste (a maior parte da suíte usa pt-BR).
 - **Texto de interface sempre pelo i18n** (`front/src/i18n/en.ts` e `pt-BR.ts`). Toda chave nova entra nos dois arquivos; nunca string literal visível no JSX.
 - **Commits, PRs e documentação de processo (`docs/`, este arquivo) em pt-BR.**
 - Não traduzir nem renomear sintaxe ou APIs de terceiros (SDK do Claude, Fastify, React, Docker): permanecem como a especificação deles define.
@@ -86,7 +86,7 @@
 | `// only live cards` em cima de um `filter` | `const liveCards = cards.filter(...)` |
 | Comentário explicando a regra de um `if` | Condição com nome (`const canReopenCli = ...`) e o porquê no commit e no PR |
 | `/** Finds the card by id */ findCardById(id)` | Só a função: o nome já diz |
-| Comentário contando o bug que a linha evita | Teste com o nome da regra (`"a new login takes effect even with a background task alive"`) e a história no commit |
+| Comentário contando o bug que a linha evita | Teste com o nome da regra (`"o login novo vale mesmo com tarefa em segundo plano viva"`) e a história no commit |
 
 ## 4. SOLID, coesão e abstrações
 
