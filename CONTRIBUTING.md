@@ -10,8 +10,14 @@ Thanks for taking a look.
   ids, branch names, session ids and container names all end up in a `docker exec` line. Read
   `back/src/runtime/host.ts` before writing code that builds one.
 - **Secrets travel over stdin, never argv.** `ps` is world-readable.
-- **Comments explain why, not what.** Several of the strange-looking lines in this repo are scars
-  from production bugs; if you fix one, leave the story behind.
+- **Code explains itself; the why lives in the commit and the PR.** New lines carry no comments
+  beyond a short list of exceptions (external rule, technical limitation, tool directive, legacy
+  name). A non-obvious invariant gets a test whose name states the rule. Existing comments stay —
+  many are scars from production bugs — unless your change makes them false.
+- **`const` for everything you write.** `let` only for live state that a process, session or
+  stream reassigns over its lifetime.
+- **Performance is a requirement.** Every `docker exec`, state read, websocket event and render is
+  shared by every card on the runner; do the least real work that covers the case.
 
 ## Layout
 
@@ -44,4 +50,6 @@ executor and run without it.
 ## Pull requests
 
 One logical change per PR, please. Describe what breaks if the change is wrong — that is the part
-reviewers cannot reconstruct.
+reviewers cannot reconstruct. Commit messages follow [Gitmoji](https://gitmoji.dev)
+(`🐛 fix(area): ...`) and explain why; the full rules, PR template included, are in
+[`AGENTS.md`](AGENTS.md) §14.
