@@ -78,10 +78,10 @@ O comando nativo `/code-review` tem níveis de esforço; o plugin `code-review` 
 
 ## 6. Fechamento: revisão agnóstica contra o AGENTS.md
 
-É o passo 8 da §12 do `AGENTS.md`, antes da entrega, sem esperar ser mandado. **Agnóstico** = o prompt de cada subagente leva só o diff (`git fetch origin main` e então `git diff origin/main...HEAD`), o caminho do `AGENTS.md` e o pedido, nunca a sua justificativa nem a conversa: quem escreveu não revisa o próprio raciocínio.
+É o passo 8 da §12 do `AGENTS.md`, antes da entrega, sem esperar ser mandado. **Agnóstico** = o prompt de cada subagente leva só como achar o diff e as mensagens dos commits (`git fetch origin main`, `git diff origin/main...HEAD` e `git log origin/main..HEAD`), o caminho do `AGENTS.md` e o pedido, nunca uma justificativa escrita para o revisor nem a conversa: quem escreveu não revisa o próprio raciocínio. As mensagens dos commits entram porque são o que o autor afirma, e o revisor as confere.
 
 1. **Simplificação:** subagente `code-simplifier:code-simplifier`, com o pedido de confrontar cada trecho com as regras e aplicar o que simplifica sem mudar comportamento. Confira o que ele escreveu e rode o recorte de testes.
-2. **Code review**, só depois de o primeiro terminar, sobre o diff já simplificado: subagente `feature-dev:code-reviewer`, com o pedido de seguir "Como revisar um PR" (§14 do `AGENTS.md`) e entregar os achados com severidade e o veredito apto ou não apto.
+2. **Code review**, só depois de o primeiro terminar, sobre o diff já simplificado: subagente `general-purpose`, com o pedido de seguir "Como revisar um PR" (§14 do `AGENTS.md`), não editar arquivos e entregar os achados com severidade e o veredito apto ou não apto. Ele precisa do shell para rodar `git` e o teste que prova o achado; o `feature-dev:code-reviewer` não tem Bash e só serve para uma leitura rápida.
 3. Cada achado se confere na fonte; o confirmado se corrige em commit próprio, com o teste que o prova.
 
 ## 7. Entrega

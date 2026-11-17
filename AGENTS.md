@@ -303,7 +303,7 @@ Se um comando de teste for passar de ~2 min, troque por um recorte menor. Não a
 5. **Auditar o trecho tocado:** nomes, `let`, comentário fora das exceções, código morto, duplicação, fallback indevido, leituras e execuções inúteis.
 6. **Não espalhar alterações:** problema vizinho que exige refatoração arriscada é comunicado, não corrigido de carona.
 7. **Validar:** testes do recorte, typecheck e build quando aplicável; revisar o diff (comandos abaixo).
-8. **Revisão independente antes de entregar:** o diff passa, nesta ordem, por **simplificação** (aplicada) e por **code review** (correção, performance, aderência às regras e o que foi inventado), ambas feitas por um revisor SEM o contexto de quem escreveu, que recebe só o diff e este arquivo; o code review segue "Como revisar um PR" (§14). Achado confirmado é corrigido; o descartado tem o motivo dito. O que a simplificação mudar volta pelo passo 7 antes do code review.
+8. **Revisão independente antes de entregar:** o diff passa, nesta ordem, por **simplificação** (aplicada) e por **code review** (correção, performance, aderência às regras e o que foi inventado), ambas feitas por um revisor SEM o contexto de quem escreveu, que recebe o diff, as mensagens dos commits e este arquivo; o code review segue "Como revisar um PR" (§14). Achado confirmado é corrigido; o descartado tem o motivo dito. O que a simplificação mudar volta pelo passo 7 antes do code review.
 9. **Descrever o resultado:** o que mudou, o que foi verificado e as limitações reais. Quando a entrega é um PR, ele segue a §14.
 
 ### Autonomia corretiva e preservação do escopo
@@ -582,10 +582,10 @@ Releia o PR como um estranho leria:
 
 ### Como revisar um PR
 
-Quem revisa (pessoa ou agente) é o **portão do merge**, não um leitor de cortesia. Recebe só o diff, o PR e este arquivo, sem a conversa de quem escreveu, e trabalha para **achar o que está errado**, não para confirmar o que o PR diz. "Passa nos testes" não aprova sozinho, e "o autor explicou" não substitui conferir.
+Quem revisa (pessoa ou agente) é o **portão do merge**, não um leitor de cortesia. Recebe o diff, este arquivo e o que o autor afirma (a descrição do PR, ou as mensagens dos commits quando o PR ainda não existe, como no fechamento da §12), sem a conversa de quem escreveu, e trabalha para **achar o que está errado**, não para confirmar o que o PR diz. "Passa nos testes" não aprova sozinho, e "o autor explicou" não substitui conferir.
 
 - **Tente quebrar.** Para cada bloco relevante, procure a entrada, o estado, a ordem de eventos ou a corrida (dois cards, dois backends, reconexão no meio do turno) que produz resultado errado. Achado sem cenário concreto de falha (entrada ou estado → resultado errado) é opinião, não achado.
-- **Prove cada achado.** Aponte o `arquivo:linha`. Em achado de comportamento, a prova é um teste que falha hoje. Separe o fato confirmado da hipótese e diga o que não verificou.
+- **Prove cada achado.** Aponte o `arquivo:linha`. Em achado de comportamento, a prova mais forte é um teste que falha hoje; quando o revisor não pode escrever ou rodar o teste, vale o cenário concreto (entrada ou estado → resultado errado, com `arquivo:linha`). Violação de regra se prova citando a regra escrita deste arquivo e o trecho do diff que a viola. Separe o fato confirmado da hipótese e diga o que não verificou.
 - **Confira o que o PR afirma.** Cada causa, número, linha citada, resultado de teste, medição de performance, pendência e justificativa da descrição e dos comentários no diff se confere no código. Afirmação falsa ou sem sustentação é achado, mesmo quando o código está certo.
 - **Leia além do diff.** Confira:
   - quem chama e quem é chamado pelo trecho alterado;
@@ -600,8 +600,9 @@ Quem revisa (pessoa ou agente) é o **portão do merge**, não um leitor de cort
   - se o resultado depende do código, e não do relógio, da carga da máquina ou da ordem de execução.
 
   Teste que passa sem afirmar nada, ou cujo nome promete mais do que ele verifica, é achado.
-- **A pendência deliberada é julgada.** Ela só é aceita quando o motivo é verdadeiro e corrigir agora traz mais risco do que esperar. Pendência com motivo falso, ou que esconde uma violação simples de corrigir, é achado.
-- **Violação de regra bloqueia o merge.** Todo achado que contraria este arquivo, e toda regressão em relação à `main`, mesmo pequena, bloqueia até ser corrigido ou virar pendência aceita no PR, com o motivo. Não é sugestão.
+- **A pendência deliberada é julgada.** Ela está registrada no PR, ou na mensagem do commit quando o PR ainda não existe, e só é aceita quando o motivo é verdadeiro e corrigir agora traz mais risco do que esperar. Pendência com motivo falso, ou que esconde uma violação simples de corrigir, é achado.
+- **Violação de regra bloqueia o merge.** Linha do diff que viola uma regra escrita deste arquivo, e toda regressão em relação à `main`, mesmo pequena, bloqueia até ser corrigida ou virar pendência aceita, com o motivo. Não é sugestão. O que só poderia ser melhor sem violar regra nenhuma (um nome que já passa na §2, mas tem alternativa melhor) é sugestão.
+- **O formato da entrega segue o fluxo onde a revisão roda.** No card de análise de PR do vibehub vale o contrato do prompt dele (`back/src/services/review/prompts.ts`): as classes `blocking`, `improvement`, `question` e `suggestion` no JSON que o servidor lê, e o card corrige o que o prompt manda corrigir. A correspondência com este método: o que **bloqueia** é `blocking` com prova (`failing_test`, `rule` ou `scenario`); o que **deveria corrigir** sem mudar comportamento é `improvement`; a decisão de produto é `question`; o **menor** é `suggestion`. Fora do card (o fechamento da §12, a revisão de uma pessoa), vale a lista abaixo.
 - **Entregue** a lista do mais grave para o menos grave. Cada achado tem:
   - a severidade (**bloqueia**, **deveria corrigir** ou **menor**);
   - o `arquivo:linha`;
