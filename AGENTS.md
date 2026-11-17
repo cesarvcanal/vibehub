@@ -303,7 +303,7 @@ Se um comando de teste for passar de ~2 min, troque por um recorte menor. Não a
 5. **Auditar o trecho tocado:** nomes, `let`, comentário fora das exceções, código morto, duplicação, fallback indevido, leituras e execuções inúteis.
 6. **Não espalhar alterações:** problema vizinho que exige refatoração arriscada é comunicado, não corrigido de carona.
 7. **Validar:** testes do recorte, typecheck e build quando aplicável; revisar o diff (comandos abaixo).
-8. **Revisão independente antes de entregar:** o diff passa, nesta ordem, por **simplificação** (aplicada) e por **code review** (correção, performance, aderência às regras e o que foi inventado), ambas feitas por um revisor SEM o contexto de quem escreveu, que recebe o diff, as mensagens dos commits e este arquivo; o code review segue "Como revisar um PR" (§14). Achado confirmado é corrigido; o descartado tem o motivo dito. O que a simplificação mudar volta pelo passo 7 antes do code review.
+8. **Revisão independente antes de entregar:** o diff passa, nesta ordem, por **simplificação** (aplicada) e por **code review** (correção, performance, aderência às regras e o que foi inventado), ambas feitas por um revisor SEM o contexto de quem escreveu, que recebe o diff, as mensagens dos commits e este arquivo; o code review segue "Como revisar um PR" (§14). Achado confirmado segue a severidade dele (§14, "As severidades"): o que bloqueia e o que deveria corrigir são corrigidos, a decisão vira pergunta ao usuário e o menor fica registrado no PR. O descartado tem o motivo dito. O que a simplificação mudar volta pelo passo 7 antes do code review.
 9. **Descrever o resultado:** o que mudou, o que foi verificado e as limitações reais. Quando a entrega é um PR, ele segue a §14.
 
 ### Autonomia corretiva e preservação do escopo
@@ -317,7 +317,7 @@ Pedir autorização e passar por brainstorming continua obrigatório para decis�
 - falha de integração, validação ou consistência;
 - ajuste técnico necessário para o que já existe funcionar corretamente.
 
-**Limites:** autonomia corretiva não amplia escopo. Não implementar funcionalidade extra só porque parece útil; não alterar decisão intencional, fluxo estabelecido ou regra de negócio por preferência técnica; não remover, substituir ou simplificar o que não se entende. Melhoria, refatoração e o que foge do propósito viram **sugestão**, não execução. Se a correção exige decidir intenção ou direção do projeto, pergunte.
+**Limites:** autonomia corretiva não amplia escopo. Não implementar funcionalidade extra só porque parece útil; não alterar decisão intencional, fluxo estabelecido ou regra de negócio por preferência técnica; não remover, substituir ou simplificar o que não se entende. Melhoria fora do código que o PR já escreve, refatoração e o que foge do propósito viram **sugestão**, não execução (a melhoria dentro do que o PR escreveu é o "deveria corrigir" da §14). Se a correção exige decidir intenção ou direção do projeto, pergunte.
 
 **Princípio:** o agente tem autonomia para preservar, corrigir e garantir a integridade do que foi definido e construído, não para redefinir o que o projeto deve ser.
 
@@ -601,13 +601,13 @@ Quem revisa (pessoa ou agente) é o **portão do merge**, não um leitor de cort
 
   Teste que passa sem afirmar nada, ou cujo nome promete mais do que ele verifica, é achado.
 - **A pendência deliberada é julgada.** Ela está registrada no PR, ou na mensagem do commit quando o PR ainda não existe, e só é aceita quando o motivo é verdadeiro e corrigir agora traz mais risco do que esperar. Pendência com motivo falso, ou que esconde uma violação simples de corrigir, é achado.
-- **Defeito e violação de regra bloqueiam o merge.** Defeito real no que o PR escreveu (comportamento errado, falha, brecha, perda de dado), linha do diff que viola uma regra escrita deste arquivo e toda regressão em relação à `main`, mesmo pequena, bloqueiam até serem corrigidos ou virarem pendência aceita, com o motivo. Não é sugestão. O que só poderia ser melhor sem violar regra nenhuma (um nome que já passa na §2, mas tem alternativa melhor) é sugestão.
-- **As severidades:**
-  - **bloqueia**: o item anterior, sempre com prova;
-  - **deveria corrigir**: melhoria no código que o PR já mexe e que preserva o comportamento (simplificar, tirar duplicação, deixar mais claro); não segura o merge;
-  - **decisão**: o que exige decidir intenção ou produto, que só uma pessoa resolve;
-  - **menor**: opcional, ou fora do escopo do PR.
-- **O formato da entrega segue o fluxo onde a revisão roda.** Os cards do vibehub que revisam PR, o de análise (`[vibehub · análise de PR]`) e o revisor da revisão em rodadas (`[vibehub · revisão de PR]`), seguem o contrato do prompt deles (`back/src/services/review/prompts.ts`): o JSON que o servidor lê, os vereditos por rodada e quem corrige (na análise, o próprio card; na revisão em rodadas, a IA do autor). As classes correspondem uma a uma: **bloqueia** = `blocking` com prova (`failing_test`, `rule` ou `scenario`), **deveria corrigir** = `improvement`, **decisão** = `question`, **menor** = `suggestion`; o achado que a verificação derrubou é `refuted` e sai da lista. Fora desses cards (o fechamento da §12, a revisão de uma pessoa), vale a lista abaixo.
+- **Defeito e violação de regra bloqueiam o merge.** Defeito real no que o PR escreveu (comportamento errado, falha, brecha, perda de dado), linha do diff que viola uma regra escrita deste arquivo e toda regressão em relação à `main`, mesmo pequena, bloqueiam até serem corrigidos ou virarem pendência aceita, com o motivo. Não é sugestão. O que não viola regra nenhuma não bloqueia: é **deveria corrigir** ou **menor**, pelo critério abaixo.
+- **As severidades, e o que acontece com cada uma:**
+  - **bloqueia**: o item anterior, sempre com prova. É corrigido antes do merge, com o teste que prova o defeito quando ele é de comportamento.
+  - **deveria corrigir**: melhoria no código que o próprio PR escreveu, que preserva o comportamento e que não depende de gosto: quem lê concordaria sem precisar escolher (um trecho que o PR escreveu de forma mais complicada que o necessário, um nome novo que passa na §2, mas é menos claro que o termo que o repo já usa). O autor aplica sem perguntar e não segura o merge.
+  - **decisão**: o que exige decidir intenção ou produto. Vira pergunta ao usuário (§12) e, enquanto estiver em aberto, o veredito é **não apto**.
+  - **menor**: preferência ou troca (a repetição pequena que a §3 permite manter, um nome alternativo igualmente claro, uma refatoração maior) e o que está fora do escopo do PR (problema antigo fora do diff). Não é aplicado: fica registrado no PR como sugestão.
+- **O formato da entrega segue o fluxo onde a revisão roda.** Os cards do vibehub que revisam PR, o de análise (`[vibehub · análise de PR]`) e o revisor da revisão em rodadas (`[vibehub · revisão de PR]`), seguem o contrato do prompt deles (`back/src/services/review/prompts.ts`): o JSON que o servidor lê, os vereditos por rodada e quem corrige (na análise, o próprio card; na revisão em rodadas, a IA do autor). As classes correspondem uma a uma: **bloqueia** = `blocking` com prova (`failing_test`, `rule` ou `scenario`), **deveria corrigir** = `improvement`, **decisão** = `question`, **menor** = `suggestion`; o achado que a verificação derrubou é `refuted` (na análise ele sai da lista; na revisão em rodadas ele vai no JSON, para ficar no histórico). Fora desses cards (o fechamento da §12, a revisão de uma pessoa), vale a lista abaixo.
 - **Entregue** a lista do mais grave para o menos grave. Cada achado tem:
   - a severidade (**bloqueia**, **deveria corrigir**, **decisão** ou **menor**);
   - o `arquivo:linha`;
