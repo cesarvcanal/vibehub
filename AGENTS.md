@@ -107,7 +107,7 @@
 | `back/src/auth/` | Contas, sessão e os preHandlers de acesso | Regra de board |
 | `back/src/secrets/` | Cofre criptografado | Leitura de segredo para log ou resposta |
 | `back/src/mcp/` | Servidor MCP e as ferramentas | Regra duplicada de service |
-| `back/src/utils/` | Funções puras compartilhadas | Código de uma área só |
+| `back/src/utils/` | Operações técnicas compartilhadas, sem regra de domínio (§4, "Utilitário × regra de negócio") | Regra de uma área; código que lê o store ou chama o host |
 | `back/src/testkit/` | Infra de teste compartilhada | Testes |
 
 - **Teste mental, antes de criar qualquer abstração:** "se eu escrever isto direto, no lugar onde é usado, o que fica pior **hoje**?" Se a resposta é "nada" ou "talvez um dia", escreva direto.
@@ -122,6 +122,17 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 - **D — Inversão de dependência:** isolar dependências externas ou instáveis (Docker, SSH, GitHub, SDK do Claude) quando isso trouxer testabilidade ou proteção de fronteira.
 
 **Antes de criar uma abstração, responder:** que responsabilidade ela protege? O que pioraria se fosse removida? Existe mais de um comportamento real? Protege uma fronteira, uma invariante ou uma duplicação relevante? Uma camada que apenas encaminha argumentos sem decisão, transformação ou proteção de fronteira deve ser eliminada quando seguro. Entre duas opções igualmente corretas, preferir a que exige menos conceitos.
+
+### Utilitário × regra de negócio
+
+**O util executa uma operação técnica; quem decide é a camada de regra da área** (o service no backend; o hook ou a função de `features/<área>/lib/` no frontend). Vale para `back/src/utils/`, `front/src/lib/` e qualquer outra pasta de utilitários.
+
+- **O util não conhece o domínio.** Ele transforma ou calcula: texto, data, número, lista, stream, codificação, conversão de formato. Não conhece card, conta, sessão, permissão nem fluxo; não lê o store, não chama o host nem serviço externo; não decide se uma operação pode acontecer; não tem efeito colateral.
+- **Entrada impossível não é regra de negócio.** O util pode recusar a entrada tecnicamente impossível para a operação dele (texto ausente numa função de texto); "este card pode ser movido" é regra e mora na camada de regra.
+- **A dependência vai só da área para o util.** O util nunca importa service, hook, store ou componente; quando chamá-lo, com qual dado e o que fazer com o resultado fica na camada de regra.
+- **Ser reutilizável não faz da função um util.** Função que duas áreas usam e que carrega regra continua sendo regra: mora na área dona, ou numa pasta compartilhada de regra quando ninguém é dono, nunca em `utils/`. Montar a URL, o comando ou a mensagem no formato de um terceiro (GitHub, Docker, CLI do Claude) é integração: mora no client ou no service da integração.
+- **Teste mental:** "esta função pode ser copiada para outro repositório sem levar nenhum módulo nem nenhuma regra deste?" Se não pode, ela não é util.
+- **Util fora deste padrão que o PR toca** (regra de domínio dentro de `utils/`) é movido para a área dona no mesmo PR, junto com os imports, ou vira pendência deliberada no PR com o motivo.
 
 ## 5. Frontend, React e TypeScript
 
