@@ -23,7 +23,7 @@ import {
   defaultAccountLabelOr,
 } from "@/features/board/api";
 import { AccountUsageBars, useMinuteTick } from "@/features/board/components/AccountUsageBars";
-import { XTerminal } from "@/features/board/components/XTerminal";
+import { AccountLoginDialog } from "@/features/board/components/AccountLoginDialog";
 import { t as translate, useT } from "@/i18n";
 
 /**
@@ -373,23 +373,7 @@ export function AccountsManager({ trigger = "icon" }: { trigger?: "icon" | "row"
           hand in the right profile — the one step of onboarding that was not in the product. The
           pty on the other end is already inside this account's profile directory, so whatever it
           writes belongs to this account and nothing else. */}
-      <Dialog open={Boolean(loginTarget)} onOpenChange={(next) => !next && closeLogin()}>
-        <DialogContent className="max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>{t("accounts.signInFor", { name: loginTarget?.name })}</DialogTitle>
-            <DialogDescription>{t("accounts.loginHelp")}</DialogDescription>
-          </DialogHeader>
-          {loginTarget ? (
-            <div className="h-[26rem] overflow-hidden rounded-md border border-border/60">
-              <XTerminal
-                wsPath={`/api/accounts/${encodeURIComponent(loginTarget.slug)}/login-terminal`}
-                zoomControl
-                ariaLabel={t("accounts.loginTerminalAria", { name: loginTarget.name })}
-              />
-            </div>
-          ) : null}
-        </DialogContent>
-      </Dialog>
+      <AccountLoginDialog account={loginTarget} onClose={closeLogin} />
 
       <Dialog open={Boolean(tokenTarget)} onOpenChange={(next) => !next && setTokenTarget(null)}>
         <DialogContent className="max-w-md">

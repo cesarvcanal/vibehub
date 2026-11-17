@@ -87,6 +87,8 @@ export interface SdkEvent {
     | "compaction"
     | "background_tasks"
     | "rate_limit"
+    | "login_failed"
+    | "login_restored"
     | "context_usage"
     | "keyword_effort_replaced"
     | "conversation_reset"
@@ -603,6 +605,11 @@ export interface SdkChatState {
    */
   rateLimits: Record<string, RateLimitInfo>;
   /**
+   * THE ACCOUNT'S LOGIN DIED (`login_failed`, until `login_restored`): the CLI could not authenticate — the OAuth
+   * stopped renewing, the token was revoked. State, not conversation: it becomes the reconnect warning above the input.
+   */
+  loginFailed: boolean;
+  /**
    * HOW MUCH OF THE CONTEXT WINDOW the conversation takes up, the latest reading (the `/context`).
    * State, not conversation: it becomes the colored meter in the bottom right corner of the log (see
    * lib/contextUsage.ts).
@@ -618,6 +625,7 @@ export const INITIAL_SDK_STATE: SdkChatState = {
   backgroundTasks: [],
   agentTasks: {},
   rateLimits: {},
+  loginFailed: false,
   contextUsage: null,
   ready: false,
   turnActive: false,
@@ -1426,6 +1434,10 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       };
       return { ...state, rateLimits: { ...state.rateLimits, [info.window]: info } };
     }
+    case "login_failed":
+      return state.loginFailed ? state : { ...state, loginFailed: true };
+    case "login_restored":
+      return state.loginFailed ? { ...state, loginFailed: false } : state;
     case "context_usage": {
       // Replaces the previous reading. A malformed one does not erase the one that holds.
       const info = parseContextUsage(event);
@@ -1537,6 +1549,8 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
         // Same for the limit warning: the back resends the current one behind the `ready`; a new driver
         // (a switched account, included) does not inherit the previous account's warning.
         rateLimits: {},
+        // Same for the dead login: the back resends it behind the `ready` while the account is still out.
+        loginFailed: false,
         // Same for the context meter: the back resends the session's latest reading behind the `ready`.
         contextUsage: null,
         rows: event.turnActive === true ? settleStreaming(state.rows) : settleLiveTools(dropProvisionalTools(settleStreaming(state.rows))),

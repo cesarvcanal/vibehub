@@ -1028,6 +1028,7 @@ function createToolInputTracker(throttleMs) {
 async function runStream() {
   // The sign-in this CLI is born with — the newest one in the profile, read NOW (see `applyAuth`).
   streamAuth = applyAuth();
+  streamLoginFailed = false;
   const options = baseOptions();
   const projectsRoot = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects");
   if (lastSessionId && !sessionTranscriptExists(projectsRoot, lastSessionId)) {
@@ -1161,6 +1162,11 @@ async function runStream() {
         // session to a point that is not its own. Only the main agent moves the fork point.
         const parent = typeof msg.parent_tool_use_id === "string" && msg.parent_tool_use_id !== "" ? msg.parent_tool_use_id : null;
         if (msg.uuid && parent === null) lastAssistantUuid = msg.uuid;
+        if (msg.error === "authentication_failed") {
+          // The CLI's own words still go to the conversation below; this is what tells the screen it is the ACCOUNT.
+          streamLoginFailed = true;
+          emit({ type: "login_failed" });
+        }
         // Main-agent speech WITHOUT an open turn = the CLI opened a turn on its own (a background
         // task finished, a ScheduleWakeup fired). It becomes the turn in flight: a message
         // now is absorbed into it (`turn_absorbed`), and if the stream drops before the `result` the finally
@@ -2001,15 +2007,24 @@ function authFingerprint(facts, token) {
 let streamAuth = null;
 
 /**
+ * The OPEN stream's CLI answered `authentication_failed`: its login is dead (the OAuth stopped renewing, the
+ * token was revoked). Born false with each CLI, in `runStream`.
+ */
+let streamLoginFailed = false;
+
+/**
  * A SIGN-IN CHANGED since the open stream started (someone logged in, or saved a new token): the
  * stream is closed so this send opens a fresh CLI on the new sign-in — resuming the SAME session, so
  * the conversation does not notice. The background "Reiniciar" the person used to have to click.
  *
  * Never with a turn in flight (killing it would lose the work; the message joins it as always) nor
- * with background tasks running (they die with the CLI) — the next send checks again.
+ * with background tasks running (they die with the CLI) — the next send checks again. The exception is
+ * a CLI whose login already FAILED: its tasks cannot reach the API either, and keeping it alive for them
+ * pinned the card to the dead login after the person logged in again (production, 2026-11-17).
  */
 async function reauthIfChanged() {
-  if (!currentQuery || turnActive || backgroundTasksOwner !== null) return;
+  if (!currentQuery || turnActive) return;
+  if (backgroundTasksOwner !== null && !streamLoginFailed) return;
   const facts = readAuthFacts();
   if (authFingerprint(facts, decideAuth(facts).token) === streamAuth) return;
   try {

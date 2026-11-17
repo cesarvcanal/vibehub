@@ -2942,6 +2942,56 @@ describe("rate_limit — o aviso de limite do plano", () => {
 });
 
 /**
+ * THE ACCOUNT'S LOGIN DIED (production, 2026-11-17): the CLI answered "Failed to authenticate: OAuth session expired
+ * and could not be refreshed" and the screen showed it as one more line of the conversation — nothing said the
+ * ACCOUNT needed reconnecting, and a tab opened later did not know at all. Session state, like the limit warning:
+ * resent to whoever connects, never recorded, and gone with the first turn that works again.
+ */
+describe("login_failed — o login da conta do card morreu", () => {
+  const loginFrames = (socket: ReturnType<typeof fakeSocket>) =>
+    socket.sent.map((s) => JSON.parse(s) as { type: string }).filter((e) => e.type === "login_failed" || e.type === "login_restored");
+
+  it("chega à aba aberta, é reenviado a quem conecta depois e não vai para o histórico", async () => {
+    const session = ensure();
+    const open = fakeSocket();
+    attachSocket(session, open as never);
+    spawned[0]!.stdout.emit("data", line({ type: "login_failed" }));
+    expect(loginFrames(open)).toEqual([{ type: "login_failed" }]);
+
+    const late = fakeSocket();
+    attachSocket(session, late as never);
+    expect(loginFrames(late)).toEqual([{ type: "login_failed" }]);
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect((await readHistory(CARD)).some((e) => e.type === "login_failed")).toBe(false);
+  });
+
+  it("um turno que dá certo depois do relogin apaga o aviso — e quem conecta depois não o recebe mais", () => {
+    const session = ensure();
+    const open = fakeSocket();
+    attachSocket(session, open as never);
+    spawned[0]!.stdout.emit("data", line({ type: "login_failed" }));
+    spawned[0]!.stdout.emit("data", line({ type: "result", subtype: "success", isError: true, sessionId: "s1" }));
+    expect(loginFrames(open)).toEqual([{ type: "login_failed" }]); // o turno que falhou não restaura nada
+
+    spawned[0]!.stdout.emit("data", line({ type: "result", subtype: "success", isError: false, sessionId: "s1" }));
+    expect(loginFrames(open)).toEqual([{ type: "login_failed" }, { type: "login_restored" }]);
+
+    const late = fakeSocket();
+    attachSocket(session, late as never);
+    expect(loginFrames(late)).toEqual([]);
+  });
+
+  it("sem login morto, um turno bom não manda aviso nenhum", () => {
+    const session = ensure();
+    const open = fakeSocket();
+    attachSocket(session, open as never);
+    spawned[0]!.stdout.emit("data", line({ type: "result", subtype: "success", isError: false, sessionId: "s1" }));
+    expect(loginFrames(open)).toEqual([]);
+  });
+});
+
+/**
  * THE CONTEXT METER: the last reading of how much of the window the session takes — normalised,
  * resent to whoever connects (the reading only comes at the end of a turn), never recorded in the history.
  */

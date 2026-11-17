@@ -2078,3 +2078,23 @@ describe("compactação — o medidor de contexto", () => {
     expect(feed([{ type: "compaction", phase: "done", postTokens: 5 }]).contextUsage).toBeNull();
   });
 });
+
+/**
+ * THE ACCOUNT'S LOGIN DIED: state of the session, not a row — what the chat's reconnect warning reads. It comes
+ * and goes with the back's frames, and a `ready` (a new driver) zeroes it: the back resends it right behind if
+ * the login is still dead.
+ */
+describe("login_failed — o login da conta do card morreu", () => {
+  it("liga com login_failed e desliga com login_restored, sem virar linha da conversa", () => {
+    const failed = feed([{ type: "ready" }, { type: "login_failed" }]);
+    expect(failed.loginFailed).toBe(true);
+    expect(failed.rows).toEqual([]);
+    expect(feed([{ type: "login_restored" }], failed).loginFailed).toBe(false);
+  });
+
+  it("um driver novo (ready) começa sem o aviso", () => {
+    const failed = feed([{ type: "ready" }, { type: "login_failed" }]);
+    expect(feed([{ type: "ready" }], failed).loginFailed).toBe(false);
+    expect(INITIAL_SDK_STATE.loginFailed).toBe(false);
+  });
+});

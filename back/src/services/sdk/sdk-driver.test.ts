@@ -150,6 +150,14 @@ export function query({ prompt, options }) {
         yield { type: "result", subtype: "success", session_id: SESSION, result: "ok" };
         continue;
       }
+      if (text === "authfail") {
+        // O LOGIN DA CONTA MORREU (formas do CLI 0.3.300, lidas no binário): a renovação do OAuth falha e
+        // o CLI responde com uma mensagem SINTÉTICA marcada error: "authentication_failed", e fecha o turno com erro.
+        yield { type: "assistant", uuid: "a-auth", parent_tool_use_id: null, session_id: SESSION, error: "authentication_failed",
+          message: { content: [{ type: "text", text: "Failed to authenticate: OAuth session expired and could not be refreshed" }] } };
+        yield { type: "result", subtype: "success", is_error: true, session_id: SESSION, result: "Failed to authenticate: OAuth session expired and could not be refreshed" };
+        continue;
+      }
       if (text === "wake-die") {
         // O TURNO QUE O CLI ABRE SOZINHO: o turno da pessoa fecha, uma tarefa em segundo plano
         // termina e o CLI acorda o modelo sem mensagem nenhuma — e o processo cai no meio desse turno.
@@ -517,6 +525,61 @@ describe("sdk-driver.mjs — um login novo vale na próxima mensagem, sem Reinic
     expect(authMarks(driver).at(-1)).toBe("auth:login");
     // In the same conversation: the new CLI resumes the session, it does not open another.
     expect(driver.events.slice(from).some((e) => e.type === "error")).toBe(false);
+  }, 60_000);
+
+  /**
+   * THE LOGIN THAT DIED UNDER A BACKGROUND TASK (production, 2026-11-17): the card had reviewers running in the
+   * background when the account's OAuth stopped renewing. The person logged in again and the chat kept answering
+   * "OAuth session expired" — the reopen is skipped while a background task lives, to not kill it. But a CLI whose
+   * login is dead cannot carry that task anywhere: it has nothing left to protect.
+   */
+  it("o login do CLI morreu com uma tarefa em segundo plano viva: o /login novo ainda vale na mensagem seguinte", async () => {
+    const config = await profileWithToken("profile-relogin-bg");
+    const driver = startDriver([], sandbox, config);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "bg" });
+    await driver.waitFor((e) => e.type === "result");
+    driver.send({ type: "user", text: "authfail" });
+    await driver.waitFor((e) => e.type === "result" && e.isError === true);
+    const before = authMarks(driver).length;
+
+    await writeFile(join(config, ".credentials.json"), LOGIN); // the /login, now
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "de novo" });
+    await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:de novo", from);
+    expect(authMarks(driver).length).toBe(before + 1);
+    expect(authMarks(driver).at(-1)).toBe("auth:login");
+  }, 60_000);
+
+  it("o login que morreu é DITO à tela (login_failed), antes do result do turno — e só ele", async () => {
+    const config = await profileWithToken("profile-login-failed");
+    const driver = startDriver([], sandbox, config);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "hello" });
+    await driver.waitFor((e) => e.type === "result");
+    expect(driver.events.some((e) => e.type === "login_failed")).toBe(false);
+
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "authfail" });
+    await driver.waitFor((e) => e.type === "result", from);
+    const types = driver.events.slice(from).map((e) => e.type);
+    expect(types.filter((t) => t === "login_failed")).toHaveLength(1);
+    expect(types.indexOf("login_failed")).toBeLessThan(types.indexOf("result"));
+  }, 60_000);
+
+  it("login mudou com uma tarefa em segundo plano viva e o login do CLI SÃO: a tarefa segue (o CLI não é reaberto)", async () => {
+    const config = await profileWithToken("profile-relogin-bg-ok");
+    const driver = startDriver([], sandbox, config);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "bg" });
+    await driver.waitFor((e) => e.type === "result");
+    const before = authMarks(driver).length;
+
+    await writeFile(join(config, ".credentials.json"), LOGIN);
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "de novo" });
+    await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:de novo", from);
+    expect(authMarks(driver).length).toBe(before);
   }, 60_000);
 
   it("nada mudou no perfil: o mesmo CLI segue, sem reabrir", async () => {

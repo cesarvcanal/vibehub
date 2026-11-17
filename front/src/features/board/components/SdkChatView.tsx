@@ -36,6 +36,7 @@ import { useVoiceDelegation } from "@/features/voice/useVoiceDelegation";
 import { AnswerActions } from "@/features/voice/AnswerActions";
 import { readAloud, readAloudError, setReadAloudErrorHandler } from "@/features/voice/readAloud";
 import { PlanUsageAlert, cardRateLimitsKey, useCardPlanUsage } from "@/features/board/components/PlanUsage";
+import { AccountLoginDialog, type LoginAccount } from "@/features/board/components/AccountLoginDialog";
 import { ContextMeter, ContextNotice } from "@/features/board/components/ContextMeter";
 import { planAlert, planWindows } from "@/features/board/lib/planUsage";
 import { LinkifiedText, Markdown, SenderTag } from "@/features/board/components/ChatView";
@@ -205,6 +206,8 @@ export interface SdkChatViewProps {
    * PR blocks). The composer lives in here, so this is the only way to sit next to it from outside.
    */
   footer?: React.ReactNode;
+  /** The Claude account this card runs on — what the "login died" warning names and reconnects. */
+  account?: LoginAccount;
   ariaLabel?: string;
   className?: string;
 }
@@ -217,10 +220,11 @@ function ownSends(outbox: readonly OutboxMessage[], viewer: string | undefined):
   return outbox.filter((m) => !m.from || m.from.name === viewer);
 }
 
-export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, terminalWorking = false, footer, ariaLabel, className }: SdkChatViewProps) {
+export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, terminalWorking = false, footer, account, ariaLabel, className }: SdkChatViewProps) {
   const t = useT();
   // Whose screen this is — the edit affordance belongs only to one's own messages.
-  const me = useAuth().user;
+  const { user: me, isOwner } = useAuth();
+  const [loginAccount, setLoginAccount] = React.useState<LoginAccount | null>(null);
   const viewer = me?.username;
   /**
    * Who THIS tab's sends are from, stamped on its own bubbles and outbox copies. An unstamped own
@@ -1643,6 +1647,27 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
           in the same seat as the transcript chat's stop. The interrupt frame is still this view's. */}
       {/* The context left the smart strip: the full message, above the meter's strip. */}
       <ContextNotice usage={state.contextUsage} className="mt-1.5" />
+
+      {/* THE ACCOUNT'S LOGIN DIED: the CLI's "Failed to authenticate…" alone read as one more line of the
+          conversation. This says it is the ACCOUNT, which one, and — for the owner — reconnects it right here. */}
+      {state.loginFailed ? (
+        <div
+          data-testid="login-alert"
+          role="alert"
+          className="mt-1.5 flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+        >
+          <span className="min-w-0 flex-1">
+            {account ? t("chat.loginFailed", { name: account.name }) : t("chat.loginFailedUnknown")}
+            {isOwner && account ? null : <> {t("chat.loginAskOwner")}</>}
+          </span>
+          {isOwner && account ? (
+            <Button type="button" size="sm" variant="destructive" className="h-7 shrink-0 px-2 text-xs" onClick={() => setLoginAccount(account)}>
+              {t("chat.loginReconnect")}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+      <AccountLoginDialog account={loginAccount} onClose={() => setLoginAccount(null)} />
 
       {/* One strip, two messages: who is typing on the left; on the right the plan warning. */}
       <div className="mt-1.5 flex items-center justify-between gap-2">
