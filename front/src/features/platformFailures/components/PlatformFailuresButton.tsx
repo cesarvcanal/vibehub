@@ -10,6 +10,8 @@ import type { PlatformFailure } from "@/api/types";
 import { PLATFORM_FAILURES_KEY, PLATFORM_FAILURES_POLL_MS, platformFailuresApi } from "../api";
 import { useAnnounceUnseenFailures } from "../lib/useAnnounceUnseenFailures";
 
+const NO_PLATFORM_FAILURES: readonly PlatformFailure[] = [];
+
 function FailureEntry({ failure }: { failure: PlatformFailure }) {
   const t = useT();
   const queryClient = useQueryClient();
@@ -60,7 +62,7 @@ export function PlatformFailuresButton() {
     queryFn: platformFailuresApi.list,
     refetchInterval: PLATFORM_FAILURES_POLL_MS,
   });
-  const failures = React.useMemo(() => failuresQuery.data ?? [], [failuresQuery.data]);
+  const failures = failuresQuery.data ?? NO_PLATFORM_FAILURES;
 
   useAnnounceUnseenFailures(failures, setFailuresDialogOpen);
 
