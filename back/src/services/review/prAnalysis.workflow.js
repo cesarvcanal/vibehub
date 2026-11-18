@@ -9,7 +9,7 @@ export const meta = {
   ],
 }
 
-const MAX_VERIFIED_PER_DIMENSION = 30
+const MAX_VERIFIED_PER_DIMENSION = 15
 
 const DIMENSIONS = [
   { key: 'correctness', focus: 'lógica, bordas, corrida entre cards ou backends, idempotência, erro engolido ou fallback que mascara falha' },
@@ -98,18 +98,28 @@ const JUDGMENT_SCHEMA = {
           dimension: { type: 'string', enum: DIMENSION_KEYS },
           severity: { type: 'string', enum: SEVERITIES },
         },
-        required: ['title', 'problem', 'dimension', 'severity'],
+        required: ['title', 'problem', 'fix', 'dimension', 'severity'],
       },
     },
   },
   required: ['findings'],
 }
 
+const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/
+const isFilledText = (value) => typeof value === 'string' && value.trim() !== ''
+const fleetArgsAreValid = typeof args === 'object' && args !== null &&
+  Number.isInteger(args.prNumber) && args.prNumber > 0 &&
+  isFilledText(args.branch) && isFilledText(args.base) &&
+  typeof args.headSha === 'string' && FULL_SHA_PATTERN.test(args.headSha)
+if (!fleetArgsAreValid) {
+  throw new Error(`args inválido para a frota da análise: esperado o objeto { prNumber, branch, base, headSha com 40 hex }, recebido ${JSON.stringify(args)}`)
+}
+
 const diffRange = `origin/${args.base}...${args.headSha}`
 
 const READ_ONLY_RULE =
-  'Você só LÊ: não edite, não crie arquivo, não faça commit nem push. Pode rodar git, gh e o teste já existente ' +
-  'do recorte que o PR tocou (nunca a suíte inteira).'
+  'Você só LÊ: não edite, não crie arquivo, não faça commit nem push. Pode rodar git, gh e um teste já existente ' +
+  'do recorte que o PR tocou, filtrado pelo caso (npx vitest run <arquivo> -t "<caso>"); nunca o arquivo inteiro nem a suíte.'
 
 const PROOF_RULE =
   'Bloqueante só com prova: failing_test (o teste que falha), rule (a regra escrita do repo, com o trecho em detail) ' +
@@ -135,8 +145,8 @@ const reviewPrompt = (dimension, brief) =>
 const verifyPrompt = (finding, dimension, brief) =>
   `Tente DERRUBAR este achado de ${dimension.key} do PR #${args.prNumber}. ${READ_ONLY_RULE}\n${briefText(brief)}\n` +
   `Achado: ${JSON.stringify(finding)}\n` +
-  'Confira no código: a linha existe, o cenário acontece de verdade, a regra citada diz isso. Rode o teste existente ' +
-  'quando ele decide a questão. Na dúvida, confirmed = false. Em evidence, o que você conferiu.'
+  'Confira no código: a linha existe, o cenário acontece de verdade, a regra citada diz isso. Quando um teste existente ' +
+  'decide a questão, rode só ele, filtrado pelo caso (-t "<caso>"). Na dúvida, confirmed = false. Em evidence, o que você conferiu.'
 
 const judgePrompt = (confirmedFindings, brief) =>
   `Você é o juiz da análise do PR #${args.prNumber}, sem o contexto de quem revisou. ${READ_ONLY_RULE}\n${briefText(brief)}\n` +
@@ -178,8 +188,13 @@ const verifyDimension = async (review, dimension) => {
   const withoutVerdictReason = `${withoutVerdictCount} ${withoutVerdictCount === 1 ? 'achado sem veredito' : 'achados sem veredito'} (o verificador não respondeu)`
   if (withoutVerdictCount > 0) log(`${dimension.key}: ${withoutVerdictReason}`)
   const reasons = [unverifiedCount > 0 ? capReason : '', withoutVerdictCount > 0 ? withoutVerdictReason : ''].filter(Boolean)
+  const notCheckedCount = unverifiedCount + withoutVerdictCount
   return {
-    run: { key: dimension.key, status: 'ran', ...(reasons.length > 0 ? { reason: reasons.join('; ') } : {}) },
+    run: {
+      key: dimension.key,
+      status: 'ran',
+      ...(notCheckedCount > 0 ? { unverifiedCount: notCheckedCount, reason: reasons.join('; ') } : {}),
+    },
     confirmed,
     refuted: refutedCount,
   }

@@ -9,7 +9,9 @@ const AsyncFunction = Object.getPrototypeOf(async () => undefined).constructor a
   ...params: string[]
 ) => (...values: unknown[]) => Promise<unknown>;
 
-async function runFleet(agentFake: AgentFake) {
+const VALID_ARGS = { prNumber: 7, branch: "feat/x", base: "dev", headSha: "d".repeat(40) };
+
+async function runFleet(agentFake: AgentFake, fleetArgs: unknown = VALID_ARGS) {
   const calls: { prompt: string; opts: AgentOpts }[] = [];
   const logs: string[] = [];
   const agent = async (prompt: string, opts: AgentOpts) => {
@@ -36,7 +38,7 @@ async function runFleet(agentFake: AgentFake) {
   const script = new AsyncFunction("agent", "parallel", "pipeline", "phase", "log", "args", scriptBody);
   const fleetResult = await script(
     agent, parallel, pipeline, () => undefined, (message: string) => logs.push(message),
-    { prNumber: 7, branch: "feat/x", base: "dev", headSha: "d".repeat(40) },
+    fleetArgs,
   );
   return { fleetResult: fleetResult as Record<string, unknown>, calls, logs };
 }
@@ -104,7 +106,7 @@ describe("frota da análise de PR", () => {
     expect(fleetResult.findings).toEqual([]);
     expect(fleetResult.refutedCount).toBe(0);
     expect(fleetResult.dimensions).toContainEqual(
-      expect.objectContaining({ key: "correctness", status: "ran", reason: expect.stringContaining("1 achado sem veredito") }),
+      expect.objectContaining({ key: "correctness", status: "ran", unverifiedCount: 1, reason: expect.stringContaining("1 achado sem veredito") }),
     );
   });
 
@@ -148,17 +150,55 @@ describe("frota da análise de PR", () => {
     ]);
   });
 
-  it("acima de 30 achados numa dimensão, o excedente não é verificado e o motivo diz quantos", async () => {
+  it("acima de 15 achados numa dimensão, o excedente não é verificado: o motivo diz quantos e a dimensão os conta como não verificados", async () => {
     const { fleetResult, calls } = await runFleet(async (_prompt, opts) => {
       if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);
-      if (opts.phase === "Revisão") return { findings: Array.from({ length: 33 }, (_, index) => scenarioFinding(`a${index}`)) };
+      if (opts.phase === "Revisão") return { findings: Array.from({ length: 18 }, (_, index) => scenarioFinding(`a${index}`)) };
       if (opts.phase === "Verificação") return { confirmed: false, evidence: "e" };
       return { findings: [] };
     });
-    expect(calls.filter((call) => call.opts.phase === "Verificação")).toHaveLength(30);
+    expect(calls.filter((call) => call.opts.phase === "Verificação")).toHaveLength(15);
     expect(fleetResult.dimensions).toContainEqual(
-      expect.objectContaining({ key: "correctness", status: "ran", reason: expect.stringContaining("3 achados") }),
+      expect.objectContaining({ key: "correctness", status: "ran", unverifiedCount: 3, reason: expect.stringContaining("3 achados") }),
     );
+  });
+
+  it("o verificador roda só o teste filtrado pelo caso, nunca o arquivo inteiro nem a suíte", async () => {
+    const { calls } = await runFleet(async (_prompt, opts) => {
+      if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);
+      if (opts.phase === "Revisão") return { findings: [scenarioFinding("x")] };
+      if (opts.phase === "Verificação") return { confirmed: false, evidence: "e" };
+      return { findings: [] };
+    });
+    const verifyPrompt = calls.find((call) => call.opts.phase === "Verificação")!.prompt;
+    expect(verifyPrompt).toContain("-t");
+  });
+
+  it("o schema do juiz exige o fix que a ferramenta do relatório exige", async () => {
+    const { calls } = await runFleet(async (_prompt, opts) => {
+      if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);
+      if (opts.phase === "Revisão") return { findings: [scenarioFinding("x")] };
+      if (opts.phase === "Verificação") return { confirmed: true, evidence: "e" };
+      return { findings: [] };
+    });
+    const judgeSchema = calls.find((call) => call.opts.phase === "Julgamento")!.opts.schema as {
+      properties: { findings: { items: { required: string[] } } };
+    };
+    expect(judgeSchema.properties.findings.items.required).toContain("fix");
+  });
+
+  it.each([
+    ["args em texto (JSON stringificado)", JSON.stringify(VALID_ARGS)],
+    ["sha ainda com o marcador do prompt", { ...VALID_ARGS, headSha: "<sha do passo 1>" }],
+    ["sem a base", { ...VALID_ARGS, base: "" }],
+    ["número da PR que não é inteiro", { ...VALID_ARGS, prNumber: "7" }],
+  ])("args inválido (%s) derruba a frota antes de chamar qualquer agente", async (_case, fleetArgs) => {
+    const agentCalls: string[] = [];
+    await expect(runFleet(async (prompt) => {
+      agentCalls.push(prompt);
+      return null;
+    }, fleetArgs)).rejects.toThrow(/args/);
+    expect(agentCalls).toEqual([]);
   });
 
   it("contexto que não responde derruba a frota com erro", async () => {
