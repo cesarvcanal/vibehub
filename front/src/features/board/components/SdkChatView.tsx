@@ -2,6 +2,7 @@ import * as React from "react";
 import { flushSync } from "react-dom";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
+import { useAnalysisRereadOnReport } from "@/features/board/lib/useCardAnalysis";
 import {
   Maximize2,
   FileDiff,
@@ -640,6 +641,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   React.useEffect(() => {
     queryClient.setQueryData(cardRateLimitsKey(cardId), state.rateLimits);
   }, [queryClient, cardId, state.rateLimits]);
+  useAnalysisRereadOnReport(cardId, state.rows);
   const plan = useCardPlanUsage(cardId, active);
   // The chat redraws on every socket frame; the "renova em" countdown moves along, with no clock of its own.
   const alertNow = Date.now();
