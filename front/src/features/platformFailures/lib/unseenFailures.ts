@@ -8,7 +8,9 @@ export function findUnseenFailureIds(failures: ReadonlyArray<Pick<PlatformFailur
 
 export function readSeenFailureIds(): Set<string> {
   try {
-    return new Set(JSON.parse(sessionStorage.getItem(SEEN_FAILURES_STORAGE_KEY) ?? "[]") as string[]);
+    const storedValue: unknown = JSON.parse(sessionStorage.getItem(SEEN_FAILURES_STORAGE_KEY) ?? "[]");
+    const storedIds = Array.isArray(storedValue) ? storedValue : [];
+    return new Set(storedIds.filter((storedId): storedId is string => typeof storedId === "string"));
   } catch {
     return new Set();
   }
