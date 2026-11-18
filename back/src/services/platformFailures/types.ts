@@ -32,6 +32,6 @@ export interface PlatformFailure {
 
 export interface UserStopMark {
   cardId: string;
-  cardLabel: string;
+  cardWorktreeSlug: string;
   at: number;
 }

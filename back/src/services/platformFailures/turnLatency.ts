@@ -56,10 +56,10 @@ export function noteDriverGone(cardId: string): void {
   openTurns.delete(cardId);
 }
 
-export function noteUserStop(cardId: string, cardLabel: string, at: number): void {
+export function noteUserStop(cardId: string, cardWorktreeSlug: string, at: number): void {
   const openTurn = openTurns.get(cardId);
   if (openTurn) openTurn.disturbed = true;
-  userStops.last = { cardId, cardLabel, at };
+  userStops.last = { cardId, cardWorktreeSlug, at };
 }
 
 export function getLastUserStop(): UserStopMark | undefined {

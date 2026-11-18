@@ -3476,7 +3476,7 @@ describe("latência até a primeira resposta — fiação para as falhas da plat
   it("o stop do usuário no chat fica registrado como o último stop, com o label que os logs usam", () => {
     const session = ensure();
     dispatchClientFrame(session, `{"type":"interrupt"}`);
-    expect(getLastUserStop()).toMatchObject({ cardId: CARD, cardLabel: "t" });
+    expect(getLastUserStop()).toMatchObject({ cardId: CARD, cardWorktreeSlug: "t" });
   });
 
   it("driver que morre antes de responder não deixa a espera aberta para o turno do sucessor", () => {

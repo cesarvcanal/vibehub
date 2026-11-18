@@ -71,7 +71,7 @@ export function buildBackendErrorReport(line: LogLine, lastUserStop: UserStopMar
   const backendFrames = extractBackendFrames(line.fields.err, BACKEND_SOURCE_ROOT);
   const loggedCardLabel = readTextField(line.fields, "card");
   const isWithinStopWindow = lastUserStop !== undefined && now - lastUserStop.at <= USER_STOP_WINDOW_MS;
-  const isFromStoppedCard = isWithinStopWindow && loggedCardLabel === lastUserStop.cardLabel;
+  const isFromStoppedCard = isWithinStopWindow && loggedCardLabel === lastUserStop.cardWorktreeSlug;
   const isMarkedAfterStop = isWithinStopWindow && (loggedCardLabel === undefined || isFromStoppedCard);
   const baseSymptom = [line.message, errorMessage].filter((part) => part !== "").join(": ");
   const symptom = redactSecrets(isMarkedAfterStop ? `logo após um stop do usuário: ${baseSymptom}` : baseSymptom).slice(0, SYMPTOM_MAX_CHARS);

@@ -74,7 +74,7 @@ describe("turno lento repetido", () => {
 
   it("guarda o último stop do usuário com card e instante", () => {
     noteUserStop("card-9", "erp-feat", 123);
-    expect(getLastUserStop()).toEqual({ cardId: "card-9", cardLabel: "erp-feat", at: 123 });
+    expect(getLastUserStop()).toEqual({ cardId: "card-9", cardWorktreeSlug: "erp-feat", at: 123 });
   });
 
   it("mensagem enviada com o turno em andamento não abre uma espera nova: tarefa longa não é lentidão", () => {
