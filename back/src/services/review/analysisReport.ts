@@ -48,6 +48,7 @@ export async function recordAnalysisReport(cardId: string, input: AnalysisReport
   if (!analysedPr) throw new Error("este card não é um card de análise: passe em `card` o $VIBEHUB_CARD_ID do card que analisa a PR");
   if (card.column === "done") throw new Error("este card de análise já foi concluído: pare; um novo pedido da PR abre outro card");
   const savedReport = await getAnalysis(cardId);
+  const headSha = input.headSha.toLowerCase();
   if (input.stage === "fleet_unavailable" && savedReport) {
     const nextStep = savedReport.stage === "done" ? "a análise está concluída, pare" : "siga do passo 4, sem fleet_unavailable";
     throw new Error(`a frota já rodou e o relatório ${savedReport.stage} está gravado: ${nextStep}`);
@@ -57,7 +58,7 @@ export async function recordAnalysisReport(cardId: string, input: AnalysisReport
   }
   if (input.stage === "done") {
     if (!savedReport) throw new Error("grave antes o relatório analysed (passo 3): o done só confirma o que a frota achou");
-    if (input.headSha.toLowerCase() !== savedReport.analysedSha.toLowerCase()) {
+    if (headSha !== savedReport.analysedSha) {
       throw new Error(`o done leva o mesmo headSha do analysed (${savedReport.analysedSha}, o sha do passo 1), não o das correções`);
     }
     const changedFromSaved = findChangedFromSavedReport(savedReport, input);
@@ -72,7 +73,7 @@ export async function recordAnalysisReport(cardId: string, input: AnalysisReport
     cardId,
     prUrl: analysedPr.url,
     prNumber: analysedPr.number,
-    analysedSha: input.headSha,
+    analysedSha: headSha,
     stage: input.stage,
     summary: input.summary,
     dimensions: input.dimensions,
