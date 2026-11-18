@@ -50,7 +50,7 @@ async function boot(): Promise<FastifyInstance> {
 }
 
 function cookieOf(res: { cookies: { name: string; value: string }[] }): string {
-  return `vibehub_session=${res.cookies.find((c) => c.name === "vibehub_session")?.value ?? ""}`;
+  return `vibehub_session=${res.cookies.find((cookie) => cookie.name === "vibehub_session")?.value ?? ""}`;
 }
 
 interface FailureWorld {

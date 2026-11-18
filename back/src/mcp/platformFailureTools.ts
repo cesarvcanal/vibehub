@@ -31,8 +31,8 @@ export function registerPlatformFailureTools(server: McpServer): void {
     async (input) => {
       try {
         return ok(await reportPlatformFailureFromAgent(input));
-      } catch (e) {
-        return fail(e);
+      } catch (error) {
+        return fail(error);
       }
     },
   );
