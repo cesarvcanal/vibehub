@@ -116,7 +116,7 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
 
   app.get<{ Params: { id: string } }>("/api/cards/:id/analysis", { preHandler: requireCardAccess }, async (req, reply) => {
     const analysis = await getAnalysis(req.params.id);
-    if (!analysis) return await reply.code(404).send({ error: "sem análise" });
+    if (!analysis) return await reply.send({ analysis: null });
     const health = Object.fromEntries(ANALYSIS_DIMENSIONS.map((dimension) => [dimension, dimensionHealth(analysis, dimension)]));
     return await reply.send({ analysis, health, verdict: analysisVerdict(analysis) });
   });

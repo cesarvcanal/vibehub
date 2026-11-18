@@ -1148,10 +1148,10 @@ describe("relatório da análise pela rota", () => {
     expect(got.json().analysis).toBeUndefined();
   });
 
-  it("card sem análise responde 404", async () => {
+  it("card sem análise responde analysis: null, como a revisão responde review: null", async () => {
     const w = await world();
     const got = await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/analysis`, headers: { cookie: w.owner.cookie } });
-    expect(got.statusCode).toBe(404);
-    expect(got.json().error).toBe("sem análise");
+    expect(got.statusCode).toBe(200);
+    expect(got.json()).toEqual({ analysis: null });
   });
 });
