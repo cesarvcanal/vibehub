@@ -62,7 +62,7 @@ export function noteUserStop(cardId: string, cardLabel: string, at: number): voi
   userStops.last = { cardId, cardLabel, at };
 }
 
-export function lastUserStop(): UserStopMark | undefined {
+export function getLastUserStop(): UserStopMark | undefined {
   return userStops.last;
 }
 

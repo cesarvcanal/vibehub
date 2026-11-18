@@ -38,7 +38,7 @@ import { BTW_COMMAND } from "./protocol.js";
 import { createMirrorState, driverKeysFor, forgetDriverKeys, mirrorNewEvents } from "./mirror.js";
 import { notifyCardSessionKill } from "../board/workspace.js";
 import { mergeTranscriptReplay } from "./transcript.js";
-import { lastUserStop, onSlowTurns, resetTurnLatencyForTesting, SLOW_FIRST_OUTPUT_MS } from "../platformFailures/turnLatency.js";
+import { getLastUserStop, onSlowTurns, resetTurnLatencyForTesting, SLOW_FIRST_OUTPUT_MS } from "../platformFailures/turnLatency.js";
 
 /**
  * THE BUG THIS FILE PINS (the reload-mid-turn bug): the SDK driver was a CHILD OF THE
@@ -3476,7 +3476,7 @@ describe("latência até a primeira resposta — fiação para as falhas da plat
   it("o stop do usuário no chat fica registrado como o último stop, com o label que os logs usam", () => {
     const session = ensure();
     dispatchClientFrame(session, `{"type":"interrupt"}`);
-    expect(lastUserStop()).toMatchObject({ cardId: CARD, cardLabel: "t" });
+    expect(getLastUserStop()).toMatchObject({ cardId: CARD, cardLabel: "t" });
   });
 
   it("driver que morre antes de responder não deixa a espera aberta para o turno do sucessor", () => {

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
   SLOW_FIRST_OUTPUT_MS, SLOW_TURNS_TO_REPORT, SLOW_TURNS_WINDOW_MS,
-  lastUserStop, noteDriverGone, noteTurnEvent, noteTurnSent, noteUserStop, onSlowTurns, resetTurnLatencyForTesting, type SlowTurn,
+  getLastUserStop, noteDriverGone, noteTurnEvent, noteTurnSent, noteUserStop, onSlowTurns, resetTurnLatencyForTesting, type SlowTurn,
 } from "./turnLatency.js";
 
 const SLOW = SLOW_FIRST_OUTPUT_MS + 1;
@@ -74,7 +74,7 @@ describe("turno lento repetido", () => {
 
   it("guarda o último stop do usuário com card e instante", () => {
     noteUserStop("card-9", "erp-feat", 123);
-    expect(lastUserStop()).toEqual({ cardId: "card-9", cardLabel: "erp-feat", at: 123 });
+    expect(getLastUserStop()).toEqual({ cardId: "card-9", cardLabel: "erp-feat", at: 123 });
   });
 
   it("mensagem enviada com o turno em andamento não abre uma espera nova: tarefa longa não é lentidão", () => {

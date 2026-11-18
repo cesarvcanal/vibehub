@@ -25,11 +25,11 @@ function toStackPath(text: string): string {
     .replace(/(^|[\s(])\/([A-Za-z]:\/)/g, "$1$2");
 }
 
-export function backendSourceRootOf(moduleUrl: string): string {
+export function readBackendSourceRoot(moduleUrl: string): string {
   return toStackPath(new URL("../../", moduleUrl).pathname);
 }
 
-const BACKEND_SOURCE_ROOT = backendSourceRootOf(import.meta.url);
+const BACKEND_SOURCE_ROOT = readBackendSourceRoot(import.meta.url);
 
 function readErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -47,7 +47,7 @@ function toBackendFrame(stackLine: string, backendRoot: string): string | undefi
   return frame.slice(0, rootAt) + frame.slice(rootAt + backendRoot.length);
 }
 
-export function backendFramesOf(err: unknown, backendRoot: string): string[] {
+export function extractBackendFrames(err: unknown, backendRoot: string): string[] {
   if (!(err instanceof Error) || !err.stack) return [];
   return err.stack
     .split("\n")
@@ -56,7 +56,7 @@ export function backendFramesOf(err: unknown, backendRoot: string): string[] {
     .slice(0, STACK_FRAMES_KEPT);
 }
 
-function componentOfFrame(frame: string | undefined): string | undefined {
+function readComponentOfFrame(frame: string | undefined): string | undefined {
   return frame?.match(SOURCE_FILE_PATTERN)?.[1];
 }
 
@@ -65,10 +65,10 @@ function readTextField(fields: Record<string, unknown>, name: string): string | 
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
-export function reportFromBackendError(line: LogLine, lastUserStop: UserStopMark | undefined, now: number): PlatformFailureReport {
+export function buildBackendErrorReport(line: LogLine, lastUserStop: UserStopMark | undefined, now: number): PlatformFailureReport {
   const loggedErrorMessage = readErrorMessage(line.fields.err) || readTextField(line.fields, "detail") || "";
   const errorMessage = loggedErrorMessage === line.message ? "" : loggedErrorMessage;
-  const backendFrames = backendFramesOf(line.fields.err, BACKEND_SOURCE_ROOT);
+  const backendFrames = extractBackendFrames(line.fields.err, BACKEND_SOURCE_ROOT);
   const loggedCardLabel = readTextField(line.fields, "card");
   const isWithinStopWindow = lastUserStop !== undefined && now - lastUserStop.at <= USER_STOP_WINDOW_MS;
   const isFromStoppedCard = isWithinStopWindow && loggedCardLabel === lastUserStop.cardLabel;
@@ -86,7 +86,7 @@ export function reportFromBackendError(line: LogLine, lastUserStop: UserStopMark
   ];
   return {
     source: "backend_error",
-    component: componentOfFrame(backendFrames[0]) ?? "backend",
+    component: readComponentOfFrame(backendFrames[0]) ?? "backend",
     symptom,
     evidence: redactSecrets(evidenceLines.join("\n")),
     ...(isFromStoppedCard ? { cardId: lastUserStop.cardId } : {}),

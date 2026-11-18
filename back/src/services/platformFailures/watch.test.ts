@@ -31,7 +31,7 @@ describe("vigia das falhas da plataforma", () => {
     const stopWatch = watch.startPlatformFailureWatch();
     logger.warn({ action: "x" }, "melhor esforço que falhou");
     logger.error({ err: new Error("driver gone") }, "request failed");
-    await watch.platformFailureWatchSettled();
+    await watch.waitForPlatformFailureWatch();
     stopWatch();
     expect((await failures.listPlatformFailuresForOwner()).map((failure) => failure.symptom)).toEqual(["request failed: driver gone"]);
   });
@@ -45,7 +45,7 @@ describe("vigia das falhas da plataforma", () => {
       turnLatency.noteTurnEvent("card-3", { type: "assistant_delta" }, startAt + turnLatency.SLOW_FIRST_OUTPUT_MS + 1);
       turnLatency.noteTurnEvent("card-3", { type: "result" }, startAt + turnLatency.SLOW_FIRST_OUTPUT_MS + 2);
     }
-    await watch.platformFailureWatchSettled();
+    await watch.waitForPlatformFailureWatch();
     stopWatch();
     expect(await failures.listPlatformFailuresForOwner()).toEqual([expect.objectContaining({ source: "slow_turn", affectedCardIds: ["card-3"] })]);
   });
@@ -55,9 +55,9 @@ describe("vigia das falhas da plataforma", () => {
     const { logger, watch } = await fresh({ recordPlatformFailure: recordSpy });
     const stopWatch = watch.startPlatformFailureWatch();
     logger.error("primeiro erro");
-    await watch.platformFailureWatchSettled();
+    await watch.waitForPlatformFailureWatch();
     logger.error("segundo erro, dentro da pausa");
-    await watch.platformFailureWatchSettled();
+    await watch.waitForPlatformFailureWatch();
     stopWatch();
     expect(recordSpy).toHaveBeenCalledTimes(1);
   });

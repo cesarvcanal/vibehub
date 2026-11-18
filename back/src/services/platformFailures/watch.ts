@@ -1,9 +1,9 @@
 import { logger, onLogLine } from "../../utils/logger.js";
 import { onCardEvent } from "../events/cardEvents.js";
-import { reportFromBackendError } from "./backendError.js";
+import { buildBackendErrorReport } from "./backendError.js";
 import { settleInvestigationOfCard } from "./investigation.js";
 import { recordPlatformFailure } from "./platformFailures.js";
-import { SLOW_FIRST_OUTPUT_MS, SLOW_TURNS_WINDOW_MS, lastUserStop, onSlowTurns, type SlowTurn } from "./turnLatency.js";
+import { SLOW_FIRST_OUTPUT_MS, SLOW_TURNS_WINDOW_MS, getLastUserStop, onSlowTurns, type SlowTurn } from "./turnLatency.js";
 import type { PlatformFailureReport } from "./types.js";
 
 const CAPTURE_PAUSE_MS = 60_000;
@@ -11,7 +11,7 @@ const CAPTURE_PAUSE_MS = 60_000;
 const backendCapture = { pausedUntil: 0 };
 const pendingRecords = new Set<Promise<unknown>>();
 
-function reportFromSlowTurns(cardId: string, slowTurns: SlowTurn[]): PlatformFailureReport {
+function buildSlowTurnsReport(cardId: string, slowTurns: SlowTurn[]): PlatformFailureReport {
   return {
     source: "slow_turn",
     component: "sdk/turn",
@@ -41,10 +41,10 @@ export function startPlatformFailureWatch(): () => void {
   const stopLogCapture = onLogLine("error", (line) => {
     const now = Date.now();
     if (now < backendCapture.pausedUntil) return;
-    const report = reportFromBackendError(line, lastUserStop(), now);
+    const report = buildBackendErrorReport(line, getLastUserStop(), now);
     queueMicrotask(() => trackRecord(recordFromWatch(report)));
   });
-  const stopSlowTurns = onSlowTurns((cardId, slowTurns) => trackRecord(recordFromWatch(reportFromSlowTurns(cardId, slowTurns))));
+  const stopSlowTurns = onSlowTurns((cardId, slowTurns) => trackRecord(recordFromWatch(buildSlowTurnsReport(cardId, slowTurns))));
   const stopConclusions = onCardEvent((event) => {
     if (event.kind !== "concluded") return;
     trackRecord(settleInvestigationOfCard(event.cardId).catch((err: unknown) => {
@@ -58,7 +58,7 @@ export function startPlatformFailureWatch(): () => void {
   };
 }
 
-export async function platformFailureWatchSettled(): Promise<void> {
+export async function waitForPlatformFailureWatch(): Promise<void> {
   await new Promise<void>((resolve) => queueMicrotask(resolve));
   await Promise.all([...pendingRecords]);
 }
