@@ -28,6 +28,7 @@ import {
 } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { observeDriverEvent } from "../events/cardEvents.js";
+import { noteTurnEvent, noteTurnSent, noteUserStop } from "../platformFailures/turnLatency.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -692,6 +693,7 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
   // answer — shown, it reads as Claude dismissing the person's message (the production symptom).
   if (event.type === "assistant_text" && typeof (event as { text?: unknown }).text === "string"
     && isHarnessFiller("assistant", (event as { text: string }).text)) return;
+  noteTurnEvent(session.cardId, event, Date.now());
   if (event.type === "assistant_text" || event.type === "tool_use" || event.type === "thinking") {
     noteAgentWork(session, event);
   }
@@ -1366,6 +1368,7 @@ function noteChatActivity(session: DriverSession): void {
  * themselves, so a turn the panel injects can never keep a card awake by passing the wrong flag.
  */
 function countSentTurn(session: DriverSession, sentText: string): void {
+  noteTurnSent(session.cardId, Date.now());
   session.activeTurns += 1;
   syncBoardStatus(session);
   clearIdleTimer(session);
@@ -1586,6 +1589,7 @@ function answerLate(session: DriverSession, card: QuestionCard, control: Questio
  * was no way to know whether it had been the deadline, a click or another person on the same card.
  */
 function noteStop(session: DriverSession, origin: MessageOrigin | undefined, how: StopHow): void {
+  noteUserStop(session.cardId, Date.now());
   session.stopCause = { ...(origin?.name ? { by: origin.name } : {}), how };
   logger.info(
     { audit: true, action: "sdk.stop", card: session.label, by: origin?.name ?? null, how, openAsks: session.openAsks.size },

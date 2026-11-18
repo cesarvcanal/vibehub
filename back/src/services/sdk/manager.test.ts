@@ -38,6 +38,7 @@ import { BTW_COMMAND } from "./protocol.js";
 import { createMirrorState, driverKeysFor, forgetDriverKeys, mirrorNewEvents } from "./mirror.js";
 import { notifyCardSessionKill } from "../board/workspace.js";
 import { mergeTranscriptReplay } from "./transcript.js";
+import { lastUserStop, onSlowTurns, resetTurnLatencyForTesting, SLOW_FIRST_OUTPUT_MS } from "../platformFailures/turnLatency.js";
 
 /**
  * THE BUG THIS FILE PINS (the reload-mid-turn bug): the SDK driver was a CHILD OF THE
@@ -3451,5 +3452,30 @@ describe("compaction — a barra do /compact", () => {
     const late = fakeSocket();
     attachSocket(session, late as never);
     expect(parsed(late)).toEqual([]);
+  });
+});
+
+describe("latência até a primeira resposta — fiação para as falhas da plataforma", () => {
+  beforeEach(() => resetTurnLatencyForTesting());
+
+  it("três turnos lentos seguidos do mesmo card chegam ao rastreador", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    const reportedCards: string[] = [];
+    onSlowTurns((cardId) => reportedCards.push(cardId));
+    const session = ensure();
+    for (const turnIndex of [0, 1, 2]) {
+      injectSystemTurn(session, `turno ${turnIndex}`, { kind: "system", name: "vibehub" }, 1);
+      vi.setSystemTime(Date.now() + SLOW_FIRST_OUTPUT_MS + 1);
+      spawned[0]!.stdout.emit("data", line({ type: "assistant_delta", text: "oi" }));
+      spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    }
+    expect(reportedCards).toEqual([CARD]);
+  });
+
+  it("o stop do usuário no chat fica registrado como o último stop", () => {
+    const session = ensure();
+    dispatchClientFrame(session, `{"type":"interrupt"}`);
+    expect(lastUserStop()).toMatchObject({ cardId: CARD });
   });
 });
