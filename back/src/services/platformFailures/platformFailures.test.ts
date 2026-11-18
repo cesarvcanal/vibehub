@@ -80,6 +80,9 @@ describe("registro de falhas da plataforma", () => {
     expect(back).toMatchObject({ status: "open", occurrences: 1, evidence: "episódio novo", affectedCardIds: ["card-9"], firstSeenAt: 2_001 + failures.SLOW_TURN_DISMISSAL_MS });
     expect(back!.id).not.toBe(recorded!.id);
     expect((await failures.listPlatformFailuresForOwner()).map((failure) => failure.id)).toEqual([back!.id]);
+    const repeated = await failures.recordPlatformFailure(slowTurn, 3_000 + failures.SLOW_TURN_DISMISSAL_MS);
+    expect(repeated).toMatchObject({ id: back!.id, occurrences: 2 });
+    await expect(failures.getPlatformFailure(recorded!.id)).rejects.toBeInstanceOf(failures.PlatformFailureNotFoundError);
   });
 
   it("'não é bug' num erro do backend continua valendo depois dos 7 dias", async () => {
