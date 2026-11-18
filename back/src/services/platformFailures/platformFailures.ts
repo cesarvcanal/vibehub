@@ -41,20 +41,12 @@ export async function recordPlatformFailure(report: PlatformFailureReport, now: 
   const signature = buildFailureSignature(report);
   const outcome = await store.mutate((doc) => {
     doc.failures = doc.failures.filter((failure) => !(failure.status === "resolved" && now - failure.lastSeenAt > RESOLVED_FAILURE_RETENTION_MS));
-    const knownFailure = doc.failures.find((failure) => failure.signature === signature && failure.status !== "resolved");
-    const isDismissalExpired = knownFailure?.status === "dismissed" && knownFailure.source === "slow_turn"
-      && now - (knownFailure.dismissedAt ?? 0) > SLOW_TURN_DISMISSAL_MS;
-    if (knownFailure?.status === "dismissed" && !isDismissalExpired) return { failure: null, capReached: false };
-    if (knownFailure && isDismissalExpired) {
-      knownFailure.status = "open";
-      knownFailure.occurrences = 1;
-      knownFailure.firstSeenAt = now;
-      knownFailure.lastSeenAt = now;
-      knownFailure.affectedCardIds = [];
-      delete knownFailure.dismissedAt;
-      noteAffectedCard(knownFailure, report.cardId);
-      return { failure: { ...knownFailure }, capReached: false };
-    }
+    const sameSignatureFailure = doc.failures.find((failure) => failure.signature === signature && failure.status !== "resolved");
+    const isDismissalExpired = sameSignatureFailure?.status === "dismissed" && sameSignatureFailure.source === "slow_turn"
+      && now - (sameSignatureFailure.dismissedAt ?? 0) > SLOW_TURN_DISMISSAL_MS;
+    if (isDismissalExpired) doc.failures = doc.failures.filter((failure) => failure !== sameSignatureFailure);
+    const knownFailure = isDismissalExpired ? undefined : sameSignatureFailure;
+    if (knownFailure?.status === "dismissed") return { failure: null, capReached: false };
     const repeatedFailure = knownFailure ?? doc.failures.find((failure) =>
       failure.signature === signature && failure.status === "resolved" && now - (failure.resolvedAt ?? 0) <= RESOLVED_GRACE_MS);
     if (repeatedFailure) {

@@ -94,12 +94,12 @@ describe("turno lento repetido", () => {
   it("driver que morre antes de responder encerra a espera: o turno seguinte mede do próprio envio", () => {
     const reports = listenSlowTurns();
     for (const turnIndex of [0, 1, 2]) {
-      const startAt = turnIndex * 3_600_000;
+      const startAt = turnIndex * 200_000;
       noteTurnSent("card-1", startAt);
       noteDriverGone("card-1");
-      noteTurnSent("card-1", startAt + 3_000_000);
-      noteTurnEvent("card-1", { type: "assistant_text" }, startAt + 3_005_000);
-      noteTurnEvent("card-1", { type: "result" }, startAt + 3_005_001);
+      noteTurnSent("card-1", startAt + 100_000);
+      noteTurnEvent("card-1", { type: "assistant_text" }, startAt + 101_000);
+      noteTurnEvent("card-1", { type: "result" }, startAt + 101_001);
     }
     expect(reports).toHaveLength(0);
   });

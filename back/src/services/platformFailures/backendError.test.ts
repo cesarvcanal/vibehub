@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { backendSourceRootOf, reportFromBackendError, USER_STOP_WINDOW_MS } from "./backendError.js";
+import { backendFramesOf, backendSourceRootOf, reportFromBackendError, USER_STOP_WINDOW_MS } from "./backendError.js";
 
 const NOW = 1_700_000_000_000;
 const STOPPED_CARD = { cardId: "card-7", cardLabel: "erp-feat" };
@@ -35,6 +35,20 @@ describe("relato de erro do backend", () => {
 
   it("a raiz do backend sai do próprio módulo, e no build de produção é /app/dist", () => {
     expect(backendSourceRootOf("file:///app/dist/services/platformFailures/backendError.js")).toBe("/app/dist/");
+  });
+
+  it("instalação em pasta com espaço ou acento ainda reconhece os frames, em URL ou em caminho", () => {
+    const backendRoot = backendSourceRootOf("file:///C:/Users/Jo%C3%A3o/meus%20apps/back/src/services/platformFailures/backendError.ts");
+    const failure = new Error("x");
+    failure.stack = [
+      "Error: x",
+      "    at writeToDriver (file:///C:/Users/Jo%C3%A3o/meus%20apps/back/src/services/sdk/manager.ts:1:1)",
+      "    at runTurn (C:\\Users\\João\\meus apps\\back\\src\\services\\sdk\\driver.ts:2:2)",
+    ].join("\n");
+    expect(backendFramesOf(failure, backendRoot)).toEqual([
+      "at writeToDriver (services/sdk/manager.ts:1:1)",
+      "at runTurn (services/sdk/driver.ts:2:2)",
+    ]);
   });
 
   it.each([

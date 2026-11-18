@@ -1262,8 +1262,10 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     // switch or the reconnect has already brought up the next driver — and clearing now would be clearing ITS state.
     const succeeded = sessions.has(opts.cardId);
     // The dedupe memory belongs to the DRIVER: it ended, so the memory ends with it — the successor speaks from scratch.
-    if (!succeeded) forgetDriverKeys(opts.cardId);
-    if (!succeeded) noteDriverGone(opts.cardId);
+    if (!succeeded) {
+      forgetDriverKeys(opts.cardId);
+      noteDriverGone(opts.cardId);
+    }
     // A driver that dies with a turn open sends no `Stop`: without this the dot stayed green on a
     // stopped chat. Only without a successor — the next one already speaks for the card.
     // Except on a DROP someone is going to resume (see below): there `waiting` would be read as "turno

@@ -72,12 +72,14 @@ describe("registro de falhas da plataforma", () => {
 
   it("'não é bug' numa lentidão silencia por 7 dias, e depois a detecção volta", async () => {
     const failures = await fresh();
-    const slowTurn: PlatformFailureReport = { source: "slow_turn", component: "sdk/turn", symptom: "primeira resposta acima de 90s", evidence: "x" };
+    const slowTurn: PlatformFailureReport = { source: "slow_turn", component: "sdk/turn", symptom: "primeira resposta acima de 90s", evidence: "episódio antigo" };
     const recorded = await failures.recordPlatformFailure(slowTurn, 1_000);
     await failures.dismissPlatformFailure(recorded!.id, 2_000);
     expect(await failures.recordPlatformFailure(slowTurn, 2_000 + failures.SLOW_TURN_DISMISSAL_MS)).toBeNull();
-    const back = await failures.recordPlatformFailure(slowTurn, 2_001 + failures.SLOW_TURN_DISMISSAL_MS);
-    expect(back).toMatchObject({ id: recorded!.id, status: "open", occurrences: 1, firstSeenAt: 2_001 + failures.SLOW_TURN_DISMISSAL_MS });
+    const back = await failures.recordPlatformFailure({ ...slowTurn, evidence: "episódio novo", cardId: "card-9" }, 2_001 + failures.SLOW_TURN_DISMISSAL_MS);
+    expect(back).toMatchObject({ status: "open", occurrences: 1, evidence: "episódio novo", affectedCardIds: ["card-9"], firstSeenAt: 2_001 + failures.SLOW_TURN_DISMISSAL_MS });
+    expect(back!.id).not.toBe(recorded!.id);
+    expect((await failures.listPlatformFailuresForOwner()).map((failure) => failure.id)).toEqual([back!.id]);
   });
 
   it("'não é bug' num erro do backend continua valendo depois dos 7 dias", async () => {

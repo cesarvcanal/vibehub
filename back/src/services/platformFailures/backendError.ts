@@ -7,8 +7,18 @@ const SOURCE_FILE_PATTERN = /([\w/.-]+?)\.[jt]s:\d+/;
 const STACK_FRAMES_KEPT = 5;
 const SYMPTOM_MAX_CHARS = 200;
 
+function decodePercentEscapes(text: string): string {
+  return text.replace(/(?:%[0-9A-Fa-f]{2})+/g, (escapedRun) => {
+    try {
+      return decodeURIComponent(escapedRun);
+    } catch {
+      return escapedRun;
+    }
+  });
+}
+
 function toStackPath(text: string): string {
-  return text
+  return decodePercentEscapes(text)
     .replace(/\\/g, "/")
     .replace(/file:\/\/\/(?=[A-Za-z]:\/)/g, "")
     .replace(/file:\/\//g, "")
@@ -16,7 +26,7 @@ function toStackPath(text: string): string {
 }
 
 export function backendSourceRootOf(moduleUrl: string): string {
-  return toStackPath(decodeURIComponent(new URL("../../", moduleUrl).pathname));
+  return toStackPath(new URL("../../", moduleUrl).pathname);
 }
 
 const BACKEND_SOURCE_ROOT = backendSourceRootOf(import.meta.url);
@@ -30,18 +40,18 @@ function readErrorMessage(err: unknown): string {
   return "";
 }
 
-function toBackendFrame(stackLine: string): string | undefined {
+function toBackendFrame(stackLine: string, backendRoot: string): string | undefined {
   const frame = toStackPath(stackLine.trim());
-  const rootAt = frame.indexOf(BACKEND_SOURCE_ROOT);
+  const rootAt = frame.indexOf(backendRoot);
   if (rootAt < 0) return undefined;
-  return frame.slice(0, rootAt) + frame.slice(rootAt + BACKEND_SOURCE_ROOT.length);
+  return frame.slice(0, rootAt) + frame.slice(rootAt + backendRoot.length);
 }
 
-function readBackendFrames(err: unknown): string[] {
+export function backendFramesOf(err: unknown, backendRoot: string): string[] {
   if (!(err instanceof Error) || !err.stack) return [];
   return err.stack
     .split("\n")
-    .map(toBackendFrame)
+    .map((stackLine) => toBackendFrame(stackLine, backendRoot))
     .filter((frame): frame is string => frame !== undefined)
     .slice(0, STACK_FRAMES_KEPT);
 }
@@ -57,7 +67,7 @@ function readTextField(fields: Record<string, unknown>, name: string): string | 
 
 export function reportFromBackendError(line: LogLine, lastUserStop: UserStopMark | undefined, now: number): PlatformFailureReport {
   const errorMessage = readErrorMessage(line.fields.err) || readTextField(line.fields, "detail") || "";
-  const backendFrames = readBackendFrames(line.fields.err);
+  const backendFrames = backendFramesOf(line.fields.err, BACKEND_SOURCE_ROOT);
   const loggedCardLabel = readTextField(line.fields, "card");
   const isWithinStopWindow = lastUserStop !== undefined && now - lastUserStop.at <= USER_STOP_WINDOW_MS;
   const isFromStoppedCard = isWithinStopWindow && loggedCardLabel === lastUserStop.cardLabel;
