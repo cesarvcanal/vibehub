@@ -72,8 +72,8 @@ async function bootFailureWorld(): Promise<FailureWorld> {
 }
 
 async function recordFailure(symptom = "driver gone") {
-  const failures = await import("../services/platformFailures/platformFailures.js");
-  return (await failures.recordPlatformFailure({ source: "backend_error", component: "services/sdk/manager", symptom, evidence: `mensagem: ${symptom}` }))!;
+  const platformFailuresService = await import("../services/platformFailures/platformFailures.js");
+  return (await platformFailuresService.recordPlatformFailure({ source: "backend_error", component: "services/sdk/manager", symptom, evidence: `mensagem: ${symptom}` }))!;
 }
 
 beforeEach(() => { sendToTerminal.mockClear(); });
@@ -90,9 +90,9 @@ describe("rotas de falha da plataforma", () => {
   it("investigar cria um card no projeto do vibehub e manda o brief com o relato", async () => {
     const { app, ...world } = await bootFailureWorld();
     const failure = await recordFailure();
-    const response = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
-    expect(response.statusCode).toBe(200);
-    const { card, failure: investigatingFailure } = response.json();
+    const investigationResponse = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
+    expect(investigationResponse.statusCode).toBe(200);
+    const { card, failure: investigatingFailure } = investigationResponse.json();
     expect(card.projectId).toBe(world.vibehubProjectId);
     expect(investigatingFailure).toMatchObject({ status: "investigating", investigationCardId: card.id });
     expect(sendToTerminal).toHaveBeenCalledTimes(1);
@@ -102,9 +102,9 @@ describe("rotas de falha da plataforma", () => {
   it("dois cliques em investigar ao mesmo tempo criam um card só", async () => {
     const { app, ...world } = await bootFailureWorld();
     const failure = await recordFailure();
-    const [first, second] = await Promise.all([1, 2].map(() =>
+    const [firstClickResponse, secondClickResponse] = await Promise.all([1, 2].map(() =>
       app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } })));
-    expect(first!.json().card.id).toBe(second!.json().card.id);
+    expect(firstClickResponse!.json().card.id).toBe(secondClickResponse!.json().card.id);
     const cards = (await app.inject({ method: "GET", url: `/api/projects/${world.vibehubProjectId}/cards`, headers: { cookie: world.owner } })).json().cards;
     expect(cards).toHaveLength(1);
     expect(sendToTerminal).toHaveBeenCalledTimes(1);
@@ -114,41 +114,41 @@ describe("rotas de falha da plataforma", () => {
     const { app, ...world } = await bootFailureWorld();
     const failure = await recordFailure();
     sendToTerminal.mockRejectedValueOnce(new Error("runner down"));
-    const failed = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
-    expect(failed.statusCode).toBe(500);
-    const listed = (await app.inject({ method: "GET", url: "/api/platform-failures", headers: { cookie: world.owner } })).json().failures;
-    expect(listed[0]).toMatchObject({ id: failure.id, status: "open" });
-    const retried = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
-    expect(retried.statusCode).toBe(200);
+    const failedInvestigationResponse = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
+    expect(failedInvestigationResponse.statusCode).toBe(500);
+    const listedFailures = (await app.inject({ method: "GET", url: "/api/platform-failures", headers: { cookie: world.owner } })).json().failures;
+    expect(listedFailures[0]).toMatchObject({ id: failure.id, status: "open" });
+    const retriedInvestigationResponse = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
+    expect(retriedInvestigationResponse.statusCode).toBe(200);
     expect(sendToTerminal).toHaveBeenCalledTimes(2);
     const cards = (await app.inject({ method: "GET", url: `/api/projects/${world.vibehubProjectId}/cards`, headers: { cookie: world.owner } })).json().cards;
-    expect(cards.map((card: { id: string }) => card.id)).toEqual([retried.json().card.id]);
+    expect(cards.map((card: { id: string }) => card.id)).toEqual([retriedInvestigationResponse.json().card.id]);
   });
 
   it("investigar de novo depois de concluída sem correção nasce num card novo, não no card concluído", async () => {
     const { app, ...world } = await bootFailureWorld();
     const failure = await recordFailure();
-    const first = (await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } })).json();
-    await app.inject({ method: "PATCH", url: `/api/cards/${first.card.id}`, headers: { cookie: world.owner }, payload: { column: "done" } });
-    const failures = await import("../services/platformFailures/platformFailures.js");
-    await failures.settlePlatformFailureInvestigation(first.card.id, { merged: false });
-    const again = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
-    expect(again.statusCode).toBe(200);
-    expect(again.json().card.id).not.toBe(first.card.id);
-    expect(sendToTerminal).toHaveBeenLastCalledWith(again.json().card.id, expect.any(String), expect.any(Object));
+    const firstInvestigation = (await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } })).json();
+    await app.inject({ method: "PATCH", url: `/api/cards/${firstInvestigation.card.id}`, headers: { cookie: world.owner }, payload: { column: "done" } });
+    const platformFailuresService = await import("../services/platformFailures/platformFailures.js");
+    await platformFailuresService.settlePlatformFailureInvestigation(firstInvestigation.card.id, { merged: false });
+    const secondInvestigationResponse = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
+    expect(secondInvestigationResponse.statusCode).toBe(200);
+    expect(secondInvestigationResponse.json().card.id).not.toBe(firstInvestigation.card.id);
+    expect(sendToTerminal).toHaveBeenLastCalledWith(secondInvestigationResponse.json().card.id, expect.any(String), expect.any(Object));
   });
 
   it("investigar de novo uma falha presa cujo card já foi mergeado fecha a falha pelo PR, sem abrir card novo", async () => {
     const { app, ...world } = await bootFailureWorld();
     const failure = await recordFailure();
-    const first = (await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } })).json();
+    const firstInvestigation = (await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } })).json();
     const registry = await import("../services/board/registry.js");
-    await registry.recordCardPr(first.card.id, { number: 7, url: "https://github.com/acme/vibehub/pull/7", base: "main", branch: "fix-falha" });
-    await registry.markCardPrMerged(first.card.id, "main", 7, Date.now());
-    await app.inject({ method: "PATCH", url: `/api/cards/${first.card.id}`, headers: { cookie: world.owner }, payload: { column: "done" } });
-    const again = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
-    expect(again.statusCode).toBe(200);
-    expect(again.json()).toMatchObject({ failure: { id: failure.id, status: "resolved" }, card: { id: first.card.id } });
+    await registry.recordCardPr(firstInvestigation.card.id, { number: 7, url: "https://github.com/acme/vibehub/pull/7", base: "main", branch: "fix-falha" });
+    await registry.markCardPrMerged(firstInvestigation.card.id, "main", 7, Date.now());
+    await app.inject({ method: "PATCH", url: `/api/cards/${firstInvestigation.card.id}`, headers: { cookie: world.owner }, payload: { column: "done" } });
+    const secondInvestigationResponse = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
+    expect(secondInvestigationResponse.statusCode).toBe(200);
+    expect(secondInvestigationResponse.json()).toMatchObject({ failure: { id: failure.id, status: "resolved" }, card: { id: firstInvestigation.card.id } });
     expect(sendToTerminal).toHaveBeenCalledTimes(1);
     expect((await app.inject({ method: "GET", url: "/api/platform-failures", headers: { cookie: world.owner } })).json().failures).toEqual([]);
   });
@@ -158,9 +158,9 @@ describe("rotas de falha da plataforma", () => {
     const failure = await recordFailure();
     const firstInvestigation = (await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } })).json();
     await app.inject({ method: "PATCH", url: `/api/cards/${firstInvestigation.card.id}`, headers: { cookie: world.owner }, payload: { column: "done" } });
-    const secondInvestigation = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
-    expect(secondInvestigation.statusCode).toBe(200);
-    const secondInvestigationCardId = secondInvestigation.json().card.id;
+    const secondInvestigationResponse = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
+    expect(secondInvestigationResponse.statusCode).toBe(200);
+    const secondInvestigationCardId = secondInvestigationResponse.json().card.id;
     expect(secondInvestigationCardId).not.toBe(firstInvestigation.card.id);
     expect(sendToTerminal).toHaveBeenCalledTimes(2);
     const listedFailures = (await app.inject({ method: "GET", url: "/api/platform-failures", headers: { cookie: world.owner } })).json().failures;
@@ -170,15 +170,15 @@ describe("rotas de falha da plataforma", () => {
   it("brief que falha ao investigar de novo uma concluída sem correção devolve a falha a esse estado", async () => {
     const { app, ...world } = await bootFailureWorld();
     const failure = await recordFailure();
-    const first = (await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } })).json();
-    await app.inject({ method: "PATCH", url: `/api/cards/${first.card.id}`, headers: { cookie: world.owner }, payload: { column: "done" } });
-    const failures = await import("../services/platformFailures/platformFailures.js");
-    await failures.settlePlatformFailureInvestigation(first.card.id, { merged: false });
+    const firstInvestigation = (await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } })).json();
+    await app.inject({ method: "PATCH", url: `/api/cards/${firstInvestigation.card.id}`, headers: { cookie: world.owner }, payload: { column: "done" } });
+    const platformFailuresService = await import("../services/platformFailures/platformFailures.js");
+    await platformFailuresService.settlePlatformFailureInvestigation(firstInvestigation.card.id, { merged: false });
     sendToTerminal.mockRejectedValueOnce(new Error("runner down"));
-    const failed = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
-    expect(failed.statusCode).toBe(500);
-    const listed = (await app.inject({ method: "GET", url: "/api/platform-failures", headers: { cookie: world.owner } })).json().failures;
-    expect(listed[0]).toMatchObject({ id: failure.id, status: "concluded_without_fix" });
+    const failedInvestigationResponse = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
+    expect(failedInvestigationResponse.statusCode).toBe(500);
+    const listedFailures = (await app.inject({ method: "GET", url: "/api/platform-failures", headers: { cookie: world.owner } })).json().failures;
+    expect(listedFailures[0]).toMatchObject({ id: failure.id, status: "concluded_without_fix" });
   });
 
   it("projeto do vibehub sumido: investigar responde 400 e a falha continua listada", async () => {
@@ -186,17 +186,17 @@ describe("rotas de falha da plataforma", () => {
     const failure = await recordFailure();
     const settings = await import("../services/settings/settings.js");
     await settings.updateSettings({ selfProjectId: "project-that-no-longer-exists" });
-    const response = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
-    expect(response.statusCode).toBe(400);
-    expect(response.json().error).toMatch(/Settings/);
+    const investigationResponse = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
+    expect(investigationResponse.statusCode).toBe(400);
+    expect(investigationResponse.json().error).toMatch(/Settings/);
     expect((await app.inject({ method: "GET", url: "/api/platform-failures", headers: { cookie: world.owner } })).json().failures).toHaveLength(1);
   });
 
   it("falha desconhecida responde 404", async () => {
     const { app, ...world } = await bootFailureWorld();
-    const response = await app.inject({ method: "POST", url: "/api/platform-failures/nope/dismiss", headers: { cookie: world.owner } });
-    expect(response.statusCode).toBe(404);
-    expect(response.json().error).toBe("platform failure nope not found");
+    const dismissResponse = await app.inject({ method: "POST", url: "/api/platform-failures/nope/dismiss", headers: { cookie: world.owner } });
+    expect(dismissResponse.statusCode).toBe(404);
+    expect(dismissResponse.json().error).toBe("platform failure nope not found");
   });
 
   it("'não é bug' tira a falha da lista", async () => {
@@ -216,8 +216,8 @@ describe("rotas de falha da plataforma", () => {
 
   it("settings recusa selfProjectId de projeto que não existe", async () => {
     const { app, ...world } = await bootFailureWorld();
-    const response = await app.inject({ method: "PATCH", url: "/api/settings", headers: { cookie: world.owner }, payload: { selfProjectId: "ghost" } });
-    expect(response.statusCode).toBe(400);
-    expect(response.json().error).toMatch(/selfProjectId/);
+    const settingsResponse = await app.inject({ method: "PATCH", url: "/api/settings", headers: { cookie: world.owner }, payload: { selfProjectId: "ghost" } });
+    expect(settingsResponse.statusCode).toBe(400);
+    expect(settingsResponse.json().error).toMatch(/selfProjectId/);
   });
 });
