@@ -46,6 +46,15 @@ describe("PlatformFailuresButton", () => {
     expect(await screen.findByText(/could not load vibehub's failures|não deu pra carregar as falhas do vibehub/i)).toBeTruthy();
   });
 
+  it("poll que falha depois de uma lista vazia avisa o dono em vez de parecer que não há falha", async () => {
+    get.mockResolvedValueOnce({ failures: [] });
+    const { queryClient } = renderApp(<PlatformFailuresButton />);
+    await waitFor(() => expect(queryClient.getQueryState(PLATFORM_FAILURES_KEY)?.status).toBe("success"));
+    get.mockRejectedValue(new Error("502"));
+    await queryClient.refetchQueries();
+    expect(await screen.findByText(/could not load vibehub's failures|não deu pra carregar as falhas do vibehub/i)).toBeTruthy();
+  });
+
   it("um poll que falha com o relato aberto mantém o relato na tela", async () => {
     const { queryClient } = renderApp(<PlatformFailuresButton />);
     await userEvent.click(await screen.findByRole("button", { name: /1/ }));
