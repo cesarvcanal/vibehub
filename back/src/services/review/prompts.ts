@@ -606,6 +606,8 @@ export function analysisPrompt(a: AnalysisInput): string {
     `   Workflow({ scriptPath: "${PR_ANALYSIS_WORKFLOW_PATH}", args: ${workflowArgs} })`,
     "   O args vai como objeto JSON, com o sha do passo 1 no headSha. A frota lê o diff, revisa em paralelo por " +
       "dimensão, tenta derrubar cada achado, e um juiz classifica. Espere o resultado: { summary, dimensions, findings, refutedCount }.",
+    "   Se a frota recusar o args (erro \"args inválido\"), o engano é seu: corrija o args e rode a frota de novo, uma vez; " +
+      "se falhar de novo, siga a linha abaixo.",
     "   Se a ferramenta Workflow não existir, for recusada ou a frota falhar com erro: chame vibehub_analysis_report com " +
       `${reportTarget}, headSha, stage: "fleet_unavailable", summary e unavailableReason com o erro, diga o motivo no chat ` +
       "e pare. Não rode a análise sozinho no lugar da frota.",
@@ -625,7 +627,8 @@ export function analysisPrompt(a: AnalysisInput): string {
       // Never the step-1 reset here: it would drop the fix commits that have not gone up yet.
       `Se o push for recusado porque a PR andou, traga o código novo sem perder as correções: git fetch origin && git rebase origin/${a.branch}, ` +
       "resolva os conflitos, rode de novo os testes do que mudou e entregue outra vez.",
-    `8. Chame vibehub_analysis_report de novo, com stage: "done": os mesmos findings, cada um com status "fixed" e o ` +
+    `8. Chame vibehub_analysis_report de novo, com stage: "done": as mesmas dimensions do passo 3, inclusive o unverifiedCount, ` +
+      "e os mesmos findings, cada um com status \"fixed\" e o " +
       "commit, ou \"open\" (question, suggestion e o que não corrigiu, com o motivo no summary).",
     `9. Comente cada achado na linha do diff, na sua conta: gh api repos/{owner}/{repo}/pulls/${a.prNumber}/comments ` +
       "(body com o problema, a prova e o commit que corrigiu; commit_id = o head entregue, path, line). Achado sem linha " +

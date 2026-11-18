@@ -233,6 +233,16 @@ describe("prompt da análise de PR", () => {
     expect(text).toContain('card: "card-9"');
   });
 
+  it("o relatório done repete as dimensions do passo 3, com o unverifiedCount: o veredito depende delas", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    expect(analysisPrompt(input)).toMatch(/stage: "done"[^\n]*as mesmas dimensions do passo 3, inclusive o unverifiedCount/);
+  });
+
+  it("args recusado pela frota é engano do card: corrige o args e roda de novo uma vez antes de reportar", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    expect(analysisPrompt(input)).toMatch(/args inválido[^\n]*corrija o args e rode a frota de novo, uma vez/);
+  });
+
   it("sem Workflow, reporta fleet_unavailable e para, sem análise sozinho no lugar da frota", async () => {
     const { analysisPrompt } = await import("./prompts.js");
     const text = analysisPrompt(input);

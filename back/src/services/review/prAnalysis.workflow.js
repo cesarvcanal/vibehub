@@ -62,7 +62,7 @@ const FINDING_PROPERTIES = {
   file: { type: 'string' },
   line: { type: 'number' },
   proof: PROOF_SCHEMA,
-  fix: { type: 'string' },
+  fix: { type: 'string', minLength: 1 },
 }
 
 const REVIEW_SCHEMA = {
@@ -173,9 +173,9 @@ const reviewLabel = (dimension) => `revisão: ${dimension.key}`
 const verifyDimension = async (review, dimension) => {
   if (!review) return { run: { key: dimension.key, status: 'not_run', reason: 'o agente de revisão não respondeu' }, confirmed: [], refuted: 0 }
   const verifiedFindings = review.findings.slice(0, MAX_VERIFIED_PER_DIMENSION)
-  const unverifiedCount = review.findings.length - verifiedFindings.length
-  const capReason = `${unverifiedCount} achados acima do teto de ${MAX_VERIFIED_PER_DIMENSION} não foram verificados`
-  if (unverifiedCount > 0) log(`${dimension.key}: ${capReason}`)
+  const aboveCapCount = review.findings.length - verifiedFindings.length
+  const capReason = `${aboveCapCount} achados acima do teto de ${MAX_VERIFIED_PER_DIMENSION} não foram verificados`
+  if (aboveCapCount > 0) log(`${dimension.key}: ${capReason}`)
   const verdicts = await parallel(verifiedFindings.map((finding) => () => agent(verifyPrompt(finding, dimension, brief), {
     label: `verificação: ${dimension.key}`, phase: 'Verificação', model: 'sonnet', effort: 'high', schema: VERDICT_SCHEMA,
   })))
@@ -187,13 +187,13 @@ const verifyDimension = async (review, dimension) => {
   const withoutVerdictCount = checkedFindings.filter((checked) => !checked.verdict).length
   const withoutVerdictReason = `${withoutVerdictCount} ${withoutVerdictCount === 1 ? 'achado sem veredito' : 'achados sem veredito'} (o verificador não respondeu)`
   if (withoutVerdictCount > 0) log(`${dimension.key}: ${withoutVerdictReason}`)
-  const reasons = [unverifiedCount > 0 ? capReason : '', withoutVerdictCount > 0 ? withoutVerdictReason : ''].filter(Boolean)
-  const notCheckedCount = unverifiedCount + withoutVerdictCount
+  const reasons = [aboveCapCount > 0 ? capReason : '', withoutVerdictCount > 0 ? withoutVerdictReason : ''].filter(Boolean)
+  const unverifiedCount = aboveCapCount + withoutVerdictCount
   return {
     run: {
       key: dimension.key,
       status: 'ran',
-      ...(notCheckedCount > 0 ? { unverifiedCount: notCheckedCount, reason: reasons.join('; ') } : {}),
+      ...(unverifiedCount > 0 ? { unverifiedCount, reason: reasons.join('; ') } : {}),
     },
     confirmed,
     refuted: refutedCount,

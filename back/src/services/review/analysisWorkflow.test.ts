@@ -171,7 +171,8 @@ describe("frota da análise de PR", () => {
       return { findings: [] };
     });
     const verifyPrompt = calls.find((call) => call.opts.phase === "Verificação")!.prompt;
-    expect(verifyPrompt).toContain("-t");
+    expect(verifyPrompt).toContain('npx vitest run <arquivo> -t "<caso>"');
+    expect(verifyPrompt).toContain("nunca o arquivo inteiro nem a suíte");
   });
 
   it("o schema do juiz exige o fix que a ferramenta do relatório exige", async () => {
@@ -182,9 +183,10 @@ describe("frota da análise de PR", () => {
       return { findings: [] };
     });
     const judgeSchema = calls.find((call) => call.opts.phase === "Julgamento")!.opts.schema as {
-      properties: { findings: { items: { required: string[] } } };
+      properties: { findings: { items: { required: string[]; properties: Record<string, object> } } };
     };
     expect(judgeSchema.properties.findings.items.required).toContain("fix");
+    expect(judgeSchema.properties.findings.items.properties.fix).toMatchObject({ minLength: 1 });
   });
 
   it.each([
