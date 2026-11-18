@@ -7,7 +7,7 @@ import type { MessageOrigin } from "../chat/provenance.js";
 import { getSettings } from "../settings/settings.js";
 import {
   PlatformFailureStateError, claimPlatformFailureInvestigation, getPlatformFailure, releasePlatformFailureInvestigation,
-  setPlatformFailureInvestigationCard,
+  setPlatformFailureInvestigationCard, settlePlatformFailureInvestigation,
 } from "./platformFailures.js";
 import type { PlatformFailure, PlatformFailureStatus } from "./types.js";
 
@@ -47,6 +47,16 @@ export function buildInvestigationBrief(failure: PlatformFailure): string {
   ].join("\n");
 }
 
+function summarizeCard(card: registry.Card): PlatformFailureInvestigation["card"] {
+  return { id: card.id, projectId: card.projectId, title: card.title };
+}
+
+export async function settleInvestigationOfCard(cardId: string): Promise<PlatformFailure | null> {
+  const card = await registry.getCard(cardId);
+  const hasMergedPr = (card?.prs ?? []).some((pr) => pr.mergedAt !== undefined);
+  return await settlePlatformFailureInvestigation(cardId, { merged: hasMergedPr });
+}
+
 async function createInvestigationCard(failure: PlatformFailure, owner: PublicUser, selfProjectId: string): Promise<registry.Card> {
   const accountSlug = await creatorAccountSlug(owner.id);
   const card = await registry.createCard(
@@ -75,7 +85,7 @@ async function sendInvestigationBrief(
     await releasePlatformFailureInvestigation(failure.id, statusBeforeClaim);
     throw err;
   }
-  return { failure: { ...failure, investigationCardId: card.id }, card: { id: card.id, projectId: card.projectId, title: card.title } };
+  return { failure: { ...failure, investigationCardId: card.id }, card: summarizeCard(card) };
 }
 
 async function investigatePlatformFailure(failureId: string, owner: PublicUser): Promise<PlatformFailureInvestigation> {
@@ -88,8 +98,11 @@ async function investigatePlatformFailure(failureId: string, owner: PublicUser):
   const { failure, alreadyClaimed, statusBeforeClaim } = await claimPlatformFailureInvestigation(failureId);
   const previousCard = failure.investigationCardId ? await registry.getCard(failure.investigationCardId) : undefined;
   const ongoingCard = previousCard?.column === "done" ? undefined : previousCard;
-  if (alreadyClaimed && ongoingCard) {
-    return { failure, card: { id: ongoingCard.id, projectId: ongoingCard.projectId, title: ongoingCard.title } };
+  if (alreadyClaimed && ongoingCard) return { failure, card: summarizeCard(ongoingCard) };
+  if (alreadyClaimed && previousCard) {
+    const settledFailure = await settleInvestigationOfCard(previousCard.id);
+    if (settledFailure?.status === "resolved") return { failure: settledFailure, card: summarizeCard(previousCard) };
+    return await investigatePlatformFailure(failureId, owner);
   }
   const investigationCard = ongoingCard ?? await createInvestigationCard(failure, owner, selfProject.id);
   return await sendInvestigationBrief(failure, statusBeforeClaim, owner, investigationCard);

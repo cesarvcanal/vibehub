@@ -1,15 +1,15 @@
 import { logger, onLogLine } from "../../utils/logger.js";
-import * as registry from "../board/registry.js";
 import { onCardEvent } from "../events/cardEvents.js";
 import { reportFromBackendError } from "./backendError.js";
-import { recordPlatformFailure, settlePlatformFailureInvestigation } from "./platformFailures.js";
+import { settleInvestigationOfCard } from "./investigation.js";
+import { recordPlatformFailure } from "./platformFailures.js";
 import { SLOW_FIRST_OUTPUT_MS, SLOW_TURNS_WINDOW_MS, lastUserStop, onSlowTurns, type SlowTurn } from "./turnLatency.js";
 import type { PlatformFailureReport } from "./types.js";
 
 const CAPTURE_PAUSE_MS = 60_000;
 
 const backendCapture = { pausedUntil: 0 };
-const pendingRecords = new Set<Promise<void>>();
+const pendingRecords = new Set<Promise<unknown>>();
 
 function reportFromSlowTurns(cardId: string, slowTurns: SlowTurn[]): PlatformFailureReport {
   return {
@@ -23,7 +23,7 @@ function reportFromSlowTurns(cardId: string, slowTurns: SlowTurn[]): PlatformFai
   };
 }
 
-function trackRecord(recording: Promise<void>): void {
+function trackRecord(recording: Promise<unknown>): void {
   pendingRecords.add(recording);
   void recording.finally(() => pendingRecords.delete(recording));
 }
@@ -35,12 +35,6 @@ async function recordFromWatch(report: PlatformFailureReport): Promise<void> {
     backendCapture.pausedUntil = Date.now() + CAPTURE_PAUSE_MS;
     logger.warn({ detail: (err as Error).message, pausedForMs: CAPTURE_PAUSE_MS }, "could not record a platform failure — backend capture paused");
   }
-}
-
-async function settleInvestigationOfCard(cardId: string): Promise<void> {
-  const card = await registry.getCard(cardId);
-  const merged = (card?.prs ?? []).some((pr) => pr.mergedAt !== undefined);
-  await settlePlatformFailureInvestigation(cardId, { merged });
 }
 
 export function startPlatformFailureWatch(): () => void {

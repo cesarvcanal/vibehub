@@ -138,6 +138,21 @@ describe("rotas de falha da plataforma", () => {
     expect(sendToTerminal).toHaveBeenLastCalledWith(again.json().card.id, expect.any(String), expect.any(Object));
   });
 
+  it("investigar de novo uma falha presa cujo card já foi mergeado fecha a falha pelo PR, sem abrir card novo", async () => {
+    const { app, ...world } = await bootFailureWorld();
+    const failure = await recordFailure();
+    const first = (await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } })).json();
+    const registry = await import("../services/board/registry.js");
+    await registry.recordCardPr(first.card.id, { number: 7, url: "https://github.com/acme/vibehub/pull/7", base: "main", branch: "fix-falha" });
+    await registry.markCardPrMerged(first.card.id, "main", 7, Date.now());
+    await app.inject({ method: "PATCH", url: `/api/cards/${first.card.id}`, headers: { cookie: world.owner }, payload: { column: "done" } });
+    const again = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toMatchObject({ failure: { id: failure.id, status: "resolved" }, card: { id: first.card.id } });
+    expect(sendToTerminal).toHaveBeenCalledTimes(1);
+    expect((await app.inject({ method: "GET", url: "/api/platform-failures", headers: { cookie: world.owner } })).json().failures).toEqual([]);
+  });
+
   it("brief que falha ao investigar de novo uma concluída sem correção devolve a falha a esse estado", async () => {
     const { app, ...world } = await bootFailureWorld();
     const failure = await recordFailure();
