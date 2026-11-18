@@ -1,3 +1,4 @@
+import type { DriverEvent } from "../sdk/protocol.js";
 import type { UserStopMark } from "./types.js";
 
 export const SLOW_FIRST_OUTPUT_MS = 90_000;
@@ -11,8 +12,8 @@ export interface SlowTurn {
 
 type SlowTurnsListener = (cardId: string, slowTurns: SlowTurn[]) => void;
 
-const FIRST_OUTPUT_EVENTS = new Set(["assistant_delta", "assistant_text", "thinking_delta", "thinking", "tool_use_start", "tool_use"]);
-const WAIT_DISTURBING_EVENTS = new Set(["user_question", "permission_request"]);
+const FIRST_OUTPUT_EVENTS: ReadonlySet<DriverEvent["type"]> = new Set<DriverEvent["type"]>(["assistant_delta", "assistant_text", "thinking_delta", "thinking", "tool_use_start", "tool_use"]);
+const WAIT_DISTURBING_EVENTS: ReadonlySet<DriverEvent["type"]> = new Set<DriverEvent["type"]>(["user_question", "permission_request"]);
 
 const openTurns = new Map<string, { since: number; disturbed: boolean; answered: boolean }>();
 const slowTurnsByCard = new Map<string, SlowTurn[]>();
@@ -34,7 +35,7 @@ export function noteTurnSent(cardId: string, at: number): void {
   if (!openTurns.has(cardId)) openTurns.set(cardId, { since: at, disturbed: false, answered: false });
 }
 
-export function noteTurnEvent(cardId: string, event: { type: string; parentToolUseId?: unknown; phase?: unknown }, at: number): void {
+export function noteTurnEvent(cardId: string, event: { type: DriverEvent["type"]; parentToolUseId?: unknown; phase?: unknown }, at: number): void {
   const openTurn = openTurns.get(cardId);
   if (!openTurn) return;
   if (event.type === "result") {
