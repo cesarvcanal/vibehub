@@ -170,6 +170,13 @@ describe("relatório da análise pela ferramenta do card", () => {
       .rejects.toThrow(/relatório done/);
   });
 
+  it("relatório done com o mesmo sha em outra caixa é aceito: o sha não diferencia maiúsculas", async () => {
+    const { analysisCard, reportService, store } = await load();
+    await reportService.recordAnalysisReport(analysisCard.id, input({ headSha: SHA.toUpperCase() }));
+    await reportService.recordAnalysisReport(analysisCard.id, input({ stage: "done", headSha: SHA }));
+    expect((await store.getAnalysis(analysisCard.id))?.stage).toBe("done");
+  });
+
   it("relatório done sem o analysed gravado antes é recusado", async () => {
     const { analysisCard, reportService, store } = await load();
     await expect(reportService.recordAnalysisReport(analysisCard.id, input({ stage: "done" }))).rejects.toThrow(/passo 3/);
