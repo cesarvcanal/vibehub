@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderApp } from "@/test/render";
+import type { PlatformFailure } from "@/api/types";
 import { PlatformFailuresButton } from "./PlatformFailuresButton";
 
 const get = vi.fn();
@@ -14,10 +15,12 @@ const toastCall = vi.fn();
 vi.mock("sonner", () => ({ toast: Object.assign((...args: unknown[]) => toastCall(...args), { success: vi.fn(), error: vi.fn() }) }));
 
 const FAILURE = {
-  id: "f1", source: "backend_error", status: "open", component: "services/sdk/manager",
-  symptom: "ao interromper: write after end", evidence: "erro: write after end",
+  id: "f1", signature: "backend_error|services/sdk/manager|logo após um stop do usuário: write after end",
+  source: "backend_error", status: "open", component: "services/sdk/manager",
+  symptom: "logo após um stop do usuário: write after end",
+  evidence: "mensagem: write after end\nat writeToDriver (services/sdk/manager.ts:1339:5)",
   occurrences: 3, affectedCardIds: ["c1"], firstSeenAt: 0, lastSeenAt: 0,
-};
+} satisfies PlatformFailure;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -47,7 +50,7 @@ describe("PlatformFailuresButton", () => {
     const indicator = await screen.findByRole("button", { name: /1/ });
     await waitFor(() => expect(toastCall).toHaveBeenCalledTimes(1));
     await userEvent.click(indicator);
-    expect(await screen.findByText("ao interromper: write after end")).toBeTruthy();
+    expect(await screen.findByText("logo após um stop do usuário: write after end")).toBeTruthy();
     expect(screen.getByText(/write after end/, { selector: "pre" })).toBeTruthy();
   });
 
