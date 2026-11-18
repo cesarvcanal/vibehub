@@ -130,6 +130,15 @@ describe("relatório da análise pela ferramenta do card", () => {
       .rejects.toThrow(named);
   });
 
+  it("relatório done que acrescenta como ran uma dimensão ausente do analysed é recusado: ausente conta como não rodou", async () => {
+    const { analysisCard, reportService } = await load();
+    await reportService.recordAnalysisReport(analysisCard.id, input());
+    const everyDimensionRan = (["correctness", "security", "performance", "contracts", "tests", "repoRules"] as const)
+      .map((key) => ({ key, status: "ran" as const }));
+    await expect(reportService.recordAnalysisReport(analysisCard.id, input({ stage: "done", dimensions: everyDimensionRan })))
+      .rejects.toThrow(/security/);
+  });
+
   it("segundo relatório analysed é recusado: o que a frota gravou não some por um analysed novo", async () => {
     const { analysisCard, reportService, store } = await load();
     await reportService.recordAnalysisReport(analysisCard.id, input({ findings: [blockingFinding] }));

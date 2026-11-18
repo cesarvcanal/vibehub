@@ -1,6 +1,6 @@
 import { getCard, updateCard } from "../board/registry.js";
 import { recordMessage } from "../events/cardEvents.js";
-import type { AnalysisFinding, AnalysisReport, AnalysisStage, DimensionRun } from "./analysisModel.js";
+import { ANALYSIS_DIMENSIONS, type AnalysisFinding, type AnalysisReport, type AnalysisStage, type DimensionRun } from "./analysisModel.js";
 import { getAnalysis, saveAnalysis } from "./analysisStore.js";
 
 export interface AnalysisReportInput {
@@ -31,12 +31,13 @@ function findChangedFromSavedReport(saved: AnalysisReport, input: AnalysisReport
       return resentFinding?.severity !== savedFinding.severity || resentFinding.dimension !== savedFinding.dimension;
     })
     .map((savedFinding) => `achado ${savedFinding.id}`);
-  const changedDimensions = saved.dimensions
-    .filter((savedDimension) => {
-      const resentDimension = input.dimensions.find((dimension) => dimension.key === savedDimension.key);
-      return resentDimension?.status !== savedDimension.status || resentDimension.unverifiedCount !== savedDimension.unverifiedCount;
+  const changedDimensions = ANALYSIS_DIMENSIONS
+    .filter((key) => {
+      const savedDimension = saved.dimensions.find((dimension) => dimension.key === key);
+      const resentDimension = input.dimensions.find((dimension) => dimension.key === key);
+      return resentDimension?.status !== savedDimension?.status || resentDimension?.unverifiedCount !== savedDimension?.unverifiedCount;
     })
-    .map((savedDimension) => `dimensão ${savedDimension.key}`);
+    .map((key) => `dimensão ${key}`);
   return [...changedFindings, ...changedDimensions];
 }
 
