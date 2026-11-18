@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { QueryClient } from "@tanstack/react-query";
-import { renderApp } from "@/test/render";
+import { apiReject, renderApp } from "@/test/render";
 import type { PlatformFailure } from "@/api/types";
 import { PLATFORM_FAILURES_KEY } from "../api";
 import { PlatformFailuresButton } from "./PlatformFailuresButton";
@@ -24,42 +24,41 @@ const FAILURE = {
   occurrences: 3, affectedCardIds: ["c1"], firstSeenAt: 0, lastSeenAt: 0,
 } satisfies PlatformFailure;
 
-function answerFailuresList(answerFailures: () => Promise<{ failures: PlatformFailure[] }>) {
+const setFailuresResponse = (buildFailuresResponse: () => Promise<{ failures: PlatformFailure[] }>) => {
   get.mockImplementation(async (url: string) => {
-    if (url === "/platform-failures") return await answerFailures();
+    if (url === "/platform-failures") return buildFailuresResponse();
     throw new Error(`unexpected GET ${url}`);
   });
-}
-
-const serveFailures = (failures: PlatformFailure[]) => answerFailuresList(async () => ({ failures }));
-const failFailuresRequest = () => answerFailuresList(async () => { throw new Error("502"); });
+};
+const setServedFailures = (failures: PlatformFailure[]) => setFailuresResponse(async () => ({ failures }));
+const setFailuresRequestToFail = () => setFailuresResponse(async () => { throw apiReject(502, "bad gateway"); });
 const refetchFailures = (queryClient: QueryClient) => queryClient.refetchQueries({ queryKey: PLATFORM_FAILURES_KEY });
 
 beforeEach(() => {
   vi.clearAllMocks();
   sessionStorage.clear();
-  serveFailures([FAILURE]);
+  setServedFailures([FAILURE]);
 });
 
 describe("PlatformFailuresButton", () => {
   it("não mostra nada quando não há falha", async () => {
-    serveFailures([]);
-    renderApp(<PlatformFailuresButton />);
-    await waitFor(() => expect(get).toHaveBeenCalledWith("/platform-failures"));
+    setServedFailures([]);
+    const { queryClient } = renderApp(<PlatformFailuresButton />);
+    await waitFor(() => expect(queryClient.getQueryState(PLATFORM_FAILURES_KEY)?.status).toBe("success"));
     expect(screen.queryByRole("button")).toBeNull();
   });
 
   it("lista que não carrega avisa o dono em vez de parecer que não há falha", async () => {
-    failFailuresRequest();
+    setFailuresRequestToFail();
     renderApp(<PlatformFailuresButton />);
     expect(await screen.findByText(/could not load vibehub's failures|não deu pra carregar as falhas do vibehub/i)).toBeTruthy();
   });
 
   it("poll que falha depois de uma lista vazia avisa o dono em vez de parecer que não há falha", async () => {
-    serveFailures([]);
+    setServedFailures([]);
     const { queryClient } = renderApp(<PlatformFailuresButton />);
     await waitFor(() => expect(queryClient.getQueryState(PLATFORM_FAILURES_KEY)?.status).toBe("success"));
-    failFailuresRequest();
+    setFailuresRequestToFail();
     await refetchFailures(queryClient);
     expect(await screen.findByText(/could not load vibehub's failures|não deu pra carregar as falhas do vibehub/i)).toBeTruthy();
   });
@@ -67,7 +66,7 @@ describe("PlatformFailuresButton", () => {
   it("poll que falha com falhas em cache avisa ao lado do indicador, sem tirar a lista", async () => {
     const { queryClient } = renderApp(<PlatformFailuresButton />);
     await screen.findByRole("button", { name: /1/ });
-    failFailuresRequest();
+    setFailuresRequestToFail();
     await refetchFailures(queryClient);
     expect(await screen.findByText(/could not load vibehub's failures|não deu pra carregar as falhas do vibehub/i)).toBeTruthy();
     expect(screen.getByRole("button", { name: /1/ })).toBeTruthy();
@@ -77,10 +76,10 @@ describe("PlatformFailuresButton", () => {
     const { queryClient } = renderApp(<PlatformFailuresButton />);
     await userEvent.click(await screen.findByRole("button", { name: /1/ }));
     post.mockResolvedValueOnce({ failure: { ...FAILURE, status: "dismissed" } });
-    serveFailures([]);
+    setServedFailures([]);
     await userEvent.click(await screen.findByRole("button", { name: /não é bug|not a bug/i }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    serveFailures([{ ...FAILURE, id: "f2" }]);
+    setServedFailures([{ ...FAILURE, id: "f2" }]);
     await refetchFailures(queryClient);
     await screen.findByRole("button", { name: /1/, hidden: true });
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -90,7 +89,7 @@ describe("PlatformFailuresButton", () => {
     const { queryClient } = renderApp(<PlatformFailuresButton />);
     await userEvent.click(await screen.findByRole("button", { name: /1/ }));
     await screen.findByText("logo após um stop do usuário: write after end");
-    failFailuresRequest();
+    setFailuresRequestToFail();
     await refetchFailures(queryClient);
     await waitFor(() => expect(queryClient.getQueryState(PLATFORM_FAILURES_KEY)?.status).toBe("error"));
     expect(screen.getByText("logo após um stop do usuário: write after end")).toBeTruthy();
@@ -123,7 +122,7 @@ describe("PlatformFailuresButton", () => {
   });
 
   it("falha em investigação ainda oferece investigar de novo, a saída quando o card sumiu", async () => {
-    serveFailures([{ ...FAILURE, status: "investigating", investigationCardId: "fix-1" }]);
+    setServedFailures([{ ...FAILURE, status: "investigating", investigationCardId: "fix-1" }]);
     post.mockResolvedValueOnce({ failure: { ...FAILURE, status: "investigating", investigationCardId: "fix-2" }, card: { id: "fix-2", projectId: "p-vh", title: "Falha da plataforma: x" } });
     renderApp(<PlatformFailuresButton />);
     await userEvent.click(await screen.findByRole("button", { name: /1/ }));
