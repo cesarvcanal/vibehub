@@ -173,6 +173,20 @@ describe("relatório da análise pela ferramenta do card", () => {
     await expect(lateRecording).rejects.toThrow("o relatório done já está gravado neste card: a análise está concluída, pare");
   });
 
+  it.each([
+    ["outra frota indisponível", { stage: "fleet_unavailable" as const, unavailableReason: "x" }],
+    ["um analysed", { stage: "analysed" as const }],
+    ["um done", { stage: "done" as const }],
+  ])("%s num card reativado depois da frota indisponível é recusado: o aviso de que a frota não rodou não some", async (_case, lateReport) => {
+    const { analysisCard, reportService, store } = await load();
+    await reportService.recordAnalysisReport(analysisCard.id, input({ stage: "fleet_unavailable", unavailableReason: "Workflow desligado" }));
+    const registry = await import("../board/registry.js");
+    await registry.updateCard(analysisCard.id, { column: "working" });
+    const lateRecording = reportService.recordAnalysisReport(analysisCard.id, input(lateReport));
+    await expect(lateRecording).rejects.toThrow("a frota não rodou neste card: pare; um novo pedido da PR abre outro card");
+    expect((await store.getAnalysis(analysisCard.id))?.stage).toBe("fleet_unavailable");
+  });
+
   it("o sha gravado sai em minúsculas, venha na caixa que vier: o sha tem uma forma só no painel e no aviso", async () => {
     const { analysisCard, reportService, store } = await load();
     await reportService.recordAnalysisReport(analysisCard.id, input({ headSha: SHA.toUpperCase() }));
