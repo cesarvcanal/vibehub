@@ -6,12 +6,12 @@ import { recordPlatformFailure, settlePlatformFailureInvestigation } from "./pla
 import { SLOW_FIRST_OUTPUT_MS, SLOW_TURNS_WINDOW_MS, lastUserStop, onSlowTurns, type SlowTurn } from "./turnLatency.js";
 import type { PlatformFailureReport } from "./types.js";
 
-export const CAPTURE_PAUSE_MS = 60_000;
+const CAPTURE_PAUSE_MS = 60_000;
 
 const backendCapture = { pausedUntil: 0 };
 const pendingRecords = new Set<Promise<void>>();
 
-export function reportFromSlowTurns(cardId: string, slowTurns: SlowTurn[]): PlatformFailureReport {
+function reportFromSlowTurns(cardId: string, slowTurns: SlowTurn[]): PlatformFailureReport {
   return {
     source: "slow_turn",
     component: "sdk/turn",
@@ -65,6 +65,6 @@ export function startPlatformFailureWatch(): () => void {
 }
 
 export async function platformFailureWatchSettled(): Promise<void> {
-  await new Promise((resolve) => queueMicrotask(() => resolve(undefined)));
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
   await Promise.all([...pendingRecords]);
 }

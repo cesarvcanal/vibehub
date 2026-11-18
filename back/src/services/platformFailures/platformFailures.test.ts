@@ -1,15 +1,15 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, onTestFinished, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PlatformFailureReport } from "./types.js";
 
-let dir = "";
-
 async function fresh({ configured = true } = {}) {
   vi.resetModules();
+  const dataDir = await mkdtemp(join(tmpdir(), "vibehub-platform-failures-"));
+  onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
   const env = await import("../../config/env.js");
-  env.config.dataDir = dir;
+  env.config.dataDir = dataDir;
   const settings = await import("../settings/settings.js");
   if (configured) await settings.updateSettings({ selfProjectId: "p-vibehub" });
   return await import("./platformFailures.js");
@@ -18,9 +18,6 @@ async function fresh({ configured = true } = {}) {
 function backendReport(symptom: string, cardId?: string): PlatformFailureReport {
   return { source: "backend_error", component: "services/sdk/manager", symptom, evidence: `mensagem: ${symptom}`, ...(cardId ? { cardId } : {}) };
 }
-
-beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "vibehub-platform-failures-")); });
-afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
 describe("registro de falhas da plataforma", () => {
   it("não registra nada enquanto o projeto do vibehub não está configurado", async () => {

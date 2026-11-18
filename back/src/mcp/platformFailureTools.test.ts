@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach, onTestFinished, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,15 +6,15 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
-let dir = "";
-
 async function connect({ configured = true } = {}) {
   vi.resetModules();
+  const dataDir = await mkdtemp(join(tmpdir(), "vibehub-platform-tools-"));
+  onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
   vi.doMock("../services/board/registry.js", () => ({
     getCard: vi.fn(async (id: string) => (id === "card-1" ? { id, projectId: "p-erp" } : undefined)),
   }));
   const env = await import("../config/env.js");
-  env.config.dataDir = dir;
+  env.config.dataDir = dataDir;
   if (configured) await (await import("../services/settings/settings.js")).updateSettings({ selfProjectId: "p-vibehub" });
   const failures = await import("../services/platformFailures/platformFailures.js");
   const { registerPlatformFailureTools } = await import("./platformFailureTools.js");
@@ -43,8 +43,7 @@ const REPORT = {
   symptom: "deliver respondeu merged sem PR", evidence: "resposta: { merged: true, prUrl: null }",
 };
 
-beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "vibehub-platform-tools-")); });
-afterEach(async () => { await rm(dir, { recursive: true, force: true }); vi.doUnmock("../services/board/registry.js"); });
+afterEach(() => { vi.doUnmock("../services/board/registry.js"); });
 
 describe("vibehub_report_platform_failure", () => {
   it("registra o relato do agente com o card afetado", async () => {

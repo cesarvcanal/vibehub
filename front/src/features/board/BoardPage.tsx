@@ -311,6 +311,7 @@ export function BoardPage() {
       <Menu className="h-4 w-4" />
     </button>
   );
+  const platformFailuresButton = isOwner ? <PlatformFailuresButton /> : undefined;
 
   const dialogs = (
     <>
@@ -403,7 +404,7 @@ export function BoardPage() {
       onNewBacklogCard={() => askCard(selected, false)}
       onClosePane={closePane}
       headerLead={menuButton}
-      headerExtra={isOwner ? <PlatformFailuresButton /> : undefined}
+      headerExtra={platformFailuresButton}
     />
   ) : (
     // Nothing selected: every project's cards at once. Opening one goes to ITS project.
@@ -412,7 +413,7 @@ export function BoardPage() {
       onOpenCard={(card) => go(card.projectId, card.id)}
       onNewCard={isOwner ? () => askCard(null, true) : undefined}
       headerLead={menuButton}
-      headerExtra={isOwner ? <PlatformFailuresButton /> : undefined}
+      headerExtra={platformFailuresButton}
     />
   );
 

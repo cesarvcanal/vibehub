@@ -63,7 +63,7 @@ async function createInvestigationCard(failure: PlatformFailure, owner: PublicUs
       guardInteractiveMenu: true,
       readyWaitMs: SEND_READY_WAIT_MS,
       viaNativeChat: true,
-      beforeDeliver: async () => recordCardActor(owner, card.id),
+      beforeDeliver: () => recordCardActor(owner, card.id),
     });
   } catch (err) {
     await releasePlatformFailureInvestigation(failure.id);

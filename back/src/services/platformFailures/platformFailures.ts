@@ -7,8 +7,8 @@ import { buildFailureSignature } from "./signature.js";
 import type { PlatformFailure, PlatformFailureReport, PlatformFailureStatus } from "./types.js";
 
 export const ACTIVE_FAILURES_CAP = 50;
-export const AFFECTED_CARDS_CAP = 20;
-export const RESOLVED_RETENTION_MS = 30 * 24 * 60 * 60_000;
+const AFFECTED_CARDS_CAP = 20;
+const RESOLVED_FAILURE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 
 const ACTIVE_STATUSES: readonly PlatformFailureStatus[] = ["open", "investigating", "concluded_without_fix"];
 const INVESTIGABLE_STATUSES: readonly PlatformFailureStatus[] = ["open", "concluded_without_fix"];
@@ -38,7 +38,7 @@ export async function recordPlatformFailure(report: PlatformFailureReport, now: 
   if (!(await getSettings()).selfProjectId) return null;
   const signature = buildFailureSignature(report);
   const outcome = await store.mutate((doc) => {
-    doc.failures = doc.failures.filter((failure) => !(failure.status === "resolved" && now - failure.lastSeenAt > RESOLVED_RETENTION_MS));
+    doc.failures = doc.failures.filter((failure) => !(failure.status === "resolved" && now - failure.lastSeenAt > RESOLVED_FAILURE_RETENTION_MS));
     const knownFailure = doc.failures.find((failure) => failure.signature === signature && failure.status !== "resolved");
     if (knownFailure?.status === "dismissed") return { failure: null, capReached: false };
     if (knownFailure) {

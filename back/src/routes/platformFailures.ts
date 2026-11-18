@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { requestUser, requireOwner } from "../auth/session.js";
 import {
   PlatformFailureNotFoundError, PlatformFailureStateError, dismissPlatformFailure, listPlatformFailuresForOwner,
@@ -11,12 +11,6 @@ async function sendPlatformFailureError(reply: FastifyReply, err: unknown) {
   throw err;
 }
 
-async function requireRequestOwner(req: FastifyRequest) {
-  const owner = await requestUser(req);
-  if (!owner) throw new Error("requireOwner let a request through without a user");
-  return owner;
-}
-
 export async function platformFailureRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/platform-failures", { preHandler: requireOwner }, async (_req, reply) => {
     return await reply.send({ failures: await listPlatformFailuresForOwner() });
@@ -24,7 +18,9 @@ export async function platformFailureRoutes(app: FastifyInstance): Promise<void>
 
   app.post<{ Params: { id: string } }>("/api/platform-failures/:id/investigate", { preHandler: requireOwner }, async (req, reply) => {
     try {
-      return await reply.send(await startPlatformFailureInvestigation(req.params.id, await requireRequestOwner(req)));
+      const owner = await requestUser(req);
+      if (!owner) throw new Error("requireOwner let a request through without a user");
+      return await reply.send(await startPlatformFailureInvestigation(req.params.id, owner));
     } catch (err) {
       return await sendPlatformFailureError(reply, err);
     }

@@ -1,12 +1,12 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach, onTestFinished, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-let dir = "";
-
 async function fresh({ recordPlatformFailure }: { recordPlatformFailure?: (...args: unknown[]) => Promise<unknown> } = {}) {
   vi.resetModules();
+  const dataDir = await mkdtemp(join(tmpdir(), "vibehub-platform-watch-"));
+  onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
   if (recordPlatformFailure) {
     vi.doMock("./platformFailures.js", async (importOriginal) => ({
       ...(await importOriginal<typeof import("./platformFailures.js")>()),
@@ -14,7 +14,7 @@ async function fresh({ recordPlatformFailure }: { recordPlatformFailure?: (...ar
     }));
   }
   const env = await import("../../config/env.js");
-  env.config.dataDir = dir;
+  env.config.dataDir = dataDir;
   await (await import("../settings/settings.js")).updateSettings({ selfProjectId: "p-vibehub" });
   const { logger } = await import("../../utils/logger.js");
   const watch = await import("./watch.js");
@@ -23,11 +23,7 @@ async function fresh({ recordPlatformFailure }: { recordPlatformFailure?: (...ar
   return { logger, watch, failures, turnLatency };
 }
 
-beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "vibehub-platform-watch-")); });
-afterEach(async () => {
-  vi.doUnmock("./platformFailures.js");
-  await rm(dir, { recursive: true, force: true });
-});
+afterEach(() => { vi.doUnmock("./platformFailures.js"); });
 
 describe("vigia das falhas da plataforma", () => {
   it("um logger.error vira falha registrada; um warn não", async () => {

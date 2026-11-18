@@ -1,19 +1,19 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, onTestFinished, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 
-vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
+vi.setConfig({ testTimeout: 90_000 });
 
-let dir = "";
-let app: FastifyInstance;
 const sendToTerminal = vi.fn(async () => undefined);
 
 async function boot(): Promise<FastifyInstance> {
   vi.resetModules();
+  const dataDir = await mkdtemp(join(tmpdir(), "vibehub-platform-failures-route-"));
+  onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
   const env = await import("../config/env.js");
-  env.config.dataDir = dir;
+  env.config.dataDir = dataDir;
   env.config.secretKey = "";
   env.config.sessionSecret = "";
   env.config.insecureCookies = true;
@@ -44,6 +44,7 @@ async function boot(): Promise<FastifyInstance> {
   });
   const { buildServer } = await import("../index.js");
   const server = await buildServer();
+  onTestFinished(() => server.close());
   await server.ready();
   return server;
 }
@@ -53,19 +54,21 @@ function cookieOf(res: { cookies: { name: string; value: string }[] }): string {
 }
 
 interface FailureWorld {
+  app: FastifyInstance;
   owner: string;
   member: string;
   vibehubProjectId: string;
 }
 
-async function failureWorld(): Promise<FailureWorld> {
+async function bootFailureWorld(): Promise<FailureWorld> {
+  const app = await boot();
   const owner = cookieOf(await app.inject({ method: "POST", url: "/api/setup/owner", payload: { username: "owner", password: "supersecret" } }));
   await app.inject({ method: "POST", url: "/api/users", headers: { cookie: owner }, payload: { username: "alex", password: "supersecret", role: "member" } });
   const member = cookieOf(await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "alex", password: "supersecret" } }));
   const vibehubProjectId = (await app.inject({ method: "POST", url: "/api/projects", headers: { cookie: owner }, payload: { name: "vibehub" } })).json().project.id as string;
   const saved = await app.inject({ method: "PATCH", url: "/api/settings", headers: { cookie: owner }, payload: { selfProjectId: vibehubProjectId } });
   expect(saved.statusCode).toBe(200);
-  return { owner, member, vibehubProjectId };
+  return { app, owner, member, vibehubProjectId };
 }
 
 async function recordFailure(symptom = "driver gone") {
@@ -73,16 +76,11 @@ async function recordFailure(symptom = "driver gone") {
   return (await failures.recordPlatformFailure({ source: "backend_error", component: "services/sdk/manager", symptom, evidence: `mensagem: ${symptom}` }))!;
 }
 
-beforeEach(async () => {
-  sendToTerminal.mockClear();
-  dir = await mkdtemp(join(tmpdir(), "vibehub-platform-failures-route-"));
-  app = await boot();
-});
-afterEach(async () => { await app?.close(); await rm(dir, { recursive: true, force: true }); });
+beforeEach(() => { sendToTerminal.mockClear(); });
 
 describe("rotas de falha da plataforma", () => {
   it("só o dono lista: membro 403 e sem sessão 401", async () => {
-    const world = await failureWorld();
+    const { app, ...world } = await bootFailureWorld();
     await recordFailure();
     expect((await app.inject({ method: "GET", url: "/api/platform-failures", headers: { cookie: world.owner } })).json().failures).toHaveLength(1);
     expect((await app.inject({ method: "GET", url: "/api/platform-failures", headers: { cookie: world.member } })).statusCode).toBe(403);
@@ -90,7 +88,7 @@ describe("rotas de falha da plataforma", () => {
   });
 
   it("investigar cria um card no projeto do vibehub e manda o brief com o relato", async () => {
-    const world = await failureWorld();
+    const { app, ...world } = await bootFailureWorld();
     const failure = await recordFailure();
     const response = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
     expect(response.statusCode).toBe(200);
@@ -102,7 +100,7 @@ describe("rotas de falha da plataforma", () => {
   });
 
   it("dois cliques em investigar ao mesmo tempo criam um card só", async () => {
-    const world = await failureWorld();
+    const { app, ...world } = await bootFailureWorld();
     const failure = await recordFailure();
     const [first, second] = await Promise.all([1, 2].map(() =>
       app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } })));
@@ -113,7 +111,7 @@ describe("rotas de falha da plataforma", () => {
   });
 
   it("brief que não chega ao card libera a falha para investigar de novo, e o novo clique entrega", async () => {
-    const world = await failureWorld();
+    const { app, ...world } = await bootFailureWorld();
     const failure = await recordFailure();
     sendToTerminal.mockRejectedValueOnce(new Error("runner down"));
     const failed = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
@@ -126,7 +124,7 @@ describe("rotas de falha da plataforma", () => {
   });
 
   it("projeto do vibehub sumido: investigar responde 400 e a falha continua listada", async () => {
-    const world = await failureWorld();
+    const { app, ...world } = await bootFailureWorld();
     const failure = await recordFailure();
     const settings = await import("../services/settings/settings.js");
     await settings.updateSettings({ selfProjectId: "project-that-no-longer-exists" });
@@ -137,21 +135,21 @@ describe("rotas de falha da plataforma", () => {
   });
 
   it("falha desconhecida responde 404", async () => {
-    const world = await failureWorld();
+    const { app, ...world } = await bootFailureWorld();
     const response = await app.inject({ method: "POST", url: "/api/platform-failures/nope/dismiss", headers: { cookie: world.owner } });
     expect(response.statusCode).toBe(404);
     expect(response.json().error).toBe("platform failure nope not found");
   });
 
   it("'não é bug' tira a falha da lista", async () => {
-    const world = await failureWorld();
+    const { app, ...world } = await bootFailureWorld();
     const failure = await recordFailure();
     expect((await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/dismiss`, headers: { cookie: world.owner } })).statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: "/api/platform-failures", headers: { cookie: world.owner } })).json().failures).toEqual([]);
   });
 
   it("membro não investiga nem dispensa", async () => {
-    const world = await failureWorld();
+    const { app, ...world } = await bootFailureWorld();
     const failure = await recordFailure();
     for (const action of ["investigate", "dismiss"]) {
       expect((await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/${action}`, headers: { cookie: world.member } })).statusCode).toBe(403);
@@ -159,7 +157,7 @@ describe("rotas de falha da plataforma", () => {
   });
 
   it("settings recusa selfProjectId de projeto que não existe", async () => {
-    const world = await failureWorld();
+    const { app, ...world } = await bootFailureWorld();
     const response = await app.inject({ method: "PATCH", url: "/api/settings", headers: { cookie: world.owner }, payload: { selfProjectId: "ghost" } });
     expect(response.statusCode).toBe(400);
     expect(response.json().error).toMatch(/selfProjectId/);

@@ -1,8 +1,5 @@
-export const PLATFORM_FAILURE_SOURCES = ["backend_error", "slow_turn", "agent_report"] as const;
-export type PlatformFailureSource = (typeof PLATFORM_FAILURE_SOURCES)[number];
-
-export const PLATFORM_FAILURE_STATUSES = ["open", "investigating", "resolved", "concluded_without_fix", "dismissed"] as const;
-export type PlatformFailureStatus = (typeof PLATFORM_FAILURE_STATUSES)[number];
+export type PlatformFailureSource = "backend_error" | "slow_turn" | "agent_report";
+export type PlatformFailureStatus = "open" | "investigating" | "resolved" | "concluded_without_fix" | "dismissed";
 
 export interface PlatformFailureReport {
   source: PlatformFailureSource;
