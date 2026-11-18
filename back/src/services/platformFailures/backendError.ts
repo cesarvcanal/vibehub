@@ -66,7 +66,8 @@ function readTextField(fields: Record<string, unknown>, name: string): string | 
 }
 
 export function reportFromBackendError(line: LogLine, lastUserStop: UserStopMark | undefined, now: number): PlatformFailureReport {
-  const errorMessage = readErrorMessage(line.fields.err) || readTextField(line.fields, "detail") || "";
+  const loggedErrorMessage = readErrorMessage(line.fields.err) || readTextField(line.fields, "detail") || "";
+  const errorMessage = loggedErrorMessage === line.message ? "" : loggedErrorMessage;
   const backendFrames = backendFramesOf(line.fields.err, BACKEND_SOURCE_ROOT);
   const loggedCardLabel = readTextField(line.fields, "card");
   const isWithinStopWindow = lastUserStop !== undefined && now - lastUserStop.at <= USER_STOP_WINDOW_MS;

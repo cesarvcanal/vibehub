@@ -100,6 +100,13 @@ describe("relato de erro do backend", () => {
     expect(report.cardId).toBeUndefined();
   });
 
+  it("Error passado sozinho ao logger não repete a mensagem no sintoma nem na evidência", () => {
+    const report = reportFromBackendError({ level: 50, message: "write after end", fields: { err: new Error("write after end") } }, undefined, NOW);
+    expect(report.symptom).toBe("write after end");
+    expect(report.evidence.startsWith("mensagem: write after end\n")).toBe(true);
+    expect(report.evidence).not.toContain("erro:");
+  });
+
   it("mascara token que aparece na mensagem de erro", () => {
     const report = reportFromBackendError({ level: 50, message: "push failed", fields: { err: `bad ghp_${"A".repeat(36)}` } }, undefined, NOW);
     expect(report.evidence).not.toContain("ghp_");
