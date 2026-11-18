@@ -8,7 +8,7 @@ import { apiErrorMessage } from "@/lib/apiError";
 import { t as translate, useT } from "@/i18n";
 import type { PlatformFailure } from "@/api/types";
 import { PLATFORM_FAILURES_KEY, PLATFORM_FAILURES_POLL_MS, platformFailuresApi } from "../api";
-import { findUnseenFailureIds, readSeenFailureIds, saveSeenFailureIds } from "../lib/unseenFailures";
+import { useAnnounceUnseenFailures } from "../lib/useAnnounceUnseenFailures";
 
 function FailureEntry({ failure }: { failure: PlatformFailure }) {
   const t = useT();
@@ -54,7 +54,7 @@ function FailureEntry({ failure }: { failure: PlatformFailure }) {
 
 export function PlatformFailuresButton() {
   const t = useT();
-  const [isDialogOpen, setDialogOpen] = React.useState(false);
+  const [isFailuresDialogOpen, setFailuresDialogOpen] = React.useState(false);
   const failuresQuery = useQuery({
     queryKey: PLATFORM_FAILURES_KEY,
     queryFn: platformFailuresApi.list,
@@ -62,25 +62,17 @@ export function PlatformFailuresButton() {
   });
   const failures = React.useMemo(() => failuresQuery.data ?? [], [failuresQuery.data]);
 
-  React.useEffect(() => {
-    const seenIds = readSeenFailureIds();
-    const unseenIds = findUnseenFailureIds(failures, seenIds);
-    if (unseenIds.length === 0) return;
-    toast(translate("platformFailures.newToast", { n: unseenIds.length, count: unseenIds.length }), {
-      action: { label: translate("platformFailures.open"), onClick: () => setDialogOpen(true) },
-    });
-    saveSeenFailureIds(new Set([...seenIds, ...unseenIds]));
-  }, [failures]);
+  useAnnounceUnseenFailures(failures, setFailuresDialogOpen);
 
   if (failuresQuery.isError) return <span className="text-xs text-amber-600">{t("platformFailures.loadError")}</span>;
   if (failures.length === 0) return null;
   return (
     <>
-      <Button size="sm" variant="outline" onClick={() => setDialogOpen(true)}>
+      <Button size="sm" variant="outline" onClick={() => setFailuresDialogOpen(true)}>
         <AlertTriangle className="mr-1 h-4 w-4 text-amber-500" aria-hidden />
         {t("platformFailures.indicator", { n: failures.length, count: failures.length })}
       </Button>
-      <Dialog open={isDialogOpen} onOpenChange={setDialogOpen}>
+      <Dialog open={isFailuresDialogOpen} onOpenChange={setFailuresDialogOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>{t("platformFailures.title")}</DialogTitle>
