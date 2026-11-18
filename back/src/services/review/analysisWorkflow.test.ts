@@ -59,7 +59,7 @@ const scenarioFinding = (title: string) => ({
 });
 
 describe("frota da análise de PR", () => {
-  it("as dimensões da frota são as do modelo do servidor: uma a mais ou a menos deixaria o veredito sempre não apto", async () => {
+  it("as dimensões da frota são as do modelo do servidor: uma só no modelo nunca rodaria, uma só no script o zod recusaria", async () => {
     const { calls } = await runFleet(async (_prompt, opts) => (opts.phase === "Contexto" ? brief(ALL_APPLY) : { findings: [] }));
     const briefSchema = calls.find((call) => call.opts.phase === "Contexto")!.opts.schema as {
       properties: { dimensions: { items: { properties: { key: { enum: string[] } } } } };

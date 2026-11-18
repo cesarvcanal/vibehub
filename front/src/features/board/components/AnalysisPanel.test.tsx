@@ -80,7 +80,7 @@ describe("painel da análise de PR", () => {
     expect(within(dimensions).getByText("o diff só toca configuração")).toBeInTheDocument();
   });
 
-  it("dimensão que rodou com achado não verificado aparece em atenção, com o motivo, e o veredito é não apto", async () => {
+  it("dimensão que rodou com achado não verificado aparece em atenção, com o motivo, ao lado do não apto que o servidor manda", async () => {
     const dimensions = doneReport().dimensions.map((dimension) => dimension.key === "tests"
       ? { ...dimension, unverifiedCount: 2, reason: "2 achados sem veredito (o verificador não respondeu)" }
       : dimension);
