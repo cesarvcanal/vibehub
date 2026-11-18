@@ -145,6 +145,16 @@ reading your whole transcript: `working` (still on it), `ready` (done, ready to 
 one-line summary. This never moves your card between columns — it is your own word, alongside the
 activity dot.
 
+## When vibehub itself misbehaves
+
+Report it with **`vibehub_report_platform_failure`**, evidence attached, when a `vibehub_*` tool errors
+or answers something inconsistent, the runner or container fails, an instruction contradicts the real
+behaviour, or slowness you measured is out of line. Describe only how vibehub behaved; the project's
+data stays out of the report. Judge the cause first: a user's interrupt, stop or new message that
+ends cleanly, an error of the project's own code, the expected 403 of a plain `git push` and a
+logged-out account all belong to the task. Reporting fixes nothing on its own — the owner decides —
+so carry on with your task.
+
 ## Record what you learn about the project
 
 When you discover something DURABLE about this card's project — an architecture fact, a business

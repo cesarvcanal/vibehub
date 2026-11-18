@@ -30,6 +30,11 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(INSTRUCTIONS).toContain("vibehub_report");
   });
 
+  it("ensina o agente a relatar falha do próprio vibehub, e quando não relatar", () => {
+    expect(INSTRUCTIONS).toContain("vibehub_report_platform_failure");
+    expect(INSTRUCTIONS).toMatch(/ends cleanly[^.]*belong to the task/);
+  });
+
   it("never send the agent to vibehub_gate before a delivery — vibehub_deliver already runs the gate", () => {
     // Each gate run is minutes of typecheck + tests. "Check it yourself before you ask to ship" made
     // the flow gate → deliver(unauthorized) → deliver(authorized): three full runs on the same commit.
