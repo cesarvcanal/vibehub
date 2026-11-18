@@ -20,15 +20,22 @@ const slowTurnsByCard = new Map<string, SlowTurn[]>();
 const slowTurnsListeners = new Set<SlowTurnsListener>();
 const userStops: { last?: UserStopMark } = {};
 
-function countSlowTurn(cardId: string, slowTurn: SlowTurn): void {
-  const recentSlowTurns = [...(slowTurnsByCard.get(cardId) ?? []), slowTurn]
-    .filter((earlierSlowTurn) => slowTurn.at - earlierSlowTurn.at <= SLOW_TURNS_WINDOW_MS);
+function slowTurnsWithinWindow(earlierSlowTurns: readonly SlowTurn[], slowTurn: SlowTurn): SlowTurn[] {
+  return [...earlierSlowTurns, slowTurn].filter((earlierSlowTurn) => slowTurn.at - earlierSlowTurn.at <= SLOW_TURNS_WINDOW_MS);
+}
+
+function recordSlowTurn(cardId: string, slowTurn: SlowTurn): void {
+  const recentSlowTurns = slowTurnsWithinWindow(slowTurnsByCard.get(cardId) ?? [], slowTurn);
   if (recentSlowTurns.length < SLOW_TURNS_TO_REPORT) {
     slowTurnsByCard.set(cardId, recentSlowTurns);
     return;
   }
   slowTurnsByCard.delete(cardId);
-  for (const listener of slowTurnsListeners) listener(cardId, recentSlowTurns);
+  notifySlowTurnsListeners(cardId, recentSlowTurns);
+}
+
+function notifySlowTurnsListeners(cardId: string, slowTurns: SlowTurn[]): void {
+  for (const listener of slowTurnsListeners) listener(cardId, slowTurns);
 }
 
 export function noteTurnSent(cardId: string, at: number): void {
@@ -50,7 +57,7 @@ export function noteTurnEvent(cardId: string, event: { type: DriverEvent["type"]
   if (!isFirstMainAgentOutput) return;
   openTurn.answered = true;
   const latencyMs = at - openTurn.since;
-  if (!openTurn.disturbed && latencyMs > SLOW_FIRST_OUTPUT_MS) countSlowTurn(cardId, { at, latencyMs });
+  if (!openTurn.disturbed && latencyMs > SLOW_FIRST_OUTPUT_MS) recordSlowTurn(cardId, { at, latencyMs });
 }
 
 export function noteDriverGone(cardId: string): void {
