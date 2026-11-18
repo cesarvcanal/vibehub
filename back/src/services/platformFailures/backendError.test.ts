@@ -62,12 +62,13 @@ describe("relato de erro do backend", () => {
 
   it.each([
     ["do mesmo card até 10s depois do stop dele é marcado e aponta o card", "erp-feat", USER_STOP_WINDOW_MS, "logo após um stop do usuário: falhou: write after end", "card-7"],
+    ["do mesmo card logado pelo id, não pelo slug, também é marcado e aponta o card", "card-7", 1_000, "logo após um stop do usuário: falhou: write after end", "card-7"],
     ["sem card logo depois de um stop é marcado pela proximidade, sem apontar card nenhum", undefined, 1_000, "logo após um stop do usuário: falhou: write after end", undefined],
     ["de outro card logo depois de um stop não é atribuído ao stop", "outro-card", 1_000, "falhou: write after end", undefined],
     ["depois da janela do stop não é atribuído ao stop", undefined, USER_STOP_WINDOW_MS + 1, "falhou: write after end", undefined],
-  ])("erro %s", (_case, loggedCard, msSinceStop, expectedSymptom, expectedCardId) => {
+  ])("erro %s", (_case, loggedCardReference, msSinceStop, expectedSymptom, expectedCardId) => {
     const report = buildBackendErrorReport(
-      { level: 50, message: "falhou", fields: { err: new Error("write after end"), ...(loggedCard ? { card: loggedCard } : {}) } },
+      { level: 50, message: "falhou", fields: { err: new Error("write after end"), ...(loggedCardReference ? { card: loggedCardReference } : {}) } },
       { ...STOPPED_CARD, at: NOW - msSinceStop },
       NOW,
     );
