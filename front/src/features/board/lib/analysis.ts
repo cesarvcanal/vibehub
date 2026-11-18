@@ -1,5 +1,5 @@
 import type { BadgeTone } from "@/components/ui/badge";
-import type { CardAnalysisResponse } from "@/api/types";
+import { ANALYSIS_DIMENSIONS, type AnalysisDimension, type CardAnalysisResponse } from "@/api/types";
 import type { SdkRow } from "@/features/board/lib/sdkChat";
 
 export const cardAnalysisKey = (cardId: string) => ["card-analysis", cardId] as const;
@@ -16,7 +16,7 @@ export function analysisPill(read: CardAnalysisResponse | null | undefined, opts
   if (!read?.analysis) {
     return opts.cardWorking ? { key: "analysis.pill.running", tone: "info" } : { key: "analysis.pill.noReport", tone: "warn" };
   }
-  const { analysis, verdict } = read;
+  const { analysis, verdict, health } = read;
   if (analysis.stage === "fleet_unavailable") return { key: "analysis.pill.fleetUnavailable", tone: "critical" };
   if (analysis.stage === "analysed") return { key: "analysis.pill.fixing", vars: { n: analysis.findings.length }, tone: "info" };
   if (verdict === "apt") {
@@ -24,7 +24,10 @@ export function analysisPill(read: CardAnalysisResponse | null | undefined, opts
     return { key: "analysis.pill.apt", vars: { n: fixedCount }, tone: "ok" };
   }
   const openBlockingCount = analysis.findings.filter((finding) => finding.severity === "blocking" && finding.status === "open").length;
-  return { key: "analysis.pill.notApt", vars: { n: openBlockingCount }, tone: "critical" };
+  if (openBlockingCount > 0) return { key: "analysis.pill.notApt", vars: { n: openBlockingCount }, tone: "critical" };
+  const hasUncheckedFindings = (key: AnalysisDimension) => (analysis.dimensions.find((dimension) => dimension.key === key)?.unverifiedCount ?? 0) > 0;
+  const uncheckedDimensions = ANALYSIS_DIMENSIONS.filter((key) => health[key] === "not_run" || hasUncheckedFindings(key));
+  return { key: "analysis.pill.notAptUnchecked", vars: { n: uncheckedDimensions.length }, tone: "critical" };
 }
 
 export function finishedAnalysisReports(rows: SdkRow[]): number {

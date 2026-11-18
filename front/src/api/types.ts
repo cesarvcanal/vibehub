@@ -763,6 +763,7 @@ export interface DimensionRun {
   key: AnalysisDimension;
   status: "ran" | "skipped" | "not_run";
   reason?: string;
+  unverifiedCount?: number;
 }
 
 export interface AnalysisReport {

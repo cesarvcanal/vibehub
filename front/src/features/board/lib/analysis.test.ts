@@ -8,9 +8,11 @@ const report = (over: Partial<AnalysisReport> = {}): AnalysisReport => ({
   dimensions: [], findings: [], refutedCount: 0, updatedAt: 1, ...over,
 });
 
-const readModel = (over: Partial<AnalysisReport> = {}, verdict: AnalysisVerdict = "pending"): AnalysisReadModel => ({
+const readModel = (
+  over: Partial<AnalysisReport> = {}, verdict: AnalysisVerdict = "pending", healthOver: Partial<AnalysisReadModel["health"]> = {},
+): AnalysisReadModel => ({
   analysis: report(over),
-  health: { correctness: "ok", security: "ok", performance: "ok", contracts: "ok", tests: "ok", repoRules: "ok" },
+  health: { correctness: "ok", security: "ok", performance: "ok", contracts: "ok", tests: "ok", repoRules: "ok", ...healthOver },
   verdict,
 });
 
@@ -37,6 +39,14 @@ describe("pílula da análise na linha da PR", () => {
     const findings = [finding(), finding({ id: "f2", status: "fixed" }), finding({ id: "f3", severity: "question" })];
     const pill = analysisPill(readModel({ stage: "done", findings }, "not_apt"), { cardWorking: false });
     expect(pill).toMatchObject({ key: "analysis.pill.notApt", vars: { n: 1 }, tone: "critical" });
+  });
+  it("não apta sem bloqueante aberto: conta as dimensões sem conferência, nunca \"0 bloqueantes\"", () => {
+    const dimensions: AnalysisReport["dimensions"] = [
+      { key: "correctness", status: "ran", unverifiedCount: 1, reason: "1 achado sem veredito" },
+      { key: "security", status: "not_run", reason: "o agente de revisão não respondeu" },
+    ];
+    const read = readModel({ stage: "done", dimensions }, "not_apt", { correctness: "attention", security: "not_run" });
+    expect(analysisPill(read, { cardWorking: false })).toMatchObject({ key: "analysis.pill.notAptUnchecked", vars: { n: 2 }, tone: "critical" });
   });
   it("frota indisponível", () => {
     const pill = analysisPill(readModel({ stage: "fleet_unavailable", unavailableReason: "x" }, "not_apt"), { cardWorking: false });

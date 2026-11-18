@@ -1461,6 +1461,8 @@ export const en: Record<string, string> = {
   "analysis.pill.apt.other": "apt · {n} fixed",
   "analysis.pill.notApt.one": "not apt · 1 open blocker",
   "analysis.pill.notApt.other": "not apt · {n} open blockers",
+  "analysis.pill.notAptUnchecked.one": "not apt · 1 dimension unchecked",
+  "analysis.pill.notAptUnchecked.other": "not apt · {n} dimensions unchecked",
   "analysis.pill.fleetUnavailable": "fleet unavailable",
   "analysis.panel.label": "PR analysis",
   "analysis.panel.title": "Analysis of PR #{n}",
