@@ -95,6 +95,26 @@ describe("relatório da análise pela ferramenta do card", () => {
     expect((await registry.getCard(analysisCard.id))?.column).toBe(analysisCard.column);
   });
 
+  it("relatório done que perde um achado do analysed é recusado: o veredito não depende só do que o card reenvia", async () => {
+    const { analysisCard, reportService, store } = await load();
+    const blockingFinding = {
+      id: "f1", severity: "blocking" as const, title: "t", problem: "p", fix: "x", dimension: "correctness" as const, status: "open" as const,
+      proof: { kind: "scenario" as const, ref: "a.ts:1" },
+    };
+    await reportService.recordAnalysisReport(analysisCard.id, input({ findings: [blockingFinding] }));
+    await expect(reportService.recordAnalysisReport(analysisCard.id, input({ stage: "done", findings: [] }))).rejects.toThrow(/f1/);
+    expect((await store.getAnalysis(analysisCard.id))?.stage).toBe("analysed");
+  });
+
+  it("relatório done que perde o unverifiedCount do analysed é recusado", async () => {
+    const { analysisCard, reportService } = await load();
+    const unverifiedTests = [{ key: "tests" as const, status: "ran" as const, unverifiedCount: 3, reason: "3 achados acima do teto" }];
+    await reportService.recordAnalysisReport(analysisCard.id, input({ dimensions: unverifiedTests }));
+    await expect(reportService.recordAnalysisReport(analysisCard.id, input({ stage: "done", dimensions: [{ key: "tests", status: "ran" }] })))
+      .rejects.toThrow(/tests/);
+    await expect(reportService.recordAnalysisReport(analysisCard.id, input({ stage: "done", dimensions: unverifiedTests }))).resolves.toBeDefined();
+  });
+
   it("card de análise já concluído não grava relatório: a PR pode já ter outro card trabalhando nela", async () => {
     const { analysisCard, reportService, store } = await load();
     await reportService.recordAnalysisReport(analysisCard.id, input({ stage: "fleet_unavailable", unavailableReason: "Workflow desligado" }));

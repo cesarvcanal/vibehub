@@ -1,7 +1,7 @@
 import { getCard, updateCard } from "../board/registry.js";
 import { recordMessage } from "../events/cardEvents.js";
-import type { AnalysisFinding, AnalysisReport, AnalysisStage, DimensionRun } from "./analysisModel.js";
-import { saveAnalysis } from "./analysisStore.js";
+import type { AnalysisDimension, AnalysisFinding, AnalysisReport, AnalysisStage, DimensionRun } from "./analysisModel.js";
+import { getAnalysis, saveAnalysis } from "./analysisStore.js";
 
 export interface AnalysisReportInput {
   headSha: string;
@@ -24,12 +24,34 @@ function stageMessage(report: AnalysisReport): string {
   }
 }
 
+function findDroppedFromSavedReport(saved: AnalysisReport, input: AnalysisReportInput): string[] {
+  const droppedFindingIds = saved.findings
+    .filter((savedFinding) => !input.findings.some((finding) => finding.id === savedFinding.id))
+    .map((savedFinding) => `achado ${savedFinding.id}`);
+  const unverifiedCountOf = (dimensions: DimensionRun[], key: AnalysisDimension) =>
+    dimensions.find((dimension) => dimension.key === key)?.unverifiedCount ?? 0;
+  const droppedUnverified = saved.dimensions
+    .filter((savedDimension) => unverifiedCountOf(input.dimensions, savedDimension.key) < (savedDimension.unverifiedCount ?? 0))
+    .map((savedDimension) => `unverifiedCount de ${savedDimension.key}`);
+  return [...droppedFindingIds, ...droppedUnverified];
+}
+
 export async function recordAnalysisReport(cardId: string, input: AnalysisReportInput): Promise<AnalysisReport> {
   const card = await getCard(cardId);
   if (!card) throw new Error(`card não encontrado: ${cardId}`);
   const analysedPr = card.pushBranch === undefined ? undefined : card.prs?.[0];
   if (!analysedPr) throw new Error("este card não é um card de análise: passe em `card` o $VIBEHUB_CARD_ID do card que analisa a PR");
   if (card.column === "done") throw new Error("este card de análise já foi concluído: pare; um novo pedido da PR abre outro card");
+  const savedReport = input.stage === "done" ? await getAnalysis(cardId) : undefined;
+  if (savedReport) {
+    const droppedFromSaved = findDroppedFromSavedReport(savedReport, input);
+    if (droppedFromSaved.length > 0) {
+      throw new Error(
+        `o relatório done perde o que o relatório ${savedReport.stage} gravou: ${droppedFromSaved.join(", ")}; ` +
+          "reenvie as mesmas dimensions e os mesmos findings, mudando só status e commit",
+      );
+    }
+  }
   const report: AnalysisReport = {
     cardId,
     prUrl: analysedPr.url,

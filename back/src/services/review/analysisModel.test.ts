@@ -38,8 +38,8 @@ describe("estado de cada dimensão da análise", () => {
     expect(dimensionHealth(report(), "tests")).toBe("not_run");
   });
   it("dimensão que rodou com achado não verificado fica em atenção, mesmo sem achado aberto", () => {
-    const withUnchecked = report({ dimensions: [{ key: "correctness", status: "ran", unverifiedCount: 2, reason: "2 achados acima do teto" }] });
-    expect(dimensionHealth(withUnchecked, "correctness")).toBe("attention");
+    const withUnverifiedFindings = report({ dimensions: [{ key: "correctness", status: "ran", unverifiedCount: 2, reason: "2 achados acima do teto" }] });
+    expect(dimensionHealth(withUnverifiedFindings, "correctness")).toBe("attention");
   });
 });
 
