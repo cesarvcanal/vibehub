@@ -60,6 +60,12 @@ describe("vibehub_report_platform_failure", () => {
     expect((await failures.listPlatformFailuresForOwner())[0]!.evidence).not.toContain("z".repeat(40));
   });
 
+  it("mascara token que o agente pôs no componente", async () => {
+    const { call, failures } = await connect();
+    await call({ ...REPORT, component: `ghp_${"A".repeat(36)}` });
+    expect((await failures.listPlatformFailuresForOwner())[0]!.component).not.toContain("A".repeat(36));
+  });
+
   it("sem projeto do vibehub configurado, recusa dizendo onde configurar", async () => {
     const { call } = await connect({ configured: false });
     expect((await call(REPORT)).json.error).toMatch(/Settings/);

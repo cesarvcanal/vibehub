@@ -28,7 +28,7 @@ export async function reportPlatformFailureFromAgent(input: AgentFailureInput) {
   const measuredEvidence = input.measuredMs !== undefined ? `\nmedido: ${input.measuredMs} ms` : "";
   const recordedFailure = await recordPlatformFailure({
     source: "agent_report",
-    component: input.component,
+    component: redactSecrets(input.component),
     symptom: redactSecrets(`${input.kind}: ${input.symptom}`),
     evidence: redactSecrets(`${input.evidence}${measuredEvidence}`),
     ...(input.reproduction ? { reproduction: redactSecrets(input.reproduction) } : {}),
