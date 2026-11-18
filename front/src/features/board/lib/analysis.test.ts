@@ -46,7 +46,7 @@ describe("pílula da análise na linha da PR", () => {
       { key: "security", status: "not_run", reason: "o agente de revisão não respondeu" },
     ];
     const read = readModel({ stage: "done", dimensions }, "not_apt", { correctness: "attention", security: "not_run" });
-    expect(analysisPill(read, { cardWorking: false })).toMatchObject({ key: "analysis.pill.notAptUnchecked", vars: { n: 2 }, tone: "critical" });
+    expect(analysisPill(read, { cardWorking: false })).toMatchObject({ key: "analysis.pill.notAptUnverified", vars: { n: 2 }, tone: "critical" });
   });
   it("frota indisponível", () => {
     const pill = analysisPill(readModel({ stage: "fleet_unavailable", unavailableReason: "x" }, "not_apt"), { cardWorking: false });

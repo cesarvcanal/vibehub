@@ -25,9 +25,9 @@ export function analysisPill(read: CardAnalysisResponse | null | undefined, opts
   }
   const openBlockingCount = analysis.findings.filter((finding) => finding.severity === "blocking" && finding.status === "open").length;
   if (openBlockingCount > 0) return { key: "analysis.pill.notApt", vars: { n: openBlockingCount }, tone: "critical" };
-  const hasUncheckedFindings = (key: AnalysisDimension) => (analysis.dimensions.find((dimension) => dimension.key === key)?.unverifiedCount ?? 0) > 0;
-  const uncheckedDimensions = ANALYSIS_DIMENSIONS.filter((key) => health[key] === "not_run" || hasUncheckedFindings(key));
-  return { key: "analysis.pill.notAptUnchecked", vars: { n: uncheckedDimensions.length }, tone: "critical" };
+  const hasUnverifiedFindings = (key: AnalysisDimension) => (analysis.dimensions.find((dimension) => dimension.key === key)?.unverifiedCount ?? 0) > 0;
+  const unverifiedDimensions = ANALYSIS_DIMENSIONS.filter((key) => health[key] === "not_run" || hasUnverifiedFindings(key));
+  return { key: "analysis.pill.notAptUnverified", vars: { n: unverifiedDimensions.length }, tone: "critical" };
 }
 
 export function finishedAnalysisReports(rows: SdkRow[]): number {
