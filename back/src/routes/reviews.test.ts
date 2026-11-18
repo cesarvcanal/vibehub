@@ -1121,3 +1121,37 @@ describe("decidir, tentar de novo e cancelar", () => {
     }
   });
 });
+
+describe("relatório da análise pela rota", () => {
+  const savedReport = (cardId: string) => ({
+    cardId, prUrl: PR.url, prNumber: 7, analysedSha: "e".repeat(40), stage: "analysed" as const, summary: "s",
+    dimensions: [{ key: "correctness" as const, status: "ran" as const }], findings: [], refutedCount: 2, updatedAt: 1,
+  });
+  const saveReport = async (cardId: string) =>
+    await (await import("../services/review/analysisStore.js")).saveAnalysis(savedReport(cardId));
+
+  it("quem só vê o card lê a análise, com o estado por dimensão e o veredito já calculados", async () => {
+    const w = await world();
+    await saveReport(w.cardId);
+    const got = await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/analysis`, headers: { cookie: w.leitor.cookie } });
+    expect(got.statusCode).toBe(200);
+    expect(got.json().analysis).toMatchObject({ cardId: w.cardId, refutedCount: 2 });
+    expect(got.json().verdict).toBe("pending");
+    expect(got.json().health).toMatchObject({ correctness: "ok", security: "not_run" });
+  });
+
+  it("quem não alcança o card não lê a análise", async () => {
+    const w = await world();
+    await saveReport(w.cardId);
+    const got = await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/analysis`, headers: { cookie: w.outro.cookie } });
+    expect(got.statusCode).toBe(404);
+    expect(got.json().analysis).toBeUndefined();
+  });
+
+  it("card sem análise responde 404", async () => {
+    const w = await world();
+    const got = await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/analysis`, headers: { cookie: w.owner.cookie } });
+    expect(got.statusCode).toBe(404);
+    expect(got.json().error).toBe("sem análise");
+  });
+});
