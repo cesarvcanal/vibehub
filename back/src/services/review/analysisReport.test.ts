@@ -162,12 +162,15 @@ describe("relatório da análise pela ferramenta do card", () => {
     expect((await store.getAnalysis(analysisCard.id))?.analysedSha).toBe(SHA);
   });
 
-  it("frota indisponível depois do done diz que a análise já foi concluída, sem mandar refazer o passo 4", async () => {
+  it.each([
+    ["frota indisponível", { stage: "fleet_unavailable" as const, unavailableReason: "x" }],
+    ["um segundo analysed", { stage: "analysed" as const }],
+  ])("%s depois do done manda parar, sem mandar refazer o passo 4", async (_case, lateReport) => {
     const { analysisCard, reportService } = await load();
     await reportService.recordAnalysisReport(analysisCard.id, input());
     await reportService.recordAnalysisReport(analysisCard.id, input({ stage: "done" }));
-    await expect(reportService.recordAnalysisReport(analysisCard.id, input({ stage: "fleet_unavailable", unavailableReason: "x" })))
-      .rejects.toThrow(/relatório done/);
+    const lateRecording = reportService.recordAnalysisReport(analysisCard.id, input(lateReport));
+    await expect(lateRecording).rejects.toThrow("o relatório done já está gravado neste card: a análise está concluída, pare");
   });
 
   it("o sha gravado sai em minúsculas, venha na caixa que vier: o sha tem uma forma só no painel e no aviso", async () => {
