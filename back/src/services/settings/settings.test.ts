@@ -55,6 +55,12 @@ describe("settings", () => {
     await expect(s.updateSettings({ selfProjectId: "  " })).rejects.toThrow(/selfProjectId/);
   });
 
+  it("recusa projeto do vibehub que não é texto: a rota só confere a existência de um id em texto", async () => {
+    const s = await fresh();
+    await expect(s.updateSettings({ selfProjectId: 5 as unknown as string })).rejects.toThrow(/selfProjectId/);
+    expect((await s.getSettings()).selfProjectId).toBeNull();
+  });
+
   it("validates the git identity", async () => {
     const s = await fresh();
     await expect(s.updateSettings({ git: { name: "  " } })).rejects.toThrow(/cannot be empty/);

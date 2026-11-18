@@ -75,7 +75,6 @@ export interface Settings {
    * only the system line; the person resumes by hand.
    */
   sdkAutoResume: boolean;
-  /** The board project holding the vibehub repo itself: where a platform-failure fix card is born. Null = the feature is off. */
   selfProjectId: string | null;
 }
 
@@ -152,7 +151,7 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
   if (patch.sdkAutoResume !== undefined && typeof patch.sdkAutoResume !== "boolean") {
     throw new Error("sdkAutoResume must be a boolean");
   }
-  if (patch.selfProjectId !== undefined && patch.selfProjectId !== null && String(patch.selfProjectId).trim() === "") {
+  if (patch.selfProjectId !== undefined && patch.selfProjectId !== null && (typeof patch.selfProjectId !== "string" || patch.selfProjectId.trim() === "")) {
     throw new Error("selfProjectId must be a project id, or null");
   }
   if (patch.transcribeLanguage !== undefined && patch.transcribeLanguage !== null) {
@@ -192,7 +191,7 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
       doc.settings.sdkAutoResume = patch.sdkAutoResume;
     }
     if (patch.selfProjectId !== undefined) {
-      doc.settings.selfProjectId = patch.selfProjectId === null ? null : String(patch.selfProjectId).trim();
+      doc.settings.selfProjectId = patch.selfProjectId === null ? null : patch.selfProjectId.trim();
     }
     if (patch.idleHibernateMinutes !== undefined) {
       doc.settings.idleHibernateMinutes = Number(patch.idleHibernateMinutes);
