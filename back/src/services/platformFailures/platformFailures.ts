@@ -105,22 +105,29 @@ export async function dismissPlatformFailure(id: string, now: number = Date.now(
   });
 }
 
-export async function claimPlatformFailureInvestigation(id: string): Promise<{ failure: PlatformFailure; alreadyClaimed: boolean }> {
+interface InvestigationClaim {
+  failure: PlatformFailure;
+  alreadyClaimed: boolean;
+  statusBeforeClaim: PlatformFailureStatus;
+}
+
+export async function claimPlatformFailureInvestigation(id: string): Promise<InvestigationClaim> {
   return await store.mutate((doc) => {
     const failure = findFailureIn(doc, id);
-    if (failure.status === "investigating") return { failure: { ...failure }, alreadyClaimed: true };
-    if (!INVESTIGABLE_STATUSES.includes(failure.status)) {
-      throw new PlatformFailureStateError(`platform failure ${id} is ${failure.status} and cannot be investigated`);
+    const statusBeforeClaim = failure.status;
+    if (statusBeforeClaim === "investigating") return { failure: { ...failure }, alreadyClaimed: true, statusBeforeClaim };
+    if (!INVESTIGABLE_STATUSES.includes(statusBeforeClaim)) {
+      throw new PlatformFailureStateError(`platform failure ${id} is ${statusBeforeClaim} and cannot be investigated`);
     }
     failure.status = "investigating";
-    return { failure: { ...failure }, alreadyClaimed: false };
+    return { failure: { ...failure }, alreadyClaimed: false, statusBeforeClaim };
   });
 }
 
-export async function releasePlatformFailureInvestigation(id: string): Promise<PlatformFailure> {
+export async function releasePlatformFailureInvestigation(id: string, statusBeforeClaim: PlatformFailureStatus): Promise<PlatformFailure> {
   return await store.mutate((doc) => {
     const failure = findFailureIn(doc, id);
-    failure.status = "open";
+    failure.status = statusBeforeClaim === "concluded_without_fix" ? "concluded_without_fix" : "open";
     return { ...failure };
   });
 }

@@ -138,6 +138,20 @@ describe("rotas de falha da plataforma", () => {
     expect(sendToTerminal).toHaveBeenLastCalledWith(again.json().card.id, expect.any(String), expect.any(Object));
   });
 
+  it("brief que falha ao investigar de novo uma concluída sem correção devolve a falha a esse estado", async () => {
+    const { app, ...world } = await bootFailureWorld();
+    const failure = await recordFailure();
+    const first = (await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } })).json();
+    await app.inject({ method: "PATCH", url: `/api/cards/${first.card.id}`, headers: { cookie: world.owner }, payload: { column: "done" } });
+    const failures = await import("../services/platformFailures/platformFailures.js");
+    await failures.settlePlatformFailureInvestigation(first.card.id, { merged: false });
+    sendToTerminal.mockRejectedValueOnce(new Error("runner down"));
+    const failed = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
+    expect(failed.statusCode).toBe(500);
+    const listed = (await app.inject({ method: "GET", url: "/api/platform-failures", headers: { cookie: world.owner } })).json().failures;
+    expect(listed[0]).toMatchObject({ id: failure.id, status: "concluded_without_fix" });
+  });
+
   it("projeto do vibehub sumido: investigar responde 400 e a falha continua listada", async () => {
     const { app, ...world } = await bootFailureWorld();
     const failure = await recordFailure();

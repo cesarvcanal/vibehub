@@ -9,7 +9,7 @@ import {
   PlatformFailureStateError, claimPlatformFailureInvestigation, getPlatformFailure, releasePlatformFailureInvestigation,
   setPlatformFailureInvestigationCard,
 } from "./platformFailures.js";
-import type { PlatformFailure } from "./types.js";
+import type { PlatformFailure, PlatformFailureStatus } from "./types.js";
 
 interface PlatformFailureInvestigation {
   failure: PlatformFailure;
@@ -57,7 +57,9 @@ async function createInvestigationCard(failure: PlatformFailure, owner: PublicUs
   return card;
 }
 
-async function sendInvestigationBrief(failure: PlatformFailure, owner: PublicUser, card: registry.Card): Promise<PlatformFailureInvestigation> {
+async function sendInvestigationBrief(
+  failure: PlatformFailure, statusBeforeClaim: PlatformFailureStatus, owner: PublicUser, card: registry.Card,
+): Promise<PlatformFailureInvestigation> {
   try {
     await sendToTerminal(card.id, buildInvestigationBrief(failure), {
       by: `platform-failure:${failure.id}`,
@@ -70,7 +72,7 @@ async function sendInvestigationBrief(failure: PlatformFailure, owner: PublicUse
       beforeDeliver: () => recordCardActor(owner, card.id),
     });
   } catch (err) {
-    await releasePlatformFailureInvestigation(failure.id);
+    await releasePlatformFailureInvestigation(failure.id, statusBeforeClaim);
     throw err;
   }
   return { failure: { ...failure, investigationCardId: card.id }, card: { id: card.id, projectId: card.projectId, title: card.title } };
@@ -83,14 +85,14 @@ async function investigatePlatformFailure(failureId: string, owner: PublicUser):
     await getPlatformFailure(failureId);
     throw new PlatformFailureStateError("the vibehub project is not configured or no longer exists — pick it in Settings");
   }
-  const { failure, alreadyClaimed } = await claimPlatformFailureInvestigation(failureId);
+  const { failure, alreadyClaimed, statusBeforeClaim } = await claimPlatformFailureInvestigation(failureId);
   const previousCard = failure.investigationCardId ? await registry.getCard(failure.investigationCardId) : undefined;
   const ongoingCard = previousCard?.column === "done" ? undefined : previousCard;
   if (alreadyClaimed && ongoingCard) {
     return { failure, card: { id: ongoingCard.id, projectId: ongoingCard.projectId, title: ongoingCard.title } };
   }
   const investigationCard = ongoingCard ?? await createInvestigationCard(failure, owner, selfProject.id);
-  return await sendInvestigationBrief(failure, owner, investigationCard);
+  return await sendInvestigationBrief(failure, statusBeforeClaim, owner, investigationCard);
 }
 
 export function startPlatformFailureInvestigation(failureId: string, owner: PublicUser): Promise<PlatformFailureInvestigation> {
