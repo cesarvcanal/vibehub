@@ -39,13 +39,13 @@ export type DimensionHealth = "ok" | "attention" | "problem" | "not_run" | "skip
 
 export function dimensionHealth(report: AnalysisReport, key: AnalysisDimension): DimensionHealth {
   const run = report.dimensions.find((dimension) => dimension.key === key);
-  if (!run || run.status === "not_run") return "not_run";
-  if (run.status === "skipped") return "skipped";
   const openFindings = report.findings.filter((finding) => finding.dimension === key && finding.status === "open");
   if (openFindings.some((finding) => finding.severity === "blocking")) return "problem";
-  const needsDecision = openFindings.some((finding) => finding.severity === "question" || finding.severity === "improvement");
-  const hasUncheckedFindings = (run.unverifiedCount ?? 0) > 0;
-  return needsDecision || hasUncheckedFindings ? "attention" : "ok";
+  if (!run || run.status === "not_run") return "not_run";
+  if (run.status === "skipped") return "skipped";
+  const hasOpenImprovementOrQuestion = openFindings.some((finding) => finding.severity === "question" || finding.severity === "improvement");
+  const hasUnverifiedFindings = (run.unverifiedCount ?? 0) > 0;
+  return hasOpenImprovementOrQuestion || hasUnverifiedFindings ? "attention" : "ok";
 }
 
 export type AnalysisVerdict = "apt" | "not_apt" | "pending";
@@ -55,6 +55,6 @@ export function analysisVerdict(report: AnalysisReport): AnalysisVerdict {
   if (report.stage !== "done") return "pending";
   const healthByDimension = ANALYSIS_DIMENSIONS.map((key) => dimensionHealth(report, key));
   const blocked = healthByDimension.some((health) => health === "problem" || health === "not_run");
-  const hasUncheckedFindings = report.dimensions.some((dimension) => (dimension.unverifiedCount ?? 0) > 0);
-  return blocked || hasUncheckedFindings ? "not_apt" : "apt";
+  const hasUnverifiedFindings = report.dimensions.some((dimension) => (dimension.unverifiedCount ?? 0) > 0);
+  return blocked || hasUnverifiedFindings ? "not_apt" : "apt";
 }

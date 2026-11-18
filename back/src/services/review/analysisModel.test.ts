@@ -70,6 +70,13 @@ describe("veredito da análise", () => {
       dimension.key === "tests" ? { ...dimension, unverifiedCount: 1, reason: "1 achado sem veredito" } : dimension);
     expect(analysisVerdict(report({ dimensions }))).toBe("not_apt");
   });
+  it("bloqueante aberto em dimensão fora do diff impede o apto: o juiz pode pôr o achado em qualquer dimensão", () => {
+    const dimensions = everyDimensionAccounted().map((dimension) =>
+      dimension.key === "tests" ? { key: "tests" as const, status: "skipped" as const, reason: "fora do diff" } : dimension);
+    const read = report({ dimensions, findings: [finding({ dimension: "tests" })] });
+    expect(dimensionHealth(read, "tests")).toBe("problem");
+    expect(analysisVerdict(read)).toBe("not_apt");
+  });
   it("frota indisponível nunca é apta", () => {
     expect(analysisVerdict(report({ stage: "fleet_unavailable", unavailableReason: "CLI antigo" }))).toBe("not_apt");
   });
