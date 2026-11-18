@@ -146,6 +146,14 @@ describe("relatório da análise pela ferramenta do card", () => {
     expect((await store.getAnalysis(analysisCard.id))?.findings).toHaveLength(1);
   });
 
+  it("frota indisponível depois do analysed gravado é recusada: os achados da frota não somem", async () => {
+    const { analysisCard, reportService, store } = await load();
+    await reportService.recordAnalysisReport(analysisCard.id, input({ findings: [blockingFinding] }));
+    await expect(reportService.recordAnalysisReport(analysisCard.id, input({ stage: "fleet_unavailable", unavailableReason: "x" })))
+      .rejects.toThrow(/frota já rodou/);
+    expect((await store.getAnalysis(analysisCard.id))?.findings).toHaveLength(1);
+  });
+
   it("relatório done sem o analysed gravado antes é recusado", async () => {
     const { analysisCard, reportService, store } = await load();
     await expect(reportService.recordAnalysisReport(analysisCard.id, input({ stage: "done" }))).rejects.toThrow(/passo 3/);

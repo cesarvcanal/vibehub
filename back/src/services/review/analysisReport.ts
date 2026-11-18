@@ -47,7 +47,10 @@ export async function recordAnalysisReport(cardId: string, input: AnalysisReport
   const analysedPr = card.pushBranch === undefined ? undefined : card.prs?.[0];
   if (!analysedPr) throw new Error("este card não é um card de análise: passe em `card` o $VIBEHUB_CARD_ID do card que analisa a PR");
   if (card.column === "done") throw new Error("este card de análise já foi concluído: pare; um novo pedido da PR abre outro card");
-  const savedReport = input.stage === "fleet_unavailable" ? undefined : await getAnalysis(cardId);
+  const savedReport = await getAnalysis(cardId);
+  if (input.stage === "fleet_unavailable" && savedReport) {
+    throw new Error("a frota já rodou e o relatório analysed está gravado: siga do passo 4, sem fleet_unavailable");
+  }
   if (input.stage === "analysed" && savedReport) {
     throw new Error("o relatório analysed já foi gravado neste card: siga do passo 4 com os findings dele");
   }
