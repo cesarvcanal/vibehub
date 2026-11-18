@@ -107,7 +107,8 @@ export const analysisFinding = z.object({
 
 const analysisReportFields = z.object({
   card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this analysis terminal"),
-  headSha: z.string().regex(HEAD_SHA_RE, "the full sha of the analysed head").describe("full sha of the analysed head (40 hex chars)"),
+  headSha: z.string().regex(HEAD_SHA_RE, "the full sha of the analysed head")
+    .describe("full sha of the analysed head, the one from step 1 (40 or 64 hex chars); `done` repeats the `analysed` one"),
   stage: z.enum(ANALYSIS_STAGES as [AnalysisStage, ...AnalysisStage[]]),
   summary: z.string().min(1).max(1000),
   dimensions: z.array(z.object({
