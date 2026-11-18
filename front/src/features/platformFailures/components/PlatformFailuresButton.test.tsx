@@ -43,9 +43,9 @@ beforeEach(() => {
 describe("PlatformFailuresButton", () => {
   it("não mostra nada quando não há falha", async () => {
     setServedFailures([]);
-    const { queryClient } = renderApp(<PlatformFailuresButton />);
+    const { queryClient, container } = renderApp(<PlatformFailuresButton />);
     await waitFor(() => expect(queryClient.getQueryState(PLATFORM_FAILURES_KEY)?.status).toBe("success"));
-    expect(screen.queryByRole("button")).toBeNull();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("lista que não carrega avisa o dono em vez de parecer que não há falha", async () => {
