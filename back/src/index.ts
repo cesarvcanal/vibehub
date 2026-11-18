@@ -16,6 +16,7 @@ import { sharesRoutes } from "./routes/shares.js";
 import { reviewRoutes } from "./routes/reviews.js";
 import { prAnalysisRoutes } from "./routes/prAnalysis.js";
 import { settingsRoutes } from "./routes/settings.js";
+import { platformFailureRoutes } from "./routes/platformFailures.js";
 import { githubRoutes } from "./routes/github.js";
 import { runnerRoutes } from "./routes/runner.js";
 import { boardRoutes } from "./routes/board.js";
@@ -89,6 +90,7 @@ export async function buildServer() {
   await app.register(usersRoutes);
   await app.register(sharesRoutes);
   await app.register(settingsRoutes);
+  await app.register(platformFailureRoutes);
   await app.register(githubRoutes);
   await app.register(runnerRoutes);
   await app.register(boardRoutes);

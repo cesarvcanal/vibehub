@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { config } from "../config/env.js";
 import { requireOwner, requireSession } from "../auth/session.js";
 import { getSettings, updateSettings, markSetupCompleted, type SettingsPatch } from "../services/settings/settings.js";
-import { setDefaultAccountLabel } from "../services/board/registry.js";
+import { getProject, setDefaultAccountLabel } from "../services/board/registry.js";
 import { hostExecutor } from "../runtime/host.js";
 import { DONE_RETENTION_DAYS } from "../services/board/retention.js";
 
@@ -25,6 +25,9 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
 
   app.patch<{ Body: SettingsPatch }>("/api/settings", { preHandler: requireOwner }, async (req, reply) => {
     try {
+      if (typeof req.body?.selfProjectId === "string" && !(await getProject(req.body.selfProjectId))) {
+        throw new Error("selfProjectId: project not found");
+      }
       const updated = await updateSettings(req.body ?? {});
       // The default account's display label lives in TWO documents: settings.json (what this route
       // owns) and the board config (what GET /api/accounts serves and the runner-side code reads).

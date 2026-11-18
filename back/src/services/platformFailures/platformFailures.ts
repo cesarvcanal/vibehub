@@ -109,6 +109,15 @@ export async function claimPlatformFailureInvestigation(id: string): Promise<{ f
   });
 }
 
+export async function releasePlatformFailureInvestigation(id: string): Promise<PlatformFailure> {
+  return await store.mutate((doc) => {
+    const failure = findFailureIn(doc, id);
+    failure.status = "open";
+    delete failure.investigationCardId;
+    return { ...failure };
+  });
+}
+
 export async function setPlatformFailureInvestigationCard(id: string, cardId: string): Promise<PlatformFailure> {
   return await store.mutate((doc) => {
     const failure = findFailureIn(doc, id);
