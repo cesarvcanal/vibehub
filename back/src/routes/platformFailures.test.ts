@@ -12,11 +12,11 @@ async function boot(): Promise<FastifyInstance> {
   vi.resetModules();
   const dataDir = await mkdtemp(join(tmpdir(), "vibehub-platform-failures-route-"));
   onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
-  const env = await import("../config/env.js");
-  env.config.dataDir = dataDir;
-  env.config.secretKey = "";
-  env.config.sessionSecret = "";
-  env.config.insecureCookies = true;
+  const envModule = await import("../config/env.js");
+  envModule.config.dataDir = dataDir;
+  envModule.config.secretKey = "";
+  envModule.config.sessionSecret = "";
+  envModule.config.insecureCookies = true;
   vi.doMock("../runtime/runner.js", () => ({
     provisionRunner: vi.fn(async () => undefined),
     startRunner: vi.fn(async () => undefined),
@@ -49,8 +49,8 @@ async function boot(): Promise<FastifyInstance> {
   return server;
 }
 
-function cookieOf(res: { cookies: { name: string; value: string }[] }): string {
-  return `vibehub_session=${res.cookies.find((cookie) => cookie.name === "vibehub_session")?.value ?? ""}`;
+function readSessionCookie(authResponse: { cookies: { name: string; value: string }[] }): string {
+  return `vibehub_session=${authResponse.cookies.find((cookie) => cookie.name === "vibehub_session")?.value ?? ""}`;
 }
 
 interface FailureWorld {
@@ -62,12 +62,12 @@ interface FailureWorld {
 
 async function bootFailureWorld(): Promise<FailureWorld> {
   const app = await boot();
-  const owner = cookieOf(await app.inject({ method: "POST", url: "/api/setup/owner", payload: { username: "owner", password: "supersecret" } }));
+  const owner = readSessionCookie(await app.inject({ method: "POST", url: "/api/setup/owner", payload: { username: "owner", password: "supersecret" } }));
   await app.inject({ method: "POST", url: "/api/users", headers: { cookie: owner }, payload: { username: "alex", password: "supersecret", role: "member" } });
-  const member = cookieOf(await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "alex", password: "supersecret" } }));
+  const member = readSessionCookie(await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "alex", password: "supersecret" } }));
   const vibehubProjectId = (await app.inject({ method: "POST", url: "/api/projects", headers: { cookie: owner }, payload: { name: "vibehub" } })).json().project.id as string;
-  const saved = await app.inject({ method: "PATCH", url: "/api/settings", headers: { cookie: owner }, payload: { selfProjectId: vibehubProjectId } });
-  expect(saved.statusCode).toBe(200);
+  const settingsResponse = await app.inject({ method: "PATCH", url: "/api/settings", headers: { cookie: owner }, payload: { selfProjectId: vibehubProjectId } });
+  expect(settingsResponse.statusCode).toBe(200);
   return { app, owner, member, vibehubProjectId };
 }
 
@@ -142,9 +142,9 @@ describe("rotas de falha da plataforma", () => {
     const { app, ...world } = await bootFailureWorld();
     const failure = await recordFailure();
     const firstInvestigation = (await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } })).json();
-    const registry = await import("../services/board/registry.js");
-    await registry.recordCardPr(firstInvestigation.card.id, { number: 7, url: "https://github.com/acme/vibehub/pull/7", base: "main", branch: "fix-falha" });
-    await registry.markCardPrMerged(firstInvestigation.card.id, "main", 7, Date.now());
+    const boardRegistry = await import("../services/board/registry.js");
+    await boardRegistry.recordCardPr(firstInvestigation.card.id, { number: 7, url: "https://github.com/acme/vibehub/pull/7", base: "main", branch: "fix-falha" });
+    await boardRegistry.markCardPrMerged(firstInvestigation.card.id, "main", 7, Date.now());
     await app.inject({ method: "PATCH", url: `/api/cards/${firstInvestigation.card.id}`, headers: { cookie: world.owner }, payload: { column: "done" } });
     const secondInvestigationResponse = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
     expect(secondInvestigationResponse.statusCode).toBe(200);
@@ -184,8 +184,8 @@ describe("rotas de falha da plataforma", () => {
   it("projeto do vibehub sumido: investigar responde 400 e a falha continua listada", async () => {
     const { app, ...world } = await bootFailureWorld();
     const failure = await recordFailure();
-    const settings = await import("../services/settings/settings.js");
-    await settings.updateSettings({ selfProjectId: "project-that-no-longer-exists" });
+    const settingsService = await import("../services/settings/settings.js");
+    await settingsService.updateSettings({ selfProjectId: "project-that-no-longer-exists" });
     const investigationResponse = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
     expect(investigationResponse.statusCode).toBe(400);
     expect(investigationResponse.json().error).toMatch(/Settings/);
