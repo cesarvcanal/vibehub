@@ -15,6 +15,8 @@ import { submitReviewerRound, submitAuthorResponse, reviewToolAnswer, HEAD_SHA_R
 import { MAX_ROUNDS, cardsToConclude } from "../services/review/model.js";
 import { attachPrs } from "../services/review/attach.js";
 import { startReviewByAgent } from "../services/review/start.js";
+import { recordAnalysisReport } from "../services/review/analysisReport.js";
+import { ANALYSIS_DIMENSIONS, ANALYSIS_STAGES, type AnalysisDimension, type AnalysisStage } from "../services/review/analysisModel.js";
 import { ok, fail } from "./toolResult.js";
 
 /**
@@ -38,6 +40,37 @@ import { ok, fail } from "./toolResult.js";
 const reviewRound = z.number().int().min(1).max(MAX_ROUNDS).describe("the review round you were asked for (1-3)");
 const reviewHeadSha = z.string().regex(HEAD_SHA_RE, "the full sha of `git rev-parse HEAD`")
   .describe("full sha of `git rev-parse HEAD` after you finished (40 hex chars)");
+const findingProof = z.object({
+  kind: z.enum(["failing_test", "rule", "scenario"]),
+  ref: z.string().max(400).describe("the failing test, the written repo rule, or file:line of the scenario"),
+  detail: z.string().max(2000).optional(),
+});
+
+const findingFields = {
+  title: z.string().min(1).max(300).describe("short label of the finding (one line)"),
+  problem: z.string().max(2000).optional()
+    .describe("the problem in plain words for someone who will not open the code: what is wrong and what happens if it stays"),
+  file: z.string().max(400).optional(),
+  line: z.number().int().positive().optional(),
+  fix: z.string().max(2000).optional()
+    .describe("how to solve it, concretely: what to change and where, enough for the author to apply without guessing"),
+};
+
+function requireExplainedFinding(finding: { severity: string; problem?: string; fix?: string }, ctx: z.RefinementCtx): void {
+  // The person decides from the panel, without the code: a finding with only a title is refused here,
+  // at the AI's boundary (the server guarantees, not the prompt). A refuted one is history; a question
+  // may have no fix (it is a doubt).
+  if (finding.severity !== "refuted" && !finding.problem?.trim()) {
+    ctx.addIssue({ code: "custom", path: ["problem"], message: "problem is required: what is wrong and what happens if it stays, in plain words" });
+  }
+  const needsFix = finding.severity === "blocking" || finding.severity === "improvement" || finding.severity === "suggestion";
+  if (needsFix && !finding.fix?.trim()) {
+    ctx.addIssue({
+      code: "custom", path: ["fix"], message: "fix is required for blocking, improvement and suggestion: how to solve it, concretely",
+    });
+  }
+}
+
 export const reviewFinding = z.object({
   severity: z.enum(["blocking", "improvement", "suggestion", "question", "refuted"])
     .describe(
@@ -45,32 +78,48 @@ export const reviewFinding = z.object({
         "touches that keeps rules and behavior (the author applies it on its own; needs `file`) | suggestion = optional, " +
         "a person chooses | question = fixing it needs a decision on intent or product (a person decides) | refuted",
     ),
-  title: z.string().min(1).max(300).describe("short label of the finding (one line)"),
-  problem: z.string().max(2000).optional()
-    .describe("the problem in plain words for someone who will not open the code: what is wrong and what happens if it stays"),
-  file: z.string().max(400).optional(),
-  line: z.number().int().positive().optional(),
-  proof: z.object({
-    kind: z.enum(["failing_test", "rule", "scenario"]),
-    // An empty ref is NOT refused here: the model downgrades that blocking to a suggestion (one rule, one place).
-    ref: z.string().max(400).describe("the failing test, the written repo rule, or file:line of the scenario"),
-    detail: z.string().max(2000).optional(),
-  }).optional().describe("required for blocking: without it the server downgrades the finding to a suggestion"),
-  fix: z.string().max(2000).optional()
-    .describe("how to solve it, concretely: what to change and where, enough for the author to apply without guessing"),
+  ...findingFields,
+  // An empty ref is NOT refused here: the model downgrades that blocking to a suggestion (one rule, one place).
+  proof: findingProof.optional().describe("required for blocking: without it the server downgrades the finding to a suggestion"),
   introducedInRound: z.number().int().min(1).max(MAX_ROUNDS).optional()
     .describe("round 2+: the current round, ONLY for a bug the author's own fix created"),
-}).superRefine((f, ctx) => {
-  // The person decides from the panel, without the code: a finding with only a title is refused here,
-  // at the AI's boundary (the server guarantees, not the prompt). A refuted one is history; a question
-  // may have no fix (it is a doubt).
-  if (f.severity !== "refuted" && !f.problem?.trim()) {
-    ctx.addIssue({ code: "custom", path: ["problem"], message: "problem is required: what is wrong and what happens if it stays, in plain words" });
+}).superRefine(requireExplainedFinding);
+
+const analysisDimension = z.enum(ANALYSIS_DIMENSIONS as [AnalysisDimension, ...AnalysisDimension[]]);
+
+export const analysisFinding = z.object({
+  id: z.string().min(1).max(20).describe("the id the fleet gave (f1, f2, ...)"),
+  severity: z.enum(["blocking", "improvement", "suggestion", "question"]),
+  dimension: analysisDimension,
+  status: z.enum(["open", "fixed"]).describe("fixed only with the commit that fixes it"),
+  commit: z.string().max(80).optional(),
+  ...findingFields,
+  proof: findingProof.optional().describe("required for blocking"),
+}).superRefine((finding, ctx) => {
+  requireExplainedFinding(finding, ctx);
+  if (finding.severity === "blocking" && !finding.proof?.ref.trim()) {
+    ctx.addIssue({ code: "custom", path: ["proof"], message: "a blocking finding needs proof: failing_test, rule or scenario with ref" });
   }
-  if ((f.severity === "blocking" || f.severity === "improvement" || f.severity === "suggestion") && !f.fix?.trim()) {
-    ctx.addIssue({
-      code: "custom", path: ["fix"], message: "fix is required for blocking, improvement and suggestion: how to solve it, concretely",
-    });
+});
+
+const analysisReportFields = z.object({
+  card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this analysis terminal"),
+  headSha: z.string().regex(HEAD_SHA_RE, "the full sha of the analysed head").describe("full sha of the analysed head (40 hex chars)"),
+  stage: z.enum(ANALYSIS_STAGES as [AnalysisStage, ...AnalysisStage[]]),
+  summary: z.string().min(1).max(1000),
+  dimensions: z.array(z.object({
+    key: analysisDimension,
+    status: z.enum(["ran", "skipped", "not_run"]),
+    reason: z.string().max(500).optional(),
+  })).max(ANALYSIS_DIMENSIONS.length),
+  findings: z.array(analysisFinding).max(100),
+  refutedCount: z.number().int().min(0),
+  unavailableReason: z.string().max(1000).optional(),
+});
+
+export const analysisReportInput = analysisReportFields.superRefine((report, ctx) => {
+  if (report.stage === "fleet_unavailable" && !report.unavailableReason?.trim()) {
+    ctx.addIssue({ code: "custom", path: ["unavailableReason"], message: "fleet_unavailable needs the reason" });
   }
 });
 
@@ -526,6 +575,27 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         // What THIS call recorded: the items of the author's message recorded now (a repeated one is not recorded).
         const answered = after.log.filter((e) => e.who === "author" && e.at >= since).reduce((n, e) => n + (e.items?.length ?? 0), 0);
         return ok({ ...reviewToolAnswer(after, "author", a.round), answered });
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_analysis_report",
+    {
+      description:
+        "PR ANALYSIS: record this analysis card's structured report, which the vibehub panel shows. Only the analysis " +
+        "card may call it (`card` = YOUR OWN $VIBEHUB_CARD_ID). Call it with stage `analysed` right after the fleet's " +
+        "judgment, `done` at the end (each finding with status fixed + commit, or open), or `fleet_unavailable` (with " +
+        "`unavailableReason`) when the Workflow could not run. Each call replaces the previous report. Returns the stored " +
+        "report, or { error }.",
+      inputSchema: analysisReportFields.shape,
+    },
+    async (a) => {
+      try {
+        const { card, ...report } = analysisReportInput.parse(a);
+        return ok(await recordAnalysisReport(card, report));
       } catch (e) {
         return fail(e);
       }
