@@ -17,8 +17,9 @@ import { useT } from "@/i18n";
  *
  *  - NO review: the pill reads "sem revisão" and the line offers "Pedir revisão", which opens the
  *    dialog where the roles are chosen;
- *  - an ANALYSIS card's PR (`Card.pushBranch`): the pill reads "análise neste card" and nothing is
- *    offered — the card already is that PR's analysis, and the server refuses a review of it;
+ *  - an ANALYSIS card's PR (`Card.pushBranch`): the pill says where the analysis stands (`analysisPill`)
+ *    and the line opens the analysis panel; "Pedir revisão" is not offered — the card already is that
+ *    PR's analysis, and the server refuses a review of it;
  *  - a review exists: the line IS the way into it — the pill says where it stands (round N of 3,
  *    ready to merge, impasse…) and clicking anywhere on it asks the screen for the review's panel.
  *
