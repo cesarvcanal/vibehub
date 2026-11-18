@@ -200,6 +200,21 @@ describe("frota da análise de PR", () => {
     expect(judgeSchema.properties.findings.items.properties.fix).toMatchObject({ minLength: 1 });
   });
 
+  it("title vazio e line que não é inteiro positivo não passam no schema do juiz, como não passam no zod da ferramenta", async () => {
+    const { calls } = await runFleet(async (_prompt, opts) => {
+      if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);
+      if (opts.phase === "Revisão") return { findings: [scenarioFinding("x")] };
+      if (opts.phase === "Verificação") return { confirmed: true, evidence: "e" };
+      return { findings: [] };
+    });
+    const judgeSchema = calls.find((call) => call.opts.phase === "Julgamento")!.opts.schema as {
+      properties: { findings: { items: { properties: Record<string, object> } } };
+    };
+    const findingProperties = judgeSchema.properties.findings.items.properties;
+    expect(findingProperties.title).toMatchObject({ minLength: 1 });
+    expect(findingProperties.line).toMatchObject({ type: "integer", minimum: 1 });
+  });
+
   it("problem vazio ou só com espaços não passa no schema do juiz, como não passa no trim da ferramenta", async () => {
     const { calls } = await runFleet(async (_prompt, opts) => {
       if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);

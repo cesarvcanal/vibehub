@@ -59,10 +59,10 @@ const BRIEF_SCHEMA = {
 const NON_BLANK_TEXT = { type: 'string', minLength: 1, pattern: '\\S' }
 
 const FINDING_PROPERTIES = {
-  title: { type: 'string' },
+  title: NON_BLANK_TEXT,
   problem: NON_BLANK_TEXT,
   file: { type: 'string' },
-  line: { type: 'number' },
+  line: { type: 'integer', minimum: 1 },
   proof: PROOF_SCHEMA,
   fix: NON_BLANK_TEXT,
 }
