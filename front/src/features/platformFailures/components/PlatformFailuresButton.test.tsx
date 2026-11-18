@@ -55,6 +55,19 @@ describe("PlatformFailuresButton", () => {
     expect(await screen.findByText(/could not load vibehub's failures|não deu pra carregar as falhas do vibehub/i)).toBeTruthy();
   });
 
+  it("dispensar a última falha com o relato aberto não reabre o relato quando chega outra falha", async () => {
+    const { queryClient } = renderApp(<PlatformFailuresButton />);
+    await userEvent.click(await screen.findByRole("button", { name: /1/ }));
+    post.mockResolvedValueOnce({ failure: { ...FAILURE, status: "dismissed" } });
+    get.mockResolvedValue({ failures: [] });
+    await userEvent.click(await screen.findByRole("button", { name: /não é bug|not a bug/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    get.mockResolvedValue({ failures: [{ ...FAILURE, id: "f2" }] });
+    await queryClient.refetchQueries();
+    await screen.findByRole("button", { name: /1/ });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("um poll que falha com o relato aberto mantém o relato na tela", async () => {
     const { queryClient } = renderApp(<PlatformFailuresButton />);
     await userEvent.click(await screen.findByRole("button", { name: /1/ }));

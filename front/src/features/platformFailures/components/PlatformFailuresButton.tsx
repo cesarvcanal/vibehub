@@ -67,6 +67,7 @@ export function PlatformFailuresButton() {
   useAnnounceUnseenFailures(failures, setFailuresDialogOpen);
 
   const hasNoFailuresToShow = failures.length === 0;
+  if (hasNoFailuresToShow && isFailuresDialogOpen) setFailuresDialogOpen(false);
   if (failuresQuery.isError && hasNoFailuresToShow) return <span className="text-xs text-amber-600">{t("platformFailures.loadError")}</span>;
   if (hasNoFailuresToShow) return null;
   return (
