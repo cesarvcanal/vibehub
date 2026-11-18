@@ -4,7 +4,9 @@ import userEvent from "@testing-library/user-event";
 import { renderApp, setupState } from "@/test/render";
 import { PrReviewBlock, PrReviewBlocks } from "./PrReviewBlock";
 import { LANGUAGE_KEY, setLanguage } from "@/i18n";
-import type { AnalysisReadModel, CardAnalysisResponse, CardPr, Review, ReviewResponse, ReviewSummary } from "@/api/types";
+import {
+  ANALYSIS_DIMENSIONS, type AnalysisReadModel, type CardAnalysisResponse, type CardPr, type Review, type ReviewResponse, type ReviewSummary,
+} from "@/api/types";
 
 vi.setConfig({ testTimeout: 30_000 });
 configure({ asyncUtilTimeout: 8_000 });
@@ -39,8 +41,11 @@ function analysisDone(verdict: AnalysisReadModel["verdict"]): AnalysisReadModel 
   return {
     analysis: {
       cardId: "c1", prUrl: PR.url, prNumber: 553, analysedSha: "b".repeat(40), stage: "done", summary: "s", refutedCount: 0, updatedAt: 1,
-      dimensions: [],
-      findings: [{ id: "f1", severity: "blocking", title: "t", dimension: "tests", status: "fixed", commit: "abc1234" }],
+      dimensions: ANALYSIS_DIMENSIONS.map((key) => ({ key, status: "ran" as const })),
+      findings: [{
+        id: "f1", severity: "blocking", title: "t", problem: "p", fix: "x", proof: { kind: "scenario", ref: "a.ts:1" },
+        dimension: "tests", status: "fixed", commit: "abc1234",
+      }],
     },
     health: { correctness: "ok", security: "ok", performance: "ok", contracts: "ok", tests: "ok", repoRules: "ok" },
     verdict,
