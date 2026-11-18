@@ -1,5 +1,6 @@
 import { clipLine } from "../../utils/clipLine.js";
 import { defuseUltraWords } from "../../utils/ultraWords.js";
+import { PR_ANALYSIS_WORKFLOW_PATH } from "./analysisWorkflow.js";
 import {
   autoMergeEligible, waivedText, MAX_ROUNDS, MERGE_GATE_AUTO_RETRIES, pendingImprovements, pendingQuestions, type Finding,
   type FindingStatus, type Review,
@@ -584,44 +585,51 @@ export interface AnalysisInput {
  * fixes, on the PR itself: by the time a PR is opened its author has finished, so whoever finds a clear
  * failure fixes it at once instead of sending a report to another developer (César and Albert,
  * 2026-11-16). The cut between fixing and asking is the review's own ({@link FINDING_CLASSES}), and the
- * skills installed on the runner do the reading: without them the analysis misses things.
+ * reading is done by the agent fleet of `prAnalysis.workflow.js`, run through the Workflow tool: specialists
+ * in parallel, a verifier that tries to refute each finding, a judge. The card itself is the only writer.
  *
  * The card has none of the author's context on purpose (agnostic): only the PR and the repo's rules.
  * It never merges, and it never rewrites the PR's title or body — they are the author's. PURE.
  */
 export function analysisPrompt(a: AnalysisInput): string {
+  const workflowArgs = JSON.stringify({ prNumber: a.prNumber, branch: a.branch, base: a.base, headSha: "<sha do passo 1>" });
+  const reportTarget = `card: "${a.cardId}"`;
   return [
     `[vibehub · análise de PR] PR #${a.prNumber} (${a.prUrl}) · branch ${a.branch} -> ${a.base}.`,
     "Você analisa este PR sem o contexto de quem o escreveu: só o código, o diff e as regras do repositório. O objetivo " +
       "é revisar de verdade (bug, incoerência, colisão com o que já existe, testes, qualidade), não reescrever o PR.",
     "",
-    "1. Ponha o worktree no código atual da PR e leia as regras:",
-    `   git fetch origin && git reset --hard origin/${a.branch}`,
-    "   Leia o AGENTS.md (e o CLAUDE.md, se houver) da raiz: é contra eles que o código é julgado.",
-    `2. Rode as skills sobre o PR #${a.prNumber}, nesta ordem:`,
-    "   - /code-review high (com a etapa de verificação que tenta derrubar cada achado);",
-    "   - /security-review, quando o diff toca autenticação, permissão, shell, segredos ou rotas;",
-    "   - /simplify sobre o código que o PR mexe: o que preserva o comportamento entra como improvement;",
-    "   - testes (TDD): mudança de comportamento sem teste, teste que não testa de verdade (só confirma a hipótese), " +
-      "bordas, falhas, corrida e permissão faltando. Rode só o recorte do que o PR tocou; a suíte inteira é do CI.",
-    "3. Classifique cada achado. Aqui não há outra IA nem rodadas: quem age no achado é você.",
+    "1. Ponha o worktree no código atual da PR, guarde o sha analisado e leia as regras:",
+    `   git fetch origin && git reset --hard origin/${a.branch} && git rev-parse HEAD`,
+    "   Leia o AGENTS.md (e o CLAUDE.md, se houver) da raiz: é contra eles que o código é julgado e corrigido.",
+    "2. Rode a frota de agentes da análise com a ferramenta Workflow (este pedido é explícito: rode o workflow):",
+    `   Workflow({ scriptPath: "${PR_ANALYSIS_WORKFLOW_PATH}", args: ${workflowArgs} })`,
+    "   O args vai como objeto JSON, com o sha do passo 1 no headSha. A frota lê o diff, revisa em paralelo por " +
+      "dimensão, tenta derrubar cada achado, e um juiz classifica. Espere o resultado: { summary, dimensions, findings, refutedCount }.",
+    "   Se a ferramenta Workflow não existir, for recusada ou a frota falhar com erro: chame vibehub_analysis_report com " +
+      `${reportTarget}, headSha, stage: "fleet_unavailable", summary e unavailableReason com o erro, diga o motivo no chat ` +
+      "e pare. Não rode a análise sozinho no lugar da frota.",
+    `3. Chame vibehub_analysis_report com ${reportTarget}, headSha (passo 1), stage: "analysed", summary, dimensions, ` +
+      "refutedCount e os findings do juiz, cada um com status: \"open\". O painel do vibehub mostra a partir daí.",
+    "4. O juiz já classificou; quem age em cada achado é você, por este critério:",
     FINDING_CLASSES,
-    "   blocking só com prova: o teste que falha, a regra escrita do repo (arquivo e trecho) ou o cenário concreto " +
-      "(arquivo:linha e o caso que dá errado). Achado que a verificação derrubou sai da lista.",
-    `4. Comente cada achado na linha do diff, na sua conta: gh api repos/{owner}/{repo}/pulls/${a.prNumber}/comments ` +
-      "(body, commit_id = o sha do passo 1, path, line). Achado sem linha vai no resumo do passo 7.",
-    "5. blocking e improvement: corrija agora, um commit atômico por achado. Em bug, escreva antes o teste que reproduz " +
-      "a falha, veja falhar pelo motivo certo, corrija e veja passar. Responda no comentário do achado com o sha do commit " +
-      `(gh api repos/{owner}/{repo}/pulls/${a.prNumber}/comments/<id>/replies). question: não mexa; pergunte no chat deste ` +
-      "card, com o conflito e as " +
-      "alternativas, e siga com o resto. suggestion: só no resumo.",
+    "5. Você é o único escritor: nenhum subagente edita arquivo. blocking e improvement: corrija agora, um commit " +
+      "atômico por achado. Em bug, escreva antes o teste que reproduz a falha, veja falhar pelo motivo certo, corrija e " +
+      "veja passar. question: não mexa; pergunte no chat deste card, com o conflito e as alternativas, e siga com o " +
+      "resto. suggestion: só no resumo.",
     ...(a.coauthorTrailer ? [`   Em cada commit, termine a mensagem com esta linha (o crédito do coautor no Git): ${a.coauthorTrailer}`] : []),
-    `6. Entregue as correções: chame vibehub_deliver com card = "${a.cardId}" e branch = "${a.base}", sem title nem body ` +
+    "6. Reconferência: dispare UM subagente novo, sem o seu contexto, para revisar só git diff <sha analisado>..HEAD, " +
+      "procurando bug que a própria correção criou. Achado com prova: corrija do mesmo jeito (uma volta a mais, só uma).",
+    `7. Entregue as correções: chame vibehub_deliver com card = "${a.cardId}" e branch = "${a.base}", sem title nem body ` +
       "(a descrição do PR é do autor) e sem authorized (o merge é de uma pessoa). Os commits vão para a branch da PR. " +
       // Never the step-1 reset here: it would drop the fix commits that have not gone up yet.
       `Se o push for recusado porque a PR andou, traga o código novo sem perder as correções: git fetch origin && git rebase origin/${a.branch}, ` +
       "resolva os conflitos, rode de novo os testes do que mudou e entregue outra vez.",
-    `7. Publique o resumo como review da PR: gh pr review ${a.prNumber} --comment --body "<resumo>", com o que achou, o ` +
-      "que corrigiu (sha), as perguntas em aberto e as sugestões. O mesmo resumo, curto, no chat deste card.",
+    `8. Chame vibehub_analysis_report de novo, com stage: "done": os mesmos findings, cada um com status "fixed" e o ` +
+      "commit, ou \"open\" (question, suggestion e o que não corrigiu, com o motivo no summary).",
+    `9. Comente cada achado na linha do diff, na sua conta: gh api repos/{owner}/{repo}/pulls/${a.prNumber}/comments ` +
+      "(body com o problema, a prova e o commit que corrigiu; commit_id = o head entregue, path, line). Achado sem linha " +
+      `vai no resumo. Publique o resumo como review da PR: gh pr review ${a.prNumber} --comment --body "<resumo>", com o ` +
+      "que achou, o que corrigiu (sha), as perguntas em aberto e as sugestões. O mesmo resumo, curto, no chat deste card.",
   ].join("\n");
 }
