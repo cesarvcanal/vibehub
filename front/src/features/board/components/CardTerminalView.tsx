@@ -41,6 +41,7 @@ import { CardOutbox } from "@/features/board/components/CardOutbox";
 import { SdkQueueTray } from "@/features/board/components/SdkQueueTray";
 import { PrReviewBlocks } from "@/features/board/components/PrReviewBlock";
 import { ReviewPanel } from "@/features/board/components/ReviewPanel";
+import { AnalysisPanel } from "@/features/board/components/AnalysisPanel";
 import { cardState, nextPosition, wantsReviewPanel, withoutReviewFlag } from "@/features/board/lib/board";
 import { readsPerPr } from "@/features/board/lib/review";
 import { CardStateIcon } from "@/features/board/components/CardStateIcon";
@@ -1379,7 +1380,11 @@ export function CardTerminalView({
               screen to share, so on a wide display it keeps a fixed width instead of taking half. */}
           {reviewOpen ? (
             <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:w-[26rem] lg:flex-none">
-              <ReviewPanel key={reviewPr ?? "card"} cardId={cardId} prNumber={reviewPr} onClose={() => setReviewOpen(false)} />
+              {card?.pushBranch !== undefined ? (
+                <AnalysisPanel cardId={cardId} onClose={() => setReviewOpen(false)} />
+              ) : (
+                <ReviewPanel key={reviewPr ?? "card"} cardId={cardId} prNumber={reviewPr} onClose={() => setReviewOpen(false)} />
+              )}
             </div>
           ) : null}
         </div>
