@@ -56,6 +56,9 @@ export async function recordAnalysisReport(cardId: string, input: AnalysisReport
   }
   if (input.stage === "done") {
     if (!savedReport) throw new Error("grave antes o relatório analysed (passo 3): o done só confirma o que a frota achou");
+    if (input.headSha !== savedReport.analysedSha) {
+      throw new Error(`o done leva o mesmo headSha do analysed (${savedReport.analysedSha}, o sha do passo 1), não o das correções`);
+    }
     const changedFromSaved = findChangedFromSavedReport(savedReport, input);
     if (changedFromSaved.length > 0) {
       throw new Error(

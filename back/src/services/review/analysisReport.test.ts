@@ -154,6 +154,14 @@ describe("relatório da análise pela ferramenta do card", () => {
     expect((await store.getAnalysis(analysisCard.id))?.findings).toHaveLength(1);
   });
 
+  it("relatório done com outro sha é recusado: o painel mostra o sha que a frota de fato analisou", async () => {
+    const { analysisCard, reportService, store } = await load();
+    await reportService.recordAnalysisReport(analysisCard.id, input());
+    await expect(reportService.recordAnalysisReport(analysisCard.id, input({ stage: "done", headSha: "f".repeat(40) })))
+      .rejects.toThrow(/headSha/);
+    expect((await store.getAnalysis(analysisCard.id))?.analysedSha).toBe(SHA);
+  });
+
   it("relatório done sem o analysed gravado antes é recusado", async () => {
     const { analysisCard, reportService, store } = await load();
     await expect(reportService.recordAnalysisReport(analysisCard.id, input({ stage: "done" }))).rejects.toThrow(/passo 3/);
