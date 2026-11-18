@@ -79,4 +79,19 @@ describe("relatório da análise pela ferramenta do card", () => {
     expect(cardMessage).toMatchObject({ severity: "warning" });
     expect(cardMessage?.text).toContain("Workflow desligado");
   });
+
+  it("frota indisponível conclui o card, e um novo pedido da mesma PR abre outro card", async () => {
+    const { analysisCard, reportService } = await load();
+    await reportService.recordAnalysisReport(analysisCard.id, input({ stage: "fleet_unavailable", unavailableReason: "Workflow desligado" }));
+    const registry = await import("../board/registry.js");
+    expect((await registry.getCard(analysisCard.id))?.column).toBe("done");
+    expect(registry.openAnalysisCard(await registry.listCards(analysisCard.projectId), PR.url)).toBeUndefined();
+  });
+
+  it("relatório analysed ou done não move o card", async () => {
+    const { analysisCard, reportService } = await load();
+    await reportService.recordAnalysisReport(analysisCard.id, input({ stage: "done" }));
+    const registry = await import("../board/registry.js");
+    expect((await registry.getCard(analysisCard.id))?.column).toBe(analysisCard.column);
+  });
 });

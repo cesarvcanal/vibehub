@@ -1,4 +1,4 @@
-import { getCard } from "../board/registry.js";
+import { getCard, updateCard } from "../board/registry.js";
 import { recordMessage } from "../events/cardEvents.js";
 import type { AnalysisFinding, AnalysisReport, AnalysisStage, DimensionRun } from "./analysisModel.js";
 import { saveAnalysis } from "./analysisStore.js";
@@ -43,6 +43,7 @@ export async function recordAnalysisReport(cardId: string, input: AnalysisReport
     updatedAt: Date.now(),
   };
   await saveAnalysis(report);
+  if (report.stage === "fleet_unavailable") await updateCard(cardId, { column: "done" });
   await recordMessage({
     cardId,
     type: "info",
