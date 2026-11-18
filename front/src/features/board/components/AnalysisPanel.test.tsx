@@ -80,6 +80,21 @@ describe("painel da análise de PR", () => {
     expect(within(dimensions).getByText("o diff só toca configuração")).toBeInTheDocument();
   });
 
+  it("dimensão que rodou com achado não verificado aparece em atenção, com o motivo, e o veredito é não apto", async () => {
+    const dimensions = doneReport().dimensions.map((dimension) => dimension.key === "tests"
+      ? { ...dimension, unverifiedCount: 2, reason: "2 achados sem veredito (o verificador não respondeu)" }
+      : dimension);
+    analysisAnswer = {
+      ...readModel(doneReport({ dimensions }), "not_apt"),
+      health: { correctness: "ok", security: "ok", performance: "ok", contracts: "ok", tests: "attention", repoRules: "skipped" },
+    };
+    renderApp(<AnalysisPanel cardId="c1" onClose={() => {}} />);
+    expect(await screen.findByText("Não apto")).toBeInTheDocument();
+    const testsDimension = within(screen.getByRole("list", { name: "Dimensões revisadas" })).getByText("Testes").closest("li")!;
+    expect(within(testsDimension).getByText("atenção")).toBeInTheDocument();
+    expect(within(testsDimension).getByText("2 achados sem veredito (o verificador não respondeu)")).toBeInTheDocument();
+  });
+
   it("agrupa os achados por classe, com arquivo:linha, prova e o commit que corrigiu", async () => {
     analysisAnswer = readModel(doneReport(), "apt");
     renderApp(<AnalysisPanel cardId="c1" onClose={() => {}} />);
