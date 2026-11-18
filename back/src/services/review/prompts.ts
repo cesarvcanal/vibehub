@@ -612,7 +612,8 @@ export function analysisPrompt(a: AnalysisInput): string {
       `${reportTarget}, headSha, stage: "fleet_unavailable", summary e unavailableReason com o erro, diga o motivo no chat ` +
       "e pare. Não rode a análise sozinho no lugar da frota.",
     `3. Chame vibehub_analysis_report com ${reportTarget}, headSha (passo 1), stage: "analysed", summary, dimensions, ` +
-      "refutedCount e os findings do juiz, cada um com status: \"open\". O painel do vibehub mostra a partir daí.",
+      "refutedCount e os findings do juiz, cada um com status: \"open\", uma vez só (o servidor recusa um segundo analysed). " +
+      "O painel do vibehub mostra a partir daí.",
     "4. O juiz já classificou; quem age em cada achado é você, por este critério:",
     FINDING_CLASSES,
     "5. Você é o único escritor: nenhum subagente edita arquivo. blocking e improvement: corrija agora, um commit " +
