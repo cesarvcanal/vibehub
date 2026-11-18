@@ -1729,4 +1729,5 @@ export const en: Record<string, string> = {
   "platformFailures.investigateAgain": "Investigate again",
   "platformFailures.dismiss": "Not a bug",
   "platformFailures.investigationStarted": "Investigation card: {title}",
+  "platformFailures.loadError": "Could not load vibehub's failures",
 };

@@ -36,6 +36,12 @@ describe("PlatformFailuresButton", () => {
     expect(screen.queryByRole("button")).toBeNull();
   });
 
+  it("lista que não carrega avisa o dono em vez de parecer que não há falha", async () => {
+    get.mockRejectedValue(new Error("500"));
+    renderApp(<PlatformFailuresButton />);
+    expect(await screen.findByText(/could not load vibehub's failures|não deu pra carregar as falhas do vibehub/i)).toBeTruthy();
+  });
+
   it("mostra a contagem, anuncia a falha nova uma vez e abre o relato", async () => {
     renderApp(<PlatformFailuresButton />);
     const indicator = await screen.findByRole("button", { name: /1/ });

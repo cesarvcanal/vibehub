@@ -55,11 +55,12 @@ function FailureEntry({ failure }: { failure: PlatformFailure }) {
 export function PlatformFailuresButton() {
   const t = useT();
   const [isDialogOpen, setDialogOpen] = React.useState(false);
-  const { data: failures = [] } = useQuery({
+  const failuresQuery = useQuery({
     queryKey: PLATFORM_FAILURES_KEY,
     queryFn: platformFailuresApi.list,
     refetchInterval: PLATFORM_FAILURES_POLL_MS,
   });
+  const failures = React.useMemo(() => failuresQuery.data ?? [], [failuresQuery.data]);
 
   React.useEffect(() => {
     const seenIds = readSeenFailureIds();
@@ -71,6 +72,7 @@ export function PlatformFailuresButton() {
     saveSeenFailureIds(new Set([...seenIds, ...unseenIds]));
   }, [failures]);
 
+  if (failuresQuery.isError) return <span className="text-xs text-amber-600">{t("platformFailures.loadError")}</span>;
   if (failures.length === 0) return null;
   return (
     <>

@@ -1741,4 +1741,5 @@ export const ptBR: Record<string, string> = {
   "platformFailures.investigateAgain": "Investigar de novo",
   "platformFailures.dismiss": "Não é bug",
   "platformFailures.investigationStarted": "Card da investigação: {title}",
+  "platformFailures.loadError": "Não deu pra carregar as falhas do vibehub",
 };
