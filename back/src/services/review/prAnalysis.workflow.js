@@ -56,13 +56,15 @@ const BRIEF_SCHEMA = {
   required: ['summary', 'touchedAreas', 'consumers', 'dimensions'],
 }
 
+const NON_BLANK_TEXT = { type: 'string', minLength: 1, pattern: '\\S' }
+
 const FINDING_PROPERTIES = {
   title: { type: 'string' },
-  problem: { type: 'string' },
+  problem: NON_BLANK_TEXT,
   file: { type: 'string' },
   line: { type: 'number' },
   proof: PROOF_SCHEMA,
-  fix: { type: 'string', minLength: 1, pattern: '\\S' },
+  fix: NON_BLANK_TEXT,
 }
 
 const REVIEW_SCHEMA = {

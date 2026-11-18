@@ -200,6 +200,21 @@ describe("frota da análise de PR", () => {
     expect(judgeSchema.properties.findings.items.properties.fix).toMatchObject({ minLength: 1 });
   });
 
+  it("problem vazio ou só com espaços não passa no schema do juiz, como não passa no trim da ferramenta", async () => {
+    const { calls } = await runFleet(async (_prompt, opts) => {
+      if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);
+      if (opts.phase === "Revisão") return { findings: [scenarioFinding("x")] };
+      if (opts.phase === "Verificação") return { confirmed: true, evidence: "e" };
+      return { findings: [] };
+    });
+    const judgeSchema = calls.find((call) => call.opts.phase === "Julgamento")!.opts.schema as {
+      properties: { findings: { items: { properties: { problem: { minLength?: number; pattern?: string } } } } };
+    };
+    const problemSchema = judgeSchema.properties.findings.items.properties.problem;
+    expect(problemSchema.minLength).toBe(1);
+    expect(new RegExp(problemSchema.pattern ?? "").test("   ")).toBe(false);
+  });
+
   it("fix só com espaços não passa no schema do juiz, como não passa no trim da ferramenta", async () => {
     const { calls } = await runFleet(async (_prompt, opts) => {
       if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);
