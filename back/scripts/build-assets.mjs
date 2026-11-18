@@ -24,6 +24,13 @@ const sdkDest = join(backRoot, "dist", sdkRel);
 mkdirSync(sdkDest, { recursive: true });
 cpSync(join(backRoot, "src", sdkRel, "sdk-driver.mjs"), join(sdkDest, "sdk-driver.mjs"));
 
+// The PR analysis fleet (`services/review/prAnalysis.workflow.js`) — read by services/review/analysisWorkflow.ts
+// and planted into the runner next to the driver. tsc ignores .js, so it is copied to the same path in dist.
+const reviewRel = join("services", "review");
+const reviewDest = join(backRoot, "dist", reviewRel);
+mkdirSync(reviewDest, { recursive: true });
+cpSync(join(backRoot, "src", reviewRel, "prAnalysis.workflow.js"), join(reviewDest, "prAnalysis.workflow.js"));
+
 // The document converter (`services/attachments/read-document.py`) — read by services/attachments/document.ts
 // and sent to the runner through stdin. tsc ignores .py, so it is copied to the same path in dist.
 const attachmentsRel = join("services", "attachments");
