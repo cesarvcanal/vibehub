@@ -162,6 +162,14 @@ describe("relatório da análise pela ferramenta do card", () => {
     expect((await store.getAnalysis(analysisCard.id))?.analysedSha).toBe(SHA);
   });
 
+  it("frota indisponível depois do done diz que a análise já foi concluída, sem mandar refazer o passo 4", async () => {
+    const { analysisCard, reportService } = await load();
+    await reportService.recordAnalysisReport(analysisCard.id, input());
+    await reportService.recordAnalysisReport(analysisCard.id, input({ stage: "done" }));
+    await expect(reportService.recordAnalysisReport(analysisCard.id, input({ stage: "fleet_unavailable", unavailableReason: "x" })))
+      .rejects.toThrow(/relatório done/);
+  });
+
   it("relatório done sem o analysed gravado antes é recusado", async () => {
     const { analysisCard, reportService, store } = await load();
     await expect(reportService.recordAnalysisReport(analysisCard.id, input({ stage: "done" }))).rejects.toThrow(/passo 3/);

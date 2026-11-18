@@ -49,7 +49,8 @@ export async function recordAnalysisReport(cardId: string, input: AnalysisReport
   if (card.column === "done") throw new Error("este card de análise já foi concluído: pare; um novo pedido da PR abre outro card");
   const savedReport = await getAnalysis(cardId);
   if (input.stage === "fleet_unavailable" && savedReport) {
-    throw new Error("a frota já rodou e o relatório analysed está gravado: siga do passo 4, sem fleet_unavailable");
+    const nextStep = savedReport.stage === "done" ? "a análise está concluída, pare" : "siga do passo 4, sem fleet_unavailable";
+    throw new Error(`a frota já rodou e o relatório ${savedReport.stage} está gravado: ${nextStep}`);
   }
   if (input.stage === "analysed" && savedReport) {
     throw new Error("o relatório analysed já foi gravado neste card: siga do passo 4 com os findings dele");
