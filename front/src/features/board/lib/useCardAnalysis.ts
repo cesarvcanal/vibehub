@@ -6,7 +6,7 @@ import type { SdkRow } from "@/features/board/lib/sdkChat";
 
 export function useAnalysisRereadOnReport(cardId: string, chatRows: SdkRow[]): void {
   const queryClient = useQueryClient();
-  const reportsInChat = finishedAnalysisReports(chatRows);
+  const reportsInChat = React.useMemo(() => finishedAnalysisReports(chatRows), [chatRows]);
   const reportsSeen = React.useRef(reportsInChat);
   React.useEffect(() => {
     const newReportArrived = reportsInChat > reportsSeen.current;
