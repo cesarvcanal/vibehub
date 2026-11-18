@@ -2,7 +2,8 @@ import { X } from "lucide-react";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  ANALYSIS_DIMENSIONS, type AnalysisFinding, type AnalysisReadModel, type AnalysisSeverity, type DimensionHealth,
+  ANALYSIS_DIMENSIONS, type AnalysisFinding, type AnalysisReadModel, type AnalysisSeverity, type AnalysisVerdict,
+  type DimensionHealth,
 } from "@/api/types";
 import { PanelFrame } from "@/features/board/components/ReviewPanelView";
 import { useCardAnalysis } from "@/features/board/lib/useCardAnalysis";
@@ -18,6 +19,8 @@ const HEALTH_TEXT_CLASS: Record<DimensionHealth, string> = {
   not_run: "text-destructive",
   skipped: "text-muted-foreground",
 };
+
+const VERDICT_TONE: Record<AnalysisVerdict, BadgeTone> = { apt: "ok", not_apt: "critical", pending: "info" };
 
 export function AnalysisPanel({ cardId, onClose }: { cardId: string; onClose: () => void }) {
   const t = useT();
@@ -53,8 +56,7 @@ export function AnalysisPanel({ cardId, onClose }: { cardId: string; onClose: ()
 function VerdictBadge({ read }: { read: AnalysisReadModel }) {
   const t = useT();
   if (read.analysis.stage === "fleet_unavailable") return <Badge tone="critical">{t("analysis.verdict.fleetUnavailable")}</Badge>;
-  const toneByVerdict: Record<AnalysisReadModel["verdict"], BadgeTone> = { apt: "ok", not_apt: "critical", pending: "info" };
-  return <Badge tone={toneByVerdict[read.verdict]}>{t(`analysis.verdict.${read.verdict}`)}</Badge>;
+  return <Badge tone={VERDICT_TONE[read.verdict]}>{t(`analysis.verdict.${read.verdict}`)}</Badge>;
 }
 
 function AnalysisBody({ read }: { read: AnalysisReadModel }) {
@@ -127,7 +129,7 @@ function findingStatusText(finding: AnalysisFinding, t: ReturnType<typeof useT>)
 
 function FindingCard({ finding }: { finding: AnalysisFinding }) {
   const t = useT();
-  const location = finding.file ? (finding.line ? `${finding.file}:${finding.line}` : finding.file) : undefined;
+  const location = finding.file && finding.line ? `${finding.file}:${finding.line}` : finding.file;
   return (
     <article className="flex flex-col gap-1.5 rounded-md border border-border/60 bg-background/40 p-2.5 text-xs">
       <div className="flex flex-wrap items-center gap-1.5">

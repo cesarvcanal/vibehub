@@ -293,7 +293,7 @@ function CardReviewBlocks({ card, onOpenPanel }: {
           onOpenPanel={() => onOpenPanel()}
           variant={row ? "row" : "block"}
           analysis={card.pushBranch !== undefined}
-      cardWorking={card.status === "working"}
+          cardWorking={card.status === "working"}
         />
       ))}
     </PrList>

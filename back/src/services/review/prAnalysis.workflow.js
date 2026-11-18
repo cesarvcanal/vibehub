@@ -20,6 +20,8 @@ const DIMENSIONS = [
   { key: 'repoRules', focus: 'as regras escritas do repositório (AGENTS.md, CLAUDE.md, .claude/rules) confrontadas com cada linha adicionada, inclusive nomes' },
 ]
 
+const DIMENSION_KEYS = DIMENSIONS.map((dimension) => dimension.key)
+
 const SEVERITIES = ['blocking', 'improvement', 'suggestion', 'question']
 
 const PROOF_SCHEMA = {
@@ -43,7 +45,7 @@ const BRIEF_SCHEMA = {
       items: {
         type: 'object',
         properties: {
-          key: { type: 'string', enum: DIMENSIONS.map((dimension) => dimension.key) },
+          key: { type: 'string', enum: DIMENSION_KEYS },
           applies: { type: 'boolean' },
           reason: { type: 'string' },
         },
@@ -93,7 +95,7 @@ const JUDGMENT_SCHEMA = {
         type: 'object',
         properties: {
           ...FINDING_PROPERTIES,
-          dimension: { type: 'string', enum: DIMENSIONS.map((dimension) => dimension.key) },
+          dimension: { type: 'string', enum: DIMENSION_KEYS },
           severity: { type: 'string', enum: SEVERITIES },
         },
         required: ['title', 'problem', 'dimension', 'severity'],
@@ -169,7 +171,7 @@ const verifyDimension = async (review, dimension) => {
   })))
   const checkedFindings = verifiedFindings.map((finding, index) => ({ finding, verdict: verdicts[index] }))
   const confirmed = checkedFindings
-    .filter((checked) => checked.verdict && checked.verdict.confirmed)
+    .filter((checked) => checked.verdict?.confirmed)
     .map((checked) => ({ finding: checked.finding, label: reviewLabel(dimension), evidence: checked.verdict.evidence }))
   const refutedCount = checkedFindings.filter((checked) => checked.verdict && !checked.verdict.confirmed).length
   const withoutVerdictCount = checkedFindings.filter((checked) => !checked.verdict).length
@@ -205,7 +207,7 @@ const judgment = confirmedFindings.length === 0
 if (!judgment) throw new Error('o juiz da análise não respondeu')
 
 const judgedFindings = judgment.findings.map((finding, index) => {
-  const blockingWithoutProof = finding.severity === 'blocking' && !(finding.proof && finding.proof.ref && finding.proof.ref.trim())
+  const blockingWithoutProof = finding.severity === 'blocking' && !finding.proof?.ref?.trim()
   if (blockingWithoutProof) log(`${finding.title}: bloqueante sem prova virou sugestão`)
   return { ...finding, id: `f${index + 1}`, severity: blockingWithoutProof ? 'suggestion' : finding.severity }
 })
