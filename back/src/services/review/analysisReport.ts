@@ -50,6 +50,7 @@ export async function recordAnalysisReport(cardId: string, input: AnalysisReport
   const savedReport = await getAnalysis(cardId);
   const headSha = input.headSha.toLowerCase();
   if (savedReport?.stage === "fleet_unavailable") {
+    await updateCard(cardId, { column: "done" });
     throw new Error("a frota não rodou neste card: pare; um novo pedido da PR abre outro card");
   }
   if (savedReport?.stage === "done" && input.stage !== "done") {
