@@ -156,14 +156,15 @@ describe("rotas de falha da plataforma", () => {
   it("investigar de novo uma falha presa cujo card foi concluído sem merge abre card novo e a falha segue em investigação nele", async () => {
     const { app, ...world } = await bootFailureWorld();
     const failure = await recordFailure();
-    const first = (await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } })).json();
-    await app.inject({ method: "PATCH", url: `/api/cards/${first.card.id}`, headers: { cookie: world.owner }, payload: { column: "done" } });
-    const again = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
-    expect(again.statusCode).toBe(200);
-    expect(again.json().card.id).not.toBe(first.card.id);
+    const firstInvestigation = (await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } })).json();
+    await app.inject({ method: "PATCH", url: `/api/cards/${firstInvestigation.card.id}`, headers: { cookie: world.owner }, payload: { column: "done" } });
+    const secondInvestigation = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
+    expect(secondInvestigation.statusCode).toBe(200);
+    const secondInvestigationCardId = secondInvestigation.json().card.id;
+    expect(secondInvestigationCardId).not.toBe(firstInvestigation.card.id);
     expect(sendToTerminal).toHaveBeenCalledTimes(2);
-    const listed = (await app.inject({ method: "GET", url: "/api/platform-failures", headers: { cookie: world.owner } })).json().failures;
-    expect(listed[0]).toMatchObject({ id: failure.id, status: "investigating", investigationCardId: again.json().card.id });
+    const listedFailures = (await app.inject({ method: "GET", url: "/api/platform-failures", headers: { cookie: world.owner } })).json().failures;
+    expect(listedFailures[0]).toMatchObject({ id: failure.id, status: "investigating", investigationCardId: secondInvestigationCardId });
   });
 
   it("brief que falha ao investigar de novo uma concluída sem correção devolve a falha a esse estado", async () => {
