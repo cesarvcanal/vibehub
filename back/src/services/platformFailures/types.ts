@@ -26,9 +26,12 @@ export interface PlatformFailure {
   firstSeenAt: number;
   lastSeenAt: number;
   investigationCardId?: string;
+  resolvedAt?: number;
+  dismissedAt?: number;
 }
 
 export interface UserStopMark {
   cardId: string;
+  cardLabel: string;
   at: number;
 }

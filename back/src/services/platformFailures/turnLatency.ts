@@ -14,7 +14,7 @@ type SlowTurnsListener = (cardId: string, slowTurns: SlowTurn[]) => void;
 const FIRST_OUTPUT_EVENTS = new Set(["assistant_delta", "assistant_text", "thinking_delta", "thinking", "tool_use_start", "tool_use"]);
 const WAIT_DISTURBING_EVENTS = new Set(["user_question", "permission_request"]);
 
-const firstOutputWaits = new Map<string, { since: number; disturbed: boolean }>();
+const openTurns = new Map<string, { since: number; disturbed: boolean; answered: boolean }>();
 const slowTurnsByCard = new Map<string, SlowTurn[]>();
 const slowTurnsListeners = new Set<SlowTurnsListener>();
 const userStops: { last?: UserStopMark } = {};
@@ -31,31 +31,35 @@ function countSlowTurn(cardId: string, slowTurn: SlowTurn): void {
 }
 
 export function noteTurnSent(cardId: string, at: number): void {
-  if (!firstOutputWaits.has(cardId)) firstOutputWaits.set(cardId, { since: at, disturbed: false });
+  if (!openTurns.has(cardId)) openTurns.set(cardId, { since: at, disturbed: false, answered: false });
 }
 
 export function noteTurnEvent(cardId: string, event: { type: string; parentToolUseId?: unknown; phase?: unknown }, at: number): void {
-  const wait = firstOutputWaits.get(cardId);
-  if (!wait) return;
+  const openTurn = openTurns.get(cardId);
+  if (!openTurn) return;
   if (event.type === "result") {
-    firstOutputWaits.delete(cardId);
+    openTurns.delete(cardId);
     return;
   }
   if (WAIT_DISTURBING_EVENTS.has(event.type) || (event.type === "compaction" && event.phase === "started")) {
-    wait.disturbed = true;
+    openTurn.disturbed = true;
     return;
   }
-  const isMainAgentOutput = FIRST_OUTPUT_EVENTS.has(event.type) && !event.parentToolUseId;
-  if (!isMainAgentOutput) return;
-  firstOutputWaits.delete(cardId);
-  const latencyMs = at - wait.since;
-  if (!wait.disturbed && latencyMs > SLOW_FIRST_OUTPUT_MS) countSlowTurn(cardId, { at, latencyMs });
+  const isFirstMainAgentOutput = !openTurn.answered && FIRST_OUTPUT_EVENTS.has(event.type) && !event.parentToolUseId;
+  if (!isFirstMainAgentOutput) return;
+  openTurn.answered = true;
+  const latencyMs = at - openTurn.since;
+  if (!openTurn.disturbed && latencyMs > SLOW_FIRST_OUTPUT_MS) countSlowTurn(cardId, { at, latencyMs });
 }
 
-export function noteUserStop(cardId: string, at: number): void {
-  const wait = firstOutputWaits.get(cardId);
-  if (wait) wait.disturbed = true;
-  userStops.last = { cardId, at };
+export function noteDriverGone(cardId: string): void {
+  openTurns.delete(cardId);
+}
+
+export function noteUserStop(cardId: string, cardLabel: string, at: number): void {
+  const openTurn = openTurns.get(cardId);
+  if (openTurn) openTurn.disturbed = true;
+  userStops.last = { cardId, cardLabel, at };
 }
 
 export function lastUserStop(): UserStopMark | undefined {
@@ -70,7 +74,7 @@ export function onSlowTurns(listener: SlowTurnsListener): () => void {
 }
 
 export function resetTurnLatencyForTesting(): void {
-  firstOutputWaits.clear();
+  openTurns.clear();
   slowTurnsByCard.clear();
   slowTurnsListeners.clear();
   userStops.last = undefined;

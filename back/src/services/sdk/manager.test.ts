@@ -3473,9 +3473,26 @@ describe("latência até a primeira resposta — fiação para as falhas da plat
     expect(reportedCards).toEqual([CARD]);
   });
 
-  it("o stop do usuário no chat fica registrado como o último stop", () => {
+  it("o stop do usuário no chat fica registrado como o último stop, com o label que os logs usam", () => {
     const session = ensure();
     dispatchClientFrame(session, `{"type":"interrupt"}`);
-    expect(lastUserStop()).toMatchObject({ cardId: CARD });
+    expect(lastUserStop()).toMatchObject({ cardId: CARD, cardLabel: "t" });
+  });
+
+  it("driver que morre antes de responder não deixa a espera aberta para o turno do sucessor", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    const reportedCards: string[] = [];
+    onSlowTurns((cardId) => reportedCards.push(cardId));
+    for (const turnIndex of [0, 1, 2]) {
+      injectSystemTurn(ensure(), `turno ${turnIndex}`, { kind: "system", name: "vibehub" }, 1);
+      vi.setSystemTime(Date.now() + SLOW_FIRST_OUTPUT_MS * 2);
+      spawned[spawned.length - 1]!.emit("close", 1);
+      injectSystemTurn(ensure(), `de novo ${turnIndex}`, { kind: "system", name: "vibehub" }, 1);
+      vi.setSystemTime(Date.now() + 1_000);
+      spawned[spawned.length - 1]!.stdout.emit("data", line({ type: "assistant_delta", text: "oi" }));
+      spawned[spawned.length - 1]!.stdout.emit("data", line({ type: "result", isError: false }));
+    }
+    expect(reportedCards).toEqual([]);
   });
 });

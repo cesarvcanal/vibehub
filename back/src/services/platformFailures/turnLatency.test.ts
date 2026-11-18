@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
   SLOW_FIRST_OUTPUT_MS, SLOW_TURNS_TO_REPORT, SLOW_TURNS_WINDOW_MS,
-  lastUserStop, noteTurnEvent, noteTurnSent, noteUserStop, onSlowTurns, resetTurnLatencyForTesting, type SlowTurn,
+  lastUserStop, noteDriverGone, noteTurnEvent, noteTurnSent, noteUserStop, onSlowTurns, resetTurnLatencyForTesting, type SlowTurn,
 } from "./turnLatency.js";
 
 const SLOW = SLOW_FIRST_OUTPUT_MS + 1;
@@ -56,7 +56,7 @@ describe("turno lento repetido", () => {
     ["compactação", (cardId: string, at: number) => noteTurnEvent(cardId, { type: "compaction", phase: "started" }, at)],
     ["pergunta ao usuário", (cardId: string, at: number) => noteTurnEvent(cardId, { type: "user_question" }, at)],
     ["permissão pedida", (cardId: string, at: number) => noteTurnEvent(cardId, { type: "permission_request" }, at)],
-    ["stop do usuário", (cardId: string, at: number) => noteUserStop(cardId, at)],
+    ["stop do usuário", (cardId: string, at: number) => noteUserStop(cardId, "erp-feat", at)],
   ])("turno com %s no meio não conta como lento", (_cause, disturb) => {
     const reports = listenSlowTurns();
     for (const turnIndex of [0, 1, 2]) runTurn("card-1", turnIndex * 60_000, SLOW, () => disturb("card-1", turnIndex * 60_000 + 10));
@@ -73,7 +73,34 @@ describe("turno lento repetido", () => {
   });
 
   it("guarda o último stop do usuário com card e instante", () => {
-    noteUserStop("card-9", 123);
-    expect(lastUserStop()).toEqual({ cardId: "card-9", at: 123 });
+    noteUserStop("card-9", "erp-feat", 123);
+    expect(lastUserStop()).toEqual({ cardId: "card-9", cardLabel: "erp-feat", at: 123 });
+  });
+
+  it("mensagem enviada com o turno em andamento não abre uma espera nova: tarefa longa não é lentidão", () => {
+    const reports = listenSlowTurns();
+    for (const turnIndex of [0, 1, 2]) {
+      const startAt = turnIndex * 400_000;
+      noteTurnSent("card-1", startAt);
+      noteTurnEvent("card-1", { type: "tool_use" }, startAt + 1_000);
+      noteTurnSent("card-1", startAt + 60_000);
+      noteTurnEvent("card-1", { type: "tool_result" }, startAt + 300_000);
+      noteTurnEvent("card-1", { type: "assistant_text" }, startAt + 300_100);
+      noteTurnEvent("card-1", { type: "result" }, startAt + 300_200);
+    }
+    expect(reports).toHaveLength(0);
+  });
+
+  it("driver que morre antes de responder encerra a espera: o turno seguinte mede do próprio envio", () => {
+    const reports = listenSlowTurns();
+    for (const turnIndex of [0, 1, 2]) {
+      const startAt = turnIndex * 3_600_000;
+      noteTurnSent("card-1", startAt);
+      noteDriverGone("card-1");
+      noteTurnSent("card-1", startAt + 3_000_000);
+      noteTurnEvent("card-1", { type: "assistant_text" }, startAt + 3_005_000);
+      noteTurnEvent("card-1", { type: "result" }, startAt + 3_005_001);
+    }
+    expect(reports).toHaveLength(0);
   });
 });

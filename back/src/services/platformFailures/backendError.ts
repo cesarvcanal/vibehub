@@ -3,9 +3,23 @@ import { redactSecrets } from "../../utils/redactSecrets.js";
 import type { PlatformFailureReport, UserStopMark } from "./types.js";
 
 export const USER_STOP_WINDOW_MS = 10_000;
-const VIBEHUB_FRAME_PATTERN = /[\\/]back[\\/](?:src|dist)[\\/]([\w/\\.-]+?)\.[jt]s:\d+/;
+const SOURCE_FILE_PATTERN = /([\w/.-]+?)\.[jt]s:\d+/;
 const STACK_FRAMES_KEPT = 5;
 const SYMPTOM_MAX_CHARS = 200;
+
+function toStackPath(text: string): string {
+  return text
+    .replace(/\\/g, "/")
+    .replace(/file:\/\/\/(?=[A-Za-z]:\/)/g, "")
+    .replace(/file:\/\//g, "")
+    .replace(/(^|[\s(])\/([A-Za-z]:\/)/g, "$1$2");
+}
+
+export function backendSourceRootOf(moduleUrl: string): string {
+  return toStackPath(decodeURIComponent(new URL("../../", moduleUrl).pathname));
+}
+
+const BACKEND_SOURCE_ROOT = backendSourceRootOf(import.meta.url);
 
 function readErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -16,17 +30,24 @@ function readErrorMessage(err: unknown): string {
   return "";
 }
 
-function readVibehubFrames(err: unknown): string[] {
+function toBackendFrame(stackLine: string): string | undefined {
+  const frame = toStackPath(stackLine.trim());
+  const rootAt = frame.indexOf(BACKEND_SOURCE_ROOT);
+  if (rootAt < 0) return undefined;
+  return frame.slice(0, rootAt) + frame.slice(rootAt + BACKEND_SOURCE_ROOT.length);
+}
+
+function readBackendFrames(err: unknown): string[] {
   if (!(err instanceof Error) || !err.stack) return [];
   return err.stack
     .split("\n")
-    .filter((frame) => VIBEHUB_FRAME_PATTERN.test(frame))
-    .slice(0, STACK_FRAMES_KEPT)
-    .map((frame) => frame.trim());
+    .map(toBackendFrame)
+    .filter((frame): frame is string => frame !== undefined)
+    .slice(0, STACK_FRAMES_KEPT);
 }
 
 function componentOfFrame(frame: string | undefined): string | undefined {
-  return frame?.match(VIBEHUB_FRAME_PATTERN)?.[1]?.replace(/\\/g, "/");
+  return frame?.match(SOURCE_FILE_PATTERN)?.[1];
 }
 
 function readTextField(fields: Record<string, unknown>, name: string): string | undefined {
@@ -36,26 +57,27 @@ function readTextField(fields: Record<string, unknown>, name: string): string | 
 
 export function reportFromBackendError(line: LogLine, lastUserStop: UserStopMark | undefined, now: number): PlatformFailureReport {
   const errorMessage = readErrorMessage(line.fields.err) || readTextField(line.fields, "detail") || "";
-  const vibehubFrames = readVibehubFrames(line.fields.err);
-  const stoppedByUser = lastUserStop !== undefined && now - lastUserStop.at <= USER_STOP_WINDOW_MS;
+  const backendFrames = readBackendFrames(line.fields.err);
+  const loggedCardLabel = readTextField(line.fields, "card");
+  const isWithinStopWindow = lastUserStop !== undefined && now - lastUserStop.at <= USER_STOP_WINDOW_MS;
+  const isFromStoppedCard = isWithinStopWindow && loggedCardLabel === lastUserStop.cardLabel;
+  const isMarkedAfterStop = isWithinStopWindow && (loggedCardLabel === undefined || isFromStoppedCard);
   const baseSymptom = [line.message, errorMessage].filter((part) => part !== "").join(": ");
-  const symptom = redactSecrets(stoppedByUser ? `ao interromper: ${baseSymptom}` : baseSymptom).slice(0, SYMPTOM_MAX_CHARS);
+  const symptom = redactSecrets(isMarkedAfterStop ? `logo após um stop do usuário: ${baseSymptom}` : baseSymptom).slice(0, SYMPTOM_MAX_CHARS);
   const action = readTextField(line.fields, "action");
   const route = readTextField(line.fields, "route");
-  const card = readTextField(line.fields, "card");
   const evidenceLines = [
     `mensagem: ${line.message}`,
     ...(errorMessage ? [`erro: ${errorMessage}`] : []),
     ...(action ? [`ação: ${action}`] : []),
     ...(route ? [`rota: ${route}`] : []),
-    ...(card ? [`card: ${card}`] : []),
-    ...vibehubFrames,
+    ...backendFrames,
   ];
   return {
     source: "backend_error",
-    component: componentOfFrame(vibehubFrames[0]) ?? "backend",
+    component: componentOfFrame(backendFrames[0]) ?? "backend",
     symptom,
     evidence: redactSecrets(evidenceLines.join("\n")),
-    ...(stoppedByUser ? { cardId: lastUserStop.cardId } : {}),
+    ...(isFromStoppedCard ? { cardId: lastUserStop.cardId } : {}),
   };
 }

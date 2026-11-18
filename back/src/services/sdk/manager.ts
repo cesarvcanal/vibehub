@@ -28,7 +28,7 @@ import {
 } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { observeDriverEvent } from "../events/cardEvents.js";
-import { noteTurnEvent, noteTurnSent, noteUserStop } from "../platformFailures/turnLatency.js";
+import { noteDriverGone, noteTurnEvent, noteTurnSent, noteUserStop } from "../platformFailures/turnLatency.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -1263,6 +1263,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     const succeeded = sessions.has(opts.cardId);
     // The dedupe memory belongs to the DRIVER: it ended, so the memory ends with it — the successor speaks from scratch.
     if (!succeeded) forgetDriverKeys(opts.cardId);
+    if (!succeeded) noteDriverGone(opts.cardId);
     // A driver that dies with a turn open sends no `Stop`: without this the dot stayed green on a
     // stopped chat. Only without a successor — the next one already speaks for the card.
     // Except on a DROP someone is going to resume (see below): there `waiting` would be read as "turno
@@ -1589,7 +1590,7 @@ function answerLate(session: DriverSession, card: QuestionCard, control: Questio
  * was no way to know whether it had been the deadline, a click or another person on the same card.
  */
 function noteStop(session: DriverSession, origin: MessageOrigin | undefined, how: StopHow): void {
-  noteUserStop(session.cardId, Date.now());
+  noteUserStop(session.cardId, session.label, Date.now());
   session.stopCause = { ...(origin?.name ? { by: origin.name } : {}), how };
   logger.info(
     { audit: true, action: "sdk.stop", card: session.label, by: origin?.name ?? null, how, openAsks: session.openAsks.size },
