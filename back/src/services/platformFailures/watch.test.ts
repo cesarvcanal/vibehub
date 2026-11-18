@@ -33,7 +33,7 @@ describe("vigia das falhas da plataforma", () => {
     logger.error({ err: new Error("driver gone") }, "request failed");
     await watch.waitForPlatformFailureWatch();
     stopWatch();
-    expect((await failures.listPlatformFailuresForOwner()).map((failure) => failure.symptom)).toEqual(["request failed: driver gone"]);
+    expect((await failures.listActivePlatformFailures()).map((failure) => failure.symptom)).toEqual(["request failed: driver gone"]);
   });
 
   it("três turnos lentos viram uma falha slow_turn do card", async () => {
@@ -47,7 +47,7 @@ describe("vigia das falhas da plataforma", () => {
     }
     await watch.waitForPlatformFailureWatch();
     stopWatch();
-    expect(await failures.listPlatformFailuresForOwner()).toEqual([expect.objectContaining({ source: "slow_turn", affectedCardIds: ["card-3"] })]);
+    expect(await failures.listActivePlatformFailures()).toEqual([expect.objectContaining({ source: "slow_turn", affectedCardIds: ["card-3"] })]);
   });
 
   it("gravar falhou: a captura de erros do backend pausa por 60s em vez de realimentar o próprio erro", async () => {

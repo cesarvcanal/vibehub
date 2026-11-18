@@ -49,7 +49,7 @@ describe("vibehub_report_platform_failure", () => {
   it("registra o relato do agente com o card afetado", async () => {
     const { call, failures } = await connect();
     expect((await call(REPORT)).json).toMatchObject({ recorded: true, occurrences: 1 });
-    expect(await failures.listPlatformFailuresForOwner()).toEqual([
+    expect(await failures.listActivePlatformFailures()).toEqual([
       expect.objectContaining({ source: "agent_report", component: "vibehub_deliver", affectedCardIds: ["card-1"] }),
     ]);
   });
@@ -57,13 +57,13 @@ describe("vibehub_report_platform_failure", () => {
   it("mascara token que o agente pôs na evidência", async () => {
     const { call, failures } = await connect();
     await call({ ...REPORT, evidence: `git disse: x-access-token:${"z".repeat(40)}@github.com` });
-    expect((await failures.listPlatformFailuresForOwner())[0]!.evidence).not.toContain("z".repeat(40));
+    expect((await failures.listActivePlatformFailures())[0]!.evidence).not.toContain("z".repeat(40));
   });
 
   it("mascara token que o agente pôs no componente", async () => {
     const { call, failures } = await connect();
     await call({ ...REPORT, component: `ghp_${"A".repeat(36)}` });
-    expect((await failures.listPlatformFailuresForOwner())[0]!.component).not.toContain("A".repeat(36));
+    expect((await failures.listActivePlatformFailures())[0]!.component).not.toContain("A".repeat(36));
   });
 
   it("sem projeto do vibehub configurado, recusa dizendo onde configurar", async () => {
@@ -74,7 +74,7 @@ describe("vibehub_report_platform_failure", () => {
   it("lentidão sem medição é recusada", async () => {
     const { call, failures } = await connect();
     expect((await call({ ...REPORT, kind: "measured_slowness" })).json.error).toMatch(/measuredMs/);
-    expect(await failures.listPlatformFailuresForOwner()).toEqual([]);
+    expect(await failures.listActivePlatformFailures()).toEqual([]);
   });
 
   it("card que não existe é recusado", async () => {

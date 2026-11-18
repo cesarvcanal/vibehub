@@ -23,7 +23,7 @@ describe("registro de falhas da plataforma", () => {
   it("não registra nada enquanto o projeto do vibehub não está configurado", async () => {
     const failures = await fresh({ configured: false });
     expect(await failures.recordPlatformFailure(backendReport("driver gone"))).toBeNull();
-    expect(await failures.listPlatformFailuresForOwner()).toEqual([]);
+    expect(await failures.listActivePlatformFailures()).toEqual([]);
   });
 
   it("a mesma falha repetida só soma ocorrências e cards afetados", async () => {
@@ -31,7 +31,7 @@ describe("registro de falhas da plataforma", () => {
     await failures.recordPlatformFailure(backendReport("timed out after 91000 ms", "card-1"), 1_000);
     await failures.recordPlatformFailure(backendReport("timed out after 95000 ms", "card-2"), 2_000);
     await failures.recordPlatformFailure(backendReport("timed out after 99000 ms", "card-1"), 3_000);
-    const listed = await failures.listPlatformFailuresForOwner();
+    const listed = await failures.listActivePlatformFailures();
     expect(listed).toHaveLength(1);
     expect(listed[0]).toMatchObject({ occurrences: 3, affectedCardIds: ["card-2", "card-1"], firstSeenAt: 1_000, lastSeenAt: 3_000, status: "open" });
   });
@@ -41,7 +41,7 @@ describe("registro de falhas da plataforma", () => {
     const recorded = await failures.recordPlatformFailure(backendReport("expected thing"));
     await failures.dismissPlatformFailure(recorded!.id);
     expect(await failures.recordPlatformFailure(backendReport("expected thing"))).toBeNull();
-    expect(await failures.listPlatformFailuresForOwner()).toEqual([]);
+    expect(await failures.listActivePlatformFailures()).toEqual([]);
   });
 
   async function resolveFailureAt(failures: Awaited<ReturnType<typeof fresh>>, mergedAt: number) {
@@ -67,7 +67,7 @@ describe("registro de falhas da plataforma", () => {
     const recorded = await resolveFailureAt(failures, mergedAt);
     const duringDeploy = await failures.recordPlatformFailure(backendReport("driver gone"), mergedAt + failures.RESOLVED_GRACE_MS);
     expect(duringDeploy).toMatchObject({ id: recorded.id, status: "resolved", occurrences: 2 });
-    expect(await failures.listPlatformFailuresForOwner()).toEqual([]);
+    expect(await failures.listActivePlatformFailures()).toEqual([]);
   });
 
   it("'não é bug' numa lentidão silencia por 7 dias, e depois a detecção volta", async () => {
@@ -79,7 +79,7 @@ describe("registro de falhas da plataforma", () => {
     const back = await failures.recordPlatformFailure({ ...slowTurn, evidence: "episódio novo", cardId: "card-9" }, 2_001 + failures.SLOW_TURN_DISMISSAL_MS);
     expect(back).toMatchObject({ status: "open", occurrences: 1, evidence: "episódio novo", affectedCardIds: ["card-9"], firstSeenAt: 2_001 + failures.SLOW_TURN_DISMISSAL_MS });
     expect(back!.id).not.toBe(recorded!.id);
-    expect((await failures.listPlatformFailuresForOwner()).map((failure) => failure.id)).toEqual([back!.id]);
+    expect((await failures.listActivePlatformFailures()).map((failure) => failure.id)).toEqual([back!.id]);
     const repeated = await failures.recordPlatformFailure(slowTurn, 3_000 + failures.SLOW_TURN_DISMISSAL_MS);
     expect(repeated).toMatchObject({ id: back!.id, occurrences: 2 });
     await expect(failures.getPlatformFailure(recorded!.id)).rejects.toBeInstanceOf(failures.PlatformFailureNotFoundError);

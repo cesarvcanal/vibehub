@@ -81,7 +81,7 @@ export async function recordPlatformFailure(report: PlatformFailureReport, now: 
   return outcome.failure;
 }
 
-export async function listPlatformFailuresForOwner(): Promise<PlatformFailure[]> {
+export async function listActivePlatformFailures(): Promise<PlatformFailure[]> {
   const doc = await store.load();
   return doc.failures
     .filter((failure) => ACTIVE_STATUSES.includes(failure.status))
