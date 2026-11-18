@@ -178,6 +178,7 @@ export interface Settings {
   sdkPermissionMode?: SdkPermissionMode;
   /** Resume automatically a native-chat turn a panel deploy interrupted (default on). */
   sdkAutoResume?: boolean;
+  selfProjectId?: string | null;
   runner: RunnerSettings;
   /** Externally reachable base URL, when the install has one. */
   publicUrl?: string;
@@ -229,7 +230,35 @@ export interface SettingsPatch {
   sdkDriver?: boolean;
   sdkPermissionMode?: SdkPermissionMode;
   sdkAutoResume?: boolean;
+  selfProjectId?: string | null;
   runner?: Partial<RunnerSettings>;
+}
+
+export type PlatformFailureSource = "backend_error" | "slow_turn" | "agent_report";
+export type PlatformFailureStatus = "open" | "investigating" | "resolved" | "concluded_without_fix" | "dismissed";
+
+export interface PlatformFailure {
+  id: string;
+  signature: string;
+  source: PlatformFailureSource;
+  status: PlatformFailureStatus;
+  component: string;
+  symptom: string;
+  evidence: string;
+  reproduction?: string;
+  hypothesis?: string;
+  occurrences: number;
+  affectedCardIds: string[];
+  firstSeenAt: number;
+  lastSeenAt: number;
+  investigationCardId?: string;
+  resolvedAt?: number;
+  dismissedAt?: number;
+}
+
+export interface PlatformFailureInvestigation {
+  failure: PlatformFailure;
+  card: { id: string; projectId: string; title: string };
 }
 
 /** `GET /api/transcribe` — what voice input can do on THIS install. */

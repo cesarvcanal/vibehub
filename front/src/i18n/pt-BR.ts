@@ -1077,6 +1077,10 @@ export const ptBR: Record<string, string> = {
   "settings.sdkPermissionMode": "Permissões do chat nativo",
   "settings.sdkPermissionModeHint":
     "\"Igual ao terminal\" = o chat nativo tem exatamente o mesmo comportamento de permissões da aba Terminal do card. \"Perguntar o sensível\" = ações sensíveis (rm -rf, force-push, deploy, segredos) viram botões Permitir/Negar no chat.",
+  "settings.selfProject": "Projeto do próprio vibehub",
+  "settings.selfProjectNone": "Nenhum (desligado)",
+  "settings.selfProjectHint":
+    "Quando o próprio vibehub falhar, ele registra a falha e propõe a correção neste projeto, sempre com a sua aprovação. Vazio desliga.",
   "settings.sdkPermissionSame": "Igual ao terminal",
   "settings.sdkPermissionAsk": "Perguntar o sensível no chat",
   "settings.voice": "Entrada por voz",
@@ -1720,4 +1724,22 @@ export const ptBR: Record<string, string> = {
   "voiceLab.stageStart": "Início",
   "voiceLab.stageDelay": "Atraso",
   "voiceLab.stageDuration": "Duração",
+  "platformFailures.indicator.one": "{count} falha do vibehub",
+  "platformFailures.indicator.other": "{count} falhas do vibehub",
+  "platformFailures.newToast.one": "O vibehub registrou uma falha nova",
+  "platformFailures.newToast.other": "O vibehub registrou {count} falhas novas",
+  "platformFailures.open": "Ver",
+  "platformFailures.title": "Falhas do vibehub",
+  "platformFailures.description":
+    "Falhas que o próprio vibehub teve enquanto você trabalhava. Leia o relato antes de aprovar: ele vira um card no projeto do vibehub, que é público.",
+  "platformFailures.meta.one": "{component} · {count} ocorrência · {cards} card(s) afetado(s)",
+  "platformFailures.meta.other": "{component} · {count} ocorrências · {cards} card(s) afetado(s)",
+  "platformFailures.hypothesis": "Hipótese (não confirmada): {hypothesis}",
+  "platformFailures.investigating": "Em investigação num card do projeto do vibehub. Se esse card sumiu, investigue de novo.",
+  "platformFailures.concludedWithoutFix": "A investigação terminou sem correção. Confirme como esperado ou investigue de novo.",
+  "platformFailures.investigate": "Investigar e corrigir",
+  "platformFailures.investigateAgain": "Investigar de novo",
+  "platformFailures.dismiss": "Não é bug",
+  "platformFailures.investigationStarted": "Card da investigação: {title}",
+  "platformFailures.loadError": "Não deu pra carregar as falhas do vibehub",
 };

@@ -47,6 +47,20 @@ describe("settings", () => {
     expect((await s.getSettings()).idleHibernateMinutes).toBe(0);
   });
 
+  it("guarda o projeto do próprio vibehub, começa vazio e aceita voltar a vazio", async () => {
+    const settingsModule = await fresh();
+    expect((await settingsModule.getSettings()).selfProjectId).toBeNull();
+    expect((await settingsModule.updateSettings({ selfProjectId: "p-vibehub" })).selfProjectId).toBe("p-vibehub");
+    expect((await settingsModule.updateSettings({ selfProjectId: null })).selfProjectId).toBeNull();
+    await expect(settingsModule.updateSettings({ selfProjectId: "  " })).rejects.toThrow(/selfProjectId/);
+  });
+
+  it("recusa projeto do vibehub que não é texto: a rota só confere a existência de um id em texto", async () => {
+    const settingsModule = await fresh();
+    await expect(settingsModule.updateSettings({ selfProjectId: 5 as unknown as string })).rejects.toThrow(/selfProjectId/);
+    expect((await settingsModule.getSettings()).selfProjectId).toBeNull();
+  });
+
   it("validates the git identity", async () => {
     const s = await fresh();
     await expect(s.updateSettings({ git: { name: "  " } })).rejects.toThrow(/cannot be empty/);

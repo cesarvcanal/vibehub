@@ -1070,6 +1070,10 @@ export const en: Record<string, string> = {
   "settings.sdkPermissionMode": "Native chat permissions",
   "settings.sdkPermissionModeHint":
     "\"Same as the terminal\" = the native chat has exactly the permission behaviour of the card's Terminal tab. \"Ask for the sensitive\" = sensitive actions (rm -rf, force-push, deploy, secrets) become Allow/Deny buttons in the chat.",
+  "settings.selfProject": "vibehub's own project",
+  "settings.selfProjectNone": "None (off)",
+  "settings.selfProjectHint":
+    "When vibehub itself fails, it records the failure and proposes the fix in this project, always with your approval. Empty turns it off.",
   "settings.sdkPermissionSame": "Same as the terminal",
   "settings.sdkPermissionAsk": "Ask for the sensitive in the chat",
   "settings.voice": "Voice input",
@@ -1708,4 +1712,22 @@ export const en: Record<string, string> = {
   "voiceLab.stageStart": "Start",
   "voiceLab.stageDelay": "Delay",
   "voiceLab.stageDuration": "Duration",
+  "platformFailures.indicator.one": "{count} vibehub failure",
+  "platformFailures.indicator.other": "{count} vibehub failures",
+  "platformFailures.newToast.one": "vibehub recorded a new failure",
+  "platformFailures.newToast.other": "vibehub recorded {count} new failures",
+  "platformFailures.open": "View",
+  "platformFailures.title": "vibehub failures",
+  "platformFailures.description":
+    "Failures vibehub itself hit while you worked. Read the report before approving: it becomes a card in the vibehub project, which is public.",
+  "platformFailures.meta.one": "{component} · {count} occurrence · {cards} card(s) affected",
+  "platformFailures.meta.other": "{component} · {count} occurrences · {cards} card(s) affected",
+  "platformFailures.hypothesis": "Hypothesis (unconfirmed): {hypothesis}",
+  "platformFailures.investigating": "Being investigated in a card of the vibehub project. If that card is gone, investigate again.",
+  "platformFailures.concludedWithoutFix": "The investigation ended without a fix. Confirm it as expected or investigate again.",
+  "platformFailures.investigate": "Investigate and fix",
+  "platformFailures.investigateAgain": "Investigate again",
+  "platformFailures.dismiss": "Not a bug",
+  "platformFailures.investigationStarted": "Investigation card: {title}",
+  "platformFailures.loadError": "Could not load vibehub's failures",
 };

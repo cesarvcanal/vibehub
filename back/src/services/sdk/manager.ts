@@ -28,6 +28,7 @@ import {
 } from "./protocol.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { observeDriverEvent } from "../events/cardEvents.js";
+import { noteDriverGone, noteTurnEvent, noteTurnSent, noteUserStop } from "../platformFailures/turnLatency.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -692,6 +693,7 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
   // answer — shown, it reads as Claude dismissing the person's message (the production symptom).
   if (event.type === "assistant_text" && typeof (event as { text?: unknown }).text === "string"
     && isHarnessFiller("assistant", (event as { text: string }).text)) return;
+  noteTurnEvent(session.cardId, event, Date.now());
   if (event.type === "assistant_text" || event.type === "tool_use" || event.type === "thinking") {
     noteAgentWork(session, event);
   }
@@ -1260,7 +1262,10 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     // switch or the reconnect has already brought up the next driver — and clearing now would be clearing ITS state.
     const succeeded = sessions.has(opts.cardId);
     // The dedupe memory belongs to the DRIVER: it ended, so the memory ends with it — the successor speaks from scratch.
-    if (!succeeded) forgetDriverKeys(opts.cardId);
+    if (!succeeded) {
+      forgetDriverKeys(opts.cardId);
+      noteDriverGone(opts.cardId);
+    }
     // A driver that dies with a turn open sends no `Stop`: without this the dot stayed green on a
     // stopped chat. Only without a successor — the next one already speaks for the card.
     // Except on a DROP someone is going to resume (see below): there `waiting` would be read as "turno
@@ -1366,6 +1371,7 @@ function noteChatActivity(session: DriverSession): void {
  * themselves, so a turn the panel injects can never keep a card awake by passing the wrong flag.
  */
 function countSentTurn(session: DriverSession, sentText: string): void {
+  noteTurnSent(session.cardId, Date.now());
   session.activeTurns += 1;
   syncBoardStatus(session);
   clearIdleTimer(session);
@@ -1586,6 +1592,7 @@ function answerLate(session: DriverSession, card: QuestionCard, control: Questio
  * was no way to know whether it had been the deadline, a click or another person on the same card.
  */
 function noteStop(session: DriverSession, origin: MessageOrigin | undefined, how: StopHow): void {
+  noteUserStop(session.cardId, session.label, Date.now());
   session.stopCause = { ...(origin?.name ? { by: origin.name } : {}), how };
   logger.info(
     { audit: true, action: "sdk.stop", card: session.label, by: origin?.name ?? null, how, openAsks: session.openAsks.size },

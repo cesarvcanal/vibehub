@@ -16,6 +16,7 @@ import { sharesRoutes } from "./routes/shares.js";
 import { reviewRoutes } from "./routes/reviews.js";
 import { prAnalysisRoutes } from "./routes/prAnalysis.js";
 import { settingsRoutes } from "./routes/settings.js";
+import { platformFailureRoutes } from "./routes/platformFailures.js";
 import { githubRoutes } from "./routes/github.js";
 import { runnerRoutes } from "./routes/runner.js";
 import { boardRoutes } from "./routes/board.js";
@@ -40,6 +41,7 @@ import { checkStatusHookReach } from "./runtime/runner.js";
 import { startOutboxFlusher } from "./services/board/outbox.js";
 import { startWebhookDispatcher } from "./services/webhooks/subscriptions.js";
 import { startReviewOrchestrator } from "./services/review/orchestrator.js";
+import { startPlatformFailureWatch } from "./services/platformFailures/watch.js";
 import { startRunnerReaper } from "./services/reaper/reaper.js";
 import { pruneStaleInflightOwners, startInflightOwnerHeartbeat } from "./services/sdk/inflight.js";
 import { handOffSdkOnShutdown, resumeAfterDriverCrash, resumeInterruptedTurns } from "./services/sdk/resume.js";
@@ -89,6 +91,7 @@ export async function buildServer() {
   await app.register(usersRoutes);
   await app.register(sharesRoutes);
   await app.register(settingsRoutes);
+  await app.register(platformFailureRoutes);
   await app.register(githubRoutes);
   await app.register(runnerRoutes);
   await app.register(boardRoutes);
@@ -241,6 +244,7 @@ async function main(): Promise<void> {
   // PR review: the end of a turn of a review card (or of the author's) without the round's tool becomes a
   // reminder and, the second time, an impasse. Same reason as the others: a test that starts the app does not inherit the listener.
   startReviewOrchestrator();
+  startPlatformFailureWatch();
   await app.listen({ port: config.port, host: config.host });
   const trustWarning = trustProxyBootWarning(config.trustProxy);
   if (trustWarning) logger.warn(trustWarning);
