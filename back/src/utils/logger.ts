@@ -26,7 +26,12 @@ export const logger = pino({
   hooks: {
     logMethod(args, method, level) {
       for (const subscription of logLineSubscriptions) {
-        if (level >= subscription.minLevel) subscription.listener(toLogLine(args, level));
+        if (level < subscription.minLevel) continue;
+        try {
+          subscription.listener(toLogLine(args, level));
+        } catch {
+          continue;
+        }
       }
       method.apply(this, args);
     },

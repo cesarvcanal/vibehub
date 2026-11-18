@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, onTestFinished } from "vitest";
 import { logger, onLogLine, type LogLine } from "./logger.js";
 
 describe("onLogLine", () => {
@@ -12,6 +12,14 @@ describe("onLogLine", () => {
     expect(heardLines).toEqual([
       { level: 50, message: "falhou", fields: { card: "b", action: "x.y" } },
     ]);
+  });
+
+  it("ouvinte que lança não derruba o logger.error de quem chamou nem os outros ouvintes", () => {
+    const heardLines: LogLine[] = [];
+    onTestFinished(onLogLine("error", () => { throw new Error("ouvinte quebrado"); }));
+    onTestFinished(onLogLine("error", (line) => heardLines.push(line)));
+    expect(() => logger.error({ card: "c" }, "falhou mesmo assim")).not.toThrow();
+    expect(heardLines.map((line) => line.message)).toEqual(["falhou mesmo assim"]);
   });
 
   it("entrega o Error passado sozinho como fields.err", () => {
