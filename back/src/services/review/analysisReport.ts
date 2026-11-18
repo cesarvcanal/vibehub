@@ -29,6 +29,7 @@ export async function recordAnalysisReport(cardId: string, input: AnalysisReport
   if (!card) throw new Error(`card não encontrado: ${cardId}`);
   const analysedPr = card.pushBranch === undefined ? undefined : card.prs?.[0];
   if (!analysedPr) throw new Error("este card não é um card de análise: passe em `card` o $VIBEHUB_CARD_ID do card que analisa a PR");
+  if (card.column === "done") throw new Error("este card de análise já foi concluído: pare; um novo pedido da PR abre outro card");
   const report: AnalysisReport = {
     cardId,
     prUrl: analysedPr.url,

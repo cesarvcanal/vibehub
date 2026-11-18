@@ -88,10 +88,17 @@ describe("relatório da análise pela ferramenta do card", () => {
     expect(registry.openAnalysisCard(await registry.listCards(analysisCard.projectId), PR.url)).toBeUndefined();
   });
 
-  it("relatório analysed ou done não move o card", async () => {
+  it.each(["analysed", "done"] as const)("relatório %s não move o card", async (stage) => {
     const { analysisCard, reportService } = await load();
-    await reportService.recordAnalysisReport(analysisCard.id, input({ stage: "done" }));
+    await reportService.recordAnalysisReport(analysisCard.id, input({ stage }));
     const registry = await import("../board/registry.js");
     expect((await registry.getCard(analysisCard.id))?.column).toBe(analysisCard.column);
+  });
+
+  it("card de análise já concluído não grava relatório: a PR pode já ter outro card trabalhando nela", async () => {
+    const { analysisCard, reportService, store } = await load();
+    await reportService.recordAnalysisReport(analysisCard.id, input({ stage: "fleet_unavailable", unavailableReason: "Workflow desligado" }));
+    await expect(reportService.recordAnalysisReport(analysisCard.id, input({ stage: "analysed" }))).rejects.toThrow(/concluído/);
+    expect((await store.getAnalysis(analysisCard.id))?.stage).toBe("fleet_unavailable");
   });
 });
