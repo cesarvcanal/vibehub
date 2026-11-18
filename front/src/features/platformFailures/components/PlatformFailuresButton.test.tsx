@@ -3,6 +3,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderApp } from "@/test/render";
 import type { PlatformFailure } from "@/api/types";
+import { PLATFORM_FAILURES_KEY } from "../api";
 import { PlatformFailuresButton } from "./PlatformFailuresButton";
 
 const get = vi.fn();
@@ -43,6 +44,16 @@ describe("PlatformFailuresButton", () => {
     get.mockRejectedValue(new Error("500"));
     renderApp(<PlatformFailuresButton />);
     expect(await screen.findByText(/could not load vibehub's failures|não deu pra carregar as falhas do vibehub/i)).toBeTruthy();
+  });
+
+  it("um poll que falha com o relato aberto mantém o relato na tela", async () => {
+    const { queryClient } = renderApp(<PlatformFailuresButton />);
+    await userEvent.click(await screen.findByRole("button", { name: /1/ }));
+    await screen.findByText("logo após um stop do usuário: write after end");
+    get.mockRejectedValue(new Error("502"));
+    await queryClient.refetchQueries();
+    await waitFor(() => expect(queryClient.getQueryState(PLATFORM_FAILURES_KEY)?.status).toBe("error"));
+    expect(screen.getByText("logo após um stop do usuário: write after end")).toBeTruthy();
   });
 
   it("mostra a contagem, anuncia a falha nova uma vez e abre o relato", async () => {
