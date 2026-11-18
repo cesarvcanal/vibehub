@@ -253,7 +253,9 @@ describe("frota da análise de PR", () => {
       properties: { findings: object };
     };
     const toolReport = analysisReportInput.innerType().shape;
-    expect(briefSchema.properties.summary).toMatchObject({ maxLength: toolReport.summary.maxLength });
+    expect(briefSchema.properties.summary).toMatchObject({
+      minLength: toolReport.summary.minLength, maxLength: toolReport.summary.maxLength,
+    });
     expect(briefSchema.properties.dimensions.items.properties.reason)
       .toMatchObject({ maxLength: toolReport.dimensions.element.shape.reason.unwrap().maxLength });
     expect(judgeSchema.properties.findings).toMatchObject({ maxItems: toolReport.findings._def.maxLength?.value });

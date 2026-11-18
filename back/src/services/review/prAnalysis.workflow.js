@@ -37,7 +37,7 @@ const PROOF_SCHEMA = {
 const BRIEF_SCHEMA = {
   type: 'object',
   properties: {
-    summary: { type: 'string', maxLength: 1000 },
+    summary: { type: 'string', minLength: 1, maxLength: 1000 },
     touchedAreas: { type: 'array', items: { type: 'string' } },
     consumers: { type: 'array', items: { type: 'string' } },
     dimensions: {
