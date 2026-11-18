@@ -68,10 +68,11 @@ export function PlatformFailuresButton() {
 
   const hasNoFailuresToShow = failures.length === 0;
   if (hasNoFailuresToShow && isFailuresDialogOpen) setFailuresDialogOpen(false);
-  if (failuresQuery.isError && hasNoFailuresToShow) return <span className="text-xs text-amber-600">{t("platformFailures.loadError")}</span>;
-  if (hasNoFailuresToShow) return null;
+  const loadErrorNotice = failuresQuery.isError ? <span className="text-xs text-amber-600">{t("platformFailures.loadError")}</span> : null;
+  if (hasNoFailuresToShow) return loadErrorNotice;
   return (
     <>
+      {loadErrorNotice}
       <Button size="sm" variant="outline" onClick={() => setFailuresDialogOpen(true)}>
         <AlertTriangle className="mr-1 h-4 w-4 text-amber-500" aria-hidden />
         {t("platformFailures.indicator", { n: failures.length, count: failures.length })}

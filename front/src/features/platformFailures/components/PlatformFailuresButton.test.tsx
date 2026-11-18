@@ -55,6 +55,15 @@ describe("PlatformFailuresButton", () => {
     expect(await screen.findByText(/could not load vibehub's failures|não deu pra carregar as falhas do vibehub/i)).toBeTruthy();
   });
 
+  it("poll que falha com falhas em cache avisa ao lado do indicador, sem tirar a lista", async () => {
+    const { queryClient } = renderApp(<PlatformFailuresButton />);
+    await screen.findByRole("button", { name: /1/ });
+    get.mockRejectedValue(new Error("502"));
+    await queryClient.refetchQueries();
+    expect(await screen.findByText(/could not load vibehub's failures|não deu pra carregar as falhas do vibehub/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /1/ })).toBeTruthy();
+  });
+
   it("dispensar a última falha com o relato aberto não reabre o relato quando chega outra falha", async () => {
     const { queryClient } = renderApp(<PlatformFailuresButton />);
     await userEvent.click(await screen.findByRole("button", { name: /1/ }));
