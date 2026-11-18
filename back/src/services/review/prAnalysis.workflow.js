@@ -28,8 +28,8 @@ const PROOF_SCHEMA = {
   type: 'object',
   properties: {
     kind: { type: 'string', enum: ['failing_test', 'rule', 'scenario'] },
-    ref: { type: 'string' },
-    detail: { type: 'string' },
+    ref: { type: 'string', maxLength: 400 },
+    detail: { type: 'string', maxLength: 2000 },
   },
   required: ['kind', 'ref'],
 }
@@ -56,12 +56,12 @@ const BRIEF_SCHEMA = {
   required: ['summary', 'touchedAreas', 'consumers', 'dimensions'],
 }
 
-const NON_BLANK_TEXT = { type: 'string', minLength: 1, pattern: '\\S' }
+const NON_BLANK_TEXT = { type: 'string', minLength: 1, pattern: '\\S', maxLength: 2000 }
 
 const FINDING_PROPERTIES = {
-  title: NON_BLANK_TEXT,
+  title: { ...NON_BLANK_TEXT, maxLength: 300 },
   problem: NON_BLANK_TEXT,
-  file: { type: 'string' },
+  file: { type: 'string', maxLength: 400 },
   line: { type: 'integer', minimum: 1 },
   proof: PROOF_SCHEMA,
   fix: NON_BLANK_TEXT,
