@@ -238,6 +238,11 @@ describe("prompt da análise de PR", () => {
     expect(analysisPrompt(input)).toMatch(/stage: "done"[^\n]*as mesmas dimensions do passo 3, inclusive o unverifiedCount/);
   });
 
+  it("o relatório done leva o headSha do passo 1, não o das correções, como o servidor exige", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    expect(analysisPrompt(input)).toMatch(/stage: "done"[^\n]*o mesmo headSha do passo 1/);
+  });
+
   it("o relatório analysed vai uma vez só, como o servidor exige", async () => {
     const { analysisPrompt } = await import("./prompts.js");
     expect(analysisPrompt(input)).toMatch(/stage: "analysed"[^\n]*uma vez só/);
