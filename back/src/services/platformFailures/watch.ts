@@ -9,7 +9,7 @@ import type { PlatformFailureReport } from "./types.js";
 const CAPTURE_PAUSE_MS = 60_000;
 
 const backendCapture = { pausedUntil: 0 };
-const pendingRecords = new Set<Promise<unknown>>();
+const pendingWatchTasks = new Set<Promise<unknown>>();
 
 function buildSlowTurnsReport(cardId: string, slowTurns: SlowTurn[]): PlatformFailureReport {
   return {
@@ -23,9 +23,9 @@ function buildSlowTurnsReport(cardId: string, slowTurns: SlowTurn[]): PlatformFa
   };
 }
 
-function trackRecord(recording: Promise<unknown>): void {
-  pendingRecords.add(recording);
-  void recording.finally(() => pendingRecords.delete(recording));
+function trackWatchTask(watchTask: Promise<unknown>): void {
+  pendingWatchTasks.add(watchTask);
+  void watchTask.finally(() => pendingWatchTasks.delete(watchTask));
 }
 
 async function recordFromWatch(report: PlatformFailureReport): Promise<void> {
@@ -42,12 +42,12 @@ export function startPlatformFailureWatch(): () => void {
     const now = Date.now();
     if (now < backendCapture.pausedUntil) return;
     const report = buildBackendErrorReport(line, getLastUserStop(), now);
-    queueMicrotask(() => trackRecord(recordFromWatch(report)));
+    queueMicrotask(() => trackWatchTask(recordFromWatch(report)));
   });
-  const stopSlowTurns = onSlowTurns((cardId, slowTurns) => trackRecord(recordFromWatch(buildSlowTurnsReport(cardId, slowTurns))));
+  const stopSlowTurns = onSlowTurns((cardId, slowTurns) => trackWatchTask(recordFromWatch(buildSlowTurnsReport(cardId, slowTurns))));
   const stopConclusions = onCardEvent((event) => {
     if (event.kind !== "concluded") return;
-    trackRecord(settleInvestigationOfCard(event.cardId).catch((err: unknown) => {
+    trackWatchTask(settleInvestigationOfCard(event.cardId).catch((err: unknown) => {
       logger.warn({ card: event.cardId, detail: (err as Error).message }, "could not settle the platform-failure investigation of a concluded card");
     }));
   });
@@ -60,5 +60,5 @@ export function startPlatformFailureWatch(): () => void {
 
 export async function waitForPlatformFailureWatch(): Promise<void> {
   await new Promise<void>((resolve) => queueMicrotask(resolve));
-  await Promise.all([...pendingRecords]);
+  await Promise.all([...pendingWatchTasks]);
 }
