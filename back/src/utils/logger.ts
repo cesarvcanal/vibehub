@@ -20,22 +20,22 @@ function toLogLine(args: unknown[], level: number): LogLine {
   return { level, message: String(first ?? ""), fields: {} };
 }
 
+export function notifyListenersAndWrite(this: pino.Logger, args: Parameters<pino.LogFn>, method: pino.LogFn, level: number): void {
+  for (const subscription of logLineSubscriptions) {
+    if (level < subscription.minLevel) continue;
+    try {
+      subscription.listener(toLogLine(args, level));
+    } catch (err) {
+      method.call(this, { detail: (err as Error).message }, "log line listener failed");
+    }
+  }
+  method.apply(this, args);
+}
+
 export const logger = pino({
   level: config.logLevel,
   transport: process.env.NODE_ENV === "production" ? undefined : { target: "pino-pretty", options: { colorize: true } },
-  hooks: {
-    logMethod(args, method, level) {
-      for (const subscription of logLineSubscriptions) {
-        if (level < subscription.minLevel) continue;
-        try {
-          subscription.listener(toLogLine(args, level));
-        } catch {
-          continue;
-        }
-      }
-      method.apply(this, args);
-    },
-  },
+  hooks: { logMethod: notifyListenersAndWrite },
 });
 
 export function onLogLine(minLevel: Level, listener: LogLineListener): () => void {
