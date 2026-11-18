@@ -75,6 +75,8 @@ export interface Settings {
    * only the system line; the person resumes by hand.
    */
   sdkAutoResume: boolean;
+  /** The board project holding the vibehub repo itself: where a platform-failure fix card is born. Null = the feature is off. */
+  selfProjectId: string | null;
 }
 
 interface SettingsDoc { settings: Settings }
@@ -90,6 +92,7 @@ const DEFAULTS: Settings = {
   sdkDriver: true,
   sdkPermissionMode: "same-as-terminal",
   sdkAutoResume: true,
+  selfProjectId: null,
 };
 
 const store = new JsonStore<SettingsDoc>(
@@ -121,6 +124,7 @@ export interface SettingsPatch {
   sdkDriver?: boolean;
   sdkPermissionMode?: SdkPermissionMode;
   sdkAutoResume?: boolean;
+  selfProjectId?: string | null;
 }
 
 /** Validates and applies a partial update. Unknown fields are ignored, not merged blindly. */
@@ -147,6 +151,9 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
   }
   if (patch.sdkAutoResume !== undefined && typeof patch.sdkAutoResume !== "boolean") {
     throw new Error("sdkAutoResume must be a boolean");
+  }
+  if (patch.selfProjectId !== undefined && patch.selfProjectId !== null && String(patch.selfProjectId).trim() === "") {
+    throw new Error("selfProjectId must be a project id, or null");
   }
   if (patch.transcribeLanguage !== undefined && patch.transcribeLanguage !== null) {
     if (!/^[a-z]{2}$/.test(String(patch.transcribeLanguage).trim())) {
@@ -183,6 +190,9 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
     }
     if (patch.sdkAutoResume !== undefined) {
       doc.settings.sdkAutoResume = patch.sdkAutoResume;
+    }
+    if (patch.selfProjectId !== undefined) {
+      doc.settings.selfProjectId = patch.selfProjectId === null ? null : String(patch.selfProjectId).trim();
     }
     if (patch.idleHibernateMinutes !== undefined) {
       doc.settings.idleHibernateMinutes = Number(patch.idleHibernateMinutes);

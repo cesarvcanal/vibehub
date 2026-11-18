@@ -47,6 +47,14 @@ describe("settings", () => {
     expect((await s.getSettings()).idleHibernateMinutes).toBe(0);
   });
 
+  it("guarda o projeto do próprio vibehub, começa vazio e aceita voltar a vazio", async () => {
+    const s = await fresh();
+    expect((await s.getSettings()).selfProjectId).toBeNull();
+    expect((await s.updateSettings({ selfProjectId: "p-vibehub" })).selfProjectId).toBe("p-vibehub");
+    expect((await s.updateSettings({ selfProjectId: null })).selfProjectId).toBeNull();
+    await expect(s.updateSettings({ selfProjectId: "  " })).rejects.toThrow(/selfProjectId/);
+  });
+
   it("validates the git identity", async () => {
     const s = await fresh();
     await expect(s.updateSettings({ git: { name: "  " } })).rejects.toThrow(/cannot be empty/);
