@@ -4,6 +4,7 @@ import type {
   AccountsResponse,
   AccountsUsageResponse,
   AnalysisPerson,
+  CardAnalysisResponse,
   AnalysisRoles,
   ApplyOutcome,
   AttachmentPreview,
@@ -274,6 +275,8 @@ export const boardApi = {
   /** Who can review or co-author an analysis in this project. */
   listAnalysisPeople: (id: string) =>
     get<{ people: AnalysisPerson[] }>(`/projects/${encodeURIComponent(id)}/analysis-people`).then((r) => r.people),
+
+  readCardAnalysis: (cardId: string) => get<CardAnalysisResponse>(`/cards/${encodeURIComponent(cardId)}/analysis`),
 
   /** Opens the analysis card of a PR (or answers with the one already open). */
   startPrAnalysis: (id: string, prNumber: number, roles: AnalysisRoles) =>
