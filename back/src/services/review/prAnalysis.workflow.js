@@ -37,7 +37,7 @@ const PROOF_SCHEMA = {
 const BRIEF_SCHEMA = {
   type: 'object',
   properties: {
-    summary: { type: 'string' },
+    summary: { type: 'string', maxLength: 1000 },
     touchedAreas: { type: 'array', items: { type: 'string' } },
     consumers: { type: 'array', items: { type: 'string' } },
     dimensions: {
@@ -47,7 +47,7 @@ const BRIEF_SCHEMA = {
         properties: {
           key: { type: 'string', enum: DIMENSION_KEYS },
           applies: { type: 'boolean' },
-          reason: { type: 'string' },
+          reason: { type: 'string', maxLength: 500 },
         },
         required: ['key', 'applies', 'reason'],
       },
@@ -93,6 +93,7 @@ const JUDGMENT_SCHEMA = {
   properties: {
     findings: {
       type: 'array',
+      maxItems: 100,
       items: {
         type: 'object',
         properties: {

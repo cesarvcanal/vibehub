@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { ANALYSIS_DIMENSIONS } from "./analysisModel.js";
 import { prAnalysisWorkflowSource } from "./analysisWorkflow.js";
-import { analysisFinding } from "../../mcp/tools.js";
+import { analysisFinding, analysisReportInput } from "../../mcp/tools.js";
 
 type AgentOpts = { label?: string; phase?: string; model?: string; effort?: string; schema?: object };
 type AgentFake = (prompt: string, opts: AgentOpts) => Promise<unknown>;
@@ -237,6 +237,26 @@ describe("frota da análise de PR", () => {
       ref: { maxLength: toolProof.ref.maxLength },
       detail: { maxLength: toolProof.detail.unwrap().maxLength },
     });
+  });
+
+  it("o resumo, o motivo da dimensão pulada e a lista de achados da frota têm os limites do zod do relatório: o passo 3 não recusa o que a frota devolveu", async () => {
+    const { calls } = await runFleet(async (_prompt, opts) => {
+      if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);
+      if (opts.phase === "Revisão") return { findings: [scenarioFinding("x")] };
+      if (opts.phase === "Verificação") return { confirmed: true, evidence: "e" };
+      return { findings: [] };
+    });
+    const briefSchema = calls.find((call) => call.opts.phase === "Contexto")!.opts.schema as {
+      properties: { summary: object; dimensions: { items: { properties: { reason: object } } } };
+    };
+    const judgeSchema = calls.find((call) => call.opts.phase === "Julgamento")!.opts.schema as {
+      properties: { findings: object };
+    };
+    const toolReport = analysisReportInput.innerType().shape;
+    expect(briefSchema.properties.summary).toMatchObject({ maxLength: toolReport.summary.maxLength });
+    expect(briefSchema.properties.dimensions.items.properties.reason)
+      .toMatchObject({ maxLength: toolReport.dimensions.element.shape.reason.unwrap().maxLength });
+    expect(judgeSchema.properties.findings).toMatchObject({ maxItems: toolReport.findings._def.maxLength?.value });
   });
 
   it("problem vazio ou só com espaços não passa no schema do juiz, como não passa no trim da ferramenta", async () => {
