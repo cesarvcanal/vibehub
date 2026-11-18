@@ -41,6 +41,7 @@ import {
 } from "@/features/board/api";
 import type { NewCard } from "@/api/types";
 import { t as translate, useT } from "@/i18n";
+import { PlatformFailuresButton } from "@/features/platformFailures/components/PlatformFailuresButton";
 
 /**
  * The board.
@@ -402,6 +403,7 @@ export function BoardPage() {
       onNewBacklogCard={() => askCard(selected, false)}
       onClosePane={closePane}
       headerLead={menuButton}
+      headerExtra={isOwner ? <PlatformFailuresButton /> : undefined}
     />
   ) : (
     // Nothing selected: every project's cards at once. Opening one goes to ITS project.
@@ -410,6 +412,7 @@ export function BoardPage() {
       onOpenCard={(card) => go(card.projectId, card.id)}
       onNewCard={isOwner ? () => askCard(null, true) : undefined}
       headerLead={menuButton}
+      headerExtra={isOwner ? <PlatformFailuresButton /> : undefined}
     />
   );
 
