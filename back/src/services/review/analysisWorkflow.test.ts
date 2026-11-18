@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { ANALYSIS_DIMENSIONS } from "./analysisModel.js";
 import { prAnalysisWorkflowSource } from "./analysisWorkflow.js";
 
 type AgentOpts = { label?: string; phase?: string; model?: string; effort?: string; schema?: object };
@@ -58,6 +59,16 @@ const scenarioFinding = (title: string) => ({
 });
 
 describe("frota da análise de PR", () => {
+  it("as dimensões da frota são as do modelo do servidor: uma a mais ou a menos deixaria o veredito sempre não apto", async () => {
+    const { calls } = await runFleet(async (_prompt, opts) => (opts.phase === "Contexto" ? brief(ALL_APPLY) : { findings: [] }));
+    const briefSchema = calls.find((call) => call.opts.phase === "Contexto")!.opts.schema as {
+      properties: { dimensions: { items: { properties: { key: { enum: string[] } } } } };
+    };
+    expect(briefSchema.properties.dimensions.items.properties.key.enum).toEqual([...ANALYSIS_DIMENSIONS]);
+    const reviewedKeys = calls.filter((call) => call.opts.phase === "Revisão").map((call) => call.opts.label?.replace("revisão: ", ""));
+    expect(reviewedKeys.sort()).toEqual([...ANALYSIS_DIMENSIONS].sort());
+  });
+
   it("contexto e juiz em Opus; revisão e verificação em Sonnet", async () => {
     const { calls } = await runFleet(async (_prompt, opts) => {
       if (opts.phase === "Contexto") return brief(ALL_APPLY);
