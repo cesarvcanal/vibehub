@@ -44,6 +44,15 @@ describe("onLogLine", () => {
     expect(writtenLines[0]).toEqual([{ detail: "texto solto" }, "log line listener failed"]);
   });
 
+  it("a linha é montada uma vez por log, não uma vez por ouvinte", () => {
+    const heardLines: LogLine[] = [];
+    onTestFinished(onLogLine("error", (line) => heardLines.push(line)));
+    onTestFinished(onLogLine("warn", (line) => heardLines.push(line)));
+    logger.error({ card: "c" }, "falhou");
+    expect(heardLines).toHaveLength(2);
+    expect(heardLines[0]).toBe(heardLines[1]);
+  });
+
   it("entrega o Error passado sozinho como fields.err", () => {
     const heardLines: LogLine[] = [];
     const unsubscribe = onLogLine("error", (line) => heardLines.push(line));

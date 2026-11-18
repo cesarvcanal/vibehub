@@ -21,10 +21,12 @@ function toLogLine(args: unknown[], level: number): LogLine {
 }
 
 export function notifyListenersAndWrite(this: pino.Logger, args: Parameters<pino.LogFn>, method: pino.LogFn, level: number): void {
+  const builtLine: { logLine?: LogLine } = {};
   for (const subscription of logLineSubscriptions) {
     if (level < subscription.minLevel) continue;
+    builtLine.logLine ??= toLogLine(args, level);
     try {
-      subscription.listener(toLogLine(args, level));
+      subscription.listener(builtLine.logLine);
     } catch (err) {
       const failureFields = err instanceof Error ? { detail: err.message, stack: err.stack } : { detail: String(err) };
       method.call(this, failureFields, "log line listener failed");
