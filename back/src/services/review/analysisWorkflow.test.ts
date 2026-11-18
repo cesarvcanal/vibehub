@@ -189,6 +189,21 @@ describe("frota da análise de PR", () => {
     expect(judgeSchema.properties.findings.items.properties.fix).toMatchObject({ minLength: 1 });
   });
 
+  it("fix só com espaços não passa no schema do juiz, como não passa no trim da ferramenta", async () => {
+    const { calls } = await runFleet(async (_prompt, opts) => {
+      if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);
+      if (opts.phase === "Revisão") return { findings: [scenarioFinding("x")] };
+      if (opts.phase === "Verificação") return { confirmed: true, evidence: "e" };
+      return { findings: [] };
+    });
+    const judgeSchema = calls.find((call) => call.opts.phase === "Julgamento")!.opts.schema as {
+      properties: { findings: { items: { properties: { fix: { pattern: string } } } } };
+    };
+    const fixPattern = new RegExp(judgeSchema.properties.findings.items.properties.fix.pattern);
+    expect(fixPattern.test("   ")).toBe(false);
+    expect(fixPattern.test("troque o filtro")).toBe(true);
+  });
+
   it.each([
     ["args em texto (JSON stringificado)", JSON.stringify(VALID_ARGS)],
     ["sha ainda com o marcador do prompt", { ...VALID_ARGS, headSha: "<sha do passo 1>" }],

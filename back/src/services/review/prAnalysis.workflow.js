@@ -62,7 +62,7 @@ const FINDING_PROPERTIES = {
   file: { type: 'string' },
   line: { type: 'number' },
   proof: PROOF_SCHEMA,
-  fix: { type: 'string', minLength: 1 },
+  fix: { type: 'string', minLength: 1, pattern: '\\S' },
 }
 
 const REVIEW_SCHEMA = {
