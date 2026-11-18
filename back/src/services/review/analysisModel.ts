@@ -18,6 +18,7 @@ export interface DimensionRun {
   key: AnalysisDimension;
   status: "ran" | "skipped" | "not_run";
   reason?: string;
+  unverifiedCount?: number;
 }
 
 export interface AnalysisReport {
@@ -42,8 +43,9 @@ export function dimensionHealth(report: AnalysisReport, key: AnalysisDimension):
   if (run.status === "skipped") return "skipped";
   const openFindings = report.findings.filter((finding) => finding.dimension === key && finding.status === "open");
   if (openFindings.some((finding) => finding.severity === "blocking")) return "problem";
-  const needsAttention = openFindings.some((finding) => finding.severity === "question" || finding.severity === "improvement");
-  return needsAttention ? "attention" : "ok";
+  const needsDecision = openFindings.some((finding) => finding.severity === "question" || finding.severity === "improvement");
+  const hasUncheckedFindings = (run.unverifiedCount ?? 0) > 0;
+  return needsDecision || hasUncheckedFindings ? "attention" : "ok";
 }
 
 export type AnalysisVerdict = "apt" | "not_apt" | "pending";
@@ -53,5 +55,6 @@ export function analysisVerdict(report: AnalysisReport): AnalysisVerdict {
   if (report.stage !== "done") return "pending";
   const healthByDimension = ANALYSIS_DIMENSIONS.map((key) => dimensionHealth(report, key));
   const blocked = healthByDimension.some((health) => health === "problem" || health === "not_run");
-  return blocked ? "not_apt" : "apt";
+  const hasUncheckedFindings = report.dimensions.some((dimension) => (dimension.unverifiedCount ?? 0) > 0);
+  return blocked || hasUncheckedFindings ? "not_apt" : "apt";
 }

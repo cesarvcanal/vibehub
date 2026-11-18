@@ -29,6 +29,14 @@ describe("entrada da vibehub_analysis_report", () => {
   it("dimensão desconhecida é recusada", () => {
     expect(analysisReportInput.safeParse({ ...base, dimensions: [{ key: "estilo", status: "ran" }] }).success).toBe(false);
   });
+  it("achado corrigido sem o commit que o corrige é recusado", () => {
+    expect(analysisReportInput.safeParse({ ...base, stage: "done", findings: [{ ...blocking, status: "fixed" }] }).success).toBe(false);
+    expect(analysisReportInput.safeParse({ ...base, stage: "done", findings: [{ ...blocking, status: "fixed", commit: "abc1234" }] }).success).toBe(true);
+  });
+  it("a dimensão leva quantos achados a frota não verificou", () => {
+    const dimensions = [{ key: "tests", status: "ran", unverifiedCount: 2, reason: "2 achados sem veredito" }];
+    expect(analysisReportInput.parse({ ...base, dimensions }).dimensions[0]).toMatchObject({ unverifiedCount: 2 });
+  });
   it("achado derrubado não entra no relatório: refuted é recusado", () => {
     expect(analysisReportInput.safeParse({ ...base, findings: [{ ...blocking, severity: "refuted" }] }).success).toBe(false);
   });

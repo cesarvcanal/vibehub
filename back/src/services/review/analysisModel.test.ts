@@ -37,6 +37,10 @@ describe("estado de cada dimensão da análise", () => {
   it("dimensão ausente do relatório conta como não rodou", () => {
     expect(dimensionHealth(report(), "tests")).toBe("not_run");
   });
+  it("dimensão que rodou com achado não verificado fica em atenção, mesmo sem achado aberto", () => {
+    const withUnchecked = report({ dimensions: [{ key: "correctness", status: "ran", unverifiedCount: 2, reason: "2 achados acima do teto" }] });
+    expect(dimensionHealth(withUnchecked, "correctness")).toBe("attention");
+  });
 });
 
 const everyDimensionAccounted = (): AnalysisReport["dimensions"] => [
@@ -60,6 +64,11 @@ describe("veredito da análise", () => {
   });
   it("não apto com dimensão que não rodou", () => {
     expect(analysisVerdict(report({ dimensions: [{ key: "correctness", status: "not_run", reason: "x" }] }))).toBe("not_apt");
+  });
+  it("achado que a frota não verificou impede o apto: um bloqueante possível não some atrás de um apto", () => {
+    const dimensions = everyDimensionAccounted().map((dimension) =>
+      dimension.key === "tests" ? { ...dimension, unverifiedCount: 1, reason: "1 achado sem veredito" } : dimension);
+    expect(analysisVerdict(report({ dimensions }))).toBe("not_apt");
   });
   it("frota indisponível nunca é apta", () => {
     expect(analysisVerdict(report({ stage: "fleet_unavailable", unavailableReason: "CLI antigo" }))).toBe("not_apt");

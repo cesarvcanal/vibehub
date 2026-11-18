@@ -100,6 +100,9 @@ export const analysisFinding = z.object({
   if (finding.severity === "blocking" && !finding.proof?.ref.trim()) {
     ctx.addIssue({ code: "custom", path: ["proof"], message: "a blocking finding needs proof: failing_test, rule or scenario with ref" });
   }
+  if (finding.status === "fixed" && !finding.commit?.trim()) {
+    ctx.addIssue({ code: "custom", path: ["commit"], message: "a fixed finding needs the sha of the commit that fixes it" });
+  }
 });
 
 const analysisReportFields = z.object({
@@ -111,6 +114,8 @@ const analysisReportFields = z.object({
     key: analysisDimension,
     status: z.enum(["ran", "skipped", "not_run"]),
     reason: z.string().max(500).optional(),
+    unverifiedCount: z.number().int().min(1).optional()
+      .describe("findings the fleet did not check (above the cap or without a verdict), exactly as the fleet returned it"),
   })).max(ANALYSIS_DIMENSIONS.length),
   findings: z.array(analysisFinding).max(100),
   refutedCount: z.number().int().min(0),
