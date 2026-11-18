@@ -239,6 +239,7 @@ export type PlatformFailureStatus = "open" | "investigating" | "resolved" | "con
 
 export interface PlatformFailure {
   id: string;
+  signature: string;
   source: PlatformFailureSource;
   status: PlatformFailureStatus;
   component: string;
@@ -251,6 +252,8 @@ export interface PlatformFailure {
   firstSeenAt: number;
   lastSeenAt: number;
   investigationCardId?: string;
+  resolvedAt?: number;
+  dismissedAt?: number;
 }
 
 export interface PlatformFailureInvestigation {
