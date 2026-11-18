@@ -60,44 +60,19 @@ describe("relato de erro do backend", () => {
     expect(report.component).toBe("backend");
   });
 
-  it("erro do mesmo card até 10s depois do stop dele é marcado e aponta o card", () => {
+  it.each([
+    ["do mesmo card até 10s depois do stop dele é marcado e aponta o card", "erp-feat", USER_STOP_WINDOW_MS, "logo após um stop do usuário: falhou: write after end", "card-7"],
+    ["sem card logo depois de um stop é marcado pela proximidade, sem apontar card nenhum", undefined, 1_000, "logo após um stop do usuário: falhou: write after end", undefined],
+    ["de outro card logo depois de um stop não é atribuído ao stop", "outro-card", 1_000, "falhou: write after end", undefined],
+    ["depois da janela do stop não é atribuído ao stop", undefined, USER_STOP_WINDOW_MS + 1, "falhou: write after end", undefined],
+  ])("erro %s", (_case, loggedCard, msSinceStop, expectedSymptom, expectedCardId) => {
     const report = buildBackendErrorReport(
-      { level: 50, message: "unhandled promise rejection — kept running", fields: { err: new Error("write after end"), card: "erp-feat" } },
-      { ...STOPPED_CARD, at: NOW - USER_STOP_WINDOW_MS },
+      { level: 50, message: "falhou", fields: { err: new Error("write after end"), ...(loggedCard ? { card: loggedCard } : {}) } },
+      { ...STOPPED_CARD, at: NOW - msSinceStop },
       NOW,
     );
-    expect(report.symptom).toBe("logo após um stop do usuário: unhandled promise rejection — kept running: write after end");
-    expect(report.cardId).toBe("card-7");
-  });
-
-  it("erro sem card logo depois de um stop é marcado pela proximidade, sem apontar card nenhum", () => {
-    const report = buildBackendErrorReport(
-      { level: 50, message: "unhandled promise rejection — kept running", fields: { err: new Error("write after end") } },
-      { ...STOPPED_CARD, at: NOW - 1_000 },
-      NOW,
-    );
-    expect(report.symptom).toBe("logo após um stop do usuário: unhandled promise rejection — kept running: write after end");
-    expect(report.cardId).toBeUndefined();
-  });
-
-  it("erro de outro card logo depois de um stop não é atribuído ao stop", () => {
-    const report = buildBackendErrorReport(
-      { level: 50, message: "request failed", fields: { err: new Error("x"), card: "outro-card" } },
-      { ...STOPPED_CARD, at: NOW - 1_000 },
-      NOW,
-    );
-    expect(report.symptom).toBe("request failed: x");
-    expect(report.cardId).toBeUndefined();
-  });
-
-  it("erro depois da janela do stop não é atribuído ao stop", () => {
-    const report = buildBackendErrorReport(
-      { level: 50, message: "x", fields: {} },
-      { ...STOPPED_CARD, at: NOW - USER_STOP_WINDOW_MS - 1 },
-      NOW,
-    );
-    expect(report.symptom).toBe("x");
-    expect(report.cardId).toBeUndefined();
+    expect(report.symptom).toBe(expectedSymptom);
+    expect(report.cardId).toBe(expectedCardId);
   });
 
   it("Error passado sozinho ao logger não repete a mensagem no sintoma nem na evidência", () => {
