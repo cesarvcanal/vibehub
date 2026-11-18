@@ -105,14 +105,14 @@ const JUDGMENT_SCHEMA = {
   required: ['findings'],
 }
 
-const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/
+const FULL_SHA_PATTERN = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i
 const isFilledText = (value) => typeof value === 'string' && value.trim() !== ''
 const fleetArgsAreValid = typeof args === 'object' && args !== null &&
   Number.isInteger(args.prNumber) && args.prNumber > 0 &&
   isFilledText(args.branch) && isFilledText(args.base) &&
   typeof args.headSha === 'string' && FULL_SHA_PATTERN.test(args.headSha)
 if (!fleetArgsAreValid) {
-  throw new Error(`args inválido para a frota da análise: esperado o objeto { prNumber, branch, base, headSha com 40 hex }, recebido ${JSON.stringify(args)}`)
+  throw new Error(`args inválido para a frota da análise: esperado o objeto { prNumber, branch, base, headSha com 40 ou 64 hex }, recebido ${JSON.stringify(args)}`)
 }
 
 const diffRange = `origin/${args.base}...${args.headSha}`

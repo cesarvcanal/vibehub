@@ -216,6 +216,16 @@ describe("frota da análise de PR", () => {
   });
 
   it.each([
+    ["sha de 40 hex em maiúsculas", "D".repeat(40)],
+    ["sha de 64 hex (repositório SHA-256)", "e".repeat(64)],
+  ])("aceita o mesmo sha que a ferramenta do relatório aceita: %s", async (_case, headSha) => {
+    const { calls } = await runFleet(async (_prompt, opts) => (opts.phase === "Contexto" ? brief(ONLY_CORRECTNESS) : { findings: [] }), {
+      ...VALID_ARGS, headSha,
+    });
+    expect(calls.some((call) => call.opts.phase === "Contexto")).toBe(true);
+  });
+
+  it.each([
     ["args em texto (JSON stringificado)", JSON.stringify(VALID_ARGS)],
     ["sha ainda com o marcador do prompt", { ...VALID_ARGS, headSha: "<sha do passo 1>" }],
     ["sem a base", { ...VALID_ARGS, base: "" }],
