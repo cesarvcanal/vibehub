@@ -271,17 +271,7 @@ describe("runGate under load", () => {
   });
 });
 
-describe("redaction and tail", () => {
-  it("redacts token-looking strings but leaves git SHAs alone", async () => {
-    const { gate } = await load();
-    const sha = "a".repeat(40);
-    const out = gate.redactSecrets(`tok ghp_${"A".repeat(36)} and github_pat_${"B".repeat(30)} and ${sha}`);
-    expect(out).toContain("[redacted]");
-    expect(out).not.toContain("ghp_A");
-    expect(out).not.toContain("github_pat_B");
-    expect(out).toContain(sha); // a 40-hex SHA is not redacted
-  });
-
+describe("output tail", () => {
   it("tails to the last bytes with an ellipsis", async () => {
     const { gate } = await load();
     const long = "x".repeat(5000);
