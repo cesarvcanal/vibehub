@@ -95,11 +95,12 @@ async function investigatePlatformFailure(failureId: string, owner: PublicUser):
     await getPlatformFailure(failureId);
     throw new PlatformFailureStateError("the vibehub project is not configured or no longer exists — pick it in Settings");
   }
-  const { failure, alreadyClaimed, statusBeforeClaim } = await claimPlatformFailureInvestigation(failureId);
+  const { failure, statusBeforeClaim } = await claimPlatformFailureInvestigation(failureId);
+  const wasAlreadyInvestigating = statusBeforeClaim === "investigating";
   const previousCard = failure.investigationCardId ? await registry.getCard(failure.investigationCardId) : undefined;
   const ongoingCard = previousCard?.column === "done" ? undefined : previousCard;
-  if (alreadyClaimed && ongoingCard) return { failure, card: summarizeCard(ongoingCard) };
-  if (alreadyClaimed && previousCard) {
+  if (wasAlreadyInvestigating && ongoingCard) return { failure, card: summarizeCard(ongoingCard) };
+  if (wasAlreadyInvestigating && previousCard) {
     const settledFailure = await settleInvestigationOfCard(previousCard.id);
     if (settledFailure?.status === "resolved") return { failure: settledFailure, card: summarizeCard(previousCard) };
     return await investigatePlatformFailure(failureId, owner);

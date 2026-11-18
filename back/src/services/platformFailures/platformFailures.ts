@@ -107,7 +107,6 @@ export async function dismissPlatformFailure(id: string, now: number = Date.now(
 
 interface InvestigationClaim {
   failure: PlatformFailure;
-  alreadyClaimed: boolean;
   statusBeforeClaim: PlatformFailureStatus;
 }
 
@@ -115,12 +114,12 @@ export async function claimPlatformFailureInvestigation(id: string): Promise<Inv
   return await store.mutate((doc) => {
     const failure = findFailureIn(doc, id);
     const statusBeforeClaim = failure.status;
-    if (statusBeforeClaim === "investigating") return { failure: { ...failure }, alreadyClaimed: true, statusBeforeClaim };
+    if (statusBeforeClaim === "investigating") return { failure: { ...failure }, statusBeforeClaim };
     if (!INVESTIGABLE_STATUSES.includes(statusBeforeClaim)) {
       throw new PlatformFailureStateError(`platform failure ${id} is ${statusBeforeClaim} and cannot be investigated`);
     }
     failure.status = "investigating";
-    return { failure: { ...failure }, alreadyClaimed: false, statusBeforeClaim };
+    return { failure: { ...failure }, statusBeforeClaim };
   });
 }
 
