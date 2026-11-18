@@ -29,8 +29,19 @@ describe("onLogLine", () => {
     onTestFinished(onLogLine("error", (line) => heardLines.push(line)));
     const writeRawLine = (...args: unknown[]) => { writtenLines.push(args); };
     notifyListenersAndWrite.call(logger, [{ card: "c" }, "falhou"] as never, writeRawLine as never, 50);
-    expect(writtenLines).toEqual([[{ detail: "ouvinte quebrado" }, "log line listener failed"], [{ card: "c" }, "falhou"]]);
+    expect(writtenLines).toEqual([
+      [{ detail: "ouvinte quebrado", stack: expect.stringContaining("ouvinte quebrado") }, "log line listener failed"],
+      [{ card: "c" }, "falhou"],
+    ]);
     expect(heardLines.map((line) => line.message)).toEqual(["falhou"]);
+  });
+
+  it("ouvinte que lança algo que não é Error ainda deixa o valor lançado no log", () => {
+    const writtenLines: unknown[][] = [];
+    onTestFinished(onLogLine("error", () => { throw "texto solto"; }));
+    const writeRawLine = (...args: unknown[]) => { writtenLines.push(args); };
+    notifyListenersAndWrite.call(logger, [{ card: "c" }, "falhou"] as never, writeRawLine as never, 50);
+    expect(writtenLines[0]).toEqual([{ detail: "texto solto" }, "log line listener failed"]);
   });
 
   it("entrega o Error passado sozinho como fields.err", () => {

@@ -26,7 +26,8 @@ export function notifyListenersAndWrite(this: pino.Logger, args: Parameters<pino
     try {
       subscription.listener(toLogLine(args, level));
     } catch (err) {
-      method.call(this, { detail: (err as Error).message }, "log line listener failed");
+      const failureFields = err instanceof Error ? { detail: err.message, stack: err.stack } : { detail: String(err) };
+      method.call(this, failureFields, "log line listener failed");
     }
   }
   method.apply(this, args);
