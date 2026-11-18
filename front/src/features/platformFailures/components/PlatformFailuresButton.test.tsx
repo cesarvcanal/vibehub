@@ -62,6 +62,15 @@ describe("PlatformFailuresButton", () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith("/platform-failures/f1/investigate"));
   });
 
+  it("falha em investigação ainda oferece investigar de novo, a saída quando o card sumiu", async () => {
+    get.mockResolvedValue({ failures: [{ ...FAILURE, status: "investigating", investigationCardId: "fix-1" }] });
+    post.mockResolvedValueOnce({ failure: { ...FAILURE, status: "investigating", investigationCardId: "fix-2" }, card: { id: "fix-2", projectId: "p-vh", title: "Falha da plataforma: x" } });
+    renderApp(<PlatformFailuresButton />);
+    await userEvent.click(await screen.findByRole("button", { name: /1/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /investigar de novo|investigate again/i }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/platform-failures/f1/investigate"));
+  });
+
   it("'não é bug' manda o descarte", async () => {
     post.mockResolvedValueOnce({ failure: { ...FAILURE, status: "dismissed" } });
     renderApp(<PlatformFailuresButton />);

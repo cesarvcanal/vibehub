@@ -9,6 +9,8 @@ import type { PlatformFailure, PlatformFailureReport, PlatformFailureStatus } fr
 export const ACTIVE_FAILURES_CAP = 50;
 const AFFECTED_CARDS_CAP = 20;
 const RESOLVED_FAILURE_RETENTION_MS = 30 * 24 * 60 * 60_000;
+export const RESOLVED_GRACE_MS = 60 * 60_000;
+export const SLOW_TURN_DISMISSAL_MS = 7 * 24 * 60 * 60_000;
 
 const ACTIVE_STATUSES: readonly PlatformFailureStatus[] = ["open", "investigating", "concluded_without_fix"];
 const INVESTIGABLE_STATUSES: readonly PlatformFailureStatus[] = ["open", "concluded_without_fix"];
@@ -40,12 +42,26 @@ export async function recordPlatformFailure(report: PlatformFailureReport, now: 
   const outcome = await store.mutate((doc) => {
     doc.failures = doc.failures.filter((failure) => !(failure.status === "resolved" && now - failure.lastSeenAt > RESOLVED_FAILURE_RETENTION_MS));
     const knownFailure = doc.failures.find((failure) => failure.signature === signature && failure.status !== "resolved");
-    if (knownFailure?.status === "dismissed") return { failure: null, capReached: false };
-    if (knownFailure) {
-      knownFailure.occurrences += 1;
+    const isDismissalExpired = knownFailure?.status === "dismissed" && knownFailure.source === "slow_turn"
+      && now - (knownFailure.dismissedAt ?? 0) > SLOW_TURN_DISMISSAL_MS;
+    if (knownFailure?.status === "dismissed" && !isDismissalExpired) return { failure: null, capReached: false };
+    if (knownFailure && isDismissalExpired) {
+      knownFailure.status = "open";
+      knownFailure.occurrences = 1;
+      knownFailure.firstSeenAt = now;
       knownFailure.lastSeenAt = now;
+      knownFailure.affectedCardIds = [];
+      delete knownFailure.dismissedAt;
       noteAffectedCard(knownFailure, report.cardId);
       return { failure: { ...knownFailure }, capReached: false };
+    }
+    const repeatedFailure = knownFailure ?? doc.failures.find((failure) =>
+      failure.signature === signature && failure.status === "resolved" && now - (failure.resolvedAt ?? 0) <= RESOLVED_GRACE_MS);
+    if (repeatedFailure) {
+      repeatedFailure.occurrences += 1;
+      repeatedFailure.lastSeenAt = now;
+      noteAffectedCard(repeatedFailure, report.cardId);
+      return { failure: { ...repeatedFailure }, capReached: false };
     }
     const activeFailures = doc.failures.filter((failure) => ACTIVE_STATUSES.includes(failure.status));
     if (activeFailures.length >= ACTIVE_FAILURES_CAP) return { failure: null, capReached: true };
@@ -85,13 +101,14 @@ export async function getPlatformFailure(id: string): Promise<PlatformFailure> {
   return { ...findFailureIn(await store.load(), id) };
 }
 
-export async function dismissPlatformFailure(id: string): Promise<PlatformFailure> {
+export async function dismissPlatformFailure(id: string, now: number = Date.now()): Promise<PlatformFailure> {
   return await store.mutate((doc) => {
     const failure = findFailureIn(doc, id);
     if (failure.status === "investigating") {
       throw new PlatformFailureStateError(`platform failure ${id} is being investigated in card ${failure.investigationCardId ?? "(starting)"}`);
     }
     failure.status = "dismissed";
+    failure.dismissedAt = now;
     return { ...failure };
   });
 }
@@ -104,7 +121,6 @@ export async function claimPlatformFailureInvestigation(id: string): Promise<{ f
       throw new PlatformFailureStateError(`platform failure ${id} is ${failure.status} and cannot be investigated`);
     }
     failure.status = "investigating";
-    delete failure.investigationCardId;
     return { failure: { ...failure }, alreadyClaimed: false };
   });
 }
@@ -113,7 +129,6 @@ export async function releasePlatformFailureInvestigation(id: string): Promise<P
   return await store.mutate((doc) => {
     const failure = findFailureIn(doc, id);
     failure.status = "open";
-    delete failure.investigationCardId;
     return { ...failure };
   });
 }
@@ -126,11 +141,12 @@ export async function setPlatformFailureInvestigationCard(id: string, cardId: st
   });
 }
 
-export async function settlePlatformFailureInvestigation(cardId: string, outcome: { merged: boolean }): Promise<PlatformFailure | null> {
+export async function settlePlatformFailureInvestigation(cardId: string, outcome: { merged: boolean }, now: number = Date.now()): Promise<PlatformFailure | null> {
   return await store.mutate((doc) => {
     const failure = doc.failures.find((candidate) => candidate.status === "investigating" && candidate.investigationCardId === cardId);
     if (!failure) return null;
     failure.status = outcome.merged ? "resolved" : "concluded_without_fix";
+    if (outcome.merged) failure.resolvedAt = now;
     return { ...failure };
   });
 }

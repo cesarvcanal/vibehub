@@ -27,7 +27,7 @@ function FailureEntry({ failure }: { failure: PlatformFailure }) {
     onSuccess: () => void refreshFailures(),
     onError: (error) => toast.error(apiErrorMessage(error)),
   });
-  const isDecisionPending = failure.status === "open" || failure.status === "concluded_without_fix";
+  const canDismiss = failure.status === "open" || failure.status === "concluded_without_fix";
   return (
     <li className="space-y-2 rounded-md border border-border p-3">
       <p className="font-medium">{failure.symptom}</p>
@@ -38,16 +38,16 @@ function FailureEntry({ failure }: { failure: PlatformFailure }) {
       {failure.hypothesis ? <p className="text-xs">{t("platformFailures.hypothesis", { hypothesis: failure.hypothesis })}</p> : null}
       {failure.status === "investigating" ? <p className="text-xs">{t("platformFailures.investigating")}</p> : null}
       {failure.status === "concluded_without_fix" ? <p className="text-xs">{t("platformFailures.concludedWithoutFix")}</p> : null}
-      {isDecisionPending ? (
-        <div className="flex gap-2">
-          <Button size="sm" disabled={investigate.isPending} onClick={() => investigate.mutate()}>
-            {t(failure.status === "open" ? "platformFailures.investigate" : "platformFailures.investigateAgain")}
-          </Button>
+      <div className="flex gap-2">
+        <Button size="sm" disabled={investigate.isPending} onClick={() => investigate.mutate()}>
+          {t(failure.status === "open" ? "platformFailures.investigate" : "platformFailures.investigateAgain")}
+        </Button>
+        {canDismiss ? (
           <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => dismiss.mutate()}>
             {t("platformFailures.dismiss")}
           </Button>
-        </div>
-      ) : null}
+        ) : null}
+      </div>
     </li>
   );
 }

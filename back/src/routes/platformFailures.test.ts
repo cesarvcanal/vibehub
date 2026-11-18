@@ -121,6 +121,21 @@ describe("rotas de falha da plataforma", () => {
     const retried = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
     expect(retried.statusCode).toBe(200);
     expect(sendToTerminal).toHaveBeenCalledTimes(2);
+    const cards = (await app.inject({ method: "GET", url: `/api/projects/${world.vibehubProjectId}/cards`, headers: { cookie: world.owner } })).json().cards;
+    expect(cards.map((card: { id: string }) => card.id)).toEqual([retried.json().card.id]);
+  });
+
+  it("investigar de novo depois de concluída sem correção nasce num card novo, não no card concluído", async () => {
+    const { app, ...world } = await bootFailureWorld();
+    const failure = await recordFailure();
+    const first = (await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } })).json();
+    await app.inject({ method: "PATCH", url: `/api/cards/${first.card.id}`, headers: { cookie: world.owner }, payload: { column: "done" } });
+    const failures = await import("../services/platformFailures/platformFailures.js");
+    await failures.settlePlatformFailureInvestigation(first.card.id, { merged: false });
+    const again = await app.inject({ method: "POST", url: `/api/platform-failures/${failure.id}/investigate`, headers: { cookie: world.owner } });
+    expect(again.statusCode).toBe(200);
+    expect(again.json().card.id).not.toBe(first.card.id);
+    expect(sendToTerminal).toHaveBeenLastCalledWith(again.json().card.id, expect.any(String), expect.any(Object));
   });
 
   it("projeto do vibehub sumido: investigar responde 400 e a falha continua listada", async () => {

@@ -1735,10 +1735,10 @@ export const ptBR: Record<string, string> = {
   "platformFailures.meta.one": "{component} · {count} ocorrência · {cards} card(s) afetado(s)",
   "platformFailures.meta.other": "{component} · {count} ocorrências · {cards} card(s) afetado(s)",
   "platformFailures.hypothesis": "Hipótese (não confirmada): {hypothesis}",
-  "platformFailures.investigating": "Em investigação num card do projeto do vibehub.",
+  "platformFailures.investigating": "Em investigação num card do projeto do vibehub. Se esse card sumiu, investigue de novo.",
   "platformFailures.concludedWithoutFix": "A investigação terminou sem correção. Confirme como esperado ou investigue de novo.",
   "platformFailures.investigate": "Investigar e corrigir",
   "platformFailures.investigateAgain": "Investigar de novo",
   "platformFailures.dismiss": "Não é bug",
-  "platformFailures.investigationStarted": "Card criado: {title}",
+  "platformFailures.investigationStarted": "Card da investigação: {title}",
 };

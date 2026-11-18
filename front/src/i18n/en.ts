@@ -1723,10 +1723,10 @@ export const en: Record<string, string> = {
   "platformFailures.meta.one": "{component} · {count} occurrence · {cards} card(s) affected",
   "platformFailures.meta.other": "{component} · {count} occurrences · {cards} card(s) affected",
   "platformFailures.hypothesis": "Hypothesis (unconfirmed): {hypothesis}",
-  "platformFailures.investigating": "Being investigated in a card of the vibehub project.",
+  "platformFailures.investigating": "Being investigated in a card of the vibehub project. If that card is gone, investigate again.",
   "platformFailures.concludedWithoutFix": "The investigation ended without a fix. Confirm it as expected or investigate again.",
   "platformFailures.investigate": "Investigate and fix",
   "platformFailures.investigateAgain": "Investigate again",
   "platformFailures.dismiss": "Not a bug",
-  "platformFailures.investigationStarted": "Card created: {title}",
+  "platformFailures.investigationStarted": "Investigation card: {title}",
 };

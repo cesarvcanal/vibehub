@@ -44,15 +44,47 @@ describe("registro de falhas da plataforma", () => {
     expect(await failures.listPlatformFailuresForOwner()).toEqual([]);
   });
 
-  it("falha resolvida que reaparece abre uma entrada nova (regressão depois do merge)", async () => {
-    const failures = await fresh();
-    const recorded = await failures.recordPlatformFailure(backendReport("driver gone"));
+  async function resolveFailureAt(failures: Awaited<ReturnType<typeof fresh>>, mergedAt: number) {
+    const recorded = await failures.recordPlatformFailure(backendReport("driver gone"), mergedAt - 1_000);
     await failures.claimPlatformFailureInvestigation(recorded!.id);
     await failures.setPlatformFailureInvestigationCard(recorded!.id, "fix-card");
-    await failures.settlePlatformFailureInvestigation("fix-card", { merged: true });
-    const reopened = await failures.recordPlatformFailure(backendReport("driver gone"));
-    expect(reopened!.id).not.toBe(recorded!.id);
+    await failures.settlePlatformFailureInvestigation("fix-card", { merged: true }, mergedAt);
+    return recorded!;
+  }
+
+  it("falha resolvida que reaparece depois da carência abre uma entrada nova (regressão depois do merge)", async () => {
+    const failures = await fresh();
+    const mergedAt = 10_000_000;
+    const recorded = await resolveFailureAt(failures, mergedAt);
+    const reopened = await failures.recordPlatformFailure(backendReport("driver gone"), mergedAt + failures.RESOLVED_GRACE_MS + 1);
+    expect(reopened!.id).not.toBe(recorded.id);
     expect(reopened).toMatchObject({ status: "open", occurrences: 1 });
+  });
+
+  it("na carência depois do merge, o código antigo ainda no ar só soma na resolvida, sem abrir entrada", async () => {
+    const failures = await fresh();
+    const mergedAt = 10_000_000;
+    const recorded = await resolveFailureAt(failures, mergedAt);
+    const duringDeploy = await failures.recordPlatformFailure(backendReport("driver gone"), mergedAt + failures.RESOLVED_GRACE_MS);
+    expect(duringDeploy).toMatchObject({ id: recorded.id, status: "resolved", occurrences: 2 });
+    expect(await failures.listPlatformFailuresForOwner()).toEqual([]);
+  });
+
+  it("'não é bug' numa lentidão silencia por 7 dias, e depois a detecção volta", async () => {
+    const failures = await fresh();
+    const slowTurn: PlatformFailureReport = { source: "slow_turn", component: "sdk/turn", symptom: "primeira resposta acima de 90s", evidence: "x" };
+    const recorded = await failures.recordPlatformFailure(slowTurn, 1_000);
+    await failures.dismissPlatformFailure(recorded!.id, 2_000);
+    expect(await failures.recordPlatformFailure(slowTurn, 2_000 + failures.SLOW_TURN_DISMISSAL_MS)).toBeNull();
+    const back = await failures.recordPlatformFailure(slowTurn, 2_001 + failures.SLOW_TURN_DISMISSAL_MS);
+    expect(back).toMatchObject({ id: recorded!.id, status: "open", occurrences: 1, firstSeenAt: 2_001 + failures.SLOW_TURN_DISMISSAL_MS });
+  });
+
+  it("'não é bug' num erro do backend continua valendo depois dos 7 dias", async () => {
+    const failures = await fresh();
+    const recorded = await failures.recordPlatformFailure(backendReport("expected thing"), 1_000);
+    await failures.dismissPlatformFailure(recorded!.id, 2_000);
+    expect(await failures.recordPlatformFailure(backendReport("expected thing"), 3_000 + failures.SLOW_TURN_DISMISSAL_MS)).toBeNull();
   });
 
   it("investigação concluída sem merge volta para decisão do dono", async () => {
