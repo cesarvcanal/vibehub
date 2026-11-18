@@ -12,20 +12,20 @@ export interface SlowTurn {
 
 type SlowTurnsListener = (cardId: string, slowTurns: SlowTurn[]) => void;
 
-const FIRST_OUTPUT_EVENTS: ReadonlySet<DriverEvent["type"]> = new Set<DriverEvent["type"]>(["assistant_delta", "assistant_text", "thinking_delta", "thinking", "tool_use_start", "tool_use"]);
-const WAIT_DISTURBING_EVENTS: ReadonlySet<DriverEvent["type"]> = new Set<DriverEvent["type"]>(["user_question", "permission_request"]);
+const FIRST_OUTPUT_EVENTS: ReadonlySet<DriverEvent["type"]> = new Set(["assistant_delta", "assistant_text", "thinking_delta", "thinking", "tool_use_start", "tool_use"]);
+const WAIT_DISTURBING_EVENTS: ReadonlySet<DriverEvent["type"]> = new Set(["user_question", "permission_request"]);
 
 const openTurns = new Map<string, { since: number; disturbed: boolean; answered: boolean }>();
 const slowTurnsByCard = new Map<string, SlowTurn[]>();
 const slowTurnsListeners = new Set<SlowTurnsListener>();
 const userStops: { last?: UserStopMark } = {};
 
-function slowTurnsWithinWindow(earlierSlowTurns: readonly SlowTurn[], slowTurn: SlowTurn): SlowTurn[] {
+function keepSlowTurnsWithinWindow(earlierSlowTurns: readonly SlowTurn[], slowTurn: SlowTurn): SlowTurn[] {
   return [...earlierSlowTurns, slowTurn].filter((earlierSlowTurn) => slowTurn.at - earlierSlowTurn.at <= SLOW_TURNS_WINDOW_MS);
 }
 
 function recordSlowTurn(cardId: string, slowTurn: SlowTurn): void {
-  const recentSlowTurns = slowTurnsWithinWindow(slowTurnsByCard.get(cardId) ?? [], slowTurn);
+  const recentSlowTurns = keepSlowTurnsWithinWindow(slowTurnsByCard.get(cardId) ?? [], slowTurn);
   if (recentSlowTurns.length < SLOW_TURNS_TO_REPORT) {
     slowTurnsByCard.set(cardId, recentSlowTurns);
     return;
