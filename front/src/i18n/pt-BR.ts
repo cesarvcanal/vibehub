@@ -1077,6 +1077,10 @@ export const ptBR: Record<string, string> = {
   "settings.sdkPermissionMode": "Permissões do chat nativo",
   "settings.sdkPermissionModeHint":
     "\"Igual ao terminal\" = o chat nativo tem exatamente o mesmo comportamento de permissões da aba Terminal do card. \"Perguntar o sensível\" = ações sensíveis (rm -rf, force-push, deploy, segredos) viram botões Permitir/Negar no chat.",
+  "settings.selfProject": "Projeto do próprio vibehub",
+  "settings.selfProjectNone": "Nenhum (desligado)",
+  "settings.selfProjectHint":
+    "Quando o próprio vibehub falhar, ele registra a falha e propõe a correção neste projeto, sempre com a sua aprovação. Vazio desliga.",
   "settings.sdkPermissionSame": "Igual ao terminal",
   "settings.sdkPermissionAsk": "Perguntar o sensível no chat",
   "settings.voice": "Entrada por voz",

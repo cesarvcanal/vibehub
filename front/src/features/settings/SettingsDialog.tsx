@@ -22,7 +22,7 @@ import { PluginsManager } from "@/features/board/components/PluginsManager";
 import { RunnerBanner } from "@/features/board/components/RunnerBanner";
 // The SAME cache entries the board reads (the composer's microphone, the project picker): a save
 // here has to reach them, which two keys for one endpoint never did.
-import { ACCOUNTS_KEY, GITHUB_KEY, TRANSCRIBE_KEY, boardApi } from "@/features/board/api";
+import { ACCOUNTS_KEY, GITHUB_KEY, PROJECTS_KEY, TRANSCRIBE_KEY, boardApi } from "@/features/board/api";
 import {
   LANGUAGES,
   getLanguage,
@@ -55,6 +55,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const settings = useQuery({ queryKey: SETTINGS_KEY, queryFn: () => get<Settings>("/settings"), enabled: open });
   const github = useQuery({ queryKey: GITHUB_KEY, queryFn: boardApi.github, enabled: open });
   const voice = useQuery({ queryKey: TRANSCRIBE_KEY, queryFn: boardApi.transcribeStatus, enabled: open });
+  const projects = useQuery({ queryKey: PROJECTS_KEY, queryFn: boardApi.listProjects, enabled: open });
   const credentials = useQuery({
     queryKey: CREDENTIALS_KEY,
     queryFn: () => get<{ credentials: Credential[] }>("/credentials").then((r) => r.credentials ?? []),
@@ -77,6 +78,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [githubToken, setGithubToken] = React.useState("");
   const [openaiKey, setOpenaiKey] = React.useState("");
   const [anthropicKey, setAnthropicKey] = React.useState("");
+  const [selfProjectId, setSelfProjectId] = React.useState("");
   // Cofre — a write-only add form. Values are typed here, sent once, and never read back.
   const [credName, setCredName] = React.useState("");
   const [credType, setCredType] = React.useState<CredentialType>("userpass");
@@ -98,6 +100,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     setDefaultLabel(settings.data.defaultAccountLabel ?? "");
     setTranscribeLanguage(settings.data.transcribeLanguage ?? "");
     setIdleHibernate(String(settings.data.idleHibernateMinutes ?? 180));
+    setSelfProjectId(settings.data.selfProjectId ?? "");
   }, [open, settings.data]);
 
   const save = useMutation({
@@ -188,6 +191,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 
   const submitGeneral = (e: React.FormEvent) => {
     e.preventDefault();
+    const isSelfProjectChanged = selfProjectId !== (settings.data?.selfProjectId ?? "");
     save.mutate({
       git: { name: name.trim(), email: email.trim() },
       autonomous,
@@ -198,6 +202,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
       transcribeLanguage: transcribeLanguage.trim() || null,
       // A blank field is not "never" — it is a field being typed in. Leave the stored value alone.
       ...(idleHibernate.trim() === "" ? {} : { idleHibernateMinutes: Number(idleHibernate.trim()) }),
+      ...(isSelfProjectChanged ? { selfProjectId: selfProjectId || null } : {}),
     });
   };
 
@@ -314,6 +319,21 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 <option value="ask-sensitive">{t("settings.sdkPermissionAsk")}</option>
               </select>
               <p className="text-xs text-muted-foreground">{t("settings.sdkPermissionModeHint")}</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="settings-self-project">{t("settings.selfProject")}</Label>
+              <select
+                id="settings-self-project"
+                className={SELECT_CLASS}
+                value={selfProjectId}
+                onChange={(event) => setSelfProjectId(event.target.value)}
+              >
+                <option value="">{t("settings.selfProjectNone")}</option>
+                {(projects.data ?? []).map((project) => (
+                  <option key={project.id} value={project.id}>{project.name}</option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground">{t("settings.selfProjectHint")}</p>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="settings-idle-hibernate">{t("settings.idleHibernate")}</Label>

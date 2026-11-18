@@ -1070,6 +1070,10 @@ export const en: Record<string, string> = {
   "settings.sdkPermissionMode": "Native chat permissions",
   "settings.sdkPermissionModeHint":
     "\"Same as the terminal\" = the native chat has exactly the permission behaviour of the card's Terminal tab. \"Ask for the sensitive\" = sensitive actions (rm -rf, force-push, deploy, secrets) become Allow/Deny buttons in the chat.",
+  "settings.selfProject": "vibehub's own project",
+  "settings.selfProjectNone": "None (off)",
+  "settings.selfProjectHint":
+    "When vibehub itself fails, it records the failure and proposes the fix in this project, always with your approval. Empty turns it off.",
   "settings.sdkPermissionSame": "Same as the terminal",
   "settings.sdkPermissionAsk": "Ask for the sensitive in the chat",
   "settings.voice": "Voice input",

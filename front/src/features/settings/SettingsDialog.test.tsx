@@ -29,11 +29,41 @@ beforeEach(() => {
     if (url === "/github") return { connections: [] };
     if (url === "/transcribe") return { available: false, proofread: false, language: "pt" };
     if (url === "/credentials") return { credentials: [] };
+    if (url === "/projects") return { projects: [{ id: "p-vh", name: "vibehub" }, { id: "p-erp", name: "erp" }] };
     throw new Error(`unexpected ${url}`);
   });
 });
 
 describe("SettingsDialog", () => {
+  it("picks vibehub's own project and saves it in the patch", async () => {
+    patch.mockResolvedValue(SETTINGS);
+    renderApp(<SettingsDialog open onOpenChange={() => {}} />);
+    const projectSelect = await screen.findByLabelText("vibehub's own project");
+    await waitFor(() => expect(within(projectSelect).getByRole("option", { name: "vibehub" })).toBeInTheDocument());
+    await userEvent.selectOptions(projectSelect, "p-vh");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(patch).toHaveBeenCalledWith("/settings", expect.objectContaining({ selfProjectId: "p-vh" })));
+  });
+
+  it("a deleted vibehub project does not block saving the rest of the form", async () => {
+    get.mockImplementation(async (url: string) => {
+      if (url === "/settings") return { ...SETTINGS, selfProjectId: "p-deleted" };
+      if (url === "/github") return { connections: [] };
+      if (url === "/transcribe") return { available: false, proofread: false, language: "pt" };
+      if (url === "/credentials") return { credentials: [] };
+      if (url === "/projects") return { projects: [{ id: "p-erp", name: "erp" }] };
+      throw new Error(`unexpected ${url}`);
+    });
+    patch.mockResolvedValue(SETTINGS);
+    renderApp(<SettingsDialog open onOpenChange={() => {}} />);
+    const name = await screen.findByLabelText("Name");
+    await waitFor(() => expect(name).toHaveValue("Ada"));
+    await userEvent.type(name, " L");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    expect(patch.mock.calls[0]![1]).not.toHaveProperty("selfProjectId");
+  });
+
   it("hydrates the form from the server and saves a patch", async () => {
     patch.mockResolvedValue(SETTINGS);
     renderApp(<SettingsDialog open onOpenChange={() => {}} />);
