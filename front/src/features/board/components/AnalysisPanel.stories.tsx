@@ -47,7 +47,7 @@ const report = (over: Partial<AnalysisReport> = {}): AnalysisReport => ({
 const readModel = (
   analysis: AnalysisReport, verdict: AnalysisReadModel["verdict"], health: Partial<AnalysisReadModel["health"]> = {},
   uncheckedDimensions: AnalysisReadModel["uncheckedDimensions"] = [],
-): AnalysisReadModel => ({ analysis, verdict, health: { ...ALL_OK, repoRules: "skipped", ...health }, uncheckedDimensions });
+): AnalysisReadModel => ({ analysis, verdict, health: { ...ALL_OK, repoRules: "skipped", ...health }, uncheckedDimensions, canMerge: false });
 
 function SeededAnalysis({ answer, children }: { answer: CardAnalysisResponse; children: React.ReactNode }) {
   const client = useQueryClient();
@@ -78,6 +78,16 @@ type Story = StoryObj<typeof AnalysisPanel>;
 
 export const Apto: Story = {
   parameters: { analysis: readModel(report({ findings: [fixedBlocking] }), "apt") },
+};
+
+export const AptoComMerge: Story = {
+  name: "Apto · com o botão de merge",
+  parameters: { analysis: { ...readModel(report({ findings: [fixedBlocking] }), "apt"), canMerge: true } },
+};
+
+export const Mergeado: Story = {
+  name: "Apto · PR já mergeado",
+  parameters: { analysis: { ...readModel(report({ findings: [fixedBlocking] }), "apt"), mergedAt: 1 } },
 };
 
 export const NaoAptoComBloqueante: Story = {
