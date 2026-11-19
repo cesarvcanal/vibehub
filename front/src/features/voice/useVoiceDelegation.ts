@@ -15,8 +15,7 @@ import {
 /**
  * THE VOICE AND THE CARD'S AGENT, during a call in the chat — the person codes by talking.
  *
- * - Every delegation the voice makes (./voiceDelegation.ts) becomes a message to the agent through
- *   the chat's own send, so it queues, waits for the wire and shows in the thread like a typed one.
+ * - Every delegation the voice makes (./voiceDelegation.ts) becomes a message to the agent.
  *   The voice is told at once that the work started; when the agent's turn on it ends, its last
  *   answer goes back on that delegation to be SAID. Each delegation gets exactly one result, even
  *   when the message could not go — GPT-Live waits for it otherwise.
@@ -35,15 +34,14 @@ export interface UseVoiceDelegationOptions {
   rows: SdkRow[];
   /** A turn of the agent is running or about to (a message just went). */
   turnRunning: boolean;
-  /** Hands a message to the agent like the composer does; throws when it cannot go. */
-  sendToAgent: (text: string) => void;
+  sendUrgentToAgent: (text: string) => void;
 }
 
-export function useVoiceDelegation({ call, rows, turnRunning, sendToAgent }: UseVoiceDelegationOptions): void {
+export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent }: UseVoiceDelegationOptions): void {
   const { onDelegation, answerDelegation, appendContext } = call;
   const live = call.snap.state === "live";
-  const sendRef = React.useRef(sendToAgent);
-  sendRef.current = sendToAgent;
+  const sendRef = React.useRef(sendUrgentToAgent);
+  sendRef.current = sendUrgentToAgent;
   // A ref, not state: a result must go once, and two effect runs before a re-render would send it twice.
   const pending = React.useRef<PendingDelegation[]>([]);
   // Bumped when a delegation is taken, so the effect below looks at the chat again.

@@ -1336,8 +1336,10 @@ export function SdkChatView({
     // Not `callWorking`: a dropped wire clears `connected` but not the turn, and the delegation must
     // wait for the turn's real end, not answer with whatever was said before the blip.
     turnRunning: state.awaiting || state.turnActive,
-    sendToAgent: (text) => {
-      sendOrQueue(text);
+    sendUrgentToAgent: (text) => {
+      const wireUp = connected && socketRef.current?.readyState === WebSocket.OPEN;
+      if (!wireUp) throw new Error(translate("sdk.offline"));
+      dispatchTurn(text, true);
       setSentDuringCall(true);
     },
   });

@@ -14,7 +14,7 @@ import type { VoiceTurn } from "./voiceTurns";
 
 const said = (text: string): VoiceTurn[] => [{ vid: "vc-u1", role: "user", text, at: 1, final: true }];
 
-function setup(sendToAgent: (text: string) => void) {
+function setup(sendUrgentToAgent: (text: string) => void) {
   let listener: DelegationListener = () => undefined;
   const call = {
     snap: { ...LiveVoiceSession.idleSnapshot, state: "live" } as LiveVoiceSnapshot,
@@ -26,7 +26,7 @@ function setup(sendToAgent: (text: string) => void) {
     appendContext: vi.fn(() => true),
   };
   const view = renderHook((props: Partial<UseVoiceDelegationOptions>) =>
-    useVoiceDelegation({ call, rows: [], turnRunning: false, sendToAgent, ...props }),
+    useVoiceDelegation({ call, rows: [], turnRunning: false, sendUrgentToAgent, ...props }),
   );
   return { call, view, delegate: (id: string, turns: VoiceTurn[]) => act(() => listener(id, turns)) };
 }

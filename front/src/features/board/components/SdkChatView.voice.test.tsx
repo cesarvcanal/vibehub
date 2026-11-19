@@ -265,6 +265,19 @@ describe("a voice call inside the card's chat", () => {
     expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument();
   });
 
+  it("com o card parado numa pergunta de múltipla escolha, o pedido da voz sai na hora em vez de ficar escondido na fila", async () => {
+    const { ws } = await openChat();
+    ws.deliver({ type: "user_question", id: "q_1", questions: [{ question: "Qual caminho?", header: "Caminho", options: [{ label: "A", description: "a" }, { label: "B", description: "b" }] }] });
+    await startCall();
+    act(() => channel().emit({ type: "session.input_transcript.delta", delta: "abre um card pra esse bug e delega", start_ms: 0, end_ms: 900 }));
+    act(() => channel().emit({ type: "session.delegation.created", offset_ms: 1000, delegation: { id: "item_q1", type: "delegation", target: "client" } }));
+
+    await waitFor(() =>
+      expect(ws.frames).toContainEqual(expect.objectContaining({ type: "user", now: true, text: expect.stringContaining("abre um card pra esse bug") })),
+    );
+    expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument();
+  });
+
   it("sem conexão, a voz ouve na hora que o pedido não foi entregue, e nada fica preso na fila", async () => {
     const { ws } = await openChat();
     await startCall();
