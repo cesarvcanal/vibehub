@@ -398,7 +398,7 @@ export function buildOpenScript(opts: OpenScriptOpts): string {
       // REOPEN — the hot "instant open" path — the idempotent open pays no network round trip: the
       // fetch on every reopen used to be the bulk of the latency.
       `if [ ! -d "$WT" ]; then`,
-      `  ${gitAuthed} -C "$REPO_DIR" fetch --prune origin`,
+      `  ${gitAuthed} -C "$REPO_DIR" fetch --all --prune`,
       `  if git -C "$REPO_DIR" show-ref --verify --quiet ${shQuote(`refs/heads/${branch}`)}; then`,
       `    git -C "$REPO_DIR" worktree add "$WT" ${shQuote(branch)}`,
       // The branch already exists on the remote (imported session/branch, or a recreated card):
