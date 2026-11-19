@@ -196,7 +196,7 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 ## 7. Dados, fonte de verdade e consistência
 
 - Cada conceito tem uma **fonte de verdade identificável**. Não persistir cópias de valores que podem ser obtidos da fonte, nem as duas direções do mesmo relacionamento. Snapshot ou materialização só como exceção explícita, com motivo, origem e regra de atualização definidos.
-- Estado JSON do vibehub em `VIBEHUB_DATA_DIR` (`board.json` e afins) passa pelo **store** (`back/src/store/`: `JsonStore`, `writeFileAtomic`). Exceções intencionais ficam documentadas no próprio arquivo — ex.: os marcadores de `services/sdk/inflight.ts`, gravados com `writeFile` numa fila por card, e os arquivos que os scripts de `workspace.ts` gravam dentro do container.
+- Estado JSON do vibehub em `VIBEHUB_DATA_DIR` (`board.json` e afins) passa pelo **store** (`back/src/store/`: `JsonStore`, `writeFileAtomic`). Gravação fora do store é exceção intencional: o porquê vai no commit que a introduz e o PR a declara, e a gravação continua atômica ou serializada por card.
 - **Não gravar durante leitura** para sincronizar cálculos.
 - Operações que podem rodar em paralelo ou repetir (hooks de status, retomada após deploy, deliver, provisionamento) precisam ser **idempotentes** e seguras em corrida. Vários cards trabalham ao mesmo tempo no mesmo runner, e, se a instalação faz deploy blue/green, dois backends convivem por um tempo.
 - Nunca introduzir migração, limpeza ou exclusão de dados reais (worktrees, transcripts, volumes, containers) sem avaliação, `dry-run` quando aplicável e autorização.
