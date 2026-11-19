@@ -4843,6 +4843,8 @@ describe("SdkChatView — o medidor de contexto", () => {
     expect(danger.getAttribute("data-zone")).toBe("danger");
     expect(danger.getAttribute("role")).toBe("alert");
     expect(danger).toHaveTextContent("AI in the danger zone: 65%");
+    expect(danger).toHaveTextContent("compacts the conversation on its own");
+    expect(danger).not.toHaveTextContent("/compact");
     expect(screen.queryByTestId("context-notice-dismiss")).toBeNull();
     expect(screen.getByTestId("context-meter")).toHaveTextContent("danger");
 
@@ -4883,6 +4885,20 @@ describe("SdkChatView — o medidor de contexto", () => {
     ws.deliver({ type: "conversation_reset", trigger: "clear" } as SdkEvent);
     expect(screen.queryByTestId("context-meter")).toBeNull();
     expect(screen.queryByTestId("context-notice")).toBeNull();
+  });
+
+  it("o guia avisa que a conversa compacta sozinha em 60%, relê as regras do projeto e segue a tarefa", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "context_usage", usedTokens: 84_000, maxTokens: 200_000, percent: 42 } as SdkEvent);
+    fireEvent.click(screen.getByTestId("context-meter"));
+    const autoCompact = within(await screen.findByTestId("context-guide")).getByTestId("context-autocompact");
+    expect(autoCompact).toHaveTextContent("Compacts on its own at 60%");
+    expect(autoCompact).toHaveTextContent("CLAUDE.md and AGENTS.md");
+    const zones = within(screen.getByTestId("context-guide")).getAllByTestId("context-zone");
+    expect(zones.find((z) => z.getAttribute("data-zone") === "danger")).not.toHaveTextContent("/compact");
   });
 
   it("o guia abre no clique (toque), não só no hover — e janela de 1M sai como 1M", async () => {

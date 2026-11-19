@@ -1,5 +1,5 @@
 import * as React from "react";
-import { AlertTriangle, OctagonAlert, X } from "lucide-react";
+import { AlertTriangle, FoldVertical, OctagonAlert, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   CONTEXT_DANGER_AT,
@@ -136,6 +136,14 @@ export function ContextMeter({ usage, className }: { usage: ContextUsageInfo | n
             );
           })}
         </ul>
+
+        <div data-testid="context-autocompact" className="flex gap-2 border-t border-border/60 px-3 py-2">
+          <FoldVertical aria-hidden className="mt-px h-3.5 w-3.5 shrink-0" style={{ color: contextColor(CONTEXT_DANGER_AT) }} />
+          <span className="min-w-0">
+            <span className="block text-[11px] font-medium text-foreground">{t("context.autoCompact.title", { n: CONTEXT_DANGER_AT })}</span>
+            <span className="block text-[11px] leading-snug text-muted-foreground">{t("context.autoCompact.desc")}</span>
+          </span>
+        </div>
       </TooltipContent>
     </Tooltip>
   );
