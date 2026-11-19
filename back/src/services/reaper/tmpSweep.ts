@@ -1,6 +1,6 @@
 import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
-import { CARD_TMP_ROOT } from "../board/cardTmp.js";
+import { CARD_TMP_DIR_NAME } from "../board/cardTmp.js";
 import { logger } from "../../utils/logger.js";
 
 export const TMP_IDLE_MINUTES = 48 * 60;
@@ -14,8 +14,7 @@ const SWEPT_MARKER = "VIBEHUB_TMP_SWEPT";
 const SIZE_MARKER = "VIBEHUB_TMP_SIZE";
 const DISK_MARKER = "VIBEHUB_TMP_DISK";
 
-const CARD_TMP_DIR_NAME = CARD_TMP_ROOT.split("/").pop() ?? "";
-const PROTECTED_NAMES = [CARD_TMP_DIR_NAME, "claude-*", "node-compile-cache", "tmux-*", "cc-socks", ".*-unix"];
+const PROTECTED_NAMES = [CARD_TMP_DIR_NAME, "claude-*", "node-compile-cache", "tmux-*", "cc-socks", ".*-unix", ".X*-lock"];
 
 export interface TmpEntrySize {
   path: string;
@@ -54,19 +53,21 @@ export function buildTmpSweepScript(
     "set -e",
     `docker exec -i ${shQuote(containerName)} bash -s <<'${SWEEP_DELIM}'`,
     `ROOT=${shQuote(root)}`,
-    'IDLE_IO=""; command -v ionice >/dev/null 2>&1 && IDLE_IO="ionice -c 3"',
-    "IN_USE=$( { for P in /proc/[0-9]*; do readlink \"$P/cwd\"; ls -l \"$P/fd\" 2>/dev/null | awk '{print $NF}'; " +
-      `tr '\\0' '\\n' < "$P/cmdline"; done; } 2>/dev/null | grep -oE ${inUsePattern} | sort -u || true)`,
+    "renice -n 19 -p $$ >/dev/null 2>&1 || true",
+    "ionice -c 3 -p $$ >/dev/null 2>&1 || true",
+    "IN_USE=$( { awk 'NR > 1 {print $8}' /proc/net/unix; for P in /proc/[0-9]*; do readlink \"$P/cwd\"; " +
+      "ls -l \"$P/fd\" 2>/dev/null | awk '{print $NF}'; " +
+      `tr '\\0' '\\n' < "$P/cmdline"; tr '\\0' '\\n' < "$P/environ"; done; } 2>/dev/null | grep -oE ${inUsePattern} | sort -u || true)`,
     `find "$ROOT" -mindepth 1 -maxdepth 1 -mmin +${idleMinutes} ${protectedNames} -print0 2>/dev/null |`,
     "while IFS= read -r -d '' E; do",
     '  printf \'%s\\n\' "$IN_USE" | grep -qxF -- "$E" && continue',
     `  if [ -d "$E" ] && [ -n "$(find "$E" -mmin -${idleMinutes} -print -quit 2>/dev/null)" ]; then continue; fi`,
-    '  K=$($IDLE_IO nice -n 19 du -sxk -- "$E" 2>/dev/null | cut -f1)',
+    '  K=$(du -sxk -- "$E" 2>/dev/null | cut -f1)',
     `  rm -rf -- "$E" 2>/dev/null && printf '${SWEPT_MARKER}\\t%s\\t%s\\n' "\${K:-0}" "$E" || true`,
     "done",
     ...[`"$ROOT" -mindepth 1 -maxdepth 1 ! -path ${shQuote(cardTmpRoot)}`, `${shQuote(cardTmpRoot)} -mindepth 1 -maxdepth 1`].map(
       (selection) =>
-        `find ${selection} -exec $IDLE_IO nice -n 19 du -sxk {} + 2>/dev/null |` +
+        `find ${selection} -exec du -sxk {} + 2>/dev/null |` +
         ` awk -F '\\t' '{print "${SIZE_MARKER}\\t" $1 "\\t" $2}' || true`,
     ),
     `printf '${DISK_MARKER}\\t%s\\n' "$(df -P "$ROOT" | awk 'NR == 2 {print $5 + 0}')"`,

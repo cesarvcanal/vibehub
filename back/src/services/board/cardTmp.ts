@@ -1,4 +1,5 @@
-export const CARD_TMP_ROOT = "/tmp/vibehub";
+export const CARD_TMP_DIR_NAME = "vibehub";
+export const CARD_TMP_ROOT = `/tmp/${CARD_TMP_DIR_NAME}`;
 
 export function cardTmpDir(cardId: string): string {
   return `${CARD_TMP_ROOT}/${cardId}`;
