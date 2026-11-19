@@ -587,6 +587,7 @@ describe("deliver orchestration", () => {
     wire();
     const out = await deliver.deliver(card.id, { branch: "dev" }); // authorized omitted
     expect(out).toMatchObject({ merged: false, reason: "unauthorized", prUrl: PR });
+    expect(out.output).toContain("authorized: true");
     expect(mergeRan()).toBe(false);
   });
 
@@ -1258,15 +1259,44 @@ describe("deliver com revisão de PR ativa no card", () => {
     expect((await registry.getCard(analysis.id))?.prs?.[0]).toMatchObject({ number: 7, branch: "feat-7" });
   });
 
-  it("card de análise nunca mergeia, nem autorizado nem pelo merge-only: o merge da PR é de uma pessoa", async () => {
+  it("card de análise com authorized mergeia a PR pelo caminho de um card comum: merge commit preso ao commit do gate", async () => {
     const { deliver, registry, project } = await makeCard();
     const analysis = await registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" });
     wire();
-    expect(await deliver.deliver(analysis.id, { branch: "dev", authorized: true })).toMatchObject({ merged: false, reason: "unauthorized", prUrl: PR });
+    const out = await deliver.deliver(analysis.id, { branch: "dev", authorized: true });
+    expect(out).toMatchObject({ merged: true, reason: "merged", prUrl: PR, branch: "dev", cardBranch: "feat-7" });
+    const merge = scripts().find((s) => s.includes("gh pr merge"))!;
+    expect(merge).toContain(`--merge --match-head-commit '${HEAD_SHA}'`);
+    expect(merge).not.toContain("--squash");
+  });
+
+  it("card de análise sem authorized não mergeia, e a recusa diz que faltou a ordem de merge", async () => {
+    const { deliver, registry, project } = await makeCard();
+    const analysis = await registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" });
+    wire();
+    const out = await deliver.deliver(analysis.id, { branch: "dev" });
+    expect(out).toMatchObject({ merged: false, reason: "unauthorized", prUrl: PR });
+    expect(out.output).toContain("authorized: true");
     expect(mergeRan()).toBe(false);
-    runScript.mockClear();
-    const mergeOnly = await deliver.deliver(analysis.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: HEAD_SHA });
-    expect(mergeOnly).toMatchObject({ merged: false, reason: "locked" });
+  });
+
+  it("card de análise numa PR em revisão no card do autor: o merge autorizado é recusado com review_active", async () => {
+    const { deliver, registry, project, card } = await withActiveReview("ready");
+    const analysis = await registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "card/x", title: "Análise PR #7" });
+    wire();
+    const out = await deliver.deliver(analysis.id, { branch: "dev", authorized: true });
+    expect(out).toMatchObject({ merged: false, reason: "review_active", prUrl: PR });
+    expect(out.output).toContain("#7");
+    expect(mergeRan()).toBe(false);
+    expect(card.id).not.toBe(analysis.id);
+  });
+
+  it("card de análise não tem merge-only: o botão é de uma revisão, e nenhuma revisão roda num card de análise", async () => {
+    const { deliver, registry, project } = await makeCard();
+    const analysis = await registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" });
+    wire();
+    const out = await deliver.deliver(analysis.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: HEAD_SHA });
+    expect(out).toMatchObject({ merged: false, reason: "locked" });
     expect(runScript).not.toHaveBeenCalled();
   });
 
