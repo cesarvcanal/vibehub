@@ -27,6 +27,7 @@ import { cardBrowserPorts, cardCdpEndpoint } from "../browser/ports.js";
 import { claudeProjectsDirName } from "../import/import.js";
 import { mcpInjectLines, resolveMcpInjections, type McpInjection } from "../mcp/mcp.js";
 import { pluginInstallLines, enabledPlugins } from "../plugins/plugins.js";
+import { autoCompactExport } from "../../runtime/autoCompact.js";
 import {
   brainInjectLines, resolveBrainText, projectBrainWriteLines, resolveProjectBrainText, brainTextForCard,
   PROJECT_BRAIN_FILE,
@@ -124,6 +125,7 @@ export function sessionCommand(opts: SessionCommandOpts | boolean): string {
   // card's git and gh read the card's token FILE on every call instead (github/runnerIdentity.ts).
   const guard =
     `export IS_SANDBOX=1; ` +
+    autoCompactExport() +
     oauthTokenGuard(profileDir) +
     // Claude's first-run walls (setup wizard + trust dialog) taken down for THIS profile and THIS
     // worktree. It lives in the session command — not in the open script — because the websocket's
