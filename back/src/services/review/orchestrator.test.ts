@@ -2335,6 +2335,25 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
     }
   });
 
+  it("turno que termina com a frota ainda rodando em segundo plano não conta", async () => {
+    const o = await load();
+    const { author, review, off } = await fixing(o);
+    const agentState = await import("../board/agentState.js");
+    const fleetRunning = new Set([author.id]);
+    const stopProbe = agentState.onCardBackgroundProbe((cardId) => fleetRunning.has(cardId));
+    try {
+      await endTurn(o, author.id);
+      await new Promise((r) => setTimeout(r, 30));
+      expect(send).not.toHaveBeenCalled();
+      fleetRunning.delete(author.id);
+      await endTurn(o, author.id);
+      await expectOnlyTheSecondCounts(o, review.id);
+    } finally {
+      stopProbe();
+      off();
+    }
+  });
+
   it("turno com pergunta ou permissão em aberto não conta", async () => {
     const o = await load();
     const { author, review, off } = await fixing(o);

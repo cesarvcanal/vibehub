@@ -5,6 +5,7 @@ import {
 } from "../board/registry.js";
 import { cardBranch, resumeCard } from "../board/workspace.js";
 import { recordCardActor } from "../board/actor.js";
+import { cardHoldsBackgroundWork } from "../board/agentState.js";
 import { findUser } from "../../auth/users.js";
 import { cardLevel } from "../../auth/access.js";
 import { cardAccountSlug, getUserGit, linkedAccountSlug } from "../../auth/userGit.js";
@@ -1413,13 +1414,14 @@ function applyReviewOrders(review: Review, orders: ReviewOrders, orderingCardId:
 /**
  * Why this turn ending does NOT count as "finished without the tool", or null if it counts. The fallback only
  * demands turns the relay opened; with no origin on the event, these signals say the turn was about something
- * else: a person using the card right now, the agent that declared it needs them, or an open question/
+ * else: a person using the card right now, a background task still running (the fleet), the agent that declared it needs them, or an open question/
  * permission waiting for somebody.
  */
 async function notJudged(event: CardEvent): Promise<string | null> {
   const card = await getCard(event.cardId);
   if (!card) return "card sumiu";
   if (isHumanActive(card)) return "pessoa usando o card";
+  if (cardHoldsBackgroundWork(card.id)) return "tarefa em segundo plano rodando";
   const declared = event.state ?? card.declaredState;
   if (declared === "needs_me" || declared === "blocked") return `agente declarou ${declared}`;
   if (card.awaitingDecisionAt || card.pendingQuestionAt) return "pergunta ou permissão em aberto";
