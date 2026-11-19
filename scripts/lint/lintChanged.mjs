@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import { join, relative } from "node:path";
-import { ESLint } from "eslint";
 import { parseAddedLines } from "./addedLines.mjs";
 
 const CONFIG_FILE = join(import.meta.dirname, "..", "..", "eslint.config.js");
@@ -40,6 +39,7 @@ export async function lintChangedLines({ repoDir, baseRef }) {
   const changedLinesByPath = readChangedLines(repoDir, baseRef);
   const pathsWithAddedLines = [...changedLinesByPath].filter(([, lines]) => lines === EVERY_LINE || lines.size > 0);
   if (pathsWithAddedLines.length === 0) return [];
+  const { ESLint } = await import("eslint");
   const eslint = new ESLint({ cwd: repoDir, overrideConfigFile: CONFIG_FILE });
   const results = await eslint.lintFiles(pathsWithAddedLines.map(([path]) => path));
   return results
