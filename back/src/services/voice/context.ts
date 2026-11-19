@@ -1,4 +1,4 @@
-import { readHistory, type HistoryEvent } from "../sdk/history.js";
+import type { HistoryEvent } from "../sdk/history.js";
 import { clipLine } from "../../utils/clipLine.js";
 
 /**
@@ -48,8 +48,4 @@ export function formatVoiceContext(
     used += l.length + 1;
   }
   return lines.reverse().join("\n");
-}
-
-export async function cardVoiceContext(cardId: string): Promise<string> {
-  return formatVoiceContext(await readHistory(cardId));
 }

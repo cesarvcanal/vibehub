@@ -67,6 +67,24 @@ async function history(cardId: string) {
   return await readHistory(cardId);
 }
 
+const RESPONSES_URL = "https://api.openai.com/v1/responses";
+
+function summaryAnswer(text: string) {
+  return new Response(JSON.stringify({ status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text }] }] }), {
+    status: 200, headers: { "content-type": "application/json" },
+  });
+}
+
+/** OpenAI as the call sees it: the summary from the Responses API, the session from GPT-Live. */
+function openAi(summary: () => Response) {
+  upstream.mockImplementation(async (url: string) => (url === RESPONSES_URL ? summary() : answer()));
+}
+
+function sentSession() {
+  const live = upstream.mock.calls.find(([url]) => url !== RESPONSES_URL) as [string, RequestInit];
+  return JSON.parse(String(live[1].body));
+}
+
 function answer() {
   return new Response(JSON.stringify({ session: { id: "live_9" }, transport: { type: "webrtc", sdp: "v=0 answer" } }), {
     status: 201, headers: { "content-type": "application/json" },
@@ -186,12 +204,12 @@ describe("POST /api/cards/:id/voice/sessions", () => {
     await appendHistoryReported(id, { type: "tool_use", id: "t1", name: "Bash", input: { command: "cat .env" } });
     await appendHistoryReported(id, { type: "assistant_text", text: "Corrigido, 12 testes verdes." } as never);
     await saveTurns(id, [{ vid: "turn-ctx-1", role: "user", text: "e o deploy?", at: Date.now() }]);
-    upstream.mockResolvedValueOnce(answer());
+    openAi(() => summaryAnswer("resumo"));
 
     const res = await app.inject({ method: "POST", url: `/api/cards/${id}/voice/sessions`, headers: { cookie: owner }, payload: { sdp: OFFER } });
     expect(res.statusCode).toBe(201);
     expect(res.json()).toEqual({ sessionId: "live_9", sdp: "v=0 answer" });
-    const sent = JSON.parse(String((upstream.mock.calls[0] as [string, RequestInit])[1].body));
+    const sent = sentSession();
     const instructions = sent.session.instructions as string;
     expect(instructions).toContain("agente do card");
     expect(instructions).toContain("Pessoa (digitou): corrige o teste do login");
@@ -204,6 +222,43 @@ describe("POST /api/cards/:id/voice/sessions", () => {
     expect(sent.session.delegation).toEqual({ type: "client" });
     expect(instructions).toContain("Generate <|SpawnThinking|> when:");
     expect(instructions).toContain("recapitular");
+  });
+
+  it("abre a chamada já sabendo o resumo da conversa inteira do card, pedido antes de criar a sessão", async () => {
+    const id = await makeCard();
+    const { appendHistoryReported } = await import("../services/sdk/history.js");
+    await appendHistoryReported(id, { type: "user", text: "revisa a PR 647", at: 1 });
+    await appendHistoryReported(id, { type: "assistant_text", text: "Revisei: 9 de 12 achados fechados, o gate estourou o prazo." } as never);
+    openAi(() => summaryAnswer("O card revisa a PR 647: nove achados fechados, merge travado pelo gate."));
+
+    const res = await app.inject({ method: "POST", url: `/api/cards/${id}/voice/sessions`, headers: { cookie: owner }, payload: { sdp: OFFER } });
+    expect(res.statusCode).toBe(201);
+    expect(upstream.mock.calls.map(([url]) => url)).toEqual([RESPONSES_URL, "https://api.openai.com/v1/live/sessions"]);
+    const summaryBody = JSON.parse(String((upstream.mock.calls[0] as [string, RequestInit])[1].body));
+    expect(summaryBody.input).toContain("Revisei: 9 de 12 achados fechados");
+    const instructions = sentSession().session.instructions as string;
+    expect(instructions).toContain("Resumo da conversa deste card até agora:\nO card revisa a PR 647: nove achados fechados, merge travado pelo gate.");
+    expect(instructions).toContain("Agente do card (Claude): Revisei: 9 de 12 achados fechados");
+  });
+
+  it("sem resumo (a OpenAI falhou nele), a chamada abre com a conversa recente", async () => {
+    const id = await makeCard();
+    const { appendHistoryReported } = await import("../services/sdk/history.js");
+    await appendHistoryReported(id, { type: "user", text: "roda os testes", at: 1 });
+    openAi(() => new Response("{}", { status: 500 }));
+
+    const res = await app.inject({ method: "POST", url: `/api/cards/${id}/voice/sessions`, headers: { cookie: owner }, payload: { sdp: OFFER } });
+    expect(res.statusCode).toBe(201);
+    const instructions = sentSession().session.instructions as string;
+    expect(instructions).not.toContain("Resumo da conversa deste card");
+    expect(instructions).toContain("Pessoa (digitou): roda os testes");
+  });
+
+  it("um card sem conversa abre a chamada sem pedir resumo", async () => {
+    const id = await makeCard();
+    openAi(() => summaryAnswer("nunca"));
+    expect((await app.inject({ method: "POST", url: `/api/cards/${id}/voice/sessions`, headers: { cookie: owner }, payload: { sdp: OFFER } })).statusCode).toBe(201);
+    expect(upstream.mock.calls.map(([url]) => url)).toEqual(["https://api.openai.com/v1/live/sessions"]);
   });
 
   it("still 404s while the mode is off, without calling OpenAI", async () => {

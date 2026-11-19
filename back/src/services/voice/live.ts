@@ -86,10 +86,12 @@ const CARD_INSTRUCTIONS = [
     "Se não souber, diga que não sabe.",
 ].join("\n\n");
 
-/** The instructions for a call in a card's chat: the base text plus the recent thread. PURE. */
-export function cardInstructions(context: string): string {
-  if (!context.trim()) return CARD_INSTRUCTIONS;
-  return `${CARD_INSTRUCTIONS}\n\nConversa recente deste chat (mais antiga primeiro):\n${context}`;
+/** The instructions for a call in a card's chat: the base text, the summary of the whole conversation and the recent thread. PURE. */
+export function cardInstructions(context: string, summary: string | null): string {
+  const sections = [CARD_INSTRUCTIONS];
+  if (summary) sections.push(`Resumo da conversa deste card até agora:\n${summary}`);
+  if (context.trim()) sections.push(`Conversa recente deste chat (mais antiga primeiro):\n${context}`);
+  return sections.join("\n\n");
 }
 
 export class VoiceLiveError extends Error {
@@ -181,8 +183,12 @@ export interface CreateLiveSessionOptions {
   signal?: AbortSignal;
   /** The card whose chat holds the call — the audit line only. */
   cardId?: string;
-  /** Instead of the plain conversation's: the call belongs to a card's chat (see {@link cardInstructions}). */
-  instructions?: string;
+  /**
+   * Instead of the plain conversation's: the call belongs to a card's chat (see {@link cardInstructions}).
+   * Built only after the mode, the key and the rate ceiling let the call through, with the same key and
+   * the browser's abort.
+   */
+  instructionsFor?: (apiKey: string, signal: AbortSignal | undefined) => Promise<string>;
   fetchImpl?: typeof fetch;
 }
 
@@ -196,6 +202,8 @@ export async function createLiveSession(offer: unknown, opts: CreateLiveSessionO
   const apiKey = await voiceApiKey();
   if (!apiKey) throw new VoiceLiveError(503, "voice mode is not configured — set VIBEHUB_VOICE_OPENAI_API_KEY");
   takeCreateSlot(opts.user);
+  const instructions = opts.instructionsFor ? await opts.instructionsFor(apiKey, opts.signal) : INSTRUCTIONS;
+  if (opts.signal?.aborted) throw new VoiceLiveError(499, "cancelled");
 
   const signals = [AbortSignal.timeout(LIVE_TIMEOUT_MS)];
   if (opts.signal) signals.push(opts.signal);
@@ -205,7 +213,7 @@ export async function createLiveSession(offer: unknown, opts: CreateLiveSessionO
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        session: { model: LIVE_MODEL, instructions: opts.instructions ?? INSTRUCTIONS, delegation: DELEGATION },
+        session: { model: LIVE_MODEL, instructions, delegation: DELEGATION },
         transport: { type: "webrtc", sdp },
       }),
       signal: AbortSignal.any(signals),
