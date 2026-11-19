@@ -20,7 +20,7 @@ vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 let dir = "";
 let app: FastifyInstance;
 
-const runScript = vi.fn(async (_script: string, _opts?: unknown) => ({ stdout: "[]", stderr: "" }));
+const runScript = vi.fn<(script: string, opts?: unknown) => Promise<{ stdout: string; stderr: string }>>(async () => ({ stdout: "[]", stderr: "" }));
 
 const send = vi.fn(async (cardId: string, _text: string, opts: SendOpts = {}): Promise<SendResult> => {
   await opts.beforeDeliver?.();

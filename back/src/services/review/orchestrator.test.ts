@@ -25,7 +25,7 @@ const calls: string[] = [];
 const plant = vi.fn(async () => {
   calls.push("plant");
 });
-const fleetRead = vi.fn(async (_cardId: string): Promise<unknown[]> => []);
+const fleetRead = vi.fn<(cardId: string) => Promise<unknown[]>>(async () => []);
 let sendFailure: Error | null = null;
 const injected = { usageWaitsReadFailures: 0, userGitFailure: null as Error | null };
 /** Runs once before the next send (the race "the review moved while the text was going out"). */

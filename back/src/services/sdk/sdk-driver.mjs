@@ -1179,7 +1179,7 @@ async function runStream() {
           streamLoginFailed = true;
           emit({ type: "login_failed" });
         }
-        // CLI 0.3.300 binary: api_error_params.rate_limit_info "says which and when it resets" on a usage-limit refusal.
+        // external: CLI 0.3.300 binary: api_error_params.rate_limit_info "says which and when it resets" on a usage-limit refusal.
         if (msg.error === "rate_limit" && parent === null) {
           const rateLimit = msg.api_error_params && msg.api_error_params.rate_limit_info;
           emit({ type: "usage_limited", ...(rateLimit ? { rateLimit } : {}) });
