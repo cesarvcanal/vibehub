@@ -1,9 +1,8 @@
 import { CheckCircle2, Loader2 } from "lucide-react";
 import type { ReviewFleetAgent, ReviewFleetRun } from "@/api/types";
-import { PhasePills, nowLine } from "@/features/board/components/WorkflowPanel";
+import { PhasePills } from "@/features/board/components/WorkflowPanel";
 import { agentRole, fleetMessages, type AgentReading, type FleetMessage } from "@/features/board/lib/reviewFleet";
 import { phasePills } from "@/features/board/lib/workflowPanel";
-import { useNow } from "@/lib/useNow";
 import { useT, type Translate } from "@/i18n";
 import { cn } from "@/lib/utils";
 
@@ -19,7 +18,6 @@ export function ReviewFleet({ round, runs }: { round: number; runs: ReviewFleetR
 function FleetRun({ run }: { run: ReviewFleetRun }) {
   const t = useT();
   const working = run.finished ? [] : run.agents.filter((agent) => agent.status === "running");
-  const now = useNow(working.length > 0);
   const messages = fleetMessages(run);
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
@@ -40,7 +38,6 @@ function FleetRun({ run }: { run: ReviewFleetRun }) {
               <li key={agent.id} data-testid="review-fleet-working" className="min-w-0 text-[11px] text-muted-foreground">
                 <span className="text-foreground/90">{agentName(agent, t)}</span>
                 {agent.model ? <span className="ml-1.5 text-muted-foreground/70">{agent.model}</span> : null}
-                <span className="block truncate">{nowLine(agent, now, t)}</span>
               </li>
             ))}
           </ul>

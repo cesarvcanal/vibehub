@@ -892,7 +892,6 @@ export interface ReviewFleetAgent {
   status: "running" | "done" | "stopped";
   result?: string;
   endedAt?: number;
-  activity?: { kind: "tool"; tool: string; target: string } | { kind: "text"; text: string } | { kind: "thinking"; since: number };
 }
 
 export interface ReviewFleetRun {

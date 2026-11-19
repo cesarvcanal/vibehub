@@ -20,12 +20,12 @@ import {
   MAX_ROUNDS, MERGE_GATE_AUTO_RETRIES, mergeGateSelfHealing, applyAuthorResponses, applyReviewerVerdicts, autoMergeEligible, cardsToConclude, waivedText, type ReviewOrders, blockingOpen, normalizeSubmittedFindings, pendingImprovements, pendingQuestions,
   isReviewClosed, phaseAfterReviewerRound,
   type AuthorAnswerStatus, type Finding, type FindingStatus, type Review, type ReviewEvent, type ReviewEventItem,
-  type RoundFleetAgent, type RoundFleetRun, type SubmittedFinding,
+  fleetRunForReaders, type ReviewFleetRun, type SubmittedFinding,
 } from "./model.js";
 import { findActiveAnalysisCard } from "./analysisReport.js";
 import { plantPrAnalysisWorkflow } from "./analysisWorkflow.js";
 import { readCardFleet } from "../sdk/manager.js";
-import { stopInFlight, type WorkflowAgent, type WorkflowRun } from "../sdk/workflowProbe.js";
+import { stopInFlight } from "../sdk/workflowProbe.js";
 import {
   activeReviewForPr, getReview, insertReview, listReviewsForCards, listReviewsWaitingUsageLimit, mutateReview, reviewByReviewerCard,
 } from "./store.js";
@@ -690,26 +690,9 @@ export async function startReview(input: {
 
 /* ------------------------------------------------------------------ revisor */
 
-function roundFleetAgent(agent: WorkflowAgent): RoundFleetAgent {
-  return {
-    id: agent.id, label: agent.label, phase: agent.phase, status: agent.status,
-    ...(agent.model !== undefined ? { model: agent.model } : {}),
-    ...(agent.result !== undefined ? { result: agent.result } : {}),
-    ...(agent.endedAt !== undefined ? { endedAt: agent.endedAt } : {}),
-  };
-}
-
-function roundFleetRun(run: WorkflowRun): RoundFleetRun {
-  return {
-    runId: run.runId, name: run.name, phases: run.phases, total: run.total, done: run.done, at: run.at, finished: true,
-    agents: stopInFlight(run.agents).map(roundFleetAgent),
-    ...(run.outcome !== undefined ? { outcome: run.outcome } : {}),
-  };
-}
-
-async function readRoundFleet(review: Review): Promise<RoundFleetRun[]> {
+async function readRoundFleet(review: Review): Promise<ReviewFleetRun[]> {
   try {
-    return (await readCardFleet(review.reviewerCardId)).map(roundFleetRun);
+    return (await readCardFleet(review.reviewerCardId)).map((run) => ({ ...fleetRunForReaders({ ...run, agents: stopInFlight(run.agents) }), finished: true }));
   } catch (err) {
     logger.warn({ review: review.id, detail: (err as Error).message }, "PR review could not read the reviewer's fleet for the history");
     return [];

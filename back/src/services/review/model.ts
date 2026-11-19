@@ -121,10 +121,27 @@ export function mergeGateSelfHealing(gate: MergeGate): boolean {
   return gate.state === "failed" && !gate.exhausted && !(gate.autoRetried && gate.failures === undefined);
 }
 
-export type RoundFleetAgent = Pick<WorkflowAgent, "id" | "label" | "phase" | "model" | "status" | "result" | "endedAt">;
-export type RoundFleetRun = Pick<WorkflowRun, "runId" | "name" | "phases" | "total" | "done" | "at" | "finished" | "outcome"> & {
-  agents: RoundFleetAgent[];
+export type ReviewFleetAgent = Pick<WorkflowAgent, "id" | "label" | "phase" | "model" | "status" | "result" | "endedAt">;
+export type ReviewFleetRun = Pick<WorkflowRun, "runId" | "name" | "phases" | "total" | "done" | "at" | "finished" | "outcome"> & {
+  agents: ReviewFleetAgent[];
 };
+
+function fleetAgentForReaders(agent: WorkflowAgent): ReviewFleetAgent {
+  return {
+    id: agent.id, label: agent.label, phase: agent.phase, status: agent.status,
+    ...(agent.model !== undefined ? { model: agent.model } : {}),
+    ...(agent.result !== undefined ? { result: agent.result } : {}),
+    ...(agent.endedAt !== undefined ? { endedAt: agent.endedAt } : {}),
+  };
+}
+
+export function fleetRunForReaders(run: WorkflowRun): ReviewFleetRun {
+  return {
+    runId: run.runId, name: run.name, phases: run.phases, total: run.total, done: run.done, at: run.at, finished: run.finished,
+    agents: run.agents.map(fleetAgentForReaders),
+    ...(run.outcome !== undefined ? { outcome: run.outcome } : {}),
+  };
+}
 
 export interface Review {
   id: string;
@@ -194,7 +211,7 @@ export interface Review {
   concludeWhenMerged?: boolean;
   usageLimitWait?: { side: "reviewer" | "author"; until: number };
   usageLimitResumes?: number;
-  fleet?: { round: number; runs: RoundFleetRun[] }[];
+  fleet?: { round: number; runs: ReviewFleetRun[] }[];
   lastSubmitRound?: number;
   lastRespondRound?: number;
   nudges: number;

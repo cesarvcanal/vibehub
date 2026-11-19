@@ -684,7 +684,10 @@ describe("GET da revisão: a frota de agentes do revisor", () => {
     runScript.mockResolvedValue({
       stdout: `${JSON.stringify([{
         runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Contexto", "Revisão"], total: 1, done: 0,
-        agents: [{ id: "a01f", status: "running", label: "revisão: correctness", phase: "Revisão", model: "sonnet", toolCount: 2 }],
+        agents: [{
+          id: "a01f", status: "running", label: "revisão: correctness", phase: "Revisão", model: "sonnet", toolCount: 2,
+          activity: { kind: "tool", tool: "Bash", target: "cat .env" },
+        }],
       }])}\n`,
       stderr: "",
     });
@@ -709,7 +712,7 @@ describe("GET da revisão: a frota de agentes do revisor", () => {
     vi.useRealTimers();
   });
 
-  it("traz o que cada agente da frota faz, com fase e modelo, e o painel aberto mantém a frota acompanhada", async () => {
+  it("traz o que cada agente da frota faz, com fase e modelo, sem a atividade crua, e o painel aberto mantém a frota acompanhada", async () => {
     const { read, firstProbe, cleanup } = await reviewerWithLiveFleet();
     try {
       await firstProbe();
@@ -718,6 +721,7 @@ describe("GET da revisão: a frota de agentes do revisor", () => {
         runId: "wf_abc12", phases: ["Contexto", "Revisão"],
         agents: [{ label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "running" }],
       });
+      expect((await read()).fleet[0].agents[0]).toEqual({ id: "a01f", label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "running" });
     } finally {
       cleanup();
     }
