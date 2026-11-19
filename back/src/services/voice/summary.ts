@@ -27,20 +27,16 @@ const SUMMARY_INSTRUCTIONS = [
   "Na conversa, \"Você (voz)\" é a própria assistente de voz em chamadas anteriores.",
 ].join("\n\n");
 
-/** The newest summary per card and the conversation it was made from. In memory: one process. */
 const cachedSummaries = new Map<string, { threadHash: string; summary: string }>();
 
 export interface SummarizeConversationOptions {
   cardId: string;
-  /** The card's chat log (`readHistory`): only what was said goes to the model, never tool calls. */
   events: HistoryEvent[];
   apiKey: string;
-  /** Aborted when the browser gives up on the call. */
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
 }
 
-/** The text the model wrote, from a raw Responses API body, or null. PURE. */
 function outputText(body: unknown): string | null {
   const output = (body as { output?: unknown } | null)?.output;
   if (!Array.isArray(output)) return null;
@@ -52,12 +48,6 @@ function outputText(body: unknown): string | null {
   return text === "" ? null : text;
 }
 
-/**
- * A short summary of the card's conversation for the voice to know where things stand when a call
- * opens, or null when there is nothing said yet or the model did not answer in time (the call still
- * opens with the recent thread). Made once per conversation state: a second call on an unchanged
- * card reuses it.
- */
 export async function summarizeConversation(opts: SummarizeConversationOptions): Promise<string | null> {
   const thread = formatVoiceContext(opts.events, SUMMARY_INPUT_MAX_CHARS, SUMMARY_INPUT_ITEM_MAX_CHARS);
   if (thread === "") return null;
@@ -85,7 +75,7 @@ export async function summarizeConversation(opts: SummarizeConversationOptions):
       logger.warn({ card: opts.cardId, status: resp.status }, "voice: OpenAI refused the conversation summary");
       return null;
     }
-    const text = outputText(await resp.json().catch(() => null));
+    const text = outputText(await resp.json());
     if (!text) {
       logger.warn({ card: opts.cardId }, "voice: the conversation summary came back without text");
       return null;

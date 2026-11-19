@@ -75,7 +75,6 @@ function summaryAnswer(text: string) {
   });
 }
 
-/** OpenAI as the call sees it: the summary from the Responses API, the session from GPT-Live. */
 function openAi(summary: () => Response) {
   upstream.mockImplementation(async (url: string) => (url === RESPONSES_URL ? summary() : answer()));
 }

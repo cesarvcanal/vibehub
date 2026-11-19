@@ -91,7 +91,6 @@ const CARD_INSTRUCTIONS = [
     "Se não souber, diga que não sabe.",
 ].join("\n\n");
 
-/** The instructions for a call in a card's chat: the base text, the summary of the whole conversation and the recent thread. PURE. */
 export function cardInstructions(context: string, summary: string | null): string {
   const sections = [CARD_INSTRUCTIONS];
   if (summary) sections.push(`Resumo da conversa deste card até agora:\n${summary}`);
@@ -188,11 +187,6 @@ export interface CreateLiveSessionOptions {
   signal?: AbortSignal;
   /** The card whose chat holds the call — the audit line only. */
   cardId?: string;
-  /**
-   * Instead of the plain conversation's: the call belongs to a card's chat (see {@link cardInstructions}).
-   * Built only after the mode, the key and the rate ceiling let the call through, with the same key and
-   * the browser's abort.
-   */
   instructionsFor?: (apiKey: string, signal: AbortSignal | undefined) => Promise<string>;
   fetchImpl?: typeof fetch;
 }

@@ -16,7 +16,6 @@ export const CONTEXT_MAX_CHARS = 6_000;
 /** One message longer than this is cut: a 3-page answer says enough in its first lines. */
 export const CONTEXT_ITEM_MAX_CHARS = 700;
 
-/** One history event as a line of the thread, each text cut at `maxChars`, or null when it is not conversation. PURE. */
 function conversationLine(event: HistoryEvent, maxChars: number): string | null {
   switch (event.type) {
     case "user": {
@@ -32,7 +31,6 @@ function conversationLine(event: HistoryEvent, maxChars: number): string | null 
   }
 }
 
-/** The thread as text that fits `maxChars` (each message cut at `itemMaxChars`), newest kept. Empty when nothing was said. PURE. */
 export function formatVoiceContext(
   events: HistoryEvent[],
   maxChars: number = CONTEXT_MAX_CHARS,
