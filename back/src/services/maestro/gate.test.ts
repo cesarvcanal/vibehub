@@ -180,6 +180,24 @@ describe("run script + parse", () => {
     expect(gate.parseGateRun(out).passed).toBe(true);
   });
 
+  it("os checks do gate levam o VIBEHUB_CARD_ID do card, a marca pela qual o apagar do card acha os processos dele", async () => {
+    const { gate } = await load();
+    const cardId = gateCardId();
+    const work = await mkdtemp(join(tmpdir(), "vibehub-gate-work-"));
+    onTestFinished(() => rm(work, { recursive: true, force: true }));
+    const env = { ...process.env, VIBEHUB_CARD_ID: "", PATH: await pathWithFakeDocker() };
+    const out = execFileSync("sh", ["-c", gate.buildGateRunScript("c", work, ['echo "card=$VIBEHUB_CARD_ID"'], { cardId })], {
+      env,
+      encoding: "utf8",
+    });
+    expect(out).toContain(`card=${cardId}`);
+  });
+
+  it.each(["", "../x", "a'b; rm -rf /"])("recusa o id de card %j antes de montar o script do gate", async (cardId) => {
+    const { gate } = await load();
+    expect(() => gate.buildGateRunScript("c", "/work/scratch/x", ["npm test"], { cardId })).toThrow(/card id/);
+  });
+
   it("a run that never reached the checks says so instead of coming back empty", async () => {
     const { gate } = await load();
     const r = gate.parseGateRun("");
