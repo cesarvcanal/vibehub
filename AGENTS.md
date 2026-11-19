@@ -627,7 +627,7 @@ Antes de cada etapa, ache no mapa abaixo a skill da situação e invoque-a pela 
 | Feature grande guiada de ponta a ponta | `feature-dev:feature-dev` |
 | Pôr à prova um plano com perguntas duras | `mattpocock-skills:grilling` |
 | Desenhar a interface de um módulo, decidir onde passa a fronteira | `mattpocock-skills:codebase-design` |
-| Tela nova ou redesenho, antes do código | Artifact (`quickstart`), quando o ambiente oferece a ferramenta, senão página HTML local; + `frontend-design:frontend-design` |
+| Tela nova ou redesenho, antes do código | Protótipo pela ferramenta `Artifact`, quando o ambiente a oferece, senão página HTML local; + `frontend-design:frontend-design` |
 | Revisar tela existente, acessibilidade, layout responsivo | `ui-design:design-review` · `ui-design:accessibility-audit` · `ui-design:responsive-design` |
 | Bug, teste falhando, comportamento que ninguém explica | `mattpocock-skills:diagnosing-bugs` |
 | Tarefa de várias etapas | `superpowers:writing-plans`, depois `superpowers:executing-plans` (você executa) ou `superpowers:subagent-driven-development` (um subagente por tarefa) |
