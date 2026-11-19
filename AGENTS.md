@@ -78,7 +78,7 @@
   - `// limitation: <motivo>`: **limitação técnica** que nenhum nome expressa: bug conhecido de biblioteca, navegador, shell ou ambiente de teste; dependência circular que obriga o import dentro da função;
   - `// legacy-name: <o que guarda>`: **nome legado que não pode mudar** (campo persistido ou contrato externo, §2 e §6): o que ele guarda e por que não foi renomeado;
   - **diretiva de ferramenta**, sem marcador e sempre com o motivo: `// eslint-disable-next-line <regra> -- <motivo>`, `// @ts-expect-error <motivo>`.
-- **A regra vale para as linhas que o PR acrescenta ou altera.** Comentário antigo fora do diff fica — muitos guardam a história de bugs de produção e continuam valendo. Comentário antigo que a mudança torna **falso** é corrigido ou removido no mesmo PR; corrigir a frase que mentiria num bloco existente é manutenção, não comentário novo.
+- **A regra vale para as linhas que o PR acrescenta ou altera.** Comentário antigo fora do diff fica — muitos guardam a história de bugs de produção e continuam valendo. Comentário antigo que a mudança torna **falso** sai no mesmo PR: é removido, com o porquê no commit, ou, quando é uma das exceções abaixo, reescrito com o marcador dela. A linha reescrita é linha nova para o lint do recorte, que não distingue correção de comentário novo.
 - **Em linha nova, o que não entra:** narração do que a linha faz, a versão anterior ("antes era…"), nome de pessoa ou de instalação, JSDoc que só repete o nome (tipo em JSDoc num `.mjs` é tipo, não comentário), código comentado, bloco de cabeçalho novo explicando o arquivo.
 
 | Em vez de | Escreva |
