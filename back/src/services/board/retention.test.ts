@@ -218,7 +218,7 @@ describe("sweepDoneCards — the purge of what has been done for a day", () => {
     expect(await reg.getCard(c.id)).toBeDefined();
   });
 
-  it("erases the card's files too — it is the delete button's purge, not a hide", async () => {
+  it("erases the card's files, its processes outside tmux and its /tmp — it is the delete button's purge, not a hide", async () => {
     const project = await reg.createProject({
       name: "erp-aux",
       repoFullName: "acme/erp-aux",
@@ -233,7 +233,6 @@ describe("sweepDoneCards — the purge of what has been done for a day", () => {
     const scripts = runScript.mock.calls.map((call) => String(call[0])).join("\n");
     expect(scripts).toContain(`tmux kill-session -t '${c.tmuxSession}'`);
     expect(scripts).toContain(c.worktreeSlug);
-    // The same purge as the button: the card's processes outside tmux and its /tmp go too.
     expect(scripts).toContain(`'VIBEHUB_CARD_ID=${c.id}' /proc/[0-9]*/environ`);
     expect(scripts).toContain(`rm -rf '/tmp/vibehub/${c.id}'`);
   });
