@@ -328,7 +328,7 @@ Pedir autorização e passar por brainstorming continua obrigatório para decis�
 
 **Princípio:** o agente tem autonomia para preservar, corrigir e garantir a integridade do que foi definido e construído, não para redefinir o que o projeto deve ser.
 
-**Operações de risco:** exclusão de dados (worktree, volume, dado de `VIBEHUB_DATA_DIR`), mudança incompatível de contrato persistido, alteração de acesso, reescrita de histórico já enviado (amend, rebase ou force-push de commit publicado), deploy e merge exigem as autorizações existentes. **Merge em `main` é deploy.** Antes de agir, exponha os riscos ao usuário e siga só com o aval dele. O emoji marca a gravidade: 🚨 para risco grande ou irreversível, ⚠️ para risco médio ou pequeno.
+**Operações de risco:** exclusão de dados (worktree, volume, dado de `VIBEHUB_DATA_DIR`), mudança incompatível de contrato persistido, alteração de acesso, reescrita de histórico já enviado (amend, rebase ou force-push de commit publicado), deploy e merge exigem as autorizações existentes. **Merge na branch que publica é deploy** (no vibehub, a `main`). Antes de agir, exponha os riscos ao usuário e siga só com o aval dele. O emoji marca a gravidade: 🚨 para risco grande ou irreversível, ⚠️ para risco médio ou pequeno.
 
 ### Comandos do repositório
 
@@ -680,4 +680,4 @@ O que o autor afirma: git log origin/main..HEAD
 ### Entrega
 
 - Dentro de um card do vibehub, a entrega é o `vibehub_deliver`: push, PR, gate (`.vibehub/gate.json`) e merge quando autorizado. O `git push` direto do runner dá 403, e é esperado. Fora do runner, "Como publicar" (§14) com o `gh`.
-- **`authorized: true` só com o aval explícito do usuário na conversa** (merge em `main` é deploy do vibehub) e com os Pontos de atenção do PR relidos: pendência que bloqueia sem o aval registrado (§14) segue sem `authorized`.
+- **`authorized: true` só com o aval explícito do usuário na conversa** (merge na branch que publica é deploy, §12) e com os Pontos de atenção do PR relidos: pendência que bloqueia sem o aval registrado (§14) segue sem `authorized`.
