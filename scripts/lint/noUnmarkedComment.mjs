@@ -1,6 +1,7 @@
 const EXCEPTION_MARKERS = ["external:", "limitation:", "legacy-name:"];
 const DIRECTIVE_NEEDING_REASON = /^eslint-disable(-next-line|-line)?\b/;
 const DIRECTIVE_WITHOUT_REASON = [/^eslint-enable\b/, /^@ts-expect-error\b/, /^\/ <reference /, /^@vite-ignore$/];
+const PLAIN_JS_FILE = /\.(mjs|cjs|js|jsx)$/;
 const JSDOC_TYPE_TAG = /^@(param|returns?|type|typedef|property|template|callback|satisfies|import)\b/;
 
 function isJsDocTypeBlock(comment) {
@@ -40,7 +41,7 @@ export const noUnmarkedComment = {
   create(context) {
     return {
       Program() {
-        const isPlainJs = context.filename.endsWith(".mjs");
+        const isPlainJs = PLAIN_JS_FILE.test(context.filename);
         const reports = context.sourceCode
           .getAllComments()
           .filter((comment) => comment.type !== "Shebang")
