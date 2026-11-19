@@ -274,7 +274,7 @@ describe("buildMergeScript", () => {
   });
 
   /** Runs the merge body (what `docker exec … bash -s` receives) with a fake gh whose PR head is `prHead`. */
-  async function runMerge(prHead: string, pin: string) {
+  async function runMerge(prHead: string, pin: string, { prTitle = "fix(deliver): título qualquer", viewError = "" } = {}) {
     const { deliver } = await load();
     const root = await mkdtemp(join(tmpdir(), "vibehub-merge-"));
     try {
@@ -283,13 +283,15 @@ describe("buildMergeScript", () => {
         "#!/bin/bash",
         'echo "gh $*" >> "$ROOT/log"',
         'case "$1 $2" in',
-        '  "pr view") echo "$PR_HEAD" ;;',
-        '  "pr merge") echo "Merged" ;;',
+        `  "pr view") [ "$*" = "pr view ${PR} --json headRefOid,number,title --jq .headRefOid, .number, .title" ] || exit 1`,
+        `    [ -z "$FAKE_VIEW_ERROR" ] || { echo "$FAKE_VIEW_ERROR" >&2; exit 1; }`,
+        `    printf '%s\\n' "$FAKE_HEAD" 7 "$FAKE_TITLE" ;;`,
+        `  "pr merge") while [ $# -gt 0 ]; do [ "$1" = --subject ] && printf 'subject=[%s]\\n' "$2" >> "$ROOT/log"; shift; done; echo "Merged" ;;`,
         "esac",
       ].join("\n"), { mode: 0o755 });
       const lines = deliver.buildMergeScript("vibehub-runner", TOKEN, root, PR, pin).split("\n");
       const inner = lines.slice(lines.findIndex((l) => l.startsWith("docker exec")) + 1, -1).join("\n");
-      const env = { PATH: `${join(root, "bin")}:${process.env.PATH}`, ROOT: root, PR_HEAD: prHead };
+      const env = { PATH: `${join(root, "bin")}:${process.env.PATH}`, ROOT: root, FAKE_HEAD: prHead, FAKE_TITLE: prTitle, FAKE_VIEW_ERROR: viewError };
       const stdout = execFileSync("bash", ["-s"], { input: inner, env, encoding: "utf8" });
       const log = execFileSync("bash", ["-c", `cat '${join(root, "log")}'`], { encoding: "utf8" });
       return { stdout, log, parsed: deliver.parseMerge(stdout) };
@@ -304,6 +306,24 @@ describe("buildMergeScript", () => {
     expect(r.log).toContain(`gh pr merge ${PR} --merge --match-head-commit ${HEAD_SHA}`);
   });
 
+  it.each([
+    ["feat(review): análise de PR multiagente", "🔀 merge: análise de PR multiagente (#7)"],
+    ["fix(pdv/pix): QR do balcão dura o prazo do .env", "🔀 merge: QR do balcão dura o prazo do .env (#7)"],
+    ["feat(api)!: rota nova", "🔀 merge: rota nova (#7)"],
+    ["Merge prod na branch", "🔀 merge: Merge prod na branch (#7)"],
+  ])("executado de verdade: o merge commit sai '🔀 merge: <título sem tipo(área)> (#N)' — %s", async (prTitle, subject) => {
+    const { parsed, log } = await runMerge(HEAD_SHA, HEAD_SHA, { prTitle });
+    expect(parsed).toMatchObject({ merged: true });
+    expect(log).toContain(`subject=[${subject}]`);
+  });
+
+  it("executado de verdade: o título do PR vira o subject como texto, nunca como comando", async () => {
+    const prTitle = 'fix(x): $(echo PWNED$((6*7)) >> "$ROOT/log") `echo TICK$((1+1)) >> "$ROOT/log"` "aspas"';
+    const { log } = await runMerge(HEAD_SHA, HEAD_SHA, { prTitle });
+    expect(log).toContain(`subject=[🔀 merge: ${prTitle.slice("fix(x): ".length)} (#7)]`);
+    expect(log).not.toMatch(/PWNED42|TICK2/);
+  });
+
   it("executado de verdade: o PR que andou depois do gate NÃO é mergeado e diz para onde foi (head_moved)", async () => {
     const moved = "e".repeat(40);
     const r = await runMerge(moved, HEAD_SHA);
@@ -315,6 +335,13 @@ describe("buildMergeScript", () => {
     const r = await runMerge("", HEAD_SHA);
     expect(r.parsed).toMatchObject({ merged: false });
     expect(r.log).not.toContain("pr merge");
+  });
+
+  it("executado de verdade: gh pr view com erro não mergeia e devolve o erro do gh", async () => {
+    const { parsed, log } = await runMerge(HEAD_SHA, HEAD_SHA, { viewError: "HTTP 502: Bad Gateway" });
+    expect(parsed).toMatchObject({ merged: false, output: expect.stringContaining("HTTP 502") });
+    expect(parsed).not.toHaveProperty("movedTo");
+    expect(log).not.toContain("pr merge");
   });
 });
 
