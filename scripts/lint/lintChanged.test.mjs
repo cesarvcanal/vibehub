@@ -78,6 +78,27 @@ describe("lintChangedLines", () => {
     expect(await lintChangedLines({ repoDir, baseRef: "main" })).toEqual([]);
   });
 
+  it.each(["diff.noprefix", "diff.mnemonicPrefix"])("%s no git de quem roda não esconde a linha nova", async (gitConfigKey) => {
+    const repoDir = createRepoWithBase({ "back/src/legacy.ts": LEGACY });
+    writeRepoFile(repoDir, "back/src/legacy.ts", `${LEGACY}var added = 2;\nexport { added };\n`);
+    git(repoDir, "config", gitConfigKey, "true");
+
+    const results = await lintChangedLines({ repoDir, baseRef: "main" });
+
+    expect(reportedLines(repoDir, results)).toEqual(["back/src/legacy.ts:4 no-var"]);
+  });
+
+  it("erro de sintaxe reprova mesmo fora das linhas novas", async () => {
+    const repoDir = createRepoWithBase({ "back/src/broken.ts": "export const broken = (;\n" });
+    writeRepoFile(repoDir, "back/src/broken.ts", "export const broken = (;\nexport const added = 1;\n");
+
+    const results = await lintChangedLines({ repoDir, baseRef: "main" });
+
+    expect(results.flatMap((result) => result.messages.map((message) => ({ line: message.line, fatal: message.fatal })))).toEqual([
+      { line: 1, fatal: true },
+    ]);
+  });
+
   it("base que não existe falha à vista em vez de passar verde", async () => {
     const repoDir = createRepoWithBase({ "back/src/legacy.ts": LEGACY });
 
