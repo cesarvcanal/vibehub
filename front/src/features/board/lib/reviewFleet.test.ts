@@ -29,7 +29,8 @@ describe("readAgentResult", () => {
     ["JSON de outro formato vira chave: valor", '{"verdict":"apt","summary":"ok"}', { kind: "text", text: "verdict: apt\nsummary: ok" }],
     ["JSON cortado com títulos", '{"findings":[{"title":"Aspas \\"x\\"","problem":"p"},{"title":"Seg', { kind: "findings", titles: ['Aspas "x"'] }],
     ["JSON cortado com veredito e evidência pela metade", '{"confirmed":false,"evidence":"o teste nunca', { kind: "verdict", confirmed: false, evidence: "o teste nunca" }],
-    ["JSON cortado sem nada legível", '{"summary":"meio', { kind: "text", text: '{"summary":"meio' }],
+    ["resumo do contexto cortado vira o texto dele, com as quebras de linha", '{"summary":"PR #337:\\n(1) `pillPercent` muda\\n(2) sai o aviso', { kind: "text", text: "PR #337:\n(1) `pillPercent` muda\n(2) sai o aviso" }],
+    ["JSON cortado sem nada legível", '{"verdict":"meio', { kind: "text", text: '{"verdict":"meio' }],
     ["texto puro", "  só texto  ", { kind: "text", text: "só texto" }],
     ["só o resumo do contexto vira o texto dele", '{"summary":"muda o login"}', { kind: "text", text: "muda o login" }],
   ])("%s", (_name, raw, expected) => {
