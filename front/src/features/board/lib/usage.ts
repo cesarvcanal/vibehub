@@ -110,15 +110,7 @@ export function usageRows(usage: AccountUsage): { key: string; label: string; wi
   return rows.filter((r): r is { key: string; label: string; window: UsageWindow } => Boolean(r.window));
 }
 
-/**
- * The number the collapsed pill shows: the 5-hour window, which is the one that actually stops a
- * card mid-turn. A plan with no 5-hour window shows the weekly one, labelled as the week so it is
- * never read as the session. Null when there is nothing to show — the pill then renders the
- * account name alone rather than a placeholder. PURE.
- */
 export function pillPercent(usage: AccountUsage | undefined): string | null {
-  if (!usage?.available) return null;
-  if (usage.fiveHour) return formatPercent(usage.fiveHour.utilization);
-  if (usage.sevenDay) return `${formatPercent(usage.sevenDay.utilization)} ${t("plan.weekShort")}`;
-  return null;
+  if (!usage?.available || !usage.fiveHour) return null;
+  return `${formatPercent(usage.fiveHour.utilization)} ${t("plan.sessionShort")}`;
 }

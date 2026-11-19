@@ -1194,6 +1194,7 @@ export const ptBR: Record<string, string> = {
   "plan.weekly": "Limite semanal",
   "plan.noSessionWindow": "Este plano não informa limite de sessão (5h), só o semanal.",
   "plan.weekShort": "semana",
+  "plan.sessionShort": "sessão",
   "plan.noReading": "sem leitura",
   "plan.noReadingHint": "O uso desta conta não pôde ser lido — abra para ver por quê",
   "plan.noReadingMember": "O uso desta conta não está disponível. Peça ao dono do painel para fazer o login interativo dela no runner.",

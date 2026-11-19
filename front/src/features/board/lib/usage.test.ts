@@ -90,15 +90,14 @@ describe("what the UI shows", () => {
     expect(usageRows(usage({ sevenDayOpus: undefined })).map((r) => r.key)).toEqual(["fiveHour", "sevenDay"]);
   });
 
-  it("puts the 5-hour window on the pill — the one that stops a card mid-turn", () => {
-    expect(pillPercent(usage())).toBe("31%");
+  it("o badge da conta mostra a sessão de 5h, marcada como sessão, a janela que para um card no meio do turno", () => {
+    expect(pillPercent(usage())).toBe("31% session");
     expect(pillPercent(usage({ available: false, fiveHour: undefined }))).toBeNull();
     expect(pillPercent(undefined)).toBeNull();
   });
 
-  it("plano sem janela de 5h (a API devolve five_hour: null) põe o semanal no badge, marcado como semana", () => {
-    expect(pillPercent(usage({ fiveHour: undefined, sevenDay: { utilization: 62, resetsAt: null } }))).toBe("62% week");
-    expect(pillPercent(usage({ fiveHour: undefined, sevenDay: undefined, sevenDayOpus: undefined }))).toBeNull();
+  it("plano sem janela de 5h (a API devolve five_hour: null) deixa o badge só com o nome: o semanal já está no medidor do topo", () => {
+    expect(pillPercent(usage({ fiveHour: undefined, sevenDay: { utilization: 62, resetsAt: null } }))).toBeNull();
   });
 });
 

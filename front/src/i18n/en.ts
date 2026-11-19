@@ -1187,6 +1187,7 @@ export const en: Record<string, string> = {
   "plan.weekly": "Weekly limit",
   "plan.noSessionWindow": "This plan reports no session (5h) limit, only the weekly one.",
   "plan.weekShort": "week",
+  "plan.sessionShort": "session",
   "plan.noReading": "no reading",
   "plan.noReadingHint": "This account's usage could not be read — open to see why",
   "plan.noReadingMember": "This account's usage is not available. Ask the panel owner to log it in interactively on the runner.",
