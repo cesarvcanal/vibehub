@@ -27,6 +27,7 @@ A skill traz o método pronto e testado (os passos, a ordem, os critérios de pr
    - Bug: `superpowers:systematic-debugging`.
    - Feature ou mudança de comportamento: `superpowers:brainstorming`.
    - Tela nova ou redesenho: protótipo aprovado antes do React, como Artifact quando o ambiente oferece a ferramenta `Artifact`, senão como página HTML local.
+   - Qualquer mudança de layout, mesmo um bloco novo numa tela existente: `frontend-design:frontend-design` antes de escrever e de novo com a tela renderizada, antes de entregar (§5, item 15, do `AGENTS.md`).
 3. **Planejar.** Tarefa de várias etapas: `superpowers:writing-plans`.
 4. **Implementar em TDD.** `superpowers:test-driven-development`, com o vermelho visto antes do verde.
 5. **Fechamento** (seção 6): simplificação e code review independentes.
@@ -43,6 +44,7 @@ A skill traz o método pronto e testado (os passos, a ordem, os critérios de pr
 | Pôr à prova um plano ou ideia com perguntas duras | `mattpocock-skills:grilling` |
 | Desenhar a interface de um módulo, decidir onde passa a fronteira | `mattpocock-skills:codebase-design` |
 | Tela nova ou redesenho, antes do código | Artifact (`quickstart`), se o ambiente oferece a ferramenta, + `frontend-design:frontend-design` |
+| Qualquer mudança de layout (bloco novo, tamanho, espaçamento, rolagem), antes de escrever e com a tela renderizada antes de entregar | `frontend-design:frontend-design` |
 | Revisar tela existente, acessibilidade, layout responsivo | `ui-design:design-review` · `ui-design:accessibility-audit` · `ui-design:responsive-design` |
 | **Bug** | |
 | Bug, teste falhando, comportamento que ninguém explica | `superpowers:systematic-debugging` |
