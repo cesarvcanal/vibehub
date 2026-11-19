@@ -79,6 +79,32 @@ async function reviewerCardOf(phase: ReviewPhase, actor: string) {
   return { ...o, reviewer };
 }
 
+describe("deliverCard — card de análise de PR", () => {
+  async function analysisCard() {
+    const o = await load();
+    const project = await o.registry.createProject({ name: "widgets" });
+    const analysis = await o.registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" });
+    return { ...o, analysis };
+  }
+
+  it("ordem de merge vinda de outro card não mergeia: o deliver vai sem authorized e a resposta diz por quê", async () => {
+    const { deliverCard, analysis } = await analysisCard();
+    deliverAnswer = { prUrl: PR, merged: false, reason: "unauthorized", branch: "dev", cardBranch: "feat-7", output: "falta authorized" };
+    const out = await deliverCard(analysis.id, { branch: "dev", authorized: true, by: "card", from: "outro-card" });
+    expect(deliver).toHaveBeenCalledWith(analysis.id, expect.objectContaining({ authorized: false }));
+    expect(out).toMatchObject({ merged: false, reason: "unauthorized" });
+    expect(out.output).toContain("from");
+  });
+
+  it("ordem dada no chat do próprio card de análise (from = o card) vai ao deliver com authorized", async () => {
+    const { deliverCard, analysis } = await analysisCard();
+    deliverAnswer = { prUrl: PR, merged: true, reason: "merged", branch: "dev", cardBranch: "feat-7" };
+    const out = await deliverCard(analysis.id, { branch: "dev", authorized: true, by: "card", from: analysis.id });
+    expect(deliver).toHaveBeenCalledWith(analysis.id, expect.objectContaining({ authorized: true }));
+    expect(out).toMatchObject({ merged: true });
+  });
+});
+
 describe("deliverCard — o vibehub_deliver com revisão de PR ativa", () => {
   it("caso real: ordem do responsável pelo merge com a revisão pronta — push, e o merge pelo caminho do botão", async () => {
     const { deliverCard, card } = await cardUnderReview("ready", "u-m");
