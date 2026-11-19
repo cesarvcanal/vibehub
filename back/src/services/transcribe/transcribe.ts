@@ -4,31 +4,13 @@ import { resolveBrainText } from "../brain/brain.js";
 import { getSettings } from "../settings/settings.js";
 import { logger } from "../../utils/logger.js";
 
-/**
- * VOICE INPUT — the microphone button on the composer.
- *
- * Whisper (OpenAI) turns the recording into text; then, optionally, a small Claude model proofreads
- * it with the shared brain as a glossary — names, acronyms and project jargon are exactly what
- * speech-to-text gets wrong, and the brain is where those words already live. Both keys are the
- * operator's, kept in the vault; neither is required to run vibehub.
- *
- * There is no transcription fallback: Claude does not take audio, so without an OpenAI key the
- * microphone is simply unavailable (the UI says so). If only the proofreading fails, the raw
- * Whisper text is returned rather than failing the whole request.
- */
-
 export const OPENAI_KEY = "TRANSCRIBE_OPENAI_API_KEY";
 const ANTHROPIC_KEY = "TRANSCRIBE_ANTHROPIC_API_KEY";
 const CLEANUP_MODEL = "claude-haiku-4-5-20251001";
+const TRANSCRIPTION_MODEL = "gpt-transcribe";
 
-/**
- * Ceiling on each external call. Without one, an API that accepts the connection and never answers
- * holds the request (and the person staring at the microphone button) forever. Generous because a
- * 20 MB upload to Whisper is not instant; the GitHub client's 8 s would cut real recordings.
- */
 const EXTERNAL_TIMEOUT_MS = 60_000;
 
-/** Whisper accepts up to 25 MB; 20 MB leaves room for a recording of several minutes. */
 export const AUDIO_MAX_BYTES = 20 * 1024 * 1024;
 
 const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
@@ -38,7 +20,6 @@ export interface TranscribeStatus {
   available: boolean;
   /** A Claude key is stored — transcriptions get proofread against the brain. */
   proofread: boolean;
-  /** ISO 639-1 language hint sent to Whisper, or null for auto-detect. */
   language: string | null;
 }
 
@@ -74,11 +55,11 @@ function extFor(mimeType: string): string {
   return "webm";
 }
 
-async function whisper(
+async function requestTranscription(
   apiKey: string,
   audio: Buffer,
   mimeType: string,
-  language: string | null,
+  hints: { language: string | null; keywords: string[] },
   fileName = `audio.${extFor(mimeType)}`,
   timeoutMs = EXTERNAL_TIMEOUT_MS,
 ): Promise<string> {
@@ -87,8 +68,10 @@ async function whisper(
   // at a time to build a copy nobody needs.
   const bytes = new Uint8Array(audio.buffer, audio.byteOffset, audio.byteLength);
   form.append("file", new Blob([bytes], { type: mimeType }), fileName);
-  form.append("model", "whisper-1");
-  if (language) form.append("language", language);
+  form.append("model", TRANSCRIPTION_MODEL);
+  // external: gpt-transcribe takes `languages[]` in place of `language`, never both (developers.openai.com/api/docs/guides/speech-to-text)
+  if (hints.language) form.append("languages[]", hints.language);
+  for (const keyword of hints.keywords) form.append("keywords[]", keyword);
   const resp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}` },
@@ -132,23 +115,12 @@ export function cleanupSystemPrompt(brain: string, language: string | null): str
   ].join("\n\n");
 }
 
-/**
- * Is the proofreader's reply actually a corrected transcription, or did the small model DISOBEY and
- * answer/refuse/explain instead (the reply that read "I'm a proofreader… your message is in
- * Bulgarian…" and landed in the composer)? A clean-up only ever nudges the text, so a reply that
- * balloons well past the input is not a correction — reject it and keep the raw Whisper text. Empty
- * is a reject too. PURE.
- */
 export function proofreadIsSafe(raw: string, revised: string): boolean {
   const r = revised.trim();
   if (!r) return false;
   return r.length <= raw.trim().length * 1.6 + 40;
 }
 
-/**
- * The proofread text, or null when there is none to give — the call failed, or the reply was not a
- * correction — and the caller keeps the raw Whisper text without claiming it was proofread.
- */
 async function proofread(apiKey: string, raw: string, language: string | null): Promise<string | null> {
   if (!raw) return null;
   const brain = await resolveBrainText();
@@ -169,9 +141,6 @@ async function proofread(apiKey: string, raw: string, language: string | null): 
   }
   const data = (await resp.json()) as { content?: { type: string; text?: string }[] };
   const revised = revisedText(data);
-  // The proofreader is a small model; when the audio is odd it sometimes answers or refuses instead
-  // of correcting. Any reply that is not plausibly a nudge of the same text is thrown away for the
-  // raw Whisper transcription — what the person actually said always beats a chatbot's meta-reply.
   const cleaned = revised ? stripCleanupArtifacts(revised) : "";
   return cleaned && proofreadIsSafe(raw, cleaned) ? cleaned : null;
 }
@@ -210,12 +179,11 @@ export async function transcribeCardAudio(
   const settings = await getSettings();
   const language = settings.transcribeLanguage ?? null;
 
-  const raw = await whisper(openaiKey, Buffer.from(b64, "base64"), mimeType || "audio/webm", language);
+  const hints = { language, keywords: settings.transcribeKeywords };
+  const raw = await requestTranscription(openaiKey, Buffer.from(b64, "base64"), mimeType || "audio/webm", hints);
 
   let text = raw;
   let didProofread = false;
-  // Raw Whisper by default: the person's exact words. Proofreading is opt-in (settings) because the
-  // cleanup model kept ANSWERING conversational dictation instead of correcting it.
   const anthropicKey = settings.transcribeProofread ? await secretGet(ANTHROPIC_KEY) : null;
   if (anthropicKey) {
     try {
@@ -235,21 +203,16 @@ export async function transcribeCardAudio(
   return { text, proofread: didProofread };
 }
 
-/** Whisper's cap for a file: 25 MB. */
-const WHISPER_MAX_BYTES = 25 * 1024 * 1024;
+const TRANSCRIPTION_FILE_MAX_BYTES = 25 * 1024 * 1024;
 
 /** A whole audio file (minutes, not seconds of dictation) takes longer than a microphone recording. */
 const AUDIO_FILE_TIMEOUT_MS = 300_000;
 
-/**
- * Transcribes an audio FILE the agent found on the runner (a conversation's attachment, a WhatsApp .ogg).
- * No review by the small model: that exists for dictation typed into the prompt, and here the agent reads
- * the raw speech. Whisper detects the format by the file name, hence `fileName`.
- */
 export async function transcribeAudioFile(audio: Buffer, fileName: string): Promise<string> {
-  if (audio.length > WHISPER_MAX_BYTES) throw new Error("o áudio passa de 25 MB, o limite do Whisper");
+  if (audio.length > TRANSCRIPTION_FILE_MAX_BYTES) throw new Error("o áudio passa de 25 MB, o limite da transcrição da OpenAI");
   const openaiKey = await secretGet(OPENAI_KEY);
   if (!openaiKey) throw new Error("transcrição não configurada: falta a chave da OpenAI em Configurações");
   const settings = await getSettings();
-  return await whisper(openaiKey, audio, "application/octet-stream", settings.transcribeLanguage ?? null, fileName, AUDIO_FILE_TIMEOUT_MS);
+  const hints = { language: settings.transcribeLanguage ?? null, keywords: settings.transcribeKeywords };
+  return await requestTranscription(openaiKey, audio, "application/octet-stream", hints, fileName, AUDIO_FILE_TIMEOUT_MS);
 }
