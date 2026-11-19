@@ -1,9 +1,9 @@
 # SDK driver — o chat nativo
 
-Implements step 1 of `docs/sdk-migration-plan.md` §4: a **per-card SDK driver** that can run a card's
-Claude session through the Agent SDK (`query()`) instead of the tmux/send-keys TUI. It is **opt-in,
-OFF by default, and purely ADDITIVE** — with the flag off, the TUI/chat/provisioning path is
-byte-for-byte unchanged. Nothing here removes or reroutes the existing terminal.
+A **per-card SDK driver** that runs a card's Claude session through the Agent SDK (`query()`) instead
+of the tmux/send-keys TUI. It is **on by default** (see The flag below) and **ADDITIVE**: with the
+flag off, the TUI/chat/provisioning path is the classic one. Nothing here removes or reroutes the
+existing terminal.
 
 Built on the proven spike (`spikes/sdk-poc/`, branch `card/spike-sdk-poc`). Reuses its findings:
 `bypassPermissions` auto-allows, a `PreToolUse` hook is the selective gate under bypass, resume works
