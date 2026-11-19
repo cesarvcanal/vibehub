@@ -17,7 +17,6 @@ export const DELEGATION_STARTED =
   "Pedido entregue com urgência ao agente do card (Claude Code): ele para o que está fazendo para atender. Ele ainda não foi feito: " +
   "não diga que fez nem invente o resultado, e não narre outra coisa até o resultado desta tarefa chegar.";
 export const DELEGATION_SLOW_MS = 45_000;
-/** Progress, once, when the agent is past {@link DELEGATION_SLOW_MS} on a request. */
 export const DELEGATION_SLOW =
   "O agente do card ainda não terminou este pedido. Avise a pessoa que continua esperando por ele e que ela pode ver no chat o que o agente " +
   "está fazendo; não diga que terminou.";
