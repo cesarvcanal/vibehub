@@ -61,6 +61,33 @@ describe("settings", () => {
     expect((await settingsModule.getSettings()).selfProjectId).toBeNull();
   });
 
+  it("guarda os termos da transcrição aparados, sem vazios, e começa sem nenhum", async () => {
+    const settingsModule = await fresh();
+    expect((await settingsModule.getSettings()).transcribeKeywords).toEqual([]);
+    const saved = await settingsModule.updateSettings({ transcribeKeywords: ["  vibehub ", "", "Qive", "   "] });
+    expect(saved.transcribeKeywords).toEqual(["vibehub", "Qive"]);
+    expect((await settingsModule.updateSettings({ transcribeKeywords: [] })).transcribeKeywords).toEqual([]);
+  });
+
+  it.each([
+    ["não é lista", "vibehub" as unknown as string[]],
+    ["termo que não é texto", [5] as unknown as string[]],
+    ["termo com quebra de linha, que a API recusa", ["bank\napi"]],
+    ["termo com sinal de menor ou maior, que a API recusa", ["<Qive>"]],
+  ])("recusa termos da transcrição: %s", async (_case, keywords) => {
+    const settingsModule = await fresh();
+    await expect(settingsModule.updateSettings({ transcribeKeywords: keywords })).rejects.toThrow(/transcribeKeywords/);
+    expect((await settingsModule.getSettings()).transcribeKeywords).toEqual([]);
+  });
+
+  it("recusa termo longo demais e lista com termos demais", async () => {
+    const settingsModule = await fresh();
+    const longKeyword = "a".repeat(settingsModule.TRANSCRIBE_KEYWORD_MAX_CHARS + 1);
+    await expect(settingsModule.updateSettings({ transcribeKeywords: [longKeyword] })).rejects.toThrow(/transcribeKeywords/);
+    const tooMany = Array.from({ length: settingsModule.TRANSCRIBE_KEYWORDS_MAX + 1 }, (_, index) => `termo${index}`);
+    await expect(settingsModule.updateSettings({ transcribeKeywords: tooMany })).rejects.toThrow(/transcribeKeywords/);
+  });
+
   it("validates the git identity", async () => {
     const s = await fresh();
     await expect(s.updateSettings({ git: { name: "  " } })).rejects.toThrow(/cannot be empty/);
