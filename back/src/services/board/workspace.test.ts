@@ -37,6 +37,7 @@ const CONTAINER = "vibehub-runner";
  * which is what keeps a session from opening on Claude's setup wizard or trust dialog.
  */
 const guard = (dir = "/root/.claude") =>
+  `mkdir -p "$TMPDIR" 2>/dev/null; ` +
   `export IS_SANDBOX=1; ` +
   `export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=60; ` +
   oauthTokenGuard(dir) +
@@ -51,6 +52,9 @@ const CLAUDE_C = `${guard()}claude -c || claude; exec bash`;
 const gitEnvFor = (cardId: string) => [
   "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=include.path", `GIT_CONFIG_VALUE_0=/root/.vibehub/git/${cardId}.gitconfig`,
 ];
+/** The card's own temp directory: every tool that honours TMPDIR writes where the purge erases. */
+const tmpEnvFor = (cardId: string) =>
+  ["TMPDIR", "TMP", "TEMP", "CLAUDE_CODE_TMPDIR"].map((name) => `${name}=/tmp/vibehub/${cardId}`);
 /** The session command as it appears INSIDE a script: one shell-quoted argument (it contains quotes of its own). */
 const sq = shQuote;
 
@@ -526,6 +530,7 @@ describe("terminalRemoteArgs / cardAttachArgs (the websocket's COMPLETE attach-o
       "-e", `PW_CDP_ENDPOINT=${cardCdpEndpoint("id-1")}`,
       "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8",
       ...gitEnvFor("id-1").flatMap((v) => ["-e", v]),
+      ...tmpEnvFor("id-1").flatMap((v) => ["-e", v]),
       // test runners share the runner's cores with every card: worker cap
       "-e", "VITEST_MAX_THREADS=2", "-e", "VITEST_MIN_THREADS=1", "-e", "VITEST_MAX_FORKS=2", "-e", "VITEST_MIN_FORKS=1",
       CLAUDE,
@@ -544,7 +549,7 @@ describe("terminalRemoteArgs / cardAttachArgs (the websocket's COMPLETE attach-o
     const args = ws.terminalRemoteArgs("c", "card-a1b2c3d4", "/work/x-worktrees/y", { ...base, shell: true });
     expect(args[args.indexOf("-s") + 1]).toBe("card-a1b2c3d4-sh");
     expect(args[args.indexOf("-c") + 1]).toBe("/work/x-worktrees/y");
-    expect(args.at(-1)).toBe("exec bash");
+    expect(args.at(-1)).toBe(`mkdir -p "$TMPDIR" 2>/dev/null; exec bash`);
     expect(args.join(" ")).not.toContain("claude");
     // still attach-or-create (-A) — reopening the shell returns to the same session
     expect(args).toContain("-A");
@@ -571,7 +576,7 @@ describe("terminalRemoteArgs / cardAttachArgs (the websocket's COMPLETE attach-o
 
     const sh = ws.cardAttachArgs(CONTAINER, p2, c2, { shell: true });
     expect(sh).toContain(`${card.tmuxSession}-sh`);
-    expect(sh.at(-1)).toBe("exec bash");
+    expect(sh.at(-1)).toBe(`mkdir -p "$TMPDIR" 2>/dev/null; exec bash`);
   });
 
   it("the attach carries the card's git include — the PATH, never the token — and never exports GH_TOKEN", async () => {
@@ -710,7 +715,7 @@ describe("pause / resume (the session dies; reopening returns to the SAME conver
     const base = { cardId: "id-1", statusUrl: STATUS_URL };
     expect(ws.terminalRemoteArgs("c", "card-1", "/w", base).at(-1)).toBe(CLAUDE);
     expect(ws.terminalRemoteArgs("c", "card-1", "/w", { ...base, resume: true }).at(-1)).toBe(CLAUDE_C);
-    expect(ws.terminalRemoteArgs("c", "card-1", "/w", { ...base, resume: true, shell: true }).at(-1)).toBe("exec bash");
+    expect(ws.terminalRemoteArgs("c", "card-1", "/w", { ...base, resume: true, shell: true }).at(-1)).toBe(`mkdir -p "$TMPDIR" 2>/dev/null; exec bash`);
 
     const { project, card } = await seed();
     expect(ws.cardAttachArgs(CONTAINER, project, card).at(-1)).toBe(CLAUDE);
@@ -728,7 +733,7 @@ describe("pause / resume (the session dies; reopening returns to the SAME conver
     await ws.openCard(c.id);
     expect(scriptAt(0)).toContain(sq(`${guard()}claude --resume ${SID} || claude -c || claude; exec bash`));
     expect(ws.cardAttachArgs(CONTAINER, project, c).at(-1)).toBe(`${guard()}claude --resume ${SID} || claude -c || claude; exec bash`);
-    expect(ws.cardAttachArgs(CONTAINER, project, c, { shell: true }).at(-1)).toBe("exec bash");
+    expect(ws.cardAttachArgs(CONTAINER, project, c, { shell: true }).at(-1)).toBe(`mkdir -p "$TMPDIR" 2>/dev/null; exec bash`);
 
     const cleared = await reg.updateCard(card.id, { resumeSessionId: null });
     expect(ws.cardAttachArgs(CONTAINER, project, cleared).at(-1)).toBe(CLAUDE_C);
@@ -2406,6 +2411,11 @@ describe("card push as the project's GitHub connection (GH_TOKEN)", () => {
   it("the session the open creates includes the card's git config — every git of the card, any repository", () => {
     const tmux = ws.buildOpenScript(openOpts).split("\n").find((l) => l.includes("tmux new-session"))!;
     for (const v of gitEnvFor("id-1")) expect(tmux).toContain(`-e ${sq(v)}`);
+  });
+
+  it("a sessão do card nasce com o /tmp DELE: TMPDIR/TMP/TEMP/CLAUDE_CODE_TMPDIR em /tmp/vibehub/<cardId>", () => {
+    const tmux = ws.buildOpenScript(openOpts).split("\n").find((l) => l.includes("tmux new-session"))!;
+    for (const v of tmpEnvFor("id-1")) expect(tmux).toContain(`-e ${sq(v)}`);
   });
 
   it("openCard resolves the token even WITHOUT an explicit connection (first-account fallback) — gh in the card never acts as the ambient login", async () => {

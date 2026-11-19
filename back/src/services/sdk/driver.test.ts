@@ -142,6 +142,14 @@ describe("buildSdkDriverCommandLine", () => {
     expect(buildSdkDriverCommandLine(base)).not.toContain("GIT_CONFIG_COUNT");
   });
 
+  it("o Claude do chat nativo grava no /tmp do card: TMPDIR/TMP/TEMP/CLAUDE_CODE_TMPDIR, criado antes", () => {
+    const line = buildSdkDriverCommandLine({ ...base, cardId: "card-0001" });
+    for (const name of ["TMPDIR", "TMP", "TEMP", "CLAUDE_CODE_TMPDIR"]) expect(line).toContain(`export ${name}=`);
+    expect(line).toContain("/tmp/vibehub/card-0001");
+    expect(line.indexOf("mkdir -p")).toBeLessThan(line.indexOf("exec node"));
+    expect(buildSdkDriverCommandLine(base)).not.toContain("TMPDIR");
+  });
+
   it("caps test-runner workers in every driver session — the runner's cores are shared by all cards", () => {
     const line = buildSdkDriverCommandLine(base);
     expect(line).toContain("export VITEST_MAX_THREADS=2; ");

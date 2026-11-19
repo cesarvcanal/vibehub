@@ -35,6 +35,7 @@ import {
 import { logger } from "../../utils/logger.js";
 import { testWorkerTmuxArgs } from "../../runtime/testWorkers.js";
 import { CARD_ID_RE } from "./cardId.js";
+import { CREATE_CARD_TMPDIR, cardTmpEnv } from "./cardTmp.js";
 import { applyLiveEffort } from "./agentState.js";
 
 export { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir };
@@ -124,6 +125,7 @@ export function sessionCommand(opts: SessionCommandOpts | boolean): string {
   // after the next change of author it pushed and opened PRs as the PREVIOUS person, silently. The
   // card's git and gh read the card's token FILE on every call instead (github/runnerIdentity.ts).
   const guard =
+    CREATE_CARD_TMPDIR +
     `export IS_SANDBOX=1; ` +
     autoCompactExport() +
     oauthTokenGuard(profileDir) +
@@ -492,7 +494,7 @@ export function buildOpenScript(opts: OpenScriptOpts): string {
       ` -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8` +
       // The card's git include: every git of the session — any repository — acts as the card's
       // author, read from a file the author switch rewrites (github/runnerIdentity.ts).
-      cardGitEnv(opts.cardId).map(([k, v]) => ` -e ${shQuote(`${k}=${v}`)}`).join("") +
+      [...cardGitEnv(opts.cardId), ...cardTmpEnv(opts.cardId)].map(([k, v]) => ` -e ${shQuote(`${k}=${v}`)}`).join("") +
       // Test runners share the runner's cores with every other card: cap their workers.
       ` ${testWorkerTmuxArgs().join(" ")}` +
       // Non-default account: the session's Claude uses the account profile (isolated credentials/state).
@@ -551,11 +553,11 @@ export function terminalRemoteArgs(containerName: string, tmuxSession: string, c
     "-e", `PW_CDP_ENDPOINT=${cardCdpEndpoint(opts.cardId)}`,
     "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8",
     // The card's git include (see buildOpenScript) — the Shell tab's manual git included.
-    ...cardGitEnv(opts.cardId).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
+    ...[...cardGitEnv(opts.cardId), ...cardTmpEnv(opts.cardId)].flatMap(([k, v]) => ["-e", `${k}=${v}`]),
     ...testWorkerTmuxArgs(),
     ...(opts.accountConfigDir ? ["-e", `CLAUDE_CONFIG_DIR=${opts.accountConfigDir}`] : []),
     opts.shell
-      ? "exec bash"
+      ? `${CREATE_CARD_TMPDIR}exec bash`
       : sessionCommand({
           resume: !!opts.resume,
           resumeSessionId: opts.resumeSessionId,

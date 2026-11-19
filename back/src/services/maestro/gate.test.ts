@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -158,6 +159,28 @@ describe("run script + parse", () => {
     } finally {
       await rm(bin, { recursive: true, force: true });
       await rm(work, { recursive: true, force: true });
+    }
+  });
+
+  it("os checks do gate escrevem no /tmp do card — que o apagar do card leva junto", async () => {
+    const { gate } = await load();
+    const cardId = randomUUID();
+    const bin = await mkdtemp(join(tmpdir(), "vibehub-gate-bin-"));
+    const work = await mkdtemp(join(tmpdir(), "vibehub-gate-work-"));
+    try {
+      await writeFile(join(bin, "docker"), '#!/bin/sh\nshift 2\nexec "$@"\n', { mode: 0o755 });
+      const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+      const out = execFileSync(
+        "sh",
+        ["-c", gate.buildGateRunScript("c", work, ['echo "tmp=$TMPDIR claude=$CLAUDE_CODE_TMPDIR"; test -d "$TMPDIR"'], { cardId })],
+        { env, encoding: "utf8" },
+      );
+      expect(out).toContain(`tmp=/tmp/vibehub/${cardId} claude=/tmp/vibehub/${cardId}`);
+      expect(gate.parseGateRun(out).passed).toBe(true);
+    } finally {
+      await rm(bin, { recursive: true, force: true });
+      await rm(work, { recursive: true, force: true });
+      await rm(`/tmp/vibehub/${cardId}`, { recursive: true, force: true });
     }
   });
 
