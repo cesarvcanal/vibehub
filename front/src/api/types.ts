@@ -775,8 +775,8 @@ export interface Finding {
   requested?: { by: string; at: number };
 }
 
-export type AnalysisDimension = "correctness" | "security" | "performance" | "contracts" | "tests" | "repoRules";
-export const ANALYSIS_DIMENSIONS: readonly AnalysisDimension[] = ["correctness", "security", "performance", "contracts", "tests", "repoRules"];
+export const ANALYSIS_DIMENSIONS = ["correctness", "security", "performance", "contracts", "tests", "repoRules"] as const;
+export type AnalysisDimension = (typeof ANALYSIS_DIMENSIONS)[number];
 export type AnalysisStage = "analysed" | "done" | "fleet_unavailable";
 export type AnalysisSeverity = Exclude<FindingSeverity, "refuted">;
 export type DimensionHealth = "ok" | "attention" | "problem" | "not_run" | "skipped";
