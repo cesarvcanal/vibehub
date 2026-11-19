@@ -1,8 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { listTerminals, sendToTerminal, readTerminal, reportState, agentOriginFor, SEND_READY_WAIT_MS } from "../services/maestro/maestro.js";
-import { DECLARED_STATES, getCard, listProjects, type Card } from "../services/board/registry.js";
-import { createCardAs } from "../services/maestro/createCard.js";
+import { DECLARED_STATES, getCard, getProject, listProjects, type Project } from "../services/board/registry.js";
+import { createCardAs, repoPushRefusal } from "../services/maestro/createCard.js";
 import { findUser, type PublicUser } from "../auth/users.js";
 import { recordMessage, MESSAGE_TYPES, SEVERITIES, type MessageType, type Severity } from "../services/events/cardEvents.js";
 import { sendAnswer } from "./events.js";
@@ -131,14 +131,20 @@ export const analysisReportInput = analysisReportFields.superRefine((report, ctx
   }
 });
 
-async function requireOwnerBehind(fromCard: Card): Promise<PublicUser> {
+async function personBehind(fromCardId: string): Promise<PublicUser> {
+  const fromCard = await getCard(fromCardId);
+  if (!fromCard) throw new Error(`card not found: ${fromCardId}`);
   if (!fromCard.actorUserId) throw new Error("nobody gave this card an order yet, so there is no one to create the card for");
-  const creator = await findUser(fromCard.actorUserId);
-  if (!creator) throw new Error("the person who gave this card its order is no longer a user of this vibehub");
-  if (creator.role !== "owner") {
-    throw new Error(`only the owner can create cards — '${creator.username}' gave this card its order; ask the owner to create it`);
+  const person = await findUser(fromCard.actorUserId);
+  if (!person) throw new Error("the person who gave this card its order is no longer a user of this vibehub");
+  return person;
+}
+
+async function cardCreationRefusal(person: PublicUser, project: Project): Promise<string | null> {
+  if (person.role !== "owner") {
+    return `only the owner can create cards — '${person.username}' gave this card its order; ask the owner to create it`;
   }
-  return creator;
+  return await repoPushRefusal(person, project);
 }
 
 export function registerMaestroTools(server: McpServer, actor: string): void {
@@ -169,16 +175,26 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     {
       description:
         "List the projects on the vibehub board (id, name, repository, base branch) — including those " +
-        "with no card yet. Use the id to create a card in a project with vibehub_create_card.",
-      inputSchema: {},
+        "with no card yet — and, for the person who gave THIS card its order (`requestedBy`), whether " +
+        "they may create a card in each one (`canCreateCard`) and, when not, the `reason`: only the " +
+        "owner creates cards, and the GitHub account their cards use must be able to push to the " +
+        "project's repository. Check it BEFORE vibehub_create_card; when it is false, tell the user " +
+        "the reason instead of trying.",
+      inputSchema: {
+        from: z.string().describe("YOUR OWN card id — the $VIBEHUB_CARD_ID of this terminal"),
+      },
     },
-    async () => {
+    async (input) => {
       try {
-        return ok({
-          projects: (await listProjects()).map((project) => ({
+        const person = await personBehind(input.from);
+        const projects = await Promise.all((await listProjects()).map(async (project) => {
+          const reason = await cardCreationRefusal(person, project);
+          return {
             id: project.id, name: project.name, repo: project.repoFullName ?? null, baseBranch: project.baseBranch,
-          })),
-        });
+            canCreateCard: reason === null, ...(reason === null ? {} : { reason }),
+          };
+        }));
+        return ok({ requestedBy: person.username, projects });
       } catch (error) {
         return fail(error);
       }
@@ -191,8 +207,9 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
       description:
         "Create a NEW card (a new terminal with its own branch) in ANY project — e.g. a fix you found " +
         "for another repository, when the user asks for a card for it. It lands at the top of that " +
-        "project's backlog, authored by the person who gave THIS card its order; only the owner may " +
-        "create cards, as on the board. Then hand it the work with vibehub_send_to_terminal (pass " +
+        "project's backlog, authored by the person who gave THIS card its order. It is refused, with " +
+        "the reason, when that person may not create it (vibehub_list_projects says so beforehand: " +
+        "check there first). Then hand it the work with vibehub_send_to_terminal (pass " +
         "`from`): the send wakes the new card on its own — the first card of a project clones the " +
         "repo, which can take minutes. Send a self-contained instruction: the new card does not know " +
         "this conversation.",
@@ -204,10 +221,12 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     },
     async (input) => {
       try {
-        const fromCard = await getCard(input.from);
-        if (!fromCard) throw new Error(`card not found: ${input.from}`);
-        const creator = await requireOwnerBehind(fromCard);
-        const card = await createCardAs(creator, { projectId: input.projectId, title: input.title }, fromCard.worktreeSlug);
+        const person = await personBehind(input.from);
+        const project = await getProject(input.projectId);
+        if (!project) throw new Error("project not found");
+        const refusal = await cardCreationRefusal(person, project);
+        if (refusal) throw new Error(refusal);
+        const card = await createCardAs(person, { projectId: project.id, title: input.title }, input.from);
         return ok({ cardId: card.id, title: card.title, projectId: card.projectId, column: card.column });
       } catch (error) {
         return fail(error);

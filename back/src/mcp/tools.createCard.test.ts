@@ -6,6 +6,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 const runScript = vi.fn(async () => ({ stdout: "", stderr: "" }));
+const canPushToRepo = vi.fn(async (_connectionId: string, _fullName: string) => true);
 const state = { dir: "" };
 
 async function load() {
@@ -17,6 +18,10 @@ async function load() {
     const actual = await vi.importActual<typeof import("../runtime/host.js")>("../runtime/host.js");
     return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript, ptyCommand: vi.fn(), pipeCommand: vi.fn() }) };
   });
+  vi.doMock("../services/github/client.js", async () => {
+    const actual = await vi.importActual<typeof import("../services/github/client.js")>("../services/github/client.js");
+    return { ...actual, canPushToRepo, gitAuthHeaderFor: vi.fn(async () => "") };
+  });
   const registry = await import("../services/board/registry.js");
   const users = await import("../auth/users.js");
   const userGit = await import("../auth/userGit.js");
@@ -25,7 +30,8 @@ async function load() {
   const owner = users.publicUser(await users.createUser("cesar", "senha-forte-123", "owner"));
   const member = users.publicUser(await users.createUser("mussa", "senha-forte-456", "member"));
   const infraProject = await registry.createProject({ name: "tech.multi" });
-  const vibehubProject = await registry.createProject({ name: "vibehub" });
+  const vibehubProject = await registry.createProject({ name: "vibehub", repoFullName: "cesarvcanal/vibehub" });
+  const githubAccount = await registry.addGithubConnection({ label: "cesar", login: "cesar-gh" });
   const callerCard = await registry.createCard({ projectId: infraProject.id, title: "faxina de volumes" });
 
   const server = createMcpServer("test");
@@ -37,7 +43,7 @@ async function load() {
     const answerText = (response.content as { type: string; text: string }[])[0]!.text;
     return JSON.parse(answerText) as Record<string, unknown>;
   };
-  return { registry, userGit, owner, member, infraProject, vibehubProject, callerCard, client, call };
+  return { registry, userGit, githubAccount, owner, member, infraProject, vibehubProject, callerCard, client, call };
 }
 
 beforeAll(async () => {
@@ -50,6 +56,8 @@ beforeEach(async () => {
   state.dir = await mkdtemp(join(tmpdir(), "vibehub-create-card-"));
   runScript.mockReset();
   runScript.mockResolvedValue({ stdout: "", stderr: "" });
+  canPushToRepo.mockReset();
+  canPushToRepo.mockResolvedValue(true);
 });
 afterEach(async () => { await rm(state.dir, { recursive: true, force: true }); });
 
@@ -62,11 +70,13 @@ describe("maestro MCP — um card cria card em qualquer projeto", () => {
 
   it("vibehub_list_projects devolve o id de um projeto que ainda não tem card", async () => {
     const env = await load();
-    const answer = await env.call("vibehub_list_projects");
+    await env.registry.stampCardActor(env.callerCard.id, env.owner.id);
+    const answer = await env.call("vibehub_list_projects", { from: env.callerCard.id });
     expect(answer.projects).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: env.vibehubProject.id, name: "vibehub" }),
     ]));
   });
+
 
   it("card cujo dono deu a ordem cria o card no outro projeto, no backlog, já com o dono como autor e o workspace sendo preparado", async () => {
     const env = await load();
@@ -129,5 +139,71 @@ describe("maestro MCP — um card cria card em qualquer projeto", () => {
     const answer = await env.call("vibehub_create_card", { from: env.callerCard.id, projectId: "nao-existe", title: "x" });
     expect(answer.error).toContain("project not found");
     expect((await env.registry.listAllCards()).map((card) => card.id)).toEqual([env.callerCard.id]);
+  });
+});
+
+describe("maestro MCP — a permissão de quem pediu é conferida antes de criar", () => {
+  it("vibehub_list_projects diz, por projeto, se quem deu a ordem pode criar card e por quê", async () => {
+    const env = await load();
+    await env.registry.stampCardActor(env.callerCard.id, env.owner.id);
+    canPushToRepo.mockImplementation(async (_connectionId, fullName) => fullName !== "cesarvcanal/vibehub");
+    const answer = await env.call("vibehub_list_projects", { from: env.callerCard.id });
+    expect(answer.requestedBy).toBe("cesar");
+    expect(answer.projects).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: env.infraProject.id, canCreateCard: true }),
+      expect.objectContaining({
+        id: env.vibehubProject.id, canCreateCard: false,
+        reason: expect.stringContaining("'cesar-gh'") as unknown,
+      }),
+    ]));
+    expect(canPushToRepo).toHaveBeenCalledWith(env.githubAccount.id, "cesarvcanal/vibehub");
+  });
+
+  it("membro vê em todos os projetos que não pode criar, sem consulta ao GitHub", async () => {
+    const env = await load();
+    await env.registry.stampCardActor(env.callerCard.id, env.member.id);
+    const answer = await env.call("vibehub_list_projects", { from: env.callerCard.id });
+    expect(answer.requestedBy).toBe("mussa");
+    const projects = answer.projects as { canCreateCard: boolean; reason: string }[];
+    expect(projects.every((project) => !project.canCreateCard && project.reason.includes("only the owner"))).toBe(true);
+    expect(canPushToRepo).not.toHaveBeenCalled();
+  });
+
+  it("dono cujo token GitHub não dá push no repo de destino não cria card, e nada é provisionado", async () => {
+    const env = await load();
+    await env.registry.stampCardActor(env.callerCard.id, env.owner.id);
+    canPushToRepo.mockResolvedValue(false);
+    const answer = await env.call("vibehub_create_card", { from: env.callerCard.id, projectId: env.vibehubProject.id, title: "x" });
+    expect(answer.error).toContain("cannot push to cesarvcanal/vibehub");
+    expect(await env.registry.listCards(env.vibehubProject.id)).toEqual([]);
+    expect(runScript).not.toHaveBeenCalled();
+  });
+
+  it("confere o token da conta GitHub da pessoa, não o primeiro do vibehub", async () => {
+    const env = await load();
+    const personal = await env.registry.addGithubConnection({ label: "pessoal", login: "cesar-pessoal" });
+    await env.userGit.setUserGit(env.owner.id, { githubConnectionId: personal.id });
+    await env.registry.stampCardActor(env.callerCard.id, env.owner.id);
+    const answer = await env.call("vibehub_create_card", { from: env.callerCard.id, projectId: env.vibehubProject.id, title: "x" });
+    expect(canPushToRepo).toHaveBeenCalledWith(personal.id, "cesarvcanal/vibehub");
+    await vi.waitFor(async () => expect((await env.registry.getCard(String(answer.cardId)))?.preparedAt).toBeDefined());
+  });
+
+  it("falha do GitHub na conferência aparece como erro e não cria card", async () => {
+    const env = await load();
+    await env.registry.stampCardActor(env.callerCard.id, env.owner.id);
+    canPushToRepo.mockRejectedValue(new Error("GitHub returned 502 while checking access to cesarvcanal/vibehub"));
+    const answer = await env.call("vibehub_create_card", { from: env.callerCard.id, projectId: env.vibehubProject.id, title: "x" });
+    expect(answer.error).toContain("502");
+    expect(await env.registry.listCards(env.vibehubProject.id)).toEqual([]);
+  });
+
+  it("projeto sem repositório só depende de quem pediu ser dono", async () => {
+    const env = await load();
+    await env.registry.stampCardActor(env.callerCard.id, env.owner.id);
+    const answer = await env.call("vibehub_create_card", { from: env.callerCard.id, projectId: env.infraProject.id, title: "x" });
+    expect(answer.error).toBeUndefined();
+    expect(canPushToRepo).not.toHaveBeenCalled();
+    await vi.waitFor(async () => expect((await env.registry.getCard(String(answer.cardId)))?.preparedAt).toBeDefined());
   });
 });
