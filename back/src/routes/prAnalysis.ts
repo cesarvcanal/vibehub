@@ -1,11 +1,33 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { WebSocket } from "ws";
 import { canAccessProject, canWorkOnProject } from "../auth/access.js";
 import { requestUser, requireSession } from "../auth/session.js";
 import { analysisPeople, listProjectPulls, RepoAccessError, startAnalysis } from "../services/review/analysis.js";
+import { joinPrRoom, type PrLiveEvent } from "../services/review/prClaims.js";
 import { NOT_FOUND, sendError } from "./httpError.js";
 
 /** GitHub failing to answer is not the caller's fault: the list is not there to give. */
 const GITHUB_FAILED = [/^GitHub returned/, 502] as const;
+const SETTING_UP_ELSEWHERE = [/^pr_em_montagem/, 409] as const;
+const POLICY_VIOLATION = 1008;
+const INTERNAL_ERROR = 1011;
+
+async function requireProjectAccess(req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply): Promise<void> {
+  await requireSession(req, reply);
+  if (reply.sent) return;
+  if (!(await canAccessProject(await requestUser(req), req.params.id))) await reply.code(404).send({ error: "project not found" });
+}
+
+function parseLiveFrame(raw: string): { type: "claim" | "release"; prNumber: number } | null {
+  try {
+    const frame = JSON.parse(raw) as { type?: unknown; prNumber?: unknown };
+    const knownType = frame.type === "claim" || frame.type === "release";
+    const validPr = typeof frame.prNumber === "number" && Number.isInteger(frame.prNumber) && frame.prNumber > 0;
+    return knownType && validPr ? { type: frame.type as "claim" | "release", prNumber: frame.prNumber as number } : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * PR ANALYSIS — the project's open PRs and the button that analyses one (`services/review/analysis.ts`).
@@ -25,6 +47,30 @@ export async function prAnalysisRoutes(app: FastifyInstance): Promise<void> {
       return await sendError(reply, err, { rules: [GITHUB_FAILED, NOT_FOUND] });
     }
   });
+
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/prs/live",
+    { websocket: true, preHandler: requireProjectAccess },
+    (socket: WebSocket, req) => {
+      const send = (event: PrLiveEvent | { type: "claim-refused"; prNumber: number; username: string } | { type: "error"; error: string }) => {
+        try { socket.send(JSON.stringify(event)); } catch { socket.terminate(); }
+      };
+      const seated = (async () => {
+        const user = (await requestUser(req))!;
+        return { user, canWork: await canWorkOnProject(user, req.params.id), seat: joinPrRoom(req.params.id, user, send) };
+      })();
+      seated.catch(() => socket.close(INTERNAL_ERROR));
+      socket.on("message", (data) => void seated.then(({ user, canWork, seat }) => {
+        const frame = parseLiveFrame(String(data));
+        if (!frame) return socket.close(POLICY_VIOLATION, "invalid frame");
+        if (frame.type === "release") return seat.release(frame.prNumber);
+        if (!canWork) return send({ type: "error", error: "this project is shared with you read-only" });
+        const holder = seat.claim(frame.prNumber);
+        if (holder.userId !== user.id) send({ type: "claim-refused", prNumber: frame.prNumber, username: holder.username });
+      }, () => undefined));
+      socket.on("close", () => void seated.then(({ seat }) => seat.leave(), () => undefined));
+    },
+  );
 
   /** Who can be the reviewer or the co-author of an analysis here: whoever works on the project. */
   app.get<{ Params: { id: string } }>("/api/projects/:id/analysis-people", { preHandler: requireSession }, async (req, reply) => {
@@ -59,7 +105,7 @@ export async function prAnalysisRoutes(app: FastifyInstance): Promise<void> {
         });
         return await reply.send({ card, created });
       } catch (err) {
-        return await sendError(reply, err, { rules: [GITHUB_FAILED, NOT_FOUND] });
+        return await sendError(reply, err, { rules: [GITHUB_FAILED, SETTING_UP_ELSEWHERE, NOT_FOUND] });
       }
     },
   );

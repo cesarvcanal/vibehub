@@ -217,3 +217,119 @@ describe("pessoas e papéis da análise", () => {
     expect(res.json().error).toMatch(/coautor_sem_identidade/);
   });
 });
+
+type LiveFrame = { type: string; claims?: { prNumber: number; userId: string; username: string }[]; prNumber?: number; username?: string; error?: string };
+
+/** The PR dialog's live socket, with every frame it received kept in order. */
+async function live(cookie: string, projectId: string) {
+  const frames: LiveFrame[] = [];
+  const socket = await app.injectWS(`/api/projects/${projectId}/prs/live`, { headers: { cookie } }, {
+    onInit: (ws) => ws.on("message", (data) => frames.push(JSON.parse(String(data)) as LiveFrame)),
+  });
+  const send = (frame: Record<string, unknown>) => socket.send(JSON.stringify(frame));
+  const lastClaims = () => frames.filter((frame) => frame.type === "claims").at(-1)?.claims;
+  return { socket, frames, send, lastClaims };
+}
+
+describe("WS /api/projects/:id/prs/live", () => {
+  it("a montagem de uma PR aparece na hora para quem está com o diálogo aberto", async () => {
+    const w = await world();
+    await w.shareProject("work");
+    const ownerLive = await live(w.owner, w.projectId);
+    const memberLive = await live(w.member, w.projectId);
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toEqual([]));
+    memberLive.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toEqual([{ prNumber: 636, userId: w.memberId, username: "albert" }]));
+    ownerLive.socket.terminate();
+    memberLive.socket.terminate();
+  });
+
+  it("quem chega depois recebe as montagens que já estão em curso", async () => {
+    const w = await world();
+    await w.shareProject("work");
+    const memberLive = await live(w.member, w.projectId);
+    memberLive.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(memberLive.lastClaims()).toHaveLength(1));
+    const ownerLive = await live(w.owner, w.projectId);
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toEqual([{ prNumber: 636, userId: w.memberId, username: "albert" }]));
+    ownerLive.socket.terminate();
+    memberLive.socket.terminate();
+  });
+
+  it("enquanto alguém monta a análise de uma PR, outra pessoa não toma a PR nem inicia a análise", async () => {
+    const w = await world();
+    await w.shareProject("work");
+    const memberLive = await live(w.member, w.projectId);
+    const ownerLive = await live(w.owner, w.projectId);
+    memberLive.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toHaveLength(1));
+    ownerLive.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(ownerLive.frames).toContainEqual({ type: "claim-refused", prNumber: 636, username: "albert" }));
+    expect(ownerLive.lastClaims()).toEqual([{ prNumber: 636, userId: w.memberId, username: "albert" }]);
+    const res = await analyse(w.owner, w.projectId, 636, { reviewerUserId: w.ownerId });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/^pr_em_montagem: albert/);
+    expect(sendToTerminal).not.toHaveBeenCalled();
+    ownerLive.socket.terminate();
+    memberLive.socket.terminate();
+  });
+
+  it("quem segura a PR inicia a análise, e quem está com o diálogo aberto é avisado para reler a lista", async () => {
+    const w = await world();
+    await w.shareProject("work");
+    const memberLive = await live(w.member, w.projectId);
+    const ownerLive = await live(w.owner, w.projectId);
+    memberLive.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toHaveLength(1));
+    const res = await analyse(w.member, w.projectId, 636, { reviewerUserId: w.memberId });
+    expect(res.json()).toMatchObject({ created: true });
+    await vi.waitFor(() => expect(ownerLive.frames).toContainEqual({ type: "pulls-changed" }));
+    ownerLive.socket.terminate();
+    memberLive.socket.terminate();
+  });
+
+  it("soltar a PR ou fechar o diálogo libera a montagem para os outros", async () => {
+    const w = await world();
+    await w.shareProject("work");
+    const memberLive = await live(w.member, w.projectId);
+    const ownerLive = await live(w.owner, w.projectId);
+    memberLive.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toHaveLength(1));
+    memberLive.send({ type: "release", prNumber: 636 });
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toEqual([]));
+    memberLive.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toHaveLength(1));
+    memberLive.socket.terminate();
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toEqual([]));
+    expect((await analyse(w.owner, w.projectId, 636, { reviewerUserId: w.ownerId })).json()).toMatchObject({ created: true });
+    ownerLive.socket.terminate();
+  });
+
+  it("soltar a PR que outra pessoa segura não a libera", async () => {
+    const w = await world();
+    await w.shareProject("work");
+    const memberLive = await live(w.member, w.projectId);
+    const ownerLive = await live(w.owner, w.projectId);
+    memberLive.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toHaveLength(1));
+    ownerLive.send({ type: "release", prNumber: 636 });
+    ownerLive.socket.terminate();
+    await new Promise((settle) => setTimeout(settle, 50));
+    expect(memberLive.lastClaims()).toEqual([{ prNumber: 636, userId: w.memberId, username: "albert" }]);
+    memberLive.socket.terminate();
+  });
+
+  it("quem só vê o projeto não monta; sem acesso ao projeto é 404; sem sessão é 401; frame inválido fecha o socket", async () => {
+    const w = await world();
+    await expect(live(w.member, w.projectId)).rejects.toThrow(/404/);
+    await expect(app.injectWS(`/api/projects/${w.projectId}/prs/live`)).rejects.toThrow(/401/);
+    await w.shareProject("view");
+    const viewer = await live(w.member, w.projectId);
+    viewer.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(viewer.frames).toContainEqual({ type: "error", error: "this project is shared with you read-only" }));
+    expect(viewer.lastClaims()).toEqual([]);
+    const closed = new Promise<number>((settle) => viewer.socket.on("close", (code) => settle(code)));
+    viewer.send({ type: "claim", prNumber: -1 });
+    expect(await closed).toBe(1008);
+  });
+});
