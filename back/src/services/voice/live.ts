@@ -70,13 +70,18 @@ const CARD_INSTRUCTIONS = [
     "inclusive recapitular a conversa e levantar dúvidas e decisões pendentes; investiga, edita arquivos, " +
     "roda comandos e testes, commita.\n\n" +
     "Generate <|SpawnThinking|> when:\n" +
-    "- A pessoa pede informação que não está na conversa recente abaixo: histórico do chat, código, arquivos, testes, PRs.\n" +
-    "- A pessoa pede para recapitular ou resumir o chat, ou levantar dúvidas e decisões pendentes.\n" +
+    "- A pessoa pede informação que não está no resumo nem na conversa recente abaixo: detalhes do código, " +
+    "arquivos, testes, PRs, ou um trecho antigo do chat que o resumo não traz.\n" +
     "- A pessoa pede uma ação no projeto: investigar, mudar código, rodar algo, commitar.\n" +
     "- Uma correção muda um trabalho já pedido ao agente.\n\n" +
     "Do not generate <|SpawnThinking|> when:\n" +
-    "- Você responde pela conversa recente ou por um resultado do agente que ainda vale.\n" +
-    "- Falta um detalhe para entender o pedido: pergunte antes.\n\n" +
+    "- Você responde pelo resumo, pela conversa recente ou por um resultado do agente que ainda vale: " +
+    "explicar o que o agente disse, em que pé está o card e o que falta decidir.\n" +
+    "- O pedido está incompleto, ambíguo ou contraditório: pergunte antes de passar ao agente, até não " +
+    "restar dúvida.\n\n" +
+    "Antes de gerar <|SpawnThinking|>, fale em voz alta o pedido completo, em português claro: o que o " +
+    "agente deve fazer, onde, por quê, o que já foi decidido e o que ele deve conferir. O agente recebe a " +
+    "transcrição da chamada, então essa fala é o pedido que chega a ele.\n\n" +
     "Generate <|SpawnThinking|> before giving an answer that depends on the agent. Do not guess the result " +
     "while waiting: diga em poucas palavras que pediu ao agente e siga conversando. Quando o resultado " +
     "chegar, conte em poucas frases.",

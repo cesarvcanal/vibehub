@@ -261,6 +261,15 @@ describe("POST /api/cards/:id/voice/sessions", () => {
     expect(upstream.mock.calls.map(([url]) => url)).toEqual(["https://api.openai.com/v1/live/sessions"]);
   });
 
+  it("as instruções mandam esclarecer a dúvida e falar o pedido completo antes de delegar", async () => {
+    const id = await makeCard();
+    openAi(() => summaryAnswer("resumo"));
+    await app.inject({ method: "POST", url: `/api/cards/${id}/voice/sessions`, headers: { cookie: owner }, payload: { sdp: OFFER } });
+    const instructions = sentSession().session.instructions as string;
+    expect(instructions).toContain("pergunte antes de passar ao agente");
+    expect(instructions).toContain("fale em voz alta o pedido completo");
+  });
+
   it("still 404s while the mode is off, without calling OpenAI", async () => {
     const id = await makeCard();
     const env = await import("../config/env.js");
