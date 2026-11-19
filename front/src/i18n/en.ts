@@ -1180,6 +1180,7 @@ export const en: Record<string, string> = {
   "plan.alert.near": "The {limit} is almost used up",
   "plan.alert.rejected": "The {limit} is used up",
   "plan.weekly": "Weekly limit",
+  "plan.noSessionWindow": "This plan reports no session (5h) limit, only the weekly one.",
   "plan.weekShort": "week",
   "plan.noReading": "no reading",
   "plan.noReadingHint": "This account's usage could not be read — open to see why",

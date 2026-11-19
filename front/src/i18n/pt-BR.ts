@@ -1187,6 +1187,7 @@ export const ptBR: Record<string, string> = {
   "plan.alert.near": "O {limit} está perto do fim",
   "plan.alert.rejected": "O {limit} acabou",
   "plan.weekly": "Limite semanal",
+  "plan.noSessionWindow": "Este plano não informa limite de sessão (5h), só o semanal.",
   "plan.weekShort": "semana",
   "plan.noReading": "sem leitura",
   "plan.noReadingHint": "O uso desta conta não pôde ser lido — abra para ver por quê",

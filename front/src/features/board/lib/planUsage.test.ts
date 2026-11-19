@@ -5,6 +5,7 @@ import {
   peakWindow,
   planAlert,
   planWindows,
+  reportsNoSession,
   usageColor,
   usageHue,
   usageTone,
@@ -147,5 +148,22 @@ describe("usageHue", () => {
     expect(usageHue(140)).toBe(0);
     expect(usageHue(Number.NaN)).toBe(142);
     expect(usageColor(100, 0.5)).toBe("hsl(0 80% 50% / 0.5)");
+  });
+});
+
+describe("reportsNoSession", () => {
+  const weekOnly: AccountUsage = { available: true, sevenDay: { utilization: 62, resetsAt: null }, fetchedAt: NOW };
+
+  it("é verdade quando a leitura veio e não tem janela de 5h, nem pela leitura nem pelo aviso ao vivo", () => {
+    expect(reportsNoSession(weekOnly, planWindows(weekOnly, {}, NOW))).toBe(true);
+  });
+
+  it.each([
+    { label: "a leitura traz a janela de 5h", reading: usage(30, 40), live: {} },
+    { label: "o aviso ao vivo do CLI traz a janela de 5h", reading: weekOnly, live: { five_hour: { status: "allowed", window: "five_hour", utilization: 20, resetsAt: IN_2H } as RateLimitInfo } },
+    { label: "não há leitura", reading: { available: false, error: "unreachable", fetchedAt: NOW } as AccountUsage, live: {} },
+    { label: "a leitura ainda não chegou", reading: undefined, live: {} },
+  ])("é falso quando $label", ({ reading, live }) => {
+    expect(reportsNoSession(reading, planWindows(reading, live, NOW))).toBe(false);
   });
 });

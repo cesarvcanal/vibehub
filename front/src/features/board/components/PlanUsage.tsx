@@ -11,6 +11,7 @@ import {
   YELLOW_AT,
   alertSentence,
   planWindows,
+  reportsNoSession,
   resetPhrase,
   usageColor,
   usageTone,
@@ -218,6 +219,11 @@ export function PlanUsageMeter({
                 : t("usage.loading")}
             </p>
           )}
+          {reportsNoSession(data?.usage, windows) ? (
+            <p data-testid="plan-no-session" className="text-[11px] leading-snug text-muted-foreground">
+              {t("plan.noSessionWindow")}
+            </p>
+          ) : null}
         </div>
         {data?.usage?.available ? (
           <div className="flex items-center justify-between gap-2 border-t border-border/60 px-4 py-2 text-[11px] text-muted-foreground">
