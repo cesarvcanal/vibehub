@@ -1,29 +1,7 @@
-import { describe, it, expect, onTestFinished } from "vitest";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, dirname, relative } from "node:path";
+import { describe, it, expect } from "vitest";
+import { relative } from "node:path";
 import { lintChangedLines } from "./lintChanged.mjs";
-
-function git(repoDir, ...args) {
-  return execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args], { cwd: repoDir, encoding: "utf8" });
-}
-
-function writeRepoFile(repoDir, path, content) {
-  mkdirSync(dirname(join(repoDir, path)), { recursive: true });
-  writeFileSync(join(repoDir, path), content);
-}
-
-function createRepoWithBase(files) {
-  const repoDir = mkdtempSync(join(tmpdir(), "lint-changed-"));
-  onTestFinished(() => rmSync(repoDir, { recursive: true, force: true }));
-  git(repoDir, "init", "-q", "-b", "main");
-  Object.entries(files).forEach(([path, content]) => writeRepoFile(repoDir, path, content));
-  git(repoDir, "add", ".");
-  git(repoDir, "commit", "-q", "-m", "base");
-  git(repoDir, "checkout", "-q", "-b", "card");
-  return repoDir;
-}
+import { git, writeRepoFile, createRepoWithBase } from "./testRepo.mjs";
 
 const LEGACY = "let legacy = 1;\nlegacy += 1;\nexport { legacy };\n";
 
