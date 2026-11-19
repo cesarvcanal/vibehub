@@ -56,13 +56,13 @@ const readModel = (
 function renderPanel(
   analysisAnswer: CardAnalysisResponse | Promise<CardAnalysisResponse>,
   onClose: () => void = () => {},
-  conversationAnswer: AnalysisConversationResponse | Promise<AnalysisConversationResponse> = { conversation: null },
+  answerConversation: () => AnalysisConversationResponse | Promise<AnalysisConversationResponse> = () => ({ conversation: null }),
 ) {
   get.mockImplementation(async (url: string) => {
     if (url === "/auth/me") return { user: { id: "u1", username: "mussa", role: "member" } };
     if (url === "/setup/state") return setupState();
     if (url === "/cards/c1/analysis") return analysisAnswer;
-    if (url === "/cards/c1/analysis/conversation") return conversationAnswer;
+    if (url === "/cards/c1/analysis/conversation") return answerConversation();
     throw new Error(`unexpected ${url}`);
   });
   return renderApp(<AnalysisPanel cardId="c1" onClose={onClose} />);
@@ -260,7 +260,7 @@ describe("aba Conversa: a frota conversando como um chat em grupo", () => {
   };
 
   it("o painel abre no relatório e só lê a conversa quando a aba é aberta", async () => {
-    renderPanel(readModel(doneReport(), "not_apt"), undefined, fleetTalk);
+    renderPanel(readModel(doneReport(), "not_apt"), undefined, () => fleetTalk);
     expect(await screen.findByRole("tab", { name: "Relatório" })).toHaveAttribute("aria-selected", "true");
     expect(get).not.toHaveBeenCalledWith("/cards/c1/analysis/conversation");
     await openConversation();
@@ -269,7 +269,7 @@ describe("aba Conversa: a frota conversando como um chat em grupo", () => {
   });
 
   it("cada fala diz quem falou, com o modelo e a versão, e traz o que o agente pensou, usou e disse", async () => {
-    renderPanel(readModel(doneReport(), "not_apt"), undefined, fleetTalk);
+    renderPanel(readModel(doneReport(), "not_apt"), undefined, () => fleetTalk);
     await openConversation();
     const turns = await screen.findAllByRole("article");
     expect(turns).toHaveLength(2);
@@ -291,16 +291,16 @@ describe("aba Conversa: a frota conversando como um chat em grupo", () => {
   });
 
   it("leitura que falhou mostra o erro do servidor", async () => {
-    renderPanel(readModel(doneReport(), "not_apt"), undefined, Promise.reject(apiReject(502, "runner parado")));
+    renderPanel(readModel(doneReport(), "not_apt"), undefined, () => Promise.reject(apiReject(502, "runner parado")));
     await openConversation();
     expect(await screen.findByText("runner parado")).toBeInTheDocument();
   });
 
   it("em inglês a aba e o estado da frota saem pelo i18n", async () => {
     setLanguage("en");
-    renderPanel(readModel(doneReport(), "not_apt"), undefined, {
+    renderPanel(readModel(doneReport(), "not_apt"), undefined, () => ({
       conversation: { ...fleetTalk.conversation!, finished: true, agents: fleetTalk.conversation!.agents.map((agent) => ({ ...agent, status: "done" as const })) },
-    });
+    }));
     await userEvent.click(await screen.findByRole("tab", { name: "Conversation" }));
     expect(await screen.findByText("Fleet finished · 2 of 2 agents answered")).toBeInTheDocument();
     expect(screen.getAllByText("thinking…")).toHaveLength(1);
