@@ -404,7 +404,7 @@ Os comentários vão direto nas linhas do diff, publicados juntos numa **única 
 
 ### Como publicar
 
-Dentro de um card do vibehub, a entrega sai pelo `vibehub_deliver` (push, PR, gate e merge quando autorizado); `git push` direto do runner dá 403. Fora do runner, com o `gh` autenticado, siga os passos abaixo. Grave `pr-body.md` e `review.json` em **UTF-8** e **fora do repositório**.
+Dentro de um card do vibehub, a entrega sai pelo `vibehub_deliver` (§15). Fora do runner, com o `gh` autenticado, siga os passos abaixo. Grave `pr-body.md` e `review.json` em **UTF-8** e **fora do repositório**.
 
 1. Abra o PR com título e corpo explícitos, nunca `--fill` (ele põe a lista de commits como descrição):
 
@@ -677,5 +677,5 @@ O que o autor afirma: git log origin/main..HEAD
 
 ### Entrega
 
-- Dentro de um card do vibehub, a entrega é o `vibehub_deliver`: push, PR, gate (`.vibehub/gate.json`) e merge quando autorizado. O `git push` direto do runner dá 403, e é esperado. Fora do runner, "Como publicar" (§14) com o `gh`.
+- Dentro de um card do vibehub, a entrega é o `vibehub_deliver`: push, PR, gate (`.vibehub/gate.json`) e merge quando autorizado. Se o `git push` direto do runner falhar com 403, é o esperado: a credencial do runner não é a de quem deu a ordem (§10), e a saída é o deliver, nunca outra credencial. Fora do runner, "Como publicar" (§14) com o `gh`.
 - **`authorized: true` só com o aval explícito do usuário na conversa** (merge na branch que publica é deploy, §12) e com os Pontos de atenção do PR relidos: pendência que bloqueia sem o aval registrado (§14) segue sem `authorized`.
