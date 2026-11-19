@@ -1,9 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { analysisPill, countFinishedAnalysisReports } from "./analysis";
+import { analysisPill } from "./analysis";
 import {
   ANALYSIS_DIMENSIONS, type AnalysisFinding, type AnalysisReadModel, type AnalysisReport, type AnalysisVerdict, type CardAnalysisResponse,
 } from "@/api/types";
-import type { SdkRow } from "./sdkChat";
 
 const report = (over: Partial<AnalysisReport> = {}): AnalysisReport => ({
   cardId: "c", prUrl: "u", prNumber: 7, analysedSha: "a".repeat(40), stage: "analysed", summary: "s",
@@ -79,17 +78,5 @@ describe("pílula da análise na linha da PR", () => {
     }, [...ANALYSIS_DIMENSIONS]);
     const pill = analysisPill(loaded(read), { cardWorking: false });
     expect(pill).toMatchObject({ key: "analysis.pill.fleetUnavailable", tone: "critical" });
-  });
-});
-
-describe("chamadas concluídas da ferramenta de relatório no chat", () => {
-  it("conta só a vibehub_analysis_report que voltou sem erro", () => {
-    const rows: SdkRow[] = [
-      { kind: "tool", id: "1", name: "mcp__vibehub__vibehub_analysis_report", summary: "", result: {} },
-      { kind: "tool", id: "2", name: "mcp__vibehub__vibehub_analysis_report", summary: "" },
-      { kind: "tool", id: "3", name: "mcp__vibehub__vibehub_analysis_report", summary: "", result: { isError: true } },
-      { kind: "tool", id: "4", name: "Bash", summary: "", result: {} },
-    ];
-    expect(countFinishedAnalysisReports(rows)).toBe(1);
   });
 });

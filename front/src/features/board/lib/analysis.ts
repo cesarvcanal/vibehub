@@ -1,6 +1,5 @@
 import type { BadgeTone } from "@/components/ui/badge";
 import type { CardAnalysisResponse } from "@/api/types";
-import type { SdkRow } from "@/features/board/lib/sdkChat";
 
 export const cardAnalysisKey = (cardId: string) => ["card-analysis", cardId] as const;
 
@@ -39,9 +38,6 @@ export function analysisPill(analysisQuery: AnalysisQueryState, opts: { cardWork
   return { key: "analysis.pill.notAptUnverified", vars: { n: read.uncheckedDimensions.length }, tone: "critical" };
 }
 
-export function countFinishedAnalysisReports(rows: SdkRow[]): number {
-  const finishedReportCalls = rows.filter(
-    (row) => row.kind === "tool" && row.name.endsWith(ANALYSIS_REPORT_TOOL) && row.result !== undefined && !row.result.isError,
-  );
-  return finishedReportCalls.length;
+export function isAnalysisReportTool(toolName: string): boolean {
+  return toolName.endsWith(ANALYSIS_REPORT_TOOL);
 }

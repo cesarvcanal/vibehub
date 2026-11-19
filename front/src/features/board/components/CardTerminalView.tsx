@@ -463,6 +463,7 @@ export function CardTerminalView({
    * these as its `footer`. Null for a card that never opened a PR.
    */
   const prBlocks = card ? <PrReviewBlocks card={card} onOpenPanel={openReview} /> : null;
+  const analysisCard = card?.pushBranch !== undefined;
   const [connection, setConnection] = React.useState<ConnectionState>("connecting");
 
   /**
@@ -1287,6 +1288,7 @@ export function CardTerminalView({
                 terminalWorking={working}
                 footer={prBlocks}
                 account={{ slug: inUseSlug, name: accountName }}
+                analysisCard={analysisCard}
                 ariaLabel={t("chat.ariaFor", { title: card?.title ?? t("cardView.cardFallback") })}
               />
             ) : mode === "chat" ? (
@@ -1380,7 +1382,7 @@ export function CardTerminalView({
               screen to share, so on a wide display it keeps a fixed width instead of taking half. */}
           {reviewOpen ? (
             <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:w-[26rem] lg:flex-none">
-              {card?.pushBranch !== undefined ? (
+              {analysisCard ? (
                 <AnalysisPanel cardId={cardId} onClose={() => setReviewOpen(false)} />
               ) : (
                 <ReviewPanel key={reviewPr ?? "card"} cardId={cardId} prNumber={reviewPr} onClose={() => setReviewOpen(false)} />
