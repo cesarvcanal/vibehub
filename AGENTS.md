@@ -644,7 +644,7 @@ Esta seção diz como o Claude Code executa as regras acima. Onde uma skill, um 
 | `.claude/CLAUDE.md` | Só o import deste arquivo |
 | `.claude/settings.json` | Plugins habilitados, permissões e a profundidade de subagente |
 | `eslint.config.js` | A parte deste arquivo que a máquina checa (`npm run lint:changed`) |
-| `docs/` | Artefatos pontuais (planos, specs, arquitetura), não canônicos |
+| `docs/` | Documentação do projeto (arquitetura, API, processos do runner), não canônica para regra. Spec e plano das skills (brainstorming, writing-plans) ficam fora do repositório, em `/tmp/<card>/`, como referência do trabalho em curso |
 | `CLAUDE.local.md` (raiz da worktree, não versionado) | Instruções do projeto escritas pelo vibehub em cada card; a seção `## Aprendizados` recebe o que o `vibehub_brain_learn` descobre: porta, runner, flakiness, fato de ambiente |
 | Cérebro (`CLAUDE.md` do perfil, não versionado) | Instruções globais do runner, editadas na aba Dev → Cérebro |
 
