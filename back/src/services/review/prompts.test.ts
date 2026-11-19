@@ -261,6 +261,13 @@ describe("prompt da análise de PR", () => {
     expect(analysisPrompt(input)).toMatch(/args inválido[^\n]*corrija o args e rode a frota de novo, uma vez/);
   });
 
+  it("frota que parou sem resultado (o processo caiu, como num deploy) é relançada uma vez pelo runId, com os agentes já concluídos no cache", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    expect(analysisPrompt(input)).toMatch(
+      /parar sem resultado[^\n]*relance uma vez[^\n]*resumeFromRunId: "<runId do lançamento>"[^\n]*Se parar de novo, siga a linha abaixo/,
+    );
+  });
+
   it("sem Workflow, reporta fleet_unavailable e para, sem análise sozinho no lugar da frota", async () => {
     const { analysisPrompt } = await import("./prompts.js");
     const text = analysisPrompt(input);

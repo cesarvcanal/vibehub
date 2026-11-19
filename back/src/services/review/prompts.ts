@@ -608,6 +608,9 @@ export function analysisPrompt(a: AnalysisInput): string {
       "dimensão, tenta derrubar cada achado, e um juiz classifica. Espere o resultado: { summary, dimensions, findings, refutedCount }.",
     "   Se a frota recusar o args (erro \"args inválido\"), o engano é seu: corrija o args e rode a frota de novo, uma vez; " +
       "se falhar de novo, siga a linha abaixo.",
+    "   Se a frota parar sem resultado (o aviso de que ela ficou sem registro de conclusão: o processo do Claude Code caiu, " +
+      `como num reinício do painel), relance uma vez: Workflow({ scriptPath: "${PR_ANALYSIS_WORKFLOW_PATH}", args: o mesmo, ` +
+      'resumeFromRunId: "<runId do lançamento>" }); os agentes que já terminaram voltam do cache. Se parar de novo, siga a linha abaixo.',
     "   Se a ferramenta Workflow não existir, for recusada ou a frota falhar com erro: chame vibehub_analysis_report com " +
       `${reportTarget}, headSha, stage: "fleet_unavailable", summary e unavailableReason com o erro, diga o motivo no chat ` +
       "e pare. Não rode a análise sozinho no lugar da frota.",
