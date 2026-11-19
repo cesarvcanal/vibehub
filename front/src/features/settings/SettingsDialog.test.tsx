@@ -77,6 +77,28 @@ describe("SettingsDialog", () => {
     })));
   });
 
+  it.each([
+    ["acrescenta um termo", "vibehub, Qive", ", Mussa", ["vibehub", "Qive", "Mussa"]],
+    ["apaga todos os termos", "vibehub", null, []],
+  ])("termos da transcrição: %s e manda a lista no patch", async (_case, stored, typed, expected) => {
+    get.mockImplementation(async (url: string) => {
+      if (url === "/settings") return { ...SETTINGS, transcribeKeywords: stored.split(", ") };
+      if (url === "/github") return { connections: [] };
+      if (url === "/transcribe") return { available: true, proofread: false, language: "pt" };
+      if (url === "/credentials") return { credentials: [] };
+      if (url === "/projects") return { projects: [] };
+      throw new Error(`unexpected ${url}`);
+    });
+    patch.mockResolvedValue(SETTINGS);
+    renderApp(<SettingsDialog open onOpenChange={() => {}} />);
+    const keywordsField = await screen.findByLabelText("Transcription terms");
+    await waitFor(() => expect(keywordsField).toHaveValue(stored));
+    if (typed === null) await userEvent.clear(keywordsField);
+    else await userEvent.type(keywordsField, typed);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(patch).toHaveBeenCalledWith("/settings", expect.objectContaining({ transcribeKeywords: expected })));
+  });
+
   it("shows a refused save INSIDE the form, and clears it on the next attempt", async () => {
     // Regression: a 400 here used to reach only a corner toast — in practice invisible, so the
     // form just looked broken (the seeded `vibehub@localhost` failed the old email validation and

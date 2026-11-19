@@ -169,6 +169,8 @@ export interface Settings {
   /** Set once the wizard finished, so it stops taking over the router. */
   setupCompletedAt: string | null;
   transcribeLanguage?: string | null;
+  /** Names and jargon the transcription must spell the way the team does. */
+  transcribeKeywords?: string[];
   /** Minutes a terminal may sit idle before it is hibernated. 0 = never. */
   idleHibernateMinutes?: number;
   /** Native chat as the Chat tab of every card (default on). Off = classic chat everywhere. */
@@ -225,6 +227,7 @@ export interface SettingsPatch {
   autonomous?: boolean;
   defaultAccountLabel?: string | null;
   transcribeLanguage?: string | null;
+  transcribeKeywords?: string[];
   idleHibernateMinutes?: number;
   sdkDriver?: boolean;
   sdkPermissionMode?: SdkPermissionMode;
