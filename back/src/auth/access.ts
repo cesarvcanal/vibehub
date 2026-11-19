@@ -113,6 +113,20 @@ export async function requireCardAccess(req: FastifyRequest, reply: FastifyReply
   stamp(req, user, level);
 }
 
+export async function requireProjectAccess(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+  const user = await currentUser(req);
+  if (!user) {
+    await reply.code(401).send({ error: "not authenticated" });
+    return;
+  }
+  const projectId = String((req.params as { id?: string } | undefined)?.id ?? "");
+  if (!(await canAccessProject(user, projectId))) {
+    await reply.code(404).send({ error: "project not found" });
+    return;
+  }
+  stampSessionUser(req, user);
+}
+
 /**
  * The same, for a route that CHANGES the card or reaches its session (typing, sending, pausing,
  * uploading, renaming). A read-only share is refused with 403 — here the card is visibly theirs, so

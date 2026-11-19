@@ -18,6 +18,7 @@ import { findActiveAnalysisCard } from "./analysisReport.js";
 import { plantPrAnalysisWorkflow } from "./analysisWorkflow.js";
 import { analysisPrompt } from "./prompts.js";
 import { activeReviewForPr } from "./store.js";
+import { announcePullsChanged, prClaimHolder } from "./prClaims.js";
 
 /**
  * PR ANALYSIS FROM THE PANEL — the project's open PRs, read from GitHub on every call, and the card that
@@ -98,6 +99,12 @@ export class RepoAccessError extends Error {
   }
 }
 
+export class PrSettingUpError extends Error {
+  constructor(readonly username: string, prNumber: number) {
+    super(`pr_em_montagem: ${username} está montando a análise do PR #${prNumber}`);
+  }
+}
+
 export interface AnalysisPerson {
   id: string;
   username: string;
@@ -168,7 +175,8 @@ function serialPerPr<T>(key: string, run: () => Promise<T>): Promise<T> {
  * the route turns into 400: `sem_repositorio`, `pr_nao_aberta`, `pr_fork`, `branch_invalida`,
  * `revisao_ativa` (a two-AI review of the same PR is running: the analysis' push would move the head it
  * reviews), `pessoa_sem_acesso` (the reviewer or co-author does not work on the project),
- * `coautor_sem_identidade`, `revisor_igual_autor` and `coautor_igual_autor`.
+ * `coautor_sem_identidade`, `revisor_igual_autor` and `coautor_igual_autor` — and into 409
+ * `pr_em_montagem` (somebody else is setting this PR's analysis up in the PR dialog).
  *
  * It answers as soon as the card exists and holds the PR: bringing a new card up (clone, worktree,
  * Claude) and waiting for it to take the prompt can last minutes, and the panel's dialog sat locked all
@@ -187,6 +195,10 @@ export async function startAnalysis(input: {
   coauthorUserId?: string;
 }): Promise<{ card: Card; created: boolean; prompt: Promise<void> }> {
   const { project, connection, owner, repo } = await projectRepoAccess(input.projectId, input.requester);
+  const settingUp = prClaimHolder(input.projectId, input.prNumber);
+  if (settingUp && settingUp.userId !== input.requester.id) {
+    throw new PrSettingUpError(settingUp.username, input.prNumber);
+  }
   const people = new Map((await peopleOf(project)).map((p) => [p.id, p]));
   const reviewer = people.get(input.reviewerUserId);
   // Read before any card exists: a reviewer deleted meanwhile is refused, never left holding a card.
@@ -231,6 +243,7 @@ export async function startAnalysis(input: {
       await purgeCard(card.id, by);
       throw err;
     }
+    announcePullsChanged(input.projectId);
     const prompt = plantPrAnalysisWorkflow()
       .then(() => deliverAnalysisPrompt(card, pull, reviewerUser, coauthorTrailer))
       .catch((err: unknown) => concludeUnstartedAnalysis(card, pull.number, (err as Error).message));
