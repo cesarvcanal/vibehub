@@ -22,6 +22,9 @@ ruleTester.run("no-unmarked-comment", noUnmarkedComment, {
     code("// limitation: jsdom has no ResizeObserver"),
     code("// legacy-name: `sid` is the session id persisted in board.json"),
     code("/* limitation: tmux ignores the first resize */"),
+    { code: "/** @param {string} name */\nexport const greet = (name) => name;", filename: "driver.mjs" },
+    { code: "/**\n * @param {string} name\n * @returns {string}\n */\nexport const greet = (name) => name;", filename: "driver.mjs" },
+    { code: "/** @type {Map<string, number>} */\nexport const counts = new Map();", filename: "driver.mjs" },
   ],
   invalid: [
     { code: code("// only live cards"), errors: [{ messageId: "unmarked" }] },
@@ -33,5 +36,7 @@ ruleTester.run("no-unmarked-comment", noUnmarkedComment, {
     { code: code("// limitation:   "), errors: [{ messageId: "emptyMarker" }] },
     { code: code("/* external: first line\n   second line */"), errors: [{ messageId: "multiline" }] },
     { code: code("// External: capitalized marker is not the marker"), errors: [{ messageId: "unmarked" }] },
+    { code: "/** Greets the person */\nexport const greet = (name) => name;", filename: "driver.mjs", errors: [{ messageId: "unmarked" }] },
+    { code: "/** @param name the person to greet */\nexport const greet = (name: string) => name;", filename: "driver.ts", errors: [{ messageId: "unmarked" }] },
   ],
 });

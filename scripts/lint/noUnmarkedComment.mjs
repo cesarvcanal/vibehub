@@ -1,8 +1,19 @@
 const EXCEPTION_MARKERS = ["external:", "limitation:", "legacy-name:"];
 const DIRECTIVE_NEEDING_REASON = /^eslint-disable(-next-line|-line)?\b/;
 const DIRECTIVE_WITHOUT_REASON = [/^eslint-enable\b/, /^@ts-expect-error\b/, /^\/ <reference /, /^@vite-ignore$/];
+const JSDOC_TYPE_TAG = /^@(param|returns?|type|typedef|property|template|callback|satisfies|import)\b/;
 
-function classifyComment(comment) {
+function isJsDocTypeBlock(comment) {
+  if (comment.type !== "Block" || !comment.value.startsWith("*")) return false;
+  const tagLines = comment.value
+    .split("\n")
+    .map((line) => line.replace(/^\s*\*+\s?/, "").trim())
+    .filter(Boolean);
+  return tagLines.length > 0 && tagLines.every((line) => JSDOC_TYPE_TAG.test(line));
+}
+
+function classifyComment(comment, isPlainJs) {
+  if (isPlainJs && isJsDocTypeBlock(comment)) return null;
   const text = comment.value.trim();
   if (DIRECTIVE_NEEDING_REASON.test(text)) return text.includes(" -- ") ? null : "directiveWithoutReason";
   if (DIRECTIVE_WITHOUT_REASON.some((directive) => directive.test(text))) return null;
@@ -16,7 +27,7 @@ function classifyComment(comment) {
 export const noUnmarkedComment = {
   meta: {
     type: "suggestion",
-    docs: { description: "Comentário novo só nas exceções da §3 do AGENTS.md, com marcador ou como diretiva" },
+    docs: { description: "Comentário novo só nas exceções da §3 do AGENTS.md, com marcador, como diretiva ou como tipo JSDoc num .mjs" },
     schema: [],
     messages: {
       unmarked:
@@ -29,10 +40,11 @@ export const noUnmarkedComment = {
   create(context) {
     return {
       Program() {
+        const isPlainJs = context.filename.endsWith(".mjs");
         const reports = context.sourceCode
           .getAllComments()
           .filter((comment) => comment.type !== "Shebang")
-          .map((comment) => ({ comment, messageId: classifyComment(comment) }))
+          .map((comment) => ({ comment, messageId: classifyComment(comment, isPlainJs) }))
           .filter((classified) => classified.messageId !== null);
         reports.forEach(({ comment, messageId }) => context.report({ loc: comment.loc, messageId }));
       },
