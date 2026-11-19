@@ -26,6 +26,7 @@ export function buildInvestigationBrief(failure: PlatformFailure): string {
     "",
     "O vibehub registrou uma falha dele mesmo e o dono da instalação pediu a investigação. O relato abaixo é a sua ÚNICA entrada: não leia outros cards.",
     "",
+    ...(failure.explanation ? [`- O que a pessoa viu: ${failure.explanation}`] : []),
     `- Sintoma: ${failure.symptom}`,
     `- Componente: ${failure.component}`,
     `- Origem do registro: ${failure.source}`,

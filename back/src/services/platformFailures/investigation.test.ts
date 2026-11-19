@@ -19,6 +19,12 @@ describe("brief do card de investigação", () => {
     ]) expect(brief).toContain(expectedPart);
   });
 
+  it("leva o que a pessoa viu, em linguagem leiga, quando o relato traz", () => {
+    const brief = buildInvestigationBrief({ ...FAILURE, explanation: "A entrega disse que publicou, mas não abriu PR." });
+    expect(brief).toContain("O que a pessoa viu: A entrega disse que publicou, mas não abriu PR.");
+    expect(buildInvestigationBrief(FAILURE)).not.toContain("O que a pessoa viu");
+  });
+
   it("não cita os cards de origem: o card de correção não lê nada além do relato", () => {
     expect(buildInvestigationBrief(FAILURE)).not.toMatch(/\bc1\b|\bc2\b/);
   });

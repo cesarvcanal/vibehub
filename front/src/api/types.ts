@@ -247,6 +247,8 @@ export interface PlatformFailure {
   evidence: string;
   reproduction?: string;
   hypothesis?: string;
+  explanation?: string;
+  originCardId?: string;
   occurrences: number;
   affectedCardIds: string[];
   firstSeenAt: number;
@@ -254,6 +256,16 @@ export interface PlatformFailure {
   investigationCardId?: string;
   resolvedAt?: number;
   dismissedAt?: number;
+}
+
+export interface PlatformFailureNotice {
+  id: string;
+  source: PlatformFailureSource;
+  status: PlatformFailureStatus;
+  explanation?: string;
+  occurrences: number;
+  firstSeenAt: number;
+  details?: Pick<PlatformFailure, "symptom" | "component" | "evidence" | "reproduction" | "hypothesis">;
 }
 
 export interface PlatformFailureInvestigation {
