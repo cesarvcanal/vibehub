@@ -127,9 +127,9 @@ describe("painel da análise de PR", () => {
     expect(within(blockers).getByText("token expirado continua entrando")).toBeInTheDocument();
   });
 
-  it("o corpo rola só na vertical e quebra o caminho longo em vez de abrir rolagem lateral", async () => {
+  it("o corpo tem overflow-y-auto, overflow-x-hidden e overflow-wrap:anywhere, para o caminho longo quebrar em vez de rolar de lado", async () => {
     renderPanel(readModel(doneReport(), "not_apt"));
-    const body = (await screen.findByText("Login por SSO no lugar da senha local.")).parentElement!;
+    const body = (await screen.findByText("Login por SSO no lugar da senha local.")).parentElement;
     expect(body).toHaveClass("overflow-y-auto", "overflow-x-hidden", "[overflow-wrap:anywhere]");
   });
 

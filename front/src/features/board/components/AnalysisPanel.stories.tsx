@@ -127,7 +127,7 @@ const longPathSuggestion: AnalysisFinding = {
   fix: "Declarar `stopped` antes da leitura e, no `.then`, não agendar se ele já for true.",
 };
 
-export const CaminhoLongo: Story = {
+export const LongPath: Story = {
   name: "Caminho longo · sem rolagem lateral",
   parameters: { analysis: readModel(report({ findings: [fixedBlocking, longPathSuggestion] }), "not_apt") },
 };

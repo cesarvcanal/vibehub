@@ -158,12 +158,12 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.getByText("Dúvida esperando a decisão do revisor humano.")).toBeInTheDocument();
   });
 
-  it("a conversa e os achados rolam só na vertical, sem rolagem lateral", async () => {
+  it("a conversa e a aba de achados têm overflow-y-auto com overflow-x-hidden, sem rolagem lateral", async () => {
     open("rev", review());
     await loaded();
     expect(screen.getByRole("log")).toHaveClass("overflow-y-auto", "overflow-x-hidden");
-    const findingsPanel = screen.getAllByRole("tabpanel", { hidden: true }).find((panel) => panel.classList.contains("overflow-y-auto"))!;
-    expect(findingsPanel).toHaveClass("overflow-x-hidden");
+    await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
+    expect(screen.getByRole("tabpanel")).toHaveClass("overflow-y-auto", "overflow-x-hidden");
   });
 
   it("sem co-autor o papel não aparece", async () => {
