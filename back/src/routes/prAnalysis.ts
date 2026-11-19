@@ -12,6 +12,7 @@ const GITHUB_FAILED = [/^GitHub returned/, 502] as const;
 const SETTING_UP_ELSEWHERE = [/^pr_em_montagem/, 409] as const;
 const POLICY_VIOLATION = 1008;
 const INTERNAL_ERROR = 1011;
+const HEARTBEAT_MS = 25_000;
 
 function parseLiveFrame(raw: string): { type: "claim" | "release"; prNumber: number } | null {
   try {
@@ -66,7 +67,19 @@ export async function prAnalysisRoutes(app: FastifyInstance): Promise<void> {
         const holder = seat.claim(frame.prNumber);
         if (holder.userId !== user.id) send({ type: "claim-refused", prNumber: frame.prNumber, username: holder.username });
       }, () => undefined));
-      socket.on("close", () => void seated.then(({ seat }) => seat.leave(), () => undefined));
+      const heartbeat = { answered: true };
+      socket.on("pong", () => {
+        heartbeat.answered = true;
+      });
+      const keepalive = setInterval(() => {
+        if (!heartbeat.answered) return socket.terminate();
+        heartbeat.answered = false;
+        socket.ping();
+      }, HEARTBEAT_MS);
+      socket.on("close", () => {
+        clearInterval(keepalive);
+        void seated.then(({ seat }) => seat.leave(), () => undefined);
+      });
     },
   );
 

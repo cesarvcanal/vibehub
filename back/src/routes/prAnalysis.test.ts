@@ -227,10 +227,14 @@ describe("pessoas e papéis da análise", () => {
 
 type LiveFrame = { type: string; claims?: { prNumber: number; userId: string; username: string }[]; prNumber?: number; username?: string; code?: string };
 
-async function live(cookie: string, projectId: string) {
+async function live(cookie: string, projectId: string, { answersPing = true } = {}) {
   const frames: LiveFrame[] = [];
   const socket = await app.injectWS(`/api/projects/${projectId}/prs/live`, { headers: { cookie } }, {
-    onInit: (ws) => ws.on("message", (data) => frames.push(JSON.parse(String(data)) as LiveFrame)),
+    onInit: (ws) => {
+      ws.on("message", (data) => frames.push(JSON.parse(String(data)) as LiveFrame));
+      // injectWS builds its client without autoPong; a browser always answers the ping (RFC 6455 §5.5.2).
+      if (answersPing) ws.on("ping", (data) => ws.pong(data));
+    },
   });
   const send = (frame: Record<string, unknown>) => socket.send(JSON.stringify(frame));
   const lastClaims = () => frames.filter((frame) => frame.type === "claims").at(-1)?.claims;
@@ -362,6 +366,29 @@ describe("WS /api/projects/:id/prs/live", () => {
     expect(ownerLive.lastClaims()).toEqual([{ prNumber: 638, userId: w.memberId, username: "albert" }]);
     ownerLive.socket.terminate();
     memberLive.socket.terminate();
+  });
+
+  it("uma conexão que para de responder ao ping cai e solta a PR que segurava", async () => {
+    const w = await world();
+    await w.shareProject("work");
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const silentLive = await live(w.member, w.projectId, { answersPing: false });
+      const ownerLive = await live(w.owner, w.projectId);
+      silentLive.send({ type: "claim", prNumber: 636 });
+      await vi.waitFor(() => expect(ownerLive.lastClaims()).toHaveLength(1));
+      const ownerPinged = new Promise((settle) => ownerLive.socket.once("ping", settle));
+      vi.advanceTimersByTime(25_000);
+      await ownerPinged;
+      ownerLive.send({ type: "claim", prNumber: 637 });
+      await vi.waitFor(() => expect(ownerLive.lastClaims()).toHaveLength(2));
+      vi.advanceTimersByTime(25_000);
+      await vi.waitFor(() => expect(ownerLive.lastClaims()).toEqual([{ prNumber: 637, userId: w.ownerId, username: "owner" }]));
+      expect(ownerLive.socket.readyState).toBe(ownerLive.socket.OPEN);
+      ownerLive.socket.terminate();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("falha ao sentar o espectador fecha o canal com 1011, e a próxima conexão entra normalmente", async () => {
