@@ -16,6 +16,7 @@ describe("eslint.config.js: regras do AGENTS.md em todo .ts, .tsx e .mjs do repo
     ["any explícito (§5.5)", "export const parse = (raw: any) => raw;", "@typescript-eslint/no-explicit-any"],
     ["catch vazio (§9)", "export function read(run: () => void) {\n  try {\n    run();\n  } catch {}\n}", "no-empty"],
     [".catch(() => {}) (§9)", "export const fire = (job: Promise<void>) => job.catch(() => {});", "no-restricted-syntax"],
+    [".catch(() => {}) atribuído a outra coisa que a fila (§9)", "export function track(state: { pending: Promise<void> }, job: Promise<void>) {\n  state.pending = job.catch(() => {});\n}", "no-restricted-syntax"],
     [".catch(() => undefined) (§9)", "export async function fire(job: Promise<void>) {\n  await job.catch(() => undefined);\n}", "no-restricted-syntax"],
     ["@ts-ignore (§3)", "// @ts-ignore\nexport const value: number = 'text';", "@typescript-eslint/ban-ts-comment"],
     ["comentário sem marcador (§3)", "// only live cards\nexport const ready = true;", "vibehub/no-unmarked-comment"],
@@ -32,6 +33,7 @@ describe("eslint.config.js: regras do AGENTS.md em todo .ts, .tsx e .mjs do repo
 
   it.each([
     ["fila por card: queue = next.catch(() => undefined)", "// eslint-disable-next-line no-restricted-syntax -- live state of the queue\nlet queue = Promise.resolve();\nexport function enqueue(run: () => Promise<void>) {\n  const next = queue.then(run);\n  queue = next.catch(() => undefined);\n  return next;\n}"],
+    ["fila no campo da classe: this.queue = next.catch(() => undefined)", "export class Store {\n  private queue: Promise<void> = Promise.resolve();\n  enqueue(run: () => Promise<void>) {\n    const next = this.queue.then(run);\n    this.queue = next.catch(() => undefined);\n    return next;\n  }\n}"],
     ["fila encadeada: previous.catch(() => undefined).then(run)", "export const chain = (previous: Promise<void>, run: () => Promise<void>) => previous.catch(() => undefined).then(run);"],
     ["catch que trata o erro", "export const fire = (job: Promise<void>, warn: (error: unknown) => void) => job.catch((error) => warn(error));"],
     ["const", "export const count = 0;"],
