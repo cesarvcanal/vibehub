@@ -119,12 +119,10 @@ describe("relatório da análise pela ferramenta do card", () => {
       reportService.recordAnalysisReport(analysisCard.id, input({ findings: [blockingFinding] })),
       reportService.recordAnalysisReport(analysisCard.id, input({ findings: [secondFinding] })),
     ]);
-    const accepted = outcomes.filter((outcome) => outcome.status === "fulfilled");
-    const refused = outcomes.filter((outcome) => outcome.status === "rejected");
-    expect(refused).toHaveLength(1);
-    expect(String((refused[0] as PromiseRejectedResult).reason)).toMatch(/analysed já foi gravado/);
-    const acceptedReport = (accepted[0] as PromiseFulfilledResult<{ findings: { id: string }[] }>).value;
-    expect((await store.getAnalysis(analysisCard.id))?.findings).toEqual(acceptedReport.findings);
+    const acceptedReports = outcomes.flatMap((outcome) => (outcome.status === "fulfilled" ? [outcome.value] : []));
+    const refusals = outcomes.flatMap((outcome) => (outcome.status === "rejected" ? [String(outcome.reason)] : []));
+    expect(refusals).toEqual([expect.stringMatching(/analysed já foi gravado/)]);
+    expect((await store.getAnalysis(analysisCard.id))?.findings).toEqual(acceptedReports[0]!.findings);
   });
 
   it("relatório done que perde o unverifiedCount do analysed é recusado; o mesmo done com ele é gravado", async () => {
