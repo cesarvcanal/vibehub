@@ -208,7 +208,7 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 
 ### Runner e host
 
-- Cada `docker exec`/SSH é caro e disputa o runner com os outros cards. Agrupar comandos num script só quando forem do mesmo passo; nunca abrir uma execução remota por item de lista.
+- Cada `docker exec`/SSH é caro e disputa o runner com os outros cards. Agrupar comandos num script só quando forem do mesmo passo; nunca abrir uma execução remota por item de lista. `docker exec` e round trip ao host se contam separados: um `runScript` com três `docker exec` é uma viagem e três processos no runner.
 - Processo de longa duração (driver do SDK, terminal, preview) tem dono e fim definidos: quem abre fecha, e o que fica órfão é bug.
 - Saída grande (log, transcript, diff) é lida em fluxo ou recortada na origem, não carregada inteira na memória do backend.
 
@@ -398,7 +398,7 @@ Em pt-BR, em markdown, com estas seções (`##`) nesta ordem. A profundidade aco
 9. **Pontos de atenção**: riscos do merge, limitações conhecidas, pendências deliberadas com o motivo e onde o revisor deve olhar com cuidado. Comece por duas respostas curtas:
    - **o merge tem volta?** Porta de mão dupla quando reverter o commit desfaz tudo; porta de mão única quando há dado migrado ou apagado, contrato publicado ou outro efeito que o revert não desfaz;
    - **até onde vai o estrago se der errado?** Quem e o que pode quebrar: telas, cards em andamento, runner, dados das instalações, consumidores da API.
-10. **Conformidade com o AGENTS.md**: para **cada seção deste arquivo cujas regras se aplicam às linhas alteradas**, diga a regra, como foi cumprida e, quando der, o `arquivo:linha` que mostra isso. O que é ausência (sem comentário, sem `let`) se afirma. Regra não seguida: qual, onde e por quê, como pendência deliberada. Frase genérica ("segue o AGENTS.md") não vale.
+10. **Conformidade com o AGENTS.md**: para **cada seção deste arquivo cujas regras se aplicam às linhas alteradas**, diga a regra, como foi cumprida e, quando der, o `arquivo:linha` que mostra isso. O que é ausência (sem comentário, sem `let`, nenhum `docker exec` a mais) se afirma com o comando que a prova e o resultado dele: o `grep` no diff para o que está no texto; para o que acontece ao rodar (`docker exec`, leitura, render), a contagem ou a medição antes e depois (§8), porque a chamada nova a uma função que já existe não aparece no `grep`. Regra não seguida: qual, onde e por quê, como pendência deliberada. Frase genérica ("segue o AGENTS.md") não vale.
 
 Nunca invente causa, teste ou justificativa. O que não está confirmado é dito como não confirmado.
 
