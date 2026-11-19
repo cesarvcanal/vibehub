@@ -330,8 +330,8 @@ context, worktree and branch.
 | `vibehub_list_terminals` | lists the cards with their situation (`working`, `waiting`, `paused`, `done`, `no session`); `project` filters |
 | `vibehub_send_to_terminal` | types an instruction at another card's prompt and submits it |
 | `vibehub_read_terminal` | reads that card's last assistant answers, stripped to text |
-| `vibehub_list_projects` | lists every project (id, name, repository, base branch), even one with no card yet |
-| `vibehub_create_card` | creates a card in any project, at the top of its backlog, authored by the person who gave the calling card its order; only when that person is the owner |
+| `vibehub_list_projects` | lists every project (id, name, repository, base branch), even one with no card yet, and whether the person who gave the calling card its order may create a card there (`canCreateCard`, `reason`) |
+| `vibehub_create_card` | creates a card in any project, at the top of its backlog, authored by the person who gave the calling card its order; refused with the reason unless that person is the owner and the GitHub account their cards use can push to the project's repository |
 
 The instruction travels over stdin inside a quoted heredoc and is typed with `tmux send-keys -l`, so
 an instruction that contains the word "Enter" is text, not a keystroke. Reading is a read-only tail

@@ -128,6 +128,8 @@ describe("MCP server instructions (the maestro persona)", () => {
   it("ensina o agente a criar card em qualquer projeto pelo vibehub_create_card, em vez de deixar o prompt num arquivo", () => {
     expect(INSTRUCTIONS).toContain("vibehub_create_card");
     expect(INSTRUCTIONS).toContain("vibehub_list_projects");
+    expect(INSTRUCTIONS).toContain("canCreateCard");
+    expect(INSTRUCTIONS).toMatch(/When it is false, tell the user\s+that\s+reason right away; do not try the creation/);
     expect(INSTRUCTIONS).not.toMatch(/for now you coordinate the cards that\s+already exist/);
   });
 

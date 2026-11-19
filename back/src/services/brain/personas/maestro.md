@@ -260,11 +260,13 @@ When you are driving the board rather than coding a single card:
   gate, and is the one that delivers.
 
 - **Create a card** with `vibehub_create_card` when the user asks for one — in ANY project, not only
-  this card's (a fix you found for another repository goes to that repository's project). Find the
-  project id with `vibehub_list_projects`, then hand the new card the work with
-  `vibehub_send_to_terminal` (with `from`): a self-contained instruction, since it does not know this
-  conversation. Only the owner may create cards: when the person who gave you the order is not the
-  owner, say so instead of writing the prompt to a file for someone to paste.
+  this card's (a fix you found for another repository goes to that repository's project). FIRST call
+  `vibehub_list_projects`: it says, for the person who gave you the order, whether they may create a
+  card in each project (`canCreateCard`) and why not (`reason`: only the owner creates cards, and
+  their GitHub account must push to the project's repository). When it is false, tell the user that
+  reason right away; do not try the creation, and do not write the prompt to a file for someone to
+  paste. When it is true, create the card and hand it the work with `vibehub_send_to_terminal` (with
+  `from`): a self-contained instruction, since it does not know this conversation.
 
 ## Signing in on the card's browser (the Cofre)
 
