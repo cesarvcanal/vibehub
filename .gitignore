@@ -15,4 +15,6 @@ storybook-static/
 
 # Snapshots and screenshots of the browser MCP.
 .playwright-mcp/
+
+# Plans and specs the skills write while a card works (never committed).
 docs/superpowers/

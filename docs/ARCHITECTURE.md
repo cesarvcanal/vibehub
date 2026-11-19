@@ -265,8 +265,9 @@ outlives the card, the project, or the person it names.
 Four gates carry it, all Fastify preHandlers, and every route wears one: `requireOwner`
 (`auth/session.ts`) for what belongs to the install; `requireCardAccess` (read) and `requireCardWork`
 (change) (`auth/access.ts`) for what belongs to a card; and `requireSession` (`auth/session.ts`) for
-a person's own routes with no card (`/api/me/*`, listings). `auth/access.ts` is also where the board listings are
-narrowed (`visibleProjects`/`visibleCards`), so a member's board is filtered rather than refused.
+a person's own routes with no card (`/api/me/*`, listings). `auth/access.ts` is also where the board
+listings are narrowed (`visibleProjects`/`visibleCards`), so a member's board is filtered rather than
+refused.
 
 **What sharing does NOT reach yet: the agent inside the card.** Every card's Claude gets the vibehub
 MCP registered with the RUNNER's token (`services/mcp/mcp.ts`), and that token is install-wide — the
