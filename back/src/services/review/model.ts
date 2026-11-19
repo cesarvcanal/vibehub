@@ -185,6 +185,11 @@ export interface Review {
    * asked for the review ({@link cardsToConclude}). Never written again; the next order replaces it.
    */
   concludeWhenMerged?: boolean;
+  /**
+   * The side's Claude account refused its turn for the usage limit: the round waits for `until` (epoch ms, when
+   * the limit comes back) and is sent again by itself, without counting as a reminder.
+   */
+  usageLimitWait?: { side: "reviewer" | "author"; until: number };
   lastSubmitRound?: number;
   lastRespondRound?: number;
   nudges: number;

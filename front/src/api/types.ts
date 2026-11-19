@@ -860,6 +860,8 @@ export interface Review extends ReviewSummary {
   prHeadSha?: string;
   impasseReason?: string;
   approvePending?: boolean;
+  /** The side's Claude account ran out of usage limit: the round is sent again by itself at `until` (epoch ms). */
+  usageLimitWait?: { side: "reviewer" | "author"; until: number };
   /** The merge gate, run on the approved commit as soon as the review is ready (only valid for its `sha`). */
   mergeGate?: MergeGate;
   /** The round the reviewer's AI last handed back: below `round`, the reviewer's turn is still open. */

@@ -2354,6 +2354,83 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
     }
   });
 
+  describe("conta Claude sem limite de uso", () => {
+    async function limitedReviewer(o: Loaded, limit: { resetsAt?: number } | null) {
+      const s = await started(o);
+      const agentState = await import("../board/agentState.js");
+      const stopProbe = agentState.onCardUsageLimitProbe((cardId) => (cardId === s.review.reviewerCardId ? limit : null));
+      const off = o.orch.startReviewOrchestrator({ graceMs: 0, usageResumeMarginMs: 0 });
+      return { ...s, stop: () => { stopProbe(); off(); } };
+    }
+
+    it("não lembra nem trava: espera o limite voltar e reenvia a rodada sozinha", async () => {
+      const o = await load();
+      const { review, stop } = await limitedReviewer(o, { resetsAt: Date.now() + 150 });
+      try {
+        await endTurn(o, review.reviewerCardId);
+        await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.usageLimitWait).toMatchObject({ side: "reviewer" }));
+        expect(send).not.toHaveBeenCalled();
+        const waiting = await o.store.getReview(review.id);
+        expect(waiting).toMatchObject({ phase: "reviewing", nudges: 0 });
+        expect(waiting?.log.at(-1)?.text).toMatch(/sem limite de uso/);
+
+        await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1), { timeout: 3000 });
+        expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
+        expect(lastText()).toMatch(/^\[vibehub · revisão de PR\]/);
+        const resumed = await o.store.getReview(review.id);
+        expect(resumed).toMatchObject({ phase: "reviewing", nudges: 0 });
+        expect(resumed?.usageLimitWait).toBeUndefined();
+      } finally {
+        stop();
+      }
+    });
+
+    it("sem horário de volta: impasse com o motivo verdadeiro, sem lembrete", async () => {
+      const o = await load();
+      const { review, stop } = await limitedReviewer(o, {});
+      try {
+        await endTurn(o, review.reviewerCardId);
+        await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("impasse"));
+        expect((await o.store.getReview(review.id))?.impasseReason).toMatch(/sem limite de uso/);
+        expect(send).not.toHaveBeenCalled();
+      } finally {
+        stop();
+      }
+    });
+
+    it("a espera sobrevive ao reinício do servidor: o horário que já passou reenvia na subida", async () => {
+      const o = await load();
+      const { review } = await started(o);
+      await o.store.mutateReview(review.id, (r) => {
+        r.usageLimitWait = { side: "reviewer", until: Date.now() - 1000 };
+      });
+      const off = o.orch.startReviewOrchestrator({ graceMs: 0, usageResumeMarginMs: 0 });
+      try {
+        await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1), { timeout: 3000 });
+        expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
+        expect((await o.store.getReview(review.id))?.usageLimitWait).toBeUndefined();
+      } finally {
+        off();
+      }
+    });
+
+    it("tentar de novo durante a espera reenvia uma vez só", async () => {
+      const o = await load();
+      const { review, stop } = await limitedReviewer(o, { resetsAt: Date.now() + 300 });
+      try {
+        await endTurn(o, review.reviewerCardId);
+        await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.usageLimitWait).toBeDefined());
+        await o.orch.retryReview(review.id, "u-merger");
+        expect(send).toHaveBeenCalledTimes(1);
+        expect((await o.store.getReview(review.id))?.usageLimitWait).toBeUndefined();
+        await new Promise((r) => setTimeout(r, 500));
+        expect(send).toHaveBeenCalledTimes(1);
+      } finally {
+        stop();
+      }
+    });
+  });
+
   it("turno com pergunta ou permissão em aberto não conta", async () => {
     const o = await load();
     const { author, review, off } = await fixing(o);

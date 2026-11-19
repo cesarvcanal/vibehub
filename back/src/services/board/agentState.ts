@@ -292,6 +292,30 @@ export function cardHoldsBackgroundWork(cardId: string): boolean {
 }
 
 /**
+ * The card's Claude account refused the last turn for its usage limit (the CLI's `error: "rate_limit"`), and
+ * when the limit comes back, when the refusal said so. REGISTERED by the sdk manager, like the probes above.
+ */
+export interface CardUsageLimit {
+  /** Epoch in ms. */
+  resetsAt?: number;
+}
+type UsageLimitProbe = (cardId: string) => CardUsageLimit | null;
+const usageLimitProbes = new Set<UsageLimitProbe>();
+
+export function onCardUsageLimitProbe(probe: UsageLimitProbe): () => void {
+  usageLimitProbes.add(probe);
+  return () => usageLimitProbes.delete(probe);
+}
+
+export function cardUsageLimit(cardId: string): CardUsageLimit | null {
+  for (const probe of usageLimitProbes) {
+    const limit = probe(cardId);
+    if (limit) return limit;
+  }
+  return null;
+}
+
+/**
  * Where the sdk manager sends a status the HOOKS cannot: the last background task ended and no
  * turn opened after it, so no Stop will ever fire to say the card went idle (or a task outlived a
  * Stop that raced ahead of it). The board's status service registers itself here — the sdk layer

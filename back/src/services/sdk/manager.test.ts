@@ -2948,6 +2948,30 @@ describe("rate_limit — o aviso de limite do plano", () => {
  * ACCOUNT needed reconnecting, and a tab opened later did not know at all. Session state, like the limit warning:
  * resent to whoever connects, never recorded, and gone with the first turn that works again.
  */
+describe("usage_limited — a conta do card ficou sem limite de uso", () => {
+  it("o card passa a dizer que está sem limite, com o horário de volta, até um turno dar certo", async () => {
+    const { cardUsageLimit } = await import("../board/agentState.js");
+    const session = ensure();
+    const open = fakeSocket();
+    attachSocket(session, open as never);
+    expect(cardUsageLimit(CARD)).toBeNull();
+    spawned[0]!.stdout.emit("data", line({ type: "usage_limited", rateLimit: { status: "rejected", rateLimitType: "five_hour", resetsAt: 1795119000 } }));
+    spawned[0]!.stdout.emit("data", line({ type: "result", subtype: "success", isError: true, sessionId: "s1" }));
+    expect(cardUsageLimit(CARD)).toEqual({ resetsAt: 1795119000000 });
+    expect(open.sent.map((s) => JSON.parse(s) as { type: string }).some((e) => e.type === "usage_limited")).toBe(false);
+
+    spawned[0]!.stdout.emit("data", line({ type: "result", subtype: "success", isError: false, sessionId: "s1" }));
+    expect(cardUsageLimit(CARD)).toBeNull();
+  });
+
+  it("recusa sem horário de volta: o card está sem limite, sem resetsAt", async () => {
+    const { cardUsageLimit } = await import("../board/agentState.js");
+    ensure();
+    spawned[0]!.stdout.emit("data", line({ type: "usage_limited" }));
+    expect(cardUsageLimit(CARD)).toEqual({});
+  });
+});
+
 describe("login_failed — o login da conta do card morreu", () => {
   const loginFrames = (socket: ReturnType<typeof fakeSocket>) =>
     socket.sent.map((s) => JSON.parse(s) as { type: string }).filter((e) => e.type === "login_failed" || e.type === "login_restored");

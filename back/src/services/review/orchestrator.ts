@@ -5,7 +5,7 @@ import {
 } from "../board/registry.js";
 import { cardBranch, resumeCard } from "../board/workspace.js";
 import { recordCardActor } from "../board/actor.js";
-import { cardHoldsBackgroundWork } from "../board/agentState.js";
+import { cardHoldsBackgroundWork, cardUsageLimit } from "../board/agentState.js";
 import { findUser } from "../../auth/users.js";
 import { cardLevel } from "../../auth/access.js";
 import { cardAccountSlug, getUserGit, linkedAccountSlug } from "../../auth/userGit.js";
@@ -24,7 +24,7 @@ import {
 } from "./model.js";
 import { findActiveAnalysisCard } from "./analysisReport.js";
 import {
-  activeReviewForPr, getReview, insertReview, listReviewsForCards, mutateReview, reviewByReviewerCard,
+  activeReviewForPr, getReview, insertReview, listReviewsForCards, listReviewsWaitingUsageLimit, mutateReview, reviewByReviewerCard,
 } from "./store.js";
 import {
   actionableForAuthor, approvePendingText, autoMergeFailedText, authorFixPrompt, authorMergeGatePrompt, mergeGateFailedText, authorQuestionNoticeText, authorSuggestionsPrompt, headMovedPrefix,
@@ -75,6 +75,10 @@ const REVIEWER_VERDICTS: ReadonlySet<FindingStatus> = new Set(["fixed", "open", 
 export const HEAD_SHA_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
 
 const NO_ANSWER = "IA não respondeu";
+/** Impasse reason when the account refused the turn for its usage limit and did not say when it comes back. */
+const USAGE_LIMIT = "conta Claude sem limite de uso, sem horário de volta";
+/** What the resend waits after the limit's reset, so the first call does not hit the window still closing. */
+const USAGE_RESUME_MARGIN_MS = 60_000;
 /** Impasse reason when the PR moved after `ready` and no round is left to check what came in. */
 const HEAD_MOVED = "push depois do pronto";
 
@@ -1070,9 +1074,11 @@ export async function retryReview(reviewId: string, by: string): Promise<Review>
     }
     r.nudges = 0;
     r.impasseReason = undefined;
+    delete r.usageLimitWait;
     note(r, "human", side === "approve" ? "Tentar de novo: o pedido de Approve volta ao revisor." :
       `Tentar de novo: a vez volta ao ${side === "reviewer" ? "revisor" : "autor"} (rodada ${r.round} de ${MAX_ROUNDS}).`, { by });
   });
+  cancelUsageResume(reviewId);
   logger.info({ audit: true, action: "review.retry", review: reviewId, side, by }, "PR review retried");
   if (side === "gate") void checkMergeGate(reviewId, { again: true, by });
   else if (side === "approve") await relayReview(after, "reviewer", reviewerApprovePrompt(after), { approve: true });
@@ -1456,12 +1462,23 @@ async function onTurnFinished(event: CardEvent): Promise<void> {
     logger.info({ card: cardId, reviews: waiting.map((w) => w.id), reason: skip }, "PR review: finished turn not judged");
     return;
   }
+  const usageLimit = cardUsageLimit(cardId);
   for (const { id, side } of waiting) {
-    let action = null as "nudge" | "impasse" | null;
+    let action = null as "nudge" | "impasse" | "wait" | null;
     const tool = side === "reviewer" ? TOOL_SUBMIT : TOOL_RESPOND;
+    const who = side === "reviewer" ? "revisor" : "autor";
     const after = await mutateReview(id, (r) => {
-      if (!awaitingTool(r, side)) return;
-      if (r.nudges >= 1) {
+      if (!awaitingTool(r, side) || r.usageLimitWait) return;
+      if (usageLimit?.resetsAt !== undefined) {
+        r.usageLimitWait = { side, until: usageLimit.resetsAt };
+        note(r, "system", `A conta Claude do ${who} ficou sem limite de uso: a rodada ${r.round} continua sozinha quando o limite voltar.`);
+        action = "wait";
+      } else if (usageLimit) {
+        r.phase = "impasse";
+        r.impasseReason = USAGE_LIMIT;
+        note(r, "system", `Impasse: a conta Claude do ${who} ficou sem limite de uso e não disse quando volta.`);
+        action = "impasse";
+      } else if (r.nudges >= 1) {
         r.phase = "impasse";
         r.impasseReason = NO_ANSWER;
         note(r, "system", `Impasse: a IA do ${side === "reviewer" ? "revisor" : "autor"} terminou o turno de novo sem chamar ${tool}.`);
@@ -1474,7 +1491,47 @@ async function onTurnFinished(event: CardEvent): Promise<void> {
     });
     if (action === "nudge") await relayReview(after, side, nudgePrefix(tool) + (await promptFor(after, side)));
     else if (action === "impasse") await announcePhase(after);
+    else if (action === "wait") scheduleUsageResume(after);
   }
+}
+
+/** The resends waiting for a usage limit, per review, and the margin after the reset (live state of this process). */
+const usageResume = { timers: new Map<string, NodeJS.Timeout>(), marginMs: USAGE_RESUME_MARGIN_MS };
+
+function cancelUsageResume(reviewId: string): void {
+  clearTimeout(usageResume.timers.get(reviewId));
+  usageResume.timers.delete(reviewId);
+}
+
+function scheduleUsageResume(r: Review): void {
+  if (!r.usageLimitWait) return;
+  cancelUsageResume(r.id);
+  const delay = Math.max(0, r.usageLimitWait.until + usageResume.marginMs - Date.now());
+  const timer = setTimeout(() => {
+    usageResume.timers.delete(r.id);
+    void resumeAfterUsageLimit(r.id).catch((err: unknown) => {
+      logger.warn({ review: r.id, detail: (err as Error).message }, "PR review could not resume after the usage limit");
+    });
+  }, delay);
+  timer.unref?.();
+  usageResume.timers.set(r.id, timer);
+}
+
+/**
+ * The usage limit came back: the side's turn is sent again, as it was, without counting as a reminder. A review
+ * that moved meanwhile (cancelled, "tentar de novo", the tool called after all) only loses the mark.
+ */
+async function resumeAfterUsageLimit(reviewId: string): Promise<void> {
+  let side = null as Side | null;
+  const after = await mutateReview(reviewId, (r) => {
+    const wait = r.usageLimitWait;
+    if (!wait) return;
+    delete r.usageLimitWait;
+    if (!awaitingTool(r, wait.side)) return;
+    side = wait.side;
+    note(r, "system", `O limite da conta Claude do ${side === "reviewer" ? "revisor" : "autor"} voltou: a rodada ${r.round} segue.`);
+  });
+  if (side) await relayReview(after, side, await promptFor(after, side));
 }
 
 /**
@@ -1483,8 +1540,12 @@ async function onTurnFinished(event: CardEvent): Promise<void> {
  * grace period — the tool call that arrived in the same turn wins — and swallows any error with a warn.
  * Returns the unsubscribe.
  */
-export function startReviewOrchestrator(opts: { graceMs?: number } = {}): () => void {
+export function startReviewOrchestrator(opts: { graceMs?: number; usageResumeMarginMs?: number } = {}): () => void {
   const graceMs = opts.graceMs ?? TURN_GRACE_MS;
+  usageResume.marginMs = opts.usageResumeMarginMs ?? USAGE_RESUME_MARGIN_MS;
+  void listReviewsWaitingUsageLimit().then((reviews) => reviews.forEach(scheduleUsageResume)).catch((err: unknown) => {
+    logger.warn({ detail: (err as Error).message }, "PR review could not reschedule the usage limit waits");
+  });
   const timers = new Set<NodeJS.Timeout>();
   let stopped = false;
   const off = onCardEvent((event: CardEvent) => {
@@ -1507,6 +1568,7 @@ export function startReviewOrchestrator(opts: { graceMs?: number } = {}): () => 
     off();
     for (const t of timers) clearTimeout(t);
     timers.clear();
+    for (const reviewId of [...usageResume.timers.keys()]) cancelUsageResume(reviewId);
   };
 }
 

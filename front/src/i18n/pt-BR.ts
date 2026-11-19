@@ -1581,6 +1581,8 @@ export const ptBR: Record<string, string> = {
   "review.stage.reviewing.first": "O revisor está lendo o PR.",
   "review.stage.reviewing.next": "O revisor confere só o que mudou desde a rodada {prev}.",
   "review.stage.fixing": "O autor está corrigindo a lista.",
+  "review.stage.usageLimit.reviewer": "A conta Claude do revisor ficou sem limite de uso: a rodada continua sozinha às {time}.",
+  "review.stage.usageLimit.author": "A conta Claude do autor ficou sem limite de uso: a correção continua sozinha às {time}.",
   "review.stage.ready": "Revisão aprovada, sem bloqueio em pé: falta só o merge.",
   "review.stage.gateRunning": "Revisão aprovada: rodando os testes do merge no commit aprovado.",
   "review.stage.gateFailed": "Revisão aprovada, mas os testes do merge seguem falhando no commit aprovado: o merge espera alguém conferir.",

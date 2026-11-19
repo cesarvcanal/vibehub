@@ -1569,6 +1569,8 @@ export const en: Record<string, string> = {
   "review.stage.reviewing.first": "The reviewer is reading the PR.",
   "review.stage.reviewing.next": "The reviewer is checking only what changed since round {prev}.",
   "review.stage.fixing": "The author is fixing the list.",
+  "review.stage.usageLimit.reviewer": "The reviewer's Claude account ran out of usage limit: the round goes on by itself at {time}.",
+  "review.stage.usageLimit.author": "The author's Claude account ran out of usage limit: the fix goes on by itself at {time}.",
   "review.stage.ready": "Review approved, no blocker left standing: only the merge is missing.",
   "review.stage.gateRunning": "Review approved: running the merge checks on the approved commit.",
   "review.stage.gateFailed": "Review approved, but the merge checks keep failing on the approved commit: the merge waits for someone to look.",

@@ -10,6 +10,7 @@ import {
   FINDING_SEVERITY_TONE, FINDING_STATUS_TONE, IMPASSE_ROUNDS, REVIEW_MAX_ROUNDS, autonomySummary, awaitingDecision, findingIsOpen,
   MERGE_GATE_AUTO_RETRIES, mergeGateOf, mergeGateStatus, pendingQuestions, requestedAtText, reviewIsOpen, reviewPill, reviewTurn, stuckItems, type ReviewActions,
 } from "@/features/board/lib/review";
+import { formatResetAt } from "@/features/board/lib/planUsage";
 import { t as translate, useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 
@@ -954,6 +955,9 @@ function Footer({
 
 /** One sentence on what is happening now: whose turn it is, or what the review waits for. */
 function stageText(review: Review, authorWorking: boolean, t: typeof translate): string {
+  if (review.usageLimitWait && (review.phase === "reviewing" || review.phase === "fixing")) {
+    return t(`review.stage.usageLimit.${review.usageLimitWait.side}`, { time: formatResetAt(review.usageLimitWait.until, Date.now()) });
+  }
   switch (review.phase) {
     case "reviewing":
       if (awaitingDecision(review)) return t("review.stage.decision");

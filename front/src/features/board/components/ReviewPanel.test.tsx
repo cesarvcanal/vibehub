@@ -158,6 +158,14 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.getByText("Dúvida esperando a decisão do revisor humano.")).toBeInTheDocument();
   });
 
+  it("conta Claude sem limite de uso: a etapa diz de quem é a conta e a que horas a rodada continua sozinha", async () => {
+    const until = new Date();
+    until.setHours(17, 10, 0, 0);
+    open("aut", review({ phase: "reviewing", round: 1, usageLimitWait: { side: "reviewer", until: until.getTime() } }));
+    await loaded();
+    expect(screen.getByText("A conta Claude do revisor ficou sem limite de uso: a rodada continua sozinha às 17:10.")).toBeInTheDocument();
+  });
+
   it("sem co-autor o papel não aparece", async () => {
     open("rev", review());
     await loaded();

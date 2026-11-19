@@ -1179,6 +1179,11 @@ async function runStream() {
           streamLoginFailed = true;
           emit({ type: "login_failed" });
         }
+        // CLI 0.3.300 binary: api_error_params.rate_limit_info "says which and when it resets" on a usage-limit refusal.
+        if (msg.error === "rate_limit" && parent === null) {
+          const rateLimit = msg.api_error_params && msg.api_error_params.rate_limit_info;
+          emit({ type: "usage_limited", ...(rateLimit ? { rateLimit } : {}) });
+        }
         // Main-agent speech WITHOUT an open turn = the CLI opened a turn on its own (a background
         // task finished, a ScheduleWakeup fired). It becomes the turn in flight: a message
         // now is absorbed into it (`turn_absorbed`), and if the stream drops before the `result` the finally

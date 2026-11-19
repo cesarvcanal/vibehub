@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
 import * as registry from "../board/registry.js";
 import { syncPendingQuestion } from "./pendingQuestion.js";
-import { onCardBackgroundProbe, onCardDefaultEffortProbe, onCardDriverProbe, onCardEffortApplier, reportCardStatusFromDriver, type DriverActivity } from "../board/agentState.js";
+import { onCardBackgroundProbe, onCardDefaultEffortProbe, onCardDriverProbe, onCardEffortApplier, onCardUsageLimitProbe, reportCardStatusFromDriver, type CardUsageLimit, type DriverActivity } from "../board/agentState.js";
 import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
 import { HISTORY_REPLAY_LIMIT, appendHistory, appendHistoryReported, clearHistoryBeforeLastClear, readHistory, replayableHistoryEvent, rewindHistory, unwrapEditedMessage, type HistoryEvent } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker, type InflightBackground, type InflightMarker } from "./inflight.js";
@@ -148,6 +148,8 @@ export interface DriverSession {
    * works again (that one sends `login_restored`).
    */
   loginFailed: boolean;
+  /** The account refused the last turn for its usage limit; cleared by the first turn that works again. */
+  usageLimit?: CardUsageLimit;
   /**
    * The last reading of how much of the context window the session takes (the meter next to the "está
    * digitando"). Session state, like the limit warning: resent to whoever connects, never recorded.
@@ -816,6 +818,12 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
   // A turn that WORKED after the login died: the account is back. Only the screen's warning has to go.
   const loginRestored = event.type === "result" && session.loginFailed && !event.isError && event.subtype !== "aborted";
   if (loginRestored) session.loginFailed = false;
+  if (event.type === "result" && !event.isError && event.subtype !== "aborted") session.usageLimit = undefined;
+  if (event.type === "usage_limited") {
+    const resetsAt = normalizeRateLimit(event.rateLimit)?.resetsAt;
+    session.usageLimit = resetsAt === undefined ? {} : { resetsAt };
+    return;
+  }
   if (event.type === "rate_limit") {
     const info = normalizeRateLimit(event);
     if (!info) return;
@@ -2500,3 +2508,7 @@ onCardDefaultEffortProbe((cardId) => driverDefaultEffort(cardId));
 // put the card in "aguardando" (see services/board/status.ts).
 // The same holds for a turn in flight: the `waiting` that arrives with it open is a late hook.
 onCardBackgroundProbe((cardId) => driverHoldsBackgroundWork(cardId) || driverTurnRunning(cardId));
+onCardUsageLimitProbe((cardId) => {
+  const session = sessions.get(cardId);
+  return session && !session.closed ? session.usageLimit ?? null : null;
+});
