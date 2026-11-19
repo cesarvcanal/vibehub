@@ -319,6 +319,7 @@ export interface ConversationResetEvent { type: "conversation_reset"; trigger?: 
  */
 export interface LoginFailedEvent { type: "login_failed" }
 export interface LoginRestoredEvent { type: "login_restored" }
+export interface UsageLimitedEvent { type: "usage_limited"; rateLimit?: unknown }
 /** The driver is up and ready to accept the first user message. The back stamps `turnActive` on
  *  every `ready` it sends (real or synthesized on reattach) with the manager's live turn count, so
  *  a view mounting mid-turn knows work is running (reattach mid-turn: Terminal↔Chat during a turn
@@ -370,6 +371,7 @@ export type DriverEvent =
   | BackgroundTasksEvent
   | RateLimitEvent
   | LoginFailedEvent
+  | UsageLimitedEvent
   | ContextUsageEvent
   | ConversationResetEvent
   | ResultEvent
@@ -409,6 +411,7 @@ const DRIVER_EVENT_TYPES = new Set([
   "background_tasks",
   "rate_limit",
   "login_failed",
+  "usage_limited",
   "context_usage",
   "conversation_reset",
   "result",

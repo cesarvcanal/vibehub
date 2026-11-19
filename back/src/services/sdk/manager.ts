@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
 import * as registry from "../board/registry.js";
 import { syncPendingQuestion } from "./pendingQuestion.js";
-import { onCardBackgroundProbe, onCardDefaultEffortProbe, onCardDriverProbe, onCardEffortApplier, reportCardStatusFromDriver, type DriverActivity } from "../board/agentState.js";
+import { onCardBackgroundProbe, onCardDefaultEffortProbe, onCardDriverProbe, onCardEffortApplier, onCardUsageLimitProbe, reportCardStatusFromDriver, type CardUsageLimit, type DriverActivity } from "../board/agentState.js";
 import { onCardInUseProbe, onCardSessionKill } from "../board/workspace.js";
 import { HISTORY_REPLAY_LIMIT, appendHistory, appendHistoryReported, clearHistoryBeforeLastClear, readHistory, replayableHistoryEvent, rewindHistory, unwrapEditedMessage, type HistoryEvent } from "./history.js";
 import { clearInflightMarker, inflightPreview, writeInflightMarker, type InflightBackground, type InflightMarker } from "./inflight.js";
@@ -15,8 +15,8 @@ import { writeCardCatalog } from "./catalog.js";
 import { normalizeRateLimit, type RateLimitInfo } from "./rateLimit.js";
 import { normalizeContextUsage, type ContextUsageInfo } from "./contextUsage.js";
 import { saveLastContext, type StoredContext } from "./lastContext.js";
-import { forgetCardWorkflows, lastWorkflowRuns, readAgentFeed, watchCardWorkflows } from "./workflow.js";
-import { InvalidWorkflowIdError } from "./workflowProbe.js";
+import { forgetCardWorkflows, lastWorkflowRuns, readAgentFeed, readWorkflowRuns, watchCardWorkflows } from "./workflow.js";
+import { InvalidWorkflowIdError, type WorkflowRun } from "./workflowProbe.js";
 import { InvalidDetailIdError, readAgentTimeline, readToolDetail } from "./detail.js";
 import { readCardChanges, readCardFileDiff } from "../maestro/changes.js";
 import { mergeTaskEvent, taskSnapshot, toolResultEvent, type AgentTaskEvent, type RawTaskEvent, type RawToolResultEvent } from "./toolResult.js";
@@ -148,6 +148,8 @@ export interface DriverSession {
    * works again (that one sends `login_restored`).
    */
   loginFailed: boolean;
+  fleetViewedAt?: number;
+  usageLimit?: CardUsageLimit;
   /**
    * The last reading of how much of the context window the session takes (the meter next to the "está
    * digitando"). Session state, like the limit warning: resent to whoever connects, never recorded.
@@ -816,6 +818,12 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
   // A turn that WORKED after the login died: the account is back. Only the screen's warning has to go.
   const loginRestored = event.type === "result" && session.loginFailed && !event.isError && event.subtype !== "aborted";
   if (loginRestored) session.loginFailed = false;
+  if (event.type === "result" && !event.isError && event.subtype !== "aborted") session.usageLimit = undefined;
+  if (event.type === "usage_limited") {
+    const refusal = normalizeRateLimit(event.rateLimit);
+    if (refusal?.status === "rejected") session.usageLimit = refusal.resetsAt === undefined ? {} : { resetsAt: refusal.resetsAt };
+    return;
+  }
   if (event.type === "rate_limit") {
     const info = normalizeRateLimit(event);
     if (!info) return;
@@ -1021,14 +1029,29 @@ function workflowDirs(session: Pick<DriverSession, "transcriptDir" | "lastSessio
   return { runs: `${base}/subagents/workflows`, scripts: `${base}/workflows/scripts` };
 }
 
+const FLEET_VIEWER_TTL_MS = 15_000;
+
 /** Turns on this card's fleet probe (idempotent — see `watchCardWorkflows`). */
 function startWorkflowWatch(session: DriverSession): void {
   watchCardWorkflows(session.cardId, {
     label: session.label,
     dirs: () => workflowDirs(session),
-    watchers: () => session.sockets.size,
+    watchers: () => session.sockets.size + (Date.now() - (session.fleetViewedAt ?? 0) < FLEET_VIEWER_TTL_MS ? 1 : 0),
     publish: (run) => broadcast(session, { type: "workflow_progress", ...run }),
   });
+}
+
+export function watchCardFleet(cardId: string): WorkflowRun[] {
+  const session = sessions.get(cardId);
+  if (!session || session.closed) return [];
+  session.fleetViewedAt = Date.now();
+  return lastWorkflowRuns(cardId);
+}
+
+export async function readCardFleet(cardId: string): Promise<WorkflowRun[]> {
+  const session = sessions.get(cardId);
+  const dirs = session && !session.closed ? workflowDirs(session) : null;
+  return dirs ? await readWorkflowRuns(dirs) : [];
 }
 
 /** A subagent's feed for whoever asked, with the reason when it comes back empty because of an error. */
@@ -2500,3 +2523,7 @@ onCardDefaultEffortProbe((cardId) => driverDefaultEffort(cardId));
 // put the card in "aguardando" (see services/board/status.ts).
 // The same holds for a turn in flight: the `waiting` that arrives with it open is a late hook.
 onCardBackgroundProbe((cardId) => driverHoldsBackgroundWork(cardId) || driverTurnRunning(cardId));
+onCardUsageLimitProbe((cardId) => {
+  const session = sessions.get(cardId);
+  return session && !session.closed ? session.usageLimit ?? null : null;
+});

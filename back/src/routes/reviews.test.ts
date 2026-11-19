@@ -21,6 +21,8 @@ vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 let dir = "";
 let app: FastifyInstance;
 
+const runScript = vi.fn<(script: string, opts?: unknown) => Promise<{ stdout: string; stderr: string }>>(async () => ({ stdout: "[]", stderr: "" }));
+
 const send = vi.fn(async (cardId: string, _text: string, opts: SendOpts = {}): Promise<SendResult> => {
   await opts.beforeDeliver?.();
   return { sent: true, cardId, title: "", project: "" };
@@ -55,6 +57,10 @@ async function boot(): Promise<FastifyInstance> {
       running: true, exists: true, claudeInstalled: true, dockerReachable: true,
       container: "vibehub-runner", host: "this machine",
     })),
+  }));
+  vi.doMock("../runtime/host.js", async () => ({
+    ...(await vi.importActual<typeof import("../runtime/host.js")>("../runtime/host.js")),
+    hostExecutor: () => ({ kind: "local", label: "test", runScript, ptyCommand: vi.fn() }),
   }));
   vi.doMock("../services/board/workspace.js", async () => ({
     ...(await vi.importActual<typeof import("../services/board/workspace.js")>("../services/board/workspace.js")),
@@ -205,6 +211,8 @@ const merge = async (reviewId: string, as: Person) =>
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "vibehub-review-routes-"));
   send.mockClear();
+  runScript.mockReset();
+  runScript.mockResolvedValue({ stdout: "[]", stderr: "" });
   deliver.mockClear();
   gateAtCommit.mockClear();
   gateAnswer = { ran: true, passed: true, output: "" };
@@ -654,6 +662,101 @@ describe("GET da revisão: quem está trabalhando agora", () => {
     await reg.applyCardStatus(review.reviewerCardId, "working");
     await reg.applyCardStatus(w.cardId, "waiting");
     expect(await read()).toMatchObject({ review: { id: review.id }, working: { author: false, reviewer: true } });
+  });
+});
+
+describe("GET da revisão: a frota de agentes do revisor", () => {
+  async function reviewerWithLiveFleet() {
+    const w = await world();
+    const review = (await startReview(w)).json().review as { id: string; reviewerCardId: string };
+    const { EventEmitter } = await import("node:events");
+    const manager = await import("../services/sdk/manager.js");
+    const workflow = await import("../services/sdk/workflow.js");
+    const driver = Object.assign(new EventEmitter(), {
+      stdout: new EventEmitter(), stderr: new EventEmitter(), exitCode: null, kill: () => undefined,
+      stdin: Object.assign(new EventEmitter(), { writable: true, write: () => true, end: () => undefined }),
+    });
+    manager.setDriverSpawnerForTesting(() => driver as never);
+    manager.ensureDriverSession({
+      cardId: review.reviewerCardId, label: "revisor", command: { file: "docker", args: ["exec"] }, transcriptDir: "/root/.claude/projects/p",
+    });
+    const emit = (event: object) => driver.stdout.emit("data", Buffer.from(`${JSON.stringify(event)}\n`));
+    emit({ type: "session", sessionId: "s1" });
+    runScript.mockResolvedValue({
+      stdout: `${JSON.stringify([{
+        runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Contexto", "Revisão"], total: 1, done: 0,
+        agents: [{
+          id: "a01f", status: "running", label: "revisão: correctness", phase: "Revisão", model: "sonnet", toolCount: 2,
+          activity: { kind: "tool", tool: "Bash", target: "cat .env" },
+        }],
+      }])}\n`,
+      stderr: "",
+    });
+    emit({ type: "tool_use", id: "t-wf", name: "Workflow", input: {} });
+    const read = async () =>
+      (await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/review`, headers: { cookie: w.leitor.cookie } })).json();
+    const firstProbe = async () => {
+      expect((await read()).fleet).toEqual([]);
+      await vi.advanceTimersByTimeAsync(workflow.WATCH_INTERVAL_MS);
+    };
+    const cleanup = () => {
+      manager.resetSdkSessionsForTesting();
+      manager.setDriverSpawnerForTesting(null);
+    };
+    return { review, read, firstProbe, cleanup };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("traz o que cada agente da frota faz, com fase e modelo, sem a atividade crua, e o painel aberto mantém a frota acompanhada", async () => {
+    const { read, firstProbe, cleanup } = await reviewerWithLiveFleet();
+    try {
+      await firstProbe();
+      expect((await read()).fleet).toHaveLength(1);
+      expect((await read()).fleet[0]).toMatchObject({
+        runId: "wf_abc12", phases: ["Contexto", "Revisão"],
+        agents: [{ label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "running" }],
+      });
+      expect((await read()).fleet[0].agents[0]).toEqual({ id: "a01f", label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "running" });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it.each([
+    { name: "na vez do autor", phase: "fixing" as const },
+    { name: "com a revisão encerrada", phase: "cancelled" as const },
+  ])("$name a frota viva não vai na resposta", async ({ phase }) => {
+    const { review, read, firstProbe, cleanup } = await reviewerWithLiveFleet();
+    try {
+      await firstProbe();
+      await (await store()).mutateReview(review.id, (stored) => {
+        stored.phase = phase;
+        stored.lastSubmitRound = stored.round;
+      });
+      expect((await read()).fleet).toEqual([]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("no impasse com a rodada do revisor não entregue, a frota viva continua na resposta", async () => {
+    const { review, read, firstProbe, cleanup } = await reviewerWithLiveFleet();
+    try {
+      await firstProbe();
+      await (await store()).mutateReview(review.id, (stored) => {
+        stored.phase = "impasse";
+        stored.impasseReason = "IA não respondeu";
+      });
+      expect((await read()).fleet).toHaveLength(1);
+    } finally {
+      cleanup();
+    }
   });
 });
 

@@ -150,6 +150,15 @@ export function query({ prompt, options }) {
         yield { type: "result", subtype: "success", session_id: SESSION, result: "ok" };
         continue;
       }
+      if (text === "quota") {
+        // A CONTA SEM LIMITE DE USO (CLI 0.3.300; o binário descreve api_error_params.rate_limit_info como "which and
+        // when it resets"): mensagem SINTÉTICA com error: "rate_limit", e o turno fecha com erro.
+        yield { type: "assistant", uuid: "a-quota", parent_tool_use_id: null, session_id: SESSION, error: "rate_limit",
+          api_error_params: { rate_limit_info: { status: "rejected", rateLimitType: "five_hour", resetsAt: 1795119000 } },
+          message: { content: [{ type: "text", text: "You've hit your session limit · resets 8:10pm (UTC)" }] } };
+        yield { type: "result", subtype: "success", is_error: true, session_id: SESSION, result: "You've hit your session limit · resets 8:10pm (UTC)" };
+        continue;
+      }
       if (text === "authfail") {
         // O LOGIN DA CONTA MORREU (formas do CLI 0.3.300, lidas no binário): a renovação do OAuth falha e
         // o CLI responde com uma mensagem SINTÉTICA marcada error: "authentication_failed", e fecha o turno com erro.
@@ -549,6 +558,19 @@ describe("sdk-driver.mjs — um login novo vale na próxima mensagem, sem Reinic
     await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:de novo", from);
     expect(authMarks(driver).length).toBe(before + 1);
     expect(authMarks(driver).at(-1)).toBe("auth:login");
+  }, 60_000);
+
+  it("a recusa por limite de uso sai como usage_limited, com o horário de volta, antes do result", async () => {
+    const config = await profileWithToken("profile-usage-limited");
+    const driver = startDriver([], sandbox, config);
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "quota" });
+    await driver.waitFor((e) => e.type === "result");
+    const types = driver.events.map((e) => e.type);
+    expect(driver.events.filter((e) => e.type === "usage_limited")).toEqual([
+      { type: "usage_limited", rateLimit: { status: "rejected", rateLimitType: "five_hour", resetsAt: 1795119000 } },
+    ]);
+    expect(types.indexOf("usage_limited")).toBeLessThan(types.indexOf("result"));
   }, 60_000);
 
   it("o login que morreu é DITO à tela (login_failed), antes do result do turno — e só ele", async () => {

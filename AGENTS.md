@@ -151,6 +151,7 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 12. Tratar carregamento, vazio, erro, sucesso e envio duplicado quando pertinentes.
 13. Não disparar requisições em renderização nem por efeito descontrolado.
 14. Esconder ação na UI é experiência; quem autoriza é o backend.
+15. **Toda mudança de layout passa por revisão de UI/UX com a tela renderizada**, inclusive um bloco novo dentro de uma tela que já existe. Antes de entregar, o agente vê a tela rodando (o app ou uma história do Storybook, na largura real em que ela aparece) e confere: a hierarquia diz o que importa primeiro, o novo segue o visual dos vizinhos (cores, tamanhos, espaçamentos e as primitivas de `components/ui`), nenhum texto some ou é cortado na horizontal (texto longo quebra a linha; contêiner com rolagem rola só na vertical), e os estados de vazio, carregando, erro e muitos itens continuam legíveis. O print vai no PR (§14, item 8); o que não ficou bom é corrigido antes, não registrado como pendência.
 
 | Pasta (front) | Guarda | Não guarda |
 |---------------|--------|------------|
@@ -626,6 +627,7 @@ Antes de cada etapa, ache no mapa abaixo a skill da situação e invoque-a pela 
 | Pôr à prova um plano com perguntas duras | `mattpocock-skills:grilling` |
 | Desenhar a interface de um módulo, decidir onde passa a fronteira | `mattpocock-skills:codebase-design` |
 | Tela nova ou redesenho, antes do código | Protótipo pela ferramenta `Artifact`, quando o ambiente a oferece, senão página HTML local; + `frontend-design:frontend-design` |
+| Qualquer mudança de layout (bloco novo, tamanho, espaçamento, rolagem), antes de escrever e de novo com a tela renderizada antes de entregar (§5, item 15) | `frontend-design:frontend-design` |
 | Revisar tela existente, acessibilidade, layout responsivo | `ui-design:design-review` · `ui-design:accessibility-audit` · `ui-design:responsive-design` |
 | Bug, teste falhando, comportamento que ninguém explica | `mattpocock-skills:diagnosing-bugs` |
 | Tarefa de várias etapas | `superpowers:writing-plans`, depois `superpowers:executing-plans` (você executa) ou `superpowers:subagent-driven-development` (um subagente por tarefa) |

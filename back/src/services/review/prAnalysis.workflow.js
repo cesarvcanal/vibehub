@@ -174,6 +174,9 @@ for (const skipped of skippedDimensions) log(`${skipped.key} fora do diff: ${ski
 
 const reviewLabel = (dimension) => `revisão: ${dimension.key}`
 
+const VERIFY_LABEL_TITLE_MAX = 80
+const verifyLabel = (dimension, finding) => `verificação: ${dimension.key} · ${finding.title.slice(0, VERIFY_LABEL_TITLE_MAX)}`
+
 const notRunResult = (dimension, reason) => ({ run: { key: dimension.key, status: 'not_run', reason }, confirmed: [], refutedCount: 0 })
 
 const verifyDimension = async (review, dimension) => {
@@ -185,7 +188,7 @@ const verifyDimension = async (review, dimension) => {
     : `${aboveCapCount} achados acima do teto de ${MAX_VERIFIED_PER_DIMENSION} não foram verificados`
   if (aboveCapCount > 0) log(`${dimension.key}: ${capReason}`)
   const verdicts = await parallel(verifiedFindings.map((finding) => () => agent(verifyPrompt(finding, dimension, brief), {
-    label: `verificação: ${dimension.key}`, phase: 'Verificação', model: 'sonnet', effort: 'high', schema: VERDICT_SCHEMA,
+    label: verifyLabel(dimension, finding), phase: 'Verificação', model: 'sonnet', effort: 'high', schema: VERDICT_SCHEMA,
   })))
   const checkedFindings = verifiedFindings.map((finding, index) => ({ finding, verdict: verdicts[index] }))
   const confirmed = checkedFindings

@@ -114,7 +114,7 @@ function AnalysisBody({ read }: { read: AnalysisReadModel }) {
     .map((severity) => ({ severity, findings: analysis.findings.filter((finding) => finding.severity === severity) }))
     .filter((group) => group.findings.length > 0);
   return (
-    <div className="flex min-h-0 flex-col gap-3 overflow-y-auto">
+    <div className="flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto overflow-x-hidden [overflow-wrap:anywhere]">
       <p className="text-xs leading-relaxed text-foreground/90">{analysis.summary}</p>
       {visibleCounts.length > 0 ? (
         <div className="flex flex-wrap gap-1.5 text-[11px]">

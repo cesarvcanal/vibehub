@@ -162,7 +162,7 @@ function WorkflowStatusLine({
   );
 }
 
-function PhasePills({ pills, t }: { pills: PhasePill[]; t: Translate }) {
+export function PhasePills({ pills, t }: { pills: PhasePill[]; t: Translate }) {
   return (
     <div data-testid="sdk-workflow-phases" className="flex flex-wrap items-center gap-1 text-[11px]">
       {pills.map((pill) => (
@@ -261,6 +261,9 @@ function AgentItem({
           <span className="min-w-0 flex-1 truncate font-medium text-foreground/90">
             {agent.label || t("sdk.workflowAgentUnnamed")}
           </span>
+          {agent.model ? (
+            <span data-testid="workflow-agent-model" className="shrink-0 text-[10px] text-muted-foreground/70">{agent.model}</span>
+          ) : null}
           {time ? (
             <span data-testid="workflow-agent-time" className="shrink-0 tabular-nums text-muted-foreground/70">{time}</span>
           ) : null}
@@ -307,7 +310,7 @@ function ToolAction({ tool, target, t }: { tool: string; target: string; t: Tran
 }
 
 /** The agent's second line: what it is doing now (or, once finished, the beginning of what it returned). */
-function nowLine(agent: WorkflowAgentFrame, now: number, t: Translate): React.ReactNode {
+export function nowLine(agent: WorkflowAgentFrame, now: number, t: Translate): React.ReactNode {
   if (agent.status === "done") return agent.result ? formatAgentResult(agent.result).split("\n")[0] : null;
   const activity = agent.activity;
   if (!activity) return null;

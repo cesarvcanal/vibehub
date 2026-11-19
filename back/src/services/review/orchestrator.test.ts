@@ -22,7 +22,12 @@ import type { SubmittedFinding } from "./model.js";
 let dir = "";
 /** The order of what happened at the boundary: `actor:<user>:<card>`, `resume:<card>`, `send:<card>`. */
 const calls: string[] = [];
+const plant = vi.fn(async () => {
+  calls.push("plant");
+});
+const fleetRead = vi.fn<(cardId: string) => Promise<unknown[]>>(async () => []);
 let sendFailure: Error | null = null;
+const injected = { usageWaitsReadFailures: 0, userGitFailure: null as Error | null };
 /** Runs once before the next send (the race "the review moved while the text was going out"). */
 let sendHook: (() => Promise<void>) | null = null;
 /** The real board, so the mock refuses a paused card like the real `sendToTerminal` (`wake` does not unpause). */
@@ -103,6 +108,14 @@ async function load() {
     gateAtCommit: gateSpy,
     setPrPeople: prPeople,
   }));
+  vi.doMock("../sdk/manager.js", async () => ({
+    ...(await vi.importActual<typeof import("../sdk/manager.js")>("../sdk/manager.js")),
+    readCardFleet: fleetRead,
+  }));
+  vi.doMock("./analysisWorkflow.js", async () => ({
+    ...(await vi.importActual<typeof import("./analysisWorkflow.js")>("./analysisWorkflow.js")),
+    plantPrAnalysisWorkflow: plant,
+  }));
   vi.doMock("./merge.js", async () => ({
     ...(await vi.importActual<typeof import("./merge.js")>("./merge.js")),
     mergeReviewedPr: mergeSpy,
@@ -114,7 +127,24 @@ async function load() {
   vi.doMock("../../auth/userGit.js", async () => ({
     ...(await vi.importActual<typeof import("../../auth/userGit.js")>("../../auth/userGit.js")),
     linkedAccountSlug: async (id: string | undefined) => (id ? accountOf[id] : undefined),
+    getUserGit: async (id: string) => {
+      if (injected.userGitFailure) throw injected.userGitFailure;
+      return (await vi.importActual<typeof import("../../auth/userGit.js")>("../../auth/userGit.js")).getUserGit(id);
+    },
   }));
+  vi.doMock("./store.js", async () => {
+    const actual = await vi.importActual<typeof import("./store.js")>("./store.js");
+    return {
+      ...actual,
+      listReviewsWaitingUsageLimit: async () => {
+        if (injected.usageWaitsReadFailures > 0) {
+          injected.usageWaitsReadFailures -= 1;
+          throw new Error("store unreadable");
+        }
+        return await actual.listReviewsWaitingUsageLimit();
+      },
+    };
+  });
   const registry = await import("../board/registry.js");
   registry.resetForTesting();
   reopen = (cardId) => registry.applyOpenTerminal(cardId);
@@ -148,6 +178,8 @@ beforeEach(async () => {
   calls.length = 0;
   sendFailure = null;
   sendHook = null;
+  injected.usageWaitsReadFailures = 0;
+  injected.userGitFailure = null;
   accountOf = { "u-revisor": "mussa" };
   send.mockClear();
   actor.mockClear();
@@ -169,7 +201,7 @@ beforeEach(async () => {
 afterEach(async () => {
   for (const m of [
     "../maestro/maestro.js", "../board/actor.js", "../board/workspace.js", "../maestro/deliver.js",
-    "../../auth/users.js", "../../auth/userGit.js", "./merge.js",
+    "../../auth/users.js", "../../auth/userGit.js", "./merge.js", "./store.js",
   ]) vi.doUnmock(m);
   // Closing a review sends the reviewer's card to done, and its "completed" is recorded in a
   // microtask: one of those writes may arrive together with the rm.
@@ -225,10 +257,10 @@ describe("iniciar a revisão", () => {
     // round 1 goes to the reviewer's card, with the reviewer as actor before the text
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]![0]).toBe(reviewer!.id);
-    expect(calls).toEqual([`actor:u-revisor:${reviewer!.id}`, `send:${reviewer!.id}`]);
+    expect(calls).toEqual(["plant", `actor:u-revisor:${reviewer!.id}`, `send:${reviewer!.id}`]);
     const text = lastText();
     for (const piece of [
-      "/code-review high", "PR #7", PR.url, review.id, "rodada 1 de 3", `reset --hard origin/${PR.branch}`,
+      "/root/.vibehub-workflows/pr-analysis.js", "PR #7", PR.url, review.id, "rodada 1 de 3", `reset --hard origin/${PR.branch}`,
       "git rev-parse HEAD", "--request-changes", "--comment", "vibehub_review_submit", `card: "${reviewer!.id}"`,
       "Não mergeie o PR por conta própria", "teste que falha", "question",
     ]) expect(text).toContain(piece);
@@ -237,6 +269,69 @@ describe("iniciar a revisão", () => {
       origin: { kind: "system", name: "revisão de PR" },
     });
     expect(review.log.length).toBeGreaterThan(0);
+  });
+
+  it("a rodada entregue guarda a frota que a produziu, terminada, para o painel mostrar depois que o card do revisor dormir", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    const run = {
+      runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Revisão"], total: 2, done: 1, at: 5, finished: false,
+      agents: [
+        { id: "a01f", label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "done", result: "{}", toolCount: 3 },
+        { id: "a02f", label: "juiz", phase: "Julgamento", model: "opus", status: "running", toolCount: 0 },
+      ],
+    };
+    fleetRead.mockResolvedValueOnce([run]);
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    expect(fleetRead).toHaveBeenCalledWith(review.reviewerCardId);
+    expect(after.fleet).toEqual([{
+      round: 1,
+      runs: [{
+        runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Revisão"], total: 2, done: 1, at: 5, finished: true,
+        agents: [
+          { id: "a01f", label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "done", result: "{}" },
+          { id: "a02f", label: "juiz", phase: "Julgamento", model: "opus", status: "stopped" },
+        ],
+      }],
+    }]);
+  });
+
+  it("a frota gravada guarda só o que o histórico desenha, sem a atividade crua dos agentes", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    fleetRead.mockResolvedValueOnce([{
+      runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Revisão"], total: 1, done: 0, at: 5, startedAt: 1, finished: false,
+      agents: [{
+        id: "a01f", label: "revisão: correctness", phase: "Revisão", status: "running", toolCount: 7, toolCountPartial: true,
+        startedAt: 1, lastAt: 4, activity: { kind: "tool", tool: "Bash", target: "cat .env" },
+      }],
+    }]);
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    expect(after.fleet?.[0]?.runs[0]?.agents[0]).toEqual({ id: "a01f", label: "revisão: correctness", phase: "Revisão", status: "stopped" });
+    expect(after.fleet?.[0]?.runs[0]).not.toHaveProperty("startedAt");
+  });
+
+  it("a execução já gravada numa rodada anterior não entra de novo na frota da rodada seguinte", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    const runOf = (runId: string) => ({ runId, name: "vibehub-pr-analysis", phases: [], total: 0, done: 0, at: 1, finished: true, agents: [] });
+    fleetRead.mockResolvedValueOnce([runOf("wf_A")]);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "fixed", commit: "c1", reply: "feito" }], headSha: SHA2 });
+    fleetRead.mockResolvedValueOnce([runOf("wf_B"), runOf("wf_A")]);
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 2, findings: [], verdicts: [{ id: "f1", status: "fixed" }], headSha: SHA2, summary: "r2",
+    });
+    expect(after.fleet?.map((entry) => [entry.round, entry.runs.map((run) => run.runId)])).toEqual([[1, ["wf_A"]], [2, ["wf_B"]]]);
+  });
+
+  it("frota que não dá para ler não segura a rodada: ela é registrada sem o retrato", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    fleetRead.mockRejectedValueOnce(new Error("runner down"));
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    expect(after).toMatchObject({ phase: "fixing", lastSubmitRound: 1 });
+    expect(after.fleet).toBeUndefined();
   });
 
   it("os textos do revisor mandam chamar a ferramenta mesmo se o gh pr review falhar", async () => {
@@ -945,7 +1040,7 @@ describe("resposta do autor", () => {
     });
     expect(after).toMatchObject({ round: 2, phase: "reviewing", lastRespondRound: 1, nudges: 0, reviewedSha: SHA1 });
     expect(after.findings[0]).toMatchObject({ id: "f1", status: "fixed", commit: "c0ffee1", authorReply: "token removido, teste novo" });
-    expect(calls).toEqual([`actor:u-revisor:${review.reviewerCardId}`, `send:${review.reviewerCardId}`]);
+    expect(calls).toEqual(["plant", `actor:u-revisor:${review.reviewerCardId}`, `send:${review.reviewerCardId}`]);
     const text = lastText();
     for (const piece of [
       `reset --hard origin/${PR.branch}`, SHA1, "rodada 2 de 3", "f1", "token removido", "c0ffee1",
@@ -1612,7 +1707,7 @@ describe("tentar de novo e cancelar", () => {
     expect(after).toMatchObject({ phase: "reviewing", round: 1, nudges: 0 });
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
-    expect(lastText()).toContain("/code-review high");
+    expect(lastText()).toContain("/root/.vibehub-workflows/pr-analysis.js");
 
     // the reviewer's round landed and only a question was left: it is the human's turn, who decides on the panel
     const waiting = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [QUESTION], headSha: SHA1, summary: "uma dúvida" });
@@ -1635,7 +1730,7 @@ describe("tentar de novo e cancelar", () => {
     const after = await o.orch.retryReview(review.id, "u-revisor");
     expect(after).toMatchObject({ phase: "reviewing", round: 1 });
     expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
-    expect(lastText()).toContain("/code-review high");
+    expect(lastText()).toContain("/root/.vibehub-workflows/pr-analysis.js");
 
     await o.store.mutateReview(review.id, (r) => {
       r.phase = "impasse";
@@ -1690,7 +1785,7 @@ describe("merge humano: push depois do pronto e mergeado", () => {
     // it is the reviewer's turn again: the turn ending without a submit is demanded again
     expect(after.lastSubmitRound).toBe(1);
     // through the same path as the relay: reviewer as actor, then the text of round 2's delta
-    expect(calls).toEqual([`actor:u-revisor:${review.reviewerCardId}`, `send:${review.reviewerCardId}`]);
+    expect(calls).toEqual(["plant", `actor:u-revisor:${review.reviewerCardId}`, `send:${review.reviewerCardId}`]);
     const text = lastText();
     for (const piece of ["rodada 2 de 3", `git diff ${SHA1}..HEAD`, "vibehub_review_submit", "push depois do pronto"]) {
       expect(text).toContain(piece);
@@ -1786,7 +1881,7 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
       // the reviewer gets the delta since the approved commit, saying it was the author who pushed
       await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
       expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
-      expect(calls).toEqual([`actor:u-revisor:${review.reviewerCardId}`, `send:${review.reviewerCardId}`]);
+      expect(calls).toEqual(["plant", `actor:u-revisor:${review.reviewerCardId}`, `send:${review.reviewerCardId}`]);
       for (const piece of ["O autor empurrou commits no PR #7", "rodada 2 de 3", `git diff ${SHA1}..HEAD`, "vibehub_review_submit"]) {
         expect(lastText()).toContain(piece);
       }
@@ -2224,7 +2319,7 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
       expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
       expect(lastText()).toMatch(/sem chamar/);
       expect(lastText()).toContain("vibehub_review_submit");
-      expect(lastText()).toContain("/code-review high");
+      expect(lastText()).toContain("/root/.vibehub-workflows/pr-analysis.js");
       expect((await o.store.getReview(review.id))?.nudges).toBe(1);
 
       // again: impasse "IA não respondeu", with no more sends
@@ -2333,6 +2428,230 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
     } finally {
       off();
     }
+  });
+
+  it("turno que termina com a frota ainda rodando em segundo plano não conta", async () => {
+    const o = await load();
+    const { author, review, off } = await fixing(o);
+    const agentState = await import("../board/agentState.js");
+    const fleetRunning = new Set([author.id]);
+    const stopProbe = agentState.onCardBackgroundProbe((cardId) => fleetRunning.has(cardId));
+    try {
+      await endTurn(o, author.id);
+      await new Promise((r) => setTimeout(r, 30));
+      expect(send).not.toHaveBeenCalled();
+      fleetRunning.delete(author.id);
+      await endTurn(o, author.id);
+      await expectOnlyTheSecondCounts(o, review.id);
+    } finally {
+      stopProbe();
+      off();
+    }
+  });
+
+  describe("conta Claude sem limite de uso", () => {
+    async function limitedReviewer(o: Loaded, limit: { resetsAt?: number } | null) {
+      const s = await started(o);
+      const agentState = await import("../board/agentState.js");
+      const stopProbe = agentState.onCardUsageLimitProbe((cardId) => (cardId === s.review.reviewerCardId ? limit : null));
+      const off = o.orch.startReviewOrchestrator({ graceMs: 0, usageResumeMarginMs: 0 });
+      return { ...s, stop: () => { stopProbe(); off(); } };
+    }
+
+    it("não lembra nem trava: espera o limite voltar e reenvia a rodada sozinha", async () => {
+      const o = await load();
+      const { review, stop } = await limitedReviewer(o, { resetsAt: Date.now() + 2_000 });
+      try {
+        await endTurn(o, review.reviewerCardId);
+        await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.usageLimitWait).toMatchObject({ side: "reviewer" }));
+        expect(send).not.toHaveBeenCalled();
+        const waiting = await o.store.getReview(review.id);
+        expect(waiting).toMatchObject({ phase: "reviewing", nudges: 0 });
+        expect(waiting?.log.at(-1)?.text).toMatch(/sem limite de uso/);
+
+        await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1), { timeout: 6000 });
+        expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
+        expect(lastText()).toMatch(/^\[vibehub · revisão de PR\]/);
+        const resumed = await o.store.getReview(review.id);
+        expect(resumed).toMatchObject({ phase: "reviewing", nudges: 0 });
+        expect(resumed?.usageLimitWait).toBeUndefined();
+      } finally {
+        stop();
+      }
+    });
+
+    it("sem horário de volta: impasse com o motivo verdadeiro, sem lembrete", async () => {
+      const o = await load();
+      const { review, stop } = await limitedReviewer(o, {});
+      try {
+        await endTurn(o, review.reviewerCardId);
+        await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("impasse"));
+        expect((await o.store.getReview(review.id))?.impasseReason).toMatch(/sem limite de uso/);
+        expect(send).not.toHaveBeenCalled();
+      } finally {
+        stop();
+      }
+    });
+
+    it("a espera sobrevive ao reinício do servidor: o horário que já passou reenvia na subida", async () => {
+      const o = await load();
+      const { review } = await started(o);
+      await o.store.mutateReview(review.id, (r) => {
+        r.usageLimitWait = { side: "reviewer", until: Date.now() - 1000 };
+      });
+      const off = o.orch.startReviewOrchestrator({ graceMs: 0, usageResumeMarginMs: 0 });
+      try {
+        await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1), { timeout: 3000 });
+        expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
+        expect((await o.store.getReview(review.id))?.usageLimitWait).toBeUndefined();
+      } finally {
+        off();
+      }
+    });
+
+    it("horário de volta que já passou não vira espera: impasse sem reenvio a cada minuto", async () => {
+      const o = await load();
+      const { review, stop } = await limitedReviewer(o, { resetsAt: Date.now() - 1000 });
+      try {
+        await endTurn(o, review.reviewerCardId);
+        await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("impasse"));
+        expect((await o.store.getReview(review.id))?.usageLimitWait).toBeUndefined();
+        expect(send).not.toHaveBeenCalled();
+      } finally {
+        stop();
+      }
+    });
+
+    it("a conta que recusa de novo a cada retomada vai para impasse depois do teto de retomadas", async () => {
+      const o = await load();
+      const s = await started(o);
+      const agentState = await import("../board/agentState.js");
+      const stopProbe = agentState.onCardUsageLimitProbe((cardId) => (cardId === s.review.reviewerCardId ? { resetsAt: Date.now() + 20 } : null));
+      const off = o.orch.startReviewOrchestrator({ graceMs: 0, usageResumeMarginMs: 0 });
+      try {
+        for (const resends of [1, 2, 3]) {
+          await endTurn(o, s.review.reviewerCardId);
+          await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(resends), { timeout: 3000 });
+        }
+        await endTurn(o, s.review.reviewerCardId);
+        await vi.waitFor(async () => expect((await o.store.getReview(s.review.id))?.phase).toBe("impasse"));
+        const stuck = await o.store.getReview(s.review.id);
+        expect(stuck?.impasseReason).toBe("conta Claude sem limite de uso depois de várias retomadas");
+        expect(stuck?.usageLimitWait).toBeUndefined();
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect(send).toHaveBeenCalledTimes(3);
+      } finally {
+        stopProbe();
+        off();
+      }
+    });
+
+    it("a rodada entregue durante a espera apaga a marca: o turno do autor sem resposta recebe o lembrete", async () => {
+      const o = await load();
+      const { author, review, stop } = await limitedReviewer(o, { resetsAt: Date.now() + 60_000 });
+      try {
+        await endTurn(o, review.reviewerCardId);
+        await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.usageLimitWait).toBeDefined());
+        const fixingNow = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+        expect(fixingNow.phase).toBe("fixing");
+        expect(fixingNow.usageLimitWait).toBeUndefined();
+        send.mockClear();
+        await endTurn(o, author.id);
+        await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+        expect(send.mock.calls[0]![0]).toBe(author.id);
+        expect(lastText()).toMatch(/sem chamar/);
+      } finally {
+        stop();
+      }
+    });
+
+    it("a resposta do autor durante a espera dele apaga a marca e o revisor volta a ser cobrado", async () => {
+      const o = await load();
+      const { author, review } = await started(o);
+      await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+      await o.store.mutateReview(review.id, (stored) => {
+        stored.usageLimitWait = { side: "author", until: Date.now() + 60_000 };
+      });
+      const reviewing = await o.orch.submitAuthorResponse(author.id, {
+        round: 1, items: [{ id: "f1", status: "fixed", commit: "c1", reply: "feito" }], headSha: SHA2,
+      });
+      expect(reviewing.phase).toBe("reviewing");
+      expect((await o.store.getReview(review.id))?.usageLimitWait).toBeUndefined();
+    });
+
+    it("a espera de um lado não cala a cobrança do outro lado", async () => {
+      const o = await load();
+      const { author, review } = await started(o);
+      await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+      await o.store.mutateReview(review.id, (stored) => {
+        stored.usageLimitWait = { side: "reviewer", until: Date.now() + 60_000 };
+      });
+      send.mockClear();
+      const off = o.orch.startReviewOrchestrator({ graceMs: 0, usageResumeMarginMs: 0 });
+      try {
+        await endTurn(o, author.id);
+        await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+        expect(send.mock.calls[0]![0]).toBe(author.id);
+      } finally {
+        off();
+      }
+    });
+
+    it("falha ao retomar depois do limite de uso vai para impasse com aviso", async () => {
+      const o = await load();
+      const { author, review } = await started(o);
+      await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+      await o.store.mutateReview(review.id, (stored) => {
+        stored.coauthorUserId = "u-merger";
+        stored.usageLimitWait = { side: "author", until: Date.now() - 1000 };
+      });
+      send.mockClear();
+      injected.userGitFailure = new Error("users store unreadable");
+      const off = o.orch.startReviewOrchestrator({ graceMs: 0, usageResumeMarginMs: 0 });
+      try {
+        await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("impasse"));
+        const failed = await o.store.getReview(review.id);
+        expect(failed?.impasseReason).toMatch(/users store unreadable/);
+        expect(failed?.usageLimitWait).toBeUndefined();
+        expect(send).not.toHaveBeenCalled();
+        await vi.waitFor(async () => expect((await messagesOn(o, author.id)).map((event) => event.text)).toContainEqual(expect.stringMatching(/impasse/i)));
+      } finally {
+        off();
+      }
+    });
+
+    it("leitura das esperas que falha na subida tenta de novo e retoma a rodada", async () => {
+      const o = await load();
+      const { review } = await started(o);
+      await o.store.mutateReview(review.id, (stored) => {
+        stored.usageLimitWait = { side: "reviewer", until: Date.now() - 1000 };
+      });
+      injected.usageWaitsReadFailures = 2;
+      const off = o.orch.startReviewOrchestrator({ graceMs: 0, usageResumeMarginMs: 0, usageWaitsRetryMs: 10 });
+      try {
+        await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1), { timeout: 3000 });
+        expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
+        expect(injected.usageWaitsReadFailures).toBe(0);
+      } finally {
+        off();
+      }
+    });
+
+    it("tentar de novo durante a espera reenvia uma vez só", async () => {
+      const o = await load();
+      const { review, stop } = await limitedReviewer(o, { resetsAt: Date.now() + 300 });
+      try {
+        await endTurn(o, review.reviewerCardId);
+        await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.usageLimitWait).toBeDefined());
+        await o.orch.retryReview(review.id, "u-merger");
+        expect(send).toHaveBeenCalledTimes(1);
+        expect((await o.store.getReview(review.id))?.usageLimitWait).toBeUndefined();
+        await new Promise((r) => setTimeout(r, 500));
+        expect(send).toHaveBeenCalledTimes(1);
+      } finally {
+        stop();
+      }
+    });
   });
 
   it("turno com pergunta ou permissão em aberto não conta", async () => {
