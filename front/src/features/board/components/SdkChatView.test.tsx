@@ -4851,6 +4851,10 @@ describe("SdkChatView — o medidor de contexto", () => {
   afterEach(() => cleanup());
 
   it("só aparece com leitura, muda de faixa conforme a conversa cresce e some com um driver novo", async () => {
+    vi.useFakeTimers({ toFake: ["performance"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -4871,10 +4875,9 @@ describe("SdkChatView — o medidor de contexto", () => {
 
     // A skewed reading does not erase the one that counts.
     ws.deliver({ type: "context_usage", usedTokens: 10 } as SdkEvent);
-    await waitFor(() => {
-      runAnimationFrames();
-      expect(screen.getByTestId("context-meter-value")).toHaveTextContent("70%");
-    });
+    vi.advanceTimersByTime(700);
+    runAnimationFrames();
+    expect(screen.getByTestId("context-meter-value")).toHaveTextContent("70%");
 
     ws.deliver({ type: "ready" });
     expect(screen.queryByTestId("context-meter")).toBeNull();
@@ -4969,6 +4972,10 @@ describe("SdkChatView — o medidor de contexto", () => {
   });
 
   it("o guia mostra os tokens, as três faixas e destaca a de agora, com a bolinha deslizando até o ponto atual", async () => {
+    vi.useFakeTimers({ toFake: ["performance"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -4982,10 +4989,9 @@ describe("SdkChatView — o medidor de contexto", () => {
     expect(zones.filter((z) => z.getAttribute("data-current") === "true").map((z) => z.getAttribute("data-zone"))).toEqual(["warn"]);
     const marker = within(guide).getByTestId("context-guide-marker");
     expect(parseFloat(marker.style.left)).toBeLessThan(42);
-    await waitFor(() => {
-      runAnimationFrames();
-      expect(marker.style.left).toBe("42%");
-    });
+    vi.advanceTimersByTime(700);
+    runAnimationFrames();
+    expect(marker.style.left).toBe("42%");
   });
 
   it.each([
