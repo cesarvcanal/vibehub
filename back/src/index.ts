@@ -43,6 +43,7 @@ import { startWebhookDispatcher } from "./services/webhooks/subscriptions.js";
 import { startReviewOrchestrator } from "./services/review/orchestrator.js";
 import { startPlatformFailureWatch } from "./services/platformFailures/watch.js";
 import { startRunnerReaper } from "./services/reaper/reaper.js";
+import { startTmpSweep } from "./services/reaper/tmpSweep.js";
 import { pruneStaleInflightOwners, startInflightOwnerHeartbeat } from "./services/sdk/inflight.js";
 import { handOffSdkOnShutdown, resumeAfterDriverCrash, resumeInterruptedTurns } from "./services/sdk/resume.js";
 import { backfillPendingQuestions } from "./services/sdk/pendingQuestion.js";
@@ -270,6 +271,7 @@ async function main(): Promise<void> {
   // loop's stdin check — this collects whatever slips through, every ten minutes. Started HERE
   // for the same reason as the others: tests must not inherit a timer that kills processes.
   startRunnerReaper();
+  startTmpSweep();
   // A deploy that changed what a session is born with (env, flags) restarts the board's sessions,
   // staggered: idle now, working when they go idle. Fire-and-forget, after listen. See sessionSpec.ts.
   void restartSessionsIfSpecChanged();
