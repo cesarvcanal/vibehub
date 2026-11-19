@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { post } from "@/lib/api";
+import { resetReloadHoldsForTesting, useVersionCheck } from "@/lib/versionCheck";
 import { FakeAudioContext, FakeStream, fakeRig, type FakeRig } from "./fakeWebRtc";
 import { DEAD_ANALYSER_MS, SAVE_RETRY_MS, useVoiceCall } from "./useVoiceCall";
 
@@ -19,6 +20,8 @@ vi.mock("@/lib/api", () => ({
   patch: vi.fn(),
   del: vi.fn(),
 }));
+
+vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }) }));
 
 const mockPost = vi.mocked(post);
 let rig: FakeRig;
@@ -229,5 +232,50 @@ describe("useVoiceCall — lifecycle", () => {
       b.result.current.start();
     });
     expect(rigA.peer().channel!.sent).toContainEqual({ type: "session.close" });
+  });
+});
+
+describe("useVoiceCall — a deploy during the call", () => {
+  const bundleHtml = (hash: string) => `<script type="module" src="/assets/index-${hash}.js"></script>`;
+
+  function setupWithVersionCheck() {
+    const served = { html: bundleHtml("AAA") };
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, text: async () => served.html })));
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    resetReloadHoldsForTesting();
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
+    });
+    rig = fakeRig();
+    audio = new FakeAudioContext();
+    const reload = vi.fn();
+    const hook = renderHook(() => {
+      useVersionCheck({ intervalMs: 1_000, reload });
+      return useVoiceCall({ cardId: "card-1", makeDeps: () => rig.deps, makeAudioContext: () => audio as unknown as AudioContext });
+    });
+    return { ...hook, reload, deploy: () => (served.html = bundleHtml("BBB")) };
+  }
+
+  it("a chamada no ar segura a recarga automática da versão nova, que só acontece quando ela termina", async () => {
+    const { result, reload, deploy } = setupWithVersionCheck();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    await goLive(result);
+
+    deploy();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(reload).not.toHaveBeenCalled();
+    expect(result.current.snap.state).toBe("live");
+
+    act(() => result.current.stop());
+    act(() => rig.peer().channel!.emit({ type: "session.closed", reason: "close_requested" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 });
