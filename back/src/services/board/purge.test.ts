@@ -167,6 +167,21 @@ describe("purgeCard — the card and everything that belonged to it", () => {
     expect(s).toContain("$P/projects/");
   });
 
+  it("leva os processos e o /tmp do card, e o relatório diz quanto o runner liberou", async () => {
+    const { card } = await seed();
+    runScript.mockImplementation(async (script: string) => ({
+      stdout: script.includes("VIBEHUB_PURGE") ? "VIBEHUB_PURGE_FREED_KB 3145728\n" : "",
+      stderr: "",
+    }));
+
+    const report = await purge.purgeCard(card.id, "cesar");
+
+    const s = allScripts();
+    expect(s).toContain(`'VIBEHUB_CARD_ID=${card.id}' /proc/[0-9]*/environ`);
+    expect(s).toContain(`rm -rf '/tmp/vibehub/${card.id}'`);
+    expect(report?.steps.find((done) => done.name === "runner")).toEqual({ name: "runner", ok: true, detail: "3072 MB freed" });
+  });
+
   it("KILLS FIRST, then takes the card off the board, then deletes — nothing can write mid-purge", async () => {
     const { card } = await seed();
     // The board is read inside the purge, so "when did the card leave the board" is observable by

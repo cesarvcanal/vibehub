@@ -233,6 +233,9 @@ describe("sweepDoneCards — the purge of what has been done for a day", () => {
     const scripts = runScript.mock.calls.map((call) => String(call[0])).join("\n");
     expect(scripts).toContain(`tmux kill-session -t '${c.tmuxSession}'`);
     expect(scripts).toContain(c.worktreeSlug);
+    // The same purge as the button: the card's processes outside tmux and its /tmp go too.
+    expect(scripts).toContain(`'VIBEHUB_CARD_ID=${c.id}' /proc/[0-9]*/environ`);
+    expect(scripts).toContain(`rm -rf '/tmp/vibehub/${c.id}'`);
   });
 
   it("a runner that is down still gets the card off the board, and says what survived", async () => {

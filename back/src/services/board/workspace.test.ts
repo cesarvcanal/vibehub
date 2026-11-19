@@ -2528,6 +2528,25 @@ describe("buildCardPurgeScript (everything the card left on the runner's disk)",
     expect(s).toContain(`rm -rf '/work/.browser/card-e3f1ab5a'`);
   });
 
+  it("apaga o /tmp do card e as saídas de tarefa do Claude Code gravadas antes do TMPDIR por card", () => {
+    const s = script();
+    expect(s).toContain(`rm -rf '/tmp/vibehub/${CARD_ID}' 2>/dev/null || true`);
+    expect(s).toContain(`rm -rf /tmp/claude-[0-9]*/'-work-acme--erp-aux-worktrees-deletar-card' 2>/dev/null || true`);
+  });
+
+  it("mata pelo ambiente todo processo do card, inclusive o que saiu da árvore do tmux (setsid, nohup)", () => {
+    const s = script();
+    expect(s).toContain(`grep -lsxzF 'VIBEHUB_CARD_ID=${CARD_ID}' /proc/[0-9]*/environ`);
+    expect(s.indexOf("VIBEHUB_CARD_ID=")).toBeLessThan(s.indexOf(`rm -rf '${CWD}'`));
+  });
+
+  it("mede o que vai liberar antes de apagar e informa numa linha própria", () => {
+    const s = script();
+    expect(s.indexOf("VIBEHUB_PURGE_FREED_KB")).toBeLessThan(s.indexOf(`rm -rf '${CWD}'`));
+    expect(ws.parsePurgeFreedBytes("x\nVIBEHUB_PURGE_FREED_KB 2048\n")).toBe(2048 * 1024);
+    expect(ws.parsePurgeFreedBytes("sem marcador")).toBeUndefined();
+  });
+
   it("erases the CONVERSATION: the transcripts of every account profile, their todos and the prompt history", () => {
     const s = script();
     // Sanitized cwd = Claude Code's own `projects/<dir>` rule (claudeProjectsDirName).

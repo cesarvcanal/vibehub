@@ -182,7 +182,8 @@ async function stopEverything(card: Card, steps: PurgeStep[], by?: string): Prom
 /** Step 3 for both entry points: the card's bytes, runner side and data-dir side. */
 async function eraseEverything(card: Card, steps: PurgeStep[], by?: string, project?: Project): Promise<void> {
   await step(steps, "runner", async () => {
-    await purgeCardWorkspace(card, { project, by });
+    const freedBytes = await purgeCardWorkspace(card, { project, by });
+    return freedBytes === undefined ? undefined : `${Math.round(freedBytes / 1024 / 1024)} MB freed`;
   });
   await step(steps, "chat-history", async () => {
     await removeHistory(card.id);
