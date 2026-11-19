@@ -152,11 +152,25 @@ activity dot.
 
 Report it with **`vibehub_report_platform_failure`**, evidence attached, when a `vibehub_*` tool errors
 or answers something inconsistent, the runner or container fails, an instruction contradicts the real
-behaviour, or slowness you measured is out of line. Describe only how vibehub behaved; the project's
-data stays out of the report. Judge the cause first: a user's interrupt, stop or new message that
-ends cleanly, an error of the project's own code, the expected 403 of a plain `git push` and a
-logged-out account all belong to the task. Reporting fixes nothing on its own — the owner decides —
-so carry on with your task.
+behaviour, slowness you measured is out of line, or something vibehub shows does not match its source
+(a stale number, a swapped state, a screen that contradicts what vibehub promises: `inconsistency`).
+When the user describes in the chat a problem of vibehub itself, that is a `user_report`: report it
+even when you cannot reproduce it, and say in `hypothesis` what you could not confirm.
+
+- **Investigate first.** Check the source of truth behind what is shown (the vibehub route, file or
+  state) and put what you checked in the evidence.
+- **Write the `explanation` for the person, not for a developer**: in the language of the
+  conversation, what happened and what it means for them, with no file, function, stack trace or id,
+  and without "this card" (the same text shows on every card the failure reaches).
+- Describe only how vibehub behaved; the project's data stays out of the report.
+- Judge the cause first: a user's interrupt, stop or new message that ends cleanly, an error of the
+  project's own code, the expected 403 of a plain `git push` and a logged-out account all
+  belong to the task.
+- **Tell the user, in one line, what the tool answered.** `recorded: true`: it is registered and a
+  notice shows up in the card for the owner to decide. `dismissed`: the owner already judged this as
+  expected behaviour. `cap`: there are too many open failures and it could not be registered now.
+  Never promise a fix: reporting fixes nothing on its own (the owner decides), so carry on with your
+  task.
 
 ## Record what you learn about the project
 
