@@ -2,7 +2,7 @@
   "name": "vibehub",
   "private": true,
   "version": "0.1.0",
-  "description": "Hosted IDE for AI coding agents — a kanban of live Claude Code terminals running in containers on your own server",
+  "description": "Hosted IDE for AI coding agents \u2014 a kanban of live Claude Code terminals running in containers on your own server",
   "type": "module",
   "scripts": {
     "dev": "npm --prefix back run dev",
@@ -16,7 +16,7 @@
     "test:lint": "vitest run"
   },
   "license": "MIT",
-  "author": "César Canal",
+  "author": "C\u00e9sar Canal",
   "repository": {
     "type": "git",
     "url": "https://github.com/cesarvcanal/vibehub.git"
