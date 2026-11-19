@@ -987,7 +987,7 @@ describe("resposta do autor", () => {
     });
     expect(after).toMatchObject({ round: 2, phase: "reviewing", lastRespondRound: 1, nudges: 0, reviewedSha: SHA1 });
     expect(after.findings[0]).toMatchObject({ id: "f1", status: "fixed", commit: "c0ffee1", authorReply: "token removido, teste novo" });
-    expect(calls).toEqual([`actor:u-revisor:${review.reviewerCardId}`, `send:${review.reviewerCardId}`]);
+    expect(calls).toEqual(["plant", `actor:u-revisor:${review.reviewerCardId}`, `send:${review.reviewerCardId}`]);
     const text = lastText();
     for (const piece of [
       `reset --hard origin/${PR.branch}`, SHA1, "rodada 2 de 3", "f1", "token removido", "c0ffee1",
@@ -1732,7 +1732,7 @@ describe("merge humano: push depois do pronto e mergeado", () => {
     // it is the reviewer's turn again: the turn ending without a submit is demanded again
     expect(after.lastSubmitRound).toBe(1);
     // through the same path as the relay: reviewer as actor, then the text of round 2's delta
-    expect(calls).toEqual([`actor:u-revisor:${review.reviewerCardId}`, `send:${review.reviewerCardId}`]);
+    expect(calls).toEqual(["plant", `actor:u-revisor:${review.reviewerCardId}`, `send:${review.reviewerCardId}`]);
     const text = lastText();
     for (const piece of ["rodada 2 de 3", `git diff ${SHA1}..HEAD`, "vibehub_review_submit", "push depois do pronto"]) {
       expect(text).toContain(piece);
@@ -1828,7 +1828,7 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
       // the reviewer gets the delta since the approved commit, saying it was the author who pushed
       await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
       expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
-      expect(calls).toEqual([`actor:u-revisor:${review.reviewerCardId}`, `send:${review.reviewerCardId}`]);
+      expect(calls).toEqual(["plant", `actor:u-revisor:${review.reviewerCardId}`, `send:${review.reviewerCardId}`]);
       for (const piece of ["O autor empurrou commits no PR #7", "rodada 2 de 3", `git diff ${SHA1}..HEAD`, "vibehub_review_submit"]) {
         expect(lastText()).toContain(piece);
       }

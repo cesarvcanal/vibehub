@@ -24,6 +24,14 @@ describe("rodada 1 do revisor: a frota de agentes", () => {
   });
 });
 
+describe("rodadas 2 e 3 do revisor: a frota de novo", () => {
+  it("o comentário que virou commit volta ao revisor, que roda a frota de novo e confere a lista fechada com ela", () => {
+    const text = reviewerDeltaPrompt({ ...review(), round: 2, reviewedSha: "a".repeat(40) });
+    expect(text).toContain('Workflow({ scriptPath: "/root/.vibehub-workflows/pr-analysis.js"');
+    expect(text).toContain(`git diff ${"a".repeat(40)}..HEAD`);
+  });
+});
+
 describe("prompts da revisão: achado explicado", () => {
   it("o revisor é instruído a mandar o problema e como resolver, não só o título", () => {
     const text = reviewerRoundPrompt(review());

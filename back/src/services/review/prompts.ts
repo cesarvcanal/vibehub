@@ -222,17 +222,10 @@ function reviewerIdentity(): string {
   return "Você é o REVISOR deste PR. Não escreva no código do autor: não faça commit, não faça push. vibehub_deliver aqui só serve para o merge por ordem (regras abaixo).";
 }
 
-/** Round 1: full review of the PR by the agent fleet, published on GitHub and delivered structured. */
-export function reviewerRoundPrompt(r: Review): string {
+/** The step that runs the agent fleet on the PR, waits for it and says what to do when it fails. */
+function fleetStep(r: Review): string[] {
   const workflowArgs = JSON.stringify({ prNumber: r.prNumber, branch: r.prBranch, base: r.base, headSha: "<sha do passo 1>" });
   return [
-    header(r),
-    reviewerIdentity(),
-    rules(),
-    "",
-    "1. Ponha o worktree na cabeça do PR:",
-    `   git fetch origin && git reset --hard origin/${r.prBranch}`,
-    "   e guarde o sha: git rev-parse HEAD",
     "2. Rode a frota de agentes da revisão com a ferramenta Workflow (este pedido é explícito: rode o workflow):",
     `   Workflow({ scriptPath: "${PR_ANALYSIS_WORKFLOW_PATH}", args: ${workflowArgs} })`,
     "   O args vai como objeto JSON, com o sha do passo 1 no headSha. A frota roda em segundo plano: especialistas por " +
@@ -241,6 +234,20 @@ export function reviewerRoundPrompt(r: Review): string {
       "{ summary, dimensions, findings, refutedCount }, com cada finding já verificado e classificado pelo juiz.",
     "   Se a frota recusar o args (erro \"args inválido\"), corrija o args e rode de novo, uma vez. Se a ferramenta Workflow " +
       `não existir ou a frota falhar de novo, rode /code-review high no PR #${r.prNumber} no lugar dela e diga no summary que a frota falhou e por quê.`,
+  ];
+}
+
+/** Round 1: full review of the PR by the agent fleet, published on GitHub and delivered structured. */
+export function reviewerRoundPrompt(r: Review): string {
+  return [
+    header(r),
+    reviewerIdentity(),
+    rules(),
+    "",
+    "1. Ponha o worktree na cabeça do PR:",
+    `   git fetch origin && git reset --hard origin/${r.prBranch}`,
+    "   e guarde o sha: git rev-parse HEAD",
+    ...fleetStep(r),
     `3. ${classification()} A classificação do juiz é o ponto de partida: confira e mude só com motivo.`,
     "4. Publique a rodada no GitHub, na sua conta, com a lista (severidade, arquivo:linha, problema, prova, como resolver):",
     `   - com algum blocking: gh pr review ${r.prNumber} --request-changes --body "<lista>"`,
@@ -286,8 +293,9 @@ export function reviewerDeltaPrompt(r: Review): string {
     "1. Ponha o worktree na cabeça do PR:",
     `   git fetch origin && git reset --hard origin/${r.prBranch}`,
     "   e guarde o sha: git rev-parse HEAD",
-    `2. Revise SÓ o que mudou desde a rodada anterior: ${since}`,
-    "   Confira cada item da lista fechada contra esse diff e contra a resposta do autor.",
+    ...fleetStep(r),
+    `   Nesta rodada, use o resultado da frota para conferir a lista fechada e achar bug que a correção criou, olhando o que mudou desde a rodada anterior: ${since}`,
+    "   Confira cada item da lista fechada contra esse diff, contra a frota e contra a resposta do autor.",
     "3. Lista fechada (dê um veredito para cada item):",
     lines(judged, "nenhum item em aberto"),
     ...(humanBlocked.length
