@@ -313,6 +313,22 @@ describe("ProjectPrsDialog", () => {
       expect(screen.queryByRole("button", { name: "Analyse PR #636" })).not.toBeInTheDocument();
     });
 
+    it("an analysis started while the channel was down shows up when it reconnects", async () => {
+      const pulls = [pull(636)];
+      serve(pulls);
+      open();
+      const first = await liveSocket();
+      first.accept();
+      await screen.findByRole("button", { name: "Analyse PR #636" });
+      expect(get.mock.calls.filter(([url]) => url === "/projects/p1/prs")).toHaveLength(1);
+      first.drop();
+      pulls[0] = pull(636, { analysisCardId: "c7" });
+      const second = await liveSocket(1);
+      second.accept();
+      expect(await screen.findByText("Analysing")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Analyse PR #636" })).not.toBeInTheDocument();
+    });
+
     it("the PR stays held until its start settles, then is let go", async () => {
       serve([pull(636)]);
       const answer: { resolve?: (value: unknown) => void } = {};

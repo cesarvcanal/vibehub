@@ -27,13 +27,14 @@ export function usePrClaims(projectId: string, enabled: boolean) {
 
   React.useEffect(() => {
     if (!enabled) return;
-    const connection: { closed: boolean; retry?: ReturnType<typeof setTimeout> } = { closed: false };
+    const connection: { closed: boolean; dropped: boolean; retry?: ReturnType<typeof setTimeout> } = { closed: false, dropped: false };
     const backoff = createReconnectBackoff(Math.random);
     const connect = () => {
       const socket = new WebSocket(wsUrl(`/api/projects/${projectId}/prs/live`));
       live.current.socket = socket;
       socket.onopen = () => {
         backoff.opened();
+        if (connection.dropped) void queryClient.invalidateQueries({ queryKey: projectPullsKey(projectId) });
         const heldPr = live.current.holding;
         if (heldPr !== null) socket.send(JSON.stringify({ type: "claim", prNumber: heldPr }));
       };
@@ -63,6 +64,7 @@ export function usePrClaims(projectId: string, enabled: boolean) {
           toast.error(t("prs.liveStopped"));
           return;
         }
+        connection.dropped = true;
         connection.retry = setTimeout(connect, backoff.next());
       };
     };
