@@ -666,11 +666,12 @@ describe("GET da revisão: quem está trabalhando agora", () => {
 });
 
 describe("GET da revisão: a frota de agentes do revisor", () => {
-  it("traz o que cada agente da frota faz, com fase e modelo, e o painel aberto mantém a frota acompanhada", async () => {
+  async function reviewerWithLiveFleet() {
     const w = await world();
-    const review = (await startReview(w)).json().review as { reviewerCardId: string };
+    const review = (await startReview(w)).json().review as { id: string; reviewerCardId: string };
     const { EventEmitter } = await import("node:events");
     const manager = await import("../services/sdk/manager.js");
+    const workflow = await import("../services/sdk/workflow.js");
     const driver = Object.assign(new EventEmitter(), {
       stdout: new EventEmitter(), stderr: new EventEmitter(), exitCode: null, kill: () => undefined,
       stdin: Object.assign(new EventEmitter(), { writable: true, write: () => true, end: () => undefined }),
@@ -689,18 +690,53 @@ describe("GET da revisão: a frota de agentes do revisor", () => {
       stderr: "",
     });
     emit({ type: "tool_use", id: "t-wf", name: "Workflow", input: {} });
-    try {
-      const read = async () =>
-        (await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/review`, headers: { cookie: w.leitor.cookie } })).json();
+    const read = async () =>
+      (await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/review`, headers: { cookie: w.leitor.cookie } })).json();
+    const firstProbe = async () => {
       expect((await read()).fleet).toEqual([]);
-      await vi.waitFor(async () => expect((await read()).fleet).toHaveLength(1), { timeout: 8_000, interval: 500 });
+      await vi.advanceTimersByTimeAsync(workflow.WATCH_INTERVAL_MS);
+    };
+    const cleanup = () => {
+      manager.resetSdkSessionsForTesting();
+      manager.setDriverSpawnerForTesting(null);
+    };
+    return { review, read, firstProbe, cleanup };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("traz o que cada agente da frota faz, com fase e modelo, e o painel aberto mantém a frota acompanhada", async () => {
+    const { read, firstProbe, cleanup } = await reviewerWithLiveFleet();
+    try {
+      await firstProbe();
+      expect((await read()).fleet).toHaveLength(1);
       expect((await read()).fleet[0]).toMatchObject({
         runId: "wf_abc12", phases: ["Contexto", "Revisão"],
         agents: [{ label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "running" }],
       });
     } finally {
-      manager.resetSdkSessionsForTesting();
-      manager.setDriverSpawnerForTesting(null);
+      cleanup();
+    }
+  });
+
+  it.each([
+    { name: "com a revisão encerrada", phase: "cancelled" as const },
+  ])("$name a frota viva não vai na resposta", async ({ phase }) => {
+    const { review, read, firstProbe, cleanup } = await reviewerWithLiveFleet();
+    try {
+      await firstProbe();
+      await (await store()).mutateReview(review.id, (r) => {
+        r.phase = phase;
+        r.lastSubmitRound = r.round;
+      });
+      expect((await read()).fleet).toEqual([]);
+    } finally {
+      cleanup();
     }
   });
 });
