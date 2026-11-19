@@ -22,6 +22,10 @@ interface PlatformFailuresDoc {
   failures: PlatformFailure[];
 }
 
+type CardFailureListener = (failure: PlatformFailure) => void;
+
+const cardFailureListeners = new Map<string, Set<CardFailureListener>>();
+
 const store = new JsonStore<PlatformFailuresDoc>(dataPath("platform-failures.json"), () => ({ failures: [] }));
 
 function findFailureIn(doc: PlatformFailuresDoc, id: string): PlatformFailure {
@@ -36,6 +40,28 @@ function noteAffectedCard(failure: PlatformFailure, cardId: string | undefined):
   failure.affectedCardIds = [...otherCardIds, cardId].slice(-AFFECTED_CARDS_CAP);
 }
 
+export function onCardFailureChange(cardId: string, listener: CardFailureListener): () => void {
+  const listenersOfCard = cardFailureListeners.get(cardId) ?? new Set<CardFailureListener>();
+  listenersOfCard.add(listener);
+  cardFailureListeners.set(cardId, listenersOfCard);
+  return () => {
+    listenersOfCard.delete(listener);
+    if (listenersOfCard.size === 0 && cardFailureListeners.get(cardId) === listenersOfCard) cardFailureListeners.delete(cardId);
+  };
+}
+
+function announceFailureToCards(failure: PlatformFailure, cardIds: readonly string[]): void {
+  for (const cardId of cardIds) {
+    for (const listener of cardFailureListeners.get(cardId) ?? []) {
+      try {
+        listener({ ...failure });
+      } catch (err) {
+        logger.warn({ card: cardId, detail: (err as Error).message }, "could not announce a platform failure to a card");
+      }
+    }
+  }
+}
+
 export async function recordPlatformFailure(report: PlatformFailureReport, now: number = Date.now()): Promise<PlatformFailure | null> {
   if (!(await getSettings()).selfProjectId) return null;
   const signature = buildFailureSignature(report);
@@ -46,17 +72,18 @@ export async function recordPlatformFailure(report: PlatformFailureReport, now: 
       && now - (sameSignatureFailure.dismissedAt ?? 0) > SLOW_TURN_DISMISSAL_MS;
     if (isDismissalExpired) doc.failures = doc.failures.filter((failure) => failure !== sameSignatureFailure);
     const knownFailure = isDismissalExpired ? undefined : sameSignatureFailure;
-    if (knownFailure?.status === "dismissed") return { failure: null, capReached: false };
+    if (knownFailure?.status === "dismissed") return { failure: null, capReached: false, isNewForCard: false };
     const repeatedFailure = knownFailure ?? doc.failures.find((failure) =>
       failure.signature === signature && failure.status === "resolved" && now - (failure.resolvedAt ?? 0) <= RESOLVED_GRACE_MS);
     if (repeatedFailure) {
+      const isNewForCard = report.cardId !== undefined && !repeatedFailure.affectedCardIds.includes(report.cardId);
       repeatedFailure.occurrences += 1;
       repeatedFailure.lastSeenAt = now;
       noteAffectedCard(repeatedFailure, report.cardId);
-      return { failure: { ...repeatedFailure }, capReached: false };
+      return { failure: { ...repeatedFailure }, capReached: false, isNewForCard };
     }
     const activeFailures = doc.failures.filter((failure) => ACTIVE_STATUSES.includes(failure.status));
-    if (activeFailures.length >= ACTIVE_FAILURES_CAP) return { failure: null, capReached: true };
+    if (activeFailures.length >= ACTIVE_FAILURES_CAP) return { failure: null, capReached: true, isNewForCard: false };
     const createdFailure: PlatformFailure = {
       id: randomUUID(),
       signature,
@@ -67,18 +94,26 @@ export async function recordPlatformFailure(report: PlatformFailureReport, now: 
       evidence: report.evidence,
       ...(report.reproduction ? { reproduction: report.reproduction } : {}),
       ...(report.hypothesis ? { hypothesis: report.hypothesis } : {}),
+      ...(report.explanation ? { explanation: report.explanation } : {}),
+      ...(report.cardId ? { originCardId: report.cardId } : {}),
       occurrences: 1,
       affectedCardIds: report.cardId ? [report.cardId] : [],
       firstSeenAt: now,
       lastSeenAt: now,
     };
     doc.failures.push(createdFailure);
-    return { failure: { ...createdFailure }, capReached: false };
+    return { failure: { ...createdFailure }, capReached: false, isNewForCard: report.cardId !== undefined };
   });
   if (outcome.capReached) {
     logger.warn({ cap: ACTIVE_FAILURES_CAP, component: report.component }, "platform failure dropped: too many open failures");
   }
+  if (outcome.failure && outcome.isNewForCard && report.cardId) announceFailureToCards(outcome.failure, [report.cardId]);
   return outcome.failure;
+}
+
+export async function isPlatformFailureDismissed(report: Pick<PlatformFailureReport, "source" | "component" | "symptom">): Promise<boolean> {
+  const signature = buildFailureSignature(report);
+  return (await store.load()).failures.some((failure) => failure.signature === signature && failure.status === "dismissed");
 }
 
 export async function listActivePlatformFailures(): Promise<PlatformFailure[]> {
@@ -89,12 +124,16 @@ export async function listActivePlatformFailures(): Promise<PlatformFailure[]> {
     .map((failure) => ({ ...failure }));
 }
 
+export async function listActivePlatformFailuresOfCard(cardId: string): Promise<PlatformFailure[]> {
+  return (await listActivePlatformFailures()).filter((failure) => failure.affectedCardIds.includes(cardId));
+}
+
 export async function getPlatformFailure(id: string): Promise<PlatformFailure> {
   return { ...findFailureIn(await store.load(), id) };
 }
 
 export async function dismissPlatformFailure(id: string, now: number = Date.now()): Promise<PlatformFailure> {
-  return await store.mutate((doc) => {
+  const dismissedFailure = await store.mutate((doc) => {
     const failure = findFailureIn(doc, id);
     if (failure.status === "investigating") {
       throw new PlatformFailureStateError(`platform failure ${id} is being investigated in card ${failure.investigationCardId ?? "(starting)"}`);
@@ -103,6 +142,8 @@ export async function dismissPlatformFailure(id: string, now: number = Date.now(
     failure.dismissedAt = now;
     return { ...failure };
   });
+  announceFailureToCards(dismissedFailure, dismissedFailure.affectedCardIds);
+  return dismissedFailure;
 }
 
 interface InvestigationClaim {
@@ -111,7 +152,7 @@ interface InvestigationClaim {
 }
 
 export async function claimPlatformFailureInvestigation(id: string): Promise<InvestigationClaim> {
-  return await store.mutate((doc) => {
+  const claim = await store.mutate((doc) => {
     const failure = findFailureIn(doc, id);
     const statusBeforeClaim = failure.status;
     if (statusBeforeClaim === "investigating") return { failure: { ...failure }, statusBeforeClaim };
@@ -121,14 +162,18 @@ export async function claimPlatformFailureInvestigation(id: string): Promise<Inv
     failure.status = "investigating";
     return { failure: { ...failure }, statusBeforeClaim };
   });
+  if (claim.statusBeforeClaim !== "investigating") announceFailureToCards(claim.failure, claim.failure.affectedCardIds);
+  return claim;
 }
 
 export async function releasePlatformFailureInvestigation(id: string, statusBeforeClaim: PlatformFailureStatus): Promise<PlatformFailure> {
-  return await store.mutate((doc) => {
+  const releasedFailure = await store.mutate((doc) => {
     const failure = findFailureIn(doc, id);
     failure.status = statusBeforeClaim === "concluded_without_fix" ? "concluded_without_fix" : "open";
     return { ...failure };
   });
+  announceFailureToCards(releasedFailure, releasedFailure.affectedCardIds);
+  return releasedFailure;
 }
 
 export async function setPlatformFailureInvestigationCard(id: string, cardId: string): Promise<PlatformFailure> {
@@ -140,11 +185,13 @@ export async function setPlatformFailureInvestigationCard(id: string, cardId: st
 }
 
 export async function settlePlatformFailureInvestigation(cardId: string, outcome: { merged: boolean }, now: number = Date.now()): Promise<PlatformFailure | null> {
-  return await store.mutate((doc) => {
+  const settledFailure = await store.mutate((doc) => {
     const failure = doc.failures.find((candidate) => candidate.status === "investigating" && candidate.investigationCardId === cardId);
     if (!failure) return null;
     failure.status = outcome.merged ? "resolved" : "concluded_without_fix";
     if (outcome.merged) failure.resolvedAt = now;
     return { ...failure };
   });
+  if (settledFailure) announceFailureToCards(settledFailure, settledFailure.affectedCardIds);
+  return settledFailure;
 }
