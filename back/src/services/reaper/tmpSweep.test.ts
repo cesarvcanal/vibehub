@@ -164,6 +164,14 @@ describe("faxina do /tmp solto (fora de /tmp/vibehub), executada de verdade", { 
 });
 
 describe("buildTmpSweepScript", () => {
+  it("recusa varrer a raiz do sistema de arquivos", () => {
+    expect(() => buildTmpSweepScript("vibehub-runner", { root: "/" })).toThrow(/refusing/);
+  });
+
+  it.each([0, 59, 1.5])("recusa janela de inatividade de %s min: menos de uma hora apagaria o que está em uso", (idleMinutes) => {
+    expect(() => buildTmpSweepScript("vibehub-runner", { idleMinutes })).toThrow(/idle window too short/);
+  });
+
   it("o prazo vale dentro do container: o runner mata a faxina antes de o Node desistir dela", () => {
     const deadlineSeconds = (TMP_SWEEP_TIMEOUT_MS - CONTAINER_DEADLINE_MARGIN_MS) / 1000;
     expect(buildTmpSweepScript("vibehub-runner")).toContain(
