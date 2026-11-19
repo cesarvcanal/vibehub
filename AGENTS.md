@@ -285,7 +285,7 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 **Rodar testes no runner: curto, só do que você tocou.** A suíte inteira leva muitos minutos, disputa CPU com os outros cards e costuma ser morta por um deploy.
 
 1. **Enquanto trabalha:** só o arquivo do que mexeu, filtrado pelo caso — `cd back && npx vitest run src/services/sdk/manager.test.ts -t "órfã"`.
-2. **Antes de entregar:** `npm run test:changed` (raiz), o mesmo recorte do gate (`.vibehub/gate.json` → `scripts/gate-changed.sh`). Junto, o typecheck do pacote tocado, o mesmo do CI:
+2. **Antes de entregar:** `npm run lint:changed` e `npm run test:changed` (raiz), o mesmo recorte do gate (`.vibehub/gate.json`). Junto, o typecheck do pacote tocado, o mesmo do CI:
    - **front:** `npx tsc -b`. O `tsconfig.json` é uma solution com project references, então `tsc --noEmit -p` não checa nada e dá verde falso.
    - **back:** `npx tsc --noEmit`. `tsc -b` emitiria JS em `back/dist`. O `tsconfig.json` do back exclui `*.test.ts`: erro de tipo em teste só aparece ao rodar o teste.
 3. **Nunca** `npm test` ou `npx vitest run` sem filtro no runner. A suíte inteira é do CI: confira com `gh pr checks <N>`.
@@ -309,7 +309,7 @@ Se um comando de teste for passar de ~2 min, troque por um recorte menor. Não a
 4. **Implementar de ponta a ponta:** consumidores, contratos, validação, acesso, i18n e testes na mesma entrega.
 5. **Auditar o trecho tocado:** nomes, `let`, comentário fora das exceções, código morto, duplicação, fallback indevido, leituras e execuções inúteis.
 6. **Não espalhar alterações:** problema vizinho que exige refatoração arriscada é comunicado, não corrigido de carona.
-7. **Validar:** testes do recorte, typecheck e build quando aplicável; revisar o diff (comandos abaixo).
+7. **Validar:** lint do recorte, testes do recorte, typecheck e build quando aplicável; revisar o diff (comandos abaixo). O lint do recorte (`npm run lint:changed`) reprova, só nas linhas que a branch acrescentou, as regras que a máquina checa: as de `eslint.config.js`, cada uma com a seção que impõe. Lint verde não é conformidade: o resto deste arquivo é o passo 5 e a revisão do passo 8.
 8. **Revisão independente antes de entregar:** o diff passa, nesta ordem, por **simplificação** (aplicada) e por **code review** (correção, performance, aderência às regras e o que foi inventado), ambas feitas por um revisor SEM o contexto de quem escreveu, que recebe o diff, as mensagens dos commits e este arquivo; o code review segue "Como revisar um PR" (§14). Achado confirmado segue a severidade dele (§14, "As severidades"): o que bloqueia é corrigido ou vira pendência deliberada, que só o aval de quem autoriza o merge aceita (§14, "A pendência deliberada é julgada"), o que deveria corrigir é aplicado, a decisão vira pergunta ao usuário e o menor fica registrado no PR. O descartado tem o motivo dito. O que a simplificação mudar volta pelo passo 7 antes do code review.
 9. **Descrever o resultado:** o que mudou, o que foi verificado e as limitações reais. Quando a entrega é um PR, ele segue a §14.
 
@@ -334,9 +334,10 @@ Pedir autorização e passar por brainstorming continua obrigatório para decis�
 
 | Comando | Uso |
 |---------|-----|
-| `npm run install:all` | Instala `back/` e `front/` |
+| `npm run install:all` | Instala a raiz (o lint), `back/` e `front/` |
 | `npm --prefix back run dev` · `npm --prefix front run dev` | Backend (tsx watch) e frontend (Vite) em dev |
 | `cd back && npx vitest run <arquivo> -t "<caso>"` | Teste do que você tocou (idem em `front/`) |
+| `npm run lint:changed` | ESLint só nas linhas que a branch acrescentou desde a base (`$VIBEHUB_BASE_REF`, padrão `origin/main`), o recorte do gate e do CI |
 | `npm run test:changed` | Testes afetados pela branch desde a `main`, o recorte do gate |
 | `npx tsc -b` (em `front/`) · `npx tsc --noEmit` (em `back/`) | Typecheck, o mesmo do CI (no back não cobre `*.test.ts`) |
 | `npm run build` | Build de back + front |
@@ -375,7 +376,7 @@ Toda dúvida que trava a execução e toda discordância com o pedido viram perg
 - [ ] Rota nova com `requireOwner` / `requireCardAccess` / `requireCardWork` / `requireSession` adequado?
 - [ ] Operações repetíveis são idempotentes e seguras em corrida?
 - [ ] Escrevi o teste antes, vi falhar pelo motivo certo e vi falhar de novo sem a correção?
-- [ ] Rodei o recorte de testes e o typecheck, e conferi o diff?
+- [ ] Rodei o lint do recorte, o recorte de testes e o typecheck, e conferi o diff?
 - [ ] O diff passou pela simplificação e pelo code review independentes contra este arquivo?
 - [ ] Afirmei apenas o que foi executado e verificado?
 
