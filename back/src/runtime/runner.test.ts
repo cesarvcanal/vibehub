@@ -78,6 +78,7 @@ describe("runnerSettingsJson", () => {
     const reminder = afterCompact[0]!.hooks[0].command;
     expect(reminder).toContain("CLAUDE.md");
     expect(reminder).toContain("AGENTS.md");
+    expect(reminder).toContain("without asking for confirmation");
     expect(reminder).not.toContain("VIBEHUB_STATUS_URL");
   });
   it("only bypasses permissions when the install chose autonomy", () => {
