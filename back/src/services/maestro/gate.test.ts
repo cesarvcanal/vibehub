@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathWithFakeDocker } from "../../testkit/fakeDocker.js";
+import { cardTmpDir } from "../board/cardTmp.js";
 
 const runScript = vi.fn(async () => ({ stdout: "", stderr: "" }));
 
@@ -127,7 +128,7 @@ describe("probe script + parse", () => {
 
 function gateCardId(): string {
   const cardId = randomUUID();
-  onTestFinished(() => rm(`/tmp/vibehub/${cardId}`, { recursive: true, force: true }));
+  onTestFinished(() => rm(cardTmpDir(cardId), { recursive: true, force: true }));
   return cardId;
 }
 
@@ -169,7 +170,7 @@ describe("run script + parse", () => {
     const cardId = randomUUID();
     const work = await mkdtemp(join(tmpdir(), "vibehub-gate-work-"));
     onTestFinished(() => rm(work, { recursive: true, force: true }));
-    onTestFinished(() => rm(`/tmp/vibehub/${cardId}`, { recursive: true, force: true }));
+    onTestFinished(() => rm(cardTmpDir(cardId), { recursive: true, force: true }));
     const env = { ...process.env, PATH: await pathWithFakeDocker() };
     const out = execFileSync(
       "sh",
