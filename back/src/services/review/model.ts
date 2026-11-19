@@ -1,3 +1,5 @@
+import type { WorkflowRun } from "../sdk/workflowProbe.js";
+
 /**
  * PR REVIEW — pure rules. This is where the invariants the server imposes on the reviewer's AI and on
  * the author's live, so the loop does not depend on the prompt's goodwill: blocking only with proof, a
@@ -190,6 +192,11 @@ export interface Review {
    * the limit comes back) and is sent again by itself, without counting as a reminder.
    */
   usageLimitWait?: { side: "reviewer" | "author"; until: number };
+  /**
+   * The reviewer's agent fleet as it stood when each round was submitted (finished: whoever was still in flight
+   * became `stopped`). The live fleet lives only as long as the reviewer's driver; this is what the panel keeps.
+   */
+  fleet?: { round: number; runs: WorkflowRun[] }[];
   lastSubmitRound?: number;
   lastRespondRound?: number;
   nudges: number;

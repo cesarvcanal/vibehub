@@ -15,7 +15,7 @@ import { writeCardCatalog } from "./catalog.js";
 import { normalizeRateLimit, type RateLimitInfo } from "./rateLimit.js";
 import { normalizeContextUsage, type ContextUsageInfo } from "./contextUsage.js";
 import { saveLastContext, type StoredContext } from "./lastContext.js";
-import { forgetCardWorkflows, lastWorkflowRuns, readAgentFeed, watchCardWorkflows } from "./workflow.js";
+import { forgetCardWorkflows, lastWorkflowRuns, readAgentFeed, readWorkflowRuns, watchCardWorkflows } from "./workflow.js";
 import { InvalidWorkflowIdError, type WorkflowRun } from "./workflowProbe.js";
 import { InvalidDetailIdError, readAgentTimeline, readToolDetail } from "./detail.js";
 import { readCardChanges, readCardFileDiff } from "../maestro/changes.js";
@@ -1054,6 +1054,13 @@ export function watchCardFleet(cardId: string): WorkflowRun[] {
   if (!session || session.closed) return [];
   session.fleetViewedAt = Date.now();
   return lastWorkflowRuns(cardId);
+}
+
+/** The fleet of this card read now (one probe in the runner), for whoever keeps it beyond the driver's life. */
+export async function readCardFleet(cardId: string): Promise<WorkflowRun[]> {
+  const session = sessions.get(cardId);
+  const dirs = session && !session.closed ? workflowDirs(session) : null;
+  return dirs ? await readWorkflowRuns(dirs) : [];
 }
 
 /** A subagent's feed for whoever asked, with the reason when it comes back empty because of an error. */

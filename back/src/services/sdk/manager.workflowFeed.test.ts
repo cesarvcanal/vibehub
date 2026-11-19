@@ -22,7 +22,7 @@ vi.mock("../board/registry.js", async (importOriginal) => {
   return { ...actual, updateCard: () => Promise.resolve(undefined), markCardHumanActive: () => Promise.resolve(undefined) };
 });
 
-const { attachSocket, ensureDriverSession, resetSdkSessionsForTesting, setDriverSpawnerForTesting, watchCardFleet } = await import("./manager.js");
+const { attachSocket, ensureDriverSession, resetSdkSessionsForTesting, setDriverSpawnerForTesting, readCardFleet, watchCardFleet } = await import("./manager.js");
 const { readHistory, rewindHistory } = await import("./history.js");
 
 const CARD = "ffff498d-98dd-44b6-97ee-c06a181c3769";
@@ -196,6 +196,27 @@ describe("watchCardFleet — o painel da revisão acompanha a frota de outro car
 
   it("card sem driver: nada a mostrar e nada a sondar", () => {
     expect(watchCardFleet("card-sem-driver")).toEqual([]);
+    expect(runScript).not.toHaveBeenCalled();
+  });
+});
+
+describe("readCardFleet — o retrato da frota lido na hora", () => {
+  it("uma sondagem só, no diário da sessão do card, e devolve as rodadas com o modelo de cada agente", async () => {
+    liveSession();
+    runScript.mockResolvedValue({
+      stdout: `${JSON.stringify([{ runId: "wf_abc12", name: "n", total: 1, done: 1, agents: [{ id: "a01f", status: "done", label: "juiz", phase: "Julgamento", model: "opus", result: "ok", toolCount: 1 }] }])}\n`,
+      stderr: "",
+    });
+    const runs = await readCardFleet(CARD);
+    expect(runScript).toHaveBeenCalledTimes(1);
+    expect(String(runScript.mock.calls[0]![0])).toContain("/root/.claude/projects/p/s1/subagents/workflows");
+    expect(runs).toMatchObject([{ runId: "wf_abc12", agents: [{ label: "juiz", model: "opus", status: "done", result: "ok" }] }]);
+  });
+
+  it("card sem driver ou sem sessão: nada a ler e nenhum docker exec", async () => {
+    expect(await readCardFleet("card-sem-driver")).toEqual([]);
+    liveSession(false);
+    expect(await readCardFleet(CARD)).toEqual([]);
     expect(runScript).not.toHaveBeenCalled();
   });
 });

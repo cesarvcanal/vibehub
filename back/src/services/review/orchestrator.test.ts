@@ -25,6 +25,8 @@ const calls: string[] = [];
 const plant = vi.fn(async () => {
   calls.push("plant");
 });
+/** The reviewer's fleet as the runner has it when the round is submitted. */
+const fleetRead = vi.fn(async (_cardId: string): Promise<unknown[]> => []);
 let sendFailure: Error | null = null;
 /** Runs once before the next send (the race "the review moved while the text was going out"). */
 let sendHook: (() => Promise<void>) | null = null;
@@ -105,6 +107,10 @@ async function load() {
     afterPrMerged: afterMerged,
     gateAtCommit: gateSpy,
     setPrPeople: prPeople,
+  }));
+  vi.doMock("../sdk/manager.js", async () => ({
+    ...(await vi.importActual<typeof import("../sdk/manager.js")>("../sdk/manager.js")),
+    readCardFleet: fleetRead,
   }));
   vi.doMock("./analysisWorkflow.js", async () => ({
     ...(await vi.importActual<typeof import("./analysisWorkflow.js")>("./analysisWorkflow.js")),
@@ -245,6 +251,34 @@ describe("iniciar a revisão", () => {
       origin: { kind: "system", name: "revisão de PR" },
     });
     expect(review.log.length).toBeGreaterThan(0);
+  });
+
+  it("a rodada entregue guarda a frota que a produziu, terminada, para o painel mostrar depois que o card do revisor dormir", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    const run = {
+      runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Revisão"], total: 2, done: 1, at: 5, finished: false,
+      agents: [
+        { id: "a01f", label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "done", result: "{}", toolCount: 3 },
+        { id: "a02f", label: "juiz", phase: "Julgamento", model: "opus", status: "running", toolCount: 0 },
+      ],
+    };
+    fleetRead.mockResolvedValueOnce([run]);
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    expect(fleetRead).toHaveBeenCalledWith(review.reviewerCardId);
+    expect(after.fleet).toEqual([{
+      round: 1,
+      runs: [{ ...run, finished: true, agents: [run.agents[0], { ...run.agents[1], status: "stopped" }] }],
+    }]);
+  });
+
+  it("frota que não dá para ler não segura a rodada: ela é registrada sem o retrato", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    fleetRead.mockRejectedValueOnce(new Error("runner down"));
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    expect(after).toMatchObject({ phase: "fixing", lastSubmitRound: 1 });
+    expect(after.fleet).toBeUndefined();
   });
 
   it("os textos do revisor mandam chamar a ferramenta mesmo se o gh pr review falhar", async () => {

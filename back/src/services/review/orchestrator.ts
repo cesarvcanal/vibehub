@@ -24,6 +24,8 @@ import {
 } from "./model.js";
 import { findActiveAnalysisCard } from "./analysisReport.js";
 import { plantPrAnalysisWorkflow } from "./analysisWorkflow.js";
+import { readCardFleet } from "../sdk/manager.js";
+import { stopInFlight, type WorkflowRun } from "../sdk/workflowProbe.js";
 import {
   activeReviewForPr, getReview, insertReview, listReviewsForCards, listReviewsWaitingUsageLimit, mutateReview, reviewByReviewerCard,
 } from "./store.js";
@@ -690,6 +692,19 @@ export async function startReview(input: {
  * not the current one, or already submitted, returns the review with no effect. Findings go through the model
  * (proof, closed list); verdicts only `fixed|open|dropped`, and never on what a human already closed.
  */
+/**
+ * The reviewer's fleet as it stands now, closed (the round is being submitted: whoever has not answered will not).
+ * Best effort: the live panel already showed it, and a runner that does not answer costs only the history, never the round.
+ */
+async function readRoundFleet(r: Review): Promise<WorkflowRun[]> {
+  try {
+    return (await readCardFleet(r.reviewerCardId)).map((run) => ({ ...run, finished: true, agents: stopInFlight(run.agents) }));
+  } catch (err) {
+    logger.warn({ review: r.id, detail: (err as Error).message }, "PR review could not read the reviewer's fleet for the history");
+    return [];
+  }
+}
+
 export async function submitReviewerRound(
   reviewerCardId: string,
   payload: {
@@ -720,10 +735,12 @@ export async function submitReviewerRound(
     );
   }
 
+  const fleetRuns = await readRoundFleet(review);
   let landed = false as boolean;
   const after = await mutateReview(review.id, (r) => {
     // Again, inside the queue: another submit of the same round may have landed between the read and here.
     if (!fresh(r)) return;
+    if (fleetRuns.length > 0) r.fleet = [...(r.fleet ?? []).filter((entry) => entry.round !== r.round), { round: r.round, runs: fleetRuns }];
     // The AI's verdict never undoes a human. Accepted risk and human withdrawal are final: any verdict
     // on them is ignored. A human block (block/keep) is only protected from `dropped` (the AI does not
     // withdraw what a human ordered blocked); `open` and `fixed` count, because the reviewer has to be
