@@ -1495,7 +1495,7 @@ async function onTurnFinished(event: CardEvent): Promise<void> {
   }
   const usageLimit = cardUsageLimit(cardId);
   for (const { id, side } of waiting) {
-    let action = null as "nudge" | "impasse" | "wait" | null;
+    const outcome: { action?: "nudge" | "impasse" | "wait" } = {};
     const tool = side === "reviewer" ? TOOL_SUBMIT : TOOL_RESPOND;
     const who = side === "reviewer" ? "revisor" : "autor";
     const after = await mutateReview(id, (r) => {
@@ -1505,7 +1505,7 @@ async function onTurnFinished(event: CardEvent): Promise<void> {
       if (usageLimit && resetsAhead && resumesLeft) {
         r.usageLimitWait = { side, until: usageLimit.resetsAt! };
         note(r, "system", `A conta Claude do ${who} ficou sem limite de uso: a rodada ${r.round} continua sozinha quando o limite voltar.`);
-        action = "wait";
+        outcome.action = "wait";
       } else if (usageLimit) {
         r.phase = "impasse";
         r.impasseReason = resumesLeft ? USAGE_LIMIT : USAGE_LIMIT_STUCK;
@@ -1513,21 +1513,21 @@ async function onTurnFinished(event: CardEvent): Promise<void> {
         note(r, "system", resumesLeft
           ? `Impasse: a conta Claude do ${who} ficou sem limite de uso e não disse quando volta.`
           : `Impasse: a conta Claude do ${who} recusou de novo depois de ${MAX_USAGE_LIMIT_RESUMES} retomadas.`);
-        action = "impasse";
+        outcome.action = "impasse";
       } else if (r.nudges >= 1) {
         r.phase = "impasse";
         r.impasseReason = NO_ANSWER;
         note(r, "system", `Impasse: a IA do ${side === "reviewer" ? "revisor" : "autor"} terminou o turno de novo sem chamar ${tool}.`);
-        action = "impasse";
+        outcome.action = "impasse";
       } else {
         r.nudges += 1;
         note(r, "system", `A IA do ${side === "reviewer" ? "revisor" : "autor"} terminou o turno sem chamar ${tool}: lembrete enviado.`);
-        action = "nudge";
+        outcome.action = "nudge";
       }
     });
-    if (action === "nudge") await relayReview(after, side, nudgePrefix(tool) + (await promptFor(after, side)));
-    else if (action === "impasse") await announcePhase(after);
-    else if (action === "wait") scheduleUsageResume(after);
+    if (outcome.action === "nudge") await relayReview(after, side, nudgePrefix(tool) + (await promptFor(after, side)));
+    else if (outcome.action === "impasse") await announcePhase(after);
+    else if (outcome.action === "wait") scheduleUsageResume(after);
   }
 }
 
@@ -1561,17 +1561,17 @@ function scheduleUsageResume(r: Review): void {
  * that moved meanwhile (cancelled, "tentar de novo", the tool called after all) only loses the mark.
  */
 async function resumeAfterUsageLimit(reviewId: string): Promise<void> {
-  let side = null as Side | null;
+  const resumed: { side?: Side } = {};
   const after = await mutateReview(reviewId, (r) => {
     const wait = r.usageLimitWait;
     if (!wait) return;
     delete r.usageLimitWait;
     if (!awaitingTool(r, wait.side)) return;
     r.usageLimitResumes = (r.usageLimitResumes ?? 0) + 1;
-    side = wait.side;
-    note(r, "system", `O limite da conta Claude do ${side === "reviewer" ? "revisor" : "autor"} voltou: a rodada ${r.round} segue.`);
+    resumed.side = wait.side;
+    note(r, "system", `O limite da conta Claude do ${wait.side === "reviewer" ? "revisor" : "autor"} voltou: a rodada ${r.round} segue.`);
   });
-  if (side) await relayReview(after, side, await promptFor(after, side));
+  if (resumed.side) await relayReview(after, resumed.side, await promptFor(after, resumed.side));
 }
 
 async function failUsageResume(reviewId: string, err: unknown): Promise<void> {
