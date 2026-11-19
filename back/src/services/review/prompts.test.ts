@@ -271,6 +271,14 @@ describe("prompt da análise de PR", () => {
     expect(analysisPrompt(input)).toMatch(/stage: "done"[^\n]*o mesmo headSha do passo 1/);
   });
 
+  it("entrega sem authorized por conta própria, e mergeia com authorized e from = o próprio card quando a pessoa manda", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    const text = analysisPrompt(input);
+    expect(text).toMatch(/Entregue as correções[^\n]*sem authorized/);
+    expect(text).toMatch(/Se a pessoa mandar mergear[^\n]*vibehub_deliver com card = "card-9", from = "card-9", branch = "dev" e authorized: true/);
+    expect(text).not.toContain("o merge é de uma pessoa");
+  });
+
   it("o relatório analysed vai uma vez só, como o servidor exige", async () => {
     const { analysisPrompt } = await import("./prompts.js");
     expect(analysisPrompt(input)).toMatch(/stage: "analysed"[^\n]*uma vez só/);
@@ -324,7 +332,7 @@ describe("prompt da análise de PR", () => {
     expect(text).toContain(classes!);
   });
 
-  it("corrige com teste primeiro, comenta tudo na PR e entrega sem merge nem reescrever a descrição", async () => {
+  it("corrige com teste primeiro, comenta tudo na PR e entrega sem merge próprio nem reescrever a descrição", async () => {
     const { analysisPrompt } = await import("./prompts.js");
     const text = analysisPrompt(input);
     expect(text).toMatch(/teste que reproduz/);
@@ -332,7 +340,7 @@ describe("prompt da análise de PR", () => {
     expect(text).not.toContain("${");
     expect(text).toContain("gh pr review 636 --comment");
     expect(text).toContain('vibehub_deliver com card = "card-9" e branch = "dev"');
-    expect(text).not.toMatch(/authorized: true/);
+    expect(text.split("\n").find((line) => line.startsWith("7."))).not.toContain("authorized: true");
     expect(text).toMatch(/sem title nem body/);
   });
 

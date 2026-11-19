@@ -637,10 +637,13 @@ export function analysisPrompt(a: AnalysisInput): string {
     "6. Reconferência: dispare UM subagente novo, sem o seu contexto, para revisar só git diff <sha analisado>..HEAD, " +
       "procurando bug que a própria correção criou. Achado com prova: corrija do mesmo jeito (uma volta a mais, só uma).",
     `7. Entregue as correções: chame vibehub_deliver com card = "${a.cardId}" e branch = "${a.base}", sem title nem body ` +
-      "(a descrição do PR é do autor) e sem authorized (o merge é de uma pessoa). Os commits vão para a branch da PR. " +
+      "(a descrição do PR é do autor) e sem authorized (você não mergeia por conta própria). Os commits vão para a branch da PR. " +
       // Never the step-1 reset here: it would drop the fix commits that have not gone up yet.
       `Se o push for recusado porque a PR andou, traga o código novo sem perder as correções: git fetch origin && git rebase origin/${a.branch}, ` +
       "resolva os conflitos, rode de novo os testes do que mudou e entregue outra vez.",
+    `   Se a pessoa mandar mergear, neste chat, chame vibehub_deliver com card = "${a.cardId}", from = "${a.cardId}", ` +
+      `branch = "${a.base}" e authorized: true: o merge sai com o gate verde, em merge commit preso ao commit conferido, e a ` +
+      "resposta diz o motivo quando recusa (PR em revisão, gate vermelho, PR que andou). Nunca mergeie pelo gh nem pela API.",
     `8. Chame vibehub_analysis_report de novo, com stage: "done": o mesmo headSha do passo 1 (não o das correções), ` +
       "as mesmas dimensions do passo 3, inclusive o unverifiedCount, e os mesmos findings, cada um com status " +
       "\"fixed\" e o commit, \"decided\" com a decision (question que a pessoa já respondeu sem pedir mudança) ou " +
