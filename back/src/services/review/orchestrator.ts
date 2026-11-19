@@ -586,7 +586,7 @@ export async function startReview(input: {
     }
     // An analysis card never merges (see `deliver`): a review started on it could never end.
     if (card.pushBranch !== undefined) throw new Error("card_de_analise: o card de uma análise de PR não é revisado");
-    // An open analysis pushes its fixes onto this PR: a review now would see the head move under it.
+    // An active analysis pushes its fixes onto this PR: a review now would see the head move under it.
     if (await findActiveAnalysisCard(await listCards(card.projectId), pr.url)) {
       throw new Error(`analise_ativa: o PR #${pr.number} tem uma análise em andamento; revise depois que ela terminar`);
     }

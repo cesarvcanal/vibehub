@@ -161,7 +161,7 @@ function serialPerPr<T>(key: string, run: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Opens the analysis of PR `prNumber`, or returns the one already open (`created: false`, with the roles
+ * Opens the analysis of PR `prNumber`, or returns the active one (`created: false`, with the roles
  * it was opened with: the ones asked now are not applied). Refusals with the code in the message, which
  * the route turns into 400: `sem_repositorio`, `pr_nao_aberta`, `pr_fork`, `branch_invalida`,
  * `revisao_ativa` (a two-AI review of the same PR is running: the analysis' push would move the head it
