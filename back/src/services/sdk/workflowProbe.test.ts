@@ -558,6 +558,21 @@ describe("conversa da frota — todos os agentes de uma vez, numa execução só
     expect(conversation!.items[4]!.text!.length).toBeGreaterThan(300);
   });
 
+  it("a resposta que o agente entrega pela ferramenta StructuredOutput vira a fala dele, com o JSON inteiro", async () => {
+    const wf = await load();
+    const transcriptDir = mkdtempSync(join(tmpdir(), "vibehub-conv-so-"));
+    onTestFinished(() => rmSync(transcriptDir, { recursive: true, force: true }));
+    const run = join(transcriptDir, "s1", "subagents", "workflows", "wf_so1");
+    mkdirSync(run, { recursive: true });
+    writeFileSync(join(run, "journal.jsonl"), jsonl([{ type: "started", agentId: "a0b1", label: "verificação:tests · x", phase: "Verificação" }]));
+    const verdict = { confirmed: false, evidence: "o teste já cobre o caso" };
+    writeFileSync(join(run, "agent-a0b1.jsonl"), jsonl([
+      MODEL_ASSISTANT(T0, "claude-sonnet-5-5", [TOOL("t9", "StructuredOutput", verdict)]),
+    ]));
+    const conversation = wf.parseFleetConversation(runProbe(wf.FLEET_CONVERSATION_PROBE_JS, [transcriptDir]));
+    expect(conversation!.items).toEqual([{ agentId: "a0b1", at: T0, kind: "text", text: JSON.stringify(verdict) }]);
+  });
+
   it("todos os agentes respondidos dão a conversa por terminada", async () => {
     const wf = await load();
     const conversation = wf.parseFleetConversation(probe({

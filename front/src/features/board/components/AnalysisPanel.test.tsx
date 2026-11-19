@@ -284,6 +284,23 @@ describe("aba Conversa: a frota conversando como um chat em grupo", () => {
     expect(screen.getByText("Frota conversando · 1 de 2 agentes responderam")).toBeInTheDocument();
   });
 
+  it("fala em JSON (achados ou veredito) é lida como na frota da revisão: títulos dos achados e o veredito com a evidência", async () => {
+    const structured: AnalysisConversationResponse = {
+      conversation: {
+        ...fleetTalk.conversation!,
+        items: [
+          { agentId: "a1", at: 1, kind: "text", text: JSON.stringify({ findings: [{ title: "token vaza no log" }] }) },
+          { agentId: "a2", at: 2, kind: "text", text: JSON.stringify({ confirmed: false, evidence: "o log mascara o token" }) },
+        ],
+      },
+    };
+    renderPanel(readModel(doneReport(), "not_apt"), undefined, () => structured);
+    await openConversation();
+    expect(await screen.findByText("1 achado: token vaza no log")).toBeInTheDocument();
+    expect(screen.getByText("Derrubado")).toBeInTheDocument();
+    expect(screen.getByText(/o log mascara o token/)).toBeInTheDocument();
+  });
+
   it("card sem frota diz que a frota ainda não rodou", async () => {
     renderPanel(readModel(doneReport(), "not_apt"));
     await openConversation();
