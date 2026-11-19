@@ -173,7 +173,7 @@ function fleetFixture(): Fixture {
     ASSISTANT(T0 + 10_000, [{ type: "text", text: "Achei   2 problemas\nno render" }]),
   ]));
   // a02: no label in the journal — the meta.json next to it knows; last thing: a Bash in progress.
-  writeFileSync(join(run, "agent-a02f.meta.json"), JSON.stringify({ agentType: "workflow-subagent", description: "varre:back-api", workflowPhase: "Varredura" }));
+  writeFileSync(join(run, "agent-a02f.meta.json"), JSON.stringify({ agentType: "workflow-subagent", description: "varre:back-api", workflowPhase: "Varredura", model: "sonnet" }));
   writeFileSync(join(run, "agent-a02f.jsonl"), jsonl([
     HEADER(T0 + 500), TASK(T0 + 600, "Varra o back"),
     ASSISTANT(T0 + 2_000, [TOOL("t2", "Read", { file_path: "/work/back/src/app.ts" })]),
@@ -222,6 +222,12 @@ describe("WORKFLOW_PROBE_JS — a sondagem lendo um diário real", () => {
   it("sem rótulo no diário, cai no agent-<id>.meta.json (description / workflowPhase)", async () => {
     const { agent } = await snapshot();
     expect(agent("a02f")).toMatchObject({ label: "varre:back-api", phase: "Varredura" });
+  });
+
+  it("o modelo de cada agente vem do meta.json; sem meta, o agente sai sem modelo", async () => {
+    const { agent } = await snapshot();
+    expect(agent("a02f")).toMatchObject({ model: "sonnet" });
+    expect(agent("a03f").model).toBeUndefined();
   });
 
   it("sem diário nem meta, usa a linha 'computed task text follows:' — pulando o cabeçalho", async () => {

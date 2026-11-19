@@ -79,6 +79,10 @@ export async function listReviewsForCards(cardIds: string[]): Promise<Review[]> 
   return (await store.load()).reviews.filter((r) => wanted.has(r.cardId)).map(copy);
 }
 
+export async function listReviewsWaitingUsageLimit(): Promise<Review[]> {
+  return (await store.load()).reviews.filter((r) => r.usageLimitWait && !isReviewClosed(r.phase)).map(copy);
+}
+
 export async function insertReview(r: Review): Promise<void> {
   await store.mutate((doc) => {
     if (doc.reviews.some((x) => x.id === r.id)) throw new Error(`review ${r.id} already exists`);

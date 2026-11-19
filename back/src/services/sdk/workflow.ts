@@ -331,6 +331,14 @@ export async function readAgentFeed(runsDir: string, runId: string, agentId: str
   return parseAgentFeed(stdout);
 }
 
+export async function readWorkflowRuns(dirs: { runs: string; scripts: string }): Promise<WorkflowRun[]> {
+  const { stdout } = await hostExecutor().runScript(
+    buildWorkflowProbeScript(config.runner.container, dirs.runs, dirs.scripts, []),
+    { timeoutMs: 10_000 },
+  );
+  return parseWorkflowProbe(stdout);
+}
+
 /** This card's last published frames — what a tab that has just opened needs to see. */
 export function lastWorkflowRuns(cardId: string): WorkflowRun[] {
   return lastRuns.get(cardId) ?? [];

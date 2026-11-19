@@ -1,3 +1,5 @@
+import type { WorkflowAgent, WorkflowRun } from "../sdk/workflowProbe.js";
+
 /**
  * PR REVIEW — pure rules. This is where the invariants the server imposes on the reviewer's AI and on
  * the author's live, so the loop does not depend on the prompt's goodwill: blocking only with proof, a
@@ -119,6 +121,28 @@ export function mergeGateSelfHealing(gate: MergeGate): boolean {
   return gate.state === "failed" && !gate.exhausted && !(gate.autoRetried && gate.failures === undefined);
 }
 
+export type ReviewFleetAgent = Pick<WorkflowAgent, "id" | "label" | "phase" | "model" | "status" | "result" | "endedAt">;
+export type ReviewFleetRun = Pick<WorkflowRun, "runId" | "name" | "phases" | "total" | "done" | "at" | "finished" | "outcome"> & {
+  agents: ReviewFleetAgent[];
+};
+
+function fleetAgentForReaders(agent: WorkflowAgent): ReviewFleetAgent {
+  return {
+    id: agent.id, label: agent.label, phase: agent.phase, status: agent.status,
+    ...(agent.model !== undefined ? { model: agent.model } : {}),
+    ...(agent.result !== undefined ? { result: agent.result } : {}),
+    ...(agent.endedAt !== undefined ? { endedAt: agent.endedAt } : {}),
+  };
+}
+
+export function fleetRunForReaders(run: WorkflowRun): ReviewFleetRun {
+  return {
+    runId: run.runId, name: run.name, phases: run.phases, total: run.total, done: run.done, at: run.at, finished: run.finished,
+    agents: run.agents.map(fleetAgentForReaders),
+    ...(run.outcome !== undefined ? { outcome: run.outcome } : {}),
+  };
+}
+
 export interface Review {
   id: string;
   /** The AUTHOR's card: where the fix runs and the PR lives. */
@@ -185,6 +209,9 @@ export interface Review {
    * asked for the review ({@link cardsToConclude}). Never written again; the next order replaces it.
    */
   concludeWhenMerged?: boolean;
+  usageLimitWait?: { side: "reviewer" | "author"; until: number };
+  usageLimitResumes?: number;
+  fleet?: { round: number; runs: ReviewFleetRun[] }[];
   lastSubmitRound?: number;
   lastRespondRound?: number;
   nudges: number;

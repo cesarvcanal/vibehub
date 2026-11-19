@@ -166,6 +166,49 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.getByRole("tabpanel")).toHaveClass("overflow-y-auto", "overflow-x-hidden");
   });
 
+  it.each([
+    { side: "reviewer", phase: "reviewing", text: "A conta Claude do revisor ficou sem limite de uso: a rodada continua sozinha às 17:10." },
+    { side: "author", phase: "fixing", text: "A conta Claude do autor ficou sem limite de uso: a correção continua sozinha às 17:10." },
+  ] as const)("conta Claude do $side sem limite de uso: a etapa diz de quem é a conta e a que horas continua sozinha", async ({ side, phase, text }) => {
+    const until = new Date();
+    until.setHours(17, 10, 0, 0);
+    open("aut", review({ phase, round: 1, usageLimitWait: { side, until: until.getTime() } }));
+    await loaded();
+    expect(screen.getByText(text)).toBeInTheDocument();
+  });
+
+  it("espera do limite de um lado não aparece na vez do outro lado", async () => {
+    open("aut", review({ phase: "fixing", round: 1, lastSubmitRound: 1, usageLimitWait: { side: "reviewer", until: Date.now() + 60_000 } }));
+    await loaded();
+    expect(screen.queryByText(/sem limite de uso/)).toBeNull();
+  });
+
+  it("revisor rodando a frota: a conversa mostra cada agente com o modelo, o achado e a verificação respondendo a ele", async () => {
+    const served = get.getMockImplementation()!;
+    const fleet = [{
+      runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Revisão", "Verificação"], total: 3, done: 2, at: 5, finished: false,
+      agents: [
+        { id: "a01f", label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "done", endedAt: 1, toolCount: 3,
+          result: '{"findings":[{"title":"token vaza no log"}]}' },
+        { id: "a02f", label: "verificação: correctness · token vaza no log", phase: "Verificação", model: "sonnet", status: "done", endedAt: 2,
+          toolCount: 1, result: '{"confirmed":false,"evidence":"a linha 72 já barra"}' },
+        { id: "a03f", label: "juiz", phase: "Julgamento", model: "opus", status: "running", toolCount: 0 },
+      ],
+    }];
+    get.mockImplementation(async (url: string) => (url === "/cards/c1/review" ? { review: current, working, fleet } : served(url)));
+    open("aut", review({ phase: "reviewing", round: 1 }));
+    await loaded();
+    const messages = await screen.findAllByTestId("review-fleet-message");
+    expect(messages.map((m) => m.textContent)).toEqual([
+      expect.stringContaining("1 achado: token vaza no log"),
+      expect.stringContaining("Derrubado: a linha 72 já barra"),
+    ]);
+    expect(messages[0]).toHaveTextContent("Revisão de Correção");
+    expect(messages[1]).toHaveTextContent("em resposta a: token vaza no log");
+    expect(screen.getByTestId("review-fleet-working")).toHaveTextContent("Juiz");
+    expect(screen.getByTestId("review-fleet-working")).toHaveTextContent("opus");
+  });
+
   it("sem co-autor o papel não aparece", async () => {
     open("rev", review());
     await loaded();

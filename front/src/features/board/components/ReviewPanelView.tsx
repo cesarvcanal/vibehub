@@ -3,13 +3,14 @@ import { Link } from "react-router-dom";
 import { Check, ChevronRight, ExternalLink, FileDiff, Loader2, SquareTerminal, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { Finding, FindingDecision, FindingSeverity, Review, ReviewPhase, ReviewWorking } from "@/api/types";
+import type { Finding, FindingDecision, FindingSeverity, Review, ReviewFleetRun, ReviewPhase, ReviewWorking } from "@/api/types";
 import { ENTER, ReviewConversation, SAID_CLAMP_CHARS } from "@/features/board/components/ReviewConversation";
 import { cardHref } from "@/features/board/lib/board";
 import {
   FINDING_SEVERITY_TONE, FINDING_STATUS_TONE, IMPASSE_ROUNDS, REVIEW_MAX_ROUNDS, autonomySummary, awaitingDecision, findingIsOpen,
   MERGE_GATE_AUTO_RETRIES, mergeGateOf, mergeGateStatus, pendingQuestions, requestedAtText, reviewIsOpen, reviewPill, reviewTurn, stuckItems, type ReviewActions,
 } from "@/features/board/lib/review";
+import { formatResetAt } from "@/features/board/lib/planUsage";
 import { t as translate, useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 
@@ -58,11 +59,12 @@ export interface ReviewPanelViewProps {
   onClose: () => void;
   /** The tab to open on, instead of the one the review calls for (the Storybook tour shows each). */
   initialTab?: Tab;
+  fleet?: ReviewFleetRun[];
 }
 
 export function ReviewPanelView(props: ReviewPanelViewProps) {
   const {
-    review, working, nameOf, actions, busy, mergeBusy, notice, onMerge, onRetry, onCancel, onDecide, onDecideSuggestions, onClose,
+    review, working, fleet, nameOf, actions, busy, mergeBusy, notice, onMerge, onRetry, onCancel, onDecide, onDecideSuggestions, onClose,
     initialTab,
   } = props;
   const t = useT();
@@ -142,9 +144,9 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
       </div>
 
       <div role="tabpanel" hidden={tab !== "conversation"} className={cn("min-h-0 flex-1 flex-col", tab === "conversation" ? "flex" : "hidden")}>
-        <ReviewConversation review={review} working={working} nameOf={nameOf} />
+        <ReviewConversation review={review} working={working} nameOf={nameOf} fleet={fleet} />
       </div>
-      <div role="tabpanel" hidden={tab !== "findings"} className={cn("min-h-0 flex-1 overflow-y-auto overflow-x-hidden", tab !== "findings" && "hidden")}>
+      <div role="tabpanel" hidden={tab !== "findings"} className={cn("min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden [overflow-wrap:anywhere]", tab !== "findings" && "hidden")}>
         <FindingsList
           review={review}
           busy={busy}
@@ -176,7 +178,7 @@ export function PanelFrame({
       className="flex min-h-[220px] min-w-0 flex-1 flex-col gap-2 rounded-md border border-border/60 bg-card/30 p-2.5 text-sm"
     >
       {header ?? (onClose ? <div className="flex shrink-0 justify-end"><CloseButton onClose={onClose} /></div> : null)}
-      <div className="flex min-h-0 flex-1 flex-col gap-2">{children}</div>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-x-hidden">{children}</div>
       {footer ? <div className="flex shrink-0 flex-col gap-2 border-t border-border/50 pt-2">{footer}</div> : null}
     </section>
   );
@@ -954,6 +956,10 @@ function Footer({
 
 /** One sentence on what is happening now: whose turn it is, or what the review waits for. */
 function stageText(review: Review, authorWorking: boolean, t: typeof translate): string {
+  const turnSide = review.phase === "reviewing" ? "reviewer" : review.phase === "fixing" ? "author" : null;
+  if (review.usageLimitWait && review.usageLimitWait.side === turnSide) {
+    return t(`review.stage.usageLimit.${turnSide}`, { time: formatResetAt(review.usageLimitWait.until, Date.now()) });
+  }
   switch (review.phase) {
     case "reviewing":
       if (awaitingDecision(review)) return t("review.stage.decision");

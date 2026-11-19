@@ -42,6 +42,7 @@ export interface WorkflowAgentFrame {
   status: "running" | "done" | "stopped";
   result?: string;
   phase?: string;
+  model?: string;
   startedAt?: number;
   lastAt?: number;
   endedAt?: number;

@@ -5,6 +5,7 @@ import {
 } from "../board/registry.js";
 import { cardBranch, resumeCard } from "../board/workspace.js";
 import { recordCardActor } from "../board/actor.js";
+import { cardHoldsBackgroundWork, cardUsageLimit } from "../board/agentState.js";
 import { findUser } from "../../auth/users.js";
 import { cardLevel } from "../../auth/access.js";
 import { cardAccountSlug, getUserGit, linkedAccountSlug } from "../../auth/userGit.js";
@@ -19,11 +20,14 @@ import {
   MAX_ROUNDS, MERGE_GATE_AUTO_RETRIES, mergeGateSelfHealing, applyAuthorResponses, applyReviewerVerdicts, autoMergeEligible, cardsToConclude, waivedText, type ReviewOrders, blockingOpen, normalizeSubmittedFindings, pendingImprovements, pendingQuestions,
   isReviewClosed, phaseAfterReviewerRound,
   type AuthorAnswerStatus, type Finding, type FindingStatus, type Review, type ReviewEvent, type ReviewEventItem,
-  type SubmittedFinding,
+  fleetRunForReaders, type ReviewFleetRun, type SubmittedFinding,
 } from "./model.js";
 import { findActiveAnalysisCard } from "./analysisReport.js";
+import { plantPrAnalysisWorkflow } from "./analysisWorkflow.js";
+import { readCardFleet } from "../sdk/manager.js";
+import { stopInFlight } from "../sdk/workflowProbe.js";
 import {
-  activeReviewForPr, getReview, insertReview, listReviewsForCards, mutateReview, reviewByReviewerCard,
+  activeReviewForPr, getReview, insertReview, listReviewsForCards, listReviewsWaitingUsageLimit, mutateReview, reviewByReviewerCard,
 } from "./store.js";
 import {
   actionableForAuthor, approvePendingText, autoMergeFailedText, authorFixPrompt, authorMergeGatePrompt, mergeGateFailedText, authorQuestionNoticeText, authorSuggestionsPrompt, headMovedPrefix,
@@ -74,6 +78,13 @@ const REVIEWER_VERDICTS: ReadonlySet<FindingStatus> = new Set(["fixed", "open", 
 export const HEAD_SHA_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
 
 const NO_ANSWER = "IA não respondeu";
+const USAGE_LIMIT = "conta Claude sem limite de uso, sem horário de volta";
+const USAGE_LIMIT_STUCK = "conta Claude sem limite de uso depois de várias retomadas";
+const USAGE_RESUME_MARGIN_MS = 60_000;
+const MAX_USAGE_LIMIT_RESUMES = 3;
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
+const USAGE_WAITS_READ_ATTEMPTS = 5;
+const USAGE_WAITS_RETRY_MS = 30_000;
 /** Impasse reason when the PR moved after `ready` and no round is left to check what came in. */
 const HEAD_MOVED = "push depois do pronto";
 
@@ -265,6 +276,7 @@ async function relayReview(
   const samePlace = (x: Review) => x.phase === r.phase && x.round === r.round;
   try {
     if (side === "author" && opts.unpause) await unpauseAuthor(r);
+    if (side === "reviewer" && r.phase === "reviewing") await plantPrAnalysisWorkflow();
     await sendToTerminal(cardId, text, {
       by: `review:${r.id}`,
       origin: REVIEW_ORIGIN,
@@ -678,6 +690,15 @@ export async function startReview(input: {
 
 /* ------------------------------------------------------------------ revisor */
 
+async function readRoundFleet(review: Review): Promise<ReviewFleetRun[]> {
+  try {
+    return (await readCardFleet(review.reviewerCardId)).map((run) => ({ ...fleetRunForReaders({ ...run, agents: stopInFlight(run.agents) }), finished: true }));
+  } catch (err) {
+    logger.warn({ review: review.id, detail: (err as Error).message }, "PR review could not read the reviewer's fleet for the history");
+    return [];
+  }
+}
+
 /**
  * The reviewer's round (`vibehub_review_submit`). Only the review's reviewer card calls it; a round that is
  * not the current one, or already submitted, returns the review with no effect. Findings go through the model
@@ -713,10 +734,15 @@ export async function submitReviewerRound(
     );
   }
 
+  const fleetRuns = await readRoundFleet(review);
   let landed = false as boolean;
   const after = await mutateReview(review.id, (r) => {
     // Again, inside the queue: another submit of the same round may have landed between the read and here.
     if (!fresh(r)) return;
+    const earlierRounds = (r.fleet ?? []).filter((entry) => entry.round !== r.round);
+    const recordedRunIds = new Set(earlierRounds.flatMap((entry) => entry.runs.map((run) => run.runId)));
+    const roundRuns = fleetRuns.filter((run) => !recordedRunIds.has(run.runId));
+    if (roundRuns.length > 0) r.fleet = [...earlierRounds, { round: r.round, runs: roundRuns }];
     // The AI's verdict never undoes a human. Accepted risk and human withdrawal are final: any verdict
     // on them is ignored. A human block (block/keep) is only protected from `dropped` (the AI does not
     // withdraw what a human ordered blocked); `open` and `fixed` count, because the reviewer has to be
@@ -736,6 +762,8 @@ export async function submitReviewerRound(
     r.prHeadSha = headSha;
     r.lastSubmitRound = r.round;
     r.nudges = 0;
+    delete r.usageLimitWait;
+    delete r.usageLimitResumes;
     note(r, "reviewer", payload.summary || `Rodada ${r.round}: ${added.length} achado(s) novo(s), ${verdicts.length} veredito(s).`, {
       items: [
         ...applied.map((v) => ({ id: v.id, status: v.status, reply: v.reviewerReply })),
@@ -750,6 +778,7 @@ export async function submitReviewerRound(
     landed = true;
   });
   if (!landed) return after;
+  cancelUsageResume(after.id);
   await announceQuestions(after);
   return await dispatch(after);
 }
@@ -888,12 +917,15 @@ export async function submitAuthorResponse(
     if (!round) return;
     r.lastRespondRound = r.round;
     r.nudges = 0;
+    delete r.usageLimitWait;
+    delete r.usageLimitResumes;
     r.round += 1;
     r.phase = "reviewing";
     note(r, "system", `Rodada ${r.round} de ${MAX_ROUNDS}: o revisor confere só o diff.`);
     opened = true;
   });
   if (!opened) return after;
+  cancelUsageResume(after.id);
   await relayReview(after, "reviewer", reviewerDeltaPrompt(after));
   return (await getReview(after.id)) ?? after;
 }
@@ -1069,9 +1101,12 @@ export async function retryReview(reviewId: string, by: string): Promise<Review>
     }
     r.nudges = 0;
     r.impasseReason = undefined;
+    delete r.usageLimitWait;
+    delete r.usageLimitResumes;
     note(r, "human", side === "approve" ? "Tentar de novo: o pedido de Approve volta ao revisor." :
       `Tentar de novo: a vez volta ao ${side === "reviewer" ? "revisor" : "autor"} (rodada ${r.round} de ${MAX_ROUNDS}).`, { by });
   });
+  cancelUsageResume(reviewId);
   logger.info({ audit: true, action: "review.retry", review: reviewId, side, by }, "PR review retried");
   if (side === "gate") void checkMergeGate(reviewId, { again: true, by });
   else if (side === "approve") await relayReview(after, "reviewer", reviewerApprovePrompt(after), { approve: true });
@@ -1413,13 +1448,14 @@ function applyReviewOrders(review: Review, orders: ReviewOrders, orderingCardId:
 /**
  * Why this turn ending does NOT count as "finished without the tool", or null if it counts. The fallback only
  * demands turns the relay opened; with no origin on the event, these signals say the turn was about something
- * else: a person using the card right now, the agent that declared it needs them, or an open question/
+ * else: a person using the card right now, a background task still running (the fleet), the agent that declared it needs them, or an open question/
  * permission waiting for somebody.
  */
 async function notJudged(event: CardEvent): Promise<string | null> {
   const card = await getCard(event.cardId);
   if (!card) return "card sumiu";
   if (isHumanActive(card)) return "pessoa usando o card";
+  if (cardHoldsBackgroundWork(card.id)) return "tarefa em segundo plano rodando";
   const declared = event.state ?? card.declaredState;
   if (declared === "needs_me" || declared === "blocked") return `agente declarou ${declared}`;
   if (card.awaitingDecisionAt || card.pendingQuestionAt) return "pergunta ou permissão em aberto";
@@ -1454,24 +1490,96 @@ async function onTurnFinished(event: CardEvent): Promise<void> {
     logger.info({ card: cardId, reviews: waiting.map((w) => w.id), reason: skip }, "PR review: finished turn not judged");
     return;
   }
+  const usageLimit = cardUsageLimit(cardId);
   for (const { id, side } of waiting) {
-    let action = null as "nudge" | "impasse" | null;
+    const outcome: { action?: "nudge" | "impasse" | "wait" } = {};
     const tool = side === "reviewer" ? TOOL_SUBMIT : TOOL_RESPOND;
+    const who = side === "reviewer" ? "revisor" : "autor";
     const after = await mutateReview(id, (r) => {
-      if (!awaitingTool(r, side)) return;
-      if (r.nudges >= 1) {
+      if (!awaitingTool(r, side) || r.usageLimitWait?.side === side) return;
+      const resetsAhead = usageLimit?.resetsAt !== undefined && usageLimit.resetsAt > Date.now();
+      const resumesLeft = (r.usageLimitResumes ?? 0) < MAX_USAGE_LIMIT_RESUMES;
+      if (usageLimit && resetsAhead && resumesLeft) {
+        r.usageLimitWait = { side, until: usageLimit.resetsAt! };
+        note(r, "system", `A conta Claude do ${who} ficou sem limite de uso: a rodada ${r.round} continua sozinha quando o limite voltar.`);
+        outcome.action = "wait";
+      } else if (usageLimit) {
+        r.phase = "impasse";
+        r.impasseReason = resumesLeft ? USAGE_LIMIT : USAGE_LIMIT_STUCK;
+        delete r.usageLimitResumes;
+        note(r, "system", resumesLeft
+          ? `Impasse: a conta Claude do ${who} ficou sem limite de uso e não disse quando volta.`
+          : `Impasse: a conta Claude do ${who} recusou de novo depois de ${MAX_USAGE_LIMIT_RESUMES} retomadas.`);
+        outcome.action = "impasse";
+      } else if (r.nudges >= 1) {
         r.phase = "impasse";
         r.impasseReason = NO_ANSWER;
         note(r, "system", `Impasse: a IA do ${side === "reviewer" ? "revisor" : "autor"} terminou o turno de novo sem chamar ${tool}.`);
-        action = "impasse";
+        outcome.action = "impasse";
       } else {
         r.nudges += 1;
         note(r, "system", `A IA do ${side === "reviewer" ? "revisor" : "autor"} terminou o turno sem chamar ${tool}: lembrete enviado.`);
-        action = "nudge";
+        outcome.action = "nudge";
       }
     });
-    if (action === "nudge") await relayReview(after, side, nudgePrefix(tool) + (await promptFor(after, side)));
-    else if (action === "impasse") await announcePhase(after);
+    if (outcome.action === "nudge") await relayReview(after, side, nudgePrefix(tool) + (await promptFor(after, side)));
+    else if (outcome.action === "impasse") await announcePhase(after);
+    else if (outcome.action === "wait") scheduleUsageResume(after);
+  }
+}
+
+const usageResume = { timers: new Map<string, NodeJS.Timeout>(), marginMs: USAGE_RESUME_MARGIN_MS };
+
+function cancelUsageResume(reviewId: string): void {
+  clearTimeout(usageResume.timers.get(reviewId));
+  usageResume.timers.delete(reviewId);
+}
+
+function scheduleUsageResume(review: Review): void {
+  if (!review.usageLimitWait) return;
+  cancelUsageResume(review.id);
+  const resumeAt = review.usageLimitWait.until + usageResume.marginMs;
+  const delay = Math.min(MAX_TIMER_DELAY_MS, Math.max(0, resumeAt - Date.now()));
+  const timer = setTimeout(() => {
+    usageResume.timers.delete(review.id);
+    if (Date.now() < resumeAt) {
+      scheduleUsageResume(review);
+      return;
+    }
+    void resumeAfterUsageLimit(review.id).catch((err: unknown) => failUsageResume(review.id, err));
+  }, delay);
+  timer.unref?.();
+  usageResume.timers.set(review.id, timer);
+}
+
+async function resumeAfterUsageLimit(reviewId: string): Promise<void> {
+  const resumed: { side?: Side } = {};
+  const after = await mutateReview(reviewId, (review) => {
+    const wait = review.usageLimitWait;
+    if (!wait) return;
+    delete review.usageLimitWait;
+    if (!awaitingTool(review, wait.side)) return;
+    review.usageLimitResumes = (review.usageLimitResumes ?? 0) + 1;
+    resumed.side = wait.side;
+    note(review, "system", `O limite da conta Claude do ${wait.side === "reviewer" ? "revisor" : "autor"} voltou: a rodada ${review.round} segue.`);
+  });
+  if (resumed.side) await relayReview(after, resumed.side, await promptFor(after, resumed.side));
+}
+
+async function failUsageResume(reviewId: string, err: unknown): Promise<void> {
+  const reason = `retomada depois do limite de uso falhou: ${(err as Error).message}`;
+  logger.warn({ review: reviewId, detail: (err as Error).message }, "PR review could not resume after the usage limit");
+  try {
+    const after = await mutateReview(reviewId, (review) => {
+      if (isReviewClosed(review.phase) || review.phase === "impasse") return;
+      review.phase = "impasse";
+      review.impasseReason = reason;
+      delete review.usageLimitWait;
+      note(review, "system", `Impasse: ${reason}.`);
+    });
+    if (after.impasseReason === reason) await announcePhase(after);
+  } catch (recordErr) {
+    logger.warn({ review: reviewId, detail: (recordErr as Error).message }, "could not record the PR review usage limit resume failure");
   }
 }
 
@@ -1481,10 +1589,29 @@ async function onTurnFinished(event: CardEvent): Promise<void> {
  * grace period — the tool call that arrived in the same turn wins — and swallows any error with a warn.
  * Returns the unsubscribe.
  */
-export function startReviewOrchestrator(opts: { graceMs?: number } = {}): () => void {
+export function startReviewOrchestrator(
+  opts: { graceMs?: number; usageResumeMarginMs?: number; usageWaitsRetryMs?: number } = {},
+): () => void {
   const graceMs = opts.graceMs ?? TURN_GRACE_MS;
+  const usageWaitsRetryMs = opts.usageWaitsRetryMs ?? USAGE_WAITS_RETRY_MS;
+  usageResume.marginMs = opts.usageResumeMarginMs ?? USAGE_RESUME_MARGIN_MS;
   const timers = new Set<NodeJS.Timeout>();
   let stopped = false;
+  const rescheduleUsageWaits = (attemptsLeft: number): void => {
+    void listReviewsWaitingUsageLimit().then((reviews) => {
+      if (!stopped) reviews.forEach(scheduleUsageResume);
+    }).catch((err: unknown) => {
+      logger.warn({ detail: (err as Error).message, attemptsLeft: attemptsLeft - 1 }, "PR review could not reschedule the usage limit waits");
+      if (stopped || attemptsLeft <= 1) return;
+      const retry = setTimeout(() => {
+        timers.delete(retry);
+        rescheduleUsageWaits(attemptsLeft - 1);
+      }, usageWaitsRetryMs);
+      retry.unref?.();
+      timers.add(retry);
+    });
+  };
+  rescheduleUsageWaits(USAGE_WAITS_READ_ATTEMPTS);
   const off = onCardEvent((event: CardEvent) => {
     if (stopped || event.kind !== "turn_finished") return;
     const timer = setTimeout(() => {
@@ -1505,6 +1632,7 @@ export function startReviewOrchestrator(opts: { graceMs?: number } = {}): () => 
     off();
     for (const t of timers) clearTimeout(t);
     timers.clear();
+    for (const reviewId of [...usageResume.timers.keys()]) cancelUsageResume(reviewId);
   };
 }
 
