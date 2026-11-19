@@ -213,13 +213,58 @@ describe("prompt da análise de PR", () => {
     expect(text).toContain("AGENTS.md");
   });
 
-  it("usa as skills instaladas: code review, security review, simplify, e confere os testes", async () => {
+  it("roda a frota de agentes pelo script plantado no runner, com os args da PR", async () => {
     const { analysisPrompt } = await import("./prompts.js");
     const text = analysisPrompt(input);
-    expect(text).toContain("/code-review high");
-    expect(text).toContain("/security-review");
-    expect(text).toContain("/simplify");
-    expect(text).toMatch(/TDD/);
+    expect(text).toContain("Workflow");
+    expect(text).toContain('scriptPath: "/root/.vibehub-sdk/workflows/pr-analysis.js"');
+    expect(text).toContain('"prNumber":636');
+    expect(text).toContain('"branch":"feat-x"');
+    expect(text).toContain('"base":"dev"');
+    expect(text).not.toContain("/code-review high");
+  });
+
+  it("grava o relatório no próprio card depois do juiz e no fim", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    const text = analysisPrompt(input);
+    expect(text).toContain("vibehub_analysis_report");
+    expect(text).toContain('stage: "analysed"');
+    expect(text).toContain('stage: "done"');
+    expect(text).toContain('card: "card-9"');
+  });
+
+  it("o relatório done repete as dimensions do passo 3, com o unverifiedCount: o veredito depende delas", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    expect(analysisPrompt(input)).toMatch(/stage: "done"[^\n]*as mesmas dimensions do passo 3, inclusive o unverifiedCount/);
+  });
+
+  it("o relatório done leva o headSha do passo 1, não o das correções, como o servidor exige", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    expect(analysisPrompt(input)).toMatch(/stage: "done"[^\n]*o mesmo headSha do passo 1/);
+  });
+
+  it("o relatório analysed vai uma vez só, como o servidor exige", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    expect(analysisPrompt(input)).toMatch(/stage: "analysed"[^\n]*uma vez só/);
+  });
+
+  it("args recusado pela frota é engano do card: corrige o args e roda de novo uma vez antes de reportar", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    expect(analysisPrompt(input)).toMatch(/args inválido[^\n]*corrija o args e rode a frota de novo, uma vez/);
+  });
+
+  it("sem Workflow, reporta fleet_unavailable e para, sem análise sozinho no lugar da frota", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    const text = analysisPrompt(input);
+    expect(text).toContain('stage: "fleet_unavailable"');
+    expect(text).toMatch(/Não rode a análise sozinho/);
+  });
+
+  it("só a sessão principal escreve, e um subagente sem contexto reconfere o que a correção mudou", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    const text = analysisPrompt(input);
+    expect(text).toMatch(/único escritor/);
+    expect(text).toContain("git diff <sha analisado>..HEAD");
   });
 
   it("classifica com o mesmo critério da revisão e só pergunta o que é de intenção", async () => {
@@ -235,7 +280,6 @@ describe("prompt da análise de PR", () => {
     const text = analysisPrompt(input);
     expect(text).toMatch(/teste que reproduz/);
     expect(text).toContain("pulls/636/comments");
-    expect(text).toContain("pulls/636/comments/<id>/replies");
     expect(text).not.toContain("${");
     expect(text).toContain("gh pr review 636 --comment");
     expect(text).toContain('vibehub_deliver com card = "card-9" e branch = "dev"');
@@ -245,9 +289,9 @@ describe("prompt da análise de PR", () => {
 
   it("push recusado porque a PR andou: rebase sobre o código novo, nunca o reset que apagaria as correções", async () => {
     const { analysisPrompt } = await import("./prompts.js");
-    const step6 = analysisPrompt(input).split("\n").find((l) => l.startsWith("6."))!;
-    expect(step6).toContain("git fetch origin && git rebase origin/feat-x");
-    expect(step6).not.toMatch(/reset|passo 1/);
+    const deliverStep = analysisPrompt(input).split("\n").find((line) => line.startsWith("7."))!;
+    expect(deliverStep).toContain("git fetch origin && git rebase origin/feat-x");
+    expect(deliverStep).not.toMatch(/reset|passo 1/);
     expect(analysisPrompt(input).match(/reset --hard/g)).toHaveLength(1);
   });
 });

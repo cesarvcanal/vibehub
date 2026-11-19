@@ -12,6 +12,8 @@ import { mergeReviewedPr } from "../services/review/merge.js";
 import { isBusy } from "../services/maestro/maestro.js";
 import { activeReviewFor, getReview, listReviewsFollowedBy, listReviewsForCards, newest } from "../services/review/store.js";
 import { canMergeReview, isReviewClosed, type Review } from "../services/review/model.js";
+import { getAnalysis } from "../services/review/analysisStore.js";
+import { ANALYSIS_DIMENSIONS, analysisVerdict, dimensionHealth } from "../services/review/analysisModel.js";
 import { sendError, type ErrorStatusRule } from "./httpError.js";
 
 /**
@@ -110,6 +112,13 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
     if (!found) return await reply.send({ review: null });
     const { review, merging } = await reviewForRead(found);
     return await reply.send({ review, working: await sidesWorking(review), merging });
+  });
+
+  app.get<{ Params: { id: string } }>("/api/cards/:id/analysis", { preHandler: requireCardAccess }, async (req, reply) => {
+    const analysis = await getAnalysis(req.params.id);
+    if (!analysis) return await reply.send({ analysis: null });
+    const health = Object.fromEntries(ANALYSIS_DIMENSIONS.map((dimension) => [dimension, dimensionHealth(analysis, dimension)]));
+    return await reply.send({ analysis, health, verdict: analysisVerdict(analysis) });
   });
 
   app.post<{ Params: { id: string }; Body: StartBody }>(

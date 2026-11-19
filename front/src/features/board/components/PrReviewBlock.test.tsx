@@ -4,7 +4,9 @@ import userEvent from "@testing-library/user-event";
 import { renderApp, setupState } from "@/test/render";
 import { PrReviewBlock, PrReviewBlocks } from "./PrReviewBlock";
 import { LANGUAGE_KEY, setLanguage } from "@/i18n";
-import type { CardPr, Review, ReviewResponse, ReviewSummary } from "@/api/types";
+import {
+  ANALYSIS_DIMENSIONS, type AnalysisReadModel, type CardAnalysisResponse, type CardPr, type Review, type ReviewResponse, type ReviewSummary,
+} from "@/api/types";
 
 vi.setConfig({ testTimeout: 30_000 });
 configure({ asyncUtilTimeout: 8_000 });
@@ -35,19 +37,41 @@ function fullReview(overrides: Partial<Review> = {}): Review {
   };
 }
 
+function analysisDone(verdict: AnalysisReadModel["verdict"]): AnalysisReadModel {
+  return {
+    analysis: {
+      cardId: "c1", prUrl: PR.url, prNumber: 553, analysedSha: "b".repeat(40), stage: "done", summary: "s", refutedCount: 0, updatedAt: 1,
+      dimensions: ANALYSIS_DIMENSIONS.map((key) => ({ key, status: "ran" as const })),
+      findings: [{
+        id: "f1", severity: "blocking", title: "t", problem: "p", fix: "x", proof: { kind: "scenario", ref: "a.ts:1" },
+        dimension: "tests", status: "fixed", commit: "abc1234",
+      }],
+    },
+    health: { correctness: "ok", security: "ok", performance: "ok", contracts: "ok", tests: "ok", repoRules: "ok" },
+    verdict,
+  };
+}
+
 /** What the server answers to the live read of the card's review; tests change it between polls. */
 let live: ReviewResponse;
 let reviewGets = 0;
+const analysisServer: { answer: CardAnalysisResponse; reads: number } = { answer: { analysis: null }, reads: 0 };
 
 beforeEach(() => {
   vi.clearAllMocks();
   setLanguage("pt-BR");
   live = { review: null };
   reviewGets = 0;
+  analysisServer.answer = { analysis: null };
+  analysisServer.reads = 0;
   get.mockImplementation(async (url: string) => {
     if (url === "/auth/me") return { user: { id: "u1", username: "mussa", role: "member" } };
     if (url === "/setup/state") return setupState();
     if (url === "/cards/c1/people") return { people: [{ id: "u1", username: "mussa", canReview: true }] };
+    if (url === "/cards/c1/analysis") {
+      analysisServer.reads += 1;
+      return analysisServer.answer;
+    }
     if (url === "/cards/c1/review") {
       reviewGets += 1;
       return live;
@@ -76,12 +100,41 @@ describe("PrReviewBlock", () => {
   });
 
   it("no card de análise a PR não oferece Pedir revisão: o próprio card já é a análise dela", async () => {
-    renderApp(<PrReviewBlocks card={{ id: "c1", prs: [PR], pushBranch: PR.branch }} onOpenPanel={() => {}} />);
+    renderApp(<PrReviewBlocks card={{ id: "c1", prs: [PR], pushBranch: PR.branch, status: "working" }} onOpenPanel={() => {}} />);
 
     expect(await screen.findByText("PR #553")).toBeInTheDocument();
-    expect(screen.getByText("análise neste card")).toBeInTheDocument();
+    expect(await screen.findByText("analisando…")).toBeInTheDocument();
     expect(screen.queryByText("sem revisão")).toBeNull();
     expect(screen.queryByRole("button", { name: "Pedir revisão" })).toBeNull();
+  });
+
+  it("card de análise parado e sem relatório diz sem relatório, nunca analisando para sempre", async () => {
+    renderApp(<PrReviewBlocks card={{ id: "c1", prs: [PR], pushBranch: PR.branch, status: "waiting" }} onOpenPanel={() => {}} />);
+
+    expect(await screen.findByText("sem relatório")).toBeInTheDocument();
+  });
+
+  it("análise concluída e apta: a pílula conta os corrigidos e a linha abre o painel da análise", async () => {
+    analysisServer.answer = analysisDone("apt");
+    const onOpenPanel = vi.fn();
+    renderApp(<PrReviewBlocks card={{ id: "c1", prs: [PR], pushBranch: PR.branch, status: "waiting" }} onOpenPanel={onOpenPanel} />);
+
+    expect(await screen.findByText("apto · 1 corrigido")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /PR #553/ }));
+    expect(onOpenPanel).toHaveBeenCalledTimes(1);
+  });
+
+  it("quando o turno do card de análise termina, a pílula relê o relatório que ele acabou de gravar", async () => {
+    const card = { id: "c1", prs: [PR], pushBranch: PR.branch };
+    const view = renderApp(<PrReviewBlocks card={{ ...card, status: "working" }} onOpenPanel={() => {}} />);
+    expect(await screen.findByText("analisando…")).toBeInTheDocument();
+    const readsWhileWorking = analysisServer.reads;
+
+    analysisServer.answer = analysisDone("apt");
+    view.rerender(<PrReviewBlocks card={{ ...card, status: "waiting" }} onOpenPanel={() => {}} />);
+
+    expect(await screen.findByText("apto · 1 corrigido")).toBeInTheDocument();
+    expect(analysisServer.reads).toBe(readsWhileWorking + 1);
   });
 
   it("Pedir revisão abre a janela de papéis para este PR", async () => {

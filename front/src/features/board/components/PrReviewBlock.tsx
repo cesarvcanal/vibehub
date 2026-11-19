@@ -6,6 +6,8 @@ import type { Card, CardPr, Finding, ReviewSummary } from "@/api/types";
 import { RequestReviewDialog } from "@/features/board/components/RequestReviewDialog";
 import { prStripCounts, readsPerPr, reviewPill, summaryForPr, visiblePrs } from "@/features/board/lib/review";
 import { useLiveReview } from "@/features/board/lib/useLiveReview";
+import { analysisPill } from "@/features/board/lib/analysis";
+import { useCardAnalysis } from "@/features/board/lib/useCardAnalysis";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n";
 
@@ -15,8 +17,9 @@ import { useT } from "@/i18n";
  *
  *  - NO review: the pill reads "sem revisão" and the line offers "Pedir revisão", which opens the
  *    dialog where the roles are chosen;
- *  - an ANALYSIS card's PR (`Card.pushBranch`): the pill reads "análise neste card" and nothing is
- *    offered — the card already is that PR's analysis, and the server refuses a review of it;
+ *  - an ANALYSIS card's PR (`Card.pushBranch`): the pill says where the analysis stands (`analysisPill`)
+ *    and the line opens the analysis panel; "Pedir revisão" is not offered — the card already is that
+ *    PR's analysis, and the server refuses a review of it;
  *  - a review exists: the line IS the way into it — the pill says where it stands (round N of 3,
  *    ready to merge, impasse…) and clicking anywhere on it asks the screen for the review's panel.
  *
@@ -38,16 +41,21 @@ export interface PrReviewBlockProps {
   variant?: "block" | "row";
   /** The card is this PR's ANALYSIS card (`Card.pushBranch`): no "Pedir revisão", the card already is it. */
   analysis?: boolean;
+  cardWorking?: boolean;
 }
 
 export function PrReviewBlock({
   cardId, pr, review: summary, authorWorking = false, actorUserId, onOpenPanel, variant = "block", analysis = false,
+  cardWorking = false,
 }: PrReviewBlockProps) {
   const t = useT();
   const [asking, setAsking] = React.useState(false);
   // The server never puts a cancelled review on a card; a stale cache must not turn one into a panel to open.
   const review = summary?.phase === "cancelled" ? undefined : summary;
-  const pill = reviewPill(review, { authorWorking });
+  const showsAnalysis = analysis && !review;
+  const analysisQuery = useCardAnalysis(cardId, { enabled: showsAnalysis, cardWorking });
+  const pill = showsAnalysis ? analysisPill(analysisQuery.data, { cardWorking }) : reviewPill(review, { authorWorking });
+  const opensPanel = review !== undefined || showsAnalysis;
 
   const line = (
     <>
@@ -64,13 +72,9 @@ export function PrReviewBlock({
           {pr.author}
         </span>
       ) : null}
-      {analysis && !review ? (
-        <Badge tone="info" className="ml-auto shrink-0">{t("review.analysisCard")}</Badge>
-      ) : (
-        <Badge tone={pill.tone} className="ml-auto shrink-0 transition-colors duration-500">
-          {t(pill.key, pill.vars)}
-        </Badge>
-      )}
+      <Badge tone={pill.tone} className="ml-auto shrink-0 transition-colors duration-500">
+        {t(pill.key, pill.vars)}
+      </Badge>
     </>
   );
 
@@ -85,10 +89,10 @@ export function PrReviewBlock({
           : "mt-1.5 rounded-md border border-amber-500/40 bg-amber-500/10",
       )}
     >
-      {review ? (
+      {opensPanel ? (
         <button
           type="button"
-          title={t("review.openPanel")}
+          title={showsAnalysis ? t("analysis.openPanel") : t("review.openPanel")}
           // Never `onClick={onOpenPanel}`: the click EVENT would arrive as the PR number, become the
           // panel's key and query, and the panel died on "Converting circular structure to JSON".
           onClick={() => onOpenPanel()}
@@ -195,7 +199,7 @@ function PrList({ cardId, count, summaries, children }: {
  * the line away.
  */
 function LivePrLine({ card, pr, row, onOpenPanel }: {
-  card: Pick<Card, "id" | "review" | "reviews" | "actorUserId" | "pushBranch">;
+  card: Pick<Card, "id" | "review" | "reviews" | "actorUserId" | "pushBranch" | "status">;
   pr: CardPr;
   row: boolean;
   onOpenPanel: (prNumber?: number) => void;
@@ -216,6 +220,7 @@ function LivePrLine({ card, pr, row, onOpenPanel }: {
       onOpenPanel={() => onOpenPanel(pr.number)}
       variant={row ? "row" : "block"}
       analysis={card.pushBranch !== undefined}
+      cardWorking={card.status === "working"}
     />
   );
 }
@@ -235,7 +240,7 @@ export function PrReviewBlocks({
   card,
   onOpenPanel,
 }: {
-  card: Pick<Card, "id" | "prs" | "review" | "reviews" | "actorUserId" | "pushBranch">;
+  card: Pick<Card, "id" | "prs" | "review" | "reviews" | "actorUserId" | "pushBranch" | "status">;
   /** Show the review's panel — of THIS PR, on a card that reads one review per PR. */
   onOpenPanel: (prNumber?: number) => void;
 }) {
@@ -244,7 +249,7 @@ export function PrReviewBlocks({
 
 /** A card with several PRs under review, or attached ones: every line reads its own review. */
 function PerPrBlocks({ card, onOpenPanel }: {
-  card: Pick<Card, "id" | "prs" | "review" | "reviews" | "actorUserId" | "pushBranch">;
+  card: Pick<Card, "id" | "prs" | "review" | "reviews" | "actorUserId" | "pushBranch" | "status">;
   onOpenPanel: (prNumber?: number) => void;
 }) {
   const prs = visiblePrs(card);
@@ -259,7 +264,7 @@ function PerPrBlocks({ card, onOpenPanel }: {
 
 /** The card's own PRs with (at most) one reviewed: the single live read of the card's review, as always. */
 function CardReviewBlocks({ card, onOpenPanel }: {
-  card: Pick<Card, "id" | "prs" | "review" | "actorUserId" | "pushBranch">;
+  card: Pick<Card, "id" | "prs" | "review" | "actorUserId" | "pushBranch" | "status">;
   onOpenPanel: () => void;
 }) {
   const reviewed = card.review !== undefined && card.review.phase !== "cancelled";
@@ -288,6 +293,7 @@ function CardReviewBlocks({ card, onOpenPanel }: {
           onOpenPanel={() => onOpenPanel()}
           variant={row ? "row" : "block"}
           analysis={card.pushBranch !== undefined}
+          cardWorking={card.status === "working"}
         />
       ))}
     </PrList>

@@ -11,6 +11,7 @@ import type {
   BrainApplyResult,
   BrainWriteResult,
   Card,
+  CardAnalysisResponse,
   CardBrowserStatus,
   CardCapture,
   CardPatch,
@@ -275,7 +276,9 @@ export const boardApi = {
   listAnalysisPeople: (id: string) =>
     get<{ people: AnalysisPerson[] }>(`/projects/${encodeURIComponent(id)}/analysis-people`).then((r) => r.people),
 
-  /** Opens the analysis card of a PR (or answers with the one already open). */
+  readCardAnalysis: (cardId: string) => get<CardAnalysisResponse>(`/cards/${encodeURIComponent(cardId)}/analysis`),
+
+  /** Opens the analysis card of a PR (or answers with the active one). */
   startPrAnalysis: (id: string, prNumber: number, roles: AnalysisRoles) =>
     post<PrAnalysisStart>(`/projects/${encodeURIComponent(id)}/prs/${prNumber}/analysis`, roles),
 

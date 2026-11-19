@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   getCard, createCard, createReviewerCard, removeCard, updateCard, cardMoveEffect, isHumanActive, shareWith, getGithubConnection,
-  listCards, openAnalysisCard, recordCardPr, markCardPrMerged, type Card, type CardPr,
+  listCards, recordCardPr, markCardPrMerged, type Card, type CardPr,
 } from "../board/registry.js";
 import { cardBranch, resumeCard } from "../board/workspace.js";
 import { recordCardActor } from "../board/actor.js";
@@ -21,6 +21,7 @@ import {
   type AuthorAnswerStatus, type Finding, type FindingStatus, type Review, type ReviewEvent, type ReviewEventItem,
   type SubmittedFinding,
 } from "./model.js";
+import { findActiveAnalysisCard } from "./analysisReport.js";
 import {
   activeReviewForPr, getReview, insertReview, listReviewsForCards, mutateReview, reviewByReviewerCard,
 } from "./store.js";
@@ -585,8 +586,8 @@ export async function startReview(input: {
     }
     // An analysis card never merges (see `deliver`): a review started on it could never end.
     if (card.pushBranch !== undefined) throw new Error("card_de_analise: o card de uma análise de PR não é revisado");
-    // An open analysis pushes its fixes onto this PR: a review now would see the head move under it.
-    if (openAnalysisCard(await listCards(card.projectId), pr.url)) {
+    // An active analysis pushes its fixes onto this PR: a review now would see the head move under it.
+    if (await findActiveAnalysisCard(await listCards(card.projectId), pr.url)) {
       throw new Error(`analise_ativa: o PR #${pr.number} tem uma análise em andamento; revise depois que ela terminar`);
     }
     // "Having an account" is having a link, including to the built-in account ("default"): whoever is on it

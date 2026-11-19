@@ -616,4 +616,4 @@ Quem revisa (pessoa ou agente) é o **portão do merge**, não um leitor de cort
   - se é regressão em relação à `main`.
 
   Feche com o veredito: **apto** ou **não apto**, com o motivo.
-- **Depois da correção, revise de novo** só o que mudou, até uma rodada voltar sem achado que bloqueie. Cada achado tem resposta na thread dele: o commit e o teste que o resolvem, ou o motivo de ter virado pendência.
+- Cada achado tem resposta na thread dele: o commit e o teste que o resolvem, ou o motivo de ter virado pendência.
