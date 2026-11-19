@@ -43,6 +43,7 @@ import { startWebhookDispatcher } from "./services/webhooks/subscriptions.js";
 import { startReviewOrchestrator } from "./services/review/orchestrator.js";
 import { startPlatformFailureWatch } from "./services/platformFailures/watch.js";
 import { startRunnerReaper } from "./services/reaper/reaper.js";
+import { startTmpSweep } from "./services/reaper/tmpSweep.js";
 import { pruneStaleInflightOwners, startInflightOwnerHeartbeat } from "./services/sdk/inflight.js";
 import { handOffSdkOnShutdown, resumeAfterDriverCrash, resumeInterruptedTurns } from "./services/sdk/resume.js";
 import { backfillPendingQuestions } from "./services/sdk/pendingQuestion.js";
@@ -202,15 +203,15 @@ function startUploadSweep(): NodeJS.Timeout {
 }
 
 /**
- * How often the orphan sweep runs. ONCE A DAY, like the uploads sweep: what it collects is, by
- * definition, data nobody can reach any more — there is no version of this that needs to be prompt.
+ * How often the orphan sweep runs. HOURLY: besides data nobody can reach any more, it collects the
+ * temp files of deleted cards (`/tmp/vibehub/<id>`), and a full /tmp stops every card in the runner.
  */
-const ORPHAN_SWEEP_MS = 24 * 60 * 60_000;
+const ORPHAN_SWEEP_MS = 60 * 60_000;
 
 /**
  * The backstop of the card purge (services/board/purge.ts): artifacts of cards that NO LONGER
  * EXIST — a conversation left by a delete that could not reach the runner, and everything the
- * deletes from before the purge existed left behind. Runs once at boot and then daily.
+ * deletes from before the purge existed left behind. Runs once at boot and then hourly.
  */
 function startOrphanSweep(): NodeJS.Timeout {
   void sweepOrphanCardData();
@@ -270,6 +271,7 @@ async function main(): Promise<void> {
   // loop's stdin check — this collects whatever slips through, every ten minutes. Started HERE
   // for the same reason as the others: tests must not inherit a timer that kills processes.
   startRunnerReaper();
+  startTmpSweep();
   // A deploy that changed what a session is born with (env, flags) restarts the board's sessions,
   // staggered: idle now, working when they go idle. Fire-and-forget, after listen. See sessionSpec.ts.
   void restartSessionsIfSpecChanged();

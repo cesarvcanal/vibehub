@@ -167,6 +167,21 @@ describe("purgeCard — the card and everything that belonged to it", () => {
     expect(s).toContain("$P/projects/");
   });
 
+  it("leva os processos e o /tmp do card, e o relatório diz quanto o runner liberou", async () => {
+    const { card } = await seed();
+    runScript.mockImplementation(async (script: string) => ({
+      stdout: script.includes("VIBEHUB_PURGE") ? "VIBEHUB_PURGE_FREED_KB 3145728\n" : "",
+      stderr: "",
+    }));
+
+    const report = await purge.purgeCard(card.id, "cesar");
+
+    const purgeScripts = allScripts();
+    expect(purgeScripts).toContain(`'VIBEHUB_CARD_ID=${card.id}' /proc/[0-9]*/environ`);
+    expect(purgeScripts).toContain(`rm -rf '/tmp/vibehub/${card.id}'`);
+    expect(report?.steps.find((done) => done.name === "runner")).toEqual({ name: "runner", ok: true, detail: "3072 MB freed" });
+  });
+
   it("KILLS FIRST, then takes the card off the board, then deletes — nothing can write mid-purge", async () => {
     const { card } = await seed();
     // The board is read inside the purge, so "when did the card leave the board" is observable by
@@ -543,6 +558,32 @@ describe("planOrphanPurge (the whole safety of the sweep lives here)", () => {
     );
     expect(plan.purge.map((e) => e.path)).toEqual([`/root/.vibehub/git/${gone}.gitconfig`]);
     expect(purge.buildOrphanListScript("vibehub-runner")).toContain("/root/.vibehub/git");
+  });
+
+  it("o /tmp de um card que não existe mais e as saídas de tarefa de um card morto saem; os de card vivo e os de fora ficam", () => {
+    const mine = "aaaaaaaa-0000-0000-0000-000000000000";
+    const gone = "bbbbbbbb-0000-0000-0000-000000000000";
+    const plan = purge.planOrphanPurge(
+      [
+        entry("tmp", `/tmp/vibehub/${mine}`),
+        entry("tmp", `/tmp/vibehub/${gone}`),
+        entry("tmp", "/tmp/vibehub/*"),
+        entry("task-output", "/tmp/claude-0/-work-acme--erp-aux-worktrees-vivo"),
+        entry("task-output", "/tmp/claude-0/-work-acme--erp-aux-worktrees-vivo-back"),
+        entry("task-output", "/tmp/claude-0/-work-acme--erp-aux-worktrees-morto"),
+        entry("task-output", "/tmp/claude-0/-tmp-acexp"),
+      ],
+      live({ ids: new Set([mine]), transcriptDirs: new Set(["-work-acme--erp-aux-worktrees-vivo"]) }),
+      { now: NOW },
+    );
+    expect(plan.purge.map((orphan) => orphan.path)).toEqual([
+      `/tmp/vibehub/${gone}`,
+      "/tmp/claude-0/-work-acme--erp-aux-worktrees-morto",
+    ]);
+    const listing = purge.buildOrphanListScript("vibehub-runner");
+    expect(listing).toContain("-printf 'tmp\\t%p\\t%T@\\n'");
+    expect(listing).toContain("find /tmp/claude-[0-9]* -mindepth 1 -maxdepth 1 -type d -printf 'task-output");
+    expect(purge.parseOrphanListing(`tmp\t/tmp/vibehub/${gone}\t1.5\ntask-output\t/tmp/claude-0/x\t2\n`).map((orphan) => orphan.kind)).toEqual(["tmp", "task-output"]);
   });
 
   it("a conversation started in a SUBDIRECTORY of a live card's worktree is the live card's too", () => {
