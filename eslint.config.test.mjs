@@ -21,6 +21,7 @@ describe("eslint.config.js: regras do AGENTS.md em todo .ts, .tsx e .mjs do repo
     [".catch(() => {}) atribuído a variável que não é a fila (§9)", "export function track(job: Promise<void>, pending: Promise<void>) {\n  pending = job.catch(() => {});\n  return pending;\n}", "no-restricted-syntax"],
     [".catch(() => {}) atribuído a campo de this que não é a fila (§9)", "export class Tracker {\n  pending?: Promise<void>;\n  track(job: Promise<void>) {\n    this.pending = job.catch(() => {});\n  }\n}", "no-restricted-syntax"],
     ["void job.catch(() => {}).then(run) (§9)", "export function fire(job: Promise<void>, run: () => void) {\n  void job.catch(() => {}).then(run);\n}", "no-restricted-syntax"],
+    ["return await job.catch(() => null).then(parse) (§9)", "export async function read(job: Promise<string>, parse: (text: string | null) => number) {\n  return await job.catch(() => null).then(parse);\n}", "no-restricted-syntax"],
     ["job.catch(() => {}).then(run) solto (§9)", "export function fire(job: Promise<void>, run: () => void) {\n  job.catch(() => {}).then(run);\n}", "no-restricted-syntax"],
     [".catch(function () {}) (§9)", "export const fire = (job: Promise<void>) => job.catch(function () {});", "no-restricted-syntax"],
     [".catch(() => null) (§9)", "export const fire = (job: Promise<void>) => job.catch(() => null);", "no-restricted-syntax"],
