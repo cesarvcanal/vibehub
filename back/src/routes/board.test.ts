@@ -737,6 +737,34 @@ describe("accounts", () => {
   });
 });
 
+describe("account rename", () => {
+  it("PATCH /api/accounts/:slug troca o nome exibido e o GET devolve o nome novo", async () => {
+    await app.inject({ method: "POST", url: "/api/accounts", headers: { cookie }, payload: { name: "tech" } });
+    const res = await app.inject({
+      method: "PATCH", url: "/api/accounts/tech", headers: { cookie }, payload: { name: "César" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().account).toMatchObject({ slug: "tech", name: "César" });
+    const listed = (await app.inject({ method: "GET", url: "/api/accounts", headers: { cookie } })).json();
+    expect(listed.accounts).toEqual([expect.objectContaining({ slug: "tech", name: "César" })]);
+  });
+
+  it.each([
+    { label: "nome vazio dá 400", slug: "tech", payload: { name: " " }, status: 400 },
+    { label: "nome ausente dá 400", slug: "tech", payload: {}, status: 400 },
+    { label: "conta que não existe dá 404", slug: "ghost", payload: { name: "x" }, status: 404 },
+  ])("$label", async ({ slug, payload, status }) => {
+    await app.inject({ method: "POST", url: "/api/accounts", headers: { cookie }, payload: { name: "tech" } });
+    const res = await app.inject({ method: "PATCH", url: `/api/accounts/${slug}`, headers: { cookie }, payload });
+    expect(res.statusCode).toBe(status);
+  });
+
+  it("sem sessão dá 401", async () => {
+    const res = await app.inject({ method: "PATCH", url: "/api/accounts/tech", payload: { name: "x" } });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
 describe("board routes require a session", () => {
   it("401s every board route without a cookie", async () => {
     for (const url of ["/api/projects", "/api/cards", "/api/accounts"]) {
