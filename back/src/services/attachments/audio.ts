@@ -13,6 +13,7 @@ const EXTRACT_TIMEOUT_MS = 600_000;
 const ORIGINAL_MARK = "original";
 const CONVERTED_MARK = "mp3";
 
+// limitation: the runner's sh has no pipefail, so ffmpeg writes to a temp file; piped, a failed ffmpeg would read as empty base64 with exit 0
 export function buildExtractAudioScript(path: string): string {
   const accepted = (TRANSCRIPTION_FORMATS as readonly string[]).includes(extensionOf(path)) ? "1" : "0";
   const inner = [
