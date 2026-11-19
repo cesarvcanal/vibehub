@@ -130,7 +130,7 @@ const meta = {
   component: ReviewPanelView,
   args: base,
   // The panel is the column at the right of the card: its real width and the height of a screen.
-  decorators: [(Story) => <div className="flex h-[820px] w-[460px]"><Story /></div>],
+  decorators: [(Story) => <div className="flex h-[820px] w-full max-w-[40rem]"><Story /></div>],
 } satisfies Meta<typeof ReviewPanelView>;
 export default meta;
 type Story = StoryObj<typeof meta>;
@@ -141,8 +141,9 @@ export const RevisorLendo: Story = {
 };
 
 export const FrotaDeAgentesTrabalhando: Story = {
-  name: "Frota de agentes trabalhando",
+  name: "Frota de agentes trabalhando (aba Agentes)",
   args: {
+    initialTab: "agents",
     working: { author: false, reviewer: true },
     fleet: [{
       runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Contexto", "Revisão", "Verificação", "Julgamento"],
