@@ -615,7 +615,7 @@ export interface SdkChatState {
    * lib/contextUsage.ts).
    */
   contextUsage: ContextUsageInfo | null;
-  lastLiveToolResult?: { id: string; name: string };
+  lastLiveToolResult?: { name: string };
   /** Monotonic counter for rows the driver did not name. */
   seq: number;
 }
@@ -1400,7 +1400,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       return {
         ...state,
         rows: replaceRowAt(state.rows, at, { ...row, result: event.toolResult }),
-        ...(row.live ? { lastLiveToolResult: { id: row.id, name: row.name } } : {}),
+        ...(row.live ? { lastLiveToolResult: { name: row.name } } : {}),
       };
     }
     case "agent_task": {

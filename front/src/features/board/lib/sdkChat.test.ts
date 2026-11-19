@@ -2112,7 +2112,7 @@ describe("lastLiveToolResult — o resultado de ferramenta que chegou ao vivo", 
       { type: "tool_use", id: "t1", name: REPORT_TOOL, input: {} },
       { type: "tool_result", id: "t1", toolResult },
     ]);
-    expect(state.lastLiveToolResult).toEqual({ id: "t1", name: REPORT_TOOL });
+    expect(state.lastLiveToolResult).toEqual({ name: REPORT_TOOL });
   });
 
   it("o replay (antes do ready) nunca vira resultado ao vivo", () => {
