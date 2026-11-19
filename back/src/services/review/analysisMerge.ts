@@ -1,6 +1,7 @@
 import type { PublicUser } from "../../auth/users.js";
 import { getCard, updateCard, type Card, type CardPr } from "../board/registry.js";
 import { deliver, type DeliverResult } from "../maestro/deliver.js";
+import { isBusy } from "../maestro/maestro.js";
 import { logger } from "../../utils/logger.js";
 import { analysisVerdict, type AnalysisReport } from "./analysisModel.js";
 import { getAnalysis } from "./analysisStore.js";
@@ -41,6 +42,12 @@ async function mergeClaimedAnalysis(cardId: string, user: PublicUser): Promise<A
     return {
       kind: "refused", status: 409, reason: "not_apt",
       error: "a análise não está apta: o merge só sai com ela concluída, sem bloqueante aberto, sem dúvida sem resposta e com todas as dimensões verificadas",
+    };
+  }
+  if (isBusy(card)) {
+    return {
+      kind: "refused", status: 409, reason: "card_working",
+      error: "o card de análise está no meio de um turno: o merge libera quando ele terminar, para não levar um commit que ninguém analisou",
     };
   }
   const connectionId = await ownGithubConnection(user, card);

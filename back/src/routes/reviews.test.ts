@@ -1258,7 +1258,7 @@ describe("merge da análise pela rota", () => {
   it("card de análise no meio de um turno recusa com 409 card_working, sem merge: o que a IA commitar agora ninguém analisou", async () => {
     const w = await world();
     await saveReport(aptReport(w.cardId));
-    await (await registry()).updateCard(w.cardId, { status: "working" });
+    await (await registry()).applyCardStatus(w.cardId, "working");
     deliver.mockClear();
     const res = await merge(w, w.merger);
     expect(res.statusCode).toBe(409);
