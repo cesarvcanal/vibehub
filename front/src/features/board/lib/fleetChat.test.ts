@@ -118,6 +118,25 @@ describe("analysisFleetChat", () => {
     expect(entries[2]).toMatchObject({ replyTo: { title: "matchMedia a cada frame", messageId: entries[1]!.id } });
   });
 
+  it("o id da fala não muda quando a sondagem seguinte descarta passos antigos de outro agente", () => {
+    const speech = { agentId: "rev", at: 9, kind: "text" as const, text: "Achei." };
+    const before = analysisFleetChat(analysis([
+      { agentId: "ver", at: 1, kind: "tool", tool: "Read", target: "a.ts" },
+      { agentId: "ver", at: 2, kind: "result", text: "ok" },
+      speech,
+    ], true));
+    const after = analysisFleetChat(analysis([{ agentId: "ver", at: 2, kind: "result", text: "ok" }, speech], true));
+    expect(after[0]!.id).toBe(before[0]!.id);
+  });
+
+  it("duas falas do mesmo agente no mesmo instante têm ids diferentes", () => {
+    const entries = analysisFleetChat(analysis([
+      { agentId: "rev", at: 5, kind: "text", text: "um" },
+      { agentId: "rev", at: 5, kind: "text", text: "dois" },
+    ], true));
+    expect(new Set(entries.map((entry) => entry.id)).size).toBe(2);
+  });
+
   it("passo de um agente que a lista não traz fica de fora", () => {
     expect(analysisFleetChat(analysis([{ agentId: "fantasma", at: 1, kind: "text", text: "oi" }], true))).toEqual([]);
   });
