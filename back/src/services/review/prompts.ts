@@ -594,7 +594,7 @@ export interface AnalysisInput {
  * in parallel, a verifier that tries to refute each finding, a judge. The card itself is the only writer.
  *
  * The card has none of the author's context on purpose (agnostic): only the PR and the repo's rules.
- * It never merges, and it never rewrites the PR's title or body — they are the author's. PURE.
+ * It merges only when the person tells it to, and it never rewrites the PR's title or body — they are the author's. PURE.
  */
 export function analysisPrompt(a: AnalysisInput): string {
   const workflowArgs = JSON.stringify({ prNumber: a.prNumber, branch: a.branch, base: a.base, headSha: "<sha do passo 1>" });
