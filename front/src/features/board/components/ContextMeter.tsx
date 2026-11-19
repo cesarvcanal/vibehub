@@ -12,6 +12,7 @@ import {
 } from "@/features/board/lib/contextUsage";
 import { formatTokens } from "@/features/board/lib/sdkDetail";
 import { cn } from "@/lib/utils";
+import { useTweenedNumber } from "@/lib/useTweenedNumber";
 import { useT } from "@/i18n";
 
 /**
@@ -24,6 +25,8 @@ import { useT } from "@/i18n";
  * Past 30% the pill gets a badge ("atenção", "perigo") and the number in the band's color.
  */
 
+const TWEEN_MS = 700;
+
 const ZONES: readonly { zone: ContextZone; mid: number }[] = [
   { zone: "smart", mid: 0 },
   { zone: "warn", mid: (CONTEXT_WARN_AT + CONTEXT_DANGER_AT) / 2 },
@@ -35,6 +38,7 @@ export function ContextMeter({ usage, className }: { usage: ContextUsageInfo | n
   // Controlled so it also opens on CLICK/TAP: the tooltip alone only opens on hover and focus, and
   // on mobile (compact layout) the guide never showed up. A tap outside or Esc closes it.
   const [open, setOpen] = React.useState(false);
+  const tweenedPct = useTweenedNumber(usage?.percent ?? 0, TWEEN_MS);
   if (!usage) return null;
   const pct = usage.percent;
   const zone = contextZone(pct);
@@ -72,11 +76,11 @@ export function ContextMeter({ usage, className }: { usage: ContextUsageInfo | n
           <span aria-hidden className="relative h-1.5 w-6 overflow-hidden rounded-full bg-muted-foreground/20">
             <span
               data-testid="context-meter-fill"
-              className="absolute inset-y-0 left-0 rounded-full transition-[width,background-color] duration-700 motion-reduce:transition-none"
-              style={{ width: `${pct}%`, backgroundColor: contextColor(pct) }}
+              className="absolute inset-y-0 left-0 rounded-full transition-[background-color] duration-700 motion-reduce:transition-none"
+              style={{ width: `${tweenedPct}%`, backgroundColor: contextColor(pct) }}
             />
           </span>
-          <span data-testid="context-meter-value">{shown}%</span>
+          <span data-testid="context-meter-value">{Math.round(tweenedPct)}%</span>
           <span className="font-normal opacity-70">
             {zone === "danger" ? t("context.dangerBadge") : zone === "warn" ? t("context.warnBadge") : t("context.short")}
           </span>
@@ -96,12 +100,7 @@ export function ContextMeter({ usage, className }: { usage: ContextUsageInfo | n
             {[CONTEXT_WARN_AT, CONTEXT_DANGER_AT].map((at) => (
               <span key={at} aria-hidden className="absolute inset-y-0 w-px bg-background/90" style={{ left: `${at}%` }} />
             ))}
-            <span
-              data-testid="context-guide-marker"
-              aria-hidden
-              className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-background shadow"
-              style={{ left: `${pct}%`, backgroundColor: contextColor(pct) }}
-            />
+            <GuideMarker percent={pct} />
           </div>
           <div className="relative mt-1 h-3 text-[10px] tabular-nums text-muted-foreground">
             <span className="absolute left-0">0</span>
@@ -145,5 +144,17 @@ export function ContextMeter({ usage, className }: { usage: ContextUsageInfo | n
         </div>
       </TooltipContent>
     </Tooltip>
+  );
+}
+
+function GuideMarker({ percent }: { percent: number }) {
+  const tweenedPercent = useTweenedNumber(percent, TWEEN_MS, 0);
+  return (
+    <span
+      data-testid="context-guide-marker"
+      aria-hidden
+      className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-background shadow"
+      style={{ left: `${tweenedPercent}%`, backgroundColor: contextColor(tweenedPercent) }}
+    />
   );
 }

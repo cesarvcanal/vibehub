@@ -4871,7 +4871,10 @@ describe("SdkChatView — o medidor de contexto", () => {
 
     // A skewed reading does not erase the one that counts.
     ws.deliver({ type: "context_usage", usedTokens: 10 } as SdkEvent);
-    expect(screen.getByTestId("context-meter-value")).toHaveTextContent("70%");
+    await waitFor(() => {
+      runAnimationFrames();
+      expect(screen.getByTestId("context-meter-value")).toHaveTextContent("70%");
+    });
 
     ws.deliver({ type: "ready" });
     expect(screen.queryByTestId("context-meter")).toBeNull();
@@ -4942,7 +4945,27 @@ describe("SdkChatView — o medidor de contexto", () => {
     expect(screen.getByTestId("jump-latest")).not.toHaveClass("bottom-3");
   });
 
-  it("o guia mostra os tokens, as três faixas e destaca a de agora", async () => {
+  it("leitura nova: o número conta passando pelos valores do meio até chegar, e o aria-label já diz o valor novo", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "context_usage", usedTokens: 20_000, maxTokens: 200_000, percent: 10 } as SdkEvent);
+    expect(screen.getByTestId("context-meter-value")).toHaveTextContent("10%");
+
+    ws.deliver({ type: "context_usage", usedTokens: 80_000, maxTokens: 200_000, percent: 40 } as SdkEvent);
+    expect(screen.getByTestId("context-meter").getAttribute("aria-label")).toContain("40%");
+    const seen = new Set<string>();
+    await waitFor(() => {
+      runAnimationFrames();
+      seen.add(screen.getByTestId("context-meter-value").textContent ?? "");
+      expect(screen.getByTestId("context-meter-value")).toHaveTextContent("40%");
+    });
+    const midway = [...seen].filter((text) => text !== "10%" && text !== "40%");
+    expect(midway.length).toBeGreaterThan(0);
+  });
+
+  it("o guia mostra os tokens, as três faixas e destaca a de agora, com a bolinha deslizando até o ponto atual", async () => {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -4954,7 +4977,12 @@ describe("SdkChatView — o medidor de contexto", () => {
     const zones = within(guide).getAllByTestId("context-zone");
     expect(zones.map((z) => z.getAttribute("data-zone"))).toEqual(["smart", "warn", "danger"]);
     expect(zones.filter((z) => z.getAttribute("data-current") === "true").map((z) => z.getAttribute("data-zone"))).toEqual(["warn"]);
-    expect(within(guide).getByTestId("context-guide-marker").style.left).toBe("42%");
+    const marker = within(guide).getByTestId("context-guide-marker");
+    expect(parseFloat(marker.style.left)).toBeLessThan(42);
+    await waitFor(() => {
+      runAnimationFrames();
+      expect(marker.style.left).toBe("42%");
+    });
   });
 
   it.each([
