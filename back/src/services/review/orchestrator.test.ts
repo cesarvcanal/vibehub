@@ -448,7 +448,7 @@ describe("PR anexado: a correção roda no card da branch do PR, ou num card de 
     await o.registry.recordCardPr(analysis.id, PR);
     // the analysis pushes onto the PR: a review would see its head move under it
     await expect(o.orch.startReview(base)).rejects.toThrow(/analise_ativa/);
-    // and the analysis card itself never merges, so a review started on it could never end
+    // and the analysis card has no merge-only, so a review started on it could never be merged
     await expect(o.orch.startReview({ ...base, cardId: analysis.id })).rejects.toThrow(/card_de_analise/);
     expect((await o.registry.listAllCards()).filter((c) => c.reviewOf)).toEqual([]);
     // the analysis done, the PR can be reviewed
