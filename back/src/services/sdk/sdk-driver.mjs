@@ -594,15 +594,21 @@ const BTW_TIMEOUT_MS = 3 * 60_000;
 /**
  * What the model reads: the question, with the notice that it is a side one and that there are no tools. And the
  * main session's reasoning level, when known: it is not in the conversation, so "em que nível você
- * está?" right after a switch in the pill went unanswered (production, 10/11/2026).
+ * está?" right after a switch in the pill went unanswered (production, 10/11/2026). And the background tasks
+ * alive in the main session: the fork resumes a copy, where the CLI (SDK 0.3.300) calls them "no completion record".
  */
-function btwPrompt(question, mainEffort) {
+function btwPrompt(question, mainEffort, backgroundTasks) {
   const effortNote = mainEffort ? ` Nível de raciocínio (effort) em que a sessão principal está agora: ${mainEffort}.` : "";
+  const backgroundTasksNote = backgroundTasks.length > 0
+    ? ` Tarefas em segundo plano vivas agora na sessão principal: ${backgroundTasks.map((task) => `${task.description} (${task.type}, ${task.id})`).join("; ")}.` +
+      " Elas seguem rodando no processo dela: se esta conversa disser que uma tarefa ficou sem registro de conclusão ou pode ter" +
+      " parado, isso vale só para esta cópia lateral."
+    : " A sessão principal não tem tarefa em segundo plano viva agora.";
   return (
     "<system-reminder>Pergunta LATERAL do usuário, feita enquanto você trabalha na tarefa principal. " +
     "Responda curto e direto, só com o que já está nesta conversa. Aqui você NÃO tem ferramentas: não " +
     "tente ler arquivos nem rodar comandos — se o contexto não basta, diga isso. Esta resposta não " +
-    "interrompe nem muda a tarefa principal." + effortNote + "</system-reminder>\n\n" + question
+    "interrompe nem muda a tarefa principal." + effortNote + backgroundTasksNote + "</system-reminder>\n\n" + question
   );
 }
 
@@ -638,7 +644,7 @@ async function answerBtw(id, question) {
       options.forkSession = true;
     }
     const mainEffort = await mainSessionEffort();
-    for await (const msg of query({ prompt: btwPrompt(question, mainEffort), options })) {
+    for await (const msg of query({ prompt: btwPrompt(question, mainEffort, liveBackgroundTasks), options })) {
       if (msg.type === "assistant" && !msg.parent_tool_use_id) {
         const text = resultText(msg.message?.content).trim();
         if (text) texts.push(text);
@@ -696,6 +702,13 @@ let announcedSessionId = null; // last session id emitted as a `session` event (
 // screen is showing now. When THAT process dies, the tasks die with it — and the CLI, dead,
 // does not send the empty-set notice: the driver is the one that sends it (see the `finally` of `runStream`).
 let backgroundTasksOwner = null;
+let liveBackgroundTasks = [];
+
+function announceBackgroundTasks(tasks, owner) {
+  backgroundTasksOwner = tasks.length > 0 ? owner : null;
+  liveBackgroundTasks = tasks;
+  emit({ type: "background_tasks", tasks });
+}
 
 /* ------------------------------------------------- what each tool RETURNED */
 // The chat only saw the CALL (name + input): the result came in a `user` message the driver
@@ -1091,8 +1104,7 @@ async function runStream() {
               description: typeof t.description === "string" ? t.description : "",
               ...(taskTools.has(t.task_id) ? { toolUseId: taskTools.get(t.task_id) } : {}),
             }));
-          backgroundTasksOwner = tasks.length > 0 ? myQuery : null;
-          emit({ type: "background_tasks", tasks });
+          announceBackgroundTasks(tasks, myQuery);
         } else if (msg.subtype === "task_started" || msg.subtype === "task_progress" || msg.subtype === "task_notification") {
           const frame = taskFrame(msg);
           if (frame) emit(frame);
@@ -1245,10 +1257,7 @@ async function runStream() {
     if (stillOurs) closeTurnAborted();
     // This stream's CLI process ended, and its background tasks with it: the set
     // the screen shows goes back to empty — otherwise the "rodando em segundo plano" stayed lit forever.
-    if (backgroundTasksOwner !== null && backgroundTasksOwner === myQuery) {
-      backgroundTasksOwner = null;
-      emit({ type: "background_tasks", tasks: [] });
-    }
+    if (backgroundTasksOwner !== null && backgroundTasksOwner === myQuery) announceBackgroundTasks([], null);
     if (channel === myChannel) channel = null;
     if (closingQuery === myQuery) closingQuery = null;
     if (stillOurs) {
@@ -1894,10 +1903,7 @@ async function endStream() {
     // Its background tasks also stop being ours: whatever it still announces is only
     // drained (including the `[]` from when they end), and its `finally` may never run — a
     // hanging process left the strip lit and the driver "busy" forever.
-    if (backgroundTasksOwner === dying) {
-      backgroundTasksOwner = null;
-      emit({ type: "background_tasks", tasks: [] });
-    }
+    if (backgroundTasksOwner === dying) announceBackgroundTasks([], null);
     if (closingQuery === dying) closingQuery = null;
     trace("stream did not let go within the teardown window — disowned, its errors are news again");
   }

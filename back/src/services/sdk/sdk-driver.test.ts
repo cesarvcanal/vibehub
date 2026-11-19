@@ -1603,6 +1603,24 @@ describe("sdk-driver.mjs — /btw", () => {
     await driver.waitFor((e) => e.type === "assistant_text" && e.text === "reply:slow", from);
   }, 60_000);
 
+  it("diz à pergunta lateral quais tarefas em segundo plano a sessão principal tem vivas: a cópia da conversa não as vê rodar", async () => {
+    const driver = startDriver();
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "bg" });
+    await driver.waitFor((e) => e.type === "result");
+    driver.send({ type: "btw", id: "viva", question: "a frota está rodando?" });
+    const alive = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "viva");
+    expect(String(alive.text)).toContain("Tarefas em segundo plano vivas agora na sessão principal: Aguarda o deploy (local_bash, b1).");
+
+    const from = driver.events.length;
+    driver.send({ type: "user", text: "bg-off" });
+    await driver.waitFor((e) => e.type === "result", from);
+    driver.send({ type: "btw", id: "nenhuma", question: "e agora?" });
+    const none = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "nenhuma");
+    expect(String(none.text)).toContain("A sessão principal não tem tarefa em segundo plano viva agora.");
+    expect(String(none.text)).not.toContain("Aguarda o deploy");
+  }, 60_000);
+
   it("diz à pergunta lateral o nível em que a sessão principal está AGORA", async () => {
     // Production, 10/11/2026: the level switched in the pill and a /btw "em que nível você está?" right after.
     // The level is not in the conversation, and the fork had no way to answer.
