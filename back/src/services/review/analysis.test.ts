@@ -37,6 +37,9 @@ const sendToTerminal = vi.fn(async (cardId: string, _text: string, opts: SendOpt
   return { sent: true, cardId, title: "", project: "" };
 });
 
+const hostAnswersEmpty = async (_script: string, _opts?: unknown) => ({ stdout: "", stderr: "" });
+const runScriptOnHost = vi.fn(hostAnswersEmpty);
+
 const pull = (n: number, extra: Partial<OpenPull> = {}): OpenPull => ({
   number: n, title: `PR ${n}`, url: `https://github.com/acme/widgets/pull/${n}`, author: "albert-gh",
   branch: `feat/pr-${n}`, base: "dev", fromFork: false, draft: false, updatedAt: "2026-11-16T12:00:00Z", ...extra,
@@ -67,6 +70,10 @@ async function load() {
     ...(await vi.importActual<typeof import("../board/workspace.js")>("../board/workspace.js")),
     reapplyCardIdentity: vi.fn(async () => true),
   }));
+  vi.doMock("../../runtime/host.js", async () => {
+    const actual = await vi.importActual<typeof import("../../runtime/host.js")>("../../runtime/host.js");
+    return { ...actual, hostExecutor: () => ({ ...actual.hostExecutor(), runScript: runScriptOnHost }) };
+  });
   vi.doMock("../../auth/users.js", async () => {
     const actual = await vi.importActual<typeof import("../../auth/users.js")>("../../auth/users.js");
     return { ...actual, findUser: async (id: string) => (id === vanished ? undefined : actual.findUser(id)) };
@@ -101,12 +108,15 @@ beforeEach(async () => {
   listOpenPulls.mockClear();
   readPull.mockClear();
   sendToTerminal.mockClear();
+  runScriptOnHost.mockReset();
+  runScriptOnHost.mockImplementation(hostAnswersEmpty);
   vanished = undefined;
 });
 afterEach(async () => {
   vi.doUnmock("../github/client.js");
   vi.doUnmock("../maestro/maestro.js");
   vi.doUnmock("../board/workspace.js");
+  vi.doUnmock("../../runtime/host.js");
   vi.doUnmock("../../auth/users.js");
   await rm(dir, { recursive: true, force: true });
 });
@@ -169,6 +179,34 @@ describe("startAnalysis", () => {
     expect(opts).toMatchObject({ wake: true, requireAgent: true, viaNativeChat: true, guardInteractiveMenu: true });
     // the commits and the PR comments go out on the REVIEWER's account, not on the one of whoever clicked
     expect((await registry.getCard(card.id))?.actorUserId).toBe(mussa.id);
+  });
+
+  it("o script da frota chega ao runner antes do prompt, pelo próprio pedido: não depende de o chat do card ser o SDK", async () => {
+    const { analysis, project } = await load();
+    const delivered: string[] = [];
+    runScriptOnHost.mockImplementation(async (script: string) => {
+      if (script.includes("/root/.vibehub-workflows/pr-analysis.js")) delivered.push("script da frota");
+      return { stdout: "", stderr: "" };
+    });
+    sendToTerminal.mockImplementationOnce(async (cardId: string) => {
+      delivered.push("prompt");
+      return { sent: true, cardId, title: "", project: "" };
+    });
+    const { prompt } = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert, reviewerUserId: mussa.id });
+    await prompt;
+    expect(delivered).toEqual(["script da frota", "prompt"]);
+  });
+
+  it("se o script da frota não chega ao runner, o prompt não sai e o card vai para concluído com o motivo", async () => {
+    const { analysis, registry, project } = await load();
+    runScriptOnHost.mockImplementation(async (script: string) => {
+      if (script.includes("/root/.vibehub-workflows/pr-analysis.js")) throw new Error("runner fora do ar");
+      return { stdout: "", stderr: "" };
+    });
+    const { card, prompt } = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert, reviewerUserId: mussa.id });
+    await prompt;
+    expect(sendToTerminal).not.toHaveBeenCalled();
+    expect((await registry.getCard(card.id))?.column).toBe("done");
   });
 
   it("repetir a mesma PR devolve o card que já existe, sem outro prompt", async () => {

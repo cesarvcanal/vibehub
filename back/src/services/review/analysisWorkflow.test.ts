@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { ANALYSIS_DIMENSIONS, ANALYSIS_SEVERITIES } from "./analysisModel.js";
-import { prAnalysisWorkflowSource } from "./analysisWorkflow.js";
+import { PR_ANALYSIS_WORKFLOW_PATH, buildPlantPrAnalysisWorkflowScript, readPrAnalysisWorkflowSource } from "./analysisWorkflow.js";
 import { analysisFindingFields, analysisReportInput } from "../../mcp/tools.js";
 
 type AgentOpts = { label?: string; phase?: string; model?: string; effort?: string; schema?: object };
@@ -36,7 +36,7 @@ async function runFleet(agentFake: AgentFake, fleetArgs: unknown = VALID_ARGS) {
         return null;
       }
     }));
-  const scriptBody = prAnalysisWorkflowSource().replace("export const meta =", "const meta =");
+  const scriptBody = readPrAnalysisWorkflowSource().replace("export const meta =", "const meta =");
   const script = new AsyncFunction("agent", "parallel", "pipeline", "phase", "log", "args", scriptBody);
   const fleetResult = await script(
     agent, parallel, pipeline, () => undefined, (message: string) => logs.push(message),
@@ -316,5 +316,15 @@ describe("frota da análise de PR", () => {
       if (opts.phase === "Verificação") return { confirmed: true, evidence: "e" };
       return null;
     })).rejects.toThrow(/juiz/);
+  });
+});
+
+describe("plantio do script da frota no runner", () => {
+  it("grava no caminho que o prompt da análise usa, por heredoc sem expansão e troca atômica", () => {
+    const script = buildPlantPrAnalysisWorkflowScript("vibehub-runner", "export const meta = { name: 'x' }\nreturn $HOME");
+    expect(script).toContain("docker exec -i 'vibehub-runner' bash -s");
+    expect(script).toContain("<<'VIBEHUB_PR_ANALYSIS_WORKFLOW_SRC'");
+    expect(script).toContain("return $HOME");
+    expect(script).toContain(`mv -f "$tmp" '${PR_ANALYSIS_WORKFLOW_PATH}'`);
   });
 });

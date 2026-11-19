@@ -15,6 +15,7 @@ import { sendToTerminal, SEND_READY_WAIT_MS } from "../maestro/maestro.js";
 import { logger } from "../../utils/logger.js";
 import { getSettings, type Settings } from "../settings/settings.js";
 import { findActiveAnalysisCard } from "./analysisReport.js";
+import { plantPrAnalysisWorkflow } from "./analysisWorkflow.js";
 import { analysisPrompt } from "./prompts.js";
 import { activeReviewForPr } from "./store.js";
 
@@ -255,12 +256,16 @@ async function concludeUnstartedAnalysis(card: Card, prNumber: number, reason: s
   }
 }
 
-/** Types the analysis prompt into the new card, on behalf of the reviewer. Same delivery as the review's relay. */
+/**
+ * Plants the fleet script in the runner, then types the analysis prompt into the new card, on behalf of the
+ * reviewer. Same delivery as the review's relay.
+ */
 async function deliverAnalysisPrompt(card: Card, pull: OpenPull, reviewer: PublicUser, coauthorTrailer?: string): Promise<void> {
   const text = analysisPrompt({
     cardId: card.id, prNumber: pull.number, prUrl: pull.url, branch: pull.branch, base: pull.base,
     ...(coauthorTrailer ? { coauthorTrailer } : {}),
   });
+  await plantPrAnalysisWorkflow();
   await sendToTerminal(card.id, text, {
     by: `analysis:${reviewer.username}`,
     origin: ANALYSIS_ORIGIN,

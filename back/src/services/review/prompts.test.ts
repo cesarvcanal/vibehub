@@ -217,7 +217,7 @@ describe("prompt da análise de PR", () => {
     const { analysisPrompt } = await import("./prompts.js");
     const text = analysisPrompt(input);
     expect(text).toContain("Workflow");
-    expect(text).toContain('scriptPath: "/root/.vibehub-sdk/workflows/pr-analysis.js"');
+    expect(text).toContain('scriptPath: "/root/.vibehub-workflows/pr-analysis.js"');
     expect(text).toContain('"prNumber":636');
     expect(text).toContain('"branch":"feat-x"');
     expect(text).toContain('"base":"dev"');
