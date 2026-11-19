@@ -1,19 +1,21 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, onTestFinished, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ANALYSIS_DIMENSIONS } from "./analysisModel.js";
 import type { AnalysisReportInput } from "./analysisReport.js";
 
 vi.setConfig({ testTimeout: 30_000 });
 
-let dir = "";
 const SHA = "b".repeat(40);
 const PR = { number: 7, url: "https://github.com/acme/widgets/pull/7", base: "dev", branch: "feat/x" };
 
 async function load() {
   vi.resetModules();
+  const dataDir = await mkdtemp(join(tmpdir(), "vibehub-analysis-report-"));
+  onTestFinished(() => rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }));
   const env = await import("../../config/env.js");
-  env.config.dataDir = dir;
+  env.config.dataDir = dataDir;
   env.config.secretKey = "";
   const registry = await import("../board/registry.js");
   registry.resetForTesting();
@@ -31,13 +33,6 @@ async function load() {
     events: await import("../events/cardEvents.js"),
   };
 }
-
-beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "vibehub-analysis-report-"));
-});
-afterEach(async () => {
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-});
 
 const input = (over: Partial<AnalysisReportInput> = {}): AnalysisReportInput => ({
   headSha: SHA, stage: "analysed", summary: "2 achados", refutedCount: 3,
@@ -133,8 +128,7 @@ describe("relatório da análise pela ferramenta do card", () => {
   it("relatório done que acrescenta como ran uma dimensão ausente do analysed é recusado: ausente conta como não rodou", async () => {
     const { analysisCard, reportService } = await load();
     await reportService.recordAnalysisReport(analysisCard.id, input());
-    const everyDimensionRan = (["correctness", "security", "performance", "contracts", "tests", "repoRules"] as const)
-      .map((key) => ({ key, status: "ran" as const }));
+    const everyDimensionRan = ANALYSIS_DIMENSIONS.map((key) => ({ key, status: "ran" as const }));
     await expect(reportService.recordAnalysisReport(analysisCard.id, input({ stage: "done", dimensions: everyDimensionRan })))
       .rejects.toThrow(/security/);
   });

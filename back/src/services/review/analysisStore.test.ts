@@ -1,24 +1,17 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, onTestFinished, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AnalysisReport } from "./analysisModel.js";
 
-let dir = "";
-
 async function load() {
   vi.resetModules();
+  const dataDir = await mkdtemp(join(tmpdir(), "vibehub-analyses-"));
+  onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
   const env = await import("../../config/env.js");
-  env.config.dataDir = dir;
+  env.config.dataDir = dataDir;
   return await import("./analysisStore.js");
 }
-
-beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "vibehub-analyses-"));
-});
-afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
-});
 
 const report = (over: Partial<AnalysisReport> = {}): AnalysisReport => ({
   cardId: "c1", prUrl: "https://github.com/acme/w/pull/7", prNumber: 7, analysedSha: "a".repeat(40), stage: "analysed",
