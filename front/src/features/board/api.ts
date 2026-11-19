@@ -278,7 +278,7 @@ export const boardApi = {
 
   readCardAnalysis: (cardId: string) => get<CardAnalysisResponse>(`/cards/${encodeURIComponent(cardId)}/analysis`),
 
-  /** Opens the analysis card of a PR (or answers with the one already open). */
+  /** Opens the analysis card of a PR (or answers with the active one). */
   startPrAnalysis: (id: string, prNumber: number, roles: AnalysisRoles) =>
     post<PrAnalysisStart>(`/projects/${encodeURIComponent(id)}/prs/${prNumber}/analysis`, roles),
 

@@ -522,7 +522,7 @@ export interface AnalysisRoles {
   coauthorUserId?: string;
 }
 
-/** What `POST /projects/:id/prs/:number/analysis` answers: the analysis card, new or the one already open. */
+/** What `POST /projects/:id/prs/:number/analysis` answers: the analysis card, new or the active one. */
 export interface PrAnalysisStart {
   card: Card;
   created: boolean;

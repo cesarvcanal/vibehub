@@ -26,9 +26,10 @@ import { activeReviewForPr } from "./store.js";
  * Invariants:
  *  - GitHub is the source of the list: nothing about open PRs is stored, so a PR opened by hand shows up
  *    at once and a closed one disappears.
- *  - One OPEN analysis card per PR, found by the PR's URL on the card (`Card.prs`) — never by title. Two
+ *  - One ACTIVE analysis card per PR, found by the PR's URL on the card (`Card.prs`) — never by title. Two
  *    requests at the same time are serialized per PR, so they cannot both create one. A card moved to
- *    "done" no longer holds the PR: asking again opens a new analysis.
+ *    "done" no longer holds the PR, nor does an open one whose fleet did not run (`fleet_unavailable`):
+ *    asking again opens a new analysis.
  *  - Only a PR from the project's own repository: the fixes are pushed to its branch, and a fork's
  *    branch is not ours to push to (the same rule as `attachPrs`).
  *  - GitHub is read with the identity of whoever asks (their connection, falling back to the project's).
@@ -39,7 +40,7 @@ import { activeReviewForPr } from "./store.js";
 const ANALYSIS_ORIGIN: MessageOrigin = { kind: "system", name: "análise de PR" };
 
 export interface ProjectPull extends OpenPull {
-  /** The open analysis card of this PR, when there is one. */
+  /** The active analysis card of this PR, when there is one. */
   analysisCardId?: string;
   /**
    * The PR's branch is a name vibehub refuses (`assertBranchName`: accents, `+`, `@`, over 80 chars): the
