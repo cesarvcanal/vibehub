@@ -8,6 +8,7 @@ import { t } from "@/i18n";
 
 const FIRST_RECONNECT_MS = 1_000;
 const MAX_RECONNECT_MS = 30_000;
+const SERVER_REFUSED_CLOSE_CODES = [1008, 1011];
 
 export function usePrClaims(projectId: string, enabled: boolean) {
   const queryClient = useQueryClient();
@@ -50,12 +51,17 @@ export function usePrClaims(projectId: string, enabled: boolean) {
             toast.info(t("prs.claimRefused", { name: event.username, number: event.prNumber }));
             return;
           case "error":
-            toast.error(event.error);
+            hold(null);
+            toast.error(t("prs.readOnly"));
             return;
         }
       };
-      socket.onclose = () => {
+      socket.onclose = (event) => {
         if (connection.closed) return;
+        if (SERVER_REFUSED_CLOSE_CODES.includes(event.code)) {
+          toast.error(t("prs.liveStopped"));
+          return;
+        }
         const delay = Math.min(FIRST_RECONNECT_MS * 2 ** connection.failures, MAX_RECONNECT_MS);
         connection.failures += 1;
         connection.retry = setTimeout(connect, delay);

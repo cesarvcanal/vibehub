@@ -382,6 +382,8 @@ export const ptBR: Record<string, string> = {
   "prs.openAnalysisOf": "Abrir a análise da PR #{number}",
   "prs.claimedBy": "{name} está montando",
   "prs.claimRefused": "{name} já está montando a análise da PR #{number}",
+  "prs.readOnly": "Este projeto foi compartilhado com você só para leitura: você não pode iniciar uma análise",
+  "prs.liveStopped": "A atualização ao vivo desta lista parou; feche e abra de novo",
   "sidebar.projectPrs": "Pull requests abertas de {name}",
   "sidebar.newCardIn": "Novo card em {name}",
   "sidebar.newCardHint": "Novo card (⌘K no projeto selecionado)",

@@ -567,7 +567,7 @@ export type PrLiveEvent =
   | { type: "claims"; claims: PrClaim[] }
   | { type: "pulls-changed" }
   | { type: "claim-refused"; prNumber: number; username: string }
-  | { type: "error"; error: string };
+  | { type: "error"; code: "read_only" };
 
 /** A pull request the card delivered — see `Card.prs`. */
 export interface CardPr {

@@ -381,6 +381,8 @@ export const en: Record<string, string> = {
   "prs.openAnalysisOf": "Open analysis of PR #{number}",
   "prs.claimedBy": "{name} is setting it up",
   "prs.claimRefused": "{name} is already setting up the analysis of PR #{number}",
+  "prs.readOnly": "This project is shared with you read-only: you cannot start an analysis",
+  "prs.liveStopped": "Live updates of this list stopped; close and reopen it",
   "sidebar.projectPrs": "Open pull requests of {name}",
   "sidebar.newCardIn": "New card in {name}",
   "sidebar.newCardHint": "New card (⌘K on the selected project)",

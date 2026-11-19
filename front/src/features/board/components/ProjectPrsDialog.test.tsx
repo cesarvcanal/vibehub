@@ -58,7 +58,7 @@ class FakeSocket {
   sent: unknown[] = [];
   onopen: (() => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((event: CloseEvent) => void) | null = null;
 
   constructor(public url: string) {
     FakeSocket.instances.push(this);
@@ -77,9 +77,9 @@ class FakeSocket {
   deliver(frame: unknown): void {
     act(() => this.onmessage?.({ data: JSON.stringify(frame) } as MessageEvent));
   }
-  drop(): void {
+  drop(code = 1006): void {
     this.readyState = 3;
-    act(() => this.onclose?.());
+    act(() => this.onclose?.({ code } as CloseEvent));
   }
 }
 
@@ -340,13 +340,27 @@ describe("ProjectPrsDialog", () => {
       expect(second.sent).toEqual([{ type: "claim", prNumber: 636 }]);
     });
 
-    it("what the channel refuses is shown", async () => {
+    it("a read-only share is told so, translated, and its picker closes", async () => {
       serve([pull(636)]);
       open();
       const ws = await liveSocket();
       ws.accept();
-      ws.deliver({ type: "error", error: "this project is shared with you read-only" });
-      await waitFor(() => expect(toast.error).toHaveBeenCalledWith("this project is shared with you read-only"));
+      await userEvent.click(await screen.findByRole("button", { name: "Analyse PR #636" }));
+      await screen.findByRole("button", { name: "Start analysis" });
+      ws.deliver({ type: "error", code: "read_only" });
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Start analysis" })).not.toBeInTheDocument());
+      expect(toast.error).toHaveBeenCalledWith("This project is shared with you read-only: you cannot start an analysis");
+    });
+
+    it.each([1008, 1011])("a channel the server closes with %i is not reopened, and says live updates stopped", async (code) => {
+      serve([pull(636)]);
+      open();
+      const ws = await liveSocket();
+      ws.accept();
+      ws.drop(code);
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Live updates of this list stopped; close and reopen it"));
+      await new Promise((settle) => setTimeout(settle, 1_500));
+      expect(FakeSocket.instances).toHaveLength(1);
     });
 
     it("closing the dialog closes the channel", async () => {

@@ -1,9 +1,10 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { WebSocket } from "ws";
+import { WebSocket } from "ws";
 import { canAccessProject, canWorkOnProject } from "../auth/access.js";
 import { requestUser, requireSession } from "../auth/session.js";
 import { analysisPeople, listProjectPulls, RepoAccessError, startAnalysis } from "../services/review/analysis.js";
 import { joinPrRoom, type PrLiveEvent } from "../services/review/prClaims.js";
+import { logger } from "../utils/logger.js";
 import { NOT_FOUND, sendError } from "./httpError.js";
 
 /** GitHub failing to answer is not the caller's fault: the list is not there to give. */
@@ -52,19 +53,22 @@ export async function prAnalysisRoutes(app: FastifyInstance): Promise<void> {
     "/api/projects/:id/prs/live",
     { websocket: true, preHandler: requireProjectAccess },
     (socket: WebSocket, req) => {
-      const send = (event: PrLiveEvent | { type: "claim-refused"; prNumber: number; username: string } | { type: "error"; error: string }) => {
-        try { socket.send(JSON.stringify(event)); } catch { socket.terminate(); }
+      const send = (event: PrLiveEvent | { type: "claim-refused"; prNumber: number; username: string } | { type: "error"; code: "read_only" }) => {
+        if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event));
       };
       const seated = (async () => {
         const user = (await requestUser(req))!;
         return { user, canWork: await canWorkOnProject(user, req.params.id), seat: joinPrRoom(req.params.id, user, send) };
       })();
-      seated.catch(() => socket.close(INTERNAL_ERROR));
+      seated.catch((err: unknown) => {
+        logger.warn({ project: req.params.id, detail: (err as Error).message }, "PR live channel could not seat the viewer");
+        socket.close(INTERNAL_ERROR);
+      });
       socket.on("message", (data) => void seated.then(({ user, canWork, seat }) => {
         const frame = parseLiveFrame(String(data));
         if (!frame) return socket.close(POLICY_VIOLATION, "invalid frame");
         if (frame.type === "release") return seat.release(frame.prNumber);
-        if (!canWork) return send({ type: "error", error: "this project is shared with you read-only" });
+        if (!canWork) return send({ type: "error", code: "read_only" });
         const holder = seat.claim(frame.prNumber);
         if (holder.userId !== user.id) send({ type: "claim-refused", prNumber: frame.prNumber, username: holder.username });
       }, () => undefined));

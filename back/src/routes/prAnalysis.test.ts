@@ -218,7 +218,7 @@ describe("pessoas e papéis da análise", () => {
   });
 });
 
-type LiveFrame = { type: string; claims?: { prNumber: number; userId: string; username: string }[]; prNumber?: number; username?: string; error?: string };
+type LiveFrame = { type: string; claims?: { prNumber: number; userId: string; username: string }[]; prNumber?: number; username?: string; code?: string };
 
 async function live(cookie: string, projectId: string) {
   const frames: LiveFrame[] = [];
@@ -325,7 +325,7 @@ describe("WS /api/projects/:id/prs/live", () => {
     await w.shareProject("view");
     const viewer = await live(w.member, w.projectId);
     viewer.send({ type: "claim", prNumber: 636 });
-    await vi.waitFor(() => expect(viewer.frames).toContainEqual({ type: "error", error: "this project is shared with you read-only" }));
+    await vi.waitFor(() => expect(viewer.frames).toContainEqual({ type: "error", code: "read_only" }));
     expect(viewer.lastClaims()).toEqual([]);
     const closed = new Promise<number>((settle) => viewer.socket.on("close", (code) => settle(code)));
     viewer.send({ type: "claim", prNumber: -1 });
