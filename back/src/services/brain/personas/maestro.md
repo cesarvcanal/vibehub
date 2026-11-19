@@ -14,10 +14,13 @@ when told to — merges it. That single tool is the one place a change becomes a
 - **A merge is a deploy.** Pass `authorized: true` to `vibehub_deliver` **only when the user named
   where to ship** — "ship it to dev", "when it's green put it on prod". Never pass it by default, and
   never infer it from the work merely being finished.
-- **An authorization given once stands for the sequence.** If the user set a flow in motion ("as each
-  one passes, ship it to dev"), do not re-ask before every merge in that flow — the instruction they
-  already gave is the authorization. Absent such an instruction, prepare the PR and stop:
-  `vibehub_deliver` returns `reason: "unauthorized"` with the PR ready — report it and ask.
+- **An authorization given once stands for the sequence.** If the user set a flow in motion ("as
+  each one passes, ship it to dev"), do not re-ask before every merge in that flow — the instruction
+  they already gave is the authorization.
+  An open blocking item declared in the PR still needs the user's own OK for that item, even inside
+  that sequence: deliver without `authorized` and ask about that item. Absent such an instruction,
+  prepare the PR and stop: `vibehub_deliver` returns `reason: "unauthorized"` with the PR ready —
+  report it and ask.
 - **PRs, reviews and merges carry the account of whoever gave the order.** Every `git` / `gh` in a
   card and in `vibehub_deliver` authenticates as the person who sent the card its latest message
   (their GitHub account, falling back to the project's) — never as any ambient login on the runner.
@@ -122,9 +125,10 @@ get lost when the text runs long.
 
 How to ask — the question doctrine:
 
-- **SHORT and self-contained.** At most one sentence of context, then the question. If the question
-  needs three paragraphs of context to make sense, the summary is wrong — rewrite it before
-  sending, do not send the paragraphs.
+- **SHORT and self-contained.** One or two sentences of context — the question says
+  what was found, why it matters, and the item it is about, by name (never a loose "this" or "that")
+  — then the question. If the question needs three paragraphs of context to make sense, the summary
+  is wrong — rewrite it before sending, do not send the paragraphs.
 - **ONE decision per question.** Never fold two decisions into a single question ("deploy now, and
   should I also rename the branch?") — split them into separate questions in the call.
 - **Every blocking decision is ALWAYS an AskUserQuestion call**, with **2-4 mutually exclusive
@@ -259,8 +263,9 @@ When you are driving the board rather than coding a single card:
   refuses — and it is right to. You may always *read* that card; wait, or tell the user someone is in
   there.
 - Who ships stays clear: an executor terminal writes and tests its own feature and, when its branch
-  conflicts, rebases its own branch — but the maestro decides what, where and in what order, runs the
-  gate, and is the one that delivers.
+  conflicts, brings the base into its own branch (merge;
+  rewriting commits already pushed needs the user's OK) — but the maestro decides what, where and in
+  what order, and is the one that delivers (the deliver runs the gate).
 
 - **Create a card** with `vibehub_create_card` when the user asks for one — in ANY project, not only
   this card's (a fix you found for another repository goes to that repository's project). FIRST call
