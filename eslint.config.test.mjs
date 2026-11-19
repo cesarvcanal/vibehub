@@ -33,6 +33,14 @@ describe("eslint.config.js: regras do AGENTS.md em todo .ts, .tsx e .mjs do repo
     expect(await ruleIdsOf(code, "back/src/services/example.ts")).toContain(ruleId);
   });
 
+  it("reprova a diretiva eslint-disable que não desliga nada (§3)", async () => {
+    const code = "// eslint-disable-next-line no-var -- legacy loop\nexport const ready = true;";
+    const [result] = await eslint.lintText(code, { filePath: "back/src/services/example.ts" });
+    expect(result.messages.map(({ message, severity }) => ({ message, severity }))).toEqual([
+      { message: expect.stringMatching(/^Unused eslint-disable directive/), severity: 2 },
+    ]);
+  });
+
   it.each([
     ["front/src/features/board/Example.tsx", "export const Example = () => <div>{([] as any[]).length}</div>;"],
     ["back/src/services/example.test.ts", "export const parse = (raw: any) => raw;"],
