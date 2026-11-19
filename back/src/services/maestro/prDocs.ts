@@ -59,6 +59,7 @@ export const PR_SECTIONS: ReadonlyArray<{ label: string; match: string[] }> = [
   { label: "Impactos", match: ["impacto", "impact"] },
   { label: "Testes e validações", match: ["teste", "test"] },
   { label: "Pontos de atenção", match: ["pontos de atencao", "points of attention", "caveat"] },
+  { label: "Conformidade com as regras do repositório", match: ["conformidade", "compliance"] },
 ];
 
 /**
@@ -115,7 +116,7 @@ function headingsOf(body: string): string[] {
  * The sections of {@link PR_SECTIONS} that have no heading in `body`, by label. Each heading stands for
  * ONE section ("## Contexto e problema" is not both): a bipartite matching (augmenting paths), so an
  * ambiguous heading goes to the section that needs it — "## Problema e contexto" plus "## Contexto"
- * covers both, whichever comes first. Nine sections and a handful of headings: trivially cheap. PURE.
+ * covers both, whichever comes first. Ten sections and a handful of headings: trivially cheap. PURE.
  */
 export function missingPrSections(body: string): string[] {
   const headings = headingsOf(body);

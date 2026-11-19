@@ -1331,7 +1331,7 @@ describe("deliver com revisão de PR ativa no card", () => {
 const DOC_BODY = [
   "## Contexto", "c", "## Problema identificado", "p", "## Objetivo", "o", "## Solução implementada", "s",
   "## Detalhamento técnico", "d", "## Comportamento esperado", "e", "## Impactos", "i",
-  "## Testes e validações", "t", "## Pontos de atenção", "a",
+  "## Testes e validações", "t", "## Pontos de atenção", "a", "## Conformidade com o AGENTS.md", "r",
 ].join("\n");
 /** A comment that explains its block (above prDocs.MIN_COMMENT_CHARS). */
 const EXPLAINED =

@@ -40,8 +40,11 @@ when told to — merges it. That single tool is the one place a change becomes a
   and `comments` (otherwise `reason: "undocumented"` lists what is missing):
   - `body`: markdown with these headings — Contexto, Problema identificado, Objetivo, Solução
     implementada, Detalhamento técnico, Comportamento esperado, Impactos, Testes e validações, Pontos
-    de atenção. Explain the change as a whole, not the list of files; tests say what was RUN and what
-    is only recommended; never invent a cause, a test or a reason — say what is not confirmed.
+    de atenção, Conformidade com as regras do repositório. Explain the change as a whole, not the list
+    of files; tests say what was RUN and what is only recommended; never invent a cause, a test or a
+    reason — say what is not confirmed. Conformidade takes each rule of the repository's own rules file
+    (AGENTS.md, CLAUDE.md or equivalent) that the changed lines touch: the rule, how it was followed and
+    the `file:line` that shows it, or why it was not followed. No rules file: say so in one line.
   - `comments`: one per relevant block of the diff (`{ path, line, body }`, `line` inside the diff),
     saying what changed, why, how it works, its responsibility, its impact and the rules involved.
     Specific to that block — never "Adicionada validação" or "Ajuste no fluxo". Trivial lines need none.
