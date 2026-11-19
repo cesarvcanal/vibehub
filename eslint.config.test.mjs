@@ -75,6 +75,12 @@ describe("eslint.config.js: regras só de teste (§11)", () => {
     expect(await ruleIdsOf(code, testFile)).toEqual([]);
   });
 
+  it.each(["back/src/testkit/example.ts", "front/src/features/board/Example.test.tsx", "scripts/lint/example.test.mjs"])("valem também em %s", async (filePath) => {
+    const code = "export async function waitFor(check: () => Promise<boolean>) {\n  while (!(await check())) await new Promise((wake) => setTimeout(wake, 50));\n}";
+    const plainCode = filePath.endsWith(".mjs") ? code.replace(": () => Promise<boolean>", "") : code;
+    expect(await ruleIdsOf(plainCode, filePath)).toContain("no-restricted-syntax");
+  });
+
   it("as regras de teste não valem no código de produção", async () => {
     const code = 'import { access } from "node:fs/promises";\nexport function exists(path: string) {\n  return access(path).then(() => true, () => false);\n}';
     expect(await ruleIdsOf(code, "back/src/services/example.ts")).toEqual([]);
