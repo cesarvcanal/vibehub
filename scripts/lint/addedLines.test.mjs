@@ -69,6 +69,37 @@ describe("parseAddedLines", () => {
     );
   });
 
+  it("caminho que o git cita (aspas, barra invertida, tab) falha à vista em vez de sumir do recorte", () => {
+    const diff = diffOf(
+      'diff --git "a/back/src/a\\"b.ts" "b/back/src/a\\"b.ts"',
+      'new file mode 100644',
+      "--- /dev/null",
+      '+++ "b/back/src/a\\"b.ts"',
+      "@@ -0,0 +1 @@",
+      "+let added = 1;",
+    );
+
+    expect(() => parseAddedLines(diff)).toThrow('+++ "b/back/src/a\\"b.ts"');
+  });
+
+  it("linha acrescentada que começa com ++ \" é conteúdo, não cabeçalho", () => {
+    const diff = diffOf(
+      "diff --git a/back/src/a.ts b/back/src/a.ts",
+      "--- a/back/src/a.ts",
+      "+++ b/back/src/a.ts",
+      "@@ -1,0 +2 @@",
+      '+++ "x";',
+    );
+
+    expect(parseAddedLines(diff)).toEqual(new Map([["back/src/a.ts", new Set([2])]]));
+  });
+
+  it("mudança só de modo, sem linha +++, não entra", () => {
+    const diff = diffOf("diff --git a/scripts/run.mjs b/scripts/run.mjs", "old mode 100644", "new mode 100755");
+
+    expect(parseAddedLines(diff)).toEqual(new Map());
+  });
+
   it("diff vazio não tem arquivo nenhum", () => {
     expect(parseAddedLines("")).toEqual(new Map());
   });
