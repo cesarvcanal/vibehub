@@ -1128,7 +1128,7 @@ describe("relatório da análise pela rota", () => {
     dimensions: [{ key: "correctness" as const, status: "ran" as const }], findings: [], refutedCount: 2, updatedAt: 1,
   });
   const saveReport = async (cardId: string) =>
-    await (await import("../services/review/analysisStore.js")).saveAnalysis(savedReport(cardId));
+    await (await import("../services/review/analysisStore.js")).saveAnalysis(savedReport(cardId), () => undefined);
 
   it("quem só vê o card lê a análise, com o estado por dimensão e o veredito já calculados", async () => {
     const w = await world();

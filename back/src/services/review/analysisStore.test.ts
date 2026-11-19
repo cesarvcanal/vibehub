@@ -13,6 +13,8 @@ async function load() {
   return await import("./analysisStore.js");
 }
 
+const acceptAnySaved = () => undefined;
+
 const report = (over: Partial<AnalysisReport> = {}): AnalysisReport => ({
   cardId: "c1", prUrl: "https://github.com/acme/w/pull/7", prNumber: 7, analysedSha: "a".repeat(40), stage: "analysed",
   summary: "s", dimensions: [], findings: [], refutedCount: 0, updatedAt: 1, ...over,
@@ -21,20 +23,20 @@ const report = (over: Partial<AnalysisReport> = {}): AnalysisReport => ({
 describe("store das análises", () => {
   it("guarda um relatório por card e o seguinte substitui o anterior", async () => {
     const store = await load();
-    await store.saveAnalysis(report());
-    await store.saveAnalysis(report({ stage: "done" }));
+    await store.saveAnalysis(report(), acceptAnySaved);
+    await store.saveAnalysis(report({ stage: "done" }), acceptAnySaved);
     expect((await store.getAnalysis("c1"))?.stage).toBe("done");
   });
   it("o relatório de um card não apaga o de outro", async () => {
     const store = await load();
-    await store.saveAnalysis(report());
-    await store.saveAnalysis(report({ cardId: "c2" }));
+    await store.saveAnalysis(report(), acceptAnySaved);
+    await store.saveAnalysis(report({ cardId: "c2" }), acceptAnySaved);
     expect(await store.getAnalysis("c1")).toBeDefined();
     expect(await store.getAnalysis("c2")).toBeDefined();
   });
   it("devolve cópia: mexer no lido não muda o gravado", async () => {
     const store = await load();
-    await store.saveAnalysis(report());
+    await store.saveAnalysis(report(), acceptAnySaved);
     const readReport = await store.getAnalysis("c1");
     readReport!.summary = "mexido";
     expect((await store.getAnalysis("c1"))?.summary).toBe("s");

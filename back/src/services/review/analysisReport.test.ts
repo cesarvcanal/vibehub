@@ -112,6 +112,21 @@ describe("relatório da análise pela ferramenta do card", () => {
     expect((await store.getAnalysis(analysisCard.id))?.stage).toBe("analysed");
   });
 
+  it("dois analysed ao mesmo tempo: um é recusado e o gravado é o que foi aceito", async () => {
+    const { analysisCard, reportService, store } = await load();
+    const secondFinding = { ...blockingFinding, id: "f2" };
+    const outcomes = await Promise.allSettled([
+      reportService.recordAnalysisReport(analysisCard.id, input({ findings: [blockingFinding] })),
+      reportService.recordAnalysisReport(analysisCard.id, input({ findings: [secondFinding] })),
+    ]);
+    const accepted = outcomes.filter((outcome) => outcome.status === "fulfilled");
+    const refused = outcomes.filter((outcome) => outcome.status === "rejected");
+    expect(refused).toHaveLength(1);
+    expect(String((refused[0] as PromiseRejectedResult).reason)).toMatch(/analysed já foi gravado/);
+    const acceptedReport = (accepted[0] as PromiseFulfilledResult<{ findings: { id: string }[] }>).value;
+    expect((await store.getAnalysis(analysisCard.id))?.findings).toEqual(acceptedReport.findings);
+  });
+
   it("relatório done que perde o unverifiedCount do analysed é recusado; o mesmo done com ele é gravado", async () => {
     const { analysisCard, reportService, store } = await load();
     const dimensionsWithUnverifiedTests = [{ key: "tests" as const, status: "ran" as const, unverifiedCount: 3, reason: "3 achados acima do teto" }];
