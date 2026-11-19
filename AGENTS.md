@@ -409,7 +409,7 @@ Dentro de um card do vibehub, a entrega sai pelo `vibehub_deliver` (push, PR, ga
 1. Abra o PR com título e corpo explícitos, nunca `--fill` (ele põe a lista de commits como descrição):
 
    ```bash
-   gh pr create --base main --title "<tipo(area): ...>" --body-file pr-body.md
+   gh pr create --base <base> --title "<tipo(area): ...>" --body-file pr-body.md
    ```
 
 2. Publique os comentários do diff como uma única revisão:
