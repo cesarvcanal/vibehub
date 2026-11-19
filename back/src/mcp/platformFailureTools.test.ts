@@ -41,6 +41,7 @@ async function connect({ configured = true } = {}) {
 const REPORT = {
   card: "card-1", kind: "tool_error", component: "vibehub_deliver",
   symptom: "deliver respondeu merged sem PR", evidence: "resposta: { merged: true, prUrl: null }",
+  explanation: "A entrega disse que tinha publicado a mudança, mas nenhum pedido de revisão foi aberto.",
 };
 
 afterEach(() => { vi.doUnmock("../services/board/registry.js"); });
@@ -85,5 +86,56 @@ describe("vibehub_report_platform_failure", () => {
   it("relato sem evidência é recusado no schema", async () => {
     const { call } = await connect();
     expect((await call({ ...REPORT, evidence: "" })).isError).toBe(true);
+  });
+
+  it("relato sem explicação leiga é recusado no schema", async () => {
+    const { call } = await connect();
+    const { explanation: _explanation, ...withoutExplanation } = REPORT;
+    expect((await call(withoutExplanation)).isError).toBe(true);
+  });
+
+  it("registra a queixa do usuário com a explicação leiga e o card de origem", async () => {
+    const { call, failures } = await connect();
+    const complaint = {
+      ...REPORT,
+      kind: "user_report",
+      component: "usage-meter",
+      symptom: "medidor semanal mostra a conta Claude anterior",
+      evidence: "a pessoa disse: está 57% mas troquei de conta; GET /api/usage devolve 3% para a conta nova",
+      explanation: "O medidor de uso no topo do card mostrou o consumo da conta Claude anterior depois da troca de conta.",
+      hypothesis: "cache do front",
+    };
+    expect((await call(complaint)).json).toMatchObject({ recorded: true });
+    expect(await failures.listActivePlatformFailures()).toEqual([expect.objectContaining({
+      symptom: "user_report: medidor semanal mostra a conta Claude anterior",
+      explanation: complaint.explanation,
+      originCardId: "card-1",
+    })]);
+  });
+
+  it("aceita inconsistência que o próprio agente notou", async () => {
+    const { call } = await connect();
+    expect((await call({ ...REPORT, kind: "inconsistency" })).json).toMatchObject({ recorded: true });
+  });
+
+  it("mascara token que o agente pôs na explicação", async () => {
+    const { call, failures } = await connect();
+    await call({ ...REPORT, explanation: `use o token ghp_${"B".repeat(36)}` });
+    expect((await failures.listActivePlatformFailures())[0]!.explanation).not.toContain("B".repeat(36));
+  });
+
+  it("relato de falha que o dono já descartou responde dismissed", async () => {
+    const { call, failures } = await connect();
+    await call(REPORT);
+    await failures.dismissPlatformFailure((await failures.listActivePlatformFailures())[0]!.id);
+    expect((await call(REPORT)).json).toEqual({ recorded: false, reason: "dismissed" });
+  });
+
+  it("com o teto de falhas ativas cheio, responde cap", async () => {
+    const { call, failures } = await connect();
+    for (const index of Array.from({ length: failures.ACTIVE_FAILURES_CAP }, (_unused, position) => position)) {
+      await call({ ...REPORT, component: `part-${String.fromCharCode(97 + (index % 26))}${Math.floor(index / 26)}` });
+    }
+    expect((await call({ ...REPORT, component: "brand-new" })).json).toEqual({ recorded: false, reason: "cap" });
   });
 });
