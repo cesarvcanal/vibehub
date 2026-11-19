@@ -17,7 +17,7 @@ export function parseAddedLines(diffU0) {
     if (quotedPathLine !== undefined) {
       throw new Error(`lint: o git citou o caminho (aspas, barra invertida ou tab no nome) e o recorte não lê caminho citado: ${quotedPathLine}`);
     }
-    const newPath = lines.map((line) => NEW_PATH_LINE.exec(line)).find(Boolean)?.[1];
+    const newPath = headerLines.map((line) => NEW_PATH_LINE.exec(line)).find(Boolean)?.[1];
     if (newPath === undefined) return [];
     const added = lines.filter((line) => HUNK_HEADER.test(line)).flatMap(hunkLines);
     return [[newPath, new Set(added)]];
