@@ -446,11 +446,14 @@ export function buildMergeScript(
     `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
     // stderr is not captured: it already goes to the output (`exec 2>&1`), and a warning there must not
     // read as the PR having moved.
-    `if ! PH=$(gh pr view ${shQuote(prUrl)} --json headRefOid --jq .headRefOid) || [ -z "$PH" ]; then`,
+    `if ! PR_VIEW=$(gh pr view ${shQuote(prUrl)} --json headRefOid,number,title --jq '.headRefOid, .number, .title'); then`,
     `  echo "${MARKER} error merge"; exit 0;`,
     `fi`,
-    `if [ "$PH" != ${pin} ]; then echo "${MARKER} error head_moved $PH"; exit 0; fi`,
-    `if gh pr merge ${shQuote(prUrl)} --merge --match-head-commit ${pin}; then echo "${MARKER} merged"; else echo "${MARKER} error merge"; fi`,
+    `{ read -r PR_HEAD; read -r PR_NUMBER; read -r PR_TITLE; } <<<"$PR_VIEW"`,
+    `if [ -z "$PR_HEAD" ]; then echo "${MARKER} error merge"; exit 0; fi`,
+    `if [ "$PR_HEAD" != ${pin} ]; then echo "${MARKER} error head_moved $PR_HEAD"; exit 0; fi`,
+    `SUBJECT="🔀 merge: $(printf '%s' "$PR_TITLE" | sed -E 's/^[a-z]+(\\([^)]*\\))?!?: *//') (#$PR_NUMBER)"`,
+    `if gh pr merge ${shQuote(prUrl)} --merge --match-head-commit ${pin} --subject "$SUBJECT"; then echo "${MARKER} merged"; else echo "${MARKER} error merge"; fi`,
   ];
   return dockerBashScript(containerName, body);
 }
