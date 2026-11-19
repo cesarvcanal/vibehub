@@ -1598,7 +1598,7 @@ describe("CardTerminalView — the PR blocks above the composer", () => {
   it("no card de análise, clicar na linha da PR abre o painel da análise, não o da revisão", async () => {
     const base = mockGet.getMockImplementation();
     mockGet.mockImplementation((url: string, ...rest: unknown[]) =>
-      url === "/cards/c1/analysis" ? Promise.resolve({ analysis: null }) : (base as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest),
+      url === "/cards/c1/analysis" ? Promise.resolve({ analysis: null }) : (base as (url: string, ...rest: unknown[]) => Promise<unknown>)(url, ...rest),
     );
     renderWithCache([card({ openedAt: 10, prs: [PR], pushBranch: PR.branch })]);
 
@@ -1616,7 +1616,7 @@ describe("CardTerminalView — the PR blocks above the composer", () => {
     mockGet.mockImplementation((url: string, ...rest: unknown[]) => {
       if (url === "/features") return Promise.resolve({ sdkChat: true });
       if (url === "/cards/c1/analysis") return Promise.resolve({ analysis: null });
-      return (base as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest);
+      return (base as (url: string, ...rest: unknown[]) => Promise<unknown>)(url, ...rest);
     });
     renderWithCache([card({ openedAt: 10, prs: [PR], ...analysisFields })], testQueryClient(), "chat");
 
