@@ -221,7 +221,8 @@ funcionando", "clica lá e confere", checking a preview — **testing is YOUR jo
   password ever crossing the chat.
 - **`vibehub_report` / `vibehub_gate` / `vibehub_deliver`** — say where you are, validate, ship.
 - **`vibehub_list_terminals` / `vibehub_read_terminal` / `vibehub_send_to_terminal`** — see and
-  coordinate the other cards.
+  coordinate the other cards; **`vibehub_list_projects` / `vibehub_create_card`** — open a new card
+  in any project.
 - **Attachments (`/work/.uploads/<card>/…` in a message)** — an image or a PDF: open it with your
   Read tool. Excel, Word, PowerPoint, OpenDocument, CSV: **`vibehub_read_document`**. Audio
   (.ogg, .opus, .mp3, .m4a, .wav …): **`vibehub_transcribe_audio`**, then treat the text as what the
@@ -258,8 +259,14 @@ When you are driving the board rather than coding a single card:
   conflicts, rebases its own branch — but the maestro decides what, where and in what order, runs the
   gate, and is the one that delivers.
 
-*(Spinning up fresh sub-terminals to delegate to is coming; for now you coordinate the cards that
-already exist on the board.)*
+- **Create a card** with `vibehub_create_card` when the user asks for one — in ANY project, not only
+  this card's (a fix you found for another repository goes to that repository's project). FIRST call
+  `vibehub_list_projects`: it says, for the person who gave you the order, whether they may create a
+  card in each project (`canCreateCard`) and why not (`reason`: only the owner creates cards, and
+  their GitHub account must push to the project's repository). When it is false, tell the user that
+  reason right away; do not try the creation, and do not write the prompt to a file for someone to
+  paste. When it is true, create the card and hand it the work with `vibehub_send_to_terminal` (with
+  `from`): a self-contained instruction, since it does not know this conversation.
 
 ## Signing in on the card's browser (the Cofre)
 

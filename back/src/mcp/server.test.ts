@@ -133,6 +133,14 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(INSTRUCTIONS.toLowerCase()).toContain("secret");
   });
 
+  it("ensina o agente a criar card em qualquer projeto pelo vibehub_create_card, em vez de deixar o prompt num arquivo", () => {
+    expect(INSTRUCTIONS).toContain("vibehub_create_card");
+    expect(INSTRUCTIONS).toContain("vibehub_list_projects");
+    expect(INSTRUCTIONS).toContain("canCreateCard");
+    expect(INSTRUCTIONS).toMatch(/When it is false, tell the user\s+that\s+reason right away; do not try the creation/);
+    expect(INSTRUCTIONS).not.toMatch(/for now you coordinate the cards that\s+already exist/);
+  });
+
   it("register vibehub_act_as and tell the agent to use it instead of waiting for the other person", () => {
     const server = createMcpServer("test") as unknown as {
       _registeredTools?: Record<string, { description?: string }>;
