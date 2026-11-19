@@ -9,6 +9,7 @@ export const DISK_ALERT_PERCENT = 80;
 const TMP_ALERT_TOP = 5;
 const TMP_SWEEP_INTERVAL_MS = 60 * 60_000;
 export const TMP_SWEEP_TIMEOUT_MS = 10 * 60_000;
+export const TMP_SWEEP_FAILURES_BEFORE_ALERT = 3;
 
 const SWEEP_DELIM = "VIBEHUB_TMP_SWEEP";
 const SWEPT_MARKER = "VIBEHUB_TMP_SWEPT";
@@ -131,13 +132,25 @@ export async function sweepRunnerTmp(): Promise<TmpSweepReport> {
 }
 
 export function startTmpSweep(intervalMs: number = TMP_SWEEP_INTERVAL_MS): () => void {
-  const pass = { running: false };
+  const pass = { running: false, consecutiveFailures: 0 };
   const tick = (): void => {
     if (pass.running) return;
     pass.running = true;
     void sweepRunnerTmp()
+      .then(() => {
+        pass.consecutiveFailures = 0;
+      })
       .catch((err: unknown) => {
-        logger.warn({ detail: (err as Error).message }, "the /tmp sweep did not run this pass");
+        pass.consecutiveFailures += 1;
+        const detail = (err as Error).message;
+        if (pass.consecutiveFailures < TMP_SWEEP_FAILURES_BEFORE_ALERT) {
+          logger.warn({ detail, failures: pass.consecutiveFailures }, "the /tmp sweep did not run this pass");
+          return;
+        }
+        logger.error(
+          { audit: true, action: "runner.tmp_sweep_failing", failures: pass.consecutiveFailures, detail },
+          "the /tmp sweep keeps failing — the runner's /tmp is neither cleaned nor measured",
+        );
       })
       .finally(() => {
         pass.running = false;

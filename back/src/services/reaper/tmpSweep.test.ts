@@ -6,8 +6,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { hostExecutor, CONTAINER_DEADLINE_MARGIN_MS } from "../../runtime/host.js";
 import { pathWithFakeDocker } from "../../testkit/fakeDocker.js";
+import { logger } from "../../utils/logger.js";
 import {
   buildTmpSweepScript, parseTmpSweep, startTmpSweep, tmpUsageAlert, TMP_ALERT_BYTES, DISK_ALERT_PERCENT, TMP_SWEEP_TIMEOUT_MS,
+  TMP_SWEEP_FAILURES_BEFORE_ALERT,
 } from "./tmpSweep.js";
 
 vi.mock("../../runtime/host.js", async (orig) => ({
@@ -214,6 +216,40 @@ describe("startTmpSweep", () => {
       pendingRuns[0]!({ stdout: "VIBEHUB_TMP_DISK\t10\n", stderr: "" });
       await vi.advanceTimersByTimeAsync(1000);
       expect(runScript).toHaveBeenCalledTimes(2);
+    } finally {
+      stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("falhas seguidas viram alerta de erro, a trava solta a cada falha e um sucesso zera a contagem", async () => {
+    vi.useFakeTimers();
+    const outcomes = [
+      ...Array.from({ length: TMP_SWEEP_FAILURES_BEFORE_ALERT }, () => "fail"),
+      "ok",
+      ...Array.from({ length: TMP_SWEEP_FAILURES_BEFORE_ALERT - 1 }, () => "fail"),
+    ];
+    const runScript = vi.fn(() =>
+      outcomes[runScript.mock.calls.length - 1] === "ok"
+        ? Promise.resolve({ stdout: "VIBEHUB_TMP_DISK\t10\n", stderr: "" })
+        : Promise.reject(new Error("runner down")),
+    );
+    vi.mocked(hostExecutor).mockReturnValue({ runScript } as unknown as ReturnType<typeof hostExecutor>);
+    const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => undefined);
+    vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+    onTestFinished(() => vi.restoreAllMocks());
+    const stop = startTmpSweep(1000);
+    try {
+      await vi.advanceTimersByTimeAsync((outcomes.length - 1) * 1000);
+
+      expect(runScript).toHaveBeenCalledTimes(outcomes.length);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy.mock.calls[0]![0]).toMatchObject({
+        audit: true,
+        action: "runner.tmp_sweep_failing",
+        failures: TMP_SWEEP_FAILURES_BEFORE_ALERT,
+        detail: "runner down",
+      });
     } finally {
       stop();
       vi.useRealTimers();
