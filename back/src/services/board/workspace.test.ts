@@ -52,7 +52,6 @@ const CLAUDE_C = `${guard()}claude -c || claude; exec bash`;
 const gitEnvFor = (cardId: string) => [
   "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=include.path", `GIT_CONFIG_VALUE_0=/root/.vibehub/git/${cardId}.gitconfig`,
 ];
-/** The card's own temp directory: every tool that honours TMPDIR writes where the purge erases. */
 const tmpEnvFor = (cardId: string) =>
   ["TMPDIR", "TMP", "TEMP", "CLAUDE_CODE_TMPDIR"].map((name) => `${name}=/tmp/vibehub/${cardId}`);
 /** The session command as it appears INSIDE a script: one shell-quoted argument (it contains quotes of its own). */
@@ -2545,6 +2544,8 @@ describe("buildCardPurgeScript (everything the card left on the runner's disk)",
     expect(purgeScript.indexOf("VIBEHUB_PURGE_FREED_KB")).toBeLessThan(purgeScript.indexOf(`rm -rf '${CWD}'`));
     expect(ws.parsePurgeFreedBytes("x\nVIBEHUB_PURGE_FREED_KB 2048\n")).toBe(2048 * 1024);
     expect(ws.parsePurgeFreedBytes("sem marcador")).toBeUndefined();
+    expect(purgeScript).toContain("FREED_KB=$(timeout 60 du ");
+    expect(purgeScript).toContain(`[ -n "$FREED_KB" ] && echo "VIBEHUB_PURGE_FREED_KB $FREED_KB" || true`);
   });
 
   it("erases the CONVERSATION: the transcripts of every account profile, their todos and the prompt history", () => {

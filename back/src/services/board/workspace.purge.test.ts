@@ -1,17 +1,26 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, onTestFinished, vi } from "vitest";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, mkdir, rm, writeFile, access } from "node:fs/promises";
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, existsSync } from "node:fs";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathWithFakeDocker } from "../../testkit/fakeDocker.js";
 import { buildCardPurgeScript, parsePurgeFreedBytes } from "./workspace.js";
 import { cardTmpDir } from "./cardTmp.js";
 
-const cleanups: Array<() => Promise<void>> = [];
-
 const UPLOADS_ROOT = "/work/.uploads";
+
+const tmuxInstalled = (() => {
+  try {
+    execFileSync("tmux", ["-V"]);
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
 const uploadsWritable = (() => {
   try {
     accessSync(UPLOADS_ROOT, constants.W_OK);
@@ -20,17 +29,6 @@ const uploadsWritable = (() => {
     return false;
   }
 })();
-
-afterEach(async () => {
-  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
-});
-
-async function exists(path: string): Promise<boolean> {
-  return access(path).then(
-    () => true,
-    () => false,
-  );
-}
 
 async function freePort(): Promise<number> {
   const server = createServer();
@@ -53,21 +51,6 @@ function isAlive(child: ChildProcess): boolean {
   return child.exitCode === null && child.signalCode === null;
 }
 
-async function waitFor(check: () => Promise<boolean>, timeoutMs = 5000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!(await check())) {
-    if (Date.now() > deadline) throw new Error("timed out waiting");
-    await new Promise((done) => setTimeout(done, 50));
-  }
-}
-
-async function fakeDockerPath(): Promise<string> {
-  const bin = await mkdtemp(join(tmpdir(), "vh-purge-bin-"));
-  cleanups.push(() => rm(bin, { recursive: true, force: true }));
-  await writeFile(join(bin, "docker"), '#!/bin/sh\nshift 3\nexec "$@"\n', { mode: 0o755 });
-  return `${bin}:${process.env.PATH}`;
-}
-
 async function liveCard(repoDir: string) {
   const cardId = randomUUID();
   const slug = `card-${cardId.slice(0, 8)}`;
@@ -76,17 +59,17 @@ async function liveCard(repoDir: string) {
   const tmp = cardTmpDir(cardId);
   await mkdir(join(tmp, "mongo-mem-123"), { recursive: true });
   await writeFile(join(tmp, "mongo-mem-123", "WiredTiger"), "x".repeat(4096));
-  cleanups.push(() => rm(tmp, { recursive: true, force: true }));
+  onTestFinished(() => rm(tmp, { recursive: true, force: true }));
   const port = await freePort();
   const server = spawn(
     process.execPath,
     ["-e", `require("net").createServer().listen(${port}, "127.0.0.1"); setInterval(() => {}, 1000)`],
     { env: { ...process.env, VIBEHUB_CARD_ID: cardId, TMPDIR: tmp }, detached: true, stdio: "ignore" },
   );
-  cleanups.push(async () => {
+  onTestFinished(() => {
     if (isAlive(server)) server.kill("SIGKILL");
   });
-  await waitFor(async () => !(await portIsFree(port)));
+  await vi.waitFor(async () => expect(await portIsFree(port)).toBe(false));
   const script = buildCardPurgeScript({
     containerName: "vibehub-runner",
     cardId,
@@ -101,7 +84,7 @@ async function liveCard(repoDir: string) {
 
 async function gitRepo(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "vh-purge-repo-"));
-  cleanups.push(() => rm(root, { recursive: true, force: true }));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
   const repoDir = join(root, "repo");
   execFileSync("git", ["init", "-q", "-b", "main", repoDir]);
   execFileSync("git", ["-C", repoDir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]);
@@ -118,7 +101,7 @@ function localBranches(repoDir: string): string {
 
 describe("apagar o card no runner (script de purge executado de verdade)", { timeout: 30_000 }, () => {
   it("leva worktree, branch local, /tmp do card e processos, e libera a porta — sem tocar no card vizinho", async () => {
-    const path = await fakeDockerPath();
+    const path = await pathWithFakeDocker();
     const repoDir = await gitRepo();
     const cardA = await liveCard(repoDir);
     const cardB = await liveCard(repoDir);
@@ -126,21 +109,40 @@ describe("apagar o card no runner (script de purge executado de verdade)", { tim
     const output = runPurge(cardA.script, path);
 
     expect(parsePurgeFreedBytes(output)).toBeGreaterThan(0);
-    await waitFor(async () => !isAlive(cardA.server));
+    await vi.waitFor(() => expect(isAlive(cardA.server)).toBe(false));
     expect(await portIsFree(cardA.port)).toBe(true);
-    expect(await exists(cardA.cwd)).toBe(false);
-    expect(await exists(cardA.tmp)).toBe(false);
+    expect(existsSync(cardA.cwd)).toBe(false);
+    expect(existsSync(cardA.tmp)).toBe(false);
     expect(localBranches(repoDir)).not.toContain(`card/${cardA.slug}`);
 
     expect(isAlive(cardB.server)).toBe(true);
     expect(await portIsFree(cardB.port)).toBe(false);
-    expect(await exists(cardB.cwd)).toBe(true);
-    expect(await exists(join(cardB.tmp, "mongo-mem-123", "WiredTiger"))).toBe(true);
+    expect(existsSync(cardB.cwd)).toBe(true);
+    expect(existsSync(join(cardB.tmp, "mongo-mem-123", "WiredTiger"))).toBe(true);
     expect(localBranches(repoDir)).toContain(`card/${cardB.slug}`);
   });
 
+  it.skipIf(!tmuxInstalled)("nunca mata o servidor tmux, mesmo nascido com o VIBEHUB_CARD_ID do card apagado", async () => {
+    const path = await pathWithFakeDocker();
+    const repoDir = await gitRepo();
+    const card = await liveCard(repoDir);
+    const socket = `vh-purge-${card.cardId.slice(0, 8)}`;
+    const otherCardId = randomUUID();
+    execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", "outro-card", "-e", `VIBEHUB_CARD_ID=${otherCardId}`, "sleep 600"], {
+      env: { ...process.env, VIBEHUB_CARD_ID: card.cardId },
+    });
+    onTestFinished(() => {
+      execFileSync("tmux", ["-L", socket, "kill-server"], { stdio: "ignore" });
+    });
+
+    runPurge(card.script, path);
+
+    expect(() => execFileSync("tmux", ["-L", socket, "has-session", "-t", "outro-card"])).not.toThrow();
+    await vi.waitFor(() => expect(isAlive(card.server)).toBe(false));
+  });
+
   it.skipIf(!uploadsWritable)("leva os uploads do card (fotos, áudios, prints) e deixa os do vizinho", async () => {
-    const path = await fakeDockerPath();
+    const path = await pathWithFakeDocker();
     const repoDir = await gitRepo();
     const cardA = await liveCard(repoDir);
     const cardB = await liveCard(repoDir);
@@ -148,17 +150,17 @@ describe("apagar o card no runner (script de purge executado de verdade)", { tim
       const dir = join(UPLOADS_ROOT, card.cardId);
       await mkdir(dir, { recursive: true });
       await writeFile(join(dir, "print.png"), "png");
-      cleanups.push(() => rm(dir, { recursive: true, force: true }));
+      onTestFinished(() => rm(dir, { recursive: true, force: true }));
     }
 
     runPurge(cardA.script, path);
 
-    expect(await exists(join(UPLOADS_ROOT, cardA.cardId))).toBe(false);
-    expect(await exists(join(UPLOADS_ROOT, cardB.cardId, "print.png"))).toBe(true);
+    expect(existsSync(join(UPLOADS_ROOT, cardA.cardId))).toBe(false);
+    expect(existsSync(join(UPLOADS_ROOT, cardB.cardId, "print.png"))).toBe(true);
   });
 
   it("é idempotente: rodar duas vezes, ou com a worktree já removida à mão, termina sem erro", async () => {
-    const path = await fakeDockerPath();
+    const path = await pathWithFakeDocker();
     const repoDir = await gitRepo();
     const card = await liveCard(repoDir);
     await rm(card.cwd, { recursive: true, force: true });
@@ -167,7 +169,7 @@ describe("apagar o card no runner (script de purge executado de verdade)", { tim
     const second = runPurge(card.script, path);
 
     expect(parsePurgeFreedBytes(second)).toBe(0);
-    expect(await exists(card.tmp)).toBe(false);
+    expect(existsSync(card.tmp)).toBe(false);
     expect(localBranches(repoDir)).not.toContain(`card/${card.slug}`);
     expect(execFileSync("git", ["-C", repoDir, "worktree", "list"], { encoding: "utf8" })).not.toContain(card.slug);
   });

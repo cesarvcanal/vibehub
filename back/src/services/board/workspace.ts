@@ -2155,13 +2155,14 @@ export function buildCardPurgeScript(o: CardPurgeScriptOpts): string {
   const legacyTaskOutputs = `/tmp/claude-[0-9]*/${shQuote(transcriptDirName)}`;
   const inner: string[] = [
     ...killSessionLines(o.sessions),
-    `CARD_PIDS=$(grep -lsxzF ${shQuote(`VIBEHUB_CARD_ID=${o.cardId}`)} /proc/[0-9]*/environ | cut -d/ -f3)`,
+    `CARD_PIDS=$(grep -lsxzF ${shQuote(`VIBEHUB_CARD_ID=${o.cardId}`)} /proc/[0-9]*/environ | cut -d/ -f3 | ` +
+      `while read -r P; do [ "$P" = 1 ] || [ "$P" = "$$" ] || [ "$(cat "/proc/$P/comm" 2>/dev/null)" = ${shQuote(TMUX_SERVER_COMM)} ] || echo "$P"; done)`,
     '[ -n "$CARD_PIDS" ] && kill -TERM $CARD_PIDS 2>/dev/null || true',
     'if [ -n "$CARD_PIDS" ]; then sleep 1; kill -KILL $CARD_PIDS 2>/dev/null || true; fi',
-    `FREED_KB=$(du -skxc ${[o.cwd, uploads, tmpDir, o.browserDataDir].map(shQuote).join(" ")} ${legacyTaskOutputs}` +
+    `FREED_KB=$(timeout ${PURGE_MEASURE_TIMEOUT_S} du -skxc ${[o.cwd, uploads, tmpDir, o.browserDataDir].map(shQuote).join(" ")} ${legacyTaskOutputs}` +
       ` ${DEFAULT_CLAUDE_DIR}/projects/${shQuote(transcriptDirName)} ${CLAUDE_PROFILES_DIR}/*/projects/${shQuote(transcriptDirName)}` +
       " 2>/dev/null | tail -n 1 | cut -f1)",
-    `echo "${PURGE_FREED_MARKER} \${FREED_KB:-0}"`,
+    `[ -n "$FREED_KB" ] && echo "${PURGE_FREED_MARKER} $FREED_KB" || true`,
   ];
   if (o.repoDir) {
     assertSafeRemotePath(o.repoDir);
@@ -2227,6 +2228,8 @@ export function buildCardPurgeScript(o: CardPurgeScriptOpts): string {
 }
 
 const PURGE_FREED_MARKER = "VIBEHUB_PURGE_FREED_KB";
+const TMUX_SERVER_COMM = "tmux: server";
+const PURGE_MEASURE_TIMEOUT_S = 60;
 
 export function parsePurgeFreedBytes(stdout: string): number | undefined {
   const markerLine = stdout.split("\n").find((line) => line.startsWith(`${PURGE_FREED_MARKER} `));
