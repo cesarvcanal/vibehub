@@ -186,6 +186,7 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 - **Mudança de versão exige conferir o comportamento real**, não a memória.
 - **Fato, não hipótese.** Diagnóstico de integração afirma só o que log, docs, binário ou teste mostram. Hipótese é dita como hipótese, testada antes de virar correção, e nunca vira regra de código nem texto de tela.
 - **Comportamento que a docs não define** é registrado como evidência, com versão, data e fonte, e tratado como incerto.
+- **Exercitar antes do merge.** Integração nova ou alterada roda de verdade, na versão instalada e pelo caminho que o usuário usa (o card, o runner, a rota), antes do merge: o teste com fake prova a lógica, não a integração. O que não deu para exercitar é pendência que bloqueia (§14, "A pendência deliberada é julgada"), com o passo que a fecha.
 
 | Em vez de | Faça |
 |-----------|------|
@@ -207,7 +208,7 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 
 ### Runner e host
 
-- Cada `docker exec`/SSH é caro e disputa o runner com os outros cards. Agrupar comandos num script só quando forem do mesmo passo; nunca abrir uma execução remota por item de lista.
+- Cada `docker exec`/SSH é caro e disputa o runner com os outros cards. Agrupar comandos num script só quando forem do mesmo passo; nunca abrir uma execução remota por item de lista. `docker exec` e round trip ao host se contam separados: um `runScript` com três `docker exec` é uma viagem e três processos no runner.
 - Processo de longa duração (driver do SDK, terminal, preview) tem dono e fim definidos: quem abre fecha, e o que fica órfão é bug.
 - Saída grande (log, transcript, diff) é lida em fluxo ou recortada na origem, não carregada inteira na memória do backend.
 
@@ -303,7 +304,7 @@ Se um comando de teste for passar de ~2 min, troque por um recorte menor. Não a
 5. **Auditar o trecho tocado:** nomes, `let`, comentário fora das exceções, código morto, duplicação, fallback indevido, leituras e execuções inúteis.
 6. **Não espalhar alterações:** problema vizinho que exige refatoração arriscada é comunicado, não corrigido de carona.
 7. **Validar:** testes do recorte, typecheck e build quando aplicável; revisar o diff (comandos abaixo).
-8. **Revisão independente antes de entregar:** o diff passa, nesta ordem, por **simplificação** (aplicada) e por **code review** (correção, performance, aderência às regras e o que foi inventado), ambas feitas por um revisor SEM o contexto de quem escreveu, que recebe o diff, as mensagens dos commits e este arquivo; o code review segue "Como revisar um PR" (§14). Achado confirmado segue a severidade dele (§14, "As severidades"): o que bloqueia é corrigido ou vira pendência aceita com o motivo, o que deveria corrigir é aplicado, a decisão vira pergunta ao usuário e o menor fica registrado no PR. O descartado tem o motivo dito. O que a simplificação mudar volta pelo passo 7 antes do code review.
+8. **Revisão independente antes de entregar:** o diff passa, nesta ordem, por **simplificação** (aplicada) e por **code review** (correção, performance, aderência às regras e o que foi inventado), ambas feitas por um revisor SEM o contexto de quem escreveu, que recebe o diff, as mensagens dos commits e este arquivo; o code review segue "Como revisar um PR" (§14). Achado confirmado segue a severidade dele (§14, "As severidades"): o que bloqueia é corrigido ou vira pendência deliberada, que só o aval de quem autoriza o merge aceita (§14, "A pendência deliberada é julgada"), o que deveria corrigir é aplicado, a decisão vira pergunta ao usuário e o menor fica registrado no PR. O descartado tem o motivo dito. O que a simplificação mudar volta pelo passo 7 antes do code review.
 9. **Descrever o resultado:** o que mudou, o que foi verificado e as limitações reais. Quando a entrega é um PR, ele segue a §14.
 
 ### Autonomia corretiva e preservação do escopo
@@ -393,13 +394,15 @@ Em pt-BR, em markdown, com estas seções (`##`) nesta ordem. A profundidade aco
 5. **Detalhamento técnico**: fluxos, componentes, services, eventos de websocket, ferramentas MCP, scripts do runner e regras envolvidas.
 6. **Comportamento esperado**: como o sistema se comporta depois da mudança, com os cenários e exceções.
 7. **Impactos**: o que muda, quando tudo dá certo, para outras áreas, usuários, dados persistidos, contratos e **performance** (o que passa a rodar a mais ou a menos), e o que o deploy exige (migração, configuração, reinício de runner).
-8. **Testes e validações**: separar o que foi **executado** (com o comando e o resultado) do que é só **recomendado**, e dizer o que não deu para testar. Em mudança de comportamento, a prova vem como **antes e depois**: o teste que falhava sem a mudança e passa com ela (o nome e a falha observada) e, quando a mudança é visual, o print da tela antes e depois. Em mudança de performance, a medição (§8). Documentação e configuração não têm teste vermelho: dizem isso. O CI também tem de estar verde, sem warning novo.
+8. **Testes e validações**: separar o que foi **executado** (com o comando e o resultado) do que é só **recomendado**, e dizer o que não deu para testar. Em mudança de comportamento, a prova vem como **antes e depois**: o teste que falhava sem a mudança e passa com ela (o nome e a falha observada) e, quando a mudança é visual, o print da tela antes e depois; a tela que ninguém viu rodando é pendência que bloqueia, como a integração não exercitada (§6). Em mudança de performance, a medição (§8). Documentação e configuração não têm teste vermelho: dizem isso. O CI também tem de estar verde, sem warning novo.
 9. **Pontos de atenção**: riscos do merge, limitações conhecidas, pendências deliberadas com o motivo e onde o revisor deve olhar com cuidado. Comece por duas respostas curtas:
    - **o merge tem volta?** Porta de mão dupla quando reverter o commit desfaz tudo; porta de mão única quando há dado migrado ou apagado, contrato publicado ou outro efeito que o revert não desfaz;
    - **até onde vai o estrago se der errado?** Quem e o que pode quebrar: telas, cards em andamento, runner, dados das instalações, consumidores da API.
-10. **Conformidade com o AGENTS.md**: para **cada seção deste arquivo cujas regras se aplicam às linhas alteradas**, diga a regra, como foi cumprida e, quando der, o `arquivo:linha` que mostra isso. O que é ausência (sem comentário, sem `let`) se afirma. Regra não seguida: qual, onde e por quê, como pendência deliberada. Frase genérica ("segue o AGENTS.md") não vale.
+10. **Conformidade com o AGENTS.md**: para **cada seção deste arquivo cujas regras se aplicam às linhas alteradas**, diga a regra, como foi cumprida e, quando der, o `arquivo:linha` que mostra isso. O que é ausência (sem comentário, sem `let`, nenhum `docker exec` a mais) se afirma com o comando que a prova e o resultado dele: o `grep` no diff para o que está no texto; para o que acontece ao rodar (`docker exec`, leitura, render), a contagem ou a medição antes e depois (§8), porque a chamada nova a uma função que já existe não aparece no `grep`. Regra não seguida: qual, onde e por quê, como pendência deliberada. Frase genérica ("segue o AGENTS.md") não vale.
 
 Nunca invente causa, teste ou justificativa. O que não está confirmado é dito como não confirmado.
+
+**O PR acompanha o código.** A cada push (correção, commit novo, merge da base), releia o PR publicado inteiro, a descrição e os comentários no diff: número, `arquivo:linha` ou afirmação que o push tornou falsa é corrigido no mesmo push, na descrição editada e, no comentário do diff, com resposta na thread dele.
 
 ### Comentários no diff
 
@@ -477,7 +480,8 @@ com login saudável a tarefa em segundo plano continua protegida.
 - **Merge commit também leva emoji:** `🔀 merge: ...`, sem área. No `gh pr merge`, passe o título com `--subject`, porque o padrão da ferramenta sai sem emoji.
 - **Se a mensagem e o PR divergem, vale o PR.**
 - **Mensagem já enviada não se reescreve** (operação de risco, §12): o que faltou vai para o PR.
-- `💡` (comentário no código) só para as exceções da §3; `🦖` (compatibilidade com versão anterior) só com a decisão explícita de compatibilidade da §6.
+- `💡` (comentário no código) só para as exceções da §3 e para corrigir o comentário antigo que a mudança tornou falso (§3, "Comentários"); `🦖` (compatibilidade com versão anterior) só com a decisão explícita de compatibilidade da §6.
+- `✏️` só corrige erro de digitação. Trocar uma palavra que muda o sentido não é digitação: num identificador ou nome de teste, sem mudar comportamento, é `♻️`; num comentário que ficou falso, é `💡`.
 
 | Emoji | Código | Quando usar |
 |---|---|---|
@@ -559,10 +563,10 @@ com login saudável a tarefa em segundo plano continua protegida.
 
 ### Regras de entrega
 
-- **PR pequeno e específico:** uma unidade lógica por PR. Se a mudança cria ou ajusta uma regra deste arquivo que o próprio código do PR segue, a regra vai no mesmo PR.
+- **PR pequeno e específico:** uma unidade lógica por PR. Se a mudança cria ou ajusta uma regra deste arquivo que o próprio código do PR segue, a regra vai no mesmo PR. Regra de processo que o PR só viveu (como revisar, entregar, quantas rodadas fazer) vai num PR próprio.
 - **Mudança neste arquivo:** a regra é escrita para qualquer agente, em qualquer área. Tem de ser clara para quem nunca viu o repositório, dizer o que fazer e por quê, e funcionar fora do caso que a motivou. Fato que muda (ferramenta instalada, nome de branch) entra como condição ("se…"), não como verdade fixa.
 - **Commits atômicos:** um commit por etapa ou tema, nunca um único commit com tudo no fim.
-- **Merge só com autorização explícita** (§12). Autorizado, o merge é **merge commit, nunca squash**, com o SHA verificado e o título no padrão Gitmoji: `gh pr merge <N> --merge --match-head-commit <sha> --subject "🔀 merge: ..."`. Depois do merge, confira o pipeline pós-merge (CI e publicação da imagem).
+- **Merge só com autorização explícita** (§12). Pendência que bloqueia, aberta, segura o merge mesmo com a ordem de merge já dada, até o aval daquela pendência ("A pendência deliberada é julgada", abaixo). Autorizado, o merge é **merge commit, nunca squash**, com o SHA verificado e o título no padrão Gitmoji: `gh pr merge <N> --merge --match-head-commit <sha> --subject "🔀 merge: ..."`. Depois do merge, confira o pipeline pós-merge (CI e publicação da imagem).
 - **Identidade git de quem fez o trabalho:** não commitar com conta de terceiros nem da organização.
 - **Testes e CI verdes antes do merge**, sem warning novo no CI.
 - **Revisão independente antes do merge:** o diff passa por um revisor (pessoa ou agente) sem o contexto de quem o escreveu, que recebe só o diff, o PR e este arquivo e segue "Como revisar um PR", abaixo.
@@ -600,8 +604,8 @@ Quem revisa (pessoa ou agente) é o **portão do merge**, não um leitor de cort
   - se o resultado depende do código, e não do relógio, da carga da máquina ou da ordem de execução.
 
   Teste que passa sem afirmar nada, ou cujo nome promete mais do que ele verifica, é achado.
-- **A pendência deliberada é julgada.** Ela está registrada no PR, ou na mensagem do commit quando o PR ainda não existe, e só é aceita quando o motivo é verdadeiro e corrigir agora traz mais risco do que esperar. Pendência com motivo falso, ou que esconde uma violação simples de corrigir, é achado.
-- **Defeito e violação de regra bloqueiam o merge.** Defeito real no que o PR escreveu (comportamento errado, falha, brecha, perda de dado), linha do diff que viola uma regra escrita deste arquivo e toda regressão em relação à `main`, mesmo pequena, bloqueiam até serem corrigidos ou virarem pendência aceita, com o motivo. Não é sugestão. O que não viola regra nenhuma não bloqueia: é **deveria corrigir** ou **menor**, pelo critério abaixo.
+- **A pendência deliberada é julgada.** Ela fica nos Pontos de atenção do PR (item 9), mesmo quando outra seção também a cita, ou na mensagem do commit quando o PR ainda não existe. Ela se sustenta quando o motivo é verdadeiro e fazer agora é impossível antes do merge (a integração que só roda depois do deploy) ou traz mais risco do que esperar. Pendência com motivo falso, ou que esconde uma violação simples de corrigir, é achado. O autor a declara; o revisor julga se ela se sustenta e diz isso na revisão; quem a aceita é quem autoriza o merge (o usuário, quando o trabalho é de um agente), explicitamente e para aquela pendência, depois de ler esse julgamento. O PR registra o aval (quem e quando); até lá ela segue bloqueando.
+- **Defeito e violação de regra bloqueiam o merge.** Defeito real no que o PR escreveu (comportamento errado, falha, brecha, perda de dado), linha do diff que viola uma regra escrita deste arquivo e toda regressão em relação à `main`, mesmo pequena, bloqueiam até serem corrigidos ou virarem pendência aceita (item da pendência deliberada, acima). Não é sugestão. O que não viola regra nenhuma não bloqueia: é **deveria corrigir** ou **menor**, pelo critério abaixo.
 - **As severidades, e o que acontece com cada uma:**
   - **bloqueia**: o item anterior, sempre com prova. É corrigido antes do merge, com o teste que prova o defeito quando ele é de comportamento, ou vira pendência aceita, com o motivo (item da pendência deliberada, acima). Código mais complicado que o necessário (§1.1, §4, §13) e nome que batiza com outro termo um conceito que o repo já nomeia (§1.7, §2) violam regra escrita e caem aqui.
   - **deveria corrigir**: melhoria no código que o próprio PR escreveu, que preserva o comportamento, que **nenhuma regra escrita exige** (se uma regra cobre o caso, é **bloqueia**) e que não depende de gosto: quem lê concordaria sem precisar escolher (uma mensagem de erro que já basta para o diagnóstico, mas pode citar o id que falta; a ordem dos casos de um teste que acompanha melhor o fluxo). O autor aplica sem perguntar e não segura o merge.
