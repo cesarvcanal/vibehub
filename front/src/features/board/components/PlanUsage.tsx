@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type QueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Ban } from "lucide-react";
 import { boardApi, cardUsageKey, profilePathFor } from "@/features/board/api";
 import type { CardUsageResponse } from "@/api/types";
@@ -33,6 +33,11 @@ import { useT } from "@/i18n";
 /** A card's live plan warnings, shared between the chat (which receives them) and the top. */
 export const cardRateLimitsKey = (cardId: string) => ["board", "card", cardId, "rateLimits"] as const;
 
+export function resetCardPlanUsage(queryClient: QueryClient, cardId: string): void {
+  queryClient.setQueryData(cardRateLimitsKey(cardId), {});
+  void queryClient.invalidateQueries({ queryKey: cardUsageKey(cardId) });
+}
+
 /**
  * The plan reading of this card's account (60s, the same cache as the back — the usage endpoint rate-limits per
  * caller) plus the live warnings the chat published. A single query per card; the top and the chat
@@ -47,7 +52,7 @@ export function useCardPlanUsage(cardId: string, enabled: boolean) {
     staleTime: 55_000,
     retry: false,
   });
-  // No real queryFn: the chat is the one that writes (`setQueryData`), here it is only read.
+  // No real queryFn: the chat writes it (`setQueryData`) and an account switch empties it; here it is only read.
   const live = useQuery<Record<string, RateLimitInfo>>({
     queryKey: cardRateLimitsKey(cardId),
     queryFn: () => ({}),

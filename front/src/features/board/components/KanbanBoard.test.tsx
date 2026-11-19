@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEvent, fireEvent, screen, waitFor } from "@testing-library/react";
+import { QueryObserver } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { KanbanBoard, insertionLine } from "@/features/board/components/KanbanBoard";
-import { renderApp } from "@/test/render";
+import { renderApp, testQueryClient } from "@/test/render";
 import { del, get, patch } from "@/lib/api";
 import { toast } from "sonner";
-import type { BoardCard, BoardProject } from "@/features/board/api";
+import { cardUsageKey, type BoardCard, type BoardProject } from "@/features/board/api";
+import { cardRateLimitsKey } from "@/features/board/components/PlanUsage";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -441,5 +443,36 @@ describe("KanbanBoard delete (what the screen promises)", () => {
     await waitFor(() => expect(toast.warning).toHaveBeenCalled());
     expect(String(vi.mocked(toast.warning).mock.calls[0]?.[0])).toContain("runner, browser");
     expect(toast.success).not.toHaveBeenCalled();
+  });
+});
+
+describe("KanbanBoard — trocar a conta pelo menu do card", () => {
+  it("esquece o uso do plano da conta anterior: o aviso ao vivo zera e a leitura volta a ser pedida", async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/auth/me") return Promise.resolve({ user: { id: "u1", username: "cesar", role: "owner" } });
+      if (/\/cards$/.test(url)) return Promise.resolve({ cards });
+      if (url === "/accounts") return Promise.resolve({ accounts: [{ slug: "personal", name: "Personal", createdAt: 1 }], defaultLabel: "Main" });
+      return Promise.resolve({});
+    });
+    const client = testQueryClient();
+    const observed = [cardRateLimitsKey("c1"), cardUsageKey("c1")].map((queryKey) =>
+      new QueryObserver(client, { queryKey, enabled: false }).subscribe(() => undefined),
+    );
+    client.setQueryData(cardRateLimitsKey("c1"), {
+      seven_day: { status: "allowed", window: "seven_day", utilization: 57, resetsAt: Date.now() + 3 * 86_400_000 },
+    });
+    client.setQueryData(cardUsageKey("c1"), { slug: "default", usage: { available: true, sevenDay: { utilization: 57, resetsAt: null }, fetchedAt: 1 } });
+    const user = userEvent.setup();
+    renderApp(<KanbanBoard project={project} onOpenCard={vi.fn()} onNewCard={vi.fn()} onNewBacklogCard={vi.fn()} />, { queryClient: client });
+
+    await user.click(await screen.findByRole("button", { name: "Actions for first" }));
+    await user.click(await screen.findByText("Claude account…"));
+    await user.selectOptions(await screen.findByLabelText("Account"), "personal");
+    await user.click(screen.getByRole("button", { name: "Switch account" }));
+
+    await waitFor(() => expect(mockPatch).toHaveBeenCalledWith("/cards/c1", { accountSlug: "personal" }));
+    await waitFor(() => expect(client.getQueryData(cardRateLimitsKey("c1"))).toEqual({}));
+    expect(client.getQueryState(cardUsageKey("c1"))?.isInvalidated).toBe(true);
+    observed.forEach((unsubscribe) => unsubscribe());
   });
 });
