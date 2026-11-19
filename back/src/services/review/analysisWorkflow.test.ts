@@ -112,6 +112,19 @@ describe("frota da análise de PR", () => {
     expect(logs.join("\n")).toContain("security");
   });
 
+  it("cada verificação leva no rótulo a dimensão e o título do achado que tenta derrubar: o painel liga a resposta ao achado", async () => {
+    const longTitle = "t".repeat(200);
+    const { calls } = await runFleet(async (_prompt, opts) => {
+      if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);
+      if (opts.phase === "Revisão") return { findings: [scenarioFinding("token vaza no log"), scenarioFinding(longTitle)] };
+      if (opts.phase === "Verificação") return { confirmed: true, evidence: "e" };
+      return { findings: [] };
+    });
+    const labels = calls.filter((call) => call.opts.phase === "Verificação").map((call) => call.opts.label);
+    expect(labels[0]).toBe("verificação: correctness · token vaza no log");
+    expect(labels[1]!.length).toBeLessThanOrEqual(120);
+  });
+
   it("achado que a verificação derruba sai da lista e entra na contagem", async () => {
     const { fleetResult, calls } = await runFleet(async (prompt, opts) => {
       if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);

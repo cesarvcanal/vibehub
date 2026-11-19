@@ -22,6 +22,9 @@ import type { SubmittedFinding } from "./model.js";
 let dir = "";
 /** The order of what happened at the boundary: `actor:<user>:<card>`, `resume:<card>`, `send:<card>`. */
 const calls: string[] = [];
+const plant = vi.fn(async () => {
+  calls.push("plant");
+});
 let sendFailure: Error | null = null;
 /** Runs once before the next send (the race "the review moved while the text was going out"). */
 let sendHook: (() => Promise<void>) | null = null;
@@ -102,6 +105,10 @@ async function load() {
     afterPrMerged: afterMerged,
     gateAtCommit: gateSpy,
     setPrPeople: prPeople,
+  }));
+  vi.doMock("./analysisWorkflow.js", async () => ({
+    ...(await vi.importActual<typeof import("./analysisWorkflow.js")>("./analysisWorkflow.js")),
+    plantPrAnalysisWorkflow: plant,
   }));
   vi.doMock("./merge.js", async () => ({
     ...(await vi.importActual<typeof import("./merge.js")>("./merge.js")),
@@ -225,10 +232,11 @@ describe("iniciar a revisão", () => {
     // round 1 goes to the reviewer's card, with the reviewer as actor before the text
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]![0]).toBe(reviewer!.id);
-    expect(calls).toEqual([`actor:u-revisor:${reviewer!.id}`, `send:${reviewer!.id}`]);
+    // the fleet's script is planted in the runner before the text that runs it
+    expect(calls).toEqual(["plant", `actor:u-revisor:${reviewer!.id}`, `send:${reviewer!.id}`]);
     const text = lastText();
     for (const piece of [
-      "/code-review high", "PR #7", PR.url, review.id, "rodada 1 de 3", `reset --hard origin/${PR.branch}`,
+      "/root/.vibehub-workflows/pr-analysis.js", "PR #7", PR.url, review.id, "rodada 1 de 3", `reset --hard origin/${PR.branch}`,
       "git rev-parse HEAD", "--request-changes", "--comment", "vibehub_review_submit", `card: "${reviewer!.id}"`,
       "Não mergeie o PR por conta própria", "teste que falha", "question",
     ]) expect(text).toContain(piece);
@@ -1612,7 +1620,7 @@ describe("tentar de novo e cancelar", () => {
     expect(after).toMatchObject({ phase: "reviewing", round: 1, nudges: 0 });
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
-    expect(lastText()).toContain("/code-review high");
+    expect(lastText()).toContain("/root/.vibehub-workflows/pr-analysis.js");
 
     // the reviewer's round landed and only a question was left: it is the human's turn, who decides on the panel
     const waiting = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [QUESTION], headSha: SHA1, summary: "uma dúvida" });
@@ -1635,7 +1643,7 @@ describe("tentar de novo e cancelar", () => {
     const after = await o.orch.retryReview(review.id, "u-revisor");
     expect(after).toMatchObject({ phase: "reviewing", round: 1 });
     expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
-    expect(lastText()).toContain("/code-review high");
+    expect(lastText()).toContain("/root/.vibehub-workflows/pr-analysis.js");
 
     await o.store.mutateReview(review.id, (r) => {
       r.phase = "impasse";
@@ -2224,7 +2232,7 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
       expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
       expect(lastText()).toMatch(/sem chamar/);
       expect(lastText()).toContain("vibehub_review_submit");
-      expect(lastText()).toContain("/code-review high");
+      expect(lastText()).toContain("/root/.vibehub-workflows/pr-analysis.js");
       expect((await o.store.getReview(review.id))?.nudges).toBe(1);
 
       // again: impasse "IA não respondeu", with no more sends

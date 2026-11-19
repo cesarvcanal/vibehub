@@ -23,6 +23,7 @@ import {
   type SubmittedFinding,
 } from "./model.js";
 import { findActiveAnalysisCard } from "./analysisReport.js";
+import { plantPrAnalysisWorkflow } from "./analysisWorkflow.js";
 import {
   activeReviewForPr, getReview, insertReview, listReviewsForCards, listReviewsWaitingUsageLimit, mutateReview, reviewByReviewerCard,
 } from "./store.js";
@@ -270,6 +271,7 @@ async function relayReview(
   const samePlace = (x: Review) => x.phase === r.phase && x.round === r.round;
   try {
     if (side === "author" && opts.unpause) await unpauseAuthor(r);
+    if (side === "reviewer" && r.round === 1 && r.phase === "reviewing") await plantPrAnalysisWorkflow();
     await sendToTerminal(cardId, text, {
       by: `review:${r.id}`,
       origin: REVIEW_ORIGIN,
