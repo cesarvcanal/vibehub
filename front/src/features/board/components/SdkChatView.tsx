@@ -2,7 +2,6 @@ import * as React from "react";
 import { flushSync } from "react-dom";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
-import { useAnalysisRereadOnReport } from "@/features/board/lib/useCardAnalysis";
 import {
   Maximize2,
   FileDiff,
@@ -40,6 +39,7 @@ import { PlanUsageAlert, cardRateLimitsKey, useCardPlanUsage } from "@/features/
 import { AccountLoginDialog, type LoginAccount } from "@/features/board/components/AccountLoginDialog";
 import { ContextMeter, ContextNotice } from "@/features/board/components/ContextMeter";
 import { planAlert, planWindows } from "@/features/board/lib/planUsage";
+import { useAnalysisRereadOnReport } from "@/features/board/lib/useCardAnalysis";
 import { LinkifiedText, Markdown, SenderTag } from "@/features/board/components/ChatView";
 import { SdkQueueTray } from "@/features/board/components/SdkQueueTray";
 import { originRole, personOrigin, type MessageOrigin } from "@/features/board/lib/chat";

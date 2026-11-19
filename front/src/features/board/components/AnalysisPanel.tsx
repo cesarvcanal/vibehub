@@ -8,7 +8,7 @@ import {
 import { PanelFrame } from "@/features/board/components/ReviewPanelView";
 import { useCardAnalysis } from "@/features/board/lib/useCardAnalysis";
 import { apiErrorMessage } from "@/lib/apiError";
-import { useT } from "@/i18n";
+import { useT, type Translate } from "@/i18n";
 
 const SEVERITY_ORDER: readonly AnalysisSeverity[] = ["blocking", "improvement", "question", "suggestion"];
 
@@ -37,7 +37,7 @@ export function AnalysisPanel({ cardId, onClose }: { cardId: string; onClose: ()
         ) : null}
       </div>
       {read?.analysis ? <VerdictBadge read={read} /> : null}
-      <Button type="button" size="icon" variant="ghost" className="h-7 w-7" aria-label={t("analysis.panel.close")} onClick={() => onClose()}>
+      <Button type="button" size="icon" variant="ghost" className="h-7 w-7" aria-label={t("analysis.panel.close")} onClick={onClose}>
         <X className="h-4 w-4" />
       </Button>
     </div>
@@ -122,7 +122,7 @@ function AnalysisBody({ read }: { read: AnalysisReadModel }) {
   );
 }
 
-function findingStatusText(finding: AnalysisFinding, t: ReturnType<typeof useT>): string {
+function findingStatusText(finding: AnalysisFinding, t: Translate): string {
   if (finding.status === "fixed") return finding.commit ? t("analysis.finding.fixedIn", { commit: finding.commit }) : t("analysis.finding.fixed");
   return finding.severity === "question" ? t("analysis.finding.awaitingDecision") : t("analysis.finding.open");
 }

@@ -12,7 +12,7 @@ export interface AnalysisPill {
   tone: BadgeTone;
 }
 
-export function analysisPill(read: CardAnalysisResponse | null | undefined, opts: { cardWorking: boolean }): AnalysisPill {
+export function analysisPill(read: CardAnalysisResponse | undefined, opts: { cardWorking: boolean }): AnalysisPill {
   if (!read?.analysis) {
     return opts.cardWorking ? { key: "analysis.pill.running", tone: "info" } : { key: "analysis.pill.noReport", tone: "warn" };
   }
@@ -30,7 +30,7 @@ export function analysisPill(read: CardAnalysisResponse | null | undefined, opts
   return { key: "analysis.pill.notAptUnverified", vars: { n: dimensionsNotFullyChecked.length }, tone: "critical" };
 }
 
-export function finishedAnalysisReports(rows: SdkRow[]): number {
+export function countFinishedAnalysisReports(rows: SdkRow[]): number {
   const finishedReportCalls = rows.filter(
     (row) => row.kind === "tool" && row.name.endsWith(ANALYSIS_REPORT_TOOL) && row.result !== undefined && !row.result.isError,
   );

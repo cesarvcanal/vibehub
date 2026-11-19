@@ -1,12 +1,12 @@
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { boardApi } from "@/features/board/api";
-import { cardAnalysisKey, finishedAnalysisReports } from "@/features/board/lib/analysis";
+import { cardAnalysisKey, countFinishedAnalysisReports } from "@/features/board/lib/analysis";
 import type { SdkRow } from "@/features/board/lib/sdkChat";
 
 export function useAnalysisRereadOnReport(cardId: string, chatRows: SdkRow[]): void {
   const queryClient = useQueryClient();
-  const reportsInChat = React.useMemo(() => finishedAnalysisReports(chatRows), [chatRows]);
+  const reportsInChat = React.useMemo(() => countFinishedAnalysisReports(chatRows), [chatRows]);
   const reportsSeen = React.useRef(reportsInChat);
   React.useEffect(() => {
     const newReportArrived = reportsInChat > reportsSeen.current;
