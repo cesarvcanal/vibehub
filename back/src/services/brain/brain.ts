@@ -4,6 +4,7 @@ import { JsonStore } from "../../store/jsonStore.js";
 import { allProfiles, type McpProfile } from "../mcp/mcp.js";
 import { DEFAULT_CLAUDE_DIR } from "../accounts/profiles.js";
 import { logger } from "../../utils/logger.js";
+import type { Card } from "../board/registry.js";
 
 /**
  * THE BRAIN — the global instructions every card's terminal starts with. One markdown document,
@@ -218,14 +219,29 @@ export function lockedCardNotice(base: string): string {
   ].join("\n");
 }
 
+export function baseBranchNotice(base: string): string {
+  return [
+    "## Card base branch (vibehub)",
+    "",
+    `This card was cut from \`${base}\`, and its pull request goes to \`${base}\` — not to the project's base branch.`,
+    "",
+    `- \`vibehub_deliver\` without \`branch\` already targets \`${base}\`. Do not rebuild the work on another branch.`,
+    `- A \`branch\` other than \`${base}\` stops with \`base_divergente\` and says how many commits and files would go along;`,
+    "  deliver there only when the user explicitly confirms it, with `confirmTarget: true`.",
+  ].join("\n");
+}
+
 /**
- * The project-brain text a given CARD receives: the lock stated first when the card is locked, the
- * project's own text untouched below it. A card that is not locked gets exactly what it always got.
- * PURE.
+ * The project-brain text a given CARD receives: the lock stated first when the card is locked (it
+ * already names the base), otherwise the base branch the card was cut from — the project's own text
+ * untouched below it. An analysis or reviewer card gets neither: its base is the PR's branch, not
+ * where anything is delivered. PURE.
  */
-export function brainTextForCard(text: string, card: { locked?: boolean; base: string }): string {
-  if (card.locked !== true) return text;
-  const notice = lockedCardNotice(card.base);
+export function brainTextForCard(
+  text: string, card: Pick<Card, "base" | "locked" | "pushBranch" | "reviewOf">,
+): string {
+  if (card.pushBranch !== undefined || card.reviewOf !== undefined) return text;
+  const notice = card.locked === true ? lockedCardNotice(card.base) : baseBranchNotice(card.base);
   return text.trim() ? `${notice}\n\n${text}` : notice;
 }
 

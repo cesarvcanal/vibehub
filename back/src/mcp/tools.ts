@@ -176,7 +176,8 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     {
       description:
         "List the terminals on the vibehub board. Each card is a real Claude Code terminal running " +
-        "in a container, with its own session and context. Returns id, title, project, board column, " +
+        "in a container, with its own session and context. Returns id, title, project, board column, the base " +
+        "branch the card was cut from (where its PR goes), " +
         "status (working/waiting), situation (working/waiting/paused/done/no session) and whether the " +
         "session is live. Use it to discover the terminals you can coordinate. `project` (id or part " +
         "of the name) filters — coordinating within the same project is the sane default.",

@@ -331,6 +331,14 @@ describe("reportState (declared state)", () => {
     expect(row).toMatchObject({ declaredState: "needs_me", declaredSummary: "which currency?", humanActive: false });
   });
 
+  it("a listagem diz de qual base o card foi cortado, que é o alvo padrão do vibehub_deliver", async () => {
+    const { maestro, registry } = await load();
+    const p = await registry.createProject({ name: "billing", baseBranch: "dev" });
+    await registry.createCard({ projectId: p.id, title: "hotfix" }, { base: "prod" });
+    const [row] = await maestro.listTerminals();
+    expect(row).toMatchObject({ base: "prod" });
+  });
+
   it("a card that declares it needs the user lands in the card-event inbox", async () => {
     const { maestro, registry } = await load();
     const users = await import("../../auth/users.js");

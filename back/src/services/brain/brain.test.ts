@@ -260,12 +260,10 @@ describe("projectBrainWriteLines", () => {
 });
 
 describe("brainTextForCard (the locked-card notice)", () => {
-  it("a card that is NOT locked gets the project's text byte-for-byte", async () => {
+  it("um card preso recebe o aviso do lock, e não o da origem: o do lock já nomeia a base", async () => {
     const { mod } = await fresh();
-    const text = "# Projeto\n\nregras do erp-aux";
-    expect(mod.brainTextForCard(text, { base: "dev" })).toBe(text);
-    expect(mod.brainTextForCard(text, { base: "dev", locked: false })).toBe(text);
-    expect(mod.brainTextForCard("", { base: "dev" })).toBe("");
+    const out = mod.brainTextForCard("regras", { base: "prod", locked: true });
+    expect(out).toBe(`${mod.lockedCardNotice("prod")}\n\nregras`);
   });
 
   it("a LOCKED card gets the rule FIRST, naming its base, with the project's text below it", async () => {
@@ -288,6 +286,36 @@ describe("brainTextForCard (the locked-card notice)", () => {
     const { mod } = await fresh();
     const text = mod.brainTextForCard("", { base: "dev", locked: true });
     expect(() => mod.projectBrainWriteLines("/work/acme--erp-worktrees/intake", text)).not.toThrow();
+  });
+});
+
+describe("brainTextForCard (o aviso da branch de origem)", () => {
+  it("card comum recebe primeiro de onde nasceu e para onde vai o PR, com o texto do projeto embaixo", async () => {
+    const { mod } = await fresh();
+    const out = mod.brainTextForCard("regras do erp-aux", { base: "prod" });
+    expect(out.startsWith("## Card base branch (vibehub)")).toBe(true);
+    expect(out).toContain("cut from `prod`");
+    expect(out).toContain("pull request goes to `prod`");
+    expect(out).toContain("base_divergente");
+    expect(out.endsWith("regras do erp-aux")).toBe(true);
+  });
+
+  it("sem cérebro do projeto, o aviso sai sozinho", async () => {
+    const { mod } = await fresh();
+    expect(mod.brainTextForCard("  ", { base: "dev" })).toBe(mod.baseBranchNotice("dev"));
+  });
+
+  it.each([
+    ["de análise (empurra na branch do PR)", { base: "feat-7", pushBranch: "feat-7" }],
+    ["revisor (nunca entrega)", { base: "feat-7", reviewOf: "author-card" }],
+  ])("card %s não recebe o aviso: a base dele é a branch do PR, não o destino", async (_label, card) => {
+    const { mod } = await fresh();
+    expect(mod.brainTextForCard("regras", card)).toBe("regras");
+  });
+
+  it("o aviso passa pela guarda do heredoc", async () => {
+    const { mod } = await fresh();
+    expect(() => mod.projectBrainWriteLines("/work/acme--erp-worktrees/intake", mod.brainTextForCard("", { base: "dev" }))).not.toThrow();
   });
 });
 

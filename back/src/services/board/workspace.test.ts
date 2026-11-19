@@ -2019,8 +2019,18 @@ describe("the PROJECT brain (CLAUDE.local.md) seeded on open", () => {
     expect(script).toContain(`echo 'CLAUDE.local.md' >> "$REPO_DIR/.git/info/exclude"`);
   });
 
-  it("with NO project brain: the file is removed (kept in sync), not written", async () => {
+  it("sem cérebro do projeto, o CLAUDE.local.md do card guarda só de onde ele nasceu e para onde vai o PR", async () => {
     const { card } = await seed();
+    await reg.updateCard(card.id, { base: "prod" });
+    await ws.openCard(card.id);
+    const script = scriptAt(0);
+    expect(script).toContain(`cat > '/work/acme--erp-aux-worktrees/${card.worktreeSlug}/CLAUDE.local.md'`);
+    expect(script).toContain("This card was cut from `prod`, and its pull request goes to `prod`");
+  });
+
+  it("sem cérebro do projeto, o card de análise fica sem o arquivo (removido, em sincronia)", async () => {
+    const project = await reg.createProject({ name: "erp-aux", repoFullName: "acme/erp-aux", cloneUrl: "https://github.com/acme/erp-aux.git" });
+    const card = await reg.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" });
     await ws.openCard(card.id);
     const script = scriptAt(0);
     expect(script).toContain(`rm -f '/work/acme--erp-aux-worktrees/${card.worktreeSlug}/CLAUDE.local.md'`);
@@ -2101,12 +2111,14 @@ describe("applyProjectBrainEverywhere", () => {
     expect(script).toContain(`if [ -d '/work/acme--alpha-worktrees/${a1.worktreeSlug}' ]; then`);
   });
 
-  it("an empty project brain REMOVES the file from the worktrees", async () => {
+  it("cérebro do projeto vazio: o card comum fica só com o aviso da origem, o de análise perde o arquivo", async () => {
     const alpha = await reg.createProject({ name: "alpha", repoFullName: "acme/alpha" });
     const a1 = await reg.createCard({ projectId: alpha.id, title: "A1" });
+    const a2 = await reg.createAnalysisCard({ projectId: alpha.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" });
     const out = await ws.applyProjectBrainEverywhere(alpha.id);
     expect(out.bytes).toBe(0);
-    expect(scriptAt(0)).toContain(`rm -f '/work/acme--alpha-worktrees/${a1.worktreeSlug}/CLAUDE.local.md'`);
+    expect(scriptAt(0)).toContain(`cat > '/work/acme--alpha-worktrees/${a1.worktreeSlug}/CLAUDE.local.md'`);
+    expect(scriptAt(0)).toContain(`rm -f '/work/acme--alpha-worktrees/${a2.worktreeSlug}/CLAUDE.local.md'`);
   });
 
   it("no cards = no host call; unknown project = error", async () => {
