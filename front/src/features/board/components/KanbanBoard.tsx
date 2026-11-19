@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { CardTile } from "@/features/board/components/CardTile";
+import { resetCardPlanUsage } from "@/features/board/components/PlanUsage";
 import {
   MarqueeSelect,
   useClearSelectionOnEscape,
@@ -249,8 +250,9 @@ export function KanbanBoard({
   const accountMutation = useMutation({
     mutationFn: ({ id, accountSlug }: { id: string; accountSlug: string | null }) =>
       boardApi.patchCard(id, { accountSlug }),
-    onSuccess: () => {
+    onSuccess: (_result, { id }) => {
       void queryClient.invalidateQueries({ queryKey: boardKey });
+      resetCardPlanUsage(queryClient, id);
       setAccountTarget(null);
       toast.success(translate("toast.cardAccountSwitched"));
     },
