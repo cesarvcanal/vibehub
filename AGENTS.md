@@ -466,7 +466,7 @@ com login saudável a tarefa em segundo plano continua protegida.
 - **Emoji:** sempre um da tabela, o da intenção principal do commit.
 - **Tipo** logo depois do emoji, em inglês, o mesmo vocabulário do título do PR (que não leva emoji). **Área** entre parênteses, a mesma do título do PR.
 - **Título** em pt-BR, curto, com o verbo da ação. **Descrição** complementa o título em vez de repeti-lo; "ajustes", "correções", "melhorias" não são descrição. Só fato: não afirmar teste que não rodou.
-- **Uma alteração lógica e coerente por commit.** Só o título vale apenas para commit mecânico (rename que não muda contrato, formatação).
+- **Uma alteração lógica e coerente por commit**, feito ao fechar cada etapa, nunca um único commit com tudo no fim. Só o título vale apenas para commit mecânico (rename que não muda contrato, formatação).
 - **Merge commit também leva emoji:** `🔀 merge: ...`, sem área. No `gh pr merge`, passe o título com `--subject`, porque o padrão da ferramenta sai sem emoji.
 - **Se a mensagem e o PR divergem, vale o PR.**
 - **Mensagem já enviada não se reescreve** (operação de risco, §12): o que faltou vai para o PR.
@@ -555,7 +555,6 @@ com login saudável a tarefa em segundo plano continua protegida.
 
 - **PR pequeno e específico:** uma unidade lógica por PR. Se a mudança cria ou ajusta uma regra deste arquivo que o próprio código do PR segue, a regra vai no mesmo PR. Regra de processo que o PR só viveu (como revisar, entregar, quantas rodadas fazer) vai num PR próprio.
 - **Mudança neste arquivo:** a regra é escrita para qualquer agente, em qualquer área. Tem de ser clara para quem nunca viu o repositório, dizer o que fazer e por quê, e funcionar fora do caso que a motivou. Fato que muda (ferramenta instalada, nome de branch) entra como condição ("se…"), não como verdade fixa.
-- **Commits atômicos:** um commit por etapa ou tema, nunca um único commit com tudo no fim.
 - **Merge só com autorização explícita** (§12). Pendência que bloqueia, aberta, segura o merge mesmo com a ordem de merge já dada, até o aval daquela pendência ("A pendência deliberada é julgada", abaixo). Autorizado, o merge é **merge commit, nunca squash**, com o SHA verificado e o título no padrão Gitmoji: `gh pr merge <N> --merge --match-head-commit <sha> --subject "🔀 merge: ..."`. Depois do merge, confira o pipeline pós-merge (CI e publicação da imagem).
 - **Testes e CI verdes antes do merge**, sem warning novo no CI.
 - **Revisão independente antes do merge:** o diff passa por um revisor (pessoa ou agente) sem o contexto de quem o escreveu, que segue "Como revisar um PR", abaixo.
