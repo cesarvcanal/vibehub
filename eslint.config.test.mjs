@@ -14,7 +14,8 @@ describe("eslint.config.js: regras do AGENTS.md em todo .ts, .tsx e .mjs do repo
     ["var (§3)", "var count = 0;\nexport { count };", "no-var"],
     ["import não usado (§1.5)", 'import { readFile } from "node:fs/promises";\nexport const ready = true;', "@typescript-eslint/no-unused-vars"],
     ["any explícito (§5.5)", "export const parse = (raw: any) => raw;", "@typescript-eslint/no-explicit-any"],
-    ["catch vazio (§9)", "export function read(run: () => void) {\n  try {\n    run();\n  } catch {}\n}", "no-empty"],
+    ["catch vazio (§9)", "export function read(run: () => void) {\n  try {\n    run();\n  } catch {}\n}", "no-restricted-syntax"],
+    ["catch vazio com comentário de marcador (§9)", "export function read(run: () => void) {\n  try {\n    run();\n  } catch {\n    // limitation: sandbox may refuse\n  }\n}", "no-restricted-syntax"],
     [".catch(() => {}) (§9)", "export const fire = (job: Promise<void>) => job.catch(() => {});", "no-restricted-syntax"],
     [".catch(() => {}) atribuído a outra coisa que a fila (§9)", "export function track(state: { pending: Promise<void> }, job: Promise<void>) {\n  state.pending = job.catch(() => {});\n}", "no-restricted-syntax"],
     [".catch(() => {}) atribuído a variável que não é a fila (§9)", "export function track(job: Promise<void>, pending: Promise<void>) {\n  pending = job.catch(() => {});\n  return pending;\n}", "no-restricted-syntax"],
@@ -43,6 +44,7 @@ describe("eslint.config.js: regras do AGENTS.md em todo .ts, .tsx e .mjs do repo
     ["catch que trata o erro", "export const fire = (job: Promise<void>, warn: (error: unknown) => void) => job.catch((error) => warn(error));"],
     ["const", "export const count = 0;"],
     ["estado vivo com eslint-disable e motivo", "// eslint-disable-next-line no-restricted-syntax -- live state of the driver\nlet current = 0;\nexport const bump = () => (current += 1);"],
+    ["catch vazio de melhor esforço com a diretiva e o motivo", "export function read(run: () => void) {\n  try {\n    run();\n    // eslint-disable-next-line no-restricted-syntax -- best effort: the next attach resends it\n  } catch {}\n}"],
     ["comentário com marcador", "// external: Docker exits 125 when the daemon refuses the run\nexport const DOCKER_REFUSED = 125;"],
   ])("aceita %s", async (_case, code) => {
     expect(await ruleIdsOf(code, "back/src/services/example.ts")).toEqual([]);

@@ -14,6 +14,11 @@ const PRODUCTION_SYNTAX = [
       "AGENTS.md §3: só `const` nas linhas novas. Estado vivo (exceção fechada) leva `// eslint-disable-next-line no-restricted-syntax -- <motivo>`.",
   },
   {
+    selector: "CatchClause > BlockStatement[body.length=0]",
+    message:
+      "AGENTS.md §9: catch vazio engole o erro, com ou sem comentário. Só em melhor esforço, com `// eslint-disable-next-line no-restricted-syntax -- <motivo>`.",
+  },
+  {
     selector: EMPTY_CATCH_CALLBACK,
     message:
       "AGENTS.md §9: catch vazio engole o erro. Só em melhor esforço, com `// eslint-disable-next-line no-restricted-syntax -- <motivo>`; a fila `queue = next.catch(() => undefined)` já é aceita.",
@@ -46,7 +51,7 @@ export default tseslint.config(
     linterOptions: { reportUnusedDisableDirectives: "error" },
     rules: {
       "no-var": "error",
-      "no-empty": ["error", { allowEmptyCatch: false }],
+      "no-empty": ["error", { allowEmptyCatch: true }],
       "no-restricted-syntax": ["error", ...PRODUCTION_SYNTAX],
       "@typescript-eslint/no-unused-vars": ["error", { ignoreRestSiblings: true }],
       "@typescript-eslint/no-explicit-any": "error",
