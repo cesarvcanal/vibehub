@@ -560,6 +560,32 @@ describe("planOrphanPurge (the whole safety of the sweep lives here)", () => {
     expect(purge.buildOrphanListScript("vibehub-runner")).toContain("/root/.vibehub/git");
   });
 
+  it("o /tmp de um card que não existe mais e as saídas de tarefa de um card morto saem; os de card vivo e os de fora ficam", () => {
+    const mine = "aaaaaaaa-0000-0000-0000-000000000000";
+    const gone = "bbbbbbbb-0000-0000-0000-000000000000";
+    const plan = purge.planOrphanPurge(
+      [
+        entry("tmp", `/tmp/vibehub/${mine}`),
+        entry("tmp", `/tmp/vibehub/${gone}`),
+        entry("tmp", "/tmp/vibehub/*"),
+        entry("task-output", "/tmp/claude-0/-work-acme--erp-aux-worktrees-vivo"),
+        entry("task-output", "/tmp/claude-0/-work-acme--erp-aux-worktrees-vivo-back"),
+        entry("task-output", "/tmp/claude-0/-work-acme--erp-aux-worktrees-morto"),
+        entry("task-output", "/tmp/claude-0/-tmp-acexp"),
+      ],
+      live({ ids: new Set([mine]), transcriptDirs: new Set(["-work-acme--erp-aux-worktrees-vivo"]) }),
+      { now: NOW },
+    );
+    expect(plan.purge.map((e) => e.path)).toEqual([
+      `/tmp/vibehub/${gone}`,
+      "/tmp/claude-0/-work-acme--erp-aux-worktrees-morto",
+    ]);
+    const listing = purge.buildOrphanListScript("vibehub-runner");
+    expect(listing).toContain("-printf 'tmp\\t%p\\t%T@\\n'");
+    expect(listing).toContain("find /tmp/claude-[0-9]* -mindepth 1 -maxdepth 1 -type d -printf 'task-output");
+    expect(purge.parseOrphanListing(`tmp\t/tmp/vibehub/${gone}\t1.5\ntask-output\t/tmp/claude-0/x\t2\n`).map((e) => e.kind)).toEqual(["tmp", "task-output"]);
+  });
+
   it("a conversation started in a SUBDIRECTORY of a live card's worktree is the live card's too", () => {
     // `cd back && claude` in the card's shell: Claude names the transcript after that cwd.
     const plan = purge.planOrphanPurge(

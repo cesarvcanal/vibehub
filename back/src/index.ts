@@ -202,15 +202,15 @@ function startUploadSweep(): NodeJS.Timeout {
 }
 
 /**
- * How often the orphan sweep runs. ONCE A DAY, like the uploads sweep: what it collects is, by
- * definition, data nobody can reach any more — there is no version of this that needs to be prompt.
+ * How often the orphan sweep runs. HOURLY: besides data nobody can reach any more, it collects the
+ * temp files of deleted cards (`/tmp/vibehub/<id>`), and a full /tmp stops every card in the runner.
  */
-const ORPHAN_SWEEP_MS = 24 * 60 * 60_000;
+const ORPHAN_SWEEP_MS = 60 * 60_000;
 
 /**
  * The backstop of the card purge (services/board/purge.ts): artifacts of cards that NO LONGER
  * EXIST — a conversation left by a delete that could not reach the runner, and everything the
- * deletes from before the purge existed left behind. Runs once at boot and then daily.
+ * deletes from before the purge existed left behind. Runs once at boot and then hourly.
  */
 function startOrphanSweep(): NodeJS.Timeout {
   void sweepOrphanCardData();
