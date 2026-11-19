@@ -616,4 +616,7 @@ Quem revisa (pessoa ou agente) é o **portão do merge**, não um leitor de cort
   - se é regressão em relação à `main`.
 
   Feche com o veredito: **apto** ou **não apto**, com o motivo.
-- **Depois da correção, revise de novo** só o que mudou, até uma rodada voltar sem achado que bloqueie. Cada achado tem resposta na thread dele: o commit e o teste que o resolvem, ou o motivo de ter virado pendência.
+- **Uma revisão, uma passada de correção.** A revisão olha o PR inteiro e entrega todos os achados de uma vez, sem parar no primeiro que bloqueia. O autor corrige todos numa passada só, cada achado de comportamento com o teste que falhava antes. Depois confere o recorte de testes, o typecheck e o CI, e segue para o merge.
+  - **A correção não volta para outra revisão.** O teste que falhava e passou é a prova de que o achado foi resolvido. Revisar só o delta de cada correção acha o que a correção anterior criou, e esse ciclo não termina.
+  - **Nova revisão só quando a correção muda o desenho** (contrato, fluxo, arquivo novo), e com o aval do usuário.
+  - Cada achado tem resposta na thread dele: o commit e o teste que o resolvem, ou o motivo de ter virado pendência.
