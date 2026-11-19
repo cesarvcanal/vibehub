@@ -107,6 +107,7 @@
 | `back/src/auth/` | Contas, sessão e os preHandlers de acesso | Regra de board |
 | `back/src/secrets/` | Cofre criptografado | Leitura de segredo para log ou resposta |
 | `back/src/mcp/` | Servidor MCP e as ferramentas | Regra duplicada de service |
+| `back/src/config/` | Leitura e validação das variáveis de ambiente (`env.ts`) | Regra de negócio |
 | `back/src/utils/` | Operações técnicas e infraestrutura compartilhadas (logger, guardas do processo), sem regra de domínio (§4, "Utilitário × regra de negócio") | Regra de uma área; código que lê o store ou chama o host |
 | `back/src/testkit/` | Infra de teste compartilhada | Testes |
 
