@@ -28,6 +28,7 @@ const h = vi.hoisted(() => ({
   /** The `--resume` target the spawn command carries, and the context reading on disk. */
   resumeId: undefined as string | undefined,
   rememberedContext: null as null | { sessionId: string; info: { usedTokens: number; maxTokens: number; percent: number } },
+  noticeStreams: [] as { cardId: string; viewerIsOwner: boolean; stopped: boolean }[],
 }));
 
 // The route reads the author with `requestUser` (the user the gate already resolved); with no gate here, nobody.
@@ -95,6 +96,15 @@ vi.mock("../services/sdk/mirror.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../services/platformFailures/cardNotice.js", () => ({
+  streamCardFailureNotices: (cardId: string, viewerIsOwner: boolean, send: (frame: object) => void) => {
+    const stream = { cardId, viewerIsOwner, stopped: false };
+    h.noticeStreams.push(stream);
+    send({ type: "platform_failures", notices: [] });
+    return () => { stream.stopped = true; };
+  },
+}));
+
 const { cardSdkRoutes } = await import("./cardSdk.js");
 const { hasDriverSession, isCardChatInUse, resetSdkSessionsForTesting, setDriverSpawnerForTesting } =
   await import("../services/sdk/manager.js");
@@ -154,6 +164,7 @@ beforeEach(() => {
   h.stamps = [];
   h.resumeId = undefined;
   h.rememberedContext = null;
+  h.noticeStreams = [];
   let resolve: () => void = () => undefined;
   const promise = new Promise<void>((r) => { resolve = r; });
   h.install = { promise, resolve };
@@ -182,6 +193,7 @@ describe("/api/cards/:id/sdk — a aba que fecha no meio do setup", () => {
     expect(isCardChatInUse(CARD)).toBe(false);
     expect(h.acquireCalls).toBe(0);
     expect(h.externalSubscriptions).toBe(0);
+    expect(h.noticeStreams).toEqual([]);
   });
 
   it("o caminho feliz segue igual: socket aberto liga no driver, e o close solta tudo", async () => {
@@ -253,5 +265,19 @@ describe("/api/cards/:id/sdk — o medidor de contexto depois do deploy", () => 
 
     expect(meterFrames(socket)).toEqual([]);
     socket.close();
+  });
+});
+
+describe("/api/cards/:id/sdk — avisos de falha do vibehub no chat do card", () => {
+  it("o chat abre o stream de avisos do card com o papel de quem conectou e fecha junto com o socket", async () => {
+    const handler = await captureHandler();
+    const socket = fakeSocket();
+    h.install?.resolve();
+    await handler(socket as unknown as WebSocket, { params: { id: CARD } });
+
+    expect(h.noticeStreams).toEqual([{ cardId: CARD, viewerIsOwner: false, stopped: false }]);
+    expect(socket.sent.map((s) => JSON.parse(s) as { type: string }).filter((e) => e.type === "platform_failures")).toHaveLength(1);
+    socket.close();
+    expect(h.noticeStreams[0]!.stopped).toBe(true);
   });
 });

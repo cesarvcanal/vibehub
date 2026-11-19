@@ -30,6 +30,7 @@ import { transcriptDirFor } from "../services/maestro/cardSession.js";
 import { config } from "../config/env.js";
 import { hostExecutor } from "../runtime/host.js";
 import { logger } from "../utils/logger.js";
+import { streamCardFailureNotices } from "../services/platformFailures/cardNotice.js";
 
 /**
  * SDK DRIVER websocket — `/api/cards/:id/sdk`. EXPERIMENTAL and gated by the `sdkDriver` setting
@@ -261,6 +262,14 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
       const beforeTurn = (raw: string): Promise<void> | undefined =>
         author && authorsTheTurn(raw) && !isCardActor(author, card.id) ? recordCardActor(author, card.id) : undefined;
       const feed = attachSocket(session, socket, wsOrigin, { beforeTurn });
+      const stopFailureNotices = streamCardFailureNotices(card.id, author?.role === "owner", (frame) => {
+        try {
+          socket.send(JSON.stringify(frame));
+        } catch {
+          return;
+        }
+      });
+      socket.on("close", stopFailureNotices);
       // Attached: from now on the relay reaches this socket itself. What it missed in between goes
       // out now, in order, minus what the replay already drew.
       stopHearing();
