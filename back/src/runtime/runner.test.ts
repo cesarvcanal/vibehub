@@ -63,6 +63,15 @@ describe("runnerSettingsJson", () => {
       expect(s.hooks[hook]?.[0].hooks[0].command).not.toContain("text/plain");
     }
   });
+  it("depois de toda compactação a sessão recebe o lembrete de reler o CLAUDE.md e o AGENTS.md e seguir a tarefa", () => {
+    const s = JSON.parse(runnerSettingsJson()) as { hooks: Record<string, { matcher?: string; hooks: [{ command: string }] }[]> };
+    const afterCompact = s.hooks.SessionStart?.filter((entry) => entry.matcher === "compact") ?? [];
+    expect(afterCompact).toHaveLength(1);
+    const reminder = afterCompact[0]!.hooks[0].command;
+    expect(reminder).toContain("CLAUDE.md");
+    expect(reminder).toContain("AGENTS.md");
+    expect(reminder).not.toContain("VIBEHUB_STATUS_URL");
+  });
   it("only bypasses permissions when the install chose autonomy", () => {
     const auto = JSON.parse(runnerSettingsJson({ autonomous: true })) as Record<string, unknown>;
     const asks = JSON.parse(runnerSettingsJson({ autonomous: false })) as Record<string, unknown>;
