@@ -136,7 +136,7 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 
 ## 5. Frontend, React e TypeScript
 
-1. **Código novo usa export nomeado**, a maioria do repositório. Os `export default` existentes (`App.tsx`, `BoardPage.tsx`, `LoginPage.tsx`, `SetupWizard.tsx` e outros) não são convertidos de carona (§12.6).
+1. **Código novo usa export nomeado**, a maioria do repositório. `export default` só onde um formato de terceiro o exige (a story do Storybook, no formato CSF); os `export default` existentes não são convertidos de carona (§12.6).
 2. **Componente focado em renderização e composição.** Regra de domínio vira função pura em `features/<área>/lib/*.ts`, com teste ao lado; orquestração com estado vira hook `use*.ts`; chamada HTTP fica no `api.ts` da feature.
 3. **Não criar hook artificial:** estado visual simples ou handler sem regra pode ficar no componente.
 4. **Contratos HTTP tipados num lugar só** (`front/src/api/types.ts`), espelhando o backend. Tipos locais de uma feature ficam fora do componente (`features/<área>/types/`).
