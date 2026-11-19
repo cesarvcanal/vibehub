@@ -1060,6 +1060,8 @@ export function SdkChatView({
     // Only what belongs to THIS account goes out over this connection (the server stamps the author by the connection).
     const head = headOfQueue(foreignToOutbox(queueRef.current, viewer).own);
     if (!head) return;
+    const commandWaitsForTurnEnd = state.turnActive && invokedCommand(head.text, state.commands) !== null;
+    if (commandWaitsForTurnEnd) return;
     setQueue((prev) => dequeue(prev, head.id));
     try {
       // One that came back from the outbox goes out with its original receipt: if the server had it, it is just the receipt.

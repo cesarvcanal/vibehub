@@ -5586,6 +5586,33 @@ describe("SdkChatView — comando do catálogo", () => {
     expect(screen.getByTestId("sdk-command-output")).toHaveTextContent("Context Usage");
   });
 
+  it("comando escrito com o turno rodando espera na fila até o turno FECHAR, não sobe no respiro", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "catalog", commands: [{ name: "compact", source: "command" }] });
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    await userEvent.type(box, "primeira{Enter}");
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } });
+
+    await userEvent.type(box, "/compact{Escape}{Enter}");
+    await screen.findByTestId("sdk-queued");
+    ws.deliver({ type: "tool_result", id: "t1", toolResult: {} });
+    ws.deliver({ type: "assistant_text", text: "os testes passaram" });
+    ws.deliver({ type: "tool_use", id: "t2", name: "Bash", input: { command: "git status" } });
+
+    expect(ws.sent.length).toBe(1);
+    expect(screen.getByTestId("sdk-queued")).toHaveTextContent("/compact");
+    expect(screen.queryByTestId("sdk-command")).toBeNull();
+
+    ws.deliver({ type: "result", isError: false });
+    await waitFor(() => expect(ws.sent.length).toBe(2));
+    expect(JSON.parse(ws.sent[1]!)).toMatchObject({ type: "user", text: "/compact" });
+    expect(await screen.findByTestId("sdk-command")).toHaveTextContent("executando…");
+  });
+
   it("uma frase que só cita um comando continua sendo a bolha de sempre", async () => {
     renderSdkChat();
     const ws = await socket();
