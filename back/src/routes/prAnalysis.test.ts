@@ -319,6 +319,24 @@ describe("WS /api/projects/:id/prs/live", () => {
     memberLive.socket.terminate();
   });
 
+  it("cada conexão monta uma PR por vez: travar outra solta a anterior, mesmo quando a nova é recusada", async () => {
+    const w = await world();
+    await w.shareProject("work");
+    const ownerLive = await live(w.owner, w.projectId);
+    const memberLive = await live(w.member, w.projectId);
+    ownerLive.send({ type: "claim", prNumber: 636 });
+    ownerLive.send({ type: "claim", prNumber: 637 });
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toContainEqual({ prNumber: 637, userId: w.ownerId, username: "owner" }));
+    expect(ownerLive.lastClaims()).toEqual([{ prNumber: 637, userId: w.ownerId, username: "owner" }]);
+    memberLive.send({ type: "claim", prNumber: 638 });
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toHaveLength(2));
+    ownerLive.send({ type: "claim", prNumber: 638 });
+    await vi.waitFor(() => expect(ownerLive.frames).toContainEqual({ type: "claim-refused", prNumber: 638, username: "albert" }));
+    expect(ownerLive.lastClaims()).toEqual([{ prNumber: 638, userId: w.memberId, username: "albert" }]);
+    ownerLive.socket.terminate();
+    memberLive.socket.terminate();
+  });
+
   it("quem só vê o projeto não monta; sem acesso ao projeto é 404; sem sessão é 401; frame inválido fecha o socket", async () => {
     const w = await world();
     await expect(live(w.member, w.projectId)).rejects.toThrow(/404/);

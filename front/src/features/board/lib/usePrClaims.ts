@@ -79,8 +79,6 @@ export function usePrClaims(projectId: string, enabled: boolean) {
   }, [enabled, projectId, queryClient]);
 
   const claim = (prNumber: number) => {
-    const previous = live.current.holding;
-    if (previous !== null && previous !== prNumber) sendFrame("release", previous);
     hold(prNumber);
     sendFrame("claim", prNumber);
   };

@@ -42,6 +42,7 @@ export function joinPrRoom(projectId: string, user: PublicUser, send: (event: Pr
   room.viewers.add(viewer);
   send({ type: "claims", claims: claimsOf(room) });
 
+  const heldPrs = (): number[] => [...room.holders].filter(([, holder]) => holder.viewer === viewer).map(([prNumber]) => prNumber);
   const release = (prNumber: number): void => {
     if (room.holders.get(prNumber)?.viewer !== viewer) return;
     room.holders.delete(prNumber);
@@ -50,17 +51,17 @@ export function joinPrRoom(projectId: string, user: PublicUser, send: (event: Pr
   return {
     claim: (prNumber) => {
       const current = room.holders.get(prNumber);
-      if (current && current.claim.userId !== user.id) return current.claim;
-      const claim = { prNumber, userId: user.id, username: user.username };
-      room.holders.set(prNumber, { claim, viewer });
+      const otherPersonsClaim = current && current.claim.userId !== user.id ? current.claim : null;
+      for (const heldPr of heldPrs()) room.holders.delete(heldPr);
+      const claim = otherPersonsClaim ?? { prNumber, userId: user.id, username: user.username };
+      if (!otherPersonsClaim) room.holders.set(prNumber, { claim, viewer });
       broadcast(room, { type: "claims", claims: claimsOf(room) });
       return claim;
     },
     release,
     leave: () => {
       room.viewers.delete(viewer);
-      const heldPrs = [...room.holders].filter(([, holder]) => holder.viewer === viewer).map(([prNumber]) => prNumber);
-      for (const prNumber of heldPrs) release(prNumber);
+      for (const prNumber of heldPrs()) release(prNumber);
       if (room.viewers.size === 0) rooms.delete(projectId);
     },
   };
