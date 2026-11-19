@@ -108,7 +108,7 @@ describe("relatório da análise pela ferramenta do card", () => {
     await reportService.recordAnalysisReport(analysisCard.id, input({ findings: [blockingFinding] }));
     const addedFinding = { ...blockingFinding, id: "f2", severity: "suggestion" as const };
     const doneWithAddedFinding = input({ stage: "done", findings: [blockingFinding, addedFinding] });
-    await expect(reportService.recordAnalysisReport(analysisCard.id, doneWithAddedFinding)).rejects.toThrow(/f2/);
+    await expect(reportService.recordAnalysisReport(analysisCard.id, doneWithAddedFinding)).rejects.toThrow(/f2.*mudando só status, commit ou decision/);
     expect((await store.getAnalysis(analysisCard.id))?.stage).toBe("analysed");
   });
 

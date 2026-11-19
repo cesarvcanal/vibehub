@@ -114,7 +114,7 @@ export const analysisFinding = z.discriminatedUnion("status", [
   if (finding.status === "decided" && finding.severity !== "question") {
     ctx.addIssue({
       code: "custom", path: ["status"],
-      message: "only a question is decided: a blocking or an improvement is fixed with its commit or stays open",
+      message: "only a question is decided: a blocking or an improvement is fixed with its commit or stays open, a suggestion stays open",
     });
   }
   if (finding.severity === "blocking" && !finding.proof?.ref.trim()) {
