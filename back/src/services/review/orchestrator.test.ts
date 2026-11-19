@@ -2407,7 +2407,7 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
 
     it("não lembra nem trava: espera o limite voltar e reenvia a rodada sozinha", async () => {
       const o = await load();
-      const { review, stop } = await limitedReviewer(o, { resetsAt: Date.now() + 150 });
+      const { review, stop } = await limitedReviewer(o, { resetsAt: Date.now() + 2_000 });
       try {
         await endTurn(o, review.reviewerCardId);
         await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.usageLimitWait).toMatchObject({ side: "reviewer" }));
@@ -2416,7 +2416,7 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
         expect(waiting).toMatchObject({ phase: "reviewing", nudges: 0 });
         expect(waiting?.log.at(-1)?.text).toMatch(/sem limite de uso/);
 
-        await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1), { timeout: 3000 });
+        await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1), { timeout: 6000 });
         expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
         expect(lastText()).toMatch(/^\[vibehub · revisão de PR\]/);
         const resumed = await o.store.getReview(review.id);
