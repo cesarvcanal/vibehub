@@ -192,7 +192,7 @@ describe("merge pelo painel da análise", () => {
   });
 
   it("com canMerge o clique pede o merge do card, trava o botão enquanto envia e, mergeado, relê a análise", async () => {
-    const mergeAnswer = { resolve: (_body: unknown) => {} };
+    const mergeAnswer: { resolve: (body: unknown) => void } = { resolve: () => undefined };
     post.mockReturnValue(new Promise((resolve) => {
       mergeAnswer.resolve = resolve;
     }));
