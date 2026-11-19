@@ -13,7 +13,7 @@ function git(repoDir, ...args) {
 
 function readChangedLines(repoDir, baseRef) {
   const base = git(repoDir, "merge-base", "HEAD", baseRef).trim();
-  const diff = git(repoDir, "diff", "-U0", "--no-color", "--no-ext-diff", "--diff-filter=d", base, "--", ...LINTED_PATHS);
+  const diff = git(repoDir, "diff", "-U0", "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/", "--diff-filter=d", base, "--", ...LINTED_PATHS);
   const untracked = git(repoDir, "ls-files", "-z", "--others", "--exclude-standard", "--", ...LINTED_PATHS)
     .split("\0")
     .filter(Boolean);
