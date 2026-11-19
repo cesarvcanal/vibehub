@@ -182,6 +182,12 @@ describe("quem age em cada achado: revisor e autor leem as mesmas classes", () =
     }
   });
 
+  it("o autor corrige bug com o teste que falha sem a correção, visto vermelho antes do verde", () => {
+    for (const text of [authorFixPrompt(review([improvement])), authorSuggestionsPrompt(review([improvement]), [improvement], { by: "cesar" })]) {
+      expect(text).toContain("com commit e com um teste que falha sem a correção (o vermelho visto antes do verde)");
+    }
+  });
+
   it("o autor não recebe ordem de recusar volta desnecessária que o revisor bloqueou por regra escrita", () => {
     for (const text of [authorFixPrompt(review([improvement])), authorSuggestionsPrompt(review([improvement]), [improvement], { by: "cesar" })]) {
       expect(text).toContain("- Fora do escopo, feature nova ou mudança de uma decisão intencional: não faça; responda explicando.");

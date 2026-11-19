@@ -100,6 +100,21 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(INSTRUCTIONS).toContain("an improvement is a suggestion, not an authorization");
   });
 
+  it("a autorização dada para a sequência não passa por cima de um item bloqueante aberto no PR", () => {
+    expect(INSTRUCTIONS).toContain("An open blocking item declared in the PR still needs the user's own OK for that item");
+  });
+
+  it("a pergunta se entende sozinha: diz o que foi achado, por que importa e nomeia o item", () => {
+    expect(INSTRUCTIONS).toContain("what was found, why it matters, and the item it is about");
+    expect(INSTRUCTIONS).not.toContain("At most one sentence of context");
+  });
+
+  it("o executor não reescreve histórico já enviado sem o OK do usuário, e quem roda o gate é o vibehub_deliver", () => {
+    expect(INSTRUCTIONS).toContain("rewriting commits already pushed needs the user's OK");
+    expect(INSTRUCTIONS).not.toMatch(/maestro decides what, where and in what order, runs the\s+gate/);
+    expect(INSTRUCTIONS).toContain("the deliver runs the gate");
+  });
+
   it("build a server that carries those instructions", () => {
     let server: ReturnType<typeof createMcpServer> | undefined;
     expect(() => {

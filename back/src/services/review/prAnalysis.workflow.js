@@ -141,9 +141,10 @@ const contextPrompt =
 const reviewPrompt = (dimension, brief) =>
   `Você é o revisor especialista em ${dimension.key} do PR #${args.prNumber}. Foco: ${dimension.focus}.\n` +
   `${briefText(brief)}\nDiff: git diff ${diffRange}. ${READ_ONLY_RULE}\n${PROOF_RULE}\n` +
-  'Procure o que está ERRADO, não confirme o que o PR diz. Para cada achado: title (uma linha), problem (o que está ' +
-  'errado e o que acontece se ficar assim, para quem não abre o código), file e line, proof, fix (o que mudar e onde) ' +
-  'e suggestedSeverity. Nenhum achado é uma resposta válida.'
+  `Procure o que está ERRADO, não confirme o que o PR diz. A descrição do PR (gh pr view ${args.prNumber}) é o que o autor ` +
+  'afirma: confira no código cada causa, teste, número e arquivo:linha que ela cita, e a afirmação falsa é achado. ' +
+  'Para cada achado: title (uma linha), problem (o que está errado e o que acontece se ficar assim, para quem não abre ' +
+  'o código), file e line, proof, fix (o que mudar e onde) e suggestedSeverity. Nenhum achado é uma resposta válida.'
 
 const verifyPrompt = (finding, dimension, brief) =>
   `Tente DERRUBAR este achado de ${dimension.key} do PR #${args.prNumber}. ${READ_ONLY_RULE}\n${briefText(brief)}\n` +
