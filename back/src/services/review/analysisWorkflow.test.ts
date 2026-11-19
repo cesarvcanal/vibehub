@@ -193,6 +193,18 @@ describe("frota da análise de PR", () => {
     );
   });
 
+  it("um achado só acima do teto sai no singular no motivo que o painel mostra", async () => {
+    const { fleetResult } = await runFleet(async (_prompt, opts) => {
+      if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);
+      if (opts.phase === "Revisão") return { findings: Array.from({ length: 16 }, (_, index) => scenarioFinding(`a${index}`)) };
+      if (opts.phase === "Verificação") return { confirmed: false, evidence: "e" };
+      return { findings: [] };
+    });
+    expect(fleetResult.dimensions).toContainEqual(
+      expect.objectContaining({ key: "correctness", unverifiedCount: 1, reason: "1 achado acima do teto de 15 não foi verificado" }),
+    );
+  });
+
   it("o verificador roda só o teste filtrado pelo caso, nunca o arquivo inteiro nem a suíte", async () => {
     const { calls } = await runFleet(async (_prompt, opts) => {
       if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);

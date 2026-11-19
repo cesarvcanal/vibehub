@@ -179,7 +179,9 @@ const verifyDimension = async (review, dimension) => {
   if (!review) return notRunResult(dimension, 'o agente de revisão não respondeu')
   const verifiedFindings = review.findings.slice(0, MAX_VERIFIED_PER_DIMENSION)
   const aboveCapCount = review.findings.length - verifiedFindings.length
-  const capReason = `${aboveCapCount} achados acima do teto de ${MAX_VERIFIED_PER_DIMENSION} não foram verificados`
+  const capReason = aboveCapCount === 1
+    ? `1 achado acima do teto de ${MAX_VERIFIED_PER_DIMENSION} não foi verificado`
+    : `${aboveCapCount} achados acima do teto de ${MAX_VERIFIED_PER_DIMENSION} não foram verificados`
   if (aboveCapCount > 0) log(`${dimension.key}: ${capReason}`)
   const verdicts = await parallel(verifiedFindings.map((finding) => () => agent(verifyPrompt(finding, dimension, brief), {
     label: `verificação: ${dimension.key}`, phase: 'Verificação', model: 'sonnet', effort: 'high', schema: VERDICT_SCHEMA,
