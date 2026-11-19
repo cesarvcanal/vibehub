@@ -65,5 +65,6 @@ export function analysisVerdict(report: AnalysisReport): AnalysisVerdict {
   if (report.stage !== "done") return "pending";
   const openFindings = report.findings.filter((finding) => finding.status === "open");
   const hasOpenBlocking = openFindings.some((finding) => finding.severity === "blocking");
-  return hasOpenBlocking || uncheckedDimensions(report).length > 0 ? "not_apt" : "apt";
+  const hasOpenQuestion = openFindings.some((finding) => finding.severity === "question");
+  return hasOpenBlocking || hasOpenQuestion || uncheckedDimensions(report).length > 0 ? "not_apt" : "apt";
 }

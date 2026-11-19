@@ -62,6 +62,10 @@ describe("veredito da análise", () => {
       }),
     ],
     ["frota indisponível nunca é apta", report({ stage: "fleet_unavailable", unavailableReason: "CLI antigo" })],
+    [
+      "dúvida aberta no done impede o apto: decisão em aberto é não apto até a pessoa decidir",
+      report({ dimensions: everyDimensionAccounted(), findings: [finding({ severity: "question" })] }),
+    ],
   ])("%s", (_case, read) => {
     expect(analysisVerdict(read)).toBe("not_apt");
   });
