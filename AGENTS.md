@@ -447,7 +447,7 @@ Dentro de um card do vibehub, a entrega sai pelo `vibehub_deliver` (§15). Fora 
 
 ### Commits
 
-Todo commit, de pessoa ou de agente, segue o padrão de emojis do **Gitmoji**, e a tabela abaixo é a referência oficial; emoji novo entra na tabela por PR antes de ser usado. Como o código não carrega o porquê (§3), a mensagem do commit é o que o `git blame` mostra a quem lê a linha depois.
+Todo commit, de pessoa ou de agente, segue o padrão de emojis do **Gitmoji**, e a tabela abaixo é a referência oficial; emoji novo entra na tabela por PR antes de ser usado.
 
 ```text
 <emoji> <tipo>(<area>): <título claro e objetivo>
