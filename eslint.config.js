@@ -5,7 +5,9 @@ const EMPTY_CATCH_CALLBACK =
   "CallExpression[callee.property.name='catch']" +
   ":not(AssignmentExpression:matches([left.name='queue'], [left.object.type='ThisExpression'][left.property.name='queue']) > CallExpression)" +
   ":not(:matches(ReturnStatement, AwaitExpression, AssignmentExpression, VariableDeclarator, ArrowFunctionExpression) > CallExpression > MemberExpression[property.name='then'] > CallExpression)" +
-  " > ArrowFunctionExpression.arguments:matches([body.type='BlockStatement'][body.body.length=0], [body.type='Identifier'][body.name='undefined'])";
+  " > :matches(ArrowFunctionExpression, FunctionExpression).arguments:matches(" +
+  "[body.type='BlockStatement'][body.body.length=0], [body.type='Identifier'][body.name='undefined'], " +
+  "[body.type='Literal'][body.raw='null'], [body.type='UnaryExpression'][body.operator='void'])";
 
 const PRODUCTION_SYNTAX = [
   {
