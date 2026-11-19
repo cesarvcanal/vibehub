@@ -2161,7 +2161,7 @@ export function buildCardPurgeScript(o: CardPurgeScriptOpts): string {
     'if [ -n "$CARD_PIDS" ]; then sleep 1; kill -KILL $CARD_PIDS 2>/dev/null || true; fi',
     `FREED_KB=$(timeout ${PURGE_MEASURE_TIMEOUT_S} du -skxc ${[o.cwd, uploads, tmpDir, o.browserDataDir].map(shQuote).join(" ")} ${legacyTaskOutputs}` +
       ` ${DEFAULT_CLAUDE_DIR}/projects/${shQuote(transcriptDirName)} ${CLAUDE_PROFILES_DIR}/*/projects/${shQuote(transcriptDirName)}` +
-      " 2>/dev/null | tail -n 1 | cut -f1)",
+      ` 2>/dev/null | awk -F '\\t' '$2 == "total" {print $1}')`,
     `[ -n "$FREED_KB" ] && echo "${PURGE_FREED_MARKER} $FREED_KB" || true`,
   ];
   if (o.repoDir) {

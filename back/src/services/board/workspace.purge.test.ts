@@ -95,6 +95,13 @@ function runPurge(script: string, path: string): string {
   return execFileSync("bash", ["-c", script], { env: { ...process.env, PATH: path }, encoding: "utf8" });
 }
 
+async function pathWithDuCutByTimeout(path: string): Promise<string> {
+  const bin = await mkdtemp(join(tmpdir(), "vh-purge-du-"));
+  onTestFinished(() => rm(bin, { recursive: true, force: true }));
+  await writeFile(join(bin, "du"), "#!/bin/sh\nprintf '8\\t/a\\n2936\\t/b\\n'\nexit 124\n", { mode: 0o755 });
+  return `${bin}:${path}`;
+}
+
 function localBranches(repoDir: string): string {
   return execFileSync("git", ["-C", repoDir, "branch", "--list"], { encoding: "utf8" });
 }
@@ -172,6 +179,17 @@ describe("apagar o card no runner (script de purge executado de verdade)", { tim
     expect(existsSync(card.tmp)).toBe(false);
     expect(localBranches(repoDir)).not.toContain(`card/${card.slug}`);
     expect(execFileSync("git", ["-C", repoDir, "worktree", "list"], { encoding: "utf8" })).not.toContain(card.slug);
+  });
+
+  it("du cortado pelo prazo não vira total: sem a linha total, o liberado fica sem medida", async () => {
+    const path = await pathWithDuCutByTimeout(await pathWithFakeDocker());
+    const repoDir = await gitRepo();
+    const card = await liveCard(repoDir);
+
+    const output = runPurge(card.script, path);
+
+    expect(parsePurgeFreedBytes(output)).toBeUndefined();
+    expect(existsSync(card.tmp)).toBe(false);
   });
 
   it.each(["", "../", "*", "..", "a/b", "$(id)"])("recusa o id de card %j antes de montar qualquer rm", (cardId) => {
