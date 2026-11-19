@@ -2942,12 +2942,6 @@ describe("rate_limit — o aviso de limite do plano", () => {
   });
 });
 
-/**
- * THE ACCOUNT'S LOGIN DIED (production, 2026-11-17): the CLI answered "Failed to authenticate: OAuth session expired
- * and could not be refreshed" and the screen showed it as one more line of the conversation — nothing said the
- * ACCOUNT needed reconnecting, and a tab opened later did not know at all. Session state, like the limit warning:
- * resent to whoever connects, never recorded, and gone with the first turn that works again.
- */
 describe("usage_limited — a conta do card ficou sem limite de uso", () => {
   it("o card passa a dizer que está sem limite, com o horário de volta, até um turno dar certo", async () => {
     const { cardUsageLimit } = await import("../board/agentState.js");
@@ -2972,6 +2966,12 @@ describe("usage_limited — a conta do card ficou sem limite de uso", () => {
   });
 });
 
+/**
+ * THE ACCOUNT'S LOGIN DIED (production, 2026-11-17): the CLI answered "Failed to authenticate: OAuth session expired
+ * and could not be refreshed" and the screen showed it as one more line of the conversation — nothing said the
+ * ACCOUNT needed reconnecting, and a tab opened later did not know at all. Session state, like the limit warning:
+ * resent to whoever connects, never recorded, and gone with the first turn that works again.
+ */
 describe("login_failed — o login da conta do card morreu", () => {
   const loginFrames = (socket: ReturnType<typeof fakeSocket>) =>
     socket.sent.map((s) => JSON.parse(s) as { type: string }).filter((e) => e.type === "login_failed" || e.type === "login_restored");

@@ -692,15 +692,6 @@ export async function startReview(input: {
 
 /* ------------------------------------------------------------------ revisor */
 
-/**
- * The reviewer's round (`vibehub_review_submit`). Only the review's reviewer card calls it; a round that is
- * not the current one, or already submitted, returns the review with no effect. Findings go through the model
- * (proof, closed list); verdicts only `fixed|open|dropped`, and never on what a human already closed.
- */
-/**
- * The reviewer's fleet as it stands now, closed (the round is being submitted: whoever has not answered will not).
- * Best effort: the live panel already showed it, and a runner that does not answer costs only the history, never the round.
- */
 function roundFleetAgent(agent: WorkflowAgent): RoundFleetAgent {
   return {
     id: agent.id, label: agent.label, phase: agent.phase, status: agent.status,
@@ -727,6 +718,11 @@ async function readRoundFleet(review: Review): Promise<RoundFleetRun[]> {
   }
 }
 
+/**
+ * The reviewer's round (`vibehub_review_submit`). Only the review's reviewer card calls it; a round that is
+ * not the current one, or already submitted, returns the review with no effect. Findings go through the model
+ * (proof, closed list); verdicts only `fixed|open|dropped`, and never on what a human already closed.
+ */
 export async function submitReviewerRound(
   reviewerCardId: string,
   payload: {
