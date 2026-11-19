@@ -1,10 +1,10 @@
 import { findUser } from "../../auth/users.js";
 import { creatorAccountSlug } from "../../auth/userGit.js";
-import { createCard, getCard, type Card } from "../board/registry.js";
+import { createCard, getCard, type Card, type CreateCardInput } from "../board/registry.js";
 import { prepareCard } from "../board/workspace.js";
 import { logger } from "../../utils/logger.js";
 
-export async function createCardFromCard(fromCardId: string, input: { projectId: string; title: string }): Promise<Card> {
+export async function createCardFromCard(fromCardId: string, input: CreateCardInput): Promise<Card> {
   const fromCard = await getCard(fromCardId);
   if (!fromCard) throw new Error(`card not found: ${fromCardId}`);
   const creator = fromCard.actorUserId ? await findUser(fromCard.actorUserId) : null;
