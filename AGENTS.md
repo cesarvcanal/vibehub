@@ -172,6 +172,7 @@ Código de uma área só mora dentro dela. O código técnico sobe para a pasta 
 - Contrato **interno** mudou: atualizar todos os consumidores na mesma alteração, sem `newField ?? oldField` nem shims automáticos.
 - **Dado persistido é contrato externo:** cada instalação auto-hospedada tem seu `board.json` e afins. Mudança de shape exige leitura compatível ou migração explícita e testada, nunca quebra silenciosa.
 - Validar na entrada, com o padrão do ponto de entrada: ferramentas MCP com **zod** no schema da ferramenta; rotas HTTP chamam a função do registry/service que valida e lança, e a rota converte o erro de validação em 400 (e "not found" em 404). Dentro do fluxo já validado, confiar no tipo.
+- **Erro de rota JSON tem uma forma só:** `{ error: "<mensagem>" }` com o status 4xx ou 5xx. A página HTML de um fluxo de navegador (o login do OAuth) responde a página de erro, não JSON.
 - Comparar e referenciar entidades por **id**, nunca por nome, título ou texto, inclusive o que o próprio código acabou de criar.
 - Dado editável vive na sua fonte (configuração, cadastro, store). Não congelar no código ids, nomes, listas ou códigos que mudam.
 - Dado composto (autor, motivo, origem, instante, referência) vai em campos próprios, não concatenado num texto.
