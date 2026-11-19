@@ -1,4 +1,4 @@
-import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
+import { hostExecutor, shQuote, assertSafeRemotePath, containerScriptCommand } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import { CARD_TMP_DIR_NAME } from "../board/cardTmp.js";
 import { logger } from "../../utils/logger.js";
@@ -8,6 +8,7 @@ export const TMP_ALERT_BYTES = 30 * 1024 ** 3;
 export const DISK_ALERT_PERCENT = 80;
 const TMP_ALERT_TOP = 5;
 const TMP_SWEEP_INTERVAL_MS = 60 * 60_000;
+export const TMP_SWEEP_TIMEOUT_MS = 10 * 60_000;
 
 const SWEEP_DELIM = "VIBEHUB_TMP_SWEEP";
 const SWEPT_MARKER = "VIBEHUB_TMP_SWEPT";
@@ -51,7 +52,7 @@ export function buildTmpSweepScript(
   const protectedNames = PROTECTED_NAMES.map((name) => `! -name ${shQuote(name)}`).join(" ");
   return [
     "set -e",
-    `docker exec -i ${shQuote(containerName)} bash -s <<'${SWEEP_DELIM}'`,
+    `${containerScriptCommand(containerName, TMP_SWEEP_TIMEOUT_MS)} <<'${SWEEP_DELIM}'`,
     `ROOT=${shQuote(root)}`,
     "renice -n 19 -p $$ >/dev/null 2>&1 || true",
     "ionice -c 3 -p $$ >/dev/null 2>&1 || true",
@@ -101,7 +102,7 @@ export function tmpUsageAlert(report: TmpSweepReport): TmpUsageAlert | null {
 
 export async function sweepRunnerTmp(): Promise<TmpSweepReport> {
   const { stdout } = await hostExecutor().runScript(buildTmpSweepScript(config.runner.container), {
-    timeoutMs: 600_000,
+    timeoutMs: TMP_SWEEP_TIMEOUT_MS,
   });
   const report = parseTmpSweep(stdout);
   if (report.swept.length > 0) {

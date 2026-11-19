@@ -4,10 +4,10 @@ import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, rm, writeFile, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hostExecutor } from "../../runtime/host.js";
+import { hostExecutor, CONTAINER_DEADLINE_MARGIN_MS } from "../../runtime/host.js";
 import { pathWithFakeDocker } from "../../testkit/fakeDocker.js";
 import {
-  buildTmpSweepScript, parseTmpSweep, startTmpSweep, tmpUsageAlert, TMP_ALERT_BYTES, DISK_ALERT_PERCENT,
+  buildTmpSweepScript, parseTmpSweep, startTmpSweep, tmpUsageAlert, TMP_ALERT_BYTES, DISK_ALERT_PERCENT, TMP_SWEEP_TIMEOUT_MS,
 } from "./tmpSweep.js";
 
 vi.mock("../../runtime/host.js", async (orig) => ({
@@ -135,6 +135,15 @@ describe("faxina do /tmp solto (fora de /tmp/vibehub), executada de verdade", { 
     expect(report.sizes.some((entry) => entry.path === join(root, "vibehub"))).toBe(false);
     expect(report.diskPercent).toBeGreaterThan(0);
     expect(report.diskPercent).toBeLessThanOrEqual(100);
+  });
+});
+
+describe("buildTmpSweepScript", () => {
+  it("o prazo vale dentro do container: o runner mata a faxina antes de o Node desistir dela", () => {
+    const deadlineSeconds = (TMP_SWEEP_TIMEOUT_MS - CONTAINER_DEADLINE_MARGIN_MS) / 1000;
+    expect(buildTmpSweepScript("vibehub-runner")).toContain(
+      `docker exec -i 'vibehub-runner' timeout -s KILL ${deadlineSeconds} bash -s`,
+    );
   });
 });
 
