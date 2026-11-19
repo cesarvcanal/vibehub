@@ -59,16 +59,16 @@ export function buildTmpSweepScript(
     `ROOT=${shQuote(root)}`,
     "renice -n 19 -p $$ >/dev/null 2>&1 || true",
     "ionice -c 3 -p $$ >/dev/null 2>&1 || true",
-    "IN_USE=$( { awk 'NR > 1 {print $8}' /proc/net/unix; for P in /proc/[0-9]*; do readlink \"$P/cwd\"; " +
-      "ls -l \"$P/fd\" 2>/dev/null | awk '{print $NF}'; " +
-      `tr '\\0' '\\n' < "$P/cmdline"; tr '\\0' '\\n' < "$P/environ"; done; } 2>/dev/null | grep -oE ${inUsePattern} | sort -u || true)`,
+    "IN_USE=$( { awk 'NR > 1 {print $8}' /proc/net/unix; for PROC_DIR in /proc/[0-9]*; do readlink \"$PROC_DIR/cwd\"; " +
+      "ls -l \"$PROC_DIR/fd\" 2>/dev/null | awk '{print $NF}'; " +
+      `tr '\\0' '\\n' < "$PROC_DIR/cmdline"; tr '\\0' '\\n' < "$PROC_DIR/environ"; done; } 2>/dev/null | grep -oE ${inUsePattern} | sort -u || true)`,
     `find "$ROOT" -mindepth 1 -maxdepth 1 -mmin +${idleMinutes} ${protectedNames} -print0 2>/dev/null |`,
-    "while IFS= read -r -d '' E; do",
-    `  case "\${E##*/}" in *[!${FILE_NAME_CHARS}]*) continue ;; esac`,
-    '  printf \'%s\\n\' "$IN_USE" | grep -qxF -- "$E" && continue',
-    `  if [ -d "$E" ] && [ -n "$(find "$E" -mmin -${idleMinutes} -print -quit 2>/dev/null)" ]; then continue; fi`,
-    '  K=$(du -sxk -- "$E" 2>/dev/null | cut -f1)',
-    `  rm -rf -- "$E" 2>/dev/null && printf '${SWEPT_MARKER}\\t%s\\t%s\\n' "\${K:-0}" "$E" || true`,
+    "while IFS= read -r -d '' ENTRY; do",
+    `  case "\${ENTRY##*/}" in *[!${FILE_NAME_CHARS}]*) continue ;; esac`,
+    '  printf \'%s\\n\' "$IN_USE" | grep -qxF -- "$ENTRY" && continue',
+    `  if [ -d "$ENTRY" ] && [ -n "$(find "$ENTRY" -mmin -${idleMinutes} -print -quit 2>/dev/null)" ]; then continue; fi`,
+    '  ENTRY_KB=$(du -sxk -- "$ENTRY" 2>/dev/null | cut -f1)',
+    `  rm -rf -- "$ENTRY" 2>/dev/null && printf '${SWEPT_MARKER}\\t%s\\t%s\\n' "\${ENTRY_KB:-0}" "$ENTRY" || true`,
     "done",
     ...[`"$ROOT" -mindepth 1 -maxdepth 1 ! -path ${shQuote(cardTmpRoot)}`, `${shQuote(cardTmpRoot)} -mindepth 1 -maxdepth 1`].map(
       (selection) =>

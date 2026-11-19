@@ -2156,7 +2156,7 @@ export function buildCardPurgeScript(o: CardPurgeScriptOpts): string {
   const inner: string[] = [
     ...killSessionLines(o.sessions),
     `CARD_PIDS=$(grep -lsxzF ${shQuote(`VIBEHUB_CARD_ID=${o.cardId}`)} /proc/[0-9]*/environ | cut -d/ -f3 | ` +
-      `while read -r P; do [ "$P" = 1 ] || [ "$P" = "$$" ] || [ "$(cat "/proc/$P/comm" 2>/dev/null)" = ${shQuote(TMUX_SERVER_COMM)} ] || echo "$P"; done)`,
+      `while read -r PROCESS_ID; do [ "$PROCESS_ID" = 1 ] || [ "$PROCESS_ID" = "$$" ] || [ "$(cat "/proc/$PROCESS_ID/comm" 2>/dev/null)" = ${shQuote(TMUX_SERVER_COMM)} ] || echo "$PROCESS_ID"; done)`,
     '[ -n "$CARD_PIDS" ] && kill -TERM $CARD_PIDS 2>/dev/null || true',
     'if [ -n "$CARD_PIDS" ]; then sleep 1; kill -KILL $CARD_PIDS 2>/dev/null || true; fi',
     `FREED_KB=$(timeout ${PURGE_MEASURE_TIMEOUT_S} du -skxc ${[o.cwd, uploads, tmpDir, o.browserDataDir].map(shQuote).join(" ")} ${legacyTaskOutputs}` +
