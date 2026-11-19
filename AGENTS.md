@@ -212,6 +212,7 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 
 - Cada `docker exec`/SSH é caro e disputa o runner com os outros cards. Agrupar comandos num script só quando forem do mesmo passo; nunca abrir uma execução remota por item de lista. `docker exec` e round trip ao host se contam separados: um `runScript` com três `docker exec` é uma viagem e três processos no runner.
 - Processo de longa duração (driver do SDK, terminal, preview) tem dono e fim definidos: quem abre fecha, e o que fica órfão é bug.
+- **Prazo de trabalho no container vale dentro do container:** o timeout do Node mata só o cliente local (`bash -s`, `ssh`, `docker exec`), e o processo lá dentro segue vivo. Script com prazo entra no container sob `timeout -s KILL`, que mata o grupo inteiro antes de o Node desistir (`containerScriptCommand`, em `runtime/host.ts`).
 - Saída grande (log, transcript, diff) é lida em fluxo ou recortada na origem, não carregada inteira na memória do backend.
 
 ### Backend e estado
