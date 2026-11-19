@@ -112,6 +112,7 @@ describe("MCP server instructions (the maestro persona)", () => {
   it("o executor não reescreve histórico já enviado sem o OK do usuário, e quem roda o gate é o vibehub_deliver", () => {
     expect(INSTRUCTIONS).toContain("rewriting commits already pushed needs the user's OK");
     expect(INSTRUCTIONS).not.toMatch(/maestro decides what, where and in what order, runs the\s+gate/);
+    expect(INSTRUCTIONS).toContain("the deliver runs the gate");
   });
 
   it("build a server that carries those instructions", () => {
