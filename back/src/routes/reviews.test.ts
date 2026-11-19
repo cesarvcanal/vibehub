@@ -1255,6 +1255,17 @@ describe("merge da análise pela rota", () => {
     expect((await (await registry()).getCard(w.cardId))?.column).not.toBe("done");
   });
 
+  it("card de análise no meio de um turno recusa com 409 card_working, sem merge: o que a IA commitar agora ninguém analisou", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    await (await registry()).updateCard(w.cardId, { status: "working" });
+    deliver.mockClear();
+    const res = await merge(w, w.merger);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().reason).toBe("card_working");
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
   it("dois cliques ao mesmo tempo disparam um merge só: o segundo recebe 409 merging", async () => {
     const w = await world();
     await saveReport(aptReport(w.cardId));
