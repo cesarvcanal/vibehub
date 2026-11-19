@@ -28,12 +28,12 @@ function readChangedLines(repoDir, baseRef) {
   return new Map([...parseAddedLines(diff), ...untracked.map((path) => [path, EVERY_LINE])]);
 }
 
-function keepChangedMessages(result, changedLines) {
-  const messages = result.messages.filter(
+function keepChangedMessages(lintResult, changedLines) {
+  const messages = lintResult.messages.filter(
     (message) => message.fatal || changedLines === EVERY_LINE || changedLines.has(message.line),
   );
   return {
-    ...result,
+    ...lintResult,
     messages,
     suppressedMessages: [],
     errorCount: messages.filter((message) => message.severity === 2).length,
@@ -50,10 +50,10 @@ export async function lintChangedLines({ repoDir, baseRef }) {
   if (pathsWithAddedLines.length === 0) return [];
   const { ESLint } = await import("eslint");
   const eslint = new ESLint({ cwd: repoDir, overrideConfigFile: CONFIG_FILE });
-  const results = await eslint.lintFiles(pathsWithAddedLines.map(([path]) => path));
-  return results
-    .map((result) => keepChangedMessages(result, changedLinesByPath.get(relative(repoDir, result.filePath))))
-    .filter((result) => result.messages.length > 0);
+  const lintResults = await eslint.lintFiles(pathsWithAddedLines.map(([path]) => path));
+  return lintResults
+    .map((lintResult) => keepChangedMessages(lintResult, changedLinesByPath.get(relative(repoDir, lintResult.filePath))))
+    .filter((lintResult) => lintResult.messages.length > 0);
 }
 
 export function findStrayMarkdown({ repoDir, baseRef }) {
