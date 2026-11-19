@@ -7,8 +7,8 @@ import type { OpenPull } from "../services/github/client.js";
 
 /**
  * PR ANALYSIS ROUTES — who sees the project's open PRs and who may start an analysis. The server, the
- * board, the users and the shares are REAL; GitHub (`listOpenPulls`) and typing into the card
- * (`sendToTerminal`) are mocked at the boundary.
+ * board, the users and the shares are REAL; GitHub (`listOpenPulls`), typing into the card
+ * (`sendToTerminal`) and the runner (`runScript`) are mocked at the boundary.
  *
  * Every test boots a server and scrypt-hashes several passwords; the budget is wide on purpose.
  */
@@ -28,6 +28,7 @@ const listOpenPulls = vi.fn(async (): Promise<OpenPull[] | null> => {
 });
 const readPull = vi.fn(async (_c: unknown, _o: string, _r: string, n: number) => (n === PULL.number ? { ...PULL, open: true } : null));
 const sendToTerminal = vi.fn(async (cardId: string) => ({ sent: true, cardId, title: "", project: "" }));
+const runScriptOnHost = vi.fn(async (_script: string, _opts?: unknown) => ({ stdout: "", stderr: "" }));
 
 async function boot(): Promise<FastifyInstance> {
   vi.resetModules();
@@ -60,6 +61,10 @@ async function boot(): Promise<FastifyInstance> {
     ...(await vi.importActual<typeof import("../services/maestro/maestro.js")>("../services/maestro/maestro.js")),
     sendToTerminal,
   }));
+  vi.doMock("../runtime/host.js", async () => {
+    const actual = await vi.importActual<typeof import("../runtime/host.js")>("../runtime/host.js");
+    return { ...actual, hostExecutor: () => ({ ...actual.hostExecutor(), runScript: runScriptOnHost }) };
+  });
   const { buildServer } = await import("../index.js");
   const server = await buildServer();
   await server.ready();
@@ -157,7 +162,7 @@ describe("POST /api/projects/:id/prs/:number/analysis", () => {
     const { card, created } = res.json() as { card: { id: string; title: string }; created: boolean };
     expect(created).toBe(true);
     expect(card.title).toBe("Análise PR #636 · Conciliação");
-    expect(sendToTerminal).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(sendToTerminal).toHaveBeenCalledTimes(1));
     expect((await list(w.member, w.projectId)).json().pulls[0].analysisCardId).toBe(card.id);
     // the second click answers with the same card
     expect((await analyse(w.member, w.projectId, 636, { reviewerUserId: w.memberId })).json()).toMatchObject({ created: false, card: { id: card.id } });
