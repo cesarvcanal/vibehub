@@ -150,17 +150,25 @@ describe("prompts da revisão: bug não é sugestão", () => {
   });
 });
 
-describe("prompts da revisão: regra escrita do repo violada bloqueia, mesmo sendo de estilo", () => {
+describe("quem age em cada achado: revisor e autor leem as mesmas classes", () => {
   const improvement: Finding = {
     id: "f1", severity: "improvement", title: "tira a duplicação", status: "open", introducedInRound: 1, file: "src/a.ts", fix: "x",
   };
+  const delta = { ...review([improvement]), round: 2, reviewedSha: "a".repeat(40) };
+  const texts = [
+    reviewerRoundPrompt(review()), reviewerDeltaPrompt(delta), authorFixPrompt(review([improvement])),
+    authorSuggestionsPrompt(review([improvement]), [improvement], { by: "cesar" }),
+  ];
+
+  it("o mesmo bloco de classes chega ao revisor (rodada e delta) e ao autor (correção e sugestões)", () => {
+    for (const text of texts) {
+      expect(text).toContain("Autonomia técnica não é autonomia de produto");
+      expect(text).toMatch(/- improvement — a IA do autor aplica sozinha/);
+      expect(text).toMatch(/- question — espera a decisão de uma pessoa/);
+    }
+  });
 
   it("revisor e autor leem que estilo, nome, comentário ou volta que viola regra escrita é blocking com proof.kind = rule", () => {
-    const delta = { ...review([improvement]), round: 2, reviewedSha: "a".repeat(40) };
-    const texts = [
-      reviewerRoundPrompt(review()), reviewerDeltaPrompt(delta), authorFixPrompt(review([improvement])),
-      authorSuggestionsPrompt(review([improvement]), [improvement], { by: "cesar" }),
-    ];
     for (const text of texts) {
       expect(text).toMatch(/Linha do PR que viola uma regra escrita do repo \(AGENTS\.md, CLAUDE\.md ou equivalente\) é blocking com proof\.kind = rule, mesmo quando é de estilo, nome, comentário, duplicação ou volta desnecessária/);
       expect(text).toMatch(/se uma regra escrita exige a melhoria, é blocking/);
@@ -170,25 +178,6 @@ describe("prompts da revisão: regra escrita do repo violada bloqueia, mesmo sen
 
   it("estilo e nome sem regra escrita que os decida continuam sugestão", () => {
     expect(reviewerRoundPrompt(review())).toMatch(/estilo, nome ou refatoração que nenhuma regra escrita decide/);
-  });
-});
-
-describe("quem age em cada achado: revisor e autor leem as mesmas classes", () => {
-  const improvement: Finding = {
-    id: "f1", severity: "improvement", title: "tira a duplicação", status: "open", introducedInRound: 1, file: "src/a.ts", fix: "x",
-  };
-
-  it("o mesmo bloco de classes chega ao revisor (rodada e delta) e ao autor (correção e sugestões)", () => {
-    const delta = { ...review([improvement]), round: 2, reviewedSha: "a".repeat(40) };
-    const texts = [
-      reviewerRoundPrompt(review()), reviewerDeltaPrompt(delta), authorFixPrompt(review([improvement])),
-      authorSuggestionsPrompt(review([improvement]), [improvement], { by: "cesar" }),
-    ];
-    for (const text of texts) {
-      expect(text).toContain("Autonomia técnica não é autonomia de produto");
-      expect(text).toMatch(/- improvement — a IA do autor aplica sozinha/);
-      expect(text).toMatch(/- question — espera a decisão de uma pessoa/);
-    }
   });
 
   it("dúvida só para decisão de intenção ou produto, inclusive colisão com o que já funcionava; nunca como saída fácil", () => {
