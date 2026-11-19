@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { describe, it, expect, beforeEach, afterEach, onTestFinished, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathWithFakeDocker } from "../../testkit/fakeDocker.js";
 
 const runScript = vi.fn(async () => ({ stdout: "", stderr: "" }));
 
@@ -142,46 +143,34 @@ describe("run script + parse", () => {
     // Asserting on substrings let `export …;; printf` through: every gate died on a sh syntax error
     // in ~100 ms, red with no output. So run it, with a `docker` that just executes in place.
     const { gate } = await load();
-    const bin = await mkdtemp(join(tmpdir(), "vibehub-gate-bin-"));
     const work = await mkdtemp(join(tmpdir(), "vibehub-gate-work-"));
-    try {
-      await writeFile(join(bin, "docker"), '#!/bin/sh\nshift 2\nexec "$@"\n', { mode: 0o755 });
-      const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
-      const run = (checks: string[]) =>
-        execFileSync("sh", ["-c", gate.buildGateRunScript("c", work, checks, { baseBranch: "main" })], { env, encoding: "utf8" });
-      const green = run(['echo "base=$VIBEHUB_BASE_REF cap=$VITEST_MAX_THREADS"']);
-      expect(green).toContain("base=origin/main cap=2");
-      expect(gate.parseGateRun(green).passed).toBe(true);
-      const red = run(["echo boom >&2; false", "echo never"]);
-      expect(gate.parseGateRun(red)).toMatchObject({ passed: false });
-      expect(red).toContain("boom");
-      expect(red).not.toContain("never");
-    } finally {
-      await rm(bin, { recursive: true, force: true });
-      await rm(work, { recursive: true, force: true });
-    }
+    onTestFinished(() => rm(work, { recursive: true, force: true }));
+    const env = { ...process.env, PATH: await pathWithFakeDocker() };
+    const run = (checks: string[]) =>
+      execFileSync("sh", ["-c", gate.buildGateRunScript("c", work, checks, { baseBranch: "main" })], { env, encoding: "utf8" });
+    const green = run(['echo "base=$VIBEHUB_BASE_REF cap=$VITEST_MAX_THREADS"']);
+    expect(green).toContain("base=origin/main cap=2");
+    expect(gate.parseGateRun(green).passed).toBe(true);
+    const red = run(["echo boom >&2; false", "echo never"]);
+    expect(gate.parseGateRun(red)).toMatchObject({ passed: false });
+    expect(red).toContain("boom");
+    expect(red).not.toContain("never");
   });
 
   it("os checks do gate escrevem no /tmp do card — que o apagar do card leva junto", async () => {
     const { gate } = await load();
     const cardId = randomUUID();
-    const bin = await mkdtemp(join(tmpdir(), "vibehub-gate-bin-"));
     const work = await mkdtemp(join(tmpdir(), "vibehub-gate-work-"));
-    try {
-      await writeFile(join(bin, "docker"), '#!/bin/sh\nshift 2\nexec "$@"\n', { mode: 0o755 });
-      const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
-      const out = execFileSync(
-        "sh",
-        ["-c", gate.buildGateRunScript("c", work, ['echo "tmp=$TMPDIR claude=$CLAUDE_CODE_TMPDIR"; test -d "$TMPDIR"'], { cardId })],
-        { env, encoding: "utf8" },
-      );
-      expect(out).toContain(`tmp=/tmp/vibehub/${cardId} claude=/tmp/vibehub/${cardId}`);
-      expect(gate.parseGateRun(out).passed).toBe(true);
-    } finally {
-      await rm(bin, { recursive: true, force: true });
-      await rm(work, { recursive: true, force: true });
-      await rm(`/tmp/vibehub/${cardId}`, { recursive: true, force: true });
-    }
+    onTestFinished(() => rm(work, { recursive: true, force: true }));
+    onTestFinished(() => rm(`/tmp/vibehub/${cardId}`, { recursive: true, force: true }));
+    const env = { ...process.env, PATH: await pathWithFakeDocker() };
+    const out = execFileSync(
+      "sh",
+      ["-c", gate.buildGateRunScript("c", work, ['echo "tmp=$TMPDIR claude=$CLAUDE_CODE_TMPDIR"; test -d "$TMPDIR"'], { cardId })],
+      { env, encoding: "utf8" },
+    );
+    expect(out).toContain(`tmp=/tmp/vibehub/${cardId} claude=/tmp/vibehub/${cardId}`);
+    expect(gate.parseGateRun(out).passed).toBe(true);
   });
 
   it("a run that never reached the checks says so instead of coming back empty", async () => {
