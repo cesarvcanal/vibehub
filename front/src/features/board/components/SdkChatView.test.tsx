@@ -4898,7 +4898,7 @@ describe("SdkChatView — o medidor de contexto", () => {
     expect(autoCompact).toHaveTextContent("Compacts on its own at 60%");
     expect(autoCompact).toHaveTextContent("CLAUDE.md and AGENTS.md");
     const zones = within(screen.getByTestId("context-guide")).getAllByTestId("context-zone");
-    expect(zones.find((z) => z.getAttribute("data-zone") === "danger")).not.toHaveTextContent("/compact");
+    expect(zones.find((zone) => zone.getAttribute("data-zone") === "danger")).not.toHaveTextContent("/compact");
   });
 
   it("o guia abre no clique (toque), não só no hover — e janela de 1M sai como 1M", async () => {

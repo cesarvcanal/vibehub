@@ -64,8 +64,8 @@ describe("runnerSettingsJson", () => {
     }
   });
   it("depois de toda compactação a sessão recebe o lembrete de reler o CLAUDE.md e o AGENTS.md e seguir a tarefa", () => {
-    const s = JSON.parse(runnerSettingsJson()) as { hooks: Record<string, { matcher?: string; hooks: [{ command: string }] }[]> };
-    const afterCompact = s.hooks.SessionStart?.filter((entry) => entry.matcher === "compact") ?? [];
+    const settings = JSON.parse(runnerSettingsJson()) as { hooks: Record<string, { matcher?: string; hooks: [{ command: string }] }[]> };
+    const afterCompact = settings.hooks.SessionStart?.filter((entry) => entry.matcher === "compact") ?? [];
     expect(afterCompact).toHaveLength(1);
     const reminder = afterCompact[0]!.hooks[0].command;
     expect(reminder).toContain("CLAUDE.md");
