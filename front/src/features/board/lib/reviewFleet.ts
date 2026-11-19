@@ -1,8 +1,6 @@
-import type { Review, ReviewFleetAgent, ReviewFleetRun } from "@/api/types";
+import { ANALYSIS_DIMENSIONS, type AnalysisDimension, type Review, type ReviewFleetAgent, type ReviewFleetRun } from "@/api/types";
 import type { ConversationRow } from "@/features/board/lib/review";
-import { formatAgentResult, type SdkRow } from "@/features/board/lib/sdkChat";
-
-type WorkflowRow = Extract<SdkRow, { kind: "workflow" }>;
+import { formatAgentResult } from "@/features/board/lib/sdkChat";
 
 /** What a fleet agent returned, in the shape the conversation draws it. PURE. */
 export type AgentReading =
@@ -24,24 +22,6 @@ const JSON_STRING = String.raw`"((?:[^"\\]|\\.)*)`;
 const TITLE_PATTERN = new RegExp(String.raw`"title"\s*:\s*${JSON_STRING}"`, "g");
 const CONFIRMED_PATTERN = /"confirmed"\s*:\s*(true|false)/;
 const EVIDENCE_PATTERN = new RegExp(String.raw`"evidence"\s*:\s*${JSON_STRING}`);
-
-/** The run as the chat's fleet panel reads it, so the review draws it with the same component. PURE. */
-export function workflowRowOf(run: ReviewFleetRun): WorkflowRow {
-  return {
-    kind: "workflow",
-    id: `wf:${run.runId}`,
-    runId: run.runId,
-    name: run.name,
-    phases: run.phases.map((title) => ({ title })),
-    startedAt: run.startedAt,
-    agents: run.agents,
-    total: run.total,
-    done: run.done,
-    at: run.at,
-    finished: run.finished,
-    outcome: run.outcome,
-  };
-}
 
 /**
  * The fleet of each round: the one persisted when the reviewer handed it back, and, for the current
@@ -71,6 +51,7 @@ function readParsed(parsed: unknown): AgentReading | null {
       .filter((title): title is string => typeof title === "string");
     return { kind: "findings", titles };
   }
+  if (typeof fields.summary === "string" && Object.keys(fields).length === 1) return { kind: "text", text: fields.summary };
   if (typeof fields.confirmed === "boolean") {
     return typeof fields.evidence === "string"
       ? { kind: "verdict", confirmed: fields.confirmed, evidence: fields.evidence }
@@ -147,4 +128,29 @@ export function withFleets(rows: ConversationRow[], fleets: Map<number, ReviewFl
   const lastRound = rows.length > 0 ? roundOf(rows[rows.length - 1]!) : undefined;
   const trailing = [...fleets.keys()].filter((round) => !placed.has(round) && (lastRound === undefined || round >= lastRound));
   return [...merged, ...trailing.flatMap(fleetRow)];
+}
+
+/** Who an agent of the fleet is, read from its label ("revisão: correctness", "verificação: tests · <título>", "juiz"). PURE. */
+export type AgentRole =
+  | { kind: "context" }
+  | { kind: "review"; dimension: AnalysisDimension }
+  | { kind: "verification"; dimension: AnalysisDimension }
+  | { kind: "judge" }
+  | { kind: "other"; label: string };
+
+const ROLE_PREFIXES = [["revisão:", "review"], ["verificação:", "verification"]] as const;
+
+function asDimension(text: string): AnalysisDimension | undefined {
+  return (ANALYSIS_DIMENSIONS as readonly string[]).includes(text) ? (text as AnalysisDimension) : undefined;
+}
+
+export function agentRole(label: string): AgentRole {
+  if (label === "contexto") return { kind: "context" };
+  if (label === JUDGE_LABEL) return { kind: "judge" };
+  for (const [prefix, kind] of ROLE_PREFIXES) {
+    if (!label.startsWith(prefix)) continue;
+    const dimension = asDimension(label.slice(prefix.length).split(LABEL_SEPARATOR)[0]!.trim());
+    if (dimension) return { kind, dimension };
+  }
+  return { kind: "other", label };
 }

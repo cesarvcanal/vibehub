@@ -162,7 +162,7 @@ function WorkflowStatusLine({
   );
 }
 
-function PhasePills({ pills, t }: { pills: PhasePill[]; t: Translate }) {
+export function PhasePills({ pills, t }: { pills: PhasePill[]; t: Translate }) {
   return (
     <div data-testid="sdk-workflow-phases" className="flex flex-wrap items-center gap-1 text-[11px]">
       {pills.map((pill) => (
@@ -310,7 +310,7 @@ function ToolAction({ tool, target, t }: { tool: string; target: string; t: Tran
 }
 
 /** The agent's second line: what it is doing now (or, once finished, the beginning of what it returned). */
-function nowLine(agent: WorkflowAgentFrame, now: number, t: Translate): React.ReactNode {
+export function nowLine(agent: WorkflowAgentFrame, now: number, t: Translate): React.ReactNode {
   if (agent.status === "done") return agent.result ? formatAgentResult(agent.result).split("\n")[0] : null;
   const activity = agent.activity;
   if (!activity) return null;
@@ -365,7 +365,6 @@ function AgentFeed({
 }: {
   agent: WorkflowAgentFrame; runId: string; polling: boolean; stopped: boolean; now: number; t: Translate;
 }) {
-  const channel = React.useContext(WorkflowFeedContext);
   const feed = useAgentFeed(runId, agent.id, polling);
   const done = agent.status === "done";
   const lines = feed ? feedLines(feed.items, { running: !done && !stopped, now, endedAt: agent.endedAt ?? (stopped ? agent.lastAt : undefined) }) : [];
@@ -380,7 +379,7 @@ function AgentFeed({
       className="ml-[18px] mt-1 space-y-1 rounded border border-border/60 bg-background/70 px-2 py-1.5 text-[11px] text-muted-foreground"
     >
       <p className="text-foreground/80">{t("sdk.workflowTask", { task: agent.label || t("sdk.workflowAgentUnnamed") })}</p>
-      {channel ? <FeedBody feed={feed} lines={lines} t={t} /> : null}
+      <FeedBody feed={feed} lines={lines} t={t} />
       <div
         data-testid="sdk-workflow-result"
         className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/50 px-1.5 py-1"

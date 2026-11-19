@@ -184,10 +184,12 @@ describe("ReviewPanel — o que mostra", () => {
     const messages = await screen.findAllByTestId("review-fleet-message");
     expect(messages.map((m) => m.textContent)).toEqual([
       expect.stringContaining("1 achado: token vaza no log"),
-      expect.stringContaining("Refutado: a linha 72 já barra"),
+      expect.stringContaining("Derrubado: a linha 72 já barra"),
     ]);
+    expect(messages[0]).toHaveTextContent("Revisão de Correção");
     expect(messages[1]).toHaveTextContent("em resposta a: token vaza no log");
-    expect(screen.getAllByTestId("workflow-agent-model").map((m) => m.textContent)).toContain("opus");
+    expect(screen.getByTestId("review-fleet-working")).toHaveTextContent("Juiz");
+    expect(screen.getByTestId("review-fleet-working")).toHaveTextContent("opus");
   });
 
   it("sem co-autor o papel não aparece", async () => {

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Review, ReviewFleetAgent, ReviewFleetRun } from "@/api/types";
 import type { ReviewEvent } from "@/api/types";
 import { conversationRows } from "./review";
-import { fleetMessages, fleetsByRound, readAgentResult, withFleets, workflowRowOf } from "./reviewFleet";
+import { agentRole, fleetMessages, fleetsByRound, readAgentResult, withFleets } from "./reviewFleet";
 
 function agent(overrides: Partial<ReviewFleetAgent> = {}): ReviewFleetAgent {
   return { id: "a1", label: "contexto", phase: "Contexto", status: "done", toolCount: 0, ...overrides };
@@ -31,6 +31,7 @@ describe("readAgentResult", () => {
     ["JSON cortado com veredito e evidência pela metade", '{"confirmed":false,"evidence":"o teste nunca', { kind: "verdict", confirmed: false, evidence: "o teste nunca" }],
     ["JSON cortado sem nada legível", '{"summary":"meio', { kind: "text", text: '{"summary":"meio' }],
     ["texto puro", "  só texto  ", { kind: "text", text: "só texto" }],
+    ["só o resumo do contexto vira o texto dele", '{"summary":"muda o login"}', { kind: "text", text: "muda o login" }],
   ])("%s", (_name, raw, expected) => {
     expect(readAgentResult(raw)).toEqual(expected);
   });
@@ -68,14 +69,6 @@ describe("fleetsByRound", () => {
   });
 });
 
-describe("workflowRowOf", () => {
-  it("vira a linha do painel da frota com o id wf: e as fases como títulos", () => {
-    const row = workflowRowOf(run());
-    expect(row.id).toBe("wf:wf_1");
-    expect(row.phases).toEqual([{ title: "Contexto" }, { title: "Revisão" }]);
-  });
-});
-
 describe("withFleets", () => {
   const line = (round: number, who: ReviewEvent["who"]): ReviewEvent => ({ at: round * 10 + (who === "reviewer" ? 1 : 0), round, who, text: who }) as ReviewEvent;
   const shape = (rows: ReturnType<typeof withFleets>) =>
@@ -94,5 +87,18 @@ describe("withFleets", () => {
   it("rodada sem frota não ganha nada", () => {
     const rows = conversationRows([line(1, "system"), line(1, "reviewer")]);
     expect(shape(withFleets(rows, new Map()))).toEqual(["R1", "system", "reviewer"]);
+  });
+});
+
+describe("agentRole", () => {
+  it.each([
+    ["contexto", { kind: "context" }],
+    ["juiz", { kind: "judge" }],
+    ["revisão: correctness", { kind: "review", dimension: "correctness" }],
+    ["verificação: repoRules · comentário narra a linha", { kind: "verification", dimension: "repoRules" }],
+    ["revisão: outra", { kind: "other", label: "revisão: outra" }],
+    ["varre:front", { kind: "other", label: "varre:front" }],
+  ])("%s", (label, expected) => {
+    expect(agentRole(label)).toEqual(expected);
   });
 });

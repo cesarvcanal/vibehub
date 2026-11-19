@@ -140,6 +140,32 @@ export const RevisorLendo: Story = {
   args: { working: { author: false, reviewer: true } },
 };
 
+export const FrotaDeAgentesTrabalhando: Story = {
+  name: "Frota de agentes trabalhando",
+  args: {
+    working: { author: false, reviewer: true },
+    fleet: [{
+      runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Contexto", "Revisão", "Verificação", "Julgamento"],
+      startedAt: Date.now() - 140_000, total: 7, done: 5, at: Date.now(), finished: false,
+      agents: [
+        { id: "a01f", label: "contexto", phase: "Contexto", model: "opus", status: "done", endedAt: 1, toolCount: 9,
+          result: '{"summary":"O PR faz o deliver de um card de análise mergear quando a pessoa autoriza."}' },
+        { id: "a02f", label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "done", endedAt: 2, toolCount: 14,
+          result: '{"findings":[{"title":"deliverCard.ts:88 deixa o merge passar com bloqueio aberto"},{"title":"corrida entre dois cliques no merge"}]}' },
+        { id: "a03f", label: "revisão: repoRules", phase: "Revisão", model: "sonnet", status: "done", endedAt: 3, toolCount: 6,
+          result: '{"findings":[{"title":"comentário novo em back/src/services/review/prompts.ts:641 narra o que a linha faz"}]}' },
+        { id: "a04f", label: "verificação: correctness · deliverCard.ts:88 deixa o merge passar com bloqueio aberto", phase: "Verificação", model: "sonnet",
+          status: "done", endedAt: 4, toolCount: 4, result: '{"confirmed":false,"evidence":"deliverCard.ts:72 já recusa com blocking aberto, antes da linha 88."}' },
+        { id: "a05f", label: "verificação: repoRules · comentário novo em back/src/services/review/prompts.ts:641 narra o que a linha faz", phase: "Verificação",
+          model: "sonnet", status: "done", endedAt: 5, toolCount: 2, result: '{"confirmed":true,"evidence":"A linha narra o fluxo, fora das exceções da §3."}' },
+        { id: "a06f", label: "verificação: correctness · corrida entre dois cliques no merge", phase: "Verificação", model: "sonnet", status: "running",
+          toolCount: 3, activity: { kind: "tool", tool: "Bash", target: "npx vitest run src/services/review/merge.test.ts -t \"dois cliques\"" } },
+        { id: "a07f", label: "juiz", phase: "Julgamento", model: "opus", status: "running", toolCount: 0 },
+      ],
+    }],
+  },
+};
+
 export const DuvidaEsperandoDecisao: Story = {
   name: "2. Dúvida esperando a decisão do revisor humano",
   args: {
