@@ -3,7 +3,9 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useQueryClient } from "@tanstack/react-query";
 import { PrReviewBlock } from "@/features/board/components/PrReviewBlock";
 import { cardAnalysisKey } from "@/features/board/lib/analysis";
-import { ANALYSIS_DIMENSIONS, type AnalysisReport, type CardAnalysisResponse, type CardPr } from "@/api/types";
+import {
+  ANALYSIS_DIMENSIONS, type AnalysisFinding, type AnalysisReadModel, type AnalysisReport, type CardAnalysisResponse, type CardPr,
+} from "@/api/types";
 
 /** The PR line above the composer, in every state its review can be in while the PR is open (a merged one leaves). */
 const PR: CardPr = {
@@ -43,17 +45,21 @@ function SeededAnalysis({ answer, children }: { answer: CardAnalysisResponse; ch
   return ready ? <>{children}</> : null;
 }
 
+const fixedFinding: AnalysisFinding = {
+  id: "f1", severity: "blocking", dimension: "tests", status: "fixed", commit: "abc1234", title: "t", problem: "p", fix: "x",
+  proof: { kind: "failing_test", ref: "a.test.ts" },
+};
+
 const analysisReport = (over: Partial<AnalysisReport> = {}): AnalysisReport => ({
   cardId: "c1", prUrl: PR.url, prNumber: PR.number, analysedSha: "b".repeat(40), stage: "done", summary: "s", refutedCount: 2, updatedAt: 1,
   dimensions: ANALYSIS_DIMENSIONS.map((key) => ({ key, status: "ran" as const })),
-  findings: [{
-    id: "f1", severity: "blocking", dimension: "tests", status: "fixed", commit: "abc1234", title: "t", problem: "p", fix: "x",
-    proof: { kind: "failing_test", ref: "a.test.ts" },
-  }],
+  findings: [fixedFinding],
   ...over,
 });
 
-const healthOk = { correctness: "ok", security: "ok", performance: "ok", contracts: "ok", tests: "ok", repoRules: "ok" } as const;
+const healthOk: AnalysisReadModel["health"] = {
+  correctness: "ok", security: "ok", performance: "ok", contracts: "ok", tests: "ok", repoRules: "ok",
+};
 
 const analysisStory = (name: string, answer: CardAnalysisResponse, cardWorking = false): Story => ({
   name,
@@ -64,7 +70,7 @@ const analysisStory = (name: string, answer: CardAnalysisResponse, cardWorking =
 export const AnaliseAnalisando = analysisStory("Análise · a frota está rodando", { analysis: null }, true);
 export const AnaliseSemRelatorio = analysisStory("Análise · card parou sem relatório", { analysis: null });
 export const AnaliseCorrigindo = analysisStory("Análise · depois do juiz, corrigindo", {
-  analysis: analysisReport({ stage: "analysed", findings: [{ ...analysisReport().findings[0]!, status: "open", commit: undefined }] }),
+  analysis: analysisReport({ stage: "analysed", findings: [{ ...fixedFinding, status: "open", commit: undefined }] }),
   health: { ...healthOk, tests: "problem" },
   verdict: "pending",
 }, true);

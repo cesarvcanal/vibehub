@@ -39,24 +39,27 @@ const doneReport = (over: Partial<AnalysisReport> = {}): AnalysisReport => ({
   ...over,
 });
 
-const readModel = (report: AnalysisReport, verdict: AnalysisReadModel["verdict"]): AnalysisReadModel => ({
+const readModel = (
+  report: AnalysisReport, verdict: AnalysisReadModel["verdict"], health: Partial<AnalysisReadModel["health"]> = {},
+): AnalysisReadModel => ({
   analysis: report,
-  health: { correctness: "ok", security: "attention", performance: "ok", contracts: "ok", tests: "ok", repoRules: "skipped" },
+  health: { correctness: "ok", security: "attention", performance: "ok", contracts: "ok", tests: "ok", repoRules: "skipped", ...health },
   verdict,
 });
 
-let analysisAnswer: CardAnalysisResponse;
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  setLanguage("pt-BR");
-  analysisAnswer = { analysis: null };
+function renderPanel(analysisAnswer: CardAnalysisResponse, onClose: () => void = () => {}) {
   get.mockImplementation(async (url: string) => {
     if (url === "/auth/me") return { user: { id: "u1", username: "mussa", role: "member" } };
     if (url === "/setup/state") return setupState();
     if (url === "/cards/c1/analysis") return analysisAnswer;
     throw new Error(`unexpected ${url}`);
   });
+  return renderApp(<AnalysisPanel cardId="c1" onClose={onClose} />);
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  setLanguage("pt-BR");
 });
 afterEach(() => {
   cleanup();
@@ -66,8 +69,7 @@ afterEach(() => {
 
 describe("painel da análise de PR", () => {
   it("mostra o veredito, as contagens e o estado de cada dimensão com o motivo de quem não rodou", async () => {
-    analysisAnswer = readModel(doneReport(), "apt");
-    renderApp(<AnalysisPanel cardId="c1" onClose={() => {}} />);
+    renderPanel(readModel(doneReport(), "apt"));
     expect(await screen.findByRole("heading", { name: "Análise do PR #312" })).toBeInTheDocument();
     expect(screen.getByText("Apto")).toBeInTheDocument();
     expect(screen.getByText("1 corrigido")).toBeInTheDocument();
@@ -84,11 +86,7 @@ describe("painel da análise de PR", () => {
     const dimensions = doneReport().dimensions.map((dimension) => dimension.key === "tests"
       ? { ...dimension, unverifiedCount: 2, reason: "2 achados sem veredito (o verificador não respondeu)" }
       : dimension);
-    analysisAnswer = {
-      ...readModel(doneReport({ dimensions }), "not_apt"),
-      health: { correctness: "ok", security: "ok", performance: "ok", contracts: "ok", tests: "attention", repoRules: "skipped" },
-    };
-    renderApp(<AnalysisPanel cardId="c1" onClose={() => {}} />);
+    renderPanel(readModel(doneReport({ dimensions }), "not_apt", { tests: "attention" }));
     expect(await screen.findByText("Não apto")).toBeInTheDocument();
     const testsDimension = within(screen.getByRole("list", { name: "Dimensões revisadas" })).getByText("Testes").closest("li")!;
     expect(within(testsDimension).getByText("atenção")).toBeInTheDocument();
@@ -96,8 +94,7 @@ describe("painel da análise de PR", () => {
   });
 
   it("agrupa os achados por classe, com arquivo:linha, prova e o commit que corrigiu", async () => {
-    analysisAnswer = readModel(doneReport(), "apt");
-    renderApp(<AnalysisPanel cardId="c1" onClose={() => {}} />);
+    renderPanel(readModel(doneReport(), "apt"));
     const blockers = await screen.findByRole("region", { name: "Bloqueantes" });
     expect(within(blockers).getByText("Sessão SSO não expira com o token")).toBeInTheDocument();
     expect(within(blockers).getByText("back/src/auth/sso.ts:84")).toBeInTheDocument();
@@ -109,11 +106,11 @@ describe("painel da análise de PR", () => {
   });
 
   it("frota indisponível mostra o motivo e o que fazer, sem achado nenhum", async () => {
-    analysisAnswer = readModel(
+    renderPanel(readModel(
       doneReport({ stage: "fleet_unavailable", unavailableReason: "the Workflow tool is not available", findings: [], dimensions: [] }),
       "not_apt",
-    );
-    renderApp(<AnalysisPanel cardId="c1" onClose={() => {}} />);
+      { correctness: "not_run", security: "not_run", performance: "not_run", contracts: "not_run", tests: "not_run", repoRules: "not_run" },
+    ));
     expect(await screen.findByText("A frota de agentes não rodou neste card")).toBeInTheDocument();
     expect(screen.getByText("the Workflow tool is not available")).toBeInTheDocument();
     expect(screen.getByText("Frota indisponível")).toBeInTheDocument();
@@ -121,14 +118,13 @@ describe("painel da análise de PR", () => {
   });
 
   it("card sem relatório ainda diz que a frota não gravou e aponta o painel de workflow", async () => {
-    renderApp(<AnalysisPanel cardId="c1" onClose={() => {}} />);
+    renderPanel({ analysis: null });
     expect(await screen.findByText(/A frota de agentes ainda não gravou o relatório/)).toBeInTheDocument();
   });
 
   it("o botão de fechar fecha o painel", async () => {
-    analysisAnswer = readModel(doneReport(), "apt");
     const onClose = vi.fn();
-    renderApp(<AnalysisPanel cardId="c1" onClose={onClose} />);
+    renderPanel(readModel(doneReport(), "apt"), onClose);
     await userEvent.click(await screen.findByRole("button", { name: "Fechar a análise" }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });

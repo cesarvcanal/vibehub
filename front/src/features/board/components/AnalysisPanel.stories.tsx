@@ -3,11 +3,11 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useQueryClient } from "@tanstack/react-query";
 import { AnalysisPanel } from "@/features/board/components/AnalysisPanel";
 import { cardAnalysisKey } from "@/features/board/lib/analysis";
-import type { AnalysisFinding, AnalysisReadModel, AnalysisReport, CardAnalysisResponse, DimensionHealth } from "@/api/types";
+import type { AnalysisFinding, AnalysisReadModel, AnalysisReport, CardAnalysisResponse } from "@/api/types";
 
 const CARD_ID = "c1";
 
-const ALL_OK: Record<AnalysisReport["dimensions"][number]["key"], DimensionHealth> = {
+const ALL_OK: AnalysisReadModel["health"] = {
   correctness: "ok", security: "ok", performance: "ok", contracts: "ok", tests: "ok", repoRules: "ok",
 };
 
@@ -18,7 +18,7 @@ const fixedBlocking: AnalysisFinding = {
 };
 
 const openBlocking: AnalysisFinding = {
-  ...fixedBlocking, id: "f2", status: "open", commit: undefined, dimension: "security",
+  id: "f2", severity: "blocking", dimension: "security", status: "open",
   title: "Callback do SSO aceita state reaproveitado", problem: "Um link de login interceptado pode ser usado de novo.",
   file: "back/src/auth/sso.ts", line: 132, proof: { kind: "scenario", ref: "sso.ts:132", detail: "o mesmo state duas vezes entra duas vezes" },
   fix: "Apagar o state na primeira leitura.",

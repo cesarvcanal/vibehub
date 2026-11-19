@@ -15,8 +15,8 @@ function renderWithClient(rows: SdkRow[]) {
   return { hook, invalidate };
 }
 
-const reportCall = (id: string, finished: boolean) =>
-  ({ kind: "tool", id, name: "mcp__vibehub__vibehub_analysis_report", summary: "", ...(finished ? { result: {} } : {}) }) as SdkRow;
+const reportCall = (id: string, finished: boolean): SdkRow =>
+  ({ kind: "tool", id, name: "mcp__vibehub__vibehub_analysis_report", summary: "", ...(finished ? { result: {} } : {}) });
 
 describe("releitura da análise pelo chat do card", () => {
   it("quando a ferramenta de relatório volta no chat, a análise do card é relida", () => {

@@ -37,20 +37,18 @@ function fullReview(overrides: Partial<Review> = {}): Review {
   };
 }
 
-function analysisDone(verdict: AnalysisReadModel["verdict"]): AnalysisReadModel {
-  return {
-    analysis: {
-      cardId: "c1", prUrl: PR.url, prNumber: 553, analysedSha: "b".repeat(40), stage: "done", summary: "s", refutedCount: 0, updatedAt: 1,
-      dimensions: ANALYSIS_DIMENSIONS.map((key) => ({ key, status: "ran" as const })),
-      findings: [{
-        id: "f1", severity: "blocking", title: "t", problem: "p", fix: "x", proof: { kind: "scenario", ref: "a.ts:1" },
-        dimension: "tests", status: "fixed", commit: "abc1234",
-      }],
-    },
-    health: { correctness: "ok", security: "ok", performance: "ok", contracts: "ok", tests: "ok", repoRules: "ok" },
-    verdict,
-  };
-}
+const aptAnalysis: AnalysisReadModel = {
+  analysis: {
+    cardId: "c1", prUrl: PR.url, prNumber: 553, analysedSha: "b".repeat(40), stage: "done", summary: "s", refutedCount: 0, updatedAt: 1,
+    dimensions: ANALYSIS_DIMENSIONS.map((key) => ({ key, status: "ran" as const })),
+    findings: [{
+      id: "f1", severity: "blocking", title: "t", problem: "p", fix: "x", proof: { kind: "scenario", ref: "a.ts:1" },
+      dimension: "tests", status: "fixed", commit: "abc1234",
+    }],
+  },
+  health: { correctness: "ok", security: "ok", performance: "ok", contracts: "ok", tests: "ok", repoRules: "ok" },
+  verdict: "apt",
+};
 
 /** What the server answers to the live read of the card's review; tests change it between polls. */
 let live: ReviewResponse;
@@ -115,7 +113,7 @@ describe("PrReviewBlock", () => {
   });
 
   it("análise concluída e apta: a pílula conta os corrigidos e a linha abre o painel da análise", async () => {
-    analysisServer.answer = analysisDone("apt");
+    analysisServer.answer = aptAnalysis;
     const onOpenPanel = vi.fn();
     renderApp(<PrReviewBlocks card={{ id: "c1", prs: [PR], pushBranch: PR.branch, status: "waiting" }} onOpenPanel={onOpenPanel} />);
 
@@ -130,7 +128,7 @@ describe("PrReviewBlock", () => {
     expect(await screen.findByText("analisando…")).toBeInTheDocument();
     const readsWhileWorking = analysisServer.reads;
 
-    analysisServer.answer = analysisDone("apt");
+    analysisServer.answer = aptAnalysis;
     view.rerender(<PrReviewBlocks card={{ ...card, status: "waiting" }} onOpenPanel={() => {}} />);
 
     expect(await screen.findByText("apto · 1 corrigido")).toBeInTheDocument();
