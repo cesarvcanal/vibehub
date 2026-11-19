@@ -480,7 +480,8 @@ com login saudável a tarefa em segundo plano continua protegida.
 - **Merge commit também leva emoji:** `🔀 merge: ...`, sem área. No `gh pr merge`, passe o título com `--subject`, porque o padrão da ferramenta sai sem emoji.
 - **Se a mensagem e o PR divergem, vale o PR.**
 - **Mensagem já enviada não se reescreve** (operação de risco, §12): o que faltou vai para o PR.
-- `💡` (comentário no código) só para as exceções da §3; `🦖` (compatibilidade com versão anterior) só com a decisão explícita de compatibilidade da §6.
+- `💡` (comentário no código) só para as exceções da §3 e para corrigir o comentário antigo que a mudança tornou falso (§3, "Comentários"); `🦖` (compatibilidade com versão anterior) só com a decisão explícita de compatibilidade da §6.
+- `✏️` só corrige erro de digitação. Trocar uma palavra que muda o sentido não é digitação: num identificador ou nome de teste, sem mudar comportamento, é `♻️`; num comentário que ficou falso, é `💡`.
 
 | Emoji | Código | Quando usar |
 |---|---|---|
