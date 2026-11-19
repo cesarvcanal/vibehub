@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { requireSession, requestUser } from "../auth/session.js";
-import { requireCardAccess, requireCardWork } from "../auth/access.js";
+import { requireCardAccess, requireCardWork, requestCardLevel } from "../auth/access.js";
 import { getUserGit, linkedAccountSlug } from "../auth/userGit.js";
 import type { PublicUser } from "../auth/users.js";
 import * as registry from "../services/board/registry.js";
@@ -13,6 +13,7 @@ import { isBusy } from "../services/maestro/maestro.js";
 import { activeReviewFor, getReview, listReviewsFollowedBy, listReviewsForCards, newest } from "../services/review/store.js";
 import { canMergeReview, isReviewClosed, type Review } from "../services/review/model.js";
 import { getAnalysis } from "../services/review/analysisStore.js";
+import { analysedPr, isAnalysisMergeable, mergeAnalysedPr } from "../services/review/analysisMerge.js";
 import { ANALYSIS_DIMENSIONS, analysisVerdict, dimensionHealth, uncheckedDimensions } from "../services/review/analysisModel.js";
 import { sendError, type ErrorStatusRule } from "./httpError.js";
 
@@ -118,7 +119,24 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
     const analysis = await getAnalysis(req.params.id);
     if (!analysis) return await reply.send({ analysis: null });
     const health = Object.fromEntries(ANALYSIS_DIMENSIONS.map((dimension) => [dimension, dimensionHealth(analysis, dimension)]));
-    return await reply.send({ analysis, health, verdict: analysisVerdict(analysis), uncheckedDimensions: uncheckedDimensions(analysis) });
+    const card = await registry.getCard(req.params.id);
+    const pr = card && analysedPr(card, analysis);
+    const canMerge = requestCardLevel(req) === "work" && pr !== undefined && isAnalysisMergeable(analysis, pr);
+    return await reply.send({
+      analysis, health, verdict: analysisVerdict(analysis), uncheckedDimensions: uncheckedDimensions(analysis), canMerge,
+      ...(pr?.mergedAt !== undefined ? { mergedAt: pr.mergedAt } : {}),
+    });
+  });
+
+  app.post<{ Params: { id: string } }>("/api/cards/:id/analysis/merge", { preHandler: requireCardWork }, async (req, reply) => {
+    try {
+      const outcome = await mergeAnalysedPr(req.params.id, (await requestUser(req))!);
+      if (outcome.kind === "merged") return await reply.send({ result: outcome.result });
+      const { kind: _refused, status, ...body } = outcome;
+      return await reply.code(status).send(body);
+    } catch (err) {
+      return await sendError(reply, err, { fallback: 500 });
+    }
   });
 
   app.post<{ Params: { id: string }; Body: StartBody }>(
