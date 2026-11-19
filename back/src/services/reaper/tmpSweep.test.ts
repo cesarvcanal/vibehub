@@ -8,7 +8,7 @@ import { hostExecutor, CONTAINER_DEADLINE_MARGIN_MS } from "../../runtime/host.j
 import { pathWithFakeDocker } from "../../testkit/fakeDocker.js";
 import { logger } from "../../utils/logger.js";
 import {
-  buildTmpSweepScript, parseTmpSweep, startTmpSweep, tmpUsageAlert, TMP_ALERT_BYTES, DISK_ALERT_PERCENT, TMP_SWEEP_TIMEOUT_MS,
+  buildTmpSweepScript, parseTmpSweep, startTmpSweep, sweepRunnerTmp, tmpUsageAlert, TMP_ALERT_BYTES, DISK_ALERT_PERCENT, TMP_SWEEP_TIMEOUT_MS,
   TMP_SWEEP_FAILURES_BEFORE_ALERT,
 } from "./tmpSweep.js";
 
@@ -169,6 +169,51 @@ describe("buildTmpSweepScript", () => {
     expect(buildTmpSweepScript("vibehub-runner")).toContain(
       `docker exec -i 'vibehub-runner' timeout -s KILL ${deadlineSeconds} bash -s`,
     );
+  });
+});
+
+describe("sweepRunnerTmp", () => {
+  it("registra no log de auditoria o que apagou e alerta com o top quando o /tmp passa de 30 GB", async () => {
+    const stdout = [
+      "VIBEHUB_TMP_SWEPT\t8\t/tmp/verify3-tests-split.log",
+      `VIBEHUB_TMP_SIZE\t${TMP_ALERT_BYTES / 1024 + 1}\t/tmp/vibehub/card-a`,
+      "VIBEHUB_TMP_SIZE\t4\t/tmp/node-compile-cache",
+      "VIBEHUB_TMP_DISK\t42",
+    ].join("\n");
+    const runScript = vi.fn(() => Promise.resolve({ stdout, stderr: "" }));
+    vi.mocked(hostExecutor).mockReturnValue({ runScript } as unknown as ReturnType<typeof hostExecutor>);
+    const infoSpy = vi.spyOn(logger, "info").mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+    onTestFinished(() => vi.restoreAllMocks());
+
+    await sweepRunnerTmp();
+
+    expect(infoSpy.mock.calls[0]![0]).toMatchObject({
+      audit: true,
+      action: "runner.tmp_sweep",
+      entries: 1,
+      freedBytes: 8 * 1024,
+      swept: [{ path: "/tmp/verify3-tests-split.log", bytes: 8 * 1024 }],
+    });
+    expect(warnSpy.mock.calls[0]![0]).toMatchObject({
+      audit: true,
+      action: "runner.tmp_alert",
+      diskPercent: 42,
+      top: [{ path: "/tmp/vibehub/card-a" }, { path: "/tmp/node-compile-cache" }],
+    });
+  });
+
+  it("passada que não apagou nada e está abaixo dos limites não escreve no log de auditoria", async () => {
+    const runScript = vi.fn(() => Promise.resolve({ stdout: "VIBEHUB_TMP_SIZE\t4\t/tmp/x\nVIBEHUB_TMP_DISK\t10\n", stderr: "" }));
+    vi.mocked(hostExecutor).mockReturnValue({ runScript } as unknown as ReturnType<typeof hostExecutor>);
+    const infoSpy = vi.spyOn(logger, "info").mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+    onTestFinished(() => vi.restoreAllMocks());
+
+    await sweepRunnerTmp();
+
+    expect(infoSpy).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 });
 
