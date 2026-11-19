@@ -11,6 +11,7 @@ import { cardsKey, type BoardCard, type BoardProject } from "@/features/board/ap
 import { writeCardMode, type CardViewMode } from "@/features/board/lib/chat";
 import { MOBILE_QUERY } from "@/lib/useIsMobile";
 import { readQueue } from "@/features/board/lib/sdkQueue";
+import { cardRateLimitsKey } from "@/features/board/components/PlanUsage";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -228,6 +229,18 @@ function serveBrowser(browser: { live: boolean; busy?: boolean; control?: "agent
     }
     return (base as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest);
   });
+}
+
+function servePersonalWeeklyUsage() {
+  const base = mockGet.getMockImplementation();
+  mockGet.mockImplementation((url: string, ...rest: unknown[]) =>
+    url === "/cards/c1/usage"
+      ? Promise.resolve({
+          slug: "personal",
+          usage: { available: true, sevenDay: { utilization: 57, resetsAt: null }, fetchedAt: 1 },
+        })
+      : (base as (url: string, ...rest: unknown[]) => Promise<unknown>)(url, ...rest),
+  );
 }
 
 /**
@@ -1067,6 +1080,70 @@ describe("CardTerminalView — the card bar", () => {
     await openMenu(user, "Claude account");
     await user.click(screen.getByRole("menuitemcheckbox", { name: /Personal/ }));
     await waitFor(() => expect(mockPatch).toHaveBeenCalledWith("/cards/c1", { accountSlug: "personal" }));
+  });
+
+  it("trocar de conta troca o medidor semanal na hora: nem a leitura nem o aviso ao vivo da conta anterior ficam", async () => {
+    const weeklyOf = { personal: 57, default: 3 } as const;
+    const pinned: { slug: "personal" | "default" } = { slug: "personal" };
+    const base = mockGet.getMockImplementation();
+    mockGet.mockImplementation((url: string, ...rest: unknown[]) =>
+      url === "/cards/c1/usage"
+        ? Promise.resolve({
+            slug: pinned.slug,
+            usage: { available: true, sevenDay: { utilization: weeklyOf[pinned.slug], resetsAt: null }, fetchedAt: 1 },
+          })
+        : (base as (url: string, ...rest: unknown[]) => Promise<unknown>)(url, ...rest),
+    );
+    mockPatch.mockImplementation(() => {
+      pinned.slug = "default";
+      return Promise.resolve({ card: card({ openedAt: 10 }), session: "restarted" });
+    });
+    const client = testQueryClient();
+    client.setQueryData(cardRateLimitsKey("c1"), {
+      seven_day: { status: "allowed", window: "seven_day", utilization: 57, resetsAt: Date.now() + 3 * 86_400_000 },
+    });
+    const user = userEvent.setup();
+    renderWithCache([card({ openedAt: 10, accountSlug: "personal" })], client);
+    expect(await screen.findByTestId("plan-meter-value")).toHaveTextContent("57%");
+
+    await openMenu(user, "Claude account");
+    await user.click(screen.getByRole("menuitemcheckbox", { name: /Main/ }));
+
+    await waitFor(() => expect(screen.getByTestId("plan-meter-value")).toHaveTextContent("3%"));
+  });
+
+  it("no clique, mostra a leitura da conta nova assim que ela é escolhida, sem esperar o PATCH que reinicia a sessão", async () => {
+    servePersonalWeeklyUsage();
+    mockPatch.mockImplementation(() => new Promise(() => {}));
+    const client = testQueryClient();
+    client.setQueryData(cardRateLimitsKey("c1"), {
+      seven_day: { status: "allowed", window: "seven_day", utilization: 57, resetsAt: Date.now() + 3 * 86_400_000 },
+    });
+    const user = userEvent.setup();
+    renderWithCache([card({ openedAt: 10, accountSlug: "personal" })], client);
+    expect(await screen.findByTestId("plan-meter-value")).toHaveTextContent("57%");
+
+    await openMenu(user, "Claude account");
+    await waitFor(() => expect(screen.getByRole("menuitemcheckbox", { name: /Main/ })).toHaveTextContent("31%"));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: /Main/ }));
+
+    await waitFor(() => expect(screen.getByTestId("plan-meter-value")).toHaveTextContent("12%"));
+    expect(mockPatch).toHaveBeenCalledWith("/cards/c1", { accountSlug: null });
+  });
+
+  it("no clique, se a troca falha, o medidor volta a ler a conta que o card ainda usa", async () => {
+    servePersonalWeeklyUsage();
+    mockPatch.mockRejectedValue(new Error("boom"));
+    const user = userEvent.setup();
+    renderWithCache([card({ openedAt: 10, accountSlug: "personal" })], testQueryClient());
+    expect(await screen.findByTestId("plan-meter-value")).toHaveTextContent("57%");
+
+    await openMenu(user, "Claude account");
+    await waitFor(() => expect(screen.getByRole("menuitemcheckbox", { name: /Main/ })).toHaveTextContent("31%"));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: /Main/ }));
+
+    await waitFor(() => expect(mockPatch).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByTestId("plan-meter-value")).toHaveTextContent("57%"));
   });
 });
 

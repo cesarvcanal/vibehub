@@ -35,6 +35,14 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(INSTRUCTIONS).toMatch(/ends cleanly[^.]*belong to the task/);
   });
 
+  it("manda investigar a fonte e relatar inconsistência e queixa do usuário sobre o próprio vibehub", () => {
+    expect(INSTRUCTIONS).toMatch(/does not match its source/);
+    expect(INSTRUCTIONS).toMatch(/user describes[^.]*user_report/);
+    expect(INSTRUCTIONS).toMatch(/Investigate first/);
+    expect(INSTRUCTIONS).toContain("explanation");
+    expect(INSTRUCTIONS).toMatch(/`dismissed`[^.]*already judged/);
+  });
+
   it("never send the agent to vibehub_gate before a delivery — vibehub_deliver already runs the gate", () => {
     // Each gate run is minutes of typecheck + tests. "Check it yourself before you ask to ship" made
     // the flow gate → deliver(unauthorized) → deliver(authorized): three full runs on the same commit.
@@ -98,6 +106,21 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(INSTRUCTIONS).toContain("Corrective autonomy");
     expect(INSTRUCTIONS).toContain("fix it without asking and without brainstorming");
     expect(INSTRUCTIONS).toContain("an improvement is a suggestion, not an authorization");
+  });
+
+  it("a autorização dada para a sequência não passa por cima de um item bloqueante aberto no PR", () => {
+    expect(INSTRUCTIONS).toContain("An open blocking item declared in the PR still needs the user's own OK for that item");
+  });
+
+  it("a pergunta se entende sozinha: diz o que foi achado, por que importa e nomeia o item", () => {
+    expect(INSTRUCTIONS).toContain("what was found, why it matters, and the item it is about");
+    expect(INSTRUCTIONS).not.toContain("At most one sentence of context");
+  });
+
+  it("o executor não reescreve histórico já enviado sem o OK do usuário, e quem roda o gate é o vibehub_deliver", () => {
+    expect(INSTRUCTIONS).toContain("rewriting commits already pushed needs the user's OK");
+    expect(INSTRUCTIONS).not.toMatch(/maestro decides what, where and in what order, runs the\s+gate/);
+    expect(INSTRUCTIONS).toContain("the deliver runs the gate");
   });
 
   it("build a server that carries those instructions", () => {

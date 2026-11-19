@@ -219,7 +219,7 @@ countdown ("Deleted in 22 h"), computed in the browser from the same stamps and 
 `GET /api/features` serves (`front/src/features/board/lib/doneRetention.ts`). What is purged is the
 runner's copy: the card's LOCAL branch goes with it, so work that was never pushed is lost.
 
-A **daily orphan sweep** is the backstop and the retroactive cleanup: it deletes only artifacts
+An **hourly orphan sweep** is the backstop and the retroactive cleanup: it deletes only artifacts
 that belong to no card that exists, with three guards — the path must be unmistakably a card
 artifact, nothing younger than an hour is touched, and a pass is capped and logs what it left.
 
@@ -236,7 +236,7 @@ Two guards, both structural:
   and the delete cannot touch it. Both rules are pinned by tests.
 
 What deliberately SURVIVES, and why: anything already pushed to **GitHub** (a branch, a PR — another
-machine's data), the **project brain** a card contributed to (`vibehub_learn` writes knowledge that
+machine's data), the **project brain** a card contributed to (`vibehub_brain_learn` writes knowledge that
 belongs to the project), the **credentials saved to the vault** from a card's browser (they were
 saved on purpose, they belong to the install), and **log lines** already emitted (the audit trail
 carries card slugs). Filesystem backups of `VIBEHUB_DATA_DIR`, if the operator takes any, keep
@@ -262,10 +262,14 @@ PROJECT is the standing version of sharing a card: every card in it, including t
 afterwards. A card reached both ways takes the stronger of the two levels, and a share never
 outlives the card, the project, or the person it names.
 
-Two gates carry it, both Fastify preHandlers, and every route wears exactly one:
-`requireOwner` (`auth/session.ts`) for what belongs to the install, and `requireCardAccess`
-(`auth/access.ts`) for what belongs to a card. `auth/access.ts` is also where the board listings are
-narrowed (`visibleProjects`/`visibleCards`), so a member's board is filtered rather than refused.
+Four gates carry it, all Fastify preHandlers, and every route that acts for a person wears one:
+`requireOwner` (`auth/session.ts`) for what belongs to the install; `requireCardAccess` (read) and
+`requireCardWork` (change) (`auth/access.ts`) for what belongs to a card; and `requireSession`
+(`auth/session.ts`) for a person's own routes with no card (`/api/me/*`, listings). Routes that act
+for nobody yet or carry their own credential (login, logout and setup, the OAuth metadata, `/mcp`,
+the runner's status hook) wear none and set their trust boundary themselves. `auth/access.ts` is
+also where the board listings are narrowed (`visibleProjects`/`visibleCards`), so a member's board
+is filtered rather than refused.
 
 **What sharing does NOT reach yet: the agent inside the card.** Every card's Claude gets the vibehub
 MCP registered with the RUNNER's token (`services/mcp/mcp.ts`), and that token is install-wide — the

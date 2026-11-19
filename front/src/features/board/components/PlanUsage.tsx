@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type QueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Ban } from "lucide-react";
 import { boardApi, cardUsageKey, profilePathFor } from "@/features/board/api";
 import type { CardUsageResponse } from "@/api/types";
@@ -11,6 +11,7 @@ import {
   YELLOW_AT,
   alertSentence,
   planWindows,
+  reportsNoSession,
   resetPhrase,
   usageColor,
   usageTone,
@@ -33,6 +34,17 @@ import { useT } from "@/i18n";
 /** A card's live plan warnings, shared between the chat (which receives them) and the top. */
 export const cardRateLimitsKey = (cardId: string) => ["board", "card", cardId, "rateLimits"] as const;
 
+export function setCardPlanUsage(queryClient: QueryClient, cardId: string, reading: CardUsageResponse): void {
+  void queryClient.cancelQueries({ queryKey: cardUsageKey(cardId) });
+  queryClient.setQueryData(cardRateLimitsKey(cardId), {});
+  queryClient.setQueryData(cardUsageKey(cardId), reading);
+}
+
+export function resetCardPlanUsage(queryClient: QueryClient, cardId: string): void {
+  queryClient.setQueryData(cardRateLimitsKey(cardId), {});
+  void queryClient.invalidateQueries({ queryKey: cardUsageKey(cardId) });
+}
+
 /**
  * The plan reading of this card's account (60s, the same cache as the back — the usage endpoint rate-limits per
  * caller) plus the live warnings the chat published. A single query per card; the top and the chat
@@ -47,7 +59,7 @@ export function useCardPlanUsage(cardId: string, enabled: boolean) {
     staleTime: 55_000,
     retry: false,
   });
-  // No real queryFn: the chat is the one that writes (`setQueryData`), here it is only read.
+  // No real queryFn: the chat writes it (`setQueryData`) and an account switch empties it; here it is only read.
   const live = useQuery<Record<string, RateLimitInfo>>({
     queryKey: cardRateLimitsKey(cardId),
     queryFn: () => ({}),
@@ -218,6 +230,11 @@ export function PlanUsageMeter({
                 : t("usage.loading")}
             </p>
           )}
+          {reportsNoSession(data?.usage, windows) ? (
+            <p data-testid="plan-no-session" className="text-[11px] leading-snug text-muted-foreground">
+              {t("plan.noSessionWindow")}
+            </p>
+          ) : null}
         </div>
         {data?.usage?.available ? (
           <div className="flex items-center justify-between gap-2 border-t border-border/60 px-4 py-2 text-[11px] text-muted-foreground">

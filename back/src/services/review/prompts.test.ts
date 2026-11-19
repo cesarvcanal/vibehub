@@ -61,7 +61,7 @@ describe("autonomia corretiva: bug no que o PR fez se corrige, melhoria fora do 
   it("o revisor classifica bug ou incongruência no que o PR fez como bloqueante ou dúvida, nunca como sugestão", () => {
     const text = reviewerRoundPrompt(review());
     expect(text).toContain("Bug ou incongruência no que o PR fez não é sugestão");
-    expect(text).toMatch(/volta desnecessária, o que fica fora do escopo do PR/);
+    expect(text).toMatch(/melhoria opcional, o que fica fora do escopo do PR/);
   });
 
   it("o autor corrige sem perguntar o que é bug, não amplia escopo, e na dúvida de intenção explica em vez de aplicar", () => {
@@ -154,17 +154,43 @@ describe("quem age em cada achado: revisor e autor leem as mesmas classes", () =
   const improvement: Finding = {
     id: "f1", severity: "improvement", title: "tira a duplicação", status: "open", introducedInRound: 1, file: "src/a.ts", fix: "x",
   };
+  const delta = { ...review([improvement]), round: 2, reviewedSha: "a".repeat(40) };
+  const texts = [
+    reviewerRoundPrompt(review()), reviewerDeltaPrompt(delta), authorFixPrompt(review([improvement])),
+    authorSuggestionsPrompt(review([improvement]), [improvement], { by: "cesar" }),
+  ];
 
   it("o mesmo bloco de classes chega ao revisor (rodada e delta) e ao autor (correção e sugestões)", () => {
-    const delta = { ...review([improvement]), round: 2, reviewedSha: "a".repeat(40) };
-    const texts = [
-      reviewerRoundPrompt(review()), reviewerDeltaPrompt(delta), authorFixPrompt(review([improvement])),
-      authorSuggestionsPrompt(review([improvement]), [improvement], { by: "cesar" }),
-    ];
     for (const text of texts) {
       expect(text).toContain("Autonomia técnica não é autonomia de produto");
       expect(text).toMatch(/- improvement — a IA do autor aplica sozinha/);
       expect(text).toMatch(/- question — espera a decisão de uma pessoa/);
+    }
+  });
+
+  it("revisor e autor leem que estilo, nome, comentário ou volta que viola regra escrita é blocking com proof.kind = rule", () => {
+    for (const text of texts) {
+      expect(text).toMatch(/Linha do PR que viola uma regra escrita do repo \(AGENTS\.md, CLAUDE\.md ou equivalente\) é blocking com proof\.kind = rule, mesmo quando é de estilo, nome, comentário, duplicação ou volta desnecessária/);
+      expect(text).toMatch(/se uma regra escrita exige a melhoria, é blocking/);
+      expect(text).not.toMatch(/fugir do padrão estabelecido do repo;/);
+    }
+  });
+
+  it("estilo e nome sem regra escrita que os decida continuam sugestão", () => {
+    for (const text of texts) {
+      expect(text).toContain("automática (estilo, nome ou refatoração que nenhuma regra escrita decide, o que fica fora do escopo do PR");
+    }
+  });
+
+  it("o autor corrige bug com o teste que falha sem a correção, visto vermelho antes do verde", () => {
+    for (const text of [authorFixPrompt(review([improvement])), authorSuggestionsPrompt(review([improvement]), [improvement], { by: "cesar" })]) {
+      expect(text).toContain("com commit e com um teste que falha sem a correção (o vermelho visto antes do verde)");
+    }
+  });
+
+  it("o autor não recebe ordem de recusar volta desnecessária que o revisor bloqueou por regra escrita", () => {
+    for (const text of [authorFixPrompt(review([improvement])), authorSuggestionsPrompt(review([improvement]), [improvement], { by: "cesar" })]) {
+      expect(text).toContain("- Fora do escopo, feature nova ou mudança de uma decisão intencional: não faça; responda explicando.");
     }
   });
 
@@ -251,6 +277,14 @@ describe("prompt da análise de PR", () => {
     expect(analysisPrompt(input)).toMatch(/stage: "done"[^\n]*o mesmo headSha do passo 1/);
   });
 
+  it("entrega sem authorized por conta própria, e mergeia com authorized e from = o próprio card quando a pessoa manda", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    const text = analysisPrompt(input);
+    expect(text).toMatch(/Entregue as correções[^\n]*sem authorized/);
+    expect(text).toMatch(/Se a pessoa mandar mergear[^\n]*vibehub_deliver com card = "card-9", from = "card-9", branch = "dev" e authorized: true/);
+    expect(text).not.toContain("o merge é de uma pessoa");
+  });
+
   it("o relatório analysed vai uma vez só, como o servidor exige", async () => {
     const { analysisPrompt } = await import("./prompts.js");
     expect(analysisPrompt(input)).toMatch(/stage: "analysed"[^\n]*uma vez só/);
@@ -304,7 +338,7 @@ describe("prompt da análise de PR", () => {
     expect(text).toContain(classes!);
   });
 
-  it("corrige com teste primeiro, comenta tudo na PR e entrega sem merge nem reescrever a descrição", async () => {
+  it("corrige com teste primeiro, comenta tudo na PR e entrega sem merge próprio nem reescrever a descrição", async () => {
     const { analysisPrompt } = await import("./prompts.js");
     const text = analysisPrompt(input);
     expect(text).toMatch(/teste que reproduz/);
@@ -312,7 +346,7 @@ describe("prompt da análise de PR", () => {
     expect(text).not.toContain("${");
     expect(text).toContain("gh pr review 636 --comment");
     expect(text).toContain('vibehub_deliver com card = "card-9" e branch = "dev"');
-    expect(text).not.toMatch(/authorized: true/);
+    expect(text.split("\n").find((line) => line.startsWith("7."))).not.toContain("authorized: true");
     expect(text).toMatch(/sem title nem body/);
   });
 

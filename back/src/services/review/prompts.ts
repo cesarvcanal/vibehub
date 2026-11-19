@@ -71,7 +71,8 @@ function rules(): string {
     "- Só bloqueia com prova: teste que falha, regra escrita do repo citada (arquivo e trecho), ou cenário concreto com " +
       "arquivo:linha. Bug no código deste PR (comportamento errado, falha, quebra, brecha de segurança, perda de dado, " +
       "regressão) TEM essa prova: é bloqueante e se resolve neste PR, nunca sugestão. Sugestão é só o que não é bug no " +
-      "escopo (estilo, nome, refatoração, melhoria opcional, problema antigo fora do diff): aparece, não bloqueia, não abre rodada; " +
+      "escopo nem viola regra escrita do repo (estilo, nome ou refatoração que nenhuma regra escrita decide, melhoria opcional, " +
+      "problema antigo fora do diff): aparece, não bloqueia, não abre rodada; " +
       "a melhoria que preserva o comportamento no código do PR é improvement, que o autor aplica sozinho.",
     // Measured in the transcripts of the erp-aux reviews (PRs #599, #605, #624, #627): most of the round
     // went into 5-to-10-minute commands (the whole suite, `npm ci`, `tsc --force`), one after the other.
@@ -139,20 +140,23 @@ const FINDING_CLASSES = [
     "esperado está claro? Se está, a IA resolve sozinha, e decide COMO resolver. Se resolver exige decidir O QUE o sistema " +
     "deve fazer, uma pessoa decide. Autonomia técnica não é autonomia de produto.",
   "- blocking — a IA do autor corrige sem perguntar: bug, erro de lógica, inconsistência, validação ausente, comportamento " +
-    "que contraria o que o PR quis fazer, contradição com uma solução evidente. Precisa de prova (regras acima).",
+    "que contraria o que o PR quis fazer, contradição com uma solução evidente. Precisa de prova (regras acima). Linha do " +
+    "PR que viola uma regra escrita do repo (AGENTS.md, CLAUDE.md ou equivalente) é blocking com proof.kind = rule, mesmo " +
+    "quando é de estilo, nome, comentário, duplicação ou volta desnecessária.",
   "- improvement — a IA do autor aplica sozinha, na mesma rodada: melhoria técnica válida no código que o PR já mexe, que " +
     "preserva a regra de negócio, a intenção e o comportamento esperado (simplificar, tirar duplicação, deixar mais claro " +
-    "ou mais seguro o que o PR escreveu). file obrigatório, num arquivo que o PR altera. Não amplia escopo: se aplicar " +
+    "ou mais seguro o que o PR escreveu) que nenhuma regra escrita exige: se uma regra escrita exige a melhoria, é blocking. " +
+    "file obrigatório, num arquivo que o PR altera. Não amplia escopo: se aplicar " +
     "exigiria mexer fora do PR, mudar comportamento ou contrato, não é improvement.",
   "- question — espera a decisão de uma pessoa, e só quando resolver exige decidir intenção ou produto: intenção ambígua; " +
-    "mudar regra de negócio ou o comportamento esperado; mudar arquitetura ou estrutura de forma relevante; fugir do padrão " +
-    "estabelecido do repo; caminhos razoáveis com impactos diferentes e nenhum tecnicamente evidente; ou o PR altera algo " +
+    "mudar regra de negócio ou o comportamento esperado; mudar arquitetura ou estrutura de forma relevante; fugir de uma " +
+    "convenção do repo que nenhuma regra escrita decide; caminhos razoáveis com impactos diferentes e nenhum tecnicamente evidente; ou o PR altera algo " +
     "que já funcionava sem deixar claro que era a intenção, ou pode colidir com uma funcionalidade existente. Em problem, " +
     "o conflito; em fix, as alternativas e o que cada uma causa. Dúvida não é saída fácil: erro comprovado com uma solução " +
     "coerente com o que foi pedido é blocking.",
   "- suggestion — opcional, uma pessoa escolhe no painel: o que não é preciso para corrigir nada e não justifica mudança " +
-    "automática (estilo, nome, refatoração maior, volta desnecessária, o que fica fora do escopo do PR, problema antigo " +
-    "fora do diff).",
+    "automática (estilo, nome ou refatoração que nenhuma regra escrita decide, o que fica fora do escopo do PR, problema " +
+    "antigo fora do diff).",
   "Os exemplos ilustram o critério; não são uma lista fechada.",
 ].join("\n");
 
@@ -169,8 +173,9 @@ function classification(): string {
     "- blocking: SÓ com prova. proof.kind = failing_test (ref = o teste que falha, ex. src/x.test.ts:12), rule (ref = a regra " +
       "escrita do repo, ex. CLAUDE.md, com o trecho em detail) ou scenario (ref = arquivo:linha, detail = o cenário concreto " +
       "que quebra, inclusive funcionalidade que já existia). Bloqueante sem prova vira sugestão no servidor.",
-    "- suggestion: SÓ o que não é bug no escopo do PR: estilo, nome, legibilidade, refatoração, melhoria opcional, volta " +
-      "desnecessária, o que fica fora do escopo do PR, ou problema que já existia fora do que o PR mexe. Bug ou incongruência " +
+    "- suggestion: SÓ o que não é bug no escopo do PR nem viola regra escrita do repo: estilo, nome, legibilidade ou " +
+      "refatoração que nenhuma regra escrita decide, melhoria opcional, o que fica fora do escopo do PR, ou problema que já " +
+      "existia fora do que o PR mexe. Bug ou incongruência " +
       "no que o PR fez não é sugestão: é blocking com proof.kind = scenario (ref = arquivo:linha, detail = o caso que dá " +
       "errado). Na dúvida entre os dois, e o defeito é real e alcançável, é blocking.",
     "- improvement: o autor aplica na rodada seguinte e você confere; na última rodada ela fica só registrada. Nunca segura o merge.",
@@ -327,10 +332,11 @@ export function reviewerDeltaPrompt(r: Review): string {
  * what widens the scope is not done; a doubt about intent belongs to the person, not the AI.
  */
 const CORRECTIVE_AUTONOMY = [
-  "- Bug ou incongruência no que o PR fez: corrija sem perguntar, com commit e teste, mesmo que tenha vindo como sugestão.",
+  "- Bug ou incongruência no que o PR fez: corrija sem perguntar, com commit e com um teste que falha sem a correção (o " +
+    "vermelho visto antes do verde), mesmo que tenha vindo como sugestão.",
   "- Melhoria autônoma (improvement): aplique sem esperar ninguém, só o que o item descreve e só nos arquivos que o PR já " +
     "altera, sem mudar regra, contrato ou comportamento. Se aplicar exigir sair disso, não aplique: wontfix com o motivo.",
-  "- Fora do escopo, feature nova, volta desnecessária ou mudança de uma decisão intencional: não faça; responda explicando.",
+  "- Fora do escopo, feature nova ou mudança de uma decisão intencional: não faça; responda explicando.",
   "- Você decide COMO resolver, não O QUE o sistema deve fazer. Correção que exige decidir a intenção do PR, muda regra de " +
     "negócio ou comportamento esperado, ou altera algo que já funcionava e pode colidir com outra funcionalidade sem estar " +
     "claro que era a intenção: não aplique; responda com a dúvida sobre a intenção e as consequências de cada caminho, para " +
@@ -589,7 +595,7 @@ export interface AnalysisInput {
  * in parallel, a verifier that tries to refute each finding, a judge. The card itself is the only writer.
  *
  * The card has none of the author's context on purpose (agnostic): only the PR and the repo's rules.
- * It never merges, and it never rewrites the PR's title or body — they are the author's. PURE.
+ * It merges only when the person tells it to, and it never rewrites the PR's title or body — they are the author's. PURE.
  */
 export function analysisPrompt(a: AnalysisInput): string {
   const workflowArgs = JSON.stringify({ prNumber: a.prNumber, branch: a.branch, base: a.base, headSha: "<sha do passo 1>" });
@@ -632,10 +638,13 @@ export function analysisPrompt(a: AnalysisInput): string {
     "6. Reconferência: dispare UM subagente novo, sem o seu contexto, para revisar só git diff <sha analisado>..HEAD, " +
       "procurando bug que a própria correção criou. Achado com prova: corrija do mesmo jeito (uma volta a mais, só uma).",
     `7. Entregue as correções: chame vibehub_deliver com card = "${a.cardId}" e branch = "${a.base}", sem title nem body ` +
-      "(a descrição do PR é do autor) e sem authorized (o merge é de uma pessoa). Os commits vão para a branch da PR. " +
+      "(a descrição do PR é do autor) e sem authorized (você não mergeia por conta própria). Os commits vão para a branch da PR. " +
       // Never the step-1 reset here: it would drop the fix commits that have not gone up yet.
       `Se o push for recusado porque a PR andou, traga o código novo sem perder as correções: git fetch origin && git rebase origin/${a.branch}, ` +
       "resolva os conflitos, rode de novo os testes do que mudou e entregue outra vez.",
+    `   Se a pessoa mandar mergear, neste chat, chame vibehub_deliver com card = "${a.cardId}", from = "${a.cardId}", ` +
+      `branch = "${a.base}" e authorized: true: o merge sai com o gate verde, em merge commit preso ao commit conferido, e a ` +
+      "resposta diz o motivo quando recusa (PR em revisão, gate vermelho, PR que andou). Nunca mergeie pelo gh nem pela API.",
     `8. Chame vibehub_analysis_report de novo, com stage: "done": o mesmo headSha do passo 1 (não o das correções), ` +
       "as mesmas dimensions do passo 3, inclusive o unverifiedCount, e os mesmos findings, cada um com status " +
       "\"fixed\" e o commit, \"decided\" com a decision (question que a pessoa já respondeu sem pedir mudança) ou " +

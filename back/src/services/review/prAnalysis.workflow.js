@@ -141,9 +141,10 @@ const contextPrompt =
 const reviewPrompt = (dimension, brief) =>
   `Você é o revisor especialista em ${dimension.key} do PR #${args.prNumber}. Foco: ${dimension.focus}.\n` +
   `${briefText(brief)}\nDiff: git diff ${diffRange}. ${READ_ONLY_RULE}\n${PROOF_RULE}\n` +
-  'Procure o que está ERRADO, não confirme o que o PR diz. Para cada achado: title (uma linha), problem (o que está ' +
-  'errado e o que acontece se ficar assim, para quem não abre o código), file e line, proof, fix (o que mudar e onde) ' +
-  'e suggestedSeverity. Nenhum achado é uma resposta válida.'
+  `Procure o que está ERRADO, não confirme o que o PR diz. A descrição do PR (gh pr view ${args.prNumber}) é o que o autor ` +
+  'afirma: confira no código cada causa, teste, número e arquivo:linha que ela cita, e a afirmação falsa é achado. ' +
+  'Para cada achado: title (uma linha), problem (o que está errado e o que acontece se ficar assim, para quem não abre ' +
+  'o código), file e line, proof, fix (o que mudar e onde) e suggestedSeverity. Nenhum achado é uma resposta válida.'
 
 const verifyPrompt = (finding, dimension, brief) =>
   `Tente DERRUBAR este achado de ${dimension.key} do PR #${args.prNumber}. ${READ_ONLY_RULE}\n${briefText(brief)}\n` +
@@ -157,8 +158,8 @@ const judgePrompt = (confirmedFindings, brief) =>
   confirmedFindings.map((confirmed) => `- [${confirmed.label}] ${JSON.stringify(confirmed.finding)} (verificação: ${confirmed.evidence})`).join('\n') +
   '\nJunte os repetidos (o mesmo defeito visto por duas dimensões vira um achado, na dimensão mais precisa) e classifique ' +
   'cada um: blocking (bug ou regra violada, com prova; a IA corrige sozinha), improvement (melhoria no código que o PR ' +
-  'mexe, que preserva o comportamento), question (resolver exige decidir intenção ou produto), suggestion (opcional, ' +
-  `fora do escopo ou gosto). ${PROOF_RULE}`
+  'mexe, que preserva o comportamento e que nenhuma regra escrita exige), question (resolver exige decidir intenção ou produto), suggestion (opcional, ' +
+  `fora do escopo, ou gosto que nenhuma regra escrita decide). ${PROOF_RULE}`
 
 phase('Contexto')
 const brief = await agent(contextPrompt, { label: 'contexto', phase: 'Contexto', model: 'opus', effort: 'high', schema: BRIEF_SCHEMA })

@@ -35,6 +35,7 @@ import {
 import { logger } from "../../utils/logger.js";
 import { testWorkerTmuxArgs } from "../../runtime/testWorkers.js";
 import { CARD_ID_RE } from "./cardId.js";
+import { CREATE_CARD_TMPDIR, cardTmpDir, cardTmpEnv } from "./cardTmp.js";
 import { applyLiveEffort } from "./agentState.js";
 
 export { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir };
@@ -124,6 +125,7 @@ export function sessionCommand(opts: SessionCommandOpts | boolean): string {
   // after the next change of author it pushed and opened PRs as the PREVIOUS person, silently. The
   // card's git and gh read the card's token FILE on every call instead (github/runnerIdentity.ts).
   const guard =
+    CREATE_CARD_TMPDIR +
     `export IS_SANDBOX=1; ` +
     autoCompactExport() +
     oauthTokenGuard(profileDir) +
@@ -492,7 +494,7 @@ export function buildOpenScript(opts: OpenScriptOpts): string {
       ` -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8` +
       // The card's git include: every git of the session — any repository — acts as the card's
       // author, read from a file the author switch rewrites (github/runnerIdentity.ts).
-      cardGitEnv(opts.cardId).map(([k, v]) => ` -e ${shQuote(`${k}=${v}`)}`).join("") +
+      [...cardGitEnv(opts.cardId), ...cardTmpEnv(opts.cardId)].map(([name, value]) => ` -e ${shQuote(`${name}=${value}`)}`).join("") +
       // Test runners share the runner's cores with every other card: cap their workers.
       ` ${testWorkerTmuxArgs().join(" ")}` +
       // Non-default account: the session's Claude uses the account profile (isolated credentials/state).
@@ -551,11 +553,11 @@ export function terminalRemoteArgs(containerName: string, tmuxSession: string, c
     "-e", `PW_CDP_ENDPOINT=${cardCdpEndpoint(opts.cardId)}`,
     "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8",
     // The card's git include (see buildOpenScript) — the Shell tab's manual git included.
-    ...cardGitEnv(opts.cardId).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
+    ...[...cardGitEnv(opts.cardId), ...cardTmpEnv(opts.cardId)].flatMap(([name, value]) => ["-e", `${name}=${value}`]),
     ...testWorkerTmuxArgs(),
     ...(opts.accountConfigDir ? ["-e", `CLAUDE_CONFIG_DIR=${opts.accountConfigDir}`] : []),
     opts.shell
-      ? "exec bash"
+      ? `${CREATE_CARD_TMPDIR}exec bash`
       : sessionCommand({
           resume: !!opts.resume,
           resumeSessionId: opts.resumeSessionId,
@@ -2125,6 +2127,9 @@ export function ownBranch(card: Pick<Card, "branch" | "worktreeSlug">): string |
  * What it erases, and why each one is part of the card:
  *  - the git worktree, its directory and the card's branch — the code the card wrote;
  *  - `/work/.uploads/<cardId>` — the images the user attached to the conversation;
+ *  - `/tmp/vibehub/<cardId>` — the card's TMPDIR (cardTmp.ts), and the Claude Code task outputs a
+ *    session wrote to `/tmp/claude-<uid>/<cwd-sanitized>` before it had one — after every process
+ *    born with the card's VIBEHUB_CARD_ID (a server detached from the pane, a test mongod) is killed;
  *  - `/root/.vibehub/gh/<cardId>.token` — the card's GitHub token (a live credential), and its git
  *    include `/root/.vibehub/git/<cardId>.gitconfig` (who worked it);
  *  - the Chromium user-data-dir — cookies and logged-in sessions of the card's browser;
@@ -2146,7 +2151,19 @@ export function buildCardPurgeScript(o: CardPurgeScriptOpts): string {
   const uploads = `/work/.uploads/${o.cardId}`;
   assertSafeRemotePath(uploads);
   const transcriptDirName = claudeProjectsDirName(o.cwd);
-  const inner: string[] = killSessionLines(o.sessions);
+  const tmpDir = cardTmpDir(o.cardId);
+  const legacyTaskOutputs = `/tmp/claude-[0-9]*/${shQuote(transcriptDirName)}`;
+  const inner: string[] = [
+    ...killSessionLines(o.sessions),
+    `CARD_PIDS=$(grep -lsxzF ${shQuote(`VIBEHUB_CARD_ID=${o.cardId}`)} /proc/[0-9]*/environ | cut -d/ -f3 | ` +
+      `while read -r PROCESS_ID; do [ "$PROCESS_ID" = 1 ] || [ "$PROCESS_ID" = "$$" ] || [ "$(cat "/proc/$PROCESS_ID/comm" 2>/dev/null)" = ${shQuote(TMUX_SERVER_COMM)} ] || echo "$PROCESS_ID"; done)`,
+    '[ -n "$CARD_PIDS" ] && kill -TERM $CARD_PIDS 2>/dev/null || true',
+    'if [ -n "$CARD_PIDS" ]; then sleep 1; kill -KILL $CARD_PIDS 2>/dev/null || true; fi',
+    `FREED_KB=$(timeout ${PURGE_MEASURE_TIMEOUT_S} du -skxc ${[o.cwd, uploads, tmpDir, o.browserDataDir].map(shQuote).join(" ")} ${legacyTaskOutputs}` +
+      ` ${DEFAULT_CLAUDE_DIR}/projects/${shQuote(transcriptDirName)} ${CLAUDE_PROFILES_DIR}/*/projects/${shQuote(transcriptDirName)}` +
+      ` 2>/dev/null | awk -F '\\t' '$2 == "total" {print $1}')`,
+    `[ -n "$FREED_KB" ] && echo "${PURGE_FREED_MARKER} $FREED_KB" || true`,
+  ];
   if (o.repoDir) {
     assertSafeRemotePath(o.repoDir);
     // `worktree remove --force` unregisters it in .git/worktrees; `prune` cleans a stale entry when
@@ -2171,6 +2188,8 @@ export function buildCardPurgeScript(o: CardPurgeScriptOpts): string {
   inner.push(
     `rm -rf ${shQuote(o.cwd)} 2>/dev/null || true`,
     `rm -rf ${shQuote(uploads)} 2>/dev/null || true`,
+    `rm -rf ${shQuote(tmpDir)} 2>/dev/null || true`,
+    `rm -rf ${legacyTaskOutputs} 2>/dev/null || true`,
     // The card's GitHub token file (a LIVE credential): the shared builder's `rm -f` is already
     // tolerant, but every line in this script carries the same guard — the invariant is checked.
     ...removeGhTokenLines(o.cardId).map((l) => `${l} 2>/dev/null || true`),
@@ -2208,6 +2227,17 @@ export function buildCardPurgeScript(o: CardPurgeScriptOpts): string {
   ].join("\n");
 }
 
+const PURGE_FREED_MARKER = "VIBEHUB_PURGE_FREED_KB";
+const TMUX_SERVER_COMM = "tmux: server";
+const PURGE_MEASURE_TIMEOUT_S = 60;
+
+export function parsePurgeFreedBytes(stdout: string): number | undefined {
+  const markerLine = stdout.split("\n").find((line) => line.startsWith(`${PURGE_FREED_MARKER} `));
+  if (!markerLine) return undefined;
+  const kilobytes = Number.parseInt(markerLine.slice(PURGE_FREED_MARKER.length + 1), 10);
+  return Number.isFinite(kilobytes) ? kilobytes * 1024 : undefined;
+}
+
 /**
  * PURGES the card's side of the runner: both tmux sessions, then every file the card owns (see
  * {@link buildCardPurgeScript}) — in ONE docker exec, the kill riding at the head of the purge.
@@ -2227,7 +2257,7 @@ export function buildCardPurgeScript(o: CardPurgeScriptOpts): string {
 export async function purgeCardWorkspace(
   card: Card,
   opts: { project?: Project; by?: string } = {},
-): Promise<void> {
+): Promise<number | undefined> {
   const { by } = opts;
   // The project is taken as a PARAMETER when the caller has it: deleting a project removes it and
   // its cards in ONE mutation, so by the time those cards are purged there is nothing to look up —
@@ -2249,15 +2279,17 @@ export async function purgeCardWorkspace(
   });
   // The kill listeners (the SDK driver) first, exactly as killCardSessionOrThrow does it.
   notifyCardSessionKill(card.id);
-  try {
-    await hostExecutor().runScript(script, { timeoutMs: 180_000 });
-  } catch (err) {
-    throw runnerUnreachable(err);
-  }
+  const stdout = await hostExecutor()
+    .runScript(script, { timeoutMs: 180_000 })
+    .then((run) => run.stdout, (err: unknown) => {
+      throw runnerUnreachable(err);
+    });
+  const freedBytes = parsePurgeFreedBytes(stdout);
   logger.info(
-    { audit: true, action: "card.purge", card: card.worktreeSlug, cwd: paths.cwd, by },
-    "card workspace purged from the runner (worktree, branch, uploads, browser profile, transcripts)",
+    { audit: true, action: "card.purge", card: card.worktreeSlug, cwd: paths.cwd, by, ...(freedBytes === undefined ? {} : { freedBytes }) },
+    "card workspace purged from the runner (worktree, branch, uploads, temp files, processes, browser profile, transcripts)",
   );
+  return freedBytes;
 }
 
 // ---------------------------------------------------------------------------

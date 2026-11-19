@@ -32,6 +32,31 @@ describe("PlanUsageMeter", () => {
     expect(screen.getByTestId("plan-meter")).toHaveAccessibleName("Weekly limit: 36%");
   });
 
+  it("conta cujo plano não tem janela de 5h: o painel diz que o plano não informa limite de sessão", async () => {
+    serve({ slug: "tech", usage: { available: true, sevenDay: { utilization: 62, resetsAt: iso(86_400_000) }, fetchedAt: Date.now() } });
+    const user = userEvent.setup();
+    renderApp(<PlanUsageMeter cardId="c1" accountName="tech" active isOwner />);
+    await waitFor(() => expect(screen.getByTestId("plan-meter-value")).toHaveTextContent("62%"));
+
+    await user.click(screen.getByTestId("plan-meter"));
+    const panel = await screen.findByTestId("plan-panel");
+    expect(within(panel).getByTestId("plan-no-session")).toHaveTextContent("This plan reports no session (5h) limit");
+  });
+
+  it("conta com janela de 5h não mostra o aviso de plano sem sessão", async () => {
+    serve({
+      slug: "albert",
+      usage: { available: true, fiveHour: { utilization: 100, resetsAt: iso(3_600_000) }, sevenDay: { utilization: 9, resetsAt: iso(86_400_000) }, fetchedAt: Date.now() },
+    });
+    const user = userEvent.setup();
+    renderApp(<PlanUsageMeter cardId="c1" accountName="albert" active isOwner />);
+    await waitFor(() => expect(screen.getByTestId("plan-meter-value")).toHaveTextContent("9%"));
+
+    await user.click(screen.getByTestId("plan-meter"));
+    const panel = await screen.findByTestId("plan-panel");
+    expect(within(panel).queryByTestId("plan-no-session")).toBeNull();
+  });
+
   it("warms the pill once the week passes 60%", async () => {
     serve({ slug: "albert", usage: { available: true, sevenDay: { utilization: 88, resetsAt: iso(86_400_000) }, fetchedAt: Date.now() } });
     renderApp(<PlanUsageMeter cardId="c1" accountName="albert" active isOwner />);

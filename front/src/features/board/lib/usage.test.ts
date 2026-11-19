@@ -95,6 +95,11 @@ describe("what the UI shows", () => {
     expect(pillPercent(usage({ available: false, fiveHour: undefined }))).toBeNull();
     expect(pillPercent(undefined)).toBeNull();
   });
+
+  it("plano sem janela de 5h (a API devolve five_hour: null) põe o semanal no badge, marcado como semana", () => {
+    expect(pillPercent(usage({ fiveHour: undefined, sevenDay: { utilization: 62, resetsAt: null } }))).toBe("62% week");
+    expect(pillPercent(usage({ fiveHour: undefined, sevenDay: undefined, sevenDayOpus: undefined }))).toBeNull();
+  });
 });
 
 describe("the sentence for an account with no numbers", () => {

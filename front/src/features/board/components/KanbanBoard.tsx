@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { CardTile } from "@/features/board/components/CardTile";
+import { resetCardPlanUsage } from "@/features/board/components/PlanUsage";
 import {
   MarqueeSelect,
   useClearSelectionOnEscape,
@@ -229,7 +230,7 @@ export function KanbanBoard({
       void queryClient.invalidateQueries({ queryKey: boardKey });
       // The card is always off the board; the purge is what can be partial (a runner that was
       // down). Saying so is the point — "Card excluído" on a delete that left the conversation on
-      // the server is exactly the lie this feature exists to remove. The daily sweep finishes it.
+      // the server is exactly the lie this feature exists to remove. The hourly orphan sweep finishes it.
       if (result.incomplete?.length) {
         toast.warning(translate("toast.cardDeletedPartial", { steps: result.incomplete.join(", ") }));
       } else {
@@ -249,8 +250,9 @@ export function KanbanBoard({
   const accountMutation = useMutation({
     mutationFn: ({ id, accountSlug }: { id: string; accountSlug: string | null }) =>
       boardApi.patchCard(id, { accountSlug }),
-    onSuccess: () => {
+    onSuccess: (_result, { id }) => {
       void queryClient.invalidateQueries({ queryKey: boardKey });
+      resetCardPlanUsage(queryClient, id);
       setAccountTarget(null);
       toast.success(translate("toast.cardAccountSwitched"));
     },

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { EXEC_TIMEOUT_MS, hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import { cardGitEnv } from "../github/runnerIdentity.js";
+import { CREATE_CARD_TMPDIR, cardTmpEnv } from "../board/cardTmp.js";
 import { cardWorkPaths } from "../board/workspace.js";
 import { accountConfigDir } from "../accounts/profiles.js";
 import { oauthTokenGuard, DEFAULT_CLAUDE_DIR } from "../accounts/profiles.js";
@@ -181,6 +182,8 @@ export function buildSdkDriverCommandLine(opts: SdkDriverCommandOpts): string {
     // The card's git include: every git the driver's Claude runs — in any repository — acts as the
     // card's author, read from a file the author switch rewrites (github/runnerIdentity.ts).
     for (const [k, v] of cardGitEnv(opts.cardId)) cardEnv += `export ${k}=${shQuote(v)}; `;
+    for (const [name, value] of cardTmpEnv(opts.cardId)) cardEnv += `export ${name}=${shQuote(value)}; `;
+    cardEnv += CREATE_CARD_TMPDIR;
   }
   if (opts.statusUrl) cardEnv += `export VIBEHUB_STATUS_URL=${shQuote(assertSafeUrl(opts.statusUrl))}; `;
   const script =

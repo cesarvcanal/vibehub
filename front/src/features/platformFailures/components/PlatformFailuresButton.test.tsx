@@ -130,6 +130,26 @@ describe("PlatformFailuresButton", () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith("/platform-failures/f1/investigate"));
   });
 
+  it("mostra o texto leigo e guarda o técnico em detalhes recolhíveis", async () => {
+    setServedFailures([{ ...FAILURE, explanation: "O medidor de uso mostrou a conta Claude anterior." }]);
+    renderApp(<PlatformFailuresButton />);
+    await userEvent.click(await screen.findByRole("button", { name: /1/ }));
+    expect(await screen.findByText("O medidor de uso mostrou a conta Claude anterior.")).toBeTruthy();
+    expect(screen.getByText(/write after end/, { selector: "pre" }).closest("details")).toBeTruthy();
+  });
+
+  it("erro do back sem explicação mostra o texto leigo do erro interno", async () => {
+    renderApp(<PlatformFailuresButton />);
+    await userEvent.click(await screen.findByRole("button", { name: /1/ }));
+    expect(await screen.findByText(/erro interno|internal error/i)).toBeTruthy();
+  });
+
+  it("o aviso de uma falha nova diz o que aconteceu em linguagem leiga", async () => {
+    setServedFailures([{ ...FAILURE, explanation: "O medidor de uso mostrou a conta Claude anterior." }]);
+    renderApp(<PlatformFailuresButton />);
+    await waitFor(() => expect(toastCall).toHaveBeenCalledWith(expect.stringContaining("O medidor de uso mostrou a conta Claude anterior."), expect.anything()));
+  });
+
   it("'não é bug' manda o descarte", async () => {
     post.mockResolvedValueOnce({ failure: { ...FAILURE, status: "dismissed" } });
     renderApp(<PlatformFailuresButton />);

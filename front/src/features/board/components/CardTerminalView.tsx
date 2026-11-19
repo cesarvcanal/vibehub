@@ -80,9 +80,9 @@ import {
   type BoardProject,
 } from "@/features/board/api";
 import { AccountUsageBars, useMinuteTick } from "@/features/board/components/AccountUsageBars";
-import { PlanUsageMeter } from "@/features/board/components/PlanUsage";
+import { PlanUsageMeter, resetCardPlanUsage, setCardPlanUsage } from "@/features/board/components/PlanUsage";
 import { pillPercent } from "@/features/board/lib/usage";
-import type { CardColumn, CardSessionInfo } from "@/api/types";
+import type { AccountsUsageResponse, CardColumn, CardSessionInfo } from "@/api/types";
 import { t as translate, useT } from "@/i18n";
 
 /**
@@ -325,9 +325,19 @@ export function CardTerminalView({
 
   const accountMutation = useMutation({
     mutationFn: (accountSlug: string | null) => boardApi.patchCardSession(cardId, { accountSlug }),
-    onSuccess: (result) =>
-      applySessionSwitch(result, { switched: "cardView.accountSwitched", pending: "cardView.accountSwitchPending" }),
-    onError: (error) => toast.error(apiErrorMessage(error, translate("cardView.accountSwitchError"))),
+    onMutate: (accountSlug) => {
+      const slug = accountInUseSlug({ accountSlug }, null, projectAccountSlug(project));
+      const usage = queryClient.getQueryData<AccountsUsageResponse>(ACCOUNT_USAGE_KEY)?.bySlug[slug];
+      if (usage) setCardPlanUsage(queryClient, cardId, { slug, usage });
+    },
+    onSuccess: (result) => {
+      resetCardPlanUsage(queryClient, cardId);
+      applySessionSwitch(result, { switched: "cardView.accountSwitched", pending: "cardView.accountSwitchPending" });
+    },
+    onError: (error) => {
+      resetCardPlanUsage(queryClient, cardId);
+      toast.error(apiErrorMessage(error, translate("cardView.accountSwitchError")));
+    },
   });
 
   const modelMutation = useMutation({
