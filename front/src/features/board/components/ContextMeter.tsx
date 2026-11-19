@@ -21,8 +21,6 @@ import { useT } from "@/i18n";
  * The pill carries the CONTINUOUS color of the percentage (border, background and the little bar), and the number stays in the
  * text color so it reads in any theme. Hovering (or focusing) opens the guide: the whole ruler with the
  * current point and the three bands — smart, worrying, dangerous — with the current one highlighted.
- *
- * Past 30% the pill gets a badge ("atenção", "perigo") and the number in the band's color.
  */
 
 const TWEEN_MS = 700;
