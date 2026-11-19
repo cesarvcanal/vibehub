@@ -438,4 +438,25 @@ describe("default account label", () => {
     const cleared = (await app.inject({ method: "GET", url: "/api/accounts", headers: { cookie } })).json();
     expect(cleared.defaultLabel).toBeNull();
   });
+
+  it("nome da conta padrão igual ao de uma conta responde 400 e não grava em nenhum dos dois documentos", async () => {
+    const cookie = await signUp(app);
+    await app.inject({ method: "POST", url: "/api/accounts", headers: { cookie }, payload: { name: "Mussa" } });
+    const saved = await app.inject({ method: "PATCH", url: "/api/settings", headers: { cookie }, payload: { defaultAccountLabel: "César" } });
+    expect(saved.statusCode).toBe(200);
+    const clash = await app.inject({ method: "PATCH", url: "/api/settings", headers: { cookie }, payload: { defaultAccountLabel: "mussa" } });
+    expect(clash.statusCode).toBe(400);
+    expect(clash.json()).toEqual({ error: "account name is already in use" });
+    expect((await app.inject({ method: "GET", url: "/api/settings", headers: { cookie } })).json().defaultAccountLabel).toBe("César");
+    expect((await app.inject({ method: "GET", url: "/api/accounts", headers: { cookie } })).json().defaultLabel).toBe("César");
+  });
+
+  it("renomear uma conta para o nome de outra responde 400", async () => {
+    const cookie = await signUp(app);
+    await app.inject({ method: "POST", url: "/api/accounts", headers: { cookie }, payload: { name: "tech" } });
+    await app.inject({ method: "POST", url: "/api/accounts", headers: { cookie }, payload: { name: "albert" } });
+    const clash = await app.inject({ method: "PATCH", url: "/api/accounts/albert", headers: { cookie }, payload: { name: "Tech" } });
+    expect(clash.statusCode).toBe(400);
+    expect(clash.json()).toEqual({ error: "account name is already in use" });
+  });
 });
