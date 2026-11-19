@@ -2005,6 +2005,35 @@ describe("SdkChatView — recibo de entrega (a mensagem que sumia no F5)", () =>
       }
     });
 
+    it("comando recusado com outro turno rodando: o reenvio automático espera o turno FECHAR, não sai no respiro", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderSdkChat();
+        const ws = await socket();
+        ws.accept();
+        ws.deliver({ type: "ready" });
+        ws.deliver({ type: "catalog", commands: [{ name: "compact", source: "command" }] });
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        await user.type(screen.getByRole("textbox"), "/compact{Escape}{Enter}");
+        await waitFor(() => expect(ws.sent).toHaveLength(1));
+        const cid = (JSON.parse(ws.sent[0]!) as { cid: string }).cid;
+        ws.deliver({ type: "user_nack", cid, reason: "driver-gone" } as SdkEvent);
+        await waitFor(() => expect(screen.getByTestId("sdk-user-retrying")).toBeInTheDocument());
+        await user.type(screen.getByRole("textbox"), "outra coisa{Enter}");
+        await waitFor(() => expect(ws.sent).toHaveLength(2));
+        ws.deliver({ type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } });
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(AUTO_RESEND_DELAYS_MS[0]!); });
+        expect(ws.sent).toHaveLength(2);
+
+        ws.deliver({ type: "result", isError: false });
+        await waitFor(() => expect(ws.sent).toHaveLength(3));
+        expect(JSON.parse(ws.sent[2]!)).toEqual({ type: "user", text: "/compact", cid });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("o socket meio-aberto engoliu a mensagem: na conexão nova ela sai sozinha (sem ninguém na tela)", async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       try {

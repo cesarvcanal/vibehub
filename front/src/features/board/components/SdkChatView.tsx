@@ -1050,8 +1050,10 @@ export function SdkChatView({
     // gate as the queue — wire up, server ready (the reconciliation has already said what it has), turn
     // with room —, so it never fires against a connection that cannot answer, and the dropped wire
     // does not spend an attempt. A correction (`original`) is a supersede: only with the turn stopped.
+    const commandWaitsForTurnEnd = (text: string): boolean =>
+      state.turnActive && invokedCommand(text, state.commands) !== null;
     const retry = planAutoResend(ownSends(outboxRef.current, viewer), Date.now()).due
-      .find((m) => m.original === undefined || !state.turnActive);
+      .find((m) => (m.original === undefined || !state.turnActive) && !commandWaitsForTurnEnd(m.text));
     if (retry) {
       // A request from the person (`asked`) goes out as the click it is: it resets the automatic plan.
       resendEntry(retry, retry.asked !== true);
@@ -1060,8 +1062,7 @@ export function SdkChatView({
     // Only what belongs to THIS account goes out over this connection (the server stamps the author by the connection).
     const head = headOfQueue(foreignToOutbox(queueRef.current, viewer).own);
     if (!head) return;
-    const commandWaitsForTurnEnd = state.turnActive && invokedCommand(head.text, state.commands) !== null;
-    if (commandWaitsForTurnEnd) return;
+    if (commandWaitsForTurnEnd(head.text)) return;
     setQueue((prev) => dequeue(prev, head.id));
     try {
       // One that came back from the outbox goes out with its original receipt: if the server had it, it is just the receipt.
