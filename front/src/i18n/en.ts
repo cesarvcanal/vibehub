@@ -43,6 +43,7 @@ export const en: Record<string, string> = {
   "apiError.badRequest": "bad request",
   "apiError.conflict": "conflict",
   "apiError.alreadyExists": "already exists",
+  "apiError.accountNameInUse": "an account already has this name",
   "apiError.missingFields": "missing fields",
   "apiError.invalidToken": "invalid token",
   "apiError.dockerUnreachable": "docker is unreachable",
