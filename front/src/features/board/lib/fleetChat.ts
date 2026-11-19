@@ -79,11 +79,20 @@ function lastStepDoing(lastStep: AnalysisConversationItem | undefined): { tool: 
 
 export function analysisFleetChat(conversation: AnalysisConversation): FleetChatEntry[] {
   const speakers = new Map(conversation.agents.map((agent) => [agent.id, speakerOf(agent.id, agent.label, agent.modelLabel)]));
-  const messages = conversation.items.flatMap((item, index): ChatMessage[] => {
+  const spoken = conversation.items.flatMap((item) => {
     const speaker = speakers.get(item.agentId);
-    if (!speaker || item.kind !== "text" || !item.text) return [];
-    return [{ kind: "message", id: `${conversation.runId}-${item.agentId}-${index}`, speaker, at: item.at, reading: readAgentResult(item.text) }];
+    return speaker && item.kind === "text" && item.text ? [{ speaker, at: item.at, text: item.text }] : [];
   });
+  const messages: ChatMessage[] = [];
+  const sameInstantOrdinals: number[] = [];
+  for (const speech of spoken) {
+    const previous = messages.at(-1);
+    const continuesInstant = previous?.speaker.agentId === speech.speaker.agentId && previous.at === speech.at;
+    const sameInstant = continuesInstant ? sameInstantOrdinals.at(-1)! + 1 : 0;
+    sameInstantOrdinals.push(sameInstant);
+    const id = `${conversation.runId}-${speech.speaker.agentId}-${speech.at}-${sameInstant}`;
+    messages.push({ kind: "message", id, speaker: speech.speaker, at: speech.at, reading: readAgentResult(speech.text) });
+  }
   const typing = conversation.finished
     ? []
     : conversation.agents
