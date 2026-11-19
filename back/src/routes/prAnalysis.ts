@@ -1,6 +1,6 @@
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { WebSocket } from "ws";
-import { canAccessProject, canWorkOnProject } from "../auth/access.js";
+import { canAccessProject, canWorkOnProject, requireProjectAccess } from "../auth/access.js";
 import { requestUser, requireSession } from "../auth/session.js";
 import { analysisPeople, listProjectPulls, RepoAccessError, startAnalysis } from "../services/review/analysis.js";
 import { joinPrRoom, type PrLiveEvent } from "../services/review/prClaims.js";
@@ -12,12 +12,6 @@ const GITHUB_FAILED = [/^GitHub returned/, 502] as const;
 const SETTING_UP_ELSEWHERE = [/^pr_em_montagem/, 409] as const;
 const POLICY_VIOLATION = 1008;
 const INTERNAL_ERROR = 1011;
-
-async function requireProjectAccess(req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply): Promise<void> {
-  await requireSession(req, reply);
-  if (reply.sent) return;
-  if (!(await canAccessProject(await requestUser(req), req.params.id))) await reply.code(404).send({ error: "project not found" });
-}
 
 function parseLiveFrame(raw: string): { type: "claim" | "release"; prNumber: number } | null {
   try {
