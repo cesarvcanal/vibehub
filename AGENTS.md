@@ -260,7 +260,7 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 - **Shell:** tudo que vira linha de `docker exec` ou script (ids de card, branch, sessão, container) é validado na fronteira e citado depois. Leia `back/src/runtime/host.ts` antes de montar um comando.
 - **Segredos por stdin, nunca argv** (`ps` é legível por todos). Credenciais moram no cofre criptografado (`back/src/secrets/`), nunca em log, resposta HTTP ou mensagem de erro.
 - **Identidade git é do card:** commit, push e PR saem com a conta de quem deu a ordem, nunca com conta de terceiros nem da organização. Não contornar com outra credencial.
-- Outros pontos de entrada (hooks do runner, MCP, websocket) têm limite de confiança próprio — token do runner, sessão — e não presumem que passaram pelo HTTP autenticado.
+- Outros pontos de entrada (hooks do runner, MCP, websocket) têm limite de confiança próprio — token do runner, sessão — e não presumem que passaram pelo HTTP autenticado. Ponto de entrada de máquina (o callback de status do runner) autentica pelo token do serviço comparado em tempo constante (`tokenMatches`, em `auth/session.ts`) e não aceita cookie de sessão no lugar dele.
 - Verificar caminhos permitidos e negados, inclusive chamando a API direto.
 
 ## 11. Testes e critérios de correção
