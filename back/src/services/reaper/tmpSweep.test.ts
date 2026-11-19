@@ -1,9 +1,17 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { mkdtemp, mkdir, rm, writeFile, utimes, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildTmpSweepScript, parseTmpSweep, tmpUsageAlert, TMP_ALERT_BYTES, DISK_ALERT_PERCENT } from "./tmpSweep.js";
+import { hostExecutor } from "../../runtime/host.js";
+import {
+  buildTmpSweepScript, parseTmpSweep, startTmpSweep, tmpUsageAlert, TMP_ALERT_BYTES, DISK_ALERT_PERCENT,
+} from "./tmpSweep.js";
+
+vi.mock("../../runtime/host.js", async (orig) => ({
+  ...(await orig<typeof import("../../runtime/host.js")>()),
+  hostExecutor: vi.fn(),
+}));
 
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -172,5 +180,30 @@ describe("tmpUsageAlert", () => {
   it("a saída malformada não vira número: linha sem formato é ignorada e o disco ausente falha à vista", () => {
     expect(() => parseTmpSweep("lixo\n")).toThrow(/disk/);
     expect(parseTmpSweep("VIBEHUB_TMP_SIZE\tabc\t/tmp/x\nVIBEHUB_TMP_DISK\t42\n")).toEqual({ swept: [], sizes: [], diskPercent: 42 });
+  });
+});
+
+describe("startTmpSweep", () => {
+  it("duas passadas nunca rodam juntas: um runner lento não ganha uma segunda faxina por cima", async () => {
+    vi.useFakeTimers();
+    const pass = { finish: (_run: { stdout: string; stderr: string }) => {} };
+    const runScript = vi.fn(
+      () => new Promise<{ stdout: string; stderr: string }>((done) => {
+        pass.finish = done;
+      }),
+    );
+    vi.mocked(hostExecutor).mockReturnValue({ runScript } as unknown as ReturnType<typeof hostExecutor>);
+    const stop = startTmpSweep(1000);
+    try {
+      await vi.advanceTimersByTimeAsync(3500);
+      expect(runScript).toHaveBeenCalledTimes(1);
+
+      pass.finish({ stdout: "VIBEHUB_TMP_DISK\t10\n", stderr: "" });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(runScript).toHaveBeenCalledTimes(2);
+    } finally {
+      stop();
+      vi.useRealTimers();
+    }
   });
 });

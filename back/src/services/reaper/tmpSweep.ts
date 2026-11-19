@@ -126,10 +126,17 @@ export async function sweepRunnerTmp(): Promise<TmpSweepReport> {
 }
 
 export function startTmpSweep(intervalMs: number = TMP_SWEEP_INTERVAL_MS): () => void {
+  const pass = { running: false };
   const tick = (): void => {
-    void sweepRunnerTmp().catch((err: unknown) => {
-      logger.warn({ detail: (err as Error).message }, "the /tmp sweep did not run this pass");
-    });
+    if (pass.running) return;
+    pass.running = true;
+    void sweepRunnerTmp()
+      .catch((err: unknown) => {
+        logger.warn({ detail: (err as Error).message }, "the /tmp sweep did not run this pass");
+      })
+      .finally(() => {
+        pass.running = false;
+      });
   };
   tick();
   const timer = setInterval(tick, intervalMs);
