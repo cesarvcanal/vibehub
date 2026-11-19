@@ -173,8 +173,10 @@ for (const skipped of skippedDimensions) log(`${skipped.key} fora do diff: ${ski
 
 const reviewLabel = (dimension) => `revisão: ${dimension.key}`
 
+const notRunResult = (dimension, reason) => ({ run: { key: dimension.key, status: 'not_run', reason }, confirmed: [], refutedCount: 0 })
+
 const verifyDimension = async (review, dimension) => {
-  if (!review) return { run: { key: dimension.key, status: 'not_run', reason: 'o agente de revisão não respondeu' }, confirmed: [], refuted: 0 }
+  if (!review) return notRunResult(dimension, 'o agente de revisão não respondeu')
   const verifiedFindings = review.findings.slice(0, MAX_VERIFIED_PER_DIMENSION)
   const aboveCapCount = review.findings.length - verifiedFindings.length
   const capReason = `${aboveCapCount} achados acima do teto de ${MAX_VERIFIED_PER_DIMENSION} não foram verificados`
@@ -199,7 +201,7 @@ const verifyDimension = async (review, dimension) => {
       ...(unverifiedCount > 0 ? { unverifiedCount, reason: reasons.join('; ') } : {}),
     },
     confirmed,
-    refuted: refutedCount,
+    refutedCount,
   }
 }
 
@@ -212,11 +214,10 @@ const reviewedDimensions = await pipeline(
   verifyDimension,
 )
 
-const dimensionResults = reviewedDimensions.map((result, index) => result ?? {
-  run: { key: applicableDimensions[index].key, status: 'not_run', reason: 'a revisão desta dimensão falhou' }, confirmed: [], refuted: 0,
-})
+const dimensionResults = reviewedDimensions.map((result, index) =>
+  result ?? notRunResult(applicableDimensions[index], 'a revisão desta dimensão falhou'))
 const confirmedFindings = dimensionResults.flatMap((result) => result.confirmed)
-const refutedCount = dimensionResults.reduce((total, result) => total + result.refuted, 0)
+const refutedCount = dimensionResults.reduce((total, result) => total + result.refutedCount, 0)
 
 phase('Julgamento')
 const judgment = confirmedFindings.length === 0
