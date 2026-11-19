@@ -607,7 +607,10 @@ export function analysisPrompt(a: AnalysisInput): string {
     "   O args vai como objeto JSON, com o sha do passo 1 no headSha. A frota lê o diff, revisa em paralelo por " +
       "dimensão, tenta derrubar cada achado, e um juiz classifica. Espere o resultado: { summary, dimensions, findings, refutedCount }.",
     "   Se a frota recusar o args (erro \"args inválido\"), o engano é seu: corrija o args e rode a frota de novo, uma vez; " +
-      "se falhar de novo, siga a linha abaixo.",
+      "se falhar de novo, siga a linha do fleet_unavailable, abaixo.",
+    "   Se a frota parar sem resultado (o aviso de que ela ficou sem registro de conclusão: o processo do Claude Code caiu, " +
+      `como num reinício do painel), relance uma vez: Workflow({ scriptPath: "${PR_ANALYSIS_WORKFLOW_PATH}", args: o mesmo, ` +
+      'resumeFromRunId: "<runId do lançamento>" }); os agentes que já terminaram voltam do cache. Se parar de novo, siga a linha do fleet_unavailable, abaixo.',
     "   Se a ferramenta Workflow não existir, for recusada ou a frota falhar com erro: chame vibehub_analysis_report com " +
       `${reportTarget}, headSha, stage: "fleet_unavailable", summary e unavailableReason com o erro, diga o motivo no chat ` +
       "e pare. Não rode a análise sozinho no lugar da frota.",
@@ -622,6 +625,9 @@ export function analysisPrompt(a: AnalysisInput): string {
       "atômico por achado. Em bug, escreva antes o teste que reproduz a falha, veja falhar pelo motivo certo, corrija e " +
       "veja passar. question: não mexa; pergunte no chat deste card, com o conflito e as alternativas, e siga com o " +
       "resto. suggestion: só no resumo.",
+    "   Quando a pessoa responder uma question: se a resposta pede mudança, corrija como no passo 5, entregue (passo 7) e " +
+      "marque fixed com o commit; se não pede, marque com status \"decided\" e decision (a decisão dela, numa frase). Nos " +
+      "dois casos, se o done já foi gravado, grave de novo o relatório done (passo 8).",
     ...(a.coauthorTrailer ? [`   Em cada commit, termine a mensagem com esta linha (o crédito do coautor no Git): ${a.coauthorTrailer}`] : []),
     "6. Reconferência: dispare UM subagente novo, sem o seu contexto, para revisar só git diff <sha analisado>..HEAD, " +
       "procurando bug que a própria correção criou. Achado com prova: corrija do mesmo jeito (uma volta a mais, só uma).",
@@ -632,7 +638,8 @@ export function analysisPrompt(a: AnalysisInput): string {
       "resolva os conflitos, rode de novo os testes do que mudou e entregue outra vez.",
     `8. Chame vibehub_analysis_report de novo, com stage: "done": o mesmo headSha do passo 1 (não o das correções), ` +
       "as mesmas dimensions do passo 3, inclusive o unverifiedCount, e os mesmos findings, cada um com status " +
-      "\"fixed\" e o commit, ou \"open\" (question, suggestion e o que não corrigiu, com o motivo no summary).",
+      "\"fixed\" e o commit, \"decided\" com a decision (question que a pessoa já respondeu sem pedir mudança) ou " +
+      "\"open\" (question ainda sem resposta, suggestion e o que não corrigiu, com o motivo no summary).",
     `9. Comente cada achado na linha do diff, na sua conta: gh api repos/{owner}/{repo}/pulls/${a.prNumber}/comments ` +
       "(body com o problema, a prova e o commit que corrigiu; commit_id = o head entregue, path, line). Achado sem linha " +
       `vai no resumo. Publique o resumo como review da PR: gh pr review ${a.prNumber} --comment --body "<resumo>", com o ` +

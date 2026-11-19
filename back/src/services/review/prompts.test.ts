@@ -258,7 +258,28 @@ describe("prompt da análise de PR", () => {
 
   it("args recusado pela frota é engano do card: corrige o args e roda de novo uma vez antes de reportar", async () => {
     const { analysisPrompt } = await import("./prompts.js");
-    expect(analysisPrompt(input)).toMatch(/args inválido[^\n]*corrija o args e rode a frota de novo, uma vez/);
+    expect(analysisPrompt(input)).toMatch(/args inválido[^\n]*corrija o args e rode a frota de novo, uma vez; se falhar de novo, siga a linha do fleet_unavailable/);
+  });
+
+  it("frota que parou sem resultado (o processo caiu, como num deploy) é relançada uma vez pelo runId, com os agentes já concluídos no cache", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    expect(analysisPrompt(input)).toMatch(
+      /parar sem resultado[^\n]*relance uma vez[^\n]*resumeFromRunId: "<runId do lançamento>"[^\n]*os agentes que já terminaram voltam do cache\. Se parar de novo, siga a linha do fleet_unavailable/,
+    );
+  });
+
+  it("dúvida respondida sem mudança de código fecha como decided, com a decisão da pessoa, num novo relatório done", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    const text = analysisPrompt(input);
+    expect(text).toMatch(/Quando a pessoa responder uma question[^\n]*status "decided" e decision[^\n]*grave de novo o relatório done/);
+    expect(text).toMatch(/stage: "done"[^\n]*"decided" com a decision/);
+  });
+
+  it("dúvida cuja resposta pede mudança é corrigida, entregue e gravada como fixed num novo done, mesmo depois do passo 8", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    expect(analysisPrompt(input)).toMatch(
+      /Quando a pessoa responder uma question: se a resposta pede mudança, corrija como no passo 5, entregue \(passo 7\) e marque fixed com o commit[^\n]*Nos dois casos, se o done já foi gravado, grave de novo o relatório done/,
+    );
   });
 
   it("sem Workflow, reporta fleet_unavailable e para, sem análise sozinho no lugar da frota", async () => {

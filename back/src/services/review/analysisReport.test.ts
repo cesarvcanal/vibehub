@@ -2,7 +2,7 @@ import { describe, it, expect, onTestFinished, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ANALYSIS_DIMENSIONS } from "./analysisModel.js";
+import { ANALYSIS_DIMENSIONS, analysisVerdict } from "./analysisModel.js";
 import type { AnalysisReportInput } from "./analysisReport.js";
 
 vi.setConfig({ testTimeout: 30_000 });
@@ -108,8 +108,24 @@ describe("relatório da análise pela ferramenta do card", () => {
     await reportService.recordAnalysisReport(analysisCard.id, input({ findings: [blockingFinding] }));
     const addedFinding = { ...blockingFinding, id: "f2", severity: "suggestion" as const };
     const doneWithAddedFinding = input({ stage: "done", findings: [blockingFinding, addedFinding] });
-    await expect(reportService.recordAnalysisReport(analysisCard.id, doneWithAddedFinding)).rejects.toThrow(/f2/);
+    await expect(reportService.recordAnalysisReport(analysisCard.id, doneWithAddedFinding)).rejects.toThrow(/f2.*mudando só status, commit ou decision/);
     expect((await store.getAnalysis(analysisCard.id))?.stage).toBe("analysed");
+  });
+
+  it("a pessoa decide a dúvida depois do done: um novo done com a dúvida decidida é gravado e a análise fica apta", async () => {
+    const { analysisCard, reportService, store } = await load();
+    const openQuestion = { ...blockingFinding, severity: "question" as const };
+    const everyDimension = ANALYSIS_DIMENSIONS.map((key) => ({ key, status: "ran" as const }));
+    await reportService.recordAnalysisReport(analysisCard.id, input({ dimensions: everyDimension, findings: [openQuestion] }));
+    await reportService.recordAnalysisReport(analysisCard.id, input({ stage: "done", dimensions: everyDimension, findings: [openQuestion] }));
+    expect(analysisVerdict((await store.getAnalysis(analysisCard.id))!)).toBe("not_apt");
+
+    const decidedQuestion = { ...openQuestion, status: "decided" as const, decision: "fica como está: o cliente pediu assim" };
+    await reportService.recordAnalysisReport(analysisCard.id, input({ stage: "done", dimensions: everyDimension, findings: [decidedQuestion] }));
+
+    const saved = (await store.getAnalysis(analysisCard.id))!;
+    expect(saved.findings).toEqual([decidedQuestion]);
+    expect(analysisVerdict(saved)).toBe("apt");
   });
 
   it("dois analysed ao mesmo tempo: um é recusado e o gravado é o que foi aceito", async () => {

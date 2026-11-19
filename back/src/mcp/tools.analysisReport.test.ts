@@ -33,6 +33,29 @@ describe("entrada da vibehub_analysis_report", () => {
     expect(withoutCommit.error?.issues.map((issue) => issue.message)).toContain("a fixed finding needs the sha of the commit that fixes it");
     expect(analysisReportInput.safeParse({ ...base, stage: "done", findings: [{ ...blocking, status: "fixed", commit: "abc1234" }] }).success).toBe(true);
   });
+  it("a recusa do achado decidido fora de dúvida diz o que fazer com cada classe", () => {
+    const decidedBlocking = analysisReportInput.safeParse({ ...base, stage: "done", findings: [{ ...blocking, status: "decided", decision: "deixa" }] });
+    expect(decidedBlocking.error?.issues.map((issue) => issue.message)).toContain(
+      "only a question is decided: a blocking or an improvement is fixed with its commit or stays open, a suggestion stays open",
+    );
+  });
+  it("dúvida decidida sem a decisão é recusada com a mensagem que diz o que falta", () => {
+    const withoutDecision = analysisReportInput.safeParse({ ...base, stage: "done", findings: [{ ...blocking, severity: "question", status: "decided" }] });
+    expect(withoutDecision.error?.issues.map((issue) => issue.message)).toContain("a decided question needs the person's decision, in one sentence");
+  });
+  it("dúvida que a pessoa decidiu sem mudar código fecha como decidida, com a decisão dela", () => {
+    const question = { ...blocking, severity: "question", status: "decided", decision: "fica como está: o cliente pediu assim" };
+    expect(analysisReportInput.safeParse({ ...base, stage: "done", findings: [question] }).success).toBe(true);
+  });
+  it.each([
+    ["decidida sem a decisão é recusada", { ...blocking, severity: "question", status: "decided" }],
+    ["decidida com a decisão em branco é recusada", { ...blocking, severity: "question", status: "decided", decision: "  " }],
+    ["só dúvida se decide: bloqueante decidido é recusado (corrige com commit ou fica aberto)", { ...blocking, status: "decided", decision: "deixa" }],
+    ["só dúvida se decide: melhoria decidida é recusada", { ...blocking, severity: "improvement", status: "decided", decision: "deixa" }],
+    ["só dúvida se decide: sugestão decidida é recusada", { ...blocking, severity: "suggestion", status: "decided", decision: "deixa" }],
+  ])("%s", (_case, finding) => {
+    expect(analysisReportInput.safeParse({ ...base, stage: "done", findings: [finding] }).success).toBe(false);
+  });
   it("a dimensão leva quantos achados a frota não verificou", () => {
     const dimensions = [{ key: "tests", status: "ran", unverifiedCount: 2, reason: "2 achados sem veredito" }];
     expect(analysisReportInput.parse({ ...base, dimensions }).dimensions[0]).toMatchObject({ unverifiedCount: 2 });

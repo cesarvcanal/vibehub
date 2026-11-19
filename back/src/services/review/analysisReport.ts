@@ -69,7 +69,7 @@ function assertReportFollowsSaved(saved: AnalysisReport | undefined, report: Ana
   if (changedFromSaved.length > 0) {
     throw new Error(
       `o relatório done muda o que o relatório ${saved.stage} gravou: ${changedFromSaved.join(", ")}; ` +
-        "reenvie as mesmas dimensions e os mesmos findings (mesma severity e dimensão), mudando só status e commit",
+        "reenvie as mesmas dimensions e os mesmos findings (mesma severity e dimensão), mudando só status, commit ou decision",
     );
   }
 }

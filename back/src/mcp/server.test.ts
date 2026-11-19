@@ -110,6 +110,14 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(INSTRUCTIONS.trim().length).toBeGreaterThan(0);
   });
 
+  it("a descrição da vibehub_analysis_report lista os três status que o done grava, inclusive a dúvida decidida", () => {
+    const server = createMcpServer("test") as unknown as {
+      _registeredTools?: Record<string, { description?: string }>;
+    };
+    const description = server._registeredTools?.["vibehub_analysis_report"]?.description ?? "";
+    expect(description).toContain("fixed + commit, decided + decision (a question the person answered without asking for a change), or open");
+  });
+
   it("register vibehub_brain_learn and instruct on recording DURABLE learnings only", () => {
     const server = createMcpServer("test") as unknown as {
       _registeredTools?: Record<string, { description?: string }>;

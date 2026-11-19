@@ -123,8 +123,14 @@ function AnalysisBody({ read }: { read: AnalysisReadModel }) {
 }
 
 function findingStatusText(finding: AnalysisFinding, t: Translate): string {
-  if (finding.status === "fixed") return t("analysis.finding.fixedIn", { commit: finding.commit });
-  return finding.severity === "question" ? t("analysis.finding.awaitingDecision") : t("analysis.finding.open");
+  switch (finding.status) {
+    case "fixed":
+      return t("analysis.finding.fixedIn", { commit: finding.commit });
+    case "decided":
+      return t("analysis.finding.decided", { decision: finding.decision });
+    case "open":
+      return finding.severity === "question" ? t("analysis.finding.awaitingDecision") : t("analysis.finding.open");
+  }
 }
 
 function FindingCard({ finding }: { finding: AnalysisFinding }) {

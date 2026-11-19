@@ -107,6 +107,17 @@ describe("painel da análise de PR", () => {
     expect(screen.queryByRole("region", { name: "Sugestões" })).not.toBeInTheDocument();
   });
 
+  it("dúvida que a pessoa decidiu mostra a decisão dela no lugar de \"esperando decisão\" e sai da contagem de dúvidas abertas", async () => {
+    const findings = doneReport().findings.map((finding) => finding.id === "f3"
+      ? { ...finding, status: "decided" as const, decision: "fica: a conta local é só do admin" }
+      : finding);
+    renderPanel(readModel(doneReport({ findings }), "apt"));
+    const questions = await screen.findByRole("region", { name: "Dúvidas" });
+    expect(within(questions).getByText("decidido: fica: a conta local é só do admin")).toBeInTheDocument();
+    expect(within(questions).queryByText("esperando decisão")).not.toBeInTheDocument();
+    expect(screen.queryByText("1 dúvida aberta")).not.toBeInTheDocument();
+  });
+
   it("a prova mostra o detalhe que o achado traz, junto do tipo e da referência", async () => {
     const [fixedBlocking, openQuestion] = doneReport().findings;
     const withDetail = { ...fixedBlocking!, proof: { kind: "scenario" as const, ref: "sso.ts:84", detail: "token expirado continua entrando" } };
