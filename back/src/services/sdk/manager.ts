@@ -820,8 +820,8 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
   if (loginRestored) session.loginFailed = false;
   if (event.type === "result" && !event.isError && event.subtype !== "aborted") session.usageLimit = undefined;
   if (event.type === "usage_limited") {
-    const resetsAt = normalizeRateLimit(event.rateLimit)?.resetsAt;
-    session.usageLimit = resetsAt === undefined ? {} : { resetsAt };
+    const refusal = normalizeRateLimit(event.rateLimit);
+    if (refusal?.status === "rejected") session.usageLimit = refusal.resetsAt === undefined ? {} : { resetsAt: refusal.resetsAt };
     return;
   }
   if (event.type === "rate_limit") {

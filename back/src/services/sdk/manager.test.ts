@@ -2958,11 +2958,22 @@ describe("usage_limited — a conta do card ficou sem limite de uso", () => {
     expect(cardUsageLimit(CARD)).toBeNull();
   });
 
-  it("recusa sem horário de volta: o card está sem limite, sem resetsAt", async () => {
+  it("recusa de limite sem horário de volta: o card está sem limite, sem resetsAt", async () => {
     const { cardUsageLimit } = await import("../board/agentState.js");
     ensure();
-    spawned[0]!.stdout.emit("data", line({ type: "usage_limited" }));
+    spawned[0]!.stdout.emit("data", line({ type: "usage_limited", rateLimit: { status: "rejected", rateLimitType: "five_hour" } }));
     expect(cardUsageLimit(CARD)).toEqual({});
+  });
+
+  it.each([
+    { name: "sem o aviso de limite", event: { type: "usage_limited" } },
+    { name: "com aviso que não é recusa", event: { type: "usage_limited", rateLimit: { status: "allowed_warning", rateLimitType: "five_hour", resetsAt: 1795119000 } } },
+    { name: "com aviso torto", event: { type: "usage_limited", rateLimit: { status: "rejected" } } },
+  ])("rate_limit $name não diz que a conta ficou sem limite de uso", async ({ event }) => {
+    const { cardUsageLimit } = await import("../board/agentState.js");
+    ensure();
+    spawned[0]!.stdout.emit("data", line(event));
+    expect(cardUsageLimit(CARD)).toBeNull();
   });
 });
 
