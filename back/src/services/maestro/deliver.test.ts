@@ -273,10 +273,7 @@ describe("buildMergeScript", () => {
     expect(() => build(`${HEAD_SHA}'; rm -rf /; '`)).toThrow(/sha/);
   });
 
-  /**
-   * Runs the merge body (what `docker exec … bash -s` receives) with a fake gh whose PR is at `prHead`
-   * and has `prTitle`; the fake logs the `--subject` it got as `subject=[…]`.
-   */
+  /** Runs the merge body (what `docker exec … bash -s` receives) with a fake gh whose PR head is `prHead`. */
   async function runMerge(prHead: string, pin: string, prTitle = "fix(deliver): título qualquer") {
     const { deliver } = await load();
     const root = await mkdtemp(join(tmpdir(), "vibehub-merge-"));
@@ -312,17 +309,17 @@ describe("buildMergeScript", () => {
     ["fix(pdv/pix): QR do balcão dura o prazo do .env", "🔀 merge: QR do balcão dura o prazo do .env (#7)"],
     ["feat(api)!: rota nova", "🔀 merge: rota nova (#7)"],
     ["Merge prod na branch", "🔀 merge: Merge prod na branch (#7)"],
-  ])("executado de verdade: o merge commit sai no Gitmoji, sem tipo nem área — %s", async (prTitle, subject) => {
-    const r = await runMerge(HEAD_SHA, HEAD_SHA, prTitle);
-    expect(r.parsed).toMatchObject({ merged: true });
-    expect(r.log).toContain(`subject=[${subject}]`);
+  ])("executado de verdade: o merge commit sai '🔀 merge: <título sem tipo(área)> (#N)' — %s", async (prTitle, subject) => {
+    const { parsed, log } = await runMerge(HEAD_SHA, HEAD_SHA, prTitle);
+    expect(parsed).toMatchObject({ merged: true });
+    expect(log).toContain(`subject=[${subject}]`);
   });
 
   it("executado de verdade: o título do PR vira o subject como texto, nunca como comando", async () => {
     const prTitle = 'fix(x): $(echo PWNED$((6*7)) >> "$ROOT/log") `echo TICK$((1+1)) >> "$ROOT/log"` "aspas"';
-    const r = await runMerge(HEAD_SHA, HEAD_SHA, prTitle);
-    expect(r.log).toContain(`subject=[🔀 merge: ${prTitle.slice("fix(x): ".length)} (#7)]`);
-    expect(r.log).not.toMatch(/PWNED42|TICK2/);
+    const { log } = await runMerge(HEAD_SHA, HEAD_SHA, prTitle);
+    expect(log).toContain(`subject=[🔀 merge: ${prTitle.slice("fix(x): ".length)} (#7)]`);
+    expect(log).not.toMatch(/PWNED42|TICK2/);
   });
 
   it("executado de verdade: o PR que andou depois do gate NÃO é mergeado e diz para onde foi (head_moved)", async () => {
