@@ -2143,3 +2143,43 @@ describe("lastLiveToolResult — o resultado de ferramenta que chegou ao vivo", 
     expect(streaming.lastLiveToolResult).toBe(settled.lastLiveToolResult);
   });
 });
+
+describe("avisos de falha do vibehub no chat do card", () => {
+  const notice = (id: string, status: string, firstSeenAt = 1_000) => ({
+    id, source: "agent_report", status, explanation: `explicação ${id}`, occurrences: 1, firstSeenAt,
+  });
+
+  it("o retrato do attach substitui os avisos que a aba tinha", () => {
+    const before = feed([{ type: "platform_failures", notices: [notice("velho", "open")] }]);
+    const after = feed([{ type: "platform_failures", notices: [notice("novo", "open")] }], before);
+    expect(after.platformFailures.map((failure) => failure.id)).toEqual(["novo"]);
+    expect(after.rows).toEqual([]);
+  });
+
+  it("a mudança de status atualiza o aviso, e falha resolvida ou descartada sai", () => {
+    const shown = feed([{ type: "platform_failures", notices: [notice("f1", "open"), notice("f2", "open")] }]);
+    const investigating = feed([{ type: "platform_failure", notice: notice("f1", "investigating") }], shown);
+    expect(investigating.platformFailures.find((failure) => failure.id === "f1")?.status).toBe("investigating");
+    const settled = feed([
+      { type: "platform_failure", notice: notice("f1", "resolved") },
+      { type: "platform_failure", notice: notice("f2", "dismissed") },
+    ], investigating);
+    expect(settled.platformFailures).toEqual([]);
+  });
+
+  it("falha nova para o card entra na lista", () => {
+    const state = feed([{ type: "platform_failure", notice: notice("f9", "open") }]);
+    expect(state.platformFailures).toEqual([expect.objectContaining({ id: "f9", explanation: "explicação f9" })]);
+  });
+
+  it("o ready de um driver que sobe depois do retrato não apaga os avisos", () => {
+    const shown = feed([{ type: "platform_failures", notices: [notice("f1", "open")] }]);
+    expect(feed([{ type: "ready" }], shown).platformFailures).toHaveLength(1);
+  });
+
+  it("aviso malformado não entra nem apaga os que valem", () => {
+    const shown = feed([{ type: "platform_failures", notices: [notice("f1", "open")] }]);
+    expect(feed([{ type: "platform_failure", notice: { id: 3 } }], shown).platformFailures).toHaveLength(1);
+    expect(feed([{ type: "platform_failures", notices: [{ id: "x" }, notice("f2", "open")] }]).platformFailures.map((failure) => failure.id)).toEqual(["f2"]);
+  });
+});
