@@ -176,9 +176,9 @@ describe("purgeCard — the card and everything that belonged to it", () => {
 
     const report = await purge.purgeCard(card.id, "cesar");
 
-    const s = allScripts();
-    expect(s).toContain(`'VIBEHUB_CARD_ID=${card.id}' /proc/[0-9]*/environ`);
-    expect(s).toContain(`rm -rf '/tmp/vibehub/${card.id}'`);
+    const purgeScripts = allScripts();
+    expect(purgeScripts).toContain(`'VIBEHUB_CARD_ID=${card.id}' /proc/[0-9]*/environ`);
+    expect(purgeScripts).toContain(`rm -rf '/tmp/vibehub/${card.id}'`);
     expect(report?.steps.find((done) => done.name === "runner")).toEqual({ name: "runner", ok: true, detail: "3072 MB freed" });
   });
 
@@ -576,14 +576,14 @@ describe("planOrphanPurge (the whole safety of the sweep lives here)", () => {
       live({ ids: new Set([mine]), transcriptDirs: new Set(["-work-acme--erp-aux-worktrees-vivo"]) }),
       { now: NOW },
     );
-    expect(plan.purge.map((e) => e.path)).toEqual([
+    expect(plan.purge.map((orphan) => orphan.path)).toEqual([
       `/tmp/vibehub/${gone}`,
       "/tmp/claude-0/-work-acme--erp-aux-worktrees-morto",
     ]);
     const listing = purge.buildOrphanListScript("vibehub-runner");
     expect(listing).toContain("-printf 'tmp\\t%p\\t%T@\\n'");
     expect(listing).toContain("find /tmp/claude-[0-9]* -mindepth 1 -maxdepth 1 -type d -printf 'task-output");
-    expect(purge.parseOrphanListing(`tmp\t/tmp/vibehub/${gone}\t1.5\ntask-output\t/tmp/claude-0/x\t2\n`).map((e) => e.kind)).toEqual(["tmp", "task-output"]);
+    expect(purge.parseOrphanListing(`tmp\t/tmp/vibehub/${gone}\t1.5\ntask-output\t/tmp/claude-0/x\t2\n`).map((orphan) => orphan.kind)).toEqual(["tmp", "task-output"]);
   });
 
   it("a conversation started in a SUBDIRECTORY of a live card's worktree is the live card's too", () => {

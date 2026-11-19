@@ -94,7 +94,7 @@ export function parseTmpSweep(stdout: string): TmpSweepReport {
 export function tmpUsageAlert(report: TmpSweepReport): TmpUsageAlert | null {
   const tmpBytes = report.sizes.reduce((total, entry) => total + entry.bytes, 0);
   if (tmpBytes <= TMP_ALERT_BYTES && report.diskPercent <= DISK_ALERT_PERCENT) return null;
-  const top = [...report.sizes].sort((a, b) => b.bytes - a.bytes).slice(0, TMP_ALERT_TOP);
+  const top = [...report.sizes].sort((left, right) => right.bytes - left.bytes).slice(0, TMP_ALERT_TOP);
   return { tmpBytes, diskPercent: report.diskPercent, top };
 }
 

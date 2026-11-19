@@ -215,8 +215,10 @@ export function buildGateRunScript(
     testWorkerExports().trim().replace(/;$/, ""),
   ];
   if (opts.cardId) {
-    parts.push(...cardTmpEnv(opts.cardId).map(([k, v]) => `export ${k}=${shQuote(v)}`));
-    parts.push(CREATE_CARD_TMPDIR.trim().replace(/;$/, ""));
+    parts.push(
+      ...cardTmpEnv(opts.cardId).map(([name, value]) => `export ${name}=${shQuote(value)}`),
+      CREATE_CARD_TMPDIR.trim().replace(/;$/, ""),
+    );
   }
   // The gate tests the WORKTREE, and the card's author keeps working in it while the gate queues and
   // runs: held to a commit, the run checks it is still there — before (the probe may be minutes old)

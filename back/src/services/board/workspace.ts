@@ -494,7 +494,7 @@ export function buildOpenScript(opts: OpenScriptOpts): string {
       ` -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8` +
       // The card's git include: every git of the session — any repository — acts as the card's
       // author, read from a file the author switch rewrites (github/runnerIdentity.ts).
-      [...cardGitEnv(opts.cardId), ...cardTmpEnv(opts.cardId)].map(([k, v]) => ` -e ${shQuote(`${k}=${v}`)}`).join("") +
+      [...cardGitEnv(opts.cardId), ...cardTmpEnv(opts.cardId)].map(([name, value]) => ` -e ${shQuote(`${name}=${value}`)}`).join("") +
       // Test runners share the runner's cores with every other card: cap their workers.
       ` ${testWorkerTmuxArgs().join(" ")}` +
       // Non-default account: the session's Claude uses the account profile (isolated credentials/state).
@@ -553,7 +553,7 @@ export function terminalRemoteArgs(containerName: string, tmuxSession: string, c
     "-e", `PW_CDP_ENDPOINT=${cardCdpEndpoint(opts.cardId)}`,
     "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8",
     // The card's git include (see buildOpenScript) — the Shell tab's manual git included.
-    ...[...cardGitEnv(opts.cardId), ...cardTmpEnv(opts.cardId)].flatMap(([k, v]) => ["-e", `${k}=${v}`]),
+    ...[...cardGitEnv(opts.cardId), ...cardTmpEnv(opts.cardId)].flatMap(([name, value]) => ["-e", `${name}=${value}`]),
     ...testWorkerTmuxArgs(),
     ...(opts.accountConfigDir ? ["-e", `CLAUDE_CONFIG_DIR=${opts.accountConfigDir}`] : []),
     opts.shell
@@ -2229,9 +2229,9 @@ export function buildCardPurgeScript(o: CardPurgeScriptOpts): string {
 const PURGE_FREED_MARKER = "VIBEHUB_PURGE_FREED_KB";
 
 export function parsePurgeFreedBytes(stdout: string): number | undefined {
-  const line = stdout.split("\n").find((l) => l.startsWith(`${PURGE_FREED_MARKER} `));
-  if (!line) return undefined;
-  const kilobytes = Number.parseInt(line.slice(PURGE_FREED_MARKER.length + 1), 10);
+  const markerLine = stdout.split("\n").find((line) => line.startsWith(`${PURGE_FREED_MARKER} `));
+  if (!markerLine) return undefined;
+  const kilobytes = Number.parseInt(markerLine.slice(PURGE_FREED_MARKER.length + 1), 10);
   return Number.isFinite(kilobytes) ? kilobytes * 1024 : undefined;
 }
 

@@ -530,7 +530,7 @@ describe("terminalRemoteArgs / cardAttachArgs (the websocket's COMPLETE attach-o
       "-e", `PW_CDP_ENDPOINT=${cardCdpEndpoint("id-1")}`,
       "-e", "LANG=C.UTF-8", "-e", "LC_ALL=C.UTF-8",
       ...gitEnvFor("id-1").flatMap((v) => ["-e", v]),
-      ...tmpEnvFor("id-1").flatMap((v) => ["-e", v]),
+      ...tmpEnvFor("id-1").flatMap((assignment) => ["-e", assignment]),
       // test runners share the runner's cores with every card: worker cap
       "-e", "VITEST_MAX_THREADS=2", "-e", "VITEST_MIN_THREADS=1", "-e", "VITEST_MAX_FORKS=2", "-e", "VITEST_MIN_FORKS=1",
       CLAUDE,
@@ -2414,8 +2414,8 @@ describe("card push as the project's GitHub connection (GH_TOKEN)", () => {
   });
 
   it("a sessão do card nasce com o /tmp DELE: TMPDIR/TMP/TEMP/CLAUDE_CODE_TMPDIR em /tmp/vibehub/<cardId>", () => {
-    const tmux = ws.buildOpenScript(openOpts).split("\n").find((l) => l.includes("tmux new-session"))!;
-    for (const v of tmpEnvFor("id-1")) expect(tmux).toContain(`-e ${sq(v)}`);
+    const tmux = ws.buildOpenScript(openOpts).split("\n").find((line) => line.includes("tmux new-session"))!;
+    for (const assignment of tmpEnvFor("id-1")) expect(tmux).toContain(`-e ${sq(assignment)}`);
   });
 
   it("openCard resolves the token even WITHOUT an explicit connection (first-account fallback) — gh in the card never acts as the ambient login", async () => {
@@ -2529,20 +2529,20 @@ describe("buildCardPurgeScript (everything the card left on the runner's disk)",
   });
 
   it("apaga o /tmp do card e as saídas de tarefa do Claude Code gravadas antes do TMPDIR por card", () => {
-    const s = script();
-    expect(s).toContain(`rm -rf '/tmp/vibehub/${CARD_ID}' 2>/dev/null || true`);
-    expect(s).toContain(`rm -rf /tmp/claude-[0-9]*/'-work-acme--erp-aux-worktrees-deletar-card' 2>/dev/null || true`);
+    const purgeScript = script();
+    expect(purgeScript).toContain(`rm -rf '/tmp/vibehub/${CARD_ID}' 2>/dev/null || true`);
+    expect(purgeScript).toContain(`rm -rf /tmp/claude-[0-9]*/'-work-acme--erp-aux-worktrees-deletar-card' 2>/dev/null || true`);
   });
 
   it("mata pelo ambiente todo processo do card, inclusive o que saiu da árvore do tmux (setsid, nohup)", () => {
-    const s = script();
-    expect(s).toContain(`grep -lsxzF 'VIBEHUB_CARD_ID=${CARD_ID}' /proc/[0-9]*/environ`);
-    expect(s.indexOf("VIBEHUB_CARD_ID=")).toBeLessThan(s.indexOf(`rm -rf '${CWD}'`));
+    const purgeScript = script();
+    expect(purgeScript).toContain(`grep -lsxzF 'VIBEHUB_CARD_ID=${CARD_ID}' /proc/[0-9]*/environ`);
+    expect(purgeScript.indexOf("VIBEHUB_CARD_ID=")).toBeLessThan(purgeScript.indexOf(`rm -rf '${CWD}'`));
   });
 
   it("mede o que vai liberar antes de apagar e informa numa linha própria", () => {
-    const s = script();
-    expect(s.indexOf("VIBEHUB_PURGE_FREED_KB")).toBeLessThan(s.indexOf(`rm -rf '${CWD}'`));
+    const purgeScript = script();
+    expect(purgeScript.indexOf("VIBEHUB_PURGE_FREED_KB")).toBeLessThan(purgeScript.indexOf(`rm -rf '${CWD}'`));
     expect(ws.parsePurgeFreedBytes("x\nVIBEHUB_PURGE_FREED_KB 2048\n")).toBe(2048 * 1024);
     expect(ws.parsePurgeFreedBytes("sem marcador")).toBeUndefined();
   });

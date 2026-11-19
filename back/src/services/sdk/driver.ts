@@ -182,7 +182,7 @@ export function buildSdkDriverCommandLine(opts: SdkDriverCommandOpts): string {
     // The card's git include: every git the driver's Claude runs — in any repository — acts as the
     // card's author, read from a file the author switch rewrites (github/runnerIdentity.ts).
     for (const [k, v] of cardGitEnv(opts.cardId)) cardEnv += `export ${k}=${shQuote(v)}; `;
-    for (const [k, v] of cardTmpEnv(opts.cardId)) cardEnv += `export ${k}=${shQuote(v)}; `;
+    for (const [name, value] of cardTmpEnv(opts.cardId)) cardEnv += `export ${name}=${shQuote(value)}; `;
     cardEnv += CREATE_CARD_TMPDIR;
   }
   if (opts.statusUrl) cardEnv += `export VIBEHUB_STATUS_URL=${shQuote(assertSafeUrl(opts.statusUrl))}; `;

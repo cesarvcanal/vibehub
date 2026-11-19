@@ -61,7 +61,6 @@ async function waitFor(check: () => Promise<boolean>, timeoutMs = 5000): Promise
   }
 }
 
-/** A `docker` that runs `docker exec -i <container> bash -s` in place. */
 async function fakeDockerPath(): Promise<string> {
   const bin = await mkdtemp(join(tmpdir(), "vh-purge-bin-"));
   cleanups.push(() => rm(bin, { recursive: true, force: true }));
@@ -69,7 +68,6 @@ async function fakeDockerPath(): Promise<string> {
   return `${bin}:${process.env.PATH}`;
 }
 
-/** A card as the runner sees it: a git worktree on `card/<slug>`, its /tmp and a detached server on a port. */
 async function liveCard(repoDir: string) {
   const cardId = randomUUID();
   const slug = `card-${cardId.slice(0, 8)}`;
