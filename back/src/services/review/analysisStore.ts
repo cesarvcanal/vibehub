@@ -22,7 +22,7 @@ export async function getAnalysis(cardId: string): Promise<AnalysisReport | unde
 
 export async function saveAnalysis(report: AnalysisReport): Promise<void> {
   await store.mutate((doc) => {
-    const otherCards = doc.analyses.filter((analysis) => analysis.cardId !== report.cardId);
-    doc.analyses = [...otherCards, structuredClone(report)];
+    const otherCardsAnalyses = doc.analyses.filter((analysis) => analysis.cardId !== report.cardId);
+    doc.analyses = [...otherCardsAnalyses, structuredClone(report)];
   });
 }
