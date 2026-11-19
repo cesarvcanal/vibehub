@@ -183,7 +183,7 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.queryByText(/sem limite de uso/)).toBeNull();
   });
 
-  it("revisor rodando a frota: a conversa mostra cada agente com o modelo, o achado e a verificação respondendo a ele", async () => {
+  it("revisor rodando a frota: a aba Agentes mostra cada agente com o modelo, o achado e a verificação respondendo a ele, fora da conversa da revisão", async () => {
     const served = get.getMockImplementation()!;
     const fleet = [{
       runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Revisão", "Verificação"], total: 3, done: 2, at: 5, finished: false,
@@ -198,6 +198,8 @@ describe("ReviewPanel — o que mostra", () => {
     get.mockImplementation(async (url: string) => (url === "/cards/c1/review" ? { review: current, working, fleet } : served(url)));
     open("aut", review({ phase: "reviewing", round: 1 }));
     await loaded();
+    expect(within(screen.getByTestId("review-conversation")).queryByTestId("fleet-chat-message")).toBeNull();
+    await userEvent.click(screen.getByRole("tab", { name: /Agentes/ }));
     const messages = await screen.findAllByTestId("fleet-chat-message");
     expect(messages).toHaveLength(2);
     expect(messages[0]).toHaveTextContent("Revisão de Correção");
@@ -213,6 +215,32 @@ describe("ReviewPanel — o que mostra", () => {
     expect(typing).toHaveTextContent("Juiz");
     expect(typing).toHaveTextContent("opus");
     expect(typing).toHaveTextContent("digitando");
+  });
+
+  it("a aba Agentes abre na rodada mais recente e troca de rodada pelas pílulas", async () => {
+    const served = get.getMockImplementation()!;
+    const agentRun = (runId: string, title: string) => ({
+      runId, name: "vibehub-pr-analysis", phases: ["Revisão"], total: 1, done: 1, at: 5, finished: true,
+      agents: [{ id: `${runId}-a`, label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "done" as const, endedAt: 1, toolCount: 1,
+        result: JSON.stringify({ findings: [{ title }] }) }],
+    });
+    const recorded = review({ phase: "reviewing", round: 2, lastSubmitRound: 1, fleet: [{ round: 1, runs: [agentRun("wf_r1", "achado da rodada 1")] }] });
+    get.mockImplementation(async (url: string) => (url === "/cards/c1/review" ? { review: current, working, fleet: [agentRun("wf_r2", "achado da rodada 2")] } : served(url)));
+    open("aut", recorded);
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Agentes/ }));
+    expect(await screen.findByText("achado da rodada 2")).toBeInTheDocument();
+    expect(screen.queryByText("achado da rodada 1")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Rodada 1" }));
+    expect(await screen.findByText("achado da rodada 1")).toBeInTheDocument();
+    expect(screen.queryByText("achado da rodada 2")).toBeNull();
+  });
+
+  it("revisão sem frota: a aba Agentes diz que os agentes ainda não rodaram", async () => {
+    open("aut", review({ phase: "reviewing", round: 1 }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Agentes/ }));
+    expect(screen.getByText("Os agentes do revisor ainda não rodaram nesta revisão.")).toBeInTheDocument();
   });
 
   it("sem co-autor o papel não aparece", async () => {
