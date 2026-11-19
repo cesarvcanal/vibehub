@@ -319,7 +319,7 @@ Se um comando de teste for passar de ~2 min, troque por um recorte menor. Não a
 Pedir autorização e passar por brainstorming continua obrigatório para decisões de produto, mudança de escopo, funcionalidade nova, mudança de comportamento intencional e tudo cuja intenção não esteja clara. A exceção: **o agente corrige sozinho problema real naquilo que já foi definido, pedido ou implementado**, sem parar para pedir licença:
 
 - bug e erro de lógica;
-- incongruência entre funcionalidades e regras de negócio;
+- código que contradiz uma regra ou decisão já definida;
 - regressão introduzida durante o desenvolvimento;
 - comportamento que contraria claramente o requisito estabelecido;
 - falha de integração, validação ou consistência;
