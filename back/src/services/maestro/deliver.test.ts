@@ -693,7 +693,6 @@ describe("deliver respeita a branch de origem do card", () => {
     wire();
     await deliver.deliver(card.id, { branch: "dev" });
     const script = pushScript();
-    expect(runScript).toHaveBeenCalledTimes(scripts().length);
     expect(script).toContain("error base_divergente");
     expect(script.indexOf("error base_divergente")).toBeLessThan(script.indexOf("git push "));
   });

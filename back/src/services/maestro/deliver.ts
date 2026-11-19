@@ -1192,7 +1192,7 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
     // (a)+(b) push and resolve the PR.
     const prOut = await hostExecutor().runScript(
       buildPushAndPrScript(container, token, cwd, source, target, docs, {
-        pushHeadOnto: card.pushBranch !== undefined, ...(offBase ? { offBaseOf: card.base } : {}),
+        pushHeadOnto: card.pushBranch !== undefined, offBaseOf: offBase ? card.base : undefined,
       }),
       { timeoutMs: 120_000 },
     );
