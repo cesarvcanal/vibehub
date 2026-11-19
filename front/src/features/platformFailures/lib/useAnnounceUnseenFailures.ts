@@ -30,7 +30,7 @@ export function useAnnounceUnseenFailures(failures: readonly PlatformFailure[], 
     const seenIds = readSeenFailureIds();
     const unseenIds = findUnseenFailureIds(failures, seenIds);
     if (unseenIds.length === 0) return;
-    const [onlyUnseenFailure] = unseenIds.length === 1 ? failures.filter((failure) => failure.id === unseenIds[0]) : [];
+    const onlyUnseenFailure = unseenIds.length === 1 ? failures.find((failure) => failure.id === unseenIds[0]) : undefined;
     const announcement = onlyUnseenFailure
       ? translate("platformFailures.newToastOne", { explanation: explainFailure(onlyUnseenFailure, translate) })
       : translate("platformFailures.newToast", { n: unseenIds.length, count: unseenIds.length });
