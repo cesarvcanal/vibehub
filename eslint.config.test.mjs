@@ -8,7 +8,7 @@ async function ruleIdsOf(code, filePath) {
   return result.messages.map((message) => message.ruleId ?? message.message);
 }
 
-describe("eslint.config.js: regras do AGENTS.md em todo .ts/.tsx de back/ e front/", () => {
+describe("eslint.config.js: regras do AGENTS.md em todo .ts, .tsx e .mjs do repositório", () => {
   it.each([
     ["let (§3)", "let count = 0;\ncount += 1;\nexport { count };", "no-restricted-syntax"],
     ["var (§3)", "var count = 0;\nexport { count };", "no-var"],

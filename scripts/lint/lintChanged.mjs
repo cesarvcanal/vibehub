@@ -1,0 +1,48 @@
+import { execFileSync } from "node:child_process";
+import { join, relative } from "node:path";
+import { ESLint } from "eslint";
+import { parseAddedLines } from "./addedLines.mjs";
+
+const CONFIG_FILE = join(import.meta.dirname, "..", "..", "eslint.config.js");
+const LINTED_PATHS = [":(glob)**/*.ts", ":(glob)**/*.tsx", ":(glob)**/*.mjs", ":(glob)*.js"];
+const EVERY_LINE = "every-line";
+
+function git(repoDir, ...args) {
+  return execFileSync("git", ["-c", "core.quotePath=false", ...args], { cwd: repoDir, encoding: "utf8" });
+}
+
+function readChangedLines(repoDir, baseRef) {
+  const base = git(repoDir, "merge-base", "HEAD", baseRef).trim();
+  const diff = git(repoDir, "diff", "-U0", "--no-color", "--no-ext-diff", "--diff-filter=d", base, "--", ...LINTED_PATHS);
+  const untracked = git(repoDir, "ls-files", "-z", "--others", "--exclude-standard", "--", ...LINTED_PATHS)
+    .split("\0")
+    .filter(Boolean);
+  return new Map([...parseAddedLines(diff), ...untracked.map((path) => [path, EVERY_LINE])]);
+}
+
+function keepChangedMessages(result, changedLines) {
+  const messages = result.messages.filter(
+    (message) => message.fatal || changedLines === EVERY_LINE || changedLines.has(message.line),
+  );
+  return {
+    ...result,
+    messages,
+    suppressedMessages: [],
+    errorCount: messages.filter((message) => message.severity === 2).length,
+    fatalErrorCount: messages.filter((message) => message.fatal).length,
+    warningCount: messages.filter((message) => message.severity === 1).length,
+    fixableErrorCount: 0,
+    fixableWarningCount: 0,
+  };
+}
+
+export async function lintChangedLines({ repoDir, baseRef }) {
+  const changedLinesByPath = readChangedLines(repoDir, baseRef);
+  const pathsWithAddedLines = [...changedLinesByPath].filter(([, lines]) => lines === EVERY_LINE || lines.size > 0);
+  if (pathsWithAddedLines.length === 0) return [];
+  const eslint = new ESLint({ cwd: repoDir, overrideConfigFile: CONFIG_FILE });
+  const results = await eslint.lintFiles(pathsWithAddedLines.map(([path]) => path));
+  return results
+    .map((result) => keepChangedMessages(result, changedLinesByPath.get(relative(repoDir, result.filePath))))
+    .filter((result) => result.messages.length > 0);
+}

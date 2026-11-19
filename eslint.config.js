@@ -41,7 +41,7 @@ const TEST_SYNTAX = [
 
 export default tseslint.config(
   {
-    files: ["back/**/*.ts", "front/**/*.{ts,tsx}"],
+    files: ["**/*.{ts,tsx,mjs}", "*.js"],
     ignores: ["**/dist/**"],
     extends: [tseslint.configs.base],
     plugins: { vibehub: { rules: { "no-unmarked-comment": noUnmarkedComment } } },
@@ -57,7 +57,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["back/**/*.test.ts", "back/src/testkit/**/*.ts", "front/**/*.test.{ts,tsx}"],
+    files: ["**/*.test.{ts,tsx,mjs}", "back/src/testkit/**/*.ts"],
     rules: {
       "no-restricted-syntax": ["error", ...PRODUCTION_SYNTAX, ...TEST_SYNTAX],
     },
