@@ -26,6 +26,7 @@ describe("eslint.config.js: regras do AGENTS.md em todo .ts, .tsx e .mjs do repo
     [".catch(() => null) (§9)", "export const fire = (job: Promise<void>) => job.catch(() => null);", "no-restricted-syntax"],
     [".catch(() => void 0) (§9)", "export const fire = (job: Promise<void>) => job.catch(() => void 0);", "no-restricted-syntax"],
     [".catch(() => undefined) (§9)", "export async function fire(job: Promise<void>) {\n  await job.catch(() => undefined);\n}", "no-restricted-syntax"],
+    ["@ts-expect-error sem o motivo (§3)", "// @ts-expect-error\nexport const value: number = 'text';", "@typescript-eslint/ban-ts-comment"],
     ["@ts-ignore (§3)", "// @ts-ignore\nexport const value: number = 'text';", "@typescript-eslint/ban-ts-comment"],
     ["comentário sem marcador (§3)", "// only live cards\nexport const ready = true;", "vibehub/no-unmarked-comment"],
   ])("reprova %s no código de produção", async (_case, code, ruleId) => {
