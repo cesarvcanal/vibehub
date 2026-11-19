@@ -278,7 +278,7 @@ export const boardApi = {
 
   readCardAnalysis: (cardId: string) => get<CardAnalysisResponse>(`/cards/${encodeURIComponent(cardId)}/analysis`),
 
-  mergeCardAnalysis: (cardId: string) => post<unknown>(`/cards/${encodeURIComponent(cardId)}/analysis/merge`).then(() => undefined),
+  mergeCardAnalysis: (cardId: string) => post<unknown>(`/cards/${encodeURIComponent(cardId)}/analysis/merge`),
 
   /** Opens the analysis card of a PR (or answers with the active one). */
   startPrAnalysis: (id: string, prNumber: number, roles: AnalysisRoles) =>

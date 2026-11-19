@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import type { SendOpts, SendResult } from "../services/maestro/maestro.js";
 import type { DeliverOpts, DeliverResult } from "../services/maestro/deliver.js";
+import { ANALYSIS_DIMENSIONS, type AnalysisFinding, type AnalysisReport, type AnalysisSeverity } from "../services/review/analysisModel.js";
 
 /**
  * PR REVIEW ROUTES — who may start, decide, retry, cancel and, above all, merge. The server, the board,
@@ -1158,20 +1159,18 @@ describe("relatório da análise pela rota", () => {
 });
 
 describe("merge da análise pela rota", () => {
-  const RAN_EVERYWHERE = ["correctness", "security", "performance", "contracts", "tests", "repoRules"].map((key) => ({ key, status: "ran" }));
-  const aptReport = (cardId: string, over: Record<string, unknown> = {}) => ({
+  const RAN_EVERYWHERE = ANALYSIS_DIMENSIONS.map((key) => ({ key, status: "ran" as const }));
+  const aptReport = (cardId: string, over: Partial<AnalysisReport> = {}): AnalysisReport => ({
     cardId, prUrl: PR.url, prNumber: 7, analysedSha: "e".repeat(40), stage: "done", summary: "s",
     dimensions: RAN_EVERYWHERE, findings: [], refutedCount: 0, updatedAt: 1, ...over,
   });
-  const saveReport = async (report: ReturnType<typeof aptReport>) =>
-    await (await import("../services/review/analysisStore.js")).saveAnalysis(
-      report as Parameters<typeof import("../services/review/analysisStore.js").saveAnalysis>[0], () => undefined,
-    );
+  const saveReport = async (report: AnalysisReport) =>
+    await (await import("../services/review/analysisStore.js")).saveAnalysis(report, () => undefined);
   const merge = async (w: World, as: Person) =>
     await app.inject({ method: "POST", url: `/api/cards/${w.cardId}/analysis/merge`, headers: { cookie: as.cookie } });
   const readAnalysis = async (w: World, as: Person) =>
     (await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/analysis`, headers: { cookie: as.cookie } })).json();
-  const openFinding = (severity: string) => ({ id: "f1", severity, dimension: "correctness", status: "open", title: "t" });
+  const openFinding = (severity: AnalysisSeverity): AnalysisFinding => ({ id: "f1", severity, dimension: "correctness", status: "open", title: "t" });
 
   it("quem trabalha no card mergeia a análise apta com a própria conexão GitHub, e o card vai para Concluído", async () => {
     const w = await world();
@@ -1195,7 +1194,7 @@ describe("merge da análise pela rota", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
-  it.each([
+  it.each<[string, Partial<AnalysisReport> | null]>([
     ["sem relatório", null],
     ["análise ainda não concluída", { stage: "analysed" }],
     ["bloqueante aberto", { findings: [openFinding("blocking")] }],
