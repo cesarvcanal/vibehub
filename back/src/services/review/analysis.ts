@@ -231,8 +231,9 @@ export async function startAnalysis(input: {
       await purgeCard(card.id, by);
       throw err;
     }
-    const prompt = deliverAnalysisPrompt(card, pull, reviewerUser, coauthorTrailer).catch((err: unknown) =>
-      concludeUnstartedAnalysis(card, pull.number, (err as Error).message));
+    const prompt = plantPrAnalysisWorkflow()
+      .then(() => deliverAnalysisPrompt(card, pull, reviewerUser, coauthorTrailer))
+      .catch((err: unknown) => concludeUnstartedAnalysis(card, pull.number, (err as Error).message));
     return { card, created: true, prompt };
   });
 }
@@ -262,7 +263,6 @@ async function deliverAnalysisPrompt(card: Card, pull: OpenPull, reviewer: Publi
     cardId: card.id, prNumber: pull.number, prUrl: pull.url, branch: pull.branch, base: pull.base,
     ...(coauthorTrailer ? { coauthorTrailer } : {}),
   });
-  await plantPrAnalysisWorkflow();
   await sendToTerminal(card.id, text, {
     by: `analysis:${reviewer.username}`,
     origin: ANALYSIS_ORIGIN,
