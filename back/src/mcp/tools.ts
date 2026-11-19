@@ -1,7 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { listTerminals, sendToTerminal, readTerminal, reportState, agentOriginFor, SEND_READY_WAIT_MS } from "../services/maestro/maestro.js";
-import { DECLARED_STATES, getCard } from "../services/board/registry.js";
+import { DECLARED_STATES, getCard, listProjects } from "../services/board/registry.js";
+import { createCardFromCard } from "../services/maestro/createCard.js";
 import { recordMessage, MESSAGE_TYPES, SEVERITIES, type MessageType, type Severity } from "../services/events/cardEvents.js";
 import { sendAnswer } from "./events.js";
 import { runGate } from "../services/maestro/gate.js";
@@ -146,6 +147,54 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     async (a) => {
       try {
         return ok(await listTerminals(a.project));
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_list_projects",
+    {
+      description:
+        "List the projects on the vibehub board (id, name, repository, base branch) — including those " +
+        "with no card yet. Use the id to create a card in a project with vibehub_create_card.",
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        return ok({
+          projects: (await listProjects()).map((project) => ({
+            id: project.id, name: project.name, repo: project.repoFullName ?? null, baseBranch: project.baseBranch,
+          })),
+        });
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_create_card",
+    {
+      description:
+        "Create a NEW card (a new terminal with its own branch) in ANY project — e.g. a fix you found " +
+        "for another repository, when the user asks for a card for it. It lands at the top of that " +
+        "project's backlog, authored by the person who gave THIS card its order; only the owner may " +
+        "create cards, as on the board. Then hand it the work with vibehub_send_to_terminal (pass " +
+        "`from`): the send wakes the new card on its own — the first card of a project clones the " +
+        "repo, which can take minutes. Send a self-contained instruction: the new card does not know " +
+        "this conversation.",
+      inputSchema: {
+        from: z.string().describe("YOUR OWN card id — the $VIBEHUB_CARD_ID of this terminal"),
+        projectId: z.string().describe("project id (from vibehub_list_projects)"),
+        title: z.string().min(1).max(200).describe("short title of the task, as it should read on the board"),
+      },
+    },
+    async (a) => {
+      try {
+        const card = await createCardFromCard(a.from, { projectId: a.projectId, title: a.title });
+        return ok({ cardId: card.id, title: card.title, projectId: card.projectId, column: card.column });
       } catch (e) {
         return fail(e);
       }
