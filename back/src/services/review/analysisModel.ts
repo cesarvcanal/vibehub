@@ -14,7 +14,7 @@ export const DIMENSION_RUN_STATUSES = ["ran", "skipped", "not_run"] as const;
 export type AnalysisFinding = Pick<Finding, "id" | "title" | "problem" | "file" | "line" | "proof" | "fix"> & {
   severity: AnalysisSeverity;
   dimension: AnalysisDimension;
-} & ({ status: "open" } | { status: "fixed"; commit: string });
+} & ({ status: "open" } | { status: "fixed"; commit: string } | { status: "decided"; decision: string });
 
 export interface DimensionRun {
   key: AnalysisDimension;

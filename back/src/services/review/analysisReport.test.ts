@@ -112,6 +112,23 @@ describe("relatório da análise pela ferramenta do card", () => {
     expect((await store.getAnalysis(analysisCard.id))?.stage).toBe("analysed");
   });
 
+  it("a pessoa decide a dúvida depois do done: um novo done com a dúvida decidida é gravado e a análise fica apta", async () => {
+    const { analysisCard, reportService, store } = await load();
+    const model = await import("./analysisModel.js");
+    const openQuestion = { ...blockingFinding, severity: "question" as const };
+    const everyDimension = ANALYSIS_DIMENSIONS.map((key) => ({ key, status: "ran" as const }));
+    await reportService.recordAnalysisReport(analysisCard.id, input({ dimensions: everyDimension, findings: [openQuestion] }));
+    await reportService.recordAnalysisReport(analysisCard.id, input({ stage: "done", dimensions: everyDimension, findings: [openQuestion] }));
+    expect(model.analysisVerdict((await store.getAnalysis(analysisCard.id))!)).toBe("not_apt");
+
+    const decidedQuestion = { ...openQuestion, status: "decided" as const, decision: "fica como está: o cliente pediu assim" };
+    await reportService.recordAnalysisReport(analysisCard.id, input({ stage: "done", dimensions: everyDimension, findings: [decidedQuestion] }));
+
+    const saved = (await store.getAnalysis(analysisCard.id))!;
+    expect(saved.findings).toEqual([decidedQuestion]);
+    expect(model.analysisVerdict(saved)).toBe("apt");
+  });
+
   it("dois analysed ao mesmo tempo: um é recusado e o gravado é o que foi aceito", async () => {
     const { analysisCard, reportService, store } = await load();
     const secondFinding = { ...blockingFinding, id: "f2" };

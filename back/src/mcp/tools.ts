@@ -96,6 +96,7 @@ export const analysisFindingFields = z.object({
 });
 
 const FIXED_WITHOUT_COMMIT = "a fixed finding needs the sha of the commit that fixes it";
+const DECIDED_WITHOUT_DECISION = "a decided question needs the person's decision, in one sentence";
 
 export const analysisFinding = z.discriminatedUnion("status", [
   analysisFindingFields.extend({ status: z.literal("open") }),
@@ -103,8 +104,19 @@ export const analysisFinding = z.discriminatedUnion("status", [
     status: z.literal("fixed"),
     commit: z.string({ required_error: FIXED_WITHOUT_COMMIT }).trim().min(1, FIXED_WITHOUT_COMMIT).max(80),
   }),
+  analysisFindingFields.extend({
+    status: z.literal("decided"),
+    decision: z.string({ required_error: DECIDED_WITHOUT_DECISION }).trim().min(1, DECIDED_WITHOUT_DECISION).max(500)
+      .describe("what the person decided about the question, when the answer needs no code change"),
+  }),
 ]).superRefine((finding, ctx) => {
   requireExplainedFinding(finding, ctx);
+  if (finding.status === "decided" && finding.severity !== "question") {
+    ctx.addIssue({
+      code: "custom", path: ["status"],
+      message: "only a question is decided: a blocking or an improvement is fixed with its commit or stays open",
+    });
+  }
   if (finding.severity === "blocking" && !finding.proof?.ref.trim()) {
     ctx.addIssue({ code: "custom", path: ["proof"], message: "a blocking finding needs proof: failing_test, rule or scenario with ref" });
   }
