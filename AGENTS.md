@@ -8,7 +8,7 @@
 >
 > **Regra de aplicação:** as regras gerais são **independentes do domínio** e não presumem entidades, telas ou fluxos de um módulo. As referências a arquivos do vibehub são exemplos e pontos de entrada; os contratos reais saem da inspeção do trecho modificado (§12, passo 1). **Cada regra vale pelo princípio, não pela lista de exemplos:** caso não citado se resolve pelo espírito da regra mais próxima, e na dúvida se pergunta (§12, "Como perguntar ao usuário").
 >
-> **Fonte única:** este arquivo é a fonte das regras de código, de teste, de commit e de PR. O `CONTRIBUTING.md` é a porta para contribuidores externos: aponta para este arquivo e não repete regra; o `.claude/CLAUDE.md` diz só como o Claude Code executa estas regras.
+> **Fonte única:** este arquivo é a fonte das regras de código, de teste, de commit e de PR, e de como o agente trabalha (§15, para o Claude Code). Regra nova entra aqui, em nenhum outro arquivo. O `.claude/CLAUDE.md` só importa este arquivo, porque o Claude Code carrega `CLAUDE.md` e não `AGENTS.md`.
 
 ## 1. Regras inegociáveis
 
@@ -299,7 +299,7 @@ Se um comando de teste for passar de ~2 min, troque por um recorte menor. Não a
 
 - **Teve dúvida, pergunta.** Requisito ambíguo, mais de um caminho razoável ou decisão que é do usuário: perguntar antes de implementar, no formato de "Como perguntar ao usuário", abaixo. Não inventar convenção nem presumir a resposta.
 - **Explorar antes de construir.** Feature nova ou mudança de comportamento com alternativas passa por brainstorming: requisitos, abordagens com prós e contras, recomendação, e execução só com o caminho aprovado.
-- **Processo em toda tarefa**, sem esperar ser mandado: debugging sistemático antes de propor fix, TDD na implementação, plano escrito para tarefa de várias etapas, verificação antes de declarar pronto, revisão do diff depois de implementar. A ferramenta que executa cada etapa é definida no arquivo de instruções do agente (no Claude Code, o `.claude/CLAUDE.md`).
+- **Processo em toda tarefa**, sem esperar ser mandado: debugging sistemático antes de propor fix, TDD na implementação, plano escrito para tarefa de várias etapas, verificação antes de declarar pronto, revisão do diff depois de implementar. A ferramenta que executa cada etapa é definida para cada agente (no Claude Code, a §15).
 - **Pedido de diagnóstico é leitura e explicação**, não edição.
 - **Discordar com fundamento faz parte do trabalho:** quando o pedido parece pior que uma alternativa, a discordância vira pergunta no mesmo formato, com a alternativa recomendada e o pedido original como opções, cada uma com a sua consequência.
 
@@ -344,6 +344,8 @@ Pedir autorização e passar por brainstorming continua obrigatório para decis�
 | `npm run build` | Build de back + front |
 | `npm --prefix front run storybook` | Storybook dos componentes |
 | `gh pr checks <N>` | Suíte inteira, que só roda no CI |
+
+Exercitar os caminhos do runner de ponta a ponta fora de um card exige Docker local; os testes unitários usam um host executor falso e rodam sem ele.
 
 **Testar pela tela sem tocar em produção:** back isolado (`VIBEHUB_PORT=<porta livre> VIBEHUB_DATA_DIR=/tmp/vh-test npx tsx src/index.ts` em `back/`) e front apontando para ele (`VIBEHUB_BACKEND=http://127.0.0.1:<porta> npx vite --port <outra>` em `front/`).
 
@@ -629,3 +631,84 @@ Quem revisa (pessoa ou agente) é o **portão do merge**, não um leitor de cort
 
   Feche com o veredito: **apto** ou **não apto**, com o motivo.
 - Cada achado tem resposta na thread dele: o commit e o teste que o resolvem, ou o motivo de ter virado pendência.
+
+## 15. Claude Code: skills, subagentes e entrega
+
+Esta seção diz como o Claude Code executa as regras acima. Onde uma skill, um subagente ou o harness apontam para um lado e as seções 1 a 14 para outro, valem as seções 1 a 14: a skill dita o método, este arquivo dita a regra (formato de commit e de PR, comentário, `let`). O modelo é este arquivo, não o código vizinho: o harness pede código que "se lê como o código ao redor", e o código ao redor tem comentário, `let` e helper de teste de antes destas regras.
+
+### Onde cada coisa vive
+
+| Camada | Conteúdo |
+|--------|----------|
+| `AGENTS.md` (este) | Todas as regras do projeto, para qualquer agente e pessoa |
+| `.claude/CLAUDE.md` | Só o import deste arquivo |
+| `.claude/settings.json` | Plugins habilitados, permissões e a profundidade de subagente |
+| `eslint.config.js` | A parte deste arquivo que a máquina checa (`npm run lint:changed`) |
+| `docs/` | Artefatos pontuais (planos, specs, arquitetura), não canônicos |
+| `CLAUDE.local.md` (raiz da worktree, não versionado) | Instruções do projeto escritas pelo vibehub em cada card; a seção `## Aprendizados` recebe o que o `vibehub_brain_learn` descobre: porta, runner, flakiness, fato de ambiente |
+| Cérebro (`CLAUDE.md` do perfil, não versionado) | Instruções globais do runner, editadas na aba Dev → Cérebro |
+
+Assunto que nenhuma camada documenta é pergunta ao usuário (§12), não convenção inventada.
+
+### Skill antes de cada etapa
+
+Antes de cada etapa, ache no mapa abaixo a skill da situação e invoque-a pela ferramenta `Skill`, sem esperar o pedido. Mais de uma serve: primeiro a de processo (debugging, brainstorming, TDD), depois a de execução (frontend, design). Nenhuma cobre: siga o método à mão e diga qual etapa ficou sem skill. A skill do mapa não aparece na lista: o `enabledPlugins` do `.claude/settings.json` só liga plugin já instalado no perfil, e quem instala é a tela de Plugins do vibehub; siga o processo à mão e avise quem cuida da instalação.
+
+| Situação | Skill |
+|----------|-------|
+| Feature nova, mudança de comportamento, desenho com alternativas | `superpowers:brainstorming` |
+| Feature grande guiada de ponta a ponta | `feature-dev:feature-dev` |
+| Pôr à prova um plano com perguntas duras | `mattpocock-skills:grilling` |
+| Desenhar a interface de um módulo, decidir onde passa a fronteira | `mattpocock-skills:codebase-design` |
+| Tela nova ou redesenho, antes do código | Artifact (`quickstart`), quando o ambiente oferece a ferramenta, senão página HTML local; + `frontend-design:frontend-design` |
+| Revisar tela existente, acessibilidade, layout responsivo | `ui-design:design-review` · `ui-design:accessibility-audit` · `ui-design:responsive-design` |
+| Bug, teste falhando, comportamento que ninguém explica | `superpowers:systematic-debugging` |
+| Tarefa de várias etapas | `superpowers:writing-plans`, depois `superpowers:executing-plans` (você executa) ou `superpowers:subagent-driven-development` (um subagente por tarefa) |
+| Duas ou mais tarefas independentes em paralelo | `superpowers:dispatching-parallel-agents` |
+| Escrever feature ou correção | `superpowers:test-driven-development` |
+| Simplificar código que escreveu ou tocou | `/simplify` · subagente `code-simplifier:code-simplifier` |
+| Modernizar código legado | subagente `code-refactoring:legacy-modernizer` |
+| Ver a mudança rodando | `run` · MCP `navegador`, com o back e o front isolados da §12 |
+| Antes de afirmar pronto, passando ou corrigido | `superpowers:verification-before-completion` |
+| Achar bug no diff ou num PR | `/code-review` (o nível `ultra`, faturado, só a pedido do usuário) |
+| Revisão por um subagente sem o seu contexto | `superpowers:requesting-code-review` |
+| Recebeu review (pessoa ou bot) | `superpowers:receiving-code-review` |
+| Segurança das mudanças pendentes | `security-review` |
+| Editar este arquivo | `mattpocock-skills:writing-for-agents` · `claude-md-management:claude-md-improver` |
+| Commit e PR | Nenhuma: direto pela §14. `commit-commands:*` faz um commit único sem Gitmoji e `mattpocock-skills:pr` usa outro modelo de descrição |
+
+### Ordem de trabalho
+
+1. **Entender e perguntar.** A pergunta da §12 sai pela `AskUserQuestion`, com "(Recomendado)" no rótulo da recomendada; a saída livre a ferramenta já põe.
+2. **Diagnosticar ou desenhar:** bug pela `superpowers:systematic-debugging`; feature pela `superpowers:brainstorming`; tela nova com o protótipo aprovado antes do React.
+3. **Planejar** a tarefa de várias etapas.
+4. **Implementar em TDD**, com o vermelho visto antes do verde e a §11 ("Antes do primeiro helper de teste") antes do primeiro helper.
+5. **Fechamento**, abaixo.
+6. **Verificar** com os comandos da §12, passo 7, depois de aplicar o que a revisão achou.
+7. **Entregar**, abaixo.
+
+### Subagentes
+
+- **Quem delegou responde pelo `git diff`.** O subagente que abriu o trecho e viu o defeito conserta ali mesmo, num pacote que não cruza com o de outro agente; feature grande se fatia antes de despachar; mudança pequena, ou que atravessa muitos arquivos, você escreve.
+- **Saída de subagente é candidata, não verdade:** confira no working tree o que ele relatou e escreveu; ressalva do tipo "não auditei X" se resolve abrindo o X.
+- **Paralelismo é multi-dispatch seu:** vários agentes numa única mensagem, cada um dono de um pacote. A profundidade 2 (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` no `.claude/settings.json`) serve para um subagente ler ou pesquisar, não para paralelizar escrita: dois agentes na mesma working tree sobrescrevem um ao outro em silêncio. Trabalho que precisa de branch própria vai para outro card (`vibehub_send_to_terminal`).
+
+### Fechamento: revisão agnóstica
+
+É o passo 8 da §12, antes da entrega, sem esperar ser mandado. O revisor recebe só este prompt, palavra por palavra, sem justificativa nem lista de foco: quem escreveu não escolhe onde o revisor olha.
+
+```text
+Revise a branch atual contra o AGENTS.md da raiz do repositório.
+O diff: git fetch origin main && git diff origin/main...HEAD
+O que o autor afirma: git log origin/main..HEAD
+<pedido: o da etapa 1 ou o da etapa 2, abaixo>
+```
+
+1. **Simplificação:** subagente `code-simplifier:code-simplifier`, com o pedido de confrontar cada trecho com as regras e aplicar o que simplifica sem mudar comportamento. Confira o que ele escreveu e rode o lint e os testes do recorte.
+2. **Code review**, depois da simplificação: subagente `general-purpose`, com o pedido de seguir "Como revisar um PR" (§14), não mexer no working tree e entregar os achados com severidade e o veredito. Ele usa o shell para `git`, lint e testes existentes; o teste novo que provaria um achado ele descreve, e você escreve e roda. O `feature-dev:code-reviewer` não tem Bash e só serve para uma leitura rápida.
+3. Cada achado se confere na fonte e segue a severidade (§14), em commit próprio quando se corrige.
+
+### Entrega
+
+- Dentro de um card do vibehub, a entrega é o `vibehub_deliver`: push, PR, gate (`.vibehub/gate.json`) e merge quando autorizado. O `git push` direto do runner dá 403, e é esperado. Fora do runner, "Como publicar" (§14) com o `gh`.
+- **`authorized: true` só com o aval explícito do usuário na conversa** (merge em `main` é deploy do vibehub) e com os Pontos de atenção do PR relidos: pendência que bloqueia sem o aval registrado (§14) segue sem `authorized`.
