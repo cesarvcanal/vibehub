@@ -26,6 +26,8 @@ export interface WorkflowAgent {
   label: string;
   /** The script phase it runs in (the journal's `phase` / the meta's `workflowPhase`). "" = no phase. */
   phase: string;
+  /** The model the script asked for (the meta's `model`: "opus", "sonnet"…). Absent when the meta does not say. */
+  model?: string;
   /** `stopped` = it was in flight when the round ended (killed, or the probe gave up): it will never answer. */
   status: "running" | "done" | "stopped";
   /** What it returned, trimmed — only on the ones that finished. */
@@ -253,9 +255,10 @@ function scriptOf(scriptsDir,runId){
   }catch(e){return {name:'',phases:[]}}
 }
 function agentOf(dir,a){
-  const meta=a.label&&a.phase?{}:metaOf(dir,a.id);
+  const meta=metaOf(dir,a.id);
   const info=inspect(p.join(dir,'agent-'+a.id+'.jsonl'));
   const out={id:a.id,status:a.status,label:a.label||str(meta.description)||info.task,phase:a.phase||str(meta.workflowPhase),toolCount:info.toolCount};
+  if(str(meta.model))out.model=str(meta.model);
   if(a.result!==undefined)out.result=a.result;
   if(info.startedAt)out.startedAt=info.startedAt;
   if(info.lastAt)out.lastAt=info.lastAt;
@@ -456,10 +459,12 @@ function parseAgent(value: unknown): WorkflowAgent | null {
   const endedAt = done ? asInstant(a.endedAt) : undefined;
   const activity = parseActivity(a.activity);
   const result = done ? asString(a.result) : "";
+  const model = asString(a.model);
   return {
     id,
     label: trimAgentLabel(asString(a.label)),
     phase: asString(a.phase),
+    ...(model ? { model } : {}),
     status: done ? "done" : "running",
     ...(result ? { result } : {}),
     toolCount,

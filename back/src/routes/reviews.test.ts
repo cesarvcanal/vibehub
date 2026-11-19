@@ -20,6 +20,9 @@ vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 let dir = "";
 let app: FastifyInstance;
 
+/** The runner (docker exec): planting the fleet's script, probing its journal. Answers "nothing" unless a test says otherwise. */
+const runScript = vi.fn(async (_script: string, _opts?: unknown) => ({ stdout: "[]", stderr: "" }));
+
 const send = vi.fn(async (cardId: string, _text: string, opts: SendOpts = {}): Promise<SendResult> => {
   await opts.beforeDeliver?.();
   return { sent: true, cardId, title: "", project: "" };
@@ -54,6 +57,10 @@ async function boot(): Promise<FastifyInstance> {
       running: true, exists: true, claudeInstalled: true, dockerReachable: true,
       container: "vibehub-runner", host: "this machine",
     })),
+  }));
+  vi.doMock("../runtime/host.js", async () => ({
+    ...(await vi.importActual<typeof import("../runtime/host.js")>("../runtime/host.js")),
+    hostExecutor: () => ({ kind: "local", label: "test", runScript, ptyCommand: vi.fn() }),
   }));
   vi.doMock("../services/board/workspace.js", async () => ({
     ...(await vi.importActual<typeof import("../services/board/workspace.js")>("../services/board/workspace.js")),
@@ -204,6 +211,8 @@ const merge = async (reviewId: string, as: Person) =>
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "vibehub-review-routes-"));
   send.mockClear();
+  runScript.mockReset();
+  runScript.mockResolvedValue({ stdout: "[]", stderr: "" });
   deliver.mockClear();
   gateAtCommit.mockClear();
   gateAnswer = { ran: true, passed: true, output: "" };
@@ -653,6 +662,46 @@ describe("GET da revisão: quem está trabalhando agora", () => {
     await reg.applyCardStatus(review.reviewerCardId, "working");
     await reg.applyCardStatus(w.cardId, "waiting");
     expect(await read()).toMatchObject({ review: { id: review.id }, working: { author: false, reviewer: true } });
+  });
+});
+
+describe("GET da revisão: a frota de agentes do revisor", () => {
+  it("traz o que cada agente da frota faz, com fase e modelo, e o painel aberto mantém a frota acompanhada", async () => {
+    const w = await world();
+    const review = (await startReview(w)).json().review as { reviewerCardId: string };
+    const { EventEmitter } = await import("node:events");
+    const manager = await import("../services/sdk/manager.js");
+    const driver = Object.assign(new EventEmitter(), {
+      stdout: new EventEmitter(), stderr: new EventEmitter(), exitCode: null, kill: () => undefined,
+      stdin: Object.assign(new EventEmitter(), { writable: true, write: () => true, end: () => undefined }),
+    });
+    manager.setDriverSpawnerForTesting(() => driver as never);
+    manager.ensureDriverSession({
+      cardId: review.reviewerCardId, label: "revisor", command: { file: "docker", args: ["exec"] }, transcriptDir: "/root/.claude/projects/p",
+    });
+    const emit = (event: object) => driver.stdout.emit("data", Buffer.from(`${JSON.stringify(event)}\n`));
+    emit({ type: "session", sessionId: "s1" });
+    runScript.mockResolvedValue({
+      stdout: `${JSON.stringify([{
+        runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Contexto", "Revisão"], total: 1, done: 0,
+        agents: [{ id: "a01f", status: "running", label: "revisão: correctness", phase: "Revisão", model: "sonnet", toolCount: 2 }],
+      }])}\n`,
+      stderr: "",
+    });
+    emit({ type: "tool_use", id: "t-wf", name: "Workflow", input: {} });
+    try {
+      const read = async () =>
+        (await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/review`, headers: { cookie: w.leitor.cookie } })).json();
+      expect((await read()).fleet).toEqual([]);
+      await vi.waitFor(async () => expect((await read()).fleet).toHaveLength(1), { timeout: 8_000, interval: 500 });
+      expect((await read()).fleet[0]).toMatchObject({
+        runId: "wf_abc12", phases: ["Contexto", "Revisão"],
+        agents: [{ label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "running" }],
+      });
+    } finally {
+      manager.resetSdkSessionsForTesting();
+      manager.setDriverSpawnerForTesting(null);
+    }
   });
 });
 

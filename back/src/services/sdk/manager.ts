@@ -16,7 +16,7 @@ import { normalizeRateLimit, type RateLimitInfo } from "./rateLimit.js";
 import { normalizeContextUsage, type ContextUsageInfo } from "./contextUsage.js";
 import { saveLastContext, type StoredContext } from "./lastContext.js";
 import { forgetCardWorkflows, lastWorkflowRuns, readAgentFeed, watchCardWorkflows } from "./workflow.js";
-import { InvalidWorkflowIdError } from "./workflowProbe.js";
+import { InvalidWorkflowIdError, type WorkflowRun } from "./workflowProbe.js";
 import { InvalidDetailIdError, readAgentTimeline, readToolDetail } from "./detail.js";
 import { readCardChanges, readCardFileDiff } from "../maestro/changes.js";
 import { mergeTaskEvent, taskSnapshot, toolResultEvent, type AgentTaskEvent, type RawTaskEvent, type RawToolResultEvent } from "./toolResult.js";
@@ -148,6 +148,8 @@ export interface DriverSession {
    * works again (that one sends `login_restored`).
    */
   loginFailed: boolean;
+  /** The last read of this card's fleet by a panel outside its chat (the PR review's): it counts as a watcher for a while. */
+  fleetViewedAt?: number;
   /** The account refused the last turn for its usage limit; cleared by the first turn that works again. */
   usageLimit?: CardUsageLimit;
   /**
@@ -1029,14 +1031,29 @@ function workflowDirs(session: Pick<DriverSession, "transcriptDir" | "lastSessio
   return { runs: `${base}/subagents/workflows`, scripts: `${base}/workflows/scripts` };
 }
 
+/** How long a panel's read of the fleet keeps the probe going: a few of the panel's polls. */
+const FLEET_VIEWER_TTL_MS = 15_000;
+
 /** Turns on this card's fleet probe (idempotent — see `watchCardWorkflows`). */
 function startWorkflowWatch(session: DriverSession): void {
   watchCardWorkflows(session.cardId, {
     label: session.label,
     dirs: () => workflowDirs(session),
-    watchers: () => session.sockets.size,
+    watchers: () => session.sockets.size + (Date.now() - (session.fleetViewedAt ?? 0) < FLEET_VIEWER_TTL_MS ? 1 : 0),
     publish: (run) => broadcast(session, { type: "workflow_progress", ...run }),
   });
+}
+
+/**
+ * The fleet of this card as a panel OUTSIDE its chat follows it (the PR review's panel, on the author's card): the
+ * last snapshots, and the read counts as a watcher for {@link FLEET_VIEWER_TTL_MS}, so the probe keeps going with
+ * nobody in the reviewer's chat. No driver = nothing to show.
+ */
+export function watchCardFleet(cardId: string): WorkflowRun[] {
+  const session = sessions.get(cardId);
+  if (!session || session.closed) return [];
+  session.fleetViewedAt = Date.now();
+  return lastWorkflowRuns(cardId);
 }
 
 /** A subagent's feed for whoever asked, with the reason when it comes back empty because of an error. */

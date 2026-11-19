@@ -22,7 +22,7 @@ vi.mock("../board/registry.js", async (importOriginal) => {
   return { ...actual, updateCard: () => Promise.resolve(undefined), markCardHumanActive: () => Promise.resolve(undefined) };
 });
 
-const { attachSocket, ensureDriverSession, resetSdkSessionsForTesting, setDriverSpawnerForTesting } = await import("./manager.js");
+const { attachSocket, ensureDriverSession, resetSdkSessionsForTesting, setDriverSpawnerForTesting, watchCardFleet } = await import("./manager.js");
 const { readHistory, rewindHistory } = await import("./history.js");
 
 const CARD = "ffff498d-98dd-44b6-97ee-c06a181c3769";
@@ -181,3 +181,22 @@ describe("workflow_feed — o feed de um subagente, sob demanda", () => {
     expect(feedFrames(socket).map((f) => f.agentId)).toEqual(["a01f", "a03f"]);
   });
 });
+
+describe("watchCardFleet — o painel da revisão acompanha a frota de outro card", () => {
+  it("sem aba do chat aberta a frota não é sondada; o painel que lê passa a contar como quem assiste", async () => {
+    liveSession();
+    child.stdout.emit("data", line({ type: "tool_use", id: "t-wf", name: "Workflow", input: { scriptPath: "/x.js" } }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(runScript).not.toHaveBeenCalled();
+
+    expect(watchCardFleet(CARD)).toEqual([]);
+    await vi.waitFor(() => expect(runScript).toHaveBeenCalled(), { timeout: 6_000 });
+    expect(String(runScript.mock.calls[0]![0])).toContain("/root/.claude/projects/p/s1/subagents/workflows");
+  }, 10_000);
+
+  it("card sem driver: nada a mostrar e nada a sondar", () => {
+    expect(watchCardFleet("card-sem-driver")).toEqual([]);
+    expect(runScript).not.toHaveBeenCalled();
+  });
+});
+
