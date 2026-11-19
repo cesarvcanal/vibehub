@@ -219,6 +219,27 @@ describe("startAnalysis", () => {
     await again.prompt;
     expect(again.created).toBe(true);
     expect(again.card.id).not.toBe(first.card.id);
+    const third = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert, reviewerUserId: mussa.id });
+    expect(third.created).toBe(false);
+    expect(third.card.id).toBe(again.card.id);
+    const relisted = await analysis.listProjectPulls(project.id, albert);
+    expect(relisted.find((listedPull) => listedPull.number === 7)?.analysisCardId).toBe(again.card.id);
+  });
+
+  it("card de análise com o relatório analysed gravado segura a PR: a lista mostra o card e pedir de novo devolve o mesmo", async () => {
+    const { analysis, project } = await load();
+    const first = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert, reviewerUserId: mussa.id });
+    await first.prompt;
+    const reportService = await import("./analysisReport.js");
+    await reportService.recordAnalysisReport(first.card.id, {
+      headSha: "a".repeat(40), stage: "analysed", summary: "sem achados", dimensions: [{ key: "correctness", status: "ran" }], findings: [],
+      refutedCount: 0,
+    });
+    const listed = await analysis.listProjectPulls(project.id, albert);
+    expect(listed.find((listedPull) => listedPull.number === 7)?.analysisCardId).toBe(first.card.id);
+    const again = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert, reviewerUserId: mussa.id });
+    expect(again.created).toBe(false);
+    expect(again.card.id).toBe(first.card.id);
   });
 
   it("responde assim que o card existe: subir o card e entregar o prompt não seguram o pedido", async () => {

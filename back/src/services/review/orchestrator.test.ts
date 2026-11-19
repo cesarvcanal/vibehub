@@ -473,6 +473,21 @@ describe("PR anexado: a correção roda no card da branch do PR, ou num card de 
     await expect(o.orch.startReview(base)).resolves.toMatchObject({ prNumber: 7 });
   });
 
+  it("análise com o relatório analysed gravado segura a revisão de duas IAs", async () => {
+    const o = await load();
+    const { author } = await seed(o);
+    accountOf = { "u-revisor": "mussa" };
+    const base = { cardId: author.id, prNumber: 7, reviewerUserId: "u-revisor", authorUserId: "u-autor", mergerUserId: "u-merger", by: "u-autor" };
+    const analysis = await o.registry.createAnalysisCard({ projectId: author.projectId, accountSlug: undefined, prBranch: PR.branch, title: "Análise PR #7" });
+    await o.registry.recordCardPr(analysis.id, PR);
+    const reportService = await import("./analysisReport.js");
+    await reportService.recordAnalysisReport(analysis.id, {
+      headSha: "a".repeat(40), stage: "analysed", summary: "sem achados", dimensions: [{ key: "correctness", status: "ran" }], findings: [],
+      refutedCount: 0,
+    });
+    await expect(o.orch.startReview(base)).rejects.toThrow(/analise_ativa/);
+  });
+
   it("o mesmo PR anexado em dois cards não ganha duas revisões", async () => {
     const o = await load();
     const { project, hub } = await seedHub(o);
