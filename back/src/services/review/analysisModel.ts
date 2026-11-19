@@ -51,13 +51,19 @@ export function dimensionHealth(report: AnalysisReport, key: AnalysisDimension):
   return hasOpenImprovementOrQuestion || hasUnverifiedFindings ? "attention" : "ok";
 }
 
+export function uncheckedDimensions(report: AnalysisReport): AnalysisDimension[] {
+  return ANALYSIS_DIMENSIONS.filter((key) => {
+    const run = report.dimensions.find((dimension) => dimension.key === key);
+    return !run || run.status === "not_run" || (run.unverifiedCount ?? 0) > 0;
+  });
+}
+
 export type AnalysisVerdict = "apt" | "not_apt" | "pending";
 
 export function analysisVerdict(report: AnalysisReport): AnalysisVerdict {
   if (report.stage === "fleet_unavailable") return "not_apt";
   if (report.stage !== "done") return "pending";
-  const healthByDimension = ANALYSIS_DIMENSIONS.map((key) => dimensionHealth(report, key));
-  const blocked = healthByDimension.some((health) => health === "problem" || health === "not_run");
-  const hasUnverifiedFindings = report.dimensions.some((dimension) => (dimension.unverifiedCount ?? 0) > 0);
-  return blocked || hasUnverifiedFindings ? "not_apt" : "apt";
+  const openFindings = report.findings.filter((finding) => finding.status === "open");
+  const hasOpenBlocking = openFindings.some((finding) => finding.severity === "blocking");
+  return hasOpenBlocking || uncheckedDimensions(report).length > 0 ? "not_apt" : "apt";
 }

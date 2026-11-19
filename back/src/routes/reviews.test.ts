@@ -1138,6 +1138,7 @@ describe("relatório da análise pela rota", () => {
     expect(got.json().analysis).toMatchObject({ cardId: w.cardId, refutedCount: 2 });
     expect(got.json().verdict).toBe("pending");
     expect(got.json().health).toMatchObject({ correctness: "ok", security: "not_run" });
+    expect(got.json().uncheckedDimensions).toEqual(["security", "performance", "contracts", "tests", "repoRules"]);
   });
 
   it("quem não alcança o card não lê a análise", async () => {

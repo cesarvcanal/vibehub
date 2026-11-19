@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { analysisVerdict, dimensionHealth, type AnalysisFinding, type AnalysisReport } from "./analysisModel.js";
+import { analysisVerdict, dimensionHealth, uncheckedDimensions, type AnalysisFinding, type AnalysisReport } from "./analysisModel.js";
 
 const finding = (over: Partial<AnalysisFinding> = {}): AnalysisFinding => ({
   id: "f1", severity: "blocking", title: "t", problem: "p", fix: "x", dimension: "correctness", status: "open",
@@ -71,5 +71,16 @@ describe("veredito da análise", () => {
     const read = report({ dimensions, findings: [finding({ dimension: "tests" })] });
     expect(dimensionHealth(read, "tests")).toBe("problem");
     expect(analysisVerdict(read)).toBe("not_apt");
+  });
+});
+
+describe("dimensões sem conferência da análise", () => {
+  it("são as que não rodaram, as ausentes do relatório e as com achado que a frota não verificou; pulada e conferida ficam de fora", () => {
+    const dimensions = everyDimensionAccounted().map((dimension) => {
+      if (dimension.key === "tests") return { ...dimension, unverifiedCount: 2, reason: "2 achados sem veredito" };
+      if (dimension.key === "performance") return { key: "performance" as const, status: "not_run" as const, reason: "agente sem resposta" };
+      return dimension;
+    }).filter((dimension) => dimension.key !== "contracts");
+    expect(uncheckedDimensions(report({ dimensions }))).toEqual(["performance", "contracts", "tests"]);
   });
 });
