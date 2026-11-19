@@ -398,7 +398,7 @@ export function buildOpenScript(opts: OpenScriptOpts): string {
       // REOPEN — the hot "instant open" path — the idempotent open pays no network round trip: the
       // fetch on every reopen used to be the bulk of the latency.
       `if [ ! -d "$WT" ]; then`,
-      `  ${gitAuthed} -C "$REPO_DIR" fetch --all --prune`,
+      `  ${gitAuthed} -C "$REPO_DIR" fetch --prune origin`,
       `  if git -C "$REPO_DIR" show-ref --verify --quiet ${shQuote(`refs/heads/${branch}`)}; then`,
       `    git -C "$REPO_DIR" worktree add "$WT" ${shQuote(branch)}`,
       // The branch already exists on the remote (imported session/branch, or a recreated card):
@@ -2019,7 +2019,8 @@ export async function restartStaggered(
  * WRITES the PROJECT brain (CLAUDE.local.md) into every EXISTING worktree of that project's cards —
  * and ONLY that project's: the sweep filters the board by projectId, and each write is guarded by
  * `[ -d <worktree> ]` so a card whose workspace was never provisioned is skipped, not created. An
- * empty text removes the file everywhere instead of leaving it stale. One host call. It lives here
+ * empty text leaves each card only its own notice (base branch or lock), and removes the file where
+ * there is none (analysis and reviewer cards), instead of leaving it stale. One host call. It lives here
  * (not in brain.ts) because it needs the card→worktree mapping, and workspace already imports brain.
  */
 export async function applyProjectBrainEverywhere(

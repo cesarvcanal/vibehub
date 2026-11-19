@@ -234,7 +234,7 @@ describe("a branch do card nasce do origin/<origem> recém-buscado (git de verda
     const lastAdd = lines.findLastIndex((l) => l.includes("worktree add"));
     const to = lines.findIndex((l, i) => i > lastAdd && l === "fi");
     const repoPart = lines.slice(from, to + 1);
-    const iFetch = repoPart.findIndex((l) => l.includes("fetch --all --prune"));
+    const iFetch = repoPart.findIndex((l) => l.includes("fetch --prune origin"));
     const iFirstAdd = repoPart.findIndex((l) => l.includes("worktree add"));
     expect(iFetch).toBeGreaterThanOrEqual(0);
     expect(repoPart.slice(iFetch + 1, iFirstAdd).every((l) => !l.includes("fetch"))).toBe(true);
@@ -293,7 +293,7 @@ describe("openCard", () => {
     // the ephemeral credential lives in the script body, which travels over stdin
     expect(script).toContain(`GIT_AUTH='${AUTH_HEADER}'`);
     expect(script).toContain("git clone");
-    expect(script).toContain("fetch --all --prune");
+    expect(script).toContain("fetch --prune origin");
     // worktree on the card's branch, off the inherited base
     expect(script).toContain(`card/${card.worktreeSlug}`);
     expect(script).toContain("'origin/dev'");
@@ -324,7 +324,8 @@ describe("openCard", () => {
     expect(script).toContain(`git -C "$REPO_DIR" remote set-url origin "$CLONE_URL"`);
     // per-command http header (a per-command assignment never leaks into the shell/tmux environment)
     expect(script).toContain(`GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraheader GIT_CONFIG_VALUE_0="$GIT_AUTH" git clone`);
-    expect(script).toContain(`GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraheader GIT_CONFIG_VALUE_0="$GIT_AUTH" git -C "$REPO_DIR" fetch --all --prune`);
+    expect(script).toContain(`GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraheader GIT_CONFIG_VALUE_0="$GIT_AUTH" git -C "$REPO_DIR" fetch --prune origin`);
+    expect(script).not.toContain("fetch --all");
     // the tmux line carries NO credential (otherwise the token would enter the claude session env)
     const tmuxLine = script.split("\n").find((l) => l.includes("tmux"))!;
     expect(tmuxLine).not.toContain("GIT_AUTH");
@@ -383,7 +384,7 @@ describe("openCard", () => {
     const iClone = lines.findIndex((l) => l.includes("git clone"));
     const iSetUrl = lines.findIndex((l) => l.includes("remote set-url"));
     const iGuard = lines.findIndex((l) => l.includes('if [ ! -d "$WT" ]; then'));
-    const iFetch = lines.findIndex((l) => l.includes("fetch --all --prune"));
+    const iFetch = lines.findIndex((l) => l.includes("fetch --prune origin"));
     const iWorktree = lines.findIndex((l) => l.includes("worktree add"));
     expect(iClone).toBeGreaterThanOrEqual(0);
     // set-url ALWAYS runs (cheap, and it is the legacy-credential scrub) — outside the guard
@@ -392,7 +393,7 @@ describe("openCard", () => {
     expect(iFetch).toBeGreaterThan(iGuard);
     expect(iFetch).toBeLessThan(iWorktree);
     // and there is exactly ONE fetch — none unconditional
-    expect(scriptAt(0).match(/fetch --all --prune/g)).toHaveLength(1);
+    expect(scriptAt(0).match(/fetch --prune origin/g)).toHaveLength(1);
   });
 
   it("GitHub not connected (gitAuthHeaderFor throws) → carries on with NO credential (public repo)", async () => {
