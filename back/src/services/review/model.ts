@@ -1,4 +1,4 @@
-import type { WorkflowRun } from "../sdk/workflowProbe.js";
+import type { WorkflowAgent, WorkflowRun } from "../sdk/workflowProbe.js";
 
 /**
  * PR REVIEW — pure rules. This is where the invariants the server imposes on the reviewer's AI and on
@@ -121,6 +121,11 @@ export function mergeGateSelfHealing(gate: MergeGate): boolean {
   return gate.state === "failed" && !gate.exhausted && !(gate.autoRetried && gate.failures === undefined);
 }
 
+export type RoundFleetAgent = Pick<WorkflowAgent, "id" | "label" | "phase" | "model" | "status" | "result" | "endedAt">;
+export type RoundFleetRun = Pick<WorkflowRun, "runId" | "name" | "phases" | "total" | "done" | "at" | "finished" | "outcome"> & {
+  agents: RoundFleetAgent[];
+};
+
 export interface Review {
   id: string;
   /** The AUTHOR's card: where the fix runs and the PR lives. */
@@ -197,7 +202,7 @@ export interface Review {
    * The reviewer's agent fleet as it stood when each round was submitted (finished: whoever was still in flight
    * became `stopped`). The live fleet lives only as long as the reviewer's driver; this is what the panel keeps.
    */
-  fleet?: { round: number; runs: WorkflowRun[] }[];
+  fleet?: { round: number; runs: RoundFleetRun[] }[];
   lastSubmitRound?: number;
   lastRespondRound?: number;
   nudges: number;

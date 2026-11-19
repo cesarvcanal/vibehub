@@ -20,12 +20,12 @@ import {
   MAX_ROUNDS, MERGE_GATE_AUTO_RETRIES, mergeGateSelfHealing, applyAuthorResponses, applyReviewerVerdicts, autoMergeEligible, cardsToConclude, waivedText, type ReviewOrders, blockingOpen, normalizeSubmittedFindings, pendingImprovements, pendingQuestions,
   isReviewClosed, phaseAfterReviewerRound,
   type AuthorAnswerStatus, type Finding, type FindingStatus, type Review, type ReviewEvent, type ReviewEventItem,
-  type SubmittedFinding,
+  type RoundFleetAgent, type RoundFleetRun, type SubmittedFinding,
 } from "./model.js";
 import { findActiveAnalysisCard } from "./analysisReport.js";
 import { plantPrAnalysisWorkflow } from "./analysisWorkflow.js";
 import { readCardFleet } from "../sdk/manager.js";
-import { stopInFlight, type WorkflowRun } from "../sdk/workflowProbe.js";
+import { stopInFlight, type WorkflowAgent, type WorkflowRun } from "../sdk/workflowProbe.js";
 import {
   activeReviewForPr, getReview, insertReview, listReviewsForCards, listReviewsWaitingUsageLimit, mutateReview, reviewByReviewerCard,
 } from "./store.js";
@@ -701,9 +701,26 @@ export async function startReview(input: {
  * The reviewer's fleet as it stands now, closed (the round is being submitted: whoever has not answered will not).
  * Best effort: the live panel already showed it, and a runner that does not answer costs only the history, never the round.
  */
-async function readRoundFleet(review: Review): Promise<WorkflowRun[]> {
+function roundFleetAgent(agent: WorkflowAgent): RoundFleetAgent {
+  return {
+    id: agent.id, label: agent.label, phase: agent.phase, status: agent.status,
+    ...(agent.model !== undefined ? { model: agent.model } : {}),
+    ...(agent.result !== undefined ? { result: agent.result } : {}),
+    ...(agent.endedAt !== undefined ? { endedAt: agent.endedAt } : {}),
+  };
+}
+
+function roundFleetRun(run: WorkflowRun): RoundFleetRun {
+  return {
+    runId: run.runId, name: run.name, phases: run.phases, total: run.total, done: run.done, at: run.at, finished: true,
+    agents: stopInFlight(run.agents).map(roundFleetAgent),
+    ...(run.outcome !== undefined ? { outcome: run.outcome } : {}),
+  };
+}
+
+async function readRoundFleet(review: Review): Promise<RoundFleetRun[]> {
   try {
-    return (await readCardFleet(review.reviewerCardId)).map((run) => ({ ...run, finished: true, agents: stopInFlight(run.agents) }));
+    return (await readCardFleet(review.reviewerCardId)).map(roundFleetRun);
   } catch (err) {
     logger.warn({ review: review.id, detail: (err as Error).message }, "PR review could not read the reviewer's fleet for the history");
     return [];

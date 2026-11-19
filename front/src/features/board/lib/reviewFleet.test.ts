@@ -5,7 +5,7 @@ import { conversationRows } from "./review";
 import { agentRole, fleetMessages, fleetsByRound, readAgentResult, withFleets } from "./reviewFleet";
 
 function agent(overrides: Partial<ReviewFleetAgent> = {}): ReviewFleetAgent {
-  return { id: "a1", label: "contexto", phase: "Contexto", status: "done", toolCount: 0, ...overrides };
+  return { id: "a1", label: "contexto", phase: "Contexto", status: "done", ...overrides };
 }
 
 function run(overrides: Partial<ReviewFleetRun> = {}): ReviewFleetRun {

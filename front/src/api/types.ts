@@ -894,11 +894,7 @@ export interface ReviewFleetAgent {
   model?: string;
   status: "running" | "done" | "stopped";
   result?: string;
-  startedAt?: number;
-  lastAt?: number;
   endedAt?: number;
-  toolCount: number;
-  toolCountPartial?: boolean;
   activity?: { kind: "tool"; tool: string; target: string } | { kind: "text"; text: string } | { kind: "thinking"; since: number };
 }
 
@@ -907,7 +903,6 @@ export interface ReviewFleetRun {
   runId: string;
   name: string;
   phases: string[];
-  startedAt?: number;
   total: number;
   done: number;
   agents: ReviewFleetAgent[];

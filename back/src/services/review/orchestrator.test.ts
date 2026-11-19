@@ -288,8 +288,29 @@ describe("iniciar a revisão", () => {
     expect(fleetRead).toHaveBeenCalledWith(review.reviewerCardId);
     expect(after.fleet).toEqual([{
       round: 1,
-      runs: [{ ...run, finished: true, agents: [run.agents[0], { ...run.agents[1], status: "stopped" }] }],
+      runs: [{
+        runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Revisão"], total: 2, done: 1, at: 5, finished: true,
+        agents: [
+          { id: "a01f", label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "done", result: "{}" },
+          { id: "a02f", label: "juiz", phase: "Julgamento", model: "opus", status: "stopped" },
+        ],
+      }],
     }]);
+  });
+
+  it("a frota gravada guarda só o que o histórico desenha, sem a atividade crua dos agentes", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    fleetRead.mockResolvedValueOnce([{
+      runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Revisão"], total: 1, done: 0, at: 5, startedAt: 1, finished: false,
+      agents: [{
+        id: "a01f", label: "revisão: correctness", phase: "Revisão", status: "running", toolCount: 7, toolCountPartial: true,
+        startedAt: 1, lastAt: 4, activity: { kind: "tool", tool: "Bash", target: "cat .env" },
+      }],
+    }]);
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    expect(after.fleet?.[0]?.runs[0]?.agents[0]).toEqual({ id: "a01f", label: "revisão: correctness", phase: "Revisão", status: "stopped" });
+    expect(after.fleet?.[0]?.runs[0]).not.toHaveProperty("startedAt");
   });
 
   it("a execução já gravada numa rodada anterior não entra de novo na frota da rodada seguinte", async () => {
