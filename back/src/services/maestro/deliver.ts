@@ -81,7 +81,8 @@ export type DeliverReason =
   /** No PR opened: its documentation is missing or invalid (prDocs.ts). The branch may have been pushed. */
   | "undocumented"
   /** The PR is open, but GitHub refused its comments (a line outside the diff, say). Nothing merged. */
-  | "comments_failed";
+  | "comments_failed"
+  | "base_divergente";
 
 export interface DeliverResult {
   /** URL of the PR — present once (b) resolved one, whether or not it was later merged. */
@@ -111,8 +112,12 @@ export interface DeliverResult {
 }
 
 export interface DeliverOpts {
-  /** Target branch to open the PR against and merge into. Absent = the project's base branch. */
+  /**
+   * Target branch to open the PR against and merge into. Absent = the card's base (the branch it was
+   * cut from); on an analysis card, the project's base branch.
+   */
   branch?: string;
+  confirmTarget?: boolean;
   /** MUST be exactly true to merge. Anything else stops before the merge. */
   authorized?: boolean;
   by?: string;
@@ -223,7 +228,7 @@ function decoded(text: string): string {
  */
 export function buildPushAndPrScript(
   containerName: string, token: string, cwd: string, branch: string, target: string,
-  docs: CleanPrDocs = { comments: [] }, opts: { pushHeadOnto?: boolean } = {},
+  docs: CleanPrDocs = { comments: [] }, opts: { pushHeadOnto?: boolean; offBaseOf?: string } = {},
 ): string {
   assertSafeRemotePath(cwd);
   const pushCommand = opts.pushHeadOnto
@@ -257,6 +262,7 @@ export function buildPushAndPrScript(
   const body = [
     ...ghTokenPreamble(token),
     `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
+    ...(opts.offBaseOf !== undefined ? buildBaseDivergenceStop(branch, target, opts.offBaseOf) : []),
     forgetDeletedRemoteBranch(branch),
     // The PR's branch gone from GitHub = the PR was merged or closed meanwhile: pushing would recreate it
     // as an orphan carrying the fixes. A card's own branch is recreated on purpose (a new delivery).
@@ -275,6 +281,23 @@ export function buildPushAndPrScript(
     `echo "${MARKER} pr $URL"`,
   ];
   return dockerBashScript(containerName, body);
+}
+
+export function buildBaseDivergenceStop(branch: string, target: string, base: string): string[] {
+  const remoteTarget = `refs/remotes/origin/${target}`;
+  const range = shQuote(`${remoteTarget}..refs/heads/${branch}`);
+  return [
+    `if ! git fetch --quiet origin ${shQuote(`+refs/heads/${target}:${remoteTarget}`)}; then ` +
+      `printf 'não deu para ler origin/%s do GitHub para comparar com a origem do card\\n' ${shQuote(target)}; echo "${MARKER} error base_check"; exit 0; fi`,
+    `COMMITS=$(git rev-list --count ${range})`,
+    `FILES=$(git diff --name-only ${shQuote(`${remoteTarget}...refs/heads/${branch}`)} | wc -l | tr -d ' ')`,
+    `printf 'Este card nasceu de \`%s\`, e o PR foi pedido para \`%s\`: ele levaria %s commit(s) e %s arquivo(s) (git log origin/%s..%s):\\n' ` +
+      `${shQuote(base)} ${shQuote(target)} "$COMMITS" "$FILES" ${shQuote(target)} ${shQuote(branch)}`,
+    `git log --oneline -n 10 ${range}`,
+    `printf 'Nada foi enviado. Entregue sem branch (o PR vai para %s) ou, se o usuário confirmou %s explicitamente, repita com confirmTarget: true.\\n' ` +
+      `${shQuote(base)} ${shQuote(target)}`,
+    `echo "${MARKER} error base_divergente $COMMITS $FILES"; exit 0`,
+  ];
 }
 
 /** How long the comments step waits for the PR to point at the pushed commit (rounds × seconds). */
@@ -596,7 +619,12 @@ export function parseMerge(stdout: string): { merged: boolean; output: string; m
 
 /** Which git stage failed maps to the reason a maestro reads. PURE. */
 function reasonForStage(stage: string): DeliverReason {
-  return stage === "push" ? "push_failed" : stage === "undocumented" ? "undocumented" : "pr_failed";
+  switch (stage) {
+    case "push": return "push_failed";
+    case "undocumented": return "undocumented";
+    case "base_divergente": return "base_divergente";
+    default: return "pr_failed";
+  }
 }
 
 /**
@@ -1098,8 +1126,10 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
   const locked = card.locked === true;
   /** Spread into every result so the caller can SAY why the target was not the one it asked for. */
   const lock = (locked ? { locked: true } : {}) as { locked?: true };
-  const requested = opts.branch ?? project.baseBranch;
+  const requested = opts.branch ?? (card.pushBranch === undefined ? card.base : project.baseBranch);
   const target = assertBranchName(locked ? (card.base || project.baseBranch) : requested);
+  const targetConfirmed = opts.confirmTarget === true || (card.prs ?? []).some((pr) => pr.base === target && !pr.attached);
+  const offBase = card.pushBranch === undefined && target !== card.base && !targetConfirmed;
   // A LOCKED card's PR is merged by whoever reviews it: the review's merge button (merge-only) is that
   // exit — but only for the PR back to the card's own base. Any other base is still the lock's "no",
   // said before a single script runs (there is no PR of this card to read there).
@@ -1161,7 +1191,9 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
   } else {
     // (a)+(b) push and resolve the PR.
     const prOut = await hostExecutor().runScript(
-      buildPushAndPrScript(container, token, cwd, source, target, docs, { pushHeadOnto: card.pushBranch !== undefined }),
+      buildPushAndPrScript(container, token, cwd, source, target, docs, {
+        pushHeadOnto: card.pushBranch !== undefined, ...(offBase ? { offBaseOf: card.base } : {}),
+      }),
       { timeoutMs: 120_000 },
     );
     const pr = parsePushAndPr(prOut.stdout);

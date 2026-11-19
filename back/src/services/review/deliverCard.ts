@@ -36,7 +36,7 @@ export async function deliverCard(
   return opts.concludeWhenMerged && !concludeRecorded ? withOutput(result, CONCLUDE_NOT_RECORDED) : result;
 }
 
-type DeliverCardOpts = Pick<DeliverOpts, "branch" | "authorized" | "by" | "docs"> & {
+type DeliverCardOpts = Pick<DeliverOpts, "branch" | "confirmTarget" | "authorized" | "by" | "docs"> & {
   from?: string;
   /** "…e concluir o card": with the card's PR under review, recorded on it, and the card goes to done once merged. */
   concludeWhenMerged?: boolean;

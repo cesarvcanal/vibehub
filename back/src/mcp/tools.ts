@@ -492,11 +492,16 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     "vibehub_deliver",
     {
       description:
-        "Deliver a card: push its branch, open (or reuse) a pull request to `branch`, run the gate, " +
+        "Deliver a card: push its branch, open (or reuse) a pull request to `branch` — absent, the branch the card " +
+        "was cut from (its `base`, chosen when the card was created; the project's base branch is only the default " +
+        "for a card created without one) — run the gate, " +
         "and — ONLY when `authorized` is true and the gate is green — merge the PR with a merge commit " +
         "(never a squash). All git/gh runs as the GitHub account of whoever sent the card its latest order (falling back to the project's). Returns { prUrl, " +
         "merged, reason }: `reason` is 'merged' on success, or 'gate' (checks red), 'unauthorized' " +
-        "(prepared the PR but was not told to merge), 'locked' (see below), or a git failure. Pass " +
+        "(prepared the PR but was not told to merge), 'locked' (see below), 'base_divergente' (`branch` is not the " +
+        "card's base: nothing was pushed, and the output says the base, the target and how many commits and files " +
+        "the PR would carry — deliver to the base, or repeat with `confirmTarget: true` only when the user " +
+        "explicitly confirms that target), or a git failure. Pass " +
         "`authorized:true` ONLY when the user named where to ship (e.g. 'sobe pra dev'); NEVER by " +
         "default — a merge is a deploy. Cherry-picking to another branch is a separate, explicit " +
         "operation, not part of this. A LOCKED card answers { reason: 'locked', locked: true }: the " +
@@ -521,7 +526,10 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         PR_DOCS_RULE,
       inputSchema: {
         card: z.string().describe("id of the card to deliver (from vibehub_list_terminals)"),
-        branch: z.string().optional().describe("target branch for the PR / merge. Absent = the project's base branch."),
+        branch: z.string().optional().describe("target branch for the PR / merge. Absent = the branch the card was cut from (its `base`, listed by vibehub_list_terminals)."),
+        confirmTarget: z.boolean().optional().describe(
+          "true = the user explicitly confirmed `branch` although the card was cut from another base. Without it such a delivery stops with 'base_divergente'.",
+        ),
         authorized: z.boolean().optional().describe("true = merge (deploy). Only when the user named the target. Never default true."),
         from: z.string().optional().describe(
           "YOUR OWN card id ($VIBEHUB_CARD_ID). A PR under review merges only when a card delivers ITSELF (from = card) by order of the review's merger.",
@@ -535,7 +543,8 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     async (a) => {
       try {
         return ok(await deliverCard(a.card, {
-          branch: a.branch, authorized: a.authorized === true, by: actor, from: a.from, concludeWhenMerged: a.concludeWhenMerged, docs: prDocsOf(a),
+          branch: a.branch, confirmTarget: a.confirmTarget, authorized: a.authorized === true, by: actor, from: a.from,
+          concludeWhenMerged: a.concludeWhenMerged, docs: prDocsOf(a),
         }));
       } catch (e) {
         return fail(e);

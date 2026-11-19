@@ -652,13 +652,147 @@ describe("deliver orchestration", () => {
     expect(mergeRan()).toBe(true);
   });
 
-  it("defaults the target to the project's base branch", async () => {
+  it("o alvo padrão é a base do card, herdada na criação, e não a base que o projeto tem hoje", async () => {
     const { deliver, registry, project, card } = await makeCard();
     await registry.updateProject(project.id, { baseBranch: "main" });
     wire();
     const out = await deliver.deliver(card.id, { authorized: true });
-    expect(out.branch).toBe("main");
-    expect(scripts().some((s) => s.includes("--base 'main'"))).toBe(true);
+    expect(out.branch).toBe(card.base);
+    expect(scripts().some((s) => s.includes(`--base '${card.base}'`))).toBe(true);
+  });
+});
+
+describe("deliver respeita a branch de origem do card", () => {
+  async function cardFrom(base: string | undefined, server: Record<string, unknown> = {}) {
+    const { deliver, registry } = await load();
+    const project = await registry.createProject({ name: "erp-aux", baseBranch: "dev" });
+    const card = await registry.createCard({ projectId: project.id, title: "hotfix" }, base ? { base } : {}, server);
+    return { deliver, registry, project, card };
+  }
+  const pushScript = () => scripts().find((s) => s.includes("git push "))!;
+
+  it("card criado de prod, sem branch: o PR vai para prod, não para a base do projeto", async () => {
+    const { deliver, card } = await cardFrom("prod");
+    wire();
+    const out = await deliver.deliver(card.id, {});
+    expect(out).toMatchObject({ branch: "prod", reason: "unauthorized" });
+    expect(pushScript()).toContain("--base 'prod'");
+    expect(pushScript()).not.toContain("error base_divergente");
+  });
+
+  it("card sem origem escolhida, sem branch: o PR vai para a base do projeto", async () => {
+    const { deliver, card } = await cardFrom(undefined);
+    wire();
+    const out = await deliver.deliver(card.id, {});
+    expect(out.branch).toBe("dev");
+    expect(pushScript()).toContain("--base 'dev'");
+  });
+
+  it("branch diferente da origem: o script para antes do push, no mesmo docker exec, e diz a origem e o alvo", async () => {
+    const { deliver, card } = await cardFrom("prod");
+    wire();
+    await deliver.deliver(card.id, { branch: "dev" });
+    const script = pushScript();
+    expect(runScript).toHaveBeenCalledTimes(scripts().length);
+    expect(script).toContain("error base_divergente");
+    expect(script.indexOf("error base_divergente")).toBeLessThan(script.indexOf("git push "));
+  });
+
+  it("branch divergente para com base_divergente: sem PR, sem gate, sem merge, mesmo autorizado", async () => {
+    const { deliver, registry, card } = await cardFrom("prod");
+    const said = "Este card nasceu de `prod`, e o PR foi pedido para `dev`: ele levaria 60 commit(s) e 59 arquivo(s)";
+    wire({ push: `${said}\n__VIBEHUB_DELIVER__ error base_divergente 60 59` });
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true });
+    expect(out).toMatchObject({ merged: false, reason: "base_divergente", branch: "dev" });
+    expect(out.prUrl).toBeUndefined();
+    expect(out.output).toContain(said);
+    expect(runScript).toHaveBeenCalledOnce();
+    expect((await registry.getCard(card.id))?.prs).toBeUndefined();
+  });
+
+  it("com confirmTarget o usuário confirmou o outro alvo: segue sem a parada", async () => {
+    const { deliver, card } = await cardFrom("prod");
+    wire();
+    const out = await deliver.deliver(card.id, { branch: "dev", confirmTarget: true });
+    expect(out).toMatchObject({ branch: "dev", reason: "unauthorized", prUrl: PR });
+    expect(pushScript()).not.toContain("error base_divergente");
+  });
+
+  it("alvo que já tem PR do card registrado conta como confirmado: a próxima entrega para lá não para", async () => {
+    const { deliver, registry, card } = await cardFrom("prod");
+    wire();
+    await deliver.deliver(card.id, { branch: "dev", confirmTarget: true });
+    expect((await registry.getCard(card.id))?.prs?.map((pr) => pr.base)).toEqual(["dev"]);
+    runScript.mockClear();
+    const out = await deliver.deliver(card.id, { branch: "dev" });
+    expect(out.reason).toBe("unauthorized");
+    expect(pushScript()).not.toContain("error base_divergente");
+  });
+
+  it("card de análise sem branch continua mirando a base do projeto, sem a parada", async () => {
+    const { deliver, card } = await cardFrom("feat-7", { pushBranch: "feat-7" });
+    wire();
+    const out = await deliver.deliver(card.id, {});
+    expect(out.branch).toBe("dev");
+    expect(pushScript()).not.toContain("error base_divergente");
+  });
+
+  it("card de análise com a branch do PR (o que o prompt dele manda) não para", async () => {
+    const { deliver, card } = await cardFrom("feat-7", { pushBranch: "feat-7" });
+    wire();
+    await deliver.deliver(card.id, { branch: "main" });
+    expect(pushScript()).not.toContain("error base_divergente");
+  });
+
+  it("card preso continua indo só para a própria base, sem a parada", async () => {
+    const { deliver, registry, card } = await cardFrom("prod");
+    await registry.updateCard(card.id, { locked: true });
+    wire();
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true });
+    expect(out).toMatchObject({ branch: "prod", locked: true, reason: "locked" });
+    expect(pushScript()).not.toContain("error base_divergente");
+  });
+});
+
+describe("buildBaseDivergenceStop (git de verdade): conta o que o PR para outro alvo arrastaria", () => {
+  const roots: string[] = [];
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  async function repoCutFromProd() {
+    const root = await mkdtemp(join(tmpdir(), "vibehub-base-stop-"));
+    roots.push(root);
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
+    const gitEnv = { ...env, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+    const sh = (cwd: string, script: string) => execFileSync("bash", ["-c", script], { cwd, encoding: "utf8", env: gitEnv });
+    const commit = (file: string) => `echo ${file} > ${file} && git add ${file} && git -c user.name=t -c user.email=t@t commit -q -m ${file}`;
+    sh(root, "git init -q --bare remote.git && git clone -q remote.git repo 2>/dev/null");
+    const repo = join(root, "repo");
+    sh(repo, `${commit("base")} && git push -q origin HEAD:dev HEAD:prod`);
+    sh(repo, `git checkout -q -b p origin/prod && ${commit("a")} && ${commit("b")} && git push -q origin HEAD:prod`);
+    sh(repo, `git fetch -q origin && git checkout -q -b card/x origin/prod && ${commit("mine")}`);
+    return { repo, sh };
+  }
+
+  it("cortado de prod e pedido para dev: para e diz a origem, o alvo e os commits e arquivos de origin/dev..card", async () => {
+    const { deliver } = await load();
+    const { repo, sh } = await repoCutFromProd();
+    const out = sh(repo, `${deliver.buildBaseDivergenceStop("card/x", "dev", "prod").join("\n")}\necho continued`);
+    expect(out).toContain("__VIBEHUB_DELIVER__ error base_divergente 3 3");
+    expect(out).toContain("nasceu de `prod`");
+    expect(out).toContain("pedido para `dev`");
+    expect(out).toContain("3 commit(s) e 3 arquivo(s)");
+    expect(out).toContain("confirmTarget");
+    expect(out).not.toContain("continued");
+  });
+
+  it("o alvo pedido não existe no GitHub: para à vista em vez de contar contra um ref velho", async () => {
+    const { deliver } = await load();
+    const { repo, sh } = await repoCutFromProd();
+    const out = sh(repo, `${deliver.buildBaseDivergenceStop("card/x", "nope", "prod").join("\n")}\necho continued`);
+    expect(out).toContain("__VIBEHUB_DELIVER__ error base_check");
+    expect(out).not.toContain("continued");
   });
 });
 
