@@ -19,6 +19,7 @@ describe("entrada da vibehub_analysis_report", () => {
     ["achado sem problema explicado é recusado, como na revisão", { ...base, findings: [{ ...blocking, problem: "" }] }],
     ["dimensão desconhecida é recusada", { ...base, dimensions: [{ key: "estilo", status: "ran" }] }],
     ["achado derrubado não entra no relatório: refuted é recusado", { ...base, findings: [{ ...blocking, severity: "refuted" }] }],
+    ["ids de achado repetidos são recusados: o done casa cada achado pelo id", { ...base, findings: [blocking, { ...blocking, title: "outro" }] }],
   ])("%s", (_case, report) => {
     expect(analysisReportInput.safeParse(report).success).toBe(false);
   });

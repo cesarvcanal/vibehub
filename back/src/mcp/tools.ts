@@ -127,6 +127,11 @@ export const analysisReportInput = analysisReportFields.superRefine((report, ctx
   if (report.stage === "fleet_unavailable" && !report.unavailableReason?.trim()) {
     ctx.addIssue({ code: "custom", path: ["unavailableReason"], message: "fleet_unavailable needs the reason" });
   }
+  const findingIds = report.findings.map((finding) => finding.id);
+  const repeatedIds = findingIds.filter((id, index) => findingIds.indexOf(id) !== index);
+  if (repeatedIds.length > 0) {
+    ctx.addIssue({ code: "custom", path: ["findings"], message: `each finding keeps the fleet's own id, once: repeated ${[...new Set(repeatedIds)].join(", ")}` });
+  }
 });
 
 export function registerMaestroTools(server: McpServer, actor: string): void {
