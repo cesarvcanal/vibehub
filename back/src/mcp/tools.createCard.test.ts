@@ -77,7 +77,6 @@ describe("maestro MCP — um card cria card em qualquer projeto", () => {
     ]));
   });
 
-
   it("card cujo dono deu a ordem cria o card no outro projeto, no backlog, já com o dono como autor e o workspace sendo preparado", async () => {
     const env = await load();
     await env.registry.stampCardActor(env.callerCard.id, env.owner.id);
@@ -196,6 +195,35 @@ describe("maestro MCP — a permissão de quem pediu é conferida antes de criar
     const answer = await env.call("vibehub_create_card", { from: env.callerCard.id, projectId: env.vibehubProject.id, title: "x" });
     expect(answer.error).toContain("502");
     expect(await env.registry.listCards(env.vibehubProject.id)).toEqual([]);
+  });
+
+  it("projeto com repositório e nenhuma conta GitHub conectada não cria card, e diz isso", async () => {
+    const env = await load();
+    await env.registry.removeGithubConnection(env.githubAccount.id);
+    await env.registry.stampCardActor(env.callerCard.id, env.owner.id);
+    const answer = await env.call("vibehub_create_card", { from: env.callerCard.id, projectId: env.vibehubProject.id, title: "x" });
+    expect(answer.error).toContain("no GitHub account is connected");
+    expect(await env.registry.listCards(env.vibehubProject.id)).toEqual([]);
+    expect(runScript).not.toHaveBeenCalled();
+  });
+
+  it("falha do GitHub num repo marca só aquele projeto, com o motivo, e lista os outros", async () => {
+    const env = await load();
+    await env.registry.stampCardActor(env.callerCard.id, env.owner.id);
+    canPushToRepo.mockRejectedValue(new Error("GitHub returned 502 while checking access to cesarvcanal/vibehub"));
+    const answer = await env.call("vibehub_list_projects", { from: env.callerCard.id });
+    expect(answer.projects).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: env.infraProject.id, canCreateCard: true }),
+      expect.objectContaining({ id: env.vibehubProject.id, canCreateCard: false, reason: expect.stringContaining("502") as unknown }),
+    ]));
+  });
+
+  it("vários projetos no mesmo repositório custam uma consulta ao GitHub só", async () => {
+    const env = await load();
+    await env.registry.createProject({ name: "vibehub-docs", repoFullName: "cesarvcanal/vibehub" });
+    await env.registry.stampCardActor(env.callerCard.id, env.owner.id);
+    await env.call("vibehub_list_projects", { from: env.callerCard.id });
+    expect(canPushToRepo).toHaveBeenCalledTimes(1);
   });
 
   it("projeto sem repositório só depende de quem pediu ser dono", async () => {
