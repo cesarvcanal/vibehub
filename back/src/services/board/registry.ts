@@ -1622,6 +1622,7 @@ interface ServerCardInit {
   branchFor?: (worktreeSlug: string) => string;
   /** Makes this an ANALYSIS card that pushes to that branch (see `Card.pushBranch`). */
   pushBranch?: string;
+  actorUserId?: string;
 }
 
 /**
@@ -1668,6 +1669,11 @@ export async function createCard(input: CreateCardInput, fields: UpdateCardInput
       card.reviewOf = author.id;
     }
     if (server.pushBranch !== undefined) card.pushBranch = assertBranchName(server.pushBranch);
+    if (server.actorUserId !== undefined) {
+      card.actorUserId = server.actorUserId;
+      card.actorAt = now;
+      card.participantUserIds = [server.actorUserId];
+    }
     const { next, move } = validateCardPatch(doc, card, withModel);
     Object.assign(card, next);
     doc.cards.push(card);
