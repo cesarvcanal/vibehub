@@ -113,10 +113,6 @@ export async function requireCardAccess(req: FastifyRequest, reply: FastifyReply
   stamp(req, user, level);
 }
 
-/**
- * Fastify preHandler for a project-scoped route (`/api/projects/:id/...`): 401 without a session, 404
- * when the project is not visible to this user ({@link canAccessProject}).
- */
 export async function requireProjectAccess(req: FastifyRequest, reply: FastifyReply): Promise<void> {
   const user = await currentUser(req);
   if (!user) {

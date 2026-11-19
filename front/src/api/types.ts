@@ -515,7 +515,6 @@ export interface RepoAccessRefusal {
   repo: string;
 }
 
-/** The 409 of `POST /projects/:id/prs/:number/analysis`: `username` is setting this PR's analysis up. */
 export interface PrSettingUpRefusal {
   error: string;
   username: string;
