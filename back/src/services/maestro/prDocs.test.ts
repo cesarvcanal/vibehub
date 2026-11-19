@@ -15,6 +15,7 @@ const BODY = [
   "## Impactos", "Quem entrega por outro card precisa pedir a ele.",
   "## Testes e validações", "Executado: vitest de prDocs e deliver.",
   "## Pontos de atenção", "A linha do comentário precisa estar no diff.",
+  "## Conformidade com o AGENTS.md", "§14: o corpo tem as dez seções.",
 ].join("\n\n");
 
 /** A comment that explains its block — long enough to say what, why and how. */
@@ -34,10 +35,15 @@ describe("missingPrSections — the description has every section of the standar
     expect(missingPrSections(body)).toEqual(["Impactos", "Pontos de atenção"]);
   });
 
+  it("the compliance section is required: a body without '## Conformidade' misses it", () => {
+    const body = BODY.replace("## Conformidade com o AGENTS.md", "Conformidade (sem heading)");
+    expect(missingPrSections(body)).toEqual(["Conformidade com as regras do repositório"]);
+  });
+
   it("accepts any heading level, numbering, bold, accents or their absence, and English headings", () => {
     const body = [
       "# 1. Contexto", "### **Problema**", "## Objetivo:", "## Solucao", "## Technical details",
-      "## Expected behavior", "## Impact", "## Tests", "## Pontos de atencao",
+      "## Expected behavior", "## Impact", "## Tests", "## Pontos de atencao", "## Compliance",
     ].join("\n");
     expect(missingPrSections(body)).toEqual([]);
   });
