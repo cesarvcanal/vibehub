@@ -94,6 +94,10 @@ const CARD_INSTRUCTIONS = [
     "Se não souber, diga que não sabe.",
 ].join("\n\n");
 
+const SUMMARY_FAILED_NOTE =
+  "O resumo da conversa deste card não ficou pronto: você só tem a conversa recente abaixo. Se a pessoa " +
+  "perguntar algo de antes, diga que não tem o histórico todo agora e passe a pergunta ao agente do card.";
+
 type CallSummary = { state: "none" } | { state: "ready"; text: string } | { state: "failed" };
 
 function cardInstructions(context: string, summary: CallSummary): string {
@@ -103,10 +107,6 @@ function cardInstructions(context: string, summary: CallSummary): string {
   if (context.trim()) sections.push(`Conversa recente deste chat (mais antiga primeiro):\n${context}`);
   return sections.join("\n\n");
 }
-
-const SUMMARY_FAILED_NOTE =
-  "O resumo da conversa deste card não ficou pronto: você só tem a conversa recente abaixo. Se a pessoa " +
-  "perguntar algo de antes, diga que não tem o histórico todo agora e passe a pergunta ao agente do card.";
 
 export async function cardCallInstructions(cardId: string, apiKey: string, signal: AbortSignal | undefined): Promise<string> {
   const events = await readHistory(cardId);

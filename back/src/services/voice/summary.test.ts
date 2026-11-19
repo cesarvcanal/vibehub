@@ -69,7 +69,7 @@ describe("summarizeConversation", () => {
     }));
     const pending = summarize("card-e", conversation, fetchImpl as typeof fetch, gone.signal);
     gone.abort();
-    await expect(pending).rejects.toThrow();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
   });
 
   it("um resumo maior que o teto é cortado", async () => {
