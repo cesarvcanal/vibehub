@@ -64,6 +64,14 @@ describe("fleetsByRound", () => {
     expect(fleets.get(2)).toEqual([live]);
   });
 
+  it("a execução que já é de uma rodada entregue não volta como frota da rodada aberta", () => {
+    const delivered = run({ runId: "wf_A" });
+    const fresh = run({ runId: "wf_B", finished: false });
+    const previous = review({ round: 2, lastSubmitRound: 1, fleet: [{ round: 1, runs: [delivered] }] });
+    expect([...fleetsByRound(previous, [delivered]).keys()]).toEqual([1]);
+    expect(fleetsByRound(previous, [fresh, delivered]).get(2)).toEqual([fresh]);
+  });
+
   it("rodada já entregue ignora a frota viva", () => {
     expect(fleetsByRound(review({ round: 1, lastSubmitRound: 1 }), [run()]).size).toBe(0);
   });

@@ -745,7 +745,10 @@ export async function submitReviewerRound(
   const after = await mutateReview(review.id, (r) => {
     // Again, inside the queue: another submit of the same round may have landed between the read and here.
     if (!fresh(r)) return;
-    if (fleetRuns.length > 0) r.fleet = [...(r.fleet ?? []).filter((entry) => entry.round !== r.round), { round: r.round, runs: fleetRuns }];
+    const earlierRounds = (r.fleet ?? []).filter((entry) => entry.round !== r.round);
+    const recordedRunIds = new Set(earlierRounds.flatMap((entry) => entry.runs.map((run) => run.runId)));
+    const roundRuns = fleetRuns.filter((run) => !recordedRunIds.has(run.runId));
+    if (roundRuns.length > 0) r.fleet = [...earlierRounds, { round: r.round, runs: roundRuns }];
     // The AI's verdict never undoes a human. Accepted risk and human withdrawal are final: any verdict
     // on them is ignored. A human block (block/keep) is only protected from `dropped` (the AI does not
     // withdraw what a human ordered blocked); `open` and `fixed` count, because the reviewer has to be

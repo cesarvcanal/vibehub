@@ -29,8 +29,10 @@ const EVIDENCE_PATTERN = new RegExp(String.raw`"evidence"\s*:\s*${JSON_STRING}`)
  */
 export function fleetsByRound(review: Review, liveFleet: ReviewFleetRun[]): Map<number, ReviewFleetRun[]> {
   const persisted = (review.fleet ?? []).filter((entry) => entry.runs.length > 0).map((entry) => [entry.round, entry.runs] as const);
-  const reviewerTurnOpen = review.lastSubmitRound !== review.round && liveFleet.length > 0;
-  return new Map(reviewerTurnOpen ? [...persisted, [review.round, liveFleet] as const] : persisted);
+  const recordedRunIds = new Set(persisted.flatMap(([, runs]) => runs.map((run) => run.runId)));
+  const openRoundFleet = liveFleet.filter((run) => !recordedRunIds.has(run.runId));
+  const reviewerTurnOpen = review.lastSubmitRound !== review.round && openRoundFleet.length > 0;
+  return new Map(reviewerTurnOpen ? [...persisted, [review.round, openRoundFleet] as const] : persisted);
 }
 
 /** A JSON string the regex captured, unescaped; the raw capture when it was cut mid-escape. PURE. */

@@ -292,6 +292,20 @@ describe("iniciar a revisão", () => {
     }]);
   });
 
+  it("a execução já gravada numa rodada anterior não entra de novo na frota da rodada seguinte", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    const runOf = (runId: string) => ({ runId, name: "vibehub-pr-analysis", phases: [], total: 0, done: 0, at: 1, finished: true, agents: [] });
+    fleetRead.mockResolvedValueOnce([runOf("wf_A")]);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    await o.orch.submitAuthorResponse(author.id, { round: 1, items: [{ id: "f1", status: "fixed", commit: "c1", reply: "feito" }], headSha: SHA2 });
+    fleetRead.mockResolvedValueOnce([runOf("wf_B"), runOf("wf_A")]);
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 2, findings: [], verdicts: [{ id: "f1", status: "fixed" }], headSha: SHA2, summary: "r2",
+    });
+    expect(after.fleet?.map((entry) => [entry.round, entry.runs.map((run) => run.runId)])).toEqual([[1, ["wf_A"]], [2, ["wf_B"]]]);
+  });
+
   it("frota que não dá para ler não segura a rodada: ela é registrada sem o retrato", async () => {
     const o = await load();
     const { review } = await started(o);
