@@ -1611,14 +1611,27 @@ describe("sdk-driver.mjs — /btw", () => {
     driver.send({ type: "btw", id: "viva", question: "a frota está rodando?" });
     const alive = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "viva");
     expect(String(alive.text)).toContain("Tarefas em segundo plano vivas agora na sessão principal: Aguarda o deploy (local_bash, b1).");
+    expect(String(alive.text)).toContain("isso vale só para esta cópia lateral");
 
     const from = driver.events.length;
     driver.send({ type: "user", text: "bg-off" });
     await driver.waitFor((e) => e.type === "result", from);
     driver.send({ type: "btw", id: "nenhuma", question: "e agora?" });
     const none = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "nenhuma");
-    expect(String(none.text)).toContain("A sessão principal não tem tarefa em segundo plano viva agora.");
+    expect(String(none.text)).toContain("A sessão principal não tem tarefa em segundo plano viva agora; o que o turno em andamento roda em primeiro plano não entra nesta conta.");
     expect(String(none.text)).not.toContain("Aguarda o deploy");
+  }, 60_000);
+
+  it("depois que o processo do CLI morre com a tarefa viva, a pergunta lateral ouve que a sessão principal não tem tarefa em segundo plano", async () => {
+    const driver = startDriver();
+    await driver.waitFor((e) => e.type === "ready");
+    driver.send({ type: "user", text: "bg-die" });
+    await driver.waitFor((e) => e.type === "background_tasks" && Array.isArray(e.tasks) && e.tasks.length === 1);
+    await driver.waitFor((e) => e.type === "background_tasks" && Array.isArray(e.tasks) && e.tasks.length === 0);
+    driver.send({ type: "btw", id: "morta", question: "a tarefa ainda roda?" });
+    const answer = await driver.waitFor((e) => e.type === "btw_answer" && e.id === "morta");
+    expect(String(answer.text)).toContain("A sessão principal não tem tarefa em segundo plano viva agora; o que o turno em andamento roda em primeiro plano não entra nesta conta.");
+    expect(String(answer.text)).not.toContain("Aguarda o deploy");
   }, 60_000);
 
   it("diz à pergunta lateral o nível em que a sessão principal está AGORA", async () => {

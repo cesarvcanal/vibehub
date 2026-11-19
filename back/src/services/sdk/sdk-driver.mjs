@@ -603,7 +603,7 @@ function btwPrompt(question, mainEffort, backgroundTasks) {
     ? ` Tarefas em segundo plano vivas agora na sessão principal: ${backgroundTasks.map((task) => `${task.description} (${task.type}, ${task.id})`).join("; ")}.` +
       " Elas seguem rodando no processo dela: se esta conversa disser que uma tarefa ficou sem registro de conclusão ou pode ter" +
       " parado, isso vale só para esta cópia lateral."
-    : " A sessão principal não tem tarefa em segundo plano viva agora.";
+    : " A sessão principal não tem tarefa em segundo plano viva agora; o que o turno em andamento roda em primeiro plano não entra nesta conta.";
   return (
     "<system-reminder>Pergunta LATERAL do usuário, feita enquanto você trabalha na tarefa principal. " +
     "Responda curto e direto, só com o que já está nesta conversa. Aqui você NÃO tem ferramentas: não " +
