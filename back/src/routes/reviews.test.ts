@@ -734,11 +734,25 @@ describe("GET da revisão: a frota de agentes do revisor", () => {
     const { review, read, firstProbe, cleanup } = await reviewerWithLiveFleet();
     try {
       await firstProbe();
-      await (await store()).mutateReview(review.id, (r) => {
-        r.phase = phase;
-        r.lastSubmitRound = r.round;
+      await (await store()).mutateReview(review.id, (stored) => {
+        stored.phase = phase;
+        stored.lastSubmitRound = stored.round;
       });
       expect((await read()).fleet).toEqual([]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("no impasse com a rodada do revisor não entregue, a frota viva continua na resposta", async () => {
+    const { review, read, firstProbe, cleanup } = await reviewerWithLiveFleet();
+    try {
+      await firstProbe();
+      await (await store()).mutateReview(review.id, (stored) => {
+        stored.phase = "impasse";
+        stored.impasseReason = "IA não respondeu";
+      });
+      expect((await read()).fleet).toHaveLength(1);
     } finally {
       cleanup();
     }

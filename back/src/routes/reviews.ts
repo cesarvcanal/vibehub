@@ -112,8 +112,8 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
       : prReview(await listReviewsFollowedBy([req.params.id]), pr);
     if (!found) return await reply.send({ review: null });
     const { review, merging } = await reviewForRead(found);
-    const reviewerTurnOpen = review.phase === "reviewing" && review.lastSubmitRound !== review.round;
-    const fleet = reviewerTurnOpen ? watchCardFleet(review.reviewerCardId).map(fleetRunForReaders) : [];
+    const reviewerRoundOpen = (review.phase === "reviewing" || review.phase === "impasse") && review.lastSubmitRound !== review.round;
+    const fleet = reviewerRoundOpen ? watchCardFleet(review.reviewerCardId).map(fleetRunForReaders) : [];
     return await reply.send({ review, working: await sidesWorking(review), merging, fleet });
   });
 
