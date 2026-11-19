@@ -38,6 +38,7 @@ const CONTAINER = "vibehub-runner";
  */
 const guard = (dir = "/root/.claude") =>
   `export IS_SANDBOX=1; ` +
+  `export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=60; ` +
   oauthTokenGuard(dir) +
   `${firstRunSeedCommand(dir, '"$PWD"')}; ` +
   `${carryTranscriptsCommand(dir, '"$PWD"')}; `;
@@ -599,6 +600,14 @@ describe("terminalRemoteArgs / cardAttachArgs (the websocket's COMPLETE attach-o
     const cmd = ws.cardTerminalCommand(project, card);
     expect(ptyCommand).toHaveBeenCalledWith(line);
     expect(cmd).toEqual({ file: "bash", args: ["-lc", line] });
+  });
+});
+
+describe("auto-compactação no terminal do card", () => {
+  it("a sessão do terminal compacta sozinha a partir de 60% do contexto, antes de abrir o claude", () => {
+    const line = ws.sessionCommand({});
+    expect(line).toContain("export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=60; ");
+    expect(line.indexOf("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE")).toBeLessThan(line.indexOf("claude; exec bash"));
   });
 });
 

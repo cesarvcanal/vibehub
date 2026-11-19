@@ -4,12 +4,12 @@
  *
  * The scale is about QUALITY, not capacity: the model does not "lock up" near the end of the window,
  * it gets worse well before that — forgets instructions from the start, repeats mistakes, mixes up
- * files. That is why the bands are low compared with the limit (the CLI's auto-compact only kicks in
- * near ~80%):
+ * files. That is why the bands are low compared with the limit, and why every card session compacts
+ * on its own where dangerous begins (back/src/runtime/autoCompact.ts):
  *
  *   0–30%   smart         the conversation fits comfortably; the model holds everything that was said
  *   30–60%  worrying      already losing detail from the start; good moment to close the step or /compact
- *   60%+    dangerous     worse answers and more mistakes; /compact or a new card
+ *   60%+    dangerous     worse answers and more mistakes; the session compacts on its own here
  *
  * The colour does NOT jump at the boundary: the hue glides between anchors (green → yellow at 30% →
  * orange → red at 60%), so the meter warms up as the conversation grows.

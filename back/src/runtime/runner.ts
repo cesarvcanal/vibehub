@@ -5,6 +5,7 @@ import { secretEnsure, secretGet } from "../secrets/vault.js";
 import { logger } from "../utils/logger.js";
 import { installGhWrapperLines } from "../services/github/runnerIdentity.js";
 import { ATTACHMENT_PACKAGES } from "../services/attachments/runner.js";
+import { AFTER_COMPACT_REMINDER } from "./autoCompact.js";
 
 /**
  * THE RUNNER — one container where every card's terminal lives. It is a plain Docker container
@@ -140,7 +141,10 @@ export function runnerSettingsJson(opts: RunnerSettingsOpts = { autonomous: true
       // Project-scoped .mcp.json files committed in a repo are honoured without a prompt.
       enableAllProjectMcpServers: true,
       hooks: {
-        SessionStart: hook("waiting"),
+        SessionStart: [
+          { matcher: "startup|resume|clear|fork", hooks: [{ type: "command", command: hookCommand("waiting") }] },
+          { matcher: "compact", hooks: [{ type: "command", command: `echo ${shQuote(AFTER_COMPACT_REMINDER)}` }] },
+        ],
         // What UserPromptSubmit prints goes into the agent's context: asked as text, the route only
         // speaks when the card was reopened out of `done` (routes/board.ts).
         UserPromptSubmit: hook("working", true),

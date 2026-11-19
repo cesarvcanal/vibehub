@@ -63,6 +63,24 @@ describe("runnerSettingsJson", () => {
       expect(s.hooks[hook]?.[0].hooks[0].command).not.toContain("text/plain");
     }
   });
+  it("a compactação no meio do turno não marca o card como aguardando: o hook de status do SessionStart ignora a fonte compact", () => {
+    const settings = JSON.parse(runnerSettingsJson()) as { hooks: Record<string, { matcher?: string; hooks: [{ command: string }] }[]> };
+    const statusEntries = settings.hooks.SessionStart?.filter((entry) => entry.hooks[0].command.includes("VIBEHUB_STATUS_URL")) ?? [];
+    expect(statusEntries).toHaveLength(1);
+    const matcher = new RegExp(`^(?:${statusEntries[0]!.matcher ?? ".*"})$`);
+    expect(["startup", "resume", "clear", "fork"].filter((source) => matcher.test(source))).toEqual(["startup", "resume", "clear", "fork"]);
+    expect(matcher.test("compact")).toBe(false);
+  });
+  it("depois de toda compactação a sessão recebe o lembrete de reler o CLAUDE.md e o AGENTS.md e seguir a tarefa", () => {
+    const settings = JSON.parse(runnerSettingsJson()) as { hooks: Record<string, { matcher?: string; hooks: [{ command: string }] }[]> };
+    const afterCompact = settings.hooks.SessionStart?.filter((entry) => entry.matcher === "compact") ?? [];
+    expect(afterCompact).toHaveLength(1);
+    const reminder = afterCompact[0]!.hooks[0].command;
+    expect(reminder).toContain("CLAUDE.md");
+    expect(reminder).toContain("AGENTS.md");
+    expect(reminder).toContain("without asking for confirmation");
+    expect(reminder).not.toContain("VIBEHUB_STATUS_URL");
+  });
   it("only bypasses permissions when the install chose autonomy", () => {
     const auto = JSON.parse(runnerSettingsJson({ autonomous: true })) as Record<string, unknown>;
     const asks = JSON.parse(runnerSettingsJson({ autonomous: false })) as Record<string, unknown>;
