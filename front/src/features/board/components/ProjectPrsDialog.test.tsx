@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { renderApp, setupState } from "@/test/render";
 import type { ProjectPull } from "@/api/types";
 import { toast } from "sonner";
+import { RECONNECT_JITTER, RECONNECT_MAX_MS } from "@/features/board/lib/reconnect";
 import { ProjectPrsDialog } from "./ProjectPrsDialog";
 
 vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { success: vi.fn(), info: vi.fn(), error: vi.fn() }) }));
@@ -371,10 +372,15 @@ describe("ProjectPrsDialog", () => {
       open();
       const ws = await liveSocket();
       ws.accept();
-      ws.drop(code);
-      await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Live updates of this list stopped; close and reopen it"));
-      await new Promise((settle) => setTimeout(settle, 1_500));
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        ws.drop(code);
+        act(() => vi.advanceTimersByTime(RECONNECT_MAX_MS * (1 + RECONNECT_JITTER)));
+      } finally {
+        vi.useRealTimers();
+      }
       expect(FakeSocket.instances).toHaveLength(1);
+      expect(toast.error).toHaveBeenCalledWith("Live updates of this list stopped; close and reopen it");
     });
 
     it("closing the dialog closes the channel", async () => {

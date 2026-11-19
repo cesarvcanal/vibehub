@@ -3,11 +3,10 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { PrClaim, PrLiveEvent } from "@/api/types";
 import { projectPullsKey } from "@/features/board/api";
+import { createReconnectBackoff } from "@/features/board/lib/reconnect";
 import { wsUrl } from "@/lib/ws";
 import { t } from "@/i18n";
 
-const FIRST_RECONNECT_MS = 1_000;
-const MAX_RECONNECT_MS = 30_000;
 const SERVER_REFUSED_CLOSE_CODES = [1008, 1011];
 
 export function usePrClaims(projectId: string, enabled: boolean) {
@@ -28,12 +27,13 @@ export function usePrClaims(projectId: string, enabled: boolean) {
 
   React.useEffect(() => {
     if (!enabled) return;
-    const connection: { closed: boolean; failures: number; retry?: ReturnType<typeof setTimeout> } = { closed: false, failures: 0 };
+    const connection: { closed: boolean; retry?: ReturnType<typeof setTimeout> } = { closed: false };
+    const backoff = createReconnectBackoff(Math.random);
     const connect = () => {
       const socket = new WebSocket(wsUrl(`/api/projects/${projectId}/prs/live`));
       live.current.socket = socket;
       socket.onopen = () => {
-        connection.failures = 0;
+        backoff.opened();
         const heldPr = live.current.holding;
         if (heldPr !== null) socket.send(JSON.stringify({ type: "claim", prNumber: heldPr }));
       };
@@ -57,20 +57,20 @@ export function usePrClaims(projectId: string, enabled: boolean) {
         }
       };
       socket.onclose = (event) => {
+        backoff.closed();
         if (connection.closed) return;
         if (SERVER_REFUSED_CLOSE_CODES.includes(event.code)) {
           toast.error(t("prs.liveStopped"));
           return;
         }
-        const delay = Math.min(FIRST_RECONNECT_MS * 2 ** connection.failures, MAX_RECONNECT_MS);
-        connection.failures += 1;
-        connection.retry = setTimeout(connect, delay);
+        connection.retry = setTimeout(connect, backoff.next());
       };
     };
     connect();
     return () => {
       connection.closed = true;
       clearTimeout(connection.retry);
+      backoff.dispose();
       live.current.socket?.close();
       live.current.socket = null;
       hold(null);
