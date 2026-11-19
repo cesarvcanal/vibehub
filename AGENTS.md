@@ -361,27 +361,7 @@ Toda dúvida que trava a execução e toda discordância com o pedido viram perg
 - **Pergunta estruturada quando a ferramenta tem**; sem ela, numere as opções no texto e ponha a saída livre por último.
 - **Descubra o que dá para descobrir.** O que o código, a documentação ou este arquivo respondem, o agente descobre e informa; a pergunta fica para a decisão que é do usuário.
 
-## 13. Revisão final (antes de entregar)
-
-- [ ] Cada dúvida e cada discordância virou pergunta de múltipla escolha com saída livre, em vez de presunção?
-- [ ] Resolvi o problema sem voltas, camadas ou abstrações artificiais?
-- [ ] Nomes em inglês, legíveis sem abrir a implementação, e todo texto de tela no i18n nos dois idiomas?
-- [ ] Só `const` nas linhas novas (ou o estado vivo justificado no PR), sem `var`, comentário fora das exceções da §3 nem código morto?
-- [ ] O porquê de cada decisão está na mensagem do commit e no PR, e cada invariante não óbvia tem um teste com o nome da regra?
-- [ ] Cálculo separado de efeito, cada estado e efeito com papel único?
-- [ ] Cada arquivo criado ou movido mora na pasta que descreve o que ele é, com o teste ao lado?
-- [ ] Componentes renderizam; regra está em `lib/` ou hook; contratos em `api/types.ts`?
-- [ ] Não dupliquei contrato, dado, estado ou fonte de verdade?
-- [ ] Dado persistido de instalações existentes continua legível?
-- [ ] O trabalho cresce com a mudança, não com o total (cards, mensagens, linhas)? Nenhum `docker exec`, leitura, emissão ou render a mais?
-- [ ] Toda integração externa que criei ou alterei segue a docs ou o comportamento verificado da versão, com a fonte citada no PR?
-- [ ] Entrada validada na fronteira, shell citado, segredo fora de argv e de log?
-- [ ] Rota nova com `requireOwner` / `requireCardAccess` / `requireCardWork` / `requireSession` adequado?
-- [ ] Operações repetíveis são idempotentes e seguras em corrida?
-- [ ] Escrevi o teste antes, vi falhar pelo motivo certo e vi falhar de novo sem a correção?
-- [ ] Rodei o lint do recorte, o recorte de testes e o typecheck, e conferi o diff?
-- [ ] O diff passou pela simplificação e pelo code review independentes contra este arquivo?
-- [ ] Afirmei apenas o que foi executado e verificado?
+## 13. Encerramento
 
 **Regra de encerramento:** se o código funciona, mas exige conceitos, estados, leituras, arquivos ou indireções desnecessários, simplificar **antes de entregar**, preservando correção, integridade, segurança e testes.
 
