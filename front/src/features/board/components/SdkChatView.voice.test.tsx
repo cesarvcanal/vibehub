@@ -10,6 +10,7 @@ import { get, post } from "@/lib/api";
 import { resetLanguage, setLanguage } from "@/i18n";
 import { FakeAudioContext, fakeRig, type FakeRig } from "@/features/voice/fakeWebRtc";
 import { setVoiceCallTestHooks } from "@/features/voice/useVoiceCall";
+import { SERVER_BACK_CONTEXT } from "@/features/voice/voiceContext";
 
 /**
  * VOICE IN THE CARD'S CHAT, end to end at the component level: the call starts from the composer
@@ -238,7 +239,7 @@ describe("a voice call inside the card's chat", () => {
     await waitFor(() => expect(ws.frames.some((f) => f.type === "user" && f.text?.includes("roda os testes"))).toBe(true));
     ws.deliver({ type: "assistant_text", text: "Vou rodar." });
     ws.drop();
-    const results = () => channel().sent.filter((e) => e.type === "session.commentary.append");
+    const results = () => channel().sent.filter((e) => e.type === "session.commentary.append" && e.delegation_id === "item_d3");
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(results()).toEqual([]);
 
@@ -311,6 +312,34 @@ describe("a voice call inside the card's chat", () => {
     // The reply still being said is on screen too, from the call itself.
     expect(turns.some((t) => t?.includes("ok"))).toBe(true);
     expect(screen.getByTestId("voice-call-bar")).toBeInTheDocument();
+  });
+
+  it("the chat losing the server and getting it back mid-call makes the voice say so, once", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    const told = () => channel().sent.filter((e) => e.type === "session.commentary.append" && e.delegation_id === null);
+    expect(told()).toEqual([]);
+
+    ws.drop();
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: 5_000 });
+    expect(told()).toEqual([]);
+    const again = FakeSocket.instances[1]!;
+    again.accept();
+    again.deliver({ type: "ready" });
+    await waitFor(() => expect(told()).toEqual([expect.objectContaining({ content: SERVER_BACK_CONTEXT })]));
+    again.deliver({ type: "ready" });
+    expect(told()).toHaveLength(1);
+  });
+
+  it("a server drop before the call is not announced when the call starts", async () => {
+    const { ws } = await openChat();
+    ws.drop();
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: 5_000 });
+    const again = FakeSocket.instances[1]!;
+    again.accept();
+    again.deliver({ type: "ready" });
+    await startCall();
+    expect(channel().sent.filter((e) => e.type === "session.commentary.append")).toEqual([]);
   });
 
   it("the replying sphere is blue and follows the assistant's REAL audio track", async () => {
