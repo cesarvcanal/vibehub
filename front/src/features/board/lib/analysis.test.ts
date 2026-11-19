@@ -61,6 +61,14 @@ describe("pílula da análise na linha da PR", () => {
     const read = readModel({ stage: "done", dimensions }, "not_apt", { correctness: "attention", security: "not_run" }, ["correctness", "security"]);
     expect(analysisPill(loaded(read), { cardWorking: false })).toMatchObject({ key: "analysis.pill.notAptUnverified", vars: { n: 2 }, tone: "critical" });
   });
+  it("não apta sem bloqueante aberto e com dúvida aberta: conta as dúvidas, antes das dimensões sem conferência", () => {
+    const dimensions: AnalysisReport["dimensions"] = ANALYSIS_DIMENSIONS.map((key) => (
+      key === "tests" ? { key, status: "ran" as const, unverifiedCount: 1 } : { key, status: "ran" as const }
+    ));
+    const findings = [finding({ status: "fixed", commit: "abc1234" }), finding({ id: "f2", severity: "question", dimension: "security" })];
+    const read = readModel({ stage: "done", dimensions, findings }, "not_apt", { security: "attention", tests: "attention" }, ["tests"]);
+    expect(analysisPill(loaded(read), { cardWorking: false })).toMatchObject({ key: "analysis.pill.notAptQuestions", vars: { n: 1 }, tone: "critical" });
+  });
   it("frota indisponível", () => {
     const read = readModel({ stage: "fleet_unavailable", unavailableReason: "x", dimensions: [] }, "not_apt", {
       correctness: "not_run", security: "not_run", performance: "not_run", contracts: "not_run", tests: "not_run", repoRules: "not_run",

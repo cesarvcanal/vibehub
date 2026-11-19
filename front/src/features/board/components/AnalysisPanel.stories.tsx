@@ -75,7 +75,7 @@ export default meta;
 type Story = StoryObj<typeof AnalysisPanel>;
 
 export const Apto: Story = {
-  parameters: { analysis: readModel(report(), "apt", { security: "attention" }) },
+  parameters: { analysis: readModel(report({ findings: [fixedBlocking] }), "apt") },
 };
 
 export const NaoAptoComBloqueante: Story = {

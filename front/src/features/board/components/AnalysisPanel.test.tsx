@@ -71,9 +71,9 @@ afterEach(() => {
 
 describe("painel da análise de PR", () => {
   it("mostra o veredito, as contagens e o estado de cada dimensão com o motivo de quem não rodou", async () => {
-    renderPanel(readModel(doneReport(), "apt"));
+    renderPanel(readModel(doneReport(), "not_apt"));
     expect(await screen.findByRole("heading", { name: "Análise do PR #312" })).toBeInTheDocument();
-    expect(screen.getByText("Apto")).toBeInTheDocument();
+    expect(screen.getByText("Não apto")).toBeInTheDocument();
     expect(screen.getByText("1 corrigido")).toBeInTheDocument();
     expect(screen.getByText("1 dúvida aberta")).toBeInTheDocument();
     expect(screen.getByText("5 derrubados na verificação")).toBeInTheDocument();
@@ -96,7 +96,7 @@ describe("painel da análise de PR", () => {
   });
 
   it("agrupa os achados por classe, com arquivo:linha, prova e o commit que corrigiu", async () => {
-    renderPanel(readModel(doneReport(), "apt"));
+    renderPanel(readModel(doneReport(), "not_apt"));
     const blockers = await screen.findByRole("region", { name: "Bloqueantes" });
     expect(within(blockers).getByText("Sessão SSO não expira com o token")).toBeInTheDocument();
     expect(within(blockers).getByText("back/src/auth/sso.ts:84")).toBeInTheDocument();
@@ -127,7 +127,7 @@ describe("painel da análise de PR", () => {
 
   it("o botão de fechar fecha o painel", async () => {
     const onClose = vi.fn();
-    renderPanel(readModel(doneReport(), "apt"), onClose);
+    renderPanel(readModel(doneReport(), "not_apt"), onClose);
     await userEvent.click(await screen.findByRole("button", { name: "Fechar a análise" }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });

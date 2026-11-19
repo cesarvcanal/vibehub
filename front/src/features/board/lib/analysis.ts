@@ -31,8 +31,11 @@ export function analysisPill(analysisQuery: AnalysisQueryState, opts: { cardWork
     const fixedCount = analysis.findings.filter((finding) => finding.status === "fixed").length;
     return { key: "analysis.pill.apt", vars: { n: fixedCount }, tone: "ok" };
   }
-  const openBlockingCount = analysis.findings.filter((finding) => finding.severity === "blocking" && finding.status === "open").length;
+  const openFindings = analysis.findings.filter((finding) => finding.status === "open");
+  const openBlockingCount = openFindings.filter((finding) => finding.severity === "blocking").length;
   if (openBlockingCount > 0) return { key: "analysis.pill.notApt", vars: { n: openBlockingCount }, tone: "critical" };
+  const openQuestionCount = openFindings.filter((finding) => finding.severity === "question").length;
+  if (openQuestionCount > 0) return { key: "analysis.pill.notAptQuestions", vars: { n: openQuestionCount }, tone: "critical" };
   return { key: "analysis.pill.notAptUnverified", vars: { n: read.uncheckedDimensions.length }, tone: "critical" };
 }
 

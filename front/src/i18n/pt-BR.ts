@@ -1478,6 +1478,8 @@ export const ptBR: Record<string, string> = {
   "analysis.pill.apt.other": "apto · {n} corrigidos",
   "analysis.pill.notApt.one": "não apto · 1 bloqueante aberto",
   "analysis.pill.notApt.other": "não apto · {n} bloqueantes abertos",
+  "analysis.pill.notAptQuestions.one": "não apto · 1 dúvida em aberto",
+  "analysis.pill.notAptQuestions.other": "não apto · {n} dúvidas em aberto",
   "analysis.pill.notAptUnverified.one": "não apto · 1 dimensão sem conferência",
   "analysis.pill.notAptUnverified.other": "não apto · {n} dimensões sem conferência",
   "analysis.pill.fleetUnavailable": "frota indisponível",
