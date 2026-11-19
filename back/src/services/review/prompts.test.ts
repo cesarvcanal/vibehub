@@ -177,7 +177,15 @@ describe("quem age em cada achado: revisor e autor leem as mesmas classes", () =
   });
 
   it("estilo e nome sem regra escrita que os decida continuam sugestão", () => {
-    expect(reviewerRoundPrompt(review())).toMatch(/estilo, nome ou refatoração que nenhuma regra escrita decide/);
+    for (const text of texts) {
+      expect(text).toContain("automática (estilo, nome ou refatoração que nenhuma regra escrita decide, o que fica fora do escopo do PR");
+    }
+  });
+
+  it("o autor não recebe ordem de recusar volta desnecessária que o revisor bloqueou por regra escrita", () => {
+    for (const text of [authorFixPrompt(review([improvement])), authorSuggestionsPrompt(review([improvement]), [improvement], { by: "cesar" })]) {
+      expect(text).toContain("- Fora do escopo, feature nova ou mudança de uma decisão intencional: não faça; responda explicando.");
+    }
   });
 
   it("dúvida só para decisão de intenção ou produto, inclusive colisão com o que já funcionava; nunca como saída fácil", () => {

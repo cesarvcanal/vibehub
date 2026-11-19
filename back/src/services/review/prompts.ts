@@ -335,7 +335,7 @@ const CORRECTIVE_AUTONOMY = [
   "- Bug ou incongruência no que o PR fez: corrija sem perguntar, com commit e teste, mesmo que tenha vindo como sugestão.",
   "- Melhoria autônoma (improvement): aplique sem esperar ninguém, só o que o item descreve e só nos arquivos que o PR já " +
     "altera, sem mudar regra, contrato ou comportamento. Se aplicar exigir sair disso, não aplique: wontfix com o motivo.",
-  "- Fora do escopo, feature nova, volta desnecessária ou mudança de uma decisão intencional: não faça; responda explicando.",
+  "- Fora do escopo, feature nova ou mudança de uma decisão intencional: não faça; responda explicando.",
   "- Você decide COMO resolver, não O QUE o sistema deve fazer. Correção que exige decidir a intenção do PR, muda regra de " +
     "negócio ou comportamento esperado, ou altera algo que já funcionava e pode colidir com outra funcionalidade sem estar " +
     "claro que era a intenção: não aplique; responda com a dúvida sobre a intenção e as consequências de cada caminho, para " +
