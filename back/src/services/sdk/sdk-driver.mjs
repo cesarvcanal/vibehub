@@ -594,8 +594,8 @@ const BTW_TIMEOUT_MS = 3 * 60_000;
 /**
  * What the model reads: the question, with the notice that it is a side one and that there are no tools. And the
  * main session's reasoning level, when known: it is not in the conversation, so "em que nível você
- * está?" right after a switch in the pill went unanswered (production, 10/11/2026). And the background tasks
- * alive in the main session: the fork resumes a copy, where the CLI (SDK 0.3.300) calls them "no completion record".
+ * está?" right after a switch in the pill went unanswered (production, 10/11/2026). And the main session's live
+ * background tasks: resuming the fork, the CLI (SDK 0.3.300) finds no completion record for them and says they may have stopped.
  */
 function btwPrompt(question, mainEffort, backgroundTasks) {
   const effortNote = mainEffort ? ` Nível de raciocínio (effort) em que a sessão principal está agora: ${mainEffort}.` : "";
@@ -644,7 +644,7 @@ async function answerBtw(id, question) {
       options.forkSession = true;
     }
     const mainEffort = await mainSessionEffort();
-    for await (const msg of query({ prompt: btwPrompt(question, mainEffort, liveBackgroundTasks), options })) {
+    for await (const msg of query({ prompt: btwPrompt(question, mainEffort, announcedBackgroundTasks.tasks), options })) {
       if (msg.type === "assistant" && !msg.parent_tool_use_id) {
         const text = resultText(msg.message?.content).trim();
         if (text) texts.push(text);
@@ -702,11 +702,11 @@ let announcedSessionId = null; // last session id emitted as a `session` event (
 // screen is showing now. When THAT process dies, the tasks die with it — and the CLI, dead,
 // does not send the empty-set notice: the driver is the one that sends it (see the `finally` of `runStream`).
 let backgroundTasksOwner = null;
-let liveBackgroundTasks = [];
+const announcedBackgroundTasks = { tasks: [] };
 
 function announceBackgroundTasks(tasks, owner) {
   backgroundTasksOwner = tasks.length > 0 ? owner : null;
-  liveBackgroundTasks = tasks;
+  announcedBackgroundTasks.tasks = tasks;
   emit({ type: "background_tasks", tasks });
 }
 
