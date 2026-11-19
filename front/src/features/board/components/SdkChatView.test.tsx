@@ -4887,7 +4887,7 @@ describe("SdkChatView — o medidor de contexto", () => {
     expect(screen.queryByTestId("context-notice")).toBeNull();
   });
 
-  it("o guia avisa que a conversa compacta sozinha em 60%, relê as regras do projeto e segue a tarefa", async () => {
+  it("o guia avisa que a conversa compacta sozinha antes de 60%, recupera as regras do projeto e segue a tarefa", async () => {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -4895,7 +4895,7 @@ describe("SdkChatView — o medidor de contexto", () => {
     ws.deliver({ type: "context_usage", usedTokens: 84_000, maxTokens: 200_000, percent: 42 } as SdkEvent);
     fireEvent.click(screen.getByTestId("context-meter"));
     const autoCompact = within(await screen.findByTestId("context-guide")).getByTestId("context-autocompact");
-    expect(autoCompact).toHaveTextContent("Compacts on its own at 60%");
+    expect(autoCompact).toHaveTextContent("Compacts on its own before reaching 60%");
     expect(autoCompact).toHaveTextContent("CLAUDE.md and AGENTS.md");
     const zones = within(screen.getByTestId("context-guide")).getAllByTestId("context-zone");
     expect(zones.find((zone) => zone.getAttribute("data-zone") === "danger")).not.toHaveTextContent("/compact");
