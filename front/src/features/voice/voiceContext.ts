@@ -36,7 +36,6 @@ export function agentContext(text: string): string {
   return `O agente do card respondeu no chat: «${text.replace(/\s+/g, " ").trim()}»`;
 }
 
-/** The chat's wire to the vibehub server dropped during the call and came back. */
 export const SERVER_BACK_CONTEXT =
   "A conexão do chat com o servidor do vibehub caiu e voltou, o que costuma ser o servidor reiniciando num deploy. " +
   "A chamada continua e os pedidos ao agente do card seguem pelo chat: diga à pessoa, em poucas palavras, que o servidor voltou.";
