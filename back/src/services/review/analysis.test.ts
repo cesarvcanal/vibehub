@@ -201,7 +201,7 @@ describe("startAnalysis", () => {
     expect(again.card.id).not.toBe(first.card.id);
   });
 
-  it("card de análise reativado depois da frota indisponível não segura a PR: a lista não o mostra e pedir de novo abre um card novo", async () => {
+  it("card de análise reativado depois da frota indisponível não segura a PR: a lista não o mostra, pedir de novo abre um card novo e é esse card novo que passa a segurar a PR", async () => {
     const { analysis, registry, project } = await load();
     const first = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert, reviewerUserId: mussa.id });
     await first.prompt;
