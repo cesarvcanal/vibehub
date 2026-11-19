@@ -615,6 +615,8 @@ export function analysisPrompt(a: AnalysisInput): string {
       "refutedCount e os findings do juiz, cada um com status: \"open\", uma vez só (o servidor recusa um segundo analysed). " +
       "O painel do vibehub mostra a partir daí.",
     "4. O juiz já classificou; quem age em cada achado é você, por este critério:",
+    "   blocking só com prova: o teste que falha, a regra escrita do repo (arquivo e trecho) ou o cenário concreto " +
+      "(arquivo:linha e o caso que dá errado).",
     FINDING_CLASSES,
     "5. Você é o único escritor: nenhum subagente edita arquivo. blocking e improvement: corrija agora, um commit " +
       "atômico por achado. Em bug, escreva antes o teste que reproduz a falha, veja falhar pelo motivo certo, corrija e " +

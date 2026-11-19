@@ -206,6 +206,14 @@ describe("quem age em cada achado: revisor e autor leem as mesmas classes", () =
 describe("prompt da análise de PR", () => {
   const input = { cardId: "card-9", prNumber: 636, prUrl: "https://github.com/acme/erp/pull/636", branch: "feat-x", base: "dev" };
 
+  it("define o que é prova antes das classes, que a citam como \"regras acima\"", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    const text = analysisPrompt(input);
+    const proofRule = text.indexOf("blocking só com prova: o teste que falha, a regra escrita do repo");
+    expect(proofRule).toBeGreaterThan(-1);
+    expect(proofRule).toBeLessThan(text.indexOf("Precisa de prova (regras acima)"));
+  });
+
   it("parte do código atual da PR e lê as regras do repositório antes de julgar", async () => {
     const { analysisPrompt } = await import("./prompts.js");
     const text = analysisPrompt(input);
