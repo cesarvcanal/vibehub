@@ -97,6 +97,14 @@ describe("maestro MCP — um card cria card em qualquer projeto", () => {
     expect(await env.registry.listCards(env.vibehubProject.id)).toEqual([]);
   });
 
+  it("card cujo autor foi removido do vibehub diz isso, sem criar card", async () => {
+    const env = await load();
+    await env.registry.stampCardActor(env.callerCard.id, "usuario-removido");
+    const out = await env.call("vibehub_create_card", { from: env.callerCard.id, projectId: env.vibehubProject.id, title: "x" });
+    expect(out.error).toContain("no longer a user");
+    expect(await env.registry.listCards(env.vibehubProject.id)).toEqual([]);
+  });
+
   it("from que não é card nenhum é recusado", async () => {
     const env = await load();
     const out = await env.call("vibehub_create_card", { from: "nao-existe", projectId: env.vibehubProject.id, title: "x" });

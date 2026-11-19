@@ -7,8 +7,9 @@ import { logger } from "../../utils/logger.js";
 export async function createCardFromCard(fromCardId: string, input: CreateCardInput): Promise<Card> {
   const fromCard = await getCard(fromCardId);
   if (!fromCard) throw new Error(`card not found: ${fromCardId}`);
-  const creator = fromCard.actorUserId ? await findUser(fromCard.actorUserId) : null;
-  if (!creator) throw new Error("nobody gave this card an order yet, so there is no one to create the card for");
+  if (!fromCard.actorUserId) throw new Error("nobody gave this card an order yet, so there is no one to create the card for");
+  const creator = await findUser(fromCard.actorUserId);
+  if (!creator) throw new Error("the person who gave this card its order is no longer a user of this vibehub");
   if (creator.role !== "owner") {
     throw new Error(`only the owner can create cards — '${creator.username}' gave this card its order; ask the owner to create it`);
   }
