@@ -48,6 +48,7 @@ const aptAnalysis: AnalysisReadModel = {
   },
   health: { correctness: "ok", security: "ok", performance: "ok", contracts: "ok", tests: "ok", repoRules: "ok" },
   verdict: "apt",
+  uncheckedDimensions: [],
 };
 
 /** What the server answers to the live read of the card's review; tests change it between polls. */

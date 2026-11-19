@@ -73,15 +73,18 @@ export const AnaliseCorrigindo = analysisStory("Análise · depois do juiz, corr
   analysis: analysisReport({ stage: "analysed", findings: [{ ...fixedFinding, status: "open", commit: undefined }] }),
   health: { ...healthOk, tests: "problem" },
   verdict: "pending",
+  uncheckedDimensions: [],
 }, true);
-export const AnaliseApta = analysisStory("Análise · apta", { analysis: analysisReport(), health: healthOk, verdict: "apt" });
+export const AnaliseApta = analysisStory("Análise · apta", { analysis: analysisReport(), health: healthOk, verdict: "apt", uncheckedDimensions: [] });
 export const AnaliseNaoAptaSemConferencia = analysisStory("Análise · não apta, dimensão sem conferência", {
   analysis: analysisReport({ dimensions: ANALYSIS_DIMENSIONS.map((key) => ({ key, status: key === "security" ? "not_run" as const : "ran" as const })) }),
   health: { ...healthOk, security: "not_run" },
   verdict: "not_apt",
+  uncheckedDimensions: ["security"],
 });
 export const AnaliseFrotaIndisponivel = analysisStory("Análise · frota indisponível", {
   analysis: analysisReport({ stage: "fleet_unavailable", dimensions: [], findings: [], refutedCount: 0, unavailableReason: "sem Workflow" }),
   health: { correctness: "not_run", security: "not_run", performance: "not_run", contracts: "not_run", tests: "not_run", repoRules: "not_run" },
   verdict: "not_apt",
+  uncheckedDimensions: [...ANALYSIS_DIMENSIONS],
 });

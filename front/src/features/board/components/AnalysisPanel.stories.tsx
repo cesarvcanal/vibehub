@@ -3,7 +3,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useQueryClient } from "@tanstack/react-query";
 import { AnalysisPanel } from "@/features/board/components/AnalysisPanel";
 import { cardAnalysisKey } from "@/features/board/lib/analysis";
-import type { AnalysisFinding, AnalysisReadModel, AnalysisReport, CardAnalysisResponse } from "@/api/types";
+import { ANALYSIS_DIMENSIONS, type AnalysisFinding, type AnalysisReadModel, type AnalysisReport, type CardAnalysisResponse } from "@/api/types";
 
 const CARD_ID = "c1";
 
@@ -44,7 +44,8 @@ const report = (over: Partial<AnalysisReport> = {}): AnalysisReport => ({
 
 const readModel = (
   analysis: AnalysisReport, verdict: AnalysisReadModel["verdict"], health: Partial<AnalysisReadModel["health"]> = {},
-): AnalysisReadModel => ({ analysis, verdict, health: { ...ALL_OK, repoRules: "skipped", ...health } });
+  uncheckedDimensions: AnalysisReadModel["uncheckedDimensions"] = [],
+): AnalysisReadModel => ({ analysis, verdict, health: { ...ALL_OK, repoRules: "skipped", ...health }, uncheckedDimensions });
 
 function SeededAnalysis({ answer, children }: { answer: CardAnalysisResponse; children: React.ReactNode }) {
   const client = useQueryClient();
@@ -99,6 +100,7 @@ export const NaoAptoSemConferencia: Story = {
       }),
       "not_apt",
       { security: "not_run", tests: "attention" },
+      ["security", "tests"],
     ),
   },
 };
@@ -121,6 +123,7 @@ export const FrotaIndisponivel: Story = {
       report({ stage: "fleet_unavailable", dimensions: [], findings: [], refutedCount: 0, unavailableReason: "a ferramenta Workflow não existe neste CLI" }),
       "not_apt",
       { correctness: "not_run", security: "not_run", performance: "not_run", contracts: "not_run", tests: "not_run", repoRules: "not_run" },
+      [...ANALYSIS_DIMENSIONS],
     ),
   },
 };

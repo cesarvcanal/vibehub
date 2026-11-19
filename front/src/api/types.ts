@@ -813,6 +813,7 @@ export interface AnalysisReadModel {
   analysis: AnalysisReport;
   health: Record<AnalysisDimension, DimensionHealth>;
   verdict: AnalysisVerdict;
+  uncheckedDimensions: AnalysisDimension[];
 }
 
 export type CardAnalysisResponse = AnalysisReadModel | { analysis: null };

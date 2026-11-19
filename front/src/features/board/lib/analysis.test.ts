@@ -12,10 +12,12 @@ const report = (over: Partial<AnalysisReport> = {}): AnalysisReport => ({
 
 const readModel = (
   over: Partial<AnalysisReport> = {}, verdict: AnalysisVerdict = "pending", healthOver: Partial<AnalysisReadModel["health"]> = {},
+  uncheckedDimensions: AnalysisReadModel["uncheckedDimensions"] = [],
 ): AnalysisReadModel => ({
   analysis: report(over),
   health: { correctness: "ok", security: "ok", performance: "ok", contracts: "ok", tests: "ok", repoRules: "ok", ...healthOver },
   verdict,
+  uncheckedDimensions,
 });
 
 const loaded = (data: CardAnalysisResponse) => ({ status: "success" as const, data });
@@ -50,19 +52,19 @@ describe("pílula da análise na linha da PR", () => {
     const pill = analysisPill(loaded(readModel({ stage: "done", findings }, "not_apt", { tests: "problem" })), { cardWorking: false });
     expect(pill).toMatchObject({ key: "analysis.pill.notApt", vars: { n: 1 }, tone: "critical" });
   });
-  it("não apta sem bloqueante aberto: conta as dimensões sem conferência, nunca \"0 bloqueantes\"", () => {
+  it("não apta sem bloqueante aberto: conta as dimensões que o servidor diz sem conferência, nunca \"0 bloqueantes\"", () => {
     const dimensions: AnalysisReport["dimensions"] = [
       { key: "correctness", status: "ran", unverifiedCount: 1, reason: "1 achado sem veredito" },
       { key: "security", status: "not_run", reason: "o agente de revisão não respondeu" },
       { key: "performance", status: "ran" }, { key: "contracts", status: "ran" }, { key: "tests", status: "ran" }, { key: "repoRules", status: "ran" },
     ];
-    const read = readModel({ stage: "done", dimensions }, "not_apt", { correctness: "attention", security: "not_run" });
+    const read = readModel({ stage: "done", dimensions }, "not_apt", { correctness: "attention", security: "not_run" }, ["correctness", "security"]);
     expect(analysisPill(loaded(read), { cardWorking: false })).toMatchObject({ key: "analysis.pill.notAptUnverified", vars: { n: 2 }, tone: "critical" });
   });
   it("frota indisponível", () => {
     const read = readModel({ stage: "fleet_unavailable", unavailableReason: "x", dimensions: [] }, "not_apt", {
       correctness: "not_run", security: "not_run", performance: "not_run", contracts: "not_run", tests: "not_run", repoRules: "not_run",
-    });
+    }, [...ANALYSIS_DIMENSIONS]);
     const pill = analysisPill(loaded(read), { cardWorking: false });
     expect(pill).toMatchObject({ key: "analysis.pill.fleetUnavailable", tone: "critical" });
   });

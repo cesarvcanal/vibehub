@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { renderApp, setupState } from "@/test/render";
 import { AnalysisPanel } from "./AnalysisPanel";
 import { LANGUAGE_KEY, setLanguage } from "@/i18n";
-import type { AnalysisReadModel, AnalysisReport, CardAnalysisResponse } from "@/api/types";
+import { ANALYSIS_DIMENSIONS, type AnalysisReadModel, type AnalysisReport, type CardAnalysisResponse } from "@/api/types";
 
 vi.setConfig({ testTimeout: 30_000 });
 configure({ asyncUtilTimeout: 8_000 });
@@ -41,10 +41,12 @@ const doneReport = (over: Partial<AnalysisReport> = {}): AnalysisReport => ({
 
 const readModel = (
   report: AnalysisReport, verdict: AnalysisReadModel["verdict"], health: Partial<AnalysisReadModel["health"]> = {},
+  uncheckedDimensions: AnalysisReadModel["uncheckedDimensions"] = [],
 ): AnalysisReadModel => ({
   analysis: report,
   health: { correctness: "ok", security: "attention", performance: "ok", contracts: "ok", tests: "ok", repoRules: "skipped", ...health },
   verdict,
+  uncheckedDimensions,
 });
 
 function renderPanel(analysisAnswer: CardAnalysisResponse, onClose: () => void = () => {}) {
@@ -86,7 +88,7 @@ describe("painel da análise de PR", () => {
     const dimensions = doneReport().dimensions.map((dimension) => dimension.key === "tests"
       ? { ...dimension, unverifiedCount: 2, reason: "2 achados sem veredito (o verificador não respondeu)" }
       : dimension);
-    renderPanel(readModel(doneReport({ dimensions }), "not_apt", { tests: "attention" }));
+    renderPanel(readModel(doneReport({ dimensions }), "not_apt", { tests: "attention" }, ["tests"]));
     expect(await screen.findByText("Não apto")).toBeInTheDocument();
     const testsDimension = within(screen.getByRole("list", { name: "Dimensões revisadas" })).getByText("Testes").closest("li")!;
     expect(within(testsDimension).getByText("atenção")).toBeInTheDocument();
@@ -110,6 +112,7 @@ describe("painel da análise de PR", () => {
       doneReport({ stage: "fleet_unavailable", unavailableReason: "the Workflow tool is not available", findings: [], dimensions: [] }),
       "not_apt",
       { correctness: "not_run", security: "not_run", performance: "not_run", contracts: "not_run", tests: "not_run", repoRules: "not_run" },
+      [...ANALYSIS_DIMENSIONS],
     ));
     expect(await screen.findByText("A frota de agentes não rodou neste card")).toBeInTheDocument();
     expect(screen.getByText("the Workflow tool is not available")).toBeInTheDocument();
