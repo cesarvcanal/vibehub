@@ -1,7 +1,7 @@
 import { hostExecutor, shQuote, assertSafeRemotePath } from "../../runtime/host.js";
 import { config } from "../../config/env.js";
 import {
-  getCard, getCardWithProject, getProject, assertBranchName, listGithubConnections, recordCardPr, markCardPrMerged, type Card, type Project,
+  getCard, getCardWithProject, getProject, listCards, assertBranchName, listGithubConnections, recordCardPr, markCardPrMerged, type Card, type Project,
 } from "../board/registry.js";
 import { cardWorkPaths, cardBranch } from "../board/workspace.js";
 import { tokenFor } from "../github/client.js";
@@ -1229,6 +1229,18 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
       "deliver opened a PR on a locked card — merging is the reviewer's",
     );
     return { prUrl, merged: false, reason: "locked", branch: target, cardBranch: source, locked: true, ...commented };
+  }
+  const prOfLockedCard = card.pushBranch !== undefined &&
+    (await listCards(card.projectId)).some((other) => other.locked === true && other.prs?.some((pr) => pr.url === prUrl));
+  if (prOfLockedCard) {
+    logger.info(
+      { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, reason: "locked", by: opts.by },
+      "analysis card refused to merge: the PR belongs to a locked card",
+    );
+    return {
+      prUrl, merged: false, reason: "locked", branch: target, cardBranch: source, locked: true, ...commented,
+      output: "o card dono desta PR está bloqueado: o merge dela é de quem revisa, pelo botão da revisão, nunca pela análise",
+    };
   }
   if (opts.authorized !== true) {
     logger.info(

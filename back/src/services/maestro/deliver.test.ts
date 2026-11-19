@@ -1290,6 +1290,18 @@ describe("deliver com revisão de PR ativa no card", () => {
     expect(mergeRan()).toBe(false);
   });
 
+  it("card de análise não mergeia a PR de um card bloqueado: a trava do dono vence a ordem dada na análise", async () => {
+    const { deliver, registry, project, card } = await makeCard();
+    await registry.updateCard(card.id, { base: "dev", locked: true });
+    await registry.recordCardPr(card.id, { number: 7, url: PR, base: "dev", branch: "card/x" });
+    const analysis = await registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "card/x", title: "Análise PR #7" });
+    wire();
+    const out = await deliver.deliver(analysis.id, { branch: "dev", authorized: true });
+    expect(out).toMatchObject({ merged: false, reason: "locked", locked: true, prUrl: PR });
+    expect(out.output).toContain("bloqueado");
+    expect(mergeRan()).toBe(false);
+  });
+
   it("card de análise não tem merge-only: o botão é de uma revisão, e nenhuma revisão roda num card de análise", async () => {
     const { deliver, registry, project } = await makeCard();
     const analysis = await registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" });
