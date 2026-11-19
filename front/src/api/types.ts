@@ -527,6 +527,11 @@ export interface RepoAccessRefusal {
   repo: string;
 }
 
+export interface PrSettingUpRefusal {
+  error: string;
+  username: string;
+}
+
 /** An open pull request of a project's repository, as GitHub has it right now (`GET /projects/:id/prs`). */
 export interface ProjectPull {
   number: number;
@@ -568,6 +573,18 @@ export interface PrAnalysisStart {
   card: Card;
   created: boolean;
 }
+
+export interface PrClaim {
+  prNumber: number;
+  userId: string;
+  username: string;
+}
+
+export type PrLiveEvent =
+  | { type: "claims"; claims: PrClaim[] }
+  | { type: "pulls-changed" }
+  | { type: "claim-refused"; prNumber: number; username: string }
+  | { type: "error"; code: "read_only" };
 
 /** A pull request the card delivered — see `Card.prs`. */
 export interface CardPr {

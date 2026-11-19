@@ -1,11 +1,28 @@
 import type { FastifyInstance } from "fastify";
-import { canAccessProject, canWorkOnProject } from "../auth/access.js";
+import { WebSocket } from "ws";
+import { canAccessProject, canWorkOnProject, requireProjectAccess } from "../auth/access.js";
 import { requestUser, requireSession } from "../auth/session.js";
-import { analysisPeople, listProjectPulls, RepoAccessError, startAnalysis } from "../services/review/analysis.js";
+import { analysisPeople, listProjectPulls, PrSettingUpError, RepoAccessError, startAnalysis } from "../services/review/analysis.js";
+import { joinPrRoom, type PrLiveEvent } from "../services/review/prClaims.js";
+import { logger } from "../utils/logger.js";
 import { NOT_FOUND, sendError } from "./httpError.js";
 
 /** GitHub failing to answer is not the caller's fault: the list is not there to give. */
 const GITHUB_FAILED = [/^GitHub returned/, 502] as const;
+const POLICY_VIOLATION = 1008;
+const INTERNAL_ERROR = 1011;
+const HEARTBEAT_MS = 25_000;
+
+function parseLiveFrame(raw: string): { type: "claim" | "release"; prNumber: number } | null {
+  try {
+    const { type, prNumber } = JSON.parse(raw) as { type?: unknown; prNumber?: unknown };
+    if (type !== "claim" && type !== "release") return null;
+    if (typeof prNumber !== "number" || !Number.isInteger(prNumber) || prNumber <= 0) return null;
+    return { type, prNumber };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * PR ANALYSIS — the project's open PRs and the button that analyses one (`services/review/analysis.ts`).
@@ -25,6 +42,45 @@ export async function prAnalysisRoutes(app: FastifyInstance): Promise<void> {
       return await sendError(reply, err, { rules: [GITHUB_FAILED, NOT_FOUND] });
     }
   });
+
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/prs/live",
+    { websocket: true, preHandler: requireProjectAccess },
+    (socket: WebSocket, req) => {
+      const send = (event: PrLiveEvent) => {
+        if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event));
+      };
+      const seated = (async () => {
+        const user = (await requestUser(req))!;
+        return { user, canWork: await canWorkOnProject(user, req.params.id), seat: joinPrRoom(req.params.id, user, send) };
+      })();
+      seated.catch((err: unknown) => {
+        logger.warn({ project: req.params.id, detail: (err as Error).message }, "PR live channel could not seat the viewer");
+        socket.close(INTERNAL_ERROR);
+      });
+      socket.on("message", (data) => void seated.then(({ user, canWork, seat }) => {
+        const frame = parseLiveFrame(String(data));
+        if (!frame) return socket.close(POLICY_VIOLATION, "invalid frame");
+        if (frame.type === "release") return seat.release(frame.prNumber);
+        if (!canWork) return send({ type: "error", code: "read_only" });
+        const holder = seat.claim(frame.prNumber);
+        if (holder.userId !== user.id) send({ type: "claim-refused", prNumber: frame.prNumber, username: holder.username });
+      }, () => undefined));
+      const heartbeat = { answered: true };
+      socket.on("pong", () => {
+        heartbeat.answered = true;
+      });
+      const keepalive = setInterval(() => {
+        if (!heartbeat.answered) return socket.terminate();
+        heartbeat.answered = false;
+        socket.ping();
+      }, HEARTBEAT_MS);
+      socket.on("close", () => {
+        clearInterval(keepalive);
+        void seated.then(({ seat }) => seat.leave(), () => undefined);
+      });
+    },
+  );
 
   /** Who can be the reviewer or the co-author of an analysis here: whoever works on the project. */
   app.get<{ Params: { id: string } }>("/api/projects/:id/analysis-people", { preHandler: requireSession }, async (req, reply) => {
@@ -59,6 +115,7 @@ export async function prAnalysisRoutes(app: FastifyInstance): Promise<void> {
         });
         return await reply.send({ card, created });
       } catch (err) {
+        if (err instanceof PrSettingUpError) return await reply.code(409).send({ error: err.message, username: err.username });
         return await sendError(reply, err, { rules: [GITHUB_FAILED, NOT_FOUND] });
       }
     },
