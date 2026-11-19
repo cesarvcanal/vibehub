@@ -22,6 +22,7 @@ import { logger } from "../../utils/logger.js";
 import { isAtomicWriteTmp } from "../../store/atomicWrite.js";
 import { forgetCardActor } from "./actor.js";
 import { CARD_ID_RE } from "./cardId.js";
+import { CARD_TMP_ROOT } from "./cardTmp.js";
 import { closeReviewsOfRemovedCard } from "../review/orchestrator.js";
 
 /**
@@ -182,7 +183,8 @@ async function stopEverything(card: Card, steps: PurgeStep[], by?: string): Prom
 /** Step 3 for both entry points: the card's bytes, runner side and data-dir side. */
 async function eraseEverything(card: Card, steps: PurgeStep[], by?: string, project?: Project): Promise<void> {
   await step(steps, "runner", async () => {
-    await purgeCardWorkspace(card, { project, by });
+    const freedBytes = await purgeCardWorkspace(card, { project, by });
+    return freedBytes === undefined ? undefined : `${Math.round(freedBytes / 1024 / 1024)} MB freed`;
   });
   await step(steps, "chat-history", async () => {
     await removeHistory(card.id);
@@ -258,7 +260,7 @@ const LIST_DELIM = "VIBEHUB_ORPHAN_LIST";
 const SWEEP_DELIM = "VIBEHUB_ORPHAN_SWEEP";
 const CLAUDE_JSON_DELIM = "VIBEHUB_ORPHAN_CLAUDE_JSON";
 
-export type OrphanKind = "upload" | "browser" | "gh" | "git" | "transcript" | "worktree";
+export type OrphanKind = "upload" | "browser" | "gh" | "git" | "transcript" | "worktree" | "tmp" | "task-output";
 
 /** One candidate artifact in the runner, as the listing script reports it. */
 export interface OrphanEntry {
@@ -329,12 +331,16 @@ export function buildOrphanListScript(containerName: string): string {
     find("git", "/root/.vibehub/git", "-type f -name '*.gitconfig'"),
     find("transcript", `${DEFAULT_CLAUDE_DIR}/projects ${CLAUDE_PROFILES_DIR}/*/projects`, "-type d"),
     find("worktree", "/work/*-worktrees /work/scratch", "-type d"),
+    find("tmp", CARD_TMP_ROOT, "-type d"),
+    find("task-output", "/tmp/claude-[0-9]*", "-type d"),
     "true",
     LIST_DELIM,
   ].join("\n");
 }
 
-const ORPHAN_KINDS: ReadonlySet<string> = new Set<OrphanKind>(["upload", "browser", "gh", "git", "transcript", "worktree"]);
+const ORPHAN_KINDS: ReadonlySet<string> = new Set<OrphanKind>([
+  "upload", "browser", "gh", "git", "transcript", "worktree", "tmp", "task-output",
+]);
 
 /** Parses the listing (`kind \t path \t mtime-seconds`). Anything malformed is skipped. PURE. */
 export function parseOrphanListing(stdout: string): OrphanEntry[] {
@@ -404,6 +410,7 @@ export function planOrphanPurge(
     let orphan = false;
     switch (entry.kind) {
       case "upload":
+      case "tmp":
         orphan = CARD_ID_RE.test(name) && !live.ids.has(name);
         break;
       case "browser":
@@ -420,6 +427,7 @@ export function planOrphanPurge(
         break;
       }
       case "transcript":
+      case "task-output":
         orphan = CARD_TRANSCRIPT_DIR_RE.test(name) && !ownedTranscriptDir(name, live.transcriptDirs);
         break;
       case "worktree":

@@ -3,6 +3,8 @@ import { config } from "../../config/env.js";
 import { testWorkerExports } from "../../runtime/testWorkers.js";
 import { getCardWithProject, assertBranchName } from "../board/registry.js";
 import { cardWorkPaths } from "../board/workspace.js";
+import { CREATE_CARD_TMPDIR, cardTmpEnv } from "../board/cardTmp.js";
+import { CARD_ID_RE } from "../board/cardId.js";
 import { logger } from "../../utils/logger.js";
 import { redactSecrets } from "../../utils/redactSecrets.js";
 
@@ -199,9 +201,10 @@ export function buildGateRunScript(
   containerName: string,
   cwd: string,
   checks: string[],
-  opts: { timeoutMs?: number; baseBranch?: string; expectedSha?: string } = {},
+  opts: { cardId: string; timeoutMs?: number; baseBranch?: string; expectedSha?: string },
 ): string {
   assertSafeRemotePath(cwd);
+  if (!CARD_ID_RE.test(opts.cardId)) throw new Error(`invalid card id for the gate: '${opts.cardId}'`);
   if (opts.expectedSha !== undefined && !FULL_SHA_RE.test(opts.expectedSha)) {
     throw new Error("the gate can only be held to a full commit sha");
   }
@@ -212,6 +215,9 @@ export function buildGateRunScript(
     // Each part is joined with "; ", so the exports lose their own trailing ";" — `;;` is a sh
     // syntax error that killed every gate before its first check.
     testWorkerExports().trim().replace(/;$/, ""),
+    `export VIBEHUB_CARD_ID=${shQuote(opts.cardId)}`,
+    ...cardTmpEnv(opts.cardId).map(([name, value]) => `export ${name}=${shQuote(value)}`),
+    CREATE_CARD_TMPDIR.trim().replace(/;$/, ""),
   ];
   // The gate tests the WORKTREE, and the card's author keeps working in it while the gate queues and
   // runs: held to a commit, the run checks it is still there — before (the probe may be minutes old)
@@ -472,7 +478,7 @@ async function runGateNow(cardId: string, expectedSha?: string): Promise<GateRes
   let runOut: { stdout: string; stderr?: string };
   try {
     runOut = await hostExecutor().runScript(
-      buildGateRunScript(container, cwd, plan.checks, { baseBranch: card.base || project.baseBranch, ...(expectedSha ? { expectedSha } : {}) }),
+      buildGateRunScript(container, cwd, plan.checks, { baseBranch: card.base || project.baseBranch, cardId: card.id, ...(expectedSha ? { expectedSha } : {}) }),
       { timeoutMs: GATE_RUN_TIMEOUT_MS },
     );
   } catch (err) {

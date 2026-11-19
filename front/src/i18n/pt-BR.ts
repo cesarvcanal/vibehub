@@ -1366,7 +1366,7 @@ export const ptBR: Record<string, string> = {
   "toast.cardHibernateError": "Não deu pra hibernar o card",
   "toast.cardDeleted": "Card excluído — conversa, anexos e arquivos apagados.",
   "toast.cardDeletedPartial":
-    "Card excluído, mas parte dos dados resistiu ({steps}) — a faxina diária termina o serviço.",
+    "Card excluído, mas parte dos dados resistiu ({steps}) — a faxina automática termina o serviço.",
   "toast.cardDeleteError": "Não deu pra excluir o card",
   "toast.cardAccountSwitched":
     "Conta trocada — a sessão do Claude reinicia na próxima abertura.",

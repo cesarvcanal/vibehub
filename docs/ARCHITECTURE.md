@@ -219,7 +219,7 @@ countdown ("Deleted in 22 h"), computed in the browser from the same stamps and 
 `GET /api/features` serves (`front/src/features/board/lib/doneRetention.ts`). What is purged is the
 runner's copy: the card's LOCAL branch goes with it, so work that was never pushed is lost.
 
-A **daily orphan sweep** is the backstop and the retroactive cleanup: it deletes only artifacts
+An **hourly orphan sweep** is the backstop and the retroactive cleanup: it deletes only artifacts
 that belong to no card that exists, with three guards — the path must be unmistakably a card
 artifact, nothing younger than an hour is touched, and a pass is capped and logs what it left.
 

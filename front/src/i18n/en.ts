@@ -1357,7 +1357,7 @@ export const en: Record<string, string> = {
   "toast.cardHibernateError": "Could not hibernate the card",
   "toast.cardDeleted": "Card deleted — conversation, attachments and files erased.",
   "toast.cardDeletedPartial":
-    "Card deleted, but part of its data survived ({steps}) — the daily sweep will finish the job.",
+    "Card deleted, but part of its data survived ({steps}) — the automatic sweep will finish the job.",
   "toast.cardDeleteError": "Could not delete the card",
   "toast.cardAccountSwitched": "Account switched — the Claude session restarts on the next open.",
   "toast.cardAccountSwitchError": "Could not switch the card's account",

@@ -332,7 +332,8 @@ export function reviewerDeltaPrompt(r: Review): string {
  * what widens the scope is not done; a doubt about intent belongs to the person, not the AI.
  */
 const CORRECTIVE_AUTONOMY = [
-  "- Bug ou incongruência no que o PR fez: corrija sem perguntar, com commit e teste, mesmo que tenha vindo como sugestão.",
+  "- Bug ou incongruência no que o PR fez: corrija sem perguntar, com commit e com um teste que falha sem a correção (o " +
+    "vermelho visto antes do verde), mesmo que tenha vindo como sugestão.",
   "- Melhoria autônoma (improvement): aplique sem esperar ninguém, só o que o item descreve e só nos arquivos que o PR já " +
     "altera, sem mudar regra, contrato ou comportamento. Se aplicar exigir sair disso, não aplique: wontfix com o motivo.",
   "- Fora do escopo, feature nova ou mudança de uma decisão intencional: não faça; responda explicando.",
@@ -594,7 +595,7 @@ export interface AnalysisInput {
  * in parallel, a verifier that tries to refute each finding, a judge. The card itself is the only writer.
  *
  * The card has none of the author's context on purpose (agnostic): only the PR and the repo's rules.
- * It never merges, and it never rewrites the PR's title or body — they are the author's. PURE.
+ * It merges only when the person tells it to, and it never rewrites the PR's title or body — they are the author's. PURE.
  */
 export function analysisPrompt(a: AnalysisInput): string {
   const workflowArgs = JSON.stringify({ prNumber: a.prNumber, branch: a.branch, base: a.base, headSha: "<sha do passo 1>" });
@@ -637,10 +638,13 @@ export function analysisPrompt(a: AnalysisInput): string {
     "6. Reconferência: dispare UM subagente novo, sem o seu contexto, para revisar só git diff <sha analisado>..HEAD, " +
       "procurando bug que a própria correção criou. Achado com prova: corrija do mesmo jeito (uma volta a mais, só uma).",
     `7. Entregue as correções: chame vibehub_deliver com card = "${a.cardId}" e branch = "${a.base}", sem title nem body ` +
-      "(a descrição do PR é do autor) e sem authorized (o merge é de uma pessoa). Os commits vão para a branch da PR. " +
+      "(a descrição do PR é do autor) e sem authorized (você não mergeia por conta própria). Os commits vão para a branch da PR. " +
       // Never the step-1 reset here: it would drop the fix commits that have not gone up yet.
       `Se o push for recusado porque a PR andou, traga o código novo sem perder as correções: git fetch origin && git rebase origin/${a.branch}, ` +
       "resolva os conflitos, rode de novo os testes do que mudou e entregue outra vez.",
+    `   Se a pessoa mandar mergear, neste chat, chame vibehub_deliver com card = "${a.cardId}", from = "${a.cardId}", ` +
+      `branch = "${a.base}" e authorized: true: o merge sai com o gate verde, em merge commit preso ao commit conferido, e a ` +
+      "resposta diz o motivo quando recusa (PR em revisão, gate vermelho, PR que andou). Nunca mergeie pelo gh nem pela API.",
     `8. Chame vibehub_analysis_report de novo, com stage: "done": o mesmo headSha do passo 1 (não o das correções), ` +
       "as mesmas dimensions do passo 3, inclusive o unverifiedCount, e os mesmos findings, cada um com status " +
       "\"fixed\" e o commit, \"decided\" com a decision (question que a pessoa já respondeu sem pedir mudança) ou " +
