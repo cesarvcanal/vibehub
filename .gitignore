@@ -15,3 +15,4 @@ storybook-static/
 
 # Snapshots and screenshots of the browser MCP.
 .playwright-mcp/
+docs/superpowers/
