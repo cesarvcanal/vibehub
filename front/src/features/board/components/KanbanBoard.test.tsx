@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createEvent, fireEvent, screen, waitFor } from "@testing-library/react";
 import { QueryObserver } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
@@ -455,9 +455,10 @@ describe("KanbanBoard — trocar a conta pelo menu do card", () => {
       return Promise.resolve({});
     });
     const client = testQueryClient();
-    const observed = [cardRateLimitsKey("c1"), cardUsageKey("c1")].map((queryKey) =>
+    const unsubscribeObservers = [cardRateLimitsKey("c1"), cardUsageKey("c1")].map((queryKey) =>
       new QueryObserver(client, { queryKey, enabled: false }).subscribe(() => undefined),
     );
+    onTestFinished(() => unsubscribeObservers.forEach((unsubscribe) => unsubscribe()));
     client.setQueryData(cardRateLimitsKey("c1"), {
       seven_day: { status: "allowed", window: "seven_day", utilization: 57, resetsAt: Date.now() + 3 * 86_400_000 },
     });
@@ -473,6 +474,5 @@ describe("KanbanBoard — trocar a conta pelo menu do card", () => {
     await waitFor(() => expect(mockPatch).toHaveBeenCalledWith("/cards/c1", { accountSlug: "personal" }));
     await waitFor(() => expect(client.getQueryData(cardRateLimitsKey("c1"))).toEqual({}));
     expect(client.getQueryState(cardUsageKey("c1"))?.isInvalidated).toBe(true);
-    observed.forEach((unsubscribe) => unsubscribe());
   });
 });

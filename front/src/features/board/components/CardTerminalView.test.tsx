@@ -1072,7 +1072,7 @@ describe("CardTerminalView — the card bar", () => {
 
   it("trocar de conta troca o medidor semanal na hora: nem a leitura nem o aviso ao vivo da conta anterior ficam", async () => {
     const weeklyOf = { personal: 57, default: 3 } as const;
-    const pinned = { slug: "personal" as "personal" | "default" };
+    const pinned: { slug: "personal" | "default" } = { slug: "personal" };
     const base = mockGet.getMockImplementation();
     mockGet.mockImplementation((url: string, ...rest: unknown[]) =>
       url === "/cards/c1/usage"
@@ -1080,7 +1080,7 @@ describe("CardTerminalView — the card bar", () => {
             slug: pinned.slug,
             usage: { available: true, sevenDay: { utilization: weeklyOf[pinned.slug], resetsAt: null }, fetchedAt: 1 },
           })
-        : (base as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest),
+        : (base as (url: string, ...rest: unknown[]) => Promise<unknown>)(url, ...rest),
     );
     mockPatch.mockImplementation(() => {
       pinned.slug = "default";
