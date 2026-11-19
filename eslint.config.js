@@ -22,11 +22,9 @@ const PRODUCTION_SYNTAX = [
 
 const TEST_SYNTAX = [
   {
-    selector: "CallExpression[callee.name='afterEach'] CallExpression[callee.property.name='splice']",
-    message: "AGENTS.md §11: limpeza registrada por teste é `onTestFinished` do Vitest, não um array esvaziado no afterEach.",
-  },
-  {
-    selector: "CallExpression[callee.name='afterEach'] AssignmentExpression[left.property.name='length']",
+    selector:
+      "CallExpression[callee.name='afterEach'] CallExpression[callee.property.name='splice'], " +
+      "CallExpression[callee.name='afterEach'] AssignmentExpression[left.property.name='length']",
     message: "AGENTS.md §11: limpeza registrada por teste é `onTestFinished` do Vitest, não um array esvaziado no afterEach.",
   },
   {
