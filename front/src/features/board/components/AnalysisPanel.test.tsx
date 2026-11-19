@@ -4,7 +4,9 @@ import userEvent from "@testing-library/user-event";
 import { apiReject, renderApp, setupState } from "@/test/render";
 import { AnalysisPanel } from "./AnalysisPanel";
 import { LANGUAGE_KEY, setLanguage } from "@/i18n";
-import { ANALYSIS_DIMENSIONS, type AnalysisReadModel, type AnalysisReport, type CardAnalysisResponse } from "@/api/types";
+import {
+  ANALYSIS_DIMENSIONS, type AnalysisConversationResponse, type AnalysisReadModel, type AnalysisReport, type CardAnalysisResponse,
+} from "@/api/types";
 
 vi.setConfig({ testTimeout: 30_000 });
 configure({ asyncUtilTimeout: 8_000 });
@@ -51,11 +53,16 @@ const readModel = (
   canMerge: false,
 });
 
-function renderPanel(analysisAnswer: CardAnalysisResponse | Promise<CardAnalysisResponse>, onClose: () => void = () => {}) {
+function renderPanel(
+  analysisAnswer: CardAnalysisResponse | Promise<CardAnalysisResponse>,
+  onClose: () => void = () => {},
+  answerConversation: () => AnalysisConversationResponse | Promise<AnalysisConversationResponse> = () => ({ conversation: null }),
+) {
   get.mockImplementation(async (url: string) => {
     if (url === "/auth/me") return { user: { id: "u1", username: "mussa", role: "member" } };
     if (url === "/setup/state") return setupState();
     if (url === "/cards/c1/analysis") return analysisAnswer;
+    if (url === "/cards/c1/analysis/conversation") return answerConversation();
     throw new Error(`unexpected ${url}`);
   });
   return renderApp(<AnalysisPanel cardId="c1" onClose={onClose} />);
@@ -227,5 +234,92 @@ describe("merge pelo painel da análise", () => {
     renderPanel(aptRead());
     await userEvent.click(await screen.findByRole("button", { name: "Merge PR #312" }));
     expect(await screen.findByText("PR #312 merged; the card moved to Done.")).toBeInTheDocument();
+  });
+});
+
+describe("aba Conversa: a frota conversando como um chat em grupo", () => {
+  const fleetTalk: AnalysisConversationResponse = {
+    conversation: {
+      runId: "wf_a1", finished: false,
+      agents: [
+        { id: "a1", label: "revisão:security", phase: "Revisão", status: "done", modelLabel: "Sonnet 5.5" },
+        { id: "a2", label: "verificação:security · token vaza", phase: "Verificação", status: "running", modelLabel: "Opus 5.5" },
+      ],
+      items: [
+        { agentId: "a1", at: 1, kind: "thinking" },
+        { agentId: "a1", at: 2, kind: "tool", tool: "Read", target: "back/src/auth.ts" },
+        { agentId: "a1", at: 3, kind: "result", text: "export function login() {}" },
+        { agentId: "a1", at: 4, kind: "text", text: "O token vaza no log." },
+        { agentId: "a2", at: 5, kind: "text", text: "Refutado: o log mascara o token." },
+      ],
+    },
+  };
+
+  const openConversation = async () => {
+    await userEvent.click(await screen.findByRole("tab", { name: "Conversa" }));
+  };
+
+  it("o painel abre no relatório e só lê a conversa quando a aba é aberta", async () => {
+    renderPanel(readModel(doneReport(), "not_apt"), undefined, () => fleetTalk);
+    expect(await screen.findByRole("tab", { name: "Relatório" })).toHaveAttribute("aria-selected", "true");
+    expect(get).not.toHaveBeenCalledWith("/cards/c1/analysis/conversation");
+    await openConversation();
+    expect(await screen.findByText("O token vaza no log.")).toBeInTheDocument();
+    expect(get).toHaveBeenCalledWith("/cards/c1/analysis/conversation");
+  });
+
+  it("cada fala diz quem falou, com o modelo e a versão, e traz o que o agente pensou, usou e disse", async () => {
+    renderPanel(readModel(doneReport(), "not_apt"), undefined, () => fleetTalk);
+    await openConversation();
+    const turns = await screen.findAllByRole("article");
+    expect(turns).toHaveLength(2);
+    expect(within(turns[0]!).getByText("Revisão de Segurança")).toBeInTheDocument();
+    expect(within(turns[0]!).getByText("Sonnet 5.5")).toBeInTheDocument();
+    expect(within(turns[0]!).getByText("pensando…")).toBeInTheDocument();
+    expect(within(turns[0]!).getByText("Read · back/src/auth.ts")).toBeInTheDocument();
+    expect(within(turns[0]!).getByText("export function login() {}")).toBeInTheDocument();
+    expect(within(turns[1]!).getByText("Verificação de Segurança")).toBeInTheDocument();
+    expect(within(turns[1]!).getByText("Opus 5.5")).toBeInTheDocument();
+    expect(within(turns[1]!).getByText("Refutado: o log mascara o token.")).toBeInTheDocument();
+    expect(screen.getByText("Frota conversando · 1 de 2 agentes responderam")).toBeInTheDocument();
+  });
+
+  it("fala em JSON (achados ou veredito) é lida como na frota da revisão: títulos dos achados e o veredito com a evidência", async () => {
+    const structured: AnalysisConversationResponse = {
+      conversation: {
+        ...fleetTalk.conversation!,
+        items: [
+          { agentId: "a1", at: 1, kind: "text", text: JSON.stringify({ findings: [{ title: "token vaza no log" }] }) },
+          { agentId: "a2", at: 2, kind: "text", text: JSON.stringify({ confirmed: false, evidence: "o log mascara o token" }) },
+        ],
+      },
+    };
+    renderPanel(readModel(doneReport(), "not_apt"), undefined, () => structured);
+    await openConversation();
+    expect(await screen.findByText("1 achado: token vaza no log")).toBeInTheDocument();
+    expect(screen.getByText("Derrubado")).toBeInTheDocument();
+    expect(screen.getByText(/o log mascara o token/)).toBeInTheDocument();
+  });
+
+  it("card sem frota diz que a frota ainda não rodou", async () => {
+    renderPanel(readModel(doneReport(), "not_apt"));
+    await openConversation();
+    expect(await screen.findByText("A frota de agentes ainda não rodou neste card.")).toBeInTheDocument();
+  });
+
+  it("leitura que falhou mostra o erro do servidor", async () => {
+    renderPanel(readModel(doneReport(), "not_apt"), undefined, () => Promise.reject(apiReject(502, "runner parado")));
+    await openConversation();
+    expect(await screen.findByText("runner parado")).toBeInTheDocument();
+  });
+
+  it("em inglês a aba e o estado da frota saem pelo i18n", async () => {
+    setLanguage("en");
+    renderPanel(readModel(doneReport(), "not_apt"), undefined, () => ({
+      conversation: { ...fleetTalk.conversation!, finished: true, agents: fleetTalk.conversation!.agents.map((agent) => ({ ...agent, status: "done" as const })) },
+    }));
+    await userEvent.click(await screen.findByRole("tab", { name: "Conversation" }));
+    expect(await screen.findByText("Fleet finished · 2 of 2 agents answered")).toBeInTheDocument();
+    expect(screen.getAllByText("thinking…")).toHaveLength(1);
   });
 });

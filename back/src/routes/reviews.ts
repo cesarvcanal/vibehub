@@ -15,6 +15,7 @@ import { activeReviewFor, getReview, listReviewsFollowedBy, listReviewsForCards,
 import { canMergeReview, fleetRunForReaders, isReviewClosed, type Review } from "../services/review/model.js";
 import { getAnalysis } from "../services/review/analysisStore.js";
 import { analysedPr, isAnalysisMergeable, mergeAnalysedPr } from "../services/review/analysisMerge.js";
+import { readAnalysisConversation } from "../services/review/analysisConversation.js";
 import { ANALYSIS_DIMENSIONS, analysisVerdict, dimensionHealth, uncheckedDimensions } from "../services/review/analysisModel.js";
 import { sendError, type ErrorStatusRule } from "./httpError.js";
 
@@ -129,6 +130,16 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
       analysis, health, verdict: analysisVerdict(analysis), uncheckedDimensions: uncheckedDimensions(analysis), canMerge,
       ...(pr?.mergedAt !== undefined ? { mergedAt: pr.mergedAt } : {}),
     });
+  });
+
+  app.get<{ Params: { id: string } }>("/api/cards/:id/analysis/conversation", { preHandler: requireCardAccess }, async (req, reply) => {
+    const card = await registry.getCard(req.params.id);
+    if (!card) return await reply.code(404).send({ error: "card not found" });
+    try {
+      return await reply.send({ conversation: await readAnalysisConversation(card) });
+    } catch (err) {
+      return await sendError(reply, err, { fallback: 502 });
+    }
   });
 
   app.post<{ Params: { id: string } }>("/api/cards/:id/analysis/merge", { preHandler: requireCardWork }, async (req, reply) => {

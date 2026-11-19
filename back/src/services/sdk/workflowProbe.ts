@@ -409,6 +409,110 @@ export function buildAgentFeedProbeScript(
   );
 }
 
+export interface FleetConversationAgent {
+  id: string;
+  label: string;
+  phase: string;
+  status: "running" | "done";
+  model?: string;
+}
+
+export interface FleetConversationItem extends WorkflowFeedItem {
+  agentId: string;
+}
+
+export interface FleetConversation {
+  runId: string;
+  finished: boolean;
+  agents: FleetConversationAgent[];
+  items: FleetConversationItem[];
+}
+
+const CONVERSATION_TEXT_MAX = 2_000;
+const CONVERSATION_ITEMS_PER_AGENT = 80;
+const STRUCTURED_OUTPUT_MAX = 8_000;
+
+export const FLEET_CONVERSATION_PROBE_JS = PROBE_COMMON_JS + String.raw`
+function str(v){return typeof v==='string'?v:''}
+function resultText(c){
+  if(typeof c==='string')return c;
+  return Array.isArray(c)?c.map(function(b){return b&&b.type==='text'&&b.text||''}).join(' '):'';
+}
+function runsOf(base){
+  let sessions=[];
+  try{sessions=fs.readdirSync(base)}catch(e){return []}
+  const runs=[];
+  for(const session of sessions){
+    const dir=p.join(base,session,'subagents','workflows');
+    let names=[];
+    try{names=fs.readdirSync(dir)}catch(e){continue}
+    for(const name of names){
+      if(!${RUN_ID_RE}.test(name))continue;
+      const st=statOf(p.join(dir,name,'journal.jsonl'));
+      if(st)runs.push({runId:name,dir:p.join(dir,name),at:st.mtimeMs});
+    }
+  }
+  return runs.sort(function(a,b){return b.at-a.at});
+}
+function metaOf(dir,id){
+  try{const o=JSON.parse(fs.readFileSync(p.join(dir,'agent-'+id+'.meta.json'),'utf8'));return o&&typeof o==='object'?o:{}}
+  catch(e){return {}}
+}
+function talkOf(dir,agent){
+  const file=p.join(dir,'agent-'+agent.id+'.jsonl');
+  const st=statOf(file);if(!st||st.size<=0)return {items:[],model:''};
+  const whole=st.size<=${FEED_TAIL_BYTES};
+  const lines=linesOf(readAt(file,whole?0:st.size-${FEED_TAIL_BYTES},whole?st.size:${FEED_TAIL_BYTES}),!whole,false);
+  const items=[];let model='';
+  for(const l of lines){
+    const o=parse(l);if(!o)continue;
+    const at=ts(o);
+    if(o.type==='assistant'){
+      if(o.message&&str(o.message.model))model=o.message.model;
+      for(const b of blocks(o)){
+        const said=b&&b.type==='tool_use'&&b.name==='StructuredOutput';
+        const s=said?{kind:'text',text:flat(JSON.stringify(b.input==null?'':b.input),${STRUCTURED_OUTPUT_MAX})}:step(b,${CONVERSATION_TEXT_MAX});
+        if(s){s.at=at;s.agentId=agent.id;items.push(s)}
+      }
+    }else if(o.type==='user'){
+      for(const b of blocks(o))if(b&&b.type==='tool_result')items.push({agentId:agent.id,at:at,kind:'result',text:flat(resultText(b.content),300)});
+    }
+  }
+  return {items:items.slice(-${CONVERSATION_ITEMS_PER_AGENT}),model:model};
+}
+function main(base){
+  const run=runsOf(base)[0];if(!run)return null;
+  let lines=[];
+  try{lines=fs.readFileSync(p.join(run.dir,'journal.jsonl'),'utf8').split('\n')}catch(e){}
+  const agents=new Map();
+  for(const l of lines){
+    const o=parse(l);
+    if(!o||!${AGENT_ID_RE}.test(str(o.agentId)))continue;
+    const a=agents.get(o.agentId)||{id:o.agentId,label:'',phase:'',status:'running'};
+    if(o.type==='started'){if(!a.label)a.label=str(o.label);if(!a.phase)a.phase=str(o.phase)}
+    if(o.type==='result')a.status='done';
+    agents.set(o.agentId,a);
+  }
+  const list=[],items=[];
+  for(const a of Array.from(agents.values()).slice(0,${AGENTS_MAX})){
+    const meta=metaOf(run.dir,a.id);
+    const talk=talkOf(run.dir,a);
+    const agent={id:a.id,label:a.label||str(meta.description),phase:a.phase||str(meta.workflowPhase),status:a.status};
+    const model=talk.model||str(meta.model);
+    if(model)agent.model=model;
+    list.push(agent);
+    for(const item of talk.items)items.push(item);
+  }
+  items.sort(function(x,y){return x.at-y.at});
+  return {runId:run.runId,agents:list,items:items};
+}
+console.log(JSON.stringify(main(process.argv[1]||'')));
+`.trim();
+
+export function buildFleetConversationProbeScript(containerName: string, transcriptDir: string): string {
+  return `docker exec ${shQuote(containerName)} node -e ${shQuote(FLEET_CONVERSATION_PROBE_JS)} ${shQuote(transcriptDir)}`;
+}
+
 /**
  * Strips from the label the header EVERY workflow subagent carries — "Trabalhe em /work/…/x." is the
  * same sentence in all of them and pushes off the line the only part that tells one from another.
@@ -565,4 +669,38 @@ export function parseAgentFeed(stdout: string): WorkflowFeedItem[] {
   const parsed = lastJsonLine(stdout);
   if (!Array.isArray(parsed)) return [];
   return parsed.map(parseFeedItem).filter((item): item is WorkflowFeedItem => item !== null);
+}
+
+function parseConversationAgent(value: unknown): FleetConversationAgent | null {
+  const fields = asFields(value);
+  const id = asString(fields?.id);
+  if (!fields || !id) return null;
+  const model = asString(fields.model);
+  return {
+    id,
+    label: trimAgentLabel(asString(fields.label)),
+    phase: asString(fields.phase),
+    status: fields.status === "done" ? "done" : "running",
+    ...(model ? { model } : {}),
+  };
+}
+
+function parseConversationItem(value: unknown): FleetConversationItem | null {
+  const agentId = asString(asFields(value)?.agentId);
+  const item = parseFeedItem(value);
+  return agentId && item ? { agentId, ...item } : null;
+}
+
+export function parseFleetConversation(stdout: string): FleetConversation | null {
+  const fields = asFields(lastJsonLine(stdout));
+  const runId = asString(fields?.runId);
+  if (!fields || !runId) return null;
+  const agents = (Array.isArray(fields.agents) ? fields.agents : [])
+    .map(parseConversationAgent)
+    .filter((agent): agent is FleetConversationAgent => agent !== null);
+  const items = (Array.isArray(fields.items) ? fields.items : [])
+    .map(parseConversationItem)
+    .filter((item): item is FleetConversationItem => item !== null);
+  const finished = agents.length > 0 && agents.every((agent) => agent.status === "done");
+  return { runId, finished, agents, items };
 }

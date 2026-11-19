@@ -2,8 +2,8 @@ import * as React from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useQueryClient } from "@tanstack/react-query";
 import { AnalysisPanel } from "@/features/board/components/AnalysisPanel";
-import { cardAnalysisKey } from "@/features/board/lib/analysis";
-import { ANALYSIS_DIMENSIONS, type AnalysisFinding, type AnalysisReadModel, type AnalysisReport, type CardAnalysisResponse } from "@/api/types";
+import { cardAnalysisConversationKey, cardAnalysisKey } from "@/features/board/lib/analysis";
+import { ANALYSIS_DIMENSIONS, type AnalysisConversation, type AnalysisFinding, type AnalysisReadModel, type AnalysisReport, type CardAnalysisResponse } from "@/api/types";
 
 const CARD_ID = "c1";
 
@@ -49,11 +49,15 @@ const readModel = (
   uncheckedDimensions: AnalysisReadModel["uncheckedDimensions"] = [],
 ): AnalysisReadModel => ({ analysis, verdict, health: { ...ALL_OK, repoRules: "skipped", ...health }, uncheckedDimensions, canMerge: false });
 
-function SeededAnalysis({ answer, children }: { answer: CardAnalysisResponse; children: React.ReactNode }) {
+function SeededAnalysis({ answer, conversation, children }: {
+  answer: CardAnalysisResponse; conversation: AnalysisConversation | null; children: React.ReactNode;
+}) {
   const client = useQueryClient();
   const [ready] = React.useState(() => {
     client.setQueryDefaults(cardAnalysisKey(CARD_ID), { staleTime: Infinity });
     client.setQueryData(cardAnalysisKey(CARD_ID), answer);
+    client.setQueryDefaults(cardAnalysisConversationKey(CARD_ID), { staleTime: Infinity });
+    client.setQueryData(cardAnalysisConversationKey(CARD_ID), conversation);
     return true;
   });
   return ready ? <>{children}</> : null;
@@ -65,7 +69,10 @@ const meta: Meta<typeof AnalysisPanel> = {
   args: { cardId: CARD_ID, onClose: () => undefined },
   decorators: [
     (Story, { parameters }) => (
-      <SeededAnalysis answer={parameters.analysis as CardAnalysisResponse}>
+      <SeededAnalysis
+        answer={parameters.analysis as CardAnalysisResponse}
+        conversation={(parameters.conversation as AnalysisConversation | undefined) ?? null}
+      >
         <div className="flex h-[80vh] max-w-md flex-col">
           <Story />
         </div>
@@ -157,4 +164,28 @@ export const FrotaIndisponivel: Story = {
 export const SemRelatorio: Story = {
   name: "Sem relatório ainda",
   parameters: { analysis: { analysis: null } satisfies CardAnalysisResponse },
+};
+
+const fleetConversation: AnalysisConversation = {
+  runId: "wf_813b262f-7ef", finished: false,
+  agents: [
+    { id: "a1", label: "contexto", phase: "Contexto", status: "done", modelLabel: "Opus 5.5" },
+    { id: "a2", label: "revisão: security", phase: "Revisão", status: "done", modelLabel: "Sonnet 5.5" },
+    { id: "a3", label: "verificação: security · Sessão SSO não expira", phase: "Verificação", status: "running", modelLabel: "Sonnet 5.5" },
+  ],
+  items: [
+    { agentId: "a1", at: 1, kind: "thinking" },
+    { agentId: "a1", at: 2, kind: "tool", tool: "Bash", target: "Lista os arquivos do diff" },
+    { agentId: "a1", at: 3, kind: "text", text: "O PR troca a senha local por SSO; o risco está na expiração da sessão e nos testes de login." },
+    { agentId: "a2", at: 4, kind: "tool", tool: "Read", target: "back/src/auth/sso.ts" },
+    { agentId: "a2", at: 5, kind: "result", text: "export async function ssoCallback(req) { const session = createSession(user) …" },
+    { agentId: "a2", at: 6, kind: "text", text: JSON.stringify({ findings: [{ title: "Sessão SSO não expira junto com o token" }, { title: "Callback aceita state reaproveitado" }] }) },
+    { agentId: "a3", at: 7, kind: "tool", tool: "Grep", target: "expiresAt" },
+    { agentId: "a3", at: 8, kind: "text", text: JSON.stringify({ confirmed: true, evidence: "createSession não recebe o exp do token: a sessão vive 30 dias" }) },
+  ],
+};
+
+export const Conversa: Story = {
+  name: "Conversa · frota conversando",
+  parameters: { analysis: readModel(report({ findings: [fixedBlocking] }), "apt"), conversation: fleetConversation },
 };

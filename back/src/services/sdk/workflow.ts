@@ -4,11 +4,14 @@ import { logger } from "../../utils/logger.js";
 import {
   RUNS_PROBED,
   buildAgentFeedProbeScript,
+  buildFleetConversationProbeScript,
   buildWorkflowProbeScript,
   parseAgentFeed,
+  parseFleetConversation,
   parseWorkflowProbe,
   stopInFlight,
   type WorkflowActivity,
+  type FleetConversation,
   type WorkflowAgent,
   type WorkflowFeedItem,
   type WorkflowRun,
@@ -329,6 +332,14 @@ export async function readAgentFeed(runsDir: string, runId: string, agentId: str
   const script = buildAgentFeedProbeScript(config.runner.container, runsDir, runId, agentId, FEED_REQUEST_ITEMS);
   const { stdout } = await hostExecutor().runScript(script, { timeoutMs: 10_000 });
   return parseAgentFeed(stdout);
+}
+
+export async function readFleetConversation(transcriptDir: string): Promise<FleetConversation | null> {
+  const { stdout } = await hostExecutor().runScript(
+    buildFleetConversationProbeScript(config.runner.container, transcriptDir),
+    { timeoutMs: 15_000 },
+  );
+  return parseFleetConversation(stdout);
 }
 
 export async function readWorkflowRuns(dirs: { runs: string; scripts: string }): Promise<WorkflowRun[]> {

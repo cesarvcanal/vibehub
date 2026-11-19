@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, onTestFinished } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -504,5 +504,96 @@ describe("desfecho da rodada — o snapshot do harness diz se ela acabou", () =>
     expect(lixo!.agents[0]!.status).toBe("running");
     const [morta] = wf.parseWorkflowProbe(probe([{ runId: "wf_a", outcome: "killed", agents: [AGENT(), AGENT({ id: "a2", status: "done", result: "ok" })] }]));
     expect(morta!.agents.map((a) => a.status)).toEqual(["stopped", "done"]);
+  });
+});
+
+describe("conversa da frota — todos os agentes de uma vez, numa execução só", () => {
+  const MODEL_ASSISTANT = (ts: number, model: string, blocks: unknown[]) => ({
+    type: "assistant", timestamp: iso(ts), message: { role: "assistant", model, content: blocks },
+  });
+
+  function conversationFixture(): { transcriptDir: string } {
+    const transcriptDir = mkdtempSync(join(tmpdir(), "vibehub-conv-"));
+    onTestFinished(() => rmSync(transcriptDir, { recursive: true, force: true }));
+    const older = join(transcriptDir, "s-old", "subagents", "workflows", "wf_old1");
+    mkdirSync(older, { recursive: true });
+    writeFileSync(join(older, "journal.jsonl"), jsonl([{ type: "started", agentId: "a0aa", label: "contexto", phase: "Contexto" }]));
+    utimesSync(join(older, "journal.jsonl"), new Date(T0), new Date(T0));
+    const run = join(transcriptDir, "s-new", "subagents", "workflows", "wf_new1");
+    mkdirSync(run, { recursive: true });
+    writeFileSync(join(run, "journal.jsonl"), jsonl([
+      { type: "launched" },
+      { type: "started", agentId: "a01f", label: "revisão:security", phase: "Revisão" },
+      { type: "started", agentId: "a02f", label: "verificação:security · token vaza", phase: "Verificação" },
+      { type: "result", agentId: "a01f", result: { findings: [] } },
+    ]));
+    writeFileSync(join(run, "agent-a01f.meta.json"), JSON.stringify({ model: "sonnet" }));
+    writeFileSync(join(run, "agent-a01f.jsonl"), jsonl([
+      HEADER(T0), TASK(T0 + 100, "Revise segurança"),
+      MODEL_ASSISTANT(T0 + 1_000, "claude-sonnet-5-5", [THINKING, TOOL("t1", "Read", { file_path: "/work/back/src/auth.ts" })]),
+      TOOL_RESULT(T0 + 1_500, "t1", "export function login() {}"),
+      MODEL_ASSISTANT(T0 + 4_000, "claude-sonnet-5-5", [{ type: "text", text: `O token vaza no log. ${"x".repeat(900)}` }]),
+    ]));
+    writeFileSync(join(run, "agent-a02f.jsonl"), jsonl([
+      HEADER(T0 + 200), TASK(T0 + 300, "Verifique"),
+      MODEL_ASSISTANT(T0 + 2_000, "claude-opus-5-5", [{ type: "text", text: "Refutado: o log mascara o token." }]),
+    ]));
+    return { transcriptDir };
+  }
+
+  it("lê a rodada mais recente de todas as sessões do card, com quem falou, o id do modelo que respondeu e o que disse, em ordem de tempo", async () => {
+    const wf = await load();
+    const { transcriptDir } = conversationFixture();
+    const conversation = wf.parseFleetConversation(runProbe(wf.FLEET_CONVERSATION_PROBE_JS, [transcriptDir]));
+    expect(conversation).toMatchObject({ runId: "wf_new1", finished: false });
+    expect(conversation!.agents).toEqual([
+      { id: "a01f", label: "revisão:security", phase: "Revisão", status: "done", model: "claude-sonnet-5-5" },
+      { id: "a02f", label: "verificação:security · token vaza", phase: "Verificação", status: "running", model: "claude-opus-5-5" },
+    ]);
+    expect(conversation!.items.map((item) => [item.agentId, item.kind])).toEqual([
+      ["a01f", "thinking"], ["a01f", "tool"], ["a01f", "result"], ["a02f", "text"], ["a01f", "text"],
+    ]);
+    expect(conversation!.items[1]).toMatchObject({ tool: "Read", target: "/work/back/src/auth.ts" });
+    expect(conversation!.items[3]!.text).toBe("Refutado: o log mascara o token.");
+    expect(conversation!.items[4]!.text!.length).toBeGreaterThan(300);
+  });
+
+  it("a resposta que o agente entrega pela ferramenta StructuredOutput vira a fala dele, com o JSON inteiro", async () => {
+    const wf = await load();
+    const transcriptDir = mkdtempSync(join(tmpdir(), "vibehub-conv-so-"));
+    onTestFinished(() => rmSync(transcriptDir, { recursive: true, force: true }));
+    const run = join(transcriptDir, "s1", "subagents", "workflows", "wf_so1");
+    mkdirSync(run, { recursive: true });
+    writeFileSync(join(run, "journal.jsonl"), jsonl([{ type: "started", agentId: "a0b1", label: "verificação:tests · x", phase: "Verificação" }]));
+    const verdict = { confirmed: false, evidence: "o teste já cobre o caso" };
+    writeFileSync(join(run, "agent-a0b1.jsonl"), jsonl([
+      MODEL_ASSISTANT(T0, "claude-sonnet-5-5", [TOOL("t9", "StructuredOutput", verdict)]),
+    ]));
+    const conversation = wf.parseFleetConversation(runProbe(wf.FLEET_CONVERSATION_PROBE_JS, [transcriptDir]));
+    expect(conversation!.items).toEqual([{ agentId: "a0b1", at: T0, kind: "text", text: JSON.stringify(verdict) }]);
+  });
+
+  it("todos os agentes respondidos dão a conversa por terminada", async () => {
+    const wf = await load();
+    const conversation = wf.parseFleetConversation(probe({
+      runId: "wf_x", agents: [{ id: "a1", label: "juiz", phase: "Julgamento", status: "done" }], items: [],
+    }));
+    expect(conversation).toMatchObject({ runId: "wf_x", finished: true });
+  });
+
+  it("card sem frota (diretório vazio ou inexistente) devolve null; lixo também", async () => {
+    const wf = await load();
+    const empty = mkdtempSync(join(tmpdir(), "vibehub-conv-empty-"));
+    onTestFinished(() => rmSync(empty, { recursive: true, force: true }));
+    expect(wf.parseFleetConversation(runProbe(wf.FLEET_CONVERSATION_PROBE_JS, [empty]))).toBeNull();
+    expect(wf.parseFleetConversation(runProbe(wf.FLEET_CONVERSATION_PROBE_JS, [join(empty, "nao-existe")]))).toBeNull();
+    expect(wf.parseFleetConversation("lixo")).toBeNull();
+  });
+
+  it("o diretório vai como argumento citado, nunca dentro do script", async () => {
+    const wf = await load();
+    const script = wf.buildFleetConversationProbeScript("runner", "/root/x'; rm -rf /");
+    expect(script.startsWith("docker exec 'runner' node -e ")).toBe(true);
+    expect(script.endsWith(` '/root/x'\\''; rm -rf /'`)).toBe(true);
   });
 });
