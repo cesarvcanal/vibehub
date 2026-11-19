@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, onTestFinished, vi } from "vitest";
 import { act, cleanup, configure, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
@@ -198,15 +198,21 @@ describe("ReviewPanel — o que mostra", () => {
     get.mockImplementation(async (url: string) => (url === "/cards/c1/review" ? { review: current, working, fleet } : served(url)));
     open("aut", review({ phase: "reviewing", round: 1 }));
     await loaded();
-    const messages = await screen.findAllByTestId("review-fleet-message");
-    expect(messages.map((m) => m.textContent)).toEqual([
-      expect.stringContaining("1 achado: token vaza no log"),
-      expect.stringContaining("Derrubado: a linha 72 já barra"),
-    ]);
+    const messages = await screen.findAllByTestId("fleet-chat-message");
+    expect(messages).toHaveLength(2);
     expect(messages[0]).toHaveTextContent("Revisão de Correção");
-    expect(messages[1]).toHaveTextContent("em resposta a: token vaza no log");
-    expect(screen.getByTestId("review-fleet-working")).toHaveTextContent("Juiz");
-    expect(screen.getByTestId("review-fleet-working")).toHaveTextContent("opus");
+    expect(messages[0]).toHaveTextContent("sonnet");
+    expect(within(messages[0]!).getByRole("listitem")).toHaveTextContent("token vaza no log");
+    expect(messages[1]).toHaveTextContent("Derrubado");
+    expect(messages[1]).toHaveTextContent("a linha 72 já barra");
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => undefined);
+    onTestFinished(() => scrolled.mockRestore());
+    await userEvent.click(within(messages[1]!).getByRole("button", { name: "Ver a fala respondida: token vaza no log" }));
+    expect(scrolled.mock.contexts[0]).toContainElement(messages[0]!);
+    const typing = screen.getByTestId("fleet-chat-typing");
+    expect(typing).toHaveTextContent("Juiz");
+    expect(typing).toHaveTextContent("opus");
+    expect(typing).toHaveTextContent("digitando");
   });
 
   it("sem co-autor o papel não aparece", async () => {
