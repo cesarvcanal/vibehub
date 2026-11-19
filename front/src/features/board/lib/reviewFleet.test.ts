@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Review, ReviewFleetAgent, ReviewFleetRun } from "@/api/types";
 import type { ReviewEvent } from "@/api/types";
 import { conversationRows } from "./review";
-import { agentRole, fleetMessages, fleetsByRound, readAgentResult, withFleets } from "./reviewFleet";
+import { agentRole, fleetsByRound, readAgentResult, withFleets } from "./reviewFleet";
 
 function agent(overrides: Partial<ReviewFleetAgent> = {}): ReviewFleetAgent {
   return { id: "a1", label: "contexto", phase: "Contexto", status: "done", ...overrides };
@@ -35,24 +35,6 @@ describe("readAgentResult", () => {
     ["só o resumo do contexto vira o texto dele", '{"summary":"muda o login"}', { kind: "text", text: "muda o login" }],
   ])("%s", (_name, raw, expected) => {
     expect(readAgentResult(raw)).toEqual(expected);
-  });
-});
-
-describe("fleetMessages", () => {
-  it("só os que terminaram, na ordem em que terminaram, o juiz por último e a verificação respondendo ao achado", () => {
-    const messages = fleetMessages(
-      run({
-        agents: [
-          agent({ id: "judge", label: "juiz", endedAt: 5 }),
-          agent({ id: "ver", label: "verificação: correctness · Busca duplicada", endedAt: 30, result: '{"confirmed":true}' }),
-          agent({ id: "rev", label: "revisão: correctness", endedAt: 20 }),
-          agent({ id: "live", label: "revisão: tests", status: "running" }),
-        ],
-      }),
-    );
-    expect(messages.map((message) => message.agent.id)).toEqual(["rev", "ver", "judge"]);
-    expect(messages[1].repliesTo).toBe("Busca duplicada");
-    expect(messages[0].repliesTo).toBeUndefined();
   });
 });
 

@@ -1,4 +1,4 @@
-import { ANALYSIS_DIMENSIONS, type AnalysisDimension, type Review, type ReviewFleetAgent, type ReviewFleetRun } from "@/api/types";
+import { ANALYSIS_DIMENSIONS, type AnalysisDimension, type Review, type ReviewFleetRun } from "@/api/types";
 import type { ConversationRow } from "@/features/board/lib/review";
 import { formatAgentResult } from "@/features/board/lib/sdkChat";
 
@@ -7,14 +7,7 @@ export type AgentReading =
   | { kind: "verdict"; confirmed: boolean; evidence?: string }
   | { kind: "text"; text: string };
 
-export interface FleetMessage {
-  agent: ReviewFleetAgent;
-  reading: AgentReading;
-  repliesTo?: string;
-}
-
 const JUDGE_LABEL = "juiz";
-const VERIFICATION_PREFIX = "verificação:";
 const LABEL_SEPARATOR = " · ";
 const JSON_STRING = String.raw`"((?:[^"\\]|\\.)*)`;
 const TITLE_PATTERN = new RegExp(String.raw`"title"\s*:\s*${JSON_STRING}"`, "g");
@@ -77,19 +70,6 @@ export function readAgentResult(raw: string): AgentReading {
   } catch {
     return readTruncated(text) ?? { kind: "text", text };
   }
-}
-
-export function fleetMessages(run: ReviewFleetRun): FleetMessage[] {
-  const finished = run.agents.filter((agent) => agent.status === "done");
-  const byEnd = (left: ReviewFleetAgent, right: ReviewFleetAgent) => (left.endedAt ?? 0) - (right.endedAt ?? 0);
-  const judges = finished.filter((agent) => agent.label === JUDGE_LABEL).sort(byEnd);
-  const others = finished.filter((agent) => agent.label !== JUDGE_LABEL).sort(byEnd);
-  return [...others, ...judges].map((agent) => {
-    const separator = agent.label.indexOf(LABEL_SEPARATOR);
-    const repliesTo = agent.label.startsWith(VERIFICATION_PREFIX) && separator >= 0 ? agent.label.slice(separator + LABEL_SEPARATOR.length) : undefined;
-    const reading = agent.result ? readAgentResult(agent.result) : { kind: "text" as const, text: "" };
-    return repliesTo ? { agent, reading, repliesTo } : { agent, reading };
-  });
 }
 
 export type ConversationRowWithFleet = ConversationRow | { kind: "fleet"; round: number; runs: ReviewFleetRun[]; key: string };
