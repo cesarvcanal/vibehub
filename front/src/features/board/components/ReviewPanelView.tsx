@@ -4,6 +4,7 @@ import { Check, ChevronRight, ExternalLink, FileDiff, Loader2, SquareTerminal, X
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Finding, FindingDecision, FindingSeverity, Review, ReviewFleetRun, ReviewPhase, ReviewWorking } from "@/api/types";
+import { ReviewAgents } from "@/features/board/components/ReviewAgents";
 import { ENTER, ReviewConversation, SAID_CLAMP_CHARS } from "@/features/board/components/ReviewConversation";
 import { cardHref } from "@/features/board/lib/board";
 import {
@@ -29,7 +30,7 @@ import { cn } from "@/lib/utils";
  * decision to make there, and the conversation otherwise.
  */
 
-export type ReviewTab = "conversation" | "findings";
+export type ReviewTab = "conversation" | "agents" | "findings";
 type Tab = ReviewTab;
 
 /** A banner over the footer's buttons: what the last merge click came to. */
@@ -62,9 +63,11 @@ export interface ReviewPanelViewProps {
   fleet?: ReviewFleetRun[];
 }
 
+const NO_FLEET: ReviewFleetRun[] = [];
+
 export function ReviewPanelView(props: ReviewPanelViewProps) {
   const {
-    review, working, fleet, nameOf, actions, busy, mergeBusy, notice, onMerge, onRetry, onCancel, onDecide, onDecideSuggestions, onClose,
+    review, working, fleet = NO_FLEET, nameOf, actions, busy, mergeBusy, notice, onMerge, onRetry, onCancel, onDecide, onDecideSuggestions, onClose,
     initialTab,
   } = props;
   const t = useT();
@@ -136,6 +139,9 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
         <TabButton active={tab === "conversation"} onClick={() => setTab("conversation")}>
           {t("review.tab.conversation")}
         </TabButton>
+        <TabButton active={tab === "agents"} onClick={() => setTab("agents")}>
+          {t("review.tab.agents")}
+        </TabButton>
         <TabButton active={tab === "findings"} onClick={() => setTab("findings")}>
           {t("review.tab.findings")}
           <span className="rounded bg-muted px-1 text-[10px] tabular-nums text-muted-foreground">{review.findings.filter(findingIsOpen).length}</span>
@@ -144,7 +150,10 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
       </div>
 
       <div role="tabpanel" hidden={tab !== "conversation"} className={cn("min-h-0 flex-1 flex-col", tab === "conversation" ? "flex" : "hidden")}>
-        <ReviewConversation review={review} working={working} nameOf={nameOf} fleet={fleet} />
+        <ReviewConversation review={review} working={working} nameOf={nameOf} />
+      </div>
+      <div role="tabpanel" hidden={tab !== "agents"} className={cn("min-h-0 flex-1 flex-col", tab === "agents" ? "flex" : "hidden")}>
+        <ReviewAgents review={review} fleet={fleet} />
       </div>
       <div role="tabpanel" hidden={tab !== "findings"} className={cn("min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden [overflow-wrap:anywhere]", tab !== "findings" && "hidden")}>
         <FindingsList
@@ -238,7 +247,7 @@ function Header({
         {/* Keyed by the sentence: when what is happening changes, the new sentence comes in. */}
         <span key={stageText(review, working.author, t)} className={cn("text-foreground/90", ENTER)}>{stageText(review, working.author, t)}</span>
       </p>
-      <dl data-testid="review-roles" className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px]">
+      <dl data-testid="review-roles" className="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px]">
         <Role
           label={t("review.roles.reviewer")}
           hint={t("review.roles.reviewer.hint")}

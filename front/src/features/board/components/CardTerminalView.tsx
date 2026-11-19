@@ -1390,7 +1390,7 @@ export function CardTerminalView({
           {/* The PR review: a column of its own at the right. The review is a list to read, not a
               screen to share, so on a wide display it keeps a fixed width instead of taking half. */}
           {reviewOpen ? (
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:w-[26rem] lg:flex-none">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:w-[30rem] lg:flex-none xl:w-[40rem] 2xl:w-[48rem]">
               {analysisCard ? (
                 <AnalysisPanel cardId={cardId} onClose={() => setReviewOpen(false)} />
               ) : (
