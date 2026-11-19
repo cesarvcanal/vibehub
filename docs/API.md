@@ -184,6 +184,20 @@ rewritten (`gh pr edit`) when a title or body comes along. The comments go up be
 GitHub refusing them (a line outside the diff) answers `{ reason: "comments_failed", prUrl }` and
 nothing is merged. The answer carries `comments: { posted, skipped }`.
 
+### The card's base is where its PR goes
+
+A card is cut from `origin/<base>` right after a `git fetch --all --prune` of the project's clone, and
+`base` is the "Branch de origem" picked when the card was created (the project's `baseBranch` only when
+nobody picked one). That branch is also the card's delivery target: `vibehub_deliver` without `branch`
+opens the PR to the card's `base`. The base is in `vibehub_list_terminals` (`base`) and stated at the top
+of the card's `CLAUDE.local.md`.
+
+A `branch` other than the card's base stops before the push with `{ reason: "base_divergente" }`: the
+output names the base and the target and counts the commits and files of `origin/<target>..<card
+branch>` that the PR would carry. It goes ahead only with `confirmTarget: true` (the user confirmed that
+target) or when the card already has a PR recorded for that target. Analysis cards (whose base is the PR's
+own branch) and locked cards (always their base) never stop here.
+
 ### Locked cards — deliver only as a pull request
 
 A card can be **locked to its base** (`locked: true`, owner-only, off by default and absent from
