@@ -19,6 +19,7 @@ async function load() {
   });
   const registry = await import("../services/board/registry.js");
   const users = await import("../auth/users.js");
+  const userGit = await import("../auth/userGit.js");
   const { createMcpServer } = await import("./server.js");
 
   const owner = users.publicUser(await users.createUser("cesar", "senha-forte-123", "owner"));
@@ -32,11 +33,11 @@ async function load() {
   const client = new Client({ name: "card-test", version: "1" });
   await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
   const call = async (name: string, args: Record<string, unknown> = {}) => {
-    const res = await client.callTool({ name, arguments: args });
-    const text = (res.content as { type: string; text: string }[])[0]!.text;
-    return JSON.parse(text) as Record<string, unknown>;
+    const response = await client.callTool({ name, arguments: args });
+    const answerText = (response.content as { type: string; text: string }[])[0]!.text;
+    return JSON.parse(answerText) as Record<string, unknown>;
   };
-  return { registry, owner, member, infraProject, vibehubProject, callerCard, client, call };
+  return { registry, userGit, owner, member, infraProject, vibehubProject, callerCard, client, call };
 }
 
 beforeAll(async () => {
@@ -61,8 +62,8 @@ describe("maestro MCP — um card cria card em qualquer projeto", () => {
 
   it("vibehub_list_projects devolve o id de um projeto que ainda não tem card", async () => {
     const env = await load();
-    const out = await env.call("vibehub_list_projects");
-    expect(out.projects).toEqual(expect.arrayContaining([
+    const answer = await env.call("vibehub_list_projects");
+    expect(answer.projects).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: env.vibehubProject.id, name: "vibehub" }),
     ]));
   });
@@ -70,51 +71,63 @@ describe("maestro MCP — um card cria card em qualquer projeto", () => {
   it("card cujo dono deu a ordem cria o card no outro projeto, no backlog, já com o dono como autor e o workspace sendo preparado", async () => {
     const env = await load();
     await env.registry.stampCardActor(env.callerCard.id, env.owner.id);
-    const out = await env.call("vibehub_create_card", {
+    const answer = await env.call("vibehub_create_card", {
       from: env.callerCard.id, projectId: env.vibehubProject.id, title: "fix: faxina de volumes de teste",
     });
-    expect(out.error).toBeUndefined();
-    const created = await env.registry.getCard(String(out.cardId));
+    expect(answer.error).toBeUndefined();
+    const created = await env.registry.getCard(String(answer.cardId));
     expect(created).toMatchObject({
       projectId: env.vibehubProject.id, title: "fix: faxina de volumes de teste", column: "backlog",
       actorUserId: env.owner.id, participantUserIds: [env.owner.id],
     });
-    await vi.waitFor(async () => expect((await env.registry.getCard(String(out.cardId)))?.preparedAt).toBeDefined());
+    await vi.waitFor(async () => expect((await env.registry.getCard(String(answer.cardId)))?.preparedAt).toBeDefined());
+  });
+
+  it("o card criado nasce na conta Claude de quem deu a ordem", async () => {
+    const env = await load();
+    const account = await env.registry.createAccount({ name: "cesar" });
+    await env.userGit.setUserGit(env.owner.id, { claudeAccountSlug: account.slug });
+    await env.registry.stampCardActor(env.callerCard.id, env.owner.id);
+    const answer = await env.call("vibehub_create_card", { from: env.callerCard.id, projectId: env.vibehubProject.id, title: "fix" });
+    expect((await env.registry.getCard(String(answer.cardId)))?.accountSlug).toBe(account.slug);
+    await vi.waitFor(async () => expect((await env.registry.getCard(String(answer.cardId)))?.preparedAt).toBeDefined());
   });
 
   it("card cuja última ordem veio de um membro não cria card, como no board", async () => {
     const env = await load();
     await env.registry.stampCardActor(env.callerCard.id, env.member.id);
-    const out = await env.call("vibehub_create_card", { from: env.callerCard.id, projectId: env.vibehubProject.id, title: "x" });
-    expect(out.error).toContain("only the owner");
+    const answer = await env.call("vibehub_create_card", { from: env.callerCard.id, projectId: env.vibehubProject.id, title: "x" });
+    expect(answer.error).toContain("only the owner");
     expect(await env.registry.listCards(env.vibehubProject.id)).toEqual([]);
   });
 
   it("card sem ninguém que tenha dado ordem não cria card", async () => {
     const env = await load();
-    const out = await env.call("vibehub_create_card", { from: env.callerCard.id, projectId: env.vibehubProject.id, title: "x" });
-    expect(out.error).toContain("nobody gave");
+    const answer = await env.call("vibehub_create_card", { from: env.callerCard.id, projectId: env.vibehubProject.id, title: "x" });
+    expect(answer.error).toContain("nobody gave");
     expect(await env.registry.listCards(env.vibehubProject.id)).toEqual([]);
   });
 
   it("card cujo autor foi removido do vibehub diz isso, sem criar card", async () => {
     const env = await load();
     await env.registry.stampCardActor(env.callerCard.id, "usuario-removido");
-    const out = await env.call("vibehub_create_card", { from: env.callerCard.id, projectId: env.vibehubProject.id, title: "x" });
-    expect(out.error).toContain("no longer a user");
+    const answer = await env.call("vibehub_create_card", { from: env.callerCard.id, projectId: env.vibehubProject.id, title: "x" });
+    expect(answer.error).toContain("no longer a user");
     expect(await env.registry.listCards(env.vibehubProject.id)).toEqual([]);
   });
 
   it("from que não é card nenhum é recusado", async () => {
     const env = await load();
-    const out = await env.call("vibehub_create_card", { from: "nao-existe", projectId: env.vibehubProject.id, title: "x" });
-    expect(out.error).toContain("card not found");
+    const answer = await env.call("vibehub_create_card", { from: "nao-existe", projectId: env.vibehubProject.id, title: "x" });
+    expect(answer.error).toContain("card not found");
+    expect(await env.registry.listCards(env.vibehubProject.id)).toEqual([]);
   });
 
   it("projeto inexistente é recusado sem criar nada", async () => {
     const env = await load();
     await env.registry.stampCardActor(env.callerCard.id, env.owner.id);
-    const out = await env.call("vibehub_create_card", { from: env.callerCard.id, projectId: "nao-existe", title: "x" });
-    expect(out.error).toContain("project not found");
+    const answer = await env.call("vibehub_create_card", { from: env.callerCard.id, projectId: "nao-existe", title: "x" });
+    expect(answer.error).toContain("project not found");
+    expect((await env.registry.listAllCards()).map((card) => card.id)).toEqual([env.callerCard.id]);
   });
 });
