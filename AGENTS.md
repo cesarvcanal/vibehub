@@ -258,7 +258,7 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 - Permissão de leitura (`view`) nunca autoriza mutação. Listagens filtram pelo que o usuário alcança, não pelo que existe.
 - **Shell:** tudo que vira linha de `docker exec` ou script (ids de card, branch, sessão, container) é validado na fronteira e citado depois. Leia `back/src/runtime/host.ts` antes de montar um comando.
 - **Segredos por stdin, nunca argv** (`ps` é legível por todos). Credenciais moram no cofre criptografado (`back/src/secrets/`), nunca em log, resposta HTTP ou mensagem de erro.
-- **Identidade git é do card:** commit, push e PR saem com a conta de quem deu a ordem. Não contornar com outra credencial.
+- **Identidade git é do card:** commit, push e PR saem com a conta de quem deu a ordem, nunca com conta de terceiros nem da organização. Não contornar com outra credencial.
 - Outros pontos de entrada (hooks do runner, MCP, websocket) têm limite de confiança próprio — token do runner, sessão — e não presumem que passaram pelo HTTP autenticado.
 - Verificar caminhos permitidos e negados, inclusive chamando a API direto.
 
@@ -557,7 +557,6 @@ com login saudável a tarefa em segundo plano continua protegida.
 - **Mudança neste arquivo:** a regra é escrita para qualquer agente, em qualquer área. Tem de ser clara para quem nunca viu o repositório, dizer o que fazer e por quê, e funcionar fora do caso que a motivou. Fato que muda (ferramenta instalada, nome de branch) entra como condição ("se…"), não como verdade fixa.
 - **Commits atômicos:** um commit por etapa ou tema, nunca um único commit com tudo no fim.
 - **Merge só com autorização explícita** (§12). Pendência que bloqueia, aberta, segura o merge mesmo com a ordem de merge já dada, até o aval daquela pendência ("A pendência deliberada é julgada", abaixo). Autorizado, o merge é **merge commit, nunca squash**, com o SHA verificado e o título no padrão Gitmoji: `gh pr merge <N> --merge --match-head-commit <sha> --subject "🔀 merge: ..."`. Depois do merge, confira o pipeline pós-merge (CI e publicação da imagem).
-- **Identidade git de quem fez o trabalho:** não commitar com conta de terceiros nem da organização.
 - **Testes e CI verdes antes do merge**, sem warning novo no CI.
 - **Revisão independente antes do merge:** o diff passa por um revisor (pessoa ou agente) sem o contexto de quem o escreveu, que segue "Como revisar um PR", abaixo.
 
