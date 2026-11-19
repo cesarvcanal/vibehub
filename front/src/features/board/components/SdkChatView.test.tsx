@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Profiler, act } from "react";
@@ -4953,16 +4953,19 @@ describe("SdkChatView — o medidor de contexto", () => {
     ws.deliver({ type: "context_usage", usedTokens: 20_000, maxTokens: 200_000, percent: 10 } as SdkEvent);
     expect(screen.getByTestId("context-meter-value")).toHaveTextContent("10%");
 
+    vi.useFakeTimers({ toFake: ["performance"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     ws.deliver({ type: "context_usage", usedTokens: 80_000, maxTokens: 200_000, percent: 40 } as SdkEvent);
     expect(screen.getByTestId("context-meter").getAttribute("aria-label")).toContain("40%");
-    const seen = new Set<string>();
-    await waitFor(() => {
+    const shownEachStep = Array.from({ length: 10 }, () => {
+      vi.advanceTimersByTime(100);
       runAnimationFrames();
-      seen.add(screen.getByTestId("context-meter-value").textContent ?? "");
-      expect(screen.getByTestId("context-meter-value")).toHaveTextContent("40%");
+      return screen.getByTestId("context-meter-value").textContent;
     });
-    const midway = [...seen].filter((text) => text !== "10%" && text !== "40%");
-    expect(midway.length).toBeGreaterThan(0);
+    expect(shownEachStep.at(-1)).toBe("40%");
+    expect(shownEachStep.filter((text) => text !== "10%" && text !== "40%").length).toBeGreaterThan(0);
   });
 
   it("o guia mostra os tokens, as três faixas e destaca a de agora, com a bolinha deslizando até o ponto atual", async () => {
