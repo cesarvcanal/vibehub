@@ -45,9 +45,9 @@ export function registerAttachmentTools(server: McpServer): void {
     "vibehub_transcribe_audio",
     {
       description:
-        "Transcribe an audio (or video) file that is on the runner to text, with Whisper. Any format: " +
+        "Transcribe an audio (or video) file that is on the runner to text, with OpenAI's gpt-transcribe. Any format: " +
         ".ogg/.opus (WhatsApp voice notes), .mp3, .m4a, .wav, .webm, .aac, .amr, .flac, .mp4 … — what " +
-        "Whisper does not take is converted with ffmpeg first. Use it whenever the user attaches an audio " +
+        "the API does not take is converted with ffmpeg first. Use it whenever the user attaches an audio " +
         "file under /work/.uploads/ (you cannot listen to it yourself) and treat the transcription as what " +
         "the user said. Long files take a while (up to ~100 minutes of speech).",
       inputSchema: {

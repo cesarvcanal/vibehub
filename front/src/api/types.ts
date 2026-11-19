@@ -168,7 +168,6 @@ export interface Settings {
   defaultAccountLabel: string | null;
   /** Set once the wizard finished, so it stops taking over the router. */
   setupCompletedAt: string | null;
-  /** ISO 639-1 hint for voice transcription, or null to let Whisper detect. */
   transcribeLanguage?: string | null;
   /** Minutes a terminal may sit idle before it is hibernated. 0 = never. */
   idleHibernateMinutes?: number;

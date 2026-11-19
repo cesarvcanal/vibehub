@@ -1097,7 +1097,7 @@ export const en: Record<string, string> = {
   "settings.fineGrained": " · fine-grained",
   "settings.tokenNotUsable": "token not usable",
   "settings.voiceKeys": "Voice keys",
-  "settings.voiceHint1": "Whisper (OpenAI) transcribes the composer's recordings",
+  "settings.voiceHint1": "OpenAI (gpt-transcribe) transcribes the composer's recordings",
   "settings.keyStored": " — key stored",
   "settings.noKey": " — no key, microphone unavailable",
   "settings.voiceHint2":

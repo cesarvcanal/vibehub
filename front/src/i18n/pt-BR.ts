@@ -1104,7 +1104,7 @@ export const ptBR: Record<string, string> = {
   "settings.fineGrained": " · fine-grained",
   "settings.tokenNotUsable": "token inutilizável",
   "settings.voiceKeys": "Chaves de voz",
-  "settings.voiceHint1": "O Whisper (OpenAI) transcreve as gravações do campo de mensagem",
+  "settings.voiceHint1": "A OpenAI (gpt-transcribe) transcreve as gravações do campo de mensagem",
   "settings.keyStored": " — chave guardada",
   "settings.noKey": " — sem chave, microfone indisponível",
   "settings.voiceHint2":
