@@ -16,6 +16,7 @@ import { getSettings } from "../settings/settings.js";
 import type { SdkPermissionGateMode } from "./protocol.js";
 import { PR_ANALYSIS_WORKFLOW_PATH, prAnalysisWorkflowSource } from "../review/analysisWorkflow.js";
 import { testWorkerExports } from "../../runtime/testWorkers.js";
+import { autoCompactExport } from "../../runtime/autoCompact.js";
 
 /**
  * SDK DRIVER (service) — spawns and addresses the per-card Agent-SDK driver process inside the runner.
@@ -212,6 +213,7 @@ export function buildSdkDriverCommandLine(opts: SdkDriverCommandOpts): string {
     // The token yields only to a NEWER `/login` in the same profile (see `oauthTokenGuard`).
     `unset ANTHROPIC_API_KEY; ` +
     `export IS_SANDBOX=1; ` +
+    autoCompactExport() +
     `export NODE_PATH=${shQuote(`${SDK_DRIVER_DIR}/node_modules`)}; ` +
     oauthTokenGuard(opts.profileDir) +
     (opts.configDir ? `export CLAUDE_CONFIG_DIR=${shQuote(opts.configDir)}; ` : "") +

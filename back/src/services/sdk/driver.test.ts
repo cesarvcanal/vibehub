@@ -150,6 +150,10 @@ describe("buildSdkDriverCommandLine", () => {
     expect(line).toContain("export VITEST_MAX_FORKS=2; ");
   });
 
+  it("o chat nativo compacta sozinho a partir de 60% do contexto", () => {
+    expect(buildSdkDriverCommandLine(base)).toContain("export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=60; ");
+  });
+
   it("rejects an unsafe cdp/status URL or card id rather than passing it to the shell", () => {
     expect(() => buildSdkDriverCommandLine({ ...base, cdpEndpoint: "http://x'; rm -rf /" })).toThrow();
     expect(() => buildSdkDriverCommandLine({ ...base, statusUrl: "ftp://nope" })).toThrow();
