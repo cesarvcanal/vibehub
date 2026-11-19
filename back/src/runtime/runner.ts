@@ -142,7 +142,7 @@ export function runnerSettingsJson(opts: RunnerSettingsOpts = { autonomous: true
       enableAllProjectMcpServers: true,
       hooks: {
         SessionStart: [
-          ...hook("waiting"),
+          { matcher: "startup|resume|clear|fork", hooks: [{ type: "command", command: hookCommand("waiting") }] },
           { matcher: "compact", hooks: [{ type: "command", command: `echo ${shQuote(AFTER_COMPACT_REMINDER)}` }] },
         ],
         // What UserPromptSubmit prints goes into the agent's context: asked as text, the route only
