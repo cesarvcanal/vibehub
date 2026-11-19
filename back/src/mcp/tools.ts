@@ -617,7 +617,9 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "card may call it (`card` = YOUR OWN $VIBEHUB_CARD_ID). Order: `fleet_unavailable` (with `unavailableReason`) " +
         "only when the Workflow could not run and nothing was recorded yet; `analysed` ONCE, right after the fleet's " +
         "judgment; `done` at the end with the SAME headSha, dimensions and findings as `analysed` (same severity and " +
-        "dimension), changing only each finding's status (fixed + commit, or open). Out of order or a rewritten fleet " +
+        "dimension), changing only each finding's status (fixed + commit, decided + decision (a question the person " +
+        "answered without asking for a change), or open); after the person answers, `done` may be sent again. Out of " +
+        "order or a rewritten fleet " +
         "result is refused. Returns the stored report, or { error } saying what to fix.",
       inputSchema: analysisReportFields.shape,
     },
