@@ -192,6 +192,7 @@ export interface Review {
    * the limit comes back) and is sent again by itself, without counting as a reminder.
    */
   usageLimitWait?: { side: "reviewer" | "author"; until: number };
+  usageLimitResumes?: number;
   /**
    * The reviewer's agent fleet as it stood when each round was submitted (finished: whoever was still in flight
    * became `stopped`). The live fleet lives only as long as the reviewer's driver; this is what the panel keeps.

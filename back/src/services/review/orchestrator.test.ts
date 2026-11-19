@@ -2456,6 +2456,43 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
       }
     });
 
+    it("horário de volta que já passou não vira espera: impasse sem reenvio a cada minuto", async () => {
+      const o = await load();
+      const { review, stop } = await limitedReviewer(o, { resetsAt: Date.now() - 1000 });
+      try {
+        await endTurn(o, review.reviewerCardId);
+        await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("impasse"));
+        expect((await o.store.getReview(review.id))?.usageLimitWait).toBeUndefined();
+        expect(send).not.toHaveBeenCalled();
+      } finally {
+        stop();
+      }
+    });
+
+    it("a conta que recusa de novo a cada retomada vai para impasse depois do teto de retomadas", async () => {
+      const o = await load();
+      const s = await started(o);
+      const agentState = await import("../board/agentState.js");
+      const stopProbe = agentState.onCardUsageLimitProbe((cardId) => (cardId === s.review.reviewerCardId ? { resetsAt: Date.now() + 20 } : null));
+      const off = o.orch.startReviewOrchestrator({ graceMs: 0, usageResumeMarginMs: 0 });
+      try {
+        for (const resends of [1, 2, 3]) {
+          await endTurn(o, s.review.reviewerCardId);
+          await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(resends), { timeout: 3000 });
+        }
+        await endTurn(o, s.review.reviewerCardId);
+        await vi.waitFor(async () => expect((await o.store.getReview(s.review.id))?.phase).toBe("impasse"));
+        const stuck = await o.store.getReview(s.review.id);
+        expect(stuck?.impasseReason).toMatch(/limite de uso/);
+        expect(stuck?.usageLimitWait).toBeUndefined();
+        await new Promise((r) => setTimeout(r, 100));
+        expect(send).toHaveBeenCalledTimes(3);
+      } finally {
+        stopProbe();
+        off();
+      }
+    });
+
     it("a rodada entregue durante a espera apaga a marca: o turno do autor sem resposta recebe o lembrete", async () => {
       const o = await load();
       const { author, review, stop } = await limitedReviewer(o, { resetsAt: Date.now() + 60_000 });

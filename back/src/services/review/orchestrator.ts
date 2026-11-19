@@ -80,8 +80,11 @@ export const HEAD_SHA_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
 const NO_ANSWER = "IA não respondeu";
 /** Impasse reason when the account refused the turn for its usage limit and did not say when it comes back. */
 const USAGE_LIMIT = "conta Claude sem limite de uso, sem horário de volta";
+const USAGE_LIMIT_STUCK = "conta Claude sem limite de uso depois de várias retomadas";
 /** What the resend waits after the limit's reset, so the first call does not hit the window still closing. */
 const USAGE_RESUME_MARGIN_MS = 60_000;
+const MAX_USAGE_LIMIT_RESUMES = 3;
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 /** Impasse reason when the PR moved after `ready` and no round is left to check what came in. */
 const HEAD_MOVED = "push depois do pronto";
 
@@ -761,6 +764,7 @@ export async function submitReviewerRound(
     r.lastSubmitRound = r.round;
     r.nudges = 0;
     delete r.usageLimitWait;
+    delete r.usageLimitResumes;
     note(r, "reviewer", payload.summary || `Rodada ${r.round}: ${added.length} achado(s) novo(s), ${verdicts.length} veredito(s).`, {
       items: [
         ...applied.map((v) => ({ id: v.id, status: v.status, reply: v.reviewerReply })),
@@ -915,6 +919,7 @@ export async function submitAuthorResponse(
     r.lastRespondRound = r.round;
     r.nudges = 0;
     delete r.usageLimitWait;
+    delete r.usageLimitResumes;
     r.round += 1;
     r.phase = "reviewing";
     note(r, "system", `Rodada ${r.round} de ${MAX_ROUNDS}: o revisor confere só o diff.`);
@@ -1098,6 +1103,7 @@ export async function retryReview(reviewId: string, by: string): Promise<Review>
     r.nudges = 0;
     r.impasseReason = undefined;
     delete r.usageLimitWait;
+    delete r.usageLimitResumes;
     note(r, "human", side === "approve" ? "Tentar de novo: o pedido de Approve volta ao revisor." :
       `Tentar de novo: a vez volta ao ${side === "reviewer" ? "revisor" : "autor"} (rodada ${r.round} de ${MAX_ROUNDS}).`, { by });
   });
@@ -1492,14 +1498,19 @@ async function onTurnFinished(event: CardEvent): Promise<void> {
     const who = side === "reviewer" ? "revisor" : "autor";
     const after = await mutateReview(id, (r) => {
       if (!awaitingTool(r, side) || r.usageLimitWait?.side === side) return;
-      if (usageLimit?.resetsAt !== undefined) {
-        r.usageLimitWait = { side, until: usageLimit.resetsAt };
+      const resetsAhead = usageLimit?.resetsAt !== undefined && usageLimit.resetsAt > Date.now();
+      const resumesLeft = (r.usageLimitResumes ?? 0) < MAX_USAGE_LIMIT_RESUMES;
+      if (usageLimit && resetsAhead && resumesLeft) {
+        r.usageLimitWait = { side, until: usageLimit.resetsAt! };
         note(r, "system", `A conta Claude do ${who} ficou sem limite de uso: a rodada ${r.round} continua sozinha quando o limite voltar.`);
         action = "wait";
       } else if (usageLimit) {
         r.phase = "impasse";
-        r.impasseReason = USAGE_LIMIT;
-        note(r, "system", `Impasse: a conta Claude do ${who} ficou sem limite de uso e não disse quando volta.`);
+        r.impasseReason = resumesLeft ? USAGE_LIMIT : USAGE_LIMIT_STUCK;
+        delete r.usageLimitResumes;
+        note(r, "system", resumesLeft
+          ? `Impasse: a conta Claude do ${who} ficou sem limite de uso e não disse quando volta.`
+          : `Impasse: a conta Claude do ${who} recusou de novo depois de ${MAX_USAGE_LIMIT_RESUMES} retomadas.`);
         action = "impasse";
       } else if (r.nudges >= 1) {
         r.phase = "impasse";
@@ -1529,9 +1540,14 @@ function cancelUsageResume(reviewId: string): void {
 function scheduleUsageResume(r: Review): void {
   if (!r.usageLimitWait) return;
   cancelUsageResume(r.id);
-  const delay = Math.max(0, r.usageLimitWait.until + usageResume.marginMs - Date.now());
+  const resumeAt = r.usageLimitWait.until + usageResume.marginMs;
+  const delay = Math.min(MAX_TIMER_DELAY_MS, Math.max(0, resumeAt - Date.now()));
   const timer = setTimeout(() => {
     usageResume.timers.delete(r.id);
+    if (Date.now() < resumeAt) {
+      scheduleUsageResume(r);
+      return;
+    }
     void resumeAfterUsageLimit(r.id).catch((err: unknown) => {
       logger.warn({ review: r.id, detail: (err as Error).message }, "PR review could not resume after the usage limit");
     });
@@ -1551,6 +1567,7 @@ async function resumeAfterUsageLimit(reviewId: string): Promise<void> {
     if (!wait) return;
     delete r.usageLimitWait;
     if (!awaitingTool(r, wait.side)) return;
+    r.usageLimitResumes = (r.usageLimitResumes ?? 0) + 1;
     side = wait.side;
     note(r, "system", `O limite da conta Claude do ${side === "reviewer" ? "revisor" : "autor"} voltou: a rodada ${r.round} segue.`);
   });
