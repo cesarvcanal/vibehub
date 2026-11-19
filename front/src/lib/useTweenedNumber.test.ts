@@ -63,6 +63,16 @@ describe("useTweenedNumber", () => {
     expect(result.current).toBe(50);
   });
 
+  it("desmontar no meio da transição cancela o quadro pendente", () => {
+    stubReducedMotion(false);
+    const { rerender, unmount } = renderHook(({ target }) => useTweenedNumber(target, DURATION_MS), { initialProps: { target: 0 } });
+    rerender({ target: 100 });
+    act(() => vi.advanceTimersByTime(DURATION_MS / 3));
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("com prefers-reduced-motion o número vai direto ao alvo, sem quadro intermediário", () => {
     stubReducedMotion(true);
     const { result, rerender } = renderHook(({ target }) => useTweenedNumber(target, DURATION_MS, 0), { initialProps: { target: 29 } });
