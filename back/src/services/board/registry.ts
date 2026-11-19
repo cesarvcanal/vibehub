@@ -1384,21 +1384,18 @@ export async function setDefaultAccountLabel(label: string | null | undefined): 
 
 const DEFAULT_ACCOUNT_OWNER = "default";
 
-/**
- * Every account name on screen (each account and the default one) is unique, compared trimmed and
- * case-insensitive. `ownerSlug` is whoever is being named, so keeping one's own name passes. THROWS.
- */
 function assertAccountNameFree(doc: BoardDoc, name: string, ownerSlug: string): void {
   const nameKey = name.trim().toLocaleLowerCase();
   const takenNames = [
     ...doc.accounts.map((account) => ({ ownerSlug: account.slug, name: account.name })),
     ...(doc.config.defaultAccountLabel ? [{ ownerSlug: DEFAULT_ACCOUNT_OWNER, name: doc.config.defaultAccountLabel }] : []),
-  ];
-  const clash = takenNames.some((taken) => taken.ownerSlug !== ownerSlug && taken.name.trim().toLocaleLowerCase() === nameKey);
+  ].map((taken) => ({ ownerSlug: taken.ownerSlug, nameKey: taken.name.trim().toLocaleLowerCase() }));
+  const keepsOwnName = takenNames.some((taken) => taken.ownerSlug === ownerSlug && taken.nameKey === nameKey);
+  if (keepsOwnName) return;
+  const clash = takenNames.some((taken) => taken.ownerSlug !== ownerSlug && taken.nameKey === nameKey);
   if (clash) throw new Error("account name is already in use");
 }
 
-/** The settings route checks the default account's new label before writing settings.json. THROWS. */
 export async function assertDefaultAccountLabelFree(label: string | null | undefined): Promise<void> {
   const clean = sanitizeDefaultAccountLabel(label);
   if (clean) assertAccountNameFree(await store.load(), clean, DEFAULT_ACCOUNT_OWNER);

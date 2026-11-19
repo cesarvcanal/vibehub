@@ -1591,6 +1591,16 @@ describe("board registry (persisted)", () => {
       expect((await reg.setDefaultAccountLabel("césar")).defaultAccountLabel).toBe("césar");
     });
 
+    it("instalação que já tinha nome repetido antes da regra: manter o próprio nome passa, só trocar para um nome ocupado é recusado", async () => {
+      await reg.createAccount({ name: "tech" });
+      await writeFile(join(dir, "board.json"), JSON.stringify({ ...JSON.parse(await readFile(join(dir, "board.json"), "utf8")), config: { defaultAccountLabel: "Tech" } }));
+      const reopened = await freshRegistry();
+      expect((await reopened.setDefaultAccountLabel("tech")).defaultAccountLabel).toBe("tech");
+      expect((await reopened.renameAccount("tech", "TECH")).name).toBe("TECH");
+      await reopened.createAccount({ name: "albert" });
+      await expect(reopened.renameAccount("albert", "tech")).rejects.toThrow(/account name is already in use/);
+    });
+
     it("removes an unreferenced account; an unknown one throws", async () => {
       await reg.createAccount({ name: "temp one" });
       expect((await reg.removeAccount("temp-one")).slug).toBe("temp-one");
