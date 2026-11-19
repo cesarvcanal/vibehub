@@ -278,7 +278,7 @@ describe("WS /api/projects/:id/prs/live", () => {
     expect(ownerLive.lastClaims()).toEqual([{ prNumber: 636, userId: w.memberId, username: "albert" }]);
     const res = await analyse(w.owner, w.projectId, 636, { reviewerUserId: w.ownerId });
     expect(res.statusCode).toBe(409);
-    expect(res.json().error).toMatch(/^pr_em_montagem: albert/);
+    expect(res.json()).toMatchObject({ error: expect.stringMatching(/^pr_em_montagem:/), username: "albert" });
     expect(sendToTerminal).not.toHaveBeenCalled();
     ownerLive.socket.terminate();
     memberLive.socket.terminate();

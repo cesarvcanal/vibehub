@@ -515,6 +515,12 @@ export interface RepoAccessRefusal {
   repo: string;
 }
 
+/** The 409 of `POST /projects/:id/prs/:number/analysis`: `username` is setting this PR's analysis up. */
+export interface PrSettingUpRefusal {
+  error: string;
+  username: string;
+}
+
 /** An open pull request of a project's repository, as GitHub has it right now (`GET /projects/:id/prs`). */
 export interface ProjectPull {
   number: number;

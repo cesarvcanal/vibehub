@@ -340,6 +340,20 @@ describe("ProjectPrsDialog", () => {
       expect(second.sent).toEqual([{ type: "claim", prNumber: 636 }]);
     });
 
+    it("a start refused because somebody else took the PR is told who, translated, and its picker closes", async () => {
+      serve([pull(636)]);
+      post.mockRejectedValue(Object.assign(new Error("Request failed with status code 409"), {
+        response: { status: 409, data: { error: "pr_em_montagem: albert está montando a análise do PR #636", username: "albert" } },
+      }));
+      open();
+      (await liveSocket()).accept();
+      await userEvent.click(await screen.findByRole("button", { name: "Analyse PR #636" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Start analysis" }));
+      await waitFor(() => expect(toast.info).toHaveBeenCalledWith("albert is already setting up the analysis of PR #636"));
+      expect(toast.error).not.toHaveBeenCalled();
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Start analysis" })).not.toBeInTheDocument());
+    });
+
     it("a read-only share is told so, translated, and its picker closes", async () => {
       serve([pull(636)]);
       open();

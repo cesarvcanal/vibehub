@@ -2,14 +2,13 @@ import type { FastifyInstance } from "fastify";
 import { WebSocket } from "ws";
 import { canAccessProject, canWorkOnProject, requireProjectAccess } from "../auth/access.js";
 import { requestUser, requireSession } from "../auth/session.js";
-import { analysisPeople, listProjectPulls, RepoAccessError, startAnalysis } from "../services/review/analysis.js";
+import { analysisPeople, listProjectPulls, PrSettingUpError, RepoAccessError, startAnalysis } from "../services/review/analysis.js";
 import { joinPrRoom, type PrLiveEvent } from "../services/review/prClaims.js";
 import { logger } from "../utils/logger.js";
 import { NOT_FOUND, sendError } from "./httpError.js";
 
 /** GitHub failing to answer is not the caller's fault: the list is not there to give. */
 const GITHUB_FAILED = [/^GitHub returned/, 502] as const;
-const SETTING_UP_ELSEWHERE = [/^pr_em_montagem/, 409] as const;
 const POLICY_VIOLATION = 1008;
 const INTERNAL_ERROR = 1011;
 const HEARTBEAT_MS = 25_000;
@@ -116,7 +115,8 @@ export async function prAnalysisRoutes(app: FastifyInstance): Promise<void> {
         });
         return await reply.send({ card, created });
       } catch (err) {
-        return await sendError(reply, err, { rules: [GITHUB_FAILED, SETTING_UP_ELSEWHERE, NOT_FOUND] });
+        if (err instanceof PrSettingUpError) return await reply.code(409).send({ error: err.message, username: err.username });
+        return await sendError(reply, err, { rules: [GITHUB_FAILED, NOT_FOUND] });
       }
     },
   );

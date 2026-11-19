@@ -99,6 +99,12 @@ export class RepoAccessError extends Error {
   }
 }
 
+export class PrSettingUpError extends Error {
+  constructor(readonly username: string, prNumber: number) {
+    super(`pr_em_montagem: ${username} está montando a análise do PR #${prNumber}`);
+  }
+}
+
 export interface AnalysisPerson {
   id: string;
   username: string;
@@ -191,7 +197,7 @@ export async function startAnalysis(input: {
   const { project, connection, owner, repo } = await projectRepoAccess(input.projectId, input.requester);
   const settingUp = prClaimHolder(input.projectId, input.prNumber);
   if (settingUp && settingUp.userId !== input.requester.id) {
-    throw new Error(`pr_em_montagem: ${settingUp.username} está montando a análise do PR #${input.prNumber}`);
+    throw new PrSettingUpError(settingUp.username, input.prNumber);
   }
   const people = new Map((await peopleOf(project)).map((p) => [p.id, p]));
   const reviewer = people.get(input.reviewerUserId);

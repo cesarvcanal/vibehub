@@ -12,6 +12,7 @@ import { SELECT_CLASS } from "@/components/ui/select";
 import type { AnalysisPerson, AnalysisRoles, ProjectPull } from "@/api/types";
 import { analysisPeopleKey, boardApi, projectPullsKey } from "@/features/board/api";
 import { defaultReviewerId, isPrAuthor } from "@/features/board/lib/analysisRoles";
+import { prSettingUpHolder } from "@/features/board/lib/prSettingUp";
 import { repoAccessRefusal } from "@/features/board/lib/repoAccess";
 import { usePrClaims } from "@/features/board/lib/usePrClaims";
 import { useAuth } from "@/providers/auth";
@@ -70,7 +71,11 @@ export function ProjectPrsDialog({ projectId, open, onOpenChange, onOpenCard }: 
       if (created) toast.success(translate("prs.started", { number: prNumber }), { action });
       else toast.info(translate("prs.alreadyOpen", { number: prNumber }), { action });
     },
-    onError: (e) => toast.error(apiErrorMessage(e)),
+    onError: (e, { prNumber }) => {
+      const holder = prSettingUpHolder(e);
+      if (holder) toast.info(translate("prs.claimRefused", { name: holder, number: prNumber }));
+      else toast.error(apiErrorMessage(e));
+    },
     onSettled: (_data, _error, { prNumber }) => {
       setStarting((current) => {
         const next = new Set(current);
