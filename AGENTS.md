@@ -186,6 +186,7 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 - **Mudança de versão exige conferir o comportamento real**, não a memória.
 - **Fato, não hipótese.** Diagnóstico de integração afirma só o que log, docs, binário ou teste mostram. Hipótese é dita como hipótese, testada antes de virar correção, e nunca vira regra de código nem texto de tela.
 - **Comportamento que a docs não define** é registrado como evidência, com versão, data e fonte, e tratado como incerto.
+- **Exercitar antes do merge.** Integração nova ou alterada roda de verdade, na versão instalada e pelo caminho que o usuário usa (o card, o runner, a rota), antes do merge: o teste com fake prova a lógica, não a integração. O que não deu para exercitar é pendência que bloqueia (§14, "A pendência deliberada é julgada"), com o passo que a fecha.
 
 | Em vez de | Faça |
 |-----------|------|
