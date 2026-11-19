@@ -42,6 +42,7 @@ npm run install:all
 npm --prefix back run dev
 npm --prefix front run dev
 npm test
+npm run lint:changed   # the AGENTS.md rules a machine can check, on the lines your branch adds
 ```
 
 You need Docker locally to exercise the runner paths end to end; the unit tests mock the host
