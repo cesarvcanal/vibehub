@@ -101,7 +101,7 @@ O que o autor afirma: git log origin/main..HEAD
 | [`AGENTS.md`](../AGENTS.md) | Regras do projeto, para qualquer agente (fonte única) |
 | `.claude/CLAUDE.md` (este) | Como o Claude Code trabalha: skills, ordem, ferramentas, subagentes |
 | [`eslint.config.js`](../eslint.config.js) | A parte do `AGENTS.md` que a máquina checa, rodada por `npm run lint:changed` |
-| [`CONTRIBUTING.md`](../CONTRIBUTING.md) | Resumo público para contribuidores externos; não pode contradizer o `AGENTS.md` |
+| [`CONTRIBUTING.md`](../CONTRIBUTING.md) | Porta para contribuidores externos: aponta para o `AGENTS.md`, sem repetir regra |
 | [`docs/`](../docs) | Artefatos pontuais (planos, specs), não canônicos |
 | `CLAUDE.local.md` (raiz da worktree) | Instruções do projeto escritas pelo vibehub em cada card; a seção `## Aprendizados` recebe o que o `vibehub_brain_learn` descobre. Não versionado |
 | Cérebro (`CLAUDE.md` do perfil) | Instruções globais do runner, editadas na aba Dev → Cérebro. Não versionado |

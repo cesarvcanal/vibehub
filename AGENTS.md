@@ -8,7 +8,7 @@
 >
 > **Regra de aplicação:** as regras gerais são **independentes do domínio** e não presumem entidades, telas ou fluxos de um módulo. As referências a arquivos do vibehub são exemplos e pontos de entrada; os contratos reais saem da inspeção do trecho modificado (§12, passo 1). **Cada regra vale pelo princípio, não pela lista de exemplos:** caso não citado se resolve pelo espírito da regra mais próxima, e na dúvida se pergunta (§12, "Como perguntar ao usuário").
 >
-> **Fonte única:** este arquivo é a fonte das regras de código, de teste, de commit e de PR. O `CONTRIBUTING.md` é o resumo para contribuidores externos e não pode contradizê-lo; o `.claude/CLAUDE.md` diz só como o Claude Code executa estas regras.
+> **Fonte única:** este arquivo é a fonte das regras de código, de teste, de commit e de PR. O `CONTRIBUTING.md` é a porta para contribuidores externos: aponta para este arquivo e não repete regra; o `.claude/CLAUDE.md` diz só como o Claude Code executa estas regras.
 
 ## 1. Regras inegociáveis
 
