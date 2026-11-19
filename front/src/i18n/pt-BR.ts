@@ -1522,7 +1522,6 @@ export const ptBR: Record<string, string> = {
   "analysis.finding.proof": "Prova",
   "analysis.finding.fix": "Como resolver",
   "analysis.finding.fixedIn": "corrigido em {commit}",
-  "analysis.finding.fixed": "corrigido",
   "analysis.finding.awaitingDecision": "esperando decisão",
   "analysis.finding.open": "aberto",
   "analysis.fleet.title": "A frota de agentes não rodou neste card",

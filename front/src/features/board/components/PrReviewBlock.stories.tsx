@@ -45,10 +45,12 @@ function SeededAnalysis({ answer, children }: { answer: CardAnalysisResponse; ch
   return ready ? <>{children}</> : null;
 }
 
-const fixedFinding: AnalysisFinding = {
-  id: "f1", severity: "blocking", dimension: "tests", status: "fixed", commit: "abc1234", title: "t", problem: "p", fix: "x",
+const openFinding: AnalysisFinding = {
+  id: "f1", severity: "blocking", dimension: "tests", status: "open", title: "t", problem: "p", fix: "x",
   proof: { kind: "failing_test", ref: "a.test.ts" },
 };
+
+const fixedFinding: AnalysisFinding = { ...openFinding, status: "fixed", commit: "abc1234" };
 
 const analysisReport = (over: Partial<AnalysisReport> = {}): AnalysisReport => ({
   cardId: "c1", prUrl: PR.url, prNumber: PR.number, analysedSha: "b".repeat(40), stage: "done", summary: "s", refutedCount: 2, updatedAt: 1,
@@ -70,7 +72,7 @@ const analysisStory = (name: string, answer: CardAnalysisResponse, cardWorking =
 export const AnaliseAnalisando = analysisStory("Análise · a frota está rodando", { analysis: null }, true);
 export const AnaliseSemRelatorio = analysisStory("Análise · card parou sem relatório", { analysis: null });
 export const AnaliseCorrigindo = analysisStory("Análise · depois do juiz, corrigindo", {
-  analysis: analysisReport({ stage: "analysed", findings: [{ ...fixedFinding, status: "open", commit: undefined }] }),
+  analysis: analysisReport({ stage: "analysed", findings: [openFinding] }),
   health: { ...healthOk, tests: "problem" },
   verdict: "pending",
   uncheckedDimensions: [],

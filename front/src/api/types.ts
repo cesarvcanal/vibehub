@@ -782,11 +782,10 @@ export type AnalysisSeverity = Exclude<FindingSeverity, "refuted">;
 export type DimensionHealth = "ok" | "attention" | "problem" | "not_run" | "skipped";
 export type AnalysisVerdict = "apt" | "not_apt" | "pending";
 
-export type AnalysisFinding = Pick<Finding, "id" | "title" | "problem" | "file" | "line" | "proof" | "fix" | "commit"> & {
+export type AnalysisFinding = Pick<Finding, "id" | "title" | "problem" | "file" | "line" | "proof" | "fix"> & {
   severity: AnalysisSeverity;
   dimension: AnalysisDimension;
-  status: "open" | "fixed";
-};
+} & ({ status: "open" } | { status: "fixed"; commit: string });
 
 export interface DimensionRun {
   key: AnalysisDimension;

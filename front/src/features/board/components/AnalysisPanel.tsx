@@ -123,7 +123,7 @@ function AnalysisBody({ read }: { read: AnalysisReadModel }) {
 }
 
 function findingStatusText(finding: AnalysisFinding, t: Translate): string {
-  if (finding.status === "fixed") return finding.commit ? t("analysis.finding.fixedIn", { commit: finding.commit }) : t("analysis.finding.fixed");
+  if (finding.status === "fixed") return t("analysis.finding.fixedIn", { commit: finding.commit });
   return finding.severity === "question" ? t("analysis.finding.awaitingDecision") : t("analysis.finding.open");
 }
 

@@ -22,9 +22,13 @@ const readModel = (
 
 const loaded = (data: CardAnalysisResponse) => ({ status: "success" as const, data });
 
-const finding = (over: Partial<AnalysisFinding> = {}): AnalysisFinding => ({
+type FindingFields = Partial<Pick<AnalysisFinding, "id" | "severity" | "title" | "dimension">>;
+
+const openFinding = (over: FindingFields = {}): AnalysisFinding => ({
   id: "f1", severity: "blocking", title: "t", dimension: "tests", status: "open", ...over,
 });
+
+const fixedFinding = (over: FindingFields = {}): AnalysisFinding => ({ ...openFinding(over), status: "fixed", commit: "abc1234" });
 
 describe("pílula da análise na linha da PR", () => {
   it.each([
@@ -40,15 +44,15 @@ describe("pílula da análise na linha da PR", () => {
     expect(analysisPill(loaded({ analysis: null }), { cardWorking })).toMatchObject({ key, tone });
   });
   it("depois do juiz: conta os achados e diz que está corrigindo", () => {
-    const pill = analysisPill(loaded(readModel({ findings: [finding(), finding({ id: "f2" })] }, "pending", { tests: "problem" })), { cardWorking: true });
+    const pill = analysisPill(loaded(readModel({ findings: [openFinding(), openFinding({ id: "f2" })] }, "pending", { tests: "problem" })), { cardWorking: true });
     expect(pill).toMatchObject({ key: "analysis.pill.fixing", vars: { n: 2 }, tone: "info" });
   });
   it("concluída e apta: conta os corrigidos", () => {
-    const pill = analysisPill(loaded(readModel({ stage: "done", findings: [finding({ status: "fixed" })] }, "apt")), { cardWorking: false });
+    const pill = analysisPill(loaded(readModel({ stage: "done", findings: [fixedFinding()] }, "apt")), { cardWorking: false });
     expect(pill).toMatchObject({ key: "analysis.pill.apt", vars: { n: 1 }, tone: "ok" });
   });
   it("concluída e não apta: conta os bloqueantes abertos", () => {
-    const findings = [finding(), finding({ id: "f2", status: "fixed" }), finding({ id: "f3", severity: "question" })];
+    const findings = [openFinding(), fixedFinding({ id: "f2" }), openFinding({ id: "f3", severity: "question" })];
     const pill = analysisPill(loaded(readModel({ stage: "done", findings }, "not_apt", { tests: "problem" })), { cardWorking: false });
     expect(pill).toMatchObject({ key: "analysis.pill.notApt", vars: { n: 1 }, tone: "critical" });
   });
@@ -65,7 +69,7 @@ describe("pílula da análise na linha da PR", () => {
     const dimensions: AnalysisReport["dimensions"] = ANALYSIS_DIMENSIONS.map((key) => (
       key === "tests" ? { key, status: "ran" as const, unverifiedCount: 1 } : { key, status: "ran" as const }
     ));
-    const findings = [finding({ status: "fixed", commit: "abc1234" }), finding({ id: "f2", severity: "question", dimension: "security" })];
+    const findings = [fixedFinding(), openFinding({ id: "f2", severity: "question", dimension: "security" })];
     const read = readModel({ stage: "done", dimensions, findings }, "not_apt", { security: "attention", tests: "attention" }, ["tests"]);
     expect(analysisPill(loaded(read), { cardWorking: false })).toMatchObject({ key: "analysis.pill.notAptQuestions", vars: { n: 1 }, tone: "critical" });
   });

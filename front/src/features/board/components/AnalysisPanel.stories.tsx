@@ -11,11 +11,13 @@ const ALL_OK: AnalysisReadModel["health"] = {
   correctness: "ok", security: "ok", performance: "ok", contracts: "ok", tests: "ok", repoRules: "ok",
 };
 
-const fixedBlocking: AnalysisFinding = {
-  id: "f1", severity: "blocking", dimension: "correctness", status: "fixed", commit: "9f3e2c1",
+const openSessionExpiry: AnalysisFinding = {
+  id: "f1", severity: "blocking", dimension: "correctness", status: "open",
   title: "Sessão SSO não expira junto com o token", problem: "Quem perde o acesso no provedor continua logado no vibehub.",
   file: "back/src/auth/sso.ts", line: 84, proof: { kind: "failing_test", ref: "sso.test.ts" }, fix: "Gravar expiresAt na sessão e conferir em cada request.",
 };
+
+const fixedBlocking: AnalysisFinding = { ...openSessionExpiry, status: "fixed", commit: "9f3e2c1" };
 
 const openBlocking: AnalysisFinding = {
   id: "f2", severity: "blocking", dimension: "security", status: "open",
@@ -109,7 +111,7 @@ export const Corrigindo: Story = {
   name: "Depois do juiz · corrigindo",
   parameters: {
     analysis: readModel(
-      report({ stage: "analysed", findings: [{ ...fixedBlocking, status: "open", commit: undefined }, openQuestion] }),
+      report({ stage: "analysed", findings: [openSessionExpiry, openQuestion] }),
       "pending",
       { correctness: "problem", security: "attention" },
     ),

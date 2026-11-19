@@ -1510,7 +1510,6 @@ export const en: Record<string, string> = {
   "analysis.finding.proof": "Proof",
   "analysis.finding.fix": "How to fix",
   "analysis.finding.fixedIn": "fixed in {commit}",
-  "analysis.finding.fixed": "fixed",
   "analysis.finding.awaitingDecision": "awaiting decision",
   "analysis.finding.open": "open",
   "analysis.fleet.title": "The agent fleet did not run on this card",
