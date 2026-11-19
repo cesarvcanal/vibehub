@@ -8,7 +8,7 @@ const LINTED_PATHS = [":(glob)**/*.ts", ":(glob)**/*.tsx", ":(glob)**/*.mjs", ":
 const EVERY_LINE = "every-line";
 
 function git(repoDir, ...args) {
-  return execFileSync("git", ["-c", "core.quotePath=false", ...args], { cwd: repoDir, encoding: "utf8" });
+  return execFileSync("git", ["-c", "core.quotePath=false", ...args], { cwd: repoDir, encoding: "utf8", maxBuffer: Infinity });
 }
 
 function readChangedLines(repoDir, baseRef) {

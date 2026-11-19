@@ -88,6 +88,17 @@ describe("lintChangedLines", () => {
     expect(reportedLines(repoDir, results)).toEqual(["back/src/legacy.ts:4 no-var"]);
   });
 
+  it("diff acima de 1 MiB, o buffer padrão do execFileSync, ainda é lido e reprovado", async () => {
+    const repoDir = createRepoWithBase({ "README.md": "base\n" });
+    writeRepoFile(repoDir, "back/src/big.ts", `export const big = "${"x".repeat(2 * 1024 * 1024)}";\nvar added = 1;\nexport { added };\n`);
+    git(repoDir, "add", ".");
+    git(repoDir, "commit", "-qm", "change");
+
+    const results = await lintChangedLines({ repoDir, baseRef: "main" });
+
+    expect(reportedLines(repoDir, results)).toEqual(["back/src/big.ts:2 no-var"]);
+  });
+
   it("erro de sintaxe reprova mesmo fora das linhas novas", async () => {
     const repoDir = createRepoWithBase({ "back/src/broken.ts": "export const broken = (;\n" });
     writeRepoFile(repoDir, "back/src/broken.ts", "export const broken = (;\nexport const added = 1;\n");
