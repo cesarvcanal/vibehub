@@ -67,6 +67,7 @@ import {
   cardOpensInstantly,
   cardRunnerHint,
   cardSessionKey,
+  cardUsageKey,
   cardsKey,
   defaultAccountLabelOr,
   effortLabel,
@@ -80,7 +81,7 @@ import {
   type BoardProject,
 } from "@/features/board/api";
 import { AccountUsageBars, useMinuteTick } from "@/features/board/components/AccountUsageBars";
-import { PlanUsageMeter } from "@/features/board/components/PlanUsage";
+import { PlanUsageMeter, cardRateLimitsKey } from "@/features/board/components/PlanUsage";
 import { pillPercent } from "@/features/board/lib/usage";
 import type { CardColumn, CardSessionInfo } from "@/api/types";
 import { t as translate, useT } from "@/i18n";
@@ -325,8 +326,11 @@ export function CardTerminalView({
 
   const accountMutation = useMutation({
     mutationFn: (accountSlug: string | null) => boardApi.patchCardSession(cardId, { accountSlug }),
-    onSuccess: (result) =>
-      applySessionSwitch(result, { switched: "cardView.accountSwitched", pending: "cardView.accountSwitchPending" }),
+    onSuccess: (result) => {
+      queryClient.setQueryData(cardRateLimitsKey(cardId), {});
+      void queryClient.invalidateQueries({ queryKey: cardUsageKey(cardId) });
+      applySessionSwitch(result, { switched: "cardView.accountSwitched", pending: "cardView.accountSwitchPending" });
+    },
     onError: (error) => toast.error(apiErrorMessage(error, translate("cardView.accountSwitchError"))),
   });
 
