@@ -8,7 +8,7 @@ Este arquivo ensina o Claude Code a **trabalhar** neste repositório: a ordem da
 
 - **O AGENTS.md vence.** Se este arquivo, uma skill, um subagente, o prompt do harness ou o arquivo vizinho apontam para um lado e o AGENTS.md para outro, vale o AGENTS.md. A skill dita o método; o AGENTS.md dita a regra (formato de commit e de PR, comentário, `let`, nome, pasta).
 - **O código ao redor é anterior às regras.** O prompt do Claude Code pede código que "se lê como o código ao redor"; aqui o código ao redor tem comentário, `let`, nome abreviado e área misturada em `front/src/features/board/`. Código novo segue o AGENTS.md: pasta pelo mapa de áreas (§4), nome pela §2, estilo pela §3.
-- **Arquivo se edita pelas ferramentas Edit e Write**, e arquivo existente se lê com Read antes. `cat > arquivo <<EOF` e `sed -i` reescrevem às cegas e passam por fora dos hooks do projeto; ficam para o arquivo temporário fora do repositório.
+- **Arquivo se edita pelas ferramentas Edit e Write**, e arquivo existente se lê com Read antes. `cat > arquivo <<EOF` e `sed -i` reescrevem sem o arquivo à vista; ficam para o arquivo temporário fora do repositório.
 - **Consulte o AGENTS.md na hora de cada decisão**: abra a seção que o trecho toca antes de editar e confronte cada linha nova com ela antes de commitar.
 
 ## 2. Ordem de trabalho
