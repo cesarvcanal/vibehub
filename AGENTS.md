@@ -344,26 +344,17 @@ Pedir autorização e passar por brainstorming continua obrigatório para decis�
 
 Toda dúvida que trava a execução e toda discordância com o pedido viram pergunta de **múltipla escolha com saída livre**: o usuário decide com um clique quando uma opção serve, e responde com as próprias palavras quando nenhuma serve.
 
-- **Escreva com as palavras de quem decide.** Quem responde enxerga telas, botões e o que acontece com o trabalho, não o código. Nomeie as coisas como elas aparecem na tela ou como o usuário as chamou na conversa ("o painel da revisão", "a conta Claude do albert ficou sem limite de uso"). Nome de função, arquivo, campo, evento, ferramenta MCP ou status em inglês (`rate_limit rejected`, `startAnalysis`, `vibehub_deliver`) fica no texto técnico de antes da pergunta, nunca na pergunta nem nas opções.
 - **Uma decisão por pergunta.** Várias decisões independentes podem ir juntas, cada uma na sua pergunta. Pergunta que depende da resposta de outra espera essa resposta.
-- **Contexto curto antes, pergunta curta depois.** Antes da pergunta, em até três frases simples: o que foi encontrado e por que a decisão é do usuário. A pergunta em si é uma frase só, com o item nomeado (a tela, o botão, a regra), sem "isso" nem "aquilo" soltos.
-- **De 2 a 4 opções, uma excluindo a outra.** O rótulo diz a escolha em poucas palavras do dia a dia ("Esperar e seguir sozinha"). A descrição, em uma ou duas frases, diz o que a pessoa vai ver acontecer depois de escolher; custo e risco técnico entram só quando mudam a escolha, e em palavras simples. Opção vaga ("depende", "ver depois") não conta.
-- **Mostre antes de pedir aprovação.** Aprovação de tela, texto ou desenho só depois que a pessoa viu: o print, o link que abre ou o trecho colado na própria mensagem. Se o link pode falhar, mande o print junto.
-- **Pergunta que voltou sem resposta foi mal feita.** Quando o usuário diz que não entendeu, ou responde outra coisa, reescreva mais curta e mais simples, com menos opções; não repita a mesma pergunta nem acrescente explicação técnica.
-- **Teste antes de enviar:** quem nunca viu o código entende a pergunta e escolhe em dez segundos? Se precisa reler, simplifique.
+- **A pergunta se entende sozinha.** Ela diz o que foi encontrado, por que a decisão importa e nomeia o item em questão (a tela, o campo, a regra), sem "isso" nem "aquilo" soltos.
+- **De 2 a 4 opções, uma excluindo a outra**, cada uma com rótulo curto e a consequência: o que muda, o custo e o risco. Opção vaga ("depende", "ver depois") não conta.
 - **A recomendada vem primeiro**, marcada como recomendada, com o motivo. Sem recomendação, diga por que as opções empatam.
 - **Sempre há saída livre** ("Outra: descreva").
 - **Pergunta estruturada quando a ferramenta tem**; sem ela, numere as opções no texto e ponha a saída livre por último.
 - **Descubra o que dá para descobrir.** O que o código, a documentação ou este arquivo respondem, o agente descobre e informa; a pergunta fica para a decisão que é do usuário.
 
-| Em vez de | Escreva |
-|-----------|---------|
-| "Quando o turno do revisor acaba recusado por cota (rate_limit rejected, com horário de volta), o que a revisão deve fazer?" | "A conta Claude do albert ficou sem limite de uso no meio da revisão. Quando isso acontecer, a revisão deve:" · "Esperar o limite voltar e seguir sozinha" · "Parar e esperar alguém clicar em Tentar de novo" |
-| "O protótipo da faixa da frota + contra-argumento do verificador + decisão do juiz está aprovado?", com um link que não abriu | O print da tela e: "O painel da revisão fica assim. Pode seguir?" · "Pode" · "Quero mudar (diga o quê)" |
-
 ## 13. Revisão final (antes de entregar)
 
-- [ ] Cada dúvida e cada discordância virou pergunta de múltipla escolha com saída livre, em vez de presunção, escrita com as palavras de quem decide e sem nome de código?
+- [ ] Cada dúvida e cada discordância virou pergunta de múltipla escolha com saída livre, em vez de presunção?
 - [ ] Resolvi o problema sem voltas, camadas ou abstrações artificiais?
 - [ ] Nomes em inglês, legíveis sem abrir a implementação, e todo texto de tela no i18n nos dois idiomas?
 - [ ] Só `const` nas linhas novas (ou o estado vivo justificado no PR), sem `var`, comentário fora das exceções da §3 nem código morto?
