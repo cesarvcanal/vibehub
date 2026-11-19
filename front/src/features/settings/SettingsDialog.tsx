@@ -390,7 +390,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               <textarea
                 id="settings-transcribe-keywords"
                 value={transcribeKeywords}
-                onChange={(e) => setTranscribeKeywords(e.target.value)}
+                onChange={(event) => setTranscribeKeywords(event.target.value)}
                 placeholder={t("settings.transcribeKeywordsPlaceholder")}
                 rows={3}
                 spellCheck={false}

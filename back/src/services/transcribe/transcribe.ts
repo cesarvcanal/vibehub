@@ -213,6 +213,6 @@ export async function transcribeAudioFile(audio: Buffer, fileName: string): Prom
   const openaiKey = await secretGet(OPENAI_KEY);
   if (!openaiKey) throw new Error("transcrição não configurada: falta a chave da OpenAI em Configurações");
   const settings = await getSettings();
-  const hints = { language: settings.transcribeLanguage ?? null, keywords: settings.transcribeKeywords };
+  const hints = { language: settings.transcribeLanguage, keywords: settings.transcribeKeywords };
   return await requestTranscription(openaiKey, audio, "application/octet-stream", hints, fileName, AUDIO_FILE_TIMEOUT_MS);
 }

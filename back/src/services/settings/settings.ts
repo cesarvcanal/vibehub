@@ -80,10 +80,10 @@ export const TRANSCRIBE_KEYWORD_MAX_CHARS = 60;
 const KEYWORD_FORBIDDEN_RE = /[<>\r\n]/;
 
 function normalizeTranscribeKeywords(keywords: unknown): string[] {
-  if (!Array.isArray(keywords) || keywords.some((keyword) => typeof keyword !== "string")) {
+  if (!Array.isArray(keywords) || !keywords.every((keyword): keyword is string => typeof keyword === "string")) {
     throw new Error("transcribeKeywords must be a list of terms");
   }
-  const terms = (keywords as string[]).map((keyword) => keyword.trim()).filter((keyword) => keyword !== "");
+  const terms = keywords.map((keyword) => keyword.trim()).filter((keyword) => keyword !== "");
   if (terms.length > TRANSCRIBE_KEYWORDS_MAX) throw new Error(`transcribeKeywords takes at most ${TRANSCRIBE_KEYWORDS_MAX} terms`);
   const invalidTerm = terms.find((term) => term.length > TRANSCRIBE_KEYWORD_MAX_CHARS || KEYWORD_FORBIDDEN_RE.test(term));
   if (invalidTerm !== undefined) {

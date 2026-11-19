@@ -81,14 +81,9 @@ describe("SettingsDialog", () => {
     ["acrescenta um termo", "vibehub, Qive", ", Mussa", ["vibehub", "Qive", "Mussa"]],
     ["apaga todos os termos", "vibehub", null, []],
   ])("termos da transcrição: %s e manda a lista no patch", async (_case, stored, typed, expected) => {
-    get.mockImplementation(async (url: string) => {
-      if (url === "/settings") return { ...SETTINGS, transcribeKeywords: stored.split(", ") };
-      if (url === "/github") return { connections: [] };
-      if (url === "/transcribe") return { available: true, proofread: false, language: "pt" };
-      if (url === "/credentials") return { credentials: [] };
-      if (url === "/projects") return { projects: [] };
-      throw new Error(`unexpected ${url}`);
-    });
+    const defaultGet = get.getMockImplementation()!;
+    get.mockImplementation(async (url: string) =>
+      url === "/settings" ? { ...SETTINGS, transcribeKeywords: stored.split(", ") } : defaultGet(url));
     patch.mockResolvedValue(SETTINGS);
     renderApp(<SettingsDialog open onOpenChange={() => {}} />);
     const keywordsField = await screen.findByLabelText("Transcription terms");
