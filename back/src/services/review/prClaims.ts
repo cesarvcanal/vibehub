@@ -16,7 +16,7 @@ interface Viewer {
 
 interface Room {
   viewers: Set<Viewer>;
-  holders: Map<number, { claim: PrClaim; viewer: Viewer }>;
+  holders: Map<number, { claim: PrClaim; viewers: Set<Viewer> }>;
 }
 
 export interface PrRoomSeat {
@@ -42,21 +42,30 @@ export function joinPrRoom(projectId: string, user: PublicUser, send: (event: Pr
   room.viewers.add(viewer);
   send({ type: "claims", claims: claimsOf(room) });
 
-  const heldPrs = (): number[] => [...room.holders].filter(([, holder]) => holder.viewer === viewer).map(([prNumber]) => prNumber);
+  const heldPrs = (): number[] => [...room.holders].filter(([, holder]) => holder.viewers.has(viewer)).map(([prNumber]) => prNumber);
+  const dropViewer = (prNumber: number): void => {
+    const holder = room.holders.get(prNumber);
+    holder?.viewers.delete(viewer);
+    if (holder?.viewers.size === 0) room.holders.delete(prNumber);
+  };
   const release = (prNumber: number): void => {
-    if (room.holders.get(prNumber)?.viewer !== viewer) return;
-    room.holders.delete(prNumber);
+    if (!room.holders.get(prNumber)?.viewers.has(viewer)) return;
+    dropViewer(prNumber);
     broadcast(room, { type: "claims", claims: claimsOf(room) });
   };
   return {
     claim: (prNumber) => {
       const current = room.holders.get(prNumber);
-      const otherPersonsClaim = current && current.claim.userId !== user.id ? current.claim : null;
-      for (const heldPr of heldPrs()) room.holders.delete(heldPr);
-      const claim = otherPersonsClaim ?? { prNumber, userId: user.id, username: user.username };
-      if (!otherPersonsClaim) room.holders.set(prNumber, { claim, viewer });
+      for (const heldPr of heldPrs()) dropViewer(heldPr);
+      if (current && current.claim.userId !== user.id) {
+        broadcast(room, { type: "claims", claims: claimsOf(room) });
+        return current.claim;
+      }
+      const holder = room.holders.get(prNumber) ?? { claim: { prNumber, userId: user.id, username: user.username }, viewers: new Set<Viewer>() };
+      holder.viewers.add(viewer);
+      room.holders.set(prNumber, holder);
       broadcast(room, { type: "claims", claims: claimsOf(room) });
-      return claim;
+      return holder.claim;
     },
     release,
     leave: () => {

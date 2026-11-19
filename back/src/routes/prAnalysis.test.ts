@@ -319,6 +319,26 @@ describe("WS /api/projects/:id/prs/live", () => {
     memberLive.socket.terminate();
   });
 
+  it("a trava é da pessoa: com duas abas montando a mesma PR, ela só solta quando a última aba solta ou fecha", async () => {
+    const w = await world();
+    await w.shareProject("work");
+    const firstTab = await live(w.member, w.projectId);
+    const secondTab = await live(w.member, w.projectId);
+    const ownerLive = await live(w.owner, w.projectId);
+    firstTab.send({ type: "claim", prNumber: 636 });
+    secondTab.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(secondTab.lastClaims()).toHaveLength(1));
+    secondTab.send({ type: "release", prNumber: 636 });
+    secondTab.socket.terminate();
+    ownerLive.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(ownerLive.frames).toContainEqual({ type: "claim-refused", prNumber: 636, username: "albert" }));
+    firstTab.socket.terminate();
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toEqual([]));
+    ownerLive.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toEqual([{ prNumber: 636, userId: w.ownerId, username: "owner" }]));
+    ownerLive.socket.terminate();
+  });
+
   it("cada conexão monta uma PR por vez: travar outra solta a anterior, mesmo quando a nova é recusada", async () => {
     const w = await world();
     await w.shareProject("work");
