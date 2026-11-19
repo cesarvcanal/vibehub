@@ -1558,6 +1558,20 @@ describe("board registry (persisted)", () => {
       await expect(reg.createAccount({ name: "!" })).rejects.toThrow(/invalid account name/);
     });
 
+    it("renomear a conta muda só o nome exibido: o slug, que é a pasta do perfil, continua o mesmo", async () => {
+      await reg.createAccount({ name: "tech" });
+      const renamed = await reg.renameAccount("tech", "  César (tech)  ");
+      expect(renamed).toMatchObject({ slug: "tech", name: "César (tech)" });
+      expect(await reg.listAccounts()).toEqual([expect.objectContaining({ slug: "tech", name: "César (tech)" })]);
+    });
+
+    it("renomear recusa nome vazio e conta que não existe", async () => {
+      await reg.createAccount({ name: "tech" });
+      await expect(reg.renameAccount("tech", "   ")).rejects.toThrow(/name is required/);
+      await expect(reg.renameAccount("ghost", "x")).rejects.toThrow(/account not found/);
+      expect((await reg.listAccounts())[0].name).toBe("tech");
+    });
+
     it("removes an unreferenced account; an unknown one throws", async () => {
       await reg.createAccount({ name: "temp one" });
       expect((await reg.removeAccount("temp-one")).slug).toBe("temp-one");

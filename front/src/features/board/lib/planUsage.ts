@@ -132,6 +132,10 @@ export function planWindows(
   return out;
 }
 
+export function reportsNoSession(usage: AccountUsage | undefined, windows: readonly PlanWindow[]): boolean {
+  return Boolean(usage?.available) && !windows.some((planWindow) => planWindow.key === "five_hour");
+}
+
 /**
  * The WEEKLY window (all models) — the number the top meter shows: it is the one that says whether
  * the week will close out, and it is the one the owner follows the plan by. Null without a reading. PURE.

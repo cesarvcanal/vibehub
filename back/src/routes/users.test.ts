@@ -427,6 +427,16 @@ describe("what a member cannot reach", () => {
     }
   });
 
+  it("não renomeia conta Claude da instalação", async () => {
+    const owner = await signUpOwner(app);
+    const member = await addMember(app, owner);
+    await app.inject({ method: "POST", url: "/api/accounts", headers: { cookie: owner }, payload: { name: "tech" } });
+    const res = await app.inject({
+      method: "PATCH", url: "/api/accounts/tech", headers: { cookie: member }, payload: { name: "minha" },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
   it("cannot create or delete projects", async () => {
     const owner = await signUpOwner(app);
     const member = await addMember(app, owner);

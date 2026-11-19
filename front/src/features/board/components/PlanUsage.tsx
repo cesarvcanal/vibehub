@@ -11,6 +11,7 @@ import {
   YELLOW_AT,
   alertSentence,
   planWindows,
+  reportsNoSession,
   resetPhrase,
   usageColor,
   usageTone,
@@ -32,6 +33,12 @@ import { useT } from "@/i18n";
 
 /** A card's live plan warnings, shared between the chat (which receives them) and the top. */
 export const cardRateLimitsKey = (cardId: string) => ["board", "card", cardId, "rateLimits"] as const;
+
+export function setCardPlanUsage(queryClient: QueryClient, cardId: string, reading: CardUsageResponse): void {
+  void queryClient.cancelQueries({ queryKey: cardUsageKey(cardId) });
+  queryClient.setQueryData(cardRateLimitsKey(cardId), {});
+  queryClient.setQueryData(cardUsageKey(cardId), reading);
+}
 
 export function resetCardPlanUsage(queryClient: QueryClient, cardId: string): void {
   queryClient.setQueryData(cardRateLimitsKey(cardId), {});
@@ -223,6 +230,11 @@ export function PlanUsageMeter({
                 : t("usage.loading")}
             </p>
           )}
+          {reportsNoSession(data?.usage, windows) ? (
+            <p data-testid="plan-no-session" className="text-[11px] leading-snug text-muted-foreground">
+              {t("plan.noSessionWindow")}
+            </p>
+          ) : null}
         </div>
         {data?.usage?.available ? (
           <div className="flex items-center justify-between gap-2 border-t border-border/60 px-4 py-2 text-[11px] text-muted-foreground">

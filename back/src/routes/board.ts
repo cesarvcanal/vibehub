@@ -312,6 +312,18 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
+  app.patch<{ Params: { slug: string }; Body: { name?: string } }>(
+    "/api/accounts/:slug",
+    { preHandler: requireOwner },
+    async (req, reply) => {
+      try {
+        return await reply.send({ account: await registry.renameAccount(req.params.slug, req.body?.name ?? "") });
+      } catch (err) {
+        return await sendError(reply, err);
+      }
+    },
+  );
+
   app.delete<{ Params: { slug: string } }>("/api/accounts/:slug", { preHandler: requireOwner }, async (req, reply) => {
     try {
       // A person tied to the account would have their next card born on a profile that is gone.
