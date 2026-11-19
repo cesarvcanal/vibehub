@@ -167,6 +167,7 @@ import { getLanguage, t as translate, useT } from "@/i18n";
 import { SdkCompactionRow } from "@/features/board/components/SdkCompactionRow";
 import { SdkCommandChip } from "@/features/board/components/SdkCommandChip";
 import { invokedCommand, type InvokedCommand } from "@/features/board/lib/slashMenu";
+import { CardFailureNotice } from "@/features/platformFailures/components/CardFailureNotice";
 
 /**
  * NATIVE CHAT (beta) — the card's conversation over the Agent SDK driver, not the tmux transcript.
@@ -1673,6 +1674,7 @@ export function SdkChatView({
         </div>
       ) : null}
       <AccountLoginDialog account={loginAccount} onClose={() => setLoginAccount(null)} />
+      <CardFailureNotice cardId={cardId} notices={state.platformFailures} />
 
       {/* One strip, two messages: who is typing on the left; on the right the plan warning. */}
       <div className="mt-1.5 flex items-center justify-between gap-2">

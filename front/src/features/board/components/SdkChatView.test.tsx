@@ -5664,3 +5664,21 @@ describe("SdkChatView — o login da conta morreu", () => {
     expect(within(alert).queryByRole("button", { name: "Reconnect" })).toBeNull();
   });
 });
+
+describe("SdkChatView — aviso de falha do vibehub no card", () => {
+  it("o retrato do attach mostra o aviso em linguagem leiga, e a falha descartada some", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    expect(screen.queryByTestId("platform-failure-notice")).toBeNull();
+
+    const notice = { id: "f1", source: "agent_report", status: "open", explanation: "The usage meter showed the previous Claude account.", occurrences: 1, firstSeenAt: 1 };
+    ws.deliver({ type: "platform_failures", notices: [notice] });
+    expect(screen.getByTestId("platform-failure-notice")).toHaveTextContent("The usage meter showed the previous Claude account.");
+
+    ws.deliver({ type: "platform_failure", notice: { ...notice, status: "dismissed" } });
+    expect(screen.queryByTestId("platform-failure-notice")).toBeNull();
+  });
+});
+
