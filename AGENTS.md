@@ -344,7 +344,7 @@ Pedir autorização e passar por brainstorming continua obrigatório para decis�
 | `cd back && npx vitest run <arquivo> -t "<caso>"` | Teste do que você tocou (idem em `front/`) |
 | `npm run lint:changed` | ESLint só nas linhas que a branch acrescentou desde a base (`$VIBEHUB_BASE_REF`, padrão `origin/main`), o recorte do gate e do CI |
 | `npm run test:lint` | Testes do próprio lint (a config e as regras locais), quando o PR mexe em `eslint.config.js` ou `scripts/`; o gate não os roda, o CI sim |
-| `npm run test:changed` | Testes afetados pela branch desde a `main`, o recorte do gate |
+| `npm run test:changed` | Testes afetados pela branch desde a base (`$VIBEHUB_BASE_REF`, padrão `origin/main`), o recorte do gate |
 | `npx tsc -b` (em `front/`) · `npx tsc --noEmit` (em `back/`) | Typecheck, o mesmo do CI (§11, passo 2) |
 | `npm run build` | Build de back + front |
 | `npm --prefix front run storybook` | Storybook dos componentes |
