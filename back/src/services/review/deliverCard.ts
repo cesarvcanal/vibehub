@@ -105,10 +105,6 @@ const ANALYSIS_ORDER_FROM_ELSEWHERE =
   "o merge de um card de análise só sai pela ordem dada no chat dele: o próprio card chama o vibehub_deliver com " +
   "from = o id dele. A ordem veio de outro card, então o PR foi atualizado e nada foi mergeado.";
 
-/**
- * An ANALYSIS card (`Card.pushBranch`) told to merge by ANOTHER card: its PR is somebody else's, so the merge
- * follows only the order of whoever spoke to the analysis card itself. The delivery still goes, without the merge.
- */
 async function deliverAnalysisWithoutMerge(cardId: string, opts: DeliverCardOpts): Promise<DeliverResult> {
   const result = await deliver(cardId, { ...opts, authorized: false });
   return result.reason === "unauthorized" ? { ...result, output: ANALYSIS_ORDER_FROM_ELSEWHERE } : result;
