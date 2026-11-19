@@ -613,7 +613,7 @@ Quem revisa (pessoa ou agente) é o **portão do merge**, não um leitor de cort
 |--------|----------|
 | `AGENTS.md` (este) | Todas as regras do projeto, para qualquer agente e pessoa |
 | `.claude/CLAUDE.md` | Como o Claude Code trabalha aqui: ordem das etapas, mapa de skills, subagentes, fechamento e entrega; importa este arquivo e nunca repete regra dele |
-| `.claude/settings.json` | Plugins habilitados, permissões e a profundidade de subagente |
+| `.claude/settings.json` | Plugins habilitados, permissões, a profundidade de subagente e os hooks que rodam o `npm run lint:changed` antes de cada `git commit` e no fim do turno com mudança na worktree; vermelho, o commit é barrado e o turno não termina |
 | `eslint.config.js` | A parte deste arquivo que a máquina checa (`npm run lint:changed`) |
 | `README.md`, `SECURITY.md` | Páginas públicas do repositório, sem regra de desenvolvimento |
 | `back/src/services/brain/personas/*.md` | Instruções que o servidor MCP do vibehub entrega a todo card, código do produto |

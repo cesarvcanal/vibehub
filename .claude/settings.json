@@ -11,6 +11,30 @@
       "Bash(gh pr checks *)"
     ]
   },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git commit*)",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && { npm run -s lint:changed 1>&2 || { echo 'Commit barrado: o npm run lint:changed está vermelho. Corrija as linhas apontadas acima conforme o AGENTS.md e commite de novo.' 1>&2; exit 2; }; }"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && { [ -z \"$(git status --porcelain)\" ] || npm run -s lint:changed 1>&2 || { echo 'Turno não encerrado: há mudança na worktree e o npm run lint:changed está vermelho. Corrija as linhas apontadas acima conforme o AGENTS.md antes de terminar.' 1>&2; exit 2; }; }"
+          }
+        ]
+      }
+    ]
+  },
   "enabledPlugins": {
     "superpowers@claude-plugins-official": true,
     "feature-dev@claude-plugins-official": true,
