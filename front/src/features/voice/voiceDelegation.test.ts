@@ -28,7 +28,7 @@ describe("delegationRequest", () => {
     const request = delegationRequest(long)!;
     expect(request).toContain("frase 59");
     expect(request).not.toContain("frase 0 ");
-    expect(request.length).toBeLessThan(DELEGATION_TRANSCRIPT_MAX_CHARS + 400);
+    expect(request.length).toBeLessThan(DELEGATION_TRANSCRIPT_MAX_CHARS + 600);
     expect(delegationRequest([turn("assistant", "Olá!", 1)])).toBeNull();
     expect(delegationRequest([turn("user", "   ", 1)])).toBeNull();
   });

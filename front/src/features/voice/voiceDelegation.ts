@@ -14,7 +14,8 @@ export const DELEGATION_TRANSCRIPT_MAX_CHARS = 3_000;
 
 /** Progress, silent: the voice knows the work started and must not invent its result. */
 export const DELEGATION_STARTED =
-  "Pedido passado ao agente do card (Claude Code), que está trabalhando nele. Não invente o resultado: ele chega como atualização desta tarefa.";
+  "Pedido entregue com urgência ao agente do card (Claude Code): ele para o que está fazendo para atender. Ele ainda não foi feito: " +
+  "não diga que fez nem invente o resultado, e não narre outra coisa até o resultado desta tarefa chegar.";
 /** Results, spoken: the outcomes that are not the agent's answer. */
 export const DELEGATION_UNHEARD = "Você não ouviu um pedido da pessoa: pergunte, em poucas palavras, o que ela quer.";
 export const DELEGATION_NOT_SENT =
@@ -39,7 +40,8 @@ export function delegationRequest(turns: VoiceTurn[]): string | null {
   return [
     `[pedido por voz]\n${asked.text.trim()}`,
     `Transcrição recente da chamada de voz (pode ter erros de transcrição):\n${lines.reverse().join("\n")}`,
-    "Responda curto e direto: a voz vai falar a sua resposta para a pessoa.",
+    "Urgente: a pessoa está esperando na chamada. Se estiver no meio de outra tarefa, pare o que está fazendo, atenda este pedido " +
+      "primeiro (responda ou execute, com as suas ferramentas) e encerre o turno com a resposta, curta e direta: a voz vai falá-la para a pessoa.",
   ].join("\n\n");
 }
 
