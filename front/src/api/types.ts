@@ -848,6 +848,34 @@ export interface AnalysisReadModel {
 
 export type CardAnalysisResponse = AnalysisReadModel | { analysis: null };
 
+export interface AnalysisConversationAgent {
+  id: string;
+  label: string;
+  phase: string;
+  status: "running" | "done";
+  modelLabel?: string;
+}
+
+export interface AnalysisConversationItem {
+  agentId: string;
+  at: number;
+  kind: "tool" | "text" | "thinking" | "result";
+  tool?: string;
+  target?: string;
+  text?: string;
+}
+
+export interface AnalysisConversation {
+  runId: string;
+  finished: boolean;
+  agents: AnalysisConversationAgent[];
+  items: AnalysisConversationItem[];
+}
+
+export interface AnalysisConversationResponse {
+  conversation: AnalysisConversation | null;
+}
+
 /** A finding a line of the conversation is about, with what that side said of it AT THAT moment. */
 export interface ReviewEventItem {
   id: string;

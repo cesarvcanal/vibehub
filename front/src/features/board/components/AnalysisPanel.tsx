@@ -6,12 +6,15 @@ import {
   ANALYSIS_DIMENSIONS, type AnalysisFinding, type AnalysisReadModel, type AnalysisSeverity, type AnalysisVerdict,
   type DimensionHealth,
 } from "@/api/types";
-import { PanelFrame } from "@/features/board/components/ReviewPanelView";
+import * as React from "react";
+import { AnalysisConversation } from "@/features/board/components/AnalysisConversation";
+import { PanelFrame, TabButton } from "@/features/board/components/ReviewPanelView";
 import { boardApi } from "@/features/board/api";
 import { cardAnalysisKey } from "@/features/board/lib/analysis";
 import { useCardAnalysis } from "@/features/board/lib/useCardAnalysis";
 import { apiErrorMessage } from "@/lib/apiError";
 import { useT, type Translate } from "@/i18n";
+import { cn } from "@/lib/utils";
 
 const SEVERITY_ORDER: readonly AnalysisSeverity[] = ["blocking", "improvement", "question", "suggestion"];
 
@@ -28,6 +31,7 @@ const VERDICT_TONE: Record<AnalysisVerdict, BadgeTone> = { apt: "ok", not_apt: "
 export function AnalysisPanel({ cardId, onClose }: { cardId: string; onClose: () => void }) {
   const t = useT();
   const analysisQuery = useCardAnalysis(cardId, { enabled: true });
+  const [tab, setTab] = React.useState<"report" | "conversation">("report");
   const read = analysisQuery.data;
   const header = (
     <div className="flex shrink-0 items-start gap-2">
@@ -48,11 +52,22 @@ export function AnalysisPanel({ cardId, onClose }: { cardId: string; onClose: ()
 
   return (
     <PanelFrame label={t("analysis.panel.label")} header={header}>
-      {analysisQuery.isPending ? <p className="text-xs text-muted-foreground">{t("common.loading")}</p> : null}
-      {analysisQuery.isError ? <p className="text-xs text-destructive">{apiErrorMessage(analysisQuery.error)}</p> : null}
-      {read && !read.analysis ? <p className="text-xs text-muted-foreground">{t("analysis.panel.empty")}</p> : null}
       {read?.analysis ? <AnalysisMerge cardId={cardId} read={read} /> : null}
-      {read?.analysis ? <AnalysisBody read={read} /> : null}
+      <div role="tablist" aria-label={t("analysis.panel.label")} className="flex shrink-0 gap-1 rounded-md border border-border/60 bg-background/40 p-0.5">
+        <TabButton active={tab === "report"} onClick={() => setTab("report")}>{t("analysis.tab.report")}</TabButton>
+        <TabButton active={tab === "conversation"} onClick={() => setTab("conversation")}>{t("analysis.tab.conversation")}</TabButton>
+      </div>
+      <div role="tabpanel" hidden={tab !== "report"} className={cn("min-h-0 flex-1 flex-col gap-3", tab === "report" ? "flex" : "hidden")}>
+        {analysisQuery.isPending ? <p className="text-xs text-muted-foreground">{t("common.loading")}</p> : null}
+        {analysisQuery.isError ? <p className="text-xs text-destructive">{apiErrorMessage(analysisQuery.error)}</p> : null}
+        {read && !read.analysis ? <p className="text-xs text-muted-foreground">{t("analysis.panel.empty")}</p> : null}
+        {read?.analysis ? <AnalysisBody read={read} /> : null}
+      </div>
+      {tab === "conversation" ? (
+        <div role="tabpanel" className="flex min-h-0 flex-1 flex-col">
+          <AnalysisConversation cardId={cardId} />
+        </div>
+      ) : null}
     </PanelFrame>
   );
 }

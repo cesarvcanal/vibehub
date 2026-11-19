@@ -2,6 +2,7 @@ import type { BadgeTone } from "@/components/ui/badge";
 import type { CardAnalysisResponse } from "@/api/types";
 
 export const cardAnalysisKey = (cardId: string) => ["card-analysis", cardId] as const;
+export const cardAnalysisConversationKey = (cardId: string) => ["card-analysis-conversation", cardId] as const;
 
 const ANALYSIS_REPORT_TOOL = "vibehub_analysis_report";
 

@@ -1,5 +1,5 @@
 import { CheckCircle2, Loader2 } from "lucide-react";
-import type { ReviewFleetAgent, ReviewFleetRun } from "@/api/types";
+import type { ReviewFleetRun } from "@/api/types";
 import { PhasePills } from "@/features/board/components/WorkflowPanel";
 import { agentRole, fleetMessages, type AgentReading, type FleetMessage } from "@/features/board/lib/reviewFleet";
 import { phasePills } from "@/features/board/lib/workflowPanel";
@@ -36,7 +36,7 @@ function FleetRun({ run }: { run: ReviewFleetRun }) {
           <ul className="min-w-0 space-y-0.5">
             {working.map((agent) => (
               <li key={agent.id} data-testid="review-fleet-working" className="min-w-0 text-[11px] text-muted-foreground">
-                <span className="text-foreground/90">{agentName(agent, t)}</span>
+                <span className="text-foreground/90">{fleetAgentName(agent.label, t)}</span>
                 {agent.model ? <span className="ml-1.5 text-muted-foreground/70">{agent.model}</span> : null}
               </li>
             ))}
@@ -56,7 +56,7 @@ function AgentMessage({ message }: { message: FleetMessage }) {
       className={cn("min-w-0 border-l-2 py-0.5 pl-2.5 text-xs", repliesTo ? "ml-4 border-l-violet-400/60" : "border-l-sky-500/40")}
     >
       <p className="text-[11px]">
-        <span className="font-semibold text-foreground/90">{agentName(agent, t)}</span>
+        <span className="font-semibold text-foreground/90">{fleetAgentName(agent.label, t)}</span>
         {agent.model ? <span className="ml-1.5 text-muted-foreground">{agent.model}</span> : null}
       </p>
       {repliesTo ? (
@@ -95,8 +95,8 @@ function ReadingText({ reading }: { reading: AgentReading }) {
   }
 }
 
-function agentName(agent: ReviewFleetAgent, t: Translate): string {
-  const role = agentRole(agent.label);
+export function fleetAgentName(label: string, t: Translate): string {
+  const role = agentRole(label);
   switch (role.kind) {
     case "context":
       return t("review.fleet.agent.context");

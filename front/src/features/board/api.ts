@@ -11,6 +11,7 @@ import type {
   BrainApplyResult,
   BrainWriteResult,
   Card,
+  AnalysisConversationResponse,
   CardAnalysisResponse,
   CardBrowserStatus,
   CardCapture,
@@ -277,6 +278,9 @@ export const boardApi = {
     get<{ people: AnalysisPerson[] }>(`/projects/${encodeURIComponent(id)}/analysis-people`).then((r) => r.people),
 
   readCardAnalysis: (cardId: string) => get<CardAnalysisResponse>(`/cards/${encodeURIComponent(cardId)}/analysis`),
+
+  readAnalysisConversation: (cardId: string) =>
+    get<AnalysisConversationResponse>(`/cards/${encodeURIComponent(cardId)}/analysis/conversation`).then((body) => body.conversation),
 
   mergeCardAnalysis: (cardId: string) => post<unknown>(`/cards/${encodeURIComponent(cardId)}/analysis/merge`),
 
