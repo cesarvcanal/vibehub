@@ -118,6 +118,20 @@ export const Corrigindo: Story = {
   },
 };
 
+const longPathSuggestion: AnalysisFinding = {
+  id: "f17", severity: "suggestion", dimension: "correctness", status: "fixed", commit: "7728910a",
+  title: "Os timers reagendados no boot não respeitam o `stopped` do orquestrador",
+  problem: "`listReviewsWaitingUsageLimit().then(scheduleUsageResume)` roda depois de qualquer stop chamado no mesmo tick.",
+  file: "back/src/services/review/orchestrator.ts", line: 1565,
+  proof: { kind: "scenario", ref: "back/src/services/review/orchestrator.ts:1565-1569 e 1586-1591", detail: "start seguido de stop no mesmo tick" },
+  fix: "Declarar `stopped` antes da leitura e, no `.then`, não agendar se ele já for true.",
+};
+
+export const LongPath: Story = {
+  name: "Caminho longo · sem rolagem lateral",
+  parameters: { analysis: readModel(report({ findings: [fixedBlocking, longPathSuggestion] }), "not_apt") },
+};
+
 export const FrotaIndisponivel: Story = {
   name: "Frota indisponível",
   parameters: {
