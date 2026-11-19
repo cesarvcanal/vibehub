@@ -82,13 +82,14 @@ O comando nativo `/code-review` tem níveis de esforço; o plugin `code-review` 
 
 1. **Simplificação:** subagente `code-simplifier:code-simplifier`, com o pedido de confrontar cada trecho com as regras e aplicar o que simplifica sem mudar comportamento. Confira o que ele escreveu e rode o recorte de testes.
 2. **Code review**, só depois de o primeiro terminar, sobre o diff já simplificado: subagente `general-purpose`, com o pedido de seguir "Como revisar um PR" (§14 do `AGENTS.md`), não mexer no working tree e entregar os achados com severidade e o veredito apto ou não apto. Ele precisa do shell para rodar `git` e os testes que já existem; o teste novo que provaria um achado ele descreve (arquivo, caso e a falha esperada) junto com o cenário, e quem escreve e roda é você. O `feature-dev:code-reviewer` não tem Bash e só serve para uma leitura rápida.
-3. Cada achado se confere na fonte e segue a severidade dele (§14 do `AGENTS.md`, "As severidades"): o que bloqueia se corrige em commit próprio, com o teste que prova o defeito quando ele é de comportamento, ou vira pendência deliberada no PR quando corrigir agora traz mais risco (§14); o que deveria corrigir se aplica em commit próprio; a decisão vira pergunta ao usuário; o menor fica registrado no PR.
+3. Cada achado se confere na fonte e segue a severidade dele (§14 do `AGENTS.md`, "As severidades"): o que bloqueia se corrige em commit próprio, com o teste que prova o defeito quando ele é de comportamento, ou vira pendência deliberada nos Pontos de atenção do PR, nas condições e com o aval da §14 ("A pendência deliberada é julgada"); o que deveria corrigir se aplica em commit próprio; a decisão vira pergunta ao usuário; o menor fica registrado no PR.
 
 ## 7. Entrega
 
 - **Dentro de um card do vibehub, só pelo `vibehub_deliver`:** ele faz push, abre o PR, roda o gate (`.vibehub/gate.json`) e mergeia quando autorizado. `git push` direto do runner dá 403 — é esperado.
 - **Fora do runner**, a entrega segue os passos de "Como publicar" da §14 do `AGENTS.md` com o `gh`.
 - **Merge em `main` é deploy** do vibehub em produção: só com o aval explícito do usuário na conversa.
+- **Antes de `authorized: true`**, releia os Pontos de atenção do PR: havendo pendência que bloqueia sem o aval registrado (§14 do `AGENTS.md`), entregue sem `authorized` e peça o aval daquela pendência.
 
 ## 8. Onde cada coisa vive
 
