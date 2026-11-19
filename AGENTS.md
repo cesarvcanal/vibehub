@@ -561,19 +561,6 @@ com login saudável a tarefa em segundo plano continua protegida.
 - **Testes e CI verdes antes do merge**, sem warning novo no CI.
 - **Revisão independente antes do merge:** o diff passa por um revisor (pessoa ou agente) sem o contexto de quem o escreveu, que recebe só o diff, o PR e este arquivo e segue "Como revisar um PR", abaixo.
 
-### Checklist antes de pedir revisão
-
-Releia o PR como um estranho leria:
-
-- [ ] O contexto, o problema (com a causa raiz, se for bug) e a solução como um todo estão claros, com o desenho curto quando mexe em fluxo ou estrutura?
-- [ ] A seção de conformidade existe, mesmo em PR pequeno ou só de documentação, e cobre cada seção do AGENTS.md que o diff toca?
-- [ ] Todo bloco relevante do diff tem comentário (o quê, por quê, como), e o código ficou sem comentário fora das exceções da §3?
-- [ ] Cada commit segue o formato Gitmoji e, fora os mecânicos, diz o que mudou, por quê e como?
-- [ ] Os impactos, inclusive de performance e o que o deploy exige, estão listados?
-- [ ] Os testes separam o executado do recomendado e mostram o antes e depois?
-- [ ] Os pontos de atenção começam dizendo se o merge tem volta e até onde vai o estrago?
-- [ ] Nada foi inventado, e o que não está confirmado está dito?
-
 ### Como revisar um PR
 
 Quem revisa (pessoa ou agente) é o **portão do merge**, não um leitor de cortesia. Recebe o diff, este arquivo e o que o autor afirma (a descrição do PR, ou as mensagens dos commits quando o PR ainda não existe, como no fechamento da §12), sem a conversa de quem escreveu, e trabalha para **achar o que está errado**, não para confirmar o que o PR diz. "Passa nos testes" não aprova sozinho, e "o autor explicou" não substitui conferir.
