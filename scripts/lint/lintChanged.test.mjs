@@ -45,6 +45,15 @@ describe("lintChangedLines", () => {
     ]);
   });
 
+  it.each(["scripts/e2e/harness.mts", "scripts/tool.cts", "scripts/tool.cjs", "front/src/Legacy.jsx"])("vale também em %s", async (path) => {
+    const repoDir = createRepoWithBase({ "README.md": "base\n" });
+    writeRepoFile(repoDir, path, "var added = 1;\nexport { added };\n");
+
+    const results = await lintChangedLines({ repoDir, baseRef: "main" });
+
+    expect(reportedLines(repoDir, results)).toEqual([`${path}:1 no-var`]);
+  });
+
   it("nada mudado, arquivo apagado e arquivo fora do recorte não reprovam", async () => {
     const repoDir = createRepoWithBase({ "back/src/gone.ts": LEGACY, "back/src/kept.ts": LEGACY });
     git(repoDir, "rm", "-q", "back/src/gone.ts");
