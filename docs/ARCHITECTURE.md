@@ -262,12 +262,14 @@ PROJECT is the standing version of sharing a card: every card in it, including t
 afterwards. A card reached both ways takes the stronger of the two levels, and a share never
 outlives the card, the project, or the person it names.
 
-Four gates carry it, all Fastify preHandlers, and every route wears one: `requireOwner`
-(`auth/session.ts`) for what belongs to the install; `requireCardAccess` (read) and `requireCardWork`
-(change) (`auth/access.ts`) for what belongs to a card; and `requireSession` (`auth/session.ts`) for
-a person's own routes with no card (`/api/me/*`, listings). `auth/access.ts` is also where the board
-listings are narrowed (`visibleProjects`/`visibleCards`), so a member's board is filtered rather than
-refused.
+Four gates carry it, all Fastify preHandlers, and every route that acts for a person wears one:
+`requireOwner` (`auth/session.ts`) for what belongs to the install; `requireCardAccess` (read) and
+`requireCardWork` (change) (`auth/access.ts`) for what belongs to a card; and `requireSession`
+(`auth/session.ts`) for a person's own routes with no card (`/api/me/*`, listings). Routes that act
+for nobody yet or carry their own credential (login, logout and setup, the OAuth metadata, `/mcp`,
+the runner's status hook) wear none and set their trust boundary themselves. `auth/access.ts` is
+also where the board listings are narrowed (`visibleProjects`/`visibleCards`), so a member's board
+is filtered rather than refused.
 
 **What sharing does NOT reach yet: the agent inside the card.** Every card's Claude gets the vibehub
 MCP registered with the RUNNER's token (`services/mcp/mcp.ts`), and that token is install-wide — the
