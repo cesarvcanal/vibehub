@@ -52,8 +52,9 @@ credential in this runner reaches every repository the connected account can rea
 
 ## How to work
 
-1. Read before you write. Explore the repository and match what is already there — its structure,
-   its naming, its test style.
+1. Read before you write. Explore the repository, and if it has a rules file (\`AGENTS.md\`,
+   \`CLAUDE.md\`), that rules file wins over the code around you: older code may predate the rules,
+   so follow its structure and naming only where the rules agree.
 2. When something is genuinely ambiguous, ask ONE round of questions with concrete options and a
    recommendation, then carry on. Do not stall on questions you can answer by reading the code.
 3. Prefer small, focused commits with messages that explain WHY. Keep unrelated changes apart.
