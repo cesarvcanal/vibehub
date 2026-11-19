@@ -39,6 +39,10 @@ describe("entrada da vibehub_analysis_report", () => {
       "only a question is decided: a blocking or an improvement is fixed with its commit or stays open, a suggestion stays open",
     );
   });
+  it("dúvida decidida sem a decisão é recusada com a mensagem que diz o que falta", () => {
+    const withoutDecision = analysisReportInput.safeParse({ ...base, stage: "done", findings: [{ ...blocking, severity: "question", status: "decided" }] });
+    expect(withoutDecision.error?.issues.map((issue) => issue.message)).toContain("a decided question needs the person's decision, in one sentence");
+  });
   it("dúvida que a pessoa decidiu sem mudar código fecha como decidida, com a decisão dela", () => {
     const question = { ...blocking, severity: "question", status: "decided", decision: "fica como está: o cliente pediu assim" };
     expect(analysisReportInput.safeParse({ ...base, stage: "done", findings: [question] }).success).toBe(true);
