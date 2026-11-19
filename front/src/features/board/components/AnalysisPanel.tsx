@@ -144,7 +144,10 @@ function FindingCard({ finding }: { finding: AnalysisFinding }) {
         {finding.proof ? (
           <>
             <dt className="text-muted-foreground">{t("analysis.finding.proof")}</dt>
-            <dd>{`${t(`analysis.proof.${finding.proof.kind}`)} · ${finding.proof.ref}`}</dd>
+            <dd>
+              <span>{`${t(`analysis.proof.${finding.proof.kind}`)} · ${finding.proof.ref}`}</span>
+              {finding.proof.detail ? <span className="block text-foreground/80">{finding.proof.detail}</span> : null}
+            </dd>
           </>
         ) : null}
         {finding.fix ? (

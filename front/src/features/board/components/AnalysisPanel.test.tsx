@@ -107,6 +107,15 @@ describe("painel da análise de PR", () => {
     expect(screen.queryByRole("region", { name: "Sugestões" })).not.toBeInTheDocument();
   });
 
+  it("a prova mostra o detalhe que o achado traz, junto do tipo e da referência", async () => {
+    const [fixedBlocking, openQuestion] = doneReport().findings;
+    const withDetail = { ...fixedBlocking!, proof: { kind: "scenario" as const, ref: "sso.ts:84", detail: "token expirado continua entrando" } };
+    renderPanel(readModel(doneReport({ findings: [withDetail, openQuestion!] }), "not_apt"));
+    const blockers = await screen.findByRole("region", { name: "Bloqueantes" });
+    expect(within(blockers).getByText("cenário · sso.ts:84")).toBeInTheDocument();
+    expect(within(blockers).getByText("token expirado continua entrando")).toBeInTheDocument();
+  });
+
   it("frota indisponível mostra o motivo e o que fazer, sem achado nenhum", async () => {
     renderPanel(readModel(
       doneReport({ stage: "fleet_unavailable", unavailableReason: "the Workflow tool is not available", findings: [], dimensions: [] }),
