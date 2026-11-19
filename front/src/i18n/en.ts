@@ -1459,6 +1459,7 @@ export const en: Record<string, string> = {
   "analysis.openPanel": "Open this PR's analysis",
   "analysis.pill.running": "analysing…",
   "analysis.pill.noReport": "no report",
+  "analysis.pill.readFailed": "could not read the analysis",
   "analysis.pill.fixing.one": "1 finding · fixing",
   "analysis.pill.fixing.other": "{n} findings · fixing",
   "analysis.pill.apt.one": "apt · 1 fixed",

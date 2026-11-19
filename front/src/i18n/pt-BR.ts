@@ -1471,6 +1471,7 @@ export const ptBR: Record<string, string> = {
   "analysis.openPanel": "Abrir a análise deste PR",
   "analysis.pill.running": "analisando…",
   "analysis.pill.noReport": "sem relatório",
+  "analysis.pill.readFailed": "erro ao ler a análise",
   "analysis.pill.fixing.one": "1 achado · corrigindo",
   "analysis.pill.fixing.other": "{n} achados · corrigindo",
   "analysis.pill.apt.one": "apto · 1 corrigido",

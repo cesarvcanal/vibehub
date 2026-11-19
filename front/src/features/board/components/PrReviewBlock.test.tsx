@@ -53,7 +53,7 @@ const aptAnalysis: AnalysisReadModel = {
 /** What the server answers to the live read of the card's review; tests change it between polls. */
 let live: ReviewResponse;
 let reviewGets = 0;
-const analysisServer: { answer: CardAnalysisResponse; reads: number } = { answer: { analysis: null }, reads: 0 };
+const analysisServer: { answer: CardAnalysisResponse | Promise<CardAnalysisResponse>; reads: number } = { answer: { analysis: null }, reads: 0 };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -106,10 +106,28 @@ describe("PrReviewBlock", () => {
     expect(screen.queryByRole("button", { name: "Pedir revisão" })).toBeNull();
   });
 
-  it("card de análise parado e sem relatório diz sem relatório, nunca analisando para sempre", async () => {
+  it("card de análise parado diz carregando enquanto a leitura não chega, e sem relatório só depois que ela diz que não há", async () => {
+    const answerRead: { current?: (answer: CardAnalysisResponse) => void } = {};
+    analysisServer.answer = new Promise<CardAnalysisResponse>((resolve) => {
+      answerRead.current = resolve;
+    });
     renderApp(<PrReviewBlocks card={{ id: "c1", prs: [PR], pushBranch: PR.branch, status: "waiting" }} onOpenPanel={() => {}} />);
 
+    expect(await screen.findByText("Carregando")).toBeInTheDocument();
+    expect(screen.queryByText("sem relatório")).toBeNull();
+
+    act(() => answerRead.current?.({ analysis: null }));
+
     expect(await screen.findByText("sem relatório")).toBeInTheDocument();
+    expect(screen.queryByText("Carregando")).toBeNull();
+  });
+
+  it("leitura da análise que falhou vira pílula de erro, nunca sem relatório", async () => {
+    analysisServer.answer = Promise.reject(new Error("boom"));
+    renderApp(<PrReviewBlocks card={{ id: "c1", prs: [PR], pushBranch: PR.branch, status: "waiting" }} onOpenPanel={() => {}} />);
+
+    expect(await screen.findByText("erro ao ler a análise")).toBeInTheDocument();
+    expect(screen.queryByText("sem relatório")).toBeNull();
   });
 
   it("análise concluída e apta: a pílula conta os corrigidos e a linha abre o painel da análise", async () => {

@@ -12,8 +12,16 @@ export interface AnalysisPill {
   tone: BadgeTone;
 }
 
-export function analysisPill(read: CardAnalysisResponse | undefined, opts: { cardWorking: boolean }): AnalysisPill {
-  if (!read?.analysis) {
+export type AnalysisQueryState =
+  | { status: "pending" }
+  | { status: "error" }
+  | { status: "success"; data: CardAnalysisResponse };
+
+export function analysisPill(analysisQuery: AnalysisQueryState, opts: { cardWorking: boolean }): AnalysisPill {
+  if (analysisQuery.status === "pending") return { key: "common.loading", tone: "muted" };
+  if (analysisQuery.status === "error") return { key: "analysis.pill.readFailed", tone: "critical" };
+  const read = analysisQuery.data;
+  if (!read.analysis) {
     return opts.cardWorking ? { key: "analysis.pill.running", tone: "info" } : { key: "analysis.pill.noReport", tone: "warn" };
   }
   const { analysis, verdict, health } = read;
