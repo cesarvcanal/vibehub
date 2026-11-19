@@ -880,7 +880,7 @@ export function formatAgentResult(raw: string): string {
   try {
     parsed = JSON.parse(text);
   } catch {
-    return text; // cut at 400 characters by the probe, for example
+    return text;
   }
   const one = (value: unknown): string => {
     if (value === null || value === undefined) return "";

@@ -98,6 +98,7 @@ export interface WorkflowFeedItem {
 
 /** How many rounds the probe looks at (the most recent). Two cover "I ran it again to iterate". */
 export const RUNS_PROBED = 2;
+export const AGENT_RESULT_MAX = 4_000;
 /** Cap on subagents LISTED per round — the count (`total`/`done`) is always from the whole journal. */
 const AGENTS_MAX = 200;
 /**
@@ -300,7 +301,7 @@ function main(dir,scriptsDir,settled){
       if(o.type==='result'){
         a.status='done';
         const v=o.result;
-        a.result=(typeof v==='string'?v:JSON.stringify(v==null?'':v)).replace(/\s+/g,' ').slice(0,400);
+        a.result=(typeof v==='string'?v:JSON.stringify(v==null?'':v)).slice(0,${AGENT_RESULT_MAX});
       }
       agents.set(o.agentId,a);
     }
@@ -434,6 +435,7 @@ const STRUCTURED_OUTPUT_MAX = 8_000;
 
 export const FLEET_CONVERSATION_PROBE_JS = PROBE_COMMON_JS + String.raw`
 function str(v){return typeof v==='string'?v:''}
+function speech(b){const t=String(b.text==null?'':b.text).trim().slice(0,${CONVERSATION_TEXT_MAX});return t?{kind:'text',text:t}:null}
 function resultText(c){
   if(typeof c==='string')return c;
   return Array.isArray(c)?c.map(function(b){return b&&b.type==='text'&&b.text||''}).join(' '):'';
@@ -471,7 +473,7 @@ function talkOf(dir,agent){
       if(o.message&&str(o.message.model))model=o.message.model;
       for(const b of blocks(o)){
         const said=b&&b.type==='tool_use'&&b.name==='StructuredOutput';
-        const s=said?{kind:'text',text:flat(JSON.stringify(b.input==null?'':b.input),${STRUCTURED_OUTPUT_MAX})}:step(b,${CONVERSATION_TEXT_MAX});
+        const s=said?{kind:'text',text:flat(JSON.stringify(b.input==null?'':b.input),${STRUCTURED_OUTPUT_MAX})}:b&&b.type==='text'?speech(b):step(b,${CONVERSATION_TEXT_MAX});
         if(s){s.at=at;s.agentId=agent.id;items.push(s)}
       }
     }else if(o.type==='user'){
