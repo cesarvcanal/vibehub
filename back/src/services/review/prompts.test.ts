@@ -271,8 +271,15 @@ describe("prompt da análise de PR", () => {
   it("dúvida respondida sem mudança de código fecha como decided, com a decisão da pessoa, num novo relatório done", async () => {
     const { analysisPrompt } = await import("./prompts.js");
     const text = analysisPrompt(input);
-    expect(text).toMatch(/Quando a pessoa responder uma question[^\n]*corrija e marque fixed com o commit[^\n]*status "decided" e decision[^\n]*grave de novo o relatório done/);
+    expect(text).toMatch(/Quando a pessoa responder uma question[^\n]*status "decided" e decision[^\n]*grave de novo o relatório done/);
     expect(text).toMatch(/stage: "done"[^\n]*"decided" com a decision/);
+  });
+
+  it("dúvida cuja resposta pede mudança é corrigida, entregue e gravada como fixed num novo done, mesmo depois do passo 8", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    expect(analysisPrompt(input)).toMatch(
+      /Quando a pessoa responder uma question: se a resposta pede mudança, corrija como no passo 5, entregue \(passo 7\) e marque fixed com o commit/,
+    );
   });
 
   it("sem Workflow, reporta fleet_unavailable e para, sem análise sozinho no lugar da frota", async () => {

@@ -625,8 +625,9 @@ export function analysisPrompt(a: AnalysisInput): string {
       "atômico por achado. Em bug, escreva antes o teste que reproduz a falha, veja falhar pelo motivo certo, corrija e " +
       "veja passar. question: não mexa; pergunte no chat deste card, com o conflito e as alternativas, e siga com o " +
       "resto. suggestion: só no resumo.",
-    "   Quando a pessoa responder uma question: se a resposta pede mudança, corrija e marque fixed com o commit; se não " +
-      "pede, marque com status \"decided\" e decision (a decisão dela, numa frase) e grave de novo o relatório done (passo 8).",
+    "   Quando a pessoa responder uma question: se a resposta pede mudança, corrija como no passo 5, entregue (passo 7) e " +
+      "marque fixed com o commit; se não pede, marque com status \"decided\" e decision (a decisão dela, numa frase). Nos " +
+      "dois casos, se o done já foi gravado, grave de novo o relatório done (passo 8).",
     ...(a.coauthorTrailer ? [`   Em cada commit, termine a mensagem com esta linha (o crédito do coautor no Git): ${a.coauthorTrailer}`] : []),
     "6. Reconferência: dispare UM subagente novo, sem o seu contexto, para revisar só git diff <sha analisado>..HEAD, " +
       "procurando bug que a própria correção criou. Achado com prova: corrija do mesmo jeito (uma volta a mais, só uma).",
