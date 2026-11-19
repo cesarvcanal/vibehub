@@ -284,7 +284,7 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 
 **Rodar testes no runner: curto, só do que você tocou.** A suíte inteira leva muitos minutos, disputa CPU com os outros cards e costuma ser morta por um deploy.
 
-1. **Enquanto trabalha:** só o arquivo do que mexeu, filtrado pelo caso — `cd back && npx vitest run src/services/sdk/manager.test.ts -t "órfã"`.
+1. **Enquanto trabalha:** só o arquivo do que mexeu, filtrado pelo caso — `cd back && npx vitest run <arquivo> -t "<caso>"` (idem em `front/`).
 2. **Antes de entregar:** `npm run lint:changed` e `npm run test:changed` (raiz), o mesmo recorte do gate (`.vibehub/gate.json`). Junto, o typecheck do pacote tocado, o mesmo do CI:
    - **front:** `npx tsc -b`. O `tsconfig.json` é uma solution com project references, então `tsc --noEmit -p` não checa nada e dá verde falso.
    - **back:** `npx tsc --noEmit`. `tsc -b` emitiria JS em `back/dist`. O `tsconfig.json` do back exclui `*.test.ts`: erro de tipo em teste só aparece ao rodar o teste.
