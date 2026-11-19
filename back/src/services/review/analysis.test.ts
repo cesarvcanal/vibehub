@@ -8,7 +8,7 @@ import type { SendOpts } from "../maestro/maestro.js";
 
 /**
  * PR ANALYSIS — the board is REAL (temporary directory); what leaves the process is mocked at the
- * boundary: GitHub (`listOpenPulls`) and typing into the card (`sendToTerminal`).
+ * boundary: GitHub (`listOpenPulls`), typing into the card (`sendToTerminal`) and the runner (`runScript`).
  */
 
 // The purge after a failed start goes through the whole card teardown: generous under a loaded runner.
@@ -203,10 +203,17 @@ describe("startAnalysis", () => {
       if (script.includes("/root/.vibehub-workflows/pr-analysis.js")) throw new Error("runner fora do ar");
       return { stdout: "", stderr: "" };
     });
+    const events = await import("../events/cardEvents.js");
+    const heard: import("../events/cardEvents.js").CardEvent[] = [];
+    const stop = events.onCardEvent((e) => void heard.push(e));
     const { card, prompt } = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert, reviewerUserId: mussa.id });
     await prompt;
+    stop();
     expect(sendToTerminal).not.toHaveBeenCalled();
     expect((await registry.getCard(card.id))?.column).toBe("done");
+    expect(heard.find((e) => e.cardId === card.id && e.kind === "message")).toMatchObject({
+      messageType: "error", text: expect.stringMatching(/PR #7 não começou.*runner fora do ar/),
+    });
   });
 
   it("repetir a mesma PR devolve o card que já existe, sem outro prompt", async () => {
