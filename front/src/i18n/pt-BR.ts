@@ -1146,6 +1146,7 @@ export const ptBR: Record<string, string> = {
     "Os cards já usam o token guardado de cada conta — não precisa de login pra trabalhar.",
   "accounts.description2":
     "“Fazer login” é só pra ler o uso e o saldo do plano (as barras): opcional, uma vez por conta.",
+  "accounts.accountName": "Nome da conta {slug}",
   "accounts.defaultName": "Nome da conta padrão",
   "accounts.tokenStoredSuffix": " · token guardado",
   "accounts.signIn": "Fazer login",
@@ -1383,6 +1384,8 @@ export const ptBR: Record<string, string> = {
   "toast.githubAdded": "{label} ({login}) adicionada.",
   "toast.githubRemoved": "Conta removida.",
   "toast.voiceKeysUpdated": "Chaves de voz atualizadas.",
+  "toast.accountRenamed": "Conta renomeada.",
+  "toast.accountRenameError": "Não deu pra renomear a conta",
   "toast.defaultAccountRenamed": "Conta padrão renomeada.",
   "toast.defaultAccountRenameError": "Não deu pra renomear a conta padrão",
   "toast.accountCreated": "Conta “{name}” criada ({slug}).",

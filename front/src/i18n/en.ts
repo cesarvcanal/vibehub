@@ -1139,6 +1139,7 @@ export const en: Record<string, string> = {
     "Cards already use each account's stored token — no login is needed to work.",
   "accounts.description2":
     "“Sign in” is only for reading plan usage (the bars): optional, once per account.",
+  "accounts.accountName": "Name of the account {slug}",
   "accounts.defaultName": "Default account name",
   "accounts.tokenStoredSuffix": " · token stored",
   "accounts.signIn": "Sign in",
@@ -1373,6 +1374,8 @@ export const en: Record<string, string> = {
   "toast.githubAdded": "Added {label} ({login}).",
   "toast.githubRemoved": "Account removed.",
   "toast.voiceKeysUpdated": "Voice keys updated.",
+  "toast.accountRenamed": "Account renamed.",
+  "toast.accountRenameError": "Could not rename the account",
   "toast.defaultAccountRenamed": "Default account renamed.",
   "toast.defaultAccountRenameError": "Could not rename the default account",
   "toast.accountCreated": "Account “{name}” created ({slug}).",

@@ -95,6 +95,10 @@ export function AccountsManager({ trigger = "icon" }: { trigger?: "icon" | "row"
   const [labelDraft, setLabelDraft] = React.useState<string | null>(null);
   const labelValue = labelDraft ?? savedLabel;
 
+  const [nameDrafts, setNameDrafts] = React.useState<Record<string, string>>({});
+  const dropNameDraft = (slug: string) =>
+    setNameDrafts(({ [slug]: _dropped, ...rest }) => rest);
+
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY });
   };
@@ -107,6 +111,24 @@ export function AccountsManager({ trigger = "icon" }: { trigger?: "icon" | "row"
       toast.success(translate("toast.defaultAccountRenamed"));
     },
     onError: (error) => toast.error(apiErrorMessage(error, translate("toast.defaultAccountRenameError"))),
+  });
+
+  const renameMutation = useMutation({
+    mutationFn: ({ slug, value }: { slug: string; value: string }) => boardApi.renameAccount(slug, value),
+    onSuccess: (account) => {
+      queryClient.setQueryData<Awaited<ReturnType<typeof boardApi.listAccounts>>>(ACCOUNTS_KEY, (listed) =>
+        listed
+          ? { ...listed, accounts: listed.accounts.map((row) => (row.slug === account.slug ? account : row)) }
+          : listed,
+      );
+      dropNameDraft(account.slug);
+      invalidate();
+      toast.success(translate("toast.accountRenamed"));
+    },
+    onError: (error, { slug }) => {
+      dropNameDraft(slug);
+      toast.error(apiErrorMessage(error, translate("toast.accountRenameError")));
+    },
   });
 
   const createMutation = useMutation({
@@ -157,6 +179,15 @@ export function AccountsManager({ trigger = "icon" }: { trigger?: "icon" | "row"
       return;
     }
     labelMutation.mutate(labelDraft.trim());
+  }
+
+  function saveAccountName(account: { slug: string; name: string }) {
+    const typed = nameDrafts[account.slug]?.trim();
+    if (!typed || typed === account.name) {
+      dropNameDraft(account.slug);
+      return;
+    }
+    renameMutation.mutate({ slug: account.slug, value: typed });
   }
 
   function submitAccount(event: React.FormEvent) {
@@ -321,9 +352,19 @@ export function AccountsManager({ trigger = "icon" }: { trigger?: "icon" | "row"
                 return (
                   <div key={account.slug} className="flex items-center gap-2.5 px-3 py-2">
                     <div className="min-w-0 flex-1 space-y-1.5">
-                      <div title={label} className="truncate text-sm font-medium">
-                        {label}
-                      </div>
+                      <Input
+                        aria-label={t("accounts.accountName", { slug: account.slug })}
+                        title={label}
+                        className="h-7 text-sm font-medium"
+                        value={nameDrafts[account.slug] ?? account.name}
+                        disabled={renameMutation.isPending && renameMutation.variables?.slug === account.slug}
+                        onChange={(e) => setNameDrafts((drafts) => ({ ...drafts, [account.slug]: e.target.value }))}
+                        onBlur={() => saveAccountName(account)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                          else if (e.key === "Escape") dropNameDraft(account.slug);
+                        }}
+                      />
                       <div className="truncate font-mono text-[11px] text-muted-foreground">
                         {account.slug}
                         {hasToken ? t("accounts.tokenStoredSuffix") : ""}
