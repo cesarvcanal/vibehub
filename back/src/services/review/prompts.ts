@@ -629,9 +629,8 @@ export function analysisPrompt(a: AnalysisInput): string {
       `Se o push for recusado porque a PR andou, traga o código novo sem perder as correções: git fetch origin && git rebase origin/${a.branch}, ` +
       "resolva os conflitos, rode de novo os testes do que mudou e entregue outra vez.",
     `8. Chame vibehub_analysis_report de novo, com stage: "done": o mesmo headSha do passo 1 (não o das correções), ` +
-      "as mesmas dimensions do passo 3, inclusive o unverifiedCount, " +
-      "e os mesmos findings, cada um com status \"fixed\" e o " +
-      "commit, ou \"open\" (question, suggestion e o que não corrigiu, com o motivo no summary).",
+      "as mesmas dimensions do passo 3, inclusive o unverifiedCount, e os mesmos findings, cada um com status " +
+      "\"fixed\" e o commit, ou \"open\" (question, suggestion e o que não corrigiu, com o motivo no summary).",
     `9. Comente cada achado na linha do diff, na sua conta: gh api repos/{owner}/{repo}/pulls/${a.prNumber}/comments ` +
       "(body com o problema, a prova e o commit que corrigiu; commit_id = o head entregue, path, line). Achado sem linha " +
       `vai no resumo. Publique o resumo como review da PR: gh pr review ${a.prNumber} --comment --body "<resumo>", com o ` +
