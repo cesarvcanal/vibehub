@@ -34,6 +34,12 @@ import { useT } from "@/i18n";
 /** A card's live plan warnings, shared between the chat (which receives them) and the top. */
 export const cardRateLimitsKey = (cardId: string) => ["board", "card", cardId, "rateLimits"] as const;
 
+export function setCardPlanUsage(queryClient: QueryClient, cardId: string, reading: CardUsageResponse): void {
+  void queryClient.cancelQueries({ queryKey: cardUsageKey(cardId) });
+  queryClient.setQueryData(cardRateLimitsKey(cardId), {});
+  queryClient.setQueryData(cardUsageKey(cardId), reading);
+}
+
 export function resetCardPlanUsage(queryClient: QueryClient, cardId: string): void {
   queryClient.setQueryData(cardRateLimitsKey(cardId), {});
   void queryClient.invalidateQueries({ queryKey: cardUsageKey(cardId) });
