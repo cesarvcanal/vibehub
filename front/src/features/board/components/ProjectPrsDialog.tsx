@@ -13,6 +13,7 @@ import type { AnalysisPerson, AnalysisRoles, ProjectPull } from "@/api/types";
 import { analysisPeopleKey, boardApi, projectPullsKey } from "@/features/board/api";
 import { defaultReviewerId, isPrAuthor } from "@/features/board/lib/analysisRoles";
 import { repoAccessRefusal } from "@/features/board/lib/repoAccess";
+import { usePrClaims } from "@/features/board/lib/usePrClaims";
 import { useAuth } from "@/providers/auth";
 import { t as translate, useT } from "@/i18n";
 
@@ -37,6 +38,8 @@ export interface ProjectPrsDialogProps {
 export function ProjectPrsDialog({ projectId, open, onOpenChange, onOpenCard }: ProjectPrsDialogProps) {
   const t = useT();
   const qc = useQueryClient();
+  const { user } = useAuth();
+  const live = usePrClaims(projectId, open);
   const pulls = useQuery({
     queryKey: projectPullsKey(projectId),
     queryFn: () => boardApi.listProjectPulls(projectId),
@@ -55,15 +58,10 @@ export function ProjectPrsDialog({ projectId, open, onOpenChange, onOpenCard }: 
     queryFn: () => boardApi.listAnalysisPeople(projectId),
     enabled: open,
   });
-  // The row whose reviewer and co-author are being chosen.
-  const [choosing, setChoosing] = React.useState<number | null>(null);
 
   const analyse = useMutation({
     mutationFn: ({ prNumber, roles }: { prNumber: number; roles: AnalysisRoles }) => boardApi.startPrAnalysis(projectId, prNumber, roles),
-    onMutate: ({ prNumber }) => {
-      setChoosing(null);
-      setStarting((current) => new Set(current).add(prNumber));
-    },
+    onMutate: ({ prNumber }) => setStarting((current) => new Set(current).add(prNumber)),
     onSuccess: ({ card, created }, { prNumber }) => {
       void qc.invalidateQueries({ queryKey: projectPullsKey(projectId) });
       void qc.invalidateQueries({ queryKey: ["board"] });
@@ -73,13 +71,18 @@ export function ProjectPrsDialog({ projectId, open, onOpenChange, onOpenCard }: 
       else toast.info(translate("prs.alreadyOpen", { number: prNumber }), { action });
     },
     onError: (e) => toast.error(apiErrorMessage(e)),
-    onSettled: (_data, _error, { prNumber }) =>
+    onSettled: (_data, _error, { prNumber }) => {
       setStarting((current) => {
         const next = new Set(current);
         next.delete(prNumber);
         return next;
-      }),
+      });
+      live.release(prNumber);
+    },
   });
+  const settingUpByOthers = new Map(
+    live.claims.filter((claim) => claim.userId !== user?.id).map((claim) => [claim.prNumber, claim.username]),
+  );
 
   const count = pulls.data?.length;
   const noAccess = pulls.isError ? repoAccessRefusal(pulls.error) : null;
@@ -135,10 +138,11 @@ export function ProjectPrsDialog({ projectId, open, onOpenChange, onOpenCard }: 
                 key={pull.number}
                 pull={pull}
                 starting={starting.has(pull.number)}
-                choosing={choosing === pull.number}
+                choosing={live.holding === pull.number && !starting.has(pull.number) && !settingUpByOthers.has(pull.number)}
+                settingUpBy={settingUpByOthers.get(pull.number)}
                 people={people}
-                onChoose={() => setChoosing(pull.number)}
-                onCancel={() => setChoosing(null)}
+                onChoose={() => live.claim(pull.number)}
+                onCancel={() => live.release(pull.number)}
                 onStart={(roles) => analyse.mutate({ prNumber: pull.number, roles })}
                 onOpenAnalysis={openCard}
               />
@@ -157,10 +161,11 @@ function blockedReason(pull: ProjectPull): string | null {
   return null;
 }
 
-function PullRow({ pull, starting, choosing, people, onChoose, onCancel, onStart, onOpenAnalysis }: {
+function PullRow({ pull, starting, choosing, settingUpBy, people, onChoose, onCancel, onStart, onOpenAnalysis }: {
   pull: ProjectPull;
   starting: boolean;
   choosing: boolean;
+  settingUpBy: string | undefined;
   /** Who can review or co-author. */
   people: UseQueryResult<AnalysisPerson[]>;
   onChoose: () => void;
@@ -214,7 +219,12 @@ function PullRow({ pull, starting, choosing, people, onChoose, onCancel, onStart
                 {t("prs.starting")}
               </span>
             ) : null}
-            {choosing ? null : (
+            {settingUpBy ? (
+              <Badge tone="warn">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400" />
+                {t("prs.claimedBy", { name: settingUpBy })}
+              </Badge>
+            ) : choosing ? null : (
               <Button
                 type="button"
                 size="sm"

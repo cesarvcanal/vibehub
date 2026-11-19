@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { configure, screen, waitFor, within } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act, configure, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderApp, setupState } from "@/test/render";
 import type { ProjectPull } from "@/api/types";
@@ -50,7 +50,52 @@ function open(onOpenCard = vi.fn()) {
   return onOpenCard;
 }
 
-beforeEach(() => vi.clearAllMocks());
+/** The dialog's live channel (`/api/projects/:id/prs/live`): what it sent, and the server's frames delivered by hand. */
+class FakeSocket {
+  static instances: FakeSocket[] = [];
+  static OPEN = 1;
+  static CONNECTING = 0;
+
+  readyState = 0;
+  sent: unknown[] = [];
+  onopen: (() => void) | null = null;
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onclose: (() => void) | null = null;
+
+  constructor(public url: string) {
+    FakeSocket.instances.push(this);
+  }
+  send(data: string): void {
+    this.sent.push(JSON.parse(data));
+  }
+  close(): void {
+    this.readyState = 3;
+  }
+
+  accept(): void {
+    this.readyState = 1;
+    act(() => this.onopen?.());
+  }
+  deliver(frame: unknown): void {
+    act(() => this.onmessage?.({ data: JSON.stringify(frame) } as MessageEvent));
+  }
+  drop(): void {
+    this.readyState = 3;
+    act(() => this.onclose?.());
+  }
+}
+
+async function liveSocket(index = 0): Promise<FakeSocket> {
+  await waitFor(() => expect(FakeSocket.instances.length).toBeGreaterThan(index));
+  return FakeSocket.instances[index]!;
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  FakeSocket.instances = [];
+  vi.stubGlobal("WebSocket", FakeSocket);
+});
+afterEach(() => vi.unstubAllGlobals());
 
 describe("ProjectPrsDialog", () => {
   it("lists the open PRs read from GitHub", async () => {
@@ -201,5 +246,119 @@ describe("ProjectPrsDialog", () => {
     serve(new Error("GitHub returned 502 while listing pull requests"));
     open();
     expect(await screen.findByText(/GitHub returned 502/)).toBeInTheDocument();
+  });
+
+  describe("live setup", () => {
+    it("holds the PR on the project's live channel while its roles are chosen, and Cancel lets it go", async () => {
+      serve([pull(636)]);
+      open();
+      const ws = await liveSocket();
+      expect(ws.url).toContain("/api/projects/p1/prs/live");
+      ws.accept();
+      await userEvent.click(await screen.findByRole("button", { name: "Analyse PR #636" }));
+      expect(ws.sent).toEqual([{ type: "claim", prNumber: 636 }]);
+      await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+      expect(ws.sent).toEqual([{ type: "claim", prNumber: 636 }, { type: "release", prNumber: 636 }]);
+    });
+
+    it("a PR somebody else is setting up shows who, and cannot be taken while they are at it", async () => {
+      serve([pull(636), pull(640)]);
+      open();
+      const ws = await liveSocket();
+      ws.accept();
+      await screen.findByText("Conciliação 636");
+      ws.deliver({ type: "claims", claims: [{ prNumber: 636, userId: "u2", username: "albert" }] });
+      expect(await screen.findByText("albert is setting it up")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Analyse PR #636" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Analyse PR #640" })).toBeEnabled();
+      ws.deliver({ type: "claims", claims: [] });
+      expect(await screen.findByRole("button", { name: "Analyse PR #636" })).toBeEnabled();
+    });
+
+    it("its own hold does not lock the one holding it", async () => {
+      serve([pull(636)]);
+      open();
+      const ws = await liveSocket();
+      ws.accept();
+      await userEvent.click(await screen.findByRole("button", { name: "Analyse PR #636" }));
+      ws.deliver({ type: "claims", claims: [{ prNumber: 636, userId: "u1", username: "sam" }] });
+      expect(screen.getByRole("button", { name: "Start analysis" })).toBeEnabled();
+      expect(screen.queryByText("sam is setting it up")).not.toBeInTheDocument();
+    });
+
+    it("losing the race for a PR closes its picker and says who has it", async () => {
+      serve([pull(636)]);
+      open();
+      const ws = await liveSocket();
+      ws.accept();
+      await userEvent.click(await screen.findByRole("button", { name: "Analyse PR #636" }));
+      await screen.findByRole("button", { name: "Start analysis" });
+      ws.deliver({ type: "claim-refused", prNumber: 636, username: "albert" });
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Start analysis" })).not.toBeInTheDocument());
+      expect(toast.info).toHaveBeenCalledWith("albert is already setting up the analysis of PR #636");
+      // once albert lets it go, the picker does not come back on its own: nobody holds it for this tab
+      ws.deliver({ type: "claims", claims: [] });
+      expect(await screen.findByRole("button", { name: "Analyse PR #636" })).toBeEnabled();
+      expect(screen.queryByRole("button", { name: "Start analysis" })).not.toBeInTheDocument();
+    });
+
+    it("an analysis somebody else started shows up without reopening the dialog", async () => {
+      const pulls = [pull(636)];
+      serve(pulls);
+      open();
+      const ws = await liveSocket();
+      ws.accept();
+      await screen.findByRole("button", { name: "Analyse PR #636" });
+      pulls[0] = pull(636, { analysisCardId: "c7" });
+      ws.deliver({ type: "pulls-changed" });
+      expect(await screen.findByText("Analysing")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Analyse PR #636" })).not.toBeInTheDocument();
+    });
+
+    it("the PR stays held until its start settles, then is let go", async () => {
+      serve([pull(636)]);
+      const answer: { resolve?: (value: unknown) => void } = {};
+      post.mockReturnValue(new Promise((resolve) => { answer.resolve = resolve; }));
+      open();
+      const ws = await liveSocket();
+      ws.accept();
+      await userEvent.click(await screen.findByRole("button", { name: "Analyse PR #636" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Start analysis" }));
+      expect(ws.sent).toEqual([{ type: "claim", prNumber: 636 }]);
+      await act(async () => answer.resolve?.({ card: { id: "c9", projectId: "p1" }, created: true }));
+      await waitFor(() => expect(ws.sent).toEqual([{ type: "claim", prNumber: 636 }, { type: "release", prNumber: 636 }]));
+    });
+
+    it("a hold taken before the channel opens is sent when it opens, and again after a reconnect", async () => {
+      serve([pull(636)]);
+      open();
+      const first = await liveSocket();
+      await userEvent.click(await screen.findByRole("button", { name: "Analyse PR #636" }));
+      expect(first.sent).toEqual([]);
+      first.accept();
+      expect(first.sent).toEqual([{ type: "claim", prNumber: 636 }]);
+      first.drop();
+      const second = await liveSocket(1);
+      second.accept();
+      expect(second.sent).toEqual([{ type: "claim", prNumber: 636 }]);
+    });
+
+    it("what the channel refuses is shown", async () => {
+      serve([pull(636)]);
+      open();
+      const ws = await liveSocket();
+      ws.accept();
+      ws.deliver({ type: "error", error: "this project is shared with you read-only" });
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith("this project is shared with you read-only"));
+    });
+
+    it("closing the dialog closes the channel", async () => {
+      serve([pull(636)]);
+      const { rerender } = renderApp(<ProjectPrsDialog projectId="p1" open onOpenChange={() => {}} onOpenCard={vi.fn()} />);
+      const ws = await liveSocket();
+      ws.accept();
+      rerender(<ProjectPrsDialog projectId="p1" open={false} onOpenChange={() => {}} onOpenCard={vi.fn()} />);
+      expect(ws.readyState).toBe(3);
+    });
   });
 });

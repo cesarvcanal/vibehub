@@ -557,6 +557,19 @@ export interface PrAnalysisStart {
   created: boolean;
 }
 
+export interface PrClaim {
+  prNumber: number;
+  userId: string;
+  username: string;
+}
+
+/** What `WS /projects/:id/prs/live` sends: who is setting up which PR's analysis, and when to read the list again. */
+export type PrLiveEvent =
+  | { type: "claims"; claims: PrClaim[] }
+  | { type: "pulls-changed" }
+  | { type: "claim-refused"; prNumber: number; username: string }
+  | { type: "error"; error: string };
+
 /** A pull request the card delivered — see `Card.prs`. */
 export interface CardPr {
   number: number;
