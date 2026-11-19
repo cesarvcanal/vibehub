@@ -236,7 +236,7 @@ Two guards, both structural:
   and the delete cannot touch it. Both rules are pinned by tests.
 
 What deliberately SURVIVES, and why: anything already pushed to **GitHub** (a branch, a PR — another
-machine's data), the **project brain** a card contributed to (`vibehub_learn` writes knowledge that
+machine's data), the **project brain** a card contributed to (`vibehub_brain_learn` writes knowledge that
 belongs to the project), the **credentials saved to the vault** from a card's browser (they were
 saved on purpose, they belong to the install), and **log lines** already emitted (the audit trail
 carries card slugs). Filesystem backups of `VIBEHUB_DATA_DIR`, if the operator takes any, keep
@@ -262,9 +262,10 @@ PROJECT is the standing version of sharing a card: every card in it, including t
 afterwards. A card reached both ways takes the stronger of the two levels, and a share never
 outlives the card, the project, or the person it names.
 
-Two gates carry it, both Fastify preHandlers, and every route wears exactly one:
-`requireOwner` (`auth/session.ts`) for what belongs to the install, and `requireCardAccess`
-(`auth/access.ts`) for what belongs to a card. `auth/access.ts` is also where the board listings are
+Four gates carry it, all Fastify preHandlers, and every route wears one: `requireOwner`
+(`auth/session.ts`) for what belongs to the install; `requireCardAccess` (read) and `requireCardWork`
+(change) (`auth/access.ts`) for what belongs to a card; and `requireSession` (`auth/session.ts`) for
+a person's own routes with no card (`/api/me/*`, listings). `auth/access.ts` is also where the board listings are
 narrowed (`visibleProjects`/`visibleCards`), so a member's board is filtered rather than refused.
 
 **What sharing does NOT reach yet: the agent inside the card.** Every card's Claude gets the vibehub
