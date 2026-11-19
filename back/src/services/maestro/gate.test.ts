@@ -125,10 +125,16 @@ describe("probe script + parse", () => {
   });
 });
 
+function gateCardId(): string {
+  const cardId = randomUUID();
+  onTestFinished(() => rm(`/tmp/vibehub/${cardId}`, { recursive: true, force: true }));
+  return cardId;
+}
+
 describe("run script + parse", () => {
   it("embeds the checks to be interpreted, folds stderr, stops at the first failure", async () => {
     const { gate } = await load();
-    const s = gate.buildGateRunScript("c", "/work/scratch/x", ["npm test", "node_modules/.bin/tsc --noEmit"]);
+    const s = gate.buildGateRunScript("c", "/work/scratch/x", ["npm test", "node_modules/.bin/tsc --noEmit"], { cardId: gateCardId() });
     expect(s).toContain("exec 2>&1");
     expect(s).toContain("if npm test; then");
     expect(s).toContain("if node_modules/.bin/tsc --noEmit; then");
@@ -146,8 +152,9 @@ describe("run script + parse", () => {
     const work = await mkdtemp(join(tmpdir(), "vibehub-gate-work-"));
     onTestFinished(() => rm(work, { recursive: true, force: true }));
     const env = { ...process.env, PATH: await pathWithFakeDocker() };
+    const cardId = gateCardId();
     const run = (checks: string[]) =>
-      execFileSync("sh", ["-c", gate.buildGateRunScript("c", work, checks, { baseBranch: "main" })], { env, encoding: "utf8" });
+      execFileSync("sh", ["-c", gate.buildGateRunScript("c", work, checks, { cardId, baseBranch: "main" })], { env, encoding: "utf8" });
     const green = run(['echo "base=$VIBEHUB_BASE_REF cap=$VITEST_MAX_THREADS"']);
     expect(green).toContain("base=origin/main cap=2");
     expect(gate.parseGateRun(green).passed).toBe(true);
@@ -192,19 +199,20 @@ describe("run script + parse", () => {
 
   it("runs the checks under an in-container deadline that kills the whole group", async () => {
     const { gate } = await load();
-    const s = gate.buildGateRunScript("c", "/work/scratch/x", ["npm test"], { timeoutMs: 600_000 });
+    const s = gate.buildGateRunScript("c", "/work/scratch/x", ["npm test"], { cardId: gateCardId(), timeoutMs: 600_000 });
     expect(s).toMatch(/^docker exec 'c' timeout -s KILL 585 sh -c /);
     expect(s).toContain('if [ $? -eq 137 ]; then echo "__VIBEHUB_GATE__ timeout 585"; fi');
-    expect(() => gate.buildGateRunScript("c", "/work/scratch/x", ["npm test"], { timeoutMs: 10_000 })).toThrow();
+    expect(() => gate.buildGateRunScript("c", "/work/scratch/x", ["npm test"], { cardId: gateCardId(), timeoutMs: 10_000 })).toThrow();
   });
 
   it("exposes the card's base as VIBEHUB_BASE_REF, validated, before the checks", async () => {
     const { gate } = await load();
-    const s = gate.buildGateRunScript("c", "/work/scratch/x", ["npm test"], { baseBranch: "main" });
+    const cardId = gateCardId();
+    const s = gate.buildGateRunScript("c", "/work/scratch/x", ["npm test"], { cardId, baseBranch: "main" });
     expect(s).toContain("export VIBEHUB_BASE_REF='\\''origin/main'\\''");
     expect(s.indexOf("VIBEHUB_BASE_REF")).toBeLessThan(s.indexOf("if npm test"));
-    expect(gate.buildGateRunScript("c", "/work/scratch/x", ["npm test"])).not.toContain("VIBEHUB_BASE_REF");
-    expect(() => gate.buildGateRunScript("c", "/work/scratch/x", ["npm test"], { baseBranch: "main; rm -rf /" })).toThrow();
+    expect(gate.buildGateRunScript("c", "/work/scratch/x", ["npm test"], { cardId })).not.toContain("VIBEHUB_BASE_REF");
+    expect(() => gate.buildGateRunScript("c", "/work/scratch/x", ["npm test"], { cardId, baseBranch: "main; rm -rf /" })).toThrow();
   });
 
   it("a timed-out run is red, flagged, and says why", async () => {
@@ -582,8 +590,9 @@ describe("buildGateRunScript with expectedSha, executed for real (git repo + a d
     sh(`mkdir -p bin work && printf '#!/bin/sh\\nshift 2\\nexec "$@"\\n' > bin/docker && chmod +x bin/docker`);
     sh(`cd work && git init -q && echo a > f && git add f && git -c user.name=t -c user.email=t@t commit -q -m one`);
     const head = sh("cd work && git rev-parse HEAD").trim();
+    const cardId = gateCardId();
     const run = (checks: string[], sha = head) => {
-      const out = sh(gate.buildGateRunScript("c", work, checks, { expectedSha: sha }));
+      const out = sh(gate.buildGateRunScript("c", work, checks, { cardId, expectedSha: sha }));
       return { out, ...gate.parseGateRun(out) };
     };
     return { sh, run, head };
@@ -621,6 +630,6 @@ describe("buildGateRunScript with expectedSha, executed for real (git repo + a d
 
   it("the sha is validated before it reaches the shell", async () => {
     const { gate } = await load();
-    expect(() => gate.buildGateRunScript("c", "/work/scratch/x", ["npm test"], { expectedSha: "a'; rm -rf / #" })).toThrow(/sha/);
+    expect(() => gate.buildGateRunScript("c", "/work/scratch/x", ["npm test"], { cardId: gateCardId(), expectedSha: "a'; rm -rf / #" })).toThrow(/sha/);
   });
 });

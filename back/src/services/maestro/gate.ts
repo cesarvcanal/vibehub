@@ -200,7 +200,7 @@ export function buildGateRunScript(
   containerName: string,
   cwd: string,
   checks: string[],
-  opts: { timeoutMs?: number; baseBranch?: string; expectedSha?: string; cardId?: string } = {},
+  opts: { cardId: string; timeoutMs?: number; baseBranch?: string; expectedSha?: string },
 ): string {
   assertSafeRemotePath(cwd);
   if (opts.expectedSha !== undefined && !FULL_SHA_RE.test(opts.expectedSha)) {
@@ -213,13 +213,9 @@ export function buildGateRunScript(
     // Each part is joined with "; ", so the exports lose their own trailing ";" — `;;` is a sh
     // syntax error that killed every gate before its first check.
     testWorkerExports().trim().replace(/;$/, ""),
+    ...cardTmpEnv(opts.cardId).map(([name, value]) => `export ${name}=${shQuote(value)}`),
+    CREATE_CARD_TMPDIR.trim().replace(/;$/, ""),
   ];
-  if (opts.cardId) {
-    parts.push(
-      ...cardTmpEnv(opts.cardId).map(([name, value]) => `export ${name}=${shQuote(value)}`),
-      CREATE_CARD_TMPDIR.trim().replace(/;$/, ""),
-    );
-  }
   // The gate tests the WORKTREE, and the card's author keeps working in it while the gate queues and
   // runs: held to a commit, the run checks it is still there — before (the probe may be minutes old)
   // and after. After, only tracked files count: tests leave untracked output behind (coverage, new
