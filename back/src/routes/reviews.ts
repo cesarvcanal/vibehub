@@ -10,8 +10,9 @@ import {
 import { reachingCard, startReviewChecked } from "../services/review/start.js";
 import { mergeReviewedPr } from "../services/review/merge.js";
 import { isBusy } from "../services/maestro/maestro.js";
+import { watchCardFleet } from "../services/sdk/manager.js";
 import { activeReviewFor, getReview, listReviewsFollowedBy, listReviewsForCards, newest } from "../services/review/store.js";
-import { canMergeReview, isReviewClosed, type Review } from "../services/review/model.js";
+import { canMergeReview, fleetRunForReaders, isReviewClosed, type Review } from "../services/review/model.js";
 import { getAnalysis } from "../services/review/analysisStore.js";
 import { ANALYSIS_DIMENSIONS, analysisVerdict, dimensionHealth, uncheckedDimensions } from "../services/review/analysisModel.js";
 import { sendError, type ErrorStatusRule } from "./httpError.js";
@@ -111,7 +112,9 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
       : prReview(await listReviewsFollowedBy([req.params.id]), pr);
     if (!found) return await reply.send({ review: null });
     const { review, merging } = await reviewForRead(found);
-    return await reply.send({ review, working: await sidesWorking(review), merging });
+    const reviewerRoundOpen = (review.phase === "reviewing" || review.phase === "impasse") && review.lastSubmitRound !== review.round;
+    const fleet = reviewerRoundOpen ? watchCardFleet(review.reviewerCardId).map(fleetRunForReaders) : [];
+    return await reply.send({ review, working: await sidesWorking(review), merging, fleet });
   });
 
   app.get<{ Params: { id: string } }>("/api/cards/:id/analysis", { preHandler: requireCardAccess }, async (req, reply) => {

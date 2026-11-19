@@ -311,3 +311,10 @@ describe("WorkflowPanel — rodada terminada com agente que nunca respondeu", ()
     expect(screen.getByTestId("workflow-eta")).not.toHaveTextContent("Concluído");
   });
 });
+
+describe("WorkflowPanel — modelo do agente", () => {
+  it("mostra o modelo ao lado do nome do agente", () => {
+    render(<WorkflowPanel row={workflowRow({ agents: [agent("a1", { model: "opus", status: "done", result: "pronto" })] })} />);
+    expect(screen.getByTestId("workflow-agent-model")).toHaveTextContent("opus");
+  });
+});

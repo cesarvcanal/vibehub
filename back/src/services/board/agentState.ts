@@ -291,6 +291,25 @@ export function cardHoldsBackgroundWork(cardId: string): boolean {
   return false;
 }
 
+export interface CardUsageLimit {
+  resetsAt?: number;
+}
+type UsageLimitProbe = (cardId: string) => CardUsageLimit | null;
+const usageLimitProbes = new Set<UsageLimitProbe>();
+
+export function onCardUsageLimitProbe(probe: UsageLimitProbe): () => void {
+  usageLimitProbes.add(probe);
+  return () => usageLimitProbes.delete(probe);
+}
+
+export function cardUsageLimit(cardId: string): CardUsageLimit | null {
+  for (const probe of usageLimitProbes) {
+    const limit = probe(cardId);
+    if (limit) return limit;
+  }
+  return null;
+}
+
 /**
  * Where the sdk manager sends a status the HOOKS cannot: the last background task ended and no
  * turn opened after it, so no Stop will ever fire to say the card went idle (or a task outlived a

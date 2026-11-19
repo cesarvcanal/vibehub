@@ -889,10 +889,12 @@ export interface Review extends ReviewSummary {
   prHeadSha?: string;
   impasseReason?: string;
   approvePending?: boolean;
+  usageLimitWait?: { side: "reviewer" | "author"; until: number };
   /** The merge gate, run on the approved commit as soon as the review is ready (only valid for its `sha`). */
   mergeGate?: MergeGate;
   /** The round the reviewer's AI last handed back: below `round`, the reviewer's turn is still open. */
   lastSubmitRound?: number;
+  fleet?: ReviewRoundFleet[];
   createdAt: number;
   updatedAt: number;
 }
@@ -911,6 +913,33 @@ export interface MergeGate {
   exhausted?: true;
 }
 
+export interface ReviewFleetAgent {
+  id: string;
+  label: string;
+  phase: string;
+  model?: string;
+  status: "running" | "done" | "stopped";
+  result?: string;
+  endedAt?: number;
+}
+
+export interface ReviewFleetRun {
+  runId: string;
+  name: string;
+  phases: string[];
+  total: number;
+  done: number;
+  agents: ReviewFleetAgent[];
+  at: number;
+  finished: boolean;
+  outcome?: "completed" | "killed" | "failed";
+}
+
+export interface ReviewRoundFleet {
+  round: number;
+  runs: ReviewFleetRun[];
+}
+
 /** Whether each side's AI is in a turn RIGHT NOW (the card's status), as `GET /cards/:id/review` reads it. */
 export interface ReviewWorking {
   author: boolean;
@@ -926,6 +955,7 @@ export interface ReviewResponse {
    * mid-way (the lock lives in memory). Absent from a server that predates it: read as unknown.
    */
   merging?: boolean;
+  fleet?: ReviewFleetRun[];
   /**
    * Client-side only: which read from the server this answer is (`useLiveReview` numbers them as they
    * start). An action's answer put in the cache keeps the number of the read it replaced.
