@@ -8,6 +8,21 @@ on:
 # The runner image is PINNED (not ubuntu-latest): an OS upgrade under the build is a decision to
 # make on purpose, in a PR of its own, not something that lands silently on a Monday.
 jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm run test:lint
+      - run: npm run lint:changed
+        env:
+          VIBEHUB_BASE_REF: origin/${{ github.base_ref || 'main' }}
+
   back:
     runs-on: ubuntu-24.04
     steps:
