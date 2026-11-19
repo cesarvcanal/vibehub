@@ -53,7 +53,7 @@ export async function prAnalysisRoutes(app: FastifyInstance): Promise<void> {
     "/api/projects/:id/prs/live",
     { websocket: true, preHandler: requireProjectAccess },
     (socket: WebSocket, req) => {
-      const send = (event: PrLiveEvent | { type: "claim-refused"; prNumber: number; username: string } | { type: "error"; code: "read_only" }) => {
+      const send = (event: PrLiveEvent) => {
         if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event));
       };
       const seated = (async () => {
