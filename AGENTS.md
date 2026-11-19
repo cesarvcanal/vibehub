@@ -113,15 +113,6 @@
 | `back/src/utils/` | Operações técnicas e infraestrutura compartilhadas (logger, guardas do processo), sem regra de domínio (§4, "Utilitário × regra de negócio") | Regra de uma área; código que lê o store ou chama o host |
 | `back/src/testkit/` | Infra de teste compartilhada | Testes |
 
-### Áreas: um nome nos dois pacotes
-
-**A área de um código é a pasta de `back/src/services/<área>/` que o atende, e o front dela mora em `front/src/features/<área>/`, com o mesmo nome.** `ls back/src/services` lista as áreas; as duas do front sem service com o mesmo nome são `auth` (no back, `back/src/auth/`) e `setup` (o assistente da primeira instalação).
-
-- **Arquivo novo nasce na pasta da área dele.** A pasta do front ainda não existe? Ela é criada no mesmo PR, com `components/`, `lib/` e `types/` conforme a §5.
-- **`front/src/features/board/` guarda só o board:** colunas, card, projeto, seleção e deck. O resto que está nela (revisão e análise de PR, contas e uso, chat do SDK e medidor de contexto, cérebro, plugins, MCP, preview) é **legado à espera de mudança de pasta**, não exemplo. Os nomes dizem a área: `front/.../board/lib/usage.ts` corresponde a `back/src/services/accounts/usage.ts`, `contextUsage.ts` a `sdk/`, `analysisConversation.ts` a `review/`.
-- **Mexeu num arquivo legado de outra área:** a mudança fica nele (a mudança de pasta é um PR próprio, só de `git mv` e imports, com pedido, §12.6); o arquivo **novo** que essa mudança cria vai para a pasta da área, importando o legado de onde ele está.
-- **Teste mental, antes de criar o arquivo:** "qual pasta de `back/src/services/` atende isto?" O nome dela é a pasta do front. Código do front sem service no back (tema, websocket) é técnico e vai para `front/src/lib/` (§4, "Utilitário × regra de negócio").
-
 - **Teste mental, antes de criar qualquer abstração:** "se eu escrever isto direto, no lugar onde é usado, o que fica pior **hoje**?" Se a resposta é "nada" ou "talvez um dia", escreva direto.
 - **Teste mental, antes de entregar:** "um dev que nunca viu o módulo entende o fluxo lendo de cima para baixo, sem pular entre arquivos para descobrir o que um nome genérico faz?" Se não entende, simplifique; não documente a complexidade.
 
@@ -134,6 +125,15 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 - **D — Inversão de dependência:** isolar dependências externas ou instáveis (Docker, SSH, GitHub, SDK do Claude) quando isso trouxer testabilidade ou proteção de fronteira.
 
 **Antes de criar uma abstração, responder:** que responsabilidade ela protege? O que pioraria se fosse removida? Existe mais de um comportamento real? Protege uma fronteira, uma invariante ou uma duplicação relevante? Uma camada que apenas encaminha argumentos sem decisão, transformação ou proteção de fronteira deve ser eliminada quando seguro. Entre duas opções igualmente corretas, preferir a que exige menos conceitos.
+
+### Áreas: um nome nos dois pacotes
+
+**A área de um código é a pasta de `back/src/services/<área>/` que o atende, e o front dela mora em `front/src/features/<área>/`, com o mesmo nome.** `ls back/src/services` lista as áreas; as duas do front sem service com o mesmo nome são `auth` (no back, `back/src/auth/`) e `setup` (o assistente da primeira instalação).
+
+- **Arquivo novo nasce na pasta da área dele.** A pasta do front ainda não existe? Ela é criada no mesmo PR, com `components/`, `lib/` e `types/` conforme a §5.
+- **`front/src/features/board/` guarda só o board:** colunas, card, projeto, seleção e deck. O resto que está nela (revisão e análise de PR, contas e uso, chat do SDK e medidor de contexto, cérebro, plugins, MCP, preview) é **legado à espera de mudança de pasta**, não exemplo. Os nomes dizem a área: `front/.../board/lib/usage.ts` corresponde a `back/src/services/accounts/usage.ts`, `contextUsage.ts` a `sdk/`, `analysisConversation.ts` a `review/`.
+- **Mexeu num arquivo legado de outra área:** a mudança fica nele (a mudança de pasta é um PR próprio, só de `git mv` e imports, com pedido, §12.6); o arquivo **novo** que essa mudança cria vai para a pasta da área, importando o legado de onde ele está.
+- **Teste mental, antes de criar o arquivo:** "qual pasta de `back/src/services/` atende isto?" O nome dela é a pasta do front. Código do front sem service no back (tema, websocket) é técnico e vai para `front/src/lib/` (§4, "Utilitário × regra de negócio").
 
 ### Utilitário × regra de negócio
 
