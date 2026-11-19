@@ -2,6 +2,7 @@ import * as React from "react";
 import { toast } from "sonner";
 import { t as translate } from "@/i18n";
 import type { PlatformFailure } from "@/api/types";
+import { explainFailure } from "./explainFailure";
 import { findUnseenFailureIds } from "./unseenFailures";
 
 const SEEN_FAILURES_STORAGE_KEY = "vibehub.platformFailures.seen";
@@ -29,7 +30,11 @@ export function useAnnounceUnseenFailures(failures: readonly PlatformFailure[], 
     const seenIds = readSeenFailureIds();
     const unseenIds = findUnseenFailureIds(failures, seenIds);
     if (unseenIds.length === 0) return;
-    toast(translate("platformFailures.newToast", { n: unseenIds.length, count: unseenIds.length }), {
+    const [onlyUnseenFailure] = unseenIds.length === 1 ? failures.filter((failure) => failure.id === unseenIds[0]) : [];
+    const announcement = onlyUnseenFailure
+      ? translate("platformFailures.newToastOne", { explanation: explainFailure(onlyUnseenFailure, translate) })
+      : translate("platformFailures.newToast", { n: unseenIds.length, count: unseenIds.length });
+    toast(announcement, {
       action: { label: translate("platformFailures.open"), onClick: () => setFailuresDialogOpen(true) },
     });
     saveSeenFailureIds(new Set([...seenIds, ...unseenIds]));
