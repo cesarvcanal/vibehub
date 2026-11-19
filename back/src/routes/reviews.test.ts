@@ -39,7 +39,7 @@ const afterPrMerged = vi.fn(async () => "deleted" as const);
 let gateAnswer = { ran: true, passed: true, output: "" };
 const gateAtCommit = vi.fn(async (_cardId: string, _prUrl: string, _sha: string) => gateAnswer);
 const fleetConversation = { answer: null as FleetConversation | null };
-const readFleetConversation = vi.fn(async (_transcriptDir: string) => fleetConversation.answer);
+const readFleetConversation = vi.fn<(transcriptDir: string) => Promise<FleetConversation | null>>(async () => fleetConversation.answer);
 const deliver = vi.fn(async (cardId: string, _opts: DeliverOpts = {}): Promise<DeliverResult> => {
   actorAtDeliver = (await (await import("../services/board/registry.js")).getCard(cardId))?.actorUserId;
   return deliverResult;
