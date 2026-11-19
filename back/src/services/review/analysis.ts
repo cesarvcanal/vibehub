@@ -4,7 +4,7 @@ import { findUser, listUsers, type PublicUser } from "../../auth/users.js";
 import { recordCardActor } from "../board/actor.js";
 import { purgeCard } from "../board/purge.js";
 import {
-  assertBranchName, createAnalysisCard, getProject, listCards, listGithubConnections, openAnalysisCard,
+  assertBranchName, createAnalysisCard, getProject, listCards, listGithubConnections,
   recordCardPr, sharesForTarget, updateCard, type Card, type GithubConnection, type Project,
 } from "../board/registry.js";
 import { recordMessage } from "../events/cardEvents.js";
@@ -14,6 +14,7 @@ import type { MessageOrigin } from "../chat/provenance.js";
 import { sendToTerminal, SEND_READY_WAIT_MS } from "../maestro/maestro.js";
 import { logger } from "../../utils/logger.js";
 import { getSettings, type Settings } from "../settings/settings.js";
+import { findActiveAnalysisCard } from "./analysisReport.js";
 import { analysisPrompt } from "./prompts.js";
 import { activeReviewForPr } from "./store.js";
 
@@ -136,14 +137,14 @@ export async function listProjectPulls(projectId: string, user: PublicUser): Pro
   if (!pulls) throw new RepoAccessError(connection.login, `${owner}/${repo}`);
   // Only the cards this user reaches: a card-only share sees the project, never the others' cards.
   const reachable = await visibleCards(user, cards);
-  return pulls.map((pull) => {
-    const card = openAnalysisCard(reachable, pull.url);
+  return Promise.all(pulls.map(async (pull) => {
+    const card = await findActiveAnalysisCard(reachable, pull.url);
     return {
       ...pull,
       ...(card ? { analysisCardId: card.id } : {}),
       ...(isSupportedBranch(pull.branch) ? {} : { unsupportedBranch: true as const }),
     };
-  });
+  }));
 }
 
 /** Per PR URL, the start in progress: the second request of the same PR waits for the first. */
@@ -212,7 +213,7 @@ export async function startAnalysis(input: {
 
   const by = `analysis:${input.requester.username}`;
   return await serialPerPr(pull.url, async () => {
-    const existing = openAnalysisCard(await listCards(input.projectId), pull.url);
+    const existing = await findActiveAnalysisCard(await listCards(input.projectId), pull.url);
     if (existing) return { card: existing, created: false, prompt: Promise.resolve() };
 
     const card = await createAnalysisCard({

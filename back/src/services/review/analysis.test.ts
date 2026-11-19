@@ -201,6 +201,26 @@ describe("startAnalysis", () => {
     expect(again.card.id).not.toBe(first.card.id);
   });
 
+  it("card de análise reativado depois da frota indisponível não segura a PR: a lista não o mostra e pedir de novo abre um card novo", async () => {
+    const { analysis, registry, project } = await load();
+    const first = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert, reviewerUserId: mussa.id });
+    await first.prompt;
+    const reportService = await import("./analysisReport.js");
+    await reportService.recordAnalysisReport(first.card.id, {
+      headSha: "a".repeat(40), stage: "fleet_unavailable", summary: "frota indisponível", dimensions: [], findings: [],
+      refutedCount: 0, unavailableReason: "Workflow desligado",
+    });
+    await registry.applyCardStatus(first.card.id, "working");
+    await registry.applyCardStatus(first.card.id, "waiting");
+    expect((await registry.getCard(first.card.id))?.column).not.toBe("done");
+    const listed = await analysis.listProjectPulls(project.id, albert);
+    expect(listed.find((listedPull) => listedPull.number === 7)?.analysisCardId).toBeUndefined();
+    const again = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert, reviewerUserId: mussa.id });
+    await again.prompt;
+    expect(again.created).toBe(true);
+    expect(again.card.id).not.toBe(first.card.id);
+  });
+
   it("responde assim que o card existe: subir o card e entregar o prompt não seguram o pedido", async () => {
     const { analysis, project } = await load();
     let deliver!: () => void;

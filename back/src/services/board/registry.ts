@@ -1807,12 +1807,12 @@ export async function createAnalysisCard(input: {
 }
 
 /**
- * The OPEN analysis card of a PR among `cards`: an analysis card (`pushBranch`) not done that recorded this
- * PR's URL. Compared by URL, never by title. One rule for whoever asks: the analysis (one card per PR) and
- * the two-AI review (which must not start while an analysis pushes onto the same PR). PURE.
+ * The OPEN analysis cards of a PR among `cards`: analysis cards (`pushBranch`) not done that recorded this
+ * PR's URL. Compared by URL, never by title. Whether one of them is still analysing (its fleet may not have
+ * run) is the review area's call, which reads the saved report. PURE.
  */
-export function openAnalysisCard(cards: Card[], prUrl: string): Card | undefined {
-  return cards.find((c) => c.pushBranch !== undefined && c.column !== "done" && (c.prs ?? []).some((p) => p.url === prUrl));
+export function openAnalysisCards(cards: Card[], prUrl: string): Card[] {
+  return cards.filter((c) => c.pushBranch !== undefined && c.column !== "done" && (c.prs ?? []).some((p) => p.url === prUrl));
 }
 
 export interface UpdateCardInput {

@@ -91,7 +91,7 @@ describe("relatório da análise pela ferramenta do card", () => {
     await reportService.recordAnalysisReport(analysisCard.id, input({ stage: "fleet_unavailable", unavailableReason: "Workflow desligado" }));
     const registry = await import("../board/registry.js");
     expect((await registry.getCard(analysisCard.id))?.column).toBe("done");
-    expect(registry.openAnalysisCard(await registry.listCards(analysisCard.projectId), PR.url)).toBeUndefined();
+    expect(registry.openAnalysisCards(await registry.listCards(analysisCard.projectId), PR.url)).toEqual([]);
   });
 
   it.each([[["analysed"]], [["analysed", "done"]]] as const)("relatório %j não move o card", async (stages) => {
@@ -185,7 +185,7 @@ describe("relatório da análise pela ferramenta do card", () => {
     const lateRecording = reportService.recordAnalysisReport(analysisCard.id, input(lateReport));
     await expect(lateRecording).rejects.toThrow("a frota não rodou neste card: pare; um novo pedido da PR abre outro card");
     expect((await store.getAnalysis(analysisCard.id))?.stage).toBe("fleet_unavailable");
-    expect(registry.openAnalysisCard(await registry.listCards(analysisCard.projectId), PR.url)).toBeUndefined();
+    expect(registry.openAnalysisCards(await registry.listCards(analysisCard.projectId), PR.url)).toEqual([]);
   });
 
   it("o sha gravado sai em minúsculas, venha na caixa que vier", async () => {

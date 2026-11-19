@@ -1,4 +1,4 @@
-import { getCard, updateCard } from "../board/registry.js";
+import { getCard, openAnalysisCards, updateCard, type Card } from "../board/registry.js";
 import { recordMessage } from "../events/cardEvents.js";
 import { ANALYSIS_DIMENSIONS, type AnalysisFinding, type AnalysisReport, type AnalysisStage, type DimensionRun } from "./analysisModel.js";
 import { getAnalysis, saveAnalysis } from "./analysisStore.js";
@@ -39,6 +39,14 @@ function findChangedFromSavedReport(saved: AnalysisReport, input: AnalysisReport
     })
     .map((key) => `dimensão ${key}`);
   return [...changedFindings, ...changedDimensions];
+}
+
+export async function findActiveAnalysisCard(cards: Card[], prUrl: string): Promise<Card | undefined> {
+  for (const openCard of openAnalysisCards(cards, prUrl)) {
+    const fleetDidNotRun = (await getAnalysis(openCard.id))?.stage === "fleet_unavailable";
+    if (!fleetDidNotRun) return openCard;
+  }
+  return undefined;
 }
 
 export async function recordAnalysisReport(cardId: string, input: AnalysisReportInput): Promise<AnalysisReport> {

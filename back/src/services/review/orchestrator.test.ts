@@ -456,6 +456,23 @@ describe("PR anexado: a correção roda no card da branch do PR, ou num card de 
     await expect(o.orch.startReview(base)).resolves.toMatchObject({ prNumber: 7 });
   });
 
+  it("análise cuja frota não rodou não segura a revisão de duas IAs, mesmo com o card de análise reativado", async () => {
+    const o = await load();
+    const { author } = await seed(o);
+    accountOf = { "u-revisor": "mussa" };
+    const base = { cardId: author.id, prNumber: 7, reviewerUserId: "u-revisor", authorUserId: "u-autor", mergerUserId: "u-merger", by: "u-autor" };
+    const analysis = await o.registry.createAnalysisCard({ projectId: author.projectId, accountSlug: undefined, prBranch: PR.branch, title: "Análise PR #7" });
+    await o.registry.recordCardPr(analysis.id, PR);
+    const reportService = await import("./analysisReport.js");
+    await reportService.recordAnalysisReport(analysis.id, {
+      headSha: "a".repeat(40), stage: "fleet_unavailable", summary: "frota indisponível", dimensions: [], findings: [],
+      refutedCount: 0, unavailableReason: "Workflow desligado",
+    });
+    await o.registry.applyCardStatus(analysis.id, "working");
+    expect((await o.registry.getCard(analysis.id))?.column).not.toBe("done");
+    await expect(o.orch.startReview(base)).resolves.toMatchObject({ prNumber: 7 });
+  });
+
   it("o mesmo PR anexado em dois cards não ganha duas revisões", async () => {
     const o = await load();
     const { project, hub } = await seedHub(o);
