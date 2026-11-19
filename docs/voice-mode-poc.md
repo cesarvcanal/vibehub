@@ -6,7 +6,13 @@ thread entre as mensagens digitadas, o campo continua aceitando texto e anexos d
 ao encerrar a conversa fica no histórico do card. Não há página separada: `/voice` só redireciona
 para o card; `/voice/lab` segue como bancada de calibração da esfera.
 
-Desligado por padrão: sem `VIBEHUB_VOICE_LIVE=1` as rotas respondem 404 e o botão não aparece.
+Desligado por padrão: sem `VIBEHUB_VOICE_LIVE=1` as rotas da chamada respondem 404 e o botão não aparece. O "ler em voz alta" de uma resposta (abaixo) não depende dessa flag.
+
+**Ler em voz alta:** o botão de alto-falante sob uma resposta terminada manda um pedaço do texto
+(já sem markdown e cortado em `readAloud.ts`) para `POST /api/cards/:id/voice/speech`
+(`requireCardWork`), que devolve o MP3 do TTS da OpenAI (`gpt-4o-mini-tts`) em stream
+(`services/voice/speech.ts`). Usa a mesma chave da chamada, com até 4096 caracteres por pedaço e
+um teto de pedaços por pessoa por minuto; parar ou fechar a aba cancela a chamada à OpenAI.
 
 ## Como funciona
 
