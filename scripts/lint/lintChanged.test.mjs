@@ -135,6 +135,24 @@ describe("findStrayMarkdown", () => {
     expect(findStrayMarkdown({ repoDir, baseRef: "main" })).toEqual(["API.md"]);
   });
 
+  it("markdown solto removido com git rm, antes do commit, já não conta: o hook de commit libera a correção", () => {
+    const repoDir = createRepoWithBase({ "README.md": "base\n" });
+    writeRepoFile(repoDir, "NOTES.md", "notes\n");
+    git(repoDir, "add", "NOTES.md");
+    git(repoDir, "commit", "-qm", "notes");
+    git(repoDir, "rm", "-q", "NOTES.md");
+
+    expect(findStrayMarkdown({ repoDir, baseRef: "main" })).toEqual([]);
+  });
+
+  it("markdown solto adicionado ao índice, antes do commit, já conta: o hook de commit barra o commit que o traria", () => {
+    const repoDir = createRepoWithBase({ "README.md": "base\n" });
+    writeRepoFile(repoDir, "NOTES.md", "notes\n");
+    git(repoDir, "add", "NOTES.md");
+
+    expect(findStrayMarkdown({ repoDir, baseRef: "main" })).toEqual(["NOTES.md"]);
+  });
+
   it("markdown que não foi commitado, como o CLAUDE.local.md do card, não conta", () => {
     const repoDir = createRepoWithBase({ "README.md": "base\n" });
     writeRepoFile(repoDir, "CLAUDE.local.md", "local\n");
