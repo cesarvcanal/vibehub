@@ -2019,7 +2019,8 @@ export async function restartStaggered(
  * WRITES the PROJECT brain (CLAUDE.local.md) into every EXISTING worktree of that project's cards —
  * and ONLY that project's: the sweep filters the board by projectId, and each write is guarded by
  * `[ -d <worktree> ]` so a card whose workspace was never provisioned is skipped, not created. An
- * empty text removes the file everywhere instead of leaving it stale. One host call. It lives here
+ * empty text leaves each card only its own notice (base branch or lock), and removes the file where
+ * there is none (analysis and reviewer cards), instead of leaving it stale. One host call. It lives here
  * (not in brain.ts) because it needs the card→worktree mapping, and workspace already imports brain.
  */
 export async function applyProjectBrainEverywhere(

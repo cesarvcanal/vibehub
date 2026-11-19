@@ -175,7 +175,8 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     {
       description:
         "List the cards (terminals) you can reach. Each card is a real Claude Code terminal with its " +
-        "own session, worktree and branch. Returns id, title, project, column, situation " +
+        "own session, worktree and branch. Returns id, title, project, column, the base branch the card " +
+        "was cut from (where its PR goes), situation " +
         "(working/waiting/paused/done/no session), whether the session is live, what the card's agent " +
         "last reported about its work, and your `access` (work = you can send/open/move/deliver; " +
         "view = read only). situation 'waiting' means its last turn is over — read it. `project` " +
@@ -440,10 +441,13 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     "vibehub_deliver",
     {
       description:
-        "Deliver a card: push its branch, open (or reuse) a pull request to `branch`, run its checks " +
+        "Deliver a card: push its branch, open (or reuse) a pull request to `branch` (absent = the branch the card " +
+        "was cut from), run its checks " +
         "and — ONLY when `authorized` is true and the checks pass — merge it with a merge commit. " +
         "Returns { prUrl, merged, reason } ('merged', 'gate' = checks red, 'unauthorized' = PR " +
-        "prepared but not told to merge, 'locked' = merge belongs to the reviewer). Pass " +
+        "prepared but not told to merge, 'locked' = merge belongs to the reviewer, 'base_divergente' = `branch` is " +
+        "not the card's base: nothing pushed, the output counts the commits and files the PR would carry; repeat with " +
+        "`confirmTarget: true` only when the user confirms that target). Pass " +
         "`authorized:true` ONLY when the user explicitly named where to ship ('sobe pra dev'); a " +
         "merge is a deploy, never a default. A PR under review: the push always happens; the merge only " +
         "when you are the review's merger and it is ready ('review_active' otherwise, naming who merges; " +
@@ -454,7 +458,10 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
         "when the conclusion was not. " + PR_DOCS_RULE,
       inputSchema: {
         cardId: z.string().describe("id of the card to deliver (from vibehub_list_terminals)"),
-        branch: z.string().optional().describe("target branch. Absent = the project's base branch."),
+        branch: z.string().optional().describe("target branch. Absent = the branch the card was cut from (its `base`)."),
+        confirmTarget: z.boolean().optional().describe(
+          "true = the user explicitly confirmed `branch` although the card was cut from another base. Without it such a delivery stops with 'base_divergente'.",
+        ),
         authorized: z.boolean().optional().describe("true = merge (deploy). Only when the user named the target."),
         concludeWhenMerged: z.boolean().optional().describe(
           "PR under review, with authorized: true = also conclude the card; recorded on the review, the card moves to done once it is merged.",
@@ -469,7 +476,8 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
         await recordCardActor(user, a.cardId);
         // The person IS the caller here (and was just made the card's actor): the order is theirs.
         return ok(await deliverCard(a.cardId, {
-          branch: a.branch, authorized: a.authorized === true, by: user.id, from: a.cardId, concludeWhenMerged: a.concludeWhenMerged, docs: prDocsOf(a),
+          branch: a.branch, confirmTarget: a.confirmTarget, authorized: a.authorized === true, by: user.id, from: a.cardId,
+          concludeWhenMerged: a.concludeWhenMerged, docs: prDocsOf(a),
         }));
       } catch (e) {
         return fail(e);

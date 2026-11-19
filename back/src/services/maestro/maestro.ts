@@ -52,6 +52,7 @@ export interface TerminalSummary {
   projectId: string;
   project: string;
   column: BoardColumn;
+  base: string;
   /** The dot the hooks reported: working = green, waiting = amber, null = nothing yet. */
   status: CardStatus | null;
   situation: TerminalSituation;
@@ -102,6 +103,7 @@ export function terminalSummary(card: Card, project: Project, now: number = Date
     projectId: project.id,
     project: project.name,
     column: card.column,
+    base: card.base,
     status: card.status ?? null,
     situation: terminalSituation(card),
     liveSession: hasLiveSession(card),

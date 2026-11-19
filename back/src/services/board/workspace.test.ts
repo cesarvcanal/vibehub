@@ -206,6 +206,44 @@ describe("path derivation (pure)", () => {
   });
 });
 
+describe("a branch do card nasce do origin/<origem> recém-buscado (git de verdade)", () => {
+  const roots: string[] = [];
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  it("clone antigo e prod andou no GitHub depois dele: o fetch roda logo antes do worktree add e o card nasce do tip novo, com upstream origin/prod", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const root = await mkdtemp(join(tmpdir(), "vibehub-open-fetch-"));
+    roots.push(root);
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
+    const gitEnv = { ...env, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+    const sh = (script: string) => execFileSync("bash", ["-c", script], { cwd: root, encoding: "utf8", env: gitEnv });
+    const commit = (m: string) => `git -c user.name=t -c user.email=t@t commit -q --allow-empty -m ${m}`;
+    sh(`git init -q --bare remote.git && git clone -q remote.git other 2>/dev/null && cd other && ${commit("base")} && git push -q origin HEAD:dev HEAD:prod`);
+    sh("git clone -q remote.git repo");
+    sh(`cd other && ${commit("hotfix-em-prod")} && git push -q origin HEAD:prod`);
+    const tip = sh("git --git-dir=remote.git rev-parse refs/heads/prod").trim();
+    const cwd = join(root, "wt");
+    const script = ws.buildOpenScript({
+      containerName: CONTAINER, tmuxSession: "card-1", cardId: "id", statusUrl: STATUS_URL, cwd,
+      repo: { dir: join(root, "repo"), branch: "card/x", base: "prod", cloneUrl: join(root, "remote.git") },
+    });
+    const lines = script.split("\n");
+    const from = lines.findIndex((l) => l.startsWith("CLONE_URL="));
+    const lastAdd = lines.findLastIndex((l) => l.includes("worktree add"));
+    const to = lines.findIndex((l, i) => i > lastAdd && l === "fi");
+    const repoPart = lines.slice(from, to + 1);
+    const iFetch = repoPart.findIndex((l) => l.includes("fetch --prune origin"));
+    const iFirstAdd = repoPart.findIndex((l) => l.includes("worktree add"));
+    expect(iFetch).toBeGreaterThanOrEqual(0);
+    expect(repoPart.slice(iFetch + 1, iFirstAdd).every((l) => !l.includes("fetch"))).toBe(true);
+    sh(`set -e\n${repoPart.join("\n")}`);
+    expect(sh(`git -C ${shQuote(cwd)} rev-parse HEAD`).trim()).toBe(tip);
+    expect(sh(`git -C ${shQuote(cwd)} rev-parse --abbrev-ref '@{upstream}'`).trim()).toBe("origin/prod");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Open
 // ---------------------------------------------------------------------------
@@ -255,7 +293,7 @@ describe("openCard", () => {
     // the ephemeral credential lives in the script body, which travels over stdin
     expect(script).toContain(`GIT_AUTH='${AUTH_HEADER}'`);
     expect(script).toContain("git clone");
-    expect(script).toContain("fetch --prune");
+    expect(script).toContain("fetch --prune origin");
     // worktree on the card's branch, off the inherited base
     expect(script).toContain(`card/${card.worktreeSlug}`);
     expect(script).toContain("'origin/dev'");
@@ -287,6 +325,7 @@ describe("openCard", () => {
     // per-command http header (a per-command assignment never leaks into the shell/tmux environment)
     expect(script).toContain(`GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraheader GIT_CONFIG_VALUE_0="$GIT_AUTH" git clone`);
     expect(script).toContain(`GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraheader GIT_CONFIG_VALUE_0="$GIT_AUTH" git -C "$REPO_DIR" fetch --prune origin`);
+    expect(script).not.toContain("fetch --all");
     // the tmux line carries NO credential (otherwise the token would enter the claude session env)
     const tmuxLine = script.split("\n").find((l) => l.includes("tmux"))!;
     expect(tmuxLine).not.toContain("GIT_AUTH");
@@ -345,7 +384,7 @@ describe("openCard", () => {
     const iClone = lines.findIndex((l) => l.includes("git clone"));
     const iSetUrl = lines.findIndex((l) => l.includes("remote set-url"));
     const iGuard = lines.findIndex((l) => l.includes('if [ ! -d "$WT" ]; then'));
-    const iFetch = lines.findIndex((l) => l.includes("fetch --prune"));
+    const iFetch = lines.findIndex((l) => l.includes("fetch --prune origin"));
     const iWorktree = lines.findIndex((l) => l.includes("worktree add"));
     expect(iClone).toBeGreaterThanOrEqual(0);
     // set-url ALWAYS runs (cheap, and it is the legacy-credential scrub) — outside the guard
@@ -354,7 +393,7 @@ describe("openCard", () => {
     expect(iFetch).toBeGreaterThan(iGuard);
     expect(iFetch).toBeLessThan(iWorktree);
     // and there is exactly ONE fetch — none unconditional
-    expect(scriptAt(0).match(/fetch --prune/g)).toHaveLength(1);
+    expect(scriptAt(0).match(/fetch --prune origin/g)).toHaveLength(1);
   });
 
   it("GitHub not connected (gitAuthHeaderFor throws) → carries on with NO credential (public repo)", async () => {
@@ -1981,8 +2020,18 @@ describe("the PROJECT brain (CLAUDE.local.md) seeded on open", () => {
     expect(script).toContain(`echo 'CLAUDE.local.md' >> "$REPO_DIR/.git/info/exclude"`);
   });
 
-  it("with NO project brain: the file is removed (kept in sync), not written", async () => {
+  it("sem cérebro do projeto, o CLAUDE.local.md do card guarda só de onde ele nasceu e para onde vai o PR", async () => {
     const { card } = await seed();
+    await reg.updateCard(card.id, { base: "prod" });
+    await ws.openCard(card.id);
+    const script = scriptAt(0);
+    expect(script).toContain(`cat > '/work/acme--erp-aux-worktrees/${card.worktreeSlug}/CLAUDE.local.md'`);
+    expect(script).toContain("This card was cut from `prod`, and its pull request goes to `prod`");
+  });
+
+  it("sem cérebro do projeto, o card de análise fica sem o arquivo (removido, em sincronia)", async () => {
+    const project = await reg.createProject({ name: "erp-aux", repoFullName: "acme/erp-aux", cloneUrl: "https://github.com/acme/erp-aux.git" });
+    const card = await reg.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" });
     await ws.openCard(card.id);
     const script = scriptAt(0);
     expect(script).toContain(`rm -f '/work/acme--erp-aux-worktrees/${card.worktreeSlug}/CLAUDE.local.md'`);
@@ -2063,12 +2112,14 @@ describe("applyProjectBrainEverywhere", () => {
     expect(script).toContain(`if [ -d '/work/acme--alpha-worktrees/${a1.worktreeSlug}' ]; then`);
   });
 
-  it("an empty project brain REMOVES the file from the worktrees", async () => {
+  it("cérebro do projeto vazio: o card comum fica só com o aviso da origem, o de análise perde o arquivo", async () => {
     const alpha = await reg.createProject({ name: "alpha", repoFullName: "acme/alpha" });
     const a1 = await reg.createCard({ projectId: alpha.id, title: "A1" });
+    const a2 = await reg.createAnalysisCard({ projectId: alpha.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" });
     const out = await ws.applyProjectBrainEverywhere(alpha.id);
     expect(out.bytes).toBe(0);
-    expect(scriptAt(0)).toContain(`rm -f '/work/acme--alpha-worktrees/${a1.worktreeSlug}/CLAUDE.local.md'`);
+    expect(scriptAt(0)).toContain(`cat > '/work/acme--alpha-worktrees/${a1.worktreeSlug}/CLAUDE.local.md'`);
+    expect(scriptAt(0)).toContain(`rm -f '/work/acme--alpha-worktrees/${a2.worktreeSlug}/CLAUDE.local.md'`);
   });
 
   it("no cards = no host call; unknown project = error", async () => {

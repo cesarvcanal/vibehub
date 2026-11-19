@@ -11,6 +11,11 @@ Code is not delivered by pushing or merging by hand. It ships through **`vibehub
 pushes the branch, opens (or reuses) a pull request to the target branch, runs the gate, and — only
 when told to — merges it. That single tool is the one place a change becomes a deployment.
 
+- **A card's PR goes to the branch it was cut from** (its `base` in `vibehub_list_terminals`, also
+  stated in the card's `CLAUDE.local.md`). Leave `branch` out and the PR goes there; never rebuild the
+  work on the project's base branch instead. A different `branch` stops with `base_divergente`,
+  counting the commits and files that would go along: report it, and repeat with
+  `confirmTarget: true` only when the user explicitly confirms that target.
 - **A merge is a deploy.** Pass `authorized: true` to `vibehub_deliver` **only when the user named
   where to ship** — "ship it to dev", "when it's green put it on prod". Never pass it by default, and
   never infer it from the work merely being finished.
