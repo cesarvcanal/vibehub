@@ -2536,9 +2536,9 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
         await endTurn(o, s.review.reviewerCardId);
         await vi.waitFor(async () => expect((await o.store.getReview(s.review.id))?.phase).toBe("impasse"));
         const stuck = await o.store.getReview(s.review.id);
-        expect(stuck?.impasseReason).toMatch(/limite de uso/);
+        expect(stuck?.impasseReason).toBe("conta Claude sem limite de uso depois de várias retomadas");
         expect(stuck?.usageLimitWait).toBeUndefined();
-        await new Promise((r) => setTimeout(r, 100));
+        await new Promise((resolve) => setTimeout(resolve, 100));
         expect(send).toHaveBeenCalledTimes(3);
       } finally {
         stopProbe();
@@ -2569,8 +2569,8 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
       const o = await load();
       const { author, review } = await started(o);
       await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
-      await o.store.mutateReview(review.id, (r) => {
-        r.usageLimitWait = { side: "author", until: Date.now() + 60_000 };
+      await o.store.mutateReview(review.id, (stored) => {
+        stored.usageLimitWait = { side: "author", until: Date.now() + 60_000 };
       });
       const reviewing = await o.orch.submitAuthorResponse(author.id, {
         round: 1, items: [{ id: "f1", status: "fixed", commit: "c1", reply: "feito" }], headSha: SHA2,
@@ -2583,8 +2583,8 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
       const o = await load();
       const { author, review } = await started(o);
       await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
-      await o.store.mutateReview(review.id, (r) => {
-        r.usageLimitWait = { side: "reviewer", until: Date.now() + 60_000 };
+      await o.store.mutateReview(review.id, (stored) => {
+        stored.usageLimitWait = { side: "reviewer", until: Date.now() + 60_000 };
       });
       send.mockClear();
       const off = o.orch.startReviewOrchestrator({ graceMs: 0, usageResumeMarginMs: 0 });
@@ -2601,9 +2601,9 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
       const o = await load();
       const { author, review } = await started(o);
       await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
-      await o.store.mutateReview(review.id, (r) => {
-        r.coauthorUserId = "u-merger";
-        r.usageLimitWait = { side: "author", until: Date.now() - 1000 };
+      await o.store.mutateReview(review.id, (stored) => {
+        stored.coauthorUserId = "u-merger";
+        stored.usageLimitWait = { side: "author", until: Date.now() - 1000 };
       });
       send.mockClear();
       injected.userGitFailure = new Error("users store unreadable");
@@ -2614,7 +2614,7 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
         expect(failed?.impasseReason).toMatch(/users store unreadable/);
         expect(failed?.usageLimitWait).toBeUndefined();
         expect(send).not.toHaveBeenCalled();
-        await vi.waitFor(async () => expect((await messagesOn(o, author.id)).map((e) => e.text)).toContainEqual(expect.stringMatching(/impasse/i)));
+        await vi.waitFor(async () => expect((await messagesOn(o, author.id)).map((event) => event.text)).toContainEqual(expect.stringMatching(/impasse/i)));
       } finally {
         off();
       }
@@ -2623,8 +2623,8 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
     it("leitura das esperas que falha na subida tenta de novo e retoma a rodada", async () => {
       const o = await load();
       const { review } = await started(o);
-      await o.store.mutateReview(review.id, (r) => {
-        r.usageLimitWait = { side: "reviewer", until: Date.now() - 1000 };
+      await o.store.mutateReview(review.id, (stored) => {
+        stored.usageLimitWait = { side: "reviewer", until: Date.now() - 1000 };
       });
       injected.usageWaitsReadFailures = 2;
       const off = o.orch.startReviewOrchestrator({ graceMs: 0, usageResumeMarginMs: 0, usageWaitsRetryMs: 10 });
