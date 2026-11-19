@@ -160,7 +160,7 @@ mudança no painel de produção — fora do escopo da POC.
 ## Testes
 
 ```bash
-cd back  && npx vitest run src/routes/voice.test.ts src/routes/voiceCard.test.ts
+cd back  && npx vitest run src/routes/voice.test.ts src/routes/voiceCard.test.ts src/routes/voiceSpeech.test.ts
 cd front && npx vitest run src/features/voice src/features/board/components/SdkChatView.voice.test.tsx src/features/board/lib/sdkChat.voice.test.ts
 ```
 
