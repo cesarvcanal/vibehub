@@ -29,6 +29,7 @@ const listOpenPulls = vi.fn(async (): Promise<OpenPull[] | null> => {
 const readPull = vi.fn(async (_c: unknown, _o: string, _r: string, n: number) => (n === PULL.number ? { ...PULL, open: true } : null));
 const sendToTerminal = vi.fn(async (cardId: string) => ({ sent: true, cardId, title: "", project: "" }));
 const runScriptOnHost = vi.fn(async (_script: string, _opts?: unknown) => ({ stdout: "", stderr: "" }));
+const canWorkOnProject = vi.fn<typeof import("../auth/access.js").canWorkOnProject>();
 
 async function boot(): Promise<FastifyInstance> {
   vi.resetModules();
@@ -64,6 +65,11 @@ async function boot(): Promise<FastifyInstance> {
   vi.doMock("../runtime/host.js", async () => {
     const actual = await vi.importActual<typeof import("../runtime/host.js")>("../runtime/host.js");
     return { ...actual, hostExecutor: () => ({ ...actual.hostExecutor(), runScript: runScriptOnHost }) };
+  });
+  vi.doMock("../auth/access.js", async () => {
+    const actual = await vi.importActual<typeof import("../auth/access.js")>("../auth/access.js");
+    canWorkOnProject.mockImplementation(actual.canWorkOnProject);
+    return { ...actual, canWorkOnProject };
   });
   const { buildServer } = await import("../index.js");
   const server = await buildServer();
@@ -113,11 +119,12 @@ beforeEach(async () => {
   repoHidden = false;
   listOpenPulls.mockClear();
   sendToTerminal.mockClear();
+  canWorkOnProject.mockReset();
   app = await boot();
 });
 afterEach(async () => {
   await app.close();
-  for (const mod of ["../runtime/runner.js", "../services/board/workspace.js", "../services/github/client.js", "../services/maestro/maestro.js"]) {
+  for (const mod of ["../runtime/runner.js", "../services/board/workspace.js", "../services/github/client.js", "../services/maestro/maestro.js", "../auth/access.js"]) {
     vi.doUnmock(mod);
   }
   await rm(dir, { recursive: true, force: true });
@@ -355,6 +362,18 @@ describe("WS /api/projects/:id/prs/live", () => {
     expect(ownerLive.lastClaims()).toEqual([{ prNumber: 638, userId: w.memberId, username: "albert" }]);
     ownerLive.socket.terminate();
     memberLive.socket.terminate();
+  });
+
+  it("falha ao sentar o espectador fecha o canal com 1011, e a próxima conexão entra normalmente", async () => {
+    const w = await world();
+    canWorkOnProject.mockRejectedValueOnce(new Error("shares unreadable"));
+    const failed = await live(w.owner, w.projectId);
+    const closed = new Promise<number>((settle) => failed.socket.on("close", (code) => settle(code)));
+    expect(await closed).toBe(1011);
+    const next = await live(w.owner, w.projectId);
+    next.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(next.lastClaims()).toEqual([{ prNumber: 636, userId: w.ownerId, username: "owner" }]));
+    next.socket.terminate();
   });
 
   it("quem só vê o projeto não monta; sem acesso ao projeto é 404; sem sessão é 401; frame inválido fecha o socket", async () => {
