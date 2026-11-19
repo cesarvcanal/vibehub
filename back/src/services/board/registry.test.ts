@@ -1572,6 +1572,35 @@ describe("board registry (persisted)", () => {
       expect((await reg.listAccounts())[0].name).toBe("tech");
     });
 
+    it("nome de conta é único entre as contas, sem diferenciar maiúscula nem espaço nas pontas", async () => {
+      await reg.createAccount({ name: "tech" });
+      await reg.createAccount({ name: "albert" });
+      await reg.renameAccount("tech", "Mussa");
+      await expect(reg.renameAccount("albert", "  mussa ")).rejects.toThrow(/account name is already in use/);
+      await expect(reg.createAccount({ name: "MUSSA" })).rejects.toThrow(/account name is already in use/);
+      expect((await reg.renameAccount("tech", "mussa")).name).toBe("mussa");
+      expect((await reg.listAccounts()).map((account) => account.name)).toEqual(["mussa", "albert"]);
+    });
+
+    it("nome de conta não repete o nome da conta padrão, e a conta padrão não repete o de uma conta", async () => {
+      await reg.createAccount({ name: "tech" });
+      await reg.setDefaultAccountLabel("César");
+      await expect(reg.renameAccount("tech", "césar")).rejects.toThrow(/account name is already in use/);
+      await expect(reg.setDefaultAccountLabel(" TECH ")).rejects.toThrow(/account name is already in use/);
+      expect((await reg.getConfig()).defaultAccountLabel).toBe("César");
+      expect((await reg.setDefaultAccountLabel("césar")).defaultAccountLabel).toBe("césar");
+    });
+
+    it("instalação que já tinha nome repetido antes da regra: manter o próprio nome passa, só trocar para um nome ocupado é recusado", async () => {
+      await reg.createAccount({ name: "tech" });
+      await writeFile(join(dir, "board.json"), JSON.stringify({ ...JSON.parse(await readFile(join(dir, "board.json"), "utf8")), config: { defaultAccountLabel: "Tech" } }));
+      const reopened = await freshRegistry();
+      expect((await reopened.setDefaultAccountLabel("tech")).defaultAccountLabel).toBe("tech");
+      expect((await reopened.renameAccount("tech", "TECH")).name).toBe("TECH");
+      await reopened.createAccount({ name: "albert" });
+      await expect(reopened.renameAccount("albert", "tech")).rejects.toThrow(/account name is already in use/);
+    });
+
     it("removes an unreferenced account; an unknown one throws", async () => {
       await reg.createAccount({ name: "temp one" });
       expect((await reg.removeAccount("temp-one")).slug).toBe("temp-one");

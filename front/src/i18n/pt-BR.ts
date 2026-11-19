@@ -43,6 +43,7 @@ export const ptBR: Record<string, string> = {
   "apiError.badRequest": "requisição inválida",
   "apiError.conflict": "conflito",
   "apiError.alreadyExists": "já existe",
+  "apiError.accountNameInUse": "já existe uma conta com esse nome",
   "apiError.missingFields": "faltam campos",
   "apiError.invalidToken": "token inválido",
   "apiError.dockerUnreachable": "o docker está inacessível",

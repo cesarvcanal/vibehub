@@ -1372,6 +1372,7 @@ export async function getConfig(): Promise<BoardConfig> {
 export async function setDefaultAccountLabel(label: string | null | undefined): Promise<BoardConfig> {
   const clean = sanitizeDefaultAccountLabel(label);
   return store.mutate((doc) => {
+    if (clean) assertAccountNameFree(doc, clean, DEFAULT_ACCOUNT_OWNER);
     doc.config = { ...doc.config, defaultAccountLabel: clean };
     return doc.config;
   });
@@ -1380,6 +1381,25 @@ export async function setDefaultAccountLabel(label: string | null | undefined): 
 // ---------------------------------------------------------------------------
 // Claude accounts
 // ---------------------------------------------------------------------------
+
+const DEFAULT_ACCOUNT_OWNER = "default";
+
+function assertAccountNameFree(doc: BoardDoc, name: string, ownerSlug: string): void {
+  const nameKey = name.trim().toLocaleLowerCase();
+  const takenNames = [
+    ...doc.accounts.map((account) => ({ ownerSlug: account.slug, name: account.name })),
+    ...(doc.config.defaultAccountLabel ? [{ ownerSlug: DEFAULT_ACCOUNT_OWNER, name: doc.config.defaultAccountLabel }] : []),
+  ].map((taken) => ({ ownerSlug: taken.ownerSlug, nameKey: taken.name.trim().toLocaleLowerCase() }));
+  const keepsOwnName = takenNames.some((taken) => taken.ownerSlug === ownerSlug && taken.nameKey === nameKey);
+  if (keepsOwnName) return;
+  const clash = takenNames.some((taken) => taken.ownerSlug !== ownerSlug && taken.nameKey === nameKey);
+  if (clash) throw new Error("account name is already in use");
+}
+
+export async function assertDefaultAccountLabelFree(label: string | null | undefined): Promise<void> {
+  const clean = sanitizeDefaultAccountLabel(label);
+  if (clean) assertAccountNameFree(await store.load(), clean, DEFAULT_ACCOUNT_OWNER);
+}
 
 export async function listAccounts(): Promise<Account[]> {
   return (await store.load()).accounts;
@@ -1391,6 +1411,7 @@ export async function createAccount(input: { name: string }): Promise<Account> {
   const slug = accountSlugFor(name);
   return store.mutate((doc) => {
     if (doc.accounts.some((a) => a.slug === slug)) throw new Error(`account '${slug}' already exists`);
+    assertAccountNameFree(doc, name, slug);
     const account: Account = { slug, name, createdAt: Date.now() };
     doc.accounts.push(account);
     return account;
@@ -1404,6 +1425,7 @@ export async function renameAccount(slug: string, name: string): Promise<Account
   return store.mutate((doc) => {
     const account = doc.accounts.find((candidate) => candidate.slug === accountSlug);
     if (!account) throw new Error("account not found");
+    assertAccountNameFree(doc, trimmedName, accountSlug);
     account.name = trimmedName;
     return account;
   });

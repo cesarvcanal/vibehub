@@ -153,6 +153,7 @@ const API_ERROR_KEYS: Record<string, string> = {
   "bad request": "apiError.badRequest",
   conflict: "apiError.conflict",
   "already exists": "apiError.alreadyExists",
+  "account name is already in use": "apiError.accountNameInUse",
   "missing fields": "apiError.missingFields",
   "invalid token": "apiError.invalidToken",
   "docker is unreachable": "apiError.dockerUnreachable",

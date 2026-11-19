@@ -143,6 +143,7 @@ describe("translateApiError", () => {
     expect(translateApiError("Not Authenticated")).toBe("não autenticado");
     expect(translateApiError("invalid username or password")).toBe("usuário ou senha inválidos");
     expect(translateApiError("the runner is unreachable")).toBe("o runner está inacessível");
+    expect(translateApiError("account name is already in use")).toBe("já existe uma conta com esse nome");
   });
 
   it("passes an unknown message straight through — half-translated stderr helps nobody", () => {
