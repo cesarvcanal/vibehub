@@ -58,9 +58,10 @@ export function joinPrRoom(projectId: string, user: PublicUser, send: (event: Pr
   return {
     claim: (prNumber) => {
       const current = room.holders.get(prNumber);
-      for (const heldPr of heldPrs()) dropViewer(heldPr);
+      const previouslyHeld = heldPrs();
+      for (const heldPr of previouslyHeld) dropViewer(heldPr);
       if (current && current.claim.userId !== user.id) {
-        broadcast(room, { type: "claims", claims: claimsOf(room) });
+        if (previouslyHeld.length > 0) broadcast(room, { type: "claims", claims: claimsOf(room) });
         return current.claim;
       }
       const holder = room.holders.get(prNumber) ?? { claim: { prNumber, userId: user.id, username: user.username }, viewers: new Set<Viewer>() };

@@ -273,9 +273,11 @@ describe("WS /api/projects/:id/prs/live", () => {
     const ownerLive = await live(w.owner, w.projectId);
     memberLive.send({ type: "claim", prNumber: 636 });
     await vi.waitFor(() => expect(ownerLive.lastClaims()).toHaveLength(1));
+    const memberClaimsFrames = memberLive.frames.filter((frame) => frame.type === "claims").length;
     ownerLive.send({ type: "claim", prNumber: 636 });
     await vi.waitFor(() => expect(ownerLive.frames).toContainEqual({ type: "claim-refused", prNumber: 636, username: "albert" }));
     expect(ownerLive.lastClaims()).toEqual([{ prNumber: 636, userId: w.memberId, username: "albert" }]);
+    expect(memberLive.frames.filter((frame) => frame.type === "claims")).toHaveLength(memberClaimsFrames);
     const res = await analyse(w.owner, w.projectId, 636, { reviewerUserId: w.ownerId });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ error: expect.stringMatching(/^pr_em_montagem:/), username: "albert" });
