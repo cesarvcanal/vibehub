@@ -172,7 +172,8 @@ commits). The AI that did the work sends the documentation with the delivery:
 
 - `title`, and `body` — markdown with the headings Contexto, Problema identificado, Objetivo, Solução
   implementada, Detalhamento técnico, Comportamento esperado, Impactos, Testes e validações, Pontos de
-  atenção (English equivalents are accepted);
+  atenção, Conformidade com as regras do repositório (English equivalents are accepted, such as
+  Compliance);
 - `comments` — `[{ path, line, body, side?, startLine? }]`, one per relevant block of the diff, each
   120 to 8 000 characters (what changed, why, how, responsibility, impact, rules).
 
