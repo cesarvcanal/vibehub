@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ANALYSIS_DIMENSIONS } from "./analysisModel.js";
+import { ANALYSIS_DIMENSIONS, ANALYSIS_SEVERITIES } from "./analysisModel.js";
 import { prAnalysisWorkflowSource } from "./analysisWorkflow.js";
 import { analysisFinding, analysisReportInput } from "../../mcp/tools.js";
 
@@ -75,6 +75,17 @@ describe("frota da análise de PR", () => {
     expect(briefSchema.properties.dimensions.items.properties.key.enum).toEqual([...ANALYSIS_DIMENSIONS]);
     const reviewedKeys = calls.filter((call) => call.opts.phase === "Revisão").map((call) => call.opts.label?.replace("revisão: ", ""));
     expect(reviewedKeys.sort()).toEqual([...ANALYSIS_DIMENSIONS].sort());
+  });
+
+  it("as severidades e os tipos de prova da frota são os da ferramenta do relatório: um valor só no script o zod recusaria no passo 3", async () => {
+    const { calls } = await runFleet(confirmOneFindingUpToJudge);
+    const judgeSchema = calls.find((call) => call.opts.phase === "Julgamento")!.opts.schema as {
+      properties: { findings: { items: { properties: { severity: { enum: string[] }; proof: { properties: { kind: { enum: string[] } } } } } } };
+    };
+    const judgedFinding = judgeSchema.properties.findings.items.properties;
+    const toolProof = analysisFinding.innerType().shape.proof.unwrap().shape;
+    expect(judgedFinding.severity.enum).toEqual([...ANALYSIS_SEVERITIES]);
+    expect(judgedFinding.proof.properties.kind.enum).toEqual([...toolProof.kind.options]);
   });
 
   it("contexto e juiz em Opus; revisão e verificação em Sonnet", async () => {

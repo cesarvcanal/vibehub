@@ -16,7 +16,7 @@ import { MAX_ROUNDS, cardsToConclude } from "../services/review/model.js";
 import { attachPrs } from "../services/review/attach.js";
 import { startReviewByAgent } from "../services/review/start.js";
 import { recordAnalysisReport } from "../services/review/analysisReport.js";
-import { ANALYSIS_DIMENSIONS, ANALYSIS_STAGES } from "../services/review/analysisModel.js";
+import { ANALYSIS_DIMENSIONS, ANALYSIS_SEVERITIES, ANALYSIS_STAGES, DIMENSION_RUN_STATUSES } from "../services/review/analysisModel.js";
 import { ok, fail } from "./toolResult.js";
 
 /**
@@ -89,7 +89,7 @@ const analysisDimension = z.enum(ANALYSIS_DIMENSIONS);
 
 export const analysisFinding = z.object({
   id: z.string().min(1).max(20).describe("the id the fleet gave (f1, f2, ...)"),
-  severity: z.enum(["blocking", "improvement", "suggestion", "question"]),
+  severity: z.enum(ANALYSIS_SEVERITIES),
   dimension: analysisDimension,
   status: z.enum(["open", "fixed"]).describe("fixed only with the commit that fixes it"),
   commit: z.string().max(80).optional(),
@@ -113,7 +113,7 @@ const analysisReportFields = z.object({
   summary: z.string().min(1).max(1000),
   dimensions: z.array(z.object({
     key: analysisDimension,
-    status: z.enum(["ran", "skipped", "not_run"]),
+    status: z.enum(DIMENSION_RUN_STATUSES),
     reason: z.string().max(500).optional(),
     unverifiedCount: z.number().int().min(1).optional()
       .describe("findings the fleet did not check (above the cap or without a verdict), exactly as the fleet returned it"),

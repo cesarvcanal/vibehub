@@ -6,7 +6,10 @@ export type AnalysisDimension = (typeof ANALYSIS_DIMENSIONS)[number];
 export const ANALYSIS_STAGES = ["analysed", "done", "fleet_unavailable"] as const;
 export type AnalysisStage = (typeof ANALYSIS_STAGES)[number];
 
-export type AnalysisSeverity = Exclude<FindingSeverity, "refuted">;
+export const ANALYSIS_SEVERITIES = ["blocking", "improvement", "suggestion", "question"] as const satisfies readonly FindingSeverity[];
+export type AnalysisSeverity = (typeof ANALYSIS_SEVERITIES)[number];
+
+export const DIMENSION_RUN_STATUSES = ["ran", "skipped", "not_run"] as const;
 
 export type AnalysisFinding = Pick<Finding, "id" | "title" | "problem" | "file" | "line" | "proof" | "fix" | "commit"> & {
   severity: AnalysisSeverity;
@@ -16,7 +19,7 @@ export type AnalysisFinding = Pick<Finding, "id" | "title" | "problem" | "file" 
 
 export interface DimensionRun {
   key: AnalysisDimension;
-  status: "ran" | "skipped" | "not_run";
+  status: (typeof DIMENSION_RUN_STATUSES)[number];
   reason?: string;
   unverifiedCount?: number;
 }
