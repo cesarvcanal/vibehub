@@ -957,8 +957,9 @@ function Footer({
 
 /** One sentence on what is happening now: whose turn it is, or what the review waits for. */
 function stageText(review: Review, authorWorking: boolean, t: typeof translate): string {
-  if (review.usageLimitWait && (review.phase === "reviewing" || review.phase === "fixing")) {
-    return t(`review.stage.usageLimit.${review.usageLimitWait.side}`, { time: formatResetAt(review.usageLimitWait.until, Date.now()) });
+  const turnSide = review.phase === "reviewing" ? "reviewer" : review.phase === "fixing" ? "author" : null;
+  if (review.usageLimitWait && review.usageLimitWait.side === turnSide) {
+    return t(`review.stage.usageLimit.${turnSide}`, { time: formatResetAt(review.usageLimitWait.until, Date.now()) });
   }
   switch (review.phase) {
     case "reviewing":

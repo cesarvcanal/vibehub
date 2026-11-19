@@ -760,6 +760,7 @@ export async function submitReviewerRound(
     r.prHeadSha = headSha;
     r.lastSubmitRound = r.round;
     r.nudges = 0;
+    delete r.usageLimitWait;
     note(r, "reviewer", payload.summary || `Rodada ${r.round}: ${added.length} achado(s) novo(s), ${verdicts.length} veredito(s).`, {
       items: [
         ...applied.map((v) => ({ id: v.id, status: v.status, reply: v.reviewerReply })),
@@ -774,6 +775,7 @@ export async function submitReviewerRound(
     landed = true;
   });
   if (!landed) return after;
+  cancelUsageResume(after.id);
   await announceQuestions(after);
   return await dispatch(after);
 }
@@ -912,12 +914,14 @@ export async function submitAuthorResponse(
     if (!round) return;
     r.lastRespondRound = r.round;
     r.nudges = 0;
+    delete r.usageLimitWait;
     r.round += 1;
     r.phase = "reviewing";
     note(r, "system", `Rodada ${r.round} de ${MAX_ROUNDS}: o revisor confere só o diff.`);
     opened = true;
   });
   if (!opened) return after;
+  cancelUsageResume(after.id);
   await relayReview(after, "reviewer", reviewerDeltaPrompt(after));
   return (await getReview(after.id)) ?? after;
 }
@@ -1487,7 +1491,7 @@ async function onTurnFinished(event: CardEvent): Promise<void> {
     const tool = side === "reviewer" ? TOOL_SUBMIT : TOOL_RESPOND;
     const who = side === "reviewer" ? "revisor" : "autor";
     const after = await mutateReview(id, (r) => {
-      if (!awaitingTool(r, side) || r.usageLimitWait) return;
+      if (!awaitingTool(r, side) || r.usageLimitWait?.side === side) return;
       if (usageLimit?.resetsAt !== undefined) {
         r.usageLimitWait = { side, until: usageLimit.resetsAt };
         note(r, "system", `A conta Claude do ${who} ficou sem limite de uso: a rodada ${r.round} continua sozinha quando o limite voltar.`);

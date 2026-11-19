@@ -2456,6 +2456,57 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
       }
     });
 
+    it("a rodada entregue durante a espera apaga a marca: o turno do autor sem resposta recebe o lembrete", async () => {
+      const o = await load();
+      const { author, review, stop } = await limitedReviewer(o, { resetsAt: Date.now() + 60_000 });
+      try {
+        await endTurn(o, review.reviewerCardId);
+        await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.usageLimitWait).toBeDefined());
+        const fixingNow = await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+        expect(fixingNow.phase).toBe("fixing");
+        expect(fixingNow.usageLimitWait).toBeUndefined();
+        send.mockClear();
+        await endTurn(o, author.id);
+        await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+        expect(send.mock.calls[0]![0]).toBe(author.id);
+        expect(lastText()).toMatch(/sem chamar/);
+      } finally {
+        stop();
+      }
+    });
+
+    it("a resposta do autor durante a espera dele apaga a marca e o revisor volta a ser cobrado", async () => {
+      const o = await load();
+      const { author, review } = await started(o);
+      await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+      await o.store.mutateReview(review.id, (r) => {
+        r.usageLimitWait = { side: "author", until: Date.now() + 60_000 };
+      });
+      const reviewing = await o.orch.submitAuthorResponse(author.id, {
+        round: 1, items: [{ id: "f1", status: "fixed", commit: "c1", reply: "feito" }], headSha: SHA2,
+      });
+      expect(reviewing.phase).toBe("reviewing");
+      expect((await o.store.getReview(review.id))?.usageLimitWait).toBeUndefined();
+    });
+
+    it("a espera de um lado não cala a cobrança do outro lado", async () => {
+      const o = await load();
+      const { author, review } = await started(o);
+      await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+      await o.store.mutateReview(review.id, (r) => {
+        r.usageLimitWait = { side: "reviewer", until: Date.now() + 60_000 };
+      });
+      send.mockClear();
+      const off = o.orch.startReviewOrchestrator({ graceMs: 0, usageResumeMarginMs: 0 });
+      try {
+        await endTurn(o, author.id);
+        await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+        expect(send.mock.calls[0]![0]).toBe(author.id);
+      } finally {
+        off();
+      }
+    });
+
     it("tentar de novo durante a espera reenvia uma vez só", async () => {
       const o = await load();
       const { review, stop } = await limitedReviewer(o, { resetsAt: Date.now() + 300 });

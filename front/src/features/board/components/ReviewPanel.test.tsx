@@ -158,12 +158,21 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.getByText("Dúvida esperando a decisão do revisor humano.")).toBeInTheDocument();
   });
 
-  it("conta Claude sem limite de uso: a etapa diz de quem é a conta e a que horas a rodada continua sozinha", async () => {
+  it.each([
+    { side: "reviewer", phase: "reviewing", text: "A conta Claude do revisor ficou sem limite de uso: a rodada continua sozinha às 17:10." },
+    { side: "author", phase: "fixing", text: "A conta Claude do autor ficou sem limite de uso: a correção continua sozinha às 17:10." },
+  ] as const)("conta Claude do $side sem limite de uso: a etapa diz de quem é a conta e a que horas continua sozinha", async ({ side, phase, text }) => {
     const until = new Date();
     until.setHours(17, 10, 0, 0);
-    open("aut", review({ phase: "reviewing", round: 1, usageLimitWait: { side: "reviewer", until: until.getTime() } }));
+    open("aut", review({ phase, round: 1, usageLimitWait: { side, until: until.getTime() } }));
     await loaded();
-    expect(screen.getByText("A conta Claude do revisor ficou sem limite de uso: a rodada continua sozinha às 17:10.")).toBeInTheDocument();
+    expect(screen.getByText(text)).toBeInTheDocument();
+  });
+
+  it("espera do limite de um lado não aparece na vez do outro lado", async () => {
+    open("aut", review({ phase: "fixing", round: 1, lastSubmitRound: 1, usageLimitWait: { side: "reviewer", until: Date.now() + 60_000 } }));
+    await loaded();
+    expect(screen.queryByText(/sem limite de uso/)).toBeNull();
   });
 
   it("revisor rodando a frota: a conversa mostra cada agente com o modelo, o achado e a verificação respondendo a ele", async () => {
