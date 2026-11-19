@@ -127,6 +127,12 @@ describe("painel da análise de PR", () => {
     expect(within(blockers).getByText("token expirado continua entrando")).toBeInTheDocument();
   });
 
+  it("o corpo rola só na vertical e quebra o caminho longo em vez de abrir rolagem lateral", async () => {
+    renderPanel(readModel(doneReport(), "not_apt"));
+    const body = (await screen.findByText("Login por SSO no lugar da senha local.")).parentElement!;
+    expect(body).toHaveClass("overflow-y-auto", "overflow-x-hidden", "[overflow-wrap:anywhere]");
+  });
+
   it("frota indisponível mostra o motivo e o que fazer, sem achado nenhum", async () => {
     renderPanel(readModel(
       doneReport({ stage: "fleet_unavailable", unavailableReason: "the Workflow tool is not available", findings: [], dimensions: [] }),

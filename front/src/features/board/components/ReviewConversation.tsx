@@ -61,7 +61,7 @@ export function ReviewConversation({ review, working, nameOf }: ReviewConversati
         role="log"
         aria-live="polite"
         aria-label={t("review.tab.conversation")}
-        className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-0.5 py-2"
+        className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overflow-x-hidden px-0.5 py-2"
       >
         {rows.length === 0 ? (
           <p className="py-6 text-center text-xs text-muted-foreground">{t("review.conversation.empty")}</p>

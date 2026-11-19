@@ -144,7 +144,7 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
       <div role="tabpanel" hidden={tab !== "conversation"} className={cn("min-h-0 flex-1 flex-col", tab === "conversation" ? "flex" : "hidden")}>
         <ReviewConversation review={review} working={working} nameOf={nameOf} />
       </div>
-      <div role="tabpanel" hidden={tab !== "findings"} className={cn("min-h-0 flex-1 overflow-y-auto", tab !== "findings" && "hidden")}>
+      <div role="tabpanel" hidden={tab !== "findings"} className={cn("min-h-0 flex-1 overflow-y-auto overflow-x-hidden", tab !== "findings" && "hidden")}>
         <FindingsList
           review={review}
           busy={busy}
