@@ -151,7 +151,7 @@ npx tsx src/index.ts
 
 A chave mestra aleatória por execução faz o cofre de teste morrer com o processo: reiniciar sem a
 mesma `VIBEHUB_SECRET_KEY` perde a chave da OpenAI colada (o owner local é recriado sozinho).
-Nenhuma chave da OpenAI vai para env, arquivo ou log — o owner a cola na página `/voice`.
+Nesta receita nenhuma chave da OpenAI vai para env, arquivo ou log: o owner a cola em Configurações (a mesma chave da transcrição, guardada no cofre). Fora dela, `VIBEHUB_VOICE_OPENAI_API_KEY` também serve e vence a do cofre.
 
 Para entrar pelo painel com SSO de verdade (a instância de dentro saber QUEM é a pessoa, não só
 "alguém que passou pelo proxy") o painel precisaria assinar a identidade num cabeçalho, e isso é
