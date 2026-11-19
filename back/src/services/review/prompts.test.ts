@@ -61,7 +61,7 @@ describe("autonomia corretiva: bug no que o PR fez se corrige, melhoria fora do 
   it("o revisor classifica bug ou incongruência no que o PR fez como bloqueante ou dúvida, nunca como sugestão", () => {
     const text = reviewerRoundPrompt(review());
     expect(text).toContain("Bug ou incongruência no que o PR fez não é sugestão");
-    expect(text).toMatch(/volta desnecessária, o que fica fora do escopo do PR/);
+    expect(text).toMatch(/melhoria opcional, o que fica fora do escopo do PR/);
   });
 
   it("o autor corrige sem perguntar o que é bug, não amplia escopo, e na dúvida de intenção explica em vez de aplicar", () => {
@@ -147,6 +147,29 @@ describe("prompts da revisão: bug não é sugestão", () => {
     const round = reviewerRoundPrompt(review());
     expect(round).toMatch(/- suggestion: SÓ o que não é bug no escopo do PR/);
     expect(round).toContain("blocking com proof.kind = scenario (ref = arquivo:linha, detail = o caso que dá errado)");
+  });
+});
+
+describe("prompts da revisão: regra escrita do repo violada bloqueia, mesmo sendo de estilo", () => {
+  const improvement: Finding = {
+    id: "f1", severity: "improvement", title: "tira a duplicação", status: "open", introducedInRound: 1, file: "src/a.ts", fix: "x",
+  };
+
+  it("revisor e autor leem que estilo, nome, comentário ou volta que viola regra escrita é blocking com proof.kind = rule", () => {
+    const delta = { ...review([improvement]), round: 2, reviewedSha: "a".repeat(40) };
+    const texts = [
+      reviewerRoundPrompt(review()), reviewerDeltaPrompt(delta), authorFixPrompt(review([improvement])),
+      authorSuggestionsPrompt(review([improvement]), [improvement], { by: "cesar" }),
+    ];
+    for (const text of texts) {
+      expect(text).toMatch(/Linha do PR que viola uma regra escrita do repo \(AGENTS\.md, CLAUDE\.md ou equivalente\) é blocking com proof\.kind = rule, mesmo quando é de estilo, nome, comentário, duplicação ou volta desnecessária/);
+      expect(text).toMatch(/se uma regra escrita exige a melhoria, é blocking/);
+      expect(text).not.toMatch(/fugir do padrão estabelecido do repo;/);
+    }
+  });
+
+  it("estilo e nome sem regra escrita que os decida continuam sugestão", () => {
+    expect(reviewerRoundPrompt(review())).toMatch(/estilo, nome ou refatoração que nenhuma regra escrita decide/);
   });
 });
 

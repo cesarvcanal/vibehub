@@ -157,8 +157,8 @@ const judgePrompt = (confirmedFindings, brief) =>
   confirmedFindings.map((confirmed) => `- [${confirmed.label}] ${JSON.stringify(confirmed.finding)} (verificação: ${confirmed.evidence})`).join('\n') +
   '\nJunte os repetidos (o mesmo defeito visto por duas dimensões vira um achado, na dimensão mais precisa) e classifique ' +
   'cada um: blocking (bug ou regra violada, com prova; a IA corrige sozinha), improvement (melhoria no código que o PR ' +
-  'mexe, que preserva o comportamento), question (resolver exige decidir intenção ou produto), suggestion (opcional, ' +
-  `fora do escopo ou gosto). ${PROOF_RULE}`
+  'mexe, que preserva o comportamento e que nenhuma regra escrita exige), question (resolver exige decidir intenção ou produto), suggestion (opcional, ' +
+  `fora do escopo, ou gosto que nenhuma regra escrita decide). ${PROOF_RULE}`
 
 phase('Contexto')
 const brief = await agent(contextPrompt, { label: 'contexto', phase: 'Contexto', model: 'opus', effort: 'high', schema: BRIEF_SCHEMA })
