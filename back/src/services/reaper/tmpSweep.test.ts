@@ -17,7 +17,7 @@ vi.mock("../../runtime/host.js", async (orig) => ({
 
 const THREE_DAYS_AGO = new Date(Date.now() - 3 * 24 * 60 * 60_000);
 
-type PathUse = "fd" | "socket" | "argv" | "cwd" | "environ";
+type PathUse = "fd" | "socket" | "argv" | "cwd" | "environ" | "environList" | "argvPunctuated";
 
 const PATH_FROM_STDIN = 'require("fs").readFileSync(0, "utf8")';
 const STAY_UP = 'console.log("up"); setInterval(() => {}, 1000)';
@@ -27,12 +27,24 @@ const PROGRAM_BY_USE: Record<PathUse, string> = {
   argv: STAY_UP,
   cwd: STAY_UP,
   environ: STAY_UP,
+  environList: STAY_UP,
+  argvPunctuated: STAY_UP,
+};
+
+const ARGV_BY_USE: Partial<Record<PathUse, (path: string) => string[]>> = {
+  argv: (path) => [path],
+  argvPunctuated: (path) => [`dirs="${path}";echo`],
+};
+
+const ENV_BY_USE: Partial<Record<PathUse, (path: string) => Record<string, string>>> = {
+  environ: (path) => ({ VIBEHUB_DATA_DIR: path }),
+  environList: (path) => ({ NODE_PATH: `/usr/lib:${path}:/usr/local/lib` }),
 };
 
 async function startProcessUsing(path: string, use: PathUse): Promise<void> {
-  const child = spawn(process.execPath, ["-e", PROGRAM_BY_USE[use], ...(use === "argv" ? [path] : [])], {
+  const child = spawn(process.execPath, ["-e", PROGRAM_BY_USE[use], ...(ARGV_BY_USE[use]?.(path) ?? [])], {
     cwd: use === "cwd" ? path : undefined,
-    env: use === "environ" ? { ...process.env, VIBEHUB_DATA_DIR: path } : process.env,
+    env: { ...process.env, ...ENV_BY_USE[use]?.(path) },
     stdio: ["pipe", "pipe", "ignore"],
   });
   onTestFinished(() => {
@@ -78,7 +90,7 @@ describe("faxina do /tmp solto (fora de /tmp/vibehub), executada de verdade", { 
     expect(report.swept.find((entry) => entry.path.endsWith(".log"))!.bytes).toBeGreaterThanOrEqual(8192);
   });
 
-  it.each<PathUse>(["fd", "socket", "argv", "cwd", "environ"])(
+  it.each<PathUse>(["fd", "socket", "argv", "cwd", "environ", "environList", "argvPunctuated"])(
     "não apaga entrada que um processo vivo usa por %s, mesmo parada há mais de 48 h",
     async (use) => {
       const { root, path } = await sweepRoot();
@@ -95,6 +107,17 @@ describe("faxina do /tmp solto (fora de /tmp/vibehub), executada de verdade", { 
       expect(existsSync(entry)).toBe(true);
     },
   );
+
+  it("entrada cujo nome foge dos caracteres de nome de arquivo fica: o uso por processo não seria reconhecido", async () => {
+    const { root, path } = await sweepRoot();
+    const entry = join(root, "nome com espaço");
+    await mkdir(entry);
+    await makeOld(entry);
+
+    runSweep(root, path);
+
+    expect(existsSync(entry)).toBe(true);
+  });
 
   it("pasta antiga com arquivo modificado nas últimas 48 h fica — confere por dentro", async () => {
     const { root, path } = await sweepRoot();

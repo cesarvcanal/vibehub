@@ -15,6 +15,8 @@ const SWEPT_MARKER = "VIBEHUB_TMP_SWEPT";
 const SIZE_MARKER = "VIBEHUB_TMP_SIZE";
 const DISK_MARKER = "VIBEHUB_TMP_DISK";
 
+const FILE_NAME_CHARS = "A-Za-z0-9._@+-";
+
 const PROTECTED_NAMES = [CARD_TMP_DIR_NAME, "claude-*", "node-compile-cache", "tmux-*", "cc-socks", ".*-unix", ".X*-lock"];
 
 export interface TmpEntrySize {
@@ -48,7 +50,7 @@ export function buildTmpSweepScript(
   const idleMinutes = opts.idleMinutes ?? TMP_IDLE_MINUTES;
   if (!Number.isInteger(idleMinutes) || idleMinutes < 60) throw new Error(`idle window too short: ${idleMinutes} min`);
   const cardTmpRoot = `${root}/${CARD_TMP_DIR_NAME}`;
-  const inUsePattern = shQuote(`${escapeExtendedRegex(root)}/[^/ =]+`);
+  const inUsePattern = shQuote(`${escapeExtendedRegex(root)}/[${FILE_NAME_CHARS}]+`);
   const protectedNames = PROTECTED_NAMES.map((name) => `! -name ${shQuote(name)}`).join(" ");
   return [
     "set -e",
@@ -61,6 +63,7 @@ export function buildTmpSweepScript(
       `tr '\\0' '\\n' < "$P/cmdline"; tr '\\0' '\\n' < "$P/environ"; done; } 2>/dev/null | grep -oE ${inUsePattern} | sort -u || true)`,
     `find "$ROOT" -mindepth 1 -maxdepth 1 -mmin +${idleMinutes} ${protectedNames} -print0 2>/dev/null |`,
     "while IFS= read -r -d '' E; do",
+    `  case "\${E##*/}" in *[!${FILE_NAME_CHARS}]*) continue ;; esac`,
     '  printf \'%s\\n\' "$IN_USE" | grep -qxF -- "$E" && continue',
     `  if [ -d "$E" ] && [ -n "$(find "$E" -mmin -${idleMinutes} -print -quit 2>/dev/null)" ]; then continue; fi`,
     '  K=$(du -sxk -- "$E" 2>/dev/null | cut -f1)',
