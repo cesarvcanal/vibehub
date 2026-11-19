@@ -267,7 +267,13 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 - **Mudança de comportamento ou bug é sempre em TDD:** escrever o teste primeiro, rodar e ver falhar pelo motivo certo (em bug, reproduzindo o erro que aconteceu) e só então implementar até passar. Teste que nunca foi visto falhando não prova nada.
 - **O verde só vale se o teste falha sem a correção:** depois do verde, tire só a correção (de uma cópia de backup do arquivo, nunca `git stash`), rode e exija a falha pelo motivo certo; recoloque e veja passar. Rode o arquivo de teste mais de uma vez: teste que alterna entre passar e falhar é defeito do teste até prova em contrário.
 - Mudança de comportamento exige testes proporcionais ao risco. **Vitest** nos dois pacotes, com o teste ao lado do código (`*.test.ts` / `*.test.tsx`). Priorizar o fluxo real; teste unitário complementa quando isola regra complexa.
-- Usar a infraestrutura de teste existente; não criar infraestrutura paralela. No front ela é Vitest + Testing Library + jsdom (`front/vitest.config.ts`, helper `renderApp` em `front/src/test/render.tsx`).
+- **Teste é código:** toda regra deste arquivo vale nas linhas de teste como nas de produção: nomes (§2), `const` e comentários (§3), lugar e duplicação (§4), erros (§9). O modelo é este arquivo; o arquivo de teste vizinho escrito antes destas regras é legado, não exemplo.
+- **Antes do primeiro helper de teste, procure a infraestrutura que já existe, nesta ordem:**
+  1. **o repositório:** `ls back/src/testkit/` (infra compartilhada do back); no front, Vitest + Testing Library + jsdom (`front/vitest.config.ts`, helper `renderApp` em `front/src/test/render.tsx`);
+  2. **o Vitest:** `onTestFinished` para desfazer o que o teste criou, `vi.waitFor` para esperar uma condição, `it.each`/`describe.each` para casos que só mudam os dados, `vi.useFakeTimers` para tempo;
+  3. **o Node:** `existsSync` para saber se um caminho existe, `mkdtempSync` para diretório temporário.
+
+  Nada disso cobre: o helper que serve a um arquivo só nasce nele; o que dois arquivos de teste precisam (um docker falso, um repositório git temporário) nasce em `back/src/testkit/` e é importado, nunca copiado de um arquivo para outro.
 - Dado de teste sai do fluxo real ou de fábrica fiel ao contrato; não inventar shape que não existe em produção.
 - Mockar só **fronteiras externas**: host executor (Docker/SSH), rede, GitHub, SDK do Claude. Não mockar a lógica interna só para facilitar asserções.
 - Rotas HTTP: testar entrando pela rota real, com validação e acesso (dono, `work`, `view`, sem acesso).
