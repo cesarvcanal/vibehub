@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { cleanup, configure, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderApp, setupState } from "@/test/render";
+import { apiReject, renderApp, setupState } from "@/test/render";
 import { AnalysisPanel } from "./AnalysisPanel";
 import { LANGUAGE_KEY, setLanguage } from "@/i18n";
 import { ANALYSIS_DIMENSIONS, type AnalysisReadModel, type AnalysisReport, type CardAnalysisResponse } from "@/api/types";
@@ -49,7 +49,7 @@ const readModel = (
   uncheckedDimensions,
 });
 
-function renderPanel(analysisAnswer: CardAnalysisResponse, onClose: () => void = () => {}) {
+function renderPanel(analysisAnswer: CardAnalysisResponse | Promise<CardAnalysisResponse>, onClose: () => void = () => {}) {
   get.mockImplementation(async (url: string) => {
     if (url === "/auth/me") return { user: { id: "u1", username: "mussa", role: "member" } };
     if (url === "/setup/state") return setupState();
@@ -132,6 +132,20 @@ describe("painel da análise de PR", () => {
   it("card sem relatório ainda diz que a frota não gravou e aponta o painel de workflow", async () => {
     renderPanel({ analysis: null });
     expect(await screen.findByText(/A frota de agentes ainda não gravou o relatório/)).toBeInTheDocument();
+  });
+
+  it("enquanto a leitura não chega, diz carregando e nada do relatório", async () => {
+    renderPanel(new Promise<CardAnalysisResponse>(() => {}));
+    expect(await screen.findByText("Carregando")).toBeInTheDocument();
+    expect(screen.queryByText(/A frota de agentes ainda não gravou o relatório/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Dimensões revisadas" })).not.toBeInTheDocument();
+  });
+
+  it("leitura que falhou mostra o erro do servidor, nunca o painel vazio de sem relatório", async () => {
+    renderPanel(Promise.reject(apiReject(500, "analysis store unreadable")));
+    expect(await screen.findByText("analysis store unreadable")).toBeInTheDocument();
+    expect(screen.queryByText("Carregando")).not.toBeInTheDocument();
+    expect(screen.queryByText(/A frota de agentes ainda não gravou o relatório/)).not.toBeInTheDocument();
   });
 
   it("o botão de fechar fecha o painel", async () => {
