@@ -1215,7 +1215,7 @@ export const ptBR: Record<string, string> = {
   "context.warnBadge": "atenção",
   "context.dangerBadge": "perigo",
   "context.notice.warn": "Contexto em {n}%: risco de a IA começar a delirar e cometer erros. Bom momento para fechar a etapa ou rodar /compact.",
-  "context.notice.danger": "IA na zona de perigo: {n}% do contexto usado. Ela compacta a conversa sozinha antes do próximo passo, relê as regras do projeto e segue de onde parou.",
+  "context.notice.danger": "IA na zona de perigo: {n}% do contexto usado. Ela compacta a conversa sozinha antes do próximo passo, recupera as regras do projeto e segue de onde parou.",
   "context.autoCompact.title": "Compacta sozinha antes de chegar a {n}%",
   "context.autoCompact.desc": "A IA resume a conversa, recupera as regras do projeto (CLAUDE.md e AGENTS.md) e segue a tarefa de onde parou.",
   "context.notice.dismiss": "Esconder até chegar na zona de perigo",
