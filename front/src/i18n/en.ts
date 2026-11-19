@@ -1516,7 +1516,7 @@ export const en: Record<string, string> = {
   "analysis.fleet.body": "No analysis ran in its place: nothing here was reviewed.",
   "analysis.fleet.reason": "Reason",
   "analysis.fleet.action": "What to do",
-  "analysis.fleet.actionText": "Whoever runs the install checks that the runner's Claude Code has the Workflow tool enabled; then ask for the analysis again from the project's PR list.",
+  "analysis.fleet.actionText": "Read the reason and fix what it points to; then ask for the analysis again from the project's PR list.",
   "review.ask": "Request review",
   "review.openPanel": "Open this PR's review",
   "review.github": "Open PR #{n} on GitHub",

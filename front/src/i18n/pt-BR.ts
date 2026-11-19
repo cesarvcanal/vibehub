@@ -1528,7 +1528,7 @@ export const ptBR: Record<string, string> = {
   "analysis.fleet.body": "Nenhuma análise foi feita no lugar dela: nada aqui foi revisado.",
   "analysis.fleet.reason": "Motivo",
   "analysis.fleet.action": "O que fazer",
-  "analysis.fleet.actionText": "Quem administra a instalação confere se o Claude Code do runner tem a ferramenta Workflow ligada; depois, peça a análise de novo na lista de PRs do projeto.",
+  "analysis.fleet.actionText": "Leia o motivo e resolva o que ele aponta; depois, peça a análise de novo na lista de PRs do projeto.",
   "review.ask": "Pedir revisão",
   "review.openPanel": "Abrir a revisão deste PR",
   "review.github": "Abrir o PR #{n} no GitHub",

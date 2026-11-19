@@ -125,13 +125,18 @@ describe("painel da análise de PR", () => {
     ));
     expect(await screen.findByText("A frota de agentes não rodou neste card")).toBeInTheDocument();
     expect(screen.getByText("the Workflow tool is not available")).toBeInTheDocument();
+    expect(screen.getByText(
+      "Leia o motivo e resolva o que ele aponta; depois, peça a análise de novo na lista de PRs do projeto.",
+    )).toBeInTheDocument();
     expect(screen.getByText("Frota indisponível")).toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "Dimensões revisadas" })).not.toBeInTheDocument();
   });
 
   it("card sem relatório ainda diz que a frota não gravou e aponta o painel de workflow", async () => {
     renderPanel({ analysis: null });
-    expect(await screen.findByText(/A frota de agentes ainda não gravou o relatório/)).toBeInTheDocument();
+    expect(await screen.findByText(
+      "A frota de agentes ainda não gravou o relatório. O andamento aparece no painel de workflow do card.",
+    )).toBeInTheDocument();
   });
 
   it("enquanto a leitura não chega, diz carregando e nada do relatório", async () => {
