@@ -224,7 +224,8 @@ function PullRow({ pull, starting, choosing, settingUpBy, people, onChoose, onCa
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400" />
                 {t("prs.claimedBy", { name: settingUpBy })}
               </Badge>
-            ) : choosing ? null : (
+            ) : null}
+            {!settingUpBy && !choosing ? (
               <Button
                 type="button"
                 size="sm"
@@ -234,7 +235,7 @@ function PullRow({ pull, starting, choosing, settingUpBy, people, onChoose, onCa
               >
                 {t("prs.analyse")}
               </Button>
-            )}
+            ) : null}
           </div>
         )}
       </div>

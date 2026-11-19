@@ -50,11 +50,9 @@ function open(onOpenCard = vi.fn()) {
   return onOpenCard;
 }
 
-/** The dialog's live channel (`/api/projects/:id/prs/live`): what it sent, and the server's frames delivered by hand. */
 class FakeSocket {
   static instances: FakeSocket[] = [];
   static OPEN = 1;
-  static CONNECTING = 0;
 
   readyState = 0;
   sent: unknown[] = [];
@@ -286,7 +284,7 @@ describe("ProjectPrsDialog", () => {
       expect(screen.queryByText("sam is setting it up")).not.toBeInTheDocument();
     });
 
-    it("losing the race for a PR closes its picker and says who has it", async () => {
+    it("losing the race for a PR closes its picker and says who has it, and the picker does not reopen when that person lets go", async () => {
       serve([pull(636)]);
       open();
       const ws = await liveSocket();
@@ -296,7 +294,6 @@ describe("ProjectPrsDialog", () => {
       ws.deliver({ type: "claim-refused", prNumber: 636, username: "albert" });
       await waitFor(() => expect(screen.queryByRole("button", { name: "Start analysis" })).not.toBeInTheDocument());
       expect(toast.info).toHaveBeenCalledWith("albert is already setting up the analysis of PR #636");
-      // once albert lets it go, the picker does not come back on its own: nobody holds it for this tab
       ws.deliver({ type: "claims", claims: [] });
       expect(await screen.findByRole("button", { name: "Analyse PR #636" })).toBeEnabled();
       expect(screen.queryByRole("button", { name: "Start analysis" })).not.toBeInTheDocument();

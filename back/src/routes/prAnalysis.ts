@@ -20,10 +20,10 @@ async function requireProjectAccess(req: FastifyRequest<{ Params: { id: string }
 
 function parseLiveFrame(raw: string): { type: "claim" | "release"; prNumber: number } | null {
   try {
-    const frame = JSON.parse(raw) as { type?: unknown; prNumber?: unknown };
-    const knownType = frame.type === "claim" || frame.type === "release";
-    const validPr = typeof frame.prNumber === "number" && Number.isInteger(frame.prNumber) && frame.prNumber > 0;
-    return knownType && validPr ? { type: frame.type as "claim" | "release", prNumber: frame.prNumber as number } : null;
+    const { type, prNumber } = JSON.parse(raw) as { type?: unknown; prNumber?: unknown };
+    if (type !== "claim" && type !== "release") return null;
+    if (typeof prNumber !== "number" || !Number.isInteger(prNumber) || prNumber <= 0) return null;
+    return { type, prNumber };
   } catch {
     return null;
   }

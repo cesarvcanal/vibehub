@@ -220,7 +220,6 @@ describe("pessoas e papéis da análise", () => {
 
 type LiveFrame = { type: string; claims?: { prNumber: number; userId: string; username: string }[]; prNumber?: number; username?: string; error?: string };
 
-/** The PR dialog's live socket, with every frame it received kept in order. */
 async function live(cookie: string, projectId: string) {
   const frames: LiveFrame[] = [];
   const socket = await app.injectWS(`/api/projects/${projectId}/prs/live`, { headers: { cookie } }, {

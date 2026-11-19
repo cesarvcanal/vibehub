@@ -563,7 +563,6 @@ export interface PrClaim {
   username: string;
 }
 
-/** What `WS /projects/:id/prs/live` sends: who is setting up which PR's analysis, and when to read the list again. */
 export type PrLiveEvent =
   | { type: "claims"; claims: PrClaim[] }
   | { type: "pulls-changed" }

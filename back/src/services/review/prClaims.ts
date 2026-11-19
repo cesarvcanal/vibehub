@@ -11,7 +11,6 @@ export type PrLiveEvent =
   | { type: "pulls-changed" };
 
 interface Viewer {
-  user: PublicUser;
   send: (event: PrLiveEvent) => void;
 }
 
@@ -39,7 +38,7 @@ function broadcast(room: Room, event: PrLiveEvent): void {
 export function joinPrRoom(projectId: string, user: PublicUser, send: (event: PrLiveEvent) => void): PrRoomSeat {
   const room = rooms.get(projectId) ?? { viewers: new Set<Viewer>(), holders: new Map() };
   rooms.set(projectId, room);
-  const viewer: Viewer = { user, send };
+  const viewer: Viewer = { send };
   room.viewers.add(viewer);
   send({ type: "claims", claims: claimsOf(room) });
 

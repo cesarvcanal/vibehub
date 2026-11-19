@@ -20,7 +20,7 @@ export function usePrClaims(projectId: string, enabled: boolean) {
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type, prNumber }));
   };
 
-  const setHeld = (prNumber: number | null) => {
+  const hold = (prNumber: number | null) => {
     live.current.holding = prNumber;
     setHolding(prNumber);
   };
@@ -33,8 +33,8 @@ export function usePrClaims(projectId: string, enabled: boolean) {
       live.current.socket = socket;
       socket.onopen = () => {
         connection.failures = 0;
-        const held = live.current.holding;
-        if (held !== null) socket.send(JSON.stringify({ type: "claim", prNumber: held }));
+        const heldPr = live.current.holding;
+        if (heldPr !== null) socket.send(JSON.stringify({ type: "claim", prNumber: heldPr }));
       };
       socket.onmessage = (message) => {
         const event = JSON.parse(String(message.data)) as PrLiveEvent;
@@ -46,7 +46,7 @@ export function usePrClaims(projectId: string, enabled: boolean) {
             void queryClient.invalidateQueries({ queryKey: projectPullsKey(projectId) });
             return;
           case "claim-refused":
-            if (live.current.holding === event.prNumber) setHeld(null);
+            if (live.current.holding === event.prNumber) hold(null);
             toast.info(t("prs.claimRefused", { name: event.username, number: event.prNumber }));
             return;
           case "error":
@@ -67,7 +67,7 @@ export function usePrClaims(projectId: string, enabled: boolean) {
       clearTimeout(connection.retry);
       live.current.socket?.close();
       live.current.socket = null;
-      setHeld(null);
+      hold(null);
       setClaims([]);
     };
   }, [enabled, projectId, queryClient]);
@@ -75,13 +75,13 @@ export function usePrClaims(projectId: string, enabled: boolean) {
   const claim = (prNumber: number) => {
     const previous = live.current.holding;
     if (previous !== null && previous !== prNumber) sendFrame("release", previous);
-    setHeld(prNumber);
+    hold(prNumber);
     sendFrame("claim", prNumber);
   };
 
   const release = (prNumber: number) => {
     if (live.current.holding !== prNumber) return;
-    setHeld(null);
+    hold(null);
     sendFrame("release", prNumber);
   };
 
