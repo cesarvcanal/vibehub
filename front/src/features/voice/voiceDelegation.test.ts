@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SdkRow } from "@/features/board/lib/sdkChat";
 import type { VoiceTurn } from "./voiceTurns";
-import { DELEGATION_TRANSCRIPT_MAX_CHARS, delegationReply, delegationRequest } from "./voiceDelegation";
+import { DELEGATION_STARTED, DELEGATION_TRANSCRIPT_MAX_CHARS, delegationReply, delegationRequest } from "./voiceDelegation";
 
 const turn = (role: VoiceTurn["role"], text: string, n: number): VoiceTurn => ({ vid: `vc-${role}${n}`, role, text, at: n, final: true });
 const user = (id: string, text: string): SdkRow => ({ kind: "user", id, text, state: "sent" });
@@ -31,6 +31,21 @@ describe("delegationRequest", () => {
     expect(request.length).toBeLessThan(DELEGATION_TRANSCRIPT_MAX_CHARS + 400);
     expect(delegationRequest([turn("assistant", "Olá!", 1)])).toBeNull();
     expect(delegationRequest([turn("user", "   ", 1)])).toBeNull();
+  });
+});
+
+describe("o que o agente e a voz ouvem sobre um pedido urgente", () => {
+  it("o pedido manda o agente parar o que está fazendo, atender primeiro e encerrar o turno com a resposta", () => {
+    const request = delegationRequest([turn("user", "crie um card agora", 1)])!;
+    expect(request).toContain("Urgente");
+    expect(request).toContain("pare o que está fazendo");
+    expect(request).toContain("encerre o turno");
+  });
+
+  it("o aviso de pedido entregue não deixa a voz dizer que já fez nem narrar outra coisa enquanto espera", () => {
+    expect(DELEGATION_STARTED).not.toContain("trabalhando nele");
+    expect(DELEGATION_STARTED).toContain("ainda não foi feito");
+    expect(DELEGATION_STARTED).toContain("não narre");
   });
 });
 

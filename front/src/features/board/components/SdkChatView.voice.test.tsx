@@ -10,6 +10,7 @@ import { get, post } from "@/lib/api";
 import { resetLanguage, setLanguage } from "@/i18n";
 import { FakeAudioContext, fakeRig, type FakeRig } from "@/features/voice/fakeWebRtc";
 import { setVoiceCallTestHooks } from "@/features/voice/useVoiceCall";
+import { DELEGATION_NOT_SENT } from "@/features/voice/voiceDelegation";
 
 /**
  * VOICE IN THE CARD'S CHAT, end to end at the component level: the call starts from the composer
@@ -251,14 +252,29 @@ describe("a voice call inside the card's chat", () => {
     await waitFor(() => expect(results()).toEqual([expect.objectContaining({ delegation_id: "item_d3", content: "Os 12 testes passaram." })]));
   });
 
-  it("a delegation the chat cannot hand over is answered anyway — the voice is never left waiting", async () => {
+  it("um pedido da voz com o agente ocupado fura a fila: vai urgente, como o enviar agora do chat", async () => {
+    const { ws } = await openChat();
+    ws.deliver({ type: "assistant_delta", text: "Subindo o back isolado…" });
+    await startCall();
+    act(() => channel().emit({ type: "session.input_transcript.delta", delta: "por que ele vai abrir uma tela?", start_ms: 0, end_ms: 900 }));
+    act(() => channel().emit({ type: "session.delegation.created", offset_ms: 1000, delegation: { id: "item_u1", type: "delegation", target: "client" } }));
+
+    await waitFor(() =>
+      expect(ws.frames).toContainEqual(expect.objectContaining({ type: "user", now: true, text: expect.stringContaining("por que ele vai abrir uma tela?") })),
+    );
+    expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument();
+  });
+
+  it("sem conexão, a voz ouve na hora que o pedido não foi entregue, e nada fica preso na fila", async () => {
     const { ws } = await openChat();
     await startCall();
     ws.drop();
-    act(() => channel().emit({ type: "session.input_transcript.delta", delta: "roda os testes", start_ms: 0, end_ms: 500 }));
+    act(() => channel().emit({ type: "session.input_transcript.delta", delta: "crie um card agora", start_ms: 0, end_ms: 500 }));
     act(() => channel().emit({ type: "session.delegation.created", offset_ms: 600, delegation: { id: "item_d2", type: "delegation", target: "client" } }));
-    // Wire down: the request waits in the chat's queue like a typed message, and the voice is told so.
-    await waitFor(() => expect(channel().sent).toContainEqual(expect.objectContaining({ type: "session.thinking.append", delegation_id: "item_d2" })));
+    await waitFor(() =>
+      expect(channel().sent).toContainEqual({ type: "session.commentary.append", delegation_id: "item_d2", content: DELEGATION_NOT_SENT }),
+    );
+    expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument();
   });
 
   it("leaving the chat (another card, the terminal tab) ends the call and releases the mic", async () => {
