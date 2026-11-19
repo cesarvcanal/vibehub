@@ -7,12 +7,6 @@ import { useNow } from "@/lib/useNow";
 import { useT, type Translate } from "@/i18n";
 import { cn } from "@/lib/utils";
 
-/**
- * The reviewer's agent fleet of one round, inside the review's conversation: what each finished agent said —
- * the specialists' findings, the verification answering the finding it checks, the judge last — and, below
- * it, where the live work is, a compact strip with the progress, the phases and only the agents still working
- * (with their model and what they do now).
- */
 export function ReviewFleet({ round, runs }: { round: number; runs: ReviewFleetRun[] }) {
   const t = useT();
   return (

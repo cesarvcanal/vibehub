@@ -860,13 +860,11 @@ export interface Review extends ReviewSummary {
   prHeadSha?: string;
   impasseReason?: string;
   approvePending?: boolean;
-  /** The side's Claude account ran out of usage limit: the round is sent again by itself at `until` (epoch ms). */
   usageLimitWait?: { side: "reviewer" | "author"; until: number };
   /** The merge gate, run on the approved commit as soon as the review is ready (only valid for its `sha`). */
   mergeGate?: MergeGate;
   /** The round the reviewer's AI last handed back: below `round`, the reviewer's turn is still open. */
   lastSubmitRound?: number;
-  /** The reviewer's agent fleet as it stood when each round was handed back. Absent on reviews before it. */
   fleet?: ReviewRoundFleet[];
   createdAt: number;
   updatedAt: number;
@@ -886,7 +884,6 @@ export interface MergeGate {
   exhausted?: true;
 }
 
-/** Mirror of `WorkflowAgent` (back/src/services/sdk/workflowProbe.ts): one agent of the reviewer's fleet. */
 export interface ReviewFleetAgent {
   id: string;
   label: string;
@@ -898,7 +895,6 @@ export interface ReviewFleetAgent {
   activity?: { kind: "tool"; tool: string; target: string } | { kind: "text"; text: string } | { kind: "thinking"; since: number };
 }
 
-/** Mirror of `WorkflowRun` (back/src/services/sdk/workflowProbe.ts): one workflow run of the reviewer's fleet. */
 export interface ReviewFleetRun {
   runId: string;
   name: string;
@@ -931,7 +927,6 @@ export interface ReviewResponse {
    * mid-way (the lock lives in memory). Absent from a server that predates it: read as unknown.
    */
   merging?: boolean;
-  /** The reviewer card's agent fleet running right now; absent from a server that predates it. */
   fleet?: ReviewFleetRun[];
   /**
    * Client-side only: which read from the server this answer is (`useLiveReview` numbers them as they

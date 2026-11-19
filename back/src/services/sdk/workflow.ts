@@ -331,7 +331,6 @@ export async function readAgentFeed(runsDir: string, runId: string, agentId: str
   return parseAgentFeed(stdout);
 }
 
-/** The rounds of a session read NOW, in one probe, outside any watch (nothing is remembered nor published). */
 export async function readWorkflowRuns(dirs: { runs: string; scripts: string }): Promise<WorkflowRun[]> {
   const { stdout } = await hostExecutor().runScript(
     buildWorkflowProbeScript(config.runner.container, dirs.runs, dirs.scripts, []),

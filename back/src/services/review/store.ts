@@ -79,7 +79,6 @@ export async function listReviewsForCards(cardIds: string[]): Promise<Review[]> 
   return (await store.load()).reviews.filter((r) => wanted.has(r.cardId)).map(copy);
 }
 
-/** The open reviews waiting for a Claude account's usage limit to come back. */
 export async function listReviewsWaitingUsageLimit(): Promise<Review[]> {
   return (await store.load()).reviews.filter((r) => r.usageLimitWait && !isReviewClosed(r.phase)).map(copy);
 }

@@ -20,7 +20,6 @@ vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 let dir = "";
 let app: FastifyInstance;
 
-/** The runner (docker exec): planting the fleet's script, probing its journal. Answers "nothing" unless a test says otherwise. */
 const runScript = vi.fn(async (_script: string, _opts?: unknown) => ({ stdout: "[]", stderr: "" }));
 
 const send = vi.fn(async (cardId: string, _text: string, opts: SendOpts = {}): Promise<SendResult> => {

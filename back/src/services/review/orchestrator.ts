@@ -78,10 +78,8 @@ const REVIEWER_VERDICTS: ReadonlySet<FindingStatus> = new Set(["fixed", "open", 
 export const HEAD_SHA_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
 
 const NO_ANSWER = "IA não respondeu";
-/** Impasse reason when the account refused the turn for its usage limit and did not say when it comes back. */
 const USAGE_LIMIT = "conta Claude sem limite de uso, sem horário de volta";
 const USAGE_LIMIT_STUCK = "conta Claude sem limite de uso depois de várias retomadas";
-/** What the resend waits after the limit's reset, so the first call does not hit the window still closing. */
 const USAGE_RESUME_MARGIN_MS = 60_000;
 const MAX_USAGE_LIMIT_RESUMES = 3;
 const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
@@ -1547,7 +1545,6 @@ async function onTurnFinished(event: CardEvent): Promise<void> {
   }
 }
 
-/** The resends waiting for a usage limit, per review, and the margin after the reset (live state of this process). */
 const usageResume = { timers: new Map<string, NodeJS.Timeout>(), marginMs: USAGE_RESUME_MARGIN_MS };
 
 function cancelUsageResume(reviewId: string): void {
@@ -1572,10 +1569,6 @@ function scheduleUsageResume(review: Review): void {
   usageResume.timers.set(review.id, timer);
 }
 
-/**
- * The usage limit came back: the side's turn is sent again, as it was, without counting as a reminder. A review
- * that moved meanwhile (cancelled, "tentar de novo", the tool called after all) only loses the mark.
- */
 async function resumeAfterUsageLimit(reviewId: string): Promise<void> {
   const resumed: { side?: Side } = {};
   const after = await mutateReview(reviewId, (review) => {

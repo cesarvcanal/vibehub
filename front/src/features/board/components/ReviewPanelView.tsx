@@ -59,7 +59,6 @@ export interface ReviewPanelViewProps {
   onClose: () => void;
   /** The tab to open on, instead of the one the review calls for (the Storybook tour shows each). */
   initialTab?: Tab;
-  /** The reviewer's live agent fleet (GET review's `fleet`). */
   fleet?: ReviewFleetRun[];
 }
 

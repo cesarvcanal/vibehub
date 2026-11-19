@@ -37,7 +37,6 @@ export interface ReviewConversationProps {
   working: ReviewWorking;
   /** A user id to the name people know them by. */
   nameOf: (userId: string | undefined) => string;
-  /** The reviewer's live agent fleet (the round still open); the delivered rounds' come in `review.fleet`. */
   fleet?: ReviewFleetRun[];
 }
 

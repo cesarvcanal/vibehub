@@ -25,7 +25,6 @@ const calls: string[] = [];
 const plant = vi.fn(async () => {
   calls.push("plant");
 });
-/** The reviewer's fleet as the runner has it when the round is submitted. */
 const fleetRead = vi.fn(async (_cardId: string): Promise<unknown[]> => []);
 let sendFailure: Error | null = null;
 const injected = { usageWaitsReadFailures: 0, userGitFailure: null as Error | null };
@@ -258,7 +257,6 @@ describe("iniciar a revisão", () => {
     // round 1 goes to the reviewer's card, with the reviewer as actor before the text
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]![0]).toBe(reviewer!.id);
-    // the fleet's script is planted in the runner before the text that runs it
     expect(calls).toEqual(["plant", `actor:u-revisor:${reviewer!.id}`, `send:${reviewer!.id}`]);
     const text = lastText();
     for (const piece of [

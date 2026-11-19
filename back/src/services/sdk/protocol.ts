@@ -319,11 +319,6 @@ export interface ConversationResetEvent { type: "conversation_reset"; trigger?: 
  */
 export interface LoginFailedEvent { type: "login_failed" }
 export interface LoginRestoredEvent { type: "login_restored" }
-/**
- * The account refused the turn for its usage limit: the CLI's assistant message with `error: "rate_limit"`, and
- * `rateLimit` = its `api_error_params.rate_limit_info` (the `rate_limit_event` shape, with `resetsAt`), when it came.
- * Card state for the back (services/board/agentState.ts), never sent to the browser nor recorded.
- */
 export interface UsageLimitedEvent { type: "usage_limited"; rateLimit?: unknown }
 /** The driver is up and ready to accept the first user message. The back stamps `turnActive` on
  *  every `ready` it sends (real or synthesized on reattach) with the manager's live turn count, so

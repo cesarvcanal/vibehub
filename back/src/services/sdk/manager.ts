@@ -148,9 +148,7 @@ export interface DriverSession {
    * works again (that one sends `login_restored`).
    */
   loginFailed: boolean;
-  /** The last read of this card's fleet by a panel outside its chat (the PR review's): it counts as a watcher for a while. */
   fleetViewedAt?: number;
-  /** The account refused the last turn for its usage limit; cleared by the first turn that works again. */
   usageLimit?: CardUsageLimit;
   /**
    * The last reading of how much of the context window the session takes (the meter next to the "está
@@ -1031,7 +1029,6 @@ function workflowDirs(session: Pick<DriverSession, "transcriptDir" | "lastSessio
   return { runs: `${base}/subagents/workflows`, scripts: `${base}/workflows/scripts` };
 }
 
-/** How long a panel's read of the fleet keeps the probe going: a few of the panel's polls. */
 const FLEET_VIEWER_TTL_MS = 15_000;
 
 /** Turns on this card's fleet probe (idempotent — see `watchCardWorkflows`). */
@@ -1044,11 +1041,6 @@ function startWorkflowWatch(session: DriverSession): void {
   });
 }
 
-/**
- * The fleet of this card as a panel OUTSIDE its chat follows it (the PR review's panel, on the author's card): the
- * last snapshots, and the read counts as a watcher for {@link FLEET_VIEWER_TTL_MS}, so the probe keeps going with
- * nobody in the reviewer's chat. No driver = nothing to show.
- */
 export function watchCardFleet(cardId: string): WorkflowRun[] {
   const session = sessions.get(cardId);
   if (!session || session.closed) return [];
@@ -1056,7 +1048,6 @@ export function watchCardFleet(cardId: string): WorkflowRun[] {
   return lastWorkflowRuns(cardId);
 }
 
-/** The fleet of this card read now (one probe in the runner), for whoever keeps it beyond the driver's life. */
 export async function readCardFleet(cardId: string): Promise<WorkflowRun[]> {
   const session = sessions.get(cardId);
   const dirs = session && !session.closed ? workflowDirs(session) : null;

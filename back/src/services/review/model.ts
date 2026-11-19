@@ -192,16 +192,8 @@ export interface Review {
    * asked for the review ({@link cardsToConclude}). Never written again; the next order replaces it.
    */
   concludeWhenMerged?: boolean;
-  /**
-   * The side's Claude account refused its turn for the usage limit: the round waits for `until` (epoch ms, when
-   * the limit comes back) and is sent again by itself, without counting as a reminder.
-   */
   usageLimitWait?: { side: "reviewer" | "author"; until: number };
   usageLimitResumes?: number;
-  /**
-   * The reviewer's agent fleet as it stood when each round was submitted (finished: whoever was still in flight
-   * became `stopped`). The live fleet lives only as long as the reviewer's driver; this is what the panel keeps.
-   */
   fleet?: { round: number; runs: RoundFleetRun[] }[];
   lastSubmitRound?: number;
   lastRespondRound?: number;

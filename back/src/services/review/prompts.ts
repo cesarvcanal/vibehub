@@ -222,7 +222,6 @@ function reviewerIdentity(): string {
   return "Você é o REVISOR deste PR. Não escreva no código do autor: não faça commit, não faça push. vibehub_deliver aqui só serve para o merge por ordem (regras abaixo).";
 }
 
-/** The step that runs the agent fleet on the PR, waits for it and says what to do when it fails. */
 function fleetStep(review: Review): string[] {
   const workflowArgs = JSON.stringify({ prNumber: review.prNumber, branch: review.prBranch, base: review.base, headSha: "<sha do passo 1>" });
   return [
@@ -237,7 +236,6 @@ function fleetStep(review: Review): string[] {
   ];
 }
 
-/** Round 1: full review of the PR by the agent fleet, published on GitHub and delivered structured. */
 export function reviewerRoundPrompt(r: Review): string {
   return [
     header(r),

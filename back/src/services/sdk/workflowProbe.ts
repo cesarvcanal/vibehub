@@ -26,7 +26,6 @@ export interface WorkflowAgent {
   label: string;
   /** The script phase it runs in (the journal's `phase` / the meta's `workflowPhase`). "" = no phase. */
   phase: string;
-  /** The model the script asked for (the meta's `model`: "opus", "sonnet"…). Absent when the meta does not say. */
   model?: string;
   /** `stopped` = it was in flight when the round ended (killed, or the probe gave up): it will never answer. */
   status: "running" | "done" | "stopped";
