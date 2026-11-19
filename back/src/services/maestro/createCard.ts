@@ -1,21 +1,13 @@
-import { findUser } from "../../auth/users.js";
+import type { PublicUser } from "../../auth/users.js";
 import { creatorAccountSlug } from "../../auth/userGit.js";
-import { createCard, getCard, type Card, type CreateCardInput } from "../board/registry.js";
+import { createCard, type Card, type CreateCardInput } from "../board/registry.js";
 import { prepareCard } from "../board/workspace.js";
 import { logger } from "../../utils/logger.js";
 
-export async function createCardFromCard(fromCardId: string, input: CreateCardInput): Promise<Card> {
-  const fromCard = await getCard(fromCardId);
-  if (!fromCard) throw new Error(`card not found: ${fromCardId}`);
-  if (!fromCard.actorUserId) throw new Error("nobody gave this card an order yet, so there is no one to create the card for");
-  const creator = await findUser(fromCard.actorUserId);
-  if (!creator) throw new Error("the person who gave this card its order is no longer a user of this vibehub");
-  if (creator.role !== "owner") {
-    throw new Error(`only the owner can create cards — '${creator.username}' gave this card its order; ask the owner to create it`);
-  }
+export async function createCardAs(creator: PublicUser, input: CreateCardInput, fromCardSlug: string): Promise<Card> {
   const accountSlug = await creatorAccountSlug(creator.id);
   const card = await createCard(input, accountSlug ? { accountSlug } : {}, { actorUserId: creator.id });
-  logger.info({ audit: true, action: "card.create", card: card.worktreeSlug, by: creator.username, from: fromCard.worktreeSlug }, "card created by another card");
+  logger.info({ audit: true, action: "card.create", card: card.worktreeSlug, by: creator.username, from: fromCardSlug }, "card created by another card");
   void prepareCard(card.id, "card.create").catch((err: unknown) => {
     logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "pre-provisioning of the new card failed (best-effort) — the first open will do it");
   });

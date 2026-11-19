@@ -1,8 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { listTerminals, sendToTerminal, readTerminal, reportState, agentOriginFor, SEND_READY_WAIT_MS } from "../services/maestro/maestro.js";
-import { DECLARED_STATES, getCard, listProjects } from "../services/board/registry.js";
-import { createCardFromCard } from "../services/maestro/createCard.js";
+import { DECLARED_STATES, getCard, listProjects, type Card } from "../services/board/registry.js";
+import { createCardAs } from "../services/maestro/createCard.js";
+import { findUser, type PublicUser } from "../auth/users.js";
 import { recordMessage, MESSAGE_TYPES, SEVERITIES, type MessageType, type Severity } from "../services/events/cardEvents.js";
 import { sendAnswer } from "./events.js";
 import { runGate } from "../services/maestro/gate.js";
@@ -130,6 +131,16 @@ export const analysisReportInput = analysisReportFields.superRefine((report, ctx
   }
 });
 
+async function requireOwnerBehind(fromCard: Card): Promise<PublicUser> {
+  if (!fromCard.actorUserId) throw new Error("nobody gave this card an order yet, so there is no one to create the card for");
+  const creator = await findUser(fromCard.actorUserId);
+  if (!creator) throw new Error("the person who gave this card its order is no longer a user of this vibehub");
+  if (creator.role !== "owner") {
+    throw new Error(`only the owner can create cards — '${creator.username}' gave this card its order; ask the owner to create it`);
+  }
+  return creator;
+}
+
 export function registerMaestroTools(server: McpServer, actor: string): void {
   server.registerTool(
     "vibehub_list_terminals",
@@ -168,8 +179,8 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
             id: project.id, name: project.name, repo: project.repoFullName ?? null, baseBranch: project.baseBranch,
           })),
         });
-      } catch (e) {
-        return fail(e);
+      } catch (error) {
+        return fail(error);
       }
     },
   );
@@ -191,12 +202,15 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         title: z.string().min(1).max(200).describe("short title of the task, as it should read on the board"),
       },
     },
-    async (a) => {
+    async (input) => {
       try {
-        const card = await createCardFromCard(a.from, { projectId: a.projectId, title: a.title });
+        const fromCard = await getCard(input.from);
+        if (!fromCard) throw new Error(`card not found: ${input.from}`);
+        const creator = await requireOwnerBehind(fromCard);
+        const card = await createCardAs(creator, { projectId: input.projectId, title: input.title }, fromCard.worktreeSlug);
         return ok({ cardId: card.id, title: card.title, projectId: card.projectId, column: card.column });
-      } catch (e) {
-        return fail(e);
+      } catch (error) {
+        return fail(error);
       }
     },
   );
