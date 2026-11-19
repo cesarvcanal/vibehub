@@ -4,5 +4,6 @@ export default defineConfig({
   test: {
     include: ["scripts/**/*.test.mjs", "eslint.config.test.mjs"],
     exclude: ["**/node_modules/**"],
+    testTimeout: 30_000,
   },
 });
