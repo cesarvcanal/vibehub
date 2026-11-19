@@ -81,7 +81,7 @@ describe("relatório da análise pela ferramenta do card", () => {
     expect(cardMessage?.text).toContain("Workflow desligado");
   });
 
-  it("frota indisponível conclui o card, e um novo pedido da mesma PR abre outro card", async () => {
+  it("frota indisponível conclui o card e solta a PR: nenhum card de análise aberto a segura", async () => {
     const { analysisCard, reportService } = await load();
     await reportService.recordAnalysisReport(analysisCard.id, input({ stage: "fleet_unavailable", unavailableReason: "Workflow desligado" }));
     const registry = await import("../board/registry.js");
@@ -195,7 +195,7 @@ describe("relatório da análise pela ferramenta do card", () => {
     ["outra frota indisponível", { stage: "fleet_unavailable" as const, unavailableReason: "x" }],
     ["um analysed", { stage: "analysed" as const }],
     ["um done", { stage: "done" as const }],
-  ])("%s num card reativado depois da frota indisponível é recusado e o card volta a done: um novo pedido da PR abre outro card", async (_case, lateReport) => {
+  ])("%s num card reativado depois da frota indisponível é recusado e o card volta a done: nenhum card de análise aberto segura a PR", async (_case, lateReport) => {
     const { analysisCard, reportService, store } = await load();
     await reportService.recordAnalysisReport(analysisCard.id, input({ stage: "fleet_unavailable", unavailableReason: "Workflow desligado" }));
     const registry = await import("../board/registry.js");
