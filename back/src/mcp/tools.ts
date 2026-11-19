@@ -95,11 +95,13 @@ export const analysisFindingFields = z.object({
   proof: findingProof.optional().describe("required for blocking"),
 });
 
+const FIXED_WITHOUT_COMMIT = "a fixed finding needs the sha of the commit that fixes it";
+
 export const analysisFinding = z.discriminatedUnion("status", [
   analysisFindingFields.extend({ status: z.literal("open") }),
   analysisFindingFields.extend({
     status: z.literal("fixed"),
-    commit: z.string().trim().min(1, "a fixed finding needs the sha of the commit that fixes it").max(80),
+    commit: z.string({ required_error: FIXED_WITHOUT_COMMIT }).trim().min(1, FIXED_WITHOUT_COMMIT).max(80),
   }),
 ]).superRefine((finding, ctx) => {
   requireExplainedFinding(finding, ctx);
