@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { ANALYSIS_DIMENSIONS, ANALYSIS_SEVERITIES } from "./analysisModel.js";
 import { prAnalysisWorkflowSource } from "./analysisWorkflow.js";
-import { analysisFinding, analysisReportInput } from "../../mcp/tools.js";
+import { analysisFindingFields, analysisReportInput } from "../../mcp/tools.js";
 
 type AgentOpts = { label?: string; phase?: string; model?: string; effort?: string; schema?: object };
 type AgentFake = (prompt: string, opts: AgentOpts) => Promise<unknown>;
@@ -83,7 +83,7 @@ describe("frota da análise de PR", () => {
       properties: { findings: { items: { properties: { severity: { enum: string[] }; proof: { properties: { kind: { enum: string[] } } } } } } };
     };
     const judgedFinding = judgeSchema.properties.findings.items.properties;
-    const toolProof = analysisFinding.innerType().shape.proof.unwrap().shape;
+    const toolProof = analysisFindingFields.shape.proof.unwrap().shape;
     expect(judgedFinding.severity.enum).toEqual([...ANALYSIS_SEVERITIES]);
     expect(judgedFinding.proof.properties.kind.enum).toEqual([...toolProof.kind.options]);
   });
@@ -232,7 +232,7 @@ describe("frota da análise de PR", () => {
       };
     };
     const fleetFinding = judgeSchema.properties.findings.items.properties;
-    const toolFinding = analysisFinding.innerType().shape;
+    const toolFinding = analysisFindingFields.shape;
     const toolProof = toolFinding.proof.unwrap().shape;
     expect(fleetFinding.title).toMatchObject({ maxLength: toolFinding.title.maxLength });
     expect(fleetFinding.problem).toMatchObject({ maxLength: toolFinding.problem.unwrap().maxLength });

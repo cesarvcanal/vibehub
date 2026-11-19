@@ -87,21 +87,24 @@ export const reviewFinding = z.object({
 
 const analysisDimension = z.enum(ANALYSIS_DIMENSIONS);
 
-export const analysisFinding = z.object({
+export const analysisFindingFields = z.object({
   id: z.string().min(1).max(20).describe("the id the fleet gave (f1, f2, ...)"),
   severity: z.enum(ANALYSIS_SEVERITIES),
   dimension: analysisDimension,
-  status: z.enum(["open", "fixed"]).describe("fixed only with the commit that fixes it"),
-  commit: z.string().max(80).optional(),
   ...findingFields,
   proof: findingProof.optional().describe("required for blocking"),
-}).superRefine((finding, ctx) => {
+});
+
+export const analysisFinding = z.discriminatedUnion("status", [
+  analysisFindingFields.extend({ status: z.literal("open") }),
+  analysisFindingFields.extend({
+    status: z.literal("fixed"),
+    commit: z.string().trim().min(1, "a fixed finding needs the sha of the commit that fixes it").max(80),
+  }),
+]).superRefine((finding, ctx) => {
   requireExplainedFinding(finding, ctx);
   if (finding.severity === "blocking" && !finding.proof?.ref.trim()) {
     ctx.addIssue({ code: "custom", path: ["proof"], message: "a blocking finding needs proof: failing_test, rule or scenario with ref" });
-  }
-  if (finding.status === "fixed" && !finding.commit?.trim()) {
-    ctx.addIssue({ code: "custom", path: ["commit"], message: "a fixed finding needs the sha of the commit that fixes it" });
   }
 });
 

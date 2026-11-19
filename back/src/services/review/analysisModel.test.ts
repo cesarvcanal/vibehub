@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { analysisVerdict, dimensionHealth, uncheckedDimensions, type AnalysisFinding, type AnalysisReport } from "./analysisModel.js";
 
-const finding = (over: Partial<AnalysisFinding> = {}): AnalysisFinding => ({
+type FindingOverrides = Partial<Pick<AnalysisFinding, "id" | "severity" | "dimension">> & ({ status?: "open" } | { status: "fixed"; commit: string });
+
+const finding = (over: FindingOverrides = {}): AnalysisFinding => ({
   id: "f1", severity: "blocking", title: "t", problem: "p", fix: "x", dimension: "correctness", status: "open",
   proof: { kind: "scenario", ref: "a.ts:1" }, ...over,
 });
@@ -22,7 +24,7 @@ describe("estado de cada dimensão da análise", () => {
     ["bloqueante aberto deixa a dimensão em problema", report({ findings: [finding()] }), "correctness", "problem"],
     [
       "bloqueante corrigido não pesa; dúvida ou melhoria aberta deixa em atenção",
-      report({ findings: [finding({ status: "fixed" }), finding({ id: "f2", severity: "question" })] }), "correctness", "attention",
+      report({ findings: [finding({ status: "fixed", commit: "abc1234" }), finding({ id: "f2", severity: "question" })] }), "correctness", "attention",
     ],
     ["sugestão aberta não muda o estado", report({ findings: [finding({ severity: "suggestion" })] }), "correctness", "ok"],
     ["dimensão pulada diz isso, nunca ok", report(), "security", "skipped"],
@@ -48,7 +50,7 @@ describe("veredito da análise", () => {
     expect(analysisVerdict(report({ stage: "analysed" }))).toBe("pending");
   });
   it("apto quando não sobra bloqueante aberto no done", () => {
-    expect(analysisVerdict(report({ dimensions: everyDimensionAccounted(), findings: [finding({ status: "fixed" })] }))).toBe("apt");
+    expect(analysisVerdict(report({ dimensions: everyDimensionAccounted(), findings: [finding({ status: "fixed", commit: "abc1234" })] }))).toBe("apt");
   });
   it.each([
     ["não apto com bloqueante aberto", report({ dimensions: everyDimensionAccounted(), findings: [finding()] })],

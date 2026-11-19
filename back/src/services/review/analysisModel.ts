@@ -11,11 +11,10 @@ export type AnalysisSeverity = (typeof ANALYSIS_SEVERITIES)[number];
 
 export const DIMENSION_RUN_STATUSES = ["ran", "skipped", "not_run"] as const;
 
-export type AnalysisFinding = Pick<Finding, "id" | "title" | "problem" | "file" | "line" | "proof" | "fix" | "commit"> & {
+export type AnalysisFinding = Pick<Finding, "id" | "title" | "problem" | "file" | "line" | "proof" | "fix"> & {
   severity: AnalysisSeverity;
   dimension: AnalysisDimension;
-  status: "open" | "fixed";
-};
+} & ({ status: "open" } | { status: "fixed"; commit: string });
 
 export interface DimensionRun {
   key: AnalysisDimension;
