@@ -312,9 +312,10 @@ describe("WS /api/projects/:id/prs/live", () => {
     memberLive.send({ type: "claim", prNumber: 636 });
     await vi.waitFor(() => expect(ownerLive.lastClaims()).toHaveLength(1));
     ownerLive.send({ type: "release", prNumber: 636 });
+    ownerLive.send({ type: "claim", prNumber: 637 });
+    await vi.waitFor(() => expect(memberLive.lastClaims()).toContainEqual({ prNumber: 637, userId: w.ownerId, username: "owner" }));
+    expect(memberLive.lastClaims()).toContainEqual({ prNumber: 636, userId: w.memberId, username: "albert" });
     ownerLive.socket.terminate();
-    await new Promise((settle) => setTimeout(settle, 50));
-    expect(memberLive.lastClaims()).toEqual([{ prNumber: 636, userId: w.memberId, username: "albert" }]);
     memberLive.socket.terminate();
   });
 
