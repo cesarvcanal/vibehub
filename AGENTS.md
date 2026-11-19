@@ -8,7 +8,7 @@
 >
 > **Regra de aplicação:** as regras gerais são **independentes do domínio** e não presumem entidades, telas ou fluxos de um módulo. As referências a arquivos do vibehub são exemplos e pontos de entrada; os contratos reais saem da inspeção do trecho modificado (§12, passo 1). **Cada regra vale pelo princípio, não pela lista de exemplos:** caso não citado se resolve pelo espírito da regra mais próxima, e na dúvida se pergunta (§12, "Como perguntar ao usuário").
 >
-> **Fonte única:** este arquivo é a fonte das regras de código, de teste, de commit e de PR. O `CONTRIBUTING.md` é o resumo para contribuidores externos e não pode contradizê-lo; o `.claude/CLAUDE.md` diz só como o Claude Code executa estas regras.
+> **Fonte única:** este arquivo é a fonte das regras de código, de teste, de commit e de PR, e de como o agente trabalha (§15, para o Claude Code). Regra nova entra aqui, em nenhum outro arquivo. O `.claude/CLAUDE.md` só importa este arquivo, porque o Claude Code carrega `CLAUDE.md` e não `AGENTS.md`.
 
 ## 1. Regras inegociáveis
 
@@ -62,7 +62,7 @@
 ### `const` e estado vivo
 
 - **Toda declaração que o PR escreve é `const`**, inclusive em teste. Valor que muda vira nova constante com nome próprio, função ou `reduce`; `beforeEach` que reatribui um `let` vira helper chamado em cada teste (`const card = createCard()`).
-- **Exceção fechada — estado vivo:** variável de módulo ou de closure que acompanha a vida de um processo, sessão ou stream e é reatribuída por eventos (a query corrente do driver, o dono das tarefas em segundo plano, um contador de tentativas). Prefira juntar esse estado num objeto `const` com campos; quando isso piora a leitura, o `let` fica e o PR diz por quê.
+- **Exceção fechada — estado vivo:** variável de módulo ou de closure que acompanha a vida de um processo, sessão ou stream e é reatribuída por eventos (a query corrente do driver, o dono das tarefas em segundo plano, um contador de tentativas). Prefira juntar esse estado num objeto `const` com campos; quando isso piora a leitura, o `let` fica com `// eslint-disable-next-line no-restricted-syntax -- <motivo>` e o PR diz por quê.
 - `let` que já existe fora do diff fica como está; não se varre o repositório atrás dele.
 
 ### Comentários
@@ -73,13 +73,13 @@
   - **a mensagem do commit** que introduz o trecho: quem lê a linha depois chega a ela pelo `git blame`/`git log`, mesmo sem abrir o PR;
   - **o PR** (§14), onde o revisor o lê junto com o diff.
 - **Invariante que o código não deixa óbvia** (ordem obrigatória, atomicidade, corrida entre cards, cicatriz de bug em produção) ganha um **teste cujo nome diz a regra**. Quem "simplificar" o trecho quebra o teste e lê o porquê no nome dele.
-- **Únicas exceções**, em uma linha e só quando o código não tem como dizer aquilo:
-  - **regra externa**, com a referência da docs ou da versão do fornecedor (SDK/CLI do Claude, Docker, GitHub; §6);
-  - **limitação técnica** que nenhum nome expressa: bug conhecido de biblioteca, navegador, shell ou ambiente de teste; dependência circular que obriga o import dentro da função;
-  - **diretiva de ferramenta** (`eslint-disable`, `@ts-expect-error`), sempre com o motivo;
-  - **nome legado que não pode mudar** (campo persistido ou contrato externo, §2 e §6): o que ele guarda e por que não foi renomeado.
-- **A regra vale para as linhas que o PR acrescenta ou altera.** Comentário antigo fora do diff fica — muitos guardam a história de bugs de produção e continuam valendo. Comentário antigo que a mudança torna **falso** é corrigido ou removido no mesmo PR; corrigir a frase que mentiria num bloco existente é manutenção, não comentário novo.
-- **Em linha nova, o que não entra:** narração do que a linha faz, a versão anterior ("antes era…"), nome de pessoa ou de instalação, JSDoc que só repete o nome (tipo em JSDoc num `.mjs` é tipo, não comentário), código comentado, bloco de cabeçalho novo explicando o arquivo.
+- **Únicas exceções**, em uma linha, só quando o código não tem como dizer aquilo, e abrindo com o marcador da exceção (o lint do recorte, §12, reprova comentário novo sem ele):
+  - `// external: <regra e referência>`: **regra externa**, com a referência da docs ou da versão do fornecedor (SDK/CLI do Claude, Docker, GitHub; §6);
+  - `// limitation: <motivo>`: **limitação técnica** que nenhum nome expressa: bug conhecido de biblioteca, navegador, shell ou ambiente de teste; dependência circular que obriga o import dentro da função;
+  - `// legacy-name: <o que guarda>`: **nome legado que não pode mudar** (campo persistido ou contrato externo, §2 e §6): o que ele guarda e por que não foi renomeado;
+  - **diretiva de ferramenta**, sem marcador e sempre com o motivo: `// eslint-disable-next-line <regra> -- <motivo>`, `// @ts-expect-error <motivo>`.
+- **A regra vale para as linhas que o PR acrescenta ou altera.** Comentário antigo fora do diff fica — muitos guardam a história de bugs de produção e continuam valendo. Comentário antigo que a mudança torna **falso** sai no mesmo PR: é removido, com o porquê no commit, ou, quando é uma das exceções abaixo, reescrito com o marcador dela. A linha reescrita é linha nova para o lint do recorte, que não distingue correção de comentário novo.
+- **Em linha nova, o que não entra:** narração do que a linha faz, a versão anterior ("antes era…"), nome de pessoa ou de instalação, JSDoc que só repete o nome (tipo em JSDoc num arquivo JS, `.mjs`, `.cjs`, `.js` ou `.jsx`, é tipo, não comentário), código comentado, bloco de cabeçalho novo explicando o arquivo.
 
 | Em vez de | Escreva |
 |-----------|---------|
@@ -107,6 +107,7 @@
 | `back/src/auth/` | Contas, sessão e os preHandlers de acesso | Regra de board |
 | `back/src/secrets/` | Cofre criptografado | Leitura de segredo para log ou resposta |
 | `back/src/mcp/` | Servidor MCP e as ferramentas | Regra duplicada de service |
+| `back/src/config/` | Leitura e validação das variáveis de ambiente (`env.ts`) | Regra de negócio |
 | `back/src/utils/` | Operações técnicas e infraestrutura compartilhadas (logger, guardas do processo), sem regra de domínio (§4, "Utilitário × regra de negócio") | Regra de uma área; código que lê o store ou chama o host |
 | `back/src/testkit/` | Infra de teste compartilhada | Testes |
 
@@ -136,7 +137,7 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 
 ## 5. Frontend, React e TypeScript
 
-1. **Código novo usa export nomeado**, a maioria do repositório. Os `export default` existentes (`App.tsx`, `BoardPage.tsx`, `LoginPage.tsx`, `SetupWizard.tsx` e outros) não são convertidos de carona (§12.6).
+1. **Código novo usa export nomeado**, a maioria do repositório. `export default` só onde um formato de terceiro o exige (a story do Storybook, no formato CSF); os `export default` existentes não são convertidos de carona (§12.6).
 2. **Componente focado em renderização e composição.** Regra de domínio vira função pura em `features/<área>/lib/*.ts`, com teste ao lado; orquestração com estado vira hook `use*.ts`; chamada HTTP fica no `api.ts` da feature.
 3. **Não criar hook artificial:** estado visual simples ou handler sem regra pode ficar no componente.
 4. **Contratos HTTP tipados num lugar só** (`front/src/api/types.ts`), espelhando o backend. Tipos locais de uma feature ficam fora do componente (`features/<área>/types/`).
@@ -172,6 +173,7 @@ Código de uma área só mora dentro dela. O código técnico sobe para a pasta 
 - Contrato **interno** mudou: atualizar todos os consumidores na mesma alteração, sem `newField ?? oldField` nem shims automáticos.
 - **Dado persistido é contrato externo:** cada instalação auto-hospedada tem seu `board.json` e afins. Mudança de shape exige leitura compatível ou migração explícita e testada, nunca quebra silenciosa.
 - Validar na entrada, com o padrão do ponto de entrada: ferramentas MCP com **zod** no schema da ferramenta; rotas HTTP chamam a função do registry/service que valida e lança, e a rota converte o erro de validação em 400 (e "not found" em 404). Dentro do fluxo já validado, confiar no tipo.
+- **Erro de rota JSON tem uma forma só:** `{ error: "<mensagem>" }` com o status 4xx ou 5xx. A página HTML de um fluxo de navegador (o login do OAuth) responde a página de erro, não JSON.
 - Comparar e referenciar entidades por **id**, nunca por nome, título ou texto, inclusive o que o próprio código acabou de criar.
 - Dado editável vive na sua fonte (configuração, cadastro, store). Não congelar no código ids, nomes, listas ou códigos que mudam.
 - Dado composto (autor, motivo, origem, instante, referência) vai em campos próprios, não concatenado num texto.
@@ -197,7 +199,7 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 ## 7. Dados, fonte de verdade e consistência
 
 - Cada conceito tem uma **fonte de verdade identificável**. Não persistir cópias de valores que podem ser obtidos da fonte, nem as duas direções do mesmo relacionamento. Snapshot ou materialização só como exceção explícita, com motivo, origem e regra de atualização definidos.
-- Estado JSON do vibehub em `VIBEHUB_DATA_DIR` (`board.json` e afins) passa pelo **store** (`back/src/store/`: `JsonStore`, `writeFileAtomic`). Exceções intencionais ficam documentadas no próprio arquivo — ex.: os marcadores de `services/sdk/inflight.ts`, gravados com `writeFile` numa fila por card, e os arquivos que os scripts de `workspace.ts` gravam dentro do container.
+- Estado JSON do vibehub em `VIBEHUB_DATA_DIR` (`board.json` e afins) passa pelo **store** (`back/src/store/`: `JsonStore`, `writeFileAtomic`). Gravação fora do store é exceção intencional: o porquê vai no commit que a introduz e o PR a declara, e a gravação continua atômica ou serializada por card.
 - **Não gravar durante leitura** para sincronizar cálculos.
 - Operações que podem rodar em paralelo ou repetir (hooks de status, retomada após deploy, deliver, provisionamento) precisam ser **idempotentes** e seguras em corrida. Vários cards trabalham ao mesmo tempo no mesmo runner, e, se a instalação faz deploy blue/green, dois backends convivem por um tempo.
 - Nunca introduzir migração, limpeza ou exclusão de dados reais (worktrees, transcripts, volumes, containers) sem avaliação, `dry-run` quando aplicável e autorização.
@@ -211,6 +213,8 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 
 - Cada `docker exec`/SSH é caro e disputa o runner com os outros cards. Agrupar comandos num script só quando forem do mesmo passo; nunca abrir uma execução remota por item de lista. `docker exec` e round trip ao host se contam separados: um `runScript` com três `docker exec` é uma viagem e três processos no runner.
 - Processo de longa duração (driver do SDK, terminal, preview) tem dono e fim definidos: quem abre fecha, e o que fica órfão é bug.
+- **Prazo de trabalho no container vale dentro do container:** o timeout do Node mata só o cliente local (`bash -s`, `ssh`, `docker exec`), e o processo lá dentro segue vivo. Script com prazo entra no container sob `timeout -s KILL`, que mata o grupo inteiro antes de o Node desistir (`containerScriptCommand`, em `runtime/host.ts`).
+- **O runner existente nunca é recriado pelo código:** recriar o container derruba as sessões de todos os cards. Mudança que pede container novo (flag de `docker run`, imagem) vale só para o container criado depois dela; trocar o que já existe é decisão do operador, numa janela agendada, e o PR diz isso nos Impactos.
 - Saída grande (log, transcript, diff) é lida em fluxo ou recortada na origem, não carregada inteira na memória do backend.
 
 ### Backend e estado
@@ -247,8 +251,8 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 - Erro informa o suficiente para diagnóstico sem expor token, segredo ou caminho sensível.
 - Integração que falhou não aparece como concluída, nem para o usuário: falha de login, de runner ou de integração vira aviso visível com a ação que resolve. Retry só limitado e idempotente.
 - **O erro chega a quem chamou, não só ao log.** Uma exceção ou é propagada até a fronteira responsável ou é traduzida para o chamador (exceção com mensagem própria, resposta HTTP de erro, evento de erro no websocket). Uma linha de log não faz nenhuma das duas coisas: o log do pino é a trilha de diagnóstico e de auditoria (as entradas `audit: true`) de quem opera a instalação e acompanha o erro, nunca o substitui.
-- **Engolir o erro só em melhor esforço.** `catch` vazio, em qualquer forma (`.catch(() => {})`, `.catch(() => undefined)`, `try { … } catch { }`), é aceito apenas em efeito colateral cuja falha não muda o resultado da operação e que outro caminho cobre: aviso em tempo real que o próximo attach reenvia, limpeza que a próxima rodada refaz, gatilho antecipado de algo que também roda por agendamento. O porquê vai para o commit e o PR (§3). Falha que o chamador precisa saber nunca é engolida.
-- **Fila de promises não engole.** Em `queue = next.catch(() => undefined); return next;`, o erro chega a quem chamou pelo `next`; o `catch` só impede que a falha de um item trave os seguintes. É o padrão das filas por card e do store, e não precisa de justificativa.
+- **Engolir o erro só em melhor esforço.** `catch` vazio, em qualquer forma (`.catch(() => {})`, `.catch(() => undefined)`, `try { … } catch { }`), é aceito apenas em efeito colateral cuja falha não muda o resultado da operação e que outro caminho cobre: aviso em tempo real que o próximo attach reenvia, limpeza que a próxima rodada refaz, gatilho antecipado de algo que também roda por agendamento. Na linha anterior à do `catch`, a diretiva que o lint exige com o motivo curto (`// eslint-disable-next-line no-restricted-syntax -- <motivo>`, a mesma nas duas formas; comentário dentro do bloco não o torna menos vazio); a história vai para o commit e o PR (§3). Falha que o chamador precisa saber nunca é engolida.
+- **Fila de promises não engole.** Em `queue = next.catch(() => undefined); return next;`, o erro chega a quem chamou pelo `next`; o `catch` só impede que a falha de um item trave os seguintes. É o padrão das filas por card e do store, e não precisa de justificativa. O lint reconhece a fila pelo nome: a atribuição a `queue` (ou `this.queue`) e o encadeamento `previous.catch(...).then(run)` (ou com `queue`); fila com outro nome leva a diretiva com o motivo.
 - **Tarefa de fundo sem chamador** (timer, reaper, retomada após deploy, rotina disparada sem esperar resposta): não há a quem propagar. Um `catch` que **altera o estado que decide o próximo passo, em relação ao que a tarefa faria sem o erro** (a marca da próxima tentativa, um contador de falhas, a parada da tarefa, o aviso ao card), não é engolir o erro, desde que esse caminho de falha tenha teste com um nome que diz o que acontece. Voltar a tentar só porque o timer bate de novo não conta: `catch` vazio, ou que só registra no log sem alterar esse estado, é engolir. Disparar sem `catch` (`void tarefa()`) dá no mesmo, porque a falha cai no handler global do processo e só vira log: a tarefa de fundo nova segue esta regra com ou sem `catch` escrito.
 - `catch` vazio antigo fora do diff, em qualquer forma, fica como está; o que o PR toca é julgado por estas regras.
 
@@ -257,10 +261,11 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 - **Acesso decidido pelos preHandlers de `back/src/auth/`:** o que é da INSTALAÇÃO exige dono (`requireOwner`, em `session.ts`); o que é TRABALHO de um card segue o compartilhamento (`access.ts`) — `requireCardAccess` para ler, `requireCardWork` para mudar qualquer coisa; rota do próprio usuário, sem card (`/api/me/*`, listagens), exige só sessão (`requireSession`). Toda rota nova usa um desses. A checagem base vem do helper; filtro por usuário no handler (o que ele alcança, se é dono) só restringe o que o helper já liberou.
 - **Acesso é decidido na borda.** Service recebe fatos já apurados (o card, o usuário, um booleano de comportamento), nunca refaz a checagem de acesso nem conhece o preHandler.
 - Permissão de leitura (`view`) nunca autoriza mutação. Listagens filtram pelo que o usuário alcança, não pelo que existe.
+- **Recurso que o chamador não alcança responde 404, não 403:** para quem não vê o card ou o projeto, ele não existe, e um 403 confirmaria que o id é real. O 403 fica para o que o chamador vê mas não pode mudar (o `view` tentando mutar, o membro numa rota de dono).
 - **Shell:** tudo que vira linha de `docker exec` ou script (ids de card, branch, sessão, container) é validado na fronteira e citado depois. Leia `back/src/runtime/host.ts` antes de montar um comando.
 - **Segredos por stdin, nunca argv** (`ps` é legível por todos). Credenciais moram no cofre criptografado (`back/src/secrets/`), nunca em log, resposta HTTP ou mensagem de erro.
-- **Identidade git é do card:** commit, push e PR saem com a conta de quem deu a ordem. Não contornar com outra credencial.
-- Outros pontos de entrada (hooks do runner, MCP, websocket) têm limite de confiança próprio — token do runner, sessão — e não presumem que passaram pelo HTTP autenticado.
+- **Identidade git é do card:** commit, push e PR saem com a conta de quem deu a ordem, nunca com conta de terceiros nem da organização. Não contornar com outra credencial.
+- Outros pontos de entrada (hooks do runner, MCP, websocket) têm limite de confiança próprio — token do runner, sessão — e não presumem que passaram pelo HTTP autenticado. Ponto de entrada de máquina (o callback de status do runner) autentica pelo token do serviço comparado em tempo constante (`tokenMatches`, em `auth/session.ts`) e não aceita cookie de sessão no lugar dele.
 - Verificar caminhos permitidos e negados, inclusive chamando a API direto.
 
 ## 11. Testes e critérios de correção
@@ -268,7 +273,13 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 - **Mudança de comportamento ou bug é sempre em TDD:** escrever o teste primeiro, rodar e ver falhar pelo motivo certo (em bug, reproduzindo o erro que aconteceu) e só então implementar até passar. Teste que nunca foi visto falhando não prova nada.
 - **O verde só vale se o teste falha sem a correção:** depois do verde, tire só a correção (de uma cópia de backup do arquivo, nunca `git stash`), rode e exija a falha pelo motivo certo; recoloque e veja passar. Rode o arquivo de teste mais de uma vez: teste que alterna entre passar e falhar é defeito do teste até prova em contrário.
 - Mudança de comportamento exige testes proporcionais ao risco. **Vitest** nos dois pacotes, com o teste ao lado do código (`*.test.ts` / `*.test.tsx`). Priorizar o fluxo real; teste unitário complementa quando isola regra complexa.
-- Usar a infraestrutura de teste existente; não criar infraestrutura paralela. No front ela é Vitest + Testing Library + jsdom (`front/vitest.config.ts`, helper `renderApp` em `front/src/test/render.tsx`).
+- **Teste é código:** toda regra deste arquivo vale nas linhas de teste como nas de produção: nomes (§2), `const` e comentários (§3), lugar e duplicação (§4), erros (§9). O modelo é este arquivo; o arquivo de teste vizinho escrito antes destas regras é legado, não exemplo.
+- **Antes do primeiro helper de teste, procure a infraestrutura que já existe, nesta ordem:**
+  1. **o repositório:** `ls back/src/testkit/` (infra compartilhada do back); no front, Vitest + Testing Library + jsdom (`front/vitest.config.ts`, helper `renderApp` em `front/src/test/render.tsx`);
+  2. **o Vitest:** `onTestFinished` para desfazer o que o teste criou, `vi.waitFor` para esperar uma condição, `it.each`/`describe.each` para casos que só mudam os dados, `vi.useFakeTimers` para tempo;
+  3. **o Node:** `existsSync` para saber se um caminho existe, `mkdtempSync` para diretório temporário.
+
+  Nada disso cobre: o helper que serve a um arquivo só nasce nele; o que dois arquivos de teste precisam (um docker falso, um repositório git temporário) nasce em `back/src/testkit/` e é importado, nunca copiado de um arquivo para outro.
 - Dado de teste sai do fluxo real ou de fábrica fiel ao contrato; não inventar shape que não existe em produção.
 - Mockar só **fronteiras externas**: host executor (Docker/SSH), rede, GitHub, SDK do Claude. Não mockar a lógica interna só para facilitar asserções.
 - Rotas HTTP: testar entrando pela rota real, com validação e acesso (dono, `work`, `view`, sem acesso).
@@ -279,11 +290,11 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 
 **Rodar testes no runner: curto, só do que você tocou.** A suíte inteira leva muitos minutos, disputa CPU com os outros cards e costuma ser morta por um deploy.
 
-1. **Enquanto trabalha:** só o arquivo do que mexeu, filtrado pelo caso — `cd back && npx vitest run src/services/sdk/manager.test.ts -t "órfã"`.
-2. **Antes de entregar:** `npm run test:changed` (raiz), o mesmo recorte do gate (`.vibehub/gate.json` → `scripts/gate-changed.sh`). Junto, o typecheck do pacote tocado, o mesmo do CI:
+1. **Enquanto trabalha:** só o arquivo do que mexeu, filtrado pelo caso — `cd back && npx vitest run <arquivo> -t "<caso>"` (idem em `front/`).
+2. **Antes de entregar:** `npm run lint:changed` e `npm run test:changed` (raiz), o mesmo recorte do gate (`.vibehub/gate.json`). Junto, o typecheck do pacote tocado, o mesmo do CI:
    - **front:** `npx tsc -b`. O `tsconfig.json` é uma solution com project references, então `tsc --noEmit -p` não checa nada e dá verde falso.
    - **back:** `npx tsc --noEmit`. `tsc -b` emitiria JS em `back/dist`. O `tsconfig.json` do back exclui `*.test.ts`: erro de tipo em teste só aparece ao rodar o teste.
-3. **Nunca** `npm test` ou `npx vitest run` sem filtro no runner. A suíte inteira é do CI: confira com `gh pr checks <N>`.
+3. **Nunca** `npm test` ou `npx vitest run` sem filtro no runner. A suíte inteira é do CI: confira com `gh pr checks <N>`. A exceção é `npm run test:lint`, a suíte do lint da raiz (`eslint.config.js` e `scripts/`), pequena, que roda inteira quando o PR mexe nela: o gate não a roda, só o CI.
 4. Teste de tempo (limite em ms) que falha de vez em quando sob carga não é regressão sua. Confirme rodando sem a sua mudança; se já era instável, diga no PR e siga.
 
 Se um comando de teste for passar de ~2 min, troque por um recorte menor. Não afirmar que algo passou sem executar; se não deu para testar, relatar **o que foi e o que não foi validado**.
@@ -294,7 +305,7 @@ Se um comando de teste for passar de ~2 min, troque por um recorte menor. Não a
 
 - **Teve dúvida, pergunta.** Requisito ambíguo, mais de um caminho razoável ou decisão que é do usuário: perguntar antes de implementar, no formato de "Como perguntar ao usuário", abaixo. Não inventar convenção nem presumir a resposta.
 - **Explorar antes de construir.** Feature nova ou mudança de comportamento com alternativas passa por brainstorming: requisitos, abordagens com prós e contras, recomendação, e execução só com o caminho aprovado.
-- **Processo em toda tarefa**, sem esperar ser mandado: debugging sistemático antes de propor fix, TDD na implementação, plano escrito para tarefa de várias etapas, verificação antes de declarar pronto, revisão do diff depois de implementar. A ferramenta que executa cada etapa é definida no arquivo de instruções do agente (no Claude Code, o `.claude/CLAUDE.md`).
+- **Processo em toda tarefa**, sem esperar ser mandado: debugging sistemático antes de propor fix, TDD na implementação, plano escrito para tarefa de várias etapas, verificação antes de declarar pronto, revisão do diff depois de implementar. A ferramenta que executa cada etapa é definida para cada agente (no Claude Code, a §15).
 - **Pedido de diagnóstico é leitura e explicação**, não edição.
 - **Discordar com fundamento faz parte do trabalho:** quando o pedido parece pior que uma alternativa, a discordância vira pergunta no mesmo formato, com a alternativa recomendada e o pedido original como opções, cada uma com a sua consequência.
 
@@ -304,8 +315,8 @@ Se um comando de teste for passar de ~2 min, troque por um recorte menor. Não a
 4. **Implementar de ponta a ponta:** consumidores, contratos, validação, acesso, i18n e testes na mesma entrega.
 5. **Auditar o trecho tocado:** nomes, `let`, comentário fora das exceções, código morto, duplicação, fallback indevido, leituras e execuções inúteis.
 6. **Não espalhar alterações:** problema vizinho que exige refatoração arriscada é comunicado, não corrigido de carona.
-7. **Validar:** testes do recorte, typecheck e build quando aplicável; revisar o diff (comandos abaixo).
-8. **Revisão independente antes de entregar:** o diff passa, nesta ordem, por **simplificação** (aplicada) e por **code review** (correção, performance, aderência às regras e o que foi inventado), ambas feitas por um revisor SEM o contexto de quem escreveu, que recebe o diff, as mensagens dos commits e este arquivo; o code review segue "Como revisar um PR" (§14). Achado confirmado segue a severidade dele (§14, "As severidades"): o que bloqueia é corrigido ou vira pendência deliberada, que só o aval de quem autoriza o merge aceita (§14, "A pendência deliberada é julgada"), o que deveria corrigir é aplicado, a decisão vira pergunta ao usuário e o menor fica registrado no PR. O descartado tem o motivo dito. O que a simplificação mudar volta pelo passo 7 antes do code review.
+7. **Validar:** lint do recorte, testes do recorte, typecheck e build quando aplicável; revisar o diff (comandos abaixo). O lint do recorte (`npm run lint:changed`) reprova, só nas linhas que a branch acrescentou, as regras que a máquina checa: as de `eslint.config.js`, cada uma com a seção que impõe. Lint verde não é conformidade: o resto deste arquivo é o passo 5 e a revisão do passo 8.
+8. **Revisão independente antes de entregar:** o diff passa, nesta ordem, por **simplificação** (aplicada) e por **code review** (correção, performance, aderência às regras e o que foi inventado), ambas feitas por um revisor SEM o contexto de quem escreveu, com a entrada definida em "Como revisar um PR" (§14), que o code review segue. Achado confirmado segue a severidade dele (§14, "As severidades"): o que bloqueia é corrigido ou vira pendência deliberada, que só o aval de quem autoriza o merge aceita (§14, "A pendência deliberada é julgada"), o que deveria corrigir é aplicado, a decisão vira pergunta ao usuário e o menor fica registrado no PR. O descartado tem o motivo dito. O que a simplificação mudar volta pelo passo 7 antes do code review.
 9. **Descrever o resultado:** o que mudou, o que foi verificado e as limitações reais. Quando a entrega é um PR, ele segue a §14.
 
 ### Autonomia corretiva e preservação do escopo
@@ -313,7 +324,7 @@ Se um comando de teste for passar de ~2 min, troque por um recorte menor. Não a
 Pedir autorização e passar por brainstorming continua obrigatório para decisões de produto, mudança de escopo, funcionalidade nova, mudança de comportamento intencional e tudo cuja intenção não esteja clara. A exceção: **o agente corrige sozinho problema real naquilo que já foi definido, pedido ou implementado**, sem parar para pedir licença:
 
 - bug e erro de lógica;
-- incongruência entre funcionalidades e regras de negócio;
+- código que contradiz uma regra ou decisão já definida;
 - regressão introduzida durante o desenvolvimento;
 - comportamento que contraria claramente o requisito estabelecido;
 - falha de integração, validação ou consistência;
@@ -323,20 +334,24 @@ Pedir autorização e passar por brainstorming continua obrigatório para decis�
 
 **Princípio:** o agente tem autonomia para preservar, corrigir e garantir a integridade do que foi definido e construído, não para redefinir o que o projeto deve ser.
 
-**Operações de risco:** exclusão de dados (worktree, volume, dado de `VIBEHUB_DATA_DIR`), mudança incompatível de contrato persistido, alteração de acesso, reescrita de histórico já enviado (amend, rebase ou force-push de commit publicado), deploy e merge exigem as autorizações existentes. **Merge em `main` é deploy.** Antes de agir, exponha os riscos ao usuário e siga só com o aval dele. O emoji marca a gravidade: 🚨 para risco grande ou irreversível, ⚠️ para risco médio ou pequeno.
+**Operações de risco:** exclusão de dados (worktree, volume, dado de `VIBEHUB_DATA_DIR`), mudança incompatível de contrato persistido, alteração de acesso, reescrita de histórico já enviado (amend, rebase ou force-push de commit publicado), deploy e merge exigem as autorizações existentes. **Merge na branch que publica é deploy** (no vibehub, a `main`). Antes de agir, exponha os riscos ao usuário e siga só com o aval dele. O emoji marca a gravidade: 🚨 para risco grande ou irreversível, ⚠️ para risco médio ou pequeno.
 
 ### Comandos do repositório
 
 | Comando | Uso |
 |---------|-----|
-| `npm run install:all` | Instala `back/` e `front/` |
+| `npm run install:all` | Instala a raiz (o lint), `back/` e `front/` |
 | `npm --prefix back run dev` · `npm --prefix front run dev` | Backend (tsx watch) e frontend (Vite) em dev |
 | `cd back && npx vitest run <arquivo> -t "<caso>"` | Teste do que você tocou (idem em `front/`) |
-| `npm run test:changed` | Testes afetados pela branch desde a `main`, o recorte do gate |
-| `npx tsc -b` (em `front/`) · `npx tsc --noEmit` (em `back/`) | Typecheck, o mesmo do CI (no back não cobre `*.test.ts`) |
+| `npm run lint:changed` | ESLint só nas linhas que a branch acrescentou desde a base (`$VIBEHUB_BASE_REF`, padrão `origin/main`), o recorte do gate e do CI |
+| `npm run test:lint` | Testes do próprio lint (a config e as regras locais), quando o PR mexe em `eslint.config.js` ou `scripts/`; o gate não os roda, o CI sim |
+| `npm run test:changed` | Testes afetados pela branch desde a base (`$VIBEHUB_BASE_REF`, padrão `origin/main`), o recorte do gate |
+| `npx tsc -b` (em `front/`) · `npx tsc --noEmit` (em `back/`) | Typecheck, o mesmo do CI (§11, passo 2) |
 | `npm run build` | Build de back + front |
 | `npm --prefix front run storybook` | Storybook dos componentes |
 | `gh pr checks <N>` | Suíte inteira, que só roda no CI |
+
+Exercitar os caminhos do runner de ponta a ponta fora de um card exige Docker local; os testes unitários usam um host executor falso e rodam sem ele.
 
 **Testar pela tela sem tocar em produção:** back isolado (`VIBEHUB_PORT=<porta livre> VIBEHUB_DATA_DIR=/tmp/vh-test npx tsx src/index.ts` em `back/`) e front apontando para ele (`VIBEHUB_BACKEND=http://127.0.0.1:<porta> npx vite --port <outra>` em `front/`).
 
@@ -352,27 +367,7 @@ Toda dúvida que trava a execução e toda discordância com o pedido viram perg
 - **Pergunta estruturada quando a ferramenta tem**; sem ela, numere as opções no texto e ponha a saída livre por último.
 - **Descubra o que dá para descobrir.** O que o código, a documentação ou este arquivo respondem, o agente descobre e informa; a pergunta fica para a decisão que é do usuário.
 
-## 13. Revisão final (antes de entregar)
-
-- [ ] Cada dúvida e cada discordância virou pergunta de múltipla escolha com saída livre, em vez de presunção?
-- [ ] Resolvi o problema sem voltas, camadas ou abstrações artificiais?
-- [ ] Nomes em inglês, legíveis sem abrir a implementação, e todo texto de tela no i18n nos dois idiomas?
-- [ ] Só `const` nas linhas novas (ou o estado vivo justificado no PR), sem `var`, comentário fora das exceções da §3 nem código morto?
-- [ ] O porquê de cada decisão está na mensagem do commit e no PR, e cada invariante não óbvia tem um teste com o nome da regra?
-- [ ] Cálculo separado de efeito, cada estado e efeito com papel único?
-- [ ] Cada arquivo criado ou movido mora na pasta que descreve o que ele é, com o teste ao lado?
-- [ ] Componentes renderizam; regra está em `lib/` ou hook; contratos em `api/types.ts`?
-- [ ] Não dupliquei contrato, dado, estado ou fonte de verdade?
-- [ ] Dado persistido de instalações existentes continua legível?
-- [ ] O trabalho cresce com a mudança, não com o total (cards, mensagens, linhas)? Nenhum `docker exec`, leitura, emissão ou render a mais?
-- [ ] Toda integração externa que criei ou alterei segue a docs ou o comportamento verificado da versão, com a fonte citada no PR?
-- [ ] Entrada validada na fronteira, shell citado, segredo fora de argv e de log?
-- [ ] Rota nova com `requireOwner` / `requireCardAccess` / `requireCardWork` / `requireSession` adequado?
-- [ ] Operações repetíveis são idempotentes e seguras em corrida?
-- [ ] Escrevi o teste antes, vi falhar pelo motivo certo e vi falhar de novo sem a correção?
-- [ ] Rodei o recorte de testes e o typecheck, e conferi o diff?
-- [ ] O diff passou pela simplificação e pelo code review independentes contra este arquivo?
-- [ ] Afirmei apenas o que foi executado e verificado?
+## 13. Encerramento
 
 **Regra de encerramento:** se o código funciona, mas exige conceitos, estados, leituras, arquivos ou indireções desnecessários, simplificar **antes de entregar**, preservando correção, integridade, segurança e testes.
 
@@ -415,12 +410,12 @@ Os comentários vão direto nas linhas do diff, publicados juntos numa **única 
 
 ### Como publicar
 
-Dentro de um card do vibehub, a entrega sai pelo `vibehub_deliver` (push, PR, gate e merge quando autorizado); `git push` direto do runner dá 403. Fora do runner, com o `gh` autenticado, siga os passos abaixo. Grave `pr-body.md` e `review.json` em **UTF-8** e **fora do repositório**.
+Dentro de um card do vibehub, a entrega sai pelo `vibehub_deliver` (§15). Fora do runner, com o `gh` autenticado, siga os passos abaixo. Grave `pr-body.md` e `review.json` em **UTF-8** e **fora do repositório**.
 
 1. Abra o PR com título e corpo explícitos, nunca `--fill` (ele põe a lista de commits como descrição):
 
    ```bash
-   gh pr create --base main --title "<tipo(area): ...>" --body-file pr-body.md
+   gh pr create --base <base> --title "<tipo(area): ...>" --body-file pr-body.md
    ```
 
 2. Publique os comentários do diff como uma única revisão:
@@ -453,7 +448,7 @@ Dentro de um card do vibehub, a entrega sai pelo `vibehub_deliver` (push, PR, ga
 
 ### Commits
 
-Todo commit, de pessoa ou de agente, segue o padrão de emojis do **Gitmoji**, e a tabela abaixo é a referência oficial; emoji novo entra na tabela por PR antes de ser usado. Como o código não carrega o porquê (§3), a mensagem do commit é o que o `git blame` mostra a quem lê a linha depois.
+Todo commit, de pessoa ou de agente, segue o padrão de emojis do **Gitmoji**, e a tabela abaixo é a referência oficial; emoji novo entra na tabela por PR antes de ser usado.
 
 ```text
 <emoji> <tipo>(<area>): <título claro e objetivo>
@@ -477,7 +472,7 @@ com login saudável a tarefa em segundo plano continua protegida.
 - **Emoji:** sempre um da tabela, o da intenção principal do commit.
 - **Tipo** logo depois do emoji, em inglês, o mesmo vocabulário do título do PR (que não leva emoji). **Área** entre parênteses, a mesma do título do PR.
 - **Título** em pt-BR, curto, com o verbo da ação. **Descrição** complementa o título em vez de repeti-lo; "ajustes", "correções", "melhorias" não são descrição. Só fato: não afirmar teste que não rodou.
-- **Uma alteração lógica e coerente por commit.** Só o título vale apenas para commit mecânico (rename que não muda contrato, formatação).
+- **Uma alteração lógica e coerente por commit**, feito ao fechar cada etapa, nunca um único commit com tudo no fim. Só o título vale apenas para commit mecânico (rename que não muda contrato, formatação).
 - **Merge commit também leva emoji:** `🔀 merge: ...`, sem área. No `gh pr merge`, passe o título com `--subject`, porque o padrão da ferramenta sai sem emoji.
 - **Se a mensagem e o PR divergem, vale o PR.**
 - **Mensagem já enviada não se reescreve** (operação de risco, §12): o que faltou vai para o PR.
@@ -495,7 +490,6 @@ com login saudável a tarefa em segundo plano continua protegida.
 | 📝 | `:memo:` | Adiciona ou atualiza documentação |
 | 🚀 | `:rocket:` | Faz deploy |
 | 💄 | `:lipstick:` | Adiciona ou atualiza a interface e os arquivos de estilo |
-| 🎉 | `:tada:` | Começa um projeto |
 | ✅ | `:white_check_mark:` | Adiciona, atualiza ou faz passar testes |
 | 🔒️ | `:lock:` | Corrige problema de segurança ou de privacidade |
 | 🔐 | `:closed_lock_with_key:` | Adiciona ou atualiza segredos |
@@ -515,7 +509,6 @@ com login saudável a tarefa em segundo plano continua protegida.
 | 🔨 | `:hammer:` | Adiciona ou atualiza scripts de desenvolvimento |
 | 🌐 | `:globe_with_meridians:` | Internacionalização e localização |
 | ✏️ | `:pencil2:` | Corrige erros de digitação |
-| 💩 | `:poop:` | Escreve código ruim que precisa ser melhorado |
 | ⏪️ | `:rewind:` | Reverte mudanças |
 | 🔀 | `:twisted_rightwards_arrows:` | Faz merge de branches |
 | 📦️ | `:package:` | Adiciona ou atualiza arquivos compilados ou pacotes |
@@ -526,7 +519,6 @@ com login saudável a tarefa em segundo plano continua protegida.
 | 🍱 | `:bento:` | Adiciona ou atualiza assets |
 | ♿️ | `:wheelchair:` | Melhora a acessibilidade |
 | 💡 | `:bulb:` | Adiciona ou atualiza comentários no código-fonte |
-| 🍻 | `:beers:` | Escreve código sob efeito de álcool |
 | 💬 | `:speech_balloon:` | Adiciona ou atualiza textos e literais |
 | 🗃️ | `:card_file_box:` | Faz mudanças relacionadas a dados persistidos |
 | 🔊 | `:loud_sound:` | Adiciona ou atualiza logs |
@@ -536,11 +528,9 @@ com login saudável a tarefa em segundo plano continua protegida.
 | 🏗️ | `:building_construction:` | Faz mudanças de arquitetura |
 | 📱 | `:iphone:` | Trabalha no design responsivo |
 | 🤡 | `:clown_face:` | Cria mocks |
-| 🥚 | `:egg:` | Adiciona ou atualiza um easter egg |
 | 🙈 | `:see_no_evil:` | Adiciona ou atualiza um arquivo .gitignore |
 | 📸 | `:camera_flash:` | Adiciona ou atualiza snapshots |
 | ⚗️ | `:alembic:` | Faz experimentos |
-| 🔍️ | `:mag:` | Melhora o SEO |
 | 🏷️ | `:label:` | Adiciona ou atualiza tipos |
 | 🌱 | `:seedling:` | Adiciona ou atualiza arquivos de seed |
 | 🚩 | `:triangular_flag_on_post:` | Adiciona, atualiza ou remove feature flags |
@@ -556,34 +546,17 @@ com login saudável a tarefa em segundo plano continua protegida.
 | 🩺 | `:stethoscope:` | Adiciona ou atualiza healthcheck |
 | 🧱 | `:bricks:` | Mudanças de infraestrutura |
 | 🧑‍💻 | `:technologist:` | Melhora a experiência de quem desenvolve |
-| 💸 | `:money_with_wings:` | Adiciona patrocínio ou infraestrutura ligada a dinheiro |
 | 🧵 | `:thread:` | Adiciona ou atualiza código de multithreading ou concorrência |
 | 🦺 | `:safety_vest:` | Adiciona ou atualiza código de validação |
-| ✈️ | `:airplane:` | Melhora o suporte offline |
 | 🦖 | `:t-rex:` | Código que adiciona compatibilidade com versões anteriores |
 
 ### Regras de entrega
 
 - **PR pequeno e específico:** uma unidade lógica por PR. Se a mudança cria ou ajusta uma regra deste arquivo que o próprio código do PR segue, a regra vai no mesmo PR. Regra de processo que o PR só viveu (como revisar, entregar, quantas rodadas fazer) vai num PR próprio.
 - **Mudança neste arquivo:** a regra é escrita para qualquer agente, em qualquer área. Tem de ser clara para quem nunca viu o repositório, dizer o que fazer e por quê, e funcionar fora do caso que a motivou. Fato que muda (ferramenta instalada, nome de branch) entra como condição ("se…"), não como verdade fixa.
-- **Commits atômicos:** um commit por etapa ou tema, nunca um único commit com tudo no fim.
 - **Merge só com autorização explícita** (§12). Pendência que bloqueia, aberta, segura o merge mesmo com a ordem de merge já dada, até o aval daquela pendência ("A pendência deliberada é julgada", abaixo). Autorizado, o merge é **merge commit, nunca squash**, com o SHA verificado e o título no padrão Gitmoji: `gh pr merge <N> --merge --match-head-commit <sha> --subject "🔀 merge: ..."`. Depois do merge, confira o pipeline pós-merge (CI e publicação da imagem).
-- **Identidade git de quem fez o trabalho:** não commitar com conta de terceiros nem da organização.
 - **Testes e CI verdes antes do merge**, sem warning novo no CI.
-- **Revisão independente antes do merge:** o diff passa por um revisor (pessoa ou agente) sem o contexto de quem o escreveu, que recebe só o diff, o PR e este arquivo e segue "Como revisar um PR", abaixo.
-
-### Checklist antes de pedir revisão
-
-Releia o PR como um estranho leria:
-
-- [ ] O contexto, o problema (com a causa raiz, se for bug) e a solução como um todo estão claros, com o desenho curto quando mexe em fluxo ou estrutura?
-- [ ] A seção de conformidade existe, mesmo em PR pequeno ou só de documentação, e cobre cada seção do AGENTS.md que o diff toca?
-- [ ] Todo bloco relevante do diff tem comentário (o quê, por quê, como), e o código ficou sem comentário fora das exceções da §3?
-- [ ] Cada commit segue o formato Gitmoji e, fora os mecânicos, diz o que mudou, por quê e como?
-- [ ] Os impactos, inclusive de performance e o que o deploy exige, estão listados?
-- [ ] Os testes separam o executado do recomendado e mostram o antes e depois?
-- [ ] Os pontos de atenção começam dizendo se o merge tem volta e até onde vai o estrago?
-- [ ] Nada foi inventado, e o que não está confirmado está dito?
+- **Revisão independente antes do merge:** o diff passa por um revisor (pessoa ou agente) sem o contexto de quem o escreveu, que segue "Como revisar um PR", abaixo.
 
 ### Como revisar um PR
 
@@ -622,3 +595,87 @@ Quem revisa (pessoa ou agente) é o **portão do merge**, não um leitor de cort
 
   Feche com o veredito: **apto** ou **não apto**, com o motivo.
 - Cada achado tem resposta na thread dele: o commit e o teste que o resolvem, ou o motivo de ter virado pendência.
+
+## 15. Claude Code: skills, subagentes e entrega
+
+Esta seção diz como o Claude Code executa as regras acima. Onde uma skill, um subagente ou o harness apontam para um lado e as seções 1 a 14 para outro, valem as seções 1 a 14: a skill dita o método, este arquivo dita a regra (formato de commit e de PR, comentário, `let`). O modelo é este arquivo, não o código vizinho: o harness pede código que "se lê como o código ao redor", e o código ao redor tem comentário, `let` e helper de teste de antes destas regras.
+
+### Onde cada coisa vive
+
+| Camada | Conteúdo |
+|--------|----------|
+| `AGENTS.md` (este) | Todas as regras do projeto, para qualquer agente e pessoa |
+| `.claude/CLAUDE.md` | Só o import deste arquivo |
+| `.claude/settings.json` | Plugins habilitados, permissões e a profundidade de subagente |
+| `eslint.config.js` | A parte deste arquivo que a máquina checa (`npm run lint:changed`) |
+| `README.md`, `SECURITY.md` | Páginas públicas do repositório, sem regra de desenvolvimento |
+| `back/src/services/brain/personas/*.md` | Instruções que o servidor MCP do vibehub entrega a todo card, código do produto |
+| `docs/` | Documentação do projeto (arquitetura, API, processos do runner), não canônica para regra. Spec e plano das skills (brainstorming, writing-plans) ficam fora do repositório, em `/tmp/<card>/`, como referência do trabalho em curso |
+| `CLAUDE.local.md` (raiz da worktree, não versionado) | Instruções do projeto escritas pelo vibehub em cada card; a seção `## Aprendizados` recebe o que o `vibehub_brain_learn` descobre: porta, runner, flakiness, fato de ambiente |
+| Cérebro (`CLAUDE.md` do perfil, não versionado) | Instruções globais do runner, editadas na aba Dev → Cérebro |
+
+Markdown versionado só existe nos lugares desta tabela (em `docs/`, só na raiz da pasta): `npm run lint:changed` reprova o `.md` que a branch commita fora deles. Assunto que nenhuma camada documenta é pergunta ao usuário (§12), não convenção inventada.
+
+### Skill antes de cada etapa
+
+Antes de cada etapa, ache no mapa abaixo a skill da situação e invoque-a pela ferramenta `Skill`, sem esperar o pedido. Mais de uma serve: primeiro a de processo (debugging, brainstorming, TDD), depois a de execução (frontend, design). Nenhuma cobre: siga o método à mão e diga qual etapa ficou sem skill. A skill do mapa não aparece na lista: o `enabledPlugins` do `.claude/settings.json` só liga plugin já instalado no perfil, e quem instala é a tela de Plugins do vibehub; siga o processo à mão e avise quem cuida da instalação.
+
+| Situação | Skill |
+|----------|-------|
+| Feature nova, mudança de comportamento, desenho com alternativas | `superpowers:brainstorming` |
+| Feature grande guiada de ponta a ponta | `feature-dev:feature-dev` |
+| Pôr à prova um plano com perguntas duras | `mattpocock-skills:grilling` |
+| Desenhar a interface de um módulo, decidir onde passa a fronteira | `mattpocock-skills:codebase-design` |
+| Tela nova ou redesenho, antes do código | Protótipo pela ferramenta `Artifact`, quando o ambiente a oferece, senão página HTML local; + `frontend-design:frontend-design` |
+| Qualquer mudança de layout (bloco novo, tamanho, espaçamento, rolagem), antes de escrever e de novo com a tela renderizada antes de entregar (§5, item 15) | `frontend-design:frontend-design` |
+| Revisar tela existente, acessibilidade, layout responsivo | `ui-design:design-review` · `ui-design:accessibility-audit` · `ui-design:responsive-design` |
+| Bug, teste falhando, comportamento que ninguém explica | `mattpocock-skills:diagnosing-bugs` |
+| Tarefa de várias etapas | `superpowers:writing-plans`, depois `superpowers:executing-plans` (você executa) ou `superpowers:subagent-driven-development` (um subagente por tarefa) |
+| Duas ou mais tarefas independentes em paralelo | `superpowers:dispatching-parallel-agents` |
+| Escrever feature ou correção | `superpowers:test-driven-development` |
+| Simplificar código que escreveu ou tocou | `/simplify` · subagente `code-simplifier:code-simplifier` |
+| Modernizar código legado | subagente `code-refactoring:legacy-modernizer` |
+| Ver a mudança rodando | `run` · MCP `navegador`, com o back e o front isolados da §12 |
+| Antes de afirmar pronto, passando ou corrigido | `superpowers:verification-before-completion` |
+| Achar bug no diff ou num PR | `/code-review` (o nível `ultra`, faturado, só a pedido do usuário) |
+| Revisão por um subagente sem o seu contexto | `superpowers:requesting-code-review` |
+| Recebeu review (pessoa ou bot) | `superpowers:receiving-code-review` |
+| Segurança das mudanças pendentes | `security-review` |
+| Editar este arquivo | `mattpocock-skills:writing-for-agents` · `claude-md-management:claude-md-improver` |
+| Commit e PR | Nenhuma: direto pela §14. `commit-commands:*` faz um commit único sem Gitmoji e `mattpocock-skills:pr` usa outro modelo de descrição |
+
+### Ordem de trabalho
+
+1. **Entender e perguntar.** A pergunta da §12 sai pela `AskUserQuestion`, com "(Recomendado)" no rótulo da recomendada; a saída livre a ferramenta já põe.
+2. **Diagnosticar ou desenhar:** bug pela `mattpocock-skills:diagnosing-bugs`; feature pela `superpowers:brainstorming`; tela nova com o protótipo aprovado antes do React.
+3. **Planejar** a tarefa de várias etapas.
+4. **Implementar em TDD**, com o vermelho visto antes do verde e a §11 ("Antes do primeiro helper de teste") antes do primeiro helper.
+5. **Fechamento**, abaixo.
+6. **Verificar** com os comandos da §12, passo 7, depois de aplicar o que a revisão achou.
+7. **Entregar**, abaixo.
+
+### Subagentes
+
+- **Quem delegou responde pelo `git diff`.** O subagente que abriu o trecho e viu o defeito conserta ali mesmo, num pacote que não cruza com o de outro agente; feature grande se fatia antes de despachar; mudança pequena, ou que atravessa muitos arquivos, você escreve.
+- **Saída de subagente é candidata, não verdade:** confira no working tree o que ele relatou e escreveu; ressalva do tipo "não auditei X" se resolve abrindo o X.
+- **Paralelismo é multi-dispatch seu:** vários agentes numa única mensagem, cada um dono de um pacote. A profundidade 2 (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` no `.claude/settings.json`) serve para um subagente ler ou pesquisar, não para paralelizar escrita: dois agentes na mesma working tree sobrescrevem um ao outro em silêncio. Trabalho que precisa de branch própria vai para outro card (`vibehub_send_to_terminal`).
+
+### Fechamento: revisão agnóstica
+
+É o passo 8 da §12, antes da entrega, sem esperar ser mandado. O revisor recebe só este prompt, palavra por palavra, sem justificativa nem lista de foco: quem escreveu não escolhe onde o revisor olha.
+
+```text
+Revise a branch atual contra o AGENTS.md da raiz do repositório.
+O diff: git fetch origin main && git diff origin/main...HEAD
+O que o autor afirma: git log origin/main..HEAD
+<pedido: o da etapa 1 ou o da etapa 2, abaixo>
+```
+
+1. **Simplificação:** subagente `code-simplifier:code-simplifier`, com o pedido de confrontar cada trecho com as regras e aplicar o que simplifica sem mudar comportamento. Confira o que ele escreveu e rode o lint e os testes do recorte.
+2. **Code review**, depois da simplificação: subagente `general-purpose`, com o pedido de seguir "Como revisar um PR" (§14), não mexer no working tree e entregar os achados com severidade e o veredito. Ele usa o shell para `git`, lint e testes existentes; o teste novo que provaria um achado ele descreve, e você escreve e roda. O `feature-dev:code-reviewer` não tem Bash e só serve para uma leitura rápida.
+3. Cada achado se confere na fonte e segue a severidade (§14), em commit próprio quando se corrige.
+
+### Entrega
+
+- Dentro de um card do vibehub, a entrega é o `vibehub_deliver`: push, PR, gate (`.vibehub/gate.json`) e merge quando autorizado. Se o `git push` direto do runner falhar com 403, é o esperado: a credencial do runner não é a de quem deu a ordem (§10), e a saída é o deliver, nunca outra credencial. Fora do runner, "Como publicar" (§14) com o `gh`.
+- **`authorized: true` só com o aval explícito do usuário na conversa** (merge na branch que publica é deploy, §12) e com os Pontos de atenção do PR relidos: pendência que bloqueia sem o aval registrado (§14) segue sem `authorized`.

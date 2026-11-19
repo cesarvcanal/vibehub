@@ -18,6 +18,8 @@ import { parseContextUsage, type ContextUsageInfo } from "@/features/board/lib/c
 import { t as translate, type Translate } from "@/i18n";
 import { peerDisplayName } from "@/features/board/lib/peerTyping";
 import type { LocalVoiceTurn } from "@/features/voice/voiceTurns";
+import { isActiveFailureStatus, parsePlatformFailureNotice } from "@/features/platformFailures/lib/notice";
+import type { PlatformFailureNotice } from "@/api/types";
 
 /* ----------------------------------------------------------------- events */
 
@@ -90,6 +92,8 @@ export interface SdkEvent {
     | "rate_limit"
     | "login_failed"
     | "login_restored"
+    | "platform_failures"
+    | "platform_failure"
     | "context_usage"
     | "keyword_effort_replaced"
     | "conversation_reset"
@@ -174,6 +178,8 @@ export interface SdkEvent {
   maxTokens?: number;
   percent?: number;
   model?: string;
+  notices?: unknown[];
+  notice?: unknown;
   /** On `catalog`: every skill/command this session can run — what the composer's "/" offers. */
   commands?: SlashCommandInfo[];
   /** On `user_question`: the questions with their selectable options. */
@@ -610,6 +616,7 @@ export interface SdkChatState {
    * stopped renewing, the token was revoked. State, not conversation: it becomes the reconnect warning above the input.
    */
   loginFailed: boolean;
+  platformFailures: PlatformFailureNotice[];
   /**
    * HOW MUCH OF THE CONTEXT WINDOW the conversation takes up, the latest reading (the `/context`).
    * State, not conversation: it becomes the colored meter in the bottom right corner of the log (see
@@ -628,6 +635,7 @@ export const INITIAL_SDK_STATE: SdkChatState = {
   agentTasks: {},
   rateLimits: {},
   loginFailed: false,
+  platformFailures: [],
   contextUsage: null,
   ready: false,
   turnActive: false,
@@ -1444,6 +1452,18 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       return state.loginFailed ? state : { ...state, loginFailed: true };
     case "login_restored":
       return state.loginFailed ? { ...state, loginFailed: false } : state;
+    case "platform_failures": {
+      const notices = (event.notices ?? [])
+        .map(parsePlatformFailureNotice)
+        .filter((notice): notice is PlatformFailureNotice => notice !== null && isActiveFailureStatus(notice.status));
+      return { ...state, platformFailures: notices };
+    }
+    case "platform_failure": {
+      const notice = parsePlatformFailureNotice(event.notice);
+      if (!notice) return state;
+      const otherNotices = state.platformFailures.filter((shownNotice) => shownNotice.id !== notice.id);
+      return { ...state, platformFailures: isActiveFailureStatus(notice.status) ? [...otherNotices, notice] : otherNotices };
+    }
     case "context_usage": {
       // Replaces the previous reading. A malformed one does not erase the one that holds.
       const info = parseContextUsage(event);

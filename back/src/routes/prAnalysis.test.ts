@@ -29,6 +29,7 @@ const listOpenPulls = vi.fn(async (): Promise<OpenPull[] | null> => {
 const readPull = vi.fn(async (_c: unknown, _o: string, _r: string, n: number) => (n === PULL.number ? { ...PULL, open: true } : null));
 const sendToTerminal = vi.fn(async (cardId: string) => ({ sent: true, cardId, title: "", project: "" }));
 const runScriptOnHost = vi.fn(async (_script: string, _opts?: unknown) => ({ stdout: "", stderr: "" }));
+const canWorkOnProject = vi.fn<typeof import("../auth/access.js").canWorkOnProject>();
 
 async function boot(): Promise<FastifyInstance> {
   vi.resetModules();
@@ -64,6 +65,11 @@ async function boot(): Promise<FastifyInstance> {
   vi.doMock("../runtime/host.js", async () => {
     const actual = await vi.importActual<typeof import("../runtime/host.js")>("../runtime/host.js");
     return { ...actual, hostExecutor: () => ({ ...actual.hostExecutor(), runScript: runScriptOnHost }) };
+  });
+  vi.doMock("../auth/access.js", async () => {
+    const actual = await vi.importActual<typeof import("../auth/access.js")>("../auth/access.js");
+    canWorkOnProject.mockImplementation(actual.canWorkOnProject);
+    return { ...actual, canWorkOnProject };
   });
   const { buildServer } = await import("../index.js");
   const server = await buildServer();
@@ -113,11 +119,12 @@ beforeEach(async () => {
   repoHidden = false;
   listOpenPulls.mockClear();
   sendToTerminal.mockClear();
+  canWorkOnProject.mockReset();
   app = await boot();
 });
 afterEach(async () => {
   await app.close();
-  for (const mod of ["../runtime/runner.js", "../services/board/workspace.js", "../services/github/client.js", "../services/maestro/maestro.js"]) {
+  for (const mod of ["../runtime/runner.js", "../services/board/workspace.js", "../services/github/client.js", "../services/maestro/maestro.js", "../auth/access.js"]) {
     vi.doUnmock(mod);
   }
   await rm(dir, { recursive: true, force: true });
@@ -215,5 +222,200 @@ describe("pessoas e papéis da análise", () => {
     // the owner has no git identity in this install: no credit to give, so it is refused rather than dropped
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toMatch(/coautor_sem_identidade/);
+  });
+});
+
+type LiveFrame = { type: string; claims?: { prNumber: number; userId: string; username: string }[]; prNumber?: number; username?: string; code?: string };
+
+async function live(cookie: string, projectId: string, { answersPing = true } = {}) {
+  const frames: LiveFrame[] = [];
+  const socket = await app.injectWS(`/api/projects/${projectId}/prs/live`, { headers: { cookie } }, {
+    onInit: (ws) => {
+      ws.on("message", (data) => frames.push(JSON.parse(String(data)) as LiveFrame));
+      // injectWS builds its client without autoPong; a browser always answers the ping (RFC 6455 §5.5.2).
+      if (answersPing) ws.on("ping", (data) => ws.pong(data));
+    },
+  });
+  const send = (frame: Record<string, unknown>) => socket.send(JSON.stringify(frame));
+  const lastClaims = () => frames.filter((frame) => frame.type === "claims").at(-1)?.claims;
+  return { socket, frames, send, lastClaims };
+}
+
+describe("WS /api/projects/:id/prs/live", () => {
+  it("a montagem de uma PR aparece na hora para quem está com o diálogo aberto", async () => {
+    const w = await world();
+    await w.shareProject("work");
+    const ownerLive = await live(w.owner, w.projectId);
+    const memberLive = await live(w.member, w.projectId);
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toEqual([]));
+    memberLive.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toEqual([{ prNumber: 636, userId: w.memberId, username: "albert" }]));
+    ownerLive.socket.terminate();
+    memberLive.socket.terminate();
+  });
+
+  it("quem chega depois recebe as montagens que já estão em curso", async () => {
+    const w = await world();
+    await w.shareProject("work");
+    const memberLive = await live(w.member, w.projectId);
+    memberLive.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(memberLive.lastClaims()).toHaveLength(1));
+    const ownerLive = await live(w.owner, w.projectId);
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toEqual([{ prNumber: 636, userId: w.memberId, username: "albert" }]));
+    ownerLive.socket.terminate();
+    memberLive.socket.terminate();
+  });
+
+  it("enquanto alguém monta a análise de uma PR, outra pessoa não toma a PR nem inicia a análise", async () => {
+    const w = await world();
+    await w.shareProject("work");
+    const memberLive = await live(w.member, w.projectId);
+    const ownerLive = await live(w.owner, w.projectId);
+    memberLive.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toHaveLength(1));
+    const memberClaimsFrames = memberLive.frames.filter((frame) => frame.type === "claims").length;
+    ownerLive.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(ownerLive.frames).toContainEqual({ type: "claim-refused", prNumber: 636, username: "albert" }));
+    expect(ownerLive.lastClaims()).toEqual([{ prNumber: 636, userId: w.memberId, username: "albert" }]);
+    expect(memberLive.frames.filter((frame) => frame.type === "claims")).toHaveLength(memberClaimsFrames);
+    const res = await analyse(w.owner, w.projectId, 636, { reviewerUserId: w.ownerId });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: expect.stringMatching(/^pr_em_montagem:/), username: "albert" });
+    expect(sendToTerminal).not.toHaveBeenCalled();
+    ownerLive.socket.terminate();
+    memberLive.socket.terminate();
+  });
+
+  it("quem segura a PR inicia a análise, e quem está com o diálogo aberto é avisado para reler a lista", async () => {
+    const w = await world();
+    await w.shareProject("work");
+    const memberLive = await live(w.member, w.projectId);
+    const ownerLive = await live(w.owner, w.projectId);
+    memberLive.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toHaveLength(1));
+    const res = await analyse(w.member, w.projectId, 636, { reviewerUserId: w.memberId });
+    expect(res.json()).toMatchObject({ created: true });
+    await vi.waitFor(() => expect(ownerLive.frames).toContainEqual({ type: "pulls-changed" }));
+    ownerLive.socket.terminate();
+    memberLive.socket.terminate();
+  });
+
+  it("soltar a PR ou fechar o diálogo libera a montagem para os outros", async () => {
+    const w = await world();
+    await w.shareProject("work");
+    const memberLive = await live(w.member, w.projectId);
+    const ownerLive = await live(w.owner, w.projectId);
+    memberLive.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toHaveLength(1));
+    memberLive.send({ type: "release", prNumber: 636 });
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toEqual([]));
+    memberLive.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toHaveLength(1));
+    memberLive.socket.terminate();
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toEqual([]));
+    expect((await analyse(w.owner, w.projectId, 636, { reviewerUserId: w.ownerId })).json()).toMatchObject({ created: true });
+    ownerLive.socket.terminate();
+  });
+
+  it("soltar a PR que outra pessoa segura não a libera", async () => {
+    const w = await world();
+    await w.shareProject("work");
+    const memberLive = await live(w.member, w.projectId);
+    const ownerLive = await live(w.owner, w.projectId);
+    memberLive.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toHaveLength(1));
+    ownerLive.send({ type: "release", prNumber: 636 });
+    ownerLive.send({ type: "claim", prNumber: 637 });
+    await vi.waitFor(() => expect(memberLive.lastClaims()).toContainEqual({ prNumber: 637, userId: w.ownerId, username: "owner" }));
+    expect(memberLive.lastClaims()).toContainEqual({ prNumber: 636, userId: w.memberId, username: "albert" });
+    ownerLive.socket.terminate();
+    memberLive.socket.terminate();
+  });
+
+  it("a trava é da pessoa: com duas abas montando a mesma PR, ela só solta quando a última aba solta ou fecha", async () => {
+    const w = await world();
+    await w.shareProject("work");
+    const firstTab = await live(w.member, w.projectId);
+    const secondTab = await live(w.member, w.projectId);
+    const ownerLive = await live(w.owner, w.projectId);
+    firstTab.send({ type: "claim", prNumber: 636 });
+    secondTab.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(secondTab.lastClaims()).toHaveLength(1));
+    secondTab.send({ type: "release", prNumber: 636 });
+    secondTab.socket.terminate();
+    ownerLive.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(ownerLive.frames).toContainEqual({ type: "claim-refused", prNumber: 636, username: "albert" }));
+    firstTab.socket.terminate();
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toEqual([]));
+    ownerLive.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toEqual([{ prNumber: 636, userId: w.ownerId, username: "owner" }]));
+    ownerLive.socket.terminate();
+  });
+
+  it("cada conexão monta uma PR por vez: travar outra solta a anterior, mesmo quando a nova é recusada", async () => {
+    const w = await world();
+    await w.shareProject("work");
+    const ownerLive = await live(w.owner, w.projectId);
+    const memberLive = await live(w.member, w.projectId);
+    ownerLive.send({ type: "claim", prNumber: 636 });
+    ownerLive.send({ type: "claim", prNumber: 637 });
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toContainEqual({ prNumber: 637, userId: w.ownerId, username: "owner" }));
+    expect(ownerLive.lastClaims()).toEqual([{ prNumber: 637, userId: w.ownerId, username: "owner" }]);
+    memberLive.send({ type: "claim", prNumber: 638 });
+    await vi.waitFor(() => expect(ownerLive.lastClaims()).toHaveLength(2));
+    ownerLive.send({ type: "claim", prNumber: 638 });
+    await vi.waitFor(() => expect(ownerLive.frames).toContainEqual({ type: "claim-refused", prNumber: 638, username: "albert" }));
+    expect(ownerLive.lastClaims()).toEqual([{ prNumber: 638, userId: w.memberId, username: "albert" }]);
+    ownerLive.socket.terminate();
+    memberLive.socket.terminate();
+  });
+
+  it("uma conexão que para de responder ao ping cai e solta a PR que segurava", async () => {
+    const w = await world();
+    await w.shareProject("work");
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const silentLive = await live(w.member, w.projectId, { answersPing: false });
+      const ownerLive = await live(w.owner, w.projectId);
+      silentLive.send({ type: "claim", prNumber: 636 });
+      await vi.waitFor(() => expect(ownerLive.lastClaims()).toHaveLength(1));
+      const ownerPinged = new Promise((settle) => ownerLive.socket.once("ping", settle));
+      vi.advanceTimersByTime(25_000);
+      await ownerPinged;
+      ownerLive.send({ type: "claim", prNumber: 637 });
+      await vi.waitFor(() => expect(ownerLive.lastClaims()).toHaveLength(2));
+      vi.advanceTimersByTime(25_000);
+      await vi.waitFor(() => expect(ownerLive.lastClaims()).toEqual([{ prNumber: 637, userId: w.ownerId, username: "owner" }]));
+      expect(ownerLive.socket.readyState).toBe(ownerLive.socket.OPEN);
+      ownerLive.socket.terminate();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falha ao sentar o espectador fecha o canal com 1011, e a próxima conexão entra normalmente", async () => {
+    const w = await world();
+    canWorkOnProject.mockRejectedValueOnce(new Error("shares unreadable"));
+    const failed = await live(w.owner, w.projectId);
+    const closed = new Promise<number>((settle) => failed.socket.on("close", (code) => settle(code)));
+    expect(await closed).toBe(1011);
+    const next = await live(w.owner, w.projectId);
+    next.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(next.lastClaims()).toEqual([{ prNumber: 636, userId: w.ownerId, username: "owner" }]));
+    next.socket.terminate();
+  });
+
+  it("quem só vê o projeto não monta; sem acesso ao projeto é 404; sem sessão é 401; frame inválido fecha o socket", async () => {
+    const w = await world();
+    await expect(live(w.member, w.projectId)).rejects.toThrow(/404/);
+    await expect(app.injectWS(`/api/projects/${w.projectId}/prs/live`)).rejects.toThrow(/401/);
+    await w.shareProject("view");
+    const viewer = await live(w.member, w.projectId);
+    viewer.send({ type: "claim", prNumber: 636 });
+    await vi.waitFor(() => expect(viewer.frames).toContainEqual({ type: "error", code: "read_only" }));
+    expect(viewer.lastClaims()).toEqual([]);
+    const closed = new Promise<number>((settle) => viewer.socket.on("close", (code) => settle(code)));
+    viewer.send({ type: "claim", prNumber: -1 });
+    expect(await closed).toBe(1008);
   });
 });

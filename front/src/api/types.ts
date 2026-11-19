@@ -247,6 +247,8 @@ export interface PlatformFailure {
   evidence: string;
   reproduction?: string;
   hypothesis?: string;
+  explanation?: string;
+  originCardId?: string;
   occurrences: number;
   affectedCardIds: string[];
   firstSeenAt: number;
@@ -254,6 +256,16 @@ export interface PlatformFailure {
   investigationCardId?: string;
   resolvedAt?: number;
   dismissedAt?: number;
+}
+
+export interface PlatformFailureNotice {
+  id: string;
+  source: PlatformFailureSource;
+  status: PlatformFailureStatus;
+  explanation?: string;
+  occurrences: number;
+  firstSeenAt: number;
+  details?: Pick<PlatformFailure, "symptom" | "component" | "evidence" | "reproduction" | "hypothesis">;
 }
 
 export interface PlatformFailureInvestigation {
@@ -515,6 +527,11 @@ export interface RepoAccessRefusal {
   repo: string;
 }
 
+export interface PrSettingUpRefusal {
+  error: string;
+  username: string;
+}
+
 /** An open pull request of a project's repository, as GitHub has it right now (`GET /projects/:id/prs`). */
 export interface ProjectPull {
   number: number;
@@ -556,6 +573,18 @@ export interface PrAnalysisStart {
   card: Card;
   created: boolean;
 }
+
+export interface PrClaim {
+  prNumber: number;
+  userId: string;
+  username: string;
+}
+
+export type PrLiveEvent =
+  | { type: "claims"; claims: PrClaim[] }
+  | { type: "pulls-changed" }
+  | { type: "claim-refused"; prNumber: number; username: string }
+  | { type: "error"; code: "read_only" };
 
 /** A pull request the card delivered — see `Card.prs`. */
 export interface CardPr {

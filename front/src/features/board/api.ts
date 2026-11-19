@@ -493,6 +493,9 @@ export const boardApi = {
   createAccount: (label: string) =>
     post<{ account: BoardAccount }>("/accounts", { name: label }).then((r) => r.account),
 
+  renameAccount: (slug: string, name: string) =>
+    patch<{ account: BoardAccount }>(`/accounts/${encodeURIComponent(slug)}`, { name }).then((r) => r.account),
+
   deleteAccount: (slug: string) => del<unknown>(`/accounts/${encodeURIComponent(slug)}`),
 
   setAccountToken: (slug: string, token: string) =>

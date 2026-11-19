@@ -6,7 +6,13 @@ thread entre as mensagens digitadas, o campo continua aceitando texto e anexos d
 ao encerrar a conversa fica no histórico do card. Não há página separada: `/voice` só redireciona
 para o card; `/voice/lab` segue como bancada de calibração da esfera.
 
-Desligado por padrão: sem `VIBEHUB_VOICE_LIVE=1` as rotas respondem 404 e o botão não aparece.
+Desligado por padrão: sem `VIBEHUB_VOICE_LIVE=1` as rotas da chamada respondem 404 e o botão não aparece. O "ler em voz alta" de uma resposta (abaixo) não depende dessa flag.
+
+**Ler em voz alta:** o botão de alto-falante sob uma resposta terminada manda um pedaço do texto
+(já sem markdown e cortado em `readAloud.ts`) para `POST /api/cards/:id/voice/speech`
+(`requireCardWork`), que devolve o MP3 do TTS da OpenAI (`gpt-4o-mini-tts`) em stream
+(`services/voice/speech.ts`). Usa a mesma chave da chamada, com até 4096 caracteres por pedaço e
+um teto de pedaços por pessoa por minuto; parar ou fechar a aba cancela a chamada à OpenAI.
 
 ## Como funciona
 
@@ -151,7 +157,7 @@ npx tsx src/index.ts
 
 A chave mestra aleatória por execução faz o cofre de teste morrer com o processo: reiniciar sem a
 mesma `VIBEHUB_SECRET_KEY` perde a chave da OpenAI colada (o owner local é recriado sozinho).
-Nenhuma chave da OpenAI vai para env, arquivo ou log — o owner a cola na página `/voice`.
+Nesta receita nenhuma chave da OpenAI vai para env, arquivo ou log: o owner a cola em Configurações (a mesma chave da transcrição, guardada no cofre). Fora dela, `VIBEHUB_VOICE_OPENAI_API_KEY` também serve e vence a do cofre.
 
 Para entrar pelo painel com SSO de verdade (a instância de dentro saber QUEM é a pessoa, não só
 "alguém que passou pelo proxy") o painel precisaria assinar a identidade num cabeçalho, e isso é
@@ -160,7 +166,7 @@ mudança no painel de produção — fora do escopo da POC.
 ## Testes
 
 ```bash
-cd back  && npx vitest run src/routes/voice.test.ts src/routes/voiceCard.test.ts
+cd back  && npx vitest run src/routes/voice.test.ts src/routes/voiceCard.test.ts src/routes/voiceSpeech.test.ts
 cd front && npx vitest run src/features/voice src/features/board/components/SdkChatView.voice.test.tsx src/features/board/lib/sdkChat.voice.test.ts
 ```
 

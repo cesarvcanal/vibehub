@@ -8,6 +8,7 @@ export interface PlatformFailureReport {
   evidence: string;
   reproduction?: string;
   hypothesis?: string;
+  explanation?: string;
   cardId?: string;
 }
 
@@ -21,6 +22,8 @@ export interface PlatformFailure {
   evidence: string;
   reproduction?: string;
   hypothesis?: string;
+  explanation?: string;
+  originCardId?: string;
   occurrences: number;
   affectedCardIds: string[];
   firstSeenAt: number;

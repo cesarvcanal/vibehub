@@ -3,8 +3,9 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AccountsManager } from "@/features/board/components/AccountsManager";
 import { renderApp, testQueryClient } from "@/test/render";
-import { get } from "@/lib/api";
+import { get, patch } from "@/lib/api";
 import { ACCOUNT_TOKENS_KEY, ACCOUNT_USAGE_KEY } from "@/features/board/api";
+import { toast } from "sonner";
 
 /**
  * The accounts dialog is where an account is BORN, and until now the last step of that birth —
@@ -34,6 +35,7 @@ vi.mock("@/features/board/components/XTerminal", () => ({
 }));
 
 const mockGet = vi.mocked(get);
+const mockPatch = vi.mocked(patch);
 
 /** `tech` has never logged in; the built-in profile has, and reports its usage. */
 function serve() {
@@ -61,7 +63,7 @@ async function openDialog(user: ReturnType<typeof userEvent.setup>) {
   const client = testQueryClient();
   const view = renderApp(<AccountsManager />, { queryClient: client });
   await user.click(screen.getByRole("button", { name: "Claude accounts" }));
-  await screen.findByText("Tech");
+  await screen.findByRole("textbox", { name: "Name of the account tech" });
   return { ...view, client };
 }
 
@@ -134,9 +136,73 @@ describe("AccountsManager — signing a profile in", () => {
     // The built-in profile has numbers…
     await waitFor(() => expect(screen.getByRole("progressbar", { name: "5h session" })).toBeInTheDocument());
     // …and the one that never logged in says what to do instead of showing an empty bar.
-    const rows = screen.getByText("Tech").closest("div")?.parentElement as HTMLElement;
+    const rows = screen.getByRole("textbox", { name: "Name of the account tech" }).parentElement as HTMLElement;
     expect(within(rows).getByText(/no interactive login on the runner/i)).toHaveTextContent(
       "/root/.claude-profiles/tech",
     );
+  });
+});
+
+describe("AccountsManager — renaming an account", () => {
+  it("o nome da conta cadastrada é editável e salva no Enter pelo PATCH da conta", async () => {
+    mockPatch.mockResolvedValue({ account: { slug: "tech", name: "César", createdAt: 1 } });
+    const user = userEvent.setup();
+    const { client } = await openDialog(user);
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    const input = screen.getByRole("textbox", { name: "Name of the account tech" });
+    expect(input).toHaveValue("Tech");
+    await user.clear(input);
+    await user.type(input, "  César  {Enter}");
+
+    await waitFor(() => expect(mockPatch).toHaveBeenCalledWith("/accounts/tech", { name: "César" }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["board", "accounts"] });
+  });
+
+  it("o campo mostra o nome salvo na resposta mesmo antes de a lista de contas ser relida", async () => {
+    mockPatch.mockImplementation(() => {
+      const served = mockGet.getMockImplementation()!;
+      mockGet.mockImplementation((url: string) => (url === "/accounts" ? new Promise(() => {}) : served(url)));
+      return Promise.resolve({ account: { slug: "tech", name: "César", createdAt: 1 } });
+    });
+    const user = userEvent.setup();
+    await openDialog(user);
+
+    const input = screen.getByRole("textbox", { name: "Name of the account tech" });
+    await user.clear(input);
+    await user.type(input, "César{Enter}");
+
+    await waitFor(() => expect(mockPatch).toHaveBeenCalled());
+    await waitFor(() => expect(input).toHaveValue("César"));
+  });
+
+  it("se o servidor recusa o nome, o campo volta ao nome salvo e o erro aparece", async () => {
+    mockPatch.mockRejectedValue(new Error("boom"));
+    const user = userEvent.setup();
+    await openDialog(user);
+
+    const input = screen.getByRole("textbox", { name: "Name of the account tech" });
+    await user.clear(input);
+    await user.type(input, "César{Enter}");
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(input).toHaveValue("Tech");
+  });
+
+  it.each([
+    { label: "o mesmo nome", typed: "Tech{Enter}" },
+    { label: "nome vazio", typed: "   {Enter}" },
+    { label: "Escape", typed: "Outro{Escape}" },
+  ])("$label não chama o servidor e o campo volta ao nome salvo", async ({ typed }) => {
+    const user = userEvent.setup();
+    await openDialog(user);
+
+    const input = screen.getByRole("textbox", { name: "Name of the account tech" });
+    await user.clear(input);
+    await user.type(input, typed);
+    await user.tab();
+
+    expect(mockPatch).not.toHaveBeenCalled();
+    expect(input).toHaveValue("Tech");
   });
 });

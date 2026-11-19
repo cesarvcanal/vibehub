@@ -231,6 +231,18 @@ function serveBrowser(browser: { live: boolean; busy?: boolean; control?: "agent
   });
 }
 
+function servePersonalWeeklyUsage() {
+  const base = mockGet.getMockImplementation();
+  mockGet.mockImplementation((url: string, ...rest: unknown[]) =>
+    url === "/cards/c1/usage"
+      ? Promise.resolve({
+          slug: "personal",
+          usage: { available: true, sevenDay: { utilization: 57, resetsAt: null }, fetchedAt: 1 },
+        })
+      : (base as (url: string, ...rest: unknown[]) => Promise<unknown>)(url, ...rest),
+  );
+}
+
 /**
  * Renders the view with `seed` already in the board cache — i.e. arriving from the board.
  *
@@ -1098,6 +1110,40 @@ describe("CardTerminalView — the card bar", () => {
     await user.click(screen.getByRole("menuitemcheckbox", { name: /Main/ }));
 
     await waitFor(() => expect(screen.getByTestId("plan-meter-value")).toHaveTextContent("3%"));
+  });
+
+  it("no clique, mostra a leitura da conta nova assim que ela é escolhida, sem esperar o PATCH que reinicia a sessão", async () => {
+    servePersonalWeeklyUsage();
+    mockPatch.mockImplementation(() => new Promise(() => {}));
+    const client = testQueryClient();
+    client.setQueryData(cardRateLimitsKey("c1"), {
+      seven_day: { status: "allowed", window: "seven_day", utilization: 57, resetsAt: Date.now() + 3 * 86_400_000 },
+    });
+    const user = userEvent.setup();
+    renderWithCache([card({ openedAt: 10, accountSlug: "personal" })], client);
+    expect(await screen.findByTestId("plan-meter-value")).toHaveTextContent("57%");
+
+    await openMenu(user, "Claude account");
+    await waitFor(() => expect(screen.getByRole("menuitemcheckbox", { name: /Main/ })).toHaveTextContent("31%"));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: /Main/ }));
+
+    await waitFor(() => expect(screen.getByTestId("plan-meter-value")).toHaveTextContent("12%"));
+    expect(mockPatch).toHaveBeenCalledWith("/cards/c1", { accountSlug: null });
+  });
+
+  it("no clique, se a troca falha, o medidor volta a ler a conta que o card ainda usa", async () => {
+    servePersonalWeeklyUsage();
+    mockPatch.mockRejectedValue(new Error("boom"));
+    const user = userEvent.setup();
+    renderWithCache([card({ openedAt: 10, accountSlug: "personal" })], testQueryClient());
+    expect(await screen.findByTestId("plan-meter-value")).toHaveTextContent("57%");
+
+    await openMenu(user, "Claude account");
+    await waitFor(() => expect(screen.getByRole("menuitemcheckbox", { name: /Main/ })).toHaveTextContent("31%"));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: /Main/ }));
+
+    await waitFor(() => expect(mockPatch).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByTestId("plan-meter-value")).toHaveTextContent("57%"));
   });
 });
 

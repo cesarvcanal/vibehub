@@ -1397,6 +1397,18 @@ export async function createAccount(input: { name: string }): Promise<Account> {
   });
 }
 
+export async function renameAccount(slug: string, name: string): Promise<Account> {
+  const accountSlug = assertAccountSlug(slug);
+  const trimmedName = String(name ?? "").trim();
+  if (!trimmedName) throw new Error("name is required");
+  return store.mutate((doc) => {
+    const account = doc.accounts.find((candidate) => candidate.slug === accountSlug);
+    if (!account) throw new Error("account not found");
+    account.name = trimmedName;
+    return account;
+  });
+}
+
 /**
  * Removes an account. REFUSES ("in use") while ANY card or project still references the slug —
  * removing it blindly would leave a dangling reference and break the next open of those cards.
