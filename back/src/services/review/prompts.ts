@@ -625,6 +625,8 @@ export function analysisPrompt(a: AnalysisInput): string {
       "atômico por achado. Em bug, escreva antes o teste que reproduz a falha, veja falhar pelo motivo certo, corrija e " +
       "veja passar. question: não mexa; pergunte no chat deste card, com o conflito e as alternativas, e siga com o " +
       "resto. suggestion: só no resumo.",
+    "   Quando a pessoa responder uma question: se a resposta pede mudança, corrija e marque fixed com o commit; se não " +
+      "pede, marque com status \"decided\" e decision (a decisão dela, numa frase) e grave de novo o relatório done (passo 8).",
     ...(a.coauthorTrailer ? [`   Em cada commit, termine a mensagem com esta linha (o crédito do coautor no Git): ${a.coauthorTrailer}`] : []),
     "6. Reconferência: dispare UM subagente novo, sem o seu contexto, para revisar só git diff <sha analisado>..HEAD, " +
       "procurando bug que a própria correção criou. Achado com prova: corrija do mesmo jeito (uma volta a mais, só uma).",
@@ -635,7 +637,8 @@ export function analysisPrompt(a: AnalysisInput): string {
       "resolva os conflitos, rode de novo os testes do que mudou e entregue outra vez.",
     `8. Chame vibehub_analysis_report de novo, com stage: "done": o mesmo headSha do passo 1 (não o das correções), ` +
       "as mesmas dimensions do passo 3, inclusive o unverifiedCount, e os mesmos findings, cada um com status " +
-      "\"fixed\" e o commit, ou \"open\" (question, suggestion e o que não corrigiu, com o motivo no summary).",
+      "\"fixed\" e o commit, \"decided\" com a decision (question que a pessoa já respondeu sem pedir mudança) ou " +
+      "\"open\" (question ainda sem resposta, suggestion e o que não corrigiu, com o motivo no summary).",
     `9. Comente cada achado na linha do diff, na sua conta: gh api repos/{owner}/{repo}/pulls/${a.prNumber}/comments ` +
       "(body com o problema, a prova e o commit que corrigiu; commit_id = o head entregue, path, line). Achado sem linha " +
       `vai no resumo. Publique o resumo como review da PR: gh pr review ${a.prNumber} --comment --body "<resumo>", com o ` +
