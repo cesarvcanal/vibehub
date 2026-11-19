@@ -25,12 +25,16 @@ function stageMessage(report: AnalysisReport): string {
 }
 
 function findChangedFromSavedReport(saved: AnalysisReport, input: AnalysisReportInput): string[] {
+  const savedFindingIds = new Set(saved.findings.map((finding) => finding.id));
   const changedFindings = saved.findings
     .filter((savedFinding) => {
       const resentFinding = input.findings.find((finding) => finding.id === savedFinding.id);
       return resentFinding?.severity !== savedFinding.severity || resentFinding.dimension !== savedFinding.dimension;
     })
     .map((savedFinding) => `achado ${savedFinding.id}`);
+  const addedFindings = input.findings
+    .filter((finding) => !savedFindingIds.has(finding.id))
+    .map((finding) => `achado ${finding.id}`);
   const changedDimensions = ANALYSIS_DIMENSIONS
     .filter((key) => {
       const savedDimension = saved.dimensions.find((dimension) => dimension.key === key);
@@ -38,7 +42,7 @@ function findChangedFromSavedReport(saved: AnalysisReport, input: AnalysisReport
       return resentDimension?.status !== savedDimension?.status || resentDimension?.unverifiedCount !== savedDimension?.unverifiedCount;
     })
     .map((key) => `dimensão ${key}`);
-  return [...changedFindings, ...changedDimensions];
+  return [...changedFindings, ...addedFindings, ...changedDimensions];
 }
 
 export async function findActiveAnalysisCard(cards: Card[], prUrl: string): Promise<Card | undefined> {

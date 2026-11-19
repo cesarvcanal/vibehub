@@ -103,6 +103,15 @@ describe("relatório da análise pela ferramenta do card", () => {
     expect((await store.getAnalysis(analysisCard.id))?.stage).toBe("analysed");
   });
 
+  it("relatório done que acrescenta um achado que o analysed não trouxe é recusado: o done não reescreve a frota", async () => {
+    const { analysisCard, reportService, store } = await load();
+    await reportService.recordAnalysisReport(analysisCard.id, input({ findings: [blockingFinding] }));
+    const addedFinding = { ...blockingFinding, id: "f2", severity: "suggestion" as const };
+    const doneWithAddedFinding = input({ stage: "done", findings: [blockingFinding, addedFinding] });
+    await expect(reportService.recordAnalysisReport(analysisCard.id, doneWithAddedFinding)).rejects.toThrow(/f2/);
+    expect((await store.getAnalysis(analysisCard.id))?.stage).toBe("analysed");
+  });
+
   it("relatório done que perde o unverifiedCount do analysed é recusado; o mesmo done com ele é gravado", async () => {
     const { analysisCard, reportService, store } = await load();
     const dimensionsWithUnverifiedTests = [{ key: "tests" as const, status: "ran" as const, unverifiedCount: 3, reason: "3 achados acima do teto" }];
