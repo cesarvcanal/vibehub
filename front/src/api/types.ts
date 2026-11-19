@@ -785,7 +785,7 @@ export type AnalysisVerdict = "apt" | "not_apt" | "pending";
 export type AnalysisFinding = Pick<Finding, "id" | "title" | "problem" | "file" | "line" | "proof" | "fix"> & {
   severity: AnalysisSeverity;
   dimension: AnalysisDimension;
-} & ({ status: "open" } | { status: "fixed"; commit: string });
+} & ({ status: "open" } | { status: "fixed"; commit: string } | { status: "decided"; decision: string });
 
 export interface DimensionRun {
   key: AnalysisDimension;
