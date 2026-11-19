@@ -725,6 +725,7 @@ describe("GET da revisão: a frota de agentes do revisor", () => {
   });
 
   it.each([
+    { name: "na vez do autor", phase: "fixing" as const },
     { name: "com a revisão encerrada", phase: "cancelled" as const },
   ])("$name a frota viva não vai na resposta", async ({ phase }) => {
     const { review, read, firstProbe, cleanup } = await reviewerWithLiveFleet();
