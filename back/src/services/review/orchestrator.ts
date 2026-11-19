@@ -85,6 +85,8 @@ const USAGE_LIMIT_STUCK = "conta Claude sem limite de uso depois de várias reto
 const USAGE_RESUME_MARGIN_MS = 60_000;
 const MAX_USAGE_LIMIT_RESUMES = 3;
 const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
+const USAGE_WAITS_READ_ATTEMPTS = 5;
+const USAGE_WAITS_RETRY_MS = 30_000;
 /** Impasse reason when the PR moved after `ready` and no round is left to check what came in. */
 const HEAD_MOVED = "push depois do pronto";
 
@@ -1548,9 +1550,7 @@ function scheduleUsageResume(r: Review): void {
       scheduleUsageResume(r);
       return;
     }
-    void resumeAfterUsageLimit(r.id).catch((err: unknown) => {
-      logger.warn({ review: r.id, detail: (err as Error).message }, "PR review could not resume after the usage limit");
-    });
+    void resumeAfterUsageLimit(r.id).catch((err: unknown) => failUsageResume(r.id, err));
   }, delay);
   timer.unref?.();
   usageResume.timers.set(r.id, timer);
@@ -1574,20 +1574,52 @@ async function resumeAfterUsageLimit(reviewId: string): Promise<void> {
   if (side) await relayReview(after, side, await promptFor(after, side));
 }
 
+async function failUsageResume(reviewId: string, err: unknown): Promise<void> {
+  const reason = `retomada depois do limite de uso falhou: ${(err as Error).message}`;
+  logger.warn({ review: reviewId, detail: (err as Error).message }, "PR review could not resume after the usage limit");
+  try {
+    const after = await mutateReview(reviewId, (review) => {
+      if (isReviewClosed(review.phase) || review.phase === "impasse") return;
+      review.phase = "impasse";
+      review.impasseReason = reason;
+      delete review.usageLimitWait;
+      note(review, "system", `Impasse: ${reason}.`);
+    });
+    if (after.impasseReason === reason) await announcePhase(after);
+  } catch (recordErr) {
+    logger.warn({ review: reviewId, detail: (recordErr as Error).message }, "could not record the PR review usage limit resume failure");
+  }
+}
+
 /**
  * Hooks the orchestrator to the cards' event feed (once, at boot). The listener does not throw and does not
  * block: it only schedules the judgement (and the check of the author's push after ready) for after a short
  * grace period — the tool call that arrived in the same turn wins — and swallows any error with a warn.
  * Returns the unsubscribe.
  */
-export function startReviewOrchestrator(opts: { graceMs?: number; usageResumeMarginMs?: number } = {}): () => void {
+export function startReviewOrchestrator(
+  opts: { graceMs?: number; usageResumeMarginMs?: number; usageWaitsRetryMs?: number } = {},
+): () => void {
   const graceMs = opts.graceMs ?? TURN_GRACE_MS;
+  const usageWaitsRetryMs = opts.usageWaitsRetryMs ?? USAGE_WAITS_RETRY_MS;
   usageResume.marginMs = opts.usageResumeMarginMs ?? USAGE_RESUME_MARGIN_MS;
-  void listReviewsWaitingUsageLimit().then((reviews) => reviews.forEach(scheduleUsageResume)).catch((err: unknown) => {
-    logger.warn({ detail: (err as Error).message }, "PR review could not reschedule the usage limit waits");
-  });
   const timers = new Set<NodeJS.Timeout>();
   let stopped = false;
+  const rescheduleUsageWaits = (attemptsLeft: number): void => {
+    void listReviewsWaitingUsageLimit().then((reviews) => {
+      if (!stopped) reviews.forEach(scheduleUsageResume);
+    }).catch((err: unknown) => {
+      logger.warn({ detail: (err as Error).message, attemptsLeft: attemptsLeft - 1 }, "PR review could not reschedule the usage limit waits");
+      if (stopped || attemptsLeft <= 1) return;
+      const retry = setTimeout(() => {
+        timers.delete(retry);
+        rescheduleUsageWaits(attemptsLeft - 1);
+      }, usageWaitsRetryMs);
+      retry.unref?.();
+      timers.add(retry);
+    });
+  };
+  rescheduleUsageWaits(USAGE_WAITS_READ_ATTEMPTS);
   const off = onCardEvent((event: CardEvent) => {
     if (stopped || event.kind !== "turn_finished") return;
     const timer = setTimeout(() => {

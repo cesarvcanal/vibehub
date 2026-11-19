@@ -28,6 +28,7 @@ const plant = vi.fn(async () => {
 /** The reviewer's fleet as the runner has it when the round is submitted. */
 const fleetRead = vi.fn(async (_cardId: string): Promise<unknown[]> => []);
 let sendFailure: Error | null = null;
+const injected = { usageWaitsReadFailures: 0, userGitFailure: null as Error | null };
 /** Runs once before the next send (the race "the review moved while the text was going out"). */
 let sendHook: (() => Promise<void>) | null = null;
 /** The real board, so the mock refuses a paused card like the real `sendToTerminal` (`wake` does not unpause). */
@@ -127,7 +128,24 @@ async function load() {
   vi.doMock("../../auth/userGit.js", async () => ({
     ...(await vi.importActual<typeof import("../../auth/userGit.js")>("../../auth/userGit.js")),
     linkedAccountSlug: async (id: string | undefined) => (id ? accountOf[id] : undefined),
+    getUserGit: async (id: string) => {
+      if (injected.userGitFailure) throw injected.userGitFailure;
+      return (await vi.importActual<typeof import("../../auth/userGit.js")>("../../auth/userGit.js")).getUserGit(id);
+    },
   }));
+  vi.doMock("./store.js", async () => {
+    const actual = await vi.importActual<typeof import("./store.js")>("./store.js");
+    return {
+      ...actual,
+      listReviewsWaitingUsageLimit: async () => {
+        if (injected.usageWaitsReadFailures > 0) {
+          injected.usageWaitsReadFailures -= 1;
+          throw new Error("store unreadable");
+        }
+        return await actual.listReviewsWaitingUsageLimit();
+      },
+    };
+  });
   const registry = await import("../board/registry.js");
   registry.resetForTesting();
   reopen = (cardId) => registry.applyOpenTerminal(cardId);
@@ -161,6 +179,8 @@ beforeEach(async () => {
   calls.length = 0;
   sendFailure = null;
   sendHook = null;
+  injected.usageWaitsReadFailures = 0;
+  injected.userGitFailure = null;
   accountOf = { "u-revisor": "mussa" };
   send.mockClear();
   actor.mockClear();
@@ -182,7 +202,7 @@ beforeEach(async () => {
 afterEach(async () => {
   for (const m of [
     "../maestro/maestro.js", "../board/actor.js", "../board/workspace.js", "../maestro/deliver.js",
-    "../../auth/users.js", "../../auth/userGit.js", "./merge.js",
+    "../../auth/users.js", "../../auth/userGit.js", "./merge.js", "./store.js",
   ]) vi.doUnmock(m);
   // Closing a review sends the reviewer's card to done, and its "completed" is recorded in a
   // microtask: one of those writes may arrive together with the rm.
@@ -2539,6 +2559,46 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
         await endTurn(o, author.id);
         await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
         expect(send.mock.calls[0]![0]).toBe(author.id);
+      } finally {
+        off();
+      }
+    });
+
+    it("falha ao retomar depois do limite de uso vai para impasse com aviso", async () => {
+      const o = await load();
+      const { author, review } = await started(o);
+      await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+      await o.store.mutateReview(review.id, (r) => {
+        r.coauthorUserId = "u-merger";
+        r.usageLimitWait = { side: "author", until: Date.now() - 1000 };
+      });
+      send.mockClear();
+      injected.userGitFailure = new Error("users store unreadable");
+      const off = o.orch.startReviewOrchestrator({ graceMs: 0, usageResumeMarginMs: 0 });
+      try {
+        await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("impasse"));
+        const failed = await o.store.getReview(review.id);
+        expect(failed?.impasseReason).toMatch(/users store unreadable/);
+        expect(failed?.usageLimitWait).toBeUndefined();
+        expect(send).not.toHaveBeenCalled();
+        await vi.waitFor(async () => expect((await messagesOn(o, author.id)).map((e) => e.text)).toContainEqual(expect.stringMatching(/impasse/i)));
+      } finally {
+        off();
+      }
+    });
+
+    it("leitura das esperas que falha na subida tenta de novo e retoma a rodada", async () => {
+      const o = await load();
+      const { review } = await started(o);
+      await o.store.mutateReview(review.id, (r) => {
+        r.usageLimitWait = { side: "reviewer", until: Date.now() - 1000 };
+      });
+      injected.usageWaitsReadFailures = 2;
+      const off = o.orch.startReviewOrchestrator({ graceMs: 0, usageResumeMarginMs: 0, usageWaitsRetryMs: 10 });
+      try {
+        await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1), { timeout: 3000 });
+        expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
+        expect(injected.usageWaitsReadFailures).toBe(0);
       } finally {
         off();
       }
