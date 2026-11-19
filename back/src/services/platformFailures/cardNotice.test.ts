@@ -101,4 +101,41 @@ describe("aviso de falha para um card", () => {
     await failures.recordPlatformFailure(userReport("card-2"));
     expect(frames).toHaveLength(1);
   });
+
+  it("o fim da falha chega ao card aberto que já saiu da lista de afetados", async () => {
+    const { failures, notices } = await fresh();
+    const recorded = await failures.recordPlatformFailure(userReport("card-0"));
+    const frames: { type: string; notice?: { id: string; status: string } }[] = [];
+    onTestFinished(notices.streamCardFailureNotices("card-0", false, (frame) => frames.push(frame)));
+    await vi.waitFor(() => expect(frames).toHaveLength(1));
+    for (const index of Array.from({ length: 20 }, (_unused, position) => position + 1)) {
+      await failures.recordPlatformFailure(userReport(`card-${index}`));
+    }
+    expect((await failures.getPlatformFailure(recorded!.id)).affectedCardIds).not.toContain("card-0");
+    await failures.dismissPlatformFailure(recorded!.id);
+    expect(frames.at(-1)).toEqual({ type: "platform_failure", notice: expect.objectContaining({ id: recorded!.id, status: "dismissed" }) });
+    expect(frames).toHaveLength(2);
+  });
+
+  it("mudança de falha que nunca afetou o card não chega a ele", async () => {
+    const { failures, notices } = await fresh();
+    const recorded = await failures.recordPlatformFailure(userReport("card-1"));
+    const frames: object[] = [];
+    onTestFinished(notices.streamCardFailureNotices("card-other", true, (frame) => frames.push(frame)));
+    await vi.waitFor(() => expect(frames).toHaveLength(1));
+    await failures.dismissPlatformFailure(recorded!.id);
+    await failures.recordPlatformFailure({ ...userReport("card-2"), component: "other" });
+    expect(frames).toHaveLength(1);
+  });
+
+  it("a falha que alcança o card com ele aberto chega como aviso novo", async () => {
+    const { failures, notices } = await fresh();
+    await failures.recordPlatformFailure(userReport("card-1"));
+    const frames: { type: string; notice?: { id: string; occurrences: number } }[] = [];
+    onTestFinished(notices.streamCardFailureNotices("card-2", false, (frame) => frames.push(frame)));
+    await vi.waitFor(() => expect(frames).toEqual([{ type: "platform_failures", notices: [] }]));
+    await failures.recordPlatformFailure(userReport("card-2"));
+    expect(frames.at(-1)).toEqual({ type: "platform_failure", notice: expect.objectContaining({ occurrences: 2 }) });
+    expect(frames.at(-1)!.notice).not.toHaveProperty("details");
+  });
 });

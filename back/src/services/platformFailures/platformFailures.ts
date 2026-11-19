@@ -22,9 +22,14 @@ interface PlatformFailuresDoc {
   failures: PlatformFailure[];
 }
 
-type CardFailureListener = (failure: PlatformFailure) => void;
+export interface PlatformFailureChange {
+  failure: PlatformFailure;
+  newForCardId?: string;
+}
 
-const cardFailureListeners = new Map<string, Set<CardFailureListener>>();
+type PlatformFailureChangeListener = (change: PlatformFailureChange) => void;
+
+const failureChangeListeners = new Set<PlatformFailureChangeListener>();
 
 const store = new JsonStore<PlatformFailuresDoc>(dataPath("platform-failures.json"), () => ({ failures: [] }));
 
@@ -40,24 +45,19 @@ function noteAffectedCard(failure: PlatformFailure, cardId: string | undefined):
   failure.affectedCardIds = [...otherCardIds, cardId].slice(-AFFECTED_CARDS_CAP);
 }
 
-export function onCardFailureChange(cardId: string, listener: CardFailureListener): () => void {
-  const listenersOfCard = cardFailureListeners.get(cardId) ?? new Set<CardFailureListener>();
-  listenersOfCard.add(listener);
-  cardFailureListeners.set(cardId, listenersOfCard);
+export function onPlatformFailureChange(listener: PlatformFailureChangeListener): () => void {
+  failureChangeListeners.add(listener);
   return () => {
-    listenersOfCard.delete(listener);
-    if (listenersOfCard.size === 0 && cardFailureListeners.get(cardId) === listenersOfCard) cardFailureListeners.delete(cardId);
+    failureChangeListeners.delete(listener);
   };
 }
 
-function announceFailureToCards(failure: PlatformFailure, cardIds: readonly string[]): void {
-  for (const cardId of cardIds) {
-    for (const listener of cardFailureListeners.get(cardId) ?? []) {
-      try {
-        listener({ ...failure });
-      } catch (err) {
-        logger.warn({ card: cardId, detail: (err as Error).message }, "could not announce a platform failure to a card");
-      }
+function announceFailureChange(change: PlatformFailureChange): void {
+  for (const listener of failureChangeListeners) {
+    try {
+      listener({ ...change, failure: { ...change.failure } });
+    } catch (err) {
+      logger.warn({ failure: change.failure.id, detail: (err as Error).message }, "could not announce a platform failure change");
     }
   }
 }
@@ -107,7 +107,7 @@ export async function recordPlatformFailure(report: PlatformFailureReport, now: 
   if (outcome.capReached) {
     logger.warn({ cap: ACTIVE_FAILURES_CAP, component: report.component }, "platform failure dropped: too many open failures");
   }
-  if (outcome.failure && outcome.isNewForCard && report.cardId) announceFailureToCards(outcome.failure, [report.cardId]);
+  if (outcome.failure && outcome.isNewForCard) announceFailureChange({ failure: outcome.failure, newForCardId: report.cardId });
   return outcome.failure;
 }
 
@@ -142,7 +142,7 @@ export async function dismissPlatformFailure(id: string, now: number = Date.now(
     failure.dismissedAt = now;
     return { ...failure };
   });
-  announceFailureToCards(dismissedFailure, dismissedFailure.affectedCardIds);
+  announceFailureChange({ failure: dismissedFailure });
   return dismissedFailure;
 }
 
@@ -162,7 +162,7 @@ export async function claimPlatformFailureInvestigation(id: string): Promise<Inv
     failure.status = "investigating";
     return { failure: { ...failure }, statusBeforeClaim };
   });
-  if (claim.statusBeforeClaim !== "investigating") announceFailureToCards(claim.failure, claim.failure.affectedCardIds);
+  if (claim.statusBeforeClaim !== "investigating") announceFailureChange({ failure: claim.failure });
   return claim;
 }
 
@@ -172,7 +172,7 @@ export async function releasePlatformFailureInvestigation(id: string, statusBefo
     failure.status = statusBeforeClaim === "concluded_without_fix" ? "concluded_without_fix" : "open";
     return { ...failure };
   });
-  announceFailureToCards(releasedFailure, releasedFailure.affectedCardIds);
+  announceFailureChange({ failure: releasedFailure });
   return releasedFailure;
 }
 
@@ -192,6 +192,6 @@ export async function settlePlatformFailureInvestigation(cardId: string, outcome
     if (outcome.merged) failure.resolvedAt = now;
     return { ...failure };
   });
-  if (settledFailure) announceFailureToCards(settledFailure, settledFailure.affectedCardIds);
+  if (settledFailure) announceFailureChange({ failure: settledFailure });
   return settledFailure;
 }

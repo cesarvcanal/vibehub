@@ -1,5 +1,5 @@
 import { logger } from "../../utils/logger.js";
-import { listActivePlatformFailuresOfCard, onCardFailureChange } from "./platformFailures.js";
+import { listActivePlatformFailuresOfCard, onPlatformFailureChange, type PlatformFailureChange } from "./platformFailures.js";
 import type { PlatformFailure } from "./types.js";
 
 export interface PlatformFailureNotice {
@@ -38,11 +38,20 @@ export function buildCardFailureNotice(failure: PlatformFailure, cardId: string,
 }
 
 export function streamCardFailureNotices(cardId: string, viewerIsOwner: boolean, send: (frame: CardFailureNoticeFrame) => void): () => void {
-  const stopListening = onCardFailureChange(cardId, (failure) => {
-    send({ type: "platform_failure", notice: buildCardFailureNotice(failure, cardId, viewerIsOwner) });
+  const shownFailureIds = new Set<string>();
+  const isChangeOfThisCard = ({ failure, newForCardId }: PlatformFailureChange) => newForCardId === undefined
+    ? shownFailureIds.has(failure.id) || failure.affectedCardIds.includes(cardId)
+    : newForCardId === cardId;
+  const stopListening = onPlatformFailureChange((change) => {
+    if (!isChangeOfThisCard(change)) return;
+    shownFailureIds.add(change.failure.id);
+    send({ type: "platform_failure", notice: buildCardFailureNotice(change.failure, cardId, viewerIsOwner) });
   });
   void listActivePlatformFailuresOfCard(cardId).then(
-    (failures) => send({ type: "platform_failures", notices: failures.map((failure) => buildCardFailureNotice(failure, cardId, viewerIsOwner)) }),
+    (failures) => {
+      for (const failure of failures) shownFailureIds.add(failure.id);
+      send({ type: "platform_failures", notices: failures.map((failure) => buildCardFailureNotice(failure, cardId, viewerIsOwner)) });
+    },
     (err: unknown) => logger.warn({ card: cardId, detail: (err as Error).message }, "could not read the platform failures of a card"),
   );
   return stopListening;

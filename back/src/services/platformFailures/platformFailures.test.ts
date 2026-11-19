@@ -154,63 +154,67 @@ describe("registro de falhas da plataforma", () => {
   });
 });
 
-describe("aviso de falha por card", () => {
-  function listenTo(failures: Awaited<ReturnType<typeof fresh>>, cardId: string) {
-    const heard: { id: string; status: string; occurrences: number }[] = [];
-    const stop = failures.onCardFailureChange(cardId, (failure) => heard.push({ id: failure.id, status: failure.status, occurrences: failure.occurrences }));
-    onTestFinished(stop);
+describe("sinal de mudança de falha", () => {
+  function listen(failures: Awaited<ReturnType<typeof fresh>>) {
+    const heard: { id: string; status: string; occurrences: number; newForCardId?: string }[] = [];
+    onTestFinished(failures.onPlatformFailureChange(({ failure, newForCardId }) => {
+      heard.push({ id: failure.id, status: failure.status, occurrences: failure.occurrences, ...(newForCardId ? { newForCardId } : {}) });
+    }));
     return heard;
   }
 
-  it("avisa o card só na primeira ocorrência dele, e o card novo quando a falha o alcança", async () => {
+  it("anuncia a falha quando ela alcança um card pela primeira vez, e não na repetição no mesmo card", async () => {
     const failures = await fresh();
-    const heardByCard1 = listenTo(failures, "card-1");
-    const heardByCard2 = listenTo(failures, "card-2");
+    const heard = listen(failures);
     await failures.recordPlatformFailure(backendReport("timed out", "card-1"));
     await failures.recordPlatformFailure(backendReport("timed out", "card-1"));
-    expect(heardByCard1).toEqual([expect.objectContaining({ status: "open", occurrences: 1 })]);
-    expect(heardByCard2).toEqual([]);
     await failures.recordPlatformFailure(backendReport("timed out", "card-2"));
-    expect(heardByCard2).toEqual([expect.objectContaining({ status: "open", occurrences: 3 })]);
-    expect(heardByCard1).toHaveLength(1);
+    expect(heard).toEqual([
+      expect.objectContaining({ status: "open", occurrences: 1, newForCardId: "card-1" }),
+      expect.objectContaining({ status: "open", occurrences: 3, newForCardId: "card-2" }),
+    ]);
   });
 
-  it("mudança de status avisa todos os cards afetados", async () => {
+  it("falha sem card não é anunciada", async () => {
+    const failures = await fresh();
+    const heard = listen(failures);
+    await failures.recordPlatformFailure(backendReport("driver gone"));
+    expect(heard).toEqual([]);
+  });
+
+  it("cada mudança de status é anunciada sem card novo", async () => {
     const failures = await fresh();
     const recorded = await failures.recordPlatformFailure(backendReport("timed out", "card-1"));
-    await failures.recordPlatformFailure(backendReport("timed out", "card-2"));
-    const heardByCard1 = listenTo(failures, "card-1");
-    const heardByCard2 = listenTo(failures, "card-2");
+    const heard = listen(failures);
     await failures.claimPlatformFailureInvestigation(recorded!.id);
     await failures.releasePlatformFailureInvestigation(recorded!.id, "open");
-    await failures.dismissPlatformFailure(recorded!.id);
-    const expectedStatuses = ["investigating", "open", "dismissed"];
-    expect(heardByCard1.map((heard) => heard.status)).toEqual(expectedStatuses);
-    expect(heardByCard2.map((heard) => heard.status)).toEqual(expectedStatuses);
-  });
-
-  it("investigação encerrada avisa os cards afetados", async () => {
-    const failures = await fresh();
-    const recorded = await failures.recordPlatformFailure(backendReport("timed out", "card-1"));
     await failures.claimPlatformFailureInvestigation(recorded!.id);
     await failures.setPlatformFailureInvestigationCard(recorded!.id, "fix-card");
-    const heardByCard1 = listenTo(failures, "card-1");
     await failures.settlePlatformFailureInvestigation("fix-card", { merged: true });
-    expect(heardByCard1.map((heard) => heard.status)).toEqual(["resolved"]);
+    expect(heard).toEqual(["investigating", "open", "investigating", "resolved"].map((status) => expect.objectContaining({ status })));
+    expect(heard.some((change) => change.newForCardId)).toBe(false);
+  });
+
+  it("descarte é anunciado", async () => {
+    const failures = await fresh();
+    const recorded = await failures.recordPlatformFailure(backendReport("timed out", "card-1"));
+    const heard = listen(failures);
+    await failures.dismissPlatformFailure(recorded!.id);
+    expect(heard).toEqual([expect.objectContaining({ status: "dismissed" })]);
   });
 
   it("um ouvinte que lança não impede o registro nem os outros ouvintes", async () => {
     const failures = await fresh();
-    onTestFinished(failures.onCardFailureChange("card-1", () => { throw new Error("socket quebrado"); }));
-    const heardByCard1 = listenTo(failures, "card-1");
+    onTestFinished(failures.onPlatformFailureChange(() => { throw new Error("socket quebrado"); }));
+    const heard = listen(failures);
     expect(await failures.recordPlatformFailure(backendReport("timed out", "card-1"))).toMatchObject({ occurrences: 1 });
-    expect(heardByCard1).toHaveLength(1);
+    expect(heard).toHaveLength(1);
   });
 
-  it("depois de parar de ouvir, o card não recebe mais nada", async () => {
+  it("depois de parar de ouvir, nada mais chega", async () => {
     const failures = await fresh();
     const heard: string[] = [];
-    const stop = failures.onCardFailureChange("card-1", (failure) => heard.push(failure.id));
+    const stop = failures.onPlatformFailureChange(({ failure }) => heard.push(failure.id));
     stop();
     await failures.recordPlatformFailure(backendReport("timed out", "card-1"));
     expect(heard).toEqual([]);
