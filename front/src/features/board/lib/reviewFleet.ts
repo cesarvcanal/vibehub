@@ -93,7 +93,7 @@ export function readAgentResult(raw: string): AgentReading {
  */
 export function fleetMessages(run: ReviewFleetRun): FleetMessage[] {
   const finished = run.agents.filter((agent) => agent.status === "done");
-  const byEnd = (a: ReviewFleetAgent, b: ReviewFleetAgent) => (a.endedAt ?? 0) - (b.endedAt ?? 0);
+  const byEnd = (left: ReviewFleetAgent, right: ReviewFleetAgent) => (left.endedAt ?? 0) - (right.endedAt ?? 0);
   const judges = finished.filter((agent) => agent.label === JUDGE_LABEL).sort(byEnd);
   const others = finished.filter((agent) => agent.label !== JUDGE_LABEL).sort(byEnd);
   return [...others, ...judges].map((agent) => {
@@ -119,8 +119,8 @@ export function withFleets(rows: ConversationRow[], fleets: Map<number, ReviewFl
     return [{ kind: "fleet", round, runs, key: `fleet-${round}` }];
   };
   const roundOf = (row: ConversationRow) => (row.kind === "round" ? row.round : row.event.round);
-  const merged = rows.flatMap((row, i): ConversationRowWithFleet[] => {
-    const previousRound = i > 0 ? roundOf(rows[i - 1]!) : undefined;
+  const merged = rows.flatMap((row, index): ConversationRowWithFleet[] => {
+    const previousRound = index > 0 ? roundOf(rows[index - 1]!) : undefined;
     const closingPrevious = row.kind === "round" && previousRound !== undefined ? fleetRow(previousRound) : [];
     const beforeReviewer = row.kind === "line" && row.event.who === "reviewer" ? fleetRow(row.event.round) : [];
     return [...closingPrevious, ...beforeReviewer, row];

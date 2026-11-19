@@ -223,8 +223,8 @@ function reviewerIdentity(): string {
 }
 
 /** The step that runs the agent fleet on the PR, waits for it and says what to do when it fails. */
-function fleetStep(r: Review): string[] {
-  const workflowArgs = JSON.stringify({ prNumber: r.prNumber, branch: r.prBranch, base: r.base, headSha: "<sha do passo 1>" });
+function fleetStep(review: Review): string[] {
+  const workflowArgs = JSON.stringify({ prNumber: review.prNumber, branch: review.prBranch, base: review.base, headSha: "<sha do passo 1>" });
   return [
     "2. Rode a frota de agentes da revisão com a ferramenta Workflow (este pedido é explícito: rode o workflow):",
     `   Workflow({ scriptPath: "${PR_ANALYSIS_WORKFLOW_PATH}", args: ${workflowArgs} })`,
@@ -233,7 +233,7 @@ function fleetStep(r: Review): string[] {
       "de seguir; a revisão acompanha a frota e não conta esse intervalo como turno sem resposta. O resultado é " +
       "{ summary, dimensions, findings, refutedCount }, com cada finding já verificado e classificado pelo juiz.",
     "   Se a frota recusar o args (erro \"args inválido\"), corrija o args e rode de novo, uma vez. Se a ferramenta Workflow " +
-      `não existir ou a frota falhar de novo, rode /code-review high no PR #${r.prNumber} no lugar dela e diga no summary que a frota falhou e por quê.`,
+      `não existir ou a frota falhar de novo, rode /code-review high no PR #${review.prNumber} no lugar dela e diga no summary que a frota falhou e por quê.`,
   ];
 }
 

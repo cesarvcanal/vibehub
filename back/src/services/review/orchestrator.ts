@@ -701,11 +701,11 @@ export async function startReview(input: {
  * The reviewer's fleet as it stands now, closed (the round is being submitted: whoever has not answered will not).
  * Best effort: the live panel already showed it, and a runner that does not answer costs only the history, never the round.
  */
-async function readRoundFleet(r: Review): Promise<WorkflowRun[]> {
+async function readRoundFleet(review: Review): Promise<WorkflowRun[]> {
   try {
-    return (await readCardFleet(r.reviewerCardId)).map((run) => ({ ...run, finished: true, agents: stopInFlight(run.agents) }));
+    return (await readCardFleet(review.reviewerCardId)).map((run) => ({ ...run, finished: true, agents: stopInFlight(run.agents) }));
   } catch (err) {
-    logger.warn({ review: r.id, detail: (err as Error).message }, "PR review could not read the reviewer's fleet for the history");
+    logger.warn({ review: review.id, detail: (err as Error).message }, "PR review could not read the reviewer's fleet for the history");
     return [];
   }
 }
@@ -1539,21 +1539,21 @@ function cancelUsageResume(reviewId: string): void {
   usageResume.timers.delete(reviewId);
 }
 
-function scheduleUsageResume(r: Review): void {
-  if (!r.usageLimitWait) return;
-  cancelUsageResume(r.id);
-  const resumeAt = r.usageLimitWait.until + usageResume.marginMs;
+function scheduleUsageResume(review: Review): void {
+  if (!review.usageLimitWait) return;
+  cancelUsageResume(review.id);
+  const resumeAt = review.usageLimitWait.until + usageResume.marginMs;
   const delay = Math.min(MAX_TIMER_DELAY_MS, Math.max(0, resumeAt - Date.now()));
   const timer = setTimeout(() => {
-    usageResume.timers.delete(r.id);
+    usageResume.timers.delete(review.id);
     if (Date.now() < resumeAt) {
-      scheduleUsageResume(r);
+      scheduleUsageResume(review);
       return;
     }
-    void resumeAfterUsageLimit(r.id).catch((err: unknown) => failUsageResume(r.id, err));
+    void resumeAfterUsageLimit(review.id).catch((err: unknown) => failUsageResume(review.id, err));
   }, delay);
   timer.unref?.();
-  usageResume.timers.set(r.id, timer);
+  usageResume.timers.set(review.id, timer);
 }
 
 /**
@@ -1562,14 +1562,14 @@ function scheduleUsageResume(r: Review): void {
  */
 async function resumeAfterUsageLimit(reviewId: string): Promise<void> {
   const resumed: { side?: Side } = {};
-  const after = await mutateReview(reviewId, (r) => {
-    const wait = r.usageLimitWait;
+  const after = await mutateReview(reviewId, (review) => {
+    const wait = review.usageLimitWait;
     if (!wait) return;
-    delete r.usageLimitWait;
-    if (!awaitingTool(r, wait.side)) return;
-    r.usageLimitResumes = (r.usageLimitResumes ?? 0) + 1;
+    delete review.usageLimitWait;
+    if (!awaitingTool(review, wait.side)) return;
+    review.usageLimitResumes = (review.usageLimitResumes ?? 0) + 1;
     resumed.side = wait.side;
-    note(r, "system", `O limite da conta Claude do ${wait.side === "reviewer" ? "revisor" : "autor"} voltou: a rodada ${r.round} segue.`);
+    note(review, "system", `O limite da conta Claude do ${wait.side === "reviewer" ? "revisor" : "autor"} voltou: a rodada ${review.round} segue.`);
   });
   if (resumed.side) await relayReview(after, resumed.side, await promptFor(after, resumed.side));
 }
