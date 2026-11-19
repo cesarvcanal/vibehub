@@ -615,6 +615,7 @@ export interface SdkChatState {
    * lib/contextUsage.ts).
    */
   contextUsage: ContextUsageInfo | null;
+  lastLiveToolResult?: { id: string; name: string };
   /** Monotonic counter for rows the driver did not name. */
   seq: number;
 }
@@ -1396,7 +1397,11 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       const at = state.rows.findIndex((r) => r.kind === "tool" && r.id === event.id);
       const row = state.rows[at];
       if (!row || row.kind !== "tool") return state;
-      return { ...state, rows: replaceRowAt(state.rows, at, { ...row, result: event.toolResult }) };
+      return {
+        ...state,
+        rows: replaceRowAt(state.rows, at, { ...row, result: event.toolResult }),
+        ...(row.live ? { lastLiveToolResult: { id: row.id, name: row.name } } : {}),
+      };
     }
     case "agent_task": {
       // State, not conversation: replaces the same subagent's.
