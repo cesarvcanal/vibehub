@@ -144,6 +144,13 @@ describe("DEFAULT_BRAIN", () => {
     expect(mod.DEFAULT_BRAIN).not.toMatch(/~\/Documents|\/Users\/|Co-Authored-By/);
     expect(mod.DEFAULT_BRAIN).toMatch(/vibehub/);
   });
+
+  it("puts the repository's rules file above the neighbouring code, which may predate the rules", async () => {
+    const { mod } = await fresh();
+    expect(mod.DEFAULT_BRAIN).not.toMatch(/match what is already there/);
+    expect(mod.DEFAULT_BRAIN).toMatch(/AGENTS\.md/);
+    expect(mod.DEFAULT_BRAIN).toMatch(/rules file wins over the code around you/);
+  });
 });
 
 describe("the stored text", () => {
