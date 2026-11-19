@@ -242,6 +242,7 @@ describe("startAnalysis", () => {
     await first.prompt;
     await registry.updateCard(first.card.id, { column: "done" });
     const again = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert, reviewerUserId: mussa.id });
+    await again.prompt;
     expect(again.created).toBe(true);
     expect(again.card.id).not.toBe(first.card.id);
   });
