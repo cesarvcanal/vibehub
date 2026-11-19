@@ -40,6 +40,8 @@ export interface WorkflowAgentFrame {
   status: "running" | "done" | "stopped";
   result?: string;
   phase?: string;
+  /** The model the script asked for ("opus", "sonnet"…). Absent when the back does not know it. */
+  model?: string;
   startedAt?: number;
   lastAt?: number;
   endedAt?: number;

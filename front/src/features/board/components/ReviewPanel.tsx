@@ -87,7 +87,7 @@ export function ReviewPanel({ cardId, prNumber: pr, onClose }: {
   /** The merge button is held: a request is open, or its result is unknown. Cancel and retry wait too. */
   const mergeBusy = mergeWait || unconfirmed;
 
-  const { query: reviewQuery, review, working, merging, readSeq, apply } = useLiveReview(cardId, { fast: mergeBusy, pr });
+  const { query: reviewQuery, review, working, fleet, merging, readSeq, apply } = useLiveReview(cardId, { fast: mergeBusy, pr });
 
   // The review carries user ids; the roles read better as names. Same key and shape as the request dialog's.
   const people = useQuery({
@@ -226,6 +226,7 @@ export function ReviewPanel({ cardId, prNumber: pr, onClose }: {
     <ReviewPanelView
       review={review}
       working={working}
+      fleet={fleet}
       nameOf={nameOf}
       actions={reviewActions(review, user ? { id: user.id, isOwner } : null)}
       busy={act.isPending}

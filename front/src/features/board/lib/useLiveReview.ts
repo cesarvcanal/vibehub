@@ -1,11 +1,12 @@
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { get } from "@/lib/api";
-import type { Review, ReviewResponse, ReviewWorking } from "@/api/types";
+import type { Review, ReviewFleetRun, ReviewResponse, ReviewWorking } from "@/api/types";
 import { CARDS_PREFIX_KEY } from "@/features/board/api";
 import { REVIEW_IDLE_POLL_MS, REVIEW_POLL_MS, cardReviewKey, mergeGateOf, reviewIsOpen, reviewIsWorking } from "@/features/board/lib/review";
 
 const NOBODY_WORKING: ReviewWorking = { author: false, reviewer: false };
+const NO_FLEET: ReviewFleetRun[] = [];
 
 /** How many reads of a review were sent to the server, ever: numbers each one as it starts. */
 let readsStarted = 0;
@@ -72,6 +73,7 @@ export function useLiveReview(
   });
   const review = query.data?.review ?? null;
   const working = query.data?.working ?? NOBODY_WORKING;
+  const fleet = query.data?.fleet ?? NO_FLEET;
   /** A merge of it running on the server now; undefined = not said (a server that predates it). */
   const merging = query.data?.merging;
   /** Which server read the data on screen came from (see {@link reviewReadsStarted}); 0 = none yet. */
@@ -102,5 +104,5 @@ export function useLiveReview(
     [queryClient, cardId, opts.pr],
   );
 
-  return { query, review, working, merging, readSeq, apply, outdated };
+  return { query, review, working, fleet, merging, readSeq, apply, outdated };
 }

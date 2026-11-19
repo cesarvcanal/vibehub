@@ -1,7 +1,9 @@
 import * as React from "react";
 import { Info, UserRound } from "lucide-react";
 import { Badge, BADGE_TEXT } from "@/components/ui/badge";
-import type { Finding, Review, ReviewEvent, ReviewEventItem, ReviewWorking } from "@/api/types";
+import type { Finding, Review, ReviewEvent, ReviewEventItem, ReviewFleetRun, ReviewWorking } from "@/api/types";
+import { ReviewFleet } from "@/features/board/components/ReviewFleet";
+import { fleetsByRound, withFleets } from "@/features/board/lib/reviewFleet";
 import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
 import { TypingDots } from "@/features/board/components/PeerTypingIndicator";
 import { formatResetAt } from "@/features/board/lib/planUsage";
@@ -35,17 +37,22 @@ export interface ReviewConversationProps {
   working: ReviewWorking;
   /** A user id to the name people know them by. */
   nameOf: (userId: string | undefined) => string;
+  /** The reviewer's live agent fleet (the round still open); the delivered rounds' come in `review.fleet`. */
+  fleet?: ReviewFleetRun[];
 }
 
-export function ReviewConversation({ review, working, nameOf }: ReviewConversationProps) {
+const NO_FLEET: ReviewFleetRun[] = [];
+
+export function ReviewConversation({ review, working, nameOf, fleet = NO_FLEET }: ReviewConversationProps) {
   const t = useT();
-  const rows = React.useMemo(() => conversationRows(review.log), [review.log]);
+  const rows = React.useMemo(() => withFleets(conversationRows(review.log), fleetsByRound(review, fleet)), [review, fleet]);
   const findings = React.useMemo(() => new Map(review.findings.map((f) => [f.id, f])), [review.findings]);
   const turn = reviewTurn(review, working);
   const names = { reviewer: nameOf(review.reviewerUserId), author: nameOf(review.authorUserId), merger: nameOf(review.mergerUserId) };
 
   // What sits at the bottom besides the lines: the "typing" row changes with the turn.
-  const stick = useStickToBottom(`${review.log.length}:${turnKey(turn)}`);
+  const fleetDone = fleet.reduce((total, run) => total + run.done, 0);
+  const stick = useStickToBottom(`${review.log.length}:${turnKey(turn)}:${fleetDone}`);
   // The log as it was when the panel opened: lines past it arrived live and come in animated. A log
   // that shrank (another review on screen) is all "already there" again.
   const openedWith = React.useRef(review.log.length);
@@ -61,13 +68,15 @@ export function ReviewConversation({ review, working, nameOf }: ReviewConversati
         role="log"
         aria-live="polite"
         aria-label={t("review.tab.conversation")}
-        className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-0.5 py-2"
+        className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-y-auto overflow-x-hidden px-0.5 py-2"
       >
         {rows.length === 0 ? (
           <p className="py-6 text-center text-xs text-muted-foreground">{t("review.conversation.empty")}</p>
         ) : (
           rows.map((row) =>
-            row.kind === "round" ? (
+            row.kind === "fleet" ? (
+              <ReviewFleet key={row.key} round={row.round} runs={row.runs} />
+            ) : row.kind === "round" ? (
               <RoundDivider key={row.key} round={row.round} fresh={fresh(row.index)} />
             ) : row.kind === "items" ? (
               <ItemLines key={row.key} event={row.event} findings={findings} names={names} fresh={fresh(row.index)} />

@@ -311,3 +311,14 @@ describe("WorkflowPanel — rodada terminada com agente que nunca respondeu", ()
     expect(screen.getByTestId("workflow-eta")).not.toHaveTextContent("Concluído");
   });
 });
+
+describe("WorkflowPanel — fora do chat", () => {
+  it("mostra o modelo ao lado do nome e, sem canal de feed, abre o agente sem ficar 'lendo' para sempre", () => {
+    render(<WorkflowPanel row={workflowRow({ agents: [agent("a1", { model: "opus", status: "done", result: "pronto" })] })} />);
+    expect(screen.getByTestId("workflow-agent-model")).toHaveTextContent("opus");
+    fireEvent.click(screen.getByTestId("sdk-workflow-agent"));
+    expect(screen.getByTestId("workflow-feed")).toBeInTheDocument();
+    expect(screen.queryByText("lendo o que ele fez…")).not.toBeInTheDocument();
+    expect(screen.getByTestId("sdk-workflow-result")).toHaveTextContent("pronto");
+  });
+});

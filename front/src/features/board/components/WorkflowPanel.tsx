@@ -261,6 +261,9 @@ function AgentItem({
           <span className="min-w-0 flex-1 truncate font-medium text-foreground/90">
             {agent.label || t("sdk.workflowAgentUnnamed")}
           </span>
+          {agent.model ? (
+            <span data-testid="workflow-agent-model" className="shrink-0 text-[10px] text-muted-foreground/70">{agent.model}</span>
+          ) : null}
           {time ? (
             <span data-testid="workflow-agent-time" className="shrink-0 tabular-nums text-muted-foreground/70">{time}</span>
           ) : null}
@@ -362,6 +365,7 @@ function AgentFeed({
 }: {
   agent: WorkflowAgentFrame; runId: string; polling: boolean; stopped: boolean; now: number; t: Translate;
 }) {
+  const channel = React.useContext(WorkflowFeedContext);
   const feed = useAgentFeed(runId, agent.id, polling);
   const done = agent.status === "done";
   const lines = feed ? feedLines(feed.items, { running: !done && !stopped, now, endedAt: agent.endedAt ?? (stopped ? agent.lastAt : undefined) }) : [];
@@ -376,7 +380,7 @@ function AgentFeed({
       className="ml-[18px] mt-1 space-y-1 rounded border border-border/60 bg-background/70 px-2 py-1.5 text-[11px] text-muted-foreground"
     >
       <p className="text-foreground/80">{t("sdk.workflowTask", { task: agent.label || t("sdk.workflowAgentUnnamed") })}</p>
-      <FeedBody feed={feed} lines={lines} t={t} />
+      {channel ? <FeedBody feed={feed} lines={lines} t={t} /> : null}
       <div
         data-testid="sdk-workflow-result"
         className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/50 px-1.5 py-1"

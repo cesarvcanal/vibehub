@@ -166,6 +166,30 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.getByText("A conta Claude do revisor ficou sem limite de uso: a rodada continua sozinha às 17:10.")).toBeInTheDocument();
   });
 
+  it("revisor rodando a frota: a conversa mostra cada agente com o modelo, o achado e a verificação respondendo a ele", async () => {
+    const served = get.getMockImplementation()!;
+    const fleet = [{
+      runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Revisão", "Verificação"], total: 3, done: 2, at: 5, finished: false,
+      agents: [
+        { id: "a01f", label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "done", endedAt: 1, toolCount: 3,
+          result: '{"findings":[{"title":"token vaza no log"}]}' },
+        { id: "a02f", label: "verificação: correctness · token vaza no log", phase: "Verificação", model: "sonnet", status: "done", endedAt: 2,
+          toolCount: 1, result: '{"confirmed":false,"evidence":"a linha 72 já barra"}' },
+        { id: "a03f", label: "juiz", phase: "Julgamento", model: "opus", status: "running", toolCount: 0 },
+      ],
+    }];
+    get.mockImplementation(async (url: string) => (url === "/cards/c1/review" ? { review: current, working, fleet } : served(url)));
+    open("aut", review({ phase: "reviewing", round: 1 }));
+    await loaded();
+    const messages = await screen.findAllByTestId("review-fleet-message");
+    expect(messages.map((m) => m.textContent)).toEqual([
+      expect.stringContaining("1 achado: token vaza no log"),
+      expect.stringContaining("Refutado: a linha 72 já barra"),
+    ]);
+    expect(messages[1]).toHaveTextContent("em resposta a: token vaza no log");
+    expect(screen.getAllByTestId("workflow-agent-model").map((m) => m.textContent)).toContain("opus");
+  });
+
   it("sem co-autor o papel não aparece", async () => {
     open("rev", review());
     await loaded();
