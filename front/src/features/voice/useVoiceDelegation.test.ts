@@ -1,9 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { SdkRow } from "@/features/board/lib/sdkChat";
 import { LiveVoiceSession, type DelegationListener, type LiveVoiceSnapshot } from "./liveVoice";
 import { useVoiceDelegation, type UseVoiceDelegationOptions } from "./useVoiceDelegation";
-import { DELEGATION_NOT_SENT, DELEGATION_STARTED, DELEGATION_UNHEARD } from "./voiceDelegation";
+import { DELEGATION_NOT_SENT, DELEGATION_SLOW, DELEGATION_SLOW_MS, DELEGATION_STARTED, DELEGATION_UNHEARD } from "./voiceDelegation";
 import type { VoiceTurn } from "./voiceTurns";
 
 /**
@@ -46,6 +46,49 @@ describe("useVoiceDelegation", () => {
     delegate("d2", []);
     expect(send).not.toHaveBeenCalled();
     expect(call.answerDelegation.mock.calls).toEqual([["d2", DELEGATION_UNHEARD, "result"]]);
+  });
+
+  it("pedido sem resultado depois do prazo: a voz fica sabendo, uma vez, que o agente ainda não terminou", () => {
+    vi.useFakeTimers();
+    onTestFinished(() => vi.useRealTimers());
+    const { call, delegate } = setup(vi.fn());
+    delegate("d4", said("roda os testes"));
+    act(() => vi.advanceTimersByTime(DELEGATION_SLOW_MS - 1));
+    expect(call.answerDelegation.mock.calls).toEqual([["d4", DELEGATION_STARTED, "progress"]]);
+    act(() => vi.advanceTimersByTime(DELEGATION_SLOW_MS * 3));
+    expect(call.answerDelegation.mock.calls).toEqual([
+      ["d4", DELEGATION_STARTED, "progress"],
+      ["d4", DELEGATION_SLOW, "progress"],
+    ]);
+  });
+
+  it("pedido respondido antes do prazo não recebe o aviso de demora", () => {
+    vi.useFakeTimers();
+    onTestFinished(() => vi.useRealTimers());
+    const send = vi.fn();
+    const { call, view, delegate } = setup(send);
+    delegate("d5", said("roda os testes"));
+    const request = send.mock.calls[0]![0] as string;
+    const rows: SdkRow[] = [
+      { kind: "user", id: "u1", text: request, state: "sent" },
+      { kind: "assistant", id: "a1", text: "12 verdes.", streaming: false },
+    ];
+    view.rerender({ rows });
+    act(() => vi.advanceTimersByTime(DELEGATION_SLOW_MS * 2));
+    expect(call.answerDelegation.mock.calls).toEqual([
+      ["d5", DELEGATION_STARTED, "progress"],
+      ["d5", "12 verdes.", "result"],
+    ]);
+  });
+
+  it("desmontar o chat com um pedido pendente cancela o aviso de demora", () => {
+    vi.useFakeTimers();
+    onTestFinished(() => vi.useRealTimers());
+    const { call, view, delegate } = setup(vi.fn());
+    delegate("d6", said("roda os testes"));
+    view.unmount();
+    act(() => vi.advanceTimersByTime(DELEGATION_SLOW_MS * 2));
+    expect(call.answerDelegation.mock.calls).toEqual([["d6", DELEGATION_STARTED, "progress"]]);
   });
 
   it("a call that ends with a request pending says nothing more about it", () => {

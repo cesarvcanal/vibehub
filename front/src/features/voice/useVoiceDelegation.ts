@@ -5,6 +5,8 @@ import { agentContext } from "./voiceContext";
 import {
   DELEGATION_NOT_SENT,
   DELEGATION_SILENT,
+  DELEGATION_SLOW,
+  DELEGATION_SLOW_MS,
   DELEGATION_STARTED,
   DELEGATION_UNHEARD,
   delegationReply,
@@ -27,6 +29,7 @@ import {
 interface PendingDelegation {
   id: string;
   request: string;
+  slowTimer: ReturnType<typeof setTimeout>;
 }
 
 export interface UseVoiceDelegationOptions {
@@ -62,16 +65,25 @@ export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent 
           return;
         }
         answerDelegation(id, DELEGATION_STARTED, "progress");
-        pending.current.push({ id, request });
+        const slowTimer = setTimeout(() => answerDelegation(id, DELEGATION_SLOW, "progress"), DELEGATION_SLOW_MS);
+        pending.current.push({ id, request, slowTimer });
         setTaken((n) => n + 1);
       }),
     [onDelegation, answerDelegation],
+  );
+
+  React.useEffect(
+    () => () => {
+      for (const { slowTimer } of pending.current) clearTimeout(slowTimer);
+    },
+    [],
   );
 
   const told = React.useRef<Set<string> | null>(null);
   React.useEffect(() => {
     if (!live) {
       told.current = null;
+      for (const { slowTimer } of pending.current) clearTimeout(slowTimer);
       pending.current = [];
       return;
     }
@@ -79,12 +91,13 @@ export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent 
     told.current ??= new Set(rows.filter(isAgentAnswer).map((row) => row.text));
     const known = told.current;
     const held = new Set<string>();
-    pending.current = pending.current.filter(({ id, request }) => {
+    pending.current = pending.current.filter(({ id, request, slowTimer }) => {
       const reply = delegationReply(rows, request, turnRunning);
       if (reply.state === "waiting") {
         for (const text of reply.answers) held.add(text);
         return true;
       }
+      clearTimeout(slowTimer);
       answerDelegation(id, reply.state === "answered" ? reply.text : DELEGATION_SILENT, "result");
       for (const text of reply.answers) known.add(text);
       return false;
