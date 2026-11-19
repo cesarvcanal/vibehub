@@ -331,6 +331,23 @@ export async function listRepos(connectionId?: string | null, q = "", limit = 10
   return filtered.slice(0, limit);
 }
 
+/** Whether the connection's account can push to `fullName`, by `permissions.push` of GET /repos/{owner}/{repo}. */
+export async function canPushToRepo(connectionId: string, fullName: string): Promise<boolean> {
+  const { owner, repo } = splitRepo(fullName);
+  const token = await tokenFor(connectionId);
+  const response = await githubFetch(`/repos/${owner}/${repo}`, token);
+  if (response.status === 404) {
+    await response.body?.cancel();
+    return false;
+  }
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(`GitHub returned ${response.status} while checking access to ${fullName}`);
+  }
+  const body = (await response.json()) as { permissions?: { push?: boolean } };
+  return body.permissions?.push === true;
+}
+
 export interface RepoBranches {
   branches: string[];
   defaultBranch: string | null;

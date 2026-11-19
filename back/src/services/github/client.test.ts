@@ -318,6 +318,40 @@ describe("listRepos", () => {
   });
 });
 
+describe("canPushToRepo", () => {
+  async function connected() {
+    const env = await fresh();
+    stubIdentity("octocat");
+    const { connection } = await env.gh.connect("personal", "ghp_token");
+    return { ...env, connectionId: connection.id };
+  }
+
+  it.each([
+    ["push no repo", { permissions: { admin: false, push: true, pull: true } }, true],
+    ["só leitura", { permissions: { admin: false, push: false, pull: true } }, false],
+  ])("lê permissions.push do GET /repos (%s)", async (_case, body, expected) => {
+    const { gh, connectionId } = await connected();
+    const fetchMock = vi.fn(async () => jsonResponse(body));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await gh.canPushToRepo(connectionId, "acme/erp")).toBe(expected);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://api.github.com/repos/acme/erp");
+    expect((init.headers as Record<string, string>).authorization).toBe("Bearer ghp_token");
+  });
+
+  it("repo que o token não enxerga (404) é sem push, não erro", async () => {
+    const { gh, connectionId } = await connected();
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ message: "Not Found" }, { status: 404 })));
+    expect(await gh.canPushToRepo(connectionId, "acme/erp")).toBe(false);
+  });
+
+  it("falha do GitHub (5xx) aparece como erro, não como 'sem permissão'", async () => {
+    const { gh, connectionId } = await connected();
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({}, { status: 502 })));
+    await expect(gh.canPushToRepo(connectionId, "acme/erp")).rejects.toThrow(/502/);
+  });
+});
+
 describe("listBranches", () => {
   it("devolve a lista na ordem do GitHub com a branch padrão à parte", async () => {
     const { gh } = await fresh();
