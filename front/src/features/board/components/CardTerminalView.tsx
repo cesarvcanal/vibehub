@@ -431,7 +431,6 @@ export function CardTerminalView({
   const usagePercent = pillPercent(inUseUsage);
   const now = useMinuteTick();
 
-  /** The percentage of ONE account, for the menu rows — absent when that account has no numbers. */
   const menuPercent = (slug: string) => pillPercent(usageBySlug[slug]);
 
   /* ------------------------------------------------------------------ state */
@@ -1017,14 +1016,14 @@ export function CardTerminalView({
                     <button
                       type="button"
                       aria-label={t("cardView.claudeAccount")}
-                      className={PILL}
+                      className={cn(PILL, "inline-flex max-w-[14rem] items-center")}
                       disabled={accountMutation.isPending}
                     >
                       {/* The pill names the account that is SIGNED IN, plus how much of its 5-hour
                           window is gone — the one number that stops a card mid-turn. */}
-                      {accountName}
+                      <span className="min-w-0 truncate">{accountName}</span>
                       {usagePercent ? (
-                        <span className="ml-1 font-mono tabular-nums opacity-70">· {usagePercent}</span>
+                        <span className="ml-1 shrink-0 whitespace-nowrap font-mono tabular-nums opacity-70">· {usagePercent}</span>
                       ) : null}
                     </button>
                   </DropdownMenuTrigger>

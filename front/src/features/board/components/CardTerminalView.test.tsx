@@ -1157,7 +1157,32 @@ describe("CardTerminalView — the account pill knows how much plan is left", ()
   it("appends the 5-hour utilization of the account IN USE", async () => {
     serveSession({ account: { slug: null, name: "Main" } });
     renderWithCache([card({ openedAt: 10 })]);
-    await waitFor(() => expect(screen.getByLabelText("Claude account")).toHaveTextContent("31%"));
+    await waitFor(() => expect(screen.getByLabelText("Claude account")).toHaveTextContent("31% session"));
+  });
+
+  it("conta sem janela de sessão de 5h mostra só o nome: o semanal não se repete ao lado do medidor semanal", async () => {
+    const base = mockGet.getMockImplementation();
+    mockGet.mockImplementation((url: string, ...rest: unknown[]) =>
+      url === "/accounts/usage"
+        ? Promise.resolve({
+            bySlug: {
+              default: { available: true, sevenDay: { utilization: 64, resetsAt: null }, fetchedAt: 1 },
+              personal: { available: true, fiveHour: { utilization: 46, resetsAt: null }, fetchedAt: 1 },
+            },
+            fetchedAt: 1,
+          })
+        : (base as (url: string, ...rest: unknown[]) => Promise<unknown>)(url, ...rest),
+    );
+    serveSession({ account: { slug: null, name: "Main" } });
+    const user = userEvent.setup();
+    renderWithCache([card({ openedAt: 10 })]);
+    const accountPill = await screen.findByLabelText("Claude account");
+    await user.click(accountPill);
+    const rows = within(await screen.findByRole("menu")).getAllByRole("menuitemcheckbox");
+    await waitFor(() => expect(rows[1]).toHaveTextContent("46% session"));
+    expect(rows[0].textContent).not.toMatch(/%/);
+    expect(accountPill).toHaveTextContent("Main");
+    expect(accountPill.textContent).not.toMatch(/%/);
   });
 
   it("shows the percentage of each account in the menu, so the choice is informed", async () => {

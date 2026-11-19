@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Profiler, act } from "react";
@@ -4851,6 +4851,10 @@ describe("SdkChatView — o medidor de contexto", () => {
   afterEach(() => cleanup());
 
   it("só aparece com leitura, muda de faixa conforme a conversa cresce e some com um driver novo", async () => {
+    vi.useFakeTimers({ toFake: ["performance"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -4871,6 +4875,8 @@ describe("SdkChatView — o medidor de contexto", () => {
 
     // A skewed reading does not erase the one that counts.
     ws.deliver({ type: "context_usage", usedTokens: 10 } as SdkEvent);
+    vi.advanceTimersByTime(700);
+    runAnimationFrames();
     expect(screen.getByTestId("context-meter-value")).toHaveTextContent("70%");
 
     ws.deliver({ type: "ready" });
@@ -4942,7 +4948,34 @@ describe("SdkChatView — o medidor de contexto", () => {
     expect(screen.getByTestId("jump-latest")).not.toHaveClass("bottom-3");
   });
 
-  it("o guia mostra os tokens, as três faixas e destaca a de agora", async () => {
+  it("leitura nova: o número conta passando pelos valores do meio até chegar, e o aria-label já diz o valor novo", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "context_usage", usedTokens: 20_000, maxTokens: 200_000, percent: 10 } as SdkEvent);
+    expect(screen.getByTestId("context-meter-value")).toHaveTextContent("10%");
+
+    vi.useFakeTimers({ toFake: ["performance"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    ws.deliver({ type: "context_usage", usedTokens: 80_000, maxTokens: 200_000, percent: 40 } as SdkEvent);
+    expect(screen.getByTestId("context-meter").getAttribute("aria-label")).toContain("40%");
+    const shownEachStep = Array.from({ length: 10 }, () => {
+      vi.advanceTimersByTime(100);
+      runAnimationFrames();
+      return screen.getByTestId("context-meter-value").textContent;
+    });
+    expect(shownEachStep.at(-1)).toBe("40%");
+    expect(shownEachStep.filter((text) => text !== "10%" && text !== "40%").length).toBeGreaterThan(0);
+  });
+
+  it("o guia mostra os tokens, as três faixas e destaca a de agora, com a bolinha deslizando até o ponto atual", async () => {
+    vi.useFakeTimers({ toFake: ["performance"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -4954,67 +4987,25 @@ describe("SdkChatView — o medidor de contexto", () => {
     const zones = within(guide).getAllByTestId("context-zone");
     expect(zones.map((z) => z.getAttribute("data-zone"))).toEqual(["smart", "warn", "danger"]);
     expect(zones.filter((z) => z.getAttribute("data-current") === "true").map((z) => z.getAttribute("data-zone"))).toEqual(["warn"]);
-    expect(within(guide).getByTestId("context-guide-marker").style.left).toBe("42%");
+    const marker = within(guide).getByTestId("context-guide-marker");
+    expect(parseFloat(marker.style.left)).toBeLessThan(42);
+    vi.advanceTimersByTime(700);
+    runAnimationFrames();
+    expect(marker.style.left).toBe("42%");
   });
 
-  it("acima de 30% vira aviso que o dev pode esconder; acima de 60% faixa de perigo que não se esconde", async () => {
+  it.each([
+    { percent: 42, zone: "attention" },
+    { percent: 65, zone: "danger" },
+  ])("contexto em $percent%: só o medidor diz $zone, sem faixa de aviso embaixo do chat", async ({ percent, zone }) => {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
     ws.deliver({ type: "ready" });
-    ws.deliver({ type: "context_usage", usedTokens: 50_000, maxTokens: 200_000, percent: 25 } as SdkEvent);
-    expect(screen.queryByTestId("context-notice")).toBeNull();
-    expect(screen.queryByTestId("context-meter-icon")).toBeNull();
-
-    ws.deliver({ type: "context_usage", usedTokens: 84_000, maxTokens: 200_000, percent: 42 } as SdkEvent);
-    const warn = screen.getByTestId("context-notice");
-    expect(warn.getAttribute("data-zone")).toBe("warn");
-    expect(warn.getAttribute("role")).toBe("status");
-    expect(warn).toHaveTextContent("Context at 42%");
-    expect(screen.getByTestId("context-meter")).toHaveTextContent("attention");
+    ws.deliver({ type: "context_usage", usedTokens: percent * 2_000, maxTokens: 200_000, percent } as SdkEvent);
+    expect(screen.getByTestId("context-meter")).toHaveTextContent(zone);
     expect(screen.getByTestId("context-meter-icon")).toBeTruthy();
-
-    fireEvent.click(screen.getByTestId("context-notice-dismiss"));
-    expect(screen.queryByTestId("context-notice")).toBeNull();
-    // With the warning hidden, the meter still says "attention".
-    expect(screen.getByTestId("context-meter")).toHaveTextContent("attention");
-
-    // It reached danger: the strip comes back, red, and without a hide button.
-    ws.deliver({ type: "context_usage", usedTokens: 130_000, maxTokens: 200_000, percent: 65 } as SdkEvent);
-    const danger = screen.getByTestId("context-notice");
-    expect(danger.getAttribute("data-zone")).toBe("danger");
-    expect(danger.getAttribute("role")).toBe("alert");
-    expect(danger).toHaveTextContent("AI in the danger zone: 65%");
-    expect(danger).toHaveTextContent("compacts the conversation on its own");
-    expect(danger).not.toHaveTextContent("/compact");
-    expect(screen.queryByTestId("context-notice-dismiss")).toBeNull();
-    expect(screen.getByTestId("context-meter")).toHaveTextContent("danger");
-
-    // A /compact brings it back to the smart band: everything goes away, and the next warning shows up again.
-    ws.deliver({ type: "context_usage", usedTokens: 20_000, maxTokens: 200_000, percent: 10 } as SdkEvent);
-    expect(screen.queryByTestId("context-notice")).toBeNull();
-    ws.deliver({ type: "context_usage", usedTokens: 70_000, maxTokens: 200_000, percent: 35 } as SdkEvent);
-    expect(screen.getByTestId("context-notice").getAttribute("data-zone")).toBe("warn");
-  });
-
-  it("o aviso escondido continua escondido depois de uma reconexão, e volta depois de passar pelo perigo", async () => {
-    renderSdkChat();
-    const ws = await socket();
-    ws.accept();
-    ws.deliver({ type: "ready" });
-    ws.deliver({ type: "context_usage", usedTokens: 84_000, maxTokens: 200_000, percent: 42 } as SdkEvent);
-    fireEvent.click(screen.getByTestId("context-notice-dismiss"));
-    expect(screen.queryByTestId("context-notice")).toBeNull();
-
-    // Reconnect: `ready` resets the reading and the back resends the same one right behind it.
-    ws.deliver({ type: "ready" });
-    ws.deliver({ type: "context_usage", usedTokens: 86_000, maxTokens: 200_000, percent: 43 } as SdkEvent);
-    expect(screen.queryByTestId("context-notice")).toBeNull();
-
-    // It went to danger and came back (a partial /compact): the worrying warning shows up again.
-    ws.deliver({ type: "context_usage", usedTokens: 130_000, maxTokens: 200_000, percent: 65 } as SdkEvent);
-    ws.deliver({ type: "context_usage", usedTokens: 100_000, maxTokens: 200_000, percent: 50 } as SdkEvent);
-    expect(screen.getByTestId("context-notice").getAttribute("data-zone")).toBe("warn");
+    expect(screen.queryByText(/Context at|danger zone/)).toBeNull();
   });
 
   it("o /clear tira o medidor da conversa apagada", async () => {
@@ -5023,10 +5014,9 @@ describe("SdkChatView — o medidor de contexto", () => {
     ws.accept();
     ws.deliver({ type: "ready" });
     ws.deliver({ type: "context_usage", usedTokens: 130_000, maxTokens: 200_000, percent: 65 } as SdkEvent);
-    expect(screen.getByTestId("context-notice")).toBeTruthy();
+    expect(screen.getByTestId("context-meter")).toBeTruthy();
     ws.deliver({ type: "conversation_reset", trigger: "clear" } as SdkEvent);
     expect(screen.queryByTestId("context-meter")).toBeNull();
-    expect(screen.queryByTestId("context-notice")).toBeNull();
   });
 
   it("o guia avisa que a conversa compacta sozinha antes de 60%, recupera as regras do projeto e segue a tarefa", async () => {

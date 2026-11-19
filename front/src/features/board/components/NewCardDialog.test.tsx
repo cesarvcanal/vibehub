@@ -224,8 +224,8 @@ describe("NewCardDialog", () => {
     const select = screen.getByLabelText("Claude account") as HTMLSelectElement;
     await waitFor(() =>
       expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
-        "Inherit (the runner default) — 8%",
-        "Personal — 91%",
+        "Inherit (the runner default) — 8% session",
+        "Personal — 91% session",
       ]),
     );
   });

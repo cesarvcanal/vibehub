@@ -37,7 +37,7 @@ import { AnswerActions } from "@/features/voice/AnswerActions";
 import { readAloud, readAloudError, setReadAloudErrorHandler } from "@/features/voice/readAloud";
 import { PlanUsageAlert, cardRateLimitsKey, useCardPlanUsage } from "@/features/board/components/PlanUsage";
 import { AccountLoginDialog, type LoginAccount } from "@/features/board/components/AccountLoginDialog";
-import { ContextMeter, ContextNotice } from "@/features/board/components/ContextMeter";
+import { ContextMeter } from "@/features/board/components/ContextMeter";
 import { planAlert, planWindows } from "@/features/board/lib/planUsage";
 import { useAnalysisRereadOnReport } from "@/features/board/lib/useCardAnalysis";
 import { LinkifiedText, Markdown, SenderTag } from "@/features/board/components/ChatView";
@@ -1654,9 +1654,6 @@ export function SdkChatView({
 
       {/* The interrupt button lives INSIDE the composer — right column, above the microphone —
           in the same seat as the transcript chat's stop. The interrupt frame is still this view's. */}
-      {/* The context left the smart strip: the full message, above the meter's strip. */}
-      <ContextNotice usage={state.contextUsage} className="mt-1.5" />
-
       {/* THE ACCOUNT'S LOGIN DIED: the CLI's "Failed to authenticate…" alone read as one more line of the
           conversation. This says it is the ACCOUNT, which one, and — for the owner — reconnects it right here. */}
       {state.loginFailed ? (
