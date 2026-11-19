@@ -1,24 +1,19 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, onTestFinished, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AnalysisReport } from "./analysisModel.js";
 
-let dir = "";
-
 async function load() {
   vi.resetModules();
+  const dataDir = await mkdtemp(join(tmpdir(), "vibehub-analyses-"));
+  onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
   const env = await import("../../config/env.js");
-  env.config.dataDir = dir;
+  env.config.dataDir = dataDir;
   return await import("./analysisStore.js");
 }
 
-beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "vibehub-analyses-"));
-});
-afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
-});
+const acceptAnySaved = () => undefined;
 
 const report = (over: Partial<AnalysisReport> = {}): AnalysisReport => ({
   cardId: "c1", prUrl: "https://github.com/acme/w/pull/7", prNumber: 7, analysedSha: "a".repeat(40), stage: "analysed",
@@ -28,20 +23,20 @@ const report = (over: Partial<AnalysisReport> = {}): AnalysisReport => ({
 describe("store das análises", () => {
   it("guarda um relatório por card e o seguinte substitui o anterior", async () => {
     const store = await load();
-    await store.saveAnalysis(report());
-    await store.saveAnalysis(report({ stage: "done" }));
+    await store.saveAnalysis(report(), acceptAnySaved);
+    await store.saveAnalysis(report({ stage: "done" }), acceptAnySaved);
     expect((await store.getAnalysis("c1"))?.stage).toBe("done");
   });
   it("o relatório de um card não apaga o de outro", async () => {
     const store = await load();
-    await store.saveAnalysis(report());
-    await store.saveAnalysis(report({ cardId: "c2" }));
+    await store.saveAnalysis(report(), acceptAnySaved);
+    await store.saveAnalysis(report({ cardId: "c2" }), acceptAnySaved);
     expect(await store.getAnalysis("c1")).toBeDefined();
     expect(await store.getAnalysis("c2")).toBeDefined();
   });
   it("devolve cópia: mexer no lido não muda o gravado", async () => {
     const store = await load();
-    await store.saveAnalysis(report());
+    await store.saveAnalysis(report(), acceptAnySaved);
     const readReport = await store.getAnalysis("c1");
     readReport!.summary = "mexido";
     expect((await store.getAnalysis("c1"))?.summary).toBe("s");

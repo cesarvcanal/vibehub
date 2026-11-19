@@ -8,7 +8,7 @@ import type { SendOpts } from "../maestro/maestro.js";
 
 /**
  * PR ANALYSIS — the board is REAL (temporary directory); what leaves the process is mocked at the
- * boundary: GitHub (`listOpenPulls`) and typing into the card (`sendToTerminal`).
+ * boundary: GitHub (`listOpenPulls`), typing into the card (`sendToTerminal`) and the runner (`runScript`).
  */
 
 // The purge after a failed start goes through the whole card teardown: generous under a loaded runner.
@@ -36,6 +36,9 @@ const sendToTerminal = vi.fn(async (cardId: string, _text: string, opts: SendOpt
   await opts.beforeDeliver?.();
   return { sent: true, cardId, title: "", project: "" };
 });
+
+const hostAnswersEmpty = async (_script: string, _opts?: unknown) => ({ stdout: "", stderr: "" });
+const runScriptOnHost = vi.fn(hostAnswersEmpty);
 
 const pull = (n: number, extra: Partial<OpenPull> = {}): OpenPull => ({
   number: n, title: `PR ${n}`, url: `https://github.com/acme/widgets/pull/${n}`, author: "albert-gh",
@@ -67,6 +70,10 @@ async function load() {
     ...(await vi.importActual<typeof import("../board/workspace.js")>("../board/workspace.js")),
     reapplyCardIdentity: vi.fn(async () => true),
   }));
+  vi.doMock("../../runtime/host.js", async () => {
+    const actual = await vi.importActual<typeof import("../../runtime/host.js")>("../../runtime/host.js");
+    return { ...actual, hostExecutor: () => ({ ...actual.hostExecutor(), runScript: runScriptOnHost }) };
+  });
   vi.doMock("../../auth/users.js", async () => {
     const actual = await vi.importActual<typeof import("../../auth/users.js")>("../../auth/users.js");
     return { ...actual, findUser: async (id: string) => (id === vanished ? undefined : actual.findUser(id)) };
@@ -101,12 +108,15 @@ beforeEach(async () => {
   listOpenPulls.mockClear();
   readPull.mockClear();
   sendToTerminal.mockClear();
+  runScriptOnHost.mockReset();
+  runScriptOnHost.mockImplementation(hostAnswersEmpty);
   vanished = undefined;
 });
 afterEach(async () => {
   vi.doUnmock("../github/client.js");
   vi.doUnmock("../maestro/maestro.js");
   vi.doUnmock("../board/workspace.js");
+  vi.doUnmock("../../runtime/host.js");
   vi.doUnmock("../../auth/users.js");
   await rm(dir, { recursive: true, force: true });
 });
@@ -171,6 +181,41 @@ describe("startAnalysis", () => {
     expect((await registry.getCard(card.id))?.actorUserId).toBe(mussa.id);
   });
 
+  it("o script da frota chega ao runner antes do prompt, pelo próprio pedido: não depende de o chat do card ser o SDK", async () => {
+    const { analysis, project } = await load();
+    const delivered: string[] = [];
+    runScriptOnHost.mockImplementation(async (script: string) => {
+      if (script.includes("/root/.vibehub-workflows/pr-analysis.js")) delivered.push("script da frota");
+      return { stdout: "", stderr: "" };
+    });
+    sendToTerminal.mockImplementationOnce(async (cardId: string) => {
+      delivered.push("prompt");
+      return { sent: true, cardId, title: "", project: "" };
+    });
+    const { prompt } = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert, reviewerUserId: mussa.id });
+    await prompt;
+    expect(delivered).toEqual(["script da frota", "prompt"]);
+  });
+
+  it("se o script da frota não chega ao runner, o prompt não sai e o card vai para concluído com o motivo", async () => {
+    const { analysis, registry, project } = await load();
+    runScriptOnHost.mockImplementation(async (script: string) => {
+      if (script.includes("/root/.vibehub-workflows/pr-analysis.js")) throw new Error("runner fora do ar");
+      return { stdout: "", stderr: "" };
+    });
+    const events = await import("../events/cardEvents.js");
+    const heard: import("../events/cardEvents.js").CardEvent[] = [];
+    const stop = events.onCardEvent((e) => void heard.push(e));
+    const { card, prompt } = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert, reviewerUserId: mussa.id });
+    await prompt;
+    stop();
+    expect(sendToTerminal).not.toHaveBeenCalled();
+    expect((await registry.getCard(card.id))?.column).toBe("done");
+    expect(heard.find((e) => e.cardId === card.id && e.kind === "message")).toMatchObject({
+      messageType: "error", text: expect.stringMatching(/PR #7 não começou.*runner fora do ar/),
+    });
+  });
+
   it("repetir a mesma PR devolve o card que já existe, sem outro prompt", async () => {
     const { analysis, project } = await load();
     const first = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert, reviewerUserId: mussa.id });
@@ -197,6 +242,7 @@ describe("startAnalysis", () => {
     await first.prompt;
     await registry.updateCard(first.card.id, { column: "done" });
     const again = await analysis.startAnalysis({ projectId: project.id, prNumber: 7, requester: albert, reviewerUserId: mussa.id });
+    await again.prompt;
     expect(again.created).toBe(true);
     expect(again.card.id).not.toBe(first.card.id);
   });

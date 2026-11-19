@@ -54,7 +54,7 @@ export function PrReviewBlock({
   const review = summary?.phase === "cancelled" ? undefined : summary;
   const showsAnalysis = analysis && !review;
   const analysisQuery = useCardAnalysis(cardId, { enabled: showsAnalysis, cardWorking });
-  const pill = showsAnalysis ? analysisPill(analysisQuery.data, { cardWorking }) : reviewPill(review, { authorWorking });
+  const pill = showsAnalysis ? analysisPill(analysisQuery, { cardWorking }) : reviewPill(review, { authorWorking });
   const opensPanel = review !== undefined || showsAnalysis;
 
   const line = (

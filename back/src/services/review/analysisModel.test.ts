@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { analysisVerdict, dimensionHealth, type AnalysisFinding, type AnalysisReport } from "./analysisModel.js";
+import { analysisVerdict, dimensionHealth, uncheckedDimensions, type AnalysisFinding, type AnalysisReport } from "./analysisModel.js";
 
-const finding = (over: Partial<AnalysisFinding> = {}): AnalysisFinding => ({
+type FindingOverrides = Partial<Pick<AnalysisFinding, "id" | "severity" | "dimension">> & ({ status?: "open" } | { status: "fixed"; commit: string });
+
+const finding = (over: FindingOverrides = {}): AnalysisFinding => ({
   id: "f1", severity: "blocking", title: "t", problem: "p", fix: "x", dimension: "correctness", status: "open",
   proof: { kind: "scenario", ref: "a.ts:1" }, ...over,
 });
@@ -17,29 +19,23 @@ const report = (over: Partial<AnalysisReport> = {}): AnalysisReport => ({
 });
 
 describe("estado de cada dimensão da análise", () => {
-  it("dimensão que rodou sem achado aberto fica ok", () => {
-    expect(dimensionHealth(report(), "correctness")).toBe("ok");
-  });
-  it("bloqueante aberto deixa a dimensão em problema", () => {
-    expect(dimensionHealth(report({ findings: [finding()] }), "correctness")).toBe("problem");
-  });
-  it("bloqueante corrigido não pesa; dúvida ou melhoria aberta deixa em atenção", () => {
-    const withQuestion = report({ findings: [finding({ status: "fixed" }), finding({ id: "f2", severity: "question" })] });
-    expect(dimensionHealth(withQuestion, "correctness")).toBe("attention");
-  });
-  it("sugestão aberta não muda o estado", () => {
-    expect(dimensionHealth(report({ findings: [finding({ severity: "suggestion" })] }), "correctness")).toBe("ok");
-  });
-  it("dimensão pulada e dimensão que não rodou dizem isso, nunca ok", () => {
-    expect(dimensionHealth(report(), "security")).toBe("skipped");
-    expect(dimensionHealth(report(), "performance")).toBe("not_run");
-  });
-  it("dimensão ausente do relatório conta como não rodou", () => {
-    expect(dimensionHealth(report(), "tests")).toBe("not_run");
-  });
-  it("dimensão que rodou com achado não verificado fica em atenção, mesmo sem achado aberto", () => {
-    const withUnverifiedFindings = report({ dimensions: [{ key: "correctness", status: "ran", unverifiedCount: 2, reason: "2 achados acima do teto" }] });
-    expect(dimensionHealth(withUnverifiedFindings, "correctness")).toBe("attention");
+  it.each([
+    ["dimensão que rodou sem achado aberto fica ok", report(), "correctness", "ok"],
+    ["bloqueante aberto deixa a dimensão em problema", report({ findings: [finding()] }), "correctness", "problem"],
+    [
+      "bloqueante corrigido não pesa; dúvida ou melhoria aberta deixa em atenção",
+      report({ findings: [finding({ status: "fixed", commit: "abc1234" }), finding({ id: "f2", severity: "question" })] }), "correctness", "attention",
+    ],
+    ["sugestão aberta não muda o estado", report({ findings: [finding({ severity: "suggestion" })] }), "correctness", "ok"],
+    ["dimensão pulada diz isso, nunca ok", report(), "security", "skipped"],
+    ["dimensão que não rodou diz isso, nunca ok", report(), "performance", "not_run"],
+    ["dimensão ausente do relatório conta como não rodou", report(), "tests", "not_run"],
+    [
+      "dimensão que rodou com achado não verificado fica em atenção, mesmo sem achado aberto",
+      report({ dimensions: [{ key: "correctness", status: "ran", unverifiedCount: 2, reason: "2 achados acima do teto" }] }), "correctness", "attention",
+    ],
+  ] as const)("%s", (_case, read, key, expected) => {
+    expect(dimensionHealth(read, key)).toBe(expected);
   });
 });
 
@@ -54,21 +50,26 @@ describe("veredito da análise", () => {
     expect(analysisVerdict(report({ stage: "analysed" }))).toBe("pending");
   });
   it("apto quando não sobra bloqueante aberto no done", () => {
-    expect(analysisVerdict(report({ dimensions: everyDimensionAccounted(), findings: [finding({ status: "fixed" })] }))).toBe("apt");
+    expect(analysisVerdict(report({ dimensions: everyDimensionAccounted(), findings: [finding({ status: "fixed", commit: "abc1234" })] }))).toBe("apt");
   });
-  it("não apto com bloqueante aberto", () => {
-    expect(analysisVerdict(report({ dimensions: everyDimensionAccounted(), findings: [finding()] }))).toBe("not_apt");
-  });
-  it("dimensão que o relatório não menciona impede o apto, como no estado do painel", () => {
-    expect(analysisVerdict(report({ dimensions: [{ key: "correctness", status: "ran" }] }))).toBe("not_apt");
-  });
-  it("não apto com dimensão que não rodou", () => {
-    expect(analysisVerdict(report({ dimensions: [{ key: "correctness", status: "not_run", reason: "x" }] }))).toBe("not_apt");
-  });
-  it("achado que a frota não verificou impede o apto: um bloqueante possível não some atrás de um apto", () => {
-    const dimensions = everyDimensionAccounted().map((dimension) =>
-      dimension.key === "tests" ? { ...dimension, unverifiedCount: 1, reason: "1 achado sem veredito" } : dimension);
-    expect(analysisVerdict(report({ dimensions }))).toBe("not_apt");
+  it.each([
+    ["não apto com bloqueante aberto", report({ dimensions: everyDimensionAccounted(), findings: [finding()] })],
+    ["dimensão que o relatório não menciona impede o apto, como no estado do painel", report({ dimensions: [{ key: "correctness", status: "ran" }] })],
+    ["não apto com dimensão que não rodou", report({ dimensions: [{ key: "correctness", status: "not_run", reason: "x" }] })],
+    [
+      "achado que a frota não verificou impede o apto: um bloqueante possível não some atrás de um apto",
+      report({
+        dimensions: everyDimensionAccounted().map((dimension) =>
+          dimension.key === "tests" ? { ...dimension, unverifiedCount: 1, reason: "1 achado sem veredito" } : dimension),
+      }),
+    ],
+    ["frota indisponível nunca é apta", report({ stage: "fleet_unavailable", unavailableReason: "CLI antigo" })],
+    [
+      "dúvida aberta no done impede o apto: decisão em aberto é não apto até a pessoa decidir",
+      report({ dimensions: everyDimensionAccounted(), findings: [finding({ severity: "question" })] }),
+    ],
+  ])("%s", (_case, read) => {
+    expect(analysisVerdict(read)).toBe("not_apt");
   });
   it("bloqueante aberto em dimensão fora do diff impede o apto: o juiz pode pôr o achado em qualquer dimensão", () => {
     const dimensions = everyDimensionAccounted().map((dimension) =>
@@ -77,7 +78,15 @@ describe("veredito da análise", () => {
     expect(dimensionHealth(read, "tests")).toBe("problem");
     expect(analysisVerdict(read)).toBe("not_apt");
   });
-  it("frota indisponível nunca é apta", () => {
-    expect(analysisVerdict(report({ stage: "fleet_unavailable", unavailableReason: "CLI antigo" }))).toBe("not_apt");
+});
+
+describe("dimensões sem conferência da análise", () => {
+  it("são as que não rodaram, as ausentes do relatório e as com achado que a frota não verificou; pulada e conferida ficam de fora", () => {
+    const dimensions = everyDimensionAccounted().map((dimension) => {
+      if (dimension.key === "tests") return { ...dimension, unverifiedCount: 2, reason: "2 achados sem veredito" };
+      if (dimension.key === "performance") return { key: "performance" as const, status: "not_run" as const, reason: "agente sem resposta" };
+      return dimension;
+    }).filter((dimension) => dimension.key !== "contracts");
+    expect(uncheckedDimensions(report({ dimensions }))).toEqual(["performance", "contracts", "tests"]);
   });
 });

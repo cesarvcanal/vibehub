@@ -547,11 +547,8 @@ that project has chosen to pre-approve those tools for itself.
 ## Provisioning — automatic now
 
 The `npm i` that used to be a manual prerequisite is part of the connect path:
-`installCardSdkDriver()` plants the driver `.mjs`, plants the PR-analysis fleet script
-(`buildInstallWorkflowScript`: `services/review/prAnalysis.workflow.js` →
-`/root/.vibehub-sdk/workflows/pr-analysis.js`, the file the analysis card hands to the `Workflow`
-tool) **and** runs `buildEnsureSdkScript` — all three in ONE `runScript`, no extra `docker exec` —
-which installs `@anthropic-ai/claude-agent-sdk@<SDK_PACKAGE_VERSION>` into `/root/.vibehub-sdk` **only
+`installCardSdkDriver()` plants the driver `.mjs` **and** runs `buildEnsureSdkScript`, which
+installs `@anthropic-ai/claude-agent-sdk@<SDK_PACKAGE_VERSION>` into `/root/.vibehub-sdk` **only
 when the `.sdk-version` marker disagrees** — the first connect pays one npm install, every one
 after is a marker check. Bumping `SDK_PACKAGE_VERSION` in `driver.ts` is how the SDK is upgraded.
 The runner container is never recreated.

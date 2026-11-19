@@ -1,19 +1,21 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, onTestFinished, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ANALYSIS_DIMENSIONS } from "./analysisModel.js";
 import type { AnalysisReportInput } from "./analysisReport.js";
 
 vi.setConfig({ testTimeout: 30_000 });
 
-let dir = "";
 const SHA = "b".repeat(40);
 const PR = { number: 7, url: "https://github.com/acme/widgets/pull/7", base: "dev", branch: "feat/x" };
 
 async function load() {
   vi.resetModules();
+  const dataDir = await mkdtemp(join(tmpdir(), "vibehub-analysis-report-"));
+  onTestFinished(() => rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }));
   const env = await import("../../config/env.js");
-  env.config.dataDir = dir;
+  env.config.dataDir = dataDir;
   env.config.secretKey = "";
   const registry = await import("../board/registry.js");
   registry.resetForTesting();
@@ -31,13 +33,6 @@ async function load() {
     events: await import("../events/cardEvents.js"),
   };
 }
-
-beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "vibehub-analysis-report-"));
-});
-afterEach(async () => {
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-});
 
 const input = (over: Partial<AnalysisReportInput> = {}): AnalysisReportInput => ({
   headSha: SHA, stage: "analysed", summary: "2 achados", refutedCount: 3,
@@ -86,7 +81,7 @@ describe("relatório da análise pela ferramenta do card", () => {
     expect(cardMessage?.text).toContain("Workflow desligado");
   });
 
-  it("frota indisponível conclui o card, e um novo pedido da mesma PR abre outro card", async () => {
+  it("frota indisponível conclui o card e solta a PR: nenhum card de análise aberto a segura", async () => {
     const { analysisCard, reportService } = await load();
     await reportService.recordAnalysisReport(analysisCard.id, input({ stage: "fleet_unavailable", unavailableReason: "Workflow desligado" }));
     const registry = await import("../board/registry.js");
@@ -106,6 +101,28 @@ describe("relatório da análise pela ferramenta do card", () => {
     await reportService.recordAnalysisReport(analysisCard.id, input({ findings: [blockingFinding] }));
     await expect(reportService.recordAnalysisReport(analysisCard.id, input({ stage: "done", findings: [] }))).rejects.toThrow(/f1/);
     expect((await store.getAnalysis(analysisCard.id))?.stage).toBe("analysed");
+  });
+
+  it("relatório done que acrescenta um achado que o analysed não trouxe é recusado: o done não reescreve a frota", async () => {
+    const { analysisCard, reportService, store } = await load();
+    await reportService.recordAnalysisReport(analysisCard.id, input({ findings: [blockingFinding] }));
+    const addedFinding = { ...blockingFinding, id: "f2", severity: "suggestion" as const };
+    const doneWithAddedFinding = input({ stage: "done", findings: [blockingFinding, addedFinding] });
+    await expect(reportService.recordAnalysisReport(analysisCard.id, doneWithAddedFinding)).rejects.toThrow(/f2/);
+    expect((await store.getAnalysis(analysisCard.id))?.stage).toBe("analysed");
+  });
+
+  it("dois analysed ao mesmo tempo: um é recusado e o gravado é o que foi aceito", async () => {
+    const { analysisCard, reportService, store } = await load();
+    const secondFinding = { ...blockingFinding, id: "f2" };
+    const outcomes = await Promise.allSettled([
+      reportService.recordAnalysisReport(analysisCard.id, input({ findings: [blockingFinding] })),
+      reportService.recordAnalysisReport(analysisCard.id, input({ findings: [secondFinding] })),
+    ]);
+    const acceptedReports = outcomes.flatMap((outcome) => (outcome.status === "fulfilled" ? [outcome.value] : []));
+    const refusals = outcomes.flatMap((outcome) => (outcome.status === "rejected" ? [String(outcome.reason)] : []));
+    expect(refusals).toEqual([expect.stringMatching(/analysed já foi gravado/)]);
+    expect((await store.getAnalysis(analysisCard.id))?.findings).toEqual(acceptedReports[0]!.findings);
   });
 
   it("relatório done que perde o unverifiedCount do analysed é recusado; o mesmo done com ele é gravado", async () => {
@@ -133,8 +150,7 @@ describe("relatório da análise pela ferramenta do card", () => {
   it("relatório done que acrescenta como ran uma dimensão ausente do analysed é recusado: ausente conta como não rodou", async () => {
     const { analysisCard, reportService } = await load();
     await reportService.recordAnalysisReport(analysisCard.id, input());
-    const everyDimensionRan = (["correctness", "security", "performance", "contracts", "tests", "repoRules"] as const)
-      .map((key) => ({ key, status: "ran" as const }));
+    const everyDimensionRan = ANALYSIS_DIMENSIONS.map((key) => ({ key, status: "ran" as const }));
     await expect(reportService.recordAnalysisReport(analysisCard.id, input({ stage: "done", dimensions: everyDimensionRan })))
       .rejects.toThrow(/security/);
   });
@@ -177,7 +193,7 @@ describe("relatório da análise pela ferramenta do card", () => {
     ["outra frota indisponível", { stage: "fleet_unavailable" as const, unavailableReason: "x" }],
     ["um analysed", { stage: "analysed" as const }],
     ["um done", { stage: "done" as const }],
-  ])("%s num card reativado depois da frota indisponível é recusado e o card volta a done: um novo pedido da PR abre outro card", async (_case, lateReport) => {
+  ])("%s num card reativado depois da frota indisponível é recusado e o card volta a done: nenhum card de análise aberto segura a PR", async (_case, lateReport) => {
     const { analysisCard, reportService, store } = await load();
     await reportService.recordAnalysisReport(analysisCard.id, input({ stage: "fleet_unavailable", unavailableReason: "Workflow desligado" }));
     const registry = await import("../board/registry.js");

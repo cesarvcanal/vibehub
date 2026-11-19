@@ -13,7 +13,7 @@ import { isBusy } from "../services/maestro/maestro.js";
 import { activeReviewFor, getReview, listReviewsFollowedBy, listReviewsForCards, newest } from "../services/review/store.js";
 import { canMergeReview, isReviewClosed, type Review } from "../services/review/model.js";
 import { getAnalysis } from "../services/review/analysisStore.js";
-import { ANALYSIS_DIMENSIONS, analysisVerdict, dimensionHealth } from "../services/review/analysisModel.js";
+import { ANALYSIS_DIMENSIONS, analysisVerdict, dimensionHealth, uncheckedDimensions } from "../services/review/analysisModel.js";
 import { sendError, type ErrorStatusRule } from "./httpError.js";
 
 /**
@@ -118,7 +118,7 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
     const analysis = await getAnalysis(req.params.id);
     if (!analysis) return await reply.send({ analysis: null });
     const health = Object.fromEntries(ANALYSIS_DIMENSIONS.map((dimension) => [dimension, dimensionHealth(analysis, dimension)]));
-    return await reply.send({ analysis, health, verdict: analysisVerdict(analysis) });
+    return await reply.send({ analysis, health, verdict: analysisVerdict(analysis), uncheckedDimensions: uncheckedDimensions(analysis) });
   });
 
   app.post<{ Params: { id: string }; Body: StartBody }>(

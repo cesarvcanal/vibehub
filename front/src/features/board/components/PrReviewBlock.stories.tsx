@@ -3,7 +3,9 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useQueryClient } from "@tanstack/react-query";
 import { PrReviewBlock } from "@/features/board/components/PrReviewBlock";
 import { cardAnalysisKey } from "@/features/board/lib/analysis";
-import { ANALYSIS_DIMENSIONS, type AnalysisReport, type CardAnalysisResponse, type CardPr } from "@/api/types";
+import {
+  ANALYSIS_DIMENSIONS, type AnalysisFinding, type AnalysisReadModel, type AnalysisReport, type CardAnalysisResponse, type CardPr,
+} from "@/api/types";
 
 /** The PR line above the composer, in every state its review can be in while the PR is open (a merged one leaves). */
 const PR: CardPr = {
@@ -43,17 +45,23 @@ function SeededAnalysis({ answer, children }: { answer: CardAnalysisResponse; ch
   return ready ? <>{children}</> : null;
 }
 
+const openFinding: AnalysisFinding = {
+  id: "f1", severity: "blocking", dimension: "tests", status: "open", title: "t", problem: "p", fix: "x",
+  proof: { kind: "failing_test", ref: "a.test.ts" },
+};
+
+const fixedFinding: AnalysisFinding = { ...openFinding, status: "fixed", commit: "abc1234" };
+
 const analysisReport = (over: Partial<AnalysisReport> = {}): AnalysisReport => ({
   cardId: "c1", prUrl: PR.url, prNumber: PR.number, analysedSha: "b".repeat(40), stage: "done", summary: "s", refutedCount: 2, updatedAt: 1,
   dimensions: ANALYSIS_DIMENSIONS.map((key) => ({ key, status: "ran" as const })),
-  findings: [{
-    id: "f1", severity: "blocking", dimension: "tests", status: "fixed", commit: "abc1234", title: "t", problem: "p", fix: "x",
-    proof: { kind: "failing_test", ref: "a.test.ts" },
-  }],
+  findings: [fixedFinding],
   ...over,
 });
 
-const healthOk = { correctness: "ok", security: "ok", performance: "ok", contracts: "ok", tests: "ok", repoRules: "ok" } as const;
+const healthOk: AnalysisReadModel["health"] = {
+  correctness: "ok", security: "ok", performance: "ok", contracts: "ok", tests: "ok", repoRules: "ok",
+};
 
 const analysisStory = (name: string, answer: CardAnalysisResponse, cardWorking = false): Story => ({
   name,
@@ -64,18 +72,21 @@ const analysisStory = (name: string, answer: CardAnalysisResponse, cardWorking =
 export const AnaliseAnalisando = analysisStory("Análise · a frota está rodando", { analysis: null }, true);
 export const AnaliseSemRelatorio = analysisStory("Análise · card parou sem relatório", { analysis: null });
 export const AnaliseCorrigindo = analysisStory("Análise · depois do juiz, corrigindo", {
-  analysis: analysisReport({ stage: "analysed", findings: [{ ...analysisReport().findings[0]!, status: "open", commit: undefined }] }),
+  analysis: analysisReport({ stage: "analysed", findings: [openFinding] }),
   health: { ...healthOk, tests: "problem" },
   verdict: "pending",
+  uncheckedDimensions: [],
 }, true);
-export const AnaliseApta = analysisStory("Análise · apta", { analysis: analysisReport(), health: healthOk, verdict: "apt" });
+export const AnaliseApta = analysisStory("Análise · apta", { analysis: analysisReport(), health: healthOk, verdict: "apt", uncheckedDimensions: [] });
 export const AnaliseNaoAptaSemConferencia = analysisStory("Análise · não apta, dimensão sem conferência", {
   analysis: analysisReport({ dimensions: ANALYSIS_DIMENSIONS.map((key) => ({ key, status: key === "security" ? "not_run" as const : "ran" as const })) }),
   health: { ...healthOk, security: "not_run" },
   verdict: "not_apt",
+  uncheckedDimensions: ["security"],
 });
 export const AnaliseFrotaIndisponivel = analysisStory("Análise · frota indisponível", {
   analysis: analysisReport({ stage: "fleet_unavailable", dimensions: [], findings: [], refutedCount: 0, unavailableReason: "sem Workflow" }),
   health: { correctness: "not_run", security: "not_run", performance: "not_run", contracts: "not_run", tests: "not_run", repoRules: "not_run" },
   verdict: "not_apt",
+  uncheckedDimensions: [...ANALYSIS_DIMENSIONS],
 });

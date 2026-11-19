@@ -15,6 +15,7 @@ import { sendToTerminal, SEND_READY_WAIT_MS } from "../maestro/maestro.js";
 import { logger } from "../../utils/logger.js";
 import { getSettings, type Settings } from "../settings/settings.js";
 import { findActiveAnalysisCard } from "./analysisReport.js";
+import { plantPrAnalysisWorkflow } from "./analysisWorkflow.js";
 import { analysisPrompt } from "./prompts.js";
 import { activeReviewForPr } from "./store.js";
 
@@ -230,8 +231,9 @@ export async function startAnalysis(input: {
       await purgeCard(card.id, by);
       throw err;
     }
-    const prompt = deliverAnalysisPrompt(card, pull, reviewerUser, coauthorTrailer).catch((err: unknown) =>
-      concludeUnstartedAnalysis(card, pull.number, (err as Error).message));
+    const prompt = plantPrAnalysisWorkflow()
+      .then(() => deliverAnalysisPrompt(card, pull, reviewerUser, coauthorTrailer))
+      .catch((err: unknown) => concludeUnstartedAnalysis(card, pull.number, (err as Error).message));
     return { card, created: true, prompt };
   });
 }

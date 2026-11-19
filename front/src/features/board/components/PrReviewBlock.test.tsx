@@ -37,25 +37,24 @@ function fullReview(overrides: Partial<Review> = {}): Review {
   };
 }
 
-function analysisDone(verdict: AnalysisReadModel["verdict"]): AnalysisReadModel {
-  return {
-    analysis: {
-      cardId: "c1", prUrl: PR.url, prNumber: 553, analysedSha: "b".repeat(40), stage: "done", summary: "s", refutedCount: 0, updatedAt: 1,
-      dimensions: ANALYSIS_DIMENSIONS.map((key) => ({ key, status: "ran" as const })),
-      findings: [{
-        id: "f1", severity: "blocking", title: "t", problem: "p", fix: "x", proof: { kind: "scenario", ref: "a.ts:1" },
-        dimension: "tests", status: "fixed", commit: "abc1234",
-      }],
-    },
-    health: { correctness: "ok", security: "ok", performance: "ok", contracts: "ok", tests: "ok", repoRules: "ok" },
-    verdict,
-  };
-}
+const aptAnalysis: AnalysisReadModel = {
+  analysis: {
+    cardId: "c1", prUrl: PR.url, prNumber: 553, analysedSha: "b".repeat(40), stage: "done", summary: "s", refutedCount: 0, updatedAt: 1,
+    dimensions: ANALYSIS_DIMENSIONS.map((key) => ({ key, status: "ran" as const })),
+    findings: [{
+      id: "f1", severity: "blocking", title: "t", problem: "p", fix: "x", proof: { kind: "scenario", ref: "a.ts:1" },
+      dimension: "tests", status: "fixed", commit: "abc1234",
+    }],
+  },
+  health: { correctness: "ok", security: "ok", performance: "ok", contracts: "ok", tests: "ok", repoRules: "ok" },
+  verdict: "apt",
+  uncheckedDimensions: [],
+};
 
 /** What the server answers to the live read of the card's review; tests change it between polls. */
 let live: ReviewResponse;
 let reviewGets = 0;
-const analysisServer: { answer: CardAnalysisResponse; reads: number } = { answer: { analysis: null }, reads: 0 };
+const analysisServer: { answer: CardAnalysisResponse | Promise<CardAnalysisResponse>; reads: number } = { answer: { analysis: null }, reads: 0 };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -108,14 +107,32 @@ describe("PrReviewBlock", () => {
     expect(screen.queryByRole("button", { name: "Pedir revisão" })).toBeNull();
   });
 
-  it("card de análise parado e sem relatório diz sem relatório, nunca analisando para sempre", async () => {
+  it("card de análise parado diz carregando enquanto a leitura não chega, e sem relatório só depois que ela diz que não há", async () => {
+    const answerRead: { current?: (answer: CardAnalysisResponse) => void } = {};
+    analysisServer.answer = new Promise<CardAnalysisResponse>((resolve) => {
+      answerRead.current = resolve;
+    });
     renderApp(<PrReviewBlocks card={{ id: "c1", prs: [PR], pushBranch: PR.branch, status: "waiting" }} onOpenPanel={() => {}} />);
 
+    expect(await screen.findByText("Carregando")).toBeInTheDocument();
+    expect(screen.queryByText("sem relatório")).toBeNull();
+
+    act(() => answerRead.current?.({ analysis: null }));
+
     expect(await screen.findByText("sem relatório")).toBeInTheDocument();
+    expect(screen.queryByText("Carregando")).toBeNull();
+  });
+
+  it("leitura da análise que falhou vira pílula de erro, nunca sem relatório", async () => {
+    analysisServer.answer = Promise.reject(new Error("boom"));
+    renderApp(<PrReviewBlocks card={{ id: "c1", prs: [PR], pushBranch: PR.branch, status: "waiting" }} onOpenPanel={() => {}} />);
+
+    expect(await screen.findByText("erro ao ler a análise")).toBeInTheDocument();
+    expect(screen.queryByText("sem relatório")).toBeNull();
   });
 
   it("análise concluída e apta: a pílula conta os corrigidos e a linha abre o painel da análise", async () => {
-    analysisServer.answer = analysisDone("apt");
+    analysisServer.answer = aptAnalysis;
     const onOpenPanel = vi.fn();
     renderApp(<PrReviewBlocks card={{ id: "c1", prs: [PR], pushBranch: PR.branch, status: "waiting" }} onOpenPanel={onOpenPanel} />);
 
@@ -130,7 +147,7 @@ describe("PrReviewBlock", () => {
     expect(await screen.findByText("analisando…")).toBeInTheDocument();
     const readsWhileWorking = analysisServer.reads;
 
-    analysisServer.answer = analysisDone("apt");
+    analysisServer.answer = aptAnalysis;
     view.rerender(<PrReviewBlocks card={{ ...card, status: "waiting" }} onOpenPanel={() => {}} />);
 
     expect(await screen.findByText("apto · 1 corrigido")).toBeInTheDocument();

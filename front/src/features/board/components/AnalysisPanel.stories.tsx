@@ -3,22 +3,24 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useQueryClient } from "@tanstack/react-query";
 import { AnalysisPanel } from "@/features/board/components/AnalysisPanel";
 import { cardAnalysisKey } from "@/features/board/lib/analysis";
-import type { AnalysisFinding, AnalysisReadModel, AnalysisReport, CardAnalysisResponse, DimensionHealth } from "@/api/types";
+import { ANALYSIS_DIMENSIONS, type AnalysisFinding, type AnalysisReadModel, type AnalysisReport, type CardAnalysisResponse } from "@/api/types";
 
 const CARD_ID = "c1";
 
-const ALL_OK: Record<AnalysisReport["dimensions"][number]["key"], DimensionHealth> = {
+const ALL_OK: AnalysisReadModel["health"] = {
   correctness: "ok", security: "ok", performance: "ok", contracts: "ok", tests: "ok", repoRules: "ok",
 };
 
-const fixedBlocking: AnalysisFinding = {
-  id: "f1", severity: "blocking", dimension: "correctness", status: "fixed", commit: "9f3e2c1",
+const openSessionExpiry: AnalysisFinding = {
+  id: "f1", severity: "blocking", dimension: "correctness", status: "open",
   title: "Sessão SSO não expira junto com o token", problem: "Quem perde o acesso no provedor continua logado no vibehub.",
   file: "back/src/auth/sso.ts", line: 84, proof: { kind: "failing_test", ref: "sso.test.ts" }, fix: "Gravar expiresAt na sessão e conferir em cada request.",
 };
 
+const fixedBlocking: AnalysisFinding = { ...openSessionExpiry, status: "fixed", commit: "9f3e2c1" };
+
 const openBlocking: AnalysisFinding = {
-  ...fixedBlocking, id: "f2", status: "open", commit: undefined, dimension: "security",
+  id: "f2", severity: "blocking", dimension: "security", status: "open",
   title: "Callback do SSO aceita state reaproveitado", problem: "Um link de login interceptado pode ser usado de novo.",
   file: "back/src/auth/sso.ts", line: 132, proof: { kind: "scenario", ref: "sso.ts:132", detail: "o mesmo state duas vezes entra duas vezes" },
   fix: "Apagar o state na primeira leitura.",
@@ -44,7 +46,8 @@ const report = (over: Partial<AnalysisReport> = {}): AnalysisReport => ({
 
 const readModel = (
   analysis: AnalysisReport, verdict: AnalysisReadModel["verdict"], health: Partial<AnalysisReadModel["health"]> = {},
-): AnalysisReadModel => ({ analysis, verdict, health: { ...ALL_OK, repoRules: "skipped", ...health } });
+  uncheckedDimensions: AnalysisReadModel["uncheckedDimensions"] = [],
+): AnalysisReadModel => ({ analysis, verdict, health: { ...ALL_OK, repoRules: "skipped", ...health }, uncheckedDimensions });
 
 function SeededAnalysis({ answer, children }: { answer: CardAnalysisResponse; children: React.ReactNode }) {
   const client = useQueryClient();
@@ -74,7 +77,7 @@ export default meta;
 type Story = StoryObj<typeof AnalysisPanel>;
 
 export const Apto: Story = {
-  parameters: { analysis: readModel(report(), "apt", { security: "attention" }) },
+  parameters: { analysis: readModel(report({ findings: [fixedBlocking] }), "apt") },
 };
 
 export const NaoAptoComBloqueante: Story = {
@@ -99,6 +102,7 @@ export const NaoAptoSemConferencia: Story = {
       }),
       "not_apt",
       { security: "not_run", tests: "attention" },
+      ["security", "tests"],
     ),
   },
 };
@@ -107,7 +111,7 @@ export const Corrigindo: Story = {
   name: "Depois do juiz · corrigindo",
   parameters: {
     analysis: readModel(
-      report({ stage: "analysed", findings: [{ ...fixedBlocking, status: "open", commit: undefined }, openQuestion] }),
+      report({ stage: "analysed", findings: [openSessionExpiry, openQuestion] }),
       "pending",
       { correctness: "problem", security: "attention" },
     ),
@@ -121,6 +125,7 @@ export const FrotaIndisponivel: Story = {
       report({ stage: "fleet_unavailable", dimensions: [], findings: [], refutedCount: 0, unavailableReason: "a ferramenta Workflow não existe neste CLI" }),
       "not_apt",
       { correctness: "not_run", security: "not_run", performance: "not_run", contracts: "not_run", tests: "not_run", repoRules: "not_run" },
+      [...ANALYSIS_DIMENSIONS],
     ),
   },
 };

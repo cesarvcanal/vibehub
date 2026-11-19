@@ -72,6 +72,10 @@ vi.mock("@/features/board/components/ReviewPanel", () => ({
   ),
 }));
 
+vi.mock("@/features/board/components/AnalysisPanel", () => ({
+  AnalysisPanel: ({ cardId }: { cardId: string }) => <div data-testid="analysis-panel" data-card={cardId} />,
+}));
+
 // The native (SDK) chat also owns a websocket and has its own test file; here the only question is
 // WHICH of the two chats got mounted — the bug was the legacy one flashing in on a beta card.
 // The upload handler it was given is kept, so a test can attach an image the way its composer does.
@@ -81,14 +85,16 @@ vi.mock("@/features/board/components/SdkChatView", () => ({
     cardId,
     footer,
     onUploadImage,
+    analysisCard,
   }: {
     cardId: string;
     footer?: ReactNode;
     onUploadImage?: (file: File) => Promise<string | null>;
+    analysisCard?: boolean;
   }) => {
     sdkChatUpload.current = onUploadImage;
     return (
-      <div data-testid="sdk-chat" data-card={cardId}>
+      <div data-testid="sdk-chat" data-card={cardId} data-analysis-card={String(analysisCard === true)}>
         {footer}
         <div data-testid="sdk-composer-stub" />
       </div>
@@ -1587,6 +1593,34 @@ describe("CardTerminalView — the PR blocks above the composer", () => {
     const block = await screen.findByTestId("pr-review-block");
     expect(block.nextElementSibling).toBe(screen.getByTestId("sdk-composer-stub"));
     expect(block.closest("[data-testid=sdk-chat]")).not.toBeNull();
+  });
+
+  it("no card de análise, clicar na linha da PR abre o painel da análise, não o da revisão", async () => {
+    const base = mockGet.getMockImplementation();
+    mockGet.mockImplementation((url: string, ...rest: unknown[]) =>
+      url === "/cards/c1/analysis" ? Promise.resolve({ analysis: null }) : (base as (url: string, ...rest: unknown[]) => Promise<unknown>)(url, ...rest),
+    );
+    renderWithCache([card({ openedAt: 10, prs: [PR], pushBranch: PR.branch })]);
+
+    await userEvent.click(within(await screen.findByTestId("pr-review-block")).getByRole("button", { name: /PR #553/ }));
+
+    expect(await screen.findByTestId("analysis-panel")).toHaveAttribute("data-card", "c1");
+    expect(screen.queryByTestId("review-panel")).toBeNull();
+  });
+
+  it.each([
+    ["card de análise liga", { pushBranch: PR.branch }, "true"],
+    ["card comum não liga", {}, "false"],
+  ])("no chat nativo, o %s a releitura da análise pelo chat", async (_scenario, analysisFields, expected) => {
+    const base = mockGet.getMockImplementation();
+    mockGet.mockImplementation((url: string, ...rest: unknown[]) => {
+      if (url === "/features") return Promise.resolve({ sdkChat: true });
+      if (url === "/cards/c1/analysis") return Promise.resolve({ analysis: null });
+      return (base as (url: string, ...rest: unknown[]) => Promise<unknown>)(url, ...rest);
+    });
+    renderWithCache([card({ openedAt: 10, prs: [PR], ...analysisFields })], testQueryClient(), "chat");
+
+    expect(await screen.findByTestId("sdk-chat")).toHaveAttribute("data-analysis-card", expected);
   });
 
   it("a card that never opened a PR has no block", async () => {

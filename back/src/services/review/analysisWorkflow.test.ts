@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { ANALYSIS_DIMENSIONS } from "./analysisModel.js";
-import { prAnalysisWorkflowSource } from "./analysisWorkflow.js";
-import { analysisFinding, analysisReportInput } from "../../mcp/tools.js";
+import { ANALYSIS_DIMENSIONS, ANALYSIS_SEVERITIES } from "./analysisModel.js";
+import { PR_ANALYSIS_WORKFLOW_PATH, buildPlantPrAnalysisWorkflowScript, readPrAnalysisWorkflowSource } from "./analysisWorkflow.js";
+import { analysisFindingFields, analysisReportInput } from "../../mcp/tools.js";
 
 type AgentOpts = { label?: string; phase?: string; model?: string; effort?: string; schema?: object };
 type AgentFake = (prompt: string, opts: AgentOpts) => Promise<unknown>;
@@ -36,7 +36,7 @@ async function runFleet(agentFake: AgentFake, fleetArgs: unknown = VALID_ARGS) {
         return null;
       }
     }));
-  const scriptBody = prAnalysisWorkflowSource().replace("export const meta =", "const meta =");
+  const scriptBody = readPrAnalysisWorkflowSource().replace("export const meta =", "const meta =");
   const script = new AsyncFunction("agent", "parallel", "pipeline", "phase", "log", "args", scriptBody);
   const fleetResult = await script(
     agent, parallel, pipeline, () => undefined, (message: string) => logs.push(message),
@@ -59,6 +59,13 @@ const scenarioFinding = (title: string) => ({
   title, problem: "p", file: "a.ts", line: 1, proof: { kind: "scenario", ref: "a.ts:1", detail: "d" }, fix: "x", suggestedSeverity: "blocking",
 });
 
+const confirmOneFindingUpToJudge: AgentFake = async (_prompt, opts) => {
+  if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);
+  if (opts.phase === "Revisão") return { findings: [scenarioFinding("x")] };
+  if (opts.phase === "Verificação") return { confirmed: true, evidence: "e" };
+  return { findings: [] };
+};
+
 describe("frota da análise de PR", () => {
   it("as dimensões da frota são as do modelo do servidor: uma só no modelo nunca rodaria, uma só no script o zod recusaria", async () => {
     const { calls } = await runFleet(async (_prompt, opts) => (opts.phase === "Contexto" ? brief(ALL_APPLY) : { findings: [] }));
@@ -68,6 +75,17 @@ describe("frota da análise de PR", () => {
     expect(briefSchema.properties.dimensions.items.properties.key.enum).toEqual([...ANALYSIS_DIMENSIONS]);
     const reviewedKeys = calls.filter((call) => call.opts.phase === "Revisão").map((call) => call.opts.label?.replace("revisão: ", ""));
     expect(reviewedKeys.sort()).toEqual([...ANALYSIS_DIMENSIONS].sort());
+  });
+
+  it("as severidades e os tipos de prova da frota são os da ferramenta do relatório: um valor só no script o zod recusaria no passo 3", async () => {
+    const { calls } = await runFleet(confirmOneFindingUpToJudge);
+    const judgeSchema = calls.find((call) => call.opts.phase === "Julgamento")!.opts.schema as {
+      properties: { findings: { items: { properties: { severity: { enum: string[] }; proof: { properties: { kind: { enum: string[] } } } } } } };
+    };
+    const judgedFinding = judgeSchema.properties.findings.items.properties;
+    const toolProof = analysisFindingFields.shape.proof.unwrap().shape;
+    expect(judgedFinding.severity.enum).toEqual([...ANALYSIS_SEVERITIES]);
+    expect(judgedFinding.proof.properties.kind.enum).toEqual([...toolProof.kind.options]);
   });
 
   it("contexto e juiz em Opus; revisão e verificação em Sonnet", async () => {
@@ -175,6 +193,18 @@ describe("frota da análise de PR", () => {
     );
   });
 
+  it("um achado só acima do teto sai no singular no motivo que o painel mostra", async () => {
+    const { fleetResult } = await runFleet(async (_prompt, opts) => {
+      if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);
+      if (opts.phase === "Revisão") return { findings: Array.from({ length: 16 }, (_, index) => scenarioFinding(`a${index}`)) };
+      if (opts.phase === "Verificação") return { confirmed: false, evidence: "e" };
+      return { findings: [] };
+    });
+    expect(fleetResult.dimensions).toContainEqual(
+      expect.objectContaining({ key: "correctness", unverifiedCount: 1, reason: "1 achado acima do teto de 15 não foi verificado" }),
+    );
+  });
+
   it("o verificador roda só o teste filtrado pelo caso, nunca o arquivo inteiro nem a suíte", async () => {
     const { calls } = await runFleet(async (_prompt, opts) => {
       if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);
@@ -188,12 +218,7 @@ describe("frota da análise de PR", () => {
   });
 
   it("o schema do juiz exige o fix que a ferramenta do relatório exige", async () => {
-    const { calls } = await runFleet(async (_prompt, opts) => {
-      if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);
-      if (opts.phase === "Revisão") return { findings: [scenarioFinding("x")] };
-      if (opts.phase === "Verificação") return { confirmed: true, evidence: "e" };
-      return { findings: [] };
-    });
+    const { calls } = await runFleet(confirmOneFindingUpToJudge);
     const judgeSchema = calls.find((call) => call.opts.phase === "Julgamento")!.opts.schema as {
       properties: { findings: { items: { required: string[]; properties: Record<string, object> } } };
     };
@@ -202,12 +227,7 @@ describe("frota da análise de PR", () => {
   });
 
   it("title vazio e line que não é inteiro positivo não passam no schema do juiz, como não passam no zod da ferramenta", async () => {
-    const { calls } = await runFleet(async (_prompt, opts) => {
-      if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);
-      if (opts.phase === "Revisão") return { findings: [scenarioFinding("x")] };
-      if (opts.phase === "Verificação") return { confirmed: true, evidence: "e" };
-      return { findings: [] };
-    });
+    const { calls } = await runFleet(confirmOneFindingUpToJudge);
     const judgeSchema = calls.find((call) => call.opts.phase === "Julgamento")!.opts.schema as {
       properties: { findings: { items: { properties: Record<string, object> } } };
     };
@@ -217,17 +237,14 @@ describe("frota da análise de PR", () => {
   });
 
   it("os textos do achado no schema do juiz têm o mesmo limite de tamanho do zod da ferramenta: o achado julgado não quebra no passo 3", async () => {
-    const { calls } = await runFleet(async (_prompt, opts) => {
-      if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);
-      if (opts.phase === "Revisão") return { findings: [scenarioFinding("x")] };
-      if (opts.phase === "Verificação") return { confirmed: true, evidence: "e" };
-      return { findings: [] };
-    });
+    const { calls } = await runFleet(confirmOneFindingUpToJudge);
     const judgeSchema = calls.find((call) => call.opts.phase === "Julgamento")!.opts.schema as {
-      properties: { findings: { items: { properties: Record<string, { properties?: Record<string, object> }> } } };
+      properties: {
+        findings: { items: { properties: { title: object; problem: object; fix: object; file: object; proof: { properties: object } } } };
+      };
     };
     const fleetFinding = judgeSchema.properties.findings.items.properties;
-    const toolFinding = analysisFinding.innerType().shape;
+    const toolFinding = analysisFindingFields.shape;
     const toolProof = toolFinding.proof.unwrap().shape;
     expect(fleetFinding.title).toMatchObject({ maxLength: toolFinding.title.maxLength });
     expect(fleetFinding.problem).toMatchObject({ maxLength: toolFinding.problem.unwrap().maxLength });
@@ -240,12 +257,7 @@ describe("frota da análise de PR", () => {
   });
 
   it("o resumo, o motivo da dimensão pulada e a lista de achados da frota têm os limites do zod do relatório: o passo 3 não recusa o que a frota devolveu", async () => {
-    const { calls } = await runFleet(async (_prompt, opts) => {
-      if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);
-      if (opts.phase === "Revisão") return { findings: [scenarioFinding("x")] };
-      if (opts.phase === "Verificação") return { confirmed: true, evidence: "e" };
-      return { findings: [] };
-    });
+    const { calls } = await runFleet(confirmOneFindingUpToJudge);
     const briefSchema = calls.find((call) => call.opts.phase === "Contexto")!.opts.schema as {
       properties: { summary: object; dimensions: { items: { properties: { reason: object } } } };
     };
@@ -262,12 +274,7 @@ describe("frota da análise de PR", () => {
   });
 
   it("problem vazio ou só com espaços não passa no schema do juiz, como não passa no trim da ferramenta", async () => {
-    const { calls } = await runFleet(async (_prompt, opts) => {
-      if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);
-      if (opts.phase === "Revisão") return { findings: [scenarioFinding("x")] };
-      if (opts.phase === "Verificação") return { confirmed: true, evidence: "e" };
-      return { findings: [] };
-    });
+    const { calls } = await runFleet(confirmOneFindingUpToJudge);
     const judgeSchema = calls.find((call) => call.opts.phase === "Julgamento")!.opts.schema as {
       properties: { findings: { items: { properties: { problem: { minLength?: number; pattern?: string } } } } };
     };
@@ -277,12 +284,7 @@ describe("frota da análise de PR", () => {
   });
 
   it("fix só com espaços não passa no schema do juiz, como não passa no trim da ferramenta", async () => {
-    const { calls } = await runFleet(async (_prompt, opts) => {
-      if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);
-      if (opts.phase === "Revisão") return { findings: [scenarioFinding("x")] };
-      if (opts.phase === "Verificação") return { confirmed: true, evidence: "e" };
-      return { findings: [] };
-    });
+    const { calls } = await runFleet(confirmOneFindingUpToJudge);
     const judgeSchema = calls.find((call) => call.opts.phase === "Julgamento")!.opts.schema as {
       properties: { findings: { items: { properties: { fix: { pattern: string } } } } };
     };
@@ -326,5 +328,15 @@ describe("frota da análise de PR", () => {
       if (opts.phase === "Verificação") return { confirmed: true, evidence: "e" };
       return null;
     })).rejects.toThrow(/juiz/);
+  });
+});
+
+describe("plantio do script da frota no runner", () => {
+  it("grava no caminho que o prompt da análise usa, por heredoc sem expansão e troca atômica", () => {
+    const script = buildPlantPrAnalysisWorkflowScript("vibehub-runner", "export const meta = { name: 'x' }\nreturn $HOME");
+    expect(script).toContain("docker exec -i 'vibehub-runner' bash -s");
+    expect(script).toContain("<<'VIBEHUB_PR_ANALYSIS_WORKFLOW_SRC'");
+    expect(script).toContain("return $HOME");
+    expect(script).toContain(`mv -f "$tmp" '${PR_ANALYSIS_WORKFLOW_PATH}'`);
   });
 });

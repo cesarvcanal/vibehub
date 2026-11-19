@@ -5,11 +5,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { EXEC_TIMEOUT_MS, hostExecutor, type HostExecutor } from "../../runtime/host.js";
 import type { Card, Project } from "../board/registry.js";
-import { PR_ANALYSIS_WORKFLOW_PATH } from "../review/analysisWorkflow.js";
 import {
   buildSdkDriverCommandLine,
   buildInstallDriverScript,
-  buildInstallWorkflowScript,
   buildEnsureSdkScript,
   installCardSdkDriver,
   sdkDriverCommand,
@@ -189,16 +187,6 @@ describe("buildInstallDriverScript", () => {
   });
 });
 
-describe("buildInstallWorkflowScript — o script da análise de PR plantado no runner", () => {
-  it("grava no caminho que o prompt da análise usa, por heredoc sem expansão e troca atômica", () => {
-    const script = buildInstallWorkflowScript("vibehub-runner", "export const meta = { name: 'x' }\nreturn $HOME");
-    expect(script).toContain(PR_ANALYSIS_WORKFLOW_PATH);
-    expect(script).toContain("<<'VIBEHUB_PR_ANALYSIS_WORKFLOW_SRC'");
-    expect(script).toContain("return $HOME");
-    expect(script).toContain(`mv -f "$tmp" '${PR_ANALYSIS_WORKFLOW_PATH}'`);
-  });
-});
-
 describe("installCardSdkDriver — uma instalação por vez (single-flight)", () => {
   let runScript: ReturnType<typeof vi.fn>;
   /** Releases every script still parked (each one waits for the test, like a slow runner). */
@@ -236,12 +224,13 @@ describe("installCardSdkDriver — uma instalação por vez (single-flight)", ()
     expect(script.indexOf(SDK_DRIVER_PATH)).toBeLessThan(script.indexOf("npm install"));
   });
 
-  it("o script da análise de PR vai no mesmo exec do driver, sem execução a mais", async () => {
+  it("o connect do chat abre só os docker exec do driver e do SDK: o script da análise de PR não viaja em todo card", async () => {
     const run = installCardSdkDriver();
     await drain();
     await run;
-    expect(runScript).toHaveBeenCalledTimes(1);
-    expect(String(runScript.mock.calls[0]![0])).toContain(PR_ANALYSIS_WORKFLOW_PATH);
+    const script = String(runScript.mock.calls[0]![0]);
+    expect(script.match(/docker exec -i/g)).toHaveLength(2);
+    expect(script).not.toContain("pr-analysis.js");
   });
 
   it("o exec único leva o orçamento dos DOIS passos (antes cada um tinha o seu EXEC_TIMEOUT_MS)", async () => {

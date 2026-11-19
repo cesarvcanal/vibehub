@@ -15,6 +15,7 @@ import { LinkifiedText, Markdown } from "@/features/board/components/ChatView";
 import { resetDraftsForTesting } from "@/features/board/components/TerminalComposer";
 import { ME_KEY } from "@/providers/auth";
 import { ACTION_POLL_MS, fleetPropsEqual } from "@/features/board/components/SdkDetail";
+import { useCardAnalysis } from "@/features/board/lib/useCardAnalysis";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -4191,6 +4192,118 @@ describe("SdkChatView — o custo do transcript", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("SdkChatView — a análise do card relida pelo resultado ao vivo da ferramenta de relatório", () => {
+  const REPORT_TOOL = "mcp__vibehub__vibehub_analysis_report";
+
+  beforeEach(() => {
+    vi.mocked(get).mockImplementation(((url: string) =>
+      url === "/cards/c1/analysis"
+        ? Promise.resolve({ analysis: null })
+        : Promise.resolve({ available: false, proofread: false, language: null })) as never);
+  });
+
+  afterEach(() => {
+    vi.mocked(get).mockImplementation((() => Promise.resolve({ available: false, proofread: false, language: null })) as never);
+  });
+
+  function AnalysisReader() {
+    useCardAnalysis("c1", { enabled: true });
+    return null;
+  }
+
+  const analysisReads = () => vi.mocked(get).mock.calls.filter(([url]) => url === "/cards/c1/analysis").length;
+
+  async function settle(): Promise<void> {
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+  }
+
+  function deliverReport(ws: FakeSocket, toolUseId: string): void {
+    ws.deliver({ type: "tool_use", id: toolUseId, name: REPORT_TOOL, input: {} });
+    ws.deliver({ type: "tool_result", id: toolUseId, toolResult: {} });
+  }
+
+  it("no card de análise o relatório do replay não relê, o resultado ao vivo relê uma vez e o streaming depois dele não relê de novo", async () => {
+    renderSdkChat({ analysisCard: true, footer: <AnalysisReader /> });
+    const ws = await socket();
+    ws.accept();
+    await waitFor(() => expect(analysisReads()).toBe(1));
+
+    deliverReport(ws, "r1");
+    ws.deliver({ type: "ready" });
+    await settle();
+    expect(analysisReads()).toBe(1);
+
+    deliverReport(ws, "r2");
+    await waitFor(() => expect(analysisReads()).toBe(2));
+
+    ws.deliver({ type: "assistant_delta", text: "Relatório " });
+    ws.deliver({ type: "assistant_delta", text: "gravado." });
+    await settle();
+    expect(analysisReads()).toBe(2);
+  });
+
+  it("a reconexão que reenvia o relatório no replay não relê a análise de novo", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+    try {
+      renderSdkChat({ analysisCard: true, footer: <AnalysisReader /> });
+      const first = await socket();
+      first.accept();
+      first.deliver({ type: "ready" });
+      deliverReport(first, "r1");
+      await waitFor(() => expect(analysisReads()).toBe(2));
+
+      act(() => { first.readyState = 3; first.onclose?.(); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(RECONNECT_MAX_MS); });
+      const second = FakeSocket.instances[1] as FakeSocket;
+      second.accept();
+      deliverReport(second, "r1");
+      second.deliver({ type: "ready" });
+      await settle();
+
+      expect(analysisReads()).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a reconexão no meio da chamada do relatório relê a análise quando o resultado chega", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+    try {
+      renderSdkChat({ analysisCard: true, footer: <AnalysisReader /> });
+      const first = await socket();
+      first.accept();
+      first.deliver({ type: "ready" });
+      first.deliver({ type: "tool_use", id: "r1", name: REPORT_TOOL, input: {} });
+      await waitFor(() => expect(analysisReads()).toBe(1));
+
+      act(() => { first.readyState = 3; first.onclose?.(); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(RECONNECT_MAX_MS); });
+      const second = FakeSocket.instances[1] as FakeSocket;
+      second.accept();
+      second.deliver({ type: "tool_use", id: "r1", name: REPORT_TOOL, input: {} });
+      second.deliver({ type: "ready" });
+      second.deliver({ type: "tool_result", id: "r1", toolResult: {} });
+
+      await waitFor(() => expect(analysisReads()).toBe(2));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fora de um card de análise o resultado ao vivo da ferramenta não relê nada", async () => {
+    renderSdkChat({ footer: <AnalysisReader /> });
+    const ws = await socket();
+    ws.accept();
+    await waitFor(() => expect(analysisReads()).toBe(1));
+    ws.deliver({ type: "ready" });
+
+    deliverReport(ws, "r1");
+    await settle();
+
+    expect(analysisReads()).toBe(1);
   });
 });
 

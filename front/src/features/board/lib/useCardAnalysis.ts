@@ -1,18 +1,17 @@
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { boardApi } from "@/features/board/api";
-import { cardAnalysisKey, finishedAnalysisReports } from "@/features/board/lib/analysis";
-import type { SdkRow } from "@/features/board/lib/sdkChat";
+import { cardAnalysisKey, isAnalysisReportTool } from "@/features/board/lib/analysis";
+import type { SdkChatState } from "@/features/board/lib/sdkChat";
 
-export function useAnalysisRereadOnReport(cardId: string, chatRows: SdkRow[]): void {
+export function useAnalysisRereadOnReport(
+  cardId: string, liveToolResult: SdkChatState["lastLiveToolResult"], opts: { enabled: boolean },
+): void {
   const queryClient = useQueryClient();
-  const reportsInChat = React.useMemo(() => finishedAnalysisReports(chatRows), [chatRows]);
-  const reportsSeen = React.useRef(reportsInChat);
   React.useEffect(() => {
-    const newReportArrived = reportsInChat > reportsSeen.current;
-    reportsSeen.current = reportsInChat;
-    if (newReportArrived) void queryClient.invalidateQueries({ queryKey: cardAnalysisKey(cardId) });
-  }, [queryClient, cardId, reportsInChat]);
+    if (!opts.enabled || !liveToolResult || !isAnalysisReportTool(liveToolResult.name)) return;
+    void queryClient.invalidateQueries({ queryKey: cardAnalysisKey(cardId) });
+  }, [queryClient, cardId, opts.enabled, liveToolResult]);
 }
 
 export function useCardAnalysis(cardId: string, opts: { enabled: boolean; cardWorking?: boolean }) {

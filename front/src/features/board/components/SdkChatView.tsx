@@ -2,7 +2,6 @@ import * as React from "react";
 import { flushSync } from "react-dom";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
-import { useAnalysisRereadOnReport } from "@/features/board/lib/useCardAnalysis";
 import {
   Maximize2,
   FileDiff,
@@ -40,6 +39,7 @@ import { PlanUsageAlert, cardRateLimitsKey, useCardPlanUsage } from "@/features/
 import { AccountLoginDialog, type LoginAccount } from "@/features/board/components/AccountLoginDialog";
 import { ContextMeter, ContextNotice } from "@/features/board/components/ContextMeter";
 import { planAlert, planWindows } from "@/features/board/lib/planUsage";
+import { useAnalysisRereadOnReport } from "@/features/board/lib/useCardAnalysis";
 import { LinkifiedText, Markdown, SenderTag } from "@/features/board/components/ChatView";
 import { SdkQueueTray } from "@/features/board/components/SdkQueueTray";
 import { originRole, personOrigin, type MessageOrigin } from "@/features/board/lib/chat";
@@ -211,6 +211,7 @@ export interface SdkChatViewProps {
   account?: LoginAccount;
   ariaLabel?: string;
   className?: string;
+  analysisCard?: boolean;
 }
 
 /**
@@ -221,7 +222,9 @@ function ownSends(outbox: readonly OutboxMessage[], viewer: string | undefined):
   return outbox.filter((m) => !m.from || m.from.name === viewer);
 }
 
-export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, terminalWorking = false, footer, account, ariaLabel, className }: SdkChatViewProps) {
+export function SdkChatView({
+  cardId, active = true, onUploadImage, onStatus, terminalWorking = false, footer, account, ariaLabel, className, analysisCard = false,
+}: SdkChatViewProps) {
   const t = useT();
   // Whose screen this is — the edit affordance belongs only to one's own messages.
   const { user: me, isOwner } = useAuth();
@@ -641,7 +644,7 @@ export function SdkChatView({ cardId, active = true, onUploadImage, onStatus, te
   React.useEffect(() => {
     queryClient.setQueryData(cardRateLimitsKey(cardId), state.rateLimits);
   }, [queryClient, cardId, state.rateLimits]);
-  useAnalysisRereadOnReport(cardId, state.rows);
+  useAnalysisRereadOnReport(cardId, state.lastLiveToolResult, { enabled: analysisCard });
   const plan = useCardPlanUsage(cardId, active);
   // The chat redraws on every socket frame; the "renova em" countdown moves along, with no clock of its own.
   const alertNow = Date.now();

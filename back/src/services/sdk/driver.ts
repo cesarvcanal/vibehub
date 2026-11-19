@@ -14,7 +14,6 @@ import { cardCdpEndpoint } from "../browser/ports.js";
 import { statusUrl } from "../../runtime/runner.js";
 import { getSettings } from "../settings/settings.js";
 import type { SdkPermissionGateMode } from "./protocol.js";
-import { PR_ANALYSIS_WORKFLOW_PATH, prAnalysisWorkflowSource } from "../review/analysisWorkflow.js";
 import { testWorkerExports } from "../../runtime/testWorkers.js";
 
 /**
@@ -86,28 +85,6 @@ export function buildInstallDriverScript(containerName: string, source: string):
     `docker exec -i ${shQuote(containerName)} bash -s <<'${INSTALL_DELIM}'`,
     inner,
     INSTALL_DELIM,
-  ].join("\n");
-}
-
-const WORKFLOW_SOURCE_DELIM = "VIBEHUB_PR_ANALYSIS_WORKFLOW_SRC";
-const WORKFLOW_INSTALL_DELIM = "VIBEHUB_PR_ANALYSIS_WORKFLOW_INSTALL";
-
-export function buildInstallWorkflowScript(containerName: string, source: string): string {
-  const inner = [
-    "set -e",
-    "umask 077",
-    `mkdir -p ${shQuote(dirname(PR_ANALYSIS_WORKFLOW_PATH))}`,
-    `tmp="$(mktemp ${shQuote(`${PR_ANALYSIS_WORKFLOW_PATH}.XXXXXX`)})"`,
-    `cat > "$tmp" <<'${WORKFLOW_SOURCE_DELIM}'`,
-    source,
-    WORKFLOW_SOURCE_DELIM,
-    `mv -f "$tmp" ${shQuote(PR_ANALYSIS_WORKFLOW_PATH)}`,
-  ].join("\n");
-  return [
-    "set -e",
-    `docker exec -i ${shQuote(containerName)} bash -s <<'${WORKFLOW_INSTALL_DELIM}'`,
-    inner,
-    WORKFLOW_INSTALL_DELIM,
   ].join("\n");
 }
 
@@ -276,17 +253,13 @@ export function installCardSdkDriver(): Promise<void> {
   // The cleanup is a `.finally` on the promise, not a try/finally in the body: the body runs
   // synchronously up to its first await, so a throw there (executor, driver source read) would
   // run the cleanup BEFORE the `set` below and leave the rejected promise "in flight" forever.
-  // One exec for every step (plant the driver, plant the PR analysis fleet, ensure the SDK): each script
-  // is `set -e` + its own heredoc, so concatenated they still run in order and a failed plant stops before
-  // the npm step — one round trip instead of three. The timeout is the plant + npm budget: each had its own
-  // EXEC_TIMEOUT_MS, and npm on a slow runner must not lose the slice the plant used to get.
+  // One exec for both steps: each script is `set -e` + its own heredoc, so concatenated they still
+  // run in order and a failed plant stops before the npm step — one round trip instead of two. The
+  // timeout is the two steps' budget: each had its own EXEC_TIMEOUT_MS, and npm on a slow runner
+  // must not lose the slice the plant used to get.
   const run = (async () => {
     await hostExecutor().runScript(
-      [
-        buildInstallDriverScript(container, sdkDriverSource()),
-        buildInstallWorkflowScript(container, prAnalysisWorkflowSource()),
-        buildEnsureSdkScript(container),
-      ].join("\n"),
+      `${buildInstallDriverScript(container, sdkDriverSource())}\n${buildEnsureSdkScript(container)}`,
       { timeoutMs: 2 * EXEC_TIMEOUT_MS },
     );
   })().finally(() => installsInFlight.delete(container));

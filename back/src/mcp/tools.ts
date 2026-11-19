@@ -16,7 +16,7 @@ import { MAX_ROUNDS, cardsToConclude } from "../services/review/model.js";
 import { attachPrs } from "../services/review/attach.js";
 import { startReviewByAgent } from "../services/review/start.js";
 import { recordAnalysisReport } from "../services/review/analysisReport.js";
-import { ANALYSIS_DIMENSIONS, ANALYSIS_STAGES, type AnalysisDimension, type AnalysisStage } from "../services/review/analysisModel.js";
+import { ANALYSIS_DIMENSIONS, ANALYSIS_SEVERITIES, ANALYSIS_STAGES, DIMENSION_RUN_STATUSES } from "../services/review/analysisModel.js";
 import { ok, fail } from "./toolResult.js";
 
 /**
@@ -85,23 +85,28 @@ export const reviewFinding = z.object({
     .describe("round 2+: the current round, ONLY for a bug the author's own fix created"),
 }).superRefine(requireExplainedFinding);
 
-const analysisDimension = z.enum(ANALYSIS_DIMENSIONS as [AnalysisDimension, ...AnalysisDimension[]]);
+const analysisDimension = z.enum(ANALYSIS_DIMENSIONS);
 
-export const analysisFinding = z.object({
+export const analysisFindingFields = z.object({
   id: z.string().min(1).max(20).describe("the id the fleet gave (f1, f2, ...)"),
-  severity: z.enum(["blocking", "improvement", "suggestion", "question"]),
+  severity: z.enum(ANALYSIS_SEVERITIES),
   dimension: analysisDimension,
-  status: z.enum(["open", "fixed"]).describe("fixed only with the commit that fixes it"),
-  commit: z.string().max(80).optional(),
   ...findingFields,
   proof: findingProof.optional().describe("required for blocking"),
-}).superRefine((finding, ctx) => {
+});
+
+const FIXED_WITHOUT_COMMIT = "a fixed finding needs the sha of the commit that fixes it";
+
+export const analysisFinding = z.discriminatedUnion("status", [
+  analysisFindingFields.extend({ status: z.literal("open") }),
+  analysisFindingFields.extend({
+    status: z.literal("fixed"),
+    commit: z.string({ required_error: FIXED_WITHOUT_COMMIT }).trim().min(1, FIXED_WITHOUT_COMMIT).max(80),
+  }),
+]).superRefine((finding, ctx) => {
   requireExplainedFinding(finding, ctx);
   if (finding.severity === "blocking" && !finding.proof?.ref.trim()) {
     ctx.addIssue({ code: "custom", path: ["proof"], message: "a blocking finding needs proof: failing_test, rule or scenario with ref" });
-  }
-  if (finding.status === "fixed" && !finding.commit?.trim()) {
-    ctx.addIssue({ code: "custom", path: ["commit"], message: "a fixed finding needs the sha of the commit that fixes it" });
   }
 });
 
@@ -109,11 +114,11 @@ const analysisReportFields = z.object({
   card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this analysis terminal"),
   headSha: z.string().regex(HEAD_SHA_RE, "the full sha of the analysed head")
     .describe("full sha of the analysed head, the one from step 1 (40 or 64 hex chars); `done` repeats the `analysed` one"),
-  stage: z.enum(ANALYSIS_STAGES as [AnalysisStage, ...AnalysisStage[]]),
+  stage: z.enum(ANALYSIS_STAGES),
   summary: z.string().min(1).max(1000),
   dimensions: z.array(z.object({
     key: analysisDimension,
-    status: z.enum(["ran", "skipped", "not_run"]),
+    status: z.enum(DIMENSION_RUN_STATUSES),
     reason: z.string().max(500).optional(),
     unverifiedCount: z.number().int().min(1).optional()
       .describe("findings the fleet did not check (above the cap or without a verdict), exactly as the fleet returned it"),
@@ -126,6 +131,11 @@ const analysisReportFields = z.object({
 export const analysisReportInput = analysisReportFields.superRefine((report, ctx) => {
   if (report.stage === "fleet_unavailable" && !report.unavailableReason?.trim()) {
     ctx.addIssue({ code: "custom", path: ["unavailableReason"], message: "fleet_unavailable needs the reason" });
+  }
+  const findingIds = report.findings.map((finding) => finding.id);
+  const repeatedIds = findingIds.filter((id, index) => findingIds.indexOf(id) !== index);
+  if (repeatedIds.length > 0) {
+    ctx.addIssue({ code: "custom", path: ["findings"], message: `each finding keeps the fleet's own id, once: repeated ${[...new Set(repeatedIds)].join(", ")}` });
   }
 });
 

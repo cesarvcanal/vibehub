@@ -2098,3 +2098,48 @@ describe("login_failed — o login da conta do card morreu", () => {
     expect(INITIAL_SDK_STATE.loginFailed).toBe(false);
   });
 });
+
+describe("lastLiveToolResult — o resultado de ferramenta que chegou ao vivo", () => {
+  const REPORT_TOOL = "mcp__vibehub__vibehub_analysis_report";
+
+  it.each([
+    ["que deu certo", {}],
+    ["que voltou com erro", { isError: true }],
+    ["que a ferramenta recusou com { error }", { error: "out of order" }],
+  ])("um resultado %s, depois do ready, fica como o último resultado ao vivo, com o nome da ferramenta", (_scenario, toolResult) => {
+    const state = feed([
+      { type: "ready" },
+      { type: "tool_use", id: "t1", name: REPORT_TOOL, input: {} },
+      { type: "tool_result", id: "t1", toolResult },
+    ]);
+    expect(state.lastLiveToolResult).toEqual({ name: REPORT_TOOL });
+  });
+
+  it("o replay (antes do ready) nunca vira resultado ao vivo", () => {
+    const state = feed([
+      { type: "tool_use", id: "t1", name: REPORT_TOOL, input: {} },
+      { type: "tool_result", id: "t1", toolResult: {} },
+      { type: "ready" },
+    ]);
+    expect(state.lastLiveToolResult).toBeUndefined();
+  });
+
+  it("a reconexão no meio da chamada: a chamada veio no replay, o resultado chega depois do ready e conta como ao vivo", () => {
+    const state = feed([
+      { type: "tool_use", id: "t1", name: REPORT_TOOL, input: {} },
+      { type: "ready" },
+      { type: "tool_result", id: "t1", toolResult: {} },
+    ]);
+    expect(state.lastLiveToolResult).toEqual({ name: REPORT_TOOL });
+  });
+
+  it("os tokens de uma resposta depois do resultado não trocam o último resultado ao vivo", () => {
+    const settled = feed([
+      { type: "ready" },
+      { type: "tool_use", id: "t1", name: REPORT_TOOL, input: {} },
+      { type: "tool_result", id: "t1", toolResult: {} },
+    ]);
+    const streaming = feed([{ type: "assistant_delta", text: "Relatório " }, { type: "assistant_delta", text: "gravado." }], settled);
+    expect(streaming.lastLiveToolResult).toBe(settled.lastLiveToolResult);
+  });
+});

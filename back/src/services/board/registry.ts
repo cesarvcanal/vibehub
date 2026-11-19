@@ -1812,7 +1812,7 @@ export async function createAnalysisCard(input: {
  * run) is the review area's call, which reads the saved report. PURE.
  */
 export function openAnalysisCards(cards: Card[], prUrl: string): Card[] {
-  return cards.filter((c) => c.pushBranch !== undefined && c.column !== "done" && (c.prs ?? []).some((p) => p.url === prUrl));
+  return cards.filter((card) => card.pushBranch !== undefined && card.column !== "done" && (card.prs ?? []).some((pr) => pr.url === prUrl));
 }
 
 export interface UpdateCardInput {

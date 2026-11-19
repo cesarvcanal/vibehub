@@ -20,9 +20,13 @@ export async function getAnalysis(cardId: string): Promise<AnalysisReport | unde
   return found && structuredClone(found);
 }
 
-export async function saveAnalysis(report: AnalysisReport): Promise<void> {
+export async function saveAnalysis(
+  report: AnalysisReport,
+  assertCanReplace: (saved: AnalysisReport | undefined) => void,
+): Promise<void> {
   await store.mutate((doc) => {
-    const otherCards = doc.analyses.filter((analysis) => analysis.cardId !== report.cardId);
-    doc.analyses = [...otherCards, structuredClone(report)];
+    assertCanReplace(doc.analyses.find((analysis) => analysis.cardId === report.cardId));
+    const otherCardsAnalyses = doc.analyses.filter((analysis) => analysis.cardId !== report.cardId);
+    doc.analyses = [...otherCardsAnalyses, structuredClone(report)];
   });
 }

@@ -24,8 +24,7 @@ const sdkDest = join(backRoot, "dist", sdkRel);
 mkdirSync(sdkDest, { recursive: true });
 cpSync(join(backRoot, "src", sdkRel, "sdk-driver.mjs"), join(sdkDest, "sdk-driver.mjs"));
 
-// The PR analysis fleet (`services/review/prAnalysis.workflow.js`) — read by services/review/analysisWorkflow.ts
-// and planted into the runner next to the driver. tsc ignores .js, so it is copied to the same path in dist.
+// tsc ignores .js: the PR analysis fleet script (read by services/review/analysisWorkflow.ts) is copied to the same path in dist.
 const reviewRel = join("services", "review");
 const reviewDest = join(backRoot, "dist", reviewRel);
 mkdirSync(reviewDest, { recursive: true });
