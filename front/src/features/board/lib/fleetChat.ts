@@ -109,6 +109,8 @@ export function isLongSpeech(text: string): boolean {
   return text.length > LONG_SPEECH_CHARS || text.split("\n").length > LONG_SPEECH_LINES;
 }
 
+const SAO_PAULO_CLOCK = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+
 export function chatClockText(at: number): string {
-  return new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(at));
+  return SAO_PAULO_CLOCK.format(new Date(at));
 }

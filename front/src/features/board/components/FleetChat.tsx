@@ -1,12 +1,11 @@
 import * as React from "react";
 import { Markdown } from "@/features/board/components/ChatView";
 import { TypingDots } from "@/features/board/components/PeerTypingIndicator";
-import { fleetAgentName } from "@/features/board/components/ReviewFleet";
 import {
   chatClockText, isLongSpeech, type ChatReply, type ChatSpeaker, type FleetChatEntry, type ModelFamily,
 } from "@/features/board/lib/fleetChat";
 import { agentRole, type AgentReading } from "@/features/board/lib/reviewFleet";
-import { useT } from "@/i18n";
+import { useT, type Translate } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 const ENTRY_TEST_ID: Record<FleetChatEntry["kind"], string> = {
@@ -163,4 +162,20 @@ function Speech({ text }: { text: string }) {
       ) : null}
     </div>
   );
+}
+
+function fleetAgentName(label: string, t: Translate): string {
+  const role = agentRole(label);
+  switch (role.kind) {
+    case "context":
+      return t("review.fleet.agent.context");
+    case "judge":
+      return t("review.fleet.agent.judge");
+    case "review":
+      return t("review.fleet.agent.review", { dimension: t(`analysis.dimension.${role.dimension}`) });
+    case "verification":
+      return t("review.fleet.agent.verification", { dimension: t(`analysis.dimension.${role.dimension}`) });
+    case "other":
+      return role.label;
+  }
 }

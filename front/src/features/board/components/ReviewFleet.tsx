@@ -3,9 +3,8 @@ import type { ReviewFleetRun } from "@/api/types";
 import { FleetChat } from "@/features/board/components/FleetChat";
 import { PhasePills } from "@/features/board/components/WorkflowPanel";
 import { reviewFleetChat } from "@/features/board/lib/fleetChat";
-import { agentRole } from "@/features/board/lib/reviewFleet";
 import { phasePills } from "@/features/board/lib/workflowPanel";
-import { useT, type Translate } from "@/i18n";
+import { useT } from "@/i18n";
 
 export function ReviewFleet({ round, runs }: { round: number; runs: ReviewFleetRun[] }) {
   const t = useT();
@@ -31,20 +30,4 @@ function FleetRun({ run }: { run: ReviewFleetRun }) {
       </div>
     </div>
   );
-}
-
-export function fleetAgentName(label: string, t: Translate): string {
-  const role = agentRole(label);
-  switch (role.kind) {
-    case "context":
-      return t("review.fleet.agent.context");
-    case "judge":
-      return t("review.fleet.agent.judge");
-    case "review":
-      return t("review.fleet.agent.review", { dimension: t(`analysis.dimension.${role.dimension}`) });
-    case "verification":
-      return t("review.fleet.agent.verification", { dimension: t(`analysis.dimension.${role.dimension}`) });
-    case "other":
-      return role.label;
-  }
 }
