@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, onTestFinished, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import type { SendOpts, SendResult } from "../services/maestro/maestro.js";
 import type { DeliverOpts, DeliverResult } from "../services/maestro/deliver.js";
+import { ANALYSIS_DIMENSIONS, type AnalysisFinding, type AnalysisReport, type AnalysisSeverity } from "../services/review/analysisModel.js";
 
 /**
  * PR REVIEW ROUTES — who may start, decide, retry, cancel and, above all, merge. The server, the board,
@@ -1257,5 +1258,133 @@ describe("relatório da análise pela rota", () => {
     const got = await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/analysis`, headers: { cookie: w.owner.cookie } });
     expect(got.statusCode).toBe(200);
     expect(got.json()).toEqual({ analysis: null });
+  });
+});
+
+describe("merge da análise pela rota", () => {
+  const RAN_EVERYWHERE = ANALYSIS_DIMENSIONS.map((key) => ({ key, status: "ran" as const }));
+  const aptReport = (cardId: string, over: Partial<AnalysisReport> = {}): AnalysisReport => ({
+    cardId, prUrl: PR.url, prNumber: 7, analysedSha: "e".repeat(40), stage: "done", summary: "s",
+    dimensions: RAN_EVERYWHERE, findings: [], refutedCount: 0, updatedAt: 1, ...over,
+  });
+  const saveReport = async (report: AnalysisReport) =>
+    await (await import("../services/review/analysisStore.js")).saveAnalysis(report, () => undefined);
+  const merge = async (w: World, as: Person) =>
+    await app.inject({ method: "POST", url: `/api/cards/${w.cardId}/analysis/merge`, headers: { cookie: as.cookie } });
+  const readAnalysis = async (w: World, as: Person) =>
+    (await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/analysis`, headers: { cookie: as.cookie } })).json();
+  const openFinding = (severity: AnalysisSeverity): AnalysisFinding => ({ id: "f1", severity, dimension: "correctness", status: "open", title: "t" });
+
+  it("quem trabalha no card mergeia a análise apta com a própria conexão GitHub, e o card vai para Concluído", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    deliver.mockClear();
+    const res = await merge(w, w.merger);
+    expect(res.statusCode).toBe(200);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver.mock.calls[0]![0]).toBe(w.cardId);
+    expect(deliver.mock.calls[0]![1]).toMatchObject({ authorized: true, branch: PR.base, connectionId: w.gh.merger, by: "merger" });
+    expect(deliver.mock.calls[0]![1]?.mergeOnly).toBeUndefined();
+    expect((await (await registry()).getCard(w.cardId))?.column).toBe("done");
+  });
+
+  it("quem só vê o card recebe 403 e quem não alcança recebe 404, sem merge", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    deliver.mockClear();
+    expect((await merge(w, w.leitor)).statusCode).toBe(403);
+    expect((await merge(w, w.outro)).statusCode).toBe(404);
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, Partial<AnalysisReport> | null]>([
+    ["sem relatório", null],
+    ["análise ainda não concluída", { stage: "analysed" }],
+    ["bloqueante aberto", { findings: [openFinding("blocking")] }],
+    ["dúvida sem resposta", { findings: [openFinding("question")] }],
+    ["dimensão que não rodou", { dimensions: RAN_EVERYWHERE.filter((run) => run.key !== "security") }],
+  ])("análise não apta (%s) recusa com 409 not_apt, sem merge, e o GET diz canMerge false", async (_case, over) => {
+    const w = await world();
+    if (over) await saveReport(aptReport(w.cardId, over));
+    deliver.mockClear();
+    const res = await merge(w, w.merger);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().reason).toBe("not_apt");
+    expect(deliver).not.toHaveBeenCalled();
+    if (over) expect((await readAnalysis(w, w.merger)).canMerge).toBe(false);
+  });
+
+  it("o GET diz canMerge só para quem trabalha no card com a análise apta e o PR ainda aberto", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    expect((await readAnalysis(w, w.merger)).canMerge).toBe(true);
+    expect((await readAnalysis(w, w.leitor)).canMerge).toBe(false);
+    expect((await readAnalysis(w, w.merger)).mergedAt).toBeUndefined();
+    await (await registry()).markCardPrMerged(w.cardId, PR.base, PR.number, 1234);
+    expect(await readAnalysis(w, w.merger)).toMatchObject({ canMerge: false, mergedAt: 1234 });
+  });
+
+  it("PR já mergeado recusa com 409 already_merged, sem novo merge", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    await (await registry()).markCardPrMerged(w.cardId, PR.base, PR.number, 1234);
+    deliver.mockClear();
+    const res = await merge(w, w.merger);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().reason).toBe("already_merged");
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("quem trabalha no card sem conexão GitHub própria recebe 400 merger_sem_github, sem cair na conta do projeto", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    deliver.mockClear();
+    const res = await merge(w, w.autor);
+    expect(res.statusCode).toBe(400);
+    expect(res.json().reason).toBe("merger_sem_github");
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("merge recusado pelo deliver volta 409 com o motivo e a saída, e o card fica onde estava", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    deliverResult = { merged: false, reason: "gate", branch: "dev", cardBranch: PR.branch, output: "CI vermelho" };
+    onTestFinished(() => {
+      deliverResult = { merged: true, reason: "merged", branch: "dev", cardBranch: "card/x" };
+    });
+    const res = await merge(w, w.merger);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ reason: "gate", error: "CI vermelho" });
+    expect((await (await registry()).getCard(w.cardId))?.column).not.toBe("done");
+  });
+
+  it("card de análise no meio de um turno recusa com 409 card_working, sem merge: o que a IA commitar agora ninguém analisou", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    await (await registry()).applyCardStatus(w.cardId, "working");
+    deliver.mockClear();
+    const res = await merge(w, w.merger);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().reason).toBe("card_working");
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("dois cliques ao mesmo tempo disparam um merge só: o segundo recebe 409 merging", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    deliver.mockClear();
+    const firstDeliver = Promise.withResolvers<void>();
+    deliver.mockImplementationOnce(async () => {
+      await firstDeliver.promise;
+      return deliverResult;
+    });
+    const first = merge(w, w.merger);
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+    const second = await merge(w, w.owner);
+    firstDeliver.resolve();
+    expect(second.statusCode).toBe(409);
+    expect(second.json().reason).toBe("merging");
+    expect((await first).statusCode).toBe(200);
+    expect(deliver).toHaveBeenCalledTimes(1);
   });
 });

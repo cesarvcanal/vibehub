@@ -17,6 +17,7 @@ const readModel = (
   health: { correctness: "ok", security: "ok", performance: "ok", contracts: "ok", tests: "ok", repoRules: "ok", ...healthOver },
   verdict,
   uncheckedDimensions,
+  canMerge: false,
 });
 
 const loaded = (data: CardAnalysisResponse) => ({ status: "success" as const, data });

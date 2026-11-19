@@ -842,6 +842,8 @@ export interface AnalysisReadModel {
   health: Record<AnalysisDimension, DimensionHealth>;
   verdict: AnalysisVerdict;
   uncheckedDimensions: AnalysisDimension[];
+  canMerge: boolean;
+  mergedAt?: number;
 }
 
 export type CardAnalysisResponse = AnalysisReadModel | { analysis: null };

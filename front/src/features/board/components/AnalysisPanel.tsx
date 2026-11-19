@@ -1,4 +1,5 @@
-import { X } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { GitMerge, X } from "lucide-react";
 import { Badge, BADGE_TEXT, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -6,6 +7,8 @@ import {
   type DimensionHealth,
 } from "@/api/types";
 import { PanelFrame } from "@/features/board/components/ReviewPanelView";
+import { boardApi } from "@/features/board/api";
+import { cardAnalysisKey } from "@/features/board/lib/analysis";
 import { useCardAnalysis } from "@/features/board/lib/useCardAnalysis";
 import { apiErrorMessage } from "@/lib/apiError";
 import { useT, type Translate } from "@/i18n";
@@ -48,6 +51,7 @@ export function AnalysisPanel({ cardId, onClose }: { cardId: string; onClose: ()
       {analysisQuery.isPending ? <p className="text-xs text-muted-foreground">{t("common.loading")}</p> : null}
       {analysisQuery.isError ? <p className="text-xs text-destructive">{apiErrorMessage(analysisQuery.error)}</p> : null}
       {read && !read.analysis ? <p className="text-xs text-muted-foreground">{t("analysis.panel.empty")}</p> : null}
+      {read?.analysis ? <AnalysisMerge cardId={cardId} read={read} /> : null}
       {read?.analysis ? <AnalysisBody read={read} /> : null}
     </PanelFrame>
   );
@@ -57,6 +61,28 @@ function VerdictBadge({ read }: { read: AnalysisReadModel }) {
   const t = useT();
   if (read.analysis.stage === "fleet_unavailable") return <Badge tone="critical">{t("analysis.verdict.fleetUnavailable")}</Badge>;
   return <Badge tone={VERDICT_TONE[read.verdict]}>{t(`analysis.verdict.${read.verdict}`)}</Badge>;
+}
+
+function AnalysisMerge({ cardId, read }: { cardId: string; read: AnalysisReadModel }) {
+  const t = useT();
+  const queryClient = useQueryClient();
+  const merge = useMutation({
+    mutationFn: () => boardApi.mergeCardAnalysis(cardId),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: cardAnalysisKey(cardId) }),
+  });
+  const prNumber = read.analysis.prNumber;
+  if (merge.isSuccess) return <p className={`text-xs ${BADGE_TEXT.ok}`}>{t("analysis.merge.done", { n: prNumber })}</p>;
+  if (read.mergedAt !== undefined) return <p className={`text-xs ${BADGE_TEXT.ok}`}>{t("analysis.merge.merged", { n: prNumber })}</p>;
+  if (!read.canMerge) return null;
+  return (
+    <div className="flex shrink-0 flex-col gap-1.5">
+      <Button type="button" size="sm" className="self-start" disabled={merge.isPending} onClick={() => merge.mutate()}>
+        <GitMerge className="h-3.5 w-3.5" />
+        {merge.isPending ? t("analysis.merge.pending") : t("analysis.merge", { n: prNumber })}
+      </Button>
+      {merge.isError ? <p className="whitespace-pre-wrap text-xs text-destructive">{apiErrorMessage(merge.error)}</p> : null}
+    </div>
+  );
 }
 
 function AnalysisBody({ read }: { read: AnalysisReadModel }) {

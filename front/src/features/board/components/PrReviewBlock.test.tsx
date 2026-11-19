@@ -48,6 +48,7 @@ const aptAnalysis: AnalysisReadModel = {
   },
   health: { correctness: "ok", security: "ok", performance: "ok", contracts: "ok", tests: "ok", repoRules: "ok" },
   verdict: "apt",
+  canMerge: false,
   uncheckedDimensions: [],
 };
 
