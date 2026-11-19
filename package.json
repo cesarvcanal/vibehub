@@ -8,15 +8,23 @@
     "dev": "npm --prefix back run dev",
     "build": "npm --prefix back run build & B=$!; npm --prefix front run build & F=$!; wait $B; b=$?; wait $F; f=$?; exit $((b|f))",
     "test": "npm --prefix back run test & B=$!; npm --prefix front run test & F=$!; wait $B; b=$?; wait $F; f=$?; exit $((b|f))",
-    "install:all": "npm --prefix back install && npm --prefix front install",
+    "install:all": "npm install && npm --prefix back install && npm --prefix front install",
     "test:changed": "sh scripts/gate-changed.sh back && sh scripts/gate-changed.sh front",
     "test:seq": "npm --prefix back run test && npm --prefix front run test",
-    "build:seq": "npm --prefix back run build && npm --prefix front run build"
+    "build:seq": "npm --prefix back run build && npm --prefix front run build",
+    "lint:changed": "node scripts/lint-changed.mjs",
+    "test:lint": "vitest run"
   },
   "license": "MIT",
   "author": "C\u00e9sar Canal",
   "repository": {
     "type": "git",
     "url": "https://github.com/cesarvcanal/vibehub.git"
+  },
+  "devDependencies": {
+    "eslint": "^10.15.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.73.0",
+    "vitest": "^2.1.9"
   }
 }

@@ -63,8 +63,6 @@ answer.
 
 ## Invariants worth keeping in review
 
-1. Payloads travel over stdin, never argv — `ps` is world-readable.
-2. Anything user-supplied is validated at the boundary and shell-quoted after that. Card ids, branch
-   names, session uuids and container names all end up in a `docker exec` line.
-3. The status callback is authenticated by the service token with a constant-time comparison, and a
-   session cookie is explicitly *not* accepted there.
+The rules every change is reviewed against (payloads over stdin, input validated at the boundary
+and shell-quoted, the runner token compared in constant time with no session cookie accepted) live
+in [`AGENTS.md`](AGENTS.md) §10.
