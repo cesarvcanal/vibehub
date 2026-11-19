@@ -1164,13 +1164,23 @@ describe("CardTerminalView — the account pill knows how much plan is left", ()
     const base = mockGet.getMockImplementation();
     mockGet.mockImplementation((url: string, ...rest: unknown[]) =>
       url === "/accounts/usage"
-        ? Promise.resolve({ bySlug: { default: { available: true, sevenDay: { utilization: 64, resetsAt: null }, fetchedAt: 1 } }, fetchedAt: 1 })
+        ? Promise.resolve({
+            bySlug: {
+              default: { available: true, sevenDay: { utilization: 64, resetsAt: null }, fetchedAt: 1 },
+              personal: { available: true, fiveHour: { utilization: 46, resetsAt: null }, fetchedAt: 1 },
+            },
+            fetchedAt: 1,
+          })
         : (base as (url: string, ...rest: unknown[]) => Promise<unknown>)(url, ...rest),
     );
     serveSession({ account: { slug: null, name: "Main" } });
+    const user = userEvent.setup();
     renderWithCache([card({ openedAt: 10 })]);
     const accountPill = await screen.findByLabelText("Claude account");
-    await waitFor(() => expect(mockGet.mock.calls.some(([url]) => url === "/accounts/usage")).toBe(true));
+    await user.click(accountPill);
+    const rows = within(await screen.findByRole("menu")).getAllByRole("menuitemcheckbox");
+    await waitFor(() => expect(rows[1]).toHaveTextContent("46% session"));
+    expect(rows[0].textContent).not.toMatch(/%/);
     expect(accountPill).toHaveTextContent("Main");
     expect(accountPill.textContent).not.toMatch(/%/);
   });
