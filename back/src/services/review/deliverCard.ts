@@ -79,7 +79,7 @@ async function deliverUnderReview(cardId: string, opts: DeliverCardOpts): Promis
     });
   }
   // The documentation goes along: the author who pushes the fix also explains in the diff what changed.
-  const pushed = await deliver(cardId, { branch: review.base, by: opts.by, docs: opts.docs, pushOnly: true });
+  const pushed = await deliver(cardId, { branch: review.base, confirmTarget: true, by: opts.by, docs: opts.docs, pushOnly: true });
   if (pushed.reason !== "pushed") return plain(pushed);
   // The push can take minutes: the review may have moved in the meantime (become ready, closed).
   const now = await getReview(review.id);

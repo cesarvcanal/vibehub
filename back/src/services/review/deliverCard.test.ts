@@ -87,9 +87,21 @@ describe("deliverCard — o vibehub_deliver com revisão de PR ativa", () => {
       result: { prUrl: PR, merged: true, reason: "merged", branch: "dev", cardBranch: "card/x", headBranch: "deleted" },
     };
     const out = await deliverCard(card.id, { branch: "dev", authorized: true, by: "mussa", from: card.id });
-    expect(deliver).toHaveBeenCalledWith(card.id, { branch: "dev", by: "mussa", pushOnly: true });
+    expect(deliver).toHaveBeenCalledWith(card.id, { branch: "dev", confirmTarget: true, by: "mussa", pushOnly: true });
     expect(mergeReviewedPr).toHaveBeenCalledWith("rev-1", "u-m");
     expect(out).toMatchObject({ merged: true, reason: "merged", prUrl: PR, headBranch: "deleted" });
+  });
+
+  it("o push da correção mira a base do PR em revisão já confirmada: um card cortado de outra base não para em base_divergente", async () => {
+    const { deliverCard, card } = await cardUnderReview("fixing", "u-a");
+    await deliverCard(card.id, { authorized: true, by: "mussa", from: card.id });
+    expect(deliver).toHaveBeenCalledWith(card.id, expect.objectContaining({ branch: "dev", confirmTarget: true, pushOnly: true }));
+  });
+
+  it("sem revisão ativa, o confirmTarget de quem chamou chega ao deliver", async () => {
+    const { deliverCard, card } = await cardUnderReview("merged", "u-a");
+    await deliverCard(card.id, { branch: "dev", confirmTarget: true, by: "mussa" });
+    expect(deliver).toHaveBeenCalledWith(card.id, expect.objectContaining({ branch: "dev", confirmTarget: true }));
   });
 
   it("a documentação do PR vai junto no push da correção (comentários do autor no diff)", async () => {
