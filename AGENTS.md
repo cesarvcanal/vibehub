@@ -402,6 +402,8 @@ Em pt-BR, em markdown, com estas seções (`##`) nesta ordem. A profundidade aco
 
 Nunca invente causa, teste ou justificativa. O que não está confirmado é dito como não confirmado.
 
+**O PR acompanha o código.** A cada push (correção, commit novo, merge da base), releia o PR publicado inteiro, a descrição e os comentários no diff: número, `arquivo:linha` ou afirmação que o push tornou falsa é corrigido no mesmo push, na descrição editada e, no comentário do diff, com resposta na thread dele.
+
 ### Comentários no diff
 
 Os comentários vão direto nas linhas do diff, publicados juntos numa **única revisão do tipo `COMMENT`**.
