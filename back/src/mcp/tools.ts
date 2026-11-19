@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { listTerminals, sendToTerminal, readTerminal, reportState, agentOriginFor, SEND_READY_WAIT_MS } from "../services/maestro/maestro.js";
 import { DECLARED_STATES, getCard, getProject, listProjects, type Project } from "../services/board/registry.js";
-import { createCardAs, repoPushRefusal } from "../services/maestro/createCard.js";
+import { createCardAs, repoPushRefusals } from "../services/maestro/createCard.js";
 import { findUser, type PublicUser } from "../auth/users.js";
 import { recordMessage, MESSAGE_TYPES, SEVERITIES, type MessageType, type Severity } from "../services/events/cardEvents.js";
 import { sendAnswer } from "./events.js";
@@ -140,11 +140,12 @@ async function personBehind(fromCardId: string): Promise<PublicUser> {
   return person;
 }
 
-async function cardCreationRefusal(person: PublicUser, project: Project): Promise<string | null> {
+async function cardCreationRefusals(person: PublicUser, projects: Project[]): Promise<Map<string, string | null>> {
   if (person.role !== "owner") {
-    return `only the owner can create cards — '${person.username}' gave this card its order; ask the owner to create it`;
+    const ownerOnly = `only the owner can create cards — '${person.username}' gave this card its order; ask the owner to create it`;
+    return new Map(projects.map((project) => [project.id, ownerOnly]));
   }
-  return await repoPushRefusal(person, project);
+  return await repoPushRefusals(person, projects);
 }
 
 export function registerMaestroTools(server: McpServer, actor: string): void {
@@ -187,14 +188,18 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     async (input) => {
       try {
         const person = await personBehind(input.from);
-        const projects = await Promise.all((await listProjects()).map(async (project) => {
-          const reason = await cardCreationRefusal(person, project);
-          return {
-            id: project.id, name: project.name, repo: project.repoFullName ?? null, baseBranch: project.baseBranch,
-            canCreateCard: reason === null, ...(reason === null ? {} : { reason }),
-          };
-        }));
-        return ok({ requestedBy: person.username, projects });
+        const projects = await listProjects();
+        const refusals = await cardCreationRefusals(person, projects);
+        return ok({
+          requestedBy: person.username,
+          projects: projects.map((project) => {
+            const reason = refusals.get(project.id);
+            return {
+              id: project.id, name: project.name, repo: project.repoFullName ?? null, baseBranch: project.baseBranch,
+              canCreateCard: !reason, ...(reason ? { reason } : {}),
+            };
+          }),
+        });
       } catch (error) {
         return fail(error);
       }
@@ -224,7 +229,7 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         const person = await personBehind(input.from);
         const project = await getProject(input.projectId);
         if (!project) throw new Error("project not found");
-        const refusal = await cardCreationRefusal(person, project);
+        const refusal = (await cardCreationRefusals(person, [project])).get(project.id);
         if (refusal) throw new Error(refusal);
         const card = await createCardAs(person, { projectId: project.id, title: input.title }, input.from);
         return ok({ cardId: card.id, title: card.title, projectId: card.projectId, column: card.column });
