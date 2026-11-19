@@ -125,6 +125,19 @@ describe("frota da análise de PR", () => {
     expect(judgePrompt).not.toContain("achado-falso");
   });
 
+  it("o juiz bloqueia regra escrita violada e deixa para improvement e suggestion só o que nenhuma regra escrita decide", async () => {
+    const { calls } = await runFleet(async (_prompt, opts) => {
+      if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);
+      if (opts.phase === "Revisão") return { findings: [scenarioFinding("achado-real")] };
+      if (opts.phase === "Verificação") return { confirmed: true, evidence: "e" };
+      return { findings: [] };
+    });
+    const judgePrompt = calls.find((call) => call.opts.phase === "Julgamento")!.prompt;
+    expect(judgePrompt).toContain("blocking (bug ou regra violada, com prova");
+    expect(judgePrompt).toContain("que preserva o comportamento e que nenhuma regra escrita exige)");
+    expect(judgePrompt).toContain("ou gosto que nenhuma regra escrita decide)");
+  });
+
   it("verificador que morre não confirma o achado nem o conta como derrubado: o motivo diz que faltou veredito", async () => {
     const { fleetResult, calls } = await runFleet(async (_prompt, opts) => {
       if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);
