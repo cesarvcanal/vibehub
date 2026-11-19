@@ -258,13 +258,13 @@ describe("prompt da análise de PR", () => {
 
   it("args recusado pela frota é engano do card: corrige o args e roda de novo uma vez antes de reportar", async () => {
     const { analysisPrompt } = await import("./prompts.js");
-    expect(analysisPrompt(input)).toMatch(/args inválido[^\n]*corrija o args e rode a frota de novo, uma vez/);
+    expect(analysisPrompt(input)).toMatch(/args inválido[^\n]*corrija o args e rode a frota de novo, uma vez; se falhar de novo, siga a linha do fleet_unavailable/);
   });
 
   it("frota que parou sem resultado (o processo caiu, como num deploy) é relançada uma vez pelo runId, com os agentes já concluídos no cache", async () => {
     const { analysisPrompt } = await import("./prompts.js");
     expect(analysisPrompt(input)).toMatch(
-      /parar sem resultado[^\n]*relance uma vez[^\n]*resumeFromRunId: "<runId do lançamento>"[^\n]*Se parar de novo, siga a linha abaixo/,
+      /parar sem resultado[^\n]*relance uma vez[^\n]*resumeFromRunId: "<runId do lançamento>"[^\n]*Se parar de novo, siga a linha do fleet_unavailable/,
     );
   });
 
