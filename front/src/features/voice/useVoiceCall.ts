@@ -1,5 +1,6 @@
 import * as React from "react";
 import { api, post } from "@/lib/api";
+import { useReloadHold } from "@/lib/versionCheck";
 import { LiveVoiceSession, type DelegationListener, type DelegationUpdate, type LiveVoiceDeps, type LiveVoiceSnapshot } from "./liveVoice";
 import { AI_TUNING, LevelMeter, MIC_TUNING, createCallAudioContext, visualLevel } from "./audioLevel";
 import { INITIAL_PHASE, nextPhase, type PhaseMemory, type VoicePhase } from "./voicePhase";
@@ -198,6 +199,7 @@ export function useVoiceCall({
   }
 
   const active = snap.state === "connecting" || snap.state === "live" || snap.state === "closing";
+  useReloadHold(`voice:${cardId}`, active);
   // The meters follow the streams: the mic from the grant, the assistant's once its track arrives.
   React.useEffect(() => {
     const ctx = ctxRef.current;
