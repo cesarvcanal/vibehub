@@ -8,7 +8,7 @@ export type AgentReading =
   | { kind: "text"; text: string };
 
 const JUDGE_LABEL = "juiz";
-const LABEL_SEPARATOR = " · ";
+export const LABEL_SEPARATOR = " · ";
 const JSON_STRING = String.raw`"((?:[^"\\]|\\.)*)`;
 const TITLE_PATTERN = new RegExp(String.raw`"title"\s*:\s*${JSON_STRING}"`, "g");
 const CONFIRMED_PATTERN = /"confirmed"\s*:\s*(true|false)/;

@@ -1,5 +1,5 @@
 import type { AnalysisConversation, AnalysisConversationItem, ReviewFleetAgent, ReviewFleetRun } from "@/api/types";
-import { agentRole, readAgentResult, type AgentReading } from "@/features/board/lib/reviewFleet";
+import { LABEL_SEPARATOR, agentRole, readAgentResult, type AgentReading } from "@/features/board/lib/reviewFleet";
 
 export type ModelFamily = "opus" | "sonnet" | "haiku" | "other";
 
@@ -23,8 +23,6 @@ export type FleetChatEntry =
 type ChatMessage = Extract<FleetChatEntry, { kind: "message" }>;
 
 const MODEL_FAMILIES = ["opus", "sonnet", "haiku"] as const;
-const JUDGE_LABEL = "juiz";
-const LABEL_SEPARATOR = " · ";
 const LONG_SPEECH_CHARS = 480;
 const LONG_SPEECH_LINES = 8;
 
@@ -38,19 +36,15 @@ function speakerOf(agentId: string, label: string, model: string | undefined): C
   return model ? { agentId, label, model, family } : { agentId, label, family };
 }
 
-function verifiedTitle(label: string): string | undefined {
-  if (agentRole(label).kind !== "verification") return undefined;
-  const separator = label.indexOf(LABEL_SEPARATOR);
-  return separator >= 0 ? label.slice(separator + LABEL_SEPARATOR.length) : undefined;
-}
-
 function withReplies(messages: ChatMessage[]): ChatMessage[] {
   const lastReviewMessage = new Map<string, string>();
   return messages.map((message) => {
-    const role = agentRole(message.speaker.label);
+    const { label } = message.speaker;
+    const role = agentRole(label);
     if (role.kind === "review") lastReviewMessage.set(role.dimension, message.id);
-    const title = verifiedTitle(message.speaker.label);
-    if (role.kind !== "verification" || title === undefined) return message;
+    const separator = label.indexOf(LABEL_SEPARATOR);
+    if (role.kind !== "verification" || separator < 0) return message;
+    const title = label.slice(separator + LABEL_SEPARATOR.length);
     const messageId = lastReviewMessage.get(role.dimension);
     return { ...message, replyTo: messageId ? { title, messageId } : { title } };
   });
@@ -60,7 +54,8 @@ export function reviewFleetChat(run: ReviewFleetRun): FleetChatEntry[] {
   const speaker = (agent: ReviewFleetAgent) => speakerOf(agent.id, agent.label, agent.model);
   const byEnd = (left: ReviewFleetAgent, right: ReviewFleetAgent) => (left.endedAt ?? 0) - (right.endedAt ?? 0);
   const answered = run.agents.filter((agent) => agent.status === "done").sort(byEnd);
-  const judgesLast = [...answered.filter((agent) => agent.label !== JUDGE_LABEL), ...answered.filter((agent) => agent.label === JUDGE_LABEL)];
+  const isJudge = (agent: ReviewFleetAgent) => agentRole(agent.label).kind === "judge";
+  const judgesLast = [...answered.filter((agent) => !isJudge(agent)), ...answered.filter(isJudge)];
   const messages = judgesLast.map((agent): ChatMessage => {
     const reading = readAgentResult(agent.result ?? "");
     const id = `${run.runId}-${agent.id}`;
@@ -77,8 +72,7 @@ export function reviewFleetChat(run: ReviewFleetRun): FleetChatEntry[] {
   return [...withReplies(messages), ...stopped, ...typing];
 }
 
-function lastStepDoing(steps: AnalysisConversationItem[]): { tool: string; target?: string } | undefined {
-  const lastStep = steps.at(-1);
+function lastStepDoing(lastStep: AnalysisConversationItem | undefined): { tool: string; target?: string } | undefined {
   if (lastStep?.kind !== "tool" || !lastStep.tool) return undefined;
   return lastStep.target ? { tool: lastStep.tool, target: lastStep.target } : { tool: lastStep.tool };
 }
@@ -95,7 +89,7 @@ export function analysisFleetChat(conversation: AnalysisConversation): FleetChat
     : conversation.agents
       .filter((agent) => agent.status === "running")
       .map((agent): FleetChatEntry => {
-        const doing = lastStepDoing(conversation.items.filter((item) => item.agentId === agent.id));
+        const doing = lastStepDoing(conversation.items.findLast((item) => item.agentId === agent.id));
         const entry = { kind: "typing" as const, id: `${conversation.runId}-${agent.id}-typing`, speaker: speakers.get(agent.id)! };
         return doing ? { ...entry, doing } : entry;
       });

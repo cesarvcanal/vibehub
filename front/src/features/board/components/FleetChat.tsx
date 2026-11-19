@@ -9,6 +9,12 @@ import { agentRole, type AgentReading } from "@/features/board/lib/reviewFleet";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 
+const ENTRY_TEST_ID: Record<FleetChatEntry["kind"], string> = {
+  message: "fleet-chat-message",
+  typing: "fleet-chat-typing",
+  stopped: "fleet-chat-stopped",
+};
+
 const FAMILY_STYLE: Record<ModelFamily, { avatar: string; name: string; initial: string }> = {
   opus: { avatar: "bg-violet-400", name: "text-violet-300", initial: "O" },
   sonnet: { avatar: "bg-sky-400", name: "text-sky-300", initial: "S" },
@@ -24,8 +30,7 @@ export function FleetChat({ entries, label }: { entries: FleetChatEntry[]; label
   return (
     <ol aria-label={label} className="flex min-w-0 flex-col gap-1.5">
       {entries.map((entry, index) => {
-        const previous = index > 0 ? entries[index - 1] : undefined;
-        const continues = previous?.speaker.agentId === entry.speaker.agentId;
+        const continues = entries[index - 1]?.speaker.agentId === entry.speaker.agentId;
         return (
           <li key={entry.id} id={chatEntryDomId(entry.id)} className={cn("flex min-w-0 items-end gap-2", !continues && index > 0 && "mt-1")}>
             {continues ? <span className="w-7 shrink-0" aria-hidden="true" /> : <Avatar speaker={entry.speaker} />}
@@ -49,10 +54,9 @@ function Avatar({ speaker }: { speaker: ChatSpeaker }) {
 
 function ChatBubble({ entry, showSpeaker }: { entry: FleetChatEntry; showSpeaker: boolean }) {
   const t = useT();
-  const testId = entry.kind === "message" ? "fleet-chat-message" : entry.kind === "typing" ? "fleet-chat-typing" : "fleet-chat-stopped";
   return (
     <article
-      data-testid={testId}
+      data-testid={ENTRY_TEST_ID[entry.kind]}
       className={cn("min-w-0 max-w-[88%] rounded-xl bg-muted/50 px-2.5 py-1.5 text-xs leading-relaxed", showSpeaker ? "rounded-bl-sm" : "rounded-l-sm")}
     >
       {showSpeaker ? <SpeakerLine speaker={entry.speaker} /> : null}
