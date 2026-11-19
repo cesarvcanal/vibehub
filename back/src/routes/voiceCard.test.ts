@@ -250,7 +250,8 @@ describe("POST /api/cards/:id/voice/sessions", () => {
     const res = await app.inject({ method: "POST", url: `/api/cards/${id}/voice/sessions`, headers: { cookie: owner }, payload: { sdp: OFFER } });
     expect(res.statusCode).toBe(201);
     const instructions = sentSession().session.instructions as string;
-    expect(instructions).not.toContain("Resumo da conversa deste card");
+    expect(instructions).not.toContain("Resumo da conversa deste card até agora");
+    expect(instructions).toContain("O resumo da conversa deste card não ficou pronto");
     expect(instructions).toContain("Pessoa (digitou): roda os testes");
   });
 

@@ -2,6 +2,9 @@ import { config } from "../../config/env.js";
 import { secretGet } from "../../secrets/vault.js";
 import { OPENAI_KEY } from "../transcribe/transcribe.js";
 import { logger } from "../../utils/logger.js";
+import { readHistory } from "../sdk/history.js";
+import { formatVoiceContext } from "./context.js";
+import { summarizeConversation } from "./summary.js";
 
 /**
  * VOICE MODE (POC) — a spoken conversation with OpenAI's GPT-Live, like ChatGPT's voice mode.
@@ -91,11 +94,29 @@ const CARD_INSTRUCTIONS = [
     "Se não souber, diga que não sabe.",
 ].join("\n\n");
 
-export function cardInstructions(context: string, summary: string | null): string {
+type CallSummary = { state: "none" } | { state: "ready"; text: string } | { state: "failed" };
+
+function cardInstructions(context: string, summary: CallSummary): string {
   const sections = [CARD_INSTRUCTIONS];
-  if (summary) sections.push(`Resumo da conversa deste card até agora:\n${summary}`);
+  if (summary.state === "ready") sections.push(`Resumo da conversa deste card até agora:\n${summary.text}`);
+  if (summary.state === "failed") sections.push(SUMMARY_FAILED_NOTE);
   if (context.trim()) sections.push(`Conversa recente deste chat (mais antiga primeiro):\n${context}`);
   return sections.join("\n\n");
+}
+
+const SUMMARY_FAILED_NOTE =
+  "O resumo da conversa deste card não ficou pronto: você só tem a conversa recente abaixo. Se a pessoa " +
+  "perguntar algo de antes, diga que não tem o histórico todo agora e passe a pergunta ao agente do card.";
+
+export async function cardCallInstructions(cardId: string, apiKey: string, signal: AbortSignal | undefined): Promise<string> {
+  const events = await readHistory(cardId);
+  const summary = await summarizeConversation({ cardId, events, apiKey, signal })
+    .then((text): CallSummary => (text === null ? { state: "none" } : { state: "ready", text }))
+    .catch((err: unknown): CallSummary => {
+      if (!signal?.aborted) logger.warn({ card: cardId, detail: (err as Error).message }, "voice: the conversation summary failed");
+      return { state: "failed" };
+    });
+  return cardInstructions(formatVoiceContext(events), summary);
 }
 
 export class VoiceLiveError extends Error {

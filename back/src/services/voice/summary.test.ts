@@ -55,9 +55,9 @@ describe("summarizeConversation", () => {
     ["a OpenAI recusa", async () => modelAnswer("x", 500)],
     ["a rede cai", async () => { throw new TypeError("fetch failed"); }],
     ["a resposta não traz texto", async () => new Response(JSON.stringify({ output: [] }), { status: 200 })],
-  ])("quando %s, não há resumo e a falha não fica guardada", async (failure, failing) => {
+  ])("quando %s, a falha chega a quem pediu e não fica guardada", async (failure, failing) => {
     const fetchImpl = vi.fn(failing);
-    expect(await summarize(`card-d ${failure}`, conversation, fetchImpl as typeof fetch)).toBeNull();
+    await expect(summarize(`card-d ${failure}`, conversation, fetchImpl as typeof fetch)).rejects.toThrow();
     const healthy = vi.fn(async () => modelAnswer("agora sim"));
     expect(await summarize(`card-d ${failure}`, conversation, healthy)).toBe("agora sim");
   });
@@ -69,7 +69,7 @@ describe("summarizeConversation", () => {
     }));
     const pending = summarize("card-e", conversation, fetchImpl as typeof fetch, gone.signal);
     gone.abort();
-    expect(await pending).toBeNull();
+    await expect(pending).rejects.toThrow();
   });
 
   it("um resumo maior que o teto é cortado", async () => {

@@ -1,10 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { requireSession, requestUser, sessionUserId } from "../auth/session.js";
 import { requireCardWork } from "../auth/access.js";
-import { cardInstructions, createLiveSession, voiceLiveStatus, SDP_MAX_BYTES, VoiceLiveError } from "../services/voice/live.js";
-import { formatVoiceContext } from "../services/voice/context.js";
-import { summarizeConversation } from "../services/voice/summary.js";
-import { readHistory } from "../services/sdk/history.js";
+import { cardCallInstructions, createLiveSession, voiceLiveStatus, SDP_MAX_BYTES, VoiceLiveError } from "../services/voice/live.js";
 import { parseVoiceTurns, saveVoiceTurns } from "../services/voice/turns.js";
 import { speechAvailable, synthesizeSpeech, SPEECH_MAX_CHARS } from "../services/voice/speech.js";
 import { Readable } from "node:stream";
@@ -67,11 +64,7 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
           user,
           cardId,
           signal: gone.signal,
-          instructionsFor: async (apiKey, signal) => {
-            const events = await readHistory(cardId);
-            const summary = await summarizeConversation({ cardId, events, apiKey, signal });
-            return cardInstructions(formatVoiceContext(events), summary);
-          },
+          instructionsFor: (apiKey, signal) => cardCallInstructions(cardId, apiKey, signal),
         });
         return await reply.code(201).send(answer);
       } catch (err) {

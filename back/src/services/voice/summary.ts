@@ -1,12 +1,11 @@
 import { createHash } from "node:crypto";
 import type { HistoryEvent } from "../sdk/history.js";
 import { clipLine } from "../../utils/clipLine.js";
-import { logger } from "../../utils/logger.js";
 import { formatVoiceContext } from "./context.js";
 
 // external: Responses API, raw HTTP — the text is in output[].content[] of type "output_text"; `output_text` at the top is SDK-only (developers.openai.com/api/reference/resources/responses/methods/create)
 const RESPONSES_URL = "https://api.openai.com/v1/responses";
-// external: the cheapest current text model, reasoning.effort "none" supported (developers.openai.com/api/docs/models/gpt-6-luna)
+// external: gpt-6-luna accepts reasoning.effort "none" (developers.openai.com/api/docs/models/gpt-6-luna)
 export const SUMMARY_MODEL = "gpt-6-luna";
 
 const SUMMARY_TIMEOUT_MS = 6_000;
@@ -57,38 +56,25 @@ export async function summarizeConversation(opts: SummarizeConversationOptions):
 
   const signals = [AbortSignal.timeout(SUMMARY_TIMEOUT_MS)];
   if (opts.signal) signals.push(opts.signal);
-  try {
-    const resp = await (opts.fetchImpl ?? fetch)(RESPONSES_URL, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${opts.apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: SUMMARY_MODEL,
-        instructions: SUMMARY_INSTRUCTIONS,
-        input: `Conversa do card (mais antiga primeiro):\n${thread}`,
-        reasoning: { effort: "none" },
-        max_output_tokens: SUMMARY_OUTPUT_TOKENS,
-        store: false,
-      }),
-      signal: AbortSignal.any(signals),
-    });
-    if (!resp.ok) {
-      logger.warn({ card: opts.cardId, status: resp.status }, "voice: OpenAI refused the conversation summary");
-      return null;
-    }
-    const text = outputText(await resp.json());
-    if (!text) {
-      logger.warn({ card: opts.cardId }, "voice: the conversation summary came back without text");
-      return null;
-    }
-    const summary = clipLine(text, SUMMARY_MAX_CHARS);
-    cachedSummaries.delete(opts.cardId);
-    cachedSummaries.set(opts.cardId, { threadHash, summary });
-    if (cachedSummaries.size > CACHED_SUMMARIES_MAX) cachedSummaries.delete(cachedSummaries.keys().next().value!);
-    return summary;
-  } catch (err) {
-    if (!opts.signal?.aborted) {
-      logger.warn({ card: opts.cardId, timedOut: (err as Error).name === "TimeoutError" }, "voice: the conversation summary failed");
-    }
-    return null;
-  }
+  const resp = await (opts.fetchImpl ?? fetch)(RESPONSES_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${opts.apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: SUMMARY_MODEL,
+      instructions: SUMMARY_INSTRUCTIONS,
+      input: `Conversa do card (mais antiga primeiro):\n${thread}`,
+      reasoning: { effort: "none" },
+      max_output_tokens: SUMMARY_OUTPUT_TOKENS,
+      store: false,
+    }),
+    signal: AbortSignal.any(signals),
+  });
+  if (!resp.ok) throw new Error(`OpenAI refused the conversation summary (HTTP ${resp.status})`);
+  const text = outputText(await resp.json());
+  if (!text) throw new Error("the conversation summary came back without text");
+  const summary = clipLine(text, SUMMARY_MAX_CHARS);
+  cachedSummaries.delete(opts.cardId);
+  cachedSummaries.set(opts.cardId, { threadHash, summary });
+  if (cachedSummaries.size > CACHED_SUMMARIES_MAX) cachedSummaries.delete(cachedSummaries.keys().next().value!);
+  return summary;
 }
