@@ -67,7 +67,7 @@ function AgentMessage({ message }: { message: FleetMessage }) {
   );
 }
 
-function ReadingText({ reading }: { reading: AgentReading }) {
+export function ReadingText({ reading }: { reading: AgentReading }) {
   const t = useT();
   const body = "whitespace-pre-wrap leading-relaxed [overflow-wrap:anywhere]";
   switch (reading.kind) {

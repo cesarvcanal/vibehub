@@ -430,6 +430,7 @@ export interface FleetConversation {
 
 const CONVERSATION_TEXT_MAX = 2_000;
 const CONVERSATION_ITEMS_PER_AGENT = 80;
+const STRUCTURED_OUTPUT_MAX = 8_000;
 
 export const FLEET_CONVERSATION_PROBE_JS = PROBE_COMMON_JS + String.raw`
 function str(v){return typeof v==='string'?v:''}
@@ -468,7 +469,11 @@ function talkOf(dir,agent){
     const at=ts(o);
     if(o.type==='assistant'){
       if(o.message&&str(o.message.model))model=o.message.model;
-      for(const b of blocks(o)){const s=step(b,${CONVERSATION_TEXT_MAX});if(s){s.at=at;s.agentId=agent.id;items.push(s)}}
+      for(const b of blocks(o)){
+        const said=b&&b.type==='tool_use'&&b.name==='StructuredOutput';
+        const s=said?{kind:'text',text:flat(JSON.stringify(b.input==null?'':b.input),${STRUCTURED_OUTPUT_MAX})}:step(b,${CONVERSATION_TEXT_MAX});
+        if(s){s.at=at;s.agentId=agent.id;items.push(s)}
+      }
     }else if(o.type==='user'){
       for(const b of blocks(o))if(b&&b.type==='tool_result')items.push({agentId:agent.id,at:at,kind:'result',text:flat(resultText(b.content),300)});
     }

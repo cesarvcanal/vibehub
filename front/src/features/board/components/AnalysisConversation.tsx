@@ -2,9 +2,10 @@ import { useQuery } from "@tanstack/react-query";
 import { CheckCircle2, Loader2 } from "lucide-react";
 import type { AnalysisConversation as Conversation, AnalysisConversationItem } from "@/api/types";
 import { boardApi } from "@/features/board/api";
-import { fleetAgentName } from "@/features/board/components/ReviewFleet";
+import { ReadingText, fleetAgentName } from "@/features/board/components/ReviewFleet";
 import { cardAnalysisConversationKey } from "@/features/board/lib/analysis";
 import { conversationTurns, type ConversationTurn } from "@/features/board/lib/analysisConversation";
+import { readAgentResult } from "@/features/board/lib/reviewFleet";
 import { apiErrorMessage } from "@/lib/apiError";
 import { useT } from "@/i18n";
 
@@ -72,6 +73,6 @@ function TurnStep({ item }: { item: AnalysisConversationItem }) {
     case "result":
       return <p className={`border-l-2 border-border/60 pl-2 font-mono text-[11px] text-muted-foreground ${wrapped}`}>{item.text}</p>;
     case "text":
-      return <p className={`leading-relaxed text-foreground/90 ${wrapped}`}>{item.text}</p>;
+      return <ReadingText reading={readAgentResult(item.text ?? "")} />;
   }
 }
