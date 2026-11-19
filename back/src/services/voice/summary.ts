@@ -9,7 +9,7 @@ const RESPONSES_URL = "https://api.openai.com/v1/responses";
 // external: the cheapest current text model, reasoning.effort "none" supported (developers.openai.com/api/docs/models/gpt-6-luna)
 export const SUMMARY_MODEL = "gpt-6-luna";
 
-export const SUMMARY_TIMEOUT_MS = 6_000;
+const SUMMARY_TIMEOUT_MS = 6_000;
 const SUMMARY_INPUT_MAX_CHARS = 60_000;
 const SUMMARY_INPUT_ITEM_MAX_CHARS = 4_000;
 export const SUMMARY_MAX_CHARS = 2_000;

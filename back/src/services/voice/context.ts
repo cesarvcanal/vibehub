@@ -39,11 +39,11 @@ export function formatVoiceContext(
   const lines: string[] = [];
   let used = 0;
   for (let i = events.length - 1; i >= 0; i--) {
-    const l = conversationLine(events[i]!, itemMaxChars);
-    if (!l) continue;
-    if (used + l.length + 1 > maxChars) break;
-    lines.push(l);
-    used += l.length + 1;
+    const threadLine = conversationLine(events[i]!, itemMaxChars);
+    if (!threadLine) continue;
+    if (used + threadLine.length + 1 > maxChars) break;
+    lines.push(threadLine);
+    used += threadLine.length + 1;
   }
   return lines.reverse().join("\n");
 }

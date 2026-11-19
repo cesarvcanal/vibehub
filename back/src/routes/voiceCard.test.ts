@@ -68,6 +68,7 @@ async function history(cardId: string) {
 }
 
 const RESPONSES_URL = "https://api.openai.com/v1/responses";
+const LIVE_SESSIONS_URL = "https://api.openai.com/v1/live/sessions";
 
 function summaryAnswer(text: string) {
   return new Response(JSON.stringify({ status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text }] }] }), {
@@ -232,7 +233,7 @@ describe("POST /api/cards/:id/voice/sessions", () => {
 
     const res = await app.inject({ method: "POST", url: `/api/cards/${id}/voice/sessions`, headers: { cookie: owner }, payload: { sdp: OFFER } });
     expect(res.statusCode).toBe(201);
-    expect(upstream.mock.calls.map(([url]) => url)).toEqual([RESPONSES_URL, "https://api.openai.com/v1/live/sessions"]);
+    expect(upstream.mock.calls.map(([url]) => url)).toEqual([RESPONSES_URL, LIVE_SESSIONS_URL]);
     const summaryBody = JSON.parse(String((upstream.mock.calls[0] as [string, RequestInit])[1].body));
     expect(summaryBody.input).toContain("Revisei: 9 de 12 achados fechados");
     const instructions = sentSession().session.instructions as string;
@@ -257,7 +258,7 @@ describe("POST /api/cards/:id/voice/sessions", () => {
     const id = await makeCard();
     openAi(() => summaryAnswer("nunca"));
     expect((await app.inject({ method: "POST", url: `/api/cards/${id}/voice/sessions`, headers: { cookie: owner }, payload: { sdp: OFFER } })).statusCode).toBe(201);
-    expect(upstream.mock.calls.map(([url]) => url)).toEqual(["https://api.openai.com/v1/live/sessions"]);
+    expect(upstream.mock.calls.map(([url]) => url)).toEqual([LIVE_SESSIONS_URL]);
   });
 
   it("as instruções mandam esclarecer a dúvida e falar o pedido completo antes de delegar", async () => {

@@ -59,10 +59,10 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
         if (!reply.raw.writableEnded) gone.abort();
       });
       try {
-        // The owner passes the access check for any id: a card that is not on the board is a 404 here.
-        if (!(await registry.getCard(req.params.id))) return await reply.code(404).send({ error: "card not found" });
-        const user = (await sessionUserId(req)) ?? "unknown";
         const cardId = req.params.id;
+        // The owner passes the access check for any id: a card that is not on the board is a 404 here.
+        if (!(await registry.getCard(cardId))) return await reply.code(404).send({ error: "card not found" });
+        const user = (await sessionUserId(req)) ?? "unknown";
         const answer = await createLiveSession(req.body?.sdp, {
           user,
           cardId,
