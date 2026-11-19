@@ -66,6 +66,7 @@ async function deliverUnderReview(cardId: string, opts: DeliverCardOpts): Promis
   if (opts.authorized === true) {
     const card = await getCard(cardId);
     if (card?.reviewOf) return await mergeFromReviewerCard(card, opts);
+    if (card?.pushBranch !== undefined && opts.from !== cardId) return plain(await deliverAnalysisWithoutMerge(cardId, opts));
   }
   const review = opts.authorized === true ? await activeReviewFor(cardId) : undefined;
   if (!review) return plain(await deliver(cardId, opts));
@@ -98,6 +99,19 @@ async function deliverUnderReview(cardId: string, opts: DeliverCardOpts): Promis
     return { result: withOutput({ ...pushed, reason: "review_active", output }, recorded.text), concludeRecorded: recorded.concludeRecorded };
   }
   return { result: mergeAnswer(await mergeReviewedPr(now.id, orderedBy), pushed, now, recorded), concludeRecorded: recorded.concludeRecorded };
+}
+
+const ANALYSIS_ORDER_FROM_ELSEWHERE =
+  "o merge de um card de análise só sai pela ordem dada no chat dele: o próprio card chama o vibehub_deliver com " +
+  "from = o id dele. A ordem veio de outro card, então o PR foi atualizado e nada foi mergeado.";
+
+/**
+ * An ANALYSIS card (`Card.pushBranch`) told to merge by ANOTHER card: its PR is somebody else's, so the merge
+ * follows only the order of whoever spoke to the analysis card itself. The delivery still goes, without the merge.
+ */
+async function deliverAnalysisWithoutMerge(cardId: string, opts: DeliverCardOpts): Promise<DeliverResult> {
+  const result = await deliver(cardId, { ...opts, authorized: false });
+  return result.reason === "unauthorized" ? { ...result, output: ANALYSIS_ORDER_FROM_ELSEWHERE } : result;
 }
 
 /**
