@@ -256,10 +256,7 @@ async function concludeUnstartedAnalysis(card: Card, prNumber: number, reason: s
   }
 }
 
-/**
- * Plants the fleet script in the runner, then types the analysis prompt into the new card, on behalf of the
- * reviewer. Same delivery as the review's relay.
- */
+/** Types the analysis prompt into the new card, on behalf of the reviewer. Same delivery as the review's relay. */
 async function deliverAnalysisPrompt(card: Card, pull: OpenPull, reviewer: PublicUser, coauthorTrailer?: string): Promise<void> {
   const text = analysisPrompt({
     cardId: card.id, prNumber: pull.number, prUrl: pull.url, branch: pull.branch, base: pull.base,
