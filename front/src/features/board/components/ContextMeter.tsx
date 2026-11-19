@@ -1,5 +1,5 @@
 import * as React from "react";
-import { AlertTriangle, FoldVertical, OctagonAlert, X } from "lucide-react";
+import { AlertTriangle, FoldVertical, OctagonAlert } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   CONTEXT_DANGER_AT,
@@ -21,8 +21,7 @@ import { useT } from "@/i18n";
  * text color so it reads in any theme. Hovering (or focusing) opens the guide: the whole ruler with the
  * current point and the three bands — smart, worrying, dangerous — with the current one highlighted.
  *
- * Past 30% the pill gets a badge ("atenção", "perigo") and the number in the band's color; the spelled-out
- * message is left to `ContextNotice`, above the field.
+ * Past 30% the pill gets a badge ("atenção", "perigo") and the number in the band's color.
  */
 
 const ZONES: readonly { zone: ContextZone; mid: number }[] = [
@@ -146,56 +145,5 @@ export function ContextMeter({ usage, className }: { usage: ContextUsageInfo | n
         </div>
       </TooltipContent>
     </Tooltip>
-  );
-}
-
-/**
- * THE SPELLED-OUT MESSAGE above the field, when the context leaves the smart band. Worrying is an
- * amber warning the dev can hide (it comes back on its own if the conversation reaches danger); dangerous is
- * a red strip that does not hide while the conversation is there.
- */
-export function ContextNotice({ usage, className }: { usage: ContextUsageInfo | null; className?: string }) {
-  const t = useT();
-  const [dismissedWarn, setDismissedWarn] = React.useState(false);
-  const zone = usage ? contextZone(usage.percent) : null;
-  // The "hide" holds until the conversation leaves the worrying band — to the smart one (a /compact, a
-  // /clear) or to danger: on returning to worrying, the warning shows up again. Only a READING counts:
-  // no reading (the reconnection zeroes it and the back resends right after) is not the conversation changing band.
-  React.useEffect(() => {
-    if (zone === "smart" || zone === "danger") setDismissedWarn(false);
-  }, [zone]);
-  if (!usage || zone === null || zone === "smart") return null;
-  if (zone === "warn" && dismissedWarn) return null;
-  const n = Math.round(usage.percent);
-  const danger = zone === "danger";
-  const Icon = danger ? OctagonAlert : AlertTriangle;
-  return (
-    <div
-      role={danger ? "alert" : "status"}
-      data-testid="context-notice"
-      data-zone={zone}
-      className={cn(
-        "flex items-start gap-2 rounded-md border px-3 py-1.5 text-xs leading-snug",
-        danger
-          ? "border-red-500/60 bg-red-500/15 font-medium text-red-700 dark:text-red-200"
-          : "border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-200",
-        className,
-      )}
-    >
-      <Icon aria-hidden className={cn("mt-px h-4 w-4 shrink-0", danger && "animate-pulse motion-reduce:animate-none")} />
-      <span className="min-w-0 flex-1">{t(danger ? "context.notice.danger" : "context.notice.warn", { n })}</span>
-      {!danger ? (
-        <button
-          type="button"
-          data-testid="context-notice-dismiss"
-          aria-label={t("context.notice.dismiss")}
-          title={t("context.notice.dismiss")}
-          onClick={() => setDismissedWarn(true)}
-          className="shrink-0 rounded p-0.5 opacity-70 hover:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
-      ) : null}
-    </div>
   );
 }
