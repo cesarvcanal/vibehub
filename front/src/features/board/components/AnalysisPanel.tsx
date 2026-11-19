@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { Badge, type BadgeTone } from "@/components/ui/badge";
+import { Badge, BADGE_TEXT, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   ANALYSIS_DIMENSIONS, type AnalysisFinding, type AnalysisReadModel, type AnalysisSeverity, type AnalysisVerdict,
@@ -12,12 +12,12 @@ import { useT, type Translate } from "@/i18n";
 
 const SEVERITY_ORDER: readonly AnalysisSeverity[] = ["blocking", "improvement", "question", "suggestion"];
 
-const HEALTH_TEXT_CLASS: Record<DimensionHealth, string> = {
-  ok: "text-emerald-400",
-  attention: "text-amber-400",
-  problem: "text-destructive",
-  not_run: "text-destructive",
-  skipped: "text-muted-foreground",
+const HEALTH_TONE: Record<DimensionHealth, BadgeTone> = {
+  ok: "ok",
+  attention: "warn",
+  problem: "critical",
+  not_run: "critical",
+  skipped: "muted",
 };
 
 const VERDICT_TONE: Record<AnalysisVerdict, BadgeTone> = { apt: "ok", not_apt: "critical", pending: "info" };
@@ -104,7 +104,7 @@ function AnalysisBody({ read }: { read: AnalysisReadModel }) {
           return (
             <li key={dimension} className="flex flex-col gap-0.5 rounded-md border border-border/60 bg-background/40 px-2 py-1.5">
               <span className="text-xs font-medium">{t(`analysis.dimension.${dimension}`)}</span>
-              <span className={`text-[11px] ${HEALTH_TEXT_CLASS[health]}`}>{t(`analysis.health.${health}`)}</span>
+              <span className={`text-[11px] ${BADGE_TEXT[HEALTH_TONE[health]]}`}>{t(`analysis.health.${health}`)}</span>
               {reason ? <span className="text-[11px] text-muted-foreground">{reason}</span> : null}
             </li>
           );
