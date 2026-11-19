@@ -186,7 +186,7 @@ nothing is merged. The answer carries `comments: { posted, skipped }`.
 
 ### The card's base is where its PR goes
 
-A card is cut from `origin/<base>` right after a `git fetch --all --prune` of the project's clone, and
+A card is cut from `origin/<base>` right after a `git fetch --prune origin` of the project's clone, and
 `base` is the "Branch de origem" picked when the card was created (the project's `baseBranch` only when
 nobody picked one). That branch is also the card's delivery target: `vibehub_deliver` without `branch`
 opens the PR to the card's `base`. The base is in `vibehub_list_terminals` (`base`) and stated at the top
@@ -342,7 +342,7 @@ context, worktree and branch.
 
 | Tool | What it does |
 |---|---|
-| `vibehub_list_terminals` | lists the cards with their situation (`working`, `waiting`, `paused`, `done`, `no session`); `project` filters |
+| `vibehub_list_terminals` | lists the cards with their `base` (the branch each was cut from, where its PR goes) and situation (`working`, `waiting`, `paused`, `done`, `no session`); `project` filters |
 | `vibehub_send_to_terminal` | types an instruction at another card's prompt and submits it |
 | `vibehub_read_terminal` | reads that card's last assistant answers, stripped to text |
 | `vibehub_list_projects` | lists every project (id, name, repository, base branch), even one with no card yet, and whether the person who gave the calling card its order may create a card there (`canCreateCard`, `reason`) |
@@ -375,7 +375,7 @@ Tokens are stored hashed in `oauth.json` and die with the account, or when its p
 | Tool | Who / what |
 |---|---|
 | `vibehub_list_projects` | the projects the user reaches; `canCreateCards` (owner only) |
-| `vibehub_list_terminals` | the cards the user reaches, with their `access` (`work` / `view`) |
+| `vibehub_list_terminals` | the cards the user reaches, with their `base` and `access` (`work` / `view`) |
 | `vibehub_create_card` | **owner** — creates a card and opens it (answers `opening` while the workspace is prepared) |
 | `vibehub_open_card` | `work` — opens or resumes a session |
 | `vibehub_send_to_terminal` | `work` — the user's own message, attributed to them; goes into the live native chat when there is one, else the terminal prompt. Returns `sentAt` |

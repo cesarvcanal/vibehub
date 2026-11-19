@@ -297,6 +297,7 @@ describe("brainTextForCard (o aviso da branch de origem)", () => {
     expect(out).toContain("cut from `prod`");
     expect(out).toContain("pull request goes to `prod`");
     expect(out).toContain("base_divergente");
+    expect(out).not.toContain("not to the project's base branch");
     expect(out.endsWith("regras do erp-aux")).toBe(true);
   });
 

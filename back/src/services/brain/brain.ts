@@ -223,7 +223,7 @@ export function baseBranchNotice(base: string): string {
   return [
     "## Card base branch (vibehub)",
     "",
-    `This card was cut from \`${base}\`, and its pull request goes to \`${base}\` — not to the project's base branch.`,
+    `This card was cut from \`${base}\`, and its pull request goes to \`${base}\`.`,
     "",
     `- \`vibehub_deliver\` without \`branch\` already targets \`${base}\`. Do not rebuild the work on another branch.`,
     `- A \`branch\` other than \`${base}\` stops with \`base_divergente\` and says how many commits and files would go along;`,

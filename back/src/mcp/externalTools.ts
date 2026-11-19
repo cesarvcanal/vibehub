@@ -175,7 +175,8 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     {
       description:
         "List the cards (terminals) you can reach. Each card is a real Claude Code terminal with its " +
-        "own session, worktree and branch. Returns id, title, project, column, situation " +
+        "own session, worktree and branch. Returns id, title, project, column, the base branch the card " +
+        "was cut from (where its PR goes), situation " +
         "(working/waiting/paused/done/no session), whether the session is live, what the card's agent " +
         "last reported about its work, and your `access` (work = you can send/open/move/deliver; " +
         "view = read only). situation 'waiting' means its last turn is over — read it. `project` " +
