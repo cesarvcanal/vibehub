@@ -662,7 +662,7 @@ Antes de cada etapa, ache no mapa abaixo a skill da situação e invoque-a pela 
 | Desenhar a interface de um módulo, decidir onde passa a fronteira | `mattpocock-skills:codebase-design` |
 | Tela nova ou redesenho, antes do código | Artifact (`quickstart`), quando o ambiente oferece a ferramenta, senão página HTML local; + `frontend-design:frontend-design` |
 | Revisar tela existente, acessibilidade, layout responsivo | `ui-design:design-review` · `ui-design:accessibility-audit` · `ui-design:responsive-design` |
-| Bug, teste falhando, comportamento que ninguém explica | `superpowers:systematic-debugging` |
+| Bug, teste falhando, comportamento que ninguém explica | `mattpocock-skills:diagnosing-bugs` |
 | Tarefa de várias etapas | `superpowers:writing-plans`, depois `superpowers:executing-plans` (você executa) ou `superpowers:subagent-driven-development` (um subagente por tarefa) |
 | Duas ou mais tarefas independentes em paralelo | `superpowers:dispatching-parallel-agents` |
 | Escrever feature ou correção | `superpowers:test-driven-development` |
@@ -680,7 +680,7 @@ Antes de cada etapa, ache no mapa abaixo a skill da situação e invoque-a pela 
 ### Ordem de trabalho
 
 1. **Entender e perguntar.** A pergunta da §12 sai pela `AskUserQuestion`, com "(Recomendado)" no rótulo da recomendada; a saída livre a ferramenta já põe.
-2. **Diagnosticar ou desenhar:** bug pela `superpowers:systematic-debugging`; feature pela `superpowers:brainstorming`; tela nova com o protótipo aprovado antes do React.
+2. **Diagnosticar ou desenhar:** bug pela `mattpocock-skills:diagnosing-bugs`; feature pela `superpowers:brainstorming`; tela nova com o protótipo aprovado antes do React.
 3. **Planejar** a tarefa de várias etapas.
 4. **Implementar em TDD**, com o vermelho visto antes do verde e a §11 ("Antes do primeiro helper de teste") antes do primeiro helper.
 5. **Fechamento**, abaixo.
