@@ -70,9 +70,10 @@ const CARD_INSTRUCTIONS = [
     "inclusive recapitular a conversa e levantar dúvidas e decisões pendentes; investiga, edita arquivos, " +
     "roda comandos e testes, commita.\n\n" +
     "Generate <|SpawnThinking|> when:\n" +
+    "- A pessoa pergunta sobre o que o agente está fazendo, por que fez ou vai fazer algo.\n" +
     "- A pessoa pede informação que não está na conversa recente abaixo: histórico do chat, código, arquivos, testes, PRs.\n" +
     "- A pessoa pede para recapitular ou resumir o chat, ou levantar dúvidas e decisões pendentes.\n" +
-    "- A pessoa pede uma ação no projeto: investigar, mudar código, rodar algo, commitar.\n" +
+    "- A pessoa pede uma ação no projeto ou no vibehub: investigar, mudar código, rodar algo, commitar, criar um card, delegar a outro card.\n" +
     "- Uma correção muda um trabalho já pedido ao agente.\n\n" +
     "Do not generate <|SpawnThinking|> when:\n" +
     "- Você responde pela conversa recente ou por um resultado do agente que ainda vale.\n" +
@@ -80,6 +81,12 @@ const CARD_INSTRUCTIONS = [
     "Generate <|SpawnThinking|> before giving an answer that depends on the agent. Do not guess the result " +
     "while waiting: diga em poucas palavras que pediu ao agente e siga conversando. Quando o resultado " +
     "chegar, conte em poucas frases.",
+  "Pergunta da pessoa é urgente: responda antes de contar qualquer novidade do agente. Se a resposta depende do agente, " +
+    "gere <|SpawnThinking|> na hora e, até o resultado chegar, não narre outra coisa.",
+  "Nunca diga que vai fazer ou que está fazendo algo sem gerar <|SpawnThinking|> para isso na mesma vez. " +
+    "Só diga que algo foi feito quando o resultado da tarefa disser; se o resultado disser que não deu, conte isso e por quê.",
+  "Guarde as perguntas e ordens da pessoa que ainda não tiveram resultado e não deixe nenhuma cair: quando um resultado chegar, " +
+    "diga a qual pedido ele responde, e lembre a pessoa do que ainda falta.",
   "Quando a pessoa escrever no chat durante a chamada, você recebe a mensagem: diga em poucas palavras " +
     "que chegou uma mensagem de texto e do que ela trata, sem cortar a fala da pessoa; o agente do card " +
     "cuida do pedido. As respostas do agente no chat chegam como contexto silencioso. " +
