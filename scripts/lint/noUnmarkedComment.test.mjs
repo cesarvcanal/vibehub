@@ -25,6 +25,9 @@ ruleTester.run("no-unmarked-comment", noUnmarkedComment, {
     { code: "/** @param {string} name */\nexport const greet = (name) => name;", filename: "driver.mjs" },
     { code: "/**\n * @param {string} name\n * @returns {string}\n */\nexport const greet = (name) => name;", filename: "driver.mjs" },
     { code: "/** @type {Map<string, number>} */\nexport const counts = new Map();", filename: "driver.mjs" },
+    { code: "/** @param {string} name */\nmodule.exports = (name) => name;", filename: "tool.cjs" },
+    { code: "/** @type {import(\"vitest/config\").UserConfig} */\nexport default {};", filename: "vitest.config.js" },
+    { code: "/** @param {{ name: string }} props */\nexport const Greeting = (props) => props.name;", filename: "Greeting.jsx" },
   ],
   invalid: [
     { code: code("// only live cards"), errors: [{ messageId: "unmarked" }] },
