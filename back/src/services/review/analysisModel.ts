@@ -1,10 +1,10 @@
 import type { Finding, FindingSeverity } from "./model.js";
 
-export type AnalysisDimension = "correctness" | "security" | "performance" | "contracts" | "tests" | "repoRules";
-export const ANALYSIS_DIMENSIONS: readonly AnalysisDimension[] = ["correctness", "security", "performance", "contracts", "tests", "repoRules"];
+export const ANALYSIS_DIMENSIONS = ["correctness", "security", "performance", "contracts", "tests", "repoRules"] as const;
+export type AnalysisDimension = (typeof ANALYSIS_DIMENSIONS)[number];
 
-export type AnalysisStage = "analysed" | "done" | "fleet_unavailable";
-export const ANALYSIS_STAGES: readonly AnalysisStage[] = ["analysed", "done", "fleet_unavailable"];
+export const ANALYSIS_STAGES = ["analysed", "done", "fleet_unavailable"] as const;
+export type AnalysisStage = (typeof ANALYSIS_STAGES)[number];
 
 export type AnalysisSeverity = Exclude<FindingSeverity, "refuted">;
 

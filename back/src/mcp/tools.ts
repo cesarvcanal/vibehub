@@ -16,7 +16,7 @@ import { MAX_ROUNDS, cardsToConclude } from "../services/review/model.js";
 import { attachPrs } from "../services/review/attach.js";
 import { startReviewByAgent } from "../services/review/start.js";
 import { recordAnalysisReport } from "../services/review/analysisReport.js";
-import { ANALYSIS_DIMENSIONS, ANALYSIS_STAGES, type AnalysisDimension, type AnalysisStage } from "../services/review/analysisModel.js";
+import { ANALYSIS_DIMENSIONS, ANALYSIS_STAGES } from "../services/review/analysisModel.js";
 import { ok, fail } from "./toolResult.js";
 
 /**
@@ -85,7 +85,7 @@ export const reviewFinding = z.object({
     .describe("round 2+: the current round, ONLY for a bug the author's own fix created"),
 }).superRefine(requireExplainedFinding);
 
-const analysisDimension = z.enum(ANALYSIS_DIMENSIONS as [AnalysisDimension, ...AnalysisDimension[]]);
+const analysisDimension = z.enum(ANALYSIS_DIMENSIONS);
 
 export const analysisFinding = z.object({
   id: z.string().min(1).max(20).describe("the id the fleet gave (f1, f2, ...)"),
@@ -109,7 +109,7 @@ const analysisReportFields = z.object({
   card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this analysis terminal"),
   headSha: z.string().regex(HEAD_SHA_RE, "the full sha of the analysed head")
     .describe("full sha of the analysed head, the one from step 1 (40 or 64 hex chars); `done` repeats the `analysed` one"),
-  stage: z.enum(ANALYSIS_STAGES as [AnalysisStage, ...AnalysisStage[]]),
+  stage: z.enum(ANALYSIS_STAGES),
   summary: z.string().min(1).max(1000),
   dimensions: z.array(z.object({
     key: analysisDimension,
