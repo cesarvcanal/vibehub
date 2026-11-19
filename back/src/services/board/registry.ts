@@ -1398,14 +1398,14 @@ export async function createAccount(input: { name: string }): Promise<Account> {
 }
 
 export async function renameAccount(slug: string, name: string): Promise<Account> {
-  const v = assertAccountSlug(slug);
-  const clean = String(name ?? "").trim();
-  if (!clean) throw new Error("name is required");
+  const accountSlug = assertAccountSlug(slug);
+  const trimmedName = String(name ?? "").trim();
+  if (!trimmedName) throw new Error("name is required");
   return store.mutate((doc) => {
-    const found = doc.accounts.find((a) => a.slug === v);
-    if (!found) throw new Error("account not found");
-    found.name = clean;
-    return found;
+    const account = doc.accounts.find((candidate) => candidate.slug === accountSlug);
+    if (!account) throw new Error("account not found");
+    account.name = trimmedName;
+    return account;
   });
 }
 

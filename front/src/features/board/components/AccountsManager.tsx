@@ -358,11 +358,13 @@ export function AccountsManager({ trigger = "icon" }: { trigger?: "icon" | "row"
                         className="h-7 text-sm font-medium"
                         value={nameDrafts[account.slug] ?? account.name}
                         disabled={renameMutation.isPending && renameMutation.variables?.slug === account.slug}
-                        onChange={(e) => setNameDrafts((drafts) => ({ ...drafts, [account.slug]: e.target.value }))}
+                        onChange={(event) =>
+                          setNameDrafts((drafts) => ({ ...drafts, [account.slug]: event.target.value }))
+                        }
                         onBlur={() => saveAccountName(account)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                          else if (e.key === "Escape") dropNameDraft(account.slug);
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") event.currentTarget.blur();
+                          else if (event.key === "Escape") dropNameDraft(account.slug);
                         }}
                       />
                       <div className="truncate font-mono text-[11px] text-muted-foreground">

@@ -231,6 +231,18 @@ function serveBrowser(browser: { live: boolean; busy?: boolean; control?: "agent
   });
 }
 
+function servePersonalWeeklyUsage() {
+  const base = mockGet.getMockImplementation();
+  mockGet.mockImplementation((url: string, ...rest: unknown[]) =>
+    url === "/cards/c1/usage"
+      ? Promise.resolve({
+          slug: "personal",
+          usage: { available: true, sevenDay: { utilization: 57, resetsAt: null }, fetchedAt: 1 },
+        })
+      : (base as (url: string, ...rest: unknown[]) => Promise<unknown>)(url, ...rest),
+  );
+}
+
 /**
  * Renders the view with `seed` already in the board cache — i.e. arriving from the board.
  *
@@ -1101,15 +1113,7 @@ describe("CardTerminalView — the card bar", () => {
   });
 
   it("no clique, mostra a leitura da conta nova assim que ela é escolhida, sem esperar o PATCH que reinicia a sessão", async () => {
-    const base = mockGet.getMockImplementation();
-    mockGet.mockImplementation((url: string, ...rest: unknown[]) =>
-      url === "/cards/c1/usage"
-        ? Promise.resolve({
-            slug: "personal",
-            usage: { available: true, sevenDay: { utilization: 57, resetsAt: null }, fetchedAt: 1 },
-          })
-        : (base as (url: string, ...rest: unknown[]) => Promise<unknown>)(url, ...rest),
-    );
+    servePersonalWeeklyUsage();
     mockPatch.mockImplementation(() => new Promise(() => {}));
     const client = testQueryClient();
     client.setQueryData(cardRateLimitsKey("c1"), {
@@ -1128,15 +1132,7 @@ describe("CardTerminalView — the card bar", () => {
   });
 
   it("no clique, se a troca falha, o medidor volta a ler a conta que o card ainda usa", async () => {
-    const base = mockGet.getMockImplementation();
-    mockGet.mockImplementation((url: string, ...rest: unknown[]) =>
-      url === "/cards/c1/usage"
-        ? Promise.resolve({
-            slug: "personal",
-            usage: { available: true, sevenDay: { utilization: 57, resetsAt: null }, fetchedAt: 1 },
-          })
-        : (base as (url: string, ...rest: unknown[]) => Promise<unknown>)(url, ...rest),
-    );
+    servePersonalWeeklyUsage();
     mockPatch.mockRejectedValue(new Error("boom"));
     const user = userEvent.setup();
     renderWithCache([card({ openedAt: 10, accountSlug: "personal" })], testQueryClient());

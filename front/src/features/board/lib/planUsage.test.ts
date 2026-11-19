@@ -158,10 +158,14 @@ describe("reportsNoSession", () => {
     expect(reportsNoSession(weekOnly, planWindows(weekOnly, {}, NOW))).toBe(true);
   });
 
-  it.each([
+  const sessionLive: Record<string, RateLimitInfo> = {
+    five_hour: { status: "allowed", window: "five_hour", utilization: 20, resetsAt: IN_2H },
+  };
+
+  it.each<{ label: string; reading: AccountUsage | undefined; live: Record<string, RateLimitInfo> }>([
     { label: "a leitura traz a janela de 5h", reading: usage(30, 40), live: {} },
-    { label: "o aviso ao vivo do CLI traz a janela de 5h", reading: weekOnly, live: { five_hour: { status: "allowed", window: "five_hour", utilization: 20, resetsAt: IN_2H } as RateLimitInfo } },
-    { label: "não há leitura", reading: { available: false, error: "unreachable", fetchedAt: NOW } as AccountUsage, live: {} },
+    { label: "o aviso ao vivo do CLI traz a janela de 5h", reading: weekOnly, live: sessionLive },
+    { label: "não há leitura", reading: { available: false, error: "unreachable", fetchedAt: NOW }, live: {} },
     { label: "a leitura ainda não chegou", reading: undefined, live: {} },
   ])("é falso quando $label", ({ reading, live }) => {
     expect(reportsNoSession(reading, planWindows(reading, live, NOW))).toBe(false);

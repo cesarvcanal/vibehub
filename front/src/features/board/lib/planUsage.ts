@@ -132,12 +132,8 @@ export function planWindows(
   return out;
 }
 
-/**
- * The reading arrived and has no 5-hour window, neither polled nor live: the account's plan does not
- * meter a session (the usage endpoint answers `five_hour: null` for it). PURE.
- */
 export function reportsNoSession(usage: AccountUsage | undefined, windows: readonly PlanWindow[]): boolean {
-  return Boolean(usage?.available) && !windows.some((w) => w.key === "five_hour");
+  return Boolean(usage?.available) && !windows.some((planWindow) => planWindow.key === "five_hour");
 }
 
 /**
