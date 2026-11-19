@@ -10,9 +10,10 @@ vi.setConfig({ testTimeout: 30_000 });
 configure({ asyncUtilTimeout: 8_000 });
 
 const get = vi.fn();
+const post = vi.fn();
 vi.mock("@/lib/api", () => ({
   get: (...a: unknown[]) => get(...a),
-  post: vi.fn(),
+  post: (...a: unknown[]) => post(...a),
   del: vi.fn(),
   patch: vi.fn(),
 }));
@@ -47,6 +48,7 @@ const readModel = (
   health: { correctness: "ok", security: "attention", performance: "ok", contracts: "ok", tests: "ok", repoRules: "skipped", ...health },
   verdict,
   uncheckedDimensions,
+  canMerge: false,
 });
 
 function renderPanel(analysisAnswer: CardAnalysisResponse | Promise<CardAnalysisResponse>, onClose: () => void = () => {}) {
@@ -169,5 +171,55 @@ describe("painel da análise de PR", () => {
     renderPanel(readModel(doneReport(), "not_apt"), onClose);
     await userEvent.click(await screen.findByRole("button", { name: "Fechar a análise" }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("merge pelo painel da análise", () => {
+  const aptRead = (over: Partial<AnalysisReadModel> = {}): AnalysisReadModel => ({
+    ...readModel(doneReport({ findings: [] }), "apt", { security: "ok" }), canMerge: true, ...over,
+  });
+
+  it("sem canMerge o botão não aparece", async () => {
+    renderPanel(aptRead({ canMerge: false }));
+    expect(await screen.findByText("Apto")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Mergear o PR #312" })).not.toBeInTheDocument();
+  });
+
+  it("PR já mergeado diz que foi mergeado, sem o botão", async () => {
+    renderPanel(aptRead({ canMerge: false, mergedAt: 1 }));
+    expect(await screen.findByText("PR #312 mergeado")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Mergear o PR #312" })).not.toBeInTheDocument();
+  });
+
+  it("com canMerge o clique pede o merge do card, trava o botão enquanto envia e, mergeado, relê a análise", async () => {
+    const mergeAnswer = { resolve: (_body: unknown) => {} };
+    post.mockReturnValue(new Promise((resolve) => {
+      mergeAnswer.resolve = resolve;
+    }));
+    renderPanel(aptRead());
+    await userEvent.click(await screen.findByRole("button", { name: "Mergear o PR #312" }));
+    expect(post).toHaveBeenCalledWith("/cards/c1/analysis/merge");
+    const sending = screen.getByRole("button", { name: "Mergeando…" });
+    expect(sending).toBeDisabled();
+    const readsBefore = get.mock.calls.filter(([url]) => url === "/cards/c1/analysis").length;
+    mergeAnswer.resolve({ result: { merged: true, reason: "merged", branch: "dev", cardBranch: "feat/sso" } });
+    expect(await screen.findByText("PR #312 mergeado; o card foi para Concluído.")).toBeInTheDocument();
+    await vi.waitFor(() => expect(get.mock.calls.filter(([url]) => url === "/cards/c1/analysis").length).toBeGreaterThan(readsBefore));
+  });
+
+  it("merge recusado mostra o motivo do servidor e devolve o botão", async () => {
+    post.mockRejectedValue(apiReject(409, "CI vermelho no PR"));
+    renderPanel(aptRead());
+    await userEvent.click(await screen.findByRole("button", { name: "Mergear o PR #312" }));
+    expect(await screen.findByText("CI vermelho no PR")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mergear o PR #312" })).toBeEnabled();
+  });
+
+  it("em inglês o botão e o resultado saem pelo i18n", async () => {
+    setLanguage("en");
+    post.mockResolvedValue({ result: { merged: true, reason: "merged", branch: "dev", cardBranch: "feat/sso" } });
+    renderPanel(aptRead());
+    await userEvent.click(await screen.findByRole("button", { name: "Merge PR #312" }));
+    expect(await screen.findByText("PR #312 merged; the card moved to Done.")).toBeInTheDocument();
   });
 });
