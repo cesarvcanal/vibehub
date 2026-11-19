@@ -1400,7 +1400,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
       return {
         ...state,
         rows: replaceRowAt(state.rows, at, { ...row, result: event.toolResult }),
-        ...(row.live ? { lastLiveToolResult: { name: row.name } } : {}),
+        ...(state.ready ? { lastLiveToolResult: { name: row.name } } : {}),
       };
     }
     case "agent_task": {

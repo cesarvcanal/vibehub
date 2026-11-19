@@ -2124,13 +2124,13 @@ describe("lastLiveToolResult — o resultado de ferramenta que chegou ao vivo", 
     expect(state.lastLiveToolResult).toBeUndefined();
   });
 
-  it("o espelho do terminal não vira resultado ao vivo do driver", () => {
+  it("a reconexão no meio da chamada: a chamada veio no replay, o resultado chega depois do ready e conta como ao vivo", () => {
     const state = feed([
+      { type: "tool_use", id: "t1", name: REPORT_TOOL, input: {} },
       { type: "ready" },
-      { type: "tool_use", id: "t1", name: REPORT_TOOL, input: {}, source: "terminal" },
-      { type: "tool_result", id: "t1", toolResult: {}, source: "terminal" },
+      { type: "tool_result", id: "t1", toolResult: {} },
     ]);
-    expect(state.lastLiveToolResult).toBeUndefined();
+    expect(state.lastLiveToolResult).toEqual({ name: REPORT_TOOL });
   });
 
   it("os tokens de uma resposta depois do resultado não trocam o último resultado ao vivo", () => {

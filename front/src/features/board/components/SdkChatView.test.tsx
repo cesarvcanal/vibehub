@@ -4269,6 +4269,30 @@ describe("SdkChatView — a análise do card relida pelo resultado ao vivo da fe
     }
   });
 
+  it("a reconexão no meio da chamada do relatório relê a análise quando o resultado chega", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+    try {
+      renderSdkChat({ analysisCard: true, footer: <AnalysisReader /> });
+      const first = await socket();
+      first.accept();
+      first.deliver({ type: "ready" });
+      first.deliver({ type: "tool_use", id: "r1", name: REPORT_TOOL, input: {} });
+      await waitFor(() => expect(analysisReads()).toBe(1));
+
+      act(() => { first.readyState = 3; first.onclose?.(); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(RECONNECT_MAX_MS); });
+      const second = FakeSocket.instances[1] as FakeSocket;
+      second.accept();
+      second.deliver({ type: "tool_use", id: "r1", name: REPORT_TOOL, input: {} });
+      second.deliver({ type: "ready" });
+      second.deliver({ type: "tool_result", id: "r1", toolResult: {} });
+
+      await waitFor(() => expect(analysisReads()).toBe(2));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fora de um card de análise o resultado ao vivo da ferramenta não relê nada", async () => {
     renderSdkChat({ footer: <AnalysisReader /> });
     const ws = await socket();
