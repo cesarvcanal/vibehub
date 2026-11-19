@@ -229,7 +229,7 @@ export function KanbanBoard({
       void queryClient.invalidateQueries({ queryKey: boardKey });
       // The card is always off the board; the purge is what can be partial (a runner that was
       // down). Saying so is the point — "Card excluído" on a delete that left the conversation on
-      // the server is exactly the lie this feature exists to remove. The daily sweep finishes it.
+      // the server is exactly the lie this feature exists to remove. The hourly orphan sweep finishes it.
       if (result.incomplete?.length) {
         toast.warning(translate("toast.cardDeletedPartial", { steps: result.incomplete.join(", ") }));
       } else {
