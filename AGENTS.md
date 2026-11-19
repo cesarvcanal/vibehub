@@ -484,7 +484,6 @@ com login saudável a tarefa em segundo plano continua protegida.
 | 📝 | `:memo:` | Adiciona ou atualiza documentação |
 | 🚀 | `:rocket:` | Faz deploy |
 | 💄 | `:lipstick:` | Adiciona ou atualiza a interface e os arquivos de estilo |
-| 🎉 | `:tada:` | Começa um projeto |
 | ✅ | `:white_check_mark:` | Adiciona, atualiza ou faz passar testes |
 | 🔒️ | `:lock:` | Corrige problema de segurança ou de privacidade |
 | 🔐 | `:closed_lock_with_key:` | Adiciona ou atualiza segredos |
@@ -504,7 +503,6 @@ com login saudável a tarefa em segundo plano continua protegida.
 | 🔨 | `:hammer:` | Adiciona ou atualiza scripts de desenvolvimento |
 | 🌐 | `:globe_with_meridians:` | Internacionalização e localização |
 | ✏️ | `:pencil2:` | Corrige erros de digitação |
-| 💩 | `:poop:` | Escreve código ruim que precisa ser melhorado |
 | ⏪️ | `:rewind:` | Reverte mudanças |
 | 🔀 | `:twisted_rightwards_arrows:` | Faz merge de branches |
 | 📦️ | `:package:` | Adiciona ou atualiza arquivos compilados ou pacotes |
@@ -515,7 +513,6 @@ com login saudável a tarefa em segundo plano continua protegida.
 | 🍱 | `:bento:` | Adiciona ou atualiza assets |
 | ♿️ | `:wheelchair:` | Melhora a acessibilidade |
 | 💡 | `:bulb:` | Adiciona ou atualiza comentários no código-fonte |
-| 🍻 | `:beers:` | Escreve código sob efeito de álcool |
 | 💬 | `:speech_balloon:` | Adiciona ou atualiza textos e literais |
 | 🗃️ | `:card_file_box:` | Faz mudanças relacionadas a dados persistidos |
 | 🔊 | `:loud_sound:` | Adiciona ou atualiza logs |
@@ -525,11 +522,9 @@ com login saudável a tarefa em segundo plano continua protegida.
 | 🏗️ | `:building_construction:` | Faz mudanças de arquitetura |
 | 📱 | `:iphone:` | Trabalha no design responsivo |
 | 🤡 | `:clown_face:` | Cria mocks |
-| 🥚 | `:egg:` | Adiciona ou atualiza um easter egg |
 | 🙈 | `:see_no_evil:` | Adiciona ou atualiza um arquivo .gitignore |
 | 📸 | `:camera_flash:` | Adiciona ou atualiza snapshots |
 | ⚗️ | `:alembic:` | Faz experimentos |
-| 🔍️ | `:mag:` | Melhora o SEO |
 | 🏷️ | `:label:` | Adiciona ou atualiza tipos |
 | 🌱 | `:seedling:` | Adiciona ou atualiza arquivos de seed |
 | 🚩 | `:triangular_flag_on_post:` | Adiciona, atualiza ou remove feature flags |
@@ -545,10 +540,8 @@ com login saudável a tarefa em segundo plano continua protegida.
 | 🩺 | `:stethoscope:` | Adiciona ou atualiza healthcheck |
 | 🧱 | `:bricks:` | Mudanças de infraestrutura |
 | 🧑‍💻 | `:technologist:` | Melhora a experiência de quem desenvolve |
-| 💸 | `:money_with_wings:` | Adiciona patrocínio ou infraestrutura ligada a dinheiro |
 | 🧵 | `:thread:` | Adiciona ou atualiza código de multithreading ou concorrência |
 | 🦺 | `:safety_vest:` | Adiciona ou atualiza código de validação |
-| ✈️ | `:airplane:` | Melhora o suporte offline |
 | 🦖 | `:t-rex:` | Código que adiciona compatibilidade com versões anteriores |
 
 ### Regras de entrega
