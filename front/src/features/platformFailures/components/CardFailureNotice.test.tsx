@@ -108,6 +108,16 @@ describe("aviso de falha do vibehub dentro do card", () => {
     expect(await screen.findByText(MEDIDOR.explanation!)).toBeTruthy();
   });
 
+  it("o diálogo não reabre sozinho quando um aviso novo chega depois de o último sumir", async () => {
+    const { rerender } = renderNotice([MEDIDOR]);
+    await userEvent.click(await screen.findByRole("button", { name: /ver detalhes/i }));
+    await screen.findByRole("dialog");
+    rerender(<CardFailureNotice cardId="card-1" notices={[]} />);
+    rerender(<CardFailureNotice cardId="card-1" notices={[{ ...MEDIDOR, id: "f-novo", explanation: "Outro problema." }]} />);
+    expect(await screen.findByText("Outro problema.")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("mais de um aviso mostra o mais recente e quantos outros há", async () => {
     const older = { ...MEDIDOR, id: "f-velho", explanation: "Aviso mais antigo.", firstSeenAt: 1_000 };
     renderNotice([MEDIDOR, older]);

@@ -16,6 +16,7 @@ export function CardFailureNotice({ cardId, notices }: { cardId: string; notices
   const [isDetailsOpen, setDetailsOpen] = React.useState(false);
   const visibleNotices = pickVisibleNotices(notices, snoozedKeys, cardId);
   const [latestNotice] = visibleNotices;
+  if (!latestNotice && isDetailsOpen) setDetailsOpen(false);
   if (!latestNotice) return null;
 
   const snoozeLatestNotice = () => {
