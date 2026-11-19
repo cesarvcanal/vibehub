@@ -288,7 +288,7 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 2. **Antes de entregar:** `npm run lint:changed` e `npm run test:changed` (raiz), o mesmo recorte do gate (`.vibehub/gate.json`). Junto, o typecheck do pacote tocado, o mesmo do CI:
    - **front:** `npx tsc -b`. O `tsconfig.json` é uma solution com project references, então `tsc --noEmit -p` não checa nada e dá verde falso.
    - **back:** `npx tsc --noEmit`. `tsc -b` emitiria JS em `back/dist`. O `tsconfig.json` do back exclui `*.test.ts`: erro de tipo em teste só aparece ao rodar o teste.
-3. **Nunca** `npm test` ou `npx vitest run` sem filtro no runner. A suíte inteira é do CI: confira com `gh pr checks <N>`.
+3. **Nunca** `npm test` ou `npx vitest run` sem filtro no runner. A suíte inteira é do CI: confira com `gh pr checks <N>`. A exceção é `npm run test:lint`, a suíte do lint da raiz (`eslint.config.js` e `scripts/`), pequena, que roda inteira quando o PR mexe nela: o gate não a roda, só o CI.
 4. Teste de tempo (limite em ms) que falha de vez em quando sob carga não é regressão sua. Confirme rodando sem a sua mudança; se já era instável, diga no PR e siga.
 
 Se um comando de teste for passar de ~2 min, troque por um recorte menor. Não afirmar que algo passou sem executar; se não deu para testar, relatar **o que foi e o que não foi validado**.
@@ -338,6 +338,7 @@ Pedir autorização e passar por brainstorming continua obrigatório para decis�
 | `npm --prefix back run dev` · `npm --prefix front run dev` | Backend (tsx watch) e frontend (Vite) em dev |
 | `cd back && npx vitest run <arquivo> -t "<caso>"` | Teste do que você tocou (idem em `front/`) |
 | `npm run lint:changed` | ESLint só nas linhas que a branch acrescentou desde a base (`$VIBEHUB_BASE_REF`, padrão `origin/main`), o recorte do gate e do CI |
+| `npm run test:lint` | Testes do próprio lint (a config e as regras locais), quando o PR mexe em `eslint.config.js` ou `scripts/`; o gate não os roda, o CI sim |
 | `npm run test:changed` | Testes afetados pela branch desde a `main`, o recorte do gate |
 | `npx tsc -b` (em `front/`) · `npx tsc --noEmit` (em `back/`) | Typecheck, o mesmo do CI (no back não cobre `*.test.ts`) |
 | `npm run build` | Build de back + front |
