@@ -5,6 +5,14 @@ import { parseAddedLines } from "./addedLines.mjs";
 const CONFIG_FILE = join(import.meta.dirname, "..", "..", "eslint.config.js");
 const LINTED_PATHS = [":(glob)**/*.ts", ":(glob)**/*.tsx", ":(glob)**/*.mjs", ":(glob)*.js"];
 const EVERY_LINE = "every-line";
+const ALLOWED_MARKDOWN = [
+  /^AGENTS\.md$/,
+  /^README\.md$/,
+  /^SECURITY\.md$/,
+  /^\.claude\/CLAUDE\.md$/,
+  /^docs\/[^/]+\.md$/,
+  /^back\/src\/services\/brain\/personas\/[^/]+\.md$/,
+];
 
 function git(repoDir, ...args) {
   return execFileSync("git", ["-c", "core.quotePath=false", ...args], { cwd: repoDir, encoding: "utf8", maxBuffer: Infinity });
@@ -45,4 +53,12 @@ export async function lintChangedLines({ repoDir, baseRef }) {
   return results
     .map((result) => keepChangedMessages(result, changedLinesByPath.get(relative(repoDir, result.filePath))))
     .filter((result) => result.messages.length > 0);
+}
+
+export function findStrayMarkdown({ repoDir, baseRef }) {
+  const base = git(repoDir, "merge-base", "HEAD", baseRef).trim();
+  const addedMarkdown = git(repoDir, "diff", "-z", "--name-only", "--no-renames", "--diff-filter=A", base, "HEAD", "--", ":(glob)**/*.md")
+    .split("\0")
+    .filter(Boolean);
+  return addedMarkdown.filter((path) => !ALLOWED_MARKDOWN.some((allowed) => allowed.test(path))).sort();
 }

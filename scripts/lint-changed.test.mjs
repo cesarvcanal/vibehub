@@ -64,4 +64,17 @@ describe("npm run lint:changed", () => {
     expect({ status: run.status, stderr: run.stderr }).toEqual({ status: 0, stderr: "" });
     expect(run.stdout).toContain("nenhuma linha acrescentada desde main");
   });
+
+  it("markdown solto commitado sai 1, com o caminho e a regra na saída", () => {
+    const repoDir = createRepoWithLint();
+    writeRepoFile(repoDir, "NOTES.md", "notes\n");
+    git(repoDir, "add", "NOTES.md");
+    git(repoDir, "commit", "-qm", "notes");
+
+    const run = runLintChanged(repoDir);
+
+    expect(run.status).toBe(1);
+    expect(run.stdout).toContain("NOTES.md");
+    expect(run.stdout).toContain("AGENTS.md §15");
+  });
 });

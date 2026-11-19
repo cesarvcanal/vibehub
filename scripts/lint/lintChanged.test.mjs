@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { relative } from "node:path";
-import { lintChangedLines } from "./lintChanged.mjs";
+import { lintChangedLines, findStrayMarkdown } from "./lintChanged.mjs";
 import { git, writeRepoFile, createRepoWithBase } from "./testRepo.mjs";
 
 const LEGACY = "let legacy = 1;\nlegacy += 1;\nexport { legacy };\n";
@@ -92,5 +92,44 @@ describe("lintChangedLines", () => {
     const repoDir = createRepoWithBase({ "back/src/legacy.ts": LEGACY });
 
     await expect(lintChangedLines({ repoDir, baseRef: "origin/nao-existe" })).rejects.toThrow(/merge-base/);
+  });
+});
+
+describe("findStrayMarkdown", () => {
+  it("markdown commitado fora dos lugares previstos é solto; os previstos passam", () => {
+    const repoDir = createRepoWithBase({ "README.md": "base\n" });
+    [
+      "docs/notes.md",
+      "docs/superpowers/plans/plan.md",
+      "back/src/services/brain/personas/reviewer.md",
+      "AGENTS.md",
+      "CONTRIBUTING.md",
+      "back/src/services/board/NOTES.md",
+      ".claude/rules.md",
+    ].forEach((path) => writeRepoFile(repoDir, path, "text\n"));
+    git(repoDir, "add", "-f", ".");
+    git(repoDir, "commit", "-qm", "docs");
+
+    expect(findStrayMarkdown({ repoDir, baseRef: "main" })).toEqual([
+      ".claude/rules.md",
+      "CONTRIBUTING.md",
+      "back/src/services/board/NOTES.md",
+      "docs/superpowers/plans/plan.md",
+    ]);
+  });
+
+  it("mover um markdown previsto para fora dos lugares previstos também é solto", () => {
+    const repoDir = createRepoWithBase({ "docs/API.md": "api\n" });
+    git(repoDir, "mv", "docs/API.md", "API.md");
+    git(repoDir, "commit", "-qm", "move");
+
+    expect(findStrayMarkdown({ repoDir, baseRef: "main" })).toEqual(["API.md"]);
+  });
+
+  it("markdown que não foi commitado, como o CLAUDE.local.md do card, não conta", () => {
+    const repoDir = createRepoWithBase({ "README.md": "base\n" });
+    writeRepoFile(repoDir, "CLAUDE.local.md", "local\n");
+
+    expect(findStrayMarkdown({ repoDir, baseRef: "main" })).toEqual([]);
   });
 });
