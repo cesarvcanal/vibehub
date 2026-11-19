@@ -1,5 +1,6 @@
 import tseslint from "typescript-eslint";
 import { noUnmarkedComment } from "./scripts/lint/noUnmarkedComment.mjs";
+import { LINTED_EXTENSIONS } from "./scripts/lint/lintChanged.mjs";
 
 const EMPTY_CATCH_CALLBACK =
   "CallExpression[callee.property.name='catch']" +
@@ -46,7 +47,7 @@ const TEST_SYNTAX = [
 
 export default tseslint.config(
   {
-    files: ["**/*.{ts,tsx,mjs}", "*.js"],
+    files: [`**/*.{${LINTED_EXTENSIONS.join(",")}}`, "*.js"],
     ignores: ["**/dist/**"],
     extends: [tseslint.configs.base],
     plugins: { vibehub: { rules: { "no-unmarked-comment": noUnmarkedComment } } },

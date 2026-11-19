@@ -3,7 +3,8 @@ import { join, relative } from "node:path";
 import { parseAddedLines } from "./addedLines.mjs";
 
 const CONFIG_FILE = join(import.meta.dirname, "..", "..", "eslint.config.js");
-const LINTED_PATHS = [":(glob)**/*.ts", ":(glob)**/*.tsx", ":(glob)**/*.mjs", ":(glob)*.js"];
+export const LINTED_EXTENSIONS = ["ts", "tsx", "mts", "cts", "mjs", "cjs", "jsx"];
+const LINTED_PATHS = [...LINTED_EXTENSIONS.map((extension) => `:(glob)**/*.${extension}`), ":(glob)*.js"];
 const EVERY_LINE = "every-line";
 const ALLOWED_MARKDOWN = [
   /^AGENTS\.md$/,
