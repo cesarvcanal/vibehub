@@ -169,7 +169,6 @@ export interface Settings {
   /** Set once the wizard finished, so it stops taking over the router. */
   setupCompletedAt: string | null;
   transcribeLanguage?: string | null;
-  /** Names and jargon the transcription must spell the way the team does. */
   transcribeKeywords?: string[];
   /** Minutes a terminal may sit idle before it is hibernated. 0 = never. */
   idleHibernateMinutes?: number;

@@ -39,10 +39,8 @@ export interface Settings {
   defaultAccountLabel: string | null;
   /** Set once the wizard has been completed, so it stops hijacking the router. */
   setupCompletedAt: string | null;
-  /** ISO 639-1 hint for voice transcription ("pt", "en"…). Null = let the model detect. */
   transcribeLanguage: string | null;
   transcribeProofread: boolean;
-  /** Names and jargon the transcription model must spell the way the team does ("erp-aux", "Qive"). */
   transcribeKeywords: string[];
   /**
    * MINUTES a card's terminal may sit idle before it is HIBERNATED: the session is killed and the
@@ -81,7 +79,6 @@ export const TRANSCRIBE_KEYWORD_MAX_CHARS = 60;
 // external: a keyword with "<", ">", CR or LF makes the API reject the whole request (developers.openai.com/api/docs/guides/speech-to-text)
 const KEYWORD_FORBIDDEN_RE = /[<>\r\n]/;
 
-/** The trimmed, non-empty terms, or an error naming the field when the list breaks the contract. */
 function normalizeTranscribeKeywords(keywords: unknown): string[] {
   if (!Array.isArray(keywords) || keywords.some((keyword) => typeof keyword !== "string")) {
     throw new Error("transcribeKeywords must be a list of terms");
