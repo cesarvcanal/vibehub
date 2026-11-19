@@ -1281,14 +1281,13 @@ describe("deliver com revisão de PR ativa no card", () => {
   });
 
   it("card de análise numa PR em revisão no card do autor: o merge autorizado é recusado com review_active", async () => {
-    const { deliver, registry, project, card } = await withActiveReview("ready");
+    const { deliver, registry, project } = await withActiveReview("ready");
     const analysis = await registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "card/x", title: "Análise PR #7" });
     wire();
     const out = await deliver.deliver(analysis.id, { branch: "dev", authorized: true });
     expect(out).toMatchObject({ merged: false, reason: "review_active", prUrl: PR });
     expect(out.output).toContain("#7");
     expect(mergeRan()).toBe(false);
-    expect(card.id).not.toBe(analysis.id);
   });
 
   it("card de análise não tem merge-only: o botão é de uma revisão, e nenhuma revisão roda num card de análise", async () => {
