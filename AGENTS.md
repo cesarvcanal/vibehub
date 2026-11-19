@@ -62,7 +62,7 @@
 ### `const` e estado vivo
 
 - **Toda declaração que o PR escreve é `const`**, inclusive em teste. Valor que muda vira nova constante com nome próprio, função ou `reduce`; `beforeEach` que reatribui um `let` vira helper chamado em cada teste (`const card = createCard()`).
-- **Exceção fechada — estado vivo:** variável de módulo ou de closure que acompanha a vida de um processo, sessão ou stream e é reatribuída por eventos (a query corrente do driver, o dono das tarefas em segundo plano, um contador de tentativas). Prefira juntar esse estado num objeto `const` com campos; quando isso piora a leitura, o `let` fica e o PR diz por quê.
+- **Exceção fechada — estado vivo:** variável de módulo ou de closure que acompanha a vida de um processo, sessão ou stream e é reatribuída por eventos (a query corrente do driver, o dono das tarefas em segundo plano, um contador de tentativas). Prefira juntar esse estado num objeto `const` com campos; quando isso piora a leitura, o `let` fica com `// eslint-disable-next-line no-restricted-syntax -- <motivo>` e o PR diz por quê.
 - `let` que já existe fora do diff fica como está; não se varre o repositório atrás dele.
 
 ### Comentários
@@ -73,11 +73,11 @@
   - **a mensagem do commit** que introduz o trecho: quem lê a linha depois chega a ela pelo `git blame`/`git log`, mesmo sem abrir o PR;
   - **o PR** (§14), onde o revisor o lê junto com o diff.
 - **Invariante que o código não deixa óbvia** (ordem obrigatória, atomicidade, corrida entre cards, cicatriz de bug em produção) ganha um **teste cujo nome diz a regra**. Quem "simplificar" o trecho quebra o teste e lê o porquê no nome dele.
-- **Únicas exceções**, em uma linha e só quando o código não tem como dizer aquilo:
-  - **regra externa**, com a referência da docs ou da versão do fornecedor (SDK/CLI do Claude, Docker, GitHub; §6);
-  - **limitação técnica** que nenhum nome expressa: bug conhecido de biblioteca, navegador, shell ou ambiente de teste; dependência circular que obriga o import dentro da função;
-  - **diretiva de ferramenta** (`eslint-disable`, `@ts-expect-error`), sempre com o motivo;
-  - **nome legado que não pode mudar** (campo persistido ou contrato externo, §2 e §6): o que ele guarda e por que não foi renomeado.
+- **Únicas exceções**, em uma linha, só quando o código não tem como dizer aquilo, e abrindo com o marcador da exceção (o lint do recorte, §12, reprova comentário novo sem ele):
+  - `// external: <regra e referência>`: **regra externa**, com a referência da docs ou da versão do fornecedor (SDK/CLI do Claude, Docker, GitHub; §6);
+  - `// limitation: <motivo>`: **limitação técnica** que nenhum nome expressa: bug conhecido de biblioteca, navegador, shell ou ambiente de teste; dependência circular que obriga o import dentro da função;
+  - `// legacy-name: <o que guarda>`: **nome legado que não pode mudar** (campo persistido ou contrato externo, §2 e §6): o que ele guarda e por que não foi renomeado;
+  - **diretiva de ferramenta**, sem marcador e sempre com o motivo: `// eslint-disable-next-line <regra> -- <motivo>`, `// @ts-expect-error <motivo>`.
 - **A regra vale para as linhas que o PR acrescenta ou altera.** Comentário antigo fora do diff fica — muitos guardam a história de bugs de produção e continuam valendo. Comentário antigo que a mudança torna **falso** é corrigido ou removido no mesmo PR; corrigir a frase que mentiria num bloco existente é manutenção, não comentário novo.
 - **Em linha nova, o que não entra:** narração do que a linha faz, a versão anterior ("antes era…"), nome de pessoa ou de instalação, JSDoc que só repete o nome (tipo em JSDoc num `.mjs` é tipo, não comentário), código comentado, bloco de cabeçalho novo explicando o arquivo.
 
@@ -246,7 +246,7 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 - Erro informa o suficiente para diagnóstico sem expor token, segredo ou caminho sensível.
 - Integração que falhou não aparece como concluída, nem para o usuário: falha de login, de runner ou de integração vira aviso visível com a ação que resolve. Retry só limitado e idempotente.
 - **O erro chega a quem chamou, não só ao log.** Uma exceção ou é propagada até a fronteira responsável ou é traduzida para o chamador (exceção com mensagem própria, resposta HTTP de erro, evento de erro no websocket). Uma linha de log não faz nenhuma das duas coisas: o log do pino é a trilha de diagnóstico e de auditoria (as entradas `audit: true`) de quem opera a instalação e acompanha o erro, nunca o substitui.
-- **Engolir o erro só em melhor esforço.** `catch` vazio, em qualquer forma (`.catch(() => {})`, `.catch(() => undefined)`, `try { … } catch { }`), é aceito apenas em efeito colateral cuja falha não muda o resultado da operação e que outro caminho cobre: aviso em tempo real que o próximo attach reenvia, limpeza que a próxima rodada refaz, gatilho antecipado de algo que também roda por agendamento. O porquê vai para o commit e o PR (§3). Falha que o chamador precisa saber nunca é engolida.
+- **Engolir o erro só em melhor esforço.** `catch` vazio, em qualquer forma (`.catch(() => {})`, `.catch(() => undefined)`, `try { … } catch { }`), é aceito apenas em efeito colateral cuja falha não muda o resultado da operação e que outro caminho cobre: aviso em tempo real que o próximo attach reenvia, limpeza que a próxima rodada refaz, gatilho antecipado de algo que também roda por agendamento. Na linha, a diretiva que o lint exige com o motivo curto (`// eslint-disable-next-line no-empty -- <motivo>` ou `no-restricted-syntax` para o `.catch`); a história vai para o commit e o PR (§3). Falha que o chamador precisa saber nunca é engolida.
 - **Fila de promises não engole.** Em `queue = next.catch(() => undefined); return next;`, o erro chega a quem chamou pelo `next`; o `catch` só impede que a falha de um item trave os seguintes. É o padrão das filas por card e do store, e não precisa de justificativa.
 - **Tarefa de fundo sem chamador** (timer, reaper, retomada após deploy, rotina disparada sem esperar resposta): não há a quem propagar. Um `catch` que **altera o estado que decide o próximo passo, em relação ao que a tarefa faria sem o erro** (a marca da próxima tentativa, um contador de falhas, a parada da tarefa, o aviso ao card), não é engolir o erro, desde que esse caminho de falha tenha teste com um nome que diz o que acontece. Voltar a tentar só porque o timer bate de novo não conta: `catch` vazio, ou que só registra no log sem alterar esse estado, é engolir. Disparar sem `catch` (`void tarefa()`) dá no mesmo, porque a falha cai no handler global do processo e só vira log: a tarefa de fundo nova segue esta regra com ou sem `catch` escrito.
 - `catch` vazio antigo fora do diff, em qualquer forma, fica como está; o que o PR toca é julgado por estas regras.
