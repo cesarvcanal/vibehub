@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import type { SendOpts, SendResult } from "../services/maestro/maestro.js";
 import type { DeliverOpts, DeliverResult } from "../services/maestro/deliver.js";
+import type { FleetConversation } from "../services/sdk/workflowProbe.js";
 import { ANALYSIS_DIMENSIONS, type AnalysisFinding, type AnalysisReport, type AnalysisSeverity } from "../services/review/analysisModel.js";
 
 /**
@@ -37,6 +38,8 @@ const afterPrMerged = vi.fn(async () => "deleted" as const);
 /** The merge gate on the approved commit (run when the review becomes ready). */
 let gateAnswer = { ran: true, passed: true, output: "" };
 const gateAtCommit = vi.fn(async (_cardId: string, _prUrl: string, _sha: string) => gateAnswer);
+const fleetConversation = { answer: null as FleetConversation | null };
+const readFleetConversation = vi.fn(async (_transcriptDir: string) => fleetConversation.answer);
 const deliver = vi.fn(async (cardId: string, _opts: DeliverOpts = {}): Promise<DeliverResult> => {
   actorAtDeliver = (await (await import("../services/board/registry.js")).getCard(cardId))?.actorUserId;
   return deliverResult;
@@ -74,6 +77,10 @@ async function boot(): Promise<FastifyInstance> {
   vi.doMock("../services/maestro/maestro.js", async () => ({
     ...(await vi.importActual<typeof import("../services/maestro/maestro.js")>("../services/maestro/maestro.js")),
     sendToTerminal: send,
+  }));
+  vi.doMock("../services/sdk/workflow.js", async () => ({
+    ...(await vi.importActual<typeof import("../services/sdk/workflow.js")>("../services/sdk/workflow.js")),
+    readFleetConversation,
   }));
   vi.doMock("../services/maestro/deliver.js", async () => ({
     ...(await vi.importActual<typeof import("../services/maestro/deliver.js")>("../services/maestro/deliver.js")),
@@ -1386,5 +1393,63 @@ describe("merge da análise pela rota", () => {
     expect(second.json().reason).toBe("merging");
     expect((await first).statusCode).toBe(200);
     expect(deliver).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("conversa da frota da análise pela rota", () => {
+  const conversation = (): FleetConversation => ({
+    runId: "wf_abc1", finished: false,
+    agents: [
+      { id: "a01f", label: "revisão:security", phase: "Revisão", status: "done", model: "claude-sonnet-5-5" },
+      { id: "a02f", label: "juiz", phase: "Julgamento", status: "running", model: "opus" },
+      { id: "a03f", label: "contexto", phase: "Contexto", status: "done" },
+    ],
+    items: [{ agentId: "a01f", at: 1, kind: "text", text: "o token vaza no log" }],
+  });
+  const read = async (w: World, as: Person) =>
+    await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/analysis/conversation`, headers: { cookie: as.cookie } });
+
+  it("quem só vê o card lê a conversa da frota, lida do diretório de transcrições do card, com o modelo pelo nome da versão", async () => {
+    const w = await world();
+    fleetConversation.answer = conversation();
+    onTestFinished(() => {
+      fleetConversation.answer = null;
+    });
+    readFleetConversation.mockClear();
+    const res = await read(w, w.leitor);
+    expect(res.statusCode).toBe(200);
+    expect(readFleetConversation).toHaveBeenCalledTimes(1);
+    expect(readFleetConversation.mock.calls[0]![0]).toMatch(/\/projects\//);
+    expect(res.json().conversation).toEqual({
+      runId: "wf_abc1", finished: false,
+      agents: [
+        { id: "a01f", label: "revisão:security", phase: "Revisão", status: "done", modelLabel: "Sonnet 5.5" },
+        { id: "a02f", label: "juiz", phase: "Julgamento", status: "running", modelLabel: "Opus" },
+        { id: "a03f", label: "contexto", phase: "Contexto", status: "done" },
+      ],
+      items: [{ agentId: "a01f", at: 1, kind: "text", text: "o token vaza no log" }],
+    });
+  });
+
+  it("card sem frota responde conversation: null", async () => {
+    const w = await world();
+    const res = await read(w, w.owner);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ conversation: null });
+  });
+
+  it("quem não alcança o card recebe 404, sem ler o runner", async () => {
+    const w = await world();
+    readFleetConversation.mockClear();
+    expect((await read(w, w.outro)).statusCode).toBe(404);
+    expect(readFleetConversation).not.toHaveBeenCalled();
+  });
+
+  it("runner que não responde volta 502 com o motivo, nunca uma conversa vazia", async () => {
+    const w = await world();
+    readFleetConversation.mockRejectedValueOnce(new Error("runner parado"));
+    const res = await read(w, w.owner);
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: "runner parado" });
   });
 });
