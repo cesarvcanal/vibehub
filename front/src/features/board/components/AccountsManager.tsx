@@ -114,7 +114,7 @@ export function AccountsManager({ trigger = "icon" }: { trigger?: "icon" | "row"
   });
 
   const renameMutation = useMutation({
-    mutationFn: ({ slug, value }: { slug: string; value: string }) => boardApi.renameAccount(slug, value),
+    mutationFn: ({ slug, newName }: { slug: string; newName: string }) => boardApi.renameAccount(slug, newName),
     onSuccess: (account) => {
       queryClient.setQueryData<Awaited<ReturnType<typeof boardApi.listAccounts>>>(ACCOUNTS_KEY, (listed) =>
         listed
@@ -187,7 +187,7 @@ export function AccountsManager({ trigger = "icon" }: { trigger?: "icon" | "row"
       dropNameDraft(account.slug);
       return;
     }
-    renameMutation.mutate({ slug: account.slug, value: typed });
+    renameMutation.mutate({ slug: account.slug, newName: typed });
   }
 
   function submitAccount(event: React.FormEvent) {

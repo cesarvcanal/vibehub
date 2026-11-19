@@ -5,6 +5,7 @@ import { AccountsManager } from "@/features/board/components/AccountsManager";
 import { renderApp, testQueryClient } from "@/test/render";
 import { get, patch } from "@/lib/api";
 import { ACCOUNT_TOKENS_KEY, ACCOUNT_USAGE_KEY } from "@/features/board/api";
+import { toast } from "sonner";
 
 /**
  * The accounts dialog is where an account is BORN, and until now the last step of that birth —
@@ -156,6 +157,36 @@ describe("AccountsManager — renaming an account", () => {
 
     await waitFor(() => expect(mockPatch).toHaveBeenCalledWith("/accounts/tech", { name: "César" }));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["board", "accounts"] });
+  });
+
+  it("o campo mostra o nome salvo na resposta mesmo antes de a lista de contas ser relida", async () => {
+    mockPatch.mockImplementation(() => {
+      const served = mockGet.getMockImplementation()!;
+      mockGet.mockImplementation((url: string) => (url === "/accounts" ? new Promise(() => {}) : served(url)));
+      return Promise.resolve({ account: { slug: "tech", name: "César", createdAt: 1 } });
+    });
+    const user = userEvent.setup();
+    await openDialog(user);
+
+    const input = screen.getByRole("textbox", { name: "Name of the account tech" });
+    await user.clear(input);
+    await user.type(input, "César{Enter}");
+
+    await waitFor(() => expect(mockPatch).toHaveBeenCalled());
+    await waitFor(() => expect(input).toHaveValue("César"));
+  });
+
+  it("se o servidor recusa o nome, o campo volta ao nome salvo e o erro aparece", async () => {
+    mockPatch.mockRejectedValue(new Error("boom"));
+    const user = userEvent.setup();
+    await openDialog(user);
+
+    const input = screen.getByRole("textbox", { name: "Name of the account tech" });
+    await user.clear(input);
+    await user.type(input, "César{Enter}");
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(input).toHaveValue("Tech");
   });
 
   it.each([
