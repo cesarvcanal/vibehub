@@ -39,21 +39,28 @@ export interface AnalysisReport {
 
 export type DimensionHealth = "ok" | "attention" | "problem" | "not_run" | "skipped";
 
+function isDimensionAccountedFor(run: DimensionRun | undefined): run is DimensionRun {
+  return run !== undefined && run.status !== "not_run";
+}
+
+function hasUnverifiedFindings(run: DimensionRun): boolean {
+  return (run.unverifiedCount ?? 0) > 0;
+}
+
 export function dimensionHealth(report: AnalysisReport, key: AnalysisDimension): DimensionHealth {
   const run = report.dimensions.find((dimension) => dimension.key === key);
   const openFindings = report.findings.filter((finding) => finding.dimension === key && finding.status === "open");
   if (openFindings.some((finding) => finding.severity === "blocking")) return "problem";
-  if (!run || run.status === "not_run") return "not_run";
+  if (!isDimensionAccountedFor(run)) return "not_run";
   if (run.status === "skipped") return "skipped";
   const hasOpenImprovementOrQuestion = openFindings.some((finding) => finding.severity === "question" || finding.severity === "improvement");
-  const hasUnverifiedFindings = (run.unverifiedCount ?? 0) > 0;
-  return hasOpenImprovementOrQuestion || hasUnverifiedFindings ? "attention" : "ok";
+  return hasOpenImprovementOrQuestion || hasUnverifiedFindings(run) ? "attention" : "ok";
 }
 
 export function uncheckedDimensions(report: AnalysisReport): AnalysisDimension[] {
   return ANALYSIS_DIMENSIONS.filter((key) => {
     const run = report.dimensions.find((dimension) => dimension.key === key);
-    return !run || run.status === "not_run" || (run.unverifiedCount ?? 0) > 0;
+    return !isDimensionAccountedFor(run) || hasUnverifiedFindings(run);
   });
 }
 
