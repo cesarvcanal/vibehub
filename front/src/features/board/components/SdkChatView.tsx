@@ -91,6 +91,7 @@ import {
   decisionSummary,
   parseDecisionReply,
   pendingDecisions,
+  proseOptions,
   splitProseQuestion,
   type PendingDecision,
 } from "@/features/board/lib/pendingDecisions";
@@ -1408,6 +1409,17 @@ export function SdkChatView({
     rootRef.current?.querySelector("textarea")?.focus();
   }, [leaveComposerModes]);
 
+  /** A click on one of a prose question's options: the answer goes at once, anchored to its question. */
+  const answerProseOption = React.useCallback((decision: PendingDecision, answer: string): void => {
+    try {
+      dispatchTurn(buildDecisionReply(decision.text, answer));
+    } catch (err) {
+      toast.error((err as Error).message);
+      return;
+    }
+    setReplyTo((current) => (current?.rowId === decision.rowId ? null : current));
+  }, [dispatchTurn]);
+
   // THE OTHER TAB (and the agent that gave up waiting): the decision this composer is aimed at
   // stopped being pending — someone answered it elsewhere, it timed out, or Claude moved on. The
   // aim is dropped and said out loud, so the next Enter is never silently a loose message. Our own
@@ -1587,6 +1599,7 @@ export function SdkChatView({
                 peerDrafts={peerDrafts[entry.id]}
                 onDraft={sendQuestionDraft}
                 onReply={pendingIds.has(entry.id) ? jumpToDecision : undefined}
+                onPickOption={pendingIds.has(entry.id) ? answerProseOption : undefined}
                 onEdit={beginEdit}
                 onResend={resendUndelivered}
                 onDiscard={discardUndelivered}
@@ -2254,6 +2267,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
   peerDrafts,
   onDraft,
   onReply,
+  onPickOption,
   onEdit,
   onResend,
   onDiscard,
@@ -2278,6 +2292,8 @@ const SdkChatRow = React.memo(function SdkChatRow({
   onDraft?: (id: string, draft: QuestionDraft) => void;
   /** Arms the composer on this row's question ("Responder"). */
   onReply?: (decision: PendingDecision) => void;
+  /** Answers this row's prose question with one of the options it listed. */
+  onPickOption?: (decision: PendingDecision, answer: string) => void;
   /** Offered only on one's OWN messages: the pencil that starts editing (a supersede). */
   onEdit?: (rowId: string, original: string) => void;
   /** On a message the server never took: send the very same words again (same receipt id). */
@@ -2580,6 +2596,14 @@ const SdkChatRow = React.memo(function SdkChatRow({
   if (prose) {
     // What this question RECEIVED (`answered`), anchored to it — the third question the screen owes
     // the person ("pronto, respondi" — "done, I answered"). Survives a reload: the answer is read back out of the sent message.
+    const decision: PendingDecision = {
+      kind: "prose",
+      rowId: row.id,
+      text: prose.question,
+      summary: decisionSummary(prose.question),
+      answerable: true,
+    };
+    const choices = answered === undefined && onPickOption ? proseOptions(prose.question) : null;
     return (
       <div data-testid="sdk-assistant" className="max-w-full select-text text-sm leading-relaxed">
         {prose.body !== "" ? <Markdown text={prose.body} /> : null}
@@ -2593,7 +2617,21 @@ const SdkChatRow = React.memo(function SdkChatRow({
               : "border-amber-500/30 bg-amber-500/5",
           )}
         >
-          <Markdown text={prose.question} />
+          <Markdown text={choices ? choices.lead : prose.question} />
+          {choices && onPickOption ? (
+            <div className={cn("mt-1.5 flex gap-1.5", hasDescriptions(choices.options) ? "flex-col" : "flex-wrap")}>
+              {choices.options.map((option) => (
+                <ChoiceOption
+                  key={option.label}
+                  label={option.label}
+                  description={option.description}
+                  stacked={hasDescriptions(choices.options)}
+                  data-testid="sdk-prose-option"
+                  onClick={() => onPickOption(decision, option.label)}
+                />
+              ))}
+            </div>
+          ) : null}
           {answered !== undefined ? (
             <div data-testid="sdk-prose-answered" className="mt-1 border-t border-emerald-500/20 pt-1 text-xs text-emerald-600 dark:text-emerald-400">
               {t("sdk.questionAnswered", { answers: answered })}
@@ -2605,17 +2643,9 @@ const SdkChatRow = React.memo(function SdkChatRow({
               className="mt-1.5 h-6 text-[11px]"
               data-testid="sdk-prose-reply"
               aria-pressed={aiming}
-              onClick={() =>
-                onReply({
-                  kind: "prose",
-                  rowId: row.id,
-                  text: prose.question,
-                  summary: decisionSummary(prose.question),
-                  answerable: true,
-                })
-              }
+              onClick={() => onReply(decision)}
             >
-              {t("sdk.replyAction")}
+              {choices ? t("sdk.questionOther") : t("sdk.replyAction")}
             </Button>
           ) : null}
         </div>
