@@ -1832,6 +1832,7 @@ export const en: Record<string, string> = {
   "platformFailures.loadError": "Could not load vibehub's failures",
   "platformFailures.plain.backend_error": "vibehub had an internal error while working. Something on screen may not have updated or finished.",
   "platformFailures.plain.slow_turn": "The agent's answers are taking longer than usual to start.",
+  "platformFailures.plain.stalled_turn": "The agent stopped giving any sign in the middle of its work, with no command running. If nothing changes, stop the turn and send the message again.",
   "platformFailures.plain.agent_report": "The agent noticed that vibehub did not behave as it should.",
   "platformFailures.status.investigating": "being investigated",
   "platformFailures.status.concluded_without_fix": "investigated without a fix",

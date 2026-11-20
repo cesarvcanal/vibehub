@@ -50,6 +50,39 @@ describe("vigia das falhas da plataforma", () => {
     expect(await failures.listActivePlatformFailures()).toEqual([expect.objectContaining({ source: "slow_turn", affectedCardIds: ["card-3"] })]);
   });
 
+  it("turno parado sem ferramenta rodando vira uma falha stalled_turn do card, com o momento do último sinal", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    onTestFinished(() => { vi.useRealTimers(); });
+    const { watch, failures, turnLatency } = await fresh();
+    const stopWatch = watch.startPlatformFailureWatch();
+    const sentAt = Date.now();
+    turnLatency.noteTurnSent("card-4", sentAt);
+    turnLatency.noteTurnEvent("card-4", { type: "assistant_text" }, sentAt + 2_000);
+    await vi.advanceTimersByTimeAsync(turnLatency.STALLED_TURN_MS + watch.STALL_CHECK_INTERVAL_MS + 2_000);
+    await watch.waitForPlatformFailureWatch();
+    stopWatch();
+    expect(await failures.listActivePlatformFailures()).toEqual([expect.objectContaining({
+      source: "stalled_turn",
+      component: "sdk/turn",
+      affectedCardIds: ["card-4"],
+      evidence: expect.stringContaining(`último sinal do agente: ${new Date(sentAt + 2_000).toISOString()}`),
+    })]);
+  });
+
+  it("turno esperando um comando do agente não vira falha, por mais longo que seja", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    onTestFinished(() => { vi.useRealTimers(); });
+    const { watch, failures, turnLatency } = await fresh();
+    const stopWatch = watch.startPlatformFailureWatch();
+    const sentAt = Date.now();
+    turnLatency.noteTurnSent("card-4", sentAt);
+    turnLatency.noteTurnEvent("card-4", { type: "tool_use", id: "bash-1" }, sentAt + 2_000);
+    await vi.advanceTimersByTimeAsync(10 * turnLatency.STALLED_TURN_MS);
+    await watch.waitForPlatformFailureWatch();
+    stopWatch();
+    expect(await failures.listActivePlatformFailures()).toEqual([]);
+  });
+
   it("gravar falhou: a captura de erros do backend pausa por 60s em vez de realimentar o próprio erro", async () => {
     const recordSpy = vi.fn(async () => { throw new Error("disk full"); });
     const { logger, watch } = await fresh({ recordPlatformFailure: recordSpy });
