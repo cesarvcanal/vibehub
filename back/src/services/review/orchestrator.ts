@@ -10,7 +10,7 @@ import { findUser } from "../../auth/users.js";
 import { cardLevel } from "../../auth/access.js";
 import { cardAccountSlug, getUserGit, linkedAccountSlug } from "../../auth/userGit.js";
 import { sendToTerminal, SEND_READY_WAIT_MS } from "../maestro/maestro.js";
-import { afterPrMerged, gateAtCommit, readPrApproval, readPrState, setPrPeople } from "../maestro/deliver.js";
+import { afterPrMerged, gateAtCommit, readPrApproval, readPrDiffUnchanged, readPrState, setPrPeople } from "../maestro/deliver.js";
 import type { GateResult } from "../maestro/gate.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { eventsAfter, onCardEvent, recordMessage, type CardEvent, type Severity } from "../events/cardEvents.js";
@@ -1275,9 +1275,27 @@ export async function syncReviewWithGithub(reviewId: string, by = "conferência 
     if (!isReviewClosed(x.phase) && x.prHeadSha === r.prHeadSha) x.prHeadSha = pr.headSha;
   });
   if (reopensOnNewHead(seen) && seen.reviewedSha && pr.headSha !== seen.reviewedSha) {
+    if (await readPrDiffUnchanged(r.cardId, r.prUrl, r.base, seen.reviewedSha, pr.headSha)) {
+      return await advanceReviewedHead(r.id, seen.reviewedSha, pr.headSha, by);
+    }
     return await reopenAfterHeadMoved(r.id, by, { cause: "push", headSha: pr.headSha });
   }
   return seen;
+}
+
+async function advanceReviewedHead(reviewId: string, fromSha: string, toSha: string, by: string): Promise<Review> {
+  let advanced = false as boolean;
+  const after = await mutateReview(reviewId, (r) => {
+    if (!reopensOnNewHead(r) || r.reviewedSha !== fromSha) return;
+    r.reviewedSha = toSha;
+    r.approvePending = undefined;
+    r.autoMergeFailedRound = undefined;
+    note(r, "system", `Merge da base ${r.base} no PR (head ${toSha.slice(0, 7)}) sem mudar o diff do PR: o commit revisado passa a ser ` +
+      `esse, sem nova conferência do revisor${r.phase === "ready" ? "; o Approve e os testes do merge valem para ele de novo" : ""}.`);
+    advanced = true;
+  });
+  logger.info({ audit: true, action: "review.head_advanced", review: reviewId, from: fromSha, to: toSha, advanced, by }, "PR review: base merged without changing the PR diff");
+  return advanced ? await dispatch(after) : after;
 }
 
 /** Reviews with a merge in progress (the button, or the owner's deliver): one at a time. */

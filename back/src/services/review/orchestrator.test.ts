@@ -64,6 +64,9 @@ const mergeSpy = vi.fn(async (_reviewId: string, _userId: string): Promise<Merge
 let prHeadNow: string | null = null;
 let prStateNow: "OPEN" | "MERGED" | "CLOSED" = "OPEN";
 const prHead = vi.fn(async (_cardId: string, _prUrl: string) => (prHeadNow ? { state: prStateNow, headSha: prHeadNow } : null));
+/** Whether the PR's net diff is the same on the reviewed commit and on the new head (`readPrDiffUnchanged`). */
+let prDiffUnchangedNow = false;
+const prDiffUnchanged = vi.fn(async (_cardId: string, _prUrl: string, _base: string, _fromSha: string, _toSha: string) => prDiffUnchangedNow);
 /** O veredito do gate do merge no commit aprovado (`gateAtCommit`); `gateGate` segura a resposta até ser solta. */
 let gateAnswer: { ran: boolean; passed: boolean; output: string } = { ran: true, passed: true, output: "" };
 let gateGate: Promise<void> | null = null;
@@ -103,6 +106,7 @@ async function load() {
     ...(await vi.importActual<typeof import("../maestro/deliver.js")>("../maestro/deliver.js")),
     deliver: deliverSpy,
     readPrState: prHead,
+    readPrDiffUnchanged: prDiffUnchanged,
     readPrApproval: prApproval,
     afterPrMerged: afterMerged,
     gateAtCommit: gateSpy,
@@ -192,6 +196,8 @@ beforeEach(async () => {
   prHead.mockClear();
   prHeadNow = null;
   prStateNow = "OPEN";
+  prDiffUnchanged.mockClear();
+  prDiffUnchangedNow = false;
   afterMerged.mockClear();
   prPeople.mockClear();
   gateSpy.mockClear();
@@ -2032,6 +2038,45 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
     prHeadNow = SHA2;
     expect(await o.orch.syncReviewWithGithub(review.id)).toMatchObject({ phase: "impasse", impasseReason: "IA não respondeu" });
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("merge da base sem mudar o diff do PR: a revisão segue pronta no head novo, com Approve e testes do merge de novo", async () => {
+    const o = await load();
+    const { review, off } = await readyAt(o);
+    off();
+    await o.store.mutateReview(review.id, (r) => {
+      r.autoMergeFailedRound = 1;
+    });
+    prHeadNow = SHA2;
+    prDiffUnchangedNow = true;
+    const after = await o.orch.syncReviewWithGithub(review.id);
+    expect(prDiffUnchanged).toHaveBeenCalledWith(review.cardId, PR.url, PR.base, SHA1, SHA2);
+    expect(after).toMatchObject({ phase: "ready", round: 1, reviewedSha: SHA2, prHeadSha: SHA2 });
+    expect(after?.autoMergeFailedRound).toBeUndefined();
+    expect(after?.log.at(-1)?.text).toMatch(/Merge da base dev no PR \(head bbbbbbb\) sem mudar o diff do PR/);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
+    expect(lastText()).toContain("--approve");
+    await vi.waitFor(() => expect(gateSpy).toHaveBeenCalledWith(review.cardId, PR.url, SHA2));
+  });
+
+  it("merge da base sem mudar o diff do PR, no impasse por rodadas: o impasse fica, no head novo, sem chamar ninguém", async () => {
+    const o = await load();
+    const { review } = await roundsImpasse(o);
+    prHeadNow = SHA2;
+    prDiffUnchangedNow = true;
+    const after = await o.orch.syncReviewWithGithub(review.id);
+    expect(after).toMatchObject({ phase: "impasse", impasseReason: "rodadas", reviewedSha: SHA2 });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("o diff só é comparado quando o head novo pode reabrir: em fixing não vai ao GitHub comparar", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    prHeadNow = SHA2;
+    await o.orch.syncReviewWithGithub(review.id);
+    expect(prDiffUnchanged).not.toHaveBeenCalled();
   });
 
   it("o delta lista as sugestões em aberto, e o fixed do revisor numa sugestão aplicada vale", async () => {

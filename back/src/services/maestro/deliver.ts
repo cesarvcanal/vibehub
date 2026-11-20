@@ -689,6 +689,47 @@ export async function readPrState(cardId: string, prUrl: string): Promise<{ stat
   return null;
 }
 
+const PR_DIFF_JQ =
+  'if (.files | length) >= 300 or any(.files[]; .patch == null) then "unknown" else ' +
+  '[.files[] | .filename, .status, (.patch | split("\\n") | map(select(startswith("+") or startswith("-"))) | join("\\n"))] | join("\\n") end';
+
+export function buildPrDiffScript(
+  containerName: string, token: string, cwd: string, prUrl: string, base: string, fromSha: string, toSha: string,
+): string {
+  assertSafeRemotePath(cwd);
+  const repo = parsePrUrl(prUrl)?.repo;
+  if (!repo) throw new Error(`not a GitHub pull request URL: ${prUrl}`);
+  for (const sha of [fromSha, toSha]) {
+    if (!FULL_SHA_RE.test(sha)) throw new Error(`the PR diff needs full shas: ${sha}`);
+  }
+  const compare = (sha: string) => shQuote(`repos/${repo}/compare/${assertBranchName(base)}...${sha}`);
+  const body = [
+    ...ghTokenPreamble(token),
+    `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
+    `if ! FROM=$(gh api ${compare(fromSha)} --jq ${shQuote(PR_DIFF_JQ)} 2>&1); then printf '%s\\n' "$FROM"; echo "${MARKER} error compare"; exit 0; fi`,
+    `if ! TO=$(gh api ${compare(toSha)} --jq ${shQuote(PR_DIFF_JQ)} 2>&1); then printf '%s\\n' "$TO"; echo "${MARKER} error compare"; exit 0; fi`,
+    `if [ "$FROM" = unknown ] || [ "$TO" = unknown ]; then echo "${MARKER} prdiff unknown";`,
+    `elif [ "$FROM" = "$TO" ]; then echo "${MARKER} prdiff same";`,
+    `else echo "${MARKER} prdiff changed"; fi`,
+  ];
+  return dockerBashScript(containerName, body);
+}
+
+export type PrDiffVerdict = "same" | "changed" | "unknown";
+
+export function parsePrDiff(stdout: string): PrDiffVerdict | null {
+  const m = new RegExp(`${MARKER} prdiff (same|changed|unknown)\\b`).exec(stdout);
+  return m ? (m[1] as PrDiffVerdict) : null;
+}
+
+export async function readPrDiffUnchanged(cardId: string, prUrl: string, base: string, fromSha: string, toSha: string): Promise<boolean> {
+  const out = await runCardGhScript(cardId, "compare the PR diff", (c) => buildPrDiffScript(c.container, c.token, c.cwd, prUrl, base, fromSha, toSha));
+  if (!out) return false;
+  const verdict = parsePrDiff(out.stdout);
+  if (verdict === null) logger.warn({ card: out.slug, detail: cleanOutput(out.stdout) }, "could not compare the PR diff");
+  return verdict === "same";
+}
+
 /** One review on a PR, as the auto-merge needs it: who, what verdict, on which commit. */
 export interface PrReview {
   author: string;

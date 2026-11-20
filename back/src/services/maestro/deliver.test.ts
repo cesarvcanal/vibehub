@@ -1092,6 +1092,37 @@ describe("buildPrStateScript / parsePrState", () => {
   });
 });
 
+describe("buildPrDiffScript / parsePrDiff: o diff líquido do PR em dois commits", () => {
+  const FROM = "a".repeat(40);
+  const TO = "b".repeat(40);
+
+  it("compara base...commit dos dois commits pela API do GitHub, com o token do stdin", async () => {
+    const { deliver } = await load();
+    const script = deliver.buildPrDiffScript("vibehub-runner", TOKEN, "/work/x", PR, "main", FROM, TO);
+    expect(script).toContain(`'repos/acme/repo/compare/main...${FROM}'`);
+    expect(script).toContain(`'repos/acme/repo/compare/main...${TO}'`);
+    for (const line of script.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
+  });
+
+  it.each([
+    ["same", "__VIBEHUB_DELIVER__ prdiff same", "same"],
+    ["changed", "__VIBEHUB_DELIVER__ prdiff changed", "changed"],
+    ["unknown (PR grande demais ou arquivo sem patch)", "__VIBEHUB_DELIVER__ prdiff unknown", "unknown"],
+    ["falha da API", "Not Found\n__VIBEHUB_DELIVER__ error compare", null],
+  ])("lê o veredito: %s", async (_name, stdout, verdict) => {
+    const { deliver } = await load();
+    expect(deliver.parsePrDiff(stdout)).toBe(verdict);
+  });
+
+  it.each([
+    ["base com aspas", "main'; rm -rf /", FROM],
+    ["sha abreviado", "main", "abc1234"],
+  ])("recusa entrada que não pode virar comando: %s", async (_name, base, sha) => {
+    const { deliver } = await load();
+    expect(() => deliver.buildPrDiffScript("vibehub-runner", TOKEN, "/work/x", PR, base, sha, TO)).toThrow();
+  });
+});
+
 describe("reviews do PR: o Approve que o merge automático exige", () => {
   const SHA = "c".repeat(40);
   const OLD = "d".repeat(40);
