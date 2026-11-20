@@ -50,6 +50,7 @@ export interface AnalysisMergeRefusal {
 export interface AnalysisMergeGate {
   cardId: string;
   analysedSha: string;
+  sha?: string;
   state: "running" | "passed" | "failed";
   output?: string;
   at: number;

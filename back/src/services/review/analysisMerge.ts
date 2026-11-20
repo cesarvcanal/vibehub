@@ -2,7 +2,7 @@ import type { PublicUser } from "../../auth/users.js";
 import { getCard, updateCard, type Card, type CardPr } from "../board/registry.js";
 import { cardBranch } from "../board/workspace.js";
 import { afterPrMerged, deliver, gateAtCommit, readPrState, type DeliverOpts, type DeliverResult } from "../maestro/deliver.js";
-import type { GateResult } from "../maestro/gate.js";
+import { readWorktreeHead, type GateResult } from "../maestro/gate.js";
 import { isBusy } from "../maestro/maestro.js";
 import { logger } from "../../utils/logger.js";
 import { analysisVerdict, type AnalysisMergeGate, type AnalysisMergeRefusal, type AnalysisReport } from "./analysisModel.js";
@@ -34,7 +34,7 @@ export function currentMergeGate(analysis: AnalysisReport, gate: AnalysisMergeGa
 }
 
 const mergingCardIds = new Set<string>();
-const mergeGateCardIds = new Set<string>();
+const mergeGateRunStarts = new Map<string, number>();
 
 const GITHUB_SYNC_MS = 60_000;
 const lastGithubSync = new Map<string, number>();
@@ -67,31 +67,54 @@ export async function startAnalysisMergeGate(cardId: string, opts: { again?: boo
     return { kind: "refused", status: 409, reason: "card_working", error: "o card de análise está no meio de um turno: os testes do merge esperam ele terminar" };
   }
   const current = currentMergeGate(analysis, recorded);
-  const orphaned = current?.state === "running" && !mergeGateCardIds.has(cardId);
+  const runStartedAt = mergeGateRunStarts.get(cardId);
+  const verdictAfterRun = current !== undefined && current.state !== "running" && runStartedAt !== undefined && current.at >= runStartedAt;
+  const runLive = runStartedAt !== undefined && !verdictAfterRun;
+  const orphaned = current?.state === "running" && !runLive;
   const rerunAsked = opts.again === true && current?.state === "failed";
   if (current && !orphaned && !rerunAsked) return { kind: "current", mergeGate: current };
-  if (mergeGateCardIds.has(cardId)) return { kind: "refused", status: 409, reason: "gate_running", error: "os testes do merge já estão rodando" };
-  mergeGateCardIds.add(cardId);
+  if (runLive) return { kind: "refused", status: 409, reason: "gate_running", error: "os testes do merge já estão rodando" };
   const started: AnalysisMergeGate = { cardId, analysedSha: analysis.analysedSha, state: "running", at: Date.now() };
+  mergeGateRunStarts.set(cardId, started.at);
+  const forgetRun = () => {
+    if (mergeGateRunStarts.get(cardId) === started.at) mergeGateRunStarts.delete(cardId);
+  };
   if (!(await saveAnalysisMergeGate(started))) {
-    mergeGateCardIds.delete(cardId);
+    forgetRun();
     return { kind: "refused", status: 409, reason: "not_apt", error: "a análise mudou de commit enquanto os testes do merge começavam" };
   }
   void runAnalysisMergeGate(started, pr.url, card.worktreeSlug)
     .catch((err: unknown) => logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not record the analysis merge gate verdict"))
-    .finally(() => mergeGateCardIds.delete(cardId));
+    .finally(forgetRun);
   return { kind: "started", mergeGate: started };
 }
 
+async function deliveredHead(cardId: string, prUrl: string): Promise<{ sha: string } | { refusal: string }> {
+  const [github, worktreeHead] = await Promise.all([readPrState(cardId, prUrl), readWorktreeHead(cardId)]);
+  if (!github) return { refusal: "não deu para ler o PR no GitHub: os testes do merge rodam de novo pelo botão" };
+  if (!worktreeHead) return { refusal: "não deu para ler o commit da worktree do card de análise" };
+  if (github.headSha !== worktreeHead) {
+    return {
+      refusal: `o PR está em ${github.headSha.slice(0, 7)} e a análise entregou ${worktreeHead.slice(0, 7)}: o PR andou depois da análise ` +
+        "(ou a correção dela não subiu). O merge só sai do commit que a análise conferiu: peça uma análise nova do PR.",
+    };
+  }
+  return { sha: worktreeHead };
+}
+
 async function runAnalysisMergeGate(started: AnalysisMergeGate, prUrl: string, cardSlug: string): Promise<void> {
-  const verdict: GateResult = await gateAtCommit(started.cardId, prUrl, started.analysedSha).catch((err: unknown) => ({
-    ran: true, passed: false, output: `o gate não chegou a rodar: ${(err as Error).message}`,
-  }));
+  const head = await deliveredHead(started.cardId, prUrl).catch((err: unknown) => ({ refusal: `o gate não chegou a rodar: ${(err as Error).message}` }));
+  const verdict: Pick<GateResult, "passed" | "output"> = "refusal" in head
+    ? { passed: false, output: head.refusal }
+    : await gateAtCommit(started.cardId, prUrl, head.sha).catch((err: unknown) => ({
+      ran: true, passed: false, output: `o gate não chegou a rodar: ${(err as Error).message}`,
+    }));
+  const pinned = "sha" in head ? { sha: head.sha } : {};
   const landed = await saveAnalysisMergeGate(verdict.passed
-    ? { cardId: started.cardId, analysedSha: started.analysedSha, state: "passed", at: Date.now() }
-    : { cardId: started.cardId, analysedSha: started.analysedSha, state: "failed", output: verdict.output, at: Date.now() });
+    ? { cardId: started.cardId, analysedSha: started.analysedSha, ...pinned, state: "passed", at: Date.now() }
+    : { cardId: started.cardId, analysedSha: started.analysedSha, ...pinned, state: "failed", output: verdict.output, at: Date.now() });
   logger.info(
-    { audit: true, action: "analysis.merge_gate", card: cardSlug, sha: started.analysedSha, passed: verdict.passed, landed },
+    { audit: true, action: "analysis.merge_gate", card: cardSlug, analysed: started.analysedSha, ...pinned, passed: verdict.passed, landed },
     verdict.passed ? "analysis merge gate passed" : "analysis merge gate failed",
   );
 }
@@ -171,12 +194,12 @@ async function mergeClaimedAnalysis(cardId: string, user: PublicUser): Promise<A
       error: `os testes do merge estão rodando no commit analisado (${analysis.analysedSha.slice(0, 7)}): o merge libera quando ficarem verdes`,
     };
   }
-  if (gate.mergeGate.state === "failed") {
-    return { kind: "refused", status: 409, reason: "gate", error: gate.mergeGate.output ?? "os testes do merge falharam no commit analisado" };
+  if (gate.mergeGate.state === "failed" || !gate.mergeGate.sha) {
+    return { kind: "refused", status: 409, reason: "gate", error: gate.mergeGate.output ?? "os testes do merge não disseram em que commit passaram" };
   }
   const result = await deliver(cardId, {
     authorized: true, branch: pr.base, connectionId, by: user.username,
-    mergeOnly: true, expectedHeadSha: analysis.analysedSha, gatePassed: true,
+    mergeOnly: true, expectedHeadSha: gate.mergeGate.sha, gatePassed: true,
   });
   await saveMergeOutcome(cardId, analysis.analysedSha, result, user.username);
   logger.info(

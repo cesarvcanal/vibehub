@@ -1373,6 +1373,16 @@ describe("relatório da análise pela rota", () => {
 });
 
 describe("merge da análise pela rota", () => {
+  const ANALYSED = "e".repeat(40);
+  const worktree = { head: ANALYSED };
+  beforeEach(() => {
+    worktree.head = ANALYSED;
+    prState = { state: "OPEN", headSha: ANALYSED };
+    runScript.mockImplementation(async (script: string) => ({
+      stdout: script.includes("__VIBEHUB_GATE_JSON__") ? `head=${worktree.head}\nclean=1\n__VIBEHUB_GATE_JSON__\n` : "[]",
+      stderr: "",
+    }));
+  });
   const RAN_EVERYWHERE = ANALYSIS_DIMENSIONS.map((key) => ({ key, status: "ran" as const }));
   const aptReport = (cardId: string, over: Partial<AnalysisReport> = {}): AnalysisReport => ({
     cardId, prUrl: PR.url, prNumber: 7, analysedSha: "e".repeat(40), stage: "done", summary: "s",
@@ -1383,7 +1393,7 @@ describe("merge da análise pela rota", () => {
   const saveAptWithGreenGate = async (report: AnalysisReport) => {
     await saveReport(report);
     const landed = await (await import("../services/review/analysisStore.js")).saveAnalysisMergeGate({
-      cardId: report.cardId, analysedSha: report.analysedSha, state: "passed", at: 1,
+      cardId: report.cardId, analysedSha: report.analysedSha, sha: report.analysedSha, state: "passed", at: 1,
     });
     expect(landed).toBe(true);
   };
@@ -1707,9 +1717,39 @@ describe("merge da análise pela rota", () => {
     await saveAptWithGreenGate(aptReport(w.cardId));
     expect((await readAnalysis(w, w.leitor)).mergeGate?.state).toBe("passed");
     expect(gateAtCommit).not.toHaveBeenCalled();
+    worktree.head = "f".repeat(40);
+    prState = { state: "OPEN", headSha: "f".repeat(40) };
     await saveReport(aptReport(w.cardId, { analysedSha: "f".repeat(40) }));
     await readAnalysis(w, w.leitor);
-    expect(gateAtCommit).toHaveBeenCalledWith(w.cardId, PR.url, "f".repeat(40));
+    await vi.waitFor(() => expect(gateAtCommit).toHaveBeenCalledWith(w.cardId, PR.url, "f".repeat(40)));
+  });
+
+  it("caso real (PR #649): a análise que corrigiu e entregou prende o gate e o merge à cabeça que entregou, não ao sha do passo 1", async () => {
+    const w = await world();
+    const delivered = "c".repeat(40);
+    worktree.head = delivered;
+    prState = { state: "OPEN", headSha: delivered };
+    await saveReport(aptReport(w.cardId));
+    await readAnalysis(w, w.leitor);
+    await vi.waitFor(async () => expect((await readAnalysis(w, w.leitor)).mergeGate).toMatchObject({ state: "passed", sha: delivered }));
+    expect(gateAtCommit).toHaveBeenCalledWith(w.cardId, PR.url, delivered);
+    deliver.mockClear();
+    expect((await merge(w, w.merger)).statusCode).toBe(200);
+    expect(deliver.mock.calls[0]![1]).toMatchObject({ mergeOnly: true, expectedHeadSha: delivered, gatePassed: true });
+  });
+
+  it("PR que andou depois da análise (cabeça diferente da worktree da análise) fica vermelho sem rodar o gate, e o clique não mergeia", async () => {
+    const w = await world();
+    worktree.head = "c".repeat(40);
+    prState = { state: "OPEN", headSha: "d".repeat(40) };
+    await saveReport(aptReport(w.cardId));
+    await readAnalysis(w, w.leitor);
+    await vi.waitFor(async () => expect((await readAnalysis(w, w.leitor)).mergeGate?.state).toBe("failed"));
+    expect((await readAnalysis(w, w.leitor)).mergeGate.output).toMatch(/andou depois da análise/);
+    expect(gateAtCommit).not.toHaveBeenCalled();
+    deliver.mockClear();
+    expect((await merge(w, w.merger)).statusCode).toBe(409);
+    expect(deliver).not.toHaveBeenCalled();
   });
 
   it.each<[string, (w: World) => Promise<void>]>([
