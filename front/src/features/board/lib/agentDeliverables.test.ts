@@ -55,6 +55,23 @@ describe("readAgentDeliverables — as entregas do subagente saem do prompt e do
     expect(deliverables.items.map((item) => item.state)).toEqual(["done", "done"]);
   });
 
+  it("só a lista que abre o relatório marca as entregas; uma lista de próximos passos mais abaixo não atrapalha", () => {
+    const reportWithNextSteps = `${REPORT}\n\n### Próximos passos\n\n- [ ] rodar o CI`;
+    expect(readAgentDeliverables(PROMPT, reportWithNextSteps, false).items.map((item) => item.state)).toEqual(["done", "missed", "done"]);
+  });
+
+  it("item marcado com anotação depois do texto do prompt casa pelo começo do texto", () => {
+    const annotated = "- [x] Achados de violação de regra: 2\n- [x] Veredito apto ou não apto: não apto";
+    expect(readAgentDeliverables(PROMPT, annotated, false).items.map((item) => item.state)).toEqual(["done", "unmarked", "done"]);
+  });
+
+  it("lista dentro de bloco de código é exemplo, não entrega, e fica no contexto", () => {
+    const promptWithExample = "Siga o modelo:\n```text\n- [ ] item do exemplo\n```\n\n- [ ] Entrega real";
+    const deliverables = readAgentDeliverables(promptWithExample, "", true);
+    expect(deliverables.items.map((item) => item.text)).toEqual(["Entrega real"]);
+    expect(deliverables.context).toBe("Siga o modelo:\n```text\n- [ ] item do exemplo\n```");
+  });
+
   it("prompt sem lista de tarefas: nenhuma entrega e o prompt inteiro é o contexto", () => {
     const deliverables = readAgentDeliverables("Leia o arquivo e resuma.\n- um ponto solto", "", false);
     expect(deliverables.items).toEqual([]);
