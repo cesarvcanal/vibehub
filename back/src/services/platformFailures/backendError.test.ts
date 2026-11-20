@@ -61,26 +61,26 @@ describe("relato de erro do backend", () => {
   });
 
   it.each([
-    ["do mesmo card até 10s depois do stop dele", "erp-feat", USER_STOP_WINDOW_MS, false],
-    ["do mesmo card logado pelo id, não pelo slug", "card-7", 1_000, false],
-    ["sem card logo depois de um stop", undefined, 1_000, false],
-    ["de outro card logo depois de um stop", "outro-card", 1_000, true],
-    ["depois da janela do stop", undefined, USER_STOP_WINDOW_MS + 1, true],
-  ])("erro %s vira falha: %s", (_case, loggedCardReference, msSinceStop, isPlatformFailure) => {
+    ["do mesmo card até 10s depois do stop dele", false, "erp-feat", USER_STOP_WINDOW_MS],
+    ["do mesmo card logado pelo id, não pelo slug", false, "card-7", 1_000],
+    ["sem card logo depois de um stop", false, undefined, 1_000],
+    ["de outro card logo depois de um stop", true, "outro-card", 1_000],
+    ["depois da janela do stop", true, undefined, USER_STOP_WINDOW_MS + 1],
+  ])("erro %s vira falha: %s", (_case, isPlatformFailure, loggedCardReference, msSinceStop) => {
     const line = { level: 50, message: "falhou", fields: { err: new Error("write after end"), ...(loggedCardReference ? { card: loggedCardReference } : {}) } };
     expect(isPlatformFailureLogLine(line, { ...STOPPED_CARD, at: NOW - msSinceStop }, NOW)).toBe(isPlatformFailure);
   });
 
   it.each([
-    ["error sem erro anexado", 50, {}, true],
-    ["warn com o erro capturado em err", 40, { err: new Error("boom") }, true],
-    ["warn com o erro capturado em detail", 40, { detail: "ECONNREFUSED" }, true],
-    ["warn sem erro capturado", 40, { card: "c" }, false],
-    ["warn com detail vazio", 40, { detail: "" }, false],
-    ["info com detail", 30, { detail: "x" }, false],
-    ["error do próprio detector de falhas", 50, { ...PLATFORM_FAILURE_LOG_MARK, detail: "disk full" }, false],
-    ["warn do próprio detector de falhas", 40, { ...PLATFORM_FAILURE_LOG_MARK, detail: "disk full" }, false],
-  ])("%s vira falha: %s", (_case, level, fields, isPlatformFailure) => {
+    ["error sem erro anexado", true, 50, {}],
+    ["warn com o erro capturado em err", true, 40, { err: new Error("boom") }],
+    ["warn com o erro capturado em detail", true, 40, { detail: "ECONNREFUSED" }],
+    ["warn sem erro capturado", false, 40, { card: "c" }],
+    ["warn com detail vazio", false, 40, { detail: "" }],
+    ["info com detail", false, 30, { detail: "x" }],
+    ["error do próprio detector de falhas", false, 50, { ...PLATFORM_FAILURE_LOG_MARK, detail: "disk full" }],
+    ["warn do próprio detector de falhas", false, 40, { ...PLATFORM_FAILURE_LOG_MARK, detail: "disk full" }],
+  ])("%s vira falha: %s", (_case, isPlatformFailure, level, fields) => {
     expect(isPlatformFailureLogLine({ level, message: "algo", fields }, undefined, NOW)).toBe(isPlatformFailure);
   });
 
