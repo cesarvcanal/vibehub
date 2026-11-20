@@ -17,8 +17,7 @@ import {
 /**
  * THE VOICE AND THE CARD'S AGENT, during a call in the chat — the person codes by talking.
  *
- * - Every delegation the voice makes (./voiceDelegation.ts) becomes a message to the agent.
- *   The voice is told at once that the work started; when the agent's turn on it ends, its last
+ * - The voice is told at once that the work started; when the agent's turn on it ends, its last
  *   answer goes back on that delegation to be SAID. Each delegation gets exactly one result, even
  *   when the message could not go — GPT-Live waits for it otherwise.
  * - Every other answer the agent gives during the call reaches the voice as quiet context. Keyed
