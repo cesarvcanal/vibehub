@@ -470,12 +470,6 @@ export function reviewTurn(
   }
 }
 
-/**
- * A row of the conversation: a "Rodada N" divider, the reviewer's agent fleet of a round, or one line
- * of the log — with a stable key and, but on the fleet, the position in the log (`index`; a divider
- * carries its first line's), which tells a line that arrived while the panel was open from one that
- * was already there.
- */
 export type ConversationRow =
   | { kind: "round"; round: number; key: string; index: number }
   | { kind: "fleet"; round: number; runs: ReviewFleetRun[]; key: string }
@@ -487,13 +481,10 @@ type LoggedLine = { event: ReviewEvent; index: number };
 
 /**
  * The log as the conversation draws it: a "Rodada N" divider before the first line of each round —
- * the way a chat app marks a new day — then the lines in the order they happened. The reviewer's
- * agents of a round speak right before the reviewer's own line of that round, which is built from
- * what they found; while the reviewer has not spoken yet, they close the round. A round only the
- * agents opened still gets its divider, in round order. An AI line that is about findings is split
- * the way a person would type it: the summary first, then its findings, one message each, so each
- * subject reads on its own instead of in one long bubble. Both rows share the line's `index` (they
- * arrived together). PURE.
+ * the way a chat app marks a new day — then the lines in the order they happened. An AI line that is
+ * about findings is split the way a person would type it: the summary first, then its findings, one
+ * message each, so each subject reads on its own instead of in one long bubble. Both rows share the
+ * line's `index` (they arrived together). PURE.
  */
 export function conversationRows(log: ReviewEvent[], fleets: ReadonlyMap<number, ReviewFleetRun[]>): ConversationRow[] {
   const segments = log.reduce<{ round: number; lines: LoggedLine[] }[]>((grouped, event, index) => {
