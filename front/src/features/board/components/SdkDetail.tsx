@@ -744,7 +744,14 @@ export function AgentTimelineView({ items, agentName, onOpen }: { items: readonl
             </li>
           );
         }
-        if (block.kind === "thinking") return <TimelineThinking key={index} text={block.text} />;
+        if (block.kind === "thinking") {
+          return (
+            <li key={index} data-testid="sdk-timeline-thinking" className="flex min-w-0 gap-2">
+              <span className="w-7 shrink-0" aria-hidden />
+              <TimelineThinking text={block.text} />
+            </li>
+          );
+        }
         return <TimelineWork key={index} block={block} onOpen={onOpen} />;
       })}
     </ol>
@@ -755,15 +762,12 @@ function TimelineThinking({ text }: { text: string }) {
   const t = useT();
   const [open, setOpen] = React.useState(false);
   return (
-    <li data-testid="sdk-timeline-thinking" className="flex min-w-0 gap-2">
-      <span className="w-7 shrink-0" aria-hidden />
-      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}
-        className="flex min-w-0 max-w-[88%] items-start gap-1.5 rounded-lg px-2 py-0.5 text-left text-[11px] italic text-muted-foreground hover:bg-muted/40">
-        <Brain aria-hidden className="mt-0.5 h-3 w-3 shrink-0" />
-        <span className={cn("min-w-0", open ? "whitespace-pre-wrap [overflow-wrap:anywhere]" : "truncate")}>{t("sdk.detail.thought")} {text}</span>
-        <ChevronRight aria-hidden className={cn("mt-0.5 h-3 w-3 shrink-0 transition-transform", open && "rotate-90")} />
-      </button>
-    </li>
+    <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}
+      className="flex min-w-0 max-w-[88%] items-start gap-1.5 rounded-lg px-2 py-0.5 text-left text-[11px] italic text-muted-foreground hover:bg-muted/40">
+      <Brain aria-hidden className="mt-0.5 h-3 w-3 shrink-0" />
+      <span className={cn("min-w-0", open ? "whitespace-pre-wrap [overflow-wrap:anywhere]" : "truncate")}>{t("sdk.detail.thought")} {text}</span>
+      <ChevronRight aria-hidden className={cn("mt-0.5 h-3 w-3 shrink-0 transition-transform", open && "rotate-90")} />
+    </button>
   );
 }
 
@@ -782,7 +786,9 @@ function TimelineWork({ block, onOpen }: { block: AgentTimelineWorkBlock; onOpen
           <span className="ml-auto shrink-0 text-[10px]">{span}</span>
         </p>
         <ol className="space-y-0.5">
-          {block.tools.map((item) => <TimelineTool key={item.id} item={item} onOpen={onOpen} />)}
+          {block.steps.map((step, index) => (step.kind === "tool"
+            ? <TimelineTool key={step.id} item={step} onOpen={onOpen} />
+            : <li key={`thinking-${index}`} data-testid="sdk-timeline-thinking"><TimelineThinking text={step.text} /></li>))}
         </ol>
       </div>
     </li>

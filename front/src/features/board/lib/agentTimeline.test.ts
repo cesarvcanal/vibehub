@@ -14,12 +14,19 @@ describe("groupAgentTimeline — a linha do tempo do subagente vira falas e caix
     ]);
     expect(blocks.map((block) => block.kind)).toEqual(["text", "work", "text"]);
     expect(blocks[1]).toMatchObject({ kind: "work", startedAt: 2, endedAt: 5 });
-    expect(blocks[1].kind === "work" && blocks[1].tools.map((item) => item.id)).toEqual(["t1", "t2"]);
+    expect(blocks[1].kind === "work" && blocks[1].steps.map((step) => step.kind === "tool" && step.id)).toEqual(["t1", "t2"]);
   });
 
-  it("o raciocínio separa as caixas de ações e aparece no lugar em que aconteceu", () => {
+  it("o raciocínio entre ações fica dentro da caixa, no lugar em que aconteceu, sem abrir caixa nova", () => {
     const blocks = groupAgentTimeline([tool("t1", "Read", 1, 2), { kind: "thinking", at: 3, text: "hum" }, tool("t2", "Grep", 4, 5)]);
-    expect(blocks.map((block) => block.kind)).toEqual(["work", "thinking", "work"]);
+    expect(blocks.map((block) => block.kind)).toEqual(["work"]);
+    expect(blocks[0].kind === "work" && blocks[0].steps.map((step) => step.kind)).toEqual(["tool", "thinking", "tool"]);
+    expect(blocks[0].kind === "work" && blocks[0].verbs.map((verb) => verb.count)).toEqual([1, 1]);
+  });
+
+  it("raciocínio sem nenhuma ação até a próxima fala fica solto, sem caixa vazia", () => {
+    const blocks = groupAgentTimeline([{ kind: "text", at: 1, text: "oi" }, { kind: "thinking", at: 2, text: "hum" }, { kind: "text", at: 3, text: "pronto" }]);
+    expect(blocks.map((block) => block.kind)).toEqual(["text", "thinking", "text"]);
   });
 
   it("caixa com ação ainda rodando fica sem fim", () => {
