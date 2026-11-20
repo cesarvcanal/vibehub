@@ -135,13 +135,15 @@ const PROOF_RULE =
   'ou scenario (arquivo:linha e o caso concreto que dá errado). Sem prova, não é blocking.'
 
 const briefText = (brief) =>
-  `Resumo do PR: ${brief.summary}\nÁreas tocadas: ${brief.touchedAreas.join(', ')}\nConsumidores: ${brief.consumers.join(', ')}`
+  `Resumo do PR:\n${brief.summary}\nÁreas tocadas: ${brief.touchedAreas.join(', ')}\nConsumidores: ${brief.consumers.join(', ')}`
 
 const contextPrompt =
   `PR #${args.prNumber} (branch ${args.branch} -> ${args.base}, head ${args.headSha}). ${READ_ONLY_RULE}\n` +
   `${diffScope} Leia o diff, a descrição do PR (gh pr view ${args.prNumber}) e as regras do repositório. ` +
   'Monte o brief que os revisores vão receber: o resumo do que o PR faz, as áreas tocadas, quem consome o que mudou ' +
-  '(procure os imports e as chamadas) e, para cada dimensão abaixo, se o diff a toca (applies) e por quê.\n' +
+  '(procure os imports e as chamadas) e, para cada dimensão abaixo, se o diff a toca (applies) e por quê. ' +
+  'No summary, um tópico markdown ("- ") por mudança do PR, cada um uma frase curta que quem não abriu o código entende; ' +
+  'nunca um parágrafo corrido nem "(1) … (2) …" na mesma linha.\n' +
   DIMENSIONS.map((dimension) => `- ${dimension.key}: ${dimension.focus}`).join('\n')
 
 const reviewPrompt = (dimension, brief) =>
@@ -156,12 +158,15 @@ const verifyPrompt = (finding, dimension, brief) =>
   `Tente DERRUBAR este achado de ${dimension.key} do PR #${args.prNumber}. ${READ_ONLY_RULE}\n${briefText(brief)}\n` +
   `Achado: ${JSON.stringify(finding)}\n` +
   'Confira no código: a linha existe, o cenário acontece de verdade, a regra citada diz isso. Quando um teste existente ' +
-  'decide a questão, rode só ele, filtrado pelo caso (-t "<caso>"). Na dúvida, confirmed = false. Em evidence, o que você conferiu.'
+  'decide a questão, rode só ele, filtrado pelo caso (-t "<caso>"). Na dúvida, confirmed = false. ' +
+  'Em evidence, o que você conferiu, um tópico markdown ("- ") por conferência, cada um uma frase curta.'
+
+const indentUnderFinding = (text) => text.split('\n').map((line) => `    ${line}`).join('\n')
 
 const judgePrompt = (confirmedFindings, brief) =>
   `Você é o juiz da análise do PR #${args.prNumber}, sem o contexto de quem revisou. ${READ_ONLY_RULE}\n${briefText(brief)}\n${diffScope}\n` +
   'Achados confirmados pela verificação, de todas as dimensões:\n' +
-  confirmedFindings.map((confirmed) => `- [${confirmed.label}] ${JSON.stringify(confirmed.finding)} (verificação: ${confirmed.evidence})`).join('\n') +
+  confirmedFindings.map((confirmed) => `- [${confirmed.label}] ${JSON.stringify(confirmed.finding)}\n  Verificação:\n${indentUnderFinding(confirmed.evidence)}`).join('\n') +
   '\nJunte os repetidos (o mesmo defeito visto por duas dimensões vira um achado, na dimensão mais precisa) e classifique ' +
   'cada um: blocking (bug ou regra violada, com prova; a IA corrige sozinha), improvement (melhoria no código que o PR ' +
   'mexe, que preserva o comportamento e que nenhuma regra escrita exige), question (resolver exige decidir intenção ou produto), suggestion (opcional, ' +
