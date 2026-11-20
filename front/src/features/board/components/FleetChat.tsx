@@ -1,5 +1,5 @@
 import * as React from "react";
-import { BookCheck, Bot, Braces, Bug, FlaskConical, Gauge, Scale, ShieldCheck, Telescope, type LucideIcon } from "lucide-react";
+import { BookCheck, Bot, Braces, Bug, ChevronRight, FlaskConical, Gauge, Scale, ShieldCheck, Telescope, type LucideIcon } from "lucide-react";
 import type { AnalysisDimension } from "@/api/types";
 import { Markdown } from "@/features/board/components/ChatView";
 import { TypingDots } from "@/features/board/components/PeerTypingIndicator";
@@ -53,15 +53,31 @@ function chatEntryDomId(entryId: string): string {
   return `fleet-chat-${entryId}`;
 }
 
-export function FleetChat({ entries, label }: { entries: FleetChatEntry[]; label: string }) {
+export type AgentDetail = (agentId: string, running: boolean) => React.ReactNode;
+
+export function FleetChat({ entries, label, agentDetail }: { entries: FleetChatEntry[]; label: string; agentDetail?: AgentDetail }) {
+  const [openEntryIds, setOpenEntryIds] = React.useState<ReadonlySet<string>>(new Set());
+  const toggleEntry = (entryId: string) => {
+    const next = new Set(openEntryIds);
+    if (!next.delete(entryId)) next.add(entryId);
+    setOpenEntryIds(next);
+  };
   return (
     <ol aria-label={label} className="flex min-w-0 flex-col gap-1.5">
       {entries.map((entry, index) => {
         const continues = entries[index - 1]?.speaker.agentId === entry.speaker.agentId;
+        const detail = agentDetail && openEntryIds.has(entry.id) ? agentDetail(entry.speaker.agentId, entry.kind === "typing") : null;
         return (
           <li key={entry.id} id={chatEntryDomId(entry.id)} className={cn("flex min-w-0 items-end gap-2", !continues && index > 0 && "mt-1")}>
             {continues ? <span className="w-7 shrink-0" aria-hidden="true" /> : <Avatar speaker={entry.speaker} />}
-            <ChatBubble entry={entry} showSpeaker={!continues} />
+            <ChatBubble
+              entry={entry}
+              showSpeaker={!continues}
+              detailOpen={agentDetail ? openEntryIds.has(entry.id) : undefined}
+              onToggleDetail={() => toggleEntry(entry.id)}
+            >
+              {detail}
+            </ChatBubble>
           </li>
         );
       })}
@@ -90,14 +106,22 @@ function Avatar({ speaker }: { speaker: ChatSpeaker }) {
   );
 }
 
-function ChatBubble({ entry, showSpeaker }: { entry: FleetChatEntry; showSpeaker: boolean }) {
+function ChatBubble({
+  entry, showSpeaker, detailOpen, onToggleDetail, children,
+}: {
+  entry: FleetChatEntry;
+  showSpeaker: boolean;
+  detailOpen: boolean | undefined;
+  onToggleDetail: () => void;
+  children: React.ReactNode;
+}) {
   const t = useT();
   return (
     <article
       data-testid={ENTRY_TEST_ID[entry.kind]}
       className={cn("min-w-0 max-w-[88%] rounded-xl bg-muted/50 px-2.5 py-1.5 text-xs leading-relaxed", showSpeaker ? "rounded-bl-sm" : "rounded-l-sm")}
     >
-      {showSpeaker ? <SpeakerLine speaker={entry.speaker} /> : null}
+      {showSpeaker ? <SpeakerLine speaker={entry.speaker} detailOpen={detailOpen} onToggleDetail={onToggleDetail} /> : null}
       {entry.kind === "message" ? (
         <>
           {entry.replyTo ? <ReplyQuote reply={entry.replyTo} speaker={entry.speaker} /> : null}
@@ -114,18 +138,38 @@ function ChatBubble({ entry, showSpeaker }: { entry: FleetChatEntry; showSpeaker
         </p>
       ) : null}
       {entry.kind === "stopped" ? <p className="text-destructive">{t("review.fleet.stopped")}</p> : null}
+      {children}
     </article>
   );
 }
 
-function SpeakerLine({ speaker }: { speaker: ChatSpeaker }) {
+function SpeakerLine({
+  speaker, detailOpen, onToggleDetail,
+}: {
+  speaker: ChatSpeaker;
+  detailOpen: boolean | undefined;
+  onToggleDetail: () => void;
+}) {
   const t = useT();
   const name = fleetAgentName(speaker.label, t);
+  const nameStyle = cn("font-semibold", TONE_STYLE[agentTone(agentRole(speaker.label))].name);
+  const nameText = speaker.ordinal === undefined ? name : `${name} #${speaker.ordinal}`;
   return (
     <p className="flex min-w-0 flex-wrap items-center gap-x-1.5">
-      <span className={cn("font-semibold", TONE_STYLE[agentTone(agentRole(speaker.label))].name)}>
-        {speaker.ordinal === undefined ? name : `${name} #${speaker.ordinal}`}
-      </span>
+      {detailOpen === undefined ? (
+        <span className={nameStyle}>{nameText}</span>
+      ) : (
+        <button
+          type="button"
+          aria-expanded={detailOpen}
+          title={t("review.fleet.steps")}
+          onClick={onToggleDetail}
+          className={cn(nameStyle, "inline-flex items-center gap-0.5 rounded hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring")}
+        >
+          {nameText}
+          <ChevronRight className={cn("h-3 w-3 transition-transform", detailOpen && "rotate-90")} aria-hidden="true" />
+        </button>
+      )}
       {speaker.model ? (
         <span data-testid="fleet-chat-model" className={cn("rounded border px-1 text-[10px] font-medium leading-4", MODEL_CHIP_STYLE[speaker.family])}>
           {speaker.model}

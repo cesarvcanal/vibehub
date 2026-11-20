@@ -6,6 +6,7 @@ import { post } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
 import type { FindingDecision, Person, Review, ReviewPhase } from "@/api/types";
 import { boardApi } from "@/features/board/api";
+import { ReviewAgentFeed } from "@/features/board/components/ReviewAgentFeed";
 import { PanelFrame, ReviewPanelView, type PanelNotice } from "@/features/board/components/ReviewPanelView";
 import { MERGE_CONFIRM_MS, cardPeopleKey, cardReviewKey, mergeFailure, reviewActions } from "@/features/board/lib/review";
 import { reviewReadsStarted, useLiveReview } from "@/features/board/lib/useLiveReview";
@@ -227,6 +228,7 @@ export function ReviewPanel({ cardId, prNumber: pr, onClose }: {
       review={review}
       working={working}
       fleet={fleet}
+      agentDetail={(runId, agentId, running) => <ReviewAgentFeed agent={{ cardId, pr, runId, agentId }} running={running} />}
       nameOf={nameOf}
       actions={reviewActions(review, user ? { id: user.id, isOwner } : null)}
       busy={act.isPending}

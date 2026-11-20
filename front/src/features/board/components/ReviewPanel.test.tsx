@@ -217,6 +217,50 @@ describe("ReviewPanel — o que mostra", () => {
     expect(typing).toHaveTextContent("digitando");
   });
 
+  it("na aba Agentes, clicar no nome de um agente abre o passo a passo dele, lido da rota do agente, e outro clique fecha", async () => {
+    const served = get.getMockImplementation()!;
+    const fleet = [{
+      runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Contexto"], total: 1, done: 0, at: 5, finished: false,
+      agents: [{ id: "a01f", label: "contexto", phase: "Contexto", model: "opus", status: "running" as const, toolCount: 1 }],
+    }];
+    const steps = [{ at: 1, kind: "tool", tool: "Read", target: "back/src/auth.ts" }, { at: 2, kind: "text", text: "Lendo o fluxo de login." }];
+    get.mockImplementation(async (url: string) => {
+      if (url === "/cards/c1/review") return { review: current, working, fleet };
+      if (url === "/cards/c1/review/agents/wf_abc12/a01f/feed") return { items: steps };
+      return served(url);
+    });
+    open("aut", review({ phase: "reviewing", round: 1 }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Agentes/ }));
+    const agentName = await screen.findByRole("button", { name: /Contexto/ });
+    expect(agentName).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(agentName);
+    const feed = await screen.findByTestId("review-agent-feed");
+    expect(await within(feed).findByText("Lendo o fluxo de login.")).toBeInTheDocument();
+    expect(feed).toHaveTextContent("back/src/auth.ts");
+    expect(agentName).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(agentName);
+    expect(screen.queryByTestId("review-agent-feed")).toBeNull();
+  });
+
+  it("passo a passo de um agente que o servidor não consegue ler avisa a falha em vez de ficar vazio", async () => {
+    const served = get.getMockImplementation()!;
+    const fleet = [{
+      runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Contexto"], total: 1, done: 1, at: 5, finished: true,
+      agents: [{ id: "a01f", label: "contexto", phase: "Contexto", model: "opus", status: "done" as const, endedAt: 1, toolCount: 1, result: "ok" }],
+    }];
+    get.mockImplementation(async (url: string) => {
+      if (url === "/cards/c1/review") return { review: current, working, fleet };
+      if (url === "/cards/c1/review/agents/wf_abc12/a01f/feed") throw new Error("the reviewer's session is not open");
+      return served(url);
+    });
+    open("aut", review({ phase: "reviewing", round: 1 }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Agentes/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /Contexto/ }));
+    expect(await within(await screen.findByTestId("review-agent-feed")).findByText(/não deu para ler/i)).toBeInTheDocument();
+  });
+
   it("a aba Agentes abre na rodada mais recente e troca de rodada pelas pílulas", async () => {
     const served = get.getMockImplementation()!;
     const agentRun = (runId: string, title: string) => ({
