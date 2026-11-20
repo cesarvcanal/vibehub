@@ -513,6 +513,8 @@ export interface Card {
    * block for each, with the "Pedir revisão" button. Absent = the card never opened a PR.
    */
   prs?: CardPr[];
+  waitingFor?: CardWait;
+  waitTargetTitle?: string;
   /**
    * ANALYSIS CARD: the branch of the PR it analyses and fixes (the panel's "Analisar"). Its PR line offers
    * no "Pedir revisão": the card itself is that PR's analysis. Absent = a regular card.
@@ -600,6 +602,20 @@ export type PrLiveEvent =
   | { type: "error"; code: "read_only" };
 
 /** A pull request the card delivered — see `Card.prs`. */
+export type CardWaitOutcome = "pr_merged" | "concluded" | "deleted";
+
+export interface CardWait {
+  cardId: string;
+  instruction: string;
+  createdAt: number;
+  createdBy: string;
+  base?: string;
+  readyAt?: number;
+  outcome?: CardWaitOutcome;
+  prNumber?: number;
+  failure?: { at: number; reason: string };
+}
+
 export interface CardPr {
   number: number;
   url: string;
