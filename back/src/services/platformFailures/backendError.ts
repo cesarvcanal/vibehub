@@ -95,6 +95,8 @@ export function buildBackendErrorReport(line: LogLine): PlatformFailureReport {
   const symptom = redactSecrets([line.message, errorMessage].filter((part) => part !== "").join(": ")).slice(0, SYMPTOM_MAX_CHARS);
   const action = readTextField(line.fields, "action");
   const route = readTextField(line.fields, "route");
+  const method = readTextField(line.fields, "method");
+  const requestedRoute = route && method ? `${method} ${route}` : route;
   const evidenceLines = [
     `mensagem: ${line.message}`,
     ...(errorMessage ? [`erro: ${errorMessage}`] : []),
@@ -104,7 +106,7 @@ export function buildBackendErrorReport(line: LogLine): PlatformFailureReport {
   ];
   return {
     source: "backend_error",
-    component: readComponentOfFrame(backendFrames[0]) ?? "backend",
+    component: readComponentOfFrame(backendFrames[0]) ?? requestedRoute ?? "backend",
     symptom,
     evidence: redactSecrets(evidenceLines.join("\n")),
   };

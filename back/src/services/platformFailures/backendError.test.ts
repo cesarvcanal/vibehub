@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { buildFailureSignature } from "./signature.js";
 import {
   extractBackendFrames, readBackendSourceRoot, buildBackendErrorReport, isPlatformFailureLogLine, PLATFORM_FAILURE_LOG_MARK, USER_STOP_WINDOW_MS,
 } from "./backendError.js";
@@ -89,6 +90,16 @@ describe("relato de erro do backend", () => {
     expect(report.symptom).toBe("write after end");
     expect(report.evidence.startsWith("mensagem: write after end\n")).toBe(true);
     expect(report.evidence).not.toContain("erro:");
+  });
+
+  it("5xx sem exceção em rotas diferentes viram falhas diferentes", () => {
+    const answeredWithServerError = (route: string) => buildBackendErrorReport({
+      level: 50, message: "request answered with a server error", fields: { method: "POST", route, status: 502, detail: `502 POST ${route}` },
+    });
+    const restartReport = answeredWithServerError("/api/runner/restart");
+    const voiceReport = answeredWithServerError("/api/voice/session");
+    expect(restartReport.component).toBe("POST /api/runner/restart");
+    expect(buildFailureSignature(restartReport)).not.toBe(buildFailureSignature(voiceReport));
   });
 
   it("mascara token que aparece na mensagem de erro", () => {
