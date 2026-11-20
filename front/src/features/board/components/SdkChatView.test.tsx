@@ -2952,6 +2952,37 @@ describe("SdkChatView — subagentes", () => {
     expect(within(dialog).getByTestId("sdk-agent-now")).toHaveTextContent("Lendo o reducer");
   });
 
+  it("a aba Tarefa mostra as entregas do subagente marcadas pelo relatório, e o contexto à parte", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(agentCall);
+    ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "completed", toolUses: 3 });
+    fireEvent.click(within(screen.getByTestId("sdk-fleet")).getByTestId("sdk-fleet-agent"));
+    const dialog = await screen.findByTestId("sdk-detail");
+    await waitFor(() => expect(ws.sent.some((frame) => (JSON.parse(frame) as { req?: string }).req === "agent")).toBe(true));
+    const ask = ws.sent.map((frame) => JSON.parse(frame) as { req?: string; nonce?: string }).find((frame) => frame.req === "agent")!;
+    ws.deliver({
+      type: "detail", req: "agent", id: "t1", nonce: ask.nonce,
+      data: { found: true, prompt: "Explore o **chat**.\n\n- [ ] Achar o reducer\n- [ ] Medir o render", items: [
+        { kind: "text", at: 3, text: "- [x] Achar o reducer\n- [ ] Medir o render — sem tempo\n\n### O que achei" },
+      ] },
+    } as never);
+    await within(dialog).findByTestId("sdk-timeline-text");
+
+    fireEvent.click(within(dialog).getByTestId("sdk-agent-tab-task"));
+    const deliverables = within(dialog).getAllByTestId("sdk-agent-deliverable");
+    expect(deliverables.map((row) => [row.textContent, row.getAttribute("data-state")])).toEqual([
+      [expect.stringContaining("Achar o reducer"), "done"],
+      [expect.stringContaining("Medir o render"), "missed"],
+    ]);
+    expect(within(dialog).getByTestId("sdk-agent-deliverables-progress")).toHaveTextContent("1 of 2 done");
+    const context = within(dialog).getByTestId("sdk-agent-task-context");
+    expect(within(context).getByText("chat").tagName).toBe("STRONG");
+    expect(context).not.toHaveTextContent("Achar o reducer");
+  });
+
   it("o texto do subagente não vira resposta do agente principal", async () => {
     renderSdkChat();
     const ws = await socket();
