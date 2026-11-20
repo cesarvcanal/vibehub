@@ -1101,7 +1101,7 @@ describe("buildPrDiffScript / parsePrDiff: o diff líquido do PR em dois commits
     const script = deliver.buildPrDiffScript("vibehub-runner", TOKEN, "/work/x", PR, "main", FROM, TO);
     expect(script).toContain(`'repos/acme/repo/compare/main...${FROM}'`);
     expect(script).toContain(`'repos/acme/repo/compare/main...${TO}'`);
-    for (const line of script.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
+    for (const line of script.split("\n").filter((scriptLine) => scriptLine.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
   });
 
   it.each([

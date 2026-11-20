@@ -1198,6 +1198,14 @@ export async function closeReviewsOfRemovedCard(cardId: string, by?: string): Pr
 
 /* ------------------------------------------------------------------ merge humano */
 
+function headMovedReason(cause: "merge" | "push", from: "ready" | "impasse", reviewedSha: string | undefined, head: string | undefined): string {
+  const reviewed = reviewedSha ? ` (${reviewedSha.slice(0, 7)})` : "";
+  if (cause === "merge") return `Merge recusado: ${HEAD_MOVED}; o PR não está mais no commit aprovado${reviewed}.`;
+  const newHead = head ? ` (head ${head.slice(0, 7)})` : "";
+  if (from === "ready") return `O autor empurrou depois do pronto${newHead}: ${HEAD_MOVED}; o PR não está mais no commit aprovado${reviewed}.`;
+  return `O autor empurrou depois do impasse${newHead}: o PR não está mais no commit revisado${reviewed}.`;
+}
+
 export async function reopenAfterHeadMoved(
   reviewId: string, by: string, opts: { cause?: "merge" | "push"; headSha?: string } = {},
 ): Promise<Review> {
@@ -1205,15 +1213,11 @@ export async function reopenAfterHeadMoved(
   const head = opts.headSha?.toLowerCase();
   const outcome = { reopenedFrom: null as "ready" | "impasse" | null };
   const after = await mutateReview(reviewId, (r) => {
-    if (!reopensOnNewHead(r) || (cause === "merge" && r.phase !== "ready")) return;
+    const reopens = cause === "merge" ? r.phase === "ready" : reopensOnNewHead(r);
+    if (!reopens) return;
     if (head && r.reviewedSha === head) return;
     const from = r.phase === "ready" ? "ready" : "impasse";
-    const approved = r.reviewedSha ? ` (${r.reviewedSha.slice(0, 7)})` : "";
-    const why = cause === "merge"
-      ? `Merge recusado: ${HEAD_MOVED}; o PR não está mais no commit aprovado${approved}.`
-      : from === "ready"
-        ? `O autor empurrou depois do pronto${head ? ` (head ${head.slice(0, 7)})` : ""}: ${HEAD_MOVED}; o PR não está mais no commit aprovado${approved}.`
-        : `O autor empurrou depois do impasse${head ? ` (head ${head.slice(0, 7)})` : ""}: o PR não está mais no commit revisado${approved}.`;
+    const why = headMovedReason(cause, from, r.reviewedSha, head);
     r.approvePending = undefined;
     r.impasseReason = undefined;
     r.nudges = 0;

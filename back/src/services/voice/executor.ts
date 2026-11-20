@@ -164,8 +164,9 @@ export async function runVoiceAction(input: VoiceActionInput): Promise<unknown> 
         const sent = await sendToCardAs(input.user, { cardId: created.cardId, text: instruction });
         return { ...created, delivered: true, sentAt: sent.sentAt };
       } catch (err) {
-        logger.warn({ card: created.cardId, detail: (err as Error).message }, "voice: card created but its first instruction did not arrive");
-        return { ...created, delivered: false, deliveryError: (err as Error).message };
+        const deliveryError = (err as Error).message;
+        logger.warn({ card: created.cardId, detail: deliveryError }, "voice: card created but its first instruction did not arrive");
+        return { ...created, delivered: false, deliveryError };
       }
     }
     case "send_to_card": {

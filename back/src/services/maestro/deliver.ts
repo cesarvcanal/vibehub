@@ -718,8 +718,8 @@ export function buildPrDiffScript(
 export type PrDiffVerdict = "same" | "changed" | "unknown";
 
 export function parsePrDiff(stdout: string): PrDiffVerdict | null {
-  const m = new RegExp(`${MARKER} prdiff (same|changed|unknown)\\b`).exec(stdout);
-  return m ? (m[1] as PrDiffVerdict) : null;
+  const match = new RegExp(`${MARKER} prdiff (same|changed|unknown)\\b`).exec(stdout);
+  return match ? (match[1] as PrDiffVerdict) : null;
 }
 
 export async function readPrDiffUnchanged(cardId: string, prUrl: string, base: string, fromSha: string, toSha: string): Promise<boolean> {
