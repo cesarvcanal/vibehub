@@ -128,7 +128,9 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
     const card = await registry.getCard(req.params.id);
     const pr = card && analysedPr(card, analysis);
     const canMerge = requestCardLevel(req) === "work" && pr !== undefined && isAnalysisMergeable(analysis, pr);
-    const lastMergeRefusal = currentMergeRefusal(analysis, await getAnalysisMergeRefusal(req.params.id));
+    const lastMergeRefusal = pr?.mergedAt === undefined
+      ? currentMergeRefusal(analysis, await getAnalysisMergeRefusal(req.params.id))
+      : undefined;
     return await reply.send({
       analysis, health, verdict: analysisVerdict(analysis), uncheckedDimensions: uncheckedDimensions(analysis), canMerge,
       merging: isAnalysisMerging(req.params.id),

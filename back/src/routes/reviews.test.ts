@@ -1440,6 +1440,20 @@ describe("merge da análise pela rota", () => {
     expect((await readAnalysis(w, w.leitor)).lastMergeRefusal).toMatchObject({ reason: "gate", output: "npm test estourou 585 s", by: "merger" });
   });
 
+  it("PR mergeado fora do vibehub não carrega a recusa gravada antes: o GET não diz merge barrado de PR mergeado", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    deliverResult = { merged: false, reason: "gate", branch: "dev", cardBranch: PR.branch, output: "vermelho" };
+    onTestFinished(() => {
+      deliverResult = { merged: true, reason: "merged", branch: "dev", cardBranch: "card/x" };
+    });
+    await merge(w, w.merger);
+    await (await registry()).markCardPrMerged(w.cardId, PR.base, PR.number, 1234);
+    const read = await readAnalysis(w, w.leitor);
+    expect(read.mergedAt).toBe(1234);
+    expect(read.lastMergeRefusal).toBeUndefined();
+  });
+
   it("a recusa gravada some quando a análise passa a outro commit ou quando o merge sai", async () => {
     const w = await world();
     await saveReport(aptReport(w.cardId));
