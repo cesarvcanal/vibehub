@@ -223,7 +223,10 @@ function reviewerIdentity(): string {
 }
 
 function fleetStep(review: Review): string[] {
-  const workflowArgs = JSON.stringify({ prNumber: review.prNumber, branch: review.prBranch, base: review.base, headSha: "<sha do passo 1>" });
+  const workflowArgs = JSON.stringify({
+    prNumber: review.prNumber, branch: review.prBranch, base: review.base, headSha: "<sha do passo 1>",
+    ...(review.round > 1 && review.reviewedSha ? { sinceSha: review.reviewedSha } : {}),
+  });
   return [
     "2. Rode a frota de agentes da revisão com a ferramenta Workflow (este pedido é explícito: rode o workflow):",
     `   Workflow({ scriptPath: "${PR_ANALYSIS_WORKFLOW_PATH}", args: ${workflowArgs} })`,
@@ -231,8 +234,12 @@ function fleetStep(review: Review): string[] {
       "dimensão, um verificador que tenta derrubar cada achado e um juiz. Espere a notificação de que ela terminou antes " +
       "de seguir; a revisão acompanha a frota e não conta esse intervalo como turno sem resposta. O resultado é " +
       "{ summary, dimensions, findings, refutedCount }, com cada finding já verificado e classificado pelo juiz.",
-    "   Se a frota recusar o args (erro \"args inválido\"), corrija o args e rode de novo, uma vez. Se a ferramenta Workflow " +
-      `não existir ou a frota falhar de novo, rode /code-review high no PR #${review.prNumber} no lugar dela e diga no summary que a frota falhou e por quê.`,
+    "   Se a frota recusar o args (erro \"args inválido\"), corrija o args e rode de novo, uma vez.",
+    "   Se a frota parar sem resultado (o aviso de que ela ficou sem registro de conclusão: o processo do Claude Code caiu, " +
+      `como num reinício do painel), relance uma vez: Workflow({ scriptPath: "${PR_ANALYSIS_WORKFLOW_PATH}", args: o mesmo, ` +
+      'resumeFromRunId: "<runId do lançamento>" }); os agentes que já terminaram voltam do cache.',
+    "   Se a ferramenta Workflow não existir ou a frota falhar de novo, rode " +
+      `/code-review high no PR #${review.prNumber} no lugar dela e diga no summary que a frota falhou e por quê.`,
   ];
 }
 

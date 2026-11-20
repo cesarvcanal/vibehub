@@ -24,11 +24,28 @@ describe("rodada 1 do revisor: a frota de agentes", () => {
   });
 });
 
-describe("rodadas 2 e 3 do revisor: a frota de novo", () => {
-  it("o comentário que virou commit volta ao revisor, que roda a frota de novo e confere a lista fechada com ela", () => {
+describe("rodadas 2 e 3 do revisor: a frota só no que mudou", () => {
+  it("o comentário que virou commit volta ao revisor, que roda a frota só no diff desde o sha revisado e confere a lista fechada com ela", () => {
     const text = reviewerDeltaPrompt({ ...review(), round: 2, reviewedSha: "a".repeat(40) });
     expect(text).toContain('Workflow({ scriptPath: "/root/.vibehub-workflows/pr-analysis.js"');
+    expect(text).toContain(`"sinceSha":"${"a".repeat(40)}"`);
     expect(text).toContain(`git diff ${"a".repeat(40)}..HEAD`);
+  });
+
+  it("rodada 1, e rodada sem sha revisado, rodam a frota no PR inteiro, sem sinceSha", () => {
+    expect(reviewerRoundPrompt(review())).not.toContain("sinceSha");
+    expect(reviewerDeltaPrompt({ ...review(), round: 2 })).not.toContain("sinceSha");
+  });
+});
+
+describe("frota do revisor interrompida por um deploy", () => {
+  it.each([
+    ["rodada 1", reviewerRoundPrompt(review())],
+    ["rodada 2", reviewerDeltaPrompt({ ...review(), round: 2, reviewedSha: "a".repeat(40) })],
+  ])("na %s, a frota que parou sem resultado é relançada pelo runId, com os agentes já concluídos no cache", (_round, text) => {
+    expect(text).toMatch(
+      /parar sem resultado[^\n]*relance uma vez[^\n]*resumeFromRunId: "<runId do lançamento>"[^\n]*os agentes que já terminaram voltam do cache/,
+    );
   });
 });
 
