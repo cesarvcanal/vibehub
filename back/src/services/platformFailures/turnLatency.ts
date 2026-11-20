@@ -21,13 +21,15 @@ type SlowTurnsListener = (cardId: string, slowTurns: SlowTurn[]) => void;
 
 const FIRST_OUTPUT_EVENTS: ReadonlySet<DriverEvent["type"]> = new Set(["assistant_delta", "assistant_text", "thinking_delta", "thinking", "tool_use_start", "tool_use"]);
 const WAIT_DISTURBING_EVENTS: ReadonlySet<DriverEvent["type"]> = new Set(["user_question", "permission_request", "usage_limited", "login_failed"]);
-const TOOL_OPENING_EVENTS: ReadonlySet<DriverEvent["type"]> = new Set(["tool_use_start", "tool_use"]);
+const WAIT_ENDING_EVENTS: ReadonlySet<DriverEvent["type"]> = new Set(["question_result", "permission"]);
+const AGENT_SIGNAL_EVENTS: ReadonlySet<DriverEvent["type"]> = new Set([...FIRST_OUTPUT_EVENTS, "tool_input_progress", "tool_progress", "tool_result"]);
 
 interface OpenTurn {
   since: number;
   disturbed: boolean;
   answered: boolean;
   lastSignalAt: number;
+  pausedByWait: boolean;
   openToolIds: Set<string>;
   stallMarked: boolean;
 }
@@ -57,14 +59,26 @@ function notifySlowTurnsListeners(cardId: string, slowTurns: SlowTurn[]): void {
 
 export function noteTurnSent(cardId: string, at: number): void {
   if (!openTurns.has(cardId)) {
-    openTurns.set(cardId, { since: at, disturbed: false, answered: false, lastSignalAt: at, openToolIds: new Set(), stallMarked: false });
+    openTurns.set(cardId, { since: at, disturbed: false, answered: false, lastSignalAt: at, pausedByWait: false, openToolIds: new Set(), stallMarked: false });
   }
 }
 
 function trackMainAgentTool(openTurn: OpenTurn, event: { type: DriverEvent["type"]; id?: unknown; parentToolUseId?: unknown }): void {
   if (typeof event.id !== "string") return;
   if (event.type === "tool_result") openTurn.openToolIds.delete(event.id);
-  else if (TOOL_OPENING_EVENTS.has(event.type) && !event.parentToolUseId) openTurn.openToolIds.add(event.id);
+  else if (event.type === "tool_use" && !event.parentToolUseId) openTurn.openToolIds.add(event.id);
+}
+
+function trackStallClock(openTurn: OpenTurn, event: { type: DriverEvent["type"]; phase?: unknown }, at: number): void {
+  const isWaitStart = WAIT_DISTURBING_EVENTS.has(event.type) || (event.type === "compaction" && event.phase === "started");
+  const isWaitEnd = WAIT_ENDING_EVENTS.has(event.type) || (event.type === "compaction" && event.phase !== "started");
+  if (isWaitStart) {
+    openTurn.pausedByWait = true;
+    return;
+  }
+  if (!isWaitEnd && !AGENT_SIGNAL_EVENTS.has(event.type)) return;
+  openTurn.pausedByWait = false;
+  openTurn.lastSignalAt = at;
 }
 
 export function noteTurnEvent(
@@ -78,7 +92,7 @@ export function noteTurnEvent(
     openTurns.delete(cardId);
     return;
   }
-  openTurn.lastSignalAt = at;
+  trackStallClock(openTurn, event, at);
   trackMainAgentTool(openTurn, event);
   if (WAIT_DISTURBING_EVENTS.has(event.type) || (event.type === "compaction" && event.phase === "started")) {
     openTurn.disturbed = true;
@@ -94,7 +108,7 @@ export function noteTurnEvent(
 export function markNewlyStalledTurns(now: number): StalledTurn[] {
   const newlyStalledTurns: StalledTurn[] = [];
   for (const [cardId, openTurn] of openTurns) {
-    const isStalled = !openTurn.stallMarked && !openTurn.disturbed && openTurn.openToolIds.size === 0
+    const isStalled = !openTurn.stallMarked && !openTurn.pausedByWait && openTurn.openToolIds.size === 0
       && now - openTurn.lastSignalAt > STALLED_TURN_MS;
     if (!isStalled) continue;
     openTurn.stallMarked = true;
@@ -109,7 +123,10 @@ export function noteDriverGone(cardId: string): void {
 
 export function noteUserStop(cardId: string, cardWorktreeSlug: string, at: number): void {
   const openTurn = openTurns.get(cardId);
-  if (openTurn) openTurn.disturbed = true;
+  if (openTurn) {
+    openTurn.disturbed = true;
+    openTurn.pausedByWait = true;
+  }
   userStops.last = { cardId, cardWorktreeSlug, at };
 }
 

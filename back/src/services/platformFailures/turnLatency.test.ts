@@ -122,15 +122,42 @@ describe("turno parado", () => {
     expect(markNewlyStalledTurns(STALLED)).toEqual([{ cardId: "card-1", sentAt: 0, lastSignalAt: 0 }]);
   });
 
-  it.each(["tool_use_start", "tool_use"] as const)("ferramenta do agente principal aberta por %s não é turno parado: é espera do comando", (type) => {
+  it("ferramenta do agente principal rodando não é turno parado: é espera do comando", () => {
     noteTurnSent("card-1", 0);
-    noteTurnEvent("card-1", { type, id: "tool-1" }, 1_000);
+    noteTurnEvent("card-1", { type: "tool_use", id: "tool-1" }, 1_000);
     expect(markNewlyStalledTurns(1_000 + 10 * STALLED_TURN_MS)).toEqual([]);
+  });
+
+  it("bloco de ferramenta aberto e abandonado sem o tool_use não deixa o turno imune", () => {
+    noteTurnSent("card-1", 0);
+    noteTurnEvent("card-1", { type: "tool_use_start", id: "tool-abortado" }, 1_000);
+    expect(markNewlyStalledTurns(1_000 + STALLED)).toEqual([{ cardId: "card-1", sentAt: 0, lastSignalAt: 1_000 }]);
+  });
+
+  it.each(["background_tasks", "btw_answer", "context_usage"] as const)("evento %s não é sinal do agente: não adia o turno parado", (type) => {
+    noteTurnSent("card-1", 0);
+    noteTurnEvent("card-1", { type: "assistant_text" }, 1_000);
+    noteTurnEvent("card-1", { type }, 1_000 + STALLED_TURN_MS);
+    expect(markNewlyStalledTurns(1_000 + STALLED)).toEqual([{ cardId: "card-1", sentAt: 0, lastSignalAt: 1_000 }]);
+  });
+
+  it.each([
+    ["a compactação terminou", { type: "compaction", phase: "started" }, { type: "compaction", phase: "done" }],
+    ["a compactação falhou", { type: "compaction", phase: "started" }, { type: "compaction", phase: "failed" }],
+    ["a pergunta foi respondida", { type: "user_question" }, { type: "question_result" }],
+    ["a permissão foi decidida", { type: "permission_request" }, { type: "permission" }],
+    ["o agente voltou a falar depois do login caído", { type: "login_failed" }, { type: "assistant_text" }],
+    ["o agente voltou a falar depois do limite de uso", { type: "usage_limited" }, { type: "assistant_delta" }],
+  ] as const)("depois que %s, o silêncio volta a contar como turno parado", (_case, waitStarted, waitEnded) => {
+    noteTurnSent("card-1", 0);
+    noteTurnEvent("card-1", waitStarted, 1_000);
+    noteTurnEvent("card-1", waitEnded, 400_000);
+    expect(markNewlyStalledTurns(400_000 + STALLED_TURN_MS)).toEqual([]);
+    expect(markNewlyStalledTurns(400_000 + STALLED)).toEqual([{ cardId: "card-1", sentAt: 0, lastSignalAt: 400_000 }]);
   });
 
   it("ferramenta que devolveu resultado volta a contar o silêncio a partir do resultado", () => {
     noteTurnSent("card-1", 0);
-    noteTurnEvent("card-1", { type: "tool_use_start", id: "tool-1" }, 1_000);
     noteTurnEvent("card-1", { type: "tool_use", id: "tool-1" }, 2_000);
     noteTurnEvent("card-1", { type: "tool_result", id: "tool-1" }, 500_000);
     expect(markNewlyStalledTurns(500_000 + STALLED_TURN_MS)).toEqual([]);
