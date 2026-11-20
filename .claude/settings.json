@@ -24,6 +24,17 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && { npm run -s lint:changed 1>&2 || { echo 'A edição que acabou de sair fere o AGENTS.md: o npm run lint:changed está vermelho nas linhas acima. Corrija agora, antes da próxima edição. Se o erro for Cannot find package eslint, rode npm ci na raiz.' 1>&2; exit 2; }; }"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
