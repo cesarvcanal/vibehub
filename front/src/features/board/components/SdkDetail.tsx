@@ -529,6 +529,7 @@ function ActionBody({ name, input, detail, row, onOpenAgent }: { name: string; i
   if (name === "Bash" || name === "BashOutput") {
     const command = field(input, "command");
     const out = detail ? bashOutput(detail) : null;
+    const commandFailed = detail?.isError === true;
     return (
       <>
         {command ? (
@@ -541,7 +542,11 @@ function ActionBody({ name, input, detail, row, onOpenAgent }: { name: string; i
             <Section label={t("sdk.detail.output")}>
               {out.stdout.trim() ? <CodeBlock text={out.stdout} /> : <div className="text-[13px] italic text-muted-foreground">{t("sdk.detail.noOutput")}</div>}
             </Section>
-            {out.stderr.trim() ? <Section label={<span className="text-red-500">{t("sdk.detail.stderr")}</span>}><CodeBlock text={out.stderr} tone="error" /></Section> : null}
+            {out.stderr.trim() ? (
+              <Section label={commandFailed ? <span className="text-red-500">{t("sdk.detail.stderr")}</span> : t("sdk.detail.stderrMessages")}>
+                <CodeBlock text={out.stderr} tone={commandFailed ? "error" : undefined} />
+              </Section>
+            ) : null}
           </>
         ) : null}
         {detail?.isError && !out?.stderr.trim() && !out?.stdout.trim() ? <ErrorBox text={detail.text ?? ""} /> : null}
