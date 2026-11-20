@@ -21,7 +21,7 @@
 11. **Mudança completa, escopo controlado:** todo consumidor afetado corrigido, nada alheio reescrito (§12).
 12. **Verificação real:** teste, build, revisão ou deploy só se dizem passados depois de executados e observados.
 
-**Ordem de prioridade em conflitos:** segurança e integridade dos dados → correção e contratos → simplicidade e clareza → performance → estilo. Performance abaixo de clareza quer dizer: entre duas soluções igualmente rápidas, a mais clara; nunca trabalho desperdiçado aceito por ser "mais legível".
+**Ordem de prioridade em conflitos:** segurança e integridade dos dados → correção e contratos → simplicidade e clareza → performance → estilo. Regra de estilo não justifica comportamento incorreto ou risco. Performance abaixo de clareza quer dizer: entre duas soluções igualmente rápidas, a mais clara; nunca trabalho desperdiçado aceito por ser "mais legível".
 
 ## 2. Idioma e nomenclatura
 
