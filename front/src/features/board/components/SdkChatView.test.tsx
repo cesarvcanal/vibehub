@@ -2983,6 +2983,32 @@ describe("SdkChatView — subagentes", () => {
     expect(context).not.toHaveTextContent("Achar o reducer");
   });
 
+  it("a aba Relatório lê como documento: títulos de seção de verdade e a lista de entregas com ícone de feito", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(agentCall);
+    ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "completed", toolUses: 3 });
+    fireEvent.click(within(screen.getByTestId("sdk-fleet")).getByTestId("sdk-fleet-agent"));
+    const dialog = await screen.findByTestId("sdk-detail");
+    await waitFor(() => expect(ws.sent.some((frame) => (JSON.parse(frame) as { req?: string }).req === "agent")).toBe(true));
+    const ask = ws.sent.map((frame) => JSON.parse(frame) as { req?: string; nonce?: string }).find((frame) => frame.req === "agent")!;
+    ws.deliver({
+      type: "detail", req: "agent", id: "t1", nonce: ask.nonce,
+      data: { found: true, prompt: "Explore", items: [
+        { kind: "text", at: 3, text: "- [x] Achar o reducer\n- [ ] Medir o render\n\n## Veredito: não apto\n\n### 1. O reducer duplica a linha\n\nTexto." },
+      ] },
+    } as never);
+    await within(dialog).findByTestId("sdk-timeline-text");
+
+    fireEvent.click(within(dialog).getByTestId("sdk-agent-tab-report"));
+    const report = within(dialog).getByTestId("sdk-agent-report");
+    expect(within(report).getByRole("heading", { level: 2 })).toHaveTextContent("Veredito: não apto");
+    expect(within(report).getByRole("heading", { level: 3 })).toHaveTextContent("1. O reducer duplica a linha");
+    expect(within(report).getAllByTestId("markdown-task-mark").map((mark) => mark.getAttribute("data-checked"))).toEqual(["true", "false"]);
+  });
+
   it("o texto do subagente não vira resposta do agente principal", async () => {
     renderSdkChat();
     const ws = await socket();
