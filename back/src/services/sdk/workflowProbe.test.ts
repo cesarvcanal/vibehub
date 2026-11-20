@@ -542,11 +542,11 @@ describe("frota retomada — o Workflow com resumeFromRunId escreve a segunda te
     { type: "result", agentId: "a04f", result: { summary: "1 achado" } },
   ];
 
-  function resumedRunDir(root: string): string {
-    const run = join(root, "s1", "subagents", "workflows", "wf_res1");
-    mkdirSync(run, { recursive: true });
-    writeFileSync(join(run, "journal.jsonl"), jsonl(RESUMED_JOURNAL));
-    return run;
+  function writeResumedJournal(root: string): string {
+    const runsDir = join(root, "s1", "subagents", "workflows");
+    mkdirSync(join(runsDir, "wf_res1"), { recursive: true });
+    writeFileSync(join(runsDir, "wf_res1", "journal.jsonl"), jsonl(RESUMED_JOURNAL));
+    return runsDir;
   }
 
   it("na rodada, a tentativa nova de um rótulo substitui a da tentativa morta: nem juiz parado, nem verificação em dobro", async () => {
@@ -556,8 +556,8 @@ describe("frota retomada — o Workflow com resumeFromRunId escreve a segunda te
     const scripts = join(root, "workflows", "scripts");
     mkdirSync(scripts, { recursive: true });
     writeFileSync(join(root, "workflows", "wf_res1.json"), JSON.stringify({ runId: "wf_res1", status: "completed" }));
-    resumedRunDir(root);
-    const [run] = wf.parseWorkflowProbe(runProbe(wf.WORKFLOW_PROBE_JS, [join(root, "s1", "subagents", "workflows"), scripts]));
+    const runsDir = writeResumedJournal(root);
+    const [run] = wf.parseWorkflowProbe(runProbe(wf.WORKFLOW_PROBE_JS, [runsDir, scripts]));
     expect(run!.agents.map((agent) => [agent.id, agent.status])).toEqual([["a03f", "done"], ["a04f", "done"]]);
     expect([run!.total, run!.done]).toEqual([2, 2]);
   });
@@ -566,10 +566,73 @@ describe("frota retomada — o Workflow com resumeFromRunId escreve a segunda te
     const wf = await load();
     const root = mkdtempSync(join(tmpdir(), "vibehub-conv-resume-"));
     onTestFinished(() => rmSync(root, { recursive: true, force: true }));
-    resumedRunDir(root);
+    writeResumedJournal(root);
     const conversation = wf.parseFleetConversation(runProbe(wf.FLEET_CONVERSATION_PROBE_JS, [root]));
     expect(conversation!.agents.map((agent) => [agent.id, agent.status])).toEqual([["a03f", "done"], ["a04f", "done"]]);
     expect(conversation!.finished).toBe(true);
+  });
+});
+
+describe("agente que falhou — o diário marca 'failed' e o snapshot do harness diz o motivo", () => {
+  const USAGE_LIMIT = "You've hit your session limit · resets 1:10am (UTC)";
+
+  function failedRunRoot(withSnapshot: boolean): { runsDir: string; scripts: string } {
+    const root = mkdtempSync(join(tmpdir(), "vibehub-wf-failed-"));
+    onTestFinished(() => rmSync(root, { recursive: true, force: true }));
+    const runsDir = join(root, "s1", "subagents", "workflows");
+    const scripts = join(root, "workflows", "scripts");
+    mkdirSync(join(runsDir, "wf_fail1"), { recursive: true });
+    mkdirSync(scripts, { recursive: true });
+    writeFileSync(join(runsDir, "wf_fail1", "journal.jsonl"), jsonl([
+      { type: "launched" },
+      { type: "started", agentId: "a01f", label: "revisão: tests", phase: "Revisão" },
+      { type: "result", agentId: "a01f", result: { findings: [] } },
+      { type: "started", agentId: "a02f", label: "juiz", phase: "Julgamento" },
+      { type: "failed", agentId: "a02f" },
+    ]));
+    if (withSnapshot) {
+      writeFileSync(join(root, "workflows", "wf_fail1.json"), JSON.stringify({
+        runId: "wf_fail1", status: "failed",
+        workflowProgress: [
+          { type: "workflow_phase", index: 1, title: "Revisão" },
+          { type: "workflow_agent", agentId: "a01f", label: "revisão: tests", state: "done" },
+          { type: "workflow_agent", agentId: "a02f", label: "juiz", state: "error", error: USAGE_LIMIT },
+        ],
+      }));
+    }
+    return { runsDir, scripts };
+  }
+
+  it("com a execução ainda aberta, o 'failed' do diário já para o agente: ele não responde mais", async () => {
+    const wf = await load();
+    const { runsDir, scripts } = failedRunRoot(false);
+    const [run] = wf.parseWorkflowProbe(runProbe(wf.WORKFLOW_PROBE_JS, [runsDir, scripts]));
+    expect(run!.agents.map((agent) => [agent.id, agent.status])).toEqual([["a01f", "done"], ["a02f", "stopped"]]);
+    expect(run!.agents[1]!.error).toBeUndefined();
+  });
+
+  it("com o snapshot, o agente que falhou leva o erro do harness; quem respondeu não leva erro", async () => {
+    const wf = await load();
+    const { runsDir, scripts } = failedRunRoot(true);
+    const [run] = wf.parseWorkflowProbe(runProbe(wf.WORKFLOW_PROBE_JS, [runsDir, scripts]));
+    expect(run!.outcome).toBe("failed");
+    expect(run!.agents.map((agent) => [agent.id, agent.status, agent.error])).toEqual([["a01f", "done", undefined], ["a02f", "stopped", USAGE_LIMIT]]);
+  });
+
+  it("parseWorkflowProbe: erro só em quem parou, cortado no teto, e lixo vira ausente", async () => {
+    const wf = await load();
+    const [run] = wf.parseWorkflowProbe(probe([{
+      runId: "wf_a",
+      agents: [
+        AGENT({ id: "a1", status: "stopped", error: "x".repeat(5_000) }),
+        AGENT({ id: "a2", status: "done", result: "ok", error: "não vale em quem respondeu" }),
+        AGENT({ id: "a3", status: "stopped", error: 42 }),
+      ],
+    }]));
+    expect(run!.agents.map((agent) => agent.status)).toEqual(["stopped", "done", "stopped"]);
+    expect(run!.agents[0]!.error!.length).toBe(wf.AGENT_ERROR_MAX);
+    expect(run!.agents[1]!.error).toBeUndefined();
+    expect(run!.agents[2]!.error).toBeUndefined();
   });
 });
 
