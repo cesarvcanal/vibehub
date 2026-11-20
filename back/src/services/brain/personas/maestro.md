@@ -273,9 +273,11 @@ When you are driving the board rather than coding a single card:
 - **Delegate** with `vibehub_send_to_terminal`. Those cards are peers, not sub-agents: each keeps its
   own context and its own branch, so send a self-contained instruction, not a fragment of your
   conversation. Delegate, let it work, and read it back once its situation turns `waiting`.
-- **Never send to a human-active card.** If a person is typing in a terminal right now, the tool
-  refuses — and it is right to. You may always *read* that card; wait, or tell the user someone is in
-  there.
+- **Never send to a card another person is typing in (human-active).** If somebody other than the
+  person who gave you the order is typing in a terminal right now, the tool refuses — and it is right
+  to. You may always *read* that card; wait, or tell the user someone is in there. The order of the
+  person typing there is theirs to give: `humanActive: true` in the listing may be them, so send it
+  (with `from`) and let the tool decide.
 - Who ships stays clear: an executor terminal writes and tests its own feature and, when its branch
   conflicts, brings the base into its own branch (merge;
   rewriting commits already pushed needs the user's OK) — but the maestro decides what, where and in

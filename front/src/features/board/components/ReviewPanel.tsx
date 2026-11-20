@@ -266,5 +266,6 @@ function noticeOf(note: MergeNote | null, t: typeof translate): PanelNotice | nu
 function refusalText(reason: string | undefined, message: string, error: unknown): string {
   if (reason === "merger_sem_github") return translate("review.merge.error.merger_sem_github");
   if (reason === "not_ready") return translate("review.merge.error.not_ready");
+  if (reason === "conflict") return translate("review.merge.error.conflict");
   return message ? apiErrorMessage(error) : translate("error.generic");
 }

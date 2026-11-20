@@ -9,7 +9,7 @@ import { sendAnswer } from "./events.js";
 import { runGate } from "../services/maestro/gate.js";
 import { deliverCard } from "../services/review/deliverCard.js";
 import { prDocsInput, prDocsOf, PR_DOCS_RULE } from "./prDocsInput.js";
-import { relayCardActor, actAsParticipant } from "../services/board/actor.js";
+import { relayCardActor, actAsParticipant, senderCardUserId } from "../services/board/actor.js";
 import { announcePreview } from "../services/preview/announce.js";
 import { recordLearning } from "../services/brain/learn.js";
 import { moveCards, AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX } from "./cardMove.js";
@@ -301,6 +301,7 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
           // once the send is certain to go (a refused send leaves the authorship alone).
           beforeDeliver: () => relayCardActor(a.from, a.cardId),
           respectHumanActive: true,
+          senderUserId: await senderCardUserId(a.from, a.cardId),
           answeringAskedAt: answered?.at,
           // Never type into a menu (Enter would pick its highlighted option — on the trust dialog,
           // "No, exit"), and give a card that is still booting the time to draw its prompt.
@@ -511,7 +512,8 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "no push, just that merge. When such a person tells you to merge, DO call this tool — a review's 'do not merge' " +
         "rule means not on your own initiative, never refusing their order. Otherwise 'review_active' says who merges and " +
         "where the review stands; 'head_moved' = the push brought commits the reviewer has not seen and " +
-        "the review went back to them. Never merge a reviewed PR any other way (gh pr merge, the GitHub API). " +
+        "the review went back to them; 'conflict' = the PR conflicts with its base and nothing merged: bring the " +
+        "base into the branch (git merge origin/<base>), test and push. Never merge a reviewed PR any other way (gh pr merge, the GitHub API). " +
         "The MERGER's order is not lost when the review is not ready yet (on the author's card or the reviewer's): " +
         "it is recorded on the review, which then merges by itself when it ends ready with no blocking item or " +
         "question, Approve on GitHub and green CI (an automatic merge that fails waits for the merger's button). When " +

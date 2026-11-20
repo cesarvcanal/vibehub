@@ -30,7 +30,7 @@ import {
   activeReviewForPr, getReview, insertReview, listReviewsForCards, listReviewsWaitingUsageLimit, mutateReview, reviewByReviewerCard,
 } from "./store.js";
 import {
-  actionableForAuthor, approvePendingText, autoMergeFailedText, authorFixPrompt, authorMergeGatePrompt, mergeGateFailedText, authorQuestionNoticeText, authorSuggestionsPrompt, headMovedPrefix,
+  actionableForAuthor, approvePendingText, autoMergeFailedText, authorFixPrompt, authorMergeConflictPrompt, authorMergeGatePrompt, mergeConflictOutput, mergeGateFailedText, authorQuestionNoticeText, authorSuggestionsPrompt, headMovedPrefix,
   impasseText, nudgePrefix, phaseNoticeText, questionNoticeText, reviewerApprovePrompt, reviewerDeltaPrompt,
   reviewerRoundPrompt, TOOL_RESPOND, TOOL_SUBMIT,
 } from "./prompts.js";
@@ -357,9 +357,10 @@ async function dispatch(r: Review): Promise<Review> {
  * as the button (`mergeReviewedPr`, on behalf of the merge owner, pinned to the reviewed commit, with gate).
  * Called AFTER the Approve: from the end of the reviewer's turn that reported `ready`, or from "não fazer"
  * on the last suggestion of an already approved review. A refusal of "not ready"/"merge already going out"/
- * "head moved" is a race and stays quiet; any other (red CI, conflict, merger with no GitHub connection)
- * marks the round (`autoMergeFailedRound`: does not try again, and the texts go back to the button), becomes
- * a note on the review and a notice on both cards. Never throws. Dynamic import: merge.ts imports this file.
+ * "head moved" is a race and stays quiet, and a conflict already ordered the author to bring the base in; any
+ * other (red CI, merger with no GitHub connection) marks the round (`autoMergeFailedRound`: does not try
+ * again, and the texts go back to the button), becomes a note on the review and a notice on both cards.
+ * Never throws. Dynamic import: merge.ts imports this file.
  */
 async function autoMerge(r: Review): Promise<void> {
   const now = (await getReview(r.id)) ?? r;
@@ -380,6 +381,7 @@ async function autoMerge(r: Review): Promise<void> {
     const { mergeReviewedPr } = await import("./merge.js");
     const outcome = await mergeReviewedPr(now.id, now.mergerUserId, { auto: true });
     if (outcome.kind === "merged" || outcome.reason === "not_ready" || outcome.reason === "merging" || outcome.reason === "head_moved") return;
+    if (outcome.reason === "conflict") return;
     await refuseAutoMerge(now, outcome.error);
   } catch (err) {
     logger.warn({ review: r.id, detail: (err as Error).message }, "PR review auto-merge failed");
@@ -416,6 +418,33 @@ function needsMergeGate(r: Review, again: boolean): boolean {
   return again && gate.state === "failed";
 }
 
+type MergeVerdict = GateResult & { conflict?: true };
+
+async function readMergeVerdict(r: Review, sha: string): Promise<MergeVerdict> {
+  try {
+    const pr = await readPrState(r.cardId, r.prUrl);
+    if (pr?.mergeable === "CONFLICTING") return { ran: true, passed: false, conflict: true, output: mergeConflictOutput(r) };
+    return await gateAtCommit(r.cardId, r.prUrl, sha);
+  } catch (err) {
+    return { ran: true, passed: false, output: `o gate não chegou a rodar: ${(err as Error).message}` };
+  }
+}
+
+function mergeVerdictNote(r: Review, sha: string, verdict: MergeVerdict, exhausted: boolean): string {
+  const commit = sha.slice(0, 7);
+  if (verdict.passed) return `Testes do merge verdes no commit aprovado (${commit}): o merge sai na hora.`;
+  if (verdict.conflict && exhausted) {
+    return `O PR segue em conflito com ${r.base} depois de ${MERGE_GATE_AUTO_RETRIES} ordens ao autor: o merge espera uma pessoa trazer a base.`;
+  }
+  if (verdict.conflict) {
+    return `${mergeConflictOutput(r)}: o autor recebeu a ordem de trazer ${r.base} para a branch, e a revisão confere o que entrar.`;
+  }
+  if (exhausted) {
+    return `Testes do merge vermelhos no commit aprovado (${commit}) depois de rodarem de novo sozinhos ${MERGE_GATE_AUTO_RETRIES} vezes: o merge espera uma pessoa.`;
+  }
+  return `Testes do merge vermelhos no commit aprovado (${commit}): o autor recebeu a falha e, ao fim do turno dele, os testes rodam de novo sozinhos.`;
+}
+
 /**
  * Runs the merge gate on the approved commit of a ready review ({@link Review.mergeGate}) and records the
  * verdict, if the review is still ready on that commit. Green: the automatic merge goes out, if it applied.
@@ -432,28 +461,25 @@ async function checkMergeGate(reviewId: string, opts: { again?: boolean; by?: st
     const previous = r.mergeGate?.sha === sha ? r.mergeGate : undefined;
     const failuresBefore = previous?.failures ?? (previous?.state === "failed" ? 1 : 0);
     await mutateReview(reviewId, (x) => {
-      x.mergeGate = { sha, state: "running", at: Date.now(), ...(failuresBefore ? { failures: failuresBefore } : {}) };
+      x.mergeGate = {
+        sha, state: "running", at: Date.now(),
+        ...(failuresBefore ? { failures: failuresBefore } : {}), ...(previous?.conflict ? { conflict: true as const } : {}),
+      };
     });
-    let verdict: GateResult;
-    try {
-      verdict = await gateAtCommit(r.cardId, r.prUrl, sha);
-    } catch (err) {
-      verdict = { ran: true, passed: false, output: `o gate não chegou a rodar: ${(err as Error).message}` };
-    }
+    const verdict = await readMergeVerdict(r, sha);
     let landed = false as boolean;
-    const failures = failuresBefore + 1;
+    const sameFailureKind = previous?.conflict === verdict.conflict;
+    const failures = sameFailureKind ? failuresBefore + 1 : 1;
     const exhausted = failures > MERGE_GATE_AUTO_RETRIES;
     const after = await mutateReview(reviewId, (x) => {
       if (x.phase !== "ready" || x.reviewedSha !== sha) return;
       x.mergeGate = verdict.passed
         ? { sha, state: "passed", at: Date.now() }
-        : { sha, state: "failed", output: verdict.output, at: Date.now(), failures, ...(exhausted ? { exhausted: true as const } : {}) };
-      note(x, "system", verdict.passed
-        ? `Testes do merge verdes no commit aprovado (${sha.slice(0, 7)}): o merge sai na hora.`
-        : exhausted
-          ? `Testes do merge vermelhos no commit aprovado (${sha.slice(0, 7)}) depois de rodarem de novo sozinhos ${MERGE_GATE_AUTO_RETRIES} vezes: o merge espera uma pessoa.`
-          : `Testes do merge vermelhos no commit aprovado (${sha.slice(0, 7)}): o autor recebeu a falha e, ao fim do turno dele, os testes rodam de novo sozinhos.`,
-      opts.by ? { by: opts.by } : {});
+        : {
+          sha, state: "failed", output: verdict.output, at: Date.now(), failures,
+          ...(exhausted ? { exhausted: true as const } : {}), ...(verdict.conflict ? { conflict: true as const } : {}),
+        };
+      note(x, "system", mergeVerdictNote(x, sha, verdict, exhausted), opts.by ? { by: opts.by } : {});
       landed = true;
     });
     logger.info(
@@ -465,15 +491,34 @@ async function checkMergeGate(reviewId: string, opts: { again?: boolean; by?: st
       if (autoMergeEligible(after) && (await reviewerApproved(after))) await autoMerge(after);
       return;
     }
-    await notifyBoth(after, `review:${reviewId}:merge_gate_failed:${sha}:${after.mergeGate?.at}`, mergeGateFailedText(after), exhausted ? "warning" : "info");
-    if (exhausted) return;
-    await relayReview(after, "author", authorMergeGatePrompt(after), { unpause: true, optional: true }).catch((e: unknown) =>
-      logger.warn({ review: reviewId, detail: (e as Error).message }, "could not send the merge gate failure to the author"));
+    await sendMergeGateFailure(after);
   } catch (err) {
     logger.warn({ review: reviewId, sha, detail: (err as Error).message }, "PR review merge gate failed to run");
   } finally {
     mergeGatesRunning.delete(reviewId);
   }
+}
+
+async function sendMergeGateFailure(r: Review): Promise<void> {
+  const gate = r.mergeGate;
+  await notifyBoth(r, `review:${r.id}:merge_gate_failed:${gate?.sha}:${gate?.at}`, mergeGateFailedText(r), gate?.exhausted ? "warning" : "info");
+  if (gate?.exhausted) return;
+  const authorPrompt = gate?.conflict ? authorMergeConflictPrompt(r) : authorMergeGatePrompt(r);
+  await relayReview(r, "author", authorPrompt, { unpause: true, optional: true }).catch((e: unknown) =>
+    logger.warn({ review: r.id, detail: (e as Error).message }, "could not send the merge gate failure to the author"));
+}
+
+export async function holdMergeOnConflict(reviewId: string, by: string): Promise<Review> {
+  const outcome = { held: false };
+  const after = await mutateReview(reviewId, (x) => {
+    if (x.phase !== "ready" || !x.reviewedSha) return;
+    x.mergeGate = { sha: x.reviewedSha, state: "failed", output: mergeConflictOutput(x), at: Date.now(), failures: 1, conflict: true };
+    note(x, "system", `Merge recusado: ${mergeConflictOutput(x)}. O autor recebeu a ordem de trazer ${x.base} para a branch.`, { by });
+    outcome.held = true;
+  });
+  logger.info({ audit: true, action: "review.merge_conflict", review: reviewId, held: outcome.held, by }, "PR review merge held: the PR conflicts with its base");
+  if (outcome.held) await sendMergeGateFailure(after);
+  return (await getReview(reviewId)) ?? after;
 }
 
 /**
@@ -1029,6 +1074,7 @@ export async function decideQuestion(reviewId: string, findingId: string, decisi
     if (f.severity === "question" && decision === "keep") {
       throw new Error(`keep vale para bloqueante travado; na dúvida ${findingId} decida block, drop ou accept_risk`);
     }
+    if (f.humanDecision === decision) return;
     f.humanDecision = decision;
     if (decision === "accept_risk") f.status = "accepted_risk";
     else if (decision === "drop") f.status = "dropped";
@@ -1319,22 +1365,6 @@ const GITHUB_SYNC_MS = 60_000;
 const lastGithubSync = new Map<string, number>();
 
 /**
- * The panel read the review: checks the PR on GitHub in the background, at most once per
- * {@link GITHUB_SYNC_MS} per review — the panel rereads every 3 s and one `gh` per read would be
- * waste. It is what catches a merge done directly on GitHub even without any author turn.
- */
-export function syncReviewSoon(r: Review): void {
-  if (isReviewClosed(r.phase)) {
-    lastGithubSync.delete(r.id);
-    return;
-  }
-  if (!claimGithubSync(r.id)) return;
-  void syncReviewWithGithub(r.id, "painel aberto").catch((err: unknown) => {
-    logger.warn({ review: r.id, detail: (err as Error).message }, "PR review could not sync with GitHub");
-  });
-}
-
-/**
  * The review for the panel's READ, along with whether a merge of it is running now (`merging`).
  *
  * `merging: false` with the review in `ready` is what makes the panel stop waiting for a merge whose
@@ -1346,26 +1376,27 @@ export function syncReviewSoon(r: Review): void {
  *    merge running, the GitHub check runs BEFORE answering (under the same throttle of
  *    {@link GITHUB_SYNC_MS}); the new process after the deploy has no throttle, and the first read
  *    already returns `merged`.
- * The other phases go on with the background check ({@link syncReviewSoon}). Never throws.
  */
 export async function reviewForRead(r: Review): Promise<{ review: Review; merging: boolean }> {
   if (merging.has(r.id)) return { review: r, merging: true };
-  if (r.phase !== "ready") {
-    syncReviewSoon(r);
+  if (isReviewClosed(r.phase)) {
+    lastGithubSync.delete(r.id);
     return { review: r, merging: false };
   }
-  let now: Review | undefined;
-  try {
-    now = claimGithubSync(r.id) ? await syncReviewWithGithub(r.id, "painel aberto") : await getReview(r.id);
-  } catch (err) {
-    logger.warn({ review: r.id, detail: (err as Error).message }, "PR review could not sync with GitHub");
-    now = await getReview(r.id);
-  }
-  const review = now ?? r;
+  const review = (await readAfterGithubSync(r.id)) ?? r;
   // A ready review with no gate verdict on the approved commit (ready before this code, or the gate
   // died in a deploy): runs it now, in the background; the panel shows "rodando" until the end.
   void checkMergeGate(review.id);
   return { review, merging: merging.has(review.id) };
+}
+
+async function readAfterGithubSync(reviewId: string): Promise<Review | undefined> {
+  try {
+    return claimGithubSync(reviewId) ? await syncReviewWithGithub(reviewId, "painel aberto") : await getReview(reviewId);
+  } catch (err) {
+    logger.warn({ review: reviewId, detail: (err as Error).message }, "PR review could not sync with GitHub");
+    return await getReview(reviewId);
+  }
 }
 
 /** Marks the check as happening now, if the last one was more than {@link GITHUB_SYNC_MS} ago. Returns whether it may go. */

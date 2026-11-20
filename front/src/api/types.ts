@@ -484,6 +484,7 @@ export interface Card {
   pendingQuestionAt?: number | null;
   /** Last time a human typed into this card's terminal (epoch ms). */
   humanActiveAt?: number;
+  humanActiveUserId?: string;
   /**
    * Last sign of life the server itself produced for the card (epoch ms): an open/wake, an
    * instruction delivered to it. Read only by the done-card countdown, which must count it as the
@@ -785,9 +786,11 @@ export interface ReviewSummary {
   authorWorking?: boolean;
   /**
    * A `ready` review whose merge gate on the approved commit is still running, failed while the author's
-   * AI fixes it (`fixing`: it reruns on its own), or failed and waits for a person: not "ready to merge".
+   * AI fixes it (`fixing`: it reruns on its own), or failed and waits for a person; or the PR conflicts with its
+   * base while the author's AI brings it in (`conflict`) or past the orders it gets (`conflictFailed`): not
+   * "ready to merge".
    */
-  mergeGateState?: "running" | "fixing" | "failed";
+  mergeGateState?: "running" | "fixing" | "failed" | "conflict" | "conflictFailed";
 }
 
 export interface FindingProof {
@@ -858,6 +861,16 @@ export interface AnalysisReadModel {
   merging: boolean;
   mergedAt?: number;
   lastMergeRefusal?: AnalysisMergeRefusal;
+  mergeGate?: AnalysisMergeGate;
+}
+
+export interface AnalysisMergeGate {
+  cardId: string;
+  analysedSha: string;
+  sha?: string;
+  state: "running" | "passed" | "failed";
+  output?: string;
+  at: number;
 }
 
 export interface AnalysisMergeRefusal {
@@ -966,6 +979,7 @@ export interface MergeGate {
   autoRetried?: true;
   /** Consecutive failures on this commit since the last human "Try again"; absent on an older failure = 1. */
   failures?: number;
+  conflict?: true;
   /** Past the automatic reruns: nothing runs it again without a person. */
   exhausted?: true;
 }

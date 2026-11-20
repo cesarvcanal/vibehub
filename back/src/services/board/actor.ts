@@ -84,6 +84,12 @@ export async function recordCardActor(
   }
 }
 
+export async function senderCardUserId(fromCardId: string | undefined, toCardId: string): Promise<string | undefined> {
+  if (!fromCardId || fromCardId === toCardId) return undefined;
+  const [from, to] = await Promise.all([getCard(fromCardId), getCard(toCardId)]);
+  return from && to && from.projectId === to.projectId ? from.actorUserId : undefined;
+}
+
 /**
  * A card delegating to another (the maestro's `vibehub_send_to_terminal`) passes on an order a
  * PERSON gave it: the sender card's author becomes the destination's, so what that order makes the
@@ -92,12 +98,8 @@ export async function recordCardActor(
  * Never rejects.
  */
 export async function relayCardActor(fromCardId: string | undefined, toCardId: string): Promise<void> {
-  if (!fromCardId) return;
   try {
-    const [from, to] = await Promise.all([getCard(fromCardId), getCard(toCardId)]);
-    // `from` is self-declared by the calling agent: only a card of the SAME project may pass its
-    // author on, so a stray or injected id cannot borrow just anybody's identity across the board.
-    const authorId = from && to && from.projectId === to.projectId ? from.actorUserId : undefined;
+    const authorId = await senderCardUserId(fromCardId, toCardId);
     if (!authorId) return;
     await recordCardActor(await findUser(authorId), toCardId);
   } catch (err) {

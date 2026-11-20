@@ -222,17 +222,34 @@ function reviewerIdentity(): string {
   return "Você é o REVISOR deste PR. Não escreva no código do autor: não faça commit, não faça push. vibehub_deliver aqui só serve para o merge por ordem (regras abaixo).";
 }
 
+const FLEET_RESUME_STEP =
+  "   Se a frota parar sem resultado (o aviso de que ela ficou sem registro de conclusão: o processo do Claude Code caiu, " +
+  `como num reinício do painel), relance uma vez: Workflow({ scriptPath: "${PR_ANALYSIS_WORKFLOW_PATH}", args: o mesmo, ` +
+  'resumeFromRunId: "<runId do lançamento>" }); os agentes que já terminaram voltam do cache.';
+
 function fleetStep(review: Review): string[] {
-  const workflowArgs = JSON.stringify({ prNumber: review.prNumber, branch: review.prBranch, base: review.base, headSha: "<sha do passo 1>" });
+  const sinceSha = review.round > 1 ? review.reviewedSha : undefined;
+  const workflowArgs = JSON.stringify({
+    prNumber: review.prNumber, branch: review.prBranch, base: review.base, headSha: "<sha do passo 1>",
+    ...(sinceSha ? { sinceSha } : {}),
+  });
   return [
     "2. Rode a frota de agentes da revisão com a ferramenta Workflow (este pedido é explícito: rode o workflow):",
     `   Workflow({ scriptPath: "${PR_ANALYSIS_WORKFLOW_PATH}", args: ${workflowArgs} })`,
+    ...(sinceSha
+      ? [
+        `   O sinceSha faz a frota ler só o que mudou desde a rodada anterior. Antes, rode git rev-list --merges ${sinceSha}..HEAD: ` +
+          "se sair algum commit (o autor fez merge da base), tire o sinceSha do args, porque esse diff traria o código da base, e a frota lê o PR inteiro.",
+      ]
+      : []),
     "   O args vai como objeto JSON, com o sha do passo 1 no headSha. A frota roda em segundo plano: especialistas por " +
       "dimensão, um verificador que tenta derrubar cada achado e um juiz. Espere a notificação de que ela terminou antes " +
       "de seguir; a revisão acompanha a frota e não conta esse intervalo como turno sem resposta. O resultado é " +
       "{ summary, dimensions, findings, refutedCount }, com cada finding já verificado e classificado pelo juiz.",
-    "   Se a frota recusar o args (erro \"args inválido\"), corrija o args e rode de novo, uma vez. Se a ferramenta Workflow " +
-      `não existir ou a frota falhar de novo, rode /code-review high no PR #${review.prNumber} no lugar dela e diga no summary que a frota falhou e por quê.`,
+    "   Se a frota recusar o args (erro \"args inválido\"), corrija o args e rode de novo, uma vez.",
+    FLEET_RESUME_STEP,
+    "   Se a ferramenta Workflow não existir ou a frota falhar de novo, rode " +
+      `/code-review high no PR #${review.prNumber} no lugar dela e diga no summary que a frota falhou e por quê.`,
   ];
 }
 
@@ -534,6 +551,13 @@ export function phaseNoticeText(r: Review): string {
 
 /** The notice, on both cards, that the merge gate failed on the approved commit. */
 export function mergeGateFailedText(r: Review): string {
+  if (r.mergeGate?.conflict && r.mergeGate.exhausted) {
+    return `PR #${r.prNumber}: o PR segue em conflito com ${r.base} depois de ${MERGE_GATE_AUTO_RETRIES} ordens à IA do autor — ` +
+      "o merge espera alguém trazer a base para a branch.";
+  }
+  if (r.mergeGate?.conflict) {
+    return `PR #${r.prNumber}: ${mergeConflictOutput(r)} — a IA do autor está trazendo ${r.base} para a branch.`;
+  }
   if (r.mergeGate?.exhausted) {
     return `PR #${r.prNumber}: os testes do merge seguem falhando depois de rodarem de novo sozinhos ${MERGE_GATE_AUTO_RETRIES} vezes — ` +
       "o merge espera alguém conferir e clicar em \"Tentar de novo\".";
@@ -564,6 +588,26 @@ export function authorMergeGatePrompt(r: Review): string {
     "3. Rode de novo os testes que falharam até passarem.",
     `4. Se houve commit: git push origin HEAD:${r.prBranch} (a revisão volta ao revisor conferir o que entrou, é o esperado).`,
     "   Sem commit (só instalar): nada a empurrar. Ao fim do seu turno o vibehub roda o gate de novo sozinho.",
+  ].join("\n");
+}
+
+export function mergeConflictOutput(r: Pick<Review, "base">): string {
+  return `o PR tem conflito com ${r.base}: o merge commit não sai limpo`;
+}
+
+export function authorMergeConflictPrompt(r: Review): string {
+  return [
+    header(r),
+    `A revisão aprovou o PR, mas no GitHub ele está em conflito com ${r.base}: o merge não sai até a branch receber ` +
+      `${r.base} sem conflito.`,
+    rules(),
+    "",
+    "O que fazer:",
+    `1. git fetch origin ${r.base} && git merge origin/${r.base} (merge, não rebase: o commit aprovado já está publicado).`,
+    "2. Resolva cada conflito preservando as duas mudanças. Quando as duas se cruzam no comportamento, um teste da " +
+      `base que passa a falhar é conflito também: ajuste para o comportamento das duas juntas.`,
+    "3. Rode os testes dos arquivos em conflito e o typecheck do pacote tocado.",
+    `4. git push origin HEAD:${r.prBranch} (a revisão volta ao revisor conferir o que entrou, é o esperado).`,
   ].join("\n");
 }
 
@@ -628,9 +672,7 @@ export function analysisPrompt(a: AnalysisInput): string {
       "dimensão, tenta derrubar cada achado, e um juiz classifica. Espere o resultado: { summary, dimensions, findings, refutedCount }.",
     "   Se a frota recusar o args (erro \"args inválido\"), o engano é seu: corrija o args e rode a frota de novo, uma vez; " +
       "se falhar de novo, siga a linha do fleet_unavailable, abaixo.",
-    "   Se a frota parar sem resultado (o aviso de que ela ficou sem registro de conclusão: o processo do Claude Code caiu, " +
-      `como num reinício do painel), relance uma vez: Workflow({ scriptPath: "${PR_ANALYSIS_WORKFLOW_PATH}", args: o mesmo, ` +
-      'resumeFromRunId: "<runId do lançamento>" }); os agentes que já terminaram voltam do cache. Se parar de novo, siga a linha do fleet_unavailable, abaixo.',
+    `${FLEET_RESUME_STEP} Se parar de novo, siga a linha do fleet_unavailable, abaixo.`,
     "   Se a ferramenta Workflow não existir, for recusada ou a frota falhar com erro: chame vibehub_analysis_report com " +
       `${reportTarget}, headSha, stage: "fleet_unavailable", summary e unavailableReason com o erro, diga o motivo no chat ` +
       "e pare. Não rode a análise sozinho no lugar da frota.",

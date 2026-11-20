@@ -66,8 +66,9 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
   const t = useT();
   const stuck = new Set(review.phase === "impasse" ? stuckItems(review.findings).map((f) => f.id) : []);
   const pending = new Set(pendingQuestions(review.findings).map((f) => f.id));
+  const keptStuck = new Set(review.findings.filter((f) => stuck.has(f.id) && f.humanDecision === "keep").map((f) => f.id));
   // What the review waits on people for (anybody's), and how much of it this person can decide.
-  const waitingOnPeople = review.findings.filter((f) => pending.has(f.id) || stuck.has(f.id)).length;
+  const waitingOnPeople = review.findings.filter((f) => pending.has(f.id) || (stuck.has(f.id) && !keptStuck.has(f.id))).length;
   const decisionsHere = actions.decide ? waitingOnPeople : 0;
   // Until the person picks a tab, the panel shows where their attention is needed: the findings while
   // they have a decision to make there (it can appear later — a round landing with a doubt), the
@@ -82,7 +83,7 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
     if (!actions.decide) return [];
     // Doubts wait for the human reviewer; in an impasse the stuck items wait for the same person.
     if (pending.has(f.id)) return ["block", "accept_risk", "drop"];
-    if (stuck.has(f.id)) return f.severity === "blocking" ? ["keep", "accept_risk"] : ["accept_risk"];
+    if (stuck.has(f.id)) return f.severity === "blocking" && !keptStuck.has(f.id) ? ["keep", "accept_risk"] : ["accept_risk"];
     return [];
   };
 
@@ -598,6 +599,7 @@ function FindingCard({
           >
             {f.title}
           </p>
+          {f.humanDecision === "keep" && !closed ? <p className="text-[11px] text-amber-300">{t("review.finding.kept")}</p> : null}
           {f.problem ? <FindingText label={t("review.finding.problem")}>{f.problem}</FindingText> : null}
           {f.fix ? <FindingText label={t("review.finding.fix")}>{f.fix}</FindingText> : null}
           <dl className="space-y-0.5 text-[11px]">
@@ -841,6 +843,20 @@ function MergeGateBanner({ review }: { review: Review }) {
     );
   }
   if (!gate || !status) return null;
+  if (status === "conflict") {
+    return (
+      <p role="status" className={cn("shrink-0 rounded-md border px-2.5 py-1.5 text-xs", NOTICE_TONE.warn)}>
+        {t("review.mergeGate.conflict", { base: review.base })}
+      </p>
+    );
+  }
+  if (status === "conflictFailed") {
+    return (
+      <p role="alert" className="shrink-0 rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-xs font-medium text-destructive">
+        {t("review.mergeGate.conflictFailed", { base: review.base, max: MERGE_GATE_AUTO_RETRIES })}
+      </p>
+    );
+  }
   if (status === "fixing") {
     return (
       <div role="status" className={cn("shrink-0 rounded-md border px-2.5 py-1.5 text-xs", NOTICE_TONE.warn)}>
@@ -974,12 +990,16 @@ function stageText(review: Review, authorWorking: boolean, t: typeof translate):
         : t("review.stage.reviewing.first");
     case "fixing":
       return t("review.stage.fixing");
-    case "ready":
+    case "ready": {
       if (authorWorking) return t("review.stage.authorWorking");
-      if (mergeGateStatus(review) === "failed") return t("review.stage.gateFailed");
-      if (mergeGateStatus(review) === "fixing") return t("review.stage.gateFixing");
-      if (mergeGateStatus(review) === "running") return t("review.stage.gateRunning");
+      const gateStatus = mergeGateStatus(review);
+      if (gateStatus === "failed") return t("review.stage.gateFailed");
+      if (gateStatus === "fixing") return t("review.stage.gateFixing");
+      if (gateStatus === "running") return t("review.stage.gateRunning");
+      if (gateStatus === "conflict") return t("review.stage.gateConflict");
+      if (gateStatus === "conflictFailed") return t("review.stage.gateConflictFailed");
       return t("review.stage.ready");
+    }
     case "impasse":
       return t("review.stage.impasse");
     case "merged":

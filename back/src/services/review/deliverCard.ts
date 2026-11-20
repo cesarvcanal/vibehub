@@ -212,12 +212,14 @@ function mergeResult(outcome: ReviewMergeOutcome, base: DeliverResult, review: R
 
 /**
  * The reason for a refused merge, so the AI tells the truth: the deliver's own when it ran (red CI,
- * conflict), "a revisão está ativa" when it was not ready or another merge is going out, and merge
+ * conflict), the conflict the merge gate already holds, "a revisão está ativa" when it was not ready or
+ * another merge is going out, and merge
  * failure for the rest (the owner's GitHub connection, permission, error).
  */
 function refusalReason(outcome: Extract<ReviewMergeOutcome, { kind: "refused" }>): DeliverResult["reason"] {
   if (outcome.result) return outcome.result.reason;
   if (outcome.reason === "gate" || outcome.reason === "gate_running") return "gate";
+  if (outcome.reason === "conflict") return "conflict";
   if (outcome.reason === "not_ready" || outcome.reason === "merging") return "review_active";
   return "merge_failed";
 }

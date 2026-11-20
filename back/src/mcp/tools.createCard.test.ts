@@ -2,8 +2,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vite
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectMcpClient } from "../testkit/mcpClient.js";
 
 const runScript = vi.fn(async () => ({ stdout: "", stderr: "" }));
 const canPushToRepo = vi.fn(async (_connectionId: string, _fullName: string) => true);
@@ -34,15 +33,7 @@ async function load() {
   const githubAccount = await registry.addGithubConnection({ label: "cesar", login: "cesar-gh" });
   const callerCard = await registry.createCard({ projectId: infraProject.id, title: "faxina de volumes" });
 
-  const server = createMcpServer("test");
-  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "card-test", version: "1" });
-  await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
-  const call = async (name: string, args: Record<string, unknown> = {}) => {
-    const response = await client.callTool({ name, arguments: args });
-    const answerText = (response.content as { type: string; text: string }[])[0]!.text;
-    return JSON.parse(answerText) as Record<string, unknown>;
-  };
+  const { client, call } = await connectMcpClient(createMcpServer("test"));
   return { registry, userGit, githubAccount, owner, member, infraProject, vibehubProject, callerCard, client, call };
 }
 

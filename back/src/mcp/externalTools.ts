@@ -343,7 +343,8 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
         "`authorized:true` ONLY when the user explicitly named where to ship ('sobe pra dev'); a " +
         "merge is a deploy, never a default. A PR under review: the push always happens; the merge only " +
         "when you are the review's merger and it is ready ('review_active' otherwise, naming who merges; " +
-        "'head_moved' = new commits went back to the reviewer). The merger's merge order that finds the review " +
+        "'head_moved' = new commits went back to the reviewer; 'conflict' = the PR conflicts with its base, " +
+        "nothing merged until the branch receives the base). The merger's merge order that finds the review " +
         "not ready is recorded on it: it merges by itself once ready with no blocking item or question, Approve on " +
         "GitHub and green CI (an automatic merge that fails waits for the merger's button); `concludeWhenMerged: true` " +
         "(\"…e concluir o card\") records that the card moves to done then. The answer says what was recorded, and " +

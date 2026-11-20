@@ -1388,8 +1388,9 @@ function writeToDriver(session: DriverSession, control: DriverControl): boolean 
  * makes "estou conversando com esse card" a sign of life the sweep can see (see
  * `lastActivityAt`/`cardsToHibernate` in services/board/workspace.ts).
  */
-function noteChatActivity(session: DriverSession): void {
-  void registry.markCardHumanActive(session.cardId).catch(() => { /* best effort, never fails a send */ });
+function noteChatActivity(session: DriverSession, typistUserId: string | undefined): void {
+  // eslint-disable-next-line no-restricted-syntax -- best effort: the next message stamps it again
+  void registry.markCardHumanActive(session.cardId, typistUserId).catch(() => undefined);
 }
 
 /**
@@ -1460,6 +1461,7 @@ export function dispatchClientFrame(
   raw: string,
   origin?: MessageOrigin,
   sender?: WebSocket,
+  typistUserId?: string,
 ): ClientFrameOutcome {
   const control = parseSdkClientFrame(raw);
   if (!control) return { kind: "ignored" };
@@ -1501,7 +1503,7 @@ export function dispatchClientFrame(
     session.rewinds.push({ original: control.original, text: control.text, ...first });
     // The transcript will carry the WRAPPED words — that is what the mirror must not re-emit.
     countSentTurn(session, wrapped);
-    noteChatActivity(session);
+    noteChatActivity(session, typistUserId);
     const at = Date.now();
     const edited: HistoryEvent = { type: "message_edited", originalText: control.original, ...first, at };
     void appendHistory(session.cardId, edited);
@@ -1521,7 +1523,7 @@ export function dispatchClientFrame(
     if (control.now && session.openAsks.size > 0) noteStop(session, origin, "send_now");
     if (!writeToDriver(session, control)) return { kind: "refused", cid: control.cid, reason: "driver-gone" };
     countSentTurn(session, control.text);
-    noteChatActivity(session);
+    noteChatActivity(session, typistUserId);
     const at = Date.now();
     const line: HistoryEvent = { type: "user", text: control.text, at, from: origin };
     const persisted = appendHistoryReported(session.cardId, line);
@@ -1540,7 +1542,7 @@ export function dispatchClientFrame(
     // carries the question, goes into the history. Driver dead: whoever asked knows right away, instead of
     // being left with the pending line forever.
     if (canAcceptTurn(session) && writeToDriver(session, control)) {
-      noteChatActivity(session);
+      noteChatActivity(session, typistUserId);
     } else {
       if (sender) {
         sendFrame(sender, {
@@ -1554,13 +1556,13 @@ export function dispatchClientFrame(
   if (control.type === "question_answer" && !session.ownQuestions.has(control.id)) {
     // ORPHAN: this driver never asked this question. Passing it on returned "no pending question with id"
     // and the answer was lost — it becomes a message (see `answerOrphanQuestion`).
-    void answerOrphanQuestion(session, control, origin);
+    void answerOrphanQuestion(session, control, origin, typistUserId);
     return { kind: "ignored" };
   }
   if (control.type === "question_answer") {
     const card = session.questionCards.get(control.id);
     if (card?.state === "answered") {
-      answerLate(session, card, control, origin);
+      answerLate(session, card, control, origin, typistUserId);
       return { kind: "ignored" };
     }
     if (card?.state === "open") {
@@ -1601,13 +1603,15 @@ export function dispatchClientFrame(
  * empty answer become nothing. The conversation shows only what the person chose; `sent` keeps what
  * the model read.
  */
-function answerLate(session: DriverSession, card: QuestionCard, control: QuestionAnswerControl, origin?: MessageOrigin): void {
+function answerLate(
+  session: DriverSession, card: QuestionCard, control: QuestionAnswerControl, origin: MessageOrigin | undefined, typistUserId: string | undefined,
+): void {
   if ((origin?.name ?? null) === card.by) return;
   const late = buildLateAnswerText(card.questions, control.answers, origin?.name, card.by);
   if (!late || !canAcceptTurn(session)) return;
   if (!writeToDriver(session, { type: "user", text: late.sent, keepQuestions: true })) return;
   countSentTurn(session, late.sent);
-  noteChatActivity(session);
+  noteChatActivity(session, typistUserId);
   const line: HistoryEvent = { type: "user", text: late.shown, sent: late.sent, at: Date.now(), from: origin };
   void appendHistoryReported(session.cardId, line);
   relayToPeers(session, undefined, line);
@@ -1696,7 +1700,9 @@ async function settleOrphanQuestions(session: DriverSession): Promise<void> {
  * still matter — they go to the model as a MESSAGE, each question quoted next to the choice, and the
  * card closes as answered. It is a turn: it counts, disarms the idle and gets the marker.
  */
-async function answerOrphanQuestion(session: DriverSession, control: QuestionAnswerControl, origin?: MessageOrigin): Promise<void> {
+async function answerOrphanQuestion(
+  session: DriverSession, control: QuestionAnswerControl, origin: MessageOrigin | undefined, typistUserId: string | undefined,
+): Promise<void> {
   // Marked BEFORE any await: the second click (another tab, double click) arrives in the middle of the
   // disk read and needs to find the slot already taken.
   if (session.answeringOrphans.has(control.id)) return; // the same answer is already on its way
@@ -1738,7 +1744,7 @@ async function answerOrphanQuestion(session: DriverSession, control: QuestionAns
     return;
   }
   countSentTurn(session, text);
-  noteChatActivity(session);
+  noteChatActivity(session, typistUserId);
   markPersonTurn(session, { startedAt: Date.now(), preview: inflightPreview(text), attempts: 0 });
   session.answeringOrphans.delete(control.id);
   session.settledOrphans.add(control.id);
@@ -2116,6 +2122,7 @@ export interface AttachOpts {
    * identity to land in the runner. `undefined` = go now: the common case costs no await.
    */
   beforeTurn?: (raw: string) => Promise<void> | undefined;
+  typistUserId?: string;
 }
 
 /**
@@ -2307,7 +2314,7 @@ export function attachSocket(
   const answerDetail = createDetailResponder(session, socket);
 
   const deliver = (text: string): void => {
-    const outcome = dispatchClientFrame(session, text, origin, socket);
+    const outcome = dispatchClientFrame(session, text, origin, socket, opts.typistUserId);
     // The message is out: whoever wrote it stopped typing — even if the front's own "parou" is lost.
     if (outcome.kind === "accepted" || (outcome.kind === "ignored" && outcome.sent)) noteTyping(false);
     replyFrameOutcome(socket, outcome);

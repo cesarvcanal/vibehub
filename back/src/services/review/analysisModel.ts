@@ -47,6 +47,15 @@ export interface AnalysisMergeRefusal {
   at: number;
 }
 
+export interface AnalysisMergeGate {
+  cardId: string;
+  analysedSha: string;
+  sha?: string;
+  state: "running" | "passed" | "failed";
+  output?: string;
+  at: number;
+}
+
 export type DimensionHealth = "ok" | "attention" | "problem" | "not_run" | "skipped";
 
 function isDimensionAccountedFor(run: DimensionRun | undefined): run is DimensionRun {
