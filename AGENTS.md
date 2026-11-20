@@ -655,7 +655,7 @@ Antes de cada etapa, ache no mapa abaixo a skill da situação e invoque-a pela 
 | Ver a mudança rodando | `run` · MCP `navegador`, com o back e o front isolados da §12 |
 | Antes de afirmar pronto, passando ou corrigido | `superpowers:verification-before-completion` |
 | Achar bug no diff ou num PR | `/code-review` (o nível `ultra`, faturado, só a pedido do usuário) |
-| Revisão por um subagente sem o seu contexto | `superpowers:requesting-code-review` |
+| Code review do diff antes de entregar (o fechamento, abaixo) | `mattpocock-skills:code-review` |
 | Recebeu review (pessoa ou bot) | `superpowers:receiving-code-review` |
 | Segurança das mudanças pendentes | `security-review` |
 | Editar este arquivo | `mattpocock-skills:writing-for-agents` · `claude-md-management:claude-md-improver` |
@@ -681,7 +681,7 @@ Antes de cada etapa, ache no mapa abaixo a skill da situação e invoque-a pela 
 
 ### Fechamento: revisão agnóstica
 
-É o passo 8 da §12, antes da entrega, sem esperar ser mandado. O revisor recebe só este prompt, palavra por palavra, sem justificativa nem lista de foco: quem escreveu não escolhe onde o revisor olha.
+É o passo 8 da §12, antes da entrega, sem esperar ser mandado. Cada revisor recebe só este prompt e o pedido da etapa, sem justificativa nem lista de foco: quem escreveu não escolhe onde o revisor olha.
 
 ```text
 Revise a branch atual contra o AGENTS.md da raiz do repositório.
@@ -692,7 +692,7 @@ O relatório segue "Como relatar" (§12 do AGENTS.md) e abre com a lista abaixo 
 ```
 
 1. **Simplificação:** subagente `code-simplifier:code-simplifier`, com o pedido de confrontar cada trecho com as regras e aplicar o que simplifica sem mudar comportamento. Confira o que ele escreveu e rode o lint e os testes do recorte.
-2. **Code review**, depois da simplificação: subagente `general-purpose`, com o pedido de seguir "Como revisar um PR" (§14), não mexer no working tree e entregar os achados com severidade e o veredito. Ele usa o shell para `git`, lint e testes existentes; o teste novo que provaria um achado ele descreve, e você escreve e roda. O `feature-dev:code-reviewer` não tem Bash e só serve para uma leitura rápida.
+2. **Code review**, depois da simplificação: a skill `mattpocock-skills:code-review`, com `origin/main` como ponto fixo. Ela despacha dois revisores sem o seu contexto, em paralelo: **padrões**, com o AGENTS.md como fonte de padrões, e **spec**, com o que o autor afirma (a descrição do PR, ou as mensagens dos commits quando o PR ainda não existe) como spec; nenhum rastreador de issues entra. Cada um recebe o prompt acima e o pedido de seguir "Como revisar um PR" (§14), não mexer no working tree e entregar os achados com severidade, que valem sobre o formato e o limite de palavras da skill. A `description` de cada despacho nomeia o eixo ("Code review · padrões", "Code review · spec"). Os revisores usam o shell para `git`, lint e testes existentes; o teste novo que provaria um achado eles descrevem, e você escreve e roda. Você junta os dois relatórios, cada eixo na sua seção como a skill manda, e fecha com um veredito só: **não apto** se qualquer eixo tem achado que bloqueia ou decisão em aberto.
 3. Cada achado se confere na fonte e segue a severidade (§14), em commit próprio quando se corrige.
 
 ### Entrega
