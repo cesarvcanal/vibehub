@@ -502,6 +502,7 @@ export interface Card {
    * card. Absent = nobody has typed here (or not since the field existed).
    */
   humanActiveAt?: number;
+  humanActiveUserId?: string;
   /**
    * Last sign of life the BACK itself produced for this card (epoch ms): an open/wake, an instruction
    * delivered to it. The idle sweep counts it ({@link lastActivityAt}), and so does the done-card
@@ -2255,11 +2256,17 @@ export async function pruneCardPreviews(listening: readonly number[]): Promise<n
  * an unknown card is a no-op (the websocket that calls this must never fail over a stale id), and
  * the CALLER throttles so this is not a disk write per keystroke. Returns the card, or undefined.
  */
-export async function markCardHumanActive(cardId: string, at: number = Date.now()): Promise<Card | undefined> {
+export async function markCardHumanActive(
+  cardId: string, userId: string | undefined, at: number = Date.now(),
+): Promise<Card | undefined> {
   return store.mutate((doc) => {
     const card = doc.cards.find((c) => c.id === cardId);
     if (!card) return undefined;
+    const previousStillActive = card.humanActiveAt !== undefined && at - card.humanActiveAt < HUMAN_ACTIVE_WINDOW_MS;
+    const sharedWithSomeoneElse = previousStillActive && card.humanActiveUserId !== userId;
     card.humanActiveAt = at;
+    if (userId && !sharedWithSomeoneElse) card.humanActiveUserId = userId;
+    else delete card.humanActiveUserId;
     // Deliberately NOT bumping updatedAt: a keystroke is not an edit of the card, and it would churn
     // the board's ordering (updatedAt is a tie-breaker) on every few seconds of typing.
     return card;

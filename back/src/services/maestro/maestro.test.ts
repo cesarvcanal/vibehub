@@ -498,7 +498,7 @@ describe("an agent's send goes to the native chat while it is in use, to the ter
 
   it("a person typing in the card still blocks the agent on the native chat", async () => {
     const { maestro, manager, registry, dest, origin } = await nativeCard();
-    await registry.markCardHumanActive(dest.id, Date.now());
+    await registry.markCardHumanActive(dest.id, undefined, Date.now());
     await expect(maestro.sendToTerminal(dest.id, "oi", { respectHumanActive: true, origin })).rejects.toThrow(/human-active/);
     manager.resetSdkSessionsForTesting();
     expect(spawned).toHaveLength(0);
@@ -524,7 +524,7 @@ describe("human-active lock (maestro-only)", () => {
     const p = await registry.createProject({ name: "billing" });
     const c = await registry.createCard({ projectId: p.id, title: "someone is typing" });
     await registry.applyOpenTerminal(c.id); // a live session — the refusal is about the human, not the session
-    await registry.markCardHumanActive(c.id, Date.now());
+    await registry.markCardHumanActive(c.id, undefined, Date.now());
 
     // the MAESTRO path opts in and is refused
     await expect(maestro.sendToTerminal(c.id, "run the tests", { respectHumanActive: true })).rejects.toThrow(/human-active/);
@@ -545,7 +545,7 @@ describe("human-active lock (maestro-only)", () => {
     const p = await registry.createProject({ name: "billing" });
     const c = await registry.createCard({ projectId: p.id, title: "the user is here" });
     await registry.applyOpenTerminal(c.id);
-    await registry.markCardHumanActive(c.id, Date.now()); // active RIGHT NOW
+    await registry.markCardHumanActive(c.id, undefined, Date.now());
     const out = await maestro.sendToTerminal(c.id, "oi"); // no opts = the user path
     expect(out).toMatchObject({ sent: true });
     expect(runScript).toHaveBeenCalledOnce();
@@ -556,7 +556,7 @@ describe("human-active lock (maestro-only)", () => {
     const p = await registry.createProject({ name: "billing" });
     const c = await registry.createCard({ projectId: p.id, title: "typed a while ago" });
     await registry.applyOpenTerminal(c.id);
-    await registry.markCardHumanActive(c.id, Date.now() - registry.HUMAN_ACTIVE_WINDOW_MS - 1);
+    await registry.markCardHumanActive(c.id, undefined, Date.now() - registry.HUMAN_ACTIVE_WINDOW_MS - 1);
     const out = await maestro.sendToTerminal(c.id, "carry on", { respectHumanActive: true });
     expect(out).toMatchObject({ sent: true });
     expect(runScript).toHaveBeenCalledOnce();
@@ -571,7 +571,7 @@ describe("human-active lock yields to the card's own open question", () => {
     const project = await loaded.registry.createProject({ name: "billing" });
     const card = await loaded.registry.createCard({ projectId: project.id, title: "waiting on a decision" });
     await loaded.registry.applyOpenTerminal(card.id);
-    await loaded.registry.markCardHumanActive(card.id, typedAt);
+    await loaded.registry.markCardHumanActive(card.id, undefined, typedAt);
     return { ...loaded, card };
   }
 
@@ -1162,7 +1162,7 @@ describe("sendToTerminal — beforeDeliver roda só quando a mensagem vai mesmo"
     const p = await registry.createProject({ name: "billing" });
     const c = await registry.createCard({ projectId: p.id, title: "alguém digitando" });
     await registry.applyOpenTerminal(c.id);
-    await registry.markCardHumanActive(c.id, Date.now());
+    await registry.markCardHumanActive(c.id, undefined, Date.now());
     const beforeDeliver = vi.fn(async () => undefined);
     await expect(maestro.sendToTerminal(c.id, "roda", { respectHumanActive: true, beforeDeliver })).rejects.toThrow(/human-active/);
     expect(beforeDeliver).not.toHaveBeenCalled();

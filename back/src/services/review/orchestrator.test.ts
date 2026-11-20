@@ -1898,7 +1898,7 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
     const o = await load();
     const { author, review, off } = await readyAt(o);
     try {
-      await o.registry.markCardHumanActive(author.id);
+      await o.registry.markCardHumanActive(author.id, undefined);
       prHeadNow = SHA2;
       await endTurn(o, author.id);
       await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("reviewing"));
@@ -1968,7 +1968,7 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
       await settle();
       expect(prHead).not.toHaveBeenCalled();
       // fixing: the author fixes through the list; their push is the answer, not a push after ready
-      await o.registry.markCardHumanActive(author.id);
+      await o.registry.markCardHumanActive(author.id, undefined);
       await endTurn(o, author.id);
       await vi.waitFor(() => expect(prHead).toHaveBeenCalledTimes(1));
       await settle();
@@ -2403,11 +2403,11 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
     const o = await load();
     const { author, review, off } = await fixing(o);
     try {
-      await o.registry.markCardHumanActive(author.id);
+      await o.registry.markCardHumanActive(author.id, undefined);
       await endTurn(o, author.id);
       await new Promise((r) => setTimeout(r, 30));
       expect(send).not.toHaveBeenCalled();
-      await o.registry.markCardHumanActive(author.id, 0);
+      await o.registry.markCardHumanActive(author.id, undefined, 0);
       await endTurn(o, author.id);
       await expectOnlyTheSecondCounts(o, review.id);
     } finally {
