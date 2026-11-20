@@ -218,10 +218,23 @@ describe("POST /api/cards/:id/voice/sessions", () => {
     // Tool calls never reach the voice: noise, and sometimes secrets the agent printed.
     expect(instructions).not.toContain(".env");
     expect(instructions.indexOf("corrige")).toBeLessThan(instructions.indexOf("e o deploy?"));
-    // What the voice cannot answer from that thread it hands to the card's agent (client delegation).
-    expect(sent.session.delegation).toEqual({ type: "client" });
     expect(instructions).toContain("Generate <|SpawnThinking|> when:");
     expect(instructions).toContain("recapitular");
+  });
+
+  it("a chamada no card delega ao backend Responses com as ferramentas da voz", async () => {
+    const id = await makeCard();
+    openAi(() => summaryAnswer("resumo"));
+    await app.inject({ method: "POST", url: `/api/cards/${id}/voice/sessions`, headers: { cookie: owner }, payload: { sdp: OFFER } });
+    const { delegation, instructions } = sentSession().session;
+    const { VOICE_TOOL_NAMES } = await import("../services/voice/executor.js");
+    expect(delegation.type).toBe("responses");
+    expect(delegation.responses.model).toBe("gpt-6-luna");
+    expect(delegation.responses.tools.map((tool: { name: string }) => tool.name)).toEqual([...VOICE_TOOL_NAMES]);
+    expect(delegation.responses.parallel_tool_calls).toBe(false);
+    expect(delegation.responses.instructions).toContain('card "voz"');
+    expect(delegation.responses.instructions).toContain('projeto "p"');
+    expect(instructions).toContain("criar card");
   });
 
   it("abre a chamada já sabendo o resumo da conversa inteira do card, pedido antes de criar a sessão", async () => {
@@ -292,6 +305,118 @@ describe("POST /api/cards/:id/voice/sessions", () => {
     env.config.voiceLive = { enabled: false, apiKey: KEY };
     expect((await app.inject({ method: "POST", url: `/api/cards/${id}/voice/sessions`, headers: { cookie: owner }, payload: { sdp: OFFER } })).statusCode).toBe(404);
     expect(upstream).not.toHaveBeenCalled();
+  });
+});
+
+function voiceAction(cardId: string, body: Record<string, unknown>, cookie = owner) {
+  return app.inject({ method: "POST", url: `/api/cards/${cardId}/voice/actions`, headers: { cookie }, payload: body });
+}
+
+async function cardsOf(cardId: string) {
+  const registry = await import("../services/board/registry.js");
+  const card = await registry.getCard(cardId);
+  return await registry.listCards(card!.projectId);
+}
+
+async function memberWith(cardId: string, level: "view" | "work") {
+  const memberId = (await app.inject({
+    method: "POST", url: "/api/users", headers: { cookie: owner },
+    payload: { username: "alex", password: "supersecret", role: "member" },
+  })).json().user.id as string;
+  await app.inject({ method: "POST", url: `/api/cards/${cardId}/shares`, headers: { cookie: owner }, payload: { userId: memberId, level } });
+  return cookieOf(await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "alex", password: "supersecret" } }));
+}
+
+describe("POST /api/cards/:id/voice/actions", () => {
+  it("o dono cria um card pela voz e o resultado volta em output", async () => {
+    const id = await makeCard();
+    const projectId = (await cardsOf(id))[0]!.projectId;
+    const res = await voiceAction(id, { callId: "call_a", name: "create_card", arguments: JSON.stringify({ projectId, title: "Relatório" }) });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().output).toMatchObject({ title: "Relatório", projectId });
+    expect((await cardsOf(id)).map((card) => card.title)).toContain("Relatório");
+  });
+
+  it("o mesmo callId repetido não cria dois cards", async () => {
+    const id = await makeCard();
+    const projectId = (await cardsOf(id))[0]!.projectId;
+    const body = { callId: "call_b", name: "create_card", arguments: JSON.stringify({ projectId, title: "Uma vez" }) };
+    const [first, second] = await Promise.all([voiceAction(id, body), voiceAction(id, body)]);
+    expect(second.json()).toEqual(first.json());
+    expect((await cardsOf(id)).filter((card) => card.title === "Uma vez")).toHaveLength(1);
+  });
+
+  it("callId diferente é outra ordem", async () => {
+    const id = await makeCard();
+    const projectId = (await cardsOf(id))[0]!.projectId;
+    const order = JSON.stringify({ projectId, title: "Duas vezes" });
+    await voiceAction(id, { callId: "call_c1", name: "create_card", arguments: order });
+    await voiceAction(id, { callId: "call_c2", name: "create_card", arguments: order });
+    expect((await cardsOf(id)).filter((card) => card.title === "Duas vezes")).toHaveLength(2);
+  });
+
+  it("falha da ordem responde o status do service e repetir a mesma ordem executa de novo", async () => {
+    const id = await makeCard();
+    const member = await memberWith(id, "work");
+    const body = { callId: "call_d", name: "create_card", arguments: JSON.stringify({ projectId: (await cardsOf(id))[0]!.projectId, title: "x" }) };
+    const refused = await voiceAction(id, body, member);
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json().error).toContain("only the owner");
+    expect((await voiceAction(id, body, member)).statusCode).toBe(403);
+  });
+
+  it("ordem que o board recusa volta com o status e o motivo, para a voz dizer à pessoa", async () => {
+    const id = await makeCard();
+    const res = await voiceAction(id, { callId: "call_j", name: "create_card", arguments: JSON.stringify({ projectId: "inventado", title: "x" }) });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: "project not found" });
+  });
+
+  it("o mesmo callId com outra ferramenta executa a outra, não devolve o resultado guardado", async () => {
+    const id = await makeCard();
+    const projectId = (await cardsOf(id))[0]!.projectId;
+    expect((await voiceAction(id, { callId: "call_m", name: "list_projects", arguments: "{}" })).statusCode).toBe(200);
+    const created = await voiceAction(id, { callId: "call_m", name: "create_card", arguments: JSON.stringify({ projectId, title: "Outra ferramenta" }) });
+    expect(created.json().output.title).toBe("Outra ferramenta");
+  });
+
+  it("falha de infraestrutura ao executar a ordem é 502, sem a mensagem interna na resposta", async () => {
+    const id = await makeCard();
+    const other = await makeCard();
+    const res = await voiceAction(id, { callId: "call_k", name: "send_to_card", arguments: JSON.stringify({ cardId: other, text: "rode os testes" }) });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: "the board failed to run send_to_card; the server log has the detail" });
+  });
+
+  it("compartilhamento view não usa a voz", async () => {
+    const id = await makeCard();
+    const member = await memberWith(id, "view");
+    expect((await voiceAction(id, { callId: "call_e", name: "list_projects", arguments: "{}" }, member)).statusCode).toBe(403);
+  });
+
+  it("sem acesso ao card da chamada responde 404", async () => {
+    const id = await makeCard();
+    const other = await makeCard();
+    const member = await memberWith(other, "work");
+    expect((await voiceAction(id, { callId: "call_f", name: "list_projects", arguments: "{}" }, member)).statusCode).toBe(404);
+  });
+
+  it("voz desligada responde 404", async () => {
+    const id = await makeCard();
+    const env = await import("../config/env.js");
+    env.config.voiceLive = { enabled: false, apiKey: KEY };
+    expect((await voiceAction(id, { callId: "call_g", name: "list_projects", arguments: "{}" })).statusCode).toBe(404);
+  });
+
+  it.each([
+    ["sem callId", { name: "list_projects", arguments: "{}" }],
+    ["arguments que não é texto", { callId: "call_h", name: "list_projects", arguments: {} }],
+    ["ferramenta desconhecida", { callId: "call_i", name: "drop_db", arguments: "{}" }],
+  ])("corpo inválido (%s) responde 400 { error }", async (_case, body) => {
+    const id = await makeCard();
+    const res = await voiceAction(id, body);
+    expect(res.statusCode).toBe(400);
+    expect(typeof res.json().error).toBe("string");
   });
 });
 

@@ -1,21 +1,19 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { PublicUser } from "../auth/users.js";
-import { cardLevel, visibleProjects } from "../auth/access.js";
-import { creatorAccountSlug } from "../auth/userGit.js";
-import * as registry from "../services/board/registry.js";
-import * as workspace from "../services/board/workspace.js";
 import { recordCardActor } from "../services/board/actor.js";
+import type { BoardColumn } from "../services/board/registry.js";
 import {
-  listTerminals, sendToTerminal, readTerminal, readCardActivity, waitForTurn, waitTerminalReady, SEND_READY_WAIT_MS, WAIT_MAX_MS, ACTIVITY_LIMIT_MAX,
+  requireCardLevel, openCardFor, listProjectsFor, listCardsFor, createCardFor, sendToCardAs, moveCardsAs,
+} from "../services/maestro/asUser.js";
+import {
+  readTerminal, readCardActivity, waitForTurn, WAIT_MAX_MS, ACTIVITY_LIMIT_MAX,
 } from "../services/maestro/maestro.js";
 import { readCardChanges } from "../services/maestro/changes.js";
 import { deliverCard } from "../services/review/deliverCard.js";
-import { originOfUser } from "../services/chat/provenance.js";
 import { prDocsInput, prDocsOf, PR_DOCS_RULE } from "./prDocsInput.js";
 import { inboxFor, markDelivered, takeUndelivered, type CardEvent } from "../services/events/cardEvents.js";
-import { sendAnswer } from "./events.js";
-import { moveCards, AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX, type CardMoveOutcome } from "./cardMove.js";
+import { AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX } from "./cardMove.js";
 import { logger } from "../utils/logger.js";
 import { ok, fail } from "./toolResult.js";
 
@@ -40,62 +38,6 @@ import { ok, fail } from "./toolResult.js";
  * read-only — by voice, a confirmation on every poll of a card would make following it unusable.
  */
 const READ_ONLY = { readOnlyHint: true, openWorldHint: false } as const;
-
-/** How long a tool waits for an open before answering "still opening" (a first clone takes minutes). */
-export const OPEN_WAIT_MS = 20_000;
-
-async function requireLevel(user: PublicUser, cardId: string, need: "view" | "work"): Promise<registry.Card> {
-  const level = await cardLevel(user, cardId);
-  const card = level ? await registry.getCard(cardId) : undefined;
-  if (!level || !card) throw new Error("card not found");
-  if (need === "work" && level !== "work") throw new Error("this card is shared with you read-only");
-  return card;
-}
-
-/**
- * Runs `work` but answers by `ms` at the latest: `{ done: true, value }` when it settled in time,
- * `{ done: false }` when it is still going (it keeps going — its failure is logged, not lost).
- */
-async function settleWithin<T>(work: Promise<T>, ms: number, what: string, cardId: string): Promise<{ done: true; value: T } | { done: false }> {
-  let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<{ done: false }>((resolve) => {
-    timer = setTimeout(() => resolve({ done: false }), ms);
-  });
-  const settled = work.then((value) => ({ done: true as const, value }));
-  try {
-    return await Promise.race([settled, timeout]);
-  } finally {
-    clearTimeout(timer);
-    void settled.catch((err: unknown) => {
-      logger.warn({ card: cardId, detail: (err as Error).message }, `${what} failed`);
-    });
-  }
-}
-
-async function openForUser(user: PublicUser, card: registry.Card) {
-  // No author stamp: opening is not an order (the board's /open does not stamp either). The send
-  // that follows is, and stamps.
-  const result = await settleWithin(workspace.openCard(card.id, user.id), OPEN_WAIT_MS, "open from the external MCP", card.id);
-  if (result.done) {
-    // The session exists; whether Claude can take a message yet is a different question, and the
-    // one the caller is about to bet a send on.
-    const terminal = await waitTerminalReady(card.id, SEND_READY_WAIT_MS);
-    if (terminal.ready) return { cardId: card.id, title: card.title, opened: true, ready: true };
-    return {
-      cardId: card.id, title: card.title, opened: true, ready: false, notReady: terminal.detail,
-      hint: "the session is up but Claude cannot take a message yet — vibehub_send_to_terminal waits " +
-        "for it on its own; if this names a menu, the user has to answer it in the Terminal tab.",
-    };
-  }
-  return {
-    cardId: card.id,
-    title: card.title,
-    opened: false,
-    opening: true,
-    hint: "still preparing the workspace (the first open of a project clones the repo). Check " +
-      "vibehub_list_terminals until liveSession is true, then send the instruction.",
-  };
-}
 
 /**
  * A moment in the SERVER's zone with its offset ("2026-10-20T18:05:00-03:00"): the assistant reads
@@ -159,11 +101,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
     async () => {
       try {
-        const projects = await visibleProjects(user, await registry.listProjects());
-        return ok({
-          canCreateCards: user.role === "owner",
-          projects: projects.map((p) => ({ id: p.id, name: p.name, repo: p.repoFullName ?? null, baseBranch: p.baseBranch })),
-        });
+        return ok(await listProjectsFor(user));
       } catch (e) {
         return fail(e);
       }
@@ -187,13 +125,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
     async (a) => {
       try {
-        const all = await listTerminals(a.project);
-        const out = [];
-        for (const t of all) {
-          const access = await cardLevel(user, t.cardId);
-          if (access) out.push({ ...t, access });
-        }
-        return ok(out);
+        return ok(await listCardsFor(user, a.project));
       } catch (e) {
         return fail(e);
       }
@@ -216,18 +148,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
     async (a) => {
       try {
-        if (user.role !== "owner") throw new Error("only the owner can create cards — ask them to create or share one");
-        // Born on the CREATOR's Claude account, the same as a card made on the board.
-        const accountSlug = await creatorAccountSlug(user.id);
-        const card = await registry.createCard({ projectId: a.projectId, title: a.title }, accountSlug ? { accountSlug } : {});
-        logger.info({ card: card.worktreeSlug, by: user.username }, "card created from the external MCP");
-        if (a.open === false) {
-          void workspace.prepareCard(card.id, "card.create").catch((err: unknown) => {
-            logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "pre-provisioning of the new card failed (best-effort)");
-          });
-          return ok({ cardId: card.id, title: card.title, projectId: card.projectId, opened: false });
-        }
-        return ok({ ...(await openForUser(user, card)), projectId: card.projectId });
+        return ok(await createCardFor(user, a));
       } catch (e) {
         return fail(e);
       }
@@ -247,7 +168,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
     async (a) => {
       try {
-        return ok(await openForUser(user, await requireLevel(user, a.cardId, "work")));
+        return ok(await openCardFor(user, await requireCardLevel(user, a.cardId, "work")));
       } catch (e) {
         return fail(e);
       }
@@ -278,19 +199,8 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
     async (a) => {
       try {
-        await requireLevel(user, a.cardId, "work");
-        const sentAt = Date.now();
-        const sent = await sendAnswer(a.cardId, a.inReplyTo, a.text, (text) => sendToTerminal(a.cardId, text, {
-          by: user.id,
-          beforeDeliver: () => recordCardActor(user, a.cardId),
-          guardInteractiveMenu: true,
-          requireAgent: true,
-          readyWaitMs: SEND_READY_WAIT_MS,
-          wake: true,
-          viaNativeChat: true,
-          origin: originOfUser(user),
-        }));
-        return ok({ ...sent, sentAt, next: "call vibehub_wait_for_card with this cardId and since=sentAt" });
+        const sent = await sendToCardAs(user, a);
+        return ok({ ...sent, next: "call vibehub_wait_for_card with this cardId and since=sentAt" });
       } catch (e) {
         return fail(e);
       }
@@ -312,7 +222,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
     async (a) => {
       try {
-        await requireLevel(user, a.cardId, "view");
+        await requireCardLevel(user, a.cardId, "view");
         return ok(await readTerminal(a.cardId, a.last ?? 3));
       } catch (e) {
         return fail(e);
@@ -341,7 +251,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
     async (a) => {
       try {
-        await requireLevel(user, a.cardId, "view");
+        await requireCardLevel(user, a.cardId, "view");
         return ok(await waitForTurn(a.cardId, {
           since: a.since,
           timeoutMs: (a.timeoutSeconds ?? WAIT_MAX_MS / 1000) * 1000,
@@ -370,7 +280,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
     async (a) => {
       try {
-        await requireLevel(user, a.cardId, "view");
+        await requireCardLevel(user, a.cardId, "view");
         return ok(await readCardActivity(a.cardId, { since: a.since, limit: a.limit }));
       } catch (e) {
         return fail(e);
@@ -393,7 +303,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
     async (a) => {
       try {
-        await requireLevel(user, a.cardId, "view");
+        await requireCardLevel(user, a.cardId, "view");
         return ok(await readCardChanges(a.cardId));
       } catch (e) {
         return fail(e);
@@ -410,26 +320,12 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
         "fails on its line and the rest still move. Returns { column, moved, unchanged, failed, results }.",
       inputSchema: {
         cards: z.array(z.string()).min(1).max(MOVE_BATCH_MAX).describe("card ids (from vibehub_list_terminals)"),
-        column: z.enum(AGENT_MOVABLE_COLUMNS as unknown as [string, ...string[]]).describe("done | backlog"),
+        column: z.enum(AGENT_MOVABLE_COLUMNS as unknown as [BoardColumn, ...BoardColumn[]]).describe("done | backlog"),
       },
     },
     async (a) => {
       try {
-        const allowed: string[] = [];
-        const refused: CardMoveOutcome[] = [];
-        for (const cardId of a.cards) {
-          try {
-            await requireLevel(user, cardId, "work");
-            allowed.push(cardId);
-          } catch (e) {
-            refused.push({ cardId, ok: false, error: (e as Error).message });
-          }
-        }
-        if (allowed.length === 0) {
-          return ok({ column: a.column, moved: 0, unchanged: 0, failed: refused.length, results: refused });
-        }
-        const moved = await moveCards(allowed, a.column, { by: user.id });
-        return ok({ ...moved, failed: moved.failed + refused.length, results: [...moved.results, ...refused] });
+        return ok(await moveCardsAs(user, a.cards, a.column));
       } catch (e) {
         return fail(e);
       }
@@ -464,7 +360,7 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     },
     async (a) => {
       try {
-        await requireLevel(user, a.cardId, "work");
+        await requireCardLevel(user, a.cardId, "work");
         // Ordering the delivery IS an order: the push, the PR and the merge go out as this person.
         await recordCardActor(user, a.cardId);
         // The person IS the caller here (and was just made the card's actor): the order is theirs.
