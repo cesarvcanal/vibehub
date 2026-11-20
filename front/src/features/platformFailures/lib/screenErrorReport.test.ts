@@ -41,6 +41,27 @@ describe("relato do erro que a tela mostrou", () => {
     expect(post).not.toHaveBeenCalled();
   });
 
+  it("erro sem mensagem é relatado pelo nome", () => {
+    reportScreenError(new RangeError(""));
+    expect(post).toHaveBeenCalledWith("/platform-failures/screen-errors", expect.objectContaining({ message: "RangeError" }));
+  });
+
+  it("mensagem e pilha longas são cortadas no limite que a rota aceita", () => {
+    const longError = new Error(`longa ${"m".repeat(3_000)}`);
+    longError.stack = "s".repeat(30_000);
+    reportScreenError(longError);
+    const sentReport = post.mock.calls[0]![1] as { message: string; stack: string };
+    expect(sentReport.message).toHaveLength(2_000);
+    expect(sentReport.stack).toHaveLength(20_000);
+  });
+
+  it("depois de 50 mensagens diferentes na página, nenhuma outra é relatada", async () => {
+    vi.resetModules();
+    const { reportScreenError: reportOnFreshPage } = await import("./screenErrorReport");
+    for (const index of Array.from({ length: 51 }, (_unused, position) => position)) reportOnFreshPage(new Error(`erro ${index}`));
+    expect(post).toHaveBeenCalledTimes(50);
+  });
+
   it("valor que não é Error não é relatado", () => {
     reportScreenError("só um texto");
     expect(post).not.toHaveBeenCalled();
