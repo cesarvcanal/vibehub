@@ -42,6 +42,7 @@ import { startOutboxFlusher } from "./services/board/outbox.js";
 import { startWebhookDispatcher } from "./services/webhooks/subscriptions.js";
 import { startReviewOrchestrator } from "./services/review/orchestrator.js";
 import { startPlatformFailureWatch } from "./services/platformFailures/watch.js";
+import { startCardWaitWatch } from "./services/waits/waits.js";
 import { startRunnerReaper } from "./services/reaper/reaper.js";
 import { startTmpSweep } from "./services/reaper/tmpSweep.js";
 import { pruneStaleInflightOwners, startInflightOwnerHeartbeat } from "./services/sdk/inflight.js";
@@ -246,6 +247,7 @@ async function main(): Promise<void> {
   // reminder and, the second time, an impasse. Same reason as the others: a test that starts the app does not inherit the listener.
   startReviewOrchestrator();
   startPlatformFailureWatch();
+  await startCardWaitWatch();
   await app.listen({ port: config.port, host: config.host });
   const trustWarning = trustProxyBootWarning(config.trustProxy);
   if (trustWarning) logger.warn(trustWarning);
