@@ -42,7 +42,7 @@ export function CardWaitNotice({ cardId, wait, waitTargetTitle }: { cardId: stri
         {failedAction ? <p role="alert" className="break-words text-destructive">{failedAction}</p> : null}
       </div>
       <div className="flex shrink-0 gap-1.5">
-        {phase === "failed" ? (
+        {phase !== "waiting" ? (
           <Button type="button" size="sm" className="h-7 px-2 text-xs" disabled={busy} onClick={() => wake.mutate()}>
             {t("cardWait.wakeNow")}
           </Button>

@@ -68,9 +68,9 @@ describe("CardWaitNotice", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("card esperado terminou e o card está pausado: avisa que continua ao sair de Pausado", () => {
+  it("card esperado terminou e o card está pausado: avisa que continua ao sair de Pausado e oferece acordar agora", () => {
     renderNotice({ ...WAIT, readyAt: 2, outcome: "concluded" }, "Captura de falhas");
     expect(screen.getByTestId("card-wait-notice")).toHaveTextContent(/leaves Paused/);
-    expect(screen.queryByRole("button", { name: "Wake now" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Wake now" })).toBeInTheDocument();
   });
 });
