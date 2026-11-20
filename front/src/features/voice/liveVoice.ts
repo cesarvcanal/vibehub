@@ -16,12 +16,6 @@ import { TurnSegmenter, newCallId, type VoiceTurn } from "./voiceTurns";
  * The transcript is settled into TURNS here (./voiceTurns.ts): the snapshot carries them as they
  * grow, and every turn that closes is handed to {@link LiveVoiceSession.onFinalTurn} listeners —
  * the chat saves those. The call ending, by any path, closes the open ones first.
- *
- * DELEGATION is this app's (the session is created with `delegation: client`): when the model wants
- * work done it emits `session.delegation.created` and WAITS for updates carrying that id. Every
- * delegation is answered — by the {@link LiveVoiceSession.onDelegation} listener (the card's chat,
- * ./useVoiceDelegation.ts) or, with none, at once with {@link NO_DELEGATE}: an unanswered one left
- * the voice promising "deixa eu recapitular" and silent for good (production, 2026-11-13).
  */
 
 export type LiveVoiceState = "idle" | "connecting" | "live" | "closing" | "error";
@@ -80,15 +74,6 @@ export const STATS_INTERVAL_MS = 250;
 /** `session.thinking.append` takes up to 500 tokens; this many characters stays well inside. */
 export const CONTEXT_MAX_CHARS = 1_200;
 
-/** How an update about a delegation reaches the model: kept for later (`progress`) or said now (`result`). */
-export type DelegationUpdate = "progress" | "result";
-
-/**
- * Takes a delegation: its id, and the call's turns at that moment — the event carries no task text,
- * the task is what was just said.
- */
-export type DelegationListener = (id: string, turns: VoiceTurn[]) => void;
-
 export interface VoiceToolCall {
   callId: string;
   name: string;
@@ -144,7 +129,6 @@ export class LiveVoiceSession {
   private attempt = 0;
   private segmenter: TurnSegmenter | null = null;
   private readonly finalListeners = new Set<(turn: VoiceTurn) => void>();
-  private readonly delegationListeners = new Set<DelegationListener>();
   private readonly toolCallListeners = new Set<ToolCallListener>();
   /** The assistant "speaking" by its transcript — the orb's last resort when no audio is measurable. */
   readonly speech = new EventEnvelope();
@@ -174,12 +158,6 @@ export class LiveVoiceSession {
     return () => this.finalListeners.delete(listener);
   }
 
-  /** Called with the id of every delegation the model hands to this app (see the module comment). */
-  onDelegation(listener: DelegationListener): () => void {
-    this.delegationListeners.add(listener);
-    return () => this.delegationListeners.delete(listener);
-  }
-
   onToolCall(listener: ToolCallListener): () => void {
     this.toolCallListeners.add(listener);
     return () => this.toolCallListeners.delete(listener);
@@ -207,14 +185,6 @@ export class LiveVoiceSession {
    */
   announceContext(text: string): boolean {
     return this.append("session.commentary.append", null, text);
-  }
-
-  /**
-   * An update about the delegation `id`: `progress` is kept for later replies (thinking), the
-   * `result` is said aloud, paraphrased (commentary). Same clipping and liveness as {@link appendContext}.
-   */
-  answerDelegation(id: string, text: string, update: DelegationUpdate): boolean {
-    return this.append(update === "result" ? "session.commentary.append" : "session.thinking.append", id, text);
   }
 
   private append(type: "session.thinking.append" | "session.commentary.append", delegationId: string | null, text: string): boolean {
@@ -376,7 +346,6 @@ export class LiveVoiceSession {
     this.teardown();
     this.listeners.clear();
     this.finalListeners.clear();
-    this.delegationListeners.clear();
     this.toolCallListeners.clear();
   }
 
@@ -436,12 +405,7 @@ export class LiveVoiceSession {
       case "session.delegation.created": {
         const id = event.delegation?.id;
         if (typeof id !== "string" || !id || event.delegation?.target === "responses") break;
-        if (this.delegationListeners.size === 0) {
-          this.answerDelegation(id, NO_DELEGATE, "result");
-          break;
-        }
-        const turns = this.segmenter?.turns.slice() ?? [];
-        for (const listener of this.delegationListeners) listener(id, turns);
+        this.append("session.commentary.append", id, NO_DELEGATE);
         break;
       }
       case "response.event": {
