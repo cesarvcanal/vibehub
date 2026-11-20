@@ -33,7 +33,7 @@ export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): voi
  * Routes that are allowed to 401 without kicking the user out: they are how we *discover*
  * whether there is a session at all.
  */
-const SILENT_401 = ["/auth/me", "/auth/login", "/setup/state", "/setup/owner"];
+const SILENT_401 = ["/auth/me", "/auth/login", "/setup/state", "/setup/owner", "/platform-failures/screen-errors"];
 
 function isSilent(url: string | undefined): boolean {
   if (!url) return false;
