@@ -956,6 +956,7 @@ export interface MergeGate {
   autoRetried?: true;
   /** Consecutive failures on this commit since the last human "Try again"; absent on an older failure = 1. */
   failures?: number;
+  conflict?: true;
   /** Past the automatic reruns: nothing runs it again without a person. */
   exhausted?: true;
 }

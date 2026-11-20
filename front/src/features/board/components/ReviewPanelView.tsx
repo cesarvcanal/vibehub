@@ -841,6 +841,13 @@ function MergeGateBanner({ review }: { review: Review }) {
     );
   }
   if (!gate || !status) return null;
+  if (gate.conflict) {
+    return (
+      <p role="status" className={cn("shrink-0 rounded-md border px-2.5 py-1.5 text-xs", NOTICE_TONE.warn)}>
+        {t("review.mergeGate.conflict", { base: review.base })}
+      </p>
+    );
+  }
   if (status === "fixing") {
     return (
       <div role="status" className={cn("shrink-0 rounded-md border px-2.5 py-1.5 text-xs", NOTICE_TONE.warn)}>

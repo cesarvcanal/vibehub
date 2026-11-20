@@ -986,6 +986,19 @@ describe("ReviewPanel — merge", () => {
     expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeDisabled();
   });
 
+  it("caso real (PR #342): pronta com o PR em conflito com a base — diz o conflito em vez de testes vermelhos, sem alerta, e o Mergear fica travado", async () => {
+    const sha = "a".repeat(40);
+    open("mer", review({
+      phase: "ready", reviewedSha: sha,
+      mergeGate: { sha, state: "failed", output: "o PR tem conflito com dev: o merge commit não sai limpo", at: 1, failures: 1, conflict: true },
+    }));
+    await loaded();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByText("O PR está em conflito com dev: a IA do autor está trazendo dev para a branch, e a revisão confere o que entrar antes do merge.")).toBeInTheDocument();
+    expect(screen.queryByText("Ver saída dos testes")).toBeNull();
+    expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeDisabled();
+  });
+
   it("gate rodando no commit aprovado: o Mergear espera; verde, ou de um commit antigo, não segura", async () => {
     const sha = "a".repeat(40);
     open("mer", review({ phase: "ready", reviewedSha: sha, mergeGate: { sha, state: "running", at: 1 } }));
@@ -1101,6 +1114,18 @@ describe("ReviewPanel — merge", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Você não tem uma conexão GitHub própria no vibehub");
     expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeEnabled();
+  });
+
+  it("merge recusado por conflito com a base diz o conflito em palavras, nunca a saída do gh", async () => {
+    post.mockRejectedValue(failure(409, { error: "o PR tem conflito com dev: o merge commit não sai limpo", reason: "conflict" }));
+    open("mer", review({ phase: "ready" }));
+    await loaded();
+
+    await userEvent.click(screen.getByRole("button", { name: "Mergear na dev" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "O merge não saiu: o PR está em conflito com a base. A IA do autor recebeu a ordem de trazer a base para a branch.",
+    );
   });
 
   it("gate vermelho mostra a mensagem do servidor como veio", async () => {
