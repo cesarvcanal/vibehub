@@ -35,7 +35,9 @@ type ReviewSummary = Pick<Review, "id" | "prNumber" | "phase" | "round"> & {
   authorWorking?: boolean;
   /**
    * Ready, but the merge gate on the approved commit is still running, failed and the author's AI is fixing
-   * it (`fixing`: runs again on its own) or failed and waits for a person: the line does not say "pronto pra merge".
+   * it (`fixing`: runs again on its own) or failed and waits for a person; or the PR conflicts with its base
+   * while the author's AI brings it in (`conflict`) or past the orders it gets (`conflictFailed`): the line does
+   * not say "pronto pra merge".
    */
   mergeGateState?: "running" | "fixing" | "failed" | "conflict" | "conflictFailed";
 };

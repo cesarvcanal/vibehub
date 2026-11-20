@@ -357,9 +357,9 @@ async function dispatch(r: Review): Promise<Review> {
  * Called AFTER the Approve: from the end of the reviewer's turn that reported `ready`, or from "não fazer"
  * on the last suggestion of an already approved review. A refusal of "not ready"/"merge already going out"/
  * "head moved" is a race and stays quiet, and a conflict already ordered the author to bring the base in; any
- * other (red CI, merger with no GitHub connection)
- * marks the round (`autoMergeFailedRound`: does not try again, and the texts go back to the button), becomes
- * a note on the review and a notice on both cards. Never throws. Dynamic import: merge.ts imports this file.
+ * other (red CI, merger with no GitHub connection) marks the round (`autoMergeFailedRound`: does not try
+ * again, and the texts go back to the button), becomes a note on the review and a notice on both cards.
+ * Never throws. Dynamic import: merge.ts imports this file.
  */
 async function autoMerge(r: Review): Promise<void> {
   const now = (await getReview(r.id)) ?? r;

@@ -332,8 +332,8 @@ export type MergeGateStatus = "running" | "fixing" | "failed" | "conflict" | "co
  * it and it reruns on its own (`fixing`), or red waiting for a person (`failed`: past the automatic
  * reruns, or a failure from when it reran only once); in conflict with the base while the author's AI brings
  * it in (`conflict`), or still in conflict past the orders it gets on its own (`conflictFailed`). Undefined =
- * it holds nothing. The server's
- * `mergeGateSelfHealing` draws the same line for the board summary. PURE.
+ * it holds nothing. The server's `failedMergeGateState` (routes/board.ts) draws the same line for the board
+ * summary. PURE.
  */
 export function mergeGateStatus(review: Pick<Review, "reviewedSha" | "mergeGate">): MergeGateStatus | undefined {
   const gate = mergeGateOf(review);
