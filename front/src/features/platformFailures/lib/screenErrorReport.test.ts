@@ -82,6 +82,17 @@ describe("relato do erro que a tela mostrou", () => {
     });
   });
 
+  it("com o envio falhando sempre, o mesmo erro repetido não passa de 3 envios", async () => {
+    post.mockRejectedValue(new Error("back fora do ar"));
+    await vi.waitFor(() => {
+      reportScreenError(new Error("erro em laço com o back fora"));
+      expect(post).toHaveBeenCalledTimes(3);
+    });
+    await expect(post.mock.results[2]!.value).rejects.toThrow("back fora do ar");
+    reportScreenError(new Error("erro em laço com o back fora"));
+    expect(post).toHaveBeenCalledTimes(3);
+  });
+
   it("exceção não tratada de um script do próprio vibehub é relatada; a de extensão do navegador não", () => {
     startListening();
     dispatchScriptError("handler quebrou", `${window.location.origin}/assets/index.js`);
