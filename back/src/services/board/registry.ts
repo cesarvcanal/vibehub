@@ -149,8 +149,7 @@ export function normalizePreviewCwd(cwd: string | null | undefined): string | un
 
 /**
  * HUMAN-ACTIVE WINDOW — a card counts as "a human is at this terminal right now" for this long after
- * the last keystroke a person typed into it (stamped as `humanActiveAt`). While it holds, a maestro
- * must not type into the card (it would fight the human for the prompt); reading is always fine.
+ * the last keystroke a person typed into it (stamped as `humanActiveAt`).
  */
 export const HUMAN_ACTIVE_WINDOW_MS = 5 * 60_000;
 
