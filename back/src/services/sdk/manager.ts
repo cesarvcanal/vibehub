@@ -1344,6 +1344,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
           action: "sdk.driver.exit",
           card: opts.label,
           code,
+          detail: `driver exited with code ${code ?? "?"}`,
           deliberate,
           turnsInFlight: session.activeTurns,
           stderr: session.stderrTail.trim().slice(-STDERR_TAIL_MAX) || undefined,

@@ -854,6 +854,15 @@ describe("end of life", () => {
     expect(last.message).toContain("TypeError: boom");
   });
 
+  it("o driver que morre sem ninguém pedir deixa no log o erro com o código, que o detector de falhas captura", () => {
+    const warn = vi.spyOn(logger, "warn");
+    onTestFinished(() => { warn.mockRestore(); });
+    ensure();
+    spawned[0]!.emit("close", 1);
+    const exitWarnings = warn.mock.calls.filter((call) => call[1] === "sdk driver exited unexpectedly").map((call) => call[0]);
+    expect(exitWarnings).toEqual([expect.objectContaining({ code: 1, detail: "driver exited with code 1" })]);
+  });
+
   it("parada pedida (troca de conta/modelo) fecha os sockets SEM anunciar erro", () => {
     const session = ensure();
     const socket = fakeSocket();
