@@ -74,6 +74,7 @@ describe("settings", () => {
     ["termo que não é texto", [5] as unknown as string[]],
     ["termo com quebra de linha, que a API recusa", ["bank\napi"]],
     ["termo com sinal de menor ou maior, que a API recusa", ["<Qive>"]],
+    ["termo com vírgula, que a tela usa como separador", ["Silva, Pedro"]],
   ])("recusa termos da transcrição: %s", async (_case, keywords) => {
     const settingsModule = await fresh();
     await expect(settingsModule.updateSettings({ transcribeKeywords: keywords })).rejects.toThrow(/transcribeKeywords/);

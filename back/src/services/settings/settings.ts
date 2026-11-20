@@ -78,6 +78,7 @@ export const TRANSCRIBE_KEYWORDS_MAX = 100;
 export const TRANSCRIBE_KEYWORD_MAX_CHARS = 60;
 // external: a keyword with "<", ">", CR or LF makes the API reject the whole request (developers.openai.com/api/docs/guides/speech-to-text)
 const KEYWORD_FORBIDDEN_RE = /[<>\r\n]/;
+const KEYWORD_SEPARATOR = ",";
 
 function normalizeTranscribeKeywords(keywords: unknown): string[] {
   if (!Array.isArray(keywords) || !keywords.every((keyword): keyword is string => typeof keyword === "string")) {
@@ -85,9 +86,11 @@ function normalizeTranscribeKeywords(keywords: unknown): string[] {
   }
   const terms = keywords.map((keyword) => keyword.trim()).filter((keyword) => keyword !== "");
   if (terms.length > TRANSCRIBE_KEYWORDS_MAX) throw new Error(`transcribeKeywords takes at most ${TRANSCRIBE_KEYWORDS_MAX} terms`);
-  const invalidTerm = terms.find((term) => term.length > TRANSCRIBE_KEYWORD_MAX_CHARS || KEYWORD_FORBIDDEN_RE.test(term));
+  const invalidTerm = terms.find(
+    (term) => term.length > TRANSCRIBE_KEYWORD_MAX_CHARS || KEYWORD_FORBIDDEN_RE.test(term) || term.includes(KEYWORD_SEPARATOR),
+  );
   if (invalidTerm !== undefined) {
-    throw new Error(`transcribeKeywords: each term has at most ${TRANSCRIBE_KEYWORD_MAX_CHARS} characters, no line break, "<" or ">"`);
+    throw new Error(`transcribeKeywords: each term has at most ${TRANSCRIBE_KEYWORD_MAX_CHARS} characters, no comma, line break, "<" or ">"`);
   }
   return terms;
 }
