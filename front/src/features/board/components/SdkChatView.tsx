@@ -108,6 +108,7 @@ import {
   deliveredUserTexts,
   dropUserRow,
   currentActivity,
+  findLongToolWait,
   finishedAnswerIds,
   groupSdkRows,
   isSdkDelta,
@@ -168,6 +169,7 @@ import { SdkCompactionRow } from "@/features/board/components/SdkCompactionRow";
 import { SdkCommandChip } from "@/features/board/components/SdkCommandChip";
 import { invokedCommand, type InvokedCommand } from "@/features/board/lib/slashMenu";
 import { CardFailureNotice } from "@/features/platformFailures/components/CardFailureNotice";
+import { LongToolWaitNotice } from "@/features/board/components/LongToolWaitNotice";
 
 /**
  * NATIVE CHAT (beta) — the card's conversation over the Agent SDK driver, not the tmux transcript.
@@ -1336,9 +1338,16 @@ export function SdkChatView({
     // Not `callWorking`: a dropped wire clears `connected` but not the turn, and the delegation must
     // wait for the turn's real end, not answer with whatever was said before the blip.
     turnRunning: state.awaiting || state.turnActive,
-    sendToAgent: (text) => {
-      sendOrQueue(text);
+    sendUrgentToAgent: (text) => {
+      const wireUp = connected && socketRef.current?.readyState === WebSocket.OPEN;
+      if (!wireUp) throw new Error(translate("sdk.offline"));
+      dispatchTurn(text, true);
       setSentDuringCall(true);
+    },
+    answerQuestion: (questionId, answers) => {
+      if (!answerUserQuestion(questionId, answers)) return false;
+      setSentDuringCall(true);
+      return true;
     },
   });
   const wireDroppedDuringCall = React.useRef(false);
@@ -1435,6 +1444,7 @@ export function SdkChatView({
   // idle with the AI working (card "POC modo de voz", 2026-10-21).
   const working = connected && (state.awaiting || state.turnActive || (state.terminalBurst && terminalWorking));
   const activity = React.useMemo(() => (working ? currentActivity(state) : null), [working, state]);
+  const longToolWait = working ? findLongToolWait(state) : null;
   // "Copiar" and "ouvir" only under a FINISHED answer: the current round's waits for everything to stop —
   // the turn, and also the background tasks, which may still change what the AI will say.
   const settled = connected && !working && state.backgroundTasks.length === 0;
@@ -1686,6 +1696,7 @@ export function SdkChatView({
         </div>
       ) : null}
       <AccountLoginDialog account={loginAccount} onClose={() => setLoginAccount(null)} />
+      {longToolWait ? <LongToolWaitNotice wait={longToolWait} onInterrupt={interrupt} /> : null}
       <CardFailureNotice cardId={cardId} notices={state.platformFailures} />
 
       {/* One strip, two messages: who is typing on the left; on the right the plan warning. */}

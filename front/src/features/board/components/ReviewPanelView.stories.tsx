@@ -3,6 +3,8 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { ReviewPanelView, type ReviewPanelViewProps } from "@/features/board/components/ReviewPanelView";
 import type { Finding, Review, ReviewEvent, ReviewWorking } from "@/api/types";
 import type { ReviewActions } from "@/features/board/lib/review";
+import { FeedBody } from "@/features/board/components/WorkflowPanel";
+import type { FeedLine } from "@/features/board/lib/workflowPanel";
 
 /**
  * The PR review's panel in every state it can be in, from fixtures — and one story ("Ao vivo") that
@@ -130,7 +132,7 @@ const meta = {
   component: ReviewPanelView,
   args: base,
   // The panel is the column at the right of the card: its real width and the height of a screen.
-  decorators: [(Story) => <div className="flex h-[820px] w-[460px]"><Story /></div>],
+  decorators: [(Story) => <div className="flex h-[820px] w-full max-w-[40rem]"><Story /></div>],
 } satisfies Meta<typeof ReviewPanelView>;
 export default meta;
 type Story = StoryObj<typeof meta>;
@@ -140,9 +142,23 @@ export const RevisorLendo: Story = {
   args: { working: { author: false, reviewer: true } },
 };
 
+const AGENT_STEPS: FeedLine[] = [
+  { kind: "tool", tool: "Read", target: "back/src/services/maestro/deliverCard.ts" },
+  { kind: "thought", ms: 12_000 },
+  { kind: "tool", tool: "Grep", target: "blocking" },
+  { kind: "text", text: "A linha 72 já recusa com blocking aberto; confiro se o segundo clique passa antes dela." },
+  { kind: "thinking", ms: 4_000 },
+];
+
 export const FrotaDeAgentesTrabalhando: Story = {
-  name: "Frota de agentes trabalhando",
+  name: "Frota de agentes trabalhando (aba Agentes)",
   args: {
+    initialTab: "agents",
+    agentDetail: () => (
+      <div className="mt-1 rounded border border-border/60 bg-background/70 px-2 py-1.5 text-[11px] text-muted-foreground">
+        <FeedBody status="read" lines={AGENT_STEPS} />
+      </div>
+    ),
     working: { author: false, reviewer: true },
     fleet: [{
       runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Contexto", "Revisão", "Verificação", "Julgamento"],
@@ -160,6 +176,26 @@ export const FrotaDeAgentesTrabalhando: Story = {
           model: "sonnet", status: "done", endedAt: 5, result: '{"confirmed":true,"evidence":"A linha narra o fluxo, fora das exceções da §3."}' },
         { id: "a06f", label: "verificação: correctness · corrida entre dois cliques no merge", phase: "Verificação", model: "sonnet", status: "running" },
         { id: "a07f", label: "juiz", phase: "Julgamento", model: "opus", status: "running" },
+      ],
+    }],
+  },
+};
+
+export const FrotaInterrompidaPeloLimiteDeUso: Story = {
+  name: "Frota interrompida pelo limite de uso (aba Agentes)",
+  args: {
+    initialTab: "agents",
+    fleet: [{
+      runId: "wf_lim01", name: "vibehub-pr-analysis", phases: ["Contexto", "Revisão", "Verificação", "Julgamento"],
+      total: 4, done: 2, at: Date.now(), finished: true, outcome: "failed",
+      agents: [
+        { id: "a11f", label: "contexto", phase: "Contexto", model: "opus", status: "done", endedAt: 1,
+          result: '{"summary":"O PR mantém a chamada de voz viva durante o deploy."}' },
+        { id: "a12f", label: "revisão: tests", phase: "Revisão", model: "sonnet", status: "done", endedAt: 2,
+          result: '{"findings":[{"title":"Teste de queda afirma logo após startCall, sem esperar o efeito"}]}' },
+        { id: "a13f", label: "verificação: tests · Teste de queda afirma logo após startCall, sem esperar o efeito", phase: "Verificação",
+          model: "sonnet", status: "stopped", error: "You've hit your session limit · resets 1:10am (UTC)" },
+        { id: "a14f", label: "juiz", phase: "Julgamento", model: "opus", status: "stopped", error: "You've hit your session limit · resets 1:10am (UTC)" },
       ],
     }],
   },

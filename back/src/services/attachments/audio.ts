@@ -3,10 +3,8 @@ import {
   AUDIO_CONVERTER_PACKAGES, extensionOf, ensurePackagesLine, runOnRunner, runnerScript, validateRunnerPath,
 } from "./runner.js";
 
-/** What Whisper accepts as it came. Any other extension (.opus, .aac, .amr, .wma, video) goes through ffmpeg. */
-export const WHISPER_FORMATS = ["flac", "m4a", "mp3", "mp4", "mpeg", "mpga", "oga", "ogg", "wav", "webm"] as const;
+export const TRANSCRIPTION_FORMATS = ["flac", "m4a", "mp3", "mp4", "mpeg", "mpga", "oga", "ogg", "wav", "webm"] as const;
 
-/** Comfortably below Whisper's cap (25 MiB); above it the file is converted, not refused. */
 const DIRECT_UPLOAD_MAX_BYTES = 24_000_000;
 
 /** Includes installing ffmpeg on an old runner and converting a long audio. */
@@ -15,14 +13,9 @@ const EXTRACT_TIMEOUT_MS = 600_000;
 const ORIGINAL_MARK = "original";
 const CONVERTED_MARK = "mp3";
 
-/**
- * Host script that returns the audio to transcribe: one line with the mark (original | mp3) and the base64.
- * Original when Whisper accepts the format and the size; otherwise ffmpeg converts it to mono mp3 16 kHz
- * 32 kbps (speech, ~100 min fit in 25 MB). A temporary file instead of a pipe: the runner's `sh` has no
- * pipefail, and an ffmpeg that failed would become an empty base64 with exit 0. PURE.
- */
+// limitation: the runner's sh has no pipefail, so ffmpeg writes to a temp file; piped, a failed ffmpeg would read as empty base64 with exit 0
 export function buildExtractAudioScript(path: string): string {
-  const accepted = (WHISPER_FORMATS as readonly string[]).includes(extensionOf(path)) ? "1" : "0";
+  const accepted = (TRANSCRIPTION_FORMATS as readonly string[]).includes(extensionOf(path)) ? "1" : "0";
   const inner = [
     `test -f "$0" || { echo "arquivo não encontrado: $0" >&2; exit 1; }`,
     `if [ "$1" = 1 ] && [ "$(stat -c %s "$0")" -le ${DIRECT_UPLOAD_MAX_BYTES} ]; then echo ${ORIGINAL_MARK}; exec base64 -w0 "$0"; fi`,
@@ -34,7 +27,6 @@ export function buildExtractAudioScript(path: string): string {
   return runnerScript(inner, [path, accepted], EXTRACT_TIMEOUT_MS);
 }
 
-/** Separates the mark from the base64 and returns the name Whisper must receive the file with. PURE. */
 export function parseExtractedAudio(
   stdout: string,
   path: string,

@@ -1,10 +1,12 @@
 import * as React from "react";
+import { BookCheck, Bot, Braces, Bug, ChevronRight, FlaskConical, Gauge, Scale, ShieldCheck, Telescope, type LucideIcon } from "lucide-react";
+import type { AnalysisDimension } from "@/api/types";
 import { Markdown } from "@/features/board/components/ChatView";
 import { TypingDots } from "@/features/board/components/PeerTypingIndicator";
 import {
   chatClockText, isLongSpeech, type ChatReply, type ChatSpeaker, type FleetChatEntry, type ModelFamily,
 } from "@/features/board/lib/fleetChat";
-import { agentRole, type AgentReading } from "@/features/board/lib/reviewFleet";
+import { agentRole, type AgentReading, type AgentRole } from "@/features/board/lib/reviewFleet";
 import { useT, type Translate } from "@/i18n";
 import { cn } from "@/lib/utils";
 
@@ -14,26 +16,82 @@ const ENTRY_TEST_ID: Record<FleetChatEntry["kind"], string> = {
   stopped: "fleet-chat-stopped",
 };
 
-const FAMILY_STYLE: Record<ModelFamily, { avatar: string; name: string; initial: string }> = {
-  opus: { avatar: "bg-violet-400", name: "text-violet-300", initial: "O" },
-  sonnet: { avatar: "bg-sky-400", name: "text-sky-300", initial: "S" },
-  haiku: { avatar: "bg-emerald-400", name: "text-emerald-300", initial: "H" },
-  other: { avatar: "bg-muted-foreground", name: "text-foreground/90", initial: "" },
+type AgentTone = AnalysisDimension | "context" | "judge" | "other";
+
+const TONE_STYLE: Record<AgentTone, { icon: LucideIcon; solid: string; outline: string; name: string }> = {
+  context: { icon: Telescope, solid: "bg-teal-400", outline: "border-teal-400 text-teal-300", name: "text-teal-300" },
+  judge: { icon: Scale, solid: "bg-amber-400", outline: "border-amber-400 text-amber-300", name: "text-amber-300" },
+  correctness: { icon: Bug, solid: "bg-sky-400", outline: "border-sky-400 text-sky-300", name: "text-sky-300" },
+  security: { icon: ShieldCheck, solid: "bg-rose-400", outline: "border-rose-400 text-rose-300", name: "text-rose-300" },
+  performance: { icon: Gauge, solid: "bg-orange-400", outline: "border-orange-400 text-orange-300", name: "text-orange-300" },
+  contracts: { icon: Braces, solid: "bg-violet-400", outline: "border-violet-400 text-violet-300", name: "text-violet-300" },
+  tests: { icon: FlaskConical, solid: "bg-lime-400", outline: "border-lime-400 text-lime-300", name: "text-lime-300" },
+  repoRules: { icon: BookCheck, solid: "bg-fuchsia-400", outline: "border-fuchsia-400 text-fuchsia-300", name: "text-fuchsia-300" },
+  other: { icon: Bot, solid: "bg-muted-foreground", outline: "border-muted-foreground text-muted-foreground", name: "text-foreground/90" },
 };
+
+const MODEL_CHIP_STYLE: Record<ModelFamily, string> = {
+  opus: "border-violet-400/40 bg-violet-400/10 text-violet-200",
+  sonnet: "border-sky-400/40 bg-sky-400/10 text-sky-200",
+  haiku: "border-emerald-400/40 bg-emerald-400/10 text-emerald-200",
+  other: "border-border/60 bg-muted/40 text-muted-foreground",
+};
+
+function agentTone(role: AgentRole): AgentTone {
+  switch (role.kind) {
+    case "review":
+    case "verification":
+      return role.dimension;
+    case "context":
+    case "judge":
+    case "other":
+      return role.kind;
+  }
+}
+
+function fleetAgentState(entry: FleetChatEntry): FleetAgentState {
+  const agentId = entry.speaker.agentId;
+  if (entry.kind === "message" && entry.at !== undefined) return { agentId, running: false, endedAt: entry.at };
+  return { agentId, running: entry.kind === "typing" };
+}
 
 function chatEntryDomId(entryId: string): string {
   return `fleet-chat-${entryId}`;
 }
 
-export function FleetChat({ entries, label }: { entries: FleetChatEntry[]; label: string }) {
+export interface FleetAgentState {
+  agentId: string;
+  running: boolean;
+  endedAt?: number;
+}
+
+type AgentDetail = (agent: FleetAgentState) => React.ReactNode;
+
+export function FleetChat({ entries, label, agentDetail }: { entries: FleetChatEntry[]; label: string; agentDetail?: AgentDetail }) {
+  const [openEntryIds, setOpenEntryIds] = React.useState<ReadonlySet<string>>(new Set());
+  const toggleEntry = (entryId: string) => {
+    setOpenEntryIds((open) => {
+      const next = new Set(open);
+      if (!next.delete(entryId)) next.add(entryId);
+      return next;
+    });
+  };
   return (
     <ol aria-label={label} className="flex min-w-0 flex-col gap-1.5">
       {entries.map((entry, index) => {
         const continues = entries[index - 1]?.speaker.agentId === entry.speaker.agentId;
+        const detailOpen = agentDetail ? openEntryIds.has(entry.id) : undefined;
         return (
           <li key={entry.id} id={chatEntryDomId(entry.id)} className={cn("flex min-w-0 items-end gap-2", !continues && index > 0 && "mt-1")}>
             {continues ? <span className="w-7 shrink-0" aria-hidden="true" /> : <Avatar speaker={entry.speaker} />}
-            <ChatBubble entry={entry} showSpeaker={!continues} />
+            <ChatBubble
+              entry={entry}
+              showSpeaker={!continues}
+              detailOpen={detailOpen}
+              onToggleDetail={() => toggleEntry(entry.id)}
+            >
+              {agentDetail && detailOpen ? agentDetail(fleetAgentState(entry)) : null}
+            </ChatBubble>
           </li>
         );
       })}
@@ -42,23 +100,42 @@ export function FleetChat({ entries, label }: { entries: FleetChatEntry[]; label
 }
 
 function Avatar({ speaker }: { speaker: ChatSpeaker }) {
-  const style = FAMILY_STYLE[speaker.family];
-  const initial = style.initial || speaker.label.trim().charAt(0).toUpperCase();
+  const role = agentRole(speaker.label);
+  const tone = agentTone(role);
+  const style = TONE_STYLE[tone];
+  const isVerification = role.kind === "verification";
+  const Icon = style.icon;
   return (
-    <span aria-hidden="true" className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold text-background", style.avatar)}>
-      {initial}
+    <span
+      aria-hidden="true"
+      data-tone={tone}
+      data-verification={isVerification}
+      className={cn(
+        "grid h-7 w-7 shrink-0 place-items-center rounded-full",
+        isVerification ? cn("border-2 bg-background", style.outline) : cn("text-background", style.solid),
+      )}
+    >
+      <Icon className="h-3.5 w-3.5" />
     </span>
   );
 }
 
-function ChatBubble({ entry, showSpeaker }: { entry: FleetChatEntry; showSpeaker: boolean }) {
+function ChatBubble({
+  entry, showSpeaker, detailOpen, onToggleDetail, children,
+}: {
+  entry: FleetChatEntry;
+  showSpeaker: boolean;
+  detailOpen: boolean | undefined;
+  onToggleDetail: () => void;
+  children: React.ReactNode;
+}) {
   const t = useT();
   return (
     <article
       data-testid={ENTRY_TEST_ID[entry.kind]}
       className={cn("min-w-0 max-w-[88%] rounded-xl bg-muted/50 px-2.5 py-1.5 text-xs leading-relaxed", showSpeaker ? "rounded-bl-sm" : "rounded-l-sm")}
     >
-      {showSpeaker ? <SpeakerLine speaker={entry.speaker} /> : null}
+      {showSpeaker ? <SpeakerLine speaker={entry.speaker} detailOpen={detailOpen} onToggleDetail={onToggleDetail} /> : null}
       {entry.kind === "message" ? (
         <>
           {entry.replyTo ? <ReplyQuote reply={entry.replyTo} speaker={entry.speaker} /> : null}
@@ -74,17 +151,46 @@ function ChatBubble({ entry, showSpeaker }: { entry: FleetChatEntry; showSpeaker
           </span>
         </p>
       ) : null}
-      {entry.kind === "stopped" ? <p className="text-destructive">{t("review.fleet.stopped")}</p> : null}
+      {entry.kind === "stopped" ? (
+        <p className="text-destructive [overflow-wrap:anywhere]">{entry.error ? t("review.fleet.failed", { error: entry.error }) : t("review.fleet.stopped")}</p>
+      ) : null}
+      {children}
     </article>
   );
 }
 
-function SpeakerLine({ speaker }: { speaker: ChatSpeaker }) {
+function SpeakerLine({
+  speaker, detailOpen, onToggleDetail,
+}: {
+  speaker: ChatSpeaker;
+  detailOpen: boolean | undefined;
+  onToggleDetail: () => void;
+}) {
   const t = useT();
+  const name = fleetAgentName(speaker.label, t);
+  const nameStyle = cn("font-semibold", TONE_STYLE[agentTone(agentRole(speaker.label))].name);
+  const nameText = speaker.ordinal === undefined ? name : `${name} #${speaker.ordinal}`;
   return (
-    <p className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
-      <span className={cn("font-semibold", FAMILY_STYLE[speaker.family].name)}>{fleetAgentName(speaker.label, t)}</span>
-      {speaker.model ? <span className="text-[11px] text-muted-foreground">{speaker.model}</span> : null}
+    <p className="flex min-w-0 flex-wrap items-center gap-x-1.5">
+      {detailOpen === undefined ? (
+        <span className={nameStyle}>{nameText}</span>
+      ) : (
+        <button
+          type="button"
+          aria-expanded={detailOpen}
+          title={t("review.fleet.steps")}
+          onClick={onToggleDetail}
+          className={cn(nameStyle, "inline-flex items-center gap-0.5 rounded hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring")}
+        >
+          {nameText}
+          <ChevronRight className={cn("h-3 w-3 transition-transform", detailOpen && "rotate-90")} aria-hidden="true" />
+        </button>
+      )}
+      {speaker.model ? (
+        <span data-testid="fleet-chat-model" className={cn("rounded border px-1 text-[10px] font-medium leading-4", MODEL_CHIP_STYLE[speaker.family])}>
+          {speaker.model}
+        </span>
+      ) : null}
     </p>
   );
 }

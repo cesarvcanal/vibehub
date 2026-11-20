@@ -1,5 +1,4 @@
 import { ANALYSIS_DIMENSIONS, type AnalysisDimension, type Review, type ReviewFleetRun } from "@/api/types";
-import type { ConversationRow } from "@/features/board/lib/review";
 import { formatAgentResult } from "@/features/board/lib/sdkChat";
 
 export type AgentReading =
@@ -70,28 +69,6 @@ export function readAgentResult(raw: string): AgentReading {
   } catch {
     return readTruncated(text) ?? { kind: "text", text };
   }
-}
-
-export type ConversationRowWithFleet = ConversationRow | { kind: "fleet"; round: number; runs: ReviewFleetRun[]; key: string };
-
-export function withFleets(rows: ConversationRow[], fleets: Map<number, ReviewFleetRun[]>): ConversationRowWithFleet[] {
-  const placed = new Set<number>();
-  const fleetRow = (round: number): ConversationRowWithFleet[] => {
-    const runs = fleets.get(round);
-    if (!runs || placed.has(round)) return [];
-    placed.add(round);
-    return [{ kind: "fleet", round, runs, key: `fleet-${round}` }];
-  };
-  const roundOf = (row: ConversationRow) => (row.kind === "round" ? row.round : row.event.round);
-  const merged = rows.flatMap((row, index): ConversationRowWithFleet[] => {
-    const previousRound = index > 0 ? roundOf(rows[index - 1]!) : undefined;
-    const closingPrevious = row.kind === "round" && previousRound !== undefined ? fleetRow(previousRound) : [];
-    const beforeReviewer = row.kind === "line" && row.event.who === "reviewer" ? fleetRow(row.event.round) : [];
-    return [...closingPrevious, ...beforeReviewer, row];
-  });
-  const lastRound = rows.length > 0 ? roundOf(rows[rows.length - 1]!) : undefined;
-  const trailing = [...fleets.keys()].filter((round) => !placed.has(round) && (lastRound === undefined || round >= lastRound));
-  return [...merged, ...trailing.flatMap(fleetRow)];
 }
 
 export type AgentRole =

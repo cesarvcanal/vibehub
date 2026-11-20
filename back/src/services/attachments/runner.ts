@@ -1,12 +1,6 @@
 import { config } from "../../config/env.js";
 import { hostExecutor, shQuote, HostExecError, CONTAINER_DEADLINE_MARGIN_MS } from "../../runtime/host.js";
 
-/**
- * Apt packages the runner needs to open attachments: PDF (poppler), spreadsheets (openpyxl/xlrd), Word
- * (python-docx, catdoc for old .doc/.ppt) and audio beyond what Whisper accepts (ffmpeg). Provisioning
- * already installs them; each tool still checks before running, because a runner provisioned before this
- * list existed would only get the packages in a manual reprovisioning.
- */
 export const DOCUMENT_READER_PACKAGES = ["poppler-utils", "python3-openpyxl", "python3-xlrd", "python3-docx", "catdoc"];
 export const AUDIO_CONVERTER_PACKAGES = ["ffmpeg"];
 export const ATTACHMENT_PACKAGES = [...DOCUMENT_READER_PACKAGES, ...AUDIO_CONVERTER_PACKAGES];

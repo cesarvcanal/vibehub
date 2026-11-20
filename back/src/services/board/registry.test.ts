@@ -23,6 +23,9 @@ import {
   assertEffort,
   sanitizeDefaultAccountLabel,
   LABEL_MAX,
+  isHumanActive,
+  HUMAN_ACTIVE_WINDOW_MS,
+  HUMAN_ACTIVE_THROTTLE_MS,
   BOARD_COLUMNS,
   columnAfterStatus,
   columnAfterOpen,
@@ -240,6 +243,33 @@ describe("derivations and validation (pure)", () => {
     expect(sanitizeDefaultAccountLabel("   ")).toBeUndefined();
     expect(sanitizeDefaultAccountLabel(null)).toBeUndefined();
     expect(sanitizeDefaultAccountLabel(undefined)).toBeUndefined();
+  });
+});
+
+describe("isHumanActive (pure)", () => {
+  const NOW = 10_000_000;
+  const TYPED = NOW - 60_000;
+
+  it.each([
+    ["nobody ever typed", {}, false],
+    ["typed inside the window, nothing asked", { humanActiveAt: TYPED }, true],
+    ["typed longer ago than the window", { humanActiveAt: NOW - HUMAN_ACTIVE_WINDOW_MS }, false],
+    ["the agent opened a decision AFTER the last keystroke", { humanActiveAt: TYPED, awaitingDecisionAt: TYPED + HUMAN_ACTIVE_THROTTLE_MS }, false],
+    ["the turn ended on a question AFTER the last keystroke", { humanActiveAt: TYPED, pendingQuestionAt: TYPED + HUMAN_ACTIVE_THROTTLE_MS }, false],
+    ["a question inside the throttle of the last stamp may hide keystrokes the throttle swallowed: still locked", { humanActiveAt: TYPED, awaitingDecisionAt: TYPED + HUMAN_ACTIVE_THROTTLE_MS - 1 }, true],
+    ["the person typed AFTER the decision opened (may be answering it)", { humanActiveAt: TYPED, awaitingDecisionAt: TYPED - 1 }, true],
+    ["the person typed AFTER the question was asked", { humanActiveAt: TYPED, pendingQuestionAt: TYPED - 1 }, true],
+    ["keystroke and question in the same millisecond stay locked", { humanActiveAt: TYPED, awaitingDecisionAt: TYPED }, true],
+  ])("%s", (_case, card, expected) => {
+    expect(isHumanActive(card, NOW)).toBe(expected);
+  });
+
+  it.each([
+    ["the answered ask was made AFTER the last keystroke", TYPED + HUMAN_ACTIVE_THROTTLE_MS, false],
+    ["the answered ask was made inside the throttle of the last stamp", TYPED + HUMAN_ACTIVE_THROTTLE_MS - 1, true],
+    ["the answered ask was made BEFORE the last keystroke", TYPED - 1, true],
+  ])("answering an ask: %s", (_case, askedAt, expected) => {
+    expect(isHumanActive({ humanActiveAt: TYPED }, NOW, askedAt)).toBe(expected);
   });
 });
 

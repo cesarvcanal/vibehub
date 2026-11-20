@@ -11,6 +11,7 @@ import { resetLanguage, setLanguage } from "@/i18n";
 import { FakeAudioContext, fakeRig, type FakeRig } from "@/features/voice/fakeWebRtc";
 import { setVoiceCallTestHooks } from "@/features/voice/useVoiceCall";
 import { SERVER_BACK_CONTEXT } from "@/features/voice/voiceContext";
+import { DELEGATION_NOT_SENT } from "@/features/voice/voiceDelegation";
 
 /**
  * VOICE IN THE CARD'S CHAT, end to end at the component level: the call starts from the composer
@@ -44,7 +45,7 @@ class FakeSocket {
   constructor(public url: string) {
     FakeSocket.instances.push(this);
   }
-  get frames(): { type: string; text?: string }[] {
+  get frames(): { type: string; text?: string; id?: string; answers?: { selected: string[] }[] }[] {
     return this.rawSent.map((raw) => JSON.parse(raw)).filter((f) => f.type !== "typing");
   }
   send(data: string): void {
@@ -252,14 +253,45 @@ describe("a voice call inside the card's chat", () => {
     await waitFor(() => expect(results()).toEqual([expect.objectContaining({ delegation_id: "item_d3", content: "Os 12 testes passaram." })]));
   });
 
-  it("a delegation the chat cannot hand over is answered anyway — the voice is never left waiting", async () => {
+  it("um pedido da voz com o agente ocupado fura a fila: vai urgente, como o enviar agora do chat", async () => {
+    const { ws } = await openChat();
+    ws.deliver({ type: "assistant_delta", text: "Subindo o back isolado…" });
+    await startCall();
+    act(() => channel().emit({ type: "session.input_transcript.delta", delta: "por que ele vai abrir uma tela?", start_ms: 0, end_ms: 900 }));
+    act(() => channel().emit({ type: "session.delegation.created", offset_ms: 1000, delegation: { id: "item_u1", type: "delegation", target: "client" } }));
+
+    await waitFor(() =>
+      expect(ws.frames).toContainEqual(expect.objectContaining({ type: "user", now: true, text: expect.stringContaining("por que ele vai abrir uma tela?") })),
+    );
+    expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument();
+  });
+
+  it("com o card parado numa pergunta de múltipla escolha desde antes da chamada, a voz lê a pergunta e o pedido dela vai como resposta, sem fechar a pergunta", async () => {
+    const { ws } = await openChat();
+    ws.deliver({ type: "user_question", id: "q_1", questions: [{ question: "Qual caminho?", header: "Caminho", options: [{ label: "A", description: "a" }, { label: "B", description: "b" }] }] });
+    await startCall();
+    await waitFor(() =>
+      expect(channel().sent).toContainEqual(expect.objectContaining({ type: "session.commentary.append", delegation_id: null, content: expect.stringContaining("Qual caminho?") })),
+    );
+    act(() => channel().emit({ type: "session.input_transcript.delta", delta: "abre um card pra esse bug e delega", start_ms: 0, end_ms: 900 }));
+    act(() => channel().emit({ type: "session.delegation.created", offset_ms: 1000, delegation: { id: "item_q1", type: "delegation", target: "client" } }));
+
+    await waitFor(() =>
+      expect(ws.frames).toContainEqual({ type: "question_answer", id: "q_1", answers: [{ selected: [expect.stringContaining("abre um card pra esse bug")] }] }),
+    );
+    expect(ws.frames.filter((frame) => frame.type === "user")).toEqual([]);
+  });
+
+  it("sem conexão, a voz ouve na hora que o pedido não foi entregue, e nada fica preso na fila", async () => {
     const { ws } = await openChat();
     await startCall();
     ws.drop();
-    act(() => channel().emit({ type: "session.input_transcript.delta", delta: "roda os testes", start_ms: 0, end_ms: 500 }));
+    act(() => channel().emit({ type: "session.input_transcript.delta", delta: "crie um card agora", start_ms: 0, end_ms: 500 }));
     act(() => channel().emit({ type: "session.delegation.created", offset_ms: 600, delegation: { id: "item_d2", type: "delegation", target: "client" } }));
-    // Wire down: the request waits in the chat's queue like a typed message, and the voice is told so.
-    await waitFor(() => expect(channel().sent).toContainEqual(expect.objectContaining({ type: "session.thinking.append", delegation_id: "item_d2" })));
+    await waitFor(() =>
+      expect(channel().sent).toContainEqual({ type: "session.commentary.append", delegation_id: "item_d2", content: DELEGATION_NOT_SENT }),
+    );
+    expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument();
   });
 
   it("leaving the chat (another card, the terminal tab) ends the call and releases the mic", async () => {
@@ -376,5 +408,90 @@ describe("a voice call inside the card's chat", () => {
     expect(Number(orb.dataset.aiRms)).toBeGreaterThan(0.05);
     await waitFor(() => expect(Number(orb.dataset.aiVisual)).toBeGreaterThan(0.5));
     expect(screen.getByTestId("voice-call-bar")).toHaveAttribute("data-phase", "ai_speaking");
+  });
+});
+
+describe("a pergunta com opções do agente durante a chamada", () => {
+  const QUESTION = {
+    type: "user_question",
+    id: "q_1_100",
+    questions: [
+      {
+        question: "Onde guardo as metas?",
+        header: "Metas",
+        options: [
+          { label: "Planilha (Recomendado)", description: "Rápido de editar" },
+          { label: "Banco novo", description: "Exige migração" },
+        ],
+      },
+    ],
+  };
+  const commentary = () => channel().sent.filter((event) => event.type === "session.commentary.append");
+  const sayAndDelegate = (said: string, delegationId: string) => {
+    act(() => channel().emit({ type: "session.input_transcript.delta", delta: said, start_ms: 0, end_ms: 500 }));
+    act(() => channel().emit({ type: "session.delegation.created", offset_ms: 600, delegation: { id: delegationId, type: "delegation", target: "client" } }));
+  };
+
+  it("a voz lê a pergunta, as opções e a recomendada, e pede a escolha por voz — sem mandar ao chat", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    ws.deliver({ type: "user", text: "decide a planilha", at: 1 });
+    ws.deliver(QUESTION);
+    await waitFor(() => expect(commentary()).toHaveLength(1));
+    const spoken = commentary()[0]!;
+    expect(spoken.delegation_id).toBeNull();
+    for (const part of ["Onde guardo as metas?", "Planilha (Recomendado)", "Rápido de editar", "Banco novo", "recomendada"]) {
+      expect(spoken.content).toContain(part);
+    }
+    expect(spoken.content).not.toMatch(/conferir no chat|veja no chat|olhe o chat/i);
+  });
+
+  it("com um pedido da voz esperando o agente, a pergunta é o resultado desse pedido", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    sayAndDelegate("organiza as metas", "item_d1");
+    await waitFor(() => expect(ws.frames.some((frame) => frame.type === "user" && frame.text?.includes("organiza as metas"))).toBe(true));
+    ws.deliver(QUESTION);
+    await waitFor(() => expect(commentary()).toEqual([expect.objectContaining({ delegation_id: "item_d1", content: expect.stringContaining("Onde guardo as metas?") })]));
+  });
+
+  it("a escolha dita volta ao agente como resposta daquela pergunta (question_answer), sem fechar a pergunta com um envio urgente", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    ws.deliver({ type: "user", text: "decide a planilha", at: 1 });
+    ws.deliver(QUESTION);
+    await waitFor(() => expect(commentary()).toHaveLength(1));
+
+    sayAndDelegate("pode ser o banco novo", "item_d2");
+    await waitFor(() => expect(ws.frames.some((frame) => frame.type === "question_answer")).toBe(true));
+    const answer = ws.frames.find((frame) => frame.type === "question_answer")!;
+    expect(answer.id).toBe("q_1_100");
+    expect(answer.answers).toEqual([{ selected: [expect.stringContaining("pode ser o banco novo")] }]);
+    expect(ws.frames.filter((frame) => frame.type === "user")).toEqual([]);
+    expect(channel().sent).toContainEqual(expect.objectContaining({ type: "session.thinking.append", delegation_id: "item_d2" }));
+
+    ws.deliver({ type: "question_result", id: "q_1_100", answers: answer.answers });
+    ws.deliver({ type: "assistant_text", text: "Feito: as metas vão para o banco novo." });
+    ws.deliver({ type: "result", isError: false });
+    await waitFor(() =>
+      expect(commentary()).toContainEqual({ type: "session.commentary.append", delegation_id: "item_d2", content: "Feito: as metas vão para o banco novo." }),
+    );
+  });
+
+  it("a pergunta que um reconnect repete não é lida de novo", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    ws.deliver({ type: "user", text: "decide a planilha", at: 1 });
+    ws.deliver(QUESTION);
+    await waitFor(() => expect(commentary()).toHaveLength(1));
+    ws.drop();
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: 5_000 });
+    const again = FakeSocket.instances[1]!;
+    again.accept();
+    again.deliver({ type: "user", text: "decide a planilha", at: 1 });
+    again.deliver(QUESTION);
+    again.deliver({ type: "ready" });
+    await waitFor(() => expect(commentary()).toContainEqual(expect.objectContaining({ content: SERVER_BACK_CONTEXT })));
+    expect(commentary().filter((event) => String(event.content).includes("Onde guardo as metas?"))).toHaveLength(1);
   });
 });

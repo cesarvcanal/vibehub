@@ -425,7 +425,8 @@ describe("terminal transport tuning", () => {
 
 describe("human-active stamping throttle", () => {
   it("writes at most once per window per card, then again after it passes", async () => {
-    const { shouldStampHumanActive, resetHumanStampThrottleForTesting, HUMAN_ACTIVE_THROTTLE_MS } = await import("./session.js");
+    const { shouldStampHumanActive, resetHumanStampThrottleForTesting } = await import("./session.js");
+    const { HUMAN_ACTIVE_THROTTLE_MS } = await import("../services/board/registry.js");
     resetHumanStampThrottleForTesting();
     const t0 = 1_000_000;
     expect(shouldStampHumanActive("card-a", t0)).toBe(true); // first keystroke stamps

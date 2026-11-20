@@ -1,9 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { SdkRow } from "@/features/board/lib/sdkChat";
 import { LiveVoiceSession, type DelegationListener, type LiveVoiceSnapshot } from "./liveVoice";
 import { useVoiceDelegation, type UseVoiceDelegationOptions } from "./useVoiceDelegation";
-import { DELEGATION_NOT_SENT, DELEGATION_STARTED, DELEGATION_UNHEARD } from "./voiceDelegation";
+import { DELEGATION_NOT_SENT, DELEGATION_SLOW, DELEGATION_SLOW_MS, DELEGATION_STARTED, DELEGATION_UNHEARD } from "./voiceDelegation";
 import type { VoiceTurn } from "./voiceTurns";
 
 /**
@@ -14,7 +14,7 @@ import type { VoiceTurn } from "./voiceTurns";
 
 const said = (text: string): VoiceTurn[] => [{ vid: "vc-u1", role: "user", text, at: 1, final: true }];
 
-function setup(sendToAgent: (text: string) => void) {
+function setup(sendUrgentToAgent: (text: string) => void) {
   let listener: DelegationListener = () => undefined;
   const call = {
     snap: { ...LiveVoiceSession.idleSnapshot, state: "live" } as LiveVoiceSnapshot,
@@ -24,9 +24,10 @@ function setup(sendToAgent: (text: string) => void) {
     },
     answerDelegation: vi.fn(() => true),
     appendContext: vi.fn(() => true),
+    announceContext: vi.fn(() => true),
   };
   const view = renderHook((props: Partial<UseVoiceDelegationOptions>) =>
-    useVoiceDelegation({ call, rows: [], turnRunning: false, sendToAgent, ...props }),
+    useVoiceDelegation({ call, rows: [], turnRunning: false, sendUrgentToAgent, answerQuestion: () => true, ...props }),
   );
   return { call, view, delegate: (id: string, turns: VoiceTurn[]) => act(() => listener(id, turns)) };
 }
@@ -48,6 +49,68 @@ describe("useVoiceDelegation", () => {
     expect(call.answerDelegation.mock.calls).toEqual([["d2", DELEGATION_UNHEARD, "result"]]);
   });
 
+  it("pedido sem resultado depois do prazo: a voz fica sabendo, uma vez, que o agente ainda não terminou", () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const { call, delegate } = setup(vi.fn());
+    delegate("d4", said("roda os testes"));
+    act(() => vi.advanceTimersByTime(DELEGATION_SLOW_MS - 1));
+    expect(call.answerDelegation.mock.calls).toEqual([["d4", DELEGATION_STARTED, "progress"]]);
+    act(() => vi.advanceTimersByTime(DELEGATION_SLOW_MS * 3));
+    expect(call.answerDelegation.mock.calls).toEqual([
+      ["d4", DELEGATION_STARTED, "progress"],
+      ["d4", DELEGATION_SLOW, "progress"],
+    ]);
+  });
+
+  it("pedido respondido antes do prazo não recebe o aviso de demora", () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const send = vi.fn();
+    const { call, view, delegate } = setup(send);
+    delegate("d5", said("roda os testes"));
+    const request = send.mock.calls[0]![0] as string;
+    const rows: SdkRow[] = [
+      { kind: "user", id: "u1", text: request, state: "sent" },
+      { kind: "assistant", id: "a1", text: "12 verdes.", streaming: false },
+    ];
+    view.rerender({ rows });
+    act(() => vi.advanceTimersByTime(DELEGATION_SLOW_MS * 2));
+    expect(call.answerDelegation.mock.calls).toEqual([
+      ["d5", DELEGATION_STARTED, "progress"],
+      ["d5", "12 verdes.", "result"],
+    ]);
+  });
+
+  it("desmontar o chat com um pedido pendente cancela o aviso de demora", () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const { call, view, delegate } = setup(vi.fn());
+    delegate("d6", said("roda os testes"));
+    view.unmount();
+    act(() => vi.advanceTimersByTime(DELEGATION_SLOW_MS * 2));
+    expect(call.answerDelegation.mock.calls).toEqual([["d6", DELEGATION_STARTED, "progress"]]);
+  });
+
+  it("a chamada que termina com um pedido pendente cancela o aviso de demora", () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const { call, view, delegate } = setup(vi.fn());
+    delegate("d7", said("roda os testes"));
+    call.snap = { ...call.snap, state: "idle" };
+    view.rerender({});
+    act(() => vi.advanceTimersByTime(DELEGATION_SLOW_MS * 2));
+    expect(call.answerDelegation.mock.calls).toEqual([["d7", DELEGATION_STARTED, "progress"]]);
+  });
+
   it("a call that ends with a request pending says nothing more about it", () => {
     const send = vi.fn();
     const { call, view, delegate } = setup(send);
@@ -63,5 +126,57 @@ describe("useVoiceDelegation", () => {
     call.snap = { ...call.snap, state: "live" };
     view.rerender({ rows });
     expect(call.answerDelegation).toHaveBeenCalledTimes(1);
+  });
+
+  it("um pedido cujo turno acabou sem texto (o agente pode ter sido interrompido) é dito assim, com a oferta de pedir de novo", () => {
+    const send = vi.fn();
+    const { call, view, delegate } = setup(send);
+    delegate("d4", said("explica o que falta para o merge"));
+    const request = send.mock.calls[0]![0] as string;
+    view.rerender({ rows: [{ kind: "user", id: "u1", text: request, state: "sent" }], turnRunning: false });
+    const [, result, update] = call.answerDelegation.mock.calls.at(-1) as unknown as [string, string, string];
+    expect(update).toBe("result");
+    expect(result).toContain("interrompido");
+    expect(result).toContain("peça de novo");
+  });
+
+  describe("com uma pergunta do agente aberta", () => {
+    const question: SdkRow = {
+      kind: "question",
+      id: "q_1",
+      questions: [{ question: "Qual caminho?", options: [{ label: "A" }, { label: "B" }] }],
+      outcome: "pending",
+    };
+
+    it("uma escolha que o chat não consegue entregar é dita como não entregue, na hora", () => {
+      const send = vi.fn();
+      const { call, view, delegate } = setup(send);
+      const answerQuestion = vi.fn(() => false);
+      view.rerender({ rows: [question], turnRunning: true, answerQuestion });
+      delegate("d5", said("a B"));
+      expect(answerQuestion).toHaveBeenCalledWith("q_1", [{ selected: [expect.stringContaining("a B")] }]);
+      expect(send).not.toHaveBeenCalled();
+      expect(call.answerDelegation.mock.calls).toEqual([["d5", DELEGATION_NOT_SENT, "result"]]);
+    });
+
+    it("nada ouvido não responde a pergunta por ninguém", () => {
+      const { call, view, delegate } = setup(vi.fn());
+      const answerQuestion = vi.fn(() => true);
+      view.rerender({ rows: [question], turnRunning: true, answerQuestion });
+      delegate("d6", []);
+      expect(answerQuestion).not.toHaveBeenCalled();
+      expect(call.answerDelegation.mock.calls).toEqual([["d6", DELEGATION_UNHEARD, "result"]]);
+    });
+
+    it("uma chamada nova lê de novo a pergunta que continua aberta", () => {
+      const { call, view } = setup(vi.fn());
+      view.rerender({ rows: [question], turnRunning: true });
+      expect(call.announceContext).toHaveBeenCalledTimes(1);
+      call.snap = { ...call.snap, state: "idle" };
+      view.rerender({ rows: [question], turnRunning: true });
+      call.snap = { ...call.snap, state: "live" };
+      view.rerender({ rows: [question], turnRunning: true });
+      expect(call.announceContext).toHaveBeenCalledTimes(2);
+    });
   });
 });
