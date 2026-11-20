@@ -1013,7 +1013,7 @@ describe("ReviewPanel — merge", () => {
     expect(screen.queryByText(/a IA do autor está trazendo/)).toBeNull();
     expect(screen.getByText("conflito com a base")).toBeInTheDocument();
     expect(screen.getByText("Revisão aprovada, mas o PR segue em conflito com a base e a IA do autor não conseguiu trazê-la: o merge espera alguém trazer a base para a branch.")).toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent("O PR segue em conflito com dev depois de 3 ordens à IA do autor. Traga dev para a branch e suba; depois, \"Tentar de novo\" confere outra vez.");
+    expect(screen.getByRole("alert")).toHaveTextContent("O PR segue em conflito com dev depois de 3 ordens à IA do autor. Traga dev para a branch e suba, ou use \"Tentar de novo\" para a IA do autor tentar outra vez.");
     expect(screen.getByRole("button", { name: "Tentar de novo" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeDisabled();
   });

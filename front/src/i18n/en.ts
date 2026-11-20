@@ -1774,7 +1774,7 @@ export const en: Record<string, string> = {
   "review.mergeGate.fixing": "The merge checks failed on the approved commit: the author's AI is fixing them and they rerun on their own (attempt {attempt} of {max}).",
   "review.mergeGate.output": "Show the checks output",
   "review.mergeGate.conflict": "The PR conflicts with {base}: the author's AI is bringing {base} into the branch, and the review checks what comes in before the merge.",
-  "review.mergeGate.conflictFailed": "The PR still conflicts with {base} after {max} orders to the author's AI. Bring {base} into the branch and push; then \"Try again\" checks it again.",
+  "review.mergeGate.conflictFailed": "The PR still conflicts with {base} after {max} orders to the author's AI. Bring {base} into the branch and push, or use \"Try again\" for the author's AI to try once more.",
   "review.retry": "Try again",
   "review.cancel": "Cancel review",
   "review.cancel.confirm": "Cancel the review of PR #{num}? The AIs stop and the PR is left without a review.",
