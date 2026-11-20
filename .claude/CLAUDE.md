@@ -25,9 +25,15 @@ Cada etapa usa a sua skill (seção 3) e só termina quando o critério dela est
 8. **Verificar** com os comandos da AGENTS.md §12, passo 7, depois de aplicar o que a revisão achou. Pronto quando lint, testes do recorte e typecheck do pacote tocado rodaram verdes nesta sessão.
 9. **Entregar** (seção 6).
 
-## 3. Mapa: situação → skill
+## 3. Skill é a retroescavadeira: use sempre
 
-Antes de cada etapa, ache aqui a skill da situação e invoque-a pela ferramenta `Skill`, sem esperar o pedido. Mais de uma serve: primeiro a de processo (debugging, brainstorming, TDD), depois a de execução (frontend, design). Nenhuma cobre: siga o método à mão e diga qual etapa ficou sem skill. A skill do mapa não aparece na lista de skills disponíveis: o `enabledPlugins` do `.claude/settings.json` só liga plugin já instalado no perfil, e quem instala é a tela de Plugins do vibehub; siga o processo à mão e avise quem cuida da instalação.
+Fazer na mão o que uma skill instalada faz é cavar uma vala com as mãos com a retroescavadeira parada do lado: demora mais e sai pior. A skill traz o método pronto e testado (os passos, a ordem, o critério de pronto); você entra com o julgamento. Lembrar do método da skill não é usá-la: invoque-a pela ferramenta `Skill` e siga o texto que ela carrega.
+
+- **Antes de cada etapa**, ache no mapa abaixo a skill da situação e invoque-a, sem esperar o pedido. A etapa só começa depois da invocação.
+- **Mais de uma serve:** primeiro a de processo (debugging, brainstorming, TDD), depois a de execução (frontend, design).
+- **Nenhuma cobre a etapa:** só então siga o método à mão, e diga ao usuário qual etapa ficou sem skill.
+- **A skill do mapa não aparece na lista de skills disponíveis:** o `enabledPlugins` do `.claude/settings.json` só liga plugin já instalado no perfil, e quem instala é a tela de Plugins do vibehub. Siga o processo à mão e avise quem cuida da instalação.
+- **No fim, diga quais skills invocou** em cada etapa; etapa sem skill aparece com o motivo.
 
 | Situação | Skill |
 |----------|-------|
