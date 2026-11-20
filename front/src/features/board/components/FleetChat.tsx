@@ -151,7 +151,9 @@ function ChatBubble({
           </span>
         </p>
       ) : null}
-      {entry.kind === "stopped" ? <p className="text-destructive">{t("review.fleet.stopped")}</p> : null}
+      {entry.kind === "stopped" ? (
+        <p className="text-destructive [overflow-wrap:anywhere]">{entry.error ? t("review.fleet.failed", { error: entry.error }) : t("review.fleet.stopped")}</p>
+      ) : null}
       {children}
     </article>
   );

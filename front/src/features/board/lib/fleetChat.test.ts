@@ -47,6 +47,18 @@ describe("reviewFleetChat", () => {
     expect(entries[0]).toMatchObject({ at: 20, reading: { kind: "findings", titles: ["Busca duplicada"] }, speaker: { family: "sonnet", model: "sonnet" } });
   });
 
+  it("quem parou leva o motivo da falha quando o harness disse qual foi", () => {
+    const usageLimit = "You've hit your session limit · resets 1:10am (UTC)";
+    const entries = reviewFleetChat(reviewRun([
+      reviewAgent({ id: "failed", label: "juiz", status: "stopped", error: usageLimit }),
+      reviewAgent({ id: "cut", label: "revisão:tests", status: "stopped" }),
+    ], true));
+    expect(entries).toEqual([
+      expect.objectContaining({ kind: "stopped", error: usageLimit, speaker: expect.objectContaining({ agentId: "failed" }) }),
+      expect.not.objectContaining({ error: expect.anything() }),
+    ]);
+  });
+
   it("a verificação responde citando a fala da revisão da mesma dimensão", () => {
     const entries = reviewFleetChat(reviewRun([
       reviewAgent({ id: "rev", label: "revisão:correctness", endedAt: 1, result: '{"findings":[{"title":"Busca duplicada"}]}' }),

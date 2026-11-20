@@ -530,6 +530,145 @@ describe("desfecho da rodada — o snapshot do harness diz se ela acabou", () =>
   });
 });
 
+describe("frota retomada — o Workflow com resumeFromRunId escreve a segunda tentativa no mesmo diário", () => {
+  const RESUMED_JOURNAL = [
+    { type: "launched" },
+    { type: "started", agentId: "a01f", label: "verificação: tests · termo com vírgula", phase: "Verificação" },
+    { type: "result", agentId: "a01f", result: { confirmed: true, evidence: "primeira tentativa" } },
+    { type: "started", agentId: "a02f", label: "juiz", phase: "Julgamento" },
+    { type: "started", agentId: "a03f", label: "verificação: tests · termo com vírgula", phase: "Verificação" },
+    { type: "result", agentId: "a03f", result: { confirmed: true, evidence: "segunda tentativa" } },
+    { type: "started", agentId: "a04f", label: "juiz", phase: "Julgamento" },
+    { type: "result", agentId: "a04f", result: { summary: "1 achado" } },
+  ];
+  const PARALLEL_JOURNAL = [
+    { type: "launched" },
+    { type: "started", agentId: "a01f", label: "worker", phase: "Varredura" },
+    { type: "started", agentId: "a02f", label: "worker", phase: "Varredura" },
+    { type: "result", agentId: "a01f", result: "um" },
+    { type: "started", agentId: "a03f", label: "worker", phase: "Varredura" },
+    { type: "result", agentId: "a02f", result: "dois" },
+  ];
+  const progressOf = (agentIds: string[]) => agentIds.map((agentId) => ({ type: "workflow_agent", agentId, state: "done" }));
+
+  function writeRun(journal: unknown[], snapshot?: Record<string, unknown>): { root: string; runsDir: string; scripts: string } {
+    const root = mkdtempSync(join(tmpdir(), "vibehub-wf-resume-"));
+    onTestFinished(() => rmSync(root, { recursive: true, force: true }));
+    const runsDir = join(root, "s1", "subagents", "workflows");
+    const scripts = join(root, "s1", "workflows", "scripts");
+    mkdirSync(join(runsDir, "wf_res1"), { recursive: true });
+    mkdirSync(scripts, { recursive: true });
+    writeFileSync(join(runsDir, "wf_res1", "journal.jsonl"), jsonl(journal));
+    if (snapshot) writeFileSync(join(root, "s1", "workflows", "wf_res1.json"), JSON.stringify({ runId: "wf_res1", ...snapshot }));
+    return { root, runsDir, scripts };
+  }
+
+  it("com o registro final do harness, só os agentes da tentativa que valeu: nem juiz parado, nem verificação em dobro", async () => {
+    const wf = await load();
+    const { runsDir, scripts } = writeRun(RESUMED_JOURNAL, { status: "completed", workflowProgress: progressOf(["a03f", "a04f"]) });
+    const [run] = wf.parseWorkflowProbe(runProbe(wf.WORKFLOW_PROBE_JS, [runsDir, scripts]));
+    expect(run!.agents.map((agent) => [agent.id, agent.status])).toEqual([["a03f", "done"], ["a04f", "done"]]);
+    expect([run!.total, run!.done]).toEqual([2, 2]);
+  });
+
+  it("na conversa da frota, com o registro final, só fala a tentativa que valeu", async () => {
+    const wf = await load();
+    const { root } = writeRun(RESUMED_JOURNAL, { status: "completed", workflowProgress: progressOf(["a03f", "a04f"]) });
+    const conversation = wf.parseFleetConversation(runProbe(wf.FLEET_CONVERSATION_PROBE_JS, [root]));
+    expect(conversation!.agents.map((agent) => [agent.id, agent.status])).toEqual([["a03f", "done"], ["a04f", "done"]]);
+    expect(conversation!.finished).toBe(true);
+  });
+
+  it.each([
+    ["sem registro final", undefined],
+    ["com o registro final listando todos", { status: "completed", workflowProgress: progressOf(["a01f", "a02f", "a03f"]) }],
+    ["com registro final sem a lista de agentes", { status: "completed" }],
+  ])("agentes paralelos com o mesmo rótulo continuam todos na frota (%s)", async (_case, snapshot) => {
+    const wf = await load();
+    const { runsDir, scripts } = writeRun(PARALLEL_JOURNAL, snapshot);
+    const [run] = wf.parseWorkflowProbe(runProbe(wf.WORKFLOW_PROBE_JS, [runsDir, scripts]));
+    expect(run!.agents.map((agent) => agent.id)).toEqual(["a01f", "a02f", "a03f"]);
+    expect([run!.total, run!.done]).toEqual([3, 2]);
+  });
+});
+
+describe("agente que falhou — o diário marca 'failed' e o snapshot do harness diz o motivo", () => {
+  const USAGE_LIMIT = "You've hit your session limit · resets 1:10am (UTC)";
+
+  function failedRunRoot(withSnapshot: boolean): { runsDir: string; scripts: string } {
+    const root = mkdtempSync(join(tmpdir(), "vibehub-wf-failed-"));
+    onTestFinished(() => rmSync(root, { recursive: true, force: true }));
+    const runsDir = join(root, "s1", "subagents", "workflows");
+    const scripts = join(root, "workflows", "scripts");
+    mkdirSync(join(runsDir, "wf_fail1"), { recursive: true });
+    mkdirSync(scripts, { recursive: true });
+    writeFileSync(join(runsDir, "wf_fail1", "journal.jsonl"), jsonl([
+      { type: "launched" },
+      { type: "started", agentId: "a01f", label: "revisão: tests", phase: "Revisão" },
+      { type: "result", agentId: "a01f", result: { findings: [] } },
+      { type: "started", agentId: "a02f", label: "juiz", phase: "Julgamento" },
+      { type: "failed", agentId: "a02f" },
+    ]));
+    if (withSnapshot) {
+      writeFileSync(join(root, "workflows", "wf_fail1.json"), JSON.stringify({
+        runId: "wf_fail1", status: "failed",
+        workflowProgress: [
+          { type: "workflow_phase", index: 1, title: "Revisão" },
+          { type: "workflow_agent", agentId: "a01f", label: "revisão: tests", state: "done" },
+          { type: "workflow_agent", agentId: "a02f", label: "juiz", state: "error", error: USAGE_LIMIT },
+        ],
+      }));
+    }
+    return { runsDir, scripts };
+  }
+
+  it("com a execução ainda aberta, o 'failed' do diário já para o agente: ele não responde mais", async () => {
+    const wf = await load();
+    const { runsDir, scripts } = failedRunRoot(false);
+    const [run] = wf.parseWorkflowProbe(runProbe(wf.WORKFLOW_PROBE_JS, [runsDir, scripts]));
+    expect(run!.agents.map((agent) => [agent.id, agent.status])).toEqual([["a01f", "done"], ["a02f", "stopped"]]);
+    expect(run!.agents[1]!.error).toBeUndefined();
+  });
+
+  it("com o snapshot, o agente que falhou leva o erro do harness; quem respondeu não leva erro", async () => {
+    const wf = await load();
+    const { runsDir, scripts } = failedRunRoot(true);
+    const [run] = wf.parseWorkflowProbe(runProbe(wf.WORKFLOW_PROBE_JS, [runsDir, scripts]));
+    expect(run!.outcome).toBe("failed");
+    expect(run!.agents.map((agent) => [agent.id, agent.status, agent.error])).toEqual([["a01f", "done", undefined], ["a02f", "stopped", USAGE_LIMIT]]);
+  });
+
+  it("erro no snapshot sem o 'failed' no diário também para o agente, com o motivo", async () => {
+    const wf = await load();
+    const { runsDir, scripts } = failedRunRoot(true);
+    const journal = join(runsDir, "wf_fail1", "journal.jsonl");
+    writeFileSync(journal, jsonl([
+      { type: "launched" },
+      { type: "started", agentId: "a01f", label: "revisão: tests", phase: "Revisão" },
+      { type: "result", agentId: "a01f", result: { findings: [] } },
+      { type: "started", agentId: "a02f", label: "juiz", phase: "Julgamento" },
+    ]));
+    const [run] = wf.parseWorkflowProbe(runProbe(wf.WORKFLOW_PROBE_JS, [runsDir, scripts]));
+    expect(run!.agents[1]).toMatchObject({ id: "a02f", status: "stopped", error: USAGE_LIMIT });
+  });
+
+  it("parseWorkflowProbe: erro só em quem parou, cortado no teto, e lixo vira ausente", async () => {
+    const wf = await load();
+    const [run] = wf.parseWorkflowProbe(probe([{
+      runId: "wf_a",
+      agents: [
+        AGENT({ id: "a1", status: "stopped", error: "x".repeat(5_000) }),
+        AGENT({ id: "a2", status: "done", result: "ok", error: "não vale em quem respondeu" }),
+        AGENT({ id: "a3", status: "stopped", error: 42 }),
+      ],
+    }]));
+    expect(run!.agents.map((agent) => agent.status)).toEqual(["stopped", "done", "stopped"]);
+    expect(run!.agents[0]!.error!.length).toBe(wf.AGENT_ERROR_MAX);
+    expect(run!.agents[1]!.error).toBeUndefined();
+    expect(run!.agents[2]!.error).toBeUndefined();
+  });
+});
+
 describe("conversa da frota — todos os agentes de uma vez, numa execução só", () => {
   const MODEL_ASSISTANT = (ts: number, model: string, blocks: unknown[]) => ({
     type: "assistant", timestamp: iso(ts), message: { role: "assistant", model, content: blocks },

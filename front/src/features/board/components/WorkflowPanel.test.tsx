@@ -300,6 +300,24 @@ describe("WorkflowPanel — rodada terminada com agente que nunca respondeu", ()
     expect(sent.length).toBe(asked);
   });
 
+  it("o agente que falhou mostra o motivo que o harness gravou, no lugar de 'interrompido'", () => {
+    const usageLimit = "You've hit your session limit · resets 1:10am (UTC)";
+    renderPanel(workflowRow({ finished: true, outcome: "failed", agents: [agent("a1", { status: "stopped", error: usageLimit })] }));
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+    expect(screen.getByTestId("workflow-agent-now")).toHaveTextContent(`falhou: ${usageLimit}`);
+    expect(screen.getByTestId("workflow-agent-now")).not.toHaveClass("truncate");
+  });
+
+  it("aberto, o agente que falhou mostra o motivo inteiro, não que a rodada acabou antes", () => {
+    const usageLimit = "You've hit your session limit · resets 1:10am (UTC)";
+    const { answer } = renderPanel(workflowRow({ finished: true, outcome: "failed", agents: [agent("a1", { status: "stopped", error: usageLimit })] }));
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+    fireEvent.click(screen.getByTestId("sdk-workflow-agent"));
+    answer("a1", []);
+    expect(screen.getByTestId("sdk-workflow-result")).toHaveTextContent(`falhou: ${usageLimit}`);
+    expect(screen.getByTestId("sdk-workflow-result")).not.toHaveTextContent("acabou antes");
+  });
+
   it("o tempo de uma rodada interrompida diz 'Interrompido após', não 'Concluído em'", () => {
     renderPanel(workflowRow({
       finished: true,
