@@ -1,104 +1,86 @@
 # AGENTS.md — Regras de desenvolvimento do vibehub
 
-> **Escopo:** regras obrigatórias para todo o repositório: backend (`back/`), frontend (`front/`), scripts plantados nos containers, testes e refatorações.
+> **O projeto:** IDE hospedada para agentes de código: um kanban de terminais Claude Code reais em containers no servidor do próprio usuário. **Público (MIT) e auto-hospedado**: cada instalação tem os próprios dados.
 >
-> **Objetivo:** produzir código correto, legível, simples, performático, seguro e fácil de manter — sem burocracia ou abstrações sem benefício.
+> **Escopo:** todo o repositório (`back/`, `front/`, scripts plantados nos containers, testes). **Cada regra vale pelo princípio, não pela lista de exemplos:** os arquivos citados são pontos de entrada, os contratos reais saem da inspeção do trecho (§12, passo 1), e o caso não citado segue o espírito da regra mais próxima ou vira pergunta (§12, "Como perguntar ao usuário").
 >
-> **O projeto:** IDE hospedada para agentes de código — um kanban de terminais Claude Code reais rodando em containers no servidor do próprio usuário. Backend Fastify, servidor MCP próprio (`back/src/mcp/`), persistência em JSON atômico (`back/src/store/`), runner Docker local ou via SSH (`back/src/runtime/host.ts`). Frontend React + Vite + React Query + Radix/Tailwind. Projeto **público (MIT) e auto-hospedado**: cada instalação tem os próprios dados, então contrato persistido não muda sem migração.
->
-> **Regra de aplicação:** as regras gerais são **independentes do domínio** e não presumem entidades, telas ou fluxos de um módulo. As referências a arquivos do vibehub são exemplos e pontos de entrada; os contratos reais saem da inspeção do trecho modificado (§12, passo 1). **Cada regra vale pelo princípio, não pela lista de exemplos:** caso não citado se resolve pelo espírito da regra mais próxima, e na dúvida se pergunta (§12, "Como perguntar ao usuário").
->
-> **Fonte única:** este arquivo é a fonte das regras de código, de nomes e pastas, de teste, de commit e de PR. Regra nova entra aqui, em nenhum outro arquivo. O `.claude/CLAUDE.md` importa este arquivo e diz como o Claude Code executa estas regras (ordem das etapas, skills, subagentes, entrega); onde cada coisa vive está na §15.
->
-> **O modelo é este arquivo, não o código vizinho.** Boa parte do código existente é anterior a estas regras (comentários, `let`, nomes abreviados, áreas misturadas em `front/src/features/board/`). Código novo segue estas regras mesmo quando o arquivo ao lado faz diferente.
+> **O modelo é este arquivo, não o código vizinho.** Boa parte do código existente, testes incluídos, é anterior a estas regras (comentários, `let`, nomes abreviados, áreas misturadas em `front/src/features/board/`). Código novo segue estas regras mesmo quando o arquivo ao lado faz diferente.
 
 ## 1. Regras inegociáveis
 
-1. **Simples, bem feito:** escolha a solução com menos conceitos e indireções que preserve todas as garantias necessárias. Menos linhas, por si só, não significa mais simplicidade.
-2. **Sem voltas:** não crie wrappers que apenas repassam chamadas, múltiplas camadas sem responsabilidade, factories artificiais ou generalizações para um futuro hipotético.
-3. **Código em inglês, interface pelo i18n:** identificadores em inglês, o idioma do repositório público; texto visível ao usuário sempre pelo i18n, nos dois idiomas; commits, PRs e documentação de processo em pt-BR (§2).
-4. **Só `const` nas linhas que o PR escreve:** `let` só para estado vivo, nas exceções fechadas da §3. Nunca `var`.
-5. **Sem código morto:** remover branches inúteis, imports não usados, dados que não são lidos e funcionalidades sem consumidor — depois de verificar referências.
-6. **Código que se explica sozinho:** o porquê de uma decisão vai para a **mensagem do commit** e para o **PR** (§14), não para o arquivo. Comentário só nas exceções fechadas da §3.
-7. **Contratos explícitos:** um significado deve ter uma representação canônica. Não criar variantes de campos, formatos ou comportamentos silenciosamente compatíveis.
-8. **Falhe de forma visível:** não mascarar violação de contrato com fallbacks, retornos vazios ou tratamento que aparenta sucesso.
-9. **Segurança na origem:** validar entrada e autorizar operações nas fronteiras. Tudo que chega a um shell é validado na fronteira e citado depois; segredo viaja por stdin, nunca por argv (§10).
-10. **Performance é requisito, não polimento:** cada `docker exec`, leitura de estado, evento de websocket e render custa num runner que vários cards dividem. Faça o menor trabalho real que cobre o caso (§8), sem cache ou memoização por reflexo.
-11. **Mudança completa, escopo controlado:** corrigir todos os consumidores afetados sem reescrever partes alheias à tarefa.
-12. **Verificação real:** nunca declarar que testes, build, revisão ou deploy passaram sem executá-los e observar o resultado.
+1. **Simples, bem feito:** menos conceitos e indireções, todas as garantias preservadas; menos linhas não é o critério (§4, §13).
+2. **Sem voltas:** nada de wrapper que só repassa, camada sem responsabilidade, factory artificial ou generalização para o futuro (§4).
+3. **Código em inglês, interface pelo i18n** (§2).
+4. **Só `const` nas linhas que o PR escreve**; `let` só para estado vivo; nunca `var` (§3).
+5. **Sem código morto:** branch inútil, import não usado, dado não lido e funcionalidade sem consumidor saem, depois de verificar referências; nada se cria sem consumidor.
+6. **Código que se explica sozinho:** o porquê vai para o commit e o PR (§3).
+7. **Contratos explícitos:** um significado, uma representação canônica (§6).
+8. **Falhe de forma visível:** violação de contrato nunca vira fallback ou sucesso aparente (§9).
+9. **Segurança na origem:** validar e autorizar nas fronteiras (§10).
+10. **Performance é requisito:** o menor trabalho real que cobre o caso (§8).
+11. **Mudança completa, escopo controlado:** todo consumidor afetado corrigido, nada alheio reescrito (§12).
+12. **Verificação real:** teste, build, revisão ou deploy só se dizem passados depois de executados e observados.
 
-**Ordem de prioridade em conflitos:** segurança e integridade dos dados → correção e contratos → simplicidade e clareza → performance → estilo. Uma regra de estilo não justifica comportamento incorreto ou risco. Performance abaixo de clareza quer dizer: entre duas soluções igualmente rápidas, a mais clara; nunca que trabalho desperdiçado é aceitável por ser "mais legível".
+**Ordem de prioridade em conflitos:** segurança e integridade dos dados → correção e contratos → simplicidade e clareza → performance → estilo. Performance abaixo de clareza quer dizer: entre duas soluções igualmente rápidas, a mais clara; nunca trabalho desperdiçado aceito por ser "mais legível".
 
 ## 2. Idioma e nomenclatura
 
-- **Código em inglês:** variáveis, funções, tipos, componentes e campos persistidos seguem o padrão do repositório, que é público. Não misturar identificadores em português num arquivo em inglês. A descrição de `describe`/`it` é texto, não identificador: segue o idioma do arquivo de teste (a maior parte da suíte usa pt-BR).
-- **Texto de interface sempre pelo i18n** (`front/src/i18n/en.ts` e `pt-BR.ts`). Toda chave nova entra nos dois arquivos; nunca string literal visível no JSX.
+- **Identificadores em inglês** (variáveis, funções, tipos, componentes, campos persistidos), sem português misturado. O texto de `describe`/`it` segue o idioma do arquivo de teste (a maioria, pt-BR).
+- **Texto de interface sempre pelo i18n** (`front/src/i18n/en.ts` e `pt-BR.ts`): chave nova entra nos dois; o JSX não leva string literal visível.
 - **Commits, PRs e documentação de processo (`docs/`, este arquivo) em pt-BR.**
-- Não traduzir nem renomear sintaxe ou APIs de terceiros (SDK do Claude, Fastify, React, Docker): permanecem como a especificação deles define.
-- Não renomear contratos persistidos (`board.json` e afins), rotas HTTP, ferramentas MCP ou variáveis de ambiente só por estética. Isso é mudança de contrato (§6).
-- Funções usam **verbo preciso + objeto** (`assertMovableColumn`, `normalizeCardIds`). Variáveis descrevem conteúdo e função. Evitar `data`, `tmp`, `result`, `x` e abreviações opacas.
-- **Todo nome se lê sem abrir a implementação**, inclusive parâmetro de callback e variável de laço (`row`, não `r`). Uma coisa tem um nome só no mesmo escopo.
-- Não usar verbos genéricos como `process`, `handle`, `manage`, `resolve` quando houver ação mais precisa.
-- Referências nomeiam a entidade apontada (`cardId`, `accountSlug`, não `id` solto quando há mais de um); nomes de variantes deixam claras as duas diferenças (`originalValue` e `convertedValue`, não `value` e `convertedValue`).
-- Antes de batizar um conceito novo, `grep` do termo no repo: se ele já nomeia outra coisa, escolha outro.
-- Convenções: `camelCase` para funções/variáveis, `PascalCase` para componentes/classes/tipos, `UPPER_SNAKE_CASE` para constantes realmente estáticas (`EXEC_TIMEOUT_MS`); hooks começam com `use`.
-- **Nome de arquivo segue a mesma convenção, inclusive em teste:** `camelCase.ts`, ou `PascalCase.tsx` quando o arquivo exporta um componente; o teste é o nome do arquivo testado mais `.test` (`sdkChat.test.ts`, `SdkChatView.test.tsx`), com sufixo de cenário quando um arquivo tem várias suítes (`cardSdk.lifecycle.test.ts`). Arquivo novo já nasce no padrão; arquivo antigo fora do padrão só é renomeado com pedido, porque o rename arrasta imports.
-- Se uma cadeia de `filter`/`map`/`sort` esconder regra importante, nomear as etapas intermediárias.
-- Em código legado tocado, o nome ruim no trecho que o PR altera sai corrigido no mesmo passo; o padrão do vizinho não é autoridade. Se o rename repercute em contrato ou em muitos consumidores, é mudança de contrato, não ajuste cosmético.
+- Sintaxe e APIs de terceiros (SDK do Claude, Fastify, React, Docker) ficam como a especificação deles define. Contrato persistido (`board.json` e afins), rota HTTP, ferramenta MCP e variável de ambiente só se renomeiam como mudança de contrato (§6), nunca por estética.
+- Função: **verbo preciso + objeto** (`assertMovableColumn`, `normalizeCardIds`), não `process`, `handle`, `manage`, `resolve` havendo ação mais precisa. Variável diz conteúdo e função, sem `data`, `tmp`, `result`, `x` ou abreviação opaca. **Todo nome se lê sem abrir a implementação**, inclusive parâmetro de callback e variável de laço (`row`, não `r`); uma coisa, um nome no mesmo escopo.
+- Referência nomeia a entidade (`cardId`, `accountSlug`, não `id` solto quando há mais de um); variantes deixam claras as duas diferenças (`originalValue` e `convertedValue`, não `value` e `convertedValue`).
+- Conceito novo: `grep` do termo no repo antes; se ele já nomeia outra coisa, escolha outro.
+- `camelCase` para funções/variáveis, `PascalCase` para componentes/classes/tipos, `UPPER_SNAKE_CASE` para constantes realmente estáticas (`EXEC_TIMEOUT_MS`); hooks começam com `use`. **Arquivo, inclusive de teste, segue a mesma convenção:** `camelCase.ts`, ou `PascalCase.tsx` quando exporta componente; o teste é o nome do testado mais `.test` (`sdkChat.test.ts`, `SdkChatView.test.tsx`), com sufixo de cenário quando há várias suítes (`cardSdk.lifecycle.test.ts`). Arquivo antigo fora do padrão só se renomeia com pedido (o rename arrasta imports).
+- Cadeia de `filter`/`map`/`sort` que esconde regra importante ganha etapas intermediárias com nome.
+- Em código legado, o nome ruim no trecho que o PR altera sai corrigido no mesmo passo; rename que repercute em contrato ou em muitos consumidores é mudança de contrato.
 
 ## 3. Estilo e qualidade de código
 
-- Preferir funções coesas com entrada, saída e responsabilidade claras. Não impor limite mecânico de linhas.
-- Usar retornos antecipados para reduzir aninhamento quando melhorar a leitura. Não comprimir regras complexas em ternários encadeados.
-- Não duplicar **regra de negócio** ou fonte de verdade. Repetição pequena e local pode ser melhor que uma abstração genérica sem significado.
-- Importações estáticas no topo. Import dinâmico só por carregamento sob demanda (dependência pesada fora do caminho inicial), dependência circular real ou outra restrição técnica fundamentada.
-- Usar `async` quando houver execução assíncrona ou obrigação de retornar `Promise`; não tornar uma função assíncrona por costume.
-- Não criar `try/catch` que só captura e relança o mesmo erro sem acrescentar informação ou comportamento.
-- Não engolir erros (a §9 traz a única exceção, o melhor esforço, e diz quando o `catch` de uma tarefa de fundo não conta como engolir), não retornar sucesso falso e não adicionar `setTimeout`/retries para esconder uma falha de fluxo.
-- Não criar flags, estados, campos ou leituras que ninguém consome.
-- Efeito colateral é explícito: função que grava, apaga ou muda estado diz isso no nome (`save`, `delete`, `set`…); um `get`/`read`/`parse` não grava nada.
-- **Cálculo e efeito em etapas separadas:** o que calcula (incluindo callbacks de `filter`/`map`/`find`) só devolve valor; o que envia, grava ou notifica vem depois, em passo próprio.
-- Reaproveitar utilitários e dependências **realmente existentes** antes de escrever abstrações novas ou instalar bibliotecas.
-- Respeitar o formatter e a organização do repositório. Não reformatar arquivos inteiros que não participam da tarefa.
+- Funções coesas, com entrada, saída e responsabilidade claras, sem limite mecânico de linhas. Retorno antecipado quando reduz aninhamento; regra complexa não vira ternário encadeado.
+- **Regra de negócio e fonte de verdade não se duplicam**; repetição pequena e local pode ser melhor que abstração genérica sem significado.
+- Imports estáticos no topo; dinâmico só por carregamento sob demanda (dependência pesada fora do caminho inicial), dependência circular real ou outra restrição técnica fundamentada.
+- `async` só com execução assíncrona ou obrigação de retornar `Promise`. `try/catch` só quando acrescenta informação ou comportamento, nunca para relançar o mesmo erro.
+- **Efeito colateral é explícito:** quem grava, apaga ou muda estado diz isso no nome (`save`, `delete`, `set`…); `get`/`read`/`parse` não grava.
+- **Cálculo e efeito em etapas separadas:** o que calcula (inclusive callback de `filter`/`map`/`find`) só devolve valor; o que envia, grava ou notifica vem depois, em passo próprio.
+- Utilitários e dependências **realmente existentes** antes de abstração nova ou biblioteca instalada.
+- Formatter e organização do repositório respeitados; arquivo fora da tarefa não é reformatado.
 
 ### `const` e estado vivo
 
 - **Toda declaração que o PR escreve é `const`**, inclusive em teste. Valor que muda vira nova constante com nome próprio, função ou `reduce`; `beforeEach` que reatribui um `let` vira helper chamado em cada teste (`const card = createCard()`).
-- **Exceção fechada — estado vivo:** variável de módulo ou de closure que acompanha a vida de um processo, sessão ou stream e é reatribuída por eventos (a query corrente do driver, o dono das tarefas em segundo plano, um contador de tentativas). Prefira juntar esse estado num objeto `const` com campos; quando isso piora a leitura, o `let` fica com `// eslint-disable-next-line no-restricted-syntax -- <motivo>` e o PR diz por quê.
-- `let` que já existe fora do diff fica como está; não se varre o repositório atrás dele.
+- **Exceção fechada — estado vivo:** variável de módulo ou de closure que acompanha a vida de um processo, sessão ou stream e é reatribuída por eventos (a query corrente do driver, o dono das tarefas em segundo plano, um contador de tentativas). Prefira um objeto `const` com campos; se isso piora a leitura, o `let` leva `// eslint-disable-next-line no-restricted-syntax -- <motivo>` e o PR diz por quê.
+- `let` existente fora do diff fica como está.
 
 ### Comentários
 
-**O código se explica pelo nome e pela estrutura.** Se um trecho precisa de explicação, renomeie a função ou a variável, extraia a etapa com nome de domínio (§2), troque o número solto por constante nomeada. No teste, a documentação é o nome do `describe`/`it`.
+**O código se explica pelo nome e pela estrutura:** renomeie, extraia a etapa com nome de domínio, troque o número solto por constante nomeada; no teste, pelo nome do `describe`/`it`. **O porquê** (a decisão, a alternativa descartada, o bug que motivou a linha) vai para **a mensagem do commit** do trecho, que o `git blame` acha mesmo sem o PR, e para **o PR** (§14), lido junto com o diff.
 
-- **Para onde vai o porquê** que o comentário diria (a decisão, a alternativa descartada, o bug que motivou a linha):
-  - **a mensagem do commit** que introduz o trecho: quem lê a linha depois chega a ela pelo `git blame`/`git log`, mesmo sem abrir o PR;
-  - **o PR** (§14), onde o revisor o lê junto com o diff.
-- **Invariante que o código não deixa óbvia** (ordem obrigatória, atomicidade, corrida entre cards, cicatriz de bug em produção) ganha um **teste cujo nome diz a regra**. Quem "simplificar" o trecho quebra o teste e lê o porquê no nome dele.
-- **Únicas exceções**, em uma linha, só quando o código não tem como dizer aquilo, e abrindo com o marcador da exceção (o lint do recorte, §12, reprova comentário novo sem ele):
+- **Invariante que o código não deixa óbvia** (ordem obrigatória, atomicidade, corrida entre cards, cicatriz de bug em produção) ganha um **teste cujo nome diz a regra**: quem "simplificar" o trecho quebra o teste e lê o porquê no nome.
+- **Únicas exceções**, em uma linha, só quando o código não tem como dizer aquilo, abrindo com o marcador (o lint do recorte reprova comentário novo sem ele):
   - `// external: <regra e referência>`: **regra externa**, com a referência da docs ou da versão do fornecedor (SDK/CLI do Claude, Docker, GitHub; §6);
   - `// limitation: <motivo>`: **limitação técnica** que nenhum nome expressa: bug conhecido de biblioteca, navegador, shell ou ambiente de teste; dependência circular que obriga o import dentro da função;
   - `// legacy-name: <o que guarda>`: **nome legado que não pode mudar** (campo persistido ou contrato externo, §2 e §6): o que ele guarda e por que não foi renomeado;
   - **diretiva de ferramenta**, sem marcador e sempre com o motivo: `// eslint-disable-next-line <regra> -- <motivo>`, `// @ts-expect-error <motivo>`.
-- **A regra vale para as linhas que o PR acrescenta ou altera.** Comentário antigo fora do diff fica — muitos guardam a história de bugs de produção e continuam valendo. Comentário antigo que a mudança torna **falso** sai no mesmo PR: é removido, com o porquê no commit, ou, quando é uma das exceções abaixo, reescrito com o marcador dela. A linha reescrita é linha nova para o lint do recorte, que não distingue correção de comentário novo.
-- **Em linha nova, o que não entra:** narração do que a linha faz, a versão anterior ("antes era…"), nome de pessoa ou de instalação, JSDoc que só repete o nome (tipo em JSDoc num arquivo JS, `.mjs`, `.cjs`, `.js` ou `.jsx`, é tipo, não comentário), código comentado, bloco de cabeçalho novo explicando o arquivo.
+- **Vale para as linhas que o PR acrescenta ou altera.** Comentário antigo fora do diff fica (muitos guardam a história de bugs de produção). O que a mudança torna **falso** sai no mesmo PR: removido, com o porquê no commit, ou, se é uma das exceções acima, reescrito com o marcador dela (para o lint, a linha reescrita é nova).
+- **Em linha nova, não entram:** narração do que a linha faz, a versão anterior ("antes era…"), nome de pessoa ou de instalação, JSDoc que só repete o nome (`/** Finds the card by id */ findCardById(id)`; tipo em JSDoc num `.mjs`, `.cjs`, `.js` ou `.jsx` é tipo, não comentário), código comentado, cabeçalho novo explicando o arquivo.
 
 | Em vez de | Escreva |
 |-----------|---------|
 | `// only live cards` em cima de um `filter` | `const liveCards = cards.filter(...)` |
 | Comentário explicando a regra de um `if` | Condição com nome (`const canReopenCli = ...`) e o porquê no commit e no PR |
-| `/** Finds the card by id */ findCardById(id)` | Só a função: o nome já diz |
 | Comentário contando o bug que a linha evita | Teste com o nome da regra (`"o login novo vale mesmo com tarefa em segundo plano viva"`) e a história no commit |
 
 ## 4. SOLID, coesão e abstrações
 
-**Todo código segue SOLID e é o mais simples possível. Simples NÃO é incompleto; abstrato NÃO é robusto.**
+**Simples não é incompleto; abstrato não é robusto.**
 
-- **Simples** = o menor número de conceitos, arquivos e indireções que cobre o problema **inteiro**: todos os casos, erros, autorização, consumidores e testes. Cortar caso, validação, teste ou consumidor para "simplificar" é entrega incompleta.
-- **Abstração sem necessidade é proibida.** Não criar camada, classe, factory, registry, estratégia, mapa paralelo, helper genérico, parâmetro de configuração ou arquivo "para o futuro" ou "por padrão arquitetural". SOLID orienta **como dividir responsabilidades reais**; ele não pede abstração nova.
-- **Uma regra, um lugar.** Se o mesmo fato pode ser declarado em dois lugares, o desenho está errado: deixe um só e apague o outro, em vez de criar uma camada que concilia os dois.
-- **Cada arquivo no seu lugar.** A pasta diz o que o arquivo **é**; o nome diz o que ele **faz** (mapa do front na §5, do back abaixo). O teste mora **ao lado do código que ele testa**. Apagou, moveu ou renomeou um arquivo? Testes, tipos e irmãos mudam junto: `grep` dos imports antigos e confira cada um que sobrou.
-- Testes quase iguais espalhados (um por caso, mudando só os dados) viram **um** teste parametrizado (`describe.each`/`it.each`) no arquivo do assunto.
+- **Simples** = o menor número de conceitos, arquivos e indireções que cobre o problema **inteiro**: casos, erros, autorização, consumidores e testes. Cortar algum deles para "simplificar" é entrega incompleta.
+- **Abstração só com necessidade real, hoje.** Camada, classe, factory, registry, estratégia, mapa paralelo, helper genérico, parâmetro de configuração ou arquivo entra quando protege uma fronteira, uma invariante ou uma duplicação relevante, ou quando há mais de um comportamento real; "para o futuro" e "por padrão arquitetural" não contam. **Teste mental:** "se eu escrever isto direto, onde é usado, o que fica pior **hoje**?" "Nada" ou "talvez um dia": escreva direto. Camada que só encaminha argumentos, sem decisão, transformação ou proteção de fronteira, sai quando seguro.
+- **Uma regra, um lugar.** Fato declarável em dois lugares é desenho errado: deixe um só, em vez de uma camada que concilia os dois.
+- **Cada arquivo no seu lugar:** a pasta diz o que ele **é**, o nome diz o que ele **faz** (mapa do back abaixo, do front na §5), e o teste mora **ao lado do código que testa**. Arquivo apagado, movido ou renomeado leva junto testes, tipos e irmãos: `grep` dos imports antigos e confira cada um que sobrou.
+- Testes quase iguais (um por caso, mudando só os dados) viram **um** teste parametrizado (`describe.each`/`it.each`) no arquivo do assunto.
 
 | Pasta (back) | Guarda | Não guarda |
 |--------------|--------|------------|
@@ -113,56 +95,45 @@
 | `back/src/utils/` | Operações técnicas e infraestrutura compartilhadas (logger, guardas do processo), sem regra de domínio (§4, "Utilitário × regra de negócio") | Regra de uma área; código que lê o store ou chama o host |
 | `back/src/testkit/` | Infra de teste compartilhada | Testes |
 
-- **Teste mental, antes de criar qualquer abstração:** "se eu escrever isto direto, no lugar onde é usado, o que fica pior **hoje**?" Se a resposta é "nada" ou "talvez um dia", escreva direto.
-- **Teste mental, antes de entregar:** "um dev que nunca viu o módulo entende o fluxo lendo de cima para baixo, sem pular entre arquivos para descobrir o que um nome genérico faz?" Se não entende, simplifique; não documente a complexidade.
+**SOLID orienta como dividir responsabilidades reais**, sem pedir classe ou abstração nova: **S** — funções, componentes, hooks e serviços agrupam o que muda pelo mesmo motivo; **O** — variante real não exige espalhar mudanças; **L** — implementações do mesmo contrato preservam semântica, erros e invariantes (o host executor `local` e o `ssh`); **I** — tipos e interfaces coesos, de necessidades concretas; **D** — dependência externa ou instável (Docker, SSH, GitHub, SDK do Claude) isolada quando isso traz testabilidade ou proteção de fronteira.
 
-Aplicar SOLID como **princípios de desenho**, não como obrigação de criar classes:
-
-- **S — Responsabilidade única:** funções, componentes, hooks e serviços agrupam o que muda pelo mesmo motivo.
-- **O — Aberto/fechado:** variantes reais não devem exigir espalhar mudanças; não criar estratégias ou registries para um caso hipotético.
-- **L — Substituição:** implementações do mesmo contrato preservam semântica, erros e invariantes (ex.: o host executor `local` e `ssh` têm o mesmo contrato).
-- **I — Segregação:** tipos e interfaces coesos, representando necessidades concretas.
-- **D — Inversão de dependência:** isolar dependências externas ou instáveis (Docker, SSH, GitHub, SDK do Claude) quando isso trouxer testabilidade ou proteção de fronteira.
-
-**Antes de criar uma abstração, responder:** que responsabilidade ela protege? O que pioraria se fosse removida? Existe mais de um comportamento real? Protege uma fronteira, uma invariante ou uma duplicação relevante? Uma camada que apenas encaminha argumentos sem decisão, transformação ou proteção de fronteira deve ser eliminada quando seguro. Entre duas opções igualmente corretas, preferir a que exige menos conceitos.
+**Teste mental, antes de entregar:** "um dev que nunca viu o módulo entende o fluxo lendo de cima para baixo, sem pular entre arquivos para descobrir o que um nome genérico faz?" Se não, simplifique, em vez de documentar a complexidade.
 
 ### Áreas: um nome nos dois pacotes
 
-**A área de um código é a pasta de `back/src/services/<área>/` que o atende, e o front dela mora em `front/src/features/<área>/`, com o mesmo nome.** `ls back/src/services` lista as áreas; as duas do front sem service com o mesmo nome são `auth` (no back, `back/src/auth/`) e `setup` (o assistente da primeira instalação).
+**A área de um código é a pasta de `back/src/services/<área>/` que o atende; o front dela mora em `front/src/features/<área>/`, com o mesmo nome.** As duas do front sem service homônimo são `auth` (no back, `back/src/auth/`) e `setup` (o assistente da primeira instalação).
 
-- **Arquivo novo nasce na pasta da área dele.** A pasta do front ainda não existe? Ela é criada no mesmo PR, com `components/`, `lib/` e `types/` conforme a §5.
-- **`front/src/features/board/` guarda só o board:** colunas, card, projeto, seleção e deck. O resto que está nela (revisão e análise de PR, contas e uso, chat do SDK e medidor de contexto, cérebro, plugins, MCP, preview) é **legado à espera de mudança de pasta**, não exemplo. Os nomes dizem a área: `front/.../board/lib/usage.ts` corresponde a `back/src/services/accounts/usage.ts`, `contextUsage.ts` a `sdk/`, `analysisConversation.ts` a `review/`.
-- **Mexeu num arquivo legado de outra área:** a mudança fica nele (a mudança de pasta é um PR próprio, só de `git mv` e imports, com pedido, §12.6); o arquivo **novo** que essa mudança cria vai para a pasta da área, importando o legado de onde ele está.
-- **Teste mental, antes de criar o arquivo:** "qual pasta de `back/src/services/` atende isto?" O nome dela é a pasta do front. Código do front sem service no back (tema, websocket) é técnico e vai para `front/src/lib/` (§4, "Utilitário × regra de negócio").
+- **Arquivo novo nasce na pasta da área dele**; a pasta do front que ainda não existe nasce no mesmo PR, com `components/`, `lib/` e `types/` (§5). **Teste mental:** "qual pasta de `back/src/services/` atende isto?" O nome dela é a pasta do front. Código do front sem service no back (tema, websocket) é técnico e vai para `front/src/lib/`.
+- **`front/src/features/board/` guarda só o board:** colunas, card, projeto, seleção e deck. O resto nela (revisão e análise de PR, contas e uso, chat do SDK e medidor de contexto, cérebro, plugins, MCP, preview) é **legado à espera de mudança de pasta**, não exemplo; o nome diz a área (`board/lib/usage.ts` é de `accounts/`, `contextUsage.ts` de `sdk/`, `analysisConversation.ts` de `review/`).
+- **Mexeu num arquivo legado de outra área:** a mudança fica nele (mudar de pasta é PR próprio, só de `git mv` e imports, com pedido, §12.6); o arquivo **novo** que ela cria vai para a pasta da área, importando o legado de onde está.
 
 ### Utilitário × regra de negócio
 
-**A pasta compartilhada guarda o técnico; quem decide é a camada de regra da área** (o service no backend; o hook ou a função de `features/<área>/lib/` no frontend). Vale para `back/src/utils/` e `front/src/lib/`. Elas guardam operações técnicas (texto, data, lista, stream, conversão de formato) e infraestrutura que toda área usa (logger, guardas do processo, cliente HTTP, websocket, tema, hooks genéricos como `useNow`). Infraestrutura pode ter efeito colateral; o que as duas pastas não guardam é **regra de domínio**.
+**`back/src/utils/` e `front/src/lib/` guardam o técnico; quem decide é a camada de regra da área** (o service no back; o hook ou a função de `features/<área>/lib/` no front). Técnico são operações (texto, data, lista, stream, conversão de formato) e infraestrutura de toda área (logger, guardas do processo, cliente HTTP, websocket, tema, hooks genéricos como `useNow`), que pode ter efeito colateral.
 
-- **Não conhece o domínio.** Não conhece card, conta, sessão, review nem permissão, e não decide se uma operação pode acontecer. Pode usar biblioteca, outro util, a configuração e o i18n; ler o relógio vale quando a operação é sobre o instante atual.
-- **Entrada impossível não é regra de negócio.** A função pode recusar a entrada tecnicamente impossível para a operação dela (texto ausente numa função de texto); "este card pode ser movido" é regra e mora na camada de regra.
-- **A dependência vai só da área para a pasta compartilhada.** Nada em `utils/` ou `lib/` importa service, store, componente ou hook de uma área; quando chamar, com qual dado e o que fazer com o resultado fica na camada de regra.
-- **Ser reutilizável não faz da função um util.** Função que duas áreas usam e que carrega regra continua sendo regra e mora na área dona; quando nenhuma área é dona, onde criar o lugar comum é decisão do usuário (§12). Montar a URL, o comando ou a mensagem no formato de um terceiro (GitHub, Docker, CLI do Claude) é integração: mora no client ou no service da integração.
-- **Teste mental:** "esta função pode ser copiada para outro repositório levando só bibliotecas, outros utils, configuração e i18n, sem nenhuma regra deste?" Se não pode, ela não é util.
-- **Regra de domínio dentro de `utils/` ou `lib/` que o PR toca** é movida para a área dona no mesmo PR, junto com os imports, ou vira pendência deliberada no PR com o motivo.
+- **Não conhece o domínio** (card, conta, sessão, review, permissão) nem decide se uma operação pode acontecer. Usa biblioteca, outro util, configuração e i18n; lê o relógio quando a operação é sobre o instante atual. Pode recusar entrada tecnicamente impossível (texto ausente numa função de texto); "este card pode ser movido" é regra.
+- **A dependência vai só da área para a pasta compartilhada:** `utils/` e `lib/` não importam service, store, componente ou hook de área; quando chamar, com qual dado e o que fazer com o resultado fica na camada de regra.
+- **Ser reutilizável não faz da função um util:** função com regra que duas áreas usam mora na área dona; sem dona, onde criar o lugar comum é decisão do usuário (§12). Montar URL, comando ou mensagem no formato de um terceiro (GitHub, Docker, CLI do Claude) é integração: mora no client ou service dela.
+- **Teste mental:** "esta função pode ser copiada para outro repositório levando só bibliotecas, outros utils, configuração e i18n?" Se não, não é util.
+- **Regra de domínio em `utils/` ou `lib/` que o PR toca** vai para a área dona no mesmo PR, com os imports, ou vira pendência deliberada com o motivo.
 
 ## 5. Frontend, React e TypeScript
 
-1. **Código novo usa export nomeado**, a maioria do repositório. `export default` só onde um formato de terceiro o exige (a story do Storybook, no formato CSF); os `export default` existentes não são convertidos de carona (§12.6).
-2. **Componente focado em renderização e composição.** Regra de domínio vira função pura em `features/<área>/lib/*.ts`, com teste ao lado; orquestração com estado vira hook `use*.ts`; chamada HTTP fica no `api.ts` da feature.
-3. **Não criar hook artificial:** estado visual simples ou handler sem regra pode ficar no componente.
-4. **Contratos HTTP tipados num lugar só** (`front/src/api/types.ts`), espelhando o backend. Tipos locais de uma feature ficam fora do componente (`features/<área>/types/`).
-5. Evitar `any`, casts sem fundamento, estados impossíveis e interfaces redundantes.
-6. Não usar `useMemo`, `useCallback` ou `React.memo` indiscriminadamente — só com cálculo custoso, identidade referencial relevante ou benefício demonstrável (§8).
-7. Não suprimir regras de hooks nem remover dependências de efeitos para esconder renderizações. Corrigir o fluxo.
-8. **Efeito e estado com papel único:** cada efeito sincroniza uma coisa; estado criado só para disparar outro código indica fluxo errado.
-9. Evitar lógica de negócio e transformação complexa dentro do JSX.
-10. Derivar valores da fonte em vez de manter estados sincronizados para o mesmo fato. Dado do servidor mora no React Query, não copiado em `useState`.
-11. Reutilizar as primitivas de `components/ui` (Radix + Tailwind) antes de criar versões novas.
-12. Tratar carregamento, vazio, erro, sucesso e envio duplicado quando pertinentes.
-13. Não disparar requisições em renderização nem por efeito descontrolado.
+1. **Export nomeado** em código novo; `export default` só onde um formato de terceiro exige (a story do Storybook, CSF), e os existentes não se convertem de carona (§12.6).
+2. **Componente renderiza e compõe:** regra de domínio é função pura em `features/<área>/lib/*.ts`, com teste ao lado; orquestração com estado, hook `use*.ts`; chamada HTTP, o `api.ts` da feature.
+3. Estado visual simples e handler sem regra ficam no componente, sem hook artificial.
+4. **Contratos HTTP tipados só em `front/src/api/types.ts`**, espelhando o backend; tipo local de feature em `features/<área>/types/`, fora do componente.
+5. Sem `any`, cast sem fundamento, estado impossível ou interface redundante.
+6. `useMemo`, `useCallback` e `React.memo` só com cálculo custoso, identidade referencial relevante ou benefício demonstrável (§8).
+7. Renderização a mais se resolve no fluxo, nunca suprimindo regra de hooks ou tirando dependência de efeito.
+8. **Efeito e estado com papel único:** cada efeito sincroniza uma coisa; estado criado só para disparar outro código é fluxo errado.
+9. Lógica de negócio e transformação complexa fora do JSX.
+10. Valor derivado sai da fonte, sem estados sincronizados para o mesmo fato; dado do servidor fica no React Query, não copiado em `useState`.
+11. Primitivas de `components/ui` (Radix + Tailwind) antes de versão nova.
+12. Carregamento, vazio, erro, sucesso e envio duplicado tratados quando pertinentes.
+13. Requisição sai de ação ou de efeito controlado, nunca da renderização.
 14. Esconder ação na UI é experiência; quem autoriza é o backend.
-15. **Toda mudança de layout passa por revisão de UI/UX com a tela renderizada**, inclusive um bloco novo dentro de uma tela que já existe. Antes de entregar, o agente vê a tela rodando (o app ou uma história do Storybook, na largura real em que ela aparece) e confere: a hierarquia diz o que importa primeiro, o novo segue o visual dos vizinhos (cores, tamanhos, espaçamentos e as primitivas de `components/ui`), nenhum texto some ou é cortado na horizontal (texto longo quebra a linha; contêiner com rolagem rola só na vertical), e os estados de vazio, carregando, erro e muitos itens continuam legíveis. O print vai no PR (§14, item 8); o que não ficou bom é corrigido antes, não registrado como pendência.
+15. **Toda mudança de layout passa por revisão de UI/UX com a tela renderizada**, inclusive bloco novo numa tela existente. Antes de entregar, veja a tela rodando (o app ou uma história do Storybook, na largura real) e confira: a hierarquia diz o que importa primeiro; o novo segue o visual dos vizinhos (cores, tamanhos, espaçamentos, primitivas de `components/ui`); texto longo quebra a linha, sem sumir nem cortar na horizontal, e rolagem só na vertical; vazio, carregando, erro e muitos itens continuam legíveis. O print vai no PR (§14, item 8); o que não ficou bom se corrige antes, não vira pendência.
 
 | Pasta (front) | Guarda | Não guarda |
 |---------------|--------|------------|
@@ -175,150 +146,141 @@ Aplicar SOLID como **princípios de desenho**, não como obrigação de criar cl
 | `front/src/types/` | Declarações de módulos de terceiros (`*.d.ts`) | Tipos de domínio |
 | `front/src/test/` | Setup do Vitest e o helper `renderApp` | Testes de feature |
 
-Código de uma área só mora dentro dela, na pasta com o nome da área (§4, "Áreas: um nome nos dois pacotes"). O código técnico sobe para a pasta compartilhada quando uma segunda área passa a usá-lo; a regra de domínio fica na área dona (§4, "Utilitário × regra de negócio").
+O código técnico sobe para a pasta compartilhada quando uma segunda área passa a usá-lo; a regra de domínio fica na área dona (§4).
 
 ## 6. Contratos, schemas e integrações
 
-- Antes de mudar um campo, tipo, payload, rota, ferramenta MCP, evento de websocket ou função consumida por outros arquivos, localizar **todos os consumidores** — inclusive o front, o runner e os scripts plantados nos containers.
-- **Uma informação, um nome canônico.** Não manter formatos paralelos "por segurança".
-- Contrato **interno** mudou: atualizar todos os consumidores na mesma alteração, sem `newField ?? oldField` nem shims automáticos.
-- **Dado persistido é contrato externo:** cada instalação auto-hospedada tem seu `board.json` e afins. Mudança de shape exige leitura compatível ou migração explícita e testada, nunca quebra silenciosa.
-- Validar na entrada, com o padrão do ponto de entrada: ferramentas MCP com **zod** no schema da ferramenta; rotas HTTP chamam a função do registry/service que valida e lança, e a rota converte o erro de validação em 400 (e "not found" em 404). Dentro do fluxo já validado, confiar no tipo.
-- **Erro de rota JSON tem uma forma só:** `{ error: "<mensagem>" }` com o status 4xx ou 5xx. A página HTML de um fluxo de navegador (o login do OAuth) responde a página de erro, não JSON.
-- Comparar e referenciar entidades por **id**, nunca por nome, título ou texto, inclusive o que o próprio código acabou de criar.
-- Dado editável vive na sua fonte (configuração, cadastro, store). Não congelar no código ids, nomes, listas ou códigos que mudam.
+- Antes de mudar campo, tipo, payload, rota, ferramenta MCP, evento de websocket ou função consumida por outros arquivos, localizar **todos os consumidores**, inclusive o front, o runner e os scripts plantados nos containers.
+- **Uma informação, um nome canônico**, sem formato paralelo "por segurança". Contrato **interno** que muda atualiza todos os consumidores na mesma alteração, sem `newField ?? oldField` nem shim.
+- **Dado persistido é contrato externo:** cada instalação auto-hospedada tem seu `board.json` e afins; mudança de shape exige leitura compatível ou migração explícita e testada, nunca quebra silenciosa.
+- Validar na entrada, no padrão do ponto de entrada: ferramenta MCP com **zod** no schema; rota HTTP chama a função do registry/service que valida e lança, e converte o erro de validação em 400 ("not found" em 404). Dentro do fluxo validado, confiar no tipo.
+- **Erro de rota JSON tem uma forma só:** `{ error: "<mensagem>" }` com status 4xx ou 5xx. Fluxo de navegador em HTML (o login do OAuth) responde a página de erro.
+- Entidade se compara e se referencia por **id**, nunca por nome, título ou texto, inclusive a que o código acabou de criar.
+- Dado editável vive na sua fonte (configuração, cadastro, store); id, nome, lista ou código que muda não se congela no código.
 - Dado composto (autor, motivo, origem, instante, referência) vai em campos próprios, não concatenado num texto.
-- Centralizar enums e discriminantes (`as const` / union de literais) numa definição única, sem mapas paralelos descoordenados. `switch` cobre todas as variantes; variante sem suporte falha visivelmente.
-- Campos opcionais novos ficam ausentes quando não informados, a menos que `null` seja um estado de domínio explícito.
-- Em atualização parcial, distinguir **campo não enviado** de campo enviado com `0`, `false`, `""` ou `null`.
+- Enums e discriminantes (`as const` / union de literais) numa definição única, sem mapas paralelos. `switch` cobre todas as variantes; variante sem suporte falha visivelmente.
+- Campo opcional novo fica ausente quando não informado, a menos que `null` seja estado de domínio explícito.
+- Em atualização parcial, **campo não enviado** é diferente de campo enviado com `0`, `false`, `""` ou `null`.
 
 ### Integrações externas: a documentação oficial é o contrato
 
-SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do fornecedor e o comportamento da versão instalada**: método, campos, eventos, códigos de saída e fluxo. Log de campo, tentativa e erro ou "funcionou no teste" não substituem a docs.
+SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do fornecedor e o comportamento da versão instalada** (método, campos, eventos, códigos de saída, fluxo); log de campo, tentativa e erro ou "funcionou no teste" não a substituem.
 
-- **Ler antes de mexer.** Antes de criar ou alterar uma chamada externa, abrir a docs (ou o pacote da versão instalada, quando a docs não cobre) e citar a fonte na descrição do PR; num comentário de uma linha só quando a regra externa não é óbvia pelo código (exceção da §3).
+- **Ler antes de mexer:** antes de criar ou alterar uma chamada externa, abrir a docs (ou o pacote da versão instalada, quando ela não cobre) e citar a fonte no PR; no código, comentário de uma linha só quando a regra não é óbvia (§3).
 - **Mudança de versão exige conferir o comportamento real**, não a memória.
-- **Fato, não hipótese.** Diagnóstico de integração afirma só o que log, docs, binário ou teste mostram. Hipótese é dita como hipótese, testada antes de virar correção, e nunca vira regra de código nem texto de tela.
-- **Comportamento que a docs não define** é registrado como evidência, com versão, data e fonte, e tratado como incerto.
-- **Exercitar antes do merge.** Integração nova ou alterada roda de verdade, na versão instalada e pelo caminho que o usuário usa (o card, o runner, a rota), antes do merge: o teste com fake prova a lógica, não a integração. O que não deu para exercitar é pendência que bloqueia (§14, "A pendência deliberada é julgada"), com o passo que a fecha.
-
-| Em vez de | Faça |
-|-----------|------|
-| Usar evento, flag ou campo que a docs não lista porque "aparece no stream" | O caminho que a docs define; sem definição, registre a evidência com versão e pergunte |
-| Afirmar a causa de um incidente sem a prova | Separar fato de hipótese e provar com log, binário ou teste antes de corrigir |
+- **Fato, não hipótese:** diagnóstico de integração afirma só o que log, docs, binário ou teste mostram. Hipótese é dita como hipótese, testada antes de virar correção, e nunca vira regra de código nem texto de tela.
+- **Evento, flag ou campo que a docs não lista** (mesmo que "apareça no stream") fica de fora: vale o caminho que a docs define. Sem definição, o comportamento observado é registrado como evidência, com versão, data e fonte, tratado como incerto, e vira pergunta.
+- **Exercitar antes do merge:** integração nova ou alterada roda de verdade, na versão instalada e pelo caminho do usuário (o card, o runner, a rota); o teste com fake prova a lógica, não a integração. O que não deu para exercitar é pendência que bloqueia (§14, "A pendência deliberada é julgada"), com o passo que a fecha.
 
 ## 7. Dados, fonte de verdade e consistência
 
-- Cada conceito tem uma **fonte de verdade identificável**. Não persistir cópias de valores que podem ser obtidos da fonte, nem as duas direções do mesmo relacionamento. Snapshot ou materialização só como exceção explícita, com motivo, origem e regra de atualização definidos.
-- Estado JSON do vibehub em `VIBEHUB_DATA_DIR` (`board.json` e afins) passa pelo **store** (`back/src/store/`: `JsonStore`, `writeFileAtomic`). Gravação fora do store é exceção intencional: o porquê vai no commit que a introduz e o PR a declara, e a gravação continua atômica ou serializada por card.
-- **Não gravar durante leitura** para sincronizar cálculos.
-- Operações que podem rodar em paralelo ou repetir (hooks de status, retomada após deploy, deliver, provisionamento) precisam ser **idempotentes** e seguras em corrida. Vários cards trabalham ao mesmo tempo no mesmo runner, e, se a instalação faz deploy blue/green, dois backends convivem por um tempo.
-- Nunca introduzir migração, limpeza ou exclusão de dados reais (worktrees, transcripts, volumes, containers) sem avaliação, `dry-run` quando aplicável e autorização.
-- Remover escrita, campo ou leitura sem consumidor só depois de verificar quem lê.
+- Cada conceito tem uma **fonte de verdade identificável**. Valor obtível da fonte não se persiste em cópia, nem as duas direções do mesmo relacionamento. Snapshot ou materialização só como exceção explícita, com motivo, origem e regra de atualização definidos.
+- Estado JSON em `VIBEHUB_DATA_DIR` (`board.json` e afins) passa pelo **store** (`back/src/store/`: `JsonStore`, `writeFileAtomic`). Gravação fora dele é exceção intencional, com o porquê no commit, declarada no PR, e continua atômica ou serializada por card.
+- **Leitura não grava**, nem para sincronizar cálculos.
+- O que pode rodar em paralelo ou repetir (hooks de status, retomada após deploy, deliver, provisionamento) é **idempotente** e seguro em corrida: vários cards dividem o runner e, em deploy blue/green, dois backends convivem por um tempo.
+- Migração, limpeza ou exclusão de dados reais (worktrees, transcripts, volumes, containers) só com avaliação, `dry-run` quando aplicável e autorização.
+- Escrita, campo ou leitura sem consumidor só sai depois de verificar quem lê.
 
 ## 8. Performance e eficiência
 
-**O objetivo é executar menos trabalho real, não escrever o código mais curto.** O vibehub roda num servidor só, onde o runner, o backend e os containers de todos os cards disputam CPU, memória e disco; o que um card desperdiça, os outros pagam.
+**Menos trabalho real, não código mais curto.** Runner, backend e os containers de todos os cards dividem um servidor só: o que um card desperdiça, os outros pagam.
 
 ### Runner e host
 
-- Cada `docker exec`/SSH é caro e disputa o runner com os outros cards. Agrupar comandos num script só quando forem do mesmo passo; nunca abrir uma execução remota por item de lista. `docker exec` e round trip ao host se contam separados: um `runScript` com três `docker exec` é uma viagem e três processos no runner.
-- Processo de longa duração (driver do SDK, terminal, preview) tem dono e fim definidos: quem abre fecha, e o que fica órfão é bug.
-- **Prazo de trabalho no container vale dentro do container:** o timeout do Node mata só o cliente local (`bash -s`, `ssh`, `docker exec`), e o processo lá dentro segue vivo. Script com prazo entra no container sob `timeout -s KILL`, que mata o grupo inteiro antes de o Node desistir (`containerScriptCommand`, em `runtime/host.ts`).
-- **O runner existente nunca é recriado pelo código:** recriar o container derruba as sessões de todos os cards. Mudança que pede container novo (flag de `docker run`, imagem) vale só para o container criado depois dela; trocar o que já existe é decisão do operador, numa janela agendada, e o PR diz isso nos Impactos.
-- Saída grande (log, transcript, diff) é lida em fluxo ou recortada na origem, não carregada inteira na memória do backend.
+- `docker exec`/SSH é caro: comandos do mesmo passo vão num script só, e item de lista nunca abre execução remota própria. `docker exec` e round trip ao host se contam separados: um `runScript` com três `docker exec` é uma viagem e três processos no runner.
+- Processo de longa duração (driver do SDK, terminal, preview) tem dono e fim: quem abre fecha; órfão é bug.
+- **Prazo de trabalho no container vale dentro do container:** o timeout do Node mata só o cliente local (`bash -s`, `ssh`, `docker exec`), e o processo lá dentro segue vivo. Script com prazo entra sob `timeout -s KILL`, que mata o grupo inteiro antes de o Node desistir (`containerScriptCommand`, em `runtime/host.ts`).
+- **O runner existente nunca é recriado pelo código** (derruba as sessões de todos os cards). Mudança que pede container novo (flag de `docker run`, imagem) vale só para o container criado depois; trocar o existente é decisão do operador, numa janela agendada, dita nos Impactos do PR.
+- Saída grande (log, transcript, diff) é lida em fluxo ou recortada na origem, nunca inteira na memória do backend.
 
 ### Backend e estado
 
-- Não reler nem regravar o estado inteiro por item quando uma operação em lote resolve; a gravação atômica do store reescreve o arquivo todo, então junte as mudanças de um passo numa gravação.
-- Código que roda a cada evento e percorre uma coleção que cresce (cards, mensagens, linhas de transcript) trabalha só sobre o que mudou, não refaz o todo.
-- Reduzir passagens repetidas em listas e mover cálculos invariantes para fora de laços, sem tornar o algoritmo mais difícil de entender.
+- Operação em lote, não releitura ou regravação do estado inteiro por item; o store reescreve o arquivo todo a cada gravação, então as mudanças de um passo vão numa só.
+- Código que roda a cada evento sobre coleção que cresce (cards, mensagens, linhas de transcript) trabalha só sobre o que mudou.
+- Menos passagens repetidas em listas e cálculo invariante fora do laço, sem dificultar a leitura do algoritmo.
 
 ### Websocket e rede
 
-- Emitir só o que mudou e só para quem pode ver. Não criar polling para mascarar evento faltando.
+- Emitir só o que mudou e só para quem pode ver; evento faltando se corrige, sem polling para mascará-lo.
 - O que o cliente precisa ao reconectar (estado de sessão, aviso ativo) é reenviado no attach, não reconstruído por replay de histórico.
 
 ### Frontend
 
-- Evitar fetch redundante: o React Query é a fonte, com chave estável e invalidação dirigida, não `refetch` geral.
-- Renders desnecessários: estado no nível mais baixo que o usa; lista longa (chat, log, board grande) não re-renderiza inteira a cada item novo.
+- React Query como fonte, com chave estável e invalidação dirigida, sem fetch redundante nem `refetch` geral.
+- Estado no nível mais baixo que o usa; lista longa (chat, log, board grande) não re-renderiza inteira a cada item novo.
 - Dependência pesada fora do caminho inicial (highlighter, terminal, editor) carrega sob demanda.
 - Paginar ou virtualizar só quando a escala justificar.
 
 ### Como provar
 
-- Cache, deduplicação e batch só por benefício concreto, com invalidação e ciclo de vida definidos; removê-los quando não agregarem valor.
-- **PR que promete ganho de performance traz a medição** (antes e depois: tempo, número de `docker exec`, renders, bytes enviados) e o modo de reproduzir. Sem medição, o ganho é hipótese (§6) e o PR diz isso.
-- **Teste mental:** "se houver 20 cards ativos e mil mensagens no histórico, quantas vezes este código roda e quanto ele lê em cada vez?" Se a resposta cresce com o total em vez de com a mudança, o desenho está errado.
+- Cache, deduplicação e batch só por benefício concreto, com invalidação e ciclo de vida definidos; saem quando não agregam valor.
+- **PR que promete ganho de performance traz a medição** (antes e depois: tempo, número de `docker exec`, renders, bytes enviados) e o modo de reproduzir; sem ela, o ganho é hipótese (§6) e o PR diz isso.
+- **Teste mental:** "com 20 cards ativos e mil mensagens no histórico, quantas vezes este código roda e quanto lê em cada vez?" Se cresce com o total, e não com a mudança, o desenho está errado.
 
 ## 9. Validação, erros e fallback
 
-- Validar **nas fronteiras**: HTTP, websocket, hooks vindos do runner, ferramentas MCP, entrada de CLI e respostas de integrações.
-- **Guard impõe contrato; fallback mascara erro.** Campo obrigatório ausente vira erro observável, não `""`, `0`, `null` ou `[]`.
-- Usar `??`, `||` ou `?.` só quando a ausência faz parte do contrato real.
+- Validar **nas fronteiras** (HTTP, websocket, hooks do runner, ferramentas MCP, entrada de CLI, respostas de integrações), no padrão de cada uma (§6).
+- **Guard impõe contrato; fallback mascara erro.** Campo obrigatório ausente vira erro observável, não `""`, `0`, `null` ou `[]`. `??`, `||` e `?.` só quando a ausência é do contrato; `0` e `false` podem ser valores válidos.
 - **Dependência ausente falha à vista:** chamada sem destino (sessão, conexão, ouvinte) gera erro ou é impedida pelo tipo, nunca vira no-op silencioso.
-- Distinguir presença de verdade lógica: `0` e `false` podem ser valores válidos.
-- Erro informa o suficiente para diagnóstico sem expor token, segredo ou caminho sensível.
-- Integração que falhou não aparece como concluída, nem para o usuário: falha de login, de runner ou de integração vira aviso visível com a ação que resolve. Retry só limitado e idempotente.
-- **O erro chega a quem chamou, não só ao log.** Uma exceção ou é propagada até a fronteira responsável ou é traduzida para o chamador (exceção com mensagem própria, resposta HTTP de erro, evento de erro no websocket). Uma linha de log não faz nenhuma das duas coisas: o log do pino é a trilha de diagnóstico e de auditoria (as entradas `audit: true`) de quem opera a instalação e acompanha o erro, nunca o substitui.
-- **Engolir o erro só em melhor esforço.** `catch` vazio, em qualquer forma (`.catch(() => {})`, `.catch(() => undefined)`, `try { … } catch { }`), é aceito apenas em efeito colateral cuja falha não muda o resultado da operação e que outro caminho cobre: aviso em tempo real que o próximo attach reenvia, limpeza que a próxima rodada refaz, gatilho antecipado de algo que também roda por agendamento. Na linha anterior à do `catch`, a diretiva que o lint exige com o motivo curto (`// eslint-disable-next-line no-restricted-syntax -- <motivo>`, a mesma nas duas formas; comentário dentro do bloco não o torna menos vazio); a história vai para o commit e o PR (§3). Falha que o chamador precisa saber nunca é engolida.
-- **Fila de promises não engole.** Em `queue = next.catch(() => undefined); return next;`, o erro chega a quem chamou pelo `next`; o `catch` só impede que a falha de um item trave os seguintes. É o padrão das filas por card e do store, e não precisa de justificativa. O lint reconhece a fila pelo nome: a atribuição a `queue` (ou `this.queue`) e o encadeamento `previous.catch(...).then(run)` (ou com `queue`); fila com outro nome leva a diretiva com o motivo.
-- **Tarefa de fundo sem chamador** (timer, reaper, retomada após deploy, rotina disparada sem esperar resposta): não há a quem propagar. Um `catch` que **altera o estado que decide o próximo passo, em relação ao que a tarefa faria sem o erro** (a marca da próxima tentativa, um contador de falhas, a parada da tarefa, o aviso ao card), não é engolir o erro, desde que esse caminho de falha tenha teste com um nome que diz o que acontece. Voltar a tentar só porque o timer bate de novo não conta: `catch` vazio, ou que só registra no log sem alterar esse estado, é engolir. Disparar sem `catch` (`void tarefa()`) dá no mesmo, porque a falha cai no handler global do processo e só vira log: a tarefa de fundo nova segue esta regra com ou sem `catch` escrito.
-- `catch` vazio antigo fora do diff, em qualquer forma, fica como está; o que o PR toca é julgado por estas regras.
+- Erro informa o bastante para diagnóstico, sem expor token, segredo ou caminho sensível.
+- Integração que falhou não aparece como concluída nem retorna sucesso falso: falha de login, de runner ou de integração vira aviso visível ao usuário com a ação que resolve. Retry só limitado e idempotente, nunca `setTimeout`/retry escondendo falha de fluxo.
+- **O erro chega a quem chamou, não só ao log:** propagado até a fronteira responsável ou traduzido para o chamador (exceção com mensagem própria, resposta HTTP de erro, evento de erro no websocket). O log do pino é trilha de diagnóstico e auditoria (`audit: true`) de quem opera a instalação, não substituto disso.
+- **Engolir o erro só em melhor esforço:** `catch` vazio em qualquer forma (`.catch(() => {})`, `.catch(() => undefined)`, `try { … } catch { }`) só em efeito colateral cuja falha não muda o resultado e que outro caminho cobre (aviso em tempo real que o próximo attach reenvia, limpeza que a próxima rodada refaz, gatilho antecipado de algo também agendado), com `// eslint-disable-next-line no-restricted-syntax -- <motivo>` na linha anterior, igual nas duas formas (comentário dentro do bloco não o torna menos vazio), e a história no commit e no PR. Falha que o chamador precisa saber nunca é engolida.
+- **Fila de promises não engole:** em `queue = next.catch(() => undefined); return next;`, o erro chega a quem chamou pelo `next` e o `catch` só impede que a falha de um item trave os seguintes. É o padrão das filas por card e do store, sem justificativa. O lint reconhece a fila pelo nome (atribuição a `queue` ou `this.queue`; encadeamento `previous.catch(...).then(run)` ou com `queue`); com outro nome, leva a diretiva com o motivo.
+- **Tarefa de fundo sem chamador** (timer, reaper, retomada após deploy, rotina disparada sem esperar resposta): `catch` que **altera o estado que decide o próximo passo, em relação ao que a tarefa faria sem o erro** (a marca da próxima tentativa, um contador de falhas, a parada da tarefa, o aviso ao card) não é engolir, se esse caminho tem teste cujo nome diz o que acontece. Tentar de novo só porque o timer bate não conta: `catch` vazio ou que só loga é engolir, e `void tarefa()` sem `catch` também (a falha só vira log no handler global); tarefa de fundo nova segue esta regra com ou sem `catch` escrito.
+- `catch` vazio antigo fora do diff fica como está.
 
 ## 10. Segurança, autorização e escopo
 
-- **Acesso decidido pelos preHandlers de `back/src/auth/`:** o que é da INSTALAÇÃO exige dono (`requireOwner`, em `session.ts`); o que é TRABALHO de um card segue o compartilhamento (`access.ts`) — `requireCardAccess` para ler, `requireCardWork` para mudar qualquer coisa; rota do próprio usuário, sem card (`/api/me/*`, listagens), exige só sessão (`requireSession`). Toda rota nova usa um desses. A checagem base vem do helper; filtro por usuário no handler (o que ele alcança, se é dono) só restringe o que o helper já liberou.
-- **Acesso é decidido na borda.** Service recebe fatos já apurados (o card, o usuário, um booleano de comportamento), nunca refaz a checagem de acesso nem conhece o preHandler.
-- Permissão de leitura (`view`) nunca autoriza mutação. Listagens filtram pelo que o usuário alcança, não pelo que existe.
-- **Recurso que o chamador não alcança responde 404, não 403:** para quem não vê o card ou o projeto, ele não existe, e um 403 confirmaria que o id é real. O 403 fica para o que o chamador vê mas não pode mudar (o `view` tentando mutar, o membro numa rota de dono).
-- **Shell:** tudo que vira linha de `docker exec` ou script (ids de card, branch, sessão, container) é validado na fronteira e citado depois. Leia `back/src/runtime/host.ts` antes de montar um comando.
+- **Acesso decidido pelos preHandlers de `back/src/auth/`:** o que é da INSTALAÇÃO exige dono (`requireOwner`, em `session.ts`); o TRABALHO de um card segue o compartilhamento (`access.ts`): `requireCardAccess` para ler, `requireCardWork` para mudar qualquer coisa; rota do próprio usuário, sem card (`/api/me/*`, listagens), exige só sessão (`requireSession`). Toda rota nova usa um desses; filtro por usuário no handler (o que ele alcança, se é dono) só restringe o que o helper liberou.
+- **Acesso é decidido na borda:** service recebe fatos apurados (o card, o usuário, um booleano de comportamento), sem refazer a checagem nem conhecer o preHandler.
+- Leitura (`view`) nunca autoriza mutação. Listagem filtra pelo que o usuário alcança, não pelo que existe.
+- **Recurso que o chamador não alcança responde 404, não 403:** para quem não vê o card ou o projeto, ele não existe, e um 403 confirmaria que o id é real. 403 é para o que ele vê mas não pode mudar (o `view` tentando mutar, o membro numa rota de dono).
+- **Shell:** tudo que vira linha de `docker exec` ou script (ids de card, branch, sessão, container) é validado na fronteira e citado depois; leia `back/src/runtime/host.ts` antes de montar um comando.
 - **Segredos por stdin, nunca argv** (`ps` é legível por todos). Credenciais moram no cofre criptografado (`back/src/secrets/`), nunca em log, resposta HTTP ou mensagem de erro.
-- **Identidade git é do card:** commit, push e PR saem com a conta de quem deu a ordem, nunca com conta de terceiros nem da organização. Não contornar com outra credencial.
-- Outros pontos de entrada (hooks do runner, MCP, websocket) têm limite de confiança próprio — token do runner, sessão — e não presumem que passaram pelo HTTP autenticado. Ponto de entrada de máquina (o callback de status do runner) autentica pelo token do serviço comparado em tempo constante (`tokenMatches`, em `auth/session.ts`) e não aceita cookie de sessão no lugar dele.
+- **Identidade git é do card:** commit, push e PR saem com a conta de quem deu a ordem, nunca de terceiros ou da organização, nem por outra credencial.
+- Hooks do runner, MCP e websocket têm limite de confiança próprio (token do runner, sessão) e não presumem o HTTP autenticado. Ponto de entrada de máquina (o callback de status do runner) autentica pelo token do serviço comparado em tempo constante (`tokenMatches`, em `auth/session.ts`), nunca por cookie de sessão.
 - Verificar caminhos permitidos e negados, inclusive chamando a API direto.
 
 ## 11. Testes e critérios de correção
 
-- **Mudança de comportamento ou bug é sempre em TDD:** escrever o teste primeiro, rodar e ver falhar pelo motivo certo (em bug, reproduzindo o erro que aconteceu) e só então implementar até passar. Teste que nunca foi visto falhando não prova nada.
-- **O verde só vale se o teste falha sem a correção:** depois do verde, tire só a correção (de uma cópia de backup do arquivo, nunca `git stash`), rode e exija a falha pelo motivo certo; recoloque e veja passar. Rode o arquivo de teste mais de uma vez: teste que alterna entre passar e falhar é defeito do teste até prova em contrário.
-- Mudança de comportamento exige testes proporcionais ao risco. **Vitest** nos dois pacotes, com o teste ao lado do código (`*.test.ts` / `*.test.tsx`). Priorizar o fluxo real; teste unitário complementa quando isola regra complexa.
-- **Teste é código:** toda regra deste arquivo vale nas linhas de teste como nas de produção: nomes (§2), `const` e comentários (§3), lugar e duplicação (§4), erros (§9). O modelo é este arquivo; o arquivo de teste vizinho escrito antes destas regras é legado, não exemplo.
+- **Mudança de comportamento ou bug é sempre em TDD:** o teste vem primeiro e é visto falhar pelo motivo certo (em bug, reproduzindo o erro que aconteceu); só então se implementa até passar.
+- **O verde só vale se o teste falha sem a correção:** depois do verde, tire só a correção (de uma cópia de backup do arquivo, nunca `git stash`), rode e exija a falha pelo motivo certo; recoloque e veja passar. Rode o arquivo mais de uma vez: teste que alterna entre passar e falhar é defeito do teste até prova em contrário.
+- Testes proporcionais ao risco, em **Vitest** nos dois pacotes, ao lado do código (`*.test.ts` / `*.test.tsx`): o fluxo real primeiro, o unitário para isolar regra complexa.
+- **Teste é código:** toda regra deste arquivo vale nas linhas de teste (nomes, `const`, comentários, lugar, duplicação, erros).
 - **Antes do primeiro helper de teste, procure a infraestrutura que já existe, nesta ordem:**
   1. **o repositório:** `ls back/src/testkit/` (infra compartilhada do back); no front, Vitest + Testing Library + jsdom (`front/vitest.config.ts`, helper `renderApp` em `front/src/test/render.tsx`);
   2. **o Vitest:** `onTestFinished` para desfazer o que o teste criou, `vi.waitFor` para esperar uma condição, `it.each`/`describe.each` para casos que só mudam os dados, `vi.useFakeTimers` para tempo;
   3. **o Node:** `existsSync` para saber se um caminho existe, `mkdtempSync` para diretório temporário.
 
-  Nada disso cobre: o helper que serve a um arquivo só nasce nele; o que dois arquivos de teste precisam (um docker falso, um repositório git temporário) nasce em `back/src/testkit/` e é importado, nunca copiado de um arquivo para outro.
-- Dado de teste sai do fluxo real ou de fábrica fiel ao contrato; não inventar shape que não existe em produção.
-- Mockar só **fronteiras externas**: host executor (Docker/SSH), rede, GitHub, SDK do Claude. Não mockar a lógica interna só para facilitar asserções.
-- Rotas HTTP: testar entrando pela rota real, com validação e acesso (dono, `work`, `view`, sem acesso).
+  Nada disso cobre: o helper que serve a um arquivo só nasce nele; o que dois arquivos de teste precisam (um docker falso, um repositório git temporário) nasce em `back/src/testkit/` e é importado, nunca copiado.
+- Dado de teste sai do fluxo real ou de fábrica fiel ao contrato, com o shape de produção; o resultado esperado sai do contrato real, lido antes, não da hipótese do autor.
+- Mock só nas **fronteiras externas** (host executor Docker/SSH, rede, GitHub, SDK do Claude); a lógica interna roda de verdade, mesmo quando mocká-la facilitaria a asserção.
+- Rota HTTP se testa pela rota real, com validação e acesso (dono, `work`, `view`, sem acesso).
 - Verificar efeitos observáveis: estado persistido, script enviado ao host, payload emitido, UI atualizada, erro esperado.
-- No front, testar interação, estados de carregamento/erro/sucesso e o contrato enviado/recebido. Em tela com debounce, cache ou espera, repetir a mesma ação exige esperar o estado assentar.
-- Cobrir caminho principal, falhas e bordas; somar corrida, idempotência e retomada quando fizerem parte do risco.
-- Não escrever teste que só valida a hipótese do próprio autor. Ler o contrato real antes de definir o resultado esperado.
+- No front, testar interação, carregamento/erro/sucesso e o contrato enviado/recebido; em tela com debounce, cache ou espera, repetir a mesma ação exige esperar o estado assentar.
+- Cobrir caminho principal, falhas e bordas; somar corrida, idempotência e retomada quando fazem parte do risco.
 
 **Rodar testes no runner: curto, só do que você tocou.** A suíte inteira leva muitos minutos, disputa CPU com os outros cards e costuma ser morta por um deploy.
 
-1. **Enquanto trabalha:** só o arquivo do que mexeu, filtrado pelo caso — `cd back && npx vitest run <arquivo> -t "<caso>"` (idem em `front/`).
-2. **Antes de entregar:** `npm run lint:changed` e `npm run test:changed` (raiz), o mesmo recorte do gate (`.vibehub/gate.json`). Junto, o typecheck do pacote tocado, o mesmo do CI:
-   - **front:** `npx tsc -b`. O `tsconfig.json` é uma solution com project references, então `tsc --noEmit -p` não checa nada e dá verde falso.
-   - **back:** `npx tsc --noEmit`. `tsc -b` emitiria JS em `back/dist`. O `tsconfig.json` do back exclui `*.test.ts`: erro de tipo em teste só aparece ao rodar o teste.
-3. **Nunca** `npm test` ou `npx vitest run` sem filtro no runner. A suíte inteira é do CI: confira com `gh pr checks <N>`. A exceção é `npm run test:lint`, a suíte do lint da raiz (`eslint.config.js` e `scripts/`), pequena, que roda inteira quando o PR mexe nela: o gate não a roda, só o CI.
-4. Teste de tempo (limite em ms) que falha de vez em quando sob carga não é regressão sua. Confirme rodando sem a sua mudança; se já era instável, diga no PR e siga.
+1. **Enquanto trabalha:** só o arquivo do que mexeu, filtrado pelo caso: `cd back && npx vitest run <arquivo> -t "<caso>"` (idem em `front/`).
+2. **Antes de entregar:** `npm run lint:changed` e `npm run test:changed` (raiz), o recorte do gate (`.vibehub/gate.json`), e o typecheck do pacote tocado, o mesmo do CI:
+   - **front:** `npx tsc -b`. O `tsconfig.json` é uma solution com project references: `tsc --noEmit -p` não checa nada e dá verde falso.
+   - **back:** `npx tsc --noEmit` (`tsc -b` emitiria JS em `back/dist`). O `tsconfig.json` do back exclui `*.test.ts`: erro de tipo em teste só aparece ao rodar o teste.
+3. **Nunca** `npm test` ou `npx vitest run` sem filtro no runner: a suíte inteira é do CI (`gh pr checks <N>`). A exceção é `npm run test:lint`, a suíte pequena do lint da raiz (`eslint.config.js` e `scripts/`), inteira quando o PR mexe nela; o gate não a roda, só o CI.
+4. Teste de tempo (limite em ms) que falha de vez em quando sob carga não é regressão sua: confirme rodando sem a sua mudança; se já era instável, diga no PR e siga.
 
-Se um comando de teste for passar de ~2 min, troque por um recorte menor. Não afirmar que algo passou sem executar; se não deu para testar, relatar **o que foi e o que não foi validado**.
+Comando de teste que passaria de ~2 min vira recorte menor. O que não deu para testar se relata: **o que foi e o que não foi validado**.
 
 ## 12. Processo obrigatório de trabalho do agente
 
-**Não sair executando.** Antes de escrever código, entender a demanda e fechar o caminho com o usuário:
+**Entender e fechar o caminho com o usuário antes de escrever código:**
 
-- **Teve dúvida, pergunta.** Requisito ambíguo, mais de um caminho razoável ou decisão que é do usuário: perguntar antes de implementar, no formato de "Como perguntar ao usuário", abaixo. Não inventar convenção nem presumir a resposta.
-- **Explorar antes de construir.** Feature nova ou mudança de comportamento com alternativas passa por brainstorming: requisitos, abordagens com prós e contras, recomendação, e execução só com o caminho aprovado.
-- **Processo em toda tarefa**, sem esperar ser mandado: debugging sistemático antes de propor fix, TDD na implementação, plano escrito para tarefa de várias etapas, verificação antes de declarar pronto, revisão do diff depois de implementar. A ferramenta que executa cada etapa é definida para cada agente (no Claude Code, o mapa de skills do `.claude/CLAUDE.md`).
+- **Teve dúvida, pergunta** ("Como perguntar ao usuário", abaixo): requisito ambíguo, mais de um caminho razoável ou decisão do usuário, antes de implementar, em vez de convenção inventada ou resposta presumida.
+- **Explorar antes de construir:** feature nova ou mudança de comportamento com alternativas passa por brainstorming (requisitos, abordagens com prós e contras, recomendação) e só se executa com o caminho aprovado.
+- **Processo em toda tarefa**, sem esperar ser mandado: debugging sistemático antes de propor fix, TDD, plano escrito para tarefa de várias etapas, verificação antes de declarar pronto, revisão do diff. A ferramenta de cada etapa é definida por agente (no Claude Code, o mapa de skills do `.claude/CLAUDE.md`).
 - **Pedido de diagnóstico é leitura e explicação**, não edição.
-- **Discordar com fundamento faz parte do trabalho:** quando o pedido parece pior que uma alternativa, a discordância vira pergunta no mesmo formato, com a alternativa recomendada e o pedido original como opções, cada uma com a sua consequência.
+- **Discordar com fundamento faz parte do trabalho:** pedido que parece pior que uma alternativa vira pergunta, com a alternativa recomendada e o pedido original como opções, cada uma com a sua consequência.
 
 1. **Inspecionar antes de editar:** arquivos, fluxo, fonte de verdade, contratos, padrões e testes relevantes.
 2. **Localizar consumidores:** chamadas, imports, rotas, ferramentas MCP, scripts do runner e telas impactadas.
@@ -326,26 +288,17 @@ Se um comando de teste for passar de ~2 min, troque por um recorte menor. Não a
 4. **Implementar de ponta a ponta:** consumidores, contratos, validação, acesso, i18n e testes na mesma entrega.
 5. **Auditar o trecho tocado:** nomes, `let`, comentário fora das exceções, código morto, duplicação, fallback indevido, leituras e execuções inúteis.
 6. **Não espalhar alterações:** problema vizinho que exige refatoração arriscada é comunicado, não corrigido de carona.
-7. **Validar:** lint do recorte, testes do recorte, typecheck e build quando aplicável; revisar o diff (comandos abaixo). O lint do recorte (`npm run lint:changed`) reprova, só nas linhas que a branch acrescentou, as regras que a máquina checa: as de `eslint.config.js`, cada uma com a seção que impõe. Lint verde não é conformidade: o resto deste arquivo é o passo 5 e a revisão do passo 8.
-8. **Revisão independente antes de entregar:** o diff passa, nesta ordem, por **simplificação** (aplicada) e por **code review** (correção, performance, aderência às regras e o que foi inventado), ambas feitas por revisores SEM o contexto de quem escreveu, com a entrada definida em "Como revisar um PR" (§14), que o code review segue. Achado confirmado segue a severidade dele (§14, "As severidades"): o que bloqueia é corrigido ou vira pendência deliberada, que só o aval de quem autoriza o merge aceita (§14, "A pendência deliberada é julgada"), o que deveria corrigir é aplicado, a decisão vira pergunta ao usuário e o menor fica registrado no PR. O descartado tem o motivo dito. O que a simplificação mudar volta pelo passo 7 antes do code review.
-9. **Descrever o resultado:** o que mudou, o que foi verificado e as limitações reais, no formato de "Como relatar", abaixo. Quando a entrega é um PR, ele segue a §14.
+7. **Validar:** lint, testes do recorte, typecheck e build quando aplicável, e revisar o diff (§11, comandos abaixo). O lint checa só `eslint.config.js`: verde não é conformidade; o resto deste arquivo é o passo 5 e a revisão do passo 8.
+8. **Revisão independente antes de entregar:** o diff passa, nesta ordem, por **simplificação** (aplicada) e por **code review** (correção, performance, aderência às regras e o que foi inventado), ambas por revisores SEM o contexto de quem escreveu, com a entrada de "Como revisar um PR" (§14). Cada achado confirmado segue a sua severidade (§14, "As severidades"); o descartado tem o motivo dito. O que a simplificação mudar volta pelo passo 7 antes do code review.
+9. **Descrever o resultado:** o que mudou, o que foi verificado e as limitações reais ("Como relatar", abaixo); PR segue a §14.
 
 ### Autonomia corretiva e preservação do escopo
 
-Pedir autorização e passar por brainstorming continua obrigatório para decisões de produto, mudança de escopo, funcionalidade nova, mudança de comportamento intencional e tudo cuja intenção não esteja clara. A exceção: **o agente corrige sozinho problema real naquilo que já foi definido, pedido ou implementado**, sem parar para pedir licença:
+Decisão de produto, mudança de escopo, funcionalidade nova, mudança de comportamento intencional e tudo de intenção pouco clara pedem autorização e brainstorming. A exceção: **o agente corrige sozinho problema real naquilo que já foi definido, pedido ou implementado** — bug e erro de lógica; código que contradiz regra ou decisão definida; regressão do desenvolvimento; comportamento que contraria claramente o requisito; falha de integração, validação ou consistência; ajuste técnico para o que existe funcionar.
 
-- bug e erro de lógica;
-- código que contradiz uma regra ou decisão já definida;
-- regressão introduzida durante o desenvolvimento;
-- comportamento que contraria claramente o requisito estabelecido;
-- falha de integração, validação ou consistência;
-- ajuste técnico necessário para o que já existe funcionar corretamente.
+**Limites:** a autonomia preserva e corrige o definido, não amplia escopo nem redefine o projeto. Ficam de fora: funcionalidade extra "porque parece útil"; decisão intencional, fluxo estabelecido ou regra de negócio mudados por preferência técnica; remover ou simplificar o que não se entende. Melhoria fora do código que o PR escreve, refatoração e o que foge do propósito viram **sugestão** (dentro do que o PR escreveu, é o "deveria corrigir" da §14). Correção que exige decidir intenção ou direção vira pergunta.
 
-**Limites:** autonomia corretiva não amplia escopo. Não implementar funcionalidade extra só porque parece útil; não alterar decisão intencional, fluxo estabelecido ou regra de negócio por preferência técnica; não remover, substituir ou simplificar o que não se entende. Melhoria fora do código que o PR já escreve, refatoração e o que foge do propósito viram **sugestão**, não execução (a melhoria dentro do que o PR escreveu é o "deveria corrigir" da §14). Se a correção exige decidir intenção ou direção do projeto, pergunte.
-
-**Princípio:** o agente tem autonomia para preservar, corrigir e garantir a integridade do que foi definido e construído, não para redefinir o que o projeto deve ser.
-
-**Operações de risco:** exclusão de dados (worktree, volume, dado de `VIBEHUB_DATA_DIR`), mudança incompatível de contrato persistido, alteração de acesso, reescrita de histórico já enviado (amend, rebase ou force-push de commit publicado), deploy e merge exigem as autorizações existentes. **Merge na branch que publica é deploy** (no vibehub, a `main`). Antes de agir, exponha os riscos ao usuário e siga só com o aval dele. O emoji marca a gravidade: 🚨 para risco grande ou irreversível, ⚠️ para risco médio ou pequeno.
+**Operações de risco:** exclusão de dados (worktree, volume, dado de `VIBEHUB_DATA_DIR`), mudança incompatível de contrato persistido, alteração de acesso, reescrita de histórico enviado (amend, rebase ou force-push de commit publicado), deploy e merge exigem as autorizações existentes. **Merge na branch que publica é deploy** (no vibehub, a `main`). Antes de agir, exponha os riscos e siga só com o aval do usuário, marcando a gravidade: 🚨 grande ou irreversível, ⚠️ médio ou pequeno.
 
 ### Comandos do repositório
 
@@ -353,133 +306,90 @@ Pedir autorização e passar por brainstorming continua obrigatório para decis�
 |---------|-----|
 | `npm run install:all` | Instala a raiz (o lint), `back/` e `front/` |
 | `npm --prefix back run dev` · `npm --prefix front run dev` | Backend (tsx watch) e frontend (Vite) em dev |
-| `cd back && npx vitest run <arquivo> -t "<caso>"` | Teste do que você tocou (idem em `front/`) |
-| `npm run lint:changed` | ESLint só nas linhas que a branch acrescentou desde a base (`$VIBEHUB_BASE_REF`, padrão `origin/main`), o recorte do gate e do CI |
-| `npm run test:lint` | Testes do próprio lint (a config e as regras locais), quando o PR mexe em `eslint.config.js` ou `scripts/`; o gate não os roda, o CI sim |
-| `npm run test:changed` | Testes afetados pela branch desde a base (`$VIBEHUB_BASE_REF`, padrão `origin/main`), o recorte do gate |
-| `npx tsc -b` (em `front/`) · `npx tsc --noEmit` (em `back/`) | Typecheck, o mesmo do CI (§11, passo 2) |
+| `npm run lint:changed` · `npm run test:changed` | ESLint nas linhas que a branch acrescentou e testes afetados por ela, desde a base (`$VIBEHUB_BASE_REF`, padrão `origin/main`): o recorte do gate (e do CI, no lint) |
 | `npm run build` | Build de back + front |
 | `npm --prefix front run storybook` | Storybook dos componentes |
-| `gh pr checks <N>` | Suíte inteira, que só roda no CI |
 
-Exercitar os caminhos do runner de ponta a ponta fora de um card exige Docker local; os testes unitários usam um host executor falso e rodam sem ele.
+Teste do recorte, typecheck, `test:lint` e `gh pr checks`: §11. Exercitar o runner de ponta a ponta fora de um card exige Docker local; os testes unitários usam um host executor falso.
 
 **Testar pela tela sem tocar em produção:** back isolado (`VIBEHUB_PORT=<porta livre> VIBEHUB_DATA_DIR=/tmp/vh-test npx tsx src/index.ts` em `back/`) e front apontando para ele (`VIBEHUB_BACKEND=http://127.0.0.1:<porta> npx vite --port <outra>` em `front/`).
 
 ### Como perguntar ao usuário
 
-Toda dúvida que trava a execução e toda discordância com o pedido viram pergunta de **múltipla escolha com saída livre**: o usuário decide com um clique quando uma opção serve, e responde com as próprias palavras quando nenhuma serve.
+Dúvida que trava a execução e discordância com o pedido viram pergunta de **múltipla escolha com saída livre**.
 
-- **Uma decisão por pergunta.** Várias decisões independentes podem ir juntas, cada uma na sua pergunta. Pergunta que depende da resposta de outra espera essa resposta.
-- **A pergunta se entende sozinha.** Ela diz o que foi encontrado, por que a decisão importa e nomeia o item em questão (a tela, o campo, a regra), sem "isso" nem "aquilo" soltos.
-- **De 2 a 4 opções, uma excluindo a outra**, cada uma com rótulo curto e a consequência: o que muda, o custo e o risco. Opção vaga ("depende", "ver depois") não conta.
-- **A recomendada vem primeiro**, marcada como recomendada, com o motivo. Sem recomendação, diga por que as opções empatam.
-- **Sempre há saída livre** ("Outra: descreva").
-- **Pergunta estruturada quando a ferramenta tem**; sem ela, numere as opções no texto e ponha a saída livre por último.
-- **Descubra o que dá para descobrir.** O que o código, a documentação ou este arquivo respondem, o agente descobre e informa; a pergunta fica para a decisão que é do usuário.
+- **Uma decisão por pergunta;** independentes podem ir juntas, cada uma na sua; a que depende da resposta de outra espera.
+- **A pergunta se entende sozinha:** o que foi encontrado, por que a decisão importa e o item em questão (a tela, o campo, a regra) nomeado, sem "isso" nem "aquilo" soltos.
+- **De 2 a 4 opções, uma excluindo a outra**, cada uma com rótulo curto e a consequência (o que muda, o custo, o risco). Opção vaga ("depende", "ver depois") não conta.
+- **A recomendada vem primeiro**, marcada, com o motivo; sem recomendação, diga por que as opções empatam.
+- **Sempre há saída livre** ("Outra: descreva"). Pergunta estruturada quando a ferramenta tem; sem ela, opções numeradas e a saída livre por último.
+- **Descubra o que dá para descobrir:** o que código, documentação ou este arquivo respondem, o agente descobre e informa; a pergunta fica para a decisão do usuário.
 
 ### Como relatar
 
-Vale para todo relatório: o resultado entregue ao usuário, o relatório de um subagente e os achados de uma revisão. **O leitor é programador e não abriu o código**: conhece a stack, mas nunca viu este módulo, este bug nem os nomes que você aprendeu durante o trabalho. Escreva como para um mecânico que não sabe qual carro é: primeiro o carro, depois a peça.
+Vale para todo relatório: o resultado ao usuário, o de um subagente e os achados de uma revisão. **O leitor é programador e não abriu o código**: conhece a stack, mas não este módulo, este bug nem os nomes que você aprendeu no trabalho. Primeiro o carro, depois a peça.
 
-- **Contexto antes do achado.** Abra dizendo o que foi pedido ou analisado e onde aquilo aparece para quem usa o vibehub (a tela, o botão, o card, a entrega); só então o que foi descoberto.
-- **Todo nome interno se apresenta.** Função, arquivo, campo, rota ou apelido do código, na primeira vez que aparece, vem com o que ele é em palavras do dia a dia: "`reopenAfterHeadMoved` (a rotina que reabre a revisão quando o autor empurra commit novo)". Sigla e termo de domínio, idem.
-- **Cenário em passos que alguém de fora segue:** quem fez o quê, o que a tela ou o sistema mostrou e o que deveria ter mostrado. O `arquivo:linha` é a evidência no fim do item, não a explicação.
-- **Layout que se lê de bater o olho:** o veredito ou o resultado na primeira linha; uma seção (`###`) por assunto; listas curtas; uma ideia por item; termos técnicos em `código`; nada de parágrafo corrido com várias ideias.
-- **Teste:** quem lê só o relatório consegue explicar o problema e a solução a um terceiro, sem abrir o código? Se não consegue, reescreva.
+- **Contexto antes do achado:** o que foi pedido ou analisado e onde aparece para quem usa o vibehub (a tela, o botão, o card, a entrega); só então o achado.
+- **Todo nome interno se apresenta** na primeira vez, em palavras do dia a dia: "`reopenAfterHeadMoved` (a rotina que reabre a revisão quando o autor empurra commit novo)". Vale para função, arquivo, campo, rota, apelido do código, sigla e termo de domínio.
+- **Cenário em passos que alguém de fora segue:** quem fez o quê, o que a tela ou o sistema mostrou e o que deveria ter mostrado; o `arquivo:linha` é a evidência no fim do item, não a explicação.
+- **Layout de bater o olho:** veredito ou resultado na primeira linha; uma seção (`###`) por assunto; listas curtas, uma ideia por item; termos técnicos em `código`.
+- **Teste:** quem lê só o relatório explica o problema e a solução a um terceiro, sem abrir o código? Se não, reescreva.
 
 ## 13. Encerramento
 
-**Regra de encerramento:** se o código funciona, mas exige conceitos, estados, leituras, arquivos ou indireções desnecessários, simplificar **antes de entregar**, preservando correção, integridade, segurança e testes.
+**Regra de encerramento:** código que funciona mas carrega conceitos, estados, leituras, arquivos ou indireções desnecessários se simplifica **antes de entregar**, preservando correção, integridade, segurança e testes.
 
 ## 14. Pull Requests
 
-Todo PR deste repositório é documentação. Quem nunca viu o código tem de entender a mudança só pelo PR. Como o código não carrega o porquê (§3), é no PR que mora o porquê da mudança inteira, e cada commit leva na mensagem o porquê da parte dele, para quem chega à linha pelo `git blame`. Todo PR tem três partes obrigatórias: a **descrição**, a **conformidade com este AGENTS.md** e os **comentários no diff**. O revisor confronta o diff com este arquivo, seção por seção; o PR facilita esse confronto, não o substitui.
+Todo PR é documentação: quem nunca viu o código entende a mudança e o porquê dela só pelo PR. Três partes obrigatórias: a **descrição**, a **conformidade com este AGENTS.md** e os **comentários no diff**. A conformidade vale para **todo PR, sem exceção** (qualquer tamanho e autor, inclusive correção de review e mudança só de documentação); PR sem ela volta do revisor antes de ele ler o diff.
 
-A conformidade vale para **todo PR, sem exceção**: de qualquer tamanho e de qualquer autor (pessoa ou agente), inclusive correção de review e mudança só de documentação. PR sem a seção de conformidade não está pronto para revisão: o revisor o devolve antes de ler o diff.
-
-**Título** no padrão conventional commits, sem emoji: o tipo em inglês (`fix`, `feat`, `docs`, `refactor`, `perf`, `test`) e a descrição em pt-BR, `tipo(area): o que muda`, entendida de bater o olho como o título de commit ("Commits", abaixo).
+**Título** em conventional commits, sem emoji: tipo em inglês (`fix`, `feat`, `docs`, `refactor`, `perf`, `test`) e descrição em pt-BR, `tipo(area): o que muda`, legível como o título de commit ("Commits", abaixo).
 
 ### Descrição
 
-Em pt-BR, em markdown, com estas seções (`##`) nesta ordem. A profundidade acompanha o tamanho da mudança. Cada seção vai direto ao ponto e diz o que só ela diz. Seção que não se aplica fica com uma linha: "Não se aplica: <motivo>". As seções 9 e 10 nunca ficam assim.
+Em pt-BR, markdown, com estas seções (`##`) nesta ordem, profundidade proporcional à mudança, cada seção dizendo só o que é dela. Seção que não se aplica leva uma linha, "Não se aplica: <motivo>", exceto a 9 e a 10, sempre preenchidas.
 
-1. **Contexto**: onde a mudança se encaixa e por que ela existe.
-2. **Problema identificado**: o que estava errado ou faltando. Em bug, a cadeia inteira: em que condição acontecia, o comportamento incorreto, a **causa raiz** e o comportamento depois.
+1. **Contexto**: onde a mudança se encaixa e por que existe.
+2. **Problema identificado**: o que estava errado ou faltando; em bug, a cadeia inteira: a condição, o comportamento incorreto, a **causa raiz** e o comportamento depois.
 3. **Objetivo**: o que o PR pretende alcançar.
-4. **Solução implementada**: a mudança como um todo, não a lista de arquivos. Cada decisão vem com as alternativas consideradas. Quando a mudança mexe em fluxo ou estrutura, abra a seção com um **desenho curto** (árvore de arquivos, de chamadas ou de componentes, diagrama Mermaid, ou um bloco `diff` desse fluxo).
+4. **Solução implementada**: a mudança como um todo, não a lista de arquivos, cada decisão com as alternativas consideradas. Mudança de fluxo ou estrutura abre com um **desenho curto** (árvore de arquivos, de chamadas ou de componentes, Mermaid, ou bloco `diff` do fluxo).
 5. **Detalhamento técnico**: fluxos, componentes, services, eventos de websocket, ferramentas MCP, scripts do runner e regras envolvidas.
-6. **Comportamento esperado**: como o sistema se comporta depois da mudança, com os cenários e exceções.
-7. **Impactos**: o que muda, quando tudo dá certo, para outras áreas, usuários, dados persistidos, contratos e **performance** (o que passa a rodar a mais ou a menos), e o que o deploy exige (migração, configuração, reinício de runner).
-8. **Testes e validações**: separar o que foi **executado** (com o comando e o resultado) do que é só **recomendado**, e dizer o que não deu para testar. Em mudança de comportamento, a prova vem como **antes e depois**: o teste que falhava sem a mudança e passa com ela (o nome e a falha observada) e, quando a mudança é visual, o print da tela antes e depois; a tela que ninguém viu rodando é pendência que bloqueia, como a integração não exercitada (§6). Em mudança de performance, a medição (§8). Documentação e configuração não têm teste vermelho: dizem isso. O CI também tem de estar verde, sem warning novo.
-9. **Pontos de atenção**: riscos do merge, limitações conhecidas, pendências deliberadas com o motivo e onde o revisor deve olhar com cuidado. Comece por duas respostas curtas:
-   - **o merge tem volta?** Porta de mão dupla quando reverter o commit desfaz tudo; porta de mão única quando há dado migrado ou apagado, contrato publicado ou outro efeito que o revert não desfaz;
+6. **Comportamento esperado**: o sistema depois da mudança, com cenários e exceções.
+7. **Impactos**: o que muda, quando tudo dá certo, para outras áreas, usuários, dados persistidos, contratos e **performance** (o que roda a mais ou a menos), e o que o deploy exige (migração, configuração, reinício de runner).
+8. **Testes e validações**: o **executado** (comando e resultado), separado do só **recomendado** e do que não deu para testar. Mudança de comportamento traz a prova **antes e depois**: o teste que falhava sem a mudança e passa com ela (nome e falha observada) e, se visual, o print antes e depois; tela que ninguém viu rodando é pendência que bloqueia, como integração não exercitada (§6). Performance traz a medição (§8). Documentação e configuração não têm teste vermelho e dizem isso. CI verde, sem warning novo.
+9. **Pontos de atenção**: riscos do merge, limitações conhecidas, pendências deliberadas com o motivo e onde olhar com cuidado. Abre com duas respostas curtas:
+   - **o merge tem volta?** Mão dupla quando reverter o commit desfaz tudo; mão única com dado migrado ou apagado, contrato publicado ou outro efeito que o revert não desfaz;
    - **até onde vai o estrago se der errado?** Quem e o que pode quebrar: telas, cards em andamento, runner, dados das instalações, consumidores da API.
-10. **Conformidade com o AGENTS.md**: para **cada seção deste arquivo cujas regras se aplicam às linhas alteradas**, diga a regra, como foi cumprida e, quando der, o `arquivo:linha` que mostra isso. O que é ausência (sem comentário, sem `let`, nenhum `docker exec` a mais) se afirma com o comando que a prova e o resultado dele: o `grep` no diff para o que está no texto; para o que acontece ao rodar (`docker exec`, leitura, render), a contagem ou a medição antes e depois (§8), porque a chamada nova a uma função que já existe não aparece no `grep`. Regra não seguida: qual, onde e por quê, como pendência deliberada. Frase genérica ("segue o AGENTS.md") não vale.
+10. **Conformidade com o AGENTS.md**: para **cada seção deste arquivo cujas regras se aplicam às linhas alteradas**, a regra, como foi cumprida e, quando der, o `arquivo:linha`. Ausência (sem comentário, sem `let`, nenhum `docker exec` a mais) se prova com o comando e o resultado: `grep` no diff para o que está no texto; para o que acontece ao rodar (`docker exec`, leitura, render), a contagem ou medição antes e depois (§8), porque chamada nova a função existente não aparece no `grep`. Regra não seguida: qual, onde e por quê, como pendência deliberada. Frase genérica ("segue o AGENTS.md") não vale.
 
-Nunca invente causa, teste ou justificativa. O que não está confirmado é dito como não confirmado.
+Causa, teste e justificativa só os reais; o não confirmado é dito como não confirmado.
 
-**O PR acompanha o código.** A cada push (correção, commit novo, merge da base), releia o PR publicado inteiro, a descrição e os comentários no diff: número, `arquivo:linha` ou afirmação que o push tornou falsa é corrigido no mesmo push, na descrição editada e, no comentário do diff, com resposta na thread dele.
+**O PR acompanha o código:** a cada push (correção, commit novo, merge da base), releia o PR publicado inteiro; número, `arquivo:linha` ou afirmação que o push tornou falsa se corrige no mesmo push, na descrição e, no comentário do diff, com resposta na thread dele.
 
 ### Comentários no diff
 
-Os comentários vão direto nas linhas do diff, publicados juntos numa **única revisão do tipo `COMMENT`**.
-
-- **Um comentário por bloco de lógica relevante:** regra ou condição de fluxo; função ou componente novo; integração; transformação de dados; erro ou exceção; persistência; acesso; evento de websocket ou ferramenta MCP; refatoração que muda responsabilidade; trecho que afeta outra área. Linhas mecânicas dispensam comentário.
-- **O que cada comentário diz:** o que mudou, por que mudou, como funciona, o impacto e as regras envolvidas, específico àquele trecho.
-- **Frase vaga não serve:** "adicionada validação", "ajuste no fluxo", "melhorada a lógica".
+Nas linhas do diff, publicados juntos numa **única revisão do tipo `COMMENT`**: **um por bloco de lógica relevante** (regra ou condição de fluxo; função ou componente novo; integração; transformação de dados; erro ou exceção; persistência; acesso; evento de websocket ou ferramenta MCP; refatoração que muda responsabilidade; trecho que afeta outra área), dispensando linhas mecânicas. Cada um diz, específico ao trecho, o que mudou, por que, como funciona, o impacto e as regras envolvidas; frase vaga ("adicionada validação", "ajuste no fluxo", "melhorada a lógica") não serve.
 
 ### Como publicar
 
-Dentro de um card do vibehub, a entrega sai pelo `vibehub_deliver` (`.claude/CLAUDE.md`, "Entrega"). Fora do runner, com o `gh` autenticado, siga os passos abaixo. Grave `pr-body.md` e `review.json` em **UTF-8** e **fora do repositório**.
+Num card do vibehub, a entrega é o `vibehub_deliver` (`.claude/CLAUDE.md`, "Entrega"). Fora do runner, com o `gh` autenticado, grave `pr-body.md` e `review.json` em **UTF-8** e **fora do repositório** e:
 
-1. Abra o PR com título e corpo explícitos, nunca `--fill` (ele põe a lista de commits como descrição):
-
-   ```bash
-   gh pr create --base <base> --title "<tipo(area): ...>" --body-file pr-body.md
-   ```
-
-2. Publique os comentários do diff como uma única revisão:
-
-   ```bash
-   gh api repos/<owner>/<repo>/pulls/<numero>/reviews --method POST --input review.json
-   ```
+1. Abra o PR com título e corpo explícitos (`--fill` poria a lista de commits como descrição):
+   `gh pr create --base <base> --title "<tipo(area): ...>" --body-file pr-body.md`
+2. Publique os comentários do diff numa revisão: `gh api repos/<owner>/<repo>/pulls/<numero>/reviews --method POST --input review.json`, com
 
    ```json
-   {
-     "commit_id": "<sha do último commit enviado>",
-     "event": "COMMENT",
+   { "commit_id": "<sha do último commit enviado>", "event": "COMMENT",
      "body": "O que cada bloco desta mudança faz, por que mudou e o impacto.",
-     "comments": [
-       { "path": "back/src/caminho/arquivo.ts", "line": 42, "side": "RIGHT", "body": "O que mudou, por que, como funciona, impacto e regras envolvidas." }
-     ]
-   }
+     "comments": [{ "path": "back/src/caminho/arquivo.ts", "line": 42, "side": "RIGHT", "body": "O que mudou, por que, como funciona, impacto e regras." }] }
    ```
 
-   `line` é a linha no arquivo e tem de estar dentro do diff; `side: "RIGHT"` aponta para a versão nova e `"LEFT"` para uma linha removida; bloco de várias linhas leva também `start_line` e `start_side`.
-
-3. **Confira o que saiu:** a revisão tem de estar `COMMENTED` e com o número de comentários enviado.
-
-   ```bash
-   gh api repos/<owner>/<repo>/pulls/<numero>/reviews --jq '.[] | {id, state}'
-   gh api repos/<owner>/<repo>/pulls/<numero>/reviews/<id>/comments --jq 'length'
-   ```
-
-   Uma falha no meio pode deixar um rascunho (`PENDING`) que bloqueia a próxima publicação; apague-o (`gh api .../reviews/<id> --method DELETE`) e publique de novo.
+   `line` é a linha no arquivo, dentro do diff; `side` `"RIGHT"` é a versão nova, `"LEFT"` a linha removida; bloco de várias linhas leva também `start_line` e `start_side`.
+3. **Confira:** a revisão `COMMENTED` e com o número de comentários enviado (`gh api .../pulls/<numero>/reviews --jq '.[] | {id, state}'` e `gh api .../reviews/<id>/comments --jq 'length'`). Falha no meio pode deixar um rascunho `PENDING` que bloqueia a próxima publicação: apague-o (`gh api .../reviews/<id> --method DELETE`) e publique de novo.
 
 ### Commits
 
-Todo commit, de pessoa ou de agente, segue o padrão de emojis do **Gitmoji**, e a tabela abaixo é a referência oficial; emoji novo entra na tabela por PR antes de ser usado.
-
-```text
-<emoji> <tipo>(<area>): <título claro e objetivo>
-
-Descrição em pt-BR cobrindo, quando se aplicam: o que foi implementado
-ou modificado; por que (em bug, a causa); como a solução foi aplicada
-e a alternativa descartada; o problema resolvido; os impactos.
-```
-
-**Exemplo:**
+Todo commit, de pessoa ou de agente, segue o **Gitmoji**; a tabela abaixo é a referência oficial, e emoji novo entra nela por PR antes de ser usado. **Uma alteração lógica por commit**, feito ao fechar cada etapa, não um commit único no fim.
 
 ```text
 🐛 fix(sdk): login novo vale mesmo com tarefa em segundo plano
@@ -490,22 +400,19 @@ em vigor. Agora a falha de login libera a reabertura no próximo turno;
 com login saudável a tarefa em segundo plano continua protegida.
 ```
 
-- **Emoji:** sempre um da tabela, o da intenção principal do commit.
-- **Tipo** logo depois do emoji, em inglês, o mesmo vocabulário do título do PR (que não leva emoji). **Área** entre parênteses, a mesma do título do PR.
-- **Título** em pt-BR, curto, com o verbo da ação, e entendido **de bater o olho** por quem nunca abriu o código: diz o que muda para quem usa o vibehub (a tela, o botão, o card, a entrega) ou, em mudança interna, o efeito dela, em palavras do dia a dia. O vocabulário interno (nome de arquivo, função, campo ou rota, e apelidos do código como "gate", "cabeça", "órfão", "só-merge") fica na descrição. Um assunto por título: dois assuntos ligados por "e" são dois commits. **Teste:** lido sozinho, numa lista de commits, alguém de fora do projeto consegue contar o que foi feito? Se não consegue, reescreva.
-- **Descrição** complementa o título em vez de repeti-lo: o detalhe técnico, a causa e os nomes internos moram aqui, explicados. "ajustes", "correções", "melhorias" não são descrição. Só fato: não afirmar teste que não rodou.
+- **`<emoji> <tipo>(<area>): <título>`:** um emoji da tabela, o da intenção principal; tipo em inglês e área, os mesmos do título do PR (que não leva emoji).
+- **Título** em pt-BR, curto, com o verbo da ação, para o leitor de "Como relatar" (§12): o que muda para quem usa o vibehub (a tela, o botão, o card, a entrega) ou, em mudança interna, o efeito dela, em palavras do dia a dia. Vocabulário interno (arquivo, função, campo, rota, apelidos do código como "gate", "cabeça", "órfão", "só-merge") fica na descrição. Um assunto por título: dois ligados por "e" são dois commits. **Teste:** lido sozinho numa lista de commits, alguém de fora conta o que foi feito? Se não, reescreva.
+- **Descrição** em pt-BR, complementando o título: o que foi feito, por que (em bug, a causa), como, a alternativa descartada, o problema resolvido e os impactos, com os nomes internos explicados. "ajustes", "correções", "melhorias" não são descrição; teste que não rodou não se afirma. Só o título basta apenas em commit mecânico (rename que não muda contrato, formatação).
 
 | Em vez de | Escreva |
 |-----------|---------|
 | `🐛 fix(review): gate da análise preso à cabeça que a análise entregou, e "rodar de novo" sem corrida` | `🐛 fix(review): botão Mergear da análise só mergeia o commit que foi analisado` (e o "rodar de novo" num commit próprio) |
 | `🗃️ feat(review): analyses.json guarda o veredito do gate do merge por commit analisado` | `🗃️ feat(review): análise de PR guarda se os testes passaram em cada commit analisado` |
 | `✅ test(review): gate da análise órfão de um deploy roda de novo` | `✅ test(review): testes do merge interrompidos por um deploy voltam a rodar` |
-- **Uma alteração lógica e coerente por commit**, feito ao fechar cada etapa, nunca um único commit com tudo no fim. Só o título vale apenas para commit mecânico (rename que não muda contrato, formatação).
-- **Merge commit também leva emoji:** `🔀 merge: ...`, sem área. No `gh pr merge`, passe o título com `--subject`, porque o padrão da ferramenta sai sem emoji.
-- **Se a mensagem e o PR divergem, vale o PR.**
-- **Mensagem já enviada não se reescreve** (operação de risco, §12): o que faltou vai para o PR.
-- `💡` (comentário no código) só para as exceções da §3 e para corrigir o comentário antigo que a mudança tornou falso (§3, "Comentários"); `🦖` (compatibilidade com versão anterior) só com a decisão explícita de compatibilidade da §6.
-- `✏️` só corrige erro de digitação. Trocar uma palavra que muda o sentido não é digitação: num identificador ou nome de teste, sem mudar comportamento, é `♻️`; num comentário que ficou falso, é `💡`.
+
+- **Merge commit também leva emoji:** `🔀 merge: ...`, sem área, via `--subject` no `gh pr merge` (o padrão da ferramenta sai sem emoji).
+- **Mensagem e PR divergem: vale o PR.** Mensagem enviada não se reescreve (operação de risco, §12): o que faltou vai para o PR.
+- `💡` só para as exceções da §3 e para corrigir o comentário antigo que a mudança tornou falso; `🦖` só com a decisão explícita de compatibilidade da §6. `✏️` só corrige digitação: trocar palavra que muda o sentido, num identificador ou nome de teste sem mudar comportamento, é `♻️`; num comentário que ficou falso, `💡`.
 
 | Emoji | Código | Quando usar |
 |---|---|---|
@@ -580,48 +487,28 @@ com login saudável a tarefa em segundo plano continua protegida.
 
 ### Regras de entrega
 
-- **PR pequeno e específico:** uma unidade lógica por PR. Se a mudança cria ou ajusta uma regra deste arquivo que o próprio código do PR segue, a regra vai no mesmo PR. Regra de processo que o PR só viveu (como revisar, entregar, quantas rodadas fazer) vai num PR próprio.
-- **Mudança neste arquivo:** a regra é escrita para qualquer agente, em qualquer área. Tem de ser clara para quem nunca viu o repositório, dizer o que fazer e por quê, e funcionar fora do caso que a motivou. Fato que muda (ferramenta instalada, nome de branch) entra como condição ("se…"), não como verdade fixa.
-- **Merge só com autorização explícita** (§12). Pendência que bloqueia, aberta, segura o merge mesmo com a ordem de merge já dada, até o aval daquela pendência ("A pendência deliberada é julgada", abaixo). Autorizado, o merge é **merge commit, nunca squash**, com o SHA verificado e o título no padrão Gitmoji: `gh pr merge <N> --merge --match-head-commit <sha> --subject "🔀 merge: ..."`. Depois do merge, confira o pipeline pós-merge (CI e publicação da imagem).
-- **Testes e CI verdes antes do merge**, sem warning novo no CI.
-- **Revisão independente antes do merge:** o diff passa por um revisor (pessoa ou agente) sem o contexto de quem o escreveu, que segue "Como revisar um PR", abaixo.
+- **PR pequeno e específico:** uma unidade lógica. Regra deste arquivo que o código do PR segue, criada ou ajustada, vai no mesmo PR; regra de processo que o PR só viveu (como revisar, entregar, quantas rodadas) vai num PR próprio.
+- **Mudança neste arquivo:** a regra vale para qualquer agente e área, é clara para quem nunca viu o repositório, diz o que fazer e por quê, e funciona fora do caso que a motivou. Fato que muda (ferramenta instalada, nome de branch) entra como condição ("se…").
+- **Merge só com autorização explícita** (§12), testes e CI verdes sem warning novo, e revisão independente ("Como revisar um PR"). Pendência que bloqueia, aberta, segura o merge mesmo com a ordem dada, até o aval dela. Autorizado: **merge commit, nunca squash**, SHA verificado, título Gitmoji (`gh pr merge <N> --merge --match-head-commit <sha> --subject "🔀 merge: ..."`); depois, confira o pipeline pós-merge (CI e publicação da imagem).
 
 ### Como revisar um PR
 
-Quem revisa (pessoa ou agente) é o **portão do merge**, não um leitor de cortesia. Recebe o diff, este arquivo e o que o autor afirma (a descrição do PR, ou as mensagens dos commits quando o PR ainda não existe, como no fechamento da §12), sem a conversa de quem escreveu, e trabalha para **achar o que está errado**, não para confirmar o que o PR diz. "Passa nos testes" não aprova sozinho, e "o autor explicou" não substitui conferir.
+Quem revisa (pessoa ou agente) é o **portão do merge**. Recebe o diff, este arquivo e o que o autor afirma (a descrição do PR ou, antes dele, as mensagens dos commits, como no fechamento da §12), sem a conversa de quem escreveu, e trabalha para **achar o que está errado**: "passa nos testes" não aprova sozinho e "o autor explicou" não substitui conferir.
 
-- **Tente quebrar.** Para cada bloco relevante, procure a entrada, o estado, a ordem de eventos ou a corrida (dois cards, dois backends, reconexão no meio do turno) que produz resultado errado. Achado sem cenário concreto de falha (entrada ou estado → resultado errado) é opinião, não achado.
-- **Prove cada achado.** Aponte o `arquivo:linha`. Em achado de comportamento, a prova mais forte é um teste que falha hoje; quando o revisor não pode escrever ou rodar o teste, vale o cenário concreto (entrada ou estado → resultado errado, com `arquivo:linha`). Violação de regra se prova citando a regra escrita deste arquivo e o trecho do diff que a viola. Separe o fato confirmado da hipótese e diga o que não verificou.
-- **Confira o que o PR afirma.** Cada causa, número, linha citada, resultado de teste, medição de performance, pendência e justificativa da descrição e dos comentários no diff se confere no código. Afirmação falsa ou sem sustentação é achado, mesmo quando o código está certo.
-- **Leia além do diff.** Confira:
-  - quem chama e quem é chamado pelo trecho alterado;
-  - quem consome o que mudou: o front, as ferramentas MCP, os scripts plantados nos containers e os pontos compartilhados (store, host executor, broadcast do websocket);
-  - o contrato com terceiro (SDK e CLI do Claude, GitHub, Docker) pela documentação ou pela versão instalada (§6);
-  - os dados já gravados nas instalações que o código novo vai ler (§6, §7);
-  - o que acontece no deploy: cards e turnos em andamento, retomada após o reinício, runner reaproveitado e limites de terceiros (rate limit do GitHub, cota da conta Claude).
-- **Confronte cada linha `+` com este arquivo**, seção por seção: nomes e arquivos (§2), `const` e comentários (§3), lugar, simplicidade e util (§4), frontend (§5), contratos e integrações (§6), dados (§7), performance (§8), erros (§9), acesso, shell e segredos (§10), testes (§11) e PR e commits (§14). Vale "trecho tocado = trecho auditado": o que o PR acrescentou ou alterou responde às regras como código novo; o que ficou fora do diff não entra.
-- **O teste tem de provar.** Confira três coisas:
-  - se ele falha sem a correção, pelo motivo certo;
-  - se cobre o fluxo real, em vez de mockar a lógica interna (§11);
-  - se o resultado depende do código, e não do relógio, da carga da máquina ou da ordem de execução.
-
-  Teste que passa sem afirmar nada, ou cujo nome promete mais do que ele verifica, é achado.
-- **A pendência deliberada é julgada.** Ela fica nos Pontos de atenção do PR (item 9), mesmo quando outra seção também a cita, ou na mensagem do commit quando o PR ainda não existe. Ela se sustenta quando o motivo é verdadeiro e fazer agora é impossível antes do merge (a integração que só roda depois do deploy) ou traz mais risco do que esperar. Pendência com motivo falso, ou que esconde uma violação simples de corrigir, é achado. O autor a declara; o revisor julga se ela se sustenta e diz isso na revisão; quem a aceita é quem autoriza o merge (o usuário, quando o trabalho é de um agente), explicitamente e para aquela pendência, depois de ler esse julgamento. O PR registra o aval (quem e quando); até lá ela segue bloqueando.
-- **Defeito e violação de regra bloqueiam o merge.** Defeito real no que o PR escreveu (comportamento errado, falha, brecha, perda de dado), linha do diff que viola uma regra escrita deste arquivo e toda regressão em relação à `main`, mesmo pequena, bloqueiam até serem corrigidos ou virarem pendência aceita (item da pendência deliberada, acima). Não é sugestão. O que não viola regra nenhuma não bloqueia: é **deveria corrigir** ou **menor**, pelo critério abaixo.
+- **Tente quebrar:** para cada bloco relevante, a entrada, o estado, a ordem de eventos ou a corrida (dois cards, dois backends, reconexão no meio do turno) que produz resultado errado. Sem esse cenário concreto (entrada ou estado → resultado errado), é opinião, não achado.
+- **Prove cada achado** com o `arquivo:linha`: em comportamento, de preferência um teste que falha hoje, senão o cenário concreto; em regra, a regra escrita deste arquivo e o trecho que a viola. Separe fato de hipótese e diga o que não verificou.
+- **Confira o que o PR afirma:** cada causa, número, linha, resultado de teste, medição, pendência e justificativa, da descrição e dos comentários no diff, contra o código. Afirmação falsa ou sem sustentação é achado, mesmo com o código certo.
+- **Leia além do diff:** quem chama e quem é chamado; quem consome o que mudou (o front, as ferramentas MCP, os scripts plantados nos containers, os pontos compartilhados: store, host executor, broadcast do websocket); o contrato com terceiro pela docs ou pela versão instalada (§6); os dados já gravados nas instalações que o código novo lê (§6, §7); o deploy: cards e turnos em andamento, retomada após o reinício, runner reaproveitado, limites de terceiros (rate limit do GitHub, cota da conta Claude).
+- **Confronte cada linha `+` com este arquivo**, seção por seção (§2 a §11 e §14). Trecho tocado = trecho auditado: o que o PR acrescentou ou alterou responde como código novo; o que ficou fora do diff não entra.
+- **O teste tem de provar:** falha sem a correção, pelo motivo certo; cobre o fluxo real, sem mockar a lógica interna (§11); depende do código, não do relógio, da carga ou da ordem de execução. Teste que não afirma nada, ou cujo nome promete mais do que verifica, é achado.
+- **A pendência deliberada é julgada.** Ela fica nos Pontos de atenção (item 9), mesmo quando outra seção a cita, ou na mensagem do commit antes de o PR existir. Sustenta-se quando o motivo é verdadeiro e fazer agora é impossível antes do merge (a integração que só roda depois do deploy) ou arrisca mais do que esperar; com motivo falso, ou escondendo violação simples de corrigir, é achado. O autor declara; o revisor julga e diz isso na revisão; quem aceita é quem autoriza o merge (o usuário, quando o trabalho é de agente), explicitamente e para aquela pendência, depois de ler o julgamento. O PR registra o aval (quem e quando); até lá, ela bloqueia.
 - **As severidades, e o que acontece com cada uma:**
-  - **bloqueia**: o item anterior, sempre com prova. É corrigido antes do merge, com o teste que prova o defeito quando ele é de comportamento, ou vira pendência aceita, com o motivo (item da pendência deliberada, acima). Código mais complicado que o necessário (§1.1, §4, §13) e nome que batiza com outro termo um conceito que o repo já nomeia (§1.7, §2) violam regra escrita e caem aqui.
-  - **deveria corrigir**: melhoria no código que o próprio PR escreveu, que preserva o comportamento, que **nenhuma regra escrita exige** (se uma regra cobre o caso, é **bloqueia**) e que não depende de gosto: quem lê concordaria sem precisar escolher (uma mensagem de erro que já basta para o diagnóstico, mas pode citar o id que falta; a ordem dos casos de um teste que acompanha melhor o fluxo). O autor aplica sem perguntar e não segura o merge.
-  - **decisão**: o que exige decidir intenção ou produto. Vira pergunta ao usuário (§12) e, enquanto estiver em aberto, o veredito é **não apto**.
-  - **menor**: preferência ou troca (a repetição pequena que a §3 permite manter, um nome alternativo igualmente claro, uma refatoração maior) e o que está fora do escopo do PR (problema antigo fora do diff). Não é aplicado: fica registrado no PR como sugestão.
-- **O formato da entrega segue o fluxo onde a revisão roda.** Os cards do vibehub que revisam PR, o de análise (`[vibehub · análise de PR]`) e o revisor da revisão em rodadas (`[vibehub · revisão de PR]`), seguem o contrato do prompt deles (`back/src/services/review/prompts.ts`): o JSON que o servidor lê, os vereditos por rodada e quem corrige (na análise, o próprio card; na revisão em rodadas, a IA do autor). As classes correspondem uma a uma: **bloqueia** = `blocking` com prova (`failing_test`, `rule` ou `scenario`), **deveria corrigir** = `improvement`, **decisão** = `question`, **menor** = `suggestion`; o achado que a verificação derrubou é `refuted` (na análise ele sai da lista; na revisão em rodadas ele vai no JSON, para ficar no histórico). Fora desses cards (o fechamento da §12, a revisão de uma pessoa), vale a lista abaixo.
-- **Entregue** a lista do mais grave para o menos grave. Cada achado tem:
-  - a severidade (**bloqueia**, **deveria corrigir**, **decisão** ou **menor**);
-  - o `arquivo:linha`;
-  - o defeito numa frase e o cenário de falha;
-  - a evidência;
-  - se é regressão em relação à `main`.
-
-  Feche com o veredito: **apto** ou **não apto**, com o motivo. O relatório segue "Como relatar" (§12): cada achado se entende sem abrir o código.
+  - **bloqueia**: defeito real no que o PR escreveu (comportamento errado, falha, brecha, perda de dado), linha que viola regra escrita deste arquivo e toda regressão em relação à `main`, mesmo pequena, sempre com prova. Corrige-se antes do merge, com o teste que prova o defeito de comportamento, ou vira pendência aceita. Código mais complicado que o necessário (§1.1, §4, §13) e nome que batiza com outro termo um conceito que o repo já nomeia (§1.7, §2) violam regra escrita e caem aqui.
+  - **deveria corrigir**: melhoria no código que o PR escreveu, que preserva o comportamento, que **nenhuma regra escrita exige** (se exige, é **bloqueia**) e que não depende de gosto (a mensagem de erro que já basta, mas pode citar o id que falta; a ordem dos casos de teste que acompanha melhor o fluxo). O autor aplica sem perguntar; não segura o merge.
+  - **decisão**: exige decidir intenção ou produto. Vira pergunta ao usuário (§12); enquanto aberta, o veredito é **não apto**.
+  - **menor**: preferência ou troca (a repetição pequena que a §3 permite, um nome igualmente claro, uma refatoração maior) e o fora do escopo (problema antigo fora do diff). Não se aplica: fica no PR como sugestão.
+- **O formato da entrega segue o fluxo onde a revisão roda.** Os cards de análise (`[vibehub · análise de PR]`) e de revisão em rodadas (`[vibehub · revisão de PR]`) seguem o contrato do prompt deles (`back/src/services/review/prompts.ts`): o JSON que o servidor lê, os vereditos por rodada e quem corrige (na análise, o próprio card; nas rodadas, a IA do autor). As classes correspondem: **bloqueia** = `blocking` com prova (`failing_test`, `rule` ou `scenario`), **deveria corrigir** = `improvement`, **decisão** = `question`, **menor** = `suggestion`; achado derrubado na verificação é `refuted` (na análise sai da lista; nas rodadas fica no JSON, para o histórico). Fora desses cards (o fechamento da §12, a revisão de uma pessoa), vale o item abaixo.
+- **Entregue** a lista do mais grave ao menos grave, cada achado com severidade, `arquivo:linha`, o defeito numa frase com o cenário de falha, a evidência e se é regressão em relação à `main`; feche com o veredito, **apto** ou **não apto**, e o motivo, no formato de "Como relatar" (§12).
 - Cada achado tem resposta na thread dele: o commit e o teste que o resolvem, ou o motivo de ter virado pendência.
 
 ## 15. Onde cada coisa vive
@@ -630,12 +517,12 @@ Quem revisa (pessoa ou agente) é o **portão do merge**, não um leitor de cort
 |--------|----------|
 | `AGENTS.md` (este) | Todas as regras do projeto, para qualquer agente e pessoa |
 | `.claude/CLAUDE.md` | Como o Claude Code trabalha aqui: ordem das etapas, mapa de skills, subagentes, fechamento e entrega; importa este arquivo e nunca repete regra dele |
-| `.claude/settings.json` | Plugins habilitados, permissões, a profundidade de subagente e os hooks: o lembrete das regras que mais escapam, a cada mensagem recebida; o `npm run lint:changed` depois de cada edição, antes de cada `git commit` e no fim do turno com mudança na worktree; vermelho, o erro volta ao agente, o commit é barrado e o turno não termina |
+| `.claude/settings.json` | Plugins, permissões, profundidade de subagente e hooks: o lembrete das regras que mais escapam, a cada mensagem; o `npm run lint:changed` depois de cada edição, antes de cada `git commit` e no fim do turno com mudança na worktree (vermelho: o erro volta ao agente, o commit é barrado e o turno não termina) |
 | `eslint.config.js` | A parte deste arquivo que a máquina checa (`npm run lint:changed`) |
 | `README.md`, `SECURITY.md` | Páginas públicas do repositório, sem regra de desenvolvimento |
-| `back/src/services/brain/personas/*.md` | Instruções que o servidor MCP do vibehub entrega a todo card, código do produto |
-| `docs/` | Documentação do projeto (arquitetura, API, processos do runner), não canônica para regra. Spec e plano das skills (brainstorming, writing-plans) ficam fora do repositório, em `/tmp/<card>/`, como referência do trabalho em curso |
-| `CLAUDE.local.md` (raiz da worktree, não versionado) | Instruções do projeto escritas pelo vibehub em cada card; a seção `## Aprendizados` recebe o que o `vibehub_brain_learn` descobre: porta, runner, flakiness, fato de ambiente |
+| `back/src/services/brain/personas/*.md` | Instruções que o servidor MCP do vibehub entrega a todo card (código do produto) |
+| `docs/` | Documentação do projeto (arquitetura, API, processos do runner), não canônica para regra. Spec e plano das skills (brainstorming, writing-plans) ficam fora do repositório, em `/tmp/<card>/` |
+| `CLAUDE.local.md` (raiz da worktree, não versionado) | Instruções do projeto que o vibehub escreve em cada card; `## Aprendizados` recebe o que o `vibehub_brain_learn` descobre (porta, runner, flakiness, fato de ambiente) |
 | Cérebro (`CLAUDE.md` do perfil, não versionado) | Instruções globais do runner, editadas na aba Dev → Cérebro |
 
-Markdown versionado só existe nos lugares desta tabela (em `docs/`, só na raiz da pasta): `npm run lint:changed` reprova o `.md` que a branch commita fora deles. Regra de projeto nova entra neste arquivo; memória do agente, `CLAUDE.local.md` e Cérebro guardam fato de ambiente, nunca regra de código. Assunto que nenhuma camada documenta é pergunta ao usuário (§12), não convenção inventada.
+Markdown versionado só existe nestes lugares (em `docs/`, só na raiz da pasta): o `npm run lint:changed` reprova o `.md` commitado fora deles. Regra de projeto nova entra neste arquivo; memória do agente, `CLAUDE.local.md` e Cérebro guardam fato de ambiente, nunca regra de código. Assunto que nenhuma camada documenta é pergunta ao usuário (§12), não convenção inventada.
