@@ -94,6 +94,14 @@ describe("painel da análise de PR", () => {
     expect(within(dimensions).getByText("o diff só toca configuração")).toBeInTheDocument();
   });
 
+  it("o resumo em tópicos aparece como lista, com o código marcado", async () => {
+    renderPanel(readModel(doneReport({ summary: "- troca a senha pelo `sso`\n- sessão expira com o token" }), "not_apt"));
+    await screen.findByRole("heading", { name: "Análise do PR #312" });
+    expect(screen.getByText("troca a senha pelo", { exact: false }).closest("li")).toBeInTheDocument();
+    expect(screen.getByText("sessão expira com o token").tagName).toBe("LI");
+    expect(screen.getByText("sso").tagName).toBe("CODE");
+  });
+
   it("dimensão que rodou com achado não verificado aparece em atenção, com o motivo, ao lado do não apto que o servidor manda", async () => {
     const dimensions = doneReport().dimensions.map((dimension) => dimension.key === "tests"
       ? { ...dimension, unverifiedCount: 2, reason: "2 achados sem veredito (o verificador não respondeu)" }
@@ -139,7 +147,7 @@ describe("painel da análise de PR", () => {
 
   it("o corpo tem overflow-y-auto, overflow-x-hidden e overflow-wrap:anywhere, para o caminho longo quebrar em vez de rolar de lado", async () => {
     renderPanel(readModel(doneReport(), "not_apt"));
-    const body = (await screen.findByText("Login por SSO no lugar da senha local.")).parentElement;
+    const body = (await screen.findByRole("list", { name: "Dimensões revisadas" })).parentElement;
     expect(body).toHaveClass("overflow-y-auto", "overflow-x-hidden", "[overflow-wrap:anywhere]");
   });
 
