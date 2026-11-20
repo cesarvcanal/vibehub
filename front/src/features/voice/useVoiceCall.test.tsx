@@ -245,7 +245,7 @@ describe("useVoiceCall — a deploy during the call", () => {
     resetReloadHoldsForTesting();
     onTestFinished(() => {
       vi.unstubAllGlobals();
-      Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
+      Reflect.deleteProperty(document, "hidden");
     });
     const reload = vi.fn();
     renderHook(() => useVersionCheck({ intervalMs: 1_000, reload }));
