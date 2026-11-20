@@ -1987,6 +1987,53 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  /** A review in impasse "rodadas": the reviewer's round 3 left a blocking one standing on SHA1, and a person kept it. */
+  async function roundsImpasse(o: Loaded) {
+    const { author, review } = await started(o);
+    await o.store.mutateReview(review.id, (r) => {
+      r.round = 3;
+    });
+    await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 3, findings: [{ ...BLOCKER, introducedInRound: 3 }], headSha: SHA1, summary: "bloqueante novo",
+    });
+    const kept = await o.orch.decideQuestion(review.id, "f1", "keep", "mussa");
+    expect(kept).toMatchObject({ phase: "impasse", impasseReason: "rodadas" });
+    send.mockClear();
+    calls.length = 0;
+    return { author, review: kept };
+  }
+
+  it("push depois do impasse por rodadas volta ao revisor numa conferência extra, e o fixed dele deixa a revisão pronta", async () => {
+    const o = await load();
+    const { review } = await roundsImpasse(o);
+    prHeadNow = SHA2;
+    const reopened = await o.orch.syncReviewWithGithub(review.id);
+    expect(reopened).toMatchObject({ phase: "reviewing", round: 3, lastSubmitRound: 2, reviewedSha: SHA1, prHeadSha: SHA2 });
+    expect(reopened?.impasseReason).toBeUndefined();
+    expect(reopened?.log.at(-1)?.text).toMatch(/O autor empurrou depois do impasse \(head bbbbbbb\).*conferência extra/);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
+    expect(lastText()).toContain("depois do impasse");
+    expect(lastText()).toContain(`git diff ${SHA1}..HEAD`);
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 3, findings: [], verdicts: [{ id: "f1", status: "fixed", reviewerReply: "corrigido no push" }], headSha: SHA2, summary: "ok",
+    });
+    expect(after).toMatchObject({ phase: "ready", reviewedSha: SHA2 });
+  });
+
+  it("no impasse por rodadas, head igual ao revisado não reabre; impasse por outro motivo não reabre com push", async () => {
+    const o = await load();
+    const { review } = await roundsImpasse(o);
+    prHeadNow = SHA1;
+    expect(await o.orch.syncReviewWithGithub(review.id)).toMatchObject({ phase: "impasse", impasseReason: "rodadas" });
+    await o.store.mutateReview(review.id, (r) => {
+      r.impasseReason = "IA não respondeu";
+    });
+    prHeadNow = SHA2;
+    expect(await o.orch.syncReviewWithGithub(review.id)).toMatchObject({ phase: "impasse", impasseReason: "IA não respondeu" });
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("o delta lista as sugestões em aberto, e o fixed do revisor numa sugestão aplicada vale", async () => {
     const o = await load();
     const { author, review, off } = await readyAt(o);

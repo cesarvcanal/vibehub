@@ -363,6 +363,10 @@ export function phaseAfterReviewerRound(review: Review): { phase: ReviewPhase; i
   return { phase: "ready" };
 }
 
+export function reopensOnNewHead(review: Pick<Review, "phase" | "impasseReason">): boolean {
+  return review.phase === "ready" || (review.phase === "impasse" && review.impasseReason === "rodadas");
+}
+
 /**
  * WHO MAY MERGE a ready review: anybody with a role in it — the merge owner, the reviewer, the author
  * and the co-author. The owner is still the one the automatic merge uses; the others exist so the work

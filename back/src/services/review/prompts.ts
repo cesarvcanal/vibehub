@@ -504,13 +504,16 @@ export function nudgePrefix(tool: typeof TOOL_SUBMIT | typeof TOOL_RESPOND): str
  * new round did not come from an author's answer to the list. `merge` = the human merge was refused because
  * of it; `push` = the author's turn ended with a new push (somebody told their AI to change the PR).
  */
-export function headMovedPrefix(r: Review, cause: "merge" | "push" = "merge"): string {
+export function headMovedPrefix(r: Review, cause: "merge" | "push" = "merge", from: "ready" | "impasse" = "ready"): string {
   const approved = r.reviewedSha ? ` (${r.reviewedSha.slice(0, 7)})` : "";
-  const what = cause === "push"
-    ? `O autor empurrou commits no PR #${r.prNumber} depois do pronto (push depois do pronto)`
-    : `Merge recusado pelo vibehub: push depois do pronto. O head do PR #${r.prNumber} mudou`;
+  const what = cause === "merge"
+    ? `Merge recusado pelo vibehub: push depois do pronto. O head do PR #${r.prNumber} mudou`
+    : from === "ready"
+      ? `O autor empurrou commits no PR #${r.prNumber} depois do pronto (push depois do pronto)`
+      : `O autor empurrou commits no PR #${r.prNumber} depois do impasse, respondendo ao que ficou travado`;
+  const reviewed = from === "ready" ? "aprovou" : "revisou";
   return (
-    `${what}: o head não é mais o commit que você aprovou${approved}, então a revisão voltou para a rodada ` +
+    `${what}: o head não é mais o commit que você ${reviewed}${approved}, então a revisão voltou para a rodada ` +
     `${r.round}. Confira o que entrou desde então como uma rodada nova, pelos passos abaixo.\n\n`
   );
 }
