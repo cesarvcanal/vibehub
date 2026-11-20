@@ -542,6 +542,18 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
     expect(screen.getByTestId("sdk-question")).toHaveAttribute("data-outcome", "answered");
   });
 
+  it("a explicação de cada opção aparece embaixo do título, dentro do botão", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(QUESTION);
+
+    const option = screen.getByRole("button", { name: "Detalhado" });
+    expect(within(option).getByText("Explicação completa")).toBeVisible();
+    expect(option).toHaveAccessibleDescription("Explicação completa");
+  });
+
   it("multiSelect collects the picks and sends them together on 'Answer'", async () => {
     renderSdkChat();
     const ws = await socket();

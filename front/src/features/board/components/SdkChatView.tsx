@@ -24,7 +24,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useNow, usePageVisible } from "@/lib/useNow";
 import { wsUrl } from "@/lib/ws";
-import { Button } from "@/components/ui/button";
+import { Button, type ButtonProps } from "@/components/ui/button";
 import { useAuth } from "@/providers/auth";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
 import { useVoiceCall } from "@/features/voice/useVoiceCall";
@@ -2821,32 +2821,30 @@ function SdkQuestionCard({
         <div key={qi} className="flex flex-col gap-1.5">
           {q.header ? <div className="text-[10px] font-semibold uppercase tracking-wide text-sky-500/80">{q.header}</div> : null}
           <div className="text-sm text-foreground">{q.question}</div>
-          <div className="flex flex-wrap gap-1.5">
+          <div className={cn("flex gap-1.5", hasDescriptions(q.options) ? "flex-col" : "flex-wrap")}>
             {q.options.map((opt) => {
               const selected = (picked[qi] ?? []).includes(opt.label);
               // Marked by ANOTHER person: their dot in the corner of the option, in their color.
               const pickedBy = peers.filter((p) => (p.draft.picked[qi] ?? []).includes(opt.label));
               return (
-                <Button
+                <ChoiceOption
                   key={opt.label}
-                  size="sm"
-                  variant={selected ? "default" : "outline"}
-                  className={cn("relative h-7 max-w-full overflow-visible text-xs", pickedBy.length > 0 && !selected && peerTone(pickedBy[0]!.name).border)}
+                  label={opt.label}
+                  description={opt.description}
+                  stacked={hasDescriptions(q.options)}
+                  selected={selected}
+                  className={cn(pickedBy.length > 0 && !selected && peerTone(pickedBy[0]!.name).border)}
                   data-testid="sdk-question-option"
                   data-peer-picked={pickedBy.length > 0 || undefined}
-                  aria-pressed={selected}
-                  title={pickedBy.length > 0
-                    ? [opt.description, t("sdk.questionPeerPicked", { names: pickedBy.map((p) => peerDisplayName(p.name)).join(", ") })].filter(Boolean).join(" — ")
-                    : opt.description}
+                  title={pickedBy.length > 0 ? t("sdk.questionPeerPicked", { names: pickedBy.map((p) => peerDisplayName(p.name)).join(", ") }) : undefined}
                   onClick={() => toggle(qi, opt.label)}
                 >
-                  <span className="truncate">{opt.label}</span>
                   {pickedBy.length > 0 ? (
                     <span className="absolute -right-1.5 -top-1.5 flex -space-x-1">
                       {pickedBy.map((p) => <PeerAvatar key={p.name} name={p.name} small />)}
                     </span>
                   ) : null}
-                </Button>
+                </ChoiceOption>
               );
             })}
           </div>
@@ -2923,6 +2921,55 @@ function SdkQuestionCard({
       )}
       <span className="text-muted-foreground/70">{t("sdk.questionTimeoutHint")}</span>
     </div>
+  );
+}
+
+function hasDescriptions(options: ReadonlyArray<{ description?: string }>): boolean {
+  return options.some((option) => (option.description ?? "") !== "");
+}
+
+/**
+ * One choice of a question, on the structured card and on the prose question alike: the title and,
+ * under it, the explanation the agent wrote. `stacked` is the full-width row used when any choice of
+ * the question has an explanation; without one, the choices stay side by side as pills.
+ */
+function ChoiceOption({
+  label,
+  description,
+  stacked,
+  selected,
+  className,
+  children,
+  ...buttonProps
+}: Omit<ButtonProps, "aria-label" | "aria-describedby" | "aria-pressed"> & {
+  label: string;
+  description?: string;
+  stacked: boolean;
+  selected?: boolean;
+}) {
+  const descriptionId = React.useId();
+  return (
+    <Button
+      size="sm"
+      variant={selected ? "default" : "outline"}
+      className={cn(
+        "relative max-w-full overflow-visible text-xs",
+        stacked ? "h-auto w-full flex-col items-start gap-0.5 whitespace-normal px-2.5 py-1.5 text-left" : "h-7",
+        className,
+      )}
+      aria-label={label}
+      aria-describedby={description ? descriptionId : undefined}
+      aria-pressed={selected}
+      {...buttonProps}
+    >
+      <span className={stacked ? "break-words" : "truncate"}>{label}</span>
+      {description ? (
+        <span id={descriptionId} className={cn("break-words font-normal", selected ? "text-primary-foreground/80" : "text-muted-foreground")}>
+          {description}
+        </span>
+      ) : null}
+      {children}
+    </Button>
   );
 }
 
