@@ -80,6 +80,13 @@ export const AnaliseCorrigindo = analysisStory("Análise · depois do juiz, corr
   merging: false,
 }, true);
 export const AnaliseApta = analysisStory("Análise · apta", { analysis: analysisReport(), health: healthOk, verdict: "apt", uncheckedDimensions: [], canMerge: false, merging: false });
+export const AnaliseMergeando = analysisStory("Análise · apta, merge rodando", {
+  analysis: analysisReport(), health: healthOk, verdict: "apt", uncheckedDimensions: [], canMerge: true, merging: true,
+});
+export const AnaliseMergeBarrado = analysisStory("Análise · apta, último merge barrado", {
+  analysis: analysisReport(), health: healthOk, verdict: "apt", uncheckedDimensions: [], canMerge: true, merging: false,
+  lastMergeRefusal: { cardId: "c1", analysedSha: analysisReport().analysedSha, reason: "gate", by: "mussa", at: 1 },
+});
 export const AnaliseNaoAptaSemConferencia = analysisStory("Análise · não apta, dimensão sem conferência", {
   analysis: analysisReport({ dimensions: ANALYSIS_DIMENSIONS.map((key) => ({ key, status: key === "security" ? "not_run" as const : "ran" as const })) }),
   health: { ...healthOk, security: "not_run" },
