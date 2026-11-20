@@ -484,6 +484,7 @@ export interface Card {
   pendingQuestionAt?: number | null;
   /** Last time a human typed into this card's terminal (epoch ms). */
   humanActiveAt?: number;
+  humanActiveUserId?: string;
   /**
    * Last sign of life the server itself produced for the card (epoch ms): an open/wake, an
    * instruction delivered to it. Read only by the done-card countdown, which must count it as the
