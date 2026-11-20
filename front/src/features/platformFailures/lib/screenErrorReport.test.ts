@@ -52,6 +52,15 @@ describe("relato do erro que a tela mostrou", () => {
     await vi.waitFor(() => expect(post).toHaveBeenCalledTimes(1));
   });
 
+  it("relato que falha pode ser repetido na próxima vez que o erro aparece", async () => {
+    post.mockRejectedValueOnce(new Error("back em deploy"));
+    reportScreenError(new Error("relato que caiu"));
+    await vi.waitFor(() => {
+      reportScreenError(new Error("relato que caiu"));
+      expect(post).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("exceção não tratada de um script do próprio vibehub é relatada; a de extensão do navegador não", () => {
     startListening();
     dispatchScriptError("handler quebrou", `${window.location.origin}/assets/index.js`);

@@ -15,8 +15,9 @@ export function reportScreenError(error: unknown): void {
   const stack = error.stack?.slice(0, STACK_MAX_CHARS);
   platformFailuresApi
     .recordScreenError({ message, ...(stack ? { stack } : {}), screen: window.location.pathname })
-    // eslint-disable-next-line no-restricted-syntax -- melhor esforço: o erro já está na tela, e o relato que falha não pode virar outro erro a relatar
-    .catch(() => undefined);
+    .catch(() => {
+      reportedMessages.delete(message);
+    });
 }
 
 export function listenForScreenErrors(): () => void {
