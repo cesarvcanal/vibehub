@@ -241,6 +241,15 @@ describe("frota da análise de PR", () => {
     );
   });
 
+  it("o contexto escreve o resumo e o verificador a evidência em tópicos, uma frase curta cada: o painel mostra lista, não um bloco corrido", async () => {
+    const { calls } = await runFleet(confirmOneFindingUpToJudge);
+    const contextPrompt = calls.find((call) => call.opts.phase === "Contexto")!.prompt;
+    expect(contextPrompt).toContain('No summary, um tópico markdown ("- ") por mudança do PR');
+    expect(contextPrompt).toContain('nunca um parágrafo corrido nem "(1) … (2) …" na mesma linha');
+    const verifyPrompt = calls.find((call) => call.opts.phase === "Verificação")!.prompt;
+    expect(verifyPrompt).toContain('Em evidence, o que você conferiu, um tópico markdown ("- ") por conferência');
+  });
+
   it("o verificador roda só o teste filtrado pelo caso, nunca o arquivo inteiro nem a suíte", async () => {
     const { calls } = await runFleet(async (_prompt, opts) => {
       if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);

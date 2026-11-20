@@ -135,7 +135,9 @@ const contextPrompt =
   `PR #${args.prNumber} (branch ${args.branch} -> ${args.base}, head ${args.headSha}). ${READ_ONLY_RULE}\n` +
   `Leia o diff (git diff ${diffRange}), a descrição do PR (gh pr view ${args.prNumber}) e as regras do repositório. ` +
   'Monte o brief que os revisores vão receber: o resumo do que o PR faz, as áreas tocadas, quem consome o que mudou ' +
-  '(procure os imports e as chamadas) e, para cada dimensão abaixo, se o diff a toca (applies) e por quê.\n' +
+  '(procure os imports e as chamadas) e, para cada dimensão abaixo, se o diff a toca (applies) e por quê. ' +
+  'No summary, um tópico markdown ("- ") por mudança do PR, cada um uma frase curta que quem não abriu o código entende; ' +
+  'nunca um parágrafo corrido nem "(1) … (2) …" na mesma linha.\n' +
   DIMENSIONS.map((dimension) => `- ${dimension.key}: ${dimension.focus}`).join('\n')
 
 const reviewPrompt = (dimension, brief) =>
@@ -150,7 +152,8 @@ const verifyPrompt = (finding, dimension, brief) =>
   `Tente DERRUBAR este achado de ${dimension.key} do PR #${args.prNumber}. ${READ_ONLY_RULE}\n${briefText(brief)}\n` +
   `Achado: ${JSON.stringify(finding)}\n` +
   'Confira no código: a linha existe, o cenário acontece de verdade, a regra citada diz isso. Quando um teste existente ' +
-  'decide a questão, rode só ele, filtrado pelo caso (-t "<caso>"). Na dúvida, confirmed = false. Em evidence, o que você conferiu.'
+  'decide a questão, rode só ele, filtrado pelo caso (-t "<caso>"). Na dúvida, confirmed = false. ' +
+  'Em evidence, o que você conferiu, um tópico markdown ("- ") por conferência, cada um uma frase curta.'
 
 const judgePrompt = (confirmedFindings, brief) =>
   `Você é o juiz da análise do PR #${args.prNumber}, sem o contexto de quem revisou. ${READ_ONLY_RULE}\n${briefText(brief)}\n` +
