@@ -4,15 +4,6 @@ import type { SdkRow } from "@/features/board/lib/sdkChat";
 /**
  * PENDING DECISIONS — what in this conversation is still WAITING ON THE USER.
  *
- * The pain this solves: a long turn buries the one question that unblocks the sequence. Two
- * sources feed the tray above the composer:
- *
- *  1. **Structured questions** — every `user_question` card (AskUserQuestion) still pending. These
- *     are exact: they stay pending until answered, whatever else is said in between.
- *  2. **Prose questions (best effort)** — an assistant message whose FINAL paragraph is a question
- *     directed at the user (conservative heuristic below). These have no structured answer: any
- *     user message sent afterwards counts as dealing with them.
- *
  * A decision can also be ANSWERED ON PURPOSE: the composer aims at one, and the message it sends
  * wears `buildDecisionReply`'s wrapper. That wrapper is the whole trick behind "pronto, respondi" —
  * it travels to the model AND back out of the history, so the answer stays anchored to its question
@@ -65,21 +56,90 @@ function lastParagraph(text: string): string {
   return paragraphs[paragraphs.length - 1] ?? "";
 }
 
-/**
- * The question directed at the user that CLOSES this text — or null. Conservative: only the final
- * paragraph counts (a question answered by the text itself is not pending), it must end in "?"
- * AND read as directed (or open with an explicit decision request), and quoted/code paragraphs
- * never match. PURE.
- */
 export function proseQuestion(text: string): string | null {
-  const para = lastParagraph(text);
-  if (para === "" || para.startsWith(">") || para.startsWith("```") || para.includes("```")) return null;
-  const plain = normalized(para);
-  if (DECISION_PREFIX.test(plain)) return para;
-  // strip trailing markdown/quote noise after the question mark ("?**", '?"', "?)")
-  const end = para.replace(/[\s*_"'`)\]]+$/, "");
-  if (!end.endsWith("?")) return null;
-  return DIRECTED.test(plain) ? para : null;
+  const block = closingBlock(text);
+  if (block === "" || block.startsWith(">") || block.includes("```")) return null;
+  const lead = optionList(block)?.lead ?? "";
+  return asksUser(lead) || asksUser(block) ? block : null;
+}
+
+const TRAILING_MARKUP = /[\s*_"'`)\]]+$/;
+
+function asksUser(text: string): boolean {
+  if (text === "") return false;
+  const plain = normalized(text);
+  if (DECISION_PREFIX.test(plain)) return true;
+  const end = text.replace(TRAILING_MARKUP, "");
+  return end.endsWith("?") && DIRECTED.test(plain);
+}
+
+function closingBlock(text: string): string {
+  const last = lastParagraph(text);
+  const lastIsBareList = optionList(last)?.lead === "";
+  if (!lastIsBareList) return last;
+  const beforeList = text.slice(0, text.lastIndexOf(last));
+  const previous = lastParagraph(beforeList);
+  if (previous === "") return last;
+  return text.slice(beforeList.lastIndexOf(previous)).trim();
+}
+
+export interface ProseOption {
+  label: string;
+  description?: string;
+}
+
+const LIST_ITEM = /^(?:\d+[.)]|[-*+])\s+(.*)$/;
+const INDENTED = /^\s/;
+
+function optionList(block: string): { lead: string; items: string[][] } | null {
+  const lines = block.split("\n");
+  const leadEnd = lines.findLastIndex((line) => line.trim() !== "" && !LIST_ITEM.test(line) && !INDENTED.test(line));
+  const listLines = lines.slice(leadEnd + 1).filter((line) => line.trim() !== "");
+  if (listLines.length === 0 || !LIST_ITEM.test(listLines[0]!)) return null;
+  const items = listLines.reduce<string[][]>((grouped, line) => {
+    const item = LIST_ITEM.exec(line);
+    if (item) return [...grouped, [item[1]!.trim()]];
+    return [...grouped.slice(0, -1), [...grouped[grouped.length - 1]!, line.trim()]];
+  }, []);
+  if (items.length < 2) return null;
+  return { lead: lines.slice(0, leadEnd + 1).join("\n").trim(), items };
+}
+
+function plainInline(text: string): string {
+  return text
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\*\*|__|`/g, "")
+    .replace(/(^|\s)[*_]([^*_\s][^*_]*)[*_](?=\s|$|[.,;:!?])/g, "$1$2")
+    .trim();
+}
+
+const FREE_ANSWER_OPTION = /^(outra|outro|other)(\s+(resposta|answer))?\s*(:\s*(descreva|describe)\b.*)?$/i;
+const BOLD_TITLE = /^\*\*(.+?)\*\*(.*)$/;
+const DASH_SEPARATOR = /\s[—–]\s/;
+
+function splitItemTitle(line: string): { title: string; rest: string } {
+  const bold = BOLD_TITLE.exec(line);
+  if (bold) return { title: bold[1]!, rest: bold[2]! };
+  const dashAt = line.search(DASH_SEPARATOR);
+  if (dashAt < 0) return { title: line, rest: "" };
+  return { title: line.slice(0, dashAt), rest: line.slice(dashAt) };
+}
+
+function toProseOption([firstLine, ...continuation]: string[]): ProseOption {
+  const { title, rest } = splitItemTitle(firstLine!);
+  const label = plainInline(title).replace(/:$/, "");
+  const description = [rest.replace(/^[\s—–:-]+/, ""), ...continuation]
+    .map(plainInline)
+    .filter((line) => line !== "")
+    .join("\n");
+  return description === "" ? { label } : { label, description };
+}
+
+export function proseOptions(question: string): { lead: string; options: ProseOption[] } | null {
+  const list = optionList(question);
+  if (!list || !asksUser(list.lead)) return null;
+  const options = list.items.map(toProseOption).filter((option) => !FREE_ANSWER_OPTION.test(option.label));
+  return options.length < 2 ? null : { lead: list.lead, options };
 }
 
 type AssistantRow = Extract<SdkRow, { kind: "assistant" }>;

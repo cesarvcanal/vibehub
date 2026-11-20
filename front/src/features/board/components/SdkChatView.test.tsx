@@ -542,6 +542,18 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
     expect(screen.getByTestId("sdk-question")).toHaveAttribute("data-outcome", "answered");
   });
 
+  it("a explicação de cada opção aparece embaixo do título, dentro do botão", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(QUESTION);
+
+    const option = screen.getByRole("button", { name: "Detalhado" });
+    expect(within(option).getByText("Explicação completa")).toBeVisible();
+    expect(option).toHaveAccessibleDescription("Explicação completa");
+  });
+
   it("multiSelect collects the picks and sends them together on 'Answer'", async () => {
     renderSdkChat();
     const ws = await socket();
@@ -1470,6 +1482,41 @@ describe("SdkChatView — responder A decisão (não um recado solto)", () => {
 
     await userEvent.click(screen.getByTestId("pending-tray-item"));
     expect(screen.queryByTestId("sdk-reply-banner")).toBeNull();
+  });
+
+  it("pergunta em prosa com lista: cada item vira botão com título e explicação, e o clique responde", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({
+      type: "assistant_text",
+      text: "Revisei o PR.\n\nDecisão sua:\n1. **Crio o PR de teste (recomendado)** — confiro o conflito de ponta a ponta antes do merge.\n2. **Merge agora** — você aceita a pendência.",
+    });
+    ws.deliver({ type: "result", isError: false });
+
+    const options = screen.getAllByTestId("sdk-prose-option");
+    expect(options).toHaveLength(2);
+    expect(within(options[0]!).getByText("confiro o conflito de ponta a ponta antes do merge.")).toBeVisible();
+    expect(screen.getByTestId("sdk-prose-question")).not.toHaveTextContent("1.");
+
+    await userEvent.click(screen.getByRole("button", { name: "Merge agora" }));
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    const frame = JSON.parse(ws.sent[0]!);
+    expect(frame.type).toBe("user");
+    expect(frame.text).toContain("Decisão sua:");
+    expect(frame.text).toMatch(/\n\nMerge agora$/);
+    expect(screen.getByTestId("sdk-prose-question")).toHaveAttribute("data-answered", "true");
+    expect(screen.getByTestId("sdk-prose-answered")).toHaveTextContent("Merge agora");
+    expect(screen.queryByTestId("sdk-prose-option")).toBeNull();
+  });
+
+  it("a pergunta com opções que o agente deixou para trás não oferece mais os botões", async () => {
+    const ws = await chatWithProseQuestion();
+    ws.deliver({ type: "assistant_text", text: "Qual você prefere?\n1. A\n2. B" });
+    ws.deliver({ type: "assistant_text", text: "Fui de A." });
+    await waitFor(() => expect(screen.queryByTestId("pending-tray")).toBeNull());
+    expect(screen.queryByTestId("sdk-prose-option")).toBeNull();
   });
 
   it("o AGENTE seguiu sozinho: a pergunta antiga sai da bandeja e o alvo cai junto", async () => {
