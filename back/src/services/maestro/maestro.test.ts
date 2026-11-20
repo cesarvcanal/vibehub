@@ -563,6 +563,60 @@ describe("human-active lock (maestro-only)", () => {
   });
 });
 
+describe("human-active lock yields to the card's own open question", () => {
+  type AskMark = "awaitingDecisionAt" | "pendingQuestionAt";
+
+  async function openCardTypedThenAsked(mark: AskMark, typedAt: number, askedAt: number) {
+    const loaded = await load();
+    const project = await loaded.registry.createProject({ name: "billing" });
+    const card = await loaded.registry.createCard({ projectId: project.id, title: "waiting on a decision" });
+    await loaded.registry.applyOpenTerminal(card.id);
+    await loaded.registry.markCardHumanActive(card.id, typedAt);
+    if (mark === "awaitingDecisionAt") await loaded.registry.setCardAwaitingDecision(card.id, askedAt);
+    else await loaded.registry.setCardPendingQuestion(card.id, askedAt);
+    return { ...loaded, card };
+  }
+
+  it.each<AskMark>(["awaitingDecisionAt", "pendingQuestionAt"])(
+    "a maestro's send goes through when the card stopped on a question (%s) after the person's last keystroke",
+    async (mark) => {
+      const now = Date.now();
+      const { maestro, card } = await openCardTypedThenAsked(mark, now - 60_000, now - 10_000);
+      await expect(maestro.sendToTerminal(card.id, "Mongo", { respectHumanActive: true })).resolves.toMatchObject({ sent: true });
+      expect(runScript).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("the person who typed AFTER the question opened is still protected from the maestro", async () => {
+    const now = Date.now();
+    const { maestro, card } = await openCardTypedThenAsked("awaitingDecisionAt", now - 10_000, now - 60_000);
+    await expect(maestro.sendToTerminal(card.id, "Mongo", { respectHumanActive: true })).rejects.toThrow(/human-active/);
+    expect(runScript).not.toHaveBeenCalled();
+  });
+
+  it("the listing reports humanActive false once the card stopped on a question after the last keystroke", async () => {
+    const now = Date.now();
+    const { maestro, card } = await openCardTypedThenAsked("awaitingDecisionAt", now - 60_000, now - 10_000);
+    const row = (await maestro.listTerminals()).find((terminal) => terminal.cardId === card.id);
+    expect(row).toMatchObject({ humanActive: false });
+  });
+
+  it.each([
+    ["made after the last keystroke goes through", -10_000, true],
+    ["made before the last keystroke is refused", -120_000, false],
+  ])("answering an ask (inReplyTo) %s", async (_case, askedOffsetMs, delivered) => {
+    const now = Date.now();
+    const { maestro, registry } = await load();
+    const project = await registry.createProject({ name: "billing" });
+    const card = await registry.createCard({ projectId: project.id, title: "asked by an event" });
+    await registry.applyOpenTerminal(card.id);
+    await registry.markCardHumanActive(card.id, now - 60_000);
+    const send = maestro.sendToTerminal(card.id, "Mongo", { respectHumanActive: true, answeringAskedAt: now + askedOffsetMs });
+    if (delivered) await expect(send).resolves.toMatchObject({ sent: true });
+    else await expect(send).rejects.toThrow(/human-active/);
+  });
+});
+
 describe("requireAgent guard — the chat's forever-pending bubble", () => {
   // THE BUG: Claude exits, the pane is a bare shell that still accepts keystrokes; the chat send
   // answered 200 and the message went to bash — never echoed, so the optimistic bubble hung as
