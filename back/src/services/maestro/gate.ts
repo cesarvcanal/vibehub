@@ -499,12 +499,14 @@ async function runGateNow(cardId: string, expectedSha?: string): Promise<GateRes
     : passed ? cleanOutput(output) : gateFailureOutput(output, timedOut ? "timeout" : reached ? undefined : "died");
   if (passed && reuseKey) greenVerdicts.set(card.id, { key: reuseKey, at: probedAt, output: cleaned });
   else greenVerdicts.delete(card.id);
-  logger.info(
-    {
-      audit: true, action: "maestro.gate", card: card.worktreeSlug, ran: true, passed, checks: plan.checks.length,
-      head: probe.headSha, waitedMs: startedAt - queuedAt, durationMs: Date.now() - startedAt, ...(timedOut ? { timedOut } : {}), ...(moved ? { moved } : {}),
-    },
-    timedOut ? "gate timed out — killed in the runner" : "gate ran",
-  );
+  const gateRunFields = {
+    audit: true, action: "maestro.gate", card: card.worktreeSlug, ran: true, passed, checks: plan.checks.length,
+    head: probe.headSha, waitedMs: startedAt - queuedAt, durationMs: Date.now() - startedAt, ...(moved ? { moved } : {}),
+  };
+  if (timedOut) {
+    logger.warn({ ...gateRunFields, timedOut, detail: "the gate passed its deadline and was killed in the runner" }, "gate timed out — killed in the runner");
+  } else {
+    logger.info(gateRunFields, "gate ran");
+  }
   return { ran: true, passed, output: cleaned, ...(timedOut ? { timedOut: true as const } : {}), ...tested };
 }

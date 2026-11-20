@@ -308,6 +308,26 @@ describe("runGate under load", () => {
       isRun(script) ? { stdout: "slow\n__VIBEHUB_GATE__ timeout 585\n", stderr: "" } : { stdout: probe, stderr: "" });
     expect(await gate.runGate(c.id)).toMatchObject({ ran: true, passed: false, timedOut: true });
   });
+
+  it("o gate que passa do prazo vira aviso de erro no log, que o detector de falhas captura; o vermelho comum não", async () => {
+    const { gate, registry } = await load();
+    const { logger } = await import("../../utils/logger.js");
+    const warn = vi.spyOn(logger, "warn");
+    onTestFinished(() => { warn.mockRestore(); });
+    const p = await registry.createProject({ name: "billing" });
+    const timedOutCard = await registry.createCard({ projectId: p.id, title: "lento" });
+    const redCard = await registry.createCard({ projectId: p.id, title: "vermelho" });
+    runScript.mockImplementation(async (script: string) => {
+      if (!isRun(script)) return { stdout: probe, stderr: "" };
+      return script.includes(timedOutCard.id)
+        ? { stdout: "slow\n__VIBEHUB_GATE__ timeout 585\n", stderr: "" }
+        : { stdout: "1 failing\n__VIBEHUB_GATE__ fail\n", stderr: "" };
+    });
+    await gate.runGate(timedOutCard.id);
+    await gate.runGate(redCard.id);
+    const timeoutWarnings = warn.mock.calls.filter((call) => call[1] === "gate timed out — killed in the runner").map((call) => call[0]);
+    expect(timeoutWarnings).toEqual([expect.objectContaining({ card: timedOutCard.worktreeSlug, detail: expect.any(String) })]);
+  });
 });
 
 describe("output tail", () => {
