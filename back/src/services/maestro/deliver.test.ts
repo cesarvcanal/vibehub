@@ -494,6 +494,15 @@ describe("deliver uses the PR's CI as the gate when there is one", () => {
     expect(scripts().find((s) => s.includes("gh pr merge"))).toContain(`--merge --match-head-commit '${HEAD_SHA}'`);
   });
 
+  it("the PR conflicts with its base at the merge: conflict, naming the base, nothing merged", async () => {
+    const { deliver, registry, card } = await makeCard();
+    wire({ ci: '[{"name":"back","bucket":"pass"}]', merge: "__VIBEHUB_DELIVER__ error conflict\n" });
+    const out = await deliver.deliver(card.id, { branch: "main", authorized: true });
+    expect(out).toMatchObject({ merged: false, reason: "conflict", prUrl: PR });
+    expect(out.output).toBe("o PR tem conflito com main: o merge commit não sai limpo até a branch do card receber main");
+    expect((await registry.getCard(card.id))?.prs?.[0]?.mergedAt).toBeUndefined();
+  });
+
   it("the PR moved between the gate and the merge: head_moved, naming both commits, nothing merged", async () => {
     const { deliver, registry, card } = await makeCard();
     const moved = "e".repeat(40);
