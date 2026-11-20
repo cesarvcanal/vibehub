@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -87,6 +87,39 @@ describe("settings", () => {
     await expect(settingsModule.updateSettings({ transcribeKeywords: [longKeyword] })).rejects.toThrow(/transcribeKeywords/);
     const tooMany = Array.from({ length: settingsModule.TRANSCRIBE_KEYWORDS_MAX + 1 }, (_, index) => `termo${index}`);
     await expect(settingsModule.updateSettings({ transcribeKeywords: tooMany })).rejects.toThrow(/transcribeKeywords/);
+  });
+
+  it("aceita a borda dos limites: exatamente o máximo de termos e de caracteres", async () => {
+    const settingsModule = await fresh();
+    const longestKeyword = "a".repeat(settingsModule.TRANSCRIBE_KEYWORD_MAX_CHARS);
+    expect((await settingsModule.updateSettings({ transcribeKeywords: [longestKeyword] })).transcribeKeywords).toEqual([longestKeyword]);
+    const mostKeywords = Array.from({ length: settingsModule.TRANSCRIBE_KEYWORDS_MAX }, (_, index) => `termo${index}`);
+    expect((await settingsModule.updateSettings({ transcribeKeywords: mostKeywords })).transcribeKeywords).toEqual(mostKeywords);
+  });
+
+  it("salvar outro campo sem mandar os termos preserva a lista guardada", async () => {
+    const settingsModule = await fresh();
+    await settingsModule.updateSettings({ transcribeKeywords: ["Qive"] });
+    const saved = await settingsModule.updateSettings({ transcribeLanguage: "en" });
+    expect(saved.transcribeKeywords).toEqual(["Qive"]);
+    expect((await settingsModule.updateSettings({ git: { name: "Ada" } })).transcribeKeywords).toEqual(["Qive"]);
+  });
+
+  it("termos inválidos recusam o patch inteiro: nenhum outro campo do mesmo patch é gravado", async () => {
+    const settingsModule = await fresh();
+    await settingsModule.updateSettings({ transcribeLanguage: "pt", transcribeKeywords: ["Qive"] });
+    await expect(settingsModule.updateSettings({ transcribeLanguage: "en", transcribeKeywords: ["a\nb"] })).rejects.toThrow(/transcribeKeywords/);
+    const stored = await settingsModule.getSettings();
+    expect(stored.transcribeLanguage).toBe("pt");
+    expect(stored.transcribeKeywords).toEqual(["Qive"]);
+  });
+
+  it("settings.json de instalação antiga, sem os termos, lê a lista vazia", async () => {
+    await writeFile(join(dir, "settings.json"), JSON.stringify({ settings: { transcribeLanguage: "pt", transcribeProofread: false } }));
+    const settingsModule = await fresh();
+    const stored = await settingsModule.getSettings();
+    expect(stored.transcribeKeywords).toEqual([]);
+    expect(stored.transcribeLanguage).toBe("pt");
   });
 
   it("validates the git identity", async () => {
