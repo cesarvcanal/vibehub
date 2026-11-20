@@ -1095,23 +1095,37 @@ describe("buildPrStateScript / parsePrState", () => {
 describe("buildPrDiffScript / parsePrDiff: o diff líquido do PR em dois commits", () => {
   const FROM = "a".repeat(40);
   const TO = "b".repeat(40);
+  const DIGEST = "1".repeat(64);
+  const OTHER_DIGEST = "2".repeat(64);
+  const PR_COMMIT = "c".repeat(40);
+  const BASE_MERGE = "d".repeat(40);
+  const AUTHOR_COMMIT = "e".repeat(40);
+  const sides = (from: string, to: string) =>
+    `__VIBEHUB_DELIVER__ prside from ${from}\n__VIBEHUB_DELIVER__ prside to ${to}`;
 
-  it("compara base...commit dos dois commits pela API do GitHub, com o token do stdin", async () => {
+  it("lê base...commit dos dois commits pela API do GitHub, com o token do stdin", async () => {
     const { deliver } = await load();
     const script = deliver.buildPrDiffScript("vibehub-runner", TOKEN, "/work/x", PR, "main", FROM, TO);
-    expect(script).toContain(`'repos/acme/repo/compare/main...${FROM}'`);
-    expect(script).toContain(`'repos/acme/repo/compare/main...${TO}'`);
-    for (const line of script.split("\n").filter((scriptLine) => scriptLine.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
+    expect(script).toContain(`pr_side from 'repos/acme/repo/compare/main...${FROM}'`);
+    expect(script).toContain(`pr_side to 'repos/acme/repo/compare/main...${TO}'`);
+    for (const scriptLine of script.split("\n").filter((line) => line.startsWith("docker exec"))) expect(scriptLine).not.toContain(TOKEN);
   });
 
   it.each([
-    ["same", "__VIBEHUB_DELIVER__ prdiff same", "same"],
-    ["changed", "__VIBEHUB_DELIVER__ prdiff changed", "changed"],
-    ["unknown (PR grande demais ou arquivo sem patch)", "__VIBEHUB_DELIVER__ prdiff unknown", "unknown"],
-    ["falha da API", "Not Found\n__VIBEHUB_DELIVER__ error compare", null],
-  ])("lê o veredito: %s", async (_name, stdout, verdict) => {
+    ["só merges da base e o mesmo diff: same", `${DIGEST} ${PR_COMMIT}:1`, `${DIGEST} ${PR_COMMIT}:1 ${BASE_MERGE}:2`, "same"],
+    ["commit comum do autor com o mesmo diff (linha trocada de lugar): changed", `${DIGEST} ${PR_COMMIT}:1`, `${DIGEST} ${PR_COMMIT}:1 ${AUTHOR_COMMIT}:1`, "changed"],
+    ["merge da base que muda o diff (conflito resolvido): changed", `${DIGEST} ${PR_COMMIT}:1`, `${OTHER_DIGEST} ${PR_COMMIT}:1 ${BASE_MERGE}:2`, "changed"],
+    ["histórico reescrito (rebase com force-push): changed", `${DIGEST} ${PR_COMMIT}:1`, `${DIGEST} ${AUTHOR_COMMIT}:1 ${BASE_MERGE}:2`, "changed"],
+    ["nenhum commit novo: changed", `${DIGEST} ${PR_COMMIT}:1`, `${DIGEST} ${PR_COMMIT}:1`, "changed"],
+    ["PR grande demais ou arquivo sem patch: unknown", `${DIGEST} ${PR_COMMIT}:1`, `${DIGEST} unknown`, "unknown"],
+  ])("%s", async (_name, from, to, verdict) => {
     const { deliver } = await load();
-    expect(deliver.parsePrDiff(stdout)).toBe(verdict);
+    expect(deliver.parsePrDiff(sides(from, to))).toBe(verdict);
+  });
+
+  it("falha da API não tem veredito", async () => {
+    const { deliver } = await load();
+    expect(deliver.parsePrDiff("Not Found\n__VIBEHUB_DELIVER__ error compare")).toBeNull();
   });
 
   it.each([

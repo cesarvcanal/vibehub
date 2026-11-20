@@ -689,9 +689,10 @@ export async function readPrState(cardId: string, prUrl: string): Promise<{ stat
   return null;
 }
 
-const PR_DIFF_JQ =
-  'if (.files | length) >= 300 or any(.files[]; .patch == null) then "unknown" else ' +
-  '[.files[] | .filename, .status, (.patch | split("\\n") | map(select(startswith("+") or startswith("-"))) | join("\\n"))] | join("\\n") end';
+const PR_SIDE_JQ =
+  'if (.files | length) >= 300 or any(.files[]; .patch == null) or .total_commits > (.commits | length) then "unknown" ' +
+  'else (.commits | map(.sha + ":" + (.parents | length | tostring)) | join(" ")) end, ' +
+  '([.files[] | .filename, .status, (.patch | split("\\n") | map(select(startswith("+") or startswith("-"))) | join("\\n"))] | join("\\n"))';
 
 export function buildPrDiffScript(
   containerName: string, token: string, cwd: string, prUrl: string, base: string, fromSha: string, toSha: string,
@@ -706,20 +707,47 @@ export function buildPrDiffScript(
   const body = [
     ...ghTokenPreamble(token),
     `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
-    `if ! FROM=$(gh api ${compare(fromSha)} --jq ${shQuote(PR_DIFF_JQ)} 2>&1); then printf '%s\\n' "$FROM"; echo "${MARKER} error compare"; exit 0; fi`,
-    `if ! TO=$(gh api ${compare(toSha)} --jq ${shQuote(PR_DIFF_JQ)} 2>&1); then printf '%s\\n' "$TO"; echo "${MARKER} error compare"; exit 0; fi`,
-    `if [ "$FROM" = unknown ] || [ "$TO" = unknown ]; then echo "${MARKER} prdiff unknown";`,
-    `elif [ "$FROM" = "$TO" ]; then echo "${MARKER} prdiff same";`,
-    `else echo "${MARKER} prdiff changed"; fi`,
+    `PR_SIDE_JQ=${shQuote(PR_SIDE_JQ)}`,
+    "pr_side() {",
+    `  if ! OUT=$(gh api "$2" --jq "$PR_SIDE_JQ" 2>&1); then printf '%s\\n' "$OUT"; echo "${MARKER} error compare"; exit 0; fi`,
+    `  echo "${MARKER} prside $1 $(printf '%s\\n' "$OUT" | tail -n +2 | sha256sum | cut -d' ' -f1) $(printf '%s\\n' "$OUT" | head -n 1)"`,
+    "}",
+    `pr_side from ${compare(fromSha)}`,
+    `pr_side to ${compare(toSha)}`,
   ];
   return dockerBashScript(containerName, body);
 }
 
 export type PrDiffVerdict = "same" | "changed" | "unknown";
 
+interface PrSide {
+  diffDigest: string;
+  commits: { sha: string; parents: number }[] | "unknown";
+}
+
+function parsePrSide(stdout: string, side: "from" | "to"): PrSide | null {
+  const match = new RegExp(`^${MARKER} prside ${side} ([0-9a-f]{64}) ?(.*)$`, "m").exec(stdout);
+  if (!match) return null;
+  const listed = match[2]!.trim();
+  if (listed === "unknown") return { diffDigest: match[1]!, commits: "unknown" };
+  const commits = listed.split(" ").filter(Boolean).map((entry) => {
+    const [sha, parents] = entry.split(":");
+    return { sha: sha!.toLowerCase(), parents: Number(parents) };
+  });
+  return { diffDigest: match[1]!, commits };
+}
+
 export function parsePrDiff(stdout: string): PrDiffVerdict | null {
-  const match = new RegExp(`${MARKER} prdiff (same|changed|unknown)\\b`).exec(stdout);
-  return match ? (match[1] as PrDiffVerdict) : null;
+  const from = parsePrSide(stdout, "from");
+  const to = parsePrSide(stdout, "to");
+  if (!from || !to) return null;
+  if (from.commits === "unknown" || to.commits === "unknown") return "unknown";
+  const reviewedCommits = new Set(from.commits.map((commit) => commit.sha));
+  const headCommits = new Set(to.commits.map((commit) => commit.sha));
+  const historyKept = [...reviewedCommits].every((sha) => headCommits.has(sha));
+  const newCommits = to.commits.filter((commit) => !reviewedCommits.has(commit.sha));
+  const onlyMerges = newCommits.length > 0 && newCommits.every((commit) => commit.parents > 1);
+  return historyKept && onlyMerges && from.diffDigest === to.diffDigest ? "same" : "changed";
 }
 
 export async function readPrDiffUnchanged(cardId: string, prUrl: string, base: string, fromSha: string, toSha: string): Promise<boolean> {
