@@ -59,7 +59,7 @@ describe("erros de rota", () => {
     expect(res.statusCode).toBe(502);
     expect(error).toHaveBeenCalledTimes(1);
     const [fields, message] = error.mock.calls[0] as [Record<string, unknown>, string];
-    expect(fields).toMatchObject({ method: "GET", route: "/api/__test/upstream", status: 502 });
+    expect(fields).toMatchObject({ method: "GET", route: "/api/__test/upstream", status: 502, detail: "502 GET /api/__test/upstream" });
     expect(message).toBe("request answered with a server error");
   });
 

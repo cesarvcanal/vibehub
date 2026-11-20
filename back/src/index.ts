@@ -89,7 +89,8 @@ export async function buildServer() {
   app.addHook("onResponse", async (req, reply) => {
     const isUnloggedServerError = reply.statusCode >= 500 && !requestsLoggedAsFailed.has(req);
     if (!isUnloggedServerError) return;
-    logger.error({ method: req.method, route: req.routeOptions.url, status: reply.statusCode }, "request answered with a server error");
+    const route = req.routeOptions.url;
+    logger.error({ method: req.method, route, status: reply.statusCode, detail: `${reply.statusCode} ${req.method} ${route}` }, "request answered with a server error");
   });
 
   app.get("/api/health", async () => ({ ok: true, version: "0.1.0" }));
