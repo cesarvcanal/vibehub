@@ -25,6 +25,12 @@ describe("brief do card de investigação", () => {
     expect(buildInvestigationBrief(FAILURE)).not.toContain("O que a pessoa viu");
   });
 
+  it("erro de tela avisa que sintoma e evidência vieram do navegador de um usuário", () => {
+    const screenBrief = buildInvestigationBrief({ ...FAILURE, source: "screen_error", component: "front" });
+    expect(screenBrief).toContain("vieram do navegador de um usuário");
+    expect(buildInvestigationBrief(FAILURE)).not.toContain("vieram do navegador de um usuário");
+  });
+
   it("não cita os cards de origem: o card de correção não lê nada além do relato", () => {
     expect(buildInvestigationBrief(FAILURE)).not.toMatch(/\bc1\b|\bc2\b/);
   });
