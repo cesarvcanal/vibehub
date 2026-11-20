@@ -85,7 +85,7 @@ export async function recordCardActor(
 }
 
 export async function senderCardUserId(fromCardId: string | undefined, toCardId: string): Promise<string | undefined> {
-  if (!fromCardId) return undefined;
+  if (!fromCardId || fromCardId === toCardId) return undefined;
   const [from, to] = await Promise.all([getCard(fromCardId), getCard(toCardId)]);
   return from && to && from.projectId === to.projectId ? from.actorUserId : undefined;
 }

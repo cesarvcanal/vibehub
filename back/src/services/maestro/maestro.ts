@@ -464,8 +464,8 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
   if (!card) throw new Error("card not found");
   // A maestro must not type into a card a person is using right now — but the person's own send is
   // never blocked (respectHumanActive is off unless the caller is a maestro driving another card).
-  const sentByTheCardAuthor = !!senderUserId && card.actorUserId === senderUserId;
-  if (respectHumanActive && !sentByTheCardAuthor && isHumanActive(card, Date.now(), answeringAskedAt)) {
+  const sentByTheTypist = !!senderUserId && card.humanActiveUserId === senderUserId;
+  if (respectHumanActive && !sentByTheTypist && isHumanActive(card, Date.now(), answeringAskedAt)) {
     throw new Error(
       `card "${card.title}" is human-active — someone is typing in it right now, so it will not accept a sent instruction; read it and wait, or ask the user`,
     );

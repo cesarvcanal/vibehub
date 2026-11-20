@@ -600,7 +600,8 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
             void observeCardStatus(card.id, null, "working");
           }
           if (shouldStampHumanActive(card.id)) {
-            void registry.markCardHumanActive(card.id).catch(() => { /* best effort, never fails a keystroke */ });
+            // eslint-disable-next-line no-restricted-syntax -- best effort: the next keystroke stamps it again
+            void registry.markCardHumanActive(card.id, typist?.id).catch(() => undefined);
           }
           // Typing IS the order. Cheap when nothing changes (isCardActor is sync); a `view` share
           // never gets here (readOnly) and recordCardActor checks the level anyway.

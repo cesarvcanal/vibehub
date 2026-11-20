@@ -63,6 +63,7 @@ const cardVncBridge = vi.fn();
 let markCardHumanActive: (cardId: string) => Promise<unknown> = async () => undefined;
 /** Records the status writes the websocket makes (the real write still happens behind it). */
 const appliedStatus = vi.fn();
+const humanActiveTypists = vi.fn();
 
 async function boot(): Promise<FastifyInstance> {
   vi.resetModules();
@@ -108,7 +109,10 @@ async function boot(): Promise<FastifyInstance> {
     );
     return {
       ...actual,
-      markCardHumanActive: (cardId: string) => markCardHumanActive(cardId),
+      markCardHumanActive: (cardId: string, userId?: string) => {
+        humanActiveTypists(cardId, userId);
+        return markCardHumanActive(cardId);
+      },
       applyCardStatus: async (cardId: string, status: Parameters<typeof actual.applyCardStatus>[1]) => {
         appliedStatus(cardId, status);
         return await actual.applyCardStatus(cardId, status);
@@ -594,6 +598,22 @@ describe("terminal websocket setup", () => {
     await vi.waitFor(() => expect(appliedStatus).toHaveBeenCalledWith(id, "working"));
     await settle();
     expect((await events.inboxFor(owner)).events).toEqual([]);
+    ws.close();
+    await closed(ws);
+  });
+
+  it("a tecla no terminal carimba a marca human-active com quem digitou", async () => {
+    const { resetHumanStampThrottleForTesting } = await import("./session.js");
+    resetHumanStampThrottleForTesting();
+    ptySpawn.mockReturnValueOnce(fakeTerm());
+    openCard.mockResolvedValueOnce(undefined);
+    const users = await import("../auth/users.js");
+    const owner = (await users.listUsers()).find((user) => user.username === "owner")!;
+    const id = await makeCard();
+    const ws = await connect(`/api/cards/${id}/terminal`);
+    await vi.waitFor(() => expect(ptySpawn).toHaveBeenCalled());
+    ws.send("x");
+    await vi.waitFor(() => expect(humanActiveTypists).toHaveBeenCalledWith(id, owner.id));
     ws.close();
     await closed(ws);
   });
