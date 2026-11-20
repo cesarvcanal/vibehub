@@ -121,44 +121,44 @@ describe("espera entre cards no registry", () => {
     await registry.updateCard(waiting.id, { column: "paused" });
     await registry.updateCard(target.id, { column: "done" });
     await settle();
-    expect(await registry.takeReadyCardWait(waiting.id)).toBeUndefined();
+    expect(await registry.getReadyCardWait(waiting.id)).toBeUndefined();
     const heard = listenWaitsReady(registry);
     await registry.updateCard(waiting.id, { column: "working" });
     await settle();
     expect(heard).toEqual([[waiting.id]]);
   });
 
-  it("tirar uma espera pronta a entrega uma vez só e nunca de um card pausado", async () => {
+  it("a espera pronta é lida sem sair do disco, e nunca de um card pausado", async () => {
     const { registry } = await freshRegistry();
     const { target, waiting } = await createWaitingPair(registry);
-    expect(await registry.takeReadyCardWait(waiting.id)).toBeUndefined();
+    expect(await registry.getReadyCardWait(waiting.id)).toBeUndefined();
     await registry.applyOpenTerminal(waiting.id);
     await registry.updateCard(waiting.id, { column: "paused" });
     await registry.applyCardStatus(waiting.id, "waiting");
     await registry.updateCard(target.id, { column: "done" });
-    expect(await registry.takeReadyCardWait(waiting.id)).toBeUndefined();
+    expect(await registry.getReadyCardWait(waiting.id)).toBeUndefined();
     await registry.applyOpenTerminal(waiting.id);
-    const [first, second] = await Promise.all([registry.takeReadyCardWait(waiting.id), registry.takeReadyCardWait(waiting.id)]);
-    expect(first).toMatchObject({ cardId: target.id, outcome: "concluded" });
-    expect(second).toBeUndefined();
-    expect((await registry.getCard(waiting.id))?.waitingFor).toBeUndefined();
+    expect(await registry.getReadyCardWait(waiting.id)).toMatchObject({ cardId: target.id, outcome: "concluded" });
+    expect((await registry.getCard(waiting.id))?.waitingFor).toMatchObject({ cardId: target.id, outcome: "concluded" });
   });
 
-  it("a falha ao acordar devolve a espera com o motivo, sem passar por cima de uma espera nova", async () => {
+  it("limpar a espera disparada e gravar a falha não mexem numa espera nova", async () => {
     const { registry } = await freshRegistry();
     const { target, waiting } = await createWaitingPair(registry);
     await registry.updateCard(target.id, { column: "done" });
-    const taken = await registry.takeReadyCardWait(waiting.id);
-    if (!taken) throw new Error("the ready wait was not taken");
-    await registry.restoreFailedCardWait(waiting.id, taken, { at: 7, reason: "runner fora" });
+    const firedWait = await registry.getReadyCardWait(waiting.id);
+    if (!firedWait) throw new Error("the ready wait was not read");
+    await registry.setCardWaitFailure(waiting.id, firedWait, { at: 7, reason: "runner fora" });
     expect((await registry.getCard(waiting.id))?.waitingFor).toMatchObject({ outcome: "concluded", failure: { at: 7, reason: "runner fora" } });
 
-    const retaken = await registry.takeReadyCardWait(waiting.id);
-    if (!retaken) throw new Error("the restored wait was not taken");
     const newerWait = { cardId: "other", instruction: "outra coisa", createdAt: 9, createdBy: "user-1" };
     await registry.setCardWait(waiting.id, newerWait);
-    await registry.restoreFailedCardWait(waiting.id, retaken, { at: 10, reason: "runner fora" });
+    await registry.setCardWaitFailure(waiting.id, firedWait, { at: 10, reason: "runner fora" });
+    await registry.clearFiredCardWait(waiting.id, firedWait);
     expect((await registry.getCard(waiting.id))?.waitingFor).toEqual(newerWait);
+
+    await registry.clearFiredCardWait(waiting.id, newerWait);
+    expect((await registry.getCard(waiting.id))?.waitingFor).toBeUndefined();
   });
 
   it("uma espera malformada no board.json é descartada na leitura", async () => {

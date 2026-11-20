@@ -280,9 +280,11 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
 
   app.post<{ Params: { id: string } }>("/api/cards/:id/wait/fire", { preHandler: requireCardWork }, async (req, reply) => {
     try {
-      if ((await fireCardWait(req.params.id)) === "not_ready") {
+      const fired = await fireCardWait(req.params.id);
+      if (fired === "not_ready") {
         return await reply.code(409).send({ error: "the wait is not ready: the awaited card has not finished, or this card is paused" });
       }
+      if (fired === "in_progress") return await reply.code(409).send({ error: "this card is being woken right now" });
       return await reply.send({ fired: true });
     } catch (err) {
       return await sendError(reply, err, { rules: [NOT_FOUND], fallback: 502 });

@@ -16,7 +16,9 @@ export interface CreateCardWaitInput {
   createdBy: string;
 }
 
-export type FireResult = "sent" | "not_ready";
+export type FireResult = "sent" | "not_ready" | "in_progress";
+
+const firingWaitCardIds = new Set<string>();
 
 function describeOutcome(wait: CardWait): string {
   switch (wait.outcome) {
@@ -88,7 +90,17 @@ export async function cancelCardWait(cardId: string): Promise<void> {
 }
 
 export async function fireCardWait(cardId: string): Promise<FireResult> {
-  const wait = await registry.takeReadyCardWait(cardId);
+  if (firingWaitCardIds.has(cardId)) return "in_progress";
+  firingWaitCardIds.add(cardId);
+  try {
+    return await sendReadyCardWait(cardId);
+  } finally {
+    firingWaitCardIds.delete(cardId);
+  }
+}
+
+async function sendReadyCardWait(cardId: string): Promise<FireResult> {
+  const wait = await registry.getReadyCardWait(cardId);
   if (!wait) return "not_ready";
   try {
     const target = await registry.getCard(wait.cardId);
@@ -104,9 +116,10 @@ export async function fireCardWait(cardId: string): Promise<FireResult> {
       beforeDeliver: () => recordCardActor(creator, cardId),
     });
   } catch (err) {
-    await registry.restoreFailedCardWait(cardId, wait, { at: Date.now(), reason: (err as Error).message });
+    await registry.setCardWaitFailure(cardId, wait, { at: Date.now(), reason: (err as Error).message });
     throw err;
   }
+  await registry.clearFiredCardWait(cardId, wait);
   logger.info({ audit: true, action: "wait.fire", card: cardId, target: wait.cardId, outcome: wait.outcome }, "waiting card woken");
   return "sent";
 }

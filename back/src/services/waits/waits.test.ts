@@ -5,13 +5,18 @@ import { join } from "node:path";
 import type { CardWait } from "../board/cardWait.js";
 import { buildWakeMessage } from "./waits.js";
 import { mockHostExecutor } from "../../testkit/fakeHost.js";
+import { WAIT_INSTRUCTION_MAX } from "../board/cardWait.js";
 
 const CLAUDE_ALIVE = { stdout: "bash\nnode\n", stderr: "" };
 const runScript = vi.fn<(script: string) => Promise<typeof CLAUDE_ALIVE>>(async () => CLAUDE_ALIVE);
 
-async function load() {
+function createDataDir(): string {
   const dataDir = mkdtempSync(join(tmpdir(), "vibehub-waits-service-"));
   onTestFinished(() => rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }));
+  return dataDir;
+}
+
+async function load(dataDir = createDataDir()) {
   runScript.mockReset();
   runScript.mockResolvedValue(CLAUDE_ALIVE);
   vi.resetModules();
@@ -21,7 +26,7 @@ async function load() {
   mockHostExecutor(runScript);
   const settings = await import("../settings/settings.js");
   await settings.updateSettings({ sdkDriver: false });
-  return { registry: await import("../board/registry.js"), waits: await import("./waits.js") };
+  return { dataDir, registry: await import("../board/registry.js"), waits: await import("./waits.js") };
 }
 
 type Loaded = Awaited<ReturnType<typeof load>>;
@@ -35,7 +40,7 @@ async function createOpenPair({ registry }: Loaded) {
 }
 
 function sentScripts(): string[] {
-  return runScript.mock.calls.map((call) => String((call as unknown as string[])[0]));
+  return runScript.mock.calls.map(([script]) => script);
 }
 
 async function startWatch({ waits }: Loaded): Promise<void> {
@@ -78,12 +83,13 @@ describe("createCardWait", () => {
     ["um card já concluído", "done", "", /already finished/],
     ["instrução vazia", "target", "   ", /instruction/],
     ["base inválida", "target", "bad base", /branch/],
+    ["instrução maior que o limite", "target", "too long", /instruction/],
   ])("recusa esperar %s", async (_case, targetKind, variant, error) => {
     const loaded = await load();
     const { target, waiting } = await createOpenPair(loaded);
     if (targetKind === "done") await loaded.registry.updateCard(target.id, { column: "done" });
-    const targetCardId = { self: waiting.id, missing: "00000000-0000-4000-8000-000000000000", done: target.id, target: target.id }[targetKind] as string;
-    const instruction = variant === "   " ? "   " : "faça o complemento";
+    const targetCardId = targetKind === "self" ? waiting.id : targetKind === "missing" ? "00000000-0000-4000-8000-000000000000" : target.id;
+    const instruction = { "   ": "   ", "too long": "x".repeat(WAIT_INSTRUCTION_MAX + 1) }[variant] ?? "faça o complemento";
     const base = variant === "bad base" ? "não é branch" : undefined;
     await expect(loaded.waits.createCardWait({ waitingCardId: waiting.id, targetCardId, instruction, base, createdBy: "user-1" })).rejects.toThrow(error);
     expect((await loaded.registry.getCard(waiting.id))?.waitingFor).toBeUndefined();
@@ -97,13 +103,6 @@ describe("createCardWait", () => {
     await loaded.waits.createCardWait({ waitingCardId: middle.id, targetCardId: waiting.id, instruction: "x", createdBy: "user-1" });
     await expect(loaded.waits.createCardWait({ waitingCardId: waiting.id, targetCardId: target.id, instruction: "x", createdBy: "user-1" }))
       .rejects.toThrow(/cycle/);
-  });
-
-  it("recusa uma instrução maior que o limite", async () => {
-    const loaded = await load();
-    const { target, waiting } = await createOpenPair(loaded);
-    await expect(loaded.waits.createCardWait({ waitingCardId: waiting.id, targetCardId: target.id, instruction: "x".repeat(2001), createdBy: "user-1" }))
-      .rejects.toThrow(/instruction/);
   });
 });
 
@@ -151,6 +150,32 @@ describe("disparo da espera", () => {
     expect(sentScripts()).toEqual([]);
     await startWatch(loaded);
     await vi.waitFor(() => expect(sentScripts().some((script) => script.includes("faça o complemento"))).toBe(true));
+  });
+
+  it("dois disparos ao mesmo tempo acordam o card uma vez só", async () => {
+    const loaded = await load();
+    const { target, waiting } = await createOpenPair(loaded);
+    await loaded.waits.createCardWait({ waitingCardId: waiting.id, targetCardId: target.id, instruction: "faça o complemento", createdBy: "user-1" });
+    await loaded.registry.updateCard(target.id, { column: "done" });
+    const results = await Promise.all([loaded.waits.fireCardWait(waiting.id), loaded.waits.fireCardWait(waiting.id)]);
+    expect(results.sort()).toEqual(["in_progress", "sent"]);
+    expect(sentScripts().filter((script) => script.includes("faça o complemento"))).toHaveLength(1);
+  });
+
+  it("um deploy no meio do envio não apaga a espera: o back novo acorda o card", async () => {
+    const loaded = await load();
+    const { target, waiting } = await createOpenPair(loaded);
+    await loaded.waits.createCardWait({ waitingCardId: waiting.id, targetCardId: target.id, instruction: "faça o complemento", createdBy: "user-1" });
+    await loaded.registry.updateCard(target.id, { column: "done" });
+    runScript.mockImplementation((script) => (script.includes("faça o complemento") ? new Promise(() => undefined) : Promise.resolve(CLAUDE_ALIVE)));
+    void loaded.waits.fireCardWait(waiting.id);
+    await vi.waitFor(() => expect(sentScripts().some((script) => script.includes("faça o complemento"))).toBe(true));
+    expect((await loaded.registry.getCard(waiting.id))?.waitingFor).toMatchObject({ outcome: "concluded", readyAt: expect.any(Number) });
+
+    const afterDeploy = await load(loaded.dataDir);
+    await startWatch(afterDeploy);
+    await vi.waitFor(() => expect(sentScripts().some((script) => script.includes("faça o complemento"))).toBe(true));
+    await vi.waitFor(async () => expect((await afterDeploy.registry.getCard(waiting.id))?.waitingFor).toBeUndefined());
   });
 
   it("card pausado com espera pronta não é acordado", async () => {

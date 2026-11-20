@@ -2073,21 +2073,27 @@ export async function removeCardWait(cardId: string): Promise<CardWait | undefin
   });
 }
 
-export async function takeReadyCardWait(cardId: string): Promise<CardWait | undefined> {
-  return store.mutate((doc) => {
+export async function getReadyCardWait(cardId: string): Promise<CardWait | undefined> {
+  const card = await getCard(cardId);
+  if (!card || card.waitingFor?.readyAt === undefined || pauseHoldsWake(card)) return undefined;
+  return card.waitingFor;
+}
+
+function isSameCardWait(stored: CardWait | undefined, wait: CardWait): stored is CardWait {
+  return stored?.cardId === wait.cardId && stored.createdAt === wait.createdAt;
+}
+
+export async function clearFiredCardWait(cardId: string, firedWait: CardWait): Promise<void> {
+  await store.mutate((doc) => {
     const card = doc.cards.find((c) => c.id === cardId);
-    const wait = card?.waitingFor;
-    if (!card || wait?.readyAt === undefined || pauseHoldsWake(card)) return undefined;
-    card.waitingFor = undefined;
-    return wait;
+    if (card && isSameCardWait(card.waitingFor, firedWait)) card.waitingFor = undefined;
   });
 }
 
-export async function restoreFailedCardWait(cardId: string, wait: CardWait, failure: WaitFailure): Promise<void> {
+export async function setCardWaitFailure(cardId: string, firedWait: CardWait, failure: WaitFailure): Promise<void> {
   await store.mutate((doc) => {
     const card = doc.cards.find((c) => c.id === cardId);
-    if (!card || card.waitingFor || card.column === "done") return;
-    card.waitingFor = { ...wait, failure };
+    if (card && isSameCardWait(card.waitingFor, firedWait)) card.waitingFor.failure = failure;
   });
 }
 
