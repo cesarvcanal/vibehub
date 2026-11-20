@@ -1605,7 +1605,7 @@ describe("merge da análise pela rota", () => {
     expect(readPrState).toHaveBeenCalledTimes(1);
   });
 
-  it("PR ainda aberto no GitHub, ou leitura do gh que falha, deixa a análise como estava", async () => {
+  it("PR ainda aberto no GitHub deixa a análise como estava", async () => {
     const w = await world();
     await saveAptWithGreenGate(aptReport(w.cardId));
     prState = { state: "OPEN", headSha: "e".repeat(40) };
@@ -1680,6 +1680,17 @@ describe("merge da análise pela rota", () => {
     expect(again.json().mergeGate.state).toBe("running");
     await vi.waitFor(async () => expect((await readAnalysis(w, w.leitor)).mergeGate?.state).toBe("passed"));
     expect(gateAtCommit).toHaveBeenCalledTimes(2);
+  });
+
+  it("gate gravado 'rodando' por um processo que morreu (deploy) roda de novo na leitura seguinte", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    await (await import("../services/review/analysisStore.js")).saveAnalysisMergeGate({
+      cardId: w.cardId, analysedSha: "e".repeat(40), state: "running", at: 1,
+    });
+    await readAnalysis(w, w.leitor);
+    expect(gateAtCommit).toHaveBeenCalledTimes(1);
+    await vi.waitFor(async () => expect((await readAnalysis(w, w.leitor)).mergeGate?.state).toBe("passed"));
   });
 
   it("gate que nem chegou a rodar (runner fora) fica vermelho com o motivo, nunca verde", async () => {
