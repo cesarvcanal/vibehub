@@ -2615,9 +2615,9 @@ const SdkChatRow = React.memo(function SdkChatRow({
           <Markdown text={choices ? choices.lead : prose.question} />
           {choices && onPickOption ? (
             <div className={cn("mt-1.5 flex gap-1.5", stackedChoices ? "flex-col" : "flex-wrap")}>
-              {choices.options.map((option) => (
+              {choices.options.map((option, optionIndex) => (
                 <ChoiceOption
-                  key={option.label}
+                  key={optionIndex}
                   label={option.label}
                   description={option.description}
                   stacked={stackedChoices}
@@ -2984,7 +2984,7 @@ function ChoiceOption({
     >
       <span className={stacked ? "break-words" : "truncate"}>{label}</span>
       {description ? (
-        <span id={descriptionId} className={cn("break-words font-normal", selected ? "text-primary-foreground/80" : "text-muted-foreground")}>
+        <span id={descriptionId} className={cn("whitespace-pre-line break-words font-normal", selected ? "text-primary-foreground/80" : "text-muted-foreground")}>
           {description}
         </span>
       ) : null}
