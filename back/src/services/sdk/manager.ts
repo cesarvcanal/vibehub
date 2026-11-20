@@ -876,6 +876,7 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
     if (session.resumeWatch && !isTurnInFlight(session)) armResumeWatch(session);
     // Before the marker and the dot: the new scheduled attempt keeps both as a turn in flight.
     noteApiOutcome(session, event);
+    logFailedTurn(session, event);
     // The last turn in flight CLOSED: the durable marker comes off — unless work goes on in the
     // background (a task, a scheduled wake-up), which a deploy would kill just the same: then it
     // stays, now saying what is running (see `syncInflightMarker`).
@@ -1896,6 +1897,13 @@ export function isTransientApiFailure(result: string | undefined): boolean {
   if (/^API Error:\s*5\d\d\b/i.test(text)) return true;
   return /can't reach the API|connection error|timed out|overloaded|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|socket hang up|fetch failed/i
     .test(text);
+}
+
+function logFailedTurn(session: DriverSession, event: ResultEvent): void {
+  const isCoveredElsewhere = isTransientApiFailure(event.result) || session.loginFailed || session.usageLimit !== undefined;
+  if (!event.isError || isCoveredElsewhere) return;
+  const endReason = [event.subtype, event.result?.slice(0, 200)].filter((part) => part !== undefined && part !== "").join(": ");
+  logger.warn({ card: session.label, action: "sdk.turn.failed", detail: endReason || "no subtype or result text" }, "agent turn ended with an error");
 }
 
 /** Gives up the scheduled new attempt: the dot and the marker stop counting on it. */

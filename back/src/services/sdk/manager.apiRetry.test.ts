@@ -1,9 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, onTestFinished, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { config } from "../../config/env.js";
+import { onLogLine, type LogLine } from "../../utils/logger.js";
+import { isPlatformFailureLogLine } from "../platformFailures/backendError.js";
 import { readHistory, rewindHistory } from "./history.js";
 import { readInflightMarker } from "./inflight.js";
 import {
@@ -256,5 +258,44 @@ describe("falha transitória da API — o turno volta sozinho", () => {
     emit({ type: "result", subtype: "success", isError: true, result: EAI });
     vi.advanceTimersByTime(API_RETRY_DELAYS_MS[0]!);
     expect(userWrites().at(-1)).toBe(API_RETRY_TEXT);
+  });
+});
+
+describe("turno que termina com erro sem ninguém ter parado — vira falha da plataforma", () => {
+  const captureFailureLines = (): LogLine[] => {
+    const loggedLines: LogLine[] = [];
+    onTestFinished(onLogLine("warn", (line) => loggedLines.push(line)));
+    return loggedLines;
+  };
+  const failureLinesIn = (loggedLines: LogLine[]) => loggedLines.filter((line) => isPlatformFailureLogLine(line, undefined, Date.now()));
+
+  it("erro que não é passageiro nem de conta é capturado pelo detector, com o tipo e o texto do fim do turno", () => {
+    const loggedLines = captureFailureLines();
+    const session = ensure();
+    sendAgentTurn(session, "faz", ORDER);
+    emit({ type: "result", subtype: "error_during_execution", isError: true, result: "API Error: 400 invalid_request_error: prompt is too long" });
+    expect(failureLinesIn(loggedLines)).toEqual([expect.objectContaining({
+      message: "agent turn ended with an error",
+      fields: expect.objectContaining({ card: "t", detail: "error_during_execution: API Error: 400 invalid_request_error: prompt is too long" }),
+    })]);
+  });
+
+  it.each([
+    { name: "turno que terminou bem", before: [], result: { subtype: "success", isError: false, result: "pronto" } },
+    { name: "turno parado pela pessoa (o driver o entrega sem erro)", before: [], result: { subtype: "error_during_execution", isError: false } },
+    { name: "falha passageira da API, que a nova tentativa automática cobre", before: [], result: { subtype: "success", isError: true, result: EAI } },
+    { name: "conta deslogada", before: [{ type: "login_failed" }], result: { subtype: "success", isError: true, result: "Invalid API key · Please run /login" } },
+    {
+      name: "conta sem limite de uso",
+      before: [{ type: "usage_limited", rateLimit: { status: "rejected", rateLimitType: "five_hour" } }],
+      result: { subtype: "success", isError: true, result: "Claude AI usage limit reached" },
+    },
+  ])("$name não vira falha da plataforma", ({ before, result }) => {
+    const loggedLines = captureFailureLines();
+    const session = ensure();
+    sendAgentTurn(session, "faz", ORDER);
+    for (const event of before) emit(event);
+    emit({ type: "result", ...result });
+    expect(failureLinesIn(loggedLines)).toEqual([]);
   });
 });
