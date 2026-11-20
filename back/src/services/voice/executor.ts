@@ -61,7 +61,8 @@ const VOICE_TOOLS: Record<VoiceToolName, { description: string; parameters: Json
   },
   create_card: {
     description: "Cria um card novo num projeto, em nome da pessoa da chamada, e já entrega a primeira instrução a ele. " +
-      "Só o dono da instalação cria cards. O agente do card novo não ouve esta conversa: a instrução tem de ser completa.",
+      "Só o dono da instalação cria cards. O agente do card novo não ouve esta conversa: a instrução tem de ser completa. " +
+      "Se voltar delivered: false, o card existe e a instrução não chegou: reenvie com send_to_card no cardId devolvido, sem criar outro.",
     parameters: objectSchema({
       projectId: { type: "string", description: "id do projeto (de list_projects)" },
       title: { type: "string", description: "título curto da tarefa, como deve aparecer no board" },
@@ -114,6 +115,8 @@ export function executorInstructions(call: { cardTitle: string; projectName: str
     "Ids saem de list_projects e list_cards; nunca invente um id. Quando a ordem for ambígua (qual projeto? qual card?), " +
       "responda com uma pergunta curta e não chame ferramenta. Só diga que algo foi feito depois que a ferramenta voltou " +
       "sem erro; se voltou erro, diga o erro em poucas palavras.",
+    "create_card que volta delivered: false criou o card, mas a instrução não chegou: diga isso e o motivo (deliveryError) e " +
+      "reenvie a mesma instrução com send_to_card no cardId devolvido. Nunca chame create_card de novo para a mesma ordem.",
   ].join("\n\n");
 }
 
@@ -122,6 +125,8 @@ function isVoiceToolName(name: string): name is VoiceToolName {
 }
 
 const BROWSER_TOOL = "ask_card_agent is answered by the call's browser, not by this route";
+const STILL_PREPARING = "the card is still preparing its workspace (the first card of a project clones the repo): the instruction " +
+  "was not delivered — send it with send_to_card to this cardId in a minute";
 const NOT_THE_CALL_CARD = "this is the card of the call itself: use ask_card_agent to ask its agent";
 
 function parseJsonArguments(name: string, argumentsJson: string): unknown {
@@ -159,7 +164,10 @@ export async function runVoiceAction(input: VoiceActionInput): Promise<unknown> 
       return await listCardsFor(input.user, parseArgs(name, ARGS.list_cards, json).project ?? undefined);
     case "create_card": {
       const { instruction, ...card } = parseArgs(name, ARGS.create_card, json);
-      const created = await createCardFor(input.user, { ...card, open: false });
+      const created = await createCardFor(input.user, card);
+      if (!created.opened) {
+        return { cardId: created.cardId, title: created.title, projectId: created.projectId, opened: false, delivered: false, deliveryError: STILL_PREPARING };
+      }
       try {
         const sent = await sendToCardAs(input.user, { cardId: created.cardId, text: instruction });
         return { ...created, delivered: true, sentAt: sent.sentAt };

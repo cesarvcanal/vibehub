@@ -9,6 +9,12 @@ const sendToTerminal = vi.fn<(cardId: string, text: string, opts?: object) => Pr
   if (sendFailure.current) throw sendFailure.current;
   return { sent: true, cardId, title: "", project: "" };
 });
+const opening = { hang: false };
+const openCard = vi.fn(async (cardId: string) => {
+  if (opening.hang) await new Promise(() => undefined);
+  return { id: cardId };
+});
+const prepareCard = vi.fn(async () => undefined);
 const dirs = { current: "" };
 
 async function load() {
@@ -23,6 +29,12 @@ async function load() {
   vi.doMock("../maestro/maestro.js", async () => ({
     ...(await vi.importActual<typeof import("../maestro/maestro.js")>("../maestro/maestro.js")),
     sendToTerminal,
+    waitTerminalReady: vi.fn(async () => ({ ready: true })),
+  }));
+  vi.doMock("../board/workspace.js", async () => ({
+    ...(await vi.importActual<typeof import("../board/workspace.js")>("../board/workspace.js")),
+    openCard,
+    prepareCard,
   }));
   const registry = await import("../board/registry.js");
   const users = await import("../../auth/users.js");
@@ -49,8 +61,11 @@ beforeEach(async () => {
   runScript.mockClear();
   sendToTerminal.mockClear();
   sendFailure.current = null;
+  openCard.mockClear();
+  prepareCard.mockClear();
+  opening.hang = false;
 });
-afterEach(async () => { await rm(dirs.current, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
+afterEach(async () => { vi.useRealTimers(); await rm(dirs.current, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
 
 describe("executor da voz", () => {
   it("cria o card como o dono da chamada e já entrega a primeira instrução, acordando o card", async () => {
@@ -65,6 +80,39 @@ describe("executor da voz", () => {
     expect(sendToTerminal).toHaveBeenCalledTimes(1);
     expect(sendToTerminal.mock.calls[0]?.slice(0, 2)).toEqual([output.cardId, "Exporte o relatório de vendas em CSV."]);
     expect(sendToTerminal.mock.calls[0]?.[2]).toMatchObject({ by: env.owner.id, wake: true });
+  });
+
+  it("cria o card provisionando o workspace uma vez só: a abertura, e a entrega encontra o card já vivo", async () => {
+    const env = await load();
+    await env.run(env.owner, "create_card", { projectId: env.project.id, title: "Exportar relatório", instruction: "Exporte o relatório." });
+    expect(openCard).toHaveBeenCalledTimes(1);
+    expect(prepareCard).not.toHaveBeenCalled();
+    expect(sendToTerminal).toHaveBeenCalledTimes(1);
+  });
+
+  it("card que ainda prepara o workspace depois do limite da abertura volta sem entregar, dizendo para reenviar com send_to_card", async () => {
+    const env = await load();
+    opening.hang = true;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const pending = env.run(env.owner, "create_card", { projectId: env.project.id, title: "Exportar relatório", instruction: "Exporte o relatório." });
+    await vi.waitFor(() => expect(openCard).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(20_000);
+    const output = await pending as { cardId: string; delivered: boolean; deliveryError: string };
+    expect(output).toMatchObject({ opened: false, delivered: false, deliveryError: expect.stringContaining("send_to_card") });
+    expect((await env.registry.getCard(output.cardId))?.title).toBe("Exportar relatório");
+    expect(sendToTerminal).not.toHaveBeenCalled();
+  });
+
+  it("as instruções e a ferramenta dizem à voz o que fazer com delivered: false: contar, reenviar por send_to_card e não criar outro card", async () => {
+    const env = await load();
+    const instructions = env.executor.executorInstructions({ cardTitle: "chamada", projectName: "erp" });
+    const createCard = env.executor.voiceToolDefinitions().find((tool) => tool.name === "create_card")!;
+    for (const text of [instructions, createCard.description]) {
+      expect(text).toContain("delivered: false");
+      expect(text).toContain("send_to_card");
+    }
+    expect(instructions).toContain("deliveryError");
+    expect(instructions).toMatch(/Nunca chame create_card de novo/);
   });
 
   it("card criado com a instrução que não chegou diz isso na saída, com o motivo, sem esconder o card criado", async () => {
