@@ -1,3 +1,4 @@
+import { modelLabelFor } from "../maestro/maestro.js";
 import type { WorkflowAgent, WorkflowRun } from "../sdk/workflowProbe.js";
 
 /**
@@ -123,15 +124,19 @@ export function mergeGateSelfHealing(gate: MergeGate): boolean {
   return gate.state === "failed" && !gate.exhausted && !(gate.autoRetried && gate.failures === undefined);
 }
 
-export type ReviewFleetAgent = Pick<WorkflowAgent, "id" | "label" | "phase" | "model" | "status" | "result" | "error" | "endedAt">;
+export type ReviewFleetAgent = Pick<WorkflowAgent, "id" | "label" | "phase" | "model" | "status" | "result" | "error" | "endedAt"> & {
+  modelLabel?: string;
+};
 export type ReviewFleetRun = Pick<WorkflowRun, "runId" | "name" | "phases" | "total" | "done" | "at" | "finished" | "outcome"> & {
   agents: ReviewFleetAgent[];
 };
 
 function fleetAgentForReaders(agent: WorkflowAgent): ReviewFleetAgent {
+  const modelLabel = modelLabelFor(agent.model);
   return {
     id: agent.id, label: agent.label, phase: agent.phase, status: agent.status,
     ...(agent.model !== undefined ? { model: agent.model } : {}),
+    ...(modelLabel ? { modelLabel } : {}),
     ...(agent.result !== undefined ? { result: agent.result } : {}),
     ...(agent.error !== undefined ? { error: agent.error } : {}),
     ...(agent.endedAt !== undefined ? { endedAt: agent.endedAt } : {}),

@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { useNow, usePageVisible } from "@/lib/useNow";
 import { useT, type Translate } from "@/i18n";
 import { Markdown } from "@/features/board/components/ChatView";
+import { AgentTaskPanel } from "@/features/board/components/AgentTaskPanel";
 import { toolHeadline, type AgentTask, type SdkRow, type ToolResultSummary } from "@/features/board/lib/sdkChat";
 import { hunksToRows, toolDiff } from "@/features/board/lib/toolDiff";
 import { DiffView, SyntaxText, useCodeTokens } from "@/features/board/components/DiffView";
@@ -705,9 +706,9 @@ function AgentView({
             <p data-testid="sdk-detail-missing" className="text-xs italic text-muted-foreground">{error === "offline" ? t("sdk.detail.offline") : error ? t("sdk.detail.failedToLoad") : t("sdk.detail.agentNotFound")}</p>
           )
         ) : tab === "task" ? (
-          prompt ? <div className="whitespace-pre-wrap rounded-md border border-border bg-card px-3 py-2 text-[13px] leading-relaxed">{prompt}</div> : <p className="text-xs italic text-muted-foreground">{t("sdk.detail.noTask")}</p>
+          prompt ? <AgentTaskPanel prompt={prompt} report={report} running={running} /> : <p className="text-xs italic text-muted-foreground">{t("sdk.detail.noTask")}</p>
         ) : report ? (
-          <div data-testid="sdk-agent-report" className="rounded-md border border-border bg-card px-4 py-3"><Markdown text={report} /></div>
+          <div data-testid="sdk-agent-report" className="rounded-md border border-border bg-card px-5 py-4 text-[13px]"><Markdown text={report} variant="document" /></div>
         ) : (
           <p className="text-xs italic text-muted-foreground">{running ? t("sdk.detail.reportLater") : t("sdk.detail.noReport")}</p>
         )}
