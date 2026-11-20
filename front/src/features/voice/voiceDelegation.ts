@@ -62,13 +62,12 @@ export type DelegationReply =
   | { state: "answered"; text: string; answers: string[] }
   | { state: "silent"; answers: [] };
 
-/**
- * Where the agent's work on a delegated request stands, read off the chat. It is over only when no
- * turn is running: a later message does not end it, because the chat delivers queued messages into
- * the running turn at a breather (`turnHasRoomForMore`) — that turn's last word answers both. PURE.
- */
-export function delegationReply(rows: SdkRow[], request: string, turnRunning: boolean): DelegationReply {
-  const at = rows.findLastIndex((row) => row.kind === "user" && row.text === request);
+export type DelegationAnchor = { request: string } | { questionId: string };
+
+export function delegationReply(rows: SdkRow[], anchor: DelegationAnchor, turnRunning: boolean): DelegationReply {
+  const at = "request" in anchor
+    ? rows.findLastIndex((row) => row.kind === "user" && row.text === anchor.request)
+    : rows.findIndex((row) => row.kind === "question" && row.id === anchor.questionId);
   if (at < 0) return { state: "waiting", answers: [] };
   const answers = rows.slice(at + 1).filter(isAgentAnswer).map((row) => row.text);
   if (turnRunning) return { state: "waiting", answers };

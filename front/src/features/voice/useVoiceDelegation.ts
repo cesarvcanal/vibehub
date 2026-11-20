@@ -12,6 +12,7 @@ import {
   delegationReply,
   delegationRequest,
   isAgentAnswer,
+  type DelegationAnchor,
 } from "./voiceDelegation";
 
 /**
@@ -27,7 +28,7 @@ import {
 
 interface PendingDelegation {
   id: string;
-  request: string;
+  anchor: DelegationAnchor;
   slowTimer: ReturnType<typeof setTimeout>;
 }
 
@@ -65,7 +66,7 @@ export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent 
         }
         answerDelegation(id, DELEGATION_STARTED, "progress");
         const slowTimer = setTimeout(() => answerDelegation(id, DELEGATION_SLOW, "progress"), DELEGATION_SLOW_MS);
-        pending.current.push({ id, request, slowTimer });
+        pending.current.push({ id, anchor: { request }, slowTimer });
         setTaken((n) => n + 1);
       }),
     [onDelegation, answerDelegation],
@@ -92,7 +93,7 @@ export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent 
     const held = new Set<string>();
     const stillWaiting: PendingDelegation[] = [];
     for (const delegation of pending.current) {
-      const reply = delegationReply(rows, delegation.request, turnRunning);
+      const reply = delegationReply(rows, delegation.anchor, turnRunning);
       if (reply.state === "waiting") {
         stillWaiting.push(delegation);
         for (const text of reply.answers) held.add(text);

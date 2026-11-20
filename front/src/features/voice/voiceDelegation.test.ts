@@ -73,9 +73,9 @@ describe("delegationReply", () => {
   const request = "[pedido por voz]\nroda os testes";
 
   it("waits until the request is in the chat and the agent's turn on it is over", () => {
-    expect(delegationReply([], request, false)).toEqual({ state: "waiting", answers: [] });
+    expect(delegationReply([], { request }, false)).toEqual({ state: "waiting", answers: [] });
     const rows = [user("u1", request), answer("a1", "Rodando…")];
-    expect(delegationReply(rows, request, true)).toEqual({ state: "waiting", answers: ["Rodando…"] });
+    expect(delegationReply(rows, { request }, true)).toEqual({ state: "waiting", answers: ["Rodando…"] });
   });
 
   it("answers with the agent's LAST word on it — not a subagent's, not one still streaming", () => {
@@ -88,18 +88,18 @@ describe("delegationReply", () => {
       answer("a2", "12 testes verdes."),
       answer("a3", "e mais", { streaming: true }),
     ];
-    expect(delegationReply(rows, request, false)).toEqual({ state: "answered", text: "12 testes verdes.", answers: ["Vou rodar.", "12 testes verdes."] });
+    expect(delegationReply(rows, { request }, false)).toEqual({ state: "answered", text: "12 testes verdes.", answers: ["Vou rodar.", "12 testes verdes."] });
   });
 
   it("a message that joins the running turn does not end it: the request waits for the turn's last word", () => {
     // The chat delivers a queued message at a breather of the running turn (turnHasRoomForMore).
     const rows = [user("u1", request), answer("a1", "Vou rodar os testes."), user("u2", "e depois commita"), answer("a2", "Rodando…")];
-    expect(delegationReply(rows, request, true)).toEqual({ state: "waiting", answers: ["Vou rodar os testes.", "Rodando…"] });
+    expect(delegationReply(rows, { request }, true)).toEqual({ state: "waiting", answers: ["Vou rodar os testes.", "Rodando…"] });
     const over = [...rows, answer("a3", "12 verdes e commitado.")];
-    expect(delegationReply(over, request, false)).toMatchObject({ state: "answered", text: "12 verdes e commitado." });
+    expect(delegationReply(over, { request }, false)).toMatchObject({ state: "answered", text: "12 verdes e commitado." });
   });
 
   it("a turn that ends with nothing said is told as such", () => {
-    expect(delegationReply([user("u1", request)], request, false)).toEqual({ state: "silent", answers: [] });
+    expect(delegationReply([user("u1", request)], { request }, false)).toEqual({ state: "silent", answers: [] });
   });
 });
