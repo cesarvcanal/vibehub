@@ -530,6 +530,49 @@ describe("desfecho da rodada — o snapshot do harness diz se ela acabou", () =>
   });
 });
 
+describe("frota retomada — o Workflow com resumeFromRunId escreve a segunda tentativa no mesmo diário", () => {
+  const RESUMED_JOURNAL = [
+    { type: "launched" },
+    { type: "started", agentId: "a01f", label: "verificação: tests · termo com vírgula", phase: "Verificação" },
+    { type: "result", agentId: "a01f", result: { confirmed: true, evidence: "primeira tentativa" } },
+    { type: "started", agentId: "a02f", label: "juiz", phase: "Julgamento" },
+    { type: "started", agentId: "a03f", label: "verificação: tests · termo com vírgula", phase: "Verificação" },
+    { type: "result", agentId: "a03f", result: { confirmed: true, evidence: "segunda tentativa" } },
+    { type: "started", agentId: "a04f", label: "juiz", phase: "Julgamento" },
+    { type: "result", agentId: "a04f", result: { summary: "1 achado" } },
+  ];
+
+  function resumedRunDir(root: string): string {
+    const run = join(root, "s1", "subagents", "workflows", "wf_res1");
+    mkdirSync(run, { recursive: true });
+    writeFileSync(join(run, "journal.jsonl"), jsonl(RESUMED_JOURNAL));
+    return run;
+  }
+
+  it("na rodada, a tentativa nova de um rótulo substitui a da tentativa morta: nem juiz parado, nem verificação em dobro", async () => {
+    const wf = await load();
+    const root = mkdtempSync(join(tmpdir(), "vibehub-wf-resume-"));
+    onTestFinished(() => rmSync(root, { recursive: true, force: true }));
+    const scripts = join(root, "workflows", "scripts");
+    mkdirSync(scripts, { recursive: true });
+    writeFileSync(join(root, "workflows", "wf_res1.json"), JSON.stringify({ runId: "wf_res1", status: "completed" }));
+    resumedRunDir(root);
+    const [run] = wf.parseWorkflowProbe(runProbe(wf.WORKFLOW_PROBE_JS, [join(root, "s1", "subagents", "workflows"), scripts]));
+    expect(run!.agents.map((agent) => [agent.id, agent.status])).toEqual([["a03f", "done"], ["a04f", "done"]]);
+    expect([run!.total, run!.done]).toEqual([2, 2]);
+  });
+
+  it("na conversa da frota, só fala a tentativa que valeu", async () => {
+    const wf = await load();
+    const root = mkdtempSync(join(tmpdir(), "vibehub-conv-resume-"));
+    onTestFinished(() => rmSync(root, { recursive: true, force: true }));
+    resumedRunDir(root);
+    const conversation = wf.parseFleetConversation(runProbe(wf.FLEET_CONVERSATION_PROBE_JS, [root]));
+    expect(conversation!.agents.map((agent) => [agent.id, agent.status])).toEqual([["a03f", "done"], ["a04f", "done"]]);
+    expect(conversation!.finished).toBe(true);
+  });
+});
+
 describe("conversa da frota — todos os agentes de uma vez, numa execução só", () => {
   const MODEL_ASSISTANT = (ts: number, model: string, blocks: unknown[]) => ({
     type: "assistant", timestamp: iso(ts), message: { role: "assistant", model, content: blocks },
