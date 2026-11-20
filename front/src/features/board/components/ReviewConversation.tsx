@@ -7,7 +7,7 @@ import { JumpToLatest, useStickToBottom } from "@/features/board/components/Jump
 import { TypingDots } from "@/features/board/components/PeerTypingIndicator";
 import { ReviewFleet, type RunAgentDetail } from "@/features/board/components/ReviewFleet";
 import { formatResetAt } from "@/features/board/lib/planUsage";
-import { FINDING_SEVERITY_TONE, FINDING_STATUS_TONE, conversationRows, reviewTurn, type ReviewTurn } from "@/features/board/lib/review";
+import { FINDING_SEVERITY_TONE, FINDING_STATUS_TONE, conversationRows, reviewTurn, type ConversationRow, type ReviewTurn } from "@/features/board/lib/review";
 import { fleetsByRound } from "@/features/board/lib/reviewFleet";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -57,6 +57,18 @@ export function ReviewConversation({ review, working, fleet, nameOf, agentDetail
   const openedWith = React.useRef(review.log.length);
   if (review.log.length < openedWith.current) openedWith.current = review.log.length;
   const fresh = (index: number) => index >= openedWith.current;
+  const drawRow = (row: ConversationRow) => {
+    switch (row.kind) {
+      case "round":
+        return <RoundDivider key={row.key} round={row.round} fresh={fresh(row.index)} />;
+      case "fleet":
+        return <ReviewFleet key={row.key} round={row.round} runs={row.runs} agentDetail={agentDetail} />;
+      case "items":
+        return <ItemLines key={row.key} event={row.event} findings={findings} names={names} fresh={fresh(row.index)} />;
+      case "line":
+        return <Line key={row.key} event={row.event} names={names} fresh={fresh(row.index)} />;
+    }
+  };
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
@@ -72,17 +84,7 @@ export function ReviewConversation({ review, working, fleet, nameOf, agentDetail
         {rows.length === 0 ? (
           <p className="py-6 text-center text-xs text-muted-foreground">{t("review.conversation.empty")}</p>
         ) : (
-          rows.map((row) =>
-            row.kind === "round" ? (
-              <RoundDivider key={row.key} round={row.round} fresh={fresh(row.index)} />
-            ) : row.kind === "fleet" ? (
-              <ReviewFleet key={row.key} round={row.round} runs={row.runs} agentDetail={agentDetail} />
-            ) : row.kind === "items" ? (
-              <ItemLines key={row.key} event={row.event} findings={findings} names={names} fresh={fresh(row.index)} />
-            ) : (
-              <Line key={row.key} event={row.event} names={names} fresh={fresh(row.index)} />
-            ),
-          )
+          rows.map(drawRow)
         )}
         {/* Keyed by the turn: a change of turn mounts it again, so the new "typing" comes in animated. */}
         <TurnRow key={turnKey(turn)} turn={turn} names={names} />
