@@ -1887,6 +1887,7 @@ export const ptBR: Record<string, string> = {
   "platformFailures.plain.slow_turn": "As respostas do agente estão demorando mais que o normal para começar.",
   "platformFailures.plain.stalled_turn": "O agente parou de dar sinal no meio do trabalho, sem nenhum comando rodando. Se nada mudar, pare o turno e mande a mensagem de novo.",
   "platformFailures.plain.agent_report": "O agente notou que o vibehub não se comportou como deveria.",
+  "platformFailures.plain.screen_error": "A tela do vibehub mostrou um erro que não deveria acontecer. Recarregar a página costuma destravar.",
   "platformFailures.status.investigating": "em investigação",
   "platformFailures.status.concluded_without_fix": "investigado sem correção",
   "platformFailures.ownerNotified": "O dono da instalação foi avisado e decide se abre a correção.",

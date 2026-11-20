@@ -1,5 +1,7 @@
 import * as React from "react";
 import { Outlet } from "react-router-dom";
+import { useAuth } from "@/providers/auth";
+import { PlatformFailuresAnnouncer } from "@/features/platformFailures/components/PlatformFailuresAnnouncer";
 
 /**
  * The chrome around every signed-in screen — which is now almost nothing.
@@ -17,6 +19,7 @@ import { Outlet } from "react-router-dom";
  * silently reserve space for chrome that no longer exists.
  */
 export function AppLayout() {
+  const { isOwner } = useAuth();
   React.useEffect(() => {
     document.documentElement.style.setProperty("--app-header-h", "0px");
   }, []);
@@ -28,6 +31,7 @@ export function AppLayout() {
           <Outlet />
         </div>
       </main>
+      {isOwner ? <PlatformFailuresAnnouncer /> : null}
     </div>
   );
 }

@@ -1875,6 +1875,7 @@ export const en: Record<string, string> = {
   "platformFailures.plain.slow_turn": "The agent's answers are taking longer than usual to start.",
   "platformFailures.plain.stalled_turn": "The agent stopped giving any sign in the middle of its work, with no command running. If nothing changes, stop the turn and send the message again.",
   "platformFailures.plain.agent_report": "The agent noticed that vibehub did not behave as it should.",
+  "platformFailures.plain.screen_error": "A vibehub screen showed an error that should not happen. Reloading the page usually gets it going again.",
   "platformFailures.status.investigating": "being investigated",
   "platformFailures.status.concluded_without_fix": "investigated without a fix",
   "platformFailures.ownerNotified": "The owner of this install was told and decides whether to open a fix.",

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, onTestFinished, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -393,6 +393,17 @@ describe("POST /api/cards/:id/voice/actions", () => {
     const res = await voiceAction(id, { callId: "call_j", name: "create_card", arguments: JSON.stringify({ projectId: "inventado", title: "x", instruction: "Faça a tarefa." }) });
     expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual({ error: "project not found" });
+  });
+
+  it("ordem que o board recusa não vira falha da plataforma", async () => {
+    const { onLogLine } = await import("../utils/logger.js");
+    const { isPlatformFailureLogLine } = await import("../services/platformFailures/backendError.js");
+    const loggedLines: import("../utils/logger.js").LogLine[] = [];
+    onTestFinished(onLogLine("warn", (line) => loggedLines.push(line)));
+    const id = await makeCard();
+    const res = await voiceAction(id, { callId: "call_r", name: "create_card", arguments: JSON.stringify({ projectId: "inventado", title: "x" }) });
+    expect(res.statusCode).toBe(404);
+    expect(loggedLines.filter((line) => isPlatformFailureLogLine(line, undefined, Date.now()))).toEqual([]);
   });
 
   it("o mesmo callId com outra ferramenta executa a outra, não devolve o resultado guardado", async () => {

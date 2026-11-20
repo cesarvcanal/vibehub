@@ -3,9 +3,12 @@ import { redactSecrets } from "../../utils/redactSecrets.js";
 import type { PlatformFailureReport, UserStopMark } from "./types.js";
 
 export const USER_STOP_WINDOW_MS = 10_000;
+export const PLATFORM_FAILURE_LOG_MARK = { platformFailureLog: true } as const;
+const WARN_LEVEL = 40;
+const ERROR_LEVEL = 50;
 const SOURCE_FILE_PATTERN = /([\w/.-]+?)\.[jt]s:\d+/;
 const STACK_FRAMES_KEPT = 5;
-const SYMPTOM_MAX_CHARS = 200;
+export const SYMPTOM_MAX_CHARS = 200;
 
 function decodePercentEscapes(text: string): string {
   return text.replace(/(?:%[0-9A-Fa-f]{2})+/g, (escapedRun) => {
@@ -65,19 +68,35 @@ function readTextField(fields: Record<string, unknown>, name: string): string | 
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
-export function buildBackendErrorReport(line: LogLine, lastUserStop: UserStopMark | undefined, now: number): PlatformFailureReport {
+function carriesCaughtError(fields: Record<string, unknown>): boolean {
+  return fields.err !== undefined || readTextField(fields, "detail") !== undefined;
+}
+
+function isRightAfterUserStop(fields: Record<string, unknown>, lastUserStop: UserStopMark | undefined, now: number): boolean {
+  if (lastUserStop === undefined || now - lastUserStop.at > USER_STOP_WINDOW_MS) return false;
+  const loggedCardReference = readTextField(fields, "card");
+  return loggedCardReference === undefined
+    || loggedCardReference === lastUserStop.cardWorktreeSlug
+    || loggedCardReference === lastUserStop.cardId;
+}
+
+export function isPlatformFailureLogLine(line: LogLine, lastUserStop: UserStopMark | undefined, now: number): boolean {
+  if (line.fields.platformFailureLog === true) return false;
+  const isErrorLevel = line.level >= ERROR_LEVEL;
+  const isCaughtWarning = line.level >= WARN_LEVEL && carriesCaughtError(line.fields);
+  if (!isErrorLevel && !isCaughtWarning) return false;
+  return !isRightAfterUserStop(line.fields, lastUserStop, now);
+}
+
+export function buildBackendErrorReport(line: LogLine): PlatformFailureReport {
   const loggedErrorMessage = readErrorMessage(line.fields.err) || readTextField(line.fields, "detail") || "";
   const errorMessage = loggedErrorMessage === line.message ? "" : loggedErrorMessage;
   const backendFrames = extractBackendFrames(line.fields.err, BACKEND_SOURCE_ROOT);
-  const loggedCardReference = readTextField(line.fields, "card");
-  const isWithinStopWindow = lastUserStop !== undefined && now - lastUserStop.at <= USER_STOP_WINDOW_MS;
-  const isFromStoppedCard = isWithinStopWindow
-    && (loggedCardReference === lastUserStop.cardWorktreeSlug || loggedCardReference === lastUserStop.cardId);
-  const isMarkedAfterStop = isWithinStopWindow && (loggedCardReference === undefined || isFromStoppedCard);
-  const baseSymptom = [line.message, errorMessage].filter((part) => part !== "").join(": ");
-  const symptom = redactSecrets(isMarkedAfterStop ? `logo após um stop do usuário: ${baseSymptom}` : baseSymptom).slice(0, SYMPTOM_MAX_CHARS);
+  const symptom = redactSecrets([line.message, errorMessage].filter((part) => part !== "").join(": ")).slice(0, SYMPTOM_MAX_CHARS);
   const action = readTextField(line.fields, "action");
   const route = readTextField(line.fields, "route");
+  const method = readTextField(line.fields, "method");
+  const requestedRoute = route && method ? `${method} ${route}` : route;
   const evidenceLines = [
     `mensagem: ${line.message}`,
     ...(errorMessage ? [`erro: ${errorMessage}`] : []),
@@ -87,9 +106,8 @@ export function buildBackendErrorReport(line: LogLine, lastUserStop: UserStopMar
   ];
   return {
     source: "backend_error",
-    component: readComponentOfFrame(backendFrames[0]) ?? "backend",
+    component: readComponentOfFrame(backendFrames[0]) ?? requestedRoute ?? "backend",
     symptom,
     evidence: redactSecrets(evidenceLines.join("\n")),
-    ...(isFromStoppedCard ? { cardId: lastUserStop.cardId } : {}),
   };
 }

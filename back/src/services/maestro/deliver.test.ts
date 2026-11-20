@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, onTestFinished, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -1698,5 +1698,40 @@ describe("buildPrReviewScript", () => {
     expect(s).not.toContain("$(x)");
     for (const line of s.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
     expect(() => deliver.buildPrReviewScript("vibehub-runner", TOKEN, "/work/x", "https://example.com/x", payload)).toThrow(/PR/);
+  });
+});
+
+describe("recusa do deliver vira aviso de erro no log, que o detector de falhas captura", () => {
+  async function deliverAndReadCapturedFailures(over: Parameters<typeof wire>[0], authorized: boolean) {
+    const { deliver, card } = await makeCard();
+    const { onLogLine } = await import("../../utils/logger.js");
+    const { isPlatformFailureLogLine } = await import("../platformFailures/backendError.js");
+    const loggedLines: import("../../utils/logger.js").LogLine[] = [];
+    onTestFinished(onLogLine("warn", (line) => loggedLines.push(line)));
+    wire(over);
+    const result = await deliver.deliver(card.id, { branch: "dev", authorized });
+    const capturedFailures = loggedLines.filter((line) => isPlatformFailureLogLine(line, undefined, Date.now()));
+    return { result, capturedFailures };
+  }
+
+  it.each([
+    ["push recusado", { push: "fatal: rejected\n__VIBEHUB_DELIVER__ error push" }, "push_failed", "fatal: rejected"],
+    ["merge que o GitHub recusou", { merge: "GraphQL: Base branch was modified\n__VIBEHUB_DELIVER__ error merge\n" }, "merge_failed", "Base branch was modified"],
+  ])("%s vira falha capturada, com o motivo e a saída", async (_case, over, reason, outputExcerpt) => {
+    const { result, capturedFailures } = await deliverAndReadCapturedFailures(over, true);
+    expect(result.reason).toBe(reason);
+    expect(capturedFailures).toEqual([expect.objectContaining({
+      message: "deliver failed", fields: expect.objectContaining({ reason, detail: expect.stringContaining(outputExcerpt) }),
+    })]);
+  });
+
+  it.each([
+    ["sem autorização", {}, false, "unauthorized"],
+    ["gate vermelho pelo teste do próprio card", { run: "1 failing test\n__VIBEHUB_GATE__ fail\n" }, true, "gate"],
+    ["merge feito", {}, true, "merged"],
+  ])("%s não é falha da plataforma", async (_case, over, authorized, reason) => {
+    const { result, capturedFailures } = await deliverAndReadCapturedFailures(over, authorized);
+    expect(result.reason).toBe(reason);
+    expect(capturedFailures).toEqual([]);
   });
 });

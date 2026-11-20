@@ -1,10 +1,13 @@
+import * as React from "react";
 import { Providers } from "@/providers/providers";
 import { AppRoutes } from "@/routes";
 import { ParticlesBackground } from "@/components/ParticlesBackground";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { VersionWatcher } from "@/lib/versionCheck";
+import { listenForScreenErrors, reportScreenError } from "@/features/platformFailures/lib/screenErrorReport";
 
 export default function App() {
+  React.useEffect(listenForScreenErrors, []);
   return (
     <Providers>
       {/*
@@ -17,7 +20,7 @@ export default function App() {
       <VersionWatcher />
       {/* Inside the providers (the boundary's message is translated) and around EVERYTHING routed:
           a crash in any screen must land on a message with a way out, never on a blank page. */}
-      <ErrorBoundary>
+      <ErrorBoundary onCrash={reportScreenError}>
         <AppRoutes />
       </ErrorBoundary>
     </Providers>

@@ -1,6 +1,6 @@
 import { logger, onLogLine } from "../../utils/logger.js";
 import { onCardEvent } from "../events/cardEvents.js";
-import { buildBackendErrorReport } from "./backendError.js";
+import { PLATFORM_FAILURE_LOG_MARK, buildBackendErrorReport, isPlatformFailureLogLine } from "./backendError.js";
 import { settleInvestigationOfCard } from "./investigation.js";
 import { recordPlatformFailure } from "./platformFailures.js";
 import {
@@ -50,15 +50,16 @@ async function recordFromWatch(report: PlatformFailureReport): Promise<void> {
     await recordPlatformFailure(report);
   } catch (err) {
     backendCapture.pausedUntil = Date.now() + CAPTURE_PAUSE_MS;
-    logger.warn({ detail: (err as Error).message, pausedForMs: CAPTURE_PAUSE_MS }, "could not record a platform failure — backend capture paused");
+    logger.warn({ ...PLATFORM_FAILURE_LOG_MARK, detail: (err as Error).message, pausedForMs: CAPTURE_PAUSE_MS }, "could not record a platform failure — backend capture paused");
   }
 }
 
 export function startPlatformFailureWatch(): () => void {
-  const stopLogCapture = onLogLine("error", (line) => {
+  const stopLogCapture = onLogLine("warn", (line) => {
     const now = Date.now();
     if (now < backendCapture.pausedUntil) return;
-    const report = buildBackendErrorReport(line, getLastUserStop(), now);
+    if (!isPlatformFailureLogLine(line, getLastUserStop(), now)) return;
+    const report = buildBackendErrorReport(line);
     queueMicrotask(() => trackWatchTask(recordFromWatch(report)));
   });
   const stopSlowTurns = onSlowTurns((cardId, slowTurns) => trackWatchTask(recordFromWatch(buildSlowTurnsReport(cardId, slowTurns))));
@@ -69,7 +70,7 @@ export function startPlatformFailureWatch(): () => void {
   const stopConclusions = onCardEvent((event) => {
     if (event.kind !== "concluded") return;
     trackWatchTask(settleInvestigationOfCard(event.cardId).catch((err: unknown) => {
-      logger.warn({ card: event.cardId, detail: (err as Error).message }, "could not settle the platform-failure investigation of a concluded card");
+      logger.warn({ ...PLATFORM_FAILURE_LOG_MARK, card: event.cardId, detail: (err as Error).message }, "could not settle the platform-failure investigation of a concluded card");
     }));
   });
   return () => {

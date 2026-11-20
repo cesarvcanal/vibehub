@@ -222,4 +222,33 @@ describe("rotas de falha da plataforma", () => {
     expect(settingsResponse.statusCode).toBe(400);
     expect(settingsResponse.json().error).toMatch(/selfProjectId/);
   });
+
+  it("erro que a tela mostrou vira falha screen_error, de quem tiver sessão, e sem sessão é 401", async () => {
+    const { app, ...world } = await bootFailureWorld();
+    const screenError = { message: "Cannot read properties of undefined (reading 'title')", stack: "TypeError: x\n    at CardView (https://vh.example/assets/index-abc.js:1:200)", screen: "/board" };
+    const memberResponse = await app.inject({ method: "POST", url: "/api/platform-failures/screen-errors", headers: { cookie: world.memberCookie }, payload: screenError });
+    expect(memberResponse.statusCode).toBe(200);
+    expect(memberResponse.json()).toEqual({ recorded: true });
+    expect((await app.inject({ method: "POST", url: "/api/platform-failures/screen-errors", payload: screenError })).statusCode).toBe(401);
+    const failures = (await app.inject({ method: "GET", url: "/api/platform-failures", headers: { cookie: world.ownerCookie } })).json().failures;
+    expect(failures).toEqual([expect.objectContaining({
+      source: "screen_error", component: "front", symptom: screenError.message,
+      evidence: expect.stringContaining("tela: /board"),
+    })]);
+    expect(failures[0].evidence).toContain("at CardView");
+  });
+
+  it.each([
+    ["sem mensagem", { screen: "/board" }],
+    ["mensagem vazia", { message: "", screen: "/board" }],
+    ["sem tela", { message: "x" }],
+    ["pilha que não é texto", { message: "x", screen: "/board", stack: 7 }],
+    ["mensagem longa demais", { message: "x".repeat(2001), screen: "/board" }],
+  ])("erro de tela malformado (%s) responde 400 e não grava nada", async (_case, payload) => {
+    const { app, ...world } = await bootFailureWorld();
+    const response = await app.inject({ method: "POST", url: "/api/platform-failures/screen-errors", headers: { cookie: world.ownerCookie }, payload });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toEqual(expect.any(String));
+    expect((await app.inject({ method: "GET", url: "/api/platform-failures", headers: { cookie: world.ownerCookie } })).json().failures).toEqual([]);
+  });
 });
