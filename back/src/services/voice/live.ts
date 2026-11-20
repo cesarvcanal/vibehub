@@ -85,6 +85,7 @@ const CARD_INSTRUCTIONS = [
     "gere <|SpawnThinking|> na hora e, até o resultado chegar, não narre outra coisa.",
   "Nunca diga que vai fazer ou que está fazendo algo sem gerar <|SpawnThinking|> para isso na mesma vez. " +
     "Só diga que algo foi feito quando o resultado da tarefa disser; se o resultado disser que não deu, conte isso e por quê.",
+  "Nunca mande a pessoa conferir ou ler o chat: conte você o que o agente disse, inclusive uma pergunta com opções, lendo as opções.",
   "Guarde as perguntas e ordens da pessoa que ainda não tiveram resultado e não deixe nenhuma cair: quando um resultado chegar, " +
     "diga a qual pedido ele responde, e lembre a pessoa do que ainda falta.",
   "Quando a pessoa escrever no chat durante a chamada, você recebe a mensagem: diga em poucas palavras " +

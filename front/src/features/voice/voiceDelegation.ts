@@ -18,13 +18,13 @@ export const DELEGATION_STARTED =
   "não diga que fez nem invente o resultado, e não narre outra coisa até o resultado desta tarefa chegar.";
 export const DELEGATION_SLOW_MS = 45_000;
 export const DELEGATION_SLOW =
-  "O agente do card ainda não terminou este pedido. Avise a pessoa que continua esperando por ele e que ela pode ver no chat o que o agente " +
+  "O agente do card ainda não terminou este pedido. Avise a pessoa que continua esperando por ele e conte o que você sabe do que o agente " +
   "está fazendo; não diga que terminou.";
 /** Results, spoken: the outcomes that are not the agent's answer. */
 export const DELEGATION_UNHEARD = "Você não ouviu um pedido da pessoa: pergunte, em poucas palavras, o que ela quer.";
 export const DELEGATION_NOT_SENT =
-  "O pedido não chegou ao agente do card: diga à pessoa que não deu para passar o pedido agora e que ela pode tentar de novo ou digitar no chat.";
-export const DELEGATION_SILENT = "O agente do card terminou sem responder nada em texto: diga isso à pessoa e pergunte se ela quer conferir no chat.";
+  "O pedido não chegou ao agente do card: diga à pessoa que não deu para passar o pedido agora, porque a conexão com o agente caiu, e que ela pode pedir de novo em instantes.";
+export const DELEGATION_SILENT = "O agente do card terminou sem responder nada em texto: diga isso à pessoa e pergunte se ela quer que você peça a ele de novo.";
 
 /** The message the card's agent gets for one delegation. Null when the person has said nothing yet. PURE. */
 export function delegationRequest(turns: VoiceTurn[]): string | null {
