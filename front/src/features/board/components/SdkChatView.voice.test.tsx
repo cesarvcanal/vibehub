@@ -239,7 +239,7 @@ describe("a voice call inside the card's chat", () => {
     await waitFor(() => expect(ws.frames.some((f) => f.type === "user" && f.text?.includes("roda os testes"))).toBe(true));
     ws.deliver({ type: "assistant_text", text: "Vou rodar." });
     ws.drop();
-    const results = () => channel().sent.filter((e) => e.type === "session.commentary.append" && e.delegation_id === "item_d3");
+    const results = () => channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append" && sentEvent.delegation_id === "item_d3");
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(results()).toEqual([]);
 
@@ -317,7 +317,7 @@ describe("a voice call inside the card's chat", () => {
   it("the chat losing the server and getting it back mid-call makes the voice say so, once per return", async () => {
     const { ws } = await openChat();
     await startCall();
-    const told = () => channel().sent.filter((e) => e.type === "session.commentary.append" && e.delegation_id === null);
+    const told = () => channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append" && sentEvent.delegation_id === null);
     expect(told()).toEqual([]);
 
     ws.drop();
@@ -344,7 +344,7 @@ describe("a voice call inside the card's chat", () => {
     const { ws } = await openChat();
     ws.drop();
     await startCall();
-    const told = () => channel().sent.filter((e) => e.type === "session.commentary.append" && e.delegation_id === null);
+    const told = () => channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append" && sentEvent.delegation_id === null);
     expect(told()).toEqual([]);
     await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: 5_000 });
     const again = FakeSocket.instances[1]!;
@@ -361,7 +361,7 @@ describe("a voice call inside the card's chat", () => {
     again.accept();
     again.deliver({ type: "ready" });
     await startCall();
-    expect(channel().sent.filter((e) => e.type === "session.commentary.append")).toEqual([]);
+    expect(channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append")).toEqual([]);
   });
 
   it("the replying sphere is blue and follows the assistant's REAL audio track", async () => {
