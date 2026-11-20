@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, it, expect, onTestFinished, vi } from "vitest";
-import { act, cleanup, configure, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, configure, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import { renderApp, setupState } from "@/test/render";
@@ -183,7 +183,7 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.queryByText(/sem limite de uso/)).toBeNull();
   });
 
-  it("revisor rodando a frota: a aba Agentes mostra cada agente com o modelo, o achado e a verificação respondendo a ele, fora da conversa da revisão", async () => {
+  it("revisor rodando a frota: a aba Agentes, aberta de cara, mostra cada agente com o modelo, o achado e a verificação respondendo a ele", async () => {
     const served = get.getMockImplementation()!;
     const fleet = [{
       runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Revisão", "Verificação"], total: 3, done: 2, at: 5, finished: false,
@@ -198,8 +198,6 @@ describe("ReviewPanel — o que mostra", () => {
     get.mockImplementation(async (url: string) => (url === "/cards/c1/review" ? { review: current, working, fleet } : served(url)));
     open("aut", review({ phase: "reviewing", round: 1 }));
     await loaded();
-    expect(within(screen.getByTestId("review-conversation")).queryByTestId("fleet-chat-message")).toBeNull();
-    await userEvent.click(screen.getByRole("tab", { name: /Agentes/ }));
     const messages = await screen.findAllByTestId("fleet-chat-message");
     expect(messages).toHaveLength(2);
     expect(messages[0]).toHaveTextContent("Revisão de Correção");
@@ -261,54 +259,73 @@ describe("ReviewPanel — o que mostra", () => {
     expect(await within(await screen.findByTestId("review-agent-feed")).findByText(/não deu para ler/i)).toBeInTheDocument();
   });
 
-  it("a aba Agentes abre na rodada mais recente e troca de rodada pelas pílulas", async () => {
+  it("a aba Agentes conta as rodadas em ordem: os agentes de cada rodada falam antes do revisor, e o autor responde depois", async () => {
     const served = get.getMockImplementation()!;
     const agentRun = (runId: string, title: string) => ({
       runId, name: "vibehub-pr-analysis", phases: ["Revisão"], total: 1, done: 1, at: 5, finished: true,
       agents: [{ id: `${runId}-a`, label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "done" as const, endedAt: 1, toolCount: 1,
         result: JSON.stringify({ findings: [{ title }] }) }],
     });
-    const recorded = review({ phase: "reviewing", round: 2, lastSubmitRound: 1, fleet: [{ round: 1, runs: [agentRun("wf_r1", "achado da rodada 1")] }] });
+    const recorded = review({
+      phase: "reviewing", round: 2, lastSubmitRound: 1, fleet: [{ round: 1, runs: [agentRun("wf_r1", "achado da rodada 1")] }],
+      log: [
+        { at: 1, round: 1, who: "reviewer", text: "revisor fecha a rodada 1" },
+        { at: 2, round: 1, who: "author", text: "autor corrigiu" },
+        { at: 3, round: 2, who: "system", text: "Rodada 2 de 3: o revisor confere só o diff." },
+      ],
+    });
     get.mockImplementation(async (url: string) => (url === "/cards/c1/review" ? { review: current, working, fleet: [agentRun("wf_r2", "achado da rodada 2")] } : served(url)));
     open("aut", recorded);
     await loaded();
-    await userEvent.click(screen.getByRole("tab", { name: /Agentes/ }));
-    expect(await screen.findByText("achado da rodada 2")).toBeInTheDocument();
-    expect(screen.queryByText("achado da rodada 1")).toBeNull();
-    await userEvent.click(screen.getByRole("button", { name: "Rodada 1" }));
-    expect(await screen.findByText("achado da rodada 1")).toBeInTheDocument();
-    expect(screen.queryByText("achado da rodada 2")).toBeNull();
+    const timeline = await screen.findByTestId("review-agents");
+    await within(timeline).findByText("achado da rodada 2");
+    const order = ["Rodada 1", "achado da rodada 1", "revisor fecha a rodada 1", "autor corrigiu", "Rodada 2", "Rodada 2 de 3", "achado da rodada 2"];
+    const positions = order.map((text) => timeline.textContent!.indexOf(text));
+    expect(positions.every((position) => position >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((left, right) => left - right));
   });
 
-  it("a aba Agentes abre no fim da conversa da frota, e trocar de rodada volta ao fim dela", async () => {
+  it("a aba Agentes abre no fim da rodada", async () => {
     const layoutHeight = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function scrollHeightOf(this: HTMLElement) {
       return this.closest("[hidden]") ? 0 : 1000;
     });
     onTestFinished(() => layoutHeight.mockRestore());
-    const served = get.getMockImplementation()!;
-    const agentRun = (runId: string, title: string) => ({
-      runId, name: "vibehub-pr-analysis", phases: ["Revisão"], total: 1, done: 1, at: 5, finished: true,
-      agents: [{ id: `${runId}-a`, label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "done" as const, endedAt: 1, toolCount: 1,
-        result: JSON.stringify({ findings: [{ title }] }) }],
-    });
-    const recorded = review({ phase: "reviewing", round: 2, lastSubmitRound: 1, fleet: [{ round: 1, runs: [agentRun("wf_r1", "achado da rodada 1")] }] });
-    get.mockImplementation(async (url: string) => (url === "/cards/c1/review" ? { review: current, working, fleet: [agentRun("wf_r2", "achado da rodada 2")] } : served(url)));
-    open("aut", recorded);
+    open("aut", review({ phase: "reviewing", round: 1, log: [{ at: 1, round: 1, who: "reviewer", text: "achei uma coisa" }] }));
     await loaded();
-    await userEvent.click(screen.getByRole("tab", { name: /Agentes/ }));
-    const scroller = await screen.findByTestId("review-agents");
-    expect(scroller.scrollTop).toBe(1000);
-    scroller.scrollTop = 0;
-    fireEvent.scroll(scroller);
-    await userEvent.click(screen.getByRole("button", { name: "Rodada 1" }));
-    expect(screen.getByTestId("review-agents").scrollTop).toBe(1000);
+    expect((await screen.findByTestId("review-agents")).scrollTop).toBe(1000);
   });
 
-  it("revisão sem frota: a aba Agentes diz que os agentes ainda não rodaram", async () => {
+  it("revisão sem nenhuma fala ainda: a aba Agentes diz que as falas aparecem quando a rodada começar", async () => {
     open("aut", review({ phase: "reviewing", round: 1 }));
     await loaded();
-    await userEvent.click(screen.getByRole("tab", { name: /Agentes/ }));
-    expect(screen.getByText("Os agentes do revisor ainda não rodaram nesta revisão.")).toBeInTheDocument();
+    expect(screen.getByText("Os agentes ainda não falaram. O que cada um vê e decide aparece aqui assim que a rodada começa.")).toBeInTheDocument();
+  });
+
+  it("o painel tem só as abas Agentes e Achados", async () => {
+    open("aut", review());
+    await loaded();
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Agentes", "Achados0"]);
+  });
+
+  it("a fala do revisor e a do autor levam a inicial da pessoa na bolinha, cada uma do seu lado", async () => {
+    open("aut", review({
+      log: [
+        { at: 1, round: 1, who: "reviewer", text: "achei uma coisa" },
+        { at: 2, round: 1, who: "author", text: "corrigi" },
+      ],
+    }));
+    await loaded();
+    const [reviewerLine, authorLine] = screen.getAllByTestId("review-line");
+    expect(within(reviewerLine!).getByTestId("review-avatar")).toHaveTextContent(/^M$/);
+    expect(within(authorLine!).getByTestId("review-avatar")).toHaveTextContent(/^A$/);
+  });
+
+  it("a fala do revisor em tópicos aparece como lista, com o código marcado", async () => {
+    open("aut", review({ log: [{ at: 1, round: 1, who: "reviewer", text: "Rodada 1:\n- reabre no `head` novo\n- voz entrega o card" }] }));
+    await loaded();
+    const line = screen.getByTestId("review-line");
+    expect(within(line).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["reabre no head novo", "voz entrega o card"]);
+    expect(within(line).getByText("head").tagName).toBe("CODE");
   });
 
   it("sem co-autor o papel não aparece", async () => {
@@ -491,20 +508,19 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.queryByRole("button", { name: /respostas/ })).toBeNull();
   });
 
-  it("abre na conversa; a aba Achados mostra a lista agrupada e as duas ficam montadas", async () => {
+  it("abre em Agentes; a aba Achados mostra a lista agrupada e as duas ficam montadas", async () => {
     open("aut", review({
       findings: [finding({ id: "f1", title: "Bloqueio A" }), finding({ id: "f2", severity: "suggestion", title: "Sugestão B" })],
       log: [{ at: 1, round: 1, who: "reviewer", text: "achei duas coisas" }],
     }));
     await loaded();
-    expect(screen.getByRole("tab", { name: /Conversa/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: /Agentes/ })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("log")).toHaveTextContent("achei duas coisas");
 
     await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
     expect(screen.getByRole("tab", { name: /Achados/ })).toHaveAttribute("aria-selected", "true");
     expect(screen.getAllByTestId("finding-group").map((g) => g.getAttribute("data-severity"))).toEqual(["blocking", "suggestion"]);
-    // The conversation stays mounted (hidden): going back to it does not lose the scroll.
-    expect(screen.getByTestId("review-conversation")).toBeInTheDocument();
+    expect(screen.getByTestId("review-agents")).toBeInTheDocument();
   });
 
   it("cada achado de uma fala da IA vira uma mensagem própria, depois do resumo, do lado de quem falou", async () => {
@@ -599,8 +615,8 @@ describe("ReviewPanel — o que mostra", () => {
     open("rev", review({ phase: "reviewing", lastSubmitRound: 2, findings: [finding({ id: "q1", severity: "question", title: "dúvida" })] }));
     await loaded();
     await waitFor(() => expect(screen.getByRole("tab", { name: /Achados/ })).toHaveAttribute("aria-selected", "true"));
-    await userEvent.click(screen.getByRole("tab", { name: /Conversa/ }));
-    expect(screen.getByRole("tab", { name: /Conversa/ })).toHaveAttribute("aria-selected", "true");
+    await userEvent.click(screen.getByRole("tab", { name: /Agentes/ }));
+    expect(screen.getByRole("tab", { name: /Agentes/ })).toHaveAttribute("aria-selected", "true");
   });
 
   it("Abrir no GitHub leva ao PR e fechar chama onClose", async () => {
@@ -1241,7 +1257,7 @@ describe("ReviewPanel — dúvidas e impasse", () => {
   it("'Decidir agora' leva à aba Achados", async () => {
     open("rev", review({ phase: "reviewing", findings: [doubt()] }));
     await loaded();
-    await userEvent.click(screen.getByRole("tab", { name: /Conversa/ }));
+    await userEvent.click(screen.getByRole("tab", { name: /Agentes/ }));
     await userEvent.click(screen.getByRole("button", { name: "Decidir agora" }));
     expect(screen.getByRole("tab", { name: /Achados/ })).toHaveAttribute("aria-selected", "true");
   });

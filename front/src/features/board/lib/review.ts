@@ -1,6 +1,6 @@
 import type { BadgeTone } from "@/components/ui/badge";
 import type {
-  CardPr, Finding, FindingSeverity, FindingStatus, MergeGate, Person, Review, ReviewEvent, ReviewPhase, ReviewSummary, ReviewWorking,
+  CardPr, Finding, FindingSeverity, FindingStatus, MergeGate, Person, Review, ReviewEvent, ReviewFleetRun, ReviewPhase, ReviewSummary, ReviewWorking,
 } from "@/api/types";
 
 /**
@@ -470,16 +470,14 @@ export function reviewTurn(
   }
 }
 
-/**
- * A row of the conversation: a "Rodada N" divider, or one line of the log — with a stable key and the
- * position in the log (`index`; a divider carries its first line's), which tells a line that arrived
- * while the panel was open from one that was already there.
- */
 export type ConversationRow =
   | { kind: "round"; round: number; key: string; index: number }
+  | { kind: "fleet"; round: number; runs: ReviewFleetRun[]; key: string }
   | { kind: "line"; event: ReviewEvent; key: string; index: number }
   /** The findings of an AI line, drawn right after its summary as one group of messages, one per finding. */
   | { kind: "items"; event: ReviewEvent; key: string; index: number };
+
+type LoggedLine = { event: ReviewEvent; index: number };
 
 /**
  * The log as the conversation draws it: a "Rodada N" divider before the first line of each round —
@@ -488,20 +486,42 @@ export type ConversationRow =
  * message each, so each subject reads on its own instead of in one long bubble. Both rows share the
  * line's `index` (they arrived together). PURE.
  */
-export function conversationRows(log: ReviewEvent[]): ConversationRow[] {
-  const rows: ConversationRow[] = [];
-  let round: number | null = null;
-  log.forEach((event, i) => {
-    if (event.round !== round) {
-      round = event.round;
-      rows.push({ kind: "round", round, key: `round-${round}-${i}`, index: i });
-    }
-    rows.push({ kind: "line", event, key: `${event.at}-${i}`, index: i });
-    if ((event.who === "reviewer" || event.who === "author") && event.items?.length) {
-      rows.push({ kind: "items", event, key: `${event.at}-${i}-items`, index: i });
-    }
-  });
-  return rows;
+export function conversationRows(log: ReviewEvent[], fleets: ReadonlyMap<number, ReviewFleetRun[]>): ConversationRow[] {
+  const segments = log.reduce<{ round: number; lines: LoggedLine[] }[]>((grouped, event, index) => {
+    const current = grouped.at(-1);
+    if (current?.round === event.round) current.lines.push({ event, index });
+    else grouped.push({ round: event.round, lines: [{ event, index }] });
+    return grouped;
+  }, []);
+  const loggedRounds = new Set(segments.map((segment) => segment.round));
+  const fleetOnlyRounds = [...fleets.keys()].filter((round) => !loggedRounds.has(round)).sort((left, right) => left - right);
+  const fleetRows = (round: number): ConversationRow[] => {
+    const runs = fleets.get(round);
+    return runs ? [{ kind: "fleet", round, runs, key: `fleet-${round}` }] : [];
+  };
+  const lineRows = ({ event, index }: LoggedLine): ConversationRow[] => {
+    const line: ConversationRow = { kind: "line", event, key: `${event.at}-${index}`, index };
+    const splitsFindings = (event.who === "reviewer" || event.who === "author") && Boolean(event.items?.length);
+    return splitsFindings ? [line, { kind: "items", event, key: `${event.at}-${index}-items`, index }] : [line];
+  };
+  const segmentRows = ({ round, lines }: { round: number; lines: LoggedLine[] }): ConversationRow[] => {
+    const reviewerSpeaks = lines.findIndex((line) => line.event.who === "reviewer");
+    const fleetAt = reviewerSpeaks < 0 ? lines.length : reviewerSpeaks;
+    const first = lines[0]!.index;
+    return [
+      { kind: "round", round, key: `round-${round}-${first}`, index: first },
+      ...lines.slice(0, fleetAt).flatMap(lineRows),
+      ...fleetRows(round),
+      ...lines.slice(fleetAt).flatMap(lineRows),
+    ];
+  };
+  const fleetOnlyRows = (round: number): ConversationRow[] => [
+    { kind: "round", round, key: `round-${round}-fleet`, index: log.length },
+    ...fleetRows(round),
+  ];
+  const segmentAfter = (round: number) => segments.findIndex((segment) => segment.round > round);
+  const fleetOnlyBefore = (segmentIndex: number) => fleetOnlyRounds.filter((round) => segmentAfter(round) === segmentIndex).flatMap(fleetOnlyRows);
+  return [...segments.flatMap((segment, segmentIndex) => [...fleetOnlyBefore(segmentIndex), ...segmentRows(segment)]), ...fleetOnlyBefore(-1)];
 }
 
 /**

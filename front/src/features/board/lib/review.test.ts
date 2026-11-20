@@ -7,6 +7,7 @@ import {
   cardReviewKey,
   cardPeopleKey,
   conversationRows,
+  type ConversationRow,
   autonomySummary,
   findingCounts,
   findingIsOpen,
@@ -27,7 +28,7 @@ import {
   summaryForPr,
   visiblePrs,
 } from "@/features/board/lib/review";
-import type { CardPr, Finding, MergeGate, Person, Review, ReviewSummary } from "@/api/types";
+import type { CardPr, Finding, MergeGate, Person, Review, ReviewFleetRun, ReviewSummary } from "@/api/types";
 
 function pr(number: number, openedAt: number, base = "dev"): CardPr {
   return { number, url: `https://github.com/acme/x/pull/${number}`, base, branch: "card/x", openedAt };
@@ -490,6 +491,9 @@ describe("reviewTurn", () => {
 });
 
 describe("conversationRows", () => {
+  const rowText = (row: ConversationRow) =>
+    row.kind === "round" ? `#${row.round}` : row.kind === "fleet" ? `fleet:${row.runs.map((run) => run.runId).join(",")}` : row.event.text;
+
   it("a divider before the first line of each round, then the lines in order", () => {
     const log = [
       { at: 1, round: 1, who: "system" as const, text: "início" },
@@ -497,8 +501,7 @@ describe("conversationRows", () => {
       { at: 3, round: 2, who: "author" as const, text: "a1" },
       { at: 4, round: 2, who: "reviewer" as const, text: "r2" },
     ];
-    expect(conversationRows(log).map((r) => (r.kind === "round" ? `#${r.round}` : r.event.text)))
-      .toEqual(["#1", "início", "r1", "#2", "a1", "r2"]);
+    expect(conversationRows(log, new Map()).map(rowText)).toEqual(["#1", "início", "r1", "#2", "a1", "r2"]);
   });
 
   it("an AI line with findings becomes its summary, then its findings as one group of messages, in order", () => {
@@ -506,25 +509,52 @@ describe("conversationRows", () => {
       { at: 1, round: 1, who: "reviewer" as const, text: "achei duas coisas", items: [{ id: "f1", status: "open" as const, isNew: true }, { id: "f2", status: "open" as const, isNew: true }] },
       { at: 2, round: 1, who: "author" as const, text: "corrigi", items: [{ id: "f1", status: "fixed" as const, reply: "feito", commit: "abc1234" }] },
     ];
-    const rows = conversationRows(log);
-    expect(rows.map((r) => (r.kind === "round" ? `#${r.round}` : r.kind === "items" ? `${r.event.who}:${r.event.items!.map((it) => it.id).join(",")}` : r.event.text)))
+    const rows = conversationRows(log, new Map());
+    expect(rows.map((row) => (row.kind === "items" ? `${row.event.who}:${row.event.items!.map((item) => item.id).join(",")}` : rowText(row))))
       .toEqual(["#1", "achei duas coisas", "reviewer:f1,f2", "corrigi", "author:f1"]);
     // The summary and its findings are the same line: same index, so they animate (or not) together.
-    expect(rows.filter((r) => r.kind !== "round").map((r) => r.index)).toEqual([0, 0, 1, 1]);
+    expect(rows.flatMap((row) => (row.kind === "line" || row.kind === "items" ? [row.index] : []))).toEqual([0, 0, 1, 1]);
     const keys = rows.map((r) => r.key);
     expect(new Set(keys).size).toBe(keys.length);
   });
 
   it("system and human lines are not split: no findings group follows them", () => {
     const log = [{ at: 1, round: 1, who: "human" as const, by: "albert", text: "Decisão humana em f6: retira.", items: [{ id: "f6", status: "dropped" as const }] }];
-    const rows = conversationRows(log);
+    const rows = conversationRows(log, new Map());
     expect(rows.map((r) => r.kind)).toEqual(["round", "line"]);
   });
 
+  describe("with the reviewer's agent fleet", () => {
+    const fleetRun = (runId: string): ReviewFleetRun => ({ runId, name: "vibehub-pr-analysis", phases: [], total: 0, done: 0, at: 1, finished: true, agents: [] });
+
+    it("the agents of a round speak before the reviewer's line of that round, after what the server said", () => {
+      const log = [
+        { at: 1, round: 1, who: "system" as const, text: "início" },
+        { at: 2, round: 1, who: "reviewer" as const, text: "r1" },
+        { at: 3, round: 1, who: "author" as const, text: "a1" },
+        { at: 4, round: 2, who: "system" as const, text: "rodada 2" },
+        { at: 5, round: 2, who: "reviewer" as const, text: "r2" },
+      ];
+      const fleets = new Map([[1, [fleetRun("wf_1")]], [2, [fleetRun("wf_2")]]]);
+      expect(conversationRows(log, fleets).map(rowText)).toEqual(["#1", "início", "fleet:wf_1", "r1", "a1", "#2", "rodada 2", "fleet:wf_2", "r2"]);
+    });
+
+    it("agents still working, before the reviewer spoke, close the round they belong to", () => {
+      const log = [{ at: 1, round: 1, who: "system" as const, text: "início" }];
+      expect(conversationRows(log, new Map([[1, [fleetRun("wf_1")]]])).map(rowText)).toEqual(["#1", "início", "fleet:wf_1"]);
+    });
+
+    it("a round that only the agents opened gets its divider, in round order", () => {
+      const log = [{ at: 1, round: 2, who: "system" as const, text: "rodada 2" }];
+      const fleets = new Map([[3, [fleetRun("wf_3")]], [1, [fleetRun("wf_1")]]]);
+      expect(conversationRows(log, fleets).map(rowText)).toEqual(["#1", "fleet:wf_1", "#2", "rodada 2", "#3", "fleet:wf_3"]);
+    });
+  });
+
   it("an empty log has no rows, and every key is unique", () => {
-    expect(conversationRows([])).toEqual([]);
+    expect(conversationRows([], new Map())).toEqual([]);
     const same = [{ at: 5, round: 1, who: "system" as const, text: "x" }, { at: 5, round: 1, who: "system" as const, text: "x" }];
-    const keys = conversationRows(same).map((r) => r.key);
+    const keys = conversationRows(same, new Map()).map((r) => r.key);
     expect(new Set(keys).size).toBe(keys.length);
   });
 });

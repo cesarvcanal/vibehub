@@ -150,6 +150,40 @@ const AGENT_STEPS: FeedLine[] = [
   { kind: "thinking", ms: 4_000 },
 ];
 
+const CONTEXT_SUMMARY = [
+  "- O botão Mergear da análise passa a mergear quando a pessoa autoriza, preso ao commit conferido.",
+  "- `deliverCard` recusa o merge com bloqueante aberto antes de chamar o GitHub.",
+  "- A revisão em rodadas enxerga o merge feito direto no GitHub e fecha sozinha.",
+].join("\n");
+
+export const RodadaInteiraNaAbaAgentes: Story = {
+  name: "Rodada inteira: agentes, revisor e autor (aba Agentes)",
+  args: {
+    review: review({
+      phase: "reviewing", round: 2, lastSubmitRound: 1, findings: FINDINGS, log: ROUND1,
+      fleet: [{
+        round: 1,
+        runs: [{
+          runId: "wf_r1", name: "vibehub-pr-analysis", phases: ["Contexto", "Revisão", "Verificação", "Julgamento"],
+          total: 4, done: 4, at: at(11), finished: true, outcome: "completed",
+          agents: [
+            { id: "b01f", label: "contexto", phase: "Contexto", model: "opus", status: "done", endedAt: at(3),
+              result: JSON.stringify({ summary: CONTEXT_SUMMARY }) },
+            { id: "b02f", label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "done", endedAt: at(7),
+              result: '{"findings":[{"title":"Chips em erro nunca saem do stash e reenviam a cada F5"}]}' },
+            { id: "b03f", label: "verificação: correctness · Chips em erro nunca saem do stash e reenviam a cada F5", phase: "Verificação",
+              model: "sonnet", status: "done", endedAt: at(9),
+              result: JSON.stringify({ confirmed: true, evidence: "- `TerminalComposer.tsx:514` grava o chip em erro no stash.\n- Depois do F5 o restore o reenvia." }) },
+            { id: "b04f", label: "juiz", phase: "Julgamento", model: "opus", status: "done", endedAt: at(11),
+              result: '{"findings":[{"title":"Chips em erro nunca saem do stash e reenviam a cada F5"}]}' },
+          ],
+        }],
+      }],
+    }),
+    working: { author: false, reviewer: true },
+  },
+};
+
 export const FrotaDeAgentesTrabalhando: Story = {
   name: "Frota de agentes trabalhando (aba Agentes)",
   args: {
@@ -165,7 +199,7 @@ export const FrotaDeAgentesTrabalhando: Story = {
       total: 7, done: 5, at: Date.now(), finished: false,
       agents: [
         { id: "a01f", label: "contexto", phase: "Contexto", model: "opus", status: "done", endedAt: 1,
-          result: '{"summary":"O PR faz o deliver de um card de análise mergear quando a pessoa autoriza."}' },
+          result: JSON.stringify({ summary: CONTEXT_SUMMARY }) },
         { id: "a02f", label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "done", endedAt: 2,
           result: '{"findings":[{"title":"deliverCard.ts:88 deixa o merge passar com bloqueio aberto"},{"title":"corrida entre dois cliques no merge"}]}' },
         { id: "a03f", label: "revisão: repoRules", phase: "Revisão", model: "sonnet", status: "done", endedAt: 3,
