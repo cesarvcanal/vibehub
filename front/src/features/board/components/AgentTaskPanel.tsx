@@ -17,9 +17,10 @@ export function AgentTaskPanel({ prompt, report, running }: { prompt: string; re
   const doneCount = items.filter((item) => item.state === "done").length;
   const reportMarkedNothing = !running && items.every((item) => item.state === "unmarked");
   const showsProgress = !running && !reportMarkedNothing;
+  const uncountedProgressKey = running ? "sdk.detail.deliverablesPending" : "sdk.detail.deliverablesUnmarked";
   const progressText = showsProgress
     ? t("sdk.detail.deliverablesProgress", { done: doneCount, n: items.length })
-    : t(running ? "sdk.detail.deliverablesPending" : "sdk.detail.deliverablesUnmarked", { n: items.length });
+    : t(uncountedProgressKey, { n: items.length });
   return (
     <div className="space-y-5">
       {items.length > 0 ? (

@@ -27,7 +27,8 @@ function normalizeTaskText(text: string): string {
 }
 
 function markedState(reportTasks: readonly TaskLine[], promptText: string, index: number, promptCount: number): DeliverableState {
-  const sameText = reportTasks.find((task) => normalizeTaskText(task.text) === normalizeTaskText(promptText));
+  const promptKey = normalizeTaskText(promptText);
+  const sameText = reportTasks.find((task) => normalizeTaskText(task.text) === promptKey);
   const samePosition = reportTasks.length === promptCount ? reportTasks[index] : undefined;
   const match = sameText ?? samePosition;
   if (!match) return "unmarked";
@@ -40,9 +41,9 @@ export function readAgentDeliverables(prompt: string, report: string, running: b
   const context = promptLines.filter((_, index) => !promptTasks[index]).join("\n").trim();
   const taskTexts = promptTasks.filter((task): task is TaskLine => task !== null).map((task) => task.text);
   const reportTasks = report.split("\n").map(parseTaskLine).filter((task): task is TaskLine => task !== null);
-  const items = taskTexts.map((text, index) => ({
+  const items: AgentDeliverable[] = taskTexts.map((text, index) => ({
     text,
-    state: running ? ("open" as const) : markedState(reportTasks, text, index, taskTexts.length),
+    state: running ? "open" : markedState(reportTasks, text, index, taskTexts.length),
   }));
   return { context, items };
 }
