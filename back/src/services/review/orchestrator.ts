@@ -415,7 +415,9 @@ function needsMergeGate(r: Review, again: boolean): boolean {
   return again && gate.state === "failed";
 }
 
-async function readMergeVerdict(r: Review, sha: string): Promise<GateResult & { conflict?: true }> {
+type MergeVerdict = GateResult & { conflict?: true };
+
+async function readMergeVerdict(r: Review, sha: string): Promise<MergeVerdict> {
   try {
     const pr = await readPrState(r.cardId, r.prUrl);
     if (pr?.mergeable === "CONFLICTING") return { ran: true, passed: false, conflict: true, output: mergeConflictOutput(r) };
@@ -423,6 +425,18 @@ async function readMergeVerdict(r: Review, sha: string): Promise<GateResult & { 
   } catch (err) {
     return { ran: true, passed: false, output: `o gate não chegou a rodar: ${(err as Error).message}` };
   }
+}
+
+function mergeVerdictNote(r: Review, sha: string, verdict: MergeVerdict, exhausted: boolean): string {
+  const commit = sha.slice(0, 7);
+  if (verdict.passed) return `Testes do merge verdes no commit aprovado (${commit}): o merge sai na hora.`;
+  if (verdict.conflict) {
+    return `${mergeConflictOutput(r)}: o autor recebeu a ordem de trazer ${r.base} para a branch, e a revisão confere o que entrar.`;
+  }
+  if (exhausted) {
+    return `Testes do merge vermelhos no commit aprovado (${commit}) depois de rodarem de novo sozinhos ${MERGE_GATE_AUTO_RETRIES} vezes: o merge espera uma pessoa.`;
+  }
+  return `Testes do merge vermelhos no commit aprovado (${commit}): o autor recebeu a falha e, ao fim do turno dele, os testes rodam de novo sozinhos.`;
 }
 
 /**
@@ -455,14 +469,7 @@ async function checkMergeGate(reviewId: string, opts: { again?: boolean; by?: st
           sha, state: "failed", output: verdict.output, at: Date.now(), failures,
           ...(exhausted ? { exhausted: true as const } : {}), ...(verdict.conflict ? { conflict: true as const } : {}),
         };
-      note(x, "system", verdict.passed
-        ? `Testes do merge verdes no commit aprovado (${sha.slice(0, 7)}): o merge sai na hora.`
-        : verdict.conflict
-          ? `${mergeConflictOutput(x)}: o autor recebeu a ordem de trazer ${x.base} para a branch, e a revisão confere o que entrar.`
-          : exhausted
-          ? `Testes do merge vermelhos no commit aprovado (${sha.slice(0, 7)}) depois de rodarem de novo sozinhos ${MERGE_GATE_AUTO_RETRIES} vezes: o merge espera uma pessoa.`
-          : `Testes do merge vermelhos no commit aprovado (${sha.slice(0, 7)}): o autor recebeu a falha e, ao fim do turno dele, os testes rodam de novo sozinhos.`,
-      opts.by ? { by: opts.by } : {});
+      note(x, "system", mergeVerdictNote(x, sha, verdict, exhausted), opts.by ? { by: opts.by } : {});
       landed = true;
     });
     logger.info(

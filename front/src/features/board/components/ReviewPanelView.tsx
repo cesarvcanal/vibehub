@@ -981,13 +981,15 @@ function stageText(review: Review, authorWorking: boolean, t: typeof translate):
         : t("review.stage.reviewing.first");
     case "fixing":
       return t("review.stage.fixing");
-    case "ready":
+    case "ready": {
       if (authorWorking) return t("review.stage.authorWorking");
-      if (mergeGateStatus(review) === "failed") return t("review.stage.gateFailed");
-      if (mergeGateStatus(review) === "fixing") return t("review.stage.gateFixing");
-      if (mergeGateStatus(review) === "running") return t("review.stage.gateRunning");
-      if (mergeGateStatus(review) === "conflict") return t("review.stage.gateConflict");
+      const gateStatus = mergeGateStatus(review);
+      if (gateStatus === "failed") return t("review.stage.gateFailed");
+      if (gateStatus === "fixing") return t("review.stage.gateFixing");
+      if (gateStatus === "running") return t("review.stage.gateRunning");
+      if (gateStatus === "conflict") return t("review.stage.gateConflict");
       return t("review.stage.ready");
+    }
     case "impasse":
       return t("review.stage.impasse");
     case "merged":
