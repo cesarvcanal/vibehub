@@ -17,7 +17,7 @@ export interface ChatReply {
 
 export type FleetChatEntry =
   | { kind: "message"; id: string; speaker: ChatSpeaker; at?: number; reading: AgentReading; replyTo?: ChatReply }
-  | { kind: "stopped"; id: string; speaker: ChatSpeaker }
+  | { kind: "stopped"; id: string; speaker: ChatSpeaker; error?: string }
   | { kind: "typing"; id: string; speaker: ChatSpeaker; doing?: { tool: string; target?: string } };
 
 type ChatMessage = Extract<FleetChatEntry, { kind: "message" }>;
@@ -63,7 +63,10 @@ export function reviewFleetChat(run: ReviewFleetRun): FleetChatEntry[] {
   });
   const stopped = run.agents
     .filter((agent) => agent.status === "stopped")
-    .map((agent): FleetChatEntry => ({ kind: "stopped", id: `${run.runId}-${agent.id}`, speaker: speaker(agent) }));
+    .map((agent): FleetChatEntry => {
+      const entry = { kind: "stopped" as const, id: `${run.runId}-${agent.id}`, speaker: speaker(agent) };
+      return agent.error ? { ...entry, error: agent.error } : entry;
+    });
   const typing = run.finished
     ? []
     : run.agents

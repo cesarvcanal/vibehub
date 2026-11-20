@@ -74,7 +74,9 @@ function ChatBubble({ entry, showSpeaker }: { entry: FleetChatEntry; showSpeaker
           </span>
         </p>
       ) : null}
-      {entry.kind === "stopped" ? <p className="text-destructive">{t("review.fleet.stopped")}</p> : null}
+      {entry.kind === "stopped" ? (
+        <p className="text-destructive [overflow-wrap:anywhere]">{entry.error ? t("review.fleet.failed", { error: entry.error }) : t("review.fleet.stopped")}</p>
+      ) : null}
     </article>
   );
 }

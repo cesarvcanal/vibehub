@@ -950,6 +950,7 @@ export interface ReviewFleetAgent {
   model?: string;
   status: "running" | "done" | "stopped";
   result?: string;
+  error?: string;
   endedAt?: number;
 }
 

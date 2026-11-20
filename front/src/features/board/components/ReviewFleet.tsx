@@ -1,4 +1,4 @@
-import { CheckCircle2, Loader2 } from "lucide-react";
+import { AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
 import type { ReviewFleetRun } from "@/api/types";
 import { FleetChat } from "@/features/board/components/FleetChat";
 import { PhasePills } from "@/features/board/components/WorkflowPanel";
@@ -18,13 +18,16 @@ export function ReviewFleet({ round, runs }: { round: number; runs: ReviewFleetR
 function FleetRun({ run }: { run: ReviewFleetRun }) {
   const t = useT();
   const entries = reviewFleetChat(run);
+  const interrupted = run.outcome === "failed" || run.outcome === "killed";
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
       {entries.length > 0 ? <FleetChat entries={entries} label={t("review.fleet.conversation")} /> : null}
       <div data-testid="review-fleet-strip" className="min-w-0 space-y-1.5 rounded-md border border-sky-500/25 bg-sky-500/5 px-2.5 py-2 text-xs">
         <p className="flex items-center gap-1.5 font-medium">
-          {run.finished ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" /> : <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-400" />}
-          {t(run.finished ? "review.fleet.finished" : "review.fleet.working", { done: run.done, total: run.total })}
+          {interrupted ? <AlertCircle className="h-3.5 w-3.5 text-destructive" />
+            : run.finished ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+              : <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-400" />}
+          {t(interrupted ? "review.fleet.interrupted" : run.finished ? "review.fleet.finished" : "review.fleet.working", { done: run.done, total: run.total })}
         </p>
         <PhasePills pills={phasePills(run.agents, run.phases, run.finished)} t={t} />
       </div>

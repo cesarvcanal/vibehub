@@ -27,10 +27,10 @@ export interface WorkflowAgent {
   /** The script phase it runs in (the journal's `phase` / the meta's `workflowPhase`). "" = no phase. */
   phase: string;
   model?: string;
-  /** `stopped` = it was in flight when the round ended (killed, or the probe gave up): it will never answer. */
   status: "running" | "done" | "stopped";
   /** What it returned, trimmed — only on the ones that finished. */
   result?: string;
+  error?: string;
   /** First and last `timestamp` of the transcript, in ms. Absent when the file has none. */
   startedAt?: number;
   lastAt?: number;
@@ -99,6 +99,7 @@ export interface WorkflowFeedItem {
 /** How many rounds the probe looks at (the most recent). Two cover "I ran it again to iterate". */
 export const RUNS_PROBED = 2;
 export const AGENT_RESULT_MAX = 4_000;
+export const AGENT_ERROR_MAX = 300;
 /** Cap on subagents LISTED per round — the count (`total`/`done`) is always from the whole journal. */
 const AGENTS_MAX = 200;
 /**
@@ -272,15 +273,19 @@ function agentOf(dir,a){
   if(info.activity)out.activity=info.activity;
   return {agent:out,mtime:info.mtime};
 }
-// O snapshot que o harness grava ao lado de scripts/ quando a rodada ACABA. Só o status interessa;
-// o resto (resultado, progresso) pode ser grande — snapshot grande demais fica sem desfecho.
-function outcomeOf(scriptsDir,runId){
+function snapshotOf(scriptsDir,runId){
+  const none={status:'',errorById:new Map()};
   try{
     const f=p.join(p.dirname(scriptsDir),runId+'.json');
-    const st=statOf(f);if(!st||st.size>8388608)return '';
+    const st=statOf(f);if(!st||st.size>8388608)return none;
     const o=JSON.parse(fs.readFileSync(f,'utf8'));
-    return o&&typeof o.status==='string'?o.status.slice(0,32):'';
-  }catch(e){return ''}
+    if(!o||typeof o.status!=='string')return none;
+    const errorById=new Map();
+    for(const step of Array.isArray(o.workflowProgress)?o.workflowProgress:[]){
+      if(step&&str(step.agentId)&&str(step.error))errorById.set(step.agentId,step.error.slice(0,${AGENT_ERROR_MAX}));
+    }
+    return {status:o.status.slice(0,32),errorById:errorById};
+  }catch(e){return none}
 }
 function main(dir,scriptsDir,settled){
   let names=[];
@@ -303,6 +308,7 @@ function main(dir,scriptsDir,settled){
       if(!o||!o.agentId)continue;
       const a=agents.get(o.agentId)||{id:o.agentId,status:'running',label:'',phase:''};
       if(o.type==='started'){if(!a.label)a.label=str(o.label);if(!a.phase)a.phase=str(o.phase)}
+      if(o.type==='failed')a.status='stopped';
       if(o.type==='result'){
         a.status='done';
         const v=o.result;
@@ -324,8 +330,9 @@ function main(dir,scriptsDir,settled){
     const script=scriptOf(scriptsDir,r.runId);
     const run={runId:r.runId,name:script.name,phases:script.phases,at:r.at,total:all.length,done:done,agents:list};
     if(first||oldest)run.startedAt=first||oldest;
-    const outcome=outcomeOf(scriptsDir,r.runId);
-    if(outcome)run.outcome=outcome;
+    const snapshot=snapshotOf(scriptsDir,r.runId);
+    if(snapshot.status)run.outcome=snapshot.status;
+    for(const agent of list)if(agent.status==='stopped'&&snapshot.errorById.has(agent.id))agent.error=snapshot.errorById.get(agent.id);
     out.push(run);
   }
   return out;
@@ -561,6 +568,7 @@ function parseAgent(value: unknown): WorkflowAgent | null {
   const id = asString(a?.id);
   if (!a || !id) return null;
   const done = a.status === "done";
+  const stopped = a.status === "stopped";
   const toolCount = typeof a.toolCount === "number" && Number.isFinite(a.toolCount) && a.toolCount > 0
     ? Math.floor(a.toolCount)
     : 0;
@@ -569,14 +577,16 @@ function parseAgent(value: unknown): WorkflowAgent | null {
   const endedAt = done ? asInstant(a.endedAt) : undefined;
   const activity = parseActivity(a.activity);
   const result = done ? asString(a.result) : "";
+  const error = stopped ? asString(a.error).slice(0, AGENT_ERROR_MAX) : "";
   const model = asString(a.model);
   return {
     id,
     label: trimAgentLabel(asString(a.label)),
     phase: asString(a.phase),
     ...(model ? { model } : {}),
-    status: done ? "done" : "running",
+    status: done ? "done" : stopped ? "stopped" : "running",
     ...(result ? { result } : {}),
+    ...(error ? { error } : {}),
     toolCount,
     ...(a.toolCountPartial === true ? { toolCountPartial: true } : {}),
     ...(startedAt !== undefined ? { startedAt } : {}),
