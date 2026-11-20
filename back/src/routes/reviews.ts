@@ -16,6 +16,7 @@ import { canMergeReview, fleetRunForReaders, isReviewClosed, type Review } from 
 import { getAnalysis, getAnalysisMergeGate, getAnalysisMergeRefusal } from "../services/review/analysisStore.js";
 import {
   analysedPr, currentMergeGate, currentMergeRefusal, isAnalysisMergeable, isAnalysisMerging, mergeAnalysedPr, startAnalysisMergeGate,
+  syncAnalysisWithGithub,
 } from "../services/review/analysisMerge.js";
 import { readAnalysisConversation } from "../services/review/analysisConversation.js";
 import { ANALYSIS_DIMENSIONS, analysisVerdict, dimensionHealth, uncheckedDimensions } from "../services/review/analysisModel.js";
@@ -151,6 +152,7 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
   );
 
   app.get<{ Params: { id: string } }>("/api/cards/:id/analysis", { preHandler: requireCardAccess }, async (req, reply) => {
+    await syncAnalysisWithGithub(req.params.id);
     const analysis = await getAnalysis(req.params.id);
     if (!analysis) return await reply.send({ analysis: null });
     const health = Object.fromEntries(ANALYSIS_DIMENSIONS.map((dimension) => [dimension, dimensionHealth(analysis, dimension)]));

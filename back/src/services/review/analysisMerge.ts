@@ -1,7 +1,7 @@
 import type { PublicUser } from "../../auth/users.js";
 import { getCard, updateCard, type Card, type CardPr } from "../board/registry.js";
 import { cardBranch } from "../board/workspace.js";
-import { deliver, gateAtCommit, type DeliverOpts, type DeliverResult } from "../maestro/deliver.js";
+import { afterPrMerged, deliver, gateAtCommit, readPrState, type DeliverOpts, type DeliverResult } from "../maestro/deliver.js";
 import type { GateResult } from "../maestro/gate.js";
 import { isBusy } from "../maestro/maestro.js";
 import { logger } from "../../utils/logger.js";
@@ -35,6 +35,26 @@ export function currentMergeGate(analysis: AnalysisReport, gate: AnalysisMergeGa
 
 const mergingCardIds = new Set<string>();
 const mergeGateCardIds = new Set<string>();
+
+const GITHUB_SYNC_MS = 60_000;
+const lastGithubSync = new Map<string, number>();
+
+export async function syncAnalysisWithGithub(cardId: string): Promise<void> {
+  if (mergingCardIds.has(cardId)) return;
+  const [card, analysis] = await Promise.all([getCard(cardId), getAnalysis(cardId)]);
+  const pr = card && analysis && analysedPr(card, analysis);
+  if (!pr || pr.mergedAt !== undefined) return;
+  const now = Date.now();
+  if (now - (lastGithubSync.get(cardId) ?? 0) < GITHUB_SYNC_MS) return;
+  lastGithubSync.set(cardId, now);
+  const github = await readPrState(cardId, pr.url);
+  if (github?.state !== "MERGED" || mergingCardIds.has(cardId)) return;
+  await afterPrMerged(cardId, pr.url, pr.base, pr.branch);
+  logger.info(
+    { audit: true, action: "analysis.merged_outside", card: card.worktreeSlug, pr: pr.number, head: github.headSha },
+    "analysed PR found merged on GitHub, outside the panel",
+  );
+}
 
 export async function startAnalysisMergeGate(cardId: string, opts: { again?: boolean } = {}): Promise<AnalysisMergeGateOutcome> {
   const [card, analysis, recorded] = await Promise.all([getCard(cardId), getAnalysis(cardId), getAnalysisMergeGate(cardId)]);

@@ -1584,6 +1584,35 @@ describe("merge da análise pela rota", () => {
     expect((await readAnalysis(w, w.leitor)).lastMergeRefusal).toBeUndefined();
   });
 
+  it("caso real (PR #649): o PR mergeado direto no GitHub aparece mergeado já na leitura da análise, sem recusa antiga, e o freio segura o gh por um minuto", async () => {
+    const w = await world();
+    await saveAptWithGreenGate(aptReport(w.cardId));
+    deliverResult = { merged: false, reason: "gate", branch: "dev", cardBranch: PR.branch, output: "gate timed out" };
+    await merge(w, w.merger);
+    prState = { state: "MERGED", headSha: "e".repeat(40) };
+    afterPrMerged.mockImplementationOnce(async (cardId: string) => {
+      await (await registry()).markCardPrMerged(cardId, PR.base, PR.number, 5678);
+      return "kept" as unknown as "deleted";
+    });
+    readPrState.mockClear();
+    const read = await readAnalysis(w, w.merger);
+    expect(read).toMatchObject({ canMerge: false, mergedAt: 5678 });
+    expect(read.lastMergeRefusal).toBeUndefined();
+    expect(readPrState).toHaveBeenCalledTimes(1);
+    expect(readPrState).toHaveBeenCalledWith(w.cardId, PR.url);
+    expect(afterPrMerged).toHaveBeenCalledWith(w.cardId, PR.url, PR.base, PR.branch);
+    await readAnalysis(w, w.merger);
+    expect(readPrState).toHaveBeenCalledTimes(1);
+  });
+
+  it("PR ainda aberto no GitHub, ou leitura do gh que falha, deixa a análise como estava", async () => {
+    const w = await world();
+    await saveAptWithGreenGate(aptReport(w.cardId));
+    prState = { state: "OPEN", headSha: "e".repeat(40) };
+    expect((await readAnalysis(w, w.merger)).canMerge).toBe(true);
+    expect(afterPrMerged).not.toHaveBeenCalled();
+  });
+
   it("caso real (PR #649): a análise apta roda o gate em segundo plano no commit analisado, e o clique com ele verde mergeia sem rodar o gate de novo", async () => {
     const w = await world();
     await saveReport(aptReport(w.cardId));
