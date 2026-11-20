@@ -11,6 +11,13 @@ import { config } from "../config/env.js";
 import { logger } from "../utils/logger.js";
 import { runVoiceAction, runVoiceActionOnce } from "../services/voice/executor.js";
 import { UserActionError } from "../services/maestro/asUser.js";
+import { NOT_FOUND, type ErrorStatusRule } from "./httpError.js";
+
+const BOARD_REFUSALS: readonly ErrorStatusRule[] = [
+  NOT_FOUND,
+  [/is required|empty text|reserved line/i, 400],
+  [/no live session|awaiting choice|no agent running|terminal not ready|^paused:|^done:|human-active|exited before it could take/i, 409],
+];
 
 /**
  * VOICE MODE — see services/voice/live.ts. The key never leaves the server.
@@ -102,8 +109,13 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
       } catch (err) {
         if (err instanceof UserActionError) return await reply.code(err.status).send({ error: err.message });
         const reason = err instanceof Error ? err.message : String(err);
-        logger.warn({ tool: name, card: callCard.id, detail: reason }, "voice action refused by the board");
-        return await reply.code(422).send({ error: reason });
+        const refusal = BOARD_REFUSALS.find(([pattern]) => pattern.test(reason));
+        if (refusal) {
+          logger.warn({ tool: name, card: callCard.id, detail: reason }, "voice action refused by the board");
+          return await reply.code(refusal[1]).send({ error: reason });
+        }
+        logger.error({ tool: name, card: callCard.id, detail: reason }, "voice action failed");
+        return await reply.code(502).send({ error: `the board failed to run ${name}; the server log has the detail` });
       }
     },
   );

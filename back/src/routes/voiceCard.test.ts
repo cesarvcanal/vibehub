@@ -365,11 +365,19 @@ describe("POST /api/cards/:id/voice/actions", () => {
     expect((await voiceAction(id, body, member)).statusCode).toBe(403);
   });
 
-  it("ordem que o board recusa volta com o motivo, para a voz dizer à pessoa", async () => {
+  it("ordem que o board recusa volta com o status e o motivo, para a voz dizer à pessoa", async () => {
     const id = await makeCard();
     const res = await voiceAction(id, { callId: "call_j", name: "create_card", arguments: JSON.stringify({ projectId: "inventado", title: "x" }) });
-    expect(res.statusCode).toBe(422);
+    expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual({ error: "project not found" });
+  });
+
+  it("falha de infraestrutura ao executar a ordem é 502, sem a mensagem interna na resposta", async () => {
+    const id = await makeCard();
+    const other = await makeCard();
+    const res = await voiceAction(id, { callId: "call_k", name: "send_to_card", arguments: JSON.stringify({ cardId: other, text: "rode os testes" }) });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: "the board failed to run send_to_card; the server log has the detail" });
   });
 
   it("compartilhamento view não usa a voz", async () => {
