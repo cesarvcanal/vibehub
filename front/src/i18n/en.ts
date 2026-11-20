@@ -650,7 +650,7 @@ export const en: Record<string, string> = {
   "sdk.note.answeringLong": "long answer, still writing",
   "sdk.note.tool": "running a tool",
   "sdk.note.toolStill": "still running",
-  "sdk.longToolWait": "The agent has been waiting {elapsed} for a command to finish: {what}. Anything you send now is only read when it finishes.",
+  "sdk.longToolWait": "The agent has been waiting {elapsed} for a command to finish. Anything you send now is only read when it finishes. Command: {what}",
   "sdk.note.toolLong": "slow tool, still running",
   "sdk.note.working": "working",
   "sdk.note.workingStill": "still working",

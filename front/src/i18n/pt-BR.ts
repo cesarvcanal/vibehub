@@ -651,7 +651,7 @@ export const ptBR: Record<string, string> = {
   "sdk.note.answeringLong": "resposta longa, ainda escrevendo",
   "sdk.note.tool": "rodando ferramenta",
   "sdk.note.toolStill": "ainda rodando",
-  "sdk.longToolWait": "O agente está há {elapsed} esperando um comando terminar: {what}. O que você mandar agora só é lido quando ele terminar.",
+  "sdk.longToolWait": "O agente está há {elapsed} esperando um comando terminar. O que você mandar agora só é lido quando ele terminar. Comando: {what}",
   "sdk.note.toolLong": "ferramenta demorada, ainda rodando",
   "sdk.note.working": "trabalhando",
   "sdk.note.workingStill": "ainda trabalhando",

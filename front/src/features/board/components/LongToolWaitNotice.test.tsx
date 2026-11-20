@@ -9,7 +9,7 @@ describe("aviso do agente esperando um comando", () => {
     setLanguage("pt-BR");
     render(<LongToolWaitNotice wait={{ rowId: "t1", what: "Espera o fim da bateria", elapsedSeconds: 190 }} onInterrupt={vi.fn()} />);
     expect(screen.getByTestId("long-tool-wait-notice")).toHaveTextContent(
-      "O agente está há 3m 10s esperando um comando terminar: Espera o fim da bateria. O que você mandar agora só é lido quando ele terminar.",
+      "O agente está há 3m 10s esperando um comando terminar. O que você mandar agora só é lido quando ele terminar. Comando: Espera o fim da bateria",
     );
     resetLanguage();
   });
