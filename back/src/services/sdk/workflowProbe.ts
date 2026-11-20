@@ -133,6 +133,11 @@ function readAt(file,start,bytes){
   finally{if(fd!==null)try{fs.closeSync(fd)}catch(e){}}
 }
 function statOf(file){try{return fs.statSync(file)}catch(e){return null}}
+function latestAttempts(agents){
+  const lastIdByLabel=new Map();
+  for(const agent of agents)if(agent.label)lastIdByLabel.set(agent.label,agent.id);
+  return agents.filter(function(agent){return !agent.label||lastIdByLabel.get(agent.label)===agent.id});
+}
 function linesOf(text,cutHead,cutTail){const l=text.split('\n');if(cutTail)l.pop();if(cutHead)l.shift();return l}
 function parse(l){if(!l)return null;try{const o=JSON.parse(l);return o&&typeof o==='object'?o:null}catch(e){return null}}
 function ts(o){const t=typeof o.timestamp==='string'?Date.parse(o.timestamp):NaN;return Number.isFinite(t)?t:0}
@@ -305,7 +310,7 @@ function main(dir,scriptsDir,settled){
       }
       agents.set(o.agentId,a);
     }
-    const all=Array.from(agents.values());
+    const all=latestAttempts(Array.from(agents.values()));
     const done=all.filter(function(a){return a.status==='done'}).length;
     const list=[];let first=0,oldest=0;
     for(const a of all.slice(0,${AGENTS_MAX})){
@@ -496,7 +501,7 @@ function main(base){
     agents.set(o.agentId,a);
   }
   const list=[],items=[];
-  for(const a of Array.from(agents.values()).slice(0,${AGENTS_MAX})){
+  for(const a of latestAttempts(Array.from(agents.values())).slice(0,${AGENTS_MAX})){
     const meta=metaOf(run.dir,a.id);
     const talk=talkOf(run.dir,a);
     const agent={id:a.id,label:a.label||str(meta.description),phase:a.phase||str(meta.workflowPhase),status:a.status};
