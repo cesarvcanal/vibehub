@@ -1351,9 +1351,7 @@ export function SdkChatView({
       wireDroppedDuringCall.current = true;
       return;
     }
-    if (!wireDroppedDuringCall.current) return;
-    wireDroppedDuringCall.current = false;
-    call.announceContext(SERVER_BACK_CONTEXT);
+    if (wireDroppedDuringCall.current) call.announceContext(SERVER_BACK_CONTEXT);
   }, [callLive, connected, call.announceContext]);
   /** The thread as drawn: the saved rows plus the call's turns still being spoken or saved. */
   const displayRows = React.useMemo(() => mergeLiveVoiceTurns(state.rows, call.turns, selfOrigin), [state.rows, call.turns, selfOrigin]);

@@ -314,7 +314,7 @@ describe("a voice call inside the card's chat", () => {
     expect(screen.getByTestId("voice-call-bar")).toBeInTheDocument();
   });
 
-  it("the chat losing the server and getting it back mid-call makes the voice say so, once", async () => {
+  it("the chat losing the server and getting it back mid-call makes the voice say so, once per return", async () => {
     const { ws } = await openChat();
     await startCall();
     const told = () => channel().sent.filter((e) => e.type === "session.commentary.append" && e.delegation_id === null);
@@ -323,12 +323,15 @@ describe("a voice call inside the card's chat", () => {
     ws.drop();
     await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: 5_000 });
     expect(told()).toEqual([]);
-    const again = FakeSocket.instances[1]!;
-    again.accept();
-    again.deliver({ type: "ready" });
+    const second = FakeSocket.instances[1]!;
+    second.accept();
+    second.deliver({ type: "ready" });
     await waitFor(() => expect(told()).toEqual([expect.objectContaining({ content: SERVER_BACK_CONTEXT })]));
-    again.deliver({ type: "ready" });
-    expect(told()).toHaveLength(1);
+
+    second.drop();
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(3), { timeout: 5_000 });
+    FakeSocket.instances[2]!.accept();
+    await waitFor(() => expect(told()).toHaveLength(2));
   });
 
   it("a server drop before the call is not announced when the call starts", async () => {
