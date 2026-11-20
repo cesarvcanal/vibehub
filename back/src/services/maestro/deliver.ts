@@ -696,6 +696,88 @@ export async function readPrState(cardId: string, prUrl: string): Promise<{ stat
   return null;
 }
 
+export const PR_SIDE_JQ =
+  '({ unknown: ((.files | length) >= 300 or .total_commits > (.commits | length)), ' +
+  'commits: [.commits[] | { sha, parents: (.parents | length) }], ' +
+  'files: [.files[] | .filename, (.previous_filename // empty)] } | tojson), ' +
+  '([.files[] | .filename, (.previous_filename // ""), .status, (if .patch then (.patch | split("\\n") | ' +
+  'map(select(startswith("+") or startswith("-"))) | join("\\n")) else ("blob " + (.sha // "none")) end)] | join("\\n"))';
+
+export function buildPrDiffScript(
+  containerName: string, token: string, cwd: string, prUrl: string, base: string, fromSha: string, toSha: string,
+): string {
+  assertSafeRemotePath(cwd);
+  const repo = parsePrUrl(prUrl)?.repo;
+  if (!repo) throw new Error(`not a GitHub pull request URL: ${prUrl}`);
+  for (const sha of [fromSha, toSha]) {
+    if (!FULL_SHA_RE.test(sha)) throw new Error(`the PR diff needs full shas: ${sha}`);
+  }
+  const compare = (from: string, to: string) => shQuote(`repos/${repo}/compare/${from}...${to}`);
+  const safeBase = assertBranchName(base);
+  const body = [
+    ...ghTokenPreamble(token),
+    `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
+    `PR_SIDE_JQ=${shQuote(PR_SIDE_JQ)}`,
+    "pr_side() {",
+    `  if ! OUT=$(gh api "$2" --jq "$PR_SIDE_JQ" 2>&1); then printf '%s\\n' "$OUT"; echo "${MARKER} error compare"; exit 0; fi`,
+    `  echo "${MARKER} prside $1 $(printf '%s\\n' "$OUT" | tail -n +2 | sha256sum | cut -d' ' -f1) $(printf '%s\\n' "$OUT" | head -n 1 | base64 -w0)"`,
+    "}",
+    `pr_side from ${compare(safeBase, fromSha)}`,
+    `pr_side to ${compare(safeBase, toSha)}`,
+    `pr_side step ${compare(fromSha, toSha)}`,
+  ];
+  return dockerBashScript(containerName, body);
+}
+
+export type PrDiffVerdict = "same" | "changed" | "unknown";
+
+interface PrSide {
+  diffDigest: string;
+  unknown: boolean;
+  commits: { sha: string; parents: number }[];
+  files: string[];
+}
+
+function parsePrSide(stdout: string, side: "from" | "to" | "step"): PrSide | null {
+  const match = new RegExp(`^${MARKER} prside ${side} ([0-9a-f]{64}) ([A-Za-z0-9+/=]+)$`, "m").exec(stdout);
+  if (!match) return null;
+  try {
+    const listed = JSON.parse(Buffer.from(match[2]!, "base64").toString("utf8")) as Omit<PrSide, "diffDigest">;
+    return {
+      diffDigest: match[1]!,
+      unknown: listed.unknown === true,
+      commits: listed.commits.map((commit) => ({ sha: String(commit.sha).toLowerCase(), parents: Number(commit.parents) })),
+      files: listed.files.map(String),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function parsePrDiff(stdout: string): PrDiffVerdict | null {
+  const from = parsePrSide(stdout, "from");
+  const to = parsePrSide(stdout, "to");
+  const step = parsePrSide(stdout, "step");
+  if (!from || !to || !step) return null;
+  if (from.unknown || to.unknown || step.unknown) return "unknown";
+  const reviewedCommits = new Set(from.commits.map((commit) => commit.sha));
+  const headCommits = new Set(to.commits.map((commit) => commit.sha));
+  const historyKept = [...reviewedCommits].every((sha) => headCommits.has(sha));
+  const newCommits = to.commits.filter((commit) => !reviewedCommits.has(commit.sha));
+  const onlyMerges = newCommits.length > 0 && newCommits.every((commit) => commit.parents > 1);
+  const prFiles = new Set([...from.files, ...to.files]);
+  const stepTouchesPrFiles = step.files.some((file) => prFiles.has(file));
+  return historyKept && onlyMerges && !stepTouchesPrFiles && from.diffDigest === to.diffDigest ? "same" : "changed";
+}
+
+export async function readPrDiffUnchanged(cardId: string, prUrl: string, base: string, fromSha: string, toSha: string): Promise<boolean> {
+  const out = await runCardGhScript(cardId, "compare the PR diff", (c) => buildPrDiffScript(c.container, c.token, c.cwd, prUrl, base, fromSha, toSha));
+  if (!out) return false;
+  const verdict = parsePrDiff(out.stdout);
+  if (verdict === null) logger.warn({ card: out.slug, detail: cleanOutput(out.stdout) }, "could not compare the PR diff");
+  return verdict === "same";
+}
+
 /** One review on a PR, as the auto-merge needs it: who, what verdict, on which commit. */
 export interface PrReview {
   author: string;
