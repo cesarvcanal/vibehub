@@ -56,8 +56,8 @@ an install with no owner is an install nobody can administer.
 | Method | Path | Body / notes |
 |---|---|---|
 | GET | `/api/features` | **any session** — `{ sdkChat, doneRetentionDays }`: the install-wide flags every user needs to render the right UI (`sdkChat` mirrors the `sdkDriver` setting: on = the native chat IS every card's Chat tab; `doneRetentionDays` is how long a card sits untouched in `done` before the hourly retention sweep purges it — the countdown on a done card reads it). The settings themselves stay owner-only |
-| GET | `/api/settings` | `{ git: { name, email }, autonomous, defaultAccountLabel, setupCompletedAt, transcribeLanguage, idleHibernateMinutes, sdkDriver, runner: { kind, container, host, image, baseDir }, publicUrl }` |
-| PATCH | `/api/settings` | `{ git?, autonomous?, defaultAccountLabel?, transcribeLanguage?, idleHibernateMinutes?, sdkDriver? }` — `idleHibernateMinutes` is a whole number of minutes, 0..10080 (0 = never hibernate) |
+| GET | `/api/settings` | `{ git: { name, email }, autonomous, defaultAccountLabel, setupCompletedAt, transcribeLanguage, transcribeKeywords, idleHibernateMinutes, sdkDriver, runner: { kind, container, host, image, baseDir }, publicUrl }` |
+| PATCH | `/api/settings` | `{ git?, autonomous?, defaultAccountLabel?, transcribeLanguage?, transcribeKeywords?, idleHibernateMinutes?, sdkDriver? }` — `idleHibernateMinutes` is a whole number of minutes, 0..10080 (0 = never hibernate); `transcribeKeywords` is a list of up to 100 terms of up to 60 characters each, with no comma, line break, `<` or `>` (terms are trimmed, empty ones dropped); an invalid list answers 400 and saves nothing |
 | POST | `/api/settings/setup-complete` | stamps the install as set up so the wizard stops taking over |
 
 ## GitHub
@@ -269,7 +269,7 @@ through the card whose browser saw it — another card's capture id is a 404 on 
 | DELETE | `/api/plugins/:name` | drop it from the wanted list and uninstall it everywhere |
 | POST | `/api/plugins/apply` | reconcile every profile with the wanted list |
 | GET | `/api/transcribe` | `{ available, proofread, language }` — voice input status (keys are never returned) |
-| POST | `/api/transcribe/keys` | `{ openaiKey?, anthropicKey? }` — empty string clears; Whisper transcribes, Claude proofreads against the brain |
+| POST | `/api/transcribe/keys` | `{ openaiKey?, anthropicKey? }` — empty string clears; OpenAI gpt-transcribe transcribes (with `transcribeKeywords` as keywords), Claude proofreads against the brain |
 | POST | `/api/cards/:id/transcribe` | `{ base64, mimeType }` → `{ text, proofread }`; 503 when voice input is not configured |
 | POST | `/api/import` | `{ items: [{ repo, title, sessionId, branch?, column? }], stageDir? }` — adopt staged Claude sessions as cards |
 | GET | `/api/cards/:id/session` | `{ model, modelLabel, account: { slug, name }, situation }` — what the session is REALLY using: model from the last assistant turn (`modelLabel` carries the version, e.g. `Opus 5.5`), effective account, and whether the agent is `working`/`waiting`/`paused`/`done`/`no session` |

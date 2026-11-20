@@ -168,8 +168,8 @@ export interface Settings {
   defaultAccountLabel: string | null;
   /** Set once the wizard finished, so it stops taking over the router. */
   setupCompletedAt: string | null;
-  /** ISO 639-1 hint for voice transcription, or null to let Whisper detect. */
   transcribeLanguage?: string | null;
+  transcribeKeywords: string[];
   /** Minutes a terminal may sit idle before it is hibernated. 0 = never. */
   idleHibernateMinutes?: number;
   /** Native chat as the Chat tab of every card (default on). Off = classic chat everywhere. */
@@ -226,6 +226,7 @@ export interface SettingsPatch {
   autonomous?: boolean;
   defaultAccountLabel?: string | null;
   transcribeLanguage?: string | null;
+  transcribeKeywords?: string[];
   idleHibernateMinutes?: number;
   sdkDriver?: boolean;
   sdkPermissionMode?: SdkPermissionMode;

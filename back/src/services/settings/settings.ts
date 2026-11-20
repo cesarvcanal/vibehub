@@ -39,15 +39,9 @@ export interface Settings {
   defaultAccountLabel: string | null;
   /** Set once the wizard has been completed, so it stops hijacking the router. */
   setupCompletedAt: string | null;
-  /** ISO 639-1 hint for voice transcription ("pt", "en"…). Null = let Whisper detect. */
   transcribeLanguage: string | null;
-  /**
-   * OFF by default. When on, a small Claude model proofreads the Whisper text against the brain to
-   * fix names/terms. It is off by default because that model keeps ANSWERING the dictation instead
-   * of cleaning it (a conversational "olha, tenho umas demandas…" came back as a reply, not a
-   * transcription). Raw Whisper — the person's exact words — is the safe default.
-   */
   transcribeProofread: boolean;
+  transcribeKeywords: string[];
   /**
    * MINUTES a card's terminal may sit idle before it is HIBERNATED: the session is killed and the
    * card stays exactly where it is on the board, marked cold. 0 turns the sweep off entirely.
@@ -80,6 +74,27 @@ export interface Settings {
 
 interface SettingsDoc { settings: Settings }
 
+export const TRANSCRIBE_KEYWORDS_MAX = 100;
+export const TRANSCRIBE_KEYWORD_MAX_CHARS = 60;
+// external: a keyword with "<", ">", CR or LF makes the API reject the whole request (developers.openai.com/api/docs/guides/speech-to-text)
+const KEYWORD_FORBIDDEN_RE = /[<>\r\n]/;
+const KEYWORD_SEPARATOR = ",";
+
+function normalizeTranscribeKeywords(keywords: unknown): string[] {
+  if (!Array.isArray(keywords) || !keywords.every((keyword): keyword is string => typeof keyword === "string")) {
+    throw new Error("transcribeKeywords must be a list of terms");
+  }
+  const terms = keywords.map((keyword) => keyword.trim()).filter((keyword) => keyword !== "");
+  if (terms.length > TRANSCRIBE_KEYWORDS_MAX) throw new Error(`transcribeKeywords takes at most ${TRANSCRIBE_KEYWORDS_MAX} terms`);
+  const invalidTerm = terms.find(
+    (term) => term.length > TRANSCRIBE_KEYWORD_MAX_CHARS || KEYWORD_FORBIDDEN_RE.test(term) || term.includes(KEYWORD_SEPARATOR),
+  );
+  if (invalidTerm !== undefined) {
+    throw new Error(`transcribeKeywords: each term has at most ${TRANSCRIBE_KEYWORD_MAX_CHARS} characters, no comma, line break, "<" or ">"`);
+  }
+  return terms;
+}
+
 const DEFAULTS: Settings = {
   git: { name: "vibehub", email: "vibehub@localhost" },
   autonomous: true,
@@ -87,6 +102,7 @@ const DEFAULTS: Settings = {
   setupCompletedAt: null,
   transcribeLanguage: null,
   transcribeProofread: false,
+  transcribeKeywords: [],
   idleHibernateMinutes: 180,
   sdkDriver: true,
   sdkPermissionMode: "same-as-terminal",
@@ -119,6 +135,7 @@ export interface SettingsPatch {
   defaultAccountLabel?: string | null;
   transcribeLanguage?: string | null;
   transcribeProofread?: boolean;
+  transcribeKeywords?: string[];
   idleHibernateMinutes?: number;
   sdkDriver?: boolean;
   sdkPermissionMode?: SdkPermissionMode;
@@ -159,6 +176,7 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
       throw new Error("transcribeLanguage must be a two-letter ISO 639-1 code, or null");
     }
   }
+  const transcribeKeywords = patch.transcribeKeywords === undefined ? undefined : normalizeTranscribeKeywords(patch.transcribeKeywords);
   if (patch.idleHibernateMinutes !== undefined) {
     const minutes = Number(patch.idleHibernateMinutes);
     // A week is the ceiling: past that the setting is not "hibernate late", it is "never", and
@@ -180,6 +198,9 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
     }
     if (patch.transcribeProofread !== undefined) {
       doc.settings.transcribeProofread = patch.transcribeProofread;
+    }
+    if (transcribeKeywords !== undefined) {
+      doc.settings.transcribeKeywords = transcribeKeywords;
     }
     if (patch.sdkDriver !== undefined) {
       doc.settings.sdkDriver = patch.sdkDriver;

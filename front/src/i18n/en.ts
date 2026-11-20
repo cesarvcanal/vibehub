@@ -1086,6 +1086,9 @@ export const en: Record<string, string> = {
   "settings.voice": "Voice input",
   "settings.transcribeLanguage": "Transcription language",
   "settings.transcribePlaceholder": "auto (or a two-letter code: pt, en, es…)",
+  "settings.transcribeKeywords": "Transcription terms",
+  "settings.transcribeKeywordsPlaceholder": "vibehub, erp-aux, Qive, Mussa",
+  "settings.transcribeKeywordsHint": "Names and jargon the transcription should spell exactly like this. Separate them with commas or line breaks.",
   "settings.githubAccounts": "GitHub accounts",
   "settings.githubHint":
     "Add one account per GitHub identity — your personal one and your organization's, say. Each project picks which one it clones with; the token only leaves the vault as an ephemeral clone credential.",
@@ -1099,7 +1102,7 @@ export const en: Record<string, string> = {
   "settings.fineGrained": " · fine-grained",
   "settings.tokenNotUsable": "token not usable",
   "settings.voiceKeys": "Voice keys",
-  "settings.voiceHint1": "Whisper (OpenAI) transcribes the composer's recordings",
+  "settings.voiceHint1": "OpenAI (gpt-transcribe) transcribes the composer's recordings",
   "settings.keyStored": " — key stored",
   "settings.noKey": " — no key, microphone unavailable",
   "settings.voiceHint2":

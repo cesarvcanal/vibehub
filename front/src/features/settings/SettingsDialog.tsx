@@ -31,6 +31,7 @@ import {
   useT,
   type Language,
 } from "@/i18n";
+import { formatTranscribeKeywords, parseTranscribeKeywords } from "./lib/transcribeKeywords";
 
 /**
  * The install's own settings — the handful of things the wizard asked once and you may want to
@@ -72,6 +73,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [sdkAutoResume, setSdkAutoResume] = React.useState(true);
   const [defaultLabel, setDefaultLabel] = React.useState("");
   const [transcribeLanguage, setTranscribeLanguage] = React.useState("");
+  const [transcribeKeywords, setTranscribeKeywords] = React.useState("");
   // Kept as a STRING: the field has to be clearable while you retype it, and "" is not 0.
   const [idleHibernate, setIdleHibernate] = React.useState("");
   const [githubLabel, setGithubLabel] = React.useState("");
@@ -99,6 +101,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     setSdkAutoResume(settings.data.sdkAutoResume ?? true);
     setDefaultLabel(settings.data.defaultAccountLabel ?? "");
     setTranscribeLanguage(settings.data.transcribeLanguage ?? "");
+    setTranscribeKeywords(formatTranscribeKeywords(settings.data.transcribeKeywords));
     setIdleHibernate(String(settings.data.idleHibernateMinutes ?? 180));
     setSelfProjectId(settings.data.selfProjectId ?? "");
   }, [open, settings.data]);
@@ -200,6 +203,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
       sdkAutoResume,
       defaultAccountLabel: defaultLabel.trim() || null,
       transcribeLanguage: transcribeLanguage.trim() || null,
+      transcribeKeywords: parseTranscribeKeywords(transcribeKeywords),
       // A blank field is not "never" — it is a field being typed in. Leave the stored value alone.
       ...(idleHibernate.trim() === "" ? {} : { idleHibernateMinutes: Number(idleHibernate.trim()) }),
       ...(isSelfProjectChanged ? { selfProjectId: selfProjectId || null } : {}),
@@ -380,6 +384,19 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 maxLength={2}
                 className="font-mono"
               />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="settings-transcribe-keywords">{t("settings.transcribeKeywords")}</Label>
+              <textarea
+                id="settings-transcribe-keywords"
+                value={transcribeKeywords}
+                onChange={(event) => setTranscribeKeywords(event.target.value)}
+                placeholder={t("settings.transcribeKeywordsPlaceholder")}
+                rows={3}
+                spellCheck={false}
+                className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-base ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 md:text-sm"
+              />
+              <p className="text-xs text-muted-foreground">{t("settings.transcribeKeywordsHint")}</p>
             </div>
           </section>
 
