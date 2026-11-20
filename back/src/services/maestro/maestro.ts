@@ -61,11 +61,6 @@ export interface TerminalSummary {
   declaredState: DeclaredState | null;
   /** The one-line summary the agent reported with `declaredState`; null = none. */
   declaredSummary: string | null;
-  /**
-   * true = a human typed into this terminal within the last few minutes. `vibehub_send_to_terminal`
-   * REFUSES a human-active card (reading is still allowed) — a maestro must not fight a person for
-   * the prompt.
-   */
   humanActive: boolean;
   updatedAt: number;
 }
