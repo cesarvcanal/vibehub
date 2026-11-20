@@ -239,6 +239,16 @@ describe("WORKFLOW_PROBE_JS — a sondagem lendo um diário real", () => {
     expect(agent("a02f")).toMatchObject({ model: "claude-sonnet-5-5" });
   });
 
+  it("o aviso <synthetic> do CLI (limite de sessão) no fim do transcript não toma o lugar do modelo que respondeu", async () => {
+    writeFileSync(join(fx.run, "agent-a02f.jsonl"), jsonl([
+      HEADER(T0 + 500), TASK(T0 + 600, "Varra o back"),
+      { type: "assistant", timestamp: iso(T0 + 2_000), message: { role: "assistant", model: "claude-sonnet-5-5", content: [THINKING] } },
+      { type: "assistant", timestamp: iso(T0 + 3_000), message: { role: "assistant", model: "<synthetic>", content: [{ type: "text", text: "You've hit your session limit" }] } },
+    ]));
+    const { agent } = await snapshot();
+    expect(agent("a02f")).toMatchObject({ model: "claude-sonnet-5-5" });
+  });
+
   it("sem diário nem meta, usa a linha 'computed task text follows:' — pulando o cabeçalho", async () => {
     const { agent } = await snapshot();
     expect(agent("a03f")).toMatchObject({ label: "Confere os testes de integração", phase: "" });
@@ -711,6 +721,18 @@ describe("conversa da frota — todos os agentes de uma vez, numa execução só
     ]));
     return { transcriptDir };
   }
+
+  it("na conversa, o aviso <synthetic> do CLI no fim do transcript não toma o lugar do modelo que respondeu", async () => {
+    const wf = await load();
+    const { transcriptDir } = conversationFixture();
+    writeFileSync(join(transcriptDir, "s-new", "subagents", "workflows", "wf_new1", "agent-a02f.jsonl"), jsonl([
+      HEADER(T0 + 200), TASK(T0 + 300, "Verifique"),
+      MODEL_ASSISTANT(T0 + 2_000, "claude-opus-5-5", [{ type: "text", text: "Refutado: o log mascara o token." }]),
+      MODEL_ASSISTANT(T0 + 3_000, "<synthetic>", [{ type: "text", text: "You've hit your session limit" }]),
+    ]));
+    const conversation = wf.parseFleetConversation(runProbe(wf.FLEET_CONVERSATION_PROBE_JS, [transcriptDir]));
+    expect(conversation!.agents.find((agent) => agent.id === "a02f")).toMatchObject({ model: "claude-opus-5-5" });
+  });
 
   it("lê a rodada mais recente de todas as sessões do card, com quem falou, o id do modelo que respondeu e o que disse, em ordem de tempo", async () => {
     const wf = await load();

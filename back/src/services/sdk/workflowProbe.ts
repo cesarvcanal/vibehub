@@ -223,7 +223,7 @@ function inspect(file){
   const counted=whole?[head]:[head,tail];
   for(const part of counted)for(const l of part){
     const o=parse(l);if(!o||o.type!=='assistant')continue;
-    if(o.message&&str(o.message.model))out.model=o.message.model;
+    if(o.message&&str(o.message.model)&&o.message.model.charAt(0)!=='<')out.model=o.message.model;
     for(const b of blocks(o))if(b&&b.type==='tool_use')out.toolCount++;
   }
   for(let i=tail.length-1;i>=0;i--){
@@ -488,7 +488,7 @@ function talkOf(dir,agent){
     const o=parse(l);if(!o)continue;
     const at=ts(o);
     if(o.type==='assistant'){
-      if(o.message&&str(o.message.model))model=o.message.model;
+      if(o.message&&str(o.message.model)&&o.message.model.charAt(0)!=='<')model=o.message.model;
       for(const b of blocks(o)){
         const said=b&&b.type==='tool_use'&&b.name==='StructuredOutput';
         const s=said?{kind:'text',text:flat(JSON.stringify(b.input==null?'':b.input),${STRUCTURED_OUTPUT_MAX})}:b&&b.type==='text'?speech(b):step(b,${CONVERSATION_TEXT_MAX});
