@@ -83,7 +83,7 @@ import { reasoningTranslator, useReasoningTranslation } from "@/features/board/l
 import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
 import { ToolDiffCard } from "@/features/board/components/ToolDiffCard";
 import { FleetPanel, FleetRow, SdkDetailContext, SdkDetailHost, SdkFleet, StatusIcon, ToolResultText, useChangedFiles, type DetailView } from "@/features/board/components/SdkDetail";
-import { DetailChannelContext, agentElapsedMs, agentName, createDetailChannel, listForegroundRunningAgents, parseDetailResponse, toolStatus, type DetailChannel } from "@/features/board/lib/sdkDetail";
+import { DetailChannelContext, agentElapsedMs, agentName, countAgentActions, createDetailChannel, describeRunningAgentStep, listForegroundRunningAgents, parseDetailResponse, toolStatus, type DetailChannel } from "@/features/board/lib/sdkDetail";
 import { toolDiff } from "@/features/board/lib/toolDiff";
 import {
   buildDecisionReply,
@@ -1646,7 +1646,7 @@ export function SdkChatView({
       </div>
 
       {connected && (state.backgroundTasks.length > 0 || foregroundAgents.length > 0) ? (
-        <SdkRunningTray backgroundTasks={state.backgroundTasks} foregroundAgents={foregroundAgents} agentTasks={state.agentTasks} rows={state.rows} />
+        <SdkRunningTray backgroundTasks={state.backgroundTasks} foregroundAgents={foregroundAgents} agentTasks={state.agentTasks} rows={state.rows} subagentRows={split.children} />
       ) : null}
 
       {/* PENDING DECISIONS — the questions still waiting on the user, surfaced right above the
@@ -1799,11 +1799,13 @@ function SdkRunningTray({
   foregroundAgents,
   agentTasks,
   rows,
+  subagentRows,
 }: {
   backgroundTasks: readonly BackgroundTask[];
   foregroundAgents: readonly Extract<SdkRow, { kind: "tool" }>[];
   agentTasks: SdkChatState["agentTasks"];
   rows: readonly SdkRow[];
+  subagentRows: SubagentSplit["children"];
 }) {
   const t = useT();
   const { open } = React.useContext(SdkDetailContext);
@@ -1822,14 +1824,15 @@ function SdkRunningTray({
     >
       {foregroundAgents.map((call) => {
         const live = agentTasks[call.id];
+        const childRows = subagentRows.get(call.id) ?? [];
         return (
           <FleetRow
             key={call.id}
             testId="sdk-running-task"
             status="running"
             name={agentName(call.input)}
-            now={live?.summary || live?.lastTool || ""}
-            actions={live?.toolUses}
+            now={describeRunningAgentStep(live, childRows)}
+            actions={countAgentActions(call, live, childRows)}
             durationMs={agentElapsedMs("running", live, undefined, now)}
             onClick={() => open({ kind: "agent", id: call.id })}
           />

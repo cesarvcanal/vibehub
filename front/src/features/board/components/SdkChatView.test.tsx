@@ -4518,6 +4518,20 @@ describe("SdkChatView — tarefas em segundo plano", () => {
     expect(await screen.findByRole("dialog")).toHaveTextContent("Analisar transcripts de cards");
   });
 
+  it("a linha fixa do subagente diz o que ele faz e quantas ações fez, como o painel da conversa, mesmo antes do progresso do CLI", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "a1", name: "Agent", input: { description: "Analisar transcripts de cards" } });
+    ws.deliver({ type: "tool_use", id: "c1", name: "Bash", input: { command: "ls", description: "Lista os transcripts" }, parentToolUseId: "a1" });
+
+    const pinned = within(await screen.findByTestId("sdk-running-tasks")).getByTestId("sdk-running-task");
+    const inConversation = screen.getByTestId("sdk-fleet-agent");
+    expect(pinned).toHaveTextContent("Lista os transcripts");
+    expect(pinned.textContent).toBe(inConversation.textContent);
+  });
+
   it.each(["completed", "failed", "stopped"])("o subagente sai da faixa fixa quando termina como %s", async (status) => {
     renderSdkChat();
     const ws = await socket();

@@ -248,6 +248,12 @@ describe("os subagentes do turno atual que ainda rodam (a faixa fixa acima do ca
     expect(listedIds(state, { a1: agentTask("a1", "running") })).toEqual([]);
   });
 
+  it("o subagente que o fim do turno deu como parado não volta num turno aberto sem mensagem do usuário", () => {
+    const ended = applySdkEvent(turnWithAgent(), { type: "result", isError: false });
+    const autoTurn = tool(ended, "b1", "Bash", { command: "ls" });
+    expect(listedIds(autoTurn, { a1: agentTask("a1", "running") })).toEqual([]);
+  });
+
   it("o subagente de um subagente não entra: ele aparece na linha do tempo do pai", () => {
     const state = tool(turnWithAgent(), "a2", "Agent", { description: "Neto" }, "a1");
     expect(listedIds(state, { a1: agentTask("a1", "running"), a2: agentTask("a2", "running") })).toEqual(["a1"]);

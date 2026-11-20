@@ -1112,9 +1112,13 @@ function isLongRunningCommand(row: SdkRow): row is Extract<SdkRow, { kind: "tool
     && typeof row.elapsedSeconds === "number" && row.elapsedSeconds >= LONG_TOOL_WAIT_SECONDS;
 }
 
+export function listCurrentTurnRows(rows: readonly SdkRow[]): SdkRow[] {
+  const turnStartIndex = rows.findLastIndex((row) => row.kind === "user" && row.absorbed !== true);
+  return rows.slice(turnStartIndex + 1);
+}
+
 export function findLongToolWait(state: SdkChatState): LongToolWait | null {
-  const turnStartIndex = state.rows.findLastIndex((row) => row.kind === "user" && row.absorbed !== true);
-  const stuckCommand = state.rows.slice(turnStartIndex + 1).findLast(isLongRunningCommand);
+  const stuckCommand = listCurrentTurnRows(state.rows).findLast(isLongRunningCommand);
   if (!stuckCommand) return null;
   return { rowId: stuckCommand.id, what: describeRunningTool(stuckCommand), elapsedSeconds: stuckCommand.elapsedSeconds };
 }
