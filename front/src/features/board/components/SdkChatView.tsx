@@ -2587,8 +2587,6 @@ const SdkChatRow = React.memo(function SdkChatRow({
     );
   }
 
-  // Best-effort highlight: when the message CLOSES on a question directed at the user, that final
-  // paragraph gets a subtle amber frame so it never drowns in the text above it.
   const prose = row.kind === "assistant" && !row.streaming ? splitProseQuestion(row.text) : null;
   const actions = row.kind === "assistant" && answerOf ? <AnswerActions id={row.id} cardId={answerOf} text={row.text} trailing={trailing} /> : null;
   if (prose) {
@@ -2600,6 +2598,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
       answerable: true,
     };
     const choices = answered === undefined && onPickOption ? proseOptions(prose.question) : null;
+    const stackedChoices = choices !== null && hasDescriptions(choices.options);
     return (
       <div data-testid="sdk-assistant" className="max-w-full select-text text-sm leading-relaxed">
         {prose.body !== "" ? <Markdown text={prose.body} /> : null}
@@ -2615,13 +2614,13 @@ const SdkChatRow = React.memo(function SdkChatRow({
         >
           <Markdown text={choices ? choices.lead : prose.question} />
           {choices && onPickOption ? (
-            <div className={cn("mt-1.5 flex gap-1.5", hasDescriptions(choices.options) ? "flex-col" : "flex-wrap")}>
+            <div className={cn("mt-1.5 flex gap-1.5", stackedChoices ? "flex-col" : "flex-wrap")}>
               {choices.options.map((option) => (
                 <ChoiceOption
                   key={option.label}
                   label={option.label}
                   description={option.description}
-                  stacked={hasDescriptions(choices.options)}
+                  stacked={stackedChoices}
                   data-testid="sdk-prose-option"
                   onClick={() => onPickOption(decision, option.label)}
                 />
@@ -2951,7 +2950,7 @@ function SdkQuestionCard({
 }
 
 function hasDescriptions(options: ReadonlyArray<{ description?: string }>): boolean {
-  return options.some((option) => (option.description ?? "") !== "");
+  return options.some((option) => Boolean(option.description));
 }
 
 function ChoiceOption({

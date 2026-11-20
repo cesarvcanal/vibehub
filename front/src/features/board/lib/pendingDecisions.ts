@@ -65,12 +65,6 @@ function lastParagraph(text: string): string {
   return paragraphs[paragraphs.length - 1] ?? "";
 }
 
-/**
- * The question directed at the user that CLOSES this text — or null. Conservative: only the final
- * paragraph counts (a question answered by the text itself is not pending), it must end in "?"
- * AND read as directed (or open with an explicit decision request), and quoted/code paragraphs
- * never match. PURE.
- */
 export function proseQuestion(text: string): string | null {
   const block = closingBlock(text);
   if (block === "" || block.startsWith(">") || block.includes("```")) return null;
@@ -86,7 +80,8 @@ export function proseQuestion(text: string): string | null {
 
 function closingBlock(text: string): string {
   const last = lastParagraph(text);
-  if (optionList(last)?.lead !== "") return last;
+  const lastIsBareList = optionList(last)?.lead === "";
+  if (!lastIsBareList) return last;
   const beforeList = text.slice(0, text.lastIndexOf(last));
   const previous = lastParagraph(beforeList);
   if (previous === "") return last;
