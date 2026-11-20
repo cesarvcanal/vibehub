@@ -5340,6 +5340,26 @@ describe("SdkChatView — o detalhe de cada ação", () => {
     await waitFor(() => expect(detailAsks(ws).some((f) => f.req === "tool" && f.id === "b2")).toBe(true));
   });
 
+  it.each([
+    ["comando que terminou bem mostra o stderr como mensagem, não como erro", false, "Command messages (stderr)", "Errors (stderr)"],
+    ["comando que falhou mostra o stderr como erro", true, "Errors (stderr)", "Command messages (stderr)"],
+  ])("%s", async (_caseName, isError, label, absentLabel) => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "s1", name: "Bash", input: { command: "cd /tmp && ls" } });
+    ws.deliver({ type: "tool_result", id: "s1", toolResult: { lines: 2 } });
+    fireEvent.click(screen.getByTestId("sdk-tool"));
+    const dialog = await screen.findByTestId("sdk-detail");
+    await waitFor(() => expect(detailAsks(ws).some((frame) => frame.id === "s1")).toBe(true));
+    const ask = detailAsks(ws).find((frame) => frame.id === "s1")!;
+    const structured = { stdout: "a.txt\n", stderr: "\nShell cwd was reset to /work/card\n" };
+    ws.deliver({ type: "detail", req: "tool", id: "s1", nonce: ask.nonce, data: { found: true, by: "main", name: "Bash", input: { command: "cd /tmp && ls" }, structured, isError, result: { lines: 2 } } } as never);
+    expect(await within(dialog).findByText(label)).toBeInTheDocument();
+    expect(within(dialog).queryByText(absentLabel)).toBeNull();
+  });
+
   it("comando ainda rodando: diz que roda (não 'terminou sem imprimir'), pede de novo e mostra a saída quando termina", async () => {
     renderSdkChat();
     const ws = await socket();

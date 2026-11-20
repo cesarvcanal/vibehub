@@ -750,6 +750,7 @@ export const en: Record<string, string> = {
   "sdk.detail.stillRunning": "Still running — the output shows up here when the command finishes.",
   "sdk.detail.resultPending": "Finished; waiting for the result to reach the transcript…",
   "sdk.detail.stderr": "Errors (stderr)",
+  "sdk.detail.stderrMessages": "Command messages (stderr)",
   "sdk.detail.notApplied": "not applied",
   "sdk.detail.newFile": "new file",
   "sdk.detail.applied": "edit applied",
