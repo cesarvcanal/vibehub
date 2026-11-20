@@ -1054,6 +1054,14 @@ export async function readCardFleet(cardId: string): Promise<WorkflowRun[]> {
   return dirs ? await readWorkflowRuns(dirs) : [];
 }
 
+export async function readCardAgentFeed(cardId: string, request: WorkflowFeedRequest): Promise<WorkflowFeedEvent> {
+  const session = sessions.get(cardId);
+  if (!session || session.closed) {
+    return { type: "workflow_feed", runId: request.runId, agentId: request.agentId, items: [], error: "no-session" };
+  }
+  return await feedReply(session, request);
+}
+
 /** A subagent's feed for whoever asked, with the reason when it comes back empty because of an error. */
 async function feedReply(session: DriverSession, request: WorkflowFeedRequest): Promise<WorkflowFeedEvent> {
   const reply = (items: WorkflowFeedEvent["items"], error?: WorkflowFeedEvent["error"]): WorkflowFeedEvent => ({

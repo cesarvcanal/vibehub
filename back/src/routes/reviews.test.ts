@@ -767,6 +767,78 @@ describe("GET da revisão: a frota de agentes do revisor", () => {
   });
 });
 
+describe("passo a passo de um agente da frota do revisor", () => {
+  async function reviewerSession() {
+    const w = await world();
+    const review = (await startReview(w)).json().review as { id: string; reviewerCardId: string };
+    const { EventEmitter } = await import("node:events");
+    const manager = await import("../services/sdk/manager.js");
+    const driver = Object.assign(new EventEmitter(), {
+      stdout: new EventEmitter(), stderr: new EventEmitter(), exitCode: null, kill: () => undefined,
+      stdin: Object.assign(new EventEmitter(), { writable: true, write: () => true, end: () => undefined }),
+    });
+    manager.setDriverSpawnerForTesting(() => driver as never);
+    onTestFinished(() => {
+      manager.resetSdkSessionsForTesting();
+      manager.setDriverSpawnerForTesting(null);
+    });
+    manager.ensureDriverSession({
+      cardId: review.reviewerCardId, label: "revisor", command: { file: "docker", args: ["exec"] }, transcriptDir: "/root/.claude/projects/p",
+    });
+    driver.stdout.emit("data", Buffer.from(`${JSON.stringify({ type: "session", sessionId: "s1" })}\n`));
+    return w;
+  }
+
+  const feedOf = async (w: World, path: string, who: Person) =>
+    await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/review/agents/${path}/feed`, headers: { cookie: who.cookie } });
+
+  it("lê o transcript do agente na rodada da sessão do revisor e devolve os passos", async () => {
+    const w = await reviewerSession();
+    const steps = [{ at: 1, kind: "tool", tool: "Read", target: "src/auth.ts" }, { at: 2, kind: "text", text: "Achei o vazamento." }];
+    runScript.mockClear();
+    runScript.mockResolvedValueOnce({ stdout: `${JSON.stringify(steps)}\n`, stderr: "" });
+    const res = await feedOf(w, "wf_abc12/a01f", w.leitor);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ items: steps });
+    expect(runScript).toHaveBeenCalledTimes(1);
+    const script = runScript.mock.calls[0]![0];
+    expect(script).toContain("'/root/.claude/projects/p/s1/subagents/workflows' 'wf_abc12' 'a01f'");
+  });
+
+  it.each(["wf_abc12/a01f;rm", "x/a01f", "wf_abc12/zz"])("id fora do formato (%s) responde 400 sem ir ao runner", async (path) => {
+    const w = await reviewerSession();
+    runScript.mockClear();
+    const res = await feedOf(w, path.split("/").map(encodeURIComponent).join("/"), w.leitor);
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toHaveProperty("error");
+    expect(runScript).not.toHaveBeenCalled();
+  });
+
+  it("sem sessão viva do revisor, responde 409 em vez de fingir passo nenhum", async () => {
+    const w = await world();
+    await startReview(w);
+    const res = await feedOf(w, "wf_abc12/a01f", w.leitor);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toHaveProperty("error");
+  });
+
+  it("sondagem que falha no runner responde 502", async () => {
+    const w = await reviewerSession();
+    runScript.mockRejectedValueOnce(new Error("container parado"));
+    expect((await feedOf(w, "wf_abc12/a01f", w.leitor)).statusCode).toBe(502);
+  });
+
+  it("quem não alcança o card não descobre que ele existe", async () => {
+    const w = await reviewerSession();
+    expect((await feedOf(w, "wf_abc12/a01f", w.outro)).statusCode).toBe(404);
+  });
+
+  it("card sem revisão responde 404", async () => {
+    const w = await world();
+    expect((await feedOf(w, "wf_abc12/a01f", w.autor)).statusCode).toBe(404);
+  });
+});
+
 describe("GET da revisão: se há merge rodando agora", () => {
   it("em ready com o merge segurando a vez diz merging e nem vai ao GitHub; sem a vez, confere antes de dizer false", async () => {
     const w = await world();
