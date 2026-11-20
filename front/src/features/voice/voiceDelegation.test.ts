@@ -65,7 +65,7 @@ describe("a voz nunca manda a pessoa ao chat", () => {
     ["DELEGATION_NOT_SENT", DELEGATION_NOT_SENT],
     ["DELEGATION_SILENT", DELEGATION_SILENT],
   ])("%s não manda a pessoa conferir, ver ou digitar no chat", (_name, text) => {
-    expect(text).not.toMatch(/no chat/);
+    expect(text).not.toMatch(/\bchat\b/i);
   });
 });
 

@@ -278,6 +278,7 @@ describe("a voice call inside the card's chat", () => {
     await waitFor(() =>
       expect(ws.frames).toContainEqual({ type: "question_answer", id: "q_1", answers: [{ selected: [expect.stringContaining("abre um card pra esse bug")] }] }),
     );
+    expect(ws.frames).not.toContainEqual(expect.objectContaining({ type: "user", now: true }));
     expect(ws.frames.filter((frame) => frame.type === "user")).toEqual([]);
   });
 
@@ -291,6 +292,18 @@ describe("a voice call inside the card's chat", () => {
       expect(channel().sent).toContainEqual({ type: "session.commentary.append", delegation_id: "item_d2", content: DELEGATION_NOT_SENT }),
     );
     expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument();
+  });
+
+  it("com o socket fechando e a desconexão ainda não percebida, a voz ouve que o pedido não foi entregue e nada sai", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    ws.readyState = 2;
+    act(() => channel().emit({ type: "session.input_transcript.delta", delta: "crie um card agora", start_ms: 0, end_ms: 500 }));
+    act(() => channel().emit({ type: "session.delegation.created", offset_ms: 600, delegation: { id: "item_d5", type: "delegation", target: "client" } }));
+    await waitFor(() =>
+      expect(channel().sent).toContainEqual({ type: "session.commentary.append", delegation_id: "item_d5", content: DELEGATION_NOT_SENT }),
+    );
+    expect(ws.frames.some((frame) => frame.type === "user")).toBe(false);
   });
 
   it("leaving the chat (another card, the terminal tab) ends the call and releases the mic", async () => {

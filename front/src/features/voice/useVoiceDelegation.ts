@@ -12,7 +12,9 @@ import {
   delegationReply,
   delegationRequest,
   isAgentAnswer,
+  requestTurnAfter,
   type DelegationAnchor,
+  type RequestTurn,
 } from "./voiceDelegation";
 import { QUESTION_ANSWER_SENT, openQuestion, questionForVoice, voiceAnswers, type OpenQuestion } from "./voiceQuestion";
 import type { VoiceTurn } from "./voiceTurns";
@@ -31,6 +33,7 @@ import type { VoiceTurn } from "./voiceTurns";
 interface PendingDelegation {
   id: string;
   anchor: DelegationAnchor;
+  requestTurn: RequestTurn;
   slowTimer: ReturnType<typeof setTimeout>;
 }
 
@@ -52,6 +55,8 @@ export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent,
   answerQuestionRef.current = answerQuestion;
   const rowsRef = React.useRef(rows);
   rowsRef.current = rows;
+  const turnRunningRef = React.useRef(turnRunning);
+  turnRunningRef.current = turnRunning;
   // A ref, not state: a result must go once, and two effect runs before a re-render would send it twice.
   const pending = React.useRef<PendingDelegation[]>([]);
   // Bumped when a delegation is taken, so the effect below looks at the chat again.
@@ -61,17 +66,18 @@ export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent,
     () =>
       onDelegation((id, turns) => {
         const question = openQuestion(rowsRef.current);
+        const requestTurn: RequestTurn = turnRunningRef.current ? "behind_cut_turn" : "started";
         const handOver = question ? answerOpenQuestion(answerQuestionRef.current, question, turns) : sendRequest(sendRef.current, turns);
         if (handOver.state !== "sent") {
           answerDelegation(id, handOver.state === "unheard" ? DELEGATION_UNHEARD : DELEGATION_NOT_SENT, "result");
           return;
         }
         answerDelegation(id, question ? QUESTION_ANSWER_SENT : DELEGATION_STARTED, "progress");
-        const slowTimer = setTimeout(() => answerDelegation(id, DELEGATION_SLOW, "progress"), DELEGATION_SLOW_MS);
-        pending.current.push({ id, anchor: handOver.anchor, slowTimer });
+        const slowTimer = setTimeout(() => announceContext(DELEGATION_SLOW), DELEGATION_SLOW_MS);
+        pending.current.push({ id, anchor: handOver.anchor, requestTurn, slowTimer });
         setTaken((n) => n + 1);
       }),
-    [onDelegation, answerDelegation],
+    [onDelegation, answerDelegation, announceContext],
   );
 
   React.useEffect(
@@ -96,7 +102,12 @@ export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent,
     const known = told.current;
     const held = new Set<string>();
     const stillWaiting: PendingDelegation[] = [];
-    for (const delegation of pending.current) {
+    for (const waiting of pending.current) {
+      const delegation = { ...waiting, requestTurn: requestTurnAfter(waiting.requestTurn, rows, waiting.anchor, turnRunning) };
+      if (delegation.requestTurn !== "started") {
+        stillWaiting.push(delegation);
+        continue;
+      }
       const reply = delegationReply(rows, delegation.anchor, turnRunning);
       if (reply.state === "waiting") {
         stillWaiting.push(delegation);
