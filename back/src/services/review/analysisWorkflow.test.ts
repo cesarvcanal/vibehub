@@ -260,6 +260,29 @@ describe("frota da análise de PR", () => {
     );
   });
 
+  it("o contexto escreve o resumo e o verificador a evidência em tópicos, uma frase curta cada: o painel mostra lista, não um bloco corrido", async () => {
+    const { calls } = await runFleet(confirmOneFindingUpToJudge);
+    const contextPrompt = calls.find((call) => call.opts.phase === "Contexto")!.prompt;
+    expect(contextPrompt).toContain('No summary, um tópico markdown ("- ") por mudança do PR');
+    expect(contextPrompt).toContain('nunca um parágrafo corrido nem "(1) … (2) …" na mesma linha');
+    const verifyPrompt = calls.find((call) => call.opts.phase === "Verificação")!.prompt;
+    expect(verifyPrompt).toContain('Em evidence, o que você conferiu, um tópico markdown ("- ") por conferência');
+  });
+
+  it("a evidência em tópicos fica dentro do achado no pedido do juiz, e o resumo em tópicos abre seu próprio bloco: nenhum tópico solto vira achado", async () => {
+    const { calls } = await runFleet(async (_prompt, opts) => {
+      if (opts.phase === "Contexto") return { ...brief(ONLY_CORRECTNESS), summary: "- muda o login\n- troca a sessão" };
+      if (opts.phase === "Revisão") return { findings: [scenarioFinding("x")] };
+      if (opts.phase === "Verificação") return { confirmed: true, evidence: "- a linha existe\n- o teste falha" };
+      return { findings: [] };
+    });
+    const judgePrompt = calls.find((call) => call.opts.phase === "Julgamento")!.prompt;
+    const confirmedList = judgePrompt.split("Achados confirmados pela verificação, de todas as dimensões:\n")[1]!.split("\nJunte os repetidos")[0]!;
+    expect(confirmedList.split("\n").filter((line) => line.startsWith("- "))).toHaveLength(1);
+    expect(confirmedList).toContain("    - o teste falha");
+    expect(judgePrompt).toContain("Resumo do PR:\n- muda o login\n- troca a sessão\nÁreas tocadas:");
+  });
+
   it("o verificador roda só o teste filtrado pelo caso, nunca o arquivo inteiro nem a suíte", async () => {
     const { calls } = await runFleet(async (_prompt, opts) => {
       if (opts.phase === "Contexto") return brief(ONLY_CORRECTNESS);

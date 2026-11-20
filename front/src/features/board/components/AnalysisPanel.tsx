@@ -8,6 +8,7 @@ import {
 } from "@/api/types";
 import * as React from "react";
 import { AnalysisConversation } from "@/features/board/components/AnalysisConversation";
+import { Markdown } from "@/features/board/components/ChatView";
 import { PanelFrame, TabButton } from "@/features/board/components/ReviewPanelView";
 import { boardApi } from "@/features/board/api";
 import { cardAnalysisKey } from "@/features/board/lib/analysis";
@@ -183,7 +184,9 @@ function AnalysisBody({ read }: { read: AnalysisReadModel }) {
     .filter((group) => group.findings.length > 0);
   return (
     <div className="flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto overflow-x-hidden [overflow-wrap:anywhere]">
-      <p className="text-xs leading-relaxed text-foreground/90">{analysis.summary}</p>
+      <div className="text-xs leading-relaxed text-foreground/90">
+        <Markdown text={analysis.summary} />
+      </div>
       {visibleCounts.length > 0 ? (
         <div className="flex flex-wrap gap-1.5 text-[11px]">
           {visibleCounts.map((count) => (
