@@ -1,4 +1,5 @@
 import type { Finding, FindingSeverity } from "./model.js";
+import type { DeliverReason } from "../maestro/deliver.js";
 
 export const ANALYSIS_DIMENSIONS = ["correctness", "security", "performance", "contracts", "tests", "repoRules"] as const;
 export type AnalysisDimension = (typeof ANALYSIS_DIMENSIONS)[number];
@@ -40,7 +41,7 @@ export interface AnalysisReport {
 export interface AnalysisMergeRefusal {
   cardId: string;
   analysedSha: string;
-  reason: string;
+  reason: DeliverReason;
   output?: string;
   by: string;
   at: number;

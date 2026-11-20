@@ -31,13 +31,14 @@ import { activeReviewFor, getReview, reviewByReviewerCard } from "./store.js";
  * says so in the answer: the AI concludes by hand after the merge instead of promising it.
  */
 export async function deliverCard(
-  cardId: string, opts: DeliverCardOpts = {},
+  cardId: string, opts: DeliverCardOpts,
 ): Promise<DeliverResult> {
   const { result, concludeRecorded } = await deliverUnderReview(cardId, opts);
   return opts.concludeWhenMerged && !concludeRecorded ? withOutput(result, CONCLUDE_NOT_RECORDED) : result;
 }
 
-type DeliverCardOpts = Pick<DeliverOpts, "branch" | "authorized" | "by" | "docs"> & {
+type DeliverCardOpts = Pick<DeliverOpts, "branch" | "authorized" | "docs"> & {
+  by: string;
   from?: string;
   /** "…e concluir o card": with the card's PR under review, recorded on it, and the card goes to done once merged. */
   concludeWhenMerged?: boolean;
@@ -68,7 +69,7 @@ async function deliverUnderReview(cardId: string, opts: DeliverCardOpts): Promis
     const card = await getCard(cardId);
     if (card?.reviewOf) return await mergeFromReviewerCard(card, opts);
     if (card?.pushBranch !== undefined && opts.from !== cardId) return plain(await deliverAnalysisWithoutMerge(cardId, opts));
-    if (card?.pushBranch !== undefined) return plain(await deliverOwnAnalysis(cardId, opts));
+    if (card?.pushBranch !== undefined) return plain(await deliverOwnAnalysis(card, opts));
   }
   const review = opts.authorized === true ? await activeReviewFor(cardId) : undefined;
   if (!review) return plain(await deliver(cardId, opts));

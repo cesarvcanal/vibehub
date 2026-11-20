@@ -1,5 +1,6 @@
 import type { PublicUser } from "../../auth/users.js";
 import { getCard, updateCard, type Card, type CardPr } from "../board/registry.js";
+import { cardBranch } from "../board/workspace.js";
 import { deliver, type DeliverOpts, type DeliverResult } from "../maestro/deliver.js";
 import { isBusy } from "../maestro/maestro.js";
 import { logger } from "../../utils/logger.js";
@@ -41,18 +42,21 @@ export async function mergeAnalysedPr(cardId: string, user: PublicUser): Promise
   }
 }
 
-export async function deliverOwnAnalysis(cardId: string, opts: DeliverOpts): Promise<DeliverResult> {
-  if (mergingCardIds.has(cardId)) {
-    return { merged: false, reason: "merge_failed", branch: opts.branch ?? "", cardBranch: "", output: `${MERGE_ALREADY_RUNNING}: nada foi feito` };
+export async function deliverOwnAnalysis(card: Card, opts: DeliverOpts & { by: string }): Promise<DeliverResult> {
+  if (mergingCardIds.has(card.id)) {
+    return {
+      merged: false, reason: "merge_failed", branch: opts.branch ?? card.base, cardBranch: cardBranch(card),
+      output: `${MERGE_ALREADY_RUNNING} neste card (pelo painel ou por outra ordem): este pedido não fez nada; o resultado aparece no painel da análise`,
+    };
   }
-  mergingCardIds.add(cardId);
+  mergingCardIds.add(card.id);
   try {
-    const analysedSha = (await getAnalysis(cardId))?.analysedSha;
-    const result = await deliver(cardId, opts);
-    if (analysedSha) await saveMergeOutcome(cardId, analysedSha, result, opts.by ?? "");
+    const analysedSha = (await getAnalysis(card.id))?.analysedSha;
+    const result = await deliver(card.id, opts);
+    if (analysedSha) await saveMergeOutcome(card.id, analysedSha, result, opts.by);
     return result;
   } finally {
-    mergingCardIds.delete(cardId);
+    mergingCardIds.delete(card.id);
   }
 }
 
