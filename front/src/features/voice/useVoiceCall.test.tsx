@@ -255,7 +255,7 @@ describe("useVoiceCall — a deploy during the call", () => {
     return { ...setup(), reload, deploy };
   }
 
-  it("a live call holds the automatic reload of a new version, which happens once the call ends", async () => {
+  it("a live call holds the automatic reload of a new version, which happens once the call ends, not while it is closing", async () => {
     const { result, reload, deploy } = setupWithVersionCheck();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(10);
@@ -270,6 +270,11 @@ describe("useVoiceCall — a deploy during the call", () => {
     expect(result.current.snap.state).toBe("live");
 
     act(() => result.current.stop());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(result.current.snap.state).toBe("closing");
+    expect(reload).not.toHaveBeenCalled();
     act(() => rig.peer().channel!.emit({ type: "session.closed", reason: "close_requested" }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(10);
