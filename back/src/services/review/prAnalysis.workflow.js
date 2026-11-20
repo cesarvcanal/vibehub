@@ -129,7 +129,7 @@ const PROOF_RULE =
   'ou scenario (arquivo:linha e o caso concreto que dá errado). Sem prova, não é blocking.'
 
 const briefText = (brief) =>
-  `Resumo do PR: ${brief.summary}\nÁreas tocadas: ${brief.touchedAreas.join(', ')}\nConsumidores: ${brief.consumers.join(', ')}`
+  `Resumo do PR:\n${brief.summary}\nÁreas tocadas: ${brief.touchedAreas.join(', ')}\nConsumidores: ${brief.consumers.join(', ')}`
 
 const contextPrompt =
   `PR #${args.prNumber} (branch ${args.branch} -> ${args.base}, head ${args.headSha}). ${READ_ONLY_RULE}\n` +
@@ -155,10 +155,12 @@ const verifyPrompt = (finding, dimension, brief) =>
   'decide a questão, rode só ele, filtrado pelo caso (-t "<caso>"). Na dúvida, confirmed = false. ' +
   'Em evidence, o que você conferiu, um tópico markdown ("- ") por conferência, cada um uma frase curta.'
 
+const indentUnderFinding = (text) => text.split('\n').map((line) => `    ${line}`).join('\n')
+
 const judgePrompt = (confirmedFindings, brief) =>
   `Você é o juiz da análise do PR #${args.prNumber}, sem o contexto de quem revisou. ${READ_ONLY_RULE}\n${briefText(brief)}\n` +
   'Achados confirmados pela verificação, de todas as dimensões:\n' +
-  confirmedFindings.map((confirmed) => `- [${confirmed.label}] ${JSON.stringify(confirmed.finding)} (verificação: ${confirmed.evidence})`).join('\n') +
+  confirmedFindings.map((confirmed) => `- [${confirmed.label}] ${JSON.stringify(confirmed.finding)}\n  Verificação:\n${indentUnderFinding(confirmed.evidence)}`).join('\n') +
   '\nJunte os repetidos (o mesmo defeito visto por duas dimensões vira um achado, na dimensão mais precisa) e classifique ' +
   'cada um: blocking (bug ou regra violada, com prova; a IA corrige sozinha), improvement (melhoria no código que o PR ' +
   'mexe, que preserva o comportamento e que nenhuma regra escrita exige), question (resolver exige decidir intenção ou produto), suggestion (opcional, ' +
