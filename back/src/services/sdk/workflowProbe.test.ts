@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, onTestFinished } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -283,6 +283,29 @@ describe("WORKFLOW_PROBE_JS — a sondagem lendo um diário real", () => {
     expect(agent("a03f").toolCountPartial).toBe(true);
     expect(agent("a03f").toolCount).toBeGreaterThan(0);
     expect(agent("a03f").toolCount).toBeLessThan(2_000);
+  });
+});
+
+describe("resultado do agente na sondagem — é a fala dele na conversa da frota", () => {
+  it.each([
+    ["texto com quebras de linha chega com as quebras", "Achei 2 problemas:\n- render caro\n- teste lento"],
+    ["resumo do contexto de quase mil caracteres chega inteiro", { summary: `PR #337:\n${"(1) `pillPercent` mostra a sessão de 5h. ".repeat(22)}` }],
+  ])("%s", async (_name, result) => {
+    const fixture = fleetFixture();
+    onTestFinished(() => rmSync(fixture.root, { recursive: true, force: true }));
+    appendFileSync(join(fixture.run, "journal.jsonl"), jsonl([{ type: "result", key: "v2:2", agentId: "a02f", result }]));
+    const wf = await load();
+    const [run] = wf.parseWorkflowProbe(runProbe(wf.WORKFLOW_PROBE_JS, [fixture.runs, fixture.scripts]));
+    expect(run!.agents.find((agent) => agent.id === "a02f")!.result).toBe(typeof result === "string" ? result : JSON.stringify(result));
+  });
+
+  it("resultado gigante é cortado no teto, sem levar o diário inteiro para a tela", async () => {
+    const fixture = fleetFixture();
+    onTestFinished(() => rmSync(fixture.root, { recursive: true, force: true }));
+    appendFileSync(join(fixture.run, "journal.jsonl"), jsonl([{ type: "result", key: "v2:2", agentId: "a02f", result: "x".repeat(50_000) }]));
+    const wf = await load();
+    const [run] = wf.parseWorkflowProbe(runProbe(wf.WORKFLOW_PROBE_JS, [fixture.runs, fixture.scripts]));
+    expect(run!.agents.find((agent) => agent.id === "a02f")!.result).toHaveLength(wf.AGENT_RESULT_MAX);
   });
 });
 
@@ -571,6 +594,19 @@ describe("conversa da frota — todos os agentes de uma vez, numa execução só
     ]));
     const conversation = wf.parseFleetConversation(runProbe(wf.FLEET_CONVERSATION_PROBE_JS, [transcriptDir]));
     expect(conversation!.items).toEqual([{ agentId: "a0b1", at: T0, kind: "text", text: JSON.stringify(verdict) }]);
+  });
+
+  it("a fala do agente chega com as quebras de linha, para o markdown dela renderizar", async () => {
+    const wf = await load();
+    const transcriptDir = mkdtempSync(join(tmpdir(), "vibehub-conv-md-"));
+    onTestFinished(() => rmSync(transcriptDir, { recursive: true, force: true }));
+    const run = join(transcriptDir, "s1", "subagents", "workflows", "wf_md1");
+    mkdirSync(run, { recursive: true });
+    writeFileSync(join(run, "journal.jsonl"), jsonl([{ type: "started", agentId: "a0c1", label: "revisão:tests", phase: "Revisão" }]));
+    const speech = "Achei 2 problemas:\n\n- `ContextMeter` sem teste\n- espera de 700ms no relógio real";
+    writeFileSync(join(run, "agent-a0c1.jsonl"), jsonl([MODEL_ASSISTANT(T0, "claude-sonnet-5-5", [{ type: "text", text: speech }])]));
+    const conversation = wf.parseFleetConversation(runProbe(wf.FLEET_CONVERSATION_PROBE_JS, [transcriptDir]));
+    expect(conversation!.items[0]!.text).toBe(speech);
   });
 
   it("todos os agentes respondidos dão a conversa por terminada", async () => {

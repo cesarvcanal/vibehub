@@ -126,4 +126,16 @@ describe("useVoiceDelegation", () => {
     view.rerender({ rows });
     expect(call.answerDelegation).toHaveBeenCalledTimes(1);
   });
+
+  it("um pedido cujo turno acabou sem texto (o agente pode ter sido interrompido) é dito assim, com a oferta de pedir de novo", () => {
+    const send = vi.fn();
+    const { call, view, delegate } = setup(send);
+    delegate("d4", said("explica o que falta para o merge"));
+    const request = send.mock.calls[0]![0] as string;
+    view.rerender({ rows: [{ kind: "user", id: "u1", text: request, state: "sent" }], turnRunning: false });
+    const [, result, update] = call.answerDelegation.mock.calls.at(-1) as unknown as [string, string, string];
+    expect(update).toBe("result");
+    expect(result).toContain("interrompido");
+    expect(result).toContain("peça de novo");
+  });
 });

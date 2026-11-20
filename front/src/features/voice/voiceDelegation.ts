@@ -24,7 +24,8 @@ export const DELEGATION_SLOW =
 export const DELEGATION_UNHEARD = "Você não ouviu um pedido da pessoa: pergunte, em poucas palavras, o que ela quer.";
 export const DELEGATION_NOT_SENT =
   "O pedido não chegou ao agente do card: diga à pessoa que não deu para passar o pedido agora, porque a conexão com o agente caiu, e que ela pode pedir de novo em instantes.";
-export const DELEGATION_SILENT = "O agente do card terminou sem responder nada em texto: diga isso à pessoa e pergunte se ela quer que você peça a ele de novo.";
+export const DELEGATION_SILENT =
+  "O agente do card não deu resposta em texto a este pedido — o trabalho dele pode ter sido interrompido (uma atualização do painel, por exemplo). Diga isso à pessoa em poucas palavras e pergunte se ela quer que você peça de novo.";
 
 /** The message the card's agent gets for one delegation. Null when the person has said nothing yet. PURE. */
 export function delegationRequest(turns: VoiceTurn[]): string | null {

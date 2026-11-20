@@ -268,23 +268,33 @@ describe("aba Conversa: a frota conversando como um chat em grupo", () => {
     expect(get).toHaveBeenCalledWith("/cards/c1/analysis/conversation");
   });
 
-  it("cada fala diz quem falou, com o modelo e a versão, e traz o que o agente pensou, usou e disse", async () => {
+  it("cada fala é um balão com quem falou e o modelo; ferramenta não vira balão e quem ainda trabalha está digitando, no grupo da própria fala", async () => {
     renderPanel(readModel(doneReport(), "not_apt"), undefined, () => fleetTalk);
     await openConversation();
-    const turns = await screen.findAllByRole("article");
-    expect(turns).toHaveLength(2);
-    expect(within(turns[0]!).getByText("Revisão de Segurança")).toBeInTheDocument();
-    expect(within(turns[0]!).getByText("Sonnet 5.5")).toBeInTheDocument();
-    expect(within(turns[0]!).getByText("pensando…")).toBeInTheDocument();
-    expect(within(turns[0]!).getByText("Read · back/src/auth.ts")).toBeInTheDocument();
-    expect(within(turns[0]!).getByText("export function login() {}")).toBeInTheDocument();
-    expect(within(turns[1]!).getByText("Verificação de Segurança")).toBeInTheDocument();
-    expect(within(turns[1]!).getByText("Opus 5.5")).toBeInTheDocument();
-    expect(within(turns[1]!).getByText("Refutado: o log mascara o token.")).toBeInTheDocument();
+    const messages = await screen.findAllByTestId("fleet-chat-message");
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toHaveTextContent("Revisão de Segurança");
+    expect(messages[0]).toHaveTextContent("Sonnet 5.5");
+    expect(messages[0]).toHaveTextContent("O token vaza no log.");
+    expect(messages[1]).toHaveTextContent("Verificação de Segurança");
+    expect(messages[1]).toHaveTextContent("Opus 5.5");
+    expect(screen.queryByText(/Read · back\/src\/auth.ts/)).toBeNull();
+    expect(screen.queryByText("export function login() {}")).toBeNull();
+    const typing = screen.getByTestId("fleet-chat-typing");
+    expect(typing).toHaveTextContent("digitando");
+    expect(typing).not.toHaveTextContent("Verificação de Segurança");
     expect(screen.getByText("Frota conversando · 1 de 2 agentes responderam")).toBeInTheDocument();
   });
 
-  it("fala em JSON (achados ou veredito) é lida como na frota da revisão: títulos dos achados e o veredito com a evidência", async () => {
+  it("quem trabalha com uma ferramenta na mão diz qual, no digitando", async () => {
+    renderPanel(readModel(doneReport(), "not_apt"), undefined, () => ({
+      conversation: { ...fleetTalk.conversation!, items: [{ agentId: "a2", at: 1, kind: "tool", tool: "Read", target: "back/src/log.ts" }] },
+    }));
+    await openConversation();
+    expect(await screen.findByTestId("fleet-chat-typing")).toHaveTextContent("Read · back/src/log.ts");
+  });
+
+  it("fala em JSON (achados ou veredito) vira a lista de achados e o veredito com a evidência, citando o achado", async () => {
     const structured: AnalysisConversationResponse = {
       conversation: {
         ...fleetTalk.conversation!,
@@ -296,9 +306,27 @@ describe("aba Conversa: a frota conversando como um chat em grupo", () => {
     };
     renderPanel(readModel(doneReport(), "not_apt"), undefined, () => structured);
     await openConversation();
-    expect(await screen.findByText("1 achado: token vaza no log")).toBeInTheDocument();
-    expect(screen.getByText("Derrubado")).toBeInTheDocument();
-    expect(screen.getByText(/o log mascara o token/)).toBeInTheDocument();
+    const messages = await screen.findAllByTestId("fleet-chat-message");
+    expect(messages[0]).toHaveTextContent("1 achado");
+    expect(within(messages[0]!).getByRole("listitem")).toHaveTextContent("token vaza no log");
+    expect(within(messages[1]!).getByText("Derrubado")).toBeInTheDocument();
+    expect(messages[1]).toHaveTextContent("o log mascara o token");
+    expect(within(messages[1]!).getByRole("button", { name: "Ver a fala respondida: token vaza" })).toBeInTheDocument();
+  });
+
+  it("fala em markdown sai renderizada e a longa vem recolhida, com ver mais e ver menos", async () => {
+    const longSpeech = `Achei **2 problemas**:\n\n${Array.from({ length: 12 }, (_, line) => `- item ${line + 1}`).join("\n")}`;
+    renderPanel(readModel(doneReport(), "not_apt"), undefined, () => ({
+      conversation: { ...fleetTalk.conversation!, items: [{ agentId: "a1", at: 1, kind: "text", text: longSpeech }] },
+    }));
+    await openConversation();
+    const [message] = await screen.findAllByTestId("fleet-chat-message");
+    expect(within(message!).getByText("2 problemas").tagName).toBe("STRONG");
+    expect(within(message!).getAllByRole("listitem")).toHaveLength(12);
+    expect(within(message!).getByTestId("fleet-chat-speech")).toHaveAttribute("data-collapsed", "true");
+    await userEvent.click(within(message!).getByRole("button", { name: "ver mais" }));
+    expect(within(message!).getByTestId("fleet-chat-speech")).toHaveAttribute("data-collapsed", "false");
+    expect(within(message!).getByRole("button", { name: "ver menos" })).toBeInTheDocument();
   });
 
   it("card sem frota diz que a frota ainda não rodou", async () => {
@@ -320,6 +348,7 @@ describe("aba Conversa: a frota conversando como um chat em grupo", () => {
     }));
     await userEvent.click(await screen.findByRole("tab", { name: "Conversation" }));
     expect(await screen.findByText("Fleet finished · 2 of 2 agents answered")).toBeInTheDocument();
-    expect(screen.getAllByText("thinking…")).toHaveLength(1);
+    expect(screen.getAllByTestId("fleet-chat-message")).toHaveLength(2);
+    expect(screen.queryByTestId("fleet-chat-typing")).toBeNull();
   });
 });
