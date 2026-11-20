@@ -80,7 +80,7 @@ export function resumeContinuationText(marker: InflightMarker, base: string = RE
   return `${base} A interrupção também encerrou o que estava rodando em segundo plano — ` +
     `o resultado disso não vai chegar:\n${list}\nConfira o estado atual, rode de novo o que ainda for ` +
     `necessário e siga até o fim. Se alguma delas for uma frota da ferramenta Workflow, relance-a com o mesmo script ` +
-    `e os mesmos args mais resumeFromRunId (o runId do aviso de que ela parou): os agentes que já terminaram voltam ` +
+    `e os mesmos args mais resumeFromRunId (o runId do lançamento dela): os agentes que já terminaram voltam ` +
     `do cache. Espere a frota terminar e não troque o resultado dela pelo seu próprio julgamento.`;
 }
 

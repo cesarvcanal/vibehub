@@ -164,7 +164,7 @@ function StoppedNotice({ error }: { error: string | undefined }) {
       <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" aria-hidden="true" />
       <div className="min-w-0">
         <p className="font-medium text-destructive">{t(error ? "review.fleet.failed" : "review.fleet.stoppedTitle")}</p>
-        <p className="text-muted-foreground [overflow-wrap:anywhere]">{error ?? t("review.fleet.stopped")}</p>
+        <p className="text-muted-foreground [overflow-wrap:anywhere]">{error ? error : t("review.fleet.stopped")}</p>
       </div>
     </div>
   );
