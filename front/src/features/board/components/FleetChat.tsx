@@ -53,7 +53,7 @@ function chatEntryDomId(entryId: string): string {
   return `fleet-chat-${entryId}`;
 }
 
-export type AgentDetail = (agentId: string, running: boolean) => React.ReactNode;
+type AgentDetail = (agentId: string, running: boolean) => React.ReactNode;
 
 export function FleetChat({ entries, label, agentDetail }: { entries: FleetChatEntry[]; label: string; agentDetail?: AgentDetail }) {
   const [openEntryIds, setOpenEntryIds] = React.useState<ReadonlySet<string>>(new Set());
@@ -68,17 +68,17 @@ export function FleetChat({ entries, label, agentDetail }: { entries: FleetChatE
     <ol aria-label={label} className="flex min-w-0 flex-col gap-1.5">
       {entries.map((entry, index) => {
         const continues = entries[index - 1]?.speaker.agentId === entry.speaker.agentId;
-        const detail = agentDetail && openEntryIds.has(entry.id) ? agentDetail(entry.speaker.agentId, entry.kind === "typing") : null;
+        const detailOpen = agentDetail ? openEntryIds.has(entry.id) : undefined;
         return (
           <li key={entry.id} id={chatEntryDomId(entry.id)} className={cn("flex min-w-0 items-end gap-2", !continues && index > 0 && "mt-1")}>
             {continues ? <span className="w-7 shrink-0" aria-hidden="true" /> : <Avatar speaker={entry.speaker} />}
             <ChatBubble
               entry={entry}
               showSpeaker={!continues}
-              detailOpen={agentDetail ? openEntryIds.has(entry.id) : undefined}
+              detailOpen={detailOpen}
               onToggleDetail={() => toggleEntry(entry.id)}
             >
-              {detail}
+              {agentDetail && detailOpen ? agentDetail(entry.speaker.agentId, entry.kind === "typing") : null}
             </ChatBubble>
           </li>
         );

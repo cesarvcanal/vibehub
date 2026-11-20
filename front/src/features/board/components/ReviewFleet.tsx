@@ -23,11 +23,13 @@ function FleetRun({ run, agentDetail }: { run: ReviewFleetRun; agentDetail: RunA
   const entries = reviewFleetChat(run);
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
-      {entries.length > 0 ? <FleetChat
+      {entries.length > 0 ? (
+        <FleetChat
           entries={entries}
           label={t("review.fleet.conversation")}
           agentDetail={agentDetail && ((agentId, running) => agentDetail(run.runId, agentId, running))}
-        /> : null}
+        />
+      ) : null}
       <div data-testid="review-fleet-strip" className="min-w-0 space-y-1.5 rounded-md border border-sky-500/25 bg-sky-500/5 px-2.5 py-2 text-xs">
         <p className="flex items-center gap-1.5 font-medium">
           {run.finished ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" /> : <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-400" />}
