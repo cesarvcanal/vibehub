@@ -169,7 +169,7 @@ import { SdkCompactionRow } from "@/features/board/components/SdkCompactionRow";
 import { SdkCommandChip } from "@/features/board/components/SdkCommandChip";
 import { invokedCommand, type InvokedCommand } from "@/features/board/lib/slashMenu";
 import { CardFailureNotice } from "@/features/platformFailures/components/CardFailureNotice";
-import { LongToolWaitNotice } from "./LongToolWaitNotice";
+import { LongToolWaitNotice } from "@/features/board/components/LongToolWaitNotice";
 
 /**
  * NATIVE CHAT (beta) — the card's conversation over the Agent SDK driver, not the tmux transcript.

@@ -1,7 +1,7 @@
 import { Hourglass } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n";
-import { formatTurnElapsed, type LongToolWait } from "../lib/sdkChat";
+import { formatTurnElapsed, type LongToolWait } from "@/features/board/lib/sdkChat";
 
 export function LongToolWaitNotice({ wait, onInterrupt }: { wait: LongToolWait; onInterrupt: () => void }) {
   const t = useT();

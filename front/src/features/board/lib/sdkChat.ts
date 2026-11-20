@@ -1099,7 +1099,6 @@ export function currentActivity(state: SdkChatState): SdkActivity | null {
 }
 
 export const LONG_TOOL_WAIT_SECONDS = 180;
-const DELEGATING_TOOLS: ReadonlySet<string> = new Set(["Agent", "Task"]);
 
 export interface LongToolWait {
   rowId: string;
@@ -1110,8 +1109,8 @@ export interface LongToolWait {
 export function findLongToolWait(state: SdkChatState): LongToolWait | null {
   const activity = currentActivity(state);
   if (activity?.kind !== "tool" || activity.background) return null;
-  const row = state.rows.find((candidate) => candidate.id === activity.rowId);
-  if (row?.kind !== "tool" || row.parent || row.result || DELEGATING_TOOLS.has(row.name)) return null;
+  const row = state.rows.findLast((candidate) => candidate.id === activity.rowId);
+  if (row?.kind !== "tool" || row.parent || row.result || SUBAGENT_TOOL_NAMES.has(row.name)) return null;
   if (typeof row.elapsedSeconds !== "number" || row.elapsedSeconds < LONG_TOOL_WAIT_SECONDS) return null;
   return { rowId: row.id, what: describeRunningTool(row), elapsedSeconds: row.elapsedSeconds };
 }
@@ -2263,8 +2262,10 @@ export type SdkRenderRow =
   | { kind: "agents"; id: string; rows: SdkRow[] };
 
 /** The tools that start a subagent: `Agent` (current name in Claude Code) and `Task` (the old one). */
+const SUBAGENT_TOOL_NAMES: ReadonlySet<string> = new Set(["Agent", "Task"]);
+
 function isAgentCall(row: SdkRow): boolean {
-  return row.kind === "tool" && !row.pending && (row.name === "Agent" || row.name === "Task");
+  return row.kind === "tool" && !row.pending && SUBAGENT_TOOL_NAMES.has(row.name);
 }
 
 export const SDK_TOOL_FOLD_MIN = 3;
