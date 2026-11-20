@@ -210,7 +210,7 @@ function taskOf(lines,raw){
   return fallback;
 }
 function inspect(file){
-  const out={startedAt:0,lastAt:0,mtime:0,toolCount:0,partial:false,activity:null,task:''};
+  const out={startedAt:0,lastAt:0,mtime:0,toolCount:0,partial:false,activity:null,task:'',model:''};
   const st=statOf(file);if(!st||st.size<=0)return out;
   out.mtime=Math.round(st.mtimeMs);
   const size=st.size,whole=size<=${AGENT_HEAD_BYTES + AGENT_TAIL_BYTES};
@@ -223,6 +223,7 @@ function inspect(file){
   const counted=whole?[head]:[head,tail];
   for(const part of counted)for(const l of part){
     const o=parse(l);if(!o||o.type!=='assistant')continue;
+    if(o.message&&str(o.message.model)&&o.message.model.charAt(0)!=='<')out.model=o.message.model;
     for(const b of blocks(o))if(b&&b.type==='tool_use')out.toolCount++;
   }
   for(let i=tail.length-1;i>=0;i--){
@@ -277,7 +278,8 @@ function agentOf(dir,a){
   const meta=metaOf(dir,a.id);
   const info=inspect(p.join(dir,'agent-'+a.id+'.jsonl'));
   const out={id:a.id,status:a.status,label:a.label||str(meta.description)||info.task,phase:a.phase||str(meta.workflowPhase),toolCount:info.toolCount};
-  if(str(meta.model))out.model=str(meta.model);
+  const model=info.model||str(meta.model);
+  if(model)out.model=model;
   if(a.result!==undefined)out.result=a.result;
   if(a.error)out.error=a.error;
   if(info.startedAt)out.startedAt=info.startedAt;
@@ -486,7 +488,7 @@ function talkOf(dir,agent){
     const o=parse(l);if(!o)continue;
     const at=ts(o);
     if(o.type==='assistant'){
-      if(o.message&&str(o.message.model))model=o.message.model;
+      if(o.message&&str(o.message.model)&&o.message.model.charAt(0)!=='<')model=o.message.model;
       for(const b of blocks(o)){
         const said=b&&b.type==='tool_use'&&b.name==='StructuredOutput';
         const s=said?{kind:'text',text:flat(JSON.stringify(b.input==null?'':b.input),${STRUCTURED_OUTPUT_MAX})}:b&&b.type==='text'?speech(b):step(b,${CONVERSATION_TEXT_MAX});

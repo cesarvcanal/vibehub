@@ -989,6 +989,7 @@ export interface ReviewFleetAgent {
   label: string;
   phase: string;
   model?: string;
+  modelLabel?: string;
   status: "running" | "done" | "stopped";
   result?: string;
   error?: string;

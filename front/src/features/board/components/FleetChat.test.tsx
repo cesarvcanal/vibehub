@@ -41,6 +41,13 @@ describe("FleetChat", () => {
     expect(within(bubble!).getByTestId("fleet-chat-model")).toHaveTextContent("opus");
   });
 
+  it("o selo do modelo mostra a versão que respondeu quando o servidor a conhece", () => {
+    const [bubble] = renderFleet([fleetAgent({ id: "a1", label: "contexto", model: "claude-sonnet-5-5", modelLabel: "Sonnet 5.5" })]);
+    const chip = within(bubble!).getByTestId("fleet-chat-model");
+    expect(chip).toHaveTextContent("Sonnet 5.5");
+    expect(chip.className).toContain("text-sky-200");
+  });
+
   it("abrir o passo a passo de dois agentes no mesmo instante deixa os dois abertos", () => {
     const run: ReviewFleetRun = {
       runId: "wf_1", name: "revisao", phases: [], total: 2, done: 0, at: 1, finished: false,

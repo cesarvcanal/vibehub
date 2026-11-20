@@ -23,7 +23,7 @@ function FleetRun({ run, agentDetail }: { run: ReviewFleetRun; agentDetail: RunA
   const entries = reviewFleetChat(run);
   const interrupted = run.outcome === "failed" || run.outcome === "killed";
   return (
-    <div className="flex min-w-0 flex-col gap-1.5">
+    <div className="flex min-w-0 flex-col gap-3">
       {entries.length > 0 ? (
         <FleetChat
           entries={entries}

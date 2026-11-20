@@ -693,7 +693,7 @@ describe("GET da revisão: a frota de agentes do revisor", () => {
       stdout: `${JSON.stringify([{
         runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Contexto", "Revisão"], total: 1, done: 0,
         agents: [{
-          id: "a01f", status: "running", label: "revisão: correctness", phase: "Revisão", model: "sonnet", toolCount: 2,
+          id: "a01f", status: "running", label: "revisão: correctness", phase: "Revisão", model: "claude-sonnet-5-5", toolCount: 2,
           activity: { kind: "tool", tool: "Bash", target: "cat .env" },
         }],
       }])}\n`,
@@ -727,9 +727,9 @@ describe("GET da revisão: a frota de agentes do revisor", () => {
       expect((await read()).fleet).toHaveLength(1);
       expect((await read()).fleet[0]).toMatchObject({
         runId: "wf_abc12", phases: ["Contexto", "Revisão"],
-        agents: [{ label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "running" }],
+        agents: [{ label: "revisão: correctness", phase: "Revisão", model: "claude-sonnet-5-5", status: "running" }],
       });
-      expect((await read()).fleet[0].agents[0]).toEqual({ id: "a01f", label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "running" });
+      expect((await read()).fleet[0].agents[0]).toEqual({ id: "a01f", label: "revisão: correctness", phase: "Revisão", model: "claude-sonnet-5-5", modelLabel: "Sonnet 5.5", status: "running" });
     } finally {
       cleanup();
     }

@@ -62,7 +62,7 @@ function withReplies(messages: ChatMessage[]): ChatMessage[] {
 }
 
 export function reviewFleetChat(run: ReviewFleetRun): FleetChatEntry[] {
-  const speakers = speakersOf(run.agents);
+  const speakers = speakersOf(run.agents.map(({ id, label, model, modelLabel }) => ({ id, label, model: modelLabel ?? model })));
   const speaker = (agent: ReviewFleetAgent) => speakers.get(agent.id)!;
   const byEnd = (left: ReviewFleetAgent, right: ReviewFleetAgent) => (left.endedAt ?? 0) - (right.endedAt ?? 0);
   const answered = run.agents.filter((agent) => agent.status === "done").sort(byEnd);
