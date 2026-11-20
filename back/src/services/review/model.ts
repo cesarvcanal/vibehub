@@ -351,20 +351,25 @@ export function pendingImprovements(findings: Finding[]): Finding[] {
  * A pending improvement gives the turn to the author (they apply it without waiting for anyone), but never
  * becomes an impasse: on the last round it stays unapplied.
  */
+export const IMPASSE_ROUNDS = "rodadas";
+
 export function phaseAfterReviewerRound(review: Review): { phase: ReviewPhase; impasseReason?: string } {
   const blocking =
     blockingOpen(review.findings).length +
     review.findings.filter((f) => f.severity === "question" && f.humanDecision === "block" && isOpen(f)).length;
   if (blocking > 0) {
-    return review.round >= MAX_ROUNDS ? { phase: "impasse", impasseReason: "rodadas" } : { phase: "fixing" };
+    return review.round >= MAX_ROUNDS ? { phase: "impasse", impasseReason: IMPASSE_ROUNDS } : { phase: "fixing" };
   }
   if (review.round < MAX_ROUNDS && pendingImprovements(review.findings).length > 0) return { phase: "fixing" };
   if (pendingQuestions(review.findings).length > 0) return { phase: "reviewing" };
   return { phase: "ready" };
 }
 
+export type HeadMovedFrom = Extract<ReviewPhase, "ready" | "impasse">;
+export type HeadMovedCause = "merge" | "push";
+
 export function reopensOnNewHead(review: Pick<Review, "phase" | "impasseReason">): boolean {
-  return review.phase === "ready" || (review.phase === "impasse" && review.impasseReason === "rodadas");
+  return review.phase === "ready" || (review.phase === "impasse" && review.impasseReason === IMPASSE_ROUNDS);
 }
 
 /**

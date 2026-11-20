@@ -2079,6 +2079,88 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
     expect(prDiffUnchanged).not.toHaveBeenCalled();
   });
 
+  it("no impasse por rodadas, o fim do turno do autor sempre confere o PR: um push logo depois de outra conferência reabre sem esperar o intervalo", async () => {
+    const o = await load();
+    const { author, review } = await roundsImpasse(o);
+    const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    try {
+      prHeadNow = SHA1;
+      await endTurn(o, author.id);
+      await vi.waitFor(() => expect(prHead).toHaveBeenCalledTimes(1));
+      await settle();
+      prHeadNow = SHA2;
+      await endTurn(o, author.id);
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("reviewing"));
+      await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+      expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
+    } finally {
+      off();
+    }
+  });
+
+  it("o impasse a que a conferência extra chega depois do push é um aviso novo nos cards do autor e do revisor", async () => {
+    const o = await load();
+    const { author, review } = await roundsImpasse(o);
+    const impasseNotices = async (cardId: string) => (await messagesOn(o, cardId)).filter((e) => String(e.id).includes(":impasse:"));
+    expect(await impasseNotices(author.id)).toHaveLength(1);
+    expect(await impasseNotices(review.reviewerCardId)).toHaveLength(1);
+    prHeadNow = SHA2;
+    expect(await o.orch.syncReviewWithGithub(review.id)).toMatchObject({ phase: "reviewing" });
+    const again = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 3, findings: [], verdicts: [{ id: "f1", status: "open", reviewerReply: "o push não resolveu" }], headSha: SHA2, summary: "segue travado",
+    });
+    expect(again).toMatchObject({ phase: "impasse", impasseReason: "rodadas" });
+    expect(await impasseNotices(author.id)).toHaveLength(2);
+    expect(await impasseNotices(review.reviewerCardId)).toHaveLength(2);
+  });
+
+  it("merge recusado não reabre impasse por rodadas: só o push do autor reabre o impasse", async () => {
+    const o = await load();
+    const { review } = await roundsImpasse(o);
+    const after = await o.orch.reopenAfterHeadMoved(review.id, "u-merger");
+    expect(after).toMatchObject({ phase: "impasse", impasseReason: "rodadas" });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("duas conferências do GitHub no mesmo head novo, ao mesmo tempo: a revisão avança uma vez só (uma nota, um Approve, um gate)", async () => {
+    const o = await load();
+    const { review, off } = await readyAt(o);
+    off();
+    const compare = { release: null as ((same: boolean) => void) | null };
+    prDiffUnchanged.mockImplementationOnce(() => new Promise<boolean>((r) => { compare.release = r; }));
+    prDiffUnchanged.mockImplementationOnce(async () => true);
+    gateSpy.mockClear();
+    prHeadNow = SHA2;
+    const first = o.orch.syncReviewWithGithub(review.id, "painel aberto");
+    await vi.waitFor(() => expect(prDiffUnchanged).toHaveBeenCalledTimes(1));
+    await o.orch.syncReviewWithGithub(review.id, "fim do turno do autor");
+    compare.release?.(true);
+    await first;
+    const after = await o.store.getReview(review.id);
+    expect(after).toMatchObject({ phase: "ready", reviewedSha: SHA2 });
+    expect(after?.log.filter((l) => l.text.startsWith("Merge da base"))).toHaveLength(1);
+    expect(send).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(gateSpy).toHaveBeenCalledWith(review.cardId, PR.url, SHA2));
+    await new Promise((r) => setTimeout(r, 40));
+    expect(gateSpy.mock.calls.filter((c) => c[2] === SHA2)).toHaveLength(1);
+  });
+
+  it("revisão cancelada enquanto o diff é comparado fica cancelada: a comparação que volta depois não avança o commit revisado", async () => {
+    const o = await load();
+    const { review, off } = await readyAt(o);
+    off();
+    const compare = { release: null as ((same: boolean) => void) | null };
+    prDiffUnchanged.mockImplementationOnce(() => new Promise<boolean>((r) => { compare.release = r; }));
+    prHeadNow = SHA2;
+    const sync = o.orch.syncReviewWithGithub(review.id);
+    await vi.waitFor(() => expect(prDiffUnchanged).toHaveBeenCalledTimes(1));
+    await o.orch.cancelReview(review.id, "mussa");
+    compare.release?.(true);
+    await sync;
+    expect(await o.store.getReview(review.id)).toMatchObject({ phase: "cancelled", reviewedSha: SHA1 });
+    expect(send.mock.calls.filter((c) => String(c[1]).includes("--approve"))).toHaveLength(0);
+  });
+
   it("o delta lista as sugestões em aberto, e o fixed do revisor numa sugestão aplicada vale", async () => {
     const o = await load();
     const { author, review, off } = await readyAt(o);

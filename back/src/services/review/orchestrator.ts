@@ -18,7 +18,7 @@ import { logger } from "../../utils/logger.js";
 import { clipLine } from "../../utils/clipLine.js";
 import {
   MAX_ROUNDS, MERGE_GATE_AUTO_RETRIES, mergeGateSelfHealing, applyAuthorResponses, applyReviewerVerdicts, autoMergeEligible, cardsToConclude, waivedText, type ReviewOrders, blockingOpen, normalizeSubmittedFindings, pendingImprovements, pendingQuestions,
-  isReviewClosed, phaseAfterReviewerRound, reopensOnNewHead,
+  isReviewClosed, phaseAfterReviewerRound, reopensOnNewHead, IMPASSE_ROUNDS, type HeadMovedCause, type HeadMovedFrom,
   type AuthorAnswerStatus, type Finding, type FindingStatus, type Review, type ReviewEvent, type ReviewEventItem,
   fleetRunForReaders, type ReviewFleetRun, type SubmittedFinding,
 } from "./model.js";
@@ -201,11 +201,14 @@ async function notifyBoth(r: Review, key: string, text: string, severity: Severi
 
 /**
  * A phase change to `ready`, `impasse` or `merged` becomes a notice on the author's and reviewer's cards
- * (the notice tray that already exists), with the key `review:<id>:<phase>:<round>:<side>`.
+ * (the notice tray that already exists), with the key `review:<id>:<phase>:<round>:<side>`. The impasse key
+ * also carries the reviewed commit: a push after the impasse of the last round reopens it in the SAME round,
+ * and the impasse the extra check reaches is a new one that has to be announced.
  */
 export async function announcePhase(r: Review): Promise<void> {
   if (r.phase !== "ready" && r.phase !== "impasse" && r.phase !== "merged") return;
-  await notifyBoth(r, `review:${r.id}:${r.phase}:${r.round}`, phaseNoticeText(r), r.phase === "impasse" ? "warning" : "info");
+  const commit = r.phase === "impasse" && r.reviewedSha ? `:${r.reviewedSha.slice(0, 12)}` : "";
+  await notifyBoth(r, `review:${r.id}:${r.phase}:${r.round}${commit}`, phaseNoticeText(r), r.phase === "impasse" ? "warning" : "info");
 }
 
 /**
@@ -1082,7 +1085,7 @@ export async function retryReview(reviewId: string, by: string): Promise<Review>
       r.mergeGate.failures = 0;
       note(r, "human", "Tentar de novo: os testes do merge rodam de novo no commit aprovado.", { by });
       return;
-    } else if (r.phase === "impasse" && r.impasseReason !== "rodadas" && r.impasseReason !== HEAD_MOVED) {
+    } else if (r.phase === "impasse" && r.impasseReason !== IMPASSE_ROUNDS && r.impasseReason !== HEAD_MOVED) {
       // "rodadas" and "push depois do pronto" have no turn to give back (the last round is over): the human
       // reviewer decides the items, or cancels and asks for a new review.
       r.phase = r.lastSubmitRound !== r.round ? "reviewing" : "fixing";
@@ -1196,7 +1199,7 @@ export async function closeReviewsOfRemovedCard(cardId: string, by?: string): Pr
 
 /* ------------------------------------------------------------------ merge humano */
 
-function headMovedReason(cause: "merge" | "push", from: "ready" | "impasse", reviewedSha: string | undefined, head: string | undefined): string {
+function headMovedReason(cause: HeadMovedCause, from: HeadMovedFrom, reviewedSha: string | undefined, head: string | undefined): string {
   const reviewed = reviewedSha ? ` (${reviewedSha.slice(0, 7)})` : "";
   if (cause === "merge") return `Merge recusado: ${HEAD_MOVED}; o PR não está mais no commit aprovado${reviewed}.`;
   const newHead = head ? ` (head ${head.slice(0, 7)})` : "";
@@ -1205,11 +1208,11 @@ function headMovedReason(cause: "merge" | "push", from: "ready" | "impasse", rev
 }
 
 export async function reopenAfterHeadMoved(
-  reviewId: string, by: string, opts: { cause?: "merge" | "push"; headSha?: string } = {},
+  reviewId: string, by: string, opts: { cause?: HeadMovedCause; headSha?: string } = {},
 ): Promise<Review> {
   const cause = opts.cause ?? "merge";
   const head = opts.headSha?.toLowerCase();
-  const outcome = { reopenedFrom: null as "ready" | "impasse" | null };
+  const outcome = { reopenedFrom: null as HeadMovedFrom | null };
   const after = await mutateReview(reviewId, (r) => {
     const reopens = cause === "merge" ? r.phase === "ready" : reopensOnNewHead(r);
     if (!reopens) return;
@@ -1294,7 +1297,7 @@ async function advanceReviewedHead(reviewId: string, fromSha: string, toSha: str
     outcome.advanced = true;
   });
   logger.info({ audit: true, action: "review.head_advanced", review: reviewId, from: fromSha, to: toSha, advanced: outcome.advanced, by }, "PR review: base merged without changing the PR diff");
-  return outcome.advanced ? await dispatch(after) : after;
+  return outcome.advanced && after.phase === "ready" ? await dispatch(after) : after;
 }
 
 /** Reviews with a merge in progress (the button, or the owner's deliver): one at a time. */
@@ -1374,15 +1377,16 @@ function claimGithubSync(reviewId: string): boolean {
 }
 
 /**
- * The end of the AUTHOR card's turn: each of its open reviews is checked on GitHub — in `ready` always
- * (a push there sends the review back to the reviewer, and that has to show up at once), in the other phases
- * at most once per {@link GITHUB_SYNC_MS} (there a push is the answer to the list; what matters is catching a
- * merge or a close done from outside). Never throws.
+ * The end of the AUTHOR card's turn: each of its open reviews is checked on GitHub — always in the phases a
+ * new head reopens ({@link reopensOnNewHead}: `ready` and the impasse of the cap on rounds; a push there sends
+ * the review back to the reviewer, and nothing else would look again), in the other phases at most once per
+ * {@link GITHUB_SYNC_MS} (there a push is the answer to the list; what matters is catching a merge or a close
+ * done from outside). Never throws.
  */
 async function checkAuthorPush(cardId: string): Promise<void> {
   for (const r of await listReviewsForCards([cardId])) {
     if (isReviewClosed(r.phase)) continue;
-    if (r.phase === "ready") lastGithubSync.set(r.id, Date.now());
+    if (reopensOnNewHead(r)) lastGithubSync.set(r.id, Date.now());
     else if (!claimGithubSync(r.id)) continue;
     await syncReviewWithGithub(r.id, "fim do turno do autor");
   }
