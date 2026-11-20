@@ -1162,10 +1162,10 @@ const MD_COMPONENTS: React.ComponentProps<typeof ReactMarkdown>["components"] = 
 
 const MD_DOCUMENT_COMPONENTS: React.ComponentProps<typeof ReactMarkdown>["components"] = {
   ...MD_COMPONENTS,
-  h1: ({ children }) => <h1 className="mt-5 border-b border-border/60 pb-1.5 text-[15px] font-semibold first:mt-0">{children}</h1>,
-  h2: ({ children }) => <h2 className="mt-5 border-b border-border/60 pb-1.5 text-[15px] font-semibold first:mt-0">{children}</h2>,
-  h3: ({ children }) => <h3 className="mt-4 text-sm font-semibold first:mt-0">{children}</h3>,
-  h4: ({ children }) => <h4 className="mt-3 text-[13px] font-semibold first:mt-0">{children}</h4>,
+  h1: ({ children }) => <h1 className="border-b border-border/60 pb-1.5 pt-4 text-[15px] font-semibold first:pt-0">{children}</h1>,
+  h2: ({ children }) => <h2 className="border-b border-border/60 pb-1.5 pt-4 text-[15px] font-semibold first:pt-0">{children}</h2>,
+  h3: ({ children }) => <h3 className="pt-3 text-sm font-semibold first:pt-0">{children}</h3>,
+  h4: ({ children }) => <h4 className="pt-2 text-[13px] font-semibold first:pt-0">{children}</h4>,
   ul: ({ className, children }) =>
     className?.includes("contains-task-list") ? (
       <ul className="space-y-1.5 rounded-md border border-border/60 bg-muted/30 px-3 py-2.5">{children}</ul>
