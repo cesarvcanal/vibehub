@@ -64,9 +64,10 @@ const mergeSpy = vi.fn(async (_reviewId: string, _userId: string): Promise<Merge
 let prHeadNow: string | null = null;
 let prStateNow: "OPEN" | "MERGED" | "CLOSED" = "OPEN";
 const prHead = vi.fn(async (_cardId: string, _prUrl: string) => (prHeadNow ? { state: prStateNow, headSha: prHeadNow } : null));
-/** Whether the PR's net diff is the same on the reviewed commit and on the new head (`readPrDiffUnchanged`). */
-let prDiffUnchangedNow = false;
-const prDiffUnchanged = vi.fn(async (_cardId: string, _prUrl: string, _base: string, _fromSha: string, _toSha: string) => prDiffUnchangedNow);
+const prDiff = { unchanged: false };
+const prDiffUnchanged = vi.fn<(cardId: string, prUrl: string, base: string, fromSha: string, toSha: string) => Promise<boolean>>(
+  async () => prDiff.unchanged,
+);
 /** O veredito do gate do merge no commit aprovado (`gateAtCommit`); `gateGate` segura a resposta até ser solta. */
 let gateAnswer: { ran: boolean; passed: boolean; output: string } = { ran: true, passed: true, output: "" };
 let gateGate: Promise<void> | null = null;
@@ -197,7 +198,7 @@ beforeEach(async () => {
   prHeadNow = null;
   prStateNow = "OPEN";
   prDiffUnchanged.mockClear();
-  prDiffUnchangedNow = false;
+  prDiff.unchanged = false;
   afterMerged.mockClear();
   prPeople.mockClear();
   gateSpy.mockClear();
@@ -1993,7 +1994,6 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  /** A review in impasse "rodadas": the reviewer's round 3 left a blocking one standing on SHA1, and a person kept it. */
   async function roundsImpasse(o: Loaded) {
     const { author, review } = await started(o);
     await o.store.mutateReview(review.id, (r) => {
@@ -2048,7 +2048,7 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
       r.autoMergeFailedRound = 1;
     });
     prHeadNow = SHA2;
-    prDiffUnchangedNow = true;
+    prDiff.unchanged = true;
     const after = await o.orch.syncReviewWithGithub(review.id);
     expect(prDiffUnchanged).toHaveBeenCalledWith(review.cardId, PR.url, PR.base, SHA1, SHA2);
     expect(after).toMatchObject({ phase: "ready", round: 1, reviewedSha: SHA2, prHeadSha: SHA2 });
@@ -2064,7 +2064,7 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
     const o = await load();
     const { review } = await roundsImpasse(o);
     prHeadNow = SHA2;
-    prDiffUnchangedNow = true;
+    prDiff.unchanged = true;
     const after = await o.orch.syncReviewWithGithub(review.id);
     expect(after).toMatchObject({ phase: "impasse", impasseReason: "rodadas", reviewedSha: SHA2 });
     expect(send).not.toHaveBeenCalled();

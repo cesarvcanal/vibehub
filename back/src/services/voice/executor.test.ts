@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 const runScript = vi.fn(async () => ({ stdout: "", stderr: "" }));
 const sendFailure = { current: null as Error | null };
-const sendToTerminal = vi.fn(async (cardId: string, _text: string) => {
+const sendToTerminal = vi.fn<(cardId: string, text: string, opts?: object) => Promise<{ sent: boolean; cardId: string; title: string; project: string }>>(async (cardId) => {
   if (sendFailure.current) throw sendFailure.current;
   return { sent: true, cardId, title: "", project: "" };
 });

@@ -1203,7 +1203,7 @@ export async function reopenAfterHeadMoved(
 ): Promise<Review> {
   const cause = opts.cause ?? "merge";
   const head = opts.headSha?.toLowerCase();
-  let reopenedFrom = null as "ready" | "impasse" | null;
+  const outcome = { reopenedFrom: null as "ready" | "impasse" | null };
   const after = await mutateReview(reviewId, (r) => {
     if (!reopensOnNewHead(r) || (cause === "merge" && r.phase !== "ready")) return;
     if (head && r.reviewedSha === head) return;
@@ -1228,13 +1228,13 @@ export async function reopenAfterHeadMoved(
       r.lastSubmitRound = r.round - 1;
       note(r, "system", `${why} Rodada ${r.round} de ${MAX_ROUNDS} (conferência extra): o revisor confere o que entrou.`);
     }
-    reopenedFrom = from;
+    outcome.reopenedFrom = from;
   });
   logger.info(
-    { audit: true, action: "review.head_moved", review: reviewId, cause, reopened: reopenedFrom !== null, from: reopenedFrom, by },
+    { audit: true, action: "review.head_moved", review: reviewId, cause, reopened: outcome.reopenedFrom !== null, from: outcome.reopenedFrom, by },
     "PR review: head moved after ready or impasse",
   );
-  if (reopenedFrom) await relayReview(after, "reviewer", headMovedPrefix(after, cause, reopenedFrom) + reviewerDeltaPrompt(after));
+  if (outcome.reopenedFrom) await relayReview(after, "reviewer", headMovedPrefix(after, cause, outcome.reopenedFrom) + reviewerDeltaPrompt(after));
   return (await getReview(reviewId)) ?? after;
 }
 
@@ -1284,7 +1284,7 @@ export async function syncReviewWithGithub(reviewId: string, by = "conferência 
 }
 
 async function advanceReviewedHead(reviewId: string, fromSha: string, toSha: string, by: string): Promise<Review> {
-  let advanced = false as boolean;
+  const outcome = { advanced: false };
   const after = await mutateReview(reviewId, (r) => {
     if (!reopensOnNewHead(r) || r.reviewedSha !== fromSha) return;
     r.reviewedSha = toSha;
@@ -1292,10 +1292,10 @@ async function advanceReviewedHead(reviewId: string, fromSha: string, toSha: str
     r.autoMergeFailedRound = undefined;
     note(r, "system", `Merge da base ${r.base} no PR (head ${toSha.slice(0, 7)}) sem mudar o diff do PR: o commit revisado passa a ser ` +
       `esse, sem nova conferência do revisor${r.phase === "ready" ? "; o Approve e os testes do merge valem para ele de novo" : ""}.`);
-    advanced = true;
+    outcome.advanced = true;
   });
-  logger.info({ audit: true, action: "review.head_advanced", review: reviewId, from: fromSha, to: toSha, advanced, by }, "PR review: base merged without changing the PR diff");
-  return advanced ? await dispatch(after) : after;
+  logger.info({ audit: true, action: "review.head_advanced", review: reviewId, from: fromSha, to: toSha, advanced: outcome.advanced, by }, "PR review: base merged without changing the PR diff");
+  return outcome.advanced ? await dispatch(after) : after;
 }
 
 /** Reviews with a merge in progress (the button, or the owner's deliver): one at a time. */
