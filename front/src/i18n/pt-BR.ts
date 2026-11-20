@@ -1785,6 +1785,7 @@ export const ptBR: Record<string, string> = {
   "review.mergeGate.fixing": "Os testes do merge falharam no commit aprovado: a IA do autor está corrigindo e eles rodam de novo sozinhos (tentativa {attempt} de {max}).",
   "review.mergeGate.output": "Ver saída dos testes",
   "review.retry": "Tentar de novo",
+  "review.finding.kept": "Bloqueio mantido: a revisão segue em impasse enquanto este item segurar o merge. Aceitar o risco o libera.",
   "review.cancel": "Cancelar revisão",
   "review.cancel.confirm": "Cancelar a revisão do PR #{num}? As IAs param e o PR fica sem revisão.",
   "review.sidebar.hint": "Abrir a revisão do PR #{num}",

@@ -66,8 +66,9 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
   const t = useT();
   const stuck = new Set(review.phase === "impasse" ? stuckItems(review.findings).map((f) => f.id) : []);
   const pending = new Set(pendingQuestions(review.findings).map((f) => f.id));
+  const keptStuck = new Set(review.findings.filter((f) => stuck.has(f.id) && f.humanDecision === "keep").map((f) => f.id));
   // What the review waits on people for (anybody's), and how much of it this person can decide.
-  const waitingOnPeople = review.findings.filter((f) => pending.has(f.id) || stuck.has(f.id)).length;
+  const waitingOnPeople = review.findings.filter((f) => pending.has(f.id) || (stuck.has(f.id) && !keptStuck.has(f.id))).length;
   const decisionsHere = actions.decide ? waitingOnPeople : 0;
   // Until the person picks a tab, the panel shows where their attention is needed: the findings while
   // they have a decision to make there (it can appear later — a round landing with a doubt), the
@@ -82,7 +83,7 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
     if (!actions.decide) return [];
     // Doubts wait for the human reviewer; in an impasse the stuck items wait for the same person.
     if (pending.has(f.id)) return ["block", "accept_risk", "drop"];
-    if (stuck.has(f.id)) return f.severity === "blocking" ? ["keep", "accept_risk"] : ["accept_risk"];
+    if (stuck.has(f.id)) return f.severity === "blocking" && !keptStuck.has(f.id) ? ["keep", "accept_risk"] : ["accept_risk"];
     return [];
   };
 
@@ -598,6 +599,7 @@ function FindingCard({
           >
             {f.title}
           </p>
+          {f.humanDecision === "keep" && !closed ? <p className="text-[11px] text-amber-300">{t("review.finding.kept")}</p> : null}
           {f.problem ? <FindingText label={t("review.finding.problem")}>{f.problem}</FindingText> : null}
           {f.fix ? <FindingText label={t("review.finding.fix")}>{f.fix}</FindingText> : null}
           <dl className="space-y-0.5 text-[11px]">

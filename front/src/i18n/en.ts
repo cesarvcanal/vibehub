@@ -1773,6 +1773,7 @@ export const en: Record<string, string> = {
   "review.mergeGate.fixing": "The merge checks failed on the approved commit: the author's AI is fixing them and they rerun on their own (attempt {attempt} of {max}).",
   "review.mergeGate.output": "Show the checks output",
   "review.retry": "Try again",
+  "review.finding.kept": "Block kept: the review stays at an impasse while this item holds the merge. Accepting the risk releases it.",
   "review.cancel": "Cancel review",
   "review.cancel.confirm": "Cancel the review of PR #{num}? The AIs stop and the PR is left without a review.",
   "review.sidebar.hint": "Open the review of PR #{num}",

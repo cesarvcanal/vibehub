@@ -1324,6 +1324,22 @@ describe("ReviewPanel — dúvidas e impasse", () => {
     expect(within(card).queryByRole("radio", { name: /Manter o bloqueio/ })).toBeNull();
   });
 
+  it("caso real (PR #342, f13): no impasse, o bloqueio já mantido aparece como decidido, sai da contagem e não oferece manter de novo", async () => {
+    open("rev", review({
+      phase: "impasse", round: 3, impasseReason: "rodadas",
+      findings: [
+        finding({ id: "f13", title: "Descrição não acompanhou o push", humanDecision: "keep" }),
+        finding({ id: "f14", title: "Outro travado" }),
+      ],
+    }));
+    await loaded();
+    expect(screen.getByTestId("decision-banner")).toHaveTextContent("O impasse precisa da sua decisão em 1 item travado");
+    const kept = cardOf("Descrição não acompanhou o push");
+    expect(kept).toHaveTextContent("Bloqueio mantido: a revisão segue em impasse enquanto este item segurar o merge. Aceitar o risco o libera.");
+    expect(within(kept).queryByRole("radio", { name: /Manter o bloqueio/ })).toBeNull();
+    expect(within(kept).getByRole("radio", { name: /Aceitar o risco/ })).toBeInTheDocument();
+  });
+
   it("fora do impasse, bloqueante aberto não pede decisão", async () => {
     open("rev", review({ phase: "fixing", findings: [finding()] }));
     await loaded();
