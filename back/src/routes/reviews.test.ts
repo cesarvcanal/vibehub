@@ -769,8 +769,8 @@ describe("GET da revisão: a frota de agentes do revisor", () => {
 
 describe("passo a passo de um agente da frota do revisor", () => {
   async function reviewerSession() {
-    const w = await world();
-    const review = (await startReview(w)).json().review as { id: string; reviewerCardId: string };
+    const people = await world();
+    const review = (await startReview(people)).json().review as { id: string; reviewerCardId: string };
     const { EventEmitter } = await import("node:events");
     const manager = await import("../services/sdk/manager.js");
     const driver = Object.assign(new EventEmitter(), {
@@ -786,56 +786,75 @@ describe("passo a passo de um agente da frota do revisor", () => {
       cardId: review.reviewerCardId, label: "revisor", command: { file: "docker", args: ["exec"] }, transcriptDir: "/root/.claude/projects/p",
     });
     driver.stdout.emit("data", Buffer.from(`${JSON.stringify({ type: "session", sessionId: "s1" })}\n`));
-    return w;
+    return people;
   }
 
-  const feedOf = async (w: World, path: string, who: Person) =>
-    await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/review/agents/${path}/feed`, headers: { cookie: who.cookie } });
+  const feedOf = async (people: World, path: string, who: Person) =>
+    await app.inject({ method: "GET", url: `/api/cards/${people.cardId}/review/agents/${path}/feed`, headers: { cookie: who.cookie } });
 
   it("lê o transcript do agente na rodada da sessão do revisor e devolve os passos", async () => {
-    const w = await reviewerSession();
+    const people = await reviewerSession();
     const steps = [{ at: 1, kind: "tool", tool: "Read", target: "src/auth.ts" }, { at: 2, kind: "text", text: "Achei o vazamento." }];
     runScript.mockClear();
     runScript.mockResolvedValueOnce({ stdout: `${JSON.stringify(steps)}\n`, stderr: "" });
-    const res = await feedOf(w, "wf_abc12/a01f", w.leitor);
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ items: steps });
+    const response = await feedOf(people, "wf_abc12/a01f", people.leitor);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ items: steps });
     expect(runScript).toHaveBeenCalledTimes(1);
     const script = runScript.mock.calls[0]![0];
     expect(script).toContain("'/root/.claude/projects/p/s1/subagents/workflows' 'wf_abc12' 'a01f'");
   });
 
   it.each(["wf_abc12/a01f;rm", "x/a01f", "wf_abc12/zz"])("id fora do formato (%s) responde 400 sem ir ao runner", async (path) => {
-    const w = await reviewerSession();
+    const people = await reviewerSession();
     runScript.mockClear();
-    const res = await feedOf(w, path.split("/").map(encodeURIComponent).join("/"), w.leitor);
-    expect(res.statusCode).toBe(400);
-    expect(res.json()).toHaveProperty("error");
+    const response = await feedOf(people, path.split("/").map(encodeURIComponent).join("/"), people.leitor);
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toHaveProperty("error");
     expect(runScript).not.toHaveBeenCalled();
   });
 
   it("sem sessão viva do revisor, responde 409 em vez de fingir passo nenhum", async () => {
-    const w = await world();
-    await startReview(w);
-    const res = await feedOf(w, "wf_abc12/a01f", w.leitor);
-    expect(res.statusCode).toBe(409);
-    expect(res.json()).toHaveProperty("error");
+    const people = await world();
+    await startReview(people);
+    const response = await feedOf(people, "wf_abc12/a01f", people.leitor);
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toHaveProperty("error");
   });
 
   it("sondagem que falha no runner responde 502", async () => {
-    const w = await reviewerSession();
+    const people = await reviewerSession();
     runScript.mockRejectedValueOnce(new Error("container parado"));
-    expect((await feedOf(w, "wf_abc12/a01f", w.leitor)).statusCode).toBe(502);
+    expect((await feedOf(people, "wf_abc12/a01f", people.leitor)).statusCode).toBe(502);
   });
 
   it("quem não alcança o card não descobre que ele existe", async () => {
-    const w = await reviewerSession();
-    expect((await feedOf(w, "wf_abc12/a01f", w.outro)).statusCode).toBe(404);
+    const people = await reviewerSession();
+    expect((await feedOf(people, "wf_abc12/a01f", people.outro)).statusCode).toBe(404);
   });
 
   it("card sem revisão responde 404", async () => {
-    const w = await world();
-    expect((await feedOf(w, "wf_abc12/a01f", w.autor)).statusCode).toBe(404);
+    const people = await world();
+    expect((await feedOf(people, "wf_abc12/a01f", people.autor)).statusCode).toBe(404);
+  });
+  it("com ?pr, lê a revisão daquele PR; pr fora do formato responde 400 sem ir ao runner", async () => {
+    const people = await reviewerSession();
+    runScript.mockClear();
+    runScript.mockResolvedValueOnce({ stdout: "[]\n", stderr: "" });
+    const ofPr = await app.inject({
+      method: "GET", url: `/api/cards/${people.cardId}/review/agents/wf_abc12/a01f/feed?pr=${PR.number}`, headers: { cookie: people.leitor.cookie },
+    });
+    expect(ofPr.statusCode).toBe(200);
+    expect(ofPr.json()).toEqual({ items: [] });
+    const otherPr = await app.inject({
+      method: "GET", url: `/api/cards/${people.cardId}/review/agents/wf_abc12/a01f/feed?pr=${PR.number + 1}`, headers: { cookie: people.leitor.cookie },
+    });
+    expect(otherPr.statusCode).toBe(404);
+    const invalid = await app.inject({
+      method: "GET", url: `/api/cards/${people.cardId}/review/agents/wf_abc12/a01f/feed?pr=abc`, headers: { cookie: people.leitor.cookie },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(runScript).toHaveBeenCalledTimes(1);
   });
 });
 
