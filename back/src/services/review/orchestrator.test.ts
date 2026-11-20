@@ -2941,6 +2941,26 @@ describe("gate do merge rodado quando a revisão fica pronta", () => {
     expect(after.log.at(-1)?.text).toMatch(/conflito com dev/);
   });
 
+  it("conflito que aparece depois de o gate falhar as vezes que roda sozinho não conta como tentativa: o autor recebe a ordem de trazer a base", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
+    await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("passed"));
+    await o.store.mutateReview(review.id, (r) => { r.mergeGate = { sha: SHA1, state: "failed", output: RED.output, at: 1, failures: 3 }; });
+    send.mockClear();
+    prHeadNow = SHA1;
+    githubPr.mergeable = "CONFLICTING";
+    const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    try {
+      await authorTurnEnds(o, author.id);
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate).toMatchObject({ state: "failed", conflict: true }));
+      expect((await o.store.getReview(review.id))?.mergeGate?.exhausted).toBeUndefined();
+      await vi.waitFor(() => expect(send.mock.calls.some(([card, text]) => card === author.id && String(text).includes("git merge origin/dev"))).toBe(true));
+    } finally {
+      off();
+    }
+  });
+
   it("pronta com o mergeable ainda não calculado pelo GitHub (UNKNOWN): o gate roda como sempre", async () => {
     const o = await load();
     const { review } = await started(o);

@@ -460,7 +460,7 @@ async function checkMergeGate(reviewId: string, opts: { again?: boolean; by?: st
     const verdict = await readMergeVerdict(r, sha);
     let landed = false as boolean;
     const failures = failuresBefore + 1;
-    const exhausted = failures > MERGE_GATE_AUTO_RETRIES;
+    const exhausted = !verdict.conflict && failures > MERGE_GATE_AUTO_RETRIES;
     const after = await mutateReview(reviewId, (x) => {
       if (x.phase !== "ready" || x.reviewedSha !== sha) return;
       x.mergeGate = verdict.passed
