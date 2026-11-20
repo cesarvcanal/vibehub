@@ -1409,7 +1409,6 @@ export function SdkChatView({
     rootRef.current?.querySelector("textarea")?.focus();
   }, [leaveComposerModes]);
 
-  /** A click on one of a prose question's options: the answer goes at once, anchored to its question. */
   const answerProseOption = React.useCallback((decision: PendingDecision, answer: string): void => {
     try {
       dispatchTurn(buildDecisionReply(decision.text, answer));
@@ -2292,7 +2291,6 @@ const SdkChatRow = React.memo(function SdkChatRow({
   onDraft?: (id: string, draft: QuestionDraft) => void;
   /** Arms the composer on this row's question ("Responder"). */
   onReply?: (decision: PendingDecision) => void;
-  /** Answers this row's prose question with one of the options it listed. */
   onPickOption?: (decision: PendingDecision, answer: string) => void;
   /** Offered only on one's OWN messages: the pencil that starts editing (a supersede). */
   onEdit?: (rowId: string, original: string) => void;
@@ -2594,8 +2592,6 @@ const SdkChatRow = React.memo(function SdkChatRow({
   const prose = row.kind === "assistant" && !row.streaming ? splitProseQuestion(row.text) : null;
   const actions = row.kind === "assistant" && answerOf ? <AnswerActions id={row.id} cardId={answerOf} text={row.text} trailing={trailing} /> : null;
   if (prose) {
-    // What this question RECEIVED (`answered`), anchored to it — the third question the screen owes
-    // the person ("pronto, respondi" — "done, I answered"). Survives a reload: the answer is read back out of the sent message.
     const decision: PendingDecision = {
       kind: "prose",
       rowId: row.id,
@@ -2958,11 +2954,6 @@ function hasDescriptions(options: ReadonlyArray<{ description?: string }>): bool
   return options.some((option) => (option.description ?? "") !== "");
 }
 
-/**
- * One choice of a question, on the structured card and on the prose question alike: the title and,
- * under it, the explanation the agent wrote. `stacked` is the full-width row used when any choice of
- * the question has an explanation; without one, the choices stay side by side as pills.
- */
 function ChoiceOption({
   label,
   description,

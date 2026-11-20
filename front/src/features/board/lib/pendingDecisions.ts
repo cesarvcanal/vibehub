@@ -84,10 +84,6 @@ export function proseQuestion(text: string): string | null {
   return DIRECTED.test(plainLead) ? block : null;
 }
 
-/**
- * The final paragraph — joined to the one before it when the final one is nothing but a list of
- * options, since "Qual você prefere?" and its "1. … 2. …" are one question. PURE.
- */
 function closingBlock(text: string): string {
   const last = lastParagraph(text);
   if (optionList(last)?.lead !== "") return last;
@@ -97,7 +93,6 @@ function closingBlock(text: string): string {
   return text.slice(beforeList.lastIndexOf(previous)).trim();
 }
 
-/** One choice offered by a prose question: its title and, when the agent wrote one, the explanation. */
 export interface ProseOption {
   label: string;
   description?: string;
@@ -106,11 +101,6 @@ export interface ProseOption {
 const LIST_ITEM = /^ {0,3}(?:\d+[.)]|[-*+])\s+(.*)$/;
 const INDENTED = /^\s/;
 
-/**
- * A block that ENDS in a list of two or more items: the text before the list (`lead`) and each
- * item's lines (the item's own line, then its indented continuation lines). Null when the block
- * does not end in such a list. PURE.
- */
 function optionList(block: string): { lead: string; items: string[][] } | null {
   const lines = block.split("\n");
   const leadEnd = lines.findLastIndex((line) => line.trim() !== "" && !LIST_ITEM.test(line) && !INDENTED.test(line));
@@ -125,7 +115,6 @@ function optionList(block: string): { lead: string; items: string[][] } | null {
   return { lead: lines.slice(0, leadEnd + 1).join("\n").trim(), items };
 }
 
-/** Inline markdown off, for text that goes inside a button. PURE. */
 function plainInline(text: string): string {
   return text.replace(/\*\*|__|`/g, "").trim();
 }
@@ -133,7 +122,6 @@ function plainInline(text: string): string {
 const BOLD_TITLE = /^\*\*(.+?)\*\*(.*)$/;
 const DASH_SEPARATOR = /\s[—–]\s/;
 
-/** An item's first line as title and the rest: "**Título** — explicação", "Título — explicação" or just the title. PURE. */
 function splitItemTitle(line: string): { title: string; rest: string } {
   const bold = BOLD_TITLE.exec(line);
   if (bold) return { title: bold[1]!, rest: bold[2]! };
@@ -149,10 +137,6 @@ function toProseOption([firstLine, ...continuation]: string[]): ProseOption {
   return description === "" ? { label } : { label, description };
 }
 
-/**
- * The clickable choices of a prose question — the question's lead and one option per list item —
- * or null when the question does not close on a list of two or more. PURE.
- */
 export function proseOptions(question: string): { lead: string; options: ProseOption[] } | null {
   const list = optionList(question);
   if (!list || list.lead === "") return null;
