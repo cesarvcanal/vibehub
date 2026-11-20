@@ -566,15 +566,20 @@ describe("human-active lock (maestro-only)", () => {
 describe("human-active lock yields to the card's own open question", () => {
   type AskMark = "awaitingDecisionAt" | "pendingQuestionAt";
 
-  async function openCardTypedThenAsked(mark: AskMark, typedAt: number, askedAt: number) {
+  async function openCardTypedAt(typedAt: number) {
     const loaded = await load();
     const project = await loaded.registry.createProject({ name: "billing" });
     const card = await loaded.registry.createCard({ projectId: project.id, title: "waiting on a decision" });
     await loaded.registry.applyOpenTerminal(card.id);
     await loaded.registry.markCardHumanActive(card.id, typedAt);
-    if (mark === "awaitingDecisionAt") await loaded.registry.setCardAwaitingDecision(card.id, askedAt);
-    else await loaded.registry.setCardPendingQuestion(card.id, askedAt);
     return { ...loaded, card };
+  }
+
+  async function openCardTypedThenAsked(mark: AskMark, typedAt: number, askedAt: number) {
+    const opened = await openCardTypedAt(typedAt);
+    if (mark === "awaitingDecisionAt") await opened.registry.setCardAwaitingDecision(opened.card.id, askedAt);
+    else await opened.registry.setCardPendingQuestion(opened.card.id, askedAt);
+    return opened;
   }
 
   it.each<AskMark>(["awaitingDecisionAt", "pendingQuestionAt"])(
@@ -606,11 +611,7 @@ describe("human-active lock yields to the card's own open question", () => {
     ["made before the last keystroke is refused", -120_000, false],
   ])("answering an ask (inReplyTo) %s", async (_case, askedOffsetMs, delivered) => {
     const now = Date.now();
-    const { maestro, registry } = await load();
-    const project = await registry.createProject({ name: "billing" });
-    const card = await registry.createCard({ projectId: project.id, title: "asked by an event" });
-    await registry.applyOpenTerminal(card.id);
-    await registry.markCardHumanActive(card.id, now - 60_000);
+    const { maestro, card } = await openCardTypedAt(now - 60_000);
     const send = maestro.sendToTerminal(card.id, "Mongo", { respectHumanActive: true, answeringAskedAt: now + askedOffsetMs });
     if (delivered) await expect(send).resolves.toMatchObject({ sent: true });
     else await expect(send).rejects.toThrow(/human-active/);
