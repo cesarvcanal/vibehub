@@ -3,6 +3,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connectMcpClient } from "../testkit/mcpClient.js";
+import { mockHostExecutor } from "../testkit/fakeHost.js";
+
+vi.setConfig({ testTimeout: 30_000 });
 
 async function load() {
   const dataDir = mkdtempSync(join(tmpdir(), "vibehub-wait-tools-"));
@@ -10,11 +13,7 @@ async function load() {
   vi.resetModules();
   const env = await import("../config/env.js");
   env.config.dataDir = dataDir;
-  vi.doMock("../runtime/host.js", async () => {
-    const actual = await vi.importActual<typeof import("../runtime/host.js")>("../runtime/host.js");
-    const runScript = vi.fn(async () => ({ stdout: "", stderr: "" }));
-    return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript, ptyCommand: vi.fn(), pipeCommand: vi.fn() }) };
-  });
+  mockHostExecutor(async () => ({ stdout: "", stderr: "" }));
   const registry = await import("../services/board/registry.js");
   const users = await import("../auth/users.js");
   const { createMcpServer } = await import("./server.js");

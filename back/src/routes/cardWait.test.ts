@@ -2,6 +2,7 @@ import { describe, it, expect, onTestFinished, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { mockHostExecutor } from "../testkit/fakeHost.js";
 
 vi.setConfig({ testTimeout: 30_000 });
 
@@ -14,10 +15,7 @@ async function boot() {
   Object.assign(env.config, { dataDir, secretKey: "", sessionSecret: "", insecureCookies: true });
   env.config.runner.container = "vibehub-runner";
   const runScript = vi.fn<(script: string) => Promise<typeof CLAUDE_ALIVE>>(async () => CLAUDE_ALIVE);
-  vi.doMock("../runtime/host.js", async () => {
-    const actual = await vi.importActual<typeof import("../runtime/host.js")>("../runtime/host.js");
-    return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript, ptyCommand: vi.fn(), pipeCommand: vi.fn() }) };
-  });
+  mockHostExecutor(runScript);
   vi.doMock("../runtime/runner.js", () => ({
     provisionRunner: vi.fn(async () => undefined),
     startRunner: vi.fn(async () => undefined),

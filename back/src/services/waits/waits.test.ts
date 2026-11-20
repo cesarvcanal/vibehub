@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CardWait } from "../board/cardWait.js";
 import { buildWakeMessage } from "./waits.js";
+import { mockHostExecutor } from "../../testkit/fakeHost.js";
 
 const CLAUDE_ALIVE = { stdout: "bash\nnode\n", stderr: "" };
 const runScript = vi.fn<(script: string) => Promise<typeof CLAUDE_ALIVE>>(async () => CLAUDE_ALIVE);
@@ -17,10 +18,7 @@ async function load() {
   const env = await import("../../config/env.js");
   env.config.dataDir = dataDir;
   env.config.runner.container = "vibehub-runner";
-  vi.doMock("../../runtime/host.js", async () => {
-    const actual = await vi.importActual<typeof import("../../runtime/host.js")>("../../runtime/host.js");
-    return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript, ptyCommand: vi.fn(), pipeCommand: vi.fn() }) };
-  });
+  mockHostExecutor(runScript);
   const settings = await import("../settings/settings.js");
   await settings.updateSettings({ sdkDriver: false });
   return { registry: await import("../board/registry.js"), waits: await import("./waits.js") };
