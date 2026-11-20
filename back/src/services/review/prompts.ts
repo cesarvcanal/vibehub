@@ -2,8 +2,8 @@ import { clipLine } from "../../utils/clipLine.js";
 import { defuseUltraWords } from "../../utils/ultraWords.js";
 import { PR_ANALYSIS_WORKFLOW_PATH } from "./analysisWorkflow.js";
 import {
-  autoMergeEligible, waivedText, MAX_ROUNDS, MERGE_GATE_AUTO_RETRIES, pendingImprovements, pendingQuestions, type Finding,
-  type FindingStatus, type Review,
+  autoMergeEligible, waivedText, IMPASSE_ROUNDS, MAX_ROUNDS, MERGE_GATE_AUTO_RETRIES, pendingImprovements, pendingQuestions, type Finding,
+  type FindingStatus, type HeadMovedCause, type HeadMovedFrom, type Review,
 } from "./model.js";
 
 /**
@@ -516,18 +516,18 @@ export function nudgePrefix(tool: typeof TOOL_SUBMIT | typeof TOOL_RESPOND): str
   );
 }
 
-/**
- * The line that goes in front of the delta when the PR moved after `ready`: the reviewer needs to know the
- * new round did not come from an author's answer to the list. `merge` = the human merge was refused because
- * of it; `push` = the author's turn ended with a new push (somebody told their AI to change the PR).
- */
-export function headMovedPrefix(r: Review, cause: "merge" | "push" = "merge"): string {
+function headMovedSituation(prNumber: number, cause: HeadMovedCause, from: HeadMovedFrom): string {
+  if (cause === "merge") return `Merge recusado pelo vibehub: push depois do pronto. O head do PR #${prNumber} mudou`;
+  if (from === "ready") return `O autor empurrou commits no PR #${prNumber} depois do pronto (push depois do pronto)`;
+  return `O autor empurrou commits no PR #${prNumber} depois do impasse, respondendo ao que ficou travado`;
+}
+
+export function headMovedPrefix(r: Review, cause: HeadMovedCause, from: HeadMovedFrom): string {
   const approved = r.reviewedSha ? ` (${r.reviewedSha.slice(0, 7)})` : "";
-  const what = cause === "push"
-    ? `O autor empurrou commits no PR #${r.prNumber} depois do pronto (push depois do pronto)`
-    : `Merge recusado pelo vibehub: push depois do pronto. O head do PR #${r.prNumber} mudou`;
+  const what = headMovedSituation(r.prNumber, cause, from);
+  const reviewed = from === "ready" ? "aprovou" : "revisou";
   return (
-    `${what}: o head não é mais o commit que você aprovou${approved}, então a revisão voltou para a rodada ` +
+    `${what}: o head não é mais o commit que você ${reviewed}${approved}, então a revisão voltou para a rodada ` +
     `${r.round}. Confira o que entrou desde então como uma rodada nova, pelos passos abaixo.\n\n`
   );
 }
@@ -628,7 +628,7 @@ export function questionNoticeText(r: Review): string {
 
 /** The impasse reason in words: "rodadas" is the model's code, the rest already comes written. */
 export function impasseText(reason: string | undefined): string {
-  if (reason === "rodadas") {
+  if (reason === IMPASSE_ROUNDS) {
     return `${MAX_ROUNDS} rodadas com bloqueante aberto ou contestado; o revisor humano decide cada item travado`;
   }
   return clipLine(reason || "motivo não informado", 200);
