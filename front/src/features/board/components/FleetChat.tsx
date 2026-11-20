@@ -58,9 +58,11 @@ export type AgentDetail = (agentId: string, running: boolean) => React.ReactNode
 export function FleetChat({ entries, label, agentDetail }: { entries: FleetChatEntry[]; label: string; agentDetail?: AgentDetail }) {
   const [openEntryIds, setOpenEntryIds] = React.useState<ReadonlySet<string>>(new Set());
   const toggleEntry = (entryId: string) => {
-    const next = new Set(openEntryIds);
-    if (!next.delete(entryId)) next.add(entryId);
-    setOpenEntryIds(next);
+    setOpenEntryIds((open) => {
+      const next = new Set(open);
+      if (!next.delete(entryId)) next.add(entryId);
+      return next;
+    });
   };
   return (
     <ol aria-label={label} className="flex min-w-0 flex-col gap-1.5">
