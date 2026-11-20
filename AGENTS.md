@@ -377,7 +377,7 @@ Todo PR deste repositório é documentação. Quem nunca viu o código tem de en
 
 A conformidade vale para **todo PR, sem exceção**: de qualquer tamanho e de qualquer autor (pessoa ou agente), inclusive correção de review e mudança só de documentação. PR sem a seção de conformidade não está pronto para revisão: o revisor o devolve antes de ler o diff.
 
-**Título** no padrão conventional commits, sem emoji: o tipo em inglês (`fix`, `feat`, `docs`, `refactor`, `perf`, `test`) e a descrição em pt-BR, `tipo(area): o que muda`.
+**Título** no padrão conventional commits, sem emoji: o tipo em inglês (`fix`, `feat`, `docs`, `refactor`, `perf`, `test`) e a descrição em pt-BR, `tipo(area): o que muda`, entendida de bater o olho como o título de commit ("Commits", abaixo).
 
 ### Descrição
 
@@ -471,7 +471,14 @@ com login saudável a tarefa em segundo plano continua protegida.
 
 - **Emoji:** sempre um da tabela, o da intenção principal do commit.
 - **Tipo** logo depois do emoji, em inglês, o mesmo vocabulário do título do PR (que não leva emoji). **Área** entre parênteses, a mesma do título do PR.
-- **Título** em pt-BR, curto, com o verbo da ação. **Descrição** complementa o título em vez de repeti-lo; "ajustes", "correções", "melhorias" não são descrição. Só fato: não afirmar teste que não rodou.
+- **Título** em pt-BR, curto, com o verbo da ação, e entendido **de bater o olho** por quem nunca abriu o código: diz o que muda para quem usa o vibehub (a tela, o botão, o card, a entrega) ou, em mudança interna, o efeito dela, em palavras do dia a dia. O vocabulário interno (nome de arquivo, função, campo ou rota, e apelidos do código como "gate", "cabeça", "órfão", "só-merge") fica na descrição. Um assunto por título: dois assuntos ligados por "e" são dois commits. **Teste:** lido sozinho, numa lista de commits, alguém de fora do projeto consegue contar o que foi feito? Se não consegue, reescreva.
+- **Descrição** complementa o título em vez de repeti-lo: o detalhe técnico, a causa e os nomes internos moram aqui, explicados. "ajustes", "correções", "melhorias" não são descrição. Só fato: não afirmar teste que não rodou.
+
+| Em vez de | Escreva |
+|-----------|---------|
+| `🐛 fix(review): gate da análise preso à cabeça que a análise entregou, e "rodar de novo" sem corrida` | `🐛 fix(review): botão Mergear da análise só mergeia o commit que foi analisado` (e o "rodar de novo" num commit próprio) |
+| `🗃️ feat(review): analyses.json guarda o veredito do gate do merge por commit analisado` | `🗃️ feat(review): análise de PR guarda se os testes passaram em cada commit analisado` |
+| `✅ test(review): gate da análise órfão de um deploy roda de novo` | `✅ test(review): testes do merge interrompidos por um deploy voltam a rodar` |
 - **Uma alteração lógica e coerente por commit**, feito ao fechar cada etapa, nunca um único commit com tudo no fim. Só o título vale apenas para commit mecânico (rename que não muda contrato, formatação).
 - **Merge commit também leva emoji:** `🔀 merge: ...`, sem área. No `gh pr merge`, passe o título com `--subject`, porque o padrão da ferramenta sai sem emoji.
 - **Se a mensagem e o PR divergem, vale o PR.**
