@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Finding, FindingDecision, FindingSeverity, Review, ReviewFleetRun, ReviewPhase, ReviewWorking } from "@/api/types";
 import { ReviewAgents } from "@/features/board/components/ReviewAgents";
+import type { RunAgentDetail } from "@/features/board/components/ReviewFleet";
 import { ENTER, ReviewConversation, SAID_CLAMP_CHARS } from "@/features/board/components/ReviewConversation";
 import { cardHref } from "@/features/board/lib/board";
 import {
@@ -52,6 +53,7 @@ export interface ReviewPanelViewProps {
   /** The tab to open on, instead of the one the review calls for (the Storybook tour shows each). */
   initialTab?: Tab;
   fleet?: ReviewFleetRun[];
+  agentDetail?: RunAgentDetail;
 }
 
 const NO_FLEET: ReviewFleetRun[] = [];
@@ -59,7 +61,7 @@ const NO_FLEET: ReviewFleetRun[] = [];
 export function ReviewPanelView(props: ReviewPanelViewProps) {
   const {
     review, working, fleet = NO_FLEET, nameOf, actions, busy, mergeBusy, notice, onMerge, onRetry, onCancel, onDecide, onDecideSuggestions, onClose,
-    initialTab,
+    initialTab, agentDetail,
   } = props;
   const t = useT();
   const stuck = new Set(review.phase === "impasse" ? stuckItems(review.findings).map((f) => f.id) : []);
@@ -145,7 +147,7 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
       </div>
       {tab === "agents" ? (
         <div role="tabpanel" className="flex min-h-0 flex-1 flex-col">
-          <ReviewAgents review={review} fleet={fleet} />
+          <ReviewAgents review={review} fleet={fleet} agentDetail={agentDetail} />
         </div>
       ) : null}
       <div role="tabpanel" hidden={tab !== "findings"} className={cn("min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden [overflow-wrap:anywhere]", tab !== "findings" && "hidden")}>
@@ -218,17 +220,16 @@ function Header({
   const turn = reviewTurn(review, working);
   const live = (turn.who === "reviewer" || turn.who === "author") && turn.working;
   return (
-    <section className="shrink-0 space-y-2 rounded-md border border-border/60 bg-card/40 p-2.5">
+    <section className="shrink-0 space-y-1 rounded-md border border-border/60 bg-card/40 px-2.5 py-1.5">
       <div className="flex items-center gap-2">
         <span className="font-semibold text-amber-400">PR #{review.prNumber}</span>
         <span className="min-w-0 truncate text-xs text-muted-foreground">→ {review.base}</span>
+        <Steps round={review.round} phase={review.phase} />
         <Badge tone={pill.tone} className="ml-auto shrink-0 transition-colors duration-500">
           {t(pill.key, "vars" in pill ? pill.vars : undefined)}
         </Badge>
         <CloseButton onClose={onClose} />
       </div>
-      <Steps round={review.round} phase={review.phase} />
-      <Commits reviewed={review.reviewedSha} head={review.prHeadSha} />
       <p data-testid="review-now" className="flex items-start gap-2 text-xs">
         <span
           aria-hidden
@@ -240,29 +241,32 @@ function Header({
         {/* Keyed by the sentence: when what is happening changes, the new sentence comes in. */}
         <span key={stageText(review, working.author, t)} className={cn("text-foreground/90", ENTER)}>{stageText(review, working.author, t)}</span>
       </p>
-      <dl data-testid="review-roles" className="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px]">
-        <Role
-          label={t("review.roles.reviewer")}
-          hint={t("review.roles.reviewer.hint")}
-          name={nameOf(review.reviewerUserId)}
-          tag={t("review.roles.reviewer.tag")}
-        />
-        <Role
-          label={t("review.roles.author")}
-          hint={t("review.roles.author.hint")}
-          name={nameOf(review.authorUserId)}
-          tag={t("review.roles.assignee")}
-        />
-        {review.coauthorUserId ? (
+      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-0.5 text-[11px]">
+        <dl data-testid="review-roles" className="flex flex-wrap gap-x-3 gap-y-0.5">
           <Role
-            label={t("review.roles.coauthor")}
-            hint={t("review.roles.coauthor.hint")}
-            name={nameOf(review.coauthorUserId)}
-            tag={t("review.roles.coauthor.tag")}
+            label={t("review.roles.reviewer")}
+            hint={t("review.roles.reviewer.hint")}
+            name={nameOf(review.reviewerUserId)}
+            tag={t("review.roles.reviewer.tag")}
           />
-        ) : null}
-        <Role label={t("review.roles.merger")} hint={t("review.roles.merger.hint")} name={nameOf(review.mergerUserId)} />
-      </dl>
+          <Role
+            label={t("review.roles.author")}
+            hint={t("review.roles.author.hint")}
+            name={nameOf(review.authorUserId)}
+            tag={t("review.roles.assignee")}
+          />
+          {review.coauthorUserId ? (
+            <Role
+              label={t("review.roles.coauthor")}
+              hint={t("review.roles.coauthor.hint")}
+              name={nameOf(review.coauthorUserId)}
+              tag={t("review.roles.coauthor.tag")}
+            />
+          ) : null}
+          <Role label={t("review.roles.merger")} hint={t("review.roles.merger.hint")} name={nameOf(review.mergerUserId)} />
+        </dl>
+        <Commits reviewed={review.reviewedSha} head={review.prHeadSha} />
+      </div>
     </section>
   );
 }
@@ -276,7 +280,7 @@ function Commits({ reviewed, head }: { reviewed?: string; head?: string }) {
   if (!reviewed) return null;
   const moved = head !== undefined && head !== reviewed;
   return (
-    <p data-testid="review-commits" className="flex flex-wrap items-baseline gap-x-2 text-[11px] text-muted-foreground">
+    <p data-testid="review-commits" className="flex flex-wrap items-baseline gap-x-2 text-muted-foreground">
       <span>
         {t("review.commits.reviewed")} <code className="font-mono text-foreground/80">{reviewed.slice(0, 7)}</code>
       </span>
@@ -289,36 +293,34 @@ function Commits({ reviewed, head }: { reviewed?: string; head?: string }) {
   );
 }
 
-/** One segment per round — behind: done; in play: lit; ahead: waiting — with "Rodada N de 3" beside it. */
+type StepState = "done" | "current" | "todo";
+
+const STEP_STYLE: Record<StepState, string> = {
+  done: "bg-emerald-500/70",
+  current: "bg-amber-400",
+  todo: "bg-border/70",
+};
+
+function stepState(step: number, round: number, over: boolean): StepState {
+  if (step < round || (over && step === round)) return "done";
+  if (step === round) return "current";
+  return "todo";
+}
+
 function Steps({ round, phase }: { round: number; phase: ReviewPhase }) {
   const t = useT();
   const over = phase === "ready" || phase === "merged";
   return (
-    <div className="flex items-center gap-2">
-      <div
-        data-testid="review-steps"
-        role="img"
-        aria-label={t("review.steps.aria", { round, max: REVIEW_MAX_ROUNDS })}
-        className="grid flex-1 grid-cols-3 gap-1"
-      >
-        {Array.from({ length: REVIEW_MAX_ROUNDS }, (_, i) => {
-          const state = i + 1 < round || (over && i + 1 === round) ? "done" : i + 1 === round ? "current" : "todo";
-          return (
-            <div
-              key={i}
-              data-testid="review-step"
-              data-state={state}
-              className={cn(
-                "h-1.5 rounded-full",
-                state === "done" ? "bg-emerald-500/70" : state === "current" ? "bg-amber-400" : "bg-border/70",
-              )}
-            />
-          );
-        })}
-      </div>
-      <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
-        {t("review.steps.aria", { round, max: REVIEW_MAX_ROUNDS })}
-      </span>
+    <div
+      data-testid="review-steps"
+      role="img"
+      aria-label={t("review.steps.aria", { round, max: REVIEW_MAX_ROUNDS })}
+      className="grid w-20 shrink-0 grid-cols-3 gap-1"
+    >
+      {Array.from({ length: REVIEW_MAX_ROUNDS }, (_, index) => {
+        const state = stepState(index + 1, round, over);
+        return <div key={index} data-testid="review-step" data-state={state} className={cn("h-1.5 rounded-full", STEP_STYLE[state])} />;
+      })}
     </div>
   );
 }
@@ -759,15 +761,19 @@ function DecisionBanner({
   if (waiting === 0) return null;
   const impasse = review.phase === "impasse";
   return (
-    <div data-testid="decision-banner" role="status" className={cn("shrink-0 space-y-1.5 rounded-md border border-sky-500/50 bg-sky-500/10 px-2.5 py-2 text-xs", ENTER)}>
-      <p className="font-semibold text-sky-200">
+    <div
+      data-testid="decision-banner"
+      role="status"
+      title={impasse ? undefined : t("review.decision.ai")}
+      className={cn("flex shrink-0 items-center gap-2 rounded-md border border-sky-500/50 bg-sky-500/10 px-2.5 py-1 text-xs", ENTER)}
+    >
+      <p className="min-w-0 flex-1 font-semibold text-sky-200">
         {mine
           ? t(impasse ? "review.decision.stuck.mine" : "review.decision.mine", { n: waiting })
           : t(impasse ? "review.decision.stuck.others" : "review.decision.others", { n: waiting, name: reviewer })}
       </p>
-      {impasse ? null : <p className="text-sky-200/80">{t("review.decision.ai")}</p>}
       {mine ? (
-        <Button type="button" size="sm" className="h-7 bg-sky-600 px-3 text-xs text-white hover:bg-sky-500" onClick={onGo}>
+        <Button type="button" size="sm" className="h-6 shrink-0 bg-sky-600 px-2.5 text-xs text-white hover:bg-sky-500" onClick={onGo}>
           {t("review.decision.go")}
         </Button>
       ) : null}
@@ -891,12 +897,12 @@ function Footer({
           {notice.text}
         </p>
       ) : null}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
         {actions.merge ? (
           <Button
             type="button"
             size="sm"
-            className="h-8 bg-emerald-600 px-3 text-xs text-white hover:bg-emerald-500"
+            className="h-7 bg-emerald-600 px-3 text-xs text-white hover:bg-emerald-500"
             disabled={mergeBusy || holdMerge || gateHolds}
             onClick={onMerge}
           >
@@ -910,17 +916,15 @@ function Footer({
           </Button>
         ) : null}
         {actions.retry ? (
-          <Button type="button" variant="outline" size="sm" className="h-8 px-3 text-xs" disabled={busy || mergeBusy} onClick={onRetry}>
+          <Button type="button" variant="outline" size="sm" className="h-7 px-3 text-xs" disabled={busy || mergeBusy} onClick={onRetry}>
             {t("review.retry")}
           </Button>
         ) : null}
         {actions.cancel ? (
-          <Button type="button" variant="ghost" size="sm" className="h-8 px-3 text-xs text-muted-foreground" disabled={busy || mergeBusy} onClick={onCancel}>
+          <Button type="button" variant="ghost" size="sm" className="h-7 px-3 text-xs text-muted-foreground" disabled={busy || mergeBusy} onClick={onCancel}>
             {t("review.cancel")}
           </Button>
         ) : null}
-      </div>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         {/* The reviewer's card is off the board: this is the one way to its terminal, to unstick an
             AI caught in a menu or an error loop. A closed review sends it to done (and the retention
             erases it), so the link goes with the review. */}

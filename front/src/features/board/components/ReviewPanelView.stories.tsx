@@ -3,6 +3,8 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { ReviewPanelView, type ReviewPanelViewProps } from "@/features/board/components/ReviewPanelView";
 import type { Finding, Review, ReviewEvent, ReviewWorking } from "@/api/types";
 import type { ReviewActions } from "@/features/board/lib/review";
+import { FeedBody } from "@/features/board/components/WorkflowPanel";
+import type { FeedLine } from "@/features/board/lib/workflowPanel";
 
 /**
  * The PR review's panel in every state it can be in, from fixtures — and one story ("Ao vivo") that
@@ -140,10 +142,23 @@ export const RevisorLendo: Story = {
   args: { working: { author: false, reviewer: true } },
 };
 
+const AGENT_STEPS: FeedLine[] = [
+  { kind: "tool", tool: "Read", target: "back/src/services/maestro/deliverCard.ts" },
+  { kind: "thought", ms: 12_000 },
+  { kind: "tool", tool: "Grep", target: "blocking" },
+  { kind: "text", text: "A linha 72 já recusa com blocking aberto; confiro se o segundo clique passa antes dela." },
+  { kind: "thinking", ms: 4_000 },
+];
+
 export const FrotaDeAgentesTrabalhando: Story = {
   name: "Frota de agentes trabalhando (aba Agentes)",
   args: {
     initialTab: "agents",
+    agentDetail: () => (
+      <div className="mt-1 rounded border border-border/60 bg-background/70 px-2 py-1.5 text-[11px] text-muted-foreground">
+        <FeedBody status="read" lines={AGENT_STEPS} />
+      </div>
+    ),
     working: { author: false, reviewer: true },
     fleet: [{
       runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Contexto", "Revisão", "Verificação", "Julgamento"],

@@ -1,4 +1,4 @@
-export type PlatformFailureSource = "backend_error" | "slow_turn" | "agent_report";
+export type PlatformFailureSource = "backend_error" | "slow_turn" | "stalled_turn" | "agent_report";
 export type PlatformFailureStatus = "open" | "investigating" | "resolved" | "concluded_without_fix" | "dismissed";
 
 export interface PlatformFailureReport {

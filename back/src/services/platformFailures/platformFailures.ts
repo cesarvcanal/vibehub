@@ -4,15 +4,16 @@ import { JsonStore } from "../../store/jsonStore.js";
 import { logger } from "../../utils/logger.js";
 import { getSettings } from "../settings/settings.js";
 import { buildFailureSignature } from "./signature.js";
-import type { PlatformFailure, PlatformFailureReport, PlatformFailureStatus } from "./types.js";
+import type { PlatformFailure, PlatformFailureReport, PlatformFailureSource, PlatformFailureStatus } from "./types.js";
 
 export const ACTIVE_FAILURES_CAP = 50;
 const AFFECTED_CARDS_CAP = 20;
 const RESOLVED_FAILURE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 export const RESOLVED_GRACE_MS = 60 * 60_000;
-export const SLOW_TURN_DISMISSAL_MS = 7 * 24 * 60 * 60_000;
+export const TURN_DISMISSAL_MS = 7 * 24 * 60 * 60_000;
 
 const ACTIVE_STATUSES: readonly PlatformFailureStatus[] = ["open", "investigating", "concluded_without_fix"];
+const TURN_SOURCES: readonly PlatformFailureSource[] = ["slow_turn", "stalled_turn"];
 const INVESTIGABLE_STATUSES: readonly PlatformFailureStatus[] = ["open", "concluded_without_fix"];
 
 export class PlatformFailureNotFoundError extends Error {}
@@ -68,8 +69,8 @@ export async function recordPlatformFailure(report: PlatformFailureReport, now: 
   const outcome = await store.mutate((doc) => {
     doc.failures = doc.failures.filter((failure) => !(failure.status === "resolved" && now - failure.lastSeenAt > RESOLVED_FAILURE_RETENTION_MS));
     const sameSignatureFailure = doc.failures.find((failure) => failure.signature === signature && failure.status !== "resolved");
-    const isDismissalExpired = sameSignatureFailure?.status === "dismissed" && sameSignatureFailure.source === "slow_turn"
-      && now - (sameSignatureFailure.dismissedAt ?? 0) > SLOW_TURN_DISMISSAL_MS;
+    const isDismissalExpired = sameSignatureFailure?.status === "dismissed" && TURN_SOURCES.includes(sameSignatureFailure.source)
+      && now - (sameSignatureFailure.dismissedAt ?? 0) > TURN_DISMISSAL_MS;
     if (isDismissalExpired) doc.failures = doc.failures.filter((failure) => failure !== sameSignatureFailure);
     const knownFailure = isDismissalExpired ? undefined : sameSignatureFailure;
     if (knownFailure?.status === "dismissed") return { failure: null, capReached: false, isNewForCard: false };

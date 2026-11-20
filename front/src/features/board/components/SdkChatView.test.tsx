@@ -2626,6 +2626,25 @@ describe("SdkChatView — todo erro diz o que houve", () => {
  * the clock and the escalation, and jumps to the live edge when clicked.
  */
 describe("SdkChatView — the activity bar", () => {
+  it("comando do agente rodando além do limite mostra o aviso de espera, e Interromper para o turno", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "user", text: "checa e já me fala" });
+    ws.deliver({ type: "tool_use", id: "t1", name: "Bash", input: { description: "Espera o fim da bateria", command: "timeout 400 sh -c 'until grep -q EXIT x.log; do sleep 5; done'" } });
+    ws.deliver({ type: "tool_progress", id: "t1", elapsedSeconds: 60 });
+    expect(screen.queryByTestId("long-tool-wait-notice")).toBeNull();
+
+    ws.deliver({ type: "tool_progress", id: "t1", elapsedSeconds: 190 });
+    expect(screen.getByTestId("long-tool-wait-notice")).toHaveTextContent("Espera o fim da bateria");
+    fireEvent.click(within(screen.getByTestId("long-tool-wait-notice")).getByRole("button"));
+    expect(ws.sent.map((frame) => JSON.parse(frame) as unknown)).toContainEqual({ type: "interrupt" });
+
+    ws.deliver({ type: "tool_result", id: "t1", toolResult: {} });
+    expect(screen.queryByTestId("long-tool-wait-notice")).toBeNull();
+  });
+
   it("is absent at rest and appears with the turn, naming the newest step", async () => {
     renderSdkChat();
     const ws = await socket();

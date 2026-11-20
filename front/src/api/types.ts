@@ -234,7 +234,7 @@ export interface SettingsPatch {
   runner?: Partial<RunnerSettings>;
 }
 
-export type PlatformFailureSource = "backend_error" | "slow_turn" | "agent_report";
+export type PlatformFailureSource = "backend_error" | "slow_turn" | "stalled_turn" | "agent_report";
 export type PlatformFailureStatus = "open" | "investigating" | "resolved" | "concluded_without_fix" | "dismissed";
 
 export interface PlatformFailure {
@@ -870,6 +870,10 @@ export interface AnalysisConversation {
   finished: boolean;
   agents: AnalysisConversationAgent[];
   items: AnalysisConversationItem[];
+}
+
+export interface ReviewAgentFeedResponse {
+  items: Omit<AnalysisConversationItem, "agentId">[];
 }
 
 export interface AnalysisConversationResponse {

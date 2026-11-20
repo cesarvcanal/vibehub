@@ -1042,11 +1042,14 @@ export function toolLiveLabel(row: SdkRow): string | null {
     return bytes > 0 ? `${label} ${translate("sdk.toolLive.kb", { n: Math.max(1, Math.round(bytes / 1024)) })}` : label;
   }
   if (typeof row.elapsedSeconds !== "number") return null;
-  const o = (row.input && typeof row.input === "object" ? row.input : {}) as Record<string, unknown>;
-  const what = row.name === "Bash"
-    ? field(o, "description") || line(field(o, "command"), 60) || row.name
+  return `${translate("sdk.toolLive.running", { what: describeRunningTool(row) })} ${formatTurnElapsed(row.elapsedSeconds)}`;
+}
+
+function describeRunningTool(row: Extract<SdkRow, { kind: "tool" }>): string {
+  const input = (row.input && typeof row.input === "object" ? row.input : {}) as Record<string, unknown>;
+  return row.name === "Bash"
+    ? field(input, "description") || line(field(input, "command"), 60) || row.name
     : toolHeadline(row.name, row.input).title;
-  return `${translate("sdk.toolLive.running", { what })} ${formatTurnElapsed(row.elapsedSeconds)}`;
 }
 
 /**
@@ -1093,6 +1096,27 @@ export function currentActivity(state: SdkChatState): SdkActivity | null {
     if (row.kind === "assistant") return row.streaming ? { kind: "answering", label: "", rowId: row.id } : null;
   }
   return null;
+}
+
+export const LONG_TOOL_WAIT_SECONDS = 180;
+
+export interface LongToolWait {
+  rowId: string;
+  what: string;
+  elapsedSeconds: number;
+}
+
+function isLongRunningCommand(row: SdkRow): row is Extract<SdkRow, { kind: "tool" }> & { elapsedSeconds: number } {
+  return row.kind === "tool" && !row.parent && !row.result && !SUBAGENT_TOOL_NAMES.has(row.name)
+    && !toolHeadline(row.name, row.input).background
+    && typeof row.elapsedSeconds === "number" && row.elapsedSeconds >= LONG_TOOL_WAIT_SECONDS;
+}
+
+export function findLongToolWait(state: SdkChatState): LongToolWait | null {
+  const turnStartIndex = state.rows.findLastIndex((row) => row.kind === "user" && row.absorbed !== true);
+  const stuckCommand = state.rows.slice(turnStartIndex + 1).findLast(isLongRunningCommand);
+  if (!stuckCommand) return null;
+  return { rowId: stuckCommand.id, what: describeRunningTool(stuckCommand), elapsedSeconds: stuckCommand.elapsedSeconds };
 }
 
 /**
@@ -2242,8 +2266,10 @@ export type SdkRenderRow =
   | { kind: "agents"; id: string; rows: SdkRow[] };
 
 /** The tools that start a subagent: `Agent` (current name in Claude Code) and `Task` (the old one). */
+const SUBAGENT_TOOL_NAMES: ReadonlySet<string> = new Set(["Agent", "Task"]);
+
 function isAgentCall(row: SdkRow): boolean {
-  return row.kind === "tool" && !row.pending && (row.name === "Agent" || row.name === "Task");
+  return row.kind === "tool" && !row.pending && SUBAGENT_TOOL_NAMES.has(row.name);
 }
 
 export const SDK_TOOL_FOLD_MIN = 3;

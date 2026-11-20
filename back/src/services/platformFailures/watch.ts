@@ -3,10 +3,14 @@ import { onCardEvent } from "../events/cardEvents.js";
 import { buildBackendErrorReport } from "./backendError.js";
 import { settleInvestigationOfCard } from "./investigation.js";
 import { recordPlatformFailure } from "./platformFailures.js";
-import { SLOW_FIRST_OUTPUT_MS, SLOW_TURNS_WINDOW_MS, getLastUserStop, onSlowTurns, type SlowTurn } from "./turnLatency.js";
+import {
+  SLOW_FIRST_OUTPUT_MS, SLOW_TURNS_WINDOW_MS, STALLED_TURN_MS,
+  getLastUserStop, markNewlyStalledTurns, onSlowTurns, type SlowTurn, type StalledTurn,
+} from "./turnLatency.js";
 import type { PlatformFailureReport } from "./types.js";
 
 const CAPTURE_PAUSE_MS = 60_000;
+export const STALL_CHECK_INTERVAL_MS = 30_000;
 
 const backendCapture = { pausedUntil: 0 };
 const pendingWatchTasks = new Set<Promise<unknown>>();
@@ -20,6 +24,19 @@ function buildSlowTurnsReport(cardId: string, slowTurns: SlowTurn[]): PlatformFa
       .map((slowTurn) => `${new Date(slowTurn.at).toISOString()}: ${Math.round(slowTurn.latencyMs / 1000)}s até a primeira saída`)
       .join("\n"),
     cardId,
+  };
+}
+
+function buildStalledTurnReport(stalledTurn: StalledTurn): PlatformFailureReport {
+  return {
+    source: "stalled_turn",
+    component: "sdk/turn",
+    symptom: `turno parado: nenhum sinal do agente por mais de ${STALLED_TURN_MS / 60_000} min, sem ferramenta rodando`,
+    evidence: [
+      `turno enviado: ${new Date(stalledTurn.sentAt).toISOString()}`,
+      `último sinal do agente: ${new Date(stalledTurn.lastSignalAt).toISOString()}`,
+    ].join("\n"),
+    cardId: stalledTurn.cardId,
   };
 }
 
@@ -45,6 +62,10 @@ export function startPlatformFailureWatch(): () => void {
     queueMicrotask(() => trackWatchTask(recordFromWatch(report)));
   });
   const stopSlowTurns = onSlowTurns((cardId, slowTurns) => trackWatchTask(recordFromWatch(buildSlowTurnsReport(cardId, slowTurns))));
+  const stallCheck = setInterval(() => {
+    for (const stalledTurn of markNewlyStalledTurns(Date.now())) trackWatchTask(recordFromWatch(buildStalledTurnReport(stalledTurn)));
+  }, STALL_CHECK_INTERVAL_MS);
+  stallCheck.unref();
   const stopConclusions = onCardEvent((event) => {
     if (event.kind !== "concluded") return;
     trackWatchTask(settleInvestigationOfCard(event.cardId).catch((err: unknown) => {
@@ -54,6 +75,7 @@ export function startPlatformFailureWatch(): () => void {
   return () => {
     stopLogCapture();
     stopSlowTurns();
+    clearInterval(stallCheck);
     stopConclusions();
   };
 }
