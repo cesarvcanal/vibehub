@@ -1,5 +1,5 @@
 import "fake-indexeddb/auto";
-import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, onTestFinished, vi } from "vitest";
 import * as React from "react";
 import type { ReactElement, ReactNode } from "react";
 import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
@@ -1122,6 +1122,72 @@ describe("TerminalComposer — voice input", () => {
     // And back to a plain microphone, with the stream released.
     await waitFor(() => expect(screen.getByTestId("composer-mic")).toBeInTheDocument());
     expect(stopTrack).toHaveBeenCalled();
+  });
+
+  it("a transcription that lands gives the field the keyboard, caret at the end, ready for Enter", async () => {
+    serveVoice(true);
+    mockPost.mockResolvedValue({ text: "run the failing test again", proofread: true });
+    const user = userEvent.setup();
+    renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" />);
+
+    const box = screen.getByRole("textbox");
+    await user.type(box, "then");
+    await waitFor(() => expect(screen.getByTestId("composer-mic")).toBeEnabled());
+    await user.click(screen.getByTestId("composer-mic"));
+    await user.click(await screen.findByTestId("composer-mic-finish"));
+
+    await waitFor(() => expect(box).toHaveValue("then run the failing test again"));
+    await waitFor(() => expect(box).toHaveFocus());
+    const textBox = box as HTMLTextAreaElement;
+    expect(textBox.selectionStart).toBe(textBox.value.length);
+    expect(textBox.selectionEnd).toBe(textBox.value.length);
+  });
+
+  it("a transcription that lands on a card no longer on screen does not take the keyboard", async () => {
+    serveVoice(true);
+    const answerTranscription: Array<(answer: { text: string; proofread: boolean }) => void> = [];
+    mockPost.mockReturnValue(new Promise((resolve) => { answerTranscription.push(resolve); }));
+    const user = userEvent.setup();
+    const { rerender } = renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" active />);
+    await waitFor(() => expect(screen.getByTestId("composer-mic")).toBeEnabled());
+    await user.click(screen.getByTestId("composer-mic"));
+    await user.click(await screen.findByTestId("composer-mic-finish"));
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+
+    rerender(<TerminalComposer onSend={vi.fn()} cardId="c1" active={false} />);
+    const box = screen.getByRole("textbox");
+    box.blur();
+    await act(async () => answerTranscription[0]({ text: "what I said", proofread: true }));
+
+    await waitFor(() => expect(box).toHaveValue("what I said"));
+    expect(box).not.toHaveFocus();
+  });
+
+  it("phone: a transcription that lands does not take the keyboard, which would cover the screen", async () => {
+    serveVoice(true);
+    mockPost.mockResolvedValue({ text: "what I said", proofread: true });
+    const original = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query === MOBILE_QUERY,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+    onTestFinished(() => { window.matchMedia = original; });
+    const user = userEvent.setup();
+    renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" />);
+    await waitFor(() => expect(screen.getByTestId("composer-mic")).toBeEnabled());
+    await user.click(screen.getByTestId("composer-mic"));
+    await user.click(await screen.findByTestId("composer-mic-finish"));
+
+    const box = screen.getByRole("textbox");
+    await waitFor(() => expect(box).toHaveValue("what I said"));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(box).not.toHaveFocus();
   });
 
   it("ends a recording when you switch to another card — the pane stays mounted, the microphone does not", async () => {
