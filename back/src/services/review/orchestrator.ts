@@ -472,16 +472,34 @@ async function checkMergeGate(reviewId: string, opts: { again?: boolean; by?: st
       if (autoMergeEligible(after) && (await reviewerApproved(after))) await autoMerge(after);
       return;
     }
-    await notifyBoth(after, `review:${reviewId}:merge_gate_failed:${sha}:${after.mergeGate?.at}`, mergeGateFailedText(after), exhausted ? "warning" : "info");
-    if (exhausted) return;
-    const authorPrompt = verdict.conflict ? authorMergeConflictPrompt(after) : authorMergeGatePrompt(after);
-    await relayReview(after, "author", authorPrompt, { unpause: true, optional: true }).catch((e: unknown) =>
-      logger.warn({ review: reviewId, detail: (e as Error).message }, "could not send the merge gate failure to the author"));
+    await sendMergeGateFailure(after);
   } catch (err) {
     logger.warn({ review: reviewId, sha, detail: (err as Error).message }, "PR review merge gate failed to run");
   } finally {
     mergeGatesRunning.delete(reviewId);
   }
+}
+
+async function sendMergeGateFailure(r: Review): Promise<void> {
+  const gate = r.mergeGate;
+  await notifyBoth(r, `review:${r.id}:merge_gate_failed:${gate?.sha}:${gate?.at}`, mergeGateFailedText(r), gate?.exhausted ? "warning" : "info");
+  if (gate?.exhausted) return;
+  const authorPrompt = gate?.conflict ? authorMergeConflictPrompt(r) : authorMergeGatePrompt(r);
+  await relayReview(r, "author", authorPrompt, { unpause: true, optional: true }).catch((e: unknown) =>
+    logger.warn({ review: r.id, detail: (e as Error).message }, "could not send the merge gate failure to the author"));
+}
+
+export async function holdMergeOnConflict(reviewId: string, by: string): Promise<Review> {
+  let held = false as boolean;
+  const after = await mutateReview(reviewId, (x) => {
+    if (x.phase !== "ready" || !x.reviewedSha) return;
+    x.mergeGate = { sha: x.reviewedSha, state: "failed", output: mergeConflictOutput(x), at: Date.now(), failures: 1, conflict: true };
+    note(x, "system", `Merge recusado: ${mergeConflictOutput(x)}. O autor recebeu a ordem de trazer ${x.base} para a branch.`, { by });
+    held = true;
+  });
+  logger.info({ audit: true, action: "review.merge_conflict", review: reviewId, held, by }, "PR review merge held: the PR conflicts with its base");
+  if (held) await sendMergeGateFailure(after);
+  return (await getReview(reviewId)) ?? after;
 }
 
 /**

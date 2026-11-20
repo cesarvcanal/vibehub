@@ -1860,7 +1860,9 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
       round, findings: round === 1 ? [SUGGESTION] : [], headSha: SHA1, summary: "sem bloqueante",
     });
     expect(ready.phase).toBe("ready");
+    await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("passed"));
     send.mockClear();
+    prHead.mockClear();
     calls.length = 0;
     return { author, review: ready, off: o.orch.startReviewOrchestrator({ graceMs: 0 }) };
   }
@@ -2127,6 +2129,8 @@ describe("o PR mudou no GitHub fora do painel (merge à mão, PR fechado)", () =
   it("syncReviewSoon tem freio: duas leituras do painel no mesmo minuto vão ao GitHub uma vez só", async () => {
     const o = await load();
     const { review } = await readyReview(o);
+    await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("passed"));
+    prHead.mockClear();
     prHeadNow = SHA1;
     o.orch.syncReviewSoon(review);
     o.orch.syncReviewSoon(review);
