@@ -1,7 +1,7 @@
 import type { Card } from "./registry.js";
 
-export type WaitOutcome = "pr_merged" | "concluded" | "deleted";
-export const WAIT_OUTCOMES: readonly WaitOutcome[] = ["pr_merged", "concluded", "deleted"];
+export const WAIT_OUTCOMES = ["pr_merged", "concluded", "deleted"] as const;
+export type CardWaitOutcome = (typeof WAIT_OUTCOMES)[number];
 export const WAIT_INSTRUCTION_MAX = 2000;
 
 export interface WaitFailure {
@@ -16,13 +16,13 @@ export interface CardWait {
   createdBy: string;
   base?: string;
   readyAt?: number;
-  outcome?: WaitOutcome;
+  outcome?: CardWaitOutcome;
   prNumber?: number;
   failure?: WaitFailure;
 }
 
 export interface WaitTrigger {
-  outcome: WaitOutcome;
+  outcome: CardWaitOutcome;
   base?: string;
   prNumber?: number;
 }
@@ -44,7 +44,7 @@ export function parseCardWait(raw: unknown): CardWait | undefined {
   if (!isFilledString(stored.cardId) || !isFilledString(stored.instruction) || !isFilledString(stored.createdBy)) return undefined;
   if (typeof stored.createdAt !== "number") return undefined;
   const ready = typeof stored.readyAt === "number";
-  if (ready && !WAIT_OUTCOMES.includes(stored.outcome as WaitOutcome)) return undefined;
+  if (ready && !WAIT_OUTCOMES.includes(stored.outcome as CardWaitOutcome)) return undefined;
   const wait: CardWait = { cardId: stored.cardId, instruction: stored.instruction, createdAt: stored.createdAt, createdBy: stored.createdBy };
   if (isFilledString(stored.base)) wait.base = stored.base;
   if (ready) {

@@ -601,7 +601,6 @@ export type PrLiveEvent =
   | { type: "claim-refused"; prNumber: number; username: string }
   | { type: "error"; code: "read_only" };
 
-/** A pull request the card delivered — see `Card.prs`. */
 export type CardWaitOutcome = "pr_merged" | "concluded" | "deleted";
 
 export interface CardWait {
@@ -616,6 +615,7 @@ export interface CardWait {
   failure?: { at: number; reason: string };
 }
 
+/** A pull request the card delivered — see `Card.prs`. */
 export interface CardPr {
   number: number;
   url: string;

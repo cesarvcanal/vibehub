@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { boardApi, CARDS_PREFIX_KEY, cardKey } from "@/features/board/api";
 import { cardWaitPhase } from "@/features/board/lib/cardWait";
 import type { CardWait } from "@/api/types";
-import { t as translate, useT } from "@/i18n";
+import { useT } from "@/i18n";
 
 export function CardWaitNotice({ cardId, wait, waitTargetTitle }: { cardId: string; wait: CardWait; waitTargetTitle?: string }) {
   const t = useT();
@@ -19,10 +19,9 @@ export function CardWaitNotice({ cardId, wait, waitTargetTitle }: { cardId: stri
   };
   const cancel = useMutation({ mutationFn: () => boardApi.cancelCardWait(cardId), onSuccess: refreshBoard });
   const wake = useMutation({ mutationFn: () => boardApi.fireCardWait(cardId), onSettled: refreshBoard });
-  const wakeError = wake.error && apiErrorMessage(wake.error, translate("cardWait.wakeError"));
-  const failedAction = cancel.error
-    ? apiErrorMessage(cancel.error, translate("cardWait.cancelError"))
-    : wakeError !== wait.failure?.reason && wakeError;
+  const wakeError = wake.error ? apiErrorMessage(wake.error, t("cardWait.wakeError")) : undefined;
+  const wakeErrorNotShownYet = wakeError !== wait.failure?.reason ? wakeError : undefined;
+  const failedAction = cancel.error ? apiErrorMessage(cancel.error, t("cardWait.cancelError")) : wakeErrorNotShownYet;
   const busy = cancel.isPending || wake.isPending;
   const headline = wait.failure ? t("cardWait.failed", { card, reason: wait.failure.reason }) : t(phase === "ready" ? "cardWait.ready" : "cardWait.waiting", { card });
   const Icon = phase === "failed" ? AlertTriangle : Hourglass;

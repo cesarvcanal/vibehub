@@ -42,7 +42,7 @@ export function buildWakeMessage(wait: CardWait, targetTitle: string | undefined
 }
 
 function normalizeInstruction(instruction: string): string {
-  const trimmed = String(instruction ?? "").trim();
+  const trimmed = instruction.trim();
   if (!trimmed) throw new Error("instruction is required: say what to do when the awaited card finishes");
   if (trimmed.length > WAIT_INSTRUCTION_MAX) throw new Error(`instruction is too long (max ${WAIT_INSTRUCTION_MAX} characters)`);
   return trimmed;
