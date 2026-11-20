@@ -13,9 +13,10 @@ import { isBusy } from "../services/maestro/maestro.js";
 import { readCardAgentFeed, watchCardFleet } from "../services/sdk/manager.js";
 import { activeReviewFor, getReview, listReviewsFollowedBy, listReviewsForCards, newest } from "../services/review/store.js";
 import { canMergeReview, fleetRunForReaders, isReviewClosed, type Review } from "../services/review/model.js";
-import { getAnalysis, getAnalysisMergeRefusal } from "../services/review/analysisStore.js";
+import { getAnalysis, getAnalysisMergeGate, getAnalysisMergeRefusal } from "../services/review/analysisStore.js";
 import {
-  analysedPr, currentMergeRefusal, isAnalysisMergeable, isAnalysisMerging, mergeAnalysedPr,
+  analysedPr, currentMergeGate, currentMergeRefusal, isAnalysisMergeable, isAnalysisMerging, mergeAnalysedPr, startAnalysisMergeGate,
+  syncAnalysisWithGithub,
 } from "../services/review/analysisMerge.js";
 import { readAnalysisConversation } from "../services/review/analysisConversation.js";
 import { ANALYSIS_DIMENSIONS, analysisVerdict, dimensionHealth, uncheckedDimensions } from "../services/review/analysisModel.js";
@@ -151,20 +152,25 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
   );
 
   app.get<{ Params: { id: string } }>("/api/cards/:id/analysis", { preHandler: requireCardAccess }, async (req, reply) => {
+    await syncAnalysisWithGithub(req.params.id);
     const analysis = await getAnalysis(req.params.id);
     if (!analysis) return await reply.send({ analysis: null });
     const health = Object.fromEntries(ANALYSIS_DIMENSIONS.map((dimension) => [dimension, dimensionHealth(analysis, dimension)]));
     const card = await registry.getCard(req.params.id);
     const pr = card && analysedPr(card, analysis);
-    const canMerge = requestCardLevel(req) === "work" && pr !== undefined && isAnalysisMergeable(analysis, pr);
+    const mergeable = pr !== undefined && isAnalysisMergeable(analysis, pr);
+    const canMerge = requestCardLevel(req) === "work" && mergeable;
     const lastMergeRefusal = pr?.mergedAt === undefined
       ? currentMergeRefusal(analysis, await getAnalysisMergeRefusal(req.params.id))
       : undefined;
+    if (mergeable) await startAnalysisMergeGate(req.params.id);
+    const mergeGate = mergeable ? currentMergeGate(analysis, await getAnalysisMergeGate(req.params.id)) : undefined;
     return await reply.send({
       analysis, health, verdict: analysisVerdict(analysis), uncheckedDimensions: uncheckedDimensions(analysis), canMerge,
       merging: isAnalysisMerging(req.params.id),
       ...(pr?.mergedAt !== undefined ? { mergedAt: pr.mergedAt } : {}),
       ...(lastMergeRefusal ? { lastMergeRefusal } : {}),
+      ...(mergeGate ? { mergeGate } : {}),
     });
   });
 
@@ -175,6 +181,17 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
       return await reply.send({ conversation: await readAnalysisConversation(card) });
     } catch (err) {
       return await sendError(reply, err, { fallback: 502 });
+    }
+  });
+
+  app.post<{ Params: { id: string } }>("/api/cards/:id/analysis/merge-gate", { preHandler: requireCardWork }, async (req, reply) => {
+    try {
+      const outcome = await startAnalysisMergeGate(req.params.id, { again: true });
+      if (outcome.kind !== "refused") return await reply.send({ mergeGate: outcome.mergeGate });
+      const { kind: _refused, status, ...body } = outcome;
+      return await reply.code(status).send(body);
+    } catch (err) {
+      return await sendError(reply, err, { fallback: 500 });
     }
   });
 

@@ -1334,7 +1334,7 @@ describe("decisão humana", () => {
     await expect(o.orch.decideQuestion(review.id, "f1", "block", "u-revisor")).rejects.toThrow();
   });
 
-  it("impasse: manter segura, aceitar o risco do último item libera o ready", async () => {
+  it("impasse: manter segura (o clique repetido não grava a decisão de novo), aceitar o risco do último item libera o ready", async () => {
     const o = await load();
     const { author, review } = await started(o);
     const two = [BLOCKER, { ...BLOCKER, title: "sql sem bind", line: 80 }];
@@ -1352,6 +1352,8 @@ describe("decisão humana", () => {
 
     const kept = await o.orch.decideQuestion(review.id, "f1", "keep", "u-revisor");
     expect(kept.phase).toBe("impasse");
+    const keptAgain = await o.orch.decideQuestion(review.id, "f1", "keep", "u-revisor");
+    expect(keptAgain.log.filter((event) => event.text.includes("f1: mantém o bloqueio"))).toHaveLength(1);
     const half = await o.orch.decideQuestion(review.id, "f2", "accept_risk", "u-revisor");
     expect(half.phase).toBe("impasse");
     expect(half.findings[1]).toMatchObject({ status: "accepted_risk", humanDecision: "accept_risk" });
@@ -2144,16 +2146,15 @@ describe("o PR mudou no GitHub fora do painel (merge à mão, PR fechado)", () =
     expect(prHead).not.toHaveBeenCalled();
   });
 
-  it("syncReviewSoon tem freio: duas leituras do painel no mesmo minuto vão ao GitHub uma vez só", async () => {
+  it("a leitura do painel tem freio: duas leituras no mesmo minuto vão ao GitHub uma vez só", async () => {
     const o = await load();
     const { review } = await readyReview(o);
     await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("passed"));
     prHead.mockClear();
     prHeadNow = SHA1;
-    o.orch.syncReviewSoon(review);
-    o.orch.syncReviewSoon(review);
-    await vi.waitFor(() => expect(prHead).toHaveBeenCalledTimes(1));
-    await new Promise((r) => setTimeout(r, 30));
+    prHead.mockClear();
+    await o.orch.reviewForRead(review);
+    await o.orch.reviewForRead(review);
     expect(prHead).toHaveBeenCalledTimes(1);
   });
 });

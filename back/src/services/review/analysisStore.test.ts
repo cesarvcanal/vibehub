@@ -1,12 +1,13 @@
 import { describe, it, expect, onTestFinished, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AnalysisReport } from "./analysisModel.js";
 
-async function load() {
+async function load(seed?: unknown) {
   vi.resetModules();
   const dataDir = await mkdtemp(join(tmpdir(), "vibehub-analyses-"));
+  if (seed !== undefined) await writeFile(join(dataDir, "analyses.json"), JSON.stringify(seed));
   onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
   const env = await import("../../config/env.js");
   env.config.dataDir = dataDir;
@@ -44,5 +45,19 @@ describe("store das análises", () => {
   it("card sem análise lê undefined", async () => {
     const store = await load();
     expect(await store.getAnalysis("nenhum")).toBeUndefined();
+  });
+  it("o veredito do gate do merge só grava no commit que a análise está agora", async () => {
+    const store = await load();
+    await store.saveAnalysis(report(), acceptAnySaved);
+    const gate = { cardId: "c1", analysedSha: "a".repeat(40), state: "passed" as const, at: 1 };
+    expect(await store.saveAnalysisMergeGate({ ...gate, analysedSha: "b".repeat(40) })).toBe(false);
+    expect(await store.getAnalysisMergeGate("c1")).toBeUndefined();
+    expect(await store.saveAnalysisMergeGate(gate)).toBe(true);
+    expect(await store.getAnalysisMergeGate("c1")).toEqual(gate);
+  });
+  it("analyses.json gravado antes do gate do merge lê sem veredito e mantém o resto", async () => {
+    const store = await load({ analyses: [report()], mergeRefusals: [] });
+    expect(await store.getAnalysisMergeGate("c1")).toBeUndefined();
+    expect((await store.getAnalysis("c1"))?.cardId).toBe("c1");
   });
 });

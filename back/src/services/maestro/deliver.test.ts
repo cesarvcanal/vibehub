@@ -63,6 +63,15 @@ function wire(over: { push?: string; probe?: string; run?: string; merge?: strin
   });
 }
 
+function wireMergeOnly(head: string, over: { ci?: string; merge?: string; resolve?: string } = {}) {
+  runScript.mockImplementation(async (script: string) => {
+    if (script.includes("gh pr merge")) return { stdout: over.merge ?? "Merged\n__VIBEHUB_DELIVER__ merged\n", stderr: "" };
+    if (script.includes("gh pr checks")) return { stdout: `${over.ci ?? '[{"name":"back","bucket":"pass"}]'}\n__VIBEHUB_CI__ done\n`, stderr: "" };
+    if (script.includes("gh pr list")) return { stdout: over.resolve ?? `__VIBEHUB_DELIVER__ head ${PR} ${head}\n`, stderr: "" };
+    return { stdout: "", stderr: "" };
+  });
+}
+
 /** Every script that was run, and the ones that were a merge. */
 const scripts = () => runScript.mock.calls.map((c) => (c as unknown as string[])[0]);
 const mergeRan = () => scripts().some((s) => s.includes("gh pr merge"));
@@ -851,15 +860,6 @@ describe("deliver grava o PR no card (revisão de PR)", () => {
 describe("deliver no modo só-merge (botão de merge da revisão de PR)", () => {
   const REVIEWED = "a".repeat(40);
   const MOVED = "b".repeat(40);
-  /** The runner of the merge-only mode: resolve the PR (no push), CI, merge. */
-  function wireMergeOnly(head: string, over: { ci?: string; merge?: string; resolve?: string } = {}) {
-    runScript.mockImplementation(async (script: string) => {
-      if (script.includes("gh pr merge")) return { stdout: over.merge ?? "Merged\n__VIBEHUB_DELIVER__ merged\n", stderr: "" };
-      if (script.includes("gh pr checks")) return { stdout: `${over.ci ?? '[{"name":"back","bucket":"pass"}]'}\n__VIBEHUB_CI__ done\n`, stderr: "" };
-      if (script.includes("gh pr list")) return { stdout: over.resolve ?? `__VIBEHUB_DELIVER__ head ${PR} ${head}\n`, stderr: "" };
-      return { stdout: "", stderr: "" };
-    });
-  }
 
   it("mergeOnly não dá push e recusa head_moved", async () => {
     const { deliver, card } = await makeCard();
@@ -1324,13 +1324,36 @@ describe("deliver com revisão de PR ativa no card", () => {
     expect(mergeRan()).toBe(false);
   });
 
-  it("card de análise não tem merge-only: o botão é de uma revisão, e nenhuma revisão roda num card de análise", async () => {
+  it("caso real (PR #649): o botão da análise mergeia em só-merge, sem push, achando a PR pela branch dela e preso ao commit analisado", async () => {
     const { deliver, registry, project } = await makeCard();
     const analysis = await registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" });
-    wire();
-    const out = await deliver.deliver(analysis.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: HEAD_SHA });
-    expect(out).toMatchObject({ merged: false, reason: "locked" });
-    expect(runScript).not.toHaveBeenCalled();
+    wireMergeOnly(HEAD_SHA);
+    const out = await deliver.deliver(analysis.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: HEAD_SHA, gatePassed: true });
+    expect(out).toMatchObject({ merged: true, reason: "merged", prUrl: PR, cardBranch: "feat-7" });
+    expect(pushRan()).toBe(false);
+    expect(scripts().find((s) => s.includes("gh pr list"))).toContain("--head 'feat-7'");
+    expect(scripts().find((s) => s.includes("gh pr merge"))).toContain(`--merge --match-head-commit '${HEAD_SHA}'`);
+    expect(scripts().some((s) => s.includes("__VIBEHUB_GATE_JSON__"))).toBe(false);
+  });
+
+  it("o só-merge da análise numa PR em revisão no card do autor é recusado com review_active, como o merge autorizado", async () => {
+    const { deliver, registry, project } = await withActiveReview("ready");
+    const analysis = await registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "card/x", title: "Análise PR #7" });
+    wireMergeOnly(HEAD_SHA);
+    const out = await deliver.deliver(analysis.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: HEAD_SHA, gatePassed: true });
+    expect(out).toMatchObject({ merged: false, reason: "review_active", prUrl: PR });
+    expect(mergeRan()).toBe(false);
+  });
+
+  it("o só-merge da análise não mergeia a PR de um card bloqueado", async () => {
+    const { deliver, registry, project, card } = await makeCard();
+    await registry.updateCard(card.id, { base: "dev", locked: true });
+    await registry.recordCardPr(card.id, { number: 7, url: PR, base: "dev", branch: "card/x" });
+    const analysis = await registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "card/x", title: "Análise PR #7" });
+    wireMergeOnly(HEAD_SHA);
+    const out = await deliver.deliver(analysis.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: HEAD_SHA, gatePassed: true });
+    expect(out).toMatchObject({ merged: false, reason: "locked", locked: true });
+    expect(mergeRan()).toBe(false);
   });
 
   it("pushOnly: empurra e acha o PR, sem gate e sem merge, mesmo autorizado", async () => {
