@@ -230,6 +230,15 @@ describe("WORKFLOW_PROBE_JS — a sondagem lendo um diário real", () => {
     expect(agent("a03f").model).toBeUndefined();
   });
 
+  it("o modelo com versão que respondeu no transcript vale mais que o apelido do meta.json", async () => {
+    writeFileSync(join(fx.run, "agent-a02f.jsonl"), jsonl([
+      HEADER(T0 + 500), TASK(T0 + 600, "Varra o back"),
+      { type: "assistant", timestamp: iso(T0 + 2_000), message: { role: "assistant", model: "claude-sonnet-5-5", content: [THINKING] } },
+    ]));
+    const { agent } = await snapshot();
+    expect(agent("a02f")).toMatchObject({ model: "claude-sonnet-5-5" });
+  });
+
   it("sem diário nem meta, usa a linha 'computed task text follows:' — pulando o cabeçalho", async () => {
     const { agent } = await snapshot();
     expect(agent("a03f")).toMatchObject({ label: "Confere os testes de integração", phase: "" });
