@@ -288,7 +288,7 @@ Comando de teste que passaria de ~2 min vira recorte menor. O que não deu para 
 4. **Implementar de ponta a ponta:** consumidores, contratos, validação, acesso, i18n e testes na mesma entrega.
 5. **Auditar o trecho tocado:** nomes, `let`, comentário fora das exceções, código morto, duplicação, fallback indevido, leituras e execuções inúteis.
 6. **Não espalhar alterações:** problema vizinho que exige refatoração arriscada é comunicado, não corrigido de carona.
-7. **Validar:** lint, testes do recorte, typecheck e build quando aplicável, e revisar o diff (§11, comandos abaixo). O lint checa só `eslint.config.js`: verde não é conformidade; o resto deste arquivo é o passo 5 e a revisão do passo 8.
+7. **Validar:** lint, testes do recorte, typecheck e build quando aplicável, e revisar o diff (§11, comandos abaixo). O lint checa só o que a máquina consegue (as regras de `eslint.config.js` e o markdown fora do lugar, §15): verde não é conformidade; o resto deste arquivo é o passo 5 e a revisão do passo 8.
 8. **Revisão independente antes de entregar:** o diff passa, nesta ordem, por **simplificação** (aplicada) e por **code review** (correção, performance, aderência às regras e o que foi inventado), ambas por revisores SEM o contexto de quem escreveu, com a entrada de "Como revisar um PR" (§14). Cada achado confirmado segue a sua severidade (§14, "As severidades"); o descartado tem o motivo dito. O que a simplificação mudar volta pelo passo 7 antes do code review.
 9. **Descrever o resultado:** o que mudou, o que foi verificado e as limitações reais ("Como relatar", abaixo); PR segue a §14.
 
