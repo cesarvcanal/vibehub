@@ -1070,8 +1070,17 @@ export function TerminalComposer({
     pointerFocusRef.current = false;
   }, []);
 
-  const append = React.useCallback((fragment: string) => {
-    setText((prev) => appendFragment(prev, fragment));
+  const spokenTakesKeyboardRef = React.useRef(false);
+  spokenTakesKeyboardRef.current = !isMobile && active;
+  const appendSpoken = React.useCallback((spoken: string) => {
+    setText((prev) => appendFragment(prev, spoken));
+    if (!spokenTakesKeyboardRef.current) return;
+    setTimeout(() => {
+      const el = ref.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    }, 0);
   }, []);
 
   // Read through a ref so a retry fired minutes later uses the handler that is current, and so the
@@ -1312,8 +1321,8 @@ export function TerminalComposer({
   // field that replaces it (see `attachDictationSink`).
   React.useEffect(() => {
     if (!cardId) return;
-    return attachDictationSink(cardId, append);
-  }, [cardId, append]);
+    return attachDictationSink(cardId, appendSpoken);
+  }, [cardId, appendSpoken]);
 
   const stopVisualiser = React.useCallback(() => {
     if (frameRef.current !== null) {
