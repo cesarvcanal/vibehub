@@ -2952,7 +2952,7 @@ describe("SdkChatView — subagentes", () => {
     expect(within(dialog).getByTestId("sdk-agent-now")).toHaveTextContent("Lendo o reducer");
   });
 
-  it("a aba Tarefa mostra as entregas do subagente marcadas pelo relatório, e o contexto à parte", async () => {
+  async function openFinishedSubagent(prompt: string, report: string): Promise<HTMLElement> {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -2965,11 +2965,17 @@ describe("SdkChatView — subagentes", () => {
     const ask = ws.sent.map((frame) => JSON.parse(frame) as { req?: string; nonce?: string }).find((frame) => frame.req === "agent")!;
     ws.deliver({
       type: "detail", req: "agent", id: "t1", nonce: ask.nonce,
-      data: { found: true, prompt: "Explore o **chat**.\n\n- [ ] Achar o reducer\n- [ ] Medir o render", items: [
-        { kind: "text", at: 3, text: "- [x] Achar o reducer\n- [ ] Medir o render — sem tempo\n\n### O que achei" },
-      ] },
+      data: { found: true, prompt, items: [{ kind: "text", at: 3, text: report }] },
     } as never);
     await within(dialog).findByTestId("sdk-timeline-text");
+    return dialog;
+  }
+
+  it("a aba Tarefa mostra as entregas do subagente marcadas pelo relatório, e o contexto à parte", async () => {
+    const dialog = await openFinishedSubagent(
+      "Explore o **chat**.\n\n- [ ] Achar o reducer\n- [ ] Medir o render",
+      "- [x] Achar o reducer\n- [ ] Medir o render — sem tempo\n\n### O que achei",
+    );
 
     fireEvent.click(within(dialog).getByTestId("sdk-agent-tab-task"));
     const deliverables = within(dialog).getAllByTestId("sdk-agent-deliverable");
@@ -2984,23 +2990,10 @@ describe("SdkChatView — subagentes", () => {
   });
 
   it("a aba Relatório lê como documento: títulos de seção de verdade e a lista de entregas com ícone de feito", async () => {
-    renderSdkChat();
-    const ws = await socket();
-    ws.accept();
-    ws.deliver({ type: "ready" });
-    ws.deliver(agentCall);
-    ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "completed", toolUses: 3 });
-    fireEvent.click(within(screen.getByTestId("sdk-fleet")).getByTestId("sdk-fleet-agent"));
-    const dialog = await screen.findByTestId("sdk-detail");
-    await waitFor(() => expect(ws.sent.some((frame) => (JSON.parse(frame) as { req?: string }).req === "agent")).toBe(true));
-    const ask = ws.sent.map((frame) => JSON.parse(frame) as { req?: string; nonce?: string }).find((frame) => frame.req === "agent")!;
-    ws.deliver({
-      type: "detail", req: "agent", id: "t1", nonce: ask.nonce,
-      data: { found: true, prompt: "Explore", items: [
-        { kind: "text", at: 3, text: "- [x] Achar o reducer\n- [ ] Medir o render\n\n## Veredito: não apto\n\n### 1. O reducer duplica a linha\n\nTexto." },
-      ] },
-    } as never);
-    await within(dialog).findByTestId("sdk-timeline-text");
+    const dialog = await openFinishedSubagent(
+      "Explore",
+      "- [x] Achar o reducer\n- [ ] Medir o render\n\n## Veredito: não apto\n\n### 1. O reducer duplica a linha\n\nTexto.",
+    );
 
     fireEvent.click(within(dialog).getByTestId("sdk-agent-tab-report"));
     const report = within(dialog).getByTestId("sdk-agent-report");
