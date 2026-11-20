@@ -114,6 +114,20 @@ describe("espera entre cards no registry", () => {
     expect(heard).toEqual([[waiting.id]]);
   });
 
+  it("o card que sai de Pausado antes de a pausa valer avisa a espera pronta", async () => {
+    const { registry } = await freshRegistry();
+    const { target, waiting } = await createWaitingPair(registry);
+    await registry.applyOpenTerminal(waiting.id);
+    await registry.updateCard(waiting.id, { column: "paused" });
+    await registry.updateCard(target.id, { column: "done" });
+    await settle();
+    expect(await registry.takeReadyCardWait(waiting.id)).toBeUndefined();
+    const heard = listenWaitsReady(registry);
+    await registry.updateCard(waiting.id, { column: "working" });
+    await settle();
+    expect(heard).toEqual([[waiting.id]]);
+  });
+
   it("tirar uma espera pronta a entrega uma vez só e nunca de um card pausado", async () => {
     const { registry } = await freshRegistry();
     const { target, waiting } = await createWaitingPair(registry);

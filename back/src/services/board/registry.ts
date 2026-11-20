@@ -1183,6 +1183,14 @@ function announceWaitsReady(waitingCardIds: string[]): void {
   queueMicrotask(() => { for (const sink of waitsReadySinks) sink(waitingCardIds); });
 }
 
+function pauseHoldsWake(card: Card): boolean {
+  return !!card.pausedAt || card.column === "paused";
+}
+
+function announceWaitReleasedFromPause(card: Card): void {
+  if (card.waitingFor?.readyAt !== undefined && !pauseHoldsWake(card)) announceWaitsReady([card.id]);
+}
+
 /**
  * Puts the card in the target column at the requested (clamped) position, renumbering both columns.
  * `now` is the instant of the whole mutation: the caller stamps `updatedAt` with the same value, so a
@@ -1208,6 +1216,7 @@ function placeCard(cards: Card[], card: Card, column: BoardColumn, now: number, 
   const parked = (c: BoardColumn) => c === "done" || c === "paused";
   if (parked(column) && !parked(from)) card.parkedAt = now;
   card.column = column;
+  if (from === "paused") announceWaitReleasedFromPause(card);
   const dest = cards
     .filter((c) => c.projectId === card.projectId && c.column === column && c.id !== card.id)
     .sort((a, b) => a.position - b.position);
@@ -2068,7 +2077,7 @@ export async function takeReadyCardWait(cardId: string): Promise<CardWait | unde
   return store.mutate((doc) => {
     const card = doc.cards.find((c) => c.id === cardId);
     const wait = card?.waitingFor;
-    if (!card || wait?.readyAt === undefined || card.pausedAt || card.column === "paused") return undefined;
+    if (!card || wait?.readyAt === undefined || pauseHoldsWake(card)) return undefined;
     card.waitingFor = undefined;
     return wait;
   });
@@ -2411,7 +2420,7 @@ export async function applyOpenTerminal(cardId: string): Promise<Card | undefine
     if (card.pausedAt) {
       card.pausedAt = null;
       changed = true;
-      if (card.waitingFor?.readyAt !== undefined) announceWaitsReady([card.id]);
+      announceWaitReleasedFromPause(card);
     }
     // Same for a hibernated one: the attach recreates the session, so the card is warm again.
     if (card.hibernatedAt) {
