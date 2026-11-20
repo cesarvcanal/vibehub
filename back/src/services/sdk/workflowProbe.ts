@@ -134,10 +134,23 @@ function readAt(file,start,bytes){
   finally{if(fd!==null)try{fs.closeSync(fd)}catch(e){}}
 }
 function statOf(file){try{return fs.statSync(file)}catch(e){return null}}
-function latestAttempts(agents){
-  const lastIdByLabel=new Map();
-  for(const agent of agents)if(agent.label)lastIdByLabel.set(agent.label,agent.id);
-  return agents.filter(function(agent){return !agent.label||lastIdByLabel.get(agent.label)===agent.id});
+function snapshotOf(file){
+  const none={status:'',errorById:new Map(),agentIds:null};
+  try{
+    const st=statOf(file);if(!st||st.size>8388608)return none;
+    const o=JSON.parse(fs.readFileSync(file,'utf8'));
+    if(!o||typeof o.status!=='string')return none;
+    const errorById=new Map(),agentIds=new Set();
+    for(const step of Array.isArray(o.workflowProgress)?o.workflowProgress:[]){
+      if(!step||!str(step.agentId))continue;
+      agentIds.add(step.agentId);
+      if(str(step.error))errorById.set(step.agentId,step.error.slice(0,${AGENT_ERROR_MAX}));
+    }
+    return {status:o.status.slice(0,32),errorById:errorById,agentIds:agentIds.size>0?agentIds:null};
+  }catch(e){return none}
+}
+function agentsOfAttempt(agents,snapshot){
+  return snapshot.agentIds?agents.filter(function(agent){return snapshot.agentIds.has(agent.id)}):agents;
 }
 function linesOf(text,cutHead,cutTail){const l=text.split('\n');if(cutTail)l.pop();if(cutHead)l.shift();return l}
 function parse(l){if(!l)return null;try{const o=JSON.parse(l);return o&&typeof o==='object'?o:null}catch(e){return null}}
@@ -266,26 +279,13 @@ function agentOf(dir,a){
   const out={id:a.id,status:a.status,label:a.label||str(meta.description)||info.task,phase:a.phase||str(meta.workflowPhase),toolCount:info.toolCount};
   if(str(meta.model))out.model=str(meta.model);
   if(a.result!==undefined)out.result=a.result;
+  if(a.error)out.error=a.error;
   if(info.startedAt)out.startedAt=info.startedAt;
   if(info.lastAt)out.lastAt=info.lastAt;
   if(a.status==='done'&&info.lastAt)out.endedAt=info.lastAt;
   if(info.partial)out.toolCountPartial=true;
   if(info.activity)out.activity=info.activity;
   return {agent:out,mtime:info.mtime};
-}
-function snapshotOf(scriptsDir,runId){
-  const none={status:'',errorById:new Map()};
-  try{
-    const f=p.join(p.dirname(scriptsDir),runId+'.json');
-    const st=statOf(f);if(!st||st.size>8388608)return none;
-    const o=JSON.parse(fs.readFileSync(f,'utf8'));
-    if(!o||typeof o.status!=='string')return none;
-    const errorById=new Map();
-    for(const step of Array.isArray(o.workflowProgress)?o.workflowProgress:[]){
-      if(step&&str(step.agentId)&&str(step.error))errorById.set(step.agentId,step.error.slice(0,${AGENT_ERROR_MAX}));
-    }
-    return {status:o.status.slice(0,32),errorById:errorById};
-  }catch(e){return none}
 }
 function main(dir,scriptsDir,settled){
   let names=[];
@@ -316,7 +316,13 @@ function main(dir,scriptsDir,settled){
       }
       agents.set(o.agentId,a);
     }
-    const all=latestAttempts(Array.from(agents.values()));
+    const snapshot=snapshotOf(p.join(p.dirname(scriptsDir),r.runId+'.json'));
+    const all=agentsOfAttempt(Array.from(agents.values()),snapshot);
+    for(const a of all){
+      if(a.status==='done'||!snapshot.errorById.has(a.id))continue;
+      a.status='stopped';
+      a.error=snapshot.errorById.get(a.id);
+    }
     const done=all.filter(function(a){return a.status==='done'}).length;
     const list=[];let first=0,oldest=0;
     for(const a of all.slice(0,${AGENTS_MAX})){
@@ -330,9 +336,7 @@ function main(dir,scriptsDir,settled){
     const script=scriptOf(scriptsDir,r.runId);
     const run={runId:r.runId,name:script.name,phases:script.phases,at:r.at,total:all.length,done:done,agents:list};
     if(first||oldest)run.startedAt=first||oldest;
-    const snapshot=snapshotOf(scriptsDir,r.runId);
     if(snapshot.status)run.outcome=snapshot.status;
-    for(const agent of list)if(agent.status==='stopped'&&snapshot.errorById.has(agent.id))agent.error=snapshot.errorById.get(agent.id);
     out.push(run);
   }
   return out;
@@ -508,7 +512,8 @@ function main(base){
     agents.set(o.agentId,a);
   }
   const list=[],items=[];
-  for(const a of latestAttempts(Array.from(agents.values())).slice(0,${AGENTS_MAX})){
+  const snapshot=snapshotOf(p.join(run.dir,'..','..','..','workflows',run.runId+'.json'));
+  for(const a of agentsOfAttempt(Array.from(agents.values()),snapshot).slice(0,${AGENTS_MAX})){
     const meta=metaOf(run.dir,a.id);
     const talk=talkOf(run.dir,a);
     const agent={id:a.id,label:a.label||str(meta.description),phase:a.phase||str(meta.workflowPhase),status:a.status};
