@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import type { ReviewFleetAgent, ReviewFleetRun } from "@/api/types";
 import { ReviewFleet } from "@/features/board/components/ReviewFleet";
 import { resetLanguage, setLanguage } from "@/i18n";
@@ -29,9 +29,19 @@ describe("ReviewFleet — como a rodada da frota terminou", () => {
     expect(screen.getByTestId("review-fleet-strip")).toHaveTextContent(strip);
   });
 
-  it("o agente que falhou mostra o motivo do harness, não que a rodada terminou antes", () => {
+  it("o agente que falhou mostra o motivo do harness num aviso com título, não que a frota parou antes", () => {
     render(<ReviewFleet round={1} runs={[fleetRun({ outcome: "failed" })]} />);
-    expect(screen.getByTestId("fleet-chat-stopped")).toHaveTextContent(`Falhou: ${USAGE_LIMIT}`);
-    expect(screen.queryByText("Parou sem responder: a rodada terminou antes.")).toBeNull();
+    const notice = within(screen.getByTestId("fleet-chat-stopped")).getByRole("note");
+    expect(within(notice).getByText("Falhou")).toBeInTheDocument();
+    expect(within(notice).getByText(USAGE_LIMIT)).toBeInTheDocument();
+    expect(screen.queryByText(/a frota parou antes/)).toBeNull();
+  });
+
+  it("o agente que a frota largou sem motivo diz que ela parou antes dele, sem culpar a rodada", () => {
+    const abandonedJudge: ReviewFleetAgent = { id: "a2", label: "juiz", phase: "Julgamento", status: "stopped" };
+    render(<ReviewFleet round={1} runs={[fleetRun({ outcome: "completed", agents: [fleetAgent({}), abandonedJudge] })]} />);
+    const notice = within(screen.getByTestId("fleet-chat-stopped")).getByRole("note");
+    expect(within(notice).getByText("Não respondeu")).toBeInTheDocument();
+    expect(notice).toHaveTextContent("A frota parou antes de ele terminar (reinício do painel ou rodada encerrada).");
   });
 });

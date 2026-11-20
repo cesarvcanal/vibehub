@@ -1,5 +1,5 @@
 import * as React from "react";
-import { BookCheck, Bot, Braces, Bug, ChevronRight, FlaskConical, Gauge, Scale, ShieldCheck, Telescope, type LucideIcon } from "lucide-react";
+import { AlertCircle, BookCheck, Bot, Braces, Bug, ChevronRight, FlaskConical, Gauge, Scale, ShieldCheck, Telescope, type LucideIcon } from "lucide-react";
 import type { AnalysisDimension } from "@/api/types";
 import { Markdown } from "@/features/board/components/ChatView";
 import { TypingDots } from "@/features/board/components/PeerTypingIndicator";
@@ -151,11 +151,22 @@ function ChatBubble({
           </span>
         </p>
       ) : null}
-      {entry.kind === "stopped" ? (
-        <p className="text-destructive [overflow-wrap:anywhere]">{entry.error ? t("review.fleet.failed", { error: entry.error }) : t("review.fleet.stopped")}</p>
-      ) : null}
+      {entry.kind === "stopped" ? <StoppedNotice error={entry.error} /> : null}
       {children}
     </article>
+  );
+}
+
+function StoppedNotice({ error }: { error: string | undefined }) {
+  const t = useT();
+  return (
+    <div role="note" className="mt-1 flex min-w-0 items-start gap-1.5 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1.5">
+      <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" aria-hidden="true" />
+      <div className="min-w-0">
+        <p className="font-medium text-destructive">{t(error ? "review.fleet.failed" : "review.fleet.stoppedTitle")}</p>
+        <p className="text-muted-foreground [overflow-wrap:anywhere]">{error ?? t("review.fleet.stopped")}</p>
+      </div>
+    </div>
   );
 }
 
