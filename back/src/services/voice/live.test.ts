@@ -14,6 +14,10 @@ describe("cardInstructions — o que a voz do card é mandada fazer", () => {
     expect(instructions).toContain("Só diga que algo foi feito quando o resultado da tarefa disser");
   });
 
+  it("a voz nunca manda a pessoa conferir o chat: ela conta, inclusive as perguntas com opções do agente", () => {
+    expect(instructions).toContain("Nunca mande a pessoa conferir ou ler o chat");
+  });
+
   it("a voz guarda as perguntas e ordens pendentes da chamada e não deixa nenhuma cair", () => {
     expect(instructions).toContain("Guarde as perguntas e ordens da pessoa que ainda não tiveram resultado");
   });

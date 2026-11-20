@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { SdkRow } from "@/features/board/lib/sdkChat";
 import type { VoiceTurn } from "./voiceTurns";
-import { DELEGATION_STARTED, DELEGATION_TRANSCRIPT_MAX_CHARS, delegationReply, delegationRequest } from "./voiceDelegation";
+import {
+  DELEGATION_NOT_SENT,
+  DELEGATION_SILENT,
+  DELEGATION_SLOW,
+  DELEGATION_STARTED,
+  DELEGATION_TRANSCRIPT_MAX_CHARS,
+  delegationReply,
+  delegationRequest,
+} from "./voiceDelegation";
 
 const turn = (role: VoiceTurn["role"], text: string, n: number): VoiceTurn => ({ vid: `vc-${role}${n}`, role, text, at: n, final: true });
 const user = (id: string, text: string): SdkRow => ({ kind: "user", id, text, state: "sent" });
@@ -47,6 +55,17 @@ describe("o que o agente e a voz ouvem sobre um pedido urgente", () => {
     expect(DELEGATION_STARTED).not.toContain("trabalhando nele");
     expect(DELEGATION_STARTED).toContain("ainda não foi feito");
     expect(DELEGATION_STARTED).toContain("não narre");
+  });
+});
+
+describe("a voz nunca manda a pessoa ao chat", () => {
+  it.each([
+    ["DELEGATION_STARTED", DELEGATION_STARTED],
+    ["DELEGATION_SLOW", DELEGATION_SLOW],
+    ["DELEGATION_NOT_SENT", DELEGATION_NOT_SENT],
+    ["DELEGATION_SILENT", DELEGATION_SILENT],
+  ])("%s não manda a pessoa conferir, ver ou digitar no chat", (_name, text) => {
+    expect(text).not.toMatch(/no chat/);
   });
 });
 
