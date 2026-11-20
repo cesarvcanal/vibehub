@@ -994,6 +994,9 @@ describe("ReviewPanel — merge", () => {
     }));
     await loaded();
     expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByText("IA trazendo a base")).toBeInTheDocument();
+    expect(screen.queryByText("IA corrigindo os testes")).toBeNull();
+    expect(screen.getByText("Revisão aprovada; o PR está em conflito com a base e a IA do autor está trazendo a base para a branch.")).toBeInTheDocument();
     expect(screen.getByText("O PR está em conflito com dev: a IA do autor está trazendo dev para a branch, e a revisão confere o que entrar antes do merge.")).toBeInTheDocument();
     expect(screen.queryByText("Ver saída dos testes")).toBeNull();
     expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeDisabled();

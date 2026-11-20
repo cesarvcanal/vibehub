@@ -234,6 +234,17 @@ export const ProntoPraMerge: Story = {
   args: { review: READY, actions: { ...NO_ACTIONS, merge: true, cancel: true, request: true } },
 };
 
+export const ProntoEmConflitoComABase: Story = {
+  name: "5b. Pronto, mas o PR entrou em conflito com a base",
+  args: {
+    review: {
+      ...READY,
+      mergeGate: { sha: "a".repeat(40), state: "failed", output: "o PR tem conflito com dev: o merge commit não sai limpo", at: 1, failures: 1, conflict: true },
+    },
+    actions: { ...NO_ACTIONS, merge: true, cancel: true, request: true },
+  },
+};
+
 export const IaTrabalhandoDepoisDoPronto: Story = {
   name: "6. Pronto, mas a IA do autor está trabalhando no PR",
   args: { review: READY, working: { author: true, reviewer: false }, actions: { ...NO_ACTIONS, merge: true, cancel: true } },

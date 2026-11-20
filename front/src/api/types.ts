@@ -777,7 +777,7 @@ export interface ReviewSummary {
    * A `ready` review whose merge gate on the approved commit is still running, failed while the author's
    * AI fixes it (`fixing`: it reruns on its own), or failed and waits for a person: not "ready to merge".
    */
-  mergeGateState?: "running" | "fixing" | "failed";
+  mergeGateState?: "running" | "fixing" | "failed" | "conflict";
 }
 
 export interface FindingProof {
