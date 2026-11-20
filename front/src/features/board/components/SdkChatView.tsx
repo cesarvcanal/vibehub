@@ -1342,6 +1342,11 @@ export function SdkChatView({
       dispatchTurn(text, true);
       setSentDuringCall(true);
     },
+    answerQuestion: (questionId, answers) => {
+      if (!answerUserQuestion(questionId, answers)) return false;
+      setSentDuringCall(true);
+      return true;
+    },
   });
   /** The thread as drawn: the saved rows plus the call's turns still being spoken or saved. */
   const displayRows = React.useMemo(() => mergeLiveVoiceTurns(state.rows, call.turns, selfOrigin), [state.rows, call.turns, selfOrigin]);

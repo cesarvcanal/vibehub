@@ -102,4 +102,16 @@ describe("delegationReply", () => {
   it("a turn that ends with nothing said is told as such", () => {
     expect(delegationReply([user("u1", request)], { request }, false)).toEqual({ state: "silent", answers: [] });
   });
+
+  it("uma escolha dada por voz a uma pergunta do agente conta a partir da pergunta, não de uma mensagem", () => {
+    const rows: SdkRow[] = [
+      user("u1", "organiza as metas"),
+      answer("a0", "Vou perguntar onde guardar."),
+      { kind: "question", id: "q_1", questions: [{ question: "Onde?", options: [{ label: "Planilha" }] }], outcome: "answered" },
+      answer("a1", "Feito na planilha."),
+    ];
+    expect(delegationReply(rows, { questionId: "q_1" }, true)).toEqual({ state: "waiting", answers: ["Feito na planilha."] });
+    expect(delegationReply(rows, { questionId: "q_1" }, false)).toEqual({ state: "answered", text: "Feito na planilha.", answers: ["Feito na planilha."] });
+    expect(delegationReply(rows, { questionId: "q_2" }, false)).toEqual({ state: "waiting", answers: [] });
+  });
 });

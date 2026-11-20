@@ -24,9 +24,10 @@ function setup(sendUrgentToAgent: (text: string) => void) {
     },
     answerDelegation: vi.fn(() => true),
     appendContext: vi.fn(() => true),
+    announceContext: vi.fn(() => true),
   };
   const view = renderHook((props: Partial<UseVoiceDelegationOptions>) =>
-    useVoiceDelegation({ call, rows: [], turnRunning: false, sendUrgentToAgent, ...props }),
+    useVoiceDelegation({ call, rows: [], turnRunning: false, sendUrgentToAgent, answerQuestion: () => true, ...props }),
   );
   return { call, view, delegate: (id: string, turns: VoiceTurn[]) => act(() => listener(id, turns)) };
 }
@@ -137,5 +138,45 @@ describe("useVoiceDelegation", () => {
     expect(update).toBe("result");
     expect(result).toContain("interrompido");
     expect(result).toContain("peça de novo");
+  });
+
+  describe("com uma pergunta do agente aberta", () => {
+    const question: SdkRow = {
+      kind: "question",
+      id: "q_1",
+      questions: [{ question: "Qual caminho?", options: [{ label: "A" }, { label: "B" }] }],
+      outcome: "pending",
+    };
+
+    it("uma escolha que o chat não consegue entregar é dita como não entregue, na hora", () => {
+      const send = vi.fn();
+      const { call, view, delegate } = setup(send);
+      const answerQuestion = vi.fn(() => false);
+      view.rerender({ rows: [question], turnRunning: true, answerQuestion });
+      delegate("d5", said("a B"));
+      expect(answerQuestion).toHaveBeenCalledWith("q_1", [{ selected: [expect.stringContaining("a B")] }]);
+      expect(send).not.toHaveBeenCalled();
+      expect(call.answerDelegation.mock.calls).toEqual([["d5", DELEGATION_NOT_SENT, "result"]]);
+    });
+
+    it("nada ouvido não responde a pergunta por ninguém", () => {
+      const { call, view, delegate } = setup(vi.fn());
+      const answerQuestion = vi.fn(() => true);
+      view.rerender({ rows: [question], turnRunning: true, answerQuestion });
+      delegate("d6", []);
+      expect(answerQuestion).not.toHaveBeenCalled();
+      expect(call.answerDelegation.mock.calls).toEqual([["d6", DELEGATION_UNHEARD, "result"]]);
+    });
+
+    it("uma chamada nova lê de novo a pergunta que continua aberta", () => {
+      const { call, view } = setup(vi.fn());
+      view.rerender({ rows: [question], turnRunning: true });
+      expect(call.announceContext).toHaveBeenCalledTimes(1);
+      call.snap = { ...call.snap, state: "idle" };
+      view.rerender({ rows: [question], turnRunning: true });
+      call.snap = { ...call.snap, state: "live" };
+      view.rerender({ rows: [question], turnRunning: true });
+      expect(call.announceContext).toHaveBeenCalledTimes(2);
+    });
   });
 });

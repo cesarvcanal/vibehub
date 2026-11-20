@@ -1,5 +1,5 @@
 import * as React from "react";
-import type { SdkRow } from "@/features/board/lib/sdkChat";
+import type { SdkQuestionAnswer, SdkRow } from "@/features/board/lib/sdkChat";
 import type { VoiceCall } from "./useVoiceCall";
 import { agentContext } from "./voiceContext";
 import {
@@ -14,6 +14,8 @@ import {
   isAgentAnswer,
   type DelegationAnchor,
 } from "./voiceDelegation";
+import { QUESTION_ANSWER_SENT, openQuestion, questionForVoice, voiceAnswers, type OpenQuestion } from "./voiceQuestion";
+import type { VoiceTurn } from "./voiceTurns";
 
 /**
  * THE VOICE AND THE CARD'S AGENT, during a call in the chat — the person codes by talking.
@@ -33,18 +35,23 @@ interface PendingDelegation {
 }
 
 export interface UseVoiceDelegationOptions {
-  call: Pick<VoiceCall, "snap" | "onDelegation" | "answerDelegation" | "appendContext">;
+  call: Pick<VoiceCall, "snap" | "onDelegation" | "answerDelegation" | "appendContext" | "announceContext">;
   rows: SdkRow[];
   /** A turn of the agent is running or about to (a message just went). */
   turnRunning: boolean;
   sendUrgentToAgent: (text: string) => void;
+  answerQuestion: (questionId: string, answers: SdkQuestionAnswer[]) => boolean;
 }
 
-export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent }: UseVoiceDelegationOptions): void {
-  const { onDelegation, answerDelegation, appendContext } = call;
+export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent, answerQuestion }: UseVoiceDelegationOptions): void {
+  const { onDelegation, answerDelegation, appendContext, announceContext } = call;
   const live = call.snap.state === "live";
   const sendRef = React.useRef(sendUrgentToAgent);
   sendRef.current = sendUrgentToAgent;
+  const answerQuestionRef = React.useRef(answerQuestion);
+  answerQuestionRef.current = answerQuestion;
+  const rowsRef = React.useRef(rows);
+  rowsRef.current = rows;
   // A ref, not state: a result must go once, and two effect runs before a re-render would send it twice.
   const pending = React.useRef<PendingDelegation[]>([]);
   // Bumped when a delegation is taken, so the effect below looks at the chat again.
@@ -53,20 +60,15 @@ export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent 
   React.useEffect(
     () =>
       onDelegation((id, turns) => {
-        const request = delegationRequest(turns);
-        if (!request) {
-          answerDelegation(id, DELEGATION_UNHEARD, "result");
+        const question = openQuestion(rowsRef.current);
+        const handOver = question ? answerOpenQuestion(answerQuestionRef.current, question, turns) : sendRequest(sendRef.current, turns);
+        if (handOver.state !== "sent") {
+          answerDelegation(id, handOver.state === "unheard" ? DELEGATION_UNHEARD : DELEGATION_NOT_SENT, "result");
           return;
         }
-        try {
-          sendRef.current(request);
-        } catch {
-          answerDelegation(id, DELEGATION_NOT_SENT, "result");
-          return;
-        }
-        answerDelegation(id, DELEGATION_STARTED, "progress");
+        answerDelegation(id, question ? QUESTION_ANSWER_SENT : DELEGATION_STARTED, "progress");
         const slowTimer = setTimeout(() => answerDelegation(id, DELEGATION_SLOW, "progress"), DELEGATION_SLOW_MS);
-        pending.current.push({ id, anchor: { request }, slowTimer });
+        pending.current.push({ id, anchor: handOver.anchor, slowTimer });
         setTaken((n) => n + 1);
       }),
     [onDelegation, answerDelegation],
@@ -80,9 +82,11 @@ export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent 
   );
 
   const told = React.useRef<Set<string> | null>(null);
+  const readQuestions = React.useRef(new Set<string>());
   React.useEffect(() => {
     if (!live) {
       told.current = null;
+      readQuestions.current.clear();
       for (const { slowTimer } of pending.current) clearTimeout(slowTimer);
       pending.current = [];
       return;
@@ -104,10 +108,41 @@ export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent 
       for (const text of reply.answers) known.add(text);
     }
     pending.current = stillWaiting;
+    const question = openQuestion(rows);
+    if (question && !readQuestions.current.has(question.id)) {
+      const spokenQuestion = questionForVoice(question.questions);
+      const asking = pending.current.at(-1);
+      const read = asking ? answerDelegation(asking.id, spokenQuestion, "result") : announceContext(spokenQuestion);
+      if (read) readQuestions.current.add(question.id);
+      if (read && asking) {
+        clearTimeout(asking.slowTimer);
+        pending.current = pending.current.slice(0, -1);
+        for (const text of delegationReply(rows, asking.anchor, true).answers) known.add(text);
+      }
+    }
     for (const row of rows) {
       if (!isAgentAnswer(row) || known.has(row.text) || held.has(row.text)) continue;
       known.add(row.text);
       appendContext(agentContext(row.text));
     }
-  }, [rows, turnRunning, live, taken, answerDelegation, appendContext]);
+  }, [rows, turnRunning, live, taken, answerDelegation, appendContext, announceContext]);
+}
+
+type HandOver = { state: "sent"; anchor: DelegationAnchor } | { state: "unheard" } | { state: "not_sent" };
+
+function sendRequest(send: UseVoiceDelegationOptions["sendUrgentToAgent"], turns: VoiceTurn[]): HandOver {
+  const request = delegationRequest(turns);
+  if (!request) return { state: "unheard" };
+  try {
+    send(request);
+  } catch {
+    return { state: "not_sent" };
+  }
+  return { state: "sent", anchor: { request } };
+}
+
+function answerOpenQuestion(answer: UseVoiceDelegationOptions["answerQuestion"], question: OpenQuestion, turns: VoiceTurn[]): HandOver {
+  const answers = voiceAnswers(question.questions, turns);
+  if (!answers) return { state: "unheard" };
+  return answer(question.id, answers) ? { state: "sent", anchor: { questionId: question.id } } : { state: "not_sent" };
 }

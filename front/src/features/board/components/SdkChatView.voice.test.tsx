@@ -44,7 +44,7 @@ class FakeSocket {
   constructor(public url: string) {
     FakeSocket.instances.push(this);
   }
-  get frames(): { type: string; text?: string }[] {
+  get frames(): { type: string; text?: string; id?: string; answers?: { selected: string[] }[] }[] {
     return this.rawSent.map((raw) => JSON.parse(raw)).filter((f) => f.type !== "typing");
   }
   send(data: string): void {
@@ -265,16 +265,20 @@ describe("a voice call inside the card's chat", () => {
     expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument();
   });
 
-  it("com o card parado numa pergunta de múltipla escolha, o pedido da voz sai urgente e fecha a pergunta em vez de esperar a resposta dela", async () => {
+  it("com o card parado numa pergunta de múltipla escolha desde antes da chamada, a voz lê a pergunta e o pedido dela vai como resposta, sem fechar a pergunta", async () => {
     const { ws } = await openChat();
     ws.deliver({ type: "user_question", id: "q_1", questions: [{ question: "Qual caminho?", header: "Caminho", options: [{ label: "A", description: "a" }, { label: "B", description: "b" }] }] });
     await startCall();
+    await waitFor(() =>
+      expect(channel().sent).toContainEqual(expect.objectContaining({ type: "session.commentary.append", delegation_id: null, content: expect.stringContaining("Qual caminho?") })),
+    );
     act(() => channel().emit({ type: "session.input_transcript.delta", delta: "abre um card pra esse bug e delega", start_ms: 0, end_ms: 900 }));
     act(() => channel().emit({ type: "session.delegation.created", offset_ms: 1000, delegation: { id: "item_q1", type: "delegation", target: "client" } }));
 
     await waitFor(() =>
-      expect(ws.frames).toContainEqual(expect.objectContaining({ type: "user", now: true, text: expect.stringContaining("abre um card pra esse bug") })),
+      expect(ws.frames).toContainEqual({ type: "question_answer", id: "q_1", answers: [{ selected: [expect.stringContaining("abre um card pra esse bug")] }] }),
     );
+    expect(ws.frames.filter((frame) => frame.type === "user")).toEqual([]);
   });
 
   it("sem conexão, a voz ouve na hora que o pedido não foi entregue, e nada fica preso na fila", async () => {
@@ -371,7 +375,7 @@ describe("a pergunta com opções do agente durante a chamada", () => {
       },
     ],
   };
-  const commentary = () => channel().sent.filter((e) => e.type === "session.commentary.append");
+  const commentary = () => channel().sent.filter((event) => event.type === "session.commentary.append");
   const sayAndDelegate = (said: string, delegationId: string) => {
     act(() => channel().emit({ type: "session.input_transcript.delta", delta: said, start_ms: 0, end_ms: 500 }));
     act(() => channel().emit({ type: "session.delegation.created", offset_ms: 600, delegation: { id: delegationId, type: "delegation", target: "client" } }));
@@ -395,7 +399,7 @@ describe("a pergunta com opções do agente durante a chamada", () => {
     const { ws } = await openChat();
     await startCall();
     sayAndDelegate("organiza as metas", "item_d1");
-    await waitFor(() => expect(ws.frames.some((f) => f.type === "user" && f.text?.includes("organiza as metas"))).toBe(true));
+    await waitFor(() => expect(ws.frames.some((frame) => frame.type === "user" && frame.text?.includes("organiza as metas"))).toBe(true));
     ws.deliver(QUESTION);
     await waitFor(() => expect(commentary()).toEqual([expect.objectContaining({ delegation_id: "item_d1", content: expect.stringContaining("Onde guardo as metas?") })]));
   });
@@ -408,12 +412,11 @@ describe("a pergunta com opções do agente durante a chamada", () => {
     await waitFor(() => expect(commentary()).toHaveLength(1));
 
     sayAndDelegate("pode ser o banco novo", "item_d2");
-    await waitFor(() => expect(ws.rawSent.map((raw) => JSON.parse(raw)).some((f) => f.type === "question_answer")).toBe(true));
-    const sent = ws.rawSent.map((raw) => JSON.parse(raw) as { type: string; id?: string; answers?: { selected: string[] }[]; now?: boolean });
-    const answer = sent.find((f) => f.type === "question_answer")!;
+    await waitFor(() => expect(ws.frames.some((frame) => frame.type === "question_answer")).toBe(true));
+    const answer = ws.frames.find((frame) => frame.type === "question_answer")!;
     expect(answer.id).toBe("q_1_100");
     expect(answer.answers).toEqual([{ selected: [expect.stringContaining("pode ser o banco novo")] }]);
-    expect(sent.filter((f) => f.type === "user")).toEqual([]);
+    expect(ws.frames.filter((frame) => frame.type === "user")).toEqual([]);
     expect(channel().sent).toContainEqual(expect.objectContaining({ type: "session.thinking.append", delegation_id: "item_d2" }));
 
     ws.deliver({ type: "question_result", id: "q_1_100", answers: answer.answers });
@@ -437,7 +440,6 @@ describe("a pergunta com opções do agente durante a chamada", () => {
     again.deliver({ type: "user", text: "decide a planilha", at: 1 });
     again.deliver(QUESTION);
     again.deliver({ type: "ready" });
-    await new Promise((resolve) => setTimeout(resolve, 100));
     expect(commentary()).toHaveLength(1);
   });
 });
