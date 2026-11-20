@@ -37,6 +37,15 @@ export interface AnalysisReport {
   updatedAt: number;
 }
 
+export interface AnalysisMergeRefusal {
+  cardId: string;
+  analysedSha: string;
+  reason: string;
+  output?: string;
+  by: string;
+  at: number;
+}
+
 export type DimensionHealth = "ok" | "attention" | "problem" | "not_run" | "skipped";
 
 function isDimensionAccountedFor(run: DimensionRun | undefined): run is DimensionRun {

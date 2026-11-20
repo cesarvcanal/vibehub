@@ -103,6 +103,38 @@ describe("deliverCard — card de análise de PR", () => {
     expect(deliver).toHaveBeenCalledWith(analysis.id, expect.objectContaining({ authorized: true }));
     expect(out).toMatchObject({ merged: true });
   });
+
+  it("merge do próprio card de análise barrado pelo gate fica gravado no commit analisado, para o painel avisar antes do clique", async () => {
+    const { deliverCard, analysis } = await analysisCard();
+    const analysisStore = await import("./analysisStore.js");
+    const analysedSha = "e".repeat(40);
+    await analysisStore.saveAnalysis({
+      cardId: analysis.id, prUrl: PR, prNumber: 7, analysedSha, stage: "done", summary: "s",
+      dimensions: [], findings: [], refutedCount: 0, updatedAt: 1,
+    }, () => undefined);
+    deliverAnswer = { prUrl: PR, merged: false, reason: "gate", branch: "dev", cardBranch: "feat-7", output: "npm test estourou 585 s" };
+    await deliverCard(analysis.id, { branch: "dev", authorized: true, by: "mussa", from: analysis.id });
+    expect(await analysisStore.getAnalysisMergeRefusal(analysis.id)).toMatchObject({
+      analysedSha, reason: "gate", output: "npm test estourou 585 s", by: "mussa",
+    });
+  });
+
+  it("com um merge da análise já rodando, a ordem do próprio card não dispara outro deliver", async () => {
+    const { deliverCard, analysis } = await analysisCard();
+    const firstDeliver = Promise.withResolvers<void>();
+    deliver.mockImplementationOnce(async () => {
+      await firstDeliver.promise;
+      return deliverAnswer;
+    });
+    const first = deliverCard(analysis.id, { branch: "dev", authorized: true, by: "mussa", from: analysis.id });
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+    const second = await deliverCard(analysis.id, { branch: "dev", authorized: true, by: "mussa", from: analysis.id });
+    firstDeliver.resolve();
+    await first;
+    expect(second).toMatchObject({ merged: false, reason: "merge_failed" });
+    expect(second.output).toContain("merge já em andamento");
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("deliverCard — o vibehub_deliver com revisão de PR ativa", () => {

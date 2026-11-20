@@ -3,6 +3,7 @@ import { getCard, type Card } from "../board/registry.js";
 import { deliver, parsePrUrl, type DeliverOpts, type DeliverResult } from "../maestro/deliver.js";
 import { logger } from "../../utils/logger.js";
 import { canMergeReview, cardsToConclude, isReviewClosed, type Review } from "./model.js";
+import { deliverOwnAnalysis } from "./analysisMerge.js";
 import { mergeReviewedPr, type ReviewMergeOutcome } from "./merge.js";
 import { recordReviewOrders } from "./orchestrator.js";
 import { activeReviewFor, getReview, reviewByReviewerCard } from "./store.js";
@@ -67,6 +68,7 @@ async function deliverUnderReview(cardId: string, opts: DeliverCardOpts): Promis
     const card = await getCard(cardId);
     if (card?.reviewOf) return await mergeFromReviewerCard(card, opts);
     if (card?.pushBranch !== undefined && opts.from !== cardId) return plain(await deliverAnalysisWithoutMerge(cardId, opts));
+    if (card?.pushBranch !== undefined) return plain(await deliverOwnAnalysis(cardId, opts));
   }
   const review = opts.authorized === true ? await activeReviewFor(cardId) : undefined;
   if (!review) return plain(await deliver(cardId, opts));

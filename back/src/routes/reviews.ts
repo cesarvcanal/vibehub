@@ -13,8 +13,10 @@ import { isBusy } from "../services/maestro/maestro.js";
 import { watchCardFleet } from "../services/sdk/manager.js";
 import { activeReviewFor, getReview, listReviewsFollowedBy, listReviewsForCards, newest } from "../services/review/store.js";
 import { canMergeReview, fleetRunForReaders, isReviewClosed, type Review } from "../services/review/model.js";
-import { getAnalysis } from "../services/review/analysisStore.js";
-import { analysedPr, isAnalysisMergeable, mergeAnalysedPr } from "../services/review/analysisMerge.js";
+import { getAnalysis, getAnalysisMergeRefusal } from "../services/review/analysisStore.js";
+import {
+  analysedPr, currentMergeRefusal, isAnalysisMergeable, isAnalysisMerging, mergeAnalysedPr,
+} from "../services/review/analysisMerge.js";
 import { readAnalysisConversation } from "../services/review/analysisConversation.js";
 import { ANALYSIS_DIMENSIONS, analysisVerdict, dimensionHealth, uncheckedDimensions } from "../services/review/analysisModel.js";
 import { sendError, type ErrorStatusRule } from "./httpError.js";
@@ -126,9 +128,12 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
     const card = await registry.getCard(req.params.id);
     const pr = card && analysedPr(card, analysis);
     const canMerge = requestCardLevel(req) === "work" && pr !== undefined && isAnalysisMergeable(analysis, pr);
+    const lastMergeRefusal = currentMergeRefusal(analysis, await getAnalysisMergeRefusal(req.params.id));
     return await reply.send({
       analysis, health, verdict: analysisVerdict(analysis), uncheckedDimensions: uncheckedDimensions(analysis), canMerge,
+      merging: isAnalysisMerging(req.params.id),
       ...(pr?.mergedAt !== undefined ? { mergedAt: pr.mergedAt } : {}),
+      ...(lastMergeRefusal ? { lastMergeRefusal } : {}),
     });
   });
 
