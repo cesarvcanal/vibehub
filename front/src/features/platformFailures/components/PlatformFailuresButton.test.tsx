@@ -95,22 +95,13 @@ describe("PlatformFailuresButton", () => {
     expect(screen.getByText("logo após um stop do usuário: write after end")).toBeTruthy();
   });
 
-  it("mostra a contagem, anuncia a falha nova uma vez e abre o relato", async () => {
+  it("mostra a contagem e abre o relato, sem anunciar: o aviso é do PlatformFailuresAnnouncer, montado em qualquer tela", async () => {
     renderApp(<PlatformFailuresButton />);
     const indicator = await screen.findByRole("button", { name: /1/ });
-    await waitFor(() => expect(toastCall).toHaveBeenCalledTimes(1));
     await userEvent.click(indicator);
     expect(await screen.findByText("logo após um stop do usuário: write after end")).toBeTruthy();
     expect(screen.getByText(/write after end/, { selector: "pre" })).toBeTruthy();
-  });
-
-  it("não anuncia de novo a mesma falha quando o board é montado outra vez na sessão", async () => {
-    const firstBoard = renderApp(<PlatformFailuresButton />);
-    await waitFor(() => expect(toastCall).toHaveBeenCalledTimes(1));
-    firstBoard.unmount();
-    renderApp(<PlatformFailuresButton />);
-    await screen.findByRole("button", { name: /1/ });
-    expect(toastCall).toHaveBeenCalledTimes(1);
+    expect(toastCall).not.toHaveBeenCalled();
   });
 
   it("investigar manda o pedido do relato aberto", async () => {
@@ -142,12 +133,6 @@ describe("PlatformFailuresButton", () => {
     renderApp(<PlatformFailuresButton />);
     await userEvent.click(await screen.findByRole("button", { name: /1/ }));
     expect(await screen.findByText(/erro interno|internal error/i)).toBeTruthy();
-  });
-
-  it("o aviso de uma falha nova diz o que aconteceu em linguagem leiga", async () => {
-    setServedFailures([{ ...FAILURE, explanation: "O medidor de uso mostrou a conta Claude anterior." }]);
-    renderApp(<PlatformFailuresButton />);
-    await waitFor(() => expect(toastCall).toHaveBeenCalledWith(expect.stringContaining("O medidor de uso mostrou a conta Claude anterior."), expect.anything()));
   });
 
   it("'não é bug' manda o descarte", async () => {
