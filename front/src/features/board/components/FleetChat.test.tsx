@@ -46,7 +46,7 @@ describe("FleetChat", () => {
       runId: "wf_1", name: "revisao", phases: [], total: 2, done: 0, at: 1, finished: false,
       agents: [fleetAgent({ id: "a1", label: "juiz", status: "running" }), fleetAgent({ id: "a2", label: "contexto", status: "running" })],
     };
-    render(<FleetChat entries={reviewFleetChat(run)} label="Conversa dos agentes" agentDetail={(agentId) => <p>passos de {agentId}</p>} />);
+    render(<FleetChat entries={reviewFleetChat(run)} label="Conversa dos agentes" agentDetail={({ agentId }) => <p>passos de {agentId}</p>} />);
     const [judge, context] = screen.getAllByRole("button", { expanded: false });
     act(() => {
       judge!.click();

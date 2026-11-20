@@ -1,13 +1,13 @@
 import type * as React from "react";
 import { CheckCircle2, Loader2 } from "lucide-react";
 import type { ReviewFleetRun } from "@/api/types";
-import { FleetChat } from "@/features/board/components/FleetChat";
+import { FleetChat, type FleetAgentState } from "@/features/board/components/FleetChat";
 import { PhasePills } from "@/features/board/components/WorkflowPanel";
 import { reviewFleetChat } from "@/features/board/lib/fleetChat";
 import { phasePills } from "@/features/board/lib/workflowPanel";
 import { useT } from "@/i18n";
 
-export type RunAgentDetail = (runId: string, agentId: string, running: boolean) => React.ReactNode;
+export type RunAgentDetail = (runId: string, agent: FleetAgentState) => React.ReactNode;
 
 export function ReviewFleet({ round, runs, agentDetail }: { round: number; runs: ReviewFleetRun[]; agentDetail?: RunAgentDetail }) {
   const t = useT();
@@ -27,7 +27,7 @@ function FleetRun({ run, agentDetail }: { run: ReviewFleetRun; agentDetail: RunA
         <FleetChat
           entries={entries}
           label={t("review.fleet.conversation")}
-          agentDetail={agentDetail && ((agentId, running) => agentDetail(run.runId, agentId, running))}
+          agentDetail={agentDetail && ((agent) => agentDetail(run.runId, agent))}
         />
       ) : null}
       <div data-testid="review-fleet-strip" className="min-w-0 space-y-1.5 rounded-md border border-sky-500/25 bg-sky-500/5 px-2.5 py-2 text-xs">

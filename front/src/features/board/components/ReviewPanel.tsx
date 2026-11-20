@@ -228,7 +228,7 @@ export function ReviewPanel({ cardId, prNumber: pr, onClose }: {
       review={review}
       working={working}
       fleet={fleet}
-      agentDetail={(runId, agentId, running) => <ReviewAgentFeed agent={{ cardId, pr, runId, agentId }} running={running} />}
+      agentDetail={(runId, agent) => <ReviewAgentFeed agent={{ ...agent, cardId, pr, runId }} />}
       nameOf={nameOf}
       actions={reviewActions(review, user ? { id: user.id, isOwner } : null)}
       busy={act.isPending}

@@ -49,11 +49,23 @@ function agentTone(role: AgentRole): AgentTone {
   }
 }
 
+function fleetAgentState(entry: FleetChatEntry): FleetAgentState {
+  const agentId = entry.speaker.agentId;
+  if (entry.kind === "message" && entry.at !== undefined) return { agentId, running: false, endedAt: entry.at };
+  return { agentId, running: entry.kind === "typing" };
+}
+
 function chatEntryDomId(entryId: string): string {
   return `fleet-chat-${entryId}`;
 }
 
-type AgentDetail = (agentId: string, running: boolean) => React.ReactNode;
+export interface FleetAgentState {
+  agentId: string;
+  running: boolean;
+  endedAt?: number;
+}
+
+type AgentDetail = (agent: FleetAgentState) => React.ReactNode;
 
 export function FleetChat({ entries, label, agentDetail }: { entries: FleetChatEntry[]; label: string; agentDetail?: AgentDetail }) {
   const [openEntryIds, setOpenEntryIds] = React.useState<ReadonlySet<string>>(new Set());
@@ -78,7 +90,7 @@ export function FleetChat({ entries, label, agentDetail }: { entries: FleetChatE
               detailOpen={detailOpen}
               onToggleDetail={() => toggleEntry(entry.id)}
             >
-              {agentDetail && detailOpen ? agentDetail(entry.speaker.agentId, entry.kind === "typing") : null}
+              {agentDetail && detailOpen ? agentDetail(fleetAgentState(entry)) : null}
             </ChatBubble>
           </li>
         );

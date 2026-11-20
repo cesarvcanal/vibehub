@@ -221,7 +221,7 @@ describe("ReviewPanel — o que mostra", () => {
     const served = get.getMockImplementation()!;
     const fleet = [{
       runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Contexto"], total: 1, done: 0, at: 5, finished: false,
-      agents: [{ id: "a01f", label: "contexto", phase: "Contexto", model: "opus", status: "running" as const, toolCount: 1 }],
+      agents: [{ id: "a01f", label: "contexto", phase: "Contexto", model: "opus", status: "running" as const, }],
     }];
     const steps = [{ at: 1, kind: "tool", tool: "Read", target: "back/src/auth.ts" }, { at: 2, kind: "text", text: "Lendo o fluxo de login." }];
     get.mockImplementation(async (url: string) => {
@@ -247,7 +247,7 @@ describe("ReviewPanel — o que mostra", () => {
     const served = get.getMockImplementation()!;
     const fleet = [{
       runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Contexto"], total: 1, done: 1, at: 5, finished: true,
-      agents: [{ id: "a01f", label: "contexto", phase: "Contexto", model: "opus", status: "done" as const, endedAt: 1, toolCount: 1, result: "ok" }],
+      agents: [{ id: "a01f", label: "contexto", phase: "Contexto", model: "opus", status: "done" as const, endedAt: 1, result: "ok" }],
     }];
     get.mockImplementation(async (url: string) => {
       if (url === "/cards/c1/review") return { review: current, working, fleet };
