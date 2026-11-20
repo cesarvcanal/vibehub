@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { setLanguage } from "@/i18n";
-import { INITIAL_SDK_STATE, applySdkEvent, groupSdkRows, type AgentTask, type SdkChatState, type SdkRow } from "@/features/board/lib/sdkChat";
+import { INITIAL_SDK_STATE, applySdkEvent, groupSdkRows, type AgentTask, type BackgroundTask, type SdkChatState, type SdkRow } from "@/features/board/lib/sdkChat";
 import {
   AGENT_CLOCK_STALE_MS,
   agentElapsedMs,
@@ -9,6 +9,7 @@ import {
   changedFiles,
   createDetailChannel,
   formatDuration,
+  listForegroundRunningAgents,
   parseDetailResponse,
   parseUnifiedDiff,
   patchRows,
@@ -212,5 +213,43 @@ describe("agentElapsedMs", () => {
 
   it("sem dado nenhum: nada", () => {
     expect(agentElapsedMs("running", undefined, undefined, 1)).toBeUndefined();
+  });
+});
+
+describe("os subagentes do turno atual que ainda rodam (a faixa fixa acima do campo)", () => {
+  const agentTask = (toolUseId: string, status: AgentTask["status"]): AgentTask => ({ toolUseId, taskId: `k-${toolUseId}`, status });
+  const turnWithAgent = () => tool(applySdkEvent(ready(), { type: "user", text: "analisa" }), "a1", "Agent", { description: "Analisar" });
+  const listedIds = (state: SdkChatState, tasks: Record<string, AgentTask>, backgroundTasks: BackgroundTask[] = []) => listForegroundRunningAgents(state.rows, tasks, backgroundTasks).map((row) => row.id);
+
+  it("o subagente sem resultado e com a tarefa rodando entra", () => {
+    expect(listedIds(turnWithAgent(), { a1: agentTask("a1", "running") })).toEqual(["a1"]);
+  });
+
+  it("o subagente recém-disparado, ainda sem tarefa, entra porque nasceu ao vivo", () => {
+    expect(listedIds(turnWithAgent(), {})).toEqual(["a1"]);
+  });
+
+  it.each(["completed", "failed", "stopped"] as const)("o subagente cuja tarefa terminou como %s não entra", (status) => {
+    expect(listedIds(turnWithAgent(), { a1: agentTask("a1", status) })).toEqual([]);
+  });
+
+  it("o subagente em segundo plano não entra: a chamada dele já devolveu resultado", () => {
+    const state = applySdkEvent(turnWithAgent(), { type: "tool_result", id: "a1", toolResult: { background: true } });
+    expect(listedIds(state, { a1: agentTask("a1", "running") })).toEqual([]);
+  });
+
+  it("o subagente que o CLI já lista como tarefa em segundo plano não entra, antes mesmo de a chamada devolver resultado", () => {
+    const backgroundTasks = [{ id: "k-a1", type: "local_agent", description: "Analisar", toolUseId: "a1" }];
+    expect(listedIds(turnWithAgent(), { a1: agentTask("a1", "running") }, backgroundTasks)).toEqual([]);
+  });
+
+  it("o subagente de um turno anterior não entra, mesmo com a tarefa ainda marcada como rodando", () => {
+    const state = applySdkEvent(turnWithAgent(), { type: "user", text: "e agora?" });
+    expect(listedIds(state, { a1: agentTask("a1", "running") })).toEqual([]);
+  });
+
+  it("o subagente de um subagente não entra: ele aparece na linha do tempo do pai", () => {
+    const state = tool(turnWithAgent(), "a2", "Agent", { description: "Neto" }, "a1");
+    expect(listedIds(state, { a1: agentTask("a1", "running"), a2: agentTask("a2", "running") })).toEqual(["a1"]);
   });
 });

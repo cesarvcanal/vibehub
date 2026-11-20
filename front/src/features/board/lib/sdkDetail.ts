@@ -1,6 +1,7 @@
 import * as React from "react";
 import { t as translate } from "@/i18n";
 import type { AgentTask, BackgroundTask, SdkRow, ToolResultSummary } from "@/features/board/lib/sdkChat";
+import { isAgentTool } from "@/features/board/lib/sdkSubagents";
 import type { DiffRow } from "@/features/board/lib/toolDiff";
 
 /**
@@ -91,9 +92,18 @@ export function agentStatus(row: Extract<SdkRow, { kind: "tool" }>, task: AgentT
   return row.live ? "running" : "unknown";
 }
 
-export function listForegroundRunningAgents(tasks: Record<string, AgentTask>, backgroundTasks: readonly BackgroundTask[]): AgentTask[] {
+export function listForegroundRunningAgents(
+  rows: readonly SdkRow[],
+  tasks: Record<string, AgentTask>,
+  backgroundTasks: readonly BackgroundTask[],
+): Extract<SdkRow, { kind: "tool" }>[] {
+  const turnStart = rows.findLastIndex((row) => row.kind === "user" && row.absorbed !== true);
   const backgroundCallIds = new Set(backgroundTasks.map((task) => task.toolUseId));
-  return Object.values(tasks).filter((task) => task.status === "running" && !backgroundCallIds.has(task.toolUseId));
+  return rows
+    .slice(turnStart + 1)
+    .filter((row): row is Extract<SdkRow, { kind: "tool" }> => row.kind === "tool" && isAgentTool(row.name) && row.parent === undefined && !row.result)
+    .filter((row) => !backgroundCallIds.has(row.id))
+    .filter((row) => (tasks[row.id] ? tasks[row.id]?.status === "running" : row.live === true));
 }
 
 /**

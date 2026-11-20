@@ -2894,7 +2894,7 @@ describe("SdkChatView — subagentes", () => {
 
       // the background strip shows the same clock
       ws.deliver({ type: "background_tasks", tasks: [{ id: "b1", type: "local_agent", description: "explora o chat", toolUseId: "t1" }] });
-      expect(screen.getByTestId("sdk-background-task")).toHaveTextContent(/4m 0[678]s/);
+      expect(screen.getByTestId("sdk-running-task")).toHaveTextContent(/4m 0[678]s/);
 
       // the subagent modal counts along with the fleet row
       fireEvent.click(agent);
@@ -4463,12 +4463,12 @@ describe("SdkChatView — tarefas em segundo plano", () => {
     ws.deliver({ type: "assistant_text", text: "Vou aguardar o deploy." });
     ws.deliver({ type: "result", isError: false });
 
-    const tray = await screen.findByTestId("sdk-background-tasks");
+    const tray = await screen.findByTestId("sdk-running-tasks");
     expect(tray).toHaveTextContent("Aguarda o self-deploy");
     expect(tray).toHaveTextContent("1 task running");
 
     ws.deliver({ type: "background_tasks", tasks: [] });
-    await waitFor(() => expect(screen.queryByTestId("sdk-background-tasks")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("sdk-running-tasks")).toBeNull());
   });
 
   it("uma tarefa sem descrição não derruba o chat: aparece com um nome genérico", async () => {
@@ -4477,7 +4477,7 @@ describe("SdkChatView — tarefas em segundo plano", () => {
     ws.accept();
     ws.deliver({ type: "ready" });
     ws.deliver({ type: "background_tasks", tasks: [{ id: "b1" } as never] });
-    const tray = await screen.findByTestId("sdk-background-tasks");
+    const tray = await screen.findByTestId("sdk-running-tasks");
     expect(tray).toHaveTextContent(/background task/i);
   });
 
@@ -4491,9 +4491,9 @@ describe("SdkChatView — tarefas em segundo plano", () => {
       { id: "k9", type: "local_agent", description: "Review backend", toolUseId: "t9" },
       { id: "k1", type: "local_bash", description: "Wait for jest" },
     ] });
-    const tray = await screen.findByTestId("sdk-background-tasks");
+    const tray = await screen.findByTestId("sdk-running-tasks");
     expect(tray).toHaveAttribute("data-count", "2");
-    const [linked, loose] = within(tray).getAllByTestId("sdk-background-task");
+    const [linked, loose] = within(tray).getAllByTestId("sdk-running-task");
     expect(linked).toHaveAttribute("data-status", "running");
     expect(linked.tagName).toBe("BUTTON");
     expect(loose).toHaveAttribute("data-status", "running");
@@ -4509,8 +4509,8 @@ describe("SdkChatView — tarefas em segundo plano", () => {
     ws.deliver({ type: "tool_use", id: "a1", name: "Agent", input: { description: "Analisar transcripts de cards", prompt: "..." } });
     ws.deliver({ type: "agent_task", toolUseId: "a1", taskId: "k1", status: "running", lastTool: "Bash", toolUses: 5 });
 
-    const tray = await screen.findByTestId("sdk-background-tasks");
-    const pinned = within(tray).getByTestId("sdk-background-task");
+    const tray = await screen.findByTestId("sdk-running-tasks");
+    const pinned = within(tray).getByTestId("sdk-running-task");
     expect(pinned).toHaveTextContent("Analisar transcripts de cards");
     expect(pinned).toHaveAttribute("data-status", "running");
 
@@ -4525,11 +4525,11 @@ describe("SdkChatView — tarefas em segundo plano", () => {
     ws.deliver({ type: "ready" });
     ws.deliver({ type: "tool_use", id: "a1", name: "Agent", input: { description: "Analisar transcripts de cards" } });
     ws.deliver({ type: "agent_task", toolUseId: "a1", taskId: "k1", status: "running" });
-    await screen.findByTestId("sdk-background-tasks");
+    await screen.findByTestId("sdk-running-tasks");
 
     ws.deliver({ type: "agent_task", toolUseId: "a1", taskId: "k1", status });
 
-    await waitFor(() => expect(screen.queryByTestId("sdk-background-tasks")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("sdk-running-tasks")).toBeNull());
     expect(screen.getByTestId("sdk-fleet")).toHaveTextContent("Analisar transcripts de cards");
   });
 
@@ -4540,11 +4540,44 @@ describe("SdkChatView — tarefas em segundo plano", () => {
     ws.deliver({ type: "ready" });
     ws.deliver({ type: "tool_use", id: "a1", name: "Agent", input: { description: "Analisar transcripts de cards" } });
     ws.deliver({ type: "agent_task", toolUseId: "a1", taskId: "k1", status: "running" });
-    await screen.findByTestId("sdk-background-tasks");
+    await screen.findByTestId("sdk-running-tasks");
 
     ws.deliver({ type: "result", isError: false });
 
-    await waitFor(() => expect(screen.queryByTestId("sdk-background-tasks")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("sdk-running-tasks")).toBeNull());
+  });
+
+  it("um subagente que morreu sem aviso de fim não volta à faixa no turno seguinte", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "user", text: "analisa os transcripts" });
+    ws.deliver({ type: "tool_use", id: "a1", name: "Agent", input: { description: "Analisar transcripts de cards" } });
+    ws.deliver({ type: "agent_task", toolUseId: "a1", taskId: "k1", status: "running" });
+    await screen.findByTestId("sdk-running-tasks");
+
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "agent_task", toolUseId: "a1", taskId: "k1", status: "running" });
+    ws.deliver({ type: "user", text: "e agora?" });
+    ws.deliver({ type: "assistant_text", text: "Vou olhar." });
+
+    expect(screen.getByTestId("sdk-working-status")).not.toBeEmptyDOMElement();
+    expect(screen.queryByTestId("sdk-running-tasks")).toBeNull();
+  });
+
+  it("um subagente em segundo plano de um CLI que não liga a tarefa à chamada aparece uma vez só", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "t9", name: "Agent", input: { description: "Review backend", run_in_background: true } });
+    ws.deliver({ type: "tool_result", id: "t9", toolResult: { background: true } });
+    ws.deliver({ type: "agent_task", toolUseId: "t9", taskId: "k9", status: "running" });
+    ws.deliver({ type: "background_tasks", tasks: [{ id: "k9", type: "local_agent", description: "Review backend" }] });
+
+    const tray = await screen.findByTestId("sdk-running-tasks");
+    expect(tray).toHaveAttribute("data-count", "1");
   });
 
   it("o subagente em segundo plano aparece uma vez só na faixa, pela tarefa do CLI", async () => {
@@ -4556,7 +4589,7 @@ describe("SdkChatView — tarefas em segundo plano", () => {
     ws.deliver({ type: "agent_task", toolUseId: "t9", taskId: "k9", status: "running" });
     ws.deliver({ type: "background_tasks", tasks: [{ id: "k9", type: "local_agent", description: "Review backend", toolUseId: "t9" }] });
 
-    const tray = await screen.findByTestId("sdk-background-tasks");
+    const tray = await screen.findByTestId("sdk-running-tasks");
     expect(tray).toHaveAttribute("data-count", "1");
   });
 });
@@ -5541,7 +5574,7 @@ describe("SdkChatView — o detalhe de cada ação", () => {
     ws.deliver({ type: "ready" });
     ws.deliver({ type: "tool_use", id: "t9", name: "Agent", input: { description: "Review PR 510", run_in_background: true } });
     ws.deliver({ type: "background_tasks", tasks: [{ id: "k9", type: "local_agent", description: "Review PR 510", toolUseId: "t9" }] });
-    const task = screen.getByTestId("sdk-background-task");
+    const task = screen.getByTestId("sdk-running-task");
     expect(task).toHaveAttribute("data-clickable", "true");
     fireEvent.click(task);
     expect(await screen.findByTestId("sdk-detail")).toHaveAttribute("data-view", "agent");
