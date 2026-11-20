@@ -218,10 +218,23 @@ describe("POST /api/cards/:id/voice/sessions", () => {
     // Tool calls never reach the voice: noise, and sometimes secrets the agent printed.
     expect(instructions).not.toContain(".env");
     expect(instructions.indexOf("corrige")).toBeLessThan(instructions.indexOf("e o deploy?"));
-    // What the voice cannot answer from that thread it hands to the card's agent (client delegation).
-    expect(sent.session.delegation).toEqual({ type: "client" });
     expect(instructions).toContain("Generate <|SpawnThinking|> when:");
     expect(instructions).toContain("recapitular");
+  });
+
+  it("a chamada no card delega ao backend Responses com as ferramentas da voz", async () => {
+    const id = await makeCard();
+    openAi(() => summaryAnswer("resumo"));
+    await app.inject({ method: "POST", url: `/api/cards/${id}/voice/sessions`, headers: { cookie: owner }, payload: { sdp: OFFER } });
+    const { delegation, instructions } = sentSession().session;
+    const { VOICE_TOOL_NAMES } = await import("../services/voice/executor.js");
+    expect(delegation.type).toBe("responses");
+    expect(delegation.responses.model).toBe("gpt-6-luna");
+    expect(delegation.responses.tools.map((tool: { name: string }) => tool.name)).toEqual([...VOICE_TOOL_NAMES]);
+    expect(delegation.responses.parallel_tool_calls).toBe(false);
+    expect(delegation.responses.instructions).toContain('card "voz"');
+    expect(delegation.responses.instructions).toContain('projeto "p"');
+    expect(instructions).toContain("criar card");
   });
 
   it("abre a chamada já sabendo o resumo da conversa inteira do card, pedido antes de criar a sessão", async () => {

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { requireSession, requestUser, sessionUserId } from "../auth/session.js";
 import { requireCardWork } from "../auth/access.js";
-import { cardCallInstructions, createLiveSession, voiceLiveStatus, SDP_MAX_BYTES, VoiceLiveError } from "../services/voice/live.js";
+import { cardCallDelegation, cardCallInstructions, createLiveSession, voiceLiveStatus, SDP_MAX_BYTES, VoiceLiveError } from "../services/voice/live.js";
 import { parseVoiceTurns, saveVoiceTurns } from "../services/voice/turns.js";
 import { speechAvailable, synthesizeSpeech, SPEECH_MAX_CHARS } from "../services/voice/speech.js";
 import { Readable } from "node:stream";
@@ -62,12 +62,16 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
       try {
         const cardId = req.params.id;
         // The owner passes the access check for any id: a card that is not on the board is a 404 here.
-        if (!(await registry.getCard(cardId))) return await reply.code(404).send({ error: "card not found" });
+        const card = await registry.getCard(cardId);
+        if (!card) return await reply.code(404).send({ error: "card not found" });
+        const project = await registry.getProject(card.projectId);
+        if (!project) return await reply.code(404).send({ error: "project not found" });
         const user = (await sessionUserId(req)) ?? "unknown";
         const answer = await createLiveSession(req.body?.sdp, {
           user,
           cardId,
           signal: gone.signal,
+          delegation: cardCallDelegation({ cardTitle: card.title, projectName: project.name }),
           instructionsFor: (apiKey, signal) => cardCallInstructions(cardId, apiKey, signal),
         });
         return await reply.code(201).send(answer);
