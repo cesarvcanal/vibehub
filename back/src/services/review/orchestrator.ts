@@ -415,6 +415,16 @@ function needsMergeGate(r: Review, again: boolean): boolean {
   return again && gate.state === "failed";
 }
 
+async function readMergeVerdict(r: Review, sha: string): Promise<GateResult & { conflict?: true }> {
+  try {
+    const pr = await readPrState(r.cardId, r.prUrl);
+    if (pr?.mergeable === "CONFLICTING") return { ran: true, passed: false, conflict: true, output: mergeConflictOutput(r) };
+    return await gateAtCommit(r.cardId, r.prUrl, sha);
+  } catch (err) {
+    return { ran: true, passed: false, output: `o gate não chegou a rodar: ${(err as Error).message}` };
+  }
+}
+
 /**
  * Runs the merge gate on the approved commit of a ready review ({@link Review.mergeGate}) and records the
  * verdict, if the review is still ready on that commit. Green: the automatic merge goes out, if it applied.
@@ -433,15 +443,7 @@ async function checkMergeGate(reviewId: string, opts: { again?: boolean; by?: st
     await mutateReview(reviewId, (x) => {
       x.mergeGate = { sha, state: "running", at: Date.now(), ...(failuresBefore ? { failures: failuresBefore } : {}) };
     });
-    let verdict: GateResult & { conflict?: true };
-    try {
-      const pr = await readPrState(r.cardId, r.prUrl);
-      verdict = pr?.mergeable === "CONFLICTING"
-        ? { ran: true, passed: false, conflict: true, output: mergeConflictOutput(r) }
-        : await gateAtCommit(r.cardId, r.prUrl, sha);
-    } catch (err) {
-      verdict = { ran: true, passed: false, output: `o gate não chegou a rodar: ${(err as Error).message}` };
-    }
+    const verdict = await readMergeVerdict(r, sha);
     let landed = false as boolean;
     const failures = failuresBefore + 1;
     const exhausted = failures > MERGE_GATE_AUTO_RETRIES;
@@ -490,15 +492,15 @@ async function sendMergeGateFailure(r: Review): Promise<void> {
 }
 
 export async function holdMergeOnConflict(reviewId: string, by: string): Promise<Review> {
-  let held = false as boolean;
+  const outcome = { held: false };
   const after = await mutateReview(reviewId, (x) => {
     if (x.phase !== "ready" || !x.reviewedSha) return;
     x.mergeGate = { sha: x.reviewedSha, state: "failed", output: mergeConflictOutput(x), at: Date.now(), failures: 1, conflict: true };
     note(x, "system", `Merge recusado: ${mergeConflictOutput(x)}. O autor recebeu a ordem de trazer ${x.base} para a branch.`, { by });
-    held = true;
+    outcome.held = true;
   });
-  logger.info({ audit: true, action: "review.merge_conflict", review: reviewId, held, by }, "PR review merge held: the PR conflicts with its base");
-  if (held) await sendMergeGateFailure(after);
+  logger.info({ audit: true, action: "review.merge_conflict", review: reviewId, held: outcome.held, by }, "PR review merge held: the PR conflicts with its base");
+  if (outcome.held) await sendMergeGateFailure(after);
   return (await getReview(reviewId)) ?? after;
 }
 

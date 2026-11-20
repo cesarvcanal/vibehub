@@ -63,9 +63,8 @@ const mergeSpy = vi.fn(async (_reviewId: string, _userId: string): Promise<Merge
 /** The PR on GitHub, as `readPrState` would read it: the head (null = a read that failed) and the state. */
 let prHeadNow: string | null = null;
 let prStateNow: "OPEN" | "MERGED" | "CLOSED" = "OPEN";
-let prMergeableNow: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" = "MERGEABLE";
-const prHead = vi.fn(async (_cardId: string, _prUrl: string) =>
-  (prHeadNow ? { state: prStateNow, headSha: prHeadNow, mergeable: prMergeableNow } : null));
+const githubPr: { mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" } = { mergeable: "MERGEABLE" };
+const prHead = vi.fn(async () => (prHeadNow ? { state: prStateNow, headSha: prHeadNow, mergeable: githubPr.mergeable } : null));
 /** O veredito do gate do merge no commit aprovado (`gateAtCommit`); `gateGate` segura a resposta até ser solta. */
 let gateAnswer: { ran: boolean; passed: boolean; output: string } = { ran: true, passed: true, output: "" };
 let gateGate: Promise<void> | null = null;
@@ -194,7 +193,7 @@ beforeEach(async () => {
   prHead.mockClear();
   prHeadNow = null;
   prStateNow = "OPEN";
-  prMergeableNow = "MERGEABLE";
+  githubPr.mergeable = "MERGEABLE";
   afterMerged.mockClear();
   prPeople.mockClear();
   gateSpy.mockClear();
@@ -2927,7 +2926,7 @@ describe("gate do merge rodado quando a revisão fica pronta", () => {
     const o = await load();
     const { author, review } = await started(o);
     prHeadNow = SHA1;
-    prMergeableNow = "CONFLICTING";
+    githubPr.mergeable = "CONFLICTING";
     await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
     await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("failed"));
     const after = (await o.store.getReview(review.id))!;
@@ -2946,7 +2945,7 @@ describe("gate do merge rodado quando a revisão fica pronta", () => {
     const o = await load();
     const { review } = await started(o);
     prHeadNow = SHA1;
-    prMergeableNow = "UNKNOWN";
+    githubPr.mergeable = "UNKNOWN";
     await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
     await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("passed"));
     expect(gateSpy).toHaveBeenCalled();
