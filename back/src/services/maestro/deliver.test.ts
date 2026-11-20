@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, onTestFinished, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -1661,10 +1661,10 @@ describe("recusa do deliver vira aviso de erro no log, que o detector de falhas 
     const { deliver, card } = await makeCard();
     const { logger } = await import("../../utils/logger.js");
     const warn = vi.spyOn(logger, "warn");
+    onTestFinished(() => { warn.mockRestore(); });
     wire(over);
     const result = await deliver.deliver(card.id, { branch: "dev", authorized });
     const failureWarnings = warn.mock.calls.filter((call) => call[1] === "deliver failed").map((call) => call[0]);
-    warn.mockRestore();
     return { result, failureWarnings };
   }
 

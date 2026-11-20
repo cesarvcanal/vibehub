@@ -1056,7 +1056,7 @@ const FAILED_DELIVER_REASONS: readonly DeliverReason[] = ["push_failed", "pr_fai
 export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<DeliverResult> {
   const result = await runDelivery(cardId, opts);
   if (FAILED_DELIVER_REASONS.includes(result.reason)) {
-    logger.warn({ card: cardId, reason: result.reason, detail: `${result.reason}: ${result.output ?? "sem saída"}` }, "deliver failed");
+    logger.warn({ card: cardId, reason: result.reason, detail: `${result.reason}: ${result.output ?? "no output"}` }, "deliver failed");
   }
   return result;
 }
