@@ -64,13 +64,6 @@ export function isValidTermSize(n: unknown): n is number {
   return typeof n === "number" && Number.isInteger(n) && n >= 10 && n <= 500;
 }
 
-/**
- * How often a card's `humanActiveAt` is actually written while someone types. Keystrokes arrive many
- * per second; persisting each would hammer the board store. The window a maestro reads
- * (HUMAN_ACTIVE_WINDOW_MS, minutes) is far larger, so stamping at most this often loses nothing.
- */
-export const HUMAN_ACTIVE_THROTTLE_MS = 5_000;
-
 /** Last time each card's human-active stamp was written — the throttle gate. Module-scoped. */
 const lastHumanStamp = new Map<string, number>();
 
@@ -81,7 +74,7 @@ const lastHumanStamp = new Map<string, number>();
  */
 export function shouldStampHumanActive(cardId: string, now: number = Date.now()): boolean {
   const last = lastHumanStamp.get(cardId) ?? 0;
-  if (now - last < HUMAN_ACTIVE_THROTTLE_MS) return false;
+  if (now - last < registry.HUMAN_ACTIVE_THROTTLE_MS) return false;
   lastHumanStamp.set(cardId, now);
   return true;
 }
