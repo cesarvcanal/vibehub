@@ -45,8 +45,6 @@ import {
  *   turn_finished without the tool ──► a reminder; on the second, impasse "IA não respondeu"
  *   human ──► decideQuestion | retryReview (impasse from a failure, pending Approve) | cancelReview
  *   merge button (route) ──► markReviewMerged | PR head moved: reopenAfterHeadMoved
- *   the PR on GitHub (end of the author's turn; panel open, throttled) ──► syncReviewWithGithub:
- *     merged outside the panel → merged | closed without merge → cancelled | push after ready → reopen
  *
  * The rules of the game (proof, closed list, cap on rounds) live in the pure model; here live the
  * persistence, who may call what, and the relays. Three guarantees run through the file:
@@ -1249,9 +1247,6 @@ export async function reopenAfterHeadMoved(
  *    `markReviewMerged` as the button: a notice on both cards, the reviewer's card to `done`), the card's PR
  *    gets `mergedAt` and its branch leaves GitHub (the work is already in the base).
  *  - CLOSED without merge: the review is cancelled (there is nothing left to review or merge).
- *  - OPEN with a head different from the approved one, in `ready`: somebody told the author's AI to change
- *    the PR and it pushed — the review goes back to the reviewer right away ({@link reopenAfterHeadMoved}),
- *    without waiting for the merge click to find out. In `fixing`, a push is the answer to the list: nothing changes.
  * Only an open review goes to GitHub. Never throws: a read that fails leaves the review as it is.
  */
 export async function syncReviewWithGithub(reviewId: string, by = "conferência do GitHub"): Promise<Review | undefined> {
