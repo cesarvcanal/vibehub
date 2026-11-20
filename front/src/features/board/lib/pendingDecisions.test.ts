@@ -5,6 +5,7 @@ import {
   decisionReplies,
   parseDecisionReply,
   pendingDecisions,
+  proseOptions,
   proseQuestion,
   splitProseQuestion,
 } from "./pendingDecisions";
@@ -49,6 +50,92 @@ describe("proseQuestion — perguntas dirigidas ao usuário (conservadora)", () 
   it("never matches quoted or code paragraphs", () => {
     expect(proseQuestion("Contexto.\n\n> Qual você prefere?")).toBeNull();
     expect(proseQuestion("Contexto.\n\n```\nQual você prefere?\n```")).toBeNull();
+  });
+});
+
+describe("proseQuestion — pergunta que fecha com uma lista de opções", () => {
+  it.each([
+    ["lista colada na pergunta", "Resumo.\n\nQual caminho você prefere?\n1. A\n2. B", "Qual caminho você prefere?\n1. A\n2. B"],
+    ["lista num parágrafo próprio", "Resumo.\n\nQual caminho você prefere?\n\n1. A\n2. B", "Qual caminho você prefere?\n\n1. A\n2. B"],
+    ["pedido de decisão com lista", "Resumo.\n\nDecisão sua:\n\n- A\n- B", "Decisão sua:\n\n- A\n- B"],
+  ])("pega a pergunta junto com as opções: %s", (_, text, expected) => {
+    expect(proseQuestion(text)).toBe(expected);
+  });
+
+  it.each([
+    ["lista sem pergunta antes", "Fiz:\n\n1. A\n2. B"],
+    ["um item só não é escolha", "Qual você prefere?\n\n1. A"],
+  ])("fica quieta: %s", (_, text) => {
+    expect(proseQuestion(text)).toBeNull();
+  });
+});
+
+describe("proseQuestion — lista que não é escolha continua pendência", () => {
+  it.each([
+    ["perguntas numeradas", "Duas perguntas:\n1. Você quer A?\n2. Você prefere B?", "Duas perguntas:\n1. Você quer A?\n2. Você prefere B?"],
+    ["pergunta no último item", "Próximos passos:\n\n- Rodo os testes\n- Quer que eu abra o PR?", "Próximos passos:\n\n- Rodo os testes\n- Quer que eu abra o PR?"],
+  ])("%s", (_, text, expected) => {
+    expect(proseQuestion(text)).toBe(expected);
+    expect(proseOptions(expected)).toBeNull();
+  });
+});
+
+describe("proseOptions — as opções clicáveis de uma pergunta em prosa", () => {
+  it("separa o enunciado das opções numeradas (o caso do 'Decisão sua:')", () => {
+    expect(
+      proseOptions("Decisão sua:\n1. Eu crio esse PR de teste (recomendado).\n2. Você autoriza o merge em `main`, o que já é deploy."),
+    ).toEqual({
+      lead: "Decisão sua:",
+      options: [
+        { label: "Eu crio esse PR de teste (recomendado)." },
+        { label: "Você autoriza o merge em main, o que já é deploy." },
+      ],
+    });
+  });
+
+  it.each([
+    ["negrito seguido de travessão", "**Rápida** — só o front.", { label: "Rápida", description: "só o front." }],
+    ["negrito seguido de dois-pontos", "**Rápida (recomendado):** só o front.", { label: "Rápida (recomendado)", description: "só o front." }],
+    ["título e travessão sem negrito", "Rápida — só o front.", { label: "Rápida", description: "só o front." }],
+    ["só negrito, sem explicação", "**Rápida**", { label: "Rápida" }],
+  ])("o título vira rótulo e o resto vira explicação: %s", (_, item, expected) => {
+    expect(proseOptions(`Qual você prefere?\n1. ${item}\n2. B`)?.options[0]).toEqual(expected);
+  });
+
+  it("a linha de continuação de um item entra na explicação dele", () => {
+    expect(proseOptions("Qual você prefere?\n\n1. **A**\n   explica o A\n2. **B**\n   explica o B")?.options).toEqual([
+      { label: "A", description: "explica o A" },
+      { label: "B", description: "explica o B" },
+    ]);
+  });
+
+  it("sub-item indentado é explicação do item de cima, não opção própria", () => {
+    expect(proseOptions("Qual você prefere?\n1. **A** — rápido\n   - custo: baixo\n   - risco: médio\n2. **B** — lento")?.options).toEqual([
+      { label: "A", description: "rápido\n- custo: baixo\n- risco: médio" },
+      { label: "B", description: "lento" },
+    ]);
+  });
+
+  it("a saída livre ('Outra: descreva') não vira botão: a resposta livre já tem o seu", () => {
+    expect(proseOptions("Qual você prefere?\n1. Rápida\n2. Lenta\n3. Outra: descreva")?.options).toEqual([
+      { label: "Rápida" },
+      { label: "Lenta" },
+    ]);
+  });
+
+  it("itálico e link saem do rótulo e da explicação", () => {
+    expect(proseOptions("Qual você prefere?\n1. *Rápida* — ver [o PR](https://x.y/1)\n2. _Lenta_")?.options).toEqual([
+      { label: "Rápida", description: "ver o PR" },
+      { label: "Lenta" },
+    ]);
+  });
+
+  it.each([
+    ["sem lista", "Qual você prefere?"],
+    ["um item só", "Qual você prefere?\n1. A"],
+    ["texto depois da lista", "Qual você prefere?\n1. A\n2. B\n\nOu outra coisa."],
+  ])("sem opções clicáveis: %s", (_, question) => {
+    expect(proseOptions(question)).toBeNull();
   });
 });
 

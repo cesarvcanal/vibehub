@@ -69,6 +69,7 @@ export type DeliverReason =
   | "push_failed"
   | "pr_failed"
   | "merge_failed"
+  | "conflict"
   /**
    * The PR's head is not the commit the merge is pinned to: the one the review approved (merge-only,
    * a push after `ready`) or the one the gate passed on (a push while the gate ran). Nothing merged.
@@ -433,7 +434,8 @@ export function buildResolvePrScript(
  * whatever had been pushed to the PR meanwhile, unchecked. A PR already past it is answered as
  * `__VIBEHUB_DELIVER__ error head_moved <sha>` without merging; for the push that lands between that
  * read and the merge, GitHub itself refuses (`--match-head-commit`: the check and the merge are one
- * call). Otherwise emits `__VIBEHUB_DELIVER__ merged` or `__VIBEHUB_DELIVER__ error merge`. PURE.
+ * call). A PR in conflict with its base is answered as `__VIBEHUB_DELIVER__ error conflict` without merging.
+ * Otherwise emits `__VIBEHUB_DELIVER__ merged` or `__VIBEHUB_DELIVER__ error merge`. PURE.
  */
 export function buildMergeScript(
   containerName: string, token: string, cwd: string, prUrl: string, matchHead: string,
@@ -446,12 +448,13 @@ export function buildMergeScript(
     `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
     // stderr is not captured: it already goes to the output (`exec 2>&1`), and a warning there must not
     // read as the PR having moved.
-    `if ! PR_VIEW=$(gh pr view ${shQuote(prUrl)} --json headRefOid,number,title --jq '.headRefOid, .number, .title'); then`,
+    `if ! PR_VIEW=$(gh pr view ${shQuote(prUrl)} --json headRefOid,number,mergeable,title --jq '.headRefOid, .number, .mergeable, .title'); then`,
     `  echo "${MARKER} error merge"; exit 0;`,
     `fi`,
-    `{ read -r PR_HEAD; read -r PR_NUMBER; read -r PR_TITLE; } <<<"$PR_VIEW"`,
+    `{ read -r PR_HEAD; read -r PR_NUMBER; read -r PR_MERGEABLE; read -r PR_TITLE; } <<<"$PR_VIEW"`,
     `if [ -z "$PR_HEAD" ]; then echo "${MARKER} error merge"; exit 0; fi`,
     `if [ "$PR_HEAD" != ${pin} ]; then echo "${MARKER} error head_moved $PR_HEAD"; exit 0; fi`,
+    `if [ "$PR_MERGEABLE" = CONFLICTING ]; then echo "${MARKER} error conflict"; exit 0; fi`,
     `SUBJECT="🔀 merge: $(printf '%s' "$PR_TITLE" | sed -E 's/^[a-z]+(\\([^)]*\\))?!?: *//') (#$PR_NUMBER)"`,
     `if gh pr merge ${shQuote(prUrl)} --merge --match-head-commit ${pin} --subject "$SUBJECT"; then echo "${MARKER} merged"; else echo "${MARKER} error merge"; fi`,
   ];
@@ -587,11 +590,12 @@ export function parseResolvePr(
 }
 
 /** Parses the merge output; `movedTo` = the PR was already past the pinned commit (nothing merged). PURE. */
-export function parseMerge(stdout: string): { merged: boolean; output: string; movedTo?: string } {
+export function parseMerge(stdout: string): { merged: boolean; output: string; movedTo?: string; conflict?: true } {
   const merged = new RegExp(`${MARKER} merged`).test(stdout);
   const moved = new RegExp(`${MARKER} error head_moved ([0-9a-fA-F]{40,64})\\b`).exec(stdout)?.[1];
+  const conflict = new RegExp(`${MARKER} error conflict`).test(stdout);
   const output = stdout.replace(new RegExp(`${MARKER} (merged|error).*`, "g"), "").trimEnd();
-  return { merged, output, ...(moved ? { movedTo: moved.toLowerCase() } : {}) };
+  return { merged, output, ...(moved ? { movedTo: moved.toLowerCase() } : {}), ...(conflict ? { conflict: true as const } : {}) };
 }
 
 /** Which git stage failed maps to the reason a maestro reads. PURE. */
@@ -646,16 +650,17 @@ async function runCardGhScript(
 }
 
 /**
- * Reads a PR's STATE and head, by its URL: `__VIBEHUB_DELIVER__ prstate <OPEN|MERGED|CLOSED> <sha>`,
- * or `__VIBEHUB_DELIVER__ error view`. What the PR review checks to notice what happened on GitHub
- * outside the panel (a merge by hand, a closed PR, a push after ready). PURE.
+ * Reads a PR's STATE, head and mergeability, by its URL: `__VIBEHUB_DELIVER__ prstate <OPEN|MERGED|CLOSED> <sha>
+ * <MERGEABLE|CONFLICTING|UNKNOWN>`, or `__VIBEHUB_DELIVER__ error view`. What the PR review checks to notice what
+ * happened on GitHub outside the panel (a merge by hand, a closed PR, a push after ready, a base that moved into a
+ * conflict). PURE.
  */
 export function buildPrStateScript(containerName: string, token: string, cwd: string, prUrl: string): string {
   assertSafeRemotePath(cwd);
   const body = [
     ...ghTokenPreamble(token),
     `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
-    `if ! J=$(gh pr view ${shQuote(prUrl)} --json state,headRefOid --jq '.state + " " + .headRefOid' 2>&1); then`,
+    `if ! J=$(gh pr view ${shQuote(prUrl)} --json state,headRefOid,mergeable --jq '.state + " " + .headRefOid + " " + .mergeable' 2>&1); then`,
     `  printf '%s\\n' "$J"; echo "${MARKER} error view"; exit 0;`,
     `fi`,
     `echo "${MARKER} prstate $J"`,
@@ -664,13 +669,15 @@ export function buildPrStateScript(containerName: string, token: string, cwd: st
 }
 
 export type PrState = "OPEN" | "MERGED" | "CLOSED";
+// external: GitHub GraphQL MergeableState, read by `gh pr view --json mergeable`
+export type PrMergeable = "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
 
 /** Parses the PR state lookup. PURE. */
 export function parsePrState(
   stdout: string,
-): { ok: true; state: PrState; headSha: string } | { ok: false; stage: string; output: string } {
-  const m = new RegExp(`${MARKER} prstate (OPEN|MERGED|CLOSED) ([0-9a-fA-F]{40,64})\\b`).exec(stdout);
-  if (m) return { ok: true, state: m[1] as PrState, headSha: m[2]!.toLowerCase() };
+): { ok: true; state: PrState; headSha: string; mergeable: PrMergeable } | { ok: false; stage: string; output: string } {
+  const m = new RegExp(`${MARKER} prstate (OPEN|MERGED|CLOSED) ([0-9a-fA-F]{40,64}) (MERGEABLE|CONFLICTING|UNKNOWN)\\b`).exec(stdout);
+  if (m) return { ok: true, state: m[1] as PrState, headSha: m[2]!.toLowerCase(), mergeable: m[3] as PrMergeable };
   const err = new RegExp(`${MARKER} error (\\S+)`).exec(stdout);
   const output = stdout.replace(new RegExp(`${MARKER} (prstate|error).*`, "g"), "").trimEnd();
   return { ok: false, stage: err?.[1] ?? "unknown", output };
@@ -680,11 +687,11 @@ export function parsePrState(
  * A PR as GitHub has it now — state and head — read with the card's own connection (the actor's).
  * Null when the lookup failed (logged): the caller leaves things as they are.
  */
-export async function readPrState(cardId: string, prUrl: string): Promise<{ state: PrState; headSha: string } | null> {
+export async function readPrState(cardId: string, prUrl: string): Promise<{ state: PrState; headSha: string; mergeable: PrMergeable } | null> {
   const out = await runCardGhScript(cardId, "read the PR state", (c) => buildPrStateScript(c.container, c.token, c.cwd, prUrl));
   if (!out) return null;
   const found = parsePrState(out.stdout);
-  if (found.ok) return { state: found.state, headSha: found.headSha };
+  if (found.ok) return { state: found.state, headSha: found.headSha, mergeable: found.mergeable };
   logger.warn({ card: out.slug, stage: found.stage, detail: cleanOutput(found.output) }, "could not read the PR state");
   return null;
 }
@@ -1087,15 +1094,6 @@ async function runDelivery(cardId: string, opts: DeliverOpts): Promise<DeliverRe
     );
     return { merged: false, reason: "locked", branch: card.base, cardBranch: cardBranch(card), locked: true };
   }
-  // An ANALYSIS card (`Card.pushBranch`) has no merge-only: that is the button of a review, and no review
-  // runs on an analysis card (`startReview` refuses it). Its merge is the usual `authorized` one.
-  if (card.pushBranch !== undefined && mergeOnly) {
-    logger.info(
-      { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, reason: "locked", mergeOnly, by: opts.by },
-      "merge-only refused: an analysis card has no review to merge",
-    );
-    return { merged: false, reason: "locked", branch: card.base, cardBranch: card.pushBranch, locked: true };
-  }
   const project = await getProject(card.projectId);
   if (!project) throw new Error("project for this card not found");
 
@@ -1264,7 +1262,7 @@ async function runDelivery(cardId: string, opts: DeliverOpts): Promise<DeliverRe
     };
   }
   // The CI wait can take minutes: a review asked for in the meantime still takes the merge away.
-  if (!mergeOnly) {
+  if (!mergeOnly || card.pushBranch !== undefined) {
     const review = card.pushBranch !== undefined ? await activeReviewForPr(prUrl) : await activeReviewFor(card.id);
     if (review) {
       logger.info(
@@ -1292,7 +1290,7 @@ async function runDelivery(cardId: string, opts: DeliverOpts): Promise<DeliverRe
     buildMergeScript(container, token, cwd, prUrl, pin),
     { timeoutMs: 120_000 },
   );
-  const { merged, output, movedTo } = parseMerge(mergeOut.stdout);
+  const { merged, output, movedTo, conflict } = parseMerge(mergeOut.stdout);
   logger.info(
     { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged, target, mergeOnly, pin, ...(movedTo ? { movedTo } : {}), by: opts.by },
     merged ? "deliver merged the PR" : "deliver could not merge the PR",
@@ -1301,6 +1299,12 @@ async function runDelivery(cardId: string, opts: DeliverOpts): Promise<DeliverRe
     return {
       prUrl, merged: false, reason: "head_moved", branch: target, cardBranch: source, ...lock, ...commented,
       output: `o PR está em ${movedTo.slice(0, 7)}, ${mergeOnly ? "a revisão aprovou" : "o gate passou em"} ${pin.slice(0, 7)}`,
+    };
+  }
+  if (conflict) {
+    return {
+      prUrl, merged: false, reason: "conflict", branch: target, cardBranch: source, ...lock, ...commented,
+      output: `o PR tem conflito com ${target}: o merge commit não sai limpo até a branch do card receber ${target}`,
     };
   }
   if (!merged) {

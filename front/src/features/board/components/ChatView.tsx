@@ -3,7 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
 import {
-  AudioLines, Bell, Bot, Check, ChevronRight, Copy, Download, File, FileSpreadsheet, FileText, Loader2, MessageSquare,
+  AudioLines, Bell, Bot, Check, ChevronRight, Circle, CircleCheck, Copy, Download, File, FileSpreadsheet, FileText, Loader2, MessageSquare,
   Presentation, TerminalSquare, UserRound, Wrench, type LucideIcon,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -934,10 +934,11 @@ const MD_PLUGINS = [remarkGfm, remarkBreaks, remarkEscapeHtml, remarkPreviewPath
  * plus the whole plugin chain) is the expensive part of a row — a message that did not change has
  * nothing new to parse.
  */
-export const Markdown = React.memo(function Markdown({ text }: { text: string }) {
+export const Markdown = React.memo(function Markdown({ text, variant = "chat" }: { text: string; variant?: "chat" | "document" }) {
+  const isDocument = variant === "document";
   return (
-    <div className="space-y-2" data-testid="chat-markdown">
-      <ReactMarkdown remarkPlugins={MD_PLUGINS} urlTransform={safeUrl} components={MD_COMPONENTS}>
+    <div className={isDocument ? "space-y-2.5 leading-relaxed" : "space-y-2"} data-testid="chat-markdown">
+      <ReactMarkdown remarkPlugins={MD_PLUGINS} urlTransform={safeUrl} components={isDocument ? MD_DOCUMENT_COMPONENTS : MD_COMPONENTS}>
         {String(text ?? "")}
       </ReactMarkdown>
     </div>
@@ -1157,4 +1158,29 @@ const MD_COMPONENTS: React.ComponentProps<typeof ReactMarkdown>["components"] = 
       {children}
     </td>
   ),
+};
+
+const MD_DOCUMENT_COMPONENTS: React.ComponentProps<typeof ReactMarkdown>["components"] = {
+  ...MD_COMPONENTS,
+  h1: ({ children }) => <h1 className="border-b border-border/60 pb-1.5 pt-4 text-[15px] font-semibold first:pt-0">{children}</h1>,
+  h2: ({ children }) => <h2 className="border-b border-border/60 pb-1.5 pt-4 text-[15px] font-semibold first:pt-0">{children}</h2>,
+  h3: ({ children }) => <h3 className="pt-3 text-sm font-semibold first:pt-0">{children}</h3>,
+  h4: ({ children }) => <h4 className="pt-2 text-[13px] font-semibold first:pt-0">{children}</h4>,
+  ul: ({ className, children }) =>
+    className?.includes("contains-task-list") ? (
+      <ul className="space-y-1.5 rounded-md border border-border/60 bg-muted/30 px-3 py-2.5">{children}</ul>
+    ) : (
+      <ul className="ml-4 list-disc space-y-1.5 marker:text-muted-foreground">{children}</ul>
+    ),
+  li: ({ className, children }) => (
+    <li className={cn("break-words", className?.includes("task-list-item") && "flex items-start gap-2")}>{children}</li>
+  ),
+  input: ({ checked }) => {
+    const Mark = checked ? CircleCheck : Circle;
+    return (
+      <span data-testid="markdown-task-mark" data-checked={checked ? "true" : "false"} className="mt-0.5 inline-flex shrink-0">
+        <Mark aria-hidden className={cn("h-4 w-4", checked ? "text-emerald-400" : "text-muted-foreground/60")} />
+      </span>
+    );
+  },
 };

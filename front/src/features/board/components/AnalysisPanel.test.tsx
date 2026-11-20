@@ -94,6 +94,14 @@ describe("painel da análise de PR", () => {
     expect(within(dimensions).getByText("o diff só toca configuração")).toBeInTheDocument();
   });
 
+  it("o resumo em tópicos aparece como lista, com o código marcado", async () => {
+    renderPanel(readModel(doneReport({ summary: "- troca a senha pelo `sso`\n- sessão expira com o token" }), "not_apt"));
+    await screen.findByRole("heading", { name: "Análise do PR #312" });
+    expect(screen.getByText("troca a senha pelo", { exact: false }).closest("li")).toBeInTheDocument();
+    expect(screen.getByText("sessão expira com o token").tagName).toBe("LI");
+    expect(screen.getByText("sso").tagName).toBe("CODE");
+  });
+
   it("dimensão que rodou com achado não verificado aparece em atenção, com o motivo, ao lado do não apto que o servidor manda", async () => {
     const dimensions = doneReport().dimensions.map((dimension) => dimension.key === "tests"
       ? { ...dimension, unverifiedCount: 2, reason: "2 achados sem veredito (o verificador não respondeu)" }
@@ -139,7 +147,7 @@ describe("painel da análise de PR", () => {
 
   it("o corpo tem overflow-y-auto, overflow-x-hidden e overflow-wrap:anywhere, para o caminho longo quebrar em vez de rolar de lado", async () => {
     renderPanel(readModel(doneReport(), "not_apt"));
-    const body = (await screen.findByText("Login por SSO no lugar da senha local.")).parentElement;
+    const body = (await screen.findByRole("list", { name: "Dimensões revisadas" })).parentElement;
     expect(body).toHaveClass("overflow-y-auto", "overflow-x-hidden", "[overflow-wrap:anywhere]");
   });
 
@@ -229,10 +237,52 @@ describe("merge pelo painel da análise", () => {
     expect(screen.getByRole("button", { name: "Mergear o PR #312" })).toBeEnabled();
   });
 
-  it("com o servidor dizendo que o merge roda, o painel mostra Mergeando travado e o aviso dos testes, mesmo sem ter clicado", async () => {
+  it("com o servidor dizendo que o merge roda, o painel mostra Mergeando travado e o aviso do merge, mesmo sem ter clicado", async () => {
     renderPanel(aptRead({ merging: true }));
     expect(await screen.findByRole("button", { name: "Mergeando…" })).toBeDisabled();
-    expect(screen.getByText("Rodando os testes do gate antes do merge; pode levar alguns minutos.")).toBeInTheDocument();
+    expect(screen.getByText("Mergeando no GitHub, preso ao commit que a análise conferiu.")).toBeInTheDocument();
+  });
+
+  const SHA = doneReport().analysedSha;
+
+  it("caso real (PR #649): testes do merge rodando no commit da análise travam o botão com o aviso, e o painel relê sozinho até o veredito", async () => {
+    const reads = { count: 0 };
+    get.mockImplementation(async (url: string) => {
+      if (url === "/auth/me") return { user: { id: "u1", username: "mussa", role: "member" } };
+      if (url === "/setup/state") return setupState();
+      if (url === "/cards/c1/analysis/conversation") return { conversation: null };
+      reads.count += 1;
+      return aptRead({
+        mergeGate: reads.count > 1
+          ? { cardId: "c1", analysedSha: SHA, sha: "c0ffee1".padEnd(40, "0"), state: "passed", at: 2 }
+          : { cardId: "c1", analysedSha: SHA, state: "running", at: 1 },
+      });
+    });
+    renderApp(<AnalysisPanel cardId="c1" onClose={() => {}} />);
+    expect(await screen.findByRole("button", { name: "Testes do merge rodando…" })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Testes do merge rodando no commit que a análise conferiu: o botão libera quando ficarem verdes.");
+    expect(await screen.findByRole("button", { name: "Mergear o PR #312" }, { timeout: 8_000 })).toBeEnabled();
+    expect(screen.getByText("Testes do merge verdes no commit que a análise conferiu (c0ffee1).")).toBeInTheDocument();
+  });
+
+  it("testes do merge vermelhos no commit da análise: mostram a saída, não oferecem o merge, e 'Rodar os testes de novo' pede o gate e relê", async () => {
+    post.mockResolvedValue({ mergeGate: { cardId: "c1", analysedSha: SHA, state: "running", at: 2 } });
+    renderPanel(aptRead({ mergeGate: { cardId: "c1", analysedSha: SHA, state: "failed", output: "FAIL src/pix.test.ts", at: 1 } }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Os testes do merge falharam: o merge fica barrado até eles passarem.");
+    expect(within(alert).getByText("FAIL src/pix.test.ts")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Mergear o PR #312" })).not.toBeInTheDocument();
+    const readsBefore = get.mock.calls.filter(([url]) => url === "/cards/c1/analysis").length;
+    await userEvent.click(screen.getByRole("button", { name: "Rodar os testes de novo" }));
+    expect(post).toHaveBeenCalledWith("/cards/c1/analysis/merge-gate");
+    await vi.waitFor(() => expect(get.mock.calls.filter(([url]) => url === "/cards/c1/analysis").length).toBeGreaterThan(readsBefore));
+  });
+
+  it("em inglês o estado dos testes do merge sai pelo i18n", async () => {
+    setLanguage("en");
+    renderPanel(aptRead({ mergeGate: { cardId: "c1", analysedSha: SHA, state: "failed", output: "x", at: 1 } }));
+    expect(await screen.findByRole("button", { name: "Run the checks again" })).toBeEnabled();
+    expect(screen.getByRole("alert")).toHaveTextContent("The merge checks failed: the merge stays blocked until they pass.");
   });
 
   it.each<[string, Error]>([
@@ -261,6 +311,15 @@ describe("merge pelo painel da análise", () => {
     expect(await screen.findByText("O último merge não saiu: os testes do gate falharam ou estouraram o tempo.")).toBeInTheDocument();
     expect(screen.getByText("npm test estourou 585 s")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Tentar o merge do PR #312 de novo" })).toBeEnabled();
+  });
+
+  it("último merge barrado por conflito com a base: o painel diz o conflito e o que fazer, sem a saída do gh", async () => {
+    renderPanel(aptRead({ lastMergeRefusal: {
+      cardId: "c1", analysedSha: doneReport().analysedSha, reason: "conflict", output: "o PR tem conflito com dev", by: "mussa", at: 1,
+    } }));
+    expect(await screen.findByText(
+      "O último merge não saiu: o PR está em conflito com a base. Peça ao card do PR para trazer a base (git merge), testar e subir; depois tente de novo.",
+    )).toBeInTheDocument();
   });
 
   it("resposta perdida e servidor sem merge rodando, sem recusa e sem merge: avisa que o resultado não foi confirmado", async () => {

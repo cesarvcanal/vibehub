@@ -1,3 +1,4 @@
+import { modelLabelFor } from "../maestro/maestro.js";
 import type { WorkflowAgent, WorkflowRun } from "../sdk/workflowProbe.js";
 
 /**
@@ -99,12 +100,14 @@ export interface MergeGate {
    */
   autoRetried?: true;
   /**
-   * How many times in a row the gate failed on this commit since the last human order ("Tentar de novo"
-   * resets it). Carried by `running`. Absent in a failure recorded before the field = 1.
+   * How many times in a row the gate failed on this commit with the same kind of failure (red checks, or a
+   * conflict with the base) since the last human order ("Tentar de novo" resets it); a change of kind starts
+   * it again at 1. Carried by `running`. Absent in a failure recorded before the field = 1.
    */
   failures?: number;
   /** The failure went past {@link MERGE_GATE_AUTO_RETRIES} automatic retries: nobody runs it again without a person. */
   exhausted?: true;
+  conflict?: true;
 }
 
 /**
@@ -121,15 +124,19 @@ export function mergeGateSelfHealing(gate: MergeGate): boolean {
   return gate.state === "failed" && !gate.exhausted && !(gate.autoRetried && gate.failures === undefined);
 }
 
-export type ReviewFleetAgent = Pick<WorkflowAgent, "id" | "label" | "phase" | "model" | "status" | "result" | "error" | "endedAt">;
+export type ReviewFleetAgent = Pick<WorkflowAgent, "id" | "label" | "phase" | "model" | "status" | "result" | "error" | "endedAt"> & {
+  modelLabel?: string;
+};
 export type ReviewFleetRun = Pick<WorkflowRun, "runId" | "name" | "phases" | "total" | "done" | "at" | "finished" | "outcome"> & {
   agents: ReviewFleetAgent[];
 };
 
 function fleetAgentForReaders(agent: WorkflowAgent): ReviewFleetAgent {
+  const modelLabel = modelLabelFor(agent.model);
   return {
     id: agent.id, label: agent.label, phase: agent.phase, status: agent.status,
     ...(agent.model !== undefined ? { model: agent.model } : {}),
+    ...(modelLabel ? { modelLabel } : {}),
     ...(agent.result !== undefined ? { result: agent.result } : {}),
     ...(agent.error !== undefined ? { error: agent.error } : {}),
     ...(agent.endedAt !== undefined ? { endedAt: agent.endedAt } : {}),
@@ -181,7 +188,8 @@ export interface Review {
    */
   approvePending?: boolean;
   /**
-   * The round in which the automatic merge was tried and refused (CI, conflict, connection). In that round
+   * The round in which the automatic merge was tried and refused (CI, connection; not a conflict, which the
+   * merge gate holds and orders the author to fix). In that round
    * it is not tried again and the texts go back to saying "merge pelo botão"; a new round resets the effect.
    */
   autoMergeFailedRound?: number;

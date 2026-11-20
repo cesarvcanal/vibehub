@@ -261,7 +261,7 @@ export async function cardSdkRoutes(app: FastifyInstance): Promise<void> {
        */
       const beforeTurn = (raw: string): Promise<void> | undefined =>
         author && authorsTheTurn(raw) && !isCardActor(author, card.id) ? recordCardActor(author, card.id) : undefined;
-      const feed = attachSocket(session, socket, wsOrigin, { beforeTurn });
+      const feed = attachSocket(session, socket, wsOrigin, { beforeTurn, typistUserId: author?.id });
       const stopFailureNotices = streamCardFailureNotices(card.id, author?.role === "owner", (frame) => {
         try {
           socket.send(JSON.stringify(frame));

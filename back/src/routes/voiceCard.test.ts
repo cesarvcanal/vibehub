@@ -17,6 +17,11 @@ let dir = "";
 let app: FastifyInstance;
 let owner = "";
 const upstream = vi.fn();
+const delivery = { failure: null as Error | null };
+const sendToTerminal = vi.fn(async (cardId: string) => {
+  if (delivery.failure) throw delivery.failure;
+  return { sent: true, cardId, title: "", project: "" };
+});
 
 async function boot(): Promise<FastifyInstance> {
   vi.resetModules();
@@ -39,6 +44,11 @@ async function boot(): Promise<FastifyInstance> {
     const actual = await vi.importActual<typeof import("../services/board/workspace.js")>("../services/board/workspace.js");
     return { ...actual, prepareCard: vi.fn(async () => undefined), openCard: vi.fn(async () => undefined) };
   });
+  vi.doMock("../services/maestro/maestro.js", async () => ({
+    ...(await vi.importActual<typeof import("../services/maestro/maestro.js")>("../services/maestro/maestro.js")),
+    sendToTerminal,
+    waitTerminalReady: vi.fn(async () => ({ ready: true })),
+  }));
   const { buildServer } = await import("../index.js");
   const server = await buildServer();
   await server.ready();
@@ -94,6 +104,8 @@ function answer() {
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "vibehub-voice-card-"));
   upstream.mockReset();
+  sendToTerminal.mockClear();
+  delivery.failure = null;
   vi.stubGlobal("fetch", upstream);
   app = await boot();
   owner = cookieOf(await app.inject({
@@ -331,16 +343,27 @@ describe("POST /api/cards/:id/voice/actions", () => {
   it("o dono cria um card pela voz e o resultado volta em output", async () => {
     const id = await makeCard();
     const projectId = (await cardsOf(id))[0]!.projectId;
-    const res = await voiceAction(id, { callId: "call_a", name: "create_card", arguments: JSON.stringify({ projectId, title: "Relatório" }) });
+    const res = await voiceAction(id, { callId: "call_a", name: "create_card", arguments: JSON.stringify({ projectId, title: "Relatório", instruction: "Faça a tarefa." }) });
     expect(res.statusCode).toBe(200);
-    expect(res.json().output).toMatchObject({ title: "Relatório", projectId });
+    expect(res.json().output).toMatchObject({ title: "Relatório", projectId, delivered: true });
+    expect(sendToTerminal.mock.calls[0]?.slice(0, 2)).toEqual([res.json().output.cardId, "Faça a tarefa."]);
     expect((await cardsOf(id)).map((card) => card.title)).toContain("Relatório");
+  });
+
+  it("card criado pela voz cuja instrução não chegou volta 200 com delivered false e o motivo, para a voz contar", async () => {
+    const id = await makeCard();
+    const projectId = (await cardsOf(id))[0]!.projectId;
+    delivery.failure = new Error("runner fora do ar");
+    const res = await voiceAction(id, { callId: "call_e", name: "create_card", arguments: JSON.stringify({ projectId, title: "Sem entrega", instruction: "Faça a tarefa." }) });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().output).toMatchObject({ title: "Sem entrega", delivered: false, deliveryError: "runner fora do ar" });
+    expect((await cardsOf(id)).map((card) => card.title)).toContain("Sem entrega");
   });
 
   it("o mesmo callId repetido não cria dois cards", async () => {
     const id = await makeCard();
     const projectId = (await cardsOf(id))[0]!.projectId;
-    const body = { callId: "call_b", name: "create_card", arguments: JSON.stringify({ projectId, title: "Uma vez" }) };
+    const body = { callId: "call_b", name: "create_card", arguments: JSON.stringify({ projectId, title: "Uma vez", instruction: "Faça a tarefa." }) };
     const [first, second] = await Promise.all([voiceAction(id, body), voiceAction(id, body)]);
     expect(second.json()).toEqual(first.json());
     expect((await cardsOf(id)).filter((card) => card.title === "Uma vez")).toHaveLength(1);
@@ -349,7 +372,7 @@ describe("POST /api/cards/:id/voice/actions", () => {
   it("callId diferente é outra ordem", async () => {
     const id = await makeCard();
     const projectId = (await cardsOf(id))[0]!.projectId;
-    const order = JSON.stringify({ projectId, title: "Duas vezes" });
+    const order = JSON.stringify({ projectId, title: "Duas vezes", instruction: "Faça a tarefa." });
     await voiceAction(id, { callId: "call_c1", name: "create_card", arguments: order });
     await voiceAction(id, { callId: "call_c2", name: "create_card", arguments: order });
     expect((await cardsOf(id)).filter((card) => card.title === "Duas vezes")).toHaveLength(2);
@@ -358,7 +381,7 @@ describe("POST /api/cards/:id/voice/actions", () => {
   it("falha da ordem responde o status do service e repetir a mesma ordem executa de novo", async () => {
     const id = await makeCard();
     const member = await memberWith(id, "work");
-    const body = { callId: "call_d", name: "create_card", arguments: JSON.stringify({ projectId: (await cardsOf(id))[0]!.projectId, title: "x" }) };
+    const body = { callId: "call_d", name: "create_card", arguments: JSON.stringify({ projectId: (await cardsOf(id))[0]!.projectId, title: "x", instruction: "Faça a tarefa." }) };
     const refused = await voiceAction(id, body, member);
     expect(refused.statusCode).toBe(403);
     expect(refused.json().error).toContain("only the owner");
@@ -367,7 +390,7 @@ describe("POST /api/cards/:id/voice/actions", () => {
 
   it("ordem que o board recusa volta com o status e o motivo, para a voz dizer à pessoa", async () => {
     const id = await makeCard();
-    const res = await voiceAction(id, { callId: "call_j", name: "create_card", arguments: JSON.stringify({ projectId: "inventado", title: "x" }) });
+    const res = await voiceAction(id, { callId: "call_j", name: "create_card", arguments: JSON.stringify({ projectId: "inventado", title: "x", instruction: "Faça a tarefa." }) });
     expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual({ error: "project not found" });
   });
@@ -387,13 +410,14 @@ describe("POST /api/cards/:id/voice/actions", () => {
     const id = await makeCard();
     const projectId = (await cardsOf(id))[0]!.projectId;
     expect((await voiceAction(id, { callId: "call_m", name: "list_projects", arguments: "{}" })).statusCode).toBe(200);
-    const created = await voiceAction(id, { callId: "call_m", name: "create_card", arguments: JSON.stringify({ projectId, title: "Outra ferramenta" }) });
+    const created = await voiceAction(id, { callId: "call_m", name: "create_card", arguments: JSON.stringify({ projectId, title: "Outra ferramenta", instruction: "Faça a tarefa." }) });
     expect(created.json().output.title).toBe("Outra ferramenta");
   });
 
   it("falha de infraestrutura ao executar a ordem é 502, sem a mensagem interna na resposta", async () => {
     const id = await makeCard();
     const other = await makeCard();
+    delivery.failure = new Error("docker exec failed: no such container");
     const res = await voiceAction(id, { callId: "call_k", name: "send_to_card", arguments: JSON.stringify({ cardId: other, text: "rode os testes" }) });
     expect(res.statusCode).toBe(502);
     expect(res.json()).toEqual({ error: "the board failed to run send_to_card; the server log has the detail" });

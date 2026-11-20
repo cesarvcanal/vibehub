@@ -150,6 +150,40 @@ const AGENT_STEPS: FeedLine[] = [
   { kind: "thinking", ms: 4_000 },
 ];
 
+const CONTEXT_SUMMARY = [
+  "- O botão Mergear da análise passa a mergear quando a pessoa autoriza, preso ao commit conferido.",
+  "- `deliverCard` recusa o merge com bloqueante aberto antes de chamar o GitHub.",
+  "- A revisão em rodadas enxerga o merge feito direto no GitHub e fecha sozinha.",
+].join("\n");
+
+export const RodadaInteiraNaAbaAgentes: Story = {
+  name: "Rodada inteira: agentes, revisor e autor (aba Agentes)",
+  args: {
+    review: review({
+      phase: "reviewing", round: 2, lastSubmitRound: 1, findings: FINDINGS, log: ROUND1,
+      fleet: [{
+        round: 1,
+        runs: [{
+          runId: "wf_r1", name: "vibehub-pr-analysis", phases: ["Contexto", "Revisão", "Verificação", "Julgamento"],
+          total: 4, done: 4, at: at(11), finished: true, outcome: "completed",
+          agents: [
+            { id: "b01f", label: "contexto", phase: "Contexto", model: "claude-opus-5-5", modelLabel: "Opus 5.5", status: "done", endedAt: at(3),
+              result: JSON.stringify({ summary: CONTEXT_SUMMARY }) },
+            { id: "b02f", label: "revisão: correctness", phase: "Revisão", model: "claude-sonnet-5-5", modelLabel: "Sonnet 5.5", status: "done", endedAt: at(7),
+              result: '{"findings":[{"title":"Chips em erro nunca saem do stash e reenviam a cada F5"}]}' },
+            { id: "b03f", label: "verificação: correctness · Chips em erro nunca saem do stash e reenviam a cada F5", phase: "Verificação",
+              model: "claude-sonnet-5-5", modelLabel: "Sonnet 5.5", status: "done", endedAt: at(9),
+              result: JSON.stringify({ confirmed: true, evidence: "- `TerminalComposer.tsx:514` grava o chip em erro no stash.\n- Depois do F5 o restore o reenvia." }) },
+            { id: "b04f", label: "juiz", phase: "Julgamento", model: "claude-opus-5-5", modelLabel: "Opus 5.5", status: "done", endedAt: at(11),
+              result: '{"findings":[{"title":"Chips em erro nunca saem do stash e reenviam a cada F5"}]}' },
+          ],
+        }],
+      }],
+    }),
+    working: { author: false, reviewer: true },
+  },
+};
+
 export const FrotaDeAgentesTrabalhando: Story = {
   name: "Frota de agentes trabalhando (aba Agentes)",
   args: {
@@ -164,18 +198,18 @@ export const FrotaDeAgentesTrabalhando: Story = {
       runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Contexto", "Revisão", "Verificação", "Julgamento"],
       total: 7, done: 5, at: Date.now(), finished: false,
       agents: [
-        { id: "a01f", label: "contexto", phase: "Contexto", model: "opus", status: "done", endedAt: 1,
-          result: '{"summary":"O PR faz o deliver de um card de análise mergear quando a pessoa autoriza."}' },
-        { id: "a02f", label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "done", endedAt: 2,
+        { id: "a01f", label: "contexto", phase: "Contexto", model: "claude-opus-5-5", modelLabel: "Opus 5.5", status: "done", endedAt: 1,
+          result: JSON.stringify({ summary: CONTEXT_SUMMARY }) },
+        { id: "a02f", label: "revisão: correctness", phase: "Revisão", model: "claude-sonnet-5-5", modelLabel: "Sonnet 5.5", status: "done", endedAt: 2,
           result: '{"findings":[{"title":"deliverCard.ts:88 deixa o merge passar com bloqueio aberto"},{"title":"corrida entre dois cliques no merge"}]}' },
-        { id: "a03f", label: "revisão: repoRules", phase: "Revisão", model: "sonnet", status: "done", endedAt: 3,
+        { id: "a03f", label: "revisão: repoRules", phase: "Revisão", model: "claude-sonnet-5-5", modelLabel: "Sonnet 5.5", status: "done", endedAt: 3,
           result: '{"findings":[{"title":"comentário novo em back/src/services/review/prompts.ts:641 narra o que a linha faz"}]}' },
-        { id: "a04f", label: "verificação: correctness · deliverCard.ts:88 deixa o merge passar com bloqueio aberto", phase: "Verificação", model: "sonnet",
+        { id: "a04f", label: "verificação: correctness · deliverCard.ts:88 deixa o merge passar com bloqueio aberto", phase: "Verificação", model: "claude-sonnet-5-5", modelLabel: "Sonnet 5.5",
           status: "done", endedAt: 4, result: '{"confirmed":false,"evidence":"deliverCard.ts:72 já recusa com blocking aberto, antes da linha 88."}' },
         { id: "a05f", label: "verificação: repoRules · comentário novo em back/src/services/review/prompts.ts:641 narra o que a linha faz", phase: "Verificação",
-          model: "sonnet", status: "done", endedAt: 5, result: '{"confirmed":true,"evidence":"A linha narra o fluxo, fora das exceções da §3."}' },
-        { id: "a06f", label: "verificação: correctness · corrida entre dois cliques no merge", phase: "Verificação", model: "sonnet", status: "running" },
-        { id: "a07f", label: "juiz", phase: "Julgamento", model: "opus", status: "running" },
+          model: "claude-sonnet-5-5", modelLabel: "Sonnet 5.5", status: "done", endedAt: 5, result: '{"confirmed":true,"evidence":"A linha narra o fluxo, fora das exceções da §3."}' },
+        { id: "a06f", label: "verificação: correctness · corrida entre dois cliques no merge", phase: "Verificação", model: "claude-sonnet-5-5", modelLabel: "Sonnet 5.5", status: "running" },
+        { id: "a07f", label: "juiz", phase: "Julgamento", model: "claude-opus-5-5", modelLabel: "Opus 5.5", status: "running" },
       ],
     }],
   },
@@ -189,13 +223,13 @@ export const FrotaInterrompidaPeloLimiteDeUso: Story = {
       runId: "wf_lim01", name: "vibehub-pr-analysis", phases: ["Contexto", "Revisão", "Verificação", "Julgamento"],
       total: 4, done: 2, at: Date.now(), finished: true, outcome: "failed",
       agents: [
-        { id: "a11f", label: "contexto", phase: "Contexto", model: "opus", status: "done", endedAt: 1,
+        { id: "a11f", label: "contexto", phase: "Contexto", model: "claude-opus-5-5", modelLabel: "Opus 5.5", status: "done", endedAt: 1,
           result: '{"summary":"O PR mantém a chamada de voz viva durante o deploy."}' },
-        { id: "a12f", label: "revisão: tests", phase: "Revisão", model: "sonnet", status: "done", endedAt: 2,
+        { id: "a12f", label: "revisão: tests", phase: "Revisão", model: "claude-sonnet-5-5", modelLabel: "Sonnet 5.5", status: "done", endedAt: 2,
           result: '{"findings":[{"title":"Teste de queda afirma logo após startCall, sem esperar o efeito"}]}' },
         { id: "a13f", label: "verificação: tests · Teste de queda afirma logo após startCall, sem esperar o efeito", phase: "Verificação",
-          model: "sonnet", status: "stopped", error: "You've hit your session limit · resets 1:10am (UTC)" },
-        { id: "a14f", label: "juiz", phase: "Julgamento", model: "opus", status: "stopped", error: "You've hit your session limit · resets 1:10am (UTC)" },
+          model: "claude-sonnet-5-5", modelLabel: "Sonnet 5.5", status: "stopped", error: "You've hit your session limit · resets 1:10am (UTC)" },
+        { id: "a14f", label: "juiz", phase: "Julgamento", model: "claude-opus-5-5", modelLabel: "Opus 5.5", status: "stopped", error: "You've hit your session limit · resets 1:10am (UTC)" },
       ],
     }],
   },
@@ -232,6 +266,30 @@ export const RevisorConferindoRodada2: Story = {
 export const ProntoPraMerge: Story = {
   name: "5. Pronto pra merge (visto por quem mergeia)",
   args: { review: READY, actions: { ...NO_ACTIONS, merge: true, cancel: true, request: true } },
+};
+
+export const ProntoEmConflitoComABase: Story = {
+  name: "5b. Pronto, mas o PR entrou em conflito com a base",
+  args: {
+    review: {
+      ...READY,
+      mergeGate: { sha: "a".repeat(40), state: "failed", output: "o PR tem conflito com dev: o merge commit não sai limpo", at: 1, failures: 1, conflict: true },
+    },
+    actions: { ...NO_ACTIONS, merge: true, cancel: true, request: true },
+  },
+};
+
+export const ConflitoQueAIaNaoResolveu: Story = {
+  name: "5c. Pronto, mas o conflito com a base seguiu depois das ordens à IA do autor",
+  args: {
+    review: {
+      ...READY,
+      mergeGate: {
+        sha: "a".repeat(40), state: "failed", output: "o PR tem conflito com dev: o merge commit não sai limpo", at: 1, failures: 4, conflict: true, exhausted: true,
+      },
+    },
+    actions: { ...NO_ACTIONS, merge: true, retry: true, cancel: true, request: true },
+  },
 };
 
 export const IaTrabalhandoDepoisDoPronto: Story = {

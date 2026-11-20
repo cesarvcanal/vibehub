@@ -323,6 +323,10 @@ describe("deliverCard — o vibehub_deliver com revisão de PR ativa", () => {
     const { deliverCard, card } = await cardUnderReview("ready", "u-m");
     mergeAnswer = { kind: "refused", status: 409, reason: "gate", error: "back: failing" };
     expect(await deliverCard(card.id, { branch: "dev", authorized: true, from: card.id })).toMatchObject({ reason: "gate", output: expect.stringContaining("back: failing") });
+    mergeAnswer = { kind: "refused", status: 409, reason: "conflict", error: "o PR tem conflito com dev: o merge commit não sai limpo" };
+    expect(await deliverCard(card.id, { branch: "dev", authorized: true, from: card.id })).toMatchObject({
+      reason: "conflict", output: expect.stringContaining("o PR tem conflito com dev"),
+    });
     // the real reason reaches the AI, not a generic "a revisão está ativa"
     mergeAnswer = { kind: "refused", status: 400, reason: "merger_sem_github", error: "merger_sem_github: sem conexão" };
     expect(await deliverCard(card.id, { branch: "dev", authorized: true, from: card.id })).toMatchObject({

@@ -542,6 +542,18 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
     expect(screen.getByTestId("sdk-question")).toHaveAttribute("data-outcome", "answered");
   });
 
+  it("a explicação de cada opção aparece embaixo do título, dentro do botão", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(QUESTION);
+
+    const option = screen.getByRole("button", { name: "Detalhado" });
+    expect(within(option).getByText("Explicação completa")).toBeVisible();
+    expect(option).toHaveAccessibleDescription("Explicação completa");
+  });
+
   it("multiSelect collects the picks and sends them together on 'Answer'", async () => {
     renderSdkChat();
     const ws = await socket();
@@ -1470,6 +1482,41 @@ describe("SdkChatView — responder A decisão (não um recado solto)", () => {
 
     await userEvent.click(screen.getByTestId("pending-tray-item"));
     expect(screen.queryByTestId("sdk-reply-banner")).toBeNull();
+  });
+
+  it("pergunta em prosa com lista: cada item vira botão com título e explicação, e o clique responde", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({
+      type: "assistant_text",
+      text: "Revisei o PR.\n\nDecisão sua:\n1. **Crio o PR de teste (recomendado)** — confiro o conflito de ponta a ponta antes do merge.\n2. **Merge agora** — você aceita a pendência.",
+    });
+    ws.deliver({ type: "result", isError: false });
+
+    const options = screen.getAllByTestId("sdk-prose-option");
+    expect(options).toHaveLength(2);
+    expect(within(options[0]!).getByText("confiro o conflito de ponta a ponta antes do merge.")).toBeVisible();
+    expect(screen.getByTestId("sdk-prose-question")).not.toHaveTextContent("1.");
+
+    await userEvent.click(screen.getByRole("button", { name: "Merge agora" }));
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    const frame = JSON.parse(ws.sent[0]!);
+    expect(frame.type).toBe("user");
+    expect(frame.text).toContain("Decisão sua:");
+    expect(frame.text).toMatch(/\n\nMerge agora$/);
+    expect(screen.getByTestId("sdk-prose-question")).toHaveAttribute("data-answered", "true");
+    expect(screen.getByTestId("sdk-prose-answered")).toHaveTextContent("Merge agora");
+    expect(screen.queryByTestId("sdk-prose-option")).toBeNull();
+  });
+
+  it("a pergunta com opções que o agente deixou para trás não oferece mais os botões", async () => {
+    const ws = await chatWithProseQuestion();
+    ws.deliver({ type: "assistant_text", text: "Qual você prefere?\n1. A\n2. B" });
+    ws.deliver({ type: "assistant_text", text: "Fui de A." });
+    await waitFor(() => expect(screen.queryByTestId("pending-tray")).toBeNull());
+    expect(screen.queryByTestId("sdk-prose-option")).toBeNull();
   });
 
   it("o AGENTE seguiu sozinho: a pergunta antiga sai da bandeja e o alvo cai junto", async () => {
@@ -2903,6 +2950,56 @@ describe("SdkChatView — subagentes", () => {
     expect(within(dialog).getByTestId("sdk-timeline-tool")).toHaveTextContent("Read(sdkChat.ts)");
     expect(within(dialog).getByTestId("sdk-timeline-tool")).toHaveTextContent("40 lines");
     expect(within(dialog).getByTestId("sdk-agent-now")).toHaveTextContent("Lendo o reducer");
+  });
+
+  async function openFinishedSubagent(prompt: string, report: string): Promise<HTMLElement> {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(agentCall);
+    ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "completed", toolUses: 3 });
+    fireEvent.click(within(screen.getByTestId("sdk-fleet")).getByTestId("sdk-fleet-agent"));
+    const dialog = await screen.findByTestId("sdk-detail");
+    await waitFor(() => expect(ws.sent.some((frame) => (JSON.parse(frame) as { req?: string }).req === "agent")).toBe(true));
+    const ask = ws.sent.map((frame) => JSON.parse(frame) as { req?: string; nonce?: string }).find((frame) => frame.req === "agent")!;
+    ws.deliver({
+      type: "detail", req: "agent", id: "t1", nonce: ask.nonce,
+      data: { found: true, prompt, items: [{ kind: "text", at: 3, text: report }] },
+    } as never);
+    await within(dialog).findByTestId("sdk-timeline-text");
+    return dialog;
+  }
+
+  it("a aba Tarefa mostra as entregas do subagente marcadas pelo relatório, e o contexto à parte", async () => {
+    const dialog = await openFinishedSubagent(
+      "Explore o **chat**.\n\n- [ ] Achar o reducer\n- [ ] Medir o render",
+      "- [x] Achar o reducer\n- [ ] Medir o render — sem tempo\n\n### O que achei",
+    );
+
+    fireEvent.click(within(dialog).getByTestId("sdk-agent-tab-task"));
+    const deliverables = within(dialog).getAllByTestId("sdk-agent-deliverable");
+    expect(deliverables.map((row) => [row.textContent, row.getAttribute("data-state")])).toEqual([
+      [expect.stringContaining("Achar o reducer"), "done"],
+      [expect.stringContaining("Medir o render"), "missed"],
+    ]);
+    expect(within(dialog).getByTestId("sdk-agent-deliverables-progress")).toHaveTextContent("1 of 2 done");
+    const context = within(dialog).getByTestId("sdk-agent-task-context");
+    expect(within(context).getByText("chat").tagName).toBe("STRONG");
+    expect(context).not.toHaveTextContent("Achar o reducer");
+  });
+
+  it("a aba Relatório lê como documento: títulos de seção de verdade e a lista de entregas com ícone de feito", async () => {
+    const dialog = await openFinishedSubagent(
+      "Explore",
+      "- [x] Achar o reducer\n- [ ] Medir o render\n\n## Veredito: não apto\n\n### 1. O reducer duplica a linha\n\nTexto.",
+    );
+
+    fireEvent.click(within(dialog).getByTestId("sdk-agent-tab-report"));
+    const report = within(dialog).getByTestId("sdk-agent-report");
+    expect(within(report).getByRole("heading", { level: 2 })).toHaveTextContent("Veredito: não apto");
+    expect(within(report).getByRole("heading", { level: 3 })).toHaveTextContent("1. O reducer duplica a linha");
+    expect(within(report).getAllByTestId("markdown-task-mark").map((mark) => mark.getAttribute("data-checked"))).toEqual(["true", "false"]);
   });
 
   it("o texto do subagente não vira resposta do agente principal", async () => {

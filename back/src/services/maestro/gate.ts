@@ -428,6 +428,12 @@ export function runGate(cardId: string, opts: { expectedSha?: string } = {}): Pr
   return run;
 }
 
+export async function readWorktreeHead(cardId: string): Promise<string | null> {
+  const { card, project } = await getCardWithProject(cardId);
+  const probeOut = await hostExecutor().runScript(buildGateProbeScript(config.runner.container, cardWorkPaths(project, card).cwd), { timeoutMs: 30_000 });
+  return parseGateProbe(probeOut.stdout).headSha;
+}
+
 /** What a gate held to `expectedSha` answers when the probe found the worktree elsewhere. PURE. */
 function offCommitOutput(expectedSha: string, probe: Pick<GateProbe, "headSha" | "cleanTree">): string {
   const why: string[] = [];

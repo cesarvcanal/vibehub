@@ -1,20 +1,22 @@
 import { JsonStore } from "../../store/jsonStore.js";
 import { dataPath } from "../../config/env.js";
-import type { AnalysisMergeRefusal, AnalysisReport } from "./analysisModel.js";
+import type { AnalysisMergeGate, AnalysisMergeRefusal, AnalysisReport } from "./analysisModel.js";
 
 interface AnalysesDoc {
   analyses: AnalysisReport[];
   mergeRefusals: AnalysisMergeRefusal[];
+  mergeGates: AnalysisMergeGate[];
 }
 
 const store = new JsonStore<AnalysesDoc>(
   dataPath("analyses.json"),
-  () => ({ analyses: [], mergeRefusals: [] }),
+  () => ({ analyses: [], mergeRefusals: [], mergeGates: [] }),
   (raw) => {
     const doc = (raw ?? {}) as Partial<AnalysesDoc>;
     return {
       analyses: Array.isArray(doc.analyses) ? doc.analyses : [],
       mergeRefusals: Array.isArray(doc.mergeRefusals) ? doc.mergeRefusals : [],
+      mergeGates: Array.isArray(doc.mergeGates) ? doc.mergeGates : [],
     };
   },
 );
@@ -44,5 +46,19 @@ export async function saveAnalysisMergeRefusal(cardId: string, refusal: Analysis
   await store.mutate((doc) => {
     const otherCardsRefusals = doc.mergeRefusals.filter((saved) => saved.cardId !== cardId);
     doc.mergeRefusals = refusal ? [...otherCardsRefusals, structuredClone(refusal)] : otherCardsRefusals;
+  });
+}
+
+export async function getAnalysisMergeGate(cardId: string): Promise<AnalysisMergeGate | undefined> {
+  const found = (await store.load()).mergeGates.find((gate) => gate.cardId === cardId);
+  return found && structuredClone(found);
+}
+
+export async function saveAnalysisMergeGate(gate: AnalysisMergeGate): Promise<boolean> {
+  return await store.mutate((doc) => {
+    const analysis = doc.analyses.find((saved) => saved.cardId === gate.cardId);
+    if (analysis?.analysedSha !== gate.analysedSha) return false;
+    doc.mergeGates = [...doc.mergeGates.filter((saved) => saved.cardId !== gate.cardId), structuredClone(gate)];
+    return true;
   });
 }

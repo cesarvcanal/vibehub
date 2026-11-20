@@ -7,7 +7,8 @@ import { getSettings } from "../settings/settings.js";
 import { deliver, type DeliverResult } from "../maestro/deliver.js";
 import { logger } from "../../utils/logger.js";
 import { canMergeReview, type Review, type ReviewPhase } from "./model.js";
-import { claimMerge, markReviewMerged, mergeGateRunning, releaseMerge, reopenAfterHeadMoved } from "./orchestrator.js";
+import { mergeConflictOutput } from "./prompts.js";
+import { claimMerge, holdMergeOnConflict, markReviewMerged, mergeGateRunning, releaseMerge, reopenAfterHeadMoved } from "./orchestrator.js";
 import { getReview } from "./store.js";
 
 /**
@@ -106,6 +107,9 @@ export async function mergeReviewedPr(
       error: "os testes do merge ainda estão rodando no commit aprovado: o merge libera quando terminarem",
     };
   }
+  if (gate?.state === "failed" && gate.conflict) {
+    return { kind: "refused", status: 409, reason: "conflict", phase: review.phase, error: mergeConflictOutput(review) };
+  }
   if (gate?.state === "failed") {
     return {
       kind: "refused", status: 409, reason: "gate", phase: review.phase,
@@ -142,6 +146,10 @@ export async function mergeReviewedPr(
     if (result.reason === "head_moved") {
       const after = await reopenAfterHeadMoved(review.id, user.username);
       return { kind: "refused", status: 409, reason: "head_moved", error: result.output ?? "o PR andou depois do pronto", review: after, result };
+    }
+    if (result.reason === "conflict") {
+      const after = await holdMergeOnConflict(review.id, user.username);
+      return { kind: "refused", status: 409, reason: "conflict", error: result.output ?? "o PR tem conflito com a base", review: after, result };
     }
     return {
       kind: "refused", status: 409, reason: result.reason, error: result.output ?? `merge não feito: ${result.reason}`,
