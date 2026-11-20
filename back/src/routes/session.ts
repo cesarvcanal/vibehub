@@ -64,14 +64,8 @@ export function isValidTermSize(n: unknown): n is number {
   return typeof n === "number" && Number.isInteger(n) && n >= 10 && n <= 500;
 }
 
-/** Last time each card's human-active stamp was written — the throttle gate. Module-scoped. */
 const lastHumanStamp = new Map<string, number>();
 
-/**
- * Should we WRITE the stamp for this card now? true when the throttle window has passed since the
- * last write (updating the gate as a side effect). Keeps the disk-write rate bounded no matter how
- * fast the user types, across every connection to the same card. PURE-ish (mutates the gate map).
- */
 export function shouldStampHumanActive(cardId: string, typistUserId: string | undefined, now: number = Date.now()): boolean {
   const gateKey = `${cardId}:${typistUserId ?? ""}`;
   const last = lastHumanStamp.get(gateKey) ?? 0;
