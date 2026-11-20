@@ -760,7 +760,7 @@ function TimelineThinking({ text }: { text: string }) {
       <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}
         className="flex min-w-0 max-w-[88%] items-start gap-1.5 rounded-lg px-2 py-0.5 text-left text-[11px] italic text-muted-foreground hover:bg-muted/40">
         <Brain aria-hidden className="mt-0.5 h-3 w-3 shrink-0" />
-        <span className={cn("min-w-0", open ? "whitespace-pre-wrap" : "truncate")}>{t("sdk.detail.thought")} {text}</span>
+        <span className={cn("min-w-0", open ? "whitespace-pre-wrap [overflow-wrap:anywhere]" : "truncate")}>{t("sdk.detail.thought")} {text}</span>
         <ChevronRight aria-hidden className={cn("mt-0.5 h-3 w-3 shrink-0 transition-transform", open && "rotate-90")} />
       </button>
     </li>
