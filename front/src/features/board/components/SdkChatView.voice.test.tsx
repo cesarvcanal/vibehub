@@ -10,6 +10,7 @@ import { get, post } from "@/lib/api";
 import { resetLanguage, setLanguage } from "@/i18n";
 import { FakeAudioContext, fakeRig, type FakeRig } from "@/features/voice/fakeWebRtc";
 import { setVoiceCallTestHooks } from "@/features/voice/useVoiceCall";
+import { SERVER_BACK_CONTEXT } from "@/features/voice/voiceContext";
 import { DELEGATION_NOT_SENT } from "@/features/voice/voiceDelegation";
 import { QUESTION_ANSWER_SENT } from "@/features/voice/voiceQuestion";
 
@@ -246,7 +247,7 @@ describe("a voice call inside the card's chat", () => {
     await waitFor(() => expect(ws.frames.some((f) => f.type === "user" && f.text?.includes("Rode os testes."))).toBe(true));
     ws.deliver({ type: "assistant_text", text: "Vou rodar." });
     ws.drop();
-    const results = () => channel().sent.filter((e) => e.type === "session.commentary.append");
+    const results = () => channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append" && sentEvent.content !== SERVER_BACK_CONTEXT);
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(results()).toEqual([]);
 
@@ -361,6 +362,56 @@ describe("a voice call inside the card's chat", () => {
     expect(screen.getByTestId("voice-call-bar")).toBeInTheDocument();
   });
 
+  it("the chat losing the server and getting it back mid-call makes the voice say so, once per return", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    const told = () => channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append" && sentEvent.delegation_id === null);
+    expect(told()).toEqual([]);
+
+    ws.drop();
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: 5_000 });
+    expect(told()).toEqual([]);
+    const second = FakeSocket.instances[1]!;
+    second.accept();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(told()).toEqual([]);
+    second.deliver({ type: "ready" });
+    await waitFor(() => expect(told()).toEqual([expect.objectContaining({ content: SERVER_BACK_CONTEXT })]));
+
+    second.drop();
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(3), { timeout: 5_000 });
+    const third = FakeSocket.instances[2]!;
+    third.accept();
+    third.deliver({ type: "ready" });
+    await waitFor(() => expect(told()).toHaveLength(2));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(told()).toHaveLength(2);
+  });
+
+  it("a server drop still going on when the call starts is announced when the server comes back", async () => {
+    const { ws } = await openChat();
+    ws.drop();
+    await startCall();
+    const told = () => channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append" && sentEvent.delegation_id === null);
+    expect(told()).toEqual([]);
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: 5_000 });
+    const again = FakeSocket.instances[1]!;
+    again.accept();
+    again.deliver({ type: "ready" });
+    await waitFor(() => expect(told()).toEqual([expect.objectContaining({ content: SERVER_BACK_CONTEXT })]));
+  });
+
+  it("a server drop already over before the call is not announced when the call starts", async () => {
+    const { ws } = await openChat();
+    ws.drop();
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: 5_000 });
+    const again = FakeSocket.instances[1]!;
+    again.accept();
+    again.deliver({ type: "ready" });
+    await startCall();
+    expect(channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append")).toEqual([]);
+  });
+
   it("the replying sphere is blue and follows the assistant's REAL audio track", async () => {
     await openChat();
     await startCall();
@@ -457,6 +508,7 @@ describe("a pergunta com opções do agente durante a chamada", () => {
     again.deliver({ type: "user", text: "decide a planilha", at: 1 });
     again.deliver(QUESTION);
     again.deliver({ type: "ready" });
-    expect(commentary()).toHaveLength(1);
+    await waitFor(() => expect(commentary()).toContainEqual(expect.objectContaining({ content: SERVER_BACK_CONTEXT })));
+    expect(commentary().filter((event) => String(event.content).includes("Onde guardo as metas?"))).toHaveLength(1);
   });
 });
