@@ -841,6 +841,20 @@ function MergeGateBanner({ review }: { review: Review }) {
     );
   }
   if (!gate || !status) return null;
+  if (status === "conflict") {
+    return (
+      <p role="status" className={cn("shrink-0 rounded-md border px-2.5 py-1.5 text-xs", NOTICE_TONE.warn)}>
+        {t("review.mergeGate.conflict", { base: review.base })}
+      </p>
+    );
+  }
+  if (status === "conflictFailed") {
+    return (
+      <p role="alert" className="shrink-0 rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-xs font-medium text-destructive">
+        {t("review.mergeGate.conflictFailed", { base: review.base, max: MERGE_GATE_AUTO_RETRIES })}
+      </p>
+    );
+  }
   if (status === "fixing") {
     return (
       <div role="status" className={cn("shrink-0 rounded-md border px-2.5 py-1.5 text-xs", NOTICE_TONE.warn)}>
@@ -974,12 +988,16 @@ function stageText(review: Review, authorWorking: boolean, t: typeof translate):
         : t("review.stage.reviewing.first");
     case "fixing":
       return t("review.stage.fixing");
-    case "ready":
+    case "ready": {
       if (authorWorking) return t("review.stage.authorWorking");
-      if (mergeGateStatus(review) === "failed") return t("review.stage.gateFailed");
-      if (mergeGateStatus(review) === "fixing") return t("review.stage.gateFixing");
-      if (mergeGateStatus(review) === "running") return t("review.stage.gateRunning");
+      const gateStatus = mergeGateStatus(review);
+      if (gateStatus === "failed") return t("review.stage.gateFailed");
+      if (gateStatus === "fixing") return t("review.stage.gateFixing");
+      if (gateStatus === "running") return t("review.stage.gateRunning");
+      if (gateStatus === "conflict") return t("review.stage.gateConflict");
+      if (gateStatus === "conflictFailed") return t("review.stage.gateConflictFailed");
       return t("review.stage.ready");
+    }
     case "impasse":
       return t("review.stage.impasse");
     case "merged":

@@ -902,6 +902,8 @@ describe("GET da revisão confere o PR no GitHub (merge feito fora do painel)", 
   it("o PR mergeado direto no GitHub aparece mergeado já na leitura em ready, e o freio segura o gh por um minuto", async () => {
     const w = await world();
     const ready = await readyReview(w);
+    await vi.waitFor(async () => expect((await (await store()).getReview(ready.id))?.mergeGate?.state).toBe("passed"));
+    readPrState.mockClear();
     prState = { state: "MERGED", headSha: SHA1 };
     const read = async () =>
       (await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/review`, headers: { cookie: w.autor.cookie } })).json();
@@ -1146,6 +1148,25 @@ describe("merge", () => {
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
     expect(String(send.mock.calls[0]![1])).toContain(`git diff ${SHA1}..HEAD`);
+  });
+
+  it("merge recusado porque a base andou e o PR ficou em conflito depois do pronto: o botão volta a ficar preso e o autor recebe a ordem de trazer a base", async () => {
+    const w = await world();
+    const review = await readyReview(w);
+    await vi.waitFor(async () => expect((await (await store()).getReview(review.id))?.mergeGate?.state).toBe("passed"));
+    deliverResult = {
+      prUrl: PR.url, merged: false, reason: "conflict", branch: "dev", cardBranch: PR.branch, output: "o PR tem conflito com dev",
+    };
+    const res = await merge(review.id, w.merger);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ reason: "conflict", review: { phase: "ready", mergeGate: { state: "failed", conflict: true } } });
+    await vi.waitFor(() => expect(send.mock.calls.some(([card]) => card === w.cardId)).toBe(true));
+    const toAuthor = String(send.mock.calls.find(([card]) => card === w.cardId)?.[1]);
+    expect(toAuthor).toContain("git merge origin/dev");
+    const again = await merge(review.id, w.merger);
+    expect(again.statusCode).toBe(409);
+    expect(again.json()).toMatchObject({ reason: "conflict" });
+    expect(deliver).toHaveBeenCalledTimes(1);
   });
 
   it("merge só acontece em ready", async () => {

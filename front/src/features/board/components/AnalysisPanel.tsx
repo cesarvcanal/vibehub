@@ -29,6 +29,12 @@ const HEALTH_TONE: Record<DimensionHealth, BadgeTone> = {
 
 const VERDICT_TONE: Record<AnalysisVerdict, BadgeTone> = { apt: "ok", not_apt: "critical", pending: "info" };
 
+function mergeRefusalTitle(reason: string, t: Translate): string {
+  if (reason === "gate") return t("analysis.merge.refused.gate");
+  if (reason === "conflict") return t("analysis.merge.refused.conflict");
+  return t("analysis.merge.refused.other");
+}
+
 export function AnalysisPanel({ cardId, onClose }: { cardId: string; onClose: () => void }) {
   const t = useT();
   const analysisQuery = useCardAnalysis(cardId, { enabled: true });
@@ -100,10 +106,8 @@ function AnalysisMerge({ cardId, read, rereading }: { cardId: string; read: Anal
     <div className="flex shrink-0 flex-col gap-1.5">
       {refusal ? (
         <div role="alert" className="flex flex-col gap-1 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs">
-          <p className="font-medium text-destructive">
-            {refusal.reason === "gate" ? t("analysis.merge.refused.gate") : t("analysis.merge.refused.other")}
-          </p>
-          {refusal.output ? (
+          <p className="font-medium text-destructive">{mergeRefusalTitle(refusal.reason, t)}</p>
+          {refusal.output && refusal.reason !== "conflict" ? (
             <pre className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground">{refusal.output}</pre>
           ) : null}
         </div>

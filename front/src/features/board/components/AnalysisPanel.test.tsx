@@ -263,6 +263,15 @@ describe("merge pelo painel da análise", () => {
     expect(screen.getByRole("button", { name: "Tentar o merge do PR #312 de novo" })).toBeEnabled();
   });
 
+  it("último merge barrado por conflito com a base: o painel diz o conflito e o que fazer, sem a saída do gh", async () => {
+    renderPanel(aptRead({ lastMergeRefusal: {
+      cardId: "c1", analysedSha: doneReport().analysedSha, reason: "conflict", output: "o PR tem conflito com dev", by: "mussa", at: 1,
+    } }));
+    expect(await screen.findByText(
+      "O último merge não saiu: o PR está em conflito com a base. Peça ao card do PR para trazer a base (git merge), testar e subir; depois tente de novo.",
+    )).toBeInTheDocument();
+  });
+
   it("resposta perdida e servidor sem merge rodando, sem recusa e sem merge: avisa que o resultado não foi confirmado", async () => {
     post.mockRejectedValue(apiReject(502, ""));
     renderPanel(aptRead());

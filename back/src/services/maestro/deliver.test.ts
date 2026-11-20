@@ -274,7 +274,7 @@ describe("buildMergeScript", () => {
   });
 
   /** Runs the merge body (what `docker exec … bash -s` receives) with a fake gh whose PR head is `prHead`. */
-  async function runMerge(prHead: string, pin: string, { prTitle = "fix(deliver): título qualquer", viewError = "" } = {}) {
+  async function runMerge(prHead: string, pin: string, { prTitle = "fix(deliver): título qualquer", viewError = "", mergeable = "MERGEABLE" } = {}) {
     const { deliver } = await load();
     const root = await mkdtemp(join(tmpdir(), "vibehub-merge-"));
     try {
@@ -283,15 +283,15 @@ describe("buildMergeScript", () => {
         "#!/bin/bash",
         'echo "gh $*" >> "$ROOT/log"',
         'case "$1 $2" in',
-        `  "pr view") [ "$*" = "pr view ${PR} --json headRefOid,number,title --jq .headRefOid, .number, .title" ] || exit 1`,
+        `  "pr view") [ "$*" = "pr view ${PR} --json headRefOid,number,mergeable,title --jq .headRefOid, .number, .mergeable, .title" ] || exit 1`,
         `    [ -z "$FAKE_VIEW_ERROR" ] || { echo "$FAKE_VIEW_ERROR" >&2; exit 1; }`,
-        `    printf '%s\\n' "$FAKE_HEAD" 7 "$FAKE_TITLE" ;;`,
+        `    printf '%s\\n' "$FAKE_HEAD" 7 "$FAKE_MERGEABLE" "$FAKE_TITLE" ;;`,
         `  "pr merge") while [ $# -gt 0 ]; do [ "$1" = --subject ] && printf 'subject=[%s]\\n' "$2" >> "$ROOT/log"; shift; done; echo "Merged" ;;`,
         "esac",
       ].join("\n"), { mode: 0o755 });
       const lines = deliver.buildMergeScript("vibehub-runner", TOKEN, root, PR, pin).split("\n");
       const inner = lines.slice(lines.findIndex((l) => l.startsWith("docker exec")) + 1, -1).join("\n");
-      const env = { PATH: `${join(root, "bin")}:${process.env.PATH}`, ROOT: root, FAKE_HEAD: prHead, FAKE_TITLE: prTitle, FAKE_VIEW_ERROR: viewError };
+      const env = { PATH: `${join(root, "bin")}:${process.env.PATH}`, ROOT: root, FAKE_HEAD: prHead, FAKE_TITLE: prTitle, FAKE_VIEW_ERROR: viewError, FAKE_MERGEABLE: mergeable };
       const stdout = execFileSync("bash", ["-s"], { input: inner, env, encoding: "utf8" });
       const log = execFileSync("bash", ["-c", `cat '${join(root, "log")}'`], { encoding: "utf8" });
       return { stdout, log, parsed: deliver.parseMerge(stdout) };
@@ -329,6 +329,18 @@ describe("buildMergeScript", () => {
     const r = await runMerge(moved, HEAD_SHA);
     expect(r.parsed).toMatchObject({ merged: false, movedTo: moved });
     expect(r.log).not.toContain("pr merge");
+  });
+
+  it("executado de verdade: o PR em conflito com a base NÃO é mergeado e sai como conflict", async () => {
+    const r = await runMerge(HEAD_SHA, HEAD_SHA, { mergeable: "CONFLICTING" });
+    expect(r.parsed).toMatchObject({ merged: false, conflict: true });
+    expect(r.log).not.toContain("pr merge");
+  });
+
+  it("executado de verdade: mergeable ainda não calculado pelo GitHub (UNKNOWN) não segura o merge", async () => {
+    const r = await runMerge(HEAD_SHA, HEAD_SHA, { mergeable: "UNKNOWN" });
+    expect(r.parsed).toMatchObject({ merged: true });
+    expect(r.parsed).not.toHaveProperty("conflict");
   });
 
   it("executado de verdade: falha ao ler o head do PR não mergeia às cegas", async () => {
@@ -480,6 +492,15 @@ describe("deliver uses the PR's CI as the gate when there is one", () => {
     const out = await deliver.deliver(card.id, { branch: "main", authorized: true });
     expect(out).toMatchObject({ merged: true });
     expect(scripts().find((s) => s.includes("gh pr merge"))).toContain(`--merge --match-head-commit '${HEAD_SHA}'`);
+  });
+
+  it("the PR conflicts with its base at the merge: conflict, naming the base, nothing merged", async () => {
+    const { deliver, registry, card } = await makeCard();
+    wire({ ci: '[{"name":"back","bucket":"pass"}]', merge: "__VIBEHUB_DELIVER__ error conflict\n" });
+    const out = await deliver.deliver(card.id, { branch: "main", authorized: true });
+    expect(out).toMatchObject({ merged: false, reason: "conflict", prUrl: PR });
+    expect(out.output).toBe("o PR tem conflito com main: o merge commit não sai limpo até a branch do card receber main");
+    expect((await registry.getCard(card.id))?.prs?.[0]?.mergedAt).toBeUndefined();
   });
 
   it("the PR moved between the gate and the merge: head_moved, naming both commits, nothing merged", async () => {
@@ -1083,11 +1104,12 @@ describe("buildPrStateScript / parsePrState", () => {
   it("lê o estado e o head do PR pela URL, com o token do stdin", async () => {
     const { deliver } = await load();
     const script = deliver.buildPrStateScript("vibehub-runner", TOKEN, "/work/x", PR);
-    expect(script).toContain(`gh pr view '${PR}' --json state,headRefOid`);
+    expect(script).toContain(`gh pr view '${PR}' --json state,headRefOid,mergeable`);
     for (const line of script.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
     const sha = "b".repeat(40);
-    expect(deliver.parsePrState(`__VIBEHUB_DELIVER__ prstate MERGED ${sha}`)).toEqual({ ok: true, state: "MERGED", headSha: sha });
-    expect(deliver.parsePrState(`__VIBEHUB_DELIVER__ prstate OPEN ${sha.toUpperCase()}`)).toEqual({ ok: true, state: "OPEN", headSha: sha });
+    expect(deliver.parsePrState(`__VIBEHUB_DELIVER__ prstate MERGED ${sha} UNKNOWN`)).toEqual({ ok: true, state: "MERGED", headSha: sha, mergeable: "UNKNOWN" });
+    expect(deliver.parsePrState(`__VIBEHUB_DELIVER__ prstate OPEN ${sha.toUpperCase()} MERGEABLE`)).toEqual({ ok: true, state: "OPEN", headSha: sha, mergeable: "MERGEABLE" });
+    expect(deliver.parsePrState(`__VIBEHUB_DELIVER__ prstate OPEN ${sha} CONFLICTING`)).toEqual({ ok: true, state: "OPEN", headSha: sha, mergeable: "CONFLICTING" });
     expect(deliver.parsePrState("denied\n__VIBEHUB_DELIVER__ error view")).toMatchObject({ ok: false, stage: "view" });
   });
 });
