@@ -1092,40 +1092,52 @@ describe("buildPrStateScript / parsePrState", () => {
   });
 });
 
-describe("buildPrDiffScript / parsePrDiff: o diff líquido do PR em dois commits", () => {
+describe("buildPrDiffScript / parsePrDiff / readPrDiffUnchanged: o diff líquido do PR em dois commits", () => {
   const FROM = "a".repeat(40);
   const TO = "b".repeat(40);
   const DIGEST = "1".repeat(64);
   const OTHER_DIGEST = "2".repeat(64);
-  const PR_COMMIT = "c".repeat(40);
-  const BASE_MERGE = "d".repeat(40);
-  const AUTHOR_COMMIT = "e".repeat(40);
-  const sides = (from: string, to: string) =>
-    `__VIBEHUB_DELIVER__ prside from ${from}\n__VIBEHUB_DELIVER__ prside to ${to}`;
+  const PR_COMMIT = { sha: "c".repeat(40), parents: 1 };
+  const BASE_MERGE = { sha: "d".repeat(40), parents: 2 };
+  const AUTHOR_COMMIT = { sha: "e".repeat(40), parents: 1 };
+  type Side = { digest?: string; unknown?: boolean; commits?: { sha: string; parents: number }[]; files?: string[] };
+  const sideLine = (name: string, side: Side) => {
+    const listed = { unknown: side.unknown ?? false, commits: side.commits ?? [], files: side.files ?? [] };
+    return `__VIBEHUB_DELIVER__ prside ${name} ${side.digest ?? DIGEST} ${Buffer.from(JSON.stringify(listed)).toString("base64")}`;
+  };
+  const reviewed: Side = { commits: [PR_COMMIT], files: ["src/auth.ts"] };
+  const cleanMerge: Side = { commits: [PR_COMMIT, BASE_MERGE], files: ["src/auth.ts"] };
+  const baseOnlyStep: Side = { commits: [BASE_MERGE], files: ["src/billing.ts"] };
+  const stdoutOf = (from: Side, to: Side, step: Side) => [sideLine("from", from), sideLine("to", to), sideLine("step", step)].join("\n");
 
-  it("lê base...commit dos dois commits pela API do GitHub, com o token do stdin", async () => {
+  it("lê base...commit dos dois commits e o passo revisado...head pela API do GitHub, com o token do stdin", async () => {
     const { deliver } = await load();
     const script = deliver.buildPrDiffScript("vibehub-runner", TOKEN, "/work/x", PR, "main", FROM, TO);
     expect(script).toContain(`pr_side from 'repos/acme/repo/compare/main...${FROM}'`);
     expect(script).toContain(`pr_side to 'repos/acme/repo/compare/main...${TO}'`);
+    expect(script).toContain(`pr_side step 'repos/acme/repo/compare/${FROM}...${TO}'`);
     for (const scriptLine of script.split("\n").filter((line) => line.startsWith("docker exec"))) expect(scriptLine).not.toContain(TOKEN);
   });
 
   it.each([
-    ["só merges da base e o mesmo diff: same", `${DIGEST} ${PR_COMMIT}:1`, `${DIGEST} ${PR_COMMIT}:1 ${BASE_MERGE}:2`, "same"],
-    ["commit comum do autor com o mesmo diff (linha trocada de lugar): changed", `${DIGEST} ${PR_COMMIT}:1`, `${DIGEST} ${PR_COMMIT}:1 ${AUTHOR_COMMIT}:1`, "changed"],
-    ["merge da base que muda o diff (conflito resolvido): changed", `${DIGEST} ${PR_COMMIT}:1`, `${OTHER_DIGEST} ${PR_COMMIT}:1 ${BASE_MERGE}:2`, "changed"],
-    ["histórico reescrito (rebase com force-push): changed", `${DIGEST} ${PR_COMMIT}:1`, `${DIGEST} ${AUTHOR_COMMIT}:1 ${BASE_MERGE}:2`, "changed"],
-    ["nenhum commit novo: changed", `${DIGEST} ${PR_COMMIT}:1`, `${DIGEST} ${PR_COMMIT}:1`, "changed"],
-    ["PR grande demais ou arquivo sem patch: unknown", `${DIGEST} ${PR_COMMIT}:1`, `${DIGEST} unknown`, "unknown"],
-  ])("%s", async (_name, from, to, verdict) => {
+    ["só merges da base fora dos arquivos do PR e o mesmo diff: same", reviewed, cleanMerge, baseOnlyStep, "same"],
+    ["commit comum do autor com o mesmo diff (linha trocada de lugar): changed",
+      reviewed, { ...cleanMerge, commits: [PR_COMMIT, AUTHOR_COMMIT] }, { ...baseOnlyStep, commits: [AUTHOR_COMMIT] }, "changed"],
+    ["merge cuja resolução mexe num arquivo do PR, mesmo com as mesmas linhas +/-: changed",
+      reviewed, cleanMerge, { ...baseOnlyStep, files: ["src/billing.ts", "src/auth.ts"] }, "changed"],
+    ["merge que muda o diff do PR: changed", reviewed, { ...cleanMerge, digest: OTHER_DIGEST }, baseOnlyStep, "changed"],
+    ["histórico reescrito (rebase com force-push): changed", reviewed, { ...cleanMerge, commits: [AUTHOR_COMMIT, BASE_MERGE] }, baseOnlyStep, "changed"],
+    ["nenhum commit novo: changed", reviewed, reviewed, { ...baseOnlyStep, commits: [] }, "changed"],
+    ["PR grande demais (300 arquivos ou commits além da lista): unknown", reviewed, { ...cleanMerge, unknown: true }, baseOnlyStep, "unknown"],
+  ])("%s", async (_name, from, to, step, verdict) => {
     const { deliver } = await load();
-    expect(deliver.parsePrDiff(sides(from, to))).toBe(verdict);
+    expect(deliver.parsePrDiff(stdoutOf(from, to, step))).toBe(verdict);
   });
 
-  it("falha da API não tem veredito", async () => {
+  it("falha da API ou lado faltando não tem veredito", async () => {
     const { deliver } = await load();
     expect(deliver.parsePrDiff("Not Found\n__VIBEHUB_DELIVER__ error compare")).toBeNull();
+    expect(deliver.parsePrDiff([sideLine("from", reviewed), sideLine("to", cleanMerge)].join("\n"))).toBeNull();
   });
 
   it.each([
@@ -1134,6 +1146,24 @@ describe("buildPrDiffScript / parsePrDiff: o diff líquido do PR em dois commits
   ])("recusa entrada que não pode virar comando: %s", async (_name, base, sha) => {
     const { deliver } = await load();
     expect(() => deliver.buildPrDiffScript("vibehub-runner", TOKEN, "/work/x", PR, base, sha, TO)).toThrow();
+  });
+
+  it.each([
+    ["diff igual: não reabre", stdoutOf(reviewed, cleanMerge, baseOnlyStep), true],
+    ["diff diferente: reabre", stdoutOf(reviewed, { ...cleanMerge, digest: OTHER_DIGEST }, baseOnlyStep), false],
+    ["PR grande demais: reabre", stdoutOf(reviewed, { ...cleanMerge, unknown: true }, baseOnlyStep), false],
+    ["leitura que falha: reabre", "Not Found\n__VIBEHUB_DELIVER__ error compare", false],
+  ])("readPrDiffUnchanged pelo runner do card — %s", async (_name, stdout, unchanged) => {
+    const { deliver, card } = await makeCard();
+    runScript.mockResolvedValue({ stdout, stderr: "" });
+    expect(await deliver.readPrDiffUnchanged(card.id, PR, "main", FROM, TO)).toBe(unchanged);
+    expect(runScript).toHaveBeenCalledTimes(1);
+  });
+
+  it("readPrDiffUnchanged com o runner fora do ar reabre", async () => {
+    const { deliver, card } = await makeCard();
+    runScript.mockRejectedValue(new Error("runner down"));
+    expect(await deliver.readPrDiffUnchanged(card.id, PR, "main", FROM, TO)).toBe(false);
   });
 });
 

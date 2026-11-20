@@ -690,9 +690,10 @@ export async function readPrState(cardId: string, prUrl: string): Promise<{ stat
 }
 
 const PR_SIDE_JQ =
-  'if (.files | length) >= 300 or any(.files[]; .patch == null) or .total_commits > (.commits | length) then "unknown" ' +
-  'else (.commits | map(.sha + ":" + (.parents | length | tostring)) | join(" ")) end, ' +
-  '([.files[] | .filename, .status, (.patch | split("\\n") | map(select(startswith("+") or startswith("-"))) | join("\\n"))] | join("\\n"))';
+  '({ unknown: ((.files | length) >= 300 or .total_commits > (.commits | length)), ' +
+  'commits: [.commits[] | { sha, parents: (.parents | length) }], ' +
+  'files: [.files[] | .filename, (.previous_filename // empty)] } | tojson), ' +
+  '([.files[] | .filename, .status, ((.patch // ("binary " + .sha)) | split("\\n") | map(select(startswith("+") or startswith("-"))) | join("\\n"))] | join("\\n"))';
 
 export function buildPrDiffScript(
   containerName: string, token: string, cwd: string, prUrl: string, base: string, fromSha: string, toSha: string,
@@ -703,17 +704,19 @@ export function buildPrDiffScript(
   for (const sha of [fromSha, toSha]) {
     if (!FULL_SHA_RE.test(sha)) throw new Error(`the PR diff needs full shas: ${sha}`);
   }
-  const compare = (sha: string) => shQuote(`repos/${repo}/compare/${assertBranchName(base)}...${sha}`);
+  const compare = (from: string, to: string) => shQuote(`repos/${repo}/compare/${from}...${to}`);
+  const safeBase = assertBranchName(base);
   const body = [
     ...ghTokenPreamble(token),
     `cd ${shQuote(cwd)} || { echo "${MARKER} error cwd"; exit 0; }`,
     `PR_SIDE_JQ=${shQuote(PR_SIDE_JQ)}`,
     "pr_side() {",
     `  if ! OUT=$(gh api "$2" --jq "$PR_SIDE_JQ" 2>&1); then printf '%s\\n' "$OUT"; echo "${MARKER} error compare"; exit 0; fi`,
-    `  echo "${MARKER} prside $1 $(printf '%s\\n' "$OUT" | tail -n +2 | sha256sum | cut -d' ' -f1) $(printf '%s\\n' "$OUT" | head -n 1)"`,
+    `  echo "${MARKER} prside $1 $(printf '%s\\n' "$OUT" | tail -n +2 | sha256sum | cut -d' ' -f1) $(printf '%s\\n' "$OUT" | head -n 1 | base64 -w0)"`,
     "}",
-    `pr_side from ${compare(fromSha)}`,
-    `pr_side to ${compare(toSha)}`,
+    `pr_side from ${compare(safeBase, fromSha)}`,
+    `pr_side to ${compare(safeBase, toSha)}`,
+    `pr_side step ${compare(fromSha, toSha)}`,
   ];
   return dockerBashScript(containerName, body);
 }
@@ -722,32 +725,41 @@ export type PrDiffVerdict = "same" | "changed" | "unknown";
 
 interface PrSide {
   diffDigest: string;
-  commits: { sha: string; parents: number }[] | "unknown";
+  unknown: boolean;
+  commits: { sha: string; parents: number }[];
+  files: string[];
 }
 
-function parsePrSide(stdout: string, side: "from" | "to"): PrSide | null {
-  const match = new RegExp(`^${MARKER} prside ${side} ([0-9a-f]{64}) ?(.*)$`, "m").exec(stdout);
+function parsePrSide(stdout: string, side: "from" | "to" | "step"): PrSide | null {
+  const match = new RegExp(`^${MARKER} prside ${side} ([0-9a-f]{64}) ([A-Za-z0-9+/=]+)$`, "m").exec(stdout);
   if (!match) return null;
-  const listed = match[2]!.trim();
-  if (listed === "unknown") return { diffDigest: match[1]!, commits: "unknown" };
-  const commits = listed.split(" ").filter(Boolean).map((entry) => {
-    const [sha, parents] = entry.split(":");
-    return { sha: sha!.toLowerCase(), parents: Number(parents) };
-  });
-  return { diffDigest: match[1]!, commits };
+  try {
+    const listed = JSON.parse(Buffer.from(match[2]!, "base64").toString("utf8")) as Omit<PrSide, "diffDigest">;
+    return {
+      diffDigest: match[1]!,
+      unknown: listed.unknown === true,
+      commits: listed.commits.map((commit) => ({ sha: String(commit.sha).toLowerCase(), parents: Number(commit.parents) })),
+      files: listed.files.map(String),
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function parsePrDiff(stdout: string): PrDiffVerdict | null {
   const from = parsePrSide(stdout, "from");
   const to = parsePrSide(stdout, "to");
-  if (!from || !to) return null;
-  if (from.commits === "unknown" || to.commits === "unknown") return "unknown";
+  const step = parsePrSide(stdout, "step");
+  if (!from || !to || !step) return null;
+  if (from.unknown || to.unknown || step.unknown) return "unknown";
   const reviewedCommits = new Set(from.commits.map((commit) => commit.sha));
   const headCommits = new Set(to.commits.map((commit) => commit.sha));
   const historyKept = [...reviewedCommits].every((sha) => headCommits.has(sha));
   const newCommits = to.commits.filter((commit) => !reviewedCommits.has(commit.sha));
   const onlyMerges = newCommits.length > 0 && newCommits.every((commit) => commit.parents > 1);
-  return historyKept && onlyMerges && from.diffDigest === to.diffDigest ? "same" : "changed";
+  const prFiles = new Set([...from.files, ...to.files]);
+  const stepTouchesPrFiles = step.files.some((file) => prFiles.has(file));
+  return historyKept && onlyMerges && !stepTouchesPrFiles && from.diffDigest === to.diffDigest ? "same" : "changed";
 }
 
 export async function readPrDiffUnchanged(cardId: string, prUrl: string, base: string, fromSha: string, toSha: string): Promise<boolean> {
