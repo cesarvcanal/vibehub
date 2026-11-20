@@ -325,16 +325,35 @@ describe("a voice call inside the card's chat", () => {
     expect(told()).toEqual([]);
     const second = FakeSocket.instances[1]!;
     second.accept();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(told()).toEqual([]);
     second.deliver({ type: "ready" });
     await waitFor(() => expect(told()).toEqual([expect.objectContaining({ content: SERVER_BACK_CONTEXT })]));
 
     second.drop();
     await waitFor(() => expect(FakeSocket.instances.length).toBe(3), { timeout: 5_000 });
-    FakeSocket.instances[2]!.accept();
+    const third = FakeSocket.instances[2]!;
+    third.accept();
+    third.deliver({ type: "ready" });
     await waitFor(() => expect(told()).toHaveLength(2));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(told()).toHaveLength(2);
   });
 
-  it("a server drop before the call is not announced when the call starts", async () => {
+  it("a server drop still going on when the call starts is announced when the server comes back", async () => {
+    const { ws } = await openChat();
+    ws.drop();
+    await startCall();
+    const told = () => channel().sent.filter((e) => e.type === "session.commentary.append" && e.delegation_id === null);
+    expect(told()).toEqual([]);
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: 5_000 });
+    const again = FakeSocket.instances[1]!;
+    again.accept();
+    again.deliver({ type: "ready" });
+    await waitFor(() => expect(told()).toEqual([expect.objectContaining({ content: SERVER_BACK_CONTEXT })]));
+  });
+
+  it("a server drop already over before the call is not announced when the call starts", async () => {
     const { ws } = await openChat();
     ws.drop();
     await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: 5_000 });
