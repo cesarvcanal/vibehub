@@ -60,6 +60,14 @@ describe("CardWaitNotice", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("runner fora do ar");
   });
 
+  it("acordar agora que falha pelo mesmo motivo já mostrado não repete o motivo", async () => {
+    vi.mocked(post).mockRejectedValueOnce(Object.assign(new Error("x"), { response: { data: { error: "sessão sumiu" } } }));
+    renderNotice({ ...WAIT, readyAt: 2, outcome: "concluded", failure: { at: 3, reason: "sessão sumiu" } }, "Captura de falhas");
+    await userEvent.click(screen.getByRole("button", { name: "Wake now" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Wake now" })).toBeEnabled());
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("card esperado terminou e o card está pausado: avisa que continua ao sair de Pausado", () => {
     renderNotice({ ...WAIT, readyAt: 2, outcome: "concluded" }, "Captura de falhas");
     expect(screen.getByTestId("card-wait-notice")).toHaveTextContent(/leaves Paused/);

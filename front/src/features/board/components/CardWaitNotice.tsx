@@ -18,10 +18,11 @@ export function CardWaitNotice({ cardId, wait, waitTargetTitle }: { cardId: stri
     await queryClient.invalidateQueries({ queryKey: cardKey(cardId) });
   };
   const cancel = useMutation({ mutationFn: () => boardApi.cancelCardWait(cardId), onSuccess: refreshBoard });
-  const wake = useMutation({ mutationFn: () => boardApi.fireCardWait(cardId), onSuccess: refreshBoard });
+  const wake = useMutation({ mutationFn: () => boardApi.fireCardWait(cardId), onSettled: refreshBoard });
+  const wakeError = wake.error && apiErrorMessage(wake.error, translate("cardWait.wakeError"));
   const failedAction = cancel.error
     ? apiErrorMessage(cancel.error, translate("cardWait.cancelError"))
-    : wake.error && apiErrorMessage(wake.error, translate("cardWait.wakeError"));
+    : wakeError !== wait.failure?.reason && wakeError;
   const busy = cancel.isPending || wake.isPending;
   const headline = wait.failure ? t("cardWait.failed", { card, reason: wait.failure.reason }) : t(phase === "ready" ? "cardWait.ready" : "cardWait.waiting", { card });
   const Icon = phase === "failed" ? AlertTriangle : Hourglass;
