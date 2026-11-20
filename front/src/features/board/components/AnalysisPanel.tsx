@@ -89,13 +89,12 @@ function AnalysisMerge({ cardId, read, rereading }: { cardId: string; read: Anal
   if (merge.isSuccess) return <p className={`text-xs ${BADGE_TEXT.ok}`}>{t("analysis.merge.done", { n: prNumber })}</p>;
   if (read.mergedAt !== undefined) return <p className={`text-xs ${BADGE_TEXT.ok}`}>{t("analysis.merge.merged", { n: prNumber })}</p>;
   if (!read.canMerge) return null;
-  const sha = read.analysis.analysedSha.slice(0, 7);
   const merging = merge.isPending || read.merging;
   const gateState = read.mergeGate?.state;
   if (gateState === "failed" && !merging) {
     return (
       <div role="alert" className="flex shrink-0 flex-col gap-1.5 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs">
-        <p className="font-medium text-destructive">{t("analysis.mergeGate.failed", { sha })}</p>
+        <p className="font-medium text-destructive">{t("analysis.mergeGate.failed")}</p>
         {read.mergeGate?.output ? (
           <pre className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground">{read.mergeGate.output}</pre>
         ) : null}
@@ -123,10 +122,12 @@ function AnalysisMerge({ cardId, read, rereading }: { cardId: string; read: Anal
     <div className="flex shrink-0 flex-col gap-1.5">
       {gateRunning ? (
         <p role="status" className="flex items-center gap-1.5 rounded-md border border-sky-500/30 bg-sky-500/10 px-2.5 py-1.5 text-xs text-sky-300">
-          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" /> {t("analysis.mergeGate.running", { sha })}
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" /> {t("analysis.mergeGate.running")}
         </p>
       ) : null}
-      {gateState === "passed" && !merging ? <p className={`text-xs ${BADGE_TEXT.ok}`}>{t("analysis.mergeGate.passed", { sha })}</p> : null}
+      {gateState === "passed" && read.mergeGate?.sha && !merging ? (
+        <p className={`text-xs ${BADGE_TEXT.ok}`}>{t("analysis.mergeGate.passed", { sha: read.mergeGate.sha.slice(0, 7) })}</p>
+      ) : null}
       {refusal ? (
         <div role="alert" className="flex flex-col gap-1 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs">
           <p className="font-medium text-destructive">
