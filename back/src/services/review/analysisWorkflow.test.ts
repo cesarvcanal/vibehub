@@ -88,18 +88,40 @@ describe("frota da análise de PR", () => {
     expect(judgedFinding.proof.properties.kind.enum).toEqual([...toolProof.kind.options]);
   });
 
-  it("contexto e juiz em Opus; revisão e verificação em Sonnet", async () => {
+  it("só o juiz roda em Opus, com esforço alto; contexto, revisão e verificação em Sonnet, e o contexto com esforço médio", async () => {
     const { calls } = await runFleet(async (_prompt, opts) => {
       if (opts.phase === "Contexto") return brief(ALL_APPLY);
       if (opts.phase === "Revisão") return { findings: [scenarioFinding("bug")] };
       if (opts.phase === "Verificação") return { confirmed: true, evidence: "reproduzido" };
       return { findings: [{ ...scenarioFinding("bug"), dimension: "correctness", severity: "blocking" }] };
     });
-    const modelsOf = (phase: string) => new Set(calls.filter((call) => call.opts.phase === phase).map((call) => call.opts.model));
-    expect(modelsOf("Contexto")).toEqual(new Set(["opus"]));
-    expect(modelsOf("Revisão")).toEqual(new Set(["sonnet"]));
-    expect(modelsOf("Verificação")).toEqual(new Set(["sonnet"]));
-    expect(modelsOf("Julgamento")).toEqual(new Set(["opus"]));
+    const settingsOf = (phase: string) => new Set(calls.filter((call) => call.opts.phase === phase).map((call) => `${call.opts.model}/${call.opts.effort}`));
+    expect(settingsOf("Contexto")).toEqual(new Set(["sonnet/medium"]));
+    expect(settingsOf("Revisão")).toEqual(new Set(["sonnet/high"]));
+    expect(settingsOf("Verificação")).toEqual(new Set(["sonnet/high"]));
+    expect(settingsOf("Julgamento")).toEqual(new Set(["opus/high"]));
+  });
+
+  it("sem sinceSha, contexto e revisores leem o diff do PR inteiro contra a base", async () => {
+    const { calls } = await runFleet(async (_prompt, opts) => (opts.phase === "Contexto" ? brief(ONLY_CORRECTNESS) : { findings: [] }));
+    const fullRange = `git diff origin/dev...${"d".repeat(40)}`;
+    expect(calls.find((call) => call.opts.phase === "Contexto")!.prompt).toContain(fullRange);
+    expect(calls.find((call) => call.opts.phase === "Revisão")!.prompt).toContain(fullRange);
+  });
+
+  it("com sinceSha (rodada 2 em diante), contexto e revisores conferem só o que mudou desde a rodada anterior, sem revisar o que veio da base", async () => {
+    const sinceSha = "c".repeat(40);
+    const { calls } = await runFleet(
+      async (_prompt, opts) => (opts.phase === "Contexto" ? brief(ONLY_CORRECTNESS) : { findings: [] }),
+      { ...VALID_ARGS, sinceSha },
+    );
+    const deltaRange = `git diff ${sinceSha}..${"d".repeat(40)}`;
+    for (const phase of ["Contexto", "Revisão"]) {
+      const prompt = calls.find((call) => call.opts.phase === phase)!.prompt;
+      expect(prompt).toContain(deltaRange);
+      expect(prompt).toMatch(/só o que mudou desde a rodada anterior/);
+      expect(prompt).toMatch(/o que entrou por merge da base[^\n]*fica fora/);
+    }
   });
 
   it("dimensão fora do diff não roda, sai como pulada e aparece no log", async () => {
@@ -344,6 +366,7 @@ describe("frota da análise de PR", () => {
     ["sha ainda com o marcador do prompt", { ...VALID_ARGS, headSha: "<sha do passo 1>" }],
     ["sem a base", { ...VALID_ARGS, base: "" }],
     ["número da PR que não é inteiro", { ...VALID_ARGS, prNumber: "7" }],
+    ["sinceSha que não é um sha completo", { ...VALID_ARGS, sinceSha: "abc1234" }],
   ])("args inválido (%s) derruba a frota antes de chamar qualquer agente", async (_case, fleetArgs) => {
     const agentCalls: string[] = [];
     await expect(runFleet(async (prompt) => {

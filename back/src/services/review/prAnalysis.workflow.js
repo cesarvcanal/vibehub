@@ -2,7 +2,7 @@ export const meta = {
   name: 'vibehub-pr-analysis',
   description: 'Análise de PR do vibehub: especialistas em paralelo, verificação adversarial e juiz',
   phases: [
-    { title: 'Contexto', model: 'opus' },
+    { title: 'Contexto', model: 'sonnet' },
     { title: 'Revisão', model: 'sonnet' },
     { title: 'Verificação', model: 'sonnet' },
     { title: 'Julgamento', model: 'opus' },
@@ -113,12 +113,18 @@ const isFilledText = (value) => typeof value === 'string' && value.trim() !== ''
 const fleetArgsAreValid = typeof args === 'object' && args !== null &&
   Number.isInteger(args.prNumber) && args.prNumber > 0 &&
   isFilledText(args.branch) && isFilledText(args.base) &&
-  typeof args.headSha === 'string' && FULL_SHA_PATTERN.test(args.headSha)
+  typeof args.headSha === 'string' && FULL_SHA_PATTERN.test(args.headSha) &&
+  (args.sinceSha === undefined || (typeof args.sinceSha === 'string' && FULL_SHA_PATTERN.test(args.sinceSha)))
 if (!fleetArgsAreValid) {
-  throw new Error(`args inválido para a frota da análise: esperado o objeto { prNumber, branch, base, headSha com 40 ou 64 hex }, recebido ${JSON.stringify(args)}`)
+  throw new Error(`args inválido para a frota da análise: esperado o objeto { prNumber, branch, base, headSha com 40 ou 64 hex, sinceSha opcional com 40 ou 64 hex }, recebido ${JSON.stringify(args)}`)
 }
 
-const diffRange = `origin/${args.base}...${args.headSha}`
+const fullDiffRange = `origin/${args.base}...${args.headSha}`
+const diffScope = args.sinceSha === undefined
+  ? `Diff: git diff ${fullDiffRange}.`
+  : `Diff: git diff ${args.sinceSha}..${args.headSha}. Esta rodada confere só o que mudou desde a rodada anterior; ` +
+    `o diff do PR inteiro (git diff ${fullDiffRange}) serve só de contexto, e o que entrou por merge da base ` +
+    `(commit que já está em origin/${args.base}) não é deste PR e fica fora.`
 
 const READ_ONLY_RULE =
   'Você só LÊ: não edite, não crie arquivo, não faça commit nem push. Pode rodar git, gh e um teste já existente ' +
@@ -133,14 +139,14 @@ const briefText = (brief) =>
 
 const contextPrompt =
   `PR #${args.prNumber} (branch ${args.branch} -> ${args.base}, head ${args.headSha}). ${READ_ONLY_RULE}\n` +
-  `Leia o diff (git diff ${diffRange}), a descrição do PR (gh pr view ${args.prNumber}) e as regras do repositório. ` +
+  `${diffScope} Leia o diff, a descrição do PR (gh pr view ${args.prNumber}) e as regras do repositório. ` +
   'Monte o brief que os revisores vão receber: o resumo do que o PR faz, as áreas tocadas, quem consome o que mudou ' +
   '(procure os imports e as chamadas) e, para cada dimensão abaixo, se o diff a toca (applies) e por quê.\n' +
   DIMENSIONS.map((dimension) => `- ${dimension.key}: ${dimension.focus}`).join('\n')
 
 const reviewPrompt = (dimension, brief) =>
   `Você é o revisor especialista em ${dimension.key} do PR #${args.prNumber}. Foco: ${dimension.focus}.\n` +
-  `${briefText(brief)}\nDiff: git diff ${diffRange}. ${READ_ONLY_RULE}\n${PROOF_RULE}\n` +
+  `${briefText(brief)}\n${diffScope} ${READ_ONLY_RULE}\n${PROOF_RULE}\n` +
   `Procure o que está ERRADO, não confirme o que o PR diz. A descrição do PR (gh pr view ${args.prNumber}) é o que o autor ` +
   'afirma: confira no código cada causa, teste, número e arquivo:linha que ela cita, e a afirmação falsa é achado. ' +
   'Para cada achado: title (uma linha), problem (o que está errado e o que acontece se ficar assim, para quem não abre ' +
@@ -162,7 +168,7 @@ const judgePrompt = (confirmedFindings, brief) =>
   `fora do escopo, ou gosto que nenhuma regra escrita decide). ${PROOF_RULE}`
 
 phase('Contexto')
-const brief = await agent(contextPrompt, { label: 'contexto', phase: 'Contexto', model: 'opus', effort: 'high', schema: BRIEF_SCHEMA })
+const brief = await agent(contextPrompt, { label: 'contexto', phase: 'Contexto', model: 'sonnet', effort: 'medium', schema: BRIEF_SCHEMA })
 if (!brief) throw new Error('o agente de contexto da análise não respondeu')
 
 const briefByDimension = new Map(brief.dimensions.map((dimension) => [dimension.key, dimension]))
@@ -228,7 +234,7 @@ const refutedCount = dimensionResults.reduce((total, result) => total + result.r
 phase('Julgamento')
 const judgment = confirmedFindings.length === 0
   ? { findings: [] }
-  : await agent(judgePrompt(confirmedFindings, brief), { label: 'juiz', phase: 'Julgamento', model: 'opus', effort: 'xhigh', schema: JUDGMENT_SCHEMA })
+  : await agent(judgePrompt(confirmedFindings, brief), { label: 'juiz', phase: 'Julgamento', model: 'opus', effort: 'high', schema: JUDGMENT_SCHEMA })
 if (!judgment) throw new Error('o juiz da análise não respondeu')
 
 const judgedFindings = judgment.findings.map((finding, index) => {
