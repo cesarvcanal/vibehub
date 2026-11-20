@@ -50,27 +50,27 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-export const TarefaTerminada: Story = {
+export const TaskFinished: Story = {
   name: "Tarefa: terminou, com uma entrega que faltou",
   args: { prompt: REVIEW_PROMPT, report: REVIEW_REPORT, running: false },
 };
 
-export const TarefaRodando: Story = {
+export const TaskRunning: Story = {
   name: "Tarefa: ainda rodando",
   args: { prompt: REVIEW_PROMPT, report: "", running: true },
 };
 
-export const TarefaSemMarcacao: Story = {
+export const TaskUnmarked: Story = {
   name: "Tarefa: relatório não marcou a lista",
   args: { prompt: REVIEW_PROMPT, report: "Terminei a revisão, tudo certo.", running: false },
 };
 
-export const TarefaSemLista: Story = {
+export const TaskWithoutDeliverables: Story = {
   name: "Tarefa: prompt sem lista de entregas",
   args: { prompt: "Explore o **chat** e ache onde o reducer junta as mensagens.\n\nResponda com o caminho do arquivo.", report: "", running: false },
 };
 
-export const Relatorio: Story = {
+export const Report: Story = {
   name: "Relatório",
   args: { prompt: "", report: REVIEW_REPORT, running: false },
   render: ({ report }) => (
