@@ -4,6 +4,7 @@ import { dataPath } from "../../config/env.js";
 import { logger } from "../../utils/logger.js";
 import { allocateBrowserSlot, cardBrowserSlot, isBrowserSlotPort, rememberBrowserSlot, SLOT_SPACE } from "../browser/ports.js";
 import { UUID_RE } from "./cardId.js";
+import { markWaitsReady, parseCardWait, type CardWait, type WaitFailure } from "./cardWait.js";
 
 /**
  * BOARD REGISTRY — the projects and cards of the kanban of Claude Code terminals.
@@ -440,6 +441,7 @@ export interface Card {
    * never opened one (or predates the field). Written by `deliver`, never through the HTTP edit.
    */
   prs?: CardPr[];
+  waitingFor?: CardWait;
   /**
    * REVIEWER CARD — the id of the author card whose PR this card reviews. Present = the card exists
    * only to review: it is born from the PR's branch, on the reviewer's account, never pushes or
@@ -747,7 +749,7 @@ const store = new JsonStore<BoardDoc>(
       config: doc?.config && typeof doc.config === "object" ? doc.config : {},
       accounts: Array.isArray(doc?.accounts) ? doc.accounts : [],
       projects: Array.isArray(doc?.projects) ? doc.projects : [],
-      cards: assignBrowserSlots(readReviewFields(readModelPins(Array.isArray(doc?.cards) ? doc.cards : []))),
+      cards: assignBrowserSlots(readCardWaits(readReviewFields(readModelPins(Array.isArray(doc?.cards) ? doc.cards : [])))),
       mcps: Array.isArray(doc?.mcps) ? doc.mcps : [],
       mcpDrops: Array.isArray(doc?.mcpDrops)
         ? (doc.mcpDrops as unknown[]).map(parseMcpDrop).filter((d): d is McpDrop => d !== null)
@@ -793,6 +795,13 @@ function readReviewFields(cards: Card[]): Card[] {
     }
     if (card.reviewOf !== undefined && (typeof card.reviewOf !== "string" || !card.reviewOf)) card.reviewOf = undefined;
     if (card.pushBranch !== undefined && !isBranchName(card.pushBranch)) card.pushBranch = undefined;
+  }
+  return cards;
+}
+
+function readCardWaits(cards: Card[]): Card[] {
+  for (const card of cards) {
+    if (card.waitingFor !== undefined) card.waitingFor = parseCardWait(card.waitingFor);
   }
   return cards;
 }
@@ -1161,6 +1170,19 @@ export function onCardConcluded(sink: ConcludedSink): () => void {
   return () => concludedSinks.delete(sink);
 }
 
+type WaitsReadySink = (waitingCardIds: string[]) => void;
+const waitsReadySinks = new Set<WaitsReadySink>();
+
+export function onWaitsReady(sink: WaitsReadySink): () => void {
+  waitsReadySinks.add(sink);
+  return () => waitsReadySinks.delete(sink);
+}
+
+function announceWaitsReady(waitingCardIds: string[]): void {
+  if (waitingCardIds.length === 0) return;
+  queueMicrotask(() => { for (const sink of waitsReadySinks) sink(waitingCardIds); });
+}
+
 /**
  * Puts the card in the target column at the requested (clamped) position, renumbering both columns.
  * `now` is the instant of the whole mutation: the caller stamps `updatedAt` with the same value, so a
@@ -1177,6 +1199,8 @@ function placeCard(cards: Card[], card: Card, column: BoardColumn, now: number, 
       card.doneAt = now;
       // Told on the next microtask: placeCard runs inside a mutation, which must finish first.
       queueMicrotask(() => { for (const sink of concludedSinks) sink(card.id); });
+      card.waitingFor = undefined;
+      announceWaitsReady(markWaitsReady(cards, card.id, { outcome: "concluded" }, now));
     }
   } else if (card.doneAt !== undefined) {
     card.doneAt = undefined;
@@ -1804,7 +1828,9 @@ export async function attachCardPrs(cardId: string, input: AttachedPrInput[]): P
 export async function markCardPrMerged(cardId: string, base: string, number: number, at: number): Promise<void> {
   await store.mutate((doc) => {
     const pr = doc.cards.find((c) => c.id === cardId)?.prs?.find((p) => p.base === base && p.number === number);
-    if (pr) pr.mergedAt = at;
+    if (!pr) return;
+    pr.mergedAt = at;
+    if (!pr.attached) announceWaitsReady(markWaitsReady(doc.cards, cardId, { outcome: "pr_merged", base, prNumber: number }, at));
   });
 }
 
@@ -2021,6 +2047,41 @@ export async function listBrowserSlotHolds(): Promise<BrowserSlotHold[]> {
   return (await store.load()).browserSlotHolds.map((h) => ({ ...h }));
 }
 
+export async function setCardWait(cardId: string, wait: CardWait): Promise<void> {
+  await store.mutate((doc) => {
+    const card = doc.cards.find((c) => c.id === cardId);
+    if (!card) throw new Error("card not found");
+    card.waitingFor = wait;
+  });
+}
+
+export async function removeCardWait(cardId: string): Promise<CardWait | undefined> {
+  return store.mutate((doc) => {
+    const card = doc.cards.find((c) => c.id === cardId);
+    const removed = card?.waitingFor;
+    if (card) card.waitingFor = undefined;
+    return removed;
+  });
+}
+
+export async function takeReadyCardWait(cardId: string): Promise<CardWait | undefined> {
+  return store.mutate((doc) => {
+    const card = doc.cards.find((c) => c.id === cardId);
+    const wait = card?.waitingFor;
+    if (!card || wait?.readyAt === undefined || card.pausedAt || card.column === "paused") return undefined;
+    card.waitingFor = undefined;
+    return wait;
+  });
+}
+
+export async function restoreFailedCardWait(cardId: string, wait: CardWait, failure: WaitFailure): Promise<void> {
+  await store.mutate((doc) => {
+    const card = doc.cards.find((c) => c.id === cardId);
+    if (!card || card.waitingFor || card.column === "done") return;
+    card.waitingFor = { ...wait, failure };
+  });
+}
+
 /** Removes a card and renumbers the column it came from. Unknown id -> undefined (the caller decides the 404). */
 export async function removeCard(id: string): Promise<Card | undefined> {
   return store.mutate((doc) => {
@@ -2030,6 +2091,7 @@ export async function removeCard(id: string): Promise<Card | undefined> {
     holdBrowserSlots(doc, [found]);
     doc.shares = doc.shares.filter((s) => !(s.kind === "card" && s.targetId === id));
     normalizeColumns(doc.cards, found.projectId, [found.column]);
+    announceWaitsReady(markWaitsReady(doc.cards, id, { outcome: "deleted" }, Date.now()));
     return found;
   });
 }
@@ -2349,6 +2411,7 @@ export async function applyOpenTerminal(cardId: string): Promise<Card | undefine
     if (card.pausedAt) {
       card.pausedAt = null;
       changed = true;
+      if (card.waitingFor?.readyAt !== undefined) announceWaitsReady([card.id]);
     }
     // Same for a hibernated one: the attach recreates the session, so the card is warm again.
     if (card.hibernatedAt) {
