@@ -1028,6 +1028,7 @@ export async function decideQuestion(reviewId: string, findingId: string, decisi
     if (f.severity === "question" && decision === "keep") {
       throw new Error(`keep vale para bloqueante travado; na dúvida ${findingId} decida block, drop ou accept_risk`);
     }
+    if (f.humanDecision === decision) return;
     f.humanDecision = decision;
     if (decision === "accept_risk") f.status = "accepted_risk";
     else if (decision === "drop") f.status = "dropped";
