@@ -27,10 +27,10 @@ export interface WorkflowAgent {
   /** The script phase it runs in (the journal's `phase` / the meta's `workflowPhase`). "" = no phase. */
   phase: string;
   model?: string;
-  /** `stopped` = it was in flight when the round ended (killed, or the probe gave up): it will never answer. */
   status: "running" | "done" | "stopped";
   /** What it returned, trimmed — only on the ones that finished. */
   result?: string;
+  error?: string;
   /** First and last `timestamp` of the transcript, in ms. Absent when the file has none. */
   startedAt?: number;
   lastAt?: number;
@@ -99,6 +99,7 @@ export interface WorkflowFeedItem {
 /** How many rounds the probe looks at (the most recent). Two cover "I ran it again to iterate". */
 export const RUNS_PROBED = 2;
 export const AGENT_RESULT_MAX = 4_000;
+export const AGENT_ERROR_MAX = 300;
 /** Cap on subagents LISTED per round — the count (`total`/`done`) is always from the whole journal. */
 const AGENTS_MAX = 200;
 /**
@@ -133,6 +134,24 @@ function readAt(file,start,bytes){
   finally{if(fd!==null)try{fs.closeSync(fd)}catch(e){}}
 }
 function statOf(file){try{return fs.statSync(file)}catch(e){return null}}
+function snapshotOf(file){
+  const none={status:'',errorById:new Map(),agentIds:null};
+  try{
+    const st=statOf(file);if(!st||st.size>8388608)return none;
+    const o=JSON.parse(fs.readFileSync(file,'utf8'));
+    if(!o||typeof o.status!=='string')return none;
+    const errorById=new Map(),agentIds=new Set();
+    for(const step of Array.isArray(o.workflowProgress)?o.workflowProgress:[]){
+      if(!step||!str(step.agentId))continue;
+      agentIds.add(step.agentId);
+      if(str(step.error))errorById.set(step.agentId,step.error.slice(0,${AGENT_ERROR_MAX}));
+    }
+    return {status:o.status.slice(0,32),errorById:errorById,agentIds:agentIds.size>0?agentIds:null};
+  }catch(e){return none}
+}
+function agentsOfAttempt(agents,snapshot){
+  return snapshot.agentIds?agents.filter(function(agent){return snapshot.agentIds.has(agent.id)}):agents;
+}
 function linesOf(text,cutHead,cutTail){const l=text.split('\n');if(cutTail)l.pop();if(cutHead)l.shift();return l}
 function parse(l){if(!l)return null;try{const o=JSON.parse(l);return o&&typeof o==='object'?o:null}catch(e){return null}}
 function ts(o){const t=typeof o.timestamp==='string'?Date.parse(o.timestamp):NaN;return Number.isFinite(t)?t:0}
@@ -260,22 +279,13 @@ function agentOf(dir,a){
   const out={id:a.id,status:a.status,label:a.label||str(meta.description)||info.task,phase:a.phase||str(meta.workflowPhase),toolCount:info.toolCount};
   if(str(meta.model))out.model=str(meta.model);
   if(a.result!==undefined)out.result=a.result;
+  if(a.error)out.error=a.error;
   if(info.startedAt)out.startedAt=info.startedAt;
   if(info.lastAt)out.lastAt=info.lastAt;
   if(a.status==='done'&&info.lastAt)out.endedAt=info.lastAt;
   if(info.partial)out.toolCountPartial=true;
   if(info.activity)out.activity=info.activity;
   return {agent:out,mtime:info.mtime};
-}
-// O snapshot que o harness grava ao lado de scripts/ quando a rodada ACABA. Só o status interessa;
-// o resto (resultado, progresso) pode ser grande — snapshot grande demais fica sem desfecho.
-function outcomeOf(scriptsDir,runId){
-  try{
-    const f=p.join(p.dirname(scriptsDir),runId+'.json');
-    const st=statOf(f);if(!st||st.size>8388608)return '';
-    const o=JSON.parse(fs.readFileSync(f,'utf8'));
-    return o&&typeof o.status==='string'?o.status.slice(0,32):'';
-  }catch(e){return ''}
 }
 function main(dir,scriptsDir,settled){
   let names=[];
@@ -298,6 +308,7 @@ function main(dir,scriptsDir,settled){
       if(!o||!o.agentId)continue;
       const a=agents.get(o.agentId)||{id:o.agentId,status:'running',label:'',phase:''};
       if(o.type==='started'){if(!a.label)a.label=str(o.label);if(!a.phase)a.phase=str(o.phase)}
+      if(o.type==='failed')a.status='stopped';
       if(o.type==='result'){
         a.status='done';
         const v=o.result;
@@ -305,7 +316,13 @@ function main(dir,scriptsDir,settled){
       }
       agents.set(o.agentId,a);
     }
-    const all=Array.from(agents.values());
+    const snapshot=snapshotOf(p.join(p.dirname(scriptsDir),r.runId+'.json'));
+    const all=agentsOfAttempt(Array.from(agents.values()),snapshot);
+    for(const a of all){
+      if(a.status==='done'||!snapshot.errorById.has(a.id))continue;
+      a.status='stopped';
+      a.error=snapshot.errorById.get(a.id);
+    }
     const done=all.filter(function(a){return a.status==='done'}).length;
     const list=[];let first=0,oldest=0;
     for(const a of all.slice(0,${AGENTS_MAX})){
@@ -319,8 +336,7 @@ function main(dir,scriptsDir,settled){
     const script=scriptOf(scriptsDir,r.runId);
     const run={runId:r.runId,name:script.name,phases:script.phases,at:r.at,total:all.length,done:done,agents:list};
     if(first||oldest)run.startedAt=first||oldest;
-    const outcome=outcomeOf(scriptsDir,r.runId);
-    if(outcome)run.outcome=outcome;
+    if(snapshot.status)run.outcome=snapshot.status;
     out.push(run);
   }
   return out;
@@ -496,7 +512,8 @@ function main(base){
     agents.set(o.agentId,a);
   }
   const list=[],items=[];
-  for(const a of Array.from(agents.values()).slice(0,${AGENTS_MAX})){
+  const snapshot=snapshotOf(p.join(run.dir,'..','..','..','workflows',run.runId+'.json'));
+  for(const a of agentsOfAttempt(Array.from(agents.values()),snapshot).slice(0,${AGENTS_MAX})){
     const meta=metaOf(run.dir,a.id);
     const talk=talkOf(run.dir,a);
     const agent={id:a.id,label:a.label||str(meta.description),phase:a.phase||str(meta.workflowPhase),status:a.status};
@@ -556,6 +573,7 @@ function parseAgent(value: unknown): WorkflowAgent | null {
   const id = asString(a?.id);
   if (!a || !id) return null;
   const done = a.status === "done";
+  const stopped = a.status === "stopped";
   const toolCount = typeof a.toolCount === "number" && Number.isFinite(a.toolCount) && a.toolCount > 0
     ? Math.floor(a.toolCount)
     : 0;
@@ -564,14 +582,16 @@ function parseAgent(value: unknown): WorkflowAgent | null {
   const endedAt = done ? asInstant(a.endedAt) : undefined;
   const activity = parseActivity(a.activity);
   const result = done ? asString(a.result) : "";
+  const error = stopped ? asString(a.error).slice(0, AGENT_ERROR_MAX) : "";
   const model = asString(a.model);
   return {
     id,
     label: trimAgentLabel(asString(a.label)),
     phase: asString(a.phase),
     ...(model ? { model } : {}),
-    status: done ? "done" : "running",
+    status: done ? "done" : stopped ? "stopped" : "running",
     ...(result ? { result } : {}),
+    ...(error ? { error } : {}),
     toolCount,
     ...(a.toolCountPartial === true ? { toolCountPartial: true } : {}),
     ...(startedAt !== undefined ? { startedAt } : {}),

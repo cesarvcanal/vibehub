@@ -3,12 +3,13 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type { SdkRow } from "@/features/board/lib/sdkChat";
 import { LiveVoiceSession, type LiveVoiceSnapshot, type ToolCallListener } from "./liveVoice";
 import { useVoiceDelegation, type UseVoiceDelegationOptions } from "./useVoiceDelegation";
-import { DELEGATION_NOT_SENT, DELEGATION_SILENT, DELEGATION_SLOW, DELEGATION_SLOW_MS, DELEGATION_STARTED } from "./voiceDelegation";
+import { QUESTION_ANSWER_SENT } from "./voiceQuestion";
+import { ASK_WITHOUT_REQUEST, DELEGATION_NOT_SENT, DELEGATION_SILENT, DELEGATION_SLOW, DELEGATION_SLOW_MS, DELEGATION_STARTED } from "./voiceDelegation";
 import type { VoiceTurn } from "./voiceTurns";
 
 const said = (text: string): VoiceTurn[] => [{ vid: "vc-u1", role: "user", text, at: 1, final: true }];
 
-function setup(options: Partial<Pick<UseVoiceDelegationOptions, "sendUrgentToAgent" | "runAction">> = {}) {
+function setup(options: Partial<Pick<UseVoiceDelegationOptions, "sendUrgentToAgent" | "runAction" | "answerQuestion">> = {}) {
   const listeners: ToolCallListener[] = [];
   const call = {
     snap: { ...LiveVoiceSession.idleSnapshot, state: "live" } as LiveVoiceSnapshot,
@@ -22,13 +23,14 @@ function setup(options: Partial<Pick<UseVoiceDelegationOptions, "sendUrgentToAge
   };
   const sendUrgentToAgent = options.sendUrgentToAgent ?? vi.fn();
   const runAction = options.runAction ?? vi.fn(async () => ({ ok: true }));
+  const answerQuestion = options.answerQuestion ?? vi.fn(() => true);
   const view = renderHook((props: Partial<UseVoiceDelegationOptions>) =>
-    useVoiceDelegation({ call, rows: [], turnRunning: false, sendUrgentToAgent, runAction, ...props }),
+    useVoiceDelegation({ call, rows: [], turnRunning: false, sendUrgentToAgent, runAction, answerQuestion, ...props }),
   );
   const toolCall = (callId: string, name: string, args: unknown, turns: VoiceTurn[] = said("pedido")) =>
     act(() => listeners.at(-1)!({ callId, name, argumentsJson: JSON.stringify(args), turns }));
   const ask = (callId: string, request: string) => toolCall(callId, "ask_card_agent", { request });
-  return { call, view, toolCall, ask, sendUrgentToAgent, runAction };
+  return { call, view, toolCall, ask, sendUrgentToAgent, runAction, answerQuestion };
 }
 
 function sentRequest(send: unknown): string {
@@ -141,5 +143,66 @@ describe("useVoiceDelegation — pergunta ao agente do card", () => {
     act(() => vi.advanceTimersByTime(DELEGATION_SLOW_MS * 2));
     expect(first.call.appendContext).not.toHaveBeenCalledWith(DELEGATION_SLOW);
     expect(second.call.appendContext).not.toHaveBeenCalledWith(DELEGATION_SLOW);
+  });
+});
+
+describe("useVoiceDelegation — pergunta do agente aberta", () => {
+  const question: SdkRow = {
+    kind: "question",
+    id: "q_1",
+    questions: [{ question: "Qual caminho?", options: [{ label: "A" }, { label: "B" }] }],
+    outcome: "pending",
+  };
+
+  it("a voz lê a pergunta aberta por commentary, uma vez", () => {
+    const { call, view } = setup();
+    view.rerender({ rows: [question], turnRunning: true });
+    view.rerender({ rows: [question], turnRunning: true });
+    expect(call.announceContext).toHaveBeenCalledTimes(1);
+    expect(call.announceContext).toHaveBeenCalledWith(expect.stringContaining("Qual caminho?"));
+  });
+
+  it("ask_card_agent com a pergunta aberta responde a pergunta com a fala da pessoa, sem envio urgente", () => {
+    const { call, view, toolCall, sendUrgentToAgent, answerQuestion } = setup();
+    view.rerender({ rows: [question], turnRunning: true });
+    toolCall("call_q1", "ask_card_agent", { request: "A pessoa escolheu B." }, said("a B"));
+    expect(answerQuestion).toHaveBeenCalledWith("q_1", [{ selected: [expect.stringContaining("a B")] }]);
+    expect(sendUrgentToAgent).not.toHaveBeenCalled();
+    expect(call.answerToolCall).toHaveBeenCalledWith("call_q1", { ok: true, status: QUESTION_ANSWER_SENT });
+  });
+
+  it("uma escolha que o chat não consegue entregar volta como erro na saída da função", () => {
+    const { call, view, toolCall, sendUrgentToAgent } = setup({ answerQuestion: vi.fn(() => false) });
+    view.rerender({ rows: [question], turnRunning: true });
+    toolCall("call_q2", "ask_card_agent", { request: "B" }, said("a B"));
+    expect(sendUrgentToAgent).not.toHaveBeenCalled();
+    expect(call.answerToolCall.mock.calls).toEqual([["call_q2", { error: DELEGATION_NOT_SENT }]]);
+  });
+
+  it("nada ouvido não responde a pergunta por ninguém", () => {
+    const { call, view, toolCall, answerQuestion } = setup();
+    view.rerender({ rows: [question], turnRunning: true });
+    toolCall("call_q3", "ask_card_agent", { request: "B" }, []);
+    expect(answerQuestion).not.toHaveBeenCalled();
+    expect(call.answerToolCall.mock.calls).toEqual([["call_q3", { error: ASK_WITHOUT_REQUEST }]]);
+  });
+
+  it("a pergunta que chega com um pedido esperando encerra esse pedido: a resposta do agente não é falada duas vezes", () => {
+    const { call, view, ask, sendUrgentToAgent } = setup();
+    ask("call_q4", "Organize as metas.");
+    const request = sentRequest(sendUrgentToAgent);
+    view.rerender({ rows: [{ kind: "user", id: "u1", text: request, state: "sent" }, { ...question }], turnRunning: true });
+    view.rerender({ rows: [{ kind: "user", id: "u1", text: request, state: "sent" }, { ...question }], turnRunning: false });
+    expect(call.announceContext.mock.calls).toEqual([[expect.stringContaining("Qual caminho?")]]);
+  });
+
+  it("uma chamada nova lê de novo a pergunta que continua aberta", () => {
+    const { call, view } = setup();
+    view.rerender({ rows: [question], turnRunning: true });
+    call.snap = { ...call.snap, state: "idle" };
+    view.rerender({ rows: [question], turnRunning: true });
+    call.snap = { ...call.snap, state: "live" };
+    view.rerender({ rows: [question], turnRunning: true });
+    expect(call.announceContext).toHaveBeenCalledTimes(2);
   });
 });

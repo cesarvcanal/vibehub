@@ -14,12 +14,15 @@ export function useAnalysisRereadOnReport(
   }, [queryClient, cardId, opts.enabled, liveToolResult]);
 }
 
+const MERGING_REREAD_MS = 5_000;
+
 export function useCardAnalysis(cardId: string, opts: { enabled: boolean; cardWorking?: boolean }) {
   const queryClient = useQueryClient();
   const analysisQuery = useQuery({
     queryKey: cardAnalysisKey(cardId),
     queryFn: () => boardApi.readCardAnalysis(cardId),
     enabled: opts.enabled,
+    refetchInterval: (query) => (query.state.data?.analysis && query.state.data.merging ? MERGING_REREAD_MS : false),
   });
   const wasWorking = React.useRef(opts.cardWorking);
   React.useEffect(() => {

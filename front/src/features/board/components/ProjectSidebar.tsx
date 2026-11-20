@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Check, ChevronDown, ChevronRight, ChevronUp, FolderGit2, GitPullRequest, Moon, Pause, Pencil, Plus, RotateCw, Share2, Trash2 } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, ChevronUp, FolderGit2, GitMerge, GitPullRequest, Moon, Pause, Pencil, Plus, RotateCw, Share2, Trash2 } from "lucide-react";
 import { cn, isNewTabClick } from "@/lib/utils";
 import { apiErrorMessage } from "@/lib/apiError";
 import { Button } from "@/components/ui/button";
@@ -1047,7 +1047,7 @@ function SidebarCard({
             "flex w-full items-center gap-2 py-1.5 pl-9 pr-3 text-left text-sm transition-colors [-webkit-touch-callout:none]",
             active ? "text-foreground" : "text-muted-foreground hover:text-foreground",
             // Close to the line below it, so the two read as one thing.
-            review && "pb-0.5",
+            (review || card.analysisMerging) && "pb-0.5",
           )}
         >
           {/* Always the same 12px slot, so titles stay aligned whether or not there is a state. */}
@@ -1056,6 +1056,12 @@ function SidebarCard({
           </span>
           <span className="truncate">{card.title}</span>
         </a>
+        {card.analysisMerging ? (
+          <p className={cn("flex items-center gap-2 pb-1.5 pl-9 pr-3 text-[11px]", BADGE_TEXT.ok)}>
+            <GitMerge aria-hidden className="h-3 w-3 shrink-0 animate-pulse" />
+            <span className="truncate">{t("analysis.sidebar.merging")}</span>
+          </p>
+        ) : null}
         {review ? (
           // A link of its own into the same card, but WITH the review panel open (`?review=1`). A
           // plain click is handled in-app and only ever opens; Cmd/Ctrl/Shift/middle-click keep the

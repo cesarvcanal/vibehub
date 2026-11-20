@@ -11,6 +11,7 @@ import { resetLanguage, setLanguage } from "@/i18n";
 import { FakeAudioContext, fakeRig, type FakeRig } from "@/features/voice/fakeWebRtc";
 import { setVoiceCallTestHooks } from "@/features/voice/useVoiceCall";
 import { DELEGATION_NOT_SENT } from "@/features/voice/voiceDelegation";
+import { QUESTION_ANSWER_SENT } from "@/features/voice/voiceQuestion";
 
 function toolCall(callId: string, name: string, args: Record<string, unknown>) {
   return {
@@ -57,7 +58,7 @@ class FakeSocket {
   constructor(public url: string) {
     FakeSocket.instances.push(this);
   }
-  get frames(): { type: string; text?: string }[] {
+  get frames(): { type: string; text?: string; id?: string; answers?: { selected: string[] }[] }[] {
     return this.rawSent.map((raw) => JSON.parse(raw)).filter((f) => f.type !== "typing");
   }
   send(data: string): void {
@@ -270,15 +271,20 @@ describe("a voice call inside the card's chat", () => {
     expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument();
   });
 
-  it("com o card parado numa pergunta de múltipla escolha, o pedido da voz sai urgente e fecha a pergunta em vez de esperar a resposta dela", async () => {
+  it("com o card parado numa pergunta de múltipla escolha desde antes da chamada, a voz lê a pergunta e o pedido dela vai como resposta, sem fechar a pergunta", async () => {
     const { ws } = await openChat();
     ws.deliver({ type: "user_question", id: "q_1", questions: [{ question: "Qual caminho?", header: "Caminho", options: [{ label: "A", description: "a" }, { label: "B", description: "b" }] }] });
     await startCall();
-    act(() => channel().emit(toolCall("call_q1", "ask_card_agent", { request: "Siga pelo caminho B." })));
+    await waitFor(() =>
+      expect(channel().sent).toContainEqual(expect.objectContaining({ type: "session.commentary.append", delegation_id: null, content: expect.stringContaining("Qual caminho?") })),
+    );
+    act(() => channel().emit({ type: "session.input_transcript.delta", delta: "abre um card pra esse bug e delega", start_ms: 0, end_ms: 900 }));
+    act(() => channel().emit(toolCall("call_q1", "ask_card_agent", { request: "A pessoa quer abrir um card para esse bug." })));
 
     await waitFor(() =>
-      expect(ws.frames).toContainEqual(expect.objectContaining({ type: "user", now: true, text: expect.stringContaining("Siga pelo caminho B.") })),
+      expect(ws.frames).toContainEqual({ type: "question_answer", id: "q_1", answers: [{ selected: [expect.stringContaining("abre um card pra esse bug")] }] }),
     );
+    expect(ws.frames.filter((frame) => frame.type === "user")).toEqual([]);
   });
 
   it("sem conexão, a voz ouve na hora que o pedido não foi entregue, e nada fica preso na fila", async () => {
@@ -367,5 +373,90 @@ describe("a voice call inside the card's chat", () => {
     expect(Number(orb.dataset.aiRms)).toBeGreaterThan(0.05);
     await waitFor(() => expect(Number(orb.dataset.aiVisual)).toBeGreaterThan(0.5));
     expect(screen.getByTestId("voice-call-bar")).toHaveAttribute("data-phase", "ai_speaking");
+  });
+});
+
+describe("a pergunta com opções do agente durante a chamada", () => {
+  const QUESTION = {
+    type: "user_question",
+    id: "q_1_100",
+    questions: [
+      {
+        question: "Onde guardo as metas?",
+        header: "Metas",
+        options: [
+          { label: "Planilha (Recomendado)", description: "Rápido de editar" },
+          { label: "Banco novo", description: "Exige migração" },
+        ],
+      },
+    ],
+  };
+  const commentary = () => channel().sent.filter((event) => event.type === "session.commentary.append");
+  const sayAndAsk = (said: string, callId: string) => {
+    act(() => channel().emit({ type: "session.input_transcript.delta", delta: said, start_ms: 0, end_ms: 500 }));
+    act(() => channel().emit(toolCall(callId, "ask_card_agent", { request: said })));
+  };
+
+  it("a voz lê a pergunta, as opções e a recomendada, e pede a escolha por voz — sem mandar ao chat", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    ws.deliver({ type: "user", text: "decide a planilha", at: 1 });
+    ws.deliver(QUESTION);
+    await waitFor(() => expect(commentary()).toHaveLength(1));
+    const spoken = commentary()[0]!;
+    expect(spoken.delegation_id).toBeNull();
+    for (const part of ["Onde guardo as metas?", "Planilha (Recomendado)", "Rápido de editar", "Banco novo", "recomendada"]) {
+      expect(spoken.content).toContain(part);
+    }
+    expect(spoken.content).not.toMatch(/conferir no chat|veja no chat|olhe o chat/i);
+  });
+
+  it("com um pedido da voz esperando o agente, a pergunta é o que a voz ouve sobre esse pedido", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    sayAndAsk("organiza as metas", "call_m1");
+    await waitFor(() => expect(ws.frames.some((frame) => frame.type === "user" && frame.text?.includes("organiza as metas"))).toBe(true));
+    ws.deliver(QUESTION);
+    ws.deliver({ type: "result", isError: false });
+    await waitFor(() => expect(commentary()).toEqual([expect.objectContaining({ delegation_id: null, content: expect.stringContaining("Onde guardo as metas?") })]));
+  });
+
+  it("a escolha dita volta ao agente como resposta daquela pergunta (question_answer), sem fechar a pergunta com um envio urgente", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    ws.deliver({ type: "user", text: "decide a planilha", at: 1 });
+    ws.deliver(QUESTION);
+    await waitFor(() => expect(commentary()).toHaveLength(1));
+
+    sayAndAsk("pode ser o banco novo", "call_m2");
+    await waitFor(() => expect(ws.frames.some((frame) => frame.type === "question_answer")).toBe(true));
+    const answer = ws.frames.find((frame) => frame.type === "question_answer")!;
+    expect(answer.id).toBe("q_1_100");
+    expect(answer.answers).toEqual([{ selected: [expect.stringContaining("pode ser o banco novo")] }]);
+    expect(ws.frames.filter((frame) => frame.type === "user")).toEqual([]);
+    expect(toolOutput(channel().sent, "call_m2")).toEqual({ ok: true, status: QUESTION_ANSWER_SENT });
+
+    ws.deliver({ type: "question_result", id: "q_1_100", answers: answer.answers });
+    ws.deliver({ type: "assistant_text", text: "Feito: as metas vão para o banco novo." });
+    ws.deliver({ type: "result", isError: false });
+    await waitFor(() =>
+      expect(commentary()).toContainEqual(expect.objectContaining({ delegation_id: null, content: expect.stringContaining("Feito: as metas vão para o banco novo.") })),
+    );
+  });
+
+  it("a pergunta que um reconnect repete não é lida de novo", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    ws.deliver({ type: "user", text: "decide a planilha", at: 1 });
+    ws.deliver(QUESTION);
+    await waitFor(() => expect(commentary()).toHaveLength(1));
+    ws.drop();
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: 5_000 });
+    const again = FakeSocket.instances[1]!;
+    again.accept();
+    again.deliver({ type: "user", text: "decide a planilha", at: 1 });
+    again.deliver(QUESTION);
+    again.deliver({ type: "ready" });
+    expect(commentary()).toHaveLength(1);
   });
 });

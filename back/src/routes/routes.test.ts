@@ -184,6 +184,22 @@ describe("settings", () => {
     });
     expect(bad.statusCode).toBe(400);
   });
+
+  it("termos da transcrição: o válido volta aparado e o inválido responde 400 sem mudar a lista", async () => {
+    const cookie = await signUp(app);
+    const saved = await app.inject({
+      method: "PATCH", url: "/api/settings", headers: { cookie }, payload: { transcribeKeywords: ["  Qive ", "erp-aux"] },
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json().transcribeKeywords).toEqual(["Qive", "erp-aux"]);
+    const refused = await app.inject({
+      method: "PATCH", url: "/api/settings", headers: { cookie }, payload: { transcribeKeywords: ["<x>"] },
+    });
+    expect(refused.statusCode).toBe(400);
+    expect(refused.json()).toEqual({ error: expect.stringMatching(/transcribeKeywords/) });
+    const stored = (await app.inject({ method: "GET", url: "/api/settings", headers: { cookie } })).json();
+    expect(stored.transcribeKeywords).toEqual(["Qive", "erp-aux"]);
+  });
 });
 
 describe("github", () => {

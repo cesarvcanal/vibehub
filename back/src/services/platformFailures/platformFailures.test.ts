@@ -70,17 +70,19 @@ describe("registro de falhas da plataforma", () => {
     expect(await failures.listActivePlatformFailures()).toEqual([]);
   });
 
-  it("'não é bug' numa lentidão silencia por 7 dias, e depois a detecção volta", async () => {
+  it.each([
+    ["uma lentidão", { source: "slow_turn", component: "sdk/turn", symptom: "primeira resposta acima de 90s", evidence: "episódio antigo" }],
+    ["um turno parado", { source: "stalled_turn", component: "sdk/turn", symptom: "turno parado: nenhum sinal do agente por mais de 3 min", evidence: "episódio antigo" }],
+  ] satisfies Array<[string, PlatformFailureReport]>)("'não é bug' n%s silencia por 7 dias, e depois a detecção volta", async (_case, slowTurn) => {
     const failures = await fresh();
-    const slowTurn: PlatformFailureReport = { source: "slow_turn", component: "sdk/turn", symptom: "primeira resposta acima de 90s", evidence: "episódio antigo" };
     const recorded = await failures.recordPlatformFailure(slowTurn, 1_000);
     await failures.dismissPlatformFailure(recorded!.id, 2_000);
-    expect(await failures.recordPlatformFailure(slowTurn, 2_000 + failures.SLOW_TURN_DISMISSAL_MS)).toBeNull();
-    const back = await failures.recordPlatformFailure({ ...slowTurn, evidence: "episódio novo", cardId: "card-9" }, 2_001 + failures.SLOW_TURN_DISMISSAL_MS);
-    expect(back).toMatchObject({ status: "open", occurrences: 1, evidence: "episódio novo", affectedCardIds: ["card-9"], firstSeenAt: 2_001 + failures.SLOW_TURN_DISMISSAL_MS });
+    expect(await failures.recordPlatformFailure(slowTurn, 2_000 + failures.TURN_DISMISSAL_MS)).toBeNull();
+    const back = await failures.recordPlatformFailure({ ...slowTurn, evidence: "episódio novo", cardId: "card-9" }, 2_001 + failures.TURN_DISMISSAL_MS);
+    expect(back).toMatchObject({ status: "open", occurrences: 1, evidence: "episódio novo", affectedCardIds: ["card-9"], firstSeenAt: 2_001 + failures.TURN_DISMISSAL_MS });
     expect(back!.id).not.toBe(recorded!.id);
     expect((await failures.listActivePlatformFailures()).map((failure) => failure.id)).toEqual([back!.id]);
-    const repeated = await failures.recordPlatformFailure(slowTurn, 3_000 + failures.SLOW_TURN_DISMISSAL_MS);
+    const repeated = await failures.recordPlatformFailure(slowTurn, 3_000 + failures.TURN_DISMISSAL_MS);
     expect(repeated).toMatchObject({ id: back!.id, occurrences: 2 });
     await expect(failures.getPlatformFailure(recorded!.id)).rejects.toBeInstanceOf(failures.PlatformFailureNotFoundError);
   });
@@ -89,7 +91,7 @@ describe("registro de falhas da plataforma", () => {
     const failures = await fresh();
     const recorded = await failures.recordPlatformFailure(backendReport("expected thing"), 1_000);
     await failures.dismissPlatformFailure(recorded!.id, 2_000);
-    expect(await failures.recordPlatformFailure(backendReport("expected thing"), 3_000 + failures.SLOW_TURN_DISMISSAL_MS)).toBeNull();
+    expect(await failures.recordPlatformFailure(backendReport("expected thing"), 3_000 + failures.TURN_DISMISSAL_MS)).toBeNull();
   });
 
   it("investigação concluída sem merge volta para decisão do dono", async () => {

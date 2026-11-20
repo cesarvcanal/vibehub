@@ -1,5 +1,5 @@
 import * as React from "react";
-import type { SdkRow } from "@/features/board/lib/sdkChat";
+import type { SdkQuestionAnswer, SdkRow } from "@/features/board/lib/sdkChat";
 import { apiErrorMessage } from "@/lib/apiError";
 import type { VoiceActionCall } from "@/api/types";
 import type { VoiceCall } from "./useVoiceCall";
@@ -16,13 +16,16 @@ import {
   delegationReply,
   delegationRequest,
   isAgentAnswer,
+  type DelegationAnchor,
 } from "./voiceDelegation";
+import { QUESTION_ANSWER_SENT, openQuestion, questionForVoice, voiceAnswers, type OpenQuestion } from "./voiceQuestion";
+import type { VoiceTurn } from "./voiceTurns";
 
 const ASK_AGENT_TOOL = "ask_card_agent";
 
 interface PendingAsk {
   asked: string;
-  request: string;
+  anchor: DelegationAnchor;
   slowTimer: ReturnType<typeof setTimeout>;
 }
 
@@ -33,36 +36,54 @@ export interface UseVoiceDelegationOptions {
   turnRunning: boolean;
   sendUrgentToAgent: (text: string) => void;
   runAction: (call: VoiceActionCall) => Promise<unknown>;
+  answerQuestion: (questionId: string, answers: SdkQuestionAnswer[]) => boolean;
 }
 
-export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent, runAction }: UseVoiceDelegationOptions): void {
+export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent, runAction, answerQuestion }: UseVoiceDelegationOptions): void {
   const { onToolCall, answerToolCall, appendContext, announceContext } = call;
   const live = call.snap.state === "live";
   const sendRef = React.useRef(sendUrgentToAgent);
   sendRef.current = sendUrgentToAgent;
   const runActionRef = React.useRef(runAction);
   runActionRef.current = runAction;
+  const answerQuestionRef = React.useRef(answerQuestion);
+  answerQuestionRef.current = answerQuestion;
+  const rowsRef = React.useRef(rows);
+  rowsRef.current = rows;
   // A ref, not state: a result must go once, and two effect runs before a re-render would send it twice.
   const pending = React.useRef<PendingAsk[]>([]);
   const [asksSent, setAsksSent] = React.useState(0);
 
   React.useEffect(() => {
+    const sendRequest = (asked: string, turns: VoiceTurn[]): HandOver => {
+      const request = delegationRequest(asked, turns);
+      try {
+        sendRef.current(request);
+      } catch {
+        return { state: "not_sent" };
+      }
+      return { state: "sent", anchor: { request } };
+    };
+    const answerOpenQuestion = (question: OpenQuestion, turns: VoiceTurn[]): HandOver => {
+      const answers = voiceAnswers(question.questions, turns);
+      if (!answers) return { state: "unheard" };
+      return answerQuestionRef.current(question.id, answers) ? { state: "sent", anchor: { questionId: question.id } } : { state: "not_sent" };
+    };
     const askAgent = (toolCall: VoiceToolCall) => {
       const asked = askedOfAgent(toolCall.argumentsJson);
       if (!asked) {
         answerToolCall(toolCall.callId, { error: ASK_WITHOUT_REQUEST });
         return;
       }
-      const request = delegationRequest(asked, toolCall.turns);
-      try {
-        sendRef.current(request);
-      } catch {
-        answerToolCall(toolCall.callId, { error: DELEGATION_NOT_SENT });
+      const question = openQuestion(rowsRef.current);
+      const handOver = question ? answerOpenQuestion(question, toolCall.turns) : sendRequest(asked, toolCall.turns);
+      if (handOver.state !== "sent") {
+        answerToolCall(toolCall.callId, { error: handOver.state === "unheard" ? ASK_WITHOUT_REQUEST : DELEGATION_NOT_SENT });
         return;
       }
-      answerToolCall(toolCall.callId, { ok: true, status: DELEGATION_STARTED });
+      answerToolCall(toolCall.callId, { ok: true, status: question ? QUESTION_ANSWER_SENT : DELEGATION_STARTED });
       const slowTimer = setTimeout(() => appendContext(DELEGATION_SLOW), DELEGATION_SLOW_MS);
-      pending.current.push({ asked, request, slowTimer });
+      pending.current.push({ asked, anchor: handOver.anchor, slowTimer });
       setAsksSent((count) => count + 1);
     };
     return onToolCall((toolCall) => {
@@ -85,9 +106,11 @@ export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent,
   );
 
   const told = React.useRef<Set<string> | null>(null);
+  const readQuestions = React.useRef(new Set<string>());
   React.useEffect(() => {
     if (!live) {
       told.current = null;
+      readQuestions.current.clear();
       for (const { slowTimer } of pending.current) clearTimeout(slowTimer);
       pending.current = [];
       return;
@@ -98,7 +121,7 @@ export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent,
     const held = new Set<string>();
     const stillWaiting: PendingAsk[] = [];
     for (const ask of pending.current) {
-      const reply = delegationReply(rows, ask.request, turnRunning);
+      const reply = delegationReply(rows, ask.anchor, turnRunning);
       if (reply.state === "waiting") {
         stillWaiting.push(ask);
         for (const text of reply.answers) held.add(text);
@@ -109,6 +132,16 @@ export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent,
       for (const text of reply.answers) known.add(text);
     }
     pending.current = stillWaiting;
+    const question = openQuestion(rows);
+    if (question && !readQuestions.current.has(question.id) && announceContext(questionForVoice(question.questions))) {
+      readQuestions.current.add(question.id);
+      const asking = pending.current.at(-1);
+      if (asking) {
+        clearTimeout(asking.slowTimer);
+        pending.current = pending.current.slice(0, -1);
+        for (const text of delegationReply(rows, asking.anchor, true).answers) known.add(text);
+      }
+    }
     for (const row of rows) {
       if (!isAgentAnswer(row) || known.has(row.text) || held.has(row.text)) continue;
       known.add(row.text);
@@ -116,3 +149,5 @@ export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent,
     }
   }, [rows, turnRunning, live, asksSent, appendContext, announceContext]);
 }
+
+type HandOver = { state: "sent"; anchor: DelegationAnchor } | { state: "unheard" } | { state: "not_sent" };

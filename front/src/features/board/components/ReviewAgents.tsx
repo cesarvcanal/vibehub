@@ -1,12 +1,12 @@
 import * as React from "react";
 import type { Review, ReviewFleetRun } from "@/api/types";
 import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
-import { ReviewFleet } from "@/features/board/components/ReviewFleet";
+import { ReviewFleet, type RunAgentDetail } from "@/features/board/components/ReviewFleet";
 import { fleetsByRound } from "@/features/board/lib/reviewFleet";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 
-export function ReviewAgents({ review, fleet }: { review: Review; fleet: ReviewFleetRun[] }) {
+export function ReviewAgents({ review, fleet, agentDetail }: { review: Review; fleet: ReviewFleetRun[]; agentDetail?: RunAgentDetail }) {
   const t = useT();
   const fleets = fleetsByRound(review, fleet);
   const rounds = [...fleets.keys()].sort((left, right) => left - right);
@@ -33,12 +33,12 @@ export function ReviewAgents({ review, fleet }: { review: Review; fleet: ReviewF
           ))}
         </div>
       ) : null}
-      <RoundFleet key={round} round={round} runs={fleets.get(round)!} />
+      <RoundFleet key={round} round={round} runs={fleets.get(round)!} agentDetail={agentDetail} />
     </div>
   );
 }
 
-function RoundFleet({ round, runs }: { round: number; runs: ReviewFleetRun[] }) {
+function RoundFleet({ round, runs, agentDetail }: { round: number; runs: ReviewFleetRun[]; agentDetail: RunAgentDetail | undefined }) {
   const answered = runs.reduce((total, run) => total + run.done, 0);
   const stick = useStickToBottom(`${answered}:${runs.length}`);
   return (
@@ -49,7 +49,7 @@ function RoundFleet({ round, runs }: { round: number; runs: ReviewFleetRun[] }) 
         data-testid="review-agents"
         className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-0.5 py-1"
       >
-        <ReviewFleet round={round} runs={runs} />
+        <ReviewFleet round={round} runs={runs} agentDetail={agentDetail} />
       </div>
       <JumpToLatest stick={stick} />
     </div>

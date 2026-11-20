@@ -87,7 +87,8 @@ const VOICE_TOOLS: Record<VoiceToolName, { description: string; parameters: Json
   },
   ask_card_agent: {
     description: "Passa ao agente do card desta chamada (Claude Code) uma pergunta ou um pedido que depende do código, do " +
-      "histórico do chat, de testes ou de trabalho no projeto. Escreva o pedido completo: o que fazer, onde e o que já foi decidido.",
+      "histórico do chat, de testes ou de trabalho no projeto, ou a escolha da pessoa quando o agente fez uma pergunta com opções. " +
+      "Escreva o pedido completo: o que fazer, onde e o que já foi decidido.",
     parameters: objectSchema({ request: { type: "string", description: "o pedido ao agente, completo" } }),
   },
 };

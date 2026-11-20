@@ -149,14 +149,19 @@ export function normalizePreviewCwd(cwd: string | null | undefined): string | un
 
 /**
  * HUMAN-ACTIVE WINDOW — a card counts as "a human is at this terminal right now" for this long after
- * the last keystroke a person typed into it (stamped as `humanActiveAt`). While it holds, a maestro
- * must not type into the card (it would fight the human for the prompt); reading is always fine.
+ * the last keystroke a person typed into it (stamped as `humanActiveAt`).
  */
 export const HUMAN_ACTIVE_WINDOW_MS = 5 * 60_000;
+export const HUMAN_ACTIVE_THROTTLE_MS = 5_000;
 
-/** true = a human typed in this card's terminal within the last {@link HUMAN_ACTIVE_WINDOW_MS}. PURE. */
-export function isHumanActive(card: Pick<Card, "humanActiveAt">, now: number = Date.now()): boolean {
-  return !!card.humanActiveAt && now - card.humanActiveAt < HUMAN_ACTIVE_WINDOW_MS;
+export function isHumanActive(
+  card: Pick<Card, "humanActiveAt" | "awaitingDecisionAt" | "pendingQuestionAt">,
+  now: number = Date.now(),
+  answeringAskedAt?: number,
+): boolean {
+  if (!card.humanActiveAt || now - card.humanActiveAt >= HUMAN_ACTIVE_WINDOW_MS) return false;
+  const lastAskedAt = Math.max(card.awaitingDecisionAt ?? 0, card.pendingQuestionAt ?? 0, answeringAskedAt ?? 0);
+  return lastAskedAt < card.humanActiveAt + HUMAN_ACTIVE_THROTTLE_MS;
 }
 
 /**
