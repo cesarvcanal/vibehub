@@ -99,7 +99,29 @@ describe("vibehub_send_to_terminal — a trava human-active protege quem digita 
     expect(sentKeys).toHaveLength(0);
   });
 
-  it("a marca sem pessoa (gravada antes desta versão) segue barrando todo mundo", async () => {
+  it.each([
+    ["quem escreveu primeiro", "mussa"],
+    ["quem escreveu por último", "cesar"],
+  ] as const)("com duas pessoas escrevendo na mesma janela, a trava barra a ordem de %s", async (_case, senderName) => {
+    const loaded = await load();
+    await loaded.registry.stampCardActor(loaded.senderCard.id, loaded[senderName].id);
+    await loaded.registry.markCardHumanActive(loaded.typedCard.id, loaded.mussa.id);
+    await loaded.registry.markCardHumanActive(loaded.typedCard.id, loaded.cesar.id);
+    await loaded.registry.markCardHumanActive(loaded.typedCard.id, loaded.mussa.id);
+    expect((await loaded.sendToTypedCard()).error).toMatch(/human-active/);
+    expect(sentKeys).toHaveLength(0);
+  });
+
+  it("vencida a janela de quem escreveu antes, a marca volta a ser só de quem escreve agora", async () => {
+    const loaded = await load();
+    const now = Date.now();
+    await loaded.registry.markCardHumanActive(loaded.typedCard.id, loaded.cesar.id, now - loaded.registry.HUMAN_ACTIVE_WINDOW_MS - 1);
+    await loaded.registry.markCardHumanActive(loaded.typedCard.id, loaded.mussa.id, now);
+    expect(await loaded.sendToTypedCard()).toMatchObject({ sent: true });
+    expect(sentKeys).toHaveLength(1);
+  });
+
+  it("a marca regravada sem pessoa (o campo ausente, como num board.json de antes desta versão) segue barrando todo mundo", async () => {
     const loaded = await load();
     await loaded.registry.markCardHumanActive(loaded.typedCard.id, loaded.mussa.id);
     await loaded.registry.markCardHumanActive(loaded.typedCard.id, undefined);

@@ -242,12 +242,13 @@ describe("/api/cards/:id/sdk — a marca human-active guarda quem escreveu", () 
   it.each([
     ["a mensagem", `{"type":"user","text":"corrige o que o review apontou"}`],
     ["o /btw, que não troca o autor do card", `{"type":"btw","id":"b1","question":"o que falta?"}`],
+    ["a edição de uma mensagem", `{"type":"edit_user","original":"corrige","text":"corrige o review"}`],
   ])("%s carimba a marca com a pessoa do socket", async (_frame, raw) => {
     const handler = await captureHandler();
     const socket = fakeSocket();
     h.install?.resolve();
     await handler(socket as unknown as WebSocket, { params: { id: CARD } });
-    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
     socket.emit("message", Buffer.from(raw));
     await vi.waitFor(() => expect(h.humanActiveStamps).toEqual([{ cardId: CARD, userId: "u-mussa" }]));
     socket.close();

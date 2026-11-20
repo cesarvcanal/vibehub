@@ -2262,8 +2262,10 @@ export async function markCardHumanActive(
   return store.mutate((doc) => {
     const card = doc.cards.find((c) => c.id === cardId);
     if (!card) return undefined;
+    const previousStillActive = card.humanActiveAt !== undefined && at - card.humanActiveAt < HUMAN_ACTIVE_WINDOW_MS;
+    const sharedWithSomeoneElse = previousStillActive && card.humanActiveUserId !== userId;
     card.humanActiveAt = at;
-    if (userId) card.humanActiveUserId = userId;
+    if (userId && !sharedWithSomeoneElse) card.humanActiveUserId = userId;
     else delete card.humanActiveUserId;
     // Deliberately NOT bumping updatedAt: a keystroke is not an edit of the card, and it would churn
     // the board's ordering (updatedAt is a tie-breaker) on every few seconds of typing.

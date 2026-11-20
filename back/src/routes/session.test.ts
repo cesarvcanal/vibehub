@@ -433,11 +433,19 @@ describe("human-active stamping throttle", () => {
     const { HUMAN_ACTIVE_THROTTLE_MS } = await import("../services/board/registry.js");
     resetHumanStampThrottleForTesting();
     const t0 = 1_000_000;
-    expect(shouldStampHumanActive("card-a", t0)).toBe(true); // first keystroke stamps
-    expect(shouldStampHumanActive("card-a", t0 + 100)).toBe(false); // within the window — no write
-    expect(shouldStampHumanActive("card-a", t0 + HUMAN_ACTIVE_THROTTLE_MS)).toBe(true); // window passed
-    // the gate is per-card
-    expect(shouldStampHumanActive("card-b", t0 + 100)).toBe(true);
+    expect(shouldStampHumanActive("card-a", "u-mussa", t0)).toBe(true);
+    expect(shouldStampHumanActive("card-a", "u-mussa", t0 + 100)).toBe(false);
+    expect(shouldStampHumanActive("card-a", "u-mussa", t0 + HUMAN_ACTIVE_THROTTLE_MS)).toBe(true);
+    expect(shouldStampHumanActive("card-b", "u-mussa", t0 + 100)).toBe(true);
+  });
+
+  it("a tecla de outra pessoa dentro da janela do limite também grava a marca", async () => {
+    const { shouldStampHumanActive, resetHumanStampThrottleForTesting } = await import("./session.js");
+    resetHumanStampThrottleForTesting();
+    const t0 = 1_000_000;
+    expect(shouldStampHumanActive("card-a", "u-mussa", t0)).toBe(true);
+    expect(shouldStampHumanActive("card-a", "u-cesar", t0 + 100)).toBe(true);
+    expect(shouldStampHumanActive("card-a", "u-cesar", t0 + 200)).toBe(false);
   });
 });
 
