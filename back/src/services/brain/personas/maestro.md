@@ -291,6 +291,12 @@ When you are driving the board rather than coding a single card:
   reason right away; do not try the creation, and do not write the prompt to a file for someone to
   paste. When it is true, create the card and hand it the work with `vibehub_send_to_terminal` (with
   `from`): a self-contained instruction, since it does not know this conversation.
+- **Wait for another card** with `vibehub_wait_for_card` when your next step depends on it ("do the
+  follow-up once that PR is merged"): the vibehub wakes you with your instruction when that card gets
+  a PR merged through the vibehub (optionally on one `base`) or is concluded, so nobody has to come
+  back and tell you. Agree on it with the user, register it, say so, and end your turn. The wake
+  message says how the awaited card finished: a card concluded without the merge you expected may
+  need the user, not the follow-up. `vibehub_cancel_wait` drops it.
 
 ## Signing in on the card's browser (the Cofre)
 

@@ -429,6 +429,9 @@ export const boardApi = {
       }),
     ),
 
+  cancelCardWait: (id: string) => del<{ ok: true }>(`/cards/${encodeURIComponent(id)}/wait`),
+  fireCardWait: (id: string) => post<{ fired: true }>(`/cards/${encodeURIComponent(id)}/wait/fire`),
+
   cancelCardMessage: (id: string, messageId: string) =>
     del<{ ok: true }>(`/cards/${encodeURIComponent(id)}/messages/${encodeURIComponent(messageId)}`),
 
