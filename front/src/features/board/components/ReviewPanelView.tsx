@@ -291,7 +291,6 @@ function Commits({ reviewed, head }: { reviewed?: string; head?: string }) {
   );
 }
 
-/** One segment per round — behind: done; in play: lit; ahead: waiting. The pill beside it says the round in words. */
 function Steps({ round, phase }: { round: number; phase: ReviewPhase }) {
   const t = useT();
   const over = phase === "ready" || phase === "merged";
