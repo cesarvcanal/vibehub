@@ -229,10 +229,48 @@ describe("merge pelo painel da análise", () => {
     expect(screen.getByRole("button", { name: "Mergear o PR #312" })).toBeEnabled();
   });
 
-  it("com o servidor dizendo que o merge roda, o painel mostra Mergeando travado e o aviso dos testes, mesmo sem ter clicado", async () => {
+  it("com o servidor dizendo que o merge roda, o painel mostra Mergeando travado e o aviso do merge, mesmo sem ter clicado", async () => {
     renderPanel(aptRead({ merging: true }));
     expect(await screen.findByRole("button", { name: "Mergeando…" })).toBeDisabled();
-    expect(screen.getByText("Rodando os testes do gate antes do merge; pode levar alguns minutos.")).toBeInTheDocument();
+    expect(screen.getByText("Mergeando no GitHub, preso ao commit analisado.")).toBeInTheDocument();
+  });
+
+  const SHA = doneReport().analysedSha;
+
+  it("caso real (PR #649): testes do merge rodando no commit analisado travam o botão com o aviso, e o painel relê sozinho até o veredito", async () => {
+    const reads = { count: 0 };
+    get.mockImplementation(async (url: string) => {
+      if (url === "/auth/me") return { user: { id: "u1", username: "mussa", role: "member" } };
+      if (url === "/setup/state") return setupState();
+      if (url === "/cards/c1/analysis/conversation") return { conversation: null };
+      reads.count += 1;
+      return aptRead({ mergeGate: { cardId: "c1", analysedSha: SHA, state: reads.count > 1 ? "passed" : "running", at: 1 } });
+    });
+    renderApp(<AnalysisPanel cardId="c1" onClose={() => {}} />);
+    expect(await screen.findByRole("button", { name: "Testes do merge rodando…" })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Testes do merge rodando no commit analisado (a1b2c3d): o botão libera quando ficarem verdes.");
+    expect(await screen.findByRole("button", { name: "Mergear o PR #312" }, { timeout: 8_000 })).toBeEnabled();
+    expect(screen.getByText("Testes do merge verdes no commit analisado (a1b2c3d).")).toBeInTheDocument();
+  });
+
+  it("testes do merge vermelhos no commit analisado: mostram a saída, não oferecem o merge, e 'Rodar os testes de novo' pede o gate e relê", async () => {
+    post.mockResolvedValue({ mergeGate: { cardId: "c1", analysedSha: SHA, state: "running", at: 2 } });
+    renderPanel(aptRead({ mergeGate: { cardId: "c1", analysedSha: SHA, state: "failed", output: "FAIL src/pix.test.ts", at: 1 } }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Os testes do merge falharam no commit analisado (a1b2c3d): o merge fica barrado até eles passarem.");
+    expect(within(alert).getByText("FAIL src/pix.test.ts")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Mergear o PR #312" })).not.toBeInTheDocument();
+    const readsBefore = get.mock.calls.filter(([url]) => url === "/cards/c1/analysis").length;
+    await userEvent.click(screen.getByRole("button", { name: "Rodar os testes de novo" }));
+    expect(post).toHaveBeenCalledWith("/cards/c1/analysis/merge-gate");
+    await vi.waitFor(() => expect(get.mock.calls.filter(([url]) => url === "/cards/c1/analysis").length).toBeGreaterThan(readsBefore));
+  });
+
+  it("em inglês o estado dos testes do merge sai pelo i18n", async () => {
+    setLanguage("en");
+    renderPanel(aptRead({ mergeGate: { cardId: "c1", analysedSha: SHA, state: "failed", output: "x", at: 1 } }));
+    expect(await screen.findByRole("button", { name: "Run the checks again" })).toBeEnabled();
+    expect(screen.getByRole("alert")).toHaveTextContent("The merge checks failed on the analysed commit (a1b2c3d): the merge stays blocked until they pass.");
   });
 
   it.each<[string, Error]>([
