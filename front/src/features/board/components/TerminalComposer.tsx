@@ -877,6 +877,11 @@ async function startDictation(cardId: string): Promise<void> {
   }
 }
 
+function isTypingTarget(element: Element | null): boolean {
+  if (!(element instanceof HTMLElement)) return false;
+  return element.isContentEditable || element.matches("input, textarea, select");
+}
+
 /** Ends the card's recording: `discard` throws it away (Cancel), otherwise it is transcribed. */
 function stopDictation(cardId: string, discard: boolean): void {
   const live = dictations.get(cardId);
@@ -1076,10 +1081,8 @@ export function TerminalComposer({
     setText((prev) => appendFragment(prev, spoken));
     if (!spokenTakesKeyboardRef.current) return;
     setTimeout(() => {
-      const el = ref.current;
-      if (!el) return;
-      el.focus();
-      el.setSelectionRange(el.value.length, el.value.length);
+      const typingElsewhere = document.activeElement !== ref.current && isTypingTarget(document.activeElement);
+      if (!typingElsewhere) ref.current?.focus();
     }, 0);
   }, []);
 
