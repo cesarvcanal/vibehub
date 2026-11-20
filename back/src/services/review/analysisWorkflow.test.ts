@@ -109,14 +109,11 @@ describe("frota da análise de PR", () => {
     expect(calls.find((call) => call.opts.phase === "Revisão")!.prompt).toContain(fullRange);
   });
 
-  it("com sinceSha (rodada 2 em diante), contexto e revisores conferem só o que mudou desde a rodada anterior, sem revisar o que veio da base", async () => {
+  it("com sinceSha (rodada 2 em diante), contexto, revisores e juiz conferem só o que mudou desde a rodada anterior, sem revisar o que veio da base", async () => {
     const sinceSha = "c".repeat(40);
-    const { calls } = await runFleet(
-      async (_prompt, opts) => (opts.phase === "Contexto" ? brief(ONLY_CORRECTNESS) : { findings: [] }),
-      { ...VALID_ARGS, sinceSha },
-    );
+    const { calls } = await runFleet(confirmOneFindingUpToJudge, { ...VALID_ARGS, sinceSha });
     const deltaRange = `git diff ${sinceSha}..${"d".repeat(40)}`;
-    for (const phase of ["Contexto", "Revisão"]) {
+    for (const phase of ["Contexto", "Revisão", "Julgamento"]) {
       const prompt = calls.find((call) => call.opts.phase === phase)!.prompt;
       expect(prompt).toContain(deltaRange);
       expect(prompt).toMatch(/só o que mudou desde a rodada anterior/);
