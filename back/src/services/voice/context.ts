@@ -1,4 +1,4 @@
-import { readHistory, type HistoryEvent } from "../sdk/history.js";
+import type { HistoryEvent } from "../sdk/history.js";
 import { clipLine } from "../../utils/clipLine.js";
 
 /**
@@ -16,36 +16,34 @@ export const CONTEXT_MAX_CHARS = 6_000;
 /** One message longer than this is cut: a 3-page answer says enough in its first lines. */
 export const CONTEXT_ITEM_MAX_CHARS = 700;
 
-/** One history event as a line of the thread, or null when it is not conversation. PURE. */
-function line(event: HistoryEvent): string | null {
+function conversationLine(event: HistoryEvent, maxChars: number): string | null {
   switch (event.type) {
     case "user": {
       const who = event.from?.kind === "agent" ? `Outro card (${clipLine(event.from.name || "agente", 60)})` : "Pessoa (digitou)";
-      return `${who}: ${clipLine(event.text, CONTEXT_ITEM_MAX_CHARS)}`;
+      return `${who}: ${clipLine(event.text, maxChars)}`;
     }
     case "assistant_text":
-      return `Agente do card (Claude): ${clipLine((event as { text: string }).text, CONTEXT_ITEM_MAX_CHARS)}`;
+      return `Agente do card (Claude): ${clipLine((event as { text: string }).text, maxChars)}`;
     case "voice_turn":
-      return `${event.role === "user" ? "Pessoa (falou)" : "Você (voz)"}: ${clipLine(event.text, CONTEXT_ITEM_MAX_CHARS)}`;
+      return `${event.role === "user" ? "Pessoa (falou)" : "Você (voz)"}: ${clipLine(event.text, maxChars)}`;
     default:
       return null;
   }
 }
 
-/** The thread as text that fits {@link CONTEXT_MAX_CHARS}, newest kept. Empty when nothing was said. PURE. */
-export function formatVoiceContext(events: HistoryEvent[], maxChars: number = CONTEXT_MAX_CHARS): string {
+export function formatVoiceContext(
+  events: HistoryEvent[],
+  maxChars: number = CONTEXT_MAX_CHARS,
+  itemMaxChars: number = CONTEXT_ITEM_MAX_CHARS,
+): string {
   const lines: string[] = [];
   let used = 0;
   for (let i = events.length - 1; i >= 0; i--) {
-    const l = line(events[i]!);
-    if (!l) continue;
-    if (used + l.length + 1 > maxChars) break;
-    lines.push(l);
-    used += l.length + 1;
+    const threadLine = conversationLine(events[i]!, itemMaxChars);
+    if (!threadLine) continue;
+    if (used + threadLine.length + 1 > maxChars) break;
+    lines.push(threadLine);
+    used += threadLine.length + 1;
   }
   return lines.reverse().join("\n");
-}
-
-export async function cardVoiceContext(cardId: string): Promise<string> {
-  return formatVoiceContext(await readHistory(cardId));
 }
