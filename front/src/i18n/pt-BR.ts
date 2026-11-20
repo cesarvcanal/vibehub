@@ -1595,6 +1595,7 @@ export const ptBR: Record<string, string> = {
   "review.panel.github": "Abrir no GitHub",
   "review.panel.reviewerSession": "Abrir sessão do revisor",
   "review.panel.diff": "Ver diff",
+  "review.panel.resize": "Arraste para mudar a largura do painel (duplo clique volta ao padrão)",
   "review.stage.reviewing.first": "O revisor está lendo o PR.",
   "review.stage.reviewing.next": "O revisor confere só o que mudou desde a rodada {prev}.",
   "review.stage.fixing": "O autor está corrigindo a lista.",

@@ -40,6 +40,7 @@ import { TerminalComposer } from "@/features/board/components/TerminalComposer";
 import { CardOutbox } from "@/features/board/components/CardOutbox";
 import { SdkQueueTray } from "@/features/board/components/SdkQueueTray";
 import { PrReviewBlocks } from "@/features/board/components/PrReviewBlock";
+import { ReviewColumn } from "@/features/board/components/ReviewColumn";
 import { ReviewPanel } from "@/features/board/components/ReviewPanel";
 import { AnalysisPanel } from "@/features/board/components/AnalysisPanel";
 import { cardState, nextPosition, wantsReviewPanel, withoutReviewFlag } from "@/features/board/lib/board";
@@ -1387,16 +1388,14 @@ export function CardTerminalView({
               <VncPanel cardId={cardId} onClose={closeBrowserPane} />
             </div>
           ) : null}
-          {/* The PR review: a column of its own at the right. The review is a list to read, not a
-              screen to share, so on a wide display it keeps a fixed width instead of taking half. */}
           {reviewOpen ? (
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:w-[30rem] lg:flex-none xl:w-[40rem] 2xl:w-[48rem]">
+            <ReviewColumn>
               {analysisCard ? (
                 <AnalysisPanel cardId={cardId} onClose={() => setReviewOpen(false)} />
               ) : (
                 <ReviewPanel key={reviewPr ?? "card"} cardId={cardId} prNumber={reviewPr} onClose={() => setReviewOpen(false)} />
               )}
-            </div>
+            </ReviewColumn>
           ) : null}
         </div>
       )}
