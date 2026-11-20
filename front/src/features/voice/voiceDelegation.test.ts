@@ -40,6 +40,7 @@ describe("o que o agente e a voz ouvem sobre um pedido urgente", () => {
     expect(request).toContain("Urgente");
     expect(request).toContain("pare o que está fazendo");
     expect(request).toContain("encerre o turno");
+    expect(request).toContain("diga o que ficou interrompido");
   });
 
   it("o aviso de pedido entregue não deixa a voz dizer que já fez nem narrar outra coisa enquanto espera", () => {

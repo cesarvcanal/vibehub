@@ -45,7 +45,8 @@ export function delegationRequest(turns: VoiceTurn[]): string | null {
     `[pedido por voz]\n${asked.text.trim()}`,
     `Transcrição recente da chamada de voz (pode ter erros de transcrição):\n${lines.reverse().join("\n")}`,
     "Urgente: a pessoa está esperando na chamada. Se estiver no meio de outra tarefa, pare o que está fazendo, atenda este pedido " +
-      "primeiro (responda ou execute, com as suas ferramentas) e encerre o turno com a resposta, curta e direta: a voz vai falá-la para a pessoa.",
+      "primeiro (responda ou execute, com as suas ferramentas) e encerre o turno com a resposta, curta e direta: a voz vai falá-la para a pessoa. " +
+      "Se parou outra tarefa para isso, diga o que ficou interrompido, para a pessoa decidir se você retoma.",
   ].join("\n\n");
 }
 
