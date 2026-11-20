@@ -3,7 +3,7 @@ import { useT } from "@/i18n";
 
 export const REVIEW_WIDTH_STORAGE_KEY = "vibehub.reviewPanelWidth";
 const MIN_WIDTH_PX = 384;
-const TERMINAL_MIN_WIDTH_PX = 320;
+const BESIDE_PANE_MIN_WIDTH_PX = 320;
 const KEYBOARD_STEP_PX = 32;
 const WIDTH_DELTA_BY_KEY = new Map([["ArrowLeft", KEYBOARD_STEP_PX], ["ArrowRight", -KEYBOARD_STEP_PX]]);
 
@@ -12,17 +12,35 @@ function readStoredWidth(): number | null {
   return Number.isFinite(stored) && stored > 0 ? stored : null;
 }
 
-export function ReviewColumn({ children }: { children: React.ReactNode }) {
+interface ColumnMeasure {
+  columnWidth: number;
+  rowWidth: number;
+}
+
+export function ReviewColumn({ besidePanes, children }: { besidePanes: number; children: React.ReactNode }) {
   const t = useT();
   const columnRef = React.useRef<HTMLDivElement>(null);
   const dragRef = React.useRef<AbortController | null>(null);
   const [width, setWidth] = React.useState<number | null>(readStoredWidth);
+  const [measure, setMeasure] = React.useState<ColumnMeasure | null>(null);
+  const besideReserve = besidePanes * BESIDE_PANE_MIN_WIDTH_PX;
 
   React.useEffect(() => () => dragRef.current?.abort(), []);
 
+  React.useLayoutEffect(() => {
+    const column = columnRef.current!;
+    const row = column.parentElement!;
+    const measureColumn = () => setMeasure({ columnWidth: Math.round(column.getBoundingClientRect().width), rowWidth: row.clientWidth });
+    measureColumn();
+    const observer = new ResizeObserver(measureColumn);
+    observer.observe(column);
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, []);
+
   const clampWidth = (wanted: number): number => {
     const rowWidth = columnRef.current!.parentElement!.clientWidth;
-    return Math.round(Math.max(MIN_WIDTH_PX, Math.min(wanted, rowWidth - TERMINAL_MIN_WIDTH_PX)));
+    return Math.round(Math.max(MIN_WIDTH_PX, Math.min(wanted, rowWidth - besideReserve)));
   };
   const saveWidth = (next: number) => {
     setWidth(next);
@@ -59,15 +77,17 @@ export function ReviewColumn({ children }: { children: React.ReactNode }) {
     <div
       ref={columnRef}
       data-testid="review-column"
-      style={width === null ? undefined : ({ "--review-width": `${width}px` } as React.CSSProperties)}
-      className="relative flex min-h-0 min-w-0 flex-1 flex-col lg:w-[var(--review-width,30rem)] lg:max-w-[calc(100%_-_20rem)] lg:flex-none xl:w-[var(--review-width,50%)]"
+      style={{ "--review-beside-reserve": `${besideReserve}px`, ...(width === null ? {} : { "--review-width": `${width}px` }) } as React.CSSProperties}
+      className="relative flex min-h-0 min-w-0 flex-1 flex-col lg:w-[var(--review-width,30rem)] lg:max-w-[calc(100%_-_var(--review-beside-reserve))] lg:flex-none xl:w-[var(--review-width,50%)]"
     >
       <div
         role="separator"
         aria-orientation="vertical"
         aria-label={t("review.panel.resize")}
         title={t("review.panel.resize")}
-        aria-valuenow={width ?? undefined}
+        aria-valuemin={MIN_WIDTH_PX}
+        aria-valuemax={measure ? measure.rowWidth - besideReserve : undefined}
+        aria-valuenow={width ?? measure?.columnWidth}
         tabIndex={0}
         onPointerDown={startDrag}
         onKeyDown={resizeByKey}

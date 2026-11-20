@@ -1389,7 +1389,7 @@ export function CardTerminalView({
             </div>
           ) : null}
           {reviewOpen ? (
-            <ReviewColumn>
+            <ReviewColumn besidePanes={browserOpen ? 2 : 1}>
               {analysisCard ? (
                 <AnalysisPanel cardId={cardId} onClose={() => setReviewOpen(false)} />
               ) : (

@@ -1,36 +1,37 @@
-import { describe, expect, it, onTestFinished } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createEvent, fireEvent, render, screen } from "@testing-library/react";
 import { REVIEW_WIDTH_STORAGE_KEY, ReviewColumn } from "@/features/board/components/ReviewColumn";
 
 const ROW_WIDTH = 1400;
+const RENDERED_WIDTH = 500;
 
-function renderColumn() {
-  onTestFinished(() => localStorage.clear());
+function renderColumn({ besidePanes = 1 }: { besidePanes?: number } = {}) {
+  onTestFinished(() => {
+    localStorage.clear();
+    vi.restoreAllMocks();
+  });
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(ROW_WIDTH);
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ right: ROW_WIDTH, width: RENDERED_WIDTH } as DOMRect);
   render(
-    <div data-testid="row">
-      <ReviewColumn>
+    <div>
+      <ReviewColumn besidePanes={besidePanes}>
         <p>painel</p>
       </ReviewColumn>
     </div>,
   );
-  const row = screen.getByTestId("row");
-  Object.defineProperty(row, "clientWidth", { value: ROW_WIDTH });
-  const column = screen.getByTestId("review-column");
-  column.getBoundingClientRect = () => ({ right: ROW_WIDTH }) as DOMRect;
-  return { column, handle: screen.getByRole("separator") };
+  return { column: screen.getByTestId("review-column"), handle: screen.getByRole("separator") };
 }
 
-function firePointer(target: EventTarget, type: "pointerdown" | "pointermove" | "pointerup", clientX: number) {
-  const event = target instanceof Element ? createEvent.pointerDown(target) : new Event(type, { bubbles: true, cancelable: true });
+function withPointer(event: Event, clientX: number): Event {
   Object.defineProperty(event, "clientX", { value: clientX });
   Object.defineProperty(event, "button", { value: 0 });
-  fireEvent(target as Element, event);
+  return event;
 }
 
 function drag(handle: HTMLElement, clientX: number) {
-  firePointer(handle, "pointerdown", 0);
-  firePointer(window, "pointermove", clientX);
-  firePointer(window, "pointerup", clientX);
+  fireEvent(handle, withPointer(createEvent.pointerDown(handle), 0));
+  fireEvent(window, withPointer(new Event("pointermove"), clientX));
+  fireEvent(window, withPointer(new Event("pointerup"), clientX));
 }
 
 const widthOf = (column: HTMLElement) => column.style.getPropertyValue("--review-width");
@@ -55,6 +56,26 @@ describe("ReviewColumn", () => {
     const { column, handle } = renderColumn();
     drag(handle, clientX);
     expect(widthOf(column)).toBe(width);
+  });
+
+  it("com o navegador aberto ao lado, a reserva vale para o terminal e para o navegador", () => {
+    const { column, handle } = renderColumn({ besidePanes: 2 });
+    drag(handle, 0);
+    expect(widthOf(column)).toBe("760px");
+    expect(column.style.getPropertyValue("--review-beside-reserve")).toBe("640px");
+  });
+
+  it("a borda anuncia a largura atual e os limites dela", () => {
+    const { handle } = renderColumn();
+    expect(handle).toHaveAttribute("aria-valuemin", "384");
+    expect(handle).toHaveAttribute("aria-valuemax", "1080");
+    expect(handle).toHaveAttribute("aria-valuenow", String(RENDERED_WIDTH));
+  });
+
+  it("sem largura gravada, o teclado parte da largura que está na tela", () => {
+    const { column, handle } = renderColumn();
+    fireEvent.keyDown(handle, { key: "ArrowLeft" });
+    expect(widthOf(column)).toBe(`${RENDERED_WIDTH + 32}px`);
   });
 
   it("a largura gravada vale ao abrir de novo", () => {
