@@ -1668,6 +1668,7 @@ export const ptBR: Record<string, string> = {
   "review.fleet.findingsCount.one": "{n} achado",
   "review.fleet.findingsCount.other": "{n} achados",
   "review.fleet.typing": "digitando",
+  "review.fleet.steps": "Ver o passo a passo deste agente",
   "review.fleet.stopped": "Parou sem responder: a rodada terminou antes.",
   "review.fleet.more": "ver mais",
   "review.fleet.less": "ver menos",

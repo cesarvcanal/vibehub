@@ -1656,6 +1656,7 @@ export const en: Record<string, string> = {
   "review.fleet.findingsCount.one": "{n} finding",
   "review.fleet.findingsCount.other": "{n} findings",
   "review.fleet.typing": "typing",
+  "review.fleet.steps": "See this agent's steps",
   "review.fleet.stopped": "Stopped without answering: the round ended first.",
   "review.fleet.more": "show more",
   "review.fleet.less": "show less",

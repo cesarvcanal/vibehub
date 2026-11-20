@@ -872,6 +872,10 @@ export interface AnalysisConversation {
   items: AnalysisConversationItem[];
 }
 
+export interface ReviewAgentFeedResponse {
+  items: Omit<AnalysisConversationItem, "agentId">[];
+}
+
 export interface AnalysisConversationResponse {
   conversation: AnalysisConversation | null;
 }

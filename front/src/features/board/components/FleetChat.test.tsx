@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import type { ReviewFleetAgent, ReviewFleetRun } from "@/api/types";
 import { FleetChat } from "@/features/board/components/FleetChat";
 import { reviewFleetChat } from "@/features/board/lib/fleetChat";
@@ -39,5 +39,20 @@ describe("FleetChat", () => {
   it("o modelo aparece como selo ao lado do nome do agente", () => {
     const [bubble] = renderFleet([fleetAgent({ id: "a1", label: "contexto", model: "opus" })]);
     expect(within(bubble!).getByTestId("fleet-chat-model")).toHaveTextContent("opus");
+  });
+
+  it("abrir o passo a passo de dois agentes no mesmo instante deixa os dois abertos", () => {
+    const run: ReviewFleetRun = {
+      runId: "wf_1", name: "revisao", phases: [], total: 2, done: 0, at: 1, finished: false,
+      agents: [fleetAgent({ id: "a1", label: "juiz", status: "running" }), fleetAgent({ id: "a2", label: "contexto", status: "running" })],
+    };
+    render(<FleetChat entries={reviewFleetChat(run)} label="Conversa dos agentes" agentDetail={({ agentId }) => <p>passos de {agentId}</p>} />);
+    const [judge, context] = screen.getAllByRole("button", { expanded: false });
+    act(() => {
+      judge!.click();
+      context!.click();
+    });
+    expect(screen.getByText("passos de a1")).toBeInTheDocument();
+    expect(screen.getByText("passos de a2")).toBeInTheDocument();
   });
 });

@@ -104,6 +104,8 @@ export function phasePills(agents: readonly WorkflowAgentFrame[], plan: readonly
   });
 }
 
+export const FEED_POLL_MS = 4_000;
+
 /** A line of the feed on screen. `thinking` = still thinking (for `ms`); `thought` = thought for `ms`. */
 export type FeedLine =
   | { kind: "tool"; tool: string; target: string }
