@@ -97,6 +97,19 @@ describe("useVoiceDelegation", () => {
     expect(call.answerDelegation.mock.calls).toEqual([["d6", DELEGATION_STARTED, "progress"]]);
   });
 
+  it("a chamada que termina com um pedido pendente cancela o aviso de demora", () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const { call, view, delegate } = setup(vi.fn());
+    delegate("d7", said("roda os testes"));
+    call.snap = { ...call.snap, state: "idle" };
+    view.rerender({});
+    act(() => vi.advanceTimersByTime(DELEGATION_SLOW_MS * 2));
+    expect(call.answerDelegation.mock.calls).toEqual([["d7", DELEGATION_STARTED, "progress"]]);
+  });
+
   it("a call that ends with a request pending says nothing more about it", () => {
     const send = vi.fn();
     const { call, view, delegate } = setup(send);
