@@ -68,6 +68,17 @@ describe("reviewFleetChat", () => {
     expect(reviewFleetChat(reviewRun([reviewAgent({ status: "running" })], true))).toEqual([]);
   });
 
+  it("cada verificação ganha o seu número dentro da dimensão, na ordem da frota, e só ela", () => {
+    const entries = reviewFleetChat(reviewRun([
+      reviewAgent({ id: "rev", label: "revisão:correctness", endedAt: 1, result: "ok" }),
+      reviewAgent({ id: "v1", label: "verificação:correctness · A", endedAt: 4, result: '{"confirmed":true}' }),
+      reviewAgent({ id: "s1", label: "verificação:security · C", endedAt: 2, result: '{"confirmed":true}' }),
+      reviewAgent({ id: "v2", label: "verificação:correctness · B", endedAt: 3, result: '{"confirmed":false}' }),
+    ]));
+    const ordinals = Object.fromEntries(entries.map((entry) => [entry.speaker.agentId, entry.speaker.ordinal]));
+    expect(ordinals).toEqual({ rev: undefined, v1: 1, s1: 1, v2: 2 });
+  });
+
   it("ids das falas carregam a execução: duas rodadas na mesma tela não colidem", () => {
     const first = reviewFleetChat({ ...reviewRun([reviewAgent({ result: "a" })]), runId: "wf_1" });
     const second = reviewFleetChat({ ...reviewRun([reviewAgent({ result: "a" })]), runId: "wf_2" });
@@ -135,6 +146,11 @@ describe("analysisFleetChat", () => {
       { agentId: "rev", at: 5, kind: "text", text: "dois" },
     ], true));
     expect(new Set(entries.map((entry) => entry.id)).size).toBe(2);
+  });
+
+  it("a verificação que digita já mostra o número dela", () => {
+    const [entry] = analysisFleetChat(analysis([]));
+    expect(entry).toMatchObject({ kind: "typing", speaker: { agentId: "ver", ordinal: 1 } });
   });
 
   it("passo de um agente que a lista não traz fica de fora", () => {

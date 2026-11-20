@@ -8,6 +8,7 @@ export interface ChatSpeaker {
   label: string;
   model?: string;
   family: ModelFamily;
+  ordinal?: number;
 }
 
 export interface ChatReply {
@@ -31,9 +32,19 @@ export function modelFamily(model: string | undefined): ModelFamily {
   return MODEL_FAMILIES.find((family) => lowered.includes(family)) ?? "other";
 }
 
-function speakerOf(agentId: string, label: string, model: string | undefined): ChatSpeaker {
-  const family = modelFamily(model);
-  return model ? { agentId, label, model, family } : { agentId, label, family };
+function speakersOf(agents: { id: string; label: string; model?: string }[]): Map<string, ChatSpeaker> {
+  const verificationsPerDimension = new Map<string, number>();
+  return new Map(agents.map((agent) => {
+    const family = modelFamily(agent.model);
+    const base: ChatSpeaker = agent.model
+      ? { agentId: agent.id, label: agent.label, model: agent.model, family }
+      : { agentId: agent.id, label: agent.label, family };
+    const role = agentRole(agent.label);
+    if (role.kind !== "verification") return [agent.id, base];
+    const ordinal = (verificationsPerDimension.get(role.dimension) ?? 0) + 1;
+    verificationsPerDimension.set(role.dimension, ordinal);
+    return [agent.id, { ...base, ordinal }];
+  }));
 }
 
 function withReplies(messages: ChatMessage[]): ChatMessage[] {
@@ -51,7 +62,8 @@ function withReplies(messages: ChatMessage[]): ChatMessage[] {
 }
 
 export function reviewFleetChat(run: ReviewFleetRun): FleetChatEntry[] {
-  const speaker = (agent: ReviewFleetAgent) => speakerOf(agent.id, agent.label, agent.model);
+  const speakers = speakersOf(run.agents);
+  const speaker = (agent: ReviewFleetAgent) => speakers.get(agent.id)!;
   const byEnd = (left: ReviewFleetAgent, right: ReviewFleetAgent) => (left.endedAt ?? 0) - (right.endedAt ?? 0);
   const answered = run.agents.filter((agent) => agent.status === "done").sort(byEnd);
   const isJudge = (agent: ReviewFleetAgent) => agentRole(agent.label).kind === "judge";
@@ -78,7 +90,7 @@ function lastStepDoing(lastStep: AnalysisConversationItem | undefined): { tool: 
 }
 
 export function analysisFleetChat(conversation: AnalysisConversation): FleetChatEntry[] {
-  const speakers = new Map(conversation.agents.map((agent) => [agent.id, speakerOf(agent.id, agent.label, agent.modelLabel)]));
+  const speakers = speakersOf(conversation.agents.map(({ id, label, modelLabel }) => ({ id, label, model: modelLabel })));
   const spoken = conversation.items.flatMap((item) => {
     const speaker = speakers.get(item.agentId);
     return speaker && item.kind === "text" && item.text ? [{ speaker, at: item.at, text: item.text }] : [];
