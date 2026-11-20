@@ -776,6 +776,7 @@ export const en: Record<string, string> = {
   "sdk.detail.deliverables": "Deliverables",
   "sdk.detail.deliverablesProgress": "{done} of {n} done",
   "sdk.detail.deliverablesPending": "{n} deliverables, marked when it finishes",
+  "sdk.detail.deliverablesUnmarked": "the report did not mark the list",
   "sdk.detail.deliverable.done": "done",
   "sdk.detail.deliverable.missed": "not done",
   "sdk.detail.deliverable.open": "pending",

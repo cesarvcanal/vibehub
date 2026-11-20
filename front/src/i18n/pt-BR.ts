@@ -777,6 +777,7 @@ export const ptBR: Record<string, string> = {
   "sdk.detail.deliverables": "Entregas",
   "sdk.detail.deliverablesProgress": "{done} de {n} feitas",
   "sdk.detail.deliverablesPending": "{n} entregas, marcadas quando ele terminar",
+  "sdk.detail.deliverablesUnmarked": "o relatório não marcou a lista",
   "sdk.detail.deliverable.done": "feita",
   "sdk.detail.deliverable.missed": "não feita",
   "sdk.detail.deliverable.open": "pendente",

@@ -15,9 +15,11 @@ export function AgentTaskPanel({ prompt, report, running }: { prompt: string; re
   const t = useT();
   const { context, items } = readAgentDeliverables(prompt, report, running);
   const doneCount = items.filter((item) => item.state === "done").length;
-  const progressText = running
-    ? t("sdk.detail.deliverablesPending", { n: items.length })
-    : t("sdk.detail.deliverablesProgress", { done: doneCount, n: items.length });
+  const reportMarkedNothing = !running && items.every((item) => item.state === "unmarked");
+  const showsProgress = !running && !reportMarkedNothing;
+  const progressText = showsProgress
+    ? t("sdk.detail.deliverablesProgress", { done: doneCount, n: items.length })
+    : t(running ? "sdk.detail.deliverablesPending" : "sdk.detail.deliverablesUnmarked", { n: items.length });
   return (
     <div className="space-y-5">
       {items.length > 0 ? (
@@ -26,11 +28,11 @@ export function AgentTaskPanel({ prompt, report, running }: { prompt: string; re
             <h3 className="text-[13px] font-semibold">{t("sdk.detail.deliverables")}</h3>
             <span data-testid="sdk-agent-deliverables-progress" className="text-xs text-muted-foreground">{progressText}</span>
           </header>
-          {running ? null : (
+          {showsProgress ? (
             <div className="h-0.5 bg-muted/60" aria-hidden>
               <div className="h-full bg-emerald-400/80 transition-[width]" style={{ width: `${(doneCount / items.length) * 100}%` }} />
             </div>
-          )}
+          ) : null}
           <ul className="divide-y divide-border/50">
             {items.map((item, index) => {
               const style = STATE_STYLE[item.state];
