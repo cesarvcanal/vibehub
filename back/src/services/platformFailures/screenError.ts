@@ -16,8 +16,8 @@ interface ScreenErrorReport {
   stack?: string;
 }
 
-function readBoundedText(body: Record<string, unknown>, field: string, maxChars: number): string {
-  const value = body[field];
+function readBoundedText(fields: Record<string, unknown>, field: string, maxChars: number): string {
+  const value = fields[field];
   if (typeof value !== "string" || value === "") throw new InvalidScreenErrorReport(`${field} must be a non-empty string`);
   if (value.length > maxChars) throw new InvalidScreenErrorReport(`${field} is longer than ${maxChars} characters`);
   return value;

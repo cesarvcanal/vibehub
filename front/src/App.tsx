@@ -1,12 +1,13 @@
+import * as React from "react";
 import { Providers } from "@/providers/providers";
 import { AppRoutes } from "@/routes";
 import { ParticlesBackground } from "@/components/ParticlesBackground";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { VersionWatcher } from "@/lib/versionCheck";
-import { reportScreenError, useScreenErrorReporting } from "@/features/platformFailures/lib/screenErrorReport";
+import { listenForScreenErrors, reportScreenError } from "@/features/platformFailures/lib/screenErrorReport";
 
 export default function App() {
-  useScreenErrorReporting();
+  React.useEffect(listenForScreenErrors, []);
   return (
     <Providers>
       {/*

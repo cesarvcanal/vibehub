@@ -9,7 +9,7 @@ export function usePlatformFailures({ isPolling }: { isPolling: boolean }) {
   const failuresQuery = useQuery({
     queryKey: PLATFORM_FAILURES_KEY,
     queryFn: platformFailuresApi.list,
-    ...(isPolling ? { refetchInterval: PLATFORM_FAILURES_POLL_MS } : {}),
+    refetchInterval: isPolling ? PLATFORM_FAILURES_POLL_MS : false,
   });
   return { failures: failuresQuery.data ?? NO_PLATFORM_FAILURES, isLoadError: failuresQuery.isError };
 }

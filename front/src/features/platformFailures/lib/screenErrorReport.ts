@@ -1,4 +1,3 @@
-import * as React from "react";
 import { isAxiosError } from "axios";
 import { platformFailuresApi } from "../api";
 
@@ -32,8 +31,4 @@ export function listenForScreenErrors(): () => void {
     window.removeEventListener("error", reportUncaughtError);
     window.removeEventListener("unhandledrejection", reportUnhandledRejection);
   };
-}
-
-export function useScreenErrorReporting(): void {
-  React.useEffect(() => listenForScreenErrors(), []);
 }
