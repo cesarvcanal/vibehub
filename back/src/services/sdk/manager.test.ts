@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { config } from "../../config/env.js";
 import { readCardCatalog } from "./catalog.js";
 import { readHistory, rewindHistory } from "./history.js";
-import { logger } from "../../utils/logger.js";
+import { logger, onLogLine, type LogLine } from "../../utils/logger.js";
+import { isPlatformFailureLogLine } from "../platformFailures/backendError.js";
 import {
   BACKGROUND_HOLD_MAX_MS,
   DRIVER_IDLE_MS,
@@ -854,22 +855,16 @@ describe("end of life", () => {
     expect(last.message).toContain("TypeError: boom");
   });
 
-  it("o driver que morre sem ninguém pedir deixa no log o erro com o código, que o detector de falhas captura", () => {
-    const warn = vi.spyOn(logger, "warn");
-    onTestFinished(() => { warn.mockRestore(); });
+  it.each([
+    ["com código", [1], "driver exited with code 1"],
+    ["por sinal", [null, "SIGKILL"], "driver killed by signal SIGKILL"],
+  ])("o driver que morre %s sem ninguém pedir vira falha capturada, com o motivo no detail", (_case, closeArguments, detail) => {
+    const loggedLines: LogLine[] = [];
+    onTestFinished(onLogLine("warn", (line) => loggedLines.push(line)));
     ensure();
-    spawned[0]!.emit("close", 1);
-    const exitWarnings = warn.mock.calls.filter((call) => call[1] === "sdk driver exited unexpectedly").map((call) => call[0]);
-    expect(exitWarnings).toEqual([expect.objectContaining({ code: 1, detail: "driver exited with code 1" })]);
-  });
-
-  it("o driver morto por sinal diz o sinal no erro, em vez de um código vazio", () => {
-    const warn = vi.spyOn(logger, "warn");
-    onTestFinished(() => { warn.mockRestore(); });
-    ensure();
-    spawned[0]!.emit("close", null, "SIGKILL");
-    const exitWarnings = warn.mock.calls.filter((call) => call[1] === "sdk driver exited unexpectedly").map((call) => call[0]);
-    expect(exitWarnings).toEqual([expect.objectContaining({ detail: "driver killed by signal SIGKILL" })]);
+    spawned[0]!.emit("close", ...closeArguments);
+    const capturedFailures = loggedLines.filter((line) => isPlatformFailureLogLine(line, undefined, Date.now()));
+    expect(capturedFailures).toEqual([expect.objectContaining({ message: "sdk driver exited unexpectedly", fields: expect.objectContaining({ detail }) })]);
   });
 
   it("parada pedida (troca de conta/modelo) fecha os sockets SEM anunciar erro", () => {
