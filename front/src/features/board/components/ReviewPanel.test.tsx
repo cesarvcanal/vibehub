@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, it, expect, onTestFinished, vi } from "vitest";
-import { act, cleanup, configure, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, configure, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import { renderApp, setupState } from "@/test/render";
@@ -234,6 +234,30 @@ describe("ReviewPanel — o que mostra", () => {
     await userEvent.click(screen.getByRole("button", { name: "Rodada 1" }));
     expect(await screen.findByText("achado da rodada 1")).toBeInTheDocument();
     expect(screen.queryByText("achado da rodada 2")).toBeNull();
+  });
+
+  it("a aba Agentes abre no fim da conversa da frota, e trocar de rodada volta ao fim dela", async () => {
+    const layoutHeight = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function scrollHeightOf(this: HTMLElement) {
+      return this.closest("[hidden]") ? 0 : 1000;
+    });
+    onTestFinished(() => layoutHeight.mockRestore());
+    const served = get.getMockImplementation()!;
+    const agentRun = (runId: string, title: string) => ({
+      runId, name: "vibehub-pr-analysis", phases: ["Revisão"], total: 1, done: 1, at: 5, finished: true,
+      agents: [{ id: `${runId}-a`, label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "done" as const, endedAt: 1, toolCount: 1,
+        result: JSON.stringify({ findings: [{ title }] }) }],
+    });
+    const recorded = review({ phase: "reviewing", round: 2, lastSubmitRound: 1, fleet: [{ round: 1, runs: [agentRun("wf_r1", "achado da rodada 1")] }] });
+    get.mockImplementation(async (url: string) => (url === "/cards/c1/review" ? { review: current, working, fleet: [agentRun("wf_r2", "achado da rodada 2")] } : served(url)));
+    open("aut", recorded);
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Agentes/ }));
+    const scroller = await screen.findByTestId("review-agents");
+    expect(scroller.scrollTop).toBe(1000);
+    scroller.scrollTop = 0;
+    fireEvent.scroll(scroller);
+    await userEvent.click(screen.getByRole("button", { name: "Rodada 1" }));
+    expect(screen.getByTestId("review-agents").scrollTop).toBe(1000);
   });
 
   it("revisão sem frota: a aba Agentes diz que os agentes ainda não rodaram", async () => {
