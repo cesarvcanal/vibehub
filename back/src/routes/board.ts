@@ -93,10 +93,6 @@ function withAnalysisMerging(card: registry.Card): BoardCard {
   return isAnalysisMerging(card.id) ? { ...card, analysisMerging: true } : card;
 }
 
-/**
- * A card listing as the board shows it. REVIEWER cards (`reviewOf`) are left out — a review shows up
- * as a line under the author's card, not as a card of its own.
- */
 async function withWaitTargetTitles(user: PublicUser | null, cards: BoardCard[]): Promise<BoardCard[]> {
   const targetIds = new Set(cards.flatMap((card) => (card.waitingFor ? [card.waitingFor.cardId] : [])));
   if (targetIds.size === 0) return cards;
@@ -108,6 +104,10 @@ async function withWaitTargetTitles(user: PublicUser | null, cards: BoardCard[])
   });
 }
 
+/**
+ * A card listing as the board shows it. REVIEWER cards (`reviewOf`) are left out — a review shows up
+ * as a line under the author's card, not as a card of its own.
+ */
 async function boardCards(user: PublicUser | null, cards: registry.Card[]): Promise<BoardCard[]> {
   return await withWaitTargetTitles(user, await withReviewSummary(cards.filter((c) => !c.reviewOf)));
 }
