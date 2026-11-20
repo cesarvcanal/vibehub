@@ -7,6 +7,10 @@ import { speechAvailable, synthesizeSpeech, SPEECH_MAX_CHARS } from "../services
 import { Readable } from "node:stream";
 import { originOfUser } from "../services/chat/provenance.js";
 import * as registry from "../services/board/registry.js";
+import { config } from "../config/env.js";
+import { logger } from "../utils/logger.js";
+import { runVoiceAction, runVoiceActionOnce } from "../services/voice/executor.js";
+import { UserActionError } from "../services/maestro/asUser.js";
 
 /**
  * VOICE MODE — see services/voice/live.ts. The key never leaves the server.
@@ -70,6 +74,32 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
       } catch (err) {
         if (err instanceof VoiceLiveError) return await reply.code(err.status).send({ error: err.message });
         throw err;
+      }
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: { callId?: unknown; name?: unknown; arguments?: unknown } }>(
+    "/api/cards/:id/voice/actions",
+    { preHandler: requireCardWork, bodyLimit: 64 * 1024 },
+    async (req, reply) => {
+      if (!config.voiceLive.enabled) return await reply.code(404).send({ error: "voice mode is disabled" });
+      const callCard = await registry.getCard(req.params.id);
+      if (!callCard) return await reply.code(404).send({ error: "card not found" });
+      const { callId, name, arguments: argumentsJson } = req.body ?? {};
+      if (typeof callId !== "string" || !callId || callId.length > 200) return await reply.code(400).send({ error: "callId is required" });
+      if (typeof name !== "string" || !name) return await reply.code(400).send({ error: "name is required" });
+      if (typeof argumentsJson !== "string") return await reply.code(400).send({ error: "arguments must be the function call's JSON text" });
+      const user = await requestUser(req);
+      if (!user) return await reply.code(401).send({ error: "not authenticated" });
+      try {
+        const output = await runVoiceActionOnce(`${user.id}:${callId}`, () => runVoiceAction({ user, callCard, name, argumentsJson }));
+        logger.info({ audit: true, action: "voice.action", tool: name, card: callCard.id, by: user.username }, "voice action");
+        return await reply.send({ output });
+      } catch (err) {
+        if (err instanceof UserActionError) return await reply.code(err.status).send({ error: err.message });
+        const reason = err instanceof Error ? err.message : String(err);
+        logger.warn({ tool: name, card: callCard.id, detail: reason }, "voice action refused by the board");
+        return await reply.code(422).send({ error: reason });
       }
     },
   );

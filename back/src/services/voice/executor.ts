@@ -169,3 +169,19 @@ export async function runVoiceAction(input: VoiceActionInput): Promise<unknown> 
     }
   }
 }
+
+export const VOICE_ACTION_TTL_MS = 10 * 60_000;
+
+const settledActions = new Map<string, { output: Promise<unknown>; at: number }>();
+
+export function runVoiceActionOnce(key: string, run: () => Promise<unknown>, now: number = Date.now()): Promise<unknown> {
+  for (const [storedKey, stored] of settledActions) {
+    if (now - stored.at >= VOICE_ACTION_TTL_MS) settledActions.delete(storedKey);
+  }
+  const known = settledActions.get(key);
+  if (known) return known.output;
+  const output = run();
+  settledActions.set(key, { output, at: now });
+  output.catch(() => settledActions.delete(key));
+  return output;
+}
