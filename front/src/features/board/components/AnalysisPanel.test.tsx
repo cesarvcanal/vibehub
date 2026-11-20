@@ -263,6 +263,23 @@ describe("merge pelo painel da análise", () => {
     expect(screen.getByRole("button", { name: "Tentar o merge do PR #312 de novo" })).toBeEnabled();
   });
 
+  it("resposta perdida e servidor sem merge rodando, sem recusa e sem merge: avisa que o resultado não foi confirmado", async () => {
+    post.mockRejectedValue(apiReject(502, ""));
+    renderPanel(aptRead());
+    await userEvent.click(await screen.findByRole("button", { name: "Mergear o PR #312" }));
+    expect(await screen.findByText("Não deu para confirmar o merge: a conexão caiu e o servidor não tem merge rodando nem recusa registrada. Confira o PR no GitHub antes de tentar de novo.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mergear o PR #312" })).toBeEnabled();
+  });
+
+  it("recusa por outro motivo que não o gate mostra o texto genérico e a saída, nunca o código interno do motivo", async () => {
+    renderPanel(aptRead({
+      lastMergeRefusal: { cardId: "c1", analysedSha: doneReport().analysedSha, reason: "push_failed", output: "rejected: non-fast-forward", by: "mussa", at: 1 },
+    }));
+    expect(await screen.findByText("O último merge não saiu. Saída do vibehub:")).toBeInTheDocument();
+    expect(screen.getByText("rejected: non-fast-forward")).toBeInTheDocument();
+    expect(screen.queryByText(/push_failed/)).not.toBeInTheDocument();
+  });
+
   it("em inglês o botão e o resultado saem pelo i18n", async () => {
     setLanguage("en");
     post.mockResolvedValue({ result: { merged: true, reason: "merged", branch: "dev", cardBranch: "feat/sso" } });

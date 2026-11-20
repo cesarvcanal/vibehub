@@ -53,7 +53,7 @@ export function AnalysisPanel({ cardId, onClose }: { cardId: string; onClose: ()
 
   return (
     <PanelFrame label={t("analysis.panel.label")} header={header}>
-      {read?.analysis ? <AnalysisMerge cardId={cardId} read={read} /> : null}
+      {read?.analysis ? <AnalysisMerge cardId={cardId} read={read} rereading={analysisQuery.isFetching} /> : null}
       <div role="tablist" aria-label={t("analysis.panel.label")} className="flex shrink-0 gap-1 rounded-md border border-border/60 bg-background/40 p-0.5">
         <TabButton active={tab === "report"} onClick={() => setTab("report")}>{t("analysis.tab.report")}</TabButton>
         <TabButton active={tab === "conversation"} onClick={() => setTab("conversation")}>{t("analysis.tab.conversation")}</TabButton>
@@ -79,7 +79,7 @@ function VerdictBadge({ read }: { read: AnalysisReadModel }) {
   return <Badge tone={VERDICT_TONE[read.verdict]}>{t(`analysis.verdict.${read.verdict}`)}</Badge>;
 }
 
-function AnalysisMerge({ cardId, read }: { cardId: string; read: AnalysisReadModel }) {
+function AnalysisMerge({ cardId, read, rereading }: { cardId: string; read: AnalysisReadModel; rereading: boolean }) {
   const t = useT();
   const queryClient = useQueryClient();
   const merge = useMutation({
@@ -94,12 +94,14 @@ function AnalysisMerge({ cardId, read }: { cardId: string; read: AnalysisReadMod
   const refusedByClick = failure?.kind === "refused" ? apiErrorMessage(merge.error) : undefined;
   const merging = merge.isPending || read.merging;
   const refusal = merging || refusedByClick ? undefined : read.lastMergeRefusal;
+  const answerLost = failure?.kind === "lost" || failure?.kind === "running";
+  const unconfirmed = answerLost && !merging && !rereading && !refusal;
   return (
     <div className="flex shrink-0 flex-col gap-1.5">
       {refusal ? (
         <div role="alert" className="flex flex-col gap-1 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs">
           <p className="font-medium text-destructive">
-            {refusal.reason === "gate" ? t("analysis.merge.refused.gate") : t("analysis.merge.refused.other", { reason: refusal.reason })}
+            {refusal.reason === "gate" ? t("analysis.merge.refused.gate") : t("analysis.merge.refused.other")}
           </p>
           {refusal.output ? (
             <pre className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground">{refusal.output}</pre>
@@ -112,6 +114,7 @@ function AnalysisMerge({ cardId, read }: { cardId: string; read: AnalysisReadMod
       </Button>
       {merging ? <p className="text-xs text-muted-foreground">{t("analysis.merge.running")}</p> : null}
       {refusedByClick ? <p className="whitespace-pre-wrap text-xs text-destructive">{refusedByClick}</p> : null}
+      {unconfirmed ? <p role="alert" className="text-xs text-destructive">{t("analysis.merge.unconfirmed")}</p> : null}
     </div>
   );
 }
