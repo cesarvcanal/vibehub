@@ -1,11 +1,11 @@
 import { redactSecrets } from "../../utils/redactSecrets.js";
+import { SYMPTOM_MAX_CHARS } from "./backendError.js";
 import { recordPlatformFailure } from "./platformFailures.js";
 import type { PlatformFailureReport } from "./types.js";
 
 const MESSAGE_MAX_CHARS = 2_000;
 const SCREEN_MAX_CHARS = 500;
 const STACK_MAX_CHARS = 20_000;
-const SYMPTOM_MAX_CHARS = 200;
 const STACK_LINES_KEPT = 6;
 
 export class InvalidScreenErrorReport extends Error {}

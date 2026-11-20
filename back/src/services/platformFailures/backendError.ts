@@ -8,7 +8,7 @@ const WARN_LEVEL = 40;
 const ERROR_LEVEL = 50;
 const SOURCE_FILE_PATTERN = /([\w/.-]+?)\.[jt]s:\d+/;
 const STACK_FRAMES_KEPT = 5;
-const SYMPTOM_MAX_CHARS = 200;
+export const SYMPTOM_MAX_CHARS = 200;
 
 function decodePercentEscapes(text: string): string {
   return text.replace(/(?:%[0-9A-Fa-f]{2})+/g, (escapedRun) => {
