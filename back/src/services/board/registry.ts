@@ -154,9 +154,14 @@ export function normalizePreviewCwd(cwd: string | null | undefined): string | un
  */
 export const HUMAN_ACTIVE_WINDOW_MS = 5 * 60_000;
 
-/** true = a human typed in this card's terminal within the last {@link HUMAN_ACTIVE_WINDOW_MS}. PURE. */
-export function isHumanActive(card: Pick<Card, "humanActiveAt">, now: number = Date.now()): boolean {
-  return !!card.humanActiveAt && now - card.humanActiveAt < HUMAN_ACTIVE_WINDOW_MS;
+export function isHumanActive(
+  card: Pick<Card, "humanActiveAt" | "awaitingDecisionAt" | "pendingQuestionAt">,
+  now: number = Date.now(),
+  answeringAskedAt?: number,
+): boolean {
+  if (!card.humanActiveAt || now - card.humanActiveAt >= HUMAN_ACTIVE_WINDOW_MS) return false;
+  const lastAskedAt = Math.max(card.awaitingDecisionAt ?? 0, card.pendingQuestionAt ?? 0, answeringAskedAt ?? 0);
+  return lastAskedAt <= card.humanActiveAt;
 }
 
 /**

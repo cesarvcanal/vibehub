@@ -295,12 +295,13 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
               "answer the review with vibehub_review_respond from your own card",
           );
         }
-        return ok(await sendAnswer(a.cardId, a.inReplyTo, a.text, async (text) => sendToTerminal(a.cardId, text, {
+        return ok(await sendAnswer(a.cardId, a.inReplyTo, a.text, async (text, answered) => sendToTerminal(a.cardId, text, {
           by: actor,
           // The order came from the PERSON behind the sending card: the destination works as them —
           // once the send is certain to go (a refused send leaves the authorship alone).
           beforeDeliver: () => relayCardActor(a.from, a.cardId),
           respectHumanActive: true,
+          answeringAskedAt: answered?.at,
           // Never type into a menu (Enter would pick its highlighted option — on the trust dialog,
           // "No, exit"), and give a card that is still booting the time to draw its prompt.
           guardInteractiveMenu: true,
