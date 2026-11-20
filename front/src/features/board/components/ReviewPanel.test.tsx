@@ -1002,6 +1002,22 @@ describe("ReviewPanel — merge", () => {
     expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeDisabled();
   });
 
+  it("conflito que a IA do autor não resolveu depois das ordens que recebe sozinha: alerta que o merge espera uma pessoa trazer a base, sem prometer a IA trazendo", async () => {
+    const sha = "a".repeat(40);
+    open("mer", review({
+      phase: "ready", reviewedSha: sha,
+      mergeGate: { sha, state: "failed", output: "o PR tem conflito com dev: o merge commit não sai limpo", at: 1, failures: 4, conflict: true, exhausted: true },
+    }));
+    await loaded();
+    expect(screen.queryByText("IA trazendo a base")).toBeNull();
+    expect(screen.queryByText(/a IA do autor está trazendo/)).toBeNull();
+    expect(screen.getByText("conflito com a base")).toBeInTheDocument();
+    expect(screen.getByText("Revisão aprovada, mas o PR segue em conflito com a base e a IA do autor não conseguiu trazê-la: o merge espera alguém trazer a base para a branch.")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("O PR segue em conflito com dev depois de 3 ordens à IA do autor. Traga dev para a branch e suba; depois, \"Tentar de novo\" confere outra vez.");
+    expect(screen.getByRole("button", { name: "Tentar de novo" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeDisabled();
+  });
+
   it("gate rodando no commit aprovado: o Mergear espera; verde, ou de um commit antigo, não segura", async () => {
     const sha = "a".repeat(40);
     open("mer", review({ phase: "ready", reviewedSha: sha, mergeGate: { sha, state: "running", at: 1 } }));

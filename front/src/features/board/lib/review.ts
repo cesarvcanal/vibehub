@@ -90,6 +90,7 @@ export function reviewPill(
       if (live.gate === "fixing") return { key: "review.pill.gateFixing", tone: "warn" };
       if (live.gate === "running") return { key: "review.pill.gateRunning", tone: "info" };
       if (live.gate === "conflict") return { key: "review.pill.gateConflict", tone: "warn" };
+      if (live.gate === "conflictFailed") return { key: "review.pill.gateConflictFailed", tone: "critical" };
       return { key: "review.pill.ready", tone: "ok" };
     // Blue = needs a person, the same colour the mockup gives it.
     case "impasse":
@@ -324,19 +325,21 @@ export function mergeGateOf(review: Pick<Review, "reviewedSha" | "mergeGate">): 
   return review.mergeGate && review.mergeGate.sha === review.reviewedSha ? review.mergeGate : undefined;
 }
 
-export type MergeGateStatus = "running" | "fixing" | "failed" | "conflict";
+export type MergeGateStatus = "running" | "fixing" | "failed" | "conflict" | "conflictFailed";
 
 /**
  * Where the merge gate on the approved commit holds the merge: running, red while the author's AI fixes
  * it and it reruns on its own (`fixing`), or red waiting for a person (`failed`: past the automatic
- * reruns, or a failure from when it reran only once). Undefined = it holds nothing. The server's
+ * reruns, or a failure from when it reran only once); in conflict with the base while the author's AI brings
+ * it in (`conflict`), or still in conflict past the orders it gets on its own (`conflictFailed`). Undefined =
+ * it holds nothing. The server's
  * `mergeGateSelfHealing` draws the same line for the board summary. PURE.
  */
 export function mergeGateStatus(review: Pick<Review, "reviewedSha" | "mergeGate">): MergeGateStatus | undefined {
   const gate = mergeGateOf(review);
   if (gate?.state === "running") return "running";
   if (gate?.state !== "failed") return undefined;
-  if (gate.conflict) return "conflict";
+  if (gate.conflict) return gate.exhausted ? "conflictFailed" : "conflict";
   return gate.exhausted || (gate.autoRetried && gate.failures === undefined) ? "failed" : "fixing";
 }
 
