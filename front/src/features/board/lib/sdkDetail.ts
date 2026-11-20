@@ -1,6 +1,6 @@
 import * as React from "react";
 import { t as translate } from "@/i18n";
-import type { AgentTask, SdkRow, ToolResultSummary } from "@/features/board/lib/sdkChat";
+import type { AgentTask, BackgroundTask, SdkRow, ToolResultSummary } from "@/features/board/lib/sdkChat";
 import type { DiffRow } from "@/features/board/lib/toolDiff";
 
 /**
@@ -89,6 +89,11 @@ export function agentStatus(row: Extract<SdkRow, { kind: "tool" }>, task: AgentT
     return row.result.background ? (row.live ? "running" : "unknown") : "ok";
   }
   return row.live ? "running" : "unknown";
+}
+
+export function listForegroundRunningAgents(tasks: Record<string, AgentTask>, backgroundTasks: readonly BackgroundTask[]): AgentTask[] {
+  const backgroundCallIds = new Set(backgroundTasks.map((task) => task.toolUseId));
+  return Object.values(tasks).filter((task) => task.status === "running" && !backgroundCallIds.has(task.toolUseId));
 }
 
 /**
