@@ -38,6 +38,15 @@ export function delegationRequest(asked: string, turns: VoiceTurn[]): string {
   ].join("\n\n");
 }
 
+export function askedOfAgent(argumentsJson: string): string | null {
+  try {
+    const { request } = JSON.parse(argumentsJson) as { request?: unknown };
+    return typeof request === "string" && request.trim() ? request.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 const ASKED_IN_ANSWER_MAX_CHARS = 200;
 
 export function agentAnswerForVoice(asked: string, answer: string | null): string {

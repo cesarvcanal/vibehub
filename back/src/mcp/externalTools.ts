@@ -320,12 +320,12 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
         "fails on its line and the rest still move. Returns { column, moved, unchanged, failed, results }.",
       inputSchema: {
         cards: z.array(z.string()).min(1).max(MOVE_BATCH_MAX).describe("card ids (from vibehub_list_terminals)"),
-        column: z.enum(AGENT_MOVABLE_COLUMNS as unknown as [string, ...string[]]).describe("done | backlog"),
+        column: z.enum(AGENT_MOVABLE_COLUMNS as unknown as [BoardColumn, ...BoardColumn[]]).describe("done | backlog"),
       },
     },
     async (a) => {
       try {
-        return ok(await moveCardsAs(user, a.cards, a.column as BoardColumn));
+        return ok(await moveCardsAs(user, a.cards, a.column));
       } catch (e) {
         return fail(e);
       }

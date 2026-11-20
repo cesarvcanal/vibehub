@@ -8,7 +8,6 @@ import { listTerminals, sendToTerminal, waitTerminalReady, SEND_READY_WAIT_MS } 
 import { originOfUser } from "../chat/provenance.js";
 import { sendAnswer } from "../../mcp/events.js";
 import { moveCards, type CardMoveOutcome } from "../../mcp/cardMove.js";
-import type { BoardColumn } from "../board/registry.js";
 import { logger } from "../../utils/logger.js";
 
 export class UserActionError extends Error {
@@ -113,15 +112,15 @@ export async function sendToCardAs(user: PublicUser, input: { cardId: string; te
   return { ...sent, sentAt };
 }
 
-export async function moveCardsAs(user: PublicUser, cards: string[], column: BoardColumn) {
+export async function moveCardsAs(user: PublicUser, cards: string[], column: registry.BoardColumn) {
   const allowed: string[] = [];
   const refused: CardMoveOutcome[] = [];
   for (const cardId of cards) {
     try {
       await requireCardLevel(user, cardId, "work");
       allowed.push(cardId);
-    } catch (e) {
-      refused.push({ cardId, ok: false, error: (e as Error).message });
+    } catch (err) {
+      refused.push({ cardId, ok: false, error: (err as Error).message });
     }
   }
   if (allowed.length === 0) return { column, moved: 0, unchanged: 0, failed: refused.length, results: refused };

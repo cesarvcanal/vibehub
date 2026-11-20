@@ -1,6 +1,7 @@
 import * as React from "react";
 import type { SdkRow } from "@/features/board/lib/sdkChat";
 import { apiErrorMessage } from "@/lib/apiError";
+import type { VoiceActionCall } from "@/api/types";
 import type { VoiceCall } from "./useVoiceCall";
 import type { VoiceToolCall } from "./liveVoice";
 import { agentContext } from "./voiceContext";
@@ -11,18 +12,13 @@ import {
   DELEGATION_SLOW_MS,
   DELEGATION_STARTED,
   agentAnswerForVoice,
+  askedOfAgent,
   delegationReply,
   delegationRequest,
   isAgentAnswer,
 } from "./voiceDelegation";
 
-export const ASK_AGENT_TOOL = "ask_card_agent";
-
-export interface VoiceActionCall {
-  callId: string;
-  name: string;
-  arguments: string;
-}
+const ASK_AGENT_TOOL = "ask_card_agent";
 
 interface PendingAsk {
   asked: string;
@@ -37,15 +33,6 @@ export interface UseVoiceDelegationOptions {
   turnRunning: boolean;
   sendUrgentToAgent: (text: string) => void;
   runAction: (call: VoiceActionCall) => Promise<unknown>;
-}
-
-function askedOfAgent(argumentsJson: string): string | null {
-  try {
-    const { request } = JSON.parse(argumentsJson) as { request?: unknown };
-    return typeof request === "string" && request.trim() ? request.trim() : null;
-  } catch {
-    return null;
-  }
 }
 
 export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent, runAction }: UseVoiceDelegationOptions): void {
