@@ -166,6 +166,26 @@ export const FrotaDeAgentesTrabalhando: Story = {
   },
 };
 
+export const FrotaInterrompidaPeloLimiteDeUso: Story = {
+  name: "Frota interrompida pelo limite de uso (aba Agentes)",
+  args: {
+    initialTab: "agents",
+    fleet: [{
+      runId: "wf_lim01", name: "vibehub-pr-analysis", phases: ["Contexto", "Revisão", "Verificação", "Julgamento"],
+      total: 4, done: 2, at: Date.now(), finished: true, outcome: "failed",
+      agents: [
+        { id: "a11f", label: "contexto", phase: "Contexto", model: "opus", status: "done", endedAt: 1,
+          result: '{"summary":"O PR mantém a chamada de voz viva durante o deploy."}' },
+        { id: "a12f", label: "revisão: tests", phase: "Revisão", model: "sonnet", status: "done", endedAt: 2,
+          result: '{"findings":[{"title":"Teste de queda afirma logo após startCall, sem esperar o efeito"}]}' },
+        { id: "a13f", label: "verificação: tests · Teste de queda afirma logo após startCall, sem esperar o efeito", phase: "Verificação",
+          model: "sonnet", status: "stopped", error: "You've hit your session limit · resets 1:10am (UTC)" },
+        { id: "a14f", label: "juiz", phase: "Julgamento", model: "opus", status: "stopped", error: "You've hit your session limit · resets 1:10am (UTC)" },
+      ],
+    }],
+  },
+};
+
 export const DuvidaEsperandoDecisao: Story = {
   name: "2. Dúvida esperando a decisão do revisor humano",
   args: {
