@@ -1042,11 +1042,14 @@ export function toolLiveLabel(row: SdkRow): string | null {
     return bytes > 0 ? `${label} ${translate("sdk.toolLive.kb", { n: Math.max(1, Math.round(bytes / 1024)) })}` : label;
   }
   if (typeof row.elapsedSeconds !== "number") return null;
-  const o = (row.input && typeof row.input === "object" ? row.input : {}) as Record<string, unknown>;
-  const what = row.name === "Bash"
-    ? field(o, "description") || line(field(o, "command"), 60) || row.name
+  return `${translate("sdk.toolLive.running", { what: describeRunningTool(row) })} ${formatTurnElapsed(row.elapsedSeconds)}`;
+}
+
+function describeRunningTool(row: Extract<SdkRow, { kind: "tool" }>): string {
+  const input = (row.input && typeof row.input === "object" ? row.input : {}) as Record<string, unknown>;
+  return row.name === "Bash"
+    ? field(input, "description") || line(field(input, "command"), 60) || row.name
     : toolHeadline(row.name, row.input).title;
-  return `${translate("sdk.toolLive.running", { what })} ${formatTurnElapsed(row.elapsedSeconds)}`;
 }
 
 /**
@@ -1093,6 +1096,24 @@ export function currentActivity(state: SdkChatState): SdkActivity | null {
     if (row.kind === "assistant") return row.streaming ? { kind: "answering", label: "", rowId: row.id } : null;
   }
   return null;
+}
+
+export const LONG_TOOL_WAIT_SECONDS = 180;
+const DELEGATING_TOOLS: ReadonlySet<string> = new Set(["Agent", "Task"]);
+
+export interface LongToolWait {
+  rowId: string;
+  what: string;
+  elapsedSeconds: number;
+}
+
+export function findLongToolWait(state: SdkChatState): LongToolWait | null {
+  const activity = currentActivity(state);
+  if (activity?.kind !== "tool" || activity.background) return null;
+  const row = state.rows.find((candidate) => candidate.id === activity.rowId);
+  if (row?.kind !== "tool" || row.parent || row.result || DELEGATING_TOOLS.has(row.name)) return null;
+  if (typeof row.elapsedSeconds !== "number" || row.elapsedSeconds < LONG_TOOL_WAIT_SECONDS) return null;
+  return { rowId: row.id, what: describeRunningTool(row), elapsedSeconds: row.elapsedSeconds };
 }
 
 /**

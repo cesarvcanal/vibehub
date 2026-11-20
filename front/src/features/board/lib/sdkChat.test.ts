@@ -10,6 +10,8 @@ import {
   expireBtwRows,
   BTW_EXPIRE_MS,
   currentActivity,
+  findLongToolWait,
+  LONG_TOOL_WAIT_SECONDS,
   decidePermission,
   deliveredUserTexts,
   dropRewoundRows,
@@ -2181,5 +2183,48 @@ describe("avisos de falha do vibehub no chat do card", () => {
     const shown = feed([{ type: "platform_failures", notices: [notice("f1", "open")] }]);
     expect(feed([{ type: "platform_failure", notice: { id: 3 } }], shown).platformFailures).toHaveLength(1);
     expect(feed([{ type: "platform_failures", notices: [{ id: "x" }, notice("f2", "open")] }]).platformFailures.map((failure) => failure.id)).toEqual(["f2"]);
+  });
+});
+
+describe("findLongToolWait (o agente preso esperando um comando)", () => {
+  const LONG = LONG_TOOL_WAIT_SECONDS;
+
+  function turnRunning(tool: { name: string; input: unknown; parentToolUseId?: string }, elapsedSeconds: number): SdkChatState {
+    const turnStarted = appendUserRow(applySdkEvent(INITIAL_SDK_STATE, { type: "ready" }), "checa os testes", undefined, { awaiting: true });
+    return feed([
+      { type: "tool_use", id: "t1", ...tool },
+      { type: "tool_progress", id: "t1", elapsedSeconds },
+    ], turnStarted);
+  }
+
+  it("avisa quando o comando do agente principal roda há mais que o limite, com a descrição dele", () => {
+    const state = turnRunning({ name: "Bash", input: { command: "timeout 400 sh -c 'until grep -q EXIT x.log; do sleep 5; done'", description: "Espera o fim da bateria" } }, LONG);
+    expect(findLongToolWait(state)).toEqual({ rowId: "t1", what: "Espera o fim da bateria", elapsedSeconds: LONG });
+  });
+
+  it("sem descrição, nomeia o comando", () => {
+    const state = turnRunning({ name: "Bash", input: { command: "sleep 300; echo done" } }, LONG + 5);
+    expect(findLongToolWait(state)?.what).toBe("sleep 300; echo done");
+  });
+
+  it("abaixo do limite não avisa", () => {
+    expect(findLongToolWait(turnRunning({ name: "Bash", input: { command: "npm test" } }, LONG - 1))).toBeNull();
+  });
+
+  it("comando que já devolveu resultado não avisa", () => {
+    const state = applySdkEvent(turnRunning({ name: "Bash", input: { command: "npm test" } }, LONG), { type: "tool_result", id: "t1", toolResult: {} });
+    expect(findLongToolWait(state)).toBeNull();
+  });
+
+  it.each([
+    ["subagente", { name: "Agent", input: { description: "revisa", prompt: "p" } }],
+    ["skill em segundo plano", { name: "Skill", input: { skill: "code-review" } }],
+  ])("delegação para %s não é comando preso: ela tem o próprio progresso", (_case, tool) => {
+    expect(findLongToolWait(turnRunning(tool, 10 * LONG))).toBeNull();
+  });
+
+  it("comando de um turno que já acabou não avisa", () => {
+    const state = appendUserRow(turnRunning({ name: "Bash", input: { command: "npm test" } }, LONG), "outra coisa", undefined, { awaiting: true });
+    expect(findLongToolWait(state)).toBeNull();
   });
 });
