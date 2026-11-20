@@ -317,7 +317,7 @@ Se um comando de teste for passar de ~2 min, troque por um recorte menor. Não a
 6. **Não espalhar alterações:** problema vizinho que exige refatoração arriscada é comunicado, não corrigido de carona.
 7. **Validar:** lint do recorte, testes do recorte, typecheck e build quando aplicável; revisar o diff (comandos abaixo). O lint do recorte (`npm run lint:changed`) reprova, só nas linhas que a branch acrescentou, as regras que a máquina checa: as de `eslint.config.js`, cada uma com a seção que impõe. Lint verde não é conformidade: o resto deste arquivo é o passo 5 e a revisão do passo 8.
 8. **Revisão independente antes de entregar:** o diff passa, nesta ordem, por **simplificação** (aplicada) e por **code review** (correção, performance, aderência às regras e o que foi inventado), ambas feitas por um revisor SEM o contexto de quem escreveu, com a entrada definida em "Como revisar um PR" (§14), que o code review segue. Achado confirmado segue a severidade dele (§14, "As severidades"): o que bloqueia é corrigido ou vira pendência deliberada, que só o aval de quem autoriza o merge aceita (§14, "A pendência deliberada é julgada"), o que deveria corrigir é aplicado, a decisão vira pergunta ao usuário e o menor fica registrado no PR. O descartado tem o motivo dito. O que a simplificação mudar volta pelo passo 7 antes do code review.
-9. **Descrever o resultado:** o que mudou, o que foi verificado e as limitações reais. Quando a entrega é um PR, ele segue a §14.
+9. **Descrever o resultado:** o que mudou, o que foi verificado e as limitações reais, no formato de "Como relatar", abaixo. Quando a entrega é um PR, ele segue a §14.
 
 ### Autonomia corretiva e preservação do escopo
 
@@ -366,6 +366,16 @@ Toda dúvida que trava a execução e toda discordância com o pedido viram perg
 - **Sempre há saída livre** ("Outra: descreva").
 - **Pergunta estruturada quando a ferramenta tem**; sem ela, numere as opções no texto e ponha a saída livre por último.
 - **Descubra o que dá para descobrir.** O que o código, a documentação ou este arquivo respondem, o agente descobre e informa; a pergunta fica para a decisão que é do usuário.
+
+### Como relatar
+
+Vale para todo relatório: o resultado entregue ao usuário, o relatório de um subagente e os achados de uma revisão. **O leitor é programador e não abriu o código**: conhece a stack, mas nunca viu este módulo, este bug nem os nomes que você aprendeu durante o trabalho. Escreva como para um mecânico que não sabe qual carro é: primeiro o carro, depois a peça.
+
+- **Contexto antes do achado.** Abra dizendo o que foi pedido ou analisado e onde aquilo aparece para quem usa o vibehub (a tela, o botão, o card, a entrega); só então o que foi descoberto.
+- **Todo nome interno se apresenta.** Função, arquivo, campo, rota ou apelido do código, na primeira vez que aparece, vem com o que ele é em palavras do dia a dia: "`reopenAfterHeadMoved` (a rotina que reabre a revisão quando o autor empurra commit novo)". Sigla e termo de domínio, idem.
+- **Cenário em passos que alguém de fora segue:** quem fez o quê, o que a tela ou o sistema mostrou e o que deveria ter mostrado. O `arquivo:linha` é a evidência no fim do item, não a explicação.
+- **Layout que se lê de bater o olho:** o veredito ou o resultado na primeira linha; uma seção (`###`) por assunto; listas curtas; uma ideia por item; termos técnicos em `código`; nada de parágrafo corrido com várias ideias.
+- **Teste:** quem lê só o relatório consegue explicar o problema e a solução a um terceiro, sem abrir o código? Se não consegue, reescreva.
 
 ## 13. Encerramento
 
@@ -600,7 +610,7 @@ Quem revisa (pessoa ou agente) é o **portão do merge**, não um leitor de cort
   - a evidência;
   - se é regressão em relação à `main`.
 
-  Feche com o veredito: **apto** ou **não apto**, com o motivo.
+  Feche com o veredito: **apto** ou **não apto**, com o motivo. O relatório segue "Como relatar" (§12): cada achado se entende sem abrir o código.
 - Cada achado tem resposta na thread dele: o commit e o teste que o resolvem, ou o motivo de ter virado pendência.
 
 ## 15. Claude Code: skills, subagentes e entrega
