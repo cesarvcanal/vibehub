@@ -37,7 +37,7 @@ type ReviewSummary = Pick<Review, "id" | "prNumber" | "phase" | "round"> & {
    * Ready, but the merge gate on the approved commit is still running, failed and the author's AI is fixing
    * it (`fixing`: runs again on its own) or failed and waits for a person: the line does not say "pronto pra merge".
    */
-  mergeGateState?: "running" | "fixing" | "failed" | "conflict";
+  mergeGateState?: "running" | "fixing" | "failed" | "conflict" | "conflictFailed";
 };
 /**
  * `review` = the most recent; `reviews` = the most recent of EACH PR (only with more than one PR
@@ -112,8 +112,8 @@ function fieldsRefusedToMember(patch: registry.UpdateCardInput): string[] {
   return Object.keys(patch).filter((key) => !MEMBER_CARD_FIELDS.has(key));
 }
 
-function failedMergeGateState(gate: MergeGate): "fixing" | "failed" | "conflict" {
-  if (gate.conflict) return "conflict";
+function failedMergeGateState(gate: MergeGate): "fixing" | "failed" | "conflict" | "conflictFailed" {
+  if (gate.conflict) return gate.exhausted ? "conflictFailed" : "conflict";
   return mergeGateSelfHealing(gate) ? "fixing" : "failed";
 }
 

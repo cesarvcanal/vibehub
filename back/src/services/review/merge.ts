@@ -7,6 +7,7 @@ import { getSettings } from "../settings/settings.js";
 import { deliver, type DeliverResult } from "../maestro/deliver.js";
 import { logger } from "../../utils/logger.js";
 import { canMergeReview, type Review, type ReviewPhase } from "./model.js";
+import { mergeConflictOutput } from "./prompts.js";
 import { claimMerge, holdMergeOnConflict, markReviewMerged, mergeGateRunning, releaseMerge, reopenAfterHeadMoved } from "./orchestrator.js";
 import { getReview } from "./store.js";
 
@@ -105,6 +106,9 @@ export async function mergeReviewedPr(
       kind: "refused", status: 409, reason: "gate_running", phase: review.phase,
       error: "os testes do merge ainda estão rodando no commit aprovado: o merge libera quando terminarem",
     };
+  }
+  if (gate?.state === "failed" && gate.conflict) {
+    return { kind: "refused", status: 409, reason: "conflict", phase: review.phase, error: mergeConflictOutput(review) };
   }
   if (gate?.state === "failed") {
     return {

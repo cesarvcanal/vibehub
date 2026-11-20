@@ -904,6 +904,25 @@ describe("rodada do revisor", () => {
     }
   });
 
+  it("merge automático recusado por conflito com a base: não avisa 'mergeie pelo painel', porque o botão ficou preso e o autor já tem a ordem", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    try {
+      mergeAnswer = { kind: "refused", status: 409, reason: "conflict", error: "o PR tem conflito com dev" };
+      await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
+      await approveTurnEnds(o, review.reviewerCardId);
+      await vi.waitFor(() => expect(mergeSpy).toHaveBeenCalledTimes(1));
+      await new Promise((r) => setTimeout(r, 40));
+      const after = (await o.store.getReview(review.id))!;
+      expect(after.autoMergeFailedRound).toBeUndefined();
+      expect(after.log.some((e) => /Merge automático não saiu/.test(e.text))).toBe(false);
+      expect((await messagesOn(o, author.id)).some((e) => /merge automático não saiu/.test(e.text))).toBe(false);
+    } finally {
+      off();
+    }
+  });
+
   it("merge automático recusado (CI vermelho): nota e aviso curtos, a rodada não tenta de novo e os textos voltam ao botão", async () => {
     const o = await load();
     const { author, review } = await started(o);
@@ -2956,6 +2975,35 @@ describe("gate do merge rodado quando a revisão fica pronta", () => {
       await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate).toMatchObject({ state: "failed", conflict: true }));
       expect((await o.store.getReview(review.id))?.mergeGate?.exhausted).toBeUndefined();
       await vi.waitFor(() => expect(send.mock.calls.some(([card, text]) => card === author.id && String(text).includes("git merge origin/dev"))).toBe(true));
+    } finally {
+      off();
+    }
+  });
+
+  it("conflito que a IA do autor não resolve para no mesmo teto do gate: depois de 3 ordens a falha espera uma pessoa e o autor não é chamado de novo", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    prHeadNow = SHA1;
+    githubPr.mergeable = "CONFLICTING";
+    const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    const conflictOrders = () => send.mock.calls.filter(([card, text]) => card === author.id && String(text).includes("git merge origin/dev")).length;
+    try {
+      await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
+      await vi.waitFor(() => expect(conflictOrders()).toBe(1));
+      for (const failures of [2, 3, 4]) {
+        await vi.waitFor(() => expect(o.orch.mergeGateRunning(review.id)).toBe(false));
+        await authorTurnEnds(o, author.id);
+        await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.failures).toBe(failures));
+      }
+      await vi.waitFor(() => expect(o.orch.mergeGateRunning(review.id)).toBe(false));
+      const exhausted = (await o.store.getReview(review.id))!;
+      expect(exhausted.mergeGate).toMatchObject({ state: "failed", conflict: true, exhausted: true });
+      expect(conflictOrders()).toBe(3);
+      await authorTurnEnds(o, author.id);
+      await new Promise((r) => setTimeout(r, 60));
+      expect((await o.store.getReview(review.id))?.mergeGate?.failures).toBe(4);
+      expect(conflictOrders()).toBe(3);
+      expect(exhausted.log.at(-1)?.text).toMatch(/segue em conflito com dev/);
     } finally {
       off();
     }

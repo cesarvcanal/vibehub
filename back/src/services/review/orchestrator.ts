@@ -356,7 +356,8 @@ async function dispatch(r: Review): Promise<Review> {
  * as the button (`mergeReviewedPr`, on behalf of the merge owner, pinned to the reviewed commit, with gate).
  * Called AFTER the Approve: from the end of the reviewer's turn that reported `ready`, or from "não fazer"
  * on the last suggestion of an already approved review. A refusal of "not ready"/"merge already going out"/
- * "head moved" is a race and stays quiet; any other (red CI, conflict, merger with no GitHub connection)
+ * "head moved" is a race and stays quiet, and a conflict already ordered the author to bring the base in; any
+ * other (red CI, merger with no GitHub connection)
  * marks the round (`autoMergeFailedRound`: does not try again, and the texts go back to the button), becomes
  * a note on the review and a notice on both cards. Never throws. Dynamic import: merge.ts imports this file.
  */
@@ -379,6 +380,7 @@ async function autoMerge(r: Review): Promise<void> {
     const { mergeReviewedPr } = await import("./merge.js");
     const outcome = await mergeReviewedPr(now.id, now.mergerUserId, { auto: true });
     if (outcome.kind === "merged" || outcome.reason === "not_ready" || outcome.reason === "merging" || outcome.reason === "head_moved") return;
+    if (outcome.reason === "conflict") return;
     await refuseAutoMerge(now, outcome.error);
   } catch (err) {
     logger.warn({ review: r.id, detail: (err as Error).message }, "PR review auto-merge failed");
@@ -430,6 +432,9 @@ async function readMergeVerdict(r: Review, sha: string): Promise<MergeVerdict> {
 function mergeVerdictNote(r: Review, sha: string, verdict: MergeVerdict, exhausted: boolean): string {
   const commit = sha.slice(0, 7);
   if (verdict.passed) return `Testes do merge verdes no commit aprovado (${commit}): o merge sai na hora.`;
+  if (verdict.conflict && exhausted) {
+    return `O PR segue em conflito com ${r.base} depois de ${MERGE_GATE_AUTO_RETRIES} ordens ao autor: o merge espera uma pessoa trazer a base.`;
+  }
   if (verdict.conflict) {
     return `${mergeConflictOutput(r)}: o autor recebeu a ordem de trazer ${r.base} para a branch, e a revisão confere o que entrar.`;
   }
@@ -459,8 +464,9 @@ async function checkMergeGate(reviewId: string, opts: { again?: boolean; by?: st
     });
     const verdict = await readMergeVerdict(r, sha);
     let landed = false as boolean;
-    const failures = failuresBefore + 1;
-    const exhausted = !verdict.conflict && failures > MERGE_GATE_AUTO_RETRIES;
+    const sameFailureKind = previous?.conflict === verdict.conflict;
+    const failures = sameFailureKind ? failuresBefore + 1 : 1;
+    const exhausted = failures > MERGE_GATE_AUTO_RETRIES;
     const after = await mutateReview(reviewId, (x) => {
       if (x.phase !== "ready" || x.reviewedSha !== sha) return;
       x.mergeGate = verdict.passed

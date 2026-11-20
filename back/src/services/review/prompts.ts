@@ -534,6 +534,10 @@ export function phaseNoticeText(r: Review): string {
 
 /** The notice, on both cards, that the merge gate failed on the approved commit. */
 export function mergeGateFailedText(r: Review): string {
+  if (r.mergeGate?.conflict && r.mergeGate.exhausted) {
+    return `PR #${r.prNumber}: o PR segue em conflito com ${r.base} depois de ${MERGE_GATE_AUTO_RETRIES} ordens à IA do autor — ` +
+      "o merge espera alguém trazer a base para a branch.";
+  }
   if (r.mergeGate?.conflict) {
     return `PR #${r.prNumber}: ${mergeConflictOutput(r)} — a IA do autor está trazendo ${r.base} para a branch.`;
   }

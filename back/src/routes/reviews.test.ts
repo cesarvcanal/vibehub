@@ -1163,7 +1163,9 @@ describe("merge", () => {
     await vi.waitFor(() => expect(send.mock.calls.some(([card]) => card === w.cardId)).toBe(true));
     const toAuthor = String(send.mock.calls.find(([card]) => card === w.cardId)?.[1]);
     expect(toAuthor).toContain("git merge origin/dev");
-    expect((await merge(review.id, w.merger)).statusCode).toBe(409);
+    const again = await merge(review.id, w.merger);
+    expect(again.statusCode).toBe(409);
+    expect(again.json()).toMatchObject({ reason: "conflict" });
     expect(deliver).toHaveBeenCalledTimes(1);
   });
 
