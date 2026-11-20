@@ -1411,6 +1411,24 @@ describe("merge da análise pela rota", () => {
     expect((await readAnalysis(w, w.leitor)).merging).toBe(false);
   });
 
+  it("enquanto o merge roda o card do board diz analysisMerging, para o sidebar mostrar o merge fora do painel", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    const deliverGate = Promise.withResolvers<void>();
+    deliver.mockImplementationOnce(async () => {
+      await deliverGate.promise;
+      return deliverResult;
+    });
+    const readBoardCard = async () =>
+      (await app.inject({ method: "GET", url: `/api/cards/${w.cardId}`, headers: { cookie: w.leitor.cookie } })).json().card;
+    expect((await readBoardCard()).analysisMerging).toBeUndefined();
+    const clicked = merge(w, w.merger);
+    await vi.waitFor(async () => expect((await readBoardCard()).analysisMerging).toBe(true));
+    deliverGate.resolve();
+    await clicked;
+    expect((await readBoardCard()).analysisMerging).toBeUndefined();
+  });
+
   it("merge recusado pelo deliver fica gravado no commit analisado: o GET diz o motivo e a saída antes do próximo clique", async () => {
     const w = await world();
     await saveReport(aptReport(w.cardId));
