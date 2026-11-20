@@ -16,13 +16,13 @@ Este arquivo ensina o Claude Code a **trabalhar** neste repositório: a ordem da
 Cada etapa usa a sua skill (seção 3) e só termina quando o critério dela está cumprido.
 
 1. **Entender e perguntar.** Pronto quando não resta dúvida que trave a execução. A pergunta (AGENTS.md §12, "Como perguntar ao usuário") sai pela `AskUserQuestion`, com "(Recomendado)" no rótulo da recomendada; a saída livre a ferramenta já põe.
-2. **Diagnosticar ou desenhar.** Bug: pronto quando há um comando que reproduz a falha e a causa está provada. Feature: pronto quando o caminho foi aprovado pelo usuário. Tela nova ou mudança de layout: pronto quando o protótipo foi aprovado, antes do React.
+2. **Diagnosticar ou desenhar.** Bug: pronto quando há um comando que reproduz a falha e a causa está provada. Feature: pronto quando o caminho foi aprovado pelo usuário. Tela nova ou redesenho: pronto quando o protótipo foi aprovado, antes do React; mudança de layout numa tela existente segue a linha dela no mapa (seção 3).
 3. **Planejar** a tarefa de várias etapas. Pronto quando cada etapa tem o arquivo, o teste e o critério dela.
 4. **Implementar em TDD.** Pronto quando cada mudança de comportamento tem um teste visto vermelho antes do verde (AGENTS.md §11), e a §11 ("Antes do primeiro helper de teste") foi seguida antes do primeiro helper.
-5. **Antes de cada arquivo novo**, confira os três pontos: a pasta é a da área no mapa (AGENTS.md §4); o nome segue a §2 (`camelCase.ts`, `PascalCase.tsx` para componente, teste = nome do arquivo + `.test`); o termo novo passou por `grep` no repositório.
-6. **Antes de cada commit**: `npm run lint:changed` verde e a mensagem no padrão Gitmoji da §14. Um commit por etapa fechada. Os hooks do `.claude/settings.json` rodam o mesmo lint depois de cada Edit e Write, antes do `git commit` e no fim do turno com mudança na worktree, e barram enquanto ele estiver vermelho; o erro que aparece depois de uma edição se corrige antes da próxima. Sem `node_modules` na raiz, o lint de linha de código falha por falta do `eslint`: rode `npm ci` na raiz (leva segundos).
+5. **Antes de cada arquivo novo**, confira os três pontos: a pasta é a da área no mapa (AGENTS.md §4); o nome do arquivo segue a §2; o termo novo passou pelo `grep` da §2.
+6. **Antes de cada commit**: `npm run lint:changed` verde e a mensagem pela §14 ("Commits"). Os hooks do `.claude/settings.json` rodam o mesmo lint depois de cada Edit e Write, antes do `git commit` e no fim do turno com mudança na worktree, e barram enquanto ele estiver vermelho; o erro que aparece depois de uma edição se corrige antes da próxima. Sem `node_modules` na raiz, o lint de linha de código falha por falta do `eslint`: rode `npm ci` na raiz (leva segundos).
 7. **Fechamento** (seção 5). Pronto quando cada achado confirmado foi corrigido ou registrado conforme a severidade.
-8. **Verificar** com os comandos da AGENTS.md §12, passo 7, depois de aplicar o que a revisão achou. Pronto quando lint, testes do recorte e typecheck do pacote tocado rodaram verdes nesta sessão.
+8. **Verificar** com os comandos da AGENTS.md §11 ("Rodar testes no runner", passo 2), depois de aplicar o que a revisão achou. Pronto quando lint, testes do recorte e typecheck do pacote tocado rodaram verdes nesta sessão.
 9. **Entregar** (seção 6).
 
 ## 3. Skill é a retroescavadeira: use sempre
