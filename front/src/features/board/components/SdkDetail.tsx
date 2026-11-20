@@ -1,11 +1,12 @@
 import * as React from "react";
-import { Bot, Brain, ChevronLeft, ChevronRight, CircleCheck, CircleX, Copy, FileDiff, GitBranch, Loader2, Maximize2, MessageSquare, Wrench } from "lucide-react";
+import { Bot, Brain, ChevronLeft, ChevronRight, CircleCheck, CircleX, Copy, FileDiff, GitBranch, Loader2, Maximize2, Wrench } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { useNow, usePageVisible } from "@/lib/useNow";
 import { useT, type Translate } from "@/i18n";
 import { Markdown } from "@/features/board/components/ChatView";
 import { AgentTaskPanel } from "@/features/board/components/AgentTaskPanel";
+import { groupAgentTimeline, type AgentTimelineBlock, type TimelineToolItem } from "@/features/board/lib/agentTimeline";
 import { toolHeadline, type AgentTask, type SdkRow, type ToolResultSummary } from "@/features/board/lib/sdkChat";
 import { hunksToRows, toolDiff } from "@/features/board/lib/toolDiff";
 import { DiffView, SyntaxText, useCodeTokens } from "@/features/board/components/DiffView";
@@ -695,9 +696,7 @@ function AgentView({
             <>
               {timeline.partial ? <p className="mb-2 text-xs italic text-muted-foreground">{t("sdk.detail.partial")}</p> : null}
               {timeline.items.length === 0 ? <p className="text-xs italic text-muted-foreground">{t("sdk.detail.noSteps")}</p> : null}
-              <ol className="space-y-1.5">
-                {timeline.items.map((item, i) => <TimelineEntry key={i} item={item} onOpen={(stepId) => onOpenStep(stepId, seq)} />)}
-              </ol>
+              <AgentTimelineView items={timeline.items} agentName={name} onOpen={(stepId) => onOpenStep(stepId, seq)} />
               {running ? <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin text-primary" />{t("sdk.detail.live")}</div> : null}
             </>
           ) : loading ? (
@@ -717,38 +716,94 @@ function AgentView({
   );
 }
 
-function TimelineEntry({ item, onOpen }: { item: TimelineItem; onOpen: (id: string) => void }) {
-  const time = <span className="w-16 shrink-0 pt-0.5 font-mono text-[11px] text-muted-foreground/60">{formatTime(item.at)}</span>;
-  if (item.kind === "thinking") {
-    return (
-      <li data-testid="sdk-timeline-thinking" className="flex gap-2">
-        {time}<Brain className="mt-1 h-3 w-3 shrink-0 text-muted-foreground" />
-        <div className="min-w-0 whitespace-pre-wrap text-xs italic leading-relaxed text-muted-foreground">{item.text}</div>
-      </li>
-    );
-  }
-  if (item.kind === "text") {
-    return (
-      <li data-testid="sdk-timeline-text" className="flex gap-2">
-        {time}<MessageSquare className="mt-1 h-3 w-3 shrink-0 text-muted-foreground" />
-        <div className="min-w-0 text-[13px] leading-relaxed"><Markdown text={item.text} /></div>
-      </li>
-    );
-  }
-  if (item.kind !== "tool") return null;
+function AgentAvatar() {
+  return (
+    <span aria-hidden className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-sky-400 text-background">
+      <Bot className="h-3.5 w-3.5" />
+    </span>
+  );
+}
+
+export function AgentTimelineView({ items, agentName, onOpen }: { items: readonly TimelineItem[]; agentName: string; onOpen: (id: string) => void }) {
+  const blocks = groupAgentTimeline(items);
+  return (
+    <ol className="flex min-w-0 flex-col gap-2">
+      {blocks.map((block, index) => {
+        if (block.kind === "text") {
+          const continues = blocks[index - 1]?.kind === "text";
+          return (
+            <li key={index} data-testid="sdk-timeline-text" className="flex min-w-0 items-end gap-2">
+              {continues ? <span className="w-7 shrink-0" aria-hidden /> : <AgentAvatar />}
+              <article className={cn("min-w-0 max-w-[88%] rounded-xl bg-muted/50 px-2.5 py-1.5 text-[13px] leading-relaxed", continues ? "rounded-l-sm" : "rounded-bl-sm")}>
+                <p className="flex min-w-0 items-baseline gap-2">
+                  <span className="min-w-0 truncate text-xs font-semibold text-sky-300">{agentName}</span>
+                  <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">{formatTime(block.at)}</span>
+                </p>
+                <Markdown text={block.text} />
+              </article>
+            </li>
+          );
+        }
+        if (block.kind === "thinking") return <TimelineThinking key={index} text={block.text} />;
+        return <TimelineWork key={index} block={block} onOpen={onOpen} />;
+      })}
+    </ol>
+  );
+}
+
+function TimelineThinking({ text }: { text: string }) {
+  const t = useT();
+  const [open, setOpen] = React.useState(false);
+  return (
+    <li data-testid="sdk-timeline-thinking" className="flex min-w-0 gap-2">
+      <span className="w-7 shrink-0" aria-hidden />
+      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}
+        className="flex min-w-0 max-w-[88%] items-start gap-1.5 rounded-lg px-2 py-0.5 text-left text-[11px] italic text-muted-foreground hover:bg-muted/40">
+        <Brain aria-hidden className="mt-0.5 h-3 w-3 shrink-0" />
+        <span className={cn("min-w-0", open ? "whitespace-pre-wrap" : "truncate")}>{t("sdk.detail.thought")} {text}</span>
+        <ChevronRight aria-hidden className={cn("mt-0.5 h-3 w-3 shrink-0 transition-transform", open && "rotate-90")} />
+      </button>
+    </li>
+  );
+}
+
+function TimelineWork({ block, onOpen }: { block: Extract<AgentTimelineBlock, { kind: "work" }>; onOpen: (id: string) => void }) {
+  const t = useT();
+  const summary = block.verbs.map((verb) => t("sdk.detail.workVerbCount", { verb: t(verb.key, { tool: verb.tool }), n: verb.count })).join(", ");
+  const span = block.endedAt === undefined
+    ? t("sdk.detail.workSpanOpen", { from: formatTime(block.startedAt) })
+    : t("sdk.detail.workSpan", { from: formatTime(block.startedAt), to: formatTime(block.endedAt) });
+  return (
+    <li data-testid="sdk-timeline-work" className="flex min-w-0 gap-2">
+      <span className="w-7 shrink-0" aria-hidden />
+      <div className="min-w-0 max-w-[88%] flex-1 rounded-xl rounded-l-sm border border-border/60 bg-background/40 px-2 py-1.5 text-xs">
+        <p className="flex min-w-0 items-baseline gap-2 px-1.5 pb-1 text-[11px] text-muted-foreground">
+          <span data-testid="sdk-timeline-work-summary" className="min-w-0">{summary}</span>
+          <span className="ml-auto shrink-0 text-[10px]">{span}</span>
+        </p>
+        <ol className="space-y-0.5">
+          {block.tools.map((item) => <TimelineTool key={item.id} item={item} onOpen={onOpen} />)}
+        </ol>
+      </div>
+    </li>
+  );
+}
+
+function TimelineTool({ item, onOpen }: { item: TimelineToolItem; onOpen: (id: string) => void }) {
   const headline = toolHeadline(item.name, item.input);
   const status: ToolStatus = item.result ? (item.result.isError ? "error" : "ok") : "running";
   return (
-    <li data-testid="sdk-timeline-tool" className="flex gap-2">
-      {time}
-      <button type="button" onClick={() => onOpen(item.id)} className="group -my-0.5 flex min-w-0 flex-1 items-start gap-1.5 rounded px-1 py-0.5 text-left text-xs hover:bg-muted/50">
-        <StatusIcon status={status} className="mt-0.5" />
+    <li data-testid="sdk-timeline-tool">
+      <button type="button" onClick={() => onOpen(item.id)} className="group flex w-full min-w-0 items-start gap-2 rounded-md px-1.5 py-1 text-left hover:bg-muted/50">
+        <StatusIcon status={status} className="mt-0.5 h-3.5 w-3.5" />
         <div className="min-w-0 flex-1">
           <div className="truncate font-medium text-foreground/90">{headline.title}</div>
           {headline.detail ? <div className="truncate font-mono text-[11px] text-muted-foreground/75">{headline.detail}</div> : null}
-          {item.result ? <div className={cn("truncate", item.result.isError ? "text-red-500" : "text-muted-foreground/80")}>{toolResultLine(item.name, item.result)}</div> : null}
         </div>
-        <Maximize2 className="mt-0.5 h-3 w-3 shrink-0 opacity-0 group-hover:opacity-60" />
+        {item.result ? (
+          <span className={cn("max-w-[40%] shrink-0 truncate text-[11px]", item.result.isError ? "text-red-500" : "text-muted-foreground")}>{toolResultLine(item.name, item.result)}</span>
+        ) : null}
+        <Maximize2 aria-hidden className="mt-0.5 h-3 w-3 shrink-0 opacity-0 group-hover:opacity-60" />
       </button>
     </li>
   );

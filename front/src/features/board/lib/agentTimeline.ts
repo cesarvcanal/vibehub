@@ -10,7 +10,8 @@ export interface TimelineVerbCount {
 }
 
 export type AgentTimelineBlock =
-  | { kind: "text" | "thinking"; at: number; text: string }
+  | { kind: "text"; at: number; text: string }
+  | { kind: "thinking"; at: number; text: string }
   | { kind: "work"; startedAt: number; endedAt?: number; tools: TimelineToolItem[]; verbs: TimelineVerbCount[] };
 
 function verbIdentity(key: string, tool: string): string {
@@ -45,7 +46,8 @@ export function groupAgentTimeline(items: readonly TimelineItem[]): AgentTimelin
     (state, item) => {
       if (item.kind === "tool") return { blocks: state.blocks, pendingTools: [...state.pendingTools, item] };
       const flushed = state.pendingTools.length > 0 ? [...state.blocks, closeWorkBlock(state.pendingTools)] : state.blocks;
-      return { blocks: [...flushed, { kind: item.kind, at: item.at, text: item.text }], pendingTools: [] };
+      const spoken: AgentTimelineBlock = item.kind === "text" ? { kind: "text", at: item.at, text: item.text } : { kind: "thinking", at: item.at, text: item.text };
+      return { blocks: [...flushed, spoken], pendingTools: [] };
     },
     { blocks: [], pendingTools: [] },
   );
