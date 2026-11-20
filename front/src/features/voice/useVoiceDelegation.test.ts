@@ -50,7 +50,9 @@ describe("useVoiceDelegation", () => {
 
   it("pedido sem resultado depois do prazo: a voz fica sabendo, uma vez, que o agente ainda não terminou", () => {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const { call, delegate } = setup(vi.fn());
     delegate("d4", said("roda os testes"));
     act(() => vi.advanceTimersByTime(DELEGATION_SLOW_MS - 1));
@@ -64,7 +66,9 @@ describe("useVoiceDelegation", () => {
 
   it("pedido respondido antes do prazo não recebe o aviso de demora", () => {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const send = vi.fn();
     const { call, view, delegate } = setup(send);
     delegate("d5", said("roda os testes"));
@@ -83,7 +87,9 @@ describe("useVoiceDelegation", () => {
 
   it("desmontar o chat com um pedido pendente cancela o aviso de demora", () => {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const { call, view, delegate } = setup(vi.fn());
     delegate("d6", said("roda os testes"));
     view.unmount();

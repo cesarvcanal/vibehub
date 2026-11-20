@@ -91,17 +91,19 @@ export function useVoiceDelegation({ call, rows, turnRunning, sendUrgentToAgent 
     told.current ??= new Set(rows.filter(isAgentAnswer).map((row) => row.text));
     const known = told.current;
     const held = new Set<string>();
-    pending.current = pending.current.filter(({ id, request, slowTimer }) => {
-      const reply = delegationReply(rows, request, turnRunning);
+    const stillWaiting: PendingDelegation[] = [];
+    for (const delegation of pending.current) {
+      const reply = delegationReply(rows, delegation.request, turnRunning);
       if (reply.state === "waiting") {
+        stillWaiting.push(delegation);
         for (const text of reply.answers) held.add(text);
-        return true;
+        continue;
       }
-      clearTimeout(slowTimer);
-      answerDelegation(id, reply.state === "answered" ? reply.text : DELEGATION_SILENT, "result");
+      clearTimeout(delegation.slowTimer);
+      answerDelegation(delegation.id, reply.state === "answered" ? reply.text : DELEGATION_SILENT, "result");
       for (const text of reply.answers) known.add(text);
-      return false;
-    });
+    }
+    pending.current = stillWaiting;
     for (const row of rows) {
       if (!isAgentAnswer(row) || known.has(row.text) || held.has(row.text)) continue;
       known.add(row.text);
