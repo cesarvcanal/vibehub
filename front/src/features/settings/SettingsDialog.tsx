@@ -101,7 +101,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     setSdkAutoResume(settings.data.sdkAutoResume ?? true);
     setDefaultLabel(settings.data.defaultAccountLabel ?? "");
     setTranscribeLanguage(settings.data.transcribeLanguage ?? "");
-    setTranscribeKeywords(formatTranscribeKeywords(settings.data.transcribeKeywords ?? []));
+    setTranscribeKeywords(formatTranscribeKeywords(settings.data.transcribeKeywords));
     setIdleHibernate(String(settings.data.idleHibernateMinutes ?? 180));
     setSelfProjectId(settings.data.selfProjectId ?? "");
   }, [open, settings.data]);

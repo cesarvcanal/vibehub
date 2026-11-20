@@ -19,7 +19,7 @@ vi.mock("@/lib/api", () => ({
 
 const SETTINGS = {
   git: { name: "Ada", email: "ada@example.com" }, autonomous: true, defaultAccountLabel: null,
-  setupCompletedAt: null, transcribeLanguage: "pt", runner: { kind: "local", container: "vibehub-runner", image: "x", host: "this machine" },
+  setupCompletedAt: null, transcribeLanguage: "pt", transcribeKeywords: [], runner: { kind: "local", container: "vibehub-runner", image: "x", host: "this machine" },
 };
 
 beforeEach(() => {
@@ -74,6 +74,23 @@ describe("SettingsDialog", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(patch).toHaveBeenCalledWith("/settings", expect.objectContaining({
       git: { name: "Grace", email: "ada@example.com" }, autonomous: true, transcribeLanguage: "pt",
+    })));
+  });
+
+  it("salvar outro campo sem editar os termos manda a lista guardada intacta", async () => {
+    const defaultGet = get.getMockImplementation()!;
+    get.mockImplementation(async (url: string) =>
+      url === "/settings" ? { ...SETTINGS, transcribeKeywords: ["vibehub", "Qive"] } : defaultGet(url));
+    patch.mockResolvedValue(SETTINGS);
+    renderApp(<SettingsDialog open onOpenChange={() => {}} />);
+    const keywordsField = await screen.findByLabelText("Transcription terms");
+    await waitFor(() => expect(keywordsField).toHaveValue("vibehub, Qive"));
+    const language = screen.getByLabelText("Transcription language");
+    await userEvent.clear(language);
+    await userEvent.type(language, "en");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(patch).toHaveBeenCalledWith("/settings", expect.objectContaining({
+      transcribeLanguage: "en", transcribeKeywords: ["vibehub", "Qive"],
     })));
   });
 

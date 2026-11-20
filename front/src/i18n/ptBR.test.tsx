@@ -158,6 +158,7 @@ describe("pt-BR — settings", () => {
           autonomous: true,
           defaultAccountLabel: null,
           transcribeLanguage: "pt",
+          transcribeKeywords: [],
         };
       }
       if (url === "/github") return { connections: [] };
