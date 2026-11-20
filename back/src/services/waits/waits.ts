@@ -71,7 +71,9 @@ export async function createCardWait(input: CreateCardWaitInput): Promise<{ wait
   const cards = await registry.listAllCards();
   const target = cards.find((card) => card.id === input.targetCardId);
   if (!target) throw new Error("card not found");
-  if (!cards.some((card) => card.id === input.waitingCardId)) throw new Error("card not found");
+  const waitingCard = cards.find((card) => card.id === input.waitingCardId);
+  if (!waitingCard) throw new Error("card not found");
+  if (waitingCard.column === "done") throw new Error(`this card already finished (it is in done): a concluded card does not wait for another one`);
   if (target.column === "done") throw new Error(`card "${target.title}" already finished (it is in done): go on now instead of waiting`);
   if (closesWaitCycle(cards, input.waitingCardId, target.id)) {
     throw new Error(`card "${target.title}" already waits, directly or through other cards, for this one: the wait would be a cycle`);

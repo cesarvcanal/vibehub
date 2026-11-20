@@ -84,10 +84,12 @@ describe("createCardWait", () => {
     ["instrução vazia", "target", "   ", /instruction/],
     ["base inválida", "target", "bad base", /branch/],
     ["instrução maior que o limite", "target", "too long", /instruction/],
+    ["com o card que espera já concluído", "waiting done", "", /already finished/],
   ])("recusa esperar %s", async (_case, targetKind, variant, error) => {
     const loaded = await load();
     const { target, waiting } = await createOpenPair(loaded);
     if (targetKind === "done") await loaded.registry.updateCard(target.id, { column: "done" });
+    if (targetKind === "waiting done") await loaded.registry.updateCard(waiting.id, { column: "done" });
     const targetCardId = targetKind === "self" ? waiting.id : targetKind === "missing" ? "00000000-0000-4000-8000-000000000000" : target.id;
     const instruction = { "   ": "   ", "too long": "x".repeat(WAIT_INSTRUCTION_MAX + 1) }[variant] ?? "faça o complemento";
     const base = variant === "bad base" ? "não é branch" : undefined;
