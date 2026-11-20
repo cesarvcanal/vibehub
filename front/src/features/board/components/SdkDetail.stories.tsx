@@ -1,12 +1,14 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { SdkDetailHost } from "@/features/board/components/SdkDetail";
 import { DetailChannelContext, createDetailChannel, type DetailChannel } from "@/features/board/lib/sdkDetail";
-import type { SdkRow } from "@/features/board/lib/sdkChat";
+import type { SdkRow, ToolResultSummary } from "@/features/board/lib/sdkChat";
 
 const COMMAND = "cd /root/.claude-profiles/tech/projects && grep -o 'TodoWrite.{0,300}' ./agent.jsonl | head -3";
 const STDOUT = "TodoWrite, WebSearch, KillShell, BashOutput)\nTodoWrite, WebSearch, KillShell, BashOutput)\n";
 
-const buildResult = (isError: boolean) => (isError ? { isError, error: "exit code 2", lines: 2 } : { isError, lines: 2 });
+function buildResult(isError: boolean): ToolResultSummary {
+  return isError ? { isError, error: "exit code 2", lines: 2 } : { isError, lines: 2 };
+}
 
 function buildAnsweringChannel(isError: boolean, stderr: string): DetailChannel {
   const channel: DetailChannel = createDetailChannel((frame) => {

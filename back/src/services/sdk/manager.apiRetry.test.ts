@@ -281,20 +281,20 @@ describe("turno que termina com erro sem ninguém ter parado — vira falha da p
   });
 
   it.each([
-    { name: "turno que terminou bem", before: [], result: { subtype: "success", isError: false, result: "pronto" } },
-    { name: "turno parado pela pessoa (o driver o entrega sem erro)", before: [], result: { subtype: "error_during_execution", isError: false } },
-    { name: "falha passageira da API, que a nova tentativa automática cobre", before: [], result: { subtype: "success", isError: true, result: EAI } },
-    { name: "conta deslogada", before: [{ type: "login_failed" }], result: { subtype: "success", isError: true, result: "Invalid API key · Please run /login" } },
+    { name: "turno que terminou bem", eventsBeforeResult: [], result: { subtype: "success", isError: false, result: "pronto" } },
+    { name: "turno parado pela pessoa (o driver o entrega sem erro)", eventsBeforeResult: [], result: { subtype: "error_during_execution", isError: false } },
+    { name: "falha passageira da API, que a nova tentativa automática cobre", eventsBeforeResult: [], result: { subtype: "success", isError: true, result: EAI } },
+    { name: "conta deslogada", eventsBeforeResult: [{ type: "login_failed" }], result: { subtype: "success", isError: true, result: "Invalid API key · Please run /login" } },
     {
       name: "conta sem limite de uso",
-      before: [{ type: "usage_limited", rateLimit: { status: "rejected", rateLimitType: "five_hour" } }],
+      eventsBeforeResult: [{ type: "usage_limited", rateLimit: { status: "rejected", rateLimitType: "five_hour" } }],
       result: { subtype: "success", isError: true, result: "Claude AI usage limit reached" },
     },
-  ])("$name não vira falha da plataforma", ({ before, result }) => {
+  ])("$name não vira falha da plataforma", ({ eventsBeforeResult, result }) => {
     const loggedLines = captureFailureLines();
     const session = ensure();
     sendAgentTurn(session, "faz", ORDER);
-    for (const event of before) emit(event);
+    for (const event of eventsBeforeResult) emit(event);
     emit({ type: "result", ...result });
     expect(failureLinesIn(loggedLines)).toEqual([]);
   });
