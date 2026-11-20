@@ -63,7 +63,9 @@ const mergeSpy = vi.fn(async (_reviewId: string, _userId: string): Promise<Merge
 /** The PR on GitHub, as `readPrState` would read it: the head (null = a read that failed) and the state. */
 let prHeadNow: string | null = null;
 let prStateNow: "OPEN" | "MERGED" | "CLOSED" = "OPEN";
-const prHead = vi.fn(async (_cardId: string, _prUrl: string) => (prHeadNow ? { state: prStateNow, headSha: prHeadNow } : null));
+let prMergeableNow: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" = "MERGEABLE";
+const prHead = vi.fn(async (_cardId: string, _prUrl: string) =>
+  (prHeadNow ? { state: prStateNow, headSha: prHeadNow, mergeable: prMergeableNow } : null));
 /** O veredito do gate do merge no commit aprovado (`gateAtCommit`); `gateGate` segura a resposta até ser solta. */
 let gateAnswer: { ran: boolean; passed: boolean; output: string } = { ran: true, passed: true, output: "" };
 let gateGate: Promise<void> | null = null;
@@ -192,6 +194,7 @@ beforeEach(async () => {
   prHead.mockClear();
   prHeadNow = null;
   prStateNow = "OPEN";
+  prMergeableNow = "MERGEABLE";
   afterMerged.mockClear();
   prPeople.mockClear();
   gateSpy.mockClear();
@@ -2914,6 +2917,35 @@ describe("gate do merge rodado quando a revisão fica pronta", () => {
     expect(toAuthor).toContain("falharam no commit aprovado (aaaaaaa)");
     expect(toAuthor).toContain("npm install");
     expect(after.log.at(-1)?.text).toMatch(/Testes do merge vermelhos/);
+  });
+
+  it("pronta com o PR em conflito com a base: não dá o merge como livre, não roda o gate e o autor recebe a ordem de trazer a base", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    prHeadNow = SHA1;
+    prMergeableNow = "CONFLICTING";
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
+    await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("failed"));
+    const after = (await o.store.getReview(review.id))!;
+    expect(after.phase).toBe("ready");
+    expect(after.mergeGate).toMatchObject({ sha: SHA1, state: "failed", conflict: true });
+    expect(gateSpy).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(send.mock.calls.some(([card]) => card === author.id)).toBe(true));
+    const toAuthor = String(send.mock.calls.find(([card]) => card === author.id)?.[1]);
+    expect(toAuthor).toContain("conflito com dev");
+    expect(toAuthor).toContain("git merge origin/dev");
+    expect(toAuthor).toContain(`git push origin HEAD:${PR.branch}`);
+    expect(after.log.at(-1)?.text).toMatch(/conflito com dev/);
+  });
+
+  it("pronta com o mergeable ainda não calculado pelo GitHub (UNKNOWN): o gate roda como sempre", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    prHeadNow = SHA1;
+    prMergeableNow = "UNKNOWN";
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
+    await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("passed"));
+    expect(gateSpy).toHaveBeenCalled();
   });
 
   it("pronta e gate verde: grava passed no commit aprovado e não manda nada ao autor", async () => {

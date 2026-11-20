@@ -105,6 +105,7 @@ export interface MergeGate {
   failures?: number;
   /** The failure went past {@link MERGE_GATE_AUTO_RETRIES} automatic retries: nobody runs it again without a person. */
   exhausted?: true;
+  conflict?: true;
 }
 
 /**

@@ -534,6 +534,9 @@ export function phaseNoticeText(r: Review): string {
 
 /** The notice, on both cards, that the merge gate failed on the approved commit. */
 export function mergeGateFailedText(r: Review): string {
+  if (r.mergeGate?.conflict) {
+    return `PR #${r.prNumber}: ${mergeConflictOutput(r)} — a IA do autor está trazendo ${r.base} para a branch.`;
+  }
   if (r.mergeGate?.exhausted) {
     return `PR #${r.prNumber}: os testes do merge seguem falhando depois de rodarem de novo sozinhos ${MERGE_GATE_AUTO_RETRIES} vezes — ` +
       "o merge espera alguém conferir e clicar em \"Tentar de novo\".";
@@ -564,6 +567,26 @@ export function authorMergeGatePrompt(r: Review): string {
     "3. Rode de novo os testes que falharam até passarem.",
     `4. Se houve commit: git push origin HEAD:${r.prBranch} (a revisão volta ao revisor conferir o que entrou, é o esperado).`,
     "   Sem commit (só instalar): nada a empurrar. Ao fim do seu turno o vibehub roda o gate de novo sozinho.",
+  ].join("\n");
+}
+
+export function mergeConflictOutput(r: Pick<Review, "base">): string {
+  return `o PR tem conflito com ${r.base}: o merge commit não sai limpo`;
+}
+
+export function authorMergeConflictPrompt(r: Review): string {
+  return [
+    header(r),
+    `A revisão aprovou o PR, mas no GitHub ele está em conflito com ${r.base}: o merge não sai até a branch receber ` +
+      `${r.base} sem conflito.`,
+    rules(),
+    "",
+    "O que fazer:",
+    `1. git fetch origin ${r.base} && git merge origin/${r.base} (merge, não rebase: o commit aprovado já está publicado).`,
+    "2. Resolva cada conflito preservando as duas mudanças. Quando as duas se cruzam no comportamento, um teste da " +
+      `base que passa a falhar é conflito também: ajuste para o comportamento das duas juntas.`,
+    "3. Rode os testes dos arquivos em conflito e o typecheck do pacote tocado.",
+    `4. git push origin HEAD:${r.prBranch} (a revisão volta ao revisor conferir o que entrou, é o esperado).`,
   ].join("\n");
 }
 

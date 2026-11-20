@@ -30,7 +30,7 @@ import {
   activeReviewForPr, getReview, insertReview, listReviewsForCards, listReviewsWaitingUsageLimit, mutateReview, reviewByReviewerCard,
 } from "./store.js";
 import {
-  actionableForAuthor, approvePendingText, autoMergeFailedText, authorFixPrompt, authorMergeGatePrompt, mergeGateFailedText, authorQuestionNoticeText, authorSuggestionsPrompt, headMovedPrefix,
+  actionableForAuthor, approvePendingText, autoMergeFailedText, authorFixPrompt, authorMergeConflictPrompt, authorMergeGatePrompt, mergeConflictOutput, mergeGateFailedText, authorQuestionNoticeText, authorSuggestionsPrompt, headMovedPrefix,
   impasseText, nudgePrefix, phaseNoticeText, questionNoticeText, reviewerApprovePrompt, reviewerDeltaPrompt,
   reviewerRoundPrompt, TOOL_RESPOND, TOOL_SUBMIT,
 } from "./prompts.js";
@@ -433,9 +433,12 @@ async function checkMergeGate(reviewId: string, opts: { again?: boolean; by?: st
     await mutateReview(reviewId, (x) => {
       x.mergeGate = { sha, state: "running", at: Date.now(), ...(failuresBefore ? { failures: failuresBefore } : {}) };
     });
-    let verdict: GateResult;
+    let verdict: GateResult & { conflict?: true };
     try {
-      verdict = await gateAtCommit(r.cardId, r.prUrl, sha);
+      const pr = await readPrState(r.cardId, r.prUrl);
+      verdict = pr?.mergeable === "CONFLICTING"
+        ? { ran: true, passed: false, conflict: true, output: mergeConflictOutput(r) }
+        : await gateAtCommit(r.cardId, r.prUrl, sha);
     } catch (err) {
       verdict = { ran: true, passed: false, output: `o gate não chegou a rodar: ${(err as Error).message}` };
     }
@@ -446,10 +449,15 @@ async function checkMergeGate(reviewId: string, opts: { again?: boolean; by?: st
       if (x.phase !== "ready" || x.reviewedSha !== sha) return;
       x.mergeGate = verdict.passed
         ? { sha, state: "passed", at: Date.now() }
-        : { sha, state: "failed", output: verdict.output, at: Date.now(), failures, ...(exhausted ? { exhausted: true as const } : {}) };
+        : {
+          sha, state: "failed", output: verdict.output, at: Date.now(), failures,
+          ...(exhausted ? { exhausted: true as const } : {}), ...(verdict.conflict ? { conflict: true as const } : {}),
+        };
       note(x, "system", verdict.passed
         ? `Testes do merge verdes no commit aprovado (${sha.slice(0, 7)}): o merge sai na hora.`
-        : exhausted
+        : verdict.conflict
+          ? `${mergeConflictOutput(x)}: o autor recebeu a ordem de trazer ${x.base} para a branch, e a revisão confere o que entrar.`
+          : exhausted
           ? `Testes do merge vermelhos no commit aprovado (${sha.slice(0, 7)}) depois de rodarem de novo sozinhos ${MERGE_GATE_AUTO_RETRIES} vezes: o merge espera uma pessoa.`
           : `Testes do merge vermelhos no commit aprovado (${sha.slice(0, 7)}): o autor recebeu a falha e, ao fim do turno dele, os testes rodam de novo sozinhos.`,
       opts.by ? { by: opts.by } : {});
@@ -466,7 +474,8 @@ async function checkMergeGate(reviewId: string, opts: { again?: boolean; by?: st
     }
     await notifyBoth(after, `review:${reviewId}:merge_gate_failed:${sha}:${after.mergeGate?.at}`, mergeGateFailedText(after), exhausted ? "warning" : "info");
     if (exhausted) return;
-    await relayReview(after, "author", authorMergeGatePrompt(after), { unpause: true, optional: true }).catch((e: unknown) =>
+    const authorPrompt = verdict.conflict ? authorMergeConflictPrompt(after) : authorMergeGatePrompt(after);
+    await relayReview(after, "author", authorPrompt, { unpause: true, optional: true }).catch((e: unknown) =>
       logger.warn({ review: reviewId, detail: (e as Error).message }, "could not send the merge gate failure to the author"));
   } catch (err) {
     logger.warn({ review: reviewId, sha, detail: (err as Error).message }, "PR review merge gate failed to run");
