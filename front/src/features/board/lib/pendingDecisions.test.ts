@@ -70,6 +70,16 @@ describe("proseQuestion — pergunta que fecha com uma lista de opções", () =>
   });
 });
 
+describe("proseQuestion — lista que não é escolha continua pendência", () => {
+  it.each([
+    ["perguntas numeradas", "Duas perguntas:\n1. Você quer A?\n2. Você prefere B?", "Duas perguntas:\n1. Você quer A?\n2. Você prefere B?"],
+    ["pergunta no último item", "Próximos passos:\n\n- Rodo os testes\n- Quer que eu abra o PR?", "Próximos passos:\n\n- Rodo os testes\n- Quer que eu abra o PR?"],
+  ])("%s", (_, text, expected) => {
+    expect(proseQuestion(text)).toBe(expected);
+    expect(proseOptions(expected)).toBeNull();
+  });
+});
+
 describe("proseOptions — as opções clicáveis de uma pergunta em prosa", () => {
   it("separa o enunciado das opções numeradas (o caso do 'Decisão sua:')", () => {
     expect(
@@ -89,13 +99,34 @@ describe("proseOptions — as opções clicáveis de uma pergunta em prosa", () 
     ["título e travessão sem negrito", "Rápida — só o front.", { label: "Rápida", description: "só o front." }],
     ["só negrito, sem explicação", "**Rápida**", { label: "Rápida" }],
   ])("o título vira rótulo e o resto vira explicação: %s", (_, item, expected) => {
-    expect(proseOptions(`Qual você prefere?\n1. ${item}\n2. Outra`)?.options[0]).toEqual(expected);
+    expect(proseOptions(`Qual você prefere?\n1. ${item}\n2. B`)?.options[0]).toEqual(expected);
   });
 
   it("a linha de continuação de um item entra na explicação dele", () => {
     expect(proseOptions("Qual você prefere?\n\n1. **A**\n   explica o A\n2. **B**\n   explica o B")?.options).toEqual([
       { label: "A", description: "explica o A" },
       { label: "B", description: "explica o B" },
+    ]);
+  });
+
+  it("sub-item indentado é explicação do item de cima, não opção própria", () => {
+    expect(proseOptions("Qual você prefere?\n1. **A** — rápido\n   - custo: baixo\n   - risco: médio\n2. **B** — lento")?.options).toEqual([
+      { label: "A", description: "rápido\n- custo: baixo\n- risco: médio" },
+      { label: "B", description: "lento" },
+    ]);
+  });
+
+  it("a saída livre ('Outra: descreva') não vira botão: a resposta livre já tem o seu", () => {
+    expect(proseOptions("Qual você prefere?\n1. Rápida\n2. Lenta\n3. Outra: descreva")?.options).toEqual([
+      { label: "Rápida" },
+      { label: "Lenta" },
+    ]);
+  });
+
+  it("itálico e link saem do rótulo e da explicação", () => {
+    expect(proseOptions("Qual você prefere?\n1. *Rápida* — ver [o PR](https://x.y/1)\n2. _Lenta_")?.options).toEqual([
+      { label: "Rápida", description: "ver o PR" },
+      { label: "Lenta" },
     ]);
   });
 

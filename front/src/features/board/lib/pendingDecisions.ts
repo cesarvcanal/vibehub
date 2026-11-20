@@ -4,15 +4,6 @@ import type { SdkRow } from "@/features/board/lib/sdkChat";
 /**
  * PENDING DECISIONS — what in this conversation is still WAITING ON THE USER.
  *
- * The pain this solves: a long turn buries the one question that unblocks the sequence. Two
- * sources feed the tray above the composer:
- *
- *  1. **Structured questions** — every `user_question` card (AskUserQuestion) still pending. These
- *     are exact: they stay pending until answered, whatever else is said in between.
- *  2. **Prose questions (best effort)** — an assistant message whose FINAL paragraph is a question
- *     directed at the user (conservative heuristic below). These have no structured answer: any
- *     user message sent afterwards counts as dealing with them.
- *
  * A decision can also be ANSWERED ON PURPOSE: the composer aims at one, and the message it sends
  * wears `buildDecisionReply`'s wrapper. That wrapper is the whole trick behind "pronto, respondi" —
  * it travels to the model AND back out of the history, so the answer stays anchored to its question
@@ -68,14 +59,18 @@ function lastParagraph(text: string): string {
 export function proseQuestion(text: string): string | null {
   const block = closingBlock(text);
   if (block === "" || block.startsWith(">") || block.includes("```")) return null;
-  const lead = optionList(block)?.lead ?? block;
-  if (lead === "") return null;
-  const plainLead = normalized(lead);
-  if (DECISION_PREFIX.test(plainLead)) return block;
-  // strip trailing markdown/quote noise after the question mark ("?**", '?"', "?)")
-  const end = lead.replace(/[\s*_"'`)\]]+$/, "");
-  if (!end.endsWith("?")) return null;
-  return DIRECTED.test(plainLead) ? block : null;
+  const lead = optionList(block)?.lead ?? "";
+  return asksUser(lead) || asksUser(block) ? block : null;
+}
+
+const TRAILING_MARKUP = /[\s*_"'`)\]]+$/;
+
+function asksUser(text: string): boolean {
+  if (text === "") return false;
+  const plain = normalized(text);
+  if (DECISION_PREFIX.test(plain)) return true;
+  const end = text.replace(TRAILING_MARKUP, "");
+  return end.endsWith("?") && DIRECTED.test(plain);
 }
 
 function closingBlock(text: string): string {
@@ -93,7 +88,7 @@ export interface ProseOption {
   description?: string;
 }
 
-const LIST_ITEM = /^ {0,3}(?:\d+[.)]|[-*+])\s+(.*)$/;
+const LIST_ITEM = /^(?:\d+[.)]|[-*+])\s+(.*)$/;
 const INDENTED = /^\s/;
 
 function optionList(block: string): { lead: string; items: string[][] } | null {
@@ -111,9 +106,14 @@ function optionList(block: string): { lead: string; items: string[][] } | null {
 }
 
 function plainInline(text: string): string {
-  return text.replace(/\*\*|__|`/g, "").trim();
+  return text
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\*\*|__|`/g, "")
+    .replace(/(^|\s)[*_]([^*_\s][^*_]*)[*_](?=\s|$|[.,;:!?])/g, "$1$2")
+    .trim();
 }
 
+const FREE_ANSWER_OPTION = /^(outra|outro|other)(\s+(resposta|answer))?\s*(:\s*(descreva|describe)\b.*)?$/i;
 const BOLD_TITLE = /^\*\*(.+?)\*\*(.*)$/;
 const DASH_SEPARATOR = /\s[—–]\s/;
 
@@ -128,14 +128,18 @@ function splitItemTitle(line: string): { title: string; rest: string } {
 function toProseOption([firstLine, ...continuation]: string[]): ProseOption {
   const { title, rest } = splitItemTitle(firstLine!);
   const label = plainInline(title).replace(/:$/, "");
-  const description = plainInline([rest.replace(/^[\s—–:-]+/, ""), ...continuation].join(" "));
+  const description = [rest.replace(/^[\s—–:-]+/, ""), ...continuation]
+    .map(plainInline)
+    .filter((line) => line !== "")
+    .join("\n");
   return description === "" ? { label } : { label, description };
 }
 
 export function proseOptions(question: string): { lead: string; options: ProseOption[] } | null {
   const list = optionList(question);
-  if (!list || list.lead === "") return null;
-  return { lead: list.lead, options: list.items.map(toProseOption) };
+  if (!list || !asksUser(list.lead)) return null;
+  const options = list.items.map(toProseOption).filter((option) => !FREE_ANSWER_OPTION.test(option.label));
+  return options.length < 2 ? null : { lead: list.lead, options };
 }
 
 type AssistantRow = Extract<SdkRow, { kind: "assistant" }>;
