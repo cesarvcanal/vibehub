@@ -355,3 +355,89 @@ describe("a voice call inside the card's chat", () => {
     expect(screen.getByTestId("voice-call-bar")).toHaveAttribute("data-phase", "ai_speaking");
   });
 });
+
+describe("a pergunta com opções do agente durante a chamada", () => {
+  const QUESTION = {
+    type: "user_question",
+    id: "q_1_100",
+    questions: [
+      {
+        question: "Onde guardo as metas?",
+        header: "Metas",
+        options: [
+          { label: "Planilha (Recomendado)", description: "Rápido de editar" },
+          { label: "Banco novo", description: "Exige migração" },
+        ],
+      },
+    ],
+  };
+  const commentary = () => channel().sent.filter((e) => e.type === "session.commentary.append");
+  const sayAndDelegate = (said: string, delegationId: string) => {
+    act(() => channel().emit({ type: "session.input_transcript.delta", delta: said, start_ms: 0, end_ms: 500 }));
+    act(() => channel().emit({ type: "session.delegation.created", offset_ms: 600, delegation: { id: delegationId, type: "delegation", target: "client" } }));
+  };
+
+  it("a voz lê a pergunta, as opções e a recomendada, e pede a escolha por voz — sem mandar ao chat", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    ws.deliver({ type: "user", text: "decide a planilha", at: 1 });
+    ws.deliver(QUESTION);
+    await waitFor(() => expect(commentary()).toHaveLength(1));
+    const spoken = commentary()[0]!;
+    expect(spoken.delegation_id).toBeNull();
+    for (const part of ["Onde guardo as metas?", "Planilha (Recomendado)", "Rápido de editar", "Banco novo", "recomendada"]) {
+      expect(spoken.content).toContain(part);
+    }
+    expect(spoken.content).not.toMatch(/conferir no chat|veja no chat|olhe o chat/i);
+  });
+
+  it("com um pedido da voz esperando o agente, a pergunta é o resultado desse pedido", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    sayAndDelegate("organiza as metas", "item_d1");
+    await waitFor(() => expect(ws.frames.some((f) => f.type === "user" && f.text?.includes("organiza as metas"))).toBe(true));
+    ws.deliver(QUESTION);
+    await waitFor(() => expect(commentary()).toEqual([expect.objectContaining({ delegation_id: "item_d1", content: expect.stringContaining("Onde guardo as metas?") })]));
+  });
+
+  it("a escolha dita volta ao agente como resposta daquela pergunta (question_answer), sem fechar a pergunta com um envio urgente", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    ws.deliver({ type: "user", text: "decide a planilha", at: 1 });
+    ws.deliver(QUESTION);
+    await waitFor(() => expect(commentary()).toHaveLength(1));
+
+    sayAndDelegate("pode ser o banco novo", "item_d2");
+    await waitFor(() => expect(ws.rawSent.map((raw) => JSON.parse(raw)).some((f) => f.type === "question_answer")).toBe(true));
+    const sent = ws.rawSent.map((raw) => JSON.parse(raw) as { type: string; id?: string; answers?: { selected: string[] }[]; now?: boolean });
+    const answer = sent.find((f) => f.type === "question_answer")!;
+    expect(answer.id).toBe("q_1_100");
+    expect(answer.answers).toEqual([{ selected: [expect.stringContaining("pode ser o banco novo")] }]);
+    expect(sent.filter((f) => f.type === "user")).toEqual([]);
+    expect(channel().sent).toContainEqual(expect.objectContaining({ type: "session.thinking.append", delegation_id: "item_d2" }));
+
+    ws.deliver({ type: "question_result", id: "q_1_100", answers: answer.answers });
+    ws.deliver({ type: "assistant_text", text: "Feito: as metas vão para o banco novo." });
+    ws.deliver({ type: "result", isError: false });
+    await waitFor(() =>
+      expect(commentary()).toContainEqual({ type: "session.commentary.append", delegation_id: "item_d2", content: "Feito: as metas vão para o banco novo." }),
+    );
+  });
+
+  it("a pergunta que um reconnect repete não é lida de novo", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    ws.deliver({ type: "user", text: "decide a planilha", at: 1 });
+    ws.deliver(QUESTION);
+    await waitFor(() => expect(commentary()).toHaveLength(1));
+    ws.drop();
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: 5_000 });
+    const again = FakeSocket.instances[1]!;
+    again.accept();
+    again.deliver({ type: "user", text: "decide a planilha", at: 1 });
+    again.deliver(QUESTION);
+    again.deliver({ type: "ready" });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(commentary()).toHaveLength(1);
+  });
+});
