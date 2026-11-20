@@ -279,8 +279,8 @@ describe("iniciar a revisão", () => {
     const run = {
       runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Revisão"], total: 2, done: 1, at: 5, finished: false,
       agents: [
-        { id: "a01f", label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "done", result: "{}", toolCount: 3 },
-        { id: "a02f", label: "juiz", phase: "Julgamento", model: "opus", status: "running", toolCount: 0 },
+        { id: "a01f", label: "revisão: correctness", phase: "Revisão", model: "claude-sonnet-5-5", status: "done", result: "{}", toolCount: 3 },
+        { id: "a02f", label: "juiz", phase: "Julgamento", model: "claude-opus-5-5", status: "running", toolCount: 0 },
       ],
     };
     fleetRead.mockResolvedValueOnce([run]);
@@ -291,8 +291,8 @@ describe("iniciar a revisão", () => {
       runs: [{
         runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Revisão"], total: 2, done: 1, at: 5, finished: true,
         agents: [
-          { id: "a01f", label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "done", result: "{}" },
-          { id: "a02f", label: "juiz", phase: "Julgamento", model: "opus", status: "stopped" },
+          { id: "a01f", label: "revisão: correctness", phase: "Revisão", model: "claude-sonnet-5-5", modelLabel: "Sonnet 5.5", status: "done", result: "{}" },
+          { id: "a02f", label: "juiz", phase: "Julgamento", model: "claude-opus-5-5", modelLabel: "Opus 5.5", status: "stopped" },
         ],
       }],
     }]);
