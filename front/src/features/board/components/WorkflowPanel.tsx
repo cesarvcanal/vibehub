@@ -270,7 +270,10 @@ function AgentItem({
           ) : null}
         </span>
         {doing ? (
-          <span data-testid="workflow-agent-now" className="block w-full truncate pl-[18px] text-[11px] text-muted-foreground">
+          <span
+            data-testid="workflow-agent-now"
+            className={cn("block w-full pl-[18px] text-[11px]", agent.error ? "text-destructive [overflow-wrap:anywhere]" : "truncate text-muted-foreground")}
+          >
             {doing}
           </span>
         ) : null}
@@ -387,6 +390,8 @@ function AgentFeed({
       >
         {done ? (
           agent.result ? formatAgentResult(agent.result) : t("sdk.workflowNoResult")
+        ) : agent.error ? (
+          t("sdk.workflowAgentFailed", { error: agent.error })
         ) : stopped ? (
           t("sdk.workflowAgentStoppedDetail")
         ) : (
