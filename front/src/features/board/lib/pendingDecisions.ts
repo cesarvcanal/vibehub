@@ -72,14 +72,91 @@ function lastParagraph(text: string): string {
  * never match. PURE.
  */
 export function proseQuestion(text: string): string | null {
-  const para = lastParagraph(text);
-  if (para === "" || para.startsWith(">") || para.startsWith("```") || para.includes("```")) return null;
-  const plain = normalized(para);
-  if (DECISION_PREFIX.test(plain)) return para;
+  const block = closingBlock(text);
+  if (block === "" || block.startsWith(">") || block.includes("```")) return null;
+  const lead = optionList(block)?.lead ?? block;
+  if (lead === "") return null;
+  const plainLead = normalized(lead);
+  if (DECISION_PREFIX.test(plainLead)) return block;
   // strip trailing markdown/quote noise after the question mark ("?**", '?"', "?)")
-  const end = para.replace(/[\s*_"'`)\]]+$/, "");
+  const end = lead.replace(/[\s*_"'`)\]]+$/, "");
   if (!end.endsWith("?")) return null;
-  return DIRECTED.test(plain) ? para : null;
+  return DIRECTED.test(plainLead) ? block : null;
+}
+
+/**
+ * The final paragraph — joined to the one before it when the final one is nothing but a list of
+ * options, since "Qual você prefere?" and its "1. … 2. …" are one question. PURE.
+ */
+function closingBlock(text: string): string {
+  const last = lastParagraph(text);
+  if (optionList(last)?.lead !== "") return last;
+  const beforeList = text.slice(0, text.lastIndexOf(last));
+  const previous = lastParagraph(beforeList);
+  if (previous === "") return last;
+  return text.slice(beforeList.lastIndexOf(previous)).trim();
+}
+
+/** One choice offered by a prose question: its title and, when the agent wrote one, the explanation. */
+export interface ProseOption {
+  label: string;
+  description?: string;
+}
+
+const LIST_ITEM = /^ {0,3}(?:\d+[.)]|[-*+])\s+(.*)$/;
+const INDENTED = /^\s/;
+
+/**
+ * A block that ENDS in a list of two or more items: the text before the list (`lead`) and each
+ * item's lines (the item's own line, then its indented continuation lines). Null when the block
+ * does not end in such a list. PURE.
+ */
+function optionList(block: string): { lead: string; items: string[][] } | null {
+  const lines = block.split("\n");
+  const leadEnd = lines.findLastIndex((line) => line.trim() !== "" && !LIST_ITEM.test(line) && !INDENTED.test(line));
+  const listLines = lines.slice(leadEnd + 1).filter((line) => line.trim() !== "");
+  if (listLines.length === 0 || !LIST_ITEM.test(listLines[0]!)) return null;
+  const items = listLines.reduce<string[][]>((grouped, line) => {
+    const item = LIST_ITEM.exec(line);
+    if (item) return [...grouped, [item[1]!.trim()]];
+    return [...grouped.slice(0, -1), [...grouped[grouped.length - 1]!, line.trim()]];
+  }, []);
+  if (items.length < 2) return null;
+  return { lead: lines.slice(0, leadEnd + 1).join("\n").trim(), items };
+}
+
+/** Inline markdown off, for text that goes inside a button. PURE. */
+function plainInline(text: string): string {
+  return text.replace(/\*\*|__|`/g, "").trim();
+}
+
+const BOLD_TITLE = /^\*\*(.+?)\*\*(.*)$/;
+const DASH_SEPARATOR = /\s[—–]\s/;
+
+/** An item's first line as title and the rest: "**Título** — explicação", "Título — explicação" or just the title. PURE. */
+function splitItemTitle(line: string): { title: string; rest: string } {
+  const bold = BOLD_TITLE.exec(line);
+  if (bold) return { title: bold[1]!, rest: bold[2]! };
+  const dashAt = line.search(DASH_SEPARATOR);
+  if (dashAt < 0) return { title: line, rest: "" };
+  return { title: line.slice(0, dashAt), rest: line.slice(dashAt) };
+}
+
+function toProseOption([firstLine, ...continuation]: string[]): ProseOption {
+  const { title, rest } = splitItemTitle(firstLine!);
+  const label = plainInline(title).replace(/:$/, "");
+  const description = plainInline([rest.replace(/^[\s—–:-]+/, ""), ...continuation].join(" "));
+  return description === "" ? { label } : { label, description };
+}
+
+/**
+ * The clickable choices of a prose question — the question's lead and one option per list item —
+ * or null when the question does not close on a list of two or more. PURE.
+ */
+export function proseOptions(question: string): { lead: string; options: ProseOption[] } | null {
+  const list = optionList(question);
+  if (!list || list.lead === "") return null;
+  return { lead: list.lead, options: list.items.map(toProseOption) };
 }
 
 type AssistantRow = Extract<SdkRow, { kind: "assistant" }>;
