@@ -29,27 +29,32 @@ function countVerbs(tools: readonly TimelineToolItem[]): TimelineVerbCount[] {
   return [...counts.values()];
 }
 
-function closeWorkBlock(tools: readonly TimelineToolItem[]): AgentTimelineBlock {
+function buildWorkBlock(tools: TimelineToolItem[]): AgentTimelineBlock {
   const stillRunning = tools.some((item) => item.endedAt === undefined);
   const lastEnd = Math.max(...tools.map((item) => item.endedAt ?? item.at));
   return {
     kind: "work",
     startedAt: tools[0].at,
     ...(stillRunning ? {} : { endedAt: lastEnd }),
-    tools: [...tools],
+    tools,
     verbs: countVerbs(tools),
   };
 }
 
 export function groupAgentTimeline(items: readonly TimelineItem[]): AgentTimelineBlock[] {
-  const grouped = items.reduce<{ blocks: AgentTimelineBlock[]; pendingTools: TimelineToolItem[] }>(
-    (state, item) => {
-      if (item.kind === "tool") return { blocks: state.blocks, pendingTools: [...state.pendingTools, item] };
-      const flushed = state.pendingTools.length > 0 ? [...state.blocks, closeWorkBlock(state.pendingTools)] : state.blocks;
-      const spoken: AgentTimelineBlock = item.kind === "text" ? { kind: "text", at: item.at, text: item.text } : { kind: "thinking", at: item.at, text: item.text };
-      return { blocks: [...flushed, spoken], pendingTools: [] };
-    },
-    { blocks: [], pendingTools: [] },
-  );
-  return grouped.pendingTools.length > 0 ? [...grouped.blocks, closeWorkBlock(grouped.pendingTools)] : grouped.blocks;
+  const blocks: AgentTimelineBlock[] = [];
+  const pendingTools: TimelineToolItem[] = [];
+  const flushPendingTools = (): void => {
+    if (pendingTools.length > 0) blocks.push(buildWorkBlock(pendingTools.splice(0)));
+  };
+  items.forEach((item) => {
+    if (item.kind === "tool") {
+      pendingTools.push(item);
+      return;
+    }
+    flushPendingTools();
+    blocks.push(item);
+  });
+  flushPendingTools();
+  return blocks;
 }
