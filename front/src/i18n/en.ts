@@ -1098,7 +1098,7 @@ export const en: Record<string, string> = {
   "settings.transcribeKeywords": "Transcription terms",
   "settings.transcribeKeywordsPlaceholder": "e.g. vibehub, erp-aux, Qive, Mussa",
   "settings.transcribeKeywordsHint": "Names and jargon the transcription should spell exactly like this. Separate them with commas or line breaks.",
-  "settings.transcribeKeywordsEmpty": "No terms saved: names and jargon from your team will come out misspelled.",
+  "settings.transcribeKeywordsEmpty": "No terms: names and jargon from your team will come out misspelled.",
   "settings.githubAccounts": "GitHub accounts",
   "settings.githubHint":
     "Add one account per GitHub identity — your personal one and your organization's, say. Each project picks which one it clones with; the token only leaves the vault as an ephemeral clone credential.",

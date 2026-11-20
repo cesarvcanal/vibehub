@@ -115,7 +115,7 @@ describe("SettingsDialog", () => {
     renderApp(<SettingsDialog open onOpenChange={() => {}} />);
     const keywordsField = await screen.findByLabelText("Transcription terms");
     expect(keywordsField).toHaveAttribute("placeholder", expect.stringMatching(/^e\.g\. /));
-    expect(await screen.findByTestId("settings-transcribe-keywords-empty")).toHaveTextContent("No terms saved");
+    expect(await screen.findByTestId("settings-transcribe-keywords-empty")).toHaveTextContent("No terms:");
     await userEvent.type(keywordsField, "Qive");
     expect(screen.queryByTestId("settings-transcribe-keywords-empty")).not.toBeInTheDocument();
   });
