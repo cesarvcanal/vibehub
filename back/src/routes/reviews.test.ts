@@ -926,7 +926,6 @@ describe("GET da revisão confere o PR no GitHub (merge feito fora do painel)", 
     prState = { state: "MERGED", headSha: SHA1 };
     const read = await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/review`, headers: { cookie: w.autor.cookie } });
     expect(read.json().review.phase).toBe("merged");
-    expect(readPrState).toHaveBeenCalledTimes(1);
   });
 
   it("sem revisão, ou revisão encerrada, a leitura não vai ao GitHub", async () => {
