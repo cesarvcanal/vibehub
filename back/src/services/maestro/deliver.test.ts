@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1109,6 +1110,30 @@ describe("buildPrDiffScript / parsePrDiff / readPrDiffUnchanged: o diff líquido
   const cleanMerge: Side = { commits: [PR_COMMIT, BASE_MERGE], files: ["src/auth.ts"] };
   const baseOnlyStep: Side = { commits: [BASE_MERGE], files: ["src/billing.ts"] };
   const stdoutOf = (from: Side, to: Side, step: Side) => [sideLine("from", from), sideLine("to", to), sideLine("step", step)].join("\n");
+
+  const digestOf = (jq: string, files: object[]) => {
+    const compare = JSON.stringify({ total_commits: 1, commits: [{ sha: "a", parents: [{}] }], files });
+    const out = execFileSync("jq", ["-r", jq], { input: compare, encoding: "utf8" });
+    return createHash("sha256").update(out.split("\n").slice(1).join("\n")).digest("hex");
+  };
+
+  it.each([
+    ["binário sem patch com outro blob", { filename: "b.png", status: "modified", sha: "s1" }, { filename: "b.png", status: "modified", sha: "s2" }],
+    ["arquivo com patch com outra linha +", { filename: "a.ts", status: "modified", sha: "s1", patch: "@@ -1 +1 @@\n-x\n+y" },
+      { filename: "a.ts", status: "modified", sha: "s2", patch: "@@ -1 +1 @@\n-x\n+z" }],
+    ["renomeado de outro arquivo", { filename: "b.ts", previous_filename: "a.ts", status: "renamed", sha: "s1" },
+      { filename: "b.ts", previous_filename: "c.ts", status: "renamed", sha: "s1" }],
+  ])("o digest do lado do PR muda quando muda o arquivo: %s", async (_case, before, after) => {
+    const { deliver } = await load();
+    expect(digestOf(deliver.PR_SIDE_JQ, [before])).not.toBe(digestOf(deliver.PR_SIDE_JQ, [after]));
+  });
+
+  it("o digest ignora o contexto do patch: as mesmas linhas +/- em outro ponto do arquivo dão o mesmo digest", async () => {
+    const { deliver } = await load();
+    const file = (patch: string) => ({ filename: "a.ts", status: "modified", sha: "s", patch });
+    expect(digestOf(deliver.PR_SIDE_JQ, [file("@@ -1 +1 @@\n ctx1\n-x\n+y")]))
+      .toBe(digestOf(deliver.PR_SIDE_JQ, [file("@@ -9 +9 @@\n ctx2\n-x\n+y")]));
+  });
 
   it("lê base...commit dos dois commits e o passo revisado...head pela API do GitHub, com o token do stdin", async () => {
     const { deliver } = await load();

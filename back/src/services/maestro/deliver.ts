@@ -689,11 +689,12 @@ export async function readPrState(cardId: string, prUrl: string): Promise<{ stat
   return null;
 }
 
-const PR_SIDE_JQ =
+export const PR_SIDE_JQ =
   '({ unknown: ((.files | length) >= 300 or .total_commits > (.commits | length)), ' +
   'commits: [.commits[] | { sha, parents: (.parents | length) }], ' +
   'files: [.files[] | .filename, (.previous_filename // empty)] } | tojson), ' +
-  '([.files[] | .filename, .status, ((.patch // ("binary " + .sha)) | split("\\n") | map(select(startswith("+") or startswith("-"))) | join("\\n"))] | join("\\n"))';
+  '([.files[] | .filename, (.previous_filename // ""), .status, (if .patch then (.patch | split("\\n") | ' +
+  'map(select(startswith("+") or startswith("-"))) | join("\\n")) else ("blob " + (.sha // "none")) end)] | join("\\n"))';
 
 export function buildPrDiffScript(
   containerName: string, token: string, cwd: string, prUrl: string, base: string, fromSha: string, toSha: string,
