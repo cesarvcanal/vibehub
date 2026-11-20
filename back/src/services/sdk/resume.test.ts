@@ -246,6 +246,14 @@ describe("resumeInterruptedTurns — the boot sweep", () => {
     expect(isStaleBackgroundOnly({ startedAt: 1, attempts: 0, background: { tasks: ["x"], since: now - BACKGROUND_HOLD_MAX_MS - 1, idle: true } }, now)).toBe(true);
   });
 
+  it("frota do Workflow derrubada por um deploy: a retomada manda relançar pelo runId, sem trocar o resultado dela pelo próprio julgamento", () => {
+    const text = resumeContinuationText({
+      startedAt: 1, attempts: 0, background: { tasks: ["Análise de PR do vibehub: especialistas em paralelo, verificação adversarial e juiz"], since: 0, idle: true },
+    });
+    expect(text).toContain("resumeFromRunId");
+    expect(text).toContain("não troque o resultado dela pelo seu próprio julgamento");
+  });
+
   it("attempts >= 1 SEM progresso (a retomada morreu antes de fazer qualquer coisa): only the line, no loop", async () => {
     await writeInflightMarker(CARD, { startedAt: 1, attempts: 1 });
     const summary = await resumeInterruptedTurns(deps());
