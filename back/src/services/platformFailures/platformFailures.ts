@@ -3,16 +3,19 @@ import { dataPath } from "../../config/env.js";
 import { JsonStore } from "../../store/jsonStore.js";
 import { logger } from "../../utils/logger.js";
 import { getSettings } from "../settings/settings.js";
+import { PLATFORM_FAILURE_LOG_MARK } from "./backendError.js";
 import { buildFailureSignature } from "./signature.js";
-import type { PlatformFailure, PlatformFailureReport, PlatformFailureStatus } from "./types.js";
+import type { PlatformFailure, PlatformFailureReport, PlatformFailureSource, PlatformFailureStatus } from "./types.js";
 
 export const ACTIVE_FAILURES_CAP = 50;
+export const ACTIVE_SCREEN_ERRORS_CAP = 20;
 const AFFECTED_CARDS_CAP = 20;
 const RESOLVED_FAILURE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 export const RESOLVED_GRACE_MS = 60 * 60_000;
-export const SLOW_TURN_DISMISSAL_MS = 7 * 24 * 60 * 60_000;
+export const TURN_DISMISSAL_MS = 7 * 24 * 60 * 60_000;
 
 const ACTIVE_STATUSES: readonly PlatformFailureStatus[] = ["open", "investigating", "concluded_without_fix"];
+const TURN_SOURCES: readonly PlatformFailureSource[] = ["slow_turn", "stalled_turn"];
 const INVESTIGABLE_STATUSES: readonly PlatformFailureStatus[] = ["open", "concluded_without_fix"];
 
 export class PlatformFailureNotFoundError extends Error {}
@@ -57,7 +60,7 @@ function announceFailureChange(change: PlatformFailureChange): void {
     try {
       listener({ ...change, failure: { ...change.failure } });
     } catch (err) {
-      logger.warn({ failure: change.failure.id, detail: (err as Error).message }, "could not announce a platform failure change");
+      logger.warn({ ...PLATFORM_FAILURE_LOG_MARK, failure: change.failure.id, detail: (err as Error).message }, "could not announce a platform failure change");
     }
   }
 }
@@ -68,8 +71,8 @@ export async function recordPlatformFailure(report: PlatformFailureReport, now: 
   const outcome = await store.mutate((doc) => {
     doc.failures = doc.failures.filter((failure) => !(failure.status === "resolved" && now - failure.lastSeenAt > RESOLVED_FAILURE_RETENTION_MS));
     const sameSignatureFailure = doc.failures.find((failure) => failure.signature === signature && failure.status !== "resolved");
-    const isDismissalExpired = sameSignatureFailure?.status === "dismissed" && sameSignatureFailure.source === "slow_turn"
-      && now - (sameSignatureFailure.dismissedAt ?? 0) > SLOW_TURN_DISMISSAL_MS;
+    const isDismissalExpired = sameSignatureFailure?.status === "dismissed" && TURN_SOURCES.includes(sameSignatureFailure.source)
+      && now - (sameSignatureFailure.dismissedAt ?? 0) > TURN_DISMISSAL_MS;
     if (isDismissalExpired) doc.failures = doc.failures.filter((failure) => failure !== sameSignatureFailure);
     const knownFailure = isDismissalExpired ? undefined : sameSignatureFailure;
     if (knownFailure?.status === "dismissed") return { failure: null, capReached: false, isNewForCard: false };
@@ -82,8 +85,11 @@ export async function recordPlatformFailure(report: PlatformFailureReport, now: 
       noteAffectedCard(repeatedFailure, report.cardId);
       return { failure: { ...repeatedFailure }, capReached: false, isNewForCard };
     }
-    const activeFailures = doc.failures.filter((failure) => ACTIVE_STATUSES.includes(failure.status));
-    if (activeFailures.length >= ACTIVE_FAILURES_CAP) return { failure: null, capReached: true, isNewForCard: false };
+    const isScreenError = report.source === "screen_error";
+    const activeFailuresOfSameCap = doc.failures.filter((failure) =>
+      ACTIVE_STATUSES.includes(failure.status) && (failure.source === "screen_error") === isScreenError);
+    const capOfSource = isScreenError ? ACTIVE_SCREEN_ERRORS_CAP : ACTIVE_FAILURES_CAP;
+    if (activeFailuresOfSameCap.length >= capOfSource) return { failure: null, capReached: true, capOfSource, isNewForCard: false };
     const createdFailure: PlatformFailure = {
       id: randomUUID(),
       signature,
@@ -105,7 +111,7 @@ export async function recordPlatformFailure(report: PlatformFailureReport, now: 
     return { failure: { ...createdFailure }, capReached: false, isNewForCard: report.cardId !== undefined };
   });
   if (outcome.capReached) {
-    logger.warn({ cap: ACTIVE_FAILURES_CAP, component: report.component }, "platform failure dropped: too many open failures");
+    logger.warn({ ...PLATFORM_FAILURE_LOG_MARK, cap: outcome.capOfSource, source: report.source, component: report.component }, "platform failure dropped: too many open failures");
   }
   if (outcome.failure && outcome.isNewForCard) announceFailureChange({ failure: outcome.failure, newForCardId: report.cardId });
   return outcome.failure;

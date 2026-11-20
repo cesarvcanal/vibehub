@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, onTestFinished, vi } from "vitest";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -59,6 +60,15 @@ function wire(over: { push?: string; probe?: string; run?: string; merge?: strin
     if (script.includes("git push ")) return { stdout: push, stderr: "" };
     if (script.includes("__VIBEHUB_GATE_JSON__")) return { stdout: probe, stderr: "" };
     if (script.includes('echo "__VIBEHUB_GATE__ pass"')) return { stdout: run, stderr: "" };
+    return { stdout: "", stderr: "" };
+  });
+}
+
+function wireMergeOnly(head: string, over: { ci?: string; merge?: string; resolve?: string } = {}) {
+  runScript.mockImplementation(async (script: string) => {
+    if (script.includes("gh pr merge")) return { stdout: over.merge ?? "Merged\n__VIBEHUB_DELIVER__ merged\n", stderr: "" };
+    if (script.includes("gh pr checks")) return { stdout: `${over.ci ?? '[{"name":"back","bucket":"pass"}]'}\n__VIBEHUB_CI__ done\n`, stderr: "" };
+    if (script.includes("gh pr list")) return { stdout: over.resolve ?? `__VIBEHUB_DELIVER__ head ${PR} ${head}\n`, stderr: "" };
     return { stdout: "", stderr: "" };
   });
 }
@@ -274,7 +284,7 @@ describe("buildMergeScript", () => {
   });
 
   /** Runs the merge body (what `docker exec … bash -s` receives) with a fake gh whose PR head is `prHead`. */
-  async function runMerge(prHead: string, pin: string, { prTitle = "fix(deliver): título qualquer", viewError = "" } = {}) {
+  async function runMerge(prHead: string, pin: string, { prTitle = "fix(deliver): título qualquer", viewError = "", mergeable = "MERGEABLE" } = {}) {
     const { deliver } = await load();
     const root = await mkdtemp(join(tmpdir(), "vibehub-merge-"));
     try {
@@ -283,15 +293,15 @@ describe("buildMergeScript", () => {
         "#!/bin/bash",
         'echo "gh $*" >> "$ROOT/log"',
         'case "$1 $2" in',
-        `  "pr view") [ "$*" = "pr view ${PR} --json headRefOid,number,title --jq .headRefOid, .number, .title" ] || exit 1`,
+        `  "pr view") [ "$*" = "pr view ${PR} --json headRefOid,number,mergeable,title --jq .headRefOid, .number, .mergeable, .title" ] || exit 1`,
         `    [ -z "$FAKE_VIEW_ERROR" ] || { echo "$FAKE_VIEW_ERROR" >&2; exit 1; }`,
-        `    printf '%s\\n' "$FAKE_HEAD" 7 "$FAKE_TITLE" ;;`,
+        `    printf '%s\\n' "$FAKE_HEAD" 7 "$FAKE_MERGEABLE" "$FAKE_TITLE" ;;`,
         `  "pr merge") while [ $# -gt 0 ]; do [ "$1" = --subject ] && printf 'subject=[%s]\\n' "$2" >> "$ROOT/log"; shift; done; echo "Merged" ;;`,
         "esac",
       ].join("\n"), { mode: 0o755 });
       const lines = deliver.buildMergeScript("vibehub-runner", TOKEN, root, PR, pin).split("\n");
       const inner = lines.slice(lines.findIndex((l) => l.startsWith("docker exec")) + 1, -1).join("\n");
-      const env = { PATH: `${join(root, "bin")}:${process.env.PATH}`, ROOT: root, FAKE_HEAD: prHead, FAKE_TITLE: prTitle, FAKE_VIEW_ERROR: viewError };
+      const env = { PATH: `${join(root, "bin")}:${process.env.PATH}`, ROOT: root, FAKE_HEAD: prHead, FAKE_TITLE: prTitle, FAKE_VIEW_ERROR: viewError, FAKE_MERGEABLE: mergeable };
       const stdout = execFileSync("bash", ["-s"], { input: inner, env, encoding: "utf8" });
       const log = execFileSync("bash", ["-c", `cat '${join(root, "log")}'`], { encoding: "utf8" });
       return { stdout, log, parsed: deliver.parseMerge(stdout) };
@@ -329,6 +339,18 @@ describe("buildMergeScript", () => {
     const r = await runMerge(moved, HEAD_SHA);
     expect(r.parsed).toMatchObject({ merged: false, movedTo: moved });
     expect(r.log).not.toContain("pr merge");
+  });
+
+  it("executado de verdade: o PR em conflito com a base NÃO é mergeado e sai como conflict", async () => {
+    const r = await runMerge(HEAD_SHA, HEAD_SHA, { mergeable: "CONFLICTING" });
+    expect(r.parsed).toMatchObject({ merged: false, conflict: true });
+    expect(r.log).not.toContain("pr merge");
+  });
+
+  it("executado de verdade: mergeable ainda não calculado pelo GitHub (UNKNOWN) não segura o merge", async () => {
+    const r = await runMerge(HEAD_SHA, HEAD_SHA, { mergeable: "UNKNOWN" });
+    expect(r.parsed).toMatchObject({ merged: true });
+    expect(r.parsed).not.toHaveProperty("conflict");
   });
 
   it("executado de verdade: falha ao ler o head do PR não mergeia às cegas", async () => {
@@ -480,6 +502,15 @@ describe("deliver uses the PR's CI as the gate when there is one", () => {
     const out = await deliver.deliver(card.id, { branch: "main", authorized: true });
     expect(out).toMatchObject({ merged: true });
     expect(scripts().find((s) => s.includes("gh pr merge"))).toContain(`--merge --match-head-commit '${HEAD_SHA}'`);
+  });
+
+  it("the PR conflicts with its base at the merge: conflict, naming the base, nothing merged", async () => {
+    const { deliver, registry, card } = await makeCard();
+    wire({ ci: '[{"name":"back","bucket":"pass"}]', merge: "__VIBEHUB_DELIVER__ error conflict\n" });
+    const out = await deliver.deliver(card.id, { branch: "main", authorized: true });
+    expect(out).toMatchObject({ merged: false, reason: "conflict", prUrl: PR });
+    expect(out.output).toBe("o PR tem conflito com main: o merge commit não sai limpo até a branch do card receber main");
+    expect((await registry.getCard(card.id))?.prs?.[0]?.mergedAt).toBeUndefined();
   });
 
   it("the PR moved between the gate and the merge: head_moved, naming both commits, nothing merged", async () => {
@@ -830,15 +861,6 @@ describe("deliver grava o PR no card (revisão de PR)", () => {
 describe("deliver no modo só-merge (botão de merge da revisão de PR)", () => {
   const REVIEWED = "a".repeat(40);
   const MOVED = "b".repeat(40);
-  /** The runner of the merge-only mode: resolve the PR (no push), CI, merge. */
-  function wireMergeOnly(head: string, over: { ci?: string; merge?: string; resolve?: string } = {}) {
-    runScript.mockImplementation(async (script: string) => {
-      if (script.includes("gh pr merge")) return { stdout: over.merge ?? "Merged\n__VIBEHUB_DELIVER__ merged\n", stderr: "" };
-      if (script.includes("gh pr checks")) return { stdout: `${over.ci ?? '[{"name":"back","bucket":"pass"}]'}\n__VIBEHUB_CI__ done\n`, stderr: "" };
-      if (script.includes("gh pr list")) return { stdout: over.resolve ?? `__VIBEHUB_DELIVER__ head ${PR} ${head}\n`, stderr: "" };
-      return { stdout: "", stderr: "" };
-    });
-  }
 
   it("mergeOnly não dá push e recusa head_moved", async () => {
     const { deliver, card } = await makeCard();
@@ -1083,12 +1105,112 @@ describe("buildPrStateScript / parsePrState", () => {
   it("lê o estado e o head do PR pela URL, com o token do stdin", async () => {
     const { deliver } = await load();
     const script = deliver.buildPrStateScript("vibehub-runner", TOKEN, "/work/x", PR);
-    expect(script).toContain(`gh pr view '${PR}' --json state,headRefOid`);
+    expect(script).toContain(`gh pr view '${PR}' --json state,headRefOid,mergeable`);
     for (const line of script.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
     const sha = "b".repeat(40);
-    expect(deliver.parsePrState(`__VIBEHUB_DELIVER__ prstate MERGED ${sha}`)).toEqual({ ok: true, state: "MERGED", headSha: sha });
-    expect(deliver.parsePrState(`__VIBEHUB_DELIVER__ prstate OPEN ${sha.toUpperCase()}`)).toEqual({ ok: true, state: "OPEN", headSha: sha });
+    expect(deliver.parsePrState(`__VIBEHUB_DELIVER__ prstate MERGED ${sha} UNKNOWN`)).toEqual({ ok: true, state: "MERGED", headSha: sha, mergeable: "UNKNOWN" });
+    expect(deliver.parsePrState(`__VIBEHUB_DELIVER__ prstate OPEN ${sha.toUpperCase()} MERGEABLE`)).toEqual({ ok: true, state: "OPEN", headSha: sha, mergeable: "MERGEABLE" });
+    expect(deliver.parsePrState(`__VIBEHUB_DELIVER__ prstate OPEN ${sha} CONFLICTING`)).toEqual({ ok: true, state: "OPEN", headSha: sha, mergeable: "CONFLICTING" });
     expect(deliver.parsePrState("denied\n__VIBEHUB_DELIVER__ error view")).toMatchObject({ ok: false, stage: "view" });
+  });
+});
+
+describe("buildPrDiffScript / parsePrDiff / readPrDiffUnchanged: o diff líquido do PR em dois commits", () => {
+  const FROM = "a".repeat(40);
+  const TO = "b".repeat(40);
+  const DIGEST = "1".repeat(64);
+  const OTHER_DIGEST = "2".repeat(64);
+  const PR_COMMIT = { sha: "c".repeat(40), parents: 1 };
+  const BASE_MERGE = { sha: "d".repeat(40), parents: 2 };
+  const AUTHOR_COMMIT = { sha: "e".repeat(40), parents: 1 };
+  type Side = { digest?: string; unknown?: boolean; commits?: { sha: string; parents: number }[]; files?: string[] };
+  const sideLine = (name: string, side: Side) => {
+    const listed = { unknown: side.unknown ?? false, commits: side.commits ?? [], files: side.files ?? [] };
+    return `__VIBEHUB_DELIVER__ prside ${name} ${side.digest ?? DIGEST} ${Buffer.from(JSON.stringify(listed)).toString("base64")}`;
+  };
+  const reviewed: Side = { commits: [PR_COMMIT], files: ["src/auth.ts"] };
+  const cleanMerge: Side = { commits: [PR_COMMIT, BASE_MERGE], files: ["src/auth.ts"] };
+  const baseOnlyStep: Side = { commits: [BASE_MERGE], files: ["src/billing.ts"] };
+  const stdoutOf = (from: Side, to: Side, step: Side) => [sideLine("from", from), sideLine("to", to), sideLine("step", step)].join("\n");
+
+  const digestOf = (jq: string, files: object[]) => {
+    const compare = JSON.stringify({ total_commits: 1, commits: [{ sha: "a", parents: [{}] }], files });
+    const out = execFileSync("jq", ["-r", jq], { input: compare, encoding: "utf8" });
+    return createHash("sha256").update(out.split("\n").slice(1).join("\n")).digest("hex");
+  };
+
+  it.each([
+    ["binário sem patch com outro blob", { filename: "b.png", status: "modified", sha: "s1" }, { filename: "b.png", status: "modified", sha: "s2" }],
+    ["arquivo com patch com outra linha +", { filename: "a.ts", status: "modified", sha: "s1", patch: "@@ -1 +1 @@\n-x\n+y" },
+      { filename: "a.ts", status: "modified", sha: "s2", patch: "@@ -1 +1 @@\n-x\n+z" }],
+    ["renomeado de outro arquivo", { filename: "b.ts", previous_filename: "a.ts", status: "renamed", sha: "s1" },
+      { filename: "b.ts", previous_filename: "c.ts", status: "renamed", sha: "s1" }],
+  ])("o digest do lado do PR muda quando muda o arquivo: %s", async (_case, before, after) => {
+    const { deliver } = await load();
+    expect(digestOf(deliver.PR_SIDE_JQ, [before])).not.toBe(digestOf(deliver.PR_SIDE_JQ, [after]));
+  });
+
+  it("o digest ignora o contexto do patch: as mesmas linhas +/- em outro ponto do arquivo dão o mesmo digest", async () => {
+    const { deliver } = await load();
+    const file = (patch: string) => ({ filename: "a.ts", status: "modified", sha: "s", patch });
+    expect(digestOf(deliver.PR_SIDE_JQ, [file("@@ -1 +1 @@\n ctx1\n-x\n+y")]))
+      .toBe(digestOf(deliver.PR_SIDE_JQ, [file("@@ -9 +9 @@\n ctx2\n-x\n+y")]));
+  });
+
+  it("lê base...commit dos dois commits e o passo revisado...head pela API do GitHub, com o token do stdin", async () => {
+    const { deliver } = await load();
+    const script = deliver.buildPrDiffScript("vibehub-runner", TOKEN, "/work/x", PR, "main", FROM, TO);
+    expect(script).toContain(`pr_side from 'repos/acme/repo/compare/main...${FROM}'`);
+    expect(script).toContain(`pr_side to 'repos/acme/repo/compare/main...${TO}'`);
+    expect(script).toContain(`pr_side step 'repos/acme/repo/compare/${FROM}...${TO}'`);
+    for (const scriptLine of script.split("\n").filter((line) => line.startsWith("docker exec"))) expect(scriptLine).not.toContain(TOKEN);
+  });
+
+  it.each([
+    ["só merges da base fora dos arquivos do PR e o mesmo diff: same", reviewed, cleanMerge, baseOnlyStep, "same"],
+    ["commit comum do autor com o mesmo diff (linha trocada de lugar): changed",
+      reviewed, { ...cleanMerge, commits: [PR_COMMIT, AUTHOR_COMMIT] }, { ...baseOnlyStep, commits: [AUTHOR_COMMIT] }, "changed"],
+    ["merge cuja resolução mexe num arquivo do PR, mesmo com as mesmas linhas +/-: changed",
+      reviewed, cleanMerge, { ...baseOnlyStep, files: ["src/billing.ts", "src/auth.ts"] }, "changed"],
+    ["merge que muda o diff do PR: changed", reviewed, { ...cleanMerge, digest: OTHER_DIGEST }, baseOnlyStep, "changed"],
+    ["histórico reescrito (rebase com force-push): changed", reviewed, { ...cleanMerge, commits: [AUTHOR_COMMIT, BASE_MERGE] }, baseOnlyStep, "changed"],
+    ["nenhum commit novo: changed", reviewed, reviewed, { ...baseOnlyStep, commits: [] }, "changed"],
+    ["PR grande demais (300 arquivos ou commits além da lista): unknown", reviewed, { ...cleanMerge, unknown: true }, baseOnlyStep, "unknown"],
+  ])("%s", async (_name, from, to, step, verdict) => {
+    const { deliver } = await load();
+    expect(deliver.parsePrDiff(stdoutOf(from, to, step))).toBe(verdict);
+  });
+
+  it("falha da API ou lado faltando não tem veredito", async () => {
+    const { deliver } = await load();
+    expect(deliver.parsePrDiff("Not Found\n__VIBEHUB_DELIVER__ error compare")).toBeNull();
+    expect(deliver.parsePrDiff([sideLine("from", reviewed), sideLine("to", cleanMerge)].join("\n"))).toBeNull();
+  });
+
+  it.each([
+    ["base com aspas", "main'; rm -rf /", FROM],
+    ["sha abreviado", "main", "abc1234"],
+  ])("recusa entrada que não pode virar comando: %s", async (_name, base, sha) => {
+    const { deliver } = await load();
+    expect(() => deliver.buildPrDiffScript("vibehub-runner", TOKEN, "/work/x", PR, base, sha, TO)).toThrow();
+  });
+
+  it.each([
+    ["diff igual: não reabre", stdoutOf(reviewed, cleanMerge, baseOnlyStep), true],
+    ["diff diferente: reabre", stdoutOf(reviewed, { ...cleanMerge, digest: OTHER_DIGEST }, baseOnlyStep), false],
+    ["PR grande demais: reabre", stdoutOf(reviewed, { ...cleanMerge, unknown: true }, baseOnlyStep), false],
+    ["leitura que falha: reabre", "Not Found\n__VIBEHUB_DELIVER__ error compare", false],
+  ])("readPrDiffUnchanged pelo runner do card — %s", async (_name, stdout, unchanged) => {
+    const { deliver, card } = await makeCard();
+    runScript.mockResolvedValue({ stdout, stderr: "" });
+    expect(await deliver.readPrDiffUnchanged(card.id, PR, "main", FROM, TO)).toBe(unchanged);
+    expect(runScript).toHaveBeenCalledTimes(1);
+  });
+
+  it("readPrDiffUnchanged com o runner fora do ar reabre", async () => {
+    const { deliver, card } = await makeCard();
+    runScript.mockRejectedValue(new Error("runner down"));
+    expect(await deliver.readPrDiffUnchanged(card.id, PR, "main", FROM, TO)).toBe(false);
   });
 });
 
@@ -1302,13 +1424,36 @@ describe("deliver com revisão de PR ativa no card", () => {
     expect(mergeRan()).toBe(false);
   });
 
-  it("card de análise não tem merge-only: o botão é de uma revisão, e nenhuma revisão roda num card de análise", async () => {
+  it("caso real (PR #649): o botão da análise mergeia em só-merge, sem push, achando a PR pela branch dela e preso ao commit analisado", async () => {
     const { deliver, registry, project } = await makeCard();
     const analysis = await registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" });
-    wire();
-    const out = await deliver.deliver(analysis.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: HEAD_SHA });
-    expect(out).toMatchObject({ merged: false, reason: "locked" });
-    expect(runScript).not.toHaveBeenCalled();
+    wireMergeOnly(HEAD_SHA);
+    const out = await deliver.deliver(analysis.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: HEAD_SHA, gatePassed: true });
+    expect(out).toMatchObject({ merged: true, reason: "merged", prUrl: PR, cardBranch: "feat-7" });
+    expect(pushRan()).toBe(false);
+    expect(scripts().find((s) => s.includes("gh pr list"))).toContain("--head 'feat-7'");
+    expect(scripts().find((s) => s.includes("gh pr merge"))).toContain(`--merge --match-head-commit '${HEAD_SHA}'`);
+    expect(scripts().some((s) => s.includes("__VIBEHUB_GATE_JSON__"))).toBe(false);
+  });
+
+  it("o só-merge da análise numa PR em revisão no card do autor é recusado com review_active, como o merge autorizado", async () => {
+    const { deliver, registry, project } = await withActiveReview("ready");
+    const analysis = await registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "card/x", title: "Análise PR #7" });
+    wireMergeOnly(HEAD_SHA);
+    const out = await deliver.deliver(analysis.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: HEAD_SHA, gatePassed: true });
+    expect(out).toMatchObject({ merged: false, reason: "review_active", prUrl: PR });
+    expect(mergeRan()).toBe(false);
+  });
+
+  it("o só-merge da análise não mergeia a PR de um card bloqueado", async () => {
+    const { deliver, registry, project, card } = await makeCard();
+    await registry.updateCard(card.id, { base: "dev", locked: true });
+    await registry.recordCardPr(card.id, { number: 7, url: PR, base: "dev", branch: "card/x" });
+    const analysis = await registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "card/x", title: "Análise PR #7" });
+    wireMergeOnly(HEAD_SHA);
+    const out = await deliver.deliver(analysis.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: HEAD_SHA, gatePassed: true });
+    expect(out).toMatchObject({ merged: false, reason: "locked", locked: true });
+    expect(mergeRan()).toBe(false);
   });
 
   it("pushOnly: empurra e acha o PR, sem gate e sem merge, mesmo autorizado", async () => {
@@ -1653,5 +1798,40 @@ describe("buildPrReviewScript", () => {
     expect(s).not.toContain("$(x)");
     for (const line of s.split("\n").filter((l) => l.startsWith("docker exec"))) expect(line).not.toContain(TOKEN);
     expect(() => deliver.buildPrReviewScript("vibehub-runner", TOKEN, "/work/x", "https://example.com/x", payload)).toThrow(/PR/);
+  });
+});
+
+describe("recusa do deliver vira aviso de erro no log, que o detector de falhas captura", () => {
+  async function deliverAndReadCapturedFailures(over: Parameters<typeof wire>[0], authorized: boolean) {
+    const { deliver, card } = await makeCard();
+    const { onLogLine } = await import("../../utils/logger.js");
+    const { isPlatformFailureLogLine } = await import("../platformFailures/backendError.js");
+    const loggedLines: import("../../utils/logger.js").LogLine[] = [];
+    onTestFinished(onLogLine("warn", (line) => loggedLines.push(line)));
+    wire(over);
+    const result = await deliver.deliver(card.id, { branch: "dev", authorized });
+    const capturedFailures = loggedLines.filter((line) => isPlatformFailureLogLine(line, undefined, Date.now()));
+    return { result, capturedFailures };
+  }
+
+  it.each([
+    ["push recusado", { push: "fatal: rejected\n__VIBEHUB_DELIVER__ error push" }, "push_failed", "fatal: rejected"],
+    ["merge que o GitHub recusou", { merge: "GraphQL: Base branch was modified\n__VIBEHUB_DELIVER__ error merge\n" }, "merge_failed", "Base branch was modified"],
+  ])("%s vira falha capturada, com o motivo e a saída", async (_case, over, reason, outputExcerpt) => {
+    const { result, capturedFailures } = await deliverAndReadCapturedFailures(over, true);
+    expect(result.reason).toBe(reason);
+    expect(capturedFailures).toEqual([expect.objectContaining({
+      message: "deliver failed", fields: expect.objectContaining({ reason, detail: expect.stringContaining(outputExcerpt) }),
+    })]);
+  });
+
+  it.each([
+    ["sem autorização", {}, false, "unauthorized"],
+    ["gate vermelho pelo teste do próprio card", { run: "1 failing test\n__VIBEHUB_GATE__ fail\n" }, true, "gate"],
+    ["merge feito", {}, true, "merged"],
+  ])("%s não é falha da plataforma", async (_case, over, authorized, reason) => {
+    const { result, capturedFailures } = await deliverAndReadCapturedFailures(over, authorized);
+    expect(result.reason).toBe(reason);
+    expect(capturedFailures).toEqual([]);
   });
 });

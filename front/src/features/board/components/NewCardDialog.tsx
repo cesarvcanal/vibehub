@@ -129,7 +129,6 @@ export function NewCardDialog({
   const baseInvalid = base.trim() !== "" && !isBranchName(base);
   const blocked = branchIssue === "invalid" || branchIssue === "isBase" || baseInvalid;
 
-  /** `Tech — 31%`, or just the name when that account has no numbers to show. PURE-ish. */
   const withPercent = (label: string, slug: string) => {
     const percent = pillPercent(usage?.bySlug?.[slug]);
     return percent ? `${label} — ${percent}` : label;

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, onTestFinished, vi } from "vitest";
 import { act, cleanup, configure, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
@@ -183,7 +183,7 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.queryByText(/sem limite de uso/)).toBeNull();
   });
 
-  it("revisor rodando a frota: a conversa mostra cada agente com o modelo, o achado e a verificação respondendo a ele", async () => {
+  it("revisor rodando a frota: a aba Agentes, aberta de cara, mostra cada agente com o modelo, o achado e a verificação respondendo a ele", async () => {
     const served = get.getMockImplementation()!;
     const fleet = [{
       runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Revisão", "Verificação"], total: 3, done: 2, at: 5, finished: false,
@@ -198,15 +198,134 @@ describe("ReviewPanel — o que mostra", () => {
     get.mockImplementation(async (url: string) => (url === "/cards/c1/review" ? { review: current, working, fleet } : served(url)));
     open("aut", review({ phase: "reviewing", round: 1 }));
     await loaded();
-    const messages = await screen.findAllByTestId("review-fleet-message");
-    expect(messages.map((m) => m.textContent)).toEqual([
-      expect.stringContaining("1 achado: token vaza no log"),
-      expect.stringContaining("Derrubado: a linha 72 já barra"),
-    ]);
+    const messages = await screen.findAllByTestId("fleet-chat-message");
+    expect(messages).toHaveLength(2);
     expect(messages[0]).toHaveTextContent("Revisão de Correção");
-    expect(messages[1]).toHaveTextContent("em resposta a: token vaza no log");
-    expect(screen.getByTestId("review-fleet-working")).toHaveTextContent("Juiz");
-    expect(screen.getByTestId("review-fleet-working")).toHaveTextContent("opus");
+    expect(messages[0]).toHaveTextContent("sonnet");
+    expect(within(messages[0]!).getByRole("listitem")).toHaveTextContent("token vaza no log");
+    expect(messages[1]).toHaveTextContent("Derrubado");
+    expect(messages[1]).toHaveTextContent("a linha 72 já barra");
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => undefined);
+    onTestFinished(() => scrolled.mockRestore());
+    await userEvent.click(within(messages[1]!).getByRole("button", { name: "Ver a fala respondida: token vaza no log" }));
+    expect(scrolled.mock.contexts[0]).toContainElement(messages[0]!);
+    const typing = screen.getByTestId("fleet-chat-typing");
+    expect(typing).toHaveTextContent("Juiz");
+    expect(typing).toHaveTextContent("opus");
+    expect(typing).toHaveTextContent("digitando");
+  });
+
+  it("na aba Agentes, clicar no nome de um agente abre o passo a passo dele, lido da rota do agente, e outro clique fecha", async () => {
+    const served = get.getMockImplementation()!;
+    const fleet = [{
+      runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Contexto"], total: 1, done: 0, at: 5, finished: false,
+      agents: [{ id: "a01f", label: "contexto", phase: "Contexto", model: "opus", status: "running" as const, }],
+    }];
+    const steps = [{ at: 1, kind: "tool", tool: "Read", target: "back/src/auth.ts" }, { at: 2, kind: "text", text: "Lendo o fluxo de login." }];
+    get.mockImplementation(async (url: string) => {
+      if (url === "/cards/c1/review") return { review: current, working, fleet };
+      if (url === "/cards/c1/review/agents/wf_abc12/a01f/feed") return { items: steps };
+      return served(url);
+    });
+    open("aut", review({ phase: "reviewing", round: 1 }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Agentes/ }));
+    const agentName = await screen.findByRole("button", { name: /Contexto/ });
+    expect(agentName).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(agentName);
+    const feed = await screen.findByTestId("review-agent-feed");
+    expect(await within(feed).findByText("Lendo o fluxo de login.")).toBeInTheDocument();
+    expect(feed).toHaveTextContent("back/src/auth.ts");
+    expect(agentName).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(agentName);
+    expect(screen.queryByTestId("review-agent-feed")).toBeNull();
+  });
+
+  it("passo a passo de um agente que o servidor não consegue ler avisa a falha em vez de ficar vazio", async () => {
+    const served = get.getMockImplementation()!;
+    const fleet = [{
+      runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Contexto"], total: 1, done: 1, at: 5, finished: true,
+      agents: [{ id: "a01f", label: "contexto", phase: "Contexto", model: "opus", status: "done" as const, endedAt: 1, result: "ok" }],
+    }];
+    get.mockImplementation(async (url: string) => {
+      if (url === "/cards/c1/review") return { review: current, working, fleet };
+      if (url === "/cards/c1/review/agents/wf_abc12/a01f/feed") throw new Error("the reviewer's session is not open");
+      return served(url);
+    });
+    open("aut", review({ phase: "reviewing", round: 1 }));
+    await loaded();
+    await userEvent.click(screen.getByRole("tab", { name: /Agentes/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /Contexto/ }));
+    expect(await within(await screen.findByTestId("review-agent-feed")).findByText(/não deu para ler/i)).toBeInTheDocument();
+  });
+
+  it("a aba Agentes conta as rodadas em ordem: os agentes de cada rodada falam antes do revisor, e o autor responde depois", async () => {
+    const served = get.getMockImplementation()!;
+    const agentRun = (runId: string, title: string) => ({
+      runId, name: "vibehub-pr-analysis", phases: ["Revisão"], total: 1, done: 1, at: 5, finished: true,
+      agents: [{ id: `${runId}-a`, label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "done" as const, endedAt: 1, toolCount: 1,
+        result: JSON.stringify({ findings: [{ title }] }) }],
+    });
+    const recorded = review({
+      phase: "reviewing", round: 2, lastSubmitRound: 1, fleet: [{ round: 1, runs: [agentRun("wf_r1", "achado da rodada 1")] }],
+      log: [
+        { at: 1, round: 1, who: "reviewer", text: "revisor fecha a rodada 1" },
+        { at: 2, round: 1, who: "author", text: "autor corrigiu" },
+        { at: 3, round: 2, who: "system", text: "Rodada 2 de 3: o revisor confere só o diff." },
+      ],
+    });
+    get.mockImplementation(async (url: string) => (url === "/cards/c1/review" ? { review: current, working, fleet: [agentRun("wf_r2", "achado da rodada 2")] } : served(url)));
+    open("aut", recorded);
+    await loaded();
+    const timeline = await screen.findByTestId("review-agents");
+    await within(timeline).findByText("achado da rodada 2");
+    const order = ["Rodada 1", "achado da rodada 1", "revisor fecha a rodada 1", "autor corrigiu", "Rodada 2", "Rodada 2 de 3", "achado da rodada 2"];
+    const positions = order.map((text) => timeline.textContent!.indexOf(text));
+    expect(positions.every((position) => position >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((left, right) => left - right));
+  });
+
+  it("a aba Agentes abre no fim da rodada", async () => {
+    const layoutHeight = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function scrollHeightOf(this: HTMLElement) {
+      return this.closest("[hidden]") ? 0 : 1000;
+    });
+    onTestFinished(() => layoutHeight.mockRestore());
+    open("aut", review({ phase: "reviewing", round: 1, log: [{ at: 1, round: 1, who: "reviewer", text: "achei uma coisa" }] }));
+    await loaded();
+    expect((await screen.findByTestId("review-agents")).scrollTop).toBe(1000);
+  });
+
+  it("revisão sem nenhuma fala ainda: a aba Agentes diz que as falas aparecem quando a rodada começar", async () => {
+    open("aut", review({ phase: "reviewing", round: 1 }));
+    await loaded();
+    expect(screen.getByText("Os agentes ainda não falaram. O que cada um vê e decide aparece aqui assim que a rodada começa.")).toBeInTheDocument();
+  });
+
+  it("o painel tem só as abas Agentes e Achados", async () => {
+    open("aut", review());
+    await loaded();
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Agentes", "Achados0"]);
+  });
+
+  it("a fala do revisor e a do autor levam a inicial da pessoa na bolinha, cada uma do seu lado", async () => {
+    open("aut", review({
+      log: [
+        { at: 1, round: 1, who: "reviewer", text: "achei uma coisa" },
+        { at: 2, round: 1, who: "author", text: "corrigi" },
+      ],
+    }));
+    await loaded();
+    const [reviewerLine, authorLine] = screen.getAllByTestId("review-line");
+    expect(within(reviewerLine!).getByTestId("review-avatar")).toHaveTextContent(/^M$/);
+    expect(within(authorLine!).getByTestId("review-avatar")).toHaveTextContent(/^A$/);
+  });
+
+  it("a fala do revisor em tópicos aparece como lista, com o código marcado", async () => {
+    open("aut", review({ log: [{ at: 1, round: 1, who: "reviewer", text: "Rodada 1:\n- reabre no `head` novo\n- voz entrega o card" }] }));
+    await loaded();
+    const line = screen.getByTestId("review-line");
+    expect(within(line).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["reabre no head novo", "voz entrega o card"]);
+    expect(within(line).getByText("head").tagName).toBe("CODE");
   });
 
   it("sem co-autor o papel não aparece", async () => {
@@ -389,20 +508,19 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.queryByRole("button", { name: /respostas/ })).toBeNull();
   });
 
-  it("abre na conversa; a aba Achados mostra a lista agrupada e as duas ficam montadas", async () => {
+  it("abre em Agentes; a aba Achados mostra a lista agrupada e as duas ficam montadas", async () => {
     open("aut", review({
       findings: [finding({ id: "f1", title: "Bloqueio A" }), finding({ id: "f2", severity: "suggestion", title: "Sugestão B" })],
       log: [{ at: 1, round: 1, who: "reviewer", text: "achei duas coisas" }],
     }));
     await loaded();
-    expect(screen.getByRole("tab", { name: /Conversa/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: /Agentes/ })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("log")).toHaveTextContent("achei duas coisas");
 
     await userEvent.click(screen.getByRole("tab", { name: /Achados/ }));
     expect(screen.getByRole("tab", { name: /Achados/ })).toHaveAttribute("aria-selected", "true");
     expect(screen.getAllByTestId("finding-group").map((g) => g.getAttribute("data-severity"))).toEqual(["blocking", "suggestion"]);
-    // The conversation stays mounted (hidden): going back to it does not lose the scroll.
-    expect(screen.getByTestId("review-conversation")).toBeInTheDocument();
+    expect(screen.getByTestId("review-agents")).toBeInTheDocument();
   });
 
   it("cada achado de uma fala da IA vira uma mensagem própria, depois do resumo, do lado de quem falou", async () => {
@@ -497,8 +615,8 @@ describe("ReviewPanel — o que mostra", () => {
     open("rev", review({ phase: "reviewing", lastSubmitRound: 2, findings: [finding({ id: "q1", severity: "question", title: "dúvida" })] }));
     await loaded();
     await waitFor(() => expect(screen.getByRole("tab", { name: /Achados/ })).toHaveAttribute("aria-selected", "true"));
-    await userEvent.click(screen.getByRole("tab", { name: /Conversa/ }));
-    expect(screen.getByRole("tab", { name: /Conversa/ })).toHaveAttribute("aria-selected", "true");
+    await userEvent.click(screen.getByRole("tab", { name: /Agentes/ }));
+    expect(screen.getByRole("tab", { name: /Agentes/ })).toHaveAttribute("aria-selected", "true");
   });
 
   it("Abrir no GitHub leva ao PR e fechar chama onClose", async () => {
@@ -884,6 +1002,38 @@ describe("ReviewPanel — merge", () => {
     expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeDisabled();
   });
 
+  it("caso real (PR #342): pronta com o PR em conflito com a base — diz o conflito em vez de testes vermelhos, sem alerta, e o Mergear fica travado", async () => {
+    const sha = "a".repeat(40);
+    open("mer", review({
+      phase: "ready", reviewedSha: sha,
+      mergeGate: { sha, state: "failed", output: "o PR tem conflito com dev: o merge commit não sai limpo", at: 1, failures: 1, conflict: true },
+    }));
+    await loaded();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByText("IA trazendo a base")).toBeInTheDocument();
+    expect(screen.queryByText("IA corrigindo os testes")).toBeNull();
+    expect(screen.getByText("Revisão aprovada; o PR está em conflito com a base e a IA do autor está trazendo a base para a branch.")).toBeInTheDocument();
+    expect(screen.getByText("O PR está em conflito com dev: a IA do autor está trazendo dev para a branch, e a revisão confere o que entrar antes do merge.")).toBeInTheDocument();
+    expect(screen.queryByText("Ver saída dos testes")).toBeNull();
+    expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeDisabled();
+  });
+
+  it("conflito que a IA do autor não resolveu depois das ordens que recebe sozinha: alerta que o merge espera uma pessoa trazer a base, sem prometer a IA trazendo", async () => {
+    const sha = "a".repeat(40);
+    open("mer", review({
+      phase: "ready", reviewedSha: sha,
+      mergeGate: { sha, state: "failed", output: "o PR tem conflito com dev: o merge commit não sai limpo", at: 1, failures: 4, conflict: true, exhausted: true },
+    }));
+    await loaded();
+    expect(screen.queryByText("IA trazendo a base")).toBeNull();
+    expect(screen.queryByText(/a IA do autor está trazendo/)).toBeNull();
+    expect(screen.getByText("conflito com a base")).toBeInTheDocument();
+    expect(screen.getByText("Revisão aprovada, mas o PR segue em conflito com a base e a IA do autor não conseguiu trazê-la: o merge espera alguém trazer a base para a branch.")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("O PR segue em conflito com dev depois de 3 ordens à IA do autor. Traga dev para a branch e suba, ou use \"Tentar de novo\" para a IA do autor tentar outra vez.");
+    expect(screen.getByRole("button", { name: "Tentar de novo" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeDisabled();
+  });
+
   it("gate rodando no commit aprovado: o Mergear espera; verde, ou de um commit antigo, não segura", async () => {
     const sha = "a".repeat(40);
     open("mer", review({ phase: "ready", reviewedSha: sha, mergeGate: { sha, state: "running", at: 1 } }));
@@ -1001,6 +1151,18 @@ describe("ReviewPanel — merge", () => {
     expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeEnabled();
   });
 
+  it("merge recusado por conflito com a base diz o conflito em palavras, nunca a saída do gh", async () => {
+    post.mockRejectedValue(failure(409, { error: "o PR tem conflito com dev: o merge commit não sai limpo", reason: "conflict" }));
+    open("mer", review({ phase: "ready" }));
+    await loaded();
+
+    await userEvent.click(screen.getByRole("button", { name: "Mergear na dev" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "O merge não saiu: o PR está em conflito com a base. A IA do autor recebeu a ordem de trazer a base para a branch.",
+    );
+  });
+
   it("gate vermelho mostra a mensagem do servidor como veio", async () => {
     post.mockRejectedValue(failure(409, { error: "gate vermelho: 2 testes falharam", reason: "gate" }));
     open("mer", review({ phase: "ready" }));
@@ -1095,7 +1257,7 @@ describe("ReviewPanel — dúvidas e impasse", () => {
   it("'Decidir agora' leva à aba Achados", async () => {
     open("rev", review({ phase: "reviewing", findings: [doubt()] }));
     await loaded();
-    await userEvent.click(screen.getByRole("tab", { name: /Conversa/ }));
+    await userEvent.click(screen.getByRole("tab", { name: /Agentes/ }));
     await userEvent.click(screen.getByRole("button", { name: "Decidir agora" }));
     expect(screen.getByRole("tab", { name: /Achados/ })).toHaveAttribute("aria-selected", "true");
   });
@@ -1220,6 +1382,22 @@ describe("ReviewPanel — dúvidas e impasse", () => {
     const card = cardOf("Dúvida bloqueada");
     expect(within(card).getByRole("radio", { name: /Aceitar o risco/ })).toBeInTheDocument();
     expect(within(card).queryByRole("radio", { name: /Manter o bloqueio/ })).toBeNull();
+  });
+
+  it("caso real (PR #342, f13): no impasse, o bloqueio já mantido aparece como decidido, sai da contagem e não oferece manter de novo", async () => {
+    open("rev", review({
+      phase: "impasse", round: 3, impasseReason: "rodadas",
+      findings: [
+        finding({ id: "f13", title: "Descrição não acompanhou o push", humanDecision: "keep" }),
+        finding({ id: "f14", title: "Outro travado" }),
+      ],
+    }));
+    await loaded();
+    expect(screen.getByTestId("decision-banner")).toHaveTextContent("O impasse precisa da sua decisão em 1 item travado");
+    const kept = cardOf("Descrição não acompanhou o push");
+    expect(kept).toHaveTextContent("Bloqueio mantido: a revisão segue em impasse enquanto este item segurar o merge. Aceitar o risco o libera.");
+    expect(within(kept).queryByRole("radio", { name: /Manter o bloqueio/ })).toBeNull();
+    expect(within(kept).getByRole("radio", { name: /Aceitar o risco/ })).toBeInTheDocument();
   });
 
   it("fora do impasse, bloqueante aberto não pede decisão", async () => {

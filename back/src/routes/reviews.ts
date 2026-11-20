@@ -10,11 +10,14 @@ import {
 import { reachingCard, startReviewChecked } from "../services/review/start.js";
 import { mergeReviewedPr } from "../services/review/merge.js";
 import { isBusy } from "../services/maestro/maestro.js";
-import { watchCardFleet } from "../services/sdk/manager.js";
+import { readCardAgentFeed, watchCardFleet } from "../services/sdk/manager.js";
 import { activeReviewFor, getReview, listReviewsFollowedBy, listReviewsForCards, newest } from "../services/review/store.js";
 import { canMergeReview, fleetRunForReaders, isReviewClosed, type Review } from "../services/review/model.js";
-import { getAnalysis } from "../services/review/analysisStore.js";
-import { analysedPr, isAnalysisMergeable, mergeAnalysedPr } from "../services/review/analysisMerge.js";
+import { getAnalysis, getAnalysisMergeGate, getAnalysisMergeRefusal } from "../services/review/analysisStore.js";
+import {
+  analysedPr, currentMergeGate, currentMergeRefusal, isAnalysisMergeable, isAnalysisMerging, mergeAnalysedPr, startAnalysisMergeGate,
+  syncAnalysisWithGithub,
+} from "../services/review/analysisMerge.js";
 import { readAnalysisConversation } from "../services/review/analysisConversation.js";
 import { ANALYSIS_DIMENSIONS, analysisVerdict, dimensionHealth, uncheckedDimensions } from "../services/review/analysisModel.js";
 import { sendError, type ErrorStatusRule } from "./httpError.js";
@@ -72,6 +75,17 @@ function prReview(list: Review[], prNumber: number): Review | undefined {
   return newest(ofPr.filter((r) => !isReviewClosed(r.phase))) ?? newest(ofPr);
 }
 
+function parsePrQuery(raw: string | undefined): number | undefined | null {
+  if (raw === undefined) return undefined;
+  const pr = Number(raw);
+  return Number.isInteger(pr) && pr > 0 ? pr : null;
+}
+
+async function findCardReview(cardId: string, pr: number | undefined): Promise<Review | undefined> {
+  if (pr !== undefined) return prReview(await listReviewsFollowedBy([cardId]), pr);
+  return (await activeReviewFor(cardId)) ?? newest(await listReviewsForCards([cardId]));
+}
+
 /**
  * Whether each side's AI is in a turn RIGHT NOW (`isBusy`: the hooks' status, or the native chat's turn).
  * The phase only changes when a tool lands; this changes the instant the AI starts or stops working, and
@@ -107,11 +121,9 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
    * answer, so `merging: false` never goes out together with a stale `ready` (`reviewForRead`).
    */
   app.get<{ Params: { id: string }; Querystring: { pr?: string } }>("/api/cards/:id/review", { preHandler: requireCardAccess }, async (req, reply) => {
-    const pr = req.query?.pr === undefined ? undefined : Number(req.query.pr);
-    if (pr !== undefined && (!Number.isInteger(pr) || pr <= 0)) return await reply.code(400).send({ error: "pr inválido" });
-    const found = pr === undefined
-      ? (await activeReviewFor(req.params.id)) ?? newest(await listReviewsForCards([req.params.id]))
-      : prReview(await listReviewsFollowedBy([req.params.id]), pr);
+    const pr = parsePrQuery(req.query?.pr);
+    if (pr === null) return await reply.code(400).send({ error: "pr inválido" });
+    const found = await findCardReview(req.params.id, pr);
     if (!found) return await reply.send({ review: null });
     const { review, merging } = await reviewForRead(found);
     const reviewerRoundOpen = (review.phase === "reviewing" || review.phase === "impasse") && review.lastSubmitRound !== review.round;
@@ -119,16 +131,46 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
     return await reply.send({ review, working: await sidesWorking(review), merging, fleet });
   });
 
+  app.get<{ Params: { id: string; runId: string; agentId: string }; Querystring: { pr?: string } }>(
+    "/api/cards/:id/review/agents/:runId/:agentId/feed", { preHandler: requireCardAccess }, async (req, reply) => {
+      const pr = parsePrQuery(req.query?.pr);
+      if (pr === null) return await reply.code(400).send({ error: "pr inválido" });
+      const review = await findCardReview(req.params.id, pr);
+      if (!review) return await reply.code(404).send({ error: "review not found" });
+      const feed = await readCardAgentFeed(review.reviewerCardId, { runId: req.params.runId, agentId: req.params.agentId });
+      switch (feed.error) {
+        case undefined:
+          return await reply.send({ items: feed.items });
+        case "invalid-id":
+          return await reply.code(400).send({ error: "invalid workflow id" });
+        case "no-session":
+          return await reply.code(409).send({ error: "the reviewer's session is not open" });
+        case "probe-failed":
+          return await reply.code(502).send({ error: "could not read the agent's steps from the runner" });
+      }
+    },
+  );
+
   app.get<{ Params: { id: string } }>("/api/cards/:id/analysis", { preHandler: requireCardAccess }, async (req, reply) => {
+    await syncAnalysisWithGithub(req.params.id);
     const analysis = await getAnalysis(req.params.id);
     if (!analysis) return await reply.send({ analysis: null });
     const health = Object.fromEntries(ANALYSIS_DIMENSIONS.map((dimension) => [dimension, dimensionHealth(analysis, dimension)]));
     const card = await registry.getCard(req.params.id);
     const pr = card && analysedPr(card, analysis);
-    const canMerge = requestCardLevel(req) === "work" && pr !== undefined && isAnalysisMergeable(analysis, pr);
+    const mergeable = pr !== undefined && isAnalysisMergeable(analysis, pr);
+    const canMerge = requestCardLevel(req) === "work" && mergeable;
+    const lastMergeRefusal = pr?.mergedAt === undefined
+      ? currentMergeRefusal(analysis, await getAnalysisMergeRefusal(req.params.id))
+      : undefined;
+    if (mergeable) await startAnalysisMergeGate(req.params.id);
+    const mergeGate = mergeable ? currentMergeGate(analysis, await getAnalysisMergeGate(req.params.id)) : undefined;
     return await reply.send({
       analysis, health, verdict: analysisVerdict(analysis), uncheckedDimensions: uncheckedDimensions(analysis), canMerge,
+      merging: isAnalysisMerging(req.params.id),
       ...(pr?.mergedAt !== undefined ? { mergedAt: pr.mergedAt } : {}),
+      ...(lastMergeRefusal ? { lastMergeRefusal } : {}),
+      ...(mergeGate ? { mergeGate } : {}),
     });
   });
 
@@ -139,6 +181,17 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
       return await reply.send({ conversation: await readAnalysisConversation(card) });
     } catch (err) {
       return await sendError(reply, err, { fallback: 502 });
+    }
+  });
+
+  app.post<{ Params: { id: string } }>("/api/cards/:id/analysis/merge-gate", { preHandler: requireCardWork }, async (req, reply) => {
+    try {
+      const outcome = await startAnalysisMergeGate(req.params.id, { again: true });
+      if (outcome.kind !== "refused") return await reply.send({ mergeGate: outcome.mergeGate });
+      const { kind: _refused, status, ...body } = outcome;
+      return await reply.code(status).send(body);
+    } catch (err) {
+      return await sendError(reply, err, { fallback: 500 });
     }
   });
 

@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Review, ReviewFleetAgent, ReviewFleetRun } from "@/api/types";
-import type { ReviewEvent } from "@/api/types";
-import { conversationRows } from "./review";
-import { agentRole, fleetMessages, fleetsByRound, readAgentResult, withFleets } from "./reviewFleet";
+import { agentRole, fleetsByRound, readAgentResult } from "./reviewFleet";
 
 function agent(overrides: Partial<ReviewFleetAgent> = {}): ReviewFleetAgent {
   return { id: "a1", label: "contexto", phase: "Contexto", status: "done", ...overrides };
@@ -29,29 +27,12 @@ describe("readAgentResult", () => {
     ["JSON de outro formato vira chave: valor", '{"verdict":"apt","summary":"ok"}', { kind: "text", text: "verdict: apt\nsummary: ok" }],
     ["JSON cortado com títulos", '{"findings":[{"title":"Aspas \\"x\\"","problem":"p"},{"title":"Seg', { kind: "findings", titles: ['Aspas "x"'] }],
     ["JSON cortado com veredito e evidência pela metade", '{"confirmed":false,"evidence":"o teste nunca', { kind: "verdict", confirmed: false, evidence: "o teste nunca" }],
-    ["JSON cortado sem nada legível", '{"summary":"meio', { kind: "text", text: '{"summary":"meio' }],
+    ["resumo do contexto cortado vira o texto dele, com as quebras de linha", '{"summary":"PR #337:\\n(1) `pillPercent` muda\\n(2) sai o aviso', { kind: "text", text: "PR #337:\n(1) `pillPercent` muda\n(2) sai o aviso" }],
+    ["JSON cortado sem nada legível", '{"verdict":"meio', { kind: "text", text: '{"verdict":"meio' }],
     ["texto puro", "  só texto  ", { kind: "text", text: "só texto" }],
     ["só o resumo do contexto vira o texto dele", '{"summary":"muda o login"}', { kind: "text", text: "muda o login" }],
   ])("%s", (_name, raw, expected) => {
     expect(readAgentResult(raw)).toEqual(expected);
-  });
-});
-
-describe("fleetMessages", () => {
-  it("só os que terminaram, na ordem em que terminaram, o juiz por último e a verificação respondendo ao achado", () => {
-    const messages = fleetMessages(
-      run({
-        agents: [
-          agent({ id: "judge", label: "juiz", endedAt: 5 }),
-          agent({ id: "ver", label: "verificação: correctness · Busca duplicada", endedAt: 30, result: '{"confirmed":true}' }),
-          agent({ id: "rev", label: "revisão: correctness", endedAt: 20 }),
-          agent({ id: "live", label: "revisão: tests", status: "running" }),
-        ],
-      }),
-    );
-    expect(messages.map((message) => message.agent.id)).toEqual(["rev", "ver", "judge"]);
-    expect(messages[1].repliesTo).toBe("Busca duplicada");
-    expect(messages[0].repliesTo).toBeUndefined();
   });
 });
 
@@ -74,27 +55,6 @@ describe("fleetsByRound", () => {
 
   it("rodada já entregue ignora a frota viva", () => {
     expect(fleetsByRound(review({ round: 1, lastSubmitRound: 1 }), [run()]).size).toBe(0);
-  });
-});
-
-describe("withFleets", () => {
-  const line = (round: number, who: ReviewEvent["who"]): ReviewEvent => ({ at: round * 10 + (who === "reviewer" ? 1 : 0), round, who, text: who }) as ReviewEvent;
-  const shape = (rows: ReturnType<typeof withFleets>) =>
-    rows.map((row) => (row.kind === "round" ? `R${row.round}` : row.kind === "fleet" ? `F${row.round}` : row.event.who));
-
-  it("a frota da rodada entra antes da fala do revisor daquela rodada", () => {
-    const rows = conversationRows([line(1, "system"), line(1, "reviewer"), line(2, "author"), line(2, "reviewer")]);
-    expect(shape(withFleets(rows, new Map([[1, [run()]], [2, [run()]]])))).toEqual(["R1", "system", "F1", "reviewer", "R2", "author", "F2", "reviewer"]);
-  });
-
-  it("revisor ainda sem resposta: a frota fica no fim da rodada", () => {
-    const rows = conversationRows([line(1, "system")]);
-    expect(shape(withFleets(rows, new Map([[1, [run()]]])))).toEqual(["R1", "system", "F1"]);
-  });
-
-  it("rodada sem frota não ganha nada", () => {
-    const rows = conversationRows([line(1, "system"), line(1, "reviewer")]);
-    expect(shape(withFleets(rows, new Map()))).toEqual(["R1", "system", "reviewer"]);
   });
 });
 

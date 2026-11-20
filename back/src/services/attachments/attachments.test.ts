@@ -128,8 +128,8 @@ describe("conversor de documentos (read-document.py)", () => {
   });
 });
 
-describe("extração do áudio para o Whisper", () => {
-  it("formato aceito pelo Whisper vai como veio, com a extensão original", () => {
+describe("extração do áudio para a transcrição", () => {
+  it("formato aceito pela transcrição vai como veio, com a extensão original", () => {
     const caminho = join(dir, "voz.ogg");
     writeFileSync(caminho, "OggS-bytes");
     const r = rodar(buildExtractAudioScript(caminho));
@@ -139,7 +139,7 @@ describe("extração do áudio para o Whisper", () => {
     expect(extraido.audio.toString()).toBe("OggS-bytes");
   });
 
-  it.skipIf(!temFfmpeg)(".opus (fora da lista do Whisper) é convertido para mp3", () => {
+  it.skipIf(!temFfmpeg)(".opus (fora da lista da transcrição) é convertido para mp3", () => {
     const caminho = join(dir, "zap.opus");
     execFileSync("ffmpeg", ["-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "libopus", "-y", caminho]);
     const extraido = parseExtractedAudio(rodar(buildExtractAudioScript(caminho)).stdout, caminho);

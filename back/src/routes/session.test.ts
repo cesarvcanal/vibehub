@@ -63,6 +63,7 @@ const cardVncBridge = vi.fn();
 let markCardHumanActive: (cardId: string) => Promise<unknown> = async () => undefined;
 /** Records the status writes the websocket makes (the real write still happens behind it). */
 const appliedStatus = vi.fn();
+const humanActiveTypists = vi.fn();
 
 async function boot(): Promise<FastifyInstance> {
   vi.resetModules();
@@ -108,7 +109,10 @@ async function boot(): Promise<FastifyInstance> {
     );
     return {
       ...actual,
-      markCardHumanActive: (cardId: string) => markCardHumanActive(cardId),
+      markCardHumanActive: (cardId: string, userId?: string) => {
+        humanActiveTypists(cardId, userId);
+        return markCardHumanActive(cardId);
+      },
       applyCardStatus: async (cardId: string, status: Parameters<typeof actual.applyCardStatus>[1]) => {
         appliedStatus(cardId, status);
         return await actual.applyCardStatus(cardId, status);
@@ -425,14 +429,23 @@ describe("terminal transport tuning", () => {
 
 describe("human-active stamping throttle", () => {
   it("writes at most once per window per card, then again after it passes", async () => {
-    const { shouldStampHumanActive, resetHumanStampThrottleForTesting, HUMAN_ACTIVE_THROTTLE_MS } = await import("./session.js");
+    const { shouldStampHumanActive, resetHumanStampThrottleForTesting } = await import("./session.js");
+    const { HUMAN_ACTIVE_THROTTLE_MS } = await import("../services/board/registry.js");
     resetHumanStampThrottleForTesting();
     const t0 = 1_000_000;
-    expect(shouldStampHumanActive("card-a", t0)).toBe(true); // first keystroke stamps
-    expect(shouldStampHumanActive("card-a", t0 + 100)).toBe(false); // within the window — no write
-    expect(shouldStampHumanActive("card-a", t0 + HUMAN_ACTIVE_THROTTLE_MS)).toBe(true); // window passed
-    // the gate is per-card
-    expect(shouldStampHumanActive("card-b", t0 + 100)).toBe(true);
+    expect(shouldStampHumanActive("card-a", "u-mussa", t0)).toBe(true);
+    expect(shouldStampHumanActive("card-a", "u-mussa", t0 + 100)).toBe(false);
+    expect(shouldStampHumanActive("card-a", "u-mussa", t0 + HUMAN_ACTIVE_THROTTLE_MS)).toBe(true);
+    expect(shouldStampHumanActive("card-b", "u-mussa", t0 + 100)).toBe(true);
+  });
+
+  it("a tecla de outra pessoa dentro da janela do limite também grava a marca", async () => {
+    const { shouldStampHumanActive, resetHumanStampThrottleForTesting } = await import("./session.js");
+    resetHumanStampThrottleForTesting();
+    const t0 = 1_000_000;
+    expect(shouldStampHumanActive("card-a", "u-mussa", t0)).toBe(true);
+    expect(shouldStampHumanActive("card-a", "u-cesar", t0 + 100)).toBe(true);
+    expect(shouldStampHumanActive("card-a", "u-cesar", t0 + 200)).toBe(false);
   });
 });
 
@@ -593,6 +606,22 @@ describe("terminal websocket setup", () => {
     await vi.waitFor(() => expect(appliedStatus).toHaveBeenCalledWith(id, "working"));
     await settle();
     expect((await events.inboxFor(owner)).events).toEqual([]);
+    ws.close();
+    await closed(ws);
+  });
+
+  it("a tecla no terminal carimba a marca human-active com quem digitou", async () => {
+    const { resetHumanStampThrottleForTesting } = await import("./session.js");
+    resetHumanStampThrottleForTesting();
+    ptySpawn.mockReturnValueOnce(fakeTerm());
+    openCard.mockResolvedValueOnce(undefined);
+    const users = await import("../auth/users.js");
+    const owner = (await users.listUsers()).find((user) => user.username === "owner")!;
+    const id = await makeCard();
+    const ws = await connect(`/api/cards/${id}/terminal`);
+    await vi.waitFor(() => expect(ptySpawn).toHaveBeenCalled());
+    ws.send("x");
+    await vi.waitFor(() => expect(humanActiveTypists).toHaveBeenCalledWith(id, owner.id));
     ws.close();
     await closed(ws);
   });

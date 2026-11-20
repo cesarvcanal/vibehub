@@ -7,6 +7,7 @@ import { formatAgentResult, type SdkRow, type WorkflowAgentFrame } from "@/featu
 import { WorkflowFeedContext, type WorkflowFeedResponse } from "@/features/board/lib/workflowFeed";
 import {
   estimateWorkflowRemaining,
+  FEED_POLL_MS,
   feedLines,
   formatWholeSeconds,
   groupAgentsByPhase,
@@ -17,9 +18,6 @@ import {
 } from "@/features/board/lib/workflowPanel";
 
 type WorkflowRow = Extract<SdkRow, { kind: "workflow" }>;
-
-/** How often the feed of an open, still-running agent is requested again. */
-export const FEED_POLL_MS = 4_000;
 
 /**
  * THE FLEET PANEL — the workflow organized the way IDEs do it.
@@ -239,7 +237,8 @@ function AgentItem({
   const done = agent.status === "done";
   const stopped = isStopped(agent, finished);
   const time = agentTime(agent, now, stopped);
-  const doing = stopped ? t("sdk.workflowAgentStopped") : nowLine(agent, now, t);
+  const doing = agent.error ? t("sdk.workflowAgentFailed", { error: agent.error })
+    : stopped ? t("sdk.workflowAgentStopped") : nowLine(agent, now, t);
   return (
     <li>
       <button
@@ -269,7 +268,10 @@ function AgentItem({
           ) : null}
         </span>
         {doing ? (
-          <span data-testid="workflow-agent-now" className="block w-full truncate pl-[18px] text-[11px] text-muted-foreground">
+          <span
+            data-testid="workflow-agent-now"
+            className={cn("block w-full pl-[18px] text-[11px]", agent.error ? "text-destructive [overflow-wrap:anywhere]" : "truncate text-muted-foreground")}
+          >
             {doing}
           </span>
         ) : null}
@@ -379,13 +381,15 @@ function AgentFeed({
       className="ml-[18px] mt-1 space-y-1 rounded border border-border/60 bg-background/70 px-2 py-1.5 text-[11px] text-muted-foreground"
     >
       <p className="text-foreground/80">{t("sdk.workflowTask", { task: agent.label || t("sdk.workflowAgentUnnamed") })}</p>
-      <FeedBody feed={feed} lines={lines} t={t} />
+      <FeedBody status={!feed ? "loading" : feed.error ? "failed" : "read"} lines={lines} />
       <div
         data-testid="sdk-workflow-result"
         className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/50 px-1.5 py-1"
       >
         {done ? (
           agent.result ? formatAgentResult(agent.result) : t("sdk.workflowNoResult")
+        ) : agent.error ? (
+          t("sdk.workflowAgentFailed", { error: agent.error })
         ) : stopped ? (
           t("sdk.workflowAgentStoppedDetail")
         ) : (
@@ -400,10 +404,11 @@ function AgentFeed({
   );
 }
 
-function FeedBody({ feed, lines, t }: { feed: WorkflowFeedResponse | null; lines: FeedLine[]; t: Translate }) {
-  if (!feed) return <p className="italic text-muted-foreground/70">{t("sdk.workflowFeedLoading")}</p>;
+export function FeedBody({ status, lines }: { status: "loading" | "failed" | "read"; lines: FeedLine[] }) {
+  const t = useT();
+  if (status === "loading") return <p className="italic text-muted-foreground/70">{t("sdk.workflowFeedLoading")}</p>;
   if (lines.length === 0) {
-    return <p className="italic text-muted-foreground/70">{t(feed.error ? "sdk.workflowFeedError" : "sdk.workflowFeedEmpty")}</p>;
+    return <p className="italic text-muted-foreground/70">{t(status === "failed" ? "sdk.workflowFeedError" : "sdk.workflowFeedEmpty")}</p>;
   }
   return (
     <ul className="max-h-56 space-y-0.5 overflow-auto">

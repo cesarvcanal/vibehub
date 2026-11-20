@@ -3,6 +3,7 @@ import {
   applyAuthorResponses,
   applyReviewerVerdicts,
   autoMergeEligible,
+  fleetRunForReaders,
   waivedSuggestions,
   blockingOpen,
   normalizeSubmittedFindings,
@@ -270,5 +271,27 @@ describe("requested — o pedido ao autor acaba quando o achado muda de mão (f1
   it("o veredito do revisor apaga o pedido", () => {
     const r = review([finding({ severity: "suggestion", requested })]);
     expect(applyReviewerVerdicts(r, [{ id: "f1", status: "open" }])[0]!.requested).toBeUndefined();
+  });
+});
+
+describe("fleetRunForReaders — o que a tela da revisão recebe da frota", () => {
+  it("o motivo de um agente que falhou chega à tela, sem o resto do quadro da sonda", () => {
+    const run = fleetRunForReaders({
+      runId: "wf_1", name: "vibehub-pr-analysis", phases: ["Julgamento"], total: 1, done: 0, at: 1, finished: true, outcome: "failed",
+      agents: [{ id: "a1", label: "juiz", phase: "Julgamento", status: "stopped", error: "You've hit your session limit", toolCount: 3 }],
+    });
+    expect(run.agents).toEqual([{ id: "a1", label: "juiz", phase: "Julgamento", status: "stopped", error: "You've hit your session limit" }]);
+  });
+
+  it.each([
+    { model: "claude-sonnet-5-5", modelLabel: "Sonnet 5.5" },
+    { model: "claude-opus-4-1-20250805", modelLabel: "Opus 4.1" },
+    { model: "sonnet", modelLabel: "Sonnet" },
+  ])("o modelo $model chega à tela com o nome e a versão: $modelLabel", ({ model, modelLabel }) => {
+    const run = fleetRunForReaders({
+      runId: "wf_1", name: "vibehub-pr-analysis", phases: ["Revisão"], total: 1, done: 0, at: 1, finished: false,
+      agents: [{ id: "a1", label: "revisão: tests", phase: "Revisão", model, status: "running", toolCount: 0 }],
+    });
+    expect(run.agents[0]).toMatchObject({ model, modelLabel });
   });
 });

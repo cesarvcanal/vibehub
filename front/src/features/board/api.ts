@@ -284,6 +284,8 @@ export const boardApi = {
 
   mergeCardAnalysis: (cardId: string) => post<unknown>(`/cards/${encodeURIComponent(cardId)}/analysis/merge`),
 
+  rerunCardAnalysisMergeGate: (cardId: string) => post<unknown>(`/cards/${encodeURIComponent(cardId)}/analysis/merge-gate`),
+
   /** Opens the analysis card of a PR (or answers with the active one). */
   startPrAnalysis: (id: string, prNumber: number, roles: AnalysisRoles) =>
     post<PrAnalysisStart>(`/projects/${encodeURIComponent(id)}/prs/${prNumber}/analysis`, roles),

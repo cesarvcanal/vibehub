@@ -40,6 +40,7 @@ import { TerminalComposer } from "@/features/board/components/TerminalComposer";
 import { CardOutbox } from "@/features/board/components/CardOutbox";
 import { SdkQueueTray } from "@/features/board/components/SdkQueueTray";
 import { PrReviewBlocks } from "@/features/board/components/PrReviewBlock";
+import { ReviewColumn } from "@/features/board/components/ReviewColumn";
 import { ReviewPanel } from "@/features/board/components/ReviewPanel";
 import { AnalysisPanel } from "@/features/board/components/AnalysisPanel";
 import { cardState, nextPosition, wantsReviewPanel, withoutReviewFlag } from "@/features/board/lib/board";
@@ -431,7 +432,6 @@ export function CardTerminalView({
   const usagePercent = pillPercent(inUseUsage);
   const now = useMinuteTick();
 
-  /** The percentage of ONE account, for the menu rows — absent when that account has no numbers. */
   const menuPercent = (slug: string) => pillPercent(usageBySlug[slug]);
 
   /* ------------------------------------------------------------------ state */
@@ -1017,14 +1017,14 @@ export function CardTerminalView({
                     <button
                       type="button"
                       aria-label={t("cardView.claudeAccount")}
-                      className={PILL}
+                      className={cn(PILL, "inline-flex max-w-[14rem] items-center")}
                       disabled={accountMutation.isPending}
                     >
                       {/* The pill names the account that is SIGNED IN, plus how much of its 5-hour
                           window is gone — the one number that stops a card mid-turn. */}
-                      {accountName}
+                      <span className="min-w-0 truncate">{accountName}</span>
                       {usagePercent ? (
-                        <span className="ml-1 font-mono tabular-nums opacity-70">· {usagePercent}</span>
+                        <span className="ml-1 shrink-0 whitespace-nowrap font-mono tabular-nums opacity-70">· {usagePercent}</span>
                       ) : null}
                     </button>
                   </DropdownMenuTrigger>
@@ -1388,16 +1388,14 @@ export function CardTerminalView({
               <VncPanel cardId={cardId} onClose={closeBrowserPane} />
             </div>
           ) : null}
-          {/* The PR review: a column of its own at the right. The review is a list to read, not a
-              screen to share, so on a wide display it keeps a fixed width instead of taking half. */}
           {reviewOpen ? (
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:w-[26rem] lg:flex-none">
+            <ReviewColumn besidePanes={browserOpen ? 2 : 1}>
               {analysisCard ? (
                 <AnalysisPanel cardId={cardId} onClose={() => setReviewOpen(false)} />
               ) : (
                 <ReviewPanel key={reviewPr ?? "card"} cardId={cardId} prNumber={reviewPr} onClose={() => setReviewOpen(false)} />
               )}
-            </div>
+            </ReviewColumn>
           ) : null}
         </div>
       )}

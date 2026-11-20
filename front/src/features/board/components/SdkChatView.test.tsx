@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Profiler, act } from "react";
@@ -540,6 +540,18 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
     expect(screen.getByTestId("sdk-question")).toHaveTextContent("Resumo");
     ws.deliver({ type: "question_result", id: "q_1", answers: [{ selected: ["Resumo"] }] });
     expect(screen.getByTestId("sdk-question")).toHaveAttribute("data-outcome", "answered");
+  });
+
+  it("a explicação de cada opção aparece embaixo do título, dentro do botão", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(QUESTION);
+
+    const option = screen.getByRole("button", { name: "Detalhado" });
+    expect(within(option).getByText("Explicação completa")).toBeVisible();
+    expect(option).toHaveAccessibleDescription("Explicação completa");
   });
 
   it("multiSelect collects the picks and sends them together on 'Answer'", async () => {
@@ -1470,6 +1482,41 @@ describe("SdkChatView — responder A decisão (não um recado solto)", () => {
 
     await userEvent.click(screen.getByTestId("pending-tray-item"));
     expect(screen.queryByTestId("sdk-reply-banner")).toBeNull();
+  });
+
+  it("pergunta em prosa com lista: cada item vira botão com título e explicação, e o clique responde", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({
+      type: "assistant_text",
+      text: "Revisei o PR.\n\nDecisão sua:\n1. **Crio o PR de teste (recomendado)** — confiro o conflito de ponta a ponta antes do merge.\n2. **Merge agora** — você aceita a pendência.",
+    });
+    ws.deliver({ type: "result", isError: false });
+
+    const options = screen.getAllByTestId("sdk-prose-option");
+    expect(options).toHaveLength(2);
+    expect(within(options[0]!).getByText("confiro o conflito de ponta a ponta antes do merge.")).toBeVisible();
+    expect(screen.getByTestId("sdk-prose-question")).not.toHaveTextContent("1.");
+
+    await userEvent.click(screen.getByRole("button", { name: "Merge agora" }));
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    const frame = JSON.parse(ws.sent[0]!);
+    expect(frame.type).toBe("user");
+    expect(frame.text).toContain("Decisão sua:");
+    expect(frame.text).toMatch(/\n\nMerge agora$/);
+    expect(screen.getByTestId("sdk-prose-question")).toHaveAttribute("data-answered", "true");
+    expect(screen.getByTestId("sdk-prose-answered")).toHaveTextContent("Merge agora");
+    expect(screen.queryByTestId("sdk-prose-option")).toBeNull();
+  });
+
+  it("a pergunta com opções que o agente deixou para trás não oferece mais os botões", async () => {
+    const ws = await chatWithProseQuestion();
+    ws.deliver({ type: "assistant_text", text: "Qual você prefere?\n1. A\n2. B" });
+    ws.deliver({ type: "assistant_text", text: "Fui de A." });
+    await waitFor(() => expect(screen.queryByTestId("pending-tray")).toBeNull());
+    expect(screen.queryByTestId("sdk-prose-option")).toBeNull();
   });
 
   it("o AGENTE seguiu sozinho: a pergunta antiga sai da bandeja e o alvo cai junto", async () => {
@@ -2626,6 +2673,25 @@ describe("SdkChatView — todo erro diz o que houve", () => {
  * the clock and the escalation, and jumps to the live edge when clicked.
  */
 describe("SdkChatView — the activity bar", () => {
+  it("comando do agente rodando além do limite mostra o aviso de espera, e Interromper para o turno", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "user", text: "checa e já me fala" });
+    ws.deliver({ type: "tool_use", id: "t1", name: "Bash", input: { description: "Espera o fim da bateria", command: "timeout 400 sh -c 'until grep -q EXIT x.log; do sleep 5; done'" } });
+    ws.deliver({ type: "tool_progress", id: "t1", elapsedSeconds: 60 });
+    expect(screen.queryByTestId("long-tool-wait-notice")).toBeNull();
+
+    ws.deliver({ type: "tool_progress", id: "t1", elapsedSeconds: 190 });
+    expect(screen.getByTestId("long-tool-wait-notice")).toHaveTextContent("Espera o fim da bateria");
+    fireEvent.click(within(screen.getByTestId("long-tool-wait-notice")).getByRole("button"));
+    expect(ws.sent.map((frame) => JSON.parse(frame) as unknown)).toContainEqual({ type: "interrupt" });
+
+    ws.deliver({ type: "tool_result", id: "t1", toolResult: {} });
+    expect(screen.queryByTestId("long-tool-wait-notice")).toBeNull();
+  });
+
   it("is absent at rest and appears with the turn, naming the newest step", async () => {
     renderSdkChat();
     const ws = await socket();
@@ -2884,6 +2950,56 @@ describe("SdkChatView — subagentes", () => {
     expect(within(dialog).getByTestId("sdk-timeline-tool")).toHaveTextContent("Read(sdkChat.ts)");
     expect(within(dialog).getByTestId("sdk-timeline-tool")).toHaveTextContent("40 lines");
     expect(within(dialog).getByTestId("sdk-agent-now")).toHaveTextContent("Lendo o reducer");
+  });
+
+  async function openFinishedSubagent(prompt: string, report: string): Promise<HTMLElement> {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(agentCall);
+    ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "completed", toolUses: 3 });
+    fireEvent.click(within(screen.getByTestId("sdk-fleet")).getByTestId("sdk-fleet-agent"));
+    const dialog = await screen.findByTestId("sdk-detail");
+    await waitFor(() => expect(ws.sent.some((frame) => (JSON.parse(frame) as { req?: string }).req === "agent")).toBe(true));
+    const ask = ws.sent.map((frame) => JSON.parse(frame) as { req?: string; nonce?: string }).find((frame) => frame.req === "agent")!;
+    ws.deliver({
+      type: "detail", req: "agent", id: "t1", nonce: ask.nonce,
+      data: { found: true, prompt, items: [{ kind: "text", at: 3, text: report }] },
+    } as never);
+    await within(dialog).findByTestId("sdk-timeline-text");
+    return dialog;
+  }
+
+  it("a aba Tarefa mostra as entregas do subagente marcadas pelo relatório, e o contexto à parte", async () => {
+    const dialog = await openFinishedSubagent(
+      "Explore o **chat**.\n\n- [ ] Achar o reducer\n- [ ] Medir o render",
+      "- [x] Achar o reducer\n- [ ] Medir o render — sem tempo\n\n### O que achei",
+    );
+
+    fireEvent.click(within(dialog).getByTestId("sdk-agent-tab-task"));
+    const deliverables = within(dialog).getAllByTestId("sdk-agent-deliverable");
+    expect(deliverables.map((row) => [row.textContent, row.getAttribute("data-state")])).toEqual([
+      [expect.stringContaining("Achar o reducer"), "done"],
+      [expect.stringContaining("Medir o render"), "missed"],
+    ]);
+    expect(within(dialog).getByTestId("sdk-agent-deliverables-progress")).toHaveTextContent("1 of 2 done");
+    const context = within(dialog).getByTestId("sdk-agent-task-context");
+    expect(within(context).getByText("chat").tagName).toBe("STRONG");
+    expect(context).not.toHaveTextContent("Achar o reducer");
+  });
+
+  it("a aba Relatório lê como documento: títulos de seção de verdade e a lista de entregas com ícone de feito", async () => {
+    const dialog = await openFinishedSubagent(
+      "Explore",
+      "- [x] Achar o reducer\n- [ ] Medir o render\n\n## Veredito: não apto\n\n### 1. O reducer duplica a linha\n\nTexto.",
+    );
+
+    fireEvent.click(within(dialog).getByTestId("sdk-agent-tab-report"));
+    const report = within(dialog).getByTestId("sdk-agent-report");
+    expect(within(report).getByRole("heading", { level: 2 })).toHaveTextContent("Veredito: não apto");
+    expect(within(report).getByRole("heading", { level: 3 })).toHaveTextContent("1. O reducer duplica a linha");
+    expect(within(report).getAllByTestId("markdown-task-mark").map((mark) => mark.getAttribute("data-checked"))).toEqual(["true", "false"]);
   });
 
   it("o texto do subagente não vira resposta do agente principal", async () => {
@@ -4851,6 +4967,10 @@ describe("SdkChatView — o medidor de contexto", () => {
   afterEach(() => cleanup());
 
   it("só aparece com leitura, muda de faixa conforme a conversa cresce e some com um driver novo", async () => {
+    vi.useFakeTimers({ toFake: ["performance"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -4871,6 +4991,8 @@ describe("SdkChatView — o medidor de contexto", () => {
 
     // A skewed reading does not erase the one that counts.
     ws.deliver({ type: "context_usage", usedTokens: 10 } as SdkEvent);
+    vi.advanceTimersByTime(700);
+    runAnimationFrames();
     expect(screen.getByTestId("context-meter-value")).toHaveTextContent("70%");
 
     ws.deliver({ type: "ready" });
@@ -4942,7 +5064,34 @@ describe("SdkChatView — o medidor de contexto", () => {
     expect(screen.getByTestId("jump-latest")).not.toHaveClass("bottom-3");
   });
 
-  it("o guia mostra os tokens, as três faixas e destaca a de agora", async () => {
+  it("leitura nova: o número conta passando pelos valores do meio até chegar, e o aria-label já diz o valor novo", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "context_usage", usedTokens: 20_000, maxTokens: 200_000, percent: 10 } as SdkEvent);
+    expect(screen.getByTestId("context-meter-value")).toHaveTextContent("10%");
+
+    vi.useFakeTimers({ toFake: ["performance"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    ws.deliver({ type: "context_usage", usedTokens: 80_000, maxTokens: 200_000, percent: 40 } as SdkEvent);
+    expect(screen.getByTestId("context-meter").getAttribute("aria-label")).toContain("40%");
+    const shownEachStep = Array.from({ length: 10 }, () => {
+      vi.advanceTimersByTime(100);
+      runAnimationFrames();
+      return screen.getByTestId("context-meter-value").textContent;
+    });
+    expect(shownEachStep.at(-1)).toBe("40%");
+    expect(shownEachStep.filter((text) => text !== "10%" && text !== "40%").length).toBeGreaterThan(0);
+  });
+
+  it("o guia mostra os tokens, as três faixas e destaca a de agora, com a bolinha deslizando até o ponto atual", async () => {
+    vi.useFakeTimers({ toFake: ["performance"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -4954,67 +5103,25 @@ describe("SdkChatView — o medidor de contexto", () => {
     const zones = within(guide).getAllByTestId("context-zone");
     expect(zones.map((z) => z.getAttribute("data-zone"))).toEqual(["smart", "warn", "danger"]);
     expect(zones.filter((z) => z.getAttribute("data-current") === "true").map((z) => z.getAttribute("data-zone"))).toEqual(["warn"]);
-    expect(within(guide).getByTestId("context-guide-marker").style.left).toBe("42%");
+    const marker = within(guide).getByTestId("context-guide-marker");
+    expect(parseFloat(marker.style.left)).toBeLessThan(42);
+    vi.advanceTimersByTime(700);
+    runAnimationFrames();
+    expect(marker.style.left).toBe("42%");
   });
 
-  it("acima de 30% vira aviso que o dev pode esconder; acima de 60% faixa de perigo que não se esconde", async () => {
+  it.each([
+    { percent: 42, zone: "attention" },
+    { percent: 65, zone: "danger" },
+  ])("contexto em $percent%: só o medidor diz $zone, sem faixa de aviso embaixo do chat", async ({ percent, zone }) => {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
     ws.deliver({ type: "ready" });
-    ws.deliver({ type: "context_usage", usedTokens: 50_000, maxTokens: 200_000, percent: 25 } as SdkEvent);
-    expect(screen.queryByTestId("context-notice")).toBeNull();
-    expect(screen.queryByTestId("context-meter-icon")).toBeNull();
-
-    ws.deliver({ type: "context_usage", usedTokens: 84_000, maxTokens: 200_000, percent: 42 } as SdkEvent);
-    const warn = screen.getByTestId("context-notice");
-    expect(warn.getAttribute("data-zone")).toBe("warn");
-    expect(warn.getAttribute("role")).toBe("status");
-    expect(warn).toHaveTextContent("Context at 42%");
-    expect(screen.getByTestId("context-meter")).toHaveTextContent("attention");
+    ws.deliver({ type: "context_usage", usedTokens: percent * 2_000, maxTokens: 200_000, percent } as SdkEvent);
+    expect(screen.getByTestId("context-meter")).toHaveTextContent(zone);
     expect(screen.getByTestId("context-meter-icon")).toBeTruthy();
-
-    fireEvent.click(screen.getByTestId("context-notice-dismiss"));
-    expect(screen.queryByTestId("context-notice")).toBeNull();
-    // With the warning hidden, the meter still says "attention".
-    expect(screen.getByTestId("context-meter")).toHaveTextContent("attention");
-
-    // It reached danger: the strip comes back, red, and without a hide button.
-    ws.deliver({ type: "context_usage", usedTokens: 130_000, maxTokens: 200_000, percent: 65 } as SdkEvent);
-    const danger = screen.getByTestId("context-notice");
-    expect(danger.getAttribute("data-zone")).toBe("danger");
-    expect(danger.getAttribute("role")).toBe("alert");
-    expect(danger).toHaveTextContent("AI in the danger zone: 65%");
-    expect(danger).toHaveTextContent("compacts the conversation on its own");
-    expect(danger).not.toHaveTextContent("/compact");
-    expect(screen.queryByTestId("context-notice-dismiss")).toBeNull();
-    expect(screen.getByTestId("context-meter")).toHaveTextContent("danger");
-
-    // A /compact brings it back to the smart band: everything goes away, and the next warning shows up again.
-    ws.deliver({ type: "context_usage", usedTokens: 20_000, maxTokens: 200_000, percent: 10 } as SdkEvent);
-    expect(screen.queryByTestId("context-notice")).toBeNull();
-    ws.deliver({ type: "context_usage", usedTokens: 70_000, maxTokens: 200_000, percent: 35 } as SdkEvent);
-    expect(screen.getByTestId("context-notice").getAttribute("data-zone")).toBe("warn");
-  });
-
-  it("o aviso escondido continua escondido depois de uma reconexão, e volta depois de passar pelo perigo", async () => {
-    renderSdkChat();
-    const ws = await socket();
-    ws.accept();
-    ws.deliver({ type: "ready" });
-    ws.deliver({ type: "context_usage", usedTokens: 84_000, maxTokens: 200_000, percent: 42 } as SdkEvent);
-    fireEvent.click(screen.getByTestId("context-notice-dismiss"));
-    expect(screen.queryByTestId("context-notice")).toBeNull();
-
-    // Reconnect: `ready` resets the reading and the back resends the same one right behind it.
-    ws.deliver({ type: "ready" });
-    ws.deliver({ type: "context_usage", usedTokens: 86_000, maxTokens: 200_000, percent: 43 } as SdkEvent);
-    expect(screen.queryByTestId("context-notice")).toBeNull();
-
-    // It went to danger and came back (a partial /compact): the worrying warning shows up again.
-    ws.deliver({ type: "context_usage", usedTokens: 130_000, maxTokens: 200_000, percent: 65 } as SdkEvent);
-    ws.deliver({ type: "context_usage", usedTokens: 100_000, maxTokens: 200_000, percent: 50 } as SdkEvent);
-    expect(screen.getByTestId("context-notice").getAttribute("data-zone")).toBe("warn");
+    expect(screen.queryByText(/Context at|danger zone/)).toBeNull();
   });
 
   it("o /clear tira o medidor da conversa apagada", async () => {
@@ -5023,10 +5130,9 @@ describe("SdkChatView — o medidor de contexto", () => {
     ws.accept();
     ws.deliver({ type: "ready" });
     ws.deliver({ type: "context_usage", usedTokens: 130_000, maxTokens: 200_000, percent: 65 } as SdkEvent);
-    expect(screen.getByTestId("context-notice")).toBeTruthy();
+    expect(screen.getByTestId("context-meter")).toBeTruthy();
     ws.deliver({ type: "conversation_reset", trigger: "clear" } as SdkEvent);
     expect(screen.queryByTestId("context-meter")).toBeNull();
-    expect(screen.queryByTestId("context-notice")).toBeNull();
   });
 
   it("o guia avisa que a conversa compacta sozinha antes de 60%, recupera as regras do projeto e segue a tarefa", async () => {

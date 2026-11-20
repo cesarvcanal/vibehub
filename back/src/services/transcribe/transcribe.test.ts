@@ -110,7 +110,7 @@ describe("transcribeCardAudio", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("returns the raw Whisper text when only the OpenAI key exists", async () => {
+  it("returns the raw transcription when only the OpenAI key exists", async () => {
     const { mod, reg } = await fresh();
     await mod.setTranscribeKeys({ openaiKey: "sk-openai-x" });
     const p = await reg.createProject({ name: "p" });
@@ -130,7 +130,7 @@ describe("transcribeCardAudio", () => {
       calls.push(url);
       if (url.includes("openai")) {
         const form = init.body as FormData;
-        expect(form.get("language")).toBe("pt");
+        expect(form.getAll("languages[]")).toEqual(["pt"]);
         return json({ text: "talk about the kiwi" });
       }
       return json({ content: [{ type: "text", text: "Corrected text: talk about the Qive" }] });
@@ -148,7 +148,6 @@ describe("transcribeCardAudio", () => {
     const c = await reg.createCard({ projectId: p.id, title: "c" });
     vi.stubGlobal("fetch", vi.fn(async (url: string) =>
       url.includes("openai") ? json({ text: "raw words" }) : json({ error: "down" }, 500)));
-    // ...and does not CLAIM a proofread that never happened: the text is the raw Whisper one.
     expect(await mod.transcribeCardAudio(c.id, AUDIO, "audio/webm")).toEqual({ text: "raw words", proofread: false });
   });
 
@@ -180,7 +179,7 @@ describe("transcribeCardAudio", () => {
     for (const signal of signals) expect(signal).toBeInstanceOf(AbortSignal);
   });
 
-  it("does NOT proofread by default even with both keys — raw Whisper, the person's exact words", async () => {
+  it("does NOT proofread by default even with both keys — the raw transcription, the person's exact words", async () => {
     // The safe default after the cleanup model kept answering the dictation instead of cleaning it.
     const { mod, reg } = await fresh();
     await mod.setTranscribeKeys({ openaiKey: "sk-openai-x", anthropicKey: "sk-ant-x" });
@@ -195,12 +194,53 @@ describe("transcribeCardAudio", () => {
     expect(fetchMock.mock.calls.some(([u]) => String(u).includes("anthropic"))).toBe(false);
   });
 
-  it("surfaces a Whisper failure with the status", async () => {
+  it("surfaces a transcription failure with the status", async () => {
     const { mod, reg } = await fresh();
     await mod.setTranscribeKeys({ openaiKey: "sk-openai-x" });
     const p = await reg.createProject({ name: "p" });
     const c = await reg.createCard({ projectId: p.id, title: "c" });
     vi.stubGlobal("fetch", vi.fn(async () => new Response("quota", { status: 429 })));
     await expect(mod.transcribeCardAudio(c.id, AUDIO, "audio/webm")).rejects.toThrow(/429/);
+  });
+});
+
+describe("pedido de transcrição ao gpt-transcribe", () => {
+  async function transcriptionFormFor(
+    entry: "microphone" | "audioFile",
+    preferences: { transcribeKeywords: string[]; transcribeLanguage: string | null },
+  ): Promise<FormData> {
+    const { mod, reg, settings } = await fresh();
+    await mod.setTranscribeKeys({ openaiKey: "sk-openai-x" });
+    await settings.updateSettings(preferences);
+    const forms: FormData[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => {
+      forms.push(init.body as FormData);
+      return json({ text: "o Mussa revisou o PR do bank-api" });
+    }));
+    if (entry === "microphone") {
+      const project = await reg.createProject({ name: "p" });
+      const card = await reg.createCard({ projectId: project.id, title: "c" });
+      await mod.transcribeCardAudio(card.id, AUDIO, "audio/webm");
+    } else {
+      await mod.transcribeAudioFile(Buffer.alloc(150), "conversa.ogg");
+    }
+    expect(forms).toHaveLength(1);
+    return forms[0] as FormData;
+  }
+
+  it.each(["microphone", "audioFile"] as const)("o %s manda os termos salvos como keywords e o idioma como languages", async (entry) => {
+    const form = await transcriptionFormFor(entry, { transcribeKeywords: ["vibehub", "erp-aux", "Qive"], transcribeLanguage: "pt" });
+    expect(form.get("model")).toBe("gpt-transcribe");
+    expect(form.getAll("keywords[]")).toEqual(["vibehub", "erp-aux", "Qive"]);
+    expect(form.getAll("languages[]")).toEqual(["pt"]);
+    expect(form.has("language")).toBe(false);
+    expect(form.has("prompt")).toBe(false);
+  });
+
+  it.each(["microphone", "audioFile"] as const)("o %s sem termos nem idioma não manda keywords nem languages", async (entry) => {
+    const form = await transcriptionFormFor(entry, { transcribeKeywords: [], transcribeLanguage: null });
+    expect(form.get("model")).toBe("gpt-transcribe");
+    expect(form.has("keywords[]")).toBe(false);
+    expect(form.has("languages[]")).toBe(false);
   });
 });

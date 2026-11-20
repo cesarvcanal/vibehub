@@ -1,6 +1,7 @@
 import * as React from "react";
 import { api, post } from "@/lib/api";
-import { LiveVoiceSession, type DelegationListener, type DelegationUpdate, type LiveVoiceDeps, type LiveVoiceSnapshot } from "./liveVoice";
+import { useReloadHold } from "@/lib/versionCheck";
+import { LiveVoiceSession, type ToolCallListener, type LiveVoiceDeps, type LiveVoiceSnapshot } from "./liveVoice";
 import { AI_TUNING, LevelMeter, MIC_TUNING, createCallAudioContext, visualLevel } from "./audioLevel";
 import { INITIAL_PHASE, nextPhase, type PhaseMemory, type VoicePhase } from "./voicePhase";
 import { TURN_TEXT_MAX, type LocalVoiceTurn, type TurnSave, type VoiceTurn } from "./voiceTurns";
@@ -198,6 +199,7 @@ export function useVoiceCall({
   }
 
   const active = snap.state === "connecting" || snap.state === "live" || snap.state === "closing";
+  useReloadHold(`voice:${cardId}`, active);
   // The meters follow the streams: the mic from the grant, the assistant's once its track arrives.
   React.useEffect(() => {
     const ctx = ctxRef.current;
@@ -331,21 +333,19 @@ export function useVoiceCall({
   }, [session]);
   const appendContext = React.useCallback((text: string) => session?.appendContext(text) ?? false, [session]);
   const announceContext = React.useCallback((text: string) => session?.announceContext(text) ?? false, [session]);
-  const onDelegation = React.useCallback(
-    (listener: DelegationListener) => session?.onDelegation(listener) ?? (() => false),
+
+  const onToolCall = React.useCallback(
+    (listener: ToolCallListener) => session?.onToolCall(listener) ?? (() => false),
     [session],
   );
-  const answerDelegation = React.useCallback(
-    (id: string, text: string, update: DelegationUpdate) => session?.answerDelegation(id, text, update) ?? false,
-    [session],
-  );
+  const answerToolCall = React.useCallback((callId: string, output: unknown) => session?.answerToolCall(callId, output) ?? false, [session]);
 
   const turns: LocalVoiceTurn[] = React.useMemo(
     () => snap.turns.map((t) => (saves[t.vid] ? { ...t, save: saves[t.vid] } : t)),
     [snap.turns, saves],
   );
 
-  return { snap, phase, turns, start, stop, setMuted, resumePlayback, appendContext, announceContext, onDelegation, answerDelegation, orbLevels, meterRef, active };
+  return { snap, phase, turns, start, stop, setMuted, resumePlayback, appendContext, announceContext, onToolCall, answerToolCall, orbLevels, meterRef, active };
 }
 
 export type VoiceCall = ReturnType<typeof useVoiceCall>;

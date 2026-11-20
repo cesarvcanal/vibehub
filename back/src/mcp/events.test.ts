@@ -309,6 +309,18 @@ describe("filters, isolation and lifecycle", () => {
     expect(sent).toHaveLength(1);
   });
 
+  it("an agent's answer (inReplyTo) carries when the question was asked, so the human-active lock can yield to it", async () => {
+    const env = await boot();
+    const posted = await tool(TOKEN, "vibehub_notify", question(env));
+    const { events } = await env.events.eventsAfter(0);
+    const askedAt = events.find((event) => event.id === posted.eventId)!.at;
+    expect((await tool(TOKEN, "vibehub_send_to_terminal", { cardId: env.card.id, text: "Mongo", inReplyTo: posted.eventId })).error).toBeUndefined();
+    const maestro = await import("../services/maestro/maestro.js");
+    expect(vi.mocked(maestro.sendToTerminal)).toHaveBeenCalledWith(
+      env.card.id, expect.any(String), expect.objectContaining({ respectHumanActive: true, answeringAskedAt: askedAt }),
+    );
+  });
+
   it("a send that fails leaves the question open, to be answered again", async () => {
     const env = await boot();
     const posted = await tool(TOKEN, "vibehub_notify", question(env));

@@ -168,8 +168,8 @@ export interface Settings {
   defaultAccountLabel: string | null;
   /** Set once the wizard finished, so it stops taking over the router. */
   setupCompletedAt: string | null;
-  /** ISO 639-1 hint for voice transcription, or null to let Whisper detect. */
   transcribeLanguage?: string | null;
+  transcribeKeywords: string[];
   /** Minutes a terminal may sit idle before it is hibernated. 0 = never. */
   idleHibernateMinutes?: number;
   /** Native chat as the Chat tab of every card (default on). Off = classic chat everywhere. */
@@ -226,6 +226,7 @@ export interface SettingsPatch {
   autonomous?: boolean;
   defaultAccountLabel?: string | null;
   transcribeLanguage?: string | null;
+  transcribeKeywords?: string[];
   idleHibernateMinutes?: number;
   sdkDriver?: boolean;
   sdkPermissionMode?: SdkPermissionMode;
@@ -234,7 +235,7 @@ export interface SettingsPatch {
   runner?: Partial<RunnerSettings>;
 }
 
-export type PlatformFailureSource = "backend_error" | "slow_turn" | "agent_report";
+export type PlatformFailureSource = "backend_error" | "slow_turn" | "stalled_turn" | "agent_report" | "screen_error";
 export type PlatformFailureStatus = "open" | "investigating" | "resolved" | "concluded_without_fix" | "dismissed";
 
 export interface PlatformFailure {
@@ -273,6 +274,12 @@ export interface PlatformFailureInvestigation {
   card: { id: string; projectId: string; title: string };
 }
 
+export interface ScreenErrorReport {
+  message: string;
+  screen: string;
+  stack?: string;
+}
+
 /** `GET /api/transcribe` — what voice input can do on THIS install. */
 export interface TranscribeStatus {
   /** An OpenAI key is stored; without one the microphone has nothing to talk to. */
@@ -281,6 +288,16 @@ export interface TranscribeStatus {
   proofread: boolean;
   /** ISO 639-1 hint sent to the recogniser, or null for auto-detect. */
   language: string | null;
+}
+
+export interface VoiceActionCall {
+  callId: string;
+  name: string;
+  arguments: string;
+}
+
+export interface VoiceActionResult {
+  output: unknown;
 }
 
 /** `POST /api/cards/:id/transcribe` */
@@ -473,6 +490,7 @@ export interface Card {
   pendingQuestionAt?: number | null;
   /** Last time a human typed into this card's terminal (epoch ms). */
   humanActiveAt?: number;
+  humanActiveUserId?: string;
   /**
    * Last sign of life the server itself produced for the card (epoch ms): an open/wake, an
    * instruction delivered to it. Read only by the done-card countdown, which must count it as the
@@ -516,6 +534,7 @@ export interface Card {
    * more than one PR was reviewed: one line per PR reads its own. Absent = `review` says it all.
    */
   reviews?: ReviewSummary[];
+  analysisMerging?: true;
   createdAt: number;
   updatedAt?: number;
 }
@@ -773,9 +792,11 @@ export interface ReviewSummary {
   authorWorking?: boolean;
   /**
    * A `ready` review whose merge gate on the approved commit is still running, failed while the author's
-   * AI fixes it (`fixing`: it reruns on its own), or failed and waits for a person: not "ready to merge".
+   * AI fixes it (`fixing`: it reruns on its own), or failed and waits for a person; or the PR conflicts with its
+   * base while the author's AI brings it in (`conflict`) or past the orders it gets (`conflictFailed`): not
+   * "ready to merge".
    */
-  mergeGateState?: "running" | "fixing" | "failed";
+  mergeGateState?: "running" | "fixing" | "failed" | "conflict" | "conflictFailed";
 }
 
 export interface FindingProof {
@@ -843,7 +864,28 @@ export interface AnalysisReadModel {
   verdict: AnalysisVerdict;
   uncheckedDimensions: AnalysisDimension[];
   canMerge: boolean;
+  merging: boolean;
   mergedAt?: number;
+  lastMergeRefusal?: AnalysisMergeRefusal;
+  mergeGate?: AnalysisMergeGate;
+}
+
+export interface AnalysisMergeGate {
+  cardId: string;
+  analysedSha: string;
+  sha?: string;
+  state: "running" | "passed" | "failed";
+  output?: string;
+  at: number;
+}
+
+export interface AnalysisMergeRefusal {
+  cardId: string;
+  analysedSha: string;
+  reason: string;
+  output?: string;
+  by: string;
+  at: number;
 }
 
 export type CardAnalysisResponse = AnalysisReadModel | { analysis: null };
@@ -870,6 +912,10 @@ export interface AnalysisConversation {
   finished: boolean;
   agents: AnalysisConversationAgent[];
   items: AnalysisConversationItem[];
+}
+
+export interface ReviewAgentFeedResponse {
+  items: Omit<AnalysisConversationItem, "agentId">[];
 }
 
 export interface AnalysisConversationResponse {
@@ -939,6 +985,7 @@ export interface MergeGate {
   autoRetried?: true;
   /** Consecutive failures on this commit since the last human "Try again"; absent on an older failure = 1. */
   failures?: number;
+  conflict?: true;
   /** Past the automatic reruns: nothing runs it again without a person. */
   exhausted?: true;
 }
@@ -948,8 +995,10 @@ export interface ReviewFleetAgent {
   label: string;
   phase: string;
   model?: string;
+  modelLabel?: string;
   status: "running" | "done" | "stopped";
   result?: string;
+  error?: string;
   endedAt?: number;
 }
 

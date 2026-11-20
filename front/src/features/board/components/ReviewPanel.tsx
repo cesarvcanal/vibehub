@@ -6,6 +6,7 @@ import { post } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/apiError";
 import type { FindingDecision, Person, Review, ReviewPhase } from "@/api/types";
 import { boardApi } from "@/features/board/api";
+import { ReviewAgentFeed } from "@/features/board/components/ReviewAgentFeed";
 import { PanelFrame, ReviewPanelView, type PanelNotice } from "@/features/board/components/ReviewPanelView";
 import { MERGE_CONFIRM_MS, cardPeopleKey, cardReviewKey, mergeFailure, reviewActions } from "@/features/board/lib/review";
 import { reviewReadsStarted, useLiveReview } from "@/features/board/lib/useLiveReview";
@@ -227,6 +228,7 @@ export function ReviewPanel({ cardId, prNumber: pr, onClose }: {
       review={review}
       working={working}
       fleet={fleet}
+      agentDetail={(runId, agent) => <ReviewAgentFeed agent={{ ...agent, cardId, pr, runId }} />}
       nameOf={nameOf}
       actions={reviewActions(review, user ? { id: user.id, isOwner } : null)}
       busy={act.isPending}
@@ -264,5 +266,6 @@ function noticeOf(note: MergeNote | null, t: typeof translate): PanelNotice | nu
 function refusalText(reason: string | undefined, message: string, error: unknown): string {
   if (reason === "merger_sem_github") return translate("review.merge.error.merger_sem_github");
   if (reason === "not_ready") return translate("review.merge.error.not_ready");
+  if (reason === "conflict") return translate("review.merge.error.conflict");
   return message ? apiErrorMessage(error) : translate("error.generic");
 }

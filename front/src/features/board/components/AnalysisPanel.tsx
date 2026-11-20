@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { GitMerge, X } from "lucide-react";
+import { GitMerge, Loader2, RotateCcw, X } from "lucide-react";
 import { Badge, BADGE_TEXT, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -8,9 +8,11 @@ import {
 } from "@/api/types";
 import * as React from "react";
 import { AnalysisConversation } from "@/features/board/components/AnalysisConversation";
+import { Markdown } from "@/features/board/components/ChatView";
 import { PanelFrame, TabButton } from "@/features/board/components/ReviewPanelView";
 import { boardApi } from "@/features/board/api";
 import { cardAnalysisKey } from "@/features/board/lib/analysis";
+import { mergeFailure } from "@/features/board/lib/review";
 import { useCardAnalysis } from "@/features/board/lib/useCardAnalysis";
 import { apiErrorMessage } from "@/lib/apiError";
 import { useT, type Translate } from "@/i18n";
@@ -27,6 +29,12 @@ const HEALTH_TONE: Record<DimensionHealth, BadgeTone> = {
 };
 
 const VERDICT_TONE: Record<AnalysisVerdict, BadgeTone> = { apt: "ok", not_apt: "critical", pending: "info" };
+
+function mergeRefusalTitle(reason: string, t: Translate): string {
+  if (reason === "gate") return t("analysis.merge.refused.gate");
+  if (reason === "conflict") return t("analysis.merge.refused.conflict");
+  return t("analysis.merge.refused.other");
+}
 
 export function AnalysisPanel({ cardId, onClose }: { cardId: string; onClose: () => void }) {
   const t = useT();
@@ -52,7 +60,7 @@ export function AnalysisPanel({ cardId, onClose }: { cardId: string; onClose: ()
 
   return (
     <PanelFrame label={t("analysis.panel.label")} header={header}>
-      {read?.analysis ? <AnalysisMerge cardId={cardId} read={read} /> : null}
+      {read?.analysis ? <AnalysisMerge cardId={cardId} read={read} rereading={analysisQuery.isFetching} /> : null}
       <div role="tablist" aria-label={t("analysis.panel.label")} className="flex shrink-0 gap-1 rounded-md border border-border/60 bg-background/40 p-0.5">
         <TabButton active={tab === "report"} onClick={() => setTab("report")}>{t("analysis.tab.report")}</TabButton>
         <TabButton active={tab === "conversation"} onClick={() => setTab("conversation")}>{t("analysis.tab.conversation")}</TabButton>
@@ -78,24 +86,70 @@ function VerdictBadge({ read }: { read: AnalysisReadModel }) {
   return <Badge tone={VERDICT_TONE[read.verdict]}>{t(`analysis.verdict.${read.verdict}`)}</Badge>;
 }
 
-function AnalysisMerge({ cardId, read }: { cardId: string; read: AnalysisReadModel }) {
+function AnalysisMerge({ cardId, read, rereading }: { cardId: string; read: AnalysisReadModel; rereading: boolean }) {
   const t = useT();
   const queryClient = useQueryClient();
-  const merge = useMutation({
-    mutationFn: () => boardApi.mergeCardAnalysis(cardId),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: cardAnalysisKey(cardId) }),
-  });
+  const rereadAnalysis = () => queryClient.invalidateQueries({ queryKey: cardAnalysisKey(cardId) });
+  const merge = useMutation({ mutationFn: () => boardApi.mergeCardAnalysis(cardId), onSettled: rereadAnalysis });
+  const rerunGate = useMutation({ mutationFn: () => boardApi.rerunCardAnalysisMergeGate(cardId), onSettled: rereadAnalysis });
   const prNumber = read.analysis.prNumber;
   if (merge.isSuccess) return <p className={`text-xs ${BADGE_TEXT.ok}`}>{t("analysis.merge.done", { n: prNumber })}</p>;
   if (read.mergedAt !== undefined) return <p className={`text-xs ${BADGE_TEXT.ok}`}>{t("analysis.merge.merged", { n: prNumber })}</p>;
   if (!read.canMerge) return null;
+  const merging = merge.isPending || read.merging;
+  const gateState = read.mergeGate?.state;
+  if (gateState === "failed" && !merging) {
+    return (
+      <div role="alert" className="flex shrink-0 flex-col gap-1.5 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs">
+        <p className="font-medium text-destructive">{t("analysis.mergeGate.failed")}</p>
+        {read.mergeGate?.output ? (
+          <pre className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground">{read.mergeGate.output}</pre>
+        ) : null}
+        <Button type="button" size="sm" variant="outline" className="self-start" disabled={rerunGate.isPending} onClick={() => rerunGate.mutate()}>
+          {rerunGate.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+          {t("analysis.mergeGate.rerun")}
+        </Button>
+        {rerunGate.isError ? <p className="whitespace-pre-wrap text-destructive">{apiErrorMessage(rerunGate.error)}</p> : null}
+      </div>
+    );
+  }
+  const gateRunning = gateState === "running" && !merging;
+  const failure = merge.isError ? mergeFailure(merge.error) : undefined;
+  const refusedByClick = failure?.kind === "refused" ? apiErrorMessage(merge.error) : undefined;
+  const refusal = merging || refusedByClick ? undefined : read.lastMergeRefusal;
+  const answerLost = failure?.kind === "lost" || failure?.kind === "running";
+  const unconfirmed = answerLost && !merging && !rereading && !refusal;
+  const mergeBlocked = merging || gateRunning;
+  const mergeLabel = (): string => {
+    if (merging) return t("analysis.merge.pending");
+    if (gateRunning) return t("analysis.mergeGate.runningButton");
+    return t(refusal ? "analysis.merge.retry" : "analysis.merge", { n: prNumber });
+  };
   return (
     <div className="flex shrink-0 flex-col gap-1.5">
-      <Button type="button" size="sm" className="self-start" disabled={merge.isPending} onClick={() => merge.mutate()}>
-        <GitMerge className="h-3.5 w-3.5" />
-        {merge.isPending ? t("analysis.merge.pending") : t("analysis.merge", { n: prNumber })}
+      {gateRunning ? (
+        <p role="status" className="flex items-center gap-1.5 rounded-md border border-sky-500/30 bg-sky-500/10 px-2.5 py-1.5 text-xs text-sky-300">
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" /> {t("analysis.mergeGate.running")}
+        </p>
+      ) : null}
+      {gateState === "passed" && read.mergeGate?.sha && !merging ? (
+        <p className={`text-xs ${BADGE_TEXT.ok}`}>{t("analysis.mergeGate.passed", { sha: read.mergeGate.sha.slice(0, 7) })}</p>
+      ) : null}
+      {refusal ? (
+        <div role="alert" className="flex flex-col gap-1 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs">
+          <p className="font-medium text-destructive">{mergeRefusalTitle(refusal.reason, t)}</p>
+          {refusal.output && refusal.reason !== "conflict" ? (
+            <pre className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground">{refusal.output}</pre>
+          ) : null}
+        </div>
+      ) : null}
+      <Button type="button" size="sm" className="self-start" disabled={mergeBlocked} onClick={() => merge.mutate()}>
+        {mergeBlocked ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitMerge className="h-3.5 w-3.5" />}
+        {mergeLabel()}
       </Button>
-      {merge.isError ? <p className="whitespace-pre-wrap text-xs text-destructive">{apiErrorMessage(merge.error)}</p> : null}
+      {merging ? <p className="text-xs text-muted-foreground">{t("analysis.merge.running")}</p> : null}
+      {refusedByClick ? <p className="whitespace-pre-wrap text-xs text-destructive">{refusedByClick}</p> : null}
+      {unconfirmed ? <p role="alert" className="text-xs text-destructive">{t("analysis.merge.unconfirmed")}</p> : null}
     </div>
   );
 }
@@ -130,7 +184,9 @@ function AnalysisBody({ read }: { read: AnalysisReadModel }) {
     .filter((group) => group.findings.length > 0);
   return (
     <div className="flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto overflow-x-hidden [overflow-wrap:anywhere]">
-      <p className="text-xs leading-relaxed text-foreground/90">{analysis.summary}</p>
+      <div className="text-xs leading-relaxed text-foreground/90">
+        <Markdown text={analysis.summary} />
+      </div>
       {visibleCounts.length > 0 ? (
         <div className="flex flex-wrap gap-1.5 text-[11px]">
           {visibleCounts.map((count) => (

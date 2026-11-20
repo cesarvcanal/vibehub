@@ -3,6 +3,7 @@ import { getCard, type Card } from "../board/registry.js";
 import { deliver, parsePrUrl, type DeliverOpts, type DeliverResult } from "../maestro/deliver.js";
 import { logger } from "../../utils/logger.js";
 import { canMergeReview, cardsToConclude, isReviewClosed, type Review } from "./model.js";
+import { deliverOwnAnalysis } from "./analysisMerge.js";
 import { mergeReviewedPr, type ReviewMergeOutcome } from "./merge.js";
 import { recordReviewOrders } from "./orchestrator.js";
 import { activeReviewFor, getReview, reviewByReviewerCard } from "./store.js";
@@ -30,13 +31,14 @@ import { activeReviewFor, getReview, reviewByReviewerCard } from "./store.js";
  * says so in the answer: the AI concludes by hand after the merge instead of promising it.
  */
 export async function deliverCard(
-  cardId: string, opts: DeliverCardOpts = {},
+  cardId: string, opts: DeliverCardOpts,
 ): Promise<DeliverResult> {
   const { result, concludeRecorded } = await deliverUnderReview(cardId, opts);
   return opts.concludeWhenMerged && !concludeRecorded ? withOutput(result, CONCLUDE_NOT_RECORDED) : result;
 }
 
-type DeliverCardOpts = Pick<DeliverOpts, "branch" | "authorized" | "by" | "docs"> & {
+type DeliverCardOpts = Pick<DeliverOpts, "branch" | "authorized" | "docs"> & {
+  by: string;
   from?: string;
   /** "…e concluir o card": with the card's PR under review, recorded on it, and the card goes to done once merged. */
   concludeWhenMerged?: boolean;
@@ -67,6 +69,7 @@ async function deliverUnderReview(cardId: string, opts: DeliverCardOpts): Promis
     const card = await getCard(cardId);
     if (card?.reviewOf) return await mergeFromReviewerCard(card, opts);
     if (card?.pushBranch !== undefined && opts.from !== cardId) return plain(await deliverAnalysisWithoutMerge(cardId, opts));
+    if (card?.pushBranch !== undefined) return plain(await deliverOwnAnalysis(card, opts));
   }
   const review = opts.authorized === true ? await activeReviewFor(cardId) : undefined;
   if (!review) return plain(await deliver(cardId, opts));
@@ -209,12 +212,14 @@ function mergeResult(outcome: ReviewMergeOutcome, base: DeliverResult, review: R
 
 /**
  * The reason for a refused merge, so the AI tells the truth: the deliver's own when it ran (red CI,
- * conflict), "a revisão está ativa" when it was not ready or another merge is going out, and merge
+ * conflict), the conflict the merge gate already holds, "a revisão está ativa" when it was not ready or
+ * another merge is going out, and merge
  * failure for the rest (the owner's GitHub connection, permission, error).
  */
 function refusalReason(outcome: Extract<ReviewMergeOutcome, { kind: "refused" }>): DeliverResult["reason"] {
   if (outcome.result) return outcome.result.reason;
   if (outcome.reason === "gate" || outcome.reason === "gate_running") return "gate";
+  if (outcome.reason === "conflict") return "conflict";
   if (outcome.reason === "not_ready" || outcome.reason === "merging") return "review_active";
   return "merge_failed";
 }

@@ -51,6 +51,7 @@ const readModel = (
   verdict,
   uncheckedDimensions,
   canMerge: false,
+  merging: false,
 });
 
 function renderPanel(
@@ -91,6 +92,14 @@ describe("painel da análise de PR", () => {
     expect(within(dimensions).getByText("atenção")).toBeInTheDocument();
     expect(within(dimensions).getByText("fora do diff")).toBeInTheDocument();
     expect(within(dimensions).getByText("o diff só toca configuração")).toBeInTheDocument();
+  });
+
+  it("o resumo em tópicos aparece como lista, com o código marcado", async () => {
+    renderPanel(readModel(doneReport({ summary: "- troca a senha pelo `sso`\n- sessão expira com o token" }), "not_apt"));
+    await screen.findByRole("heading", { name: "Análise do PR #312" });
+    expect(screen.getByText("troca a senha pelo", { exact: false }).closest("li")).toBeInTheDocument();
+    expect(screen.getByText("sessão expira com o token").tagName).toBe("LI");
+    expect(screen.getByText("sso").tagName).toBe("CODE");
   });
 
   it("dimensão que rodou com achado não verificado aparece em atenção, com o motivo, ao lado do não apto que o servidor manda", async () => {
@@ -138,7 +147,7 @@ describe("painel da análise de PR", () => {
 
   it("o corpo tem overflow-y-auto, overflow-x-hidden e overflow-wrap:anywhere, para o caminho longo quebrar em vez de rolar de lado", async () => {
     renderPanel(readModel(doneReport(), "not_apt"));
-    const body = (await screen.findByText("Login por SSO no lugar da senha local.")).parentElement;
+    const body = (await screen.findByRole("list", { name: "Dimensões revisadas" })).parentElement;
     expect(body).toHaveClass("overflow-y-auto", "overflow-x-hidden", "[overflow-wrap:anywhere]");
   });
 
@@ -228,6 +237,108 @@ describe("merge pelo painel da análise", () => {
     expect(screen.getByRole("button", { name: "Mergear o PR #312" })).toBeEnabled();
   });
 
+  it("com o servidor dizendo que o merge roda, o painel mostra Mergeando travado e o aviso do merge, mesmo sem ter clicado", async () => {
+    renderPanel(aptRead({ merging: true }));
+    expect(await screen.findByRole("button", { name: "Mergeando…" })).toBeDisabled();
+    expect(screen.getByText("Mergeando no GitHub, preso ao commit que a análise conferiu.")).toBeInTheDocument();
+  });
+
+  const SHA = doneReport().analysedSha;
+
+  it("caso real (PR #649): testes do merge rodando no commit da análise travam o botão com o aviso, e o painel relê sozinho até o veredito", async () => {
+    const reads = { count: 0 };
+    get.mockImplementation(async (url: string) => {
+      if (url === "/auth/me") return { user: { id: "u1", username: "mussa", role: "member" } };
+      if (url === "/setup/state") return setupState();
+      if (url === "/cards/c1/analysis/conversation") return { conversation: null };
+      reads.count += 1;
+      return aptRead({
+        mergeGate: reads.count > 1
+          ? { cardId: "c1", analysedSha: SHA, sha: "c0ffee1".padEnd(40, "0"), state: "passed", at: 2 }
+          : { cardId: "c1", analysedSha: SHA, state: "running", at: 1 },
+      });
+    });
+    renderApp(<AnalysisPanel cardId="c1" onClose={() => {}} />);
+    expect(await screen.findByRole("button", { name: "Testes do merge rodando…" })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Testes do merge rodando no commit que a análise conferiu: o botão libera quando ficarem verdes.");
+    expect(await screen.findByRole("button", { name: "Mergear o PR #312" }, { timeout: 8_000 })).toBeEnabled();
+    expect(screen.getByText("Testes do merge verdes no commit que a análise conferiu (c0ffee1).")).toBeInTheDocument();
+  });
+
+  it("testes do merge vermelhos no commit da análise: mostram a saída, não oferecem o merge, e 'Rodar os testes de novo' pede o gate e relê", async () => {
+    post.mockResolvedValue({ mergeGate: { cardId: "c1", analysedSha: SHA, state: "running", at: 2 } });
+    renderPanel(aptRead({ mergeGate: { cardId: "c1", analysedSha: SHA, state: "failed", output: "FAIL src/pix.test.ts", at: 1 } }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Os testes do merge falharam: o merge fica barrado até eles passarem.");
+    expect(within(alert).getByText("FAIL src/pix.test.ts")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Mergear o PR #312" })).not.toBeInTheDocument();
+    const readsBefore = get.mock.calls.filter(([url]) => url === "/cards/c1/analysis").length;
+    await userEvent.click(screen.getByRole("button", { name: "Rodar os testes de novo" }));
+    expect(post).toHaveBeenCalledWith("/cards/c1/analysis/merge-gate");
+    await vi.waitFor(() => expect(get.mock.calls.filter(([url]) => url === "/cards/c1/analysis").length).toBeGreaterThan(readsBefore));
+  });
+
+  it("em inglês o estado dos testes do merge sai pelo i18n", async () => {
+    setLanguage("en");
+    renderPanel(aptRead({ mergeGate: { cardId: "c1", analysedSha: SHA, state: "failed", output: "x", at: 1 } }));
+    expect(await screen.findByRole("button", { name: "Run the checks again" })).toBeEnabled();
+    expect(screen.getByRole("alert")).toHaveTextContent("The merge checks failed: the merge stays blocked until they pass.");
+  });
+
+  it.each<[string, Error]>([
+    ["409 merging (o clique anterior ainda roda)", Object.assign(new Error("409"), { response: { status: 409, data: { error: "merge já em andamento", reason: "merging" } } })],
+    ["proxy que desistiu da requisição longa", apiReject(524, "")],
+  ])("clique com resposta %s não vira erro: relê e segue em Mergeando enquanto o servidor diz merging", async (_case, failure) => {
+    post.mockRejectedValue(failure);
+    const reads = { count: 0 };
+    get.mockImplementation(async (url: string) => {
+      if (url === "/auth/me") return { user: { id: "u1", username: "mussa", role: "member" } };
+      if (url === "/setup/state") return setupState();
+      if (url === "/cards/c1/analysis/conversation") return { conversation: null };
+      reads.count += 1;
+      return aptRead({ merging: reads.count > 1 });
+    });
+    renderApp(<AnalysisPanel cardId="c1" onClose={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Mergear o PR #312" }));
+    expect(await screen.findByRole("button", { name: "Mergeando…" })).toBeDisabled();
+    expect(screen.queryByText("merge já em andamento")).not.toBeInTheDocument();
+  });
+
+  it("último merge barrado no commit analisado: o painel diz o motivo e a saída antes do clique e oferece tentar de novo", async () => {
+    renderPanel(aptRead({ lastMergeRefusal: {
+      cardId: "c1", analysedSha: doneReport().analysedSha, reason: "gate", output: "npm test estourou 585 s", by: "mussa", at: 1,
+    } }));
+    expect(await screen.findByText("O último merge não saiu: os testes do gate falharam ou estouraram o tempo.")).toBeInTheDocument();
+    expect(screen.getByText("npm test estourou 585 s")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Tentar o merge do PR #312 de novo" })).toBeEnabled();
+  });
+
+  it("último merge barrado por conflito com a base: o painel diz o conflito e o que fazer, sem a saída do gh", async () => {
+    renderPanel(aptRead({ lastMergeRefusal: {
+      cardId: "c1", analysedSha: doneReport().analysedSha, reason: "conflict", output: "o PR tem conflito com dev", by: "mussa", at: 1,
+    } }));
+    expect(await screen.findByText(
+      "O último merge não saiu: o PR está em conflito com a base. Peça ao card do PR para trazer a base (git merge), testar e subir; depois tente de novo.",
+    )).toBeInTheDocument();
+  });
+
+  it("resposta perdida e servidor sem merge rodando, sem recusa e sem merge: avisa que o resultado não foi confirmado", async () => {
+    post.mockRejectedValue(apiReject(502, ""));
+    renderPanel(aptRead());
+    await userEvent.click(await screen.findByRole("button", { name: "Mergear o PR #312" }));
+    expect(await screen.findByText("Não deu para confirmar o merge: a conexão caiu e o servidor não tem merge rodando nem recusa registrada. Confira o PR no GitHub antes de tentar de novo.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mergear o PR #312" })).toBeEnabled();
+  });
+
+  it("recusa por outro motivo que não o gate mostra o texto genérico e a saída, nunca o código interno do motivo", async () => {
+    renderPanel(aptRead({
+      lastMergeRefusal: { cardId: "c1", analysedSha: doneReport().analysedSha, reason: "push_failed", output: "rejected: non-fast-forward", by: "mussa", at: 1 },
+    }));
+    expect(await screen.findByText("O último merge não saiu. Saída do vibehub:")).toBeInTheDocument();
+    expect(screen.getByText("rejected: non-fast-forward")).toBeInTheDocument();
+    expect(screen.queryByText(/push_failed/)).not.toBeInTheDocument();
+  });
+
   it("em inglês o botão e o resultado saem pelo i18n", async () => {
     setLanguage("en");
     post.mockResolvedValue({ result: { merged: true, reason: "merged", branch: "dev", cardBranch: "feat/sso" } });
@@ -268,23 +379,33 @@ describe("aba Conversa: a frota conversando como um chat em grupo", () => {
     expect(get).toHaveBeenCalledWith("/cards/c1/analysis/conversation");
   });
 
-  it("cada fala diz quem falou, com o modelo e a versão, e traz o que o agente pensou, usou e disse", async () => {
+  it("cada fala é um balão com quem falou e o modelo; ferramenta não vira balão e quem ainda trabalha está digitando, no grupo da própria fala", async () => {
     renderPanel(readModel(doneReport(), "not_apt"), undefined, () => fleetTalk);
     await openConversation();
-    const turns = await screen.findAllByRole("article");
-    expect(turns).toHaveLength(2);
-    expect(within(turns[0]!).getByText("Revisão de Segurança")).toBeInTheDocument();
-    expect(within(turns[0]!).getByText("Sonnet 5.5")).toBeInTheDocument();
-    expect(within(turns[0]!).getByText("pensando…")).toBeInTheDocument();
-    expect(within(turns[0]!).getByText("Read · back/src/auth.ts")).toBeInTheDocument();
-    expect(within(turns[0]!).getByText("export function login() {}")).toBeInTheDocument();
-    expect(within(turns[1]!).getByText("Verificação de Segurança")).toBeInTheDocument();
-    expect(within(turns[1]!).getByText("Opus 5.5")).toBeInTheDocument();
-    expect(within(turns[1]!).getByText("Refutado: o log mascara o token.")).toBeInTheDocument();
+    const messages = await screen.findAllByTestId("fleet-chat-message");
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toHaveTextContent("Revisão de Segurança");
+    expect(messages[0]).toHaveTextContent("Sonnet 5.5");
+    expect(messages[0]).toHaveTextContent("O token vaza no log.");
+    expect(messages[1]).toHaveTextContent("Verificação de Segurança");
+    expect(messages[1]).toHaveTextContent("Opus 5.5");
+    expect(screen.queryByText(/Read · back\/src\/auth.ts/)).toBeNull();
+    expect(screen.queryByText("export function login() {}")).toBeNull();
+    const typing = screen.getByTestId("fleet-chat-typing");
+    expect(typing).toHaveTextContent("digitando");
+    expect(typing).not.toHaveTextContent("Verificação de Segurança");
     expect(screen.getByText("Frota conversando · 1 de 2 agentes responderam")).toBeInTheDocument();
   });
 
-  it("fala em JSON (achados ou veredito) é lida como na frota da revisão: títulos dos achados e o veredito com a evidência", async () => {
+  it("quem trabalha com uma ferramenta na mão diz qual, no digitando", async () => {
+    renderPanel(readModel(doneReport(), "not_apt"), undefined, () => ({
+      conversation: { ...fleetTalk.conversation!, items: [{ agentId: "a2", at: 1, kind: "tool", tool: "Read", target: "back/src/log.ts" }] },
+    }));
+    await openConversation();
+    expect(await screen.findByTestId("fleet-chat-typing")).toHaveTextContent("Read · back/src/log.ts");
+  });
+
+  it("fala em JSON (achados ou veredito) vira a lista de achados e o veredito com a evidência, citando o achado", async () => {
     const structured: AnalysisConversationResponse = {
       conversation: {
         ...fleetTalk.conversation!,
@@ -296,9 +417,27 @@ describe("aba Conversa: a frota conversando como um chat em grupo", () => {
     };
     renderPanel(readModel(doneReport(), "not_apt"), undefined, () => structured);
     await openConversation();
-    expect(await screen.findByText("1 achado: token vaza no log")).toBeInTheDocument();
-    expect(screen.getByText("Derrubado")).toBeInTheDocument();
-    expect(screen.getByText(/o log mascara o token/)).toBeInTheDocument();
+    const messages = await screen.findAllByTestId("fleet-chat-message");
+    expect(messages[0]).toHaveTextContent("1 achado");
+    expect(within(messages[0]!).getByRole("listitem")).toHaveTextContent("token vaza no log");
+    expect(within(messages[1]!).getByText("Derrubado")).toBeInTheDocument();
+    expect(messages[1]).toHaveTextContent("o log mascara o token");
+    expect(within(messages[1]!).getByRole("button", { name: "Ver a fala respondida: token vaza" })).toBeInTheDocument();
+  });
+
+  it("fala em markdown sai renderizada e a longa vem recolhida, com ver mais e ver menos", async () => {
+    const longSpeech = `Achei **2 problemas**:\n\n${Array.from({ length: 12 }, (_, line) => `- item ${line + 1}`).join("\n")}`;
+    renderPanel(readModel(doneReport(), "not_apt"), undefined, () => ({
+      conversation: { ...fleetTalk.conversation!, items: [{ agentId: "a1", at: 1, kind: "text", text: longSpeech }] },
+    }));
+    await openConversation();
+    const [message] = await screen.findAllByTestId("fleet-chat-message");
+    expect(within(message!).getByText("2 problemas").tagName).toBe("STRONG");
+    expect(within(message!).getAllByRole("listitem")).toHaveLength(12);
+    expect(within(message!).getByTestId("fleet-chat-speech")).toHaveAttribute("data-collapsed", "true");
+    await userEvent.click(within(message!).getByRole("button", { name: "ver mais" }));
+    expect(within(message!).getByTestId("fleet-chat-speech")).toHaveAttribute("data-collapsed", "false");
+    expect(within(message!).getByRole("button", { name: "ver menos" })).toBeInTheDocument();
   });
 
   it("card sem frota diz que a frota ainda não rodou", async () => {
@@ -320,6 +459,7 @@ describe("aba Conversa: a frota conversando como um chat em grupo", () => {
     }));
     await userEvent.click(await screen.findByRole("tab", { name: "Conversation" }));
     expect(await screen.findByText("Fleet finished · 2 of 2 agents answered")).toBeInTheDocument();
-    expect(screen.getAllByText("thinking…")).toHaveLength(1);
+    expect(screen.getAllByTestId("fleet-chat-message")).toHaveLength(2);
+    expect(screen.queryByTestId("fleet-chat-typing")).toBeNull();
   });
 });

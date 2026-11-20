@@ -11,9 +11,10 @@ import { reportCardStatus } from "../services/board/status.js";
 import { purgeRemovedCards } from "../services/board/purge.js";
 import { runnerToken } from "../runtime/runner.js";
 import { listReviewsFollowedBy } from "../services/review/store.js";
-import { mergeGateSelfHealing, pendingQuestions, type Review } from "../services/review/model.js";
+import { mergeGateSelfHealing, pendingQuestions, type MergeGate, type Review } from "../services/review/model.js";
 import { logger } from "../utils/logger.js";
 import { isBusy } from "../services/maestro/maestro.js";
+import { isAnalysisMerging } from "../services/review/analysisMerge.js";
 import { sendError } from "./httpError.js";
 
 /**
@@ -34,15 +35,17 @@ type ReviewSummary = Pick<Review, "id" | "prNumber" | "phase" | "round"> & {
   authorWorking?: boolean;
   /**
    * Ready, but the merge gate on the approved commit is still running, failed and the author's AI is fixing
-   * it (`fixing`: runs again on its own) or failed and waits for a person: the line does not say "pronto pra merge".
+   * it (`fixing`: runs again on its own) or failed and waits for a person; or the PR conflicts with its base
+   * while the author's AI brings it in (`conflict`) or past the orders it gets (`conflictFailed`): the line does
+   * not say "pronto pra merge".
    */
-  mergeGateState?: "running" | "fixing" | "failed";
+  mergeGateState?: "running" | "fixing" | "failed" | "conflict" | "conflictFailed";
 };
 /**
  * `review` = the most recent; `reviews` = the most recent of EACH PR (only with more than one PR
  * reviewed), the one line per PR of a card that attached several.
  */
-type BoardCard = registry.Card & { review?: ReviewSummary; reviews?: ReviewSummary[] };
+type BoardCard = registry.Card & { review?: ReviewSummary; reviews?: ReviewSummary[]; analysisMerging?: true };
 
 /**
  * Each card with the summary of its most recent review that was not cancelled (a merged one stays:
@@ -65,7 +68,7 @@ async function withReviewSummary(cards: registry.Card[]): Promise<BoardCard[]> {
     keep(r.cardId, r);
     if (r.hubCardId && r.hubCardId !== r.cardId) keep(r.hubCardId, r);
   }
-  return cards.map((c) => {
+  return cards.map((card) => withAnalysisMerging(card)).map((c) => {
     const perPr = [...(latest.get(c.id)?.values() ?? [])].sort((a, b) => b.createdAt - a.createdAt);
     if (perPr.length === 0) return c;
     const summaries = perPr.map((r) => {
@@ -77,11 +80,15 @@ async function withReviewSummary(cards: registry.Card[]): Promise<BoardCard[]> {
       if (r.phase === "ready" && r.cardId === c.id && isBusy(c)) review.authorWorking = true;
       const gate = r.mergeGate?.sha === r.reviewedSha ? r.mergeGate : undefined;
       if (r.phase === "ready" && gate?.state === "running") review.mergeGateState = "running";
-      if (r.phase === "ready" && gate?.state === "failed") review.mergeGateState = mergeGateSelfHealing(gate) ? "fixing" : "failed";
+      if (r.phase === "ready" && gate?.state === "failed") review.mergeGateState = failedMergeGateState(gate);
       return review;
     });
     return { ...c, review: summaries[0], ...(summaries.length > 1 ? { reviews: summaries } : {}) };
   });
+}
+
+function withAnalysisMerging(card: registry.Card): BoardCard {
+  return isAnalysisMerging(card.id) ? { ...card, analysisMerging: true } : card;
 }
 
 /**
@@ -105,6 +112,11 @@ const MEMBER_CARD_FIELDS: ReadonlySet<string> = new Set<keyof registry.UpdateCar
 /** The fields of a card patch a member may not send (empty = the patch is theirs to make). PURE. */
 function fieldsRefusedToMember(patch: registry.UpdateCardInput): string[] {
   return Object.keys(patch).filter((key) => !MEMBER_CARD_FIELDS.has(key));
+}
+
+function failedMergeGateState(gate: MergeGate): "fixing" | "failed" | "conflict" | "conflictFailed" {
+  if (gate.conflict) return gate.exhausted ? "conflictFailed" : "conflict";
+  return mergeGateSelfHealing(gate) ? "fixing" : "failed";
 }
 
 export async function boardRoutes(app: FastifyInstance): Promise<void> {

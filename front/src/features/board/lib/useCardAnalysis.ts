@@ -14,12 +14,19 @@ export function useAnalysisRereadOnReport(
   }, [queryClient, cardId, opts.enabled, liveToolResult]);
 }
 
+const MERGE_PROGRESS_REREAD_MS = 5_000;
+
 export function useCardAnalysis(cardId: string, opts: { enabled: boolean; cardWorking?: boolean }) {
   const queryClient = useQueryClient();
   const analysisQuery = useQuery({
     queryKey: cardAnalysisKey(cardId),
     queryFn: () => boardApi.readCardAnalysis(cardId),
     enabled: opts.enabled,
+    refetchInterval: (query) => {
+      const read = query.state.data;
+      const inProgress = read?.analysis && (read.merging || read.mergeGate?.state === "running");
+      return inProgress ? MERGE_PROGRESS_REREAD_MS : false;
+    },
   });
   const wasWorking = React.useRef(opts.cardWorking);
   React.useEffect(() => {

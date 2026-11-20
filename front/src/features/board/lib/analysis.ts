@@ -10,6 +10,7 @@ export interface AnalysisPill {
   key: string;
   vars?: Record<string, number>;
   tone: BadgeTone;
+  icon?: "merging";
 }
 
 export type AnalysisQueryState =
@@ -27,6 +28,8 @@ export function analysisPill(analysisQuery: AnalysisQueryState, opts: { cardWork
   const { analysis, verdict } = read;
   if (analysis.stage === "fleet_unavailable") return { key: "analysis.pill.fleetUnavailable", tone: "critical" };
   if (analysis.stage === "analysed") return { key: "analysis.pill.fixing", vars: { n: analysis.findings.length }, tone: "info" };
+  if (verdict === "apt" && read.merging) return { key: "analysis.pill.merging", tone: "ok", icon: "merging" };
+  if (verdict === "apt" && read.lastMergeRefusal) return { key: "analysis.pill.mergeRefused", tone: "critical" };
   if (verdict === "apt") {
     const fixedCount = analysis.findings.filter((finding) => finding.status === "fixed").length;
     return { key: "analysis.pill.apt", vars: { n: fixedCount }, tone: "ok" };

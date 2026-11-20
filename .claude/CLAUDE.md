@@ -55,7 +55,7 @@ Antes de cada etapa, ache aqui a skill da situação e invoque-a pela ferramenta
 | Antes de afirmar pronto, passando ou corrigido | `superpowers:verification-before-completion` |
 | Revisão agnóstica do que escreveu, antes de entregar | Seção 5 deste arquivo |
 | Achar bug no diff ou num PR | `/code-review` (o nível `ultra`, faturado, só a pedido do usuário) |
-| Revisão por um subagente sem o seu contexto | `superpowers:requesting-code-review` |
+| Code review do diff antes de entregar (seção 5), em dois eixos: padrões e spec | `mattpocock-skills:code-review` |
 | Recebeu review (pessoa ou bot) | `superpowers:receiving-code-review` |
 | Segurança das mudanças pendentes | `security-review` |
 | **Documentação** | |
@@ -65,22 +65,25 @@ Antes de cada etapa, ache aqui a skill da situação e invoque-a pela ferramenta
 ## 4. Subagentes
 
 - **Quem delegou responde pelo `git diff`.** O subagente que abriu o trecho e viu o defeito conserta ali mesmo, num pacote que não cruza com o de outro agente; feature grande se fatia antes de despachar; mudança pequena, ou que atravessa muitos arquivos, você escreve.
+- **Tarefa de subagente é checklist.** O que ele tem de entregar vai no prompt como lista de tarefas markdown, um item por entregável verificável (`- [ ] achados do eixo padrões com severidade`); o contexto (o diff, o diretório, o comando) fica em texto antes da lista. O relatório dele abre com a mesma lista, os mesmos textos na mesma ordem, marcando `- [x]` o que fez e deixando `- [ ]` o que não fez, com o motivo no item. Quando o trabalho roda num card do vibehub, a aba Tarefa do subagente mostra essa lista com o que ficou feito e o que faltou. No fechamento (seção 5), a lista traz só os entregáveis da etapa, sem apontar trecho, arquivo ou seção.
+- **Relatório de subagente segue "Como relatar" (AGENTS.md §12)**, e o prompt diz isso a ele: o subagente não sabe quem vai ler.
 - **Saída de subagente é candidata, não verdade:** confira no working tree o que ele relatou e escreveu; ressalva do tipo "não auditei X" se resolve abrindo o X.
 - **Paralelismo é multi-dispatch seu:** vários agentes numa única mensagem, cada um dono de um pacote. A profundidade 2 (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` no `.claude/settings.json`) serve para um subagente ler ou pesquisar, não para paralelizar escrita: dois agentes na mesma working tree sobrescrevem um ao outro em silêncio. Trabalho que precisa de branch própria vai para outro card (`vibehub_send_to_terminal`).
 
 ## 5. Fechamento: revisão agnóstica
 
-É o passo 8 da AGENTS.md §12, antes da entrega, sem esperar ser mandado. O revisor recebe só este prompt, palavra por palavra, sem justificativa nem lista de foco: quem escreveu não escolhe onde o revisor olha.
+É o passo 8 da AGENTS.md §12, antes da entrega, sem esperar ser mandado. Cada revisor recebe só este prompt e o pedido da etapa, sem justificativa nem lista de foco: quem escreveu não escolhe onde o revisor olha.
 
 ```text
 Revise a branch atual contra o AGENTS.md da raiz do repositório.
 O diff: git fetch origin main && git diff origin/main...HEAD
 O que o autor afirma: git log origin/main..HEAD
-<pedido: o da etapa 1 ou o da etapa 2, abaixo>
+O relatório segue "Como relatar" (§12 do AGENTS.md) e abre com a lista abaixo marcada.
+<pedido da etapa, abaixo, como lista de tarefas>
 ```
 
 1. **Simplificação:** subagente `code-simplifier:code-simplifier`, com o pedido de confrontar cada trecho com as regras e aplicar o que simplifica sem mudar comportamento. Confira o que ele escreveu e rode o lint e os testes do recorte.
-2. **Code review**, depois da simplificação: subagente `general-purpose`, com o pedido de seguir "Como revisar um PR" (AGENTS.md §14), não mexer no working tree e entregar os achados com severidade e o veredito. Ele usa o shell para `git`, lint e testes existentes; o teste novo que provaria um achado ele descreve, e você escreve e roda. O `feature-dev:code-reviewer` não tem Bash e só serve para uma leitura rápida.
+2. **Code review**, depois da simplificação: a skill `mattpocock-skills:code-review`, com `origin/main` como ponto fixo. Ela despacha dois revisores sem o seu contexto, em paralelo: **padrões**, com o AGENTS.md como fonte de padrões, e **spec**, com o que o autor afirma (a descrição do PR, ou as mensagens dos commits quando o PR ainda não existe) como spec; nenhum rastreador de issues entra. Cada um recebe o prompt acima e o pedido de seguir "Como revisar um PR" (AGENTS.md §14), não mexer no working tree e entregar os achados com severidade, que valem sobre o formato e o limite de palavras da skill. A `description` de cada despacho nomeia o eixo ("Code review · padrões", "Code review · spec"). Os revisores usam o shell para `git`, lint e testes existentes; o teste novo que provaria um achado eles descrevem, e você escreve e roda. Você junta os dois relatórios, cada eixo na sua seção como a skill manda, e fecha com um veredito só: **não apto** se qualquer eixo tem achado que bloqueia ou decisão em aberto.
 3. Cada achado se confere na fonte e segue a severidade (AGENTS.md §14), em commit próprio quando se corrige.
 
 ## 6. Entrega

@@ -498,7 +498,7 @@ describe("an agent's send goes to the native chat while it is in use, to the ter
 
   it("a person typing in the card still blocks the agent on the native chat", async () => {
     const { maestro, manager, registry, dest, origin } = await nativeCard();
-    await registry.markCardHumanActive(dest.id, Date.now());
+    await registry.markCardHumanActive(dest.id, undefined, Date.now());
     await expect(maestro.sendToTerminal(dest.id, "oi", { respectHumanActive: true, origin })).rejects.toThrow(/human-active/);
     manager.resetSdkSessionsForTesting();
     expect(spawned).toHaveLength(0);
@@ -524,7 +524,7 @@ describe("human-active lock (maestro-only)", () => {
     const p = await registry.createProject({ name: "billing" });
     const c = await registry.createCard({ projectId: p.id, title: "someone is typing" });
     await registry.applyOpenTerminal(c.id); // a live session — the refusal is about the human, not the session
-    await registry.markCardHumanActive(c.id, Date.now());
+    await registry.markCardHumanActive(c.id, undefined, Date.now());
 
     // the MAESTRO path opts in and is refused
     await expect(maestro.sendToTerminal(c.id, "run the tests", { respectHumanActive: true })).rejects.toThrow(/human-active/);
@@ -545,7 +545,7 @@ describe("human-active lock (maestro-only)", () => {
     const p = await registry.createProject({ name: "billing" });
     const c = await registry.createCard({ projectId: p.id, title: "the user is here" });
     await registry.applyOpenTerminal(c.id);
-    await registry.markCardHumanActive(c.id, Date.now()); // active RIGHT NOW
+    await registry.markCardHumanActive(c.id, undefined, Date.now());
     const out = await maestro.sendToTerminal(c.id, "oi"); // no opts = the user path
     expect(out).toMatchObject({ sent: true });
     expect(runScript).toHaveBeenCalledOnce();
@@ -556,10 +556,66 @@ describe("human-active lock (maestro-only)", () => {
     const p = await registry.createProject({ name: "billing" });
     const c = await registry.createCard({ projectId: p.id, title: "typed a while ago" });
     await registry.applyOpenTerminal(c.id);
-    await registry.markCardHumanActive(c.id, Date.now() - registry.HUMAN_ACTIVE_WINDOW_MS - 1);
+    await registry.markCardHumanActive(c.id, undefined, Date.now() - registry.HUMAN_ACTIVE_WINDOW_MS - 1);
     const out = await maestro.sendToTerminal(c.id, "carry on", { respectHumanActive: true });
     expect(out).toMatchObject({ sent: true });
     expect(runScript).toHaveBeenCalledOnce();
+  });
+});
+
+describe("human-active lock yields to the card's own open question", () => {
+  type AskMark = "awaitingDecisionAt" | "pendingQuestionAt";
+
+  async function openCardTypedAt(typedAt: number) {
+    const loaded = await load();
+    const project = await loaded.registry.createProject({ name: "billing" });
+    const card = await loaded.registry.createCard({ projectId: project.id, title: "waiting on a decision" });
+    await loaded.registry.applyOpenTerminal(card.id);
+    await loaded.registry.markCardHumanActive(card.id, undefined, typedAt);
+    return { ...loaded, card };
+  }
+
+  async function openCardTypedThenAsked(mark: AskMark, typedAt: number, askedAt: number) {
+    const opened = await openCardTypedAt(typedAt);
+    if (mark === "awaitingDecisionAt") await opened.registry.setCardAwaitingDecision(opened.card.id, askedAt);
+    else await opened.registry.setCardPendingQuestion(opened.card.id, askedAt);
+    return opened;
+  }
+
+  it.each<AskMark>(["awaitingDecisionAt", "pendingQuestionAt"])(
+    "a maestro's send goes through when the card stopped on a question (%s) after the person's last keystroke",
+    async (mark) => {
+      const now = Date.now();
+      const { maestro, card } = await openCardTypedThenAsked(mark, now - 60_000, now - 10_000);
+      await expect(maestro.sendToTerminal(card.id, "Mongo", { respectHumanActive: true })).resolves.toMatchObject({ sent: true });
+      expect(runScript).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("the person who typed AFTER the question opened is still protected from the maestro", async () => {
+    const now = Date.now();
+    const { maestro, card } = await openCardTypedThenAsked("awaitingDecisionAt", now - 10_000, now - 60_000);
+    await expect(maestro.sendToTerminal(card.id, "Mongo", { respectHumanActive: true })).rejects.toThrow(/human-active/);
+    expect(runScript).not.toHaveBeenCalled();
+  });
+
+  it("the listing reports humanActive false once the card stopped on a question after the last keystroke", async () => {
+    const now = Date.now();
+    const { maestro, card } = await openCardTypedThenAsked("awaitingDecisionAt", now - 60_000, now - 10_000);
+    const row = (await maestro.listTerminals()).find((terminal) => terminal.cardId === card.id);
+    expect(row).toMatchObject({ humanActive: false });
+  });
+
+  it.each([
+    ["made after the last keystroke goes through", -10_000, true],
+    ["made before the last keystroke is refused", -120_000, false],
+  ])("answering an ask (inReplyTo) %s", async (_case, askedOffsetMs, delivered) => {
+    const now = Date.now();
+    const { maestro, card } = await openCardTypedAt(now - 60_000);
+    const send = maestro.sendToTerminal(card.id, "Mongo", { respectHumanActive: true, answeringAskedAt: now + askedOffsetMs });
+    if (delivered) await expect(send).resolves.toMatchObject({ sent: true });
+    else await expect(send).rejects.toThrow(/human-active/);
+    expect(runScript).toHaveBeenCalledTimes(delivered ? 1 : 0);
   });
 });
 
@@ -1106,7 +1162,7 @@ describe("sendToTerminal — beforeDeliver roda só quando a mensagem vai mesmo"
     const p = await registry.createProject({ name: "billing" });
     const c = await registry.createCard({ projectId: p.id, title: "alguém digitando" });
     await registry.applyOpenTerminal(c.id);
-    await registry.markCardHumanActive(c.id, Date.now());
+    await registry.markCardHumanActive(c.id, undefined, Date.now());
     const beforeDeliver = vi.fn(async () => undefined);
     await expect(maestro.sendToTerminal(c.id, "roda", { respectHumanActive: true, beforeDeliver })).rejects.toThrow(/human-active/);
     expect(beforeDeliver).not.toHaveBeenCalled();

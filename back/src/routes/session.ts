@@ -64,25 +64,13 @@ export function isValidTermSize(n: unknown): n is number {
   return typeof n === "number" && Number.isInteger(n) && n >= 10 && n <= 500;
 }
 
-/**
- * How often a card's `humanActiveAt` is actually written while someone types. Keystrokes arrive many
- * per second; persisting each would hammer the board store. The window a maestro reads
- * (HUMAN_ACTIVE_WINDOW_MS, minutes) is far larger, so stamping at most this often loses nothing.
- */
-export const HUMAN_ACTIVE_THROTTLE_MS = 5_000;
-
-/** Last time each card's human-active stamp was written — the throttle gate. Module-scoped. */
 const lastHumanStamp = new Map<string, number>();
 
-/**
- * Should we WRITE the stamp for this card now? true when the throttle window has passed since the
- * last write (updating the gate as a side effect). Keeps the disk-write rate bounded no matter how
- * fast the user types, across every connection to the same card. PURE-ish (mutates the gate map).
- */
-export function shouldStampHumanActive(cardId: string, now: number = Date.now()): boolean {
-  const last = lastHumanStamp.get(cardId) ?? 0;
-  if (now - last < HUMAN_ACTIVE_THROTTLE_MS) return false;
-  lastHumanStamp.set(cardId, now);
+export function shouldStampHumanActive(cardId: string, typistUserId: string | undefined, now: number = Date.now()): boolean {
+  const gateKey = `${cardId}:${typistUserId ?? ""}`;
+  const last = lastHumanStamp.get(gateKey) ?? 0;
+  if (now - last < registry.HUMAN_ACTIVE_THROTTLE_MS) return false;
+  lastHumanStamp.set(gateKey, now);
   return true;
 }
 
@@ -606,8 +594,9 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
             // over, and must not resurface in anyone's inbox now that the card is visible again.
             void observeCardStatus(card.id, null, "working");
           }
-          if (shouldStampHumanActive(card.id)) {
-            void registry.markCardHumanActive(card.id).catch(() => { /* best effort, never fails a keystroke */ });
+          if (shouldStampHumanActive(card.id, typist?.id)) {
+            // eslint-disable-next-line no-restricted-syntax -- best effort: the next keystroke stamps it again
+            void registry.markCardHumanActive(card.id, typist?.id).catch(() => undefined);
           }
           // Typing IS the order. Cheap when nothing changes (isCardActor is sync); a `view` share
           // never gets here (readOnly) and recordCardActor checks the level anyway.

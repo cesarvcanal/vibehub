@@ -7,7 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { SendOpts, SendResult } from "../maestro/maestro.js";
 import type { PublicUser } from "../../auth/users.js";
-import type { SubmittedFinding } from "./model.js";
+import type { MergeGate, SubmittedFinding } from "./model.js";
 
 /**
  * PR REVIEW ORCHESTRATOR — the reviewer <-> author relay. The board, the reviews store and the event log
@@ -63,7 +63,12 @@ const mergeSpy = vi.fn(async (_reviewId: string, _userId: string): Promise<Merge
 /** The PR on GitHub, as `readPrState` would read it: the head (null = a read that failed) and the state. */
 let prHeadNow: string | null = null;
 let prStateNow: "OPEN" | "MERGED" | "CLOSED" = "OPEN";
-const prHead = vi.fn(async (_cardId: string, _prUrl: string) => (prHeadNow ? { state: prStateNow, headSha: prHeadNow } : null));
+const githubPr: { mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" } = { mergeable: "MERGEABLE" };
+const prHead = vi.fn(async () => (prHeadNow ? { state: prStateNow, headSha: prHeadNow, mergeable: githubPr.mergeable } : null));
+const prDiff = { unchanged: false };
+const prDiffUnchanged = vi.fn<(cardId: string, prUrl: string, base: string, fromSha: string, toSha: string) => Promise<boolean>>(
+  async () => prDiff.unchanged,
+);
 /** O veredito do gate do merge no commit aprovado (`gateAtCommit`); `gateGate` segura a resposta até ser solta. */
 let gateAnswer: { ran: boolean; passed: boolean; output: string } = { ran: true, passed: true, output: "" };
 let gateGate: Promise<void> | null = null;
@@ -103,6 +108,7 @@ async function load() {
     ...(await vi.importActual<typeof import("../maestro/deliver.js")>("../maestro/deliver.js")),
     deliver: deliverSpy,
     readPrState: prHead,
+    readPrDiffUnchanged: prDiffUnchanged,
     readPrApproval: prApproval,
     afterPrMerged: afterMerged,
     gateAtCommit: gateSpy,
@@ -192,6 +198,9 @@ beforeEach(async () => {
   prHead.mockClear();
   prHeadNow = null;
   prStateNow = "OPEN";
+  githubPr.mergeable = "MERGEABLE";
+  prDiffUnchanged.mockClear();
+  prDiff.unchanged = false;
   afterMerged.mockClear();
   prPeople.mockClear();
   gateSpy.mockClear();
@@ -277,8 +286,8 @@ describe("iniciar a revisão", () => {
     const run = {
       runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Revisão"], total: 2, done: 1, at: 5, finished: false,
       agents: [
-        { id: "a01f", label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "done", result: "{}", toolCount: 3 },
-        { id: "a02f", label: "juiz", phase: "Julgamento", model: "opus", status: "running", toolCount: 0 },
+        { id: "a01f", label: "revisão: correctness", phase: "Revisão", model: "claude-sonnet-5-5", status: "done", result: "{}", toolCount: 3 },
+        { id: "a02f", label: "juiz", phase: "Julgamento", model: "claude-opus-5-5", status: "running", toolCount: 0 },
       ],
     };
     fleetRead.mockResolvedValueOnce([run]);
@@ -289,8 +298,8 @@ describe("iniciar a revisão", () => {
       runs: [{
         runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Revisão"], total: 2, done: 1, at: 5, finished: true,
         agents: [
-          { id: "a01f", label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "done", result: "{}" },
-          { id: "a02f", label: "juiz", phase: "Julgamento", model: "opus", status: "stopped" },
+          { id: "a01f", label: "revisão: correctness", phase: "Revisão", model: "claude-sonnet-5-5", modelLabel: "Sonnet 5.5", status: "done", result: "{}" },
+          { id: "a02f", label: "juiz", phase: "Julgamento", model: "claude-opus-5-5", modelLabel: "Opus 5.5", status: "stopped" },
         ],
       }],
     }]);
@@ -902,6 +911,25 @@ describe("rodada do revisor", () => {
     }
   });
 
+  it("merge automático recusado por conflito com a base: não avisa 'mergeie pelo painel', porque o botão ficou preso e o autor já tem a ordem", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    try {
+      mergeAnswer = { kind: "refused", status: 409, reason: "conflict", error: "o PR tem conflito com dev" };
+      await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
+      await approveTurnEnds(o, review.reviewerCardId);
+      await vi.waitFor(() => expect(mergeSpy).toHaveBeenCalledTimes(1));
+      await new Promise((r) => setTimeout(r, 40));
+      const after = (await o.store.getReview(review.id))!;
+      expect(after.autoMergeFailedRound).toBeUndefined();
+      expect(after.log.some((e) => /Merge automático não saiu/.test(e.text))).toBe(false);
+      expect((await messagesOn(o, author.id)).some((e) => /merge automático não saiu/.test(e.text))).toBe(false);
+    } finally {
+      off();
+    }
+  });
+
   it("merge automático recusado (CI vermelho): nota e aviso curtos, a rodada não tenta de novo e os textos voltam ao botão", async () => {
     const o = await load();
     const { author, review } = await started(o);
@@ -1313,7 +1341,7 @@ describe("decisão humana", () => {
     await expect(o.orch.decideQuestion(review.id, "f1", "block", "u-revisor")).rejects.toThrow();
   });
 
-  it("impasse: manter segura, aceitar o risco do último item libera o ready", async () => {
+  it("impasse: manter segura (o clique repetido não grava a decisão de novo), aceitar o risco do último item libera o ready", async () => {
     const o = await load();
     const { author, review } = await started(o);
     const two = [BLOCKER, { ...BLOCKER, title: "sql sem bind", line: 80 }];
@@ -1331,6 +1359,8 @@ describe("decisão humana", () => {
 
     const kept = await o.orch.decideQuestion(review.id, "f1", "keep", "u-revisor");
     expect(kept.phase).toBe("impasse");
+    const keptAgain = await o.orch.decideQuestion(review.id, "f1", "keep", "u-revisor");
+    expect(keptAgain.log.filter((event) => event.text.includes("f1: mantém o bloqueio"))).toHaveLength(1);
     const half = await o.orch.decideQuestion(review.id, "f2", "accept_risk", "u-revisor");
     expect(half.phase).toBe("impasse");
     expect(half.findings[1]).toMatchObject({ status: "accepted_risk", humanDecision: "accept_risk" });
@@ -1857,7 +1887,9 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
       round, findings: round === 1 ? [SUGGESTION] : [], headSha: SHA1, summary: "sem bloqueante",
     });
     expect(ready.phase).toBe("ready");
+    await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("passed"));
     send.mockClear();
+    prHead.mockClear();
     calls.length = 0;
     return { author, review: ready, off: o.orch.startReviewOrchestrator({ graceMs: 0 }) };
   }
@@ -1898,7 +1930,7 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
     const o = await load();
     const { author, review, off } = await readyAt(o);
     try {
-      await o.registry.markCardHumanActive(author.id);
+      await o.registry.markCardHumanActive(author.id, undefined);
       prHeadNow = SHA2;
       await endTurn(o, author.id);
       await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("reviewing"));
@@ -1968,7 +2000,7 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
       await settle();
       expect(prHead).not.toHaveBeenCalled();
       // fixing: the author fixes through the list; their push is the answer, not a push after ready
-      await o.registry.markCardHumanActive(author.id);
+      await o.registry.markCardHumanActive(author.id, undefined);
       await endTurn(o, author.id);
       await vi.waitFor(() => expect(prHead).toHaveBeenCalledTimes(1));
       await settle();
@@ -1985,6 +2017,173 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
     const after = await o.orch.reopenAfterHeadMoved(review.id, "teste", { cause: "push", headSha: SHA1 });
     expect(after).toMatchObject({ phase: "ready", round: 1 });
     expect(send).not.toHaveBeenCalled();
+  });
+
+  async function roundsImpasse(o: Loaded) {
+    const { author, review } = await started(o);
+    await o.store.mutateReview(review.id, (r) => {
+      r.round = 3;
+    });
+    await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 3, findings: [{ ...BLOCKER, introducedInRound: 3 }], headSha: SHA1, summary: "bloqueante novo",
+    });
+    const kept = await o.orch.decideQuestion(review.id, "f1", "keep", "mussa");
+    expect(kept).toMatchObject({ phase: "impasse", impasseReason: "rodadas" });
+    send.mockClear();
+    calls.length = 0;
+    return { author, review: kept };
+  }
+
+  it("push depois do impasse por rodadas volta ao revisor numa conferência extra, e o fixed dele deixa a revisão pronta", async () => {
+    const o = await load();
+    const { review } = await roundsImpasse(o);
+    prHeadNow = SHA2;
+    const reopened = await o.orch.syncReviewWithGithub(review.id);
+    expect(reopened).toMatchObject({ phase: "reviewing", round: 3, lastSubmitRound: 2, reviewedSha: SHA1, prHeadSha: SHA2 });
+    expect(reopened?.impasseReason).toBeUndefined();
+    expect(reopened?.log.at(-1)?.text).toMatch(/O autor empurrou depois do impasse \(head bbbbbbb\).*conferência extra/);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
+    expect(lastText()).toContain("depois do impasse");
+    expect(lastText()).toContain(`git diff ${SHA1}..HEAD`);
+    const after = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 3, findings: [], verdicts: [{ id: "f1", status: "fixed", reviewerReply: "corrigido no push" }], headSha: SHA2, summary: "ok",
+    });
+    expect(after).toMatchObject({ phase: "ready", reviewedSha: SHA2 });
+  });
+
+  it("no impasse por rodadas, head igual ao revisado não reabre; impasse por outro motivo não reabre com push", async () => {
+    const o = await load();
+    const { review } = await roundsImpasse(o);
+    prHeadNow = SHA1;
+    expect(await o.orch.syncReviewWithGithub(review.id)).toMatchObject({ phase: "impasse", impasseReason: "rodadas" });
+    await o.store.mutateReview(review.id, (r) => {
+      r.impasseReason = "IA não respondeu";
+    });
+    prHeadNow = SHA2;
+    expect(await o.orch.syncReviewWithGithub(review.id)).toMatchObject({ phase: "impasse", impasseReason: "IA não respondeu" });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("merge da base sem mudar o diff do PR: a revisão segue pronta no head novo, com Approve e testes do merge de novo", async () => {
+    const o = await load();
+    const { review, off } = await readyAt(o);
+    off();
+    await o.store.mutateReview(review.id, (r) => {
+      r.autoMergeFailedRound = 1;
+    });
+    prHeadNow = SHA2;
+    prDiff.unchanged = true;
+    const after = await o.orch.syncReviewWithGithub(review.id);
+    expect(prDiffUnchanged).toHaveBeenCalledWith(review.cardId, PR.url, PR.base, SHA1, SHA2);
+    expect(after).toMatchObject({ phase: "ready", round: 1, reviewedSha: SHA2, prHeadSha: SHA2 });
+    expect(after?.autoMergeFailedRound).toBeUndefined();
+    expect(after?.log.at(-1)?.text).toMatch(/Merge da base dev no PR \(head bbbbbbb\) sem mudar o diff do PR/);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
+    expect(lastText()).toContain("--approve");
+    await vi.waitFor(() => expect(gateSpy).toHaveBeenCalledWith(review.cardId, PR.url, SHA2));
+  });
+
+  it("merge da base sem mudar o diff do PR, no impasse por rodadas: o impasse fica, no head novo, sem chamar ninguém", async () => {
+    const o = await load();
+    const { review } = await roundsImpasse(o);
+    prHeadNow = SHA2;
+    prDiff.unchanged = true;
+    const after = await o.orch.syncReviewWithGithub(review.id);
+    expect(after).toMatchObject({ phase: "impasse", impasseReason: "rodadas", reviewedSha: SHA2 });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("o diff só é comparado quando o head novo pode reabrir: em fixing não vai ao GitHub comparar", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [BLOCKER], headSha: SHA1, summary: "r1" });
+    prHeadNow = SHA2;
+    await o.orch.syncReviewWithGithub(review.id);
+    expect(prDiffUnchanged).not.toHaveBeenCalled();
+  });
+
+  it("no impasse por rodadas, o fim do turno do autor sempre confere o PR: um push logo depois de outra conferência reabre sem esperar o intervalo", async () => {
+    const o = await load();
+    const { author, review } = await roundsImpasse(o);
+    const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    try {
+      prHeadNow = SHA1;
+      await endTurn(o, author.id);
+      await vi.waitFor(() => expect(prHead).toHaveBeenCalledTimes(1));
+      await settle();
+      prHeadNow = SHA2;
+      await endTurn(o, author.id);
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.phase).toBe("reviewing"));
+      await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+      expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
+    } finally {
+      off();
+    }
+  });
+
+  it("o impasse a que a conferência extra chega depois do push é um aviso novo nos cards do autor e do revisor", async () => {
+    const o = await load();
+    const { author, review } = await roundsImpasse(o);
+    const impasseNotices = async (cardId: string) => (await messagesOn(o, cardId)).filter((e) => String(e.id).includes(":impasse:"));
+    expect(await impasseNotices(author.id)).toHaveLength(1);
+    expect(await impasseNotices(review.reviewerCardId)).toHaveLength(1);
+    prHeadNow = SHA2;
+    expect(await o.orch.syncReviewWithGithub(review.id)).toMatchObject({ phase: "reviewing" });
+    const again = await o.orch.submitReviewerRound(review.reviewerCardId, {
+      round: 3, findings: [], verdicts: [{ id: "f1", status: "open", reviewerReply: "o push não resolveu" }], headSha: SHA2, summary: "segue travado",
+    });
+    expect(again).toMatchObject({ phase: "impasse", impasseReason: "rodadas" });
+    expect(await impasseNotices(author.id)).toHaveLength(2);
+    expect(await impasseNotices(review.reviewerCardId)).toHaveLength(2);
+  });
+
+  it("merge recusado não reabre impasse por rodadas: só o push do autor reabre o impasse", async () => {
+    const o = await load();
+    const { review } = await roundsImpasse(o);
+    const after = await o.orch.reopenAfterHeadMoved(review.id, "u-merger");
+    expect(after).toMatchObject({ phase: "impasse", impasseReason: "rodadas" });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("duas conferências do GitHub no mesmo head novo, ao mesmo tempo: a revisão avança uma vez só (uma nota, um Approve, um gate)", async () => {
+    const o = await load();
+    const { review, off } = await readyAt(o);
+    off();
+    const compare = { release: null as ((same: boolean) => void) | null };
+    prDiffUnchanged.mockImplementationOnce(() => new Promise<boolean>((r) => { compare.release = r; }));
+    prDiffUnchanged.mockImplementationOnce(async () => true);
+    gateSpy.mockClear();
+    prHeadNow = SHA2;
+    const first = o.orch.syncReviewWithGithub(review.id, "painel aberto");
+    await vi.waitFor(() => expect(prDiffUnchanged).toHaveBeenCalledTimes(1));
+    await o.orch.syncReviewWithGithub(review.id, "fim do turno do autor");
+    compare.release?.(true);
+    await first;
+    const after = await o.store.getReview(review.id);
+    expect(after).toMatchObject({ phase: "ready", reviewedSha: SHA2 });
+    expect(after?.log.filter((l) => l.text.startsWith("Merge da base"))).toHaveLength(1);
+    expect(send).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(gateSpy).toHaveBeenCalledWith(review.cardId, PR.url, SHA2));
+    await new Promise((r) => setTimeout(r, 40));
+    expect(gateSpy.mock.calls.filter((c) => c[2] === SHA2)).toHaveLength(1);
+  });
+
+  it("revisão cancelada enquanto o diff é comparado fica cancelada: a comparação que volta depois não avança o commit revisado", async () => {
+    const o = await load();
+    const { review, off } = await readyAt(o);
+    off();
+    const compare = { release: null as ((same: boolean) => void) | null };
+    prDiffUnchanged.mockImplementationOnce(() => new Promise<boolean>((r) => { compare.release = r; }));
+    prHeadNow = SHA2;
+    const sync = o.orch.syncReviewWithGithub(review.id);
+    await vi.waitFor(() => expect(prDiffUnchanged).toHaveBeenCalledTimes(1));
+    await o.orch.cancelReview(review.id, "mussa");
+    compare.release?.(true);
+    await sync;
+    expect(await o.store.getReview(review.id)).toMatchObject({ phase: "cancelled", reviewedSha: SHA1 });
+    expect(send.mock.calls.filter((c) => String(c[1]).includes("--approve"))).toHaveLength(0);
   });
 
   it("o delta lista as sugestões em aberto, e o fixed do revisor numa sugestão aplicada vale", async () => {
@@ -2121,14 +2320,15 @@ describe("o PR mudou no GitHub fora do painel (merge à mão, PR fechado)", () =
     expect(prHead).not.toHaveBeenCalled();
   });
 
-  it("syncReviewSoon tem freio: duas leituras do painel no mesmo minuto vão ao GitHub uma vez só", async () => {
+  it("a leitura do painel tem freio: duas leituras no mesmo minuto vão ao GitHub uma vez só", async () => {
     const o = await load();
     const { review } = await readyReview(o);
+    await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("passed"));
+    prHead.mockClear();
     prHeadNow = SHA1;
-    o.orch.syncReviewSoon(review);
-    o.orch.syncReviewSoon(review);
-    await vi.waitFor(() => expect(prHead).toHaveBeenCalledTimes(1));
-    await new Promise((r) => setTimeout(r, 30));
+    prHead.mockClear();
+    await o.orch.reviewForRead(review);
+    await o.orch.reviewForRead(review);
     expect(prHead).toHaveBeenCalledTimes(1);
   });
 });
@@ -2403,11 +2603,11 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
     const o = await load();
     const { author, review, off } = await fixing(o);
     try {
-      await o.registry.markCardHumanActive(author.id);
+      await o.registry.markCardHumanActive(author.id, undefined);
       await endTurn(o, author.id);
       await new Promise((r) => setTimeout(r, 30));
       expect(send).not.toHaveBeenCalled();
-      await o.registry.markCardHumanActive(author.id, 0);
+      await o.registry.markCardHumanActive(author.id, undefined, 0);
       await endTurn(o, author.id);
       await expectOnlyTheSecondCounts(o, review.id);
     } finally {
@@ -2914,6 +3114,115 @@ describe("gate do merge rodado quando a revisão fica pronta", () => {
     expect(toAuthor).toContain("falharam no commit aprovado (aaaaaaa)");
     expect(toAuthor).toContain("npm install");
     expect(after.log.at(-1)?.text).toMatch(/Testes do merge vermelhos/);
+  });
+
+  it("pronta com o PR em conflito com a base: não dá o merge como livre, não roda o gate e o autor recebe a ordem de trazer a base", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    prHeadNow = SHA1;
+    githubPr.mergeable = "CONFLICTING";
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
+    await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("failed"));
+    const after = (await o.store.getReview(review.id))!;
+    expect(after.phase).toBe("ready");
+    expect(after.mergeGate).toMatchObject({ sha: SHA1, state: "failed", conflict: true });
+    expect(gateSpy).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(send.mock.calls.some(([card]) => card === author.id)).toBe(true));
+    const toAuthor = String(send.mock.calls.find(([card]) => card === author.id)?.[1]);
+    expect(toAuthor).toContain("conflito com dev");
+    expect(toAuthor).toContain("git merge origin/dev");
+    expect(toAuthor).toContain(`git push origin HEAD:${PR.branch}`);
+    expect(after.log.at(-1)?.text).toMatch(/conflito com dev/);
+  });
+
+  it("conflito que aparece depois de o gate falhar as vezes que roda sozinho não conta como tentativa: o autor recebe a ordem de trazer a base", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
+    await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("passed"));
+    await o.store.mutateReview(review.id, (r) => { r.mergeGate = { sha: SHA1, state: "failed", output: RED.output, at: 1, failures: 3 }; });
+    send.mockClear();
+    prHeadNow = SHA1;
+    githubPr.mergeable = "CONFLICTING";
+    const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    try {
+      await authorTurnEnds(o, author.id);
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate).toMatchObject({ state: "failed", conflict: true }));
+      expect((await o.store.getReview(review.id))?.mergeGate?.exhausted).toBeUndefined();
+      await vi.waitFor(() => expect(send.mock.calls.some(([card, text]) => card === author.id && String(text).includes("git merge origin/dev"))).toBe(true));
+    } finally {
+      off();
+    }
+  });
+
+  it("conflito que a IA do autor não resolve para no mesmo teto do gate: depois de 3 ordens a falha espera uma pessoa e o autor não é chamado de novo", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    prHeadNow = SHA1;
+    githubPr.mergeable = "CONFLICTING";
+    const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    const conflictOrders = () => send.mock.calls.filter(([card, text]) => card === author.id && String(text).includes("git merge origin/dev")).length;
+    try {
+      await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
+      await vi.waitFor(() => expect(conflictOrders()).toBe(1));
+      for (const failures of [2, 3, 4]) {
+        await vi.waitFor(() => expect(o.orch.mergeGateRunning(review.id)).toBe(false));
+        await authorTurnEnds(o, author.id);
+        await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.failures).toBe(failures));
+      }
+      await vi.waitFor(() => expect(o.orch.mergeGateRunning(review.id)).toBe(false));
+      const exhausted = (await o.store.getReview(review.id))!;
+      expect(exhausted.mergeGate).toMatchObject({ state: "failed", conflict: true, exhausted: true });
+      expect(conflictOrders()).toBe(3);
+      await authorTurnEnds(o, author.id);
+      await new Promise((r) => setTimeout(r, 60));
+      expect((await o.store.getReview(review.id))?.mergeGate?.failures).toBe(4);
+      expect(conflictOrders()).toBe(3);
+      expect(exhausted.log.at(-1)?.text).toMatch(/segue em conflito com dev/);
+    } finally {
+      off();
+    }
+  });
+
+  it("conflito retomado depois de um deploy no meio da conferência: a conta de ordens ao autor segue, não volta a 1", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    prHeadNow = SHA1;
+    githubPr.mergeable = "CONFLICTING";
+    const first = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    const gatesSeenByPrReads: MergeGate[] = [];
+    const readPr = prHead.getMockImplementation()!;
+    try {
+      await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.failures).toBe(1));
+      await vi.waitFor(() => expect(o.orch.mergeGateRunning(review.id)).toBe(false));
+      prHead.mockImplementation(async () => {
+        gatesSeenByPrReads.push({ ...(await o.store.getReview(review.id))!.mergeGate! });
+        return readPr();
+      });
+      await authorTurnEnds(o, author.id);
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.failures).toBe(2));
+      await vi.waitFor(() => expect(o.orch.mergeGateRunning(review.id)).toBe(false));
+    } finally {
+      prHead.mockImplementation(readPr);
+      first();
+    }
+    const orphan = gatesSeenByPrReads.find((gate) => gate.state === "running");
+    expect(orphan).toMatchObject({ state: "running", failures: 1 });
+    const afterDeploy = await o.store.mutateReview(review.id, (r) => { r.mergeGate = orphan; });
+    await o.orch.reviewForRead(afterDeploy);
+    await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("failed"));
+    expect((await o.store.getReview(review.id))?.mergeGate).toMatchObject({ conflict: true, failures: 2 });
+  });
+
+  it("pronta com o mergeable ainda não calculado pelo GitHub (UNKNOWN): o gate roda como sempre", async () => {
+    const o = await load();
+    const { review } = await started(o);
+    prHeadNow = SHA1;
+    githubPr.mergeable = "UNKNOWN";
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
+    await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("passed"));
+    expect(gateSpy).toHaveBeenCalled();
   });
 
   it("pronta e gate verde: grava passed no commit aprovado e não manda nada ao autor", async () => {

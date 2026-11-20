@@ -24,20 +24,21 @@ import {
 import { cn } from "@/lib/utils";
 import { useNow, usePageVisible } from "@/lib/useNow";
 import { wsUrl } from "@/lib/ws";
-import { Button } from "@/components/ui/button";
+import { Button, type ButtonProps } from "@/components/ui/button";
 import { useAuth } from "@/providers/auth";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
 import { useVoiceCall } from "@/features/voice/useVoiceCall";
 import { VoiceCallBar } from "@/features/voice/VoiceCallBar";
 import { VoiceCallContext, type VoiceCallControl } from "@/features/voice/ComposerVoiceButton";
 import { VoiceTurnBubble } from "@/features/voice/VoiceTurnBubble";
-import { typedContext } from "@/features/voice/voiceContext";
+import { SERVER_BACK_CONTEXT, typedContext } from "@/features/voice/voiceContext";
 import { useVoiceDelegation } from "@/features/voice/useVoiceDelegation";
+import { runVoiceAction } from "@/features/voice/api";
 import { AnswerActions } from "@/features/voice/AnswerActions";
 import { readAloud, readAloudError, setReadAloudErrorHandler } from "@/features/voice/readAloud";
 import { PlanUsageAlert, cardRateLimitsKey, useCardPlanUsage } from "@/features/board/components/PlanUsage";
 import { AccountLoginDialog, type LoginAccount } from "@/features/board/components/AccountLoginDialog";
-import { ContextMeter, ContextNotice } from "@/features/board/components/ContextMeter";
+import { ContextMeter } from "@/features/board/components/ContextMeter";
 import { planAlert, planWindows } from "@/features/board/lib/planUsage";
 import { useAnalysisRereadOnReport } from "@/features/board/lib/useCardAnalysis";
 import { LinkifiedText, Markdown, SenderTag } from "@/features/board/components/ChatView";
@@ -90,6 +91,7 @@ import {
   decisionSummary,
   parseDecisionReply,
   pendingDecisions,
+  proseOptions,
   splitProseQuestion,
   type PendingDecision,
 } from "@/features/board/lib/pendingDecisions";
@@ -108,6 +110,7 @@ import {
   deliveredUserTexts,
   dropUserRow,
   currentActivity,
+  findLongToolWait,
   finishedAnswerIds,
   groupSdkRows,
   isSdkDelta,
@@ -168,6 +171,7 @@ import { SdkCompactionRow } from "@/features/board/components/SdkCompactionRow";
 import { SdkCommandChip } from "@/features/board/components/SdkCommandChip";
 import { invokedCommand, type InvokedCommand } from "@/features/board/lib/slashMenu";
 import { CardFailureNotice } from "@/features/platformFailures/components/CardFailureNotice";
+import { LongToolWaitNotice } from "@/features/board/components/LongToolWaitNotice";
 
 /**
  * NATIVE CHAT (beta) — the card's conversation over the Agent SDK driver, not the tmux transcript.
@@ -1336,11 +1340,31 @@ export function SdkChatView({
     // Not `callWorking`: a dropped wire clears `connected` but not the turn, and the delegation must
     // wait for the turn's real end, not answer with whatever was said before the blip.
     turnRunning: state.awaiting || state.turnActive,
-    sendToAgent: (text) => {
-      sendOrQueue(text);
+    sendUrgentToAgent: (text) => {
+      const wireUp = connected && socketRef.current?.readyState === WebSocket.OPEN;
+      if (!wireUp) throw new Error(translate("sdk.offline"));
+      dispatchTurn(text, true);
       setSentDuringCall(true);
     },
+    runAction: (toolCall) => runVoiceAction(cardId, toolCall),
+    answerQuestion: (questionId, answers) => {
+      if (!answerUserQuestion(questionId, answers)) return false;
+      setSentDuringCall(true);
+      return true;
+    },
   });
+  const wireDroppedDuringCall = React.useRef(false);
+  React.useEffect(() => {
+    if (!callLive) {
+      wireDroppedDuringCall.current = false;
+      return;
+    }
+    if (!connected) {
+      wireDroppedDuringCall.current = true;
+      return;
+    }
+    if (state.ready && wireDroppedDuringCall.current) call.announceContext(SERVER_BACK_CONTEXT);
+  }, [callLive, connected, state.ready, call.announceContext]);
   /** The thread as drawn: the saved rows plus the call's turns still being spoken or saved. */
   const displayRows = React.useMemo(() => mergeLiveVoiceTurns(state.rows, call.turns, selfOrigin), [state.rows, call.turns, selfOrigin]);
   const showCallBar = call.active || (call.phase === "error" && !callBarDismissed);
@@ -1385,6 +1409,16 @@ export function SdkChatView({
     rootRef.current?.querySelector("textarea")?.focus();
   }, [leaveComposerModes]);
 
+  const answerProseOption = React.useCallback((decision: PendingDecision, answer: string): void => {
+    try {
+      dispatchTurn(buildDecisionReply(decision.text, answer));
+    } catch (err) {
+      toast.error((err as Error).message);
+      return;
+    }
+    setReplyTo((current) => (current?.rowId === decision.rowId ? null : current));
+  }, [dispatchTurn]);
+
   // THE OTHER TAB (and the agent that gave up waiting): the decision this composer is aimed at
   // stopped being pending — someone answered it elsewhere, it timed out, or Claude moved on. The
   // aim is dropped and said out loud, so the next Enter is never silently a loose message. Our own
@@ -1423,6 +1457,7 @@ export function SdkChatView({
   // idle with the AI working (card "POC modo de voz", 2026-10-21).
   const working = connected && (state.awaiting || state.turnActive || (state.terminalBurst && terminalWorking));
   const activity = React.useMemo(() => (working ? currentActivity(state) : null), [working, state]);
+  const longToolWait = working ? findLongToolWait(state) : null;
   // "Copiar" and "ouvir" only under a FINISHED answer: the current round's waits for everything to stop —
   // the turn, and also the background tasks, which may still change what the AI will say.
   const settled = connected && !working && state.backgroundTasks.length === 0;
@@ -1563,6 +1598,7 @@ export function SdkChatView({
                 peerDrafts={peerDrafts[entry.id]}
                 onDraft={sendQuestionDraft}
                 onReply={pendingIds.has(entry.id) ? jumpToDecision : undefined}
+                onPickOption={pendingIds.has(entry.id) ? answerProseOption : undefined}
                 onEdit={beginEdit}
                 onResend={resendUndelivered}
                 onDiscard={discardUndelivered}
@@ -1654,9 +1690,6 @@ export function SdkChatView({
 
       {/* The interrupt button lives INSIDE the composer — right column, above the microphone —
           in the same seat as the transcript chat's stop. The interrupt frame is still this view's. */}
-      {/* The context left the smart strip: the full message, above the meter's strip. */}
-      <ContextNotice usage={state.contextUsage} className="mt-1.5" />
-
       {/* THE ACCOUNT'S LOGIN DIED: the CLI's "Failed to authenticate…" alone read as one more line of the
           conversation. This says it is the ACCOUNT, which one, and — for the owner — reconnects it right here. */}
       {state.loginFailed ? (
@@ -1677,6 +1710,7 @@ export function SdkChatView({
         </div>
       ) : null}
       <AccountLoginDialog account={loginAccount} onClose={() => setLoginAccount(null)} />
+      {longToolWait ? <LongToolWaitNotice wait={longToolWait} onInterrupt={interrupt} /> : null}
       <CardFailureNotice cardId={cardId} notices={state.platformFailures} />
 
       {/* One strip, two messages: who is typing on the left; on the right the plan warning. */}
@@ -2232,6 +2266,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
   peerDrafts,
   onDraft,
   onReply,
+  onPickOption,
   onEdit,
   onResend,
   onDiscard,
@@ -2256,6 +2291,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
   onDraft?: (id: string, draft: QuestionDraft) => void;
   /** Arms the composer on this row's question ("Responder"). */
   onReply?: (decision: PendingDecision) => void;
+  onPickOption?: (decision: PendingDecision, answer: string) => void;
   /** Offered only on one's OWN messages: the pencil that starts editing (a supersede). */
   onEdit?: (rowId: string, original: string) => void;
   /** On a message the server never took: send the very same words again (same receipt id). */
@@ -2551,13 +2587,18 @@ const SdkChatRow = React.memo(function SdkChatRow({
     );
   }
 
-  // Best-effort highlight: when the message CLOSES on a question directed at the user, that final
-  // paragraph gets a subtle amber frame so it never drowns in the text above it.
   const prose = row.kind === "assistant" && !row.streaming ? splitProseQuestion(row.text) : null;
   const actions = row.kind === "assistant" && answerOf ? <AnswerActions id={row.id} cardId={answerOf} text={row.text} trailing={trailing} /> : null;
   if (prose) {
-    // What this question RECEIVED (`answered`), anchored to it — the third question the screen owes
-    // the person ("pronto, respondi" — "done, I answered"). Survives a reload: the answer is read back out of the sent message.
+    const decision: PendingDecision = {
+      kind: "prose",
+      rowId: row.id,
+      text: prose.question,
+      summary: decisionSummary(prose.question),
+      answerable: true,
+    };
+    const choices = answered === undefined && onPickOption ? proseOptions(prose.question) : null;
+    const stackedChoices = choices !== null && hasDescriptions(choices.options);
     return (
       <div data-testid="sdk-assistant" className="max-w-full select-text text-sm leading-relaxed">
         {prose.body !== "" ? <Markdown text={prose.body} /> : null}
@@ -2571,7 +2612,21 @@ const SdkChatRow = React.memo(function SdkChatRow({
               : "border-amber-500/30 bg-amber-500/5",
           )}
         >
-          <Markdown text={prose.question} />
+          <Markdown text={choices ? choices.lead : prose.question} />
+          {choices && onPickOption ? (
+            <div className={cn("mt-1.5 flex gap-1.5", stackedChoices ? "flex-col" : "flex-wrap")}>
+              {choices.options.map((option, optionIndex) => (
+                <ChoiceOption
+                  key={optionIndex}
+                  label={option.label}
+                  description={option.description}
+                  stacked={stackedChoices}
+                  data-testid="sdk-prose-option"
+                  onClick={() => onPickOption(decision, option.label)}
+                />
+              ))}
+            </div>
+          ) : null}
           {answered !== undefined ? (
             <div data-testid="sdk-prose-answered" className="mt-1 border-t border-emerald-500/20 pt-1 text-xs text-emerald-600 dark:text-emerald-400">
               {t("sdk.questionAnswered", { answers: answered })}
@@ -2583,17 +2638,9 @@ const SdkChatRow = React.memo(function SdkChatRow({
               className="mt-1.5 h-6 text-[11px]"
               data-testid="sdk-prose-reply"
               aria-pressed={aiming}
-              onClick={() =>
-                onReply({
-                  kind: "prose",
-                  rowId: row.id,
-                  text: prose.question,
-                  summary: decisionSummary(prose.question),
-                  answerable: true,
-                })
-              }
+              onClick={() => onReply(decision)}
             >
-              {t("sdk.replyAction")}
+              {choices ? t("sdk.questionOther") : t("sdk.replyAction")}
             </Button>
           ) : null}
         </div>
@@ -2799,32 +2846,30 @@ function SdkQuestionCard({
         <div key={qi} className="flex flex-col gap-1.5">
           {q.header ? <div className="text-[10px] font-semibold uppercase tracking-wide text-sky-500/80">{q.header}</div> : null}
           <div className="text-sm text-foreground">{q.question}</div>
-          <div className="flex flex-wrap gap-1.5">
+          <div className={cn("flex gap-1.5", hasDescriptions(q.options) ? "flex-col" : "flex-wrap")}>
             {q.options.map((opt) => {
               const selected = (picked[qi] ?? []).includes(opt.label);
               // Marked by ANOTHER person: their dot in the corner of the option, in their color.
               const pickedBy = peers.filter((p) => (p.draft.picked[qi] ?? []).includes(opt.label));
               return (
-                <Button
+                <ChoiceOption
                   key={opt.label}
-                  size="sm"
-                  variant={selected ? "default" : "outline"}
-                  className={cn("relative h-7 max-w-full overflow-visible text-xs", pickedBy.length > 0 && !selected && peerTone(pickedBy[0]!.name).border)}
+                  label={opt.label}
+                  description={opt.description}
+                  stacked={hasDescriptions(q.options)}
+                  selected={selected}
+                  className={cn(pickedBy.length > 0 && !selected && peerTone(pickedBy[0]!.name).border)}
                   data-testid="sdk-question-option"
                   data-peer-picked={pickedBy.length > 0 || undefined}
-                  aria-pressed={selected}
-                  title={pickedBy.length > 0
-                    ? [opt.description, t("sdk.questionPeerPicked", { names: pickedBy.map((p) => peerDisplayName(p.name)).join(", ") })].filter(Boolean).join(" — ")
-                    : opt.description}
+                  title={pickedBy.length > 0 ? t("sdk.questionPeerPicked", { names: pickedBy.map((p) => peerDisplayName(p.name)).join(", ") }) : undefined}
                   onClick={() => toggle(qi, opt.label)}
                 >
-                  <span className="truncate">{opt.label}</span>
                   {pickedBy.length > 0 ? (
                     <span className="absolute -right-1.5 -top-1.5 flex -space-x-1">
                       {pickedBy.map((p) => <PeerAvatar key={p.name} name={p.name} small />)}
                     </span>
                   ) : null}
-                </Button>
+                </ChoiceOption>
               );
             })}
           </div>
@@ -2901,6 +2946,50 @@ function SdkQuestionCard({
       )}
       <span className="text-muted-foreground/70">{t("sdk.questionTimeoutHint")}</span>
     </div>
+  );
+}
+
+function hasDescriptions(options: ReadonlyArray<{ description?: string }>): boolean {
+  return options.some((option) => Boolean(option.description));
+}
+
+function ChoiceOption({
+  label,
+  description,
+  stacked,
+  selected,
+  className,
+  children,
+  ...buttonProps
+}: Omit<ButtonProps, "aria-label" | "aria-describedby" | "aria-pressed"> & {
+  label: string;
+  description?: string;
+  stacked: boolean;
+  selected?: boolean;
+}) {
+  const descriptionId = React.useId();
+  return (
+    <Button
+      size="sm"
+      variant={selected ? "default" : "outline"}
+      className={cn(
+        "relative max-w-full overflow-visible text-xs",
+        stacked ? "h-auto w-full flex-col items-start gap-0.5 whitespace-normal px-2.5 py-1.5 text-left" : "h-7",
+        className,
+      )}
+      aria-label={label}
+      aria-describedby={description ? descriptionId : undefined}
+      aria-pressed={selected}
+      {...buttonProps}
+    >
+      <span className={stacked ? "break-words" : "truncate"}>{label}</span>
+      {description ? (
+        <span id={descriptionId} className={cn("whitespace-pre-line break-words font-normal", selected ? "text-primary-foreground/80" : "text-muted-foreground")}>
+          {description}
+        </span>
+      ) : null}
+      {children}
+    </Button>
   );
 }
 

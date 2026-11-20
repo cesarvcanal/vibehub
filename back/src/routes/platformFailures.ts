@@ -1,13 +1,14 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { requestUser, requireOwner } from "../auth/session.js";
+import { requestUser, requireOwner, requireSession } from "../auth/session.js";
 import {
   PlatformFailureNotFoundError, PlatformFailureStateError, dismissPlatformFailure, listActivePlatformFailures,
 } from "../services/platformFailures/platformFailures.js";
 import { startPlatformFailureInvestigation } from "../services/platformFailures/investigation.js";
+import { InvalidScreenErrorReport, parseScreenErrorReport, recordScreenError } from "../services/platformFailures/screenError.js";
 
 async function sendPlatformFailureError(reply: FastifyReply, err: unknown) {
   if (err instanceof PlatformFailureNotFoundError) return await reply.code(404).send({ error: err.message });
-  if (err instanceof PlatformFailureStateError) return await reply.code(400).send({ error: err.message });
+  if (err instanceof PlatformFailureStateError || err instanceof InvalidScreenErrorReport) return await reply.code(400).send({ error: err.message });
   throw err;
 }
 
@@ -29,6 +30,14 @@ export async function platformFailureRoutes(app: FastifyInstance): Promise<void>
   app.post<{ Params: { id: string } }>("/api/platform-failures/:id/dismiss", { preHandler: requireOwner }, async (req, reply) => {
     try {
       return await reply.send({ failure: await dismissPlatformFailure(req.params.id) });
+    } catch (err) {
+      return await sendPlatformFailureError(reply, err);
+    }
+  });
+
+  app.post("/api/platform-failures/screen-errors", { preHandler: requireSession }, async (req, reply) => {
+    try {
+      return await reply.send({ recorded: await recordScreenError(parseScreenErrorReport(req.body)) });
     } catch (err) {
       return await sendPlatformFailureError(reply, err);
     }

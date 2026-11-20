@@ -693,7 +693,7 @@ describe("GET da revisão: a frota de agentes do revisor", () => {
       stdout: `${JSON.stringify([{
         runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Contexto", "Revisão"], total: 1, done: 0,
         agents: [{
-          id: "a01f", status: "running", label: "revisão: correctness", phase: "Revisão", model: "sonnet", toolCount: 2,
+          id: "a01f", status: "running", label: "revisão: correctness", phase: "Revisão", model: "claude-sonnet-5-5", toolCount: 2,
           activity: { kind: "tool", tool: "Bash", target: "cat .env" },
         }],
       }])}\n`,
@@ -727,9 +727,9 @@ describe("GET da revisão: a frota de agentes do revisor", () => {
       expect((await read()).fleet).toHaveLength(1);
       expect((await read()).fleet[0]).toMatchObject({
         runId: "wf_abc12", phases: ["Contexto", "Revisão"],
-        agents: [{ label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "running" }],
+        agents: [{ label: "revisão: correctness", phase: "Revisão", model: "claude-sonnet-5-5", status: "running" }],
       });
-      expect((await read()).fleet[0].agents[0]).toEqual({ id: "a01f", label: "revisão: correctness", phase: "Revisão", model: "sonnet", status: "running" });
+      expect((await read()).fleet[0].agents[0]).toEqual({ id: "a01f", label: "revisão: correctness", phase: "Revisão", model: "claude-sonnet-5-5", modelLabel: "Sonnet 5.5", status: "running" });
     } finally {
       cleanup();
     }
@@ -764,6 +764,97 @@ describe("GET da revisão: a frota de agentes do revisor", () => {
     } finally {
       cleanup();
     }
+  });
+});
+
+describe("passo a passo de um agente da frota do revisor", () => {
+  async function reviewerSession() {
+    const people = await world();
+    const review = (await startReview(people)).json().review as { id: string; reviewerCardId: string };
+    const { EventEmitter } = await import("node:events");
+    const manager = await import("../services/sdk/manager.js");
+    const driver = Object.assign(new EventEmitter(), {
+      stdout: new EventEmitter(), stderr: new EventEmitter(), exitCode: null, kill: () => undefined,
+      stdin: Object.assign(new EventEmitter(), { writable: true, write: () => true, end: () => undefined }),
+    });
+    manager.setDriverSpawnerForTesting(() => driver as never);
+    onTestFinished(() => {
+      manager.resetSdkSessionsForTesting();
+      manager.setDriverSpawnerForTesting(null);
+    });
+    manager.ensureDriverSession({
+      cardId: review.reviewerCardId, label: "revisor", command: { file: "docker", args: ["exec"] }, transcriptDir: "/root/.claude/projects/p",
+    });
+    driver.stdout.emit("data", Buffer.from(`${JSON.stringify({ type: "session", sessionId: "s1" })}\n`));
+    return people;
+  }
+
+  const feedOf = async (people: World, path: string, who: Person) =>
+    await app.inject({ method: "GET", url: `/api/cards/${people.cardId}/review/agents/${path}/feed`, headers: { cookie: who.cookie } });
+
+  it("lê o transcript do agente na rodada da sessão do revisor e devolve os passos", async () => {
+    const people = await reviewerSession();
+    const steps = [{ at: 1, kind: "tool", tool: "Read", target: "src/auth.ts" }, { at: 2, kind: "text", text: "Achei o vazamento." }];
+    runScript.mockClear();
+    runScript.mockResolvedValueOnce({ stdout: `${JSON.stringify(steps)}\n`, stderr: "" });
+    const response = await feedOf(people, "wf_abc12/a01f", people.leitor);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ items: steps });
+    expect(runScript).toHaveBeenCalledTimes(1);
+    const script = runScript.mock.calls[0]![0];
+    expect(script).toContain("'/root/.claude/projects/p/s1/subagents/workflows' 'wf_abc12' 'a01f'");
+  });
+
+  it.each(["wf_abc12/a01f;rm", "x/a01f", "wf_abc12/zz"])("id fora do formato (%s) responde 400 sem ir ao runner", async (path) => {
+    const people = await reviewerSession();
+    runScript.mockClear();
+    const response = await feedOf(people, path.split("/").map(encodeURIComponent).join("/"), people.leitor);
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toHaveProperty("error");
+    expect(runScript).not.toHaveBeenCalled();
+  });
+
+  it("sem sessão viva do revisor, responde 409 em vez de fingir passo nenhum", async () => {
+    const people = await world();
+    await startReview(people);
+    const response = await feedOf(people, "wf_abc12/a01f", people.leitor);
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toHaveProperty("error");
+  });
+
+  it("sondagem que falha no runner responde 502", async () => {
+    const people = await reviewerSession();
+    runScript.mockRejectedValueOnce(new Error("container parado"));
+    expect((await feedOf(people, "wf_abc12/a01f", people.leitor)).statusCode).toBe(502);
+  });
+
+  it("quem não alcança o card não descobre que ele existe", async () => {
+    const people = await reviewerSession();
+    expect((await feedOf(people, "wf_abc12/a01f", people.outro)).statusCode).toBe(404);
+  });
+
+  it("card sem revisão responde 404", async () => {
+    const people = await world();
+    expect((await feedOf(people, "wf_abc12/a01f", people.autor)).statusCode).toBe(404);
+  });
+  it("com ?pr, lê a revisão daquele PR; pr fora do formato responde 400 sem ir ao runner", async () => {
+    const people = await reviewerSession();
+    runScript.mockClear();
+    runScript.mockResolvedValueOnce({ stdout: "[]\n", stderr: "" });
+    const ofPr = await app.inject({
+      method: "GET", url: `/api/cards/${people.cardId}/review/agents/wf_abc12/a01f/feed?pr=${PR.number}`, headers: { cookie: people.leitor.cookie },
+    });
+    expect(ofPr.statusCode).toBe(200);
+    expect(ofPr.json()).toEqual({ items: [] });
+    const otherPr = await app.inject({
+      method: "GET", url: `/api/cards/${people.cardId}/review/agents/wf_abc12/a01f/feed?pr=${PR.number + 1}`, headers: { cookie: people.leitor.cookie },
+    });
+    expect(otherPr.statusCode).toBe(404);
+    const invalid = await app.inject({
+      method: "GET", url: `/api/cards/${people.cardId}/review/agents/wf_abc12/a01f/feed?pr=abc`, headers: { cookie: people.leitor.cookie },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(runScript).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -811,6 +902,8 @@ describe("GET da revisão confere o PR no GitHub (merge feito fora do painel)", 
   it("o PR mergeado direto no GitHub aparece mergeado já na leitura em ready, e o freio segura o gh por um minuto", async () => {
     const w = await world();
     const ready = await readyReview(w);
+    await vi.waitFor(async () => expect((await (await store()).getReview(ready.id))?.mergeGate?.state).toBe("passed"));
+    readPrState.mockClear();
     prState = { state: "MERGED", headSha: SHA1 };
     const read = async () =>
       (await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/review`, headers: { cookie: w.autor.cookie } })).json();
@@ -823,6 +916,18 @@ describe("GET da revisão confere o PR no GitHub (merge feito fora do painel)", 
     // Several reads in a row: a single trip to GitHub.
     expect(readPrState).toHaveBeenCalledTimes(1);
     expect(ready.id).toBeTruthy();
+  });
+
+  it("caso real (PR #342): em impasse, o PR mergeado direto no GitHub aparece mergeado já na leitura que foi conferir", async () => {
+    const w = await world();
+    const ready = await readyReview(w);
+    await (await store()).mutateReview(ready.id, (r) => {
+      r.phase = "impasse";
+      r.impasseReason = "rodadas";
+    });
+    prState = { state: "MERGED", headSha: SHA1 };
+    const read = await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/review`, headers: { cookie: w.autor.cookie } });
+    expect(read.json().review.phase).toBe("merged");
   });
 
   it("sem revisão, ou revisão encerrada, a leitura não vai ao GitHub", async () => {
@@ -1057,6 +1162,25 @@ describe("merge", () => {
     expect(String(send.mock.calls[0]![1])).toContain(`git diff ${SHA1}..HEAD`);
   });
 
+  it("merge recusado porque a base andou e o PR ficou em conflito depois do pronto: o botão volta a ficar preso e o autor recebe a ordem de trazer a base", async () => {
+    const w = await world();
+    const review = await readyReview(w);
+    await vi.waitFor(async () => expect((await (await store()).getReview(review.id))?.mergeGate?.state).toBe("passed"));
+    deliverResult = {
+      prUrl: PR.url, merged: false, reason: "conflict", branch: "dev", cardBranch: PR.branch, output: "o PR tem conflito com dev",
+    };
+    const res = await merge(review.id, w.merger);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ reason: "conflict", review: { phase: "ready", mergeGate: { state: "failed", conflict: true } } });
+    await vi.waitFor(() => expect(send.mock.calls.some(([card]) => card === w.cardId)).toBe(true));
+    const toAuthor = String(send.mock.calls.find(([card]) => card === w.cardId)?.[1]);
+    expect(toAuthor).toContain("git merge origin/dev");
+    const again = await merge(review.id, w.merger);
+    expect(again.statusCode).toBe(409);
+    expect(again.json()).toMatchObject({ reason: "conflict" });
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
   it("merge só acontece em ready", async () => {
     const w = await world();
     const started = (await startReview(w)).json().review as { id: string; reviewerCardId: string };
@@ -1269,6 +1393,16 @@ describe("relatório da análise pela rota", () => {
 });
 
 describe("merge da análise pela rota", () => {
+  const ANALYSED = "e".repeat(40);
+  const worktree = { head: ANALYSED };
+  beforeEach(() => {
+    worktree.head = ANALYSED;
+    prState = { state: "OPEN", headSha: ANALYSED };
+    runScript.mockImplementation(async (script: string) => ({
+      stdout: script.includes("__VIBEHUB_GATE_JSON__") ? `head=${worktree.head}\nclean=1\n__VIBEHUB_GATE_JSON__\n` : "[]",
+      stderr: "",
+    }));
+  });
   const RAN_EVERYWHERE = ANALYSIS_DIMENSIONS.map((key) => ({ key, status: "ran" as const }));
   const aptReport = (cardId: string, over: Partial<AnalysisReport> = {}): AnalysisReport => ({
     cardId, prUrl: PR.url, prNumber: 7, analysedSha: "e".repeat(40), stage: "done", summary: "s",
@@ -1276,22 +1410,31 @@ describe("merge da análise pela rota", () => {
   });
   const saveReport = async (report: AnalysisReport) =>
     await (await import("../services/review/analysisStore.js")).saveAnalysis(report, () => undefined);
+  const saveAptWithGreenGate = async (report: AnalysisReport) => {
+    await saveReport(report);
+    const landed = await (await import("../services/review/analysisStore.js")).saveAnalysisMergeGate({
+      cardId: report.cardId, analysedSha: report.analysedSha, sha: report.analysedSha, state: "passed", at: 1,
+    });
+    expect(landed).toBe(true);
+  };
   const merge = async (w: World, as: Person) =>
     await app.inject({ method: "POST", url: `/api/cards/${w.cardId}/analysis/merge`, headers: { cookie: as.cookie } });
   const readAnalysis = async (w: World, as: Person) =>
     (await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/analysis`, headers: { cookie: as.cookie } })).json();
   const openFinding = (severity: AnalysisSeverity): AnalysisFinding => ({ id: "f1", severity, dimension: "correctness", status: "open", title: "t" });
 
-  it("quem trabalha no card mergeia a análise apta com a própria conexão GitHub, e o card vai para Concluído", async () => {
+  it("quem trabalha no card mergeia a análise apta com a própria conexão GitHub, preso ao commit analisado e sem push, e o card vai para Concluído", async () => {
     const w = await world();
-    await saveReport(aptReport(w.cardId));
+    await saveAptWithGreenGate(aptReport(w.cardId));
     deliver.mockClear();
     const res = await merge(w, w.merger);
     expect(res.statusCode).toBe(200);
     expect(deliver).toHaveBeenCalledTimes(1);
     expect(deliver.mock.calls[0]![0]).toBe(w.cardId);
-    expect(deliver.mock.calls[0]![1]).toMatchObject({ authorized: true, branch: PR.base, connectionId: w.gh.merger, by: "merger" });
-    expect(deliver.mock.calls[0]![1]?.mergeOnly).toBeUndefined();
+    expect(deliver.mock.calls[0]![1]).toEqual({
+      authorized: true, branch: PR.base, connectionId: w.gh.merger, by: "merger",
+      mergeOnly: true, expectedHeadSha: "e".repeat(40), gatePassed: true,
+    });
     expect((await (await registry()).getCard(w.cardId))?.column).toBe("done");
   });
 
@@ -1354,7 +1497,7 @@ describe("merge da análise pela rota", () => {
 
   it("merge recusado pelo deliver volta 409 com o motivo e a saída, e o card fica onde estava", async () => {
     const w = await world();
-    await saveReport(aptReport(w.cardId));
+    await saveAptWithGreenGate(aptReport(w.cardId));
     deliverResult = { merged: false, reason: "gate", branch: "dev", cardBranch: PR.branch, output: "CI vermelho" };
     onTestFinished(() => {
       deliverResult = { merged: true, reason: "merged", branch: "dev", cardBranch: "card/x" };
@@ -1378,7 +1521,7 @@ describe("merge da análise pela rota", () => {
 
   it("dois cliques ao mesmo tempo disparam um merge só: o segundo recebe 409 merging", async () => {
     const w = await world();
-    await saveReport(aptReport(w.cardId));
+    await saveAptWithGreenGate(aptReport(w.cardId));
     deliver.mockClear();
     const firstDeliver = Promise.withResolvers<void>();
     deliver.mockImplementationOnce(async () => {
@@ -1393,6 +1536,253 @@ describe("merge da análise pela rota", () => {
     expect(second.json().reason).toBe("merging");
     expect((await first).statusCode).toBe(200);
     expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("enquanto o merge roda o GET diz merging true, para o painel mostrar o andamento mesmo sem a resposta do clique", async () => {
+    const w = await world();
+    await saveAptWithGreenGate(aptReport(w.cardId));
+    const deliverGate = Promise.withResolvers<void>();
+    deliver.mockImplementationOnce(async () => {
+      await deliverGate.promise;
+      return deliverResult;
+    });
+    expect((await readAnalysis(w, w.leitor)).merging).toBe(false);
+    const clicked = merge(w, w.merger);
+    await vi.waitFor(async () => expect((await readAnalysis(w, w.leitor)).merging).toBe(true));
+    deliverGate.resolve();
+    await clicked;
+    expect((await readAnalysis(w, w.leitor)).merging).toBe(false);
+  });
+
+  it("enquanto o merge roda o card do board diz analysisMerging, para o sidebar mostrar o merge fora do painel", async () => {
+    const w = await world();
+    await saveAptWithGreenGate(aptReport(w.cardId));
+    const deliverGate = Promise.withResolvers<void>();
+    deliver.mockImplementationOnce(async () => {
+      await deliverGate.promise;
+      return deliverResult;
+    });
+    const readBoardCard = async () =>
+      (await app.inject({ method: "GET", url: `/api/cards/${w.cardId}`, headers: { cookie: w.leitor.cookie } })).json().card;
+    expect((await readBoardCard()).analysisMerging).toBeUndefined();
+    const clicked = merge(w, w.merger);
+    await vi.waitFor(async () => expect((await readBoardCard()).analysisMerging).toBe(true));
+    deliverGate.resolve();
+    await clicked;
+    expect((await readBoardCard()).analysisMerging).toBeUndefined();
+  });
+
+  it("merge recusado pelo deliver fica gravado no commit analisado: o GET diz o motivo e a saída antes do próximo clique", async () => {
+    const w = await world();
+    await saveAptWithGreenGate(aptReport(w.cardId));
+    deliverResult = { merged: false, reason: "gate", branch: "dev", cardBranch: PR.branch, output: "npm test estourou 585 s" };
+    onTestFinished(() => {
+      deliverResult = { merged: true, reason: "merged", branch: "dev", cardBranch: "card/x" };
+    });
+    await merge(w, w.merger);
+    expect((await readAnalysis(w, w.leitor)).lastMergeRefusal).toMatchObject({ reason: "gate", output: "npm test estourou 585 s", by: "merger" });
+  });
+
+  it("PR mergeado fora do vibehub não carrega a recusa gravada antes: o GET não diz merge barrado de PR mergeado", async () => {
+    const w = await world();
+    await saveAptWithGreenGate(aptReport(w.cardId));
+    deliverResult = { merged: false, reason: "gate", branch: "dev", cardBranch: PR.branch, output: "vermelho" };
+    onTestFinished(() => {
+      deliverResult = { merged: true, reason: "merged", branch: "dev", cardBranch: "card/x" };
+    });
+    await merge(w, w.merger);
+    await (await registry()).markCardPrMerged(w.cardId, PR.base, PR.number, 1234);
+    const read = await readAnalysis(w, w.leitor);
+    expect(read.mergedAt).toBe(1234);
+    expect(read.lastMergeRefusal).toBeUndefined();
+  });
+
+  it("a recusa gravada some quando a análise passa a outro commit ou quando o merge sai", async () => {
+    const w = await world();
+    await saveAptWithGreenGate(aptReport(w.cardId));
+    deliverResult = { merged: false, reason: "gate", branch: "dev", cardBranch: PR.branch, output: "vermelho" };
+    onTestFinished(() => {
+      deliverResult = { merged: true, reason: "merged", branch: "dev", cardBranch: "card/x" };
+    });
+    await merge(w, w.merger);
+    await saveAptWithGreenGate(aptReport(w.cardId, { analysedSha: "f".repeat(40) }));
+    expect((await readAnalysis(w, w.leitor)).lastMergeRefusal).toBeUndefined();
+    await merge(w, w.merger);
+    expect((await readAnalysis(w, w.leitor)).lastMergeRefusal).toMatchObject({ reason: "gate" });
+    deliverResult = { merged: true, reason: "merged", branch: "dev", cardBranch: "card/x" };
+    await merge(w, w.merger);
+    expect((await readAnalysis(w, w.leitor)).lastMergeRefusal).toBeUndefined();
+  });
+
+  it("caso real (PR #649): o PR mergeado direto no GitHub aparece mergeado já na leitura da análise, sem recusa antiga, e o freio segura o gh por um minuto", async () => {
+    const w = await world();
+    await saveAptWithGreenGate(aptReport(w.cardId));
+    deliverResult = { merged: false, reason: "gate", branch: "dev", cardBranch: PR.branch, output: "gate timed out" };
+    await merge(w, w.merger);
+    prState = { state: "MERGED", headSha: "e".repeat(40) };
+    afterPrMerged.mockImplementationOnce(async (cardId: string) => {
+      await (await registry()).markCardPrMerged(cardId, PR.base, PR.number, 5678);
+      return "kept" as unknown as "deleted";
+    });
+    readPrState.mockClear();
+    const read = await readAnalysis(w, w.merger);
+    expect(read).toMatchObject({ canMerge: false, mergedAt: 5678 });
+    expect(read.lastMergeRefusal).toBeUndefined();
+    expect(readPrState).toHaveBeenCalledTimes(1);
+    expect(readPrState).toHaveBeenCalledWith(w.cardId, PR.url);
+    expect(afterPrMerged).toHaveBeenCalledWith(w.cardId, PR.url, PR.base, PR.branch);
+    await readAnalysis(w, w.merger);
+    expect(readPrState).toHaveBeenCalledTimes(1);
+  });
+
+  it("PR ainda aberto no GitHub deixa a análise como estava", async () => {
+    const w = await world();
+    await saveAptWithGreenGate(aptReport(w.cardId));
+    prState = { state: "OPEN", headSha: "e".repeat(40) };
+    expect((await readAnalysis(w, w.merger)).canMerge).toBe(true);
+    expect(afterPrMerged).not.toHaveBeenCalled();
+  });
+
+  it("caso real (PR #649): a análise apta roda o gate em segundo plano no commit analisado, e o clique com ele verde mergeia sem rodar o gate de novo", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    const first = await readAnalysis(w, w.leitor);
+    expect(gateAtCommit).toHaveBeenCalledTimes(1);
+    expect(gateAtCommit).toHaveBeenCalledWith(w.cardId, PR.url, "e".repeat(40));
+    expect(first.mergeGate?.state).toBe("running");
+    await vi.waitFor(async () => expect((await readAnalysis(w, w.leitor)).mergeGate?.state).toBe("passed"));
+    deliver.mockClear();
+    expect((await merge(w, w.merger)).statusCode).toBe(200);
+    expect(deliver.mock.calls[0]![1]).toMatchObject({ mergeOnly: true, expectedHeadSha: "e".repeat(40), gatePassed: true });
+    expect(gateAtCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("com o gate rodando o clique não espera por ele: 409 gate_running na hora, sem merge e sem um segundo gate", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    const gateRun = Promise.withResolvers<typeof gateAnswer>();
+    gateAtCommit.mockImplementationOnce(async () => await gateRun.promise);
+    onTestFinished(() => gateRun.resolve(gateAnswer));
+    await readAnalysis(w, w.leitor);
+    deliver.mockClear();
+    const res = await merge(w, w.merger);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().reason).toBe("gate_running");
+    expect(deliver).not.toHaveBeenCalled();
+    expect(gateAtCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("clique sem veredito do gate (análise de antes desta versão) dispara o gate e responde gate_running, sem merge", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    const gateRun = Promise.withResolvers<typeof gateAnswer>();
+    gateAtCommit.mockImplementationOnce(async () => await gateRun.promise);
+    onTestFinished(() => gateRun.resolve(gateAnswer));
+    deliver.mockClear();
+    const res = await merge(w, w.merger);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().reason).toBe("gate_running");
+    expect(gateAtCommit).toHaveBeenCalledTimes(1);
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("gate vermelho no commit analisado barra o clique na hora com a saída, e só o 'rodar de novo' roda outra vez", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    gateAnswer = { ran: true, passed: false, output: "FAIL src/pix.test.ts" };
+    await readAnalysis(w, w.leitor);
+    await vi.waitFor(async () => expect((await readAnalysis(w, w.leitor)).mergeGate).toMatchObject({ state: "failed", output: "FAIL src/pix.test.ts" }));
+    deliver.mockClear();
+    const res = await merge(w, w.merger);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ reason: "gate", error: "FAIL src/pix.test.ts" });
+    expect(deliver).not.toHaveBeenCalled();
+    expect(gateAtCommit).toHaveBeenCalledTimes(1);
+
+    const rerun = (as: Person) =>
+      app.inject({ method: "POST", url: `/api/cards/${w.cardId}/analysis/merge-gate`, headers: { cookie: as.cookie } });
+    expect((await rerun(w.leitor)).statusCode).toBe(403);
+    expect((await rerun(w.outro)).statusCode).toBe(404);
+    expect(gateAtCommit).toHaveBeenCalledTimes(1);
+    gateAnswer = { ran: true, passed: true, output: "" };
+    const again = await rerun(w.merger);
+    expect(again.statusCode).toBe(200);
+    expect(again.json().mergeGate.state).toBe("running");
+    await vi.waitFor(async () => expect((await readAnalysis(w, w.leitor)).mergeGate?.state).toBe("passed"));
+    expect(gateAtCommit).toHaveBeenCalledTimes(2);
+  });
+
+  it("gate gravado 'rodando' por um processo que morreu (deploy) roda de novo na leitura seguinte", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    await (await import("../services/review/analysisStore.js")).saveAnalysisMergeGate({
+      cardId: w.cardId, analysedSha: "e".repeat(40), state: "running", at: 1,
+    });
+    await readAnalysis(w, w.leitor);
+    expect(gateAtCommit).toHaveBeenCalledTimes(1);
+    await vi.waitFor(async () => expect((await readAnalysis(w, w.leitor)).mergeGate?.state).toBe("passed"));
+  });
+
+  it("gate que nem chegou a rodar (runner fora) fica vermelho com o motivo, nunca verde", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    gateAtCommit.mockRejectedValueOnce(new Error("runner down"));
+    await readAnalysis(w, w.leitor);
+    await vi.waitFor(async () => expect((await readAnalysis(w, w.leitor)).mergeGate?.state).toBe("failed"));
+    expect((await readAnalysis(w, w.leitor)).mergeGate.output).toContain("runner down");
+  });
+
+  it("o veredito vale só para o commit analisado: análise num commit novo roda o gate de novo nele", async () => {
+    const w = await world();
+    await saveAptWithGreenGate(aptReport(w.cardId));
+    expect((await readAnalysis(w, w.leitor)).mergeGate?.state).toBe("passed");
+    expect(gateAtCommit).not.toHaveBeenCalled();
+    worktree.head = "f".repeat(40);
+    prState = { state: "OPEN", headSha: "f".repeat(40) };
+    await saveReport(aptReport(w.cardId, { analysedSha: "f".repeat(40) }));
+    await readAnalysis(w, w.leitor);
+    await vi.waitFor(() => expect(gateAtCommit).toHaveBeenCalledWith(w.cardId, PR.url, "f".repeat(40)));
+  });
+
+  it("caso real (PR #649): a análise que corrigiu e entregou prende o gate e o merge à cabeça que entregou, não ao sha do passo 1", async () => {
+    const w = await world();
+    const delivered = "c".repeat(40);
+    worktree.head = delivered;
+    prState = { state: "OPEN", headSha: delivered };
+    await saveReport(aptReport(w.cardId));
+    await readAnalysis(w, w.leitor);
+    await vi.waitFor(async () => expect((await readAnalysis(w, w.leitor)).mergeGate).toMatchObject({ state: "passed", sha: delivered }));
+    expect(gateAtCommit).toHaveBeenCalledWith(w.cardId, PR.url, delivered);
+    deliver.mockClear();
+    expect((await merge(w, w.merger)).statusCode).toBe(200);
+    expect(deliver.mock.calls[0]![1]).toMatchObject({ mergeOnly: true, expectedHeadSha: delivered, gatePassed: true });
+  });
+
+  it("PR que andou depois da análise (cabeça diferente da worktree da análise) fica vermelho sem rodar o gate, e o clique não mergeia", async () => {
+    const w = await world();
+    worktree.head = "c".repeat(40);
+    prState = { state: "OPEN", headSha: "d".repeat(40) };
+    await saveReport(aptReport(w.cardId));
+    await readAnalysis(w, w.leitor);
+    await vi.waitFor(async () => expect((await readAnalysis(w, w.leitor)).mergeGate?.state).toBe("failed"));
+    expect((await readAnalysis(w, w.leitor)).mergeGate.output).toMatch(/andou depois da análise/);
+    expect(gateAtCommit).not.toHaveBeenCalled();
+    deliver.mockClear();
+    expect((await merge(w, w.merger)).statusCode).toBe(409);
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, (w: World) => Promise<void>]>([
+    ["análise não apta", async (w) => saveReport(aptReport(w.cardId, { stage: "analysed" }))],
+    ["card de análise no meio de um turno", async (w) => {
+      await saveReport(aptReport(w.cardId));
+      await (await registry()).applyCardStatus(w.cardId, "working");
+    }],
+  ])("%s não dispara o gate na leitura", async (_case, arrange) => {
+    const w = await world();
+    await arrange(w);
+    await readAnalysis(w, w.leitor);
+    expect(gateAtCommit).not.toHaveBeenCalled();
   });
 });
 

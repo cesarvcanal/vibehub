@@ -31,7 +31,7 @@ const PERSONAS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "servic
 const FALLBACK_INSTRUCTIONS =
   "vibehub — you are one terminal on a board of Claude Code terminals. Coordinate the others with " +
   "the vibehub_* tools, report your state with vibehub_report, and ship with vibehub_deliver — " +
-  "passing authorized:true only when the user named where to ship. Never send to a human-active card.";
+  "passing authorized:true only when the user named where to ship. Never send to a card another person is typing in (human-active).";
 
 /** The same belt for the external persona (an app on the internet acting as one user). */
 const EXTERNAL_FALLBACK_INSTRUCTIONS =

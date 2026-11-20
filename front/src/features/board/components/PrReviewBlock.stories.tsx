@@ -77,14 +77,23 @@ export const AnaliseCorrigindo = analysisStory("Análise · depois do juiz, corr
   verdict: "pending",
   uncheckedDimensions: [],
   canMerge: false,
+  merging: false,
 }, true);
-export const AnaliseApta = analysisStory("Análise · apta", { analysis: analysisReport(), health: healthOk, verdict: "apt", uncheckedDimensions: [], canMerge: false });
+export const AnaliseApta = analysisStory("Análise · apta", { analysis: analysisReport(), health: healthOk, verdict: "apt", uncheckedDimensions: [], canMerge: false, merging: false });
+export const AnaliseMergeando = analysisStory("Análise · apta, merge rodando", {
+  analysis: analysisReport(), health: healthOk, verdict: "apt", uncheckedDimensions: [], canMerge: true, merging: true,
+});
+export const AnaliseMergeBarrado = analysisStory("Análise · apta, último merge barrado", {
+  analysis: analysisReport(), health: healthOk, verdict: "apt", uncheckedDimensions: [], canMerge: true, merging: false,
+  lastMergeRefusal: { cardId: "c1", analysedSha: analysisReport().analysedSha, reason: "gate", by: "mussa", at: 1 },
+});
 export const AnaliseNaoAptaSemConferencia = analysisStory("Análise · não apta, dimensão sem conferência", {
   analysis: analysisReport({ dimensions: ANALYSIS_DIMENSIONS.map((key) => ({ key, status: key === "security" ? "not_run" as const : "ran" as const })) }),
   health: { ...healthOk, security: "not_run" },
   verdict: "not_apt",
   uncheckedDimensions: ["security"],
   canMerge: false,
+  merging: false,
 });
 export const AnaliseFrotaIndisponivel = analysisStory("Análise · frota indisponível", {
   analysis: analysisReport({ stage: "fleet_unavailable", dimensions: [], findings: [], refutedCount: 0, unavailableReason: "sem Workflow" }),
@@ -92,4 +101,5 @@ export const AnaliseFrotaIndisponivel = analysisStory("Análise · frota indispo
   verdict: "not_apt",
   uncheckedDimensions: [...ANALYSIS_DIMENSIONS],
   canMerge: false,
+  merging: false,
 });

@@ -210,4 +210,21 @@ describe("createLiveSession cancellation", () => {
     gone.abort();
     await expect(pending).rejects.toMatchObject({ status: 499 });
   });
+
+  it("quem desiste enquanto as instruções são preparadas não abre sessão no GPT-Live", async () => {
+    live.resetCreateSlots();
+    const gone = new AbortController();
+    const fetchImpl = vi.fn(async () => answer());
+    const pending = live.createLiveSession(OFFER, {
+      user: "u",
+      signal: gone.signal,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      instructionsFor: async () => {
+        gone.abort();
+        return "instruções";
+      },
+    });
+    await expect(pending).rejects.toMatchObject({ status: 499 });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });

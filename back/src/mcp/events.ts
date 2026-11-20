@@ -260,13 +260,15 @@ export function registerEvents(server: McpServer, user: PublicUser | null, princ
  * which question it settles, and the event is claimed BEFORE the send (two answers at once: one goes
  * out, the other is refused) and reopened if the send fails.
  */
-export async function sendAnswer<T>(cardId: string, inReplyTo: string | undefined, text: string, send: (text: string) => Promise<T>): Promise<T> {
+export async function sendAnswer<T>(
+  cardId: string, inReplyTo: string | undefined, text: string, send: (text: string, answered?: CardEvent) => Promise<T>,
+): Promise<T> {
   if (!inReplyTo) return send(text);
   const { event, settle } = await claimReply(cardId, inReplyTo);
   const asked = event.questions?.[0]?.question ?? event.summary ?? event.text;
   let delivered = false;
   try {
-    const sent = await send(`[resposta a ${event.id}${asked ? ` — "${asked}"` : ""}]\n${text}`);
+    const sent = await send(`[resposta a ${event.id}${asked ? ` — "${asked}"` : ""}]\n${text}`, event);
     delivered = true;
     return sent;
   } finally {

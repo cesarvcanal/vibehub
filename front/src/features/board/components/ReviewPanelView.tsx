@@ -4,6 +4,7 @@ import { Check, ChevronRight, ExternalLink, FileDiff, Loader2, SquareTerminal, X
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Finding, FindingDecision, FindingSeverity, Review, ReviewFleetRun, ReviewPhase, ReviewWorking } from "@/api/types";
+import type { RunAgentDetail } from "@/features/board/components/ReviewFleet";
 import { ENTER, ReviewConversation, SAID_CLAMP_CHARS } from "@/features/board/components/ReviewConversation";
 import { cardHref } from "@/features/board/lib/board";
 import {
@@ -18,18 +19,9 @@ import { cn } from "@/lib/utils";
  * What the PR review's panel DRAWS, from props alone: the review, who is working right now, who may
  * do what, and the callbacks of the human moves. `ReviewPanel` reads the server and runs the merge;
  * this draws — which is what lets every state be seen in the Storybook without a back-end.
- *
- *   ┌ header ─ PR #N → base · pill · close; the rounds; what is happening now; the people ┐
- *   │ [ Conversa ]  [ Achados N ]                                                         │
- *   │ the conversation of the AIs (chat)  |  the closed list, grouped by severity         │
- *   └ footer ─ merge · try again · cancel · GitHub; the reviewer's session · the diff     ┘
- *
- * Both tabs stay mounted (the hidden one with `hidden`): switching back to the conversation finds it
- * scrolled where it was. Until the person picks one, the panel shows the findings while they have a
- * decision to make there, and the conversation otherwise.
  */
 
-export type ReviewTab = "conversation" | "findings";
+export type ReviewTab = "agents" | "findings";
 type Tab = ReviewTab;
 
 /** A banner over the footer's buttons: what the last merge click came to. */
@@ -60,24 +52,25 @@ export interface ReviewPanelViewProps {
   /** The tab to open on, instead of the one the review calls for (the Storybook tour shows each). */
   initialTab?: Tab;
   fleet?: ReviewFleetRun[];
+  agentDetail?: RunAgentDetail;
 }
+
+const NO_FLEET: ReviewFleetRun[] = [];
 
 export function ReviewPanelView(props: ReviewPanelViewProps) {
   const {
-    review, working, fleet, nameOf, actions, busy, mergeBusy, notice, onMerge, onRetry, onCancel, onDecide, onDecideSuggestions, onClose,
-    initialTab,
+    review, working, fleet = NO_FLEET, nameOf, actions, busy, mergeBusy, notice, onMerge, onRetry, onCancel, onDecide, onDecideSuggestions, onClose,
+    initialTab, agentDetail,
   } = props;
   const t = useT();
   const stuck = new Set(review.phase === "impasse" ? stuckItems(review.findings).map((f) => f.id) : []);
   const pending = new Set(pendingQuestions(review.findings).map((f) => f.id));
+  const keptStuck = new Set(review.findings.filter((f) => stuck.has(f.id) && f.humanDecision === "keep").map((f) => f.id));
   // What the review waits on people for (anybody's), and how much of it this person can decide.
-  const waitingOnPeople = review.findings.filter((f) => pending.has(f.id) || stuck.has(f.id)).length;
+  const waitingOnPeople = review.findings.filter((f) => pending.has(f.id) || (stuck.has(f.id) && !keptStuck.has(f.id))).length;
   const decisionsHere = actions.decide ? waitingOnPeople : 0;
-  // Until the person picks a tab, the panel shows where their attention is needed: the findings while
-  // they have a decision to make there (it can appear later — a round landing with a doubt), the
-  // conversation otherwise.
   const [chosen, setTab] = React.useState<Tab | null>(initialTab ?? null);
-  const tab: Tab = chosen ?? (decisionsHere > 0 ? "findings" : "conversation");
+  const tab: Tab = chosen ?? (decisionsHere > 0 ? "findings" : "agents");
   // The author's AI is on a PR that was ready: what it pushes goes back to the reviewer, so the merge
   // waits for it to finish instead of racing it.
   const authorOnReadyPr = review.phase === "ready" && working.author;
@@ -86,7 +79,7 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
     if (!actions.decide) return [];
     // Doubts wait for the human reviewer; in an impasse the stuck items wait for the same person.
     if (pending.has(f.id)) return ["block", "accept_risk", "drop"];
-    if (stuck.has(f.id)) return f.severity === "blocking" ? ["keep", "accept_risk"] : ["accept_risk"];
+    if (stuck.has(f.id)) return f.severity === "blocking" && !keptStuck.has(f.id) ? ["keep", "accept_risk"] : ["accept_risk"];
     return [];
   };
 
@@ -133,8 +126,8 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
       {authorOnReadyPr ? null : <Verdict review={review} />}
 
       <div role="tablist" aria-label={t("review.panel.aria", { n: review.prNumber })} className="flex shrink-0 gap-1 rounded-md border border-border/60 bg-background/40 p-0.5">
-        <TabButton active={tab === "conversation"} onClick={() => setTab("conversation")}>
-          {t("review.tab.conversation")}
+        <TabButton active={tab === "agents"} onClick={() => setTab("agents")}>
+          {t("review.tab.agents")}
         </TabButton>
         <TabButton active={tab === "findings"} onClick={() => setTab("findings")}>
           {t("review.tab.findings")}
@@ -143,8 +136,8 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
         </TabButton>
       </div>
 
-      <div role="tabpanel" hidden={tab !== "conversation"} className={cn("min-h-0 flex-1 flex-col", tab === "conversation" ? "flex" : "hidden")}>
-        <ReviewConversation review={review} working={working} nameOf={nameOf} fleet={fleet} />
+      <div role="tabpanel" hidden={tab !== "agents"} className={cn("min-h-0 flex-1 flex-col", tab === "agents" ? "flex" : "hidden")}>
+        <ReviewConversation review={review} working={working} fleet={fleet} nameOf={nameOf} agentDetail={agentDetail} />
       </div>
       <div role="tabpanel" hidden={tab !== "findings"} className={cn("min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden [overflow-wrap:anywhere]", tab !== "findings" && "hidden")}>
         <FindingsList
@@ -216,17 +209,16 @@ function Header({
   const turn = reviewTurn(review, working);
   const live = (turn.who === "reviewer" || turn.who === "author") && turn.working;
   return (
-    <section className="shrink-0 space-y-2 rounded-md border border-border/60 bg-card/40 p-2.5">
+    <section className="shrink-0 space-y-1 rounded-md border border-border/60 bg-card/40 px-2.5 py-1.5">
       <div className="flex items-center gap-2">
         <span className="font-semibold text-amber-400">PR #{review.prNumber}</span>
         <span className="min-w-0 truncate text-xs text-muted-foreground">→ {review.base}</span>
+        <Steps round={review.round} phase={review.phase} />
         <Badge tone={pill.tone} className="ml-auto shrink-0 transition-colors duration-500">
           {t(pill.key, "vars" in pill ? pill.vars : undefined)}
         </Badge>
         <CloseButton onClose={onClose} />
       </div>
-      <Steps round={review.round} phase={review.phase} />
-      <Commits reviewed={review.reviewedSha} head={review.prHeadSha} />
       <p data-testid="review-now" className="flex items-start gap-2 text-xs">
         <span
           aria-hidden
@@ -238,29 +230,32 @@ function Header({
         {/* Keyed by the sentence: when what is happening changes, the new sentence comes in. */}
         <span key={stageText(review, working.author, t)} className={cn("text-foreground/90", ENTER)}>{stageText(review, working.author, t)}</span>
       </p>
-      <dl data-testid="review-roles" className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px]">
-        <Role
-          label={t("review.roles.reviewer")}
-          hint={t("review.roles.reviewer.hint")}
-          name={nameOf(review.reviewerUserId)}
-          tag={t("review.roles.reviewer.tag")}
-        />
-        <Role
-          label={t("review.roles.author")}
-          hint={t("review.roles.author.hint")}
-          name={nameOf(review.authorUserId)}
-          tag={t("review.roles.assignee")}
-        />
-        {review.coauthorUserId ? (
+      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-0.5 text-[11px]">
+        <dl data-testid="review-roles" className="flex flex-wrap gap-x-3 gap-y-0.5">
           <Role
-            label={t("review.roles.coauthor")}
-            hint={t("review.roles.coauthor.hint")}
-            name={nameOf(review.coauthorUserId)}
-            tag={t("review.roles.coauthor.tag")}
+            label={t("review.roles.reviewer")}
+            hint={t("review.roles.reviewer.hint")}
+            name={nameOf(review.reviewerUserId)}
+            tag={t("review.roles.reviewer.tag")}
           />
-        ) : null}
-        <Role label={t("review.roles.merger")} hint={t("review.roles.merger.hint")} name={nameOf(review.mergerUserId)} />
-      </dl>
+          <Role
+            label={t("review.roles.author")}
+            hint={t("review.roles.author.hint")}
+            name={nameOf(review.authorUserId)}
+            tag={t("review.roles.assignee")}
+          />
+          {review.coauthorUserId ? (
+            <Role
+              label={t("review.roles.coauthor")}
+              hint={t("review.roles.coauthor.hint")}
+              name={nameOf(review.coauthorUserId)}
+              tag={t("review.roles.coauthor.tag")}
+            />
+          ) : null}
+          <Role label={t("review.roles.merger")} hint={t("review.roles.merger.hint")} name={nameOf(review.mergerUserId)} />
+        </dl>
+        <Commits reviewed={review.reviewedSha} head={review.prHeadSha} />
+      </div>
     </section>
   );
 }
@@ -274,7 +269,7 @@ function Commits({ reviewed, head }: { reviewed?: string; head?: string }) {
   if (!reviewed) return null;
   const moved = head !== undefined && head !== reviewed;
   return (
-    <p data-testid="review-commits" className="flex flex-wrap items-baseline gap-x-2 text-[11px] text-muted-foreground">
+    <p data-testid="review-commits" className="flex flex-wrap items-baseline gap-x-2 text-muted-foreground">
       <span>
         {t("review.commits.reviewed")} <code className="font-mono text-foreground/80">{reviewed.slice(0, 7)}</code>
       </span>
@@ -287,36 +282,34 @@ function Commits({ reviewed, head }: { reviewed?: string; head?: string }) {
   );
 }
 
-/** One segment per round — behind: done; in play: lit; ahead: waiting — with "Rodada N de 3" beside it. */
+type StepState = "done" | "current" | "todo";
+
+const STEP_STYLE: Record<StepState, string> = {
+  done: "bg-emerald-500/70",
+  current: "bg-amber-400",
+  todo: "bg-border/70",
+};
+
+function stepState(step: number, round: number, over: boolean): StepState {
+  if (step < round || (over && step === round)) return "done";
+  if (step === round) return "current";
+  return "todo";
+}
+
 function Steps({ round, phase }: { round: number; phase: ReviewPhase }) {
   const t = useT();
   const over = phase === "ready" || phase === "merged";
   return (
-    <div className="flex items-center gap-2">
-      <div
-        data-testid="review-steps"
-        role="img"
-        aria-label={t("review.steps.aria", { round, max: REVIEW_MAX_ROUNDS })}
-        className="grid flex-1 grid-cols-3 gap-1"
-      >
-        {Array.from({ length: REVIEW_MAX_ROUNDS }, (_, i) => {
-          const state = i + 1 < round || (over && i + 1 === round) ? "done" : i + 1 === round ? "current" : "todo";
-          return (
-            <div
-              key={i}
-              data-testid="review-step"
-              data-state={state}
-              className={cn(
-                "h-1.5 rounded-full",
-                state === "done" ? "bg-emerald-500/70" : state === "current" ? "bg-amber-400" : "bg-border/70",
-              )}
-            />
-          );
-        })}
-      </div>
-      <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
-        {t("review.steps.aria", { round, max: REVIEW_MAX_ROUNDS })}
-      </span>
+    <div
+      data-testid="review-steps"
+      role="img"
+      aria-label={t("review.steps.aria", { round, max: REVIEW_MAX_ROUNDS })}
+      className="grid w-20 shrink-0 grid-cols-3 gap-1"
+    >
+      {Array.from({ length: REVIEW_MAX_ROUNDS }, (_, index) => {
+        const state = stepState(index + 1, round, over);
+        return <div key={index} data-testid="review-step" data-state={state} className={cn("h-1.5 rounded-full", STEP_STYLE[state])} />;
+      })}
     </div>
   );
 }
@@ -594,6 +587,7 @@ function FindingCard({
           >
             {f.title}
           </p>
+          {f.humanDecision === "keep" && !closed ? <p className="text-[11px] text-amber-300">{t("review.finding.kept")}</p> : null}
           {f.problem ? <FindingText label={t("review.finding.problem")}>{f.problem}</FindingText> : null}
           {f.fix ? <FindingText label={t("review.finding.fix")}>{f.fix}</FindingText> : null}
           <dl className="space-y-0.5 text-[11px]">
@@ -757,15 +751,19 @@ function DecisionBanner({
   if (waiting === 0) return null;
   const impasse = review.phase === "impasse";
   return (
-    <div data-testid="decision-banner" role="status" className={cn("shrink-0 space-y-1.5 rounded-md border border-sky-500/50 bg-sky-500/10 px-2.5 py-2 text-xs", ENTER)}>
-      <p className="font-semibold text-sky-200">
+    <div
+      data-testid="decision-banner"
+      role="status"
+      title={impasse ? undefined : t("review.decision.ai")}
+      className={cn("flex shrink-0 items-center gap-2 rounded-md border border-sky-500/50 bg-sky-500/10 px-2.5 py-1 text-xs", ENTER)}
+    >
+      <p className="min-w-0 flex-1 font-semibold text-sky-200">
         {mine
           ? t(impasse ? "review.decision.stuck.mine" : "review.decision.mine", { n: waiting })
           : t(impasse ? "review.decision.stuck.others" : "review.decision.others", { n: waiting, name: reviewer })}
       </p>
-      {impasse ? null : <p className="text-sky-200/80">{t("review.decision.ai")}</p>}
       {mine ? (
-        <Button type="button" size="sm" className="h-7 bg-sky-600 px-3 text-xs text-white hover:bg-sky-500" onClick={onGo}>
+        <Button type="button" size="sm" className="h-6 shrink-0 bg-sky-600 px-2.5 text-xs text-white hover:bg-sky-500" onClick={onGo}>
           {t("review.decision.go")}
         </Button>
       ) : null}
@@ -833,6 +831,20 @@ function MergeGateBanner({ review }: { review: Review }) {
     );
   }
   if (!gate || !status) return null;
+  if (status === "conflict") {
+    return (
+      <p role="status" className={cn("shrink-0 rounded-md border px-2.5 py-1.5 text-xs", NOTICE_TONE.warn)}>
+        {t("review.mergeGate.conflict", { base: review.base })}
+      </p>
+    );
+  }
+  if (status === "conflictFailed") {
+    return (
+      <p role="alert" className="shrink-0 rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-xs font-medium text-destructive">
+        {t("review.mergeGate.conflictFailed", { base: review.base, max: MERGE_GATE_AUTO_RETRIES })}
+      </p>
+    );
+  }
   if (status === "fixing") {
     return (
       <div role="status" className={cn("shrink-0 rounded-md border px-2.5 py-1.5 text-xs", NOTICE_TONE.warn)}>
@@ -889,12 +901,12 @@ function Footer({
           {notice.text}
         </p>
       ) : null}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
         {actions.merge ? (
           <Button
             type="button"
             size="sm"
-            className="h-8 bg-emerald-600 px-3 text-xs text-white hover:bg-emerald-500"
+            className="h-7 bg-emerald-600 px-3 text-xs text-white hover:bg-emerald-500"
             disabled={mergeBusy || holdMerge || gateHolds}
             onClick={onMerge}
           >
@@ -908,17 +920,15 @@ function Footer({
           </Button>
         ) : null}
         {actions.retry ? (
-          <Button type="button" variant="outline" size="sm" className="h-8 px-3 text-xs" disabled={busy || mergeBusy} onClick={onRetry}>
+          <Button type="button" variant="outline" size="sm" className="h-7 px-3 text-xs" disabled={busy || mergeBusy} onClick={onRetry}>
             {t("review.retry")}
           </Button>
         ) : null}
         {actions.cancel ? (
-          <Button type="button" variant="ghost" size="sm" className="h-8 px-3 text-xs text-muted-foreground" disabled={busy || mergeBusy} onClick={onCancel}>
+          <Button type="button" variant="ghost" size="sm" className="h-7 px-3 text-xs text-muted-foreground" disabled={busy || mergeBusy} onClick={onCancel}>
             {t("review.cancel")}
           </Button>
         ) : null}
-      </div>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         {/* The reviewer's card is off the board: this is the one way to its terminal, to unstick an
             AI caught in a menu or an error loop. A closed review sends it to done (and the retention
             erases it), so the link goes with the review. */}
@@ -968,12 +978,16 @@ function stageText(review: Review, authorWorking: boolean, t: typeof translate):
         : t("review.stage.reviewing.first");
     case "fixing":
       return t("review.stage.fixing");
-    case "ready":
+    case "ready": {
       if (authorWorking) return t("review.stage.authorWorking");
-      if (mergeGateStatus(review) === "failed") return t("review.stage.gateFailed");
-      if (mergeGateStatus(review) === "fixing") return t("review.stage.gateFixing");
-      if (mergeGateStatus(review) === "running") return t("review.stage.gateRunning");
+      const gateStatus = mergeGateStatus(review);
+      if (gateStatus === "failed") return t("review.stage.gateFailed");
+      if (gateStatus === "fixing") return t("review.stage.gateFixing");
+      if (gateStatus === "running") return t("review.stage.gateRunning");
+      if (gateStatus === "conflict") return t("review.stage.gateConflict");
+      if (gateStatus === "conflictFailed") return t("review.stage.gateConflictFailed");
       return t("review.stage.ready");
+    }
     case "impasse":
       return t("review.stage.impasse");
     case "merged":
