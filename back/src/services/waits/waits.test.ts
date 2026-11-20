@@ -6,7 +6,7 @@ import type { CardWait } from "../board/cardWait.js";
 import { buildWakeMessage } from "./waits.js";
 
 const CLAUDE_ALIVE = { stdout: "bash\nnode\n", stderr: "" };
-const runScript = vi.fn(async (_script: string) => CLAUDE_ALIVE);
+const runScript = vi.fn<(script: string) => Promise<typeof CLAUDE_ALIVE>>(async () => CLAUDE_ALIVE);
 
 async function load() {
   const dataDir = mkdtempSync(join(tmpdir(), "vibehub-waits-service-"));

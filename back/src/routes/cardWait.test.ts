@@ -13,7 +13,7 @@ async function boot() {
   const env = await import("../config/env.js");
   Object.assign(env.config, { dataDir, secretKey: "", sessionSecret: "", insecureCookies: true });
   env.config.runner.container = "vibehub-runner";
-  const runScript = vi.fn(async (_script: string) => CLAUDE_ALIVE);
+  const runScript = vi.fn<(script: string) => Promise<typeof CLAUDE_ALIVE>>(async () => CLAUDE_ALIVE);
   vi.doMock("../runtime/host.js", async () => {
     const actual = await vi.importActual<typeof import("../runtime/host.js")>("../runtime/host.js");
     return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript, ptyCommand: vi.fn(), pipeCommand: vi.fn() }) };
