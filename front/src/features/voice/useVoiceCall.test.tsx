@@ -255,7 +255,7 @@ describe("useVoiceCall — a deploy during the call", () => {
     return { ...setup(), reload, deploy };
   }
 
-  it("a chamada no ar segura a recarga automática da versão nova, que só acontece quando ela termina", async () => {
+  it("a live call holds the automatic reload of a new version, which happens once the call ends", async () => {
     const { result, reload, deploy } = setupWithVersionCheck();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(10);
