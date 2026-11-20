@@ -3,6 +3,7 @@ import { dataPath } from "../../config/env.js";
 import { JsonStore } from "../../store/jsonStore.js";
 import { logger } from "../../utils/logger.js";
 import { getSettings } from "../settings/settings.js";
+import { PLATFORM_FAILURE_LOG_MARK } from "./backendError.js";
 import { buildFailureSignature } from "./signature.js";
 import type { PlatformFailure, PlatformFailureReport, PlatformFailureSource, PlatformFailureStatus } from "./types.js";
 
@@ -58,7 +59,7 @@ function announceFailureChange(change: PlatformFailureChange): void {
     try {
       listener({ ...change, failure: { ...change.failure } });
     } catch (err) {
-      logger.warn({ failure: change.failure.id, detail: (err as Error).message }, "could not announce a platform failure change");
+      logger.warn({ ...PLATFORM_FAILURE_LOG_MARK, failure: change.failure.id, detail: (err as Error).message }, "could not announce a platform failure change");
     }
   }
 }
@@ -106,7 +107,7 @@ export async function recordPlatformFailure(report: PlatformFailureReport, now: 
     return { failure: { ...createdFailure }, capReached: false, isNewForCard: report.cardId !== undefined };
   });
   if (outcome.capReached) {
-    logger.warn({ cap: ACTIVE_FAILURES_CAP, component: report.component }, "platform failure dropped: too many open failures");
+    logger.warn({ ...PLATFORM_FAILURE_LOG_MARK, cap: ACTIVE_FAILURES_CAP, component: report.component }, "platform failure dropped: too many open failures");
   }
   if (outcome.failure && outcome.isNewForCard) announceFailureChange({ failure: outcome.failure, newForCardId: report.cardId });
   return outcome.failure;

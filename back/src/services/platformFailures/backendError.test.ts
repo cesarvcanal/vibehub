@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { extractBackendFrames, readBackendSourceRoot, buildBackendErrorReport, USER_STOP_WINDOW_MS } from "./backendError.js";
+import {
+  extractBackendFrames, readBackendSourceRoot, buildBackendErrorReport, isPlatformFailureLogLine, PLATFORM_FAILURE_LOG_MARK, USER_STOP_WINDOW_MS,
+} from "./backendError.js";
 
 const NOW = 1_700_000_000_000;
 const STOPPED_CARD = { cardId: "card-7", cardWorktreeSlug: "erp-feat" };
@@ -19,8 +21,6 @@ describe("relato de erro do backend", () => {
   it("leva só os campos da lista branca e os frames do próprio backend, sem o caminho da instalação", () => {
     const report = buildBackendErrorReport(
       { level: 50, message: "request failed", fields: { err: errorWithStack("driver gone"), route: "/api/x", card: "erp-feat", customerName: "ACME", rawBody: "segredo do negócio" } },
-      undefined,
-      NOW,
     );
     expect(report).toMatchObject({ source: "backend_error", component: "services/sdk/manager", symptom: "request failed: driver gone" });
     expect(report.evidence).toContain("rota: /api/x");
@@ -55,36 +55,44 @@ describe("relato de erro do backend", () => {
     ["string", "connect ECONNREFUSED"],
     ["objeto solto", { message: "sem Error" }],
   ])("aceita err como %s sem estourar", (_kind, err) => {
-    const report = buildBackendErrorReport({ level: 50, message: "runner provisioning failed", fields: { err } }, undefined, NOW);
+    const report = buildBackendErrorReport({ level: 50, message: "runner provisioning failed", fields: { err } });
     expect(report.symptom.startsWith("runner provisioning failed")).toBe(true);
     expect(report.component).toBe("backend");
   });
 
   it.each([
-    ["do mesmo card até 10s depois do stop dele é marcado e aponta o card", "erp-feat", USER_STOP_WINDOW_MS, "logo após um stop do usuário: falhou: write after end", "card-7"],
-    ["do mesmo card logado pelo id, não pelo slug, também é marcado e aponta o card", "card-7", 1_000, "logo após um stop do usuário: falhou: write after end", "card-7"],
-    ["sem card logo depois de um stop é marcado pela proximidade, sem apontar card nenhum", undefined, 1_000, "logo após um stop do usuário: falhou: write after end", undefined],
-    ["de outro card logo depois de um stop não é atribuído ao stop", "outro-card", 1_000, "falhou: write after end", undefined],
-    ["depois da janela do stop não é atribuído ao stop", undefined, USER_STOP_WINDOW_MS + 1, "falhou: write after end", undefined],
-  ])("erro %s", (_case, loggedCardReference, msSinceStop, expectedSymptom, expectedCardId) => {
-    const report = buildBackendErrorReport(
-      { level: 50, message: "falhou", fields: { err: new Error("write after end"), ...(loggedCardReference ? { card: loggedCardReference } : {}) } },
-      { ...STOPPED_CARD, at: NOW - msSinceStop },
-      NOW,
-    );
-    expect(report.symptom).toBe(expectedSymptom);
-    expect(report.cardId).toBe(expectedCardId);
+    ["do mesmo card até 10s depois do stop dele", "erp-feat", USER_STOP_WINDOW_MS, false],
+    ["do mesmo card logado pelo id, não pelo slug", "card-7", 1_000, false],
+    ["sem card logo depois de um stop", undefined, 1_000, false],
+    ["de outro card logo depois de um stop", "outro-card", 1_000, true],
+    ["depois da janela do stop", undefined, USER_STOP_WINDOW_MS + 1, true],
+  ])("erro %s vira falha: %s", (_case, loggedCardReference, msSinceStop, isPlatformFailure) => {
+    const line = { level: 50, message: "falhou", fields: { err: new Error("write after end"), ...(loggedCardReference ? { card: loggedCardReference } : {}) } };
+    expect(isPlatformFailureLogLine(line, { ...STOPPED_CARD, at: NOW - msSinceStop }, NOW)).toBe(isPlatformFailure);
+  });
+
+  it.each([
+    ["error sem erro anexado", 50, {}, true],
+    ["warn com o erro capturado em err", 40, { err: new Error("boom") }, true],
+    ["warn com o erro capturado em detail", 40, { detail: "ECONNREFUSED" }, true],
+    ["warn sem erro capturado", 40, { card: "c" }, false],
+    ["warn com detail vazio", 40, { detail: "" }, false],
+    ["info com detail", 30, { detail: "x" }, false],
+    ["error do próprio detector de falhas", 50, { ...PLATFORM_FAILURE_LOG_MARK, detail: "disk full" }, false],
+    ["warn do próprio detector de falhas", 40, { ...PLATFORM_FAILURE_LOG_MARK, detail: "disk full" }, false],
+  ])("%s vira falha: %s", (_case, level, fields, isPlatformFailure) => {
+    expect(isPlatformFailureLogLine({ level, message: "algo", fields }, undefined, NOW)).toBe(isPlatformFailure);
   });
 
   it("Error passado sozinho ao logger não repete a mensagem no sintoma nem na evidência", () => {
-    const report = buildBackendErrorReport({ level: 50, message: "write after end", fields: { err: new Error("write after end") } }, undefined, NOW);
+    const report = buildBackendErrorReport({ level: 50, message: "write after end", fields: { err: new Error("write after end") } });
     expect(report.symptom).toBe("write after end");
     expect(report.evidence.startsWith("mensagem: write after end\n")).toBe(true);
     expect(report.evidence).not.toContain("erro:");
   });
 
   it("mascara token que aparece na mensagem de erro", () => {
-    const report = buildBackendErrorReport({ level: 50, message: "push failed", fields: { err: `bad ghp_${"A".repeat(36)}` } }, undefined, NOW);
+    const report = buildBackendErrorReport({ level: 50, message: "push failed", fields: { err: `bad ghp_${"A".repeat(36)}` } });
     expect(report.evidence).not.toContain("ghp_");
     expect(report.symptom).not.toContain("ghp_");
   });
