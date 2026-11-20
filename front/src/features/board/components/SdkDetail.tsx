@@ -549,7 +549,7 @@ function ActionBody({ name, input, detail, row, onOpenAgent }: { name: string; i
             ) : null}
           </>
         ) : null}
-        {detail?.isError && !out?.stderr.trim() && !out?.stdout.trim() ? <ErrorBox text={detail.text ?? ""} /> : null}
+        {commandFailed && !out?.stderr.trim() && !out?.stdout.trim() ? <ErrorBox text={detail.text ?? ""} /> : null}
       </>
     );
   }

@@ -5341,9 +5341,9 @@ describe("SdkChatView — o detalhe de cada ação", () => {
   });
 
   it.each([
-    { name: "comando que terminou bem mostra o stderr como mensagem, não como erro", isError: false, label: "Command messages (stderr)", absentLabel: "Errors (stderr)" },
-    { name: "comando que falhou mostra o stderr como erro", isError: true, label: "Errors (stderr)", absentLabel: "Command messages (stderr)" },
-  ])("$name", async ({ isError, label, absentLabel }) => {
+    ["comando que terminou bem mostra o stderr como mensagem, não como erro", false, "Command messages (stderr)", "Errors (stderr)"],
+    ["comando que falhou mostra o stderr como erro", true, "Errors (stderr)", "Command messages (stderr)"],
+  ])("%s", async (_caseName, isError, label, absentLabel) => {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -5352,8 +5352,8 @@ describe("SdkChatView — o detalhe de cada ação", () => {
     ws.deliver({ type: "tool_result", id: "s1", toolResult: { lines: 2 } });
     fireEvent.click(screen.getByTestId("sdk-tool"));
     const dialog = await screen.findByTestId("sdk-detail");
-    await waitFor(() => expect(detailAsks(ws).some((f) => f.id === "s1")).toBe(true));
-    const ask = detailAsks(ws).find((f) => f.id === "s1")!;
+    await waitFor(() => expect(detailAsks(ws).some((frame) => frame.id === "s1")).toBe(true));
+    const ask = detailAsks(ws).find((frame) => frame.id === "s1")!;
     const structured = { stdout: "a.txt\n", stderr: "\nShell cwd was reset to /work/card\n" };
     ws.deliver({ type: "detail", req: "tool", id: "s1", nonce: ask.nonce, data: { found: true, by: "main", name: "Bash", input: { command: "cd /tmp && ls" }, structured, isError, result: { lines: 2 } } } as never);
     expect(await within(dialog).findByText(label)).toBeInTheDocument();
