@@ -1,11 +1,14 @@
 import * as React from "react";
 import { Info, UserRound } from "lucide-react";
 import { Badge, BADGE_TEXT } from "@/components/ui/badge";
-import type { Finding, Review, ReviewEvent, ReviewEventItem, ReviewWorking } from "@/api/types";
+import type { Finding, Review, ReviewEvent, ReviewEventItem, ReviewFleetRun, ReviewWorking } from "@/api/types";
+import { Markdown } from "@/features/board/components/ChatView";
 import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
 import { TypingDots } from "@/features/board/components/PeerTypingIndicator";
+import { ReviewFleet, type RunAgentDetail } from "@/features/board/components/ReviewFleet";
 import { formatResetAt } from "@/features/board/lib/planUsage";
 import { FINDING_SEVERITY_TONE, FINDING_STATUS_TONE, conversationRows, reviewTurn, type ReviewTurn } from "@/features/board/lib/review";
+import { fleetsByRound } from "@/features/board/lib/reviewFleet";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 
@@ -33,19 +36,22 @@ export const ENTER = "animate-in fade-in-0 slide-in-from-bottom-2 duration-300 e
 export interface ReviewConversationProps {
   review: Review;
   working: ReviewWorking;
+  fleet: ReviewFleetRun[];
   /** A user id to the name people know them by. */
   nameOf: (userId: string | undefined) => string;
+  agentDetail?: RunAgentDetail;
 }
 
-export function ReviewConversation({ review, working, nameOf }: ReviewConversationProps) {
+export function ReviewConversation({ review, working, fleet, nameOf, agentDetail }: ReviewConversationProps) {
   const t = useT();
-  const rows = React.useMemo(() => conversationRows(review.log), [review.log]);
+  const rows = conversationRows(review.log, fleetsByRound(review, fleet));
+  const agentsAnswered = fleet.reduce((total, run) => total + run.done, 0);
   const findings = React.useMemo(() => new Map(review.findings.map((f) => [f.id, f])), [review.findings]);
   const turn = reviewTurn(review, working);
   const names = { reviewer: nameOf(review.reviewerUserId), author: nameOf(review.authorUserId), merger: nameOf(review.mergerUserId) };
 
   // What sits at the bottom besides the lines: the "typing" row changes with the turn.
-  const stick = useStickToBottom(`${review.log.length}:${turnKey(turn)}`);
+  const stick = useStickToBottom(`${review.log.length}:${agentsAnswered}:${fleet.length}:${turnKey(turn)}`);
   // The log as it was when the panel opened: lines past it arrived live and come in animated. A log
   // that shrank (another review on screen) is all "already there" again.
   const openedWith = React.useRef(review.log.length);
@@ -57,10 +63,10 @@ export function ReviewConversation({ review, working, nameOf }: ReviewConversati
       <div
         ref={stick.scrollerRef}
         onScroll={stick.onScroll}
-        data-testid="review-conversation"
+        data-testid="review-agents"
         role="log"
         aria-live="polite"
-        aria-label={t("review.tab.conversation")}
+        aria-label={t("review.tab.agents")}
         className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-y-auto overflow-x-hidden px-0.5 py-2"
       >
         {rows.length === 0 ? (
@@ -69,6 +75,8 @@ export function ReviewConversation({ review, working, nameOf }: ReviewConversati
           rows.map((row) =>
             row.kind === "round" ? (
               <RoundDivider key={row.key} round={row.round} fresh={fresh(row.index)} />
+            ) : row.kind === "fleet" ? (
+              <ReviewFleet key={row.key} round={row.round} runs={row.runs} agentDetail={agentDetail} />
             ) : row.kind === "items" ? (
               <ItemLines key={row.key} event={row.event} findings={findings} names={names} fresh={fresh(row.index)} />
             ) : (
@@ -143,12 +151,15 @@ function Line({
     );
   }
   const reviewer = event.who === "reviewer";
+  const name = reviewer ? names.reviewer : names.author;
   return (
-    <Bubble testId="review-line" reviewer={reviewer} fresh={fresh} first>
+    <Bubble testId="review-line" reviewer={reviewer} fresh={fresh} speaker={name}>
       <p className={cn("text-[11px] font-semibold", reviewer ? "text-sky-300" : "text-emerald-300")}>
-        {t(reviewer ? "review.conversation.reviewer" : "review.conversation.author", { name: reviewer ? names.reviewer : names.author })}
+        {t(reviewer ? "review.conversation.reviewer" : "review.conversation.author", { name })}
       </p>
-      <p className="whitespace-pre-wrap break-words leading-relaxed">{event.text}</p>
+      <div className="min-w-0 break-words leading-relaxed">
+        <Markdown text={event.text} />
+      </div>
       <p className="text-right text-[10px] text-muted-foreground">{when}</p>
     </Bubble>
   );
@@ -156,13 +167,12 @@ function Line({
 
 /** An AI's bubble, on its side: the reviewer on the left, the author on the right. */
 function Bubble({
-  testId, reviewer, fresh, first, status, children,
+  testId, reviewer, fresh, speaker, status, children,
 }: {
   testId: string;
   reviewer: boolean;
   fresh: boolean;
-  /** The line's summary, which the findings follow: its corner points at the side it came from. */
-  first?: boolean;
+  speaker?: string;
   status?: string;
   children: React.ReactNode;
 }) {
@@ -172,18 +182,34 @@ function Bubble({
       data-who={reviewer ? "reviewer" : "author"}
       data-status={status}
       data-fresh={fresh || undefined}
-      className={cn("flex", reviewer ? "justify-start" : "justify-end", fresh && ENTER)}
+      className={cn("flex items-end gap-2", !reviewer && "flex-row-reverse", fresh && ENTER)}
     >
+      {speaker === undefined ? <span className="w-7 shrink-0" aria-hidden="true" /> : <PersonAvatar name={speaker} reviewer={reviewer} />}
       <div
         className={cn(
-          "max-w-[88%] space-y-1.5 rounded-lg border px-3 py-2 text-xs",
+          "min-w-0 max-w-[88%] space-y-1.5 rounded-lg border px-3 py-2 text-xs",
           reviewer ? "border-sky-500/30 bg-sky-500/10" : "border-emerald-500/30 bg-emerald-500/10",
-          first && (reviewer ? "rounded-tl-sm" : "rounded-tr-sm"),
+          speaker !== undefined && (reviewer ? "rounded-bl-sm" : "rounded-br-sm"),
         )}
       >
         {children}
       </div>
     </div>
+  );
+}
+
+function PersonAvatar({ name, reviewer }: { name: string; reviewer: boolean }) {
+  return (
+    <span
+      data-testid="review-avatar"
+      aria-hidden="true"
+      className={cn(
+        "grid h-7 w-7 shrink-0 select-none place-items-center rounded-full text-xs font-semibold text-background",
+        reviewer ? "bg-sky-400" : "bg-emerald-400",
+      )}
+    >
+      {name.trim().charAt(0).toUpperCase()}
+    </span>
   );
 }
 
@@ -316,8 +342,9 @@ function TurnRow({ turn, names }: { turn: ReviewTurn; names: Names }) {
       data-testid="review-turn"
       data-who={turn.who}
       data-working={turn.working}
-      className={cn("flex", reviewer ? "justify-start" : "justify-end", ENTER)}
+      className={cn("flex items-end gap-2", !reviewer && "flex-row-reverse", ENTER)}
     >
+      <PersonAvatar name={name} reviewer={reviewer} />
       <div
         className={cn(
           "inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-[11px]",
