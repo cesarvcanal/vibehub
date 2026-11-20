@@ -271,6 +271,21 @@ describe("POST /api/cards/:id/voice/sessions", () => {
     expect(instructions).toContain("fale em voz alta o pedido completo");
   });
 
+  it.each([
+    ["pergunta da pessoa vem antes de qualquer novidade do agente", "Pergunta da pessoa é urgente"],
+    ["o que o agente faz e por quê é delegado na hora", "- A pessoa pergunta sobre o que o agente está fazendo, por que fez ou vai fazer algo."],
+    ["criar card e delegar a outro card são ações delegadas", "criar um card, delegar a outro card"],
+    ["nada é confirmado sem a delegação na mesma vez", "Nunca diga que vai fazer ou que está fazendo algo sem gerar <|SpawnThinking|>"],
+    ["feito só quando o resultado disser", "Só diga que algo foi feito quando o resultado da tarefa disser"],
+    ["a voz nunca manda a pessoa conferir o chat", "Nunca mande a pessoa conferir ou ler o chat"],
+    ["perguntas e ordens pendentes não caem", "Guarde as perguntas e ordens da pessoa que ainda não tiveram resultado"],
+  ])("as instruções da chamada: %s", async (_rule, text) => {
+    const id = await makeCard();
+    openAi(() => summaryAnswer("resumo"));
+    await app.inject({ method: "POST", url: `/api/cards/${id}/voice/sessions`, headers: { cookie: owner }, payload: { sdp: OFFER } });
+    expect(sentSession().session.instructions as string).toContain(text);
+  });
+
   it("still 404s while the mode is off, without calling OpenAI", async () => {
     const id = await makeCard();
     const env = await import("../config/env.js");

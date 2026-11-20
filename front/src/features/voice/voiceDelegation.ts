@@ -14,11 +14,16 @@ export const DELEGATION_TRANSCRIPT_MAX_CHARS = 3_000;
 
 /** Progress, silent: the voice knows the work started and must not invent its result. */
 export const DELEGATION_STARTED =
-  "Pedido passado ao agente do card (Claude Code), que está trabalhando nele. Não invente o resultado: ele chega como atualização desta tarefa.";
+  "Pedido entregue com urgência ao agente do card (Claude Code): ele para o que está fazendo para atender. Ele ainda não foi feito: " +
+  "não diga que fez nem invente o resultado, e não narre outra coisa até o resultado desta tarefa chegar.";
+export const DELEGATION_SLOW_MS = 45_000;
+export const DELEGATION_SLOW =
+  "O agente do card ainda não terminou este pedido. Avise a pessoa que continua esperando por ele e conte o que você sabe do que o agente " +
+  "está fazendo; não diga que terminou.";
 /** Results, spoken: the outcomes that are not the agent's answer. */
 export const DELEGATION_UNHEARD = "Você não ouviu um pedido da pessoa: pergunte, em poucas palavras, o que ela quer.";
 export const DELEGATION_NOT_SENT =
-  "O pedido não chegou ao agente do card: diga à pessoa que não deu para passar o pedido agora e que ela pode tentar de novo ou digitar no chat.";
+  "O pedido não chegou ao agente do card: diga à pessoa que não deu para passar o pedido agora, porque a conexão com o agente caiu, e que ela pode pedir de novo em instantes.";
 export const DELEGATION_SILENT =
   "O agente do card não deu resposta em texto a este pedido — o trabalho dele pode ter sido interrompido (uma atualização do painel, por exemplo). Diga isso à pessoa em poucas palavras e pergunte se ela quer que você peça de novo.";
 
@@ -40,7 +45,9 @@ export function delegationRequest(turns: VoiceTurn[]): string | null {
   return [
     `[pedido por voz]\n${asked.text.trim()}`,
     `Transcrição recente da chamada de voz (pode ter erros de transcrição):\n${lines.reverse().join("\n")}`,
-    "Responda curto e direto: a voz vai falar a sua resposta para a pessoa.",
+    "Urgente: a pessoa está esperando na chamada. Se estiver no meio de outra tarefa, pare o que está fazendo, atenda este pedido " +
+      "primeiro (responda ou execute, com as suas ferramentas) e encerre o turno com a resposta, curta e direta: a voz vai falá-la para a pessoa. " +
+      "Se parou outra tarefa para isso, diga o que ficou interrompido, para a pessoa decidir se você retoma.",
   ].join("\n\n");
 }
 
@@ -55,13 +62,12 @@ export type DelegationReply =
   | { state: "answered"; text: string; answers: string[] }
   | { state: "silent"; answers: [] };
 
-/**
- * Where the agent's work on a delegated request stands, read off the chat. It is over only when no
- * turn is running: a later message does not end it, because the chat delivers queued messages into
- * the running turn at a breather (`turnHasRoomForMore`) — that turn's last word answers both. PURE.
- */
-export function delegationReply(rows: SdkRow[], request: string, turnRunning: boolean): DelegationReply {
-  const at = rows.findLastIndex((row) => row.kind === "user" && row.text === request);
+export type DelegationAnchor = { request: string } | { questionId: string };
+
+export function delegationReply(rows: SdkRow[], anchor: DelegationAnchor, turnRunning: boolean): DelegationReply {
+  const at = "request" in anchor
+    ? rows.findLastIndex((row) => row.kind === "user" && row.text === anchor.request)
+    : rows.findIndex((row) => row.kind === "question" && row.id === anchor.questionId);
   if (at < 0) return { state: "waiting", answers: [] };
   const answers = rows.slice(at + 1).filter(isAgentAnswer).map((row) => row.text);
   if (turnRunning) return { state: "waiting", answers };
