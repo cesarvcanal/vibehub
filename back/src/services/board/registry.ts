@@ -152,6 +152,7 @@ export function normalizePreviewCwd(cwd: string | null | undefined): string | un
  * the last keystroke a person typed into it (stamped as `humanActiveAt`).
  */
 export const HUMAN_ACTIVE_WINDOW_MS = 5 * 60_000;
+export const HUMAN_ACTIVE_THROTTLE_MS = 5_000;
 
 export function isHumanActive(
   card: Pick<Card, "humanActiveAt" | "awaitingDecisionAt" | "pendingQuestionAt">,
@@ -160,7 +161,7 @@ export function isHumanActive(
 ): boolean {
   if (!card.humanActiveAt || now - card.humanActiveAt >= HUMAN_ACTIVE_WINDOW_MS) return false;
   const lastAskedAt = Math.max(card.awaitingDecisionAt ?? 0, card.pendingQuestionAt ?? 0, answeringAskedAt ?? 0);
-  return lastAskedAt <= card.humanActiveAt;
+  return lastAskedAt < card.humanActiveAt + HUMAN_ACTIVE_THROTTLE_MS;
 }
 
 /**

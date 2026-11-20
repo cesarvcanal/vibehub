@@ -615,6 +615,7 @@ describe("human-active lock yields to the card's own open question", () => {
     const send = maestro.sendToTerminal(card.id, "Mongo", { respectHumanActive: true, answeringAskedAt: now + askedOffsetMs });
     if (delivered) await expect(send).resolves.toMatchObject({ sent: true });
     else await expect(send).rejects.toThrow(/human-active/);
+    expect(runScript).toHaveBeenCalledTimes(delivered ? 1 : 0);
   });
 });
 
