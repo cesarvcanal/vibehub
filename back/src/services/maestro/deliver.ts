@@ -1051,13 +1051,23 @@ export async function afterPrMerged(
   return await deleteMergedBranch(cardId, prUrl, branch, connectionId);
 }
 
+const FAILED_DELIVER_REASONS: readonly DeliverReason[] = ["push_failed", "pr_failed", "merge_failed", "comments_failed"];
+
+export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<DeliverResult> {
+  const result = await runDelivery(cardId, opts);
+  if (FAILED_DELIVER_REASONS.includes(result.reason)) {
+    logger.warn({ card: cardId, reason: result.reason, detail: `${result.reason}: ${result.output ?? "sem saída"}` }, "deliver failed");
+  }
+  return result;
+}
+
 /**
  * Delivers a card: push → PR → gate → (authorized) merge. The gate always runs before the merge, so
  * an unauthorized call still comes back with the truth ("green, ready — say the word"). Merging
  * happens only when `authorized === true` and the gate is green. In merge-only mode the push and the
  * PR creation are replaced by reading the open PR and comparing its head with `expectedHeadSha`.
  */
-export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<DeliverResult> {
+async function runDelivery(cardId: string, opts: DeliverOpts): Promise<DeliverResult> {
   const mergeOnly = opts.mergeOnly === true;
   const expectedHead = mergeOnly ? String(opts.expectedHeadSha ?? "").trim().toLowerCase() : "";
   // Merge-only exists to merge exactly the reviewed commit: without its full sha there is nothing to
