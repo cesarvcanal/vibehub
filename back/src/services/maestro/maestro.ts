@@ -253,6 +253,7 @@ export interface SendResult {
 export interface SendOpts {
   by?: string;
   respectHumanActive?: boolean;
+  senderUserId?: string;
   answeringAskedAt?: number;
   /**
    * Refuse the send when a MENU is open in the terminal (session resume, /compact, a permission
@@ -454,7 +455,7 @@ export async function waitTerminalReady(cardId: string, waitMs: number, pollMs =
 
 export async function sendToTerminal(cardId: string, text: string, opts: SendOpts = {}): Promise<SendResult> {
   const {
-    by, respectHumanActive = false, answeringAskedAt, guardInteractiveMenu = false, requireAgent = false, origin, viaNativeChat = false,
+    by, respectHumanActive = false, senderUserId, answeringAskedAt, guardInteractiveMenu = false, requireAgent = false, origin, viaNativeChat = false,
     beforeDeliver, readyWaitMs = 0, readyPollMs = READY_POLL_MS, wake = false,
   } = opts;
   const instruction = String(text ?? "").trim();
@@ -463,7 +464,8 @@ export async function sendToTerminal(cardId: string, text: string, opts: SendOpt
   if (!card) throw new Error("card not found");
   // A maestro must not type into a card a person is using right now — but the person's own send is
   // never blocked (respectHumanActive is off unless the caller is a maestro driving another card).
-  if (respectHumanActive && isHumanActive(card, Date.now(), answeringAskedAt)) {
+  const sentByTheCardAuthor = !!senderUserId && card.actorUserId === senderUserId;
+  if (respectHumanActive && !sentByTheCardAuthor && isHumanActive(card, Date.now(), answeringAskedAt)) {
     throw new Error(
       `card "${card.title}" is human-active — someone is typing in it right now, so it will not accept a sent instruction; read it and wait, or ask the user`,
     );
