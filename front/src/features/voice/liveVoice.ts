@@ -89,6 +89,15 @@ export type DelegationUpdate = "progress" | "result";
  */
 export type DelegationListener = (id: string, turns: VoiceTurn[]) => void;
 
+export interface VoiceToolCall {
+  callId: string;
+  name: string;
+  argumentsJson: string;
+  turns: VoiceTurn[];
+}
+
+export type ToolCallListener = (call: VoiceToolCall) => void;
+
 /** The answer to a delegation when nobody in this page can do the work (the calibration lab). */
 const NO_DELEGATE = "Não há quem faça isso nesta conversa: diga à pessoa, em poucas palavras, que você não consegue fazer isso aqui.";
 
@@ -136,6 +145,7 @@ export class LiveVoiceSession {
   private segmenter: TurnSegmenter | null = null;
   private readonly finalListeners = new Set<(turn: VoiceTurn) => void>();
   private readonly delegationListeners = new Set<DelegationListener>();
+  private readonly toolCallListeners = new Set<ToolCallListener>();
   /** The assistant "speaking" by its transcript — the orb's last resort when no audio is measurable. */
   readonly speech = new EventEnvelope();
 
@@ -168,6 +178,17 @@ export class LiveVoiceSession {
   onDelegation(listener: DelegationListener): () => void {
     this.delegationListeners.add(listener);
     return () => this.delegationListeners.delete(listener);
+  }
+
+  onToolCall(listener: ToolCallListener): () => void {
+    this.toolCallListeners.add(listener);
+    return () => this.toolCallListeners.delete(listener);
+  }
+
+  answerToolCall(callId: string, output: unknown): boolean {
+    if (this.snap.state !== "live") return false;
+    const appended = this.send({ type: "response.item.create", item: { type: "function_call_output", call_id: callId, output: JSON.stringify(output) } });
+    return appended && this.send({ type: "response.create" });
   }
 
   /**
@@ -356,6 +377,7 @@ export class LiveVoiceSession {
     this.listeners.clear();
     this.finalListeners.clear();
     this.delegationListeners.clear();
+    this.toolCallListeners.clear();
   }
 
   private send(event: Record<string, unknown>): boolean {
@@ -377,7 +399,8 @@ export class LiveVoiceSession {
       end_ms?: unknown;
       error?: { message?: unknown; code?: unknown; type?: unknown };
       reason?: unknown;
-      delegation?: { id?: unknown };
+      delegation?: { id?: unknown; target?: unknown };
+      event?: { type?: unknown; item?: { type?: unknown; call_id?: unknown; name?: unknown; arguments?: unknown } };
     };
     try {
       event = JSON.parse(String(raw));
@@ -412,13 +435,26 @@ export class LiveVoiceSession {
         break;
       case "session.delegation.created": {
         const id = event.delegation?.id;
-        if (typeof id !== "string" || !id) break;
+        if (typeof id !== "string" || !id || event.delegation?.target === "responses") break;
         if (this.delegationListeners.size === 0) {
           this.answerDelegation(id, NO_DELEGATE, "result");
           break;
         }
         const turns = this.segmenter?.turns.slice() ?? [];
         for (const listener of this.delegationListeners) listener(id, turns);
+        break;
+      }
+      case "response.event": {
+        const item = event.event?.type === "response.output_item.done" ? event.event.item : undefined;
+        if (item?.type !== "function_call") break;
+        const { call_id: callId, name, arguments: argumentsJson } = item;
+        if (typeof callId !== "string" || typeof name !== "string" || typeof argumentsJson !== "string") break;
+        if (this.toolCallListeners.size === 0) {
+          this.answerToolCall(callId, { error: NO_DELEGATE });
+          break;
+        }
+        const turns = this.segmenter?.turns.slice() ?? [];
+        for (const listener of this.toolCallListeners) listener({ callId, name, argumentsJson, turns });
         break;
       }
       case "session.input_audio.muted":

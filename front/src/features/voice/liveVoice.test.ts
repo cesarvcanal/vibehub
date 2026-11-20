@@ -420,3 +420,64 @@ describe("errorMessage", () => {
     expect(errorMessage("weird")).toBe("voice.err.generic");
   });
 });
+
+function functionCallEvent(callId: string, name: string, args: string) {
+  return {
+    type: "response.event",
+    delegation_id: "item_9",
+    event: { type: "response.output_item.done", item: { id: "fc_1", type: "function_call", status: "completed", call_id: callId, name, arguments: args } },
+  };
+}
+
+describe("LiveVoiceSession — chamadas de ferramenta do backend", () => {
+  it("entrega a chamada de função ao ouvinte com callId, nome, argumentos e o que já foi dito", async () => {
+    const { session, rig } = await liveSession();
+    const ch = rig.peer().channel!;
+    const calls: unknown[] = [];
+    session.onToolCall((call) => calls.push({ ...call, turns: call.turns.map((turn) => turn.text) }));
+    ch.emit({ type: "session.input_transcript.delta", delta: "cria o card X" });
+    ch.emit({ type: "response.event", delegation_id: "item_9", event: { type: "response.output_item.done", item: { type: "reasoning", id: "rs_1" } } });
+    ch.emit(functionCallEvent("call_1", "create_card", '{"projectId":"p1","title":"X"}'));
+    expect(calls).toEqual([{ callId: "call_1", name: "create_card", argumentsJson: '{"projectId":"p1","title":"X"}', turns: ["cria o card X"] }]);
+  });
+
+  it("responde com function_call_output seguido de response.create", async () => {
+    const { session, rig } = await liveSession();
+    const ch = rig.peer().channel!;
+    expect(session.answerToolCall("call_1", { cardId: "c1" })).toBe(true);
+    expect(ch.sent.slice(-2)).toEqual([
+      { type: "response.item.create", item: { type: "function_call_output", call_id: "call_1", output: '{"cardId":"c1"}' } },
+      { type: "response.create" },
+    ]);
+  });
+
+  it("sem ouvinte, responde na hora com erro", async () => {
+    const { rig } = await liveSession();
+    const ch = rig.peer().channel!;
+    ch.emit(functionCallEvent("call_2", "create_card", "{}"));
+    const output = ch.sent.find((event) => (event as { type: string }).type === "response.item.create") as { item: { call_id: string; output: string } };
+    expect(output.item.call_id).toBe("call_2");
+    expect(JSON.parse(output.item.output)).toHaveProperty("error");
+    expect(ch.sent[ch.sent.length - 1]).toEqual({ type: "response.create" });
+  });
+
+  it("delegação responses não vira delegação client e não recebe resposta de delegação", async () => {
+    const { session, rig } = await liveSession();
+    const ch = rig.peer().channel!;
+    const taken: string[] = [];
+    session.onDelegation((id) => taken.push(id));
+    const sentBefore = ch.sent.length;
+    ch.emit({ type: "session.delegation.created", delegation: { id: "item_9", type: "delegation", target: "responses", response_id: "resp_1" } });
+    expect(taken).toEqual([]);
+    expect(ch.sent.length).toBe(sentBefore);
+  });
+
+  it("depois do fim da chamada, responder não envia nada e devolve false", async () => {
+    const { session, rig } = await liveSession();
+    const ch = rig.peer().channel!;
+    session.dispose();
+    const sentBefore = ch.sent.length;
+    expect(session.answerToolCall("call_3", { ok: true })).toBe(false);
+    expect(ch.sent.length).toBe(sentBefore);
+  });
+});
