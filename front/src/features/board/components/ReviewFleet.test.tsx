@@ -11,7 +11,8 @@ function fleetAgent(overrides: Partial<ReviewFleetAgent>): ReviewFleetAgent {
 }
 
 function fleetRun(overrides: Partial<ReviewFleetRun>): ReviewFleetRun {
-  const agents = [fleetAgent({}), fleetAgent({ id: "a2", label: "juiz", phase: "Julgamento", status: "stopped", error: USAGE_LIMIT, result: undefined })];
+  const failedJudge: ReviewFleetAgent = { id: "a2", label: "juiz", phase: "Julgamento", status: "stopped", error: USAGE_LIMIT };
+  const agents = [fleetAgent({}), failedJudge];
   return { runId: "wf_1", name: "vibehub-pr-analysis", phases: ["Contexto", "Julgamento"], total: 2, done: 1, agents, at: 1, finished: true, ...overrides };
 }
 
