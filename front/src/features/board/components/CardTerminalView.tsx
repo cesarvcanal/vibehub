@@ -1276,7 +1276,7 @@ export function CardTerminalView({
               mainCovered && "pointer-events-none invisible absolute inset-0",
             )}
           >
-            {card?.waitingFor ? <CardWaitNotice cardId={card.id} wait={card.waitingFor} waitTargetTitle={card.waitTargetTitle} /> : null}
+            {card?.waitingFor ? <CardWaitNotice card={card} wait={card.waitingFor} /> : null}
             {mode === "chat" && features.data === undefined ? (
               /* The install flag is not here yet (cold cache). WHICH chat this install uses is that
                  flag, so guessing would mount the WRONG view: the legacy chat flashed in, took the

@@ -6,6 +6,7 @@ import { CardWaitNotice } from "./CardWaitNotice";
 import { del, post } from "@/lib/api";
 import { testQueryClient } from "@/test/render";
 import type { CardWait } from "@/api/types";
+import type { BoardCard } from "@/features/board/api";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -18,12 +19,16 @@ vi.mock("@/lib/api", () => ({
 
 const WAIT: CardWait = { cardId: "target", instruction: "faça o PR complementar", createdAt: 1, createdBy: "user-1" };
 
-function renderNotice(wait: CardWait, waitTargetTitle?: string) {
+function renderNotice(wait: CardWait, waitTargetTitle?: string, column: BoardCard["column"] = "working") {
   const queryClient = testQueryClient();
   const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+  const card: BoardCard = {
+    id: "waiting", projectId: "p1", title: "Complemento", column, position: 0, tmuxSession: "card-waiting",
+    worktreeSlug: "complemento", createdAt: 1, waitingFor: wait, waitTargetTitle,
+  };
   render(
     <QueryClientProvider client={queryClient}>
-      <CardWaitNotice cardId="waiting" wait={wait} waitTargetTitle={waitTargetTitle} />
+      <CardWaitNotice card={card} wait={wait} />
     </QueryClientProvider>,
   );
   return { invalidate };
@@ -68,9 +73,17 @@ describe("CardWaitNotice", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("card esperado terminou e o card está pausado: avisa que continua ao sair de Pausado e oferece acordar agora", () => {
-    renderNotice({ ...WAIT, readyAt: 2, outcome: "concluded" }, "Captura de falhas");
+  it("card esperado terminou e o card está pausado: avisa que continua ao sair de Pausado, sem acordar agora", () => {
+    renderNotice({ ...WAIT, readyAt: 2, outcome: "concluded" }, "Captura de falhas", "paused");
     expect(screen.getByTestId("card-wait-notice")).toHaveTextContent(/leaves Paused/);
+    expect(screen.queryByRole("button", { name: "Wake now" })).toBeNull();
+  });
+
+  it("card esperado terminou e o card fora de Pausado: diz que está acordando, sem falar de Pausado, e oferece acordar agora", () => {
+    renderNotice({ ...WAIT, readyAt: 2, outcome: "concluded" }, "Captura de falhas", "working");
+    const notice = screen.getByTestId("card-wait-notice");
+    expect(notice).toHaveTextContent('Waking this card: the card "Captura de falhas" already finished.');
+    expect(notice).not.toHaveTextContent(/Paused/);
     expect(screen.getByRole("button", { name: "Wake now" })).toBeInTheDocument();
   });
 });

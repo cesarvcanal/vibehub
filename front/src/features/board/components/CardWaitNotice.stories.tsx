@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { CardWaitNotice } from "@/features/board/components/CardWaitNotice";
 import { CardTile } from "@/features/board/components/CardTile";
 import type { CardWait } from "@/api/types";
+import type { BoardCard } from "@/features/board/api";
 
 const WAIT: CardWait = {
   cardId: "d3497d82",
@@ -13,30 +14,34 @@ const TARGET_TITLE = "Captura de falha da plataforma pega todo erro real e avisa
 const READY_WAIT: CardWait = { ...WAIT, readyAt: 2, outcome: "pr_merged", prNumber: 356 };
 const FAILED_WAIT: CardWait = { ...READY_WAIT, failure: { at: 3, reason: "the terminal for card \"auto-aprimorável\" has no live session" } };
 
+function waitingCard(index: number, waitingFor: CardWait, waitTargetTitle: string | undefined, column: BoardCard["column"]): BoardCard {
+  return {
+    id: `card-${index}`, projectId: "p1", title: "auto-aprimorável não funcionando", column, position: index,
+    tmuxSession: `card-${index}`, worktreeSlug: `auto-${index}`, createdAt: 1, waitingFor, waitTargetTitle,
+  };
+}
+
+const NOTICE_CARDS = [
+  waitingCard(0, WAIT, TARGET_TITLE, "waiting"),
+  waitingCard(1, READY_WAIT, TARGET_TITLE, "paused"),
+  waitingCard(2, READY_WAIT, TARGET_TITLE, "working"),
+  waitingCard(3, FAILED_WAIT, undefined, "waiting"),
+];
+const TILE_CARDS = [
+  waitingCard(4, WAIT, TARGET_TITLE, "waiting"),
+  waitingCard(5, WAIT, undefined, "waiting"),
+  waitingCard(6, FAILED_WAIT, "Captura de falhas", "waiting"),
+];
+
 const meta = {
   title: "Card/Espera por outro card",
   render: ({ width }) => (
     <div className="flex gap-6">
       <div className="space-y-3" style={{ width }}>
-        <CardWaitNotice cardId="a9e64bf6" wait={WAIT} waitTargetTitle={TARGET_TITLE} />
-        <CardWaitNotice cardId="a9e64bf6" wait={READY_WAIT} waitTargetTitle={TARGET_TITLE} />
-        <CardWaitNotice cardId="a9e64bf6" wait={FAILED_WAIT} />
+        {NOTICE_CARDS.map((card) => (card.waitingFor ? <CardWaitNotice key={card.id} card={card} wait={card.waitingFor} /> : null))}
       </div>
       <div className="w-72 space-y-2">
-        {[
-          { waitingFor: WAIT, waitTargetTitle: TARGET_TITLE },
-          { waitingFor: WAIT, waitTargetTitle: undefined },
-          { waitingFor: FAILED_WAIT, waitTargetTitle: "Captura de falhas" },
-        ].map((wait, index) => (
-          <CardTile
-            key={index}
-            card={{
-              id: `card-${index}`, projectId: "p1", title: "auto-aprimorável não funcionando", column: "waiting", position: index,
-              tmuxSession: `card-${index}`, worktreeSlug: `auto-${index}`, createdAt: 1, ...wait,
-            }}
-            onOpen={() => undefined}
-          />
-        ))}
+        {TILE_CARDS.map((card) => <CardTile key={card.id} card={card} onOpen={() => undefined} />)}
       </div>
     </div>
   ),

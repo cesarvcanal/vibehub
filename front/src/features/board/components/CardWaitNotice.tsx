@@ -6,13 +6,15 @@ import { Button } from "@/components/ui/button";
 import { boardApi, CARDS_PREFIX_KEY, cardKey } from "@/features/board/api";
 import { cardWaitPhase } from "@/features/board/lib/cardWait";
 import type { CardWait } from "@/api/types";
+import type { BoardCard } from "@/features/board/api";
 import { useT } from "@/i18n";
 
-export function CardWaitNotice({ cardId, wait, waitTargetTitle }: { cardId: string; wait: CardWait; waitTargetTitle?: string }) {
+export function CardWaitNotice({ card, wait }: { card: BoardCard; wait: CardWait }) {
   const t = useT();
   const queryClient = useQueryClient();
-  const phase = cardWaitPhase(wait);
-  const card = waitTargetTitle ? t("cardWait.namedCard", { title: waitTargetTitle }) : t("cardWait.unnamedCard");
+  const cardId = card.id;
+  const phase = cardWaitPhase(wait, card);
+  const targetCardLabel = card.waitTargetTitle ? t("cardWait.namedCard", { title: card.waitTargetTitle }) : t("cardWait.unnamedCard");
   const refreshBoard = async () => {
     await queryClient.invalidateQueries({ queryKey: CARDS_PREFIX_KEY });
     await queryClient.invalidateQueries({ queryKey: cardKey(cardId) });
@@ -23,7 +25,12 @@ export function CardWaitNotice({ cardId, wait, waitTargetTitle }: { cardId: stri
   const wakeErrorNotShownYet = wakeError !== wait.failure?.reason ? wakeError : undefined;
   const failedAction = cancel.error ? apiErrorMessage(cancel.error, t("cardWait.cancelError")) : wakeErrorNotShownYet;
   const busy = cancel.isPending || wake.isPending;
-  const headline = wait.failure ? t("cardWait.failed", { card, reason: wait.failure.reason }) : t(phase === "ready" ? "cardWait.ready" : "cardWait.waiting", { card });
+  const headline = {
+    waiting: t("cardWait.waiting", { card: targetCardLabel }),
+    paused: t("cardWait.paused", { card: targetCardLabel }),
+    waking: t("cardWait.waking", { card: targetCardLabel }),
+    failed: t("cardWait.failed", { card: targetCardLabel, reason: wait.failure?.reason }),
+  }[phase];
   const Icon = phase === "failed" ? AlertTriangle : Hourglass;
 
   return (
@@ -42,7 +49,7 @@ export function CardWaitNotice({ cardId, wait, waitTargetTitle }: { cardId: stri
         {failedAction ? <p role="alert" className="break-words text-destructive">{failedAction}</p> : null}
       </div>
       <div className="flex shrink-0 gap-1.5">
-        {phase !== "waiting" ? (
+        {phase === "waking" || phase === "failed" ? (
           <Button type="button" size="sm" className="h-7 px-2 text-xs" disabled={busy} onClick={() => wake.mutate()}>
             {t("cardWait.wakeNow")}
           </Button>

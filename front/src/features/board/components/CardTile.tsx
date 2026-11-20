@@ -284,7 +284,7 @@ export function CardTile({
             title={t("card.waitChipTooltip", { instruction: card.waitingFor.instruction })}
             className={cn(
               "mr-1 mt-1 inline-flex max-w-full items-start gap-1 rounded border px-1 py-px text-[10px] font-medium",
-              cardWaitPhase(card.waitingFor) === "failed"
+              cardWaitPhase(card.waitingFor, card) === "failed"
                 ? "border-destructive/40 bg-destructive/10 text-destructive"
                 : "border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-400",
             )}
