@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { GitMerge, X } from "lucide-react";
+import { GitMerge, Loader2, X } from "lucide-react";
 import { Badge, BADGE_TEXT, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,6 +11,7 @@ import { AnalysisConversation } from "@/features/board/components/AnalysisConver
 import { PanelFrame, TabButton } from "@/features/board/components/ReviewPanelView";
 import { boardApi } from "@/features/board/api";
 import { cardAnalysisKey } from "@/features/board/lib/analysis";
+import { mergeFailure } from "@/features/board/lib/review";
 import { useCardAnalysis } from "@/features/board/lib/useCardAnalysis";
 import { apiErrorMessage } from "@/lib/apiError";
 import { useT, type Translate } from "@/i18n";
@@ -89,13 +90,28 @@ function AnalysisMerge({ cardId, read }: { cardId: string; read: AnalysisReadMod
   if (merge.isSuccess) return <p className={`text-xs ${BADGE_TEXT.ok}`}>{t("analysis.merge.done", { n: prNumber })}</p>;
   if (read.mergedAt !== undefined) return <p className={`text-xs ${BADGE_TEXT.ok}`}>{t("analysis.merge.merged", { n: prNumber })}</p>;
   if (!read.canMerge) return null;
+  const failure = merge.isError ? mergeFailure(merge.error) : undefined;
+  const refusedByClick = failure?.kind === "refused" ? apiErrorMessage(merge.error) : undefined;
+  const merging = merge.isPending || read.merging;
+  const refusal = merging || refusedByClick ? undefined : read.lastMergeRefusal;
   return (
     <div className="flex shrink-0 flex-col gap-1.5">
-      <Button type="button" size="sm" className="self-start" disabled={merge.isPending} onClick={() => merge.mutate()}>
-        <GitMerge className="h-3.5 w-3.5" />
-        {merge.isPending ? t("analysis.merge.pending") : t("analysis.merge", { n: prNumber })}
+      {refusal ? (
+        <div role="alert" className="flex flex-col gap-1 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs">
+          <p className="font-medium text-destructive">
+            {refusal.reason === "gate" ? t("analysis.merge.refused.gate") : t("analysis.merge.refused.other", { reason: refusal.reason })}
+          </p>
+          {refusal.output ? (
+            <pre className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground">{refusal.output}</pre>
+          ) : null}
+        </div>
+      ) : null}
+      <Button type="button" size="sm" className="self-start" disabled={merging} onClick={() => merge.mutate()}>
+        {merging ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitMerge className="h-3.5 w-3.5" />}
+        {merging ? t("analysis.merge.pending") : t(refusal ? "analysis.merge.retry" : "analysis.merge", { n: prNumber })}
       </Button>
-      {merge.isError ? <p className="whitespace-pre-wrap text-xs text-destructive">{apiErrorMessage(merge.error)}</p> : null}
+      {merging ? <p className="text-xs text-muted-foreground">{t("analysis.merge.running")}</p> : null}
+      {refusedByClick ? <p className="whitespace-pre-wrap text-xs text-destructive">{refusedByClick}</p> : null}
     </div>
   );
 }

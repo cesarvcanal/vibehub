@@ -843,7 +843,18 @@ export interface AnalysisReadModel {
   verdict: AnalysisVerdict;
   uncheckedDimensions: AnalysisDimension[];
   canMerge: boolean;
+  merging: boolean;
   mergedAt?: number;
+  lastMergeRefusal?: AnalysisMergeRefusal;
+}
+
+export interface AnalysisMergeRefusal {
+  cardId: string;
+  analysedSha: string;
+  reason: string;
+  output?: string;
+  by: string;
+  at: number;
 }
 
 export type CardAnalysisResponse = AnalysisReadModel | { analysis: null };
