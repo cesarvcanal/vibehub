@@ -148,6 +148,7 @@ export interface DriverSession {
    * works again (that one sends `login_restored`).
    */
   loginFailed: boolean;
+  accountRefusedTurn: boolean;
   fleetViewedAt?: number;
   usageLimit?: CardUsageLimit;
   /**
@@ -815,6 +816,7 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
     maybeScheduleIdleStop(session);
   }
   if (event.type === "login_failed") session.loginFailed = true;
+  if (event.type === "login_failed" || event.type === "usage_limited") session.accountRefusedTurn = true;
   // A turn that WORKED after the login died: the account is back. Only the screen's warning has to go.
   const loginRestored = event.type === "result" && session.loginFailed && !event.isError && event.subtype !== "aborted";
   if (loginRestored) session.loginFailed = false;
@@ -877,6 +879,7 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
     // Before the marker and the dot: the new scheduled attempt keeps both as a turn in flight.
     noteApiOutcome(session, event);
     logFailedTurn(session, event);
+    session.accountRefusedTurn = false;
     // The last turn in flight CLOSED: the durable marker comes off — unless work goes on in the
     // background (a task, a scheduled wake-up), which a deploy would kill just the same: then it
     // stays, now saying what is running (see `syncInflightMarker`).
@@ -1203,6 +1206,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     tasks: new Map(),
     rateLimits: new Map(),
     loginFailed: false,
+    accountRefusedTurn: false,
     rewinds: [],
     idleTimer: null,
     stderrTail: "",
@@ -1900,7 +1904,7 @@ export function isTransientApiFailure(result: string | undefined): boolean {
 }
 
 function logFailedTurn(session: DriverSession, event: ResultEvent): void {
-  const isCoveredElsewhere = isTransientApiFailure(event.result) || session.loginFailed || session.usageLimit !== undefined;
+  const isCoveredElsewhere = isTransientApiFailure(event.result) || session.accountRefusedTurn;
   if (!event.isError || isCoveredElsewhere) return;
   const endReason = [event.subtype, event.result?.slice(0, 200)].filter((part) => part !== undefined && part !== "").join(": ");
   logger.warn({ card: session.label, action: "sdk.turn.failed", detail: endReason || "no subtype or result text" }, "agent turn ended with an error");
