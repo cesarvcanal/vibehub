@@ -48,9 +48,9 @@ describe("pílula da análise na linha da PR", () => {
     const pill = analysisPill(loaded(readModel({ findings: [openFinding(), openFinding({ id: "f2" })] }, "pending", { tests: "problem" })), { cardWorking: true });
     expect(pill).toMatchObject({ key: "analysis.pill.fixing", vars: { n: 2 }, tone: "info" });
   });
-  it("apta com merge rodando: diz que está mergeando, não um apto parado", () => {
+  it("apta com merge rodando: diz que está mergeando em verde, com o ícone do merge, não um apto parado", () => {
     expect(analysisPill(loaded({ ...readModel({ stage: "done" }, "apt"), merging: true }), { cardWorking: false }))
-      .toMatchObject({ key: "analysis.pill.merging", tone: "info" });
+      .toMatchObject({ key: "analysis.pill.merging", tone: "ok", icon: "merging" });
   });
 
   it("apta com o último merge barrado no commit analisado: diz que o merge foi barrado, nunca só apto", () => {

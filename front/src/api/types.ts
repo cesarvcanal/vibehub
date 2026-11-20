@@ -516,6 +516,7 @@ export interface Card {
    * more than one PR was reviewed: one line per PR reads its own. Absent = `review` says it all.
    */
   reviews?: ReviewSummary[];
+  analysisMerging?: true;
   createdAt: number;
   updatedAt?: number;
 }
