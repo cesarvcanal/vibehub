@@ -311,9 +311,10 @@ describe("runGate under load", () => {
 
   it("o gate que passa do prazo vira aviso de erro no log, que o detector de falhas captura; o vermelho comum não", async () => {
     const { gate, registry } = await load();
-    const { logger } = await import("../../utils/logger.js");
-    const warn = vi.spyOn(logger, "warn");
-    onTestFinished(() => { warn.mockRestore(); });
+    const { onLogLine } = await import("../../utils/logger.js");
+    const { isPlatformFailureLogLine } = await import("../platformFailures/backendError.js");
+    const loggedLines: import("../../utils/logger.js").LogLine[] = [];
+    onTestFinished(onLogLine("warn", (line) => loggedLines.push(line)));
     const p = await registry.createProject({ name: "billing" });
     const timedOutCard = await registry.createCard({ projectId: p.id, title: "lento" });
     const redCard = await registry.createCard({ projectId: p.id, title: "vermelho" });
@@ -325,8 +326,10 @@ describe("runGate under load", () => {
     });
     await gate.runGate(timedOutCard.id);
     await gate.runGate(redCard.id);
-    const timeoutWarnings = warn.mock.calls.filter((call) => call[1] === "gate timed out — killed in the runner").map((call) => call[0]);
-    expect(timeoutWarnings).toEqual([expect.objectContaining({ card: timedOutCard.worktreeSlug, detail: expect.any(String) })]);
+    const capturedFailures = loggedLines.filter((line) => isPlatformFailureLogLine(line, undefined, Date.now()));
+    expect(capturedFailures).toEqual([expect.objectContaining({
+      message: "gate timed out — killed in the runner", fields: expect.objectContaining({ card: timedOutCard.worktreeSlug }),
+    })]);
   });
 });
 
