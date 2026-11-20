@@ -1,12 +1,23 @@
 import type { FastifyInstance } from "fastify";
 import { requireSession, requestUser, sessionUserId } from "../auth/session.js";
 import { requireCardWork } from "../auth/access.js";
-import { cardCallInstructions, createLiveSession, voiceLiveStatus, SDP_MAX_BYTES, VoiceLiveError } from "../services/voice/live.js";
+import { cardCallDelegation, cardCallInstructions, createLiveSession, voiceLiveStatus, SDP_MAX_BYTES, VoiceLiveError } from "../services/voice/live.js";
 import { parseVoiceTurns, saveVoiceTurns } from "../services/voice/turns.js";
 import { speechAvailable, synthesizeSpeech, SPEECH_MAX_CHARS } from "../services/voice/speech.js";
 import { Readable } from "node:stream";
 import { originOfUser } from "../services/chat/provenance.js";
 import * as registry from "../services/board/registry.js";
+import { config } from "../config/env.js";
+import { logger } from "../utils/logger.js";
+import { runVoiceAction, runVoiceActionOnce } from "../services/voice/executor.js";
+import { UserActionError } from "../services/maestro/asUser.js";
+import { NOT_FOUND, type ErrorStatusRule } from "./httpError.js";
+
+const BOARD_REFUSALS: readonly ErrorStatusRule[] = [
+  NOT_FOUND,
+  [/is required|empty text|reserved line/i, 400],
+  [/no live session|awaiting choice|no agent running|terminal not ready|^paused:|^done:|human-active|exited before it could take/i, 409],
+];
 
 /**
  * VOICE MODE — see services/voice/live.ts. The key never leaves the server.
@@ -58,18 +69,53 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
       try {
         const cardId = req.params.id;
         // The owner passes the access check for any id: a card that is not on the board is a 404 here.
-        if (!(await registry.getCard(cardId))) return await reply.code(404).send({ error: "card not found" });
+        const card = await registry.getCard(cardId);
+        if (!card) return await reply.code(404).send({ error: "card not found" });
+        const project = await registry.getProject(card.projectId);
+        if (!project) return await reply.code(404).send({ error: "project not found" });
         const user = (await sessionUserId(req)) ?? "unknown";
         const answer = await createLiveSession(req.body?.sdp, {
           user,
           cardId,
           signal: gone.signal,
+          delegation: cardCallDelegation({ cardTitle: card.title, projectName: project.name }),
           instructionsFor: (apiKey, signal) => cardCallInstructions(cardId, apiKey, signal),
         });
         return await reply.code(201).send(answer);
       } catch (err) {
         if (err instanceof VoiceLiveError) return await reply.code(err.status).send({ error: err.message });
         throw err;
+      }
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: { callId?: unknown; name?: unknown; arguments?: unknown } }>(
+    "/api/cards/:id/voice/actions",
+    { preHandler: requireCardWork, bodyLimit: 64 * 1024 },
+    async (req, reply) => {
+      if (!config.voiceLive.enabled) return await reply.code(404).send({ error: "voice mode is disabled" });
+      const callCard = await registry.getCard(req.params.id);
+      if (!callCard) return await reply.code(404).send({ error: "card not found" });
+      const { callId, name, arguments: argumentsJson } = req.body ?? {};
+      if (typeof callId !== "string" || !callId || callId.length > 200) return await reply.code(400).send({ error: "callId is required" });
+      if (typeof name !== "string" || !name) return await reply.code(400).send({ error: "name is required" });
+      if (typeof argumentsJson !== "string") return await reply.code(400).send({ error: "arguments must be the function call's JSON text" });
+      const user = await requestUser(req);
+      if (!user) return await reply.code(401).send({ error: "not authenticated" });
+      try {
+        const output = await runVoiceActionOnce(`${user.id}:${callId}:${name}`, () => runVoiceAction({ user, callCard, name, argumentsJson }));
+        logger.info({ audit: true, action: "voice.action", tool: name, card: callCard.id, by: user.username }, "voice action");
+        return await reply.send({ output });
+      } catch (err) {
+        if (err instanceof UserActionError) return await reply.code(err.status).send({ error: err.message });
+        const reason = err instanceof Error ? err.message : String(err);
+        const refusal = BOARD_REFUSALS.find(([pattern]) => pattern.test(reason));
+        if (refusal) {
+          logger.warn({ tool: name, card: callCard.id, detail: reason }, "voice action refused by the board");
+          return await reply.code(refusal[1]).send({ error: reason });
+        }
+        logger.error({ tool: name, card: callCard.id, detail: reason }, "voice action failed");
+        return await reply.code(502).send({ error: `the board failed to run ${name}; the server log has the detail` });
       }
     },
   );
