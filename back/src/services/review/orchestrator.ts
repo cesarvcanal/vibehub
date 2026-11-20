@@ -1302,22 +1302,6 @@ const GITHUB_SYNC_MS = 60_000;
 const lastGithubSync = new Map<string, number>();
 
 /**
- * The panel read the review: checks the PR on GitHub in the background, at most once per
- * {@link GITHUB_SYNC_MS} per review — the panel rereads every 3 s and one `gh` per read would be
- * waste. It is what catches a merge done directly on GitHub even without any author turn.
- */
-export function syncReviewSoon(r: Review): void {
-  if (isReviewClosed(r.phase)) {
-    lastGithubSync.delete(r.id);
-    return;
-  }
-  if (!claimGithubSync(r.id)) return;
-  void syncReviewWithGithub(r.id, "painel aberto").catch((err: unknown) => {
-    logger.warn({ review: r.id, detail: (err as Error).message }, "PR review could not sync with GitHub");
-  });
-}
-
-/**
  * The review for the panel's READ, along with whether a merge of it is running now (`merging`).
  *
  * `merging: false` with the review in `ready` is what makes the panel stop waiting for a merge whose
@@ -1329,26 +1313,27 @@ export function syncReviewSoon(r: Review): void {
  *    merge running, the GitHub check runs BEFORE answering (under the same throttle of
  *    {@link GITHUB_SYNC_MS}); the new process after the deploy has no throttle, and the first read
  *    already returns `merged`.
- * The other phases go on with the background check ({@link syncReviewSoon}). Never throws.
  */
 export async function reviewForRead(r: Review): Promise<{ review: Review; merging: boolean }> {
   if (merging.has(r.id)) return { review: r, merging: true };
-  if (r.phase !== "ready") {
-    syncReviewSoon(r);
+  if (isReviewClosed(r.phase)) {
+    lastGithubSync.delete(r.id);
     return { review: r, merging: false };
   }
-  let now: Review | undefined;
-  try {
-    now = claimGithubSync(r.id) ? await syncReviewWithGithub(r.id, "painel aberto") : await getReview(r.id);
-  } catch (err) {
-    logger.warn({ review: r.id, detail: (err as Error).message }, "PR review could not sync with GitHub");
-    now = await getReview(r.id);
-  }
-  const review = now ?? r;
+  const review = (await readAfterGithubSync(r.id)) ?? r;
   // A ready review with no gate verdict on the approved commit (ready before this code, or the gate
   // died in a deploy): runs it now, in the background; the panel shows "rodando" until the end.
   void checkMergeGate(review.id);
   return { review, merging: merging.has(review.id) };
+}
+
+async function readAfterGithubSync(reviewId: string): Promise<Review | undefined> {
+  try {
+    return claimGithubSync(reviewId) ? await syncReviewWithGithub(reviewId, "painel aberto") : await getReview(reviewId);
+  } catch (err) {
+    logger.warn({ review: reviewId, detail: (err as Error).message }, "PR review could not sync with GitHub");
+    return await getReview(reviewId);
+  }
 }
 
 /** Marks the check as happening now, if the last one was more than {@link GITHUB_SYNC_MS} ago. Returns whether it may go. */

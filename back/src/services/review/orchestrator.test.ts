@@ -2121,14 +2121,13 @@ describe("o PR mudou no GitHub fora do painel (merge à mão, PR fechado)", () =
     expect(prHead).not.toHaveBeenCalled();
   });
 
-  it("syncReviewSoon tem freio: duas leituras do painel no mesmo minuto vão ao GitHub uma vez só", async () => {
+  it("a leitura do painel tem freio: duas leituras no mesmo minuto vão ao GitHub uma vez só", async () => {
     const o = await load();
     const { review } = await readyReview(o);
     prHeadNow = SHA1;
-    o.orch.syncReviewSoon(review);
-    o.orch.syncReviewSoon(review);
-    await vi.waitFor(() => expect(prHead).toHaveBeenCalledTimes(1));
-    await new Promise((r) => setTimeout(r, 30));
+    prHead.mockClear();
+    await o.orch.reviewForRead(review);
+    await o.orch.reviewForRead(review);
     expect(prHead).toHaveBeenCalledTimes(1);
   });
 });
