@@ -228,13 +228,20 @@ const FLEET_RESUME_STEP =
   'resumeFromRunId: "<runId do lançamento>" }); os agentes que já terminaram voltam do cache.';
 
 function fleetStep(review: Review): string[] {
+  const sinceSha = review.round > 1 ? review.reviewedSha : undefined;
   const workflowArgs = JSON.stringify({
     prNumber: review.prNumber, branch: review.prBranch, base: review.base, headSha: "<sha do passo 1>",
-    ...(review.round > 1 && review.reviewedSha ? { sinceSha: review.reviewedSha } : {}),
+    ...(sinceSha ? { sinceSha } : {}),
   });
   return [
     "2. Rode a frota de agentes da revisão com a ferramenta Workflow (este pedido é explícito: rode o workflow):",
     `   Workflow({ scriptPath: "${PR_ANALYSIS_WORKFLOW_PATH}", args: ${workflowArgs} })`,
+    ...(sinceSha
+      ? [
+        `   O sinceSha faz a frota ler só o que mudou desde a rodada anterior. Antes, rode git rev-list --merges ${sinceSha}..HEAD: ` +
+          "se sair algum commit (o autor fez merge da base), tire o sinceSha do args, porque esse diff traria o código da base, e a frota lê o PR inteiro.",
+      ]
+      : []),
     "   O args vai como objeto JSON, com o sha do passo 1 no headSha. A frota roda em segundo plano: especialistas por " +
       "dimensão, um verificador que tenta derrubar cada achado e um juiz. Espere a notificação de que ela terminou antes " +
       "de seguir; a revisão acompanha a frota e não conta esse intervalo como turno sem resposta. O resultado é " +

@@ -32,6 +32,11 @@ describe("rodadas 2 e 3 do revisor: a frota só no que mudou", () => {
     expect(text).toContain(`git diff ${"a".repeat(40)}..HEAD`);
   });
 
+  it("com merge da base desde o sha revisado, o revisor tira o sinceSha e a frota lê o PR inteiro, sem o código da base", () => {
+    const text = reviewerDeltaPrompt({ ...review(), round: 2, reviewedSha: "a".repeat(40) });
+    expect(text).toMatch(new RegExp(`git rev-list --merges ${"a".repeat(40)}\\.\\.HEAD[^\\n]*tire o sinceSha do args`));
+  });
+
   it("rodada 1, e rodada sem sha revisado, rodam a frota no PR inteiro, sem sinceSha", () => {
     expect(reviewerRoundPrompt(review())).not.toContain("sinceSha");
     expect(reviewerDeltaPrompt({ ...review(), round: 2 })).not.toContain("sinceSha");
