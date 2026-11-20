@@ -10,7 +10,22 @@ import { get, post } from "@/lib/api";
 import { resetLanguage, setLanguage } from "@/i18n";
 import { FakeAudioContext, fakeRig, type FakeRig } from "@/features/voice/fakeWebRtc";
 import { setVoiceCallTestHooks } from "@/features/voice/useVoiceCall";
+import { SERVER_BACK_CONTEXT } from "@/features/voice/voiceContext";
 import { DELEGATION_NOT_SENT } from "@/features/voice/voiceDelegation";
+import { QUESTION_ANSWER_SENT } from "@/features/voice/voiceQuestion";
+
+function toolCall(callId: string, name: string, args: Record<string, unknown>) {
+  return {
+    type: "response.event",
+    delegation_id: "item_r1",
+    event: { type: "response.output_item.done", item: { type: "function_call", call_id: callId, name, arguments: JSON.stringify(args) } },
+  };
+}
+
+function toolOutput(sent: Record<string, unknown>[], callId: string): unknown {
+  const created = sent.find((event) => event.type === "response.item.create" && (event.item as { call_id: string }).call_id === callId);
+  return created ? JSON.parse((created.item as { output: string }).output) : undefined;
+}
 
 /**
  * VOICE IN THE CARD'S CHAT, end to end at the component level: the call starts from the composer
@@ -202,44 +217,37 @@ describe("a voice call inside the card's chat", () => {
     expect(thinkingSent().join(" ")).not.toContain("resposta antiga");
   });
 
-  it("a delegation from the voice goes to the card's agent, and its answer comes back for the voice to say", async () => {
-    // Production, 2026-11-13: the voice said "deixa eu recapitular rapidinho…" and went silent for
-    // good — GPT-Live had handed the task to this app (client delegation) and nobody answered.
+  it("a pergunta da voz vai ao agente do card, e a resposta dele volta para a voz falar", async () => {
     const { ws } = await openChat();
     await startCall();
     act(() => channel().emit({ type: "session.input_transcript.delta", delta: "recapitula tudo que tem no chat", start_ms: 0, end_ms: 900 }));
-    act(() => channel().emit({ type: "session.delegation.created", offset_ms: 1000, delegation: { id: "item_d1", type: "delegation", target: "client" } }));
-    act(() => channel().emit({ type: "session.output_transcript.delta", delta: "Claro, deixa eu recapitular rapidinho...", start_ms: 1000, end_ms: 2000 }));
+    act(() => channel().emit(toolCall("call_d1", "ask_card_agent", { request: "Recapitule a conversa do card e liste as decisões pendentes." })));
+    act(() => channel().emit({ type: "session.output_transcript.delta", delta: "Claro, vou pedir ao agente.", start_ms: 1000, end_ms: 2000 }));
 
-    // The request reaches the agent through the chat's own flow, with what the person asked.
-    await waitFor(() => expect(ws.frames.some((f) => f.type === "user" && f.text?.includes("recapitula tudo que tem no chat"))).toBe(true));
-    // The voice knows the work started (silently, on that delegation) and the call shows it working
-    // once its spoken acknowledgement is over.
-    expect(channel().sent).toContainEqual(expect.objectContaining({ type: "session.thinking.append", delegation_id: "item_d1" }));
+    await waitFor(() => expect(ws.frames.some((f) => f.type === "user" && f.text?.includes("Recapitule a conversa do card"))).toBe(true));
+    expect(toolOutput(channel().sent, "call_d1")).toMatchObject({ ok: true });
     await waitFor(() => expect(screen.getByTestId("voice-call-bar")).toHaveAttribute("data-phase", "thinking"), { timeout: 3_000 });
 
     ws.deliver({ type: "assistant_text", text: "Resumo: falta decidir o layout da planilha e quem aprova as metas." });
     ws.deliver({ type: "result", isError: false });
     await waitFor(() =>
-      expect(channel().sent).toContainEqual({
+      expect(channel().sent).toContainEqual(expect.objectContaining({
         type: "session.commentary.append",
-        delegation_id: "item_d1",
-        content: "Resumo: falta decidir o layout da planilha e quem aprova as metas.",
-      }),
+        delegation_id: null,
+        content: expect.stringContaining("Resumo: falta decidir o layout da planilha e quem aprova as metas."),
+      })),
     );
-    // Said once, on its delegation — not repeated as loose context.
     expect(thinkingSent().join(" ")).not.toContain("falta decidir o layout");
   });
 
   it("a dropped wire mid-turn does not close a delegation early: the voice waits for the turn's real end", async () => {
     const { ws } = await openChat();
     await startCall();
-    act(() => channel().emit({ type: "session.input_transcript.delta", delta: "roda os testes", start_ms: 0, end_ms: 500 }));
-    act(() => channel().emit({ type: "session.delegation.created", offset_ms: 600, delegation: { id: "item_d3", type: "delegation", target: "client" } }));
-    await waitFor(() => expect(ws.frames.some((f) => f.type === "user" && f.text?.includes("roda os testes"))).toBe(true));
+    act(() => channel().emit(toolCall("call_d3", "ask_card_agent", { request: "Rode os testes." })));
+    await waitFor(() => expect(ws.frames.some((f) => f.type === "user" && f.text?.includes("Rode os testes."))).toBe(true));
     ws.deliver({ type: "assistant_text", text: "Vou rodar." });
     ws.drop();
-    const results = () => channel().sent.filter((e) => e.type === "session.commentary.append");
+    const results = () => channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append" && sentEvent.content !== SERVER_BACK_CONTEXT);
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(results()).toEqual([]);
 
@@ -249,18 +257,17 @@ describe("a voice call inside the card's chat", () => {
     again.deliver({ type: "ready" });
     again.deliver({ type: "assistant_text", text: "Os 12 testes passaram." });
     again.deliver({ type: "result", isError: false });
-    await waitFor(() => expect(results()).toEqual([expect.objectContaining({ delegation_id: "item_d3", content: "Os 12 testes passaram." })]));
+    await waitFor(() => expect(results()).toEqual([expect.objectContaining({ delegation_id: null, content: expect.stringContaining("Os 12 testes passaram.") })]));
   });
 
   it("um pedido da voz com o agente ocupado fura a fila: vai urgente, como o enviar agora do chat", async () => {
     const { ws } = await openChat();
     ws.deliver({ type: "assistant_delta", text: "Subindo o back isolado…" });
     await startCall();
-    act(() => channel().emit({ type: "session.input_transcript.delta", delta: "por que ele vai abrir uma tela?", start_ms: 0, end_ms: 900 }));
-    act(() => channel().emit({ type: "session.delegation.created", offset_ms: 1000, delegation: { id: "item_u1", type: "delegation", target: "client" } }));
+    act(() => channel().emit(toolCall("call_u1", "ask_card_agent", { request: "Por que você vai abrir uma tela?" })));
 
     await waitFor(() =>
-      expect(ws.frames).toContainEqual(expect.objectContaining({ type: "user", now: true, text: expect.stringContaining("por que ele vai abrir uma tela?") })),
+      expect(ws.frames).toContainEqual(expect.objectContaining({ type: "user", now: true, text: expect.stringContaining("Por que você vai abrir uma tela?") })),
     );
     expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument();
   });
@@ -273,7 +280,7 @@ describe("a voice call inside the card's chat", () => {
       expect(channel().sent).toContainEqual(expect.objectContaining({ type: "session.commentary.append", delegation_id: null, content: expect.stringContaining("Qual caminho?") })),
     );
     act(() => channel().emit({ type: "session.input_transcript.delta", delta: "abre um card pra esse bug e delega", start_ms: 0, end_ms: 900 }));
-    act(() => channel().emit({ type: "session.delegation.created", offset_ms: 1000, delegation: { id: "item_q1", type: "delegation", target: "client" } }));
+    act(() => channel().emit(toolCall("call_q1", "ask_card_agent", { request: "A pessoa quer abrir um card para esse bug." })));
 
     await waitFor(() =>
       expect(ws.frames).toContainEqual({ type: "question_answer", id: "q_1", answers: [{ selected: [expect.stringContaining("abre um card pra esse bug")] }] }),
@@ -285,12 +292,22 @@ describe("a voice call inside the card's chat", () => {
     const { ws } = await openChat();
     await startCall();
     ws.drop();
-    act(() => channel().emit({ type: "session.input_transcript.delta", delta: "crie um card agora", start_ms: 0, end_ms: 500 }));
-    act(() => channel().emit({ type: "session.delegation.created", offset_ms: 600, delegation: { id: "item_d2", type: "delegation", target: "client" } }));
-    await waitFor(() =>
-      expect(channel().sent).toContainEqual({ type: "session.commentary.append", delegation_id: "item_d2", content: DELEGATION_NOT_SENT }),
-    );
+    act(() => channel().emit(toolCall("call_d2", "ask_card_agent", { request: "Rode os testes." })));
+    await waitFor(() => expect(toolOutput(channel().sent, "call_d2")).toEqual({ error: DELEGATION_NOT_SENT }));
     expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument();
+  });
+
+  it("ordem dada na chamada executa pela rota da voz e não interrompe o agente do card", async () => {
+    const { ws } = await openChat();
+    ws.deliver({ type: "assistant_delta", text: "Rodando a suíte…" });
+    await startCall();
+    vi.mocked(post).mockImplementation(((url: string) =>
+      Promise.resolve(url.endsWith("/voice/actions") ? { output: { cardId: "c9", title: "Relatório" } } : { saved: [], duplicate: [] })) as never);
+    act(() => channel().emit(toolCall("call_o1", "create_card", { projectId: "p1", title: "Relatório" })));
+
+    await waitFor(() => expect(toolOutput(channel().sent, "call_o1")).toEqual({ cardId: "c9", title: "Relatório" }));
+    expect(post).toHaveBeenCalledWith("/cards/c1/voice/actions", { callId: "call_o1", name: "create_card", arguments: '{"projectId":"p1","title":"Relatório"}' });
+    expect(ws.frames.filter((f) => f.type === "user")).toEqual([]);
   });
 
   it("leaving the chat (another card, the terminal tab) ends the call and releases the mic", async () => {
@@ -345,6 +362,56 @@ describe("a voice call inside the card's chat", () => {
     expect(screen.getByTestId("voice-call-bar")).toBeInTheDocument();
   });
 
+  it("the chat losing the server and getting it back mid-call makes the voice say so, once per return", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    const told = () => channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append" && sentEvent.delegation_id === null);
+    expect(told()).toEqual([]);
+
+    ws.drop();
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: 5_000 });
+    expect(told()).toEqual([]);
+    const second = FakeSocket.instances[1]!;
+    second.accept();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(told()).toEqual([]);
+    second.deliver({ type: "ready" });
+    await waitFor(() => expect(told()).toEqual([expect.objectContaining({ content: SERVER_BACK_CONTEXT })]));
+
+    second.drop();
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(3), { timeout: 5_000 });
+    const third = FakeSocket.instances[2]!;
+    third.accept();
+    third.deliver({ type: "ready" });
+    await waitFor(() => expect(told()).toHaveLength(2));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(told()).toHaveLength(2);
+  });
+
+  it("a server drop still going on when the call starts is announced when the server comes back", async () => {
+    const { ws } = await openChat();
+    ws.drop();
+    await startCall();
+    const told = () => channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append" && sentEvent.delegation_id === null);
+    expect(told()).toEqual([]);
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: 5_000 });
+    const again = FakeSocket.instances[1]!;
+    again.accept();
+    again.deliver({ type: "ready" });
+    await waitFor(() => expect(told()).toEqual([expect.objectContaining({ content: SERVER_BACK_CONTEXT })]));
+  });
+
+  it("a server drop already over before the call is not announced when the call starts", async () => {
+    const { ws } = await openChat();
+    ws.drop();
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: 5_000 });
+    const again = FakeSocket.instances[1]!;
+    again.accept();
+    again.deliver({ type: "ready" });
+    await startCall();
+    expect(channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append")).toEqual([]);
+  });
+
   it("the replying sphere is blue and follows the assistant's REAL audio track", async () => {
     await openChat();
     await startCall();
@@ -376,9 +443,9 @@ describe("a pergunta com opções do agente durante a chamada", () => {
     ],
   };
   const commentary = () => channel().sent.filter((event) => event.type === "session.commentary.append");
-  const sayAndDelegate = (said: string, delegationId: string) => {
+  const sayAndAsk = (said: string, callId: string) => {
     act(() => channel().emit({ type: "session.input_transcript.delta", delta: said, start_ms: 0, end_ms: 500 }));
-    act(() => channel().emit({ type: "session.delegation.created", offset_ms: 600, delegation: { id: delegationId, type: "delegation", target: "client" } }));
+    act(() => channel().emit(toolCall(callId, "ask_card_agent", { request: said })));
   };
 
   it("a voz lê a pergunta, as opções e a recomendada, e pede a escolha por voz — sem mandar ao chat", async () => {
@@ -395,13 +462,14 @@ describe("a pergunta com opções do agente durante a chamada", () => {
     expect(spoken.content).not.toMatch(/conferir no chat|veja no chat|olhe o chat/i);
   });
 
-  it("com um pedido da voz esperando o agente, a pergunta é o resultado desse pedido", async () => {
+  it("com um pedido da voz esperando o agente, a pergunta é o que a voz ouve sobre esse pedido", async () => {
     const { ws } = await openChat();
     await startCall();
-    sayAndDelegate("organiza as metas", "item_d1");
+    sayAndAsk("organiza as metas", "call_m1");
     await waitFor(() => expect(ws.frames.some((frame) => frame.type === "user" && frame.text?.includes("organiza as metas"))).toBe(true));
     ws.deliver(QUESTION);
-    await waitFor(() => expect(commentary()).toEqual([expect.objectContaining({ delegation_id: "item_d1", content: expect.stringContaining("Onde guardo as metas?") })]));
+    ws.deliver({ type: "result", isError: false });
+    await waitFor(() => expect(commentary()).toEqual([expect.objectContaining({ delegation_id: null, content: expect.stringContaining("Onde guardo as metas?") })]));
   });
 
   it("a escolha dita volta ao agente como resposta daquela pergunta (question_answer), sem fechar a pergunta com um envio urgente", async () => {
@@ -411,19 +479,19 @@ describe("a pergunta com opções do agente durante a chamada", () => {
     ws.deliver(QUESTION);
     await waitFor(() => expect(commentary()).toHaveLength(1));
 
-    sayAndDelegate("pode ser o banco novo", "item_d2");
+    sayAndAsk("pode ser o banco novo", "call_m2");
     await waitFor(() => expect(ws.frames.some((frame) => frame.type === "question_answer")).toBe(true));
     const answer = ws.frames.find((frame) => frame.type === "question_answer")!;
     expect(answer.id).toBe("q_1_100");
     expect(answer.answers).toEqual([{ selected: [expect.stringContaining("pode ser o banco novo")] }]);
     expect(ws.frames.filter((frame) => frame.type === "user")).toEqual([]);
-    expect(channel().sent).toContainEqual(expect.objectContaining({ type: "session.thinking.append", delegation_id: "item_d2" }));
+    expect(toolOutput(channel().sent, "call_m2")).toEqual({ ok: true, status: QUESTION_ANSWER_SENT });
 
     ws.deliver({ type: "question_result", id: "q_1_100", answers: answer.answers });
     ws.deliver({ type: "assistant_text", text: "Feito: as metas vão para o banco novo." });
     ws.deliver({ type: "result", isError: false });
     await waitFor(() =>
-      expect(commentary()).toContainEqual({ type: "session.commentary.append", delegation_id: "item_d2", content: "Feito: as metas vão para o banco novo." }),
+      expect(commentary()).toContainEqual(expect.objectContaining({ delegation_id: null, content: expect.stringContaining("Feito: as metas vão para o banco novo.") })),
     );
   });
 
@@ -440,6 +508,7 @@ describe("a pergunta com opções do agente durante a chamada", () => {
     again.deliver({ type: "user", text: "decide a planilha", at: 1 });
     again.deliver(QUESTION);
     again.deliver({ type: "ready" });
-    expect(commentary()).toHaveLength(1);
+    await waitFor(() => expect(commentary()).toContainEqual(expect.objectContaining({ content: SERVER_BACK_CONTEXT })));
+    expect(commentary().filter((event) => String(event.content).includes("Onde guardo as metas?"))).toHaveLength(1);
   });
 });

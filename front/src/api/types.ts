@@ -284,6 +284,16 @@ export interface TranscribeStatus {
   language: string | null;
 }
 
+export interface VoiceActionCall {
+  callId: string;
+  name: string;
+  arguments: string;
+}
+
+export interface VoiceActionResult {
+  output: unknown;
+}
+
 /** `POST /api/cards/:id/transcribe` */
 export interface Transcription {
   text: string;

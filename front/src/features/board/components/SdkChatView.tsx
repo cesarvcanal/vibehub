@@ -31,8 +31,9 @@ import { useVoiceCall } from "@/features/voice/useVoiceCall";
 import { VoiceCallBar } from "@/features/voice/VoiceCallBar";
 import { VoiceCallContext, type VoiceCallControl } from "@/features/voice/ComposerVoiceButton";
 import { VoiceTurnBubble } from "@/features/voice/VoiceTurnBubble";
-import { typedContext } from "@/features/voice/voiceContext";
+import { SERVER_BACK_CONTEXT, typedContext } from "@/features/voice/voiceContext";
 import { useVoiceDelegation } from "@/features/voice/useVoiceDelegation";
+import { runVoiceAction } from "@/features/voice/api";
 import { AnswerActions } from "@/features/voice/AnswerActions";
 import { readAloud, readAloudError, setReadAloudErrorHandler } from "@/features/voice/readAloud";
 import { PlanUsageAlert, cardRateLimitsKey, useCardPlanUsage } from "@/features/board/components/PlanUsage";
@@ -1344,12 +1345,25 @@ export function SdkChatView({
       dispatchTurn(text, true);
       setSentDuringCall(true);
     },
+    runAction: (toolCall) => runVoiceAction(cardId, toolCall),
     answerQuestion: (questionId, answers) => {
       if (!answerUserQuestion(questionId, answers)) return false;
       setSentDuringCall(true);
       return true;
     },
   });
+  const wireDroppedDuringCall = React.useRef(false);
+  React.useEffect(() => {
+    if (!callLive) {
+      wireDroppedDuringCall.current = false;
+      return;
+    }
+    if (!connected) {
+      wireDroppedDuringCall.current = true;
+      return;
+    }
+    if (state.ready && wireDroppedDuringCall.current) call.announceContext(SERVER_BACK_CONTEXT);
+  }, [callLive, connected, state.ready, call.announceContext]);
   /** The thread as drawn: the saved rows plus the call's turns still being spoken or saved. */
   const displayRows = React.useMemo(() => mergeLiveVoiceTurns(state.rows, call.turns, selfOrigin), [state.rows, call.turns, selfOrigin]);
   const showCallBar = call.active || (call.phase === "error" && !callBarDismissed);

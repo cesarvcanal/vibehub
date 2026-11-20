@@ -8,6 +8,7 @@ import {
   DELEGATION_STARTED,
   DELEGATION_TRANSCRIPT_MAX_CHARS,
   delegationReply,
+  agentAnswerForVoice,
   delegationRequest,
 } from "./voiceDelegation";
 
@@ -18,43 +19,48 @@ const answer = (id: string, text: string, extra: Partial<Extract<SdkRow, { kind:
 });
 
 describe("delegationRequest", () => {
-  it("asks the agent what the person said last, with the call around it", () => {
-    const request = delegationRequest([
+  it("leva ao agente o pedido escrito pelo backend da voz, com a chamada em volta", () => {
+    const request = delegationRequest("Recapitule a conversa do card e liste as decisões pendentes.", [
       turn("user", "oi, tudo bem?", 1),
       turn("assistant", "Tudo, e você?", 2),
       turn("user", "recapitula tudo que tem no chat", 3),
       turn("assistant", "Claro, deixa eu recapitular rapidinho...", 4),
-    ])!;
-    expect(request.startsWith("[pedido por voz]\nrecapitula tudo que tem no chat\n")).toBe(true);
-    expect(request).toContain("Pessoa: oi, tudo bem?");
+    ]);
+    expect(request.startsWith("[pedido por voz]\nRecapitule a conversa do card e liste as decisões pendentes.\n")).toBe(true);
+    expect(request).toContain("Pessoa: recapitula tudo que tem no chat");
     expect(request).toContain("Voz: Claro, deixa eu recapitular rapidinho...");
     expect(request.indexOf("oi, tudo bem?")).toBeLessThan(request.indexOf("Voz: Claro"));
   });
 
-  it("keeps the newest of a long call, and nothing when the person said nothing", () => {
+  it("guarda só o fim de uma chamada longa", () => {
     const long = Array.from({ length: 60 }, (_, i) => turn(i % 2 ? "assistant" : "user", `frase ${i} ${"x".repeat(80)}`, i));
-    const request = delegationRequest(long)!;
+    const request = delegationRequest("roda os testes", long);
     expect(request).toContain("frase 59");
     expect(request).not.toContain("frase 0 ");
     expect(request.length).toBeLessThan(DELEGATION_TRANSCRIPT_MAX_CHARS + 600);
-    expect(delegationRequest([turn("assistant", "Olá!", 1)])).toBeNull();
-    expect(delegationRequest([turn("user", "   ", 1)])).toBeNull();
   });
 });
 
 describe("o que o agente e a voz ouvem sobre um pedido urgente", () => {
   it("o pedido manda o agente parar o que está fazendo, atender primeiro e encerrar o turno com a resposta", () => {
-    const request = delegationRequest([turn("user", "crie um card agora", 1)])!;
+    const request = delegationRequest("crie um card agora", [turn("user", "crie um card agora", 1)]);
     expect(request).toContain("Urgente");
     expect(request).toContain("pare o que está fazendo");
     expect(request).toContain("encerre o turno");
     expect(request).toContain("diga o que ficou interrompido");
   });
 
-  it("o aviso de pedido entregue não deixa a voz dizer que já fez nem narrar outra coisa enquanto espera", () => {
+  it("o aviso de pedido entregue não deixa a voz dizer que já fez nem inventar o resultado", () => {
     expect(DELEGATION_STARTED).not.toContain("trabalhando nele");
     expect(DELEGATION_STARTED).toContain("ainda não foi feito");
-    expect(DELEGATION_STARTED).toContain("não narre");
+    expect(DELEGATION_STARTED).toContain("não invente");
+  });
+
+  it("a resposta do agente chega à voz dizendo a que pedido responde", () => {
+    const told = agentAnswerForVoice("Investigue por que o teste de login falha.", "O token expirou; renovei e passou.");
+    expect(told).toContain("Investigue por que o teste de login falha.");
+    expect(told).toContain("O token expirou; renovei e passou.");
+    expect(agentAnswerForVoice("x".repeat(1_000), "ok").length).toBeLessThan(400);
   });
 });
 
