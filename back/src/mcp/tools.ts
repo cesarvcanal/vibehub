@@ -9,7 +9,7 @@ import { sendAnswer } from "./events.js";
 import { runGate } from "../services/maestro/gate.js";
 import { deliverCard } from "../services/review/deliverCard.js";
 import { prDocsInput, prDocsOf, PR_DOCS_RULE } from "./prDocsInput.js";
-import { relayCardActor, actAsParticipant, senderCardPerson } from "../services/board/actor.js";
+import { relayCardActor, actAsParticipant, senderCardUserId } from "../services/board/actor.js";
 import { announcePreview } from "../services/preview/announce.js";
 import { recordLearning } from "../services/brain/learn.js";
 import { moveCards, AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX } from "./cardMove.js";
@@ -301,7 +301,7 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
           // once the send is certain to go (a refused send leaves the authorship alone).
           beforeDeliver: () => relayCardActor(a.from, a.cardId),
           respectHumanActive: true,
-          senderUserId: await senderCardPerson(a.from, a.cardId),
+          senderUserId: await senderCardUserId(a.from, a.cardId),
           answeringAskedAt: answered?.at,
           // Never type into a menu (Enter would pick its highlighted option — on the trust dialog,
           // "No, exit"), and give a card that is still booting the time to draw its prompt.

@@ -84,7 +84,7 @@ export async function recordCardActor(
   }
 }
 
-export async function senderCardPerson(fromCardId: string | undefined, toCardId: string): Promise<string | undefined> {
+export async function senderCardUserId(fromCardId: string | undefined, toCardId: string): Promise<string | undefined> {
   if (!fromCardId) return undefined;
   const [from, to] = await Promise.all([getCard(fromCardId), getCard(toCardId)]);
   return from && to && from.projectId === to.projectId ? from.actorUserId : undefined;
@@ -99,7 +99,7 @@ export async function senderCardPerson(fromCardId: string | undefined, toCardId:
  */
 export async function relayCardActor(fromCardId: string | undefined, toCardId: string): Promise<void> {
   try {
-    const authorId = await senderCardPerson(fromCardId, toCardId);
+    const authorId = await senderCardUserId(fromCardId, toCardId);
     if (!authorId) return;
     await recordCardActor(await findUser(authorId), toCardId);
   } catch (err) {
