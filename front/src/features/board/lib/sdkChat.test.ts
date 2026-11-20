@@ -2221,6 +2221,20 @@ describe("findLongToolWait (o agente preso esperando um comando)", () => {
     expect(findLongToolWait(turnRunning(tool, 10 * LONG_TOOL_WAIT_SECONDS))).toBeNull();
   });
 
+  it("comando preso continua avisado quando um comando paralelo mais novo já terminou", () => {
+    const state = feed([
+      { type: "tool_use", id: "t2", name: "Read", input: { file_path: "a/b.ts" } },
+      { type: "tool_result", id: "t2", toolResult: {} },
+    ], turnRunning({ name: "Bash", input: { command: "sleep 300; echo done" } }, LONG_TOOL_WAIT_SECONDS));
+    expect(findLongToolWait(state)).toEqual({ rowId: "t1", what: "sleep 300; echo done", elapsedSeconds: LONG_TOOL_WAIT_SECONDS });
+  });
+
+  it("mensagem absorvida no turno não esconde o comando preso", () => {
+    const withMessage = appendUserRow(turnRunning({ name: "Bash", input: { command: "npm test" } }, LONG_TOOL_WAIT_SECONDS), "e aí?", undefined, { awaiting: true });
+    const state = applySdkEvent(withMessage, { type: "turn_absorbed" });
+    expect(findLongToolWait(state)?.rowId).toBe("t1");
+  });
+
   it("comando de um turno que já acabou não avisa", () => {
     const state = appendUserRow(turnRunning({ name: "Bash", input: { command: "npm test" } }, LONG_TOOL_WAIT_SECONDS), "outra coisa", undefined, { awaiting: true });
     expect(findLongToolWait(state)).toBeNull();

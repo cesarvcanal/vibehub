@@ -1106,13 +1106,17 @@ export interface LongToolWait {
   elapsedSeconds: number;
 }
 
+function isLongRunningCommand(row: SdkRow): row is Extract<SdkRow, { kind: "tool" }> & { elapsedSeconds: number } {
+  return row.kind === "tool" && !row.parent && !row.result && !SUBAGENT_TOOL_NAMES.has(row.name)
+    && !toolHeadline(row.name, row.input).background
+    && typeof row.elapsedSeconds === "number" && row.elapsedSeconds >= LONG_TOOL_WAIT_SECONDS;
+}
+
 export function findLongToolWait(state: SdkChatState): LongToolWait | null {
-  const activity = currentActivity(state);
-  if (activity?.kind !== "tool" || activity.background) return null;
-  const row = state.rows.findLast((candidate) => candidate.id === activity.rowId);
-  if (row?.kind !== "tool" || row.parent || row.result || SUBAGENT_TOOL_NAMES.has(row.name)) return null;
-  if (typeof row.elapsedSeconds !== "number" || row.elapsedSeconds < LONG_TOOL_WAIT_SECONDS) return null;
-  return { rowId: row.id, what: describeRunningTool(row), elapsedSeconds: row.elapsedSeconds };
+  const turnStartIndex = state.rows.findLastIndex((row) => row.kind === "user" && row.absorbed !== true);
+  const stuckCommand = state.rows.slice(turnStartIndex + 1).findLast(isLongRunningCommand);
+  if (!stuckCommand) return null;
+  return { rowId: stuckCommand.id, what: describeRunningTool(stuckCommand), elapsedSeconds: stuckCommand.elapsedSeconds };
 }
 
 /**
