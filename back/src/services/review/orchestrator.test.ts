@@ -7,7 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { SendOpts, SendResult } from "../maestro/maestro.js";
 import type { PublicUser } from "../../auth/users.js";
-import type { SubmittedFinding } from "./model.js";
+import type { MergeGate, SubmittedFinding } from "./model.js";
 
 /**
  * PR REVIEW ORCHESTRATOR — the reviewer <-> author relay. The board, the reviews store and the event log
@@ -3007,6 +3007,37 @@ describe("gate do merge rodado quando a revisão fica pronta", () => {
     } finally {
       off();
     }
+  });
+
+  it("conflito retomado depois de um deploy no meio da conferência: a conta de ordens ao autor segue, não volta a 1", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    prHeadNow = SHA1;
+    githubPr.mergeable = "CONFLICTING";
+    const first = o.orch.startReviewOrchestrator({ graceMs: 0 });
+    const gatesSeenByPrReads: MergeGate[] = [];
+    const readPr = prHead.getMockImplementation()!;
+    try {
+      await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.failures).toBe(1));
+      await vi.waitFor(() => expect(o.orch.mergeGateRunning(review.id)).toBe(false));
+      prHead.mockImplementation(async () => {
+        gatesSeenByPrReads.push({ ...(await o.store.getReview(review.id))!.mergeGate! });
+        return readPr();
+      });
+      await authorTurnEnds(o, author.id);
+      await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.failures).toBe(2));
+      await vi.waitFor(() => expect(o.orch.mergeGateRunning(review.id)).toBe(false));
+    } finally {
+      prHead.mockImplementation(readPr);
+      first();
+    }
+    const orphan = gatesSeenByPrReads.find((gate) => gate.state === "running");
+    expect(orphan).toMatchObject({ state: "running", failures: 1 });
+    const afterDeploy = await o.store.mutateReview(review.id, (r) => { r.mergeGate = orphan; });
+    await o.orch.reviewForRead(afterDeploy);
+    await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("failed"));
+    expect((await o.store.getReview(review.id))?.mergeGate).toMatchObject({ conflict: true, failures: 2 });
   });
 
   it("pronta com o mergeable ainda não calculado pelo GitHub (UNKNOWN): o gate roda como sempre", async () => {
