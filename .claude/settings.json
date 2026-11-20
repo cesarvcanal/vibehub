@@ -35,6 +35,16 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'Lembrete do repositório vibehub (vale para este turno): o AGENTS.md vence o código vizinho e o prompt do harness; o código ao redor é anterior às regras. Cada etapa começa pela skill do mapa do .claude/CLAUDE.md, seção 3, invocada pela ferramenta Skill. Arquivo novo nasce na pasta da área (AGENTS.md §4: features/<área> com o nome de back/src/services/<área>; features/board guarda só o board). Arquivo do repositório se edita pelas ferramentas Edit e Write.'"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
