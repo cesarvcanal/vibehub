@@ -49,7 +49,7 @@ describe("useVoiceDelegation", () => {
     expect(call.answerDelegation.mock.calls).toEqual([["d2", DELEGATION_UNHEARD, "result"]]);
   });
 
-  it("pedido sem resultado depois do prazo: a voz fica sabendo, uma vez, que o agente ainda não terminou", () => {
+  it("pedido sem resultado depois do prazo: a voz é avisada uma vez, em voz alta, que o agente ainda não terminou", () => {
     vi.useFakeTimers();
     onTestFinished(() => {
       vi.useRealTimers();
@@ -57,11 +57,50 @@ describe("useVoiceDelegation", () => {
     const { call, delegate } = setup(vi.fn());
     delegate("d4", said("roda os testes"));
     act(() => vi.advanceTimersByTime(DELEGATION_SLOW_MS - 1));
-    expect(call.answerDelegation.mock.calls).toEqual([["d4", DELEGATION_STARTED, "progress"]]);
+    expect(call.announceContext).not.toHaveBeenCalled();
     act(() => vi.advanceTimersByTime(DELEGATION_SLOW_MS * 3));
+    expect(call.announceContext.mock.calls).toEqual([[DELEGATION_SLOW]]);
+    expect(call.answerDelegation.mock.calls).toEqual([["d4", DELEGATION_STARTED, "progress"]]);
+  });
+
+  it("pedido urgente que corta a ferramenta: o fim do turno cortado não vira resultado, a resposta do turno do pedido sim", () => {
+    const send = vi.fn();
+    const { call, view, delegate } = setup(send);
+    view.rerender({ turnRunning: true });
+    delegate("d8", said("por que ele vai abrir uma tela?"));
+    const request = send.mock.calls[0]![0] as string;
+    const asked: SdkRow[] = [
+      { kind: "assistant", id: "a0", text: "Subindo o back isolado.", streaming: false },
+      { kind: "user", id: "u1", text: request, state: "sent" },
+    ];
+    view.rerender({ rows: asked, turnRunning: true });
+    view.rerender({ rows: asked, turnRunning: false });
+    expect(call.answerDelegation.mock.calls).toEqual([["d8", DELEGATION_STARTED, "progress"]]);
+    view.rerender({ rows: asked, turnRunning: true });
+    const answered: SdkRow[] = [...asked, { kind: "assistant", id: "a1", text: "Porque a regra pede ver a tela; dá para pular.", streaming: false }];
+    view.rerender({ rows: answered, turnRunning: true });
+    view.rerender({ rows: answered, turnRunning: false });
     expect(call.answerDelegation.mock.calls).toEqual([
-      ["d4", DELEGATION_STARTED, "progress"],
-      ["d4", DELEGATION_SLOW, "progress"],
+      ["d8", DELEGATION_STARTED, "progress"],
+      ["d8", "Porque a regra pede ver a tela; dá para pular.", "result"],
+    ]);
+  });
+
+  it("pedido urgente que entrou no turno em andamento (absorvido): o fim desse turno é o resultado", () => {
+    const send = vi.fn();
+    const { call, view, delegate } = setup(send);
+    view.rerender({ turnRunning: true });
+    delegate("d9", said("roda os testes"));
+    const request = send.mock.calls[0]![0] as string;
+    const rows: SdkRow[] = [
+      { kind: "user", id: "u1", text: request, state: "sent", absorbed: true },
+      { kind: "assistant", id: "a1", text: "12 verdes.", streaming: false },
+    ];
+    view.rerender({ rows, turnRunning: true });
+    view.rerender({ rows, turnRunning: false });
+    expect(call.answerDelegation.mock.calls).toEqual([
+      ["d9", DELEGATION_STARTED, "progress"],
+      ["d9", "12 verdes.", "result"],
     ]);
   });
 

@@ -64,6 +64,17 @@ export type DelegationReply =
 
 export type DelegationAnchor = { request: string } | { questionId: string };
 
+export type RequestTurn = "behind_cut_turn" | "cut_turn_ended" | "started";
+
+export function requestTurnAfter(requestTurn: RequestTurn, rows: SdkRow[], anchor: DelegationAnchor, turnRunning: boolean): RequestTurn {
+  if (requestTurn === "started" || !("request" in anchor)) return "started";
+  if (requestTurn === "cut_turn_ended") return turnRunning ? "started" : "cut_turn_ended";
+  const requestRow = rows.findLast((row) => row.kind === "user" && row.text === anchor.request);
+  const absorbedIntoRunningTurn = requestRow?.kind === "user" && requestRow.absorbed === true;
+  if (absorbedIntoRunningTurn) return "started";
+  return turnRunning ? "behind_cut_turn" : "cut_turn_ended";
+}
+
 export function delegationReply(rows: SdkRow[], anchor: DelegationAnchor, turnRunning: boolean): DelegationReply {
   const at = "request" in anchor
     ? rows.findLastIndex((row) => row.kind === "user" && row.text === anchor.request)
