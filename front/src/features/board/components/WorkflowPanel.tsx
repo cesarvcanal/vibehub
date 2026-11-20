@@ -239,7 +239,8 @@ function AgentItem({
   const done = agent.status === "done";
   const stopped = isStopped(agent, finished);
   const time = agentTime(agent, now, stopped);
-  const doing = stopped ? t("sdk.workflowAgentStopped") : nowLine(agent, now, t);
+  const doing = agent.error ? t("sdk.workflowAgentFailed", { error: agent.error })
+    : stopped ? t("sdk.workflowAgentStopped") : nowLine(agent, now, t);
   return (
     <li>
       <button

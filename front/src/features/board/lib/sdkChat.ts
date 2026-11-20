@@ -38,9 +38,9 @@ export type WorkflowActivity =
 export interface WorkflowAgentFrame {
   id: string;
   label: string;
-  /** `stopped` = it was in flight when the run ended (killed, or the back gave up): it will not answer. */
   status: "running" | "done" | "stopped";
   result?: string;
+  error?: string;
   phase?: string;
   model?: string;
   startedAt?: number;

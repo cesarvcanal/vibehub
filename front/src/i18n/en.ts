@@ -663,6 +663,7 @@ export const en: Record<string, string> = {
   "sdk.workflowInterrupted": "interrupted",
   "sdk.workflowFailed": "failed",
   "sdk.workflowAgentStopped": "interrupted",
+  "sdk.workflowAgentFailed": "failed: {error}",
   "sdk.workflowAgentStoppedDetail": "interrupted — the run ended before it answered.",
   "sdk.workflowStarting": "spinning up the fleet…",
   "sdk.workflowAgentUnnamed": "subagent",

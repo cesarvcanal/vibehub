@@ -664,6 +664,7 @@ export const ptBR: Record<string, string> = {
   "sdk.workflowInterrupted": "interrompido",
   "sdk.workflowFailed": "falhou",
   "sdk.workflowAgentStopped": "interrompido",
+  "sdk.workflowAgentFailed": "falhou: {error}",
   "sdk.workflowAgentStoppedDetail": "interrompido — a rodada acabou antes de ele responder.",
   "sdk.workflowStarting": "subindo a frota…",
   "sdk.workflowAgentUnnamed": "subagente",
