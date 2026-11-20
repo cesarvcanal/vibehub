@@ -372,6 +372,14 @@ describe("POST /api/cards/:id/voice/actions", () => {
     expect(res.json()).toEqual({ error: "project not found" });
   });
 
+  it("o mesmo callId com outra ferramenta executa a outra, não devolve o resultado guardado", async () => {
+    const id = await makeCard();
+    const projectId = (await cardsOf(id))[0]!.projectId;
+    expect((await voiceAction(id, { callId: "call_m", name: "list_projects", arguments: "{}" })).statusCode).toBe(200);
+    const created = await voiceAction(id, { callId: "call_m", name: "create_card", arguments: JSON.stringify({ projectId, title: "Outra ferramenta" }) });
+    expect(created.json().output.title).toBe("Outra ferramenta");
+  });
+
   it("falha de infraestrutura ao executar a ordem é 502, sem a mensagem interna na resposta", async () => {
     const id = await makeCard();
     const other = await makeCard();

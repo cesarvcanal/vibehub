@@ -103,7 +103,7 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
       const user = await requestUser(req);
       if (!user) return await reply.code(401).send({ error: "not authenticated" });
       try {
-        const output = await runVoiceActionOnce(`${user.id}:${callId}`, () => runVoiceAction({ user, callCard, name, argumentsJson }));
+        const output = await runVoiceActionOnce(`${user.id}:${callId}:${name}`, () => runVoiceAction({ user, callCard, name, argumentsJson }));
         logger.info({ audit: true, action: "voice.action", tool: name, card: callCard.id, by: user.username }, "voice action");
         return await reply.send({ output });
       } catch (err) {
