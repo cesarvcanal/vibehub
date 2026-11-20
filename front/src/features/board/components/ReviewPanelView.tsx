@@ -291,6 +291,20 @@ function Commits({ reviewed, head }: { reviewed?: string; head?: string }) {
   );
 }
 
+type StepState = "done" | "current" | "todo";
+
+const STEP_STYLE: Record<StepState, string> = {
+  done: "bg-emerald-500/70",
+  current: "bg-amber-400",
+  todo: "bg-border/70",
+};
+
+function stepState(step: number, round: number, over: boolean): StepState {
+  if (step < round || (over && step === round)) return "done";
+  if (step === round) return "current";
+  return "todo";
+}
+
 function Steps({ round, phase }: { round: number; phase: ReviewPhase }) {
   const t = useT();
   const over = phase === "ready" || phase === "merged";
@@ -301,19 +315,9 @@ function Steps({ round, phase }: { round: number; phase: ReviewPhase }) {
       aria-label={t("review.steps.aria", { round, max: REVIEW_MAX_ROUNDS })}
       className="grid w-20 shrink-0 grid-cols-3 gap-1"
     >
-      {Array.from({ length: REVIEW_MAX_ROUNDS }, (_, i) => {
-        const state = i + 1 < round || (over && i + 1 === round) ? "done" : i + 1 === round ? "current" : "todo";
-        return (
-          <div
-            key={i}
-            data-testid="review-step"
-            data-state={state}
-            className={cn(
-              "h-1.5 rounded-full",
-              state === "done" ? "bg-emerald-500/70" : state === "current" ? "bg-amber-400" : "bg-border/70",
-            )}
-          />
-        );
+      {Array.from({ length: REVIEW_MAX_ROUNDS }, (_, index) => {
+        const state = stepState(index + 1, round, over);
+        return <div key={index} data-testid="review-step" data-state={state} className={cn("h-1.5 rounded-full", STEP_STYLE[state])} />;
       })}
     </div>
   );

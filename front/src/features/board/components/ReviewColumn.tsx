@@ -5,6 +5,7 @@ export const REVIEW_WIDTH_STORAGE_KEY = "vibehub.reviewPanelWidth";
 const MIN_WIDTH_PX = 384;
 const TERMINAL_MIN_WIDTH_PX = 320;
 const KEYBOARD_STEP_PX = 32;
+const WIDTH_DELTA_BY_KEY = new Map([["ArrowLeft", KEYBOARD_STEP_PX], ["ArrowRight", -KEYBOARD_STEP_PX]]);
 
 function readStoredWidth(): number | null {
   const stored = Number(localStorage.getItem(REVIEW_WIDTH_STORAGE_KEY));
@@ -42,11 +43,11 @@ export function ReviewColumn({ children }: { children: React.ReactNode }) {
   };
 
   const resizeByKey = (event: React.KeyboardEvent) => {
-    const direction = event.key === "ArrowLeft" ? 1 : event.key === "ArrowRight" ? -1 : 0;
-    if (direction === 0) return;
+    const widthDelta = WIDTH_DELTA_BY_KEY.get(event.key);
+    if (widthDelta === undefined) return;
     event.preventDefault();
     const current = width ?? columnRef.current!.getBoundingClientRect().width;
-    saveWidth(clampWidth(current + direction * KEYBOARD_STEP_PX));
+    saveWidth(clampWidth(current + widthDelta));
   };
 
   const resetWidth = () => {

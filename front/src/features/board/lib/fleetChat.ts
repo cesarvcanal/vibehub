@@ -36,7 +36,9 @@ function speakersOf(agents: { id: string; label: string; model?: string }[]): Ma
   const verificationsPerDimension = new Map<string, number>();
   return new Map(agents.map((agent) => {
     const family = modelFamily(agent.model);
-    const base: ChatSpeaker = agent.model ? { agentId: agent.id, label: agent.label, model: agent.model, family } : { agentId: agent.id, label: agent.label, family };
+    const base: ChatSpeaker = agent.model
+      ? { agentId: agent.id, label: agent.label, model: agent.model, family }
+      : { agentId: agent.id, label: agent.label, family };
     const role = agentRole(agent.label);
     if (role.kind !== "verification") return [agent.id, base];
     const ordinal = (verificationsPerDimension.get(role.dimension) ?? 0) + 1;
@@ -88,7 +90,7 @@ function lastStepDoing(lastStep: AnalysisConversationItem | undefined): { tool: 
 }
 
 export function analysisFleetChat(conversation: AnalysisConversation): FleetChatEntry[] {
-  const speakers = speakersOf(conversation.agents.map(({ id, label, modelLabel }) => (modelLabel ? { id, label, model: modelLabel } : { id, label })));
+  const speakers = speakersOf(conversation.agents.map(({ id, label, modelLabel }) => ({ id, label, model: modelLabel })));
   const spoken = conversation.items.flatMap((item) => {
     const speaker = speakers.get(item.agentId);
     return speaker && item.kind === "text" && item.text ? [{ speaker, at: item.at, text: item.text }] : [];
