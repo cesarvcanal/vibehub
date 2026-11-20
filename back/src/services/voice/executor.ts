@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { PublicUser } from "../../auth/users.js";
 import { recordMessage } from "../events/cardEvents.js";
+import { logger } from "../../utils/logger.js";
 import { AGENT_MOVABLE_COLUMNS, MOVE_BATCH_MAX } from "../../mcp/cardMove.js";
 import type { BoardColumn } from "../board/registry.js";
 import {
@@ -33,7 +34,9 @@ const NOTIFY_TYPES = ["info", "error", "done"] as const;
 const ARGS = {
   list_projects: z.object({}).strict(),
   list_cards: z.object({ project: z.string().nullable() }).strict(),
-  create_card: z.object({ projectId: z.string().min(1), title: z.string().trim().min(1).max(200) }).strict(),
+  create_card: z.object({
+    projectId: z.string().min(1), title: z.string().trim().min(1).max(200), instruction: z.string().trim().min(1).max(20_000),
+  }).strict(),
   send_to_card: z.object({ cardId: z.string().min(1), text: z.string().trim().min(1).max(20_000) }).strict(),
   move_cards: z.object({
     cards: z.array(z.string().min(1)).min(1).max(MOVE_BATCH_MAX),
@@ -57,10 +60,12 @@ const VOICE_TOOLS: Record<VoiceToolName, { description: string; parameters: Json
     parameters: objectSchema({ project: { type: ["string", "null"], description: "id ou parte do nome do projeto; null = todos" } }),
   },
   create_card: {
-    description: "Cria um card novo num projeto, em nome da pessoa da chamada. Só o dono da instalação cria cards.",
+    description: "Cria um card novo num projeto, em nome da pessoa da chamada, e já entrega a primeira instrução a ele. " +
+      "Só o dono da instalação cria cards. O agente do card novo não ouve esta conversa: a instrução tem de ser completa.",
     parameters: objectSchema({
       projectId: { type: "string", description: "id do projeto (de list_projects)" },
       title: { type: "string", description: "título curto da tarefa, como deve aparecer no board" },
+      instruction: { type: "string", description: "a primeira instrução ao card, completa: o que fazer, onde, como saber que terminou" },
     }),
   },
   send_to_card: {
@@ -152,8 +157,17 @@ export async function runVoiceAction(input: VoiceActionInput): Promise<unknown> 
       return await listProjectsFor(input.user);
     case "list_cards":
       return await listCardsFor(input.user, parseArgs(name, ARGS.list_cards, json).project ?? undefined);
-    case "create_card":
-      return await createCardFor(input.user, { ...parseArgs(name, ARGS.create_card, json), open: false });
+    case "create_card": {
+      const { instruction, ...card } = parseArgs(name, ARGS.create_card, json);
+      const created = await createCardFor(input.user, { ...card, open: false });
+      try {
+        const sent = await sendToCardAs(input.user, { cardId: created.cardId, text: instruction });
+        return { ...created, delivered: true, sentAt: sent.sentAt };
+      } catch (err) {
+        logger.warn({ card: created.cardId, detail: (err as Error).message }, "voice: card created but its first instruction did not arrive");
+        return { ...created, delivered: false, deliveryError: (err as Error).message };
+      }
+    }
     case "send_to_card": {
       const args = parseArgs(name, ARGS.send_to_card, json);
       if (args.cardId === input.callCard.id) throw new UserActionError(400, NOT_THE_CALL_CARD);

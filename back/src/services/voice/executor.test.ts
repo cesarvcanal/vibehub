@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const runScript = vi.fn(async () => ({ stdout: "", stderr: "" }));
+const sendFailure = { current: null as Error | null };
+const sendToTerminal = vi.fn(async (cardId: string, _text: string) => {
+  if (sendFailure.current) throw sendFailure.current;
+  return { sent: true, cardId, title: "", project: "" };
+});
 const dirs = { current: "" };
 
 async function load() {
@@ -15,6 +20,10 @@ async function load() {
     const actual = await vi.importActual<typeof import("../../runtime/host.js")>("../../runtime/host.js");
     return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript, ptyCommand: vi.fn(), pipeCommand: vi.fn((line: string) => ({ file: "sh", args: ["-c", line] })) }) };
   });
+  vi.doMock("../maestro/maestro.js", async () => ({
+    ...(await vi.importActual<typeof import("../maestro/maestro.js")>("../maestro/maestro.js")),
+    sendToTerminal,
+  }));
   const registry = await import("../board/registry.js");
   const users = await import("../../auth/users.js");
   const events = await import("../events/cardEvents.js");
@@ -38,16 +47,34 @@ beforeAll(async () => {
 beforeEach(async () => {
   dirs.current = await mkdtemp(join(tmpdir(), "vibehub-voice-executor-"));
   runScript.mockClear();
+  sendToTerminal.mockClear();
+  sendFailure.current = null;
 });
 afterEach(async () => { await rm(dirs.current, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
 
 describe("executor da voz", () => {
-  it("cria o card como o dono da chamada", async () => {
+  it("cria o card como o dono da chamada e já entrega a primeira instrução, acordando o card", async () => {
     const env = await load();
-    const output = await env.run(env.owner, "create_card", { projectId: env.project.id, title: "Exportar relatório" }) as { cardId: string };
+    const output = await env.run(env.owner, "create_card", {
+      projectId: env.project.id, title: "Exportar relatório", instruction: "Exporte o relatório de vendas em CSV.",
+    }) as { cardId: string; delivered: boolean };
     const created = await env.registry.getCard(output.cardId);
     expect(created?.title).toBe("Exportar relatório");
     expect(created?.projectId).toBe(env.project.id);
+    expect(output.delivered).toBe(true);
+    expect(sendToTerminal).toHaveBeenCalledTimes(1);
+    expect(sendToTerminal.mock.calls[0]?.slice(0, 2)).toEqual([output.cardId, "Exporte o relatório de vendas em CSV."]);
+    expect(sendToTerminal.mock.calls[0]?.[2]).toMatchObject({ by: env.owner.id, wake: true });
+  });
+
+  it("card criado com a instrução que não chegou diz isso na saída, com o motivo, sem esconder o card criado", async () => {
+    const env = await load();
+    sendFailure.current = new Error("runner fora do ar");
+    const output = await env.run(env.owner, "create_card", {
+      projectId: env.project.id, title: "Exportar relatório", instruction: "Exporte o relatório.",
+    }) as { cardId: string; delivered: boolean; deliveryError: string };
+    expect(output).toMatchObject({ delivered: false, deliveryError: "runner fora do ar" });
+    expect((await env.registry.getCard(output.cardId))?.title).toBe("Exportar relatório");
   });
 
   it("recusa mandar mensagem ao próprio card da chamada", async () => {
@@ -78,7 +105,7 @@ describe("executor da voz", () => {
 
   it("membro não cria card", async () => {
     const env = await load();
-    const refusal = env.run(env.member, "create_card", { projectId: env.project.id, title: "x" });
+    const refusal = env.run(env.member, "create_card", { projectId: env.project.id, title: "x", instruction: "faça X" });
     await expect(refusal).rejects.toMatchObject({ status: 403, message: expect.stringContaining("only the owner") });
   });
 
@@ -98,7 +125,9 @@ describe("executor da voz", () => {
   it.each([
     ["nome desconhecido", "delete_all", "{}"],
     ["JSON inválido", "create_card", "{"],
-    ["campo faltando", "create_card", '{"title":"x"}'],
+    ["campo faltando", "create_card", '{"title":"x","instruction":"faça X"}'],
+    ["card sem instrução", "create_card", '{"projectId":"p","title":"x"}'],
+    ["instrução vazia", "create_card", '{"projectId":"p","title":"x","instruction":"  "}'],
     ["ask_card_agent é do navegador", "ask_card_agent", '{"request":"x"}'],
   ])("%s vira 400", async (_case, name, argumentsJson) => {
     const env = await load();
