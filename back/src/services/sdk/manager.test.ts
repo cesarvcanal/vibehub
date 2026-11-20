@@ -863,6 +863,15 @@ describe("end of life", () => {
     expect(exitWarnings).toEqual([expect.objectContaining({ code: 1, detail: "driver exited with code 1" })]);
   });
 
+  it("o driver morto por sinal diz o sinal no erro, em vez de um código vazio", () => {
+    const warn = vi.spyOn(logger, "warn");
+    onTestFinished(() => { warn.mockRestore(); });
+    ensure();
+    spawned[0]!.emit("close", null, "SIGKILL");
+    const exitWarnings = warn.mock.calls.filter((call) => call[1] === "sdk driver exited unexpectedly").map((call) => call[0]);
+    expect(exitWarnings).toEqual([expect.objectContaining({ detail: "driver killed by signal SIGKILL" })]);
+  });
+
   it("parada pedida (troca de conta/modelo) fecha os sockets SEM anunciar erro", () => {
     const session = ensure();
     const socket = fakeSocket();

@@ -1278,7 +1278,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     logger.warn({ card: opts.label, detail: err.message }, "sdk driver process error");
     broadcast(session, { type: "error", message: `driver process error: ${err.message}` });
   });
-  child.on("close", (code) => {
+  child.on("close", (code, signal) => {
     // The driver died (idle stop, killCardSession, a crash): tell whoever is watching and close
     // their sockets — the front's reconnect loop spawns the successor on its next connect.
     const deliberate = session.closed; // stopCardDriver stamped it BEFORE killing
@@ -1344,7 +1344,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
           action: "sdk.driver.exit",
           card: opts.label,
           code,
-          detail: `driver exited with code ${code ?? "?"}`,
+          detail: signal ? `driver killed by signal ${signal}` : `driver exited with code ${code ?? "?"}`,
           deliberate,
           turnsInFlight: session.activeTurns,
           stderr: session.stderrTail.trim().slice(-STDERR_TAIL_MAX) || undefined,
