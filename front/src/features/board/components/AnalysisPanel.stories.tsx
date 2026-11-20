@@ -47,7 +47,7 @@ const report = (over: Partial<AnalysisReport> = {}): AnalysisReport => ({
 const readModel = (
   analysis: AnalysisReport, verdict: AnalysisReadModel["verdict"], health: Partial<AnalysisReadModel["health"]> = {},
   uncheckedDimensions: AnalysisReadModel["uncheckedDimensions"] = [],
-): AnalysisReadModel => ({ analysis, verdict, health: { ...ALL_OK, repoRules: "skipped", ...health }, uncheckedDimensions, canMerge: false });
+): AnalysisReadModel => ({ analysis, verdict, health: { ...ALL_OK, repoRules: "skipped", ...health }, uncheckedDimensions, canMerge: false, merging: false });
 
 function SeededAnalysis({ answer, conversation, children }: {
   answer: CardAnalysisResponse; conversation: AnalysisConversation | null; children: React.ReactNode;
@@ -90,6 +90,25 @@ export const Apto: Story = {
 export const AptoComMerge: Story = {
   name: "Apto · com o botão de merge",
   parameters: { analysis: { ...readModel(report({ findings: [fixedBlocking] }), "apt"), canMerge: true } },
+};
+
+export const AptoMergeando: Story = {
+  name: "Apto · merge rodando no servidor",
+  parameters: { analysis: { ...readModel(report({ findings: [fixedBlocking] }), "apt"), canMerge: true, merging: true } },
+};
+
+export const AptoMergeBarrado: Story = {
+  name: "Apto · último merge barrado pelo gate",
+  parameters: {
+    analysis: {
+      ...readModel(report({ findings: [fixedBlocking] }), "apt"),
+      canMerge: true,
+      lastMergeRefusal: {
+        cardId: CARD_ID, analysedSha: report().analysedSha, reason: "gate", by: "mussa", at: 1,
+        output: "✗ npm test (585s, morto por tempo)\nFAIL src/pdv/fechamento.test.ts\nFAIL src/rh/ponto.test.ts",
+      },
+    },
+  },
 };
 
 export const Mergeado: Story = {

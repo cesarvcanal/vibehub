@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ChevronDown, ExternalLink } from "lucide-react";
+import { ChevronDown, ExternalLink, GitMerge } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Card, CardPr, Finding, ReviewSummary } from "@/api/types";
@@ -72,7 +72,8 @@ export function PrReviewBlock({
           {pr.author}
         </span>
       ) : null}
-      <Badge tone={pill.tone} className="ml-auto shrink-0 transition-colors duration-500">
+      <Badge tone={pill.tone} className="ml-auto shrink-0 gap-1 transition-colors duration-500">
+        {"icon" in pill && pill.icon === "merging" ? <GitMerge aria-hidden className="h-3 w-3 animate-pulse" /> : null}
         {t(pill.key, pill.vars)}
       </Badge>
     </>

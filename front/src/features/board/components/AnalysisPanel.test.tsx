@@ -51,6 +51,7 @@ const readModel = (
   verdict,
   uncheckedDimensions,
   canMerge: false,
+  merging: false,
 });
 
 function renderPanel(
@@ -226,6 +227,57 @@ describe("merge pelo painel da análise", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Mergear o PR #312" }));
     expect(await screen.findByText("CI vermelho no PR")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Mergear o PR #312" })).toBeEnabled();
+  });
+
+  it("com o servidor dizendo que o merge roda, o painel mostra Mergeando travado e o aviso dos testes, mesmo sem ter clicado", async () => {
+    renderPanel(aptRead({ merging: true }));
+    expect(await screen.findByRole("button", { name: "Mergeando…" })).toBeDisabled();
+    expect(screen.getByText("Rodando os testes do gate antes do merge; pode levar alguns minutos.")).toBeInTheDocument();
+  });
+
+  it.each<[string, Error]>([
+    ["409 merging (o clique anterior ainda roda)", Object.assign(new Error("409"), { response: { status: 409, data: { error: "merge já em andamento", reason: "merging" } } })],
+    ["proxy que desistiu da requisição longa", apiReject(524, "")],
+  ])("clique com resposta %s não vira erro: relê e segue em Mergeando enquanto o servidor diz merging", async (_case, failure) => {
+    post.mockRejectedValue(failure);
+    const reads = { count: 0 };
+    get.mockImplementation(async (url: string) => {
+      if (url === "/auth/me") return { user: { id: "u1", username: "mussa", role: "member" } };
+      if (url === "/setup/state") return setupState();
+      if (url === "/cards/c1/analysis/conversation") return { conversation: null };
+      reads.count += 1;
+      return aptRead({ merging: reads.count > 1 });
+    });
+    renderApp(<AnalysisPanel cardId="c1" onClose={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Mergear o PR #312" }));
+    expect(await screen.findByRole("button", { name: "Mergeando…" })).toBeDisabled();
+    expect(screen.queryByText("merge já em andamento")).not.toBeInTheDocument();
+  });
+
+  it("último merge barrado no commit analisado: o painel diz o motivo e a saída antes do clique e oferece tentar de novo", async () => {
+    renderPanel(aptRead({ lastMergeRefusal: {
+      cardId: "c1", analysedSha: doneReport().analysedSha, reason: "gate", output: "npm test estourou 585 s", by: "mussa", at: 1,
+    } }));
+    expect(await screen.findByText("O último merge não saiu: os testes do gate falharam ou estouraram o tempo.")).toBeInTheDocument();
+    expect(screen.getByText("npm test estourou 585 s")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Tentar o merge do PR #312 de novo" })).toBeEnabled();
+  });
+
+  it("resposta perdida e servidor sem merge rodando, sem recusa e sem merge: avisa que o resultado não foi confirmado", async () => {
+    post.mockRejectedValue(apiReject(502, ""));
+    renderPanel(aptRead());
+    await userEvent.click(await screen.findByRole("button", { name: "Mergear o PR #312" }));
+    expect(await screen.findByText("Não deu para confirmar o merge: a conexão caiu e o servidor não tem merge rodando nem recusa registrada. Confira o PR no GitHub antes de tentar de novo.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mergear o PR #312" })).toBeEnabled();
+  });
+
+  it("recusa por outro motivo que não o gate mostra o texto genérico e a saída, nunca o código interno do motivo", async () => {
+    renderPanel(aptRead({
+      lastMergeRefusal: { cardId: "c1", analysedSha: doneReport().analysedSha, reason: "push_failed", output: "rejected: non-fast-forward", by: "mussa", at: 1 },
+    }));
+    expect(await screen.findByText("O último merge não saiu. Saída do vibehub:")).toBeInTheDocument();
+    expect(screen.getByText("rejected: non-fast-forward")).toBeInTheDocument();
+    expect(screen.queryByText(/push_failed/)).not.toBeInTheDocument();
   });
 
   it("em inglês o botão e o resultado saem pelo i18n", async () => {

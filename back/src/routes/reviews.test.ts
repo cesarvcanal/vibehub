@@ -1485,6 +1485,82 @@ describe("merge da análise pela rota", () => {
     expect((await first).statusCode).toBe(200);
     expect(deliver).toHaveBeenCalledTimes(1);
   });
+
+  it("enquanto o merge roda o GET diz merging true, para o painel mostrar o andamento mesmo sem a resposta do clique", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    const deliverGate = Promise.withResolvers<void>();
+    deliver.mockImplementationOnce(async () => {
+      await deliverGate.promise;
+      return deliverResult;
+    });
+    expect((await readAnalysis(w, w.leitor)).merging).toBe(false);
+    const clicked = merge(w, w.merger);
+    await vi.waitFor(async () => expect((await readAnalysis(w, w.leitor)).merging).toBe(true));
+    deliverGate.resolve();
+    await clicked;
+    expect((await readAnalysis(w, w.leitor)).merging).toBe(false);
+  });
+
+  it("enquanto o merge roda o card do board diz analysisMerging, para o sidebar mostrar o merge fora do painel", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    const deliverGate = Promise.withResolvers<void>();
+    deliver.mockImplementationOnce(async () => {
+      await deliverGate.promise;
+      return deliverResult;
+    });
+    const readBoardCard = async () =>
+      (await app.inject({ method: "GET", url: `/api/cards/${w.cardId}`, headers: { cookie: w.leitor.cookie } })).json().card;
+    expect((await readBoardCard()).analysisMerging).toBeUndefined();
+    const clicked = merge(w, w.merger);
+    await vi.waitFor(async () => expect((await readBoardCard()).analysisMerging).toBe(true));
+    deliverGate.resolve();
+    await clicked;
+    expect((await readBoardCard()).analysisMerging).toBeUndefined();
+  });
+
+  it("merge recusado pelo deliver fica gravado no commit analisado: o GET diz o motivo e a saída antes do próximo clique", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    deliverResult = { merged: false, reason: "gate", branch: "dev", cardBranch: PR.branch, output: "npm test estourou 585 s" };
+    onTestFinished(() => {
+      deliverResult = { merged: true, reason: "merged", branch: "dev", cardBranch: "card/x" };
+    });
+    await merge(w, w.merger);
+    expect((await readAnalysis(w, w.leitor)).lastMergeRefusal).toMatchObject({ reason: "gate", output: "npm test estourou 585 s", by: "merger" });
+  });
+
+  it("PR mergeado fora do vibehub não carrega a recusa gravada antes: o GET não diz merge barrado de PR mergeado", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    deliverResult = { merged: false, reason: "gate", branch: "dev", cardBranch: PR.branch, output: "vermelho" };
+    onTestFinished(() => {
+      deliverResult = { merged: true, reason: "merged", branch: "dev", cardBranch: "card/x" };
+    });
+    await merge(w, w.merger);
+    await (await registry()).markCardPrMerged(w.cardId, PR.base, PR.number, 1234);
+    const read = await readAnalysis(w, w.leitor);
+    expect(read.mergedAt).toBe(1234);
+    expect(read.lastMergeRefusal).toBeUndefined();
+  });
+
+  it("a recusa gravada some quando a análise passa a outro commit ou quando o merge sai", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    deliverResult = { merged: false, reason: "gate", branch: "dev", cardBranch: PR.branch, output: "vermelho" };
+    onTestFinished(() => {
+      deliverResult = { merged: true, reason: "merged", branch: "dev", cardBranch: "card/x" };
+    });
+    await merge(w, w.merger);
+    await saveReport(aptReport(w.cardId, { analysedSha: "f".repeat(40) }));
+    expect((await readAnalysis(w, w.leitor)).lastMergeRefusal).toBeUndefined();
+    await merge(w, w.merger);
+    expect((await readAnalysis(w, w.leitor)).lastMergeRefusal).toMatchObject({ reason: "gate" });
+    deliverResult = { merged: true, reason: "merged", branch: "dev", cardBranch: "card/x" };
+    await merge(w, w.merger);
+    expect((await readAnalysis(w, w.leitor)).lastMergeRefusal).toBeUndefined();
+  });
 });
 
 describe("conversa da frota da análise pela rota", () => {

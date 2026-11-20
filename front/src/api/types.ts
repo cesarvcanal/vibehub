@@ -516,6 +516,7 @@ export interface Card {
    * more than one PR was reviewed: one line per PR reads its own. Absent = `review` says it all.
    */
   reviews?: ReviewSummary[];
+  analysisMerging?: true;
   createdAt: number;
   updatedAt?: number;
 }
@@ -843,7 +844,18 @@ export interface AnalysisReadModel {
   verdict: AnalysisVerdict;
   uncheckedDimensions: AnalysisDimension[];
   canMerge: boolean;
+  merging: boolean;
   mergedAt?: number;
+  lastMergeRefusal?: AnalysisMergeRefusal;
+}
+
+export interface AnalysisMergeRefusal {
+  cardId: string;
+  analysedSha: string;
+  reason: string;
+  output?: string;
+  by: string;
+  at: number;
 }
 
 export type CardAnalysisResponse = AnalysisReadModel | { analysis: null };

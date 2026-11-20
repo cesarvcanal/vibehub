@@ -14,6 +14,7 @@ import { listReviewsFollowedBy } from "../services/review/store.js";
 import { mergeGateSelfHealing, pendingQuestions, type Review } from "../services/review/model.js";
 import { logger } from "../utils/logger.js";
 import { isBusy } from "../services/maestro/maestro.js";
+import { isAnalysisMerging } from "../services/review/analysisMerge.js";
 import { sendError } from "./httpError.js";
 
 /**
@@ -42,7 +43,7 @@ type ReviewSummary = Pick<Review, "id" | "prNumber" | "phase" | "round"> & {
  * `review` = the most recent; `reviews` = the most recent of EACH PR (only with more than one PR
  * reviewed), the one line per PR of a card that attached several.
  */
-type BoardCard = registry.Card & { review?: ReviewSummary; reviews?: ReviewSummary[] };
+type BoardCard = registry.Card & { review?: ReviewSummary; reviews?: ReviewSummary[]; analysisMerging?: true };
 
 /**
  * Each card with the summary of its most recent review that was not cancelled (a merged one stays:
@@ -65,7 +66,7 @@ async function withReviewSummary(cards: registry.Card[]): Promise<BoardCard[]> {
     keep(r.cardId, r);
     if (r.hubCardId && r.hubCardId !== r.cardId) keep(r.hubCardId, r);
   }
-  return cards.map((c) => {
+  return cards.map((card) => withAnalysisMerging(card)).map((c) => {
     const perPr = [...(latest.get(c.id)?.values() ?? [])].sort((a, b) => b.createdAt - a.createdAt);
     if (perPr.length === 0) return c;
     const summaries = perPr.map((r) => {
@@ -82,6 +83,10 @@ async function withReviewSummary(cards: registry.Card[]): Promise<BoardCard[]> {
     });
     return { ...c, review: summaries[0], ...(summaries.length > 1 ? { reviews: summaries } : {}) };
   });
+}
+
+function withAnalysisMerging(card: registry.Card): BoardCard {
+  return isAnalysisMerging(card.id) ? { ...card, analysisMerging: true } : card;
 }
 
 /**
