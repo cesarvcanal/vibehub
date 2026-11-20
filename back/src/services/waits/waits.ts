@@ -23,7 +23,9 @@ function describeOutcome(wait: CardWait): string {
     case "pr_merged":
       return `o PR #${wait.prNumber} foi mergeado`;
     case "concluded":
-      return "foi concluído (sem PR mergeado pelo vibehub desde que a espera foi criada)";
+      return wait.base === undefined
+        ? "foi concluído (sem PR mergeado pelo vibehub desde que a espera foi criada)"
+        : `foi concluído (sem PR mergeado na base ${wait.base} pelo vibehub desde que a espera foi criada)`;
     case "deleted":
       return "foi apagado do board";
     case undefined:

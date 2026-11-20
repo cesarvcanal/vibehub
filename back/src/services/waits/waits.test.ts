@@ -49,7 +49,8 @@ describe("buildWakeMessage", () => {
 
   it.each([
     ["pr_merged", { prNumber: 356 }, "PR #356 foi mergeado"],
-    ["concluded", {}, "foi concluído"],
+    ["concluded", {}, "foi concluído (sem PR mergeado pelo vibehub desde que a espera foi criada)"],
+    ["concluded", { base: "prod" }, "foi concluído (sem PR mergeado na base prod pelo vibehub desde que a espera foi criada)"],
     ["deleted", {}, "foi apagado"],
   ] as const)("diz como o card esperado terminou (%s) e repete a instrução", (outcome, extra, phrase) => {
     const message = buildWakeMessage({ ...wait, outcome, ...extra }, "Captura de falhas");
