@@ -113,9 +113,12 @@ function AnalysisMerge({ cardId, read, rereading }: { cardId: string; read: Anal
   const refusal = merging || refusedByClick ? undefined : read.lastMergeRefusal;
   const answerLost = failure?.kind === "lost" || failure?.kind === "running";
   const unconfirmed = answerLost && !merging && !rereading && !refusal;
-  const mergeLabel = merging
-    ? t("analysis.merge.pending")
-    : gateRunning ? t("analysis.mergeGate.runningButton") : t(refusal ? "analysis.merge.retry" : "analysis.merge", { n: prNumber });
+  const mergeBlocked = merging || gateRunning;
+  const mergeLabel = (): string => {
+    if (merging) return t("analysis.merge.pending");
+    if (gateRunning) return t("analysis.mergeGate.runningButton");
+    return t(refusal ? "analysis.merge.retry" : "analysis.merge", { n: prNumber });
+  };
   return (
     <div className="flex shrink-0 flex-col gap-1.5">
       {gateRunning ? (
@@ -134,9 +137,9 @@ function AnalysisMerge({ cardId, read, rereading }: { cardId: string; read: Anal
           ) : null}
         </div>
       ) : null}
-      <Button type="button" size="sm" className="self-start" disabled={merging || gateRunning} onClick={() => merge.mutate()}>
-        {merging || gateRunning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitMerge className="h-3.5 w-3.5" />}
-        {mergeLabel}
+      <Button type="button" size="sm" className="self-start" disabled={mergeBlocked} onClick={() => merge.mutate()}>
+        {mergeBlocked ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitMerge className="h-3.5 w-3.5" />}
+        {mergeLabel()}
       </Button>
       {merging ? <p className="text-xs text-muted-foreground">{t("analysis.merge.running")}</p> : null}
       {refusedByClick ? <p className="whitespace-pre-wrap text-xs text-destructive">{refusedByClick}</p> : null}
