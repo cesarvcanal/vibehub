@@ -19,15 +19,6 @@ import { cn } from "@/lib/utils";
  * What the PR review's panel DRAWS, from props alone: the review, who is working right now, who may
  * do what, and the callbacks of the human moves. `ReviewPanel` reads the server and runs the merge;
  * this draws — which is what lets every state be seen in the Storybook without a back-end.
- *
- *   ┌ header ─ PR #N → base · pill · close; the rounds; what is happening now; the people ┐
- *   │ [ Conversa ]  [ Achados N ]                                                         │
- *   │ the conversation of the AIs (chat)  |  the closed list, grouped by severity         │
- *   └ footer ─ merge · try again · cancel · GitHub; the reviewer's session · the diff     ┘
- *
- * Both tabs stay mounted (the hidden one with `hidden`): switching back to the conversation finds it
- * scrolled where it was. Until the person picks one, the panel shows the findings while they have a
- * decision to make there, and the conversation otherwise.
  */
 
 export type ReviewTab = "conversation" | "agents" | "findings";
