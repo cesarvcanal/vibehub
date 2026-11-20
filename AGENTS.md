@@ -674,6 +674,8 @@ Antes de cada etapa, ache no mapa abaixo a skill da situação e invoque-a pela 
 ### Subagentes
 
 - **Quem delegou responde pelo `git diff`.** O subagente que abriu o trecho e viu o defeito conserta ali mesmo, num pacote que não cruza com o de outro agente; feature grande se fatia antes de despachar; mudança pequena, ou que atravessa muitos arquivos, você escreve.
+- **Tarefa de subagente é checklist.** O que ele tem de entregar vai no prompt como lista de tarefas markdown, um item por entregável verificável (`- [ ] achados do eixo padrões com severidade`); o contexto (o diff, o diretório, o comando) fica em texto antes da lista. O relatório dele abre com a mesma lista, os mesmos textos na mesma ordem, marcando `- [x]` o que fez e deixando `- [ ]` o que não fez, com o motivo no item. A tela do card mostra essa lista na aba Tarefa do subagente.
+- **Relatório de subagente segue "Como relatar" (§12)**, e o prompt diz isso a ele: o subagente não sabe quem vai ler.
 - **Saída de subagente é candidata, não verdade:** confira no working tree o que ele relatou e escreveu; ressalva do tipo "não auditei X" se resolve abrindo o X.
 - **Paralelismo é multi-dispatch seu:** vários agentes numa única mensagem, cada um dono de um pacote. A profundidade 2 (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` no `.claude/settings.json`) serve para um subagente ler ou pesquisar, não para paralelizar escrita: dois agentes na mesma working tree sobrescrevem um ao outro em silêncio. Trabalho que precisa de branch própria vai para outro card (`vibehub_send_to_terminal`).
 
@@ -685,7 +687,8 @@ Antes de cada etapa, ache no mapa abaixo a skill da situação e invoque-a pela 
 Revise a branch atual contra o AGENTS.md da raiz do repositório.
 O diff: git fetch origin main && git diff origin/main...HEAD
 O que o autor afirma: git log origin/main..HEAD
-<pedido: o da etapa 1 ou o da etapa 2, abaixo>
+O relatório segue "Como relatar" (§12 do AGENTS.md) e abre com a lista abaixo marcada.
+<pedido da etapa, abaixo, como lista de tarefas>
 ```
 
 1. **Simplificação:** subagente `code-simplifier:code-simplifier`, com o pedido de confrontar cada trecho com as regras e aplicar o que simplifica sem mudar comportamento. Confira o que ele escreveu e rode o lint e os testes do recorte.
