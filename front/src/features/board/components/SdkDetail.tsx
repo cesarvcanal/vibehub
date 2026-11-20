@@ -6,7 +6,7 @@ import { useNow, usePageVisible } from "@/lib/useNow";
 import { useT, type Translate } from "@/i18n";
 import { Markdown } from "@/features/board/components/ChatView";
 import { AgentTaskPanel } from "@/features/board/components/AgentTaskPanel";
-import { groupAgentTimeline, type AgentTimelineBlock, type TimelineToolItem } from "@/features/board/lib/agentTimeline";
+import { groupAgentTimeline, type AgentTimelineWorkBlock, type TimelineToolItem } from "@/features/board/lib/agentTimeline";
 import { toolHeadline, type AgentTask, type SdkRow, type ToolResultSummary } from "@/features/board/lib/sdkChat";
 import { hunksToRows, toolDiff } from "@/features/board/lib/toolDiff";
 import { DiffView, SyntaxText, useCodeTokens } from "@/features/board/components/DiffView";
@@ -767,7 +767,7 @@ function TimelineThinking({ text }: { text: string }) {
   );
 }
 
-function TimelineWork({ block, onOpen }: { block: Extract<AgentTimelineBlock, { kind: "work" }>; onOpen: (id: string) => void }) {
+function TimelineWork({ block, onOpen }: { block: AgentTimelineWorkBlock; onOpen: (id: string) => void }) {
   const t = useT();
   const summary = block.verbs.map((verb) => t("sdk.detail.workVerbCount", { verb: t(verb.key, { tool: verb.tool }), n: verb.count })).join(", ");
   const span = block.endedAt === undefined

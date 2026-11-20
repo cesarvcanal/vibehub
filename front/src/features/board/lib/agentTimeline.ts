@@ -9,10 +9,18 @@ export interface TimelineVerbCount {
   count: number;
 }
 
+export interface AgentTimelineWorkBlock {
+  kind: "work";
+  startedAt: number;
+  endedAt?: number;
+  tools: TimelineToolItem[];
+  verbs: TimelineVerbCount[];
+}
+
 export type AgentTimelineBlock =
   | { kind: "text"; at: number; text: string }
   | { kind: "thinking"; at: number; text: string }
-  | { kind: "work"; startedAt: number; endedAt?: number; tools: TimelineToolItem[]; verbs: TimelineVerbCount[] };
+  | AgentTimelineWorkBlock;
 
 function verbIdentity(key: string, tool: string): string {
   return key === "sdk.verb.default" ? `${key}:${tool}` : key;
@@ -29,13 +37,12 @@ function countVerbs(tools: readonly TimelineToolItem[]): TimelineVerbCount[] {
   return [...counts.values()];
 }
 
-function buildWorkBlock(tools: TimelineToolItem[]): AgentTimelineBlock {
+function buildWorkBlock(tools: TimelineToolItem[]): AgentTimelineWorkBlock {
   const stillRunning = tools.some((item) => item.endedAt === undefined);
-  const lastEnd = Math.max(...tools.map((item) => item.endedAt ?? item.at));
   return {
     kind: "work",
     startedAt: tools[0].at,
-    ...(stillRunning ? {} : { endedAt: lastEnd }),
+    ...(stillRunning ? {} : { endedAt: Math.max(...tools.map((item) => item.endedAt ?? item.at)) }),
     tools,
     verbs: countVerbs(tools),
   };
