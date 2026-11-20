@@ -89,6 +89,19 @@ function renderComposer(ui: ReactElement) {
   return render(ui, { wrapper: Wrapper });
 }
 
+function setViewport(mobile: boolean): void {
+  window.matchMedia = ((query: string) => ({
+    matches: query === MOBILE_QUERY ? mobile : false,
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia;
+}
+
 describe("appendFragment", () => {
   it("joins fragments with one space and ignores blanks", () => {
     expect(appendFragment("", "  hello ")).toBe("hello");
@@ -1124,7 +1137,7 @@ describe("TerminalComposer — voice input", () => {
     expect(stopTrack).toHaveBeenCalled();
   });
 
-  it("a transcription that lands gives the field the keyboard, caret at the end, ready for Enter", async () => {
+  it("a transcription that lands gives the field the keyboard, ready for Enter", async () => {
     serveVoice(true);
     mockPost.mockResolvedValue({ text: "run the failing test again", proofread: true });
     const user = userEvent.setup();
@@ -1138,9 +1151,32 @@ describe("TerminalComposer — voice input", () => {
 
     await waitFor(() => expect(box).toHaveValue("then run the failing test again"));
     await waitFor(() => expect(box).toHaveFocus());
-    const textBox = box as HTMLTextAreaElement;
-    expect(textBox.selectionStart).toBe(textBox.value.length);
-    expect(textBox.selectionEnd).toBe(textBox.value.length);
+  });
+
+  it("a transcription that lands does not pull the keyboard from another field someone is typing in", async () => {
+    serveVoice(true);
+    const answerTranscription: Array<(answer: { text: string; proofread: boolean }) => void> = [];
+    mockPost.mockReturnValue(new Promise((resolve) => { answerTranscription.push(resolve); }));
+    const user = userEvent.setup();
+    renderComposer(
+      <div>
+        <input aria-label="shell" />
+        <TerminalComposer onSend={vi.fn()} cardId="c1" />
+      </div>,
+    );
+    await waitFor(() => expect(screen.getByTestId("composer-mic")).toBeEnabled());
+    await user.click(screen.getByTestId("composer-mic"));
+    await user.click(await screen.findByTestId("composer-mic-finish"));
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+
+    const shell = screen.getByRole("textbox", { name: "shell" });
+    await user.click(shell);
+    await user.type(shell, "git st");
+    await act(async () => answerTranscription[0]({ text: "what I said", proofread: true }));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    await user.keyboard("atus");
+
+    expect(shell).toHaveValue("git status");
   });
 
   it("a transcription that lands on a card no longer on screen does not take the keyboard", async () => {
@@ -1156,7 +1192,6 @@ describe("TerminalComposer — voice input", () => {
 
     rerender(<TerminalComposer onSend={vi.fn()} cardId="c1" active={false} />);
     const box = screen.getByRole("textbox");
-    box.blur();
     await act(async () => answerTranscription[0]({ text: "what I said", proofread: true }));
 
     await waitFor(() => expect(box).toHaveValue("what I said"));
@@ -1167,16 +1202,7 @@ describe("TerminalComposer — voice input", () => {
     serveVoice(true);
     mockPost.mockResolvedValue({ text: "what I said", proofread: true });
     const original = window.matchMedia;
-    window.matchMedia = ((query: string) => ({
-      matches: query === MOBILE_QUERY,
-      media: query,
-      onchange: null,
-      addListener: () => {},
-      removeListener: () => {},
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      dispatchEvent: () => false,
-    })) as unknown as typeof window.matchMedia;
+    setViewport(true);
     onTestFinished(() => { window.matchMedia = original; });
     const user = userEvent.setup();
     renderComposer(<TerminalComposer onSend={vi.fn()} cardId="c1" />);
@@ -1403,19 +1429,6 @@ describe("formatElapsed", () => {
  */
 describe("TerminalComposer — on a phone", () => {
   const originalMatchMedia = window.matchMedia;
-
-  function setViewport(mobile: boolean): void {
-    window.matchMedia = ((query: string) => ({
-      matches: query === MOBILE_QUERY ? mobile : false,
-      media: query,
-      onchange: null,
-      addListener: () => {},
-      removeListener: () => {},
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      dispatchEvent: () => false,
-    })) as unknown as typeof window.matchMedia;
-  }
 
   beforeEach(() => {
     mockGet.mockResolvedValue({ available: true });
