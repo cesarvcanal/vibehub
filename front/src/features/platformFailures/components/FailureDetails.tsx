@@ -2,6 +2,7 @@ import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { FOLDED_TEXT_MIN_CHARS, FoldedTextToggle } from "@/components/FoldedTextToggle";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n";
 import type { FailureNarrative, FailureTrigger, PlatformFailureNotice } from "@/api/types";
@@ -13,7 +14,6 @@ type FailureForDetails = Pick<
   PlatformFailureNotice, "id" | "source" | "status" | "explanation" | "occurrences" | "firstSeenAt" | "lastSeenAt" | "details"
 >;
 
-const SUMMARY_CLAMP_CHARS = 240;
 const TRIGGER_TONES: Record<FailureTrigger, BadgeTone> = { system: "critical", person: "warn", unknown: "muted" };
 const STATUS_TONES: Record<PlatformFailureNotice["status"], BadgeTone> = {
   open: "muted", investigating: "info", concluded_without_fix: "muted", resolved: "ok", dismissed: "muted",
@@ -62,7 +62,7 @@ function FailureSummary({ symptom, narrative }: { symptom: string; narrative?: F
     ] : []),
     { label: t("platformFailures.symptomLabel"), text: symptom },
   ];
-  const isLong = summaryItems.some((item) => item.text.length > SUMMARY_CLAMP_CHARS);
+  const isLong = summaryItems.some((item) => item.text.length > FOLDED_TEXT_MIN_CHARS);
   const isFolded = isLong && !isExpanded;
   return (
     <div className="space-y-1">
@@ -74,16 +74,7 @@ function FailureSummary({ symptom, narrative }: { symptom: string; narrative?: F
           </React.Fragment>
         ))}
       </dl>
-      {isLong ? (
-        <button
-          type="button"
-          aria-expanded={isExpanded}
-          onClick={() => setExpanded((wasExpanded) => !wasExpanded)}
-          className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-        >
-          {t(isExpanded ? "platformFailures.showLess" : "platformFailures.showMore")}
-        </button>
-      ) : null}
+      {isLong ? <FoldedTextToggle isExpanded={isExpanded} onToggle={() => setExpanded((wasExpanded) => !wasExpanded)} /> : null}
       {narrative ? <p className="text-[11px] text-muted-foreground">{t("platformFailures.narrativeNote")}</p> : null}
     </div>
   );
