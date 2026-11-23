@@ -61,40 +61,44 @@ function withReplies(messages: ChatMessage[]): ChatMessage[] {
   });
 }
 
+function reviewSpeakers(run: ReviewFleetRun): Map<string, ChatSpeaker> {
+  return speakersOf(run.agents.map(({ id, label, model, modelLabel }) => ({ id, label, model: modelLabel ?? model })));
+}
+
+function resultMessage(runId: string, agent: ReviewFleetAgent, speaker: ChatSpeaker): ChatMessage {
+  const reading = readAgentResult(agent.result ?? "");
+  const id = `${runId}-${agent.id}`;
+  return agent.endedAt === undefined ? { kind: "message", id, speaker, reading } : { kind: "message", id, speaker, at: agent.endedAt, reading };
+}
+
+function stoppedEntries(run: ReviewFleetRun, speakers: Map<string, ChatSpeaker>): FleetChatEntry[] {
+  return run.agents
+    .filter((agent) => agent.status === "stopped")
+    .map((agent): FleetChatEntry => {
+      const entry = { kind: "stopped" as const, id: `${run.runId}-${agent.id}`, speaker: speakers.get(agent.id)! };
+      return agent.error ? { ...entry, error: agent.error } : entry;
+    });
+}
+
+function reviewTypingEntries(run: ReviewFleetRun, speakers: Map<string, ChatSpeaker>): FleetChatEntry[] {
+  if (run.finished) return [];
+  return run.agents
+    .filter((agent) => agent.status === "running")
+    .map((agent): FleetChatEntry => ({ kind: "typing", id: `${run.runId}-${agent.id}`, speaker: speakers.get(agent.id)! }));
+}
+
 export function reviewFleetChat(run: ReviewFleetRun): FleetChatEntry[] {
-  const speakers = speakersOf(run.agents.map(({ id, label, model, modelLabel }) => ({ id, label, model: modelLabel ?? model })));
-  const speaker = (agent: ReviewFleetAgent) => speakers.get(agent.id)!;
+  const speakers = reviewSpeakers(run);
   const byEnd = (left: ReviewFleetAgent, right: ReviewFleetAgent) => (left.endedAt ?? 0) - (right.endedAt ?? 0);
   const answered = run.agents.filter((agent) => agent.status === "done").sort(byEnd);
   const isJudge = (agent: ReviewFleetAgent) => agentRole(agent.label).kind === "judge";
   const judgesLast = [...answered.filter((agent) => !isJudge(agent)), ...answered.filter(isJudge)];
-  const messages = judgesLast.map((agent): ChatMessage => {
-    const reading = readAgentResult(agent.result ?? "");
-    const id = `${run.runId}-${agent.id}`;
-    return agent.endedAt === undefined ? { kind: "message", id, speaker: speaker(agent), reading } : { kind: "message", id, speaker: speaker(agent), at: agent.endedAt, reading };
-  });
-  const stopped = run.agents
-    .filter((agent) => agent.status === "stopped")
-    .map((agent): FleetChatEntry => {
-      const entry = { kind: "stopped" as const, id: `${run.runId}-${agent.id}`, speaker: speaker(agent) };
-      return agent.error ? { ...entry, error: agent.error } : entry;
-    });
-  const typing = run.finished
-    ? []
-    : run.agents
-      .filter((agent) => agent.status === "running")
-      .map((agent): FleetChatEntry => ({ kind: "typing", id: `${run.runId}-${agent.id}`, speaker: speaker(agent) }));
-  return [...withReplies(messages), ...stopped, ...typing];
+  const messages = judgesLast.map((agent) => resultMessage(run.runId, agent, speakers.get(agent.id)!));
+  return [...withReplies(messages), ...stoppedEntries(run, speakers), ...reviewTypingEntries(run, speakers)];
 }
 
-function lastStepDoing(lastStep: AnalysisConversationItem | undefined): { tool: string; target?: string } | undefined {
-  if (lastStep?.kind !== "tool" || !lastStep.tool) return undefined;
-  return lastStep.target ? { tool: lastStep.tool, target: lastStep.target } : { tool: lastStep.tool };
-}
-
-export function analysisFleetChat(conversation: AnalysisConversation): FleetChatEntry[] {
-  const speakers = speakersOf(conversation.agents.map(({ id, label, modelLabel }) => ({ id, label, model: modelLabel })));
-  const spoken = conversation.items.flatMap((item) => {
+function spokenMessages(runId: string, speakers: Map<string, ChatSpeaker>, items: AnalysisConversationItem[]): ChatMessage[] {
+  const spoken = items.flatMap((item) => {
     const speaker = speakers.get(item.agentId);
     return speaker && item.kind === "text" && item.text ? [{ speaker, at: item.at, text: item.text }] : [];
   });
@@ -105,9 +109,32 @@ export function analysisFleetChat(conversation: AnalysisConversation): FleetChat
     const continuesInstant = previous?.speaker.agentId === speech.speaker.agentId && previous.at === speech.at;
     const sameInstant = continuesInstant ? sameInstantOrdinals.at(-1)! + 1 : 0;
     sameInstantOrdinals.push(sameInstant);
-    const id = `${conversation.runId}-${speech.speaker.agentId}-${speech.at}-${sameInstant}`;
+    const id = `${runId}-${speech.speaker.agentId}-${speech.at}-${sameInstant}`;
     messages.push({ kind: "message", id, speaker: speech.speaker, at: speech.at, reading: readAgentResult(speech.text) });
   }
+  return messages;
+}
+
+export function reviewConversationChat(run: ReviewFleetRun, conversation: AnalysisConversation): FleetChatEntry[] {
+  const speakers = reviewSpeakers(run);
+  const spoken = spokenMessages(run.runId, speakers, conversation.items);
+  const agentsWhoSpoke = new Set(spoken.map((message) => message.speaker.agentId));
+  const silentResults = run.agents
+    .filter((agent) => agent.status === "done" && !agentsWhoSpoke.has(agent.id))
+    .map((agent) => resultMessage(run.runId, agent, speakers.get(agent.id)!));
+  const byTime = (left: ChatMessage, right: ChatMessage) => (left.at ?? 0) - (right.at ?? 0);
+  const messages = [...spoken, ...silentResults].sort(byTime);
+  return [...withReplies(messages), ...stoppedEntries(run, speakers), ...reviewTypingEntries(run, speakers)];
+}
+
+function lastStepDoing(lastStep: AnalysisConversationItem | undefined): { tool: string; target?: string } | undefined {
+  if (lastStep?.kind !== "tool" || !lastStep.tool) return undefined;
+  return lastStep.target ? { tool: lastStep.tool, target: lastStep.target } : { tool: lastStep.tool };
+}
+
+export function analysisFleetChat(conversation: AnalysisConversation): FleetChatEntry[] {
+  const speakers = speakersOf(conversation.agents.map(({ id, label, modelLabel }) => ({ id, label, model: modelLabel })));
+  const messages = spokenMessages(conversation.runId, speakers, conversation.items);
   const typing = conversation.finished
     ? []
     : conversation.agents
