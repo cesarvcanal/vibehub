@@ -405,6 +405,13 @@ describe("prompt da análise de PR", () => {
     expect(publishStep).not.toContain("gh pr review 636 --comment");
   });
 
+  it("revisão recusada por um comentário fora do diff: o achado vai para o resumo e a revisão sai de novo", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    const publishStep = analysisPrompt(input).split("\n").find((line) => line.startsWith("9.")) ?? "";
+    expect(publishStep).toContain("422");
+    expect(publishStep).toContain("PENDING");
+  });
+
   it("push recusado porque a PR andou: rebase sobre o código novo, nunca o reset que apagaria as correções", async () => {
     const { analysisPrompt } = await import("./prompts.js");
     const deliverStep = analysisPrompt(input).split("\n").find((line) => line.startsWith("7."))!;

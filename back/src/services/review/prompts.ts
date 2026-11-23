@@ -710,6 +710,8 @@ export function analysisPrompt(a: AnalysisInput): string {
       '"side": "RIGHT", "body" }] } e rode ' +
       `gh api repos/{owner}/{repo}/pulls/${a.prNumber}/reviews --method POST --input review.json. Um comentário por ` +
       "achado com linha no diff (o problema, a prova e o commit que corrigiu); o achado sem linha vai no resumo, que diz " +
-      "o que achou, o que corrigiu (sha), as perguntas em aberto e as sugestões. O mesmo resumo, curto, no chat deste card.",
+      "o que achou, o que corrigiu (sha), as perguntas em aberto e as sugestões. Se o GitHub recusar a revisão (422, um " +
+      "comentário com linha fora do diff), leve esse achado para o resumo e publique de novo; um rascunho PENDING que " +
+      "sobrar se apaga antes (gh api .../reviews/<id> --method DELETE). O mesmo resumo, curto, no chat deste card.",
   ].join("\n");
 }
