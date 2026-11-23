@@ -453,6 +453,7 @@ export interface Card {
   status?: CardStatus | null;
   statusAt?: number;
   accountSlug?: string;
+  accountLoan?: AccountLoan;
   /** Family alias the card pins (`opus`); the CLI resolves it to the newest release. */
   model?: string;
   /** Reasoning level the card pins (`low`…`max`). Absent = the account's own. */
@@ -1137,6 +1138,7 @@ export interface Account {
   /** A long-lived token is in the vault. The value itself never comes back. */
   hasToken?: boolean;
   createdAt?: number;
+  backupAccountSlug?: string;
 }
 
 /** `GET /api/accounts` */
@@ -1144,6 +1146,19 @@ export interface AccountsResponse {
   accounts: Account[];
   /** Display name of the built-in default profile. */
   defaultLabel: string;
+  defaultBackup: string | null;
+}
+
+export interface AccountBackupResponse {
+  accountSlug: string;
+  backupAccountSlug: string | null;
+}
+
+export interface AccountLoan {
+  originalAccountSlug?: string;
+  originalAccount: string;
+  renewsAt?: number;
+  exhausted: { account: string; renewsAt?: number }[];
 }
 
 /** One metered plan window: how much is gone, and when it empties again. */

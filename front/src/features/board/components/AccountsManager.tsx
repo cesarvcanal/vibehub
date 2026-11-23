@@ -24,6 +24,7 @@ import {
 } from "@/features/board/api";
 import { AccountUsageBars, useMinuteTick } from "@/features/board/components/AccountUsageBars";
 import { AccountLoginDialog } from "@/features/board/components/AccountLoginDialog";
+import { AccountBackupSelect } from "@/features/accounts/components/AccountBackupSelect";
 import { t as translate, useT } from "@/i18n";
 
 /**
@@ -92,6 +93,10 @@ export function AccountsManager({ trigger = "icon" }: { trigger?: "icon" | "row"
   // The default profile's display name lives in settings; the input only syncs from the server
   // while it is not being typed in.
   const savedLabel = data?.defaultLabel ?? "";
+  const backupOptions = [
+    { slug: DEFAULT_ACCOUNT_SLUG, label: defaultAccountLabelOr(savedLabel) },
+    ...accounts.map((account) => ({ slug: account.slug, label: accountLabel(account) })),
+  ];
   const [labelDraft, setLabelDraft] = React.useState<string | null>(null);
   const labelValue = labelDraft ?? savedLabel;
 
@@ -330,6 +335,12 @@ export function AccountsManager({ trigger = "icon" }: { trigger?: "icon" | "row"
                     usage={usage?.bySlug?.[DEFAULT_ACCOUNT_SLUG]}
                     now={now}
                   />
+                  <AccountBackupSelect
+                    accountSlug={DEFAULT_ACCOUNT_SLUG}
+                    accountLabel={defaultAccountLabelOr(savedLabel)}
+                    value={data?.defaultBackup ?? null}
+                    options={backupOptions}
+                  />
                 </div>
                 {loginButton(
                   {
@@ -372,6 +383,12 @@ export function AccountsManager({ trigger = "icon" }: { trigger?: "icon" | "row"
                         {hasToken ? t("accounts.tokenStoredSuffix") : ""}
                       </div>
                       <AccountUsageBars slug={account.slug} usage={usage?.bySlug?.[account.slug]} now={now} />
+                      <AccountBackupSelect
+                        accountSlug={account.slug}
+                        accountLabel={label}
+                        value={account.backupAccountSlug ?? null}
+                        options={backupOptions}
+                      />
                     </div>
                     {loginButton({ slug: account.slug, name: label, hasToken }, needsLogin(account.slug))}
                     {tokenButton({ slug: account.slug, name: label, hasToken })}
