@@ -73,8 +73,8 @@ export async function checkStatusHookReach(): Promise<boolean> {
   // A runner that is down (or a host without docker) never ran curl: blaming the public URL would send
   // the operator to change a URL that is fine. Keep the last verdict; the runner's own health says why.
   if (verdict === "unknown") return false;
-  const wasAlarmed = statusHookReach.unreachableProbesInARow >= UNREACHABLE_PROBES_BEFORE_ALARM;
   if (verdict === "reachable") {
+    const wasAlarmed = statusHookReach.unreachableProbesInARow >= UNREACHABLE_PROBES_BEFORE_ALARM;
     statusHookReach.unreachableProbesInARow = 0;
     if (wasAlarmed) {
       logger.info({ audit: true, action: "runner.statusHook.reachable", url }, "the runner reaches the status URL again");
