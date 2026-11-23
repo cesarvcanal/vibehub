@@ -36,6 +36,7 @@ import {
   type ToolDetailData,
   type ToolStatus,
 } from "@/features/board/lib/sdkDetail";
+import { findDispatchingSkill } from "@/features/sdk/lib/dispatchingSkill";
 
 /**
  * SEEING WHAT CLAUDE IS DOING — the click the terminal has and the chat did not.
@@ -654,6 +655,8 @@ function AgentView({
   const lastText = timeline ? [...timeline.items].reverse().find((i) => i.kind === "text") : undefined;
   const report = !running ? (task?.summary || (lastText && lastText.kind === "text" ? lastText.text : "")) : "";
   const toolUses = task?.toolUses ?? timeline?.toolCount;
+  const agentType = timeline?.agentType || task?.subagentType;
+  const dispatchingSkill = findDispatchingSkill(rows, id);
   const scroller = React.useRef<HTMLDivElement | null>(null);
   const count = timeline?.items.length ?? 0;
   React.useEffect(() => {
@@ -668,7 +671,8 @@ function AgentView({
         <div className="flex min-w-0 items-center gap-2 pr-8">
           <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
           <DialogTitle className="min-w-0 truncate text-base font-semibold">{name}</DialogTitle>
-          {timeline?.agentType || task?.subagentType ? <span className="shrink-0 rounded border border-border/70 bg-muted/50 px-1.5 py-px font-mono text-[11px] text-muted-foreground">{timeline?.agentType || task?.subagentType}</span> : null}
+          {dispatchingSkill ? <span data-testid="sdk-agent-skill" className="shrink-0 rounded border border-primary/40 bg-primary/10 px-1.5 py-px font-mono text-[11px] text-foreground">{dispatchingSkill}</span> : null}
+          {agentType ? <span data-testid="sdk-agent-type" className="shrink-0 rounded border border-border/70 bg-muted/50 px-1.5 py-px font-mono text-[11px] text-muted-foreground">{agentType}</span> : null}
           <StatusPill status={status} />
         </div>
         <DialogDescription asChild>
