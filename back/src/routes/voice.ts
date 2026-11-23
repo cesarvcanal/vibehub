@@ -111,7 +111,7 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
         const reason = err instanceof Error ? err.message : String(err);
         const refusal = BOARD_REFUSALS.find(([pattern]) => pattern.test(reason));
         if (refusal) {
-          logger.warn({ tool: name, card: callCard.id, detail: reason }, "voice action refused by the board");
+          logger.info({ tool: name, card: callCard.id, detail: reason }, "voice action refused by the board");
           return await reply.code(refusal[1]).send({ error: reason });
         }
         logger.error({ tool: name, card: callCard.id, detail: reason }, "voice action failed");

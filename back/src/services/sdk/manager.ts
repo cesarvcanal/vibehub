@@ -148,6 +148,7 @@ export interface DriverSession {
    * works again (that one sends `login_restored`).
    */
   loginFailed: boolean;
+  accountRefusedTurn: boolean;
   fleetViewedAt?: number;
   usageLimit?: CardUsageLimit;
   /**
@@ -815,6 +816,7 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
     maybeScheduleIdleStop(session);
   }
   if (event.type === "login_failed") session.loginFailed = true;
+  if (event.type === "login_failed" || event.type === "usage_limited") session.accountRefusedTurn = true;
   // A turn that WORKED after the login died: the account is back. Only the screen's warning has to go.
   const loginRestored = event.type === "result" && session.loginFailed && !event.isError && event.subtype !== "aborted";
   if (loginRestored) session.loginFailed = false;
@@ -876,6 +878,8 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
     if (session.resumeWatch && !isTurnInFlight(session)) armResumeWatch(session);
     // Before the marker and the dot: the new scheduled attempt keeps both as a turn in flight.
     noteApiOutcome(session, event);
+    logFailedTurn(session, event);
+    session.accountRefusedTurn = false;
     // The last turn in flight CLOSED: the durable marker comes off — unless work goes on in the
     // background (a task, a scheduled wake-up), which a deploy would kill just the same: then it
     // stays, now saying what is running (see `syncInflightMarker`).
@@ -1202,6 +1206,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     tasks: new Map(),
     rateLimits: new Map(),
     loginFailed: false,
+    accountRefusedTurn: false,
     rewinds: [],
     idleTimer: null,
     stderrTail: "",
@@ -1278,7 +1283,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     logger.warn({ card: opts.label, detail: err.message }, "sdk driver process error");
     broadcast(session, { type: "error", message: `driver process error: ${err.message}` });
   });
-  child.on("close", (code) => {
+  child.on("close", (code, signal) => {
     // The driver died (idle stop, killCardSession, a crash): tell whoever is watching and close
     // their sockets — the front's reconnect loop spawns the successor on its next connect.
     const deliberate = session.closed; // stopCardDriver stamped it BEFORE killing
@@ -1344,6 +1349,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
           action: "sdk.driver.exit",
           card: opts.label,
           code,
+          detail: signal ? `driver killed by signal ${signal}` : `driver exited with code ${code ?? "?"}`,
           deliberate,
           turnsInFlight: session.activeTurns,
           stderr: session.stderrTail.trim().slice(-STDERR_TAIL_MAX) || undefined,
@@ -1895,6 +1901,13 @@ export function isTransientApiFailure(result: string | undefined): boolean {
   if (/^API Error:\s*5\d\d\b/i.test(text)) return true;
   return /can't reach the API|connection error|timed out|overloaded|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|socket hang up|fetch failed/i
     .test(text);
+}
+
+function logFailedTurn(session: DriverSession, event: ResultEvent): void {
+  const isCoveredElsewhere = isTransientApiFailure(event.result) || session.accountRefusedTurn;
+  if (!event.isError || isCoveredElsewhere) return;
+  const endReason = [event.subtype, event.result?.slice(0, 200)].filter((part) => part !== undefined && part !== "").join(": ");
+  logger.warn({ card: session.label, action: "sdk.turn.failed", detail: endReason || "no subtype or result text" }, "agent turn ended with an error");
 }
 
 /** Gives up the scheduled new attempt: the dot and the marker stop counting on it. */

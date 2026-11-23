@@ -26,14 +26,40 @@ async function fresh({ recordPlatformFailure }: { recordPlatformFailure?: (...ar
 afterEach(() => { vi.doUnmock("./platformFailures.js"); });
 
 describe("vigia das falhas da plataforma", () => {
-  it("um logger.error vira falha registrada; um warn não", async () => {
+  it("error e warn com o erro capturado viram falha; warn sem erro e info não", async () => {
     const { logger, watch, failures } = await fresh();
     const stopWatch = watch.startPlatformFailureWatch();
-    logger.warn({ action: "x" }, "melhor esforço que falhou");
+    logger.info({ detail: "x" }, "informação");
+    logger.warn({ action: "x" }, "aviso sem erro");
+    logger.warn({ detail: "ECONNREFUSED" }, "runner probe failed");
     logger.error({ err: new Error("driver gone") }, "request failed");
     await watch.waitForPlatformFailureWatch();
     stopWatch();
-    expect((await failures.listActivePlatformFailures()).map((failure) => failure.symptom)).toEqual(["request failed: driver gone"]);
+    expect((await failures.listActivePlatformFailures()).map((failure) => failure.symptom).sort())
+      .toEqual(["request failed: driver gone", "runner probe failed: ECONNREFUSED"]);
+  });
+
+  it("erro do card logo depois do stop do usuário não vira falha", async () => {
+    const { logger, watch, failures, turnLatency } = await fresh();
+    const stopWatch = watch.startPlatformFailureWatch();
+    turnLatency.noteUserStop("card-7", "erp-feat", Date.now());
+    logger.error({ card: "erp-feat", err: new Error("write after end") }, "sdk driver stdin died");
+    await watch.waitForPlatformFailureWatch();
+    stopWatch();
+    expect(await failures.listActivePlatformFailures()).toEqual([]);
+  });
+
+  it("o aviso de falha que quebra ao anunciar não vira outra falha nem entra em laço", async () => {
+    const { logger, watch, failures } = await fresh();
+    const stopWatch = watch.startPlatformFailureWatch();
+    const stopListening = failures.onPlatformFailureChange(() => { throw new Error("listener quebrado"); });
+    logger.error({ card: "card-1", err: new Error("boom") }, "request failed");
+    await failures.recordPlatformFailure({ source: "agent_report", component: "x", symptom: "y", evidence: "z", cardId: "card-1" });
+    await watch.waitForPlatformFailureWatch();
+    await watch.waitForPlatformFailureWatch();
+    stopListening();
+    stopWatch();
+    expect((await failures.listActivePlatformFailures()).map((failure) => failure.symptom).sort()).toEqual(["request failed: boom", "y"]);
   });
 
   it("três turnos lentos viram uma falha slow_turn do card", async () => {

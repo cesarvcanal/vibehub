@@ -308,6 +308,29 @@ describe("runGate under load", () => {
       isRun(script) ? { stdout: "slow\n__VIBEHUB_GATE__ timeout 585\n", stderr: "" } : { stdout: probe, stderr: "" });
     expect(await gate.runGate(c.id)).toMatchObject({ ran: true, passed: false, timedOut: true });
   });
+
+  it("o gate que passa do prazo vira aviso de erro no log, que o detector de falhas captura; o vermelho comum não", async () => {
+    const { gate, registry } = await load();
+    const { onLogLine } = await import("../../utils/logger.js");
+    const { isPlatformFailureLogLine } = await import("../platformFailures/backendError.js");
+    const loggedLines: import("../../utils/logger.js").LogLine[] = [];
+    onTestFinished(onLogLine("warn", (line) => loggedLines.push(line)));
+    const p = await registry.createProject({ name: "billing" });
+    const timedOutCard = await registry.createCard({ projectId: p.id, title: "lento" });
+    const redCard = await registry.createCard({ projectId: p.id, title: "vermelho" });
+    runScript.mockImplementation(async (script: string) => {
+      if (!isRun(script)) return { stdout: probe, stderr: "" };
+      return script.includes(timedOutCard.id)
+        ? { stdout: "slow\n__VIBEHUB_GATE__ timeout 585\n", stderr: "" }
+        : { stdout: "1 failing\n__VIBEHUB_GATE__ fail\n", stderr: "" };
+    });
+    await gate.runGate(timedOutCard.id);
+    await gate.runGate(redCard.id);
+    const capturedFailures = loggedLines.filter((line) => isPlatformFailureLogLine(line, undefined, Date.now()));
+    expect(capturedFailures).toEqual([expect.objectContaining({
+      message: "gate timed out — killed in the runner", fields: expect.objectContaining({ card: timedOutCard.worktreeSlug }),
+    })]);
+  });
 });
 
 describe("output tail", () => {

@@ -1,4 +1,5 @@
 import { logger } from "../../utils/logger.js";
+import { PLATFORM_FAILURE_LOG_MARK } from "./backendError.js";
 import { listActivePlatformFailuresOfCard, onPlatformFailureChange, type PlatformFailureChange } from "./platformFailures.js";
 import type { PlatformFailure } from "./types.js";
 
@@ -52,7 +53,7 @@ export function streamCardFailureNotices(cardId: string, viewerIsOwner: boolean,
       for (const failure of failures) shownFailureIds.add(failure.id);
       send({ type: "platform_failures", notices: failures.map((failure) => buildCardFailureNotice(failure, cardId, viewerIsOwner)) });
     },
-    (err: unknown) => logger.warn({ card: cardId, detail: (err as Error).message }, "could not read the platform failures of a card"),
+    (err: unknown) => logger.warn({ ...PLATFORM_FAILURE_LOG_MARK, card: cardId, detail: (err as Error).message }, "could not read the platform failures of a card"),
   );
   return stopListening;
 }

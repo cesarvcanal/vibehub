@@ -16,6 +16,8 @@ import {
   agentStatus,
   bashOutput,
   changedFiles,
+  countAgentActions,
+  describeRunningAgentStep,
   detailHasResult,
   formatDuration,
   formatTokens,
@@ -232,11 +234,10 @@ function SdkFleetView({ rows, tasks, children }: FleetProps) {
     >
       {agents.map((row, i) => {
         const task = tasks[row.id];
-        const kids = children.get(row.id) ?? [];
-        const lastKid = [...kids].reverse().find((k) => k.kind === "tool") as ToolRow | undefined;
+        const childRows = children.get(row.id) ?? [];
         const status = statuses[i] as ToolStatus;
         const doing = task?.status === "running" || !task
-          ? task?.summary || (task?.lastTool ? task.lastTool : lastKid ? toolHeadline(lastKid.name, lastKid.input).title : "")
+          ? describeRunningAgentStep(task, childRows)
           : t(task.status === "completed" ? "sdk.fleet.finished" : "sdk.fleet.stopped");
         return (
           <FleetRow
@@ -245,7 +246,7 @@ function SdkFleetView({ rows, tasks, children }: FleetProps) {
             status={status}
             name={agentName(row.input)}
             now={doing}
-            actions={task?.toolUses ?? row.result?.agent?.toolUses ?? kids.filter((k) => k.kind === "tool").length}
+            actions={countAgentActions(row, task, childRows)}
             durationMs={agentElapsedMs(status, task, row.result?.agent, now)}
             onClick={() => open({ kind: "agent", id: row.id })}
           />
@@ -530,6 +531,7 @@ function ActionBody({ name, input, detail, row, onOpenAgent }: { name: string; i
   if (name === "Bash" || name === "BashOutput") {
     const command = field(input, "command");
     const out = detail ? bashOutput(detail) : null;
+    const commandFailed = detail?.isError === true;
     return (
       <>
         {command ? (
@@ -542,10 +544,14 @@ function ActionBody({ name, input, detail, row, onOpenAgent }: { name: string; i
             <Section label={t("sdk.detail.output")}>
               {out.stdout.trim() ? <CodeBlock text={out.stdout} /> : <div className="text-[13px] italic text-muted-foreground">{t("sdk.detail.noOutput")}</div>}
             </Section>
-            {out.stderr.trim() ? <Section label={<span className="text-red-500">{t("sdk.detail.stderr")}</span>}><CodeBlock text={out.stderr} tone="error" /></Section> : null}
+            {out.stderr.trim() ? (
+              <Section label={commandFailed ? <span className="text-red-500">{t("sdk.detail.stderr")}</span> : t("sdk.detail.stderrMessages")}>
+                <CodeBlock text={out.stderr} tone={commandFailed ? "error" : undefined} />
+              </Section>
+            ) : null}
           </>
         ) : null}
-        {detail?.isError && !out?.stderr.trim() && !out?.stdout.trim() ? <ErrorBox text={detail.text ?? ""} /> : null}
+        {commandFailed && !out?.stderr.trim() && !out?.stdout.trim() ? <ErrorBox text={detail.text ?? ""} /> : null}
       </>
     );
   }

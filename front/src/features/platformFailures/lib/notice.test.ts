@@ -20,7 +20,7 @@ describe("aviso de falha vindo do websocket", () => {
     expect(parsePlatformFailureNotice(frame)).toBeNull();
   });
 
-  it.each(["backend_error", "slow_turn", "stalled_turn", "agent_report"])("aceita a origem %s que o back grava", (source) => {
+  it.each(["backend_error", "slow_turn", "stalled_turn", "agent_report", "screen_error"])("aceita a origem %s que o back grava", (source) => {
     expect(parsePlatformFailureNotice({ ...VALID, source })).toEqual({ ...VALID, source });
   });
 
