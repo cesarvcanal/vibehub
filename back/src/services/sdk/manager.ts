@@ -649,6 +649,13 @@ function emitSystemNote(session: DriverSession, text: string): void {
   void appendHistory(session.cardId, { type: "system_note", text, at });
 }
 
+export async function emitCardSystemNote(cardId: string, text: string): Promise<void> {
+  const at = Date.now();
+  const session = sessions.get(cardId);
+  if (session && !session.closed) broadcast(session, { type: "system_note", text, at });
+  await appendHistory(cardId, { type: "system_note", text, at });
+}
+
 /** Every clock of the session, in a single exit (close, stop, shutdown): none survives the driver. */
 function clearSessionTimers(session: DriverSession): void {
   clearIdleTimer(session);
@@ -1877,7 +1884,7 @@ export type AccountTurnOutcome =
   | { kind: "answered" }
   | { kind: "refused"; reason: "usage_limit" | "login"; renewsAt?: number };
 
-type AccountOutcomeListener = (cardId: string, outcome: AccountTurnOutcome) => void;
+type AccountOutcomeListener = (cardId: string, outcome: AccountTurnOutcome, driver: DriverSession) => void;
 const accountOutcomeListeners = new Set<AccountOutcomeListener>();
 
 export function onAccountTurnOutcome(listener: AccountOutcomeListener): () => void {
@@ -1898,7 +1905,7 @@ function accountTurnOutcome(session: DriverSession, event: ResultEvent): Account
 function noteAccountOutcome(session: DriverSession, event: ResultEvent): void {
   const outcome = accountTurnOutcome(session, event);
   if (!outcome) return;
-  for (const listener of accountOutcomeListeners) listener(session.cardId, outcome);
+  for (const listener of accountOutcomeListeners) listener(session.cardId, outcome, session);
 }
 
 /**

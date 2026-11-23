@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mockHostExecutor } from "../testkit/fakeHost.js";
+import { sessionCookie } from "../testkit/sessionCookie.js";
 
 vi.setConfig({ testTimeout: 30_000 });
 
@@ -37,10 +38,6 @@ async function boot() {
 
 type Booted = Awaited<ReturnType<typeof boot>>;
 
-function sessionCookie(res: { cookies: { name: string; value: string }[] }): string {
-  return `vibehub_session=${res.cookies.find((cookie) => cookie.name === "vibehub_session")?.value ?? ""}`;
-}
-
 async function createWorld({ app, registry }: Booted) {
   const owner = sessionCookie(await app.inject({ method: "POST", url: "/api/setup/owner", payload: { username: "owner", password: "supersecret" } }));
   const memberId = (await app.inject({
@@ -52,7 +49,7 @@ async function createWorld({ app, registry }: Booted) {
   await registry.setAccountBackup("albert", "cesar");
   const project = await registry.createProject({ name: "vibehub" });
   const card = await registry.createCard({ projectId: project.id, title: "Checkout" }, { accountSlug: "albert" });
-  await registry.switchCardToBackupAccount(card.id, { account: "albert", renewsAt: 1_800_000_000_000 });
+  await registry.switchCardToBackupAccount(card.id, { reason: "usage_limit", renewsAt: Date.now() + 60_000 });
   const shareCard = async (level: "work" | "view") => app.inject({
     method: "POST", url: `/api/cards/${card.id}/shares`, headers: { cookie: owner }, payload: { userId: memberId, level },
   });

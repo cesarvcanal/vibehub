@@ -2680,6 +2680,25 @@ describe("falha de entrega e fim de turno sem ferramenta", () => {
       }
     });
 
+    it("card trocando para a conta reserva: o turno recusado não vira espera, lembrete nem impasse", async () => {
+      const o = await load();
+      const { review, stop } = await limitedReviewer(o, { resetsAt: Date.now() + 60_000 });
+      const agentState = await import("../board/agentState.js");
+      const stopSwitchProbe = agentState.onCardAccountSwitchProbe((cardId) => cardId === review.reviewerCardId);
+      try {
+        await endTurn(o, review.reviewerCardId);
+        await new Promise((resolve) => setTimeout(resolve, 30));
+
+        expect(send).not.toHaveBeenCalled();
+        const judged = await o.store.getReview(review.id);
+        expect(judged).toMatchObject({ phase: "reviewing", nudges: 0 });
+        expect(judged?.usageLimitWait).toBeUndefined();
+      } finally {
+        stopSwitchProbe();
+        stop();
+      }
+    });
+
     it("sem horário de volta: impasse com o motivo verdadeiro, sem lembrete", async () => {
       const o = await load();
       const { review, stop } = await limitedReviewer(o, {});

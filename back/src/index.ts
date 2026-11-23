@@ -47,7 +47,7 @@ import { startRunnerReaper } from "./services/reaper/reaper.js";
 import { startTmpSweep } from "./services/reaper/tmpSweep.js";
 import { pruneStaleInflightOwners, startInflightOwnerHeartbeat } from "./services/sdk/inflight.js";
 import { handOffSdkOnShutdown, resumeAfterDriverCrash, resumeInterruptedTurns } from "./services/sdk/resume.js";
-import { watchAccountRefusals } from "./services/sdk/accountFallback.js";
+import { watchAccountRefusals } from "./services/sdk/backupAccountSwitch.js";
 import { backfillPendingQuestions } from "./services/sdk/pendingQuestion.js";
 import { onDriverCrashWithWork } from "./services/sdk/manager.js";
 import { restartSessionsIfSpecChanged } from "./services/board/sessionSpec.js";

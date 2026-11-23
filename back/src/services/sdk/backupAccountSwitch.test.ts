@@ -1,8 +1,8 @@
 import { describe, it, expect, onTestFinished, vi } from "vitest";
-import { EventEmitter } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fakeDriverChild, type FakeDriverChild } from "../../testkit/fakeDriverChild.js";
 
 vi.setConfig({ testTimeout: 30_000 });
 
@@ -10,29 +10,6 @@ vi.mock("../events/cardEvents.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../events/cardEvents.js")>();
   return { ...actual, observeDriverEvent: () => Promise.resolve() };
 });
-
-interface FakeChild extends EventEmitter {
-  stdout: EventEmitter;
-  stderr: EventEmitter;
-  stdin: EventEmitter & { write: (s: string) => boolean; end: () => void; written: string[]; writable: boolean };
-  exitCode: number | null;
-  kill: () => void;
-}
-
-function fakeChild(): FakeChild {
-  const child = new EventEmitter() as FakeChild;
-  child.stdout = new EventEmitter();
-  child.stderr = new EventEmitter();
-  const stdin = new EventEmitter() as FakeChild["stdin"];
-  stdin.written = [];
-  stdin.writable = true;
-  stdin.write = (s: string) => { stdin.written.push(s); return true; };
-  stdin.end = () => { stdin.writable = false; };
-  child.stdin = stdin;
-  child.exitCode = null;
-  child.kill = () => undefined;
-  return child;
-}
 
 const RESETS_AT_SECONDS = 1_900_000_000;
 const ORDER = { kind: "owner", name: "albert" } as const;
@@ -43,10 +20,11 @@ interface BootOptions {
   cardAccount: string;
   beforeContinuation?: (cardId: string) => void;
   startDriverFails?: boolean;
+  restartGate?: Promise<void>;
 }
 
-async function boot({ backups, cardAccount, beforeContinuation, startDriverFails }: BootOptions) {
-  const dir = await mkdtemp(join(tmpdir(), "vibehub-account-fallback-"));
+async function boot({ backups, cardAccount, beforeContinuation, startDriverFails, restartGate }: BootOptions) {
+  const dir = await mkdtemp(join(tmpdir(), "vibehub-account-backup-switch-"));
   vi.resetModules();
   const env = await import("../../config/env.js");
   env.config.dataDir = dir;
@@ -54,20 +32,21 @@ async function boot({ backups, cardAccount, beforeContinuation, startDriverFails
   const registry = await import("../board/registry.js");
   const agentState = await import("../board/agentState.js");
   const history = await import("./history.js");
-  const fallback = await import("./accountFallback.js");
-  const spawned: FakeChild[] = [];
+  const backupSwitch = await import("./backupAccountSwitch.js");
+  const spawned: FakeDriverChild[] = [];
   manager.setDriverSpawnerForTesting(() => {
-    const child = fakeChild();
+    const child = fakeDriverChild();
     spawned.push(child);
     return child as never;
   });
   for (const name of ["albert", "cesar", "mussa"]) await registry.createAccount({ name });
-  for (const [account, backup] of backups) await registry.setAccountBackup(account, backup);
+  for (const [accountSlug, backupAccountSlug] of backups) await registry.setAccountBackup(accountSlug, backupAccountSlug);
   const project = await registry.createProject({ name: "Shop" });
   const card = await registry.createCard({ projectId: project.id, title: "Checkout" }, { accountSlug: cardAccount });
   const restarted: string[] = [];
-  const stopWatching = fallback.watchAccountRefusals({
+  const stopWatching = backupSwitch.watchAccountRefusals({
     restartCard: async (cardId) => {
+      await restartGate;
       restarted.push(cardId);
       manager.stopCardDriver(cardId);
     },
@@ -101,7 +80,7 @@ async function boot({ backups, cardAccount, beforeContinuation, startDriverFails
   const notes = async () => (await history.readHistory(card.id))
     .filter((event) => event.type === "system_note")
     .map((event) => (event as { text: string }).text);
-  return { manager, registry, agentState, fallback, card, session, spawned, restarted, emit, userWrites, refuseForUsage, refuseLogin, notes };
+  return { manager, registry, agentState, backupSwitch, card, session, spawned, restarted, emit, userWrites, refuseForUsage, refuseLogin, notes };
 }
 
 describe("troca automática para a conta reserva no chat nativo", () => {
@@ -111,7 +90,7 @@ describe("troca automática para a conta reserva no chat nativo", () => {
 
     world.refuseForUsage(0);
 
-    await vi.waitFor(() => expect(world.userWrites(1)).toEqual([world.fallback.ACCOUNT_FALLBACK_CONTINUE_TEXT]));
+    await vi.waitFor(() => expect(world.userWrites(1)).toEqual([world.backupSwitch.BACKUP_SWITCH_CONTINUE_TEXT]));
     expect((await world.registry.getCard(world.card.id))?.accountSlug).toBe("cesar");
     expect(world.restarted).toEqual([world.card.id]);
     expect((await world.notes()).some((note) => note.includes("albert") && note.includes("Seguindo na conta cesar"))).toBe(true);
@@ -125,6 +104,19 @@ describe("troca automática para a conta reserva no chat nativo", () => {
 
     await vi.waitFor(() => expect(world.spawned).toHaveLength(2));
     expect(world.agentState.cardUsageLimit(world.card.id)).toBeNull();
+  });
+
+  it("enquanto a conta troca, a revisão de PR sabe que o card está trocando; depois, não", async () => {
+    const restart = Promise.withResolvers<void>();
+    const world = await boot({ backups: [["albert", "cesar"]], cardAccount: "albert", restartGate: restart.promise });
+    world.manager.sendAgentTurn(world.session, "abre o PR", ORDER);
+
+    world.refuseForUsage(0);
+
+    expect(world.agentState.cardSwitchingAccount(world.card.id)).toBe(true);
+    restart.resolve();
+    await vi.waitFor(() => expect(world.userWrites(1)).toHaveLength(1));
+    await vi.waitFor(() => expect(world.agentState.cardSwitchingAccount(world.card.id)).toBe(false));
   });
 
   it("mensagem da pessoa durante a troca: a continuação não entra por cima", async () => {
@@ -154,8 +146,8 @@ describe("troca automática para a conta reserva no chat nativo", () => {
     world.refuseLogin(1);
 
     await vi.waitFor(async () => expect((await world.registry.getCard(world.card.id))?.accountSlug).toBe("mussa"));
-    await vi.waitFor(() => expect(world.userWrites(2)).toEqual([world.fallback.ACCOUNT_FALLBACK_CONTINUE_TEXT]));
-    expect((await world.registry.getCard(world.card.id))?.accountLoan?.originalAccount).toBe("albert");
+    await vi.waitFor(() => expect(world.userWrites(2)).toEqual([world.backupSwitch.BACKUP_SWITCH_CONTINUE_TEXT]));
+    expect((await world.registry.getCard(world.card.id))?.accountLoan?.originalEffectiveAccount).toBe("albert");
   });
 
   it("sem reserva configurada o card fica como hoje, com o aviso de limite", async () => {
@@ -181,7 +173,7 @@ describe("troca automática para a conta reserva no chat nativo", () => {
     expect(world.spawned).toHaveLength(1);
   });
 
-  it("todas as contas da cadeia sem limite: o chat avisa e o card não troca mais", async () => {
+  it("todas as contas da cadeia sem limite: o chat avisa quais e o card não troca mais", async () => {
     const world = await boot({ backups: [["albert", "cesar"]], cardAccount: "albert" });
     world.manager.sendAgentTurn(world.session, "abre o PR", ORDER);
     world.refuseForUsage(0);
@@ -189,9 +181,41 @@ describe("troca automática para a conta reserva no chat nativo", () => {
 
     world.refuseForUsage(1);
 
-    await vi.waitFor(async () => expect((await world.notes()).some((note) => note.includes(world.fallback.ACCOUNT_CHAIN_EXHAUSTED_NOTE))).toBe(true));
+    await vi.waitFor(async () => expect((await world.notes()).some((note) => note.startsWith(world.backupSwitch.BACKUP_CHAIN_EXHAUSTED_NOTE) && note.includes("albert, cesar"))).toBe(true));
     expect(world.spawned).toHaveLength(2);
     expect((await world.registry.getCard(world.card.id))?.accountSlug).toBe("cesar");
+  });
+
+  it("cadeia esgotada: a aba aberta recebe o aviso na hora", async () => {
+    const world = await boot({ backups: [["albert", "cesar"]], cardAccount: "albert" });
+    world.manager.sendAgentTurn(world.session, "abre o PR", ORDER);
+    world.refuseForUsage(0);
+    await vi.waitFor(() => expect(world.userWrites(1)).toHaveLength(1));
+    const frames: string[] = [];
+    world.manager.liveDriverSession(world.card.id)!.sockets.add({ send: (frame: string) => frames.push(frame) } as never);
+
+    world.refuseForUsage(1);
+
+    await vi.waitFor(() => expect(frames.some((frame) => frame.includes(world.backupSwitch.BACKUP_CHAIN_EXHAUSTED_NOTE))).toBe(true));
+  });
+
+  it("segunda recusa da sessão antiga depois da troca não pula a reserva", async () => {
+    const restart = Promise.withResolvers<void>();
+    const world = await boot({ backups: [["albert", "cesar"], ["cesar", "mussa"]], cardAccount: "albert", restartGate: restart.promise });
+    world.manager.sendAgentTurn(world.session, "abre o PR", ORDER);
+    world.refuseForUsage(0);
+    await vi.waitFor(async () => expect((await world.registry.getCard(world.card.id))?.accountSlug).toBe("cesar"));
+
+    world.manager.sendAgentTurn(world.session, "e roda os testes", ORDER);
+    world.refuseForUsage(0);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    restart.resolve();
+
+    await vi.waitFor(() => expect(world.userWrites(1)).toHaveLength(1));
+    const card = await world.registry.getCard(world.card.id);
+    expect(card?.accountSlug).toBe("cesar");
+    expect(card?.accountLoan?.exhausted.map((entry) => entry.accountSlug)).toEqual(["albert"]);
+    expect(world.spawned).toHaveLength(2);
   });
 
   it("o chat não abre na reserva: o card avisa que a troca falhou e o que fazer", async () => {
@@ -200,8 +224,19 @@ describe("troca automática para a conta reserva no chat nativo", () => {
 
     world.refuseForUsage(0);
 
-    await vi.waitFor(async () => expect((await world.notes()).some((note) => note.includes(world.fallback.ACCOUNT_FALLBACK_FAILED_NOTE))).toBe(true));
+    await vi.waitFor(async () => expect((await world.notes()).some((note) => note.includes(world.backupSwitch.BACKUP_SWITCH_FAILED_NOTE))).toBe(true));
     expect((await world.registry.getCard(world.card.id))?.accountSlug).toBe("cesar");
+  });
+
+  it("a troca que quebra no meio avisa no chat e libera o card para a revisão julgar", async () => {
+    const world = await boot({ backups: [["albert", "cesar"]], cardAccount: "albert" });
+    world.manager.sendAgentTurn(world.session, "abre o PR", ORDER);
+    await world.registry.removeCard(world.card.id);
+
+    world.refuseForUsage(0);
+
+    await vi.waitFor(async () => expect((await world.notes()).some((note) => note.includes(world.backupSwitch.BACKUP_SWITCH_FAILED_NOTE))).toBe(true));
+    await vi.waitFor(() => expect(world.agentState.cardSwitchingAccount(world.card.id)).toBe(false));
   });
 
   it("a primeira resposta boa na reserva zera a cadeia e mantém o empréstimo", async () => {
@@ -213,6 +248,6 @@ describe("troca automática para a conta reserva no chat nativo", () => {
     world.emit(1, { type: "result", subtype: "success", isError: false });
 
     await vi.waitFor(async () => expect((await world.registry.getCard(world.card.id))?.accountLoan?.exhausted).toEqual([]));
-    expect((await world.registry.getCard(world.card.id))?.accountLoan?.originalAccount).toBe("albert");
+    expect((await world.registry.getCard(world.card.id))?.accountLoan?.originalEffectiveAccount).toBe("albert");
   });
 });
