@@ -3527,6 +3527,19 @@ describe("latência até a primeira resposta — fiação para as falhas da plat
     expect(getLastUserStop()).toMatchObject({ cardId: CARD, cardWorktreeSlug: "t" });
   });
 
+  it("o \"enviar agora\" com turno em andamento conta como stop do usuário: o erro que ele provoca não vira falha da plataforma", () => {
+    const session = ensure();
+    dispatchClientFrame(session, `{"type":"user","text":"oi"}`);
+    dispatchClientFrame(session, `{"type":"user","text":"para e faz assim","now":true}`);
+    expect(getLastUserStop()).toMatchObject({ cardId: CARD, cardWorktreeSlug: "t" });
+  });
+
+  it("o \"enviar agora\" sem turno em andamento não marca stop", () => {
+    const session = ensure();
+    dispatchClientFrame(session, `{"type":"user","text":"oi","now":true}`);
+    expect(getLastUserStop()).toBeUndefined();
+  });
+
   it("driver que morre antes de responder não deixa a espera aberta para o turno do sucessor", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_700_000_000_000);
