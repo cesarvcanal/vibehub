@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { listTerminals, sendToTerminal, readTerminal, reportState, agentOriginFor, SEND_READY_WAIT_MS } from "../services/maestro/maestro.js";
-import { DECLARED_STATES, getCard, getProject, listProjects, type Project } from "../services/board/registry.js";
+import { DECLARED_STATES, getCard, getCardWithProject, getProject, listProjects, type Project } from "../services/board/registry.js";
 import { createCardAs, repoPushRefusals } from "../services/maestro/createCard.js";
 import { findUser, type PublicUser } from "../auth/users.js";
 import { recordMessage, MESSAGE_TYPES, SEVERITIES, type MessageType, type Severity } from "../services/events/cardEvents.js";
@@ -543,7 +543,8 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
     },
     async (a) => {
       try {
-        return ok(await runGate(a.card));
+        const { card, project } = await getCardWithProject(a.card);
+        return ok(await runGate(card.id, { baseBranch: card.base || project.baseBranch }));
       } catch (e) {
         return fail(e);
       }
