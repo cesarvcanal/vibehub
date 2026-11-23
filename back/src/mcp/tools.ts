@@ -577,7 +577,8 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "'review_active' says who merges; 'head_moved' = the reviewer has new commits to see; 'conflict' = bring the " +
         "base in (git merge origin/<base>), test and push. The merger's order before the review is ready, with " +
         "`concludeWhenMerged`, is recorded on it, as in vibehub_review_start: relay what the answer says was recorded; " +
-        "when the conclusion was NOT recorded, conclude by hand after the merge. " +
+        "when the conclusion was NOT recorded, conclude by hand after the merge. A merge made by the card itself " +
+        "(`from` = its own id) moves it to done on its own; the answer says so. " +
         PR_DOCS_RULE,
       inputSchema: {
         card: z.string().describe("id of the card to deliver (from vibehub_list_terminals)"),
