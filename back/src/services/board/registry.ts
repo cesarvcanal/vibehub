@@ -2113,7 +2113,7 @@ function findCardOrThrow(doc: BoardDoc, cardId: string): Card {
 
 function effectiveAccountOf(doc: BoardDoc, card: Card): string {
   const project = doc.projects.find((candidate) => candidate.id === card.projectId);
-  return card.accountSlug ?? project?.defaultAccountSlug ?? DEFAULT_ACCOUNT_OWNER;
+  return effectiveAccountSlug(card, project ?? {}) ?? DEFAULT_ACCOUNT_OWNER;
 }
 
 function cardSlugForAccount(doc: BoardDoc, card: Card, account: string): string | undefined | null {

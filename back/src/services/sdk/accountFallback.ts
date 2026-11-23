@@ -34,13 +34,14 @@ function formatRenewal(renewsAt: number): string {
   return new Date(renewsAt).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" });
 }
 
+function refusalReason(from: string, refusal: Refusal): string {
+  if (refusal.reason === "login") return `A conta ${from} não conseguiu entrar no Claude.`;
+  if (refusal.renewsAt === undefined) return `A conta ${from} ficou sem limite de uso.`;
+  return `A conta ${from} ficou sem limite até ${formatRenewal(refusal.renewsAt)}.`;
+}
+
 function switchNote(from: string, to: string, refusal: Refusal): string {
-  const reason = refusal.reason === "login"
-    ? `A conta ${from} não conseguiu entrar no Claude.`
-    : refusal.renewsAt === undefined
-      ? `A conta ${from} ficou sem limite de uso.`
-      : `A conta ${from} ficou sem limite até ${formatRenewal(refusal.renewsAt)}.`;
-  return `${reason} Seguindo na conta ${to}.`;
+  return `${refusalReason(from, refusal)} Seguindo na conta ${to}.`;
 }
 
 function appendNote(cardId: string, text: string): Promise<void> {

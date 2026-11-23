@@ -1,6 +1,6 @@
 import { ArrowLeftRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useT } from "@/i18n";
+import { useT, type Translate } from "@/i18n";
 import { useNow } from "@/lib/useNow";
 import type { AccountLoan } from "@/api/types";
 import { formatResetAt } from "@/features/board/lib/planUsage";
@@ -13,16 +13,19 @@ interface AccountLoanNoticeProps {
   onReturn: () => void;
 }
 
+function loanMessage(t: Translate, loan: AccountLoan, currentAccount: string, now: number): string {
+  const original = loan.originalAccount;
+  if (loan.renewsAt === undefined) return t("accounts.loan.unknownRenewal", { current: currentAccount, original });
+  if (isAccountLoanRenewed(loan, now)) return t("accounts.loan.renewed", { original });
+  return t("accounts.loan.borrowed", { current: currentAccount, original, time: formatResetAt(loan.renewsAt, now) });
+}
+
 export function AccountLoanNotice({ loan, currentAccount, returning, onReturn }: AccountLoanNoticeProps) {
   const t = useT();
   const now = useNow(!isAccountLoanRenewed(loan, Date.now()));
   const original = loan.originalAccount;
   const renewed = isAccountLoanRenewed(loan, now);
-  const message = loan.renewsAt === undefined
-    ? t("accounts.loan.unknownRenewal", { current: currentAccount, original })
-    : renewed
-      ? t("accounts.loan.renewed", { original })
-      : t("accounts.loan.borrowed", { current: currentAccount, original, time: formatResetAt(loan.renewsAt, now) });
+  const message = loanMessage(t, loan, currentAccount, now);
   const tone = renewed && loan.renewsAt !== undefined
     ? { box: "border-emerald-500/50 bg-emerald-500/10", icon: "text-emerald-500" }
     : { box: "border-sky-500/40 bg-sky-500/10", icon: "text-sky-500" };
