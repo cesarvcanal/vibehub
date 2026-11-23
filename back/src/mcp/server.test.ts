@@ -12,17 +12,27 @@ import { EXTERNAL_INSTRUCTIONS, INSTRUCTIONS, createMcpServer } from "./server.j
  * authorization gate, don't type into a human-active card, report your state).
  */
 
-// external: Claude Code 2.1.330 corta em 4096 caracteres as instructions de um servidor MCP e a descrição de cada ferramenta (CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH, sufixo "… [truncated]"), lido no binário em 23/11/2026
+// external: Claude Code 2.1.330 cuts an MCP server's instructions and each tool description at 4096 characters (CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH, "… [truncated]"), read in the binary on 2026-11-23
 const MCP_DESCRIPTION_DELIVERED_CHARS = 4096;
 const DELIVER_DESCRIPTION_WITH_ROOM_CHARS = 3200;
 
 const personaFile = join(dirname(fileURLToPath(import.meta.url)), "..", "services", "brain", "personas", "maestro.md");
 
-const cardTools = (createMcpServer("test") as unknown as {
-  _registeredTools?: Record<string, { description?: string }>;
-})._registeredTools ?? {};
+function readCardTools(): Record<string, { description?: string }> {
+  const tools = (createMcpServer("test") as unknown as {
+    _registeredTools?: Record<string, { description?: string }>;
+  })._registeredTools;
+  if (!tools || Object.keys(tools).length === 0) throw new Error("the MCP server exposes no registered tools: these tests would check nothing");
+  return tools;
+}
+
+const cardTools = readCardTools();
 const cardToolDescriptions = Object.entries(cardTools).map(([name, tool]) => [name, tool.description ?? ""] as const);
-const cardToolDescription = (name: string): string => cardTools[name]?.description ?? "";
+function cardToolDescription(name: string): string {
+  const description = cardTools[name]?.description;
+  if (description === undefined) throw new Error(`tool not registered on the card's MCP server: ${name}`);
+  return description;
+}
 
 describe("o que o Claude Code entrega ao card sem cortar", () => {
   it("a persona do maestro cabe inteira no limite das instructions", () => {
@@ -318,6 +328,37 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(INSTRUCTIONS).toContain("vibehub_credential_fill");
     expect(INSTRUCTIONS.toLowerCase()).toContain("cofre");
     expect(cardToolDescription("vibehub_credential_list")).toContain("NEVER ask for a password in the chat");
+  });
+});
+
+describe("regras da persona antiga que continuam chegando ao card", () => {
+  it("a vibehub_attach_prs deixa o card revisar à mão quando o usuário pede que ele mesmo revise", () => {
+    expect(cardToolDescription("vibehub_attach_prs")).toContain("revisa você mesmo");
+  });
+
+  it("o corpo do PR nunca inventa causa ou teste, e a Conformidade cita a regra e o file:line", () => {
+    const server = createMcpServer("test") as unknown as {
+      _registeredTools?: Record<string, { inputSchema?: { shape?: Record<string, { description?: string }> } }>;
+    };
+    const bodyDescription = server._registeredTools?.["vibehub_deliver"]?.inputSchema?.shape?.body?.description ?? "";
+    expect(bodyDescription).toContain("never invent a cause, a test or a reason");
+    expect(bodyDescription).toContain("`file:line`");
+    expect(bodyDescription).toContain("re-read it as a stranger");
+  });
+
+  it("pergunta de conversa não é decisão, e a autonomia corretiva não muda decisão intencional", () => {
+    expect(INSTRUCTIONS).toContain('"faz sentido?" is no decision: proceed');
+    expect(INSTRUCTIONS).toContain("never change an intentional decision");
+    expect(INSTRUCTIONS).toContain("a fix that needs a call on intent is a question");
+  });
+
+  it("o brainstorming à mão diz qual é o laço", () => {
+    expect(INSTRUCTIONS).toContain("every open question at once, 2-3 approaches with a recommendation");
+  });
+
+  it("anexo se tenta abrir antes de dizer que não dá", () => {
+    expect(INSTRUCTIONS).toContain("images and PDFs with Read");
+    expect(cardToolDescription("vibehub_read_document")).toContain("Never answer that you cannot open a file without trying");
   });
 });
 

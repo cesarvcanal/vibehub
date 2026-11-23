@@ -24,7 +24,8 @@ export function registerAttachmentTools(server: McpServer): void {
         "user attaches under /work/.uploads/ that is not an image, instead of improvising a parser. A " +
         "scanned PDF has no text layer: open it with your Read tool to see the pages. `limit` caps the " +
         `characters returned (default ${DEFAULT_TEXT_LIMIT}); when the answer says it was truncated, ` +
-        `raise it or process the file with python. Formats: ${DOCUMENT_FORMATS.join(", ")}.`,
+        `raise it or process the file with python. Formats: ${DOCUMENT_FORMATS.join(", ")}. ` +
+        "Never answer that you cannot open a file without trying this, Read or vibehub_transcribe_audio first.",
       inputSchema: {
         path: z.string().min(1).max(1000).describe("absolute path of the file on the runner"),
         limit: z.number().int().min(1).max(MAX_TEXT_LIMIT).optional().describe("max characters to return"),

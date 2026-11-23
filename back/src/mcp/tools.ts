@@ -858,6 +858,8 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "runs the reviewer AI and the author's fixing AI until it is ready to merge. Pass PR numbers (of " +
         "your project's repository) or GitHub PR URLs. Only open PRs of the same repository, not from a " +
         "fork, are attached; the rest comes back in `refused` with the reason. Attaching again is harmless. " +
+        "Only when the user says explicitly that YOU review them (\"revisa você mesmo\", \"só me dá sua opinião\") do " +
+        "you review by hand, without this tool. " +
         "Returns { attached, refused, next }, or { error }.",
       inputSchema: {
         card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this terminal"),
