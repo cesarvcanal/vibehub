@@ -27,7 +27,7 @@
 
 - **Identificadores em inglês** (variáveis, funções, tipos, componentes, campos persistidos), sem português misturado. O texto de `describe`/`it` segue o idioma do arquivo de teste (a maioria, pt-BR).
 - **Texto de interface sempre pelo i18n** (`front/src/i18n/en.ts` e `pt-BR.ts`): chave nova entra nos dois; o JSX não leva string literal visível.
-- **Commits, PRs e documentação de processo (`docs/`, este arquivo) em pt-BR.**
+- **Documentação pública em inglês, processo em pt-BR.** O repositório é público: `README.md`, `SECURITY.md` e `docs/` se escrevem em inglês, para quem instala ou contribui sem ler português. Este arquivo, o `.claude/CLAUDE.md`, commits e PRs, que conduzem o trabalho do time, ficam em pt-BR.
 - Sintaxe e APIs de terceiros (SDK do Claude, Fastify, React, Docker) ficam como a especificação deles define. Contrato persistido (`board.json` e afins), rota HTTP, ferramenta MCP e variável de ambiente só se renomeiam como mudança de contrato (§6), nunca por estética.
 - Função: **verbo preciso + objeto** (`assertMovableColumn`, `normalizeCardIds`), não `process`, `handle`, `manage`, `resolve` havendo ação mais precisa. Variável diz conteúdo e função, sem `data`, `tmp`, `result`, `x` ou abreviação opaca. **Todo nome se lê sem abrir a implementação**, inclusive parâmetro de callback e variável de laço (`row`, não `r`); uma coisa, um nome no mesmo escopo.
 - Referência nomeia a entidade (`cardId`, `accountSlug`, não `id` solto quando há mais de um); variantes deixam claras as duas diferenças (`originalValue` e `convertedValue`, não `value` e `convertedValue`).
@@ -237,6 +237,7 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 - **Recurso que o chamador não alcança responde 404, não 403:** para quem não vê o card ou o projeto, ele não existe, e um 403 confirmaria que o id é real. 403 é para o que ele vê mas não pode mudar (o `view` tentando mutar, o membro numa rota de dono).
 - **Shell:** tudo que vira linha de `docker exec` ou script (ids de card, branch, sessão, container) é validado na fronteira e citado depois; leia `back/src/runtime/host.ts` antes de montar um comando.
 - **Segredos por stdin, nunca argv** (`ps` é legível por todos). Credenciais moram no cofre criptografado (`back/src/secrets/`), nunca em log, resposta HTTP ou mensagem de erro.
+- **O agente no runner entra pela assinatura Claude do perfil do card** (o token de longa duração ou um `/login` mais novo), nunca por chave de API: `ANTHROPIC_API_KEY` no ambiente do agente venceria a assinatura e cobraria a API, por isso o driver do chat nativo a remove antes de abrir o CLI (`services/sdk/driver.ts`) e nenhum código a planta no runner.
 - **Identidade git é do card:** commit, push e PR saem com a conta de quem deu a ordem, nunca de terceiros ou da organização, nem por outra credencial.
 - Hooks do runner, MCP e websocket têm limite de confiança próprio (token do runner, sessão) e não presumem o HTTP autenticado. Ponto de entrada de máquina (o callback de status do runner) autentica pelo token do serviço comparado em tempo constante (`tokenMatches`, em `auth/session.ts`), nunca por cookie de sessão.
 - Verificar caminhos permitidos e negados, inclusive chamando a API direto.

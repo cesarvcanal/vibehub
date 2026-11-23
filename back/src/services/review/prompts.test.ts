@@ -160,6 +160,12 @@ describe("prompts da revisão: tempo de cada rodada", () => {
     }
   });
 
+  it("comando de teste longo troca por recorte no mesmo limite do AGENTS.md, uns 2 minutos", () => {
+    for (const text of [reviewerRoundPrompt(review()), authorFixPrompt(review())]) {
+      expect(text).toContain("Comando que passaria de uns 2 minutos troca por um recorte menor");
+    }
+  });
+
   it("palavra reservada na fala citada sai desarmada; branch, caminho e comandos do PR chegam intactos", () => {
     // Finding f1 of the review of #264: defusing the whole prompt changed the card's branch and the push created another one.
     const f: Finding = {
@@ -402,12 +408,26 @@ describe("prompt da análise de PR", () => {
     const { analysisPrompt } = await import("./prompts.js");
     const text = analysisPrompt(input);
     expect(text).toMatch(/teste que reproduz/);
-    expect(text).toContain("pulls/636/comments");
     expect(text).not.toContain("${");
-    expect(text).toContain("gh pr review 636 --comment");
     expect(text).toContain('vibehub_deliver com card = "card-9" e branch = "dev"');
     expect(text.split("\n").find((line) => line.startsWith("7."))).not.toContain("authorized: true");
     expect(text).toMatch(/sem title nem body/);
+  });
+
+  it("publica os comentários dos achados e o resumo numa única revisão COMMENT, como pede o AGENTS.md", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    const publishStep = analysisPrompt(input).split("\n").find((line) => line.startsWith("9.")) ?? "";
+    expect(publishStep).toContain("pulls/636/reviews --method POST");
+    expect(publishStep).toContain('"event": "COMMENT"');
+    expect(publishStep).not.toContain("pulls/636/comments");
+    expect(publishStep).not.toContain("gh pr review 636 --comment");
+  });
+
+  it("revisão recusada por um comentário fora do diff: o achado vai para o resumo e a revisão sai de novo", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    const publishStep = analysisPrompt(input).split("\n").find((line) => line.startsWith("9.")) ?? "";
+    expect(publishStep).toContain("422");
+    expect(publishStep).toContain("PENDING");
   });
 
   it("push recusado porque a PR andou: rebase sobre o código novo, nunca o reset que apagaria as correções", async () => {

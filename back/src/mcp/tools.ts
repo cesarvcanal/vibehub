@@ -242,7 +242,7 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "check there first). Then hand it the work with vibehub_send_to_terminal (pass " +
         "`from`): the send wakes the new card on its own — the first card of a project clones the " +
         "repo, which can take minutes. Send a self-contained instruction: the new card does not know " +
-        "this conversation.",
+        "this conversation. Create the card and send it the work yourself: never leave the prompt in a file for someone to paste.",
       inputSchema: {
         from: z.string().describe("YOUR OWN card id — the $VIBEHUB_CARD_ID of this terminal"),
         projectId: z.string().describe("project id (from vibehub_list_projects)"),
@@ -273,7 +273,9 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "as if a person had sent it. A card that is asleep (hibernated, never opened) is woken on its " +
         "own; a card PAUSED on purpose is refused — ask the user. A PR reviewer card is refused too (the review drives " +
         "it). Fails clearly when no Claude can run there. The receiving card keeps its own context, so " +
-        "send a self-contained instruction, not a fragment of your conversation.",
+        "send a self-contained instruction, not a fragment of your conversation. Refused while ANOTHER person " +
+        "is typing in that card (human-active); `humanActive: true` in the listing may be the person who gave " +
+        "you the order, so pass `from` and let this tool decide.",
       inputSchema: {
         cardId: z.string().describe("id of the destination card (from vibehub_list_terminals)"),
         text: z.string().describe("the instruction to type at that terminal's prompt (submitted with Enter)"),
@@ -367,7 +369,7 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "before going on. One wait per card: a new one replaces the previous. A card paused on purpose " +
         "is woken when it is reopened. The board shows the wait and the person can cancel it. Refused " +
         "for your own card, a card already in done (go on now) and a wait that would close a cycle. " +
-        "`card` is YOUR OWN card id ($VIBEHUB_CARD_ID).",
+        "Agree on it with the user, say so, and end your turn. `card` is YOUR OWN card id ($VIBEHUB_CARD_ID).",
       inputSchema: {
         card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this terminal"),
         waitFor: z.string().describe("id of the card to wait for (from vibehub_list_terminals)"),
@@ -506,6 +508,8 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "ALWAYS pass `command` (and `cwd` when it is not your " +
         "worktree): vibehub stores them so the preview can be RELAUNCHED in its own session after " +
         "your card is paused or restarted — without them the link dies with your terminal. " +
+        "Hand out only the link this tool returned. The preview is the USER's window; testing it yourself goes in " +
+        "the card's Chromium (the navegador tools) at the same port, never a second server. " +
         "`card` is YOUR OWN card id ($VIBEHUB_CARD_ID).",
       inputSchema: {
         card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this terminal"),
@@ -566,23 +570,14 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "operation, not part of this. A LOCKED card answers { reason: 'locked', locked: true }: the " +
         "PR goes to that card's own base whatever `branch` said, and it is NEVER merged from here — " +
         "say so plainly ('o PR está aberto em <base>; o merge é de quem revisa') instead of " +
-        "retrying, and do not go around it with git or gh by hand. A card whose PR is under REVIEW: " +
-        "the push always happens (it is how the author delivers a fix), and the merge goes through only " +
-        "when the card delivers ITSELF (pass `from` = your own $VIBEHUB_CARD_ID), the order came from someone " +
-        "with a role in the review (merger, reviewer, author, co-author) and the review is ready — the same merge as the " +
-        "panel's button, which also closes the review. The REVIEWER's card can do the same (card = from = its own id): " +
-        "no push, just that merge. When such a person tells you to merge, DO call this tool — a review's 'do not merge' " +
-        "rule means not on your own initiative, never refusing their order. Otherwise 'review_active' says who merges and " +
-        "where the review stands; 'head_moved' = the push brought commits the reviewer has not seen and " +
-        "the review went back to them; 'conflict' = the PR conflicts with its base and nothing merged: bring the " +
-        "base into the branch (git merge origin/<base>), test and push. Never merge a reviewed PR any other way (gh pr merge, the GitHub API). " +
-        "The MERGER's order is not lost when the review is not ready yet (on the author's card or the reviewer's): " +
-        "it is recorded on the review, which then merges by itself when it ends ready with no blocking item or " +
-        "question, Approve on GitHub and green CI (an automatic merge that fails waits for the merger's button). When " +
-        "the order also said to conclude the card (\"mergeia e conclui o card\"), pass `concludeWhenMerged: true` " +
-        "together: it is recorded too, and once the PR is merged — by itself, by the button, outside the panel or by " +
-        "you — this card moves to done with nobody coming back to it. Tell the user what the answer says was recorded " +
-        "instead of promising to do it later; when it says the conclusion was NOT recorded, conclude by hand after the merge. " +
+        "retrying, and do not go around it with git or gh by hand. A card whose PR is under REVIEW: the push " +
+        "always happens; the merge goes only when the card delivers ITSELF (`from` = its own $VIBEHUB_CARD_ID, the " +
+        "reviewer's card included) by order of someone with a role in the review and the review is ready. Their " +
+        "order to merge is followed: DO call this tool, and never merge a reviewed PR any other way (gh pr merge, the API). " +
+        "'review_active' says who merges; 'head_moved' = the reviewer has new commits to see; 'conflict' = bring the " +
+        "base in (git merge origin/<base>), test and push. The merger's order before the review is ready, with " +
+        "`concludeWhenMerged`, is recorded on it, as in vibehub_review_start: relay what the answer says was recorded; " +
+        "when the conclusion was NOT recorded, conclude by hand after the merge. " +
         PR_DOCS_RULE,
       inputSchema: {
         card: z.string().describe("id of the card to deliver (from vibehub_list_terminals)"),
@@ -619,7 +614,8 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "The person must be on the card's participant list (they sent it a message before) and still " +
         "have work access; anybody else is refused. Without `user` it changes nothing and returns the " +
         "current actor and the participants. The next message a person sends switches the card to " +
-        "them again, so switch right before the step that must carry the other account. Returns " +
+        "them again, so switch right before the step that must carry the other account. Never stop to ask the " +
+        "other person to come and confirm: having given this card an order is their consent. Returns " +
         "{ actor, participants } or { error }.",
       inputSchema: {
         card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this terminal"),
@@ -683,7 +679,8 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
       description:
         "PR REVIEW, reviewer side: hand back the round you were asked to review, structured. Only the " +
         "reviewer card of that review may call it (`card` = YOUR OWN $VIBEHUB_CARD_ID); the round prompt " +
-        "you received names the review, the round and this card. Round 1: `findings` from /code-review. " +
+        "you received names the review, the round and this card. Round 1: `findings` from the Workflow fleet the " +
+        "round prompt runs (/code-review only when it fails). " +
         "Round 2+: `verdicts` on the closed list (fixed | open | dropped — accepting the author's " +
         "contestation is dropped; accepting a risk is a human decision) and new findings ONLY for a bug the " +
         "fix itself created (`introducedInRound` = the round). A blocking finding needs `proof` " +
@@ -861,6 +858,8 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "runs the reviewer AI and the author's fixing AI until it is ready to merge. Pass PR numbers (of " +
         "your project's repository) or GitHub PR URLs. Only open PRs of the same repository, not from a " +
         "fork, are attached; the rest comes back in `refused` with the reason. Attaching again is harmless. " +
+        "Only when the user says explicitly that YOU review them (\"revisa você mesmo\", \"só me dá sua opinião\") do " +
+        "you review by hand, without this tool. " +
         "Returns { attached, refused, next }, or { error }.",
       inputSchema: {
         card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this terminal"),
