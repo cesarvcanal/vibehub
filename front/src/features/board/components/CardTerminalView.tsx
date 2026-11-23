@@ -1393,7 +1393,7 @@ export function CardTerminalView({
           {reviewOpen ? (
             <ReviewColumn besidePanes={browserOpen ? 2 : 1}>
               {analysisCard ? (
-                <AnalysisPanel cardId={cardId} cardState={state?.kind} onClose={() => setReviewOpen(false)} />
+                <AnalysisPanel cardId={cardId} cardState={state ?? undefined} onClose={() => setReviewOpen(false)} />
               ) : (
                 <ReviewPanel key={reviewPr ?? "card"} cardId={cardId} prNumber={reviewPr} onClose={() => setReviewOpen(false)} />
               )}

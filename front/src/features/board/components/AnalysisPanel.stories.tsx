@@ -151,19 +151,19 @@ const fixingReadModel = readModel(
 
 export const Corrigindo: Story = {
   name: "Depois do juiz · corrigindo",
-  args: { cardState: "working" },
+  args: { cardState: { kind: "working", label: "Trabalhando" } },
   parameters: { analysis: fixingReadModel },
 };
 
 export const EsperandoDecisao: Story = {
   name: "Depois do juiz · esperando a decisão da pessoa",
-  args: { cardState: "needs_me" },
+  args: { cardState: { kind: "needs_me", label: "Esperando você" } },
   parameters: { analysis: fixingReadModel },
 };
 
 export const ParouSemFechar: Story = {
-  name: "Depois do juiz · a IA parou sem fechar",
-  args: { cardState: "your_turn" },
+  name: "Depois do juiz · a IA parou bloqueada, com o motivo",
+  args: { cardState: { kind: "blocked", label: "Bloqueado", summary: "o push foi recusado: a branch do PR andou" } },
   parameters: { analysis: fixingReadModel },
 };
 

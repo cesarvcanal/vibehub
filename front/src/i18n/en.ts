@@ -1532,6 +1532,7 @@ export const en: Record<string, string> = {
   "analysis.verdict.fleetUnavailable": "Fleet unavailable",
   "analysis.progress.label": "Fix progress",
   "analysis.progress.working": "The AI is fixing the findings.",
+  "analysis.progress.workingAfterReport": "The AI is working on the PR.",
   "analysis.progress.needsMe": "The AI is waiting for your decision in the card's chat.",
   "analysis.progress.stopped": "The AI stopped without closing the analysis. Open the card's chat and tell it to continue.",
   "analysis.merge": "Merge PR #{n}",

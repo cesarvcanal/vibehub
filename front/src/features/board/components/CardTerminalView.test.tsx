@@ -74,8 +74,8 @@ vi.mock("@/features/board/components/ReviewPanel", () => ({
 }));
 
 vi.mock("@/features/board/components/AnalysisPanel", () => ({
-  AnalysisPanel: ({ cardId, cardState }: { cardId: string; cardState?: string }) => (
-    <div data-testid="analysis-panel" data-card={cardId} data-card-state={cardState} />
+  AnalysisPanel: ({ cardId, cardState }: { cardId: string; cardState?: { kind: string } }) => (
+    <div data-testid="analysis-panel" data-card={cardId} data-card-state={cardState?.kind} />
   ),
 }));
 

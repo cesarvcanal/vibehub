@@ -1544,6 +1544,7 @@ export const ptBR: Record<string, string> = {
   "analysis.verdict.fleetUnavailable": "Frota indisponível",
   "analysis.progress.label": "Andamento da correção",
   "analysis.progress.working": "A IA está corrigindo os achados.",
+  "analysis.progress.workingAfterReport": "A IA está trabalhando no PR.",
   "analysis.progress.needsMe": "A IA está esperando sua decisão no chat do card.",
   "analysis.progress.stopped": "A IA parou sem fechar a análise. Abra o chat do card e mande continuar.",
   "analysis.merge": "Mergear o PR #{n}",

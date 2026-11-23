@@ -11,8 +11,8 @@ import { AnalysisConversation } from "@/features/board/components/AnalysisConver
 import { Markdown } from "@/features/board/components/ChatView";
 import { PanelFrame, TabButton } from "@/features/board/components/ReviewPanelView";
 import { boardApi } from "@/features/board/api";
-import { cardAnalysisKey } from "@/features/board/lib/analysis";
-import type { CardStateKind } from "@/features/board/lib/board";
+import { analysisProgress, cardAnalysisKey, type AnalysisProgress } from "@/features/board/lib/analysis";
+import type { CardState } from "@/features/board/lib/board";
 import { mergeFailure } from "@/features/board/lib/review";
 import { useCardAnalysis } from "@/features/board/lib/useCardAnalysis";
 import { apiErrorMessage } from "@/lib/apiError";
@@ -37,11 +37,12 @@ function mergeRefusalTitle(reason: string, t: Translate): string {
   return t("analysis.merge.refused.other");
 }
 
-export function AnalysisPanel({ cardId, cardState, onClose }: { cardId: string; cardState?: CardStateKind; onClose: () => void }) {
+export function AnalysisPanel({ cardId, cardState, onClose }: { cardId: string; cardState?: CardState; onClose: () => void }) {
   const t = useT();
   const analysisQuery = useCardAnalysis(cardId, { enabled: true });
   const [tab, setTab] = React.useState<"report" | "conversation">("report");
   const read = analysisQuery.data;
+  const progress = read?.analysis && cardState ? analysisProgress(read.verdict, cardState.kind) : null;
   const header = (
     <div className="flex shrink-0 items-start gap-2">
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -61,7 +62,7 @@ export function AnalysisPanel({ cardId, cardState, onClose }: { cardId: string; 
 
   return (
     <PanelFrame label={t("analysis.panel.label")} header={header}>
-      {read?.analysis && read.verdict === "pending" && cardState ? <FixProgress cardState={cardState} /> : null}
+      {progress ? <FixProgress progress={progress} summary={cardState?.summary} /> : null}
       {read?.analysis ? <AnalysisMerge cardId={cardId} read={read} rereading={analysisQuery.isFetching} /> : null}
       <div role="tablist" aria-label={t("analysis.panel.label")} className="flex shrink-0 gap-1 rounded-md border border-border/60 bg-background/40 p-0.5">
         <TabButton active={tab === "conversation"} onClick={() => setTab("conversation")}>{t("analysis.tab.conversation")}</TabButton>
@@ -84,13 +85,20 @@ export function AnalysisPanel({ cardId, cardState, onClose }: { cardId: string; 
 
 const FIX_PROGRESS_ICON_CLASS = "h-3.5 w-3.5 shrink-0";
 
-const FIX_PROGRESS = {
+const WORKING_TONE = "border-sky-500/30 bg-sky-500/10 text-sky-300";
+
+const FIX_PROGRESS: Record<AnalysisProgress, { icon: React.ReactNode; tone: string; textKey: string }> = {
   working: {
     icon: <Loader2 aria-hidden className={cn(FIX_PROGRESS_ICON_CLASS, "animate-spin")} />,
-    tone: "border-sky-500/30 bg-sky-500/10 text-sky-300",
+    tone: WORKING_TONE,
     textKey: "analysis.progress.working",
   },
-  needs_me: {
+  workingAfterReport: {
+    icon: <Loader2 aria-hidden className={cn(FIX_PROGRESS_ICON_CLASS, "animate-spin")} />,
+    tone: WORKING_TONE,
+    textKey: "analysis.progress.workingAfterReport",
+  },
+  needsMe: {
     icon: <MessageCircleQuestion aria-hidden className={FIX_PROGRESS_ICON_CLASS} />,
     tone: "border-amber-500/40 bg-amber-500/10 text-amber-300",
     textKey: "analysis.progress.needsMe",
@@ -102,17 +110,18 @@ const FIX_PROGRESS = {
   },
 };
 
-function FixProgress({ cardState }: { cardState: CardStateKind }) {
+function FixProgress({ progress, summary }: { progress: AnalysisProgress; summary?: string }) {
   const t = useT();
-  const progress = cardState === "working" || cardState === "needs_me" ? FIX_PROGRESS[cardState] : FIX_PROGRESS.stopped;
+  const { icon, tone, textKey } = FIX_PROGRESS[progress];
   return (
-    <p
+    <div
       role="status"
       aria-label={t("analysis.progress.label")}
-      className={cn("flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs", progress.tone)}
+      className={cn("flex shrink-0 flex-col gap-0.5 rounded-md border px-2.5 py-1.5 text-xs", tone)}
     >
-      {progress.icon} {t(progress.textKey)}
-    </p>
+      <p className="flex items-center gap-1.5">{icon} {t(textKey)}</p>
+      {summary ? <p className="pl-5 text-foreground/80">{summary}</p> : null}
+    </div>
   );
 }
 

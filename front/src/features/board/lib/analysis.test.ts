@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { analysisPill } from "./analysis";
+import { analysisPill, analysisProgress } from "./analysis";
+import type { CardStateKind } from "./board";
 import {
   ANALYSIS_DIMENSIONS, type AnalysisFinding, type AnalysisReadModel, type AnalysisReport, type AnalysisVerdict, type CardAnalysisResponse,
 } from "@/api/types";
@@ -90,5 +91,23 @@ describe("pílula da análise na linha da PR", () => {
     }, [...ANALYSIS_DIMENSIONS]);
     const pill = analysisPill(loaded(read), { cardWorking: false });
     expect(pill).toMatchObject({ key: "analysis.pill.fleetUnavailable", tone: "critical" });
+  });
+});
+
+describe("andamento da análise pelo estado do card", () => {
+  it.each<[CardStateKind, ReturnType<typeof analysisProgress>, ReturnType<typeof analysisProgress>]>([
+    ["working", "working", "workingAfterReport"],
+    ["needs_me", "needsMe", "needsMe"],
+    ["blocked", "stopped", null],
+    ["ready", "stopped", null],
+    ["your_turn", "stopped", null],
+    ["idle", "stopped", null],
+    ["hibernated", "stopped", null],
+    ["paused", null, null],
+    ["done", null, null],
+  ])("card em %s: %s com a correção aberta, %s depois do relatório final", (kind, whilePending, afterReport) => {
+    expect(analysisProgress("pending", kind)).toBe(whilePending);
+    expect(analysisProgress("not_apt", kind)).toBe(afterReport);
+    expect(analysisProgress("apt", kind)).toBe(afterReport);
   });
 });

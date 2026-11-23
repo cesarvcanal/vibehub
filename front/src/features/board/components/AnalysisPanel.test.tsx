@@ -7,7 +7,7 @@ import { LANGUAGE_KEY, setLanguage } from "@/i18n";
 import {
   ANALYSIS_DIMENSIONS, type AnalysisConversationResponse, type AnalysisReadModel, type AnalysisReport, type CardAnalysisResponse,
 } from "@/api/types";
-import type { CardStateKind } from "@/features/board/lib/board";
+import type { CardState, CardStateKind } from "@/features/board/lib/board";
 
 vi.setConfig({ testTimeout: 30_000 });
 configure({ asyncUtilTimeout: 8_000 });
@@ -59,7 +59,7 @@ function renderPanel(
   analysisAnswer: CardAnalysisResponse | Promise<CardAnalysisResponse>,
   onClose: () => void = () => {},
   answerConversation: () => AnalysisConversationResponse | Promise<AnalysisConversationResponse> = () => ({ conversation: null }),
-  cardState?: CardStateKind,
+  cardState?: CardState,
 ) {
   get.mockImplementation(async (url: string) => {
     if (url === "/auth/me") return { user: { id: "u1", username: "mussa", role: "member" } };
@@ -201,31 +201,50 @@ describe("painel da análise de PR", () => {
 describe("andamento da correção no painel da análise", () => {
   const noConversation = () => ({ conversation: null });
 
+  const stateOf = (kind: CardStateKind, summary?: string): CardState => ({ kind, label: kind, ...(summary ? { summary } : {}) });
+
   it.each<[CardStateKind, string]>([
     ["working", "A IA está corrigindo os achados."],
     ["needs_me", "A IA está esperando sua decisão no chat do card."],
     ["your_turn", "A IA parou sem fechar a análise. Abra o chat do card e mande continuar."],
     ["hibernated", "A IA parou sem fechar a análise. Abra o chat do card e mande continuar."],
-  ])("com o card em %s, a correção ainda aberta diz o que a IA está fazendo", async (cardState, text) => {
-    renderPanel(readModel(doneReport({ stage: "analysed" }), "pending"), () => {}, noConversation, cardState);
+  ])("com o card em %s, a correção ainda aberta diz o que a IA está fazendo", async (kind, text) => {
+    renderPanel(readModel(doneReport({ stage: "analysed" }), "pending"), () => {}, noConversation, stateOf(kind));
     expect(await screen.findByRole("status", { name: "Andamento da correção" })).toHaveTextContent(text);
   });
 
   it("o andamento aparece também na aba Conversa, onde a frota já terminou", async () => {
-    renderPanel(readModel(doneReport({ stage: "analysed" }), "pending"), () => {}, noConversation, "needs_me");
+    renderPanel(readModel(doneReport({ stage: "analysed" }), "pending"), () => {}, noConversation, stateOf("needs_me"));
     await userEvent.click(await screen.findByRole("tab", { name: "Conversa" }));
     expect(screen.getByRole("status", { name: "Andamento da correção" })).toHaveTextContent("A IA está esperando sua decisão no chat do card.");
   });
 
-  it("análise que terminou não mostra andamento, mesmo com o card trabalhando em outra coisa", async () => {
-    renderPanel(readModel(doneReport(), "not_apt"), () => {}, noConversation, "working");
+  it("depois do relatório final, o card parado nas dúvidas diz que a IA espera a decisão", async () => {
+    renderPanel(readModel(doneReport(), "not_apt"), () => {}, noConversation, stateOf("needs_me"));
+    expect(await screen.findByRole("status", { name: "Andamento da correção" })).toHaveTextContent("A IA está esperando sua decisão no chat do card.");
+  });
+
+  it("depois do relatório final, o card trabalhando diz que a IA trabalha no PR, sem prometer correção", async () => {
+    renderPanel(readModel(doneReport(), "not_apt"), () => {}, noConversation, stateOf("working"));
+    expect(await screen.findByRole("status", { name: "Andamento da correção" })).toHaveTextContent("A IA está trabalhando no PR.");
+  });
+
+  it("depois do relatório final, o card parado não mostra andamento", async () => {
+    renderPanel(readModel(doneReport(), "not_apt"), () => {}, noConversation, stateOf("your_turn"));
     await screen.findByText("Não apto");
     expect(screen.queryByRole("status", { name: "Andamento da correção" })).not.toBeInTheDocument();
   });
 
+  it("card bloqueado mostra o motivo que o agente declarou junto do aviso", async () => {
+    renderPanel(readModel(doneReport({ stage: "analysed" }), "pending"), () => {}, noConversation, stateOf("blocked", "push recusado pelo GitHub"));
+    const progress = await screen.findByRole("status", { name: "Andamento da correção" });
+    expect(progress).toHaveTextContent("A IA parou sem fechar a análise.");
+    expect(progress).toHaveTextContent("push recusado pelo GitHub");
+  });
+
   it("em inglês o andamento sai pelo i18n", async () => {
     setLanguage("en");
-    renderPanel(readModel(doneReport({ stage: "analysed" }), "pending"), () => {}, noConversation, "working");
+    renderPanel(readModel(doneReport({ stage: "analysed" }), "pending"), () => {}, noConversation, stateOf("working"));
     expect(await screen.findByRole("status", { name: "Fix progress" })).toHaveTextContent("The AI is fixing the findings.");
   });
 });
