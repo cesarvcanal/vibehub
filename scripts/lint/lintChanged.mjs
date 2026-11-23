@@ -14,6 +14,8 @@ const ALLOWED_MARKDOWN = [
   /^docs\/[^/]+\.md$/,
   /^back\/src\/services\/brain\/personas\/[^/]+\.md$/,
 ];
+const BOARD_DIR = "front/src/features/board/";
+const APPROVED_BOARD_FILES = [];
 
 function git(repoDir, ...args) {
   return execFileSync("git", ["-c", "core.quotePath=false", ...args], { cwd: repoDir, encoding: "utf8", maxBuffer: Infinity });
@@ -54,6 +56,17 @@ export async function lintChangedLines({ repoDir, baseRef }) {
   return lintResults
     .map((lintResult) => keepChangedMessages(lintResult, changedLinesByPath.get(relative(repoDir, lintResult.filePath))))
     .filter((lintResult) => lintResult.messages.length > 0);
+}
+
+function listAddedFiles(repoDir, baseRef, pathspec) {
+  const base = git(repoDir, "merge-base", "HEAD", baseRef).trim();
+  const committedOrStaged = git(repoDir, "diff", "-z", "--name-only", "--no-renames", "--diff-filter=A", base, "--", pathspec);
+  const untracked = git(repoDir, "ls-files", "-z", "--others", "--exclude-standard", "--", pathspec);
+  return [...committedOrStaged.split("\0"), ...untracked.split("\0")].filter(Boolean).sort();
+}
+
+export function findNewFilesOutsideBoardArea({ repoDir, baseRef, approvedBoardFiles = APPROVED_BOARD_FILES }) {
+  return listAddedFiles(repoDir, baseRef, BOARD_DIR).filter((path) => !approvedBoardFiles.includes(path));
 }
 
 export function findStrayMarkdown({ repoDir, baseRef }) {

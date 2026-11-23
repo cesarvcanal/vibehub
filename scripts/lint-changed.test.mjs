@@ -77,4 +77,16 @@ describe("npm run lint:changed", () => {
     expect(run.stdout).toContain("NOTES.md");
     expect(run.stdout).toContain("AGENTS.md §15");
   });
+
+  it("arquivo novo em features/board sai 1, com o caminho, a regra e o teste mental na saída", () => {
+    const repoDir = createRepoWithLintInstalled();
+    writeRepoFile(repoDir, "front/src/features/board/components/FleetChat.tsx", "export const fleetChat = 1;\n");
+
+    const run = runLintChanged(repoDir);
+
+    expect(run.status).toBe(1);
+    expect(run.stdout).toContain("front/src/features/board/components/FleetChat.tsx");
+    expect(run.stdout).toContain("AGENTS.md §4");
+    expect(run.stdout).toContain("qual pasta de back/src/services/ atende isto?");
+  });
 });

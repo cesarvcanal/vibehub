@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { relative } from "node:path";
-import { lintChangedLines, findStrayMarkdown } from "./lintChanged.mjs";
+import { lintChangedLines, findStrayMarkdown, findNewFilesOutsideBoardArea } from "./lintChanged.mjs";
 import { git, writeRepoFile, createRepoWithBase } from "./testRepo.mjs";
 
 const LEGACY = "let legacy = 1;\nlegacy += 1;\nexport { legacy };\n";
@@ -158,5 +158,34 @@ describe("findStrayMarkdown", () => {
     writeRepoFile(repoDir, "CLAUDE.local.md", "local\n");
 
     expect(findStrayMarkdown({ repoDir, baseRef: "main" })).toEqual([]);
+  });
+});
+
+describe("findNewFilesOutsideBoardArea", () => {
+  it("arquivo novo em features/board reprova, commitado ou ainda não rastreado; o legado e o de outra área passam", () => {
+    const repoDir = createRepoWithBase({ "front/src/features/board/components/Legacy.tsx": "legacy\n" });
+    writeRepoFile(repoDir, "front/src/features/board/components/AgentTaskPanel.tsx", "panel\n");
+    writeRepoFile(repoDir, "front/src/features/waits/lib/cardWait.ts", "wait\n");
+    git(repoDir, "add", ".");
+    git(repoDir, "commit", "-qm", "add");
+    writeRepoFile(repoDir, "front/src/features/board/lib/cardWait.ts", "wait\n");
+    writeRepoFile(repoDir, "front/src/features/board/components/Legacy.tsx", "legacy changed\n");
+
+    expect(findNewFilesOutsideBoardArea({ repoDir, baseRef: "main" })).toEqual([
+      "front/src/features/board/components/AgentTaskPanel.tsx",
+      "front/src/features/board/lib/cardWait.ts",
+    ]);
+  });
+
+  it("arquivo novo cujo caminho exato está na lista de aprovados do board passa", () => {
+    const repoDir = createRepoWithBase({ "README.md": "base\n" });
+    writeRepoFile(repoDir, "front/src/features/board/components/DeckColumn.tsx", "deck\n");
+    writeRepoFile(repoDir, "front/src/features/board/components/DeckColumn.test.tsx", "deck test\n");
+
+    const approvedBoardFiles = ["front/src/features/board/components/DeckColumn.tsx"];
+
+    expect(findNewFilesOutsideBoardArea({ repoDir, baseRef: "main", approvedBoardFiles })).toEqual([
+      "front/src/features/board/components/DeckColumn.test.tsx",
+    ]);
   });
 });
