@@ -84,6 +84,14 @@ describe("explicação da falha escrita pela IA", () => {
     expect(await failures.getPlatformFailure(failure.id)).toMatchObject({ narrativeUnavailable: "no_api_key" });
   });
 
+  it("cofre que falha ao ler a chave marca a falha como sem explicação, em vez de deixá-la sem motivo", async () => {
+    const { failures, narrative, failure } = await fresh();
+    const vault = await import("../../secrets/vault.js");
+    vi.spyOn(vault, "secretGet").mockRejectedValueOnce(new Error("bad decrypt"));
+    await narrative.writePlatformFailureNarrative(failure.id);
+    expect(await failures.getPlatformFailure(failure.id)).toMatchObject({ narrativeUnavailable: "request_failed" });
+  });
+
   it.each([
     ["HTTP de erro", { status: 529, body: { error: "overloaded" } }],
     ["recusa da IA, mesmo com texto válido", { body: anthropicAnswer(JSON.stringify(NARRATIVE), "refusal") }],

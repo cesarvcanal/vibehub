@@ -144,9 +144,9 @@ async function readNarrativeContext(failure: PlatformFailure) {
 
 export async function writePlatformFailureNarrative(failureId: string): Promise<PlatformFailure> {
   const failure = await getPlatformFailure(failureId);
-  const apiKey = await secretGet(ANTHROPIC_KEY);
-  if (!apiKey) return await setPlatformFailureNarrative(failureId, { narrativeUnavailable: "no_api_key" });
   try {
+    const apiKey = await secretGet(ANTHROPIC_KEY);
+    if (!apiKey) return await setPlatformFailureNarrative(failureId, { narrativeUnavailable: "no_api_key" });
     const narrative = await requestFailureNarrative(apiKey, buildNarrativePrompt(failure, await readNarrativeContext(failure)));
     return await setPlatformFailureNarrative(failureId, { narrative });
   } catch (err) {
