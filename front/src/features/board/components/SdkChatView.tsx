@@ -1845,14 +1845,16 @@ function SdkRunningTray({
         const call = id ? rows.find((r) => r.kind === "tool" && r.id === id) : undefined;
         const isAgent = call?.kind === "tool" ? isAgentTool(call.name) : task.type === "local_agent";
         const live = id ? agentTasks[id] : undefined;
+        const agentCall = isAgent && call?.kind === "tool" ? call : undefined;
+        const childRows = agentCall ? subagentRows.get(agentCall.id) ?? [] : [];
         return (
           <FleetRow
             key={task.id}
             testId="sdk-running-task"
             status="running"
             name={task.description.trim() || t("sdk.backgroundUnnamed")}
-            now={live?.summary || live?.lastTool || ""}
-            actions={live?.toolUses}
+            now={agentCall ? describeRunningAgentStep(live, childRows) : live?.summary || live?.lastTool || ""}
+            actions={agentCall ? countAgentActions(agentCall, live, childRows) : live?.toolUses}
             durationMs={agentElapsedMs("running", live, undefined, now)}
             onClick={id ? () => open(isAgent ? { kind: "agent", id } : { kind: "action", id }) : undefined}
           />
