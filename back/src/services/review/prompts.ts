@@ -77,7 +77,7 @@ function rules(): string {
     // Measured in the transcripts of the erp-aux reviews (PRs #599, #605, #624, #627): most of the round
     // went into 5-to-10-minute commands (the whole suite, `npm ci`, `tsc --force`), one after the other.
     "- Teste por recorte: rode só os testes do que o PR tocou (o arquivo ou a pasta). A suíte inteira é do CI: confira " +
-      "com `gh pr checks`. Comando que passaria de uns 3 minutos troca por um recorte menor.",
+      "com `gh pr checks`. Comando que passaria de uns 2 minutos troca por um recorte menor.",
   ].join("\n");
 }
 

@@ -160,6 +160,12 @@ describe("prompts da revisão: tempo de cada rodada", () => {
     }
   });
 
+  it("comando de teste longo troca por recorte no mesmo limite do AGENTS.md, uns 2 minutos", () => {
+    for (const text of [reviewerRoundPrompt(review()), authorFixPrompt(review())]) {
+      expect(text).toContain("Comando que passaria de uns 2 minutos troca por um recorte menor");
+    }
+  });
+
   it("palavra reservada na fala citada sai desarmada; branch, caminho e comandos do PR chegam intactos", () => {
     // Finding f1 of the review of #264: defusing the whole prompt changed the card's branch and the push created another one.
     const f: Finding = {
