@@ -143,15 +143,28 @@ export const NaoAptoSemConferencia: Story = {
   },
 };
 
+const fixingReadModel = readModel(
+  report({ stage: "analysed", findings: [openSessionExpiry, openQuestion] }),
+  "pending",
+  { correctness: "problem", security: "attention" },
+);
+
 export const Corrigindo: Story = {
   name: "Depois do juiz · corrigindo",
-  parameters: {
-    analysis: readModel(
-      report({ stage: "analysed", findings: [openSessionExpiry, openQuestion] }),
-      "pending",
-      { correctness: "problem", security: "attention" },
-    ),
-  },
+  args: { cardState: "working" },
+  parameters: { analysis: fixingReadModel },
+};
+
+export const EsperandoDecisao: Story = {
+  name: "Depois do juiz · esperando a decisão da pessoa",
+  args: { cardState: "needs_me" },
+  parameters: { analysis: fixingReadModel },
+};
+
+export const ParouSemFechar: Story = {
+  name: "Depois do juiz · a IA parou sem fechar",
+  args: { cardState: "your_turn" },
+  parameters: { analysis: fixingReadModel },
 };
 
 const longPathSuggestion: AnalysisFinding = {

@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { GitMerge, Loader2, RotateCcw, X } from "lucide-react";
+import { CirclePause, GitMerge, Loader2, MessageCircleQuestion, RotateCcw, X } from "lucide-react";
 import { Badge, BADGE_TEXT, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,6 +12,7 @@ import { Markdown } from "@/features/board/components/ChatView";
 import { PanelFrame, TabButton } from "@/features/board/components/ReviewPanelView";
 import { boardApi } from "@/features/board/api";
 import { cardAnalysisKey } from "@/features/board/lib/analysis";
+import type { CardStateKind } from "@/features/board/lib/board";
 import { mergeFailure } from "@/features/board/lib/review";
 import { useCardAnalysis } from "@/features/board/lib/useCardAnalysis";
 import { apiErrorMessage } from "@/lib/apiError";
@@ -36,7 +37,7 @@ function mergeRefusalTitle(reason: string, t: Translate): string {
   return t("analysis.merge.refused.other");
 }
 
-export function AnalysisPanel({ cardId, onClose }: { cardId: string; onClose: () => void }) {
+export function AnalysisPanel({ cardId, cardState, onClose }: { cardId: string; cardState?: CardStateKind; onClose: () => void }) {
   const t = useT();
   const analysisQuery = useCardAnalysis(cardId, { enabled: true });
   const [tab, setTab] = React.useState<"report" | "conversation">("report");
@@ -60,6 +61,7 @@ export function AnalysisPanel({ cardId, onClose }: { cardId: string; onClose: ()
 
   return (
     <PanelFrame label={t("analysis.panel.label")} header={header}>
+      {read?.analysis && read.verdict === "pending" && cardState ? <FixProgress cardState={cardState} /> : null}
       {read?.analysis ? <AnalysisMerge cardId={cardId} read={read} rereading={analysisQuery.isFetching} /> : null}
       <div role="tablist" aria-label={t("analysis.panel.label")} className="flex shrink-0 gap-1 rounded-md border border-border/60 bg-background/40 p-0.5">
         <TabButton active={tab === "conversation"} onClick={() => setTab("conversation")}>{t("analysis.tab.conversation")}</TabButton>
@@ -77,6 +79,30 @@ export function AnalysisPanel({ cardId, onClose }: { cardId: string; onClose: ()
         </div>
       ) : null}
     </PanelFrame>
+  );
+}
+
+function FixProgress({ cardState }: { cardState: CardStateKind }) {
+  const t = useT();
+  const label = t("analysis.progress.label");
+  if (cardState === "working") {
+    return (
+      <p role="status" aria-label={label} className="flex shrink-0 items-center gap-1.5 rounded-md border border-sky-500/30 bg-sky-500/10 px-2.5 py-1.5 text-xs text-sky-300">
+        <Loader2 aria-hidden className="h-3.5 w-3.5 shrink-0 animate-spin" /> {t("analysis.progress.working")}
+      </p>
+    );
+  }
+  if (cardState === "needs_me") {
+    return (
+      <p role="status" aria-label={label} className="flex shrink-0 items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-300">
+        <MessageCircleQuestion aria-hidden className="h-3.5 w-3.5 shrink-0" /> {t("analysis.progress.needsMe")}
+      </p>
+    );
+  }
+  return (
+    <p role="status" aria-label={label} className="flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-background/40 px-2.5 py-1.5 text-xs text-muted-foreground">
+      <CirclePause aria-hidden className="h-3.5 w-3.5 shrink-0" /> {t("analysis.progress.stopped")}
+    </p>
   );
 }
 

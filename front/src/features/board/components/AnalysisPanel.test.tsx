@@ -7,6 +7,7 @@ import { LANGUAGE_KEY, setLanguage } from "@/i18n";
 import {
   ANALYSIS_DIMENSIONS, type AnalysisConversationResponse, type AnalysisReadModel, type AnalysisReport, type CardAnalysisResponse,
 } from "@/api/types";
+import type { CardStateKind } from "@/features/board/lib/board";
 
 vi.setConfig({ testTimeout: 30_000 });
 configure({ asyncUtilTimeout: 8_000 });
@@ -58,6 +59,7 @@ function renderPanel(
   analysisAnswer: CardAnalysisResponse | Promise<CardAnalysisResponse>,
   onClose: () => void = () => {},
   answerConversation: () => AnalysisConversationResponse | Promise<AnalysisConversationResponse> = () => ({ conversation: null }),
+  cardState?: CardStateKind,
 ) {
   get.mockImplementation(async (url: string) => {
     if (url === "/auth/me") return { user: { id: "u1", username: "mussa", role: "member" } };
@@ -66,7 +68,7 @@ function renderPanel(
     if (url === "/cards/c1/analysis/conversation") return answerConversation();
     throw new Error(`unexpected ${url}`);
   });
-  return renderApp(<AnalysisPanel cardId="c1" onClose={onClose} />);
+  return renderApp(<AnalysisPanel cardId="c1" cardState={cardState} onClose={onClose} />);
 }
 
 beforeEach(() => {
@@ -193,6 +195,38 @@ describe("painel da análise de PR", () => {
     renderPanel(readModel(doneReport(), "not_apt"), onClose);
     await userEvent.click(await screen.findByRole("button", { name: "Fechar a análise" }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("andamento da correção no painel da análise", () => {
+  const noConversation = () => ({ conversation: null });
+
+  it.each<[CardStateKind, string]>([
+    ["working", "A IA está corrigindo os achados."],
+    ["needs_me", "A IA está esperando sua decisão no chat do card."],
+    ["your_turn", "A IA parou sem fechar a análise. Abra o chat do card e mande continuar."],
+    ["hibernated", "A IA parou sem fechar a análise. Abra o chat do card e mande continuar."],
+  ])("com o card em %s, a correção ainda aberta diz o que a IA está fazendo", async (cardState, text) => {
+    renderPanel(readModel(doneReport({ stage: "analysed" }), "pending"), () => {}, noConversation, cardState);
+    expect(await screen.findByRole("status", { name: "Andamento da correção" })).toHaveTextContent(text);
+  });
+
+  it("o andamento aparece também na aba Conversa, onde a frota já terminou", async () => {
+    renderPanel(readModel(doneReport({ stage: "analysed" }), "pending"), () => {}, noConversation, "needs_me");
+    await userEvent.click(await screen.findByRole("tab", { name: "Conversa" }));
+    expect(screen.getByRole("status", { name: "Andamento da correção" })).toHaveTextContent("A IA está esperando sua decisão no chat do card.");
+  });
+
+  it("análise que terminou não mostra andamento, mesmo com o card trabalhando em outra coisa", async () => {
+    renderPanel(readModel(doneReport(), "not_apt"), () => {}, noConversation, "working");
+    await screen.findByText("Não apto");
+    expect(screen.queryByRole("status", { name: "Andamento da correção" })).not.toBeInTheDocument();
+  });
+
+  it("em inglês o andamento sai pelo i18n", async () => {
+    setLanguage("en");
+    renderPanel(readModel(doneReport({ stage: "analysed" }), "pending"), () => {}, noConversation, "working");
+    expect(await screen.findByRole("status", { name: "Fix progress" })).toHaveTextContent("The AI is fixing the findings.");
   });
 });
 

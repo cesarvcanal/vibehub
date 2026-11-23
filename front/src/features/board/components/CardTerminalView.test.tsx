@@ -74,7 +74,9 @@ vi.mock("@/features/board/components/ReviewPanel", () => ({
 }));
 
 vi.mock("@/features/board/components/AnalysisPanel", () => ({
-  AnalysisPanel: ({ cardId }: { cardId: string }) => <div data-testid="analysis-panel" data-card={cardId} />,
+  AnalysisPanel: ({ cardId, cardState }: { cardId: string; cardState?: string }) => (
+    <div data-testid="analysis-panel" data-card={cardId} data-card-state={cardState} />
+  ),
 }));
 
 // The native (SDK) chat also owns a websocket and has its own test file; here the only question is
@@ -1708,6 +1710,18 @@ describe("CardTerminalView — the PR blocks above the composer", () => {
 
     expect(await screen.findByTestId("analysis-panel")).toHaveAttribute("data-card", "c1");
     expect(screen.queryByTestId("review-panel")).toBeNull();
+  });
+
+  it("o painel da análise recebe o estado do card, para dizer se a IA corrige, espera uma decisão ou parou", async () => {
+    const base = mockGet.getMockImplementation();
+    mockGet.mockImplementation((url: string, ...rest: unknown[]) =>
+      url === "/cards/c1/analysis" ? Promise.resolve({ analysis: null }) : (base as (url: string, ...rest: unknown[]) => Promise<unknown>)(url, ...rest),
+    );
+    renderWithCache([card({ openedAt: 10, prs: [PR], pushBranch: PR.branch, status: "working", awaitingDecisionAt: 20 })]);
+
+    await userEvent.click(within(await screen.findByTestId("pr-review-block")).getByRole("button", { name: /PR #553/ }));
+
+    expect(await screen.findByTestId("analysis-panel")).toHaveAttribute("data-card-state", "needs_me");
   });
 
   it.each([
