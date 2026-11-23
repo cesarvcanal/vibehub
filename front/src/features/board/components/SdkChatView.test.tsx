@@ -272,6 +272,40 @@ describe("SdkChatView", () => {
     await waitFor(() => expect(screen.queryByTestId("image-viewer")).not.toBeInTheDocument());
   });
 
+  it("comentário na imagem com uma mensagem em edição no composer sai como mensagem nova, sem mexer na edição", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    const path = "/work/.uploads/2f76af45-3e76-4e32-a49d-bc30b799713d/1792422236057-image.png";
+    ws.deliver({ type: "user", text: `olha esse erro ${path}` });
+    await userEvent.click(screen.getByTestId("sdk-edit"));
+
+    await userEvent.click(await screen.findByTestId("chat-image"));
+    await userEvent.type(await screen.findByTestId("image-viewer-comment"), "e o rodapé?{Enter}");
+
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    expect(JSON.parse(ws.sent[0]!)).toMatchObject({ type: "user", text: `e o rodapé? ${path}` });
+    expect(screen.getByTestId("composer-editing")).toBeInTheDocument();
+  });
+
+  it("comentário na imagem com o agente trabalhando espera na fila como qualquer mensagem", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    const path = "/work/.uploads/2f76af45-3e76-4e32-a49d-bc30b799713d/1792422236057-image.png";
+    await userEvent.type(screen.getByRole("textbox"), `olha esse erro ${path}{Enter}`);
+    await waitFor(() => expect(ws.sent.length).toBe(1));
+    ws.deliver({ type: "assistant_delta", text: "trabalhando…" });
+
+    await userEvent.click(await screen.findByTestId("chat-image"));
+    await userEvent.type(await screen.findByTestId("image-viewer-comment"), "e o rodapé?{Enter}");
+
+    expect(await screen.findByTestId("sdk-queued-text")).toHaveTextContent("e o rodapé?");
+    expect(ws.sent.length).toBe(1);
+  });
+
   it("a URL in a user message is clickable; javascript: never becomes a link", async () => {
     renderSdkChat();
     const ws = await socket();

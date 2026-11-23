@@ -225,6 +225,21 @@ describe("ChatView", () => {
     );
   });
 
+  it("imagem aberta que deixou de existir mostra o caminho, nunca o ícone de imagem quebrada", async () => {
+    renderChat();
+    const ws = await socket();
+    ws.accept();
+    const path = "/work/.uploads/4ef6374b-6a1f-4fc1-b2c1-0ba4c377223f/1790375878344-image.png";
+    ws.deliver({ id: "u1", kind: "user", at: 1, text: `olha ${path}` });
+    await userEvent.click(await screen.findByTestId("chat-image"));
+
+    fireEvent.error(await screen.findByTestId("image-viewer-image"));
+
+    const viewer = await screen.findByTestId("image-viewer");
+    await waitFor(() => expect(within(viewer).queryByTestId("image-viewer-image")).not.toBeInTheDocument());
+    expect(viewer).toHaveTextContent(path);
+  });
+
   it("o comentário escrito embaixo da imagem aberta sai como mensagem do chat, com a imagem junto", async () => {
     renderChat();
     const ws = await socket();

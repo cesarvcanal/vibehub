@@ -1195,6 +1195,15 @@ export function SdkChatView({
     }
   };
 
+  const sendImageComment = async (text: string): Promise<void> => {
+    try {
+      sendOrQueue(text);
+    } catch (err) {
+      toast.error((err as Error).message);
+      throw err;
+    }
+  };
+
   /** A new message for the agent: it waits in the queue while it cannot go (see `send`), or goes now. Throws when it cannot. */
   const sendOrQueue = (text: string): void => {
     const chat = readSettledState();
@@ -1523,7 +1532,7 @@ export function SdkChatView({
 
   return (
     <WorkflowFeedContext.Provider value={workflowFeed}>
-    <ImageCommentContext.Provider value={sendFromComposer}>
+    <ImageCommentContext.Provider value={sendImageComment}>
     <DetailChannelContext.Provider value={detailChannel}>
     <SdkDetailContext.Provider value={detailApi}>
     <div ref={rootRef} className={cn("flex min-h-0 min-w-0 flex-1 flex-col", className)}>

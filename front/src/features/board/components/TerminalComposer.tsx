@@ -297,6 +297,10 @@ export interface Attachment {
  */
 export function composeMessage(text: string, attachments: readonly Attachment[]): string {
   const paths = attachments.filter((a) => a.status === "ready" && a.path).map((a) => a.path as string);
+  return appendPathsToMessage(text, paths);
+}
+
+export function appendPathsToMessage(text: string, paths: readonly string[]): string {
   return [text.trim(), ...paths].filter(Boolean).join(" ");
 }
 

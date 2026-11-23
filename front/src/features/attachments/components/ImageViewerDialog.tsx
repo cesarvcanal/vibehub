@@ -2,7 +2,7 @@ import * as React from "react";
 import { ArrowUp, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { composeMessage } from "@/features/board/components/TerminalComposer";
+import { appendPathsToMessage } from "@/features/board/components/TerminalComposer";
 import { useT } from "@/i18n";
 
 export type SendChatMessage = (text: string) => Promise<void>;
@@ -19,6 +19,7 @@ interface ImageViewerDialogProps {
 
 export function ImageViewerDialog({ open, onOpenChange, src, displayName, runnerPath }: ImageViewerDialogProps) {
   const t = useT();
+  const [broken, setBroken] = React.useState(false);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent data-testid="image-viewer" className="flex max-h-[92vh] max-w-5xl flex-col">
@@ -31,43 +32,36 @@ export function ImageViewerDialog({ open, onOpenChange, src, displayName, runner
             </a>
           </DialogDescription>
         </DialogHeader>
-        <img
-          src={src}
-          alt={t("chat.attachedImage")}
-          data-testid="image-viewer-image"
-          className="mx-auto min-h-0 max-w-full flex-1 rounded-md border border-border/70 object-contain"
-        />
-        <ImageCommentField runnerPath={runnerPath} onSent={() => onOpenChange(false)} />
+        {broken ? (
+          <p className="break-all font-mono text-sm text-muted-foreground">{runnerPath}</p>
+        ) : (
+          <img
+            src={src}
+            alt={t("chat.attachedImage")}
+            data-testid="image-viewer-image"
+            onError={() => setBroken(true)}
+            className="mx-auto min-h-0 max-w-full flex-1 rounded-md border border-border/70 object-contain"
+          />
+        )}
+        <ImageCommentForm runnerPath={runnerPath} onSent={() => onOpenChange(false)} />
       </DialogContent>
     </Dialog>
   );
 }
 
-function ImageCommentField({ runnerPath, onSent }: { runnerPath: string; onSent: () => void }) {
-  const sendChatMessage = React.useContext(ImageCommentContext);
-  if (!sendChatMessage) return null;
-  return <ImageCommentForm runnerPath={runnerPath} sendChatMessage={sendChatMessage} onSent={onSent} />;
-}
-
-function ImageCommentForm({
-  runnerPath,
-  sendChatMessage,
-  onSent,
-}: {
-  runnerPath: string;
-  sendChatMessage: SendChatMessage;
-  onSent: () => void;
-}) {
+function ImageCommentForm({ runnerPath, onSent }: { runnerPath: string; onSent: () => void }) {
   const t = useT();
+  const sendChatMessage = React.useContext(ImageCommentContext);
   const [comment, setComment] = React.useState("");
   const [sending, setSending] = React.useState(false);
+  if (!sendChatMessage) throw new Error("ImageViewerDialog needs an ImageCommentContext provider");
   const canSend = comment.trim() !== "" && !sending;
 
   const send = async (): Promise<void> => {
     if (!canSend) return;
     setSending(true);
     try {
-      await sendChatMessage(composeMessage(comment, [{ id: runnerPath, name: runnerPath, path: runnerPath, status: "ready" }]));
+      await sendChatMessage(appendPathsToMessage(comment, [runnerPath]));
       onSent();
     } catch {
       setSending(false);
