@@ -6,7 +6,8 @@ import { SEND_READY_WAIT_MS, sendToTerminal } from "../maestro/maestro.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { getSettings } from "../settings/settings.js";
 import {
-  PlatformFailureStateError, claimPlatformFailureInvestigation, getPlatformFailure, releasePlatformFailureInvestigation,
+  PlatformFailureStateError, claimPlatformFailureInvestigation, getPlatformFailure, listActivePlatformFailures,
+  releasePlatformFailureInvestigation,
   setPlatformFailureInvestigationCard, settlePlatformFailureInvestigation,
 } from "./platformFailures.js";
 import type { PlatformFailure, PlatformFailureStatus } from "./types.js";
@@ -53,6 +54,14 @@ export function buildInvestigationBrief(failure: PlatformFailure): string {
 
 function summarizeCard(card: registry.Card): PlatformFailureInvestigation["card"] {
   return { id: card.id, projectId: card.projectId, title: card.title };
+}
+
+export async function listPlatformFailuresAwaitingOwner(): Promise<PlatformFailure[]> {
+  const [activeFailures, cards] = await Promise.all([listActivePlatformFailures(), registry.listAllCards()]);
+  const openCardIds = new Set(cards.filter((card) => card.column !== "done").map((card) => card.id));
+  const isInvestigatedInOpenCard = (failure: PlatformFailure) =>
+    failure.status === "investigating" && failure.investigationCardId !== undefined && openCardIds.has(failure.investigationCardId);
+  return activeFailures.filter((failure) => !isInvestigatedInOpenCard(failure));
 }
 
 export async function settleInvestigationOfCard(cardId: string): Promise<PlatformFailure | null> {

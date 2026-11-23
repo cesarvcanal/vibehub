@@ -1,9 +1,9 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { requestUser, requireOwner, requireSession } from "../auth/session.js";
 import {
-  PlatformFailureNotFoundError, PlatformFailureStateError, dismissPlatformFailure, listActivePlatformFailures,
+  PlatformFailureNotFoundError, PlatformFailureStateError, dismissPlatformFailure,
 } from "../services/platformFailures/platformFailures.js";
-import { startPlatformFailureInvestigation } from "../services/platformFailures/investigation.js";
+import { listPlatformFailuresAwaitingOwner, startPlatformFailureInvestigation } from "../services/platformFailures/investigation.js";
 import { InvalidScreenErrorReport, parseScreenErrorReport, recordScreenError } from "../services/platformFailures/screenError.js";
 
 async function sendPlatformFailureError(reply: FastifyReply, err: unknown) {
@@ -14,7 +14,7 @@ async function sendPlatformFailureError(reply: FastifyReply, err: unknown) {
 
 export async function platformFailureRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/platform-failures", { preHandler: requireOwner }, async (_req, reply) => {
-    return await reply.send({ failures: await listActivePlatformFailures() });
+    return await reply.send({ failures: await listPlatformFailuresAwaitingOwner() });
   });
 
   app.post<{ Params: { id: string } }>("/api/platform-failures/:id/investigate", { preHandler: requireOwner }, async (req, reply) => {
