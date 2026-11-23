@@ -585,6 +585,9 @@ export function authorMergeGatePrompt(r: Review): string {
       "robusto (sem depender do relógio da máquina), não só aumente o limite.",
     "3. Rode de novo, localmente, os testes que falharam até passarem.",
     `4. git push origin HEAD:${r.prBranch} (a revisão volta ao revisor conferir o que entrou, é o esperado).`,
+    "Se a saída diz que o CI estava ainda rodando ou não foi lido, ou o job falhou por instabilidade (passa ao rodar de novo), " +
+      "não há o que commitar: espere o CI terminar ou rode o job de novo (gh run rerun <id> --failed); " +
+      "ao fim do seu turno o vibehub lê o CI de novo.",
   ].join("\n");
 }
 
