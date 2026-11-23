@@ -53,10 +53,11 @@ export function isPlainTextField(target: EventTarget | null): boolean {
  * the next task, and you should not have to reach for the mouse to write it down.
  */
 export function attachNewCardShortcut(onTrigger: () => void, target: Window = window): () => void {
-  const onKeyDown = (e: KeyboardEvent): void => {
-    if (!isNewCardShortcut(e) || isPlainTextField(e.target)) return;
-    e.preventDefault();
-    e.stopPropagation();
+  const onKeyDown = (event: Event): void => {
+    if (!(event instanceof KeyboardEvent)) return;
+    if (!isNewCardShortcut(event) || isPlainTextField(event.target)) return;
+    event.preventDefault();
+    event.stopPropagation();
     onTrigger();
   };
   target.addEventListener("keydown", onKeyDown, true);
