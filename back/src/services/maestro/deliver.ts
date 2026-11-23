@@ -282,9 +282,6 @@ export function buildPushAndPrScript(
 const COMMENTS_HEAD_ROUNDS = 12;
 const COMMENTS_HEAD_POLL_SECONDS = 5;
 
-const MERGE_ATTEMPTS = 3;
-const MERGE_RETRY_SECONDS = 5;
-
 /**
  * Before commenting: wait (bounded) for the PR to point at the commit just pushed — the comment lines
  * belong to THAT diff, and a reused PR moves to it a few seconds after the push. "Just pushed" is the
@@ -437,6 +434,9 @@ export function buildResolvePrScript(
   return dockerBashScript(containerName, body);
 }
 
+const MERGE_ATTEMPTS = 3;
+const MERGE_RETRY_SECONDS = 5;
+
 /**
  * Script for step (d): merge the PR with a MERGE COMMIT (never squash), ALWAYS pinned to `matchHead`
  * — the commit the gate passed on. The CI wait can take 15 minutes, and a merge without the pin took
@@ -470,7 +470,7 @@ export function buildMergeScript(
     `    printf '%s\\n' "$MERGE_OUT"; echo "${MARKER} merged"; exit 0;`,
     `  fi`,
     `  printf '%s\\n' "$MERGE_OUT"`,
-    // external: GitHub's mergePullRequest answers "Base branch was modified. Review and try the merge again." when another merge lands on the base mid-call
+    // external: GitHub mergePullRequest via gh 2.100.0 refuses with "Base branch was modified. Review and try the merge again." when the base moves mid-call (seen in a deliver, 2026-11-23; not in GitHub docs)
     `  case "$MERGE_OUT" in *"Base branch was modified"*) [ "$MERGE_ATTEMPT" -lt ${MERGE_ATTEMPTS} ] || break; sleep ${MERGE_RETRY_SECONDS} ;; *) break ;; esac`,
     `done`,
     `echo "${MARKER} error merge"`,
