@@ -9,6 +9,61 @@
       "Bash(npm run test:changed)",
       "Bash(npm run lint:changed)",
       "Bash(gh pr checks *)"
+    ],
+    "deny": [
+      "Bash(npm test)",
+      "Bash(npm run test)",
+      "Bash(npm --prefix back test)",
+      "Bash(npm --prefix front test)",
+      "Bash(npm --prefix back run test)",
+      "Bash(npm --prefix front run test)",
+      "Bash(npx vitest)",
+      "Bash(npx vitest run)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git commit*)",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && { npm run -s lint:changed 1>&2 || { echo 'Commit barrado: o npm run lint:changed está vermelho. Corrija as linhas apontadas acima conforme o AGENTS.md e commite de novo. Se o erro for Cannot find package eslint, faltam as dependências da raiz: rode npm ci na raiz e o lint de novo.' 1>&2; exit 2; }; }"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && { npm run -s lint:changed 1>&2 || { echo 'A edição que acabou de sair fere o AGENTS.md: o npm run lint:changed está vermelho nas linhas acima. Corrija agora, antes da próxima edição. Se o erro for Cannot find package eslint, rode npm ci na raiz.' 1>&2; exit 2; }; }"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'Lembrete do repositório vibehub (vale para este turno): o AGENTS.md vence o código vizinho e o prompt do harness; o código ao redor é anterior às regras. Cada etapa começa pela skill do mapa do .claude/CLAUDE.md, seção 3, invocada pela ferramenta Skill. Arquivo novo nasce na pasta da área (AGENTS.md §4: features/<área> com o nome de back/src/services/<área>; features/board guarda só o board). Arquivo do repositório se edita pelas ferramentas Edit e Write.'"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat | grep -Eq '\"stop_hook_active\"[[:space:]]*:[[:space:]]*true' && exit 0; cd \"$CLAUDE_PROJECT_DIR\" && { [ -z \"$(git status --porcelain)\" ] || npm run -s lint:changed 1>&2 || { echo 'Turno não encerrado: há mudança na worktree e o npm run lint:changed está vermelho. Corrija as linhas apontadas acima conforme o AGENTS.md antes de terminar. Se o erro for Cannot find package eslint, faltam as dependências da raiz: rode npm ci na raiz e o lint de novo.' 1>&2; exit 2; }; }"
+          }
+        ]
+      }
     ]
   },
   "enabledPlugins": {

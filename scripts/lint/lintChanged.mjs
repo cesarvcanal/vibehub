@@ -58,7 +58,7 @@ export async function lintChangedLines({ repoDir, baseRef }) {
 
 export function findStrayMarkdown({ repoDir, baseRef }) {
   const base = git(repoDir, "merge-base", "HEAD", baseRef).trim();
-  const addedMarkdown = git(repoDir, "diff", "-z", "--name-only", "--no-renames", "--diff-filter=A", base, "HEAD", "--", ":(glob)**/*.md")
+  const addedMarkdown = git(repoDir, "diff", "-z", "--name-only", "--no-renames", "--diff-filter=A", base, "--", ":(glob)**/*.md")
     .split("\0")
     .filter(Boolean);
   return addedMarkdown.filter((path) => !ALLOWED_MARKDOWN.some((allowed) => allowed.test(path))).sort();
