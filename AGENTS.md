@@ -270,7 +270,7 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 3. **Nunca** `npm test` ou `npx vitest run` sem filtro no runner: a suíte inteira é do CI (`gh pr checks <N>`). A exceção é `npm run test:lint`, a suíte pequena do lint da raiz (`eslint.config.js` e `scripts/`), inteira quando o PR mexe nela; o gate não a roda, só o CI.
 4. Teste de tempo (limite em ms) que falha de vez em quando sob carga não é regressão sua: confirme rodando sem a sua mudança; se já era instável, diga no PR e siga.
 
-Comando de teste que passaria de ~2 min vira recorte menor. O que não deu para testar se relata: **o que foi e o que não foi validado**.
+Comando de teste que passaria de ~2 min vira recorte menor; o que ainda passa de ~1 min roda destacado do terminal (`setsid nohup sh -c '<comando> > /tmp/<log> 2>&1' &`, e o log se lê depois), porque o deploy do painel mata o terminal e o que roda nele. O que não deu para testar se relata: **o que foi e o que não foi validado**.
 
 ## 12. Processo obrigatório de trabalho do agente
 
