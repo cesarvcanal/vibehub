@@ -1818,6 +1818,7 @@ describe("recusa do deliver vira aviso de erro no log, que o detector de falhas 
     ["push recusado", { push: "fatal: rejected\n__VIBEHUB_DELIVER__ error push" }, "push_failed", "fatal: rejected"],
     ["merge que o GitHub recusou", { merge: "GraphQL: Base branch was modified\n__VIBEHUB_DELIVER__ error merge\n" }, "merge_failed", "Base branch was modified"],
     ["comentários que o token não pode publicar", { review: "gh: Resource not accessible by personal access token (HTTP 403)\n__VIBEHUB_DELIVER__ error review" }, "comments_failed", "HTTP 403"],
+    ["PR que não chegou ao commit dos comentários", { comments: "__VIBEHUB_DELIVER__ error stale" }, "comments_failed", "commit enviado"],
   ])("%s vira falha capturada, com o motivo e a saída", async (_case, over, reason, outputExcerpt) => {
     const { result, capturedFailures } = await deliverAndReadCapturedFailures(over, true);
     expect(result.reason).toBe(reason);
