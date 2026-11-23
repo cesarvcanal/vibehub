@@ -284,7 +284,10 @@ describe("buildMergeScript", () => {
   });
 
   /** Runs the merge body (what `docker exec … bash -s` receives) with a fake gh whose PR head is `prHead`. */
-  async function runMerge(prHead: string, pin: string, { prTitle = "fix(deliver): título qualquer", viewError = "", mergeable = "MERGEABLE" } = {}) {
+  async function runMerge(
+    prHead: string, pin: string,
+    { prTitle = "fix(deliver): título qualquer", viewError = "", mergeable = "MERGEABLE", mergeErrors = [] as readonly string[] } = {},
+  ) {
     const { deliver } = await load();
     const root = await mkdtemp(join(tmpdir(), "vibehub-merge-"));
     try {
@@ -296,9 +299,15 @@ describe("buildMergeScript", () => {
         `  "pr view") [ "$*" = "pr view ${PR} --json headRefOid,number,mergeable,title --jq .headRefOid, .number, .mergeable, .title" ] || exit 1`,
         `    [ -z "$FAKE_VIEW_ERROR" ] || { echo "$FAKE_VIEW_ERROR" >&2; exit 1; }`,
         `    printf '%s\\n' "$FAKE_HEAD" 7 "$FAKE_MERGEABLE" "$FAKE_TITLE" ;;`,
-        `  "pr merge") while [ $# -gt 0 ]; do [ "$1" = --subject ] && printf 'subject=[%s]\\n' "$2" >> "$ROOT/log"; shift; done; echo "Merged" ;;`,
+        `  "pr merge") while [ $# -gt 0 ]; do [ "$1" = --subject ] && printf 'subject=[%s]\\n' "$2" >> "$ROOT/log"; shift; done`,
+        `    ATTEMPT=$(grep -c "^gh pr merge" "$ROOT/log")`,
+        `    MERGE_ERROR=$(sed -n "\${ATTEMPT}p" "$ROOT/merge-errors")`,
+        `    [ -z "$MERGE_ERROR" ] || { echo "$MERGE_ERROR" >&2; exit 1; }`,
+        `    echo "Merged" ;;`,
         "esac",
       ].join("\n"), { mode: 0o755 });
+      await writeFile(join(root, "bin", "sleep"), ["#!/bin/bash", 'echo "sleep $*" >> "$ROOT/log"'].join("\n"), { mode: 0o755 });
+      await writeFile(join(root, "merge-errors"), mergeErrors.map((error) => `${error}\n`).join(""));
       const lines = deliver.buildMergeScript("vibehub-runner", TOKEN, root, PR, pin).split("\n");
       const inner = lines.slice(lines.findIndex((l) => l.startsWith("docker exec")) + 1, -1).join("\n");
       const env = { PATH: `${join(root, "bin")}:${process.env.PATH}`, ROOT: root, FAKE_HEAD: prHead, FAKE_TITLE: prTitle, FAKE_VIEW_ERROR: viewError, FAKE_MERGEABLE: mergeable };
@@ -351,6 +360,28 @@ describe("buildMergeScript", () => {
     const r = await runMerge(HEAD_SHA, HEAD_SHA, { mergeable: "UNKNOWN" });
     expect(r.parsed).toMatchObject({ merged: true });
     expect(r.parsed).not.toHaveProperty("conflict");
+  });
+
+  const BASE_MODIFIED = "GraphQL: Base branch was modified. Review and try the merge again. (mergePullRequest)";
+  const mergeAttempts = (log: string) => log.split("\n").filter((line) => line.startsWith("gh pr merge")).length;
+
+  it("executado de verdade: a base que andou no meio do merge não derruba a entrega, o merge sai na tentativa seguinte", async () => {
+    const r = await runMerge(HEAD_SHA, HEAD_SHA, { mergeErrors: [BASE_MODIFIED] });
+    expect(r.parsed).toMatchObject({ merged: true });
+    expect(mergeAttempts(r.log)).toBe(2);
+    expect(r.log).toContain("sleep ");
+  });
+
+  it("executado de verdade: a base que segue andando esgota as tentativas e devolve o erro do GitHub", async () => {
+    const r = await runMerge(HEAD_SHA, HEAD_SHA, { mergeErrors: [BASE_MODIFIED, BASE_MODIFIED, BASE_MODIFIED, BASE_MODIFIED] });
+    expect(r.parsed).toMatchObject({ merged: false, output: expect.stringContaining("Base branch was modified") });
+    expect(mergeAttempts(r.log)).toBe(3);
+  });
+
+  it("executado de verdade: outra recusa do merge não é repetida", async () => {
+    const r = await runMerge(HEAD_SHA, HEAD_SHA, { mergeErrors: ["GraphQL: Pull Request is not mergeable (mergePullRequest)"] });
+    expect(r.parsed).toMatchObject({ merged: false, output: expect.stringContaining("not mergeable") });
+    expect(mergeAttempts(r.log)).toBe(1);
   });
 
   it("executado de verdade: falha ao ler o head do PR não mergeia às cegas", async () => {
