@@ -10,6 +10,13 @@ const FAILURE: PlatformFailure = {
 };
 
 describe("brief do card de investigação", () => {
+  it("com a ordem de merge, mergeia e conclui o card à mão, porque sem revisão o concludeWhenMerged não registra nada", () => {
+    const mergeStep = buildInvestigationBrief(FAILURE).split("\n").find((line) => line.startsWith("4.")) ?? "";
+    expect(mergeStep).toContain("`authorized: true`");
+    expect(mergeStep).not.toContain("concludeWhenMerged");
+    expect(mergeStep).toContain("vibehub_move_cards");
+  });
+
   it("leva o relato, rotula a hipótese e manda confirmar antes de corrigir e esperar a ordem de merge", () => {
     const brief = buildInvestigationBrief(FAILURE);
     for (const expectedPart of [
