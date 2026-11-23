@@ -35,18 +35,18 @@ function FleetRun({ run, conversationRead, agentDetail }: {
   const interrupted = run.outcome === "failed" || run.outcome === "killed";
   return (
     <div className="flex min-w-0 flex-col gap-3">
-      {conversationRead?.kind === "failed" ? (
-        <p role="note" className="flex min-w-0 items-start gap-1.5 text-[11px] text-muted-foreground">
-          <AlertCircle className="mt-0.5 h-3 w-3 shrink-0 text-destructive" aria-hidden="true" />
-          <span className="min-w-0 [overflow-wrap:anywhere]">{t("review.fleet.speechFailed")}</span>
-        </p>
-      ) : null}
       {entries.length > 0 ? (
         <FleetChat
           entries={entries}
           label={t("review.fleet.conversation")}
           agentDetail={agentDetail && ((agent) => agentDetail(run.runId, agent))}
         />
+      ) : null}
+      {conversationRead?.kind === "failed" ? (
+        <p role="note" className="flex min-w-0 items-start gap-1.5 text-[11px] text-muted-foreground">
+          <AlertCircle className="mt-0.5 h-3 w-3 shrink-0 text-destructive" aria-hidden="true" />
+          <span className="min-w-0 [overflow-wrap:anywhere]">{t("review.fleet.speechFailed")}</span>
+        </p>
       ) : null}
       <div data-testid="review-fleet-strip" className="min-w-0 space-y-1.5 rounded-md border border-sky-500/25 bg-sky-500/5 px-2.5 py-2 text-xs">
         <p className="flex items-center gap-1.5 font-medium">
