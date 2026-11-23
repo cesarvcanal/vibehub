@@ -15,7 +15,7 @@
  *   small mock that replays the card's REAL history file and answers typed messages.
  * - `/api/cards/:id/voice/sessions` (the SDP trade with OpenAI) is answered with a fake SDP.
  *
- * Run (back + front already up, see docs/voice-mode-poc.md):
+ * Run (back + front already up, see docs/voice.md):
  *   NODE_PATH=<dir with playwright-core> node front/e2e/voice-in-chat.e2e.mjs \
  *     --front http://127.0.0.1:5913 --data /tmp/vh-voice --card <id> --project <id> --out /tmp/shots
  */
