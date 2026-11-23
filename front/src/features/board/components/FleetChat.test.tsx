@@ -36,16 +36,16 @@ describe("FleetChat", () => {
     expect(second!.closest("li")!.querySelector("[data-tone]")).toHaveAttribute("data-verification", "true");
   });
 
-  it("o modelo aparece como selo ao lado do nome do agente", () => {
+  it("o modelo aparece ao lado do nome do agente como texto simples, sem selo com borda nem fundo", () => {
     const [bubble] = renderFleet([fleetAgent({ id: "a1", label: "contexto", model: "opus" })]);
-    expect(within(bubble!).getByTestId("fleet-chat-model")).toHaveTextContent("opus");
+    const model = within(bubble!).getByTestId("fleet-chat-model");
+    expect(model).toHaveTextContent("opus");
+    expect(model.className).not.toMatch(/\bborder\b|\bbg-/);
   });
 
-  it("o selo do modelo mostra a versão que respondeu quando o servidor a conhece", () => {
+  it("o modelo mostra a versão que respondeu quando o servidor a conhece", () => {
     const [bubble] = renderFleet([fleetAgent({ id: "a1", label: "contexto", model: "claude-sonnet-5-5", modelLabel: "Sonnet 5.5" })]);
-    const chip = within(bubble!).getByTestId("fleet-chat-model");
-    expect(chip).toHaveTextContent("Sonnet 5.5");
-    expect(chip.className).toContain("text-sky-200");
+    expect(within(bubble!).getByTestId("fleet-chat-model")).toHaveTextContent("Sonnet 5.5");
   });
 
   it("abrir o passo a passo de dois agentes no mesmo instante deixa os dois abertos", () => {

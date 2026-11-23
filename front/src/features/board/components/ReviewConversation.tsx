@@ -9,6 +9,7 @@ import { ReviewFleet, type RunAgentDetail } from "@/features/board/components/Re
 import { formatResetAt } from "@/features/board/lib/planUsage";
 import { FINDING_SEVERITY_TONE, FINDING_STATUS_TONE, conversationRows, reviewTurn, type ConversationRow, type ReviewTurn } from "@/features/board/lib/review";
 import { fleetsByRound } from "@/features/board/lib/reviewFleet";
+import type { RunConversationRead } from "@/features/board/types/reviewConversation";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 
@@ -39,10 +40,11 @@ export interface ReviewConversationProps {
   fleet: ReviewFleetRun[];
   /** A user id to the name people know them by. */
   nameOf: (userId: string | undefined) => string;
+  conversations?: ReadonlyMap<string, RunConversationRead>;
   agentDetail?: RunAgentDetail;
 }
 
-export function ReviewConversation({ review, working, fleet, nameOf, agentDetail }: ReviewConversationProps) {
+export function ReviewConversation({ review, working, fleet, conversations, nameOf, agentDetail }: ReviewConversationProps) {
   const t = useT();
   const rows = conversationRows(review.log, fleetsByRound(review, fleet));
   const agentsAnswered = fleet.reduce((total, run) => total + run.done, 0);
@@ -62,7 +64,7 @@ export function ReviewConversation({ review, working, fleet, nameOf, agentDetail
       case "round":
         return <RoundDivider key={row.key} round={row.round} fresh={fresh(row.index)} />;
       case "fleet":
-        return <ReviewFleet key={row.key} round={row.round} runs={row.runs} agentDetail={agentDetail} />;
+        return <ReviewFleet key={row.key} round={row.round} runs={row.runs} conversations={conversations} agentDetail={agentDetail} />;
       case "items":
         return <ItemLines key={row.key} event={row.event} findings={findings} names={names} fresh={fresh(row.index)} />;
       case "line":

@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Finding, FindingDecision, FindingSeverity, Review, ReviewFleetRun, ReviewPhase, ReviewWorking } from "@/api/types";
 import type { RunAgentDetail } from "@/features/board/components/ReviewFleet";
+import type { RunConversationRead } from "@/features/board/types/reviewConversation";
 import { ENTER, ReviewConversation, SAID_CLAMP_CHARS } from "@/features/board/components/ReviewConversation";
 import { cardHref } from "@/features/board/lib/board";
 import {
@@ -52,6 +53,8 @@ export interface ReviewPanelViewProps {
   /** The tab to open on, instead of the one the review calls for (the Storybook tour shows each). */
   initialTab?: Tab;
   fleet?: ReviewFleetRun[];
+  conversations?: ReadonlyMap<string, RunConversationRead>;
+  onAgentsTabShown?: (shown: boolean) => void;
   agentDetail?: RunAgentDetail;
 }
 
@@ -60,7 +63,7 @@ const NO_FLEET: ReviewFleetRun[] = [];
 export function ReviewPanelView(props: ReviewPanelViewProps) {
   const {
     review, working, fleet = NO_FLEET, nameOf, actions, busy, mergeBusy, notice, onMerge, onRetry, onCancel, onDecide, onDecideSuggestions, onClose,
-    initialTab, agentDetail,
+    initialTab, conversations, onAgentsTabShown, agentDetail,
   } = props;
   const t = useT();
   const stuck = new Set(review.phase === "impasse" ? stuckItems(review.findings).map((f) => f.id) : []);
@@ -71,6 +74,7 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
   const decisionsHere = actions.decide ? waitingOnPeople : 0;
   const [chosen, setTab] = React.useState<Tab | null>(initialTab ?? null);
   const tab: Tab = chosen ?? (decisionsHere > 0 ? "findings" : "agents");
+  React.useEffect(() => onAgentsTabShown?.(tab === "agents"), [onAgentsTabShown, tab]);
   // The author's AI is on a PR that was ready: what it pushes goes back to the reviewer, so the merge
   // waits for it to finish instead of racing it.
   const authorOnReadyPr = review.phase === "ready" && working.author;
@@ -137,7 +141,7 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
       </div>
 
       <div role="tabpanel" hidden={tab !== "agents"} className={cn("min-h-0 flex-1 flex-col", tab === "agents" ? "flex" : "hidden")}>
-        <ReviewConversation review={review} working={working} fleet={fleet} nameOf={nameOf} agentDetail={agentDetail} />
+        <ReviewConversation review={review} working={working} fleet={fleet} conversations={conversations} nameOf={nameOf} agentDetail={agentDetail} />
       </div>
       <div role="tabpanel" hidden={tab !== "findings"} className={cn("min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden [overflow-wrap:anywhere]", tab !== "findings" && "hidden")}>
         <FindingsList

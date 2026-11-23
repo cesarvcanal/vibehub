@@ -334,9 +334,9 @@ export async function readAgentFeed(runsDir: string, runId: string, agentId: str
   return parseAgentFeed(stdout);
 }
 
-export async function readFleetConversation(transcriptDir: string): Promise<FleetConversation | null> {
+export async function readFleetConversation(transcriptDir: string, runId?: string): Promise<FleetConversation | null> {
   const { stdout } = await hostExecutor().runScript(
-    buildFleetConversationProbeScript(config.runner.container, transcriptDir),
+    buildFleetConversationProbeScript(config.runner.container, transcriptDir, runId),
     { timeoutMs: 15_000 },
   );
   return parseFleetConversation(stdout);

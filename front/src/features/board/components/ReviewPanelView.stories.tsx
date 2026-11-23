@@ -1,7 +1,7 @@
 import * as React from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { ReviewPanelView, type ReviewPanelViewProps } from "@/features/board/components/ReviewPanelView";
-import type { Finding, Review, ReviewEvent, ReviewWorking } from "@/api/types";
+import type { AnalysisConversation, Finding, Review, ReviewEvent, ReviewFleetRun, ReviewWorking } from "@/api/types";
 import type { ReviewActions } from "@/features/board/lib/review";
 import { FeedBody } from "@/features/board/components/WorkflowPanel";
 import type { FeedLine } from "@/features/board/lib/workflowPanel";
@@ -212,6 +212,56 @@ export const FrotaDeAgentesTrabalhando: Story = {
         { id: "a07f", label: "juiz", phase: "Julgamento", model: "claude-opus-5-5", modelLabel: "Opus 5.5", status: "running" },
       ],
     }],
+  },
+};
+
+const SPEAKING_FLEET: ReviewFleetRun = {
+  runId: "wf_fala1", name: "vibehub-pr-analysis", phases: ["Contexto", "Revisão", "Verificação", "Julgamento"],
+  total: 5, done: 3, at: Date.now(), finished: false,
+  agents: [
+    { id: "c01f", label: "contexto", phase: "Contexto", model: "claude-haiku-4-5", modelLabel: "Haiku 4.5", status: "done", endedAt: at(2),
+      result: JSON.stringify({ summary: CONTEXT_SUMMARY }) },
+    { id: "c02f", label: "revisão: security", phase: "Revisão", model: "claude-opus-5-5", modelLabel: "Opus 5.5", status: "done", endedAt: at(6),
+      result: '{"findings":[]}' },
+    { id: "c03f", label: "revisão: correctness", phase: "Revisão", model: "claude-sonnet-5-5", modelLabel: "Sonnet 5.5", status: "done", endedAt: at(7),
+      result: '{"findings":[{"title":"Falas no mesmo milissegundo geram id duplicado e uma bolha some"}]}' },
+    { id: "c04f", label: "verificação: correctness · Falas no mesmo milissegundo geram id duplicado e uma bolha some", phase: "Verificação",
+      model: "claude-haiku-4-5", modelLabel: "Haiku 4.5", status: "running" },
+    { id: "c05f", label: "juiz", phase: "Julgamento", model: "claude-opus-5-5", modelLabel: "Opus 5.5", status: "running" },
+  ],
+};
+
+const SPEAKING_CONVERSATION: AnalysisConversation = {
+  runId: "wf_fala1", finished: false, agents: [],
+  items: [
+    { agentId: "c01f", at: at(1), kind: "text", text: "O PR troca a aba Agentes da revisão por um chat com uma bolha por fala. São 9 arquivos, 3 no back." },
+    { agentId: "c01f", at: at(2), kind: "text", text: JSON.stringify({ summary: CONTEXT_SUMMARY }) },
+    { agentId: "c03f", at: at(3), kind: "text", text: "Acho que a ordem das mensagens pode embaralhar: duas falas no mesmo milissegundo ficam com o mesmo id." },
+    { agentId: "c02f", at: at(4), kind: "text", text: "A rota nova recebe o `runId` pela URL e ele vai parar no caminho de um arquivo dentro do container. Vou conferir se é validado antes." },
+    { agentId: "c03f", at: at(5), kind: "text", text: "Confirmei no teste: com duas falas no mesmo instante, o React acusa chave duplicada e uma das bolhas some." },
+    { agentId: "c02f", at: at(6), kind: "text", text: "Validado: passa por `assertWorkflowId` antes de chegar ao shell. Daqui não sai achado." },
+    { agentId: "c02f", at: at(6), kind: "text", text: '{"findings":[]}' },
+    { agentId: "c03f", at: at(7), kind: "text", text: '{"findings":[{"title":"Falas no mesmo milissegundo geram id duplicado e uma bolha some"}]}' },
+  ],
+};
+
+export const FalasDosAgentesChegando: Story = {
+  name: "Falas dos agentes chegando uma a uma (aba Agentes)",
+  args: {
+    initialTab: "agents",
+    working: { author: false, reviewer: true },
+    fleet: [SPEAKING_FLEET],
+    conversations: new Map([["wf_fala1", { conversation: SPEAKING_CONVERSATION, lastReadFailed: false }]]),
+  },
+};
+
+export const FalasDosAgentesSemLeitura: Story = {
+  name: "Falas dos agentes que não puderam ser lidas (aba Agentes)",
+  args: {
+    initialTab: "agents",
+    working: { author: false, reviewer: true },
+    fleet: [SPEAKING_FLEET],
+    conversations: new Map([["wf_fala1", { conversation: null, lastReadFailed: true }]]),
   },
 };
 

@@ -18,7 +18,8 @@ import {
   analysedPr, currentMergeGate, currentMergeRefusal, isAnalysisMergeable, isAnalysisMerging, mergeAnalysedPr, startAnalysisMergeGate,
   syncAnalysisWithGithub,
 } from "../services/review/analysisMerge.js";
-import { readAnalysisConversation } from "../services/review/analysisConversation.js";
+import { readCardFleetConversation } from "../services/review/analysisConversation.js";
+import { InvalidWorkflowIdError } from "../services/sdk/workflowProbe.js";
 import { ANALYSIS_DIMENSIONS, analysisVerdict, dimensionHealth, uncheckedDimensions } from "../services/review/analysisModel.js";
 import { sendError, type ErrorStatusRule } from "./httpError.js";
 
@@ -151,6 +152,23 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  app.get<{ Params: { id: string; runId: string }; Querystring: { pr?: string } }>(
+    "/api/cards/:id/review/conversation/:runId", { preHandler: requireCardAccess }, async (req, reply) => {
+      const pr = parsePrQuery(req.query?.pr);
+      if (pr === null) return await reply.code(400).send({ error: "pr inválido" });
+      const review = await findCardReview(req.params.id, pr);
+      if (!review) return await reply.code(404).send({ error: "review not found" });
+      const reviewerCard = await registry.getCard(review.reviewerCardId);
+      if (!reviewerCard) return await reply.code(404).send({ error: "reviewer card not found" });
+      try {
+        return await reply.send({ conversation: await readCardFleetConversation(reviewerCard, req.params.runId) });
+      } catch (err) {
+        if (err instanceof InvalidWorkflowIdError) return await reply.code(400).send({ error: "invalid workflow id" });
+        return await sendError(reply, err, { fallback: 502 });
+      }
+    },
+  );
+
   app.get<{ Params: { id: string } }>("/api/cards/:id/analysis", { preHandler: requireCardAccess }, async (req, reply) => {
     await syncAnalysisWithGithub(req.params.id);
     const analysis = await getAnalysis(req.params.id);
@@ -178,7 +196,7 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
     const card = await registry.getCard(req.params.id);
     if (!card) return await reply.code(404).send({ error: "card not found" });
     try {
-      return await reply.send({ conversation: await readAnalysisConversation(card) });
+      return await reply.send({ conversation: await readCardFleetConversation(card) });
     } catch (err) {
       return await sendError(reply, err, { fallback: 502 });
     }
