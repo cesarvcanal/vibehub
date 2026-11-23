@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { basename, extname, join, relative } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, dirname, extname, join, relative } from "node:path";
 import { parseAddedLines } from "./addedLines.mjs";
 
 const CONFIG_FILE = join(import.meta.dirname, "..", "..", "eslint.config.js");
@@ -20,7 +20,7 @@ const APPROVED_BOARD_FILES = [];
 const NAMED_SOURCE_DIRS = ["back/src/", "front/src/"];
 const CODE_EXTENSIONS = [...LINTED_EXTENSIONS, "js"];
 const COMPONENT_EXTENSIONS = ["tsx", "jsx"];
-const CODE_FILE_NAME = /^(?<stem>[A-Za-z][A-Za-z0-9]*)(?<suffixes>(?:\.[a-z][A-Za-z0-9]*)*)\.(?<extension>[a-z]+)$/;
+const CODE_FILE_NAME = /^(?<stem>[A-Za-z][A-Za-z0-9]*)(?:\.[a-z][A-Za-z0-9]*)*\.(?<extension>[a-z]+)$/;
 const SHADCN_UI_DIR = "front/src/components/ui/";
 const LOCALE_FILE = /^front\/src\/i18n\/[a-z]{2}(?:-[A-Z]{2})?\.ts$/;
 const GITMOJI_TABLE_ROW = /^\| (?<emoji>\S+) \| `:[a-z0-9_-]+:` \|/gm;
@@ -74,8 +74,16 @@ function listAddedFiles(repoDir, baseRef, ...pathspecs) {
   return [...committedOrStaged.split("\0"), ...untracked.split("\0")].filter(Boolean).sort();
 }
 
+function isTestOfExistingFile(repoDir, path) {
+  const [testedStem, ...suffixes] = basename(path).split(".");
+  if (!suffixes.includes("test")) return false;
+  return CODE_EXTENSIONS.some((extension) => existsSync(join(repoDir, dirname(path), `${testedStem}.${extension}`)));
+}
+
 export function findNewFilesOutsideBoardArea({ repoDir, baseRef, approvedBoardFiles = APPROVED_BOARD_FILES }) {
-  return listAddedFiles(repoDir, baseRef, BOARD_DIR).filter((path) => !approvedBoardFiles.includes(path));
+  return listAddedFiles(repoDir, baseRef, BOARD_DIR).filter(
+    (path) => !approvedBoardFiles.includes(path) && !isTestOfExistingFile(repoDir, path),
+  );
 }
 
 function isNameExempt(path) {
@@ -83,21 +91,21 @@ function isNameExempt(path) {
 }
 
 function followsNamingConvention(path) {
-  const fileName = basename(path);
-  const nameParts = CODE_FILE_NAME.exec(fileName);
+  const nameParts = CODE_FILE_NAME.exec(basename(path));
   if (!nameParts) return false;
-  const { stem, suffixes, extension } = nameParts.groups;
+  const { stem, extension } = nameParts.groups;
   const isCamelCase = /^[a-z]/.test(stem);
   const isComponentFile = COMPONENT_EXTENSIONS.includes(extension);
-  const isTestFile = suffixes.split(".").includes("test");
-  return isCamelCase || isComponentFile || isTestFile;
+  return isCamelCase || isComponentFile;
 }
 
 export function findMisnamedFiles({ repoDir, baseRef }) {
   const addedCodeFiles = listAddedFiles(repoDir, baseRef, ...NAMED_SOURCE_DIRS).filter((path) =>
     CODE_EXTENSIONS.includes(extname(path).slice(1)),
   );
-  return addedCodeFiles.filter((path) => !isNameExempt(path) && !followsNamingConvention(path));
+  return addedCodeFiles.filter(
+    (path) => !isNameExempt(path) && !isTestOfExistingFile(repoDir, path) && !followsNamingConvention(path),
+  );
 }
 
 function readGitmojis(repoDir) {

@@ -180,12 +180,23 @@ describe("findNewFilesOutsideBoardArea", () => {
   it("arquivo novo cujo caminho exato está na lista de aprovados do board passa", () => {
     const repoDir = createRepoWithBase({ "README.md": "base\n" });
     writeRepoFile(repoDir, "front/src/features/board/components/DeckColumn.tsx", "deck\n");
-    writeRepoFile(repoDir, "front/src/features/board/components/DeckColumn.test.tsx", "deck test\n");
+    writeRepoFile(repoDir, "front/src/features/board/components/DeckRow.tsx", "row\n");
 
     const approvedBoardFiles = ["front/src/features/board/components/DeckColumn.tsx"];
 
     expect(findNewFilesOutsideBoardArea({ repoDir, baseRef: "main", approvedBoardFiles })).toEqual([
-      "front/src/features/board/components/DeckColumn.test.tsx",
+      "front/src/features/board/components/DeckRow.tsx",
+    ]);
+  });
+
+  it("teste novo ao lado de um arquivo que já existe no board passa; teste sem o testado ao lado reprova", () => {
+    const repoDir = createRepoWithBase({ "front/src/features/board/components/ReviewColumn.tsx": "legacy\n" });
+    writeRepoFile(repoDir, "front/src/features/board/components/ReviewColumn.test.tsx", "test\n");
+    writeRepoFile(repoDir, "front/src/features/board/components/ReviewColumn.merge.test.tsx", "test\n");
+    writeRepoFile(repoDir, "front/src/features/board/components/FleetChat.test.tsx", "test\n");
+
+    expect(findNewFilesOutsideBoardArea({ repoDir, baseRef: "main" })).toEqual([
+      "front/src/features/board/components/FleetChat.test.tsx",
     ]);
   });
 });
@@ -198,7 +209,6 @@ describe("findMisnamedFiles", () => {
     "front/src/features/sdk/components/SdkChatView.tsx",
     "front/src/features/sdk/components/SdkChatView.test.tsx",
     "front/src/features/sdk/components/SdkChatView.stories.tsx",
-    "front/src/features/sdk/components/SdkChatView.test.ts",
     "front/src/test/render.tsx",
     "front/src/components/ui/dropdown-menu.tsx",
     "front/src/types/vite-env.d.ts",
@@ -221,6 +231,7 @@ describe("findMisnamedFiles", () => {
     "front/src/features/sdk/lib/ContextUsage.mjs",
     "front/src/i18n/en_US.ts",
     "front/src/features/sdk/components/ui/drop-down.tsx",
+    "front/src/features/sdk/components/SdkChatView.test.ts",
   ])("%s reprova", (path) => {
     const repoDir = createRepoWithBase({ "README.md": "base\n" });
     writeRepoFile(repoDir, path, "text\n");
@@ -228,6 +239,17 @@ describe("findMisnamedFiles", () => {
     git(repoDir, "commit", "-qm", "add");
 
     expect(findMisnamedFiles({ repoDir, baseRef: "main" })).toEqual([path]);
+  });
+
+  it("teste com o nome de um arquivo que já existe ao lado passa, mesmo com o nome dele fora da convenção", () => {
+    const repoDir = createRepoWithBase({
+      "back/src/runtime/sdk-driver.mjs": "legacy\n",
+      "front/src/features/board/components/ProjectSidebar.tsx": "sidebar\n",
+    });
+    writeRepoFile(repoDir, "back/src/runtime/sdk-driver.resume.test.ts", "test\n");
+    writeRepoFile(repoDir, "front/src/features/board/components/ProjectSidebar.test.ts", "test\n");
+
+    expect(findMisnamedFiles({ repoDir, baseRef: "main" })).toEqual([]);
   });
 
   it("arquivo antigo fora do padrão que a branch só altera não conta", () => {
