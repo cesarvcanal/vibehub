@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { basename, dirname, extname, join, relative } from "node:path";
 import { parseAddedLines } from "./addedLines.mjs";
 
@@ -108,8 +108,8 @@ export function findMisnamedFiles({ repoDir, baseRef }) {
   );
 }
 
-function readGitmojis(repoDir) {
-  const agentsRules = readFileSync(join(repoDir, "AGENTS.md"), "utf8");
+function readGitmojisAtBase(repoDir, base) {
+  const agentsRules = git(repoDir, "show", `${base}:AGENTS.md`);
   const gitmojis = [...agentsRules.matchAll(GITMOJI_TABLE_ROW)].map((row) => withoutVariationSelector(row.groups.emoji));
   if (gitmojis.length === 0) throw new Error("lint: a tabela de emojis dos commits (AGENTS.md §14) não foi encontrada no AGENTS.md");
   return gitmojis;
@@ -123,7 +123,7 @@ export function findCommitsWithoutGitmoji({ repoDir, baseRef }) {
   const base = git(repoDir, "merge-base", "HEAD", baseRef).trim();
   const commitTitles = git(repoDir, "log", "-z", "--no-merges", "--reverse", "--format=%s", `${base}..HEAD`).split("\0").filter(Boolean);
   if (commitTitles.length === 0) return [];
-  const gitmojis = readGitmojis(repoDir);
+  const gitmojis = readGitmojisAtBase(repoDir, base);
   return commitTitles.filter((title) => !gitmojis.some((gitmoji) => withoutVariationSelector(title).startsWith(`${gitmoji} `)));
 }
 

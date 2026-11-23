@@ -307,6 +307,15 @@ describe("findCommitsWithoutGitmoji", () => {
     expect(findCommitsWithoutGitmoji({ repoDir, baseRef: "main" })).toEqual([]);
   });
 
+  it("emoji que a própria branch acrescenta à tabela ainda não vale: entra por PR antes de ser usado", () => {
+    const repoDir = createRepoWithBase({ "AGENTS.md": GITMOJI_TABLE });
+    writeRepoFile(repoDir, "AGENTS.md", `${GITMOJI_TABLE}| 🎉 | \`:tada:\` | Comemora |\n`);
+    git(repoDir, "commit", "-qam", "🐛 fix(agents): emoji novo na tabela");
+    commitEmpty(repoDir, "🎉 feat(board): usa o emoji novo");
+
+    expect(findCommitsWithoutGitmoji({ repoDir, baseRef: "main" })).toEqual(["🎉 feat(board): usa o emoji novo"]);
+  });
+
   it("AGENTS.md sem a tabela de emojis falha à vista em vez de passar verde", () => {
     const repoDir = createRepoWithBase({ "AGENTS.md": "# AGENTS.md\n" });
     commitEmpty(repoDir, "🐛 fix(sdk): login novo vale");
