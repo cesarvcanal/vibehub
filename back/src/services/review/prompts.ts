@@ -685,8 +685,11 @@ export function analysisPrompt(a: AnalysisInput): string {
     FINDING_CLASSES,
     "5. Você é o único escritor: nenhum subagente edita arquivo. blocking e improvement: corrija agora, um commit " +
       "atômico por achado. Em bug, escreva antes o teste que reproduz a falha, veja falhar pelo motivo certo, corrija e " +
-      "veja passar. question: não mexa; pergunte no chat deste card, com o conflito e as alternativas, e siga com o " +
-      "resto. suggestion: só no resumo.",
+      "veja passar. question: não pergunte agora e não mexa; ela fica para o passo 10, porque a pergunta para o turno " +
+      "até a pessoa responder e os bloqueantes ficariam parados esperando. suggestion: só no resumo.",
+    "   Durante a correção, rode só o teste do achado, filtrado pelo caso (-t \"<caso>\"); antes da entrega (passo 7), " +
+      "uma rodada só dos testes dos arquivos que você mexeu e o typecheck do pacote tocado, nunca a suíte inteira (ela é " +
+      "do CI). Corrija o que falhar e rode só o que falhou: não rode de novo o teste que já passou sem que o código dele mudasse.",
     "   Quando a pessoa responder uma question: se a resposta pede mudança, corrija como no passo 5, entregue (passo 7) e " +
       "marque fixed com o commit; se não pede, marque com status \"decided\" e decision (a decisão dela, numa frase). Nos " +
       "dois casos, se o done já foi gravado, grave de novo o relatório done (passo 8).",
@@ -709,5 +712,7 @@ export function analysisPrompt(a: AnalysisInput): string {
       "(body com o problema, a prova e o commit que corrigiu; commit_id = o head entregue, path, line). Achado sem linha " +
       `vai no resumo. Publique o resumo como review da PR: gh pr review ${a.prNumber} --comment --body "<resumo>", com o ` +
       "que achou, o que corrigiu (sha), as perguntas em aberto e as sugestões. O mesmo resumo, curto, no chat deste card.",
+    "10. Pergunte as questions ainda abertas, todas numa chamada só da AskUserQuestion (uma pergunta por question, até 4 " +
+      "por chamada), cada uma com o conflito e as alternativas; com mais de 4, as seguintes vão na chamada seguinte.",
   ].join("\n");
 }

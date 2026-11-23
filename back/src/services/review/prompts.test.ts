@@ -372,6 +372,24 @@ describe("prompt da análise de PR", () => {
     expect(text).toContain("git diff <sha analisado>..HEAD");
   });
 
+  it("as questions só são perguntadas depois que os bloqueantes foram corrigidos e entregues, todas numa pergunta só", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    const text = analysisPrompt(input);
+    const askStep = text.indexOf("Pergunte as questions");
+    expect(askStep).toBeGreaterThan(text.indexOf("Entregue as correções"));
+    expect(text).toMatch(/question: não pergunte agora/);
+    expect(text).toMatch(/Pergunte as questions[^\n]*uma chamada só da AskUserQuestion/);
+  });
+
+  it("testes do achado filtrados durante a correção e uma rodada só do recorte no fim, sem repetir o que já passou", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    const text = analysisPrompt(input);
+    expect(text).toMatch(/Durante a correção, rode só o teste do achado, filtrado pelo caso/);
+    expect(text).toMatch(/uma rodada só dos testes dos arquivos que você mexeu/);
+    expect(text).toMatch(/nunca a suíte inteira/);
+    expect(text).toMatch(/não rode de novo o teste que já passou/);
+  });
+
   it("classifica com o mesmo critério da revisão e só pergunta o que é de intenção", async () => {
     const { analysisPrompt, reviewerRoundPrompt: round } = await import("./prompts.js");
     const text = analysisPrompt(input);
