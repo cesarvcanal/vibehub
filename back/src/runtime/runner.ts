@@ -49,14 +49,15 @@ export function statusProbeVerdict(stdout: string): "reachable" | "unreachable" 
   return code === "000" ? "unreachable" : "reachable";
 }
 
-let lastReach: boolean | null = null;
+const UNREACHABLE_PROBES_BEFORE_ALARM = 2;
+
+const statusHookReach = { unreachableProbesInARow: 0 };
 
 /**
  * Checks that the runner reaches the status URL every card's hooks POST to, and SAYS SO when it does
  * not. Production, 21/10/2026: the public URL pointed at a blue/green port the app no longer listened
  * on; every hook failed in silence (`curl … || true`), the board never saw a TUI card working, and
- * the idle sweep hibernated cards mid-task. Logs an error on the first failure (and each failure
- * after a recovery), an info on recovery. A probe that never reached curl decides nothing. Never throws.
+ * the idle sweep hibernated cards mid-task.
  * Returns true only when the route answered.
  */
 export async function checkStatusHookReach(): Promise<boolean> {
@@ -71,17 +72,22 @@ export async function checkStatusHookReach(): Promise<boolean> {
   // A runner that is down (or a host without docker) never ran curl: blaming the public URL would send
   // the operator to change a URL that is fine. Keep the last verdict; the runner's own health says why.
   if (verdict === "unknown") return false;
-  const reachable = verdict === "reachable";
-  if (!reachable && lastReach !== false) {
+  if (verdict === "reachable") {
+    const wasAlarmed = statusHookReach.unreachableProbesInARow >= UNREACHABLE_PROBES_BEFORE_ALARM;
+    statusHookReach.unreachableProbesInARow = 0;
+    if (wasAlarmed) {
+      logger.info({ audit: true, action: "runner.statusHook.reachable", url }, "the runner reaches the status URL again");
+    }
+    return true;
+  }
+  statusHookReach.unreachableProbesInARow += 1;
+  if (statusHookReach.unreachableProbesInARow === UNREACHABLE_PROBES_BEFORE_ALARM) {
     logger.error(
       { audit: true, action: "runner.statusHook.unreachable", url },
       "the runner cannot reach the status URL: cards working in the terminal will not report `working`/`waiting` to the board — set VIBEHUB_PUBLIC_URL to an address the runner reaches (a stable name, not a blue/green port) and reopen the cards",
     );
-  } else if (reachable && lastReach === false) {
-    logger.info({ audit: true, action: "runner.statusHook.reachable", url }, "the runner reaches the status URL again");
   }
-  lastReach = reachable;
-  return reachable;
+  return false;
 }
 
 /**

@@ -5,7 +5,7 @@ import { getSettings } from "../settings/settings.js";
 import { logger } from "../../utils/logger.js";
 
 export const OPENAI_KEY = "TRANSCRIBE_OPENAI_API_KEY";
-const ANTHROPIC_KEY = "TRANSCRIBE_ANTHROPIC_API_KEY";
+export const ANTHROPIC_KEY = "TRANSCRIBE_ANTHROPIC_API_KEY";
 const CLEANUP_MODEL = "claude-haiku-4-5-20251001";
 const TRANSCRIPTION_MODEL = "gpt-transcribe";
 

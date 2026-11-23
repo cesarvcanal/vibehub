@@ -370,8 +370,10 @@ export function buildPrReviewScript(
  */
 async function postPrComments(
   container: string, token: string, cwd: string, prUrl: string, branch: string, comments: CleanComment[],
-): Promise<{ ok: true; posted: number; skipped: number } | { ok: false; output: string }> {
-  if (!parsePrUrl(prUrl)) return { ok: false, output: `a URL do PR não é do GitHub (${prUrl}): os comentários não foram publicados` };
+): Promise<{ ok: true; posted: number; skipped: number } | { ok: false; output: string; positionRefused: boolean }> {
+  if (!parsePrUrl(prUrl)) {
+    return { ok: false, output: `a URL do PR não é do GitHub (${prUrl}): os comentários não foram publicados`, positionRefused: false };
+  }
   const read = await hostExecutor().runScript(
     buildPrCommentsReadScript(container, token, cwd, prUrl, branch),
     { timeoutMs: (COMMENTS_HEAD_ROUNDS * COMMENTS_HEAD_POLL_SECONDS + 60) * 1000 },
@@ -383,6 +385,7 @@ async function postPrComments(
       output: found.stage === "stale"
         ? "o PR ainda não aponta para o commit enviado: os comentários não foram publicados (entregue de novo em instantes)"
         : `não deu para ler os comentários do PR: ${cleanOutput(found.output) || found.stage}`,
+      positionRefused: false,
     };
   }
   const fresh = freshComments(found.posted, comments);
@@ -397,10 +400,13 @@ async function postPrComments(
     // The hint about lines only when GitHub refused a POSITION (422); a 403 or a token without the
     // scope is not fixed by moving lines.
     // Whole words only: "different", "deadline" or "pipeline" in a 403 are not a refused position.
-    const position = /\b(422|line|position|diff)\b/i.test(answer)
+    const positionRefused = /\b(422|line|position|diff)\b/i.test(answer);
+    const lineHint = positionRefused
       ? " Cada line tem que estar no diff do PR (side RIGHT = linha da versão nova; LEFT = linha removida)."
       : "";
-    return { ok: false, output: `o GitHub recusou os comentários (nenhum foi publicado): ${answer || "sem resposta"}.${position}` };
+    return {
+      ok: false, output: `o GitHub recusou os comentários (nenhum foi publicado): ${answer || "sem resposta"}.${lineHint}`, positionRefused,
+    };
   }
   return { ok: true, posted: fresh.length, skipped };
 }
@@ -427,6 +433,9 @@ export function buildResolvePrScript(
   ];
   return dockerBashScript(containerName, body);
 }
+
+const MERGE_ATTEMPTS = 3;
+const MERGE_RETRY_SECONDS = 5;
 
 /**
  * Script for step (d): merge the PR with a MERGE COMMIT (never squash), ALWAYS pinned to `matchHead`
@@ -456,7 +465,15 @@ export function buildMergeScript(
     `if [ "$PR_HEAD" != ${pin} ]; then echo "${MARKER} error head_moved $PR_HEAD"; exit 0; fi`,
     `if [ "$PR_MERGEABLE" = CONFLICTING ]; then echo "${MARKER} error conflict"; exit 0; fi`,
     `SUBJECT="🔀 merge: $(printf '%s' "$PR_TITLE" | sed -E 's/^[a-z]+(\\([^)]*\\))?!?: *//') (#$PR_NUMBER)"`,
-    `if gh pr merge ${shQuote(prUrl)} --merge --match-head-commit ${pin} --subject "$SUBJECT"; then echo "${MARKER} merged"; else echo "${MARKER} error merge"; fi`,
+    `for MERGE_ATTEMPT in {1..${MERGE_ATTEMPTS}}; do`,
+    `  if MERGE_OUT=$(gh pr merge ${shQuote(prUrl)} --merge --match-head-commit ${pin} --subject "$SUBJECT" 2>&1); then`,
+    `    printf '%s\\n' "$MERGE_OUT"; echo "${MARKER} merged"; exit 0;`,
+    `  fi`,
+    `  printf '%s\\n' "$MERGE_OUT"`,
+    // external: GitHub mergePullRequest via gh 2.100.0 refuses with "Base branch was modified. Review and try the merge again." when the base moves mid-call (seen in a deliver, 2026-11-23; not in GitHub docs)
+    `  case "$MERGE_OUT" in *"Base branch was modified"*) [ "$MERGE_ATTEMPT" -lt ${MERGE_ATTEMPTS} ] || break; sleep ${MERGE_RETRY_SECONDS} ;; *) break ;; esac`,
+    `done`,
+    `echo "${MARKER} error merge"`,
   ];
   return dockerBashScript(containerName, body);
 }
@@ -1140,13 +1157,15 @@ export async function afterPrMerged(
   return await deleteMergedBranch(cardId, prUrl, branch, connectionId);
 }
 
-const FAILED_DELIVER_REASONS: readonly DeliverReason[] = ["push_failed", "pr_failed", "merge_failed", "comments_failed"];
+const FAILED_DELIVER_REASONS: readonly DeliverReason[] = ["push_failed", "pr_failed", "merge_failed"];
+
+function logDeliverFailure(cardId: string, reason: DeliverReason, output: string | undefined): void {
+  logger.warn({ card: cardId, reason, detail: `${reason}: ${output ?? "no output"}` }, "deliver failed");
+}
 
 export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<DeliverResult> {
   const result = await runDelivery(cardId, opts);
-  if (FAILED_DELIVER_REASONS.includes(result.reason)) {
-    logger.warn({ card: cardId, reason: result.reason, detail: `${result.reason}: ${result.output ?? "no output"}` }, "deliver failed");
-  }
+  if (FAILED_DELIVER_REASONS.includes(result.reason)) logDeliverFailure(cardId, result.reason, result.output);
   return result;
 }
 
@@ -1277,6 +1296,7 @@ async function runDelivery(cardId: string, opts: DeliverOpts): Promise<DeliverRe
         posted.ok ? "deliver posted the PR comments" : "deliver could not post the PR comments",
       );
       if (!posted.ok) {
+        if (!posted.positionRefused) logDeliverFailure(cardId, "comments_failed", posted.output);
         return { prUrl, merged: false, reason: "comments_failed", branch: target, cardBranch: source, ...lock, output: posted.output };
       }
       const repeated = docs.repeated ? { repeated: docs.repeated } : {};

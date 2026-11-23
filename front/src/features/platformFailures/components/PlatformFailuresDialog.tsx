@@ -12,12 +12,15 @@ function toFailureDetails(failure: PlatformFailure) {
       evidence: failure.evidence,
       ...(failure.reproduction ? { reproduction: failure.reproduction } : {}),
       ...(failure.hypothesis ? { hypothesis: failure.hypothesis } : {}),
+      ...(failure.narrative ? { narrative: failure.narrative } : {}),
+      ...(failure.narrativeUnavailable ? { narrativeUnavailable: failure.narrativeUnavailable } : {}),
     },
   };
 }
 
-export function PlatformFailuresDialog({ failures, isOpen, onOpenChange }: {
+export function PlatformFailuresDialog({ failures, isLoadError, isOpen, onOpenChange }: {
   failures: readonly PlatformFailure[];
+  isLoadError: boolean;
   isOpen: boolean;
   onOpenChange: (isOpen: boolean) => void;
 }) {
@@ -29,9 +32,20 @@ export function PlatformFailuresDialog({ failures, isOpen, onOpenChange }: {
           <DialogTitle>{t("platformFailures.title")}</DialogTitle>
           <DialogDescription>{t("platformFailures.description")}</DialogDescription>
         </DialogHeader>
-        <ul className="max-h-[60vh] space-y-3 overflow-auto">
+        {isLoadError ? (
+          <p role="alert" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-400">
+            {t("platformFailures.loadError")}
+          </p>
+        ) : null}
+        <ul className="max-h-[60vh] space-y-2 overflow-y-auto overflow-x-hidden pr-1">
           {failures.map((failure) => (
-            <FailureDetails key={failure.id} failure={toFailureDetails(failure)} isOwner affectedCardCount={failure.affectedCardIds.length} />
+            <FailureDetails
+              key={failure.id}
+              failure={toFailureDetails(failure)}
+              isOwner
+              affectedCardCount={failure.affectedCardIds.length}
+              leavesListOnSuccess
+            />
           ))}
         </ul>
       </DialogContent>

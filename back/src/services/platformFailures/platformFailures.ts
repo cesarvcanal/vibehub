@@ -5,7 +5,9 @@ import { logger } from "../../utils/logger.js";
 import { getSettings } from "../settings/settings.js";
 import { PLATFORM_FAILURE_LOG_MARK } from "./backendError.js";
 import { buildFailureSignature } from "./signature.js";
-import type { PlatformFailure, PlatformFailureReport, PlatformFailureSource, PlatformFailureStatus } from "./types.js";
+import type {
+  FailureNarrative, FailureNarrativeUnavailableReason, PlatformFailure, PlatformFailureReport, PlatformFailureSource, PlatformFailureStatus,
+} from "./types.js";
 
 export const ACTIVE_FAILURES_CAP = 50;
 export const ACTIVE_SCREEN_ERRORS_CAP = 20;
@@ -28,6 +30,7 @@ interface PlatformFailuresDoc {
 export interface PlatformFailureChange {
   failure: PlatformFailure;
   newForCardId?: string;
+  isCreated?: true;
 }
 
 type PlatformFailureChangeListener = (change: PlatformFailureChange) => void;
@@ -75,7 +78,7 @@ export async function recordPlatformFailure(report: PlatformFailureReport, now: 
       && now - (sameSignatureFailure.dismissedAt ?? 0) > TURN_DISMISSAL_MS;
     if (isDismissalExpired) doc.failures = doc.failures.filter((failure) => failure !== sameSignatureFailure);
     const knownFailure = isDismissalExpired ? undefined : sameSignatureFailure;
-    if (knownFailure?.status === "dismissed") return { failure: null, capReached: false, isNewForCard: false };
+    if (knownFailure?.status === "dismissed") return { failure: null, capReached: false, isNewForCard: false, isCreated: false };
     const repeatedFailure = knownFailure ?? doc.failures.find((failure) =>
       failure.signature === signature && failure.status === "resolved" && now - (failure.resolvedAt ?? 0) <= RESOLVED_GRACE_MS);
     if (repeatedFailure) {
@@ -83,13 +86,13 @@ export async function recordPlatformFailure(report: PlatformFailureReport, now: 
       repeatedFailure.occurrences += 1;
       repeatedFailure.lastSeenAt = now;
       noteAffectedCard(repeatedFailure, report.cardId);
-      return { failure: { ...repeatedFailure }, capReached: false, isNewForCard };
+      return { failure: { ...repeatedFailure }, capReached: false, isNewForCard, isCreated: false };
     }
     const isScreenError = report.source === "screen_error";
     const activeFailuresOfSameCap = doc.failures.filter((failure) =>
       ACTIVE_STATUSES.includes(failure.status) && (failure.source === "screen_error") === isScreenError);
     const capOfSource = isScreenError ? ACTIVE_SCREEN_ERRORS_CAP : ACTIVE_FAILURES_CAP;
-    if (activeFailuresOfSameCap.length >= capOfSource) return { failure: null, capReached: true, capOfSource, isNewForCard: false };
+    if (activeFailuresOfSameCap.length >= capOfSource) return { failure: null, capReached: true, capOfSource, isNewForCard: false, isCreated: false };
     const createdFailure: PlatformFailure = {
       id: randomUUID(),
       signature,
@@ -108,13 +111,36 @@ export async function recordPlatformFailure(report: PlatformFailureReport, now: 
       lastSeenAt: now,
     };
     doc.failures.push(createdFailure);
-    return { failure: { ...createdFailure }, capReached: false, isNewForCard: report.cardId !== undefined };
+    return { failure: { ...createdFailure }, capReached: false, isNewForCard: report.cardId !== undefined, isCreated: true };
   });
   if (outcome.capReached) {
     logger.warn({ ...PLATFORM_FAILURE_LOG_MARK, cap: outcome.capOfSource, source: report.source, component: report.component }, "platform failure dropped: too many open failures");
   }
-  if (outcome.failure && outcome.isNewForCard) announceFailureChange({ failure: outcome.failure, newForCardId: report.cardId });
+  if (outcome.failure && (outcome.isNewForCard || outcome.isCreated)) {
+    announceFailureChange({
+      failure: outcome.failure,
+      ...(outcome.isNewForCard ? { newForCardId: report.cardId } : {}),
+      ...(outcome.isCreated ? { isCreated: true as const } : {}),
+    });
+  }
   return outcome.failure;
+}
+
+export async function setPlatformFailureNarrative(
+  id: string, narrativeOutcome: { narrative: FailureNarrative } | { narrativeUnavailable: FailureNarrativeUnavailableReason },
+): Promise<PlatformFailure> {
+  const describedFailure = await store.mutate((doc) => {
+    const failure = findFailureIn(doc, id);
+    if ("narrative" in narrativeOutcome) {
+      failure.narrative = narrativeOutcome.narrative;
+      delete failure.narrativeUnavailable;
+    } else {
+      failure.narrativeUnavailable = narrativeOutcome.narrativeUnavailable;
+    }
+    return { ...failure };
+  });
+  announceFailureChange({ failure: describedFailure });
+  return describedFailure;
 }
 
 export async function isPlatformFailureDismissed(report: Pick<PlatformFailureReport, "source" | "component" | "symptom">): Promise<boolean> {

@@ -284,7 +284,10 @@ describe("buildMergeScript", () => {
   });
 
   /** Runs the merge body (what `docker exec … bash -s` receives) with a fake gh whose PR head is `prHead`. */
-  async function runMerge(prHead: string, pin: string, { prTitle = "fix(deliver): título qualquer", viewError = "", mergeable = "MERGEABLE" } = {}) {
+  async function runMerge(
+    prHead: string, pin: string,
+    { prTitle = "fix(deliver): título qualquer", viewError = "", mergeable = "MERGEABLE", mergeErrors = [] as readonly string[] } = {},
+  ) {
     const { deliver } = await load();
     const root = await mkdtemp(join(tmpdir(), "vibehub-merge-"));
     try {
@@ -296,9 +299,15 @@ describe("buildMergeScript", () => {
         `  "pr view") [ "$*" = "pr view ${PR} --json headRefOid,number,mergeable,title --jq .headRefOid, .number, .mergeable, .title" ] || exit 1`,
         `    [ -z "$FAKE_VIEW_ERROR" ] || { echo "$FAKE_VIEW_ERROR" >&2; exit 1; }`,
         `    printf '%s\\n' "$FAKE_HEAD" 7 "$FAKE_MERGEABLE" "$FAKE_TITLE" ;;`,
-        `  "pr merge") while [ $# -gt 0 ]; do [ "$1" = --subject ] && printf 'subject=[%s]\\n' "$2" >> "$ROOT/log"; shift; done; echo "Merged" ;;`,
+        `  "pr merge") while [ $# -gt 0 ]; do [ "$1" = --subject ] && printf 'subject=[%s]\\n' "$2" >> "$ROOT/log"; shift; done`,
+        `    ATTEMPT=$(grep -c "^gh pr merge" "$ROOT/log")`,
+        `    MERGE_ERROR=$(sed -n "\${ATTEMPT}p" "$ROOT/merge-errors")`,
+        `    [ -z "$MERGE_ERROR" ] || { echo "$MERGE_ERROR" >&2; exit 1; }`,
+        `    echo "Merged" ;;`,
         "esac",
       ].join("\n"), { mode: 0o755 });
+      await writeFile(join(root, "bin", "sleep"), ["#!/bin/bash", 'echo "sleep $*" >> "$ROOT/log"'].join("\n"), { mode: 0o755 });
+      await writeFile(join(root, "merge-errors"), mergeErrors.map((error) => `${error}\n`).join(""));
       const lines = deliver.buildMergeScript("vibehub-runner", TOKEN, root, PR, pin).split("\n");
       const inner = lines.slice(lines.findIndex((l) => l.startsWith("docker exec")) + 1, -1).join("\n");
       const env = { PATH: `${join(root, "bin")}:${process.env.PATH}`, ROOT: root, FAKE_HEAD: prHead, FAKE_TITLE: prTitle, FAKE_VIEW_ERROR: viewError, FAKE_MERGEABLE: mergeable };
@@ -351,6 +360,30 @@ describe("buildMergeScript", () => {
     const r = await runMerge(HEAD_SHA, HEAD_SHA, { mergeable: "UNKNOWN" });
     expect(r.parsed).toMatchObject({ merged: true });
     expect(r.parsed).not.toHaveProperty("conflict");
+  });
+
+  const BASE_MODIFIED = "GraphQL: Base branch was modified. Review and try the merge again. (mergePullRequest)";
+  const countLogLines = (log: string, prefix: string) => log.split("\n").filter((line) => line.startsWith(prefix)).length;
+
+  it("executado de verdade: a base que andou no meio do merge não derruba a entrega, o merge sai na tentativa seguinte", async () => {
+    const r = await runMerge(HEAD_SHA, HEAD_SHA, { mergeErrors: [BASE_MODIFIED] });
+    expect(r.parsed).toMatchObject({ merged: true });
+    expect(countLogLines(r.log, "gh pr merge")).toBe(2);
+    expect(countLogLines(r.log, "sleep ")).toBe(1);
+  });
+
+  it("executado de verdade: a base que segue andando esgota as tentativas e devolve o erro do GitHub", async () => {
+    const r = await runMerge(HEAD_SHA, HEAD_SHA, { mergeErrors: [BASE_MODIFIED, BASE_MODIFIED, BASE_MODIFIED, BASE_MODIFIED] });
+    expect(r.parsed).toMatchObject({ merged: false, output: expect.stringContaining("Base branch was modified") });
+    expect(countLogLines(r.log, "gh pr merge")).toBe(3);
+    expect(countLogLines(r.log, "sleep ")).toBe(2);
+  });
+
+  it("executado de verdade: outra recusa do merge não é repetida", async () => {
+    const r = await runMerge(HEAD_SHA, HEAD_SHA, { mergeErrors: ["GraphQL: Pull Request is not mergeable (mergePullRequest)"] });
+    expect(r.parsed).toMatchObject({ merged: false, output: expect.stringContaining("not mergeable") });
+    expect(countLogLines(r.log, "gh pr merge")).toBe(1);
+    expect(countLogLines(r.log, "sleep ")).toBe(0);
   });
 
   it("executado de verdade: falha ao ler o head do PR não mergeia às cegas", async () => {
@@ -1809,7 +1842,7 @@ describe("recusa do deliver vira aviso de erro no log, que o detector de falhas 
     const loggedLines: import("../../utils/logger.js").LogLine[] = [];
     onTestFinished(onLogLine("warn", (line) => loggedLines.push(line)));
     wire(over);
-    const result = await deliver.deliver(card.id, { branch: "dev", authorized });
+    const result = await deliver.deliver(card.id, { branch: "dev", authorized, docs: DOCS });
     const capturedFailures = loggedLines.filter((line) => isPlatformFailureLogLine(line, undefined, Date.now()));
     return { result, capturedFailures };
   }
@@ -1817,6 +1850,8 @@ describe("recusa do deliver vira aviso de erro no log, que o detector de falhas 
   it.each([
     ["push recusado", { push: "fatal: rejected\n__VIBEHUB_DELIVER__ error push" }, "push_failed", "fatal: rejected"],
     ["merge que o GitHub recusou", { merge: "GraphQL: Base branch was modified\n__VIBEHUB_DELIVER__ error merge\n" }, "merge_failed", "Base branch was modified"],
+    ["comentários que o token não pode publicar", { review: "gh: Resource not accessible by personal access token (HTTP 403)\n__VIBEHUB_DELIVER__ error review" }, "comments_failed", "HTTP 403"],
+    ["PR que não chegou ao commit dos comentários", { comments: "__VIBEHUB_DELIVER__ error stale" }, "comments_failed", "commit enviado"],
   ])("%s vira falha capturada, com o motivo e a saída", async (_case, over, reason, outputExcerpt) => {
     const { result, capturedFailures } = await deliverAndReadCapturedFailures(over, true);
     expect(result.reason).toBe(reason);
@@ -1829,6 +1864,7 @@ describe("recusa do deliver vira aviso de erro no log, que o detector de falhas 
     ["sem autorização", {}, false, "unauthorized"],
     ["gate vermelho pelo teste do próprio card", { run: "1 failing test\n__VIBEHUB_GATE__ fail\n" }, true, "gate"],
     ["merge feito", {}, true, "merged"],
+    ["comentário numa linha fora do diff, que o GitHub recusa", { review: "gh: Line could not be resolved (HTTP 422)\n__VIBEHUB_DELIVER__ error review" }, true, "comments_failed"],
   ])("%s não é falha da plataforma", async (_case, over, authorized, reason) => {
     const { result, capturedFailures } = await deliverAndReadCapturedFailures(over, authorized);
     expect(result.reason).toBe(reason);

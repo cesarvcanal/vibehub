@@ -62,8 +62,8 @@ export function AnalysisPanel({ cardId, onClose }: { cardId: string; onClose: ()
     <PanelFrame label={t("analysis.panel.label")} header={header}>
       {read?.analysis ? <AnalysisMerge cardId={cardId} read={read} rereading={analysisQuery.isFetching} /> : null}
       <div role="tablist" aria-label={t("analysis.panel.label")} className="flex shrink-0 gap-1 rounded-md border border-border/60 bg-background/40 p-0.5">
-        <TabButton active={tab === "report"} onClick={() => setTab("report")}>{t("analysis.tab.report")}</TabButton>
         <TabButton active={tab === "conversation"} onClick={() => setTab("conversation")}>{t("analysis.tab.conversation")}</TabButton>
+        <TabButton active={tab === "report"} onClick={() => setTab("report")}>{t("analysis.tab.report")}</TabButton>
       </div>
       <div role="tabpanel" hidden={tab !== "report"} className={cn("min-h-0 flex-1 flex-col gap-3", tab === "report" ? "flex" : "hidden")}>
         {analysisQuery.isPending ? <p className="text-xs text-muted-foreground">{t("common.loading")}</p> : null}

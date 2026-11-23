@@ -2148,7 +2148,7 @@ describe("lastLiveToolResult — o resultado de ferramenta que chegou ao vivo", 
 
 describe("avisos de falha do vibehub no chat do card", () => {
   const notice = (id: string, status: string, firstSeenAt = 1_000) => ({
-    id, source: "agent_report", status, explanation: `explicação ${id}`, occurrences: 1, firstSeenAt,
+    id, source: "agent_report", status, explanation: `explicação ${id}`, occurrences: 1, firstSeenAt, lastSeenAt: firstSeenAt,
   });
 
   it("o retrato do attach substitui os avisos que a aba tinha", () => {

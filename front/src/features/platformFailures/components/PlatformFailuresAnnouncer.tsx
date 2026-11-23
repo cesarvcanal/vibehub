@@ -3,8 +3,8 @@ import { useFailuresDialog, usePlatformFailures } from "../lib/usePlatformFailur
 import { PlatformFailuresDialog } from "./PlatformFailuresDialog";
 
 export function PlatformFailuresAnnouncer() {
-  const { failures } = usePlatformFailures({ isPolling: true });
+  const { failures, isLoadError } = usePlatformFailures({ isPolling: true });
   const { isFailuresDialogOpen, setFailuresDialogOpen } = useFailuresDialog(failures.length > 0);
   useAnnounceUnseenFailures(failures, setFailuresDialogOpen);
-  return <PlatformFailuresDialog failures={failures} isOpen={isFailuresDialogOpen} onOpenChange={setFailuresDialogOpen} />;
+  return <PlatformFailuresDialog failures={failures} isLoadError={isLoadError} isOpen={isFailuresDialogOpen} onOpenChange={setFailuresDialogOpen} />;
 }

@@ -6,7 +6,8 @@ import { SEND_READY_WAIT_MS, sendToTerminal } from "../maestro/maestro.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { getSettings } from "../settings/settings.js";
 import {
-  PlatformFailureStateError, claimPlatformFailureInvestigation, getPlatformFailure, releasePlatformFailureInvestigation,
+  PlatformFailureStateError, claimPlatformFailureInvestigation, getPlatformFailure, listActivePlatformFailures,
+  releasePlatformFailureInvestigation,
   setPlatformFailureInvestigationCard, settlePlatformFailureInvestigation,
 } from "./platformFailures.js";
 import type { PlatformFailure, PlatformFailureStatus } from "./types.js";
@@ -41,6 +42,14 @@ export function buildInvestigationBrief(failure: PlatformFailure): string {
     "```",
     ...(failure.reproduction ? ["", `Como reproduzir: ${failure.reproduction}`] : []),
     ...(failure.hypothesis ? ["", `Hipótese (não confirmada): ${failure.hypothesis}`] : []),
+    ...(failure.narrative ? [
+      "",
+      "Explicação automática (IA, não confirmada):",
+      `- Contexto: ${failure.narrative.context}`,
+      `- O que aconteceu: ${failure.narrative.whatHappened}`,
+      `- Causa provável: ${failure.narrative.cause}`,
+      `- Quem provocou: ${failure.narrative.trigger} (${failure.narrative.triggerReason})`,
+    ] : []),
     "",
     "## Ordem de trabalho",
     "1. Confirme se é bug, reproduzindo com um teste que falha. Se NÃO for (comportamento esperado, erro do usuário, problema do provedor), explique o porquê aqui no chat, avise o dono com vibehub_notify e conclua o card sem PR.",
@@ -53,6 +62,14 @@ export function buildInvestigationBrief(failure: PlatformFailure): string {
 
 function summarizeCard(card: registry.Card): PlatformFailureInvestigation["card"] {
   return { id: card.id, projectId: card.projectId, title: card.title };
+}
+
+export async function listPlatformFailuresAwaitingOwner(): Promise<PlatformFailure[]> {
+  const [activeFailures, cards] = await Promise.all([listActivePlatformFailures(), registry.listAllCards()]);
+  const openCardIds = new Set(cards.filter((card) => card.column !== "done").map((card) => card.id));
+  const isInvestigatedInOpenCard = (failure: PlatformFailure) =>
+    failure.status === "investigating" && failure.investigationCardId !== undefined && openCardIds.has(failure.investigationCardId);
+  return activeFailures.filter((failure) => !isInvestigatedInOpenCard(failure));
 }
 
 export async function settleInvestigationOfCard(cardId: string): Promise<PlatformFailure | null> {

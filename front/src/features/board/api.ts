@@ -282,6 +282,11 @@ export const boardApi = {
   readAnalysisConversation: (cardId: string) =>
     get<AnalysisConversationResponse>(`/cards/${encodeURIComponent(cardId)}/analysis/conversation`).then((body) => body.conversation),
 
+  readReviewConversation: (cardId: string, runId: string, pr?: number) => {
+    const path = `/cards/${encodeURIComponent(cardId)}/review/conversation/${encodeURIComponent(runId)}`;
+    return get<AnalysisConversationResponse>(pr === undefined ? path : `${path}?pr=${pr}`).then((body) => body.conversation);
+  },
+
   mergeCardAnalysis: (cardId: string) => post<unknown>(`/cards/${encodeURIComponent(cardId)}/analysis/merge`),
 
   rerunCardAnalysisMergeGate: (cardId: string) => post<unknown>(`/cards/${encodeURIComponent(cardId)}/analysis/merge-gate`),
@@ -428,6 +433,9 @@ export const boardApi = {
         agent: r?.agent ?? "none",
       }),
     ),
+
+  cancelCardWait: (id: string) => del<{ ok: true }>(`/cards/${encodeURIComponent(id)}/wait`),
+  fireCardWait: (id: string) => post<{ fired: true }>(`/cards/${encodeURIComponent(id)}/wait/fire`),
 
   cancelCardMessage: (id: string, messageId: string) =>
     del<{ ok: true }>(`/cards/${encodeURIComponent(id)}/messages/${encodeURIComponent(messageId)}`),

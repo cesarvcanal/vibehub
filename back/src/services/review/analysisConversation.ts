@@ -13,9 +13,9 @@ function toReaderAgent({ model, ...agent }: FleetConversationAgent): AnalysisCon
   return modelLabel ? { ...agent, modelLabel } : agent;
 }
 
-export async function readAnalysisConversation(card: Card): Promise<AnalysisConversation | null> {
+export async function readCardFleetConversation(card: Card, runId?: string): Promise<AnalysisConversation | null> {
   const project = await getProject(card.projectId);
   if (!project) throw new Error("project not found");
-  const conversation = await readFleetConversation(transcriptDirFor(project, card, effectiveAccountSlug(card, project)));
+  const conversation = await readFleetConversation(transcriptDirFor(project, card, effectiveAccountSlug(card, project)), runId);
   return conversation && { ...conversation, agents: conversation.agents.map(toReaderAgent) };
 }

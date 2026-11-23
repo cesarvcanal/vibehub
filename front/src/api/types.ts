@@ -238,6 +238,20 @@ export interface SettingsPatch {
 export type PlatformFailureSource = "backend_error" | "slow_turn" | "stalled_turn" | "agent_report" | "screen_error";
 export type PlatformFailureStatus = "open" | "investigating" | "resolved" | "concluded_without_fix" | "dismissed";
 
+export const FAILURE_TRIGGERS = ["system", "person", "unknown"] as const;
+export type FailureTrigger = (typeof FAILURE_TRIGGERS)[number];
+
+export interface FailureNarrative {
+  context: string;
+  whatHappened: string;
+  cause: string;
+  trigger: FailureTrigger;
+  triggerReason: string;
+}
+
+export const FAILURE_NARRATIVE_UNAVAILABLE_REASONS = ["no_api_key", "request_failed"] as const;
+export type FailureNarrativeUnavailableReason = (typeof FAILURE_NARRATIVE_UNAVAILABLE_REASONS)[number];
+
 export interface PlatformFailure {
   id: string;
   signature: string;
@@ -257,6 +271,8 @@ export interface PlatformFailure {
   investigationCardId?: string;
   resolvedAt?: number;
   dismissedAt?: number;
+  narrative?: FailureNarrative;
+  narrativeUnavailable?: FailureNarrativeUnavailableReason;
 }
 
 export interface PlatformFailureNotice {
@@ -266,7 +282,8 @@ export interface PlatformFailureNotice {
   explanation?: string;
   occurrences: number;
   firstSeenAt: number;
-  details?: Pick<PlatformFailure, "symptom" | "component" | "evidence" | "reproduction" | "hypothesis">;
+  lastSeenAt: number;
+  details?: Pick<PlatformFailure, "symptom" | "component" | "evidence" | "reproduction" | "hypothesis" | "narrative" | "narrativeUnavailable">;
 }
 
 export interface PlatformFailureInvestigation {
@@ -519,6 +536,8 @@ export interface Card {
    * block for each, with the "Pedir revisão" button. Absent = the card never opened a PR.
    */
   prs?: CardPr[];
+  waitingFor?: CardWait;
+  waitTargetTitle?: string;
   /**
    * ANALYSIS CARD: the branch of the PR it analyses and fixes (the panel's "Analisar"). Its PR line offers
    * no "Pedir revisão": the card itself is that PR's analysis. Absent = a regular card.
@@ -604,6 +623,20 @@ export type PrLiveEvent =
   | { type: "pulls-changed" }
   | { type: "claim-refused"; prNumber: number; username: string }
   | { type: "error"; code: "read_only" };
+
+export type CardWaitOutcome = "pr_merged" | "concluded" | "deleted";
+
+export interface CardWait {
+  cardId: string;
+  instruction: string;
+  createdAt: number;
+  createdBy: string;
+  base?: string;
+  readyAt?: number;
+  outcome?: CardWaitOutcome;
+  prNumber?: number;
+  failure?: { at: number; reason: string };
+}
 
 /** A pull request the card delivered — see `Card.prs`. */
 export interface CardPr {

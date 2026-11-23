@@ -430,3 +430,23 @@ describe("CardTile — the countdown on a done card", () => {
     expect(screen.queryByText(/Deleted/)).not.toBeInTheDocument();
   });
 });
+
+describe("CardTile — espera por outro card", () => {
+  const wait = { cardId: "c2", instruction: "faça o PR complementar", createdAt: 1, createdBy: "u1" };
+
+  it("mostra quem o card aguarda e, no tooltip, o que ele fará depois", () => {
+    renderApp(<CardTile card={card({ waitingFor: wait, waitTargetTitle: "Captura de falhas" })} onOpen={vi.fn()} />);
+    const chip = screen.getByText("Waiting for Captura de falhas");
+    expect(chip.closest("[title]")).toHaveAttribute("title", "When it finishes: faça o PR complementar");
+  });
+
+  it("sem acesso ao card esperado fala de outro card", () => {
+    renderApp(<CardTile card={card({ waitingFor: wait })} onOpen={vi.fn()} />);
+    expect(screen.getByText("Waiting for another card")).toBeInTheDocument();
+  });
+
+  it("card sem espera não ganha o selo", () => {
+    renderApp(<CardTile card={card()} onOpen={vi.fn()} />);
+    expect(screen.queryByText(/Waiting for/)).not.toBeInTheDocument();
+  });
+});
