@@ -1,1138 +1,607 @@
-# SDK driver — o chat nativo
+# SDK driver — the native chat
 
-A **per-card SDK driver** that runs a card's Claude session through the Agent SDK (`query()`) instead
-of the tmux/send-keys TUI. It is **on by default** (see The flag below) and **ADDITIVE**: with the
-flag off, the TUI/chat/provisioning path is the classic one. Nothing here removes or reroutes the
-existing terminal.
+The Chat tab of every card runs the card's Claude session through the **Claude Agent SDK**
+(`query()`), not through `send-keys` into the terminal UI (TUI). A small Node process, the
+**driver**, runs inside the runner, in the card's worktree, and talks to the back over NDJSON on
+stdin/stdout; the back relays it to the browser over a websocket. The Terminal tab is untouched:
+both tabs are views of the same conversation (see "Terminal and native chat").
 
-Built on the proven spike (`spikes/sdk-poc/`, branch `card/spike-sdk-poc`). Reuses its findings:
-`bypassPermissions` auto-allows, a `PreToolUse` hook is the selective gate under bypass, resume works
-by `session_id`, and a **bare-name allowlist SHADOWS the permission callback** (see the risk below).
+## Settings
 
-## The flag
+All three live in `back/src/services/settings/settings.ts` and are install-wide (owner only):
 
-`sdkDriver: boolean` in `back/src/services/settings/settings.ts` — **default `true`** since
-2026-08-31 (the native chat graduated: it IS the Chat tab of every card). Off is the install-wide
-fallback to the classic chat: the front mounts the transcript chat everywhere (it learns the flag
-from `GET /api/features`, which any signed-in user can read) and the `/sdk` websocket does not
-start. `PATCH /api/settings { "sdkDriver": false }` or the "Chat nativo" switch in Configurações.
+| Setting | Default | Effect |
+|---|---|---|
+| `sdkDriver` | `true` | On: the Chat tab of every card is the native chat. Off: every card falls back to the classic transcript chat and `GET /api/cards/:id/sdk` answers an error frame and closes. The front learns the value from `GET /api/features` (`sdkChat`), readable by any signed-in user. UI: Settings → "Native chat (install default)". |
+| `sdkPermissionMode` | `"same-as-terminal"` | The driver's permission gate (see "Permissions"). Travels to the driver as `--permission-gate`. |
+| `sdkAutoResume` | `true` | Whether a turn killed by a panel restart or a driver crash is resumed automatically (see "Resume after a restart"). |
 
-`sdkPermissionMode: "same-as-terminal" | "ask-sensitive"` — **default `"same-as-terminal"`** — picks
-the driver's permission-gate behaviour; see "Permission model" below.
+The card field `card.sdkChat` (an old per-card opt-in) is still accepted by the board's patch
+validation, but nothing reads it: the front decides only by `/api/features`.
 
 ## The pieces
 
-| File | What |
+| File | Role |
 |---|---|
-| `back/src/services/sdk/sdk-driver.mjs` | The **driver process**. Runs IN the runner (Node, in the card's worktree). `query()` with `bypassPermissions` + a `PreToolUse` gate; NDJSON events on stdout; user messages on stdin. |
-| `back/src/services/sdk/protocol.ts` | Pure contract: `DriverEvent` types, `parseDriverLine`, `encodeControl`, and the permission classifier (`classifySensitivity` / `sdkPermissionDecision`). Unit-tested; the driver embeds a mirror copy. |
-| `back/src/services/sdk/driver.ts` | Installs the driver into the runner (`docker exec`, atomic) and builds the spawn command (`docker exec -i … bash -c '<token guard>; exec node …'`), resolved through the host executor. |
-| `back/src/services/sdk/manager.ts` | O **dono do driver**: UM driver por card, propriedade do BACK (não da conexão). Multiplexa todos os websockets do card, persiste history/resume-id do lado que sobrevive, e cuida do fim de vida (killCardSession + idle). |
-| `back/src/routes/cardSdk.ts` | The **websocket** `GET /api/cards/:id/sdk`. Flag-gated; faz o trabalho por-conexão (replay, mirror, quem digita) e ATTACHA no driver vivo do card via o manager. Entirely separate from the terminal/chat routes. |
+| `back/src/services/sdk/sdk-driver.mjs` | The driver process. Runs in the runner; one streaming `query()` per stream, `bypassPermissions` plus its own `PreToolUse` hook, NDJSON events on stdout, controls on stdin. Copied into `dist` by `back/scripts/build-assets.mjs` (tsc ignores `.mjs`). |
+| `back/src/services/sdk/protocol.ts` | The canonical contract: event and control types, `parseDriverLine`, `encodeControl`, `parseSdkClientFrame` and the other browser-frame parsers, the permission classifier and the permission/question ledgers. The driver embeds mirror copies of the classifier, the gate and the ledgers (an `.mjs` cannot import the compiled back); `protocol.ts` is the tested source. |
+| `back/src/services/sdk/driver.ts` | Installs the driver and the SDK into the runner and builds the spawn command. |
+| `back/src/services/sdk/manager.ts` | Owns the card's single driver: multiplexes every websocket of the card, persists history and the resume id, counts turns, handles idle stop, death reports, API retries and effort switches. |
+| `back/src/routes/cardSdk.ts` | The websocket `GET /api/cards/:id/sdk` (`requireCardWork`): per-connection work (frame buffering, replay, mirror reference, author) and then `attachSocket` onto the card's driver. |
+| `back/src/services/sdk/history.ts` | The card's chat log, `<dataDir>/sdk-history/<cardId>.ndjson`. |
+| `back/src/services/sdk/inflight.ts`, `resume.ts` | Durable "turn in flight" markers and the boot sweep that resumes them. |
+| `back/src/services/sdk/mirror.ts`, `transcript.ts` | Terminal → chat mirror and the replay merge with the CLI transcript. |
+| `front/src/features/board/components/SdkChatView.tsx`, `front/src/features/board/lib/sdkChat.ts` | The chat view and its pure reducer/rules. |
 
-The driver `.mjs` is copied into `dist` by `back/scripts/build-assets.mjs` (tsc ignores `.mjs`).
+## Driver lifecycle
 
-## The wire contract (consumed by the front's `SdkChatView` since increment 2)
+### Provisioning
 
-The websocket sends **one JSON text frame per event**:
+On connect, when the card has no live driver, `installCardSdkDriver()` plants `sdk-driver.mjs`
+in `/root/.vibehub-sdk/` (atomic `mktemp` + `mv`) and runs `buildEnsureSdkScript`, which installs
+`@anthropic-ai/claude-agent-sdk@<SDK_PACKAGE_VERSION>` there only when the `.sdk-version` marker
+disagrees. The first connect pays one `npm install`; later ones are a marker check. Upgrading the
+SDK means changing `SDK_PACKAGE_VERSION` in `driver.ts` (currently `0.3.300`). The runner container
+is never recreated.
+
+Before spawning, the route also rebuilds a missing worktree (`restoreMissingWorkspace`, for a card
+whose agent removed its own folder) and reapplies the card's git identity.
+
+### The spawn command
+
+`buildSdkDriverCommandLine` produces `docker exec -i <runner> bash -c '<env>; exec node
+sdk-driver.mjs --cwd <worktree> [--resume <id>] [--model …] [--effort …] [--permission-gate …]'`,
+run through the host executor's pipe transport (no tty, so long NDJSON lines are not cut or
+echoed). The environment it sets:
+
+- `unset ANTHROPIC_API_KEY`, `IS_SANDBOX=1`, `NODE_PATH` at the driver's own `node_modules`, the
+  auto-compact and test-worker exports;
+- the sign-in (see "Authentication") and `CLAUDE_CONFIG_DIR` for a non-default account; transcripts
+  are carried over from the previous profile after an account switch, so `--resume` finds them;
+- the card's environment, the same the TUI session has: `PW_CDP_ENDPOINT` (the `navegador` MCP
+  drives this card's own Chromium), `VIBEHUB_CARD_ID` and `VIBEHUB_STATUS_URL` (the status hooks
+  report the right card), the card's git identity variables and its temp dir.
+
+Every value placed in the line is validated (paths, card id, session id, URLs) and shell-quoted.
+
+### Query options
+
+`baseOptions()` in the driver:
+
+- `permissionMode: "bypassPermissions"` with a `PreToolUse` hook (the gate) and `canUseTool` (which
+  receives `AskUserQuestion` in every permission mode);
+- `settingSources: ["user", "project", "local"]` and `systemPrompt: { type: "preset", preset:
+  "claude_code" }`: the same MCPs, settings, hooks and `CLAUDE.md` files the TUI session loads;
+- `includePartialMessages: true` (live deltas), `thinking: { type: "adaptive", display:
+  "summarized" }` (on current models the default display is `omitted`, and thinking blocks arrive
+  with empty text), `agentProgressSummaries: true` (a per-subagent "what it is doing now" line);
+- `model` and `effort` when the card pins them. No `allowedTools`.
+
+### One driver per card
+
+`ensureDriverSession` keeps at most one driver per card, owned by the back, not by a connection.
+A reconnect or a second tab attaches to the live process and receives a synthesized `ready` (with
+the newest resume id and `turnActive`). Closing a tab only detaches its socket: the turn keeps
+running and the manager keeps writing the history, the resume id and the mirror's dedupe keys.
+
+The driver ends when:
+
+- the card's session is killed (`onCardSessionKill`: pause, hibernate, restart, delete, model or
+  account change);
+- it is idle: no socket and no turn in flight for `DRIVER_IDLE_MS` (15 min). A live background
+  task holds an unwatched driver for at most `BACKGROUND_HOLD_MAX_MS` (3 h);
+- its stdin closes (`rl.on("close") → exit 0`), which is also how it exits when the back stops.
+
+The runner reaper never selects a process whose command line carries the driver path. A card with
+a connected chat or a turn running is vetoed from hibernation (`isCardChatInUse`), and a chat
+message stamps `humanActiveAt`, which the idle sweep counts as activity.
+
+An exit nobody asked for becomes a `warn` log with the exit code, the stderr tail
+(`STDERR_TAIL_MAX`) and the turns in flight, plus an `error` frame in the chat. If a turn was in
+flight, the crash resume picks it up (see below). A late `close` from a stopped driver never clears
+state that a successor driver already owns.
+
+The route buffers every frame that arrives during its setup (seconds of `await`) and feeds them to
+the manager after the attach, in order. If the socket closed during the setup, the route acquires
+nothing (no mirror, no driver, no slot in `session.sockets`).
+
+## Turns: streaming input
+
+The driver keeps one long-lived `query()` whose `prompt` is an async iterable fed by an internal
+channel. A message that arrives while a turn runs is pushed into the live stream, and the CLI folds
+it into the running turn. Verified live on SDK 0.3.246 and again on 0.3.300: a message pushed
+during a running turn produced a single `result` whose answer already honoured it.
+
+- **`turn_absorbed`**: the driver emits it after pushing a message into a running turn. That send
+  will not produce its own `result`, so the manager takes back its +1 on `activeTurns` (floor 1).
+- **Closing a turn**: a turn that ends without a `result` (interrupt, stream death) is closed with
+  `result { subtype: "aborted" }`, so the manager's count always returns to zero. An interrupted
+  turn (`terminal_reason` `aborted_streaming`/`aborted_tools`) reports `isError: false`. The CLI's
+  internal diagnostics (`[ede_diagnostic]`) are stripped from error text; a stream the driver
+  tears down itself is not reported as an error.
+- **Autonomous turns**: the CLI also opens turns on its own (a background task finished, a
+  `ScheduleWakeup` fired). The manager detects them (main-agent output with no turn open) and
+  `isTurnInFlight` (`activeTurns > 0 || autonomousTurn`) is the single rule used by `ready`, the
+  idle stop and the board status.
+- **Known race**: the driver decides "absorbed" from its own `turnActive` at push time. If the
+  CLI's `result` was already in transit, the CLI runs the message as a new turn and one extra
+  `result` arrives; the manager's floor at zero absorbs it, and the worst symptom is the spinner
+  going off between the two results.
+- **Session id**: `session` is emitted when the id changes; the manager persists it on the card
+  (`resumeSessionId`). A new stream resumes `lastSessionId`. On connect, the route resumes the
+  newest transcript in the card's worktree, whichever tab wrote it (`resumeTargetFor`).
+
+## The wire protocol
+
+`protocol.ts` defines four directions. Everything below matches it field by field.
+
+### Driver → back (stdout)
+
+`parseDriverLine` accepts exactly these `type` values (`DRIVER_EVENT_TYPES`); anything else, or a
+line that is not JSON, becomes `parse_error`.
 
 ```jsonc
-{ "type": "ready", "resume"?: "<sessionId>", "turnActive"?: bool } // driver is up (turnActive: a turn is in flight)
-{ "type": "session", "sessionId": "<uuid>" }               // learned the session id (resume key)
-{ "type": "assistant_delta", "text": "…" }                 // live token stream
-{ "type": "assistant_text", "text": "…" }                  // consolidated text block
-{ "type": "tool_use", "id": "toolu_…", "name": "Write", "input": { … } }
+{ "type": "ready", "resume"?: "<sessionId>", "turnActive"?: bool }   // turnActive is stamped by the back
+{ "type": "session", "sessionId": "<uuid>" }
+{ "type": "assistant_delta", "text": "…" }
+{ "type": "assistant_text", "text": "…", "parentToolUseId"?: "toolu_…" }
+{ "type": "thinking_delta", "text": "…" }
+{ "type": "thinking", "text": "…" }
+{ "type": "tool_use_start", "id": "toolu_…", "name": "Write" }
+{ "type": "tool_input_progress", "id": "toolu_…", "bytes": n, "filePath"?: "…" }
+{ "type": "tool_use", "id": "toolu_…", "name": "Write", "input": { … }, "parentToolUseId"?: "…" }
+{ "type": "tool_progress", "id": "toolu_…", "elapsedSeconds": n }
+{ "type": "tool_result", "id": "toolu_…", "isError"?: bool, "text"?: "…", "textLength"?: n, "structured"?: …, "outputLines"?: n, "parentToolUseId"?: "…" } // raw, capped
+{ "type": "task_started" | "task_progress" | "task_notification", "taskId": "…", "toolUseId"?: "…", "description"?: "…", "subagentType"?: "…", "taskType"?: "…", "status"?: "…", "toolUses"?: …, "tokens"?: …, "durationMs"?: …, "lastTool"?: "…", "summary"?: "…" }
 { "type": "permission", "tool": "Bash", "decision": "allow"|"deny", "sensitive": bool, "reason"?: "…", "id"?: "…", "timedOut"?: bool }
-{ "type": "permission_request", "id": "perm_…", "tool": "Bash", "input"?: { … }, "reason"?: "…" }  // AWAITS a decision
-{ "type": "turn_absorbed" }                                // a send folded into the RUNNING turn (streaming input)
-{ "type": "result", "isError": bool, "sessionId"?: "…", "subtype"?: "success", "result"?: "…", "permissionDenials"?: [ … ] }
-{ "type": "catalog", "commands": [ { "name": "code-review", "description": "…", "argumentHint": "[<pr#>]", "aliases": ["review"], "source": "skill"|"plugin"|"command" } ] }
-{ "type": "local_output", "text": "…" }                    // resposta de um comando LOCAL (/cost, /usage)
-{ "type": "conversation_reset", "trigger"?: "clear" }      // o /clear zerou o contexto: sessão NOVA no CLI; o back apaga o log do card e grava a nota "conversation-cleared"; o front limpa a tela
-{ "type": "background_tasks", "tasks": [ { "id": "…", "type": "local_bash", "description": "…" } ] } // o conjunto VIVO de tarefas em segundo plano (substitui o anterior; [] = nada rodando). Estado, não conversa: nunca gravado, reenviado a quem conecta; enquanto não vazio o driver não é desligado por ociosidade
-{ "type": "tool_result", "id": "toolu_…", "parentToolUseId"?: "…", "toolResult": { "lines"?: n, "isError"?: true, "error"?: "…", "added"?: n, "removed"?: n, … } } // o RESUMO do que a ferramenta devolveu
-{ "type": "agent_task", "toolUseId": "toolu_…", "taskId": "…", "status": "running"|"completed"|"failed"|"stopped", "toolUses"?: n, "durationMs"?: n, "summary"?: "…" } // estado de um subagente
-{ "type": "detail", "req": "tool"|"agent"|"changes"|"file", "id"?: "…", "path"?: "…", "nonce"?: "…", "data"?: {…}, "error"?: "…" } // resposta a um pedido de detalhe, só para a aba que pediu
-{ "type": "thinking", "text": "…" }                        // o raciocínio do modelo (bloco fechado)
-{ "type": "thinking_delta", "text": "…" }                  // …e o mesmo, token a token, ao vivo
+{ "type": "permission_request", "id": "…", "tool": "Bash", "input"?: …, "reason"?: "…" }
 { "type": "user_question", "id": "…", "questions": [ { "question": "…", "header"?: "…", "options": [ { "label": "…", "description"?: "…" } ], "multiSelect"?: bool } ] }
-{ "type": "question_result", "id": "…", "answers"?: [ { "selected": ["…"] } ], "timedOut"?: bool, "superseded"?: bool }
-{ "type": "rewound", "ok": bool, "uuid"?: "…", "reason"?: "no-fork-point"|"absorbed", "originalText"?: "…" } // an edit was applied (live-only)
-{ "type": "workflow_progress", "runId": "wf_…", "name": "…", "total": n, "done": n, "agents": [ { "id", "label", "status": "running"|"done", "result"? } ], "at": ms, "finished": bool } // live-only
-{ "type": "system_note", "text": "…", "at": ms }           // back-synthesised: the panel's own line (persisted)
-{ "type": "peer_typing", "name": "…", "active": bool }     // back-synthesised: ANOTHER socket of this card is typing (ephemeral)
-{ "type": "user", "text": "…", "at": ms, "from"?: {…} }  // back-relayed: a message sent from ANOTHER socket of this card (an edit sends `message_edited` first)
-{ "type": "user_ack", "cid": "…" }                         // back-synthesised: a send is ON DISK
-{ "type": "user_nack", "cid": "…", "reason": "driver-gone"|"history-write-failed" } // back-synthesised: the send was REFUSED, or never reached the disk
+{ "type": "question_result", "id": "…", "answers"?: [ { "selected": ["…"] } ], "timedOut"?: bool, "superseded"?: bool, "sent"?: "…", "cancelledBy"?: "…", "cancelledHow"?: "stop"|"send_now"|"edit" }
+{ "type": "turn_absorbed" }
+{ "type": "rewound", "ok": bool, "uuid"?: "…", "reason"?: "no-fork-point"|"absorbed"|"not-delivered", "originalText"?: "…", "text"?: "…", "first"?: bool }
+{ "type": "catalog", "commands": [ { "name": "…", "description"?: "…", "argumentHint"?: "…", "aliases"?: ["…"], "source": "skill"|"plugin"|"command" } ] }
+{ "type": "effort_default", "effort": "…" }
+{ "type": "effort_ack", "id": "…", "effort"?: "…", "error"?: "…" }
+{ "type": "keyword_effort_replaced" }
+{ "type": "local_output", "text": "…" }
+{ "type": "btw_answer", "id": "…", "question": "…", "text"?: "…", "error"?: "…" }
+{ "type": "compaction", "phase": "started"|"done"|"failed", "trigger"?: "manual"|"auto", "preTokens"?: n, "postTokens"?: n, "durationMs"?: n, "error"?: "…", "startedAt"?: ms }
+{ "type": "background_tasks", "tasks": [ { "id": "…", "type": "…", "description": "…", "toolUseId"?: "…" } ] }
+{ "type": "rate_limit", "status": "allowed"|"allowed_warning"|"rejected", "window": "…", "utilization"?: n, "resetsAt"?: ms }
+{ "type": "login_failed" }
+{ "type": "usage_limited", "rateLimit"?: … }
+{ "type": "context_usage", "usedTokens": n, "maxTokens": n, "percent": n, "model"?: "…" }
+{ "type": "conversation_reset", "trigger"?: "…" }
+{ "type": "result", "isError": bool, "subtype"?: "…", "sessionId"?: "…", "result"?: "…", "permissionDenials"?: [ … ] }
 { "type": "error", "message": "…" }
-{ "type": "parse_error", "raw": "<the bad line>" }          // back-synthesised; nothing is swallowed
 ```
 
-The connect REPLAY (before any of the above) re-sends the persisted history events — `user`,
-`assistant_text`, `tool_use`, `permission_request`/`permission`, `user_question`/`question_result`,
-`system_note`, `message_edited` — plus the terminal-mirrored ones (`source: "terminal"`, `tid`).
-
-The front sends, per message: a JSON object `{ "type": "user", "text": "…", "cid"?: "…" }`,
-`{ "type": "interrupt", "reason"?: "edit" }`, `{ "type": "permission_decision", "id": "…", "allow": true|false }`
-(the answer to a `permission_request`), `{ "type": "question_answer", "id": "…", "answers": [{ "selected": ["…"] }] }`
-(the answer to a `user_question`), `{ "type": "edit_user", "original": "…", "text": "…", "cid"?: "…" }`
-(editar uma mensagem enviada — ver a seção *Editar mensagem*), `{ "type": "typing", "active": bool }`
-(o "está digitando", só repassado às outras abas) — **or a bare string**, which is treated as a user
-message.
-Multi-turn works by resume: the driver captures `session_id`, the manager persists it on the card
-(`resumeSessionId`), and the next spawn continues the same session.
-
-## O menu "/" — invocar skills e comandos pelo chat
-
-No Terminal você aperta `/` e a TUI oferece a lista; no chat nativo era preciso saber o nome de cor.
-A sessão JÁ conhece tudo que pode rodar — skills (`~/.claude/skills`, plugins, `.claude/skills` do
-repo), comandos de plugin, comandos do projeto (`.claude/commands`) e os built-ins do Claude Code —,
-porque o driver sobe com `settingSources: ["user","project","local"]`. O que faltava era o caminho
-até a tela:
-
-1. **Driver** — no `init` de cada stream, o driver pede `query.supportedCommands()` (nome,
-   descrição, `argumentHint`, aliases) e emite UM `catalog` com essa lista mais as listas do próprio
-   `init`: `skills` (quais nomes são skills), `plugins` (quais plugins estão instalados) e
-   `terminal_slash_commands` (os presos ao terminal — `/doctor`, `/color`). O pedido é feito uma vez
-   por processo (o `init` se repete a cada turno, e um round-trip de controle por turno não
-   compraria nada); um `commands_changed` do CLI — uma skill descoberta no meio da sessão — emite o
-   catálogo de novo. Falhou? o próximo `init` tenta outra vez.
-2. **Back** — `normalizeSlashCommands` (protocol.ts) é quem transforma isso no que pode ir pro
-   browser: nome válido ou fora, descrição achatada numa linha e limitada, catálogo com teto,
-   `source` calculado (`skill` / `plugin` / `command`) e os terminal-only removidos. O manager
-   guarda o resultado em `session.catalog` e **reenvia no attach** de cada socket — o catálogo é
-   ESTADO de sessão, não conversa: nunca entra no histórico, e uma aba que abre depois não pode
-   ficar sem menu esperando o `init` do próximo turno.
-3. **Front** — `lib/slashMenu.ts` tem as regras puras (quando o menu abre, o ranking da busca, como
-   o campo fica depois de escolher) e o `TerminalComposer` desenha a lista acima do campo. O menu só
-   existe enquanto o rascunho INTEIRO é uma palavra começada por `/`: digitou espaço, o nome está
-   fechado e o que vem depois são os argumentos. Enter/Tab escolhem, setas andam, Esc dispensa
-   **sem mexer no rascunho** (e um caractere a mais reabre). A busca casa nome, alias E descrição —
-   é o que faz "bug" achar a skill que caça bug.
-
-O envio não tem nada de especial: `/code-review high` vai como mensagem de usuário normal, e o CLI
-resolve o comando do outro lado (é o mesmo caminho da TUI). Quando o comando é LOCAL (`/cost`,
-`/usage`), não existe turno nem fala do modelo — a resposta chega como `local_command_output` e
-vira a linha `command_output` do chat, em vez de ser engolida.
-
-Um runner mais antigo, que não reporte catálogo, simplesmente não tem menu: o campo se comporta
-como antes e um `/` digitado à mão continua chegando no CLI.
-
-## Editar mensagem = REBOBINAR a conversa (2026-09-26)
-
-Editar passou a levar a sessão **de volta pra antes da mensagem corrigida**, como em qualquer chat:
-o modelo nunca leu a versão errada, a resposta pela metade deixa de existir e as ferramentas que
-rodaram no meio saem junto. Antes a edição só EMPILHAVA — a conversa ganhava as duas bolhas, a meia
-resposta e um supersede explicando a correção; o modelo lembrava de tudo.
-
-Como: `resume` + `resumeSessionAt` no `query()`. Medido contra o SDK antes de escrever (e depois
-ponta a ponta, com sessão real): rebobinar no uuid do **assistant** do turno mantido traz a
-resposta antiga de volta; rebobinar no uuid do `result` é recusado com `error_during_execution`. A
-sessão continua com o mesmo id — trunca no lugar.
-
-**De onde vem o ponto de volta (hotfix 2026-10-05).** Primeiro do **transcript da sessão em
-disco** (`forkPointFromTranscript` + `readSessionTranscript` no driver): andando só pelo ramo vivo
-(da entrada mais nova subindo por `parentUuid`), acha o prompt com aquele texto e o primeiro
-`assistant` acima dele. Isso vale para **qualquer** mensagem (não só a última) e sobrevive ao driver
-ser derrubado por ociosidade ou deploy — antes o ponto vivia só na memória do processo, e qualquer
-um desses casos caía no supersede (a edição aparecia como mensagem nova embaixo, sem apagar nada).
-Editar a **primeira** mensagem abre uma sessão nova (`rewound` com `ok: true` e sem `uuid`). Um
-`compact_boundary` ou um pai ausente no arquivo **não** contam como início da conversa: aí o disco
-responde "não achei". Também "não achei" quando a mesma frase aparece mais abaixo como mensagem
-absorvida (`attachment` `queued_command`) — a tela está editando essa, que não tem ponto próprio.
-Sem resposta do disco, o ponto em memória só vale se a mensagem editada for **a última enviada**
-(senão rebobinaria a errada); fora isso, supersede. O que estava abaixo da mensagem editada —
-inclusive uma mensagem absorvida — some da tela e do modelo, que é o que editar acima dela significa.
-
-A decisão é tomada **antes** de derrubar o stream: uma edição que termina em supersede não reinicia o
-CLI. `user`/`edit_user` que chegam enquanto um rebobinar está em curso esperam a vez (`serialized`),
-senão abririam um stream na ponta velha e a edição cairia dentro dele. O `rewound` com `ok: true`
-leva `originalText`, e a tela corta a partir da linha com essas palavras (não da editada mais nova —
-um supersede anterior mais abaixo também fica "editada").
-
-**A primeira mensagem é dita pelo nome, não pelas palavras (2026-10-19).** Palavras não dizem QUAL
-cópia foi clicada: uma mensagem reenviada depois de um erro tem as mesmas, e as três camadas pegavam
-a mais nova — editar a primeira rebobinava para depois da primeira resposta ("ficou como se eu
-tivesse editado a segunda"). Quando a bolha editada é a primeira mensagem da tela, o `edit_user`
-leva `first: true`: o driver recomeça a sessão sem procurar nada no transcript (`rewound` ok, sem
-`uuid`), o manager carimba `first` no marcador `message_edited` e no `rewound` da tela, e log
-(`rewindHistory`) e tela (`markUserEdited`/`dropRewoundRows`) cortam desde a PRIMEIRA cópia.
-
-Risco residual conhecido: editar a **primeira** mensagem abre sessão nova; se o driver morrer antes
-de essa sessão gravar o primeiro arquivo (~1s), o próximo spawn retoma a sessão antiga.
-
-**Quando o driver RECUSA rebobinar** (só quando o disco não achou o ponto; cai no supersede de
-sempre, que continua existindo):
-
-- **`no-fork-point`** — não há pra onde voltar (primeira mensagem da sessão, ou o stream morreu ao
-  ser derrubado).
-- **`absorbed`** — uma mensagem entrou **no meio do turno** depois da que está sendo editada (o
-  "encavalar" que o vibehub suporta). Rebobinar descartaria essa mensagem sem bolha, sem linha no
-  log e sem como recuperar — e é uma mensagem que uma PESSOA escreveu. O SDK tem um guard pra isso
-  (`resumeDropsTurn`), mas ele exige o prompt uuid do próprio envio, que o driver nunca vê; então
-  o driver recusa por conta própria.
-
-- **`not-delivered`** — o transcript foi lido inteiro, até a raiz do ramo vivo, e a mensagem
-  original não está lá: o modelo nunca a leu (o turno morreu antes de o CLI gravá-la — o "No
-  conversation found" depois de trocar a conta). Não há o que corrigir nem rebobinar: vai o texto
-  LIMPO, como turno normal, sem derrubar o stream (2026-10-19 — antes ia o invólucro "desconsidere a
-  mensagem anterior" falando de uma mensagem que o modelo não conhecia). Nada é cortado; o manager
-  registra o texto limpo como fala do driver (espelho) e tira o `sent` da linha (`unwrapEditedMessage`).
-  Transcript vazio, compactação ou pai ausente continuam "não sei" e caem no supersede.
-
-O evento `rewound` (`{ ok, uuid?, reason? }`) diz qual dos dois aconteceu, e **as três camadas têm
-de concordar**: o modelo (a sessão truncada), o log (`rewindHistory` corta do original até o
-marcador `message_edited`) e a tela (`dropRewoundRows` corta as mesmas linhas). Com `ok: false`
-ninguém corta nada — o supersede significa que tudo que está na tela ainda faz parte da conversa.
-
-Três detalhes que fazem as camadas realmente baterem:
-
-- **A nota do corte sai junto.** "A resposta acima ficou pela metade" fala de uma meia resposta que
-  o rebobinar apagou. No caminho comum ela está entre o original e o marcador, e o corte a leva; no
-  caminho do prazo de carência (a tela desiste de esperar o turno fechar e manda a edição assim
-  mesmo) ela aterrissa DEPOIS do marcador, e quem a tira é `dropOrphanInterruptNotes`. Na tela,
-  `dropRewoundRows` faz o mesmo na cauda.
-- **O `rewound: ok` tem dono.** O manager mantém uma FILA das edições em voo (`session.rewinds`) e
-  casa cada resposta com a sua, na ordem — duas edições antes da primeira resposta cortavam o log na
-  mensagem errada. Um `ok: true` sem dono (driver repetindo, frame atrasado) **não é repassado à
-  tela**: lá ele apagaria turnos inteiros que o modelo ainda tem.
-- **A chave de dedupe do espelho muda com o resultado.** Ver a seção da edição, abaixo.
-
-Invariante que os testes cercam: **a edição sempre chega ao modelo**. Recusa, falha ao derrubar o
-stream, `applyFlagSettings` quebrado — todos os caminhos terminam mandando a mensagem, como rewind
-ou como supersede. Uma edição que não chega é o único resultado inaceitável.
-
-## Editar mensagem (supersede) — só no chat nativo
-
-O usuário pode editar uma mensagem que já mandou (lápis na bolha; Esc com o campo vazio edita a
-última; Esc durante a edição cancela e devolve o rascunho). Como o modelo **já leu** a original, a
-edição não reescreve o passado — é um **supersede**:
-
-- **Entrar na edição PAUSA o turno.** No clique do lápis (não no envio), com um turno rodando, o
-  front manda `{ "type": "interrupt", "reason": "edit" }`. O relato que originou isso: "cliquei pra
-  editar e, em vez de PAUSAR o raciocínio, ele continua respondendo normalmente" — o agente gastava
-  o turno em cima da mensagem que estava sendo corrigida.
-- O front manda `{ "type": "edit_user", "original", "text" }` e segura a edição até o
-  `result`/`aborted` do turno interrompido (timeout de segurança de 15s — o driver enfileira turnos
-  de todo jeito), pra que a edição nunca chegue como resposta de um turno que a mensagem antiga
-  ainda está tocando. Se um turno novo apareceu no meio (outra aba), ele também é interrompido.
-- **Cancelar a edição (Esc/X) NÃO ressuscita o turno** — o SDK não desinterrompe nada. A tela diz a
-  verdade: aparece uma faixa "o turno foi interrompido quando você entrou na edição" com um botão
-  **Continuar de onde parou**, que manda um turno NOVO pedindo pra retomar (`RESUME_TURN_TEXT`), e um
-  X pra dispensar. Enviar a edição substitui a oferta.
-- O manager NARRA o corte: no `result` do turno abortado (depois dos últimos deltas, nunca antes)
-  ele grava e transmite `{ "type": "system_note", "text": "turn-interrupted" | "turn-interrupted-edit" }`.
-  É código, não prosa — o front traduz (pt-BR/en) e a linha sobrevive ao F5, porque explica um texto
-  que ficou cortado no meio. Um stop sem turno rodando não gera nota.
-- **Nada de balão vermelho mudo.** O CLI encerra um turno interrompido como `error_during_execution`
-  com `terminal_reason: aborted_streaming | aborted_tools` e um diagnóstico interno
-  (`[ede_diagnostic] …`) no lugar de texto; o chat desenhava literalmente a palavra "error", e
-  depois o jargão. Agora a filtragem acontece no DRIVER, que é a camada que sobrevive ao F5 e à
-  segunda aba:
-  - `wasAborted(terminal_reason)` ⇒ o `result` vai com `isError: false`. Interrupção não é falha, e
-    a nota acima já contou a história. (`interruptRequested` no reducer continua como segunda
-    trava, mas ele é estado de uma aba só.)
-  - `humanErrorText` tira os diagnósticos internos do CLI (`[ede_diagnostic]`) de qualquer mensagem
-    de erro; se não sobrar nada, nada é emitido. `[session_crash]` NÃO é filtrado — jargão que a
-    pessoa pode agir em cima vale mais que um turno que para sem explicação.
-  - O stream que o próprio driver derruba (`endStream`, no rebobinar) não vira erro na tela: o SDK
-    reporta essa morte como exceção, e ela é nossa. O que é engolido vai pro stderr com o prefixo
-    `[sdk-driver]`, que o manager loga em `warn`.
-  - Falha de verdade continua virando frase traduzida com o `subtype` e o que fazer.
-- O manager (`dispatchClientFrame`) embrulha o texto com `buildSupersedeText` (protocol.ts) e escreve
-  no stdin do driver **um turno `user` normal** — o driver não conhece `edit_user`:
-
-  ```
-  [correção do usuário — desconsidere a mensagem anterior:
-  «<original>»
-  e considere esta versão no lugar:]
-
-  <texto editado>
-  ```
-
-  A proveniência continua a do USUÁRIO — é fala dele, corrigida.
-- A história (ndjson) ganha duas linhas: `{ "type": "message_edited", "originalText" }` (a bolha
-  original sai da tela e a nova versão leva o selo "editada" — no replay também; desde 2026-10-19
-  a edição troca a bolha em vez de empilhar uma cópia apagada em cima da nova) e o novo
-  `{ "type": "user", "text": <limpo>, "sent": <embrulhado> }`. `text` é o que a TELA mostra;
-  `sent` é a APOSTA de o que vai pro stdin, feita antes de o driver escolher — e é pelo `sent` que
-  `replayDedupeKey` casa a linha embrulhada que o transcript vai carregar.
-- **Quem decide a aposta é o `rewound`**, e as duas pontas são acertadas quando ele chega:
-  - `ok: true` ⇒ foi o texto LIMPO que o modelo leu. O manager registra esse texto na memória de
-    dedupe do espelho (sem isso o espelho republicava a mensagem corrigida como se o TERMINAL a
-    tivesse dito — uma segunda bolha embaixo da que acabara de ser corrigida) e `rewindHistory`
-    apaga o `sent`, que virou mentira. Sem isso o F5 desenhava a mensagem duas vezes.
-  - `ok: false` ⇒ foi mesmo o embrulho; `sent` fica e tudo segue como antes.
-- Turno e marcador in-flight contam como um envio normal (deploy resume incluído).
-
-**O chat clássico (transcript/tmux) não tem edição**: o caminho dele é `send-keys` na TUI — não há
-como interromper semanticamente o turno nem falar de supersede com o motor; a tecla Esc lá já é o
-próprio stop do terminal. A edição é um recurso do driver SDK.
-
-## Escada de estados — feedback imediato ao enviar ("Preparando… → Pensando… → Trabalhando…")
-
-Entre o Enter e o primeiro token existem segundos reais (o driver roda `query()` por turno: subir o
-subprocess, carregar MCPs, resume da sessão). Para a mensagem nunca parecer perdida, o reducer
-marca `awaiting` no envio próprio (`appendUserRow` com `awaiting`) e a view mostra **um** indicador
-(nunca empilhado, mesmo assento do spinner):
-
-- `awaiting && !ready` → **"Preparando…"** (driver frio, ainda subindo/retomando a sessão);
-- `awaiting && ready` → **"Pensando…"** (o turno está no motor, nenhum token ainda);
-- primeiro evento do driver (delta/tool/result…) limpa `awaiting` → o **"Trabalhando…"** normal
-  assume (ou nada, se o turno acabou).
-
-Replay e mensagens externas nunca acendem a escada — ela narra o NOSSO envio.
-
-**Warm-up**: a rota já garante o driver de pé no CONNECT do websocket (`ensureDriverSession` roda a
-cada conexão, antes de qualquer mensagem) — o arranque frio do processo acontece enquanto o usuário
-digita, sem contar turno nem marcar in-flight (teste em manager.test.ts). A latência que resta é o
-`query()` por turno dentro do driver; eliminá-la de verdade pede o modo streaming-input do SDK (uma
-`query()` persistente por sessão) — anotado como próximo passo, fora deste incremento.
-
-## Permission model — a configurable MODE (`sdkPermissionMode`)
-
-Decisão de produto do mantenedor: o gate do driver virou um **modo configurável**,
-`sdkPermissionMode`, com **`"same-as-terminal"` como default**.
-
-- **`"same-as-terminal"`** — o chat nativo tem **exatamente o mesmo comportamento de permissões da
-  aba Terminal do mesmo card**: o terminal roda o Claude sob as settings do próprio runner
-  (`bypassPermissions` quando a instalação é autônoma) sem nenhum gate do vibehub por cima — então o
-  hook do driver não escala nada, só emite eventos `permission` de observabilidade. Racional: um
-  card, duas telas, UMA história de permissões — o gate antigo chegou a pedir confirmação para um
-  `rm` do próprio scratchpad `/tmp` do agente, uma fricção que o terminal nunca teve.
-- **`"ask-sensitive"`** — o comportamento anterior, mantido para cenários futuros (membros
-  compartilhados, revisão só pelo celular): o conjunto SENSÍVEL escala para os botões
-  Permitir/Negar no chat, como descrito abaixo. Toda a infraestrutura de `permission_request` /
-  botões / timeout continua viva e testada neste modo.
-
-O modo viaja para o driver como `--permission-gate` (fallback: `ask-sensitive`, o modo mais
-estrito, para um driver spawnado sem a flag). A decisão pura é `sdkGateAction` em `protocol.ts`
-(unit-tested; o driver embute o espelho).
-
-### O modo `ask-sensitive`, por dentro
-
-`bypassPermissions` auto-allows the bulk ("libera tudo, pergunta só o sensível").
-The driver's **own** `PreToolUse` hook classifies the **SENSITIVE set** — `rm -r/-f`,
-`git push --force`, `git reset --hard`, deploy-shaped commands (kubectl/helm/vercel/…),
-`npm publish`, `curl | sh`, and reads of secret files (`.env`, `id_rsa`, `.oauth-token`, …) — and
-**ESCALATES it to the chat**:
-
-1. the hook emits `permission_request { id, tool, input, reason }` and **AWAITS**;
-2. the front draws the **"Permitir / Negar"** card; a click sends
-   `{ "type": "permission_decision", "id", "allow": true|false }` back down the socket;
-3. no answer for **5 minutes** (`PERMISSION_TIMEOUT_MS`) ⇒ automatic **deny**;
-4. either way the driver emits `permission { id, decision, sensitive: true, timedOut? }` so the card
-   settles ("Permitida" / "Negada" / "Sem resposta — negada").
-
-The pending ledger is `createPermissionBroker` in `protocol.ts` (unit-tested; the driver embeds the
-mirror). An `interrupt` denies everything still pending and interrupts the running `query()`.
-
-## Perguntas com opções — AskUserQuestion no chat
-
-O agente pode PERGUNTAR em vez de chutar: quando o modelo chama a tool nativa **AskUserQuestion**,
-o SDK roteia a chamada pelo callback **`canUseTool`** em QUALQUER permission mode
-(`bypassPermissions` incluído — é uma pergunta ao humano, não uma permissão). O driver intercepta:
-
-1. valida/normaliza o input (`normalizeUserQuestions`) e emite
-   `user_question { id, questions: [{ question, header?, options: [{label, description?}], multiSelect? }] }`;
-2. o front desenha o **card de pergunta**: opções clicáveis por questão + campo livre
-   **"Outra resposta…"**. Uma pergunta única de escolha única responde NO CLIQUE; multi-select (ou
-   várias perguntas) coleta as escolhas e envia com um "Responder";
-3. a resposta volta como `{ "type": "question_answer", "id", "answers": [{ "selected": [...] }] }`
-   (uma entrada por pergunta, na ordem; texto livre é mais uma string em `selected`);
-4. o driver devolve ao modelo via `updatedInput` (`{ questions, answers: { "<pergunta>": label | labels[] } }`,
-   `buildAskUserAnswers`) e emite `question_result { id, answers }` para o card assentar
-   ("Respondida: …");
-5. **timeout generoso** (`QUESTION_TIMEOUT_MS`, 30 min): sem resposta, o modelo recebe um deny
-   dizendo que o usuário não respondeu e que siga com o melhor julgamento; o card mostra "Sem
-   resposta". Um `interrupt` cancela as perguntas pendentes do turno.
-
-O par `user_question`/`question_result` é persistido no `sdk-history`: o replay re-desenha uma
-pergunta pendente CLICÁVEL (o driver é do card e continua aguardando — F5 não perde a pergunta,
-como a permissão) e uma respondida/expirada já assentada. Ledger: `createQuestionBroker` em
-`protocol.ts` (unit-tested; o driver embute o espelho).
-
-**Pergunta órfã.** O ledger do driver vive só em memória. Se o driver morre com um cartão de pé
-(deploy, crash, hibernação), o replay ainda o desenha pendente, mas o sucessor nunca ouviu falar
-dele. Antes, o clique voltava `no pending question with id …` e a resposta se perdia. Agora o
-manager (`manager.ts`) sabe quais perguntas o driver atual fez (`ownQuestions`) e trata o resto:
-- um `question_answer` para uma órfã vira **mensagem** ao modelo (`buildOrphanAnswerText`: cada
-  pergunta citada ao lado do escolhido), conta como turno, e o cartão assenta como respondido;
-- uma mensagem do usuário (ou edição) assenta as órfãs como `superseded` (uma varredura por driver: órfã só nasce de um driver anterior), como o driver faz com as
-  dele. Assim a bandeja não volta a pedir o que já foi respondido por escrito.
-
-O que a pessoa marcou e escreveu num cartão pendente fica num mapa do módulo (`questionDrafts` em
-`SdkChatView.tsx`), por id de pergunta. Ele sobrevive ao remount que todo reconnect provoca, inclusive depois do clique (o "respondida" é otimista; se o driver morrer antes de confirmar, o cartão volta pendente com o que foi marcado).
-
-## As mesmas ferramentas do terminal (MCPs, navegador, CLAUDE.md)
-
-O chat nativo carrega a MESMA configuração que a sessão TUI do card — o agente precisa poder
-navegar, clicar e testar (Chrome/preview) igualzinho ao terminal, com o usuário acompanhando:
-
-- `settingSources: ["user", "project", "local"]` no `query()` — o perfil do card traz os MCPs
-  gerenciados (`vibehub`, cujas instructions SÃO a persona maestro; `navegador`; os registrados) e
-  as settings do runner (status hooks — o dot de atividade segue o chat nativo —, persistência de
-  sessão); o worktree traz o `.mcp.json` e settings do repo. Explícito de propósito: o default do
-  SDK hoje é "all sources", mas um flip futuro não pode tirar as ferramentas em silêncio.
-- `systemPrompt: { type: "preset", preset: "claude_code" }` — o prompt do próprio Claude Code, que
-  é também o que carrega os CLAUDE.md (o brain na raiz do perfil e o do repo). Antes o driver
-  rodava no prompt cru do SDK.
-- O spawn (`buildSdkDriverCommandLine`) exporta o que a sessão tmux sempre exportou:
-  `PW_CDP_ENDPOINT` (o MCP `navegador` resolve para o Chromium DESTE card — o mesmo que o usuário
-  assiste no noVNC, botão Navegador), `VIBEHUB_CARD_ID` e `VIBEHUB_STATUS_URL` (os hooks de status
-  do settings.json do runner passam a reportar o card certo).
-
-No painel Navegador, o usuário escolhe entre **"Só assistir"** (default; conexão view-only do RFB —
-o mouse dele não interfere no agente) e **"Pilotar junto"** (input habilitado; entra JUNTO do
-controle do agente — o agente dirige via CDP, canal separado do VNC, ninguém expulsa ninguém). O
-toggle troca `viewOnly` na conexão viva, sem reconectar.
-
-## As palavras reservadas — `ultrathink` e `ultracode`
-
-As duas não são texto: o CLI lê as duas do que você escreve e age sozinho — `ultrathink` injeta o
-pedido de raciocínio mais fundo naquele turno, `ultracode` opta o turno pela orquestração
-multi-agente (ferramenta Workflow). Isso vale **igual no terminal e no chat nativo**, porque quem
-faz é o CLI, e o driver entrega o texto verbatim.
-
-O que o CLI **não** faz é subir o NÍVEL de esforço — e é exatamente isso que o painel promete
-quando pinta a palavra no compositor. Então o driver:
-
-1. detecta a palavra na mensagem, com as MESMAS regras do front
-   (`front/src/features/board/lib/ultraWords.ts`: caixa livre, mas nada de `/comando`, caminho,
-   flag, nome de arquivo ou palavra entre aspas/parênteses — a tela só pinta o que o back vai
-   honrar, e vice-versa);
-2. fixa a camada de *flag settings* em `effortLevel: "max"` (mais `ultracode: true` quando a
-   palavra é essa: xhigh + orquestração), caindo para `max` puro e depois `xhigh` se a sessão não
-   permitir — plano com teto de esforço, workflows desligados, CLI antigo;
-3. **devolve** no `result` do turno (`applyFlagSettings({ effortLevel: null, ultracode: null })`):
-   limpa a camada de flags, então o que vale de novo é a configuração do próprio usuário. A palavra
-   valia para AQUELE turno. **Exceção: o card que fixou uma inteligência** (`--effort`, campo
-   `effort` do card). Limpar a flag NÃO traz o `--effort` de volta (medido no CLI real, SDK 0.3.300:
-   `--effort low` → flag `max` → flag `null` deixou a sessão em `medium`), então nesse caso a
-   devolução escreve `effortLevel: <nível do card>` em vez de `null`. **Card sem nível fixado:** o
-   `null` sozinho cai no padrão do **modelo** e pula o `effortLevel` dos settings da conta, então a
-   devolução usa `restoreAccountEffort` (limpa e reaplica o nível dos settings por cima).
-
-**Troca de nível no meio de um turno com a palavra:** a escolha no pill é a mais nova e vence. O
-nível entra na hora, sai do registro da palavra (`ultraRaised`), e a devolução no fim do turno limpa
-só o `ultracode`, se houver. Nesse momento o driver emite `keyword_effort_replaced` (vai ao
-navegador, não ao histórico), e a barra de atividade do chat deixa de dizer "esforço alto". Quem
-sabe se a troca veio antes ou depois da palavra é o driver, que serializa as duas; o relógio do
-navegador não sabe. O "ultracode" continua, porque a orquestração segue ligada. O aviso só sai
-quando o nível tirado é o da mensagem com a palavra mais NOVA (o driver numera essas mensagens na
-chegada): uma troca presa na fila que cai depois do fim do turno, com a mensagem seguinte (também
-com a palavra) já enviada, acha ainda o `max` do turno velho, e avisar ali apagaria a barra da
-mensagem nova, que a escalada dela põe em `max` logo depois. Uma mensagem nova que entra no turno
-em andamento e tem a escalada recusada herda o `max` que já estava fixado: é nele que o turno
-segue, e a troca seguinte avisa a barra dela.
-
-Com a fila do nível ocupada (uma troca, a devolução do turno anterior), a escalada de uma corrente
-viva espera a vez e pode cair com o turno já andando. A espera é limitada pelos prazos do que está à
-frente na fila, e o nível da palavra vale a partir de quando a escalada cai, salvo uma troca
-posterior do pill. É deliberado: segurar a mensagem até a escalada deixaria a mensagem seguinte,
-enviada na hora, passar na frente.
-
-Duas armadilhas que o teste cerca: a mensagem é empurrada num `finally`, então nenhuma falha da
-escalada pode engoli-la; e a primeira mensagem de uma corrente nova espera o
-`initializationResult()` (com timeout) antes de mandar a configuração, porque um control request
-escrito num CLI que ainda não existe se perde.
-
-## A inteligência do card — troca a quente e o nível antes da primeira resposta
-
-Trocar a inteligência no pill com o driver de pé **nunca reinicia a sessão**: o back escreve
-`set_effort` no stdin e o driver aplica com `applyFlagSettings`, no meio do turno inclusive —
-subagente em primeiro plano rodando, a chamada dele volta no mesmo turno. Medido no CLI real (SDK
-0.3.300): as chamadas seguintes do mesmo turno saem no nível novo. A chamada que já está sendo
-gerada no instante da troca termina no nível antigo (o nível é parâmetro de cada chamada à API).
-
-- `set_effort { id, effort: "<nível>" }` → `applyFlagSettings({ effortLevel })`.
-- `set_effort { id, effort: null }` ("Usar a inteligência padrão da conta") → também a quente:
-  `effortLevel: null` leva ao padrão do **modelo** e ignora o `effortLevel` dos settings (medido,
-  29/10: settings `high` → flag `xhigh` → null = `medium`), então o driver lê
-  `getSettings().effective.effortLevel` e, havendo nível nos settings, o reaplica por cima.
-- **Confirmação:** cada `set_effort` é respondido com `effort_ack { id, effort? | error? }`.
-  `effort` = o nível que a própria sessão diz que a próxima chamada vai usar
-  (`getSettings().applied.effort`); `error` = não aplicada, e nada mudou no driver. O driver
-  responde toda troca até o **prazo de início** (`EFFORT_SWITCH_START_DEADLINE_MS`, 12 s da chegada,
-  fila e subida do CLI incluídas); a que não começou a escrever até lá é recusada e **nunca grava
-  depois**. A que começou termina nos prazos das próprias idas. Se o stream cai enquanto a troca
-  espera o CLI dele e uma mensagem nova abre outro nesse meio tempo, o novo nasceu no nível antigo
-  (o `currentEffort` é lido ao nascer, fora da fila): a troca é respondida como não aplicada, e o back cai
-  no reinício. Sem stream no lugar, o próximo nasce no nível novo e a troca vale. O back espera
-  (`EFFORT_ACK_TIMEOUT_MS`, 25 s: 12 s + escrita 4 s + leitura 4 s, mais folga) e só então
-  `applySessionChange` responde `live` e a tela diz "já valendo". Recusa, prazo vencido ou driver
-  morto = não aplicado, e a troca cai no caminho de sempre (abaixo), decidido pelo status do card
-  relido **depois** da espera (uma mensagem pode ter começado um turno nesse meio tempo). Cada
-  desfecho vira auditoria `sdk.effort.applied` / `refused` / `timeout`.
-- **Um escritor só para o nível:** a escalada do `ultrathink`, a devolução no fim do turno e a troca
-  do pill passam pela mesma fila do driver (`inEffortQueue`, fora da fila das mensagens), uma de
-  cada vez. A devolução e a volta ao padrão da conta são várias idas ao CLI, e uma escrita de fora
-  no meio era desfeita pela última. Cada ida tem prazo (`EFFORT_STEP_TIMEOUT_MS`, 4 s): um control
-  request sem resposta não trava a fila nem o /btw. O prazo solta a fila mas não para a ida já
-  enviada, então cada ESCRITA marca o nível como seu ao começar (`claimEffortWrite`), e a escrita
-  que vem depois de um `await` (a última ida da volta ao nível da conta) só sai se nenhuma escrita
-  posterior começou; pulada, fica registrada no trace. Leitura (o /btw), troca recusada ou
-  abandonada antes de escrever e devolução sem nada a devolver não contam: não mexeram no nível. Um
-  CLI que ainda não terminou de subir recusa a troca (a escrita se perderia), e o back cai no
-  reinício para o nível novo.
-- **/btw:** o aviso da pergunta lateral leva o nível em que a sessão principal está agora — o nível
-  não está na conversa, e "em que nível você está?" ficava sem resposta. A leitura entra na fila do
-  nível (nunca no meio da volta ao nível da conta, que passa pelo padrão do modelo). Vale o que a
-  sessão diz; com ela muda, o que o driver escreveu: o nível da palavra num turno `ultrathink`,
-  senão o pin.
-- **Volta ao padrão da conta:** o nível que a sessão confirma vira o `defaultEffort` do card, que o
-  pill de um card sem nível lê. Um nível confirmado diferente do pedido (plano que limita o esforço)
-  conta como aplicado e sai em `warn` na auditoria; o pill se acerta pelo carimbo da próxima chamada.
-- Sem driver (card de terminal) a troca segue como antes: reinicia já se o card está livre, ou
-  fica pendente até ele ficar livre (`restartPendingAt`) — nunca corta um turno.
-- **Variáveis de teste:** `VIBEHUB_EFFORT_STEP_TIMEOUT_MS` e `VIBEHUB_EFFORT_SWITCH_START_DEADLINE_MS`
-  sobrescrevem os dois prazos do driver (4 s e 12 s), lidas no boot dele. Existem para os testes
-  encurtarem os prazos (mesmo padrão de `VIBEHUB_CONTEXT_USAGE_TIMEOUT_MS`); em produção não se
-  definem, e o `EFFORT_ACK_TIMEOUT_MS` do back conta com os valores padrão.
-
-**O nível antes da primeira resposta.** Num card sem nível fixado, nada dizia o nível até a primeira
-resposta carimbar o transcript. A consulta descartável do catálogo (`warmCatalog`, no boot do
-driver) sobe **sem** o `--effort` do card e pergunta `getSettings().applied.effort` — o nível que
-uma sessão sem pin usa (settings da conta, senão o padrão do modelo). O driver anuncia
-`effort_default`, o manager guarda na sessão (não vai para histórico nem navegador) e o
-`GET /api/cards/:id/session` usa como último recurso, depois do pin, do carimbo da última resposta
-e do `effortLevel` dos settings.
-
-## Auth — OAuth token ONLY (regra do projeto)
-
-The driver authenticates **exclusively** with `CLAUDE_CODE_OAUTH_TOKEN`, read from the card
-profile's `.oauth-token` (the Max subscription's setup-token, same as the TUI's session command).
-
-**The newest sign-in wins (2026-10-19).** The variable beats `.credentials.json` inside Claude Code,
-so a profile holding both used to run on the token forever — a revoked setup-token kept answering
-"OAuth token revoked" while a fresh `/login` sat unused next to it. `oauthTokenGuard`
-(accounts/profiles.ts, shared by the driver and the TUI) exports the token only when no
-`.credentials.json` NEWER than it carries a refresh token. Saving a token in the UI rewrites the
-file (takes the lead back); the card open re-seeds it from the vault only when the value changed, so
-opening a card never steals the lead from a login.
-
-**No "Reiniciar" after a login.** The spawn command decides once, and the CLI keeps the environment
-it was born with — so a login made while the driver ran was ignored until someone restarted the
-card. The driver applies the same rule itself (`decideAuth`/`applyAuth` in sdk-driver.mjs) before
-every stream, and before every send (`reauthIfChanged`) compares the profile's sign-in with the one
-the open CLI was born with: changed → the stream is closed and the message opens a fresh CLI on the
-new sign-in, resuming the same session. Never with a turn in flight or background tasks running
-(they would die with the CLI) — the next send checks again.
-The spawn line **`unset ANTHROPIC_API_KEY`** before `exec node`, and the driver itself runs
-`delete process.env.ANTHROPIC_API_KEY` on boot — two locks on the same door, both tested. An
-inherited API key would silently outrank the token and bill the API instead of the subscription;
-it can never reach the SDK.
-
-## ✅ The shadowing risk (PoC finding #1) — AUDITED (increment 2)
-
-A **bare-name entry in `allowedTools`, or an `allow` rule in the runner's `settings.json`,
-auto-approves that tool BEFORE any callback/hook runs** — silently (only a stderr warning
-`CLAUDE_SDK_CAN_USE_TOOL_SHADOWED`).
-
-**Audit result (2026-08-29):** nothing vibehub provisions can shadow the escalation.
-
-- `runnerSettingsJson({autonomous})` (`back/src/runtime/runner.ts`) writes
-  `permissions: { defaultMode: "bypassPermissions" }` + hooks + env — **no `allowedTools`, no
-  `permissions.allow` rules**, and no other code path writes them. (`defaultMode` is not a rule:
-  it cannot pre-approve a specific tool past the hook.)
-- Account profiles are seeded by **copying** that same default `settings.json`
-  (`workspace.ts`), so they carry no allow rules either.
-- The driver passes **no `allowedTools`** in its `query()` options and brings its **own**
-  `PreToolUse` hook, which fires regardless of settings.
-
-Residual caution (documented, not code): a **repo's own** `.claude/settings.json` committed inside
-a card worktree could carry `allow` rules. vibehub does not write those; if a project adds them,
-that project has chosen to pre-approve those tools for itself.
-
-## Provisioning — automatic now
-
-The `npm i` that used to be a manual prerequisite is part of the connect path:
-`installCardSdkDriver()` plants the driver `.mjs` **and** runs `buildEnsureSdkScript`, which
-installs `@anthropic-ai/claude-agent-sdk@<SDK_PACKAGE_VERSION>` into `/root/.vibehub-sdk` **only
-when the `.sdk-version` marker disagrees** — the first connect pays one npm install, every one
-after is a marker check. Bumping `SDK_PACKAGE_VERSION` in `driver.ts` is how the SDK is upgraded.
-The runner container is never recreated.
-
-## Session persistence
-
-The driver emits the `session_id` (`session` / `result` events); the manager
-(`applyDriverEvent` in `services/sdk/manager.ts` — the side that survives the page) persists each
-NEW id onto the card (`resumeSessionId` in board.json, deduplicated). The next driver spawn — a
-reconnect, the card reopened tomorrow — passes `--resume <id>` and continues the SAME conversation.
-The chat footer shows the short session id (the resume key you are on).
-
-## Deploy resume — um turno em voo sobrevive ao restart do painel (2026-09-01)
-
-Um push na `main` reinicia o app-vibehub; o driver é filho do back (docker exec) e **morre junto,
-no meio do turno** — 2x em produção o card ficou mudo. A resposta:
-
-- **Marcador durável por card** (`<dataDir>/sdk-inflight/<cardId>.json`, ver
-  `services/sdk/inflight.ts`): escrito quando um turno de usuário entra no stdin do driver
-  (`{startedAt, preview, attempts}`), removido quando o `result` fecha o último turno em voo, e
-  também num stop DELIBERADO (pause/hibernate/delete — o que a pessoa encerrou não se retoma).
-- **SIGTERM** (`docker stop`/restart): `handOffSdkOnShutdown()` para os espelhos, `shutdownAllDrivers()` encerra o stdin de cada driver
-  (EOF = saída limpa, atravessa o docker exec) e **mantém os marcadores** — eles são a mensagem
-  para o próximo boot.
-- **Sweep de boot** (`services/sdk/resume.ts`, depois do listen): para cada marcador órfão, o card
-  ganha uma **linha de sistema** no sdk-history (`system_note`, replayed como nota no chat) e —
-  com `sdkAutoResume` ligado (default) — o driver sobe de novo (`--resume` da chave persistida) e
-  recebe um turno de continuação **como turno de usuário normal** (nunca embrulhado em
-  notificação), com **proveniência `system`** (#48) para nunca parecer fala da pessoa.
-- **Órfão de verdade — deploy blue/green (2026-10-08):** o tech.multi sobe o container novo e só
-  remove o antigo depois do health-gate — com `docker rm -f` (SIGKILL, sem SIGTERM) —, então o boot
-  do novo acontece com o antigo **ainda rodando o turno**. Retomar ali punha dois CLIs na mesma
-  sessão, e o espelho do back antigo gravava a fala de retomada como "Atividade no terminal" (a
-  mensagem de sistema aparecia duas vezes). Agora cada processo assina os marcadores que escreve
-  (`owner`) e toca um batimento em `<dataDir>/sdk-inflight/owners/<owner>` a cada 3 s. O sweep só
-  retoma um marcador cujo dono **parou de bater** há 12 s (o SIGKILL da troca, um crash) ou
-  **largou** o batimento num SIGTERM (`handOffSdkOnShutdown`: para os espelhos, encerra os drivers
-  e só então apaga o batimento). Se o turno terminar no antigo durante a espera, o marcador some e
-  nada é retomado. Cada card espera na sua própria tarefa; marcador sem `owner` (versão anterior)
-  segue órfão na hora; batimentos de processos mortos são recolhidos no boot.
-- **Sem loop, sem largar trabalho pela metade (2026-10-19):** o turno retomado nasce com
-  `attempts: N+1` e sem `progressed`; o manager grava `progressed: true` no marcador na primeira
-  saída da IA (texto ou ferramenta). Outro deploy no meio dele retoma DE NOVO só se ele avançou e
-  ainda não gastou `MAX_AUTO_RESUMES` (5) seguidas; a retomada que morre sem produzir nada (o loop
-  de verdade) ou o teto só escrevem a linha ("não vou retomar de novo") e param. Mensagem de pessoa
-  zera a cadeia. A retomada que avançou e ficou de pé por `SETTLED_RESUME_MS` (2 min) também zera:
-  ela trabalhou, e o deploy que a matou é dos outros — num dia de deploy a cada ~5 min a 5ª retomada
-  parava um trabalho longo no meio (2026-11-10). O teto só pega o turno que derruba o painel logo
-  depois de voltar. As operações do marcador são serializadas por card, para um `progressed` atrasado
-  nunca ressuscitar o marcador de um turno que já fechou.
-- **Trabalho que nenhuma mensagem abriu (2026-10-19):** o marcador cobre todo trabalho que um
-  deploy mataria, não só o turno de quem mandou mensagem: o turno que o PRÓPRIO CLI abre (a tarefa
-  em segundo plano acabou, um `ScheduleWakeup` venceu — detectado pelo primeiro passo do principal
-  com `activeTurns == 0`), as tarefas em segundo plano vivas (`background_tasks`) e um
-  `ScheduleWakeup` pendente. O marcador leva `background: { tasks, since, idle }`, e a fala de
-  retomada lista o que morreu ("o resultado disso não vai chegar — rode de novo"). Era o caso que
-  escapava: testes em background → o CLI abre o turno → o agente chama o deploy → card parado sem
-  aviso. Segundo plano sozinho há mais de `BACKGROUND_HOLD_MAX_MS` (um dev server) só ganha a nota.
-  Passo de subagente (`parentToolUseId`) não conta como turno do principal.
-- **O turno autônomo é turno em voo em todo lugar (2026-10-20):** só o marcador olhava para ele. O
-  `ready` de quem conecta ou recarrega, o idle stop e o status do board (`driverActivity`) contavam
-  só `activeTurns`: depois da retomada o CLI seguia num turno que ele mesmo abriu, e o chat reaberto
-  nascia "parado", a ferramenta sem spinner, e a pessoa mandava "continue" a um card trabalhando
-  (cards cfb8 e 4f4b). Agora a regra é uma só (`isTurnInFlight`). O driver também passa a conhecer
-  esse turno (fala do principal sem turno aberto): mensagem no meio dele vira `turn_absorbed`, e o
-  stream que cai antes do `result` fecha com o `aborted` devido. Um `error` sem esse result também
-  encerra o turno autônomo no manager, para nunca deixar o card "trabalhando" para sempre.
-- **Worktree apagada:** se a pasta do card sumiu (a própria IA rodou `git worktree remove` depois
-  de um merge), o connect do chat e o sweep de boot reprovisionam a worktree com o script de
-  abertura antes de subir o driver (`restoreMissingWorkspace`). Se ainda assim faltar, o driver
-  troca o falso erro de libc do SDK ("native binary ... failed to launch") por uma mensagem que diz
-  que a pasta não existe.
-- **Filler do harness filtrado:** o par que o Claude Code sintetiza ao retomar sessão cortada —
-  `[Request interrupted by user]` + `No response requested.` — é descartado em todo caminho que lê
-  transcript (chat clássico, merge do replay, mirror) e também vindo ao vivo do driver: no chat
-  ele lia como o Claude "dispensando" a mensagem da pessoa.
-- **Mensagem durante o setup da conexão:** a rota `/sdk` agora **bufferiza** frames que chegam
-  enquanto o connect ainda faz o probe/replay (antes eram descartados sem listener) e os entrega
-  ao driver na ordem, como turnos normais.
-
-## Falha passageira da API — o turno volta sozinho (2026-10-26)
-
-O CLI tenta de novo por conta própria quando a API falha, mas desiste depois de alguns minutos e
-fecha o turno com `result` de erro (`"API Error: Can't reach the API server … (EAI_AGAIN)"`,
-`"API Error: Connection dropped (ECONNRESET)"`, 5xx, `overloaded_error`). Antes, o card ficava em
-"falhou" até alguém escrever "continua" (produção, card 8f2a, 23/10/2026). Agora
-(`noteApiOutcome` em `manager.ts`):
-
-- `isTransientApiFailure` separa o que passa com o tempo (rede, DNS, timeout, sobrecarga, 5xx) do
-  que não passa (401, 400, 429/limite do plano) — esses continuam com a pessoa.
-- Falha passageira: nota no chat ("Nova tentativa automática em 30 s") e, depois de
-  `API_RETRY_DELAYS_MS` (30 s, 2 min, 5 min), um turno de sistema com `API_RETRY_TEXT`. Acabou a
-  lista: `NOTE_API_RETRY_EXHAUSTED` e o evento "falhou" sai normalmente.
-- A espera conta como turno em voo (`turnRunning`): a bolinha segue "trabalhando", o
-  `vibehub_wait_for_card` do ChatGPT não devolve o erro como fim, o sweep e o idle stop não derrubam o
-  driver, e o marcador em voo fica — um deploy no meio da espera é retomado pelo sweep de boot.
-- Mensagem da pessoa cancela a nova tentativa (ela vira o turno); turno que fecha sem erro zera a conta.
-- E2E real: `scripts/e2e-mcp-wake/run.sh apiretry` (um proxy na frente da API derruba as conexões nos
-  primeiros 20 s, com `CLAUDE_CODE_MAX_RETRIES=0`).
-
-## Turning it on — ONE switch, on by default (2026-08-31)
-
-**Global only:** the `sdkDriver` setting — "Chat nativo (padrão da instalação)" in
-**Configurações**. On (the default), the Chat tab of EVERY card is the native chat; off, every
-card falls back to the classic transcript chat and the `/sdk` socket refuses.
-
-The per-card opt-in ("Chat nativo (beta)" in the `⋯` menu) was **retired** the same day: the field
-`card.sdkChat` still exists in `board.json` records that set it, but nothing reads it anymore —
-**vestigial, no data migration needed**. Cards that never used the native chat lose nothing: the
-history bridge (#43/#51) merges the TUI transcript into the native chat's replay on first open.
-
-## Validação pela tela (roteiro manual)
-
-1. **Ligar o flag global:** Configurações → "Driver SDK (chat nativo, beta)" → salvar.
-2. **Escolher UM card de teste:** abrir o card → menu `⋯` → marcar **"Chat nativo (beta)"**.
-3. **Ir pra aba Chat** do card: o rodapé mostra "Chat nativo (beta)" com a bolinha de conexão.
-   (Primeira vez pode demorar alguns segundos extras: é o npm install único do SDK no runner.)
-4. **Conversar:** mandar "cria hello.txt com HELLO e lê de volta". Esperado: resposta streamando,
-   linhas compactas de ferramenta (Write/Read), fim de turno; o rodapé passa a mostrar `sessão
-   <id>`.
-5. **Pedir ação sensível:** mandar "roda exatamente: rm -rf .". Esperado: o card âmbar
-   **"Permissão necessária"** com **Permitir / Negar**.
-   - **Negar** → o agente é bloqueado e segue; o card mostra "Negada".
-   - Repetir e **Permitir** → a ação roda; o card mostra "Permitida".
-   - Não responder → em 5 minutos nega sozinho ("Sem resposta — negada").
-6. **Interromper:** com um turno rodando, o botão ⏹ ao lado do composer manda o interrupt.
-7. **Resume:** fechar e reabrir o card (ou recarregar a página) e mandar "qual arquivo criamos?".
-   Esperado: responde com contexto — mesma sessão (mesmo id no rodapé), via o `resumeSessionId`
-   persistido no card.
-8. **Isolamento:** qualquer outro card (sem o toggle) segue exatamente como antes; desligar o flag
-   global desliga tudo (o chat nativo passa a mostrar o aviso de driver desligado).
-
-## Convivência TUI ↔ chat nativo — as regras de um card com as duas telas
-
-Um card é **UMA conversa**, mesmo quando ela acontece em duas telas. As regras:
-
-- **Terminal → chat nativo, ao vivo (o espelho).** Enquanto um chat nativo está conectado, o back
-  segue o transcript do card (o mesmo loop `tail -F` do chat clássico — `buildFollowCommand`,
-  marcador do reaper incluído; ver `back/src/services/sdk/mirror.ts`) e converte as linhas NOVAS em
-  frames pro chat: a mensagem digitada na TUI aparece como balão de usuário (com remetente, quando
-  o log de proveniência conhece), as respostas como assistant/tool, e o burst abre com a linha de
-  sistema **"Atividade no terminal"**. Os eventos espelhados também entram no `sdk-history`
-  (`source:"terminal"` + `tid`), então sobrevivem a reconexão.
-- **Reconexão / chat fechado (o merge).** O replay de cada connect é um MERGE do `sdk-history` com
-  o transcript (`mergeTranscriptReplay`): o que o history não conhece — inclusive conversa feita na
-  TUI **enquanto nenhum chat estava aberto** — entra na linha do tempo; o que o driver já disse é
-  deduplicado por id de tool-use, por `tid` e por texto normalizado (multiset). Nada some, nada é
-  desenhado duas vezes.
-- **Chat nativo → terminal.** Uma mensagem mandada no chat nativo roda no driver, que grava a
-  sessão no MESMO diretório de transcripts; a TUI **não** desenha esse turno ao vivo (o processo
-  `claude` dela não sabe do driver — a tela dela segue "congelada" enquanto o driver conversa), mas
-  o próximo `claude -c` / resume retoma o transcript mais novo e continua exatamente dessa
-  conversa. Alternar à vontade é suportado; a regra de resume é sempre "o transcript mais novo
-  vence" (`resumeTargetFor`).
-- **Estado honesto.** "Trabalhando…" só acende com evento VIVO do driver (depois do `ready`) e
-  apaga quando o socket cai (a tela desconectada não pode atestar o que o driver está fazendo);
-  replay nunca acende — no reconnect, se o turno ainda roda, o próximo delta reacende. Todo turno
-  do driver se fecha sozinho: um turno encerrado sem `result` (interrupt, erro, stall) emite
-  `result{subtype:"aborted"}` no `finally` do `runTurn` — é também assim que o manager conta
-  turnos pra saber quando o driver está ocioso.
-
-## Streaming input — mensagem no meio do turno entra NO turno (2026-09-01)
-
-A dor: o César mandava uma segunda mensagem com o agente trabalhando e ela só era vista quando o
-turno acabava (o driver antigo rodava UM `query({ prompt: string })` por turno e enfileirava o
-resto). Agora o driver usa o **modo de input streaming do SDK**: um `query()` de vida longa cujo
-`prompt` é um AsyncIterable de user messages (um channel interno). Mensagem que chega no MEIO do
-turno é empurrada pro stream vivo e o CLI **dobra ela no turno corrente** — o modelo absorve no
-próximo passo, exatamente como a fila da TUI.
-
-**Verificado ao vivo no SDK 0.3.246, e de novo no 0.3.300** (PoC + smoke do driver real): mensagem empurrada durante um
-`sleep` de turno em andamento → UM único `result`, cuja resposta final já honrava a mensagem
-mid-turn. Os types do SDK confirmam a semântica (fold-in-flight, "queued user message … absorbed
-mid-turn", batches coalescidos).
-
-Como as peças se mantêm coerentes:
-
-- **`turn_absorbed`** — quando um send chega com turno já rodando, o driver o injeta e emite este
-  evento: o send NÃO vai produzir `result` próprio. O **manager** devolve o +1 daquele send no
-  `activeTurns` (piso em 1 — absorvido implica turno em voo, com um result ainda devido), então
-  spinner/idle/inflight-marker continuam fechando no ÚNICO result do turno. O **front** marca a
-  bolha com o rótulo **"entrou no turno em andamento"** — a mensagem nunca parece perdida.
-  Live-only: não entra no `sdk-history` (num replay o turno já é passado).
-- **Sessão e resume** — o stream nasce com `resume: lastSessionId`; se o stream morre (erro do
-  SDK), o próximo send abre outro que resume a MESMA sessão. `session` agora é emitido só quando o
-  id MUDA (o modo streaming entrega muitos system messages por turno).
-- **Interrupt** — continua o `query().interrupt()` (é o modo onde ele é oficialmente suportado).
-  Todo send já está no CLI (não há mais fila no driver): o interrupt aborta o turno corrente; um
-  send empurrado no último instante e ainda não dobrado pode sobreviver e rodar como turno próprio
-  — o result extra é absorvido pelo piso-em-zero do manager.
-- **Corrida honesta (documentada)** — o driver decide "absorvido?" pelo SEU `turnActive` na hora do
-  push; se o result do CLI já estava em trânsito, o CLI enfileira o send como turno novo e chega um
-  result a mais que o esperado. O clamp em zero absorve; o pior sintoma é o spinner apagar entre os
-  dois results (o próximo delta reacende).
-- **Supersede (#65) e inflight (#64)** intocados: o manager segue embrulhando `edit_user` como user
-  turn normal, e o marker durável segue +1 por send / limpo quando `activeTurns` zera.
-
-## O turno sobrevive à página (manager — o bug do reload no meio do turno)
-
-O driver era filho da CONEXÃO: o route spawnava um por websocket e o matava no close. Bastava o
-usuário mandar mensagem no chat nativo e recarregar a página no meio do turno → o socket caía, o
-driver morria NO MEIO do turno, a resposta nunca chegava ao transcript e o driver novo do reconnect
-fazia `--resume` sem continuar o turno pendente — mensagem engolida.
-
-Agora o driver é **do CARD**, propriedade do back (`back/src/services/sdk/manager.ts`):
-
-- **Um driver por card.** `ensureDriverSession` spawna no máximo um; reconectar (ou abrir uma
-  segunda aba) ATTACHA no processo vivo — duas abas multiplexam o mesmo driver, nunca dois.
-- **A persistência mora no lado que sobrevive.** É o manager (não o socket) que ouve o stdout do
-  driver: sdk-history, resume-id no board e as chaves de dedupe do mirror continuam fluindo com
-  ZERO páginas abertas. Fechar a página só desanexa o socket; o turno segue e fica gravado — o
-  reconnect replay mostra o que a tela perdeu.
-- **Reconnect reata.** Um socket que chega num driver já `ready` recebe um `ready` sintetizado
-  (com o resume-id mais novo) — sem ele o composer da página nova nunca habilitaria.
-- **Interrupt continua funcionando**: o botão manda o frame pro stdin do driver VIVO, de qualquer
-  aba conectada.
-- **Morte silenciosa é proibida.** O manager guarda a cauda do stderr do driver
-  (`STDERR_TAIL_MAX`); uma saída que ninguém pediu (crash, código ≠ 0) vira log **warn** no back
-  (código de saída + stderr + turnos em voo) E frame de erro no chat com o mesmo post-mortem.
-  Investigação (repro manual no runner): o `--resume` de uma sessão grande (3,7MB)
-  funciona normalmente — a morte era o socket fechando e levando o driver junto (Cmd+Shift+R,
-  troca de aba), com o stderr em nível debug e o frame de saída indo pra um socket já fechado.
-- **Fim de vida.** (1) `killCardSession` notifica o manager (`onCardSessionKill` em
-  `workspace.ts`) — pausar, hibernar, reiniciar, deletar, trocar modelo/conta matam o driver
-  junto com o tmux. (2) **Ocioso**: sem nenhum socket E sem turno rodando por `DRIVER_IDLE_MS`
-  (15 min), o driver se encerra sozinho — o resume-id persistido traz a conversa de volta no
-  próximo connect. (3) O **reaper** nunca julga um driver vivo: `reapCandidates` recusa qualquer
-  processo com `.vibehub-sdk/sdk-driver.mjs` na linha de comando (e os subprocessos do SDK pendem
-  do driver, nunca ppid 1 enquanto ele vive). Um driver realmente morto sai sozinho no EOF do
-  stdin (`rl.on("close") → exit 0`), inclusive quando o back reinicia.
-- **Aba que fecha no meio do setup não prende nada.** O connect gasta segundos em `await` (instalar
-  o driver, a sonda do transcript, o replay) sem ninguém ouvindo o `close`; uma aba fechada nesse
-  intervalo já disparou o evento. A rota confere o `readyState` depois do último `await` e, com o
-  socket morto, sai sem assinar o barramento externo, sem pegar ref do espelho e sem subir driver —
-  e `attachSocket` recusa um socket que não esteja `OPEN`. Antes, o socket morto ficava em
-  `session.sockets` para sempre: o idle stop nunca armava, o card nunca hibernava (`isCardChatInUse`)
-  e o follow do espelho rodava eterno. O chat legado (`/api/cards/:id/chat`) segue a mesma regra.
-- **O close atrasado do driver velho não mexe no sucessor.** O `close` de um driver parado
-  (`stopCardDriver`) pode chegar depois que o próximo já subiu; a memória de dedupe do espelho e a
-  sondagem da frota são do CARD, então só são apagadas quando nenhum sucessor assumiu o card. A
-  memória é ESVAZIADA (`forgetDriverKeys`), não trocada: um espelho vivo lê o mesmo `Set`.
-
-## Recibo de entrega — a mensagem que "sumia no F5" (2026-09-17)
-
-**O incidente** (três vezes num dia): a pessoa escreve uma instrução longa, dá Enter, o chat entra
-num carregando eterno — e no F5 (ou em outro computador) a mensagem não está lá, como se nunca
-tivesse sido enviada. Reenviar o mesmo texto funciona. Dois furos, um em cada ponta:
-
-1. **A hibernação matava a conversa.** `openedAt` é gravado só no PRIMEIRO open e uma conversa do
-   chat nativo nunca move o `statusAt` dos hooks — então o idle sweep media um card que a pessoa
-   estava usando como "sem sinal de vida há horas" e o hibernava, o que mata o driver
-   (`killCardSession` → `stopCardDriver`). Nos logs de produção: card aberto 00:57:34, hibernado
-   01:01:37 por `idle-sweep`, e de novo a cada passada de 5 min. A mensagem escrita no instante
-   seguinte era escrita num stdin morto dentro de um `try {} catch {}`, gravada no histórico e
-   respondida por ninguém — o "loop carregando" com a mensagem ainda lá depois do F5.
-2. **O navegador chamava `send()` de entrega.** Um socket meio-aberto (VPN caindo, proxy soltando,
-   o back reiniciando) aceita `send()` e joga os bytes no vácuo — e o `readyState` continua `OPEN`
-   por minutos. A bolha era só estado React: o F5 apagava a única testemunha da mensagem.
-
-**As três regras que fecham isso:**
-
-- **Card em uso não hiberna.** O manager registra um veto (`onCardInUseProbe` em `workspace.ts`) —
-  `isCardChatInUse`: há aba conectada, ou há turno rodando. Fechada a aba, o driver se encerra pelo
-  próprio idle stop e o card volta a ser hibernável. Além disso, `lastActivityAt` agora conta
-  `humanActiveAt`, e uma mensagem no chat nativo passa a estampá-lo — conversar É sinal de vida.
-- **Envio nunca é engolido.** `dispatchClientFrame` devolve um veredito (`ClientFrameOutcome`): com o
-  driver morto ele **recusa** (nada escrito, nada gravado, nenhum turno contado) e o socket recebe
-  `user_nack`; aceito, o `user_ack` sai **depois** do append no histórico — o ack promete
-  durabilidade, não intenção. Um append que FALHA (disco cheio) não ganha ack: sai `user_nack`
-  com `reason: "history-write-failed"` (`appendHistoryReported`), e o navegador guarda as palavras
-  — antes ele recebia o ack, apagava o outbox e a mensagem sumia no F5. EPIPE no stdin virou frame
-  de erro, não silêncio.
-- **O navegador guarda o que enviou.** `front/src/features/board/lib/sdkOutbox.ts`: cada envio
-  nasce em `localStorage` (por card) com um `cid` ANTES de ir pro socket, e só sai de lá com o
-  `user_ack`. Sem recibo em `OUTBOX_ACK_TIMEOUT_MS` (12s) a bolha vira **"não entregue"** com
-  *Reenviar*/*Descartar* e o socket é derrubado (o reconnect é a única forma de descobrir se ele
-  estava vivo). No reconnect, `reconcileOutbox` compara o outbox com o replay do servidor: texto
-  que está no replay foi entregue (só o recibo se perdeu); o que não está volta marcado, com o
-  texto inteiro — inclusive depois de um F5. O casamento é por texto (o `cid` não volta do disco),
-  mas não contra QUALQUER ocorrência: cada entrada nasce com uma MARCA (`sendMark`, sobre
-  `deliveredUserTexts` — as bolhas do usuário já gravadas na tela), ancorada no relógio do
-  SERVIDOR. `since` é o `at` (carimbo do histórico) mais novo que a tela conhecia quando a mensagem
-  saiu; `seenBefore` conta só as linhas com aquelas palavras DEPOIS da âncora (na prática, envios
-  desta conexão confirmados pelo `user_ack`, que não traz hora). Na reconciliação (`deliveryOf`)
-  só contam as linhas do replay com `at > since`; as `seenBefore` primeiras já existiam, e só uma
-  além delas prova a entrega; cada linha do replay casa com no máximo uma entrada. Antes, o "sim"
-  de ontem dava por entregue o "sim" de hoje perdido num socket meio-aberto, e ele sumia em
-  silêncio. A âncora existe porque o replay é uma JANELA que descarta sempre o mais velho: contar
-  na tela inteira dava 6 "ok" no envio contra 3 no replay, e a mensagem entregue voltava "não
-  entregue" com um *Reenviar* que duplicava o turno. O limite que sobra: se a conversa andar mais
-  que a janela inteira entre o envio e o reconnect, a entrega volta como "não entregue" — com
-  *Reenviar*/*Descartar*, nunca sumida (e o *Reenviar* do mesmo `cid` só cobra o recibo, abaixo;
-  ele também refaz a marca contra a tela de agora, `retryOutbox`). Sem nenhum `at` na tela
-  (histórico antigo ou conversa vazia) não há âncora e conta-se tudo; entradas gravadas antes dos
-  campos casam contra qualquer ocorrência, como antes.
-- **O backoff do reconnect só zera com o `ready`.** O aperto de mão do websocket não é saúde: o
-  back aceita a conexão e SÓ ENTÃO descobre se consegue servi-la (setup do driver, card apagado,
-  instalação que falhou) — e fecha. Zerar no `onopen` transformava isso num reconnect no intervalo
-  base para sempre. O chat SDK zera o backoff (`createReconnectBackoff().healthy()`, em
-  `front/src/features/board/lib/reconnect.ts`) quando chega o frame `ready`, a prova de que o
-  servidor terminou o setup e está atendendo; uma conexão que cai antes dele mantém o atraso
-  crescendo geometricamente (400ms → 15s).
-- **O veredito é dado UMA vez por envio.** A mensagem dada por não entregue CONTINUA no outbox (é a
-  cópia que o *Reenviar*/*Descartar* oferece) e o `at` dela não anda mais — então ela é marcada com
-  `undelivered`, e `overdueMessages` ignora quem já foi cobrado. Sem essa marca ela estaria vencida
-  em TODO tique do watchdog, que derrubava o socket a cada 2s: a tela entrava no loop "chat →
-  *Iniciando o agente…* → histórico inteiro → chat", piscando sem parar (produção, 2026-09-17, logo
-  depois do recibo entrar no ar). Um *Reenviar* zera o relógio e limpa a marca — o envio novo volta
-  a ser cobrável; um `user_nack` a estampa na hora, porque o servidor JÁ respondeu e derrubar essa
-  conexão não descobriria nada.
-- **O prazo só corre quando o servidor pode responder.** O `onopen` do navegador dispara no aperto
-  de mão do websocket, mas o back só chega a ATENDER frames depois de um setup de vários segundos
-  (`installCardSdkDriver` com dois `docker exec` por SSH, a sonda de transcript com timeout de 15s —
-  sozinha maior que o prazo de 12s —, `readHistory`, o replay, o spawn do driver); até lá os frames
-  esperam em `pendingFrames` e são entregues DE VERDADE quando o setup acaba. Contar esse tempo
-  contra a mensagem marcava "não entregue" o que o servidor tinha recebido — e o watchdog derrubava
-  o socket no meio do setup, cuja reconexão paga o setup inteiro de novo: era esse o "toda hora"
-  (produção, 2026-09-28). `overdueMessages` agora recebe um PISO (`answerableSince`, o instante do
-  `ready`) e o watchdog se cala enquanto não existe conexão em condições de responder — com o fio
-  caído quem dá o veredito é a reconciliação do reconnect, que pergunta ao replay.
-- **Reconciliar é sobre o que sobrou de ANTES.** O `ready` sai no attach e só DEPOIS o back responde
-  o que ficou bufferado, então o replay não pode conter o envio em voo — e a reconciliação, que
-  compara por texto, o dava por perdido: uma SEGUNDA bolha, marcada. Ela agora só julga os órfãos
-  (`liveUserCids`): um `cid` que já tem bolha nesta tela pertence a esta conexão e tem dono.
-- **Quem só precisa de fio ESPERA, não é condenada.** Um socket cai por motivos banais e volta em
-  400ms–15s; escrever nessa janela fazia a mensagem nascer condenada na hora, com o texto em dois
-  lugares (a bolha e o campo, de onde o Enter seguinte mandava a cópia). Com o fio fora do ar o
-  envio vai para a **fila** — o mesmo lugar de quem escreveu durante um turno: editável, em disco,
-  entregue sozinha pelo despacho quando houver conexão.
-- **`Reenviar` não roda o turno duas vezes.** O reenvio repete o MESMO `cid` de propósito: o que se
-  perdeu foi o recibo, não a mensagem. `dispatchClientFrame` lembra os recibos já emitidos
-  (`acceptedCids`, os últimos `ACCEPTED_CIDS_MAX`) e devolve o `user_ack` sem tocar no driver — sem
-  isso, reenviar "apaga a branch" executava a instrução duas vezes. Mesmas palavras com `cid` NOVO
-  seguem sendo mensagem nova: mandar duas vezes é um direito. Se o recibo guardado é um
-  `history-write-failed` (o driver JÁ leu a mensagem, só o append falhou), o reenvio tenta GRAVAR a
-  linha de novo (`chargeReceipt`) e devolve esse novo veredito — antes ele ganhava o mesmo nack para
-  sempre, e a saída que sobrava (Descartar + digitar de novo) fazia o modelo trabalhar em dobro.
-
-## A espera é uma escolha, não uma sentença (2026-09-28)
-
-O que se escreve com um turno rodando espera na **fila**, logo acima do campo — editável, em disco,
-entregue sozinha quando o turno fecha. Três regras que faltavam para ela não atrapalhar mais do que
-ajuda:
-
-- **O lápis não para o turno.** Ele parava (o pedido anterior: "cliquei pra editar e ele continua
-  respondendo"), e o preço apareceu em produção: clicar em editar e MUDAR DE IDEIA matava um turno
-  que ninguém quis matar, e um turno cortado não se descorta — sobrava uma oferta de "continuar de
-  onde parou" para consertar um estrago que a própria tela havia feito. Clicar em editar não é uma
-  decisão; é abrir a possibilidade de uma. Quem para o turno é a **correção enviada** (`send`), e o
-  custo é conhecido: entre o lápis e o Enter o agente segue trabalhando na mensagem antiga.
-  Trabalho a mais é recuperável; um turno morto por engano, não. A oferta "continuar de onde parou"
-  saiu junto — sem o corte acidental ela não tinha mais o que consertar.
-- **A fila tem teto.** Ela é irmã do scroller da conversa num flex column: sem limite, uma
-  instrução de duzentas linhas esticava a bandeja até espremer o `flex-1` do scroller a quase zero
-  e empurrar a conversa para fora da tela. Agora a bandeja para em `max-h-[28vh]` com rolagem
-  própria, e cada mensagem em espera em `max-h-24` — uma gigante rola no lugar dela em vez de
-  esconder as outras. A espera é um aviso, não uma leitura: o lápis continua sendo o caminho para
-  ler a mensagem inteira, no campo.
-- **A fila anda no RESPIRO do turno, não no fim dele.** Esperar o `result` fazia um turno de quinze
-  minutos segurar por quinze minutos um "para, tá errado". Só que um turno não é um bloco maciço: a
-  cada passo o modelo FECHA um bloco, e é esse instante que o Cursor e o Claude Code usam para puxar
-  o que está esperando. `turnHasRoomForMore` (puro, em `lib/sdkChat.ts`) lê o respiro na mesma ordem
-  da barra de atividade: texto ou raciocínio ainda escorrendo, não; "Preparando…", não; bloco
-  fechado, sim; **ferramenta em curso, sim** (ver abaixo). Uma mensagem recém-entregue não abre o
-  respiro seguinte — ela é a linha mais nova e o turno segue de pé, então a próxima espera o modelo
-  REAGIR; senão a fila inteira sairia de uma vez, que é o oposto de "uma por vez, e as outras
-  continuam suas".
-- **"Ferramenta rodando" NÃO é esperar** (produção, 13/10/2026: "passo uma tarefa e vejo que ela
-  demora um pouco"). A primeira versão da regra lia a ferramenta como "não está tranquilo" e
-  devolvia quase toda a espera antiga, porque é na ferramenta que o turno passa o tempo dele e a
-  linha mais nova de um turno trabalhando é quase sempre uma: medido no transcript de uma sessão
-  real deste painel, de uma chamada de ferramenta até o próximo bloco fechado são **11s na mediana,
-  31s no p90 e 71s no pior caso** — a mensagem parada na tela com o fio de pé e o CLI pronto para
-  recebê-la. E um turno que ACABA numa linha de ferramenta (interrompido no meio de uma, um
-  `result` sem texto final) deixava a fila travada sem nada rodando. Uma ferramenta é trabalho em
-  curso, não frase pela metade: entregue ali, a mensagem segue o mesmo caminho que seguiria no
-  bloco fechado — o CLI a enfileira pelo streaming input e o modelo a lê no passo seguinte (o
-  `turn_absorbed` que volta).
-- **Dá para atropelar a espera.** Cada mensagem da fila carrega o gesto de ir AGORA
-  (`sdk-queued-send-now`), que manda o frame `user` com `now: true`. O CLI só lê uma mensagem
-  empurrada quando a ferramenta em curso devolve (medido no SDK em 2026-10-20: 51s cegos atrás de um
-  Bash de 60s; em produção, 24 min atrás de um `vibehub_deliver` preso). Por isso, com ferramenta do
-  principal rodando, o driver interrompe (o Esc do terminal), espera o result do turno cortado (teto
-  de 10s) e manda a mensagem como turno NOVO, com result próprio, sem `turn_absorbed`. Sem
-  ferramenta rodando, o modelo lê no passo seguinte: ela entra no turno em andamento e volta marcada
-  "entrou no turno em andamento" (o `turn_absorbed` acima). Esperar continua sendo o padrão — uma
-  mensagem dobrada no meio de um raciocínio entra como interrupção de contexto, não como pergunta
-  nova —, mas "para, tá errado" não é uma pergunta para daqui a dez minutos. Sem fio de pé nada sai
-  da fila: forçar um envio que não pode acontecer só trocaria uma mensagem guardada por uma bolha
-  condenada.
-
-## Duas palavras e um menu (2026-09-28)
-
-- **O NOME do slash command não é palavra reservada — a mensagem inteira, sim.** A regra antiga
-  descartava tudo por causa da primeira letra ("começou com barra, então nada aqui é keyword"), e
-  uma mensagem que abria com `/superpowers:systematic-debugging`, trazia parágrafos de contexto e
-  terminava em `ultracode` não escalava nada. O que é comando é o PRIMEIRO TOKEN; o resto são os
-  argumentos, que o comando expande para dentro do prompt — prosa, onde `ultrathink`/`ultracode`
-  valem como valeriam em qualquer frase. `/ultracode-review` segue de fora: é o nome de um comando.
-  A regra vive em DOIS lugares e tem de concordar letra por letra — `commandNameEnd` em
-  `front/src/features/board/lib/ultraWords.ts` (que pinta) e `ultraCommandNameEnd` em
-  `sdk-driver.mjs` (que ESCALA).
-- **O menu "/" existe no instante do connect.** O catálogo chega num evento que o driver anuncia UMA
-  vez, ao subir, e vivia só em `session.catalog`: num card cujo driver ainda estava bootando o
-  primeiro "/" abria vazio, e apagar e digitar de novo "resolvia" porque nesse meio-tempo o anúncio
-  chegava. Agora ele é gravado por card (`services/sdk/catalog.ts`, `<dataDir>/sdk-catalog/`) e a
-  rota serve a última lista conhecida quando a sessão ainda não tem a sua. Uma lista VAZIA nunca é
-  gravada: ela apagaria um menu bom por causa de um driver que subiu capenga.
-
-## O raciocínio na tela
-
-A espera mostrava só um spinner com "Trabalhando…" — um turno de dez minutos e um de meio segundo
-eram idênticos, e quem esperava não tinha como saber se o agente havia entendido o pedido. O
-pensamento é a única coisa que o modelo produz ANTES da resposta, então é ele que transforma espera
-em acompanhamento.
-
-- **O driver pede o resumo.** `thinking: { type: "adaptive", display: "summarized" }` em
-  `baseOptions()`. O `display` não é enfeite: nos modelos atuais o padrão é `omitted` e os blocos
-  chegam com texto VAZIO — sem ele o driver encaminharia nada, sem erro nenhum, e a tela continuaria
-  no spinner. `adaptive` deixa o modelo decidir quando e quanto pensar.
-- **Dois eventos, como no texto.** `thinking_delta` ao vivo (o texto vem em `delta.thinking`, NÃO em
-  `delta.text`) e `thinking` consolidado, que substitui os deltas que o montaram. `redacted_thinking`
-  é ignorado de propósito: não carrega texto legível, e uma linha vazia seria pior que nada.
-- **Duas correntes que não se misturam.** O raciocínio tem linha própria (`kind: "thinking"`); um
-  delta de resposta FECHA um raciocínio aberto e vice-versa. Sem isso o primeiro token da resposta
-  era colado no fim do pensamento — e uma linha ficava "pensando" para sempre.
-- **Não é gravado.** `replayableHistoryEvent` recusa os dois, como faz com o `turn_absorbed`: é
-  orientação do momento. Gravá-lo encheria o log (replay de 500 eventos) com o pensamento de ontem e
-  empurraria a conversa de verdade para fora do replay. Depois de um F5, o que volta é a conversa —
-  mensagem, ferramenta, resposta.
-- **Na tela.** Aberto enquanto pensa, recolhido quando termina (um clique reabre) — durante a espera
-  é o que se quer ler; depois, vira ruído entre a pergunta e a resposta. Uma escolha explícita da
-  pessoa vence o automático, então abrir no meio do turno não é desfeito quando ele acaba.
-
-## O indicador diz o que a IA está dizendo (2026-09-28)
-
-O que mais se via num turno longo era "ferramenta demorada, ainda rodando" — a MESMA frase para
-qualquer ferramenta e qualquer raciocínio, escolhida por uma tabela a partir do relógio
-(`workingStage`). Ela não informava nada, e o material de verdade estava a um passo dali, no estado:
-a descrição que o PRÓPRIO agente escreveu para o comando (`toolHeadline` já a extrai — "Medindo o
-tamanho do módulo PDV") e o raciocínio que ele está escrevendo neste instante.
-
-`liveActivityDetail` (puro, em `lib/sdkChat.ts`) devolve a ÚLTIMA linha do que está em curso, porque
-é ela que está mudando: o começo de um raciocínio de dez linhas é história, o fim é notícia. Um
-bloco já FECHADO não é atividade — virou a saída do turno e já está desenhado logo acima —, e aí a
-função devolve `null`. A frase enlatada volta a ser o que sempre deveria ter sido: o fallback de
-quando não há nada a dizer, como o "Preparando…" de uma sessão subindo.
-
-## O fluxo do agente na tela — a barra fixa e a manchete da ferramenta (2026-09-26)
-
-O terminal tem uma coisa que o chat não tinha: uma linha de status sempre visível dizendo o que o
-agente está fazendo e há quanto tempo. No chat essa informação existia, mas espalhada pelo scroll —
-num turno longo (uma skill, um agente, um build) ela ficava muito acima da dobra, e quem
-acompanhava o card tinha que rolar para saber se ainda havia algo rodando.
-
-- **A barra fixa** (`SdkActivityBar`, `sticky top-0` dentro do scroller) só existe enquanto o turno
-  está vivo, e carrega três fatos: **o quê** (`currentActivity` — a manchete da ferramenta mais
-  recente, o raciocínio em curso, ou a resposta sendo escrita), **há quanto tempo** (`useTurnClock`,
-  `4s`, `1m 24s` — "Trabalhando…" sem número é a mesma palavra no segundo 2 e no minuto 9) e **com
-  qual esforço** (a palavra reservada com que a mensagem foi enviada: `ultrathink` vira "esforço
-  alto", `ultracode` se anuncia por nome — a escalada acontecia em silêncio). Um clique vai para a
-  ponta viva da conversa. A escada de estados inline continua onde estava: ela marca o LUGAR do
-  trabalho na conversa, a barra é a que não sai da tela.
-- **A manchete da ferramenta** (`toolHeadline`, puro) porta o formato de duas linhas da TUI: o que
-  está sendo feito e, indentado sob ele, o detalhe. O `description` que o agente escreve para um
-  `Bash` ("Measuring PDV module size") é a melhor linha da tela e era exatamente o que o chat
-  jogava fora — mostrava `Bash` e um pedaço truncado do input. `Read(registry.ts)` com o caminho
-  embaixo, `Grep(padrão)`, `Fetch(host)`; e um `Skill(code-review)` ou um `Task(...)` diz
-  **"Rodando em segundo plano"**, que é a informação que faltava: aquela chamada não termina ali,
-  ela sai correndo enquanto o turno segue.
-- **Uma palavra, uma paleta.** `ultrathink` e `ultracode` eram pintados com o MESMO arco-íris da
-  TUI, letra a letra — iguais na tela, sendo pedidos diferentes (um compra raciocínio, o outro liga
-  orquestração multi-agente). O `ultracode` agora tem paleta própria (rampa fria ciano → violeta),
-  mesma varredura, mesma mecânica.
-
-## Falar é responder (o cartão de pergunta não prende mais a tela)
-
-Com um `user_question` de pé, o turno está PARADO dentro do `canUseTool` esperando um clique. Uma
-mensagem escrita no chat nesse meio-tempo entrava na corrente do CLI e ficava lá, sem ninguém para
-lê-la, até o timeout de 30 minutos: na tela, "mandei a mensagem e não acontece nada, fica preso"
-(produção, 2026-09-17 — o caso é justamente NÃO gostar do plano proposto e querer outro rumo).
-
-- **Uma mensagem libera o cartão.** `supersedePendingQuestions()` no driver (`supersedeAll()` no
-  broker canônico de `protocol.ts`) resolve tudo que espera clique com `superseded: true`.
-- **A ordem é o bug.** A mensagem é empurrada (`sendUser`) ANTES de o cartão ser liberado. Liberar
-  primeiro solta o turno, que pode seguir e responder à pergunta sem nunca ter visto a mensagem
-  nova — o oposto do que a pessoa pediu ao escrever.
-- **O modelo lê o motivo.** `QUESTION_SUPERSEDED_MESSAGE` diz as três coisas que impedem o agente de
-  reabrir a mesma pergunta: não houve escolha, existe uma mensagem nesta conversa, e ela manda.
-- **A tela não mente.** O `question_result` sai com `superseded`, e o cartão diz "Você respondeu por
-  mensagem" — `unanswered` seria falso: a pessoa respondeu, só não pelo cartão. Ele também sai da
-  bandeja de decisões pendentes, que parava de cobrar um clique que já não fazia sentido.
-
-O cartão de PERMISSÃO (`permission_request`) tem a mesma forma de espera, e segue como estava: ali a
-decisão é binária, o botão Negar é o caminho explícito, e o relógio é de 5 minutos, não 30.
-
-## Quem escreveu e quem está digitando — duas contas no mesmo card (2026-10-06)
-
-**O bug.** A conta "mussa" mandou "continua nao para"; a aba trocou para "cesar" e a barra lateral
-mudou (o `SessionGuard` revalida o `/auth/me` no foco) — mas a bolha continuou desenhada como do
-leitor, sem nome, até um F5. Eram dois furos juntos:
-
-1. **A bolha própria nascia sem autor.** `appendUserRow(..., undefined)` + `originRole(undefined)`
-   = `"self"` para QUEM estivesse logado. Agora o envio (e a cópia no outbox, `OutboxMessage.from`)
-   leva o autor da conta que escreveu; o `readOutbox` valida esse campo com `parseOrigin`
-   (localStorage é entrada não confiável).
-2. **O socket continuava falando pela conta antiga.** O back resolve o autor UMA vez por conexão
-   (`wsOrigin` em `routes/cardSdk.ts`), e o effect do socket dependia só de `cardId`. Agora depende
-   também de `identity.epoch` (`lib/viewerIdentity.ts`), que só anda numa troca REAL entre duas
-   contas conhecidas — o `/auth/me` chegando ou a sessão caindo não reconectam (a conversa não pisca).
-3. **O que outra conta deixou esperando não sai por esta conexão.** Fila (`QueuedMessage.from`) e
-   outbox guardam o autor; quando o leitor muda, `foreignToOutbox` tira da fila o que é de outra
-   conta e o transforma em cópia "não entregue" — na tela com o nome de quem escreveu, descartável,
-   SEM "Reenviar" (só quem escreveu reenvia; daqui sairia no nome errado). Edição em curso é limpa
-   na troca. O `onclose` de um socket já descartado não mexe mais no estado da conexão nova.
-
-**"Cesar está digitando…".** Presença efêmera sobre o mesmo websocket do card (o projeto não usa
-socket.io: o "room" é o `session.sockets` do manager):
-
-- O front manda `{ "type": "typing", "active": boolean }` — um na primeira tecla, no máximo um a cada
-  `TYPING_SEND_EVERY_MS` (2,5 s) enquanto a pessoa escreve, e o "parou" depois de `TYPING_IDLE_MS`
-  (3 s) sem tecla, ao apagar o campo ou ao enviar (`lib/peerTyping.ts` `createTypingSignal`). Só
-  teclas da pessoa contam (`TerminalComposer` `onDraftInput`), não rascunho restaurado nem modo edição.
-- O back (`attachSocket`) intercepta o frame ANTES do `parseSdkClientFrame` — cujo fallthrough
-  transforma texto desconhecido em turno — e o repassa como `{ "type": "peer_typing", "name",
-  "active" }` só para os OUTROS sockets do card. Nunca vai ao driver nem ao histórico. Guarda própria
-  contra abuso: `TYPING_RELAY_MIN_MS` (1 s) entre dois "digitando" do mesmo socket — mesmo com um
-  "parou" no meio, senão um loop digitando/parou repassaria cada frame (o "parou" em si nunca espera).
-  Um "digitando" que chega no buffer do setup (antes do attach) é descartado: já está velho.
-  Um envio aceito e o fechamento do socket também mandam o "parou"; socket sem autor não anuncia.
-- O front expira cada nome em `PEER_TYPING_TTL_MS` (6 s) sem renovação — um "parou" perdido nunca
-  deixa o indicador preso —, esconde o próprio nome (mesma conta em duas abas) e limpa tudo a cada
-  reconexão. O desenho (`PeerTypingIndicator`) são os três pontos do LoaderOne da Aceternity (y em
-  loop, ease-in-out, 1 s, 0,2 s de defasagem) feitos em CSS (`animate-typing-dot`), sem biblioteca de
-  animação no bundle, e parados com `prefers-reduced-motion`.
-
-Limitação conhecida: o estado é por SOCKET no back e por NOME no front — a mesma pessoa digitando
-em duas abas e fechando uma apaga o indicador por até 2,5 s (até a próxima renovação da outra).
-
-Custo no servidor: um frame de poucos bytes a cada ~2,5 s por pessoa digitando, fan-out só para as
-abas abertas NAQUELE card. Nada em disco, nenhum timer no back.
-
-**A mensagem enviada, ao vivo nas outras abas (2026-10-08).** O "digitando" chegava, mas o Enter
-não: o turno ia para o stdin do driver e para o histórico, e só quem enviou via a bolha (eco local).
-A resposta do modelo chegava a todos via `broadcast`, sem a pergunta que a gerou — só um F5 (o
-replay) trazia a mensagem. Agora `dispatchClientFrame` repassa a linha aceita (`relayToPeers`) às
-OUTRAS abas do card, no mesmo formato do replay (`{ type: "user", text, at, from }`; numa edição,
-antes, o `message_edited`). Nunca de volta ao remetente (ele já desenhou), nunca de novo num
-Reenviar com o mesmo `cid`, nunca quando a mensagem foi recusada. O transporte já era em tempo
-real: faltava publicar o evento — Socket.IO não mudaria nada aqui.
-
-O que a mensagem alheia ao vivo exigiu em volta:
-- **Aba conectando.** O socket só entra em `session.sockets` no `attachSocket`, segundos depois de a
-  rota ler o replay. A rota escuta os envios do card (`onPeerTurn`) desde ANTES dessa leitura e,
-  já anexada, entrega o que o replay não trouxe (`missedDuringSetup`, sem desenhar duas vezes).
-- **Rebobinar.** `dropRewoundRows` cortava até a ÚLTIMA mensagem, que agora pode ser de outra
-  pessoa (chegada entre a edição e o `rewound`). O back carimba no `rewound` o texto novo da edição
-  (`text`) e a tela corta até ELA.
-- **Fila de envio.** `deliveredUserTexts(rows, viewer)` ignora mensagens de outras pessoas: o mesmo
-  texto vindo de outro não prova que o meu envio chegou, nem vira âncora (`sendMark`) do próximo.
-- **Turno do sistema.** A retomada pós-deploy (`injectSystemTurn`) também é repassada a quem olha.
-
-## Ver o que o Claude está fazendo — resultado, subagentes e detalhe (2026-10-19)
-
-O pedido: "no terminal eu clico e vejo o que ele está fazendo, onde está mexendo, o que mudou, o que
-pensou; no chat não". A causa estava no driver: ele descartava as mensagens `user` com `tool_result`,
-então a tela só tinha a CHAMADA de cada ferramenta — nada de "deu certo", nada para abrir.
-
-- **Resultado de cada ação.** O driver repassa o resultado capado (`toolResultFrames`: texto até 4 KB,
-  `tool_use_result` podado, e as linhas contadas ANTES do corte). O back resume (`toolResult.ts`,
-  `summarizeToolResult`) e só o resumo segue: `tool_result { id, toolResult }`. A linha da conversa
-  ganha o ícone (rodando / ok / erro) e a frase do terminal ("7 linhas", "+3 −1", "erro: …"). Só o do
-  agente PRINCIPAL entra no histórico — o dos subagentes são centenas por frota e empurrariam a conversa
-  para fora da janela do replay.
-- **Subagentes.** `task_started`/`task_progress`/`task_notification` do CLI viram UM estado por chamada
-  (`agent_task`, `mergeTaskEvent`), reenviado a quem conecta; só o fim é gravado. O driver liga
-  `agentProgressSummaries` — a frase "o que ele faz agora" de cada subagente, a cada ~30 s — e as
-  entradas de `background_tasks` passam a dizer a chamada (`toolUseId`). Na tela, chamadas de subagente
-  seguidas viram uma FROTA (uma linha por subagente), não mais um "N ações" dobrado; a bandeja de
-  segundo plano é clicável.
-- **Detalhe sob demanda.** `{ type: "detail", req }` pelo websocket, respondido só à aba que pediu (um
-  `docker exec` por vez; da fila fica o mais recente de cada pedido). Nada novo é guardado: a sondagem
-  (`detail.ts`) lê o transcript que o Claude Code já grava — a ação pelo id (input, saída, estruturado,
-  o raciocínio de logo antes, de quem é), a linha do tempo de um subagente (achado pelo `toolUseId` do
-  `agent-<id>.meta.json` ou pelo `agentId` do resultado da chamada) — e o git do worktree (`changes.ts`:
-  a lista do branch e o diff de um arquivo contra o merge-base). Por isso vale para conversas antigas,
-  para o que foi feito pelo Terminal e depois de qualquer F5.
+Notes:
+
+- `rewound.text` and `rewound.first` are stamped by the back before relaying; the driver sends
+  `ok`, `uuid`, `reason` and `originalText`.
+- `rate_limit` and `context_usage` are normalised by the back (`rateLimit.ts`, `contextUsage.ts`:
+  percentage 0..100, epoch in ms, whole tokens).
+- `compaction.startedAt` is set by the back on `started`.
+
+### Events the back synthesises (also in `protocol.ts`)
+
+```jsonc
+{ "type": "parse_error", "raw": "<the bad line>" }
+{ "type": "workflow_progress", "runId": "…", "name": "…", "total": n, "done": n, "agents": [ … ], "at": ms, "finished": bool, "outcome"?: … } // = WorkflowRun (workflowProbe.ts)
+{ "type": "workflow_feed", "runId": "…", "agentId": "…", "items": [ … ], "error"?: "invalid-id"|"no-session"|"probe-failed" } // only to the socket that asked
+{ "type": "login_restored" }                                                // first turn that works after login_failed
+```
+
+### Back → driver (stdin, `DriverControl`)
+
+`encodeControl` strips the browser's `cid` before writing.
+
+```jsonc
+{ "type": "user", "text": "…", "now"?: true, "keepQuestions"?: true }  // keepQuestions: back only
+{ "type": "btw", "id": "…", "question": "…" }
+{ "type": "set_effort", "id": "…", "effort": "<level>" | null }        // back only
+{ "type": "interrupt", "reason"?: "edit" }
+{ "type": "permission_decision", "id": "…", "allow": bool }
+{ "type": "question_answer", "id": "…", "answers": [ { "selected": ["…"] } ], "forModel"?: [ … ] } // forModel: back only
+{ "type": "edit_user", "original": "…", "text": "…", "fallback"?: "…", "first"?: bool }  // fallback: back only
+{ "type": "reanchor" }                                                  // back only
+```
+
+### Browser → back (websocket)
+
+`parseSdkClientFrame` turns a frame into a control. It accepts `user { text, cid?, now? }`,
+`interrupt { reason?: "edit" }` (any other reason degrades to a plain stop),
+`permission_decision { id, allow }`, `question_answer { id, answers }`, `btw { id, question }`
+(question capped at `BTW_QUESTION_MAX`), `edit_user { original, text, cid?, first? }`, and a
+**bare string**, which is a user message. A JSON object of an unrecognised shape is ignored.
+
+Four more frames are parsed separately and never reach the driver or the history:
+
+```jsonc
+{ "type": "typing", "active": bool }                                          // parseTypingFrame
+{ "type": "question_draft", "id": "…", "picked": [["…"]], "other": ["…"], "at"?: ms } // parseQuestionDraftFrame
+{ "type": "workflow_feed", "runId": "…", "agentId": "…" }                      // parseWorkflowFeedFrame
+{ "type": "detail", "req": "tool"|"agent"|"changes"|"file", "id"?: "…", "path"?: "…", "nonce"?: "…" } // parseDetailFrame
+```
+
+### Back → browser
+
+Driver events are relayed as they are, with these exceptions in `manager.ts`: `effort_default`,
+`effort_ack` and `usage_limited` are consumed by the manager; raw `tool_result` is replaced by its
+summary `{ type: "tool_result", id, parentToolUseId?, toolResult }` (`toolResult.ts`); the three
+`task_*` frames are merged into one state per call, `agent_task { toolUseId, taskId, status, … }`.
+
+Frames only the back produces (typed in `manager.ts`, `history.ts` and `toolResult.ts`, not in
+`protocol.ts`): `user_ack { cid }`, `user_nack { cid, reason: "driver-gone"|"history-write-failed" }`,
+`system_note { text, at }`, `user { text, at, from? }` and `message_edited { originalText, first?, at }`
+(relayed from another tab, and in the replay), `peer_typing { name, active }`,
+`peer_question_draft { id, name, picked, other }`, `voice_turn` (replay), and the answer to a
+`detail` request `{ type: "detail", req, id?, path?, nonce?, data?, error? }`.
+
+Session state (`catalog`, `background_tasks`, `rate_limit`, `context_usage`, `login_failed`, the
+running compaction, subagent states, the latest `workflow_progress`) is never written to the history;
+the manager re-sends it to every socket that attaches.
+
+## History and replay
+
+`history.ts` appends to `<dataDir>/sdk-history/<cardId>.ndjson` only what is worth re-drawing
+(`replayableHistoryEvent`): `user`, `assistant_text`, `tool_use` (long input texts capped),
+`permission_request`, `permission` with an `id`, `user_question`, `question_result`,
+`system_note`, `message_edited`, `voice_turn`, `btw_answer` with text, `compaction` `done`/`failed`,
+the main agent's `tool_result` summary and a finished `agent_task`. Deltas, thinking, tool progress,
+`turn_absorbed`, `rewound` and errors are live-only.
+
+Each connect replays up to `HISTORY_REPLAY_LIMIT` (500) events, merged with the card's newest CLI
+transcript (`mergeTranscriptReplay`): conversation held in the Terminal tab with no chat open
+enters the timeline, and what the driver already said is deduplicated by tool-use id, transcript
+event id (`tid`) and normalised text. The file is compacted past `HISTORY_COMPACT_FACTOR` × the
+replay limit or `HISTORY_COMPACT_SIZE` characters. The harness filler `[Request interrupted by
+user]` + `No response requested.` is dropped on every path that reads transcripts.
+
+A `/clear` (`conversation_reset`) opens a new CLI session; the back clears the card's log, writes the
+`conversation-cleared` note and the front clears the screen. The driver forgets its fork points.
+
+## Sending a message
+
+### Delivery receipt
+
+Each send carries a `cid`. The browser keeps the message in `localStorage` (`sdkOutbox.ts`) before
+writing to the socket and removes it only on `user_ack`, which the back sends **after** the line is
+appended to the history. With the driver gone the back refuses (`user_nack` `driver-gone`, nothing
+written, no turn counted); a failed append answers `user_nack` `history-write-failed`.
+
+- No receipt within `OUTBOX_ACK_TIMEOUT_MS` (12 s), counted from the `ready` of the current
+  connection (`answerableSince`), marks the bubble "not delivered" with Resend/Discard and drops
+  the socket. Each message is judged once (`undelivered`).
+- On reconnect, `reconcileOutbox` compares the outbox with the replay by text, anchored on the
+  server timestamp the screen knew at send time (`sendMark`: `since`, `seenBefore`); messages that
+  already have a bubble on this connection (`liveUserCids`) are not judged. If the conversation
+  moved further than the replay window between the send and the reconnect, a delivered message
+  comes back "not delivered" (Resend is safe, see next item).
+- Resend repeats the same `cid`. The manager remembers the last `ACCEPTED_CIDS_MAX` (256) receipts
+  and answers a known `cid` without touching the driver; a stored `history-write-failed` retries
+  the append (`chargeReceipt`).
+- The reconnect backoff (400 ms → 15 s) resets on `ready`, not on the websocket handshake.
+
+### The queue and "Send now"
+
+A message written while a turn runs waits in a queue above the field (`SdkQueueTray`, capped at
+`max-h-[28vh]`, each item at `max-h-24`), editable and persisted. With the socket down, the send
+also goes to the queue. The queue is released at the turn's next "breathing point"
+(`turnHasRoomForMore` in `lib/sdkChat.ts`): not while text or reasoning is streaming or the session
+is preparing; yes after a closed block or **while a tool runs**. A message just delivered does not
+open the next breathing point, so the queue goes out one at a time. The exception: with a
+`user_question` pending, a message goes immediately, because only a message releases the turn.
+
+Evidence for releasing during tools: in a real session transcript, the time from a tool call to the
+next closed block was 11 s median, 31 s p90 and 71 s worst case.
+
+Each queued message has a **Send now** action (`sdk-queued-send-now`), which sends `user` with
+`now: true`. The CLI reads a pushed message only when the running tool returns (observed: 51 s
+blind behind a 60 s `Bash`). So with a main-agent tool in flight the driver (`sendUserNow`)
+denies pending permissions, abandons pending questions, interrupts, waits up to
+`SEND_NOW_TIMEOUT_MS` (10 s) for the turn to close and sends the message as a new turn. With no
+tool running it folds into the turn like any other send.
+
+### Interrupt
+
+The stop button sends `interrupt`. The driver denies pending permissions, abandons pending
+questions and calls `query().interrupt()`. The manager writes a `system_note`
+(`turn-interrupted` or, with `reason: "edit"`, `turn-interrupted-edit`) after the interrupted
+turn's `result`; the front translates the code. A stop with no turn running writes no note.
+
+## Editing a message
+
+The pencil on a sent bubble (or Esc on an empty field, for the last one) opens the edit. Clicking
+the pencil does **not** stop the turn: the agent keeps working until the correction is sent.
+
+1. **Send.** With a turn running, the front sends `interrupt { reason: "edit" }` and holds the edit
+   until the turn reports its end (grace `EDIT_INTERRUPT_GRACE_MS`, 15 s). Then it sends
+   `edit_user { original, text, cid, first? }`. `first: true` means the edited bubble is the first
+   message on screen (words alone cannot tell which copy of a repeated message was clicked).
+2. **Back.** `dispatchClientFrame` writes `edit_user` to the driver with `fallback` = the same
+   edit wrapped by `buildSupersedeText` ("disregard the previous message … consider this version"),
+   queues the edit in `session.rewinds`, and appends `message_edited` plus the new `user` line
+   (`text` clean, `sent` the wrapped words, used as the transcript dedupe key).
+3. **Driver** (`rewindAndSend`, serialized behind any rewind in flight) decides, before tearing
+   anything down:
+   - **Rewind** (`rewound { ok: true }`). The fork point comes first from the session transcript on
+     disk (`forkPointFromTranscript`: walks the live branch by `parentUuid`, finds the newest prompt
+     with the original words and the first `assistant` above it), which works for any message and
+     after a driver restart. `first` skips the search and starts a new session. If the disk has no
+     answer, the in-memory point is used only when the edited message is the last one sent
+     (`rewindDecision`). The driver closes the stream and the next one resumes with
+     `resumeSessionAt` at that point; everything after it leaves the model's context. The model
+     reads the clean text.
+   - **Not delivered** (`rewound { ok: false, reason: "not-delivered" }`). The transcript's live
+     branch was read to its root and the original is not there (its turn died before the CLI wrote
+     it): the clean text goes as a normal turn, nothing is cut.
+   - **Supersede** (`rewound { ok: false, reason }`), the fallback: `no-fork-point` (nothing to go
+     back to, or the teardown failed) or `absorbed` (a message joined the turn after the edited one;
+     rewinding would silently discard it). The wrapped text goes as a new turn on the live stream.
+   The disk answers "not found" on a `compact_boundary`, a missing parent, or when the same words
+   appear later as an absorbed message (`queued_command` attachment).
+4. **Agreement.** On `ok: true` the manager pairs the answer with the oldest queued edit, cuts the
+   log (`rewindHistory`, also dropping an orphaned interrupt note), drops the stale `sent`, records
+   the clean text in the mirror's dedupe memory, stamps `text`/`first` and relays `rewound`; the
+   screen cuts the same rows (`dropRewoundRows`). An `ok: true` with no queued edit is not relayed.
+   On `ok: false` nothing is cut and the wrapped text stays the dedupe key.
+
+Invariant covered by tests: an edit always reaches the model, as a rewind, a clean turn or a
+supersede. Evidence from the SDK: resuming at the kept turn's `assistant` uuid works and keeps the
+session id; resuming at a `result` uuid is rejected with `error_during_execution`.
+
+Known gap: editing the first message opens a new session; if the driver dies before that session
+writes its first transcript entry, the next spawn resumes the old session.
+
+The classic transcript chat has no edit.
+
+## Permissions
+
+`sdkGateAction(mode, tool, input)` (`protocol.ts`, mirrored in the driver) decides what the
+`PreToolUse` hook does:
+
+- **`same-as-terminal`** (default): allow everything, emitting `permission` events for
+  observability only. The chat behaves like the card's Terminal tab, which runs under the runner's
+  own settings with no vibehub gate on top.
+- **`ask-sensitive`** (also the driver's fallback when `--permission-gate` is missing or unknown):
+  the sensitive set (`classifySensitivity`: `rm -r/-f`, force push, `git reset --hard`,
+  deploy-shaped commands, `npm publish`, `curl | sh`, reads of secret files, the `KillShell` tool)
+  escalates. The hook emits `permission_request` and awaits `permission_decision`; no answer within
+  `PERMISSION_TIMEOUT_MS` (5 min) denies. The driver then emits `permission { id, decision,
+  sensitive: true, timedOut? }`.
+
+The gate is the hook, not `canUseTool`. An allow rule in settings or `allowedTools` makes the SDK
+skip `canUseTool` for that tool (it warns `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED`, which the driver
+silences because `canUseTool` only serves questions here). vibehub writes no allow rules:
+`runnerSettingsJson` sets only `permissions.defaultMode: "bypassPermissions"`, and the driver passes
+no `allowedTools`. A repository's own committed `.claude/settings.json` may still carry allow
+rules; that is the project's choice.
+
+## Questions (AskUserQuestion)
+
+The SDK routes `AskUserQuestion` through `canUseTool` in every permission mode. The driver
+normalises the input (`normalizeUserQuestions`), emits `user_question` and awaits
+`question_answer`; the answer returns to the model as `updatedInput` (`buildAskUserAnswers`) and the
+driver emits `question_result`. No answer within `QUESTION_TIMEOUT_MS` (30 min): the model is told
+nobody answered.
+
+- **Answering by message.** A user message releases every pending question with
+  `superseded: true`; the model reads `QUESTION_SUPERSEDED_MESSAGE`. The message is pushed before
+  the question is released, so the turn never continues without having read it.
+- **Stopped turn.** An interrupt, a "Send now" or an edit abandons pending questions; the manager
+  stamps `cancelledBy`/`cancelledHow` on the `question_result`.
+- **Orphan questions.** The driver's ledger is in memory. If the driver died with a card open, the
+  replay still shows it pending; the manager knows which questions the current driver asked
+  (`ownQuestions`) and sends an answer to an orphan as a user message (`buildOrphanAnswerText`).
+- **Several people.** Draft choices are relayed as `peer_question_draft`. When an answer meets
+  other people's drafts, the model receives all of them (`forModel`, `mergePeerAnswers`); an answer
+  arriving after the card closed goes as a message (`buildLateAnswerText`, `keepQuestions: true`).
+- The front keeps what was ticked per question id in `lib/questionDraftStore.ts`, which survives
+  the remount a reconnect causes.
+
+## Terminal and native chat
+
+A card is one conversation shown in two tabs.
+
+- **Terminal → chat (mirror).** While a chat is connected, the back follows the card's transcript
+  (`mirror.ts`) and turns new lines into frames: a message typed in the TUI appears as a user
+  bubble, preceded by the `terminal-activity` note. Mirrored events go to the history with
+  `source: "terminal"` and `tid`.
+- **Chat → terminal.** The driver writes the same transcript directory. The TUI does not draw the
+  driver's turns live, but its next resume continues from the newest transcript.
+- **Re-anchoring.** When the mirror sees the conversation move outside the chat, the manager sends
+  `reanchor`; the driver marks its stream stale and, on the next send (never during one of its own
+  turns), closes it so the new stream resumes at the transcript's real end.
+
+## Resume after a restart
+
+### Panel restart (deploy)
+
+The driver is a child of the back and dies with it.
+
+- **Marker.** When a turn starts, the manager writes `<dataDir>/sdk-inflight/<cardId>.json`
+  (`startedAt`, `preview`, `attempts`, `owner`, later `progressed`, `background`). It is removed when
+  the last turn closes and on a deliberate stop (pause, hibernate, delete). Marker operations are
+  serialized per card.
+- **Background work counts.** The marker also covers autonomous turns, live background tasks and
+  a pending `ScheduleWakeup`; the continuation text lists what died. Background work alone that has
+  been idle longer than `BACKGROUND_HOLD_MAX_MS` only gets a note.
+- **SIGTERM.** `handOffSdkOnShutdown()` stops the mirrors, ends each driver's stdin and keeps the
+  markers.
+- **Blue/green.** Each process signs its markers (`owner`) and touches a heartbeat every 3 s. The
+  boot sweep (`resume.ts`) resumes a marker only when its owner stopped beating for
+  `OWNER_STALE_MS` (12 s) or released the heartbeat on SIGTERM; if the old process finishes the turn
+  meanwhile, the marker disappears and nothing is resumed.
+- **Resume.** The card gets a `system_note`; with `sdkAutoResume` on, the driver is spawned with
+  `--resume` and receives `RESUME_CONTINUATION_TEXT` as a normal user turn with `system`
+  provenance. A turn parked on a question card is not resumed: the note asks the person to answer it.
+  A resumed turn that closes without the agent advancing gets one re-engage
+  (`RESUME_REENGAGE_TEXT`, after `RESUME_CONFIRM_MS`, 45 s) and then `NOTE_RESUME_STALLED`.
+- **No loop.** A resumed turn is resumed again only if it advanced (`progressed`) and fewer than
+  `MAX_AUTO_RESUMES` (5) consecutive resumes happened; one that advanced and stayed up for
+  `SETTLED_RESUME_MS` (2 min) restarts the count. A person's message resets the chain.
+
+### Driver crash
+
+A driver that dies with work in flight while the back stays up is resumed by the same logic with
+crash wording (`CRASH_TEXTS`), after `CRASH_RESUME_DELAY_MS` (10 s).
+
+### Transient API failure
+
+When the CLI gives up and closes a turn with a transient API error (`isTransientApiFailure`:
+5xx, overloaded, network and DNS errors), the manager posts a note and, after
+`API_RETRY_DELAYS_MS` (30 s, 2 min, 5 min), injects `API_RETRY_TEXT` as a system turn. 4xx
+(credentials, invalid request, plan limit) is left to the person. The wait counts as a turn in
+flight; a person's message cancels it; a turn that ends without error resets the count; after the
+last delay `NOTE_API_RETRY_EXHAUSTED` is posted. End-to-end check:
+`scripts/e2e-mcp-wake/run.sh apiretry`.
+
+## Authentication
+
+The driver signs in with the card profile's Claude subscription credentials, never with an API key:
+
+- The spawn command exports `CLAUDE_CODE_OAUTH_TOKEN` from the profile's `.oauth-token` through
+  `oauthTokenGuard` (`accounts/profiles.ts`, shared with the TUI) unless a `.credentials.json`
+  newer than the token and carrying a refresh token (a `/login`) exists; then the CLI uses that
+  login. The newest sign-in wins, because inside Claude Code the variable outranks
+  `.credentials.json`.
+- `ANTHROPIC_API_KEY` is unset in the spawn line and deleted again by the driver at boot. An
+  inherited API key would take precedence over the subscription token and bill the API.
+- The driver re-applies the same rule itself (`decideAuth`/`applyAuth`) before every stream, and
+  before every send (`reauthIfChanged`) compares the profile's sign-in with the one the open CLI was
+  born with. If it changed, the stream is closed and the message opens a new CLI on the new sign-in,
+  resuming the same session. Not with a turn in flight, and not with background tasks running
+  unless the current CLI's login already failed.
+- `login_failed` (the CLI answered `authentication_failed`) is session state shown in the chat until
+  a turn works again (`login_restored`).
+
+## Reasoning level (effort)
+
+### The card's level, switched live
+
+Changing the level in the card's pill with a driver up never restarts the session. The back writes
+`set_effort { id, effort }`; the driver applies it with `applyFlagSettings({ effortLevel })`, mid-turn
+included. Measured on the real CLI (SDK 0.3.300): later calls of the same turn carry the new level;
+the call being generated at that instant finishes on the old one.
+
+- `effort: null` (back to the account default) is also live. `effortLevel: null` alone falls to the
+  **model's** default and skips the account settings (measured: settings `high` → flag `xhigh` →
+  `null` gave `medium`), so the driver reads `getSettings().effective.effortLevel` and reapplies it
+  (`restoreAccountEffort`).
+- Every `set_effort` is answered with `effort_ack`: `effort` is what the session says the next call
+  uses (`getSettings().applied.effort`), `error` means not applied. A switch that has not started
+  writing within `EFFORT_SWITCH_START_DEADLINE_MS` (12 s) is refused and never writes later; each
+  step has `EFFORT_STEP_TIMEOUT_MS` (4 s). Both can be overridden by
+  `VIBEHUB_EFFORT_SWITCH_START_DEADLINE_MS` and `VIBEHUB_EFFORT_STEP_TIMEOUT_MS` (tests only).
+- The back waits `EFFORT_ACK_TIMEOUT_MS` (25 s). Refused, timed out or no driver: it falls back to
+  restarting the session now if the card is idle, or when it becomes idle (`restartPendingAt`).
+  Outcomes are audited as `sdk.effort.applied` / `refused` / `timeout`.
+- **One writer.** The keyword raise, the end-of-turn give-back, the pill switch and the `/btw` read
+  go through one queue (`inEffortQueue`); each write claims the level (`claimEffortWrite`) so a
+  late step never overwrites a newer write.
+- **Before the first reply.** At boot the driver's throwaway catalog query, started without the
+  card's `--effort`, reads the level an unpinned session uses and emits `effort_default`; the
+  manager keeps it as session state for `GET /api/cards/:id/session`.
+
+### `ultrathink` and `ultracode`
+
+The CLI reacts to both words in the text itself (deeper reasoning for the turn; Workflow
+orchestration for `ultracode`). It does not raise the effort level, so the driver does: it detects
+the word with the same rules the front uses to paint it (`ultraCommandNameEnd` in the driver,
+`commandNameEnd` in `front/src/features/board/lib/ultraWords.ts`; the first token of a slash command
+is a name, the rest is prose; quoted spans, paths and flags do not count) and applies, strongest
+first, `{ effortLevel: "max", ultracode: true }` (for `ultracode`), `{ effortLevel: "max" }`,
+`{ effortLevel: "xhigh" }`. The message is pushed in a `finally`, so a failed raise never costs it,
+and the first message of a new stream waits for `initializationResult()` (bounded) first.
+
+At the turn's `result` the driver gives the level back: the card's pinned level when there is one
+(clearing the flag does not restore `--effort`: measured on SDK 0.3.300, `--effort low` → flag
+`max` → flag `null` left `medium`), otherwise the account level. A pill switch during a keyword
+turn wins: the driver emits `keyword_effort_replaced` (only for the newest keyword message) and the
+activity bar drops its "high effort" label.
+
+### `/btw`
+
+`/btw <question>` asks a side question without touching the running turn. The composer sends
+`btw { id, question }`; the driver answers from a separate query that forks the session
+(`resume` + `forkSession`, no tools, `maxTurns: 1`, `persistSession: false`, timeout 3 min) and
+emits `btw_answer`. The prompt includes the main session's current level and its live background
+tasks. The manager adds `/btw` to the catalog (`withBtwCommand`).
+
+## The "/" menu
+
+At boot the driver runs a throwaway query (`warmCatalog`) and, on each stream's `init`, asks
+`supportedCommands()` once per process; `commands_changed` refreshes it. It emits one raw `catalog`;
+the back normalises it (`normalizeSlashCommands`: valid names only, one-line descriptions, a cap,
+`source` from the init's skill and plugin lists, terminal-only commands removed), keeps it as
+session state, persists it per card (`<dataDir>/sdk-catalog/`, never an empty list) and serves the
+remembered list to a socket that connects before the driver announces. The front's rules are in
+`lib/slashMenu.ts`; the menu exists while the whole draft is one word starting with `/`. A slash
+command is sent as a normal user message; a local command (`/cost`, `/usage`) answers with
+`local_output`.
+
+## What the screen shows
+
+- **Reasoning**: `thinking_delta` live, `thinking` consolidated, in its own row, open while
+  thinking and collapsed after. `redacted_thinking` is ignored. Not stored.
+- **Tool generation**: `tool_use_start`, `tool_input_progress` (throttled) and `tool_progress`, main
+  agent only, so a long `Write` shows progress before its `tool_use` exists.
+- **Tool results**: the driver forwards a capped result (text up to 4 KB, lines counted before the
+  cut); the back's summary ("7 lines", "+3 −1", "error: …") is what the browser and the history get.
+- **Subagents**: `agent_task` per call; consecutive subagent calls render as a fleet. Subagent
+  stream deltas are never emitted.
+- **Detail on demand**: a `detail` request is answered only to the asking tab, one `docker exec` at
+  a time. `detail.ts` reads the transcript (a tool call's input, output and preceding reasoning; a
+  subagent's timeline) and `maestro/changes.ts` reads the worktree's git (changed files, a file's
+  diff against the merge base). Nothing new is stored.
+- **Workflow fleet**: the `Workflow` tool returns at once; the back watches its journal on disk
+  (`workflow.ts`) and pushes `workflow_progress`; `workflow_feed` answers one agent's recent steps.
+- **Activity bar** (`SdkActivityBar`, sticky): what is running now (`currentActivity`,
+  `liveActivityDetail`, `toolHeadline`), elapsed time (`useTurnClock`) and the keyword effort.
+  Before the first event of a send, an inline indicator shows "Preparing…" (driver not ready) or
+  "Thinking…" (turn in the engine).
+- **Compaction**: `compaction` `started` opens a row with a bar; `done`/`failed` close it with
+  tokens before and after, or the reason.
+- **Context and plan limits**: `context_usage` (read at the end of each turn) and `rate_limit`.
+
+## Several people on one card
+
+- **Authorship.** The route resolves the socket's author once; each message carries it (`from`).
+  The front reconnects the socket on a real account switch (`identity.epoch`,
+  `lib/viewerIdentity.ts`); queued messages of another account move to the outbox as "not
+  delivered", without Resend.
+- **Relay.** An accepted message (or edit) is relayed to the card's other tabs as `user` (preceded by
+  `message_edited`), never back to the sender, never twice for the same `cid`. A tab still setting up
+  receives what it missed after attaching (`missedDuringSetup`).
+- **Typing.** The front sends `typing` at most every `TYPING_SEND_EVERY_MS` (2.5 s) and "stopped"
+  after `TYPING_IDLE_MS` (3 s) idle (`lib/peerTyping.ts`). The back relays `peer_typing` to the
+  other sockets, at most one "typing" per socket per `TYPING_RELAY_MIN_MS` (1 s). The front expires
+  a name after `PEER_TYPING_TTL_MS` (6 s) and hides its own name.
+
+## Limitations
+
+- **Typing indicator per name.** The back tracks typing per socket and the front per name: the same
+  person typing in two tabs and closing one hides the indicator for up to 2.5 s.
+- **Absorbed-turn race.** See "Turns": an extra `result` can briefly turn the spinner off.
+- **First-message edit.** See "Editing a message".
+- **Outbox window.** A conversation that moves further than the replay window between a send and the
+  reconnect makes a delivered message come back "not delivered".
+- **Effort keyword lag.** With the effort queue busy, a keyword's raise can land after the turn has
+  started; the level holds from that moment.
+- **Mid-turn level switch.** The call already being generated finishes on the old level.
+
+## Manual check
+
+1. Settings → "Native chat (install default)" on (the default).
+2. Open any card's Chat tab. The first connect on a runner may take longer: it installs the SDK.
+3. Send "create hello.txt with HELLO and read it back". Expected: streamed answer, tool rows
+   (Write, Read) with result summaries, end of turn.
+4. Send a second message while a turn runs: it waits in the queue and enters at the next breathing
+   point; "Send now" interrupts a running tool and sends it as a new turn.
+5. Edit a sent message: the rows below it disappear and the model answers the new version.
+6. With `sdkPermissionMode` set to `ask-sensitive`, ask for `rm -rf .`: a permission card with
+   Allow/Deny appears; no answer denies after 5 minutes.
+7. Reload the page mid-turn: the turn continues and the replay shows what the screen missed.
+8. Turn `sdkDriver` off: every card shows the classic chat.

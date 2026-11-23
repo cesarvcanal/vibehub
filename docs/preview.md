@@ -27,8 +27,24 @@ You should not have to hunt for ports. Ask the card's agent for a preview ("roda
    click it and the app opens in a new tab. The Preview menu lists the announced previews first,
    above the raw port scan.
 
-If the announced port is not listening, the tool refuses and tells the agent what is — so a link
-you receive is a link that worked at the moment it was announced.
+If the announced port is not listening, the tool refuses and tells the agent which ports are.
+
+A listening port is not yet a page that opens, so before recording anything the tool also opens
+`/` through the same tunnel and with the same request head the proxy sends (prefix stripped,
+`X-Forwarded-Prefix` set), waiting at most 6 seconds:
+
+- **Redirect loop: refused.** An app based at `/preview/<port>/` answers the stripped `/` with a
+  redirect back to `/preview/<port>/`. The proxy absorbs exactly one such hop (it fetches the
+  redirect target internally instead of relaying it), and the probe follows that same hop. If the
+  answer still redirects into `/preview/<port>/`, the browser would loop
+  (`ERR_TOO_MANY_REDIRECTS`): the tool refuses the announcement, nothing is written to the card,
+  and the agent is told to serve the app at the root (relative base `./` or a static build) or to
+  honour `X-Forwarded-Prefix`.
+- **Opens but visibly wrong: announced with a `warning`.** A 4xx/5xx on `/`, a redirect to a path
+  outside `/preview/<port>/`, or an HTML page whose `src`/`href` point at absolute paths outside
+  the prefix (they will 404 in the browser). The agent relays the warning or fixes the app's base.
+- **No HTTP answer** (a database, a raw socket, a timeout): no verdict — the preview is announced
+  as before, on the port scan alone.
 
 ## Preview lifecycle — it outlives the card session
 
@@ -37,11 +53,11 @@ session (pause, hibernate, restart, a model switch) tree-kills that pane's desce
 server dies with the card. Registered previews survive that on purpose:
 
 - **State on the chip.** The chip (and each row in the menu) carries the live state from the port
-  scan: green = listening, amber "parado" = the port went silent, neutral gray = not verified yet
-  (no scan answered). **Green is earned by the scan** — the chip never claims "no ar" it did not
-  see.
+  scan: green = listening, amber "stopped" = the port went silent, neutral gray = not verified yet
+  (no scan answered). **Green is earned by the scan** — the chip never claims a server is up that
+  it did not see.
 - **Stopped ≠ dead.** Clicking a stopped preview never lands on a bare 502: it opens a small
-  "Preview parado" screen. **Restart** relaunches the stored command in the preview's **own tmux
+  "Preview stopped" dialog. **Restart** relaunches the stored command in the preview's **own tmux
   session** in the runner (`preview-<card8>-<port>` — outside the card's kill tree, invisible to
   the process reaper), waits until the port listens and opens the tab. From that point the server
   belongs to the preview, and pausing/restarting the card no longer touches it.
@@ -51,10 +67,10 @@ server dies with the card. Registered previews survive that on purpose:
   then, anything that kills the card session kills the server too, the chip goes amber, and
   bringing it back is the one Restart click.
 - **A dead link in the tab is a screen, not JSON.** Navigating to `/preview/<port>/` while the
-  port is silent answers the same "Preview parado" screen straight from the proxy — with the
-  Reiniciar button when the port belongs to a registered preview that stored its command, or the
-  "ask the agent" guidance when it did not. Asset and API requests made by the previewed app keep
-  the structured JSON 502.
+  port is silent answers a "Preview parado" page straight from the proxy (always in Portuguese) —
+  with the Reiniciar (restart) button when the port belongs to a registered preview that stored its
+  command, or the "ask the agent" guidance when it did not. Asset and API requests made by the
+  previewed app keep the structured JSON 502.
 - **No stored command** (an old or manual registration): the screen says the honest thing — ask
   the card's agent to start the server again; it will re-announce the link.
 - **Stop preview** (the ✕ on the row, or the button in the dialog) tree-kills the dedicated
@@ -78,14 +94,20 @@ your browser ──HTTP/WS──▶ vibehub  ──docker exec socat──▶ 12
 - The target is the **runner's loopback**, so servers bound to `127.0.0.1` (the default for vite,
   Next.js, etc.) are reachable without `--host`.
 - **WebSockets are relayed** byte-for-byte, so vite HMR / live reload works.
+- Responses are relayed as they come, with one exception: a `GET`/`HEAD` answered by a redirect to
+  the very path the browser is already on (`/preview/<port>/...` pointing back at itself, once the
+  prefix is stripped) is followed inside the proxy, one hop only; a second redirect is relayed as
+  is.
 - Auth is your vibehub session: the preview URL is same-origin, the cookie rides along, and nobody
   without a session can reach the proxied app — what a session reaches is narrower still, see
   [Who reaches what](#who-reaches-what). The `vibehub_session` cookie itself is stripped before
   requests cross into your app.
 - The proxy sends `X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Forwarded-For` and
   `X-Forwarded-Prefix: /preview/<port>`.
-- The port list comes from the runner's `/proc/net/tcp`, so it needs no tools installed; vibehub's
-  own per-card browser ports (VNC 5900–6799, CDP 9222–10121) are hidden from it.
+- The port list comes from the runner's `/proc/net/tcp`, so it needs no tools installed. The
+  ranges vibehub reserves for the per-card browsers (VNC 5900–6799, CDP 9222–10121) are left out of
+  it entirely, so a dev server listening inside them (Storybook's 6006) does not show in the list
+  nor pass the `vibehub_preview` check; type the port to open it.
 
 ## Who reaches what
 
@@ -93,9 +115,10 @@ A port in the runner can be anything — including the per-card Chromium's CDP e
 out the open tabs and takes full remote control of a browser holding someone's logged-in sessions.
 So a session alone is not the gate:
 
-- **vibehub's own browser plumbing is never a preview.** VNC (5900–6799) and CDP (9222–10121) are
-  refused by the HTTP proxy and the websocket relay alike (404), **for the owner too** — the card's
-  browser is reached through its Browser tab, not through `/preview/`.
+- **vibehub's own browser plumbing is never a preview.** The VNC and CDP ports actually allocated
+  to a card's browser are refused by the HTTP proxy and the websocket relay alike (404), **for the
+  owner too** — the card's browser is reached through its Browser tab, not through `/preview/`.
+  The rest of the 5900–6799 and 9222–10121 ranges are ordinary ports.
 - **The owner** opens any other port, and the port list shows everything listening.
 - **A member** opens only a port whose **current** card is **visible to them** (shared at any
   level, directly or through its project); any other port answers 404, as if nothing were there,

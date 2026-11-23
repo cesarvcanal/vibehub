@@ -22,16 +22,24 @@ and you get:
   its own git worktree.
 - **Columns that move themselves.** Claude Code hooks report back on every prompt, stop, and
   permission request, so a card sits in **Working** while the agent runs and slides to **Waiting**
-  the moment it needs you. `Backlog`, `Paused` and `Done` never move on their own.
-- **A terminal that is actually a terminal.** xterm over a websocket into tmux: colours, copy on
-  select, paste, image paste, links. Close the tab, open it on another machine, the session is
-  still there.
-- **The conversations you were just in, one click away.** The five most recent ones sit at the top
-  of the sidebar, across every project, and stay there while a terminal is open — answering the next
-  agent never means hunting for the project that owns it.
-- **Terminals that go cold on their own.** A card nobody has touched for a few hours has its session
-  closed and turns grey where it stands — same column, same place, same conversation when you open it
-  again. What you are working on now stops looking like what you walked away from yesterday.
+  the moment it needs you. `Backlog` and `Paused` never move on their own; a card in `Done` goes
+  back to **Working** only when a new turn starts in it.
+- **A native chat per card.** A card opens on its **Chat** tab, which by default is the native
+  chat: the agent runs through the Claude Agent SDK (a driver process inside the runner) and its
+  tools, questions and permission requests arrive as structured messages. The owner can switch it
+  off in the settings, and the Chat tab of every card falls back to the classic chat read from the
+  session transcript.
+- **A terminal that is actually a terminal.** The **Terminal** tab is xterm over a websocket into
+  tmux: colours, copy on select, paste, image paste, links. Close the tab, open it on another
+  machine, the session is still there.
+- **The conversations you were just in, one click away.** On the all-projects view, the top of the
+  sidebar lists every card you have opened that is not in `Done`, across every project, newest
+  first: ten at a time, with "show more" for the next ten. Opening a project, or a card in it,
+  swaps that list for the project switcher.
+- **Terminals that go cold on their own.** A card nobody has touched for a few hours (three, by
+  default) has its session closed and turns grey where it stands — same column, same place, same
+  conversation when you open it again. What you are working on now stops looking like what you
+  walked away from yesterday.
 - **The people you work with.** Create an account for a teammate and hand them one card — or a
   whole project — from its menu. They get that work and nothing else: no other card, no accounts, no
   settings. `Can work` puts them at the same terminal as you; `can view` lets them read it without
@@ -86,19 +94,28 @@ browser ── https ──► vibehub (API + UI)
                         ▼
                  runner container
                    ├── /work   clones + one git worktree per card
-                   └── tmux    one session per card, Claude Code inside
+                   ├── tmux    one session per card, Claude Code inside (Terminal tab)
+                   └── SDK driver   one per card, the native chat (Chat tab)
                         │
                         └── status hooks ──► POST /api/runner/status
 ```
 
 vibehub never runs an agent in its own process. It provisions one container, opens a tmux session
-per card inside it, and bridges that session to your browser. If vibehub restarts, every session is
-still running and reconnects.
+per card inside it, and bridges that session to your browser; the native chat's SDK driver runs in
+the same container, started through `docker exec`. If vibehub restarts, every tmux session is still
+running and reconnects. The SDK drivers do not survive it: on boot, vibehub writes a line in the
+chat of every card whose turn was interrupted and, with automatic resume on (the default), resumes
+that turn — again after each restart as long as the resumed turn keeps advancing, up to five times
+in a row.
 
-**On credentials:** the GitHub token lives in an encrypted local vault and is handed to
-`git clone/fetch` per command, as an environment-scoped http header. It is never written into
-`.git/config` inside the runner, where the agent — which reads untrusted repository content and has
-network access — could read it back.
+**On credentials:** GitHub tokens live in an encrypted local vault. `git clone` and `git fetch` get
+the token per command, as an environment-scoped http header; it is never written into
+`.git/config`. The agent's own `git` and `gh` act as the person who gave the card its latest order
+(or through the project's GitHub connection): that token is written to a per-card file inside the
+runner (mode 600), read on every call by a credential helper scoped to `github.com` and by a `gh`
+wrapper. Every card runs as `root` in the same runner, so any card can read that file — its own
+token and every other card's: a token you hand to one card is a token every agent on the install
+can read. See [SECURITY.md](SECURITY.md).
 
 ## Configuration
 
@@ -110,7 +127,7 @@ Everything is an environment variable with a working default. The ones that matt
 | `VIBEHUB_RUNNER_KIND` | `local` | `local` (Docker socket) or `ssh` (remote Docker host). |
 | `VIBEHUB_RUNNER_BASE_DIR` | `/opt/vibehub/runner` | Host path for the runner's persistent `/root` and `/work` (macOS: use a path under `$HOME`). |
 | `VIBEHUB_RUNNER_NETWORK` | `vibehub` (compose) | Docker network the runner joins, so `http://vibehub:3010` resolves from inside it. |
-| `VIBEHUB_DATA_DIR` | `data` | Board, settings, users, encrypted vault. **Back this up.** |
+| `VIBEHUB_DATA_DIR` | `data` (`/data` in the image) | Board, settings, users, encrypted vault. **Back this up.** |
 | `VIBEHUB_SECRET_KEY` | generated | Vault master key. Lose it and the stored tokens are gone. |
 | `VIBEHUB_INSECURE_COOKIES` | `0` | Set to `1` when serving over plain http. |
 | `VIBEHUB_TRUST_PROXY` | unset | Who the sign-in client is. Behind a gateway, name it (its address/CIDR, `loopback`, `uniquelocal`, or a hop count) so `X-Forwarded-For` is honoured — otherwise every request shares the gateway's address and ten wrong passwords from anyone lock that account out for 15 minutes in every browser that has not signed in as it before (a browser that has keeps its own count). `docker-compose.yml` passes it through from `.env`. `0` = no gateway (the peer is the client). Any other value requires the gateway to be the only way in — publish the port as `127.0.0.1:3010:3010` — or a client reaching it directly forges `X-Forwarded-For` past the throttle (warned at boot). Set either way, it also enables the per-address ceiling on failed sign-ins (30/min across usernames); unset, that ceiling stays off, because behind an undeclared gateway it would let anyone switch sign-in off for everybody. |

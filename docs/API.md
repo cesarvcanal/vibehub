@@ -1,7 +1,16 @@
 # vibehub HTTP API
 
-Everything lives under `/api`. JSON in, JSON out. Every route requires a session cookie except the
-ones marked **public**. Errors are `{ "error": "message" }` with a 4xx/5xx status.
+Everything lives under `/api`, except the MCP endpoint (`/mcp`), the OAuth routes (`/oauth/*`,
+`/.well-known/*`) and the preview proxy (`/preview/*`). JSON in, JSON out. Every route requires a
+session cookie except the ones marked **public**. Errors are `{ "error": "message" }` with a 4xx/5xx
+status.
+
+**Coverage:** every HTTP and websocket route registered in `back/src/routes/*.ts` and
+`back/src/index.ts`, and every MCP tool registered in `back/src/mcp/*.ts`, has a line below. Those
+files are the reference: when a line here and the code disagree, the code is right and this file is
+the bug. The access helper of each route (`requireOwner`, `requireSession`, `requireCardAccess`,
+`requireCardWork`, in `back/src/auth/`) is what the **owner** / **any session** / **view** / **work**
+marks below stand for.
 
 ## Roles
 
@@ -27,12 +36,13 @@ OAuth access token (see "MCP — the board, from outside"), which reaches what i
 
 | Method | Path | Body / notes |
 |---|---|---|
-| GET | `/api/setup/state` | **public** — `{ fresh, steps: { owner, runner, claude, github }, runner: RunnerStatus }`. Drives the wizard. |
+| GET | `/api/health` | **public** — `{ ok: true, version }` |
+| GET | `/api/setup/state` | **public** — `{ fresh, completed, steps: { owner, runner, claude, github }, runner: RunnerStatus }`. Drives the wizard; `completed` is whether `setup-complete` was stamped. |
 | POST | `/api/setup/owner` | **public, only while `fresh`** — `{ username, password }` → creates the owner and signs in. **409** once the install has an owner (also when two setups race: the check runs inside the write). With `VIBEHUB_TRUST_PROXY` set, every try — 409s included — counts toward the 30/min address ceiling it shares with sign-in. |
 | POST | `/api/auth/login` | **public** — `{ username, password }` → sets the session cookie. **429** + `retry-after` after 10 failed tries for one username from one client in 15 min — a browser that signed in as that username before (its `vibehub_device_<digest>` cookie — one per username, scoped to this path) is its own client, whatever its address; and, only when `VIBEHUB_TRUST_PROXY` is set, after 30 failed tries from one client in a minute across usernames (shared with setup). Only failures count; a successful sign-in clears that username's count. |
 | POST | `/api/auth/logout` | — |
 | POST | `/api/auth/password` | `{ password }` — change your own password. Revokes every other session: their requests 401 and the websockets they hold open (terminals, chat, VNC, preview tunnels) are closed; this one gets a fresh cookie, and its own sockets reconnect with it |
-| GET | `/api/auth/me` | `{ user: { id, username, role, createdAt } }` |
+| GET | `/api/auth/me` | `{ user: { id, username, role, createdAt, claudeAccountSlug? } }` — `claudeAccountSlug` only when the owner tied this person to a Claude account. 401 without a session |
 
 ## Access — the install's people
 
@@ -44,7 +54,7 @@ an install with no owner is an install nobody can administer.
 |---|---|---|
 | GET | `/api/users` | `{ users: [{ id, username, role, createdAt, git? }] }` — never a hash or a salt |
 | POST | `/api/users` | `{ username, password, role? }` → `{ user }`; `role` defaults to `"member"` |
-| PATCH | `/api/users/:id` | `{ password?, role?, githubConnectionId?, gitName?, gitEmail? }` → `{ user, git? }`. The last three are that person's git identity; `null` CLEARS one (back to inheriting), an absent field is untouched. A `githubConnectionId` that does not exist is a 400 |
+| PATCH | `/api/users/:id` | `{ password?, role?, githubConnectionId?, gitName?, gitEmail?, claudeAccountSlug? }` → `{ user, git? }`. `githubConnectionId`/`gitName`/`gitEmail` are that person's git identity; `null` CLEARS one (back to inheriting), an absent field is untouched. A `githubConnectionId` that does not exist is a 400. `claudeAccountSlug` is the Claude account the cards this person CREATES run on (an unknown slug is a 400; cards they already have keep theirs) |
 | GET | `/api/me/git` | `{ git? }` — my own git identity. Any session, not just the owner's |
 | PATCH | `/api/me/git` | `{ githubConnectionId?, gitName?, gitEmail? }` → `{ git }`. The same write as above, for MYSELF: a PAT expires, and rotating it must not be the owner's task. `role`/`password` are ignored here — those stay the owner's |
 | DELETE | `/api/users/:id` | `{ ok: true, user }`; removing YOURSELF also clears your session cookie. The removed account's open websockets are closed |
@@ -56,8 +66,8 @@ an install with no owner is an install nobody can administer.
 | Method | Path | Body / notes |
 |---|---|---|
 | GET | `/api/features` | **any session** — `{ sdkChat, doneRetentionDays }`: the install-wide flags every user needs to render the right UI (`sdkChat` mirrors the `sdkDriver` setting: on = the native chat IS every card's Chat tab; `doneRetentionDays` is how long a card sits untouched in `done` before the hourly retention sweep purges it — the countdown on a done card reads it). The settings themselves stay owner-only |
-| GET | `/api/settings` | `{ git: { name, email }, autonomous, defaultAccountLabel, setupCompletedAt, transcribeLanguage, transcribeKeywords, idleHibernateMinutes, sdkDriver, runner: { kind, container, host, image, baseDir }, publicUrl }` |
-| PATCH | `/api/settings` | `{ git?, autonomous?, defaultAccountLabel?, transcribeLanguage?, transcribeKeywords?, idleHibernateMinutes?, sdkDriver? }` — `idleHibernateMinutes` is a whole number of minutes, 0..10080 (0 = never hibernate); `transcribeKeywords` is a list of up to 100 terms of up to 60 characters each, with no comma, line break, `<` or `>` (terms are trimmed, empty ones dropped); an invalid list answers 400 and saves nothing |
+| GET | `/api/settings` | `{ git: { name, email }, autonomous, defaultAccountLabel, setupCompletedAt, transcribeLanguage, transcribeProofread, transcribeKeywords, idleHibernateMinutes, sdkDriver, sdkPermissionMode, sdkAutoResume, selfProjectId, runner: { kind, container, host, image, baseDir }, publicUrl }` |
+| PATCH | `/api/settings` | `{ git?, autonomous?, defaultAccountLabel?, transcribeLanguage?, transcribeProofread?, transcribeKeywords?, idleHibernateMinutes?, sdkDriver?, sdkPermissionMode?, sdkAutoResume?, selfProjectId? }` → the settings. `sdkPermissionMode` is `"same-as-terminal"` or `"ask-sensitive"` (the native chat asks before sensitive tools); `sdkAutoResume` resumes, once, a native-chat turn a restart of the back interrupted; `selfProjectId` names the project that holds vibehub's own repository, where platform-failure investigations open their cards (an unknown id is a 400); `idleHibernateMinutes` is a whole number of minutes, 0..10080 (0 = never hibernate); `transcribeKeywords` is a list of up to 100 terms of up to 60 characters each, with no comma, line break, `<` or `>` (terms are trimmed, empty ones dropped); an invalid list answers 400 and saves nothing |
 | POST | `/api/settings/setup-complete` | stamps the install as set up so the wizard stops taking over |
 
 ## GitHub
@@ -91,10 +101,10 @@ connection #1 (label = its login) and the secret moves to `GITHUB_TOKEN_<id>`. I
 
 | Method | Path | Body / notes |
 |---|---|---|
-| GET | `/api/runner` | `RunnerStatus` = `{ running, exists, claudeInstalled, dockerReachable, container, host, detail?, provisioning, terminal: true }` |
-| POST | `/api/runner/provision` | `{ ok: true }` — idempotent; long-running |
+| GET | `/api/runner` | `RunnerStatus` = `{ running, exists, claudeInstalled, dockerReachable, container, host, detail?, provisioning, terminal: true, processes }` — `processes` is the last process-reaper sweep inside the runner (`null` before the first one) |
+| POST | `/api/runner/provision` | `{ ok: true }` (`alreadyRunning: true` when a provisioning is in progress) — idempotent; long-running, its output goes to the logs socket |
 | WS | `/api/runner/logs` | provisioning output, with the last run buffered for late subscribers |
-| POST | `/api/runner/start` | starts a stopped container |
+| POST | `/api/runner/start` | starts a stopped container → `RunnerStatus`; 502 when it fails |
 | WS | `/api/runner/terminal` | a shell inside the runner container itself — where you run `claude` / `gh auth login` once |
 | POST | `/api/runner/status` | **public, `x-vibehub-token`** — `{ card, status: "working" \| "waiting" }`, the Claude hook callback |
 
@@ -121,9 +131,11 @@ running.
 A share never outlives what it points at: deleting a card, a project (with its cards) or a person
 drops theirs.
 
-`/mcp` is not narrowed by a share: it authenticates the RUNNER, and the maestro tools reach every
-card on the board. A member cannot call it from a browser (owner session or runner token only), but
-the agent inside a card they were given can — see "Who can see what" in `ARCHITECTURE.md`.
+`/mcp` called with the RUNNER's token is not narrowed by a share: the maestro tools reach every card
+on the board. A member cannot call it with a browser session (only an owner's session is accepted),
+but the agent inside a card they were given can — see "Who can see what" in `ARCHITECTURE.md`. An
+OAuth access token (see "MCP — the board, from outside") IS narrowed: it reaches what its user
+reaches.
 
 ## Projects & cards
 
@@ -142,7 +154,9 @@ that card.
 | GET | `/api/cards` | `{ cards: Card[] }` — every card in the install, for the views that cut across projects (the sidebar's Recent list) |
 | POST | `/api/cards` | `{ projectId, title }` plus any editable field (`branch`, `base`, `locked`, `accountSlug`, `model`, `effort`, `resumeSessionId`), applied through the same validation an edit uses. Answers immediately and **pre-provisions the workspace in the background** (clone, worktree, tmux), so the first open is instant |
 | GET | `/api/cards/:id` | `{ card }` |
-| PATCH | `/api/cards/:id` | `{ title?, column?, position?, model?, effort?, accountSlug?, branch?, base?, locked?, resumeSessionId?, sdkChat? }` → `{ card, session }`. All-or-nothing: one invalid field and nothing is applied. A **member** (with `work`) may send only `title`, `column`, `position`, `model` and `effort` — any other field refuses the whole patch with `403 { error: "only the owner can change: …" }`. `accountSlug`/`branch`/`resumeSessionId`: `null` clears (back to the project's account / `card/<slug>` / `claude -c`); `model` is a family alias (`fable`/`opus`/`sonnet`/`haiku`) that the CLI resolves to its newest release — a versioned id from an older client (`claude-opus-5`) is stored as its family; `effort` is `low`/`medium`/`high`/`xhigh`/`max`; both: `null`/`""` clears, and a change restarts the live session (or flags it while Claude works). `sdkChat` is the per-card "Chat nativo (beta)" opt-in (SDK driver socket); `locked` is the per-card lock described below (`null`/`false` unlocks) — moving to `done` is always manual. A column is not just a label: moving **into `paused` pauses the card for real** (same rules as the pause route) and moving a paused card into `waiting`/`working` **resumes it** (the session comes back in the background) |
+| DELETE | `/api/cards/:id/wait` | **work** — cancels the wait this card registered with `vibehub_wait_for_card` → `{ ok: true }`; 404 when there is none |
+| POST | `/api/cards/:id/wait/fire` | **work** — wakes this card now with the wait's instruction → `{ fired: true }`; 409 when the awaited card has not finished, this card is paused, or a wake is already running |
+| PATCH | `/api/cards/:id` | **work** — `{ title?, column?, position?, model?, effort?, accountSlug?, branch?, base?, locked?, resumeSessionId? }` → `{ card, session }`. All-or-nothing: one invalid field and nothing is applied. A **member** (with `work`) may send only `title`, `column`, `position`, `model` and `effort` — any other field refuses the whole patch with `403 { error: "only the owner can change: …" }`. `accountSlug`/`branch`/`resumeSessionId`: `null` clears (back to the project's account / `card/<slug>` / `claude -c`); `model` is a family alias (`fable`/`opus`/`sonnet`/`haiku`) that the CLI resolves to its newest release — a versioned id from an older client (`claude-opus-5`) is stored as its family; `effort` is `low`/`medium`/`high`/`xhigh`/`max`; both: `null`/`""` clears, and a change restarts the live session (or flags it while Claude works). A `sdkChat` field is still accepted (owner only) and stored, but nothing reads it: whether a card's Chat tab is the native chat is the install-wide `sdkDriver` setting. `locked` is the per-card lock described below (`null`/`false` unlocks) — moving to `done` is always manual. A column is not just a label: moving **into `paused` pauses the card for real** (same rules as the pause route) and moving a paused card into `waiting`/`working` **resumes it** (the session comes back in the background) |
 | DELETE | `/api/cards/:id` | **owner** — a PURGE, not a hide: `{ ok: true, incomplete: string[], steps }`. Kills both tmux sessions and the SDK driver, the preview servers and the card's browser; then erases the native chat history, the provenance log, the in-flight marker, the queued messages, the worktree, **the `card/<slug>` branch the card created, LOCALLY** (a branch that existed before the card — `dev`, `prod`, an imported session — is left alone, and nothing remote is ever touched: the script carries no `push`/`fetch`/`gh`), `/work/.uploads/<id>`, the card's `/tmp/vibehub/<id>` (after killing every runner process born with its `VIBEHUB_CARD_ID`), the browser profile, the gh-token file and the Claude Code transcripts/prompt history of the card's cwd in every account profile. The card leaves the board even when the runner is down — `incomplete` names the steps that did not finish and the hourly orphan sweep collects them. Nothing pushed to GitHub is touched |
 | POST | `/api/cards/:id/open` | attach-or-create the tmux session; returns the card. Also resumes a paused or hibernated one |
 | POST | `/api/cards/:id/pause` | moves the card to `paused` and ends its tmux sessions. A card that is REALLY working (the runner is asked, not the dot) becomes a *pending* pause: the session lives until Claude finishes. A stale `working` dot — a card parked on Claude's "Resume from summary" screen never fires a Stop hook — does not defer anything: it is paused on the spot |
@@ -150,7 +164,8 @@ that card.
 | POST | `/api/cards/:id/restart` | fresh Claude process in the same worktree |
 | POST | `/api/cards/restart-all` | `{ restarted, skipped }` |
 | POST | `/api/cards/:id/upload` | `{ name, content }` with bare base64 → `{ path }` inside the runner (10 MB cap). Kept for **180 days** (`UPLOAD_RETENTION_DAYS`, swept daily) and erased with the card (DELETE above) |
-| GET | `/api/cards/:id/uploads/:file` | the image back, as the image — the chat renders what was attached instead of the runner path. Only names the upload route itself writes (`<stamp>-<name>.<ext>`) and only image types; anything missing is a 404, cached `immutable` because the name carries the upload's timestamp |
+| GET | `/api/cards/:id/uploads/:file` | **view** — the attached file back (image, PDF, audio, any document): types the browser opens are served `inline`, the rest as a download. Honours `Range` (206/416), so attached audio shows its duration and plays in Safari. Only names the upload route itself writes (`<stamp>-<name>.<ext>`); anything missing is a 404, cached `immutable` because the name carries the upload's timestamp |
+| GET | `/api/cards/:id/uploads/:file/preview` | **view** — the attachment as text, for the formats the browser does not open (spreadsheet, Word, PowerPoint…) → `{ formato, texto, truncado }`; 422 when it cannot be read |
 | POST | `/api/cards/:id/messages` | `{ text }` → `{ delivered, pending, agent }` — the composer's Enter. Delivered to a RUNNING Claude, otherwise QUEUED until there is one |
 | GET | `/api/cards/:id/messages` | `{ pending: OutboxMessage[], agent }` — `agent` is `running` / `shell` / `none` |
 | DELETE | `/api/cards/:id/messages/:messageId` | gives up on one queued message |
@@ -158,12 +173,12 @@ that card.
 | POST/DELETE | `/api/cards/:id/browser` | start/stop the card's live browser |
 | POST | `/api/cards/:id/browser/control` | **take the wheel**: the browser pane stops being view-only and the agent is asked before it drives. Answers the same shape as the GET |
 | DELETE | `/api/cards/:id/browser/control` | hand it back to the agent — releases only YOUR own hold |
-| WS | `/api/cards/:id/terminal` | xterm bridge (`?shell=1` for a plain shell in the same worktree) |
+| WS | `/api/cards/:id/terminal` | **view** (a `view` socket only watches) — xterm bridge (`?shell=1` for a plain shell in the same worktree) |
 | WS | `/api/cards/:id/chat` | the SAME session read as a conversation: one JSON `ChatEvent` per frame (`{ id, kind: "user"\|"assistant"\|"tool", at, text, tool? }`), parsed from Claude Code's transcript. Opens with the last turns and streams what is appended; blank frames are the follower's heartbeat |
-| POST | `/api/cards/:id/chat` | `{ text }` — types it at that session's prompt and presses Enter (409 when the card has no live session) |
-| WS | `/api/cards/:id/sdk` | **native chat (beta)** — the Agent-SDK driver, gated by the `sdkDriver` setting. One JSON `DriverEvent` per frame (`ready`, `session`, `assistant_delta`, `assistant_text`, `tool_use`, `permission_request`, `permission`, `result`, `error`, `parse_error`); the client sends `{ type: "user", text }`, `{ type: "interrupt" }` or `{ type: "permission_decision", id, allow }`. On connect the route **replays the conversation**: the newest TUI/SDK transcript tail (converted to frames, incl. `{ type: "user" }`) plus the per-card event log (`<dataDir>/sdk-history/<cardId>.ndjson`), then spawns the driver resuming the **newest session** in the card's worktree (falling back to `resumeSessionId`). The route persists each new `session_id` on the card (`resumeSessionId`) so a reconnect resumes the same conversation. Contract in `back/src/services/sdk/protocol.ts` + `docs/sdk-driver.md` |
+| POST | `/api/cards/:id/chat` | **work** — `{ text }` → `{ ok: true }`: types it at that session's prompt and presses Enter. 409 when the card has no live session, Claude is not running in it, or a menu is open in the terminal |
+| WS | `/api/cards/:id/sdk` | **work** — **native chat**, the Agent-SDK driver, gated by the `sdkDriver` setting (on by default; off, the socket sends one `error` frame and closes). One JSON `DriverEvent` per frame (among them `ready`, `session`, `assistant_delta`, `assistant_text`, `tool_use`, `permission_request`, `permission`, `user_question`, `question_result`, `result`, `system_note`, `workflow_progress`, `error`, `parse_error`); the client sends `{ type: "user", text }`, `{ type: "interrupt" }`, `{ type: "permission_decision", id, allow }`, `{ type: "question_answer", id, answers }`, plus the ephemeral `typing`, `question_draft` and `workflow_feed` frames. The driver belongs to the card, not to the socket: closing the page leaves a turn running. On connect the route **replays the conversation**: the newest TUI/SDK transcript tail (converted to frames, incl. `{ type: "user" }`) plus the per-card event log (`<dataDir>/sdk-history/<cardId>.ndjson`), then spawns the driver resuming the **newest session** in the card's worktree (falling back to `resumeSessionId`). The route persists each new `session_id` on the card (`resumeSessionId`) so a reconnect resumes the same conversation. Contract in `back/src/services/sdk/protocol.ts` + `docs/sdk-driver.md` |
 | POST | `/api/cards/:id/chat/key` | `{ key: "escape" \| "interrupt" }` — the chat's Stop button |
-| WS | `/api/cards/:id/vnc` | noVNC bridge for the card browser |
+| WS | `/api/cards/:id/vnc` | **work** — noVNC bridge for the card browser |
 
 ### Documented pull requests — every PR explains itself
 
@@ -233,19 +248,24 @@ through the card whose browser saw it — another card's capture id is a 404 on 
 | GET | `/api/credentials` | `{ credentials: [{ id, name, type: "userpass"\|"token", createdAt, usedAt? }] }` |
 | POST | `/api/credentials` | `{ name, type, username?, password?, value? }` — `userpass` takes `username` + `password`, `token` takes `value` → `{ credential }`; 400 on a bad or duplicate name |
 | DELETE | `/api/credentials/:id` | `{ ok: true }`; 404 when unknown |
+| GET | `/api/credentials/agent-write` | `{ projectIds }` — the projects whose card agents may WRITE to the Cofre (`vibehub_credential_generate`, `vibehub_credential_save_capture`) |
+| PUT | `/api/credentials/agent-write` | `{ projectIds }` → `{ projectIds }` — replaces that list |
 | GET | `/api/cards/:id/captures` | `{ captures: [{ id, host, suggestedName, username, at }] }` — logins the card's browser saw and nobody decided on yet. Never the password |
 | POST | `/api/cards/:id/captures/save` | **owner** — `{ captureId, name? }` → `{ credential }`; `name` defaults to the suggested one. The password goes from the server-held capture straight to the vault |
 | POST | `/api/cards/:id/captures/dismiss` | `{ captureId }` → `{ ok }` — forgets it without saving |
 
 ## Claude accounts, MCPs, brain, import
 
-**owner** only, except the card-scoped routes (`/api/cards/:id/upload`, `/api/cards/:id/uploads/:file`, `/api/cards/:id/transcribe`, `/api/cards/:id/paths`), which follow the card.
+**owner** only, except `GET /api/transcribe` (any session) and the card-scoped routes
+(`/api/cards/:id/transcribe`, `/api/cards/:id/session`, `/api/cards/:id/usage`,
+`/api/cards/:id/paths`), which follow the card.
 
 | Method | Path | Body / notes |
 |---|---|---|
 | GET | `/api/accounts` | `{ accounts: Account[], defaultLabel }` |
-| POST | `/api/accounts` | `{ name }` → creates the account; the profile directory slug is derived from it |
-| DELETE | `/api/accounts/:slug` | |
+| POST | `/api/accounts` | `{ name }` → `{ account }`; the profile directory slug is derived from it |
+| PATCH | `/api/accounts/:slug` | `{ name }` → `{ account }` — renames it; the slug does not change |
+| DELETE | `/api/accounts/:slug` | `{ account }`; refused (400) while a person is tied to it through `claudeAccountSlug`, or a card or project still uses it |
 | GET | `/api/accounts/tokens` | `{ bySlug, defaultHasToken }` — which accounts have a long-lived token |
 | GET | `/api/accounts/usage` | `{ bySlug: { <slug>: AccountUsage }, fetchedAt }` — plan usage per account (see below) |
 | POST | `/api/accounts/:slug/token` | `{ token }` — long-lived Claude token, stored in the vault, planted in every runner profile |
@@ -268,12 +288,13 @@ through the card whose browser saw it — another card's capture id is a 404 on 
 | POST | `/api/plugins/:name` | install it into every profile and remember it (auto-applies + staggered restart) |
 | DELETE | `/api/plugins/:name` | drop it from the wanted list and uninstall it everywhere |
 | POST | `/api/plugins/apply` | reconcile every profile with the wanted list |
-| GET | `/api/transcribe` | `{ available, proofread, language }` — voice input status (keys are never returned) |
-| POST | `/api/transcribe/keys` | `{ openaiKey?, anthropicKey? }` — empty string clears; OpenAI gpt-transcribe transcribes (with `transcribeKeywords` as keywords), Claude proofreads against the brain |
-| POST | `/api/cards/:id/transcribe` | `{ base64, mimeType }` → `{ text, proofread }`; 503 when voice input is not configured |
+| GET | `/api/transcribe` | **any session** — `{ available, proofread, language }` — voice input status (keys are never returned); `proofread` is on only with a Claude key stored AND the `transcribeProofread` setting on |
+| POST | `/api/transcribe/keys` | `{ openaiKey?, anthropicKey? }` → the same status — empty string clears; OpenAI gpt-transcribe transcribes (with `transcribeKeywords` as keywords), Claude proofreads against the brain |
+| POST | `/api/cards/:id/transcribe` | **work** — `{ base64, mimeType }` → `{ text, proofread }`; 503 when voice input is not configured |
 | POST | `/api/import` | `{ items: [{ repo, title, sessionId, branch?, column? }], stageDir? }` — adopt staged Claude sessions as cards |
-| GET | `/api/cards/:id/session` | `{ model, modelLabel, account: { slug, name }, situation }` — what the session is REALLY using: model from the last assistant turn (`modelLabel` carries the version, e.g. `Opus 5.5`), effective account, and whether the agent is `working`/`waiting`/`paused`/`done`/`no session` |
-| GET | `/api/cards/:id/paths` | where the card maps to inside the runner (debugging an import) |
+| GET | `/api/cards/:id/session` | **view** — `{ model, modelLabel, effort, account: { slug, name }, situation }` — what the session is REALLY using: model from the last assistant turn (`modelLabel` carries the version, e.g. `Opus 5.5`), reasoning level, effective account, and whether the agent is `working`/`waiting`/`paused`/`done`/`stopped`/`no session` (`stopped` = the session is there but Claude exited to the shell) |
+| GET | `/api/cards/:id/usage` | **view** — `{ slug, usage: AccountUsage }` — plan usage of the ONE account this card runs on, so a member sees how close the limit is without seeing the account list |
+| GET | `/api/cards/:id/paths` | **view** — where the card maps to inside the runner (debugging an import) |
 
 ### `AccountUsage` — how much of the plan is gone
 
@@ -290,7 +311,7 @@ for the runner's built-in profile:
       "sevenDayOpus": { "utilization": 74, "resetsAt": "2026-08-27T00:00:00Z" },
       "fetchedAt": 1755880000000
     },
-    "tech": { "available": false, "error": "no_credentials", "fetchedAt": 1755880000000 }
+    "work": { "available": false, "error": "no_credentials", "fetchedAt": 1755880000000 }
   },
   "fetchedAt": 1755880000000
 }
@@ -315,28 +336,121 @@ and dropped. The token is never logged, never returned and never stored on the v
 long-lived `setup-token` in the vault is NOT accepted by that endpoint and is never used here.
 Readings are cached 60s per account and the accounts are polled in series.
 
+## Voice mode
+
+A spoken conversation with GPT-Live over WebRTC — see `docs/voice.md`. The OpenAI key never leaves
+the server: the browser sends its SDP offer and gets the answer back. A call inside a card's chat
+takes the same right as typing in it (**work**).
+
+| Method | Path | Body / notes |
+|---|---|---|
+| GET | `/api/voice/live` | **any session** — `{ enabled, available, model, speech }`, booleans and the model name only |
+| POST | `/api/voice/live/sessions` | **any session** — `{ sdp }` (the browser's offer) → `201 { sessionId, sdp }`. 404 when voice mode is disabled; 400 on a missing or invalid offer |
+| POST | `/api/cards/:id/voice/sessions` | **work** — the same trade for a call in this card's chat; the instructions carry the card's recent thread |
+| POST | `/api/cards/:id/voice/actions` | **work** — `{ callId, name, arguments }` (a function call the model made, `arguments` as its JSON text) → `{ output }`. Runs the board action as the caller, once per `callId`; a board refusal keeps its status (400/404/409), any other failure is a 502 |
+| POST | `/api/cards/:id/voice/turns` | **work** — `{ turns: [{ vid, role, text, at }] }` → `{ saved, duplicate }`: the call's spoken turns saved in the card's chat. Idempotent on `vid` |
+| POST | `/api/cards/:id/voice/speech` | **work** — `{ text }` (one piece of an answer) → `audio/mpeg`, streamed: reads it aloud |
+
+## Pull request review and analysis
+
+Two flows, both driven by cards (see the `[vibehub · revisão de PR]` and `[vibehub · análise de PR]`
+prompts in `back/src/services/review/prompts.ts`): a **review** in rounds, where a reviewer AI and
+the author's AI take turns on one PR of a card; and an **analysis**, where one analysis card judges
+a project's PR and can merge it.
+
+| Method | Path | Body / notes |
+|---|---|---|
+| GET | `/api/projects/:id/prs` | **any session**, project visible (else 404) — `{ pulls }`, the project's open PRs as the caller's GitHub account sees them. 403 `{ error, login, repo }` when that account cannot see the repository; 502 when GitHub fails |
+| WS | `/api/projects/:id/prs/live` | project visible — who is looking at which PR. The client sends `{ type: "claim" \| "release", prNumber }`; the server sends `claims`, `pulls-changed`, `claim-refused` and, to a `view` share that claims, `{ type: "error", code: "read_only" }` |
+| GET | `/api/projects/:id/analysis-people` | **any session**, project visible — `{ people }` who may review or co-author an analysis there |
+| POST | `/api/projects/:id/prs/:number/analysis` | `work` on the project — `{ reviewerUserId, coauthorUserId? }` → `{ card, created }`: creates (or reuses) the analysis card. 409 `{ error, username }` while another person is setting up that PR's analysis |
+| GET | `/api/cards/:id/analysis` | **view** — `{ analysis, health, verdict, uncheckedDimensions, canMerge, merging, mergedAt?, lastMergeRefusal?, mergeGate? }`; `{ analysis: null }` before the first report |
+| GET | `/api/cards/:id/analysis/conversation` | **view** — `{ conversation }` of the analysis fleet |
+| POST | `/api/cards/:id/analysis/merge-gate` | **work** — runs the merge gate again → `{ mergeGate }`, or the refusal with its status |
+| POST | `/api/cards/:id/analysis/merge` | **work** — merges the analysed PR as the caller → `{ result }`, or the refusal with its status |
+| GET | `/api/cards/:id/people` | **view** — `{ people }` who can take a role in this card's review |
+| POST | `/api/cards/:id/review` | **work** — `{ prNumber, reviewerUserId, authorUserId?, coauthorUserId?, mergerUserId? }` → `{ review }`: starts a review of that PR |
+| GET | `/api/cards/:id/review?pr=` | **view** — `{ review, working, merging, fleet }` for the active (or latest) review; `pr` picks one PR among those the card follows. `{ review: null }` when there is none |
+| GET | `/api/cards/:id/review/agents/:runId/:agentId/feed` | **view** — `{ items }`, the recent steps of one reviewer subagent. 400 bad id, 409 reviewer session closed, 502 runner probe failed |
+| GET | `/api/cards/:id/review/conversation/:runId` | **view** — `{ conversation }` of one reviewer fleet run |
+| POST | `/api/reviews/:id/decide` | reviewer or owner — `{ findingId, decision: "block" \| "drop" \| "keep" \| "accept_risk" }` → `{ review }` |
+| POST | `/api/reviews/:id/retry` | reviewer, merger, co-author or owner → `{ review }`; 409 when there is nothing to retry |
+| POST | `/api/reviews/:id/suggestions` | reviewer, author, co-author, merger or owner — `{ apply?, skip? }` (suggestion ids; `findingIds` is the old name of `apply`) → `{ review }` |
+| POST | `/api/reviews/:id/cancel` | reviewer, author, co-author, merger or owner → `{ review }`; 409 when the review is closed |
+| POST | `/api/reviews/:id/merge` | merger, reviewer, author or co-author (an owner without a role is refused) → `{ review, result }`. Only in `ready`, pinned to the approved commit, with the clicker's own GitHub connection; otherwise the refusal with its status |
+
+The `/api/reviews/:id/*` routes need only a session; the role is checked inside: 404 for an unknown
+review, 403 for a caller outside the roles listed.
+
+## Platform failures
+
+A failure or inconsistency of vibehub ITSELF, reported by a card's agent
+(`vibehub_report_platform_failure`) or by the screen, waiting for the owner to approve a fix.
+
+| Method | Path | Body / notes |
+|---|---|---|
+| GET | `/api/platform-failures` | **owner** — `{ failures }` waiting on the owner |
+| POST | `/api/platform-failures/:id/investigate` | **owner** — opens (or reuses) an investigation card in the project named by the `selfProjectId` setting and sends it the brief → `{ failure, card }`. 400 when that project is not set |
+| POST | `/api/platform-failures/:id/dismiss` | **owner** → `{ failure }` |
+| POST | `/api/platform-failures/screen-errors` | **any session** — `{ message, screen, stack? }` → `{ recorded }`: an error the front caught, with secrets redacted |
+
 ## MCP — the board, from inside a card
 
 | Method | Path | Body / notes |
 |---|---|---|
-| POST | `/mcp` | **Bearer = the runner's service token** (a browser session also works). MCP streamable HTTP, stateless. |
+| POST | `/mcp` | **Bearer = the runner's service token**; an **owner**'s browser session also works (a member's does not). MCP streamable HTTP, stateless. |
 | GET | `/mcp` | 405 — this endpoint is POST-only. |
 
 vibehub registers itself as an MCP server in every card's profile, so the agent running in a card can
 coordinate the other cards. They are real parallel terminals, not sub-agents: each keeps its own
-context, worktree and branch.
+context, worktree and branch. The tools below are the whole set a card gets (`back/src/mcp/tools.ts`,
+`credentialTools.ts`, `attachmentTools.ts`, `platformFailureTools.ts`); each tool's description in
+those files is the full contract. "Own card" = the caller passes its `$VIBEHUB_CARD_ID` as `card`.
 
 | Tool | What it does |
 |---|---|
+| **Coordinating cards** | |
 | `vibehub_list_terminals` | lists the cards with their situation (`working`, `waiting`, `paused`, `done`, `no session`); `project` filters |
-| `vibehub_send_to_terminal` | types an instruction at another card's prompt and submits it |
-| `vibehub_read_terminal` | reads that card's last assistant answers, stripped to text |
 | `vibehub_list_projects` | lists every project (id, name, repository, base branch), even one with no card yet, and whether the person who gave the calling card its order may create a card there (`canCreateCard`, `reason`) |
 | `vibehub_create_card` | creates a card in any project, at the top of its backlog, authored by the person who gave the calling card its order; refused with the reason unless that person is the owner and the GitHub account their cards use can push to the project's repository |
+| `vibehub_send_to_terminal` | delivers an instruction to another card as a message of its conversation (see below); wakes a hibernated or never-opened card; refuses a card paused on purpose and a PR reviewer card. `from` = the caller's own card id, shown as the sender; `inReplyTo` closes the event it answers |
+| `vibehub_read_terminal` | reads that card's last assistant answers (`last`, default 3), stripped to text; works on a paused card |
+| `vibehub_wait_for_card` | own card — wakes the caller with `instruction` when the awaited card gets a PR merged through vibehub (on `base`, if given), is concluded or is deleted. One wait per card; refused for itself, a card already in done and a cycle |
+| `vibehub_cancel_wait` | own card — drops that wait |
+| `vibehub_move_cards` | moves one or more cards to `done` or `backlog`; each card succeeds or fails on its own line |
+| **Own state** | |
+| `vibehub_report` | own card — declares `working` / `ready` / `needs_me` / `blocked` with a one-line `summary`; never moves the card |
+| `vibehub_notify` | own card — a message to whoever follows the board (MCP push `card.event` and the inbox): `info`, `error`, `done`, or `question` / `approval`, which ask for an answer; `idempotencyKey` announces a retry once |
+| `vibehub_brain_learn` | own card — appends a dated learning under `## Aprendizados` of the project's brain; append-only, deduplicated |
+| `vibehub_preview` | own card — registers a server listening in the runner as a preview chip and returns its `/preview/<port>/` path; refuses a port not listening or a page that cannot be opened |
+| `vibehub_report_platform_failure` | reports a failure or inconsistency of vibehub itself (see "Platform failures") |
+| **Shipping** | |
+| `vibehub_gate` | runs the card's checks (`.vibehub/gate.json`, else defaults) → `{ ran, passed, output }` |
+| `vibehub_deliver` | push, PR (documented, see "Documented pull requests"), gate, and a merge commit only with `authorized: true` → `{ prUrl, merged, reason }` |
+| `vibehub_act_as` | makes the card's git and gh act as another participant of the card, until the next person's message |
+| **PR review and analysis** | |
+| `vibehub_review_start` | own card — starts a review of the card's PR, as the "Pedir revisão" button does |
+| `vibehub_attach_prs` | own card — attaches open PRs of the project to the card for review → `{ attached, refused, next }` |
+| `vibehub_review_submit` | reviewer card only — hands back a review round (findings or verdicts) |
+| `vibehub_review_respond` | author card only — answers the reviewer's findings after fixing |
+| `vibehub_analysis_report` | analysis card only — records the analysis report (`fleet_unavailable`, `analysed`, `done`) |
+| **Attachments** | |
+| `vibehub_read_document` | reads a document on the runner (Excel, Word, PowerPoint, OpenDocument, PDF text layer, plain text) as markdown |
+| `vibehub_transcribe_audio` | transcribes an audio or video file on the runner with OpenAI's gpt-transcribe |
+| **Cofre (credentials)** | |
+| `vibehub_credential_list` | own card — names and types of the credentials, never a value |
+| `vibehub_credential_fill` | own card — types a named credential into the card's live browser over CDP; the value never reaches the agent |
+| `vibehub_credential_generate` | own card — creates a credential with a random password the agent never sees; needs agent writes enabled for the project |
+| `vibehub_credential_captures` | own card — logins the card's browser captured and nobody saved yet, never the password |
+| `vibehub_credential_save_capture` | own card — saves one of those captures as a named credential; same rule as generate |
 
-The instruction travels over stdin inside a quoted heredoc and is typed with `tmux send-keys -l`, so
-an instruction that contains the word "Enter" is text, not a keystroke. Reading is a read-only tail
-of the newest transcript.
+**How `vibehub_send_to_terminal` delivers** (`sendToTerminal` in `back/src/services/maestro/maestro.ts`):
+when the destination card's native chat has a live driver, the instruction is a TURN of that driver.
+With no live driver, the `sdkDriver` setting on and nobody generating in the card's terminal, a
+driver is started for it and takes the turn. Otherwise the instruction travels over stdin inside a
+quoted heredoc and is typed with `tmux send-keys -l`, so an instruction that contains the word
+"Enter" is text, not a keystroke; that route refuses when a menu is open in the terminal. Reading is
+a read-only tail of the newest transcript.
 
 ## MCP — the board, from outside (ChatGPT, Claude.ai)
 
@@ -358,19 +472,22 @@ connector URL is `https://<that domain>/mcp`.
 
 Tokens are stored hashed in `oauth.json` and die with the account, or when its password changes.
 
+The tools below are the whole set an OAuth caller gets (`back/src/mcp/externalTools.ts`).
+
 | Tool | Who / what |
 |---|---|
 | `vibehub_list_projects` | the projects the user reaches; `canCreateCards` (owner only) |
 | `vibehub_list_terminals` | the cards the user reaches, with their `access` (`work` / `view`) |
 | `vibehub_create_card` | **owner** — creates a card and opens it (answers `opening` while the workspace is prepared) |
 | `vibehub_open_card` | `work` — opens or resumes a session |
-| `vibehub_send_to_terminal` | `work` — the user's own message, attributed to them; goes into the live native chat when there is one, else the terminal prompt. Returns `sentAt` |
+| `vibehub_send_to_terminal` | `work` — the user's own message, attributed to them; delivered the way the in-card tool delivers (a turn of the native chat when it is live or can be started, else typed at the terminal prompt). Wakes a sleeping card; refuses a card paused on purpose or asleep in `done`. Returns `sentAt` |
 | `vibehub_wait_for_card` | `view` — holds up to 50 s until the turn ends or the card needs the user: `outcome` `finished` / `question` / `permission` / `timeout` / `not_started` / `no session`, with `answers`, `activity` and what is pending. `since` = the send's `sentAt` |
 | `vibehub_read_terminal` | `view` — the card's last answers, plus `pendingQuestion` (the question card or terminal menu waiting on the user) |
 | `vibehub_card_activity` | `view` — situation, `busy`, `pendingQuestion` / `pendingPermission` and recent events (messages, one line per tool call, answers); `since` for only what is new |
 | `vibehub_card_changes` | `view` — read-only git: branch, commits ahead of the base, files changed, uncommitted work, the branch's PR |
 | `vibehub_move_cards` | `work` on each card — `done` or `backlog` |
-| `vibehub_deliver` | `work` — PR + checks; merges only with `authorized: true`. A NEW PR opens only documented: `title`, `body` with the standard's sections and `comments` on the diff (`reason: "undocumented"` otherwise; see below) |
+| `vibehub_deliver` | `work` — PR + checks; merges only with `authorized: true`. A NEW PR opens only documented: `title`, `body` with the standard's sections and `comments` on the diff (`reason: "undocumented"` otherwise; see "Documented pull requests") |
+| `vibehub_inbox` | the user's open events (cards that finished a turn, asked a question, wait for a permission or need the user) → `{ events, cursor }`; `since` = a previous `cursor`. Other tool answers also carry new events once, as `notifications` |
 
 The read tools carry `readOnlyHint`, so the app does not ask the user to confirm every poll.
 
@@ -423,8 +540,8 @@ the vibehub server can make **outbound HTTPS** requests to the internet (the cal
 2. Open a **Work chat** (ChatGPT web, or the desktop app with **Work** and **Cloud** selected; a dot
    also works). MCP Events is not available in ordinary chats or voice.
 3. Ask ChatGPT to monitor vibehub, naming the filter and what to do, e.g. "Subscribe to vibehub
-   card.event for project erp, kinds question and needs_me. When one arrives, tell me the question and
-   the options, and answer it with vibehub_send_to_terminal only after I confirm."
+   card.event for project my-app, kinds question and needs_me. When one arrives, tell me the
+   question and the options, and answer it with vibehub_send_to_terminal only after I confirm."
 4. On the server, confirm `events/subscribe` arrived and the verification passed (log line
    `MCP events` or the subscription in `webhook-subscriptions.json`).
 5. Make a card ask something (`vibehub_notify` type `question`, or an AskUserQuestion in the native
