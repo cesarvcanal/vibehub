@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { QueryClient } from "@tanstack/react-query";
 import { apiReject, renderApp } from "@/test/render";
@@ -100,7 +100,7 @@ describe("PlatformFailuresButton", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("um poll que falha com o relato aberto mantém o relato na tela", async () => {
+  it("um poll que falha com o relato aberto mantém o relato na tela e avisa dentro da janela", async () => {
     const { queryClient } = renderApp(<PlatformFailuresButton />);
     await userEvent.click(await screen.findByRole("button", { name: /1/ }));
     await screen.findByText("logo após um stop do usuário: write after end");
@@ -108,6 +108,7 @@ describe("PlatformFailuresButton", () => {
     await refetchFailures(queryClient);
     await waitFor(() => expect(queryClient.getQueryState(PLATFORM_FAILURES_KEY)?.status).toBe("error"));
     expect(screen.getByText("logo após um stop do usuário: write after end")).toBeTruthy();
+    expect(within(screen.getByRole("dialog")).getByRole("alert").textContent).toMatch(/could not load vibehub's failures|não deu pra carregar as falhas do vibehub/i);
   });
 
   it("mostra a contagem e abre o relato, sem anunciar: o aviso é do PlatformFailuresAnnouncer, montado em qualquer tela", async () => {
