@@ -1,4 +1,5 @@
 import type { SdkRow } from "@/features/board/lib/sdkChat";
+import { readSkillName } from "./skillName";
 
 type ToolRow = Extract<SdkRow, { kind: "tool" }>;
 
@@ -10,6 +11,5 @@ export function findDispatchingSkill(rows: readonly SdkRow[], agentRowId: string
   const skillCall = rowsBeforeDispatch
     .slice(turnStart)
     .findLast((row): row is ToolRow => row.kind === "tool" && row.name === "Skill" && row.parent === agentRow.parent);
-  const skillInput = skillCall?.input as { skill?: unknown } | undefined;
-  return typeof skillInput?.skill === "string" && skillInput.skill !== "" ? skillInput.skill : undefined;
+  return skillCall ? readSkillName(skillCall.input) : undefined;
 }

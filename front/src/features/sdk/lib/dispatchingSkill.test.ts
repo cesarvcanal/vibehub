@@ -26,6 +26,8 @@ describe("findDispatchingSkill", () => {
       [userRow("u1"), agentRow("a0"), skillRow("s1", "mattpocock-skills:code-review", "a0"), agentRow("a1")], undefined],
     ["despacho sem skill no turno não tem dona",
       [userRow("u1"), readRow("r1"), agentRow("a1")], undefined],
+    ["a skill pedida pelo campo command também é dona do despacho, como na linha do chat",
+      [userRow("u1"), { kind: "tool", id: "s1", name: "Skill", summary: "x", input: { command: "x" } }, agentRow("a1")], "x"],
   ])("%s", (_name, rows, expected) => {
     expect(findDispatchingSkill(rows, "a1")).toBe(expected);
   });

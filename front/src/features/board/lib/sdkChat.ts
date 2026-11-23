@@ -19,6 +19,7 @@ import { t as translate, type Translate } from "@/i18n";
 import { peerDisplayName } from "@/features/board/lib/peerTyping";
 import type { LocalVoiceTurn } from "@/features/voice/voiceTurns";
 import { isActiveFailureStatus, parsePlatformFailureNotice } from "@/features/platformFailures/lib/notice";
+import { readSkillName } from "@/features/sdk/lib/skillName";
 import type { PlatformFailureNotice } from "@/api/types";
 
 /* ----------------------------------------------------------------- events */
@@ -981,7 +982,7 @@ export function toolHeadline(name: string, input: unknown): ToolHeadline {
       };
     }
     case "Skill": {
-      const skill = field(o, "skill") || field(o, "name") || field(o, "command");
+      const skill = readSkillName(o);
       return {
         title: skill ? `Skill(${line(skill, 60)})` : tool,
         ...(field(o, "args") ? { detail: line(field(o, "args")) } : {}),
