@@ -32,7 +32,7 @@
 - Função: **verbo preciso + objeto** (`assertMovableColumn`, `normalizeCardIds`), não `process`, `handle`, `manage`, `resolve` havendo ação mais precisa. Variável diz conteúdo e função, sem `data`, `tmp`, `result`, `x` ou abreviação opaca. **Todo nome se lê sem abrir a implementação**, inclusive parâmetro de callback e variável de laço (`row`, não `r`); uma coisa, um nome no mesmo escopo.
 - Referência nomeia a entidade (`cardId`, `accountSlug`, não `id` solto quando há mais de um); variantes deixam claras as duas diferenças (`originalValue` e `convertedValue`, não `value` e `convertedValue`).
 - Conceito novo: `grep` do termo no repo antes; se ele já nomeia outra coisa, escolha outro.
-- `camelCase` para funções/variáveis, `PascalCase` para componentes/classes/tipos, `UPPER_SNAKE_CASE` para constantes realmente estáticas (`EXEC_TIMEOUT_MS`); hooks começam com `use`. **Arquivo, inclusive de teste, segue a mesma convenção:** `camelCase.ts`, ou `PascalCase.tsx` quando exporta componente; o teste é o nome do testado mais `.test` (`sdkChat.test.ts`, `SdkChatView.test.tsx`), com sufixo de cenário quando há várias suítes (`cardSdk.lifecycle.test.ts`). Exceção: as primitivas de `front/src/components/ui/` seguem o kebab-case do shadcn (`dropdown-menu.tsx`). Arquivo antigo fora do padrão só se renomeia com pedido (o rename arrasta imports).
+- `camelCase` para funções/variáveis, `PascalCase` para componentes/classes/tipos, `UPPER_SNAKE_CASE` para constantes realmente estáticas (`EXEC_TIMEOUT_MS`); hooks começam com `use`. **Arquivo, inclusive de teste, segue a mesma convenção:** `camelCase.ts`, ou `PascalCase.tsx` quando exporta componente; o teste é o nome do testado mais `.test` (`sdkChat.test.ts`, `SdkChatView.test.tsx`), com sufixo de cenário quando há várias suítes (`cardSdk.lifecycle.test.ts`). Exceções: as primitivas de `front/src/components/ui/` seguem o kebab-case do shadcn (`dropdown-menu.tsx`), os idiomas de `front/src/i18n/` seguem a tag de idioma (`pt-BR.ts`) e as declarações `*.d.ts` seguem o pacote que declaram. Arquivo antigo fora do padrão só se renomeia com pedido (o rename arrasta imports).
 - Cadeia de `filter`/`map`/`sort` que esconde regra importante ganha etapas intermediárias com nome.
 - Em código legado, o nome ruim no trecho que o PR altera sai corrigido no mesmo passo; rename que repercute em contrato ou em muitos consumidores é mudança de contrato.
 
@@ -103,7 +103,7 @@
 **A área de um código é a pasta de `back/src/services/<área>/` que o atende; o front dela mora em `front/src/features/<área>/`, com o mesmo nome.** As duas do front sem service homônimo são `auth` (no back, `back/src/auth/`) e `setup` (o assistente da primeira instalação).
 
 - **Arquivo novo nasce na pasta da área dele**; a pasta do front que ainda não existe nasce no mesmo PR, com `components/`, `lib/` e `types/` (§5). **Teste mental:** "qual pasta de `back/src/services/` atende isto?" O nome dela é a pasta do front. Código do front sem service no back (tema, websocket) é técnico e vai para `front/src/lib/`.
-- **`front/src/features/board/` guarda só o board:** colunas, card, projeto, seleção e deck. O resto nela (revisão e análise de PR, contas e uso, chat do SDK e medidor de contexto, cérebro, plugins, MCP, preview) é **legado à espera de mudança de pasta**, não exemplo; o nome diz a área (`board/lib/usage.ts` é de `accounts/`, `contextUsage.ts` de `sdk/`, `AnalysisConversation.tsx` de `review/`).
+- **`front/src/features/board/` guarda só o board:** colunas, card, projeto, seleção e deck. O resto nela (revisão e análise de PR, contas e uso, chat do SDK e medidor de contexto, cérebro, plugins, MCP, preview) é **legado à espera de mudança de pasta**, não exemplo; o nome diz a área (`board/lib/usage.ts` é de `accounts/`, `contextUsage.ts` de `sdk/`, `AnalysisConversation.tsx` de `review/`). O lint reprova todo arquivo novo nela; o que é de fato do board entra com o caminho exato em `APPROVED_BOARD_FILES` (`scripts/lint/lintChanged.mjs`), no mesmo PR, para o revisor julgar.
 - **Mexeu num arquivo legado de outra área:** a mudança fica nele (mudar de pasta é PR próprio, só de `git mv` e imports, com pedido, §12.6); o arquivo **novo** que ela cria vai para a pasta da área, importando o legado de onde está.
 
 ### Utilitário × regra de negócio
@@ -287,7 +287,7 @@ Comando de teste que passaria de ~2 min vira recorte menor; o que ainda passa de
 4. **Implementar de ponta a ponta:** consumidores, contratos, validação, acesso, i18n e testes na mesma entrega.
 5. **Auditar o trecho tocado:** nomes, `let`, comentário fora das exceções, código morto, duplicação, fallback indevido, leituras e execuções inúteis.
 6. **Não espalhar alterações:** problema vizinho que exige refatoração arriscada é comunicado, não corrigido de carona.
-7. **Validar:** lint, testes do recorte, typecheck e build quando aplicável, e revisar o diff (§11, comandos abaixo). O lint checa só o que a máquina consegue (as regras de `eslint.config.js` e o markdown fora do lugar, §15): verde não é conformidade; o resto deste arquivo é o passo 5 e a revisão do passo 8.
+7. **Validar:** lint, testes do recorte, typecheck e build quando aplicável, e revisar o diff (§11, comandos abaixo). O lint checa só o que a máquina consegue: as regras de `eslint.config.js` nas linhas novas, e, desde a base, o markdown fora do lugar (§15), o arquivo novo em `front/src/features/board/` (§4), o nome de arquivo novo em `back/src` e `front/src` (§2) e o emoji do título de cada commit da branch (§14). Verde não é conformidade; o resto deste arquivo é o passo 5 e a revisão do passo 8.
 8. **Revisão independente antes de entregar:** o diff passa, nesta ordem, por **simplificação** (aplicada) e por **code review** (correção, performance, aderência às regras e o que foi inventado), ambas por revisores SEM o contexto de quem escreveu, com a entrada de "Como revisar um PR" (§14). Cada achado confirmado segue a sua severidade (§14, "As severidades"); o descartado tem o motivo dito. O que a simplificação mudar volta pelo passo 7 antes do code review.
 9. **Descrever o resultado:** o que mudou, o que foi verificado e as limitações reais ("Como relatar", abaixo); PR segue a §14.
 
@@ -305,7 +305,7 @@ Decisão de produto, mudança de escopo, funcionalidade nova, mudança de compor
 |---------|-----|
 | `npm run install:all` | Instala a raiz (o lint), `back/` e `front/` |
 | `npm --prefix back run dev` · `npm --prefix front run dev` | Backend (tsx watch) e frontend (Vite) em dev |
-| `npm run lint:changed` · `npm run test:changed` | ESLint nas linhas que a branch acrescentou e testes afetados por ela, desde a base (`$VIBEHUB_BASE_REF`, padrão `origin/main`): o recorte do gate (e do CI, no lint) |
+| `npm run lint:changed` · `npm run test:changed` | Lint do que a branch acrescentou (§12, passo 7) e testes afetados por ela, desde a base (`$VIBEHUB_BASE_REF`, padrão `origin/main`): o recorte do gate (e do CI, no lint) |
 | `npm run build` | Build de back + front |
 | `npm --prefix front run storybook` | Storybook dos componentes |
 
@@ -517,7 +517,7 @@ Quem revisa (pessoa ou agente) é o **portão do merge**. Recebe o diff, este ar
 | `AGENTS.md` (este) | Todas as regras do projeto, para qualquer agente e pessoa |
 | `.claude/CLAUDE.md` | Como o Claude Code trabalha aqui: ordem das etapas, mapa de skills, subagentes, fechamento e entrega; importa este arquivo e nunca repete regra dele |
 | `.claude/settings.json` | Configuração do Claude Code: plugins, permissões, profundidade de subagente e os hooks que o `.claude/CLAUDE.md` descreve |
-| `eslint.config.js` | A parte deste arquivo que a máquina checa (`npm run lint:changed`) |
+| `eslint.config.js`, `scripts/lint/` | A parte deste arquivo que a máquina checa (`npm run lint:changed`, §12 passo 7); os emojis dos commits ela lê da tabela da §14, sem cópia |
 | `README.md`, `SECURITY.md` | Páginas públicas do repositório, sem regra de desenvolvimento |
 | `back/src/services/brain/personas/*.md` | Instruções que o servidor MCP do vibehub entrega a todo card (código do produto) |
 | `docs/` | Documentação do projeto (arquitetura, API, processos do runner), não canônica para regra. Spec e plano das skills (brainstorming, writing-plans) ficam fora do repositório, em `/tmp/<card>/` |
