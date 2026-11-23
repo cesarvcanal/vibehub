@@ -751,6 +751,31 @@ describe("conversa da frota — todos os agentes de uma vez, numa execução só
     expect(conversation!.items[4]!.text!.length).toBeGreaterThan(300);
   });
 
+  it("com o runId de uma rodada antiga, lê as falas dela e não as da rodada mais recente", async () => {
+    const wf = await load();
+    const { transcriptDir } = conversationFixture();
+    const older = join(transcriptDir, "s-old", "subagents", "workflows", "wf_old1");
+    writeFileSync(join(older, "agent-a0aa.jsonl"), jsonl([
+      MODEL_ASSISTANT(T0 + 500, "claude-haiku-4-5", [{ type: "text", text: "O PR mexe em 3 arquivos." }]),
+    ]));
+    const conversation = wf.parseFleetConversation(runProbe(wf.FLEET_CONVERSATION_PROBE_JS, [transcriptDir, "wf_old1"]));
+    expect(conversation!.runId).toBe("wf_old1");
+    expect(conversation!.agents.map((agent) => agent.id)).toEqual(["a0aa"]);
+    expect(conversation!.items.map((item) => item.text)).toEqual(["O PR mexe em 3 arquivos."]);
+  });
+
+  it("com o runId de uma rodada que não existe no card, devolve null", async () => {
+    const wf = await load();
+    const { transcriptDir } = conversationFixture();
+    expect(wf.parseFleetConversation(runProbe(wf.FLEET_CONVERSATION_PROBE_JS, [transcriptDir, "wf_nada1"]))).toBeNull();
+  });
+
+  it("o runId vai citado depois do diretório; fora do formato, nenhum comando é montado", async () => {
+    const wf = await load();
+    expect(wf.buildFleetConversationProbeScript("runner", "/root/t", "wf_old1").endsWith(" '/root/t' 'wf_old1'")).toBe(true);
+    expect(() => wf.buildFleetConversationProbeScript("runner", "/root/t", "wf_x'; rm -rf /")).toThrow(wf.InvalidWorkflowIdError);
+  });
+
   it("a resposta que o agente entrega pela ferramenta StructuredOutput vira a fala dele, com o JSON inteiro", async () => {
     const wf = await load();
     const transcriptDir = mkdtempSync(join(tmpdir(), "vibehub-conv-so-"));

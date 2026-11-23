@@ -500,8 +500,9 @@ function talkOf(dir,agent){
   }
   return {items:items.slice(-${CONVERSATION_ITEMS_PER_AGENT}),model:model};
 }
-function main(base){
-  const run=runsOf(base)[0];if(!run)return null;
+function main(base,runId){
+  const runs=runsOf(base);
+  const run=runId?runs.find(function(r){return r.runId===runId}):runs[0];if(!run)return null;
   let lines=[];
   try{lines=fs.readFileSync(p.join(run.dir,'journal.jsonl'),'utf8').split('\n')}catch(e){}
   const agents=new Map();
@@ -527,11 +528,13 @@ function main(base){
   items.sort(function(x,y){return x.at-y.at});
   return {runId:run.runId,agents:list,items:items};
 }
-console.log(JSON.stringify(main(process.argv[1]||'')));
+console.log(JSON.stringify(main(process.argv[1]||'',process.argv[2]||'')));
 `.trim();
 
-export function buildFleetConversationProbeScript(containerName: string, transcriptDir: string): string {
-  return `docker exec ${shQuote(containerName)} node -e ${shQuote(FLEET_CONVERSATION_PROBE_JS)} ${shQuote(transcriptDir)}`;
+export function buildFleetConversationProbeScript(containerName: string, transcriptDir: string, runId?: string): string {
+  if (runId !== undefined && !RUN_ID_RE.test(runId)) throw new InvalidWorkflowIdError(`invalid workflow run id: ${JSON.stringify(runId)}`);
+  const command = `docker exec ${shQuote(containerName)} node -e ${shQuote(FLEET_CONVERSATION_PROBE_JS)} ${shQuote(transcriptDir)}`;
+  return runId === undefined ? command : `${command} ${shQuote(runId)}`;
 }
 
 /**
