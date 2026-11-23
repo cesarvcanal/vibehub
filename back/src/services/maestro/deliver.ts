@@ -1349,7 +1349,9 @@ async function runDelivery(cardId: string, opts: DeliverOpts): Promise<DeliverRe
     return {
       prUrl, merged: false, reason: "unauthorized", branch: target, cardBranch: source, ...commented,
       output: `o PR está aberto e o gate não barrou, mas o merge não foi pedido: falta authorized: true, que só vai quando a pessoa ` +
-        `manda mergear em ${target}. Não é falta de permissão de quem deu a ordem.`,
+        `manda mergear em ${target}. Não é falta de permissão de quem deu a ordem. Pergunte o merge pela AskUserQuestion, ` +
+        `com as opções "Mergear em ${target} (recomendado)" e "Não mergear agora"; se o PR declara pendência que bloqueia, ` +
+        `pergunte sobre ela.`,
     };
   }
   // The CI wait can take minutes: a review asked for in the meantime still takes the merge away.

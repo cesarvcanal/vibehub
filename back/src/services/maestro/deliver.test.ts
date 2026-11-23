@@ -622,6 +622,15 @@ describe("deliver orchestration", () => {
     expect(mergeRan()).toBe(false);
   });
 
+  it("unauthorized manda perguntar o merge com AskUserQuestion, com opções, em vez de uma pergunta em prosa", async () => {
+    const { deliver, card } = await makeCard();
+    wire();
+    const out = await deliver.deliver(card.id, { branch: "dev" });
+    expect(out.reason).toBe("unauthorized");
+    expect(out.output).toContain("AskUserQuestion");
+    expect(out.output).toContain("Mergear em dev (recomendado)");
+  });
+
   it("unauthorized, then the user's OK on the same clean commit: the gate runs once, the merge still happens", async () => {
     const { deliver, card } = await makeCard();
     const probe = [`head=${"c".repeat(40)}`, "clean=1", "__VIBEHUB_GATE_JSON__", '{"checks":["npm test"]}'].join("\n");
