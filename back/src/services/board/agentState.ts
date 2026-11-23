@@ -302,6 +302,18 @@ export function onCardUsageLimitProbe(probe: UsageLimitProbe): () => void {
   return () => usageLimitProbes.delete(probe);
 }
 
+type AccountSwitchProbe = (cardId: string) => boolean;
+const accountSwitchProbes = new Set<AccountSwitchProbe>();
+
+export function onCardAccountSwitchProbe(probe: AccountSwitchProbe): () => void {
+  accountSwitchProbes.add(probe);
+  return () => accountSwitchProbes.delete(probe);
+}
+
+export function cardSwitchingAccount(cardId: string): boolean {
+  return [...accountSwitchProbes].some((probe) => probe(cardId));
+}
+
 export function cardUsageLimit(cardId: string): CardUsageLimit | null {
   for (const probe of usageLimitProbes) {
     const limit = probe(cardId);

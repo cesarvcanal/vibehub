@@ -489,6 +489,7 @@ export const boardApi = {
     get<AccountsResponse & { accounts: BoardAccount[] }>("/accounts").then((r) => ({
       accounts: Array.isArray(r?.accounts) ? r.accounts : [],
       defaultLabel: r?.defaultLabel ?? "",
+      defaultBackup: r?.defaultBackup ?? null,
     })),
 
   accountTokens: () =>

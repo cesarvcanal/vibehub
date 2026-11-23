@@ -69,6 +69,10 @@ export function patch<T>(url: string, body?: unknown, config?: AxiosRequestConfi
   return api.patch<T>(url, body, config).then((r) => r.data);
 }
 
+export function put<T>(url: string, body?: unknown, config?: AxiosRequestConfig): Promise<T> {
+  return api.put<T>(url, body, config).then((r) => r.data);
+}
+
 export function del<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
   return api.delete<T>(url, config).then((r) => r.data);
 }

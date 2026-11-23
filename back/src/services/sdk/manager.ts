@@ -649,6 +649,13 @@ function emitSystemNote(session: DriverSession, text: string): void {
   void appendHistory(session.cardId, { type: "system_note", text, at });
 }
 
+export async function emitCardSystemNote(cardId: string, text: string): Promise<void> {
+  const at = Date.now();
+  const session = sessions.get(cardId);
+  if (session && !session.closed) broadcast(session, { type: "system_note", text, at });
+  await appendHistory(cardId, { type: "system_note", text, at });
+}
+
 /** Every clock of the session, in a single exit (close, stop, shutdown): none survives the driver. */
 function clearSessionTimers(session: DriverSession): void {
   clearIdleTimer(session);
@@ -879,6 +886,7 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
     // Before the marker and the dot: the new scheduled attempt keeps both as a turn in flight.
     noteApiOutcome(session, event);
     logFailedTurn(session, event);
+    noteAccountOutcome(session, event);
     session.accountRefusedTurn = false;
     // The last turn in flight CLOSED: the durable marker comes off — unless work goes on in the
     // background (a task, a scheduled wake-up), which a deploy would kill just the same: then it
@@ -1870,6 +1878,34 @@ const crashListeners = new Set<CrashListener>();
 export function onDriverCrashWithWork(listener: CrashListener): () => void {
   crashListeners.add(listener);
   return () => { crashListeners.delete(listener); };
+}
+
+export type AccountTurnOutcome =
+  | { kind: "answered" }
+  | { kind: "refused"; reason: "usage_limit" | "login"; renewsAt?: number };
+
+type AccountOutcomeListener = (cardId: string, outcome: AccountTurnOutcome, driver: DriverSession) => void;
+const accountOutcomeListeners = new Set<AccountOutcomeListener>();
+
+export function onAccountTurnOutcome(listener: AccountOutcomeListener): () => void {
+  accountOutcomeListeners.add(listener);
+  return () => { accountOutcomeListeners.delete(listener); };
+}
+
+function accountTurnOutcome(session: DriverSession, event: ResultEvent): AccountTurnOutcome | null {
+  if (!event.isError && event.subtype !== "aborted") return { kind: "answered" };
+  if (!session.accountRefusedTurn) return null;
+  if (session.usageLimit) {
+    const renewsAt = session.usageLimit.resetsAt;
+    return { kind: "refused", reason: "usage_limit", ...(renewsAt !== undefined ? { renewsAt } : {}) };
+  }
+  return session.loginFailed ? { kind: "refused", reason: "login" } : null;
+}
+
+function noteAccountOutcome(session: DriverSession, event: ResultEvent): void {
+  const outcome = accountTurnOutcome(session, event);
+  if (!outcome) return;
+  for (const listener of accountOutcomeListeners) listener(session.cardId, outcome, session);
 }
 
 /**

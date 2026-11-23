@@ -87,17 +87,20 @@ vi.mock("@/features/board/components/SdkChatView", () => ({
   SdkChatView: ({
     cardId,
     footer,
+    accountNotice,
     onUploadImage,
     analysisCard,
   }: {
     cardId: string;
     footer?: ReactNode;
+    accountNotice?: ReactNode;
     onUploadImage?: (file: File) => Promise<string | null>;
     analysisCard?: boolean;
   }) => {
     sdkChatUpload.current = onUploadImage;
     return (
       <div data-testid="sdk-chat" data-card={cardId} data-analysis-card={String(analysisCard === true)}>
+        {accountNotice}
         {footer}
         <div data-testid="sdk-composer-stub" />
       </div>
@@ -407,6 +410,28 @@ describe("CardTerminalView — which chat the Chat tab mounts (the INSTALL flag,
     // The native chat takes over and finds the message in its queue — it is the one that delivers it.
     expect(await screen.findByTestId("sdk-chat")).toBeInTheDocument();
     expect(readQueue("c1").map((m) => m.text)).toEqual(["segunda"]);
+  });
+
+  it("card numa conta reserva cuja original renovou: o Voltar devolve o card à conta original", async () => {
+    serveFeaturesOn();
+    const loan = { originalCardAccountSlug: "albert", originalEffectiveAccount: "albert", renewsAt: 1, exhausted: [] };
+    mockPost.mockImplementation((url: string) => (url === "/cards/c1/account-return"
+      ? Promise.resolve({ card: card({ openedAt: 10, accountSlug: "albert" }), session: "restarted" })
+      : Promise.resolve({ card: card({ openedAt: 10, accountSlug: "cesar", accountLoan: loan }) })));
+    renderWithCache([card({ openedAt: 10, accountSlug: "cesar", accountLoan: loan })], testQueryClient(), "chat");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Back to albert" }));
+
+    await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/cards/c1/account-return"));
+    await waitFor(() => expect(screen.queryByTestId("account-loan-notice")).toBeNull());
+  });
+
+  it("card sem empréstimo de conta não mostra o aviso", async () => {
+    serveFeaturesOn();
+    renderWithCache([card({ openedAt: 10, accountSlug: "cesar" })], testQueryClient(), "chat");
+
+    expect(await screen.findByTestId("sdk-chat")).toBeInTheDocument();
+    expect(screen.queryByTestId("account-loan-notice")).toBeNull();
   });
 
   it("…mas na aba Terminal, onde se digita NO painel, o aviso continua", async () => {
