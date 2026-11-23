@@ -363,25 +363,27 @@ describe("buildMergeScript", () => {
   });
 
   const BASE_MODIFIED = "GraphQL: Base branch was modified. Review and try the merge again. (mergePullRequest)";
-  const mergeAttempts = (log: string) => log.split("\n").filter((line) => line.startsWith("gh pr merge")).length;
+  const countLogLines = (log: string, prefix: string) => log.split("\n").filter((line) => line.startsWith(prefix)).length;
 
   it("executado de verdade: a base que andou no meio do merge não derruba a entrega, o merge sai na tentativa seguinte", async () => {
     const r = await runMerge(HEAD_SHA, HEAD_SHA, { mergeErrors: [BASE_MODIFIED] });
     expect(r.parsed).toMatchObject({ merged: true });
-    expect(mergeAttempts(r.log)).toBe(2);
-    expect(r.log).toContain("sleep ");
+    expect(countLogLines(r.log, "gh pr merge")).toBe(2);
+    expect(countLogLines(r.log, "sleep ")).toBe(1);
   });
 
   it("executado de verdade: a base que segue andando esgota as tentativas e devolve o erro do GitHub", async () => {
     const r = await runMerge(HEAD_SHA, HEAD_SHA, { mergeErrors: [BASE_MODIFIED, BASE_MODIFIED, BASE_MODIFIED, BASE_MODIFIED] });
     expect(r.parsed).toMatchObject({ merged: false, output: expect.stringContaining("Base branch was modified") });
-    expect(mergeAttempts(r.log)).toBe(3);
+    expect(countLogLines(r.log, "gh pr merge")).toBe(3);
+    expect(countLogLines(r.log, "sleep ")).toBe(2);
   });
 
   it("executado de verdade: outra recusa do merge não é repetida", async () => {
     const r = await runMerge(HEAD_SHA, HEAD_SHA, { mergeErrors: ["GraphQL: Pull Request is not mergeable (mergePullRequest)"] });
     expect(r.parsed).toMatchObject({ merged: false, output: expect.stringContaining("not mergeable") });
-    expect(mergeAttempts(r.log)).toBe(1);
+    expect(countLogLines(r.log, "gh pr merge")).toBe(1);
+    expect(countLogLines(r.log, "sleep ")).toBe(0);
   });
 
   it("executado de verdade: falha ao ler o head do PR não mergeia às cegas", async () => {
