@@ -14,7 +14,7 @@ Este arquivo ensina o Claude Code a **trabalhar** neste repositório: a ordem da
 
 Cada etapa usa a sua skill (seção 3) e só termina quando o critério dela está cumprido.
 
-1. **Entender e perguntar.** Pronto quando não resta dúvida que trave a execução. A pergunta (AGENTS.md §12, "Como perguntar ao usuário") sai pela `AskUserQuestion`, com "(Recomendado)" no rótulo da recomendada; a saída livre a ferramenta já põe.
+1. **Entender e perguntar.** Pronto quando não resta dúvida que trave a execução. A pergunta (AGENTS.md §12, "Como perguntar ao usuário") sai pela `AskUserQuestion`, com "(recomendado)" no rótulo da recomendada, a mesma marca das instruções do vibehub; a saída livre a ferramenta já põe.
 2. **Diagnosticar ou desenhar.** Bug: pronto quando há um comando que reproduz a falha e a causa está provada. Feature: pronto quando o caminho foi aprovado pelo usuário. Tela nova ou redesenho: pronto quando o protótipo foi aprovado, antes do React; mudança de layout numa tela existente segue a linha dela no mapa (seção 3).
 3. **Planejar** a tarefa de várias etapas. Pronto quando cada etapa tem o arquivo, o teste e o critério dela.
 4. **Implementar em TDD.** Pronto quando cada mudança de comportamento tem um teste visto vermelho antes do verde (AGENTS.md §11), e a §11 ("Antes do primeiro helper de teste") foi seguida antes do primeiro helper.
