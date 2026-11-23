@@ -76,6 +76,24 @@ describe("explicação da falha escrita pela IA", () => {
     expect(prompt).toContain("nenhuma ação registrada");
   });
 
+  it.each([
+    ["no próprio card da falha", "card-a", "card-a", "O agente do card erp-a foi parado ou interrompido por uma pessoa 3s antes do erro."],
+    ["em outro card, não conta para a falha do card", "card-a", "card-b", undefined],
+    ["com a falha sem card, entra nomeando o card parado", undefined, "card-b", "O agente do card erp-b foi parado ou interrompido por uma pessoa 3s antes do erro."],
+  ])("stop de uma pessoa %s", async (_case, failureCardId, stoppedCardId, expectedLine) => {
+    const { failures, narrative } = await fresh();
+    const turnLatency = await import("./turnLatency.js");
+    turnLatency.noteUserStop(stoppedCardId, stoppedCardId.replace("card-", "erp-"), 2_000_000 - 3_000);
+    const failure = (await failures.recordPlatformFailure(
+      { source: "backend_error", component: "sdk", symptom: "write after end", evidence: "e", ...(failureCardId ? { cardId: failureCardId } : {}) }, 2_000_000,
+    ))!;
+    const fetchMock = stubAnthropic({ body: anthropicAnswer(JSON.stringify(NARRATIVE)) });
+    await narrative.writePlatformFailureNarrative(failure.id);
+    const prompt = readRequestBody(fetchMock).messages[0].content as string;
+    if (expectedLine) expect(prompt).toContain(expectedLine);
+    else expect(prompt).not.toMatch(/interromp/);
+  });
+
   it("sem chave da Anthropic no cofre, a falha fica marcada sem explicação e nada é chamado", async () => {
     const { failures, narrative, failure } = await fresh({ withApiKey: false });
     const fetchMock = stubAnthropic({ body: anthropicAnswer(JSON.stringify(NARRATIVE)) });

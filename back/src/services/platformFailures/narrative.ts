@@ -79,7 +79,7 @@ function formatInstant(at: number): string {
 export function buildNarrativePrompt(failure: PlatformFailure, context: {
   card?: Pick<registry.Card, "title" | "column">;
   activityBefore: readonly RecentActivityEntry[];
-  secondsSinceUserStop?: number;
+  userStop?: { cardWorktreeSlug: string; secondsBefore: number };
 }): string {
   const activityLines = context.activityBefore.length === 0
     ? ["(nenhuma ação registrada nos minutos antes do erro)"]
@@ -91,7 +91,9 @@ export function buildNarrativePrompt(failure: PlatformFailure, context: {
     `- Quando: ${formatInstant(failure.firstSeenAt)} (horário de São Paulo)`,
     `- Sintoma: ${failure.symptom}`,
     ...(context.card ? [`- Card afetado: "${context.card.title}" (coluna ${context.card.column})`] : []),
-    ...(context.secondsSinceUserStop !== undefined ? [`- Uma pessoa parou ou interrompeu um agente ${context.secondsSinceUserStop}s antes do erro.`] : []),
+    ...(context.userStop
+      ? [`- O agente do card ${context.userStop.cardWorktreeSlug} foi parado ou interrompido por uma pessoa ${context.userStop.secondsBefore}s antes do erro.`]
+      : []),
     "",
     "Evidência:",
     "```",
@@ -135,10 +137,13 @@ async function readNarrativeContext(failure: PlatformFailure) {
   const lastUserStop = getLastUserStop();
   const isRecentUserStop = lastUserStop !== undefined && lastUserStop.at <= failure.firstSeenAt
     && failure.firstSeenAt - lastUserStop.at <= RECENT_ACTIVITY_WINDOW_MS;
+  const isStopOfAnotherCard = failure.originCardId !== undefined && lastUserStop?.cardId !== failure.originCardId;
   return {
     ...(card ? { card: { title: card.title, column: card.column } } : {}),
     activityBefore: recentActivity.filter((entry) => entry.at <= failure.firstSeenAt && failure.firstSeenAt - entry.at <= RECENT_ACTIVITY_WINDOW_MS),
-    ...(isRecentUserStop ? { secondsSinceUserStop: Math.round((failure.firstSeenAt - lastUserStop.at) / 1000) } : {}),
+    ...(isRecentUserStop && !isStopOfAnotherCard ? {
+      userStop: { cardWorktreeSlug: lastUserStop.cardWorktreeSlug, secondsBefore: Math.round((failure.firstSeenAt - lastUserStop.at) / 1000) },
+    } : {}),
   };
 }
 
