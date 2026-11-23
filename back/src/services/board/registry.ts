@@ -248,6 +248,7 @@ export interface Account {
   slug: string;
   name: string;
   createdAt: number;
+  backupAccountSlug?: string;
 }
 
 export interface Project {
@@ -670,6 +671,7 @@ export function sanitizeConnectionLabel(label: string | null | undefined, login:
  */
 export interface BoardConfig {
   defaultAccountLabel?: string;
+  defaultAccountBackup?: string;
 }
 
 /** Display label for the default account: trimmed, at most 40 chars. Empty -> undefined (clears). PURE. */
@@ -1470,6 +1472,44 @@ export async function renameAccount(slug: string, name: string): Promise<Account
   });
 }
 
+function assertAccountExists(doc: BoardDoc, account: string): string {
+  if (account === DEFAULT_ACCOUNT_OWNER) return account;
+  const slug = assertAccountSlug(account);
+  if (!doc.accounts.some((candidate) => candidate.slug === slug)) throw new Error("account not found");
+  return slug;
+}
+
+function accountBackups(doc: BoardDoc): Map<string, string> {
+  const named = doc.accounts.flatMap((account) => (account.backupAccountSlug ? [[account.slug, account.backupAccountSlug] as const] : []));
+  const fromDefault = doc.config.defaultAccountBackup ? [[DEFAULT_ACCOUNT_OWNER, doc.config.defaultAccountBackup] as const] : [];
+  return new Map([...named, ...fromDefault]);
+}
+
+export async function readAccountBackups(): Promise<Map<string, string>> {
+  return accountBackups(await store.load());
+}
+
+export async function setAccountBackup(
+  accountSlug: string,
+  backupAccountSlug: string | null,
+): Promise<{ accountSlug: string; backupAccountSlug: string | null }> {
+  return store.mutate((doc) => {
+    const account = assertAccountExists(doc, accountSlug);
+    const backup = backupAccountSlug === null ? null : assertAccountExists(doc, backupAccountSlug);
+    if (backup === account) throw new Error("an account cannot be its own backup");
+    if (account === DEFAULT_ACCOUNT_OWNER) {
+      const { defaultAccountBackup: _previous, ...rest } = doc.config;
+      doc.config = backup === null ? rest : { ...rest, defaultAccountBackup: backup };
+    } else {
+      const record = doc.accounts.find((candidate) => candidate.slug === account);
+      if (!record) throw new Error("account not found");
+      if (backup === null) delete record.backupAccountSlug;
+      else record.backupAccountSlug = backup;
+    }
+    return { accountSlug: account, backupAccountSlug: backup };
+  });
+}
+
 /**
  * Removes an account. REFUSES ("in use") while ANY card or project still references the slug —
  * removing it blindly would leave a dangling reference and break the next open of those cards.
@@ -1485,6 +1525,10 @@ export async function removeAccount(slug: string): Promise<Account> {
       throw new Error(
         `account '${v}' is in use by ${cards} card(s) and ${projects} project(s) — move them to another account first`,
       );
+    }
+    const backedUp = [...accountBackups(doc)].filter(([, backup]) => backup === v).map(([account]) => account);
+    if (backedUp.length > 0) {
+      throw new Error(`account '${v}' is the backup of ${backedUp.join(", ")} — pick another backup first`);
     }
     doc.accounts = doc.accounts.filter((a) => a.slug !== v);
     return found;
