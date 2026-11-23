@@ -89,8 +89,8 @@ function followsNamingConvention(path) {
   const { stem, suffixes, extension } = nameParts.groups;
   const isCamelCase = /^[a-z]/.test(stem);
   const isComponentFile = COMPONENT_EXTENSIONS.includes(extension);
-  const isTestOfComponent = suffixes.split(".").includes("test");
-  return isCamelCase || isComponentFile || isTestOfComponent;
+  const isTestFile = suffixes.split(".").includes("test");
+  return isCamelCase || isComponentFile || isTestFile;
 }
 
 export function findMisnamedFiles({ repoDir, baseRef }) {
