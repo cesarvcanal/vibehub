@@ -112,6 +112,21 @@ describe("rotas de falha da plataforma", () => {
     expect(sendToTerminal).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ["apagado", async (cardId: string) => { await (await import("../services/board/registry.js")).removeCard(cardId); }],
+    ["concluído sem fechar a falha", async (cardId: string) => { await (await import("../services/board/registry.js")).updateCard(cardId, { column: "done" }); }],
+  ])("falha com card de investigação aberto some da lista do dono e volta quando o card é %s", async (_case, leaveInvestigationCard) => {
+    const { app, ...world } = await bootFailureWorld();
+    const investigatedFailure = await recordFailure();
+    const untouchedFailure = await recordFailure("runner gone");
+    const listFailureIds = async () =>
+      (await app.inject({ method: "GET", url: "/api/platform-failures", headers: { cookie: world.ownerCookie } })).json().failures.map((failure: { id: string }) => failure.id);
+    const investigation = (await app.inject({ method: "POST", url: `/api/platform-failures/${investigatedFailure.id}/investigate`, headers: { cookie: world.ownerCookie } })).json();
+    expect(await listFailureIds()).toEqual([untouchedFailure.id]);
+    await leaveInvestigationCard(investigation.card.id);
+    expect((await listFailureIds()).sort()).toEqual([investigatedFailure.id, untouchedFailure.id].sort());
+  });
+
   it("brief que não chega ao card libera a falha para investigar de novo, e o novo clique entrega", async () => {
     const { app, ...world } = await bootFailureWorld();
     const failure = await recordFailure();
@@ -165,8 +180,8 @@ describe("rotas de falha da plataforma", () => {
     const secondInvestigationCardId = secondInvestigationResponse.json().card.id;
     expect(secondInvestigationCardId).not.toBe(firstInvestigation.card.id);
     expect(sendToTerminal).toHaveBeenCalledTimes(2);
-    const listedFailures = (await app.inject({ method: "GET", url: "/api/platform-failures", headers: { cookie: world.ownerCookie } })).json().failures;
-    expect(listedFailures[0]).toMatchObject({ id: failure.id, status: "investigating", investigationCardId: secondInvestigationCardId });
+    const platformFailuresService = await import("../services/platformFailures/platformFailures.js");
+    expect(await platformFailuresService.getPlatformFailure(failure.id)).toMatchObject({ status: "investigating", investigationCardId: secondInvestigationCardId });
   });
 
   it("brief que falha ao investigar de novo uma concluída sem correção devolve a falha a esse estado", async () => {
