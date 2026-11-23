@@ -20,6 +20,9 @@ import { startReviewByAgent } from "../services/review/start.js";
 import { recordAnalysisReport } from "../services/review/analysisReport.js";
 import { ANALYSIS_DIMENSIONS, ANALYSIS_SEVERITIES, ANALYSIS_STAGES, DIMENSION_RUN_STATUSES } from "../services/review/analysisModel.js";
 import { ok, fail } from "./toolResult.js";
+import { visibleCards } from "../auth/access.js";
+import { cancelCardWait, createCardWait } from "../services/waits/waits.js";
+import { WAIT_INSTRUCTION_MAX } from "../services/board/cardWait.js";
 
 /**
  * MAESTRO TOOLS — what one card's agent can do to the OTHER cards.
@@ -346,6 +349,63 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         const { card, ...message } = a;
         const event = await recordMessage({ cardId: card, ...message });
         return ok({ eventId: event.id, cursor: String(event.seq), needsAnswer: !event.resolvedAt });
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_wait_for_card",
+    {
+      description:
+        "WAIT for another card to finish, then be woken with `instruction`. Use it when your next step " +
+        "depends on that card (e.g. 'do the follow-up once its PR is merged'): instead of the person " +
+        "coming back to tell you, the vibehub wakes THIS card on its own when the awaited card gets a PR " +
+        "merged through the vibehub (on `base`, when you pass it) or is concluded (moved to done) — " +
+        "whichever comes first — or is deleted. The wake message says which of these happened, so check " +
+        "before going on. One wait per card: a new one replaces the previous. A card paused on purpose " +
+        "is woken when it is reopened. The board shows the wait and the person can cancel it. Refused " +
+        "for your own card, a card already in done (go on now) and a wait that would close a cycle. " +
+        "`card` is YOUR OWN card id ($VIBEHUB_CARD_ID).",
+      inputSchema: {
+        card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this terminal"),
+        waitFor: z.string().describe("id of the card to wait for (from vibehub_list_terminals)"),
+        instruction: z.string().min(1).max(WAIT_INSTRUCTION_MAX)
+          .describe("what to do when it finishes — self-contained: it is the message that wakes you"),
+        base: z.string().optional().describe("only a PR merged into this branch counts (e.g. 'prod'); absent = any branch"),
+      },
+    },
+    async (a) => {
+      try {
+        const person = await personBehind(a.card);
+        const target = await getCard(a.waitFor);
+        const [visibleTarget] = target ? await visibleCards(person, [target]) : [];
+        if (!visibleTarget) throw new Error(`card not found: ${a.waitFor}`);
+        const created = await createCardWait({
+          waitingCardId: a.card, targetCardId: visibleTarget.id, instruction: a.instruction, base: a.base, createdBy: person.id,
+        });
+        return ok({ waiting: true, waitFor: { cardId: visibleTarget.id, title: created.targetTitle }, base: created.wait.base });
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_cancel_wait",
+    {
+      description:
+        "CANCEL the wait this card registered with vibehub_wait_for_card: it will no longer be woken " +
+        "when the awaited card finishes. `card` is YOUR OWN card id ($VIBEHUB_CARD_ID).",
+      inputSchema: {
+        card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this terminal"),
+      },
+    },
+    async (a) => {
+      try {
+        await cancelCardWait(a.card);
+        return ok({ cancelled: true });
       } catch (e) {
         return fail(e);
       }
