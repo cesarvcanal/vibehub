@@ -1322,8 +1322,8 @@ describe("buildPrInfoScript / parsePrInfo (anexar um PR ao card)", () => {
 });
 
 describe("o gate compara o diff com a base do merge", () => {
-  const probeScript = () => scripts().find((s) => s.includes("__VIBEHUB_GATE_JSON__")) ?? "";
-  const docsOnlyProbe = [`head=${HEAD_SHA}`, "clean=1", "changedfiles=1", "codefiles=0", "__VIBEHUB_GATE_JSON__", '{"checks":["npm test"]}'].join("\n");
+  const probeScript = () => scripts().find((script) => script.includes("__VIBEHUB_GATE_JSON__")) ?? "";
+  const docsOnlyProbe = ["pkg=1", "test=1", `head=${HEAD_SHA}`, "clean=1", "changedfiles=1", "codefiles=0", "__VIBEHUB_GATE_JSON__", ""].join("\n");
 
   it("card de análise de um PR para prod: o gate compara com origin/prod, não com a branch do PR", async () => {
     const { deliver, registry, project } = await makeCard();
@@ -1339,8 +1339,8 @@ describe("o gate compara o diff com a base do merge", () => {
     wire({ probe: docsOnlyProbe });
     const out = await deliver.deliver(card.id, { branch: "dev", authorized: true });
     expect(out).toMatchObject({ merged: true, reason: "merged" });
-    expect(scripts().some((s) => s.includes('echo "__VIBEHUB_GATE__ pass"'))).toBe(false);
-    expect(scripts().find((s) => s.includes("gh pr merge"))).toContain(`--match-head-commit '${HEAD_SHA}'`);
+    expect(scripts().some((script) => script.includes('echo "__VIBEHUB_GATE__ pass"'))).toBe(false);
+    expect(scripts().find((script) => script.includes("gh pr merge"))).toContain(`--match-head-commit '${HEAD_SHA}'`);
   });
 
   it("gate do merge da análise no commit: compara com a base do PR gravado no card", async () => {

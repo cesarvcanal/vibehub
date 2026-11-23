@@ -1109,9 +1109,7 @@ export async function gateAtCommit(cardId: string, prUrl: string, sha: string): 
   const { card, project } = await getCardWithProject(cardId);
   const { cwd } = cardWorkPaths(project, card);
   const token = await cardConnectionToken(card, project);
-  const prBase = card.prs?.find((pr) => pr.url === prUrl)?.base;
-  const mergeBase = prBase ? { baseBranch: prBase } : {};
-  return (await ciGate(config.runner.container, token, cwd, prUrl, sha)) ?? (await runGate(card.id, { expectedSha: sha, ...mergeBase }));
+  return (await ciGate(config.runner.container, token, cwd, prUrl, sha)) ?? (await runGate(card.id, { expectedSha: sha }));
 }
 
 /**

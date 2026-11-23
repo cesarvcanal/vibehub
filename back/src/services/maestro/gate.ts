@@ -18,7 +18,7 @@ import { redactSecrets } from "../../utils/redactSecrets.js";
  * WHAT it runs:
  *  - `.vibehub/gate.json` in the worktree, when present: `{ "checks": ["cmd", "cmd", …] }`. Those
  *    commands, in order — the repo decides what "green" means. They run with `VIBEHUB_BASE_REF`
- *    (`origin/<card base>`) in the environment, so a repo can test only what the card changed
+ *    (`origin/<the merge's base>`) in the environment, so a repo can test only what the card changed
  *    (`vitest run --changed "$VIBEHUB_BASE_REF"`) instead of every suite it has — CI still runs
  *    the whole thing on the PR.
  *  - otherwise sensible defaults, each ONLY when it is actually resolvable in the worktree: a
@@ -133,9 +133,9 @@ export function parseGateConfig(text: string | null | undefined): string[] | nul
  * defaults, each included only when it is resolvable; otherwise nothing runs (`ran: false`). PURE.
  */
 export function resolveGateChecks(probe: GateProbe): { ran: boolean; checks: string[] } {
-  if (probe.docsOnly) return { ran: false, checks: [] };
   const configured = parseGateConfig(probe.gateJson);
   if (configured) return { ran: true, checks: configured };
+  if (probe.docsOnly) return { ran: false, checks: [] };
   const checks: string[] = [];
   if (probe.hasTsconfig && probe.hasLocalTsc) checks.push(DEFAULT_TSC_CHECK);
   if (probe.hasPackageJson && probe.hasTestScript) checks.push(DEFAULT_TEST_CHECK);
@@ -152,7 +152,7 @@ export function buildGateProbeScript(containerName: string, cwd: string, baseBra
   assertSafeRemotePath(cwd);
   const baseRef = baseBranch === undefined ? undefined : `origin/${assertBranchName(baseBranch)}`;
   const changedFiles = baseRef
-    ? `if files=$(git diff --name-only "$2"...HEAD 2>/dev/null); then ` +
+    ? `if files=$(git diff --no-renames --name-only "$2"...HEAD 2>/dev/null); then ` +
       `echo "changedfiles=$(printf '%s\\n' "$files" | grep -c .)"; ` +
       `echo "codefiles=$(printf '%s\\n' "$files" | grep . | grep -cvE '${DOCS_FILE_PATTERN}')"; fi; `
     : "";
@@ -434,7 +434,7 @@ function releaseSlot(): void {
  */
 export function runGate(cardId: string, opts: { expectedSha?: string; baseBranch?: string } = {}): Promise<GateResult> {
   const expectedSha = opts.expectedSha?.toLowerCase();
-  const key = expectedSha ? `${cardId}@${expectedSha}` : cardId;
+  const key = [cardId, expectedSha ?? "", opts.baseBranch ?? ""].join("@");
   const current = inFlight.get(key);
   if (current) {
     logger.info({ action: "maestro.gate", cardId }, "gate already running for this card — joining it");
@@ -467,7 +467,8 @@ async function runGateNow(cardId: string, expectedSha?: string, requestedBase?: 
   const { card, project } = await getCardWithProject(cardId);
   const { cwd } = cardWorkPaths(project, card);
   const container = config.runner.container;
-  const baseBranch = requestedBase ?? (card.base || project.baseBranch);
+  const analysedPrBase = card.pushBranch === undefined ? undefined : card.prs?.find((pr) => pr.branch === card.pushBranch && !pr.attached)?.base;
+  const baseBranch = requestedBase ?? analysedPrBase ?? (card.base || project.baseBranch);
 
   const probeOut = await hostExecutor().runScript(buildGateProbeScript(container, cwd, baseBranch), { timeoutMs: 30_000 });
   const probedAt = Date.now();

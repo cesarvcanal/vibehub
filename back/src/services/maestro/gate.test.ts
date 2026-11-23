@@ -126,12 +126,12 @@ describe("probe script + parse", () => {
   });
 });
 
-describe("PR só de documentação não roda testes", () => {
+describe("PR só de documentação não roda os checks padrão", () => {
   const SHA = "a".repeat(40);
-  const docsProbe = (over: { changed?: number; code?: number; clean?: boolean } = {}) =>
+  const docsProbe = (over: { changed?: number; code?: number; clean?: boolean; gateJson?: string } = {}) =>
     [
       "pkg=1", "test=1", "tsconfig=1", "localtsc=1", `head=${SHA}`, `clean=${over.clean === false ? 0 : 1}`,
-      `changedfiles=${over.changed ?? 1}`, `codefiles=${over.code ?? 0}`, "__VIBEHUB_GATE_JSON__", '{"checks":["npm test"]}',
+      `changedfiles=${over.changed ?? 1}`, `codefiles=${over.code ?? 0}`, "__VIBEHUB_GATE_JSON__", over.gateJson ?? "",
     ].join("\n");
 
   it.each([
@@ -149,9 +149,15 @@ describe("PR só de documentação não roda testes", () => {
     expect(gate.parseGateProbe(`head=${SHA}\nclean=1\n__VIBEHUB_GATE_JSON__\n`).docsOnly).toBe(false);
   });
 
-  it("só documentação não roda nem o gate.json nem os padrões", async () => {
+  it("repo sem gate.json: só documentação não roda npm test nem tsc", async () => {
     const { gate } = await load();
     expect(gate.resolveGateChecks(gate.parseGateProbe(docsProbe()))).toEqual({ ran: false, checks: [] });
+  });
+
+  it("repo com gate.json: só documentação ainda roda os checks que o repo configurou", async () => {
+    const { gate } = await load();
+    const probe = gate.parseGateProbe(docsProbe({ gateJson: '{"checks":["npm run lint:changed"]}' }));
+    expect(gate.resolveGateChecks(probe)).toEqual({ ran: true, checks: ["npm run lint:changed"] });
   });
 
   it("a sondagem compara com a base pedida, validada, e sem base não lê o diff", async () => {
@@ -163,40 +169,49 @@ describe("PR só de documentação não roda testes", () => {
 
   it("runGate com diff só de documentação passa sem rodar os checks", async () => {
     const { gate, registry } = await load();
-    const p = await registry.createProject({ name: "billing" });
-    const c = await registry.createCard({ projectId: p.id, title: "x" });
+    const project = await registry.createProject({ name: "billing" });
+    const card = await registry.createCard({ projectId: project.id, title: "x" });
     runScript.mockResolvedValue({ stdout: docsProbe(), stderr: "" });
-    expect(await gate.runGate(c.id, { baseBranch: "prod" })).toEqual({ ran: false, passed: true, output: "", headSha: SHA });
+    expect(await gate.runGate(card.id, { baseBranch: "prod" })).toEqual({ ran: false, passed: true, output: "", headSha: SHA });
     expect(runScript).toHaveBeenCalledOnce();
     expect(runScript.mock.calls[0]?.[0]).toContain("origin/prod");
   });
 
-  it("executado num repo git de verdade: .md e .claude/CLAUDE.md são documentação, .ts não", async () => {
+  it("card de análise: sem base pedida, o gate compara com a base do PR, não com a branch dele", async () => {
+    const { gate, registry } = await load();
+    const project = await registry.createProject({ name: "billing" });
+    const analysis = await registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" });
+    await registry.recordCardPr(analysis.id, { number: 7, url: "https://github.com/acme/repo/pull/7", base: "prod", branch: "feat-7" });
+    runScript.mockResolvedValue({ stdout: docsProbe(), stderr: "" });
+    await gate.runGate(analysis.id);
+    expect(runScript.mock.calls[0]?.[0]).toContain("'origin/prod'");
+  });
+
+  it("dois gates do mesmo card com bases diferentes rodam cada um a sua sondagem", async () => {
+    const { gate, registry } = await load();
+    const project = await registry.createProject({ name: "billing" });
+    const card = await registry.createCard({ projectId: project.id, title: "x" });
+    runScript.mockResolvedValue({ stdout: docsProbe(), stderr: "" });
+    await Promise.all([gate.runGate(card.id), gate.runGate(card.id, { baseBranch: "prod" })]);
+    expect(runScript).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    [".md e .claude/CLAUDE.md são documentação", "mkdir -p .claude && echo regra > .claude/CLAUDE.md && echo doc > README.md", true],
+    [".ts é código", "echo b > app.ts", false],
+    ["requirements.txt é dependência", "echo flask > requirements.txt", false],
+    ["renomear código para .md tira código", "git mv app.ts app.md", false],
+  ])("executado num repo git de verdade: %s", async (_case, change, docsOnly) => {
     const { gate } = await load();
     const root = await mkdtemp(join(tmpdir(), "vibehub-gate-docs-"));
     onTestFinished(() => rm(root, { recursive: true, force: true }));
-    const cleanGitEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_")));
-    const env = { ...cleanGitEnv, PATH: await pathWithFakeDocker(), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+    const envWithoutGit = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_")));
+    const env = { ...envWithoutGit, PATH: await pathWithFakeDocker(), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
     const sh = (script: string) => execFileSync("sh", ["-c", script], { cwd: root, env, encoding: "utf8" });
     const commit = "git -c user.name=t -c user.email=t@t commit -q";
     sh(`git init -q && echo a > app.ts && git add . && ${commit} -m base && git update-ref refs/remotes/origin/prod HEAD`);
-    sh(`mkdir -p .claude && echo regra > .claude/CLAUDE.md && echo doc > README.md && git add . && ${commit} -m docs`);
-    expect(gate.parseGateProbe(sh(gate.buildGateProbeScript("c", root, "prod"))).docsOnly).toBe(true);
-    sh(`echo b > app.ts && git add . && ${commit} -m code`);
-    expect(gate.parseGateProbe(sh(gate.buildGateProbeScript("c", root, "prod"))).docsOnly).toBe(false);
-  });
-
-  it("requirements.txt é dependência, não documentação", async () => {
-    const { gate } = await load();
-    const root = await mkdtemp(join(tmpdir(), "vibehub-gate-docs-"));
-    onTestFinished(() => rm(root, { recursive: true, force: true }));
-    const cleanGitEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_")));
-    const env = { ...cleanGitEnv, PATH: await pathWithFakeDocker(), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
-    const sh = (script: string) => execFileSync("sh", ["-c", script], { cwd: root, env, encoding: "utf8" });
-    const commit = "git -c user.name=t -c user.email=t@t commit -q";
-    sh(`git init -q && echo a > README.md && git add . && ${commit} -m base && git update-ref refs/remotes/origin/prod HEAD`);
-    sh(`echo flask > requirements.txt && git add . && ${commit} -m deps`);
-    expect(gate.parseGateProbe(sh(gate.buildGateProbeScript("c", root, "prod"))).docsOnly).toBe(false);
+    sh(`${change} && git add -A && ${commit} -m change`);
+    expect(gate.parseGateProbe(sh(gate.buildGateProbeScript("c", root, "prod"))).docsOnly).toBe(docsOnly);
   });
 });
 
