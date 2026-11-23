@@ -765,6 +765,7 @@ export const ptBR: Record<string, string> = {
   "sdk.detail.stillRunning": "Ainda rodando — a saída aparece aqui quando o comando terminar.",
   "sdk.detail.resultPending": "Terminou; esperando o resultado chegar no transcript…",
   "sdk.detail.stderr": "Erros (stderr)",
+  "sdk.detail.stderrMessages": "Mensagens do comando (stderr)",
   "sdk.detail.notApplied": "não aplicado",
   "sdk.detail.newFile": "arquivo novo",
   "sdk.detail.applied": "edição aplicada",
@@ -1117,8 +1118,9 @@ export const ptBR: Record<string, string> = {
   "settings.transcribeLanguage": "Idioma da transcrição",
   "settings.transcribePlaceholder": "auto (ou um código de duas letras: pt, en, es…)",
   "settings.transcribeKeywords": "Termos da transcrição",
-  "settings.transcribeKeywordsPlaceholder": "vibehub, erp-aux, Qive, Mussa",
+  "settings.transcribeKeywordsPlaceholder": "ex.: vibehub, erp-aux, Qive, Mussa",
   "settings.transcribeKeywordsHint": "Nomes e jargões que a transcrição deve escrever exatamente assim. Separe por vírgula ou por linha.",
+  "settings.transcribeKeywordsEmpty": "Sem termos: nomes e jargões do time vão sair escritos errado.",
   "settings.githubAccounts": "Contas do GitHub",
   "settings.githubHint":
     "Adicione uma conta por identidade do GitHub — a sua pessoal e a da sua organização, por exemplo. Cada projeto escolhe com qual clona; o token só sai do cofre como credencial efêmera de clone.",

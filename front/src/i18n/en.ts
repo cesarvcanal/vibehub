@@ -764,6 +764,7 @@ export const en: Record<string, string> = {
   "sdk.detail.stillRunning": "Still running — the output shows up here when the command finishes.",
   "sdk.detail.resultPending": "Finished; waiting for the result to reach the transcript…",
   "sdk.detail.stderr": "Errors (stderr)",
+  "sdk.detail.stderrMessages": "Command messages (stderr)",
   "sdk.detail.notApplied": "not applied",
   "sdk.detail.newFile": "new file",
   "sdk.detail.applied": "edit applied",
@@ -1110,8 +1111,9 @@ export const en: Record<string, string> = {
   "settings.transcribeLanguage": "Transcription language",
   "settings.transcribePlaceholder": "auto (or a two-letter code: pt, en, es…)",
   "settings.transcribeKeywords": "Transcription terms",
-  "settings.transcribeKeywordsPlaceholder": "vibehub, erp-aux, Qive, Mussa",
+  "settings.transcribeKeywordsPlaceholder": "e.g. vibehub, erp-aux, Qive, Mussa",
   "settings.transcribeKeywordsHint": "Names and jargon the transcription should spell exactly like this. Separate them with commas or line breaks.",
+  "settings.transcribeKeywordsEmpty": "No terms: names and jargon from your team will come out misspelled.",
   "settings.githubAccounts": "GitHub accounts",
   "settings.githubHint":
     "Add one account per GitHub identity — your personal one and your organization's, say. Each project picks which one it clones with; the token only leaves the vault as an ephemeral clone credential.",
