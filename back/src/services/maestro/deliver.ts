@@ -467,9 +467,9 @@ export function buildMergeScript(
     `SUBJECT="🔀 merge: $(printf '%s' "$PR_TITLE" | sed -E 's/^[a-z]+(\\([^)]*\\))?!?: *//') (#$PR_NUMBER)"`,
     `for MERGE_ATTEMPT in {1..${MERGE_ATTEMPTS}}; do`,
     `  if MERGE_OUT=$(gh pr merge ${shQuote(prUrl)} --merge --match-head-commit ${pin} --subject "$SUBJECT" 2>&1); then`,
-    `    printf '%s\n' "$MERGE_OUT"; echo "${MARKER} merged"; exit 0;`,
+    `    printf '%s\\n' "$MERGE_OUT"; echo "${MARKER} merged"; exit 0;`,
     `  fi`,
-    `  printf '%s\n' "$MERGE_OUT"`,
+    `  printf '%s\\n' "$MERGE_OUT"`,
     // external: GitHub's mergePullRequest answers "Base branch was modified. Review and try the merge again." when another merge lands on the base mid-call
     `  case "$MERGE_OUT" in *"Base branch was modified"*) [ "$MERGE_ATTEMPT" -lt ${MERGE_ATTEMPTS} ] || break; sleep ${MERGE_RETRY_SECONDS} ;; *) break ;; esac`,
     `done`,
