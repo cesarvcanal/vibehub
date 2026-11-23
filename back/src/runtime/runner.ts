@@ -69,8 +69,6 @@ export async function checkStatusHookReach(): Promise<boolean> {
   } catch {
     verdict = "unknown";
   }
-  // A runner that is down (or a host without docker) never ran curl: blaming the public URL would send
-  // the operator to change a URL that is fine. Keep the last verdict; the runner's own health says why.
   if (verdict === "unknown") return false;
   if (verdict === "reachable") {
     if (statusHookReach.failedInARow >= FAILED_PROBES_TO_ALERT) {
@@ -80,18 +78,17 @@ export async function checkStatusHookReach(): Promise<boolean> {
     return true;
   }
   statusHookReach.failedInARow += 1;
-  if (statusHookReach.failedInARow > FAILED_PROBES_TO_ALERT) return false;
   if (statusHookReach.failedInARow < FAILED_PROBES_TO_ALERT) {
     logger.warn(
       { action: "runner.statusHook.probeFailed", url },
       "the runner did not reach the status URL on this probe — the next one decides whether it is the public URL",
     );
-    return false;
+  } else if (statusHookReach.failedInARow === FAILED_PROBES_TO_ALERT) {
+    logger.error(
+      { audit: true, action: "runner.statusHook.unreachable", url },
+      "the runner cannot reach the status URL: cards working in the terminal will not report `working`/`waiting` to the board — set VIBEHUB_PUBLIC_URL to an address the runner reaches (a stable name, not a blue/green port) and reopen the cards",
+    );
   }
-  logger.error(
-    { audit: true, action: "runner.statusHook.unreachable", url, failedProbes: FAILED_PROBES_TO_ALERT },
-    "the runner cannot reach the status URL: cards working in the terminal will not report `working`/`waiting` to the board — set VIBEHUB_PUBLIC_URL to an address the runner reaches (a stable name, not a blue/green port) and reopen the cards",
-  );
   return false;
 }
 

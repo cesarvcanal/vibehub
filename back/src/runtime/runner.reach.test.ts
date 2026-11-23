@@ -57,13 +57,16 @@ describe("checkStatusHookReach", () => {
     expect(error).not.toHaveBeenCalled();
   });
 
-  it("the public-URL error waits for the second failed probe in a row", async () => {
+  it("the public-URL error waits for the second failed probe in a row and is not repeated while the URL stays down", async () => {
     const error = vi.spyOn(logger, "error").mockImplementation(() => undefined as never);
     runScript.mockResolvedValueOnce({ stdout: "401", stderr: "" });
     await checkStatusHookReach();
     runScript.mockResolvedValue({ stdout: "000", stderr: "" });
     await checkStatusHookReach();
     expect(error).not.toHaveBeenCalled();
+    await checkStatusHookReach();
+    expect(error).toHaveBeenCalledTimes(1);
+    await checkStatusHookReach();
     await checkStatusHookReach();
     expect(error).toHaveBeenCalledTimes(1);
   });
@@ -82,7 +85,7 @@ describe("checkStatusHookReach", () => {
     expect(info).toHaveBeenCalledWith(expect.objectContaining({ action: "runner.statusHook.reachable" }), expect.any(String));
   });
 
-  it("an unknown pass between two failures does not re-raise the error", async () => {
+  it("an unknown pass between two failures keeps the count, so the second failure alerts once", async () => {
     const error = vi.spyOn(logger, "error").mockImplementation(() => undefined as never);
     runScript.mockResolvedValueOnce({ stdout: "401", stderr: "" });
     await checkStatusHookReach();
