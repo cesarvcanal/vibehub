@@ -57,9 +57,8 @@ const statusHookReach = { unreachableProbesInARow: 0 };
  * Checks that the runner reaches the status URL every card's hooks POST to, and SAYS SO when it does
  * not. Production, 21/10/2026: the public URL pointed at a blue/green port the app no longer listened
  * on; every hook failed in silence (`curl … || true`), the board never saw a TUI card working, and
- * the idle sweep hibernated cards mid-task. Logs an error once the failure repeats on consecutive
- * probes (and again after a recovery), an info on recovery. A probe that never reached curl decides
- * nothing. Never throws. Returns true only when the route answered.
+ * the idle sweep hibernated cards mid-task.
+ * Returns true only when the route answered.
  */
 export async function checkStatusHookReach(): Promise<boolean> {
   const url = statusUrl();
