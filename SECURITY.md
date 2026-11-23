@@ -15,15 +15,23 @@ reach, and what can it read".
 the MCP servers you registered, the accounts whose tokens you planted. The runner is a container
 with no host mounts beyond its own `/root` and `/work`.
 
-**What the agent cannot read.** The vault. Secrets stay in vibehub's process, and the two that must
-reach the runner get there in a deliberately narrow way:
+**What the agent cannot read.** The vault and the master key: they stay in vibehub's process. What
+a card needs to work is written into the runner, over stdin and at mode 600:
 
-- The **GitHub token** is handed to `git clone/fetch` per command through `GIT_CONFIG_*`, so it lives
-  only in that process's environment. It is never written into `/work/<repo>/.git/config`, which any
-  process in the container can read — including the agent, which routinely processes untrusted
-  repository content.
-- The **runner service token** is written host-side into the `/root` bind mount at mode 600. The
-  status hook reads it from that file at call time, so it is never baked into `settings.json`.
+- **GitHub tokens**, one file per card at `/root/.vibehub/gh/<card>.token`. The card's git
+  credential helper and the `gh` wrapper read it on every call, so a change of author reaches
+  processes already running. No token is written into `/work/<repo>/.git/config`.
+- **Claude account tokens**, per profile under `/root/.claude-profiles/<account>/`: the long-lived
+  token in `.oauth-token`, or the `.credentials.json` that a `/login` in the card creates.
+- The **runner service token** at `/root/.vibehub-token`, written from inside the container by the
+  setup (`docker exec`) into `/root`, which is bind-mounted from the host so it survives a container
+  recreate. The status hook reads it at call time, so it is never baked into `settings.json`.
+
+Every card runs as `root` in the same runner container, so mode 600 separates nothing between
+cards: **any card can read every one of these files** — the GitHub token of every other card, every
+Claude account planted in the runner, and the runner service token. Treat everything the runner
+holds as reachable by every agent on the install, including one that a repository's untrusted
+content talks into reading it.
 
 **Cards can reach each other.** vibehub registers itself as an MCP server inside every card, so an
 agent can list the other cards, type an instruction into one, and read its answers. That is the
