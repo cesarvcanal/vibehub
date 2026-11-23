@@ -15,6 +15,7 @@ describe("brief do card de investigação", () => {
     expect(mergeStep).toContain("`authorized: true`");
     expect(mergeStep).not.toContain("concludeWhenMerged");
     expect(mergeStep).toContain("vibehub_move_cards");
+    expect(mergeStep).toContain("`authorized: true` e from = o id deste card");
   });
 
   it("leva o relato, rotula a hipótese e manda confirmar antes de corrigir e esperar a ordem de merge", () => {
