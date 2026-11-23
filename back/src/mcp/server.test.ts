@@ -14,6 +14,7 @@ import { EXTERNAL_INSTRUCTIONS, INSTRUCTIONS, createMcpServer } from "./server.j
 
 // external: Claude Code 2.1.330 corta em 4096 caracteres as instructions de um servidor MCP e a descrição de cada ferramenta (CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH, sufixo "… [truncated]"), lido no binário em 23/11/2026
 const MCP_DESCRIPTION_DELIVERED_CHARS = 4096;
+const DELIVER_DESCRIPTION_WITH_ROOM_CHARS = 3200;
 
 const personaFile = join(dirname(fileURLToPath(import.meta.url)), "..", "services", "brain", "personas", "maestro.md");
 
@@ -184,13 +185,9 @@ describe("MCP server instructions (the maestro persona)", () => {
   });
 
   it("register vibehub_brain_learn and instruct on recording DURABLE learnings only", () => {
-    const server = createMcpServer("test") as unknown as {
-      _registeredTools?: Record<string, { description?: string }>;
-    };
-    const tools = server._registeredTools ?? {};
-    expect(Object.keys(tools)).toContain("vibehub_brain_learn");
+    expect(Object.keys(cardTools)).toContain("vibehub_brain_learn");
     // the tool's own contract: append-only into the Aprendizados section, never the rest
-    const description = tools["vibehub_brain_learn"]?.description ?? "";
+    const description = cardToolDescription("vibehub_brain_learn");
     expect(description).toContain("Aprendizados");
     expect(description.toLowerCase()).toContain("append");
     expect(description.toLowerCase()).toContain("secret");
@@ -207,10 +204,7 @@ describe("MCP server instructions (the maestro persona)", () => {
   });
 
   it("register vibehub_act_as and tell the agent to use it instead of waiting for the other person", () => {
-    const server = createMcpServer("test") as unknown as {
-      _registeredTools?: Record<string, { description?: string }>;
-    };
-    const description = (server._registeredTools ?? {})["vibehub_act_as"]?.description ?? "";
+    const description = cardToolDescription("vibehub_act_as");
     // The consent limit is part of the contract the agent reads.
     expect(description).toContain("already gave this card an order");
     expect(description).toContain("refused");
@@ -298,7 +292,7 @@ describe("MCP server instructions (the maestro persona)", () => {
   it("a vibehub_deliver deixa o detalhe da revisão com a vibehub_review_start e cabe com folga no limite", () => {
     const description = cardToolDescription("vibehub_deliver");
     expect(description).toContain("vibehub_review_start");
-    expect(description.length).toBeLessThanOrEqual(3200);
+    expect(description.length).toBeLessThanOrEqual(DELIVER_DESCRIPTION_WITH_ROOM_CHARS);
   });
 
   it("a vibehub_wait_for_card diz para combinar a espera com o usuário e encerrar o turno", () => {
@@ -318,10 +312,7 @@ describe("MCP server instructions (the maestro persona)", () => {
   });
 
   it("register the Cofre tools and instruct on using them for logins", () => {
-    const server = createMcpServer("test") as unknown as {
-      _registeredTools?: Record<string, unknown>;
-    };
-    const names = Object.keys(server._registeredTools ?? {});
+    const names = Object.keys(cardTools);
     expect(names).toContain("vibehub_credential_list");
     expect(names).toContain("vibehub_credential_fill");
     expect(INSTRUCTIONS).toContain("vibehub_credential_fill");
