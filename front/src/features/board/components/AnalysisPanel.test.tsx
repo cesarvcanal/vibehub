@@ -359,11 +359,20 @@ describe("merge pelo painel da análise", () => {
 
   it("último merge barrado no commit analisado: o painel diz o motivo e a saída antes do clique e oferece tentar de novo", async () => {
     renderPanel(aptRead({ lastMergeRefusal: {
-      cardId: "c1", analysedSha: doneReport().analysedSha, reason: "gate", output: "npm test estourou 585 s", by: "mussa", at: 1,
+      cardId: "c1", analysedSha: doneReport().analysedSha, reason: "gate", output: "CI do PR vermelho: back", by: "mussa", at: 1,
     } }));
-    expect(await screen.findByText("O último merge não saiu: os testes do gate falharam ou estouraram o tempo.")).toBeInTheDocument();
-    expect(screen.getByText("npm test estourou 585 s")).toBeInTheDocument();
+    expect(await screen.findByText("O último merge não saiu: o CI do PR ficou vermelho ou não terminou a tempo.")).toBeInTheDocument();
+    expect(screen.getByText("CI do PR vermelho: back")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Tentar o merge do PR #312 de novo" })).toBeEnabled();
+  });
+
+  it("último merge barrado porque o repo não tem CI: o painel diz que o merge exige o CI do GitHub", async () => {
+    renderPanel(aptRead({ lastMergeRefusal: {
+      cardId: "c1", analysedSha: doneReport().analysedSha, reason: "no_ci", output: "o PR não tem CI no GitHub", by: "mussa", at: 1,
+    } }));
+    expect(await screen.findByText(
+      "O último merge não saiu: o PR não tem CI no GitHub, e o vibehub só mergeia com o CI do PR verde. Configure um workflow do GitHub Actions que rode em todo PR.",
+    )).toBeInTheDocument();
   });
 
   it("último merge barrado por conflito com a base: o painel diz o conflito e o que fazer, sem a saída do gh", async () => {

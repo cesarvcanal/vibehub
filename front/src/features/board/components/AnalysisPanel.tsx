@@ -33,6 +33,7 @@ const VERDICT_TONE: Record<AnalysisVerdict, BadgeTone> = { apt: "ok", not_apt: "
 
 function mergeRefusalTitle(reason: string, t: Translate): string {
   if (reason === "gate") return t("analysis.merge.refused.gate");
+  if (reason === "no_ci") return t("analysis.merge.refused.noCi");
   if (reason === "conflict") return t("analysis.merge.refused.conflict");
   return t("analysis.merge.refused.other");
 }
