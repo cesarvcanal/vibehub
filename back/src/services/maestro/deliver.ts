@@ -401,11 +401,11 @@ async function postPrComments(
     // scope is not fixed by moving lines.
     // Whole words only: "different", "deadline" or "pipeline" in a 403 are not a refused position.
     const positionRefused = /\b(422|line|position|diff)\b/i.test(answer);
-    const position = positionRefused
+    const lineHint = positionRefused
       ? " Cada line tem que estar no diff do PR (side RIGHT = linha da versão nova; LEFT = linha removida)."
       : "";
     return {
-      ok: false, output: `o GitHub recusou os comentários (nenhum foi publicado): ${answer || "sem resposta"}.${position}`, positionRefused,
+      ok: false, output: `o GitHub recusou os comentários (nenhum foi publicado): ${answer || "sem resposta"}.${lineHint}`, positionRefused,
     };
   }
   return { ok: true, posted: fresh.length, skipped };

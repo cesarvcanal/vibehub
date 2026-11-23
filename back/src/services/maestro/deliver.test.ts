@@ -1802,14 +1802,14 @@ describe("buildPrReviewScript", () => {
 });
 
 describe("recusa do deliver vira aviso de erro no log, que o detector de falhas captura", () => {
-  async function deliverAndReadCapturedFailures(over: Parameters<typeof wire>[0], authorized: boolean, docs?: typeof DOCS) {
+  async function deliverAndReadCapturedFailures(over: Parameters<typeof wire>[0], authorized: boolean) {
     const { deliver, card } = await makeCard();
     const { onLogLine } = await import("../../utils/logger.js");
     const { isPlatformFailureLogLine } = await import("../platformFailures/backendError.js");
     const loggedLines: import("../../utils/logger.js").LogLine[] = [];
     onTestFinished(onLogLine("warn", (line) => loggedLines.push(line)));
     wire(over);
-    const result = await deliver.deliver(card.id, { branch: "dev", authorized, docs });
+    const result = await deliver.deliver(card.id, { branch: "dev", authorized, docs: DOCS });
     const capturedFailures = loggedLines.filter((line) => isPlatformFailureLogLine(line, undefined, Date.now()));
     return { result, capturedFailures };
   }
@@ -1819,7 +1819,7 @@ describe("recusa do deliver vira aviso de erro no log, que o detector de falhas 
     ["merge que o GitHub recusou", { merge: "GraphQL: Base branch was modified\n__VIBEHUB_DELIVER__ error merge\n" }, "merge_failed", "Base branch was modified"],
     ["comentários que o token não pode publicar", { review: "gh: Resource not accessible by personal access token (HTTP 403)\n__VIBEHUB_DELIVER__ error review" }, "comments_failed", "HTTP 403"],
   ])("%s vira falha capturada, com o motivo e a saída", async (_case, over, reason, outputExcerpt) => {
-    const { result, capturedFailures } = await deliverAndReadCapturedFailures(over, true, DOCS);
+    const { result, capturedFailures } = await deliverAndReadCapturedFailures(over, true);
     expect(result.reason).toBe(reason);
     expect(capturedFailures).toEqual([expect.objectContaining({
       message: "deliver failed", fields: expect.objectContaining({ reason, detail: expect.stringContaining(outputExcerpt) }),
@@ -1832,7 +1832,7 @@ describe("recusa do deliver vira aviso de erro no log, que o detector de falhas 
     ["merge feito", {}, true, "merged"],
     ["comentário numa linha fora do diff, que o GitHub recusa", { review: "gh: Line could not be resolved (HTTP 422)\n__VIBEHUB_DELIVER__ error review" }, true, "comments_failed"],
   ])("%s não é falha da plataforma", async (_case, over, authorized, reason) => {
-    const { result, capturedFailures } = await deliverAndReadCapturedFailures(over, authorized, DOCS);
+    const { result, capturedFailures } = await deliverAndReadCapturedFailures(over, authorized);
     expect(result.reason).toBe(reason);
     expect(capturedFailures).toEqual([]);
   });
