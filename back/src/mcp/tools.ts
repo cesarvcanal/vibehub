@@ -558,7 +558,9 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "and — ONLY when `authorized` is true and the gate is green — merge the PR with a merge commit " +
         "(never a squash). All git/gh runs as the GitHub account of whoever sent the card its latest order (falling back to the project's). Returns { prUrl, " +
         "merged, reason }: `reason` is 'merged' on success, or 'gate' (checks red), 'unauthorized' " +
-        "(prepared the PR but was not told to merge), 'locked' (see below), or a git failure. Pass " +
+        "(prepared the PR but was not told to merge: ask the merge as an AskUserQuestion with the options " +
+        "'Mergear em <branch> (recomendado)' and 'Não mergear agora'; when the PR declares a blocking item, ask " +
+        "the OK for that item first, without recommending the merge), 'locked' (see below), or a git failure. Pass " +
         "`authorized:true` ONLY when the user named where to ship (e.g. 'sobe pra dev'); NEVER by " +
         "default — a merge is a deploy. Cherry-picking to another branch is a separate, explicit " +
         "operation, not part of this. A LOCKED card answers { reason: 'locked', locked: true }: the " +

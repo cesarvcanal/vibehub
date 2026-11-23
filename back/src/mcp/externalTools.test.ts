@@ -129,6 +129,7 @@ describe("external MCP — vibehub_deliver pede a documentação do PR (diretriz
     expect(Object.keys(tool.inputSchema.properties ?? {})).toEqual(expect.arrayContaining(["title", "body", "comments"]));
     expect(tool.description).toContain("EVERY PR IS DOCUMENTATION");
     expect(tool.description).toContain("Pontos de atenção");
+    expect(tool.description).not.toContain("AskUserQuestion");
   });
 
   it("documentação sem as seções volta undocumented pela chamada MCP, sem empurrar nada", async () => {
