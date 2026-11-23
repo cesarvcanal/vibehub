@@ -280,13 +280,13 @@ describe("deliverCard — o vibehub_deliver com revisão de PR ativa", () => {
     expect(review?.log).toEqual([]);
   });
 
-  it("concludeWhenMerged sem revisão ativa ou sem authorized: o deliver de sempre, avisando que a ordem de concluir não ficou", async () => {
+  it("concludeWhenMerged sem authorized: o deliver de sempre, avisando que a ordem de concluir não ficou", async () => {
     const o = await load();
     const project = await o.registry.createProject({ name: "widgets" });
     const card = await o.registry.createCard({ projectId: project.id, title: "Login" });
-    deliverAnswer = { prUrl: PR, merged: true, reason: "merged", branch: "dev", cardBranch: "card/x" };
-    const out = await o.deliverCard(card.id, { branch: "dev", authorized: true, from: card.id, concludeWhenMerged: true });
-    expect(out).toMatchObject({ merged: true, reason: "merged" });
+    deliverAnswer = { prUrl: PR, merged: false, reason: "unauthorized", branch: "dev", cardBranch: "card/x" };
+    const out = await o.deliverCard(card.id, { branch: "dev", from: card.id, concludeWhenMerged: true });
+    expect(out).toMatchObject({ merged: false, reason: "unauthorized" });
     expect(out.output).toMatch(/concluir o card NÃO foi registrada/);
     expect(out.output).toMatch(/vibehub_move_cards/);
   });
@@ -379,6 +379,57 @@ describe("deliverCard — o vibehub_deliver com revisão de PR ativa", () => {
     await deliverCard(reviewed.id, { branch: "dev" });
     expect(deliver).toHaveBeenCalledWith(reviewed.id, { branch: "dev" });
     expect(mergeReviewedPr).not.toHaveBeenCalled();
+  });
+});
+
+describe("deliverCard — merge feito pelo próprio card o conclui", () => {
+  const mergedAnswer: DeliverResult = { prUrl: PR, merged: true, reason: "merged", branch: "dev", cardBranch: "card/x" };
+
+  async function plainCard() {
+    const o = await load();
+    const project = await o.registry.createProject({ name: "widgets" });
+    const card = await o.registry.createCard({ projectId: project.id, title: "Docs" });
+    return { ...o, card };
+  }
+
+  it("caso real (PRs #387 e #388): o card mergeia o próprio PR sem revisão e vai para Concluído", async () => {
+    const { deliverCard, registry, card } = await plainCard();
+    deliverAnswer = mergedAnswer;
+    const out = await deliverCard(card.id, { branch: "main", authorized: true, by: "mussa", from: card.id });
+    expect(out).toMatchObject({ merged: true, reason: "merged" });
+    expect((await registry.getCard(card.id))?.column).toBe("done");
+  });
+
+  it("com concludeWhenMerged, o merge próprio conclui e a resposta não diz que a ordem ficou sem registro", async () => {
+    const { deliverCard, registry, card } = await plainCard();
+    deliverAnswer = mergedAnswer;
+    const out = await deliverCard(card.id, { branch: "dev", authorized: true, from: card.id, concludeWhenMerged: true });
+    expect((await registry.getCard(card.id))?.column).toBe("done");
+    expect(out.output ?? "").not.toMatch(/NÃO foi registrada/);
+  });
+
+  it.each([
+    ["de outro card", "outro-card"],
+    ["sem from", undefined],
+  ])("merge mandado %s não conclui o card entregue", async (_case, from) => {
+    const { deliverCard, registry, card } = await plainCard();
+    deliverAnswer = mergedAnswer;
+    await deliverCard(card.id, { branch: "dev", authorized: true, from });
+    expect((await registry.getCard(card.id))?.column).not.toBe("done");
+  });
+
+  it("entrega que não mergeou (gate vermelho) deixa o card onde estava", async () => {
+    const { deliverCard, registry, card } = await plainCard();
+    deliverAnswer = { prUrl: PR, merged: false, reason: "gate", branch: "dev", cardBranch: "card/x", output: "back: failing" };
+    await deliverCard(card.id, { branch: "dev", authorized: true, from: card.id });
+    expect((await registry.getCard(card.id))?.column).not.toBe("done");
+  });
+
+  it("revisão pronta mergeada pelo próprio card do autor também o conclui", async () => {
+    const { deliverCard, registry, card } = await cardUnderReview("ready", "u-m");
+    mergeAnswer = { kind: "merged", review: { phase: "merged" } as never, result: mergedAnswer };
+    await deliverCard(card.id, { branch: "dev", authorized: true, from: card.id });
+    expect((await registry.getCard(card.id))?.column).toBe("done");
   });
 });
 
