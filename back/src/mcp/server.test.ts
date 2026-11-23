@@ -12,7 +12,7 @@ import { EXTERNAL_INSTRUCTIONS, INSTRUCTIONS, createMcpServer } from "./server.j
  * authorization gate, don't type into a human-active card, report your state).
  */
 
-// external: Claude Code 2.1.330 corta as instructions de um servidor MCP em 4096 caracteres ("… [truncated]")
+// external: Claude Code 2.1.330 cuts an MCP server's instructions at 4096 characters ("… [truncated]")
 const MCP_INSTRUCTIONS_DELIVERED_CHARS = 4096;
 
 const personaFile = join(dirname(fileURLToPath(import.meta.url)), "..", "services", "brain", "personas", "maestro.md");
