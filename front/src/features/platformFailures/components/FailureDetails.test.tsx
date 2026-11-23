@@ -66,6 +66,7 @@ describe("resumo de cada falha no modal de falhas do vibehub", () => {
 
   it("resumo curto aparece inteiro, sem ver mais", () => {
     renderFailure(buildFailure({ narrative: buildNarrative() }));
+    expect(screen.getByText("Provavelmente a conexão com o CLI caiu.")).not.toHaveClass("line-clamp-3");
     expect(screen.queryByRole("button", { name: "ver mais" })).toBeNull();
   });
 
