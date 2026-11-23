@@ -282,6 +282,12 @@ export const boardApi = {
   readAnalysisConversation: (cardId: string) =>
     get<AnalysisConversationResponse>(`/cards/${encodeURIComponent(cardId)}/analysis/conversation`).then((body) => body.conversation),
 
+  /** What the agents of one round of the PR review said, read from the reviewer card's transcripts. */
+  readReviewConversation: (cardId: string, runId: string, pr?: number) => {
+    const path = `/cards/${encodeURIComponent(cardId)}/review/conversation/${encodeURIComponent(runId)}`;
+    return get<AnalysisConversationResponse>(pr === undefined ? path : `${path}?pr=${pr}`).then((body) => body.conversation);
+  },
+
   mergeCardAnalysis: (cardId: string) => post<unknown>(`/cards/${encodeURIComponent(cardId)}/analysis/merge`),
 
   rerunCardAnalysisMergeGate: (cardId: string) => post<unknown>(`/cards/${encodeURIComponent(cardId)}/analysis/merge-gate`),

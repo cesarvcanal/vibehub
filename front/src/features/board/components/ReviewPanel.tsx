@@ -10,6 +10,8 @@ import { ReviewAgentFeed } from "@/features/board/components/ReviewAgentFeed";
 import { PanelFrame, ReviewPanelView, type PanelNotice } from "@/features/board/components/ReviewPanelView";
 import { MERGE_CONFIRM_MS, cardPeopleKey, cardReviewKey, mergeFailure, reviewActions } from "@/features/board/lib/review";
 import { reviewReadsStarted, useLiveReview } from "@/features/board/lib/useLiveReview";
+import { fleetsByRound } from "@/features/board/lib/reviewFleet";
+import { useReviewConversations } from "@/features/board/lib/useReviewConversations";
 import { useAuth } from "@/providers/auth";
 import { t as translate, useT } from "@/i18n";
 
@@ -91,6 +93,8 @@ export function ReviewPanel({ cardId, prNumber: pr, onClose }: {
   const { query: reviewQuery, review, working, fleet, merging, readSeq, apply } = useLiveReview(cardId, { fast: mergeBusy, pr });
 
   // The review carries user ids; the roles read better as names. Same key and shape as the request dialog's.
+  const fleetRuns = review ? [...fleetsByRound(review, fleet).values()].flat() : [];
+  const conversations = useReviewConversations(cardId, pr, fleetRuns);
   const people = useQuery({
     queryKey: cardPeopleKey(cardId),
     queryFn: () => boardApi.listCardPeople(cardId),
@@ -228,6 +232,7 @@ export function ReviewPanel({ cardId, prNumber: pr, onClose }: {
       review={review}
       working={working}
       fleet={fleet}
+      conversations={conversations}
       agentDetail={(runId, agent) => <ReviewAgentFeed agent={{ ...agent, cardId, pr, runId }} />}
       nameOf={nameOf}
       actions={reviewActions(review, user ? { id: user.id, isOwner } : null)}

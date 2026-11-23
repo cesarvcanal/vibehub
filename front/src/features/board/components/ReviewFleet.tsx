@@ -3,27 +3,44 @@ import { AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
 import type { ReviewFleetRun } from "@/api/types";
 import { FleetChat, type FleetAgentState } from "@/features/board/components/FleetChat";
 import { PhasePills } from "@/features/board/components/WorkflowPanel";
-import { reviewFleetChat } from "@/features/board/lib/fleetChat";
+import { reviewConversationChat, reviewFleetChat } from "@/features/board/lib/fleetChat";
+import type { RunConversationRead } from "@/features/board/lib/useReviewConversations";
 import { phasePills } from "@/features/board/lib/workflowPanel";
 import { useT } from "@/i18n";
 
 export type RunAgentDetail = (runId: string, agent: FleetAgentState) => React.ReactNode;
 
-export function ReviewFleet({ round, runs, agentDetail }: { round: number; runs: ReviewFleetRun[]; agentDetail?: RunAgentDetail }) {
+export function ReviewFleet({ round, runs, conversations, agentDetail }: {
+  round: number;
+  runs: ReviewFleetRun[];
+  conversations?: ReadonlyMap<string, RunConversationRead>;
+  agentDetail?: RunAgentDetail;
+}) {
   const t = useT();
   return (
     <section data-testid="review-fleet" aria-label={t("review.fleet.aria", { round })} className="flex min-w-0 flex-col gap-1.5">
-      {runs.map((run) => <FleetRun key={run.runId} run={run} agentDetail={agentDetail} />)}
+      {runs.map((run) => <FleetRun key={run.runId} run={run} conversationRead={conversations?.get(run.runId)} agentDetail={agentDetail} />)}
     </section>
   );
 }
 
-function FleetRun({ run, agentDetail }: { run: ReviewFleetRun; agentDetail: RunAgentDetail | undefined }) {
+function FleetRun({ run, conversationRead, agentDetail }: {
+  run: ReviewFleetRun;
+  conversationRead: RunConversationRead | undefined;
+  agentDetail: RunAgentDetail | undefined;
+}) {
   const t = useT();
-  const entries = reviewFleetChat(run);
+  const conversation = conversationRead?.kind === "read" ? conversationRead.conversation : null;
+  const entries = conversation ? reviewConversationChat(run, conversation) : reviewFleetChat(run);
   const interrupted = run.outcome === "failed" || run.outcome === "killed";
   return (
     <div className="flex min-w-0 flex-col gap-3">
+      {conversationRead?.kind === "failed" ? (
+        <p role="note" className="flex min-w-0 items-start gap-1.5 text-[11px] text-muted-foreground">
+          <AlertCircle className="mt-0.5 h-3 w-3 shrink-0 text-destructive" aria-hidden="true" />
+          <span className="min-w-0 [overflow-wrap:anywhere]">{t("review.fleet.speechFailed")}</span>
+        </p>
+      ) : null}
       {entries.length > 0 ? (
         <FleetChat
           entries={entries}

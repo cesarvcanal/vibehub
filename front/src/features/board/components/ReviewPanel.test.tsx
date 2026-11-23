@@ -65,6 +65,7 @@ function serve() {
       if (!current) return { review: null };
       return merging === undefined ? { review: current, working } : { review: current, working, merging };
     }
+    if (url.startsWith("/cards/c1/review/conversation/")) return { conversation: null };
     if (url === "/cards/c1/people") {
       return { people: Object.values(USERS).map((u) => ({ id: u.id, username: u.username, canReview: true })) };
     }
@@ -213,6 +214,56 @@ describe("ReviewPanel — o que mostra", () => {
     expect(typing).toHaveTextContent("Juiz");
     expect(typing).toHaveTextContent("opus");
     expect(typing).toHaveTextContent("digitando");
+  });
+
+  it("na aba Agentes, cada fala de um agente da frota chega como bolha, lida da conversa daquela rodada, e quem trabalha segue digitando", async () => {
+    const served = get.getMockImplementation()!;
+    const fleet = [{
+      runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Revisão"], total: 1, done: 0, at: 5, finished: false,
+      agents: [{ id: "a01f", label: "revisão: security", phase: "Revisão", model: "claude-opus-5-5", modelLabel: "Opus 5.5", status: "running" as const }],
+    }];
+    const conversation = {
+      runId: "wf_abc12", finished: false,
+      agents: [{ id: "a01f", label: "revisão: security", phase: "Revisão", status: "running", modelLabel: "Opus 5.5" }],
+      items: [
+        { agentId: "a01f", at: 1, kind: "tool", tool: "Read", target: "back/src/routes/reviews.ts" },
+        { agentId: "a01f", at: 2, kind: "text", text: "Vou conferir se o runId é validado." },
+        { agentId: "a01f", at: 3, kind: "text", text: "Validado: passa por assertWorkflowId." },
+      ],
+    };
+    get.mockImplementation(async (url: string) => {
+      if (url === "/cards/c1/review") return { review: current, working, fleet };
+      if (url === "/cards/c1/review/conversation/wf_abc12") return { conversation };
+      return served(url);
+    });
+    open("aut", review({ phase: "reviewing", round: 1 }));
+    await loaded();
+    const messages = await screen.findAllByTestId("fleet-chat-message");
+    expect(messages.map((message) => message.textContent)).toEqual([
+      expect.stringContaining("Vou conferir se o runId é validado."),
+      expect.stringContaining("Validado: passa por assertWorkflowId."),
+    ]);
+    expect(messages[0]).toHaveTextContent("Revisão de Segurança");
+    expect(messages[0]).toHaveTextContent("Opus 5.5");
+    expect(screen.getByTestId("fleet-chat-typing")).toHaveTextContent("digitando");
+    expect(screen.queryByText(/não deu para ler as falas/i)).toBeNull();
+  });
+
+  it("conversa da rodada que o servidor não consegue ler: o resultado de cada agente continua e um aviso diz que as falas não vieram", async () => {
+    const served = get.getMockImplementation()!;
+    const fleet = [{
+      runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Contexto"], total: 1, done: 1, at: 5, finished: true,
+      agents: [{ id: "a01f", label: "contexto", phase: "Contexto", model: "opus", status: "done" as const, endedAt: 1, result: '{"summary":"O PR mexe em 3 arquivos."}' }],
+    }];
+    get.mockImplementation(async (url: string) => {
+      if (url === "/cards/c1/review") return { review: current, working, fleet };
+      if (url === "/cards/c1/review/conversation/wf_abc12") throw new Error("runner parado");
+      return served(url);
+    });
+    open("aut", review({ phase: "reviewing", round: 1 }));
+    await loaded();
+    expect(await screen.findByText(/não deu para ler as falas/i)).toBeInTheDocument();
+    expect(screen.getByTestId("fleet-chat-message")).toHaveTextContent("O PR mexe em 3 arquivos.");
   });
 
   it("na aba Agentes, clicar no nome de um agente abre o passo a passo dele, lido da rota do agente, e outro clique fecha", async () => {

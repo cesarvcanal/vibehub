@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Finding, FindingDecision, FindingSeverity, Review, ReviewFleetRun, ReviewPhase, ReviewWorking } from "@/api/types";
 import type { RunAgentDetail } from "@/features/board/components/ReviewFleet";
+import type { RunConversationRead } from "@/features/board/lib/useReviewConversations";
 import { ENTER, ReviewConversation, SAID_CLAMP_CHARS } from "@/features/board/components/ReviewConversation";
 import { cardHref } from "@/features/board/lib/board";
 import {
@@ -52,6 +53,7 @@ export interface ReviewPanelViewProps {
   /** The tab to open on, instead of the one the review calls for (the Storybook tour shows each). */
   initialTab?: Tab;
   fleet?: ReviewFleetRun[];
+  conversations?: ReadonlyMap<string, RunConversationRead>;
   agentDetail?: RunAgentDetail;
 }
 
@@ -60,7 +62,7 @@ const NO_FLEET: ReviewFleetRun[] = [];
 export function ReviewPanelView(props: ReviewPanelViewProps) {
   const {
     review, working, fleet = NO_FLEET, nameOf, actions, busy, mergeBusy, notice, onMerge, onRetry, onCancel, onDecide, onDecideSuggestions, onClose,
-    initialTab, agentDetail,
+    initialTab, conversations, agentDetail,
   } = props;
   const t = useT();
   const stuck = new Set(review.phase === "impasse" ? stuckItems(review.findings).map((f) => f.id) : []);
@@ -137,7 +139,7 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
       </div>
 
       <div role="tabpanel" hidden={tab !== "agents"} className={cn("min-h-0 flex-1 flex-col", tab === "agents" ? "flex" : "hidden")}>
-        <ReviewConversation review={review} working={working} fleet={fleet} nameOf={nameOf} agentDetail={agentDetail} />
+        <ReviewConversation review={review} working={working} fleet={fleet} conversations={conversations} nameOf={nameOf} agentDetail={agentDetail} />
       </div>
       <div role="tabpanel" hidden={tab !== "findings"} className={cn("min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden [overflow-wrap:anywhere]", tab !== "findings" && "hidden")}>
         <FindingsList

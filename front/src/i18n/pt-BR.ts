@@ -1700,6 +1700,7 @@ export const ptBR: Record<string, string> = {
   "review.fleet.typing": "digitando",
   "review.fleet.steps": "Ver o passo a passo deste agente",
   "review.fleet.stoppedTitle": "Não respondeu",
+  "review.fleet.speechFailed": "Não deu para ler as falas dos agentes desta rodada; aparece só o resultado de cada um.",
   "review.fleet.stopped": "A frota parou antes de ele terminar (reinício do painel ou rodada encerrada).",
   "review.fleet.failed": "Falhou",
   "review.fleet.more": "ver mais",

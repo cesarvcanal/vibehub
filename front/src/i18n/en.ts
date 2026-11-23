@@ -1688,6 +1688,7 @@ export const en: Record<string, string> = {
   "review.fleet.typing": "typing",
   "review.fleet.steps": "See this agent's steps",
   "review.fleet.stoppedTitle": "No answer",
+  "review.fleet.speechFailed": "Could not read what the agents of this round said; only each one's result is shown.",
   "review.fleet.stopped": "The fleet stopped before this agent finished (panel restart or round closed).",
   "review.fleet.failed": "Failed",
   "review.fleet.more": "show more",
