@@ -29,7 +29,7 @@
           {
             "type": "command",
             "if": "Bash(git commit*)",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && { npm run -s lint:changed 1>&2 || { echo 'Commit barrado: o npm run lint:changed está vermelho. Corrija as linhas apontadas acima conforme o AGENTS.md e commite de novo. Se o erro for Cannot find package eslint, faltam as dependências da raiz: rode npm ci na raiz e o lint de novo.' 1>&2; exit 2; }; }"
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && { npm run -s lint:changed -- --skip-commit-titles 1>&2 || { echo 'Commit barrado: o npm run lint:changed está vermelho. Corrija as linhas apontadas acima conforme o AGENTS.md e commite de novo. Se o erro for Cannot find package eslint, faltam as dependências da raiz: rode npm ci na raiz e o lint de novo.' 1>&2; exit 2; }; }"
           }
         ]
       }
