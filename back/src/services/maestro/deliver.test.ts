@@ -1321,6 +1321,38 @@ describe("buildPrInfoScript / parsePrInfo (anexar um PR ao card)", () => {
   });
 });
 
+describe("o gate compara o diff com a base do merge", () => {
+  const probeScript = () => scripts().find((s) => s.includes("__VIBEHUB_GATE_JSON__")) ?? "";
+  const docsOnlyProbe = [`head=${HEAD_SHA}`, "clean=1", "changedfiles=1", "codefiles=0", "__VIBEHUB_GATE_JSON__", '{"checks":["npm test"]}'].join("\n");
+
+  it("card de análise de um PR para prod: o gate compara com origin/prod, não com a branch do PR", async () => {
+    const { deliver, registry, project } = await makeCard();
+    const analysis = await registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" });
+    wire();
+    await deliver.deliver(analysis.id, { branch: "prod", authorized: true });
+    expect(probeScript()).toContain("'origin/prod'");
+    expect(probeScript()).not.toContain("origin/feat-7");
+  });
+
+  it("PR só de documentação mergeia sem rodar a suíte", async () => {
+    const { deliver, card } = await makeCard();
+    wire({ probe: docsOnlyProbe });
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true });
+    expect(out).toMatchObject({ merged: true, reason: "merged" });
+    expect(scripts().some((s) => s.includes('echo "__VIBEHUB_GATE__ pass"'))).toBe(false);
+    expect(scripts().find((s) => s.includes("gh pr merge"))).toContain(`--match-head-commit '${HEAD_SHA}'`);
+  });
+
+  it("gate do merge da análise no commit: compara com a base do PR gravado no card", async () => {
+    const { deliver, registry, project } = await makeCard();
+    const analysis = await registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" });
+    await registry.recordCardPr(analysis.id, { number: 7, url: PR, base: "prod", branch: "feat-7" });
+    wire({ probe: docsOnlyProbe });
+    expect(await deliver.gateAtCommit(analysis.id, PR, HEAD_SHA)).toMatchObject({ ran: false, passed: true });
+    expect(probeScript()).toContain("'origin/prod'");
+  });
+});
+
 describe("gateAtCommit (o gate do merge da revisão, no commit aprovado)", () => {
   const SHA = "a".repeat(40);
   const gateRunScripts = () => scripts().filter((s) => s.includes('echo "__VIBEHUB_GATE__ pass"'));

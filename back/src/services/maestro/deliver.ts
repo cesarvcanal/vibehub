@@ -1109,7 +1109,9 @@ export async function gateAtCommit(cardId: string, prUrl: string, sha: string): 
   const { card, project } = await getCardWithProject(cardId);
   const { cwd } = cardWorkPaths(project, card);
   const token = await cardConnectionToken(card, project);
-  return (await ciGate(config.runner.container, token, cwd, prUrl, sha)) ?? (await runGate(card.id, { expectedSha: sha }));
+  const prBase = card.prs?.find((pr) => pr.url === prUrl)?.base;
+  const mergeBase = prBase ? { baseBranch: prBase } : {};
+  return (await ciGate(config.runner.container, token, cwd, prUrl, sha)) ?? (await runGate(card.id, { expectedSha: sha, ...mergeBase }));
 }
 
 /**
@@ -1315,7 +1317,7 @@ async function runDelivery(cardId: string, opts: DeliverOpts): Promise<DeliverRe
     gate = mergeOnly && opts.gatePassed
       ? { ran: false, passed: true, output: "" }
       : (await ciGate(container, token, cwd, prUrl, mergeOnly ? expectedHead : undefined)) ??
-        (await runGate(card.id, mergeOnly ? { expectedSha: expectedHead } : {}));
+        (await runGate(card.id, { baseBranch: target, ...(mergeOnly ? { expectedSha: expectedHead } : {}) }));
   } catch (err) {
     logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "gate could not run — treating as red");
     return { prUrl, merged: false, reason: "gate", branch: target, cardBranch: source, ...lock, ...commented, output: (err as Error).message };
