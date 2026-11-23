@@ -717,6 +717,16 @@ describe("deliver orchestration", () => {
     expect(mergeRan()).toBe(true);
   });
 
+  it("o gate local compara com a branch alvo do PR, não com a base do card", async () => {
+    const { deliver, registry, card } = await makeCard();
+    await registry.updateCard(card.id, { base: "dev" });
+    wire();
+    await deliver.deliver(card.id, { branch: "prod" });
+    const gateRun = scripts().find((s) => s.includes('echo "__VIBEHUB_GATE__ pass"'));
+    expect(gateRun).toContain("VIBEHUB_BASE_REF='\\''origin/prod'\\''");
+    expect(gateRun).not.toContain("origin/dev");
+  });
+
   it("defaults the target to the project's base branch", async () => {
     const { deliver, registry, project, card } = await makeCard();
     await registry.updateProject(project.id, { baseBranch: "main" });
@@ -1337,9 +1347,17 @@ describe("gateAtCommit (o gate do merge da revisão, no commit aprovado)", () =>
   it("sem CI e a worktree no commit, limpa: roda a suíte, que confere o commit de novo", async () => {
     const { deliver, card } = await makeCard();
     wire({ probe: `head=${SHA}\nclean=1\n__VIBEHUB_GATE_JSON__\n{"checks":["npm test"]}` });
-    expect(await deliver.gateAtCommit(card.id, PR, SHA)).toMatchObject({ ran: true, passed: true, headSha: SHA });
+    expect(await deliver.gateAtCommit(card.id, PR, SHA, "dev")).toMatchObject({ ran: true, passed: true, headSha: SHA });
     expect(gateRunScripts()).toHaveLength(1);
     expect(gateRunScripts()[0]).toContain(SHA);
+  });
+
+  it("sem CI: a suíte compara com a base do PR, não com a do card", async () => {
+    const { deliver, registry, card } = await makeCard();
+    await registry.updateCard(card.id, { base: "dev" });
+    wire({ probe: `head=${SHA}\nclean=1\n__VIBEHUB_GATE_JSON__\n{"checks":["npm test"]}` });
+    await deliver.gateAtCommit(card.id, PR, SHA, "prod");
+    expect(gateRunScripts()[0]).toContain("VIBEHUB_BASE_REF='\\''origin/prod'\\''");
   });
 
   it("com CI: lê o CI do sha revisado, não a worktree", async () => {

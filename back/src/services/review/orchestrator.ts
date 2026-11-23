@@ -424,7 +424,7 @@ async function readMergeVerdict(r: Review, sha: string): Promise<MergeVerdict> {
   try {
     const pr = await readPrState(r.cardId, r.prUrl);
     if (pr?.mergeable === "CONFLICTING") return { ran: true, passed: false, conflict: true, output: mergeConflictOutput(r) };
-    return await gateAtCommit(r.cardId, r.prUrl, sha);
+    return await gateAtCommit(r.cardId, r.prUrl, sha, r.base);
   } catch (err) {
     return { ran: true, passed: false, output: `o gate não chegou a rodar: ${(err as Error).message}` };
   }

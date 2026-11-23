@@ -1648,7 +1648,7 @@ describe("merge da análise pela rota", () => {
     await saveReport(aptReport(w.cardId));
     const first = await readAnalysis(w, w.leitor);
     expect(gateAtCommit).toHaveBeenCalledTimes(1);
-    expect(gateAtCommit).toHaveBeenCalledWith(w.cardId, PR.url, "e".repeat(40));
+    expect(gateAtCommit).toHaveBeenCalledWith(w.cardId, PR.url, "e".repeat(40), PR.base);
     expect(first.mergeGate?.state).toBe("running");
     await vi.waitFor(async () => expect((await readAnalysis(w, w.leitor)).mergeGate?.state).toBe("passed"));
     deliver.mockClear();
@@ -1741,7 +1741,7 @@ describe("merge da análise pela rota", () => {
     prState = { state: "OPEN", headSha: "f".repeat(40) };
     await saveReport(aptReport(w.cardId, { analysedSha: "f".repeat(40) }));
     await readAnalysis(w, w.leitor);
-    await vi.waitFor(() => expect(gateAtCommit).toHaveBeenCalledWith(w.cardId, PR.url, "f".repeat(40)));
+    await vi.waitFor(() => expect(gateAtCommit).toHaveBeenCalledWith(w.cardId, PR.url, "f".repeat(40), PR.base));
   });
 
   it("caso real (PR #649): a análise que corrigiu e entregou prende o gate e o merge à cabeça que entregou, não ao sha do passo 1", async () => {
@@ -1752,7 +1752,7 @@ describe("merge da análise pela rota", () => {
     await saveReport(aptReport(w.cardId));
     await readAnalysis(w, w.leitor);
     await vi.waitFor(async () => expect((await readAnalysis(w, w.leitor)).mergeGate).toMatchObject({ state: "passed", sha: delivered }));
-    expect(gateAtCommit).toHaveBeenCalledWith(w.cardId, PR.url, delivered);
+    expect(gateAtCommit).toHaveBeenCalledWith(w.cardId, PR.url, delivered, PR.base);
     deliver.mockClear();
     expect((await merge(w, w.merger)).statusCode).toBe(200);
     expect(deliver.mock.calls[0]![1]).toMatchObject({ mergeOnly: true, expectedHeadSha: delivered, gatePassed: true });

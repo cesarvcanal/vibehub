@@ -83,7 +83,7 @@ export async function startAnalysisMergeGate(cardId: string, opts: { again?: boo
     forgetRun();
     return { kind: "refused", status: 409, reason: "not_apt", error: "a análise mudou de commit enquanto os testes do merge começavam" };
   }
-  void runAnalysisMergeGate(started, pr.url, card.worktreeSlug)
+  void runAnalysisMergeGate(started, pr, card.worktreeSlug)
     .catch((err: unknown) => logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "could not record the analysis merge gate verdict"))
     .finally(forgetRun);
   return { kind: "started", mergeGate: started };
@@ -102,11 +102,11 @@ async function deliveredHead(cardId: string, prUrl: string): Promise<{ sha: stri
   return { sha: worktreeHead };
 }
 
-async function runAnalysisMergeGate(started: AnalysisMergeGate, prUrl: string, cardSlug: string): Promise<void> {
-  const head = await deliveredHead(started.cardId, prUrl).catch((err: unknown) => ({ refusal: `o gate não chegou a rodar: ${(err as Error).message}` }));
+async function runAnalysisMergeGate(started: AnalysisMergeGate, pr: CardPr, cardSlug: string): Promise<void> {
+  const head = await deliveredHead(started.cardId, pr.url).catch((err: unknown) => ({ refusal: `o gate não chegou a rodar: ${(err as Error).message}` }));
   const verdict: Pick<GateResult, "passed" | "output"> = "refusal" in head
     ? { passed: false, output: head.refusal }
-    : await gateAtCommit(started.cardId, prUrl, head.sha).catch((err: unknown) => ({
+    : await gateAtCommit(started.cardId, pr.url, head.sha, pr.base).catch((err: unknown) => ({
       ran: true, passed: false, output: `o gate não chegou a rodar: ${(err as Error).message}`,
     }));
   const pinned = "sha" in head ? { sha: head.sha } : {};

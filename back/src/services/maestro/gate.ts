@@ -181,9 +181,9 @@ export function parseGateProbe(stdout: string): GateProbe {
  * What a green verdict is valid FOR: the commit and the exact check list, and only on a clean
  * tree — null (never reusable) otherwise. PURE.
  */
-export function gateReuseKey(probe: Pick<GateProbe, "headSha" | "cleanTree">, checks: string[]): string | null {
+export function gateReuseKey(probe: Pick<GateProbe, "headSha" | "cleanTree">, checks: string[], baseBranch: string): string | null {
   if (!probe.headSha || !probe.cleanTree) return null;
-  return JSON.stringify([probe.headSha, checks]);
+  return JSON.stringify([probe.headSha, checks, baseBranch]);
 }
 
 /**
@@ -415,15 +415,15 @@ function releaseSlot(): void {
  * that moves while the checks run (see `buildGateRunScript`). Such a call joins only a run held to
  * the same commit.
  */
-export function runGate(cardId: string, opts: { expectedSha?: string } = {}): Promise<GateResult> {
+export function runGate(cardId: string, opts: { expectedSha?: string; baseBranch?: string } = {}): Promise<GateResult> {
   const expectedSha = opts.expectedSha?.toLowerCase();
-  const key = expectedSha ? `${cardId}@${expectedSha}` : cardId;
+  const key = JSON.stringify([cardId, expectedSha, opts.baseBranch]);
   const current = inFlight.get(key);
   if (current) {
     logger.info({ action: "maestro.gate", cardId }, "gate already running for this card — joining it");
     return current;
   }
-  const run = runGateNow(cardId, expectedSha).finally(() => inFlight.delete(key));
+  const run = runGateNow(cardId, expectedSha, opts.baseBranch).finally(() => inFlight.delete(key));
   inFlight.set(key, run);
   return run;
 }
@@ -445,10 +445,11 @@ function offCommitOutput(expectedSha: string, probe: Pick<GateProbe, "headSha" |
   );
 }
 
-async function runGateNow(cardId: string, expectedSha?: string): Promise<GateResult> {
+async function runGateNow(cardId: string, expectedSha?: string, targetBranch?: string): Promise<GateResult> {
   if (expectedSha !== undefined && !FULL_SHA_RE.test(expectedSha)) throw new Error("the gate can only be held to a full commit sha");
   const { card, project } = await getCardWithProject(cardId);
   const { cwd } = cardWorkPaths(project, card);
+  const baseBranch = targetBranch ?? (card.base || project.baseBranch);
   const container = config.runner.container;
 
   const probeOut = await hostExecutor().runScript(buildGateProbeScript(container, cwd), { timeoutMs: 30_000 });
@@ -468,7 +469,7 @@ async function runGateNow(cardId: string, expectedSha?: string): Promise<GateRes
     return { ran: false, passed: true, output: "", ...tested };
   }
 
-  const reuseKey = gateReuseKey(probe, plan.checks);
+  const reuseKey = gateReuseKey(probe, plan.checks, baseBranch);
   const green = greenVerdicts.get(card.id);
   if (reuseKey && green?.key === reuseKey && probedAt - green.at < GATE_REUSE_MS) {
     logger.info(
@@ -484,7 +485,7 @@ async function runGateNow(cardId: string, expectedSha?: string): Promise<GateRes
   let runOut: { stdout: string; stderr?: string };
   try {
     runOut = await hostExecutor().runScript(
-      buildGateRunScript(container, cwd, plan.checks, { baseBranch: card.base || project.baseBranch, cardId: card.id, ...(expectedSha ? { expectedSha } : {}) }),
+      buildGateRunScript(container, cwd, plan.checks, { baseBranch, cardId: card.id, ...(expectedSha ? { expectedSha } : {}) }),
       { timeoutMs: GATE_RUN_TIMEOUT_MS },
     );
   } catch (err) {

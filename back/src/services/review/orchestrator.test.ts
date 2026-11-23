@@ -2082,7 +2082,7 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
     expect(lastText()).toContain("--approve");
-    await vi.waitFor(() => expect(gateSpy).toHaveBeenCalledWith(review.cardId, PR.url, SHA2));
+    await vi.waitFor(() => expect(gateSpy).toHaveBeenCalledWith(review.cardId, PR.url, SHA2, PR.base));
   });
 
   it("merge da base sem mudar o diff do PR, no impasse por rodadas: o impasse fica, no head novo, sem chamar ninguém", async () => {
@@ -2165,7 +2165,7 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
     expect(after).toMatchObject({ phase: "ready", reviewedSha: SHA2 });
     expect(after?.log.filter((l) => l.text.startsWith("Merge da base"))).toHaveLength(1);
     expect(send).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => expect(gateSpy).toHaveBeenCalledWith(review.cardId, PR.url, SHA2));
+    await vi.waitFor(() => expect(gateSpy).toHaveBeenCalledWith(review.cardId, PR.url, SHA2, PR.base));
     await new Promise((r) => setTimeout(r, 40));
     expect(gateSpy.mock.calls.filter((c) => c[2] === SHA2)).toHaveLength(1);
   });
@@ -3105,7 +3105,7 @@ describe("gate do merge rodado quando a revisão fica pronta", () => {
     gateAnswer = RED;
     await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
     await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("failed"));
-    expect(gateSpy).toHaveBeenCalledWith(author.id, PR.url, SHA1);
+    expect(gateSpy).toHaveBeenCalledWith(author.id, PR.url, SHA1, PR.base);
     const after = (await o.store.getReview(review.id))!;
     expect(after.phase).toBe("ready");
     expect(after.mergeGate).toMatchObject({ sha: SHA1, state: "failed", output: RED.output });
