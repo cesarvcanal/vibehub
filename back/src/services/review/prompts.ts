@@ -551,6 +551,10 @@ export function phaseNoticeText(r: Review): string {
 
 /** The notice, on both cards, that the merge gate failed on the approved commit. */
 export function mergeGateFailedText(r: Review): string {
+  if (r.mergeGate?.noCi) {
+    return `PR #${r.prNumber}: o merge foi recusado porque o PR está sem CI no GitHub — o vibehub só mergeia com o CI do PR verde. ` +
+      "Configure um workflow do GitHub Actions que rode em todo PR; depois que ele rodar neste PR, tente o merge de novo.";
+  }
   if (r.mergeGate?.conflict && r.mergeGate.exhausted) {
     return `PR #${r.prNumber}: o PR segue em conflito com ${r.base} depois de ${MERGE_GATE_AUTO_RETRIES} ordens à IA do autor — ` +
       "o merge espera alguém trazer a base para a branch.";

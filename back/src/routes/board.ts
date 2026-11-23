@@ -41,7 +41,7 @@ type ReviewSummary = Pick<Review, "id" | "prNumber" | "phase" | "round"> & {
    * while the author's AI brings it in (`conflict`) or past the orders it gets (`conflictFailed`): the line does
    * not say "pronto pra merge".
    */
-  mergeGateState?: "running" | "fixing" | "failed" | "conflict" | "conflictFailed";
+  mergeGateState?: "running" | "fixing" | "failed" | "conflict" | "conflictFailed" | "noCi";
 };
 /**
  * `review` = the most recent; `reviews` = the most recent of EACH PR (only with more than one PR
@@ -127,7 +127,8 @@ function fieldsRefusedToMember(patch: registry.UpdateCardInput): string[] {
   return Object.keys(patch).filter((key) => !MEMBER_CARD_FIELDS.has(key));
 }
 
-function failedMergeGateState(gate: MergeGate): "fixing" | "failed" | "conflict" | "conflictFailed" {
+function failedMergeGateState(gate: MergeGate): "fixing" | "failed" | "conflict" | "conflictFailed" | "noCi" {
+  if (gate.noCi) return "noCi";
   if (gate.conflict) return gate.exhausted ? "conflictFailed" : "conflict";
   return mergeGateSelfHealing(gate) ? "fixing" : "failed";
 }

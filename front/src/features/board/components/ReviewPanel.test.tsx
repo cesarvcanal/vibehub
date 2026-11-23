@@ -1103,6 +1103,19 @@ describe("ReviewPanel — merge", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("PR sem CI no GitHub: o painel diz que falta o CI e o Mergear fica travado, sem falar de testes que rodaram de novo", async () => {
+    const sha = "a".repeat(40);
+    open("mer", review({
+      phase: "ready", reviewedSha: sha,
+      mergeGate: { sha, state: "failed", output: "o PR não tem CI no GitHub", at: 1, failures: 1, exhausted: true, noCi: true },
+    }));
+    await loaded();
+    expect(screen.getByText("PR sem CI")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("GitHub Actions");
+    expect(screen.getByRole("alert")).not.toHaveTextContent("rodarem de novo sozinhos");
+    expect(screen.getByRole("button", { name: "Mergear na dev" })).toBeDisabled();
+  });
+
   it("caso real (PR #215): gate vermelho esgotado no commit aprovado — a falha aparece e o Mergear fica travado; Tentar de novo libera", async () => {
     const sha = "a".repeat(40);
     open("mer", review({

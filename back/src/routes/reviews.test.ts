@@ -36,7 +36,7 @@ let prState: { state: "OPEN" | "MERGED" | "CLOSED"; headSha: string } | null = n
 const readPrState = vi.fn(async () => prState);
 const afterPrMerged = vi.fn(async () => "deleted" as const);
 /** The merge gate on the approved commit (run when the review becomes ready). */
-const mergeGateVerdict: { answer: { passed: boolean; output: string } } = { answer: { passed: true, output: "" } };
+const mergeGateVerdict: { answer: { passed: boolean; output: string; noCi?: true } } = { answer: { passed: true, output: "" } };
 const gateAtCommit = vi.fn<(cardId: string, prUrl: string, sha: string) => Promise<typeof mergeGateVerdict.answer>>(async () => mergeGateVerdict.answer);
 const fleetConversation = { answer: null as FleetConversation | null };
 const readFleetConversation = vi.fn<(transcriptDir: string, runId?: string) => Promise<FleetConversation | null>>(async () => fleetConversation.answer);
@@ -1101,6 +1101,18 @@ describe("merge", () => {
     expect(res.statusCode).toBe(200);
     expect(deliver.mock.calls[0]![1]).toMatchObject({ mergeOnly: true, expectedHeadSha: SHA1, gatePassed: true });
     expect(gateAtCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("PR sem CI: o clique em mergear responde no_ci na hora, sem deliver e sem mandar 'tentar de novo'", async () => {
+    const w = await world();
+    mergeGateVerdict.answer = { passed: false, output: "o PR não tem CI no GitHub", noCi: true };
+    const review = await readyReview(w);
+    const res = await merge(review.id, w.merger);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ reason: "no_ci" });
+    expect(res.json().error).toMatch(/GitHub Actions/);
+    expect(res.json().error).not.toMatch(/Tentar de novo/);
+    expect(deliver).not.toHaveBeenCalled();
   });
 
   it("caso real (PR #215): gate vermelho no commit aprovado — o clique responde NA HORA com a falha, sem deliver", async () => {

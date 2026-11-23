@@ -829,7 +829,7 @@ export interface ReviewSummary {
    * base while the author's AI brings it in (`conflict`) or past the orders it gets (`conflictFailed`): not
    * "ready to merge".
    */
-  mergeGateState?: "running" | "fixing" | "failed" | "conflict" | "conflictFailed";
+  mergeGateState?: "running" | "fixing" | "failed" | "conflict" | "conflictFailed" | "noCi";
 }
 
 export interface FindingProof {
@@ -1021,6 +1021,7 @@ export interface MergeGate {
   conflict?: true;
   /** Past the automatic reruns: nothing runs it again without a person. */
   exhausted?: true;
+  noCi?: true;
 }
 
 export interface ReviewFleetAgent {

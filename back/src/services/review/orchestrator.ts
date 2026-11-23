@@ -478,6 +478,7 @@ async function checkMergeGate(reviewId: string, opts: { again?: boolean; by?: st
         : {
           sha, state: "failed", output: verdict.output, at: Date.now(), failures,
           ...(exhausted ? { exhausted: true as const } : {}), ...(verdict.conflict ? { conflict: true as const } : {}),
+          ...(verdict.noCi ? { noCi: true as const } : {}),
         };
       note(x, "system", mergeVerdictNote(x, sha, verdict, exhausted), opts.by ? { by: opts.by } : {});
       landed = true;

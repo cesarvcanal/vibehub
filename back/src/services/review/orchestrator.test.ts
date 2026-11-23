@@ -3125,9 +3125,13 @@ describe("gate do merge rodado quando a revisão fica pronta", () => {
     await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("failed"));
     await vi.waitFor(() => expect(o.orch.mergeGateRunning(review.id)).toBe(false));
     const after = (await o.store.getReview(review.id))!;
-    expect(after.mergeGate).toMatchObject({ sha: SHA1, state: "failed", exhausted: true });
+    expect(after.mergeGate).toMatchObject({ sha: SHA1, state: "failed", exhausted: true, noCi: true });
     expect(after.log.at(-1)?.text).toMatch(/sem CI/);
     expect(send.mock.calls.some(([card]) => card === author.id)).toBe(false);
+    await vi.waitFor(async () => expect((await messagesOn(o, author.id)).some((notice) => /sem CI no GitHub/.test(notice.text))).toBe(true));
+    const notice = (await messagesOn(o, author.id)).find((message) => /sem CI no GitHub/.test(message.text));
+    expect(notice?.text).toMatch(/GitHub Actions/);
+    expect(notice?.text).not.toMatch(/vezes|Tentar de novo/);
   });
 
   it("pronta com o PR em conflito com a base: não dá o merge como livre, não roda o gate e o autor recebe a ordem de trazer a base", async () => {

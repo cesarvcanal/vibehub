@@ -849,6 +849,13 @@ function MergeGateBanner({ review }: { review: Review }) {
       </p>
     );
   }
+  if (status === "noCi") {
+    return (
+      <p role="alert" className="shrink-0 rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-xs font-medium text-destructive">
+        {t("review.mergeGate.noCi")}
+      </p>
+    );
+  }
   if (status === "fixing") {
     return (
       <div role="status" className={cn("shrink-0 rounded-md border px-2.5 py-1.5 text-xs", NOTICE_TONE.warn)}>
@@ -990,6 +997,7 @@ function stageText(review: Review, authorWorking: boolean, t: typeof translate):
       if (gateStatus === "running") return t("review.stage.gateRunning");
       if (gateStatus === "conflict") return t("review.stage.gateConflict");
       if (gateStatus === "conflictFailed") return t("review.stage.gateConflictFailed");
+      if (gateStatus === "noCi") return t("review.stage.gateNoCi");
       return t("review.stage.ready");
     }
     case "impasse":
