@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   attachLeaveFocusShortcut,
   attachNewCardShortcut,
@@ -101,6 +101,26 @@ describe("attachNewCardShortcut", () => {
     expect(onTrigger).not.toHaveBeenCalled();
     dispose();
     input.remove();
+  });
+
+  it("ignora um keydown que não é KeyboardEvent e chega sem key, sem lançar erro", () => {
+    const onTrigger = vi.fn();
+    const listenerErrors: unknown[] = [];
+    const recordListenerError = (event: ErrorEvent): void => {
+      listenerErrors.push(event.error);
+      event.preventDefault();
+    };
+    window.addEventListener("error", recordListenerError);
+    const dispose = attachNewCardShortcut(onTrigger, window);
+    onTestFinished(() => {
+      dispose();
+      window.removeEventListener("error", recordListenerError);
+    });
+
+    window.dispatchEvent(new Event("keydown"));
+
+    expect(listenerErrors).toEqual([]);
+    expect(onTrigger).not.toHaveBeenCalled();
   });
 });
 

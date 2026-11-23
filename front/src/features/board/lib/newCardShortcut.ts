@@ -53,7 +53,8 @@ export function isPlainTextField(target: EventTarget | null): boolean {
  * the next task, and you should not have to reach for the mouse to write it down.
  */
 export function attachNewCardShortcut(onTrigger: () => void, target: Window = window): () => void {
-  const onKeyDown = (e: KeyboardEvent): void => {
+  const onKeyDown = (e: Event): void => {
+    if (!(e instanceof KeyboardEvent)) return;
     if (!isNewCardShortcut(e) || isPlainTextField(e.target)) return;
     e.preventDefault();
     e.stopPropagation();
