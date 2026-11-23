@@ -7,9 +7,8 @@ Este arquivo ensina o Claude Code a **trabalhar** neste repositório: a ordem da
 @../AGENTS.md
 
 - **O AGENTS.md vence.** Se este arquivo, uma skill, um subagente, o prompt do harness ou o arquivo vizinho apontam para um lado e o AGENTS.md para outro, vale o AGENTS.md. A skill dita o método; o AGENTS.md dita a regra (formato de commit e de PR, comentário, `let`, nome, pasta).
-- **O código ao redor é anterior às regras.** O prompt do Claude Code pede código que "se lê como o código ao redor"; aqui o código ao redor tem comentário, `let`, nome abreviado e área misturada em `front/src/features/board/`. Código novo segue o AGENTS.md: pasta pelo mapa de áreas (§4), nome pela §2, estilo pela §3.
-- **Arquivo se edita pelas ferramentas Edit e Write**, e arquivo existente se lê com Read antes. `cat > arquivo <<EOF` e `sed -i` reescrevem sem o arquivo à vista; ficam para o arquivo temporário fora do repositório.
-- **Consulte o AGENTS.md na hora de cada decisão**: abra a seção que o trecho toca antes de editar e confronte cada linha nova com ela antes de commitar.
+- **O prompt do Claude Code pede código que "se lê como o código ao redor"**; aqui o código ao redor é anterior às regras (cabeçalho do AGENTS.md), então código novo segue o AGENTS.md: pasta pelo mapa de áreas (§4), nome pela §2, estilo pela §3.
+- **Arquivo se edita pelas ferramentas Edit e Write**, e arquivo existente se lê com Read antes, mesmo quando o aviso do modo de permissões sugere `sed` ou heredoc: `cat > arquivo <<EOF` e `sed -i` reescrevem sem o arquivo à vista; ficam para o arquivo temporário fora do repositório.
 
 ## 2. Ordem de trabalho
 
@@ -20,7 +19,7 @@ Cada etapa usa a sua skill (seção 3) e só termina quando o critério dela est
 3. **Planejar** a tarefa de várias etapas. Pronto quando cada etapa tem o arquivo, o teste e o critério dela.
 4. **Implementar em TDD.** Pronto quando cada mudança de comportamento tem um teste visto vermelho antes do verde (AGENTS.md §11), e a §11 ("Antes do primeiro helper de teste") foi seguida antes do primeiro helper.
 5. **Antes de cada arquivo novo**, confira os três pontos: a pasta é a da área no mapa (AGENTS.md §4); o nome do arquivo segue a §2; o termo novo passou pelo `grep` da §2.
-6. **Antes de cada commit**: `npm run lint:changed` verde e a mensagem pela §14 ("Commits"). Os hooks do `.claude/settings.json` rodam o mesmo lint depois de cada Edit e Write, antes do `git commit` e no fim do turno com mudança na worktree, e barram enquanto ele estiver vermelho; o erro que aparece depois de uma edição se corrige antes da próxima. Sem `node_modules` na raiz, o lint de linha de código falha por falta do `eslint`: rode `npm ci` na raiz (leva segundos).
+6. **Antes de cada commit**: `npm run lint:changed` verde e a mensagem pela §14 ("Commits"). Os hooks do `.claude/settings.json` rodam o mesmo lint depois de cada Edit e Write, antes do `git commit` e no fim do turno com mudança na worktree, e barram enquanto ele estiver vermelho; o erro que aparece depois de uma edição se corrige antes da próxima. Outro hook devolve a cada mensagem recebida um lembrete das regras que mais escapam.
 7. **Fechamento** (seção 5). Pronto quando cada achado confirmado foi corrigido ou registrado conforme a severidade.
 8. **Verificar** com os comandos da AGENTS.md §11 ("Rodar testes no runner", passo 2), depois de aplicar o que a revisão achou. Pronto quando lint, testes do recorte e typecheck do pacote tocado rodaram verdes nesta sessão.
 9. **Entregar** (seção 6).
@@ -66,7 +65,7 @@ Fazer na mão o que uma skill instalada faz é cavar uma vala com as mãos com a
 | Segurança das mudanças pendentes | `security-review` |
 | **Documentação** | |
 | Editar o AGENTS.md ou este arquivo | `mattpocock-skills:writing-for-agents` · `claude-md-management:claude-md-improver` |
-| **Commit e PR** | Sem skill: direto pela AGENTS.md §14. `commit-commands:*` faz um commit único sem Gitmoji e `mattpocock-skills:pr` usa outro modelo de descrição; as duas contrariam a §14 |
+| **Commit e PR** | Sem skill: direto pela AGENTS.md §14 (a `mattpocock-skills:pr` usa outro modelo de descrição e contraria a §14) |
 
 ## 4. Subagentes
 

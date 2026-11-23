@@ -45,7 +45,6 @@
 - **Efeito colateral é explícito:** quem grava, apaga ou muda estado diz isso no nome (`save`, `delete`, `set`…); `get`/`read`/`parse` não grava.
 - **Cálculo e efeito em etapas separadas:** o que calcula (inclusive callback de `filter`/`map`/`find`) só devolve valor; o que envia, grava ou notifica vem depois, em passo próprio.
 - Utilitários e dependências **realmente existentes** antes de abstração nova ou biblioteca instalada.
-- Formatter e organização do repositório respeitados; arquivo fora da tarefa não é reformatado.
 
 ### `const` e estado vivo
 
@@ -517,7 +516,7 @@ Quem revisa (pessoa ou agente) é o **portão do merge**. Recebe o diff, este ar
 |--------|----------|
 | `AGENTS.md` (este) | Todas as regras do projeto, para qualquer agente e pessoa |
 | `.claude/CLAUDE.md` | Como o Claude Code trabalha aqui: ordem das etapas, mapa de skills, subagentes, fechamento e entrega; importa este arquivo e nunca repete regra dele |
-| `.claude/settings.json` | Plugins, permissões, profundidade de subagente e hooks: o lembrete das regras que mais escapam, a cada mensagem; o `npm run lint:changed` depois de cada edição, antes de cada `git commit` e no fim do turno com mudança na worktree (vermelho: o erro volta ao agente, o commit é barrado e o turno não termina) |
+| `.claude/settings.json` | Configuração do Claude Code: plugins, permissões, profundidade de subagente e os hooks que o `.claude/CLAUDE.md` descreve |
 | `eslint.config.js` | A parte deste arquivo que a máquina checa (`npm run lint:changed`) |
 | `README.md`, `SECURITY.md` | Páginas públicas do repositório, sem regra de desenvolvimento |
 | `back/src/services/brain/personas/*.md` | Instruções que o servidor MCP do vibehub entrega a todo card (código do produto) |
