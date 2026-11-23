@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { join, relative } from "node:path";
+import { existsSync } from "node:fs";
+import { basename, dirname, extname, join, relative } from "node:path";
 import { parseAddedLines } from "./addedLines.mjs";
 
 const CONFIG_FILE = join(import.meta.dirname, "..", "..", "eslint.config.js");
@@ -14,6 +15,16 @@ const ALLOWED_MARKDOWN = [
   /^docs\/[^/]+\.md$/,
   /^back\/src\/services\/brain\/personas\/[^/]+\.md$/,
 ];
+const BOARD_DIR = "front/src/features/board/";
+const APPROVED_BOARD_FILES = [];
+const NAMED_SOURCE_DIRS = ["back/src/", "front/src/"];
+const CODE_EXTENSIONS = [...LINTED_EXTENSIONS, "js"];
+const COMPONENT_EXTENSIONS = ["tsx", "jsx"];
+const CODE_FILE_NAME = /^(?<stem>[A-Za-z][A-Za-z0-9]*)(?:\.[a-z][A-Za-z0-9]*)*\.(?<extension>[a-z]+)$/;
+const SHADCN_UI_DIR = "front/src/components/ui/";
+const LOCALE_FILE = /^front\/src\/i18n\/[a-z]{2}(?:-[A-Z]{2})?\.ts$/;
+const GITMOJI_TABLE_ROW = /^\| (?<emoji>\S+) \| `:[a-z0-9_-]+:` \|/gm;
+const VARIATION_SELECTOR = "\u{FE0F}";
 
 function git(repoDir, ...args) {
   return execFileSync("git", ["-c", "core.quotePath=false", ...args], { cwd: repoDir, encoding: "utf8", maxBuffer: Infinity });
@@ -54,6 +65,66 @@ export async function lintChangedLines({ repoDir, baseRef }) {
   return lintResults
     .map((lintResult) => keepChangedMessages(lintResult, changedLinesByPath.get(relative(repoDir, lintResult.filePath))))
     .filter((lintResult) => lintResult.messages.length > 0);
+}
+
+function listAddedFiles(repoDir, baseRef, ...pathspecs) {
+  const base = git(repoDir, "merge-base", "HEAD", baseRef).trim();
+  const committedOrStaged = git(repoDir, "diff", "-z", "--name-only", "--no-renames", "--diff-filter=A", base, "--", ...pathspecs);
+  const untracked = git(repoDir, "ls-files", "-z", "--others", "--exclude-standard", "--", ...pathspecs);
+  return [...committedOrStaged.split("\0"), ...untracked.split("\0")].filter(Boolean).sort();
+}
+
+function isTestOfExistingFile(repoDir, path) {
+  const [testedStem, ...suffixes] = basename(path).split(".");
+  if (!suffixes.includes("test")) return false;
+  return CODE_EXTENSIONS.some((extension) => existsSync(join(repoDir, dirname(path), `${testedStem}.${extension}`)));
+}
+
+export function findNewFilesOutsideBoardArea({ repoDir, baseRef, approvedBoardFiles = APPROVED_BOARD_FILES }) {
+  return listAddedFiles(repoDir, baseRef, BOARD_DIR).filter(
+    (path) => !approvedBoardFiles.includes(path) && !isTestOfExistingFile(repoDir, path),
+  );
+}
+
+function isNameExempt(path) {
+  return path.startsWith(SHADCN_UI_DIR) || path.endsWith(".d.ts") || LOCALE_FILE.test(path);
+}
+
+function followsNamingConvention(path) {
+  const nameParts = CODE_FILE_NAME.exec(basename(path));
+  if (!nameParts) return false;
+  const { stem, extension } = nameParts.groups;
+  const isCamelCase = /^[a-z]/.test(stem);
+  const isComponentFile = COMPONENT_EXTENSIONS.includes(extension);
+  return isCamelCase || isComponentFile;
+}
+
+export function findMisnamedFiles({ repoDir, baseRef }) {
+  const addedCodeFiles = listAddedFiles(repoDir, baseRef, ...NAMED_SOURCE_DIRS).filter((path) =>
+    CODE_EXTENSIONS.includes(extname(path).slice(1)),
+  );
+  return addedCodeFiles.filter(
+    (path) => !isNameExempt(path) && !isTestOfExistingFile(repoDir, path) && !followsNamingConvention(path),
+  );
+}
+
+function readGitmojisAtBase(repoDir, base) {
+  const agentsRules = git(repoDir, "show", `${base}:AGENTS.md`);
+  const gitmojis = [...agentsRules.matchAll(GITMOJI_TABLE_ROW)].map((row) => withoutVariationSelector(row.groups.emoji));
+  if (gitmojis.length === 0) throw new Error("lint: a tabela de emojis dos commits (AGENTS.md §14) não foi encontrada no AGENTS.md");
+  return gitmojis;
+}
+
+function withoutVariationSelector(text) {
+  return text.replaceAll(VARIATION_SELECTOR, "");
+}
+
+export function findCommitsWithoutGitmoji({ repoDir, baseRef }) {
+  const base = git(repoDir, "merge-base", "HEAD", baseRef).trim();
+  const commitTitles = git(repoDir, "log", "-z", "--no-merges", "--reverse", "--format=%s", `${base}..HEAD`).split("\0").filter(Boolean);
+  if (commitTitles.length === 0) return [];
+  const gitmojis = readGitmojisAtBase(repoDir, base);
+  return commitTitles.filter((title) => !gitmojis.some((gitmoji) => withoutVariationSelector(title).startsWith(`${gitmoji} `)));
 }
 
 export function findStrayMarkdown({ repoDir, baseRef }) {

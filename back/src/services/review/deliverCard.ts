@@ -1,5 +1,5 @@
 import { findUser } from "../../auth/users.js";
-import { getCard, type Card } from "../board/registry.js";
+import { getCard, updateCard, type Card } from "../board/registry.js";
 import { deliver, parsePrUrl, type DeliverOpts, type DeliverResult } from "../maestro/deliver.js";
 import { logger } from "../../utils/logger.js";
 import { canMergeReview, cardsToConclude, isReviewClosed, type Review } from "./model.js";
@@ -34,7 +34,21 @@ export async function deliverCard(
   cardId: string, opts: DeliverCardOpts,
 ): Promise<DeliverResult> {
   const { result, concludeRecorded } = await deliverUnderReview(cardId, opts);
+  const mergedByItself = result.merged && opts.authorized === true && opts.from === cardId;
+  if (mergedByItself) return withOutput(result, await concludeMergedCard(cardId));
   return opts.concludeWhenMerged && !concludeRecorded ? withOutput(result, CONCLUDE_NOT_RECORDED) : result;
+}
+
+async function concludeMergedCard(cardId: string): Promise<string> {
+  try {
+    const card = await getCard(cardId);
+    if (!card || card.column === "done") return "";
+    await updateCard(cardId, { column: "done" });
+    logger.info({ audit: true, action: "maestro.deliver", card: card.worktreeSlug }, "card that merged its own PR moved to done");
+    return "Mergeado pelo próprio card: ele foi para Concluído.";
+  } catch (err) {
+    return `O card NÃO foi para Concluído (${(err as Error).message}): conclua com vibehub_move_cards.`;
+  }
 }
 
 type DeliverCardOpts = Pick<DeliverOpts, "branch" | "authorized" | "docs"> & {

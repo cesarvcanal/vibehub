@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { relative } from "node:path";
-import { lintChangedLines, findStrayMarkdown } from "./lintChanged.mjs";
+import { lintChangedLines, findStrayMarkdown, findNewFilesOutsideBoardArea, findMisnamedFiles, findCommitsWithoutGitmoji } from "./lintChanged.mjs";
 import { git, writeRepoFile, createRepoWithBase } from "./testRepo.mjs";
 
 const LEGACY = "let legacy = 1;\nlegacy += 1;\nexport { legacy };\n";
@@ -158,5 +158,168 @@ describe("findStrayMarkdown", () => {
     writeRepoFile(repoDir, "CLAUDE.local.md", "local\n");
 
     expect(findStrayMarkdown({ repoDir, baseRef: "main" })).toEqual([]);
+  });
+});
+
+describe("findNewFilesOutsideBoardArea", () => {
+  it("arquivo novo em features/board reprova, commitado ou ainda não rastreado; o legado e o de outra área passam", () => {
+    const repoDir = createRepoWithBase({ "front/src/features/board/components/Legacy.tsx": "legacy\n" });
+    writeRepoFile(repoDir, "front/src/features/board/components/AgentTaskPanel.tsx", "panel\n");
+    writeRepoFile(repoDir, "front/src/features/waits/lib/cardWait.ts", "wait\n");
+    git(repoDir, "add", ".");
+    git(repoDir, "commit", "-qm", "add");
+    writeRepoFile(repoDir, "front/src/features/board/lib/cardWait.ts", "wait\n");
+    writeRepoFile(repoDir, "front/src/features/board/components/Legacy.tsx", "legacy changed\n");
+
+    expect(findNewFilesOutsideBoardArea({ repoDir, baseRef: "main" })).toEqual([
+      "front/src/features/board/components/AgentTaskPanel.tsx",
+      "front/src/features/board/lib/cardWait.ts",
+    ]);
+  });
+
+  it("arquivo novo cujo caminho exato está na lista de aprovados do board passa", () => {
+    const repoDir = createRepoWithBase({ "README.md": "base\n" });
+    writeRepoFile(repoDir, "front/src/features/board/components/DeckColumn.tsx", "deck\n");
+    writeRepoFile(repoDir, "front/src/features/board/components/DeckRow.tsx", "row\n");
+
+    const approvedBoardFiles = ["front/src/features/board/components/DeckColumn.tsx"];
+
+    expect(findNewFilesOutsideBoardArea({ repoDir, baseRef: "main", approvedBoardFiles })).toEqual([
+      "front/src/features/board/components/DeckRow.tsx",
+    ]);
+  });
+
+  it("teste novo ao lado de um arquivo que já existe no board passa; teste sem o testado ao lado reprova", () => {
+    const repoDir = createRepoWithBase({ "front/src/features/board/components/ReviewColumn.tsx": "legacy\n" });
+    writeRepoFile(repoDir, "front/src/features/board/components/ReviewColumn.test.tsx", "test\n");
+    writeRepoFile(repoDir, "front/src/features/board/components/ReviewColumn.merge.test.tsx", "test\n");
+    writeRepoFile(repoDir, "front/src/features/board/components/FleetChat.test.tsx", "test\n");
+
+    expect(findNewFilesOutsideBoardArea({ repoDir, baseRef: "main" })).toEqual([
+      "front/src/features/board/components/FleetChat.test.tsx",
+    ]);
+  });
+});
+
+describe("findMisnamedFiles", () => {
+  it.each([
+    "back/src/services/sdk/cardSdk.ts",
+    "back/src/services/sdk/cardSdk.lifecycle.test.ts",
+    "back/src/runtime/sdkDriver.mjs",
+    "front/src/features/sdk/components/SdkChatView.tsx",
+    "front/src/features/sdk/components/SdkChatView.test.tsx",
+    "front/src/features/sdk/components/SdkChatView.stories.tsx",
+    "front/src/test/render.tsx",
+    "front/src/components/ui/dropdown-menu.tsx",
+    "front/src/types/vite-env.d.ts",
+    "front/src/i18n/pt-PT.ts",
+    "front/src/styles/app-theme.css",
+    "scripts/lint-changed.mjs",
+  ])("%s passa", (path) => {
+    const repoDir = createRepoWithBase({ "README.md": "base\n" });
+    writeRepoFile(repoDir, path, "text\n");
+
+    expect(findMisnamedFiles({ repoDir, baseRef: "main" })).toEqual([]);
+  });
+
+  it.each([
+    "back/src/services/sdk/sdk-driver.mjs",
+    "back/src/services/sdk/card_sdk.ts",
+    "back/src/services/sdk/CardSdk.ts",
+    "back/src/services/sdk/cardSdk.Lifecycle.test.ts",
+    "front/src/features/sdk/components/sdk-chat-view.tsx",
+    "front/src/features/sdk/lib/ContextUsage.mjs",
+    "front/src/i18n/en_US.ts",
+    "front/src/features/sdk/components/ui/drop-down.tsx",
+    "front/src/features/sdk/components/SdkChatView.test.ts",
+  ])("%s reprova", (path) => {
+    const repoDir = createRepoWithBase({ "README.md": "base\n" });
+    writeRepoFile(repoDir, path, "text\n");
+    git(repoDir, "add", ".");
+    git(repoDir, "commit", "-qm", "add");
+
+    expect(findMisnamedFiles({ repoDir, baseRef: "main" })).toEqual([path]);
+  });
+
+  it("teste com o nome de um arquivo que já existe ao lado passa, mesmo com o nome dele fora da convenção", () => {
+    const repoDir = createRepoWithBase({
+      "back/src/runtime/sdk-driver.mjs": "legacy\n",
+      "front/src/features/board/components/ProjectSidebar.tsx": "sidebar\n",
+    });
+    writeRepoFile(repoDir, "back/src/runtime/sdk-driver.resume.test.ts", "test\n");
+    writeRepoFile(repoDir, "front/src/features/board/components/ProjectSidebar.test.ts", "test\n");
+
+    expect(findMisnamedFiles({ repoDir, baseRef: "main" })).toEqual([]);
+  });
+
+  it("arquivo antigo fora do padrão que a branch só altera não conta", () => {
+    const repoDir = createRepoWithBase({ "back/src/runtime/sdk-driver.mjs": "legacy\n" });
+    writeRepoFile(repoDir, "back/src/runtime/sdk-driver.mjs", "legacy changed\n");
+
+    expect(findMisnamedFiles({ repoDir, baseRef: "main" })).toEqual([]);
+  });
+});
+
+const GITMOJI_TABLE = [
+  "### Commits",
+  "",
+  "| Emoji | Código | Quando usar |",
+  "|---|---|---|",
+  "| ⚡️ | `:zap:` | Melhora a performance |",
+  "| 🐛 | `:bug:` | Corrige um bug |",
+  "| 🧑‍💻 | `:technologist:` | Melhora a experiência de quem desenvolve |",
+  "| 🦖 | `:t-rex:` | Código que adiciona compatibilidade com versões anteriores |",
+  "",
+].join("\n");
+
+function commitEmpty(repoDir, title) {
+  git(repoDir, "commit", "-q", "--allow-empty", "-m", title);
+}
+
+describe("findCommitsWithoutGitmoji", () => {
+  it("título sem emoji, com emoji fora da tabela ou colado no texto reprova; os da tabela passam, com ou sem o seletor de variação", () => {
+    const repoDir = createRepoWithBase({ "AGENTS.md": GITMOJI_TABLE });
+    [
+      "🐛 fix(sdk): login novo vale",
+      "⚡️ perf(board): menos docker exec",
+      "⚡ perf(board): sem o seletor de variação",
+      "🧑‍💻 chore(claude): hook novo",
+      "🦖 fix(board): board.json antigo continua lido",
+      "fix(sdk): sem emoji",
+      "🎉 feat(board): emoji fora da tabela",
+      "🐛fix(sdk): emoji colado",
+    ].forEach((title) => commitEmpty(repoDir, title));
+
+    expect(findCommitsWithoutGitmoji({ repoDir, baseRef: "main" })).toEqual([
+      "fix(sdk): sem emoji",
+      "🎉 feat(board): emoji fora da tabela",
+      "🐛fix(sdk): emoji colado",
+    ]);
+  });
+
+  it("commit de merge e commit anterior à base não contam", () => {
+    const repoDir = createRepoWithBase({ "AGENTS.md": GITMOJI_TABLE });
+    git(repoDir, "checkout", "-q", "-b", "side", "main");
+    commitEmpty(repoDir, "🐛 fix(sdk): do lado");
+    git(repoDir, "checkout", "-q", "card");
+    git(repoDir, "merge", "-q", "--no-ff", "-m", "Merge branch 'side' into card", "side");
+
+    expect(findCommitsWithoutGitmoji({ repoDir, baseRef: "main" })).toEqual([]);
+  });
+
+  it("emoji que a própria branch acrescenta à tabela ainda não vale: entra por PR antes de ser usado", () => {
+    const repoDir = createRepoWithBase({ "AGENTS.md": GITMOJI_TABLE });
+    writeRepoFile(repoDir, "AGENTS.md", `${GITMOJI_TABLE}| 🎉 | \`:tada:\` | Comemora |\n`);
+    git(repoDir, "commit", "-qam", "🐛 fix(agents): emoji novo na tabela");
+    commitEmpty(repoDir, "🎉 feat(board): usa o emoji novo");
+
+    expect(findCommitsWithoutGitmoji({ repoDir, baseRef: "main" })).toEqual(["🎉 feat(board): usa o emoji novo"]);
+  });
+
+  it("AGENTS.md sem a tabela de emojis falha à vista em vez de passar verde", () => {
+    const repoDir = createRepoWithBase({ "AGENTS.md": "# AGENTS.md\n" });
+    commitEmpty(repoDir, "🐛 fix(sdk): login novo vale");
+
+    expect(() => findCommitsWithoutGitmoji({ repoDir, baseRef: "main" })).toThrow(/tabela/);
   });
 });

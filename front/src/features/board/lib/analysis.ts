@@ -1,5 +1,6 @@
 import type { BadgeTone } from "@/components/ui/badge";
-import type { CardAnalysisResponse } from "@/api/types";
+import type { AnalysisVerdict, CardAnalysisResponse } from "@/api/types";
+import type { CardStateKind } from "@/features/board/lib/board";
 
 export const cardAnalysisKey = (cardId: string) => ["card-analysis", cardId] as const;
 export const cardAnalysisConversationKey = (cardId: string) => ["card-analysis-conversation", cardId] as const;
@@ -17,6 +18,31 @@ export type AnalysisQueryState =
   | { status: "pending" }
   | { status: "error" }
   | { status: "success"; data: CardAnalysisResponse };
+
+export type AnalysisProgress = "working" | "workingAfterReport" | "needsMe" | "stopped";
+
+type CardActivity = "working" | "needsMe" | "stopped" | "filedByPerson";
+
+const CARD_ACTIVITY: Record<CardStateKind, CardActivity> = {
+  working: "working",
+  needs_me: "needsMe",
+  blocked: "stopped",
+  ready: "stopped",
+  your_turn: "stopped",
+  idle: "stopped",
+  hibernated: "stopped",
+  paused: "filedByPerson",
+  done: "filedByPerson",
+};
+
+export function analysisProgress(verdict: AnalysisVerdict, cardState: CardStateKind): AnalysisProgress | null {
+  const activity = CARD_ACTIVITY[cardState];
+  if (activity === "filedByPerson") return null;
+  if (verdict === "pending") return activity;
+  if (activity === "working") return "workingAfterReport";
+  if (activity === "needsMe") return "needsMe";
+  return null;
+}
 
 export function analysisPill(analysisQuery: AnalysisQueryState, opts: { cardWorking: boolean }): AnalysisPill {
   if (analysisQuery.status === "pending") return { key: "common.loading", tone: "muted" };
