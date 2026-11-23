@@ -46,6 +46,42 @@ describe("checkStatusHookReach", () => {
     expect(error).toHaveBeenCalledTimes(1);
   });
 
+  it("one failed probe between two that answered is a blip, not the public-URL error", async () => {
+    const error = vi.spyOn(logger, "error").mockImplementation(() => undefined as never);
+    runScript.mockResolvedValueOnce({ stdout: "401", stderr: "" });
+    await checkStatusHookReach();
+    runScript.mockResolvedValueOnce({ stdout: "000", stderr: "" });
+    expect(await checkStatusHookReach()).toBe(false);
+    runScript.mockResolvedValueOnce({ stdout: "401", stderr: "" });
+    expect(await checkStatusHookReach()).toBe(true);
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it("the public-URL error waits for the second failed probe in a row", async () => {
+    const error = vi.spyOn(logger, "error").mockImplementation(() => undefined as never);
+    runScript.mockResolvedValueOnce({ stdout: "401", stderr: "" });
+    await checkStatusHookReach();
+    runScript.mockResolvedValue({ stdout: "000", stderr: "" });
+    await checkStatusHookReach();
+    expect(error).not.toHaveBeenCalled();
+    await checkStatusHookReach();
+    expect(error).toHaveBeenCalledTimes(1);
+  });
+
+  it("after the error, an answered probe logs the recovery and a new pair of failures alerts again", async () => {
+    const error = vi.spyOn(logger, "error").mockImplementation(() => undefined as never);
+    const info = vi.spyOn(logger, "info").mockImplementation(() => undefined as never);
+    runScript.mockResolvedValueOnce({ stdout: "401", stderr: "" });
+    await checkStatusHookReach();
+    const probeStdouts = ["000", "000", "401", "000", "000"];
+    for (const stdout of probeStdouts) {
+      runScript.mockResolvedValueOnce({ stdout, stderr: "" });
+      await checkStatusHookReach();
+    }
+    expect(error).toHaveBeenCalledTimes(2);
+    expect(info).toHaveBeenCalledWith(expect.objectContaining({ action: "runner.statusHook.reachable" }), expect.any(String));
+  });
+
   it("an unknown pass between two failures does not re-raise the error", async () => {
     const error = vi.spyOn(logger, "error").mockImplementation(() => undefined as never);
     runScript.mockResolvedValueOnce({ stdout: "401", stderr: "" });
