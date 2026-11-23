@@ -17,7 +17,7 @@ export function PlatformFailuresButton() {
         <AlertTriangle className="mr-1 h-4 w-4 text-amber-500" aria-hidden />
         {t("platformFailures.indicator", { n: failures.length, count: failures.length })}
       </Button>
-      <PlatformFailuresDialog failures={failures} isOpen={isFailuresDialogOpen} onOpenChange={setFailuresDialogOpen} />
+      <PlatformFailuresDialog failures={failures} isLoadError={isLoadError} isOpen={isFailuresDialogOpen} onOpenChange={setFailuresDialogOpen} />
     </>
   );
 }

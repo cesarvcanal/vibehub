@@ -1,6 +1,19 @@
 export type PlatformFailureSource = "backend_error" | "slow_turn" | "stalled_turn" | "agent_report" | "screen_error";
 export type PlatformFailureStatus = "open" | "investigating" | "resolved" | "concluded_without_fix" | "dismissed";
 
+export const FAILURE_TRIGGERS = ["system", "person", "unknown"] as const;
+export type FailureTrigger = (typeof FAILURE_TRIGGERS)[number];
+
+export interface FailureNarrative {
+  context: string;
+  whatHappened: string;
+  cause: string;
+  trigger: FailureTrigger;
+  triggerReason: string;
+}
+
+export type FailureNarrativeUnavailableReason = "no_api_key" | "request_failed";
+
 export interface PlatformFailureReport {
   source: PlatformFailureSource;
   component: string;
@@ -31,6 +44,8 @@ export interface PlatformFailure {
   investigationCardId?: string;
   resolvedAt?: number;
   dismissedAt?: number;
+  narrative?: FailureNarrative;
+  narrativeUnavailable?: FailureNarrativeUnavailableReason;
 }
 
 export interface UserStopMark {

@@ -25,6 +25,17 @@ describe("brief do card de investigação", () => {
     expect(buildInvestigationBrief(FAILURE)).not.toContain("O que a pessoa viu");
   });
 
+  it("leva a explicação automática da IA rotulada como não confirmada, quando ela existe", () => {
+    const brief = buildInvestigationBrief({
+      ...FAILURE,
+      narrative: { context: "ctx-x", whatHappened: "aconteceu-x", cause: "causa-x", trigger: "person", triggerReason: "enviou agora" },
+    });
+    for (const expectedPart of ["Explicação automática (IA, não confirmada)", "ctx-x", "aconteceu-x", "causa-x", "Quem provocou: person (enviou agora)"]) {
+      expect(brief).toContain(expectedPart);
+    }
+    expect(buildInvestigationBrief(FAILURE)).not.toContain("Explicação automática");
+  });
+
   it("erro de tela avisa que sintoma e evidência vieram do navegador de um usuário", () => {
     const screenBrief = buildInvestigationBrief({ ...FAILURE, source: "screen_error", component: "front" });
     expect(screenBrief).toContain("vieram do navegador de um usuário");

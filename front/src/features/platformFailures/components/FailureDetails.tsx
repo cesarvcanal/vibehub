@@ -1,60 +1,119 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { Loader2 } from "lucide-react";
+import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { apiErrorMessage } from "@/lib/apiError";
-import { t as translate, useT } from "@/i18n";
-import type { PlatformFailureNotice } from "@/api/types";
-import { PLATFORM_FAILURES_KEY, platformFailuresApi } from "../api";
+import { cn } from "@/lib/utils";
+import { useT } from "@/i18n";
+import type { FailureNarrative, FailureTrigger, PlatformFailureNotice } from "@/api/types";
 import { explainFailure } from "../lib/explainFailure";
+import { formatFailureInstant } from "../lib/formatFailureInstant";
+import { useFailureActions } from "../lib/useFailureActions";
 
-type FailureForDetails = Pick<PlatformFailureNotice, "id" | "source" | "status" | "explanation" | "occurrences" | "details">;
+type FailureForDetails = Pick<
+  PlatformFailureNotice, "id" | "source" | "status" | "explanation" | "occurrences" | "firstSeenAt" | "lastSeenAt" | "details"
+>;
 
-function FailureActions({ failure }: { failure: FailureForDetails }) {
+const TRIGGER_TONES: Record<FailureTrigger, BadgeTone> = { system: "critical", person: "warn", unknown: "muted" };
+const STATUS_TONES: Record<PlatformFailureNotice["status"], BadgeTone> = {
+  open: "muted", investigating: "info", concluded_without_fix: "muted", resolved: "ok", dismissed: "muted",
+};
+
+function BusyLabel({ isBusy, idleLabel, busyLabel }: { isBusy: boolean; idleLabel: string; busyLabel: string }) {
+  if (!isBusy) return <>{idleLabel}</>;
+  return (
+    <>
+      <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden />
+      {busyLabel}
+    </>
+  );
+}
+
+function FailureActions({ failure, actions }: { failure: FailureForDetails; actions: ReturnType<typeof useFailureActions> }) {
   const t = useT();
-  const queryClient = useQueryClient();
-  const refreshFailures = () => queryClient.invalidateQueries({ queryKey: PLATFORM_FAILURES_KEY });
-  const investigate = useMutation({
-    mutationFn: () => platformFailuresApi.investigate(failure.id),
-    onSuccess: (investigation) => {
-      toast.success(translate("platformFailures.investigationStarted", { title: investigation.card.title }));
-      void refreshFailures();
-    },
-    onError: (error) => toast.error(apiErrorMessage(error)),
-  });
-  const dismiss = useMutation({
-    mutationFn: () => platformFailuresApi.dismiss(failure.id),
-    onSuccess: () => void refreshFailures(),
-    onError: (error) => toast.error(apiErrorMessage(error)),
-  });
+  const { investigate, dismiss, isBusy, isLeaving } = actions;
+  const areActionsLocked = isBusy || isLeaving;
   const canDismiss = failure.status === "open" || failure.status === "concluded_without_fix";
   return (
-    <div className="flex gap-2">
-      <Button size="sm" disabled={investigate.isPending} onClick={() => investigate.mutate()}>
-        {t(failure.status === "open" ? "platformFailures.investigate" : "platformFailures.investigateAgain")}
-      </Button>
+    <div className="flex flex-wrap justify-end gap-2 pt-1">
       {canDismiss ? (
-        <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => dismiss.mutate()}>
-          {t("platformFailures.dismiss")}
+        <Button size="sm" variant="outline" disabled={areActionsLocked} onClick={() => dismiss.mutate()}>
+          <BusyLabel isBusy={dismiss.isPending} idleLabel={t("platformFailures.dismiss")} busyLabel={t("platformFailures.dismissing")} />
         </Button>
       ) : null}
+      <Button size="sm" disabled={areActionsLocked} onClick={() => investigate.mutate()}>
+        <BusyLabel
+          isBusy={investigate.isPending}
+          idleLabel={t(failure.status === "open" ? "platformFailures.investigate" : "platformFailures.investigateAgain")}
+          busyLabel={t("platformFailures.openingInvestigation")}
+        />
+      </Button>
     </div>
+  );
+}
+
+function FailureNarrativeSections({ narrative }: { narrative: FailureNarrative }) {
+  const t = useT();
+  return (
+    <>
+      <dl className="grid gap-x-3 gap-y-1 text-sm sm:grid-cols-[max-content_1fr]">
+        <dt className="text-xs font-medium leading-5 text-muted-foreground">{t("platformFailures.narrativeContext")}</dt>
+        <dd>{narrative.context}</dd>
+        <dt className="text-xs font-medium leading-5 text-muted-foreground">{t("platformFailures.narrativeCause")}</dt>
+        <dd>{narrative.cause}</dd>
+      </dl>
+      <p className="text-[11px] text-muted-foreground">{t("platformFailures.narrativeNote")}</p>
+    </>
   );
 }
 
 function FailureStatusLine({ status, isOwner }: { status: PlatformFailureNotice["status"]; isOwner: boolean }) {
   const t = useT();
-  if (status === "investigating") return <p className="text-xs">{t("platformFailures.investigating")}</p>;
-  if (status === "concluded_without_fix") return <p className="text-xs">{t("platformFailures.concludedWithoutFix")}</p>;
-  if (status === "open" && !isOwner) return <p className="text-xs">{t("platformFailures.ownerNotified")}</p>;
+  if (status === "investigating") return <p className="text-xs text-muted-foreground">{t("platformFailures.investigating")}</p>;
+  if (status === "concluded_without_fix") return <p className="text-xs text-muted-foreground">{t("platformFailures.concludedWithoutFix")}</p>;
+  if (status === "open" && !isOwner) return <p className="text-xs text-muted-foreground">{t("platformFailures.ownerNotified")}</p>;
   return null;
 }
 
-export function FailureDetails({ failure, isOwner, affectedCardCount }: { failure: FailureForDetails; isOwner: boolean; affectedCardCount?: number }) {
+export function FailureDetails({ failure, isOwner, affectedCardCount, leavesListOnSuccess = false }: {
+  failure: FailureForDetails;
+  isOwner: boolean;
+  affectedCardCount?: number;
+  leavesListOnSuccess?: boolean;
+}) {
   const t = useT();
+  const actions = useFailureActions(failure.id, { leavesListOnSuccess });
   const { details } = failure;
+  const narrative = details?.narrative;
   return (
-    <li className="space-y-2 rounded-md border border-border p-3">
-      <p className="font-medium">{explainFailure(failure, t)}</p>
+    <li
+      aria-busy={actions.isBusy}
+      className={cn(
+        "space-y-2 rounded-lg border border-border/70 bg-card/40 p-3 transition-[opacity,transform] duration-200 motion-reduce:transition-none",
+        actions.isBusy && "opacity-60",
+        actions.isLeaving && "-translate-x-2 opacity-0",
+      )}
+    >
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        {narrative ? <Badge tone={TRIGGER_TONES[narrative.trigger]}>{t(`platformFailures.trigger.${narrative.trigger}`)}</Badge> : null}
+        {failure.status === "open" ? null : (
+          <Badge tone={STATUS_TONES[failure.status]}>{t(`platformFailures.status.${failure.status}`)}</Badge>
+        )}
+        <span className="text-[11px] text-muted-foreground">
+          {t("platformFailures.when", {
+            first: formatFailureInstant(failure.firstSeenAt),
+            last: formatFailureInstant(failure.lastSeenAt),
+            n: failure.occurrences,
+            count: failure.occurrences,
+          })}
+        </span>
+      </div>
+      <div className="space-y-0.5">
+        <p className="text-sm font-semibold leading-snug">{explainFailure(failure, t)}</p>
+        {narrative ? <p className="text-xs text-muted-foreground">{narrative.triggerReason}</p> : null}
+      </div>
+      {narrative ? <FailureNarrativeSections narrative={narrative} /> : null}
+      {details?.narrativeUnavailable ? (
+        <p className="text-xs text-muted-foreground">{t(`platformFailures.narrativeUnavailable.${details.narrativeUnavailable}`)}</p>
+      ) : null}
       <FailureStatusLine status={failure.status} isOwner={isOwner} />
       {details ? (
         <details className="space-y-2 text-xs">
@@ -70,7 +129,7 @@ export function FailureDetails({ failure, isOwner, affectedCardCount }: { failur
           {details.hypothesis ? <p>{t("platformFailures.hypothesis", { hypothesis: details.hypothesis })}</p> : null}
         </details>
       ) : null}
-      {isOwner ? <FailureActions failure={failure} /> : null}
+      {isOwner ? <FailureActions failure={failure} actions={actions} /> : null}
     </li>
   );
 }

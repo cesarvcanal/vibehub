@@ -1,4 +1,8 @@
-import type { PlatformFailureNotice, PlatformFailureSource, PlatformFailureStatus } from "@/api/types";
+import {
+  FAILURE_NARRATIVE_UNAVAILABLE_REASONS, FAILURE_TRIGGERS,
+  type FailureNarrative, type FailureNarrativeUnavailableReason, type FailureTrigger,
+  type PlatformFailureNotice, type PlatformFailureSource, type PlatformFailureStatus,
+} from "@/api/types";
 
 const SOURCES: readonly PlatformFailureSource[] = ["backend_error", "slow_turn", "stalled_turn", "agent_report", "screen_error"];
 const STATUSES: readonly PlatformFailureStatus[] = ["open", "investigating", "resolved", "concluded_without_fix", "dismissed"];
@@ -13,21 +17,42 @@ function readOptionalText(record: Record<string, unknown>, field: string): strin
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
+function parseFailureNarrative(value: unknown): FailureNarrative | null {
+  if (!isRecord(value)) return null;
+  const context = readOptionalText(value, "context");
+  const whatHappened = readOptionalText(value, "whatHappened");
+  const cause = readOptionalText(value, "cause");
+  const triggerReason = readOptionalText(value, "triggerReason");
+  const { trigger } = value;
+  if (!context || !whatHappened || !cause || !triggerReason || !FAILURE_TRIGGERS.includes(trigger as FailureTrigger)) return null;
+  return { context, whatHappened, cause, trigger: trigger as FailureTrigger, triggerReason };
+}
+
 function parseNoticeDetails(value: unknown): PlatformFailureNotice["details"] | null {
   if (!isRecord(value)) return null;
-  const { symptom, component, evidence } = value;
+  const { symptom, component, evidence, narrativeUnavailable } = value;
   if (typeof symptom !== "string" || typeof component !== "string" || typeof evidence !== "string") return null;
+  const narrative = value.narrative === undefined ? undefined : parseFailureNarrative(value.narrative);
+  if (narrative === null) return null;
+  const isKnownUnavailableReason = FAILURE_NARRATIVE_UNAVAILABLE_REASONS.includes(narrativeUnavailable as FailureNarrativeUnavailableReason);
+  if (narrativeUnavailable !== undefined && !isKnownUnavailableReason) return null;
   const reproduction = readOptionalText(value, "reproduction");
   const hypothesis = readOptionalText(value, "hypothesis");
-  return { symptom, component, evidence, ...(reproduction ? { reproduction } : {}), ...(hypothesis ? { hypothesis } : {}) };
+  return {
+    symptom, component, evidence,
+    ...(reproduction ? { reproduction } : {}),
+    ...(hypothesis ? { hypothesis } : {}),
+    ...(narrative ? { narrative } : {}),
+    ...(isKnownUnavailableReason ? { narrativeUnavailable: narrativeUnavailable as FailureNarrativeUnavailableReason } : {}),
+  };
 }
 
 export function parsePlatformFailureNotice(value: unknown): PlatformFailureNotice | null {
   if (!isRecord(value)) return null;
-  const { id, source, status, occurrences, firstSeenAt } = value;
+  const { id, source, status, occurrences, firstSeenAt, lastSeenAt } = value;
   if (typeof id !== "string" || id === "") return null;
   if (!SOURCES.includes(source as PlatformFailureSource) || !STATUSES.includes(status as PlatformFailureStatus)) return null;
-  if (typeof occurrences !== "number" || typeof firstSeenAt !== "number") return null;
+  if (typeof occurrences !== "number" || typeof firstSeenAt !== "number" || typeof lastSeenAt !== "number") return null;
   const explanation = readOptionalText(value, "explanation");
   const details = value.details === undefined ? undefined : parseNoticeDetails(value.details);
   if (details === null) return null;
@@ -38,6 +63,7 @@ export function parsePlatformFailureNotice(value: unknown): PlatformFailureNotic
     ...(explanation ? { explanation } : {}),
     occurrences,
     firstSeenAt,
+    lastSeenAt,
     ...(details ? { details } : {}),
   };
 }

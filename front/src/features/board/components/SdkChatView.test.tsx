@@ -5995,7 +5995,7 @@ describe("SdkChatView — aviso de falha do vibehub no card", () => {
     ws.deliver({ type: "ready" });
     expect(screen.queryByTestId("platform-failure-notice")).toBeNull();
 
-    const notice = { id: "f1", source: "agent_report", status: "open", explanation: "The usage meter showed the previous Claude account.", occurrences: 1, firstSeenAt: 1 };
+    const notice = { id: "f1", source: "agent_report", status: "open", explanation: "The usage meter showed the previous Claude account.", occurrences: 1, firstSeenAt: 1, lastSeenAt: 1 };
     ws.deliver({ type: "platform_failures", notices: [notice] });
     expect(screen.getByTestId("platform-failure-notice")).toHaveTextContent("The usage meter showed the previous Claude account.");
 

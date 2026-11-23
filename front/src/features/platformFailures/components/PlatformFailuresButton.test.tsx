@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { QueryClient } from "@tanstack/react-query";
 import { apiReject, renderApp } from "@/test/render";
@@ -14,7 +14,22 @@ vi.mock("@/lib/api", () => ({
   post: (...args: unknown[]) => post(...args),
 }));
 const toastCall = vi.fn();
-vi.mock("sonner", () => ({ toast: Object.assign((...args: unknown[]) => toastCall(...args), { success: vi.fn(), error: vi.fn() }) }));
+const toastSuccess = vi.fn();
+const toastError = vi.fn();
+vi.mock("sonner", () => ({
+  toast: Object.assign((...args: unknown[]) => toastCall(...args), {
+    success: (...args: unknown[]) => toastSuccess(...args),
+    error: (...args: unknown[]) => toastError(...args),
+  }),
+}));
+
+function deferred<Value>() {
+  const handlers: { resolve?: (value: Value) => void; reject?: (reason: unknown) => void } = {};
+  const promise = new Promise<Value>((resolve, reject) => Object.assign(handlers, { resolve, reject }));
+  return { promise, resolve: (value: Value) => handlers.resolve!(value), reject: (reason: unknown) => handlers.reject!(reason) };
+}
+
+const INVESTIGATION = { failure: { ...{ id: "f1" }, status: "investigating", investigationCardId: "fix-1" }, card: { id: "fix-1", projectId: "p-vh", title: "Falha da plataforma: x" } };
 
 const FAILURE = {
   id: "f1", signature: "backend_error|services/sdk/manager|logo após um stop do usuário: write after end",
@@ -85,7 +100,7 @@ describe("PlatformFailuresButton", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("um poll que falha com o relato aberto mantém o relato na tela", async () => {
+  it("um poll que falha com o relato aberto mantém o relato na tela e avisa dentro da janela", async () => {
     const { queryClient } = renderApp(<PlatformFailuresButton />);
     await userEvent.click(await screen.findByRole("button", { name: /1/ }));
     await screen.findByText("logo após um stop do usuário: write after end");
@@ -93,6 +108,7 @@ describe("PlatformFailuresButton", () => {
     await refetchFailures(queryClient);
     await waitFor(() => expect(queryClient.getQueryState(PLATFORM_FAILURES_KEY)?.status).toBe("error"));
     expect(screen.getByText("logo após um stop do usuário: write after end")).toBeTruthy();
+    expect(within(screen.getByRole("dialog")).getByRole("alert").textContent).toMatch(/could not load vibehub's failures|não deu pra carregar as falhas do vibehub/i);
   });
 
   it("mostra a contagem e abre o relato, sem anunciar: o aviso é do PlatformFailuresAnnouncer, montado em qualquer tela", async () => {
@@ -141,5 +157,48 @@ describe("PlatformFailuresButton", () => {
     await userEvent.click(await screen.findByRole("button", { name: /1/ }));
     await userEvent.click(await screen.findByRole("button", { name: /não é bug|not a bug/i }));
     await waitFor(() => expect(post).toHaveBeenCalledWith("/platform-failures/f1/dismiss"));
+  });
+
+  it("investigar mostra que está abrindo o card, esmaece o item e trava as ações até o back responder", async () => {
+    const pendingInvestigation = deferred<unknown>();
+    post.mockReturnValueOnce(pendingInvestigation.promise);
+    renderApp(<PlatformFailuresButton />);
+    await userEvent.click(await screen.findByRole("button", { name: /1/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /investigar e corrigir|investigate and fix/i }));
+    const busyButton = await screen.findByRole("button", { name: /abrindo o card da investigação|opening the investigation card/i });
+    expect(busyButton).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: /não é bug|not a bug/i })).toHaveProperty("disabled", true);
+    expect(busyButton.closest("li")?.getAttribute("aria-busy")).toBe("true");
+    setServedFailures([]);
+    pendingInvestigation.resolve(INVESTIGATION);
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith(
+      expect.stringContaining("Falha da plataforma: x"),
+      expect.objectContaining({ action: expect.objectContaining({ label: expect.stringMatching(/abrir card|open card/i) }) }),
+    ));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("'não é bug' mostra o mesmo carregando enquanto o back responde", async () => {
+    const pendingDismissal = deferred<unknown>();
+    post.mockReturnValueOnce(pendingDismissal.promise);
+    renderApp(<PlatformFailuresButton />);
+    await userEvent.click(await screen.findByRole("button", { name: /1/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /não é bug|not a bug/i }));
+    const busyButton = await screen.findByRole("button", { name: /marcando como não é bug|marking as not a bug/i });
+    expect(busyButton.closest("li")?.getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByRole("button", { name: /investigar e corrigir|investigate and fix/i })).toHaveProperty("disabled", true);
+    pendingDismissal.resolve({ failure: { ...FAILURE, status: "dismissed" } });
+    await waitFor(() => expect(busyButton.closest("li")?.getAttribute("aria-busy")).not.toBe("true"));
+  });
+
+  it("investigação que falha devolve o item ao normal e mostra o erro", async () => {
+    post.mockRejectedValueOnce(apiReject(500, "runner down"));
+    renderApp(<PlatformFailuresButton />);
+    await userEvent.click(await screen.findByRole("button", { name: /1/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /investigar e corrigir|investigate and fix/i }));
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    const investigateButton = screen.getByRole("button", { name: /investigar e corrigir|investigate and fix/i });
+    expect(investigateButton).toHaveProperty("disabled", false);
+    expect(investigateButton.closest("li")?.getAttribute("aria-busy")).not.toBe("true");
   });
 });

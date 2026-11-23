@@ -1527,6 +1527,7 @@ export function dispatchClientFrame(
     // The "enviar agora" with a tool running STOPS the turn (see `sendUserNow` in the driver) — and with
     // it whatever question is open.
     if (control.now && session.openAsks.size > 0) noteStop(session, origin, "send_now");
+    else if (control.now && session.activeTurns > 0) noteUserStop(session.cardId, session.label, Date.now());
     if (!writeToDriver(session, control)) return { kind: "refused", cid: control.cid, reason: "driver-gone" };
     countSentTurn(session, control.text);
     noteChatActivity(session, typistUserId);

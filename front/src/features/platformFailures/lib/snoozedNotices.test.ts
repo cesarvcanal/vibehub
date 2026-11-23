@@ -3,7 +3,7 @@ import type { PlatformFailureNotice } from "@/api/types";
 import { buildSnoozeKey, pickVisibleNotices, readSnoozedNoticeKeys, saveSnoozedNoticeKeys } from "./snoozedNotices";
 
 const notice = (id: string, firstSeenAt: number, status: PlatformFailureNotice["status"] = "open"): PlatformFailureNotice =>
-  ({ id, source: "agent_report", status, occurrences: 1, firstSeenAt });
+  ({ id, source: "agent_report", status, occurrences: 1, firstSeenAt, lastSeenAt: firstSeenAt });
 
 beforeEach(() => localStorage.clear());
 

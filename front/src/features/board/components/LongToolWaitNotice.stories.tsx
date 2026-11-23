@@ -11,7 +11,7 @@ const meta = {
       <LongToolWaitNotice wait={{ rowId: "t1", what, elapsedSeconds }} onInterrupt={() => undefined} />
       <CardFailureNotice
         cardId="c1"
-        notices={[{ id: "f1", source: "stalled_turn", status: "open", occurrences: 1, firstSeenAt: 0 }]}
+        notices={[{ id: "f1", source: "stalled_turn", status: "open", occurrences: 1, firstSeenAt: 0, lastSeenAt: 0 }]}
       />
     </div>
   ),
