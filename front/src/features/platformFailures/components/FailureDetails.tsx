@@ -29,16 +29,17 @@ function BusyLabel({ isBusy, idleLabel, busyLabel }: { isBusy: boolean; idleLabe
 
 function FailureActions({ failure, actions }: { failure: FailureForDetails; actions: ReturnType<typeof useFailureActions> }) {
   const t = useT();
-  const { investigate, dismiss, isBusy } = actions;
+  const { investigate, dismiss, isBusy, isLeaving } = actions;
+  const areActionsLocked = isBusy || isLeaving;
   const canDismiss = failure.status === "open" || failure.status === "concluded_without_fix";
   return (
     <div className="flex flex-wrap justify-end gap-2 pt-1">
       {canDismiss ? (
-        <Button size="sm" variant="outline" disabled={isBusy} onClick={() => dismiss.mutate()}>
+        <Button size="sm" variant="outline" disabled={areActionsLocked} onClick={() => dismiss.mutate()}>
           <BusyLabel isBusy={dismiss.isPending} idleLabel={t("platformFailures.dismiss")} busyLabel={t("platformFailures.dismissing")} />
         </Button>
       ) : null}
-      <Button size="sm" disabled={isBusy} onClick={() => investigate.mutate()}>
+      <Button size="sm" disabled={areActionsLocked} onClick={() => investigate.mutate()}>
         <BusyLabel
           isBusy={investigate.isPending}
           idleLabel={t(failure.status === "open" ? "platformFailures.investigate" : "platformFailures.investigateAgain")}

@@ -8,7 +8,7 @@ import { writeLocation } from "@/features/board/lib/board";
 import { Paths } from "@/lib/paths";
 import { PLATFORM_FAILURES_KEY, platformFailuresApi } from "../api";
 
-export const LEAVE_ANIMATION_MS = 200;
+const LEAVE_ANIMATION_MS = 200;
 
 export function useFailureActions(failureId: string, { leavesListOnSuccess }: { leavesListOnSuccess: boolean }) {
   const queryClient = useQueryClient();
