@@ -11,6 +11,7 @@ export function useReviewConversations(
   cardId: string,
   pr: number | undefined,
   runs: ReviewFleetRun[],
+  agentsShown: boolean,
 ): ReadonlyMap<string, RunConversationRead> {
   const queryClient = useQueryClient();
   const runIdsSeenOpen = React.useRef(new Set<string>());
@@ -18,6 +19,7 @@ export function useReviewConversations(
     queries: runs.map((run) => ({
       queryKey: reviewConversationKey(cardId, pr, run.runId),
       queryFn: () => boardApi.readReviewConversation(cardId, run.runId, pr),
+      enabled: agentsShown,
       refetchInterval: run.finished ? false : FEED_POLL_MS,
       staleTime: run.finished ? Infinity : 0,
       retry: false,

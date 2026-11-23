@@ -54,6 +54,7 @@ export interface ReviewPanelViewProps {
   initialTab?: Tab;
   fleet?: ReviewFleetRun[];
   conversations?: ReadonlyMap<string, RunConversationRead>;
+  onAgentsTabShown?: (shown: boolean) => void;
   agentDetail?: RunAgentDetail;
 }
 
@@ -62,7 +63,7 @@ const NO_FLEET: ReviewFleetRun[] = [];
 export function ReviewPanelView(props: ReviewPanelViewProps) {
   const {
     review, working, fleet = NO_FLEET, nameOf, actions, busy, mergeBusy, notice, onMerge, onRetry, onCancel, onDecide, onDecideSuggestions, onClose,
-    initialTab, conversations, agentDetail,
+    initialTab, conversations, onAgentsTabShown, agentDetail,
   } = props;
   const t = useT();
   const stuck = new Set(review.phase === "impasse" ? stuckItems(review.findings).map((f) => f.id) : []);
@@ -73,6 +74,7 @@ export function ReviewPanelView(props: ReviewPanelViewProps) {
   const decisionsHere = actions.decide ? waitingOnPeople : 0;
   const [chosen, setTab] = React.useState<Tab | null>(initialTab ?? null);
   const tab: Tab = chosen ?? (decisionsHere > 0 ? "findings" : "agents");
+  React.useEffect(() => onAgentsTabShown?.(tab === "agents"), [onAgentsTabShown, tab]);
   // The author's AI is on a PR that was ready: what it pushes goes back to the reviewer, so the merge
   // waits for it to finish instead of racing it.
   const authorOnReadyPr = review.phase === "ready" && working.author;

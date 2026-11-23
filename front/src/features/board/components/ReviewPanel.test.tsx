@@ -313,6 +313,21 @@ describe("ReviewPanel — o que mostra", () => {
       expect(screen.getByText("Vou conferir se o runId é validado.")).toBeInTheDocument();
     });
 
+    it("com a aba Achados na tela, as falas não são lidas; ao abrir a aba Agentes, são", async () => {
+      const served = get.getMockImplementation()!;
+      get.mockImplementation(async (url: string) => {
+        if (url === "/cards/c1/review") return { review: current, working, fleet: runningFleet(false) };
+        if (url === conversationUrl) return { conversation: speeches };
+        return served(url);
+      });
+      open("rev", review({ phase: "reviewing", round: 1, findings: [finding({ id: "q1", severity: "question", title: "dúvida" })] }));
+      await loaded();
+      await waitFor(() => expect(screen.getByRole("tab", { name: /Achados/ })).toHaveAttribute("aria-selected", "true"));
+      await screen.findByTestId("fleet-chat-typing");
+      expect(conversationReads()).toBe(0);
+      await userEvent.click(screen.getByRole("tab", { name: /Agentes/ }));
+      expect(await screen.findByText("Vou conferir se o runId é validado.")).toBeInTheDocument();
+    });
   });
 
   it("conversa da rodada que o servidor não consegue ler: o resultado de cada agente continua e um aviso diz que as falas não vieram", async () => {

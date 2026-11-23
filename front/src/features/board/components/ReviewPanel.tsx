@@ -92,7 +92,8 @@ export function ReviewPanel({ cardId, prNumber: pr, onClose }: {
 
   const { query: reviewQuery, review, working, fleet, merging, readSeq, apply } = useLiveReview(cardId, { fast: mergeBusy, pr });
   const fleetRuns = review ? [...fleetsByRound(review, fleet).values()].flat() : [];
-  const conversations = useReviewConversations(cardId, pr, fleetRuns);
+  const [agentsTabShown, setAgentsTabShown] = React.useState(false);
+  const conversations = useReviewConversations(cardId, pr, fleetRuns, agentsTabShown);
 
   // The review carries user ids; the roles read better as names. Same key and shape as the request dialog's.
   const people = useQuery({
@@ -233,6 +234,7 @@ export function ReviewPanel({ cardId, prNumber: pr, onClose }: {
       working={working}
       fleet={fleet}
       conversations={conversations}
+      onAgentsTabShown={setAgentsTabShown}
       agentDetail={(runId, agent) => <ReviewAgentFeed agent={{ ...agent, cardId, pr, runId }} />}
       nameOf={nameOf}
       actions={reviewActions(review, user ? { id: user.id, isOwner } : null)}
