@@ -3,6 +3,7 @@ import { lintChangedLines, findStrayMarkdown, findNewFilesOutsideBoardArea, find
 
 const repoDir = join(import.meta.dirname, "..");
 const baseRef = process.env.VIBEHUB_BASE_REF ?? "origin/main";
+const skipsCommitTitles = process.argv.includes("--skip-commit-titles");
 const lintResults = await lintChangedLines({ repoDir, baseRef });
 const ruleViolations = [
   {
@@ -19,7 +20,7 @@ const ruleViolations = [
   },
   {
     rule: `commit da branch cujo título não abre com um emoji da tabela de Gitmoji seguido de espaço (AGENTS.md §14, "Commits"): <emoji> <tipo>(<area>): <título>. Commit ainda não enviado se corrige com git commit --amend ou rebase; enviado, reescrever é operação de risco (§12) e pede o aval do usuário`,
-    items: findCommitsWithoutGitmoji({ repoDir, baseRef }),
+    items: skipsCommitTitles ? [] : findCommitsWithoutGitmoji({ repoDir, baseRef }),
   },
 ].filter((violation) => violation.items.length > 0);
 

@@ -26,8 +26,8 @@ function createRepoWithLintInstalled() {
   return repoDir;
 }
 
-function runLintChanged(repoDir) {
-  return spawnSync(process.execPath, ["scripts/lint-changed.mjs"], {
+function runLintChanged(repoDir, ...lintArgs) {
+  return spawnSync(process.execPath, ["scripts/lint-changed.mjs", ...lintArgs], {
     cwd: repoDir,
     encoding: "utf8",
     env: { ...process.env, VIBEHUB_BASE_REF: "main" },
@@ -112,5 +112,15 @@ describe("npm run lint:changed", () => {
     expect(run.status).toBe(1);
     expect(run.stdout).toContain("docs: mais documentação");
     expect(run.stdout).toContain("AGENTS.md §14");
+  });
+
+  it("com --skip-commit-titles, o título errado já commitado não barra: o hook do git commit deixa passar o amend que o corrige", () => {
+    const repoDir = createRepoWithLint();
+    writeRepoFile(repoDir, "README.md", "base\nmore docs\n");
+    git(repoDir, "commit", "-qam", "docs: mais documentação");
+
+    const run = runLintChanged(repoDir, "--skip-commit-titles");
+
+    expect({ status: run.status, stderr: run.stderr }).toEqual({ status: 0, stderr: "" });
   });
 });
