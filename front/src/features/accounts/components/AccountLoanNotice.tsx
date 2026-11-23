@@ -24,15 +24,15 @@ export function AccountLoanNotice({ loan, currentAccount, returning, onReturn }:
       ? t("accounts.loan.renewed", { original })
       : t("accounts.loan.borrowed", { current: currentAccount, original, time: formatResetAt(loan.renewsAt, now) });
   const tone = renewed && loan.renewsAt !== undefined
-    ? "border-emerald-500/50 bg-emerald-500/10"
-    : "border-sky-500/40 bg-sky-500/10";
+    ? { box: "border-emerald-500/50 bg-emerald-500/10", icon: "text-emerald-500" }
+    : { box: "border-sky-500/40 bg-sky-500/10", icon: "text-sky-500" };
   return (
     <div
       data-testid="account-loan-notice"
       role="status"
-      className={`mt-1.5 flex items-center gap-2 rounded-md border px-3 py-2 text-xs ${tone}`}
+      className={`mt-1.5 flex items-center gap-2 rounded-md border px-3 py-2 text-xs ${tone.box}`}
     >
-      <ArrowLeftRight className="h-4 w-4 shrink-0 text-sky-500" aria-hidden />
+      <ArrowLeftRight className={`h-4 w-4 shrink-0 ${tone.icon}`} aria-hidden />
       <span className="min-w-0 flex-1">{message}</span>
       {renewed ? (
         <Button type="button" size="sm" variant="outline" className="h-7 shrink-0 px-2 text-xs" disabled={returning} onClick={onReturn}>
