@@ -9,6 +9,10 @@
       "Bash(npm run test:changed)",
       "Bash(npm run lint:changed)",
       "Bash(gh pr checks *)"
+    ],
+    "deny": [
+      "Bash(npm test)",
+      "Bash(npx vitest run)"
     ]
   },
   "hooks": {
