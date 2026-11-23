@@ -668,10 +668,10 @@ function AgentView({
     <>
       <div className="shrink-0 border-b border-border/70 px-5 pt-4">
         <BackButton back={back} label={t("sdk.detail.back")} />
-        <div className="flex min-w-0 items-center gap-2 pr-8">
+        <div className="flex min-w-0 flex-wrap items-center gap-2 pr-8">
           <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <DialogTitle className="min-w-0 truncate text-base font-semibold">{name}</DialogTitle>
-          {dispatchingSkill ? <span data-testid="sdk-agent-skill" className="shrink-0 rounded border border-primary/40 bg-primary/10 px-1.5 py-px font-mono text-[11px] text-foreground">{dispatchingSkill}</span> : null}
+          <DialogTitle className="min-w-0 break-words text-base font-semibold">{name}</DialogTitle>
+          {dispatchingSkill ? <span data-testid="sdk-agent-skill" className="min-w-0 break-all rounded border border-primary/40 bg-primary/10 px-1.5 py-px font-mono text-[11px] text-foreground">{dispatchingSkill}</span> : null}
           {agentType ? <span data-testid="sdk-agent-type" className="shrink-0 rounded border border-border/70 bg-muted/50 px-1.5 py-px font-mono text-[11px] text-muted-foreground">{agentType}</span> : null}
           <StatusPill status={status} />
         </div>
