@@ -65,7 +65,7 @@ export function listPortsScript(container: string): string {
     "while read -r fdDir socketLink; do",
     '  pid=${fdDir#/proc/}; pid=${pid%/fd}; inode=${socketLink#socket:[}; inode=${inode%]}',
     '  comm=; read -r comm 2>/dev/null < "/proc/$pid/comm"',
-    '  echo "$inode $pid $comm"',
+    "  printf '%s %s %s\\n' \"$inode\" \"$pid\" \"$comm\"",
     "done",
     "VIBEHUB_PORTS",
   ].join("\n");
