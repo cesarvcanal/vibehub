@@ -251,7 +251,7 @@ export const FalasDosAgentesChegando: Story = {
     initialTab: "agents",
     working: { author: false, reviewer: true },
     fleet: [SPEAKING_FLEET],
-    conversations: new Map([["wf_fala1", { kind: "read", conversation: SPEAKING_CONVERSATION }]]),
+    conversations: new Map([["wf_fala1", { conversation: SPEAKING_CONVERSATION, lastReadFailed: false }]]),
   },
 };
 
@@ -261,7 +261,7 @@ export const FalasDosAgentesSemLeitura: Story = {
     initialTab: "agents",
     working: { author: false, reviewer: true },
     fleet: [SPEAKING_FLEET],
-    conversations: new Map([["wf_fala1", { kind: "failed" }]]),
+    conversations: new Map([["wf_fala1", { conversation: null, lastReadFailed: true }]]),
   },
 };
 

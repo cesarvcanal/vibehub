@@ -9,7 +9,7 @@ import { ReviewFleet, type RunAgentDetail } from "@/features/board/components/Re
 import { formatResetAt } from "@/features/board/lib/planUsage";
 import { FINDING_SEVERITY_TONE, FINDING_STATUS_TONE, conversationRows, reviewTurn, type ConversationRow, type ReviewTurn } from "@/features/board/lib/review";
 import { fleetsByRound } from "@/features/board/lib/reviewFleet";
-import type { RunConversationRead } from "@/features/board/lib/useReviewConversations";
+import type { RunConversationRead } from "@/features/board/types/reviewConversation";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 

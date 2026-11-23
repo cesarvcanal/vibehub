@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Finding, FindingDecision, FindingSeverity, Review, ReviewFleetRun, ReviewPhase, ReviewWorking } from "@/api/types";
 import type { RunAgentDetail } from "@/features/board/components/ReviewFleet";
-import type { RunConversationRead } from "@/features/board/lib/useReviewConversations";
+import type { RunConversationRead } from "@/features/board/types/reviewConversation";
 import { ENTER, ReviewConversation, SAID_CLAMP_CHARS } from "@/features/board/components/ReviewConversation";
 import { cardHref } from "@/features/board/lib/board";
 import {

@@ -249,6 +249,72 @@ describe("ReviewPanel — o que mostra", () => {
     expect(screen.queryByText(/não deu para ler as falas/i)).toBeNull();
   });
 
+  describe("falas da rodada ao longo do tempo", () => {
+    const runningFleet = (finished: boolean) => [{
+      runId: "wf_abc12", name: "vibehub-pr-analysis", phases: ["Revisão"], total: 1, done: finished ? 1 : 0, at: 5, finished,
+      agents: [{
+        id: "a01f", label: "revisão: security", phase: "Revisão", model: "claude-opus-5-5", modelLabel: "Opus 5.5",
+        ...(finished ? { status: "done" as const, endedAt: 9, result: '{"findings":[]}' } : { status: "running" as const }),
+      }],
+    }];
+    const speeches = {
+      runId: "wf_abc12", finished: false, agents: [],
+      items: [{ agentId: "a01f", at: 2, kind: "text", text: "Vou conferir se o runId é validado." }],
+    };
+    const conversationUrl = "/cards/c1/review/conversation/wf_abc12";
+    const conversationReads = () => get.mock.calls.filter(([url]) => url === conversationUrl).length;
+
+    it("quando a rodada termina, as falas já lidas continuam na tela enquanto a última leitura não volta", async () => {
+      const served = get.getMockImplementation()!;
+      const state = { finished: false };
+      get.mockImplementation(async (url: string) => {
+        if (url === "/cards/c1/review") return { review: current, working, fleet: runningFleet(state.finished) };
+        if (url === conversationUrl) return state.finished ? await new Promise(() => undefined) : { conversation: speeches };
+        return served(url);
+      });
+      open("aut", review({ phase: "reviewing", round: 1 }));
+      await loaded();
+      expect(await screen.findByText("Vou conferir se o runId é validado.")).toBeInTheDocument();
+      state.finished = true;
+      await screen.findByText(/Agentes concluídos/);
+      expect(screen.getByText("Vou conferir se o runId é validado.")).toBeInTheDocument();
+    });
+
+    it("quando a rodada termina, as falas são lidas mais uma vez e a última fala aparece", async () => {
+      const served = get.getMockImplementation()!;
+      const state = { finished: false };
+      const lastSpeech = { agentId: "a01f", at: 8, kind: "text", text: "Validado: passa por assertWorkflowId." };
+      get.mockImplementation(async (url: string) => {
+        if (url === "/cards/c1/review") return { review: current, working, fleet: runningFleet(state.finished) };
+        if (url === conversationUrl) return { conversation: state.finished ? { ...speeches, items: [...speeches.items, lastSpeech] } : speeches };
+        return served(url);
+      });
+      open("aut", review({ phase: "reviewing", round: 1 }));
+      await loaded();
+      expect(await screen.findByText("Vou conferir se o runId é validado.")).toBeInTheDocument();
+      state.finished = true;
+      expect(await screen.findByText("Validado: passa por assertWorkflowId.", {}, { timeout: 10_000 })).toBeInTheDocument();
+    });
+
+    it("uma leitura que falha no meio da rodada mantém as falas já lidas, com o aviso de que a última não veio", async () => {
+      const served = get.getMockImplementation()!;
+      get.mockImplementation(async (url: string) => {
+        if (url === "/cards/c1/review") return { review: current, working, fleet: runningFleet(false) };
+        if (url === conversationUrl) {
+          if (conversationReads() > 1) throw new Error("runner parado");
+          return { conversation: speeches };
+        }
+        return served(url);
+      });
+      open("aut", review({ phase: "reviewing", round: 1 }));
+      await loaded();
+      expect(await screen.findByText("Vou conferir se o runId é validado.")).toBeInTheDocument();
+      expect(await screen.findByText(/não deu para ler as falas/i, {}, { timeout: 10_000 })).toBeInTheDocument();
+      expect(screen.getByText("Vou conferir se o runId é validado.")).toBeInTheDocument();
+    });
+
+  });
+
   it("conversa da rodada que o servidor não consegue ler: o resultado de cada agente continua e um aviso diz que as falas não vieram", async () => {
     const served = get.getMockImplementation()!;
     const fleet = [{
