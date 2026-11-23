@@ -1,7 +1,7 @@
 import { describe, it, expect, onTestFinished } from "vitest";
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer, type Server } from "node:net";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -122,7 +122,7 @@ const SCAN_TEST_TIMEOUT_MS = 120_000;
 const SCAN_COMMANDS = ["cat", "find", "readlink", "ls", "awk", "sed", "grep", "head"];
 
 async function listenOnLoopback(): Promise<number> {
-  const server: Server = createServer();
+  const server = createServer();
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   onTestFinished(() => new Promise<void>((done) => server.close(() => done())));
   const address = server.address();
@@ -134,18 +134,18 @@ async function pathCountingScanCommands(basePath: string): Promise<{ path: strin
   const bin = await mkdtemp(join(tmpdir(), "vibehub-scan-count-"));
   onTestFinished(() => rm(bin, { recursive: true, force: true }));
   const log = join(bin, "launches.log");
-  const realPath = process.env.PATH ?? "";
+  await writeFile(log, "");
   await Promise.all(
     SCAN_COMMANDS.map((command) =>
       writeFile(
         join(bin, command),
-        `#!/bin/sh\necho ${command} >> '${log}'\nPATH='${realPath}' exec ${command} "$@"\n`,
+        `#!/bin/sh\necho ${command} >> '${log}'\nPATH='${basePath}' exec ${command} "$@"\n`,
         { mode: 0o755 },
       ),
     ),
   );
   const launches = async (): Promise<number> => {
-    const lines = await readFile(log, "utf8").catch(() => "");
+    const lines = await readFile(log, "utf8");
     return lines.split("\n").filter(Boolean).length;
   };
   return { path: `${bin}:${basePath}`, launches };
