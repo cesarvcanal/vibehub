@@ -12,7 +12,7 @@ import { EXTERNAL_INSTRUCTIONS, INSTRUCTIONS, createMcpServer } from "./server.j
  * authorization gate, don't type into a human-active card, report your state).
  */
 
-// external: Claude Code 2.1.330 cuts an MCP server's instructions at 4096 characters ("… [truncated]")
+// external: Claude Code 2.1.330 cuts an MCP server's instructions at 4096 characters ("… [truncated]"), seen in a card session on 2026-11-23
 const MCP_INSTRUCTIONS_DELIVERED_CHARS = 4096;
 
 const personaFile = join(dirname(fileURLToPath(import.meta.url)), "..", "services", "brain", "personas", "maestro.md");
@@ -95,6 +95,16 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(deliveredPersona).toContain("ALWAYS an AskUserQuestion");
     expect(deliveredPersona).toContain("(recomendado)");
     expect(deliveredPersona).toContain("authorized: true");
+  });
+
+  it("a vibehub_deliver do card diz como perguntar o merge que não foi autorizado: AskUserQuestion com opções", () => {
+    const server = createMcpServer("test") as unknown as {
+      _registeredTools?: Record<string, { description?: string }>;
+    };
+    const deliverDescription = server._registeredTools?.["vibehub_deliver"]?.description ?? "";
+    expect(deliverDescription).toMatch(/'unauthorized'[^)]*AskUserQuestion/);
+    expect(deliverDescription).toContain("'Mergear em <branch> (recomendado)' and 'Não mergear agora'");
+    expect(deliverDescription).toContain("without recommending the merge");
   });
 
   it("planejar começa no brainstorming; dúvida ou contradição viram pergunta — nunca decisão por conta própria", () => {
