@@ -55,7 +55,7 @@ export function buildInvestigationBrief(failure: PlatformFailure): string {
     "1. Confirme se é bug, reproduzindo com um teste que falha. Se NÃO for (comportamento esperado, erro do usuário, problema do provedor), explique o porquê aqui no chat, avise o dono com vibehub_notify e conclua o card sem PR.",
     "2. Sendo bug, corrija em TDD seguindo o AGENTS.md, inclusive o fechamento com simplificação e code review independentes.",
     "3. Abra o PR com vibehub_deliver sem `authorized`.",
-    "4. Avise o dono quando o PR estiver pronto, com a review apta e o CI verde, e espere a ordem dele. Nunca mergeie por conta própria. Com a ordem, use vibehub_deliver com `authorized: true` e `concludeWhenMerged: true`.",
+    "4. Avise o dono quando o PR estiver pronto, com a review apta e o CI verde, e espere a ordem dele. Nunca mergeie por conta própria. Com a ordem, use vibehub_deliver com `authorized: true` e from = o id deste card e, mergeado, conclua este card com vibehub_move_cards (column `done`, from = o id deste card).",
     "5. O repositório é público: nada além do comportamento do vibehub entra em commit, PR ou comentário (nem nomes, dados ou trechos de outros repositórios).",
   ].join("\n");
 }

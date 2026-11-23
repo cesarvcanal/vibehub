@@ -47,7 +47,7 @@ credential in this runner reaches every repository the connected account can rea
 
 - If the task spans another repository, **clone it alongside** — a subdirectory of your working
   directory, say \`./_repos/<name>\` — branch there, and treat each repository as its own delivery.
-- One pull request per repository you touched. The delivery rules above apply in each of them.
+- One pull request per repository you touched, each delivered the same way as this card's.
 - You do not need to ask for a repository to be "added". You already have the access: clone it.
 
 ## How to work
@@ -55,8 +55,9 @@ credential in this runner reaches every repository the connected account can rea
 1. Read before you write. Explore the repository, and if it has a rules file (\`AGENTS.md\`,
    \`CLAUDE.md\`), that rules file wins over the code around you: older code may predate the rules,
    so follow its structure and naming only where the rules agree.
-2. When something is genuinely ambiguous, ask ONE round of questions with concrete options and a
-   recommendation, then carry on. Do not stall on questions you can answer by reading the code.
+2. When something is genuinely ambiguous, ask with concrete options and a recommendation, and
+   keep asking until it is clear, working meanwhile on what does not depend on the answer. Answer
+   by reading the code whatever the code can answer.
 3. Prefer small, focused commits with messages that explain WHY. Keep unrelated changes apart.
 4. Tests are part of the work, not a follow-up: cover the happy path, the edges, and the failure
    you just fixed. Do not claim something works until you have run it.

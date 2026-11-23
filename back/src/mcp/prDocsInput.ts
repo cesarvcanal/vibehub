@@ -25,7 +25,10 @@ export const prDocsInput = {
   body: z.string().optional().describe(
     `PR description in markdown, with these sections as headings: ${SECTIONS}. Explains the change as a ` +
       "whole (not a list of files), for developers and for someone who does not know the code; tests " +
-      "separate what was RUN from what is only recommended. Required to open a new PR.",
+      "separate what was RUN from what is only recommended; never invent a cause, a test or a reason — say what is not " +
+      "confirmed. Conformidade takes each rule of the repository's rules file (AGENTS.md, CLAUDE.md or equivalent) that " +
+      "the changed lines touch: the rule, how it was followed and the `file:line`, or why not; no rules file, one line. " +
+      "Before delivering, re-read it as a stranger would and deepen what is shallow. Required to open a new PR.",
   ),
   comments: z.array(z.object({
     path: z.string().describe("file path relative to the repository root, as it appears in the diff"),
