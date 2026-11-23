@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { basename, extname, join, relative } from "node:path";
 import { parseAddedLines } from "./addedLines.mjs";
 
@@ -22,6 +23,8 @@ const COMPONENT_EXTENSIONS = ["tsx", "jsx"];
 const CODE_FILE_NAME = /^(?<stem>[A-Za-z][A-Za-z0-9]*)(?<suffixes>(?:\.[a-z][A-Za-z0-9]*)*)\.(?<extension>[a-z]+)$/;
 const SHADCN_UI_DIR = "front/src/components/ui/";
 const LOCALE_FILE = /^front\/src\/i18n\/[a-z]{2}(?:-[A-Z]{2})?\.ts$/;
+const GITMOJI_TABLE_ROW = /^\| (?<emoji>\S+) \| `:[a-z0-9_-]+:` \|/gm;
+const VARIATION_SELECTOR = "\u{FE0F}";
 
 function git(repoDir, ...args) {
   return execFileSync("git", ["-c", "core.quotePath=false", ...args], { cwd: repoDir, encoding: "utf8", maxBuffer: Infinity });
@@ -95,6 +98,25 @@ export function findMisnamedFiles({ repoDir, baseRef }) {
     CODE_EXTENSIONS.includes(extname(path).slice(1)),
   );
   return addedCodeFiles.filter((path) => !isNameExempt(path) && !followsNamingConvention(path));
+}
+
+function readGitmojis(repoDir) {
+  const agentsRules = readFileSync(join(repoDir, "AGENTS.md"), "utf8");
+  const gitmojis = [...agentsRules.matchAll(GITMOJI_TABLE_ROW)].map((row) => withoutVariationSelector(row.groups.emoji));
+  if (gitmojis.length === 0) throw new Error("lint: a tabela de emojis dos commits (AGENTS.md §14) não foi encontrada no AGENTS.md");
+  return gitmojis;
+}
+
+function withoutVariationSelector(text) {
+  return text.replaceAll(VARIATION_SELECTOR, "");
+}
+
+export function findCommitsWithoutGitmoji({ repoDir, baseRef }) {
+  const base = git(repoDir, "merge-base", "HEAD", baseRef).trim();
+  const commitTitles = git(repoDir, "log", "-z", "--no-merges", "--reverse", "--format=%s", `${base}..HEAD`).split("\0").filter(Boolean);
+  if (commitTitles.length === 0) return [];
+  const gitmojis = readGitmojis(repoDir);
+  return commitTitles.filter((title) => !gitmojis.some((gitmoji) => withoutVariationSelector(title).startsWith(`${gitmoji} `)));
 }
 
 export function findStrayMarkdown({ repoDir, baseRef }) {

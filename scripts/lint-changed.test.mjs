@@ -4,18 +4,19 @@ import { readFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { git, writeRepoFile, createRepoWithBase } from "./lint/testRepo.mjs";
 
-const LINT_FILES = [
+const LINT_INPUT_FILES = [
   "scripts/lint-changed.mjs",
   "scripts/lint/addedLines.mjs",
   "scripts/lint/lintChanged.mjs",
   "scripts/lint/noUnmarkedComment.mjs",
   "eslint.config.js",
+  "AGENTS.md",
 ];
 
 const REPO_ROOT = join(import.meta.dirname, "..");
 
 function createRepoWithLint() {
-  const lintFiles = Object.fromEntries(LINT_FILES.map((path) => [path, readFileSync(join(REPO_ROOT, path), "utf8")]));
+  const lintFiles = Object.fromEntries(LINT_INPUT_FILES.map((path) => [path, readFileSync(join(REPO_ROOT, path), "utf8")]));
   return createRepoWithBase({ ...lintFiles, "README.md": "base\n" });
 }
 
@@ -37,7 +38,7 @@ describe("npm run lint:changed", () => {
   it("branch só de documentação passa sem node_modules na raiz", () => {
     const repoDir = createRepoWithLint();
     writeRepoFile(repoDir, "README.md", "base\nmore docs\n");
-    git(repoDir, "commit", "-qam", "docs");
+    git(repoDir, "commit", "-qam", "📝 docs(readme): mais documentação");
 
     const run = runLintChanged(repoDir);
 
@@ -69,7 +70,7 @@ describe("npm run lint:changed", () => {
     const repoDir = createRepoWithLint();
     writeRepoFile(repoDir, "NOTES.md", "notes\n");
     git(repoDir, "add", "NOTES.md");
-    git(repoDir, "commit", "-qm", "notes");
+    git(repoDir, "commit", "-qm", "📝 docs: notas");
 
     const run = runLintChanged(repoDir);
 
@@ -99,5 +100,17 @@ describe("npm run lint:changed", () => {
     expect(run.status).toBe(1);
     expect(run.stdout).toContain("back/src/services/sdk/sdk-driver.ts");
     expect(run.stdout).toContain("AGENTS.md §2");
+  });
+
+  it("commit da branch sem emoji da tabela sai 1, com o título e a regra na saída", () => {
+    const repoDir = createRepoWithLint();
+    writeRepoFile(repoDir, "README.md", "base\nmore docs\n");
+    git(repoDir, "commit", "-qam", "docs: mais documentação");
+
+    const run = runLintChanged(repoDir);
+
+    expect(run.status).toBe(1);
+    expect(run.stdout).toContain("docs: mais documentação");
+    expect(run.stdout).toContain("AGENTS.md §14");
   });
 });

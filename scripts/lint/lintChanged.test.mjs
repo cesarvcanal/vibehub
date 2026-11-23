@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { relative } from "node:path";
-import { lintChangedLines, findStrayMarkdown, findNewFilesOutsideBoardArea, findMisnamedFiles } from "./lintChanged.mjs";
+import { lintChangedLines, findStrayMarkdown, findNewFilesOutsideBoardArea, findMisnamedFiles, findCommitsWithoutGitmoji } from "./lintChanged.mjs";
 import { git, writeRepoFile, createRepoWithBase } from "./testRepo.mjs";
 
 const LEGACY = "let legacy = 1;\nlegacy += 1;\nexport { legacy };\n";
@@ -235,5 +235,60 @@ describe("findMisnamedFiles", () => {
     writeRepoFile(repoDir, "back/src/runtime/sdk-driver.mjs", "legacy changed\n");
 
     expect(findMisnamedFiles({ repoDir, baseRef: "main" })).toEqual([]);
+  });
+});
+
+const GITMOJI_TABLE = [
+  "### Commits",
+  "",
+  "| Emoji | Código | Quando usar |",
+  "|---|---|---|",
+  "| ⚡️ | `:zap:` | Melhora a performance |",
+  "| 🐛 | `:bug:` | Corrige um bug |",
+  "| 🧑‍💻 | `:technologist:` | Melhora a experiência de quem desenvolve |",
+  "| 🦖 | `:t-rex:` | Código que adiciona compatibilidade com versões anteriores |",
+  "",
+].join("\n");
+
+function commitEmpty(repoDir, title) {
+  git(repoDir, "commit", "-q", "--allow-empty", "-m", title);
+}
+
+describe("findCommitsWithoutGitmoji", () => {
+  it("título sem emoji, com emoji fora da tabela ou colado no texto reprova; os da tabela passam, com ou sem o seletor de variação", () => {
+    const repoDir = createRepoWithBase({ "AGENTS.md": GITMOJI_TABLE });
+    [
+      "🐛 fix(sdk): login novo vale",
+      "⚡️ perf(board): menos docker exec",
+      "⚡ perf(board): sem o seletor de variação",
+      "🧑‍💻 chore(claude): hook novo",
+      "🦖 fix(board): board.json antigo continua lido",
+      "fix(sdk): sem emoji",
+      "🎉 feat(board): emoji fora da tabela",
+      "🐛fix(sdk): emoji colado",
+    ].forEach((title) => commitEmpty(repoDir, title));
+
+    expect(findCommitsWithoutGitmoji({ repoDir, baseRef: "main" })).toEqual([
+      "fix(sdk): sem emoji",
+      "🎉 feat(board): emoji fora da tabela",
+      "🐛fix(sdk): emoji colado",
+    ]);
+  });
+
+  it("commit de merge e commit anterior à base não contam", () => {
+    const repoDir = createRepoWithBase({ "AGENTS.md": GITMOJI_TABLE });
+    git(repoDir, "checkout", "-q", "-b", "side", "main");
+    commitEmpty(repoDir, "🐛 fix(sdk): do lado");
+    git(repoDir, "checkout", "-q", "card");
+    git(repoDir, "merge", "-q", "--no-ff", "-m", "Merge branch 'side' into card", "side");
+
+    expect(findCommitsWithoutGitmoji({ repoDir, baseRef: "main" })).toEqual([]);
+  });
+
+  it("AGENTS.md sem a tabela de emojis falha à vista em vez de passar verde", () => {
+    const repoDir = createRepoWithBase({ "AGENTS.md": "# AGENTS.md\n" });
+    commitEmpty(repoDir, "🐛 fix(sdk): login novo vale");
+
+    expect(() => findCommitsWithoutGitmoji({ repoDir, baseRef: "main" })).toThrow(/tabela/);
   });
 });

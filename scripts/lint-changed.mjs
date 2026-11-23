@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { lintChangedLines, findStrayMarkdown, findNewFilesOutsideBoardArea, findMisnamedFiles } from "./lint/lintChanged.mjs";
+import { lintChangedLines, findStrayMarkdown, findNewFilesOutsideBoardArea, findMisnamedFiles, findCommitsWithoutGitmoji } from "./lint/lintChanged.mjs";
 
 const repoDir = join(import.meta.dirname, "..");
 const baseRef = process.env.VIBEHUB_BASE_REF ?? "origin/main";
@@ -16,6 +16,10 @@ const ruleViolations = [
   {
     rule: `arquivo novo com nome fora da convenção (AGENTS.md §2, "Idioma e nomenclatura"): camelCase.ts, ou PascalCase.tsx quando exporta componente; o teste é o nome do testado mais .test, com sufixo de cenário opcional (cardSdk.lifecycle.test.ts). Ficam de fora front/src/components/ui/ (kebab-case do shadcn), *.d.ts e os idiomas de front/src/i18n/ (pt-BR.ts)`,
     items: findMisnamedFiles({ repoDir, baseRef }),
+  },
+  {
+    rule: `commit da branch cujo título não abre com um emoji da tabela de Gitmoji seguido de espaço (AGENTS.md §14, "Commits"): <emoji> <tipo>(<area>): <título>. Commit ainda não enviado se corrige com git commit --amend ou rebase; enviado, reescrever é operação de risco (§12) e pede o aval do usuário`,
+    items: findCommitsWithoutGitmoji({ repoDir, baseRef }),
   },
 ].filter((violation) => violation.items.length > 0);
 
