@@ -16,13 +16,15 @@ the MCP servers you registered, the accounts whose tokens you planted. The runne
 with no host mounts beyond its own `/root` and `/work`.
 
 **What the agent cannot read.** The vault and the master key: they stay in vibehub's process. What
-a card needs to work is written into the runner, over stdin and at mode 600:
+a card needs to work lives in files inside the runner at mode 600; the ones vibehub writes travel
+over stdin:
 
 - **GitHub tokens**, one file per card at `/root/.vibehub/gh/<card>.token`. The card's git
   credential helper and the `gh` wrapper read it on every call, so a change of author reaches
   processes already running. No token is written into `/work/<repo>/.git/config`.
 - **Claude account tokens**, per profile under `/root/.claude-profiles/<account>/`: the long-lived
-  token in `.oauth-token`, or the `.credentials.json` that a `/login` in the card creates.
+  token in `.oauth-token` (written by vibehub), or the `.credentials.json` that Claude Code itself
+  writes when someone runs `/login` in a card.
 - The **runner service token** at `/root/.vibehub-token`, written from inside the container by the
   setup (`docker exec`) into `/root`, which is bind-mounted from the host so it survives a container
   recreate. The status hook reads it at call time, so it is never baked into `settings.json`.

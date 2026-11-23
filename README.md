@@ -112,8 +112,9 @@ the token per command, as an environment-scoped http header; it is never written
 `.git/config`. The agent's own `git` and `gh` act as the person who gave the card its latest order
 (or through the project's GitHub connection): that token is written to a per-card file inside the
 runner (mode 600), read on every call by a credential helper scoped to `github.com` and by a `gh`
-wrapper. The agent runs as the same user, so it can read that file: a card's token is a token you
-hand to its agent.
+wrapper. Every card runs as `root` in the same runner, so any card can read that file — its own
+token and every other card's: a token you hand to one card is a token every agent on the install
+can read. See [SECURITY.md](SECURITY.md).
 
 ## Configuration
 
