@@ -27,7 +27,7 @@
 
 - **Identificadores em inglês** (variáveis, funções, tipos, componentes, campos persistidos), sem português misturado. O texto de `describe`/`it` segue o idioma do arquivo de teste (a maioria, pt-BR).
 - **Texto de interface sempre pelo i18n** (`front/src/i18n/en.ts` e `pt-BR.ts`): chave nova entra nos dois; o JSX não leva string literal visível.
-- **Commits, PRs e documentação de processo (`docs/`, este arquivo) em pt-BR.**
+- **Documentação pública em inglês, processo em pt-BR.** O repositório é público: `README.md`, `SECURITY.md` e `docs/` se escrevem em inglês, para quem instala ou contribui sem ler português. Este arquivo, o `.claude/CLAUDE.md`, commits e PRs, que conduzem o trabalho do time, ficam em pt-BR.
 - Sintaxe e APIs de terceiros (SDK do Claude, Fastify, React, Docker) ficam como a especificação deles define. Contrato persistido (`board.json` e afins), rota HTTP, ferramenta MCP e variável de ambiente só se renomeiam como mudança de contrato (§6), nunca por estética.
 - Função: **verbo preciso + objeto** (`assertMovableColumn`, `normalizeCardIds`), não `process`, `handle`, `manage`, `resolve` havendo ação mais precisa. Variável diz conteúdo e função, sem `data`, `tmp`, `result`, `x` ou abreviação opaca. **Todo nome se lê sem abrir a implementação**, inclusive parâmetro de callback e variável de laço (`row`, não `r`); uma coisa, um nome no mesmo escopo.
 - Referência nomeia a entidade (`cardId`, `accountSlug`, não `id` solto quando há mais de um); variantes deixam claras as duas diferenças (`originalValue` e `convertedValue`, não `value` e `convertedValue`).
