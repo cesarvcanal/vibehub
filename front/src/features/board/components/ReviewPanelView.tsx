@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import type { Finding, FindingDecision, FindingSeverity, Review, ReviewFleetRun, ReviewPhase, ReviewWorking } from "@/api/types";
 import type { RunAgentDetail } from "@/features/board/components/ReviewFleet";
 import type { RunConversationRead } from "@/features/board/types/reviewConversation";
-import { ENTER, ReviewConversation, SAID_CLAMP_CHARS } from "@/features/board/components/ReviewConversation";
+import { ENTER, ReviewConversation } from "@/features/board/components/ReviewConversation";
+import { FOLDED_TEXT_MIN_CHARS, FoldedTextToggle } from "@/components/FoldedTextToggle";
 import { cardHref } from "@/features/board/lib/board";
 import {
   FINDING_SEVERITY_TONE, FINDING_STATUS_TONE, IMPASSE_ROUNDS, REVIEW_MAX_ROUNDS, autonomySummary, awaitingDecision, findingIsOpen,
@@ -706,23 +707,13 @@ function FindingCard({
  * conversation, so eight suggestions do not turn the list into a wall.
  */
 function FindingText({ label, children }: { label: string; children: string }) {
-  const t = useT();
   const [open, setOpen] = React.useState(false);
-  const long = children.length > SAID_CLAMP_CHARS;
+  const long = children.length > FOLDED_TEXT_MIN_CHARS;
   return (
     <div className="space-y-0.5 text-xs">
       <p className="text-[11px] font-semibold text-muted-foreground">{label}</p>
       <p className={cn("whitespace-pre-line break-words leading-relaxed text-foreground/90", long && !open && "line-clamp-4")}>{children}</p>
-      {long ? (
-        <button
-          type="button"
-          aria-expanded={open}
-          onClick={() => setOpen((v) => !v)}
-          className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-        >
-          {open ? t("review.conversation.less") : t("review.conversation.more")}
-        </button>
-      ) : null}
+      {long ? <FoldedTextToggle isExpanded={open} onToggle={() => setOpen((wasOpen) => !wasOpen)} /> : null}
     </div>
   );
 }
