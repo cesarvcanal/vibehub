@@ -379,6 +379,12 @@ describe("aba Conversa: a frota conversando como um chat em grupo", () => {
     expect(get).toHaveBeenCalledWith("/cards/c1/analysis/conversation");
   });
 
+  it("a aba Conversa vem antes da aba Relatório", async () => {
+    renderPanel(readModel(doneReport(), "not_apt"), undefined, () => fleetTalk);
+    await screen.findByRole("tab", { name: "Relatório" });
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Conversa", "Relatório"]);
+  });
+
   it("cada fala é um balão com quem falou e o modelo; ferramenta não vira balão e quem ainda trabalha está digitando, no grupo da própria fala", async () => {
     renderPanel(readModel(doneReport(), "not_apt"), undefined, () => fleetTalk);
     await openConversation();
