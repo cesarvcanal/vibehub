@@ -261,13 +261,28 @@ describe("runGate under load", () => {
       await new Promise<void>((r) => { finish = r; });
       return { stdout: "ok\n__VIBEHUB_GATE__ pass\n", stderr: "" };
     });
-    const a = gate.runGate(c.id);
-    const b = gate.runGate(c.id);
+    const a = gate.runGate(c.id, { baseBranch: "main" });
+    const b = gate.runGate(c.id, { baseBranch: "main" });
     await vi.waitFor(() => expect(runs).toBe(1));
     finish();
     expect(await a).toMatchObject({ passed: true });
     expect(await b).toBe(await a);
     expect(runs).toBe(1);
+  });
+
+  it("a call compared with another base branch does not join the running gate: its verdict would be of other tests", async () => {
+    const { gate, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "x" });
+    const runs: string[] = [];
+    runScript.mockImplementation(async (script: string) => {
+      if (!isRun(script)) return { stdout: probe, stderr: "" };
+      runs.push(script);
+      return { stdout: "ok\n__VIBEHUB_GATE__ pass\n", stderr: "" };
+    });
+    await Promise.all([gate.runGate(c.id, { baseBranch: "dev" }), gate.runGate(c.id, { baseBranch: "prod" })]);
+    expect(runs).toHaveLength(2);
+    expect(runs.some((script) => script.includes("origin/prod"))).toBe(true);
   });
 
   it("caps runs across cards at GATE_MAX_CONCURRENT; the next starts when one ends, even if it failed", async () => {
@@ -287,7 +302,7 @@ describe("runGate under load", () => {
       if (fail) throw new Error("host command timed out");
       return { stdout: "__VIBEHUB_GATE__ pass\n", stderr: "" };
     });
-    const results = cards.map((c) => gate.runGate(c.id).catch((e: Error) => e.message));
+    const results = cards.map((c) => gate.runGate(c.id, { baseBranch: "main" }).catch((e: Error) => e.message));
     await vi.waitFor(() => expect(releases).toHaveLength(gate.GATE_MAX_CONCURRENT));
     await new Promise((r) => setTimeout(r, 20));
     expect(releases).toHaveLength(gate.GATE_MAX_CONCURRENT); // the last one is queued
@@ -306,7 +321,7 @@ describe("runGate under load", () => {
     const c = await registry.createCard({ projectId: p.id, title: "x" });
     runScript.mockImplementation(async (script: string) =>
       isRun(script) ? { stdout: "slow\n__VIBEHUB_GATE__ timeout 585\n", stderr: "" } : { stdout: probe, stderr: "" });
-    expect(await gate.runGate(c.id)).toMatchObject({ ran: true, passed: false, timedOut: true });
+    expect(await gate.runGate(c.id, { baseBranch: "main" })).toMatchObject({ ran: true, passed: false, timedOut: true });
   });
 
   it("o gate que passa do prazo vira aviso de erro no log, que o detector de falhas captura; o vermelho comum não", async () => {
@@ -324,8 +339,8 @@ describe("runGate under load", () => {
         ? { stdout: "slow\n__VIBEHUB_GATE__ timeout 585\n", stderr: "" }
         : { stdout: "1 failing\n__VIBEHUB_GATE__ fail\n", stderr: "" };
     });
-    await gate.runGate(timedOutCard.id);
-    await gate.runGate(redCard.id);
+    await gate.runGate(timedOutCard.id, { baseBranch: "main" });
+    await gate.runGate(redCard.id, { baseBranch: "main" });
     const capturedFailures = loggedLines.filter((line) => isPlatformFailureLogLine(line, undefined, Date.now()));
     expect(capturedFailures).toEqual([expect.objectContaining({
       message: "gate timed out — killed in the runner", fields: expect.objectContaining({ card: timedOutCard.worktreeSlug }),
@@ -357,7 +372,7 @@ describe("runGate", () => {
     const p = await registry.createProject({ name: "billing" });
     const c = await registry.createCard({ projectId: p.id, title: "x" });
     wireHost(["pkg=0", "test=0", "tsconfig=0", "localtsc=0", "__VIBEHUB_GATE_JSON__"].join("\n"), "SHOULD_NOT_RUN");
-    const r = await gate.runGate(c.id);
+    const r = await gate.runGate(c.id, { baseBranch: "main" });
     expect(r).toEqual({ ran: false, passed: true, output: "" });
     expect(runScript).toHaveBeenCalledOnce(); // probe only
   });
@@ -367,7 +382,7 @@ describe("runGate", () => {
     const p = await registry.createProject({ name: "billing" });
     const c = await registry.createCard({ projectId: p.id, title: "x" });
     wireHost('__VIBEHUB_GATE_JSON__\n{"checks":["npm test"]}', "ran tests\n__VIBEHUB_GATE__ pass\n");
-    const r = await gate.runGate(c.id);
+    const r = await gate.runGate(c.id, { baseBranch: "main" });
     expect(r).toMatchObject({ ran: true, passed: true });
     expect(r.output).toContain("ran tests");
   });
@@ -377,7 +392,7 @@ describe("runGate", () => {
     const p = await registry.createProject({ name: "billing" });
     const c = await registry.createCard({ projectId: p.id, title: "x" });
     wireHost('__VIBEHUB_GATE_JSON__\n{"checks":["npm test"]}', "1 failing\n__VIBEHUB_GATE__ fail\n");
-    const r = await gate.runGate(c.id);
+    const r = await gate.runGate(c.id, { baseBranch: "main" });
     expect(r).toMatchObject({ ran: true, passed: false });
     expect(r.output).toContain("1 failing");
   });
@@ -390,7 +405,7 @@ describe("runGate", () => {
       script.includes("__VIBEHUB_GATE_JSON__")
         ? { stdout: '__VIBEHUB_GATE_JSON__\n{"checks":["npm test"]}', stderr: "" }
         : { stdout: "", stderr: 'sh: 1: Syntax error: ";;" unexpected\n' });
-    const r = await gate.runGate(c.id);
+    const r = await gate.runGate(c.id, { baseBranch: "main" });
     expect(r).toMatchObject({ ran: true, passed: false });
     expect(r.output).toContain("Syntax error");
   });
@@ -430,8 +445,8 @@ describe("runGate reuses a GREEN verdict for the same commit on a clean tree", (
     const { gate, card } = await cardFor();
     probes = [probeOut(SHA_A, true), probeOut(SHA_A, true)];
     wireHost();
-    const first = await gate.runGate(card.id);
-    const second = await gate.runGate(card.id);
+    const first = await gate.runGate(card.id, { baseBranch: "main" });
+    const second = await gate.runGate(card.id, { baseBranch: "main" });
     expect(runs).toHaveLength(1);
     expect(first).toMatchObject({ ran: true, passed: true });
     expect(second).toMatchObject({ ran: true, passed: true, reused: true });
@@ -442,18 +457,18 @@ describe("runGate reuses a GREEN verdict for the same commit on a clean tree", (
     const { gate, card } = await cardFor();
     probes = [probeOut(SHA_A, true), probeOut(SHA_A, true), '__VIBEHUB_GATE_JSON__\n{"checks":["npm test"]}', `head=${SHA_B}\n__VIBEHUB_GATE_JSON__\n`];
     wireHost();
-    expect(await gate.runGate(card.id)).toMatchObject({ ran: true, headSha: SHA_A });
-    expect(await gate.runGate(card.id)).toMatchObject({ reused: true, headSha: SHA_A });
-    expect(await gate.runGate(card.id)).not.toHaveProperty("headSha");
-    expect(await gate.runGate(card.id)).toEqual({ ran: false, passed: true, output: "", headSha: SHA_B });
+    expect(await gate.runGate(card.id, { baseBranch: "main" })).toMatchObject({ ran: true, headSha: SHA_A });
+    expect(await gate.runGate(card.id, { baseBranch: "main" })).toMatchObject({ reused: true, headSha: SHA_A });
+    expect(await gate.runGate(card.id, { baseBranch: "main" })).not.toHaveProperty("headSha");
+    expect(await gate.runGate(card.id, { baseBranch: "main" })).toEqual({ ran: false, passed: true, output: "", headSha: SHA_B });
   });
 
   it("a new commit runs the checks again", async () => {
     const { gate, card } = await cardFor();
     probes = [probeOut(SHA_A, true), probeOut(SHA_B, true)];
     wireHost();
-    await gate.runGate(card.id);
-    await gate.runGate(card.id);
+    await gate.runGate(card.id, { baseBranch: "main" });
+    await gate.runGate(card.id, { baseBranch: "main" });
     expect(runs).toHaveLength(2);
   });
 
@@ -461,9 +476,9 @@ describe("runGate reuses a GREEN verdict for the same commit on a clean tree", (
     const { gate, card } = await cardFor();
     probes = [probeOut(SHA_A, true), probeOut(SHA_A, false), probeOut(SHA_A, false)];
     wireHost();
-    await gate.runGate(card.id);
-    await gate.runGate(card.id);
-    await gate.runGate(card.id);
+    await gate.runGate(card.id, { baseBranch: "main" });
+    await gate.runGate(card.id, { baseBranch: "main" });
+    await gate.runGate(card.id, { baseBranch: "main" });
     expect(runs).toHaveLength(3);
   });
 
@@ -471,8 +486,8 @@ describe("runGate reuses a GREEN verdict for the same commit on a clean tree", (
     const { gate, card } = await cardFor();
     probes = [probeOut(SHA_A, true), probeOut(SHA_A, true)];
     wireHost(["fail", "pass"]);
-    expect(await gate.runGate(card.id)).toMatchObject({ passed: false });
-    expect(await gate.runGate(card.id)).toMatchObject({ passed: true });
+    expect(await gate.runGate(card.id, { baseBranch: "main" })).toMatchObject({ passed: false });
+    expect(await gate.runGate(card.id, { baseBranch: "main" })).toMatchObject({ passed: true });
     expect(runs).toHaveLength(2);
   });
 
@@ -480,9 +495,9 @@ describe("runGate reuses a GREEN verdict for the same commit on a clean tree", (
     const { gate, card } = await cardFor();
     probes = [probeOut(SHA_A, true), probeOut(SHA_B, true), probeOut(SHA_A, true)];
     wireHost(["pass", "fail", "pass"]);
-    await gate.runGate(card.id);
-    await gate.runGate(card.id); // another commit, red
-    await gate.runGate(card.id); // back on A: the old green is gone
+    await gate.runGate(card.id, { baseBranch: "main" });
+    await gate.runGate(card.id, { baseBranch: "main" });
+    await gate.runGate(card.id, { baseBranch: "main" });
     expect(runs).toHaveLength(3);
   });
 
@@ -490,8 +505,17 @@ describe("runGate reuses a GREEN verdict for the same commit on a clean tree", (
     const { gate, card } = await cardFor();
     probes = [probeOut(SHA_A, true), probeOut(SHA_A, true, '{"checks":["npm test","npm run lint"]}')];
     wireHost();
-    await gate.runGate(card.id);
-    await gate.runGate(card.id);
+    await gate.runGate(card.id, { baseBranch: "main" });
+    await gate.runGate(card.id, { baseBranch: "main" });
+    expect(runs).toHaveLength(2);
+  });
+
+  it("a green compared with one base branch does not answer for another", async () => {
+    const { gate, card } = await cardFor();
+    probes = [probeOut(SHA_A, true), probeOut(SHA_A, true)];
+    wireHost();
+    await gate.runGate(card.id, { baseBranch: "dev" });
+    expect(await gate.runGate(card.id, { baseBranch: "prod" })).not.toHaveProperty("reused");
     expect(runs).toHaveLength(2);
   });
 
@@ -500,9 +524,9 @@ describe("runGate reuses a GREEN verdict for the same commit on a clean tree", (
     probes = [probeOut(SHA_A, true), probeOut(SHA_A, true)];
     wireHost();
     vi.useFakeTimers({ toFake: ["Date"] });
-    await gate.runGate(card.id);
+    await gate.runGate(card.id, { baseBranch: "main" });
     vi.setSystemTime(Date.now() + gate.GATE_REUSE_MS + 1);
-    await gate.runGate(card.id);
+    await gate.runGate(card.id, { baseBranch: "main" });
     expect(runs).toHaveLength(2);
   });
 
@@ -510,8 +534,8 @@ describe("runGate reuses a GREEN verdict for the same commit on a clean tree", (
     const { gate, card } = await cardFor();
     probes = ['__VIBEHUB_GATE_JSON__\n{"checks":["npm test"]}', '__VIBEHUB_GATE_JSON__\n{"checks":["npm test"]}'];
     wireHost();
-    await gate.runGate(card.id);
-    await gate.runGate(card.id);
+    await gate.runGate(card.id, { baseBranch: "main" });
+    await gate.runGate(card.id, { baseBranch: "main" });
     expect(runs).toHaveLength(2);
   });
 });
@@ -543,7 +567,7 @@ describe("runGate on a given commit (expectedSha): the green is of THAT commit, 
   it("worktree on another commit: red, naming both, and the checks never run", async () => {
     const { gate, card } = await cardFor();
     wireHost(probeOut(OTHER, true));
-    const r = await gate.runGate(card.id, { expectedSha: SHA });
+    const r = await gate.runGate(card.id, { baseBranch: "main", expectedSha: SHA });
     expect(r).toMatchObject({ ran: true, passed: false, headSha: OTHER });
     expect(r.output).toContain(SHA.slice(0, 7));
     expect(r.output).toContain(OTHER.slice(0, 7));
@@ -553,7 +577,7 @@ describe("runGate on a given commit (expectedSha): the green is of THAT commit, 
   it("right commit but uncommitted edits or untracked files: red, the checks never run", async () => {
     const { gate, card } = await cardFor();
     wireHost(probeOut(SHA, false));
-    const r = await gate.runGate(card.id, { expectedSha: SHA });
+    const r = await gate.runGate(card.id, { baseBranch: "main", expectedSha: SHA });
     expect(r).toMatchObject({ ran: true, passed: false });
     expect(r.output).toContain("não commitadas");
     expect(runs).toHaveLength(0);
@@ -562,15 +586,15 @@ describe("runGate on a given commit (expectedSha): the green is of THAT commit, 
   it("HEAD unreadable, or nothing to run on a worktree off the commit: red too", async () => {
     const { gate, card } = await cardFor();
     wireHost(probeOut(null, false));
-    expect(await gate.runGate(card.id, { expectedSha: SHA })).toMatchObject({ ran: true, passed: false });
+    expect(await gate.runGate(card.id, { baseBranch: "main", expectedSha: SHA })).toMatchObject({ ran: true, passed: false });
     wireHost(`head=${OTHER}\nclean=1\n__VIBEHUB_GATE_JSON__\n`);
-    expect(await gate.runGate(card.id, { expectedSha: SHA })).toMatchObject({ ran: true, passed: false });
+    expect(await gate.runGate(card.id, { baseBranch: "main", expectedSha: SHA })).toMatchObject({ ran: true, passed: false });
   });
 
   it("on the commit with a clean tree: runs, and the run itself re-checks the commit (the run may queue)", async () => {
     const { gate, card } = await cardFor();
     wireHost(probeOut(SHA, true));
-    const r = await gate.runGate(card.id, { expectedSha: SHA.toUpperCase() });
+    const r = await gate.runGate(card.id, { baseBranch: "main", expectedSha: SHA.toUpperCase() });
     expect(r).toMatchObject({ ran: true, passed: true, headSha: SHA });
     expect(runs).toHaveLength(1);
     expect(runs[0]).toContain(SHA);
@@ -579,7 +603,7 @@ describe("runGate on a given commit (expectedSha): the green is of THAT commit, 
   it("the worktree moved while the checks ran: red, saying so — not a failing check", async () => {
     const { gate, card } = await cardFor();
     wireHost(probeOut(SHA, true), "=== gate: npm test ===\ntests ran\n__VIBEHUB_GATE__ moved\n");
-    const r = await gate.runGate(card.id, { expectedSha: SHA });
+    const r = await gate.runGate(card.id, { baseBranch: "main", expectedSha: SHA });
     expect(r).toMatchObject({ ran: true, passed: false });
     expect(r.output).toContain(SHA.slice(0, 7));
     expect(r.output).not.toContain("falhou no check");
@@ -589,8 +613,8 @@ describe("runGate on a given commit (expectedSha): the green is of THAT commit, 
   it("a sha that is not a full one is refused before any script", async () => {
     const { gate, card } = await cardFor();
     wireHost(probeOut(SHA, true));
-    await expect(gate.runGate(card.id, { expectedSha: "abc1234" })).rejects.toThrow(/sha/);
-    await expect(gate.runGate(card.id, { expectedSha: `${SHA}; rm -rf /` })).rejects.toThrow(/sha/);
+    await expect(gate.runGate(card.id, { baseBranch: "main", expectedSha: "abc1234" })).rejects.toThrow(/sha/);
+    await expect(gate.runGate(card.id, { baseBranch: "main", expectedSha: `${SHA}; rm -rf /` })).rejects.toThrow(/sha/);
     expect(runScript).not.toHaveBeenCalled();
   });
 
@@ -604,10 +628,10 @@ describe("runGate on a given commit (expectedSha): the green is of THAT commit, 
       if (runs.length === 1) await new Promise<void>((r) => { finish = r; });
       return { stdout: "__VIBEHUB_GATE__ pass\n", stderr: "" };
     });
-    const plain = gate.runGate(card.id);
+    const plain = gate.runGate(card.id, { baseBranch: "main" });
     await vi.waitFor(() => expect(runs).toHaveLength(1));
     // the plain gate is green on OTHER; the one on SHA must not come back with that answer
-    expect(await gate.runGate(card.id, { expectedSha: SHA })).toMatchObject({ passed: false });
+    expect(await gate.runGate(card.id, { baseBranch: "main", expectedSha: SHA })).toMatchObject({ passed: false });
     finish();
     expect(await plain).toMatchObject({ passed: true });
   });
