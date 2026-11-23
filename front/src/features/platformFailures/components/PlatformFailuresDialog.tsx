@@ -31,9 +31,15 @@ export function PlatformFailuresDialog({ failures, isOpen, onOpenChange }: {
           <DialogTitle>{t("platformFailures.title")}</DialogTitle>
           <DialogDescription>{t("platformFailures.description")}</DialogDescription>
         </DialogHeader>
-        <ul className="max-h-[60vh] space-y-3 overflow-auto">
+        <ul className="max-h-[60vh] space-y-2 overflow-y-auto overflow-x-hidden pr-1">
           {failures.map((failure) => (
-            <FailureDetails key={failure.id} failure={toFailureDetails(failure)} isOwner affectedCardCount={failure.affectedCardIds.length} />
+            <FailureDetails
+              key={failure.id}
+              failure={toFailureDetails(failure)}
+              isOwner
+              affectedCardCount={failure.affectedCardIds.length}
+              leavesListOnSuccess
+            />
           ))}
         </ul>
       </DialogContent>
