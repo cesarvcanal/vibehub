@@ -5,7 +5,7 @@ import { FEED_POLL_MS } from "@/features/board/lib/workflowPanel";
 
 export type RunConversationRead = { kind: "read"; conversation: AnalysisConversation | null } | { kind: "failed" };
 
-export const reviewConversationKey = (cardId: string, pr: number | undefined, runId: string, finished: boolean) =>
+const reviewConversationKey = (cardId: string, pr: number | undefined, runId: string, finished: boolean) =>
   ["review-conversation", cardId, pr, runId, finished] as const;
 
 export function useReviewConversations(cardId: string, pr: number | undefined, runs: ReviewFleetRun[]): ReadonlyMap<string, RunConversationRead> {

@@ -502,7 +502,7 @@ function talkOf(dir,agent){
 }
 function main(base,runId){
   const runs=runsOf(base);
-  const run=runId?runs.find(function(r){return r.runId===runId}):runs[0];if(!run)return null;
+  const run=runId?runs.find(function(candidate){return candidate.runId===runId}):runs[0];if(!run)return null;
   let lines=[];
   try{lines=fs.readFileSync(p.join(run.dir,'journal.jsonl'),'utf8').split('\n')}catch(e){}
   const agents=new Map();

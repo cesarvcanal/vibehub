@@ -91,10 +91,10 @@ export function ReviewPanel({ cardId, prNumber: pr, onClose }: {
   const mergeBusy = mergeWait || unconfirmed;
 
   const { query: reviewQuery, review, working, fleet, merging, readSeq, apply } = useLiveReview(cardId, { fast: mergeBusy, pr });
-
-  // The review carries user ids; the roles read better as names. Same key and shape as the request dialog's.
   const fleetRuns = review ? [...fleetsByRound(review, fleet).values()].flat() : [];
   const conversations = useReviewConversations(cardId, pr, fleetRuns);
+
+  // The review carries user ids; the roles read better as names. Same key and shape as the request dialog's.
   const people = useQuery({
     queryKey: cardPeopleKey(cardId),
     queryFn: () => boardApi.listCardPeople(cardId),
