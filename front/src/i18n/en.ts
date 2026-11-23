@@ -1543,6 +1543,7 @@ export const en: Record<string, string> = {
   "analysis.mergeGate.runningButton": "Merge checks running…",
   "analysis.mergeGate.passed": "Merge checks green on the commit the analysis checked ({sha}).",
   "analysis.mergeGate.failed": "The merge checks failed: the merge stays blocked until they pass.",
+  "analysis.mergeGate.noCi": "The merge stays blocked: the PR has no GitHub CI, and vibehub only merges with the PR's CI green. Set up a GitHub Actions workflow that runs on every PR and run the check again.",
   "analysis.mergeGate.rerun": "Run the checks again",
   "analysis.merge.retry": "Retry the merge of PR #{n}",
   "analysis.merge.refused.gate": "The last merge did not go through: the PR's CI is red or did not finish in time.",

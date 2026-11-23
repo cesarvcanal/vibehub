@@ -331,6 +331,13 @@ describe("merge pelo painel da análise", () => {
     await vi.waitFor(() => expect(get.mock.calls.filter(([url]) => url === "/cards/c1/analysis").length).toBeGreaterThan(readsBefore));
   });
 
+  it("PR analisado sem CI: o painel diz que falta o CI no GitHub, não que os testes falharam", async () => {
+    renderPanel(aptRead({ mergeGate: { cardId: "c1", analysedSha: SHA, state: "failed", output: "o PR não tem CI no GitHub", at: 1, noCi: true } }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("O merge fica barrado: o PR não tem CI no GitHub");
+    expect(alert).not.toHaveTextContent("Os testes do merge falharam");
+  });
+
   it("em inglês o estado dos testes do merge sai pelo i18n", async () => {
     setLanguage("en");
     renderPanel(aptRead({ mergeGate: { cardId: "c1", analysedSha: SHA, state: "failed", output: "x", at: 1 } }));

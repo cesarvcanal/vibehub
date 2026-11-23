@@ -105,7 +105,7 @@ async function deliveredHead(cardId: string, prUrl: string): Promise<{ sha: stri
 
 async function runAnalysisMergeGate(started: AnalysisMergeGate, pr: CardPr, cardSlug: string): Promise<void> {
   const head = await deliveredHead(started.cardId, pr.url).catch((err: unknown) => ({ refusal: `o gate não chegou a rodar: ${(err as Error).message}` }));
-  const verdict: Pick<GateResult, "passed" | "output"> = "refusal" in head
+  const verdict: Pick<GateResult, "passed" | "output" | "noCi"> = "refusal" in head
     ? { passed: false, output: head.refusal }
     : await gateAtCommit(started.cardId, pr.url, head.sha).catch((err: unknown) => ({
       passed: false, output: `o gate não chegou a rodar: ${(err as Error).message}`,
@@ -113,7 +113,10 @@ async function runAnalysisMergeGate(started: AnalysisMergeGate, pr: CardPr, card
   const pinned = "sha" in head ? { sha: head.sha } : {};
   const landed = await saveAnalysisMergeGate(verdict.passed
     ? { cardId: started.cardId, analysedSha: started.analysedSha, ...pinned, state: "passed", at: Date.now() }
-    : { cardId: started.cardId, analysedSha: started.analysedSha, ...pinned, state: "failed", output: verdict.output, at: Date.now() });
+    : {
+      cardId: started.cardId, analysedSha: started.analysedSha, ...pinned, state: "failed", output: verdict.output, at: Date.now(),
+      ...(verdict.noCi ? { noCi: true as const } : {}),
+    });
   logger.info(
     { audit: true, action: "analysis.merge_gate", card: cardSlug, analysed: started.analysedSha, ...pinned, passed: verdict.passed, landed },
     verdict.passed ? "analysis merge gate passed" : "analysis merge gate failed",
@@ -194,6 +197,9 @@ async function mergeClaimedAnalysis(cardId: string, user: PublicUser): Promise<A
       kind: "refused", status: 409, reason: "gate_running",
       error: `os testes do merge estão rodando no commit analisado (${analysis.analysedSha.slice(0, 7)}): o merge libera quando ficarem verdes`,
     };
+  }
+  if (gate.mergeGate.state === "failed" && gate.mergeGate.noCi) {
+    return { kind: "refused", status: 409, reason: "no_ci", error: gate.mergeGate.output ?? "o PR não tem CI no GitHub" };
   }
   if (gate.mergeGate.state === "failed" || !gate.mergeGate.sha) {
     return { kind: "refused", status: 409, reason: "gate", error: gate.mergeGate.output ?? "os testes do merge não disseram em que commit passaram" };

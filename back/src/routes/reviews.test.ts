@@ -1724,6 +1724,19 @@ describe("merge da análise pela rota", () => {
     expect(gateAtCommit).toHaveBeenCalledTimes(2);
   });
 
+  it("PR analisado sem CI: o veredito fica marcado sem CI e o clique responde no_ci, sem deliver", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    mergeGateVerdict.answer = { passed: false, output: "o PR não tem CI no GitHub", noCi: true };
+    await readAnalysis(w, w.leitor);
+    await vi.waitFor(async () => expect((await readAnalysis(w, w.leitor)).mergeGate).toMatchObject({ state: "failed", noCi: true }));
+    deliver.mockClear();
+    const res = await merge(w, w.merger);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ reason: "no_ci" });
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
   it("gate gravado 'rodando' por um processo que morreu (deploy) roda de novo na leitura seguinte", async () => {
     const w = await world();
     await saveReport(aptReport(w.cardId));

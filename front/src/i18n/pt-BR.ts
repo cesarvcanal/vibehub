@@ -1555,6 +1555,7 @@ export const ptBR: Record<string, string> = {
   "analysis.mergeGate.runningButton": "Testes do merge rodando…",
   "analysis.mergeGate.passed": "Testes do merge verdes no commit que a análise conferiu ({sha}).",
   "analysis.mergeGate.failed": "Os testes do merge falharam: o merge fica barrado até eles passarem.",
+  "analysis.mergeGate.noCi": "O merge fica barrado: o PR não tem CI no GitHub, e o vibehub só mergeia com o CI do PR verde. Configure um workflow do GitHub Actions que rode em todo PR e rode a conferência de novo.",
   "analysis.mergeGate.rerun": "Rodar os testes de novo",
   "analysis.merge.retry": "Tentar o merge do PR #{n} de novo",
   "analysis.merge.refused.gate": "O último merge não saiu: o CI do PR ficou vermelho ou não terminou a tempo.",

@@ -910,6 +910,7 @@ export interface AnalysisMergeGate {
   state: "running" | "passed" | "failed";
   output?: string;
   at: number;
+  noCi?: true;
 }
 
 export interface AnalysisMergeRefusal {
