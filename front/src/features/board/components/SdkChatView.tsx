@@ -27,6 +27,7 @@ import { wsUrl } from "@/lib/ws";
 import { Button, type ButtonProps } from "@/components/ui/button";
 import { useAuth } from "@/providers/auth";
 import { TerminalComposer } from "@/features/board/components/TerminalComposer";
+import { ImageCommentContext } from "@/features/attachments/components/ImageViewerDialog";
 import { useVoiceCall } from "@/features/voice/useVoiceCall";
 import { VoiceCallBar } from "@/features/voice/VoiceCallBar";
 import { VoiceCallContext, type VoiceCallControl } from "@/features/voice/ComposerVoiceButton";
@@ -1522,6 +1523,7 @@ export function SdkChatView({
 
   return (
     <WorkflowFeedContext.Provider value={workflowFeed}>
+    <ImageCommentContext.Provider value={sendFromComposer}>
     <DetailChannelContext.Provider value={detailChannel}>
     <SdkDetailContext.Provider value={detailApi}>
     <div ref={rootRef} className={cn("flex min-h-0 min-w-0 flex-1 flex-col", className)}>
@@ -1769,6 +1771,7 @@ export function SdkChatView({
     </div>
     </SdkDetailContext.Provider>
     </DetailChannelContext.Provider>
+    </ImageCommentContext.Provider>
     </WorkflowFeedContext.Provider>
   );
 }

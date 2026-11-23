@@ -48,6 +48,7 @@ import {
   type UploadKind,
 } from "@/features/board/lib/markdown";
 import { AudioAttachment } from "@/features/board/components/AudioAttachment";
+import { ImageCommentContext, ImageViewerDialog } from "@/features/attachments/components/ImageViewerDialog";
 import { UltraText } from "@/features/board/components/UltraText";
 import { copyText } from "@/features/board/lib/terminalZoom";
 import { t as translate, useT } from "@/i18n";
@@ -331,6 +332,7 @@ export function ChatView({
   const rows = React.useMemo(() => groupChatRows(events), [events]);
 
   return (
+    <ImageCommentContext.Provider value={send}>
     <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", className)}>
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       <div
@@ -426,6 +428,7 @@ export function ChatView({
         }}
       />
     </div>
+    </ImageCommentContext.Provider>
   );
 }
 
@@ -714,7 +717,15 @@ function renderUserToken(token: MdToken, i: number, compact: boolean): React.Rea
   if (token.type === "image") {
     // Keyed by the path too: a queued row is rewritten IN PLACE (same id) when it is edited,
     // and a new image at the same index must not inherit the old one's `broken`.
-    return <UploadedImage key={`${i}:${token.value}`} cardId={token.cardId} file={token.file} compact={compact} />;
+    return (
+      <UploadedImage
+        key={`${i}:${token.value}`}
+        cardId={token.cardId}
+        file={token.file}
+        runnerPath={token.value}
+        compact={compact}
+      />
+    );
   }
   if (token.type === "file") {
     return <UploadedFile key={`${i}:${token.value}`} cardId={token.cardId} file={token.file} compact={compact} />;
@@ -728,8 +739,7 @@ function renderUserToken(token: MdToken, i: number, compact: boolean): React.Rea
  *
  * What went into the message is a runner path — the only form Claude can open — so the bubble used
  * to come back as `/work/.uploads/…/1790375978854-image.png` and you could not see what you had
- * just attached. The thumbnail is a link to the full file: same route, opened in a tab, which is
- * the cheapest "bigger, please" there is.
+ * just attached.
  *
  * `onError` is the case that matters: the card was deleted, the runner is down, the file was
  * cleaned up. The path comes back as text then — still the truth, never a broken-image icon.
@@ -740,31 +750,51 @@ function renderUserToken(token: MdToken, i: number, compact: boolean): React.Rea
  * it on arrival would push the agent's latest lines below the fold. Inline, so two screenshots sit
  * side by side instead of stacking past the row's own cap.
  */
-function UploadedImage({ cardId, file, compact = false }: { cardId: string; file: string; compact?: boolean }) {
+function UploadedImage({
+  cardId,
+  file,
+  runnerPath,
+  compact = false,
+}: {
+  cardId: string;
+  file: string;
+  runnerPath: string;
+  compact?: boolean;
+}) {
   const t = useT();
   const [broken, setBroken] = React.useState(false);
+  const [viewerOpen, setViewerOpen] = React.useState(false);
   const src = uploadImageUrl(cardId, file);
-  if (broken) return <>{`/work/.uploads/${cardId}/${file}`}</>;
+  if (broken) return <>{runnerPath}</>;
   return (
-    <a
-      href={src}
-      target="_blank"
-      rel="noreferrer noopener"
-      className={cn("w-fit", compact ? "mr-1 mt-1 inline-block align-top" : "block")}
-    >
-      <img
+    <>
+      <button
+        type="button"
+        onClick={() => setViewerOpen(true)}
+        title={t("chat.viewAttachedImage")}
+        className={cn("w-fit cursor-zoom-in", compact ? "mr-1 mt-1 inline-block align-top" : "block")}
+      >
+        <img
+          src={src}
+          alt={t("chat.attachedImage")}
+          title={file}
+          data-testid="chat-image"
+          loading="lazy"
+          onError={() => setBroken(true)}
+          className={cn(
+            "max-w-full rounded-md border border-border/70 object-contain",
+            compact ? "h-16 w-auto" : "max-h-64",
+          )}
+        />
+      </button>
+      <ImageViewerDialog
+        open={viewerOpen}
+        onOpenChange={setViewerOpen}
         src={src}
-        alt={t("chat.attachedImage")}
-        title={file}
-        data-testid="chat-image"
-        loading="lazy"
-        onError={() => setBroken(true)}
-        className={cn(
-          "max-w-full rounded-md border border-border/70 object-contain",
-          compact ? "h-16 w-auto" : "max-h-64",
-        )}
+        displayName={uploadDisplayName(file)}
+        runnerPath={runnerPath}
       />
-    </a>
+    </>
   );
 }
 
