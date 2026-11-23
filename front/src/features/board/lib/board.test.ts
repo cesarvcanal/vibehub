@@ -219,10 +219,16 @@ describe("cardState", () => {
     });
     // Decided: the stamp comes off and the turn goes on — back to the spinner.
     expect(kind({ status: "working", openedAt: 1, awaitingDecisionAt: null })).toBe("working");
-    // A stale stamp over a turn that already ended does not raise the alarm on its own.
-    expect(kind({ status: "waiting", openedAt: 1, awaitingDecisionAt: 9 })).toBe("your_turn");
     // Nothing runs behind a hibernated card, whatever was pending.
     expect(kind({ status: "working", openedAt: 1, hibernatedAt: 5, awaitingDecisionAt: 9 })).toBe("hibernated");
+  });
+
+  it("is needs_me when a deploy left the question card open and the turn ended (status waiting, decision stamp)", () => {
+    expect(kind({ status: "waiting", openedAt: 1, awaitingDecisionAt: 9 })).toBe("needs_me");
+    expect(kind({ status: "waiting", openedAt: 1, hibernatedAt: 5, awaitingDecisionAt: 9 })).toBe("needs_me");
+    expect(kind({ status: "waiting", openedAt: 1, declaredState: "ready", awaitingDecisionAt: 9 })).toBe("needs_me");
+    expect(kind({ column: "done", openedAt: 1, awaitingDecisionAt: 9 })).toBe("done");
+    expect(kind({ column: "paused", openedAt: 1, pausedAt: 2, awaitingDecisionAt: 9 })).toBe("paused");
   });
 
   it("is needs_me once the turn ENDED on a question to the person — the chat's pending-decisions tray", () => {
