@@ -100,7 +100,7 @@ describe("probe script + parse", () => {
     expect(gate.parseGateProbe(stdout)).toEqual({
       gateJson: '{"checks":["make ci"]}',
       hasPackageJson: true, hasTestScript: false, hasTsconfig: true, hasLocalTsc: true,
-      headSha: null, cleanTree: false,
+      headSha: null, cleanTree: false, docsOnly: false,
     });
   });
 
@@ -123,6 +123,80 @@ describe("probe script + parse", () => {
     const probe = gate.parseGateProbe(stdout);
     expect(probe.gateJson).toBe("");
     expect(probe.hasPackageJson).toBe(true);
+  });
+});
+
+describe("PR só de documentação não roda testes", () => {
+  const SHA = "a".repeat(40);
+  const docsProbe = (over: { changed?: number; code?: number; clean?: boolean } = {}) =>
+    [
+      "pkg=1", "test=1", "tsconfig=1", "localtsc=1", `head=${SHA}`, `clean=${over.clean === false ? 0 : 1}`,
+      `changedfiles=${over.changed ?? 1}`, `codefiles=${over.code ?? 0}`, "__VIBEHUB_GATE_JSON__", '{"checks":["npm test"]}',
+    ].join("\n");
+
+  it.each([
+    ["só documentação", { changed: 2, code: 0 }, true],
+    ["um arquivo de código", { changed: 2, code: 1 }, false],
+    ["diff vazio", { changed: 0, code: 0 }, false],
+    ["documentação com a árvore suja", { changed: 1, code: 0, clean: false }, false],
+  ])("%s", async (_case, over, docsOnly) => {
+    const { gate } = await load();
+    expect(gate.parseGateProbe(docsProbe(over)).docsOnly).toBe(docsOnly);
+  });
+
+  it("diff que não foi lido não conta como só documentação", async () => {
+    const { gate } = await load();
+    expect(gate.parseGateProbe(`head=${SHA}\nclean=1\n__VIBEHUB_GATE_JSON__\n`).docsOnly).toBe(false);
+  });
+
+  it("só documentação não roda nem o gate.json nem os padrões", async () => {
+    const { gate } = await load();
+    expect(gate.resolveGateChecks(gate.parseGateProbe(docsProbe()))).toEqual({ ran: false, checks: [] });
+  });
+
+  it("a sondagem compara com a base pedida, validada, e sem base não lê o diff", async () => {
+    const { gate } = await load();
+    expect(gate.buildGateProbeScript("c", "/work/scratch/x", "prod")).toMatch(/ _ '\/work\/scratch\/x' 'origin\/prod'$/);
+    expect(gate.buildGateProbeScript("c", "/work/scratch/x")).not.toContain("git diff");
+    expect(() => gate.buildGateProbeScript("c", "/work/scratch/x", "prod; rm -rf /")).toThrow();
+  });
+
+  it("runGate com diff só de documentação passa sem rodar os checks", async () => {
+    const { gate, registry } = await load();
+    const p = await registry.createProject({ name: "billing" });
+    const c = await registry.createCard({ projectId: p.id, title: "x" });
+    runScript.mockResolvedValue({ stdout: docsProbe(), stderr: "" });
+    expect(await gate.runGate(c.id, { baseBranch: "prod" })).toEqual({ ran: false, passed: true, output: "", headSha: SHA });
+    expect(runScript).toHaveBeenCalledOnce();
+    expect(runScript.mock.calls[0]?.[0]).toContain("origin/prod");
+  });
+
+  it("executado num repo git de verdade: .md e .claude/CLAUDE.md são documentação, .ts não", async () => {
+    const { gate } = await load();
+    const root = await mkdtemp(join(tmpdir(), "vibehub-gate-docs-"));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
+    const cleanGitEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_")));
+    const env = { ...cleanGitEnv, PATH: await pathWithFakeDocker(), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+    const sh = (script: string) => execFileSync("sh", ["-c", script], { cwd: root, env, encoding: "utf8" });
+    const commit = "git -c user.name=t -c user.email=t@t commit -q";
+    sh(`git init -q && echo a > app.ts && git add . && ${commit} -m base && git update-ref refs/remotes/origin/prod HEAD`);
+    sh(`mkdir -p .claude && echo regra > .claude/CLAUDE.md && echo doc > README.md && git add . && ${commit} -m docs`);
+    expect(gate.parseGateProbe(sh(gate.buildGateProbeScript("c", root, "prod"))).docsOnly).toBe(true);
+    sh(`echo b > app.ts && git add . && ${commit} -m code`);
+    expect(gate.parseGateProbe(sh(gate.buildGateProbeScript("c", root, "prod"))).docsOnly).toBe(false);
+  });
+
+  it("requirements.txt é dependência, não documentação", async () => {
+    const { gate } = await load();
+    const root = await mkdtemp(join(tmpdir(), "vibehub-gate-docs-"));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
+    const cleanGitEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_")));
+    const env = { ...cleanGitEnv, PATH: await pathWithFakeDocker(), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+    const sh = (script: string) => execFileSync("sh", ["-c", script], { cwd: root, env, encoding: "utf8" });
+    const commit = "git -c user.name=t -c user.email=t@t commit -q";
+    sh(`git init -q && echo a > README.md && git add . && ${commit} -m base && git update-ref refs/remotes/origin/prod HEAD`);
+    sh(`echo flask > requirements.txt && git add . && ${commit} -m deps`);
+    expect(gate.parseGateProbe(sh(gate.buildGateProbeScript("c", root, "prod"))).docsOnly).toBe(false);
   });
 });
 

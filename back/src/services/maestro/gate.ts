@@ -82,6 +82,7 @@ export const GATE_RUN_TIMEOUT_MS = 600_000;
 export const GATE_MAX_CONCURRENT = 2;
 
 const PROBE_MARKER = "__VIBEHUB_GATE_JSON__";
+const DOCS_FILE_PATTERN = "\\.(md|mdx|markdown|rst|adoc)$";
 const RESULT_MARKER = "__VIBEHUB_GATE__";
 
 /** A full commit sha (SHA-1, or SHA-256 in a repo that uses it): an abbreviated one could match two commits. */
@@ -100,6 +101,7 @@ export interface GateProbe {
   headSha: string | null;
   /** No tracked change and no untracked file in the worktree. */
   cleanTree: boolean;
+  docsOnly: boolean;
 }
 
 /**
@@ -131,6 +133,7 @@ export function parseGateConfig(text: string | null | undefined): string[] | nul
  * defaults, each included only when it is resolvable; otherwise nothing runs (`ran: false`). PURE.
  */
 export function resolveGateChecks(probe: GateProbe): { ran: boolean; checks: string[] } {
+  if (probe.docsOnly) return { ran: false, checks: [] };
   const configured = parseGateConfig(probe.gateJson);
   if (configured) return { ran: true, checks: configured };
   const checks: string[] = [];
@@ -145,8 +148,14 @@ export function resolveGateChecks(probe: GateProbe): { ran: boolean; checks: str
  * marker, then the raw body of `.vibehub/gate.json` (which may be multi-line and is therefore put
  * last, unbounded). The cwd is validated and passed as `$1`. PURE.
  */
-export function buildGateProbeScript(containerName: string, cwd: string): string {
+export function buildGateProbeScript(containerName: string, cwd: string, baseBranch?: string): string {
   assertSafeRemotePath(cwd);
+  const baseRef = baseBranch === undefined ? undefined : `origin/${assertBranchName(baseBranch)}`;
+  const changedFiles = baseRef
+    ? `if files=$(git diff --name-only "$2"...HEAD 2>/dev/null); then ` +
+      `echo "changedfiles=$(printf '%s\\n' "$files" | grep -c .)"; ` +
+      `echo "codefiles=$(printf '%s\\n' "$files" | grep . | grep -cvE '${DOCS_FILE_PATTERN}')"; fi; `
+    : "";
   const inner =
     `cd "$1" 2>/dev/null || { echo "pkg=0"; echo "test=0"; echo "tsconfig=0"; echo "localtsc=0"; echo "${PROBE_MARKER}"; exit 0; }; ` +
     `if [ -f package.json ]; then echo "pkg=1"; else echo "pkg=0"; fi; ` +
@@ -155,9 +164,11 @@ export function buildGateProbeScript(containerName: string, cwd: string): string
     `if [ -x node_modules/.bin/tsc ]; then echo "localtsc=1"; else echo "localtsc=0"; fi; ` +
     `h=$(git rev-parse HEAD 2>/dev/null) && echo "head=$h"; ` +
     `if s=$(git status --porcelain --untracked-files=all 2>/dev/null) && [ -z "$s" ]; then echo "clean=1"; else echo "clean=0"; fi; ` +
+    changedFiles +
     `echo "${PROBE_MARKER}"; ` +
     `if [ -f .vibehub/gate.json ]; then cat .vibehub/gate.json; fi`;
-  return `docker exec ${shQuote(containerName)} sh -c ${shQuote(inner)} _ ${shQuote(cwd)}`;
+  const baseArg = baseRef ? ` ${shQuote(baseRef)}` : "";
+  return `docker exec ${shQuote(containerName)} sh -c ${shQuote(inner)} _ ${shQuote(cwd)}${baseArg}`;
 }
 
 /** Splits the probe output into its facts and the gate.json body. PURE. */
@@ -166,6 +177,11 @@ export function parseGateProbe(stdout: string): GateProbe {
   const head = idx < 0 ? stdout : stdout.slice(0, idx);
   const gateJson = idx < 0 ? "" : stdout.slice(idx + PROBE_MARKER.length).replace(/^\r?\n/, "");
   const flag = (key: string): boolean => new RegExp(`(?:^|\\n)${key}=1(?:\\r?\\n|$)`).test(head);
+  const count = (key: string): number | undefined => {
+    const value = new RegExp(`(?:^|\\n)${key}=(\\d+)\\r?(?:\\n|$)`).exec(head)?.[1];
+    return value === undefined ? undefined : Number(value);
+  };
+  const changedFiles = count("changedfiles");
   return {
     gateJson,
     hasPackageJson: flag("pkg"),
@@ -174,6 +190,7 @@ export function parseGateProbe(stdout: string): GateProbe {
     hasLocalTsc: flag("localtsc"),
     headSha: /(?:^|\n)head=([0-9a-f]{40,64})\r?(?:\n|$)/.exec(head)?.[1] ?? null,
     cleanTree: flag("clean"),
+    docsOnly: flag("clean") && changedFiles !== undefined && changedFiles > 0 && count("codefiles") === 0,
   };
 }
 
@@ -415,7 +432,7 @@ function releaseSlot(): void {
  * that moves while the checks run (see `buildGateRunScript`). Such a call joins only a run held to
  * the same commit.
  */
-export function runGate(cardId: string, opts: { expectedSha?: string } = {}): Promise<GateResult> {
+export function runGate(cardId: string, opts: { expectedSha?: string; baseBranch?: string } = {}): Promise<GateResult> {
   const expectedSha = opts.expectedSha?.toLowerCase();
   const key = expectedSha ? `${cardId}@${expectedSha}` : cardId;
   const current = inFlight.get(key);
@@ -423,7 +440,7 @@ export function runGate(cardId: string, opts: { expectedSha?: string } = {}): Pr
     logger.info({ action: "maestro.gate", cardId }, "gate already running for this card — joining it");
     return current;
   }
-  const run = runGateNow(cardId, expectedSha).finally(() => inFlight.delete(key));
+  const run = runGateNow(cardId, expectedSha, opts.baseBranch).finally(() => inFlight.delete(key));
   inFlight.set(key, run);
   return run;
 }
@@ -445,13 +462,14 @@ function offCommitOutput(expectedSha: string, probe: Pick<GateProbe, "headSha" |
   );
 }
 
-async function runGateNow(cardId: string, expectedSha?: string): Promise<GateResult> {
+async function runGateNow(cardId: string, expectedSha?: string, requestedBase?: string): Promise<GateResult> {
   if (expectedSha !== undefined && !FULL_SHA_RE.test(expectedSha)) throw new Error("the gate can only be held to a full commit sha");
   const { card, project } = await getCardWithProject(cardId);
   const { cwd } = cardWorkPaths(project, card);
   const container = config.runner.container;
+  const baseBranch = requestedBase ?? (card.base || project.baseBranch);
 
-  const probeOut = await hostExecutor().runScript(buildGateProbeScript(container, cwd), { timeoutMs: 30_000 });
+  const probeOut = await hostExecutor().runScript(buildGateProbeScript(container, cwd, baseBranch), { timeoutMs: 30_000 });
   const probedAt = Date.now();
   const probe = parseGateProbe(probeOut.stdout);
   const tested = probe.headSha ? { headSha: probe.headSha } : {};
@@ -464,7 +482,10 @@ async function runGateNow(cardId: string, expectedSha?: string): Promise<GateRes
   }
   const plan = resolveGateChecks(probe);
   if (!plan.ran) {
-    logger.info({ audit: true, action: "maestro.gate", card: card.worktreeSlug, ran: false }, "gate had nothing to run");
+    logger.info(
+      { audit: true, action: "maestro.gate", card: card.worktreeSlug, ran: false, docsOnly: probe.docsOnly, base: baseBranch },
+      probe.docsOnly ? "gate skipped: the diff against the base is documentation only" : "gate had nothing to run",
+    );
     return { ran: false, passed: true, output: "", ...tested };
   }
 
@@ -484,7 +505,7 @@ async function runGateNow(cardId: string, expectedSha?: string): Promise<GateRes
   let runOut: { stdout: string; stderr?: string };
   try {
     runOut = await hostExecutor().runScript(
-      buildGateRunScript(container, cwd, plan.checks, { baseBranch: card.base || project.baseBranch, cardId: card.id, ...(expectedSha ? { expectedSha } : {}) }),
+      buildGateRunScript(container, cwd, plan.checks, { baseBranch, cardId: card.id, ...(expectedSha ? { expectedSha } : {}) }),
       { timeoutMs: GATE_RUN_TIMEOUT_MS },
     );
   } catch (err) {
