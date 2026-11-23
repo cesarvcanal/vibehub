@@ -1,13 +1,19 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { apiErrorMessage } from "@/lib/apiError";
 import { t as translate, useT } from "@/i18n";
-import type { PlatformFailureNotice } from "@/api/types";
+import type { FailureNarrative, FailureTrigger, PlatformFailureNotice } from "@/api/types";
 import { PLATFORM_FAILURES_KEY, platformFailuresApi } from "../api";
 import { explainFailure } from "../lib/explainFailure";
+import { formatFailureInstant } from "../lib/formatFailureInstant";
 
-type FailureForDetails = Pick<PlatformFailureNotice, "id" | "source" | "status" | "explanation" | "occurrences" | "details">;
+type FailureForDetails = Pick<
+  PlatformFailureNotice, "id" | "source" | "status" | "explanation" | "occurrences" | "firstSeenAt" | "lastSeenAt" | "details"
+>;
+
+const TRIGGER_TONES: Record<FailureTrigger, BadgeTone> = { system: "critical", person: "warn", unknown: "muted" };
 
 function FailureActions({ failure }: { failure: FailureForDetails }) {
   const t = useT();
@@ -41,6 +47,25 @@ function FailureActions({ failure }: { failure: FailureForDetails }) {
   );
 }
 
+function FailureNarrativeSummary({ narrative }: { narrative: FailureNarrative }) {
+  const t = useT();
+  return (
+    <div className="space-y-2 text-sm">
+      <p className="flex flex-wrap items-center gap-2">
+        <Badge tone={TRIGGER_TONES[narrative.trigger]}>{t(`platformFailures.trigger.${narrative.trigger}`)}</Badge>
+        <span className="text-xs text-muted-foreground">{narrative.triggerReason}</span>
+      </p>
+      <dl className="space-y-1.5">
+        <dt className="text-xs font-medium text-muted-foreground">{t("platformFailures.narrativeContext")}</dt>
+        <dd>{narrative.context}</dd>
+        <dt className="text-xs font-medium text-muted-foreground">{t("platformFailures.narrativeCause")}</dt>
+        <dd>{narrative.cause}</dd>
+      </dl>
+      <p className="text-xs text-muted-foreground">{t("platformFailures.narrativeNote")}</p>
+    </div>
+  );
+}
+
 function FailureStatusLine({ status, isOwner }: { status: PlatformFailureNotice["status"]; isOwner: boolean }) {
   const t = useT();
   if (status === "investigating") return <p className="text-xs">{t("platformFailures.investigating")}</p>;
@@ -55,6 +80,18 @@ export function FailureDetails({ failure, isOwner, affectedCardCount }: { failur
   return (
     <li className="space-y-2 rounded-md border border-border p-3">
       <p className="font-medium">{explainFailure(failure, t)}</p>
+      <p className="text-xs text-muted-foreground">
+        {t("platformFailures.when", {
+          first: formatFailureInstant(failure.firstSeenAt),
+          last: formatFailureInstant(failure.lastSeenAt),
+          n: failure.occurrences,
+          count: failure.occurrences,
+        })}
+      </p>
+      {details?.narrative ? <FailureNarrativeSummary narrative={details.narrative} /> : null}
+      {details?.narrativeUnavailable ? (
+        <p className="text-xs text-muted-foreground">{t(`platformFailures.narrativeUnavailable.${details.narrativeUnavailable}`)}</p>
+      ) : null}
       <FailureStatusLine status={failure.status} isOwner={isOwner} />
       {details ? (
         <details className="space-y-2 text-xs">
