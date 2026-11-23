@@ -33,10 +33,6 @@ import { logger } from "../../utils/logger.js";
  *      title, a body with every section of the team's standard, and comments on the diff — otherwise
  *      the branch is pushed and the delivery stops at `undocumented`. Then the comments go up as one
  *      COMMENT review on the pushed commit (those already on the PR are skipped).
- *   c. the GATE. When the pull request has GitHub CI checks, THEY are the gate: wait for them (bounded)
- *      and read their verdict — the CI runs the suite on a clean machine, never inside the shared
- *      runner. A PR without CI checks (gh SAYS so) is never merged from here (`no_ci`); a CI answer
- *      that could not be read is red, never "no CI". Red either way: STOP — do not merge.
  *   d. MERGE only when the caller passed `authorized: true` AND the gate is green. A merge commit,
  *      NEVER a squash, pinned to the commit the gate passed on: a PR that moved meanwhile is
  *      `head_moved`, never merged unchecked.
@@ -178,10 +174,6 @@ const CI_MARKER = "__VIBEHUB_CI__";
 export const CI_POLL_SECONDS = 20;
 /** How long the deliver waits for running CI checks before giving up (red, "still running"). */
 export const CI_WAIT_SECONDS = 15 * 60;
-/**
- * Right after the push GitHub may not have registered the checks yet ("no checks reported"). A repo
- * that HAS workflows gets this long for them to show up before the deliver falls back to the local gate.
- */
 export const CI_APPEAR_SECONDS = 2 * 60;
 
 /** Lines that plant the connection token and export `GH_TOKEN` from it (token over stdin only). PURE. */
@@ -558,7 +550,6 @@ export function buildCiChecksScript(
 
 /**
  * The CI verdict from what `gh pr checks --json name,bucket,link` printed:
- *  - `none`: gh said the PR has no checks ("no checks reported", or an empty list) — the local gate decides;
  *  - `pass`: every check passed or was skipped — on `headSha`, the commit the script read them for;
  *  - `fail`: some check failed or was cancelled (named in `output`, each with its job link when GitHub
  *    gave one — the red then points straight at the log that failed);
@@ -1099,10 +1090,6 @@ export async function setPrPeople(cardId: string, prUrl: string, people: PrPeopl
   return result;
 }
 
-/**
- * The PR's CI as the gate. Checks still running past the wait are red — never merged on a guess — and
- * so is an answer that could not be read. A PR with no CI checks is red too, marked `noCi`.
- */
 async function ciGate(
   container: string, token: string, cwd: string, prUrl: string, headSha?: string,
 ): Promise<GateResult> {
@@ -1126,12 +1113,6 @@ export async function readWorktreeHead(cardId: string): Promise<string | null> {
   return FULL_SHA_RE.test(out.stdout.trim()) ? out.stdout.trim().toLowerCase() : null;
 }
 
-/**
- * The gate a merge-only delivery would run, on its own: the CI of `sha`. What the PR review runs as
- * soon as it becomes ready, so the merge button already knows the verdict (and a green one is not run
- * again: `gatePassed`). Throws when the sha is not a full one, the card or its project is gone, or
- * the runner failed — a gate that did not run is not green.
- */
 export async function gateAtCommit(cardId: string, prUrl: string, sha: string): Promise<GateResult> {
   if (!FULL_SHA_RE.test(sha)) throw new Error("gateAtCommit requires the full sha of the reviewed commit");
   const { card, project } = await getCardWithProject(cardId);
