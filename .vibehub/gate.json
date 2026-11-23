@@ -1,7 +1,0 @@
-{
-  "checks": [
-    "npm run lint:changed",
-    "sh scripts/gate-changed.sh back",
-    "sh scripts/gate-changed.sh front"
-  ]
-}

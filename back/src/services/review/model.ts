@@ -194,7 +194,7 @@ export interface Review {
    */
   autoMergeFailedRound?: number;
   /**
-   * The merge gate (the PR's CI, or the tests of the author's worktree), run on the approved commit as soon
+   * The merge gate (the PR's CI), run on the approved commit as soon
    * as the review is ready, and not only on the click: the panel shows the verdict before the button, a green
    * is reused by the merge (which goes out right away) and a red goes back to the author with the failure.
    * Valid only for `sha`; a `running` that is not running in this process is from before a deploy and runs again.

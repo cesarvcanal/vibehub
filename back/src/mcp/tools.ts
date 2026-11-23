@@ -6,7 +6,6 @@ import { createCardAs, repoPushRefusals } from "../services/maestro/createCard.j
 import { findUser, type PublicUser } from "../auth/users.js";
 import { recordMessage, MESSAGE_TYPES, SEVERITIES, type MessageType, type Severity } from "../services/events/cardEvents.js";
 import { sendAnswer } from "./events.js";
-import { runGate } from "../services/maestro/gate.js";
 import { deliverCard } from "../services/review/deliverCard.js";
 import { prDocsInput, prDocsOf, PR_DOCS_RULE } from "./prDocsInput.js";
 import { relayCardActor, actAsParticipant, senderCardUserId } from "../services/board/actor.js";
@@ -531,38 +530,14 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
   );
 
   server.registerTool(
-    "vibehub_gate",
-    {
-      description:
-        "Run a card's checks in its worktree and report whether they pass — the gate a delivery has " +
-        "to clear. It runs `.vibehub/gate.json` (`{ \"checks\": [\"…\"] }`) if the repo has one, else " +
-        "sensible defaults (a typecheck and `npm test`) when they are resolvable, else nothing at all. " +
-        "Returns { ran, passed, output }: `ran:false` means there was nothing to check (a pass-" +
-        "through, not a failure). Output is a redacted tail. Use it only to know if a card is green when " +
-        "you are NOT delivering: vibehub_deliver already runs the gate and returns its verdict, so " +
-        "running this first just repeats minutes of checks.",
-      inputSchema: {
-        card: z.string().describe("id of the card to check (from vibehub_list_terminals)"),
-      },
-    },
-    async (a) => {
-      try {
-        const { card, project } = await getCardWithProject(a.card);
-        return ok(await runGate(card.id, { baseBranch: card.base || project.baseBranch }));
-      } catch (e) {
-        return fail(e);
-      }
-    },
-  );
-
-  server.registerTool(
     "vibehub_deliver",
     {
       description:
-        "Deliver a card: push its branch, open (or reuse) a pull request to `branch`, run the gate, " +
-        "and — ONLY when `authorized` is true and the gate is green — merge the PR with a merge commit " +
+        "Deliver a card: push its branch, open (or reuse) a pull request to `branch`, read the PR's GitHub CI, " +
+        "and — ONLY when `authorized` is true and the CI is green — merge the PR with a merge commit " +
         "(never a squash). All git/gh runs as the GitHub account of whoever sent the card its latest order (falling back to the project's). Returns { prUrl, " +
-        "merged, reason }: `reason` is 'merged' on success, or 'gate' (checks red), 'unauthorized' " +
+        "merged, reason }: `reason` is 'merged' on success, or 'gate' (CI red), 'no_ci' (the PR has no GitHub CI: " +
+        "never merged from here; tell the user the repo needs a GitHub Actions workflow that runs on every PR), 'unauthorized' " +
         "(prepared the PR but was not told to merge: ask the merge as an AskUserQuestion with the options " +
         "'Mergear em <branch> (recomendado)' and 'Não mergear agora'; when the PR declares a blocking item, ask " +
         "the OK for that item first, without recommending the merge), 'locked' (see below), or a git failure. Pass " +

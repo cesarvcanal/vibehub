@@ -1,8 +1,9 @@
 import type { PublicUser } from "../../auth/users.js";
 import { getCard, updateCard, type Card, type CardPr } from "../board/registry.js";
 import { cardBranch } from "../board/workspace.js";
-import { afterPrMerged, deliver, gateAtCommit, readPrState, type DeliverOpts, type DeliverResult } from "../maestro/deliver.js";
-import { readWorktreeHead, type GateResult } from "../maestro/gate.js";
+import {
+  afterPrMerged, deliver, gateAtCommit, readPrState, readWorktreeHead, type DeliverOpts, type DeliverResult, type GateResult,
+} from "../maestro/deliver.js";
 import { isBusy } from "../maestro/maestro.js";
 import { logger } from "../../utils/logger.js";
 import { analysisVerdict, type AnalysisMergeGate, type AnalysisMergeRefusal, type AnalysisReport } from "./analysisModel.js";
@@ -106,8 +107,8 @@ async function runAnalysisMergeGate(started: AnalysisMergeGate, pr: CardPr, card
   const head = await deliveredHead(started.cardId, pr.url).catch((err: unknown) => ({ refusal: `o gate não chegou a rodar: ${(err as Error).message}` }));
   const verdict: Pick<GateResult, "passed" | "output"> = "refusal" in head
     ? { passed: false, output: head.refusal }
-    : await gateAtCommit(started.cardId, pr.url, head.sha, pr.base).catch((err: unknown) => ({
-      ran: true, passed: false, output: `o gate não chegou a rodar: ${(err as Error).message}`,
+    : await gateAtCommit(started.cardId, pr.url, head.sha).catch((err: unknown) => ({
+      passed: false, output: `o gate não chegou a rodar: ${(err as Error).message}`,
     }));
   const pinned = "sha" in head ? { sha: head.sha } : {};
   const landed = await saveAnalysisMergeGate(verdict.passed

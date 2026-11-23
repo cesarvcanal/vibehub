@@ -10,8 +10,7 @@ import { findUser } from "../../auth/users.js";
 import { cardLevel } from "../../auth/access.js";
 import { cardAccountSlug, getUserGit, linkedAccountSlug } from "../../auth/userGit.js";
 import { sendToTerminal, SEND_READY_WAIT_MS } from "../maestro/maestro.js";
-import { afterPrMerged, gateAtCommit, readPrApproval, readPrDiffUnchanged, readPrState, setPrPeople } from "../maestro/deliver.js";
-import type { GateResult } from "../maestro/gate.js";
+import { type GateResult, afterPrMerged, gateAtCommit, readPrApproval, readPrDiffUnchanged, readPrState, setPrPeople } from "../maestro/deliver.js";
 import type { MessageOrigin } from "../chat/provenance.js";
 import { eventsAfter, onCardEvent, recordMessage, type CardEvent, type Severity } from "../events/cardEvents.js";
 import { logger } from "../../utils/logger.js";
@@ -423,16 +422,17 @@ type MergeVerdict = GateResult & { conflict?: true };
 async function readMergeVerdict(r: Review, sha: string): Promise<MergeVerdict> {
   try {
     const pr = await readPrState(r.cardId, r.prUrl);
-    if (pr?.mergeable === "CONFLICTING") return { ran: true, passed: false, conflict: true, output: mergeConflictOutput(r) };
-    return await gateAtCommit(r.cardId, r.prUrl, sha, r.base);
+    if (pr?.mergeable === "CONFLICTING") return { passed: false, conflict: true, output: mergeConflictOutput(r) };
+    return await gateAtCommit(r.cardId, r.prUrl, sha);
   } catch (err) {
-    return { ran: true, passed: false, output: `o gate não chegou a rodar: ${(err as Error).message}` };
+    return { passed: false, output: `o gate não chegou a rodar: ${(err as Error).message}` };
   }
 }
 
 function mergeVerdictNote(r: Review, sha: string, verdict: MergeVerdict, exhausted: boolean): string {
   const commit = sha.slice(0, 7);
   if (verdict.passed) return `Testes do merge verdes no commit aprovado (${commit}): o merge sai na hora.`;
+  if (verdict.noCi) return `Merge recusado: o PR está sem CI no GitHub, e o vibehub só mergeia com o CI do PR verde. Configure o GitHub Actions do repo.`;
   if (verdict.conflict && exhausted) {
     return `O PR segue em conflito com ${r.base} depois de ${MERGE_GATE_AUTO_RETRIES} ordens ao autor: o merge espera uma pessoa trazer a base.`;
   }
@@ -470,7 +470,7 @@ async function checkMergeGate(reviewId: string, opts: { again?: boolean; by?: st
     let landed = false as boolean;
     const sameFailureKind = previous?.conflict === verdict.conflict;
     const failures = sameFailureKind ? failuresBefore + 1 : 1;
-    const exhausted = failures > MERGE_GATE_AUTO_RETRIES;
+    const exhausted = failures > MERGE_GATE_AUTO_RETRIES || verdict.noCi === true;
     const after = await mutateReview(reviewId, (x) => {
       if (x.phase !== "ready" || x.reviewedSha !== sha) return;
       x.mergeGate = verdict.passed
