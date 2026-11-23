@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { relative } from "node:path";
-import { lintChangedLines, findStrayMarkdown, findNewFilesOutsideBoardArea } from "./lintChanged.mjs";
+import { lintChangedLines, findStrayMarkdown, findNewFilesOutsideBoardArea, findMisnamedFiles } from "./lintChanged.mjs";
 import { git, writeRepoFile, createRepoWithBase } from "./testRepo.mjs";
 
 const LEGACY = "let legacy = 1;\nlegacy += 1;\nexport { legacy };\n";
@@ -187,5 +187,53 @@ describe("findNewFilesOutsideBoardArea", () => {
     expect(findNewFilesOutsideBoardArea({ repoDir, baseRef: "main", approvedBoardFiles })).toEqual([
       "front/src/features/board/components/DeckColumn.test.tsx",
     ]);
+  });
+});
+
+describe("findMisnamedFiles", () => {
+  it.each([
+    "back/src/services/sdk/cardSdk.ts",
+    "back/src/services/sdk/cardSdk.lifecycle.test.ts",
+    "back/src/runtime/sdkDriver.mjs",
+    "front/src/features/sdk/components/SdkChatView.tsx",
+    "front/src/features/sdk/components/SdkChatView.test.tsx",
+    "front/src/features/sdk/components/SdkChatView.stories.tsx",
+    "front/src/features/sdk/components/SdkChatView.test.ts",
+    "front/src/test/render.tsx",
+    "front/src/components/ui/dropdown-menu.tsx",
+    "front/src/types/vite-env.d.ts",
+    "front/src/i18n/pt-PT.ts",
+    "front/src/styles/app-theme.css",
+    "scripts/lint-changed.mjs",
+  ])("%s passa", (path) => {
+    const repoDir = createRepoWithBase({ "README.md": "base\n" });
+    writeRepoFile(repoDir, path, "text\n");
+
+    expect(findMisnamedFiles({ repoDir, baseRef: "main" })).toEqual([]);
+  });
+
+  it.each([
+    "back/src/services/sdk/sdk-driver.mjs",
+    "back/src/services/sdk/card_sdk.ts",
+    "back/src/services/sdk/CardSdk.ts",
+    "back/src/services/sdk/cardSdk.Lifecycle.test.ts",
+    "front/src/features/sdk/components/sdk-chat-view.tsx",
+    "front/src/features/sdk/lib/ContextUsage.mjs",
+    "front/src/i18n/en_US.ts",
+    "front/src/features/sdk/components/ui/drop-down.tsx",
+  ])("%s reprova", (path) => {
+    const repoDir = createRepoWithBase({ "README.md": "base\n" });
+    writeRepoFile(repoDir, path, "text\n");
+    git(repoDir, "add", ".");
+    git(repoDir, "commit", "-qm", "add");
+
+    expect(findMisnamedFiles({ repoDir, baseRef: "main" })).toEqual([path]);
+  });
+
+  it("arquivo antigo fora do padrão que a branch só altera não conta", () => {
+    const repoDir = createRepoWithBase({ "back/src/runtime/sdk-driver.mjs": "legacy\n" });
+    writeRepoFile(repoDir, "back/src/runtime/sdk-driver.mjs", "legacy changed\n");
+
+    expect(findMisnamedFiles({ repoDir, baseRef: "main" })).toEqual([]);
   });
 });

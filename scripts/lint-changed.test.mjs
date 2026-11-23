@@ -89,4 +89,15 @@ describe("npm run lint:changed", () => {
     expect(run.stdout).toContain("AGENTS.md §4");
     expect(run.stdout).toContain("qual pasta de back/src/services/ atende isto?");
   });
+
+  it("arquivo novo com nome fora da convenção sai 1, com o caminho e a regra na saída", () => {
+    const repoDir = createRepoWithLintInstalled();
+    writeRepoFile(repoDir, "back/src/services/sdk/sdk-driver.ts", "export const sdkDriver = 1;\n");
+
+    const run = runLintChanged(repoDir);
+
+    expect(run.status).toBe(1);
+    expect(run.stdout).toContain("back/src/services/sdk/sdk-driver.ts");
+    expect(run.stdout).toContain("AGENTS.md §2");
+  });
 });

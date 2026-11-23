@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { join, relative } from "node:path";
+import { basename, extname, join, relative } from "node:path";
 import { parseAddedLines } from "./addedLines.mjs";
 
 const CONFIG_FILE = join(import.meta.dirname, "..", "..", "eslint.config.js");
@@ -16,6 +16,12 @@ const ALLOWED_MARKDOWN = [
 ];
 const BOARD_DIR = "front/src/features/board/";
 const APPROVED_BOARD_FILES = [];
+const NAMED_SOURCE_DIRS = ["back/src/", "front/src/"];
+const CODE_EXTENSIONS = [...LINTED_EXTENSIONS, "js"];
+const COMPONENT_EXTENSIONS = ["tsx", "jsx"];
+const CODE_FILE_NAME = /^(?<stem>[A-Za-z][A-Za-z0-9]*)(?<suffixes>(?:\.[a-z][A-Za-z0-9]*)*)\.(?<extension>[a-z]+)$/;
+const SHADCN_UI_DIR = "front/src/components/ui/";
+const LOCALE_FILE = /^front\/src\/i18n\/[a-z]{2}(?:-[A-Z]{2})?\.ts$/;
 
 function git(repoDir, ...args) {
   return execFileSync("git", ["-c", "core.quotePath=false", ...args], { cwd: repoDir, encoding: "utf8", maxBuffer: Infinity });
@@ -58,15 +64,37 @@ export async function lintChangedLines({ repoDir, baseRef }) {
     .filter((lintResult) => lintResult.messages.length > 0);
 }
 
-function listAddedFiles(repoDir, baseRef, pathspec) {
+function listAddedFiles(repoDir, baseRef, ...pathspecs) {
   const base = git(repoDir, "merge-base", "HEAD", baseRef).trim();
-  const committedOrStaged = git(repoDir, "diff", "-z", "--name-only", "--no-renames", "--diff-filter=A", base, "--", pathspec);
-  const untracked = git(repoDir, "ls-files", "-z", "--others", "--exclude-standard", "--", pathspec);
+  const committedOrStaged = git(repoDir, "diff", "-z", "--name-only", "--no-renames", "--diff-filter=A", base, "--", ...pathspecs);
+  const untracked = git(repoDir, "ls-files", "-z", "--others", "--exclude-standard", "--", ...pathspecs);
   return [...committedOrStaged.split("\0"), ...untracked.split("\0")].filter(Boolean).sort();
 }
 
 export function findNewFilesOutsideBoardArea({ repoDir, baseRef, approvedBoardFiles = APPROVED_BOARD_FILES }) {
   return listAddedFiles(repoDir, baseRef, BOARD_DIR).filter((path) => !approvedBoardFiles.includes(path));
+}
+
+function isNameExempt(path) {
+  return path.startsWith(SHADCN_UI_DIR) || path.endsWith(".d.ts") || LOCALE_FILE.test(path);
+}
+
+function followsNamingConvention(path) {
+  const fileName = basename(path);
+  const nameParts = CODE_FILE_NAME.exec(fileName);
+  if (!nameParts) return false;
+  const { stem, suffixes, extension } = nameParts.groups;
+  const isCamelCase = /^[a-z]/.test(stem);
+  const isComponentFile = COMPONENT_EXTENSIONS.includes(extension);
+  const isTestOfComponent = suffixes.split(".").includes("test");
+  return isCamelCase || isComponentFile || isTestOfComponent;
+}
+
+export function findMisnamedFiles({ repoDir, baseRef }) {
+  const addedCodeFiles = listAddedFiles(repoDir, baseRef, ...NAMED_SOURCE_DIRS).filter((path) =>
+    CODE_EXTENSIONS.includes(extname(path).slice(1)),
+  );
+  return addedCodeFiles.filter((path) => !isNameExempt(path) && !followsNamingConvention(path));
 }
 
 export function findStrayMarkdown({ repoDir, baseRef }) {
