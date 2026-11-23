@@ -39,7 +39,7 @@ const afterPrMerged = vi.fn(async () => "deleted" as const);
 let gateAnswer = { ran: true, passed: true, output: "" };
 const gateAtCommit = vi.fn(async (_cardId: string, _prUrl: string, _sha: string) => gateAnswer);
 const fleetConversation = { answer: null as FleetConversation | null };
-const readFleetConversation = vi.fn<(transcriptDir: string) => Promise<FleetConversation | null>>(async () => fleetConversation.answer);
+const readFleetConversation = vi.fn<(transcriptDir: string, runId?: string) => Promise<FleetConversation | null>>(async () => fleetConversation.answer);
 const deliver = vi.fn(async (cardId: string, _opts: DeliverOpts = {}): Promise<DeliverResult> => {
   actorAtDeliver = (await (await import("../services/board/registry.js")).getCard(cardId))?.actorUserId;
   return deliverResult;
@@ -1839,6 +1839,81 @@ describe("conversa da frota da análise pela rota", () => {
     const w = await world();
     readFleetConversation.mockRejectedValueOnce(new Error("runner parado"));
     const res = await read(w, w.owner);
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: "runner parado" });
+  });
+});
+
+describe("conversa de uma rodada da frota do revisor pela rota", () => {
+  const roundConversation = (): FleetConversation => ({
+    runId: "wf_abc12", finished: false,
+    agents: [{ id: "a01f", label: "revisão:security", phase: "Revisão", status: "running", model: "claude-opus-5-5" }],
+    items: [{ agentId: "a01f", at: 1, kind: "text", text: "Vou conferir se o runId é validado." }],
+  });
+  const read = async (w: World, as: Person, path = "wf_abc12") =>
+    await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/review/conversation/${path}`, headers: { cookie: as.cookie } });
+
+  it("quem só vê o card lê as falas daquela rodada, do diretório de transcrições do card revisor", async () => {
+    const w = await world();
+    const review = (await startReview(w)).json().review as { reviewerCardId: string };
+    fleetConversation.answer = roundConversation();
+    onTestFinished(() => {
+      fleetConversation.answer = null;
+    });
+    readFleetConversation.mockClear();
+    const res = await read(w, w.leitor);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().conversation).toEqual({
+      runId: "wf_abc12", finished: false,
+      agents: [{ id: "a01f", label: "revisão:security", phase: "Revisão", status: "running", modelLabel: "Opus 5.5" }],
+      items: [{ agentId: "a01f", at: 1, kind: "text", text: "Vou conferir se o runId é validado." }],
+    });
+    expect(readFleetConversation).toHaveBeenCalledTimes(1);
+    const [transcriptDir, runId] = readFleetConversation.mock.calls[0]!;
+    expect(runId).toBe("wf_abc12");
+    expect(transcriptDir).toContain(review.reviewerCardId.slice(0, 4));
+  });
+
+  it("rodada que o card revisor não tem mais responde conversation: null", async () => {
+    const w = await world();
+    await startReview(w);
+    const res = await read(w, w.leitor);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ conversation: null });
+  });
+
+  it("runId fora do formato responde 400", async () => {
+    const w = await world();
+    await startReview(w);
+    const { InvalidWorkflowIdError } = await import("../services/sdk/workflowProbe.js");
+    readFleetConversation.mockRejectedValueOnce(new InvalidWorkflowIdError("invalid workflow run id"));
+    const res = await read(w, w.leitor, encodeURIComponent("x;rm"));
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toHaveProperty("error");
+  });
+
+  it("pr fora do formato responde 400 e PR sem revisão responde 404, sem ir ao runner", async () => {
+    const w = await world();
+    await startReview(w);
+    readFleetConversation.mockClear();
+    expect((await read(w, w.leitor, "wf_abc12?pr=abc")).statusCode).toBe(400);
+    expect((await read(w, w.leitor, `wf_abc12?pr=${PR.number + 1}`)).statusCode).toBe(404);
+    expect(readFleetConversation).not.toHaveBeenCalled();
+  });
+
+  it("quem não alcança o card recebe 404, sem ler o runner", async () => {
+    const w = await world();
+    await startReview(w);
+    readFleetConversation.mockClear();
+    expect((await read(w, w.outro)).statusCode).toBe(404);
+    expect(readFleetConversation).not.toHaveBeenCalled();
+  });
+
+  it("runner que não responde volta 502 com o motivo", async () => {
+    const w = await world();
+    await startReview(w);
+    readFleetConversation.mockRejectedValueOnce(new Error("runner parado"));
+    const res = await read(w, w.leitor);
     expect(res.statusCode).toBe(502);
     expect(res.json()).toEqual({ error: "runner parado" });
   });
