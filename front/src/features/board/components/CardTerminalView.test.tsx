@@ -414,7 +414,7 @@ describe("CardTerminalView — which chat the Chat tab mounts (the INSTALL flag,
 
   it("card numa conta reserva cuja original renovou: o Voltar devolve o card à conta original", async () => {
     serveFeaturesOn();
-    const loan = { originalAccountSlug: "albert", originalAccount: "albert", renewsAt: 1, exhausted: [] };
+    const loan = { originalCardAccountSlug: "albert", originalEffectiveAccount: "albert", renewsAt: 1, exhausted: [] };
     mockPost.mockImplementation((url: string) => (url === "/cards/c1/account-return"
       ? Promise.resolve({ card: card({ openedAt: 10, accountSlug: "albert" }), session: "restarted" })
       : Promise.resolve({ card: card({ openedAt: 10, accountSlug: "cesar", accountLoan: loan }) })));

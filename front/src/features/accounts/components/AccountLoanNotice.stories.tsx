@@ -15,24 +15,24 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Borrowed: Story = {
-  args: { loan: { originalAccount: "albert", renewsAt: Date.now() + 2 * HOUR_MS, exhausted: [] } },
+  args: { loan: { originalEffectiveAccount: "albert", renewsAt: Date.now() + 2 * HOUR_MS, exhausted: [] } },
 };
 
 export const Renewed: Story = {
-  args: { loan: { originalAccount: "albert", renewsAt: Date.now() - 60_000, exhausted: [] } },
+  args: { loan: { originalEffectiveAccount: "albert", renewsAt: Date.now() - 60_000, exhausted: [] } },
 };
 
 export const UnknownRenewal: Story = {
-  args: { loan: { originalAccount: "albert", exhausted: [] } },
+  args: { loan: { originalEffectiveAccount: "albert", exhausted: [] } },
 };
 
 export const Returning: Story = {
-  args: { loan: { originalAccount: "albert", renewsAt: Date.now() - 60_000, exhausted: [] }, returning: true },
+  args: { loan: { originalEffectiveAccount: "albert", renewsAt: Date.now() - 60_000, exhausted: [] }, returning: true },
 };
 
 export const NarrowWithLongNames: Story = {
   args: {
-    loan: { originalAccount: "conta-do-albert-reginato-financeiro", renewsAt: Date.now() + HOUR_MS, exhausted: [] },
+    loan: { originalEffectiveAccount: "conta-do-albert-reginato-financeiro", renewsAt: Date.now() + HOUR_MS, exhausted: [] },
     currentAccount: "conta-reserva-do-cesar-canal-multiverso",
   },
   decorators: [(Story) => <div className="w-[360px] p-4"><Story /></div>],

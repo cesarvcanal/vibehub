@@ -327,11 +327,12 @@ export function CardTerminalView({
     toast.success(translate(key, vars));
   }
 
-  const accountReturnMutation = useMutation({
-    mutationFn: (loan: AccountLoan) => accountsApi.returnCardAccount(cardId).then((result) => ({ result, loan })),
-    onSuccess: ({ result, loan }) => {
+  const accountLoan = card?.accountLoan;
+  const accountReturnMutation = useMutation<Awaited<ReturnType<typeof accountsApi.returnCardAccount>>, Error, AccountLoan>({
+    mutationFn: () => accountsApi.returnCardAccount(cardId),
+    onSuccess: (result, loan) => {
       resetCardPlanUsage(queryClient, cardId);
-      applySessionSwitch(result, { switched: "accounts.loan.returned", pending: "accounts.loan.returnPending" }, { label: loan.originalAccount });
+      applySessionSwitch(result, { switched: "accounts.loan.returned", pending: "accounts.loan.returnPending" }, { label: loan.originalEffectiveAccount });
     },
     onError: (error) => toast.error(apiErrorMessage(error, translate("accounts.loan.returnError"))),
   });
@@ -1311,12 +1312,12 @@ export function CardTerminalView({
                 terminalWorking={working}
                 footer={prBlocks}
                 account={{ slug: inUseSlug, name: accountName }}
-                accountNotice={card?.accountLoan ? (
+                accountNotice={accountLoan ? (
                   <AccountLoanNotice
-                    loan={card.accountLoan}
+                    loan={accountLoan}
                     currentAccount={inUseSlug}
                     returning={accountReturnMutation.isPending}
-                    onReturn={() => card.accountLoan && accountReturnMutation.mutate(card.accountLoan)}
+                    onReturn={() => accountReturnMutation.mutate(accountLoan)}
                   />
                 ) : null}
                 analysisCard={analysisCard}

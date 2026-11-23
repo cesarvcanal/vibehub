@@ -1155,10 +1155,10 @@ export interface AccountBackupResponse {
 }
 
 export interface AccountLoan {
-  originalAccountSlug?: string;
-  originalAccount: string;
+  originalCardAccountSlug?: string;
+  originalEffectiveAccount: string;
   renewsAt?: number;
-  exhausted: { account: string; renewsAt?: number }[];
+  exhausted: { accountSlug: string; renewsAt?: number }[];
 }
 
 /** One metered plan window: how much is gone, and when it empties again. */

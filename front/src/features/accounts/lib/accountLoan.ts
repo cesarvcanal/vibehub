@@ -1,5 +1,8 @@
 import type { AccountLoan } from "@/api/types";
 
-export function isAccountLoanRenewed(loan: AccountLoan, now: number): boolean {
-  return loan.renewsAt === undefined || loan.renewsAt <= now;
+export type AccountLoanState = "borrowed" | "renewed" | "unknownRenewal";
+
+export function accountLoanState(loan: AccountLoan, now: number): AccountLoanState {
+  if (loan.renewsAt === undefined) return "unknownRenewal";
+  return loan.renewsAt <= now ? "renewed" : "borrowed";
 }
