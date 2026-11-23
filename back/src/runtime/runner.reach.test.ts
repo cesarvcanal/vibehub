@@ -46,6 +46,33 @@ describe("checkStatusHookReach", () => {
     expect(error).toHaveBeenCalledTimes(1);
   });
 
+  it("a single 000 that the next probe contradicts does not blame the public URL", async () => {
+    runScript.mockResolvedValueOnce({ stdout: "401", stderr: "" });
+    await checkStatusHookReach();
+    const error = vi.spyOn(logger, "error").mockImplementation(() => undefined as never);
+    const info = vi.spyOn(logger, "info").mockImplementation(() => undefined as never);
+    runScript.mockResolvedValueOnce({ stdout: "000", stderr: "" });
+    expect(await checkStatusHookReach()).toBe(false);
+    runScript.mockResolvedValueOnce({ stdout: "401", stderr: "" });
+    expect(await checkStatusHookReach()).toBe(true);
+    expect(error).not.toHaveBeenCalled();
+    expect(info).not.toHaveBeenCalled();
+  });
+
+  it("after the alarm, the first answering probe logs the recovery once", async () => {
+    runScript.mockResolvedValueOnce({ stdout: "401", stderr: "" });
+    await checkStatusHookReach();
+    const info = vi.spyOn(logger, "info").mockImplementation(() => undefined as never);
+    vi.spyOn(logger, "error").mockImplementation(() => undefined as never);
+    runScript.mockResolvedValueOnce({ stdout: "000", stderr: "" }).mockResolvedValueOnce({ stdout: "000", stderr: "" });
+    await checkStatusHookReach();
+    await checkStatusHookReach();
+    runScript.mockResolvedValue({ stdout: "401", stderr: "" });
+    await checkStatusHookReach();
+    await checkStatusHookReach();
+    expect(info).toHaveBeenCalledTimes(1);
+  });
+
   it("an unknown pass between two failures does not re-raise the error", async () => {
     const error = vi.spyOn(logger, "error").mockImplementation(() => undefined as never);
     runScript.mockResolvedValueOnce({ stdout: "401", stderr: "" });
