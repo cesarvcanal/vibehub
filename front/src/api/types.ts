@@ -235,7 +235,7 @@ export interface SettingsPatch {
   runner?: Partial<RunnerSettings>;
 }
 
-export type PlatformFailureSource = "backend_error" | "slow_turn" | "stalled_turn" | "agent_report";
+export type PlatformFailureSource = "backend_error" | "slow_turn" | "stalled_turn" | "agent_report" | "screen_error";
 export type PlatformFailureStatus = "open" | "investigating" | "resolved" | "concluded_without_fix" | "dismissed";
 
 export interface PlatformFailure {
@@ -272,6 +272,12 @@ export interface PlatformFailureNotice {
 export interface PlatformFailureInvestigation {
   failure: PlatformFailure;
   card: { id: string; projectId: string; title: string };
+}
+
+export interface ScreenErrorReport {
+  message: string;
+  screen: string;
+  stack?: string;
 }
 
 /** `GET /api/transcribe` — what voice input can do on THIS install. */

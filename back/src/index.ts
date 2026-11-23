@@ -2,7 +2,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, resolve, join } from "node:path";
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
-import Fastify from "fastify";
+import Fastify, { type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
@@ -78,11 +78,20 @@ export async function buildServer() {
   // `logger: false` above silences Fastify's own logger — and with it the default error handler's
   // only trace of a crashed route. A 5xx is the server's fault and lands in the app log here; the
   // response itself is untouched (still the default handler's). A 4xx is the client's and does not.
+  const requestsLoggedAsFailed = new WeakSet<FastifyRequest>();
   app.addHook("onError", async (req, _reply, err) => {
     const status = (err as { statusCode?: number }).statusCode ?? 500;
     // The route PATTERN, not req.url: the same failure groups across card ids, and whatever a query
     // string carries (a search term, a path) stays out of the log.
-    if (status >= 500) logger.error({ err, method: req.method, route: req.routeOptions.url }, "request failed");
+    if (status < 500) return;
+    requestsLoggedAsFailed.add(req);
+    logger.error({ err, method: req.method, route: req.routeOptions.url }, "request failed");
+  });
+  app.addHook("onResponse", async (req, reply) => {
+    const isUnloggedServerError = reply.statusCode >= 500 && !requestsLoggedAsFailed.has(req);
+    if (!isUnloggedServerError) return;
+    const route = req.routeOptions.url;
+    logger.error({ method: req.method, route, status: reply.statusCode, detail: `${reply.statusCode} ${req.method} ${route}` }, "request answered with a server error");
   });
 
   app.get("/api/health", async () => ({ ok: true, version: "0.1.0" }));

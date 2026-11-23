@@ -112,6 +112,17 @@ describe("registro de falhas da plataforma", () => {
     expect(await failures.recordPlatformFailure({ ...backendReport("x"), component: "component-a0" })).toMatchObject({ occurrences: 2 });
   });
 
+  it("relatos de tela em excesso não descartam falha do backend", async () => {
+    const failures = await fresh();
+    const screenReport = (message: string): PlatformFailureReport => ({ source: "screen_error", component: "front", symptom: message, evidence: `mensagem: ${message}` });
+    for (const index of Array.from({ length: failures.ACTIVE_FAILURES_CAP }, (_unused, position) => position)) {
+      await failures.recordPlatformFailure(screenReport(`erro de tela ${String.fromCharCode(97 + (index % 26))}${String.fromCharCode(97 + Math.floor(index / 26))}`));
+    }
+    expect(await failures.recordPlatformFailure(screenReport("mais um erro de tela"))).toBeNull();
+    expect(await failures.recordPlatformFailure(backendReport("driver gone"))).toMatchObject({ source: "backend_error", occurrences: 1 });
+    expect((await failures.listActivePlatformFailures()).filter((failure) => failure.source === "screen_error")).toHaveLength(failures.ACTIVE_SCREEN_ERRORS_CAP);
+  });
+
   it("dispensar falha em investigação é recusado", async () => {
     const failures = await fresh();
     const recorded = await failures.recordPlatformFailure(backendReport("driver gone"));

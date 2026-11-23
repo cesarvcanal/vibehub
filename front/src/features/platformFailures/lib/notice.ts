@@ -1,6 +1,6 @@
 import type { PlatformFailureNotice, PlatformFailureSource, PlatformFailureStatus } from "@/api/types";
 
-const SOURCES: readonly PlatformFailureSource[] = ["backend_error", "slow_turn", "stalled_turn", "agent_report"];
+const SOURCES: readonly PlatformFailureSource[] = ["backend_error", "slow_turn", "stalled_turn", "agent_report", "screen_error"];
 const STATUSES: readonly PlatformFailureStatus[] = ["open", "investigating", "resolved", "concluded_without_fix", "dismissed"];
 const ACTIVE_STATUSES: readonly PlatformFailureStatus[] = ["open", "investigating", "concluded_without_fix"];
 

@@ -39,6 +39,7 @@ async function boot(): Promise<{ app: FastifyInstance; error: MockInstance }> {
   app.get("/api/__test/bad", async () => {
     throw Object.assign(new Error("bad input"), { statusCode: 400 });
   });
+  app.get("/api/__test/upstream", async (_req, reply) => await reply.code(502).send({ error: "GitHub fora do ar" }));
   await app.ready();
   return { app, error };
 }
@@ -51,6 +52,15 @@ describe("erros de rota", () => {
     const [fields] = error.mock.calls[0] as [Record<string, unknown>];
     expect((fields.err as Error).message).toBe("disk exploded");
     expect(fields).toMatchObject({ method: "GET", route: "/api/__test/boom" });
+  });
+
+  it("um 5xx respondido pela rota sem exceção também vai ao log de erro, uma vez, com status e rota", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/__test/upstream" });
+    expect(res.statusCode).toBe(502);
+    expect(error).toHaveBeenCalledTimes(1);
+    const [fields, message] = error.mock.calls[0] as [Record<string, unknown>, string];
+    expect(fields).toMatchObject({ method: "GET", route: "/api/__test/upstream", status: 502, detail: "502 GET /api/__test/upstream" });
+    expect(message).toBe("request answered with a server error");
   });
 
   it("um erro do cliente (4xx) não vai para o log de erro", async () => {

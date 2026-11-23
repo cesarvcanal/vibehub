@@ -18,7 +18,7 @@ interface State {
   error: Error | null;
 }
 
-export class ErrorBoundary extends React.Component<{ children: React.ReactNode }, State> {
+export class ErrorBoundary extends React.Component<{ children: React.ReactNode; onCrash: (error: Error) => void }, State> {
   override state: State = { error: null };
 
   static getDerivedStateFromError(error: Error): State {
@@ -29,6 +29,7 @@ export class ErrorBoundary extends React.Component<{ children: React.ReactNode }
     // The console is where the stack is actually readable, and it is the one place a report can be
     // copied from. Never swallow it.
     console.error("[vibehub] render crashed", error, info.componentStack);
+    this.props.onCrash(error);
   }
 
   override render(): React.ReactNode {

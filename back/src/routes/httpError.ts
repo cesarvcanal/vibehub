@@ -9,7 +9,7 @@ import type { FastifyReply } from "fastify";
  */
 export type ErrorStatusRule = readonly [pattern: RegExp, status: number];
 
-export const NOT_FOUND: ErrorStatusRule = [/not found/i, 404];
+export const NOT_FOUND: ErrorStatusRule = [/(?<!command )not found/i, 404];
 
 interface ErrorStatusOptions {
   rules?: readonly ErrorStatusRule[];

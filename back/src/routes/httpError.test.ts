@@ -26,4 +26,9 @@ describe("sendError", () => {
     expect((await statusOf("runner unreachable", { fallback: 502 })).status).toBe(502);
     expect((await statusOf("card not found", { fallback: 502 })).status).toBe(404);
   });
+
+  it("o 'command not found' do shell é falha do runner, não recurso inexistente: cai no fallback, não em 404", async () => {
+    const runnerFailure = "the runner on this machine could not run the command: bash: line 2: docker: command not found";
+    expect((await statusOf(runnerFailure, { fallback: 502 })).status).toBe(502);
+  });
 });

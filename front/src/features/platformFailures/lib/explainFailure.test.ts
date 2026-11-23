@@ -13,6 +13,7 @@ describe("texto leigo de uma falha", () => {
     ["backend_error", /erro interno/],
     ["slow_turn", /demorando mais que o normal/],
     ["agent_report", /não se comportou como deveria/],
+    ["screen_error", /tela do vibehub mostrou um erro/],
   ] as const)("sem explicação, a origem %s tem texto leigo próprio", (source, expectedText) => {
     setLanguage("pt-BR");
     expect(explainFailure({ source }, t)).toMatch(expectedText);
