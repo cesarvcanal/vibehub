@@ -105,7 +105,8 @@ per card inside it, and bridges that session to your browser; the native chat's 
 the same container, started through `docker exec`. If vibehub restarts, every tmux session is still
 running and reconnects. The SDK drivers do not survive it: on boot, vibehub writes a line in the
 chat of every card whose turn was interrupted and, with automatic resume on (the default), resumes
-that turn once.
+that turn — again after each restart as long as the resumed turn keeps advancing, up to five times
+in a row.
 
 **On credentials:** GitHub tokens live in an encrypted local vault. `git clone` and `git fetch` get
 the token per command, as an environment-scoped http header; it is never written into

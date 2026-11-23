@@ -44,8 +44,8 @@ an agent bug would land in the app's blast radius. Keeping it in one container i
 
 - vibehub restarts freely — every tmux session survives and reconnects. The native chat's SDK
   drivers are the exception: they are children of the back and die with it, so a turn they had in
-  flight is marked on disk and resumed once at the next boot (`sdkAutoResume`,
-  `services/sdk/resume.ts`).
+  flight is marked on disk and resumed at the next boot (`sdkAutoResume`); a resumed turn that
+  keeps advancing is resumed again, up to five times in a row (`services/sdk/resume.ts`).
 - The agent runs as root inside an isolated container (`IS_SANDBOX=1`), which is what lets it work
   without a permission prompt on every command.
 - What the agent can reach is exactly what you mounted and configured: the repos you connected, the
