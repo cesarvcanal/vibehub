@@ -151,6 +151,13 @@ describe("DEFAULT_BRAIN", () => {
     expect(mod.DEFAULT_BRAIN).toMatch(/AGENTS\.md/);
     expect(mod.DEFAULT_BRAIN).toMatch(/rules file wins over the code around you/);
   });
+
+  it("pergunta até ficar claro, como a persona do maestro, e não cita regra de entrega que não existe", async () => {
+    const { mod } = await fresh();
+    expect(mod.DEFAULT_BRAIN).not.toMatch(/ONE round of questions/);
+    expect(mod.DEFAULT_BRAIN).toContain("keep asking until it is clear");
+    expect(mod.DEFAULT_BRAIN).not.toMatch(/delivery rules above/);
+  });
 });
 
 describe("the stored text", () => {
