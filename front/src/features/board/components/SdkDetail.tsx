@@ -15,6 +15,8 @@ import {
   agentStatus,
   bashOutput,
   changedFiles,
+  countAgentActions,
+  describeRunningAgentStep,
   detailHasResult,
   formatDuration,
   formatTokens,
@@ -231,11 +233,10 @@ function SdkFleetView({ rows, tasks, children }: FleetProps) {
     >
       {agents.map((row, i) => {
         const task = tasks[row.id];
-        const kids = children.get(row.id) ?? [];
-        const lastKid = [...kids].reverse().find((k) => k.kind === "tool") as ToolRow | undefined;
+        const childRows = children.get(row.id) ?? [];
         const status = statuses[i] as ToolStatus;
         const doing = task?.status === "running" || !task
-          ? task?.summary || (task?.lastTool ? task.lastTool : lastKid ? toolHeadline(lastKid.name, lastKid.input).title : "")
+          ? describeRunningAgentStep(task, childRows)
           : t(task.status === "completed" ? "sdk.fleet.finished" : "sdk.fleet.stopped");
         return (
           <FleetRow
@@ -244,7 +245,7 @@ function SdkFleetView({ rows, tasks, children }: FleetProps) {
             status={status}
             name={agentName(row.input)}
             now={doing}
-            actions={task?.toolUses ?? row.result?.agent?.toolUses ?? kids.filter((k) => k.kind === "tool").length}
+            actions={countAgentActions(row, task, childRows)}
             durationMs={agentElapsedMs(status, task, row.result?.agent, now)}
             onClick={() => open({ kind: "agent", id: row.id })}
           />
