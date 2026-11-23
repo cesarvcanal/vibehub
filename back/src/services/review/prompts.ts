@@ -705,9 +705,11 @@ export function analysisPrompt(a: AnalysisInput): string {
       "as mesmas dimensions do passo 3, inclusive o unverifiedCount, e os mesmos findings, cada um com status " +
       "\"fixed\" e o commit, \"decided\" com a decision (question que a pessoa já respondeu sem pedir mudança) ou " +
       "\"open\" (question ainda sem resposta, suggestion e o que não corrigiu, com o motivo no summary).",
-    `9. Comente cada achado na linha do diff, na sua conta: gh api repos/{owner}/{repo}/pulls/${a.prNumber}/comments ` +
-      "(body com o problema, a prova e o commit que corrigiu; commit_id = o head entregue, path, line). Achado sem linha " +
-      `vai no resumo. Publique o resumo como review da PR: gh pr review ${a.prNumber} --comment --body "<resumo>", com o ` +
-      "que achou, o que corrigiu (sha), as perguntas em aberto e as sugestões. O mesmo resumo, curto, no chat deste card.",
+    "9. Publique tudo numa única revisão COMMENT da PR, na sua conta: grave fora do repositório um review.json com " +
+      '{ "commit_id": "<o head entregue>", "event": "COMMENT", "body": "<resumo>", "comments": [{ "path", "line", ' +
+      '"side": "RIGHT", "body" }] } e rode ' +
+      `gh api repos/{owner}/{repo}/pulls/${a.prNumber}/reviews --method POST --input review.json. Um comentário por ` +
+      "achado com linha no diff (o problema, a prova e o commit que corrigiu); o achado sem linha vai no resumo, que diz " +
+      "o que achou, o que corrigiu (sha), as perguntas em aberto e as sugestões. O mesmo resumo, curto, no chat deste card.",
   ].join("\n");
 }

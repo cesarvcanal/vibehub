@@ -390,12 +390,19 @@ describe("prompt da análise de PR", () => {
     const { analysisPrompt } = await import("./prompts.js");
     const text = analysisPrompt(input);
     expect(text).toMatch(/teste que reproduz/);
-    expect(text).toContain("pulls/636/comments");
     expect(text).not.toContain("${");
-    expect(text).toContain("gh pr review 636 --comment");
     expect(text).toContain('vibehub_deliver com card = "card-9" e branch = "dev"');
     expect(text.split("\n").find((line) => line.startsWith("7."))).not.toContain("authorized: true");
     expect(text).toMatch(/sem title nem body/);
+  });
+
+  it("publica os comentários dos achados e o resumo numa única revisão COMMENT, como pede o AGENTS.md", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    const publishStep = analysisPrompt(input).split("\n").find((line) => line.startsWith("9.")) ?? "";
+    expect(publishStep).toContain("pulls/636/reviews --method POST");
+    expect(publishStep).toContain('"event": "COMMENT"');
+    expect(publishStep).not.toContain("pulls/636/comments");
+    expect(publishStep).not.toContain("gh pr review 636 --comment");
   });
 
   it("push recusado porque a PR andou: rebase sobre o código novo, nunca o reset que apagaria as correções", async () => {
