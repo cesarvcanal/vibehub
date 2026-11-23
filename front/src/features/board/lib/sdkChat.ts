@@ -1113,8 +1113,12 @@ function isLongRunningCommand(row: SdkRow): row is Extract<SdkRow, { kind: "tool
     && typeof row.elapsedSeconds === "number" && row.elapsedSeconds >= LONG_TOOL_WAIT_SECONDS;
 }
 
+export function opensTurn(row: SdkRow): boolean {
+  return row.kind === "user" && row.absorbed !== true;
+}
+
 export function listCurrentTurnRows(rows: readonly SdkRow[]): SdkRow[] {
-  const turnStartIndex = rows.findLastIndex((row) => row.kind === "user" && row.absorbed !== true);
+  const turnStartIndex = rows.findLastIndex(opensTurn);
   return rows.slice(turnStartIndex + 1);
 }
 

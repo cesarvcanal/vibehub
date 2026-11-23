@@ -20,6 +20,8 @@ describe("findDispatchingSkill", () => {
       [userRow("u1"), skillRow("s1", "superpowers:brainstorming"), skillRow("s2", "mattpocock-skills:code-review"), agentRow("a1")], "mattpocock-skills:code-review"],
     ["skill de um turno anterior não vale para o despacho de agora",
       [userRow("u1"), skillRow("s1", "mattpocock-skills:code-review"), userRow("u2"), agentRow("a1")], undefined],
+    ["mensagem encaixada no turno em andamento não tira a skill do despacho seguinte",
+      [userRow("u1"), skillRow("s1", "mattpocock-skills:code-review"), { kind: "user", id: "u2", text: "olha o front também", state: "sent", absorbed: true }, agentRow("a1")], "mattpocock-skills:code-review"],
     ["skill chamada depois do despacho não é dona dele",
       [userRow("u1"), agentRow("a1"), skillRow("s1", "mattpocock-skills:code-review")], undefined],
     ["skill chamada por outro subagente não é dona do despacho do agente principal",
