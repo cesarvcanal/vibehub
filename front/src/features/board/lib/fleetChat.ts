@@ -1,13 +1,10 @@
 import type { AnalysisConversation, AnalysisConversationItem, ReviewFleetAgent, ReviewFleetRun } from "@/api/types";
 import { LABEL_SEPARATOR, agentRole, readAgentResult, type AgentReading } from "@/features/board/lib/reviewFleet";
 
-export type ModelFamily = "opus" | "sonnet" | "haiku" | "other";
-
 export interface ChatSpeaker {
   agentId: string;
   label: string;
   model?: string;
-  family: ModelFamily;
   ordinal?: number;
 }
 
@@ -23,22 +20,15 @@ export type FleetChatEntry =
 
 type ChatMessage = Extract<FleetChatEntry, { kind: "message" }>;
 
-const MODEL_FAMILIES = ["opus", "sonnet", "haiku"] as const;
 const LONG_SPEECH_CHARS = 480;
 const LONG_SPEECH_LINES = 8;
-
-export function modelFamily(model: string | undefined): ModelFamily {
-  const lowered = model?.toLowerCase() ?? "";
-  return MODEL_FAMILIES.find((family) => lowered.includes(family)) ?? "other";
-}
 
 function speakersOf(agents: { id: string; label: string; model?: string }[]): Map<string, ChatSpeaker> {
   const verificationsPerDimension = new Map<string, number>();
   return new Map(agents.map((agent) => {
-    const family = modelFamily(agent.model);
     const base: ChatSpeaker = agent.model
-      ? { agentId: agent.id, label: agent.label, model: agent.model, family }
-      : { agentId: agent.id, label: agent.label, family };
+      ? { agentId: agent.id, label: agent.label, model: agent.model }
+      : { agentId: agent.id, label: agent.label };
     const role = agentRole(agent.label);
     if (role.kind !== "verification") return [agent.id, base];
     const ordinal = (verificationsPerDimension.get(role.dimension) ?? 0) + 1;

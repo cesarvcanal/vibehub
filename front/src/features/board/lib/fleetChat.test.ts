@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AnalysisConversation, ReviewFleetAgent, ReviewFleetRun } from "@/api/types";
-import { analysisFleetChat, chatClockText, isLongSpeech, modelFamily, reviewConversationChat, reviewFleetChat } from "./fleetChat";
+import { analysisFleetChat, chatClockText, isLongSpeech, reviewConversationChat, reviewFleetChat } from "./fleetChat";
 
 function reviewAgent(overrides: Partial<ReviewFleetAgent> = {}): ReviewFleetAgent {
   return { id: "a1", label: "contexto", phase: "Contexto", status: "done", ...overrides };
@@ -20,18 +20,6 @@ function analysis(items: AnalysisConversation["items"], finished = false): Analy
   };
 }
 
-describe("modelFamily", () => {
-  it.each([
-    ["claude-opus-5-5", "opus"],
-    ["Sonnet 5.5", "sonnet"],
-    ["haiku", "haiku"],
-    ["gpt-5", "other"],
-    [undefined, "other"],
-  ] as const)("%s → %s", (model, family) => {
-    expect(modelFamily(model)).toBe(family);
-  });
-});
-
 describe("reviewFleetChat", () => {
   it("quem terminou fala na ordem em que terminou, o juiz por último, quem parou avisa e quem trabalha está digitando", () => {
     const entries = reviewFleetChat(reviewRun([
@@ -44,7 +32,7 @@ describe("reviewFleetChat", () => {
     expect(entries.map((entry) => [entry.kind, entry.speaker.agentId])).toEqual([
       ["message", "rev"], ["message", "ver"], ["message", "judge"], ["stopped", "dead"], ["typing", "live"],
     ]);
-    expect(entries[0]).toMatchObject({ at: 20, reading: { kind: "findings", titles: ["Busca duplicada"] }, speaker: { family: "sonnet", model: "sonnet" } });
+    expect(entries[0]).toMatchObject({ at: 20, reading: { kind: "findings", titles: ["Busca duplicada"] }, speaker: { model: "sonnet" } });
   });
 
   it("quem parou leva o motivo da falha quando o harness disse qual foi", () => {
@@ -110,7 +98,7 @@ describe("analysisFleetChat", () => {
       { kind: "text", text: "Vou conferir o hook." },
       { kind: "findings", titles: ["matchMedia a cada frame"] },
     ]);
-    expect(entries[0]).toMatchObject({ at: 3, speaker: { model: "Sonnet 5.5", family: "sonnet" } });
+    expect(entries[0]).toMatchObject({ at: 3, speaker: { model: "Sonnet 5.5" } });
   });
 
   it("quem ainda trabalha está digitando, com a última ferramenta que usou", () => {
@@ -184,7 +172,7 @@ describe("reviewConversationChat", () => {
       { agentId: "sec", at: 3, kind: "text", text: "Validado." },
     ]));
     expect(entries.map((entry) => entry.kind)).toEqual(["message", "message", "typing"]);
-    expect(entries[0]).toMatchObject({ at: 2, reading: { kind: "text", text: "Vou conferir se o runId é validado." }, speaker: { model: "Opus 5.5", family: "opus" } });
+    expect(entries[0]).toMatchObject({ at: 2, reading: { kind: "text", text: "Vou conferir se o runId é validado." }, speaker: { model: "Opus 5.5" } });
   });
 
   it("quem ainda trabalha aparece digitando, sem dizer a ferramenta, como hoje", () => {

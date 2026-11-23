@@ -4,7 +4,7 @@ import type { AnalysisDimension } from "@/api/types";
 import { Markdown } from "@/features/board/components/ChatView";
 import { TypingDots } from "@/features/board/components/PeerTypingIndicator";
 import {
-  chatClockText, isLongSpeech, type ChatReply, type ChatSpeaker, type FleetChatEntry, type ModelFamily,
+  chatClockText, isLongSpeech, type ChatReply, type ChatSpeaker, type FleetChatEntry,
 } from "@/features/board/lib/fleetChat";
 import { agentRole, type AgentReading, type AgentRole } from "@/features/board/lib/reviewFleet";
 import { useT, type Translate } from "@/i18n";
@@ -28,13 +28,6 @@ const TONE_STYLE: Record<AgentTone, { icon: LucideIcon; solid: string; outline: 
   tests: { icon: FlaskConical, solid: "bg-lime-400", outline: "border-lime-400 text-lime-300", name: "text-lime-300" },
   repoRules: { icon: BookCheck, solid: "bg-fuchsia-400", outline: "border-fuchsia-400 text-fuchsia-300", name: "text-fuchsia-300" },
   other: { icon: Bot, solid: "bg-muted-foreground", outline: "border-muted-foreground text-muted-foreground", name: "text-foreground/90" },
-};
-
-const MODEL_CHIP_STYLE: Record<ModelFamily, string> = {
-  opus: "border-violet-400/40 bg-violet-400/10 text-violet-200",
-  sonnet: "border-sky-400/40 bg-sky-400/10 text-sky-200",
-  haiku: "border-emerald-400/40 bg-emerald-400/10 text-emerald-200",
-  other: "border-border/60 bg-muted/40 text-muted-foreground",
 };
 
 function agentTone(role: AgentRole): AgentTone {
@@ -198,7 +191,7 @@ function SpeakerLine({
         </button>
       )}
       {speaker.model ? (
-        <span data-testid="fleet-chat-model" className={cn("rounded border px-1 text-[10px] font-medium leading-4", MODEL_CHIP_STYLE[speaker.family])}>
+        <span data-testid="fleet-chat-model" className="text-[11px] font-medium text-muted-foreground">
           {speaker.model}
         </span>
       ) : null}
