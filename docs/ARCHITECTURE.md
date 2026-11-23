@@ -153,10 +153,9 @@ Three consequences worth knowing:
 - **`POST /open` is asked for only when it can change something** (`cardNeedsOpen`): a card that has
   never been opened, one whose session was killed (paused, hibernated), or one whose column the open
   rule would move. That call runs the provisioning script and is serialized per project repository
-  (`provisionLockKey`), so firing
-  it for every card you glance at is how the one card that genuinely needs provisioning ends up
-  waiting behind a queue of cards that needed nothing. A live card needs none of it: the pane's own
-  websocket provisions by itself if the session turns out to be gone.
+  (`provisionLockKey`), so firing it for every card you glance at is how the one card that genuinely
+  needs provisioning ends up waiting behind a queue of cards that needed nothing. A live card needs
+  none of it: the pane's own websocket provisions by itself if the session turns out to be gone.
 
 ## Hibernation — the third thing a session can be
 
@@ -170,8 +169,9 @@ An open card that is `working` is never hibernated, whatever the clock says: the
 while Claude thinks, and a long task is not an abandoned one. Nor is a card whose native chat is
 in use (its driver casts a veto, `isCardInUse`), nor one whose pane the runner reports as busy or
 cannot report on: the sweep asks the runner before killing anything. With the sweep on, a card in
-`done` follows its own clock instead: silent for an hour (`DONE_HIBERNATE_MS`), it is hibernated whatever its status
-(`cardsToHibernate` in `services/board/workspace.ts`). Hibernating also ends the card's SDK driver.
+`done` follows its own clock instead: silent for an hour (`DONE_HIBERNATE_MS`), it is hibernated
+whatever its status (`cardsToHibernate` in `services/board/workspace.ts`). Hibernating also ends
+the card's SDK driver.
 
 Waking up is opening the card (or any hook report): `hibernatedAt` is cleared and the attach
 recreates the session with `claude -c`, same conversation.
@@ -211,9 +211,8 @@ The top-level `.json` documents go through `JsonStore` (`store/jsonStore.ts`): a
 (tmp + rename) at mode 600 and mutations serialized per document — the status hooks are frequent
 and concurrent, and a lost update there would silently corrupt the board. `session-spec.json` and
 `secrets.enc` are written atomically by their own modules, and the keys by `store/keyFile.ts` at
-mode 600. The per-card
-files under a directory are written by their own module: the `.ndjson` logs append a line, and the
-rest are rewritten whole.
+mode 600. The per-card files under a directory are written by their own module: the `.ndjson`
+logs append a line, and the rest are rewritten whole.
 
 ## The outbox
 
@@ -222,8 +221,7 @@ still accepting keystrokes — into a SHELL. Typing a composed message into that
 a command; typing one into a card that was never opened wrote it to nothing.
 
 So the card's composer, outside the native chat, no longer writes into the terminal websocket. It
-POSTs to the card's outbox
-(`services/board/outbox.ts`), which probes what the pane is really running
+POSTs to the card's outbox (`services/board/outbox.ts`), which probes what the pane is really running
 (`tmux list-panes -F '#{pane_current_command}'`) and either delivers with `send-keys` — the same
 path the maestro uses — or keeps the message in `outbox.json` until it can. A flush is attempted on
 enqueue, when a terminal attaches, when a status hook reports the agent went idle, and on a slow

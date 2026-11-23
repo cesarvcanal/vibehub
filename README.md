@@ -38,7 +38,8 @@ and you get:
   swaps that list for the project switcher.
 - **Terminals that go cold on their own.** A card nobody has touched for a few hours (three, by
   default) has its session closed and turns grey where it stands — same column, same place, same
-  conversation when you open it again. What you are working on now stops looking like what you walked away from yesterday.
+  conversation when you open it again. What you are working on now stops looking like what you
+  walked away from yesterday.
 - **The people you work with.** Create an account for a teammate and hand them one card — or a
   whole project — from its menu. They get that work and nothing else: no other card, no accounts, no
   settings. `Can work` puts them at the same terminal as you; `can view` lets them read it without
@@ -109,9 +110,10 @@ that turn once.
 **On credentials:** GitHub tokens live in an encrypted local vault. `git clone` and `git fetch` get
 the token per command, as an environment-scoped http header; it is never written into
 `.git/config`. The agent's own `git` and `gh` act as the person who gave the card its latest order
-(or through the project's GitHub connection): that token is written to a per-card file inside the runner (mode 600), read on every call
-by a credential helper scoped to `github.com` and by a `gh` wrapper. The agent runs as the same
-user, so it can read that file: a card's token is a token you hand to its agent.
+(or through the project's GitHub connection): that token is written to a per-card file inside the
+runner (mode 600), read on every call by a credential helper scoped to `github.com` and by a `gh`
+wrapper. The agent runs as the same user, so it can read that file: a card's token is a token you
+hand to its agent.
 
 ## Configuration
 

@@ -68,9 +68,9 @@ server dies with the card. Registered previews survive that on purpose:
   bringing it back is the one Restart click.
 - **A dead link in the tab is a screen, not JSON.** Navigating to `/preview/<port>/` while the
   port is silent answers a "Preview parado" page straight from the proxy (always in Portuguese) —
-  with the Reiniciar (restart) button when the port belongs to a registered preview that stored its command, or the
-  "ask the agent" guidance when it did not. Asset and API requests made by the previewed app keep
-  the structured JSON 502.
+  with the Reiniciar (restart) button when the port belongs to a registered preview that stored its
+  command, or the "ask the agent" guidance when it did not. Asset and API requests made by the
+  previewed app keep the structured JSON 502.
 - **No stored command** (an old or manual registration): the screen says the honest thing — ask
   the card's agent to start the server again; it will re-announce the link.
 - **Stop preview** (the ✕ on the row, or the button in the dialog) tree-kills the dedicated

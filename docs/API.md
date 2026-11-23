@@ -540,8 +540,8 @@ the vibehub server can make **outbound HTTPS** requests to the internet (the cal
 2. Open a **Work chat** (ChatGPT web, or the desktop app with **Work** and **Cloud** selected; a dot
    also works). MCP Events is not available in ordinary chats or voice.
 3. Ask ChatGPT to monitor vibehub, naming the filter and what to do, e.g. "Subscribe to vibehub
-   card.event for project my-app, kinds question and needs_me. When one arrives, tell me the question and
-   the options, and answer it with vibehub_send_to_terminal only after I confirm."
+   card.event for project my-app, kinds question and needs_me. When one arrives, tell me the
+   question and the options, and answer it with vibehub_send_to_terminal only after I confirm."
 4. On the server, confirm `events/subscribe` arrived and the verification passed (log line
    `MCP events` or the subscription in `webhook-subscriptions.json`).
 5. Make a card ask something (`vibehub_notify` type `question`, or an AskUserQuestion in the native
