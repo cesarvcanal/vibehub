@@ -54,7 +54,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && { [ -z \"$(git status --porcelain)\" ] || npm run -s lint:changed 1>&2 || { echo 'Turno não encerrado: há mudança na worktree e o npm run lint:changed está vermelho. Corrija as linhas apontadas acima conforme o AGENTS.md antes de terminar. Se o erro for Cannot find package eslint, faltam as dependências da raiz: rode npm ci na raiz e o lint de novo.' 1>&2; exit 2; }; }"
+            "command": "cat | grep -Eq '\"stop_hook_active\"[[:space:]]*:[[:space:]]*true' && exit 0; cd \"$CLAUDE_PROJECT_DIR\" && { [ -z \"$(git status --porcelain)\" ] || npm run -s lint:changed 1>&2 || { echo 'Turno não encerrado: há mudança na worktree e o npm run lint:changed está vermelho. Corrija as linhas apontadas acima conforme o AGENTS.md antes de terminar. Se o erro for Cannot find package eslint, faltam as dependências da raiz: rode npm ci na raiz e o lint de novo.' 1>&2; exit 2; }; }"
           }
         ]
       }
