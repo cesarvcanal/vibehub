@@ -12,6 +12,9 @@ import { EXTERNAL_INSTRUCTIONS, INSTRUCTIONS, createMcpServer } from "./server.j
  * authorization gate, don't type into a human-active card, report your state).
  */
 
+// external: Claude Code 2.1.330 corta as instructions de um servidor MCP em 4096 caracteres ("… [truncated]")
+const MCP_INSTRUCTIONS_DELIVERED_CHARS = 4096;
+
 const personaFile = join(dirname(fileURLToPath(import.meta.url)), "..", "services", "brain", "personas", "maestro.md");
 
 describe("MCP server instructions (the maestro persona)", () => {
@@ -85,6 +88,13 @@ describe("MCP server instructions (the maestro persona)", () => {
     // "Sempre a primeira opção é o cenário recomendado", labelled with the literal suffix.
     expect(INSTRUCTIONS).toContain("The FIRST option is the recommended one");
     expect(INSTRUCTIONS).toContain("(recomendado)");
+  });
+
+  it("a regra de perguntar com opções e a de autorizar o merge cabem no trecho que o Claude Code entrega", () => {
+    const deliveredPersona = INSTRUCTIONS.slice(0, MCP_INSTRUCTIONS_DELIVERED_CHARS);
+    expect(deliveredPersona).toContain("ALWAYS an AskUserQuestion");
+    expect(deliveredPersona).toContain("(recomendado)");
+    expect(deliveredPersona).toContain("authorized: true");
   });
 
   it("planejar começa no brainstorming; dúvida ou contradição viram pergunta — nunca decisão por conta própria", () => {
