@@ -282,6 +282,9 @@ export function buildPushAndPrScript(
 const COMMENTS_HEAD_ROUNDS = 12;
 const COMMENTS_HEAD_POLL_SECONDS = 5;
 
+const MERGE_ATTEMPTS = 3;
+const MERGE_RETRY_SECONDS = 5;
+
 /**
  * Before commenting: wait (bounded) for the PR to point at the commit just pushed — the comment lines
  * belong to THAT diff, and a reused PR moves to it a few seconds after the push. "Just pushed" is the
@@ -462,7 +465,15 @@ export function buildMergeScript(
     `if [ "$PR_HEAD" != ${pin} ]; then echo "${MARKER} error head_moved $PR_HEAD"; exit 0; fi`,
     `if [ "$PR_MERGEABLE" = CONFLICTING ]; then echo "${MARKER} error conflict"; exit 0; fi`,
     `SUBJECT="🔀 merge: $(printf '%s' "$PR_TITLE" | sed -E 's/^[a-z]+(\\([^)]*\\))?!?: *//') (#$PR_NUMBER)"`,
-    `if gh pr merge ${shQuote(prUrl)} --merge --match-head-commit ${pin} --subject "$SUBJECT"; then echo "${MARKER} merged"; else echo "${MARKER} error merge"; fi`,
+    `for MERGE_ATTEMPT in {1..${MERGE_ATTEMPTS}}; do`,
+    `  if MERGE_OUT=$(gh pr merge ${shQuote(prUrl)} --merge --match-head-commit ${pin} --subject "$SUBJECT" 2>&1); then`,
+    `    printf '%s\n' "$MERGE_OUT"; echo "${MARKER} merged"; exit 0;`,
+    `  fi`,
+    `  printf '%s\n' "$MERGE_OUT"`,
+    // external: GitHub's mergePullRequest answers "Base branch was modified. Review and try the merge again." when another merge lands on the base mid-call
+    `  case "$MERGE_OUT" in *"Base branch was modified"*) [ "$MERGE_ATTEMPT" -lt ${MERGE_ATTEMPTS} ] || break; sleep ${MERGE_RETRY_SECONDS} ;; *) break ;; esac`,
+    `done`,
+    `echo "${MARKER} error merge"`,
   ];
   return dockerBashScript(containerName, body);
 }
