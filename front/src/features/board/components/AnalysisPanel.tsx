@@ -82,26 +82,36 @@ export function AnalysisPanel({ cardId, cardState, onClose }: { cardId: string; 
   );
 }
 
+const FIX_PROGRESS_ICON_CLASS = "h-3.5 w-3.5 shrink-0";
+
+const FIX_PROGRESS = {
+  working: {
+    icon: <Loader2 aria-hidden className={cn(FIX_PROGRESS_ICON_CLASS, "animate-spin")} />,
+    tone: "border-sky-500/30 bg-sky-500/10 text-sky-300",
+    textKey: "analysis.progress.working",
+  },
+  needs_me: {
+    icon: <MessageCircleQuestion aria-hidden className={FIX_PROGRESS_ICON_CLASS} />,
+    tone: "border-amber-500/40 bg-amber-500/10 text-amber-300",
+    textKey: "analysis.progress.needsMe",
+  },
+  stopped: {
+    icon: <CirclePause aria-hidden className={FIX_PROGRESS_ICON_CLASS} />,
+    tone: "border-border/60 bg-background/40 text-muted-foreground",
+    textKey: "analysis.progress.stopped",
+  },
+};
+
 function FixProgress({ cardState }: { cardState: CardStateKind }) {
   const t = useT();
-  const label = t("analysis.progress.label");
-  if (cardState === "working") {
-    return (
-      <p role="status" aria-label={label} className="flex shrink-0 items-center gap-1.5 rounded-md border border-sky-500/30 bg-sky-500/10 px-2.5 py-1.5 text-xs text-sky-300">
-        <Loader2 aria-hidden className="h-3.5 w-3.5 shrink-0 animate-spin" /> {t("analysis.progress.working")}
-      </p>
-    );
-  }
-  if (cardState === "needs_me") {
-    return (
-      <p role="status" aria-label={label} className="flex shrink-0 items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-300">
-        <MessageCircleQuestion aria-hidden className="h-3.5 w-3.5 shrink-0" /> {t("analysis.progress.needsMe")}
-      </p>
-    );
-  }
+  const progress = cardState === "working" || cardState === "needs_me" ? FIX_PROGRESS[cardState] : FIX_PROGRESS.stopped;
   return (
-    <p role="status" aria-label={label} className="flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-background/40 px-2.5 py-1.5 text-xs text-muted-foreground">
-      <CirclePause aria-hidden className="h-3.5 w-3.5 shrink-0" /> {t("analysis.progress.stopped")}
+    <p
+      role="status"
+      aria-label={t("analysis.progress.label")}
+      className={cn("flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs", progress.tone)}
+    >
+      {progress.icon} {t(progress.textKey)}
     </p>
   );
 }
