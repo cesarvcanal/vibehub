@@ -278,6 +278,21 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
+  app.post<{ Params: { id: string } }>("/api/cards/:id/account-return", { preHandler: requireCardWork }, async (req, reply) => {
+    try {
+      const { before, after } = await registry.returnCardAccount(req.params.id);
+      const by = (await requestUser(req))?.username;
+      const session = await applySessionChange(before, after, by);
+      logger.info(
+        { audit: true, action: "card.account.return", card: after.worktreeSlug, from: before.accountSlug ?? null, to: after.accountSlug ?? null, by },
+        "card returned to the account it had before the automatic backup switch",
+      );
+      return await reply.send({ card: after, session });
+    } catch (err) {
+      return await sendError(reply, err);
+    }
+  });
+
   app.post<{ Params: { id: string } }>("/api/cards/:id/wait/fire", { preHandler: requireCardWork }, async (req, reply) => {
     try {
       const fired = await fireCardWait(req.params.id);
@@ -351,8 +366,24 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/api/accounts", { preHandler: requireOwner }, async (_req, reply) => {
     const [accounts, config] = await Promise.all([registry.listAccounts(), registry.getConfig()]);
-    return await reply.send({ accounts, defaultLabel: config.defaultAccountLabel ?? null });
+    return await reply.send({ accounts, defaultLabel: config.defaultAccountLabel ?? null, defaultBackup: config.defaultAccountBackup ?? null });
   });
+
+  app.put<{ Params: { slug: string }; Body: { backupAccountSlug?: string | null } }>(
+    "/api/accounts/:slug/backup",
+    { preHandler: requireOwner },
+    async (req, reply) => {
+      try {
+        const backupAccountSlug = req.body?.backupAccountSlug;
+        if (backupAccountSlug !== null && typeof backupAccountSlug !== "string") {
+          throw new Error("backupAccountSlug must be an account slug or null");
+        }
+        return await reply.send(await registry.setAccountBackup(req.params.slug, backupAccountSlug));
+      } catch (err) {
+        return await sendError(reply, err);
+      }
+    },
+  );
 
   app.post<{ Body: { name?: string } }>("/api/accounts", { preHandler: requireOwner }, async (req, reply) => {
     try {
