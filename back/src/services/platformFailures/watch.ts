@@ -2,7 +2,8 @@ import { logger, onLogLine } from "../../utils/logger.js";
 import { onCardEvent } from "../events/cardEvents.js";
 import { PLATFORM_FAILURE_LOG_MARK, buildBackendErrorReport, isPlatformFailureLogLine } from "./backendError.js";
 import { settleInvestigationOfCard } from "./investigation.js";
-import { recordPlatformFailure } from "./platformFailures.js";
+import { noteAuditLogLine, writePlatformFailureNarrative } from "./narrative.js";
+import { onPlatformFailureChange, recordPlatformFailure } from "./platformFailures.js";
 import {
   SLOW_FIRST_OUTPUT_MS, SLOW_TURNS_WINDOW_MS, STALLED_TURN_MS,
   getLastUserStop, markNewlyStalledTurns, onSlowTurns, type SlowTurn, type StalledTurn,
@@ -73,15 +74,24 @@ export function startPlatformFailureWatch(): () => void {
       logger.warn({ ...PLATFORM_FAILURE_LOG_MARK, card: event.cardId, detail: (err as Error).message }, "could not settle the platform-failure investigation of a concluded card");
     }));
   });
+  const stopActivityNotes = onLogLine("info", (line) => noteAuditLogLine(line, Date.now()));
+  const stopNarratives = onPlatformFailureChange(({ failure, isCreated }) => {
+    if (!isCreated || failure.source === "agent_report") return;
+    trackWatchTask(writePlatformFailureNarrative(failure.id).catch((err: unknown) => {
+      logger.warn({ ...PLATFORM_FAILURE_LOG_MARK, failure: failure.id, detail: (err as Error).message }, "could not save the explanation of a platform failure");
+    }));
+  });
   return () => {
     stopLogCapture();
     stopSlowTurns();
     clearInterval(stallCheck);
     stopConclusions();
+    stopActivityNotes();
+    stopNarratives();
   };
 }
 
 export async function waitForPlatformFailureWatch(): Promise<void> {
   await new Promise<void>((resolve) => queueMicrotask(resolve));
-  await Promise.all([...pendingWatchTasks]);
+  while (pendingWatchTasks.size > 0) await Promise.all([...pendingWatchTasks]);
 }

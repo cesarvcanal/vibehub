@@ -39,6 +39,26 @@ describe("vigia das falhas da plataforma", () => {
       .toEqual(["request failed: driver gone", "runner probe failed: ECONNREFUSED"]);
   });
 
+  it("só a falha nova chama a IA para escrever a explicação: repetição e relato de agente não chamam", async () => {
+    const { logger, watch, failures } = await fresh();
+    await (await import("../transcribe/transcribe.js")).setTranscribeKeys({ anthropicKey: "sk-ant-test" });
+    const narrativeAnswer = { context: "c", whatHappened: "w", cause: "x", trigger: "system", triggerReason: "r" };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(narrativeAnswer) }] })));
+    vi.stubGlobal("fetch", fetchMock);
+    onTestFinished(() => { vi.unstubAllGlobals(); });
+    const stopWatch = watch.startPlatformFailureWatch();
+    logger.error({ err: new Error("driver gone") }, "request failed");
+    await watch.waitForPlatformFailureWatch();
+    logger.error({ err: new Error("driver gone") }, "request failed");
+    await failures.recordPlatformFailure({ source: "agent_report", component: "x", symptom: "y", evidence: "z", explanation: "o agente explicou" });
+    await watch.waitForPlatformFailureWatch();
+    stopWatch();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const listedFailures = await failures.listActivePlatformFailures();
+    expect(listedFailures.find((failure) => failure.source === "backend_error")).toMatchObject({ occurrences: 2, narrative: narrativeAnswer });
+    expect(listedFailures.find((failure) => failure.source === "agent_report")?.narrative).toBeUndefined();
+  });
+
   it("erro do card logo depois do stop do usuário não vira falha", async () => {
     const { logger, watch, failures, turnLatency } = await fresh();
     const stopWatch = watch.startPlatformFailureWatch();

@@ -188,11 +188,15 @@ describe("sinal de mudança de falha", () => {
     ]);
   });
 
-  it("falha sem card não é anunciada", async () => {
+  it("falha nova sem card é anunciada só como criada, e a repetição dela não é anunciada", async () => {
     const failures = await fresh();
-    const heard = listen(failures);
+    const heardCreations: boolean[] = [];
+    onTestFinished(failures.onPlatformFailureChange(({ isCreated, newForCardId }) => {
+      heardCreations.push(isCreated === true && newForCardId === undefined);
+    }));
     await failures.recordPlatformFailure(backendReport("driver gone"));
-    expect(heard).toEqual([]);
+    await failures.recordPlatformFailure(backendReport("driver gone"));
+    expect(heardCreations).toEqual([true]);
   });
 
   it("cada mudança de status é anunciada sem card novo", async () => {
