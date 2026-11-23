@@ -46,13 +46,12 @@ describe("vigia das falhas da plataforma", () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(narrativeAnswer) }] })));
     vi.stubGlobal("fetch", fetchMock);
     onTestFinished(() => { vi.unstubAllGlobals(); });
-    const stopWatch = watch.startPlatformFailureWatch();
+    onTestFinished(watch.startPlatformFailureWatch());
     logger.error({ err: new Error("driver gone") }, "request failed");
     await watch.waitForPlatformFailureWatch();
     logger.error({ err: new Error("driver gone") }, "request failed");
     await failures.recordPlatformFailure({ source: "agent_report", component: "x", symptom: "y", evidence: "z", explanation: "o agente explicou" });
     await watch.waitForPlatformFailureWatch();
-    stopWatch();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const listedFailures = await failures.listActivePlatformFailures();
     expect(listedFailures.find((failure) => failure.source === "backend_error")).toMatchObject({ occurrences: 2, narrative: narrativeAnswer });
