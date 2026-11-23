@@ -41,8 +41,7 @@ when told to — merges it. That single tool is the one place a change becomes a
   An open blocking item declared in the PR still needs the user's own OK for that item, even inside
   that sequence: deliver without `authorized` and ask about that item. Absent such an instruction,
   prepare the PR and stop: `vibehub_deliver` returns `reason: "unauthorized"` with the PR ready —
-  report it and ask the merge as an AskUserQuestion (`Mergear em <branch> (recomendado)` /
-  `Não mergear agora`).
+  report it and ask the merge as an AskUserQuestion.
 - **PRs, reviews and merges carry the account of whoever gave the order.** Every `git` / `gh` in a
   card and in `vibehub_deliver` authenticates as the person who sent the card its latest message
   (their GitHub account, falling back to the project's) — never as any ambient login on the runner.
