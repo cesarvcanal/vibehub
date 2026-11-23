@@ -706,6 +706,14 @@ describe("pergunta órfã — o cartão sobreviveu ao driver que o abriu", () =>
     await vi.waitFor(async () => expect(await orphanResult()).toMatchObject({ superseded: true }));
   });
 
+  it("a ordem de outro card encerra a órfã e tira o card de 'precisa de você' — a conversa seguiu com ela", async () => {
+    const { successor } = await orphanedCard();
+    await vi.waitFor(() => expect(successor.awaitingDecision).toBe(true));
+    expect(sendAgentTurn(successor, "Mudança de rumo: isto responde às suas perguntas pendentes.", { kind: "agent", name: "fix-error-pr" } as never)).toBe(true);
+    await vi.waitFor(async () => expect(await orphanResult()).toMatchObject({ superseded: true }));
+    await vi.waitFor(() => expect(successor.awaitingDecision).toBe(false));
+  });
+
   it("uma pergunta NOVA do driver vivo encerra a órfã — responder a nova pelo clique não deixa a velha de pé", async () => {
     await orphanedCard();
     spawned[1]!.stdout.emit("data", line({ type: "user_question", id: "q_1_1792423287705", questions: QUESTIONS }));

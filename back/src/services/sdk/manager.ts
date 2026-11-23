@@ -2086,6 +2086,7 @@ function noteAgentWork(session: DriverSession, event: DriverEvent): void {
 export function sendAgentTurn(session: DriverSession, text: string, origin: MessageOrigin): boolean {
   if (!writeInjectedTurn(session, text, origin)) return false;
   markPersonTurn(session, { startedAt: Date.now(), preview: inflightPreview(text), attempts: 0 });
+  void settleOrphanQuestions(session);
   return true;
 }
 
