@@ -401,7 +401,7 @@ describe("POST /api/cards/:id/voice/actions", () => {
     const loggedLines: import("../utils/logger.js").LogLine[] = [];
     onTestFinished(onLogLine("warn", (line) => loggedLines.push(line)));
     const id = await makeCard();
-    const res = await voiceAction(id, { callId: "call_r", name: "create_card", arguments: JSON.stringify({ projectId: "inventado", title: "x" }) });
+    const res = await voiceAction(id, { callId: "call_r", name: "create_card", arguments: JSON.stringify({ projectId: "inventado", title: "x", instruction: "Faça a tarefa." }) });
     expect(res.statusCode).toBe(404);
     expect(loggedLines.filter((line) => isPlatformFailureLogLine(line, undefined, Date.now()))).toEqual([]);
   });
