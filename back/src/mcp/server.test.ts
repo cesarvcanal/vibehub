@@ -12,10 +12,27 @@ import { EXTERNAL_INSTRUCTIONS, INSTRUCTIONS, createMcpServer } from "./server.j
  * authorization gate, don't type into a human-active card, report your state).
  */
 
-// external: Claude Code 2.1.330 cuts an MCP server's instructions at 4096 characters ("… [truncated]"), seen in a card session on 2026-11-23
-const MCP_INSTRUCTIONS_DELIVERED_CHARS = 4096;
+// external: Claude Code 2.1.330 corta em 4096 caracteres as instructions de um servidor MCP e a descrição de cada ferramenta (CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH, sufixo "… [truncated]"), lido no binário em 23/11/2026
+const MCP_DESCRIPTION_DELIVERED_CHARS = 4096;
 
 const personaFile = join(dirname(fileURLToPath(import.meta.url)), "..", "services", "brain", "personas", "maestro.md");
+
+const cardTools = (createMcpServer("test") as unknown as {
+  _registeredTools?: Record<string, { description?: string }>;
+})._registeredTools ?? {};
+const cardToolDescriptions = Object.entries(cardTools).map(([name, tool]) => [name, tool.description ?? ""] as const);
+const cardToolDescription = (name: string): string => cardTools[name]?.description ?? "";
+
+describe("o que o Claude Code entrega ao card sem cortar", () => {
+  it("a persona do maestro cabe inteira no limite das instructions", () => {
+    expect(INSTRUCTIONS.length).toBeLessThanOrEqual(MCP_DESCRIPTION_DELIVERED_CHARS);
+  });
+
+  it.each(cardToolDescriptions)("a descrição da %s cabe inteira no limite de cada ferramenta", (_name, description) => {
+    expect(description.length).toBeGreaterThan(0);
+    expect(description.length).toBeLessThanOrEqual(MCP_DESCRIPTION_DELIVERED_CHARS);
+  });
+});
 
 describe("MCP server instructions (the maestro persona)", () => {
   it("are non-empty and come straight from maestro.md", () => {
@@ -35,15 +52,23 @@ describe("MCP server instructions (the maestro persona)", () => {
 
   it("ensina o agente a relatar falha do próprio vibehub, e quando não relatar", () => {
     expect(INSTRUCTIONS).toContain("vibehub_report_platform_failure");
-    expect(INSTRUCTIONS).toMatch(/ends cleanly[^.]*belong to the task/);
+    expect(cardToolDescription("vibehub_report_platform_failure")).toMatch(/ended cleanly[^.]*errors of the project's own code/);
   });
 
-  it("manda investigar a fonte e relatar inconsistência e queixa do usuário sobre o próprio vibehub", () => {
-    expect(INSTRUCTIONS).toMatch(/does not match its source/);
-    expect(INSTRUCTIONS).toMatch(/user describes[^.]*user_report/);
-    expect(INSTRUCTIONS).toMatch(/Investigate first/);
-    expect(INSTRUCTIONS).toContain("explanation");
-    expect(INSTRUCTIONS).toMatch(/`dismissed`[^.]*already judged/);
+  it("manda investigar a fonte, relatar inconsistência e queixa do usuário e contar a resposta sem prometer correção", () => {
+    const description = cardToolDescription("vibehub_report_platform_failure");
+    expect(description).toMatch(/does not match its source/);
+    expect(description).toMatch(/USER describing[^.]*user_report/);
+    expect(description).toMatch(/Investigate first/);
+    expect(description).toMatch(/`dismissed`[^.]*already judged/);
+    expect(description).toContain("Tell the user, in one line, what this answered");
+    expect(description).toContain("never promise a fix");
+  });
+
+  it("um push que a conta da pessoa não alcança é da tarefa, não o 403 esperado de todo push", () => {
+    const description = cardToolDescription("vibehub_report_platform_failure");
+    expect(description).not.toContain("the expected 403 of a plain git push");
+    expect(description).toContain("a push the person's GitHub account cannot make");
   });
 
   it("never send the agent to vibehub_gate before a delivery — vibehub_deliver already runs the gate", () => {
@@ -90,13 +115,6 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(INSTRUCTIONS).toContain("(recomendado)");
   });
 
-  it("a regra de perguntar com opções e a de autorizar o merge cabem no trecho que o Claude Code entrega", () => {
-    const deliveredPersona = INSTRUCTIONS.slice(0, MCP_INSTRUCTIONS_DELIVERED_CHARS);
-    expect(deliveredPersona).toContain("ALWAYS an AskUserQuestion");
-    expect(deliveredPersona).toContain("(recomendado)");
-    expect(deliveredPersona).toContain("authorized: true");
-  });
-
   it("a vibehub_deliver do card diz como perguntar o merge que não foi autorizado: AskUserQuestion com opções", () => {
     const server = createMcpServer("test") as unknown as {
       _registeredTools?: Record<string, { description?: string }>;
@@ -137,10 +155,14 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(INSTRUCTIONS).not.toContain("At most one sentence of context");
   });
 
-  it("o executor não reescreve histórico já enviado sem o OK do usuário, e quem roda o gate é o vibehub_deliver", () => {
+  it("o executor não reescreve histórico já enviado sem o OK do usuário", () => {
     expect(INSTRUCTIONS).toContain("rewriting commits already pushed needs the user's OK");
-    expect(INSTRUCTIONS).not.toMatch(/maestro decides what, where and in what order, runs the\s+gate/);
-    expect(INSTRUCTIONS).toContain("the deliver runs the gate");
+  });
+
+  it("o maestro manda cada card se entregar, como pede a vibehub_deliver, porque o PR documenta o diff daquele card", () => {
+    expect(INSTRUCTIONS).not.toMatch(/is the one that delivers/);
+    expect(INSTRUCTIONS).toContain("delivers itself");
+    expect(cardToolDescription("vibehub_deliver")).toContain("ask that card to deliver itself");
   });
 
   it("build a server that carries those instructions", () => {
@@ -171,16 +193,16 @@ describe("MCP server instructions (the maestro persona)", () => {
     const description = tools["vibehub_brain_learn"]?.description ?? "";
     expect(description).toContain("Aprendizados");
     expect(description.toLowerCase()).toContain("append");
-    // the persona tells agents what belongs there — and what never does
+    expect(description.toLowerCase()).toContain("secret");
     expect(INSTRUCTIONS).toContain("vibehub_brain_learn");
-    expect(INSTRUCTIONS.toLowerCase()).toContain("secret");
   });
 
   it("ensina o agente a criar card em qualquer projeto pelo vibehub_create_card, em vez de deixar o prompt num arquivo", () => {
     expect(INSTRUCTIONS).toContain("vibehub_create_card");
     expect(INSTRUCTIONS).toContain("vibehub_list_projects");
-    expect(INSTRUCTIONS).toContain("canCreateCard");
-    expect(INSTRUCTIONS).toMatch(/When it is false, tell the user\s+that\s+reason right away; do not try the creation/);
+    expect(cardToolDescription("vibehub_list_projects")).toContain("`canCreateCard`");
+    expect(cardToolDescription("vibehub_list_projects")).toContain("when it is false, tell the user the reason instead of trying");
+    expect(cardToolDescription("vibehub_create_card")).toContain("never leave the prompt in a file for someone to paste");
     expect(INSTRUCTIONS).not.toMatch(/for now you coordinate the cards that\s+already exist/);
   });
 
@@ -192,9 +214,8 @@ describe("MCP server instructions (the maestro persona)", () => {
     // The consent limit is part of the contract the agent reads.
     expect(description).toContain("already gave this card an order");
     expect(description).toContain("refused");
-    // The persona sends the agent to the tool, never to "ask the other person to come back".
+    expect(description).toMatch(/Never stop to ask the other person/);
     expect(INSTRUCTIONS).toContain("vibehub_act_as");
-    expect(INSTRUCTIONS).toMatch(/Never stop to\s+ask the other person/);
   });
 
   it("register vibehub_move_cards and keep its contract explicit (bulk, done/backlog only, own project)", () => {
@@ -268,6 +289,34 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(description).toContain("`fix`");
   });
 
+  it("a vibehub_review_submit manda a rodada 1 vir da frota do Workflow, como o prompt do revisor, e o /code-review só quando ela falha", () => {
+    const description = cardToolDescription("vibehub_review_submit");
+    expect(description).not.toContain("findings` from /code-review");
+    expect(description).toContain("the Workflow fleet the round prompt runs (/code-review only when it fails)");
+  });
+
+  it("a vibehub_deliver deixa o detalhe da revisão com a vibehub_review_start e cabe com folga no limite", () => {
+    const description = cardToolDescription("vibehub_deliver");
+    expect(description).toContain("vibehub_review_start");
+    expect(description.length).toBeLessThanOrEqual(3200);
+  });
+
+  it("a vibehub_wait_for_card diz para combinar a espera com o usuário e encerrar o turno", () => {
+    expect(cardToolDescription("vibehub_wait_for_card")).toContain("Agree on it with the user, say so, and end your turn");
+  });
+
+  it("a vibehub_send_to_terminal só recusa o card em que OUTRA pessoa digita, e deixa a ferramenta decidir", () => {
+    const description = cardToolDescription("vibehub_send_to_terminal");
+    expect(description).toContain("human-active");
+    expect(description).toContain("pass `from` and let this tool decide");
+  });
+
+  it("a vibehub_preview entrega só o link que ela devolveu e separa o link do usuário do teste no navegador do card", () => {
+    const description = cardToolDescription("vibehub_preview");
+    expect(description).toContain("Hand out only the link this tool returned");
+    expect(description).toContain("navegador");
+  });
+
   it("register the Cofre tools and instruct on using them for logins", () => {
     const server = createMcpServer("test") as unknown as {
       _registeredTools?: Record<string, unknown>;
@@ -275,9 +324,9 @@ describe("MCP server instructions (the maestro persona)", () => {
     const names = Object.keys(server._registeredTools ?? {});
     expect(names).toContain("vibehub_credential_list");
     expect(names).toContain("vibehub_credential_fill");
-    // The persona tells the agent to use the Cofre and never to ask for a password in the chat.
     expect(INSTRUCTIONS).toContain("vibehub_credential_fill");
     expect(INSTRUCTIONS.toLowerCase()).toContain("cofre");
+    expect(cardToolDescription("vibehub_credential_list")).toContain("NEVER ask for a password in the chat");
   });
 });
 

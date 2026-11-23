@@ -17,11 +17,12 @@ export function registerPlatformFailureTools(server: McpServer): void {
         "a swapped state, a screen that contradicts what vibehub promises (inconsistency); the USER describing in the " +
         "chat a problem of vibehub itself (user_report) — always report it, even when you could not reproduce it, with " +
         "what you could not confirm in `hypothesis`. Do NOT report: something the user did (interrupting, stopping, " +
-        "sending a message) that ended cleanly; errors of the project's own code; the expected 403 of a plain " +
-        "git push in the runner; a logged-out Claude account. Never put data, names or code of the project's " +
+        "sending a message) that ended cleanly; errors of the project's own code; a push the person's GitHub account " +
+        "cannot make; a logged-out Claude account. Never put data, names or code of the project's " +
         "business in the report — only how vibehub behaved. The report shows up as a notice inside the affected card; " +
         "nothing is fixed without the owner's approval. Answer: recorded=true, or recorded=false with reason " +
         "`dismissed` (the owner already judged this as expected behaviour) or `cap` (too many open failures). " +
+        "Tell the user, in one line, what this answered, never promise a fix, and carry on with your task. " +
         "`card` is YOUR OWN card id ($VIBEHUB_CARD_ID).",
       inputSchema: {
         card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this terminal"),
