@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Check, Lock, LockOpen, Moon, MoreHorizontal, Pause, RotateCw, Share2, Trash2, Users } from "lucide-react";
+import { Check, Hourglass, Lock, LockOpen, Moon, MoreHorizontal, Pause, RotateCw, Share2, Trash2, Users } from "lucide-react";
 import { cn, isNewTabClick } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cardHref, cardState, declaredStateChip } from "@/features/board/lib/board";
 import { CardStateIcon } from "@/features/board/components/CardStateIcon";
+import { cardWaitPhase } from "@/features/board/lib/cardWait";
 import {
   ContextMenu,
   useContextMenuPoint,
@@ -275,6 +276,21 @@ export function CardTile({
           >
             <Lock aria-hidden className="h-2.5 w-2.5 shrink-0" />
             <span className="truncate font-mono">{card.base}</span>
+          </span>
+        ) : null}
+
+        {card.waitingFor ? (
+          <span
+            title={t("card.waitChipTooltip", { instruction: card.waitingFor.instruction })}
+            className={cn(
+              "mr-1 mt-1 inline-flex max-w-full items-start gap-1 rounded border px-1 py-px text-[10px] font-medium",
+              cardWaitPhase(card.waitingFor, card) === "failed"
+                ? "border-destructive/40 bg-destructive/10 text-destructive"
+                : "border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-400",
+            )}
+          >
+            <Hourglass aria-hidden className="mt-px h-2.5 w-2.5 shrink-0" />
+            <span className="min-w-0 break-words">{t("card.waitChip", { title: card.waitTargetTitle ?? t("cardWait.anotherCard") })}</span>
           </span>
         ) : null}
 

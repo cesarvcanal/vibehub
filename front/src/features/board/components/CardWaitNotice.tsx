@@ -1,0 +1,63 @@
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { AlertTriangle, Hourglass } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { apiErrorMessage } from "@/lib/apiError";
+import { Button } from "@/components/ui/button";
+import { boardApi, CARDS_PREFIX_KEY, cardKey } from "@/features/board/api";
+import { cardWaitPhase } from "@/features/board/lib/cardWait";
+import type { CardWait } from "@/api/types";
+import type { BoardCard } from "@/features/board/api";
+import { useT } from "@/i18n";
+
+export function CardWaitNotice({ card, wait }: { card: BoardCard; wait: CardWait }) {
+  const t = useT();
+  const queryClient = useQueryClient();
+  const cardId = card.id;
+  const phase = cardWaitPhase(wait, card);
+  const targetCardLabel = card.waitTargetTitle ? t("cardWait.namedCard", { title: card.waitTargetTitle }) : t("cardWait.unnamedCard");
+  const refreshBoard = async () => {
+    await queryClient.invalidateQueries({ queryKey: CARDS_PREFIX_KEY });
+    await queryClient.invalidateQueries({ queryKey: cardKey(cardId) });
+  };
+  const cancel = useMutation({ mutationFn: () => boardApi.cancelCardWait(cardId), onSuccess: refreshBoard });
+  const wake = useMutation({ mutationFn: () => boardApi.fireCardWait(cardId), onSettled: refreshBoard });
+  const wakeError = wake.error ? apiErrorMessage(wake.error, t("cardWait.wakeError")) : undefined;
+  const wakeErrorNotShownYet = wakeError !== wait.failure?.reason ? wakeError : undefined;
+  const failedAction = cancel.error ? apiErrorMessage(cancel.error, t("cardWait.cancelError")) : wakeErrorNotShownYet;
+  const busy = cancel.isPending || wake.isPending;
+  const headline = {
+    waiting: t("cardWait.waiting", { card: targetCardLabel }),
+    paused: t("cardWait.paused", { card: targetCardLabel }),
+    waking: t("cardWait.waking", { card: targetCardLabel }),
+    failed: t("cardWait.failed", { card: targetCardLabel, reason: wait.failure?.reason }),
+  }[phase];
+  const Icon = phase === "failed" ? AlertTriangle : Hourglass;
+
+  return (
+    <div
+      data-testid="card-wait-notice"
+      role="status"
+      className={cn(
+        "mb-1.5 flex flex-wrap items-start gap-2 rounded-md border px-3 py-2 text-xs",
+        phase === "failed" ? "border-destructive/50 bg-destructive/10" : "border-sky-500/40 bg-sky-500/10",
+      )}
+    >
+      <Icon className={cn("mt-0.5 h-4 w-4 shrink-0", phase === "failed" ? "text-destructive" : "text-sky-500")} aria-hidden />
+      <div className="min-w-0 flex-1 basis-60 space-y-0.5">
+        <p className="break-words">{headline}</p>
+        <p className="break-words text-muted-foreground">{t("cardWait.instruction", { instruction: wait.instruction })}</p>
+        {failedAction ? <p role="alert" className="break-words text-destructive">{failedAction}</p> : null}
+      </div>
+      <div className="flex shrink-0 gap-1.5">
+        {phase === "waking" || phase === "failed" ? (
+          <Button type="button" size="sm" className="h-7 px-2 text-xs" disabled={busy} onClick={() => wake.mutate()}>
+            {t("cardWait.wakeNow")}
+          </Button>
+        ) : null}
+        <Button type="button" size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={busy} onClick={() => cancel.mutate()}>
+          {t("cardWait.cancel")}
+        </Button>
+      </div>
+    </div>
+  );
+}

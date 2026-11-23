@@ -16,6 +16,7 @@ import { resetDraftsForTesting } from "@/features/board/components/TerminalCompo
 import { ME_KEY } from "@/providers/auth";
 import { ACTION_POLL_MS, fleetPropsEqual } from "@/features/board/components/SdkDetail";
 import { useCardAnalysis } from "@/features/board/lib/useCardAnalysis";
+import type { TimelineItem } from "@/features/board/lib/sdkDetail";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -2894,7 +2895,7 @@ describe("SdkChatView — subagentes", () => {
 
       // the background strip shows the same clock
       ws.deliver({ type: "background_tasks", tasks: [{ id: "b1", type: "local_agent", description: "explora o chat", toolUseId: "t1" }] });
-      expect(screen.getByTestId("sdk-background-task")).toHaveTextContent(/4m 0[678]s/);
+      expect(screen.getByTestId("sdk-running-task")).toHaveTextContent(/4m 0[678]s/);
 
       // the subagent modal counts along with the fleet row
       fireEvent.click(agent);
@@ -2952,7 +2953,7 @@ describe("SdkChatView — subagentes", () => {
     expect(within(dialog).getByTestId("sdk-agent-now")).toHaveTextContent("Lendo o reducer");
   });
 
-  async function openFinishedSubagent(prompt: string, report: string): Promise<HTMLElement> {
+  async function openFinishedSubagent(prompt: string, items: readonly TimelineItem[]): Promise<HTMLElement> {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -2965,16 +2966,34 @@ describe("SdkChatView — subagentes", () => {
     const ask = ws.sent.map((frame) => JSON.parse(frame) as { req?: string; nonce?: string }).find((frame) => frame.req === "agent")!;
     ws.deliver({
       type: "detail", req: "agent", id: "t1", nonce: ask.nonce,
-      data: { found: true, prompt, items: [{ kind: "text", at: 3, text: report }] },
+      data: { found: true, prompt, items },
     } as never);
-    await within(dialog).findByTestId("sdk-timeline-text");
+    await within(dialog).findAllByTestId("sdk-timeline-text");
     return dialog;
   }
+
+  it("a linha do tempo mostra as falas do subagente em balão com o nome dele e as ações seguidas numa caixa com resumo", async () => {
+    const dialog = await openFinishedSubagent("Explore", [
+      { kind: "text", at: 1, text: "vou ler o reducer" },
+      { kind: "tool", at: 2, endedAt: 3, id: "c1", name: "Read", input: { file_path: "/w/sdkChat.ts" }, result: { lines: 40 } },
+      { kind: "tool", at: 4, endedAt: 5, id: "c2", name: "Bash", input: { command: "ls", description: "Listando" } },
+      { kind: "thinking", at: 6, text: "achei o ponto" },
+      { kind: "text", at: 7, text: "achei o reducer" },
+    ]);
+    const messages = within(dialog).getAllByTestId("sdk-timeline-text");
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toHaveTextContent("explora o chat");
+    expect(messages[0]).toHaveTextContent("vou ler o reducer");
+    const work = within(dialog).getByTestId("sdk-timeline-work");
+    expect(within(work).getByTestId("sdk-timeline-work-summary")).toHaveTextContent("Read 1, Ran 1");
+    expect(within(work).getAllByTestId("sdk-timeline-tool")).toHaveLength(2);
+    expect(within(dialog).getByTestId("sdk-timeline-thinking")).toHaveTextContent("achei o ponto");
+  });
 
   it("a aba Tarefa mostra as entregas do subagente marcadas pelo relatório, e o contexto à parte", async () => {
     const dialog = await openFinishedSubagent(
       "Explore o **chat**.\n\n- [ ] Achar o reducer\n- [ ] Medir o render",
-      "- [x] Achar o reducer\n- [ ] Medir o render — sem tempo\n\n### O que achei",
+      [{ kind: "text", at: 3, text: "- [x] Achar o reducer\n- [ ] Medir o render — sem tempo\n\n### O que achei" }],
     );
 
     fireEvent.click(within(dialog).getByTestId("sdk-agent-tab-task"));
@@ -2992,7 +3011,7 @@ describe("SdkChatView — subagentes", () => {
   it("a aba Relatório lê como documento: títulos de seção de verdade e a lista de entregas com ícone de feito", async () => {
     const dialog = await openFinishedSubagent(
       "Explore",
-      "- [x] Achar o reducer\n- [ ] Medir o render\n\n## Veredito: não apto\n\n### 1. O reducer duplica a linha\n\nTexto.",
+      [{ kind: "text", at: 3, text: "- [x] Achar o reducer\n- [ ] Medir o render\n\n## Veredito: não apto\n\n### 1. O reducer duplica a linha\n\nTexto." }],
     );
 
     fireEvent.click(within(dialog).getByTestId("sdk-agent-tab-report"));
@@ -4463,12 +4482,12 @@ describe("SdkChatView — tarefas em segundo plano", () => {
     ws.deliver({ type: "assistant_text", text: "Vou aguardar o deploy." });
     ws.deliver({ type: "result", isError: false });
 
-    const tray = await screen.findByTestId("sdk-background-tasks");
+    const tray = await screen.findByTestId("sdk-running-tasks");
     expect(tray).toHaveTextContent("Aguarda o self-deploy");
-    expect(tray).toHaveTextContent(/background/i);
+    expect(tray).toHaveTextContent("1 task running");
 
     ws.deliver({ type: "background_tasks", tasks: [] });
-    await waitFor(() => expect(screen.queryByTestId("sdk-background-tasks")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("sdk-running-tasks")).toBeNull());
   });
 
   it("uma tarefa sem descrição não derruba o chat: aparece com um nome genérico", async () => {
@@ -4477,7 +4496,7 @@ describe("SdkChatView — tarefas em segundo plano", () => {
     ws.accept();
     ws.deliver({ type: "ready" });
     ws.deliver({ type: "background_tasks", tasks: [{ id: "b1" } as never] });
-    const tray = await screen.findByTestId("sdk-background-tasks");
+    const tray = await screen.findByTestId("sdk-running-tasks");
     expect(tray).toHaveTextContent(/background task/i);
   });
 
@@ -4491,14 +4510,135 @@ describe("SdkChatView — tarefas em segundo plano", () => {
       { id: "k9", type: "local_agent", description: "Review backend", toolUseId: "t9" },
       { id: "k1", type: "local_bash", description: "Wait for jest" },
     ] });
-    const tray = await screen.findByTestId("sdk-background-tasks");
+    const tray = await screen.findByTestId("sdk-running-tasks");
     expect(tray).toHaveAttribute("data-count", "2");
-    const [linked, loose] = within(tray).getAllByTestId("sdk-background-task");
+    const [linked, loose] = within(tray).getAllByTestId("sdk-running-task");
     expect(linked).toHaveAttribute("data-status", "running");
     expect(linked.tagName).toBe("BUTTON");
     expect(loose).toHaveAttribute("data-status", "running");
     expect(loose.tagName).toBe("DIV");
     expect(loose).not.toHaveAttribute("data-clickable");
+  });
+
+  it("um subagente em primeiro plano fica fixo acima do campo enquanto roda, e abre a linha do tempo dele", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "a1", name: "Agent", input: { description: "Analisar transcripts de cards", prompt: "..." } });
+    ws.deliver({ type: "agent_task", toolUseId: "a1", taskId: "k1", status: "running", lastTool: "Bash", toolUses: 5 });
+
+    const tray = await screen.findByTestId("sdk-running-tasks");
+    const pinned = within(tray).getByTestId("sdk-running-task");
+    expect(pinned).toHaveTextContent("Analisar transcripts de cards");
+    expect(pinned).toHaveAttribute("data-status", "running");
+
+    fireEvent.click(pinned);
+    expect(await screen.findByRole("dialog")).toHaveTextContent("Analisar transcripts de cards");
+  });
+
+  it("a linha fixa do subagente diz o que ele faz e quantas ações fez, como o painel da conversa, mesmo antes do progresso do CLI", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "a1", name: "Agent", input: { description: "Analisar transcripts de cards" } });
+    ws.deliver({ type: "tool_use", id: "c1", name: "Bash", input: { command: "ls", description: "Lista os transcripts" }, parentToolUseId: "a1" });
+
+    const pinned = within(await screen.findByTestId("sdk-running-tasks")).getByTestId("sdk-running-task");
+    const inConversation = screen.getByTestId("sdk-fleet-agent");
+    expect(pinned).toHaveTextContent("Lista os transcripts");
+    expect(pinned.textContent).toBe(inConversation.textContent);
+  });
+
+  it("a linha fixa do subagente em segundo plano também diz o que ele faz e quantas ações fez, como o painel da conversa", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "t9", name: "Agent", input: { description: "Review backend", run_in_background: true } });
+    ws.deliver({ type: "tool_result", id: "t9", toolResult: { background: true } });
+    ws.deliver({ type: "background_tasks", tasks: [{ id: "k9", type: "local_agent", description: "Review backend", toolUseId: "t9" }] });
+    ws.deliver({ type: "tool_use", id: "c1", name: "Bash", input: { command: "ls", description: "Lista os transcripts" }, parentToolUseId: "t9" });
+
+    const pinned = within(await screen.findByTestId("sdk-running-tasks")).getByTestId("sdk-running-task");
+    expect(pinned).toHaveTextContent("Lista os transcripts");
+    expect(pinned).toHaveTextContent("1");
+  });
+
+  it.each(["completed", "failed", "stopped"])("o subagente sai da faixa fixa quando termina como %s", async (status) => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "a1", name: "Agent", input: { description: "Analisar transcripts de cards" } });
+    ws.deliver({ type: "agent_task", toolUseId: "a1", taskId: "k1", status: "running" });
+    await screen.findByTestId("sdk-running-tasks");
+
+    ws.deliver({ type: "agent_task", toolUseId: "a1", taskId: "k1", status });
+
+    await waitFor(() => expect(screen.queryByTestId("sdk-running-tasks")).toBeNull());
+    expect(screen.getByTestId("sdk-fleet")).toHaveTextContent("Analisar transcripts de cards");
+  });
+
+  it("um subagente em primeiro plano sem aviso de fim não fica preso na faixa depois que o turno acaba", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "a1", name: "Agent", input: { description: "Analisar transcripts de cards" } });
+    ws.deliver({ type: "agent_task", toolUseId: "a1", taskId: "k1", status: "running" });
+    await screen.findByTestId("sdk-running-tasks");
+
+    ws.deliver({ type: "result", isError: false });
+
+    await waitFor(() => expect(screen.queryByTestId("sdk-running-tasks")).toBeNull());
+  });
+
+  it("um subagente que morreu sem aviso de fim não volta à faixa no turno seguinte", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "user", text: "analisa os transcripts" });
+    ws.deliver({ type: "tool_use", id: "a1", name: "Agent", input: { description: "Analisar transcripts de cards" } });
+    ws.deliver({ type: "agent_task", toolUseId: "a1", taskId: "k1", status: "running" });
+    await screen.findByTestId("sdk-running-tasks");
+
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "agent_task", toolUseId: "a1", taskId: "k1", status: "running" });
+    ws.deliver({ type: "user", text: "e agora?" });
+    ws.deliver({ type: "assistant_text", text: "Vou olhar." });
+
+    expect(screen.getByTestId("sdk-working-status")).not.toBeEmptyDOMElement();
+    expect(screen.queryByTestId("sdk-running-tasks")).toBeNull();
+  });
+
+  it("um subagente em segundo plano de um CLI que não liga a tarefa à chamada aparece uma vez só", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "t9", name: "Agent", input: { description: "Review backend", run_in_background: true } });
+    ws.deliver({ type: "tool_result", id: "t9", toolResult: { background: true } });
+    ws.deliver({ type: "agent_task", toolUseId: "t9", taskId: "k9", status: "running" });
+    ws.deliver({ type: "background_tasks", tasks: [{ id: "k9", type: "local_agent", description: "Review backend" }] });
+
+    const tray = await screen.findByTestId("sdk-running-tasks");
+    expect(tray).toHaveAttribute("data-count", "1");
+  });
+
+  it("o subagente em segundo plano aparece uma vez só na faixa, pela tarefa do CLI", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "t9", name: "Agent", input: { description: "Review backend", run_in_background: true } });
+    ws.deliver({ type: "agent_task", toolUseId: "t9", taskId: "k9", status: "running" });
+    ws.deliver({ type: "background_tasks", tasks: [{ id: "k9", type: "local_agent", description: "Review backend", toolUseId: "t9" }] });
+
+    const tray = await screen.findByTestId("sdk-running-tasks");
+    expect(tray).toHaveAttribute("data-count", "1");
   });
 });
 
@@ -5340,6 +5480,26 @@ describe("SdkChatView — o detalhe de cada ação", () => {
     await waitFor(() => expect(detailAsks(ws).some((f) => f.req === "tool" && f.id === "b2")).toBe(true));
   });
 
+  it.each([
+    ["comando que terminou bem mostra o stderr como mensagem, não como erro", false, "Command messages (stderr)", "Errors (stderr)"],
+    ["comando que falhou mostra o stderr como erro", true, "Errors (stderr)", "Command messages (stderr)"],
+  ])("%s", async (_caseName, isError, label, absentLabel) => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "s1", name: "Bash", input: { command: "cd /tmp && ls" } });
+    ws.deliver({ type: "tool_result", id: "s1", toolResult: { lines: 2 } });
+    fireEvent.click(screen.getByTestId("sdk-tool"));
+    const dialog = await screen.findByTestId("sdk-detail");
+    await waitFor(() => expect(detailAsks(ws).some((frame) => frame.id === "s1")).toBe(true));
+    const ask = detailAsks(ws).find((frame) => frame.id === "s1")!;
+    const structured = { stdout: "a.txt\n", stderr: "\nShell cwd was reset to /work/card\n" };
+    ws.deliver({ type: "detail", req: "tool", id: "s1", nonce: ask.nonce, data: { found: true, by: "main", name: "Bash", input: { command: "cd /tmp && ls" }, structured, isError, result: { lines: 2 } } } as never);
+    expect(await within(dialog).findByText(label)).toBeInTheDocument();
+    expect(within(dialog).queryByText(absentLabel)).toBeNull();
+  });
+
   it("comando ainda rodando: diz que roda (não 'terminou sem imprimir'), pede de novo e mostra a saída quando termina", async () => {
     renderSdkChat();
     const ws = await socket();
@@ -5482,7 +5642,7 @@ describe("SdkChatView — o detalhe de cada ação", () => {
     ws.deliver({ type: "ready" });
     ws.deliver({ type: "tool_use", id: "t9", name: "Agent", input: { description: "Review PR 510", run_in_background: true } });
     ws.deliver({ type: "background_tasks", tasks: [{ id: "k9", type: "local_agent", description: "Review PR 510", toolUseId: "t9" }] });
-    const task = screen.getByTestId("sdk-background-task");
+    const task = screen.getByTestId("sdk-running-task");
     expect(task).toHaveAttribute("data-clickable", "true");
     fireEvent.click(task);
     expect(await screen.findByTestId("sdk-detail")).toHaveAttribute("data-view", "agent");

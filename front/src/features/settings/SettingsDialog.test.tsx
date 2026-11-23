@@ -111,6 +111,24 @@ describe("SettingsDialog", () => {
     await waitFor(() => expect(patch).toHaveBeenCalledWith("/settings", expect.objectContaining({ transcribeKeywords: expected })));
   });
 
+  it("termos da transcrição vazios avisam que os nomes do time saem errados, e o aviso some ao digitar um termo", async () => {
+    renderApp(<SettingsDialog open onOpenChange={() => {}} />);
+    const keywordsField = await screen.findByLabelText("Transcription terms");
+    expect(keywordsField).toHaveAttribute("placeholder", expect.stringMatching(/^e\.g\. /));
+    expect(await screen.findByTestId("settings-transcribe-keywords-empty")).toHaveTextContent("No terms:");
+    await userEvent.type(keywordsField, "Qive");
+    expect(screen.queryByTestId("settings-transcribe-keywords-empty")).not.toBeInTheDocument();
+  });
+
+  it("termos da transcrição salvos não mostram o aviso de lista vazia", async () => {
+    const defaultGet = get.getMockImplementation()!;
+    get.mockImplementation(async (url: string) =>
+      url === "/settings" ? { ...SETTINGS, transcribeKeywords: ["vibehub"] } : defaultGet(url));
+    renderApp(<SettingsDialog open onOpenChange={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText("Transcription terms")).toHaveValue("vibehub"));
+    expect(screen.queryByTestId("settings-transcribe-keywords-empty")).not.toBeInTheDocument();
+  });
+
   it("shows a refused save INSIDE the form, and clears it on the next attempt", async () => {
     // Regression: a 400 here used to reach only a corner toast — in practice invisible, so the
     // form just looked broken (the seeded `vibehub@localhost` failed the old email validation and

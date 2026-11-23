@@ -15,7 +15,9 @@ import { mergeGateSelfHealing, pendingQuestions, type MergeGate, type Review } f
 import { logger } from "../utils/logger.js";
 import { isBusy } from "../services/maestro/maestro.js";
 import { isAnalysisMerging } from "../services/review/analysisMerge.js";
-import { sendError } from "./httpError.js";
+import { NOT_FOUND, sendError } from "./httpError.js";
+import { cancelCardWait, fireCardWait } from "../services/waits/waits.js";
+import type { PublicUser } from "../auth/users.js";
 
 /**
  * BOARD — projects, cards, accounts, and the public status callback the runner's Claude hooks fire.
@@ -45,7 +47,7 @@ type ReviewSummary = Pick<Review, "id" | "prNumber" | "phase" | "round"> & {
  * `review` = the most recent; `reviews` = the most recent of EACH PR (only with more than one PR
  * reviewed), the one line per PR of a card that attached several.
  */
-type BoardCard = registry.Card & { review?: ReviewSummary; reviews?: ReviewSummary[]; analysisMerging?: true };
+type BoardCard = registry.Card & { review?: ReviewSummary; reviews?: ReviewSummary[]; analysisMerging?: true; waitTargetTitle?: string };
 
 /**
  * Each card with the summary of its most recent review that was not cancelled (a merged one stays:
@@ -91,12 +93,23 @@ function withAnalysisMerging(card: registry.Card): BoardCard {
   return isAnalysisMerging(card.id) ? { ...card, analysisMerging: true } : card;
 }
 
+async function withWaitTargetTitles(user: PublicUser | null, cards: BoardCard[]): Promise<BoardCard[]> {
+  const targetIds = new Set(cards.flatMap((card) => (card.waitingFor ? [card.waitingFor.cardId] : [])));
+  if (targetIds.size === 0) return cards;
+  const targets = (await registry.listAllCards()).filter((card) => targetIds.has(card.id));
+  const titleById = new Map((await visibleCards(user, targets)).map((card) => [card.id, card.title]));
+  return cards.map((card) => {
+    const waitTargetTitle = card.waitingFor && titleById.get(card.waitingFor.cardId);
+    return waitTargetTitle ? { ...card, waitTargetTitle } : card;
+  });
+}
+
 /**
  * A card listing as the board shows it. REVIEWER cards (`reviewOf`) are left out — a review shows up
  * as a line under the author's card, not as a card of its own.
  */
-async function boardCards(cards: registry.Card[]): Promise<BoardCard[]> {
-  return await withReviewSummary(cards.filter((c) => !c.reviewOf));
+async function boardCards(user: PublicUser | null, cards: registry.Card[]): Promise<BoardCard[]> {
+  return await withWaitTargetTitles(user, await withReviewSummary(cards.filter((c) => !c.reviewOf)));
 }
 
 /**
@@ -199,15 +212,17 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get<{ Params: { id: string } }>("/api/projects/:id/cards", { preHandler: requireSession }, async (req, reply) => {
-    const cards = await visibleCards(await requestUser(req), await registry.listCards(req.params.id));
-    return await reply.send({ cards: await boardCards(cards) });
+    const user = await requestUser(req);
+    const cards = await visibleCards(user, await registry.listCards(req.params.id));
+    return await reply.send({ cards: await boardCards(user, cards) });
   });
 
   /* ------------------------------------------------------------------- cards */
 
   app.get("/api/cards", { preHandler: requireSession }, async (req, reply) => {
-    const cards = await visibleCards(await requestUser(req), await registry.listAllCards());
-    return await reply.send({ cards: await boardCards(cards) });
+    const user = await requestUser(req);
+    const cards = await visibleCards(user, await registry.listAllCards());
+    return await reply.send({ cards: await boardCards(user, cards) });
   });
 
   app.post<{ Body: registry.CreateCardInput & registry.UpdateCardInput }>(
@@ -250,7 +265,30 @@ export async function boardRoutes(app: FastifyInstance): Promise<void> {
     const card = await registry.getCard(req.params.id);
     if (!card) return await reply.code(404).send({ error: "card not found" });
     // Not through `boardCards`: a reviewer card is still reachable by its id (the panel opens its session).
-    return await reply.send({ card: (await withReviewSummary([card]))[0] });
+    const [boardCard] = await withWaitTargetTitles(await requestUser(req), await withReviewSummary([card]));
+    return await reply.send({ card: boardCard });
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/cards/:id/wait", { preHandler: requireCardWork }, async (req, reply) => {
+    try {
+      await cancelCardWait(req.params.id);
+      return await reply.send({ ok: true });
+    } catch (err) {
+      return await sendError(reply, err, { rules: [NOT_FOUND, [/no wait/, 404]] });
+    }
+  });
+
+  app.post<{ Params: { id: string } }>("/api/cards/:id/wait/fire", { preHandler: requireCardWork }, async (req, reply) => {
+    try {
+      const fired = await fireCardWait(req.params.id);
+      if (fired === "not_ready") {
+        return await reply.code(409).send({ error: "the wait is not ready: the awaited card has not finished, or this card is paused" });
+      }
+      if (fired === "in_progress") return await reply.code(409).send({ error: "this card is being woken right now" });
+      return await reply.send({ fired: true });
+    } catch (err) {
+      return await sendError(reply, err, { rules: [NOT_FOUND], fallback: 502 });
+    }
   });
 
   /**

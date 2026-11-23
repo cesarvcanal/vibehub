@@ -210,6 +210,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     });
   };
 
+  const hasNoTranscribeKeywords = Boolean(settings.data) && parseTranscribeKeywords(transcribeKeywords).length === 0;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {/* grid-cols-1 pins the single column to minmax(0,1fr): without it the primitive's implicit
@@ -397,6 +399,11 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-base ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 md:text-sm"
               />
               <p className="text-xs text-muted-foreground">{t("settings.transcribeKeywordsHint")}</p>
+              {hasNoTranscribeKeywords && (
+                <p data-testid="settings-transcribe-keywords-empty" className="text-xs text-amber-600 dark:text-amber-400">
+                  {t("settings.transcribeKeywordsEmpty")}
+                </p>
+              )}
             </div>
           </section>
 

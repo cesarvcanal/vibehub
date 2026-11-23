@@ -83,7 +83,7 @@ import { reasoningTranslator, useReasoningTranslation } from "@/features/board/l
 import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
 import { ToolDiffCard } from "@/features/board/components/ToolDiffCard";
 import { FleetPanel, FleetRow, SdkDetailContext, SdkDetailHost, SdkFleet, StatusIcon, ToolResultText, useChangedFiles, type DetailView } from "@/features/board/components/SdkDetail";
-import { DetailChannelContext, agentElapsedMs, createDetailChannel, parseDetailResponse, toolStatus, type DetailChannel } from "@/features/board/lib/sdkDetail";
+import { DetailChannelContext, agentElapsedMs, agentName, countAgentActions, createDetailChannel, describeRunningAgentStep, listForegroundRunningAgents, parseDetailResponse, toolStatus, type DetailChannel } from "@/features/board/lib/sdkDetail";
 import { toolDiff } from "@/features/board/lib/toolDiff";
 import {
   buildDecisionReply,
@@ -1461,6 +1461,7 @@ export function SdkChatView({
   // "Copiar" and "ouvir" only under a FINISHED answer: the current round's waits for everything to stop —
   // the turn, and also the background tasks, which may still change what the AI will say.
   const settled = connected && !working && state.backgroundTasks.length === 0;
+  const foregroundAgents = working ? listForegroundRunningAgents(state.rows, state.agentTasks, state.backgroundTasks) : [];
   const finishedAnswers = React.useMemo(() => finishedAnswerIds(state.rows, settled), [state.rows, settled]);
   // The sends that ARE catalogue commands (the chip), and which of them the current turn is running: the
   // last one sent, while there is a turn.
@@ -1644,11 +1645,9 @@ export function SdkChatView({
       ) : null}
       </div>
 
-      {/* THE WORK THAT CONTINUES AFTER THE TURN — a `sleep` waiting for the deploy, a subagent. The
-          "Trabalhando…" went out with the `result`, and without this strip the chat looked idle while
-          Claude was still waiting for something (production, 2026-10-07). Only with the wire up: a
-          disconnected screen cannot guarantee anything; the reconnect relights it via the back's resend. */}
-      {connected && state.backgroundTasks.length > 0 ? <SdkBackgroundTray tasks={state.backgroundTasks} agentTasks={state.agentTasks} rows={state.rows} /> : null}
+      {connected && (state.backgroundTasks.length > 0 || foregroundAgents.length > 0) ? (
+        <SdkRunningTray backgroundTasks={state.backgroundTasks} foregroundAgents={foregroundAgents} agentTasks={state.agentTasks} rows={state.rows} subagentRows={split.children} />
+      ) : null}
 
       {/* PENDING DECISIONS — the questions still waiting on the user, surfaced right above the
           composer so they never drown in a long turn. Clicking one jumps to it in the chat. */}
@@ -1795,42 +1794,67 @@ function SdkChangesButton({ rows }: { rows: readonly SdkRow[] }) {
   );
 }
 
-/**
- * THE "RODANDO EM SEGUNDO PLANO" STRIP — the equivalent of the "1 background task" in Claude
- * Code's footer. Lists what is alive by the description the model itself gave the task, with the SAME design
- * as the conversation's subagent panel: pinned above the field while there is work running. Height
- * ceiling for the same reason as the queue: a sibling of the scroller, it must not squeeze the conversation.
- */
-function SdkBackgroundTray({ tasks, agentTasks, rows }: { tasks: readonly BackgroundTask[]; agentTasks: SdkChatState["agentTasks"]; rows: readonly SdkRow[] }) {
+function SdkRunningTray({
+  backgroundTasks,
+  foregroundAgents,
+  agentTasks,
+  rows,
+  subagentRows,
+}: {
+  backgroundTasks: readonly BackgroundTask[];
+  foregroundAgents: readonly Extract<SdkRow, { kind: "tool" }>[];
+  agentTasks: SdkChatState["agentTasks"];
+  rows: readonly SdkRow[];
+  subagentRows: SubagentSplit["children"];
+}) {
   const t = useT();
   const { open } = React.useContext(SdkDetailContext);
   // The strip only exists with work running: the clock ticks while it is in view.
   const now = useNow(usePageVisible());
+  const runningCount = foregroundAgents.length + backgroundTasks.length;
   return (
     <FleetPanel
-      testId="sdk-background-tasks"
+      testId="sdk-running-tasks"
       role="status"
-      count={tasks.length}
+      count={runningCount}
       icon={<Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />}
-      title={t("sdk.backgroundTitle", { n: tasks.length })}
+      title={t("sdk.runningTitle", { n: runningCount })}
       subtitle={t("sdk.backgroundHint")}
       className="mt-1.5 max-h-[20vh] shrink-0 overflow-y-auto overscroll-contain"
     >
-      {tasks.map((task) => {
+      {foregroundAgents.map((call) => {
+        const live = agentTasks[call.id];
+        const childRows = subagentRows.get(call.id) ?? [];
+        return (
+          <FleetRow
+            key={call.id}
+            testId="sdk-running-task"
+            status="running"
+            name={agentName(call.input)}
+            now={describeRunningAgentStep(live, childRows)}
+            actions={countAgentActions(call, live, childRows)}
+            durationMs={agentElapsedMs("running", live, undefined, now)}
+            onClick={() => open({ kind: "agent", id: call.id })}
+          />
+        );
+      })}
+      {backgroundTasks.map((task) => {
         // The task links to the call that fired it: a subagent opens its timeline; a background Bash
         // opens the action. Without the link (old CLI), it is just the description — no click.
         const id = task.toolUseId;
         const call = id ? rows.find((r) => r.kind === "tool" && r.id === id) : undefined;
         const isAgent = call?.kind === "tool" ? isAgentTool(call.name) : task.type === "local_agent";
         const live = id ? agentTasks[id] : undefined;
+        const agentCall = isAgent && call?.kind === "tool" ? call : undefined;
+        const childRows = agentCall ? subagentRows.get(agentCall.id) ?? [] : [];
         return (
           <FleetRow
             key={task.id}
-            testId="sdk-background-task"
+            testId="sdk-running-task"
             status="running"
             name={task.description.trim() || t("sdk.backgroundUnnamed")}
-            now={live?.summary || live?.lastTool || ""}
-            actions={live?.toolUses}
+            now={agentCall ? describeRunningAgentStep(live, childRows) : live?.summary || live?.lastTool || ""}
+            actions={agentCall ? countAgentActions(agentCall, live, childRows) : live?.toolUses}
             durationMs={agentElapsedMs("running", live, undefined, now)}
             onClick={id ? () => open(isAgent ? { kind: "agent", id } : { kind: "action", id }) : undefined}
           />

@@ -1,9 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, onTestFinished, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { config } from "../../config/env.js";
+import { onLogLine, type LogLine } from "../../utils/logger.js";
+import { isPlatformFailureLogLine } from "../platformFailures/backendError.js";
 import { readHistory, rewindHistory } from "./history.js";
 import { readInflightMarker } from "./inflight.js";
 import {
@@ -256,5 +258,58 @@ describe("falha transitória da API — o turno volta sozinho", () => {
     emit({ type: "result", subtype: "success", isError: true, result: EAI });
     vi.advanceTimersByTime(API_RETRY_DELAYS_MS[0]!);
     expect(userWrites().at(-1)).toBe(API_RETRY_TEXT);
+  });
+});
+
+describe("turno que termina com erro sem ninguém ter parado — vira falha da plataforma", () => {
+  const captureFailureLines = (): LogLine[] => {
+    const loggedLines: LogLine[] = [];
+    onTestFinished(onLogLine("warn", (line) => loggedLines.push(line)));
+    return loggedLines;
+  };
+  const failureLinesIn = (loggedLines: LogLine[]) => loggedLines.filter((line) => isPlatformFailureLogLine(line, undefined, Date.now()));
+
+  const PROMPT_TOO_LONG = { subtype: "error_during_execution", isError: true, result: "API Error: 400 invalid_request_error: prompt is too long" };
+  const USAGE_LIMITED = { type: "usage_limited", rateLimit: { status: "rejected", rateLimitType: "five_hour" } };
+
+  it("erro que não é passageiro nem de conta é capturado pelo detector, com o tipo e o texto do fim do turno", () => {
+    const loggedLines = captureFailureLines();
+    const session = ensure();
+    sendAgentTurn(session, "faz", ORDER);
+    emit({ type: "result", ...PROMPT_TOO_LONG });
+    expect(failureLinesIn(loggedLines)).toEqual([expect.objectContaining({
+      message: "agent turn ended with an error",
+      fields: expect.objectContaining({ card: "t", detail: "error_during_execution: API Error: 400 invalid_request_error: prompt is too long" }),
+    })]);
+  });
+
+  it.each([
+    ["turno que terminou bem", [], { subtype: "success", isError: false, result: "pronto" }],
+    ["turno parado pela pessoa (o driver o entrega sem erro)", [], { subtype: "error_during_execution", isError: false }],
+    ["falha passageira da API, que a nova tentativa automática cobre", [], { subtype: "success", isError: true, result: EAI }],
+    ["conta deslogada", [{ type: "login_failed" }], { subtype: "success", isError: true, result: "Invalid API key · Please run /login" }],
+    ["conta sem limite de uso", [USAGE_LIMITED], { subtype: "success", isError: true, result: "Claude AI usage limit reached" }],
+    ["conta sem limite de uso, com o aviso sem os dados do limite", [{ type: "usage_limited" }], { subtype: "success", isError: true, result: "API Error: 429 rate_limit_error" }],
+  ])("%s não vira falha da plataforma", (_caseName, eventsBeforeResult: object[], result) => {
+    const loggedLines = captureFailureLines();
+    const session = ensure();
+    sendAgentTurn(session, "faz", ORDER);
+    for (const event of eventsBeforeResult) emit(event);
+    emit({ type: "result", ...result });
+    expect(failureLinesIn(loggedLines)).toEqual([]);
+  });
+
+  it.each([
+    ["sem limite de uso", USAGE_LIMITED],
+    ["deslogada", { type: "login_failed" }],
+  ])("conta que ficou %s num turno não esconde a falha real do turno seguinte", (_caseName, accountEvent) => {
+    const loggedLines = captureFailureLines();
+    const session = ensure();
+    sendAgentTurn(session, "faz", ORDER);
+    emit(accountEvent);
+    emit({ type: "result", subtype: "success", isError: true, result: "Claude AI usage limit reached" });
+    sendAgentTurn(session, "continua", ORDER);
+    emit({ type: "result", ...PROMPT_TOO_LONG });
+    expect(failureLinesIn(loggedLines)).toEqual([expect.objectContaining({ message: "agent turn ended with an error" })]);
   });
 });
