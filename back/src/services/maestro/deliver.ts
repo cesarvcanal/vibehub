@@ -97,7 +97,7 @@ export function cleanOutput(text: string): string {
   return bytes.length <= OUTPUT_TAIL_BYTES ? redacted : "…\n" + bytes.subarray(bytes.length - OUTPUT_TAIL_BYTES).toString("utf8");
 }
 
-export const NO_CI_OUTPUT =
+const NO_CI_OUTPUT =
   "o PR não tem CI no GitHub: o vibehub só mergeia com o CI do PR verde. Configure um workflow do GitHub Actions " +
   "que rode em pull_request (e em todo PR, inclusive só de documentação) e entregue de novo.";
 
@@ -1315,13 +1315,12 @@ async function runDelivery(cardId: string, opts: DeliverOpts): Promise<DeliverRe
     if (opts.pushOnly) return { prUrl, merged: false, reason: "pushed", branch: target, cardBranch: source, ...lock, ...commented };
   }
 
-  const gate = await (mergeOnly && opts.gatePassed
-    ? Promise.resolve<GateResult>({ passed: true, output: "" })
-    : ciGate(container, token, cwd, prUrl, mergeOnly ? expectedHead : undefined)
-  ).catch((err: unknown): GateResult => {
-    logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "gate could not run — treating as red");
-    return { passed: false, output: (err as Error).message };
-  });
+  const gate: GateResult = mergeOnly && opts.gatePassed
+    ? { passed: true, output: "" }
+    : await ciGate(container, token, cwd, prUrl, mergeOnly ? expectedHead : undefined).catch((err: unknown): GateResult => {
+      logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "gate could not run — treating as red");
+      return { passed: false, output: (err as Error).message };
+    });
   if (!gate.passed) {
     const reason: DeliverReason = gate.noCi ? "no_ci" : "gate";
     logger.info(
