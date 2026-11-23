@@ -47,6 +47,7 @@ import { startRunnerReaper } from "./services/reaper/reaper.js";
 import { startTmpSweep } from "./services/reaper/tmpSweep.js";
 import { pruneStaleInflightOwners, startInflightOwnerHeartbeat } from "./services/sdk/inflight.js";
 import { handOffSdkOnShutdown, resumeAfterDriverCrash, resumeInterruptedTurns } from "./services/sdk/resume.js";
+import { watchAccountRefusals } from "./services/sdk/accountFallback.js";
 import { backfillPendingQuestions } from "./services/sdk/pendingQuestion.js";
 import { onDriverCrashWithWork } from "./services/sdk/manager.js";
 import { restartSessionsIfSpecChanged } from "./services/board/sessionSpec.js";
@@ -307,6 +308,7 @@ async function main(): Promise<void> {
   // …and the driver that DIES on its own with the back still up (OOM, kill, the docker exec that died): the
   // same resume, right away — without this the turn waited for a deploy to come back. See resumeAfterDriverCrash.
   onDriverCrashWithWork((cardId, marker) => { void resumeAfterDriverCrash(cardId, marker); });
+  watchAccountRefusals();
   // Graceful shutdown (best effort): a deploy's docker stop sends SIGTERM and gives a few seconds.
   // Closing the drivers' stdin is the clean goodbye (EOF = the driver exits, it goes through the docker exec);
   // the in-flight turn markers STAY on disk — they are what tells the next boot what this shutdown
