@@ -16,6 +16,7 @@ import { resetDraftsForTesting } from "@/features/board/components/TerminalCompo
 import { ME_KEY } from "@/providers/auth";
 import { ACTION_POLL_MS, fleetPropsEqual } from "@/features/board/components/SdkDetail";
 import { useCardAnalysis } from "@/features/board/lib/useCardAnalysis";
+import type { TimelineItem } from "@/features/board/lib/sdkDetail";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -2952,7 +2953,7 @@ describe("SdkChatView — subagentes", () => {
     expect(within(dialog).getByTestId("sdk-agent-now")).toHaveTextContent("Lendo o reducer");
   });
 
-  async function openFinishedSubagent(prompt: string, report: string): Promise<HTMLElement> {
+  async function openFinishedSubagent(prompt: string, items: readonly TimelineItem[]): Promise<HTMLElement> {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -2965,16 +2966,34 @@ describe("SdkChatView — subagentes", () => {
     const ask = ws.sent.map((frame) => JSON.parse(frame) as { req?: string; nonce?: string }).find((frame) => frame.req === "agent")!;
     ws.deliver({
       type: "detail", req: "agent", id: "t1", nonce: ask.nonce,
-      data: { found: true, prompt, items: [{ kind: "text", at: 3, text: report }] },
+      data: { found: true, prompt, items },
     } as never);
-    await within(dialog).findByTestId("sdk-timeline-text");
+    await within(dialog).findAllByTestId("sdk-timeline-text");
     return dialog;
   }
+
+  it("a linha do tempo mostra as falas do subagente em balão com o nome dele e as ações seguidas numa caixa com resumo", async () => {
+    const dialog = await openFinishedSubagent("Explore", [
+      { kind: "text", at: 1, text: "vou ler o reducer" },
+      { kind: "tool", at: 2, endedAt: 3, id: "c1", name: "Read", input: { file_path: "/w/sdkChat.ts" }, result: { lines: 40 } },
+      { kind: "tool", at: 4, endedAt: 5, id: "c2", name: "Bash", input: { command: "ls", description: "Listando" } },
+      { kind: "thinking", at: 6, text: "achei o ponto" },
+      { kind: "text", at: 7, text: "achei o reducer" },
+    ]);
+    const messages = within(dialog).getAllByTestId("sdk-timeline-text");
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toHaveTextContent("explora o chat");
+    expect(messages[0]).toHaveTextContent("vou ler o reducer");
+    const work = within(dialog).getByTestId("sdk-timeline-work");
+    expect(within(work).getByTestId("sdk-timeline-work-summary")).toHaveTextContent("Read 1, Ran 1");
+    expect(within(work).getAllByTestId("sdk-timeline-tool")).toHaveLength(2);
+    expect(within(dialog).getByTestId("sdk-timeline-thinking")).toHaveTextContent("achei o ponto");
+  });
 
   it("a aba Tarefa mostra as entregas do subagente marcadas pelo relatório, e o contexto à parte", async () => {
     const dialog = await openFinishedSubagent(
       "Explore o **chat**.\n\n- [ ] Achar o reducer\n- [ ] Medir o render",
-      "- [x] Achar o reducer\n- [ ] Medir o render — sem tempo\n\n### O que achei",
+      [{ kind: "text", at: 3, text: "- [x] Achar o reducer\n- [ ] Medir o render — sem tempo\n\n### O que achei" }],
     );
 
     fireEvent.click(within(dialog).getByTestId("sdk-agent-tab-task"));
@@ -2992,7 +3011,7 @@ describe("SdkChatView — subagentes", () => {
   it("a aba Relatório lê como documento: títulos de seção de verdade e a lista de entregas com ícone de feito", async () => {
     const dialog = await openFinishedSubagent(
       "Explore",
-      "- [x] Achar o reducer\n- [ ] Medir o render\n\n## Veredito: não apto\n\n### 1. O reducer duplica a linha\n\nTexto.",
+      [{ kind: "text", at: 3, text: "- [x] Achar o reducer\n- [ ] Medir o render\n\n## Veredito: não apto\n\n### 1. O reducer duplica a linha\n\nTexto." }],
     );
 
     fireEvent.click(within(dialog).getByTestId("sdk-agent-tab-report"));
