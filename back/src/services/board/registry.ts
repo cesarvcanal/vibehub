@@ -4,6 +4,7 @@ import { dataPath } from "../../config/env.js";
 import { logger } from "../../utils/logger.js";
 import { allocateBrowserSlot, cardBrowserSlot, isBrowserSlotPort, rememberBrowserSlot, SLOT_SPACE } from "../browser/ports.js";
 import { UUID_RE } from "./cardId.js";
+import { nextBackupAccount, type ExhaustedAccount } from "../accounts/fallback.js";
 import { markWaitsReady, parseCardWait, type CardWait, type WaitFailure } from "./cardWait.js";
 
 /**
@@ -251,6 +252,13 @@ export interface Account {
   backupAccountSlug?: string;
 }
 
+export interface AccountLoan {
+  originalAccountSlug?: string;
+  originalAccount: string;
+  renewsAt?: number;
+  exhausted: ExhaustedAccount[];
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -326,6 +334,7 @@ export interface Card {
   statusAt?: number;
   /** Claude account for THIS card. Absent = inherit the project's (absent there = default account). */
   accountSlug?: string;
+  accountLoan?: AccountLoan;
   /** Claude model for THIS card (one of CLAUDE_MODELS). Absent = the account default (no flag). */
   model?: string;
   /**
@@ -1530,6 +1539,10 @@ export async function removeAccount(slug: string): Promise<Account> {
     if (backedUp.length > 0) {
       throw new Error(`account '${v}' is the backup of ${backedUp.join(", ")} — pick another backup first`);
     }
+    const lentCards = doc.cards.filter((card) => card.accountLoan?.originalAccount === v).length;
+    if (lentCards > 0) {
+      throw new Error(`${lentCards} card(s) are borrowed from account '${v}' — return them first`);
+    }
     doc.accounts = doc.accounts.filter((a) => a.slug !== v);
     return found;
   });
@@ -2019,6 +2032,7 @@ function validateCardPatch(
   // Switching accounts on a live session is handled by the caller (kill-session) — this is the record only.
   if (patch.accountSlug !== undefined) {
     next.accountSlug = patch.accountSlug === null ? undefined : requireAccountSlug(doc, patch.accountSlug);
+    next.accountLoan = undefined;
   }
   // model: null/"" = CLEAR (back to the account default); a string must be whitelisted. A change
   // stamps `modelAt`: from that instant the pin is newer than any turn already in the transcript,
@@ -2082,6 +2096,78 @@ export async function updateCard(id: string, patch: UpdateCardInput): Promise<Ca
     if (move) placeCard(doc.cards, card, move.column, now, move.position);
     card.updatedAt = now;
     return card;
+  });
+}
+
+export type BackupSwitch =
+  | { outcome: "switched"; from: string; to: string; card: Card }
+  | { outcome: "superseded" }
+  | { outcome: "noBackup" }
+  | { outcome: "exhausted"; exhausted: string[] };
+
+function findCardOrThrow(doc: BoardDoc, cardId: string): Card {
+  const card = doc.cards.find((candidate) => candidate.id === cardId);
+  if (!card) throw new Error("card not found");
+  return card;
+}
+
+function effectiveAccountOf(doc: BoardDoc, card: Card): string {
+  const project = doc.projects.find((candidate) => candidate.id === card.projectId);
+  return card.accountSlug ?? project?.defaultAccountSlug ?? DEFAULT_ACCOUNT_OWNER;
+}
+
+function cardSlugForAccount(doc: BoardDoc, card: Card, account: string): string | undefined | null {
+  if (account !== DEFAULT_ACCOUNT_OWNER) return account;
+  const project = doc.projects.find((candidate) => candidate.id === card.projectId);
+  return project?.defaultAccountSlug ? null : undefined;
+}
+
+export async function switchCardToBackupAccount(cardId: string, refused: ExhaustedAccount, now: number = Date.now()): Promise<BackupSwitch> {
+  return store.mutate((doc): BackupSwitch => {
+    const card = findCardOrThrow(doc, cardId);
+    const from = effectiveAccountOf(doc, card);
+    if (from !== refused.account) return { outcome: "superseded" };
+    const backups = accountBackups(doc);
+    if (!backups.has(from) && !card.accountLoan) return { outcome: "noBackup" };
+    const loan: AccountLoan = card.accountLoan ?? {
+      ...(card.accountSlug ? { originalAccountSlug: card.accountSlug } : {}),
+      originalAccount: from,
+      ...(refused.renewsAt !== undefined ? { renewsAt: refused.renewsAt } : {}),
+      exhausted: [],
+    };
+    const exhausted = [...loan.exhausted.filter((entry) => entry.account !== from), refused];
+    const to = nextBackupAccount({ from, backupOf: (account) => backups.get(account), exhausted, now });
+    const toSlug = to === null ? null : cardSlugForAccount(doc, card, to);
+    if (to === null || toSlug === null) {
+      if (card.accountLoan) card.accountLoan = { ...loan, exhausted };
+      return { outcome: "exhausted", exhausted: exhausted.map((entry) => entry.account) };
+    }
+    card.accountSlug = toSlug;
+    card.accountLoan = { ...loan, exhausted };
+    card.updatedAt = now;
+    return { outcome: "switched", from, to, card };
+  });
+}
+
+export async function returnCardAccount(cardId: string): Promise<{ before: Card; after: Card }> {
+  return store.mutate((doc) => {
+    const card = findCardOrThrow(doc, cardId);
+    const loan = card.accountLoan;
+    if (!loan) throw new Error("card has no borrowed account");
+    const before = { ...card };
+    card.accountSlug = loan.originalAccountSlug;
+    card.accountLoan = undefined;
+    card.updatedAt = Date.now();
+    return { before, after: card };
+  });
+}
+
+export async function clearCardFallbackChain(cardId: string): Promise<void> {
+  const loan = (await getCard(cardId))?.accountLoan;
+  if (!loan || loan.exhausted.length === 0) return;
+  await store.mutate((doc) => {
+    const card = findCardOrThrow(doc, cardId);
+    if (card.accountLoan) card.accountLoan = { ...card.accountLoan, exhausted: [] };
   });
 }
 
