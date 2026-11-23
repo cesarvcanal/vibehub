@@ -434,6 +434,9 @@ export function buildResolvePrScript(
   return dockerBashScript(containerName, body);
 }
 
+const MERGE_ATTEMPTS = 3;
+const MERGE_RETRY_SECONDS = 5;
+
 /**
  * Script for step (d): merge the PR with a MERGE COMMIT (never squash), ALWAYS pinned to `matchHead`
  * — the commit the gate passed on. The CI wait can take 15 minutes, and a merge without the pin took
@@ -462,7 +465,15 @@ export function buildMergeScript(
     `if [ "$PR_HEAD" != ${pin} ]; then echo "${MARKER} error head_moved $PR_HEAD"; exit 0; fi`,
     `if [ "$PR_MERGEABLE" = CONFLICTING ]; then echo "${MARKER} error conflict"; exit 0; fi`,
     `SUBJECT="🔀 merge: $(printf '%s' "$PR_TITLE" | sed -E 's/^[a-z]+(\\([^)]*\\))?!?: *//') (#$PR_NUMBER)"`,
-    `if gh pr merge ${shQuote(prUrl)} --merge --match-head-commit ${pin} --subject "$SUBJECT"; then echo "${MARKER} merged"; else echo "${MARKER} error merge"; fi`,
+    `for MERGE_ATTEMPT in {1..${MERGE_ATTEMPTS}}; do`,
+    `  if MERGE_OUT=$(gh pr merge ${shQuote(prUrl)} --merge --match-head-commit ${pin} --subject "$SUBJECT" 2>&1); then`,
+    `    printf '%s\\n' "$MERGE_OUT"; echo "${MARKER} merged"; exit 0;`,
+    `  fi`,
+    `  printf '%s\\n' "$MERGE_OUT"`,
+    // external: GitHub mergePullRequest via gh 2.100.0 refuses with "Base branch was modified. Review and try the merge again." when the base moves mid-call (seen in a deliver, 2026-11-23; not in GitHub docs)
+    `  case "$MERGE_OUT" in *"Base branch was modified"*) [ "$MERGE_ATTEMPT" -lt ${MERGE_ATTEMPTS} ] || break; sleep ${MERGE_RETRY_SECONDS} ;; *) break ;; esac`,
+    `done`,
+    `echo "${MARKER} error merge"`,
   ];
   return dockerBashScript(containerName, body);
 }
