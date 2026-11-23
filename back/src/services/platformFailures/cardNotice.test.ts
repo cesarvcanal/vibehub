@@ -46,6 +46,7 @@ describe("aviso de falha para um card", () => {
       explanation: "O medidor de uso mostrou o consumo da conta Claude anterior.",
       occurrences: 2,
       firstSeenAt: 1_000,
+      lastSeenAt: 2_000,
       details: {
         symptom: "user_report: medidor mostra a conta antiga",
         component: "usage-meter",
@@ -66,6 +67,15 @@ describe("aviso de falha para um card", () => {
     const { notices } = await fresh();
     const { originCardId: _origin, ...legacyFailure } = FAILURE;
     expect(notices.buildCardFailureNotice(legacyFailure, "card-1", false)).not.toHaveProperty("details");
+  });
+
+  it("a explicação da IA anda junto com os detalhes: quem vê os detalhes vê a explicação, quem não vê não vê", async () => {
+    const { notices } = await fresh();
+    const narrative = { context: "c", whatHappened: "w", cause: "x", trigger: "system" as const, triggerReason: "r" };
+    expect(notices.buildCardFailureNotice({ ...FAILURE, narrative }, "card-1", false).details).toMatchObject({ narrative });
+    expect(notices.buildCardFailureNotice({ ...FAILURE, narrativeUnavailable: "no_api_key" }, "card-1", false).details)
+      .toMatchObject({ narrativeUnavailable: "no_api_key" });
+    expect(JSON.stringify(notices.buildCardFailureNotice({ ...FAILURE, narrative }, "card-2", false))).not.toContain("narrative");
   });
 
   it("dono vê detalhes sempre", async () => {
