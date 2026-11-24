@@ -5,6 +5,7 @@ import {
   INFLIGHT_OWNER,
   clearInflightMarker,
   isInflightOwnerAlive,
+  isOtherInflightOwnerAlive,
   listInflightMarkers,
   readInflightMarker,
   releaseInflightOwnerSync,
@@ -29,7 +30,7 @@ import { defusedCommandList } from "../../utils/ultraWords.js";
  * without a single line saying what happened. The back could not warn: it was the one dying.
  *
  * The answer is durable, not heroic: the manager writes a MARKER per card while a turn is in
- * flight (services/sdk/inflight.ts). This sweep runs ONCE at boot and, for each orphaned marker:
+ * flight (services/sdk/inflight.ts). This sweep runs at boot, until no other process beats, and, for each orphaned marker:
  *
  *  1. writes a visible system line in the card's sdk-history ("o turno foi interrompido por uma
  *     atualização do painel…") — the silence ends here, even with everything else switched off;
@@ -205,6 +206,7 @@ export interface ResumeDeps {
   /** This process's identity: the marker it signs is a live turn FROM HERE, not an orphan. */
   selfOwner: string;
   ownerAlive: typeof isInflightOwnerAlive;
+  otherOwnerAlive: typeof isOtherInflightOwnerAlive;
   /** A driver of this card has a turn running right now (the successor the person already used). */
   turnRunning: (cardId: string) => boolean;
   /** This process received SIGTERM: the one that resumes now is the new process, not this one. */
@@ -237,6 +239,7 @@ const realDeps: ResumeDeps = {
   readMarker: readInflightMarker,
   selfOwner: INFLIGHT_OWNER,
   ownerAlive: isInflightOwnerAlive,
+  otherOwnerAlive: isOtherInflightOwnerAlive,
   turnRunning: driverTurnRunning,
   stopping: () => shuttingDown,
   reportIdle: (cardId) => reportCardStatusFromDriver(cardId, "waiting"),
@@ -314,53 +317,68 @@ interface ResumeSummary {
   noted: string[];
 }
 
+interface SweepOnceLoads {
+  settings?: Promise<Settings | null>;
+  install?: Promise<void>;
+}
+
+interface SweepRound {
+  isOtherOwnerAlive: boolean;
+  markers: Array<{ cardId: string; marker: InflightMarker }>;
+}
+
+async function readSweepRound(deps: ResumeDeps): Promise<SweepRound | null> {
+  try {
+    const isOtherOwnerAlive = await deps.otherOwnerAlive(deps.selfOwner);
+    return { isOtherOwnerAlive, markers: await deps.listMarkers() };
+  } catch (err) {
+    logger.warn({ detail: (err as Error).message }, "could not read the sdk inflight markers or owner heartbeats at boot");
+    return null;
+  }
+}
+
 /**
  * The one boot sweep. Never throws; returns what it did (for the log and for the tests).
  * Call it AFTER listen — the resume must not delay the server from accepting connections.
  */
 export async function resumeInterruptedTurns(deps: ResumeDeps = realDeps): Promise<ResumeSummary> {
   const summary: ResumeSummary = { resumed: [], noted: [] };
-  let markers: Array<{ cardId: string; marker: InflightMarker }>;
-  try {
-    markers = await deps.listMarkers();
-  } catch (err) {
-    logger.warn({ detail: (err as Error).message }, "could not list sdk inflight markers at boot");
-    return summary;
-  }
-  if (markers.length === 0) return summary;
-
-  let settings: Settings;
-  try {
-    settings = await deps.settings();
-  } catch (err) {
-    logger.warn({ detail: (err as Error).message }, "could not read settings for the sdk boot resume");
-    return summary;
-  }
-
-  // Each card in its own task: one card's live turn does not delay another's resume.
-  // The driver install in the runner is a single one, shared by all.
-  let install: Promise<void> | null = null;
-  const installOnce = (): Promise<void> => (install ??= deps.installDriver());
-  await Promise.all(markers.map(async ({ cardId, marker: first }) => {
-    let marker: InflightMarker | null;
-    try {
-      marker = await orphanedMarker(cardId, first, deps);
-    } catch (err) {
-      logger.warn({ card: cardId, detail: (err as Error).message }, "could not tell whether an sdk inflight marker is orphaned");
-      return;
+  const onceLoads: SweepOnceLoads = {};
+  const sweepingCardIds = new Set<string>();
+  const cardSweeps: Promise<void>[] = [];
+  for (;;) {
+    const round = await readSweepRound(deps);
+    if (!round) break;
+    const unsweptMarkers = round.markers.filter(({ cardId }) => !sweepingCardIds.has(cardId));
+    for (const { cardId, marker } of unsweptMarkers) {
+      sweepingCardIds.add(cardId);
+      cardSweeps.push(sweepCard(cardId, marker, summary, onceLoads, deps).finally(() => sweepingCardIds.delete(cardId)));
     }
-    if (!marker) return;
-    const outcome = await resumeCard(cardId, marker, settings, deps, installOnce, DEPLOY_TEXTS);
-    if (outcome === "resumed") summary.resumed.push(cardId);
-    else if (outcome === "noted") {
-      summary.noted.push(cardId);
-      // The `working` on the board belongs to the process that died with the turn: no hook or driver from here will
-      // clear it (production, card a28ffa23, 2026-10-20). Only on "noted": "skipped" is a card stopped on
-      // purpose (a report would unhibernate it) or a conversation that went on in a live turn, which owns the dot.
-      settleUnresumed(cardId, outcome, deps);
-    }
-  }));
+    if (!round.isOtherOwnerAlive || deps.stopping()) break;
+    await deps.wait(OWNER_POLL_MS);
+  }
+  await Promise.all(cardSweeps);
   return summary;
+}
+
+async function sweepCard(cardId: string, first: InflightMarker, summary: ResumeSummary, onceLoads: SweepOnceLoads, deps: ResumeDeps): Promise<void> {
+  const marker = await orphanedMarker(cardId, first, deps).catch((err: unknown) => {
+    logger.warn({ card: cardId, detail: (err as Error).message }, "could not tell whether an sdk inflight marker is orphaned");
+    return null;
+  });
+  if (!marker) return;
+  const settings = await (onceLoads.settings ??= deps.settings().catch((err: unknown) => {
+    logger.warn({ detail: (err as Error).message }, "could not read settings for the sdk boot resume");
+    return null;
+  }));
+  if (!settings) return;
+  const installOnce = (): Promise<void> => (onceLoads.install ??= deps.installDriver());
+  const outcome = await resumeCard(cardId, marker, settings, deps, installOnce, DEPLOY_TEXTS);
+  if (outcome === "resumed") summary.resumed.push(cardId);
+  else if (outcome === "noted") {
+    summary.noted.push(cardId);
+    settleUnresumed(cardId, outcome, deps);
+  }
 }
 
 /** What fell to ONE card whose turn died (see `resumeCard`). */

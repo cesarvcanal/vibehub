@@ -13,6 +13,7 @@ import {
   INFLIGHT_OWNER,
   SDK_INFLIGHT_DIR,
   isInflightOwnerAlive,
+  isOtherInflightOwnerAlive,
   readInflightMarker,
   touchInflightOwner,
   writeInflightMarker,
@@ -109,6 +110,7 @@ function deps(over: Partial<ResumeDeps> = {}, settings: Settings = settingsWith(
     // does not beat: it is a deploy's old process, already dead. The sweep under test plays the NEW one.
     selfOwner: NOVO,
     ownerAlive: isInflightOwnerAlive,
+    otherOwnerAlive: isOtherInflightOwnerAlive,
     turnRunning: () => false,
     stopping: () => false,
     reportIdle: () => undefined,
@@ -515,9 +517,9 @@ describe("resumeInterruptedTurns — o turno parado numa pergunta", () => {
 });
 
 /** A marker written by ANOTHER back process (a blue/green's old container). */
-async function markerFrom(owner: string, cardId = CARD): Promise<void> {
+async function markerFrom(owner: string, cardId = CARD, startedAt = 1): Promise<void> {
   await mkdir(join(dir, SDK_INFLIGHT_DIR), { recursive: true });
-  await writeFile(join(dir, SDK_INFLIGHT_DIR, `${cardId}.json`), JSON.stringify({ startedAt: 1, preview: "jest longo", attempts: 0, owner }), "utf8");
+  await writeFile(join(dir, SDK_INFLIGHT_DIR, `${cardId}.json`), JSON.stringify({ startedAt, preview: "jest longo", attempts: 0, owner }), "utf8");
 }
 
 /** The heartbeat the `owner` process keeps while it lives — `null` = it died (SIGKILL). */
@@ -552,7 +554,7 @@ describe("resumeInterruptedTurns — o turno ainda vivo na instância antiga (de
       },
     }));
 
-    expect(esperas).toBe(2);
+    expect(esperas).toBeGreaterThanOrEqual(2);
     expect(summary.resumed).toEqual([CARD]);
     expect(spawned.length).toBe(1);
     await vi.waitFor(async () => {
@@ -566,7 +568,10 @@ describe("resumeInterruptedTurns — o turno ainda vivo na instância antiga (de
     const { clearInflightMarker } = await import("./inflight.js");
     const summary = await resumeInterruptedTurns(deps({
       // The turn's `result` arrives at the old back, which deletes the marker — the sweep re-reads and sees it is over.
-      wait: async () => { await clearInflightMarker(CARD); },
+      wait: async () => {
+        await clearInflightMarker(CARD);
+        await heartbeat(ANTIGO, false);
+      },
     }));
 
     expect(summary).toEqual({ resumed: [], noted: [] });
@@ -593,6 +598,79 @@ describe("resumeInterruptedTurns — o turno ainda vivo na instância antiga (de
     expect(summary.resumed).toEqual([CARD]);
   });
 
+  it("O CASO REAL (2026-11-24): mensagem aceita pela instância antiga DEPOIS da varredura do novo é retomada quando a antiga morre", async () => {
+    await heartbeat(ANTIGO, true);
+    const summary = await resumeInterruptedTurns(deps({
+      wait: async () => {
+        if (await readInflightMarker(CARD)) return;
+        await markerFrom(ANTIGO);
+        await heartbeat(ANTIGO, false);
+      },
+    }));
+
+    expect(summary.resumed).toEqual([CARD]);
+    expect(spawned.length).toBe(1);
+    await vi.waitFor(async () => {
+      expect((await readHistory(CARD)).map((entry) => entry.type)).toEqual(["system_note", "user"]);
+    });
+  });
+
+  it("sem outra instância viva, a varredura lista os marcadores uma vez só e não espera", async () => {
+    const waits: number[] = [];
+    const listMarkers = vi.fn(async () => []);
+    const summary = await resumeInterruptedTurns(deps({
+      listMarkers,
+      wait: async (ms) => { waits.push(ms); },
+    }));
+
+    expect(summary).toEqual({ resumed: [], noted: [] });
+    expect(listMarkers).toHaveBeenCalledTimes(1);
+    expect(waits).toEqual([]);
+  });
+
+  it("a pessoa manda outra mensagem na antiga durante a espera (marcador regravado com outro início): o card é retomado UMA vez, com uma nota só", async () => {
+    await markerFrom(ANTIGO);
+    await heartbeat(ANTIGO, true);
+    const waitCalls: number[] = [];
+    const summary = await resumeInterruptedTurns(deps({
+      wait: async () => {
+        waitCalls.push(waitCalls.length);
+        if (waitCalls.length === 1) await markerFrom(ANTIGO, CARD, 2);
+        if (waitCalls.length === 4) await heartbeat(ANTIGO, false);
+      },
+    }));
+
+    expect(summary.resumed).toEqual([CARD]);
+    expect(spawned.length).toBe(1);
+    await vi.waitFor(async () => {
+      expect((await readHistory(CARD)).map((entry) => entry.type)).toEqual(["system_note", "user"]);
+    });
+  });
+
+  it("a passada final lista DEPOIS de saber que a antiga morreu: o marcador que ela grava ao morrer é visto", async () => {
+    const summary = await resumeInterruptedTurns(deps({
+      otherOwnerAlive: async () => {
+        await markerFrom(ANTIGO);
+        return false;
+      },
+    }));
+
+    expect(summary.resumed).toEqual([CARD]);
+  });
+
+  it("falha ao ler os batimentos encerra a varredura com aviso no log, sem retomar nada", async () => {
+    await markerFrom(ANTIGO);
+    const { logger } = await import("../../utils/logger.js");
+    const warn = vi.spyOn(logger, "warn");
+    const summary = await resumeInterruptedTurns(deps({
+      otherOwnerAlive: async () => { throw new Error("EACCES: owners"); },
+    }));
+
+    expect(summary).toEqual({ resumed: [], noted: [] });
+    expect(spawned.length).toBe(0);
+    expect(warn).toHaveBeenCalledWith({ detail: "EACCES: owners" }, "could not read the sdk inflight markers or owner heartbeats at boot");
+  });
+
   it("o turno vivo de um card não segura a retomada de outro", async () => {
     const OUTRO = "ffff498d-98dd-44b6-97ee-c06a181c3769";
     await markerFrom(ANTIGO);
@@ -612,7 +690,8 @@ describe("resumeInterruptedTurns — o turno ainda vivo na instância antiga (de
       },
     }));
 
-    expect(viuOutroRetomado).toEqual([true]);
+    expect(viuOutroRetomado.length).toBeGreaterThan(0);
+    expect(viuOutroRetomado).not.toContain(false);
     expect(summary.resumed.sort()).toEqual([CARD, OUTRO].sort());
   });
 });

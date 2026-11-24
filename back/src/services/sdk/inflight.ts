@@ -248,6 +248,16 @@ export async function pruneStaleInflightOwners(): Promise<void> {
   }
 }
 
+export async function isOtherInflightOwnerAlive(selfOwner: string): Promise<boolean> {
+  const owners = await readdir(dataPath(SDK_INFLIGHT_DIR, "owners")).catch((err: NodeJS.ErrnoException) => {
+    if (err.code === "ENOENT") return [];
+    throw err;
+  });
+  const otherOwners = owners.filter((owner) => owner !== selfOwner);
+  const aliveFlags = await Promise.all(otherOwners.map(isInflightOwnerAlive));
+  return aliveFlags.includes(true);
+}
+
 /** Is the process that signed a marker still alive? Missing or stale heartbeat = no. */
 export async function isInflightOwnerAlive(owner: string): Promise<boolean> {
   if (!UUID_RE.test(owner)) return false;
