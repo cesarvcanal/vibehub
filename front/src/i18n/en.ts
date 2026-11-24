@@ -267,6 +267,7 @@ export const en: Record<string, string> = {
   "status.blocked": "Blocked — the agent cannot go on",
   "status.your_turn": "Turn finished — your move",
   "status.idle": "Open, no activity yet",
+  "status.inCall": "In a voice call — someone is talking to the AI in this card's chat",
   "status.paused": "Paused",
   "status.hibernated": "Hibernated — the terminal was closed after sitting idle. Open it to carry on.",
 

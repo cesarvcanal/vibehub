@@ -3,6 +3,7 @@ import {
   CircleCheck,
   Loader2,
   MessageCircleQuestion,
+  Mic,
   Moon,
   OctagonAlert,
   Pause,
@@ -47,10 +48,18 @@ export function CardStateIcon({
     <span
       title={cardStateTitle(state)}
       data-state={state.kind}
-      className="inline-flex shrink-0 items-center justify-center"
+      className="inline-flex shrink-0 items-center justify-center gap-0.5"
       {...(announce ? { role: "status", "aria-label": state.label } : {})}
     >
       <Icon aria-hidden strokeWidth={2.25} className={cn("h-3 w-3", tone, className)} />
+      {state.inCall ? (
+        <Mic
+          aria-hidden
+          data-testid="card-voice-call"
+          strokeWidth={2.5}
+          className={cn("h-3 w-3 animate-pulse text-rose-500 dark:text-rose-400", className)}
+        />
+      ) : null}
     </span>
   );
 }
