@@ -646,13 +646,16 @@ function reasonForStage(stage: string): DeliverReason {
  * behaves exactly as before: the project's connection.
  */
 export async function cardConnectionToken(card: Card, project: Project): Promise<string> {
+  return await tokenFor(await cardConnectionId(card, project));
+}
+
+export async function cardConnectionId(card: Card, project: Project): Promise<string | undefined> {
   const [actor, settings, connections] = await Promise.all([
     card.actorUserId ? getUserGit(card.actorUserId) : null,
     getSettings(),
     listGithubConnections(),
   ]);
-  const identity = resolveIdentity({ actor, project, settings, connections });
-  return await tokenFor(identity.connectionId);
+  return resolveIdentity({ actor, project, settings, connections }).connectionId;
 }
 
 /** `owner/repo` and the number out of a GitHub pull request's URL; null when it is not one. PURE. */

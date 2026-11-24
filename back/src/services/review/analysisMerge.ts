@@ -150,7 +150,7 @@ export async function deliverOwnAnalysis(card: Card, opts: DeliverOpts & { by: s
   try {
     const analysedSha = (await getAnalysis(card.id))?.analysedSha;
     const result = await deliver(card.id, opts);
-    if (analysedSha) await saveMergeOutcome(card.id, analysedSha, result, opts.by);
+    if (analysedSha && result.reason !== "merge_queued") await saveMergeOutcome(card.id, analysedSha, result, opts.by);
     return result;
   } finally {
     mergingCardIds.delete(card.id);
