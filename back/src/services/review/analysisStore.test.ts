@@ -2,7 +2,7 @@ import { describe, it, expect, onTestFinished, vi } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AnalysisReport } from "./analysisModel.js";
+import { reportTimelineEntry, type AnalysisReport } from "./analysisModel.js";
 
 async function load(seed?: unknown) {
   vi.resetModules();
@@ -21,23 +21,26 @@ const report = (over: Partial<AnalysisReport> = {}): AnalysisReport => ({
   summary: "s", dimensions: [], findings: [], refutedCount: 0, updatedAt: 1, ...over,
 });
 
+const saveReport = async (store: Awaited<ReturnType<typeof load>>, saved: AnalysisReport) =>
+  await store.saveAnalysis(saved, acceptAnySaved, reportTimelineEntry(saved));
+
 describe("store das análises", () => {
   it("guarda um relatório por card e o seguinte substitui o anterior", async () => {
     const store = await load();
-    await store.saveAnalysis(report(), acceptAnySaved);
-    await store.saveAnalysis(report({ stage: "done" }), acceptAnySaved);
+    await saveReport(store, report());
+    await saveReport(store, report({ stage: "done" }));
     expect((await store.getAnalysis("c1"))?.stage).toBe("done");
   });
   it("o relatório de um card não apaga o de outro", async () => {
     const store = await load();
-    await store.saveAnalysis(report(), acceptAnySaved);
-    await store.saveAnalysis(report({ cardId: "c2" }), acceptAnySaved);
+    await saveReport(store, report());
+    await saveReport(store, report({ cardId: "c2" }));
     expect(await store.getAnalysis("c1")).toBeDefined();
     expect(await store.getAnalysis("c2")).toBeDefined();
   });
   it("devolve cópia: mexer no lido não muda o gravado", async () => {
     const store = await load();
-    await store.saveAnalysis(report(), acceptAnySaved);
+    await saveReport(store, report());
     const readReport = await store.getAnalysis("c1");
     readReport!.summary = "mexido";
     expect((await store.getAnalysis("c1"))?.summary).toBe("s");
@@ -48,7 +51,7 @@ describe("store das análises", () => {
   });
   it("o veredito do gate do merge só grava no commit que a análise está agora", async () => {
     const store = await load();
-    await store.saveAnalysis(report(), acceptAnySaved);
+    await saveReport(store, report());
     const gate = { cardId: "c1", analysedSha: "a".repeat(40), state: "passed" as const, at: 1 };
     expect(await store.saveAnalysisMergeGate({ ...gate, analysedSha: "b".repeat(40) })).toBe(false);
     expect(await store.getAnalysisMergeGate("c1")).toBeUndefined();

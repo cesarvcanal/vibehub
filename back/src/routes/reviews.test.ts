@@ -6,7 +6,9 @@ import type { FastifyInstance } from "fastify";
 import type { SendOpts, SendResult } from "../services/maestro/maestro.js";
 import type { DeliverOpts, DeliverResult } from "../services/maestro/deliver.js";
 import type { FleetConversation } from "../services/sdk/workflowProbe.js";
-import { ANALYSIS_DIMENSIONS, type AnalysisFinding, type AnalysisReport, type AnalysisSeverity } from "../services/review/analysisModel.js";
+import {
+  ANALYSIS_DIMENSIONS, reportTimelineEntry, type AnalysisFinding, type AnalysisReport, type AnalysisSeverity,
+} from "../services/review/analysisModel.js";
 
 /**
  * PR REVIEW ROUTES — who may start, decide, retry, cancel and, above all, merge. The server, the board,
@@ -1375,7 +1377,7 @@ describe("relatório da análise pela rota", () => {
     dimensions: [{ key: "correctness" as const, status: "ran" as const }], findings: [], refutedCount: 2, updatedAt: 1,
   });
   const saveReport = async (cardId: string) =>
-    await (await import("../services/review/analysisStore.js")).saveAnalysis(savedReport(cardId), () => undefined);
+    await (await import("../services/review/analysisStore.js")).saveAnalysis(savedReport(cardId), () => undefined, reportTimelineEntry(savedReport(cardId)));
 
   it("quem só vê o card lê a análise, com o estado por dimensão e o veredito já calculados", async () => {
     const w = await world();
@@ -1421,7 +1423,7 @@ describe("merge da análise pela rota", () => {
     dimensions: RAN_EVERYWHERE, findings: [], refutedCount: 0, updatedAt: 1, ...over,
   });
   const saveReport = async (report: AnalysisReport) =>
-    await (await import("../services/review/analysisStore.js")).saveAnalysis(report, () => undefined);
+    await (await import("../services/review/analysisStore.js")).saveAnalysis(report, () => undefined, reportTimelineEntry(report));
   const saveAptWithGreenGate = async (report: AnalysisReport) => {
     await saveReport(report);
     const landed = await (await import("../services/review/analysisStore.js")).saveAnalysisMergeGate({

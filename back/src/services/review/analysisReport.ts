@@ -1,6 +1,8 @@
 import { getCard, openAnalysisCards, updateCard, type Card } from "../board/registry.js";
 import { recordMessage } from "../events/cardEvents.js";
-import { ANALYSIS_DIMENSIONS, type AnalysisFinding, type AnalysisReport, type AnalysisStage, type DimensionRun } from "./analysisModel.js";
+import {
+  ANALYSIS_DIMENSIONS, reportTimelineEntry, type AnalysisFinding, type AnalysisReport, type AnalysisStage, type DimensionRun,
+} from "./analysisModel.js";
 import { getAnalysis, saveAnalysis } from "./analysisStore.js";
 
 export interface AnalysisReportInput {
@@ -82,12 +84,17 @@ export async function findActiveAnalysisCard(cards: Card[], prUrl: string): Prom
   return undefined;
 }
 
-export async function recordAnalysisReport(cardId: string, input: AnalysisReportInput): Promise<AnalysisReport> {
+export async function findOpenAnalysisCardPr(cardId: string): Promise<NonNullable<Card["prs"]>[number]> {
   const card = await getCard(cardId);
   if (!card) throw new Error(`card não encontrado: ${cardId}`);
   const analysedPr = card.pushBranch === undefined ? undefined : card.prs?.[0];
   if (!analysedPr) throw new Error("este card não é um card de análise: passe em `card` o $VIBEHUB_CARD_ID do card que analisa a PR");
   if (card.column === "done") throw new Error("este card de análise já foi concluído: pare; um novo pedido da PR abre outro card");
+  return analysedPr;
+}
+
+export async function recordAnalysisReport(cardId: string, input: AnalysisReportInput): Promise<AnalysisReport> {
+  const analysedPr = await findOpenAnalysisCardPr(cardId);
   const report: AnalysisReport = {
     cardId,
     prUrl: analysedPr.url,
@@ -102,7 +109,7 @@ export async function recordAnalysisReport(cardId: string, input: AnalysisReport
     updatedAt: Date.now(),
   };
   try {
-    await saveAnalysis(report, (saved) => assertReportFollowsSaved(saved, report));
+    await saveAnalysis(report, (saved) => assertReportFollowsSaved(saved, report), reportTimelineEntry(report));
   } catch (err) {
     if (err instanceof FleetDidNotRunError) await updateCard(cardId, { column: "done" });
     throw err;
