@@ -652,6 +652,27 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
     });
   });
 
+  it("a resposta livre é uma caixa de texto de várias linhas: Shift+Enter quebra a linha e Enter envia", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(QUESTION);
+
+    const field = screen.getByTestId("sdk-question-other");
+    expect(field.tagName).toBe("TEXTAREA");
+    await userEvent.type(field, "primeiro faz a tabela{Shift>}{Enter}{/Shift}depois o gráfico");
+    expect(ws.sent.map((s) => JSON.parse(s)).find((f) => f.type === "question_answer")).toBeUndefined();
+    await userEvent.type(field, "{Enter}");
+
+    const frame = ws.sent.map((s) => JSON.parse(s)).find((f) => f.type === "question_answer");
+    expect(frame).toEqual({
+      type: "question_answer",
+      id: "q_1",
+      answers: [{ selected: ["primeiro faz a tabela\ndepois o gráfico"] }],
+    });
+  });
+
   it("REPLAY: a pending question replayed before `ready` comes back CLICKABLE (survives F5)", async () => {
     renderSdkChat();
     const ws = await socket();
