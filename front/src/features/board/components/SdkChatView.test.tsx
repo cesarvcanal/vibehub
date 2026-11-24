@@ -7,6 +7,7 @@ import { AUTO_RESEND_DELAYS_MS, AUTO_RESEND_MAX_AGE_MS, OUTBOX_ACK_TIMEOUT_MS } 
 import { RECONNECT_MAX_MS } from "@/features/board/lib/reconnect";
 import { PEER_TYPING_TTL_MS } from "@/features/board/lib/peerTyping";
 import { renderApp } from "@/test/render";
+import { MOBILE_QUERY } from "@/lib/useIsMobile";
 import type { SdkEvent, SdkRow } from "@/features/board/lib/sdkChat";
 import { resetLanguage, setLanguage } from "@/i18n";
 import { resetReasoningTranslatorForTesting } from "@/features/board/lib/reasoningTranslation";
@@ -650,6 +651,70 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
       id: "q_1",
       answers: [{ selected: ["nenhum dos dois, faz em tabela"] }],
     });
+  });
+
+  it("a resposta livre é uma caixa de texto de várias linhas: Shift+Enter quebra a linha e Enter envia", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(QUESTION);
+
+    const findAnswerFrame = () =>
+      ws.sent.map((sentText) => JSON.parse(sentText)).find((sentFrame) => sentFrame.type === "question_answer");
+    const field = screen.getByTestId("sdk-question-other");
+    expect(field.tagName).toBe("TEXTAREA");
+    await userEvent.type(field, "primeiro faz a tabela{Shift>}{Enter}{/Shift}depois o gráfico");
+    expect(findAnswerFrame()).toBeUndefined();
+    await userEvent.type(field, "{Enter}");
+
+    expect(findAnswerFrame()).toEqual({
+      type: "question_answer",
+      id: "q_1",
+      answers: [{ selected: ["primeiro faz a tabela\ndepois o gráfico"] }],
+    });
+  });
+
+  it("no celular, sem Shift no teclado, Enter quebra a linha da resposta livre e quem envia é o botão Responder", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === MOBILE_QUERY,
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(QUESTION);
+
+    const findAnswerFrame = () =>
+      ws.sent.map((sentText) => JSON.parse(sentText)).find((sentFrame) => sentFrame.type === "question_answer");
+    const field = screen.getByTestId("sdk-question-other");
+    await userEvent.type(field, "primeiro a tabela{Enter}depois o gráfico");
+    expect(findAnswerFrame()).toBeUndefined();
+    expect(field).toHaveValue("primeiro a tabela\ndepois o gráfico");
+    await userEvent.click(screen.getByTestId("sdk-question-send"));
+
+    expect(findAnswerFrame()).toEqual({
+      type: "question_answer",
+      id: "q_1",
+      answers: [{ selected: ["primeiro a tabela\ndepois o gráfico"] }],
+    });
+  });
+
+  it("o Enter que confirma a composição do IME não envia a resposta livre", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(QUESTION);
+
+    const field = screen.getByTestId("sdk-question-other");
+    await userEvent.type(field, "表で");
+    fireEvent.keyDown(field, { key: "Enter", isComposing: true });
+
+    expect(ws.sent.map((sentText) => JSON.parse(sentText)).find((sentFrame) => sentFrame.type === "question_answer")).toBeUndefined();
   });
 
   it("REPLAY: a pending question replayed before `ready` comes back CLICKABLE (survives F5)", async () => {
