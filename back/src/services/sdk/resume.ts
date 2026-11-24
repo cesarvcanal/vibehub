@@ -30,7 +30,7 @@ import { defusedCommandList } from "../../utils/ultraWords.js";
  * without a single line saying what happened. The back could not warn: it was the one dying.
  *
  * The answer is durable, not heroic: the manager writes a MARKER per card while a turn is in
- * flight (services/sdk/inflight.ts). This sweep runs ONCE at boot and, for each orphaned marker:
+ * flight (services/sdk/inflight.ts). This sweep runs at boot, until no other process beats, and, for each orphaned marker:
  *
  *  1. writes a visible system line in the card's sdk-history ("o turno foi interrompido por uma
  *     atualização do painel…") — the silence ends here, even with everything else switched off;
