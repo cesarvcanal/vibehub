@@ -82,18 +82,13 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(description).toContain("a push the person's GitHub account cannot make");
   });
 
-  it("never send the agent to vibehub_gate before a delivery — vibehub_deliver already runs the gate", () => {
-    // Each gate run is minutes of typecheck + tests. "Check it yourself before you ask to ship" made
-    // the flow gate → deliver(unauthorized) → deliver(authorized): three full runs on the same commit.
+  it("o gate local saiu: não existe vibehub_gate, e o vibehub_deliver diz que o merge exige o CI do PR", () => {
     const server = createMcpServer("test") as unknown as {
       _registeredTools?: Record<string, { description?: string }>;
     };
-    const gateDescription = server._registeredTools?.["vibehub_gate"]?.description ?? "";
-    for (const text of [INSTRUCTIONS, gateDescription]) {
-      expect(text).not.toMatch(/vibehub_gate[^.]*before you ask/i);
-      expect(text).not.toMatch(/green before you ask to ship/i);
-      expect(text).toMatch(/vibehub_deliver[^.]*already runs the gate/i);
-    }
+    expect(server._registeredTools?.["vibehub_gate"]).toBeUndefined();
+    expect(server._registeredTools?.["vibehub_deliver"]?.description).toMatch(/'no_ci'/);
+    expect(INSTRUCTIONS).toMatch(/vibehub_deliver[^.]*already runs the gate/i);
   });
 
   it("toda entrega de PR é documentação: o vibehub_deliver pede título, corpo e comentários", () => {

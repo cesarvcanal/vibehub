@@ -111,6 +111,20 @@ export const AptoMergeBarrado: Story = {
   },
 };
 
+export const AptoSemCiNoGithub: Story = {
+  name: "Apto · PR sem CI no GitHub",
+  parameters: {
+    analysis: {
+      ...readModel(report({ findings: [fixedBlocking] }), "apt"),
+      canMerge: true,
+      mergeGate: {
+        cardId: CARD_ID, analysedSha: report().analysedSha, sha: "a".repeat(40), state: "failed", at: 1, noCi: true,
+        output: "o PR não tem CI no GitHub: o vibehub só mergeia com o CI do PR verde.",
+      },
+    },
+  },
+};
+
 export const Mergeado: Story = {
   name: "Apto · PR já mergeado",
   parameters: { analysis: { ...readModel(report({ findings: [fixedBlocking] }), "apt"), mergedAt: 1 } },

@@ -93,5 +93,5 @@ O relatório segue "Como relatar" (§12 do AGENTS.md) e abre com a lista abaixo 
 
 ## 6. Entrega
 
-- Dentro de um card do vibehub, a entrega é o `vibehub_deliver`: push, PR, gate (`.vibehub/gate.json`) e merge quando autorizado. O `git push` direto do card sai com a credencial de quem deu a ordem (AGENTS.md §10), a mesma do deliver, e serve para empurrar a correção de um PR que já existe; um 403 nele quer dizer que essa conta não alcança o repositório: avise, nunca troque de credencial. Fora do runner, "Como publicar" (AGENTS.md §14) com o `gh`.
+- Dentro de um card do vibehub, a entrega é o `vibehub_deliver`: push, PR, o CI do PR no GitHub (sem CI o merge é recusado) e merge quando autorizado. O `git push` direto do card sai com a credencial de quem deu a ordem (AGENTS.md §10), a mesma do deliver, e serve para empurrar a correção de um PR que já existe; um 403 nele quer dizer que essa conta não alcança o repositório: avise, nunca troque de credencial. Fora do runner, "Como publicar" (AGENTS.md §14) com o `gh`.
 - **`authorized: true` só com o aval explícito do usuário na conversa** (merge na branch que publica é deploy, AGENTS.md §12) e com os Pontos de atenção do PR relidos: pendência que bloqueia sem o aval registrado (AGENTS.md §14) segue sem `authorized`.

@@ -425,8 +425,7 @@ those files is the full contract. "Own card" = the caller passes its `$VIBEHUB_C
 | `vibehub_preview` | own card — registers a server listening in the runner as a preview chip and returns its `/preview/<port>/` path; refuses a port not listening or a page that cannot be opened |
 | `vibehub_report_platform_failure` | reports a failure or inconsistency of vibehub itself (see "Platform failures") |
 | **Shipping** | |
-| `vibehub_gate` | runs the card's checks (`.vibehub/gate.json`, else defaults) → `{ ran, passed, output }` |
-| `vibehub_deliver` | push, PR (documented, see "Documented pull requests"), gate, and a merge commit only with `authorized: true` → `{ prUrl, merged, reason }` |
+| `vibehub_deliver` | push, PR (documented, see "Documented pull requests"), the PR's GitHub CI as the gate (a PR without CI is refused with `no_ci`, never merged), and a merge commit only with `authorized: true` → `{ prUrl, merged, reason }` |
 | `vibehub_act_as` | makes the card's git and gh act as another participant of the card, until the next person's message |
 | **PR review and analysis** | |
 | `vibehub_review_start` | own card — starts a review of the card's PR, as the "Pedir revisão" button does |

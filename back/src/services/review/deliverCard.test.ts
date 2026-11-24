@@ -319,6 +319,12 @@ describe("deliverCard — o vibehub_deliver com revisão de PR ativa", () => {
     expect(out.output).toMatch(/rodada 3/);
   });
 
+  it("revisão barrada por PR sem CI: o deliver do card volta no_ci, não gate", async () => {
+    const { deliverCard, card } = await cardUnderReview("ready", "u-m");
+    mergeAnswer = { kind: "refused", status: 409, reason: "no_ci", error: "o PR não tem CI no GitHub" };
+    expect(await deliverCard(card.id, { branch: "dev", authorized: true, from: card.id })).toMatchObject({ merged: false, reason: "no_ci" });
+  });
+
   it("CI vermelho volta gate com o que falhou; outra recusa do merge volta review_active com o motivo", async () => {
     const { deliverCard, card } = await cardUnderReview("ready", "u-m");
     mergeAnswer = { kind: "refused", status: 409, reason: "gate", error: "back: failing" };

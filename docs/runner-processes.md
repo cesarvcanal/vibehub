@@ -44,25 +44,6 @@ defences below exist so that this class of leak never comes back.
    whole group at the deadline — bash and every `git` under it — before Node gives up. The tmux
    server, which detaches into a session of its own, is left out on purpose.
 
-5. **Gate with a deadline, a queue and no duplicates** (`back/src/services/maestro/gate.ts`): the
-   gate of `vibehub_deliver` (and of `vibehub_gate`) runs, in the card's worktree, the commands in
-   `.vibehub/gate.json` when that file exists — `{ "checks": ["<command>", …] }`, up to 20, in
-   order, stopping at the first failure, with `VIBEHUB_BASE_REF=origin/<card base>` in the
-   environment so a repo can test only what the card changed. Without the file (or with `checks`
-   empty or invalid), it runs whichever defaults exist in the worktree:
-   `node_modules/.bin/tsc --noEmit` (with a `tsconfig.json` and a local tsc) and `npm test` (with a
-   `test` script in `package.json`); with neither, the gate does not run and does not block. The
-   gate used to run `npm test` through `docker exec` without `timeout` — when Node gave up
-   (10 min), the suite kept running as an orphan in the runner. The maestro retried and stacked
-   another suite on top; with 4-5 cards delivering at once (each vitest spawns workers = number of
-   CPUs) the load went past 18 on 8 cores, a ~2 min suite (on CI) took over 20 and no gate ever
-   finished (incident of 2026-10-20: 24 min for a 2-line fix). Now `timeout -s KILL` inside the
-   container kills the whole group at the deadline and the result comes back as `timedOut`; a
-   second call for the same card while its gate is running joins the same run; at most
-   `GATE_MAX_CONCURRENT` (2) gates run together, the rest wait in a queue. Each run logs
-   `waitedMs` (queue) and `durationMs` (suite) under `maestro.gate` — "why did it take so long" is
-   answered in the back end's log.
-
 ## Zombies: the runner is born with `--init`
 
 The runner's command is `sleep infinity`, which never calls `wait()`: without a real init as

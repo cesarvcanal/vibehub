@@ -54,6 +54,7 @@ export interface AnalysisMergeGate {
   state: "running" | "passed" | "failed";
   output?: string;
   at: number;
+  noCi?: true;
 }
 
 export type DimensionHealth = "ok" | "attention" | "problem" | "not_run" | "skipped";

@@ -43,23 +43,21 @@ const PR = "https://github.com/acme/repo/pull/7";
 /** The commit the card pushed, as the comments step reads it back. */
 const HEAD_SHA = "d".repeat(40);
 
-/** What `gh pr checks` says about a PR without CI: the only answer that hands the gate to the local one. */
 const NO_CHECKS = "no checks reported on the 'card/x' branch";
+const CI_GREEN = '[{"name":"back","bucket":"pass"}]';
+const CI_RED = '[{"name":"back","bucket":"fail"}]';
 
 /** Wire the runner: one canned reply per phase, chosen by the script's content. */
-function wire(over: { push?: string; probe?: string; run?: string; merge?: string; ci?: string; comments?: string; review?: string } = {}) {
+function wire(over: { push?: string; merge?: string; ci?: string; ciHead?: string; comments?: string; review?: string } = {}) {
   const push = over.push ?? `pushed\n__VIBEHUB_DELIVER__ pr ${PR}`;
-  const probe = over.probe ?? ['pkg=0', 'test=0', 'tsconfig=0', 'localtsc=0', `head=${HEAD_SHA}`, '__VIBEHUB_GATE_JSON__', '{"checks":["npm test"]}'].join("\n");
-  const run = over.run ?? "ran\n__VIBEHUB_GATE__ pass\n";
+  const ciHead = over.ciHead ?? HEAD_SHA;
   const merge = over.merge ?? "Merged\n__VIBEHUB_DELIVER__ merged\n";
   runScript.mockImplementation(async (script: string) => {
     if (script.includes("/comments' --paginate")) return { stdout: over.comments ?? `__VIBEHUB_DELIVER__ prcomments ${HEAD_SHA} `, stderr: "" };
     if (script.includes("/reviews' --input")) return { stdout: over.review ?? "__VIBEHUB_DELIVER__ review ok", stderr: "" };
     if (script.includes("gh pr merge")) return { stdout: merge, stderr: "" };
-    if (script.includes("gh pr checks")) return { stdout: `${over.ci ?? NO_CHECKS}\n__VIBEHUB_CI__ done ${HEAD_SHA}\n`, stderr: "" };
+    if (script.includes("gh pr checks")) return { stdout: `${over.ci ?? CI_GREEN}\n__VIBEHUB_CI__ done ${ciHead}\n`, stderr: "" };
     if (script.includes("git push ")) return { stdout: push, stderr: "" };
-    if (script.includes("__VIBEHUB_GATE_JSON__")) return { stdout: probe, stderr: "" };
-    if (script.includes('echo "__VIBEHUB_GATE__ pass"')) return { stdout: run, stderr: "" };
     return { stdout: "", stderr: "" };
   });
 }
@@ -421,7 +419,6 @@ describe("parsePushAndPr / parseMerge", () => {
   });
 });
 
-const localGateRan = () => scripts().some((s) => s.includes("__VIBEHUB_GATE_JSON__"));
 
 describe("parseCiChecks", () => {
   it("reads the verdict of the PR's checks", async () => {
@@ -435,7 +432,7 @@ describe("parseCiChecks", () => {
       .toEqual({ verdict: "fail", output: "CI do PR vermelho: back\n  back: https://github.com/o/r/actions/runs/1/job/2" });
     expect(p('[{"name":"front","bucket":"pending"}]')).toEqual({ verdict: "pending", output: "CI do PR ainda rodando: front" });
   });
-  it("only gh's own 'no checks reported' (or an empty list) is 'none' — the local gate decides", async () => {
+  it("only gh's own 'no checks reported' (or an empty list) is 'none' — the PR has no CI", async () => {
     const { deliver } = await load();
     expect(deliver.parseCiChecks("no checks reported on the 'x' branch\n__VIBEHUB_CI__ done").verdict).toBe("none");
     expect(deliver.parseCiChecks("[]\n__VIBEHUB_CI__ done").verdict).toBe("none");
@@ -526,7 +523,6 @@ describe("deliver uses the PR's CI as the gate when there is one", () => {
     wire({ ci: '[{"name":"back","bucket":"pass"},{"name":"front","bucket":"pass"}]' });
     const out = await deliver.deliver(card.id, { branch: "main", authorized: true });
     expect(out).toMatchObject({ merged: true, reason: "merged" });
-    expect(localGateRan()).toBe(false);
   });
 
   it("the merge is pinned to the commit whose CI passed: a push after the gate is not merged unchecked", async () => {
@@ -583,42 +579,50 @@ describe("deliver uses the PR's CI as the gate when there is one", () => {
     const out = await deliver.deliver(card.id, { branch: "main", authorized: true });
     expect(out).toMatchObject({ merged: false, reason: "gate" });
     expect(mergeRan()).toBe(false);
-    expect(localGateRan()).toBe(false);
   });
 
-  it("an error reading the CI is red, even when the repo has no local checks — never merged unread", async () => {
+  it("an error reading the CI is red — never merged unread", async () => {
     const { deliver, card } = await makeCard();
-    wire({ ci: "HTTP 502: Bad Gateway", probe: "pkg=0\ntest=0\ntsconfig=0\nlocaltsc=0\n__VIBEHUB_GATE_JSON__\n" });
+    wire({ ci: "HTTP 502: Bad Gateway" });
     const out = await deliver.deliver(card.id, { branch: "main", authorized: true });
     expect(out).toMatchObject({ merged: false, reason: "gate" });
     expect(out.output).toContain("HTTP 502: Bad Gateway");
     expect(mergeRan()).toBe(false);
-    expect(localGateRan()).toBe(false);
   });
 
-  it("no CI: the merge is pinned to the commit the local gate tested", async () => {
+  it("the merge is pinned to the commit the CI was read on", async () => {
     const { deliver, card } = await makeCard();
     const tested = "c".repeat(40);
-    wire({ probe: [`head=${tested}`, "__VIBEHUB_GATE_JSON__", '{"checks":["npm test"]}'].join("\n") });
+    wire({ ciHead: tested });
     const out = await deliver.deliver(card.id, { branch: "main", authorized: true });
     expect(out).toMatchObject({ merged: true });
     expect(scripts().find((s) => s.includes("gh pr merge"))).toContain(`--match-head-commit '${tested}'`);
   });
 
-  it("a green gate that could not say which commit it passed on never merges (nothing to pin it to)", async () => {
+  it("a green CI that could not say which commit it passed on never merges (nothing to pin it to)", async () => {
     const { deliver, card } = await makeCard();
-    wire({ probe: "pkg=0\ntest=0\ntsconfig=0\nlocaltsc=0\n__VIBEHUB_GATE_JSON__\n" });
+    wire({ ciHead: "" });
     const out = await deliver.deliver(card.id, { branch: "main", authorized: true });
     expect(out).toMatchObject({ merged: false, reason: "gate", prUrl: PR });
     expect(mergeRan()).toBe(false);
   });
 
-  it("a PR with no CI falls back to the local gate", async () => {
+});
+
+describe("merge exige o CI do PR", () => {
+  it("PR sem CI: o PR fica aberto e o merge é recusado com no_ci, sem rodar teste nenhum no runner", async () => {
     const { deliver, card } = await makeCard();
-    wire({ ci: "no checks reported on the 'card/x' branch", run: "1 failing\n__VIBEHUB_GATE__ fail\n" });
-    const out = await deliver.deliver(card.id, { branch: "main", authorized: true });
-    expect(localGateRan()).toBe(true);
-    expect(out).toMatchObject({ merged: false, reason: "gate" });
+    wire({ ci: NO_CHECKS });
+    const out = await deliver.deliver(card.id, { branch: "dev", authorized: true });
+    expect(out).toMatchObject({ merged: false, reason: "no_ci", prUrl: PR });
+    expect(out.output).toContain("GitHub Actions");
+    expect(mergeRan()).toBe(false);
+  });
+
+  it("gate do merge no commit, PR sem CI: vermelho marcado como sem CI, sem rodar teste no runner", async () => {
+    const { deliver, card } = await makeCard();
+    wire({ ci: NO_CHECKS });
+    expect(await deliver.gateAtCommit(card.id, PR, HEAD_SHA)).toMatchObject({ passed: false, noCi: true });
   });
 });
 
@@ -639,10 +643,10 @@ describe("deliver orchestration", () => {
 
   it("STOPS at a red gate and never merges", async () => {
     const { deliver, card } = await makeCard();
-    wire({ run: "1 failing test\n__VIBEHUB_GATE__ fail\n" });
+    wire({ ci: CI_RED });
     const out = await deliver.deliver(card.id, { branch: "dev", authorized: true });
     expect(out).toMatchObject({ merged: false, reason: "gate", prUrl: PR });
-    expect(out.output).toContain("1 failing test");
+    expect(out.output).toContain("CI do PR vermelho: back");
     expect(mergeRan()).toBe(false);
   });
 
@@ -653,15 +657,6 @@ describe("deliver orchestration", () => {
     expect(out).toMatchObject({ merged: false, reason: "unauthorized", prUrl: PR });
     expect(out.output).toContain("authorized: true");
     expect(mergeRan()).toBe(false);
-  });
-
-  it("unauthorized, then the user's OK on the same clean commit: the gate runs once, the merge still happens", async () => {
-    const { deliver, card } = await makeCard();
-    const probe = [`head=${"c".repeat(40)}`, "clean=1", "__VIBEHUB_GATE_JSON__", '{"checks":["npm test"]}'].join("\n");
-    wire({ probe });
-    expect(await deliver.deliver(card.id, { branch: "dev" })).toMatchObject({ reason: "unauthorized" });
-    expect(await deliver.deliver(card.id, { branch: "dev", authorized: true })).toMatchObject({ merged: true });
-    expect(scripts().filter((s) => s.includes('echo "__VIBEHUB_GATE__ pass"'))).toHaveLength(1);
   });
 
   it("authorized:true is the ONLY thing that merges — a truthy-but-not-true value does not", async () => {
@@ -698,11 +693,11 @@ describe("deliver orchestration", () => {
   it("a LOCKED card still runs the gate — the PR arrives already measured", async () => {
     const { deliver, registry, card } = await makeCard();
     await registry.updateCard(card.id, { locked: true });
-    wire({ run: "1 failing test\n__VIBEHUB_GATE__ fail\n" });
+    wire({ ci: CI_RED });
     const out = await deliver.deliver(card.id, { authorized: true });
     // A red gate is the more useful answer than "locked": it says what to FIX.
     expect(out).toMatchObject({ merged: false, reason: "gate", locked: true });
-    expect(out.output).toContain("1 failing test");
+    expect(out.output).toContain("CI do PR vermelho: back");
     expect(mergeRan()).toBe(false);
   });
 
@@ -715,16 +710,6 @@ describe("deliver orchestration", () => {
     expect(out).toMatchObject({ merged: true, reason: "merged" });
     expect(out.locked).toBeUndefined();
     expect(mergeRan()).toBe(true);
-  });
-
-  it("o gate local compara com a branch alvo do PR, não com a base do card", async () => {
-    const { deliver, registry, card } = await makeCard();
-    await registry.updateCard(card.id, { base: "dev" });
-    wire();
-    await deliver.deliver(card.id, { branch: "prod" });
-    const gateRun = scripts().find((s) => s.includes('echo "__VIBEHUB_GATE__ pass"'));
-    expect(gateRun).toContain("VIBEHUB_BASE_REF='\\''origin/prod'\\''");
-    expect(gateRun).not.toContain("origin/dev");
   });
 
   it("defaults the target to the project's base branch", async () => {
@@ -811,7 +796,7 @@ describe("deliver grava o PR no card (revisão de PR)", () => {
 
   it("o PR fica gravado mesmo com o gate vermelho e mesmo sem autorização", async () => {
     const { deliver, registry, card } = await makeCard();
-    wire({ push: pushOut(7), run: "1 failing test\n__VIBEHUB_GATE__ fail\n" });
+    wire({ push: pushOut(7), ci: CI_RED });
     expect(await deliver.deliver(card.id, { branch: "dev", authorized: true })).toMatchObject({ reason: "gate" });
     expect((await registry.getCard(card.id))?.prs).toMatchObject([{ number: 7, base: "dev" }]);
 
@@ -868,7 +853,7 @@ describe("deliver grava o PR no card (revisão de PR)", () => {
     await deliver.deliver(card.id, { branch: "dev" });
     expect(await merged()).toBeUndefined();
 
-    wire({ push: pushOut(7), run: "1 failing test\n__VIBEHUB_GATE__ fail\n" });
+    wire({ push: pushOut(7), ci: CI_RED });
     await deliver.deliver(card.id, { branch: "dev", authorized: true });
     expect(await merged()).toBeUndefined();
 
@@ -919,7 +904,6 @@ describe("deliver no modo só-merge (botão de merge da revisão de PR)", () => 
     expect(resolve).toContain("--base 'dev'");
     expect(resolve).toContain("headRefOid");
     expect(mergeRan()).toBe(false);
-    expect(localGateRan()).toBe(false);
   });
 
   it("mergeOnly com o head igual ao revisado: CI lido contra o sha revisado e merge preso a ele", async () => {
@@ -950,7 +934,6 @@ describe("deliver no modo só-merge (botão de merge da revisão de PR)", () => 
     const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: REVIEWED, gatePassed: true });
     expect(out).toMatchObject({ merged: true, reason: "merged" });
     expect(scripts().some((s) => s.includes("gh pr checks"))).toBe(false);
-    expect(localGateRan()).toBe(false);
     // the merge stays pinned to the commit on which the gate passed
     expect(scripts().find((s) => s.includes("gh pr merge"))).toContain(`--match-head-commit '${REVIEWED}'`);
   });
@@ -990,21 +973,12 @@ describe("deliver no modo só-merge (botão de merge da revisão de PR)", () => 
     expect(out.output).toBe(`o PR está em ${MOVED.slice(0, 7)}, a revisão aprovou ${REVIEWED.slice(0, 7)}`);
   });
 
-  it("mergeOnly sem CI: a worktree do autor em outro commit não vale como gate do commit revisado", async () => {
+  it("mergeOnly sem CI: o merge do commit revisado é recusado com no_ci", async () => {
     const { deliver, card } = await makeCard();
-    runScript.mockImplementation(async (script: string) => {
-      if (script.includes("gh pr merge")) return { stdout: "__VIBEHUB_DELIVER__ merged\n", stderr: "" };
-      if (script.includes("gh pr checks")) return { stdout: `${NO_CHECKS}\n__VIBEHUB_CI__ done ${REVIEWED}\n`, stderr: "" };
-      if (script.includes("gh pr list")) return { stdout: `__VIBEHUB_DELIVER__ head ${PR} ${REVIEWED}\n`, stderr: "" };
-      if (script.includes("__VIBEHUB_GATE_JSON__")) return { stdout: `head=${MOVED}\nclean=1\n__VIBEHUB_GATE_JSON__\n{"checks":["npm test"]}`, stderr: "" };
-      if (script.includes('echo "__VIBEHUB_GATE__ pass"')) return { stdout: "__VIBEHUB_GATE__ pass\n", stderr: "" };
-      return { stdout: "", stderr: "" };
-    });
+    wireMergeOnly(REVIEWED, { ci: NO_CHECKS });
     const out = await deliver.deliver(card.id, { branch: "dev", authorized: true, mergeOnly: true, expectedHeadSha: REVIEWED });
-    expect(out).toMatchObject({ merged: false, reason: "gate" });
-    expect(out.output).toContain(REVIEWED.slice(0, 7));
+    expect(out).toMatchObject({ merged: false, reason: "no_ci" });
     expect(mergeRan()).toBe(false);
-    expect(scripts().some((s) => s.includes('echo "__VIBEHUB_GATE__ pass"'))).toBe(false);
   });
 
   it("mergeOnly: gate vermelho continua barrando", async () => {
@@ -1333,45 +1307,18 @@ describe("buildPrInfoScript / parsePrInfo (anexar um PR ao card)", () => {
 
 describe("gateAtCommit (o gate do merge da revisão, no commit aprovado)", () => {
   const SHA = "a".repeat(40);
-  const gateRunScripts = () => scripts().filter((s) => s.includes('echo "__VIBEHUB_GATE__ pass"'));
-
-  it("sem CI e a worktree do autor em outro commit: vermelho, sem rodar a suíte (o verde não seria do sha revisado)", async () => {
-    const { deliver, card } = await makeCard();
-    wire({ probe: `head=${HEAD_SHA}\nclean=1\n__VIBEHUB_GATE_JSON__\n{"checks":["npm test"]}` });
-    const r = await deliver.gateAtCommit(card.id, PR, SHA, "dev");
-    expect(r).toMatchObject({ ran: true, passed: false });
-    expect(r.output).toContain(SHA.slice(0, 7));
-    expect(gateRunScripts()).toHaveLength(0);
-  });
-
-  it("sem CI e a worktree no commit, limpa: roda a suíte, que confere o commit de novo", async () => {
-    const { deliver, card } = await makeCard();
-    wire({ probe: `head=${SHA}\nclean=1\n__VIBEHUB_GATE_JSON__\n{"checks":["npm test"]}` });
-    expect(await deliver.gateAtCommit(card.id, PR, SHA, "dev")).toMatchObject({ ran: true, passed: true, headSha: SHA });
-    expect(gateRunScripts()).toHaveLength(1);
-    expect(gateRunScripts()[0]).toContain(SHA);
-  });
-
-  it("sem CI: a suíte compara com a base do PR, não com a do card", async () => {
-    const { deliver, registry, card } = await makeCard();
-    await registry.updateCard(card.id, { base: "dev" });
-    wire({ probe: `head=${SHA}\nclean=1\n__VIBEHUB_GATE_JSON__\n{"checks":["npm test"]}` });
-    await deliver.gateAtCommit(card.id, PR, SHA, "prod");
-    expect(gateRunScripts()[0]).toContain("VIBEHUB_BASE_REF='\\''origin/prod'\\''");
-  });
 
   it("com CI: lê o CI do sha revisado, não a worktree", async () => {
     const { deliver, card } = await makeCard();
     wire({ ci: '[{"name":"back","bucket":"pass"}]' });
-    expect(await deliver.gateAtCommit(card.id, PR, SHA, "dev")).toMatchObject({ ran: true, passed: true });
+    expect(await deliver.gateAtCommit(card.id, PR, SHA)).toMatchObject({ passed: true });
     expect(scripts().find((s) => s.includes("gh pr checks"))).toContain(`HEAD='${SHA}'`);
-    expect(localGateRan()).toBe(false);
   });
 
   it("sha que não é completo é recusado antes de qualquer script", async () => {
     const { deliver, card } = await makeCard();
     wire();
-    await expect(deliver.gateAtCommit(card.id, PR, "abc1234", "dev")).rejects.toThrow(/sha/);
+    await expect(deliver.gateAtCommit(card.id, PR, "abc1234")).rejects.toThrow(/sha/);
     expect(runScript).not.toHaveBeenCalled();
   });
 });
@@ -1484,7 +1431,6 @@ describe("deliver com revisão de PR ativa no card", () => {
     expect(pushRan()).toBe(false);
     expect(scripts().find((s) => s.includes("gh pr list"))).toContain("--head 'feat-7'");
     expect(scripts().find((s) => s.includes("gh pr merge"))).toContain(`--merge --match-head-commit '${HEAD_SHA}'`);
-    expect(scripts().some((s) => s.includes("__VIBEHUB_GATE_JSON__"))).toBe(false);
   });
 
   it("o só-merge da análise numa PR em revisão no card do autor é recusado com review_active, como o merge autorizado", async () => {
@@ -1513,7 +1459,7 @@ describe("deliver com revisão de PR ativa no card", () => {
     const out = await deliver.deliver(card.id, { branch: "dev", pushOnly: true, authorized: true });
     expect(out).toMatchObject({ merged: false, reason: "pushed", prUrl: PR, branch: "dev" });
     expect(pushRan()).toBe(true);
-    expect(scripts().some((s) => s.includes("gh pr checks") || s.includes("__VIBEHUB_GATE_JSON__"))).toBe(false);
+    expect(scripts().some((s) => s.includes("gh pr checks"))).toBe(false);
     expect(mergeRan()).toBe(false);
     // the PR is recorded on the card, as in every delivery
     expect((await registry.getCard(card.id))?.prs?.[0]).toMatchObject({ number: 7, base: "dev" });
@@ -1733,7 +1679,6 @@ describe("deliver abre PR documentado (diretriz de PR de todo repositório)", ()
     expect(out.output).toContain("Line could not be resolved");
     expect(out.output).toContain("tem que estar no diff");
     expect(mergeRan()).toBe(false);
-    expect(localGateRan()).toBe(false);
     expect((await registry.getCard(card.id))?.prs?.[0]?.number).toBe(7);
   });
 
@@ -1793,7 +1738,6 @@ describe("deliver abre PR documentado (diretriz de PR de todo repositório)", ()
     wire();
     const out = await deliver.deliver(card.id, { branch: "dev", pushOnly: true, docs: { comments: DOCS.comments } });
     expect(out).toMatchObject({ reason: "pushed", comments: { posted: 1, skipped: 0 } });
-    expect(localGateRan()).toBe(false);
   });
 
   it("só-merge ignora documentação: não empurra, não escreve no PR", async () => {
@@ -1880,7 +1824,7 @@ describe("recusa do deliver vira aviso de erro no log, que o detector de falhas 
 
   it.each([
     ["sem autorização", {}, false, "unauthorized"],
-    ["gate vermelho pelo teste do próprio card", { run: "1 failing test\n__VIBEHUB_GATE__ fail\n" }, true, "gate"],
+    ["gate vermelho pelo teste do próprio card", { ci: CI_RED }, true, "gate"],
     ["merge feito", {}, true, "merged"],
     ["comentário numa linha fora do diff, que o GitHub recusa", { review: "gh: Line could not be resolved (HTTP 422)\n__VIBEHUB_DELIVER__ error review" }, true, "comments_failed"],
   ])("%s não é falha da plataforma", async (_case, over, authorized, reason) => {

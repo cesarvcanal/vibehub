@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Finding, Review } from "./model.js";
 import {
-  authorFixPrompt, authorSuggestionsPrompt, phaseNoticeText, reviewerApprovePrompt, reviewerDeltaPrompt, reviewerRoundPrompt,
+  authorFixPrompt, authorMergeGatePrompt, authorSuggestionsPrompt, phaseNoticeText, reviewerApprovePrompt, reviewerDeltaPrompt, reviewerRoundPrompt,
 } from "./prompts.js";
 
 function review(findings: Finding[] = []): Review {
@@ -11,6 +11,19 @@ function review(findings: Finding[] = []): Review {
     round: 1, phase: "reviewing", findings, log: [], nudges: 0, createdAt: 0, updatedAt: 0,
   };
 }
+
+describe("CI do merge vermelho: o que o autor recebe", () => {
+  it("CI ainda rodando, não lido ou instável não pede commit: espera ou roda o job de novo, e o vibehub relê o CI ao fim do turno", () => {
+    const text = authorMergeGatePrompt({
+      ...review(), phase: "ready", reviewedSha: "a".repeat(40),
+      mergeGate: { sha: "a".repeat(40), state: "failed", output: "CI do PR ainda rodando: back", at: 1 },
+    });
+    expect(text).toContain("CI do PR ainda rodando: back");
+    expect(text).toMatch(/ainda rodando ou não foi lido/);
+    expect(text).toContain("gh run rerun");
+    expect(text).toMatch(/ao fim do seu turno o vibehub lê o CI de novo/);
+  });
+});
 
 describe("rodada 1 do revisor: a frota de agentes", () => {
   it("roda a frota pelo script plantado no runner, com os args da PR, e espera o resultado antes de submeter", () => {

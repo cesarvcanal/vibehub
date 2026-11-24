@@ -87,6 +87,7 @@ describe("reviewPill", () => {
     expect(at({ sha, state: "failed", at: 1, autoRetried: true })).toBe("failed");
     expect(at({ sha, state: "running", at: 1, failures: 2 })).toBe("running");
     expect(at({ sha, state: "passed", at: 1 })).toBeUndefined();
+    expect(at({ sha, state: "failed", at: 1, failures: 1, exhausted: true, noCi: true })).toBe("noCi");
     expect(mergeGateStatus({ reviewedSha: "b".repeat(40), mergeGate: { sha, state: "failed", at: 1 } })).toBeUndefined();
   });
 

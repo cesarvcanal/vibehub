@@ -336,9 +336,9 @@ export function registerExternalTools(server: McpServer, user: PublicUser): void
     "vibehub_deliver",
     {
       description:
-        "Deliver a card: push its branch, open (or reuse) a pull request to `branch`, run its checks " +
-        "and — ONLY when `authorized` is true and the checks pass — merge it with a merge commit. " +
-        "Returns { prUrl, merged, reason } ('merged', 'gate' = checks red, 'unauthorized' = PR " +
+        "Deliver a card: push its branch, open (or reuse) a pull request to `branch`, read the PR's GitHub CI " +
+        "and — ONLY when `authorized` is true and the CI is green — merge it with a merge commit. " +
+        "Returns { prUrl, merged, reason } ('merged', 'gate' = CI red, 'no_ci' = the PR has no GitHub CI, never merged, 'unauthorized' = PR " +
         "prepared but not told to merge, 'locked' = merge belongs to the reviewer). Pass " +
         "`authorized:true` ONLY when the user explicitly named where to ship ('sobe pra dev'); a " +
         "merge is a deploy, never a default. A PR under review: the push always happens; the merge only " +

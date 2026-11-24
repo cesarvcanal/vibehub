@@ -91,6 +91,7 @@ export function reviewPill(
       if (live.gate === "running") return { key: "review.pill.gateRunning", tone: "info" };
       if (live.gate === "conflict") return { key: "review.pill.gateConflict", tone: "warn" };
       if (live.gate === "conflictFailed") return { key: "review.pill.gateConflictFailed", tone: "critical" };
+      if (live.gate === "noCi") return { key: "review.pill.gateNoCi", tone: "critical" };
       return { key: "review.pill.ready", tone: "ok" };
     // Blue = needs a person, the same colour the mockup gives it.
     case "impasse":
@@ -325,7 +326,7 @@ export function mergeGateOf(review: Pick<Review, "reviewedSha" | "mergeGate">): 
   return review.mergeGate && review.mergeGate.sha === review.reviewedSha ? review.mergeGate : undefined;
 }
 
-export type MergeGateStatus = "running" | "fixing" | "failed" | "conflict" | "conflictFailed";
+export type MergeGateStatus = "running" | "fixing" | "failed" | "conflict" | "conflictFailed" | "noCi";
 
 /**
  * Where the merge gate on the approved commit holds the merge: running, red while the author's AI fixes
@@ -339,6 +340,7 @@ export function mergeGateStatus(review: Pick<Review, "reviewedSha" | "mergeGate"
   const gate = mergeGateOf(review);
   if (gate?.state === "running") return "running";
   if (gate?.state !== "failed") return undefined;
+  if (gate.noCi) return "noCi";
   if (gate.conflict) return gate.exhausted ? "conflictFailed" : "conflict";
   return gate.exhausted || (gate.autoRetried && gate.failures === undefined) ? "failed" : "fixing";
 }

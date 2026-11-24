@@ -9,7 +9,7 @@ import { resolveIdentity } from "../github/identity.js";
 import { getUserGit } from "../../auth/userGit.js";
 import { getSettings } from "../settings/settings.js";
 import { assertGhToken } from "../accounts/token.js";
-import { runGate, cleanOutput, FULL_SHA_RE, type GateResult } from "./gate.js";
+import { redactSecrets } from "../../utils/redactSecrets.js";
 import { activeReviewFor, activeReviewForPr } from "../review/store.js";
 import {
   validatePrDocs, canOpenPr, undocumentedOutput, freshComments, reviewPayload,
@@ -33,11 +33,6 @@ import { logger } from "../../utils/logger.js";
  *      title, a body with every section of the team's standard, and comments on the diff — otherwise
  *      the branch is pushed and the delivery stops at `undocumented`. Then the comments go up as one
  *      COMMENT review on the pushed commit (those already on the PR are skipped).
- *   c. the GATE. When the pull request has GitHub CI checks, THEY are the gate: wait for them (bounded)
- *      and read their verdict — the CI already runs the full suite on a clean machine, and running it
- *      again inside the shared runner duplicated the work and timed out on a loaded box. Without CI
- *      checks (gh SAYS so), the local gate runs as before (see gate.ts); a CI answer that could not be
- *      read is red, never "no CI". Red either way: STOP — do not merge.
  *   d. MERGE only when the caller passed `authorized: true` AND the gate is green. A merge commit,
  *      NEVER a squash, pinned to the commit the gate passed on: a PR that moved meanwhile is
  *      `head_moved`, never merged unchecked.
@@ -82,7 +77,29 @@ export type DeliverReason =
   /** No PR opened: its documentation is missing or invalid (prDocs.ts). The branch may have been pushed. */
   | "undocumented"
   /** The PR is open, but GitHub refused its comments (a line outside the diff, say). Nothing merged. */
-  | "comments_failed";
+  | "comments_failed"
+  | "no_ci";
+
+export interface GateResult {
+  passed: boolean;
+  output: string;
+  headSha?: string;
+  noCi?: true;
+}
+
+export const FULL_SHA_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
+
+const OUTPUT_TAIL_BYTES = 4_000;
+
+export function cleanOutput(text: string): string {
+  const redacted = redactSecrets(String(text ?? ""));
+  const bytes = Buffer.from(redacted, "utf8");
+  return bytes.length <= OUTPUT_TAIL_BYTES ? redacted : "…\n" + bytes.subarray(bytes.length - OUTPUT_TAIL_BYTES).toString("utf8");
+}
+
+const NO_CI_OUTPUT =
+  "o PR não tem CI no GitHub: o vibehub só mergeia com o CI do PR verde. Configure um workflow do GitHub Actions " +
+  "que rode em pull_request (e em todo PR, inclusive só de documentação) e entregue de novo.";
 
 export interface DeliverResult {
   /** URL of the PR — present once (b) resolved one, whether or not it was later merged. */
@@ -157,10 +174,6 @@ const CI_MARKER = "__VIBEHUB_CI__";
 export const CI_POLL_SECONDS = 20;
 /** How long the deliver waits for running CI checks before giving up (red, "still running"). */
 export const CI_WAIT_SECONDS = 15 * 60;
-/**
- * Right after the push GitHub may not have registered the checks yet ("no checks reported"). A repo
- * that HAS workflows gets this long for them to show up before the deliver falls back to the local gate.
- */
 export const CI_APPEAR_SECONDS = 2 * 60;
 
 /** Lines that plant the connection token and export `GH_TOKEN` from it (token over stdin only). PURE. */
@@ -537,7 +550,6 @@ export function buildCiChecksScript(
 
 /**
  * The CI verdict from what `gh pr checks --json name,bucket,link` printed:
- *  - `none`: gh said the PR has no checks ("no checks reported", or an empty list) — the local gate decides;
  *  - `pass`: every check passed or was skipped — on `headSha`, the commit the script read them for;
  *  - `fail`: some check failed or was cancelled (named in `output`, each with its job link when GitHub
  *    gave one — the red then points straight at the log that failed);
@@ -1078,38 +1090,35 @@ export async function setPrPeople(cardId: string, prUrl: string, people: PrPeopl
   return result;
 }
 
-/**
- * The PR's CI as the gate: its verdict, or null when the PR has no CI checks (the local gate
- * decides). Checks still running past the wait are red — never merged on a guess — and so is an
- * answer that could not be read: only gh saying "no checks" hands the PR to the local gate.
- */
 async function ciGate(
   container: string, token: string, cwd: string, prUrl: string, headSha?: string,
-): Promise<GateResult | null> {
+): Promise<GateResult> {
   const out = await hostExecutor().runScript(
     buildCiChecksScript(container, token, cwd, prUrl, headSha),
     { timeoutMs: (CI_WAIT_SECONDS + 2 * CI_POLL_SECONDS) * 1000 + 60_000 },
   );
   const ci = parseCiChecks(out.stdout);
-  if (ci.verdict === "none") return null;
-  return { ran: true, passed: ci.verdict === "pass", output: ci.output, ...(ci.headSha ? { headSha: ci.headSha } : {}) };
+  if (ci.verdict === "none") return { passed: false, output: NO_CI_OUTPUT, noCi: true };
+  return { passed: ci.verdict === "pass", output: ci.output, ...(ci.headSha ? { headSha: ci.headSha } : {}) };
 }
 
-/**
- * The gate a merge-only delivery would run, on its own: the CI of `sha` when the PR has CI, the local
- * gate of the card's worktree otherwise. What the PR review runs as soon as it becomes ready, so the
- * merge button already knows the verdict (and a green one is not run again: `gatePassed`). The local
- * gate is held to `sha`: the author's worktree off that commit, or with anything uncommitted, is red —
- * its green was recorded as the reviewed commit's while it tested other code. Throws when the sha is
- * not a full one, the card or its project is gone, or the runner failed — a gate that did not run is
- * not green.
- */
-export async function gateAtCommit(cardId: string, prUrl: string, sha: string, prBase: string): Promise<GateResult> {
+export async function readWorktreeHead(cardId: string): Promise<string | null> {
+  const { card, project } = await getCardWithProject(cardId);
+  const { cwd } = cardWorkPaths(project, card);
+  assertSafeRemotePath(cwd);
+  const out = await hostExecutor().runScript(
+    `docker exec ${shQuote(config.runner.container)} git -C ${shQuote(cwd)} rev-parse HEAD`,
+    { timeoutMs: 30_000 },
+  );
+  return FULL_SHA_RE.test(out.stdout.trim()) ? out.stdout.trim().toLowerCase() : null;
+}
+
+export async function gateAtCommit(cardId: string, prUrl: string, sha: string): Promise<GateResult> {
   if (!FULL_SHA_RE.test(sha)) throw new Error("gateAtCommit requires the full sha of the reviewed commit");
   const { card, project } = await getCardWithProject(cardId);
   const { cwd } = cardWorkPaths(project, card);
   const token = await cardConnectionToken(card, project);
-  return (await ciGate(config.runner.container, token, cwd, prUrl, sha)) ?? (await runGate(card.id, { expectedSha: sha, baseBranch: prBase }));
+  return await ciGate(config.runner.container, token, cwd, prUrl, sha);
 }
 
 /**
@@ -1306,26 +1315,19 @@ async function runDelivery(cardId: string, opts: DeliverOpts): Promise<DeliverRe
     if (opts.pushOnly) return { prUrl, merged: false, reason: "pushed", branch: target, cardBranch: source, ...lock, ...commented };
   }
 
-  // (c) the gate — the PR's CI when it has one, the local gate otherwise. A gate that errors
-  // (runner blip) blocks the merge — deploying past an unknown state is worse than trying again.
-  // Merge-only reads the CI of the REVIEWED commit (nothing was pushed, the worktree's HEAD may not be
-  // it), and without CI holds the local gate to that commit.
-  let gate: GateResult;
-  try {
-    gate = mergeOnly && opts.gatePassed
-      ? { ran: false, passed: true, output: "" }
-      : (await ciGate(container, token, cwd, prUrl, mergeOnly ? expectedHead : undefined)) ??
-        (await runGate(card.id, { baseBranch: target, ...(mergeOnly ? { expectedSha: expectedHead } : {}) }));
-  } catch (err) {
-    logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "gate could not run — treating as red");
-    return { prUrl, merged: false, reason: "gate", branch: target, cardBranch: source, ...lock, ...commented, output: (err as Error).message };
-  }
-  if (gate.ran && !gate.passed) {
+  const gate: GateResult = mergeOnly && opts.gatePassed
+    ? { passed: true, output: "" }
+    : await ciGate(container, token, cwd, prUrl, mergeOnly ? expectedHead : undefined).catch((err: unknown): GateResult => {
+      logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "gate could not run — treating as red");
+      return { passed: false, output: (err as Error).message };
+    });
+  if (!gate.passed) {
+    const reason: DeliverReason = gate.noCi ? "no_ci" : "gate";
     logger.info(
-      { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, gate: "red", by: opts.by },
+      { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, gate: "red", reason, by: opts.by },
       "deliver stopped at the gate",
     );
-    return { prUrl, merged: false, reason: "gate", branch: target, cardBranch: source, ...lock, ...commented, output: gate.output };
+    return { prUrl, merged: false, reason, branch: target, cardBranch: source, ...lock, ...commented, output: gate.output };
   }
 
   // (d) merge. A LOCKED card never gets here on purpose: its delivery IS the open pull request, and

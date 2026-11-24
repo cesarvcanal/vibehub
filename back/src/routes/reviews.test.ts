@@ -36,8 +36,8 @@ let prState: { state: "OPEN" | "MERGED" | "CLOSED"; headSha: string } | null = n
 const readPrState = vi.fn(async () => prState);
 const afterPrMerged = vi.fn(async () => "deleted" as const);
 /** The merge gate on the approved commit (run when the review becomes ready). */
-let gateAnswer = { ran: true, passed: true, output: "" };
-const gateAtCommit = vi.fn(async (_cardId: string, _prUrl: string, _sha: string) => gateAnswer);
+const mergeGateVerdict: { answer: { passed: boolean; output: string; noCi?: true } } = { answer: { passed: true, output: "" } };
+const gateAtCommit = vi.fn<(cardId: string, prUrl: string, sha: string) => Promise<typeof mergeGateVerdict.answer>>(async () => mergeGateVerdict.answer);
 const fleetConversation = { answer: null as FleetConversation | null };
 const readFleetConversation = vi.fn<(transcriptDir: string, runId?: string) => Promise<FleetConversation | null>>(async () => fleetConversation.answer);
 const deliver = vi.fn(async (cardId: string, _opts: DeliverOpts = {}): Promise<DeliverResult> => {
@@ -222,7 +222,7 @@ beforeEach(async () => {
   runScript.mockResolvedValue({ stdout: "[]", stderr: "" });
   deliver.mockClear();
   gateAtCommit.mockClear();
-  gateAnswer = { ran: true, passed: true, output: "" };
+  mergeGateVerdict.answer = { passed: true, output: "" };
   readPrState.mockClear();
   afterPrMerged.mockClear();
   prState = null;
@@ -1103,9 +1103,21 @@ describe("merge", () => {
     expect(gateAtCommit).toHaveBeenCalledTimes(1);
   });
 
+  it("PR sem CI: o clique em mergear responde no_ci na hora, sem deliver e sem mandar 'tentar de novo'", async () => {
+    const w = await world();
+    mergeGateVerdict.answer = { passed: false, output: "o PR não tem CI no GitHub", noCi: true };
+    const review = await readyReview(w);
+    const res = await merge(review.id, w.merger);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ reason: "no_ci" });
+    expect(res.json().error).toMatch(/GitHub Actions/);
+    expect(res.json().error).not.toMatch(/Tentar de novo/);
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
   it("caso real (PR #215): gate vermelho no commit aprovado — o clique responde NA HORA com a falha, sem deliver", async () => {
     const w = await world();
-    gateAnswer = { ran: true, passed: false, output: "FAIL src/services/secrets/audit.test.ts > Test timed out in 5000ms." };
+    mergeGateVerdict.answer = { passed: false, output: "FAIL src/services/secrets/audit.test.ts > Test timed out in 5000ms." };
     const review = await readyReview(w);
     const res = await merge(review.id, w.merger);
     expect(res.statusCode).toBe(409);
@@ -1120,7 +1132,7 @@ describe("merge", () => {
     const w = await world();
     let release!: () => void;
     const held = new Promise<void>((r) => { release = r; });
-    gateAtCommit.mockImplementationOnce(async () => { await held; return gateAnswer; });
+    gateAtCommit.mockImplementationOnce(async () => { await held; return mergeGateVerdict.answer; });
     const started = await startReview(w);
     const id = started.json().review.id as string;
     await (await orchestrator()).submitReviewerRound(started.json().review.reviewerCardId, {
@@ -1399,7 +1411,7 @@ describe("merge da análise pela rota", () => {
     worktree.head = ANALYSED;
     prState = { state: "OPEN", headSha: ANALYSED };
     runScript.mockImplementation(async (script: string) => ({
-      stdout: script.includes("__VIBEHUB_GATE_JSON__") ? `head=${worktree.head}\nclean=1\n__VIBEHUB_GATE_JSON__\n` : "[]",
+      stdout: script.includes("rev-parse HEAD") ? `${worktree.head}\n` : "[]",
       stderr: "",
     }));
   });
@@ -1648,7 +1660,7 @@ describe("merge da análise pela rota", () => {
     await saveReport(aptReport(w.cardId));
     const first = await readAnalysis(w, w.leitor);
     expect(gateAtCommit).toHaveBeenCalledTimes(1);
-    expect(gateAtCommit).toHaveBeenCalledWith(w.cardId, PR.url, "e".repeat(40), PR.base);
+    expect(gateAtCommit).toHaveBeenCalledWith(w.cardId, PR.url, "e".repeat(40));
     expect(first.mergeGate?.state).toBe("running");
     await vi.waitFor(async () => expect((await readAnalysis(w, w.leitor)).mergeGate?.state).toBe("passed"));
     deliver.mockClear();
@@ -1660,9 +1672,9 @@ describe("merge da análise pela rota", () => {
   it("com o gate rodando o clique não espera por ele: 409 gate_running na hora, sem merge e sem um segundo gate", async () => {
     const w = await world();
     await saveReport(aptReport(w.cardId));
-    const gateRun = Promise.withResolvers<typeof gateAnswer>();
+    const gateRun = Promise.withResolvers<typeof mergeGateVerdict.answer>();
     gateAtCommit.mockImplementationOnce(async () => await gateRun.promise);
-    onTestFinished(() => gateRun.resolve(gateAnswer));
+    onTestFinished(() => gateRun.resolve(mergeGateVerdict.answer));
     await readAnalysis(w, w.leitor);
     deliver.mockClear();
     const res = await merge(w, w.merger);
@@ -1675,9 +1687,9 @@ describe("merge da análise pela rota", () => {
   it("clique sem veredito do gate (análise de antes desta versão) dispara o gate e responde gate_running, sem merge", async () => {
     const w = await world();
     await saveReport(aptReport(w.cardId));
-    const gateRun = Promise.withResolvers<typeof gateAnswer>();
+    const gateRun = Promise.withResolvers<typeof mergeGateVerdict.answer>();
     gateAtCommit.mockImplementationOnce(async () => await gateRun.promise);
-    onTestFinished(() => gateRun.resolve(gateAnswer));
+    onTestFinished(() => gateRun.resolve(mergeGateVerdict.answer));
     deliver.mockClear();
     const res = await merge(w, w.merger);
     expect(res.statusCode).toBe(409);
@@ -1689,7 +1701,7 @@ describe("merge da análise pela rota", () => {
   it("gate vermelho no commit analisado barra o clique na hora com a saída, e só o 'rodar de novo' roda outra vez", async () => {
     const w = await world();
     await saveReport(aptReport(w.cardId));
-    gateAnswer = { ran: true, passed: false, output: "FAIL src/pix.test.ts" };
+    mergeGateVerdict.answer = { passed: false, output: "FAIL src/pix.test.ts" };
     await readAnalysis(w, w.leitor);
     await vi.waitFor(async () => expect((await readAnalysis(w, w.leitor)).mergeGate).toMatchObject({ state: "failed", output: "FAIL src/pix.test.ts" }));
     deliver.mockClear();
@@ -1704,12 +1716,25 @@ describe("merge da análise pela rota", () => {
     expect((await rerun(w.leitor)).statusCode).toBe(403);
     expect((await rerun(w.outro)).statusCode).toBe(404);
     expect(gateAtCommit).toHaveBeenCalledTimes(1);
-    gateAnswer = { ran: true, passed: true, output: "" };
+    mergeGateVerdict.answer = { passed: true, output: "" };
     const again = await rerun(w.merger);
     expect(again.statusCode).toBe(200);
     expect(again.json().mergeGate.state).toBe("running");
     await vi.waitFor(async () => expect((await readAnalysis(w, w.leitor)).mergeGate?.state).toBe("passed"));
     expect(gateAtCommit).toHaveBeenCalledTimes(2);
+  });
+
+  it("PR analisado sem CI: o veredito fica marcado sem CI e o clique responde no_ci, sem deliver", async () => {
+    const w = await world();
+    await saveReport(aptReport(w.cardId));
+    mergeGateVerdict.answer = { passed: false, output: "o PR não tem CI no GitHub", noCi: true };
+    await readAnalysis(w, w.leitor);
+    await vi.waitFor(async () => expect((await readAnalysis(w, w.leitor)).mergeGate).toMatchObject({ state: "failed", noCi: true }));
+    deliver.mockClear();
+    const res = await merge(w, w.merger);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ reason: "no_ci" });
+    expect(deliver).not.toHaveBeenCalled();
   });
 
   it("gate gravado 'rodando' por um processo que morreu (deploy) roda de novo na leitura seguinte", async () => {
@@ -1741,7 +1766,7 @@ describe("merge da análise pela rota", () => {
     prState = { state: "OPEN", headSha: "f".repeat(40) };
     await saveReport(aptReport(w.cardId, { analysedSha: "f".repeat(40) }));
     await readAnalysis(w, w.leitor);
-    await vi.waitFor(() => expect(gateAtCommit).toHaveBeenCalledWith(w.cardId, PR.url, "f".repeat(40), PR.base));
+    await vi.waitFor(() => expect(gateAtCommit).toHaveBeenCalledWith(w.cardId, PR.url, "f".repeat(40)));
   });
 
   it("caso real (PR #649): a análise que corrigiu e entregou prende o gate e o merge à cabeça que entregou, não ao sha do passo 1", async () => {
@@ -1752,7 +1777,7 @@ describe("merge da análise pela rota", () => {
     await saveReport(aptReport(w.cardId));
     await readAnalysis(w, w.leitor);
     await vi.waitFor(async () => expect((await readAnalysis(w, w.leitor)).mergeGate).toMatchObject({ state: "passed", sha: delivered }));
-    expect(gateAtCommit).toHaveBeenCalledWith(w.cardId, PR.url, delivered, PR.base);
+    expect(gateAtCommit).toHaveBeenCalledWith(w.cardId, PR.url, delivered);
     deliver.mockClear();
     expect((await merge(w, w.merger)).statusCode).toBe(200);
     expect(deliver.mock.calls[0]![1]).toMatchObject({ mergeOnly: true, expectedHeadSha: delivered, gatePassed: true });

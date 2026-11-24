@@ -264,10 +264,10 @@ SDK e CLI do Claude, GitHub, Docker e afins seguem a **documentação oficial do
 **Rodar testes no runner: curto, só do que você tocou.** A suíte inteira leva muitos minutos, disputa CPU com os outros cards e costuma ser morta por um deploy.
 
 1. **Enquanto trabalha:** só o arquivo do que mexeu, filtrado pelo caso: `cd back && npx vitest run <arquivo> -t "<caso>"` (idem em `front/`).
-2. **Antes de entregar:** `npm run lint:changed` e `npm run test:changed` (raiz), o recorte do gate (`.vibehub/gate.json`), e o typecheck do pacote tocado, o mesmo do CI:
+2. **Antes de entregar:** `npm run lint:changed` e `npm run test:changed` (raiz) e o typecheck do pacote tocado, o mesmo do CI:
    - **front:** `npx tsc -b`. O `tsconfig.json` é uma solution com project references: `tsc --noEmit -p` não checa nada e dá verde falso.
    - **back:** `npx tsc --noEmit` (`tsc -b` emitiria JS em `back/dist`). O `tsconfig.json` do back exclui `*.test.ts`: erro de tipo em teste só aparece ao rodar o teste.
-3. **Nunca** `npm test` ou `npx vitest run` sem filtro no runner: a suíte inteira é do CI (`gh pr checks <N>`). A exceção é `npm run test:lint`, a suíte pequena do lint da raiz (`eslint.config.js` e `scripts/`), inteira quando o PR mexe nela; o gate não a roda, só o CI.
+3. **Nunca** `npm test` ou `npx vitest run` sem filtro no runner: a suíte inteira é do CI (`gh pr checks <N>`). A exceção é `npm run test:lint`, a suíte pequena do lint da raiz (`eslint.config.js` e `scripts/`), inteira quando o PR mexe nela; o `test:changed` não a roda, só o CI.
 4. Teste de tempo (limite em ms) que falha de vez em quando sob carga não é regressão sua: confirme rodando sem a sua mudança; se já era instável, diga no PR e siga.
 
 Comando de teste que passaria de ~2 min vira recorte menor; o que ainda passa de ~1 min roda destacado do terminal (`setsid nohup sh -c '<comando> > /tmp/<log> 2>&1' &`, e o log se lê depois) se a instalação faz deploy reiniciando o servidor, que mata o terminal e o que roda nele. O que não deu para testar se relata: **o que foi e o que não foi validado**.
@@ -306,7 +306,7 @@ Decisão de produto, mudança de escopo, funcionalidade nova, mudança de compor
 |---------|-----|
 | `npm run install:all` | Instala a raiz (o lint), `back/` e `front/` |
 | `npm --prefix back run dev` · `npm --prefix front run dev` | Backend (tsx watch) e frontend (Vite) em dev |
-| `npm run lint:changed` · `npm run test:changed` | Lint do que a branch acrescentou (§12, passo 7) e testes afetados por ela, desde a base (`$VIBEHUB_BASE_REF`, padrão `origin/main`): o recorte do gate (e do CI, no lint) |
+| `npm run lint:changed` · `npm run test:changed` | Lint do que a branch acrescentou (§12, passo 7) e testes afetados por ela, desde a base (`$VIBEHUB_BASE_REF`, padrão `origin/main`): o recorte que se roda antes de entregar (o lint roda também no CI) |
 | `npm run build` | Build de back + front |
 | `npm --prefix front run storybook` | Storybook dos componentes |
 

@@ -551,6 +551,10 @@ export function phaseNoticeText(r: Review): string {
 
 /** The notice, on both cards, that the merge gate failed on the approved commit. */
 export function mergeGateFailedText(r: Review): string {
+  if (r.mergeGate?.noCi) {
+    return `PR #${r.prNumber}: o merge foi recusado porque o PR está sem CI no GitHub — o vibehub só mergeia com o CI do PR verde. ` +
+      "Configure um workflow do GitHub Actions que rode em todo PR; depois que ele rodar neste PR, tente o merge de novo.";
+  }
   if (r.mergeGate?.conflict && r.mergeGate.exhausted) {
     return `PR #${r.prNumber}: o PR segue em conflito com ${r.base} depois de ${MERGE_GATE_AUTO_RETRIES} ordens à IA do autor — ` +
       "o merge espera alguém trazer a base para a branch.";
@@ -565,29 +569,25 @@ export function mergeGateFailedText(r: Review): string {
   return `PR #${r.prNumber}: os testes do merge falharam no commit aprovado — a IA do autor está corrigindo, e eles rodam de novo sozinhos.`;
 }
 
-/**
- * The merge gate failed on the approved commit: the author gets the output and fixes it. It is almost always
- * the worktree (a dependency not installed) or a test that is flaky under load, not the reviewed code; the
- * text says so, so the AI does not go hunting for a bug in the diff.
- */
 export function authorMergeGatePrompt(r: Review): string {
   return [
     header(r),
-    "A revisão aprovou o PR, mas os testes que o merge roda (o gate: CI do PR, ou os testes desta worktree) " +
-      `falharam no commit aprovado (${(r.reviewedSha ?? "").slice(0, 7)}). Enquanto estiverem vermelhos, o merge não sai.`,
+    "A revisão aprovou o PR, mas o CI do PR (o que o merge exige) " +
+      `falhou no commit aprovado (${(r.reviewedSha ?? "").slice(0, 7)}). Enquanto estiver vermelho, o merge não sai.`,
     rules(),
     "",
-    "Saída do gate:",
+    "Saída do CI:",
     quotedBlock(r.mergeGate?.output, "  ", 4000),
     "",
     "O que fazer:",
-    "1. Leia a causa. Dependência faltando ou comando não encontrado é a worktree: rode npm install (na raiz e nos " +
-      "pacotes que pedirem). Nada a commitar nesse caso.",
-    "2. Teste que falhou de verdade: corrija, com commit e teste. Teste de tempo que estoura sob carga: torne-o " +
+    "1. Abra o log do job que falhou (o link está na saída acima) e leia a causa.",
+    "2. Teste que falhou de verdade: corrija, com commit e teste. Teste de tempo que estoura: torne-o " +
       "robusto (sem depender do relógio da máquina), não só aumente o limite.",
-    "3. Rode de novo os testes que falharam até passarem.",
-    `4. Se houve commit: git push origin HEAD:${r.prBranch} (a revisão volta ao revisor conferir o que entrou, é o esperado).`,
-    "   Sem commit (só instalar): nada a empurrar. Ao fim do seu turno o vibehub roda o gate de novo sozinho.",
+    "3. Rode de novo, localmente, os testes que falharam até passarem.",
+    `4. git push origin HEAD:${r.prBranch} (a revisão volta ao revisor conferir o que entrou, é o esperado).`,
+    "Se a saída diz que o CI estava ainda rodando ou não foi lido, ou o job falhou por instabilidade (passa ao rodar de novo), " +
+      "não há o que commitar: espere o CI terminar ou rode o job de novo (gh run rerun <id> --failed); " +
+      "ao fim do seu turno o vibehub lê o CI de novo.",
   ].join("\n");
 }
 

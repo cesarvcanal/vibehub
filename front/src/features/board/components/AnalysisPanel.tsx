@@ -33,6 +33,7 @@ const VERDICT_TONE: Record<AnalysisVerdict, BadgeTone> = { apt: "ok", not_apt: "
 
 function mergeRefusalTitle(reason: string, t: Translate): string {
   if (reason === "gate") return t("analysis.merge.refused.gate");
+  if (reason === "no_ci") return t("analysis.merge.refused.noCi");
   if (reason === "conflict") return t("analysis.merge.refused.conflict");
   return t("analysis.merge.refused.other");
 }
@@ -146,7 +147,7 @@ function AnalysisMerge({ cardId, read, rereading }: { cardId: string; read: Anal
   if (gateState === "failed" && !merging) {
     return (
       <div role="alert" className="flex shrink-0 flex-col gap-1.5 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs">
-        <p className="font-medium text-destructive">{t("analysis.mergeGate.failed")}</p>
+        <p className="font-medium text-destructive">{t(read.mergeGate?.noCi ? "analysis.mergeGate.noCi" : "analysis.mergeGate.failed")}</p>
         {read.mergeGate?.output ? (
           <pre className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground">{read.mergeGate.output}</pre>
         ) : null}

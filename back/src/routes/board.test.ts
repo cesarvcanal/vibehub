@@ -365,6 +365,8 @@ describe("revisão de PR no board", () => {
     expect(await read()).toMatchObject({ mergeGateState: "conflict" });
     await store.mutateReview("r-gate", (r) => { r.mergeGate = { sha, state: "failed", at: 2, failures: 4, conflict: true, exhausted: true }; });
     expect(await read()).toMatchObject({ mergeGateState: "conflictFailed" });
+    await store.mutateReview("r-gate", (r) => { r.mergeGate = { sha, state: "failed", at: 2, failures: 1, exhausted: true, noCi: true }; });
+    expect(await read()).toMatchObject({ mergeGateState: "noCi" });
     // green, or a verdict from a commit that is not the approved one: the line goes back to "pronto pra merge"
     await store.mutateReview("r-gate", (r) => { r.mergeGate = { sha, state: "passed", at: 3 }; });
     expect(await read()).toEqual({ id: "r-gate", prNumber: 7, phase: "ready", round: 1 });

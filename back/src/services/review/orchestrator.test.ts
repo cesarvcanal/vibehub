@@ -70,11 +70,11 @@ const prDiffUnchanged = vi.fn<(cardId: string, prUrl: string, base: string, from
   async () => prDiff.unchanged,
 );
 /** O veredito do gate do merge no commit aprovado (`gateAtCommit`); `gateGate` segura a resposta até ser solta. */
-let gateAnswer: { ran: boolean; passed: boolean; output: string } = { ran: true, passed: true, output: "" };
+const mergeGateVerdict: { answer: { passed: boolean; output: string; noCi?: true } } = { answer: { passed: true, output: "" } };
 let gateGate: Promise<void> | null = null;
 const gateSpy = vi.fn(async (_cardId: string, _prUrl: string, _sha: string) => {
   if (gateGate) await gateGate;
-  return gateAnswer;
+  return mergeGateVerdict.answer;
 });
 const afterMerged = vi.fn(async (_cardId: string, _prUrl: string, _base: string, _branch: string) => "deleted" as const);
 const prPeople = vi.fn(async (_cardId: string, _prUrl: string, people: { assignee?: string; reviewer?: string }) => ({
@@ -204,7 +204,7 @@ beforeEach(async () => {
   afterMerged.mockClear();
   prPeople.mockClear();
   gateSpy.mockClear();
-  gateAnswer = { ran: true, passed: true, output: "" };
+  mergeGateVerdict.answer = { passed: true, output: "" };
   gateGate = null;
 });
 afterEach(async () => {
@@ -2082,7 +2082,7 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]![0]).toBe(review.reviewerCardId);
     expect(lastText()).toContain("--approve");
-    await vi.waitFor(() => expect(gateSpy).toHaveBeenCalledWith(review.cardId, PR.url, SHA2, PR.base));
+    await vi.waitFor(() => expect(gateSpy).toHaveBeenCalledWith(review.cardId, PR.url, SHA2));
   });
 
   it("merge da base sem mudar o diff do PR, no impasse por rodadas: o impasse fica, no head novo, sem chamar ninguém", async () => {
@@ -2165,7 +2165,7 @@ describe("push do autor depois do pronto (a IA do autor mexeu no PR)", () => {
     expect(after).toMatchObject({ phase: "ready", reviewedSha: SHA2 });
     expect(after?.log.filter((l) => l.text.startsWith("Merge da base"))).toHaveLength(1);
     expect(send).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => expect(gateSpy).toHaveBeenCalledWith(review.cardId, PR.url, SHA2, PR.base));
+    await vi.waitFor(() => expect(gateSpy).toHaveBeenCalledWith(review.cardId, PR.url, SHA2));
     await new Promise((r) => setTimeout(r, 40));
     expect(gateSpy.mock.calls.filter((c) => c[2] === SHA2)).toHaveLength(1);
   });
@@ -3108,8 +3108,8 @@ describe("ferramentas MCP", () => {
 
 describe("gate do merge rodado quando a revisão fica pronta", () => {
   const RED = {
-    ran: true, passed: false,
-    output: "[vibehub] dependência faltando na worktree (@vitejs/plugin-react): rode npm install no card e entregue de novo",
+    passed: false,
+    output: "CI do PR vermelho: front (https://github.com/acme/widgets/actions/runs/1/job/2)",
   };
   const authorTurnEnds = async (o: Loaded, cardId: string) => {
     await o.registry.applyCardStatus(cardId, "working");
@@ -3121,18 +3121,36 @@ describe("gate do merge rodado quando a revisão fica pronta", () => {
   it("caso real (PR #215): pronta e gate vermelho — o veredito fica gravado antes do clique, e o autor recebe a falha", async () => {
     const o = await load();
     const { author, review } = await started(o);
-    gateAnswer = RED;
+    mergeGateVerdict.answer = RED;
     await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
     await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("failed"));
-    expect(gateSpy).toHaveBeenCalledWith(author.id, PR.url, SHA1, PR.base);
+    expect(gateSpy).toHaveBeenCalledWith(author.id, PR.url, SHA1);
     const after = (await o.store.getReview(review.id))!;
     expect(after.phase).toBe("ready");
     expect(after.mergeGate).toMatchObject({ sha: SHA1, state: "failed", output: RED.output });
-    await vi.waitFor(() => expect(send.mock.calls.some(([card, text]) => card === author.id && String(text).includes("@vitejs/plugin-react"))).toBe(true));
+    await vi.waitFor(() => expect(send.mock.calls.some(([card, text]) => card === author.id && String(text).includes("CI do PR vermelho: front"))).toBe(true));
     const toAuthor = String(send.mock.calls.find(([card]) => card === author.id)?.[1]);
-    expect(toAuthor).toContain("falharam no commit aprovado (aaaaaaa)");
-    expect(toAuthor).toContain("npm install");
+    expect(toAuthor).toContain("falhou no commit aprovado (aaaaaaa)");
+    expect(toAuthor).toContain("actions/runs/1/job/2");
+    expect(toAuthor).not.toContain("worktree");
     expect(after.log.at(-1)?.text).toMatch(/Testes do merge vermelhos/);
+  });
+
+  it("pronta num repo sem CI: o merge fica recusado esperando uma pessoa, e o autor não recebe a falha como bug", async () => {
+    const o = await load();
+    const { author, review } = await started(o);
+    mergeGateVerdict.answer = { passed: false, output: "o PR não tem CI no GitHub", noCi: true };
+    await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
+    await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("failed"));
+    await vi.waitFor(() => expect(o.orch.mergeGateRunning(review.id)).toBe(false));
+    const after = (await o.store.getReview(review.id))!;
+    expect(after.mergeGate).toMatchObject({ sha: SHA1, state: "failed", exhausted: true, noCi: true });
+    expect(after.log.at(-1)?.text).toMatch(/sem CI/);
+    expect(send.mock.calls.some(([card]) => card === author.id)).toBe(false);
+    await vi.waitFor(async () => expect((await messagesOn(o, author.id)).some((notice) => /sem CI no GitHub/.test(notice.text))).toBe(true));
+    const notice = (await messagesOn(o, author.id)).find((message) => /sem CI no GitHub/.test(message.text));
+    expect(notice?.text).toMatch(/GitHub Actions/);
+    expect(notice?.text).not.toMatch(/vezes|Tentar de novo/);
   });
 
   it("pronta com o PR em conflito com a base: não dá o merge como livre, não roda o gate e o autor recebe a ordem de trazer a base", async () => {
@@ -3278,13 +3296,13 @@ describe("gate do merge rodado quando a revisão fica pronta", () => {
   it("o autor termina um turno com o gate vermelho: roda de novo sozinho, e o verde que a correção trouxe mergeia sem clique", async () => {
     const o = await load();
     const { author, review } = await started(o);
-    gateAnswer = RED;
+    mergeGateVerdict.answer = RED;
     const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
     try {
       await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
       await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate).toMatchObject({ state: "failed", failures: 1 }));
       expect((await o.store.getReview(review.id))?.mergeGate?.exhausted).toBeUndefined();
-      gateAnswer = { ran: true, passed: true, output: "" };
+      mergeGateVerdict.answer = { passed: true, output: "" };
       await authorTurnEnds(o, author.id);
       await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("passed"));
       expect(gateSpy).toHaveBeenCalledTimes(2);
@@ -3296,7 +3314,7 @@ describe("gate do merge rodado quando a revisão fica pronta", () => {
   it("caso real (PR #218): vermelho que a IA não conserta roda sozinho até 3 vezes; depois disso vira erro pra pessoa, e o 'Tentar de novo' zera a conta", async () => {
     const o = await load();
     const { author, review } = await started(o);
-    gateAnswer = RED;
+    mergeGateVerdict.answer = RED;
     const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
     try {
       await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
@@ -3309,7 +3327,7 @@ describe("gate do merge rodado quando a revisão fica pronta", () => {
       expect(exhausted.mergeGate?.exhausted).toBe(true);
       expect(gateSpy).toHaveBeenCalledTimes(4);
       // the first 3 failures went to the author; the last did not (nobody runs it again on their own after it)
-      const gatePrompts = () => send.mock.calls.filter(([card, text]) => card === author.id && String(text).includes("os testes que o merge roda"));
+      const gatePrompts = () => send.mock.calls.filter(([card, text]) => card === author.id && String(text).includes("o CI do PR (o que o merge exige)"));
       await vi.waitFor(() => expect(gatePrompts()).toHaveLength(3));
       expect(exhausted.log.at(-1)?.text).toMatch(/3 vezes/);
       await authorTurnEnds(o, author.id);
@@ -3319,7 +3337,7 @@ describe("gate do merge rodado quando a revisão fica pronta", () => {
       await o.orch.retryReview(review.id, "mussa");
       await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate).toMatchObject({ state: "failed", failures: 1 }));
       expect((await o.store.getReview(review.id))?.mergeGate?.exhausted).toBeUndefined();
-      gateAnswer = { ran: true, passed: true, output: "" };
+      mergeGateVerdict.answer = { passed: true, output: "" };
       await authorTurnEnds(o, author.id);
       await vi.waitFor(async () => expect((await o.store.getReview(review.id))?.mergeGate?.state).toBe("passed"));
     } finally {
@@ -3330,7 +3348,7 @@ describe("gate do merge rodado quando a revisão fica pronta", () => {
   it("dois fins de turno juntos com o gate vermelho rodam o gate uma vez só", async () => {
     const o = await load();
     const { author, review } = await started(o);
-    gateAnswer = RED;
+    mergeGateVerdict.answer = RED;
     const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
     try {
       await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
@@ -3347,7 +3365,7 @@ describe("gate do merge rodado quando a revisão fica pronta", () => {
   it("falha gravada antes da conta (autoRetried, sem failures) não roda de novo sozinha", async () => {
     const o = await load();
     const { author, review } = await started(o);
-    gateAnswer = RED;
+    mergeGateVerdict.answer = RED;
     const off = o.orch.startReviewOrchestrator({ graceMs: 0 });
     try {
       await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [], headSha: SHA1, summary: "limpo" });
@@ -3392,7 +3410,7 @@ describe("gate do merge rodado quando a revisão fica pronta", () => {
     const { review } = await started(o);
     let release!: () => void;
     gateGate = new Promise((r) => { release = r; });
-    gateAnswer = RED;
+    mergeGateVerdict.answer = RED;
     await o.orch.submitReviewerRound(review.reviewerCardId, { round: 1, findings: [SUGGESTION], headSha: SHA1, summary: "s" });
     await vi.waitFor(() => expect(gateSpy).toHaveBeenCalledTimes(1));
     await o.orch.reopenAfterHeadMoved(review.id, "teste", { cause: "push", headSha: SHA2 });

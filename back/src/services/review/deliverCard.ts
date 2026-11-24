@@ -234,6 +234,7 @@ function refusalReason(outcome: Extract<ReviewMergeOutcome, { kind: "refused" }>
   if (outcome.result) return outcome.result.reason;
   if (outcome.reason === "gate" || outcome.reason === "gate_running") return "gate";
   if (outcome.reason === "conflict") return "conflict";
+  if (outcome.reason === "no_ci") return "no_ci";
   if (outcome.reason === "not_ready" || outcome.reason === "merging") return "review_active";
   return "merge_failed";
 }
