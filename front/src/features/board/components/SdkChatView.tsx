@@ -2827,7 +2827,7 @@ function SdkQuestionCard({
         {row.questions.map((q, i) => (
           <div key={i} className="min-w-0 text-muted-foreground">{q.question}</div>
         ))}
-        <div className="text-foreground/90">
+        <div className="whitespace-pre-wrap break-words text-foreground/90">
           {row.outcome === "answered"
             ? t("sdk.questionAnswered", { answers: chosen.join(" · ") })
             : row.outcome === "superseded"
