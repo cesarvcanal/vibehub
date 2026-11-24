@@ -51,6 +51,7 @@ const aptAnalysis: AnalysisReadModel = {
   canMerge: false,
   merging: false,
   uncheckedDimensions: [],
+  timeline: [],
 };
 
 /** What the server answers to the live read of the card's review; tests change it between polls. */

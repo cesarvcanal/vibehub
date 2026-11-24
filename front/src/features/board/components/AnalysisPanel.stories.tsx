@@ -3,7 +3,10 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useQueryClient } from "@tanstack/react-query";
 import { AnalysisPanel } from "@/features/board/components/AnalysisPanel";
 import { cardAnalysisConversationKey, cardAnalysisKey } from "@/features/board/lib/analysis";
-import { ANALYSIS_DIMENSIONS, type AnalysisConversation, type AnalysisFinding, type AnalysisReadModel, type AnalysisReport, type CardAnalysisResponse } from "@/api/types";
+import {
+  ANALYSIS_DIMENSIONS, type AnalysisConversation, type AnalysisFinding, type AnalysisReadModel, type AnalysisReport,
+  type AnalysisTimelineEntry, type AnalysisTimelineEvent, type CardAnalysisResponse,
+} from "@/api/types";
 
 const CARD_ID = "c1";
 
@@ -47,7 +50,7 @@ const report = (over: Partial<AnalysisReport> = {}): AnalysisReport => ({
 const readModel = (
   analysis: AnalysisReport, verdict: AnalysisReadModel["verdict"], health: Partial<AnalysisReadModel["health"]> = {},
   uncheckedDimensions: AnalysisReadModel["uncheckedDimensions"] = [],
-): AnalysisReadModel => ({ analysis, verdict, health: { ...ALL_OK, repoRules: "skipped", ...health }, uncheckedDimensions, canMerge: false, merging: false });
+): AnalysisReadModel => ({ analysis, verdict, health: { ...ALL_OK, repoRules: "skipped", ...health }, uncheckedDimensions, canMerge: false, merging: false, timeline: [] });
 
 function SeededAnalysis({ answer, conversation, children }: {
   answer: CardAnalysisResponse; conversation: AnalysisConversation | null; children: React.ReactNode;
@@ -234,4 +237,33 @@ const fleetConversation: AnalysisConversation = {
 export const Conversa: Story = {
   name: "Conversa · frota conversando",
   parameters: { analysis: readModel(report({ findings: [fixedBlocking] }), "apt"), conversation: fleetConversation },
+};
+
+const timelineAt = (minute: number) => Date.UTC(2026, 10, 24, 13, minute);
+
+const timelineEntry = (event: AnalysisTimelineEvent, minute: number): AnalysisTimelineEntry => ({
+  ...event, cardId: CARD_ID, analysedSha: report().analysedSha, at: timelineAt(minute),
+});
+
+const fixingTimeline: AnalysisTimelineEntry[] = [
+  timelineEntry({ kind: "report", stage: "analysed", fixed: 0, decided: 0, open: 3 }, 0),
+  timelineEntry({ kind: "fixing", findingId: "f1" }, 2),
+  timelineEntry({ kind: "fixed", findingId: "f1", commit: "9f3e2c1".padEnd(40, "0") }, 9),
+  timelineEntry({ kind: "recheck", outcome: "clean" }, 12),
+  timelineEntry({ kind: "delivered", reason: "gate", output: "✗ lint: 12 erros (no-explicit-any) em src/financeiro/FormasPagamento.page.tsx" }, 18),
+  timelineEntry({ kind: "report", stage: "done", fixed: 1, decided: 0, open: 2 }, 19),
+  timelineEntry({ kind: "fixing", findingId: "f2" }, 21),
+];
+
+const finishedFleet: AnalysisConversation = {
+  ...fleetConversation, finished: true, agents: fleetConversation.agents.map((agent) => ({ ...agent, status: "done" })),
+};
+
+export const ConversaCorrigindo: Story = {
+  name: "Conversa · frota terminou e a IA corrige",
+  args: { cardState: { kind: "working", label: "Trabalhando" } },
+  parameters: {
+    analysis: { ...readModel(report({ findings: [fixedBlocking, openBlocking, openQuestion] }), "not_apt"), timeline: fixingTimeline },
+    conversation: finishedFleet,
+  },
 };

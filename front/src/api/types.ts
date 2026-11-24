@@ -917,7 +917,17 @@ export interface AnalysisReadModel {
   mergedAt?: number;
   lastMergeRefusal?: AnalysisMergeRefusal;
   mergeGate?: AnalysisMergeGate;
+  timeline: AnalysisTimelineEntry[];
 }
+
+export type AnalysisTimelineEvent =
+  | { kind: "fixing"; findingId: string }
+  | { kind: "fixed"; findingId: string; commit: string }
+  | { kind: "recheck"; outcome: "clean" | "found"; note?: string }
+  | { kind: "delivered"; reason: string; prUrl?: string; output?: string }
+  | { kind: "report"; stage: AnalysisStage; fixed: number; decided: number; open: number };
+
+export type AnalysisTimelineEntry = AnalysisTimelineEvent & { cardId: string; analysedSha: string; at: number };
 
 export interface AnalysisMergeGate {
   cardId: string;

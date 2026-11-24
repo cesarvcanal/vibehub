@@ -20,6 +20,7 @@ const readModel = (
   uncheckedDimensions,
   canMerge: false,
   merging: false,
+  timeline: [],
 });
 
 const loaded = (data: CardAnalysisResponse) => ({ status: "success" as const, data });
