@@ -306,7 +306,7 @@ describe("prompt da análise de PR", () => {
     const text = analysisPrompt(input);
     expect(text).toContain('vibehub_analysis_step com card: "card-9", kind: "fixing" e findingId');
     expect(text).toContain('kind: "fixed", findingId e commit');
-    expect(text).toContain('kind: "recheck"');
+    expect(text).toContain('vibehub_analysis_step com card: "card-9", kind: "recheck"');
   });
 
   it("correção entregue depois do done grava o done de novo, para o selo acompanhar", async () => {

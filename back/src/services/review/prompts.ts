@@ -698,7 +698,7 @@ export function analysisPrompt(a: AnalysisInput): string {
     ...(a.coauthorTrailer ? [`   Em cada commit, termine a mensagem com esta linha (o crédito do coautor no Git): ${a.coauthorTrailer}`] : []),
     "6. Reconferência: dispare UM subagente novo, sem o seu contexto, para revisar só git diff <sha analisado>..HEAD, " +
       "procurando bug que a própria correção criou. Achado com prova: corrija do mesmo jeito (uma volta a mais, só uma). " +
-      'Ao fim, chame vibehub_analysis_step com kind: "recheck" e outcome: "clean", ou "found" com a note do que achou.',
+      `Ao fim, chame vibehub_analysis_step com ${reportTarget}, kind: "recheck" e outcome: "clean", ou "found" com a note do que achou.`,
     `7. Entregue as correções: chame vibehub_deliver com card = "${a.cardId}" e branch = "${a.base}", sem title nem body ` +
       "(a descrição do PR é do autor) e sem authorized (você não mergeia por conta própria). Os commits vão para a branch da PR. " +
       // Never the step-1 reset here: it would drop the fix commits that have not gone up yet.
