@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { describe, it, expect, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useAnalysisRereadOnReport } from "./useCardAnalysis";
+import { useAnalysisRereadOnLiveTool } from "./useCardAnalysis";
 import type { SdkChatState } from "./sdkChat";
 
 type LiveToolResult = SdkChatState["lastLiveToolResult"];
@@ -14,7 +14,7 @@ function renderReread(enabled: boolean) {
   const invalidate = vi.spyOn(queryClient, "invalidateQueries");
   const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
   const hook = renderHook<void, { liveToolResult: LiveToolResult }>(
-    ({ liveToolResult }) => useAnalysisRereadOnReport("c1", liveToolResult, { enabled }),
+    ({ liveToolResult }) => useAnalysisRereadOnLiveTool("c1", liveToolResult, { enabled }),
     { wrapper, initialProps: { liveToolResult: undefined } },
   );
   const analysisRereads = () => invalidate.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["card-analysis","c1"]').length;

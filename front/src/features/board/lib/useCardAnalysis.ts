@@ -4,7 +4,7 @@ import { boardApi } from "@/features/board/api";
 import { cardAnalysisKey, isAnalysisRereadTool } from "@/features/board/lib/analysis";
 import type { SdkChatState } from "@/features/board/lib/sdkChat";
 
-export function useAnalysisRereadOnReport(
+export function useAnalysisRereadOnLiveTool(
   cardId: string, liveToolResult: SdkChatState["lastLiveToolResult"], opts: { enabled: boolean },
 ): void {
   const queryClient = useQueryClient();
