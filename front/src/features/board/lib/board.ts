@@ -280,7 +280,7 @@ export function cardState(
     const kindLabel = t(`status.${kind}`);
     return {
       kind,
-      label: inCall ? `${kindLabel} · ${t("status.inCall")}` : kindLabel,
+      label: inCall ? t("status.inCall", { state: kindLabel }) : kindLabel,
       ...(summary ? { summary } : {}),
       ...(inCall ? { inCall: true as const } : {}),
     };
