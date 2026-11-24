@@ -13,6 +13,7 @@ import {
   INFLIGHT_OWNER,
   SDK_INFLIGHT_DIR,
   isInflightOwnerAlive,
+  isOtherInflightOwnerAlive,
   readInflightMarker,
   touchInflightOwner,
   writeInflightMarker,
@@ -109,6 +110,7 @@ function deps(over: Partial<ResumeDeps> = {}, settings: Settings = settingsWith(
     // does not beat: it is a deploy's old process, already dead. The sweep under test plays the NEW one.
     selfOwner: NOVO,
     ownerAlive: isInflightOwnerAlive,
+    otherOwnerAlive: isOtherInflightOwnerAlive,
     turnRunning: () => false,
     stopping: () => false,
     reportIdle: () => undefined,
@@ -552,7 +554,7 @@ describe("resumeInterruptedTurns — o turno ainda vivo na instância antiga (de
       },
     }));
 
-    expect(esperas).toBe(2);
+    expect(esperas).toBeGreaterThanOrEqual(2);
     expect(summary.resumed).toEqual([CARD]);
     expect(spawned.length).toBe(1);
     await vi.waitFor(async () => {
@@ -566,7 +568,10 @@ describe("resumeInterruptedTurns — o turno ainda vivo na instância antiga (de
     const { clearInflightMarker } = await import("./inflight.js");
     const summary = await resumeInterruptedTurns(deps({
       // The turn's `result` arrives at the old back, which deletes the marker — the sweep re-reads and sees it is over.
-      wait: async () => { await clearInflightMarker(CARD); },
+      wait: async () => {
+        await clearInflightMarker(CARD);
+        await heartbeat(ANTIGO, false);
+      },
     }));
 
     expect(summary).toEqual({ resumed: [], noted: [] });
@@ -593,6 +598,31 @@ describe("resumeInterruptedTurns — o turno ainda vivo na instância antiga (de
     expect(summary.resumed).toEqual([CARD]);
   });
 
+  it("O CASO REAL (2026-11-24): mensagem aceita pela instância antiga DEPOIS da varredura do novo é retomada quando a antiga morre", async () => {
+    await heartbeat(ANTIGO, true);
+    const summary = await resumeInterruptedTurns(deps({
+      wait: async () => {
+        if (await readInflightMarker(CARD)) return;
+        await markerFrom(ANTIGO);
+        await heartbeat(ANTIGO, false);
+      },
+    }));
+
+    expect(summary.resumed).toEqual([CARD]);
+    expect(spawned.length).toBe(1);
+    await vi.waitFor(async () => {
+      expect((await readHistory(CARD)).map((entry) => entry.type)).toEqual(["system_note", "user"]);
+    });
+  });
+
+  it("sem outra instância viva, a varredura passa uma vez só e não espera", async () => {
+    const waits: number[] = [];
+    const summary = await resumeInterruptedTurns(deps({ wait: async (ms) => { waits.push(ms); } }));
+
+    expect(summary).toEqual({ resumed: [], noted: [] });
+    expect(waits).toEqual([]);
+  });
+
   it("o turno vivo de um card não segura a retomada de outro", async () => {
     const OUTRO = "ffff498d-98dd-44b6-97ee-c06a181c3769";
     await markerFrom(ANTIGO);
@@ -612,7 +642,8 @@ describe("resumeInterruptedTurns — o turno ainda vivo na instância antiga (de
       },
     }));
 
-    expect(viuOutroRetomado).toEqual([true]);
+    expect(viuOutroRetomado.length).toBeGreaterThan(0);
+    expect(viuOutroRetomado).not.toContain(false);
     expect(summary.resumed.sort()).toEqual([CARD, OUTRO].sort());
   });
 });

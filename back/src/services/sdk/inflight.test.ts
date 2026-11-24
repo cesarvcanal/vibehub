@@ -10,6 +10,7 @@ import {
   OWNER_STALE_MS,
   clearInflightMarker,
   isInflightOwnerAlive,
+  isOtherInflightOwnerAlive,
   pruneStaleInflightOwners,
   releaseInflightOwnerSync,
   touchInflightOwner,
@@ -169,5 +170,32 @@ describe("o dono do marcador — quem escreveu o turno ainda está vivo?", () =>
     await pruneStaleInflightOwners();
 
     expect((await readdir(owners)).sort()).toEqual([vivo]);
+  });
+
+  describe("isOtherInflightOwnerAlive — outra instância do back ainda bate?", () => {
+    const SELF = "0a1b2c3d-0000-4000-8000-0000000000e0";
+    const OTHER = "0a1b2c3d-0000-4000-8000-00000000a171";
+
+    async function writeHeartbeat(owner: string, ageMs: number): Promise<void> {
+      const owners = join(dir, SDK_INFLIGHT_DIR, "owners");
+      await mkdir(owners, { recursive: true });
+      await writeFile(join(owners, owner), "1", "utf8");
+      const beatAt = (Date.now() - ageMs) / 1000;
+      await utimes(join(owners, owner), beatAt, beatAt);
+    }
+
+    it("sem o diretório dos batimentos, ninguém mais está vivo", async () => {
+      expect(await isOtherInflightOwnerAlive(SELF)).toBe(false);
+    });
+
+    it.each([
+      { scenario: "só o próprio processo bate", owner: SELF, ageMs: 0, expected: false },
+      { scenario: "a outra instância morreu sem largar (batimento velho)", owner: OTHER, ageMs: OWNER_STALE_MS + 1_000, expected: false },
+      { scenario: "a outra instância ainda bate", owner: OTHER, ageMs: 0, expected: true },
+    ])("$scenario: $expected", async ({ owner, ageMs, expected }) => {
+      await writeHeartbeat(owner, ageMs);
+
+      expect(await isOtherInflightOwnerAlive(SELF)).toBe(expected);
+    });
   });
 });
