@@ -63,6 +63,7 @@ export interface PlatformFailure {
   narrative?: FailureNarrative;
   narrativeUnavailable?: FailureNarrativeUnavailableReason;
   investigationReport?: FailureInvestigationReport;
+  previousInvestigationReport?: FailureInvestigationReport;
 }
 
 export interface UserStopMark {

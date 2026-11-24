@@ -113,6 +113,17 @@ describe("cada falha no modal de falhas do vibehub, como uma análise", () => {
     expect(screen.getByText("Provavelmente a conexão com o CLI caiu.")).toBeVisible();
   });
 
+  it("em nova investigação, a conclusão anterior sai do topo e aparece na análise como investigação anterior", async () => {
+    renderFailure({ ...buildFailure({ previousInvestigationReport: buildInvestigationReport() }), status: "investigating" });
+    expect(screen.queryByText("Não é bug do vibehub")).toBeNull();
+    expect(screen.queryByText("O gate parou a suíte no prazo, como deve.")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Ver análise completa" }));
+
+    expect(screen.getByText("Investigação anterior")).toBeVisible();
+    expect(screen.getByText("Não é bug do vibehub: O gate parou a suíte no prazo, como deve.")).toBeVisible();
+  });
+
   it("investigada sem conclusão gravada diz que o card não deixou conclusão", () => {
     renderFailure(buildFailure());
     expect(screen.getByText("A investigação terminou sem deixar conclusão. Investigue de novo para ter a análise.")).toBeVisible();

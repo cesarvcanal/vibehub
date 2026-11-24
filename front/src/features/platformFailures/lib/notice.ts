@@ -53,6 +53,10 @@ function parseNoticeDetails(value: unknown): PlatformFailureNotice["details"] | 
   if (narrative === null) return null;
   const investigationReport = value.investigationReport === undefined ? undefined : parseInvestigationReport(value.investigationReport);
   if (investigationReport === null) return null;
+  const previousInvestigationReport = value.previousInvestigationReport === undefined
+    ? undefined
+    : parseInvestigationReport(value.previousInvestigationReport);
+  if (previousInvestigationReport === null) return null;
   const isKnownUnavailableReason = FAILURE_NARRATIVE_UNAVAILABLE_REASONS.includes(narrativeUnavailable as FailureNarrativeUnavailableReason);
   if (narrativeUnavailable !== undefined && !isKnownUnavailableReason) return null;
   const reproduction = readOptionalText(value, "reproduction");
@@ -64,6 +68,7 @@ function parseNoticeDetails(value: unknown): PlatformFailureNotice["details"] | 
     ...(narrative ? { narrative } : {}),
     ...(isKnownUnavailableReason ? { narrativeUnavailable: narrativeUnavailable as FailureNarrativeUnavailableReason } : {}),
     ...(investigationReport ? { investigationReport } : {}),
+    ...(previousInvestigationReport ? { previousInvestigationReport } : {}),
   };
 }
 

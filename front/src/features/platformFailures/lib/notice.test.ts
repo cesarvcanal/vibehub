@@ -40,6 +40,8 @@ describe("aviso de falha vindo do websocket", () => {
     expect(parsePlatformFailureNotice({ ...VALID, details })).toEqual({ ...VALID, details });
     const withDecision = { ...details, investigationReport: { ...REPORT, pendingDecision: "d" } };
     expect(parsePlatformFailureNotice({ ...VALID, details: withDecision })).toEqual({ ...VALID, details: withDecision });
+    const withPrevious = { symptom: "s", component: "c", evidence: "e", previousInvestigationReport: REPORT };
+    expect(parsePlatformFailureNotice({ ...VALID, details: withPrevious })).toEqual({ ...VALID, details: withPrevious });
   });
 
   it.each(["backend_error", "slow_turn", "stalled_turn", "agent_report", "screen_error"])("aceita a origem %s que o back grava", (source) => {

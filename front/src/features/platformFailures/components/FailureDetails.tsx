@@ -67,15 +67,16 @@ function AnalysisSections({ sections }: { sections: readonly { label: string; te
   );
 }
 
-function FailureAnalysis({ symptom, narrative, report }: {
+function FailureAnalysis({ symptom, narrative, report, previousReport }: {
   symptom: string;
   narrative?: FailureNarrative;
   report?: FailureInvestigationReport;
+  previousReport?: FailureInvestigationReport;
 }) {
   const t = useT();
   const [isExpanded, setExpanded] = React.useState(false);
   const symptomSection = { label: t("platformFailures.analysis.symptom"), text: symptom };
-  if (!narrative && !report) return <AnalysisSections sections={[symptomSection]} />;
+  if (!narrative && !report && !previousReport) return <AnalysisSections sections={[symptomSection]} />;
   const cause = report?.cause ?? narrative?.cause;
   const sections = [
     ...(narrative ? [{ label: t("platformFailures.analysis.context"), text: narrative.context }] : []),
@@ -83,6 +84,10 @@ function FailureAnalysis({ symptom, narrative, report }: {
     ...(cause ? [{ label: t("platformFailures.analysis.cause"), text: cause }] : []),
     ...(report ? [{ label: t("platformFailures.analysis.resolution"), text: report.resolution }] : []),
     symptomSection,
+    ...(previousReport ? [{
+      label: t("platformFailures.analysis.previousInvestigation"),
+      text: `${t(`platformFailures.verdict.${previousReport.verdict}`)}: ${previousReport.conclusion}`,
+    }] : []),
   ];
   return (
     <div className="space-y-2">
@@ -174,7 +179,9 @@ export function FailureDetails({ failure, isOwner, affectedCardCount, leavesList
         {!report && narrative ? <p className="text-xs text-muted-foreground">{narrative.triggerReason}</p> : null}
       </div>
       {report ? <InvestigationConclusion report={report} /> : null}
-      {details ? <FailureAnalysis symptom={details.symptom} narrative={narrative} report={report} /> : null}
+      {details ? (
+        <FailureAnalysis symptom={details.symptom} narrative={narrative} report={report} previousReport={details.previousInvestigationReport} />
+      ) : null}
       {!report && details?.narrativeUnavailable ? (
         <p className="text-xs text-muted-foreground">{t(`platformFailures.narrativeUnavailable.${details.narrativeUnavailable}`)}</p>
       ) : null}

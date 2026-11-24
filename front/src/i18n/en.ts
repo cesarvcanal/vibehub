@@ -1942,6 +1942,7 @@ export const en: Record<string, string> = {
   "platformFailures.analysis.cause": "Why it happened",
   "platformFailures.analysis.resolution": "What fixes it",
   "platformFailures.analysis.symptom": "Recorded error",
+  "platformFailures.analysis.previousInvestigation": "Previous investigation",
   "platformFailures.analysis.open": "See the full analysis",
   "platformFailures.analysis.close": "Close the analysis",
   "platformFailures.verdict.vibehub_bug": "vibehub bug",

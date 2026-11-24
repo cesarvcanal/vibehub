@@ -82,6 +82,8 @@ describe("aviso de falha para um card", () => {
     const { notices } = await fresh();
     const investigationReport = { verdict: "not_a_bug" as const, conclusion: "c", howItHappened: "h", cause: "x", resolution: "r", reportedAt: 1 };
     expect(notices.buildCardFailureNotice({ ...FAILURE, investigationReport }, "card-1", false).details).toMatchObject({ investigationReport });
+    expect(notices.buildCardFailureNotice({ ...FAILURE, previousInvestigationReport: investigationReport }, "card-1", false).details)
+      .toMatchObject({ previousInvestigationReport: investigationReport });
     expect(JSON.stringify(notices.buildCardFailureNotice({ ...FAILURE, investigationReport }, "card-2", false))).not.toContain("investigationReport");
   });
 

@@ -51,15 +51,17 @@ export function buildInvestigationBrief(failure: PlatformFailure): string {
       `- Causa provável: ${failure.narrative.cause}`,
       `- Quem provocou: ${failure.narrative.trigger} (${failure.narrative.triggerReason})`,
     ] : []),
-    ...(failure.investigationReport ? [
+    ...(failure.previousInvestigationReport ? [
       "",
-      "Investigação anterior (concluída sem correção; o dono pediu para investigar de novo):",
-      `- Veredito: ${failure.investigationReport.verdict}`,
-      `- Conclusão: ${failure.investigationReport.conclusion}`,
-      `- Como ocorreu: ${failure.investigationReport.howItHappened}`,
-      `- Causa: ${failure.investigationReport.cause}`,
-      `- O que resolve: ${failure.investigationReport.resolution}`,
-      ...(failure.investigationReport.pendingDecision ? [`- Decisão pendente do dono: ${failure.investigationReport.pendingDecision}`] : []),
+      "Investigação anterior (o dono pediu para investigar de novo):",
+      `- Veredito: ${failure.previousInvestigationReport.verdict}`,
+      `- Conclusão: ${failure.previousInvestigationReport.conclusion}`,
+      `- Como ocorreu: ${failure.previousInvestigationReport.howItHappened}`,
+      `- Causa: ${failure.previousInvestigationReport.cause}`,
+      `- O que resolve: ${failure.previousInvestigationReport.resolution}`,
+      ...(failure.previousInvestigationReport.pendingDecision
+        ? [`- Decisão pendente do dono: ${failure.previousInvestigationReport.pendingDecision}`]
+        : []),
     ] : []),
     "",
     "## Ordem de trabalho",

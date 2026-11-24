@@ -1954,6 +1954,7 @@ export const ptBR: Record<string, string> = {
   "platformFailures.analysis.cause": "Por que aconteceu",
   "platformFailures.analysis.resolution": "O que resolve",
   "platformFailures.analysis.symptom": "Erro registrado",
+  "platformFailures.analysis.previousInvestigation": "Investigação anterior",
   "platformFailures.analysis.open": "Ver análise completa",
   "platformFailures.analysis.close": "Fechar análise",
   "platformFailures.verdict.vibehub_bug": "Bug do vibehub",

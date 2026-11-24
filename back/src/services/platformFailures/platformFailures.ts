@@ -196,6 +196,10 @@ export async function claimPlatformFailureInvestigation(id: string): Promise<Inv
       throw new PlatformFailureStateError(`platform failure ${id} is ${statusBeforeClaim} and cannot be investigated`);
     }
     failure.status = "investigating";
+    if (failure.investigationReport) {
+      failure.previousInvestigationReport = failure.investigationReport;
+      delete failure.investigationReport;
+    }
     return { failure: { ...failure }, statusBeforeClaim };
   });
   if (claim.statusBeforeClaim !== "investigating") announceFailureChange({ failure: claim.failure });
@@ -206,6 +210,10 @@ export async function releasePlatformFailureInvestigation(id: string, statusBefo
   const releasedFailure = await store.mutate((doc) => {
     const failure = findFailureIn(doc, id);
     failure.status = statusBeforeClaim === "concluded_without_fix" ? "concluded_without_fix" : "open";
+    if (statusBeforeClaim !== "investigating" && failure.previousInvestigationReport && !failure.investigationReport) {
+      failure.investigationReport = failure.previousInvestigationReport;
+      delete failure.previousInvestigationReport;
+    }
     return { ...failure };
   });
   announceFailureChange({ failure: releasedFailure });

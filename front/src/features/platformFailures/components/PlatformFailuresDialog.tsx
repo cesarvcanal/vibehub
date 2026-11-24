@@ -15,6 +15,7 @@ function toFailureDetails(failure: PlatformFailure) {
       ...(failure.narrative ? { narrative: failure.narrative } : {}),
       ...(failure.narrativeUnavailable ? { narrativeUnavailable: failure.narrativeUnavailable } : {}),
       ...(failure.investigationReport ? { investigationReport: failure.investigationReport } : {}),
+      ...(failure.previousInvestigationReport ? { previousInvestigationReport: failure.previousInvestigationReport } : {}),
     },
   };
 }

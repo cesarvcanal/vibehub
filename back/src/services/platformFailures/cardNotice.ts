@@ -11,7 +11,7 @@ export interface PlatformFailureNotice {
   occurrences: number;
   firstSeenAt: number;
   lastSeenAt: number;
-  details?: Pick<PlatformFailure, "symptom" | "component" | "evidence" | "reproduction" | "hypothesis" | "narrative" | "narrativeUnavailable" | "investigationReport">;
+  details?: Pick<PlatformFailure, "symptom" | "component" | "evidence" | "reproduction" | "hypothesis" | "narrative" | "narrativeUnavailable" | "investigationReport" | "previousInvestigationReport">;
 }
 
 export type CardFailureNoticeFrame =
@@ -38,6 +38,7 @@ export function buildCardFailureNotice(failure: PlatformFailure, cardId: string,
         ...(failure.narrative ? { narrative: failure.narrative } : {}),
         ...(failure.narrativeUnavailable ? { narrativeUnavailable: failure.narrativeUnavailable } : {}),
         ...(failure.investigationReport ? { investigationReport: failure.investigationReport } : {}),
+        ...(failure.previousInvestigationReport ? { previousInvestigationReport: failure.previousInvestigationReport } : {}),
       },
     } : {}),
   };

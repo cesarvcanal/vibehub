@@ -55,7 +55,7 @@ describe("brief do card de investigação", () => {
   it("investigada de novo, leva a conclusão anterior para o card não repetir o mesmo caminho", () => {
     const brief = buildInvestigationBrief({
       ...FAILURE,
-      investigationReport: {
+      previousInvestigationReport: {
         verdict: "not_a_bug", conclusion: "conclusao-x", howItHappened: "como-x", cause: "causa-x", resolution: "resolve-x",
         pendingDecision: "decisao-x", reportedAt: 0,
       },

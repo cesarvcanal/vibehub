@@ -287,6 +287,7 @@ export interface PlatformFailure {
   narrative?: FailureNarrative;
   narrativeUnavailable?: FailureNarrativeUnavailableReason;
   investigationReport?: FailureInvestigationReport;
+  previousInvestigationReport?: FailureInvestigationReport;
 }
 
 export interface PlatformFailureNotice {
@@ -297,7 +298,7 @@ export interface PlatformFailureNotice {
   occurrences: number;
   firstSeenAt: number;
   lastSeenAt: number;
-  details?: Pick<PlatformFailure, "symptom" | "component" | "evidence" | "reproduction" | "hypothesis" | "narrative" | "narrativeUnavailable" | "investigationReport">;
+  details?: Pick<PlatformFailure, "symptom" | "component" | "evidence" | "reproduction" | "hypothesis" | "narrative" | "narrativeUnavailable" | "investigationReport" | "previousInvestigationReport">;
 }
 
 export interface PlatformFailureInvestigation {
