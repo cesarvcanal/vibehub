@@ -39,12 +39,13 @@ async function load() {
 
 async function cardWithOrder(over: { analysis?: boolean } = {}) {
   const modules = await load();
+  await modules.registry.addGithubConnection({ id: "CONN_MUSSA", login: "wellesley-mussolini" });
   const project = await modules.registry.createProject({ name: "widgets" });
   const card = over.analysis
     ? await modules.registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" })
     : await modules.registry.createCard({ projectId: project.id, title: "Docs" });
   await modules.registry.saveMergeOrder(card.id, {
-    sha: SHA, target: "main", prUrl: PR, orderedBy: "mussa", connectionId: "conn-mussa", orderedAt: ORDERED_AT,
+    sha: SHA, target: "main", prUrl: PR, orderedBy: "mussa", connectionId: "CONN_MUSSA", orderedAt: ORDERED_AT,
   });
   return { ...modules, card };
 }
@@ -69,7 +70,7 @@ describe("servidor cumpre a ordem de merge guardada", { timeout: 30_000 }, () =>
     const { mergeOrder, card } = await cardWithOrder();
     await mergeOrder.runMergeOrders(ORDERED_AT + 60_000);
     expect(deliver).toHaveBeenCalledWith(card.id, {
-      authorized: true, mergeOnly: true, expectedHeadSha: SHA, branch: "main", connectionId: "conn-mussa", by: "mussa", queueWhileCiRuns: true,
+      authorized: true, mergeOnly: true, expectedHeadSha: SHA, branch: "main", connectionId: "CONN_MUSSA", by: "mussa", queueWhileCiRuns: true,
     });
   });
 
@@ -115,12 +116,29 @@ describe("servidor cumpre a ordem de merge guardada", { timeout: 30_000 }, () =>
     expect(await messagesOf(events, card.id)).toEqual([expect.objectContaining({ text: expect.stringContaining("6 h") })]);
   });
 
-  it("card concluído à mão: a ordem morre sem rodar", async () => {
-    const { mergeOrder, registry, card } = await cardWithOrder();
+  it("aviso das 6 h não culpa só o CI: a leitura do PR que falhou também aparece como causa possível", async () => {
+    const { mergeOrder, events, card } = await cardWithOrder();
+    await mergeOrder.runMergeOrders(ORDERED_AT + mergeOrder.MERGE_ORDER_TTL_MS);
+    const [notice] = await messagesOf(events, card.id);
+    expect(notice?.text).toContain("leitura do PR");
+  });
+
+  it("card concluído à mão: a ordem morre sem rodar e o card é avisado", async () => {
+    const { mergeOrder, registry, events, card } = await cardWithOrder();
     await registry.updateCard(card.id, { column: "done" });
     await mergeOrder.runMergeOrders(ORDERED_AT + 60_000);
     expect(deliver).not.toHaveBeenCalled();
     expect((await registry.getCard(card.id))?.mergeOrder).toBeUndefined();
+    expect(await messagesOf(events, card.id)).toEqual([expect.objectContaining({ text: expect.stringContaining("concluído") })]);
+  });
+
+  it("conexão GitHub de quem mandou removida: a ordem cai na hora, avisando a causa, sem tentar até as 6 h", async () => {
+    const { mergeOrder, registry, events, card } = await cardWithOrder();
+    await registry.removeGithubConnection("CONN_MUSSA");
+    await mergeOrder.runMergeOrders(ORDERED_AT + 60_000);
+    expect(deliver).not.toHaveBeenCalled();
+    expect((await registry.getCard(card.id))?.mergeOrder).toBeUndefined();
+    expect(await messagesOf(events, card.id)).toEqual([expect.objectContaining({ text: expect.stringContaining("conexão GitHub") })]);
   });
 
   it("revisão de PR aberta depois da ordem: o merge é da revisão, a ordem cai e o card é avisado", async () => {
@@ -144,6 +162,31 @@ describe("servidor cumpre a ordem de merge guardada", { timeout: 30_000 }, () =>
     expect(order).toMatchObject({ sha: SHA });
     expect(order?.claimedAt).toBeUndefined();
     expect(await messagesOf(events, card.id)).toEqual([]);
+  });
+
+  it("ordem nova gravada enquanto o servidor lia a antiga sobrevive ao fim da antiga", async () => {
+    const { mergeOrder, registry, card } = await cardWithOrder();
+    const newerOrder = { sha: "d".repeat(40), target: "main", prUrl: PR, orderedBy: "mussa", connectionId: "CONN_MUSSA", orderedAt: ORDERED_AT + 30_000 };
+    deliver.mockImplementationOnce(async () => {
+      await registry.saveMergeOrder(card.id, newerOrder);
+      return answer({ reason: "head_moved", output: "o PR está em ddddddd" });
+    });
+    await mergeOrder.runMergeOrders(ORDERED_AT + 60_000);
+    expect((await registry.getCard(card.id))?.mergeOrder).toEqual(newerOrder);
+  });
+
+  it("falha ao encerrar a ordem de um card não impede as ordens dos outros cards no mesmo ciclo", async () => {
+    const modules = await cardWithOrder();
+    const project = await modules.registry.createProject({ name: "outro" });
+    const other = await modules.registry.createCard({ projectId: project.id, title: "Outro" });
+    await modules.registry.saveMergeOrder(other.id, {
+      sha: SHA, target: "main", prUrl: PR, orderedBy: "mussa", connectionId: "CONN_MUSSA", orderedAt: ORDERED_AT,
+    });
+    deliverAnswers.push(answer({ reason: "gate", output: "x".repeat(10) }), queued());
+    const recordMessage = vi.spyOn(modules.events, "recordMessage").mockRejectedValueOnce(new Error("store cheio"));
+    await modules.mergeOrder.runMergeOrders(ORDERED_AT + 60_000);
+    recordMessage.mockRestore();
+    expect(deliver).toHaveBeenCalledTimes(2);
   });
 
   it("dois ciclos ao mesmo tempo (dois backends no deploy): o PR é lido uma vez só", async () => {

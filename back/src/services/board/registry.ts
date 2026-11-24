@@ -1892,6 +1892,13 @@ export async function claimMergeOrder(cardId: string, now: number): Promise<Merg
   });
 }
 
+export async function deleteMergeOrderAt(cardId: string, sha: string): Promise<void> {
+  await store.mutate((doc) => {
+    const card = doc.cards.find((candidate) => candidate.id === cardId);
+    if (card?.mergeOrder?.sha === sha) delete card.mergeOrder;
+  });
+}
+
 export async function releaseMergeOrder(cardId: string, sha: string): Promise<void> {
   await store.mutate((doc) => {
     const order = doc.cards.find((candidate) => candidate.id === cardId)?.mergeOrder;

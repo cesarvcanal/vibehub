@@ -1,5 +1,6 @@
 import {
-  claimMergeOrder, getCard, getProject, listCardsWithMergeOrder, releaseMergeOrder, saveMergeOrder, updateCard, type Card, type MergeOrder,
+  claimMergeOrder, deleteMergeOrderAt, getCard, getGithubConnection, getProject, listCardsWithMergeOrder, releaseMergeOrder, saveMergeOrder,
+  updateCard, type Card, type MergeOrder,
 } from "../board/registry.js";
 import { cardConnectionId, deliver, type DeliverOpts, type DeliverResult } from "../maestro/deliver.js";
 import { recordMessage } from "../events/cardEvents.js";
@@ -20,7 +21,12 @@ export function startMergeOrders(): void {
 }
 
 export async function runMergeOrders(now: number = Date.now()): Promise<void> {
-  for (const card of await listCardsWithMergeOrder()) await runMergeOrder(card.id, now);
+  for (const card of await listCardsWithMergeOrder()) {
+    await runMergeOrder(card.id, now).catch(async (err: unknown) => {
+      logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "merge order step failed — released for the next tick");
+      if (card.mergeOrder) await releaseMergeOrder(card.id, card.mergeOrder.sha);
+    });
+  }
 }
 
 async function runMergeOrder(cardId: string, now: number): Promise<void> {
@@ -28,14 +34,21 @@ async function runMergeOrder(cardId: string, now: number): Promise<void> {
   if (!order) return;
   const card = await getCard(cardId);
   if (!card) return;
+  const shortSha = order.sha.slice(0, 7);
   if (card.column === "done") {
-    await saveMergeOrder(cardId, undefined);
+    await dropMergeOrder(card, order, "card_done", `O card foi concluído: a ordem de merge guardada do commit ${shortSha} caiu sem merge.`);
     return;
   }
-  const sha7 = order.sha.slice(0, 7);
   if (now - order.orderedAt >= MERGE_ORDER_TTL_MS) {
     await dropMergeOrder(card, order, "expired",
-      `A ordem de merge guardada caiu: o CI do PR não terminou em 6 h no commit ${sha7}. Nada foi mergeado; confira o CI e entregue de novo.`);
+      `A ordem de merge guardada caiu: passaram 6 h sem merge do commit ${shortSha}. O CI do PR não ficou verde a tempo, ou a ` +
+      "leitura do PR no GitHub falhou em todas as tentativas. Nada foi mergeado; confira o CI do PR e entregue de novo.");
+    return;
+  }
+  if (!(await getGithubConnection(order.connectionId))) {
+    await dropMergeOrder(card, order, "connection_gone",
+      `A ordem de merge guardada caiu: a conexão GitHub de quem mandou foi removida do vibehub. Nada foi mergeado; entregue de ` +
+      "novo com uma conta GitHub conectada.");
     return;
   }
   if (card.pushBranch === undefined && (await activeReviewFor(card.id))) {
@@ -52,16 +65,16 @@ async function runMergeOrder(cardId: string, now: number): Promise<void> {
     return;
   }
   if (result.merged) {
-    await saveMergeOrder(cardId, undefined);
+    await deleteMergeOrderAt(cardId, order.sha);
     const concluded = await concludeMergedCard(cardId);
     await notifyMergeOrder(card, order, "merged", "done",
-      `Mergeado: o CI do PR ficou verde e a ordem de merge guardada saiu em ${order.target} (commit ${sha7}). ${concluded}`.trim());
+      `Mergeado: o CI do PR ficou verde e a ordem de merge guardada saiu em ${order.target} (commit ${shortSha}). ${concluded}`.trim());
     return;
   }
   const why = result.reason === "head_moved"
     ? `o PR recebeu commit novo depois da ordem (${result.output ?? "outro commit"}). A ordem voltou para você: entregue de novo para mergear o commit novo.`
     : `${result.reason}: ${result.output ?? "sem detalhe"}`;
-  await dropMergeOrder(card, order, result.reason, `A ordem de merge guardada caiu sem merge do commit ${sha7}. ${why}`);
+  await dropMergeOrder(card, order, result.reason, `A ordem de merge guardada caiu sem merge do commit ${shortSha}. ${why}`);
 }
 
 function deliverMergeOrder(card: Card, order: MergeOrder): Promise<DeliverResult> {
@@ -73,7 +86,7 @@ function deliverMergeOrder(card: Card, order: MergeOrder): Promise<DeliverResult
 }
 
 async function dropMergeOrder(card: Card, order: MergeOrder, outcome: string, text: string): Promise<void> {
-  await saveMergeOrder(card.id, undefined);
+  await deleteMergeOrderAt(card.id, order.sha);
   await notifyMergeOrder(card, order, outcome, "error", text);
 }
 
