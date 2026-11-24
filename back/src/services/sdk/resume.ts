@@ -349,9 +349,10 @@ export async function resumeInterruptedTurns(deps: ResumeDeps = realDeps): Promi
   for (;;) {
     const round = await readSweepRound(deps);
     if (!round) break;
-    const unsweptMarkers = round.markers.filter(({ cardId, marker }) => !sweptMarkerKeys.has(`${cardId}:${marker.startedAt}`));
-    for (const { cardId, marker } of unsweptMarkers) {
-      sweptMarkerKeys.add(`${cardId}:${marker.startedAt}`);
+    for (const { cardId, marker } of round.markers) {
+      const markerKey = `${cardId}:${marker.startedAt}`;
+      if (sweptMarkerKeys.has(markerKey)) continue;
+      sweptMarkerKeys.add(markerKey);
       cardSweeps.push(sweepCard(cardId, marker, summary, shared, deps));
     }
     if (!round.isOtherOwnerAlive || deps.stopping()) break;
