@@ -569,6 +569,36 @@ describe("deliver uses the PR's CI as the gate when there is one", () => {
     expect(mergeRan()).toBe(false);
   });
 
+  it("ordem de merge com o CI ainda rodando volta enfileirada, presa ao commit lido, sem merge", async () => {
+    const { deliver, card } = await makeCard();
+    wire({ ci: '[{"name":"back","bucket":"pass"},{"name":"front","bucket":"pending"}]' });
+    const out = await deliver.deliver(card.id, { branch: "main", authorized: true, queueWhileCiRuns: true });
+    expect(out).toMatchObject({ merged: false, reason: "merge_queued", queuedSha: HEAD_SHA, prUrl: PR });
+    expect(mergeRan()).toBe(false);
+  });
+
+  it("enfileirar não lê o CI em laço de espera: checks rodando encerram a leitura na hora", async () => {
+    const { deliver, card } = await makeCard();
+    wire({ ci: '[{"name":"front","bucket":"pending"}]' });
+    await deliver.deliver(card.id, { branch: "main", authorized: true, queueWhileCiRuns: true });
+    expect(scripts().find((s) => s.includes("gh pr checks"))).toContain(`*'"bucket":"pending"'*) break ;;`);
+  });
+
+  it("enfileirar não passa por cima do card bloqueado: o PR abre e nada fica na fila", async () => {
+    const { deliver, registry, card } = await makeCard();
+    await registry.updateCard(card.id, { locked: true });
+    wire({ ci: '[{"name":"front","bucket":"pending"}]' });
+    const out = await deliver.deliver(card.id, { branch: "main", authorized: true, queueWhileCiRuns: true });
+    expect(out).toMatchObject({ merged: false, reason: "locked" });
+  });
+
+  it("CI vermelho com a fila pedida continua vermelho", async () => {
+    const { deliver, card } = await makeCard();
+    wire({ ci: CI_RED });
+    const out = await deliver.deliver(card.id, { branch: "main", authorized: true, queueWhileCiRuns: true });
+    expect(out).toMatchObject({ merged: false, reason: "gate" });
+  });
+
   it("a PR stuck on an older commit is red — its checks are not this push's", async () => {
     const { deliver, card } = await makeCard();
     runScript.mockImplementation(async (script: string) => {

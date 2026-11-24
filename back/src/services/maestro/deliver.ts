@@ -78,13 +78,15 @@ export type DeliverReason =
   | "undocumented"
   /** The PR is open, but GitHub refused its comments (a line outside the diff, say). Nothing merged. */
   | "comments_failed"
-  | "no_ci";
+  | "no_ci"
+  | "merge_queued";
 
 export interface GateResult {
   passed: boolean;
   output: string;
   headSha?: string;
   noCi?: true;
+  pending?: true;
 }
 
 export const FULL_SHA_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
@@ -126,6 +128,7 @@ export interface DeliverResult {
    * and how many the call itself repeated (same file and text twice — posted once).
    */
   comments?: { posted: number; skipped: number; repeated?: number };
+  queuedSha?: string;
 }
 
 export interface DeliverOpts {
@@ -165,6 +168,7 @@ export interface DeliverOpts {
    * merge-only, which writes nothing.
    */
   docs?: PrDocs;
+  queueWhileCiRuns?: boolean;
 }
 
 const MARKER = "__VIBEHUB_DELIVER__";
@@ -513,9 +517,12 @@ export const PR_WORKFLOWS_DETECT =
  */
 export function buildCiChecksScript(
   containerName: string, token: string, cwd: string, prUrl: string, headSha?: string,
+  opts: { waitForChecks?: boolean } = {},
 ): string {
   assertSafeRemotePath(cwd);
-  const rounds = Math.ceil(CI_WAIT_SECONDS / CI_POLL_SECONDS);
+  const runningChecks = opts.waitForChecks === false
+    ? "break"
+    : `[ "$i" -lt ${Math.ceil(CI_WAIT_SECONDS / CI_POLL_SECONDS)} ] || break`;
   const appearRounds = Math.ceil(CI_APPEAR_SECONDS / CI_POLL_SECONDS);
   const body = [
     ...ghTokenPreamble(token),
@@ -534,7 +541,7 @@ export function buildCiChecksScript(
     `  fi`,
     `  J=$(gh pr checks ${shQuote(prUrl)} --json name,bucket,link 2>&1)`,
     `  case "$J" in`,
-    `    *'"bucket":"pending"'*) [ "$i" -lt ${rounds} ] || break ;;`,
+    `    *'"bucket":"pending"'*) ${runningChecks} ;;`,
     `    *"no checks reported"*) [ "$WF" = 1 ] && [ "$i" -lt ${appearRounds} ] || break ;;`,
     // The verdict, or an error gh printed (502, rate limit): parseCiChecks tells them apart.
     `    *) break ;;`,
@@ -586,9 +593,9 @@ export function parseCiChecks(
       .map((c) => `\n  ${c.name || "?"}: ${c.link}`);
     return { verdict: "fail", output: `CI do PR vermelho: ${failed.join(", ")}${links.join("")}` };
   }
-  const pending = named(["pending"]);
-  if (pending.length) return { verdict: "pending", output: `CI do PR ainda rodando: ${pending.join(", ")}` };
   const headSha = new RegExp(`${CI_MARKER} done ([0-9a-fA-F]{40,64})\\b`).exec(stdout)?.[1]?.toLowerCase();
+  const pending = named(["pending"]);
+  if (pending.length) return { verdict: "pending", output: `CI do PR ainda rodando: ${pending.join(", ")}`, ...(headSha ? { headSha } : {}) };
   return { verdict: "pass", output: `CI do PR verde: ${checks.map((c) => c.name || "?").join(", ")}`, ...(headSha ? { headSha } : {}) };
 }
 
@@ -639,13 +646,16 @@ function reasonForStage(stage: string): DeliverReason {
  * behaves exactly as before: the project's connection.
  */
 export async function cardConnectionToken(card: Card, project: Project): Promise<string> {
+  return await tokenFor(await cardConnectionId(card, project));
+}
+
+export async function cardConnectionId(card: Card, project: Project): Promise<string | undefined> {
   const [actor, settings, connections] = await Promise.all([
     card.actorUserId ? getUserGit(card.actorUserId) : null,
     getSettings(),
     listGithubConnections(),
   ]);
-  const identity = resolveIdentity({ actor, project, settings, connections });
-  return await tokenFor(identity.connectionId);
+  return resolveIdentity({ actor, project, settings, connections }).connectionId;
 }
 
 /** `owner/repo` and the number out of a GitHub pull request's URL; null when it is not one. PURE. */
@@ -1091,15 +1101,18 @@ export async function setPrPeople(cardId: string, prUrl: string, people: PrPeopl
 }
 
 async function ciGate(
-  container: string, token: string, cwd: string, prUrl: string, headSha?: string,
+  container: string, token: string, cwd: string, prUrl: string, headSha?: string, opts: { waitForChecks?: boolean } = {},
 ): Promise<GateResult> {
   const out = await hostExecutor().runScript(
-    buildCiChecksScript(container, token, cwd, prUrl, headSha),
+    buildCiChecksScript(container, token, cwd, prUrl, headSha, opts),
     { timeoutMs: (CI_WAIT_SECONDS + 2 * CI_POLL_SECONDS) * 1000 + 60_000 },
   );
   const ci = parseCiChecks(out.stdout);
   if (ci.verdict === "none") return { passed: false, output: NO_CI_OUTPUT, noCi: true };
-  return { passed: ci.verdict === "pass", output: ci.output, ...(ci.headSha ? { headSha: ci.headSha } : {}) };
+  return {
+    passed: ci.verdict === "pass", output: ci.output,
+    ...(ci.headSha ? { headSha: ci.headSha } : {}), ...(ci.verdict === "pending" ? { pending: true as const } : {}),
+  };
 }
 
 export async function readWorktreeHead(cardId: string): Promise<string | null> {
@@ -1186,6 +1199,7 @@ export async function deliver(cardId: string, opts: DeliverOpts = {}): Promise<D
  */
 async function runDelivery(cardId: string, opts: DeliverOpts): Promise<DeliverResult> {
   const mergeOnly = opts.mergeOnly === true;
+  const queueWhileCiRuns = opts.queueWhileCiRuns === true;
   const expectedHead = mergeOnly ? String(opts.expectedHeadSha ?? "").trim().toLowerCase() : "";
   // Merge-only exists to merge exactly the reviewed commit: without its full sha there is nothing to
   // pin the merge to, and a short one could name two commits.
@@ -1317,11 +1331,12 @@ async function runDelivery(cardId: string, opts: DeliverOpts): Promise<DeliverRe
 
   const gate: GateResult = mergeOnly && opts.gatePassed
     ? { passed: true, output: "" }
-    : await ciGate(container, token, cwd, prUrl, mergeOnly ? expectedHead : undefined).catch((err: unknown): GateResult => {
+    : await ciGate(container, token, cwd, prUrl, mergeOnly ? expectedHead : undefined, { waitForChecks: !queueWhileCiRuns }).catch((err: unknown): GateResult => {
       logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "gate could not run — treating as red");
       return { passed: false, output: (err as Error).message };
     });
-  if (!gate.passed) {
+  const queuedSha = queueWhileCiRuns && gate.pending ? gate.headSha : undefined;
+  if (!gate.passed && !queuedSha) {
     const reason: DeliverReason = gate.noCi ? "no_ci" : "gate";
     logger.info(
       { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, gate: "red", reason, by: opts.by },
@@ -1378,6 +1393,16 @@ async function runDelivery(cardId: string, opts: DeliverOpts): Promise<DeliverRe
         output: `o PR #${review.prNumber} está em revisão: o merge é o botão do responsável no painel da revisão`,
       };
     }
+  }
+
+  if (queuedSha) {
+    logger.info(
+      { audit: true, action: "maestro.deliver", card: card.worktreeSlug, merged: false, reason: "merge_queued", sha: queuedSha, by: opts.by },
+      "deliver queued the merge: the PR's CI is still running",
+    );
+    return {
+      prUrl, merged: false, reason: "merge_queued", branch: target, cardBranch: source, ...lock, ...commented, output: gate.output, queuedSha,
+    };
   }
 
   // The merge goes out pinned to the commit the gate passed on — the reviewed one in merge-only. A

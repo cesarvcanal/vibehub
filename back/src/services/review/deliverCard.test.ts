@@ -439,6 +439,70 @@ describe("deliverCard — merge feito pelo próprio card o conclui", () => {
   });
 });
 
+describe("deliverCard — ordem de merge com o CI ainda rodando fica guardada no card", () => {
+  const QUEUED_SHA = "c".repeat(40);
+  const queuedAnswer: DeliverResult = {
+    prUrl: PR, merged: false, reason: "merge_queued", branch: "main", cardBranch: "card/x", queuedSha: QUEUED_SHA, output: "CI do PR ainda rodando: back",
+  };
+
+  async function cardWithConnection() {
+    const modules = await load();
+    const connection = await modules.registry.addGithubConnection({ login: "wellesley-mussolini" });
+    const project = await modules.registry.createProject({ name: "widgets" });
+    const card = await modules.registry.createCard({ projectId: project.id, title: "Docs" });
+    return { ...modules, card, connection };
+  }
+
+  it("a ordem do próprio card pede a fila ao deliver e grava commit, destino, PR, quem mandou e a conexão", async () => {
+    const { deliverCard, registry, card, connection } = await cardWithConnection();
+    deliverAnswer = queuedAnswer;
+    const out = await deliverCard(card.id, { branch: "main", authorized: true, by: "mussa", from: card.id });
+    expect(deliver).toHaveBeenCalledWith(card.id, expect.objectContaining({ authorized: true, queueWhileCiRuns: true }));
+    expect((await registry.getCard(card.id))?.mergeOrder).toMatchObject({
+      sha: QUEUED_SHA, target: "main", prUrl: PR, orderedBy: "mussa", connectionId: connection.id, orderedAt: expect.any(Number),
+    });
+    expect(out).toMatchObject({ merged: false, reason: "merge_queued" });
+    expect(out.output).toContain("Não chame de novo");
+  });
+
+  it("ordem vinda de outro card não pede fila nem grava nada", async () => {
+    const { deliverCard, registry, card } = await cardWithConnection();
+    deliverAnswer = { ...queuedAnswer, reason: "gate" };
+    await deliverCard(card.id, { branch: "main", authorized: true, by: "mussa", from: "outro-card" });
+    expect(deliver).toHaveBeenCalledWith(card.id, expect.not.objectContaining({ queueWhileCiRuns: true }));
+    expect((await registry.getCard(card.id))?.mergeOrder).toBeUndefined();
+  });
+
+  it.each([
+    ["mergeou", { prUrl: PR, merged: true, reason: "merged", branch: "main", cardBranch: "card/x" }],
+    ["CI vermelho", { prUrl: PR, merged: false, reason: "gate", branch: "main", cardBranch: "card/x" }],
+  ] as const)("nova ordem do próprio card que %s apaga a ordem guardada antes", async (_case, answer) => {
+    const { deliverCard, registry, card } = await cardWithConnection();
+    deliverAnswer = queuedAnswer;
+    await deliverCard(card.id, { branch: "main", authorized: true, by: "mussa", from: card.id });
+    deliverAnswer = answer;
+    await deliverCard(card.id, { branch: "main", authorized: true, by: "mussa", from: card.id });
+    expect((await registry.getCard(card.id))?.mergeOrder).toBeUndefined();
+  });
+
+  it("card de análise: a ordem fica guardada e o painel não marca recusa do merge", async () => {
+    const modules = await load();
+    await modules.registry.addGithubConnection({ login: "wellesley-mussolini" });
+    const project = await modules.registry.createProject({ name: "widgets" });
+    const analysis = await modules.registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" });
+    const analysisStore = await import("./analysisStore.js");
+    await analysisStore.saveAnalysis({
+      cardId: analysis.id, prUrl: PR, prNumber: 7, analysedSha: "e".repeat(40), stage: "done", summary: "s",
+      dimensions: [], findings: [], refutedCount: 0, updatedAt: 1,
+    }, () => undefined);
+    deliverAnswer = { ...queuedAnswer, cardBranch: "feat-7" };
+    await modules.deliverCard(analysis.id, { branch: "main", authorized: true, by: "mussa", from: analysis.id });
+    expect(deliver).toHaveBeenCalledWith(analysis.id, expect.objectContaining({ queueWhileCiRuns: true }));
+    expect((await modules.registry.getCard(analysis.id))?.mergeOrder).toMatchObject({ sha: QUEUED_SHA });
+    expect(await analysisStore.getAnalysisMergeRefusal(analysis.id)).toBeUndefined();
+  });
+});
+
 describe("deliverCard — o card do REVISOR mandado mergear", () => {
   const merged: ReviewMergeOutcome = {
     kind: "merged", review: { phase: "merged" } as never,

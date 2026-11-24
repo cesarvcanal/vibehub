@@ -535,15 +535,15 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
       description:
         "Deliver a card: push its branch, open (or reuse) a pull request to `branch`, read the PR's GitHub CI, " +
         "and — ONLY when `authorized` is true and the CI is green — merge the PR with a merge commit " +
-        "(never a squash). All git/gh runs as the GitHub account of whoever sent the card its latest order (falling back to the project's). Returns { prUrl, " +
-        "merged, reason }: `reason` is 'merged' on success, or 'gate' (CI red), 'no_ci' (the PR has no GitHub CI: " +
-        "never merged from here; tell the user the repo needs a GitHub Actions workflow that runs on every PR), 'unauthorized' " +
+        "(never a squash). All git/gh runs as the GitHub account of whoever sent the card its latest order (else the project's). Returns { prUrl, " +
+        "merged, reason }: `reason` is 'merged', 'merge_queued' (CI still running: the server merges when green, up to 6 h; " +
+        "do not call again), 'gate' (CI red), 'no_ci' (no GitHub CI: never merged from here; the repo needs a GitHub Actions " +
+        "workflow that runs on every PR), 'unauthorized' " +
         "(prepared the PR but was not told to merge: ask the merge as an AskUserQuestion with the options " +
         "'Mergear em <branch> (recomendado)' and 'Não mergear agora'; when the PR declares a blocking item, ask " +
         "the OK for that item first, without recommending the merge), 'locked' (see below), or a git failure. Pass " +
         "`authorized:true` ONLY when the user named where to ship (e.g. 'sobe pra dev'); NEVER by " +
-        "default — a merge is a deploy. Cherry-picking to another branch is a separate, explicit " +
-        "operation, not part of this. A LOCKED card answers { reason: 'locked', locked: true }: the " +
+        "default — a merge is a deploy. A cherry-pick is a separate operation. A LOCKED card answers { reason: 'locked', locked: true }: the " +
         "PR goes to that card's own base whatever `branch` said, and it is NEVER merged from here — " +
         "say so plainly ('o PR está aberto em <base>; o merge é de quem revisa') instead of " +
         "retrying, and do not go around it with git or gh by hand. A card whose PR is under REVIEW: the push " +

@@ -1,10 +1,11 @@
 import { findUser } from "../../auth/users.js";
-import { getCard, updateCard, type Card } from "../board/registry.js";
+import { getCard, type Card } from "../board/registry.js";
 import { deliver, parsePrUrl, type DeliverOpts, type DeliverResult } from "../maestro/deliver.js";
 import { logger } from "../../utils/logger.js";
 import { canMergeReview, cardsToConclude, isReviewClosed, type Review } from "./model.js";
 import { deliverOwnAnalysis } from "./analysisMerge.js";
 import { mergeReviewedPr, type ReviewMergeOutcome } from "./merge.js";
+import { concludeMergedCard, MERGE_QUEUED_OUTPUT, saveOrderFromDelivery } from "./mergeOrder.js";
 import { recordReviewOrders } from "./orchestrator.js";
 import { activeReviewFor, getReview, reviewByReviewerCard } from "./store.js";
 
@@ -34,21 +35,12 @@ export async function deliverCard(
   cardId: string, opts: DeliverCardOpts,
 ): Promise<DeliverResult> {
   const { result, concludeRecorded } = await deliverUnderReview(cardId, opts);
-  const mergedByItself = result.merged && opts.authorized === true && opts.from === cardId;
-  if (mergedByItself) return withOutput(result, await concludeMergedCard(cardId));
+  const ownOrder = opts.authorized === true && opts.from === cardId;
+  const card = ownOrder ? await getCard(cardId) : undefined;
+  if (card) await saveOrderFromDelivery(card, result, opts.by);
+  if (result.reason === "merge_queued") return withOutput(result, MERGE_QUEUED_OUTPUT);
+  if (result.merged && ownOrder) return withOutput(result, await concludeMergedCard(cardId));
   return opts.concludeWhenMerged && !concludeRecorded ? withOutput(result, CONCLUDE_NOT_RECORDED) : result;
-}
-
-async function concludeMergedCard(cardId: string): Promise<string> {
-  try {
-    const card = await getCard(cardId);
-    if (!card || card.column === "done") return "";
-    await updateCard(cardId, { column: "done" });
-    logger.info({ audit: true, action: "maestro.deliver", card: card.worktreeSlug }, "card that merged its own PR moved to done");
-    return "Mergeado pelo próprio card: ele foi para Concluído.";
-  } catch (err) {
-    return `O card NÃO foi para Concluído (${(err as Error).message}): conclua com vibehub_move_cards.`;
-  }
 }
 
 type DeliverCardOpts = Pick<DeliverOpts, "branch" | "authorized" | "docs"> & {
@@ -83,10 +75,11 @@ async function deliverUnderReview(cardId: string, opts: DeliverCardOpts): Promis
     const card = await getCard(cardId);
     if (card?.reviewOf) return await mergeFromReviewerCard(card, opts);
     if (card?.pushBranch !== undefined && opts.from !== cardId) return plain(await deliverAnalysisWithoutMerge(cardId, opts));
-    if (card?.pushBranch !== undefined) return plain(await deliverOwnAnalysis(card, opts));
+    if (card?.pushBranch !== undefined) return plain(await deliverOwnAnalysis(card, { ...opts, queueWhileCiRuns: true }));
   }
   const review = opts.authorized === true ? await activeReviewFor(cardId) : undefined;
-  if (!review) return plain(await deliver(cardId, opts));
+  const ownOrder = opts.authorized === true && opts.from === cardId;
+  if (!review) return plain(await deliver(cardId, ownOrder ? { ...opts, queueWhileCiRuns: true } : opts));
 
   // The delivery belongs to the PR under review: another base would open a new, loose PR that nobody reviewed.
   const target = opts.branch ?? review.base;

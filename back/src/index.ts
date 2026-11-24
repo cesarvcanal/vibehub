@@ -41,6 +41,7 @@ import { checkStatusHookReach } from "./runtime/runner.js";
 import { startOutboxFlusher } from "./services/board/outbox.js";
 import { startWebhookDispatcher } from "./services/webhooks/subscriptions.js";
 import { startReviewOrchestrator } from "./services/review/orchestrator.js";
+import { startMergeOrders } from "./services/review/mergeOrder.js";
 import { startPlatformFailureWatch } from "./services/platformFailures/watch.js";
 import { startCardWaitWatch } from "./services/waits/waits.js";
 import { startRunnerReaper } from "./services/reaper/reaper.js";
@@ -256,6 +257,7 @@ async function main(): Promise<void> {
   // PR review: the end of a turn of a review card (or of the author's) without the round's tool becomes a
   // reminder and, the second time, an impasse. Same reason as the others: a test that starts the app does not inherit the listener.
   startReviewOrchestrator();
+  startMergeOrders();
   startPlatformFailureWatch();
   await startCardWaitWatch();
   await app.listen({ port: config.port, host: config.host });

@@ -469,6 +469,7 @@ export interface Card {
    * Absent = the card pushes its own branch, as always.
    */
   pushBranch?: string;
+  mergeOrder?: MergeOrder;
   /**
    * DECLARED STATE reported by the agent through `vibehub_report` — its own judgement of where the
    * task stands ({@link DeclaredState}). ORTHOGONAL to `status`/`column`: reporting it never moves
@@ -807,8 +808,17 @@ function readReviewFields(cards: Card[]): Card[] {
     }
     if (card.reviewOf !== undefined && (typeof card.reviewOf !== "string" || !card.reviewOf)) card.reviewOf = undefined;
     if (card.pushBranch !== undefined && !isBranchName(card.pushBranch)) card.pushBranch = undefined;
+    if (card.mergeOrder !== undefined && !isMergeOrder(card.mergeOrder)) card.mergeOrder = undefined;
   }
   return cards;
+}
+
+function isMergeOrder(value: unknown): value is MergeOrder {
+  const order = value as Partial<MergeOrder> | null;
+  const textFields = [order?.sha, order?.target, order?.prUrl, order?.orderedBy, order?.connectionId];
+  return textFields.every((field) => typeof field === "string" && field.length > 0) &&
+    typeof order?.orderedAt === "number" &&
+    (order.claimedAt === undefined || typeof order.claimedAt === "number");
 }
 
 function readCardWaits(cards: Card[]): Card[] {
@@ -1848,6 +1858,56 @@ export async function recordCardPr(cardId: string, pr: Omit<CardPr, "openedAt">)
     }
     card.prs = prs;
   });
+}
+
+export interface MergeOrder {
+  sha: string;
+  target: string;
+  prUrl: string;
+  orderedBy: string;
+  connectionId: string;
+  orderedAt: number;
+  claimedAt?: number;
+}
+
+export const MERGE_ORDER_CLAIM_MS = 20 * 60_000;
+
+export async function saveMergeOrder(cardId: string, order: MergeOrder | undefined): Promise<void> {
+  if (order !== undefined && !isMergeOrder(order)) throw new Error("invalid merge order");
+  await store.mutate((doc) => {
+    const card = doc.cards.find((candidate) => candidate.id === cardId);
+    if (!card) return;
+    if (order) card.mergeOrder = { ...order };
+    else delete card.mergeOrder;
+  });
+}
+
+export async function claimMergeOrder(cardId: string, now: number): Promise<MergeOrder | null> {
+  return await store.mutate((doc) => {
+    const order = doc.cards.find((candidate) => candidate.id === cardId)?.mergeOrder;
+    const claimAlive = order?.claimedAt !== undefined && now - order.claimedAt < MERGE_ORDER_CLAIM_MS;
+    if (!order || claimAlive) return null;
+    order.claimedAt = now;
+    return { ...order };
+  });
+}
+
+export async function deleteMergeOrderAt(cardId: string, sha: string): Promise<void> {
+  await store.mutate((doc) => {
+    const card = doc.cards.find((candidate) => candidate.id === cardId);
+    if (card?.mergeOrder?.sha === sha) delete card.mergeOrder;
+  });
+}
+
+export async function releaseMergeOrder(cardId: string, sha: string): Promise<void> {
+  await store.mutate((doc) => {
+    const order = doc.cards.find((candidate) => candidate.id === cardId)?.mergeOrder;
+    if (order?.sha === sha) delete order.claimedAt;
+  });
+}
+
+export async function listCardsWithMergeOrder(): Promise<Card[]> {
+  return (await store.load()).cards.filter((card) => card.mergeOrder !== undefined);
 }
 
 /** What {@link attachCardPrs} takes: a PR as GitHub has it, already read by the caller. */
