@@ -8,6 +8,9 @@
  * (back/src/services/voice/live.ts), whatever the interface language.
  */
 
+import { originRole } from "@/features/board/lib/chat";
+import type { SdkRow } from "@/features/board/lib/sdkChat";
+
 /** An image attached in the composer travels as its path in the runner (TerminalComposer `composeMessage`). */
 const UPLOAD_RE = /\/work\/\.uploads\/\S+/g;
 
@@ -15,11 +18,12 @@ const UPLOAD_RE = /\/work\/\.uploads\/\S+/g;
  * A message typed during the call, as the voice should announce it — GPT-Live paraphrases it aloud.
  * Null when there is nothing to say. PURE.
  */
-export function typedContext(raw: string): string | null {
+export function typedContext(raw: string, author?: string): string | null {
   const images = raw.match(UPLOAD_RE)?.length ?? 0;
   const text = raw.replace(UPLOAD_RE, " ").replace(/\s+/g, " ").trim();
   if (!text && images === 0) return null;
-  const parts = [text ? `Chegou uma mensagem de texto no chat: «${text}»` : "Chegou uma mensagem no chat"];
+  const fromAuthor = author ? ` de ${author}` : "";
+  const parts = [text ? `Chegou uma mensagem de texto${fromAuthor} no chat: «${text}»` : `Chegou uma mensagem${fromAuthor} no chat`];
   if (images > 0) {
     parts.push(
       images === 1
@@ -29,6 +33,20 @@ export function typedContext(raw: string): string | null {
   }
   parts.push("Ela foi para o agente do card");
   return parts.join(". ");
+}
+
+export interface PeerMessage {
+  key: string;
+  text: string;
+  author: string;
+}
+
+export function peerMessages(rows: readonly SdkRow[], viewer: string | undefined): PeerMessage[] {
+  return rows.flatMap((row) =>
+    row.kind === "user" && row.from && originRole(row.from, viewer) === "user"
+      ? [{ key: `${row.at ?? ""}\u0000${row.text}`, text: row.text, author: row.from.name }]
+      : [],
+  );
 }
 
 /** The card agent's answer that landed during the call, for the voice. PURE. */

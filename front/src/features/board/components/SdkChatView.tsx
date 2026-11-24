@@ -34,6 +34,7 @@ import { VoiceCallBar } from "@/features/voice/VoiceCallBar";
 import { VoiceCallContext, type VoiceCallControl } from "@/features/voice/ComposerVoiceButton";
 import { VoiceTurnBubble } from "@/features/voice/VoiceTurnBubble";
 import { SERVER_BACK_CONTEXT, typedContext } from "@/features/voice/voiceContext";
+import { usePeerMessagesForVoice } from "@/features/voice/usePeerMessagesForVoice";
 import { useVoiceDelegation } from "@/features/voice/useVoiceDelegation";
 import { runVoiceAction } from "@/features/voice/api";
 import { AnswerActions } from "@/features/voice/AnswerActions";
@@ -1346,6 +1347,14 @@ export function SdkChatView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [send, callLive, call.announceContext],
   );
+  const { announceContext } = call;
+  const announcePeerMessage = React.useCallback(
+    (note: string): void => {
+      if (announceContext(note)) setSentDuringCall(true);
+    },
+    [announceContext],
+  );
+  usePeerMessagesForVoice({ live: callLive, rows: state.rows, viewer, announce: announcePeerMessage });
   useVoiceDelegation({
     call,
     rows: state.rows,

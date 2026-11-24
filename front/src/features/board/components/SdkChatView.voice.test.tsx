@@ -206,6 +206,27 @@ describe("a voice call inside the card's chat", () => {
     expect(screen.getByTestId("voice-call-orb")).toHaveAttribute("data-orb", "logo");
   });
 
+  it("a mensagem que outra pessoa digita durante a chamada chega à voz com o nome dela, uma vez só, mesmo depois de um reconnect", async () => {
+    const { ws } = await openChat();
+    ws.deliver({ type: "user", text: "pedido de antes da chamada", at: 1, from: { kind: "user", name: "mussa" } });
+    await startCall();
+    ws.deliver({ type: "user", text: "olha a requisição que mandei", at: 2, from: { kind: "user", name: "mussa" } });
+    const peerNotes = () =>
+      channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append" && sentEvent.content !== SERVER_BACK_CONTEXT);
+    await waitFor(() =>
+      expect(peerNotes()).toEqual([expect.objectContaining({ content: expect.stringMatching(/mussa.*«olha a requisição que mandei»/) })]),
+    );
+
+    ws.drop();
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: 5_000 });
+    const again = FakeSocket.instances[1]!;
+    again.accept();
+    again.deliver({ type: "user", text: "pedido de antes da chamada", at: 1, from: { kind: "user", name: "mussa" } });
+    again.deliver({ type: "user", text: "olha a requisição que mandei", at: 2, from: { kind: "user", name: "mussa" } });
+    again.deliver({ type: "ready" });
+    expect(peerNotes()).toHaveLength(1);
+  });
+
   it("the agent's answers during the call reach the voice as context — only the new ones", async () => {
     const { ws } = await openChat();
     ws.deliver({ type: "assistant_text", text: "resposta antiga" });
