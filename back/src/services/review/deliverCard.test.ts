@@ -446,11 +446,11 @@ describe("deliverCard — ordem de merge com o CI ainda rodando fica guardada no
   };
 
   async function cardWithConnection() {
-    const o = await load();
-    const connection = await o.registry.addGithubConnection({ login: "wellesley-mussolini" });
-    const project = await o.registry.createProject({ name: "widgets" });
-    const card = await o.registry.createCard({ projectId: project.id, title: "Docs" });
-    return { ...o, card, connection };
+    const modules = await load();
+    const connection = await modules.registry.addGithubConnection({ login: "wellesley-mussolini" });
+    const project = await modules.registry.createProject({ name: "widgets" });
+    const card = await modules.registry.createCard({ projectId: project.id, title: "Docs" });
+    return { ...modules, card, connection };
   }
 
   it("a ordem do próprio card pede a fila ao deliver e grava commit, destino, PR, quem mandou e a conexão", async () => {
@@ -486,19 +486,19 @@ describe("deliverCard — ordem de merge com o CI ainda rodando fica guardada no
   });
 
   it("card de análise: a ordem fica guardada e o painel não marca recusa do merge", async () => {
-    const o = await load();
-    await o.registry.addGithubConnection({ login: "wellesley-mussolini" });
-    const project = await o.registry.createProject({ name: "widgets" });
-    const analysis = await o.registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" });
+    const modules = await load();
+    await modules.registry.addGithubConnection({ login: "wellesley-mussolini" });
+    const project = await modules.registry.createProject({ name: "widgets" });
+    const analysis = await modules.registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" });
     const analysisStore = await import("./analysisStore.js");
     await analysisStore.saveAnalysis({
       cardId: analysis.id, prUrl: PR, prNumber: 7, analysedSha: "e".repeat(40), stage: "done", summary: "s",
       dimensions: [], findings: [], refutedCount: 0, updatedAt: 1,
     }, () => undefined);
     deliverAnswer = { ...queuedAnswer, cardBranch: "feat-7" };
-    await o.deliverCard(analysis.id, { branch: "main", authorized: true, by: "mussa", from: analysis.id });
+    await modules.deliverCard(analysis.id, { branch: "main", authorized: true, by: "mussa", from: analysis.id });
     expect(deliver).toHaveBeenCalledWith(analysis.id, expect.objectContaining({ queueWhileCiRuns: true }));
-    expect((await o.registry.getCard(analysis.id))?.mergeOrder).toMatchObject({ sha: QUEUED_SHA });
+    expect((await modules.registry.getCard(analysis.id))?.mergeOrder).toMatchObject({ sha: QUEUED_SHA });
     expect(await analysisStore.getAnalysisMergeRefusal(analysis.id)).toBeUndefined();
   });
 });

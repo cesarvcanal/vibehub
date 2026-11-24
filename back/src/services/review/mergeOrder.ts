@@ -8,16 +8,15 @@ import { deliverOwnAnalysis } from "./analysisMerge.js";
 import { activeReviewFor } from "./store.js";
 
 export const MERGE_ORDER_TTL_MS = 6 * 60 * 60_000;
-export const MERGE_ORDER_TICK_MS = 60_000;
+const MERGE_ORDER_TICK_MS = 60_000;
 
-export function startMergeOrders(): NodeJS.Timeout {
+export function startMergeOrders(): void {
   const timer = setInterval(() => {
     runMergeOrders().catch((err: unknown) => {
       logger.warn({ detail: (err as Error).message }, "merge orders could not be read — the next tick reads them again");
     });
   }, MERGE_ORDER_TICK_MS);
   timer.unref();
-  return timer;
 }
 
 export async function runMergeOrders(now: number = Date.now()): Promise<void> {
@@ -26,8 +25,9 @@ export async function runMergeOrders(now: number = Date.now()): Promise<void> {
 
 async function runMergeOrder(cardId: string, now: number): Promise<void> {
   const order = await claimMergeOrder(cardId, now);
-  const card = order && (await getCard(cardId));
-  if (!order || !card) return;
+  if (!order) return;
+  const card = await getCard(cardId);
+  if (!card) return;
   if (card.column === "done") {
     await saveMergeOrder(cardId, undefined);
     return;

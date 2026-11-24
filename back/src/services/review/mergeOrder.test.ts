@@ -38,15 +38,15 @@ async function load() {
 }
 
 async function cardWithOrder(over: { analysis?: boolean } = {}) {
-  const o = await load();
-  const project = await o.registry.createProject({ name: "widgets" });
+  const modules = await load();
+  const project = await modules.registry.createProject({ name: "widgets" });
   const card = over.analysis
-    ? await o.registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" })
-    : await o.registry.createCard({ projectId: project.id, title: "Docs" });
-  await o.registry.saveMergeOrder(card.id, {
+    ? await modules.registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" })
+    : await modules.registry.createCard({ projectId: project.id, title: "Docs" });
+  await modules.registry.saveMergeOrder(card.id, {
     sha: SHA, target: "main", prUrl: PR, orderedBy: "mussa", connectionId: "conn-mussa", orderedAt: ORDERED_AT,
   });
-  return { ...o, card };
+  return { ...modules, card };
 }
 
 async function messagesOf(events: Awaited<ReturnType<typeof load>>["events"], cardId: string) {
