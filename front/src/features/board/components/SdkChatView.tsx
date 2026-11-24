@@ -34,7 +34,8 @@ import { VoiceCallBar } from "@/features/voice/VoiceCallBar";
 import { VoiceCallContext, type VoiceCallControl } from "@/features/voice/ComposerVoiceButton";
 import { VoiceTurnBubble } from "@/features/voice/VoiceTurnBubble";
 import { SERVER_BACK_CONTEXT, typedContext } from "@/features/voice/voiceContext";
-import { usePeerMessagesForVoice } from "@/features/voice/usePeerMessagesForVoice";
+import { usePeerMessagesForVoice } from "@/features/voice/lib/usePeerMessagesForVoice";
+import { useVoiceCallSignal } from "@/features/voice/lib/useVoiceCallSignal";
 import { useVoiceDelegation } from "@/features/voice/useVoiceDelegation";
 import { runVoiceAction } from "@/features/voice/api";
 import { AnswerActions } from "@/features/voice/AnswerActions";
@@ -1355,16 +1356,7 @@ export function SdkChatView({
     [announceContext],
   );
   usePeerMessagesForVoice({ live: callLive, rows: state.rows, viewer, announce: announcePeerMessage });
-  const callSignalled = React.useRef(false);
-  React.useEffect(() => {
-    if (!connected) {
-      callSignalled.current = false;
-      return;
-    }
-    if (callLive === callSignalled.current) return;
-    sendFrame({ type: "voice_call", active: callLive });
-    callSignalled.current = callLive;
-  }, [connected, callLive, sendFrame]);
+  useVoiceCallSignal({ connected, callLive, sendFrame });
   useVoiceDelegation({
     call,
     rows: state.rows,

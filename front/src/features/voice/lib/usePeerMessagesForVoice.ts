@@ -1,6 +1,6 @@
 import * as React from "react";
 import type { SdkRow } from "@/features/board/lib/sdkChat";
-import { peerMessages, typedContext } from "./voiceContext";
+import { peerMessages, typedContext } from "@/features/voice/voiceContext";
 
 export interface UsePeerMessagesForVoiceOptions {
   live: boolean;
