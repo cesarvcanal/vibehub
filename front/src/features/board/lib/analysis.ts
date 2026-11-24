@@ -5,7 +5,7 @@ import type { CardStateKind } from "@/features/board/lib/board";
 export const cardAnalysisKey = (cardId: string) => ["card-analysis", cardId] as const;
 export const cardAnalysisConversationKey = (cardId: string) => ["card-analysis-conversation", cardId] as const;
 
-const ANALYSIS_REPORT_TOOL = "vibehub_analysis_report";
+const ANALYSIS_REREAD_TOOLS = ["vibehub_analysis_report", "vibehub_analysis_step", "vibehub_deliver"] as const;
 
 export interface AnalysisPill {
   key: string;
@@ -68,6 +68,6 @@ export function analysisPill(analysisQuery: AnalysisQueryState, opts: { cardWork
   return { key: "analysis.pill.notAptUnverified", vars: { n: read.uncheckedDimensions.length }, tone: "critical" };
 }
 
-export function isAnalysisReportTool(toolName: string): boolean {
-  return toolName.endsWith(ANALYSIS_REPORT_TOOL);
+export function isAnalysisRereadTool(toolName: string): boolean {
+  return ANALYSIS_REREAD_TOOLS.some((tool) => toolName.endsWith(tool));
 }
