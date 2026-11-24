@@ -1101,10 +1101,10 @@ export async function setPrPeople(cardId: string, prUrl: string, people: PrPeopl
 }
 
 async function ciGate(
-  container: string, token: string, cwd: string, prUrl: string, headSha?: string, waitForChecks = true,
+  container: string, token: string, cwd: string, prUrl: string, headSha?: string, opts: { waitForChecks?: boolean } = {},
 ): Promise<GateResult> {
   const out = await hostExecutor().runScript(
-    buildCiChecksScript(container, token, cwd, prUrl, headSha, { waitForChecks }),
+    buildCiChecksScript(container, token, cwd, prUrl, headSha, opts),
     { timeoutMs: (CI_WAIT_SECONDS + 2 * CI_POLL_SECONDS) * 1000 + 60_000 },
   );
   const ci = parseCiChecks(out.stdout);
@@ -1331,7 +1331,7 @@ async function runDelivery(cardId: string, opts: DeliverOpts): Promise<DeliverRe
 
   const gate: GateResult = mergeOnly && opts.gatePassed
     ? { passed: true, output: "" }
-    : await ciGate(container, token, cwd, prUrl, mergeOnly ? expectedHead : undefined, !queueWhileCiRuns).catch((err: unknown): GateResult => {
+    : await ciGate(container, token, cwd, prUrl, mergeOnly ? expectedHead : undefined, { waitForChecks: !queueWhileCiRuns }).catch((err: unknown): GateResult => {
       logger.warn({ card: card.worktreeSlug, detail: (err as Error).message }, "gate could not run — treating as red");
       return { passed: false, output: (err as Error).message };
     });
