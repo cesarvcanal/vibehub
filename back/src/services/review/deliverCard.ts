@@ -36,18 +36,16 @@ export async function deliverCard(
   cardId: string, opts: DeliverCardOpts,
 ): Promise<DeliverResult> {
   const { result: deliveredResult, concludeRecorded } = await deliverUnderReview(cardId, opts);
-  const result = await recordDeliveryOnAnalysisTimeline(cardId, deliveredResult);
+  const card = await getCard(cardId);
+  const result = card?.pushBranch === undefined ? deliveredResult : await recordDeliveryOnAnalysisTimeline(cardId, deliveredResult);
   const ownOrder = opts.authorized === true && opts.from === cardId;
-  const card = ownOrder ? await getCard(cardId) : undefined;
-  if (card) await saveOrderFromDelivery(card, result, opts.by);
+  if (card && ownOrder) await saveOrderFromDelivery(card, result, opts.by);
   if (result.reason === "merge_queued") return withOutput(result, MERGE_QUEUED_OUTPUT);
   if (result.merged && ownOrder) return withOutput(result, await concludeMergedCard(cardId));
   return opts.concludeWhenMerged && !concludeRecorded ? withOutput(result, CONCLUDE_NOT_RECORDED) : result;
 }
 
 async function recordDeliveryOnAnalysisTimeline(cardId: string, result: DeliverResult): Promise<DeliverResult> {
-  const card = await getCard(cardId);
-  if (card?.pushBranch === undefined) return result;
   try {
     await recordAnalysisDelivery(cardId, result);
     return result;
