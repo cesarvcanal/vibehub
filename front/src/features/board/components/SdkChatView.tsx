@@ -22,6 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/lib/useIsMobile";
 import { useNow, usePageVisible } from "@/lib/useNow";
 import { wsUrl } from "@/lib/ws";
 import { Button, type ButtonProps } from "@/components/ui/button";
@@ -2732,6 +2733,7 @@ function SdkQuestionCard({
   onDraft?: (id: string, draft: QuestionDraft) => void;
 }) {
   const t = useT();
+  const isMobile = useIsMobile();
   // What was already marked and written comes back after a reconnect, an F5 and the deploy that reloads
   // the tab — and stays stored after the click on "Responder" (see lib/questionDraftStore.ts).
   const [initial] = React.useState(() => readQuestionDraft(cardId, row.id));
@@ -2923,7 +2925,8 @@ function SdkQuestionCard({
               setOther((prev) => prev.map((v, i) => (i === qi ? value : v)));
             }}
             onKeyDown={(event) => {
-              if (event.key !== "Enter" || event.shiftKey) return;
+              const sendsAnswer = event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && !isMobile;
+              if (!sendsAnswer) return;
               event.preventDefault();
               const answers = answersFrom(picked, other);
               if (answers[qi]!.selected.length > 0 && (single || complete)) submit(answers);
