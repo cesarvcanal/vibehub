@@ -14,7 +14,11 @@ export function useVoiceCallSignal({ connected, callLive, sendFrame }: UseVoiceC
       return;
     }
     if (callLive === callSignalled.current) return;
-    sendFrame({ type: "voice_call", active: callLive });
+    try {
+      sendFrame({ type: "voice_call", active: callLive });
+    } catch {
+      return;
+    }
     callSignalled.current = callLive;
   }, [connected, callLive, sendFrame]);
 }
