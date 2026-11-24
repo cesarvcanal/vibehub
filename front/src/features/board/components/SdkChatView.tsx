@@ -2922,9 +2922,9 @@ function SdkQuestionCard({
               const value = e.target.value;
               setOther((prev) => prev.map((v, i) => (i === qi ? value : v)));
             }}
-            onKeyDown={(e) => {
-              if (e.key !== "Enter" || e.shiftKey) return;
-              e.preventDefault();
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" || event.shiftKey) return;
+              event.preventDefault();
               const answers = answersFrom(picked, other);
               if (answers[qi]!.selected.length > 0 && (single || complete)) submit(answers);
             }}

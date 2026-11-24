@@ -659,14 +659,15 @@ describe("SdkChatView — perguntas com opções (AskUserQuestion)", () => {
     ws.deliver({ type: "ready" });
     ws.deliver(QUESTION);
 
+    const findAnswerFrame = () =>
+      ws.sent.map((sentText) => JSON.parse(sentText)).find((sentFrame) => sentFrame.type === "question_answer");
     const field = screen.getByTestId("sdk-question-other");
     expect(field.tagName).toBe("TEXTAREA");
     await userEvent.type(field, "primeiro faz a tabela{Shift>}{Enter}{/Shift}depois o gráfico");
-    expect(ws.sent.map((s) => JSON.parse(s)).find((f) => f.type === "question_answer")).toBeUndefined();
+    expect(findAnswerFrame()).toBeUndefined();
     await userEvent.type(field, "{Enter}");
 
-    const frame = ws.sent.map((s) => JSON.parse(s)).find((f) => f.type === "question_answer");
-    expect(frame).toEqual({
+    expect(findAnswerFrame()).toEqual({
       type: "question_answer",
       id: "q_1",
       answers: [{ selected: ["primeiro faz a tabela\ndepois o gráfico"] }],
