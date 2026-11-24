@@ -710,7 +710,8 @@ export function analysisPrompt(a: AnalysisInput): string {
     `8. Chame vibehub_analysis_report de novo, com stage: "done": o mesmo headSha do passo 1 (não o das correções), ` +
       "as mesmas dimensions do passo 3, inclusive o unverifiedCount, e os mesmos findings, cada um com status " +
       "\"fixed\" e o commit, \"decided\" com a decision (question que a pessoa já respondeu sem pedir mudança) ou " +
-      "\"open\" (question ainda sem resposta, suggestion e o que não corrigiu, com o motivo no summary).",
+      "\"open\" (question ainda sem resposta, suggestion e o que não corrigiu, com o motivo no summary). O selo do painel " +
+      "sai do último done: toda correção entregue depois do done (CI vermelho, reconferência) grava o done de novo, com os status novos.",
     "9. Publique tudo numa única revisão COMMENT da PR, na sua conta: grave fora do repositório um review.json com " +
       '{ "commit_id": "<o head entregue>", "event": "COMMENT", "body": "<resumo>", "comments": [{ "path", "line", ' +
       '"side": "RIGHT", "body" }] } e rode ' +

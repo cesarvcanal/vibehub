@@ -309,6 +309,11 @@ describe("prompt da análise de PR", () => {
     expect(text).toContain('kind: "recheck"');
   });
 
+  it("correção entregue depois do done grava o done de novo, para o selo acompanhar", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    expect(analysisPrompt(input)).toContain("toda correção entregue depois do done (CI vermelho, reconferência) grava o done de novo");
+  });
+
   it("parte do código atual da PR e lê as regras do repositório antes de julgar", async () => {
     const { analysisPrompt } = await import("./prompts.js");
     const text = analysisPrompt(input);
