@@ -317,8 +317,8 @@ interface ResumeSummary {
   noted: string[];
 }
 
-interface SweepShared {
-  settings?: Promise<Settings>;
+interface SweepOnceLoads {
+  settings?: Promise<Settings | null>;
   install?: Promise<void>;
 }
 
@@ -332,7 +332,7 @@ async function readSweepRound(deps: ResumeDeps): Promise<SweepRound | null> {
     const isOtherOwnerAlive = await deps.otherOwnerAlive(deps.selfOwner);
     return { isOtherOwnerAlive, markers: await deps.listMarkers() };
   } catch (err) {
-    logger.warn({ detail: (err as Error).message }, "could not list sdk inflight markers at boot");
+    logger.warn({ detail: (err as Error).message }, "could not read the sdk inflight markers or owner heartbeats at boot");
     return null;
   }
 }
@@ -343,17 +343,16 @@ async function readSweepRound(deps: ResumeDeps): Promise<SweepRound | null> {
  */
 export async function resumeInterruptedTurns(deps: ResumeDeps = realDeps): Promise<ResumeSummary> {
   const summary: ResumeSummary = { resumed: [], noted: [] };
-  const shared: SweepShared = {};
-  const sweptMarkerKeys = new Set<string>();
+  const onceLoads: SweepOnceLoads = {};
+  const sweepingCardIds = new Set<string>();
   const cardSweeps: Promise<void>[] = [];
   for (;;) {
     const round = await readSweepRound(deps);
     if (!round) break;
-    for (const { cardId, marker } of round.markers) {
-      const markerKey = `${cardId}:${marker.startedAt}`;
-      if (sweptMarkerKeys.has(markerKey)) continue;
-      sweptMarkerKeys.add(markerKey);
-      cardSweeps.push(sweepCard(cardId, marker, summary, shared, deps));
+    const unsweptMarkers = round.markers.filter(({ cardId }) => !sweepingCardIds.has(cardId));
+    for (const { cardId, marker } of unsweptMarkers) {
+      sweepingCardIds.add(cardId);
+      cardSweeps.push(sweepCard(cardId, marker, summary, onceLoads, deps).finally(() => sweepingCardIds.delete(cardId)));
     }
     if (!round.isOtherOwnerAlive || deps.stopping()) break;
     await deps.wait(OWNER_POLL_MS);
@@ -362,18 +361,18 @@ export async function resumeInterruptedTurns(deps: ResumeDeps = realDeps): Promi
   return summary;
 }
 
-async function sweepCard(cardId: string, first: InflightMarker, summary: ResumeSummary, shared: SweepShared, deps: ResumeDeps): Promise<void> {
+async function sweepCard(cardId: string, first: InflightMarker, summary: ResumeSummary, onceLoads: SweepOnceLoads, deps: ResumeDeps): Promise<void> {
   const marker = await orphanedMarker(cardId, first, deps).catch((err: unknown) => {
     logger.warn({ card: cardId, detail: (err as Error).message }, "could not tell whether an sdk inflight marker is orphaned");
     return null;
   });
   if (!marker) return;
-  const settings = await (shared.settings ??= deps.settings()).catch((err: unknown) => {
-    logger.warn({ card: cardId, detail: (err as Error).message }, "could not read settings for the sdk boot resume");
+  const settings = await (onceLoads.settings ??= deps.settings().catch((err: unknown) => {
+    logger.warn({ detail: (err as Error).message }, "could not read settings for the sdk boot resume");
     return null;
-  });
+  }));
   if (!settings) return;
-  const installOnce = (): Promise<void> => (shared.install ??= deps.installDriver());
+  const installOnce = (): Promise<void> => (onceLoads.install ??= deps.installDriver());
   const outcome = await resumeCard(cardId, marker, settings, deps, installOnce, DEPLOY_TEXTS);
   if (outcome === "resumed") summary.resumed.push(cardId);
   else if (outcome === "noted") {

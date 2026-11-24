@@ -615,12 +615,62 @@ describe("resumeInterruptedTurns — o turno ainda vivo na instância antiga (de
     });
   });
 
-  it("sem outra instância viva, a varredura passa uma vez só e não espera", async () => {
+  it("sem outra instância viva, a varredura lista os marcadores uma vez só e não espera", async () => {
     const waits: number[] = [];
-    const summary = await resumeInterruptedTurns(deps({ wait: async (ms) => { waits.push(ms); } }));
+    const listings: number[] = [];
+    const summary = await resumeInterruptedTurns(deps({
+      listMarkers: async () => { listings.push(Date.now()); return []; },
+      wait: async (ms) => { waits.push(ms); },
+    }));
 
     expect(summary).toEqual({ resumed: [], noted: [] });
+    expect(listings.length).toBe(1);
     expect(waits).toEqual([]);
+  });
+
+  it("a pessoa manda outra mensagem na antiga durante a espera (marcador regravado com outro início): o card é retomado UMA vez, com uma nota só", async () => {
+    await markerFrom(ANTIGO);
+    await heartbeat(ANTIGO, true);
+    const waitCalls: number[] = [];
+    const summary = await resumeInterruptedTurns(deps({
+      wait: async () => {
+        waitCalls.push(waitCalls.length);
+        if (waitCalls.length === 1) {
+          await writeFile(join(dir, SDK_INFLIGHT_DIR, `${CARD}.json`), JSON.stringify({ startedAt: 2, preview: "outra", attempts: 0, owner: ANTIGO }), "utf8");
+        }
+        if (waitCalls.length === 4) await heartbeat(ANTIGO, false);
+      },
+    }));
+
+    expect(summary.resumed).toEqual([CARD]);
+    expect(spawned.length).toBe(1);
+    await vi.waitFor(async () => {
+      expect((await readHistory(CARD)).map((entry) => entry.type)).toEqual(["system_note", "user"]);
+    });
+  });
+
+  it("a passada final lista DEPOIS de saber que a antiga morreu: o marcador que ela grava ao morrer é visto", async () => {
+    const summary = await resumeInterruptedTurns(deps({
+      otherOwnerAlive: async () => {
+        await markerFrom(ANTIGO);
+        return false;
+      },
+    }));
+
+    expect(summary.resumed).toEqual([CARD]);
+  });
+
+  it("falha ao ler os batimentos encerra a varredura com aviso no log, sem retomar nada", async () => {
+    await markerFrom(ANTIGO);
+    const { logger } = await import("../../utils/logger.js");
+    const warn = vi.spyOn(logger, "warn");
+    const summary = await resumeInterruptedTurns(deps({
+      otherOwnerAlive: async () => { throw new Error("EACCES: owners"); },
+    }));
+
+    expect(summary).toEqual({ resumed: [], noted: [] });
+    expect(spawned.length).toBe(0);
+    expect(warn).toHaveBeenCalledWith({ detail: "EACCES: owners" }, "could not read the sdk inflight markers or owner heartbeats at boot");
   });
 
   it("o turno vivo de um card não segura a retomada de outro", async () => {
