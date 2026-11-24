@@ -428,7 +428,7 @@ describe("aba Conversa: a correção depois da frota", () => {
     entry({ kind: "fixing", findingId: "f1" }, 1),
     entry({ kind: "fixed", findingId: "f1", commit: "9f3e2c1".padEnd(40, "0") }, 2),
     entry({ kind: "recheck", outcome: "clean" }, 3),
-    entry({ kind: "delivered", reason: "gate", output: "lint: 12 erros em FormasPagamento.page.tsx" }, 4),
+    entry({ kind: "delivered", reason: "gate", stopped: true, output: "lint: 12 erros em FormasPagamento.page.tsx" }, 4),
     entry({ kind: "report", stage: "done", fixed: 1, decided: 0, open: 1 }, 5),
   ];
   const stateOf = (kind: CardStateKind): CardState => ({ kind, label: kind });

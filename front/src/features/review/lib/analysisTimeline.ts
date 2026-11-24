@@ -3,21 +3,10 @@ import type { AnalysisTimelineRow } from "@/features/review/types/analysisTimeli
 
 const SHORT_SHA_LENGTH = 7;
 
-const DELIVERY_REASONS_WITH_TEXT = new Set(["pushed", "gate", "no_ci", "unauthorized", "merge_queued", "merged", "conflict", "review_active"]);
-
-const DELIVERY_REASONS_THAT_WENT_THROUGH = new Set(["pushed", "unauthorized", "merged", "merge_queued", "review_active"]);
-
 type RowText = Pick<AnalysisTimelineRow, "textKey" | "vars" | "detail">;
 
-function deliveryText(reason: string, output: string | undefined): RowText {
-  const textKey = DELIVERY_REASONS_WITH_TEXT.has(reason) ? `analysis.timeline.delivered.${reason}` : "analysis.timeline.delivered.unknown";
-  const vars = { reason };
-  const showsOutput = output !== undefined && !DELIVERY_REASONS_THAT_WENT_THROUGH.has(reason);
-  return showsOutput ? { textKey, vars, detail: output } : { textKey, vars };
-}
-
 function needsAttention(entry: AnalysisTimelineEntry): boolean {
-  if (entry.kind === "delivered") return !DELIVERY_REASONS_THAT_WENT_THROUGH.has(entry.reason);
+  if (entry.kind === "delivered") return entry.stopped;
   return entry.kind === "recheck" && entry.outcome === "found";
 }
 
@@ -35,7 +24,7 @@ function rowText(entry: AnalysisTimelineEntry, findingTitle: (findingId: string)
         ? { textKey: "analysis.timeline.recheckClean", vars: {} }
         : { textKey: "analysis.timeline.recheckFound", vars: {}, ...(entry.note ? { detail: entry.note } : {}) };
     case "delivered":
-      return deliveryText(entry.reason, entry.output);
+      return { textKey: `analysis.timeline.delivered.${entry.reason}`, vars: {}, ...(entry.output ? { detail: entry.output } : {}) };
     case "report":
       return entry.stage === "done"
         ? { textKey: "analysis.timeline.done", vars: { fixed: entry.fixed, decided: entry.decided, open: entry.open } }

@@ -250,7 +250,7 @@ const fixingTimeline: AnalysisTimelineEntry[] = [
   timelineEntry({ kind: "fixing", findingId: "f1" }, 2),
   timelineEntry({ kind: "fixed", findingId: "f1", commit: "9f3e2c1".padEnd(40, "0") }, 9),
   timelineEntry({ kind: "recheck", outcome: "clean" }, 12),
-  timelineEntry({ kind: "delivered", reason: "gate", output: "✗ lint: 12 erros (no-explicit-any) em src/financeiro/FormasPagamento.page.tsx" }, 18),
+  timelineEntry({ kind: "delivered", reason: "gate", stopped: true, output: "✗ lint: 12 erros (no-explicit-any) em src/financeiro/FormasPagamento.page.tsx" }, 18),
   timelineEntry({ kind: "report", stage: "done", fixed: 1, decided: 0, open: 2 }, 19),
   timelineEntry({ kind: "fixing", findingId: "f2" }, 21),
 ];

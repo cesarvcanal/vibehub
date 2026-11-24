@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { AnalysisFinding, AnalysisTimelineEntry, AnalysisTimelineEvent } from "@/api/types";
+import { DELIVER_REASONS, type AnalysisFinding, type AnalysisTimelineEntry, type AnalysisTimelineEvent } from "@/api/types";
 import { analysisTimelineRows, openQuestionFindings } from "@/features/review/lib/analysisTimeline";
+import { en } from "@/i18n/en";
+import { ptBR } from "@/i18n/pt-BR";
 
 const FIX_SHA = "d".repeat(40);
 
@@ -33,20 +35,20 @@ describe("linhas da linha do tempo da correção", () => {
   });
 
   it.each([
-    [{ kind: "recheck", outcome: "clean" } as const, "analysis.timeline.recheckClean", undefined],
-    [{ kind: "recheck", outcome: "found", note: "teste do PDV quebrou" } as const, "analysis.timeline.recheckFound", "teste do PDV quebrou"],
-    [{ kind: "delivered", reason: "gate", output: "lint: 12 erros" } as const, "analysis.timeline.delivered.gate", "lint: 12 erros"],
-    [{ kind: "delivered", reason: "unauthorized", output: "falta authorized" } as const, "analysis.timeline.delivered.unauthorized", undefined],
-    [{ kind: "delivered", reason: "push_failed", output: "403" } as const, "analysis.timeline.delivered.unknown", "403"],
-  ])("%o vira a linha %s com o detalhe certo", (event, textKey, detail) => {
+    [{ kind: "recheck", outcome: "clean" } as const, "analysis.timeline.recheckClean", undefined, false],
+    [{ kind: "recheck", outcome: "found", note: "teste do PDV quebrou" } as const, "analysis.timeline.recheckFound", "teste do PDV quebrou", true],
+    [{ kind: "delivered", reason: "gate", stopped: true, output: "lint: 12 erros" } as const, "analysis.timeline.delivered.gate", "lint: 12 erros", true],
+    [{ kind: "delivered", reason: "unauthorized", stopped: false } as const, "analysis.timeline.delivered.unauthorized", undefined, false],
+    [{ kind: "delivered", reason: "push_failed", stopped: true, output: "403" } as const, "analysis.timeline.delivered.push_failed", "403", true],
+  ])("%o vira a linha %s com o detalhe e o alerta certos", (event, textKey, detail, needsAttention) => {
     const [row] = analysisTimelineRows(entriesOf(event), FINDINGS, { cardWorking: false });
-    expect(row?.textKey).toBe(textKey);
+    expect(row).toMatchObject({ textKey, needsAttention });
     expect(row?.detail).toBe(detail);
   });
 
-  it("motivo de entrega sem texto próprio mostra o motivo cru, sem sumir", () => {
-    const [row] = analysisTimelineRows(entriesOf({ kind: "delivered", reason: "push_failed" }), FINDINGS, { cardWorking: false });
-    expect(row?.vars).toEqual({ reason: "push_failed" });
+  it.each(DELIVER_REASONS)("o motivo de entrega %s tem texto próprio nos dois idiomas", (reason) => {
+    expect(en[`analysis.timeline.delivered.${reason}`]).toBeTruthy();
+    expect(ptBR[`analysis.timeline.delivered.${reason}`]).toBeTruthy();
   });
 
   it("o relatório final traz a contagem de corrigidos, decididos e abertos", () => {

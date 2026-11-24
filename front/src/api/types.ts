@@ -920,11 +920,17 @@ export interface AnalysisReadModel {
   timeline: AnalysisTimelineEntry[];
 }
 
+export const DELIVER_REASONS = [
+  "merged", "gate", "locked", "unauthorized", "push_failed", "pr_failed", "merge_failed", "conflict", "head_moved",
+  "review_active", "pushed", "undocumented", "comments_failed", "no_ci", "merge_queued",
+] as const;
+export type DeliverReason = (typeof DELIVER_REASONS)[number];
+
 export type AnalysisTimelineEvent =
   | { kind: "fixing"; findingId: string }
   | { kind: "fixed"; findingId: string; commit: string }
   | { kind: "recheck"; outcome: "clean" | "found"; note?: string }
-  | { kind: "delivered"; reason: string; prUrl?: string; output?: string }
+  | { kind: "delivered"; reason: DeliverReason; stopped: boolean; prUrl?: string; output?: string }
   | { kind: "report"; stage: AnalysisStage; fixed: number; decided: number; open: number };
 
 export type AnalysisTimelineEntry = AnalysisTimelineEvent & { cardId: string; analysedSha: string; at: number };
