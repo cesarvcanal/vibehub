@@ -22,6 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/lib/useIsMobile";
 import { useNow, usePageVisible } from "@/lib/useNow";
 import { wsUrl } from "@/lib/ws";
 import { Button, type ButtonProps } from "@/components/ui/button";
@@ -2732,6 +2733,7 @@ function SdkQuestionCard({
   onDraft?: (id: string, draft: QuestionDraft) => void;
 }) {
   const t = useT();
+  const isMobile = useIsMobile();
   // What was already marked and written comes back after a reconnect, an F5 and the deploy that reloads
   // the tab — and stays stored after the click on "Responder" (see lib/questionDraftStore.ts).
   const [initial] = React.useState(() => readQuestionDraft(cardId, row.id));
@@ -2825,7 +2827,7 @@ function SdkQuestionCard({
         {row.questions.map((q, i) => (
           <div key={i} className="min-w-0 text-muted-foreground">{q.question}</div>
         ))}
-        <div className="text-foreground/90">
+        <div className="whitespace-pre-wrap break-words text-foreground/90">
           {row.outcome === "answered"
             ? t("sdk.questionAnswered", { answers: chosen.join(" · ") })
             : row.outcome === "superseded"
@@ -2911,8 +2913,8 @@ function SdkQuestionCard({
               );
             })}
           </div>
-          <input
-            type="text"
+          <textarea
+            rows={1}
             data-testid="sdk-question-other"
             aria-label={t("sdk.questionOther")}
             placeholder={t("sdk.questionOther")}
@@ -2922,13 +2924,14 @@ function SdkQuestionCard({
               const value = e.target.value;
               setOther((prev) => prev.map((v, i) => (i === qi ? value : v)));
             }}
-            onKeyDown={(e) => {
-              if (e.key !== "Enter") return;
-              e.preventDefault();
+            onKeyDown={(event) => {
+              const sendsAnswer = event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && !isMobile;
+              if (!sendsAnswer) return;
+              event.preventDefault();
               const answers = answersFrom(picked, other);
               if (answers[qi]!.selected.length > 0 && (single || complete)) submit(answers);
             }}
-            className="h-7 rounded-md border border-border/70 bg-background/80 px-2 text-xs outline-none placeholder:text-muted-foreground/60 focus:border-sky-500/60"
+            className="max-h-40 min-h-7 resize-none rounded-md border border-border/70 bg-background/80 px-2 py-1.5 text-xs leading-snug outline-none [field-sizing:content] placeholder:text-muted-foreground/60 focus:border-sky-500/60"
           />
           {peers.map(({ name, draft }) => {
             const text = (draft.other[qi] ?? "").trim();
