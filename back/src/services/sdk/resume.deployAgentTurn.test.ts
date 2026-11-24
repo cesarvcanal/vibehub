@@ -82,6 +82,7 @@ function sweep(b: Proc, settings: { sdkDriver: boolean; sdkAutoResume: boolean }
     readMarker: inflight.readInflightMarker,
     selfOwner: inflight.INFLIGHT_OWNER,
     ownerAlive: inflight.isInflightOwnerAlive,
+    otherOwnerAlive: inflight.isOtherInflightOwnerAlive,
     turnRunning: manager.driverTurnRunning,
     stopping: () => false,
     reportIdle: (cardId) => { void import("../board/agentState.js").then((a) => a.reportCardStatusFromDriver(cardId, "waiting")); },
