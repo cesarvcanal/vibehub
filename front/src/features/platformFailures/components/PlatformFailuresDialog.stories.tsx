@@ -82,4 +82,10 @@ export default meta;
 
 type Story = StoryObj<typeof meta>;
 
+const { investigationReport: gateConclusion, ...gateTimeoutWithoutConclusion } = GATE_TIMEOUT;
+
 export const InvestigatedWithConclusion: Story = { args: { failures: [GATE_TIMEOUT, DRIVER_EPIPE, SCREEN_ERROR] } };
+
+export const InvestigatedAgain: Story = {
+  args: { failures: [{ ...gateTimeoutWithoutConclusion, status: "investigating", previousInvestigationReport: gateConclusion }] },
+};
