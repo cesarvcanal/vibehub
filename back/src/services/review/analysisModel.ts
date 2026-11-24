@@ -68,7 +68,7 @@ export type AnalysisStepInput =
 
 export type AnalysisTimelineEvent =
   | AnalysisStepInput
-  | { kind: "delivered"; reason: DeliverReason; prUrl?: string; output?: string }
+  | { kind: "delivered"; reason: DeliverReason; stopped: boolean; prUrl?: string; output?: string }
   | { kind: "report"; stage: AnalysisStage; fixed: number; decided: number; open: number };
 
 export type AnalysisTimelineEntry = AnalysisTimelineEvent & { cardId: string; analysedSha: string; at: number };

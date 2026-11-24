@@ -57,11 +57,13 @@ export async function listAnalysisTimeline(cardId: string): Promise<AnalysisTime
 
 export async function appendAnalysisTimeline<Entry extends AnalysisTimelineEntry | undefined>(
   cardId: string,
+  repeated: "skipRepeated" | "keepRepeated",
   buildEntry: (saved: AnalysisReport | undefined) => Entry,
 ): Promise<Entry> {
   return await store.mutate((doc) => {
     const entry = buildEntry(doc.analyses.find((analysis) => analysis.cardId === cardId));
-    if (entry) appendUnlessRepeated(doc, entry);
+    if (entry && repeated === "skipRepeated") appendUnlessRepeated(doc, entry);
+    if (entry && repeated === "keepRepeated") doc.timeline.push(structuredClone(entry));
     return entry;
   });
 }

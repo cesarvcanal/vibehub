@@ -111,8 +111,31 @@ describe("linha do tempo da correção na análise de PR", () => {
       merged: false, reason: "gate", branch: "dev", cardBranch: "feat/y", prUrl: PR.url, output: "lint: 12 erros",
     });
     expect((await store.listAnalysisTimeline(analysisCard.id)).at(-1)).toMatchObject({
-      kind: "delivered", reason: "gate", prUrl: PR.url, output: "lint: 12 erros", analysedSha: SHA,
+      kind: "delivered", reason: "gate", stopped: true, prUrl: PR.url, output: "lint: 12 erros", analysedSha: SHA,
     });
+  });
+
+  it.each(["pushed", "unauthorized", "merged", "merge_queued", "review_active"] as const)(
+    "entrega que passou (%s) entra sem a saída, que ninguém mostra",
+    async (reason) => {
+      const { analysisCard, reportService, timeline, store } = await load();
+      await reportService.recordAnalysisReport(analysisCard.id, analysedInput());
+      await timeline.recordAnalysisDelivery(analysisCard.id, {
+        merged: reason === "merged", reason, branch: "dev", cardBranch: "feat/y", prUrl: PR.url, output: "texto para a IA",
+      });
+      const deliveredEntry = (await store.listAnalysisTimeline(analysisCard.id)).at(-1);
+      expect(deliveredEntry).toMatchObject({ kind: "delivered", reason, stopped: false });
+      expect(deliveredEntry).not.toHaveProperty("output");
+    },
+  );
+
+  it("duas entregas iguais seguidas são duas entradas: cada uma aconteceu", async () => {
+    const { analysisCard, reportService, timeline, store } = await load();
+    await reportService.recordAnalysisReport(analysisCard.id, analysedInput());
+    const stoppedAtGate = { merged: false, reason: "gate" as const, branch: "dev", cardBranch: "feat/y", output: "lint: 12 erros" };
+    await timeline.recordAnalysisDelivery(analysisCard.id, stoppedAtGate);
+    await timeline.recordAnalysisDelivery(analysisCard.id, stoppedAtGate);
+    expect((await store.listAnalysisTimeline(analysisCard.id)).filter((entry) => entry.kind === "delivered")).toHaveLength(2);
   });
 
   it("entrega de card sem relatório de análise não grava nada", async () => {

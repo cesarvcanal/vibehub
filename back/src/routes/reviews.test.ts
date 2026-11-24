@@ -1394,8 +1394,8 @@ describe("relatório da análise pela rota", () => {
     const w = await world();
     await saveReport(w.cardId);
     const analysisStore = await import("../services/review/analysisStore.js");
-    await analysisStore.appendAnalysisTimeline(w.cardId, (saved) => saved && {
-      kind: "delivered", reason: "pushed", cardId: w.cardId, analysedSha: saved.analysedSha, at: 2,
+    await analysisStore.appendAnalysisTimeline(w.cardId, "keepRepeated", (saved) => saved && {
+      kind: "delivered", reason: "pushed", stopped: false, cardId: w.cardId, analysedSha: saved.analysedSha, at: 2,
     });
     const got = await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/analysis`, headers: { cookie: w.leitor.cookie } });
     expect(got.json().timeline.map((entry: { kind: string }) => entry.kind)).toEqual(["report", "delivered"]);
