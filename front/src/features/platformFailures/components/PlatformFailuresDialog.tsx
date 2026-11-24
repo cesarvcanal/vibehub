@@ -14,6 +14,7 @@ function toFailureDetails(failure: PlatformFailure) {
       ...(failure.hypothesis ? { hypothesis: failure.hypothesis } : {}),
       ...(failure.narrative ? { narrative: failure.narrative } : {}),
       ...(failure.narrativeUnavailable ? { narrativeUnavailable: failure.narrativeUnavailable } : {}),
+      ...(failure.investigationReport ? { investigationReport: failure.investigationReport } : {}),
     },
   };
 }

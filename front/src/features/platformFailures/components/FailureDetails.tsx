@@ -1,11 +1,12 @@
 import * as React from "react";
-import { Loader2 } from "lucide-react";
+import { ChevronDown, Loader2 } from "lucide-react";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { FOLDED_TEXT_MIN_CHARS, FoldedTextToggle } from "@/components/FoldedTextToggle";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n";
-import type { FailureNarrative, FailureTrigger, PlatformFailureNotice } from "@/api/types";
+import type {
+  FailureInvestigationReport, FailureNarrative, FailureTrigger, InvestigationVerdict, PlatformFailureNotice,
+} from "@/api/types";
 import { explainFailure } from "../lib/explainFailure";
 import { formatFailureInstant } from "../lib/formatFailureInstant";
 import { useFailureActions } from "../lib/useFailureActions";
@@ -15,6 +16,7 @@ type FailureForDetails = Pick<
 >;
 
 const TRIGGER_TONES: Record<FailureTrigger, BadgeTone> = { system: "critical", person: "warn", unknown: "muted" };
+const VERDICT_TONES: Record<InvestigationVerdict, BadgeTone> = { vibehub_bug: "critical", not_a_bug: "ok", inconclusive: "muted" };
 const STATUS_TONES: Record<PlatformFailureNotice["status"], BadgeTone> = {
   open: "muted", investigating: "info", concluded_without_fix: "muted", resolved: "ok", dismissed: "muted",
 };
@@ -52,38 +54,82 @@ function FailureActions({ failure, actions }: { failure: FailureForDetails; acti
   );
 }
 
-function FailureSummary({ symptom, narrative }: { symptom: string; narrative?: FailureNarrative }) {
+function AnalysisSections({ sections }: { sections: readonly { label: string; text: string }[] }) {
+  return (
+    <dl className="space-y-2 text-sm">
+      {sections.map((section) => (
+        <div key={section.label} className="space-y-0.5">
+          <dt className="text-xs font-medium text-muted-foreground">{section.label}</dt>
+          <dd className="min-w-0 whitespace-pre-line break-words">{section.text}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function FailureAnalysis({ symptom, narrative, report }: {
+  symptom: string;
+  narrative?: FailureNarrative;
+  report?: FailureInvestigationReport;
+}) {
   const t = useT();
   const [isExpanded, setExpanded] = React.useState(false);
-  const summaryItems = [
-    ...(narrative ? [
-      { label: t("platformFailures.narrativeContext"), text: narrative.context },
-      { label: t("platformFailures.narrativeCause"), text: narrative.cause },
-    ] : []),
-    { label: t("platformFailures.symptomLabel"), text: symptom },
+  const symptomSection = { label: t("platformFailures.analysis.symptom"), text: symptom };
+  if (!narrative && !report) return <AnalysisSections sections={[symptomSection]} />;
+  const cause = report?.cause ?? narrative?.cause;
+  const sections = [
+    ...(narrative ? [{ label: t("platformFailures.analysis.context"), text: narrative.context }] : []),
+    ...(report ? [{ label: t("platformFailures.analysis.howItHappened"), text: report.howItHappened }] : []),
+    ...(cause ? [{ label: t("platformFailures.analysis.cause"), text: cause }] : []),
+    ...(report ? [{ label: t("platformFailures.analysis.resolution"), text: report.resolution }] : []),
+    symptomSection,
   ];
-  const isLong = summaryItems.some((item) => item.text.length > FOLDED_TEXT_MIN_CHARS);
-  const isFolded = isLong && !isExpanded;
   return (
-    <div className="space-y-1">
-      <dl className="grid gap-x-3 gap-y-1 text-sm sm:grid-cols-[max-content_1fr]">
-        {summaryItems.map((item) => (
-          <React.Fragment key={item.label}>
-            <dt className="text-xs font-medium leading-5 text-muted-foreground">{item.label}</dt>
-            <dd className={cn("min-w-0 whitespace-pre-line break-words", isFolded && "line-clamp-3")}>{item.text}</dd>
-          </React.Fragment>
-        ))}
-      </dl>
-      {isLong ? <FoldedTextToggle isExpanded={isExpanded} onToggle={() => setExpanded((wasExpanded) => !wasExpanded)} /> : null}
-      {narrative ? <p className="text-[11px] text-muted-foreground">{t("platformFailures.narrativeNote")}</p> : null}
+    <div className="space-y-2">
+      {isExpanded ? (
+        <div className="space-y-2 border-l-2 border-border pl-3">
+          <AnalysisSections sections={sections} />
+          <p className="text-[11px] text-muted-foreground">
+            {report
+              ? t("platformFailures.reportNote", { at: formatFailureInstant(report.reportedAt) })
+              : t("platformFailures.narrativeNote")}
+          </p>
+        </div>
+      ) : null}
+      <button
+        type="button"
+        aria-expanded={isExpanded}
+        onClick={() => setExpanded((wasExpanded) => !wasExpanded)}
+        className="flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+      >
+        <ChevronDown className={cn("size-3.5 transition-transform motion-reduce:transition-none", isExpanded && "rotate-180")} aria-hidden />
+        {t(isExpanded ? "platformFailures.analysis.close" : "platformFailures.analysis.open")}
+      </button>
     </div>
   );
 }
 
-function FailureStatusLine({ status, isOwner }: { status: PlatformFailureNotice["status"]; isOwner: boolean }) {
+function InvestigationConclusion({ report }: { report: FailureInvestigationReport }) {
+  const t = useT();
+  return (
+    <div className="space-y-2">
+      <p className="whitespace-pre-line break-words text-sm">{report.conclusion}</p>
+      {report.pendingDecision ? (
+        <div className="space-y-0.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2">
+          <p className="text-xs font-medium text-amber-400">{t("platformFailures.pendingDecision")}</p>
+          <p className="whitespace-pre-line break-words text-sm">{report.pendingDecision}</p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function FailureStatusLine({ status, isOwner, hasReport }: { status: PlatformFailureNotice["status"]; isOwner: boolean; hasReport: boolean }) {
   const t = useT();
   if (status === "investigating") return <p className="text-xs text-muted-foreground">{t("platformFailures.investigating")}</p>;
-  if (status === "concluded_without_fix") return <p className="text-xs text-muted-foreground">{t("platformFailures.concludedWithoutFix")}</p>;
+  if (status === "concluded_without_fix" && !hasReport) {
+    return <p className="text-xs text-muted-foreground">{t("platformFailures.concludedWithoutReport")}</p>;
+  }
   if (status === "open" && !isOwner) return <p className="text-xs text-muted-foreground">{t("platformFailures.ownerNotified")}</p>;
   return null;
 }
@@ -98,6 +144,7 @@ export function FailureDetails({ failure, isOwner, affectedCardCount, leavesList
   const actions = useFailureActions(failure.id, { leavesListOnSuccess });
   const { details } = failure;
   const narrative = details?.narrative;
+  const report = details?.investigationReport;
   return (
     <li
       aria-busy={actions.isBusy}
@@ -108,7 +155,8 @@ export function FailureDetails({ failure, isOwner, affectedCardCount, leavesList
       )}
     >
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        {narrative ? <Badge tone={TRIGGER_TONES[narrative.trigger]}>{t(`platformFailures.trigger.${narrative.trigger}`)}</Badge> : null}
+        {report ? <Badge tone={VERDICT_TONES[report.verdict]}>{t(`platformFailures.verdict.${report.verdict}`)}</Badge> : null}
+        {!report && narrative ? <Badge tone={TRIGGER_TONES[narrative.trigger]}>{t(`platformFailures.trigger.${narrative.trigger}`)}</Badge> : null}
         {failure.status === "open" ? null : (
           <Badge tone={STATUS_TONES[failure.status]}>{t(`platformFailures.status.${failure.status}`)}</Badge>
         )}
@@ -123,13 +171,16 @@ export function FailureDetails({ failure, isOwner, affectedCardCount, leavesList
       </div>
       <div className="space-y-0.5">
         <p className="text-sm font-semibold leading-snug">{explainFailure(failure, t)}</p>
-        {narrative ? <p className="text-xs text-muted-foreground">{narrative.triggerReason}</p> : null}
+        {!report && narrative ? <p className="text-xs text-muted-foreground">{narrative.triggerReason}</p> : null}
       </div>
-      {details ? <FailureSummary symptom={details.symptom} narrative={narrative} /> : null}
-      {details?.narrativeUnavailable ? (
+      {report ? <InvestigationConclusion report={report} /> : null}
+      {details ? (
+        <FailureAnalysis symptom={details.symptom} {...(narrative ? { narrative } : {})} {...(report ? { report } : {})} />
+      ) : null}
+      {!report && details?.narrativeUnavailable ? (
         <p className="text-xs text-muted-foreground">{t(`platformFailures.narrativeUnavailable.${details.narrativeUnavailable}`)}</p>
       ) : null}
-      <FailureStatusLine status={failure.status} isOwner={isOwner} />
+      <FailureStatusLine status={failure.status} isOwner={isOwner} hasReport={report !== undefined} />
       {details ? (
         <details className="space-y-2 text-xs">
           <summary className="cursor-pointer text-muted-foreground">{t("platformFailures.technicalDetails")}</summary>

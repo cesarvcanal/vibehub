@@ -3,15 +3,13 @@ import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderApp } from "@/test/render";
 import { resetLanguage, setLanguage } from "@/i18n";
-import type { FailureNarrative, PlatformFailureNotice } from "@/api/types";
+import type { FailureInvestigationReport, FailureNarrative, PlatformFailureNotice } from "@/api/types";
 import { FailureDetails } from "./FailureDetails";
 
 vi.mock("@/lib/api", () => ({
   get: vi.fn(async () => ({})),
   post: vi.fn(),
 }));
-
-const LONG_CAUSE = "O driver do chat fechou a conexão com o CLI antes de o turno terminar. ".repeat(6).trim();
 
 function buildFailure(details: Partial<NonNullable<PlatformFailureNotice["details"]>> = {}): PlatformFailureNotice {
   return {
@@ -41,6 +39,18 @@ function buildNarrative(narrative: Partial<FailureNarrative> = {}): FailureNarra
   };
 }
 
+function buildInvestigationReport(report: Partial<FailureInvestigationReport> = {}): FailureInvestigationReport {
+  return {
+    verdict: "not_a_bug",
+    conclusion: "O gate parou a suíte no prazo, como deve.",
+    howItHappened: "O projeto não tem gate próprio e o npm test inteiro passou de 10 minutos.",
+    cause: "A suíte do projeto é lenta demais para o prazo do gate.",
+    resolution: "Criar no projeto um gate que rode só os testes afetados.",
+    reportedAt: 3_000,
+    ...report,
+  };
+}
+
 function renderFailure(failure: PlatformFailureNotice) {
   return renderApp(<ul><FailureDetails failure={failure} isOwner={false} /></ul>);
 }
@@ -50,33 +60,61 @@ beforeEach(() => {
   return () => resetLanguage();
 });
 
-describe("resumo de cada falha no modal de falhas do vibehub", () => {
-  it("falha sem explicação da IA mostra o erro registrado sem abrir os detalhes técnicos", () => {
+describe("cada falha no modal de falhas do vibehub, como uma análise", () => {
+  it("falha sem explicação nem conclusão mostra o erro registrado", () => {
     renderFailure(buildFailure());
     expect(screen.getByText("Erro registrado")).toBeVisible();
     expect(screen.getByText("sdk turn failed: write EPIPE")).toBeVisible();
   });
 
-  it("falha com explicação da IA mostra contexto, causa e o erro registrado", () => {
+  it("com a conclusão da investigação, o veredito e a conclusão aparecem sem abrir a análise", () => {
+    renderFailure(buildFailure({ investigationReport: buildInvestigationReport() }));
+    expect(screen.getByText("Não é bug do vibehub")).toBeVisible();
+    expect(screen.getByText("O gate parou a suíte no prazo, como deve.")).toBeVisible();
+    expect(screen.queryByText("A investigação terminou sem deixar conclusão. Investigue de novo para ter a análise.")).toBeNull();
+  });
+
+  it("a decisão que ficou para o dono aparece sem abrir a análise", () => {
+    renderFailure(buildFailure({ investigationReport: buildInvestigationReport({ pendingDecision: "Tratar o estouro como vermelho do projeto?" }) }));
+    expect(screen.getByText("Decisão sua")).toBeVisible();
+    expect(screen.getByText("Tratar o estouro como vermelho do projeto?")).toBeVisible();
+  });
+
+  it("abrir a análise mostra contexto, como ocorreu, por que e o que resolve", async () => {
+    renderFailure(buildFailure({ narrative: buildNarrative(), investigationReport: buildInvestigationReport() }));
+    expect(screen.queryByText("O projeto não tem gate próprio e o npm test inteiro passou de 10 minutos.")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Ver análise completa" }));
+
+    for (const [label, text] of [
+      ["Contexto", "O card Ajustar login estava respondendo uma mensagem."],
+      ["Como ocorreu", "O projeto não tem gate próprio e o npm test inteiro passou de 10 minutos."],
+      ["Por que aconteceu", "A suíte do projeto é lenta demais para o prazo do gate."],
+      ["O que resolve", "Criar no projeto um gate que rode só os testes afetados."],
+      ["Erro registrado", "sdk turn failed: write EPIPE"],
+    ]) {
+      expect(screen.getByText(label!)).toBeVisible();
+      expect(screen.getByText(text!)).toBeVisible();
+    }
+    expect(screen.getByRole("button", { name: "Fechar análise" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("a causa achada pela investigação vale sobre a causa provável escrita pela IA", async () => {
+    renderFailure(buildFailure({ narrative: buildNarrative(), investigationReport: buildInvestigationReport() }));
+    await userEvent.click(screen.getByRole("button", { name: "Ver análise completa" }));
+    expect(screen.queryByText("Provavelmente a conexão com o CLI caiu.")).toBeNull();
+  });
+
+  it("sem conclusão da investigação, a análise usa o contexto e a causa provável da IA", async () => {
     renderFailure(buildFailure({ narrative: buildNarrative() }));
+    expect(screen.getByText("O agente parou de responder no meio do turno.")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Ver análise completa" }));
     expect(screen.getByText("O card Ajustar login estava respondendo uma mensagem.")).toBeVisible();
     expect(screen.getByText("Provavelmente a conexão com o CLI caiu.")).toBeVisible();
-    expect(screen.getByText("sdk turn failed: write EPIPE")).toBeVisible();
   });
 
-  it("resumo curto aparece inteiro, sem ver mais", () => {
-    renderFailure(buildFailure({ narrative: buildNarrative() }));
-    expect(screen.getByText("Provavelmente a conexão com o CLI caiu.")).not.toHaveClass("line-clamp-3");
-    expect(screen.queryByRole("button", { name: "ver mais" })).toBeNull();
-  });
-
-  it("resumo longo vem dobrado e ver mais abre o texto inteiro", async () => {
-    renderFailure(buildFailure({ narrative: buildNarrative({ cause: LONG_CAUSE }) }));
-    expect(screen.getByText(LONG_CAUSE)).toHaveClass("line-clamp-3");
-
-    await userEvent.click(screen.getByRole("button", { name: "ver mais" }));
-
-    expect(screen.getByText(LONG_CAUSE)).not.toHaveClass("line-clamp-3");
-    expect(screen.getByRole("button", { name: "ver menos" })).toHaveAttribute("aria-expanded", "true");
+  it("investigada sem conclusão gravada diz que o card não deixou conclusão", () => {
+    renderFailure(buildFailure());
+    expect(screen.getByText("A investigação terminou sem deixar conclusão. Investigue de novo para ter a análise.")).toBeVisible();
   });
 });

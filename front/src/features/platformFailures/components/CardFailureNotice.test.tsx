@@ -85,6 +85,7 @@ describe("aviso de falha do vibehub dentro do card", () => {
     expect(await screen.findByText("A entrega do PR parou no meio.")).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: /ver detalhes/i }));
     const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Ver análise completa" }));
     for (const expectedText of [
       /provocado por uma pessoa/i, "Uma pessoa mandou 'enviar agora' 2s antes do erro.", "Contexto", "O card 'entrega' estava abrindo o PR.",
       "Por que aconteceu", "O agente foi interrompido pelo 'enviar agora'.", /23\/11\/2026.*10:05.*11:05.*3 vezes/,
