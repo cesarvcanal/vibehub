@@ -1,9 +1,9 @@
 import { describe, it, expect, onTestFinished, vi } from "vitest";
-import { EventEmitter } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakeDriverChild } from "../../testkit/fakeDriverChild.js";
+import { FakeSocket } from "../../testkit/fakeSocket.js";
 
 vi.setConfig({ testTimeout: 30_000 });
 
@@ -14,15 +14,7 @@ vi.mock("../events/cardEvents.js", async (importOriginal) => {
 
 const ALBERT = { kind: "user", name: "albert" } as const;
 const MUSSA = { kind: "owner", name: "mussa" } as const;
-
-class FakeSocket extends EventEmitter {
-  readonly sent: string[] = [];
-  readonly readyState = 1;
-  send(data: string): void {
-    this.sent.push(data);
-  }
-  ping(): void {}
-}
+const DRIVER_COMMAND = { file: "docker", args: ["exec"] };
 
 const voiceCall = (active: boolean): Buffer => Buffer.from(JSON.stringify({ type: "voice_call", active }));
 
@@ -41,14 +33,16 @@ async function boot() {
     manager.setDriverSpawnerForTesting(null);
     await rm(dir, { recursive: true, force: true });
   });
-  const session = manager.ensureDriverSession({ cardId: card.id, label: "t", command: { file: "docker", args: ["exec"] } });
-  const openTab = (origin: typeof ALBERT | typeof MUSSA): FakeSocket => {
+  const startDriver = () => manager.ensureDriverSession({ cardId: card.id, label: "t", command: DRIVER_COMMAND });
+  const firstDriver = startDriver();
+  const openTab = (origin: typeof ALBERT | typeof MUSSA, session = firstDriver): FakeSocket => {
     const socket = new FakeSocket();
     manager.attachSocket(session, socket as never, origin);
     return socket;
   };
   const callStamp = async (): Promise<number | null | undefined> => (await registry.getCard(card.id))?.voiceCallAt;
-  return { registry, card, openTab, callStamp };
+  const settleBoardWrites = () => registry.setCardPendingQuestion(card.id, null);
+  return { manager, registry, card, startDriver, openTab, callStamp, settleBoardWrites };
 }
 
 describe("chamada de voz no chat do card — o board sabe que tem gente falando com a IA", () => {
@@ -69,10 +63,23 @@ describe("chamada de voz no chat do card — o board sabe que tem gente falando 
     mussa.emit("message", voiceCall(true));
     await vi.waitFor(async () => expect(typeof (await world.callStamp())).toBe("number"));
     albert.emit("close");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await world.settleBoardWrites();
     expect(typeof (await world.callStamp())).toBe("number");
     mussa.emit("close");
     await vi.waitFor(async () => expect((await world.callStamp()) ?? null).toBeNull());
+  });
+
+  it("a aba presa no driver que está saindo não apaga a marca de quem já está em chamada no driver novo do mesmo card", async () => {
+    const world = await boot();
+    const albert = world.openTab(ALBERT);
+    albert.emit("message", voiceCall(true));
+    await vi.waitFor(async () => expect(typeof (await world.callStamp())).toBe("number"));
+    world.manager.stopCardDriver(world.card.id);
+    const mussa = world.openTab(MUSSA, world.startDriver());
+    mussa.emit("message", voiceCall(true));
+    albert.emit("close");
+    await world.settleBoardWrites();
+    expect(typeof (await world.callStamp())).toBe("number");
   });
 
   it("o aviso de chamada nunca vira mensagem para a IA", async () => {

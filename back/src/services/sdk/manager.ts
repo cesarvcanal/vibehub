@@ -112,7 +112,6 @@ export interface DriverSession {
   label: string;
   child: ChildProcessWithoutNullStreams;
   sockets: Set<WebSocket>;
-  voiceCallSockets: Set<WebSocket>;
   /** The driver said `ready` — a socket attaching after this gets a synthesized one. */
   ready: boolean;
   /** Latest session id the driver reported — the resume key (also persisted on the card). */
@@ -364,6 +363,7 @@ export type ClientFrameOutcome =
 const STDERR_TAIL_MAX = 2000;
 
 const sessions = new Map<string, DriverSession>();
+const voiceCallSocketsByCard = new Map<string, Set<WebSocket>>();
 
 /* ------------------------------------------------------------- test seams */
 
@@ -1206,7 +1206,6 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     label: opts.label,
     child,
     sockets: new Set(),
-    voiceCallSockets: new Set(),
     ready: false,
     activeTurns: 0,
     autonomousTurn: false,
@@ -2364,10 +2363,13 @@ export function attachSocket(
   };
 
   const noteVoiceCall = (active: boolean): void => {
-    const wasInCall = session.voiceCallSockets.size > 0;
-    if (active) session.voiceCallSockets.add(socket);
-    else session.voiceCallSockets.delete(socket);
-    const inCall = session.voiceCallSockets.size > 0;
+    const cardCallSockets = voiceCallSocketsByCard.get(session.cardId) ?? new Set<WebSocket>();
+    const wasInCall = cardCallSockets.size > 0;
+    if (active) cardCallSockets.add(socket);
+    else cardCallSockets.delete(socket);
+    const inCall = cardCallSockets.size > 0;
+    if (inCall) voiceCallSocketsByCard.set(session.cardId, cardCallSockets);
+    else voiceCallSocketsByCard.delete(session.cardId);
     if (inCall === wasInCall) return;
     void registry.setCardVoiceCall(session.cardId, inCall ? Date.now() : null).catch((err: unknown) => {
       logger.warn({ card: session.label, detail: (err as Error).message }, "could not mark the card's voice call");
