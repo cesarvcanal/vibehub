@@ -1390,6 +1390,17 @@ describe("relatório da análise pela rota", () => {
     expect(got.json().uncheckedDimensions).toEqual(["security", "performance", "contracts", "tests", "repoRules"]);
   });
 
+  it("quem só vê o card lê a linha do tempo da correção junto com a análise, em ordem", async () => {
+    const w = await world();
+    await saveReport(w.cardId);
+    const analysisStore = await import("../services/review/analysisStore.js");
+    await analysisStore.appendAnalysisTimeline(w.cardId, (saved) => saved && {
+      kind: "delivered", reason: "pushed", cardId: w.cardId, analysedSha: saved.analysedSha, at: 2,
+    });
+    const got = await app.inject({ method: "GET", url: `/api/cards/${w.cardId}/analysis`, headers: { cookie: w.leitor.cookie } });
+    expect(got.json().timeline.map((entry: { kind: string }) => entry.kind)).toEqual(["report", "delivered"]);
+  });
+
   it("quem não alcança o card não lê a análise", async () => {
     const w = await world();
     await saveReport(w.cardId);

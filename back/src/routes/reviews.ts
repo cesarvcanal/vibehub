@@ -13,7 +13,7 @@ import { isBusy } from "../services/maestro/maestro.js";
 import { readCardAgentFeed, watchCardFleet } from "../services/sdk/manager.js";
 import { activeReviewFor, getReview, listReviewsFollowedBy, listReviewsForCards, newest } from "../services/review/store.js";
 import { canMergeReview, fleetRunForReaders, isReviewClosed, type Review } from "../services/review/model.js";
-import { getAnalysis, getAnalysisMergeGate, getAnalysisMergeRefusal } from "../services/review/analysisStore.js";
+import { getAnalysis, getAnalysisMergeGate, getAnalysisMergeRefusal, listAnalysisTimeline } from "../services/review/analysisStore.js";
 import {
   analysedPr, currentMergeGate, currentMergeRefusal, isAnalysisMergeable, isAnalysisMerging, mergeAnalysedPr, startAnalysisMergeGate,
   syncAnalysisWithGithub,
@@ -185,6 +185,7 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
     const mergeGate = mergeable ? currentMergeGate(analysis, await getAnalysisMergeGate(req.params.id)) : undefined;
     return await reply.send({
       analysis, health, verdict: analysisVerdict(analysis), uncheckedDimensions: uncheckedDimensions(analysis), canMerge,
+      timeline: await listAnalysisTimeline(req.params.id),
       merging: isAnalysisMerging(req.params.id),
       ...(pr?.mergedAt !== undefined ? { mergedAt: pr.mergedAt } : {}),
       ...(lastMergeRefusal ? { lastMergeRefusal } : {}),
