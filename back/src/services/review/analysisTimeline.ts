@@ -20,12 +20,10 @@ function normalizeStep(step: AnalysisStepInput): AnalysisStepInput {
 
 export async function recordAnalysisStep(cardId: string, step: AnalysisStepInput): Promise<AnalysisTimelineEntry> {
   await findOpenAnalysisCardPr(cardId);
-  const entry = await appendAnalysisTimeline(cardId, (saved) => {
+  return await appendAnalysisTimeline(cardId, (saved): AnalysisTimelineEntry => {
     const report = assertStepFollowsReport(saved, step);
     return { ...normalizeStep(step), cardId, analysedSha: report.analysedSha, at: Date.now() };
   });
-  if (!entry) throw new Error(`a linha do tempo do card ${cardId} não gravou o passo`);
-  return entry;
 }
 
 export async function recordAnalysisDelivery(cardId: string, result: DeliverResult): Promise<void> {

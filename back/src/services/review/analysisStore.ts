@@ -55,10 +55,10 @@ export async function listAnalysisTimeline(cardId: string): Promise<AnalysisTime
   return structuredClone((await store.load()).timeline.filter((entry) => entry.cardId === cardId));
 }
 
-export async function appendAnalysisTimeline(
+export async function appendAnalysisTimeline<Entry extends AnalysisTimelineEntry | undefined>(
   cardId: string,
-  buildEntry: (saved: AnalysisReport | undefined) => AnalysisTimelineEntry | undefined,
-): Promise<AnalysisTimelineEntry | undefined> {
+  buildEntry: (saved: AnalysisReport | undefined) => Entry,
+): Promise<Entry> {
   return await store.mutate((doc) => {
     const entry = buildEntry(doc.analyses.find((analysis) => analysis.cardId === cardId));
     if (entry) appendUnlessRepeated(doc, entry);

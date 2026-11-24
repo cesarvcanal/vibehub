@@ -35,9 +35,8 @@ import { activeReviewFor, getReview, reviewByReviewerCard } from "./store.js";
 export async function deliverCard(
   cardId: string, opts: DeliverCardOpts,
 ): Promise<DeliverResult> {
-  const delivered = await deliverUnderReview(cardId, opts);
-  const result = await recordDeliveryOnAnalysisTimeline(cardId, delivered.result);
-  const { concludeRecorded } = delivered;
+  const { result: deliveredResult, concludeRecorded } = await deliverUnderReview(cardId, opts);
+  const result = await recordDeliveryOnAnalysisTimeline(cardId, deliveredResult);
   const ownOrder = opts.authorized === true && opts.from === cardId;
   const card = ownOrder ? await getCard(cardId) : undefined;
   if (card) await saveOrderFromDelivery(card, result, opts.by);
@@ -57,7 +56,7 @@ async function recordDeliveryOnAnalysisTimeline(cardId: string, result: DeliverR
   }
 }
 
-type DeliverCardOpts =Pick<DeliverOpts, "branch" | "authorized" | "docs"> & {
+type DeliverCardOpts = Pick<DeliverOpts, "branch" | "authorized" | "docs"> & {
   by: string;
   from?: string;
   /** "…e concluir o card": with the card's PR under review, recorded on it, and the card goes to done once merged. */
