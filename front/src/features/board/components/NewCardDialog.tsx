@@ -34,8 +34,7 @@ import { useT } from "@/i18n";
 
 /**
  * New card. The title is the only thing that matters — the branch, worktree and tmux session are
- * derived from it inside the runner. Account, model and branch are folded away under "Options"
- * because the answer is almost always "whatever the project uses".
+ * derived from it inside the runner.
  *
  * Submitting fires the creation and closes IMMEDIATELY rather than waiting for the server. Creating
  * a card can mean cloning a repository, and blocking the dialog on that turned "spin up four cards"
@@ -108,10 +107,9 @@ export function NewCardDialog({
   });
 
   /**
-   * THE REPOSITORY'S REAL BRANCHES, so "cut from" is a list and not a guess. Only fetched once the
-   * options are open: most cards are created without ever unfolding them, and this is a round trip
-   * to GitHub. A project with no repo (scratch), or a request that fails, falls back to a free text
-   * field — the card still gets created, it just stops being able to check the name.
+   * THE REPOSITORY'S REAL BRANCHES, so "cut from" is a list and not a guess. A project with no repo
+   * (scratch), or a request that fails, falls back to a free text field — the card still gets
+   * created, it just stops being able to check the name.
    */
   const { owner, repo: repoName } = splitRepo(selectedProject?.repoFullName ?? "");
   const connection = selectedProject?.githubConnectionId ?? "";
@@ -119,7 +117,7 @@ export function NewCardDialog({
     connection,
     owner,
     repo: repoName,
-    enabled: open && showOptions,
+    enabled: open,
   });
   const { branches } = repoBranches;
 
@@ -230,6 +228,72 @@ export function NewCardDialog({
             />
           </div>
 
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="min-w-0 space-y-1.5">
+              <Label htmlFor="new-card-base">{t("newCard.base")}</Label>
+              {branches?.length ? (
+                <BranchPicker
+                  id="new-card-base"
+                  value={base}
+                  onSelect={setBase}
+                  branches={branches}
+                  defaultBranch={repoBranches.defaultBranch}
+                  refreshing={repoBranches.refreshing}
+                  refreshFailed={repoBranches.failed}
+                  truncated={repoBranches.truncated}
+                  onOpen={repoBranches.refreshIfStale}
+                  onRefresh={repoBranches.forceRefresh}
+                  noChoiceLabel={t("newCard.baseInherit", { branch: defaultBranch ?? "" })}
+                />
+              ) : (
+                <Input
+                  id="new-card-base"
+                  value={base}
+                  onChange={(e) => setBase(e.target.value)}
+                  placeholder={t("newCard.basePlaceholder", { branch: defaultBranch ?? "dev" })}
+                  className="font-mono"
+                  aria-invalid={baseInvalid || undefined}
+                />
+              )}
+              {baseInvalid ? (
+                <p className="text-[11px] text-destructive">{t("newCard.branchInvalid")}</p>
+              ) : null}
+            </div>
+
+            <div className="min-w-0 space-y-1.5">
+              <Label htmlFor="new-card-branch">{t("newCard.branch")}</Label>
+              <Input
+                id="new-card-branch"
+                value={branch}
+                onChange={(e) => setBranch(e.target.value)}
+                placeholder={
+                  effectiveBase
+                    ? t("newCard.branchPlaceholderBase", { branch: effectiveBase })
+                    : t("newCard.branchPlaceholder")
+                }
+                className="font-mono"
+                aria-invalid={branchIssue === "invalid" || branchIssue === "isBase" || undefined}
+                aria-describedby={branchIssue ? "new-card-branch-issue" : undefined}
+              />
+              {branchIssue ? (
+                <p
+                  id="new-card-branch-issue"
+                  className={
+                    branchIssue === "exists"
+                      ? "text-[11px] text-amber-600 dark:text-amber-400"
+                      : "text-[11px] text-destructive"
+                  }
+                >
+                  {branchIssue === "invalid"
+                    ? t("newCard.branchInvalid")
+                    : branchIssue === "isBase"
+                      ? t("newCard.branchIsBase", { branch: effectiveBase })
+                      : t("newCard.branchExists")}
+                </p>
+              ) : null}
+            </div>
+          </div>
+
           <button
             type="button"
             onClick={() => setShowOptions((v) => !v)}
@@ -284,77 +348,6 @@ export function NewCardDialog({
                 </select>
               </div>
 
-              {/* CUT FROM comes first: it is the question you answer before naming anything, and a
-                  list of the repository's real branches is the whole point — "dev" exists in some
-                  repos and not others, and typing it wrong fails minutes later inside the runner. */}
-              <div className="min-w-0 space-y-1.5">
-                <Label htmlFor="new-card-base">{t("newCard.base")}</Label>
-                {branches?.length ? (
-                  <BranchPicker
-                    id="new-card-base"
-                    value={base}
-                    onSelect={setBase}
-                    branches={branches}
-                    defaultBranch={repoBranches.defaultBranch}
-                    refreshing={repoBranches.refreshing}
-                    refreshFailed={repoBranches.failed}
-                    truncated={repoBranches.truncated}
-                    onOpen={repoBranches.refreshIfStale}
-                    onRefresh={repoBranches.forceRefresh}
-                    noChoiceLabel={t("newCard.baseInherit", { branch: defaultBranch ?? "" })}
-                  />
-                ) : (
-                  <Input
-                    id="new-card-base"
-                    value={base}
-                    onChange={(e) => setBase(e.target.value)}
-                    placeholder={t("newCard.basePlaceholder", { branch: defaultBranch ?? "dev" })}
-                    className="font-mono"
-                    aria-invalid={baseInvalid || undefined}
-                  />
-                )}
-                {baseInvalid ? (
-                  <p className="text-[11px] text-destructive">{t("newCard.branchInvalid")}</p>
-                ) : null}
-              </div>
-
-              <div className="min-w-0 space-y-1.5">
-                <Label htmlFor="new-card-branch">{t("newCard.branch")}</Label>
-                <Input
-                  id="new-card-branch"
-                  value={branch}
-                  onChange={(e) => setBranch(e.target.value)}
-                  placeholder={
-                    effectiveBase
-                      ? t("newCard.branchPlaceholderBase", { branch: effectiveBase })
-                      : t("newCard.branchPlaceholder")
-                  }
-                  className="font-mono"
-                  aria-invalid={branchIssue === "invalid" || branchIssue === "isBase" || undefined}
-                  aria-describedby={branchIssue ? "new-card-branch-issue" : undefined}
-                />
-                {/* One line, and it says which of the three it is: two stop the card, one just
-                    tells you the card will OPEN on a branch instead of creating it. */}
-                {branchIssue ? (
-                  <p
-                    id="new-card-branch-issue"
-                    className={
-                      branchIssue === "exists"
-                        ? "text-[11px] text-amber-600 dark:text-amber-400"
-                        : "text-[11px] text-destructive"
-                    }
-                  >
-                    {branchIssue === "invalid"
-                      ? t("newCard.branchInvalid")
-                      : branchIssue === "isBase"
-                        ? t("newCard.branchIsBase", { branch: effectiveBase })
-                        : t("newCard.branchExists")}
-                  </p>
-                ) : null}
-              </div>
-
-              {/* The LOCK. Deliberately next to the base, because the base is what it locks the card
-                  to: the delivery becomes a PR against that branch and nothing else. */}
               <label htmlFor="new-card-locked" className="flex cursor-pointer items-start gap-2 sm:col-span-2">
                 <input
                   id="new-card-locked"

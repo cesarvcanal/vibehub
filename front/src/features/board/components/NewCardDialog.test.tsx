@@ -151,23 +151,25 @@ describe("NewCardDialog", () => {
     expect(title.value).toBe("");
   });
 
-  it("clears the options too, so a branch typed and abandoned cannot ride along next time", async () => {
+  it("clears the branch on Cancel, so a branch typed and abandoned cannot ride along next time", async () => {
     const { user } = setup();
-    await user.click(screen.getByRole("button", { name: "Options" }));
     await user.type(screen.getByLabelText("Branch"), "feat/oops");
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 
-    // The disclosure closes with them: reopening starts from "whatever the project uses".
-    expect(screen.queryByLabelText("Branch")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Options" }));
     expect((screen.getByLabelText("Branch") as HTMLInputElement).value).toBe("");
   });
 
   it("keeps the options folded away until they are asked for", () => {
     setup();
-    // The answer is almost always "whatever the project uses"; a card is meant to be type-and-go.
     expect(screen.queryByLabelText("Claude account")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Options" })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("mostra a branch de origem e a branch do card sem abrir as opções", async () => {
+    setup();
+    await waitFor(() => expect(screen.getByLabelText("Cut from")).toHaveTextContent("The project's (dev)"));
+    expect(screen.getByLabelText("Branch")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Lock the card to this branch/)).not.toBeInTheDocument();
   });
 
   it("refuses an empty or whitespace-only title without closing", async () => {
@@ -424,15 +426,15 @@ describe("NewCardDialog", () => {
     const { user } = setup();
     const chamadasBranches = () =>
       vi.mocked(get).mock.calls.filter(([url]) => url === "/github/repos/acme/p1/branches").length;
+    await waitFor(() => expect(screen.getByLabelText("Cut from")).toHaveTextContent("The project's (dev)"));
     const antes = chamadasBranches();
-    await user.click(screen.getByRole("button", { name: "Options" }));
-    await user.click(await screen.findByLabelText("Cut from"));
+    await user.click(screen.getByLabelText("Cut from"));
     await user.keyboard("{Escape}");
     await user.click(screen.getByLabelText("Cut from"));
-    expect(chamadasBranches() - antes).toBe(1);
+    expect(chamadasBranches() - antes).toBe(0);
 
     await user.click(screen.getByRole("button", { name: "Refresh the list from GitHub" }));
-    await waitFor(() => expect(chamadasBranches() - antes).toBe(2));
+    await waitFor(() => expect(chamadasBranches() - antes).toBe(1));
   });
 
   it("refuses a branch name the server would refuse, and says why", async () => {
