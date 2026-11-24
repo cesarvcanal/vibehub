@@ -446,7 +446,7 @@ describe("aba Conversa: a correção depois da frota", () => {
       expect.stringContaining("f1 corrigido no commit 9f3e2c1 · Sessão SSO não expira com o token"),
       expect.stringContaining("Reconferência das correções: nada novo"),
       expect.stringContaining("Entrega parada: o CI do PR não passou"),
-      expect.stringContaining("Relatório final: 1 corrigidos, 0 decididos, 1 abertos"),
+      expect.stringContaining("Relatório final · corrigidos: 1 · decididos: 0 · abertos: 1"),
     ]);
     expect(steps[4]).toHaveTextContent("lint: 12 erros em FormasPagamento.page.tsx");
     expect(steps[1]).toHaveTextContent("10:01");

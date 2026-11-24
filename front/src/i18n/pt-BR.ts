@@ -1610,7 +1610,7 @@ export const ptBR: Record<string, string> = {
   "analysis.timeline.report.analysed.one": "Relatório da frota gravado: 1 achado para tratar",
   "analysis.timeline.report.analysed.other": "Relatório da frota gravado: {n} achados para tratar",
   "analysis.timeline.report.fleet_unavailable": "A frota de agentes não rodou",
-  "analysis.timeline.done": "Relatório final: {fixed} corrigidos, {decided} decididos, {open} abertos",
+  "analysis.timeline.done": "Relatório final · corrigidos: {fixed} · decididos: {decided} · abertos: {open}",
   "analysis.timeline.questions.title": "Esperando você no chat do card",
   "analysis.proof.failing_test": "teste que falha",
   "analysis.proof.rule": "regra do repo",

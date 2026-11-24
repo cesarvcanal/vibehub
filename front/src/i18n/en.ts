@@ -1598,7 +1598,7 @@ export const en: Record<string, string> = {
   "analysis.timeline.report.analysed.one": "Fleet report saved: 1 finding to handle",
   "analysis.timeline.report.analysed.other": "Fleet report saved: {n} findings to handle",
   "analysis.timeline.report.fleet_unavailable": "The agent fleet did not run",
-  "analysis.timeline.done": "Final report: {fixed} fixed, {decided} decided, {open} open",
+  "analysis.timeline.done": "Final report · fixed: {fixed} · decided: {decided} · open: {open}",
   "analysis.timeline.questions.title": "Waiting for you in the card's chat",
   "analysis.proof.failing_test": "failing test",
   "analysis.proof.rule": "repo rule",
