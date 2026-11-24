@@ -5,7 +5,8 @@ import { apiReject, renderApp, setupState } from "@/test/render";
 import { AnalysisPanel } from "./AnalysisPanel";
 import { LANGUAGE_KEY, setLanguage } from "@/i18n";
 import {
-  ANALYSIS_DIMENSIONS, type AnalysisConversationResponse, type AnalysisReadModel, type AnalysisReport, type CardAnalysisResponse,
+  ANALYSIS_DIMENSIONS, type AnalysisConversationResponse, type AnalysisReadModel, type AnalysisReport, type AnalysisTimelineEntry,
+  type AnalysisTimelineEvent, type CardAnalysisResponse,
 } from "@/api/types";
 import type { CardState, CardStateKind } from "@/features/board/lib/board";
 
@@ -53,6 +54,7 @@ const readModel = (
   uncheckedDimensions,
   canMerge: false,
   merging: false,
+  timeline: [],
 });
 
 function renderPanel(
@@ -414,6 +416,69 @@ describe("merge pelo painel da análise", () => {
     renderPanel(aptRead());
     await userEvent.click(await screen.findByRole("button", { name: "Merge PR #312" }));
     expect(await screen.findByText("PR #312 merged; the card moved to Done.")).toBeInTheDocument();
+  });
+});
+
+describe("aba Conversa: a correção depois da frota", () => {
+  const ANALYSED = "a1b2c3d".padEnd(40, "0");
+  const at = (minute: number) => Date.UTC(2026, 10, 24, 13, minute);
+  const entry = (event: AnalysisTimelineEvent, minute: number): AnalysisTimelineEntry => ({ ...event, cardId: "c1", analysedSha: ANALYSED, at: at(minute) });
+  const fixingTimeline: AnalysisTimelineEntry[] = [
+    entry({ kind: "report", stage: "analysed", fixed: 0, decided: 0, open: 2 }, 0),
+    entry({ kind: "fixing", findingId: "f1" }, 1),
+    entry({ kind: "fixed", findingId: "f1", commit: "9f3e2c1".padEnd(40, "0") }, 2),
+    entry({ kind: "recheck", outcome: "clean" }, 3),
+    entry({ kind: "delivered", reason: "gate", stopped: true, output: "lint: 12 erros em FormasPagamento.page.tsx" }, 4),
+    entry({ kind: "report", stage: "done", fixed: 1, decided: 0, open: 1 }, 5),
+  ];
+  const stateOf = (kind: CardStateKind): CardState => ({ kind, label: kind });
+  const openConversation = async () => {
+    await userEvent.click(await screen.findByRole("tab", { name: "Conversa" }));
+  };
+
+  it("mostra em ordem o achado corrigido com o commit, a reconferência, a entrega com o motivo do gate e o relatório final", async () => {
+    renderPanel({ ...readModel(doneReport(), "not_apt"), timeline: fixingTimeline }, () => {}, () => ({ conversation: null }), stateOf("working"));
+    await openConversation();
+    const steps = within(await screen.findByRole("list", { name: "Correção" })).getAllByRole("listitem");
+    expect(steps.map((step) => step.textContent)).toEqual([
+      expect.stringContaining("Relatório da frota gravado: 2 achados para tratar"),
+      expect.stringContaining("Corrigindo f1 · Sessão SSO não expira com o token"),
+      expect.stringContaining("f1 corrigido no commit 9f3e2c1 · Sessão SSO não expira com o token"),
+      expect.stringContaining("Reconferência das correções: nada novo"),
+      expect.stringContaining("Entrega parada: o CI do PR não passou"),
+      expect.stringContaining("Relatório final · corrigidos: 1 · decididos: 0 · abertos: 1"),
+    ]);
+    expect(steps[4]).toHaveTextContent("lint: 12 erros em FormasPagamento.page.tsx");
+    expect(steps[1]).toHaveTextContent("10:01");
+  });
+
+  it("o achado que a IA está corrigindo agora fica marcado como em andamento", async () => {
+    const timeline = [entry({ kind: "fixing", findingId: "f1" }, 1)];
+    renderPanel({ ...readModel(doneReport({ stage: "analysed" }), "pending"), timeline }, () => {}, () => ({ conversation: null }), stateOf("working"));
+    await openConversation();
+    const [step] = within(await screen.findByRole("list", { name: "Correção" })).getAllByRole("listitem");
+    expect(step).toHaveAttribute("aria-current", "step");
+  });
+
+  it("depois do done, as dúvidas abertas aparecem como esperando a pessoa", async () => {
+    renderPanel({ ...readModel(doneReport(), "not_apt"), timeline: fixingTimeline }, () => {}, () => ({ conversation: null }), stateOf("needs_me"));
+    await openConversation();
+    const waiting = await screen.findByRole("list", { name: "Esperando você no chat do card" });
+    expect(within(waiting).getByRole("listitem")).toHaveTextContent("f3 · Conta local continua aceitando senha?");
+  });
+
+  it("análise concluída antes da linha do tempo existir não diz que a IA não começou", async () => {
+    renderPanel(readModel(doneReport(), "not_apt"), () => {}, () => ({ conversation: null }), stateOf("done"));
+    await openConversation();
+    await screen.findByRole("list", { name: "Correção" });
+    expect(screen.queryByText("A IA ainda não começou a corrigir os achados.")).toBeNull();
+    expect(screen.queryByRole("list", { name: "Esperando você no chat do card" })).toBeNull();
+  });
+
+  it("sem passo de correção ainda, a Conversa diz que a IA não começou", async () => {
+    renderPanel(readModel(doneReport({ stage: "analysed" }), "pending"), () => {}, () => ({ conversation: null }), stateOf("working"));
+    await openConversation();
+    expect(await screen.findByText("A IA ainda não começou a corrigir os achados.")).toBeInTheDocument();
   });
 });
 

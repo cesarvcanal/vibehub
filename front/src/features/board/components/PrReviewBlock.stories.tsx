@@ -78,13 +78,14 @@ export const AnaliseCorrigindo = analysisStory("Análise · depois do juiz, corr
   uncheckedDimensions: [],
   canMerge: false,
   merging: false,
+  timeline: [],
 }, true);
-export const AnaliseApta = analysisStory("Análise · apta", { analysis: analysisReport(), health: healthOk, verdict: "apt", uncheckedDimensions: [], canMerge: false, merging: false });
+export const AnaliseApta = analysisStory("Análise · apta", { analysis: analysisReport(), health: healthOk, verdict: "apt", uncheckedDimensions: [], canMerge: false, merging: false, timeline: [] });
 export const AnaliseMergeando = analysisStory("Análise · apta, merge rodando", {
-  analysis: analysisReport(), health: healthOk, verdict: "apt", uncheckedDimensions: [], canMerge: true, merging: true,
+  analysis: analysisReport(), health: healthOk, verdict: "apt", uncheckedDimensions: [], canMerge: true, merging: true, timeline: [],
 });
 export const AnaliseMergeBarrado = analysisStory("Análise · apta, último merge barrado", {
-  analysis: analysisReport(), health: healthOk, verdict: "apt", uncheckedDimensions: [], canMerge: true, merging: false,
+  analysis: analysisReport(), health: healthOk, verdict: "apt", uncheckedDimensions: [], canMerge: true, merging: false, timeline: [],
   lastMergeRefusal: { cardId: "c1", analysedSha: analysisReport().analysedSha, reason: "gate", by: "mussa", at: 1 },
 });
 export const AnaliseNaoAptaSemConferencia = analysisStory("Análise · não apta, dimensão sem conferência", {
@@ -94,6 +95,7 @@ export const AnaliseNaoAptaSemConferencia = analysisStory("Análise · não apta
   uncheckedDimensions: ["security"],
   canMerge: false,
   merging: false,
+  timeline: [],
 });
 export const AnaliseFrotaIndisponivel = analysisStory("Análise · frota indisponível", {
   analysis: analysisReport({ stage: "fleet_unavailable", dimensions: [], findings: [], refutedCount: 0, unavailableReason: "sem Workflow" }),
@@ -102,4 +104,5 @@ export const AnaliseFrotaIndisponivel = analysisStory("Análise · frota indispo
   uncheckedDimensions: [...ANALYSIS_DIMENSIONS],
   canMerge: false,
   merging: false,
+  timeline: [],
 });

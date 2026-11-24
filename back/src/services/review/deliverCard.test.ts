@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DeliverOpts, DeliverResult } from "../maestro/deliver.js";
+import { reportTimelineEntry, type AnalysisReport } from "./analysisModel.js";
 import type { ReviewMergeOutcome } from "./merge.js";
 import type { ReviewPhase } from "./model.js";
 
@@ -38,6 +39,13 @@ async function load() {
   const store = await import("./store.js");
   const { deliverCard } = await import("./deliverCard.js");
   return { registry, store, deliverCard };
+}
+
+async function saveDoneReport(cardId: string, analysedSha: string): Promise<void> {
+  const report: AnalysisReport = {
+    cardId, prUrl: PR, prNumber: 7, analysedSha, stage: "done", summary: "s", dimensions: [], findings: [], refutedCount: 0, updatedAt: 1,
+  };
+  await (await import("./analysisStore.js")).saveAnalysis(report, () => undefined, reportTimelineEntry(report));
 }
 
 beforeEach(async () => {
@@ -87,6 +95,32 @@ describe("deliverCard — card de análise de PR", () => {
     return { ...o, analysis };
   }
 
+  it("a entrega das correções da análise entra na linha do tempo com o motivo, a PR e a saída do gate", async () => {
+    const { deliverCard, analysis } = await analysisCard();
+    await saveDoneReport(analysis.id, "e".repeat(40));
+    deliverAnswer = { prUrl: PR, merged: false, reason: "gate", branch: "dev", cardBranch: "feat-7", output: "lint: 12 erros" };
+    await deliverCard(analysis.id, { branch: "dev", by: "mussa" });
+    const timeline = await (await import("./analysisStore.js")).listAnalysisTimeline(analysis.id);
+    expect(timeline.at(-1)).toMatchObject({ kind: "delivered", reason: "gate", prUrl: PR, output: "lint: 12 erros" });
+  });
+
+  it("entrega de card que não é de análise não grava linha do tempo", async () => {
+    const o = await load();
+    const project = await o.registry.createProject({ name: "widgets" });
+    const card = await o.registry.createCard({ projectId: project.id, title: "Login" });
+    await o.deliverCard(card.id, { branch: "dev", by: "mussa" });
+    expect(await (await import("./analysisStore.js")).listAnalysisTimeline(card.id)).toEqual([]);
+  });
+
+  it("a linha do tempo que não grava não desfaz a entrega: a resposta mantém o resultado e diz o que faltou", async () => {
+    const { deliverCard, analysis } = await analysisCard();
+    await mkdir(join(dir, "analyses.json"));
+    deliverAnswer = { prUrl: PR, merged: false, reason: "pushed", branch: "dev", cardBranch: "feat-7" };
+    const out = await deliverCard(analysis.id, { branch: "dev", by: "mussa" });
+    expect(out).toMatchObject({ reason: "pushed", prUrl: PR });
+    expect(out.output).toMatch(/linha do tempo da análise não registrou esta entrega/);
+  });
+
   it("ordem de merge vinda de outro card não mergeia: o deliver vai sem authorized e a resposta diz por quê", async () => {
     const { deliverCard, analysis } = await analysisCard();
     deliverAnswer = { prUrl: PR, merged: false, reason: "unauthorized", branch: "dev", cardBranch: "feat-7", output: "falta authorized" };
@@ -108,10 +142,7 @@ describe("deliverCard — card de análise de PR", () => {
     const { deliverCard, analysis } = await analysisCard();
     const analysisStore = await import("./analysisStore.js");
     const analysedSha = "e".repeat(40);
-    await analysisStore.saveAnalysis({
-      cardId: analysis.id, prUrl: PR, prNumber: 7, analysedSha, stage: "done", summary: "s",
-      dimensions: [], findings: [], refutedCount: 0, updatedAt: 1,
-    }, () => undefined);
+    await saveDoneReport(analysis.id, analysedSha);
     deliverAnswer = { prUrl: PR, merged: false, reason: "gate", branch: "dev", cardBranch: "feat-7", output: "npm test estourou 585 s" };
     await deliverCard(analysis.id, { branch: "dev", authorized: true, by: "mussa", from: analysis.id });
     expect(await analysisStore.getAnalysisMergeRefusal(analysis.id)).toMatchObject({
@@ -491,10 +522,7 @@ describe("deliverCard — ordem de merge com o CI ainda rodando fica guardada no
     const project = await modules.registry.createProject({ name: "widgets" });
     const analysis = await modules.registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" });
     const analysisStore = await import("./analysisStore.js");
-    await analysisStore.saveAnalysis({
-      cardId: analysis.id, prUrl: PR, prNumber: 7, analysedSha: "e".repeat(40), stage: "done", summary: "s",
-      dimensions: [], findings: [], refutedCount: 0, updatedAt: 1,
-    }, () => undefined);
+    await saveDoneReport(analysis.id, "e".repeat(40));
     deliverAnswer = { ...queuedAnswer, cardBranch: "feat-7" };
     await modules.deliverCard(analysis.id, { branch: "main", authorized: true, by: "mussa", from: analysis.id });
     expect(deliver).toHaveBeenCalledWith(analysis.id, expect.objectContaining({ queueWhileCiRuns: true }));

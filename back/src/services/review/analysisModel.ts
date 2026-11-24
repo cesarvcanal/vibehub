@@ -57,6 +57,30 @@ export interface AnalysisMergeGate {
   noCi?: true;
 }
 
+export const ANALYSIS_STEP_KINDS = ["fixing", "fixed", "recheck"] as const;
+
+export const RECHECK_OUTCOMES = ["clean", "found"] as const;
+
+export type AnalysisStepInput =
+  | { kind: "fixing"; findingId: string }
+  | { kind: "fixed"; findingId: string; commit: string }
+  | { kind: "recheck"; outcome: (typeof RECHECK_OUTCOMES)[number]; note?: string };
+
+export type AnalysisTimelineEvent =
+  | AnalysisStepInput
+  | { kind: "delivered"; reason: DeliverReason; stopped: boolean; prUrl?: string; output?: string }
+  | { kind: "report"; stage: AnalysisStage; fixed: number; decided: number; open: number };
+
+export type AnalysisTimelineEntry = AnalysisTimelineEvent & { cardId: string; analysedSha: string; at: number };
+
+export function reportTimelineEntry(report: AnalysisReport): AnalysisTimelineEntry {
+  const countWithStatus = (status: AnalysisFinding["status"]) => report.findings.filter((finding) => finding.status === status).length;
+  return {
+    kind: "report", stage: report.stage, fixed: countWithStatus("fixed"), decided: countWithStatus("decided"), open: countWithStatus("open"),
+    cardId: report.cardId, analysedSha: report.analysedSha, at: report.updatedAt,
+  };
+}
+
 export type DimensionHealth = "ok" | "attention" | "problem" | "not_run" | "skipped";
 
 function isDimensionAccountedFor(run: DimensionRun | undefined): run is DimensionRun {

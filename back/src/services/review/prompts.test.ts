@@ -301,6 +301,19 @@ describe("prompt da análise de PR", () => {
     expect(proofRule).toBeLessThan(text.indexOf("Precisa de prova (regras acima)"));
   });
 
+  it("a correção de cada achado e a reconferência avisam o painel pela vibehub_analysis_step, com o card certo", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    const text = analysisPrompt(input);
+    expect(text).toContain('vibehub_analysis_step com card: "card-9", kind: "fixing" e findingId');
+    expect(text).toContain('kind: "fixed", findingId e commit');
+    expect(text).toContain('vibehub_analysis_step com card: "card-9", kind: "recheck"');
+  });
+
+  it("correção entregue depois do done grava o done de novo, para o selo acompanhar", async () => {
+    const { analysisPrompt } = await import("./prompts.js");
+    expect(analysisPrompt(input)).toContain("toda correção entregue depois do done (CI vermelho, reconferência) grava o done de novo");
+  });
+
   it("parte do código atual da PR e lê as regras do repositório antes de julgar", async () => {
     const { analysisPrompt } = await import("./prompts.js");
     const text = analysisPrompt(input);

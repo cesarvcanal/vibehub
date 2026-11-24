@@ -687,6 +687,8 @@ export function analysisPrompt(a: AnalysisInput): string {
       "atômico por achado. Em bug, escreva antes o teste que reproduz a falha, veja falhar pelo motivo certo, corrija e " +
       "veja passar. question: não pergunte agora e não mexa; ela fica para o passo 10, porque a pergunta para o turno " +
       "até a pessoa responder e os bloqueantes ficariam parados esperando. suggestion: só no resumo.",
+    `   O painel mostra a correção ao vivo: antes de mexer em cada achado, chame vibehub_analysis_step com ${reportTarget}, ` +
+      'kind: "fixing" e findingId; logo depois do commit dele, a mesma ferramenta com kind: "fixed", findingId e commit (o sha).',
     "   Durante a correção, rode só o teste do achado, filtrado pelo caso (-t \"<caso>\"); antes da entrega (passo 7), " +
       "uma rodada só dos testes dos arquivos que você mexeu e o typecheck do pacote tocado, nunca a suíte inteira (ela é " +
       "do CI). Corrija o que falhar e rode só o que falhou: não rode de novo o teste que já passou sem que o código dele mudasse.",
@@ -695,7 +697,8 @@ export function analysisPrompt(a: AnalysisInput): string {
       "dois casos, se o done já foi gravado, grave de novo o relatório done (passo 8).",
     ...(a.coauthorTrailer ? [`   Em cada commit, termine a mensagem com esta linha (o crédito do coautor no Git): ${a.coauthorTrailer}`] : []),
     "6. Reconferência: dispare UM subagente novo, sem o seu contexto, para revisar só git diff <sha analisado>..HEAD, " +
-      "procurando bug que a própria correção criou. Achado com prova: corrija do mesmo jeito (uma volta a mais, só uma).",
+      "procurando bug que a própria correção criou. Achado com prova: corrija do mesmo jeito (uma volta a mais, só uma). " +
+      `Ao fim, chame vibehub_analysis_step com ${reportTarget}, kind: "recheck" e outcome: "clean", ou "found" com a note do que achou.`,
     `7. Entregue as correções: chame vibehub_deliver com card = "${a.cardId}" e branch = "${a.base}", sem title nem body ` +
       "(a descrição do PR é do autor) e sem authorized (você não mergeia por conta própria). Os commits vão para a branch da PR. " +
       // Never the step-1 reset here: it would drop the fix commits that have not gone up yet.
@@ -707,7 +710,8 @@ export function analysisPrompt(a: AnalysisInput): string {
     `8. Chame vibehub_analysis_report de novo, com stage: "done": o mesmo headSha do passo 1 (não o das correções), ` +
       "as mesmas dimensions do passo 3, inclusive o unverifiedCount, e os mesmos findings, cada um com status " +
       "\"fixed\" e o commit, \"decided\" com a decision (question que a pessoa já respondeu sem pedir mudança) ou " +
-      "\"open\" (question ainda sem resposta, suggestion e o que não corrigiu, com o motivo no summary).",
+      "\"open\" (question ainda sem resposta, suggestion e o que não corrigiu, com o motivo no summary). O selo do painel " +
+      "sai do último done: toda correção entregue depois do done (CI vermelho, reconferência) grava o done de novo, com os status novos.",
     "9. Publique tudo numa única revisão COMMENT da PR, na sua conta: grave fora do repositório um review.json com " +
       '{ "commit_id": "<o head entregue>", "event": "COMMENT", "body": "<resumo>", "comments": [{ "path", "line", ' +
       '"side": "RIGHT", "body" }] } e rode ' +

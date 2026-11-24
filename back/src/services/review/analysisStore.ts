@@ -1,22 +1,24 @@
 import { JsonStore } from "../../store/jsonStore.js";
 import { dataPath } from "../../config/env.js";
-import type { AnalysisMergeGate, AnalysisMergeRefusal, AnalysisReport } from "./analysisModel.js";
+import type { AnalysisMergeGate, AnalysisMergeRefusal, AnalysisReport, AnalysisTimelineEntry } from "./analysisModel.js";
 
 interface AnalysesDoc {
   analyses: AnalysisReport[];
   mergeRefusals: AnalysisMergeRefusal[];
   mergeGates: AnalysisMergeGate[];
+  timeline: AnalysisTimelineEntry[];
 }
 
 const store = new JsonStore<AnalysesDoc>(
   dataPath("analyses.json"),
-  () => ({ analyses: [], mergeRefusals: [], mergeGates: [] }),
+  () => ({ analyses: [], mergeRefusals: [], mergeGates: [], timeline: [] }),
   (raw) => {
     const doc = (raw ?? {}) as Partial<AnalysesDoc>;
     return {
       analyses: Array.isArray(doc.analyses) ? doc.analyses : [],
       mergeRefusals: Array.isArray(doc.mergeRefusals) ? doc.mergeRefusals : [],
       mergeGates: Array.isArray(doc.mergeGates) ? doc.mergeGates : [],
+      timeline: Array.isArray(doc.timeline) ? doc.timeline : [],
     };
   },
 );
@@ -29,11 +31,40 @@ export async function getAnalysis(cardId: string): Promise<AnalysisReport | unde
 export async function saveAnalysis(
   report: AnalysisReport,
   assertCanReplace: (saved: AnalysisReport | undefined) => void,
+  timelineEntry: AnalysisTimelineEntry,
 ): Promise<void> {
   await store.mutate((doc) => {
     assertCanReplace(doc.analyses.find((analysis) => analysis.cardId === report.cardId));
     const otherCardsAnalyses = doc.analyses.filter((analysis) => analysis.cardId !== report.cardId);
     doc.analyses = [...otherCardsAnalyses, structuredClone(report)];
+    appendUnlessRepeated(doc, timelineEntry);
+  });
+}
+
+function withoutInstant({ at: _at, ...event }: AnalysisTimelineEntry): string {
+  return JSON.stringify(event);
+}
+
+function appendUnlessRepeated(doc: AnalysesDoc, entry: AnalysisTimelineEntry): void {
+  const lastOfCard = doc.timeline.findLast((saved) => saved.cardId === entry.cardId);
+  if (lastOfCard && withoutInstant(lastOfCard) === withoutInstant(entry)) return;
+  doc.timeline.push(structuredClone(entry));
+}
+
+export async function listAnalysisTimeline(cardId: string): Promise<AnalysisTimelineEntry[]> {
+  return structuredClone((await store.load()).timeline.filter((entry) => entry.cardId === cardId));
+}
+
+export async function appendAnalysisTimeline<Entry extends AnalysisTimelineEntry | undefined>(
+  cardId: string,
+  repeated: "skipRepeated" | "keepRepeated",
+  buildEntry: (saved: AnalysisReport | undefined) => Entry,
+): Promise<Entry> {
+  return await store.mutate((doc) => {
+    const entry = buildEntry(doc.analyses.find((analysis) => analysis.cardId === cardId));
+    if (entry && repeated === "skipRepeated") appendUnlessRepeated(doc, entry);
+    if (entry && repeated === "keepRepeated") doc.timeline.push(structuredClone(entry));
+    return entry;
   });
 }
 

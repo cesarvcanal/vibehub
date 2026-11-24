@@ -1,15 +1,15 @@
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { boardApi } from "@/features/board/api";
-import { cardAnalysisKey, isAnalysisReportTool } from "@/features/board/lib/analysis";
+import { cardAnalysisKey, isAnalysisRereadTool } from "@/features/board/lib/analysis";
 import type { SdkChatState } from "@/features/board/lib/sdkChat";
 
-export function useAnalysisRereadOnReport(
+export function useAnalysisRereadOnLiveTool(
   cardId: string, liveToolResult: SdkChatState["lastLiveToolResult"], opts: { enabled: boolean },
 ): void {
   const queryClient = useQueryClient();
   React.useEffect(() => {
-    if (!opts.enabled || !liveToolResult || !isAnalysisReportTool(liveToolResult.name)) return;
+    if (!opts.enabled || !liveToolResult || !isAnalysisRereadTool(liveToolResult.name)) return;
     void queryClient.invalidateQueries({ queryKey: cardAnalysisKey(cardId) });
   }, [queryClient, cardId, opts.enabled, liveToolResult]);
 }

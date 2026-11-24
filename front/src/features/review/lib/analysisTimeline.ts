@@ -1,0 +1,59 @@
+import type { AnalysisFinding, AnalysisReport, AnalysisStage, AnalysisTimelineEntry } from "@/api/types";
+import type { CardStateKind } from "@/features/board/lib/board";
+import type { AnalysisTimelineRow } from "@/features/review/types/analysisTimeline";
+
+const SHORT_SHA_LENGTH = 7;
+
+type RowText = Pick<AnalysisTimelineRow, "textKey" | "vars" | "detail">;
+
+function rowText(entry: AnalysisTimelineEntry, findingTitle: (findingId: string) => string): RowText {
+  switch (entry.kind) {
+    case "fixing":
+      return { textKey: "analysis.timeline.fixing", vars: { id: entry.findingId, title: findingTitle(entry.findingId) } };
+    case "fixed":
+      return {
+        textKey: "analysis.timeline.fixed",
+        vars: { id: entry.findingId, title: findingTitle(entry.findingId), commit: entry.commit.slice(0, SHORT_SHA_LENGTH) },
+      };
+    case "recheck":
+      return entry.outcome === "clean"
+        ? { textKey: "analysis.timeline.recheckClean", vars: {} }
+        : { textKey: "analysis.timeline.recheckFound", vars: {}, ...(entry.note ? { detail: entry.note } : {}) };
+    case "delivered":
+      return { textKey: `analysis.timeline.delivered.${entry.reason}`, vars: {}, ...(entry.output ? { detail: entry.output } : {}) };
+    case "report":
+      return entry.stage === "done"
+        ? { textKey: "analysis.timeline.done", vars: { fixed: entry.fixed, decided: entry.decided, open: entry.open } }
+        : { textKey: `analysis.timeline.report.${entry.stage}`, vars: { n: entry.open } };
+  }
+}
+
+function needsAttention(entry: AnalysisTimelineEntry): boolean {
+  if (entry.kind === "delivered") return entry.stopped;
+  return entry.kind === "recheck" && entry.outcome === "found";
+}
+
+export function analysisTimelineRows(
+  entries: AnalysisTimelineEntry[], findings: AnalysisFinding[], opts: { cardWorking: boolean },
+): AnalysisTimelineRow[] {
+  const titleById = new Map(findings.map((finding) => [finding.id, finding.title]));
+  const findingTitle = (findingId: string) => titleById.get(findingId) ?? "";
+  const lastIndex = entries.length - 1;
+  const fixingIsTheLatestStep = entries[lastIndex]?.kind === "fixing";
+  const currentIndex = opts.cardWorking && fixingIsTheLatestStep ? lastIndex : -1;
+  return entries.map((entry, index) => ({
+    id: `${entry.at}-${index}`, at: entry.at, kind: entry.kind, current: index === currentIndex, needsAttention: needsAttention(entry),
+    ...rowText(entry, findingTitle),
+  }));
+}
+
+export function fixingNotStartedYet(entries: AnalysisTimelineEntry[], stage: AnalysisStage): boolean {
+  return stage === "analysed" && entries.every((entry) => entry.kind === "report");
+}
+
+export function questionsWaitingForPerson(
+  report: Pick<AnalysisReport, "stage" | "findings">, cardState: CardStateKind | undefined,
+): AnalysisFinding[] {
+  if (report.stage !== "done" || cardState !== "needs_me") return [];
+  return report.findings.filter((finding) => finding.severity === "question" && finding.status === "open");
+}

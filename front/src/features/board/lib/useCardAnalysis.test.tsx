@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { describe, it, expect, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useAnalysisRereadOnReport } from "./useCardAnalysis";
+import { useAnalysisRereadOnLiveTool } from "./useCardAnalysis";
 import type { SdkChatState } from "./sdkChat";
 
 type LiveToolResult = SdkChatState["lastLiveToolResult"];
@@ -14,7 +14,7 @@ function renderReread(enabled: boolean) {
   const invalidate = vi.spyOn(queryClient, "invalidateQueries");
   const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
   const hook = renderHook<void, { liveToolResult: LiveToolResult }>(
-    ({ liveToolResult }) => useAnalysisRereadOnReport("c1", liveToolResult, { enabled }),
+    ({ liveToolResult }) => useAnalysisRereadOnLiveTool("c1", liveToolResult, { enabled }),
     { wrapper, initialProps: { liveToolResult: undefined } },
   );
   const analysisRereads = () => invalidate.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["card-analysis","c1"]').length;
@@ -41,6 +41,15 @@ describe("releitura da análise pelo resultado ao vivo da ferramenta de relatór
     hook.rerender({ liveToolResult: { name: REPORT_TOOL } });
     expect(analysisRereads()).toBe(2);
   });
+
+  it.each(["mcp__vibehub__vibehub_analysis_step", "mcp__vibehub__vibehub_deliver"])(
+    "o resultado ao vivo da %s relê a análise, para a linha do tempo da correção chegar na hora",
+    (toolName) => {
+      const { hook, analysisRereads } = renderReread(true);
+      hook.rerender({ liveToolResult: { name: toolName } });
+      expect(analysisRereads()).toBe(1);
+    },
+  );
 
   it("o resultado ao vivo de outra ferramenta não relê", () => {
     const { hook, analysisRereads } = renderReread(true);

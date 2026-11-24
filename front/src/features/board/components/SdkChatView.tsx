@@ -42,7 +42,7 @@ import { PlanUsageAlert, cardRateLimitsKey, useCardPlanUsage } from "@/features/
 import { AccountLoginDialog, type LoginAccount } from "@/features/board/components/AccountLoginDialog";
 import { ContextMeter } from "@/features/board/components/ContextMeter";
 import { planAlert, planWindows } from "@/features/board/lib/planUsage";
-import { useAnalysisRereadOnReport } from "@/features/board/lib/useCardAnalysis";
+import { useAnalysisRereadOnLiveTool } from "@/features/board/lib/useCardAnalysis";
 import { LinkifiedText, Markdown, SenderTag } from "@/features/board/components/ChatView";
 import { SdkQueueTray } from "@/features/board/components/SdkQueueTray";
 import { originRole, personOrigin, type MessageOrigin } from "@/features/board/lib/chat";
@@ -652,7 +652,7 @@ export function SdkChatView({
   React.useEffect(() => {
     queryClient.setQueryData(cardRateLimitsKey(cardId), state.rateLimits);
   }, [queryClient, cardId, state.rateLimits]);
-  useAnalysisRereadOnReport(cardId, state.lastLiveToolResult, { enabled: analysisCard });
+  useAnalysisRereadOnLiveTool(cardId, state.lastLiveToolResult, { enabled: analysisCard });
   const plan = useCardPlanUsage(cardId, active);
   // The chat redraws on every socket frame; the "renova em" countdown moves along, with no clock of its own.
   const alertNow = Date.now();

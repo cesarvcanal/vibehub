@@ -4,6 +4,7 @@ import { deliver, parsePrUrl, type DeliverOpts, type DeliverResult } from "../ma
 import { logger } from "../../utils/logger.js";
 import { canMergeReview, cardsToConclude, isReviewClosed, type Review } from "./model.js";
 import { deliverOwnAnalysis } from "./analysisMerge.js";
+import { recordAnalysisDelivery } from "./analysisTimeline.js";
 import { mergeReviewedPr, type ReviewMergeOutcome } from "./merge.js";
 import { concludeMergedCard, MERGE_QUEUED_OUTPUT, saveOrderFromDelivery } from "./mergeOrder.js";
 import { recordReviewOrders } from "./orchestrator.js";
@@ -34,13 +35,23 @@ import { activeReviewFor, getReview, reviewByReviewerCard } from "./store.js";
 export async function deliverCard(
   cardId: string, opts: DeliverCardOpts,
 ): Promise<DeliverResult> {
-  const { result, concludeRecorded } = await deliverUnderReview(cardId, opts);
+  const { result: deliveredResult, concludeRecorded } = await deliverUnderReview(cardId, opts);
+  const card = await getCard(cardId);
+  const result = card?.pushBranch === undefined ? deliveredResult : await recordDeliveryOnAnalysisTimeline(cardId, deliveredResult);
   const ownOrder = opts.authorized === true && opts.from === cardId;
-  const card = ownOrder ? await getCard(cardId) : undefined;
-  if (card) await saveOrderFromDelivery(card, result, opts.by);
+  if (card && ownOrder) await saveOrderFromDelivery(card, result, opts.by);
   if (result.reason === "merge_queued") return withOutput(result, MERGE_QUEUED_OUTPUT);
   if (result.merged && ownOrder) return withOutput(result, await concludeMergedCard(cardId));
   return opts.concludeWhenMerged && !concludeRecorded ? withOutput(result, CONCLUDE_NOT_RECORDED) : result;
+}
+
+async function recordDeliveryOnAnalysisTimeline(cardId: string, result: DeliverResult): Promise<DeliverResult> {
+  try {
+    await recordAnalysisDelivery(cardId, result);
+    return result;
+  } catch (err) {
+    return withOutput(result, `A linha do tempo da análise não registrou esta entrega: ${(err as Error).message}`);
+  }
 }
 
 type DeliverCardOpts = Pick<DeliverOpts, "branch" | "authorized" | "docs"> & {
