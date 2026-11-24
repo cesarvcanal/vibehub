@@ -385,7 +385,9 @@ review, 403 for a caller outside the roles listed.
 ## Platform failures
 
 A failure or inconsistency of vibehub ITSELF, reported by a card's agent
-(`vibehub_report_platform_failure`) or by the screen, waiting for the owner to approve a fix.
+(`vibehub_report_platform_failure`) or by the screen, waiting for the owner to approve a fix. The
+investigation card records its conclusion on the failure (`vibehub_failure_investigation_report`), and
+`investigationReport` comes in the failure.
 
 | Method | Path | Body / notes |
 |---|---|---|
@@ -424,6 +426,7 @@ those files is the full contract. "Own card" = the caller passes its `$VIBEHUB_C
 | `vibehub_brain_learn` | own card — appends a dated learning under `## Aprendizados` of the project's brain; append-only, deduplicated |
 | `vibehub_preview` | own card — registers a server listening in the runner as a preview chip and returns its `/preview/<port>/` path; refuses a port not listening or a page that cannot be opened |
 | `vibehub_report_platform_failure` | reports a failure or inconsistency of vibehub itself (see "Platform failures") |
+| `vibehub_failure_investigation_report` | own card — the investigation card records its conclusion on the failure it investigates (verdict, how it happened, cause, what fixes it, a decision left to the owner), shown in the failures panel; refused for a card investigating nothing |
 | **Shipping** | |
 | `vibehub_deliver` | push, PR (documented, see "Documented pull requests"), the PR's GitHub CI as the gate (a PR without CI is refused with `no_ci`, never merged), and a merge commit only with `authorized: true` → `{ prUrl, merged, reason }` |
 | `vibehub_act_as` | makes the card's git and gh act as another participant of the card, until the next person's message |

@@ -44,6 +44,28 @@ describe("brief do card de investigação", () => {
     expect(buildInvestigationBrief(FAILURE)).not.toContain("Explicação automática");
   });
 
+  it("manda gravar a conclusão para o painel antes de concluir o card, com ou sem PR", () => {
+    const lines = buildInvestigationBrief(FAILURE).split("\n");
+    const notABugStep = lines.find((line) => line.startsWith("1.")) ?? "";
+    const mergeStep = lines.find((line) => line.startsWith("4.")) ?? "";
+    expect(notABugStep).toContain("vibehub_failure_investigation_report");
+    expect(mergeStep).toContain("vibehub_failure_investigation_report");
+  });
+
+  it("investigada de novo, leva a conclusão anterior para o card não repetir o mesmo caminho", () => {
+    const brief = buildInvestigationBrief({
+      ...FAILURE,
+      previousInvestigationReport: {
+        verdict: "not_a_bug", conclusion: "conclusao-x", howItHappened: "como-x", cause: "causa-x", resolution: "resolve-x",
+        pendingDecision: "decisao-x", reportedAt: 0,
+      },
+    });
+    for (const expectedPart of ["Investigação anterior", "not_a_bug", "conclusao-x", "como-x", "causa-x", "resolve-x", "decisao-x"]) {
+      expect(brief).toContain(expectedPart);
+    }
+    expect(buildInvestigationBrief(FAILURE)).not.toContain("Investigação anterior");
+  });
+
   it("erro de tela avisa que sintoma e evidência vieram do navegador de um usuário", () => {
     const screenBrief = buildInvestigationBrief({ ...FAILURE, source: "screen_error", component: "front" });
     expect(screenBrief).toContain("vieram do navegador de um usuário");

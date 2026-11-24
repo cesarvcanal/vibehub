@@ -252,6 +252,19 @@ export interface FailureNarrative {
 export const FAILURE_NARRATIVE_UNAVAILABLE_REASONS = ["no_api_key", "request_failed"] as const;
 export type FailureNarrativeUnavailableReason = (typeof FAILURE_NARRATIVE_UNAVAILABLE_REASONS)[number];
 
+export const INVESTIGATION_VERDICTS = ["vibehub_bug", "not_a_bug", "inconclusive"] as const;
+export type InvestigationVerdict = (typeof INVESTIGATION_VERDICTS)[number];
+
+export interface FailureInvestigationReport {
+  verdict: InvestigationVerdict;
+  conclusion: string;
+  howItHappened: string;
+  cause: string;
+  resolution: string;
+  pendingDecision?: string;
+  reportedAt: number;
+}
+
 export interface PlatformFailure {
   id: string;
   signature: string;
@@ -273,6 +286,8 @@ export interface PlatformFailure {
   dismissedAt?: number;
   narrative?: FailureNarrative;
   narrativeUnavailable?: FailureNarrativeUnavailableReason;
+  investigationReport?: FailureInvestigationReport;
+  previousInvestigationReport?: FailureInvestigationReport;
 }
 
 export interface PlatformFailureNotice {
@@ -283,7 +298,7 @@ export interface PlatformFailureNotice {
   occurrences: number;
   firstSeenAt: number;
   lastSeenAt: number;
-  details?: Pick<PlatformFailure, "symptom" | "component" | "evidence" | "reproduction" | "hypothesis" | "narrative" | "narrativeUnavailable">;
+  details?: Pick<PlatformFailure, "symptom" | "component" | "evidence" | "reproduction" | "hypothesis" | "narrative" | "narrativeUnavailable" | "investigationReport" | "previousInvestigationReport">;
 }
 
 export interface PlatformFailureInvestigation {

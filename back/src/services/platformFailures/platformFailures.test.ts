@@ -19,6 +19,15 @@ function backendReport(symptom: string, cardId?: string): PlatformFailureReport 
   return { source: "backend_error", component: "services/sdk/manager", symptom, evidence: `mensagem: ${symptom}`, ...(cardId ? { cardId } : {}) };
 }
 
+const INVESTIGATION_REPORT = { verdict: "not_a_bug" as const, conclusion: "c", howItHappened: "h", cause: "x", resolution: "r" };
+
+async function startInvestigation(failures: Awaited<ReturnType<typeof fresh>>, investigationCardId: string): Promise<string> {
+  const recorded = await failures.recordPlatformFailure(backendReport("driver gone"));
+  await failures.claimPlatformFailureInvestigation(recorded!.id);
+  await failures.setPlatformFailureInvestigationCard(recorded!.id, investigationCardId);
+  return recorded!.id;
+}
+
 describe("registro de falhas da plataforma", () => {
   it("não registra nada enquanto o projeto do vibehub não está configurado", async () => {
     const failures = await fresh({ configured: false });
@@ -101,6 +110,64 @@ describe("registro de falhas da plataforma", () => {
     await failures.setPlatformFailureInvestigationCard(recorded!.id, "fix-card");
     expect(await failures.settlePlatformFailureInvestigation("fix-card", { merged: false }))
       .toMatchObject({ status: "concluded_without_fix", investigationCardId: "fix-card" });
+  });
+
+  it("a conclusão do card de investigação fica na falha depois que o card termina sem merge", async () => {
+    const failures = await fresh();
+    const failureId = await startInvestigation(failures, "fix-card");
+    const report = {
+      verdict: "not_a_bug" as const,
+      conclusion: "O gate parou a suíte no prazo, como deve.",
+      howItHappened: "O projeto não tem gate próprio e o npm test inteiro passou de 10 min.",
+      cause: "Suíte lenta do projeto.",
+      resolution: "Criar um gate só dos testes afetados no projeto.",
+      pendingDecision: "Tratar o estouro do npm test padrão como vermelho do projeto?",
+    };
+    await failures.saveFailureInvestigationReport("fix-card", report, 5_000);
+    await failures.settlePlatformFailureInvestigation("fix-card", { merged: false });
+    expect(await failures.getPlatformFailure(failureId))
+      .toMatchObject({ status: "concluded_without_fix", investigationReport: { ...report, reportedAt: 5_000 } });
+  });
+
+  it("conclusão de investigação vinda de um card que não investiga falha nenhuma é recusada", async () => {
+    const failures = await fresh();
+    const failureId = await startInvestigation(failures, "fix-card");
+    await expect(failures.saveFailureInvestigationReport("other-card", INVESTIGATION_REPORT)).rejects.toBeInstanceOf(failures.PlatformFailureStateError);
+    expect(await failures.getPlatformFailure(failureId)).not.toHaveProperty("investigationReport");
+  });
+
+  it("investigar de novo tira a conclusão do topo e a guarda como investigação anterior", async () => {
+    const failures = await fresh();
+    const failureId = await startInvestigation(failures, "card-a");
+    await failures.saveFailureInvestigationReport("card-a", INVESTIGATION_REPORT, 5_000);
+    await failures.settlePlatformFailureInvestigation("card-a", { merged: false });
+    const reclaimed = await failures.claimPlatformFailureInvestigation(failureId);
+    expect(reclaimed.failure).not.toHaveProperty("investigationReport");
+    expect(reclaimed.failure.previousInvestigationReport).toMatchObject({ ...INVESTIGATION_REPORT, reportedAt: 5_000 });
+  });
+
+  it("o card novo que termina sem gravar conclusão não herda a conclusão do card anterior", async () => {
+    const failures = await fresh();
+    const failureId = await startInvestigation(failures, "card-a");
+    await failures.saveFailureInvestigationReport("card-a", INVESTIGATION_REPORT);
+    await failures.settlePlatformFailureInvestigation("card-a", { merged: false });
+    await failures.claimPlatformFailureInvestigation(failureId);
+    await failures.setPlatformFailureInvestigationCard(failureId, "card-b");
+    await failures.settlePlatformFailureInvestigation("card-b", { merged: false });
+    const failure = await failures.getPlatformFailure(failureId);
+    expect(failure).not.toHaveProperty("investigationReport");
+    expect(failure.previousInvestigationReport?.conclusion).toBe(INVESTIGATION_REPORT.conclusion);
+  });
+
+  it("se o card novo não chega a receber o pedido, a conclusão anterior volta a ser a atual", async () => {
+    const failures = await fresh();
+    const failureId = await startInvestigation(failures, "card-a");
+    await failures.saveFailureInvestigationReport("card-a", INVESTIGATION_REPORT);
+    await failures.settlePlatformFailureInvestigation("card-a", { merged: false });
+    const { statusBeforeClaim } = await failures.claimPlatformFailureInvestigation(failureId);
+    const released = await failures.releasePlatformFailureInvestigation(failureId, statusBeforeClaim);
+    expect(released).toMatchObject({ status: "concluded_without_fix", investigationReport: { conclusion: INVESTIGATION_REPORT.conclusion } });
+    expect(released).not.toHaveProperty("previousInvestigationReport");
   });
 
   it("acima do teto de falhas ativas, uma falha nova é descartada e uma conhecida ainda soma", async () => {
@@ -210,6 +277,15 @@ describe("sinal de mudança de falha", () => {
     await failures.settlePlatformFailureInvestigation("fix-card", { merged: true });
     expect(heard).toEqual(["investigating", "open", "investigating", "resolved"].map((status) => expect.objectContaining({ status })));
     expect(heard.some((change) => change.newForCardId)).toBe(false);
+  });
+
+  it("a conclusão da investigação é anunciada, para o aviso nos cards afetados atualizar sem recarregar", async () => {
+    const failures = await fresh();
+    await startInvestigation(failures, "fix-card");
+    const heardVerdicts: (string | undefined)[] = [];
+    onTestFinished(failures.onPlatformFailureChange(({ failure }) => heardVerdicts.push(failure.investigationReport?.verdict)));
+    await failures.saveFailureInvestigationReport("fix-card", { ...INVESTIGATION_REPORT, verdict: "vibehub_bug" });
+    expect(heardVerdicts).toEqual(["vibehub_bug"]);
   });
 
   it("descarte é anunciado", async () => {

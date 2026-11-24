@@ -10,7 +10,8 @@ async function connect({ configured = true } = {}) {
   vi.resetModules();
   const dataDir = await mkdtemp(join(tmpdir(), "vibehub-platform-tools-"));
   onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
-  vi.doMock("../services/board/registry.js", () => ({
+  vi.doMock("../services/board/registry.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../services/board/registry.js")>()),
     getCard: vi.fn(async (id: string) => (id === "card-1" ? { id, projectId: "p-erp" } : undefined)),
   }));
   const env = await import("../config/env.js");
@@ -23,8 +24,8 @@ async function connect({ configured = true } = {}) {
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "agent", version: "1" });
   await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
-  const call = async (args: Record<string, unknown>) => {
-    const response = await client.callTool({ name: "vibehub_report_platform_failure", arguments: args });
+  const callTool = async (name: string, args: Record<string, unknown>) => {
+    const response = await client.callTool({ name, arguments: args });
     const text = (response.content as { type: string; text: string }[])[0]!.text;
     const parsed = (() => {
       try {
@@ -35,7 +36,8 @@ async function connect({ configured = true } = {}) {
     })();
     return { isError: response.isError === true, json: parsed };
   };
-  return { client, call, failures };
+  const call = (args: Record<string, unknown>) => callTool("vibehub_report_platform_failure", args);
+  return { client, call, callTool, failures };
 }
 
 const REPORT = {
@@ -137,5 +139,52 @@ describe("vibehub_report_platform_failure", () => {
       await call({ ...REPORT, component: `part-${String.fromCharCode(97 + (index % 26))}${Math.floor(index / 26)}` });
     }
     expect((await call({ ...REPORT, component: "brand-new" })).json).toEqual({ recorded: false, reason: "cap" });
+  });
+});
+
+const INVESTIGATION_REPORT = {
+  card: "investigation-card", verdict: "not_a_bug",
+  conclusion: "O gate parou a suíte no prazo, como deve.",
+  howItHappened: "O projeto não tem gate próprio e o npm test inteiro passou de 10 min.",
+  cause: "Suíte lenta do projeto.",
+  resolution: "Criar um gate só dos testes afetados no projeto.",
+};
+
+describe("vibehub_failure_investigation_report", () => {
+  async function connectInvestigating() {
+    const connection = await connect();
+    const recorded = await connection.failures.recordPlatformFailure({
+      source: "backend_error", component: "backend", symptom: "gate timed out", evidence: "mensagem: gate timed out",
+    });
+    await connection.failures.claimPlatformFailureInvestigation(recorded!.id);
+    await connection.failures.setPlatformFailureInvestigationCard(recorded!.id, "investigation-card");
+    return { ...connection, failureId: recorded!.id };
+  }
+
+  it("grava a conclusão na falha que o card investiga", async () => {
+    const { callTool, failures, failureId } = await connectInvestigating();
+    const answer = await callTool("vibehub_failure_investigation_report", { ...INVESTIGATION_REPORT, pendingDecision: "Tratar como vermelho do projeto?" });
+    expect(answer.json).toMatchObject({ id: failureId, investigationReport: { verdict: "not_a_bug" } });
+    const { card: _card, ...reportFields } = INVESTIGATION_REPORT;
+    expect((await failures.getPlatformFailure(failureId)).investigationReport).toMatchObject({
+      ...reportFields, pendingDecision: "Tratar como vermelho do projeto?",
+    });
+  });
+
+  it("card que não investiga falha nenhuma é recusado dizendo o motivo", async () => {
+    const { callTool } = await connectInvestigating();
+    expect((await callTool("vibehub_failure_investigation_report", { ...INVESTIGATION_REPORT, card: "card-1" })).json.error)
+      .toMatch(/not investigating/);
+  });
+
+  it("veredito desconhecido é recusado no schema", async () => {
+    const { callTool } = await connectInvestigating();
+    expect((await callTool("vibehub_failure_investigation_report", { ...INVESTIGATION_REPORT, verdict: "talvez" })).isError).toBe(true);
+  });
+
+  it("mascara token que o agente pôs no texto da conclusão", async () => {
+    const { callTool, failures, failureId } = await connectInvestigating();
+    await callTool("vibehub_failure_investigation_report", { ...INVESTIGATION_REPORT, cause: `token ghp_${"C".repeat(36)} vazou` });
+    expect((await failures.getPlatformFailure(failureId)).investigationReport?.cause).not.toContain("C".repeat(36));
   });
 });

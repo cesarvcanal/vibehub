@@ -6,7 +6,7 @@ import { getSettings } from "../settings/settings.js";
 import { PLATFORM_FAILURE_LOG_MARK } from "./backendError.js";
 import { buildFailureSignature } from "./signature.js";
 import type {
-  FailureNarrative, FailureNarrativeUnavailableReason, PlatformFailure, PlatformFailureReport, PlatformFailureSource, PlatformFailureStatus,
+  FailureInvestigationReportInput, FailureNarrative, FailureNarrativeUnavailableReason, PlatformFailure, PlatformFailureReport, PlatformFailureSource, PlatformFailureStatus,
 } from "./types.js";
 
 export const ACTIVE_FAILURES_CAP = 50;
@@ -43,6 +43,10 @@ function findFailureIn(doc: PlatformFailuresDoc, id: string): PlatformFailure {
   const failure = doc.failures.find((candidate) => candidate.id === id);
   if (!failure) throw new PlatformFailureNotFoundError(`platform failure ${id} not found`);
   return failure;
+}
+
+function findFailureInvestigatedBy(doc: PlatformFailuresDoc, cardId: string): PlatformFailure | undefined {
+  return doc.failures.find((candidate) => candidate.status === "investigating" && candidate.investigationCardId === cardId);
 }
 
 function noteAffectedCard(failure: PlatformFailure, cardId: string | undefined): void {
@@ -192,6 +196,10 @@ export async function claimPlatformFailureInvestigation(id: string): Promise<Inv
       throw new PlatformFailureStateError(`platform failure ${id} is ${statusBeforeClaim} and cannot be investigated`);
     }
     failure.status = "investigating";
+    if (failure.investigationReport) {
+      failure.previousInvestigationReport = failure.investigationReport;
+      delete failure.investigationReport;
+    }
     return { failure: { ...failure }, statusBeforeClaim };
   });
   if (claim.statusBeforeClaim !== "investigating") announceFailureChange({ failure: claim.failure });
@@ -202,6 +210,10 @@ export async function releasePlatformFailureInvestigation(id: string, statusBefo
   const releasedFailure = await store.mutate((doc) => {
     const failure = findFailureIn(doc, id);
     failure.status = statusBeforeClaim === "concluded_without_fix" ? "concluded_without_fix" : "open";
+    if (statusBeforeClaim !== "investigating" && failure.previousInvestigationReport && !failure.investigationReport) {
+      failure.investigationReport = failure.previousInvestigationReport;
+      delete failure.previousInvestigationReport;
+    }
     return { ...failure };
   });
   announceFailureChange({ failure: releasedFailure });
@@ -216,9 +228,22 @@ export async function setPlatformFailureInvestigationCard(id: string, cardId: st
   });
 }
 
+export async function saveFailureInvestigationReport(
+  cardId: string, report: FailureInvestigationReportInput, now: number = Date.now(),
+): Promise<PlatformFailure> {
+  const reportedFailure = await store.mutate((doc) => {
+    const failure = findFailureInvestigatedBy(doc, cardId);
+    if (!failure) throw new PlatformFailureStateError(`card ${cardId} is not investigating any platform failure`);
+    failure.investigationReport = { ...report, reportedAt: now };
+    return { ...failure };
+  });
+  announceFailureChange({ failure: reportedFailure });
+  return reportedFailure;
+}
+
 export async function settlePlatformFailureInvestigation(cardId: string, outcome: { merged: boolean }, now: number = Date.now()): Promise<PlatformFailure | null> {
   const settledFailure = await store.mutate((doc) => {
-    const failure = doc.failures.find((candidate) => candidate.status === "investigating" && candidate.investigationCardId === cardId);
+    const failure = findFailureInvestigatedBy(doc, cardId);
     if (!failure) return null;
     failure.status = outcome.merged ? "resolved" : "concluded_without_fix";
     if (outcome.merged) failure.resolvedAt = now;
