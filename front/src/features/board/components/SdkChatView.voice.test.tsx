@@ -227,6 +227,26 @@ describe("a voice call inside the card's chat", () => {
     expect(peerNotes()).toHaveLength(1);
   });
 
+  it("o chat diz ao servidor quando a chamada entra no ar, repete depois de um reconnect e avisa quando ela termina", async () => {
+    const { ws } = await openChat();
+    const callFrames = (socket: FakeSocket) =>
+      socket.rawSent.map((raw) => JSON.parse(raw) as { type: string; active?: boolean }).filter((frame) => frame.type === "voice_call");
+    expect(callFrames(ws)).toEqual([]);
+    await startCall();
+    await waitFor(() => expect(callFrames(ws)).toEqual([{ type: "voice_call", active: true }]));
+
+    ws.drop();
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: 5_000 });
+    const again = FakeSocket.instances[1]!;
+    again.accept();
+    again.deliver({ type: "ready" });
+    await waitFor(() => expect(callFrames(again)).toEqual([{ type: "voice_call", active: true }]));
+
+    await userEvent.click(screen.getByTestId("voice-call-end"));
+    act(() => channel().emit({ type: "session.closed", reason: "close_requested" }));
+    await waitFor(() => expect(callFrames(again)).toEqual([{ type: "voice_call", active: true }, { type: "voice_call", active: false }]));
+  });
+
   it("the agent's answers during the call reach the voice as context — only the new ones", async () => {
     const { ws } = await openChat();
     ws.deliver({ type: "assistant_text", text: "resposta antiga" });

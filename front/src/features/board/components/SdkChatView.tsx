@@ -1355,6 +1355,16 @@ export function SdkChatView({
     [announceContext],
   );
   usePeerMessagesForVoice({ live: callLive, rows: state.rows, viewer, announce: announcePeerMessage });
+  const callSignalled = React.useRef(false);
+  React.useEffect(() => {
+    if (!connected) {
+      callSignalled.current = false;
+      return;
+    }
+    if (callLive === callSignalled.current) return;
+    sendFrame({ type: "voice_call", active: callLive });
+    callSignalled.current = callLive;
+  }, [connected, callLive, sendFrame]);
   useVoiceDelegation({
     call,
     rows: state.rows,
