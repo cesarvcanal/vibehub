@@ -84,7 +84,7 @@ export async function findActiveAnalysisCard(cards: Card[], prUrl: string): Prom
   return undefined;
 }
 
-export async function findOpenAnalysisCardPr(cardId: string): Promise<NonNullable<Card["prs"]>[number]> {
+export async function requireOpenAnalysisCardPr(cardId: string): Promise<NonNullable<Card["prs"]>[number]> {
   const card = await getCard(cardId);
   if (!card) throw new Error(`card não encontrado: ${cardId}`);
   const analysedPr = card.pushBranch === undefined ? undefined : card.prs?.[0];
@@ -94,7 +94,7 @@ export async function findOpenAnalysisCardPr(cardId: string): Promise<NonNullabl
 }
 
 export async function recordAnalysisReport(cardId: string, input: AnalysisReportInput): Promise<AnalysisReport> {
-  const analysedPr = await findOpenAnalysisCardPr(cardId);
+  const analysedPr = await requireOpenAnalysisCardPr(cardId);
   const report: AnalysisReport = {
     cardId,
     prUrl: analysedPr.url,

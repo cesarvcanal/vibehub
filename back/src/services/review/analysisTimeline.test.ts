@@ -68,10 +68,10 @@ describe("linha do tempo da correção na análise de PR", () => {
     await expect(timeline.recordAnalysisStep(analysisCard.id, { kind: "recheck", outcome: "clean" })).rejects.toThrow(/analysed/);
   });
 
-  it("passo depois da frota indisponível é recusado", async () => {
+  it("passo depois da frota indisponível é recusado: o card já foi concluído", async () => {
     const { analysisCard, reportService, timeline } = await load();
     await reportService.recordAnalysisReport(analysisCard.id, analysedInput({ stage: "fleet_unavailable", unavailableReason: "sem Workflow", findings: [] }));
-    await expect(timeline.recordAnalysisStep(analysisCard.id, { kind: "recheck", outcome: "clean" })).rejects.toThrow(/concluído|frota/);
+    await expect(timeline.recordAnalysisStep(analysisCard.id, { kind: "recheck", outcome: "clean" })).rejects.toThrow(/concluído/);
   });
 
   it("card de análise concluído recusa passo novo", async () => {

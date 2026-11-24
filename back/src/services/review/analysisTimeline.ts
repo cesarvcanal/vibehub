@@ -1,11 +1,10 @@
 import type { DeliverResult } from "../maestro/deliver.js";
 import type { AnalysisReport, AnalysisStepInput, AnalysisTimelineEntry } from "./analysisModel.js";
-import { findOpenAnalysisCardPr } from "./analysisReport.js";
+import { requireOpenAnalysisCardPr } from "./analysisReport.js";
 import { appendAnalysisTimeline } from "./analysisStore.js";
 
 function assertStepFollowsReport(saved: AnalysisReport | undefined, step: AnalysisStepInput): AnalysisReport {
   if (!saved) throw new Error("grave antes o relatório analysed (passo 3): os passos da correção seguem os achados dele");
-  if (saved.stage === "fleet_unavailable") throw new Error("a frota não rodou neste card: não há correção a registrar, pare");
   if (step.kind === "recheck") return saved;
   const knownIds = saved.findings.map((finding) => finding.id);
   if (!knownIds.includes(step.findingId)) {
@@ -19,7 +18,7 @@ function normalizeStep(step: AnalysisStepInput): AnalysisStepInput {
 }
 
 export async function recordAnalysisStep(cardId: string, step: AnalysisStepInput): Promise<AnalysisTimelineEntry> {
-  await findOpenAnalysisCardPr(cardId);
+  await requireOpenAnalysisCardPr(cardId);
   return await appendAnalysisTimeline(cardId, (saved): AnalysisTimelineEntry => {
     const report = assertStepFollowsReport(saved, step);
     return { ...normalizeStep(step), cardId, analysedSha: report.analysedSha, at: Date.now() };
