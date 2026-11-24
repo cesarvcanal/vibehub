@@ -436,6 +436,7 @@ those files is the full contract. "Own card" = the caller passes its `$VIBEHUB_C
 | `vibehub_review_submit` | reviewer card only — hands back a review round (findings or verdicts) |
 | `vibehub_review_respond` | author card only — answers the reviewer's findings after fixing |
 | `vibehub_analysis_report` | analysis card only — records the analysis report (`fleet_unavailable`, `analysed`, `done`) |
+| `vibehub_analysis_step` | analysis card only — records a fixing step for the panel's timeline (`fixing`, `fixed` with the commit, `recheck`) |
 | **Attachments** | |
 | `vibehub_read_document` | reads a document on the runner (Excel, Word, PowerPoint, OpenDocument, PDF text layer, plain text) as markdown |
 | `vibehub_transcribe_audio` | transcribes an audio or video file on the runner with OpenAI's gpt-transcribe |

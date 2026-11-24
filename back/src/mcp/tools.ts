@@ -17,7 +17,11 @@ import { MAX_ROUNDS, cardsToConclude } from "../services/review/model.js";
 import { attachPrs } from "../services/review/attach.js";
 import { startReviewByAgent } from "../services/review/start.js";
 import { recordAnalysisReport } from "../services/review/analysisReport.js";
-import { ANALYSIS_DIMENSIONS, ANALYSIS_SEVERITIES, ANALYSIS_STAGES, DIMENSION_RUN_STATUSES } from "../services/review/analysisModel.js";
+import {
+  ANALYSIS_DIMENSIONS, ANALYSIS_SEVERITIES, ANALYSIS_STAGES, ANALYSIS_STEP_KINDS, DIMENSION_RUN_STATUSES, RECHECK_OUTCOMES,
+  type AnalysisStepInput,
+} from "../services/review/analysisModel.js";
+import { recordAnalysisStep } from "../services/review/analysisTimeline.js";
 import { ok, fail } from "./toolResult.js";
 import { visibleCards } from "../auth/access.js";
 import { cancelCardWait, createCardWait } from "../services/waits/waits.js";
@@ -153,6 +157,36 @@ export const analysisReportInput = analysisReportFields.superRefine((report, ctx
   if (repeatedIds.length > 0) {
     ctx.addIssue({ code: "custom", path: ["findings"], message: `each finding keeps the fleet's own id, once: repeated ${[...new Set(repeatedIds)].join(", ")}` });
   }
+});
+
+const STEP_WITHOUT_FINDING = "fixing and fixed need the findingId";
+const FIXED_STEP_WITHOUT_COMMIT = "fixed needs the sha of the commit that fixed the finding";
+const RECHECK_WITHOUT_OUTCOME = "recheck needs the outcome: clean or found";
+
+const analysisStepFields = z.object({
+  card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this analysis terminal"),
+  kind: z.enum(ANALYSIS_STEP_KINDS),
+  findingId: z.string().min(1).max(20).optional().describe("fixing/fixed: the finding's id from the analysed report (f1, f2, ...)"),
+  commit: z.string().optional().describe("fixed: the sha of the commit that fixed the finding"),
+  outcome: z.enum(RECHECK_OUTCOMES).optional().describe("recheck: clean, or found (a bug the fix created)"),
+  note: z.string().max(500).optional().describe("recheck: what the recheck found, in one sentence"),
+});
+
+const COMMIT_SHA_RE = /^[0-9a-f]{7,64}$/i;
+
+export const analysisStepInput = analysisStepFields.transform((raw, ctx): { card: string; step: AnalysisStepInput } => {
+  const failWith = (message: string) => {
+    ctx.addIssue({ code: "custom", message });
+    return z.NEVER;
+  };
+  if (raw.kind === "recheck") {
+    if (!raw.outcome) return failWith(RECHECK_WITHOUT_OUTCOME);
+    return { card: raw.card, step: raw.note ? { kind: "recheck", outcome: raw.outcome, note: raw.note } : { kind: "recheck", outcome: raw.outcome } };
+  }
+  if (!raw.findingId) return failWith(STEP_WITHOUT_FINDING);
+  if (raw.kind === "fixing") return { card: raw.card, step: { kind: "fixing", findingId: raw.findingId } };
+  if (!raw.commit || !COMMIT_SHA_RE.test(raw.commit)) return failWith(FIXED_STEP_WITHOUT_COMMIT);
+  return { card: raw.card, step: { kind: "fixed", findingId: raw.findingId, commit: raw.commit } };
 });
 
 async function personBehind(fromCardId: string): Promise<PublicUser> {
@@ -744,7 +778,8 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "only when the Workflow could not run and nothing was recorded yet; `analysed` ONCE, right after the fleet's " +
         "judgment; `done` at the end with the SAME headSha, dimensions and findings as `analysed` (same severity and " +
         "dimension), changing only each finding's status (fixed + commit, decided + decision (a question the person " +
-        "answered without asking for a change), or open); after the person answers, `done` may be sent again. Out of " +
+        "answered without asking for a change), or open); after the person answers, or after any fix delivered later, " +
+        "`done` is sent again. Out of " +
         "order or a rewritten fleet " +
         "result is refused. Returns the stored report, or { error } saying what to fix.",
       inputSchema: analysisReportFields.shape,
@@ -753,6 +788,28 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
       try {
         const { card, ...report } = analysisReportInput.parse(a);
         return ok(await recordAnalysisReport(card, report));
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_analysis_step",
+    {
+      description:
+        "PR ANALYSIS, while fixing: tell the vibehub panel which step you are on, so whoever follows the card sees the " +
+        "fix happening. Only the analysis card calls it (`card` = YOUR OWN $VIBEHUB_CARD_ID), after the `analysed` " +
+        "report. `fixing` + findingId right before working on a finding; `fixed` + findingId + commit right after its " +
+        "commit; `recheck` + outcome (clean or found, with a note) after the recheck subagent. The deliver and the " +
+        "reports enter the panel by themselves. An unknown findingId or a step before `analysed` is refused. Returns " +
+        "the recorded step, or { error } saying what to fix.",
+      inputSchema: analysisStepFields.shape,
+    },
+    async (a) => {
+      try {
+        const { card, step } = analysisStepInput.parse(a);
+        return ok(await recordAnalysisStep(card, step));
       } catch (e) {
         return fail(e);
       }
