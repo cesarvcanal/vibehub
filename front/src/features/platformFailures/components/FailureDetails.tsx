@@ -174,9 +174,7 @@ export function FailureDetails({ failure, isOwner, affectedCardCount, leavesList
         {!report && narrative ? <p className="text-xs text-muted-foreground">{narrative.triggerReason}</p> : null}
       </div>
       {report ? <InvestigationConclusion report={report} /> : null}
-      {details ? (
-        <FailureAnalysis symptom={details.symptom} {...(narrative ? { narrative } : {})} {...(report ? { report } : {})} />
-      ) : null}
+      {details ? <FailureAnalysis symptom={details.symptom} narrative={narrative} report={report} /> : null}
       {!report && details?.narrativeUnavailable ? (
         <p className="text-xs text-muted-foreground">{t(`platformFailures.narrativeUnavailable.${details.narrativeUnavailable}`)}</p>
       ) : null}

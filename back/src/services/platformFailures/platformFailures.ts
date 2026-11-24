@@ -45,6 +45,10 @@ function findFailureIn(doc: PlatformFailuresDoc, id: string): PlatformFailure {
   return failure;
 }
 
+function findFailureInvestigatedBy(doc: PlatformFailuresDoc, cardId: string): PlatformFailure | undefined {
+  return doc.failures.find((candidate) => candidate.status === "investigating" && candidate.investigationCardId === cardId);
+}
+
 function noteAffectedCard(failure: PlatformFailure, cardId: string | undefined): void {
   if (!cardId) return;
   const otherCardIds = failure.affectedCardIds.filter((affectedCardId) => affectedCardId !== cardId);
@@ -220,7 +224,7 @@ export async function saveFailureInvestigationReport(
   cardId: string, report: FailureInvestigationReportInput, now: number = Date.now(),
 ): Promise<PlatformFailure> {
   const reportedFailure = await store.mutate((doc) => {
-    const failure = doc.failures.find((candidate) => candidate.status === "investigating" && candidate.investigationCardId === cardId);
+    const failure = findFailureInvestigatedBy(doc, cardId);
     if (!failure) throw new PlatformFailureStateError(`card ${cardId} is not investigating any platform failure`);
     failure.investigationReport = { ...report, reportedAt: now };
     return { ...failure };
@@ -231,7 +235,7 @@ export async function saveFailureInvestigationReport(
 
 export async function settlePlatformFailureInvestigation(cardId: string, outcome: { merged: boolean }, now: number = Date.now()): Promise<PlatformFailure | null> {
   const settledFailure = await store.mutate((doc) => {
-    const failure = doc.failures.find((candidate) => candidate.status === "investigating" && candidate.investigationCardId === cardId);
+    const failure = findFailureInvestigatedBy(doc, cardId);
     if (!failure) return null;
     failure.status = outcome.merged ? "resolved" : "concluded_without_fix";
     if (outcome.merged) failure.resolvedAt = now;
