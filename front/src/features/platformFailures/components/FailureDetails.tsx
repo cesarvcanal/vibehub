@@ -94,11 +94,12 @@ function FailureAnalysis({ symptom, narrative, report, previousReport }: {
       {isExpanded ? (
         <div className="space-y-2 border-l-2 border-border pl-3">
           <AnalysisSections sections={sections} />
-          <p className="text-[11px] text-muted-foreground">
-            {report
-              ? t("platformFailures.reportNote", { at: formatFailureInstant(report.reportedAt) })
-              : t("platformFailures.narrativeNote")}
-          </p>
+          {narrative ? <p className="text-[11px] text-muted-foreground">{t("platformFailures.narrativeNote")}</p> : null}
+          {report ? (
+            <p className="text-[11px] text-muted-foreground">
+              {t("platformFailures.reportNote", { at: formatFailureInstant(report.reportedAt) })}
+            </p>
+          ) : null}
         </div>
       ) : null}
       <button

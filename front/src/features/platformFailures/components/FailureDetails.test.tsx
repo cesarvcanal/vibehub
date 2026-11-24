@@ -124,8 +124,15 @@ describe("cada falha no modal de falhas do vibehub, como uma análise", () => {
     expect(screen.getByText("Não é bug do vibehub: O gate parou a suíte no prazo, como deve.")).toBeVisible();
   });
 
+  it("com conclusão e explicação da IA, a análise diz que o contexto foi escrito pela IA", async () => {
+    renderFailure(buildFailure({ narrative: buildNarrative(), investigationReport: buildInvestigationReport() }));
+    await userEvent.click(screen.getByRole("button", { name: "Ver análise completa" }));
+    expect(screen.getByText("Explicação escrita por IA a partir do erro: confira nos detalhes técnicos.")).toBeVisible();
+    expect(screen.getByText(/Conclusão do card que investigou esta falha/)).toBeVisible();
+  });
+
   it("investigada sem conclusão gravada diz que o card não deixou conclusão", () => {
-    renderFailure(buildFailure());
+    renderFailure({ ...buildFailure(), status: "concluded_without_fix" });
     expect(screen.getByText("A investigação terminou sem deixar conclusão. Investigue de novo para ter a análise.")).toBeVisible();
   });
 });
