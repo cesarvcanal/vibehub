@@ -6,7 +6,7 @@ import { getSettings } from "../settings/settings.js";
 import { PLATFORM_FAILURE_LOG_MARK } from "./backendError.js";
 import { buildFailureSignature } from "./signature.js";
 import type {
-  FailureNarrative, FailureNarrativeUnavailableReason, PlatformFailure, PlatformFailureReport, PlatformFailureSource, PlatformFailureStatus,
+  FailureInvestigationReportInput, FailureNarrative, FailureNarrativeUnavailableReason, PlatformFailure, PlatformFailureReport, PlatformFailureSource, PlatformFailureStatus,
 } from "./types.js";
 
 export const ACTIVE_FAILURES_CAP = 50;
@@ -214,6 +214,19 @@ export async function setPlatformFailureInvestigationCard(id: string, cardId: st
     failure.investigationCardId = cardId;
     return { ...failure };
   });
+}
+
+export async function saveFailureInvestigationReport(
+  cardId: string, report: FailureInvestigationReportInput, now: number = Date.now(),
+): Promise<PlatformFailure> {
+  const reportedFailure = await store.mutate((doc) => {
+    const failure = doc.failures.find((candidate) => candidate.status === "investigating" && candidate.investigationCardId === cardId);
+    if (!failure) throw new PlatformFailureStateError(`card ${cardId} is not investigating any platform failure`);
+    failure.investigationReport = { ...report, reportedAt: now };
+    return { ...failure };
+  });
+  announceFailureChange({ failure: reportedFailure });
+  return reportedFailure;
 }
 
 export async function settlePlatformFailureInvestigation(cardId: string, outcome: { merged: boolean }, now: number = Date.now()): Promise<PlatformFailure | null> {

@@ -1,6 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { AGENT_FAILURE_KINDS, reportPlatformFailureFromAgent } from "../services/platformFailures/agentReport.js";
+import { reportFailureInvestigation } from "../services/platformFailures/investigation.js";
+import { INVESTIGATION_VERDICTS } from "../services/platformFailures/types.js";
 import { ok, fail } from "./toolResult.js";
 
 export function registerPlatformFailureTools(server: McpServer): void {
@@ -45,6 +47,38 @@ export function registerPlatformFailureTools(server: McpServer): void {
     async (input) => {
       try {
         return ok(await reportPlatformFailureFromAgent(input));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_failure_investigation_report",
+    {
+      description:
+        "PLATFORM-FAILURE INVESTIGATION: record the conclusion of the failure THIS card investigates, which the owner " +
+        "reads in the \"Falhas do vibehub\" panel as an analysis. Only the investigation card may call it (`card` = YOUR " +
+        "OWN $VIBEHUB_CARD_ID). Call it once you know the answer and BEFORE concluding the card, with or without a PR; " +
+        "calling again replaces the previous conclusion. Write for the owner, who did not read the code, in the language " +
+        "of the conversation: no file, function or stack trace, and nothing of the business of other projects. " +
+        "Refused when this card is not investigating a platform failure. Returns the failure with the stored report.",
+      inputSchema: {
+        card: z.string().describe("your own card id — the $VIBEHUB_CARD_ID of this terminal"),
+        verdict: z.enum(INVESTIGATION_VERDICTS).describe(
+          "vibehub_bug = a defect of vibehub, reproduced | not_a_bug = expected behaviour, a project or provider problem | " +
+          "inconclusive = the evidence does not decide",
+        ),
+        conclusion: z.string().min(1).max(600).describe("one or two sentences: what the investigation found"),
+        howItHappened: z.string().min(1).max(1200).describe("the sequence that led to the error: who did what, what vibehub did, where it went wrong"),
+        cause: z.string().min(1).max(800).describe("why it happened, proven; what is not proven is said as likely"),
+        resolution: z.string().min(1).max(800).describe("what fixes it: the PR opened here, or what the owner or the project must change"),
+        pendingDecision: z.string().min(1).max(600).optional().describe("a decision only the owner can make, as a question; absent when there is none"),
+      },
+    },
+    async ({ card, ...report }) => {
+      try {
+        return ok(await reportFailureInvestigation(card, report));
       } catch (error) {
         return fail(error);
       }

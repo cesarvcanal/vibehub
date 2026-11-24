@@ -103,6 +103,35 @@ describe("registro de falhas da plataforma", () => {
       .toMatchObject({ status: "concluded_without_fix", investigationCardId: "fix-card" });
   });
 
+  it("a conclusão do card de investigação fica na falha depois que o card termina sem merge", async () => {
+    const failures = await fresh();
+    const recorded = await failures.recordPlatformFailure(backendReport("gate timed out"));
+    await failures.claimPlatformFailureInvestigation(recorded!.id);
+    await failures.setPlatformFailureInvestigationCard(recorded!.id, "fix-card");
+    const report = {
+      verdict: "not_a_bug" as const,
+      conclusion: "O gate parou a suíte no prazo, como deve.",
+      howItHappened: "O projeto não tem gate próprio e o npm test inteiro passou de 10 min.",
+      cause: "Suíte lenta do projeto.",
+      resolution: "Criar um gate só dos testes afetados no projeto.",
+      pendingDecision: "Tratar o estouro do npm test padrão como vermelho do projeto?",
+    };
+    await failures.saveFailureInvestigationReport("fix-card", report, 5_000);
+    await failures.settlePlatformFailureInvestigation("fix-card", { merged: false });
+    expect(await failures.getPlatformFailure(recorded!.id))
+      .toMatchObject({ status: "concluded_without_fix", investigationReport: { ...report, reportedAt: 5_000 } });
+  });
+
+  it("conclusão de investigação vinda de um card que não investiga falha nenhuma é recusada", async () => {
+    const failures = await fresh();
+    const recorded = await failures.recordPlatformFailure(backendReport("driver gone"));
+    await failures.claimPlatformFailureInvestigation(recorded!.id);
+    await failures.setPlatformFailureInvestigationCard(recorded!.id, "fix-card");
+    const report = { verdict: "inconclusive" as const, conclusion: "c", howItHappened: "h", cause: "x", resolution: "r" };
+    await expect(failures.saveFailureInvestigationReport("other-card", report)).rejects.toBeInstanceOf(failures.PlatformFailureStateError);
+    expect(await failures.getPlatformFailure(recorded!.id)).not.toHaveProperty("investigationReport");
+  });
+
   it("acima do teto de falhas ativas, uma falha nova é descartada e uma conhecida ainda soma", async () => {
     const failures = await fresh();
     for (const index of Array.from({ length: failures.ACTIVE_FAILURES_CAP }, (_unused, position) => position)) {
@@ -210,6 +239,17 @@ describe("sinal de mudança de falha", () => {
     await failures.settlePlatformFailureInvestigation("fix-card", { merged: true });
     expect(heard).toEqual(["investigating", "open", "investigating", "resolved"].map((status) => expect.objectContaining({ status })));
     expect(heard.some((change) => change.newForCardId)).toBe(false);
+  });
+
+  it("a conclusão da investigação é anunciada, para o modal das falhas atualizar sem recarregar", async () => {
+    const failures = await fresh();
+    const recorded = await failures.recordPlatformFailure(backendReport("driver gone"));
+    await failures.claimPlatformFailureInvestigation(recorded!.id);
+    await failures.setPlatformFailureInvestigationCard(recorded!.id, "fix-card");
+    const heardVerdicts: (string | undefined)[] = [];
+    onTestFinished(failures.onPlatformFailureChange(({ failure }) => heardVerdicts.push(failure.investigationReport?.verdict)));
+    await failures.saveFailureInvestigationReport("fix-card", { verdict: "vibehub_bug", conclusion: "c", howItHappened: "h", cause: "x", resolution: "r" });
+    expect(heardVerdicts).toEqual(["vibehub_bug"]);
   });
 
   it("descarte é anunciado", async () => {

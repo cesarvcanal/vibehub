@@ -12,6 +12,22 @@ export interface FailureNarrative {
   triggerReason: string;
 }
 
+export const INVESTIGATION_VERDICTS = ["vibehub_bug", "not_a_bug", "inconclusive"] as const;
+export type InvestigationVerdict = (typeof INVESTIGATION_VERDICTS)[number];
+
+export interface FailureInvestigationReportInput {
+  verdict: InvestigationVerdict;
+  conclusion: string;
+  howItHappened: string;
+  cause: string;
+  resolution: string;
+  pendingDecision?: string;
+}
+
+export interface FailureInvestigationReport extends FailureInvestigationReportInput {
+  reportedAt: number;
+}
+
 export type FailureNarrativeUnavailableReason = "no_api_key" | "request_failed";
 
 export interface PlatformFailureReport {
@@ -46,6 +62,7 @@ export interface PlatformFailure {
   dismissedAt?: number;
   narrative?: FailureNarrative;
   narrativeUnavailable?: FailureNarrativeUnavailableReason;
+  investigationReport?: FailureInvestigationReport;
 }
 
 export interface UserStopMark {
