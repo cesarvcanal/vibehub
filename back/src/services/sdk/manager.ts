@@ -22,7 +22,7 @@ import { readCardChanges, readCardFileDiff } from "../maestro/changes.js";
 import { mergeTaskEvent, taskSnapshot, toolResultEvent, type AgentTaskEvent, type RawTaskEvent, type RawToolResultEvent } from "./toolResult.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
-  NOTE_CONVERSATION_CLEARED, buildLateAnswerText, buildOrphanAnswerText, mergePeerAnswers, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseQuestionDraftFrame, isEmptyQuestionDraft, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
+  NOTE_CONVERSATION_CLEARED, buildLateAnswerText, buildOrphanAnswerText, mergePeerAnswers, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseVoiceCallFrame, parseQuestionDraftFrame, isEmptyQuestionDraft, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
   type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type EffortAckEvent, type QuestionAnswerControl, type QuestionDraft, type StopHow, type UserQuestionItem,
   type WorkflowFeedEvent, type WorkflowFeedRequest, type DetailRequest, type ResultEvent,
 } from "./protocol.js";
@@ -112,6 +112,7 @@ export interface DriverSession {
   label: string;
   child: ChildProcessWithoutNullStreams;
   sockets: Set<WebSocket>;
+  voiceCallSockets: Set<WebSocket>;
   /** The driver said `ready` — a socket attaching after this gets a synthesized one. */
   ready: boolean;
   /** Latest session id the driver reported — the resume key (also persisted on the card). */
@@ -1205,6 +1206,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     label: opts.label,
     child,
     sockets: new Set(),
+    voiceCallSockets: new Set(),
     ready: false,
     activeTurns: 0,
     autonomousTurn: false,
@@ -2361,6 +2363,17 @@ export function attachSocket(
     draftedHere.clear();
   };
 
+  const noteVoiceCall = (active: boolean): void => {
+    const wasInCall = session.voiceCallSockets.size > 0;
+    if (active) session.voiceCallSockets.add(socket);
+    else session.voiceCallSockets.delete(socket);
+    const inCall = session.voiceCallSockets.size > 0;
+    if (inCall === wasInCall) return;
+    void registry.setCardVoiceCall(session.cardId, inCall ? Date.now() : null).catch((err: unknown) => {
+      logger.warn({ card: session.label, detail: (err as Error).message }, "could not mark the card's voice call");
+    });
+  };
+
   const answerFeed = createFeedResponder(session, socket);
   const answerDetail = createDetailResponder(session, socket);
 
@@ -2377,6 +2390,11 @@ export function attachSocket(
     const typing = parseTypingFrame(text);
     if (typing !== null) {
       noteTyping(typing);
+      return;
+    }
+    const voiceCall = parseVoiceCallFrame(text);
+    if (voiceCall !== null) {
+      noteVoiceCall(voiceCall);
       return;
     }
     const draft = parseQuestionDraftFrame(text);
@@ -2419,6 +2437,7 @@ export function attachSocket(
     session.sockets.delete(socket);
     // A tab closed mid-sentence must not leave "Cesar está digitando…" on everyone else's screen.
     noteTyping(false);
+    noteVoiceCall(false);
     dropDraftsOfThisSocket();
     if (session.sockets.size === 0) maybeScheduleIdleStop(session);
   };

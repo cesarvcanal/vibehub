@@ -784,6 +784,18 @@ export function parseTypingFrame(raw: string): boolean | null {
   }
 }
 
+export function parseVoiceCallFrame(raw: string): boolean | null {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as { type?: unknown; active?: unknown };
+    if (parsed.type !== "voice_call") return null;
+    return parsed.active === true;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The DRAFT of a question card — `{ "type": "question_draft", "id": string, "picked":
  * string[][], "other": string[] }`: what the person has already ticked and written on the card, before sending.
