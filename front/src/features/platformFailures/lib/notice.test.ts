@@ -3,6 +3,7 @@ import { isActiveFailureStatus, parsePlatformFailureNotice } from "./notice";
 
 const VALID = { id: "f1", source: "agent_report", status: "open", occurrences: 2, firstSeenAt: 10, lastSeenAt: 20 };
 const NARRATIVE = { context: "c", whatHappened: "w", cause: "x", trigger: "person", triggerReason: "r" };
+const REPORT = { verdict: "not_a_bug", conclusion: "c", howItHappened: "h", cause: "x", resolution: "r", reportedAt: 30 };
 
 describe("aviso de falha vindo do websocket", () => {
   it("aceita o aviso completo, com explicação e detalhes", () => {
@@ -21,6 +22,8 @@ describe("aviso de falha vindo do websocket", () => {
     ["explicação da IA sem a causa", { ...VALID, details: { symptom: "s", component: "c", evidence: "e", narrative: { ...NARRATIVE, cause: "" } } }],
     ["motivo desconhecido de não haver explicação", { ...VALID, details: { symptom: "s", component: "c", evidence: "e", narrativeUnavailable: "preguiça" } }],
     ["um texto no lugar do aviso", "f1"],
+    ["conclusão da investigação com veredito desconhecido", { ...VALID, details: { symptom: "s", component: "c", evidence: "e", investigationReport: { ...REPORT, verdict: "talvez" } } }],
+    ["conclusão da investigação sem o que resolve", { ...VALID, details: { symptom: "s", component: "c", evidence: "e", investigationReport: { ...REPORT, resolution: "" } } }],
   ])("recusa aviso malformado (%s)", (_case, frame) => {
     expect(parsePlatformFailureNotice(frame)).toBeNull();
   });
@@ -30,6 +33,13 @@ describe("aviso de falha vindo do websocket", () => {
     expect(parsePlatformFailureNotice({ ...VALID, details })).toEqual({ ...VALID, details });
     const detailsWithoutNarrative = { symptom: "s", component: "c", evidence: "e", narrativeUnavailable: "no_api_key" };
     expect(parsePlatformFailureNotice({ ...VALID, details: detailsWithoutNarrative })).toEqual({ ...VALID, details: detailsWithoutNarrative });
+  });
+
+  it("o aviso no card leva a conclusão da investigação, com e sem a decisão pendente", () => {
+    const details = { symptom: "s", component: "c", evidence: "e", investigationReport: REPORT };
+    expect(parsePlatformFailureNotice({ ...VALID, details })).toEqual({ ...VALID, details });
+    const withDecision = { ...details, investigationReport: { ...REPORT, pendingDecision: "d" } };
+    expect(parsePlatformFailureNotice({ ...VALID, details: withDecision })).toEqual({ ...VALID, details: withDecision });
   });
 
   it.each(["backend_error", "slow_turn", "stalled_turn", "agent_report", "screen_error"])("aceita a origem %s que o back grava", (source) => {
