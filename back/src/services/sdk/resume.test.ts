@@ -517,9 +517,9 @@ describe("resumeInterruptedTurns — o turno parado numa pergunta", () => {
 });
 
 /** A marker written by ANOTHER back process (a blue/green's old container). */
-async function markerFrom(owner: string, cardId = CARD): Promise<void> {
+async function markerFrom(owner: string, cardId = CARD, startedAt = 1): Promise<void> {
   await mkdir(join(dir, SDK_INFLIGHT_DIR), { recursive: true });
-  await writeFile(join(dir, SDK_INFLIGHT_DIR, `${cardId}.json`), JSON.stringify({ startedAt: 1, preview: "jest longo", attempts: 0, owner }), "utf8");
+  await writeFile(join(dir, SDK_INFLIGHT_DIR, `${cardId}.json`), JSON.stringify({ startedAt, preview: "jest longo", attempts: 0, owner }), "utf8");
 }
 
 /** The heartbeat the `owner` process keeps while it lives — `null` = it died (SIGKILL). */
@@ -617,14 +617,14 @@ describe("resumeInterruptedTurns — o turno ainda vivo na instância antiga (de
 
   it("sem outra instância viva, a varredura lista os marcadores uma vez só e não espera", async () => {
     const waits: number[] = [];
-    const listings: number[] = [];
+    const listMarkers = vi.fn(async () => []);
     const summary = await resumeInterruptedTurns(deps({
-      listMarkers: async () => { listings.push(Date.now()); return []; },
+      listMarkers,
       wait: async (ms) => { waits.push(ms); },
     }));
 
     expect(summary).toEqual({ resumed: [], noted: [] });
-    expect(listings.length).toBe(1);
+    expect(listMarkers).toHaveBeenCalledTimes(1);
     expect(waits).toEqual([]);
   });
 
@@ -635,9 +635,7 @@ describe("resumeInterruptedTurns — o turno ainda vivo na instância antiga (de
     const summary = await resumeInterruptedTurns(deps({
       wait: async () => {
         waitCalls.push(waitCalls.length);
-        if (waitCalls.length === 1) {
-          await writeFile(join(dir, SDK_INFLIGHT_DIR, `${CARD}.json`), JSON.stringify({ startedAt: 2, preview: "outra", attempts: 0, owner: ANTIGO }), "utf8");
-        }
+        if (waitCalls.length === 1) await markerFrom(ANTIGO, CARD, 2);
         if (waitCalls.length === 4) await heartbeat(ANTIGO, false);
       },
     }));
