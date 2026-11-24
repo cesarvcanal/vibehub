@@ -4,6 +4,7 @@ import type { AnalysisConversation as Conversation, AnalysisReadModel } from "@/
 import { boardApi } from "@/features/board/api";
 import { FleetChat } from "@/features/board/components/FleetChat";
 import { cardAnalysisConversationKey } from "@/features/board/lib/analysis";
+import type { CardStateKind } from "@/features/board/lib/board";
 import { analysisFleetChat } from "@/features/board/lib/fleetChat";
 import { AnalysisTimeline } from "@/features/review/components/AnalysisTimeline";
 import { apiErrorMessage } from "@/lib/apiError";
@@ -11,11 +12,15 @@ import { useT } from "@/i18n";
 
 const CONVERSATION_POLL_MS = 8_000;
 
-export function AnalysisConversation({ cardId, read, cardWorking }: { cardId: string; read?: AnalysisReadModel; cardWorking: boolean }) {
+export function AnalysisConversation({ cardId, read, cardState }: {
+  cardId: string;
+  read?: AnalysisReadModel;
+  cardState: CardStateKind | undefined;
+}) {
   return (
     <div className="flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto overflow-x-hidden pr-1">
       <FleetSection cardId={cardId} />
-      {read ? <AnalysisTimeline timeline={read.timeline} analysis={read.analysis} cardWorking={cardWorking} /> : null}
+      {read ? <AnalysisTimeline timeline={read.timeline} analysis={read.analysis} cardState={cardState} /> : null}
     </div>
   );
 }

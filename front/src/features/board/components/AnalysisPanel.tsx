@@ -77,7 +77,7 @@ export function AnalysisPanel({ cardId, cardState, onClose }: { cardId: string; 
       </div>
       {tab === "conversation" ? (
         <div role="tabpanel" className="flex min-h-0 flex-1 flex-col">
-          <AnalysisConversation cardId={cardId} read={read?.analysis ? read : undefined} cardWorking={cardState?.kind === "working"} />
+          <AnalysisConversation cardId={cardId} read={read?.analysis ? read : undefined} cardState={cardState?.kind} />
         </div>
       ) : null}
     </PanelFrame>

@@ -1,8 +1,9 @@
 import { CircleAlert, FileText, GitCommitHorizontal, Loader2, ShieldAlert, ShieldCheck, Upload, Wrench } from "lucide-react";
 import type * as React from "react";
 import type { AnalysisReport, AnalysisTimelineEntry } from "@/api/types";
+import type { CardStateKind } from "@/features/board/lib/board";
 import { chatClockText } from "@/features/board/lib/fleetChat";
-import { analysisTimelineRows, hasFixingStarted, openQuestionFindings } from "@/features/review/lib/analysisTimeline";
+import { analysisTimelineRows, fixingNotStartedYet, questionsWaitingForPerson } from "@/features/review/lib/analysisTimeline";
 import type { AnalysisTimelineRow } from "@/features/review/types/analysisTimeline";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -29,20 +30,20 @@ function rowIcon(row: AnalysisTimelineRow): React.ReactNode {
   }
 }
 
-export function AnalysisTimeline({ timeline, analysis, cardWorking }: {
+export function AnalysisTimeline({ timeline, analysis, cardState }: {
   timeline: AnalysisTimelineEntry[];
   analysis: AnalysisReport;
-  cardWorking: boolean;
+  cardState: CardStateKind | undefined;
 }) {
   const t = useT();
-  const rows = analysisTimelineRows(timeline, analysis.findings, { cardWorking });
-  const waitingQuestions = openQuestionFindings(analysis);
+  const rows = analysisTimelineRows(timeline, analysis.findings, { cardWorking: cardState === "working" });
+  const waitingQuestions = questionsWaitingForPerson(analysis, cardState);
   return (
     <section aria-labelledby="analysis-timeline-title" className="flex min-w-0 flex-col gap-2 border-t border-border/60 pt-3">
       <h3 id="analysis-timeline-title" className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         {t("analysis.timeline.title")}
       </h3>
-      {hasFixingStarted(rows) ? null : <p className="text-xs text-muted-foreground">{t("analysis.timeline.empty")}</p>}
+      {fixingNotStartedYet(timeline, analysis.stage) ? <p className="text-xs text-muted-foreground">{t("analysis.timeline.empty")}</p> : null}
       <ol aria-labelledby="analysis-timeline-title" className="flex flex-col gap-1.5">
         {rows.map((row) => (
           <li

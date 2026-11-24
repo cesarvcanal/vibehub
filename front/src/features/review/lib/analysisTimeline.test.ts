@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { DELIVER_REASONS, type AnalysisFinding, type AnalysisTimelineEntry, type AnalysisTimelineEvent } from "@/api/types";
-import { analysisTimelineRows, openQuestionFindings } from "@/features/review/lib/analysisTimeline";
+import {
+  DELIVER_REASONS, type AnalysisFinding, type AnalysisStage, type AnalysisTimelineEntry, type AnalysisTimelineEvent,
+} from "@/api/types";
+import type { CardStateKind } from "@/features/board/lib/board";
+import { analysisTimelineRows, fixingNotStartedYet, questionsWaitingForPerson } from "@/features/review/lib/analysisTimeline";
 import { en } from "@/i18n/en";
 import { ptBR } from "@/i18n/pt-BR";
 
@@ -34,6 +37,13 @@ describe("linhas da linha do tempo da correção", () => {
     expect(rows[0]?.current).toBe(false);
   });
 
+  it("achado que a IA largou (seguiu para a reconferência sem o commit dele) deixa de estar em andamento", () => {
+    const rows = analysisTimelineRows(
+      entriesOf({ kind: "fixing", findingId: "f1" }, { kind: "recheck", outcome: "clean" }), FINDINGS, { cardWorking: true },
+    );
+    expect(rows.map((row) => row.current)).toEqual([false, false]);
+  });
+
   it.each([
     [{ kind: "recheck", outcome: "clean" } as const, "analysis.timeline.recheckClean", undefined, false],
     [{ kind: "recheck", outcome: "found", note: "teste do PDV quebrou" } as const, "analysis.timeline.recheckFound", "teste do PDV quebrou", true],
@@ -63,9 +73,34 @@ describe("linhas da linha do tempo da correção", () => {
 });
 
 describe("perguntas que esperam a pessoa", () => {
-  it("só as questions abertas, e só depois do done", () => {
-    const decided = finding({ id: "f3", severity: "question", status: "decided", decision: "fica" });
-    expect(openQuestionFindings({ stage: "done", findings: [...FINDINGS, decided] }).map((open) => open.id)).toEqual(["f2"]);
-    expect(openQuestionFindings({ stage: "analysed", findings: FINDINGS })).toEqual([]);
+  const decided = finding({ id: "f3", severity: "question", status: "decided", decision: "fica" });
+
+  it("depois do done, com o card esperando a pessoa, são as questions abertas", () => {
+    expect(questionsWaitingForPerson({ stage: "done", findings: [...FINDINGS, decided] }, "needs_me").map((open) => open.id)).toEqual(["f2"]);
+  });
+
+  it.each<[string, AnalysisStage, CardStateKind | undefined]>([
+    ["antes do done", "analysed", "needs_me"],
+    ["com a IA ainda trabalhando (não perguntou)", "done", "working"],
+    ["com o card concluído", "done", "done"],
+    ["sem o estado do card", "done", undefined],
+  ])("%s, nenhuma pergunta aparece como esperando", (_case, stage, cardState) => {
+    expect(questionsWaitingForPerson({ stage, findings: FINDINGS }, cardState)).toEqual([]);
+  });
+});
+
+describe("aviso de que a IA ainda não começou a corrigir", () => {
+  const analysedReport = entriesOf({ kind: "report", stage: "analysed", fixed: 0, decided: 0, open: 2 });
+
+  it("aparece só com o analysed gravado e nenhum passo da correção", () => {
+    expect(fixingNotStartedYet(analysedReport, "analysed")).toBe(true);
+  });
+
+  it.each<[string, AnalysisTimelineEntry[], AnalysisStage]>([
+    ["análise concluída antes da linha do tempo existir", [], "done"],
+    ["frota que não rodou", [], "fleet_unavailable"],
+    ["com um passo da correção", entriesOf({ kind: "report", stage: "analysed", fixed: 0, decided: 0, open: 2 }, { kind: "fixing", findingId: "f1" }), "analysed"],
+  ])("não aparece: %s", (_case, entries, stage) => {
+    expect(fixingNotStartedYet(entries, stage)).toBe(false);
   });
 });

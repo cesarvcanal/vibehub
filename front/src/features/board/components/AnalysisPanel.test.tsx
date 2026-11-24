@@ -467,6 +467,14 @@ describe("aba Conversa: a correção depois da frota", () => {
     expect(within(waiting).getByRole("listitem")).toHaveTextContent("f3 · Conta local continua aceitando senha?");
   });
 
+  it("análise concluída antes da linha do tempo existir não diz que a IA não começou", async () => {
+    renderPanel(readModel(doneReport(), "not_apt"), () => {}, () => ({ conversation: null }), stateOf("done"));
+    await openConversation();
+    await screen.findByRole("list", { name: "Correção" });
+    expect(screen.queryByText("A IA ainda não começou a corrigir os achados.")).toBeNull();
+    expect(screen.queryByRole("list", { name: "Esperando você no chat do card" })).toBeNull();
+  });
+
   it("sem passo de correção ainda, a Conversa diz que a IA não começou", async () => {
     renderPanel(readModel(doneReport({ stage: "analysed" }), "pending"), () => {}, () => ({ conversation: null }), stateOf("working"));
     await openConversation();

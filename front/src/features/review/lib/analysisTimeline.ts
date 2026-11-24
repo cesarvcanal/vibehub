@@ -1,14 +1,10 @@
-import type { AnalysisFinding, AnalysisReport, AnalysisTimelineEntry } from "@/api/types";
+import type { AnalysisFinding, AnalysisReport, AnalysisStage, AnalysisTimelineEntry } from "@/api/types";
+import type { CardStateKind } from "@/features/board/lib/board";
 import type { AnalysisTimelineRow } from "@/features/review/types/analysisTimeline";
 
 const SHORT_SHA_LENGTH = 7;
 
 type RowText = Pick<AnalysisTimelineRow, "textKey" | "vars" | "detail">;
-
-function needsAttention(entry: AnalysisTimelineEntry): boolean {
-  if (entry.kind === "delivered") return entry.stopped;
-  return entry.kind === "recheck" && entry.outcome === "found";
-}
 
 function rowText(entry: AnalysisTimelineEntry, findingTitle: (findingId: string) => string): RowText {
   switch (entry.kind) {
@@ -32,12 +28,9 @@ function rowText(entry: AnalysisTimelineEntry, findingTitle: (findingId: string)
   }
 }
 
-function findCurrentFixingIndex(entries: AnalysisTimelineEntry[]): number {
-  const lastFixingIndex = entries.findLastIndex((entry) => entry.kind === "fixing");
-  const lastFixing = entries[lastFixingIndex];
-  if (lastFixing?.kind !== "fixing") return -1;
-  const fixedAfter = entries.slice(lastFixingIndex + 1).some((entry) => entry.kind === "fixed" && entry.findingId === lastFixing.findingId);
-  return fixedAfter ? -1 : lastFixingIndex;
+function needsAttention(entry: AnalysisTimelineEntry): boolean {
+  if (entry.kind === "delivered") return entry.stopped;
+  return entry.kind === "recheck" && entry.outcome === "found";
 }
 
 export function analysisTimelineRows(
@@ -45,18 +38,22 @@ export function analysisTimelineRows(
 ): AnalysisTimelineRow[] {
   const titleById = new Map(findings.map((finding) => [finding.id, finding.title]));
   const findingTitle = (findingId: string) => titleById.get(findingId) ?? "";
-  const currentIndex = opts.cardWorking ? findCurrentFixingIndex(entries) : -1;
+  const lastIndex = entries.length - 1;
+  const fixingIsTheLatestStep = entries[lastIndex]?.kind === "fixing";
+  const currentIndex = opts.cardWorking && fixingIsTheLatestStep ? lastIndex : -1;
   return entries.map((entry, index) => ({
     id: `${entry.at}-${index}`, at: entry.at, kind: entry.kind, current: index === currentIndex, needsAttention: needsAttention(entry),
     ...rowText(entry, findingTitle),
   }));
 }
 
-export function hasFixingStarted(rows: AnalysisTimelineRow[]): boolean {
-  return rows.some((row) => row.kind !== "report" || row.textKey === "analysis.timeline.done");
+export function fixingNotStartedYet(entries: AnalysisTimelineEntry[], stage: AnalysisStage): boolean {
+  return stage === "analysed" && entries.every((entry) => entry.kind === "report");
 }
 
-export function openQuestionFindings(report: Pick<AnalysisReport, "stage" | "findings">): AnalysisFinding[] {
-  if (report.stage !== "done") return [];
+export function questionsWaitingForPerson(
+  report: Pick<AnalysisReport, "stage" | "findings">, cardState: CardStateKind | undefined,
+): AnalysisFinding[] {
+  if (report.stage !== "done" || cardState !== "needs_me") return [];
   return report.findings.filter((finding) => finding.severity === "question" && finding.status === "open");
 }
