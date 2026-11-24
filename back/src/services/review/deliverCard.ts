@@ -4,6 +4,7 @@ import { deliver, parsePrUrl, type DeliverOpts, type DeliverResult } from "../ma
 import { logger } from "../../utils/logger.js";
 import { canMergeReview, cardsToConclude, isReviewClosed, type Review } from "./model.js";
 import { deliverOwnAnalysis } from "./analysisMerge.js";
+import { recordAnalysisDelivery } from "./analysisTimeline.js";
 import { mergeReviewedPr, type ReviewMergeOutcome } from "./merge.js";
 import { concludeMergedCard, MERGE_QUEUED_OUTPUT, saveOrderFromDelivery } from "./mergeOrder.js";
 import { recordReviewOrders } from "./orchestrator.js";
@@ -34,7 +35,9 @@ import { activeReviewFor, getReview, reviewByReviewerCard } from "./store.js";
 export async function deliverCard(
   cardId: string, opts: DeliverCardOpts,
 ): Promise<DeliverResult> {
-  const { result, concludeRecorded } = await deliverUnderReview(cardId, opts);
+  const delivered = await deliverUnderReview(cardId, opts);
+  const result = await recordDeliveryOnAnalysisTimeline(cardId, delivered.result);
+  const { concludeRecorded } = delivered;
   const ownOrder = opts.authorized === true && opts.from === cardId;
   const card = ownOrder ? await getCard(cardId) : undefined;
   if (card) await saveOrderFromDelivery(card, result, opts.by);
@@ -43,7 +46,18 @@ export async function deliverCard(
   return opts.concludeWhenMerged && !concludeRecorded ? withOutput(result, CONCLUDE_NOT_RECORDED) : result;
 }
 
-type DeliverCardOpts = Pick<DeliverOpts, "branch" | "authorized" | "docs"> & {
+async function recordDeliveryOnAnalysisTimeline(cardId: string, result: DeliverResult): Promise<DeliverResult> {
+  const card = await getCard(cardId);
+  if (card?.pushBranch === undefined) return result;
+  try {
+    await recordAnalysisDelivery(cardId, result);
+    return result;
+  } catch (err) {
+    return withOutput(result, `A linha do tempo da análise não registrou esta entrega: ${(err as Error).message}`);
+  }
+}
+
+type DeliverCardOpts =Pick<DeliverOpts, "branch" | "authorized" | "docs"> & {
   by: string;
   from?: string;
   /** "…e concluir o card": with the card's PR under review, recorded on it, and the card goes to done once merged. */

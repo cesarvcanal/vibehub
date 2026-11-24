@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DeliverOpts, DeliverResult } from "../maestro/deliver.js";
@@ -94,6 +94,32 @@ describe("deliverCard — card de análise de PR", () => {
     const analysis = await o.registry.createAnalysisCard({ projectId: project.id, accountSlug: undefined, prBranch: "feat-7", title: "Análise PR #7" });
     return { ...o, analysis };
   }
+
+  it("a entrega das correções da análise entra na linha do tempo com o motivo, a PR e a saída do gate", async () => {
+    const { deliverCard, analysis } = await analysisCard();
+    await saveDoneReport(analysis.id, "e".repeat(40));
+    deliverAnswer = { prUrl: PR, merged: false, reason: "gate", branch: "dev", cardBranch: "feat-7", output: "lint: 12 erros" };
+    await deliverCard(analysis.id, { branch: "dev", by: "mussa" });
+    const timeline = await (await import("./analysisStore.js")).listAnalysisTimeline(analysis.id);
+    expect(timeline.at(-1)).toMatchObject({ kind: "delivered", reason: "gate", prUrl: PR, output: "lint: 12 erros" });
+  });
+
+  it("entrega de card que não é de análise não grava linha do tempo", async () => {
+    const o = await load();
+    const project = await o.registry.createProject({ name: "widgets" });
+    const card = await o.registry.createCard({ projectId: project.id, title: "Login" });
+    await o.deliverCard(card.id, { branch: "dev", by: "mussa" });
+    expect(await (await import("./analysisStore.js")).listAnalysisTimeline(card.id)).toEqual([]);
+  });
+
+  it("a linha do tempo que não grava não desfaz a entrega: a resposta mantém o resultado e diz o que faltou", async () => {
+    const { deliverCard, analysis } = await analysisCard();
+    await mkdir(join(dir, "analyses.json"));
+    deliverAnswer = { prUrl: PR, merged: false, reason: "pushed", branch: "dev", cardBranch: "feat-7" };
+    const out = await deliverCard(analysis.id, { branch: "dev", by: "mussa" });
+    expect(out).toMatchObject({ reason: "pushed", prUrl: PR });
+    expect(out.output).toMatch(/linha do tempo da análise não registrou esta entrega/);
+  });
 
   it("ordem de merge vinda de outro card não mergeia: o deliver vai sem authorized e a resposta diz por quê", async () => {
     const { deliverCard, analysis } = await analysisCard();
