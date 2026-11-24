@@ -1,6 +1,8 @@
+import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { FOLDED_TEXT_MIN_CHARS, FoldedTextToggle } from "@/components/FoldedTextToggle";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n";
 import type { FailureNarrative, FailureTrigger, PlatformFailureNotice } from "@/api/types";
@@ -50,18 +52,31 @@ function FailureActions({ failure, actions }: { failure: FailureForDetails; acti
   );
 }
 
-function FailureNarrativeSections({ narrative }: { narrative: FailureNarrative }) {
+function FailureSummary({ symptom, narrative }: { symptom: string; narrative?: FailureNarrative }) {
   const t = useT();
+  const [isExpanded, setExpanded] = React.useState(false);
+  const summaryItems = [
+    ...(narrative ? [
+      { label: t("platformFailures.narrativeContext"), text: narrative.context },
+      { label: t("platformFailures.narrativeCause"), text: narrative.cause },
+    ] : []),
+    { label: t("platformFailures.symptomLabel"), text: symptom },
+  ];
+  const isLong = summaryItems.some((item) => item.text.length > FOLDED_TEXT_MIN_CHARS);
+  const isFolded = isLong && !isExpanded;
   return (
-    <>
+    <div className="space-y-1">
       <dl className="grid gap-x-3 gap-y-1 text-sm sm:grid-cols-[max-content_1fr]">
-        <dt className="text-xs font-medium leading-5 text-muted-foreground">{t("platformFailures.narrativeContext")}</dt>
-        <dd>{narrative.context}</dd>
-        <dt className="text-xs font-medium leading-5 text-muted-foreground">{t("platformFailures.narrativeCause")}</dt>
-        <dd>{narrative.cause}</dd>
+        {summaryItems.map((item) => (
+          <React.Fragment key={item.label}>
+            <dt className="text-xs font-medium leading-5 text-muted-foreground">{item.label}</dt>
+            <dd className={cn("min-w-0 whitespace-pre-line break-words", isFolded && "line-clamp-3")}>{item.text}</dd>
+          </React.Fragment>
+        ))}
       </dl>
-      <p className="text-[11px] text-muted-foreground">{t("platformFailures.narrativeNote")}</p>
-    </>
+      {isLong ? <FoldedTextToggle isExpanded={isExpanded} onToggle={() => setExpanded((wasExpanded) => !wasExpanded)} /> : null}
+      {narrative ? <p className="text-[11px] text-muted-foreground">{t("platformFailures.narrativeNote")}</p> : null}
+    </div>
   );
 }
 
@@ -110,7 +125,7 @@ export function FailureDetails({ failure, isOwner, affectedCardCount, leavesList
         <p className="text-sm font-semibold leading-snug">{explainFailure(failure, t)}</p>
         {narrative ? <p className="text-xs text-muted-foreground">{narrative.triggerReason}</p> : null}
       </div>
-      {narrative ? <FailureNarrativeSections narrative={narrative} /> : null}
+      {details ? <FailureSummary symptom={details.symptom} narrative={narrative} /> : null}
       {details?.narrativeUnavailable ? (
         <p className="text-xs text-muted-foreground">{t(`platformFailures.narrativeUnavailable.${details.narrativeUnavailable}`)}</p>
       ) : null}
@@ -118,7 +133,6 @@ export function FailureDetails({ failure, isOwner, affectedCardCount, leavesList
       {details ? (
         <details className="space-y-2 text-xs">
           <summary className="cursor-pointer text-muted-foreground">{t("platformFailures.technicalDetails")}</summary>
-          <p>{details.symptom}</p>
           <p className="text-muted-foreground">
             {affectedCardCount === undefined
               ? t("platformFailures.cardMeta", { component: details.component, n: failure.occurrences, count: failure.occurrences })

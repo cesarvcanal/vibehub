@@ -84,7 +84,9 @@ import {
 import { AccountUsageBars, useMinuteTick } from "@/features/board/components/AccountUsageBars";
 import { PlanUsageMeter, resetCardPlanUsage, setCardPlanUsage } from "@/features/board/components/PlanUsage";
 import { pillPercent } from "@/features/board/lib/usage";
-import type { AccountsUsageResponse, CardColumn, CardSessionInfo } from "@/api/types";
+import type { AccountLoan, AccountsUsageResponse, CardColumn, CardSessionInfo } from "@/api/types";
+import { accountsApi } from "@/features/accounts/api";
+import { AccountLoanNotice } from "@/features/accounts/components/AccountLoanNotice";
 import { t as translate, useT } from "@/i18n";
 
 /**
@@ -324,6 +326,16 @@ export function CardTerminalView({
     const key = change === "pending" ? toastKey.pending : change === "live" && toastKey.live ? toastKey.live : toastKey.switched;
     toast.success(translate(key, vars));
   }
+
+  const accountLoan = card?.accountLoan;
+  const accountReturnMutation = useMutation<Awaited<ReturnType<typeof accountsApi.returnCardAccount>>, Error, AccountLoan>({
+    mutationFn: () => accountsApi.returnCardAccount(cardId),
+    onSuccess: (result, loan) => {
+      resetCardPlanUsage(queryClient, cardId);
+      applySessionSwitch(result, { switched: "accounts.loan.returned", pending: "accounts.loan.returnPending" }, { label: loan.originalEffectiveAccount });
+    },
+    onError: (error) => toast.error(apiErrorMessage(error, translate("accounts.loan.returnError"))),
+  });
 
   const accountMutation = useMutation({
     mutationFn: (accountSlug: string | null) => boardApi.patchCardSession(cardId, { accountSlug }),
@@ -1300,6 +1312,14 @@ export function CardTerminalView({
                 terminalWorking={working}
                 footer={prBlocks}
                 account={{ slug: inUseSlug, name: accountName }}
+                accountNotice={accountLoan ? (
+                  <AccountLoanNotice
+                    loan={accountLoan}
+                    currentAccount={inUseSlug}
+                    returning={accountReturnMutation.isPending}
+                    onReturn={() => accountReturnMutation.mutate(accountLoan)}
+                  />
+                ) : null}
                 analysisCard={analysisCard}
                 ariaLabel={t("chat.ariaFor", { title: card?.title ?? t("cardView.cardFallback") })}
               />

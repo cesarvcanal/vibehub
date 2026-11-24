@@ -2963,6 +2963,35 @@ describe("SdkChatView — subagentes", () => {
     }
   });
 
+  it("o selo do subagente mostra a skill que o despachou ao lado do tipo do agente", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "s1", name: "Skill", input: { skill: "mattpocock-skills:code-review" } });
+    ws.deliver(agentCall);
+    ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "running", subagentType: "Explore" });
+
+    fireEvent.click(within(screen.getByTestId("sdk-fleet")).getByTestId("sdk-fleet-agent"));
+    const dialog = await screen.findByTestId("sdk-detail");
+    expect(within(dialog).getByTestId("sdk-agent-skill")).toHaveTextContent("mattpocock-skills:code-review");
+    expect(within(dialog).getByTestId("sdk-agent-type")).toHaveTextContent("Explore");
+  });
+
+  it("subagente despachado sem skill no turno mostra só o tipo do agente no selo", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver(agentCall);
+    ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "running", subagentType: "Explore" });
+
+    fireEvent.click(within(screen.getByTestId("sdk-fleet")).getByTestId("sdk-fleet-agent"));
+    const dialog = await screen.findByTestId("sdk-detail");
+    expect(within(dialog).queryByTestId("sdk-agent-skill")).toBeNull();
+    expect(within(dialog).getByTestId("sdk-agent-type")).toHaveTextContent("Explore");
+  });
+
   it("o subagente vira uma linha da frota; o clique abre a linha do tempo dele, pedida ao back", async () => {
     renderSdkChat();
     const ws = await socket();

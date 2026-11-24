@@ -206,3 +206,24 @@ describe("AccountsManager — renaming an account", () => {
     expect(input).toHaveValue("Tech");
   });
 });
+
+describe("AccountsManager — conta reserva", () => {
+  it("cada linha, a conta padrão incluída, mostra a reserva gravada no servidor", async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/auth/me") return Promise.resolve({ user: { id: "1", username: "operator", role: "owner" } });
+      if (url === "/accounts") {
+        return Promise.resolve({
+          accounts: [{ slug: "tech", name: "Tech", createdAt: 1, backupAccountSlug: "default" }],
+          defaultLabel: "Main",
+          defaultBackup: "tech",
+        });
+      }
+      return Promise.resolve({});
+    });
+    const user = userEvent.setup();
+    await openDialog(user);
+
+    expect(screen.getByRole("combobox", { name: "Backup account of Main" })).toHaveValue("tech");
+    expect(screen.getByRole("combobox", { name: "Backup account of Tech" })).toHaveValue("default");
+  });
+});

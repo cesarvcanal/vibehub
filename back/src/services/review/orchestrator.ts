@@ -5,7 +5,7 @@ import {
 } from "../board/registry.js";
 import { cardBranch, resumeCard } from "../board/workspace.js";
 import { recordCardActor } from "../board/actor.js";
-import { cardHoldsBackgroundWork, cardUsageLimit } from "../board/agentState.js";
+import { cardHoldsBackgroundWork, cardSwitchingAccount, cardUsageLimit } from "../board/agentState.js";
 import { findUser } from "../../auth/users.js";
 import { cardLevel } from "../../auth/access.js";
 import { cardAccountSlug, getUserGit, linkedAccountSlug } from "../../auth/userGit.js";
@@ -1506,6 +1506,7 @@ async function notJudged(event: CardEvent): Promise<string | null> {
   if (!card) return "card sumiu";
   if (isHumanActive(card)) return "pessoa usando o card";
   if (cardHoldsBackgroundWork(card.id)) return "tarefa em segundo plano rodando";
+  if (cardSwitchingAccount(card.id)) return "conta Claude trocando para a reserva";
   const declared = event.state ?? card.declaredState;
   if (declared === "needs_me" || declared === "blocked") return `agente declarou ${declared}`;
   if (card.awaitingDecisionAt || card.pendingQuestionAt) return "pergunta ou permissão em aberto";

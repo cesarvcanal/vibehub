@@ -4,6 +4,8 @@ import { dataPath } from "../../config/env.js";
 import { logger } from "../../utils/logger.js";
 import { allocateBrowserSlot, cardBrowserSlot, isBrowserSlotPort, rememberBrowserSlot, SLOT_SPACE } from "../browser/ports.js";
 import { UUID_RE } from "./cardId.js";
+import { backupChainOf, nextBackupAccount, type ExhaustedAccount } from "../accounts/backupChain.js";
+import { DEFAULT_ACCOUNT_SLUG } from "../accounts/profiles.js";
 import { markWaitsReady, parseCardWait, type CardWait, type WaitFailure } from "./cardWait.js";
 
 /**
@@ -248,6 +250,14 @@ export interface Account {
   slug: string;
   name: string;
   createdAt: number;
+  backupAccountSlug?: string;
+}
+
+export interface AccountLoan {
+  originalCardAccountSlug?: string;
+  originalEffectiveAccount: string;
+  renewsAt?: number;
+  exhausted: ExhaustedAccount[];
 }
 
 export interface Project {
@@ -325,6 +335,7 @@ export interface Card {
   statusAt?: number;
   /** Claude account for THIS card. Absent = inherit the project's (absent there = default account). */
   accountSlug?: string;
+  accountLoan?: AccountLoan;
   /** Claude model for THIS card (one of CLAUDE_MODELS). Absent = the account default (no flag). */
   model?: string;
   /**
@@ -670,6 +681,7 @@ export function sanitizeConnectionLabel(label: string | null | undefined, login:
  */
 export interface BoardConfig {
   defaultAccountLabel?: string;
+  defaultAccountBackup?: string;
 }
 
 /** Display label for the default account: trimmed, at most 40 chars. Empty -> undefined (clears). PURE. */
@@ -1470,6 +1482,48 @@ export async function renameAccount(slug: string, name: string): Promise<Account
   });
 }
 
+function findAccountOrDefault(doc: BoardDoc, accountSlug: string): Account | typeof DEFAULT_ACCOUNT_SLUG {
+  if (accountSlug === DEFAULT_ACCOUNT_SLUG) return DEFAULT_ACCOUNT_SLUG;
+  const slug = assertAccountSlug(accountSlug);
+  const account = doc.accounts.find((candidate) => candidate.slug === slug);
+  if (!account) throw new Error("account not found");
+  return account;
+}
+
+function accountSlugOf(account: Account | typeof DEFAULT_ACCOUNT_SLUG): string {
+  return account === DEFAULT_ACCOUNT_SLUG ? account : account.slug;
+}
+
+function accountBackups(doc: BoardDoc): Map<string, string> {
+  const named = doc.accounts.flatMap((account) => (account.backupAccountSlug ? [[account.slug, account.backupAccountSlug] as const] : []));
+  const fromDefault = doc.config.defaultAccountBackup ? [[DEFAULT_ACCOUNT_SLUG, doc.config.defaultAccountBackup] as const] : [];
+  return new Map([...named, ...fromDefault]);
+}
+
+export async function readAccountBackups(): Promise<Map<string, string>> {
+  return accountBackups(await store.load());
+}
+
+export async function setAccountBackup(
+  accountSlug: string,
+  backupAccountSlug: string | null,
+): Promise<{ accountSlug: string; backupAccountSlug: string | null }> {
+  return store.mutate((doc) => {
+    const account = findAccountOrDefault(doc, accountSlug);
+    const backup = backupAccountSlug === null ? null : accountSlugOf(findAccountOrDefault(doc, backupAccountSlug));
+    if (backup === accountSlugOf(account)) throw new Error("an account cannot be its own backup");
+    if (account === DEFAULT_ACCOUNT_SLUG) {
+      const { defaultAccountBackup: _previous, ...rest } = doc.config;
+      doc.config = backup === null ? rest : { ...rest, defaultAccountBackup: backup };
+    } else if (backup === null) {
+      delete account.backupAccountSlug;
+    } else {
+      account.backupAccountSlug = backup;
+    }
+    return { accountSlug: accountSlugOf(account), backupAccountSlug: backup };
+  });
+}
+
 /**
  * Removes an account. REFUSES ("in use") while ANY card or project still references the slug —
  * removing it blindly would leave a dangling reference and break the next open of those cards.
@@ -1485,6 +1539,14 @@ export async function removeAccount(slug: string): Promise<Account> {
       throw new Error(
         `account '${v}' is in use by ${cards} card(s) and ${projects} project(s) — move them to another account first`,
       );
+    }
+    const backedUp = [...accountBackups(doc)].filter(([, backup]) => backup === v).map(([account]) => account);
+    if (backedUp.length > 0) {
+      throw new Error(`account '${v}' is the backup of ${backedUp.join(", ")} — pick another backup first`);
+    }
+    const lentCards = doc.cards.filter((card) => card.accountLoan?.originalEffectiveAccount === v).length;
+    if (lentCards > 0) {
+      throw new Error(`${lentCards} card(s) are borrowed from account '${v}' — return them first`);
     }
     doc.accounts = doc.accounts.filter((a) => a.slug !== v);
     return found;
@@ -1975,6 +2037,7 @@ function validateCardPatch(
   // Switching accounts on a live session is handled by the caller (kill-session) — this is the record only.
   if (patch.accountSlug !== undefined) {
     next.accountSlug = patch.accountSlug === null ? undefined : requireAccountSlug(doc, patch.accountSlug);
+    next.accountLoan = undefined;
   }
   // model: null/"" = CLEAR (back to the account default); a string must be whitelisted. A change
   // stamps `modelAt`: from that instant the pin is newer than any turn already in the transcript,
@@ -2038,6 +2101,96 @@ export async function updateCard(id: string, patch: UpdateCardInput): Promise<Ca
     if (move) placeCard(doc.cards, card, move.column, now, move.position);
     card.updatedAt = now;
     return card;
+  });
+}
+
+export interface AccountRefusal {
+  reason: "usage_limit" | "login";
+  renewsAt?: number;
+}
+
+export type BackupSwitch =
+  | { outcome: "switched"; from: string; to: string; returnedToOriginal: boolean; card: Card }
+  | { outcome: "skipped" }
+  | { outcome: "exhausted"; exhausted: string[]; unusableDefault: boolean; card: Card };
+
+function findCardOrThrow(doc: BoardDoc, cardId: string): Card {
+  const card = doc.cards.find((candidate) => candidate.id === cardId);
+  if (!card) throw new Error("card not found");
+  return card;
+}
+
+function findCardProjectOrThrow(doc: BoardDoc, card: Card): Project {
+  const project = doc.projects.find((candidate) => candidate.id === card.projectId);
+  if (!project) throw new Error("project not found");
+  return project;
+}
+
+function startAccountLoan(card: Card, from: string, refusal: AccountRefusal): AccountLoan {
+  return {
+    ...(card.accountSlug ? { originalCardAccountSlug: card.accountSlug } : {}),
+    originalEffectiveAccount: from,
+    ...(refusal.renewsAt !== undefined ? { renewsAt: refusal.renewsAt } : {}),
+    exhausted: [],
+  };
+}
+
+export async function switchCardToBackupAccount(cardId: string, refusal: AccountRefusal, now: number = Date.now()): Promise<BackupSwitch> {
+  return store.mutate((doc): BackupSwitch => {
+    const card = findCardOrThrow(doc, cardId);
+    const project = findCardProjectOrThrow(doc, card);
+    const from = effectiveAccountSlug(card, project) ?? DEFAULT_ACCOUNT_SLUG;
+    const chainInProgress = (card.accountLoan?.exhausted.length ?? 0) > 0;
+    if (refusal.reason === "login" && !chainInProgress) return { outcome: "skipped" };
+    const backups = accountBackups(doc);
+    if (!backups.has(from) && !card.accountLoan) return { outcome: "skipped" };
+    const loan = card.accountLoan ?? startAccountLoan(card, from, refusal);
+    const refused: ExhaustedAccount = { accountSlug: from, ...(refusal.renewsAt !== undefined ? { renewsAt: refusal.renewsAt } : {}) };
+    const exhausted = [...loan.exhausted.filter((entry) => entry.accountSlug !== from), refused];
+    const originalUntilRenewal: ExhaustedAccount = {
+      accountSlug: loan.originalEffectiveAccount,
+      ...(loan.renewsAt !== undefined ? { renewsAt: loan.renewsAt } : {}),
+    };
+    const defaultIsUnusable = project.defaultAccountSlug !== undefined;
+    const unusable: ExhaustedAccount[] = defaultIsUnusable ? [{ accountSlug: DEFAULT_ACCOUNT_SLUG }] : [];
+    const backupOf = (accountSlug: string) => backups.get(accountSlug);
+    const to = nextBackupAccount({ from, backupOf, exhausted: [...exhausted, originalUntilRenewal, ...unusable], now });
+    if (to === null) {
+      if (card.accountLoan) card.accountLoan = { ...loan, exhausted };
+      const unusableDefault = defaultIsUnusable && backupChainOf(from, backupOf).includes(DEFAULT_ACCOUNT_SLUG);
+      return { outcome: "exhausted", exhausted: exhausted.map((entry) => entry.accountSlug), unusableDefault, card };
+    }
+    card.updatedAt = now;
+    if (to === loan.originalEffectiveAccount) {
+      card.accountSlug = loan.originalCardAccountSlug;
+      card.accountLoan = undefined;
+      return { outcome: "switched", from, to, returnedToOriginal: true, card };
+    }
+    card.accountSlug = to === DEFAULT_ACCOUNT_SLUG ? undefined : to;
+    card.accountLoan = { ...loan, exhausted };
+    return { outcome: "switched", from, to, returnedToOriginal: false, card };
+  });
+}
+
+export async function returnCardAccount(cardId: string): Promise<{ before: Card; after: Card }> {
+  return store.mutate((doc) => {
+    const card = findCardOrThrow(doc, cardId);
+    const loan = card.accountLoan;
+    if (!loan) throw new Error("card has no borrowed account");
+    const before = { ...card };
+    card.accountSlug = loan.originalCardAccountSlug;
+    card.accountLoan = undefined;
+    card.updatedAt = Date.now();
+    return { before, after: card };
+  });
+}
+
+export async function clearCardBackupChain(cardId: string): Promise<void> {
+  const loan = (await getCard(cardId))?.accountLoan;
+  if (!loan || loan.exhausted.length === 0) return;
+  await store.mutate((doc) => {
+    const card = findCardOrThrow(doc, cardId);
+    if (card.accountLoan) card.accountLoan = { ...card.accountLoan, exhausted: [] };
   });
 }
 

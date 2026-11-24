@@ -215,6 +215,7 @@ export interface SdkChatViewProps {
   footer?: React.ReactNode;
   /** The Claude account this card runs on — what the "login died" warning names and reconnects. */
   account?: LoginAccount;
+  accountNotice?: React.ReactNode;
   ariaLabel?: string;
   className?: string;
   analysisCard?: boolean;
@@ -229,7 +230,7 @@ function ownSends(outbox: readonly OutboxMessage[], viewer: string | undefined):
 }
 
 export function SdkChatView({
-  cardId, active = true, onUploadImage, onStatus, terminalWorking = false, footer, account, ariaLabel, className, analysisCard = false,
+  cardId, active = true, onUploadImage, onStatus, terminalWorking = false, footer, account, accountNotice, ariaLabel, className, analysisCard = false,
 }: SdkChatViewProps) {
   const t = useT();
   // Whose screen this is — the edit affordance belongs only to one's own messages.
@@ -1720,6 +1721,7 @@ export function SdkChatView({
         </div>
       ) : null}
       <AccountLoginDialog account={loginAccount} onClose={() => setLoginAccount(null)} />
+      {accountNotice}
       {longToolWait ? <LongToolWaitNotice wait={longToolWait} onInterrupt={interrupt} /> : null}
       <CardFailureNotice cardId={cardId} notices={state.platformFailures} />
 

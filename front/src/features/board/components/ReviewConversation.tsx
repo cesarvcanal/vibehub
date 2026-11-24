@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Info, UserRound } from "lucide-react";
 import { Badge, BADGE_TEXT } from "@/components/ui/badge";
+import { FOLDED_TEXT_MIN_CHARS, FoldedTextToggle } from "@/components/FoldedTextToggle";
 import type { Finding, Review, ReviewEvent, ReviewEventItem, ReviewFleetRun, ReviewWorking } from "@/api/types";
 import { Markdown } from "@/features/board/components/ChatView";
 import { JumpToLatest, useStickToBottom } from "@/features/board/components/JumpToLatest";
@@ -246,9 +247,6 @@ function ItemLines({
   );
 }
 
-/** Past this many characters, what was said of a finding comes clamped, with "ver mais". */
-export const SAID_CLAMP_CHARS = 240;
-
 /**
  * One finding an AI line is about, as a message of its own: what it is and where it stands after
  * this line, where in the code, then what was said of it — the author's answer, the reviewer's
@@ -269,7 +267,7 @@ function ItemLine({
   const where = finding?.file ? (finding.line ? `${finding.file}:${finding.line}` : finding.file) : null;
   const said = item.reply ?? (item.isNew ? finding?.fix : undefined);
   const problem = item.isNew && !item.reply ? finding?.problem : undefined;
-  const long = (said?.length ?? 0) > SAID_CLAMP_CHARS || (problem?.length ?? 0) > SAID_CLAMP_CHARS;
+  const long = (said?.length ?? 0) > FOLDED_TEXT_MIN_CHARS || (problem?.length ?? 0) > FOLDED_TEXT_MIN_CHARS;
   return (
     <Bubble testId="review-line-item" reviewer={reviewer} fresh={fresh} status={item.status}>
       <div className="flex items-center gap-1.5">
@@ -301,15 +299,7 @@ function ItemLine({
           {said}
         </p>
       ) : null}
-      {long ? (
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-        >
-          {open ? t("review.conversation.less") : t("review.conversation.more")}
-        </button>
-      ) : null}
+      {long ? <FoldedTextToggle isExpanded={open} onToggle={() => setOpen((wasOpen) => !wasOpen)} /> : null}
       {item.commit ? <code className="block font-mono text-[10px] text-muted-foreground">{t("review.conversation.commit", { sha: item.commit.slice(0, 7) })}</code> : null}
     </Bubble>
   );
