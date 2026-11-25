@@ -97,16 +97,23 @@ async function notifyMergeOrder(card: Card, order: MergeOrder, outcome: string, 
   });
 }
 
-export function mergeQueuedOutput(result: DeliverResult): string {
+const MERGE_ORDER_TICKS_BEFORE_DELIVERING_AGAIN = 3;
+const CI_WATCH_COMMAND_TIMEOUT_MS = 5 * 60_000;
+
+export function buildMergeQueuedOutput(result: DeliverResult): string {
   const { queuedSha, prUrl } = result;
   if (!queuedSha || !prUrl) throw new Error("a queued merge needs the commit and the PR");
   const shortSha = queuedSha.slice(0, 7);
-  return `O CI do PR ainda está rodando: a ordem de merge ficou guardada no servidor, presa ao commit ${shortSha}, ` +
-    "e o servidor mergeia sozinho até 1 min depois de o CI ficar verde (até 6 h) e conclui o card. Não encerre o turno: a ordem " +
-    "só está cumprida com o PR mergeado. Diga ao usuário que está esperando o CI e acompanhe: " +
-    `\`gh pr checks ${prUrl} --watch\` (Bash com timeout de 600000 ms; repita se o tempo acabar) e, com o CI verde, ` +
-    `\`gh pr view ${prUrl} --json state\` a cada ~20 s até MERGED. Enquanto espera, não chame o vibehub_deliver de novo. ` +
-    "CI vermelho: a ordem cai sem merge; conte ao usuário, corrija se a falha for deste PR e entregue de novo.";
+  const tickMinutes = MERGE_ORDER_TICK_MS / 60_000;
+  const ttlHours = MERGE_ORDER_TTL_MS / 3_600_000;
+  const minutesBeforeDeliveringAgain = MERGE_ORDER_TICKS_BEFORE_DELIVERING_AGAIN * tickMinutes;
+  return `O CI do PR ainda está rodando: a ordem de merge ficou guardada no servidor, presa ao commit ${shortSha}. O servidor ` +
+    `confere a cada ${tickMinutes} min, mergeia quando o CI ficar verde (até ${ttlHours} h) e conclui o card. Não encerre o turno: ` +
+    "a ordem só está cumprida com o PR mergeado. Diga ao usuário que está esperando o CI e acompanhe: " +
+    `\`gh pr checks ${prUrl} --watch --interval 30\` (Bash com timeout de ${CI_WATCH_COMMAND_TIMEOUT_MS} ms; repita se o tempo ` +
+    `acabar) e, com o CI verde, \`gh pr view ${prUrl} --json state\` a cada ~20 s até MERGED. Enquanto o CI roda, não chame o ` +
+    `vibehub_deliver de novo. CI vermelho, ou PR ainda aberto ${minutesBeforeDeliveringAgain} min depois do verde: chame o ` +
+    "vibehub_deliver de novo com a mesma ordem; a resposta dele diz o motivo (CI, conflito, revisão) e você segue por ela.";
 }
 
 export async function saveOrderFromDelivery(card: Card, result: DeliverResult, orderedBy: string): Promise<void> {

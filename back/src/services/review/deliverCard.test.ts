@@ -503,8 +503,24 @@ describe("deliverCard — ordem de merge com o CI ainda rodando fica guardada no
     expect(out.output).toContain(`gh pr checks ${PR} --watch`);
     expect(out.output).toContain(`gh pr view ${PR} --json state`);
     expect(out.output).toContain(QUEUED_SHA.slice(0, 7));
-    expect(out.output).toContain("não chame o vibehub_deliver de novo");
+    expect(out.output).toContain("Enquanto o CI roda, não chame o vibehub_deliver de novo");
     expect(out.output).not.toContain("nem fique esperando");
+  });
+
+  it("a resposta da ordem guardada dá saída à IA quando o merge não sai: CI vermelho ou PR ainda aberto 3 rodadas da fila depois", async () => {
+    const { deliverCard, card } = await cardWithConnection();
+    deliverAnswer = queuedAnswer;
+    const out = await deliverCard(card.id, { branch: "main", authorized: true, by: "mussa", from: card.id });
+    expect(out.output).toContain("CI vermelho, ou PR ainda aberto 3 min depois do verde: chame o vibehub_deliver de novo com a mesma ordem");
+    expect(out.output).toContain("a cada 1 min");
+    expect(out.output).toContain("até 6 h");
+  });
+
+  it("o acompanhamento do CI roda em comandos de até 5 min, abaixo do limite em que um card mudo deixa de contar como trabalhando", async () => {
+    const { deliverCard, card } = await cardWithConnection();
+    deliverAnswer = queuedAnswer;
+    const out = await deliverCard(card.id, { branch: "main", authorized: true, by: "mussa", from: card.id });
+    expect(out.output).toContain("timeout de 300000 ms");
   });
 
   it("ordem vinda de outro card não pede fila nem grava nada", async () => {

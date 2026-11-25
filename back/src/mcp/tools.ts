@@ -570,9 +570,9 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "Deliver a card: push its branch, open (or reuse) a pull request to `branch`, read the PR's GitHub CI, " +
         "and — ONLY when `authorized` is true and the CI is green — merge the PR with a merge commit " +
         "(never a squash). All git/gh runs as the GitHub account of whoever sent the card its latest order (else the project's). Returns { prUrl, " +
-        "merged, reason }: `reason` is 'merged', 'merge_queued' (CI running; server merges on green: " +
-        "do NOT end your turn until it is MERGED; do not call again), 'gate' (CI red), " +
-        "'no_ci' (no GitHub CI: never merged; the repo needs a GitHub Actions workflow on every PR), 'unauthorized' " +
+        "merged, reason }: `reason` is 'merged', 'merge_queued' (CI running, merge kept: " +
+        "do NOT end your turn until it is MERGED; do not call again mid-CI), 'gate' (CI red), " +
+        "'no_ci' (no GitHub CI: never merged from here; the repo needs a GitHub Actions workflow on every PR), 'unauthorized' " +
         "(prepared the PR but was not told to merge: ask the merge as an AskUserQuestion with the options " +
         "'Mergear em <branch> (recomendado)' and 'Não mergear agora'; when the PR declares a blocking item, ask " +
         "the OK for that item first, without recommending the merge), 'locked' (see below), or a git failure. Pass " +
