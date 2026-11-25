@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { previewPublicUrl, portNotListeningError, PREVIEW_BASE_HINT } from "./announce.js";
-import { PROC_MARKER } from "./preview.js";
+import { CWD_MARKER, PROC_MARKER } from "./preview.js";
 import type { PreviewProbe } from "./probe.js";
 
 /**
@@ -117,6 +117,37 @@ describe("announcePreview", () => {
     await expect(
       announce.announcePreview(cardId, 5173, { command: "a\nb" }),
     ).rejects.toThrow(/single line/);
+  });
+
+  it("recusa a porta servida por um processo de outra pasta, sem registrar nada", async () => {
+    const { registry, announce, cardId } = await boot();
+    runScript.mockResolvedValue({
+      stdout: `${scanOutput([8765])}1 40 python3\n${CWD_MARKER}\n/proc/40 /tmp/artefato-processos\n`,
+      stderr: "",
+      code: 0,
+    });
+
+    await expect(
+      announce.announcePreview(cardId, 8765, { command: "python3 -m http.server 8765", cwd: "/work/app/prototipos" }),
+    ).rejects.toThrow(/port 8765 is served by python3 running in \/tmp\/artefato-processos, not in \/work\/app\/prototipos/);
+    expect((await registry.getCard(cardId))?.previews).toBeUndefined();
+  });
+
+  it.each(["/work/app", "/work/app/front"])("aceita o servidor que roda na pasta anunciada ou dentro dela: %s", async (listenerCwd) => {
+    const { registry, announce, cardId } = await boot();
+    runScript.mockResolvedValue({ stdout: `${scanOutput([5173])}1 40 node\n${CWD_MARKER}\n/proc/40 ${listenerCwd}\n`, stderr: "", code: 0 });
+
+    await announce.announcePreview(cardId, 5173, { command: "npm run dev", cwd: "/work/app" });
+    expect((await registry.getCard(cardId))?.previews).toHaveLength(1);
+  });
+
+  it("não confunde pasta irmã com prefixo parecido com a pasta anunciada", async () => {
+    const { announce, cardId } = await boot();
+    runScript.mockResolvedValue({ stdout: `${scanOutput([5173])}1 40 node\n${CWD_MARKER}\n/proc/40 /work/app-old\n`, stderr: "", code: 0 });
+
+    await expect(announce.announcePreview(cardId, 5173, { command: "npm run dev", cwd: "/work/app" })).rejects.toThrow(
+      /served by node running in \/work\/app-old/,
+    );
   });
 
   it("refuses a silent port WITHOUT registering anything", async () => {

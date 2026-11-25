@@ -117,6 +117,21 @@ describe("GET /api/preview/ports", () => {
     expect(res.json().ports).toEqual([{ port: 5173, address: "loopback", process: "node", pid: 12 }]);
   });
 
+  it("a lista de portas não leva a pasta do processo do runner para a tela", async () => {
+    runScript.mockResolvedValueOnce({
+      stdout: [
+        "   1: 0100007F:1435 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 77 1",
+        "__VIBEHUB_PROC__",
+        "77 12 node",
+        "__VIBEHUB_CWD__",
+        "/proc/12 /tmp/segredo-de-outro-card",
+      ].join("\n"),
+      stderr: "",
+    });
+    const res = await app.inject({ method: "GET", url: "/api/preview/ports", headers: { cookie } });
+    expect(res.json().ports).toEqual([{ port: 5173, address: "loopback", process: "node", pid: 12 }]);
+  });
+
   it("turns an unreachable runner into a 502, not a crash", async () => {
     runScript.mockRejectedValueOnce(new Error("docker not reachable"));
     const res = await app.inject({ method: "GET", url: "/api/preview/ports", headers: { cookie } });
