@@ -1,6 +1,6 @@
 import * as React from "react";
 import { AlertCircle, BookCheck, Bot, Braces, Bug, ChevronRight, FlaskConical, Gauge, Scale, ShieldCheck, Telescope, type LucideIcon } from "lucide-react";
-import type { AnalysisDimension } from "@/api/types";
+import { ANALYSIS_DIMENSIONS, type AnalysisDimension } from "@/api/types";
 import { Markdown } from "@/features/board/components/ChatView";
 import { TypingDots } from "@/features/board/components/PeerTypingIndicator";
 import {
@@ -103,22 +103,78 @@ export function FleetChat({ entries, label, agentDetail }: { entries: FleetChatE
 
 function Avatar({ speaker }: { speaker: ChatSpeaker }) {
   const role = agentRole(speaker.label);
-  const tone = agentTone(role);
+  return <ToneAvatar tone={agentTone(role)} isVerification={role.kind === "verification"} />;
+}
+
+function ToneAvatar({ tone, isVerification, className, style: inlineStyle }: {
+  tone: AgentTone;
+  isVerification: boolean;
+  className?: string;
+  style?: React.CSSProperties;
+}) {
   const style = TONE_STYLE[tone];
-  const isVerification = role.kind === "verification";
   const Icon = style.icon;
   return (
     <span
       aria-hidden="true"
       data-tone={tone}
       data-verification={isVerification}
+      style={inlineStyle}
       className={cn(
         "grid h-7 w-7 shrink-0 place-items-center rounded-full",
         isVerification ? cn("border-2 bg-background", style.outline) : cn("text-background", style.solid),
+        className,
       )}
     >
       <Icon className="h-3.5 w-3.5" />
     </span>
+  );
+}
+
+const FLEET_LINEUP: readonly AgentTone[] = ["context", ...ANALYSIS_DIMENSIONS, "judge"];
+
+const GATHER_STAGGER_MS = 220;
+
+const GHOST_BUBBLES: readonly { tone: AgentTone; lineWidths: readonly string[]; fade: string }[] = [
+  { tone: "context", lineWidths: ["w-40", "w-28"], fade: "opacity-100" },
+  { tone: "security", lineWidths: ["w-32"], fade: "opacity-70" },
+  { tone: "correctness", lineWidths: ["w-44", "w-36", "w-20"], fade: "opacity-40" },
+];
+
+export function FleetGathering({ title, body }: { title: string; body: string }) {
+  return (
+    <section role="status" aria-label={title} className="flex min-w-0 flex-col gap-5 py-6">
+      <div className="flex flex-col items-center gap-3 text-center">
+        <div className="flex -space-x-1.5">
+          {FLEET_LINEUP.map((tone, index) => (
+            <ToneAvatar
+              key={tone}
+              tone={tone}
+              isVerification={false}
+              className="animate-fleet-gather ring-2 ring-background motion-reduce:animate-none"
+              style={{ animationDelay: `${index * GATHER_STAGGER_MS}ms` }}
+            />
+          ))}
+        </div>
+        <p className="flex items-center gap-2 text-sm font-semibold">
+          <TypingDots />
+          {title}
+        </p>
+        <p className="max-w-[34ch] text-xs leading-relaxed text-muted-foreground">{body}</p>
+      </div>
+      <ol aria-hidden="true" className="flex min-w-0 flex-col gap-2.5">
+        {GHOST_BUBBLES.map((bubble) => (
+          <li key={bubble.tone} className={cn("flex items-end gap-2", bubble.fade)}>
+            <ToneAvatar tone={bubble.tone} isVerification={false} className="opacity-60" />
+            <div className="flex animate-pulse flex-col gap-1.5 rounded-xl rounded-bl-sm bg-muted px-2.5 py-2 motion-reduce:animate-none">
+              {bubble.lineWidths.map((width, lineIndex) => (
+                <span key={`${width}-${lineIndex}`} className={cn("h-2 max-w-full rounded-full bg-muted-foreground/30", width)} />
+              ))}
+            </div>
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }
 

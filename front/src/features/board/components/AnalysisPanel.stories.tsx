@@ -239,6 +239,43 @@ export const Conversa: Story = {
   parameters: { analysis: readModel(report({ findings: [fixedBlocking] }), "apt"), conversation: fleetConversation },
 };
 
+export const FrotaSeReunindo: Story = {
+  name: "Conversa · frota se reunindo, antes da primeira fala",
+  parameters: { analysis: { analysis: null } satisfies CardAnalysisResponse },
+};
+
+const LIVE_SPEECHES = [
+  "Li o diff: o callback cria a sessão sem olhar o exp do token.",
+  "Confirmo: o teste de login passa com um token vencido.",
+  "O state do OAuth não é apagado depois da primeira leitura.",
+  "Nada de performance no caminho do login: uma consulta por request.",
+];
+
+const LIVE_SPEECH_EVERY_MS = 2_000;
+
+function LiveFleetSpeeches({ children }: { children: React.ReactNode }) {
+  const client = useQueryClient();
+  React.useEffect(() => {
+    const timer = setInterval(() => {
+      client.setQueryData<AnalysisConversation | null>(cardAnalysisConversationKey(CARD_ID), (current) => {
+        const conversation = current ?? fleetConversation;
+        const at = conversation.items.length + 1;
+        const speaker = conversation.agents[at % conversation.agents.length]!;
+        const speech = LIVE_SPEECHES[at % LIVE_SPEECHES.length]!;
+        return { ...conversation, items: [...conversation.items, { agentId: speaker.id, at, kind: "text", text: speech }] };
+      });
+    }, LIVE_SPEECH_EVERY_MS);
+    return () => clearInterval(timer);
+  }, [client]);
+  return <>{children}</>;
+}
+
+export const ConversaAoVivo: Story = {
+  name: "Conversa · falas chegando ao vivo",
+  parameters: { analysis: { analysis: null } satisfies CardAnalysisResponse, conversation: fleetConversation },
+  decorators: [(StoryComponent) => <LiveFleetSpeeches><StoryComponent /></LiveFleetSpeeches>],
+};
+
 const timelineAt = (minute: number) => Date.UTC(2026, 10, 24, 13, minute);
 
 const timelineEntry = (event: AnalysisTimelineEvent, minute: number): AnalysisTimelineEntry => ({

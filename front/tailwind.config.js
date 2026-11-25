@@ -71,6 +71,10 @@ export default {
           "0%": { transform: "translateX(-100%)" },
           "100%": { transform: "translateX(250%)" },
         },
+        "fleet-gather": {
+          "0%, 100%": { transform: "translateY(0) scale(0.92)", opacity: "0.35" },
+          "40%": { transform: "translateY(-4px) scale(1)", opacity: "1" },
+        },
         // external: a entrada de mensagem do Telegram Web A (Ajaxy/telegram-tt, MessageList.scss .Message:not(.open))
         "message-arrival": {
           from: { transform: "scale(0.8)", opacity: "0" },
@@ -82,6 +86,7 @@ export default {
         "accordion-up": "accordion-up 0.2s ease-out",
         "typing-dot": "typing-dot 1s ease-in-out infinite",
         "compact-slide": "compact-slide 1.4s ease-in-out infinite",
+        "fleet-gather": "fleet-gather 1.76s ease-in-out infinite",
         "message-arrival": "message-arrival 0.2s ease both",
       },
     },
