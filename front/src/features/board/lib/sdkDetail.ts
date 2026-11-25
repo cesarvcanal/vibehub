@@ -139,10 +139,16 @@ export function listRunningWork(
   const fleetAgents = pinnedFleets.flatMap((entry) => entry.rows).filter((row): row is Extract<SdkRow, { kind: "tool" }> => row.kind === "tool");
   const fleetAgentIds = new Set(fleetAgents.map((row) => row.id));
   const agentsOutsideFleets = foregroundAgents.filter((row) => !fleetAgentIds.has(row.id));
+  const isFinishedAgent = (row: SdkRow): boolean => row.kind === "tool" && ["ok", "error"].includes(agentStatus(row, tasks[row.id]));
+  const finishedAgentIds = new Set(
+    entries.flatMap((entry) => (entry.kind === "agents" ? entry.rows.filter(isFinishedAgent).map((row) => row.id) : [])),
+  );
+  const isShownInFleet = (task: BackgroundTask): boolean =>
+    task.toolUseId !== undefined && (fleetAgentIds.has(task.toolUseId) || finishedAgentIds.has(task.toolUseId));
   return {
     pinnedFleetIds: new Set(pinnedFleets.map((entry) => entry.id)),
     agents: [...fleetAgents, ...agentsOutsideFleets],
-    looseTasks: linkedTasks.filter((task) => !task.toolUseId || !fleetAgentIds.has(task.toolUseId)),
+    looseTasks: linkedTasks.filter((task) => !isShownInFleet(task)),
   };
 }
 

@@ -291,10 +291,20 @@ describe("o que fica preso acima do campo enquanto roda", () => {
     expect(work.looseTasks).toEqual([]);
   });
 
-  it("o subagente já concluído que o CLI ainda lista como tarefa não prende a frota", () => {
+  it("o subagente já concluído que o CLI ainda lista como tarefa não prende a frota nem se repete como tarefa solta", () => {
     const backgroundTasks = [{ id: "k-a1", type: "local_agent", description: "a1", toolUseId: "a1" }];
     const work = runningWorkOf(["a1"], { a1: agentTask("a1", "completed") }, backgroundTasks);
     expect(work.pinnedFleetIds.size).toBe(0);
+    expect(work.looseTasks).toEqual([]);
+  });
+
+  it("o subagente de estado desconhecido que o CLI ainda lista continua visível como tarefa solta", () => {
+    const replayed = tool(INITIAL_SDK_STATE, "a1", "Agent", { description: "a1" });
+    const silenced = applySdkEvent(replayed, { type: "tool_result", id: "a1", toolResult: { background: true } });
+    const backgroundTasks = [{ id: "k-a1", type: "local_agent", description: "a1", toolUseId: "a1" }];
+    expect(agentStatus(rowOf(silenced, "a1"), undefined)).toBe("unknown");
+    const work = listRunningWork(groupSdkRows(silenced.rows), [], backgroundTasks, {});
+    expect(work.looseTasks).toEqual(backgroundTasks);
   });
 
   it("a tarefa do CLI que chegou sem a chamada se liga ao subagente pelo id da tarefa e não se repete", () => {
