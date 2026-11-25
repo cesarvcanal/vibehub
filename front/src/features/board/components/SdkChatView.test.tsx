@@ -3047,7 +3047,7 @@ describe("SdkChatView — subagentes", () => {
       ws.deliver(agentCall);
       // the runner's clock does not come in: a startedAt from another clock does not change what the screen shows
       ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "running", toolUses: 18, durationMs: 186_000, startedAt: 1 });
-      const agent = within(screen.getByTestId("sdk-fleet")).getByTestId("sdk-fleet-agent");
+      const agent = within(screen.getByTestId("sdk-running-tasks")).getByTestId("sdk-fleet-agent");
       // the real clock also moves with `shouldAdvanceTime`: a slow runner may add a second
       expect(agent).toHaveTextContent(/3m 0[67]s/);
 
@@ -3056,7 +3056,7 @@ describe("SdkChatView — subagentes", () => {
 
       // the background strip shows the same clock
       ws.deliver({ type: "background_tasks", tasks: [{ id: "b1", type: "local_agent", description: "explora o chat", toolUseId: "t1" }] });
-      expect(screen.getByTestId("sdk-running-task")).toHaveTextContent(/4m 0[678]s/);
+      expect(screen.getByTestId("sdk-fleet-agent")).toHaveTextContent(/4m 0[678]s/);
 
       // the subagent modal counts along with the fleet row
       fireEvent.click(agent);
@@ -3067,7 +3067,7 @@ describe("SdkChatView — subagentes", () => {
       // finished, the clock stops at the final duration
       ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "completed", toolUses: 20, durationMs: 250_000 });
       await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
-      expect(agent).toHaveTextContent("4m 10s");
+      expect(within(screen.getByTestId("sdk-fleet")).getByTestId("sdk-fleet-agent")).toHaveTextContent("4m 10s");
       expect(screen.getByTestId("sdk-agent-elapsed")).toHaveTextContent("4m 10s");
     } finally {
       vi.useRealTimers();
@@ -3083,7 +3083,7 @@ describe("SdkChatView — subagentes", () => {
     ws.deliver(agentCall);
     ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "running", subagentType: "Explore" });
 
-    fireEvent.click(within(screen.getByTestId("sdk-fleet")).getByTestId("sdk-fleet-agent"));
+    fireEvent.click(within(screen.getByTestId("sdk-running-tasks")).getByTestId("sdk-fleet-agent"));
     const dialog = await screen.findByTestId("sdk-detail");
     expect(within(dialog).getByTestId("sdk-agent-skill")).toHaveTextContent("mattpocock-skills:code-review");
     expect(within(dialog).getByTestId("sdk-agent-type")).toHaveTextContent("Explore");
@@ -3097,7 +3097,7 @@ describe("SdkChatView — subagentes", () => {
     ws.deliver(agentCall);
     ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "running", subagentType: "Explore" });
 
-    fireEvent.click(within(screen.getByTestId("sdk-fleet")).getByTestId("sdk-fleet-agent"));
+    fireEvent.click(within(screen.getByTestId("sdk-running-tasks")).getByTestId("sdk-fleet-agent"));
     const dialog = await screen.findByTestId("sdk-detail");
     expect(within(dialog).queryByTestId("sdk-agent-skill")).toBeNull();
     expect(within(dialog).getByTestId("sdk-agent-type")).toHaveTextContent("Explore");
@@ -3114,8 +3114,8 @@ describe("SdkChatView — subagentes", () => {
     ws.deliver({ type: "tool_use", id: "c2", name: "Grep", input: { pattern: "toolHeadline" }, parentToolUseId: "t1" });
     ws.deliver({ type: "agent_task", toolUseId: "t1", taskId: "k1", status: "running", toolUses: 2, summary: "Lendo o reducer" });
 
-    const fleet = screen.getByTestId("sdk-fleet");
-    const agent = within(fleet).getByTestId("sdk-fleet-agent");
+    const pinnedFleet = screen.getByTestId("sdk-running-tasks");
+    const agent = within(pinnedFleet).getByTestId("sdk-fleet-agent");
     expect(agent).toHaveAttribute("data-status", "running");
     expect(agent).toHaveTextContent("explora o chat");
     expect(agent).toHaveTextContent("Lendo o reducer");
@@ -3234,6 +3234,15 @@ describe("SdkChatView — subagentes", () => {
     expect(fleetPropsEqual(before, { rows: [row], tasks, children: new Map([["t1", kids]]) })).toBe(true);
     expect(fleetPropsEqual(before, { rows: [row], tasks, children: new Map([["t1", [...kids]]]) })).toBe(false);
     expect(fleetPropsEqual(before, { rows: [row], tasks: {}, children })).toBe(false);
+  });
+
+  it("a frota presa acima do campo redesenha quando as tarefas soltas dela mudam", () => {
+    const row: SdkRow = { kind: "tool", id: "t1", name: "Agent", summary: "", input: {} };
+    const children = new Map<string, SdkRow[]>();
+    const tasks = {};
+    const pinned = { className: "", looseTaskRows: [] };
+    expect(fleetPropsEqual({ rows: [row], tasks, children, pinned }, { rows: [row], tasks, children, pinned })).toBe(true);
+    expect(fleetPropsEqual({ rows: [row], tasks, children, pinned }, { rows: [row], tasks, children, pinned: { className: "", looseTaskRows: ["Roda test:changed"] } })).toBe(false);
   });
 
   it("a barra de atividade diz que é o subagente trabalhando", async () => {
@@ -4690,7 +4699,7 @@ describe("SdkChatView — tarefas em segundo plano", () => {
     expect(tray).toHaveTextContent(/background task/i);
   });
 
-  it("a faixa tem o desenho do painel de subagentes: cada tarefa é uma linha rodando; sem ligação, não é clicável", async () => {
+  it("o subagente vai preso na frota e a tarefa que não é subagente vira linha solta, sem clique", async () => {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -4702,12 +4711,53 @@ describe("SdkChatView — tarefas em segundo plano", () => {
     ] });
     const tray = await screen.findByTestId("sdk-running-tasks");
     expect(tray).toHaveAttribute("data-count", "2");
-    const [linked, loose] = within(tray).getAllByTestId("sdk-running-task");
+    const linked = within(tray).getByTestId("sdk-fleet-agent");
+    const loose = within(tray).getByTestId("sdk-running-task");
     expect(linked).toHaveAttribute("data-status", "running");
     expect(linked.tagName).toBe("BUTTON");
+    expect(loose).toHaveTextContent("Wait for jest");
     expect(loose).toHaveAttribute("data-status", "running");
     expect(loose.tagName).toBe("DIV");
     expect(loose).not.toHaveAttribute("data-clickable");
+  });
+
+  it("com um subagente rodando, a frota inteira fica presa acima do campo, com o robô, os concluídos e a barra, e sai da conversa", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "tool_use", id: "a1", name: "Agent", input: { description: "Code review · padrões" } });
+    ws.deliver({ type: "tool_use", id: "a2", name: "Agent", input: { description: "Code review · spec" } });
+    ws.deliver({ type: "agent_task", toolUseId: "a1", taskId: "k1", status: "completed" });
+    ws.deliver({ type: "agent_task", toolUseId: "a2", taskId: "k2", status: "running", summary: "Reading manager.ts" });
+
+    const tray = await screen.findByTestId("sdk-running-tasks");
+    expect(tray).toHaveTextContent("2 subagents");
+    expect(tray).toHaveTextContent("1 done · 1 running");
+    expect(within(tray).getByTestId("sdk-fleet-progress")).toHaveStyle({ width: "50%" });
+    expect(within(tray).getAllByTestId("sdk-fleet-agent").map((row) => row.textContent)).toEqual([
+      expect.stringContaining("Code review · padrões"),
+      expect.stringContaining("Reading manager.ts"),
+    ]);
+    expect(screen.queryByTestId("sdk-fleet")).toBeNull();
+
+    ws.deliver({ type: "agent_task", toolUseId: "a2", taskId: "k2", status: "completed" });
+    await waitFor(() => expect(screen.queryByTestId("sdk-running-tasks")).toBeNull());
+    expect(screen.getByTestId("sdk-fleet")).toHaveTextContent("2 done · 0 running");
+  });
+
+  it("a frota presa acima do campo não deixa um item vazio no lugar dela na conversa", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "assistant_text", text: "Vou revisar." });
+    ws.deliver({ type: "tool_use", id: "a1", name: "Agent", input: { description: "Code review · padrões" } });
+    ws.deliver({ type: "agent_task", toolUseId: "a1", taskId: "k1", status: "running" });
+    await screen.findByTestId("sdk-running-tasks");
+
+    const conversationItems = [...screen.getByTestId("sdk-chat-scroller").querySelectorAll(":scope > div")];
+    expect(conversationItems.filter((item) => item.childElementCount === 0 && item.textContent === "")).toEqual([]);
   });
 
   it("um subagente em primeiro plano fica fixo acima do campo enquanto roda, e abre a linha do tempo dele", async () => {
@@ -4719,7 +4769,7 @@ describe("SdkChatView — tarefas em segundo plano", () => {
     ws.deliver({ type: "agent_task", toolUseId: "a1", taskId: "k1", status: "running", lastTool: "Bash", toolUses: 5 });
 
     const tray = await screen.findByTestId("sdk-running-tasks");
-    const pinned = within(tray).getByTestId("sdk-running-task");
+    const pinned = within(tray).getByTestId("sdk-fleet-agent");
     expect(pinned).toHaveTextContent("Analisar transcripts de cards");
     expect(pinned).toHaveAttribute("data-status", "running");
 
@@ -4727,7 +4777,7 @@ describe("SdkChatView — tarefas em segundo plano", () => {
     expect(await screen.findByRole("dialog")).toHaveTextContent("Analisar transcripts de cards");
   });
 
-  it("a linha fixa do subagente diz o que ele faz e quantas ações fez, como o painel da conversa, mesmo antes do progresso do CLI", async () => {
+  it("a linha presa do subagente diz o que ele faz e quantas ações fez, mesmo antes do progresso do CLI, e não se repete na conversa", async () => {
     renderSdkChat();
     const ws = await socket();
     ws.accept();
@@ -4735,10 +4785,10 @@ describe("SdkChatView — tarefas em segundo plano", () => {
     ws.deliver({ type: "tool_use", id: "a1", name: "Agent", input: { description: "Analisar transcripts de cards" } });
     ws.deliver({ type: "tool_use", id: "c1", name: "Bash", input: { command: "ls", description: "Lista os transcripts" }, parentToolUseId: "a1" });
 
-    const pinned = within(await screen.findByTestId("sdk-running-tasks")).getByTestId("sdk-running-task");
-    const inConversation = screen.getByTestId("sdk-fleet-agent");
+    const pinned = within(await screen.findByTestId("sdk-running-tasks")).getByTestId("sdk-fleet-agent");
     expect(pinned).toHaveTextContent("Lista os transcripts");
-    expect(pinned.textContent).toBe(inConversation.textContent);
+    expect(pinned).toHaveTextContent("1 action");
+    expect(screen.getAllByTestId("sdk-fleet-agent")).toHaveLength(1);
   });
 
   it("a linha fixa do subagente em segundo plano também diz o que ele faz e quantas ações fez, como o painel da conversa", async () => {
@@ -4751,7 +4801,7 @@ describe("SdkChatView — tarefas em segundo plano", () => {
     ws.deliver({ type: "background_tasks", tasks: [{ id: "k9", type: "local_agent", description: "Review backend", toolUseId: "t9" }] });
     ws.deliver({ type: "tool_use", id: "c1", name: "Bash", input: { command: "ls", description: "Lista os transcripts" }, parentToolUseId: "t9" });
 
-    const pinned = within(await screen.findByTestId("sdk-running-tasks")).getByTestId("sdk-running-task");
+    const pinned = within(await screen.findByTestId("sdk-running-tasks")).getByTestId("sdk-fleet-agent");
     expect(pinned).toHaveTextContent("Lista os transcripts");
     expect(pinned).toHaveTextContent("1");
   });
@@ -5832,7 +5882,7 @@ describe("SdkChatView — o detalhe de cada ação", () => {
     ws.deliver({ type: "ready" });
     ws.deliver({ type: "tool_use", id: "t9", name: "Agent", input: { description: "Review PR 510", run_in_background: true } });
     ws.deliver({ type: "background_tasks", tasks: [{ id: "k9", type: "local_agent", description: "Review PR 510", toolUseId: "t9" }] });
-    const task = screen.getByTestId("sdk-running-task");
+    const task = screen.getByTestId("sdk-fleet-agent");
     expect(task).toHaveAttribute("data-clickable", "true");
     fireEvent.click(task);
     expect(await screen.findByTestId("sdk-detail")).toHaveAttribute("data-view", "agent");

@@ -785,6 +785,11 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
     const stoppedNow = merged.status === "stopped" && session.tasks.get(merged.toolUseId)?.status !== "stopped";
     if (stoppedNow) session.stoppedTasksUnknownToModel.push(merged.description || "tarefa em segundo plano");
     session.tasks.set(merged.toolUseId, merged);
+    const listedWithoutCall = session.backgroundTasks.some((task) => task.id === merged.taskId && !task.toolUseId);
+    if (listedWithoutCall) {
+      session.backgroundTasks = session.backgroundTasks.map((task) => (task.id === merged.taskId ? { ...task, toolUseId: merged.toolUseId } : task));
+      broadcast(session, { type: "background_tasks", tasks: session.backgroundTasks });
+    }
     // Cap: a long session fires hundreds of tasks; the oldest finished ones go first.
     if (session.tasks.size > TASKS_MAX) {
       for (const [id, task] of session.tasks) {

@@ -1,6 +1,6 @@
 import * as React from "react";
 import { t as translate } from "@/i18n";
-import { listCurrentTurnRows, toolHeadline, type AgentTask, type BackgroundTask, type SdkRow, type ToolResultSummary } from "@/features/board/lib/sdkChat";
+import { listCurrentTurnRows, toolHeadline, type AgentTask, type BackgroundTask, type SdkRenderRow, type SdkRow, type ToolResultSummary } from "@/features/board/lib/sdkChat";
 import { isAgentTool } from "@/features/board/lib/sdkSubagents";
 import type { DiffRow } from "@/features/board/lib/toolDiff";
 
@@ -111,6 +111,40 @@ export function listForegroundRunningAgents(
     row.kind === "tool" && isAgentTool(row.name) && row.parent === undefined && !row.result && row.live !== false
     && !backgroundCallIds.has(row.id) && agentStatus(row, tasks[row.id]) === "running";
   return listCurrentTurnRows(rows).filter(isForegroundRunningAgent);
+}
+
+export interface RunningWork {
+  pinnedFleetIds: ReadonlySet<string>;
+  agents: Extract<SdkRow, { kind: "tool" }>[];
+  looseTasks: BackgroundTask[];
+}
+
+export function listRunningWork(
+  entries: readonly SdkRenderRow[],
+  foregroundAgents: readonly Extract<SdkRow, { kind: "tool" }>[],
+  backgroundTasks: readonly BackgroundTask[],
+  tasks: Record<string, AgentTask>,
+): RunningWork {
+  const runningCallIds = new Set([...foregroundAgents.map((row) => row.id), ...backgroundTasks.map((task) => task.toolUseId)]);
+  const isRunningAgent = (row: SdkRow): boolean =>
+    row.kind === "tool" && runningCallIds.has(row.id) && agentStatus(row, tasks[row.id]) === "running";
+  const pinnedFleets = entries.filter(
+    (entry): entry is Extract<SdkRenderRow, { kind: "agents" }> => entry.kind === "agents" && entry.rows.some(isRunningAgent),
+  );
+  const fleetAgents = pinnedFleets.flatMap((entry) => entry.rows).filter((row): row is Extract<SdkRow, { kind: "tool" }> => row.kind === "tool");
+  const fleetAgentIds = new Set(fleetAgents.map((row) => row.id));
+  const agentsOutsideFleets = foregroundAgents.filter((row) => !fleetAgentIds.has(row.id));
+  const isFinishedAgent = (row: SdkRow): boolean => row.kind === "tool" && ["ok", "error"].includes(agentStatus(row, tasks[row.id]));
+  const finishedAgentIds = new Set(
+    entries.flatMap((entry) => (entry.kind === "agents" ? entry.rows.filter(isFinishedAgent).map((row) => row.id) : [])),
+  );
+  const isShownInFleet = (task: BackgroundTask): boolean =>
+    task.toolUseId !== undefined && (fleetAgentIds.has(task.toolUseId) || finishedAgentIds.has(task.toolUseId));
+  return {
+    pinnedFleetIds: new Set(pinnedFleets.map((entry) => entry.id)),
+    agents: [...fleetAgents, ...agentsOutsideFleets],
+    looseTasks: backgroundTasks.filter((task) => !isShownInFleet(task)),
+  };
 }
 
 /**

@@ -202,20 +202,22 @@ export function ToolResultText({ name, result }: { name: string; result?: ToolRe
  * THE SUBAGENTS fired in sequence: one row per subagent, with what it is doing now, how many
  * actions it did and how long ago. In place of the "6 ações" that hid all of them behind a click.
  */
-interface FleetProps { rows: SdkRow[]; tasks: Record<string, AgentTask>; children: ReadonlyMap<string, readonly SdkRow[]> }
+interface PinnedFleet { className: string; looseTaskRows: readonly React.ReactNode[] }
+
+interface FleetProps { rows: SdkRow[]; tasks: Record<string, AgentTask>; children: ReadonlyMap<string, readonly SdkRow[]>; pinned?: PinnedFleet }
 
 /**
  * The fleet only redraws when SOMETHING OF IT changed: a token of the main agent's answer recreates the array of
  * rows on every delta, but the subagents' rows are the same references. PURE.
  */
 export function fleetPropsEqual(a: FleetProps, b: FleetProps): boolean {
-  if (a.tasks !== b.tasks || a.rows.length !== b.rows.length || a.rows.some((row, i) => row !== b.rows[i])) return false;
+  if (a.pinned !== b.pinned || a.tasks !== b.tasks || a.rows.length !== b.rows.length || a.rows.some((row, i) => row !== b.rows[i])) return false;
   return a.rows.every((row) => a.children.get(row.id) === b.children.get(row.id));
 }
 
 export const SdkFleet = React.memo(SdkFleetView, fleetPropsEqual);
 
-function SdkFleetView({ rows, tasks, children }: FleetProps) {
+function SdkFleetView({ rows, tasks, children, pinned }: FleetProps) {
   const t = useT();
   const { open } = React.useContext(SdkDetailContext);
   const agents = rows.filter((r): r is ToolRow => r.kind === "tool");
@@ -226,8 +228,10 @@ function SdkFleetView({ rows, tasks, children }: FleetProps) {
   const now = useNow(running > 0 && visible);
   return (
     <FleetPanel
-      testId="sdk-fleet"
-      count={agents.length}
+      testId={pinned ? "sdk-running-tasks" : "sdk-fleet"}
+      role={pinned ? "status" : undefined}
+      className={pinned?.className}
+      count={agents.length + (pinned?.looseTaskRows.length ?? 0)}
       icon={<Bot className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
       title={t("sdk.fleet.title", { n: agents.length })}
       subtitle={agents.length > 1 ? t("sdk.fleet.count", { done, running }) : undefined}
@@ -253,6 +257,7 @@ function SdkFleetView({ rows, tasks, children }: FleetProps) {
           />
         );
       })}
+      {pinned?.looseTaskRows}
     </FleetPanel>
   );
 }
@@ -292,7 +297,7 @@ export function FleetPanel({
       </div>
       {progress !== undefined ? (
         <div className="mb-1 mt-2 h-1 overflow-hidden rounded-full bg-border/60">
-          <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${Math.round(progress * 100)}%` }} />
+          <div data-testid="sdk-fleet-progress" className="h-full rounded-full bg-primary transition-all" style={{ width: `${Math.round(progress * 100)}%` }} />
         </div>
       ) : null}
       <div className="mt-1 space-y-0.5">{children}</div>

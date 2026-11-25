@@ -2696,6 +2696,18 @@ describe("background_tasks — o trabalho que segue depois do turno", () => {
     expect(frames).toEqual([running]);
   });
 
+  it("a tarefa listada antes do aviso do subagente ganha a chamada quando o aviso chega, e a lista ligada vai de novo às abas", () => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    spawned[0]!.stdout.emit("data", line({ type: "background_tasks", tasks: [{ id: "k1", type: "local_agent", description: "Code review · spec" }] }));
+    spawned[0]!.stdout.emit("data", line({ type: "task_started", taskId: "k1", toolUseId: "toolu_a", description: "Code review · spec" }));
+
+    const lists = socket.sent.map((raw) => JSON.parse(raw) as { type: string; tasks?: unknown }).filter((frame) => frame.type === "background_tasks");
+    expect(lists.at(-1)).toEqual({ type: "background_tasks", tasks: [{ id: "k1", type: "local_agent", description: "Code review · spec", toolUseId: "toolu_a" }] });
+  });
+
   it("não reenvia nada quando o conjunto esvaziou", () => {
     const session = ensure();
     attachSocket(session, fakeSocket() as never);

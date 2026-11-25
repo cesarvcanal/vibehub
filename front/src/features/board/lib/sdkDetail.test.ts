@@ -10,6 +10,7 @@ import {
   createDetailChannel,
   formatDuration,
   listForegroundRunningAgents,
+  listRunningWork,
   parseDetailResponse,
   parseUnifiedDiff,
   patchRows,
@@ -257,5 +258,68 @@ describe("os subagentes do turno atual que ainda rodam (a faixa fixa acima do ca
   it("o subagente de um subagente não entra: ele aparece na linha do tempo do pai", () => {
     const state = tool(turnWithAgent(), "a2", "Agent", { description: "Neto" }, "a1");
     expect(listedIds(state, { a1: agentTask("a1", "running"), a2: agentTask("a2", "running") })).toEqual(["a1"]);
+  });
+});
+
+describe("o que fica preso acima do campo enquanto roda", () => {
+  const agentTask = (toolUseId: string, status: AgentTask["status"]): AgentTask => ({ toolUseId, taskId: `k-${toolUseId}`, status });
+  const fleetOf = (ids: string[]) => {
+    const state = ids.reduce((current, id) => tool(current, id, "Agent", { description: id }), applySdkEvent(ready(), { type: "user", text: "revisa" }));
+    return { state, entries: groupSdkRows(state.rows) };
+  };
+  const runningWorkOf = (ids: string[], tasks: Record<string, AgentTask>, backgroundTasks: BackgroundTask[] = []) => {
+    const { state, entries } = fleetOf(ids);
+    return listRunningWork(entries, listForegroundRunningAgents(state.rows, tasks, backgroundTasks), backgroundTasks, tasks);
+  };
+
+  it("um subagente rodando prende a frota inteira, com os que já terminaram, para a barra encher", () => {
+    const work = runningWorkOf(["a1", "a2"], { a1: agentTask("a1", "completed"), a2: agentTask("a2", "running") });
+    expect(work.agents.map((row) => row.id)).toEqual(["a1", "a2"]);
+    expect([...work.pinnedFleetIds]).toEqual(["a1"]);
+  });
+
+  it("a frota toda concluída não fica presa: volta para o lugar dela na conversa", () => {
+    const work = runningWorkOf(["a1", "a2"], { a1: agentTask("a1", "completed"), a2: agentTask("a2", "completed") });
+    expect(work.agents).toEqual([]);
+    expect(work.pinnedFleetIds.size).toBe(0);
+  });
+
+  it("o subagente em segundo plano ligado à tarefa do CLI prende a frota e não se repete como tarefa solta", () => {
+    const backgroundTasks = [{ id: "k-a1", type: "local_agent", description: "a1", toolUseId: "a1" }];
+    const work = runningWorkOf(["a1"], { a1: agentTask("a1", "running") }, backgroundTasks);
+    expect(work.agents.map((row) => row.id)).toEqual(["a1"]);
+    expect(work.looseTasks).toEqual([]);
+  });
+
+  it("o subagente já concluído que o CLI ainda lista como tarefa não prende a frota nem se repete como tarefa solta", () => {
+    const backgroundTasks = [{ id: "k-a1", type: "local_agent", description: "a1", toolUseId: "a1" }];
+    const work = runningWorkOf(["a1"], { a1: agentTask("a1", "completed") }, backgroundTasks);
+    expect(work.pinnedFleetIds.size).toBe(0);
+    expect(work.looseTasks).toEqual([]);
+  });
+
+  it("o subagente de estado desconhecido que o CLI ainda lista continua visível como tarefa solta", () => {
+    const replayed = tool(INITIAL_SDK_STATE, "a1", "Agent", { description: "a1" });
+    const silenced = applySdkEvent(replayed, { type: "tool_result", id: "a1", toolResult: { background: true } });
+    const backgroundTasks = [{ id: "k-a1", type: "local_agent", description: "a1", toolUseId: "a1" }];
+    expect(agentStatus(rowOf(silenced, "a1"), undefined)).toBe("unknown");
+    const work = listRunningWork(groupSdkRows(silenced.rows), [], backgroundTasks, {});
+    expect(work.looseTasks).toEqual(backgroundTasks);
+  });
+
+  it("a tarefa que não é subagente fica solta, com a chamada que a disparou", () => {
+    const backgroundTasks = [{ id: "b1", type: "local_bash", description: "Aguarda o deploy", toolUseId: "t1" }];
+    const work = runningWorkOf(["a1"], { a1: agentTask("a1", "completed") }, backgroundTasks);
+    expect(work.agents).toEqual([]);
+    expect(work.looseTasks).toEqual(backgroundTasks);
+  });
+
+  it("duas frotas rodando ficam presas juntas, numa caixa só", () => {
+    const first = fleetOf(["a1"]);
+    const second = tool(tool(first.state, "b1", "Bash", { command: "ls" }), "a2", "Agent", { description: "a2" });
+    const tasks = { a1: agentTask("a1", "running"), a2: agentTask("a2", "running") };
+    const work = listRunningWork(groupSdkRows(second.rows), listForegroundRunningAgents(second.rows, tasks, []), [], tasks);
+    expect(work.agents.map((row) => row.id)).toEqual(["a1", "a2"]);
+    expect([...work.pinnedFleetIds]).toEqual(["a1", "a2"]);
   });
 });
