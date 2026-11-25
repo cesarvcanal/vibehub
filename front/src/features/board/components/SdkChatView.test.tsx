@@ -1531,6 +1531,52 @@ describe("SdkChatView — responder A decisão (não um recado solto)", () => {
     expect(screen.getByTestId("sdk-user-reply")).toHaveTextContent("Qual dos dois você prefere?");
   });
 
+  it("pedido por voz mostra só o pedido, com o contexto enviado ao agente recolhido", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({
+      type: "user",
+      text: "[pedido por voz]\nFaça uma revisão completa.\n\nTranscrição recente da chamada de voz (pode ter erros de transcrição):\nPessoa: faz um review\n\nUrgente: a pessoa está esperando na chamada.",
+      from: { kind: "user", name: "albert" },
+    });
+    ws.deliver({ type: "ready" });
+
+    const bubble = screen.getByTestId("sdk-user");
+    expect(within(bubble).getByTestId("sdk-user-voice")).toHaveTextContent("Voice request");
+    expect(bubble).toHaveTextContent("Faça uma revisão completa.");
+    expect(bubble).not.toHaveTextContent("[pedido por voz]");
+    const context = within(bubble).getByTestId("sdk-user-voice-context");
+    expect(context).not.toHaveAttribute("open");
+    expect(context).toHaveTextContent("Pessoa: faz um review");
+  });
+
+  it("pedido por voz de quem está na tela não oferece editar, que poria o texto cru no campo", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "user", text: "uma mensagem comum" });
+    ws.deliver({ type: "user", text: "[pedido por voz]\nroda os testes" });
+    ws.deliver({ type: "ready" });
+
+    expect(screen.getByTestId("sdk-user-voice")).toBeInTheDocument();
+    expect(screen.getAllByTestId("sdk-edit")).toHaveLength(1);
+  });
+
+  it("Esc no campo vazio pula o pedido por voz e edita a última mensagem escrita", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "user", text: "uma mensagem comum" });
+    ws.deliver({ type: "user", text: "[pedido por voz]\nroda os testes" });
+    ws.deliver({ type: "ready" });
+
+    const box = (await screen.findByLabelText(/Enter/)) as HTMLTextAreaElement;
+    fireEvent.keyDown(box, { key: "Escape" });
+
+    await waitFor(() => expect(box.value).toBe("uma mensagem comum"));
+  });
+
   it("decisão ESTRUTURADA: o que se digita responde a pergunta (vai como question_answer)", async () => {
     renderSdkChat();
     const ws = await socket();

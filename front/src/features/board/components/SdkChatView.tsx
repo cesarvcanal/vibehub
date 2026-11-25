@@ -15,6 +15,7 @@ import {
   Loader2,
   MessageCircleQuestion,
   MessageSquare,
+  Mic,
   Pencil,
   Reply,
   ShieldAlert,
@@ -37,6 +38,7 @@ import { SERVER_BACK_CONTEXT, typedContext } from "@/features/voice/voiceContext
 import { usePeerMessagesForVoice } from "@/features/voice/lib/usePeerMessagesForVoice";
 import { useVoiceCallSignal } from "@/features/voice/lib/useVoiceCallSignal";
 import { useVoiceDelegation } from "@/features/voice/useVoiceDelegation";
+import { parseVoiceRequest } from "@/features/voice/voiceDelegation";
 import { runVoiceAction } from "@/features/voice/api";
 import { AnswerActions } from "@/features/voice/AnswerActions";
 import { readAloud, readAloudError, setReadAloudErrorHandler } from "@/features/voice/readAloud";
@@ -1305,7 +1307,7 @@ export function SdkChatView({
       const row = chat.rows[i]!;
       // A decision answer is skipped for the same reason its pencil is hidden (see the bubble).
       if (row.kind === "user" && row.edited !== true && parseDecisionReply(row.text) === null
-        && originRole(row.from, viewer) === "self") {
+        && parseVoiceRequest(row.text) === null && originRole(row.from, viewer) === "self") {
         beginEdit(row.id, row.text);
         return;
       }
@@ -2552,7 +2554,20 @@ const SdkChatRow = React.memo(function SdkChatRow({
         <span className="min-w-0 break-words italic">{reply.question}</span>
       </div>
     ) : null;
-    const bodyText = reply ? reply.answer : row.text;
+    const voiceRequest = reply ? null : parseVoiceRequest(row.text);
+    const voiceHeader = voiceRequest ? (
+      <div data-testid="sdk-user-voice" className="mb-1 flex items-center gap-1 border-b border-current/15 pb-1 text-[10px] text-muted-foreground">
+        <Mic className="h-2.5 w-2.5 shrink-0" />
+        <span>{t("sdk.voiceRequest")}</span>
+      </div>
+    ) : null;
+    const voiceContext = voiceRequest && voiceRequest.context !== "" ? (
+      <details data-testid="sdk-user-voice-context" className="mt-1 border-t border-current/15 pt-1 text-xs text-muted-foreground">
+        <summary className="cursor-pointer select-none text-[10px]">{t("sdk.voiceRequestContext")}</summary>
+        <div className="mt-1 whitespace-pre-wrap break-words">{voiceRequest.context}</div>
+      </details>
+    ) : null;
+    const bodyText = reply ? reply.answer : voiceRequest ? voiceRequest.asked : row.text;
     /**
      * A message the SERVER never took (it refused it, or the receipt never came). The bubble says
      * so and hands back the two things the person actually needs: send again, or give up. The
@@ -2605,7 +2620,9 @@ const SdkChatRow = React.memo(function SdkChatRow({
           >
             <SenderTag from={row.from} />
             {replyHeader}
+            {voiceHeader}
             <LinkifiedText text={bodyText} />
+            {voiceContext}
             {editedBadge}
             {undelivered}
           </div>
@@ -2629,14 +2646,16 @@ const SdkChatRow = React.memo(function SdkChatRow({
           className="max-w-[85%] select-text whitespace-pre-wrap break-words rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-sm"
         >
           {replyHeader}
+          {voiceHeader}
           <LinkifiedText text={bodyText} />
+          {voiceContext}
           {editedBadge}
           {undelivered}
         </div>
         {/* The pencil: hover-revealed on a desktop, simply there on touch (no hover to reveal it).
             A superseded message is not drawn at all (above). Nor does an ANSWER to a decision: its text carries the wrapper, and putting that back in the
             field would show the person plumbing instead of their own words. Answer again instead. */}
-        {!reply && row.state !== "undelivered" && onEdit ? (
+        {!reply && !voiceRequest && row.state !== "undelivered" && onEdit ? (
           <button
             type="button"
             data-testid="sdk-edit"
