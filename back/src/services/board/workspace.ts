@@ -36,7 +36,7 @@ import { logger } from "../../utils/logger.js";
 import { testWorkerTmuxArgs } from "../../runtime/testWorkers.js";
 import { CARD_ID_RE } from "./cardId.js";
 import { CREATE_CARD_TMPDIR, cardTmpDir, cardTmpEnv } from "./cardTmp.js";
-import { applyLiveEffort } from "./agentState.js";
+import { applyLiveEffort, cardDriverActivity } from "./agentState.js";
 
 export { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir };
 
@@ -1543,6 +1543,10 @@ export async function probeCardSession(card: Pick<Card, "tmuxSession">): Promise
   return (await probeSessions([card.tmuxSession])).get(card.tmuxSession) ?? "unknown";
 }
 
+function nativeChatTurnRunning(cardId: string): boolean {
+  return cardDriverActivity(cardId) === "turn";
+}
+
 /**
  * PURE decision: does this pause have to take effect RIGHT NOW, ignoring the dot the board is
  * showing? Yes whenever the runner CONTRADICTS a `working` dot — the session is idle (parked on a
@@ -1575,7 +1579,7 @@ export async function pauseCard(cardId: string, by?: string): Promise<Card> {
   // only a genuinely busy Claude earns the polite "let it finish" treatment.
   const before = await getCard(cardId);
   let effective = false;
-  if (before?.status === "working" && hasLiveSession(before)) {
+  if (before?.status === "working" && hasLiveSession(before) && !nativeChatTurnRunning(before.id)) {
     effective = pauseMustBeEffective(before.status, await probeCardSession(before));
   }
   const card = await registryPauseCard(cardId, { effective });
@@ -1668,7 +1672,9 @@ export function overduePauses<T extends Pick<Card, "tmuxSession">>(
  * Returns how many pauses it carried out.
  */
 export async function reconcilePausedCards(): Promise<number> {
-  const pending = (await listAllCards()).filter((c) => c.column === "paused" && hasLiveSession(c));
+  const pending = (await listAllCards()).filter(
+    (card) => card.column === "paused" && hasLiveSession(card) && !nativeChatTurnRunning(card.id),
+  );
   if (pending.length === 0) return 0;
   const states = await probeSessions(pending.map((c) => c.tmuxSession));
   const overdue = overduePauses(pending, states);
