@@ -2887,6 +2887,20 @@ describe("subagente em segundo plano parado — o modelo fica sabendo que o resu
     expect(userTextsWritten().at(-1)).toBe("e o PR?");
   });
 
+  it("editar a mensagem que levou o aviso acha no transcript o texto que de fato foi ao modelo", () => {
+    const socket = reviewerEndsWith("stopped");
+    sendUser(socket, "so segue ae");
+    const sentWithNotice = userTextsWritten().at(-1)!;
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "edit_user", original: "so segue ae", text: "so abre o PR" })));
+
+    const edit = spawned[0]!.stdin.written
+      .map((written) => JSON.parse(written) as { type: string; original?: string; text?: string })
+      .find((frame) => frame.type === "edit_user");
+    expect(edit?.original).toBe(sentWithNotice);
+    expect(edit?.text).toBe("so abre o PR");
+  });
+
   it("comando de barra sai intacto e o aviso espera a próxima mensagem comum", () => {
     const socket = reviewerEndsWith("stopped");
     sendUser(socket, "/model sonnet");

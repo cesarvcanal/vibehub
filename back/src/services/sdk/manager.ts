@@ -199,6 +199,7 @@ export interface DriverSession {
    */
   pendingNotices: string[];
   stoppedTasksUnknownToModel: string[];
+  sentTextByShownText: Map<string, string>;
   /**
    * An AUTOMATIC resume (injectSystemTurn) that has not produced anything yet. `marker` is its
    * in-flight marker: the first text or tool call rewrites it with `progressed: true` — the proof the
@@ -1230,6 +1231,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     backgroundTasks: [],
     pendingNotices: [],
     stoppedTasksUnknownToModel: [],
+    sentTextByShownText: new Map(),
     tasks: new Map(),
     rateLimits: new Map(),
     loginFailed: false,
@@ -1527,7 +1529,8 @@ export function dispatchClientFrame(
     // conversation can be taken back to before the original, `fallback` the supersede used when it
     // cannot. Either way the edit reaches the model — the choice is never "nothing happens".
     const first = control.first === true ? { first: true } : {};
-    if (!writeToDriver(session, { type: "edit_user", original: control.original, text: control.text, fallback: wrapped, ...first })) {
+    const originalAsSent = session.sentTextByShownText.get(control.original) ?? control.original;
+    if (!writeToDriver(session, { type: "edit_user", original: originalAsSent, text: control.text, fallback: wrapped, ...first })) {
       return { kind: "refused", cid: control.cid, reason: "driver-gone" };
     }
     // Which message a `rewound: ok` will cut the log back to, and which words went in its place.
@@ -1558,7 +1561,10 @@ export function dispatchClientFrame(
     const sentText = appendStoppedTasksNotice(control.text, session.stoppedTasksUnknownToModel);
     if (!writeToDriver(session, { ...control, text: sentText })) return { kind: "refused", cid: control.cid, reason: "driver-gone" };
     const noticeWent = sentText !== control.text;
-    if (noticeWent) session.stoppedTasksUnknownToModel = [];
+    if (noticeWent) {
+      session.stoppedTasksUnknownToModel = [];
+      session.sentTextByShownText.set(control.text, sentText);
+    }
     countSentTurn(session, sentText);
     noteChatActivity(session, typistUserId);
     const at = Date.now();
