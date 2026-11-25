@@ -300,6 +300,12 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(description.length).toBeLessThanOrEqual(DELIVER_DESCRIPTION_WITH_ROOM_CHARS);
   });
 
+  it("a vibehub_deliver manda a IA seguir no turno até o merge guardado sair, sem chamar de novo", () => {
+    const description = cardToolDescription("vibehub_deliver");
+    expect(description).toMatch(/'merge_queued'[^)]*do NOT end your turn[^)]*until it is MERGED/);
+    expect(description).toMatch(/'merge_queued'[^)]*do not call again/);
+  });
+
   it("a vibehub_wait_for_card diz para combinar a espera com o usuário e encerrar o turno", () => {
     expect(cardToolDescription("vibehub_wait_for_card")).toContain("Agree on it with the user, say so, and end your turn");
   });

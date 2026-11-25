@@ -493,7 +493,18 @@ describe("deliverCard — ordem de merge com o CI ainda rodando fica guardada no
       sha: QUEUED_SHA, target: "main", prUrl: PR, orderedBy: "mussa", connectionId: connection.id, orderedAt: expect.any(Number),
     });
     expect(out).toMatchObject({ merged: false, reason: "merge_queued" });
-    expect(out.output).toContain("Não chame de novo");
+  });
+
+  it("com a ordem guardada, a resposta manda a IA seguir no turno acompanhando o PR até o merge, sem chamar de novo", async () => {
+    const { deliverCard, card } = await cardWithConnection();
+    deliverAnswer = queuedAnswer;
+    const out = await deliverCard(card.id, { branch: "main", authorized: true, by: "mussa", from: card.id });
+    expect(out.output).toContain("Não encerre o turno");
+    expect(out.output).toContain(`gh pr checks ${PR} --watch`);
+    expect(out.output).toContain(`gh pr view ${PR} --json state`);
+    expect(out.output).toContain(QUEUED_SHA.slice(0, 7));
+    expect(out.output).toContain("não chame o vibehub_deliver de novo");
+    expect(out.output).not.toContain("nem fique esperando");
   });
 
   it("ordem vinda de outro card não pede fila nem grava nada", async () => {
