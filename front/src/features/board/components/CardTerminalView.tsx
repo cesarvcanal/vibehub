@@ -658,7 +658,7 @@ export function CardTerminalView({
   );
 
   /** Dropped on the terminal: the path is typed at the prompt, and the wait gets a toast. */
-  const uploadImage = React.useCallback(
+  const uploadFile = React.useCallback(
     (file: File) => uploadFileWith(file, true),
     [uploadFileWith],
   );
@@ -1354,7 +1354,7 @@ export function CardTerminalView({
                   wsPath={`/api/cards/${encodeURIComponent(cardId)}/terminal`}
                   reconnectKey={reconnectKey}
                   onStatus={setConnection}
-                  onUploadImage={uploadImage}
+                  onUploadImage={uploadFile}
                   /* The COMPOSER is where a card is written from. A terminal that grabs the keyboard on
                      every open (and every reconnect) puts the caret in the raw session, which is how a
                      first message ends up typed into xterm instead of the field below. Clicking the

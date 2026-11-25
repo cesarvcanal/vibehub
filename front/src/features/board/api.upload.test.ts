@@ -31,7 +31,7 @@ function deadConnection(_url: string, _body?: unknown, config?: AxiosRequestConf
 }
 
 describe("boardApi.uploadCardFile — the request has a deadline", () => {
-  it("o teto do anexo é 1 GB, o mesmo do servidor", () => {
+  it("o teto local do anexo é 1 GB", () => {
     expect(UPLOAD_MAX_BYTES).toBe(1024 ** 3);
   });
 
