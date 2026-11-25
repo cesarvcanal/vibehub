@@ -302,8 +302,8 @@ describe("MCP server instructions (the maestro persona)", () => {
 
   it("a vibehub_deliver manda a IA seguir no turno até o merge guardado sair, sem chamar de novo", () => {
     const description = cardToolDescription("vibehub_deliver");
-    expect(description).toMatch(/'merge_queued'[^)]*do NOT end your turn[^)]*until it is MERGED/);
-    expect(description).toMatch(/'merge_queued'[^)]*do not call again/);
+    expect(description).toMatch(/'merge_queued'[^)]*do NOT end your turn till MERGED or the output says/);
+    expect(description).toMatch(/'merge_queued'[^)]*never call again/);
   });
 
   it("a vibehub_wait_for_card diz para combinar a espera com o usuário e encerrar o turno", () => {
