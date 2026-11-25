@@ -63,12 +63,21 @@ describe("CardTile — what the card says", () => {
     );
   });
 
-  it("com alguém em chamada de voz no chat, o ícone ganha o microfone e diz que tem gente falando com a IA, sem esconder o estado do turno", () => {
-    renderApp(<CardTile card={card({ status: "waiting", column: "waiting", openedAt: 1, voiceCallAt: 5 })} onOpen={vi.fn()} />);
-    const icon = screen.getByRole("status", { name: "Turn finished — your move · In a voice call — someone is talking to the AI in this card's chat" });
-    expect(icon).toHaveAttribute("data-state", "your_turn");
-    expect(within(icon).getByTestId("card-voice-call")).toBeInTheDocument();
-  });
+  it.each([
+    { status: "waiting", column: "waiting", stateName: "Turn finished — your move", stateKind: "your_turn" },
+    { status: "working", column: "working", stateName: "Working", stateKind: "working" },
+  ] as const)(
+    "com alguém em chamada de voz no chat, o microfone ocupa o lugar do ícone de $stateKind e o nome ainda diz o estado do turno",
+    ({ status, column, stateName, stateKind }) => {
+      renderApp(<CardTile card={card({ status, column, openedAt: 1, voiceCallAt: 5 })} onOpen={vi.fn()} />);
+      const icon = screen.getByRole("status", {
+        name: `${stateName} · In a voice call — someone is talking to the AI in this card's chat`,
+      });
+      expect(icon).toHaveAttribute("data-state", stateKind);
+      expect(within(icon).getByTestId("card-voice-call")).toBeInTheDocument();
+      expect(icon.querySelectorAll("svg")).toHaveLength(1);
+    },
+  );
 
   it("sem chamada, nenhum microfone no ícone", () => {
     renderApp(<CardTile card={card({ status: "waiting", column: "waiting", openedAt: 1, voiceCallAt: null })} onOpen={vi.fn()} />);

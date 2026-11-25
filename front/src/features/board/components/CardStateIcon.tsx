@@ -48,18 +48,19 @@ export function CardStateIcon({
     <span
       title={cardStateTitle(state)}
       data-state={state.kind}
-      className="inline-flex shrink-0 items-center justify-center gap-0.5"
+      className="inline-flex shrink-0 items-center justify-center"
       {...(announce ? { role: "status", "aria-label": state.label } : {})}
     >
-      <Icon aria-hidden strokeWidth={2.25} className={cn("h-3 w-3", tone, className)} />
       {state.inCall ? (
-        <span
+        <Mic
+          aria-hidden
           data-testid="card-voice-call"
-          className="inline-flex animate-pulse items-center justify-center rounded-full bg-rose-500/20 p-0.5 ring-1 ring-rose-500/60"
-        >
-          <Mic aria-hidden strokeWidth={2.5} className={cn("h-3 w-3 text-rose-500 dark:text-rose-400", className)} />
-        </span>
-      ) : null}
+          strokeWidth={2.5}
+          className={cn("h-3 w-3 animate-pulse text-rose-500 dark:text-rose-400", className)}
+        />
+      ) : (
+        <Icon aria-hidden strokeWidth={2.25} className={cn("h-3 w-3", tone, className)} />
+      )}
     </span>
   );
 }
