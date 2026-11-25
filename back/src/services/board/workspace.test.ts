@@ -2320,6 +2320,23 @@ describe("session probe (busy / idle / gone) and the pending-pause reconciler", 
     expect(runScript).not.toHaveBeenCalled();
   });
 
+  it("reconcilePausedCards: a pausa pendente de um chat nativo com turno em andamento espera o turno acabar", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "working");
+    runScript.mockResolvedValue({ stdout: `${card.tmuxSession} busy\n`, stderr: "" });
+    await ws.pauseCard(card.id);
+    const agentState = await import("./agentState.js");
+    onTestFinished(agentState.onCardDriverProbe((cardId) => (cardId === card.id ? "turn" : "none")));
+    runScript.mockClear();
+    runScript.mockResolvedValue({ stdout: `${card.tmuxSession} idle\n`, stderr: "" });
+
+    expect(await ws.reconcilePausedCards()).toBe(0);
+
+    expect((await reg.getCard(card.id))?.pausedAt ?? null).toBeNull();
+    expect(runScript.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain("kill-session");
+  });
+
   it("reconcilePausedCards: a card that is really working is NOT cut off, and cards outside Paused are never touched", async () => {
     const { project, card } = await seed();
     await ws.openCard(card.id);

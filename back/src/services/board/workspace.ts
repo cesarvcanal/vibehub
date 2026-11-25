@@ -1667,7 +1667,9 @@ export function overduePauses<T extends Pick<Card, "tmuxSession">>(
  * Returns how many pauses it carried out.
  */
 export async function reconcilePausedCards(): Promise<number> {
-  const pending = (await listAllCards()).filter((c) => c.column === "paused" && hasLiveSession(c));
+  const pending = (await listAllCards()).filter(
+    (card) => card.column === "paused" && hasLiveSession(card) && cardDriverActivity(card.id) !== "turn",
+  );
   if (pending.length === 0) return 0;
   const states = await probeSessions(pending.map((c) => c.tmuxSession));
   const overdue = overduePauses(pending, states);
