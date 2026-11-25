@@ -1,12 +1,21 @@
 import { config } from "../../config/env.js";
 import { containerScriptCommand, hostExecutor } from "../../runtime/host.js";
 
-export const SAMPLE_SECONDS = 2;
+const SAMPLE_SECONDS = 2;
 const SNAPSHOT_TIMEOUT_MS = 30_000;
 const SCRIPT_DELIM = "VIBEHUB_DIAGNOSTICS";
 const ARGS_MAX_CHARS = 160;
-const SECRET_ASSIGNMENT_RE = /([\w.-]*(?:token|secret|key|pass|auth)[\w.-]*)=("[^"]*"|'[^']*'|\S+)/gi;
-const SECRET_LITERAL_RE = /\b(?:sk-ant-|gh[pousr]_)[\w-]+/g;
+const SECRET_REDACTIONS: [pattern: RegExp, replacement: string][] = [
+  [/([\w.-]*(?:token|secret|key|pass|auth)[\w.-]*)=("[^"]*"|'[^']*'|\S+)/gi, "$1=<redacted>"],
+  [/(--?[\w-]*(?:token|secret|key|pass|auth)[\w-]*)\s+(?!-)("[^"]*"|'[^']*'|\S+)/gi, "$1 <redacted>"],
+  [/\b(Bearer|Basic)\s+[^\s"']+/gi, "$1 <redacted>"],
+  [/(:\/\/[^\s:@/]+:)[^\s@/]+@/g, "$1<redacted>@"],
+  [/\b(?:sk-ant-|gh[pousr]_|github_pat_)[\w-]+/g, "<redacted>"],
+];
+const PROC_STAT_UTIME_FIELD = 11;
+const PROC_STAT_STIME_FIELD = 12;
+const PROC_STAT_STARTTIME_FIELD = 19;
+const PROC_STAT_RSS_FIELD = 21;
 
 export interface RunnerProcess {
   pid: number;
@@ -28,12 +37,12 @@ export interface RunnerSnapshot {
     iowaitPct: number;
     stealPct: number;
     idlePct: number;
-    throttledPct: number;
+    throttledPct?: number;
   };
   load: number[];
-  pressure: { cpuSome: number; memorySome: number; ioSome: number; ioFull: number };
+  pressure?: { cpuSome: number; memorySome: number; ioSome: number; ioFull: number };
   memory: { totalMb: number; availableMb: number; swapTotalMb: number; swapUsedMb: number };
-  disk: { usedPct: number };
+  disk?: { usedPct: number };
   processes: RunnerProcess[];
 }
 
@@ -47,7 +56,7 @@ interface ProcessSample {
 interface Sample {
   uptimeSeconds: number;
   cpuTicks: number[];
-  throttledUsec: number;
+  throttledUsec?: number;
   processes: Map<number, ProcessSample>;
 }
 
@@ -91,15 +100,15 @@ function parseProcessStat(line: string): [number, ProcessSample] | undefined {
   const commEnd = line.lastIndexOf(")");
   if (commStart < 0 || commEnd < commStart) return undefined;
   const fieldsAfterComm = line.slice(commEnd + 2).split(" ");
-  const utime = Number(fieldsAfterComm[11]);
-  const stime = Number(fieldsAfterComm[12]);
+  const utime = Number(fieldsAfterComm[PROC_STAT_UTIME_FIELD]);
+  const stime = Number(fieldsAfterComm[PROC_STAT_STIME_FIELD]);
   return [
     Number(line.slice(0, commStart)),
     {
       comm: line.slice(commStart + 2, commEnd),
       cpuTicks: utime + stime,
-      startTicks: Number(fieldsAfterComm[19]),
-      rssPages: Number(fieldsAfterComm[21]),
+      startTicks: Number(fieldsAfterComm[PROC_STAT_STARTTIME_FIELD]),
+      rssPages: Number(fieldsAfterComm[PROC_STAT_RSS_FIELD]),
     },
   ];
 }
@@ -110,18 +119,34 @@ function splitTag(line: string): [string, string] {
 }
 
 function redactArgs(args: string): string {
-  return args
-    .replace(SECRET_ASSIGNMENT_RE, "$1=<redacted>")
-    .replace(SECRET_LITERAL_RE, "<redacted>")
-    .slice(0, ARGS_MAX_CHARS);
+  const redacted = SECRET_REDACTIONS.reduce((text, [pattern, replacement]) => text.replace(pattern, replacement), args);
+  return redacted.slice(0, ARGS_MAX_CHARS);
 }
 
 function percentOf(part: number, total: number): number {
   return total > 0 ? Math.round((1000 * part) / total) / 10 : 0;
 }
 
-function avg10(pressureLine: string | undefined): number {
-  return Number(/avg10=([\d.]+)/.exec(pressureLine ?? "")?.[1] ?? 0);
+function parsePressureAvg10(pressureLines: ReadonlyMap<string, string>, name: string): number {
+  const avg10 = /avg10=([\d.]+)/.exec(pressureLines.get(name) ?? "")?.[1];
+  if (avg10 === undefined) throw new Error(`runner snapshot: pressure line '${name}' is missing`);
+  return Number(avg10);
+}
+
+function readPressure(pressureLines: ReadonlyMap<string, string>): RunnerSnapshot["pressure"] {
+  if (pressureLines.size === 0) return undefined;
+  return {
+    cpuSome: parsePressureAvg10(pressureLines, "cpu some"),
+    memorySome: parsePressureAvg10(pressureLines, "memory some"),
+    ioSome: parsePressureAvg10(pressureLines, "io some"),
+    ioFull: parsePressureAvg10(pressureLines, "io full"),
+  };
+}
+
+function readDisk(diskLine: string | undefined): RunnerSnapshot["disk"] {
+  const [usedKb, totalKb] = (diskLine ?? "").trim().split(" ").map(Number);
+  if (!usedKb || !totalKb) return undefined;
+  return { usedPct: percentOf(usedKb, totalKb) };
 }
 
 export function parseRunnerSnapshot(raw: string): RunnerSnapshot {
@@ -135,10 +160,10 @@ export function parseRunnerSnapshot(raw: string): RunnerSnapshot {
   for (const line of raw.split("\n")) {
     const [tag, value] = splitTag(line);
     const current = samples.at(-1);
-    if (tag === "@sample") samples.push({ uptimeSeconds: 0, cpuTicks: [], throttledUsec: 0, processes: new Map() });
+    if (tag === "@sample") samples.push({ uptimeSeconds: 0, cpuTicks: [], processes: new Map() });
     else if (tag === "@uptime" && current) current.uptimeSeconds = Number(value);
     else if (tag === "@cpu" && current) current.cpuTicks = value.trim().split(/\s+/).slice(1).map(Number);
-    else if (tag === "@throttled" && current) current.throttledUsec = Number(value) || 0;
+    else if (tag === "@throttled" && current && value.trim()) current.throttledUsec = Number(value);
     else if (tag === "@pstat" && current) {
       const parsed = parseProcessStat(value);
       if (parsed) current.processes.set(...parsed);
@@ -171,7 +196,9 @@ export function parseRunnerSnapshot(raw: string): RunnerSnapshot {
   const limitCores = quota && quota !== "max" ? Number(quota) / Number(period) : undefined;
 
   const processes = [...second.processes].map(([pid, process]): RunnerProcess => {
-    const ticksBefore = first.processes.get(pid)?.cpuTicks ?? 0;
+    const before = first.processes.get(pid);
+    const sameProcessBefore = before?.startTicks === process.startTicks ? before : undefined;
+    const ticksBefore = sameProcessBefore?.cpuTicks ?? 0;
     const cardId = cardByPid.get(pid);
     return {
       pid,
@@ -184,8 +211,18 @@ export function parseRunnerSnapshot(raw: string): RunnerSnapshot {
     };
   });
 
-  const [diskUsed = 0, diskTotal = 0] = (header.get("@disk") ?? "").split(" ").map(Number);
-  const kbToMb = (name: string) => Math.round((memoryKb.get(name) ?? 0) / 1024);
+  const kbToMb = (name: string) => {
+    const kb = memoryKb.get(name);
+    if (kb === undefined) throw new Error(`runner snapshot: /proc/meminfo has no ${name}`);
+    return Math.round(kb / 1024);
+  };
+  const { throttledUsec: throttledBefore } = first;
+  const { throttledUsec: throttledAfter } = second;
+  const throttledPct = throttledBefore !== undefined && throttledAfter !== undefined
+    ? percentOf((throttledAfter - throttledBefore) / 1e6, intervalSeconds)
+    : undefined;
+  const pressure = readPressure(pressureLines);
+  const disk = readDisk(header.get("@disk"));
   return {
     intervalSeconds: Math.round(intervalSeconds * 100) / 100,
     cpu: {
@@ -196,22 +233,17 @@ export function parseRunnerSnapshot(raw: string): RunnerSnapshot {
       iowaitPct: percentOf(iowait, totalTicks),
       stealPct: percentOf(steal, totalTicks),
       idlePct: percentOf(idle, totalTicks),
-      throttledPct: percentOf((second.throttledUsec - first.throttledUsec) / 1e6, intervalSeconds),
+      ...(throttledPct !== undefined ? { throttledPct } : {}),
     },
     load: (header.get("@loadavg") ?? "").split(" ").slice(0, 3).map(Number),
-    pressure: {
-      cpuSome: avg10(pressureLines.get("cpu some")),
-      memorySome: avg10(pressureLines.get("memory some")),
-      ioSome: avg10(pressureLines.get("io some")),
-      ioFull: avg10(pressureLines.get("io full")),
-    },
+    ...(pressure ? { pressure } : {}),
     memory: {
       totalMb: kbToMb("MemTotal"),
       availableMb: kbToMb("MemAvailable"),
       swapTotalMb: kbToMb("SwapTotal"),
       swapUsedMb: kbToMb("SwapTotal") - kbToMb("SwapFree"),
     },
-    disk: { usedPct: percentOf(diskUsed, diskTotal) },
+    ...(disk ? { disk } : {}),
     processes,
   };
 }

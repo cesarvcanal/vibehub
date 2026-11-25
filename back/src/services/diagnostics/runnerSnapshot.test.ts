@@ -53,6 +53,31 @@ describe("parseRunnerSnapshot", () => {
     expect(vitest?.args).toBe("node vitest run src/x.test.ts GH_TOKEN=<redacted> --api-key=<redacted>");
   });
 
+  it.each([
+    ['curl -H "Authorization: Bearer github_pat_11ABCDEF0123" x', 'curl -H "Authorization: Bearer <redacted>" x'],
+    ["git clone https://user:hunter2@example.com/r.git", "git clone https://user:<redacted>@example.com/r.git"],
+    ["claude --token abc123secret --model opus", "claude --token <redacted> --model opus"],
+    ["node x --password hunter2", "node x --password <redacted>"],
+    ["tool github_pat_11ABC", "tool <redacted>"],
+  ])("segredo fora do formato NOME=valor também sai redigido: %s", (args, redacted) => {
+    const claude = parseRunnerSnapshot(`${captureFrom()}\n@args 102 ${args}`).processes.find((process) => process.pid === 102);
+    expect(claude?.args).toBe(redacted);
+  });
+
+  it("PID reaproveitado por outro processo no intervalo conta só a CPU do processo novo", () => {
+    const capture = runnerCapture({
+      processes: [{ pid: 104, comm: "git", ticksBefore: 5000, startTicksBefore: 90_000, ticksAfter: 30, startTicks: 100_050, rssPages: 100 }],
+    });
+    expect(parseRunnerSnapshot(capture).processes).toEqual([expect.objectContaining({ pid: 104, cpuPct: 15 })]);
+  });
+
+  it("runner sem medição de pressão nem de throttle deixa os campos ausentes, em vez de zero", () => {
+    const withoutPressure = captureFrom().split("\n").filter((line) => !line.startsWith("@pressure") && !line.startsWith("@throttled")).join("\n");
+    const snapshot = parseRunnerSnapshot(withoutPressure);
+    expect(snapshot.pressure).toBeUndefined();
+    expect(snapshot.cpu).not.toHaveProperty("throttledPct");
+  });
+
   it("linha de comando longa é recortada", () => {
     const longArgs = `@args 102 claude ${"x".repeat(500)}`;
     const claude = parseRunnerSnapshot(`${captureFrom()}\n${longArgs}`).processes.find((process) => process.pid === 102);

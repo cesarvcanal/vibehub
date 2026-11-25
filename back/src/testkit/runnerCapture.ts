@@ -4,6 +4,7 @@ export interface CapturedProcess {
   ticksBefore?: number;
   ticksAfter?: number;
   startTicks: number;
+  startTicksBefore?: number;
   rssPages: number;
   cardId?: string;
   args?: string;
@@ -15,18 +16,18 @@ function procStatLine(pid: number, comm: string, cpuTicks: number, startTicks: n
 
 export function runnerCapture({ processes, secondSample = true }: { processes: CapturedProcess[]; secondSample?: boolean }): string {
   const header = ["@clk 100", "@pagesize 4096", "@ncpu 8", "@cpumax 800000 100000"];
-  const sampleLines = (index: number, uptime: string, cpuLine: string, throttled: number, ticksOf: (process: CapturedProcess) => number | undefined) => [
+  const sampleLines = (index: number, uptime: string, cpuLine: string, throttled: number, ticksOf: (process: CapturedProcess) => [cpuTicks?: number, startTicks?: number]) => [
     `@sample ${index}`,
     `@uptime ${uptime}`,
     `@cpu ${cpuLine}`,
     `@throttled ${throttled}`,
     ...processes.flatMap((process) => {
-      const ticks = ticksOf(process);
-      return ticks === undefined ? [] : [procStatLine(process.pid, process.comm, ticks, process.startTicks, process.rssPages)];
+      const [cpuTicks, startTicks = process.startTicks] = ticksOf(process);
+      return cpuTicks === undefined ? [] : [procStatLine(process.pid, process.comm, cpuTicks, startTicks, process.rssPages)];
     }),
   ];
-  const first = sampleLines(1, "1000.00", "cpu  1000 0 1000 1000 1000 0 1000 1000 0 0", 0, (process) => process.ticksBefore);
-  const second = sampleLines(2, "1002.00", "cpu  1300 0 1080 1120 1040 0 1020 1440 0 0", 400_000, (process) => process.ticksAfter);
+  const first = sampleLines(1, "1000.00", "cpu  1000 0 1000 1000 1000 0 1000 1000 0 0", 0, (process) => [process.ticksBefore, process.startTicksBefore]);
+  const second = sampleLines(2, "1002.00", "cpu  1300 0 1080 1120 1040 0 1020 1440 0 0", 400_000, (process) => [process.ticksAfter]);
   const tail = [
     "@loadavg 10.26 10.27 9.02 9/2464 1554161",
     "@pressure cpu some avg10=16.05 avg60=26.04 avg300=24.17 total=191206616899",
