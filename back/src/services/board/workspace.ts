@@ -1576,7 +1576,7 @@ export async function pauseCard(cardId: string, by?: string): Promise<Card> {
   const before = await getCard(cardId);
   const nativeChatTurnRunning = cardDriverActivity(cardId) === "turn";
   const mustProbeRunner = before?.status === "working" && hasLiveSession(before) && !nativeChatTurnRunning;
-  const effective = mustProbeRunner ? pauseMustBeEffective(before.status, await probeCardSession(before)) : false;
+  const effective = mustProbeRunner && pauseMustBeEffective(before.status, await probeCardSession(before));
   const card = await registryPauseCard(cardId, { effective });
   if (card.pausedAt) {
     // EFFECTIVE pause (the card was idle): end the sessions right away.
