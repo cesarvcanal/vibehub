@@ -98,12 +98,14 @@ async function notifyMergeOrder(card: Card, order: MergeOrder, outcome: string, 
 }
 
 export function mergeQueuedOutput(result: DeliverResult): string {
-  if (!result.queuedSha || !result.prUrl) throw new Error("a queued merge needs the commit and the PR");
-  return `O CI do PR ainda está rodando: a ordem de merge ficou guardada no servidor, presa ao commit ${result.queuedSha.slice(0, 7)}, ` +
+  const { queuedSha, prUrl } = result;
+  if (!queuedSha || !prUrl) throw new Error("a queued merge needs the commit and the PR");
+  const shortSha = queuedSha.slice(0, 7);
+  return `O CI do PR ainda está rodando: a ordem de merge ficou guardada no servidor, presa ao commit ${shortSha}, ` +
     "e o servidor mergeia sozinho até 1 min depois de o CI ficar verde (até 6 h) e conclui o card. Não encerre o turno: a ordem " +
     "só está cumprida com o PR mergeado. Diga ao usuário que está esperando o CI e acompanhe: " +
-    `\`gh pr checks ${result.prUrl} --watch\` (Bash com timeout de 600000 ms; repita se o tempo acabar) e, com o CI verde, ` +
-    `\`gh pr view ${result.prUrl} --json state\` a cada ~20 s até MERGED. Enquanto espera, não chame o vibehub_deliver de novo. ` +
+    `\`gh pr checks ${prUrl} --watch\` (Bash com timeout de 600000 ms; repita se o tempo acabar) e, com o CI verde, ` +
+    `\`gh pr view ${prUrl} --json state\` a cada ~20 s até MERGED. Enquanto espera, não chame o vibehub_deliver de novo. ` +
     "CI vermelho: a ordem cai sem merge; conte ao usuário, corrija se a falha for deste PR e entregue de novo.";
 }
 
