@@ -22,7 +22,7 @@ import { readCardChanges, readCardFileDiff } from "../maestro/changes.js";
 import { mergeTaskEvent, taskSnapshot, toolResultEvent, type AgentTaskEvent, type RawTaskEvent, type RawToolResultEvent } from "./toolResult.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
-  NOTE_CONVERSATION_CLEARED, buildLateAnswerText, buildOrphanAnswerText, mergePeerAnswers, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseQuestionDraftFrame, isEmptyQuestionDraft, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
+  NOTE_CONVERSATION_CLEARED, buildLateAnswerText, buildOrphanAnswerText, mergePeerAnswers, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseVoiceCallFrame, parseQueuedNoteFrame, parseQuestionDraftFrame, isEmptyQuestionDraft, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
   type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type EffortAckEvent, type QuestionAnswerControl, type QuestionDraft, type StopHow, type UserQuestionItem,
   type WorkflowFeedEvent, type WorkflowFeedRequest, type DetailRequest, type ResultEvent,
 } from "./protocol.js";
@@ -363,6 +363,20 @@ export type ClientFrameOutcome =
 const STDERR_TAIL_MAX = 2000;
 
 const sessions = new Map<string, DriverSession>();
+const voiceCallSocketsByCard = new Map<string, Set<WebSocket>>();
+const VOICE_CALL_MARK_RETRIES = 3;
+export const VOICE_CALL_MARK_RETRY_MS = 2_000;
+
+function saveVoiceCallMark(cardId: string, label: string, retriesLeft: number): void {
+  const inCall = (voiceCallSocketsByCard.get(cardId)?.size ?? 0) > 0;
+  void registry.setCardVoiceCall(cardId, inCall ? Date.now() : null).catch((err: unknown) => {
+    if (retriesLeft === 0) {
+      logger.error({ card: label, detail: (err as Error).message }, "could not save the card's voice call mark");
+      return;
+    }
+    setTimeout(() => saveVoiceCallMark(cardId, label, retriesLeft - 1), VOICE_CALL_MARK_RETRY_MS).unref();
+  });
+}
 
 /* ------------------------------------------------------------- test seams */
 
@@ -2361,6 +2375,18 @@ export function attachSocket(
     draftedHere.clear();
   };
 
+  const noteVoiceCall = (active: boolean): void => {
+    const cardCallSockets = voiceCallSocketsByCard.get(session.cardId) ?? new Set<WebSocket>();
+    const wasInCall = cardCallSockets.size > 0;
+    if (active) cardCallSockets.add(socket);
+    else cardCallSockets.delete(socket);
+    const inCall = cardCallSockets.size > 0;
+    if (inCall) voiceCallSocketsByCard.set(session.cardId, cardCallSockets);
+    else voiceCallSocketsByCard.delete(session.cardId);
+    if (inCall === wasInCall) return;
+    saveVoiceCallMark(session.cardId, session.label, VOICE_CALL_MARK_RETRIES);
+  };
+
   const answerFeed = createFeedResponder(session, socket);
   const answerDetail = createDetailResponder(session, socket);
 
@@ -2377,6 +2403,16 @@ export function attachSocket(
     const typing = parseTypingFrame(text);
     if (typing !== null) {
       noteTyping(typing);
+      return;
+    }
+    const voiceCall = parseVoiceCallFrame(text);
+    if (voiceCall !== null) {
+      noteVoiceCall(voiceCall);
+      return;
+    }
+    const queuedNote = parseQueuedNoteFrame(text);
+    if (queuedNote !== null) {
+      if (origin && queuedNote !== "") broadcast(session, { type: "peer_queued", name: origin.name, text: queuedNote }, socket);
       return;
     }
     const draft = parseQuestionDraftFrame(text);
@@ -2419,6 +2455,7 @@ export function attachSocket(
     session.sockets.delete(socket);
     // A tab closed mid-sentence must not leave "Cesar está digitando…" on everyone else's screen.
     noteTyping(false);
+    noteVoiceCall(false);
     dropDraftsOfThisSocket();
     if (session.sockets.size === 0) maybeScheduleIdleStop(session);
   };

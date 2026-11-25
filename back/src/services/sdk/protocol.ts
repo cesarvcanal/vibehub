@@ -773,11 +773,33 @@ export function parseSdkClientFrame(raw: string): DriverControl | null {
  * indicator that vanishes early, never a phantom turn); `null` = not a typing frame. PURE.
  */
 export function parseTypingFrame(raw: string): boolean | null {
+  return parseActiveFlagFrame(raw, "typing");
+}
+
+export function parseVoiceCallFrame(raw: string): boolean | null {
+  return parseActiveFlagFrame(raw, "voice_call");
+}
+
+const QUEUED_NOTE_MAX_TEXT = 4_000;
+
+export function parseQueuedNoteFrame(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as { type?: unknown; text?: unknown };
+    if (parsed.type !== "queued_note") return null;
+    return typeof parsed.text === "string" ? parsed.text.slice(0, QUEUED_NOTE_MAX_TEXT) : "";
+  } catch {
+    return null;
+  }
+}
+
+function parseActiveFlagFrame(raw: string, frameType: "typing" | "voice_call"): boolean | null {
   const trimmed = raw.trim();
   if (!trimmed.startsWith("{")) return null;
   try {
     const parsed = JSON.parse(trimmed) as { type?: unknown; active?: unknown };
-    if (parsed.type !== "typing") return null;
+    if (parsed.type !== frameType) return null;
     return parsed.active === true;
   } catch {
     return null;

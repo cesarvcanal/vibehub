@@ -35,6 +35,7 @@ import { voiceRoutes } from "./routes/voice.js";
 import { ensurePreviewOwner } from "./auth/previewProxyAuth.js";
 import { startPauseReconciler, sweepCardUploads, sweepIdleCards } from "./services/board/workspace.js";
 import { reconcileStaleWorking } from "./services/board/status.js";
+import { clearStaleVoiceCalls } from "./services/board/registry.js";
 import { sweepOrphanCardData } from "./services/board/purge.js";
 import { sweepDoneCards, DONE_SWEEP_INTERVAL_MS } from "./services/board/retention.js";
 import { checkStatusHookReach } from "./runtime/runner.js";
@@ -260,6 +261,7 @@ async function main(): Promise<void> {
   startMergeOrders();
   startPlatformFailureWatch();
   await startCardWaitWatch();
+  await clearStaleVoiceCalls();
   await app.listen({ port: config.port, host: config.host });
   const trustWarning = trustProxyBootWarning(config.trustProxy);
   if (trustWarning) logger.warn(trustWarning);

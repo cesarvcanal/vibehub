@@ -34,6 +34,8 @@ import { VoiceCallBar } from "@/features/voice/VoiceCallBar";
 import { VoiceCallContext, type VoiceCallControl } from "@/features/voice/ComposerVoiceButton";
 import { VoiceTurnBubble } from "@/features/voice/VoiceTurnBubble";
 import { SERVER_BACK_CONTEXT, typedContext } from "@/features/voice/voiceContext";
+import { usePeerMessagesForVoice } from "@/features/voice/lib/usePeerMessagesForVoice";
+import { useVoiceCallSignal } from "@/features/voice/lib/useVoiceCallSignal";
 import { useVoiceDelegation } from "@/features/voice/useVoiceDelegation";
 import { runVoiceAction } from "@/features/voice/api";
 import { AnswerActions } from "@/features/voice/AnswerActions";
@@ -301,6 +303,7 @@ export function SdkChatView({
   const workflowFeedRef = React.useRef<WorkflowFeedChannel | null>(null);
   /** Where the response to a `detail` is delivered (the modals listen; see lib/sdkDetail.ts). */
   const detailChannelRef = React.useRef<DetailChannel | null>(null);
+  const announceQueuedRef = React.useRef<((author: string, text: string) => void) | null>(null);
   const statusRef = React.useRef<SdkChatViewProps["onStatus"]>(onStatus);
   statusRef.current = onStatus;
   const [connected, setConnected] = React.useState(false);
@@ -452,6 +455,10 @@ export function SdkChatView({
             setPeersNow(now);
             setPeers((prev) => applyPeerTyping(prev, name, parsed.active === true, now));
           }
+          return;
+        }
+        if (parsed.type === "peer_queued") {
+          if (typeof parsed.name === "string" && typeof parsed.text === "string") announceQueuedRef.current?.(parsed.name, parsed.text);
           return;
         }
         if (parsed.type === "peer_question_draft") {
@@ -663,6 +670,7 @@ export function SdkChatView({
    * leaves, and only a `user_ack` takes them off it. This is the whole difference between "the
    * socket accepted" (which a half-open connection also does, into the void) and "the server has it".
    */
+  const sentFromThisTab = React.useRef(new Map<string, number>());
   const sendTurn = React.useCallback(
     (frame: { type: "user" | "edit_user"; text: string; original?: string; first?: boolean; now?: boolean }, shown: string, cid: string): void => {
       const entry: OutboxMessage = {
@@ -678,6 +686,7 @@ export function SdkChatView({
         ...sendMark(deliveredUserTexts(rowsRef.current, viewer), shown),
       };
       setOutbox((prev) => addToOutbox(prev, entry));
+      sentFromThisTab.current.set(shown, (sentFromThisTab.current.get(shown) ?? 0) + 1);
       try {
         sendFrame({ ...frame, cid });
       } catch (err) {
@@ -1213,6 +1222,7 @@ export function SdkChatView({
     const waits = !wireUp || !chat.ready || chat.turnActive || chat.awaiting || pendingEdit;
     if (waits && pendingRef.current.length === 0) {
       setQueue((prev) => enqueue(prev, { id: newQueueId(), text, at: Date.now(), from: selfOriginRef.current }));
+      if (wireUp) sendFrame({ type: "queued_note", text });
       return;
     }
     dispatchTurn(text);
@@ -1346,6 +1356,22 @@ export function SdkChatView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [send, callLive, call.announceContext],
   );
+  const { announceContext } = call;
+  const announcePeerMessage = React.useCallback(
+    (note: string): void => {
+      if (announceContext(note)) setSentDuringCall(true);
+    },
+    [announceContext],
+  );
+  const { announceQueued } = usePeerMessagesForVoice({
+    live: callLive,
+    rows: state.rows,
+    viewer,
+    sentFromThisTab: sentFromThisTab.current,
+    announce: announcePeerMessage,
+  });
+  announceQueuedRef.current = announceQueued;
+  useVoiceCallSignal({ connected, callLive, sendFrame });
   useVoiceDelegation({
     call,
     rows: state.rows,

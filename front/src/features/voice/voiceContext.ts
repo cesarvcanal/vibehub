@@ -8,6 +8,10 @@
  * (back/src/services/voice/live.ts), whatever the interface language.
  */
 
+import { originRole } from "@/features/board/lib/chat";
+import { parseDecisionReply } from "@/features/board/lib/pendingDecisions";
+import type { SdkRow } from "@/features/board/lib/sdkChat";
+
 /** An image attached in the composer travels as its path in the runner (TerminalComposer `composeMessage`). */
 const UPLOAD_RE = /\/work\/\.uploads\/\S+/g;
 
@@ -15,11 +19,17 @@ const UPLOAD_RE = /\/work\/\.uploads\/\S+/g;
  * A message typed during the call, as the voice should announce it — GPT-Live paraphrases it aloud.
  * Null when there is nothing to say. PURE.
  */
-export function typedContext(raw: string): string | null {
+export interface TypedContextOptions {
+  author?: string;
+  queued?: boolean;
+}
+
+export function typedContext(raw: string, { author, queued = false }: TypedContextOptions = {}): string | null {
   const images = raw.match(UPLOAD_RE)?.length ?? 0;
   const text = raw.replace(UPLOAD_RE, " ").replace(/\s+/g, " ").trim();
   if (!text && images === 0) return null;
-  const parts = [text ? `Chegou uma mensagem de texto no chat: «${text}»` : "Chegou uma mensagem no chat"];
+  const fromAuthor = author ? ` de ${author}` : "";
+  const parts = [text ? `Chegou uma mensagem de texto${fromAuthor} no chat: «${text}»` : `Chegou uma mensagem${fromAuthor} no chat`];
   if (images > 0) {
     parts.push(
       images === 1
@@ -27,8 +37,39 @@ export function typedContext(raw: string): string | null {
         : `Veio com ${images} imagens, que só o agente do card vê — você não vê o conteúdo delas`,
     );
   }
-  parts.push("Ela foi para o agente do card");
+  parts.push(queued
+    ? "Ela está na fila e vai para o agente do card quando ele terminar o que está fazendo"
+    : "Ela foi para o agente do card");
   return parts.join(". ");
+}
+
+export interface PeerMessage {
+  key: string;
+  text: string;
+  author: string;
+}
+
+export function peerMessages(
+  rows: readonly SdkRow[],
+  viewer: string | undefined,
+  sentFromThisTab: ReadonlyMap<string, number>,
+): PeerMessage[] {
+  const ownCopiesLeft = new Map(sentFromThisTab);
+  const messages: PeerMessage[] = [];
+  for (const row of rows) {
+    if (row.kind !== "user" || !row.from) continue;
+    const role = originRole(row.from, viewer);
+    if (role !== "self" && role !== "user") continue;
+    const copiesSentHere = role === "self" ? ownCopiesLeft.get(row.text) ?? 0 : 0;
+    if (copiesSentHere > 0) {
+      ownCopiesLeft.set(row.text, copiesSentHere - 1);
+      continue;
+    }
+    const decisionReplyOfThisAccount = role === "self" && parseDecisionReply(row.text) !== null;
+    if (decisionReplyOfThisAccount) continue;
+    messages.push({ key: `${row.at ?? ""}\u0000${row.text}`, text: row.text, author: row.from.name });
+  }
+  return messages;
 }
 
 /** The card agent's answer that landed during the call, for the voice. PURE. */

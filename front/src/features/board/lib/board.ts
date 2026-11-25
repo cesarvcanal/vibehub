@@ -244,6 +244,7 @@ export interface CardState {
   label: string;
   /** The one-line summary the agent reported, when the state came from it. */
   summary?: string;
+  inCall?: true;
 }
 
 const DECLARED_KIND: Partial<Record<DeclaredState, CardStateKind>> = {
@@ -271,13 +272,19 @@ export function cardState(
     | "declaredSummary"
     | "awaitingDecisionAt"
     | "pendingQuestionAt"
+    | "voiceCallAt"
   >,
 ): CardState | null {
-  const make = (kind: CardStateKind, summary?: string): CardState => ({
-    kind,
-    label: t(`status.${kind}`),
-    ...(summary ? { summary } : {}),
-  });
+  const inCall = Boolean(card.voiceCallAt);
+  const make = (kind: CardStateKind, summary?: string): CardState => {
+    const kindLabel = t(`status.${kind}`);
+    return {
+      kind,
+      label: inCall ? t("status.inCall", { state: kindLabel }) : kindLabel,
+      ...(summary ? { summary } : {}),
+      ...(inCall ? { inCall: true as const } : {}),
+    };
+  };
   // The conversation STOPPED on a question to the person — what the chat's pending-decisions tray
   // lists. It waits on them whether or not a process is still warm behind it; only their own filing
   // (done, paused) outranks it. The neutral "your turn" circle there read as "nothing to decide"

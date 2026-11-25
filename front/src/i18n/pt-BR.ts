@@ -268,6 +268,7 @@ export const ptBR: Record<string, string> = {
   "status.blocked": "Bloqueado — o agente não consegue seguir",
   "status.your_turn": "Turno terminou — sua vez",
   "status.idle": "Aberto, sem atividade ainda",
+  "status.inCall": "{state} · Em chamada de voz — alguém está conversando com a IA no chat deste card",
   "status.paused": "Pausado",
   "status.hibernated": "Hibernado — o terminal fechou por ficar parado. Abra pra continuar.",
 
