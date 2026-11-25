@@ -1579,6 +1579,8 @@ export const ptBR: Record<string, string> = {
   "analysis.merge.refused.other": "O último merge não saiu. Saída do vibehub:",
   "analysis.merge.unconfirmed": "Não deu para confirmar o merge: a conexão caiu e o servidor não tem merge rodando nem recusa registrada. Confira o PR no GitHub antes de tentar de novo.",
   "analysis.sidebar.merging": "mergeando o PR…",
+  "card.mergeQueued": "merge em {target} na fila: sai quando o CI do PR ficar verde",
+  "card.mergeQueuedShort": "merge na fila",
   "analysis.merge.done": "PR #{n} mergeado; o card foi para Concluído.",
   "analysis.merge.merged": "PR #{n} mergeado",
   "analysis.tab.report": "Relatório",

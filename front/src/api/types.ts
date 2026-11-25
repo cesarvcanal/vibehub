@@ -571,6 +571,7 @@ export interface Card {
    */
   reviews?: ReviewSummary[];
   analysisMerging?: true;
+  mergeOrder?: MergeOrder;
   createdAt: number;
   updatedAt?: number;
 }
@@ -824,6 +825,13 @@ export type FindingSeverity = "blocking" | "improvement" | "suggestion" | "quest
 export type FindingDecision = "keep" | "accept_risk" | "block" | "drop";
 /** `wontfix`: the author will not apply a suggestion or improvement, and said why (those two only). */
 export type FindingStatus = "open" | "fixed" | "contested" | "accepted_risk" | "dropped" | "wontfix";
+
+export interface MergeOrder {
+  sha: string;
+  target: string;
+  prUrl: string;
+  orderedAt: number;
+}
 
 /** What a board card carries about its review: the line of the block and of the sidebar. */
 export interface ReviewSummary {

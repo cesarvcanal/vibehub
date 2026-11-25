@@ -69,4 +69,18 @@ describe("ProjectSidebar — merge da análise rodando no card", () => {
     expect(await screen.findByText("Análise PR #649")).toBeInTheDocument();
     expect(screen.queryByText("mergeando o PR…")).not.toBeInTheDocument();
   });
+
+  it("card com ordem de merge guardada esperando o CI diz que o merge está na fila e para qual branch", async () => {
+    renderSidebarWith(analysisCard({
+      mergeOrder: { sha: "b3ca4b2", target: "main", prUrl: "https://github.com/o/r/pull/411", orderedAt: 1 },
+    }));
+    expect(await screen.findByText("Análise PR #649")).toBeInTheDocument();
+    expect(screen.getByText("merge em main na fila: sai quando o CI do PR ficar verde")).toBeInTheDocument();
+  });
+
+  it("card sem ordem de merge guardada não mostra a linha da fila", async () => {
+    renderSidebarWith(analysisCard());
+    expect(await screen.findByText("Análise PR #649")).toBeInTheDocument();
+    expect(screen.queryByText(/na fila: sai quando o CI/)).not.toBeInTheDocument();
+  });
 });

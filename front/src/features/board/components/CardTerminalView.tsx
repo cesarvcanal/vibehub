@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   Check,
+  GitMerge,
   Loader2,
   Menu,
   MonitorPlay,
@@ -21,6 +22,7 @@ import { useIsMobile } from "@/lib/useIsMobile";
 import { apiErrorMessage } from "@/lib/apiError";
 import { UploadStalledError } from "@/features/board/lib/uploadWatchdog";
 import { Button } from "@/components/ui/button";
+import { BADGE_TEXT } from "@/components/ui/badge";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -929,6 +931,15 @@ export function CardTerminalView({
               </h2>
             </button>
           )}
+          {card?.mergeOrder ? (
+            <span
+              title={t("card.mergeQueued", { target: card.mergeOrder.target })}
+              className={cn("inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-xs", BADGE_TEXT.info)}
+            >
+              <GitMerge aria-hidden className="h-3.5 w-3.5" />
+              {t("card.mergeQueuedShort")}
+            </span>
+          ) : null}
           <span className="hidden min-w-0 truncate text-xs text-muted-foreground/80 md:inline md:shrink-0">
         · {project.name}
       </span>
