@@ -291,6 +291,12 @@ describe("o que fica preso acima do campo enquanto roda", () => {
     expect(work.looseTasks).toEqual([]);
   });
 
+  it("o subagente já concluído que o CLI ainda lista como tarefa não prende a frota", () => {
+    const backgroundTasks = [{ id: "k-a1", type: "local_agent", description: "a1", toolUseId: "a1" }];
+    const work = runningWorkOf(["a1"], { a1: agentTask("a1", "completed") }, backgroundTasks);
+    expect(work.pinnedFleetIds.size).toBe(0);
+  });
+
   it("a tarefa do CLI que chegou sem a chamada se liga ao subagente pelo id da tarefa e não se repete", () => {
     const backgroundTasks = [{ id: "k-a2", type: "local_agent", description: "a2" }];
     const tasks = { a1: agentTask("a1", "running"), a2: agentTask("a2", "running") };

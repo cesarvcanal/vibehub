@@ -131,8 +131,10 @@ export function listRunningWork(
     return toolUseId ? { ...task, toolUseId } : task;
   });
   const runningCallIds = new Set([...foregroundAgents.map((row) => row.id), ...linkedTasks.map((task) => task.toolUseId)]);
+  const isRunningAgent = (row: SdkRow): boolean =>
+    row.kind === "tool" && runningCallIds.has(row.id) && agentStatus(row, tasks[row.id]) === "running";
   const pinnedFleets = entries.filter(
-    (entry): entry is Extract<SdkRenderRow, { kind: "agents" }> => entry.kind === "agents" && entry.rows.some((row) => runningCallIds.has(row.id)),
+    (entry): entry is Extract<SdkRenderRow, { kind: "agents" }> => entry.kind === "agents" && entry.rows.some(isRunningAgent),
   );
   const fleetAgents = pinnedFleets.flatMap((entry) => entry.rows).filter((row): row is Extract<SdkRow, { kind: "tool" }> => row.kind === "tool");
   const fleetAgentIds = new Set(fleetAgents.map((row) => row.id));
