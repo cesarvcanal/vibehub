@@ -196,7 +196,7 @@ export function onCardDriverProbe(probe: DriverProbe): () => void {
 /**
  * What the card's driver is doing. With no probe registered (sdk layer not loaded, or a test that
  * only exercises tmux) the answer is `none` — the caller then falls back to the tmux probe exactly
- * as before. A probe that throws is ignored, never fatal: this decides a label on a header.
+ * as before.
  */
 export function cardDriverActivity(cardId: string): DriverActivity {
   let best: DriverActivity = "none";

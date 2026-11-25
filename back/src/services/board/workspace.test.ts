@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, onTestFinished, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,7 @@ import { carryTranscriptsCommand } from "../accounts/carryTranscripts.js";
 import { oauthTokenGuard } from "../accounts/profiles.js";
 import { shQuote } from "../../runtime/host.js";
 import { runnerSettingsJson } from "../../runtime/runner.js";
+import type { DriverActivity } from "./agentState.js";
 
 /**
  * A card's workspace in the runner (open + terminal + pause + restart + drop). The INVARIANTS the
@@ -827,6 +828,44 @@ describe("pause / resume (the session dies; reopening returns to the SAME conver
     const pending = await ws.pauseCard(other.id);
     expect(pending.pausedAt ?? null).toBeNull();
     expect(pending.column).toBe("paused");
+  });
+
+  it("pauseCard: com um turno do chat nativo em andamento, a pausa fica pendente mesmo com o painel do tmux ocioso", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "working");
+    const agent = await import("./agentState.js");
+    onTestFinished(agent.onCardDriverProbe((cardId) => (cardId === card.id ? "turn" : "none")));
+    runScript.mockClear();
+    runScript.mockResolvedValue({ stdout: `${card.tmuxSession} idle\n`, stderr: "" });
+
+    const pending = await ws.pauseCard(card.id, "tester");
+
+    expect(pending.column).toBe("paused");
+    expect(pending.pausedAt ?? null).toBeNull();
+    expect(pending.status).toBe("working");
+    const killScripts = runScript.mock.calls.map(([script]) => String(script)).filter((script) => script.includes("kill-session"));
+    expect(killScripts).toEqual([]);
+  });
+
+  it("pauseCard: um turno do chat nativo que começa enquanto o runner é sondado também deixa a pausa pendente", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "working");
+    const driver: { activity: DriverActivity } = { activity: "idle" };
+    const agent = await import("./agentState.js");
+    onTestFinished(agent.onCardDriverProbe((cardId) => (cardId === card.id ? driver.activity : "none")));
+    runScript.mockClear();
+    runScript.mockImplementation(async (script: string) => {
+      driver.activity = "turn";
+      return probeAnswer(script) ?? { stdout: "", stderr: "" };
+    });
+
+    const pending = await ws.pauseCard(card.id, "tester");
+
+    expect(pending.pausedAt ?? null).toBeNull();
+    const killScripts = runScript.mock.calls.map(([script]) => String(script)).filter((script) => script.includes("kill-session"));
+    expect(killScripts).toEqual([]);
   });
 
   it("pauseCard: a card never opened / unknown THROWS and nothing runs; a dead host does not undo the pause", async () => {
@@ -2301,6 +2340,42 @@ describe("session probe (busy / idle / gone) and the pending-pause reconciler", 
     runScript.mockClear();
     expect(await ws.reconcilePausedCards()).toBe(0);
     expect(runScript).not.toHaveBeenCalled();
+  });
+
+  it("reconcilePausedCards: a pausa pendente espera o turno do chat nativo acabar, mesmo com o painel do tmux ocioso", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "working");
+    const driver: { activity: DriverActivity } = { activity: "turn" };
+    const agent = await import("./agentState.js");
+    onTestFinished(agent.onCardDriverProbe((cardId) => (cardId === card.id ? driver.activity : "none")));
+    runScript.mockResolvedValue({ stdout: `${card.tmuxSession} idle\n`, stderr: "" });
+    await ws.pauseCard(card.id);
+
+    expect(await ws.reconcilePausedCards()).toBe(0);
+    expect((await reg.getCard(card.id))?.pausedAt ?? null).toBeNull();
+
+    driver.activity = "idle";
+    expect(await ws.reconcilePausedCards()).toBe(1);
+    expect((await reg.getCard(card.id))?.pausedAt).toBeTypeOf("number");
+  });
+
+  it("reconcilePausedCards: um turno do chat nativo que começa enquanto o runner é sondado segura a pausa pendente", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "working");
+    const driver: { activity: DriverActivity } = { activity: "turn" };
+    const agent = await import("./agentState.js");
+    onTestFinished(agent.onCardDriverProbe((cardId) => (cardId === card.id ? driver.activity : "none")));
+    await ws.pauseCard(card.id);
+    driver.activity = "idle";
+    runScript.mockImplementation(async (script: string) => {
+      driver.activity = "turn";
+      return probeAnswer(script) ?? { stdout: "", stderr: "" };
+    });
+
+    expect(await ws.reconcilePausedCards()).toBe(0);
+    expect((await reg.getCard(card.id))?.pausedAt ?? null).toBeNull();
   });
 
   it("reconcilePausedCards: a card that is really working is NOT cut off, and cards outside Paused are never touched", async () => {
