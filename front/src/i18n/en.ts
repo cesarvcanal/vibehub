@@ -649,6 +649,8 @@ export const en: Record<string, string> = {
   "readAloud.err.failed": "Could not read the answer aloud.",
   "sdk.edit": "Edit message",
   "sdk.edited": "edited",
+  "sdk.voiceRequest": "Voice request",
+  "sdk.voiceRequestContext": "Context sent to the agent",
   "sdk.preparing": "Preparing\u2026",
   /* The working indicator's verbs and notes (lib/workingStage.ts): the verb rotates, the note
      escalates — that is what tells a four-minute turn apart from a frozen screen. */

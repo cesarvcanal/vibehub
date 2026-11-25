@@ -650,6 +650,8 @@ export const ptBR: Record<string, string> = {
   "readAloud.err.failed": "Não foi possível ler a resposta em voz alta.",
   "sdk.edit": "Editar mensagem",
   "sdk.edited": "editada",
+  "sdk.voiceRequest": "Pedido por voz",
+  "sdk.voiceRequestContext": "Contexto enviado ao agente",
   "sdk.preparing": "Preparando\u2026",
   /* The working indicator's verbs and notes (lib/workingStage.ts): the verb changes over time and the
      note escalates — it is what says, in a 4-minute turn, that the thing is still alive. */
