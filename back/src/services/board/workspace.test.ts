@@ -8,6 +8,7 @@ import { carryTranscriptsCommand } from "../accounts/carryTranscripts.js";
 import { oauthTokenGuard } from "../accounts/profiles.js";
 import { shQuote } from "../../runtime/host.js";
 import { runnerSettingsJson } from "../../runtime/runner.js";
+import type { DriverActivity } from "./agentState.js";
 
 /**
  * A card's workspace in the runner (open + terminal + pause + restart + drop). The INVARIANTS the
@@ -843,7 +844,8 @@ describe("pause / resume (the session dies; reopening returns to the SAME conver
     expect(pending.column).toBe("paused");
     expect(pending.pausedAt ?? null).toBeNull();
     expect(pending.status).toBe("working");
-    expect(runScript.mock.calls.map(([script]) => String(script)).filter((script) => script.includes("kill-session"))).toEqual([]);
+    const killScripts = runScript.mock.calls.map(([script]) => String(script)).filter((script) => script.includes("kill-session"));
+    expect(killScripts).toEqual([]);
   });
 
   it("pauseCard: a card never opened / unknown THROWS and nothing runs; a dead host does not undo the pause", async () => {
@@ -2324,7 +2326,7 @@ describe("session probe (busy / idle / gone) and the pending-pause reconciler", 
     const { card } = await seed();
     await ws.openCard(card.id);
     await reg.applyCardStatus(card.id, "working");
-    const driver = { activity: "turn" as import("./agentState.js").DriverActivity };
+    const driver: { activity: DriverActivity } = { activity: "turn" };
     const agent = await import("./agentState.js");
     onTestFinished(agent.onCardDriverProbe((cardId) => (cardId === card.id ? driver.activity : "none")));
     runScript.mockResolvedValue({ stdout: `${card.tmuxSession} idle\n`, stderr: "" });
