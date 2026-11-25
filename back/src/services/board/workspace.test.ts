@@ -848,6 +848,26 @@ describe("pause / resume (the session dies; reopening returns to the SAME conver
     expect(killScripts).toEqual([]);
   });
 
+  it("pauseCard: um turno do chat nativo que começa enquanto o runner é sondado também deixa a pausa pendente", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "working");
+    const driver: { activity: DriverActivity } = { activity: "idle" };
+    const agent = await import("./agentState.js");
+    onTestFinished(agent.onCardDriverProbe((cardId) => (cardId === card.id ? driver.activity : "none")));
+    runScript.mockClear();
+    runScript.mockImplementation(async (script: string) => {
+      driver.activity = "turn";
+      return probeAnswer(script) ?? { stdout: "", stderr: "" };
+    });
+
+    const pending = await ws.pauseCard(card.id, "tester");
+
+    expect(pending.pausedAt ?? null).toBeNull();
+    const killScripts = runScript.mock.calls.map(([script]) => String(script)).filter((script) => script.includes("kill-session"));
+    expect(killScripts).toEqual([]);
+  });
+
   it("pauseCard: a card never opened / unknown THROWS and nothing runs; a dead host does not undo the pause", async () => {
     const { card } = await seed();
     await expect(ws.pauseCard(card.id)).rejects.toThrow(/never opened/);
@@ -2338,6 +2358,24 @@ describe("session probe (busy / idle / gone) and the pending-pause reconciler", 
     driver.activity = "idle";
     expect(await ws.reconcilePausedCards()).toBe(1);
     expect((await reg.getCard(card.id))?.pausedAt).toBeTypeOf("number");
+  });
+
+  it("reconcilePausedCards: um turno do chat nativo que começa enquanto o runner é sondado segura a pausa pendente", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "working");
+    const driver: { activity: DriverActivity } = { activity: "turn" };
+    const agent = await import("./agentState.js");
+    onTestFinished(agent.onCardDriverProbe((cardId) => (cardId === card.id ? driver.activity : "none")));
+    await ws.pauseCard(card.id);
+    driver.activity = "idle";
+    runScript.mockImplementation(async (script: string) => {
+      driver.activity = "turn";
+      return probeAnswer(script) ?? { stdout: "", stderr: "" };
+    });
+
+    expect(await ws.reconcilePausedCards()).toBe(0);
+    expect((await reg.getCard(card.id))?.pausedAt ?? null).toBeNull();
   });
 
   it("reconcilePausedCards: a card that is really working is NOT cut off, and cards outside Paused are never touched", async () => {

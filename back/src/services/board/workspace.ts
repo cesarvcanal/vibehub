@@ -1580,7 +1580,8 @@ export async function pauseCard(cardId: string, by?: string): Promise<Card> {
   const before = await getCard(cardId);
   let effective = false;
   if (before?.status === "working" && hasLiveSession(before) && !nativeChatTurnRunning(before.id)) {
-    effective = pauseMustBeEffective(before.status, await probeCardSession(before));
+    const sessionState = await probeCardSession(before);
+    effective = pauseMustBeEffective(before.status, sessionState) && !nativeChatTurnRunning(before.id);
   }
   const card = await registryPauseCard(cardId, { effective });
   if (card.pausedAt) {
@@ -1677,7 +1678,7 @@ export async function reconcilePausedCards(): Promise<number> {
   );
   if (pending.length === 0) return 0;
   const states = await probeSessions(pending.map((c) => c.tmuxSession));
-  const overdue = overduePauses(pending, states);
+  const overdue = overduePauses(pending, states).filter((card) => !nativeChatTurnRunning(card.id));
   for (const card of overdue) {
     try {
       const paused = await registryPauseCard(card.id, { effective: true });
