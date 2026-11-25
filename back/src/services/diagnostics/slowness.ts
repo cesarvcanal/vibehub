@@ -59,12 +59,14 @@ function sumUsage(processes: readonly RunnerProcess[]): Omit<ProcessGroup, "proc
   };
 }
 
-function heaviestFirst(processes: readonly RunnerProcess[]): RunnerProcess[] {
-  return [...processes].sort((left, right) => right.cpuPct - left.cpuPct || right.rssMb - left.rssMb);
+function heaviestProcesses(processes: readonly RunnerProcess[]): RunnerProcess[] {
+  return [...processes]
+    .sort((left, right) => right.cpuPct - left.cpuPct || right.rssMb - left.rssMb)
+    .slice(0, TOP_PROCESSES_PER_GROUP);
 }
 
 function groupOf(processes: readonly RunnerProcess[]): ProcessGroup {
-  return { ...sumUsage(processes), processes: heaviestFirst(processes).slice(0, TOP_PROCESSES_PER_GROUP) };
+  return { ...sumUsage(processes), processes: heaviestProcesses(processes) };
 }
 
 function cores(cpuPct: number): string {
@@ -146,7 +148,7 @@ export function diagnoseSlowness(
   }
   const cardUsages = [...processesByCard.values()].map(({ card, processes }): CardUsage => ({
     id: card.id, title: card.title, column: card.column, status: card.status ?? null,
-    ...sumUsage(processes), topProcesses: heaviestFirst(processes).slice(0, TOP_PROCESSES_PER_GROUP),
+    ...sumUsage(processes), topProcesses: heaviestProcesses(processes),
   })).sort((left, right) => right.cpuPct - left.cpuPct);
 
   const orphans = groupOf(processesIn("orphan"));
