@@ -52,17 +52,24 @@ export interface PeerMessage {
 export function peerMessages(
   rows: readonly SdkRow[],
   viewer: string | undefined,
-  sentFromThisTab: ReadonlySet<string>,
+  sentFromThisTab: ReadonlyMap<string, number>,
 ): PeerMessage[] {
-  return rows.flatMap((row) => {
-    if (row.kind !== "user" || !row.from) return [];
+  const ownCopiesLeft = new Map(sentFromThisTab);
+  const messages: PeerMessage[] = [];
+  for (const row of rows) {
+    if (row.kind !== "user" || !row.from) continue;
     const role = originRole(row.from, viewer);
-    const fromAnotherPerson = role === "user";
-    const sameAccountElsewhere = role === "self" && !sentFromThisTab.has(row.text) && parseDecisionReply(row.text) === null;
-    return fromAnotherPerson || sameAccountElsewhere
-      ? [{ key: `${row.at ?? ""}\u0000${row.text}`, text: row.text, author: row.from.name }]
-      : [];
-  });
+    if (role !== "self" && role !== "user") continue;
+    const copiesSentHere = role === "self" ? ownCopiesLeft.get(row.text) ?? 0 : 0;
+    if (copiesSentHere > 0) {
+      ownCopiesLeft.set(row.text, copiesSentHere - 1);
+      continue;
+    }
+    const decisionReplyOfThisAccount = role === "self" && parseDecisionReply(row.text) !== null;
+    if (decisionReplyOfThisAccount) continue;
+    messages.push({ key: `${row.at ?? ""}\u0000${row.text}`, text: row.text, author: row.from.name });
+  }
+  return messages;
 }
 
 /** The card agent's answer that landed during the call, for the voice. PURE. */

@@ -262,6 +262,47 @@ describe("a voice call inside the card's chat", () => {
     expect(commentary()).toHaveLength(1);
   });
 
+  it("o mesmo texto vindo do outro dispositivo depois de esta aba já ter mandado ele também chega à voz", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    const commentary = () =>
+      channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append" && sentEvent.content !== SERVER_BACK_CONTEXT);
+    await userEvent.type(screen.getByRole("textbox"), "sim{Enter}");
+    await waitFor(() => expect(commentary()).toHaveLength(1));
+    ws.deliver({ type: "result", isError: false });
+    ws.deliver({ type: "user", text: "sim", at: 3, from: { kind: "owner", name: "operator" } });
+    await waitFor(() => expect(commentary()).toHaveLength(2));
+    expect(commentary()[1]).toEqual(expect.objectContaining({ content: expect.stringMatching(/operator.*«sim»/) }));
+  });
+
+  it("a mensagem longa que o servidor cortou no aviso da fila não é anunciada de novo quando sai da fila inteira", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    const commentary = () =>
+      channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append" && sentEvent.content !== SERVER_BACK_CONTEXT);
+    const fullText = "log ".repeat(1_500);
+    ws.deliver({ type: "peer_queued", name: "mussa", text: fullText.slice(0, 4_000) });
+    await waitFor(() => expect(commentary()).toHaveLength(1));
+    ws.deliver({ type: "user", text: fullText, at: 9, from: { kind: "user", name: "mussa" } });
+    ws.deliver({ type: "result", isError: false });
+    expect(commentary()).toHaveLength(1);
+  });
+
+  it("o mesmo texto deixado duas vezes na fila pela mesma pessoa é anunciado duas vezes e não se repete quando as duas saem da fila", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    const commentary = () =>
+      channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append" && sentEvent.content !== SERVER_BACK_CONTEXT);
+    ws.deliver({ type: "peer_queued", name: "mussa", text: "ok" });
+    ws.deliver({ type: "peer_queued", name: "mussa", text: "ok" });
+    await waitFor(() => expect(commentary()).toHaveLength(2));
+    ws.deliver({ type: "user", text: "ok", at: 9, from: { kind: "user", name: "mussa" } });
+    ws.deliver({ type: "result", isError: false });
+    ws.deliver({ type: "user", text: "ok", at: 10, from: { kind: "user", name: "mussa" } });
+    ws.deliver({ type: "result", isError: false });
+    expect(commentary()).toHaveLength(2);
+  });
+
   it("a mensagem que fica na fila desta aba avisa as outras abas do card", async () => {
     const { ws } = await openChat();
     await userEvent.type(screen.getByRole("textbox"), "primeira{Enter}");

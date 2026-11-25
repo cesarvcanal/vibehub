@@ -38,7 +38,7 @@ describe("what the voice is told about the chat", () => {
       { kind: "user", id: "u4", text: "sem autor", state: "sent", at: 4 },
       { kind: "user", id: "u5", text: "do celular", state: "sent", from: { kind: "owner", name: "albert" }, at: 5 },
     ];
-    expect(peerMessages(rows, "albert", new Set(["desta aba"]))).toEqual([
+    expect(peerMessages(rows, "albert", new Map([["desta aba", 1]]))).toEqual([
       { key: "2\u0000do mussa", text: "do mussa", author: "mussa" },
       { key: "5\u0000do celular", text: "do celular", author: "albert" },
     ]);
