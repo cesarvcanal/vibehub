@@ -62,4 +62,17 @@ describe("FleetChat", () => {
     expect(screen.getByText("passos de a1")).toBeInTheDocument();
     expect(screen.getByText("passos de a2")).toBeInTheDocument();
   });
+
+  it("a fala que chega com o chat aberto entra animada; a que já estava na tela fica parada", () => {
+    const runWith = (agents: ReviewFleetAgent[]): ReviewFleetRun => ({
+      runId: "wf_1", name: "revisao", phases: [], total: 2, done: agents.length, agents, at: 1, finished: false,
+    });
+    const context = fleetAgent({ id: "a1", label: "contexto" });
+    const judge = fleetAgent({ id: "a2", label: "juiz", endedAt: 2 });
+    const { rerender } = render(<FleetChat entries={reviewFleetChat(runWith([context]))} label="Conversa dos agentes" />);
+    rerender(<FleetChat entries={reviewFleetChat(runWith([context, judge]))} label="Conversa dos agentes" />);
+    const [already, arrived] = screen.getAllByTestId("fleet-chat-message").map((bubble) => bubble.closest("li")!);
+    expect(already).toHaveAttribute("data-arrived", "false");
+    expect(arrived).toHaveAttribute("data-arrived", "true");
+  });
 });

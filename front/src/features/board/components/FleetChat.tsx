@@ -18,6 +18,8 @@ const ENTRY_TEST_ID: Record<FleetChatEntry["kind"], string> = {
 
 type AgentTone = AnalysisDimension | "context" | "judge" | "other";
 
+const MESSAGE_ARRIVAL = "origin-bottom-left animate-message-arrival motion-reduce:animate-none";
+
 const TONE_STYLE: Record<AgentTone, { icon: LucideIcon; solid: string; outline: string; name: string }> = {
   context: { icon: Telescope, solid: "bg-teal-400", outline: "border-teal-400 text-teal-300", name: "text-teal-300" },
   judge: { icon: Scale, solid: "bg-amber-400", outline: "border-amber-400 text-amber-300", name: "text-amber-300" },
@@ -62,6 +64,7 @@ type AgentDetail = (agent: FleetAgentState) => React.ReactNode;
 
 export function FleetChat({ entries, label, agentDetail }: { entries: FleetChatEntry[]; label: string; agentDetail?: AgentDetail }) {
   const [openEntryIds, setOpenEntryIds] = React.useState<ReadonlySet<string>>(new Set());
+  const [entryIdsOnOpen] = React.useState<ReadonlySet<string>>(() => new Set(entries.map((entry) => entry.id)));
   const toggleEntry = (entryId: string) => {
     setOpenEntryIds((open) => {
       const next = new Set(open);
@@ -74,8 +77,14 @@ export function FleetChat({ entries, label, agentDetail }: { entries: FleetChatE
       {entries.map((entry, index) => {
         const continues = entries[index - 1]?.speaker.agentId === entry.speaker.agentId;
         const detailOpen = agentDetail ? openEntryIds.has(entry.id) : undefined;
+        const arrived = !entryIdsOnOpen.has(entry.id);
         return (
-          <li key={entry.id} id={chatEntryDomId(entry.id)} className={cn("flex min-w-0 items-end gap-2", !continues && index > 0 && "mt-1")}>
+          <li
+            key={entry.id}
+            id={chatEntryDomId(entry.id)}
+            data-arrived={arrived}
+            className={cn("flex min-w-0 items-end gap-2", !continues && index > 0 && "mt-1", arrived && MESSAGE_ARRIVAL)}
+          >
             {continues ? <span className="w-7 shrink-0" aria-hidden="true" /> : <Avatar speaker={entry.speaker} />}
             <ChatBubble
               entry={entry}
