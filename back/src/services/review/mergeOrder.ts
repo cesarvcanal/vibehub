@@ -97,8 +97,9 @@ async function notifyMergeOrder(card: Card, order: MergeOrder, outcome: string, 
   });
 }
 
-const MERGE_ORDER_TICKS_BEFORE_DELIVERING_AGAIN = 3;
+const MERGE_ORDER_TICKS_BEFORE_GIVING_UP = 3;
 const CI_WATCH_COMMAND_TIMEOUT_MS = 5 * 60_000;
+const CI_WATCH_LIMIT_MINUTES = 60;
 
 export function buildMergeQueuedOutput(result: DeliverResult): string {
   const { queuedSha, prUrl } = result;
@@ -106,14 +107,16 @@ export function buildMergeQueuedOutput(result: DeliverResult): string {
   const shortSha = queuedSha.slice(0, 7);
   const tickMinutes = MERGE_ORDER_TICK_MS / 60_000;
   const ttlHours = MERGE_ORDER_TTL_MS / 3_600_000;
-  const minutesBeforeDeliveringAgain = MERGE_ORDER_TICKS_BEFORE_DELIVERING_AGAIN * tickMinutes;
+  const minutesBeforeGivingUp = MERGE_ORDER_TICKS_BEFORE_GIVING_UP * tickMinutes;
   return `O CI do PR ainda está rodando: a ordem de merge ficou guardada no servidor, presa ao commit ${shortSha}. O servidor ` +
     `confere a cada ${tickMinutes} min, mergeia quando o CI ficar verde (até ${ttlHours} h) e conclui o card. Não encerre o turno: ` +
     "a ordem só está cumprida com o PR mergeado. Diga ao usuário que está esperando o CI e acompanhe: " +
     `\`gh pr checks ${prUrl} --watch --interval 30\` (Bash com timeout de ${CI_WATCH_COMMAND_TIMEOUT_MS} ms; repita se o tempo ` +
-    `acabar) e, com o CI verde, \`gh pr view ${prUrl} --json state\` a cada ~20 s até MERGED. Enquanto o CI roda, não chame o ` +
-    `vibehub_deliver de novo. CI vermelho, ou PR ainda aberto ${minutesBeforeDeliveringAgain} min depois do verde: chame o ` +
-    "vibehub_deliver de novo com a mesma ordem; a resposta dele diz o motivo (CI, conflito, revisão) e você segue por ela.";
+    `acabar) e, com o CI terminado, \`gh pr view ${prUrl} --json state,mergeable\` a cada ~20 s até MERGED. Não chame o ` +
+    "vibehub_deliver de novo enquanto a ordem está guardada: o merge é do servidor. CI vermelho ou PR CONFLICTING: a ordem cai; " +
+    "conte ao usuário, corrija (a falha deste PR, ou traga a base) e entregue o commit novo. " +
+    `CI verde e PR ainda OPEN ${minutesBeforeGivingUp} min depois, ou CI ainda rodando depois de ${CI_WATCH_LIMIT_MINUTES} min: ` +
+    "conte ao usuário que o merge guardado não saiu ainda, que o aviso do servidor chega neste card, e só então encerre.";
 }
 
 export async function saveOrderFromDelivery(card: Card, result: DeliverResult, orderedBy: string): Promise<void> {
