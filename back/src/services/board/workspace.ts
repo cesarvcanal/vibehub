@@ -918,11 +918,6 @@ export const UPLOAD_MAX_BYTES = 1024 ** 3;
 export const UPLOAD_SERVE_MAX_BYTES = 10 * 1024 * 1024;
 export const UPLOAD_STALL_MS = 60_000;
 
-/**
- * STRICT base64 (the payload already has its whitespace stripped). This is what makes it safe to
- * embed the content in a heredoc: the alphabet has no quotes, `$`, backticks or `_` — it cannot
- * escape a quoted heredoc and can never collide with the VIBEHUB_* delimiters.
- */
 const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
 /**
