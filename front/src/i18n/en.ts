@@ -428,7 +428,7 @@ export const en: Record<string, string> = {
   "cardView.modelSwitchPending": "Switched to {label} — it takes effect the moment Claude finishes.",
   "cardView.modelSwitchError": "Could not switch the model",
   "cardView.accountDefault": "the account default",
-  "cardView.imageTooBig": "That file is over 10 MB.",
+  "cardView.fileTooBig": "That file is over 1 GB.",
   "cardView.uploadingImage": "Uploading file…",
   "cardView.uploadError": "Could not upload the file",
   "cardView.uploadStalled": "The connection dropped while sending the file. Tap Retry on it.",

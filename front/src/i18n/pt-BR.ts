@@ -429,7 +429,7 @@ export const ptBR: Record<string, string> = {
   "cardView.modelSwitchPending": "Trocado pro {label} — vale assim que o Claude terminar o que está fazendo.",
   "cardView.modelSwitchError": "Não deu pra trocar o modelo",
   "cardView.accountDefault": "o padrão da conta",
-  "cardView.imageTooBig": "Esse arquivo passa de 10 MB.",
+  "cardView.fileTooBig": "Esse arquivo passa de 1 GB.",
   "cardView.uploadingImage": "Enviando o arquivo…",
   "cardView.uploadError": "Não deu pra enviar o arquivo",
   "cardView.uploadStalled": "A conexão caiu enquanto o arquivo subia. Toque em tentar de novo nele.",

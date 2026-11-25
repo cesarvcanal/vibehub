@@ -377,28 +377,15 @@ export const boardApi = {
   readAttachmentPreview: (cardId: string, file: string) =>
     get<AttachmentPreview>(`/cards/${encodeURIComponent(cardId)}/uploads/${encodeURIComponent(file)}/preview`),
 
-  /**
-   * Uploads an image so the agent can read it. The running server takes JSON `{ name, content }`
-   * with base64 content (the doc says multipart); it answers with the path INSIDE the runner, which
-   * is what gets typed into the prompt.
-   *
-   * Under the upload watchdog: a request on a dead connection used to spin the chip forever (see
-   * `uploadWatchdog`). Silence is abandoned and the image sent again; past the last try it rejects,
-   * and the chip turns into an error with Retry.
-   */
-  uploadCardImage: (id: string, file: File): Promise<UploadResult> =>
-    uploadWithWatchdog(async ({ signal, onProgress }) => {
-      const content = await blobToBase64(file);
-      onProgress(false);
-      return await post<UploadResult>(
-        `/cards/${encodeURIComponent(id)}/upload`,
-        { name: file.name, content },
-        {
-          signal,
-          onUploadProgress: (e) => onProgress(e.total !== undefined && e.total > 0 && e.loaded >= e.total),
-        },
-      );
-    }),
+  uploadCardFile: (id: string, file: File): Promise<UploadResult> =>
+    uploadWithWatchdog(({ signal, onProgress }) =>
+      post<UploadResult>(`/cards/${encodeURIComponent(id)}/upload`, file, {
+        signal,
+        params: { name: file.name },
+        headers: { "content-type": "application/octet-stream" },
+        onUploadProgress: (e) => onProgress(e.total !== undefined && e.total > 0 && e.loaded >= e.total),
+      }),
+    ),
 
   /**
    * Sends a chat message: the server types it at the prompt of the SAME tmux session the terminal
@@ -663,8 +650,7 @@ export function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
-/** The runner rejects an image over 10 MB; catching it here saves a pointless round trip. */
-export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+export const UPLOAD_MAX_BYTES = 1024 ** 3;
 
 /** And a recording over 20 MB — about 40 minutes of Opus, far past the recorder's own 5-minute cap. */
 export const AUDIO_MAX_BYTES = 20 * 1024 * 1024;
