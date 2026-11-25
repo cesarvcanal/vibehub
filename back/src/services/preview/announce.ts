@@ -81,9 +81,9 @@ function isListenerInCwd(listenerCwd: string, announcedCwd: string): boolean {
   return listenerCwd === announcedRoot || listenerCwd.startsWith(`${announcedRoot}/`);
 }
 
-function portServedElsewhereError(listener: ListeningPort & { cwd: string }, announcedCwd: string): Error {
+function portServedElsewhereError(listener: ListeningPort, listenerCwd: string, announcedCwd: string): Error {
   return new Error(
-    `port ${listener.port} is served by ${listener.process ?? "another process"} running in ${listener.cwd}, not in ${announcedCwd} — ` +
+    `port ${listener.port} is served by ${listener.process ?? "another process"} running in ${listenerCwd}, not in ${announcedCwd} — ` +
       "another server already holds this port: start yours on a free port and announce that one, or pass the cwd your server really runs in.",
   );
 }
@@ -122,7 +122,7 @@ export async function announcePreview(cardId: string, port: number, input: Annou
   const listener = listening.find((l) => l.port === p);
   if (!listener) throw portNotListeningError(p, listening);
   if (cwd && listener.cwd && !isListenerInCwd(listener.cwd, cwd)) {
-    throw portServedElsewhereError({ ...listener, cwd: listener.cwd }, cwd);
+    throw portServedElsewhereError(listener, listener.cwd, cwd);
   }
 
   // LISTENING is not OPENS. The port answering a TCP connect said nothing about the page, and that

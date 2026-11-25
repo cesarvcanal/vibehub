@@ -254,7 +254,7 @@ function linkPreviewPaths(node: MdNode): void {
     const child = children[i] as MdNode;
     const isPreviewPathCode = child.type === "inlineCode" && WHOLE_PREVIEW_PATH.test(child.value ?? "");
     if (isPreviewPathCode) {
-      children.splice(i, 1, { type: "link", url: child.value, children: [child] });
+      children[i] = { type: "link", url: child.value, children: [child] };
       continue;
     }
     if (child.type !== "text") {
