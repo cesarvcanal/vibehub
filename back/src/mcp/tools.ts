@@ -1,7 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { listTerminals, sendToTerminal, readTerminal, reportState, agentOriginFor, SEND_READY_WAIT_MS } from "../services/maestro/maestro.js";
-import { DECLARED_STATES, getCard, getCardWithProject, getProject, listProjects, type Project } from "../services/board/registry.js";
+import { DECLARED_STATES, getCard, getProject, listAllCards, listProjects, type Project } from "../services/board/registry.js";
+import { readRunnerSnapshot } from "../services/diagnostics/runnerSnapshot.js";
+import { diagnoseSlowness } from "../services/diagnostics/slowness.js";
 import { createCardAs, repoPushRefusals } from "../services/maestro/createCard.js";
 import { findUser, type PublicUser } from "../auth/users.js";
 import { recordMessage, MESSAGE_TYPES, SEVERITIES, type MessageType, type Severity } from "../services/events/cardEvents.js";
@@ -909,6 +911,39 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
             "and press \"Pedir revisão\". Do not review them yourself."
           : "nothing was attached: tell the user why (refused)";
         return ok({ ...attachment, next });
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "vibehub_diagnose_slowness",
+    {
+      description:
+        "DIAGNOSE A SLOW COMMAND: call it when the user says an order is taking too long, or asks why vibehub is " +
+        "slow. ONE reading of about 2 s inside the runner (nothing keeps running afterwards) returns: `machine` " +
+        "(CPU split into user/system/iowait/idle and `stealPct` — the share the hosting VPS's hypervisor took away " +
+        "—, the container's CPU limit throttling, load, pressure, memory, disk), `cards` (CPU and RAM of each card " +
+        "you can see, 100 = one core, with its heaviest processes and their age), `orphans` (processes of " +
+        "concluded or deleted cards still alive), `runner` (processes of no card), `others` (cards you cannot " +
+        "see, summed) and `findings`, worst first. Read the findings to the user plainly: `server_steal` and " +
+        "`cpu_limit` are the server — nothing to fix in vibehub; `heavy_card` / `idle_card_busy` name the card " +
+        "and the processes (tests running, a dev server or watcher left behind); `orphan_processes` are " +
+        "leftovers the user may want stopped; `no_runner_bottleneck` means the time went to the model or to the " +
+        "turn's own work. It only reads: NEVER kill anything without the user's OK. Call it once per question, " +
+        "not in a loop. `from` = YOUR OWN $VIBEHUB_CARD_ID.",
+      inputSchema: {
+        from: z.string().describe("YOUR OWN card id — the $VIBEHUB_CARD_ID of this terminal"),
+      },
+    },
+    async (input) => {
+      try {
+        const person = await personBehind(input.from);
+        const cards = await listAllCards();
+        const visibleCardIds = new Set((await visibleCards(person, cards)).map((card) => card.id));
+        const snapshot = await readRunnerSnapshot();
+        return ok(diagnoseSlowness(snapshot, cards, visibleCardIds, person.role === "owner"));
       } catch (e) {
         return fail(e);
       }

@@ -66,6 +66,11 @@ describe("MCP server instructions (the maestro persona)", () => {
     expect(cardToolDescription("vibehub_report_platform_failure")).toMatch(/ended cleanly[^.]*errors of the project's own code/);
   });
 
+  it("ensina o agente a diagnosticar a demora de uma ordem numa leitura só, sem matar nada sem OK", () => {
+    expect(INSTRUCTIONS).toContain("An order taking too long: `vibehub_diagnose_slowness`");
+    expect(cardToolDescription("vibehub_diagnose_slowness")).toMatch(/NEVER kill anything without the user's OK/);
+  });
+
   it("manda investigar a fonte, relatar inconsistência e queixa do usuário e contar a resposta sem prometer correção", () => {
     const description = cardToolDescription("vibehub_report_platform_failure");
     expect(description).toMatch(/does not match its source/);
