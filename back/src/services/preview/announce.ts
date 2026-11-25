@@ -38,16 +38,6 @@ export const PREVIEW_BASE_HINT =
   "The app is served under /preview/<port>/ — if assets 404, set its base path " +
   "(vite: base '/preview/<port>/'; Next.js: basePath '/preview/<port>') or honour X-Forwarded-Prefix.";
 
-/**
- * The host guidance that rides back with the link: the panel is reached through more than one host
- * (a LAN IP, a domain behind a gateway), and the PATH is what is true on all of them — `url` is
- * only the configured public URL, one example among the hosts the user may actually be on.
- */
-export const PREVIEW_HOST_NOTE =
-  "The preview works on ANY host the vibehub panel is opened on: hand the user the PATH " +
-  "(/preview/<port>/) and tell them to open it on the panel host they already use — `url` is just " +
-  "that path on the configured public URL.";
-
 /** What `vibehub_preview` answers with: the link, ready to be relayed to the user. */
 export interface AnnouncedPreview {
   registered: true;
@@ -59,12 +49,8 @@ export interface AnnouncedPreview {
    * through. THIS is what the agent hands the user.
    */
   path: string;
-  /** The path on the configured public URL — one example host, not the only one. */
-  url: string;
   /** Base-path guidance for apps that emit absolute URLs. */
   hint: string;
-  /** Host guidance: the path works on any panel host; `url` is only an example. */
-  note: string;
   /**
    * What the end-to-end check saw and the user has to know (Portuguese — it is relayed verbatim):
    * the page opens, but a 404, a redirect out of the prefix or absolute assets await them. Absent
@@ -103,7 +89,7 @@ export interface AnnounceInput {
 
 /**
  * Verifies the port is LISTENING in the runner, records the preview on the card (deduped by port)
- * and returns the full URL. Throws a clear, actionable error when the port is silent or the card
+ * and returns its path. Throws a clear, actionable error when the port is silent or the card
  * does not exist — those are the two mistakes an agent actually makes here. When a command comes
  * without a cwd, the card's own worktree cwd is resolved NOW and stored, so the record stays
  * relaunchable on its own.
@@ -145,9 +131,7 @@ export async function announcePreview(cardId: string, port: number, input: Annou
     port: p,
     ...(stored?.label ? { label: stored.label } : {}),
     path: `/preview/${p}/`,
-    url: previewPublicUrl(config.publicUrl, p),
     hint: PREVIEW_BASE_HINT,
-    note: PREVIEW_HOST_NOTE,
     ...(diagnosis.warning ? { warning: diagnosis.warning } : {}),
   };
 }

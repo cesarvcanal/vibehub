@@ -81,7 +81,7 @@ describe("portNotListeningError (pure)", () => {
 });
 
 describe("announcePreview", () => {
-  it("verifies the port, registers the preview and returns the full clickable URL", async () => {
+  it("verifica a porta, registra o preview e devolve só o caminho, sem endereço de um host que o usuário pode não usar", async () => {
     const { registry, announce, cardId } = await boot();
     runScript.mockResolvedValue({ stdout: scanOutput([5173]), stderr: "", code: 0 });
 
@@ -91,12 +91,8 @@ describe("announcePreview", () => {
       cardId,
       port: 5173,
       label: "front",
-      // The PATH is the canonical link — valid on every host the panel is reached through; the
-      // full URL is only that path on the configured public URL (one example host).
       path: "/preview/5173/",
-      url: "http://192.0.2.10:3010/preview/5173/",
       hint: PREVIEW_BASE_HINT,
-      note: announce.PREVIEW_HOST_NOTE,
     });
     const card = await registry.getCard(cardId);
     expect(card?.previews).toEqual([{ port: 5173, label: "front", createdAt: expect.any(Number) }]);
