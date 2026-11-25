@@ -44,11 +44,11 @@ export function delegationRequest(asked: string, turns: VoiceTurn[]): string {
 export function parseVoiceRequest(text: string): { asked: string; context: string } | null {
   if (!text.startsWith(VOICE_REQUEST_MARK)) return null;
   const body = text.slice(VOICE_REQUEST_MARK.length);
-  const contextStart = body.indexOf(`\n\n${TRANSCRIPT_HEADER}`);
-  const asked = (contextStart < 0 ? body : body.slice(0, contextStart)).trim();
+  const transcriptStart = body.indexOf(`\n\n${TRANSCRIPT_HEADER}`);
+  const askedEnd = transcriptStart < 0 ? body.length : transcriptStart;
+  const asked = body.slice(0, askedEnd).trim();
   if (asked === "") return null;
-  const context = contextStart < 0 ? "" : body.slice(contextStart).trim();
-  return { asked, context };
+  return { asked, context: body.slice(askedEnd).trim() };
 }
 
 export function askedOfAgent(argumentsJson: string): string | null {

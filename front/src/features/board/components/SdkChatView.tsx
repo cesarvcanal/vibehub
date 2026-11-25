@@ -2554,7 +2554,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
         <span className="min-w-0 break-words italic">{reply.question}</span>
       </div>
     ) : null;
-    const voiceRequest = reply ? null : parseVoiceRequest(row.text);
+    const voiceRequest = parseVoiceRequest(row.text);
     const voiceHeader = voiceRequest ? (
       <div data-testid="sdk-user-voice" className="mb-1 flex items-center gap-1 border-b border-current/15 pb-1 text-[10px] text-muted-foreground">
         <Mic className="h-2.5 w-2.5 shrink-0" />
@@ -2567,7 +2567,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
         <div className="mt-1 whitespace-pre-wrap break-words">{voiceRequest.context}</div>
       </details>
     ) : null;
-    const bodyText = reply ? reply.answer : voiceRequest ? voiceRequest.asked : row.text;
+    const bodyText = reply?.answer ?? voiceRequest?.asked ?? row.text;
     /**
      * A message the SERVER never took (it refused it, or the receipt never came). The bubble says
      * so and hands back the two things the person actually needs: send again, or give up. The
