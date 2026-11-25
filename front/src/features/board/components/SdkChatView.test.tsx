@@ -4737,6 +4737,20 @@ describe("SdkChatView — tarefas em segundo plano", () => {
     expect(screen.getByTestId("sdk-fleet")).toHaveTextContent("2 done · 0 running");
   });
 
+  it("a frota presa acima do campo não deixa um item vazio no lugar dela na conversa", async () => {
+    renderSdkChat();
+    const ws = await socket();
+    ws.accept();
+    ws.deliver({ type: "ready" });
+    ws.deliver({ type: "assistant_text", text: "Vou revisar." });
+    ws.deliver({ type: "tool_use", id: "a1", name: "Agent", input: { description: "Code review · padrões" } });
+    ws.deliver({ type: "agent_task", toolUseId: "a1", taskId: "k1", status: "running" });
+    await screen.findByTestId("sdk-running-tasks");
+
+    const conversationItems = [...screen.getByTestId("sdk-chat-scroller").querySelectorAll(":scope > div")];
+    expect(conversationItems.filter((item) => item.childElementCount === 0 && item.textContent === "")).toEqual([]);
+  });
+
   it("um subagente em primeiro plano fica fixo acima do campo enquanto roda, e abre a linha do tempo dele", async () => {
     renderSdkChat();
     const ws = await socket();

@@ -1506,6 +1506,7 @@ export function SdkChatView({
   const settled = connected && !working && state.backgroundTasks.length === 0;
   const foregroundAgents = working ? listForegroundRunningAgents(state.rows, state.agentTasks, state.backgroundTasks) : [];
   const runningWork = listRunningWork(rendered, foregroundAgents, connected ? state.backgroundTasks : [], state.agentTasks);
+  const conversationEntries = rendered.filter((entry) => !runningWork.pinnedFleetIds.has(entry.id));
   const finishedAnswers = React.useMemo(() => finishedAnswerIds(state.rows, settled), [state.rows, settled]);
   // The sends that ARE catalogue commands (the chip), and which of them the current turn is running: the
   // last one sent, while there is a turn.
@@ -1619,7 +1620,7 @@ export function SdkChatView({
         ) : null}
 
         <SdkThreadContext.Provider value={thread}>
-        {rendered.map((entry) => (
+        {conversationEntries.map((entry) => (
           <div
             key={entry.id}
             ref={(el) => {
@@ -1632,7 +1633,7 @@ export function SdkChatView({
             {entry.kind === "tools" ? (
               <SdkToolGroup rows={entry.rows} />
             ) : entry.kind === "agents" ? (
-              !runningWork.pinnedFleetIds.has(entry.id) && <SdkFleet rows={entry.rows} tasks={state.agentTasks} children={split.children} />
+              <SdkFleet rows={entry.rows} tasks={state.agentTasks} children={split.children} />
             ) : (
               <SdkChatRow
                 cardId={cardId}
