@@ -255,7 +255,7 @@ describe("stopped preview → restart dialog", () => {
   });
 
   it("Restart relaunches on the server, THEN opens the tab and closes the dialog", async () => {
-    mockPost.mockResolvedValue({ restarted: true, port: 4999, path: "/preview/4999/", url: "http://x/preview/4999/" });
+    mockPost.mockResolvedValue({ restarted: true, port: 4999, path: "/preview/4999/" });
     const user = userEvent.setup();
     renderApp(<PreviewChip cardId="c1" previews={[stoppedPreview]} />);
     await waitFor(() => expect(screen.getByTestId("preview-chip")).toHaveTextContent("stopped"));

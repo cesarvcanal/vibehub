@@ -25,11 +25,6 @@ import { logger } from "../../utils/logger.js";
  * ports that are — the agent's fix (start the server / wait for it) is different from a typo's.
  */
 
-/** The clickable URL of a preview — publicUrl is where the user's browser reaches vibehub. PURE. */
-export function previewPublicUrl(publicUrl: string, port: number): string {
-  return `${publicUrl.replace(/\/+$/, "")}/preview/${assertPreviewPort(port)}/`;
-}
-
 /**
  * The one-line base-path warning that rides back with the URL. Only apps that emit ABSOLUTE URLs
  * need it (vite, Next.js); relative-path apps work as-is. Kept short: it is tool output, not docs.
@@ -37,16 +32,6 @@ export function previewPublicUrl(publicUrl: string, port: number): string {
 export const PREVIEW_BASE_HINT =
   "The app is served under /preview/<port>/ — if assets 404, set its base path " +
   "(vite: base '/preview/<port>/'; Next.js: basePath '/preview/<port>') or honour X-Forwarded-Prefix.";
-
-/**
- * The host guidance that rides back with the link: the panel is reached through more than one host
- * (a LAN IP, a domain behind a gateway), and the PATH is what is true on all of them — `url` is
- * only the configured public URL, one example among the hosts the user may actually be on.
- */
-export const PREVIEW_HOST_NOTE =
-  "The preview works on ANY host the vibehub panel is opened on: hand the user the PATH " +
-  "(/preview/<port>/) and tell them to open it on the panel host they already use — `url` is just " +
-  "that path on the configured public URL.";
 
 /** What `vibehub_preview` answers with: the link, ready to be relayed to the user. */
 export interface AnnouncedPreview {
@@ -59,12 +44,8 @@ export interface AnnouncedPreview {
    * through. THIS is what the agent hands the user.
    */
   path: string;
-  /** The path on the configured public URL — one example host, not the only one. */
-  url: string;
   /** Base-path guidance for apps that emit absolute URLs. */
   hint: string;
-  /** Host guidance: the path works on any panel host; `url` is only an example. */
-  note: string;
   /**
    * What the end-to-end check saw and the user has to know (Portuguese — it is relayed verbatim):
    * the page opens, but a 404, a redirect out of the prefix or absolute assets await them. Absent
@@ -90,6 +71,11 @@ export function portNotListeningError(port: number, listening: readonly Listenin
   );
 }
 
+function isListenerInCwd(listenerCwd: string, announcedCwd: string): boolean {
+  const announcedRoot = announcedCwd.replace(/\/+$/, "");
+  return listenerCwd === announcedRoot || listenerCwd.startsWith(`${announcedRoot}/`);
+}
+
 export interface AnnounceInput {
   label?: string;
   /**
@@ -103,7 +89,7 @@ export interface AnnounceInput {
 
 /**
  * Verifies the port is LISTENING in the runner, records the preview on the card (deduped by port)
- * and returns the full URL. Throws a clear, actionable error when the port is silent or the card
+ * and returns its path. Throws a clear, actionable error when the port is silent or the card
  * does not exist — those are the two mistakes an agent actually makes here. When a command comes
  * without a cwd, the card's own worktree cwd is resolved NOW and stored, so the record stays
  * relaunchable on its own.
@@ -112,16 +98,22 @@ export async function announcePreview(cardId: string, port: number, input: Annou
   const p = assertPreviewPort(port);
   // Shape errors (a two-line command, a relative cwd) must beat the scan: they are the agent's to fix.
   const command = normalizePreviewCommand(input.command);
-  let cwd = normalizePreviewCwd(input.cwd);
+  const announcedCwd = normalizePreviewCwd(input.cwd);
   const card = await getCard(cardId);
   if (!card) throw new Error("card not found — pass your OWN card id ($VIBEHUB_CARD_ID)");
-  if (command && !cwd) {
-    const project = await getProject(card.projectId);
-    if (project) cwd = cardWorkPaths(project, card).cwd;
-  }
+  const project = await getProject(card.projectId);
+  const serverCwd = announcedCwd ?? (project ? cardWorkPaths(project, card).cwd : undefined);
+  const cwd = command ? serverCwd : announcedCwd;
 
   const listening = await scanListeningPorts();
-  if (!listening.some((l) => l.port === p)) throw portNotListeningError(p, listening);
+  const listener = listening.find((l) => l.port === p);
+  if (!listener) throw portNotListeningError(p, listening);
+  if (serverCwd && listener.cwd && !isListenerInCwd(listener.cwd, serverCwd)) {
+    throw new Error(
+      `port ${p} is served by ${listener.process ?? "another process"} running in ${listener.cwd}, not in ${serverCwd} — ` +
+        "another server already holds this port: start yours on a free port and announce that one, or pass the cwd your server really runs in.",
+    );
+  }
 
   // LISTENING is not OPENS. The port answering a TCP connect said nothing about the page, and that
   // gap is exactly how a redirect-looping vite got announced as `registered: true` (see probe.ts).
@@ -145,9 +137,7 @@ export async function announcePreview(cardId: string, port: number, input: Annou
     port: p,
     ...(stored?.label ? { label: stored.label } : {}),
     path: `/preview/${p}/`,
-    url: previewPublicUrl(config.publicUrl, p),
     hint: PREVIEW_BASE_HINT,
-    note: PREVIEW_HOST_NOTE,
     ...(diagnosis.warning ? { warning: diagnosis.warning } : {}),
   };
 }

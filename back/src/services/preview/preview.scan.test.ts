@@ -67,7 +67,7 @@ async function runPortScan(path: string): Promise<string> {
 }
 
 describe("listPortsScript contra o /proc de verdade", () => {
-  it("acha a porta de um servidor de verdade com o processo e o pid dele", async () => {
+  it("acha a porta de um servidor de verdade com o processo, o pid e a pasta dele", async () => {
     const port = await listenOnLoopback();
     const ports = parseListeningPorts(await runPortScan(await pathWithFakeDocker()));
     expect(ports.find((listening) => listening.port === port)).toEqual({
@@ -75,6 +75,7 @@ describe("listPortsScript contra o /proc de verdade", () => {
       address: "loopback",
       process: expect.any(String),
       pid: process.pid,
+      cwd: process.cwd(),
     });
   }, SCAN_TEST_TIMEOUT_MS);
 
@@ -95,6 +96,7 @@ describe("listPortsScript contra o /proc de verdade", () => {
       address: "loopback",
       process: processName,
       pid: server.pid,
+      cwd: process.cwd(),
     });
   }, SCAN_TEST_TIMEOUT_MS);
 });

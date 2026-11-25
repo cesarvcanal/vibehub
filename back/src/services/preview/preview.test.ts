@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   PROC_MARKER,
+  CWD_MARKER,
   badGatewayResponse,
   buildProxyHead,
   isInfraPort,
@@ -93,6 +94,20 @@ describe("parseListeningPorts", () => {
     }
   });
 
+  it("lê a pasta em que o processo do servidor roda", () => {
+    const raw = [
+      tcpLine({ addr: "00000000", port: 8765, inode: "111" }),
+      PROC_MARKER,
+      "111 40 python3",
+      CWD_MARKER,
+      "/proc/40 /tmp/artefato processos",
+      "/proc/41 /root",
+    ].join("\n");
+    expect(parseListeningPorts(raw)).toEqual([
+      { port: 8765, address: "all", process: "python3", pid: 40, cwd: "/tmp/artefato processos" },
+    ]);
+  });
+
   it("survives a process section with malformed lines", () => {
     const raw = [tcpLine({ addr: "0100007F", port: 5173, inode: "111" }), PROC_MARKER, "garbage", "111 40 node", ""].join("\n");
     expect(parseListeningPorts(raw)[0]).toMatchObject({ process: "node" });
@@ -116,6 +131,7 @@ describe("listPortsScript", () => {
     expect(script).toContain("docker exec -i 'vibehub-runner'");
     expect(script).toContain("/proc/net/tcp");
     expect(script).toContain(PROC_MARKER);
+    expect(script).toContain(CWD_MARKER);
   });
 });
 

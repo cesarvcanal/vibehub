@@ -10,7 +10,7 @@ import {
   type CardPreview,
 } from "../board/registry.js";
 import { buildKillSessionScript } from "../board/workspace.js";
-import { previewPublicUrl, scanListeningPorts } from "./announce.js";
+import { scanListeningPorts } from "./announce.js";
 import { logger } from "../../utils/logger.js";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -152,8 +152,6 @@ export interface RestartedPreview {
   port: number;
   /** Same-origin path the tab opens (`/preview/<port>/`). */
   path: string;
-  /** Full public URL, for completeness (the front uses `path` — same origin). */
-  url: string;
 }
 
 /**
@@ -206,7 +204,6 @@ export async function restartPreview(cardId: string, port: number): Promise<Rest
     restarted: true,
     port: preview.port,
     path: `/preview/${preview.port}/`,
-    url: previewPublicUrl(config.publicUrl, preview.port),
   };
 }
 

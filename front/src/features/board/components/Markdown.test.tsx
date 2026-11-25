@@ -99,6 +99,15 @@ describe("Markdown — GFM", () => {
     expect(container.querySelector("a")).toBeNull();
     expect(container.querySelector("code")?.textContent).toBe("curl /preview/3100/x");
   });
+
+  it.each([
+    ["**`/preview/8791/`**", "/preview/8791/"],
+    ["abra `/preview/8791/index.html` no painel", "/preview/8791/index.html"],
+  ])("o caminho de preview sozinho entre crases vira link clicável: %s", (text, href) => {
+    const { container } = render(<Markdown text={text} />);
+    expect(container.querySelector("a")?.getAttribute("href")).toBe(href);
+    expect(container.querySelector("a code")?.textContent).toBe(href);
+  });
 });
 
 describe("Markdown — safety", () => {
