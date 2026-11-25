@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, onTestFinished, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -806,6 +806,23 @@ describe("pause / resume (the session dies; reopening returns to the SAME conver
     expect(runScript).toHaveBeenCalledTimes(2); // probe, then the kill
     expect(scriptAt(1)).toContain(`tmux kill-session -t '${card.tmuxSession}'`);
     expect(scriptAt(1)).toContain(`tmux kill-session -t '${card.tmuxSession}-sh'`);
+  });
+
+  it("pauseCard: um card do chat nativo com turno em andamento é pausa PENDENTE, mesmo com o tmux parado", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "working");
+    const agentState = await import("./agentState.js");
+    onTestFinished(agentState.onCardDriverProbe((cardId) => (cardId === card.id ? "turn" : "none")));
+    runScript.mockClear();
+    runScript.mockResolvedValue({ stdout: `${card.tmuxSession} idle\n`, stderr: "" });
+
+    const pending = await ws.pauseCard(card.id, "tester");
+
+    expect(pending.column).toBe("paused");
+    expect(pending.pausedAt ?? null).toBeNull();
+    expect(pending.status).toBe("working");
+    expect(runScript.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain("kill-session");
   });
 
   it("pauseCard: a session that is GONE pauses for real; an unreachable runner keeps the pause pending", async () => {

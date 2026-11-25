@@ -36,7 +36,7 @@ import { logger } from "../../utils/logger.js";
 import { testWorkerTmuxArgs } from "../../runtime/testWorkers.js";
 import { CARD_ID_RE } from "./cardId.js";
 import { CREATE_CARD_TMPDIR, cardTmpDir, cardTmpEnv } from "./cardTmp.js";
-import { applyLiveEffort } from "./agentState.js";
+import { applyLiveEffort, cardDriverActivity } from "./agentState.js";
 
 export { CLAUDE_PROFILES_DIR, DEFAULT_CLAUDE_DIR, accountConfigDir };
 
@@ -1574,10 +1574,9 @@ export async function pauseCard(cardId: string, by?: string): Promise<Card> {
   // column that means "not running". So before deciding, ASK THE RUNNER what that session is doing;
   // only a genuinely busy Claude earns the polite "let it finish" treatment.
   const before = await getCard(cardId);
-  let effective = false;
-  if (before?.status === "working" && hasLiveSession(before)) {
-    effective = pauseMustBeEffective(before.status, await probeCardSession(before));
-  }
+  const nativeChatTurnRunning = cardDriverActivity(cardId) === "turn";
+  const mustProbeRunner = before?.status === "working" && hasLiveSession(before) && !nativeChatTurnRunning;
+  const effective = mustProbeRunner ? pauseMustBeEffective(before.status, await probeCardSession(before)) : false;
   const card = await registryPauseCard(cardId, { effective });
   if (card.pausedAt) {
     // EFFECTIVE pause (the card was idle): end the sessions right away.
