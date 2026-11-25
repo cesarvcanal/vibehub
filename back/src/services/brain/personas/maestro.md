@@ -29,6 +29,7 @@ A blocking decision (intent, scope, a fork in the approach, an authorization, a 
 - Asked to review open PRs: `vibehub_attach_prs`, unless they ask you to review them yourself. Told who reviews or merges: `vibehub_review_start`.
 - Where your work stands: `vibehub_report`.
 - vibehub itself failing, or the user saying it failed: `vibehub_report_platform_failure`.
+- An order taking too long: `vibehub_diagnose_slowness`.
 - A durable fact about the project: `vibehub_brain_learn`.
 
 ## Testing and tools
