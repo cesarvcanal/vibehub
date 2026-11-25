@@ -1027,6 +1027,7 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
       logger.warn({ card: session.label, detail: (err as Error).message }, "could not clear the sdk chat history");
     });
     forgetCardWorkflows(session.cardId);
+    session.stoppedTasksUnknownToModel = [];
     // The erased conversation takes up nothing any more: its meter goes with it (the new session's reading
     // arrives at the end of the /clear's turn).
     session.contextUsage = undefined;
@@ -1556,11 +1557,12 @@ export function dispatchClientFrame(
     else if (control.now && session.activeTurns > 0) noteUserStop(session.cardId, session.label, Date.now());
     const sentText = appendStoppedTasksNotice(control.text, session.stoppedTasksUnknownToModel);
     if (!writeToDriver(session, { ...control, text: sentText })) return { kind: "refused", cid: control.cid, reason: "driver-gone" };
-    session.stoppedTasksUnknownToModel = [];
+    const noticeWent = sentText !== control.text;
+    if (noticeWent) session.stoppedTasksUnknownToModel = [];
     countSentTurn(session, sentText);
     noteChatActivity(session, typistUserId);
     const at = Date.now();
-    const sent = sentText === control.text ? {} : { sent: sentText };
+    const sent = noticeWent ? { sent: sentText } : {};
     const line: HistoryEvent = { type: "user", text: control.text, ...sent, at, from: origin };
     const persisted = appendHistoryReported(session.cardId, line);
     relayToPeers(session, sender, line);

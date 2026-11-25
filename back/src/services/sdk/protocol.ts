@@ -569,6 +569,8 @@ export function buildSupersedeText(original: string, text: string): string {
   );
 }
 
+export const BACKGROUND_NOTICE_LIST_MAX = 8;
+
 /**
  * The answer to an ORPHANED question card, on its way to the model as a plain user message.
  *
@@ -592,14 +594,15 @@ export function buildOrphanAnswerText(
   // The restart that left the card up also killed what was running in the background — its completion
   // notice will never arrive, and the agent would sit waiting for it.
   // Only the quoted command is disarmed; the answer is the person's speech and counts as they wrote it.
-  const list = defusedCommandList(lostBackground.slice(0, 8));
+  const list = defusedCommandList(lostBackground.slice(0, BACKGROUND_NOTICE_LIST_MAX));
   return `${text}\n\nO reinício também encerrou o que estava rodando em segundo plano — o resultado disso não vai ` +
     `chegar:\n${list}\nConfira o estado atual, rode de novo o que ainda for necessário e siga até o fim.`;
 }
 
 export function appendStoppedTasksNotice(text: string, stoppedTasks: readonly string[]): string {
-  if (stoppedTasks.length === 0) return text;
-  const list = defusedCommandList(stoppedTasks.slice(0, 8));
+  const isSlashCommand = text.trimStart().startsWith("/");
+  if (stoppedTasks.length === 0 || isSlashCommand) return text;
+  const list = defusedCommandList(stoppedTasks.slice(0, BACKGROUND_NOTICE_LIST_MAX));
   return `${text}\n\n[vibehub: o que rodava em segundo plano foi parado antes de terminar e o resultado não vai chegar:]\n` +
     `${list}\nNão diga que ainda está rodando; rode de novo o que ainda for necessário.`;
 }

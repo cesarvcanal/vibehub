@@ -21,6 +21,8 @@ import {
   parseWorkflowFeedFrame,
   buildSupersedeText,
   buildOrphanAnswerText,
+  appendStoppedTasksNotice,
+  BACKGROUND_NOTICE_LIST_MAX,
   buildLateAnswerText,
   mergePeerAnswers,
   interruptNote,
@@ -663,6 +665,25 @@ describe("buildOrphanAnswerText", () => {
     const text = buildOrphanAnswerText([{ question: "A?", options: [] }], [{ selected: ["ultrathink"] }], ["grep ultracode src"]);
     expect(text).toContain("- grep ultra-code src");
     expect(text).toContain("«A?» → ultrathink");
+  });
+});
+
+describe("appendStoppedTasksNotice — o aviso de segundo plano parado que vai com a mensagem da pessoa", () => {
+  it("lista no máximo BACKGROUND_NOTICE_LIST_MAX tarefas, com a palavra reservada desarmada", () => {
+    const stopped = ["grep ultracode src", ...Array.from({ length: BACKGROUND_NOTICE_LIST_MAX }, (_, index) => `tarefa ${index}`)];
+    const text = appendStoppedTasksNotice("segue", stopped);
+    expect(text.startsWith("segue\n\n")).toBe(true);
+    expect(text).toContain("- grep ultra-code src");
+    expect(text).toContain(`- tarefa ${BACKGROUND_NOTICE_LIST_MAX - 2}`);
+    expect(text).not.toContain(`- tarefa ${BACKGROUND_NOTICE_LIST_MAX - 1}`);
+  });
+
+  it.each(["/model sonnet", "  /compact foco no PR"])("comando de barra (%s) não leva aviso", (command) => {
+    expect(appendStoppedTasksNotice(command, ["Code review · spec"])).toBe(command);
+  });
+
+  it("sem tarefa parada, o texto sai como a pessoa escreveu", () => {
+    expect(appendStoppedTasksNotice("segue", [])).toBe("segue");
   });
 });
 
