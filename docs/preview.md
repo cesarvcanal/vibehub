@@ -21,13 +21,19 @@ You should not have to hunt for ports. Ask the card's agent for a preview ("roda
 2. It calls the **`vibehub_preview`** MCP tool with `{ card, port, label, command, cwd }`. vibehub
    verifies the port is actually listening (same scan as the menu), records the preview on the
    card — **including the start command**, which is the relaunch recipe — and returns the link:
-   the canonical `path` (`/preview/<port>/`, valid on any host the panel is opened on) plus `url`
-   (that path on the configured public URL, one example host).
+   the `path` (`/preview/<port>/`). It carries no host on purpose: the chat turns it into a link
+   on whatever host the panel is open on, where the user already has a session. A full URL on
+   another host answers 401 to a user who is not logged in there.
 3. The agent answers with that link, and the card grows a **chip** ("Preview: front") on its bar —
    click it and the app opens in a new tab. The Preview menu lists the announced previews first,
    above the raw port scan.
 
 If the announced port is not listening, the tool refuses and tells the agent which ports are.
+
+Every card shares the same runner, so a port can already belong to another card's server. The
+tool reads the working directory of the process listening on the port and refuses it when it is
+outside the announced `cwd` (or, without one, the card's worktree), naming the process and its
+directory. The agent then picks a free port, or passes the `cwd` its server really runs in.
 
 A listening port is not yet a page that opens, so before recording anything the tool also opens
 `/` through the same tunnel and with the same request head the proxy sends (prefix stripped,

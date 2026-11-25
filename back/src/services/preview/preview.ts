@@ -29,6 +29,8 @@ import { SESSION_COOKIE } from "../../auth/session.js";
 /** Marker separating the /proc/net/tcp dump from the inode→process map in the scan output. */
 export const PROC_MARKER = "__VIBEHUB_PROC__";
 
+export const CWD_MARKER = "__VIBEHUB_CWD__";
+
 export interface ListeningPort {
   port: number;
   /** Where the server bound: loopback (127.0.0.1/::1), all interfaces, or a specific address. */
@@ -36,6 +38,7 @@ export interface ListeningPort {
   /** Best-effort process name (`comm`), when the inode could be mapped to a /proc entry. */
   process?: string;
   pid?: number;
+  cwd?: string;
 }
 
 /**
@@ -67,6 +70,8 @@ export function listPortsScript(container: string): string {
     '  comm=; read -r comm 2>/dev/null < "/proc/$pid/comm"',
     "  printf '%s %s %s\\n' \"$inode\" \"$pid\" \"$comm\"",
     "done",
+    `echo ${CWD_MARKER}`,
+    "find /proc/[0-9]*/cwd -maxdepth 0 -printf '%h %l\\n' 2>/dev/null || true",
     "VIBEHUB_PORTS",
   ].join("\n");
 }
@@ -90,7 +95,15 @@ function classifyAddress(hex: string): "loopback" | "all" | "other" {
 export function parseListeningPorts(raw: string): ListeningPort[] {
   const markerAt = raw.indexOf(PROC_MARKER);
   const sockets = markerAt >= 0 ? raw.slice(0, markerAt) : raw;
-  const procSection = markerAt >= 0 ? raw.slice(markerAt + PROC_MARKER.length) : "";
+  const cwdAt = raw.indexOf(CWD_MARKER);
+  const procSection = markerAt >= 0 ? raw.slice(markerAt + PROC_MARKER.length, cwdAt >= 0 ? cwdAt : undefined) : "";
+  const cwdSection = cwdAt >= 0 ? raw.slice(cwdAt + CWD_MARKER.length) : "";
+
+  const cwdByPid = new Map<number, string>();
+  for (const line of cwdSection.split("\n")) {
+    const match = /^\/proc\/(\d+) (\/.*)$/.exec(line);
+    if (match) cwdByPid.set(Number(match[1]), match[2]!);
+  }
 
   const byInode = new Map<string, { pid: number; comm?: string }>();
   for (const line of procSection.split("\n")) {
@@ -121,6 +134,7 @@ export function parseListeningPorts(raw: string): ListeningPort[] {
         address,
         process: proc?.comm ?? existing?.process,
         pid: proc?.pid ?? existing?.pid,
+        cwd: (proc && cwdByPid.get(proc.pid)) ?? existing?.cwd,
       });
     }
   }

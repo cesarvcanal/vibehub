@@ -530,9 +530,9 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "an API) and the user should get a clickable link to it. vibehub verifies the port is " +
         "actually LISTENING **and OPENS the page itself** through the same proxy the browser uses, " +
         "records the preview on the card (a visible chip the user clicks) and " +
-        "returns the link: answer the user with `path` (/preview/<port>/ — it works on ANY host the " +
-        "vibehub panel is opened on; `url` is just that path on the configured public URL, one " +
-        "example host). If the port is not listening " +
+        "returns the link: answer the user with `path` exactly as returned (/preview/<port>/, a page " +
+        "under it allowed). The panel turns it into a link on whatever host the user opened it on; " +
+        "never prefix it with a host, which breaks with 401 for a user logged in elsewhere. If the port is not listening " +
         "yet, it refuses and tells you what is: start the server first (bound to 127.0.0.1 or " +
         "0.0.0.0) and wait until it listens. It also REFUSES a page that cannot be opened (an app " +
         "that redirects into /preview/<port>/ loops the browser, because the proxy strips that " +

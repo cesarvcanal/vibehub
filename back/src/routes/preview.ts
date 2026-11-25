@@ -315,7 +315,8 @@ export async function previewRoutes(app: FastifyInstance): Promise<void> {
         logger.warn({ err: (err as Error).message }, "preview prune failed (listing continues)");
       }
       const scope = await previewPortScope(user);
-      return await reply.send({ ports: scope === "all" ? ports : ports.filter((p) => scope.has(p.port)) });
+      const visiblePorts = scope === "all" ? ports : ports.filter((p) => scope.has(p.port));
+      return await reply.send({ ports: visiblePorts.map(({ port, address, process, pid }) => ({ port, address, process, pid })) });
     } catch (err) {
       return await reply.code(502).send({ error: (err as Error).message });
     }

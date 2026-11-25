@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { previewPublicUrl, portNotListeningError, PREVIEW_BASE_HINT } from "./announce.js";
-import { PROC_MARKER } from "./preview.js";
+import { portNotListeningError, PREVIEW_BASE_HINT } from "./announce.js";
+import { CWD_MARKER, PROC_MARKER } from "./preview.js";
 import type { PreviewProbe } from "./probe.js";
 
 /**
@@ -41,7 +41,6 @@ async function boot(probe: PreviewProbe | null = null) {
   vi.resetModules();
   const env = await import("../../config/env.js");
   env.config.dataDir = dir;
-  env.config.publicUrl = "http://192.0.2.10:3010/";
   vi.doMock("../../runtime/host.js", async () => {
     const actual = await vi.importActual<typeof import("../../runtime/host.js")>("../../runtime/host.js");
     return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript }) };
@@ -57,17 +56,6 @@ async function boot(probe: PreviewProbe | null = null) {
   return { registry, announce, cardId: card.id };
 }
 
-describe("previewPublicUrl (pure)", () => {
-  it("joins publicUrl and the proxy path, tolerating trailing slashes", () => {
-    expect(previewPublicUrl("http://192.0.2.10:3010", 5173)).toBe("http://192.0.2.10:3010/preview/5173/");
-    expect(previewPublicUrl("http://vibehub.multi/", 3000)).toBe("http://vibehub.multi/preview/3000/");
-  });
-
-  it("refuses a port that could not be proxied", () => {
-    expect(() => previewPublicUrl("http://x", 0)).toThrow(/invalid preview port/);
-  });
-});
-
 describe("portNotListeningError (pure)", () => {
   it("names what IS listening so the agent can act", () => {
     const err = portNotListeningError(5173, [{ port: 3000, address: "all", process: "node" }]);
@@ -81,7 +69,7 @@ describe("portNotListeningError (pure)", () => {
 });
 
 describe("announcePreview", () => {
-  it("verifies the port, registers the preview and returns the full clickable URL", async () => {
+  it("verifica a porta, registra o preview e devolve só o caminho, sem endereço de um host que o usuário pode não usar", async () => {
     const { registry, announce, cardId } = await boot();
     runScript.mockResolvedValue({ stdout: scanOutput([5173]), stderr: "", code: 0 });
 
@@ -91,12 +79,8 @@ describe("announcePreview", () => {
       cardId,
       port: 5173,
       label: "front",
-      // The PATH is the canonical link — valid on every host the panel is reached through; the
-      // full URL is only that path on the configured public URL (one example host).
       path: "/preview/5173/",
-      url: "http://192.0.2.10:3010/preview/5173/",
       hint: PREVIEW_BASE_HINT,
-      note: announce.PREVIEW_HOST_NOTE,
     });
     const card = await registry.getCard(cardId);
     expect(card?.previews).toEqual([{ port: 5173, label: "front", createdAt: expect.any(Number) }]);
@@ -121,6 +105,49 @@ describe("announcePreview", () => {
     await expect(
       announce.announcePreview(cardId, 5173, { command: "a\nb" }),
     ).rejects.toThrow(/single line/);
+  });
+
+  it("recusa a porta servida por um processo de outra pasta, sem registrar nada", async () => {
+    const { registry, announce, cardId } = await boot();
+    runScript.mockResolvedValue({
+      stdout: `${scanOutput([8765])}1 40 python3\n${CWD_MARKER}\n/proc/40 /tmp/artefato-processos\n`,
+      stderr: "",
+      code: 0,
+    });
+
+    await expect(
+      announce.announcePreview(cardId, 8765, { command: "python3 -m http.server 8765", cwd: "/work/app/prototipos" }),
+    ).rejects.toThrow(/port 8765 is served by python3 running in \/tmp\/artefato-processos, not in \/work\/app\/prototipos/);
+    expect((await registry.getCard(cardId))?.previews).toBeUndefined();
+  });
+
+  it("sem comando nem pasta, recusa a porta de um processo fora da worktree do card", async () => {
+    const { registry, announce, cardId } = await boot();
+    runScript.mockResolvedValue({
+      stdout: `${scanOutput([8765])}1 40 python3\n${CWD_MARKER}\n/proc/40 /tmp/artefato-processos\n`,
+      stderr: "",
+      code: 0,
+    });
+
+    await expect(announce.announcePreview(cardId, 8765)).rejects.toThrow(/served by python3 running in \/tmp\/artefato-processos/);
+    expect((await registry.getCard(cardId))?.previews).toBeUndefined();
+  });
+
+  it.each(["/work/app", "/work/app/front"])("aceita o servidor que roda na pasta anunciada ou dentro dela: %s", async (listenerCwd) => {
+    const { registry, announce, cardId } = await boot();
+    runScript.mockResolvedValue({ stdout: `${scanOutput([5173])}1 40 node\n${CWD_MARKER}\n/proc/40 ${listenerCwd}\n`, stderr: "", code: 0 });
+
+    await announce.announcePreview(cardId, 5173, { command: "npm run dev", cwd: "/work/app" });
+    expect((await registry.getCard(cardId))?.previews).toHaveLength(1);
+  });
+
+  it("não confunde pasta irmã com prefixo parecido com a pasta anunciada", async () => {
+    const { announce, cardId } = await boot();
+    runScript.mockResolvedValue({ stdout: `${scanOutput([5173])}1 40 node\n${CWD_MARKER}\n/proc/40 /work/app-old\n`, stderr: "", code: 0 });
+
+    await expect(announce.announcePreview(cardId, 5173, { command: "npm run dev", cwd: "/work/app" })).rejects.toThrow(
+      /served by node running in \/work\/app-old/,
+    );
   });
 
   it("refuses a silent port WITHOUT registering anything", async () => {
