@@ -430,7 +430,7 @@ export const ptBR: Record<string, string> = {
   "cardView.modelSwitchError": "Não deu pra trocar o modelo",
   "cardView.accountDefault": "o padrão da conta",
   "cardView.fileTooBig": "Esse arquivo passa de 1 GB.",
-  "cardView.uploadingImage": "Enviando o arquivo…",
+  "cardView.uploadingFile": "Enviando o arquivo…",
   "cardView.uploadError": "Não deu pra enviar o arquivo",
   "cardView.uploadStalled": "A conexão caiu enquanto o arquivo subia. Toque em tentar de novo nele.",
   "cardView.openCardList": "Abrir a lista de cards",

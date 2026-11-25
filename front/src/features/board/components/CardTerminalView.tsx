@@ -633,13 +633,13 @@ export function CardTerminalView({
    * a toast there is a second notification for one event. A drop on the raw terminal has no such
    * picture, and needs the toast. A failure always speaks.
    */
-  const uploadImageWith = React.useCallback(
+  const uploadFileWith = React.useCallback(
     async (file: File, progress: boolean): Promise<string | null> => {
       if (file.size > UPLOAD_MAX_BYTES) {
         toast.error(translate("cardView.fileTooBig"));
         return null;
       }
-      const pending = progress ? toast.loading(translate("cardView.uploadingImage")) : null;
+      const pending = progress ? toast.loading(translate("cardView.uploadingFile")) : null;
       try {
         const { path } = await boardApi.uploadCardFile(cardId, file);
         return path;
@@ -659,14 +659,14 @@ export function CardTerminalView({
 
   /** Dropped on the terminal: the path is typed at the prompt, and the wait gets a toast. */
   const uploadImage = React.useCallback(
-    (file: File) => uploadImageWith(file, true),
-    [uploadImageWith],
+    (file: File) => uploadFileWith(file, true),
+    [uploadFileWith],
   );
 
   /** Pasted into the composer: the thumbnail and its spinner are the whole story already. */
   const uploadAttachment = React.useCallback(
-    (file: File) => uploadImageWith(file, false),
-    [uploadImageWith],
+    (file: File) => uploadFileWith(file, false),
+    [uploadFileWith],
   );
 
   /**
