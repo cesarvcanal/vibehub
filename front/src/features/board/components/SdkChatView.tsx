@@ -303,6 +303,7 @@ export function SdkChatView({
   const workflowFeedRef = React.useRef<WorkflowFeedChannel | null>(null);
   /** Where the response to a `detail` is delivered (the modals listen; see lib/sdkDetail.ts). */
   const detailChannelRef = React.useRef<DetailChannel | null>(null);
+  const announceQueuedRef = React.useRef<((author: string, text: string) => void) | null>(null);
   const statusRef = React.useRef<SdkChatViewProps["onStatus"]>(onStatus);
   statusRef.current = onStatus;
   const [connected, setConnected] = React.useState(false);
@@ -454,6 +455,10 @@ export function SdkChatView({
             setPeersNow(now);
             setPeers((prev) => applyPeerTyping(prev, name, parsed.active === true, now));
           }
+          return;
+        }
+        if (parsed.type === "peer_queued") {
+          if (typeof parsed.name === "string" && typeof parsed.text === "string") announceQueuedRef.current?.(parsed.name, parsed.text);
           return;
         }
         if (parsed.type === "peer_question_draft") {
@@ -1217,6 +1222,7 @@ export function SdkChatView({
     const waits = !wireUp || !chat.ready || chat.turnActive || chat.awaiting || pendingEdit;
     if (waits && pendingRef.current.length === 0) {
       setQueue((prev) => enqueue(prev, { id: newQueueId(), text, at: Date.now(), from: selfOriginRef.current }));
+      if (wireUp) sendFrame({ type: "queued_note", text });
       return;
     }
     dispatchTurn(text);
@@ -1357,13 +1363,14 @@ export function SdkChatView({
     },
     [announceContext],
   );
-  usePeerMessagesForVoice({
+  const { announceQueued } = usePeerMessagesForVoice({
     live: callLive,
     rows: state.rows,
     viewer,
     sentFromThisTab: sentFromThisTab.current,
     announce: announcePeerMessage,
   });
+  announceQueuedRef.current = announceQueued;
   useVoiceCallSignal({ connected, callLive, sendFrame });
   useVoiceDelegation({
     call,

@@ -17,10 +17,17 @@ describe("what the voice is told about the chat", () => {
   });
 
   it("a mensagem de outra pessoa é anunciada com o nome de quem escreveu", () => {
-    expect(typedContext("olha a requisição", "mussa")).toBe(
+    expect(typedContext("olha a requisição", { author: "mussa" })).toBe(
       "Chegou uma mensagem de texto de mussa no chat: «olha a requisição». Ela foi para o agente do card",
     );
-    expect(typedContext("/work/.uploads/c1/1-a.png", "mussa")).toContain("Chegou uma mensagem de mussa no chat");
+    expect(typedContext("/work/.uploads/c1/1-a.png", { author: "mussa" })).toContain("Chegou uma mensagem de mussa no chat");
+  });
+
+  it("a mensagem que espera na fila é anunciada como na fila, não como entregue ao agente", () => {
+    expect(typedContext("olha a requisição", { author: "mussa", queued: true })).toBe(
+      "Chegou uma mensagem de texto de mussa no chat: «olha a requisição». " +
+        "Ela está na fila e vai para o agente do card quando ele terminar o que está fazendo",
+    );
   });
 
   it("das mensagens do chat, contam as de outra pessoa e as da mesma conta vindas de outro dispositivo, cada uma com chave estável entre replays", () => {

@@ -248,6 +248,30 @@ describe("a voice call inside the card's chat", () => {
     expect(commentary()).toHaveLength(2);
   });
 
+  it("com o agente ocupado, a mensagem que outra pessoa deixou na fila chega à voz na hora, e não se repete quando sai da fila", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    const commentary = () =>
+      channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append" && sentEvent.content !== SERVER_BACK_CONTEXT);
+    ws.deliver({ type: "peer_queued", name: "mussa", text: "olha a requisição" });
+    await waitFor(() =>
+      expect(commentary()).toEqual([expect.objectContaining({ content: expect.stringMatching(/mussa.*«olha a requisição».*fila/) })]),
+    );
+    ws.deliver({ type: "user", text: "olha a requisição", at: 9, from: { kind: "user", name: "mussa" } });
+    ws.deliver({ type: "result", isError: false });
+    expect(commentary()).toHaveLength(1);
+  });
+
+  it("a mensagem que fica na fila desta aba avisa as outras abas do card", async () => {
+    const { ws } = await openChat();
+    await userEvent.type(screen.getByRole("textbox"), "primeira{Enter}");
+    await waitFor(() => expect(ws.frames.some((f) => f.type === "user" && f.text === "primeira")).toBe(true));
+    await userEvent.type(screen.getByRole("textbox"), "segunda{Enter}");
+    const queuedNotes = () =>
+      ws.rawSent.map((raw) => JSON.parse(raw) as { type: string; text?: string }).filter((frame) => frame.type === "queued_note");
+    await waitFor(() => expect(queuedNotes()).toEqual([{ type: "queued_note", text: "segunda" }]));
+  });
+
   it("o chat diz ao servidor quando a chamada entra no ar, repete depois de um reconnect e avisa quando ela termina", async () => {
     const { ws } = await openChat();
     const callFrames = (socket: FakeSocket) =>

@@ -19,7 +19,12 @@ const UPLOAD_RE = /\/work\/\.uploads\/\S+/g;
  * A message typed during the call, as the voice should announce it — GPT-Live paraphrases it aloud.
  * Null when there is nothing to say. PURE.
  */
-export function typedContext(raw: string, author?: string): string | null {
+export interface TypedContextOptions {
+  author?: string;
+  queued?: boolean;
+}
+
+export function typedContext(raw: string, { author, queued = false }: TypedContextOptions = {}): string | null {
   const images = raw.match(UPLOAD_RE)?.length ?? 0;
   const text = raw.replace(UPLOAD_RE, " ").replace(/\s+/g, " ").trim();
   if (!text && images === 0) return null;
@@ -32,7 +37,9 @@ export function typedContext(raw: string, author?: string): string | null {
         : `Veio com ${images} imagens, que só o agente do card vê — você não vê o conteúdo delas`,
     );
   }
-  parts.push("Ela foi para o agente do card");
+  parts.push(queued
+    ? "Ela está na fila e vai para o agente do card quando ele terminar o que está fazendo"
+    : "Ela foi para o agente do card");
   return parts.join(". ");
 }
 
