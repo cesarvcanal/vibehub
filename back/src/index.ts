@@ -61,7 +61,6 @@ import { restartSessionsIfSpecChanged } from "./services/board/sessionSpec.js";
 export async function buildServer() {
   const app = Fastify({
     logger: false,
-    // Terminal frames and image uploads: the default 1 MB body limit is too small for a paste.
     bodyLimit: 16 * 1024 * 1024,
     // Behind a gateway, `req.ip` must be the client it forwarded for — the sign-in ceilings are
     // keyed on it (routes/auth.ts). False by default: a direct install trusts no header.

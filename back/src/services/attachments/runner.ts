@@ -39,10 +39,6 @@ export function extensionOf(path: string): string {
 }
 
 /**
- * Host script that hands the rest of stdin to a command inside the runner. Same transport as the upload
- * (`buildUploadScript`): the host's bash reads only the first line and `exec` passes stdin along, so the
- * payload is never interpreted as shell. `args` reach `sh -c` as $0, $1…
- *
  * `timeoutMs` is the SAME deadline passed to `runOnRunner`. Node's timeout kills only the `docker exec`
  * client, not what it started in the container (docs/runner-processes.md): an ffmpeg that went past the
  * deadline kept on converting, and each new attempt stacked another one on the runner. The `timeout -s KILL`
