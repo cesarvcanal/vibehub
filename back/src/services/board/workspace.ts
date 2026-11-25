@@ -984,7 +984,8 @@ async function streamUploadIntoRunner(command: string, body: Readable, declaredB
     child.once("close", (code) => resolve({ code }));
   });
 
-  const progress = { receivedBytes: 0 };
+  const progress = { receivedBytes: 0, clientFailed: false };
+  body.once("error", () => { progress.clientFailed = true; });
   const meter = new Transform({
     transform(chunk: Buffer, _encoding, done) {
       progress.receivedBytes += chunk.length;
@@ -992,19 +993,23 @@ async function streamUploadIntoRunner(command: string, body: Readable, declaredB
       done(null, chunk);
     },
   });
-  const stallTimer = setTimeout(() => meter.destroy(new Error("upload stalled")), UPLOAD_STALL_MS);
+  const stallTimer = setTimeout(() => {
+    progress.clientFailed = true;
+    meter.destroy(new Error("upload stalled"));
+    child.kill("SIGKILL");
+  }, UPLOAD_STALL_MS);
   const pipeError = await pipeline(body, meter, child.stdin).then(
     () => null,
     (err: unknown) => (err instanceof Error ? err : new Error(String(err))),
   );
-  clearTimeout(stallTimer);
-  if (pipeError) child.kill("SIGKILL");
-
   const { code, spawnError } = await exited;
+  clearTimeout(stallTimer);
+
   if (spawnError) throw runnerUnreachable(spawnError);
+  if (pipeError && progress.clientFailed) throw pipeError;
+  if (code !== 0) throw runnerUnreachable(new HostExecError(stderrChunks.join("").trim() || `command exited with code ${code}`));
   if (pipeError) throw pipeError;
   if (progress.receivedBytes !== declaredBytes) throw new Error("upload ended before the whole file arrived");
-  if (code !== 0) throw runnerUnreachable(new HostExecError(stderrChunks.join("").trim() || `command exited with code ${code}`));
 }
 
 export async function uploadCardFile(

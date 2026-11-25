@@ -1778,7 +1778,7 @@ describe("image upload into the card", () => {
 
   it("1 GB exato é aceito: o teto é inclusivo", async () => {
     const { card } = await seed();
-    const { pipeCommand } = await uploadHost("cat > /dev/null; exit 1");
+    const { pipeCommand } = await uploadHost("cat > /dev/null");
     await expect(ws.uploadCardFile(card.id, "a.zip", Readable.from([Buffer.from("x")]), ws.UPLOAD_MAX_BYTES)).rejects.toThrow(/ended before the whole file/);
     expect(pipeCommand).toHaveBeenCalledTimes(1);
   });
@@ -1803,6 +1803,14 @@ describe("image upload into the card", () => {
     const outcome = expect(upload).rejects.toThrow(/upload stalled/);
     await vi.advanceTimersByTimeAsync(ws.UPLOAD_STALL_MS);
     await outcome;
+  });
+
+  it("um runner que morre sem ler o arquivo dá o erro do runner, não o EPIPE do pipe", async () => {
+    const { card } = await seed();
+    await uploadHost("echo 'no such container' >&2; exit 1");
+    const big = Buffer.alloc(8 * 1024 * 1024);
+    await expect(ws.uploadCardFile(card.id, "a.zip", Readable.from([big]), big.length))
+      .rejects.toThrow(/the runner on this machine could not run the command: no such container/);
   });
 
   it("a host failure during the upload surfaces the clear runner error", async () => {
