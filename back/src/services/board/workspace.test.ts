@@ -1765,10 +1765,12 @@ describe("image upload into the card", () => {
     expect(runScript).not.toHaveBeenCalled();
   });
 
-  it("recusa sem tamanho, acima de 1 GB e card desconhecido — nada roda no host", async () => {
+  it("recusa sem nome, sem tamanho, acima de 1 GB e card desconhecido — nada roda no host", async () => {
     const { card } = await seed();
     const { pipeCommand } = await uploadHost("cat > /dev/null");
     const body = () => Readable.from([Buffer.from("x")]);
+    await expect(ws.uploadCardFile(card.id, undefined, body(), 1)).rejects.toThrow(/file name is required/);
+    await expect(ws.uploadCardFile(card.id, "", body(), 1)).rejects.toThrow(/file name is required/);
     await expect(ws.uploadCardFile(card.id, "a.zip", body(), Number.NaN)).rejects.toThrow(/file size is required/);
     await expect(ws.uploadCardFile(card.id, "a.zip", body(), 0)).rejects.toThrow(/file size is required/);
     await expect(ws.uploadCardFile(card.id, "a.zip", body(), ws.UPLOAD_MAX_BYTES + 1)).rejects.toThrow(/larger than 1 GB/);
@@ -1776,7 +1778,7 @@ describe("image upload into the card", () => {
     expect(pipeCommand).not.toHaveBeenCalled();
   });
 
-  it("1 GB exato é aceito: o teto é inclusivo", async () => {
+  it("1 GB exato passa da validação de tamanho: o teto é inclusivo", async () => {
     const { card } = await seed();
     const { pipeCommand } = await uploadHost("cat > /dev/null");
     await expect(ws.uploadCardFile(card.id, "a.zip", Readable.from([Buffer.from("x")]), ws.UPLOAD_MAX_BYTES)).rejects.toThrow(/ended before the whole file/);

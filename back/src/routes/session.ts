@@ -321,7 +321,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       try {
         const by = (await sessionUserId(req)) ?? undefined;
         const declaredBytes = Number(req.headers["content-length"]);
-        return await reply.send(await workspace.uploadCardFile(req.params.id, req.query.name ?? "", req.body, declaredBytes, by));
+        return await reply.send(await workspace.uploadCardFile(req.params.id, req.query.name, req.body, declaredBytes, by));
       } catch (err) {
         return await sendError(reply, err, { rules: UPLOAD_ERROR_STATUS });
       }

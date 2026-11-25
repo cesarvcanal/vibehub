@@ -1009,12 +1009,13 @@ async function streamUploadIntoRunner(command: string, body: Readable, declaredB
 
 export async function uploadCardFile(
   cardId: string,
-  originalName: string,
+  originalName: string | undefined,
   body: Readable,
   declaredBytes: number,
   by?: string,
 ): Promise<{ path: string }> {
   const { card } = await getCardWithProject(cardId);
+  if (!originalName) throw new Error("file name is required");
   if (!Number.isSafeInteger(declaredBytes) || declaredBytes < 1) throw new Error("file size is required");
   if (declaredBytes > UPLOAD_MAX_BYTES) throw new Error("file is larger than 1 GB");
 

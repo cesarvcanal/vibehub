@@ -261,6 +261,7 @@ describe("card lifecycle routes", () => {
     ["card not found", 404],
     ["the runner on this machine could not run the command: no such container", 502],
     ["upload ended before the whole file arrived", 400],
+    ["file name is required", 400],
   ])("o erro %s do upload vira %i", async (message, status) => {
     const id = await makeCard();
     uploadCardFile.mockRejectedValueOnce(new Error(message));
