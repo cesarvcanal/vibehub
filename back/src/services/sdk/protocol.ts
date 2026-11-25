@@ -597,6 +597,13 @@ export function buildOrphanAnswerText(
     `chegar:\n${list}\nConfira o estado atual, rode de novo o que ainda for necessário e siga até o fim.`;
 }
 
+export function appendStoppedTasksNotice(text: string, stoppedTasks: readonly string[]): string {
+  if (stoppedTasks.length === 0) return text;
+  const list = defusedCommandList(stoppedTasks.slice(0, 8));
+  return `${text}\n\n[vibehub: o que rodava em segundo plano foi parado antes de terminar e o resultado não vai chegar:]\n` +
+    `${list}\nNão diga que ainda está rodando; rode de novo o que ainda for necessário.`;
+}
+
 /** The request that accompanies answers from different people to the same card. */
 const MULTI_ANSWER_NOTE =
   "(respostas de pessoas diferentes no mesmo card: analise todas juntas; se forem contraditórias ou " +

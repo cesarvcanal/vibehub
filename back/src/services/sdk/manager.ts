@@ -22,7 +22,7 @@ import { readCardChanges, readCardFileDiff } from "../maestro/changes.js";
 import { mergeTaskEvent, taskSnapshot, toolResultEvent, type AgentTaskEvent, type RawTaskEvent, type RawToolResultEvent } from "./toolResult.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
-  NOTE_CONVERSATION_CLEARED, buildLateAnswerText, buildOrphanAnswerText, mergePeerAnswers, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseVoiceCallFrame, parseQueuedNoteFrame, parseQuestionDraftFrame, isEmptyQuestionDraft, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
+  NOTE_CONVERSATION_CLEARED, appendStoppedTasksNotice, buildLateAnswerText, buildOrphanAnswerText, mergePeerAnswers, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseVoiceCallFrame, parseQueuedNoteFrame, parseQuestionDraftFrame, isEmptyQuestionDraft, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
   type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type EffortAckEvent, type QuestionAnswerControl, type QuestionDraft, type StopHow, type UserQuestionItem,
   type WorkflowFeedEvent, type WorkflowFeedRequest, type DetailRequest, type ResultEvent,
 } from "./protocol.js";
@@ -198,6 +198,7 @@ export interface DriverSession {
    * opens a turn for it when the model is free. Until then the notice is work a deploy would erase.
    */
   pendingNotices: string[];
+  stoppedTasksUnknownToModel: string[];
   /**
    * An AUTOMATIC resume (injectSystemTurn) that has not produced anything yet. `marker` is its
    * in-flight marker: the first text or tool call rewrites it with `progressed: true` — the proof the
@@ -780,6 +781,8 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
     const key = raw.toolUseId || [...session.tasks.values()].find((t) => t.taskId === raw.taskId)?.toolUseId;
     const merged = key ? mergeTaskEvent(session.tasks.get(key), { ...raw, toolUseId: key }, Date.now()) : null;
     if (!merged) return;
+    const stoppedNow = merged.status === "stopped" && session.tasks.get(merged.toolUseId)?.status !== "stopped";
+    if (stoppedNow) session.stoppedTasksUnknownToModel.push(merged.description || "tarefa em segundo plano");
     session.tasks.set(merged.toolUseId, merged);
     // Cap: a long session fires hundreds of tasks; the oldest finished ones go first.
     if (session.tasks.size > TASKS_MAX) {
@@ -1225,6 +1228,7 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     agentSignals: 0,
     backgroundTasks: [],
     pendingNotices: [],
+    stoppedTasksUnknownToModel: [],
     tasks: new Map(),
     rateLimits: new Map(),
     loginFailed: false,
@@ -1550,11 +1554,14 @@ export function dispatchClientFrame(
     // it whatever question is open.
     if (control.now && session.openAsks.size > 0) noteStop(session, origin, "send_now");
     else if (control.now && session.activeTurns > 0) noteUserStop(session.cardId, session.label, Date.now());
-    if (!writeToDriver(session, control)) return { kind: "refused", cid: control.cid, reason: "driver-gone" };
-    countSentTurn(session, control.text);
+    const sentText = appendStoppedTasksNotice(control.text, session.stoppedTasksUnknownToModel);
+    if (!writeToDriver(session, { ...control, text: sentText })) return { kind: "refused", cid: control.cid, reason: "driver-gone" };
+    session.stoppedTasksUnknownToModel = [];
+    countSentTurn(session, sentText);
     noteChatActivity(session, typistUserId);
     const at = Date.now();
-    const line: HistoryEvent = { type: "user", text: control.text, at, from: origin };
+    const sent = sentText === control.text ? {} : { sent: sentText };
+    const line: HistoryEvent = { type: "user", text: control.text, ...sent, at, from: origin };
     const persisted = appendHistoryReported(session.cardId, line);
     relayToPeers(session, sender, line);
     // The durable "turn in flight" record: if a deploy kills the back (and this driver with it)
