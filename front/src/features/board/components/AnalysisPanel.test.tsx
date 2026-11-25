@@ -83,6 +83,8 @@ afterEach(() => {
   setLanguage("en");
 });
 
+const stateOf = (kind: CardStateKind, summary?: string): CardState => ({ kind, label: kind, ...(summary ? { summary } : {}) });
+
 async function renderReportTab(analysisAnswer: CardAnalysisResponse) {
   renderPanel(analysisAnswer);
   await userEvent.click(await screen.findByRole("tab", { name: "Relatório" }));
@@ -207,8 +209,6 @@ describe("painel da análise de PR", () => {
 
 describe("andamento da correção no painel da análise", () => {
   const noConversation = () => ({ conversation: null });
-
-  const stateOf = (kind: CardStateKind, summary?: string): CardState => ({ kind, label: kind, ...(summary ? { summary } : {}) });
 
   it.each<[CardStateKind, string]>([
     ["working", "A IA está corrigindo os achados."],
@@ -436,7 +436,6 @@ describe("aba Conversa: a correção depois da frota", () => {
     entry({ kind: "delivered", reason: "gate", stopped: true, output: "lint: 12 erros em FormasPagamento.page.tsx" }, 4),
     entry({ kind: "report", stage: "done", fixed: 1, decided: 0, open: 1 }, 5),
   ];
-  const stateOf = (kind: CardStateKind): CardState => ({ kind, label: kind });
   const openConversation = async () => {
     await userEvent.click(await screen.findByRole("tab", { name: "Conversa" }));
   };
@@ -527,6 +526,60 @@ describe("aba Conversa: a frota conversando como um chat em grupo", () => {
     await vi.advanceTimersByTimeAsync(8_000);
     expect(await screen.findByText("O token vaza no log.")).toBeInTheDocument();
     expect(screen.queryByRole("status", { name: "Reunindo a frota de agentes" })).not.toBeInTheDocument();
+    const [firstSpeech] = screen.getAllByTestId("fleet-chat-message");
+    expect(firstSpeech!.closest("li")).toHaveAttribute("data-arrived", "true");
+  });
+
+  it("card que parou antes de a frota falar não promete conversa ao vivo nem fica relendo", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    onTestFinished(() => { vi.useRealTimers(); });
+    renderPanel({ analysis: null }, undefined, () => ({ conversation: null }), stateOf("your_turn"));
+    expect(await screen.findByText("A frota de agentes não rodou neste card.")).toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Reunindo a frota de agentes" })).not.toBeInTheDocument();
+    const readsBefore = get.mock.calls.filter(([url]) => url === "/cards/c1/analysis/conversation").length;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(get.mock.calls.filter(([url]) => url === "/cards/c1/analysis/conversation")).toHaveLength(readsBefore);
+  });
+
+  it("um agente que termina enquanto outro ainda digita faz a conversa descer até a fala nova", async () => {
+    vi.useFakeTimers({
+      shouldAdvanceTime: true,
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "requestAnimationFrame", "cancelAnimationFrame", "performance"],
+    });
+    onTestFinished(() => { vi.useRealTimers(); });
+    const bothTyping: AnalysisConversationResponse = {
+      conversation: {
+        runId: "wf_a1", finished: false,
+        agents: [
+          { id: "a1", label: "revisão:security", phase: "Revisão", status: "running" },
+          { id: "a2", label: "revisão:correctness", phase: "Revisão", status: "running" },
+        ],
+        items: [],
+      },
+    };
+    const securityAnswered: AnalysisConversationResponse = {
+      conversation: {
+        ...bothTyping.conversation!,
+        agents: [{ ...bothTyping.conversation!.agents[0]!, status: "done" }, bothTyping.conversation!.agents[1]!],
+        items: [{ agentId: "a1", at: 1, kind: "text", text: "O token vaza no log." }],
+      },
+    };
+    const answers = [bothTyping];
+    renderPanel({ analysis: null }, undefined, () => answers[answers.length - 1]!, stateOf("working"));
+    expect(await screen.findAllByTestId("fleet-chat-typing")).toHaveLength(2);
+    const scroller = screen.getByTestId("analysis-conversation-scroller");
+    const layout = { scrollHeight: 1_000, scrollTop: 600 };
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 400 });
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => layout.scrollHeight });
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true, get: () => layout.scrollTop, set: (top: number) => { layout.scrollTop = top; },
+    });
+    answers.push(securityAnswered);
+    layout.scrollHeight = 1_300;
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(await screen.findByText("O token vaza no log.")).toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(700);
+    expect(layout.scrollTop).toBe(900);
   });
 
   it("com o relatório gravado e nenhuma conversa, diz que a frota não rodou e para de reler", async () => {

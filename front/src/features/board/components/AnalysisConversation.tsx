@@ -1,3 +1,4 @@
+import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { CheckCircle2, Loader2 } from "lucide-react";
 import type { AnalysisConversation as Conversation, AnalysisReadModel } from "@/api/types";
@@ -18,27 +19,30 @@ export function AnalysisConversation({ cardId, read, cardState }: {
   read?: AnalysisReadModel;
   cardState: CardStateKind | undefined;
 }) {
-  const reportWritten = read !== undefined;
+  const cardMayRunFleet = cardState === undefined || cardState === "working";
+  const fleetMayStillCome = read === undefined && cardMayRunFleet;
   const conversationQuery = useQuery({
     queryKey: cardAnalysisConversationKey(cardId),
     queryFn: () => boardApi.readAnalysisConversation(cardId),
     refetchInterval: (query) => {
       const conversation = query.state.data;
-      const fleetStillComing = conversation === null && !reportWritten;
+      const fleetStillComing = conversation === null && fleetMayStillCome;
       const fleetTalking = conversation ? !conversation.finished : false;
       return fleetStillComing || fleetTalking ? CONVERSATION_POLL_MS : false;
     },
   });
   const conversation = conversationQuery.data;
+  const [waitedForFleet, setWaitedForFleet] = React.useState(false);
+  if (conversation === null && fleetMayStillCome && !waitedForFleet) setWaitedForFleet(true);
   const entries = conversation ? analysisFleetChat(conversation) : [];
-  const lastEntry = entries[entries.length - 1];
-  const bottomContent = `${entries.length}:${lastEntry?.id}:${lastEntry?.kind}:${read?.timeline.length ?? 0}`;
+  const bottomContent = `${entries.map((entry) => entry.id).join("|")}:${read?.timeline.length ?? 0}`;
   const stick = useStickToBottom(bottomContent, { smooth: true });
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       <div
         ref={stick.scrollerRef}
         onScroll={stick.onScroll}
+        data-testid="analysis-conversation-scroller"
         className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden pr-1"
       >
         <FleetSection
@@ -46,7 +50,8 @@ export function AnalysisConversation({ cardId, read, cardState }: {
           error={conversationQuery.error}
           conversation={conversation ?? null}
           entries={entries}
-          reportWritten={reportWritten}
+          fleetMayStillCome={fleetMayStillCome}
+          speechesArriveLive={waitedForFleet}
         />
         {read ? <AnalysisTimeline timeline={read.timeline} analysis={read.analysis} cardState={cardState} /> : null}
       </div>
@@ -55,22 +60,27 @@ export function AnalysisConversation({ cardId, read, cardState }: {
   );
 }
 
-function FleetSection({ isPending, error, conversation, entries, reportWritten }: {
+function FleetSection({ isPending, error, conversation, entries, fleetMayStillCome, speechesArriveLive }: {
   isPending: boolean;
   error: Error | null;
   conversation: Conversation | null;
   entries: FleetChatEntry[];
-  reportWritten: boolean;
+  fleetMayStillCome: boolean;
+  speechesArriveLive: boolean;
 }) {
   const t = useT();
   if (isPending) return <p className="text-xs text-muted-foreground">{t("common.loading")}</p>;
   if (error) return <p className="text-xs text-destructive">{apiErrorMessage(error)}</p>;
-  if (conversation) return <FleetConversation conversation={conversation} entries={entries} />;
-  if (reportWritten) return <p className="text-xs text-muted-foreground">{t("analysis.conversation.empty")}</p>;
+  if (conversation) return <FleetConversation conversation={conversation} entries={entries} speechesArriveLive={speechesArriveLive} />;
+  if (!fleetMayStillCome) return <p className="text-xs text-muted-foreground">{t("analysis.conversation.empty")}</p>;
   return <FleetGathering title={t("analysis.conversation.gathering.title")} body={t("analysis.conversation.gathering.body")} />;
 }
 
-function FleetConversation({ conversation, entries }: { conversation: Conversation; entries: FleetChatEntry[] }) {
+function FleetConversation({ conversation, entries, speechesArriveLive }: {
+  conversation: Conversation;
+  entries: FleetChatEntry[];
+  speechesArriveLive: boolean;
+}) {
   const t = useT();
   const answered = conversation.agents.filter((agent) => agent.status === "done").length;
   return (
@@ -83,7 +93,7 @@ function FleetConversation({ conversation, entries }: { conversation: Conversati
           done: answered, total: conversation.agents.length,
         })}
       </p>
-      <FleetChat entries={entries} label={t("analysis.conversation.aria")} />
+      <FleetChat entries={entries} label={t("analysis.conversation.aria")} allArriveLive={speechesArriveLive} />
     </div>
   );
 }

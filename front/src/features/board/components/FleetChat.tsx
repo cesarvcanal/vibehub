@@ -62,9 +62,14 @@ export interface FleetAgentState {
 
 type AgentDetail = (agent: FleetAgentState) => React.ReactNode;
 
-export function FleetChat({ entries, label, agentDetail }: { entries: FleetChatEntry[]; label: string; agentDetail?: AgentDetail }) {
+export function FleetChat({ entries, label, agentDetail, allArriveLive = false }: {
+  entries: FleetChatEntry[];
+  label: string;
+  agentDetail?: AgentDetail;
+  allArriveLive?: boolean;
+}) {
   const [openEntryIds, setOpenEntryIds] = React.useState<ReadonlySet<string>>(new Set());
-  const [entryIdsOnOpen] = React.useState<ReadonlySet<string>>(() => new Set(entries.map((entry) => entry.id)));
+  const [entryIdsOnOpen] = React.useState<ReadonlySet<string>>(() => new Set(allArriveLive ? [] : entries.map((entry) => entry.id)));
   const toggleEntry = (entryId: string) => {
     setOpenEntryIds((open) => {
       const next = new Set(open);
