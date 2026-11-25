@@ -809,6 +809,37 @@ describe("pause / resume (the session dies; reopening returns to the SAME conver
     expect(scriptAt(1)).toContain(`tmux kill-session -t '${card.tmuxSession}-sh'`);
   });
 
+  it("pauseCard: o turno do chat nativo vale antes de o board marcar o card como trabalhando", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "waiting");
+    const agentState = await import("./agentState.js");
+    onTestFinished(agentState.onCardDriverProbe((cardId) => (cardId === card.id ? "turn" : "none")));
+    runScript.mockClear();
+    runScript.mockResolvedValue({ stdout: `${card.tmuxSession} idle\n`, stderr: "" });
+
+    const pending = await ws.pauseCard(card.id, "tester");
+
+    expect(pending.column).toBe("paused");
+    expect(pending.pausedAt ?? null).toBeNull();
+    expect(runScript).not.toHaveBeenCalled();
+  });
+
+  it("pauseCard: o turno que termina enquanto o runner é sondado deixa a pausa valer na hora", async () => {
+    const { card } = await seed();
+    await ws.openCard(card.id);
+    await reg.applyCardStatus(card.id, "working");
+    runScript.mockClear();
+    runScript.mockImplementation(async (script: string) => {
+      await reg.applyCardStatus(card.id, "waiting");
+      return probeAnswer(script, "busy") ?? { stdout: "", stderr: "" };
+    });
+
+    const paused = await ws.pauseCard(card.id, "tester");
+
+    expect(paused.pausedAt).toBeTypeOf("number");
+  });
+
   it("pauseCard: a session that is GONE pauses for real; an unreachable runner keeps the pause pending", async () => {
     const { card } = await seed();
     await ws.openCard(card.id);

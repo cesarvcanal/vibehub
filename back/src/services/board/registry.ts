@@ -2739,7 +2739,7 @@ export async function pauseCard(cardId: string, opts: PauseOpts = {}): Promise<C
     // `done` is the user's own sticky column: pausing does NOT take the card out of it. And a card
     // already in `paused` has nowhere to move.
     if (card.column !== "paused" && card.column !== "done") placeCard(doc.cards, card, "paused", Date.now());
-    if (opts.effective || shouldEndSessionOnMove(card.status)) {
+    if (opts.effective ?? shouldEndSessionOnMove(card.status)) {
       // Idle -> effective pause: the caller kills the session now.
       card.pausedAt = Date.now();
       card.status = null;

@@ -1558,6 +1558,13 @@ export function pauseMustBeEffective(status: CardStatus | null | undefined, stat
   return state === "idle" || state === "gone";
 }
 
+async function decidePauseEffective(cardId: string, before: Card | undefined): Promise<boolean | undefined> {
+  if (nativeChatTurnRunning(cardId)) return false;
+  if (before?.status !== "working" || !hasLiveSession(before)) return undefined;
+  const sessionState = await probeCardSession(before);
+  return pauseMustBeEffective(before.status, sessionState) && !nativeChatTurnRunning(cardId);
+}
+
 /**
  * PAUSES the card (POST /api/cards/:id/pause and the drag into the "paused" column): the board goes
  * first (registryPauseCard — a card that does not exist or was never opened THROWS before the host
@@ -1565,30 +1572,19 @@ export function pauseMustBeEffective(status: CardStatus | null | undefined, stat
  * stamped): both sessions are killed (claude and shell), the Claude process dies, zero consumption.
  * A card that is GENUINELY working is a PENDING pause (registryPauseCard does not stamp `pausedAt`):
  * the session stays ALIVE and the status hook ends it when Claude finishes — "let it finish, then
- * pause", so work in progress is never interrupted. "Genuinely" is decided by the RUNNER, not by the
- * dot: a card whose session is parked on a menu or is gone gets paused for real right away
- * (pauseMustBeEffective), because its dot would never turn amber and the pause would never land.
+ * pause", so work in progress is never interrupted.
  * Resuming is just opening the card (see `resumeCard`): the attach recreates the session with
  * `claude -c` and comes back to the same conversation.
  */
 export async function pauseCard(cardId: string, by?: string): Promise<Card> {
-  // The DOT can be a lie. A card parked on Claude's "Resume from summary" screen, on a permission
-  // question, or one whose session died, never fires the Stop hook that would turn its green dot
-  // amber — and a pending pause on such a card would wait forever, keeping a live session inside a
-  // column that means "not running". So before deciding, ASK THE RUNNER what that session is doing;
-  // only a genuinely busy Claude earns the polite "let it finish" treatment.
   const before = await getCard(cardId);
-  let effective = false;
-  if (before?.status === "working" && hasLiveSession(before) && !nativeChatTurnRunning(before.id)) {
-    const sessionState = await probeCardSession(before);
-    effective = pauseMustBeEffective(before.status, sessionState) && !nativeChatTurnRunning(before.id);
-  }
+  const effective = await decidePauseEffective(cardId, before);
   const card = await registryPauseCard(cardId, { effective });
   if (card.pausedAt) {
     // EFFECTIVE pause (the card was idle): end the sessions right away.
     await killCardSession(card, { includeShell: true });
     logger.info(
-      { audit: true, action: "card.pause", card: card.worktreeSlug, session: card.tmuxSession, forced: effective, by },
+      { audit: true, action: "card.pause", card: card.worktreeSlug, session: card.tmuxSession, forced: effective === true, by },
       "card paused — tmux sessions ended in the runner",
     );
   } else {
