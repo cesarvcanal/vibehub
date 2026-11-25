@@ -2839,11 +2839,14 @@ describe("background_tasks — o trabalho que segue depois do turno", () => {
 describe("subagente em segundo plano parado — o modelo fica sabendo que o resultado não vai chegar", () => {
   const userTextsWritten = (): string[] =>
     spawned[0]!.stdin.written
-      .map((w) => JSON.parse(w) as { type: string; text?: string })
+      .map((written) => JSON.parse(written) as { type: string; text?: string })
       .filter((frame) => frame.type === "user")
       .map((frame) => frame.text ?? "");
 
-  const reviewerRunsThenEnds = (socket: FakeSocket, status: string) => {
+  const personRepliesAfterReviewerEnds = (status: string): FakeSocket => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
     spawned[0]!.stdout.emit("data", line({ type: "ready" }));
     socket.emit("message", Buffer.from(`{"type":"user","text":"revisa a branch"}`));
     spawned[0]!.stdout.emit("data", line({ type: "task_started", taskId: "a1", toolUseId: "t1", description: "Code review · spec", taskType: "local_agent" }));
@@ -2852,14 +2855,12 @@ describe("subagente em segundo plano parado — o modelo fica sabendo que o resu
     spawned[0]!.stdout.emit("data", line({ type: "task_notification", taskId: "a1", toolUseId: "t1", status }));
     spawned[0]!.stdout.emit("data", line({ type: "background_tasks", tasks: [] }));
     spawned[0]!.stdout.emit("data", line({ type: "result", isError: true, subtype: "error_during_execution" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"so segue ae"}`));
+    return socket;
   };
 
   it("caso real (card mais-de-10-mb-de-upload): o stop matou o revisor e a próxima mensagem da pessoa leva o aviso ao modelo", async () => {
-    const session = ensure();
-    const socket = fakeSocket();
-    attachSocket(session, socket as never);
-    reviewerRunsThenEnds(socket, "stopped");
-    socket.emit("message", Buffer.from(`{"type":"user","text":"so segue ae"}`));
+    personRepliesAfterReviewerEnds("stopped");
 
     const sent = userTextsWritten().at(-1)!;
     expect(sent.startsWith("so segue ae")).toBe(true);
@@ -2867,16 +2868,12 @@ describe("subagente em segundo plano parado — o modelo fica sabendo que o resu
     expect(sent).toContain("não vai chegar");
     await vi.waitFor(async () => {
       const history = await readHistory(CARD);
-      expect(history.filter((e) => e.type === "user").map((e) => (e as { text: string }).text)).toEqual(["revisa a branch", "so segue ae"]);
+      expect(history.filter((entry) => entry.type === "user").map((entry) => (entry as { text: string }).text)).toEqual(["revisa a branch", "so segue ae"]);
     });
   });
 
   it("o aviso vai uma vez só: a mensagem seguinte sai limpa", () => {
-    const session = ensure();
-    const socket = fakeSocket();
-    attachSocket(session, socket as never);
-    reviewerRunsThenEnds(socket, "stopped");
-    socket.emit("message", Buffer.from(`{"type":"user","text":"so segue ae"}`));
+    const socket = personRepliesAfterReviewerEnds("stopped");
     spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
     socket.emit("message", Buffer.from(`{"type":"user","text":"e o PR?"}`));
 
@@ -2884,11 +2881,7 @@ describe("subagente em segundo plano parado — o modelo fica sabendo que o resu
   });
 
   it.each(["completed", "failed"])("subagente que termina com %s não gera aviso: o CLI já entrega o resultado ao modelo", (status) => {
-    const session = ensure();
-    const socket = fakeSocket();
-    attachSocket(session, socket as never);
-    reviewerRunsThenEnds(socket, status);
-    socket.emit("message", Buffer.from(`{"type":"user","text":"so segue ae"}`));
+    personRepliesAfterReviewerEnds(status);
 
     expect(userTextsWritten().at(-1)).toBe("so segue ae");
   });
