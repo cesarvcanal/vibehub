@@ -73,5 +73,9 @@ export default meta;
 
 export const ChatNativo: StoryObj<typeof CardTerminalView> = {};
 
+export const EmChamadaDeVoz: StoryObj<typeof CardTerminalView> = {
+  parameters: { card: { ...card, status: "waiting", voiceCallAt: 1 } },
+};
+
 /** Click "PR #218" above the composer: on a phone the panel takes the whole card; X brings the chat back. */
 export const PrEmRevisao: StoryObj<typeof CardTerminalView> = { parameters: { card: reviewed } };

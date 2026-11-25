@@ -104,6 +104,7 @@ export interface SdkEvent {
     | "user_ack"
     | "user_nack"
     | "peer_typing"
+    | "peer_queued"
     | "peer_question_draft"
     | "voice_turn"
     | "error"

@@ -206,6 +206,133 @@ describe("a voice call inside the card's chat", () => {
     expect(screen.getByTestId("voice-call-orb")).toHaveAttribute("data-orb", "logo");
   });
 
+  it("a mensagem que outra pessoa digita durante a chamada chega à voz com o nome dela, uma vez só, mesmo depois de um reconnect", async () => {
+    const { ws } = await openChat();
+    ws.deliver({ type: "user", text: "pedido de antes da chamada", at: 1, from: { kind: "user", name: "mussa" } });
+    await startCall();
+    ws.deliver({ type: "user", text: "olha a requisição que mandei", at: 2, from: { kind: "user", name: "mussa" } });
+    const peerNotes = () =>
+      channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append" && sentEvent.content !== SERVER_BACK_CONTEXT);
+    await waitFor(() =>
+      expect(peerNotes()).toEqual([expect.objectContaining({ content: expect.stringMatching(/mussa.*«olha a requisição que mandei»/) })]),
+    );
+
+    ws.drop();
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: 5_000 });
+    const again = FakeSocket.instances[1]!;
+    again.accept();
+    again.deliver({ type: "user", text: "pedido de antes da chamada", at: 1, from: { kind: "user", name: "mussa" } });
+    again.deliver({ type: "user", text: "olha a requisição que mandei", at: 2, from: { kind: "user", name: "mussa" } });
+    again.deliver({ type: "ready" });
+    expect(peerNotes()).toHaveLength(1);
+  });
+
+  it("a mensagem da mesma pessoa vinda de outro dispositivo chega à voz; a que esta aba enviou não se repete depois de um reconnect", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    const commentary = () =>
+      channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append" && sentEvent.content !== SERVER_BACK_CONTEXT);
+    await userEvent.type(screen.getByRole("textbox"), "daqui da aba{Enter}");
+    await waitFor(() => expect(commentary()).toHaveLength(1));
+    ws.deliver({ type: "user", text: "do notebook", at: 3, from: { kind: "owner", name: "operator" } });
+    await waitFor(() => expect(commentary()).toHaveLength(2));
+    expect(commentary()[1]).toEqual(expect.objectContaining({ content: expect.stringMatching(/operator.*«do notebook»/) }));
+
+    ws.drop();
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: 5_000 });
+    const again = FakeSocket.instances[1]!;
+    again.accept();
+    again.deliver({ type: "user", text: "daqui da aba", at: 2, from: { kind: "owner", name: "operator" } });
+    again.deliver({ type: "user", text: "do notebook", at: 3, from: { kind: "owner", name: "operator" } });
+    again.deliver({ type: "ready" });
+    expect(commentary()).toHaveLength(2);
+  });
+
+  it("com o agente ocupado, a mensagem que outra pessoa deixou na fila chega à voz na hora, e não se repete quando sai da fila", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    const commentary = () =>
+      channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append" && sentEvent.content !== SERVER_BACK_CONTEXT);
+    ws.deliver({ type: "peer_queued", name: "mussa", text: "olha a requisição" });
+    await waitFor(() =>
+      expect(commentary()).toEqual([expect.objectContaining({ content: expect.stringMatching(/mussa.*«olha a requisição».*fila/) })]),
+    );
+    ws.deliver({ type: "user", text: "olha a requisição", at: 9, from: { kind: "user", name: "mussa" } });
+    ws.deliver({ type: "result", isError: false });
+    expect(commentary()).toHaveLength(1);
+  });
+
+  it("o mesmo texto vindo do outro dispositivo depois de esta aba já ter mandado ele também chega à voz", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    const commentary = () =>
+      channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append" && sentEvent.content !== SERVER_BACK_CONTEXT);
+    await userEvent.type(screen.getByRole("textbox"), "sim{Enter}");
+    await waitFor(() => expect(commentary()).toHaveLength(1));
+    ws.deliver({ type: "result", isError: false });
+    ws.deliver({ type: "user", text: "sim", at: 3, from: { kind: "owner", name: "operator" } });
+    await waitFor(() => expect(commentary()).toHaveLength(2));
+    expect(commentary()[1]).toEqual(expect.objectContaining({ content: expect.stringMatching(/operator.*«sim»/) }));
+  });
+
+  it("a mensagem longa que o servidor cortou no aviso da fila não é anunciada de novo quando sai da fila inteira", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    const commentary = () =>
+      channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append" && sentEvent.content !== SERVER_BACK_CONTEXT);
+    const fullText = "log ".repeat(1_500);
+    ws.deliver({ type: "peer_queued", name: "mussa", text: fullText.slice(0, 4_000) });
+    await waitFor(() => expect(commentary()).toHaveLength(1));
+    ws.deliver({ type: "user", text: fullText, at: 9, from: { kind: "user", name: "mussa" } });
+    ws.deliver({ type: "result", isError: false });
+    expect(commentary()).toHaveLength(1);
+  });
+
+  it("o mesmo texto deixado duas vezes na fila pela mesma pessoa é anunciado duas vezes e não se repete quando as duas saem da fila", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    const commentary = () =>
+      channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append" && sentEvent.content !== SERVER_BACK_CONTEXT);
+    ws.deliver({ type: "peer_queued", name: "mussa", text: "ok" });
+    ws.deliver({ type: "peer_queued", name: "mussa", text: "ok" });
+    await waitFor(() => expect(commentary()).toHaveLength(2));
+    ws.deliver({ type: "user", text: "ok", at: 9, from: { kind: "user", name: "mussa" } });
+    ws.deliver({ type: "result", isError: false });
+    ws.deliver({ type: "user", text: "ok", at: 10, from: { kind: "user", name: "mussa" } });
+    ws.deliver({ type: "result", isError: false });
+    expect(commentary()).toHaveLength(2);
+  });
+
+  it("a mensagem que fica na fila desta aba avisa as outras abas do card", async () => {
+    const { ws } = await openChat();
+    await userEvent.type(screen.getByRole("textbox"), "primeira{Enter}");
+    await waitFor(() => expect(ws.frames.some((f) => f.type === "user" && f.text === "primeira")).toBe(true));
+    await userEvent.type(screen.getByRole("textbox"), "segunda{Enter}");
+    const queuedNotes = () =>
+      ws.rawSent.map((raw) => JSON.parse(raw) as { type: string; text?: string }).filter((frame) => frame.type === "queued_note");
+    await waitFor(() => expect(queuedNotes()).toEqual([{ type: "queued_note", text: "segunda" }]));
+  });
+
+  it("o chat diz ao servidor quando a chamada entra no ar, repete depois de um reconnect e avisa quando ela termina", async () => {
+    const { ws } = await openChat();
+    const callFrames = (socket: FakeSocket) =>
+      socket.rawSent.map((raw) => JSON.parse(raw) as { type: string; active?: boolean }).filter((frame) => frame.type === "voice_call");
+    expect(callFrames(ws)).toEqual([]);
+    await startCall();
+    await waitFor(() => expect(callFrames(ws)).toEqual([{ type: "voice_call", active: true }]));
+
+    ws.drop();
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: 5_000 });
+    const again = FakeSocket.instances[1]!;
+    again.accept();
+    again.deliver({ type: "ready" });
+    await waitFor(() => expect(callFrames(again)).toEqual([{ type: "voice_call", active: true }]));
+
+    await userEvent.click(screen.getByTestId("voice-call-end"));
+    act(() => channel().emit({ type: "session.closed", reason: "close_requested" }));
+    await waitFor(() => expect(callFrames(again)).toEqual([{ type: "voice_call", active: true }, { type: "voice_call", active: false }]));
+  });
+
   it("the agent's answers during the call reach the voice as context — only the new ones", async () => {
     const { ws } = await openChat();
     ws.deliver({ type: "assistant_text", text: "resposta antiga" });

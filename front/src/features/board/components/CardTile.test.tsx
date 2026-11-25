@@ -63,6 +63,18 @@ describe("CardTile — what the card says", () => {
     );
   });
 
+  it("com alguém em chamada de voz no chat, o ícone ganha o microfone e diz que tem gente falando com a IA, sem esconder o estado do turno", () => {
+    renderApp(<CardTile card={card({ status: "waiting", column: "waiting", openedAt: 1, voiceCallAt: 5 })} onOpen={vi.fn()} />);
+    const icon = screen.getByRole("status", { name: "Turn finished — your move · In a voice call — someone is talking to the AI in this card's chat" });
+    expect(icon).toHaveAttribute("data-state", "your_turn");
+    expect(within(icon).getByTestId("card-voice-call")).toBeInTheDocument();
+  });
+
+  it("sem chamada, nenhum microfone no ícone", () => {
+    renderApp(<CardTile card={card({ status: "waiting", column: "waiting", openedAt: 1, voiceCallAt: null })} onOpen={vi.fn()} />);
+    expect(screen.queryByTestId("card-voice-call")).not.toBeInTheDocument();
+  });
+
   it("says a pause is waiting for the turn to end — something no column shows", () => {
     renderApp(<CardTile card={card({ column: "paused", openedAt: 5 })} onOpen={vi.fn()} />);
     expect(screen.getByText("Pausing when idle…")).toBeInTheDocument();

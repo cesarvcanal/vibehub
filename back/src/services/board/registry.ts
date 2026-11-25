@@ -496,6 +496,7 @@ export interface Card {
    * the next turn starts; null/absent = nothing pending.
    */
   pendingQuestionAt?: number | null;
+  voiceCallAt?: number | null;
   /**
    * Since when a status report took the card OUT OF `done` (reactivatesOnActivity) without its agent
    * being told yet. The next UserPromptSubmit hook consumes it (`takeReopenedNotice`) and hands the
@@ -2589,6 +2590,21 @@ export async function setCardPendingQuestion(cardId: string, at: number | null):
     const card = doc.cards.find((c) => c.id === cardId);
     if (!card || Boolean(card.pendingQuestionAt) === (at !== null)) return;
     card.pendingQuestionAt = at;
+  });
+}
+
+export async function setCardVoiceCall(cardId: string, at: number | null): Promise<void> {
+  await store.mutate((doc) => {
+    const card = doc.cards.find((candidate) => candidate.id === cardId);
+    if (!card || Boolean(card.voiceCallAt) === (at !== null)) return;
+    card.voiceCallAt = at;
+  });
+}
+
+export async function clearStaleVoiceCalls(): Promise<void> {
+  await store.mutate((doc) => {
+    const cardsInCall = doc.cards.filter((card) => card.voiceCallAt);
+    for (const card of cardsInCall) card.voiceCallAt = null;
   });
 }
 

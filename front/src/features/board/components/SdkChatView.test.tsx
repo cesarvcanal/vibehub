@@ -87,7 +87,7 @@ class FakeSocket {
     return this.rawSent.filter((raw) => {
       try {
         const type = (JSON.parse(raw) as { type?: string }).type;
-        return type !== "typing";
+        return type !== "typing" && type !== "queued_note";
       } catch { return true; }
     });
   }

@@ -521,6 +521,7 @@ export interface Card {
    * Set by the server at the end of each turn, cleared when the next one starts.
    */
   pendingQuestionAt?: number | null;
+  voiceCallAt?: number | null;
   /** Last time a human typed into this card's terminal (epoch ms). */
   humanActiveAt?: number;
   humanActiveUserId?: string;

@@ -1543,6 +1543,10 @@ export async function probeCardSession(card: Pick<Card, "tmuxSession">): Promise
   return (await probeSessions([card.tmuxSession])).get(card.tmuxSession) ?? "unknown";
 }
 
+function nativeChatTurnRunning(cardId: string): boolean {
+  return cardDriverActivity(cardId) === "turn";
+}
+
 /**
  * PURE decision: does this pause have to take effect RIGHT NOW, ignoring the dot the board is
  * showing? Yes whenever the runner CONTRADICTS a `working` dot — the session is idle (parked on a
@@ -1555,9 +1559,10 @@ export function pauseMustBeEffective(status: CardStatus | null | undefined, stat
 }
 
 async function decidePauseEffective(cardId: string, before: Card | undefined): Promise<boolean | undefined> {
-  if (cardDriverActivity(cardId) === "turn") return false;
+  if (nativeChatTurnRunning(cardId)) return false;
   if (before?.status !== "working" || !hasLiveSession(before)) return undefined;
-  return pauseMustBeEffective(before.status, await probeCardSession(before));
+  const sessionState = await probeCardSession(before);
+  return pauseMustBeEffective(before.status, sessionState) && !nativeChatTurnRunning(cardId);
 }
 
 /**
@@ -1665,11 +1670,11 @@ export function overduePauses<T extends Pick<Card, "tmuxSession">>(
  */
 export async function reconcilePausedCards(): Promise<number> {
   const pending = (await listAllCards()).filter(
-    (card) => card.column === "paused" && hasLiveSession(card) && cardDriverActivity(card.id) !== "turn",
+    (card) => card.column === "paused" && hasLiveSession(card) && !nativeChatTurnRunning(card.id),
   );
   if (pending.length === 0) return 0;
   const states = await probeSessions(pending.map((c) => c.tmuxSession));
-  const overdue = overduePauses(pending, states);
+  const overdue = overduePauses(pending, states).filter((card) => !nativeChatTurnRunning(card.id));
   for (const card of overdue) {
     try {
       const paused = await registryPauseCard(card.id, { effective: true });
