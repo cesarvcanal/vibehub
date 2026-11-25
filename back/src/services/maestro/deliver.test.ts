@@ -1559,7 +1559,9 @@ describe("buildPushAndPrScript executado de verdade (gh e git falsos): PR novo s
   });
 
   /** Runs the script's runner-side body (what `docker exec … bash -s` receives) with fake gh/git on PATH. */
-  async function run(docs: Parameters<typeof import("./deliver.js").buildPushAndPrScript>[6], existing = "", editResult = "") {
+  async function run(
+    docs: Parameters<typeof import("./deliver.js").buildPushAndPrScript>[6], existing = "", editResult = "", listFailure = "",
+  ) {
     const { deliver } = await load();
     const root = await mkdtemp(join(tmpdir(), "vibehub-prdocs-"));
     roots.push(root);
@@ -1571,7 +1573,8 @@ describe("buildPushAndPrScript executado de verdade (gh e git falsos): PR novo s
       "#!/bin/bash",
       'echo "gh $1 $2" >> "$ROOT/log"',
       'case "$1 $2" in',
-      '  "pr list") [ -n "$EXISTING" ] && echo "$EXISTING"; exit 0 ;;',
+      '  "pr list") [ -n "$LIST_FAILURE" ] && { echo "$LIST_FAILURE" >&2; exit 1; }',
+      '    [ -n "$EXISTING" ] && echo "$EXISTING"; exit 0 ;;',
       '  "pr edit") [ -n "$EDIT_RESULT" ] && { echo "no permission"; $EDIT_RESULT; } ;;&',
       '  "pr create"|"pr edit")',
       '    while [ $# -gt 0 ]; do case "$1" in',
@@ -1584,7 +1587,7 @@ describe("buildPushAndPrScript executado de verdade (gh e git falsos): PR novo s
     const script = deliver.buildPushAndPrScript("vibehub-runner", TOKEN, root, "card/x", "dev", docs);
     const lines = script.split("\n");
     const inner = lines.slice(lines.findIndex((l) => l.startsWith("docker exec")) + 1, -1).join("\n");
-    const env = { PATH: `${bin}:${process.env.PATH}`, ROOT: root, EXISTING: existing, EDIT_RESULT: editResult };
+    const env = { PATH: `${bin}:${process.env.PATH}`, ROOT: root, EXISTING: existing, EDIT_RESULT: editResult, LIST_FAILURE: listFailure };
     const stdout = execFileSync("bash", ["-s"], { input: inner, env, encoding: "utf8" });
     const read = (f: string) => execFileSync("bash", ["-c", `cat '${join(root, f)}' 2>/dev/null || true`], { encoding: "utf8" });
     return { stdout, log: read("log"), title: read("title"), body: read("body"), script };
@@ -1623,6 +1626,13 @@ describe("buildPushAndPrScript executado de verdade (gh e git falsos): PR novo s
     const r = await run(clean(DOCS), PR, "exit 1");
     expect(r.stdout).toContain(`__VIBEHUB_DELIVER__ error edit ${PR}`);
     expect(r.stdout).toContain("no permission");
+  });
+
+  it("a busca do PR aberto falhou no GitHub: a entrega para com o erro da busca, sem tentar criar outro PR", async () => {
+    const r = await run(clean(DOCS), PR, "", "GraphQL: Something went wrong while executing your query");
+    expect(r.log).not.toMatch(/gh pr (create|edit)/);
+    expect(r.stdout).toContain("__VIBEHUB_DELIVER__ error list");
+    expect(r.stdout).toContain("GraphQL: Something went wrong while executing your query");
   });
 
   it("PR já aberto e nada de texto novo: reaproveitado sem tocar (a revisão empurra correção assim)", async () => {
