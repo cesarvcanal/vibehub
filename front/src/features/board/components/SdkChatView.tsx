@@ -1632,7 +1632,7 @@ export function SdkChatView({
             {entry.kind === "tools" ? (
               <SdkToolGroup rows={entry.rows} />
             ) : entry.kind === "agents" ? (
-              runningWork.pinnedFleetIds.has(entry.id) ? null : <SdkFleet rows={entry.rows} tasks={state.agentTasks} children={split.children} />
+              !runningWork.pinnedFleetIds.has(entry.id) && <SdkFleet rows={entry.rows} tasks={state.agentTasks} children={split.children} />
             ) : (
               <SdkChatRow
                 cardId={cardId}
@@ -1858,10 +1858,10 @@ function SdkRunningTray({
   const now = useNow(usePageVisible());
   const looseTaskRows = runningWork.looseTasks.map((task) => {
     const id = task.toolUseId;
-    const call = id ? rows.find((r) => r.kind === "tool" && r.id === id) : undefined;
-    const isAgent = call?.kind === "tool" ? isAgentTool(call.name) : task.type === "local_agent";
+    const call = id ? rows.find((row): row is Extract<SdkRow, { kind: "tool" }> => row.kind === "tool" && row.id === id) : undefined;
+    const isAgent = call ? isAgentTool(call.name) : task.type === "local_agent";
     const live = id ? agentTasks[id] : undefined;
-    const agentCall = isAgent && call?.kind === "tool" ? call : undefined;
+    const agentCall = isAgent ? call : undefined;
     const childRows = agentCall ? subagentRows.get(agentCall.id) ?? [] : [];
     return (
       <FleetRow
@@ -1876,9 +1876,9 @@ function SdkRunningTray({
       />
     );
   });
-  const className = "mt-1.5 max-h-[20vh] shrink-0 overflow-y-auto overscroll-contain";
+  const trayClassName = "mt-1.5 max-h-[20vh] shrink-0 overflow-y-auto overscroll-contain";
   if (runningWork.agents.length > 0) {
-    return <SdkFleet rows={runningWork.agents} tasks={agentTasks} children={subagentRows} pinned={{ className, looseTaskRows }} />;
+    return <SdkFleet rows={runningWork.agents} tasks={agentTasks} children={subagentRows} pinned={{ className: trayClassName, looseTaskRows }} />;
   }
   return (
     <FleetPanel
@@ -1888,7 +1888,7 @@ function SdkRunningTray({
       icon={<Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />}
       title={t("sdk.runningTitle", { n: looseTaskRows.length })}
       subtitle={t("sdk.backgroundHint")}
-      className={className}
+      className={trayClassName}
     >
       {looseTaskRows}
     </FleetPanel>
