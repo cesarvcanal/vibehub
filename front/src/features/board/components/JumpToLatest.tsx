@@ -77,16 +77,16 @@ export function useStickToBottom(content: unknown, { smooth = false }: { smooth?
     const el = scrollerRef.current;
     if (el && stickRef.current) {
       cancelGlide.current?.();
+      cancelGlide.current = null;
       lastScrollTop.current = el.scrollTop;
       if (smooth && !first.current) {
         const cancel = animateScrollToBottom(el, () => {
           if (cancelGlide.current === cancel) cancelGlide.current = null;
         });
         cancelGlide.current = cancel;
-      } else {
-        cancelGlide.current = null;
-        el.scrollTop = el.scrollHeight;
+        return;
       }
+      el.scrollTop = el.scrollHeight;
       return;
     }
     // Scrolled up: never yank — just note that the conversation moved on (skip the mount pass,

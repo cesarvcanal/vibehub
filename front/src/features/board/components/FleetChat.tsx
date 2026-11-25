@@ -106,23 +106,23 @@ function Avatar({ speaker }: { speaker: ChatSpeaker }) {
   return <ToneAvatar tone={agentTone(role)} isVerification={role.kind === "verification"} />;
 }
 
-function ToneAvatar({ tone, isVerification, className, style: inlineStyle }: {
+function ToneAvatar({ tone, isVerification, className, style }: {
   tone: AgentTone;
   isVerification: boolean;
   className?: string;
   style?: React.CSSProperties;
 }) {
-  const style = TONE_STYLE[tone];
-  const Icon = style.icon;
+  const toneStyle = TONE_STYLE[tone];
+  const Icon = toneStyle.icon;
   return (
     <span
       aria-hidden="true"
       data-tone={tone}
       data-verification={isVerification}
-      style={inlineStyle}
+      style={style}
       className={cn(
         "grid h-7 w-7 shrink-0 place-items-center rounded-full",
-        isVerification ? cn("border-2 bg-background", style.outline) : cn("text-background", style.solid),
+        isVerification ? cn("border-2 bg-background", toneStyle.outline) : cn("text-background", toneStyle.solid),
         className,
       )}
     >
