@@ -125,12 +125,7 @@ export function listRunningWork(
   backgroundTasks: readonly BackgroundTask[],
   tasks: Record<string, AgentTask>,
 ): RunningWork {
-  const callIdByTaskId = new Map(Object.values(tasks).map((task) => [task.taskId, task.toolUseId]));
-  const linkedTasks = backgroundTasks.map((task) => {
-    const toolUseId = task.toolUseId || callIdByTaskId.get(task.id);
-    return toolUseId ? { ...task, toolUseId } : task;
-  });
-  const runningCallIds = new Set([...foregroundAgents.map((row) => row.id), ...linkedTasks.map((task) => task.toolUseId)]);
+  const runningCallIds = new Set([...foregroundAgents.map((row) => row.id), ...backgroundTasks.map((task) => task.toolUseId)]);
   const isRunningAgent = (row: SdkRow): boolean =>
     row.kind === "tool" && runningCallIds.has(row.id) && agentStatus(row, tasks[row.id]) === "running";
   const pinnedFleets = entries.filter(
@@ -148,7 +143,7 @@ export function listRunningWork(
   return {
     pinnedFleetIds: new Set(pinnedFleets.map((entry) => entry.id)),
     agents: [...fleetAgents, ...agentsOutsideFleets],
-    looseTasks: linkedTasks.filter((task) => !isShownInFleet(task)),
+    looseTasks: backgroundTasks.filter((task) => !isShownInFleet(task)),
   };
 }
 

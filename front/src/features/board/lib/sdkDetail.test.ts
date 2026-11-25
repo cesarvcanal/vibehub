@@ -307,26 +307,11 @@ describe("o que fica preso acima do campo enquanto roda", () => {
     expect(work.looseTasks).toEqual(backgroundTasks);
   });
 
-  it("a tarefa do CLI que chegou sem a chamada se liga ao subagente pelo id da tarefa e não se repete", () => {
-    const backgroundTasks = [{ id: "k-a2", type: "local_agent", description: "a2" }];
-    const tasks = { a1: agentTask("a1", "running"), a2: agentTask("a2", "running") };
-    const work = runningWorkOf(["a1", "a2"], tasks, backgroundTasks);
-    expect(work.agents.map((row) => row.id)).toEqual(["a1", "a2"]);
-    expect(work.looseTasks).toEqual([]);
-  });
-
   it("a tarefa que não é subagente fica solta, com a chamada que a disparou", () => {
     const backgroundTasks = [{ id: "b1", type: "local_bash", description: "Aguarda o deploy", toolUseId: "t1" }];
     const work = runningWorkOf(["a1"], { a1: agentTask("a1", "completed") }, backgroundTasks);
     expect(work.agents).toEqual([]);
     expect(work.looseTasks).toEqual(backgroundTasks);
-  });
-
-  it("a tarefa solta sem a chamada ganha a chamada pelo id da tarefa, para abrir o subagente", () => {
-    const { state } = fleetOf([]);
-    const tasks = { a9: agentTask("a9", "running") };
-    const work = listRunningWork(groupSdkRows(state.rows), [], [{ id: "k-a9", type: "local_agent", description: "a9" }], tasks);
-    expect(work.looseTasks).toEqual([{ id: "k-a9", type: "local_agent", description: "a9", toolUseId: "a9" }]);
   });
 
   it("duas frotas rodando ficam presas juntas, numa caixa só", () => {
