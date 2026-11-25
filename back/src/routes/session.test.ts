@@ -48,7 +48,7 @@ const restartCard = vi.fn();
 const hibernateCard = vi.fn();
 const restartAllCards = vi.fn();
 const purgeCardWorkspace = vi.fn();
-const uploadCardImage = vi.fn();
+const uploadCardFile = vi.fn();
 const readCardUpload = vi.fn();
 const readCardAttachment = vi.fn();
 /** The terminal websocket's pty — never a real process here; see `fakeTerm`. */
@@ -89,7 +89,7 @@ async function boot(): Promise<FastifyInstance> {
     return {
       ...actual,
       openCard, prepareCard, pauseCard, restartCard, hibernateCard, restartAllCards, purgeCardWorkspace,
-      uploadCardImage, readCardUpload,
+      uploadCardFile, readCardUpload,
     };
   });
   vi.doMock("../services/attachments/document.js", async () => ({
@@ -226,14 +226,51 @@ describe("card lifecycle routes", () => {
     expect((await app.inject({ method: "GET", url: `/api/cards/${id}`, headers: { cookie } })).statusCode).toBe(404);
   });
 
-  it("uploads an image and returns the path inside the runner", async () => {
+  it("sobe o arquivo cru em fluxo e devolve o caminho dentro do runner", async () => {
     const id = await makeCard();
-    uploadCardImage.mockResolvedValueOnce({ path: "/work/.uploads/x/1-image.png" });
-    const res = await app.inject({
-      method: "POST", url: `/api/cards/${id}/upload`, headers: { cookie },
-      payload: { name: "shot.png", content: "aGVsbG8=" },
+    const content = Buffer.from("PK\x03\x04 zip");
+    const streamed: Buffer[] = [];
+    uploadCardFile.mockImplementationOnce(async (_cardId: string, _name: string, body: AsyncIterable<Buffer>) => {
+      for await (const chunk of body) streamed.push(chunk);
+      return { path: "/work/.uploads/x/1-pacote.zip" };
     });
-    expect(res.json()).toEqual({ path: "/work/.uploads/x/1-image.png" });
+    const res = await app.inject({
+      method: "POST", url: `/api/cards/${id}/upload?name=pacote.zip`,
+      headers: { cookie, "content-type": "application/octet-stream" }, payload: content,
+    });
+    expect(res.json()).toEqual({ path: "/work/.uploads/x/1-pacote.zip" });
+    expect(Buffer.concat(streamed)).toEqual(content);
+    expect(uploadCardFile).toHaveBeenCalledWith(id, "pacote.zip", expect.anything(), content.length, expect.any(String));
+  });
+
+  it("um envio em JSON, de uma aba aberta antes do deploy, responde 415 e nada sobe", async () => {
+    const id = await makeCard();
+    uploadCardFile.mockClear();
+    const res = await app.inject({
+      method: "POST", url: `/api/cards/${id}/upload`, headers: { cookie }, payload: { name: "x.png", content: "aGk=" },
+    });
+    expect(res.statusCode).toBe(415);
+    expect(res.json().error).toMatch(/reload/);
+    expect(uploadCardFile).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["file size is required", 411],
+    ["file is larger than 1 GB", 413],
+    ["upload stalled", 408],
+    ["card not found", 404],
+    ["the runner on this machine could not run the command: no such container", 502],
+    ["upload ended before the whole file arrived", 400],
+    ["file name is required", 400],
+  ])("o erro %s do upload vira %i", async (message, status) => {
+    const id = await makeCard();
+    uploadCardFile.mockRejectedValueOnce(new Error(message));
+    const res = await app.inject({
+      method: "POST", url: `/api/cards/${id}/upload?name=a.zip`,
+      headers: { cookie, "content-type": "application/octet-stream" }, payload: Buffer.from("x"),
+    });
+    expect(res.statusCode).toBe(status);
+    expect(res.json()).toEqual({ error: message });
   });
 
   it("serves an uploaded image back, as the image, cached for good", async () => {
@@ -328,15 +365,6 @@ describe("card lifecycle routes", () => {
       method: "GET", url: `/api/cards/${id}/uploads/1790375878344-gone.png`, headers: { cookie },
     });
     expect(res.statusCode).toBe(404);
-  });
-
-  it("400s an upload the workspace rejects", async () => {
-    const id = await makeCard();
-    uploadCardImage.mockRejectedValueOnce(new Error("invalid base64 content"));
-    const res = await app.inject({
-      method: "POST", url: `/api/cards/${id}/upload`, headers: { cookie }, payload: { name: "x", content: "!!!" },
-    });
-    expect(res.statusCode).toBe(400);
   });
 });
 

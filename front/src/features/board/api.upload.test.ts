@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AxiosRequestConfig } from "axios";
 import { post } from "@/lib/api";
-import { boardApi } from "@/features/board/api";
+import { UPLOAD_MAX_BYTES, boardApi } from "@/features/board/api";
 
 vi.mock("@/lib/api", () => ({
   api: { interceptors: { response: { use: vi.fn() } } },
@@ -30,14 +30,20 @@ function deadConnection(_url: string, _body?: unknown, config?: AxiosRequestConf
   });
 }
 
-describe("boardApi.uploadCardImage — the request has a deadline", () => {
-  it("sends the image with an abort signal and upload progress, and answers with the runner path", async () => {
+describe("boardApi.uploadCardFile — the request has a deadline", () => {
+  it("o teto local do anexo é 1 GB", () => {
+    expect(UPLOAD_MAX_BYTES).toBe(1024 ** 3);
+  });
+
+  it("manda o arquivo cru, sem base64, com o nome na query, o sinal de aborto e o progresso; volta o caminho no runner", async () => {
     mockPost.mockResolvedValueOnce({ path: PATH });
     const file = new File(["png-bytes"], "img_3664.png", { type: "image/png" });
-    await expect(boardApi.uploadCardImage(CARD, file)).resolves.toEqual({ path: PATH });
+    await expect(boardApi.uploadCardFile(CARD, file)).resolves.toEqual({ path: PATH });
     const [url, body, config] = mockPost.mock.calls[0] ?? [];
     expect(url).toBe(`/cards/${CARD}/upload`);
-    expect(body).toEqual({ name: "img_3664.png", content: btoa("png-bytes") });
+    expect(body).toBe(file);
+    expect(config?.params).toEqual({ name: "img_3664.png" });
+    expect(config?.headers).toEqual({ "content-type": "application/octet-stream" });
     expect(config?.signal).toBeInstanceOf(AbortSignal);
     expect(typeof config?.onUploadProgress).toBe("function");
   });
@@ -46,7 +52,7 @@ describe("boardApi.uploadCardImage — the request has a deadline", () => {
     vi.useFakeTimers();
     mockPost.mockImplementationOnce(deadConnection).mockResolvedValueOnce({ path: PATH });
     const file = new File(["png-bytes"], "img_3664.png", { type: "image/png" });
-    const result = boardApi.uploadCardImage(CARD, file);
+    const result = boardApi.uploadCardFile(CARD, file);
     await vi.advanceTimersByTimeAsync(60_000);
     await expect(result).resolves.toEqual({ path: PATH });
     expect(mockPost).toHaveBeenCalledTimes(2);
@@ -58,7 +64,7 @@ describe("boardApi.uploadCardImage — the request has a deadline", () => {
     vi.useFakeTimers();
     mockPost.mockImplementation(deadConnection);
     const file = new File(["png-bytes"], "img_3664.png", { type: "image/png" });
-    const result = boardApi.uploadCardImage(CARD, file);
+    const result = boardApi.uploadCardFile(CARD, file);
     const settled = expect(result).rejects.toThrow();
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     await settled;

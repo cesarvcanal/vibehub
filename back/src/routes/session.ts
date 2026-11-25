@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { Readable } from "node:stream";
 import type { IPty } from "node-pty";
 import pty from "node-pty";
 import type { FastifyInstance } from "fastify";
@@ -14,7 +15,7 @@ import { purgeCard } from "../services/board/purge.js";
 import { readCardAttachment } from "../services/attachments/document.js";
 import { observeCardStatus } from "../services/events/cardEvents.js";
 import { logger } from "../utils/logger.js";
-import { sendError } from "./httpError.js";
+import { NOT_FOUND, sendError, type ErrorStatusRule } from "./httpError.js";
 import { setTimeout as delay } from "node:timers/promises";
 
 /**
@@ -58,6 +59,14 @@ export function disableNagle(socket: unknown): boolean {
  * and "the agent is listening".
  */
 export const OUTBOX_ATTACH_DELAY_MS = 3_000;
+
+const UPLOAD_ERROR_STATUS: readonly ErrorStatusRule[] = [
+  NOT_FOUND,
+  [/file size is required/, 411],
+  [/larger than 1 GB/, 413],
+  [/upload stalled/, 408],
+  [/could not run the command/, 502],
+];
 
 /** Terminal geometry the runner will accept: an integer between 10 and 500. */
 export function isValidTermSize(n: unknown): n is number {
@@ -299,14 +308,22 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     return await reply.send({ ok: true, incomplete: report.incomplete, steps: report.steps });
   });
 
-  app.post<{ Params: { id: string }; Body: { name?: string; content?: string } }>(
+  app.addContentTypeParser("application/octet-stream", (_req, payload, done) => {
+    done(null, payload);
+  });
+
+  app.post<{ Params: { id: string }; Querystring: { name?: string }; Body: unknown }>(
     "/api/cards/:id/upload", { preHandler: requireCardWork },
     async (req, reply) => {
-      const { name = "image.png", content = "" } = req.body ?? {};
+      if (!(req.body instanceof Readable)) {
+        return await reply.code(415).send({ error: "upload expects the raw file as application/octet-stream; reload the page" });
+      }
       try {
-        return await reply.send(await workspace.uploadCardImage(req.params.id, name, content));
+        const by = (await sessionUserId(req)) ?? undefined;
+        const declaredBytes = Number(req.headers["content-length"]);
+        return await reply.send(await workspace.uploadCardFile(req.params.id, req.query.name, req.body, declaredBytes, by));
       } catch (err) {
-        return await sendError(reply, err);
+        return await sendError(reply, err, { rules: UPLOAD_ERROR_STATUS });
       }
     },
   );

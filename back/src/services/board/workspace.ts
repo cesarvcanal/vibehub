@@ -1,3 +1,6 @@
+import { spawn } from "node:child_process";
+import { Transform, type Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import {
   hostExecutor, shQuote, assertSafeRemotePath, HostExecError, containerScriptCommand,
 } from "../../runtime/host.js";
@@ -911,16 +914,10 @@ export async function restoreMissingWorkspace(cardId: string): Promise<boolean> 
   }
 }
 
-// ---- Image upload into a card (paste/drag on the terminal) ----
+export const UPLOAD_MAX_BYTES = 1024 ** 3;
+export const UPLOAD_SERVE_MAX_BYTES = 10 * 1024 * 1024;
+export const UPLOAD_STALL_MS = 60_000;
 
-/** Ceiling for the DECODED file (the route's bodyLimit covers the base64+JSON envelope). */
-export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
-
-/**
- * STRICT base64 (the payload already has its whitespace stripped). This is what makes it safe to
- * embed the content in a heredoc: the alphabet has no quotes, `$`, backticks or `_` — it cannot
- * escape a quoted heredoc and can never collide with the VIBEHUB_* delimiters.
- */
 const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
 /**
@@ -952,66 +949,89 @@ export function sanitizeUploadName(name: string): string {
   return UPLOAD_NAME_RE.test(s) ? s : `${s}.bin`;
 }
 
-export interface UploadScriptOpts {
+export interface UploadCommandOpts {
   containerName: string;
   destDir: string;
   destPath: string;
-  /** The file's base64, ALREADY validated against B64_RE (the caller's invariant). */
-  base64: string;
+  bytes: number;
 }
 
-/**
- * Script that writes the file INSIDE the runner, over STDIN (the content NEVER passes through argv):
- * ONE command line, then the base64 as the rest of the stream.
- *
- * The `exec` is the point. Bash reads a script from a pipe ONE BYTE PER read() — so the commands it
- * starts can inherit the rest of the stream — and the old shape put the payload inside a heredoc,
- * parsed twice (host bash, then the container's `bash -s`): ~19 s per level for a 5 MB screenshot,
- * the "colei a imagem e ela demora muito para carregar" of production (2026-10-19). Here bash reads
- * only the first line and hands its stdin to `docker exec -i`, which streams the payload in blocks
- * straight into `base64 -d` (0.25 s for the same 5 MB). Nothing after the payload is ever parsed as
- * shell: the process reading it is base64, not bash. PURE/testable.
- */
-export function buildUploadScript(opts: UploadScriptOpts): string {
-  if (!B64_RE.test(opts.base64)) throw new Error("invalid base64 content");
-  const inside = `mkdir -p ${shQuote(opts.destDir)} && base64 -d > ${shQuote(opts.destPath)}`;
-  return `exec docker exec -i ${shQuote(opts.containerName)} sh -c ${shQuote(inside)}\n${opts.base64}\n`;
+export function buildUploadCommand(opts: UploadCommandOpts): string {
+  if (!Number.isSafeInteger(opts.bytes) || opts.bytes < 1) throw new Error("invalid upload size");
+  const partPath = shQuote(`${opts.destPath}.part`);
+  const writeWhole = [
+    `mkdir -p ${shQuote(opts.destDir)}`,
+    `cat > ${partPath}`,
+    `[ "$(stat -c %s ${partPath})" = ${opts.bytes} ]`,
+    `mv ${partPath} ${shQuote(opts.destPath)}`,
+  ].join(" && ");
+  const inside = `${writeWhole} || { rm -f ${partPath}; exit 1; }`;
+  return `docker exec -i ${shQuote(opts.containerName)} sh -c ${shQuote(inside)}`;
 }
 
-/**
- * Uploads an image into the card's workspace: validates the base64 and the size, writes it to
- * /work/.uploads/<cardId>/<timestamp>-<sanitized-name> inside the runner and returns the path — the
- * front-end types that path into the terminal and Claude Code reads the image from there.
- */
-export async function uploadCardImage(
+async function streamUploadIntoRunner(command: string, body: Readable, declaredBytes: number): Promise<void> {
+  const { file, args } = hostExecutor().pipeCommand(command);
+  const child = spawn(file, args, { stdio: ["pipe", "ignore", "pipe"] });
+  const stderrChunks: string[] = [];
+  child.stderr.setEncoding("utf8").on("data", (chunk: string) => stderrChunks.push(chunk));
+  const exited = new Promise<{ code: number | null; spawnError?: Error }>((resolve) => {
+    child.once("error", (spawnError) => resolve({ code: null, spawnError }));
+    child.once("close", (code) => resolve({ code }));
+  });
+
+  const progress = { receivedBytes: 0, clientFailed: false };
+  body.once("error", () => { progress.clientFailed = true; });
+  const meter = new Transform({
+    transform(chunk: Buffer, _encoding, done) {
+      progress.receivedBytes += chunk.length;
+      stallTimer.refresh();
+      done(null, chunk);
+    },
+  });
+  const stallTimer = setTimeout(() => {
+    progress.clientFailed = true;
+    meter.destroy(new Error("upload stalled"));
+    child.kill("SIGKILL");
+  }, UPLOAD_STALL_MS);
+  const pipeError = await pipeline(body, meter, child.stdin).then(
+    () => null,
+    (err: unknown) => (err instanceof Error ? err : new Error(String(err))),
+  );
+  const { code, spawnError } = await exited;
+  clearTimeout(stallTimer);
+
+  if (spawnError) throw runnerUnreachable(spawnError);
+  if (pipeError && progress.clientFailed) throw pipeError;
+  if (code !== 0) throw runnerUnreachable(new HostExecError(stderrChunks.join("").trim() || `command exited with code ${code}`));
+  if (pipeError) throw pipeError;
+  if (progress.receivedBytes !== declaredBytes) throw new Error("upload ended before the whole file arrived");
+}
+
+export async function uploadCardFile(
   cardId: string,
-  originalName: string,
-  base64: string,
+  originalName: string | undefined,
+  body: Readable,
+  declaredBytes: number,
   by?: string,
 ): Promise<{ path: string }> {
   const { card } = await getCardWithProject(cardId);
-
-  const b64 = String(base64 ?? "").replace(/\s+/g, ""); // tolerate line breaks from encoders
-  if (!B64_RE.test(b64)) throw new Error("invalid base64 content");
-  const bytes = Math.floor((b64.length * 3) / 4) - (b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0);
-  if (bytes > UPLOAD_MAX_BYTES) throw new Error("file is larger than 10 MB");
+  if (!originalName) throw new Error("file name is required");
+  if (!Number.isSafeInteger(declaredBytes) || declaredBytes < 1) throw new Error("file size is required");
+  if (declaredBytes > UPLOAD_MAX_BYTES) throw new Error("file is larger than 1 GB");
 
   const name = sanitizeUploadName(originalName);
   const destDir = `/work/.uploads/${card.id}`;
   const destPath = `${destDir}/${Date.now()}-${name}`;
-  assertSafeRemotePath(destPath); // belt: the id comes from the board (uuid), the name is sanitized
+  assertSafeRemotePath(destPath);
 
-  try {
-    await hostExecutor().runScript(
-      buildUploadScript({ containerName: config.runner.container, destDir, destPath, base64: b64 }),
-      { timeoutMs: 120_000 },
-    );
-  } catch (err) {
-    throw runnerUnreachable(err);
-  }
+  await streamUploadIntoRunner(
+    buildUploadCommand({ containerName: config.runner.container, destDir, destPath, bytes: declaredBytes }),
+    body,
+    declaredBytes,
+  );
   logger.info(
-    { audit: true, action: "card.upload", card: card.worktreeSlug, file: name, bytes, by },
-    "image uploaded into the card workspace",
+    { audit: true, action: "card.upload", card: card.worktreeSlug, file: name, bytes: declaredBytes, by },
+    "file uploaded into the card workspace",
   );
   return { path: destPath };
 }
@@ -1061,11 +1081,6 @@ const UPLOAD_CONTENT_TYPES: Record<string, string> = {
 /** Anything not in the table: bytes to save, never something the browser renders. */
 const UPLOAD_DOWNLOAD_TYPE = "application/octet-stream";
 
-/**
- * The name of an upload, as `uploadCardImage` writes it: `<stamp>-<sanitized>.<ext>`. The check is
- * deliberately stricter than "no traversal" — it is the exact shape this server produces, so a
- * name that could not have come from the upload route is refused before it reaches a shell. PURE.
- */
 const UPLOAD_FILE_RE = new RegExp(`^\\d+-${UPLOAD_NAME_SOURCE}$`);
 
 /**
@@ -1204,7 +1219,7 @@ export async function readCardUpload(
   const head = /^(\d+) (?:(\d+) (\d+)|-)$/.exec((newline < 0 ? stdout : stdout.slice(0, newline)).trim());
   if (!head) throw new Error("upload not found");
   const size = Number(head[1]);
-  if (size === 0 || size > UPLOAD_MAX_BYTES) throw new Error("upload not found");
+  if (size === 0 || size > UPLOAD_SERVE_MAX_BYTES) throw new Error("upload not found");
   if (head[2] === undefined) return { body: Buffer.alloc(0), contentType, size, range: "unsatisfiable" };
 
   const b64 = stdout.slice(newline + 1).replace(/\s+/g, "");
