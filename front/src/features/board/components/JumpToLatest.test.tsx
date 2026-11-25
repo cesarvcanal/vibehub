@@ -1,5 +1,6 @@
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
+import { useFakeAnimationFrames } from "@/test/animationFrames";
 import { useStickToBottom } from "./JumpToLatest";
 
 const CLIENT_HEIGHT = 400;
@@ -9,8 +10,7 @@ function fakeScroller() {
 }
 
 function renderSmoothStick(scroller: ReturnType<typeof fakeScroller>) {
-  vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame", "performance"] });
-  onTestFinished(() => { vi.useRealTimers(); });
+  useFakeAnimationFrames();
   const hook = renderHook(({ content }) => useStickToBottom(content, { smooth: true }), { initialProps: { content: 1 } });
   hook.result.current.scrollerRef.current = scroller as unknown as HTMLDivElement;
   hook.rerender({ content: 1 });

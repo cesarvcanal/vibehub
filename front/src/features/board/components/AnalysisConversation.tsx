@@ -32,10 +32,8 @@ export function AnalysisConversation({ cardId, read, cardState }: {
   const conversation = conversationQuery.data;
   const entries = conversation ? analysisFleetChat(conversation) : [];
   const lastEntry = entries[entries.length - 1];
-  const stick = useStickToBottom(
-    `${entries.length}:${lastEntry?.id}:${lastEntry?.kind}:${read?.timeline.length ?? 0}`,
-    { smooth: true },
-  );
+  const bottomContent = `${entries.length}:${lastEntry?.id}:${lastEntry?.kind}:${read?.timeline.length ?? 0}`;
+  const stick = useStickToBottom(bottomContent, { smooth: true });
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       <div
@@ -45,7 +43,7 @@ export function AnalysisConversation({ cardId, read, cardState }: {
       >
         <FleetSection
           isPending={conversationQuery.isPending}
-          error={conversationQuery.isError ? conversationQuery.error : null}
+          error={conversationQuery.error}
           conversation={conversation ?? null}
           entries={entries}
           reportWritten={reportWritten}

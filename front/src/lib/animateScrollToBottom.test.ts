@@ -1,4 +1,5 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { useFakeAnimationFrames } from "@/test/animationFrames";
 import { animateScrollToBottom } from "./animateScrollToBottom";
 
 function fakeScroller(scrollTop: number, scrollHeight: number) {
@@ -9,14 +10,9 @@ function glideToBottom(scroller: ReturnType<typeof fakeScroller>, onArrive: () =
   return animateScrollToBottom(scroller as unknown as HTMLElement, onArrive);
 }
 
-function useFakeFrames() {
-  vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame", "performance"] });
-  onTestFinished(() => { vi.useRealTimers(); });
-}
-
 describe("animateScrollToBottom", () => {
   it("desce até o fim em no máximo 600 ms, devagar no final, e avisa quando chega", () => {
-    useFakeFrames();
+    useFakeAnimationFrames();
     const scroller = fakeScroller(0, 1_000);
     const onArrive = vi.fn();
     glideToBottom(scroller, onArrive);
@@ -35,7 +31,7 @@ describe("animateScrollToBottom", () => {
   });
 
   it("conteúdo que chega no meio da descida empurra o destino, sem recomeçar", () => {
-    useFakeFrames();
+    useFakeAnimationFrames();
     const scroller = fakeScroller(0, 700);
     glideToBottom(scroller);
     vi.advanceTimersByTime(100);
@@ -45,7 +41,7 @@ describe("animateScrollToBottom", () => {
   });
 
   it("distância maior que 800 px salta para 800 px do fim e anima só esse trecho", () => {
-    useFakeFrames();
+    useFakeAnimationFrames();
     const scroller = fakeScroller(0, 5_000);
     glideToBottom(scroller);
     expect(scroller.scrollTop).toBe(3_800);
@@ -64,7 +60,7 @@ describe("animateScrollToBottom", () => {
   });
 
   it("cancelada, para onde está e não avisa chegada", () => {
-    useFakeFrames();
+    useFakeAnimationFrames();
     const scroller = fakeScroller(0, 1_000);
     const onArrive = vi.fn();
     const cancel = glideToBottom(scroller, onArrive);
