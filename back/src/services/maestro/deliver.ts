@@ -1181,8 +1181,8 @@ export async function afterPrMerged(
 
 const FAILED_DELIVER_REASONS: readonly DeliverReason[] = ["push_failed", "pr_failed", "merge_failed"];
 
-// external: the GitHub GraphQL API answers its own internal errors with "Something went wrong while executing your query", and gh prints REST errors as "(HTTP <status>)"
-const GITHUB_INTERNAL_ERROR_PATTERN = /GraphQL: Something went wrong while executing your query|\(HTTP 5\d\d\)/;
+// external: gh 2.100.0 prints a GitHub 5xx as "HTTP 502: …"/"HTTP 502 (…)" (pr create, pr merge) or "(HTTP 502)" (api), and GraphQL internal errors as "Something went wrong while executing your query" (seen in delivers, 2026-11-25; not in GitHub docs)
+const GITHUB_INTERNAL_ERROR_PATTERN = /GraphQL: Something went wrong while executing your query|\bHTTP 5\d\d\b/;
 
 function logDeliverFailure(cardId: string, reason: DeliverReason, output: string | undefined): void {
   const isGithubInternalError = output !== undefined && GITHUB_INTERNAL_ERROR_PATTERN.test(output);
