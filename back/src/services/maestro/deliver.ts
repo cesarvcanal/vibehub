@@ -1181,7 +1181,15 @@ export async function afterPrMerged(
 
 const FAILED_DELIVER_REASONS: readonly DeliverReason[] = ["push_failed", "pr_failed", "merge_failed"];
 
+// external: the GitHub GraphQL API answers its own internal errors with "Something went wrong while executing your query", and gh prints REST errors as "(HTTP <status>)"
+const GITHUB_INTERNAL_ERROR_PATTERN = /GraphQL: Something went wrong while executing your query|\(HTTP 5\d\d\)/;
+
 function logDeliverFailure(cardId: string, reason: DeliverReason, output: string | undefined): void {
+  const isGithubInternalError = output !== undefined && GITHUB_INTERNAL_ERROR_PATTERN.test(output);
+  if (isGithubInternalError) {
+    logger.info({ card: cardId, reason, detail: `${reason}: ${output}` }, "deliver failed on a GitHub internal error");
+    return;
+  }
   logger.warn({ card: cardId, reason, detail: `${reason}: ${output ?? "no output"}` }, "deliver failed");
 }
 

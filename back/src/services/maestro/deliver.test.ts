@@ -1857,6 +1857,12 @@ describe("recusa do deliver vira aviso de erro no log, que o detector de falhas 
     ["gate vermelho pelo teste do próprio card", { ci: CI_RED }, true, "gate"],
     ["merge feito", {}, true, "merged"],
     ["comentário numa linha fora do diff, que o GitHub recusa", { review: "gh: Line could not be resolved (HTTP 422)\n__VIBEHUB_DELIVER__ error review" }, true, "comments_failed"],
+    [
+      "PR que o GitHub não criou por erro interno do GraphQL",
+      { push: "Everything up-to-date\npull request create failed: GraphQL: Something went wrong while executing your query on 2026-11-25T15:47:26Z. Please include `D168:3898C2:1DEDA56:2C96A11:6B0703F1` when reporting this issue.\n__VIBEHUB_DELIVER__ error pr" },
+      true, "pr_failed",
+    ],
+    ["merge que o GitHub não fez por erro interno (HTTP 502)", { merge: "gh: Bad Gateway (HTTP 502)\n__VIBEHUB_DELIVER__ error merge\n" }, true, "merge_failed"],
   ])("%s não é falha da plataforma", async (_case, over, authorized, reason) => {
     const { result, capturedFailures } = await deliverAndReadCapturedFailures(over, authorized);
     expect(result.reason).toBe(reason);
