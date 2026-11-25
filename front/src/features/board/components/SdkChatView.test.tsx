@@ -3236,6 +3236,15 @@ describe("SdkChatView — subagentes", () => {
     expect(fleetPropsEqual(before, { rows: [row], tasks: {}, children })).toBe(false);
   });
 
+  it("a frota presa acima do campo redesenha quando as tarefas soltas dela mudam", () => {
+    const row: SdkRow = { kind: "tool", id: "t1", name: "Agent", summary: "", input: {} };
+    const children = new Map<string, SdkRow[]>();
+    const tasks = {};
+    const pinned = { className: "", looseTaskRows: [] };
+    expect(fleetPropsEqual({ rows: [row], tasks, children, pinned }, { rows: [row], tasks, children, pinned })).toBe(true);
+    expect(fleetPropsEqual({ rows: [row], tasks, children, pinned }, { rows: [row], tasks, children, pinned: { className: "", looseTaskRows: ["Roda test:changed"] } })).toBe(false);
+  });
+
   it("a barra de atividade diz que é o subagente trabalhando", async () => {
     renderSdkChat();
     const ws = await socket();
