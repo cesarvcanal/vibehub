@@ -25,11 +25,6 @@ import { logger } from "../../utils/logger.js";
  * ports that are — the agent's fix (start the server / wait for it) is different from a typo's.
  */
 
-/** The clickable URL of a preview — publicUrl is where the user's browser reaches vibehub. PURE. */
-export function previewPublicUrl(publicUrl: string, port: number): string {
-  return `${publicUrl.replace(/\/+$/, "")}/preview/${assertPreviewPort(port)}/`;
-}
-
 /**
  * The one-line base-path warning that rides back with the URL. Only apps that emit ABSOLUTE URLs
  * need it (vite, Next.js); relative-path apps work as-is. Kept short: it is tool output, not docs.

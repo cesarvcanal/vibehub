@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { previewPublicUrl, portNotListeningError, PREVIEW_BASE_HINT } from "./announce.js";
+import { portNotListeningError, PREVIEW_BASE_HINT } from "./announce.js";
 import { CWD_MARKER, PROC_MARKER } from "./preview.js";
 import type { PreviewProbe } from "./probe.js";
 
@@ -41,7 +41,6 @@ async function boot(probe: PreviewProbe | null = null) {
   vi.resetModules();
   const env = await import("../../config/env.js");
   env.config.dataDir = dir;
-  env.config.publicUrl = "http://192.0.2.10:3010/";
   vi.doMock("../../runtime/host.js", async () => {
     const actual = await vi.importActual<typeof import("../../runtime/host.js")>("../../runtime/host.js");
     return { ...actual, hostExecutor: () => ({ kind: "local", label: "test", runScript }) };
@@ -56,17 +55,6 @@ async function boot(probe: PreviewProbe | null = null) {
   const card = await registry.createCard({ projectId: project.id, title: "Checkout" });
   return { registry, announce, cardId: card.id };
 }
-
-describe("previewPublicUrl (pure)", () => {
-  it("joins publicUrl and the proxy path, tolerating trailing slashes", () => {
-    expect(previewPublicUrl("http://192.0.2.10:3010", 5173)).toBe("http://192.0.2.10:3010/preview/5173/");
-    expect(previewPublicUrl("http://vibehub.multi/", 3000)).toBe("http://vibehub.multi/preview/3000/");
-  });
-
-  it("refuses a port that could not be proxied", () => {
-    expect(() => previewPublicUrl("http://x", 0)).toThrow(/invalid preview port/);
-  });
-});
 
 describe("portNotListeningError (pure)", () => {
   it("names what IS listening so the agent can act", () => {

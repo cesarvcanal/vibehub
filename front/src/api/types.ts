@@ -704,7 +704,6 @@ export interface RestartedPreview {
   port: number;
   /** Same-origin path to open (`/preview/<port>/`). */
   path: string;
-  url: string;
 }
 
 /** The agent's own read of where its work stands — see `Card.declaredState`. */
