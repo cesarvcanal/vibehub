@@ -230,6 +230,10 @@ export interface SdkChatViewProps {
  * The stored messages THIS account may send again: its own, and the ones with no author (recorded
  * before the field existed). One from another account, going out over this connection, would end up under the wrong name. PURE.
  */
+function isWrappedUserText(text: string): boolean {
+  return parseDecisionReply(text) !== null || parseVoiceRequest(text) !== null;
+}
+
 function ownSends(outbox: readonly OutboxMessage[], viewer: string | undefined): OutboxMessage[] {
   return outbox.filter((m) => !m.from || m.from.name === viewer);
 }
@@ -1306,8 +1310,8 @@ export function SdkChatView({
     for (let i = chat.rows.length - 1; i >= 0; i -= 1) {
       const row = chat.rows[i]!;
       // A decision answer is skipped for the same reason its pencil is hidden (see the bubble).
-      if (row.kind === "user" && row.edited !== true && parseDecisionReply(row.text) === null
-        && parseVoiceRequest(row.text) === null && originRole(row.from, viewer) === "self") {
+      if (row.kind === "user" && row.edited !== true && !isWrappedUserText(row.text)
+        && originRole(row.from, viewer) === "self") {
         beginEdit(row.id, row.text);
         return;
       }
@@ -2655,7 +2659,7 @@ const SdkChatRow = React.memo(function SdkChatRow({
         {/* The pencil: hover-revealed on a desktop, simply there on touch (no hover to reveal it).
             A superseded message is not drawn at all (above). Nor does an ANSWER to a decision: its text carries the wrapper, and putting that back in the
             field would show the person plumbing instead of their own words. Answer again instead. */}
-        {!reply && !voiceRequest && row.state !== "undelivered" && onEdit ? (
+        {!isWrappedUserText(row.text) && row.state !== "undelivered" && onEdit ? (
           <button
             type="button"
             data-testid="sdk-edit"
