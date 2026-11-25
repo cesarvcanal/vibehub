@@ -121,6 +121,18 @@ describe("announcePreview", () => {
     expect((await registry.getCard(cardId))?.previews).toBeUndefined();
   });
 
+  it("sem comando nem pasta, recusa a porta de um processo fora da worktree do card", async () => {
+    const { registry, announce, cardId } = await boot();
+    runScript.mockResolvedValue({
+      stdout: `${scanOutput([8765])}1 40 python3\n${CWD_MARKER}\n/proc/40 /tmp/artefato-processos\n`,
+      stderr: "",
+      code: 0,
+    });
+
+    await expect(announce.announcePreview(cardId, 8765)).rejects.toThrow(/served by python3 running in \/tmp\/artefato-processos/);
+    expect((await registry.getCard(cardId))?.previews).toBeUndefined();
+  });
+
   it.each(["/work/app", "/work/app/front"])("aceita o servidor que roda na pasta anunciada ou dentro dela: %s", async (listenerCwd) => {
     const { registry, announce, cardId } = await boot();
     runScript.mockResolvedValue({ stdout: `${scanOutput([5173])}1 40 node\n${CWD_MARKER}\n/proc/40 ${listenerCwd}\n`, stderr: "", code: 0 });

@@ -76,13 +76,6 @@ function isListenerInCwd(listenerCwd: string, announcedCwd: string): boolean {
   return listenerCwd === announcedRoot || listenerCwd.startsWith(`${announcedRoot}/`);
 }
 
-function portServedElsewhereError(listener: ListeningPort, listenerCwd: string, announcedCwd: string): Error {
-  return new Error(
-    `port ${listener.port} is served by ${listener.process ?? "another process"} running in ${listenerCwd}, not in ${announcedCwd} — ` +
-      "another server already holds this port: start yours on a free port and announce that one, or pass the cwd your server really runs in.",
-  );
-}
-
 export interface AnnounceInput {
   label?: string;
   /**
@@ -105,19 +98,21 @@ export async function announcePreview(cardId: string, port: number, input: Annou
   const p = assertPreviewPort(port);
   // Shape errors (a two-line command, a relative cwd) must beat the scan: they are the agent's to fix.
   const command = normalizePreviewCommand(input.command);
-  let cwd = normalizePreviewCwd(input.cwd);
+  const announcedCwd = normalizePreviewCwd(input.cwd);
   const card = await getCard(cardId);
   if (!card) throw new Error("card not found — pass your OWN card id ($VIBEHUB_CARD_ID)");
-  if (command && !cwd) {
-    const project = await getProject(card.projectId);
-    if (project) cwd = cardWorkPaths(project, card).cwd;
-  }
+  const project = await getProject(card.projectId);
+  const serverCwd = announcedCwd ?? (project ? cardWorkPaths(project, card).cwd : undefined);
+  const cwd = command ? serverCwd : announcedCwd;
 
   const listening = await scanListeningPorts();
   const listener = listening.find((l) => l.port === p);
   if (!listener) throw portNotListeningError(p, listening);
-  if (cwd && listener.cwd && !isListenerInCwd(listener.cwd, cwd)) {
-    throw portServedElsewhereError(listener, listener.cwd, cwd);
+  if (serverCwd && listener.cwd && !isListenerInCwd(listener.cwd, serverCwd)) {
+    throw new Error(
+      `port ${p} is served by ${listener.process ?? "another process"} running in ${listener.cwd}, not in ${serverCwd} — ` +
+        "another server already holds this port: start yours on a free port and announce that one, or pass the cwd your server really runs in.",
+    );
   }
 
   // LISTENING is not OPENS. The port answering a TCP connect said nothing about the page, and that
