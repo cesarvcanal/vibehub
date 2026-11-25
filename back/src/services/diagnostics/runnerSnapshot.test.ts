@@ -1,48 +1,21 @@
 import { describe, it, expect } from "vitest";
 import { parseRunnerSnapshot, runnerSnapshotScript } from "./runnerSnapshot.js";
+import { runnerCapture } from "../../testkit/runnerCapture.js";
 
 const CARD_A = "f9e7a907-d9e2-4b6b-8be6-d78c7fee0855";
 
-function procStatLine(pid: number, comm: string, utime: number, stime: number, startTicks: number, rssPages: number): string {
-  return `@pstat ${pid} (${comm}) R 1 1 1 0 -1 0 0 0 0 0 ${utime} ${stime} 0 0 20 0 1 0 ${startTicks} 0 ${rssPages}`;
-}
-
 function captureFrom({ secondSample = true } = {}): string {
-  const header = ["@clk 100", "@pagesize 4096", "@ncpu 8", "@cpumax 800000 100000"];
-  const first = [
-    "@sample 1",
-    "@uptime 1000.00",
-    "@cpu cpu  1000 0 1000 1000 1000 0 1000 1000 0 0",
-    "@throttled 0",
-    procStatLine(101, "node (vitest 1)", 1000, 0, 90_000, 262_144),
-    procStatLine(103, "sh", 5, 5, 99_000, 100),
-  ];
-  const second = [
-    "@sample 2",
-    "@uptime 1002.00",
-    "@cpu cpu  1300 0 1080 1120 1040 0 1020 1440 0 0",
-    "@throttled 400000",
-    procStatLine(101, "node (vitest 1)", 1300, 100, 90_000, 262_144),
-    procStatLine(102, "claude", 50, 50, 100_100, 25_600),
-  ];
-  const tail = [
-    "@loadavg 10.26 10.27 9.02 9/2464 1554161",
-    "@pressure cpu some avg10=16.05 avg60=26.04 avg300=24.17 total=191206616899",
-    "@pressure cpu full avg10=0.00 avg60=0.00 avg300=0.00 total=0",
-    "@pressure memory some avg10=0.00 avg60=0.26 avg300=0.22 total=2572292569",
-    "@pressure memory full avg10=0.00 avg60=0.23 avg300=0.20 total=2069102658",
-    "@pressure io some avg10=9.50 avg60=11.43 avg300=10.25 total=32606673497",
-    "@pressure io full avg10=6.38 avg60=5.94 avg300=5.50 total=18776921219",
-    "@mem MemTotal:       33554432 kB",
-    "@mem MemAvailable:   16777216 kB",
-    "@mem SwapTotal:       8388608 kB",
-    "@mem SwapFree:        6291456 kB",
-    "@disk 300 400",
-    `@card 101 ${CARD_A}`,
-    "@args 101 node vitest run src/x.test.ts GH_TOKEN=ghp_abc123 --api-key=sk-ant-xyz",
-    "@args 102 claude --model opus",
-  ];
-  return [...header, ...first, ...(secondSample ? second : []), ...tail].join("\n");
+  return runnerCapture({
+    secondSample,
+    processes: [
+      {
+        pid: 101, comm: "node (vitest 1)", ticksBefore: 1000, ticksAfter: 1400, startTicks: 90_000, rssPages: 262_144, cardId: CARD_A,
+        args: "node vitest run src/x.test.ts GH_TOKEN=ghp_abc123 --api-key=sk-ant-xyz",
+      },
+      { pid: 102, comm: "claude", ticksAfter: 100, startTicks: 100_100, rssPages: 25_600, args: "claude --model opus" },
+      { pid: 103, comm: "sh", ticksBefore: 10, startTicks: 99_000, rssPages: 100 },
+    ],
+  });
 }
 
 describe("parseRunnerSnapshot", () => {
