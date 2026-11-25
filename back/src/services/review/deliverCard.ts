@@ -6,7 +6,7 @@ import { canMergeReview, cardsToConclude, isReviewClosed, type Review } from "./
 import { deliverOwnAnalysis } from "./analysisMerge.js";
 import { recordAnalysisDelivery } from "./analysisTimeline.js";
 import { mergeReviewedPr, type ReviewMergeOutcome } from "./merge.js";
-import { concludeMergedCard, MERGE_QUEUED_OUTPUT, saveOrderFromDelivery } from "./mergeOrder.js";
+import { concludeMergedCard, buildMergeQueuedOutput, saveOrderFromDelivery } from "./mergeOrder.js";
 import { recordReviewOrders } from "./orchestrator.js";
 import { activeReviewFor, getReview, reviewByReviewerCard } from "./store.js";
 
@@ -40,7 +40,7 @@ export async function deliverCard(
   const result = card?.pushBranch === undefined ? deliveredResult : await recordDeliveryOnAnalysisTimeline(cardId, deliveredResult);
   const ownOrder = opts.authorized === true && opts.from === cardId;
   if (card && ownOrder) await saveOrderFromDelivery(card, result, opts.by);
-  if (result.reason === "merge_queued") return withOutput(result, MERGE_QUEUED_OUTPUT);
+  if (result.reason === "merge_queued") return withOutput(result, buildMergeQueuedOutput(result));
   if (result.merged && ownOrder) return withOutput(result, await concludeMergedCard(cardId));
   return opts.concludeWhenMerged && !concludeRecorded ? withOutput(result, CONCLUDE_NOT_RECORDED) : result;
 }

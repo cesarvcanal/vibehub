@@ -493,7 +493,37 @@ describe("deliverCard — ordem de merge com o CI ainda rodando fica guardada no
       sha: QUEUED_SHA, target: "main", prUrl: PR, orderedBy: "mussa", connectionId: connection.id, orderedAt: expect.any(Number),
     });
     expect(out).toMatchObject({ merged: false, reason: "merge_queued" });
-    expect(out.output).toContain("Não chame de novo");
+  });
+
+  it("com a ordem guardada, a resposta manda a IA seguir no turno acompanhando o PR até o merge, sem chamar de novo", async () => {
+    const { deliverCard, card } = await cardWithConnection();
+    deliverAnswer = queuedAnswer;
+    const out = await deliverCard(card.id, { branch: "main", authorized: true, by: "mussa", from: card.id });
+    expect(out.output).toContain("Não encerre o turno");
+    expect(out.output).toContain(`gh pr checks ${PR} --watch`);
+    expect(out.output).toContain(`gh pr view ${PR} --json state`);
+    expect(out.output).toContain(QUEUED_SHA.slice(0, 7));
+    expect(out.output).toContain("Não chame o vibehub_deliver de novo enquanto a ordem está guardada");
+    expect(out.output).not.toContain("nem fique esperando");
+  });
+
+  it("a resposta da ordem guardada dá saída à IA pelo que o GitHub mostra, sem disputar o merge com a fila do servidor", async () => {
+    const { deliverCard, card } = await cardWithConnection();
+    deliverAnswer = queuedAnswer;
+    const out = await deliverCard(card.id, { branch: "main", authorized: true, by: "mussa", from: card.id });
+    expect(out.output).toContain(`gh pr view ${PR} --json state,mergeable`);
+    expect(out.output).toContain("CI vermelho ou PR CONFLICTING: a ordem cai");
+    expect(out.output).toContain("CI verde e PR ainda OPEN 3 min depois, ou CI ainda rodando depois de 60 min");
+    expect(out.output).toContain("a cada 1 min");
+    expect(out.output).toContain("até 6 h");
+    expect(out.output).not.toContain("com a mesma ordem");
+  });
+
+  it("o acompanhamento do CI roda em comandos de até 5 min, abaixo do limite em que um card mudo deixa de contar como trabalhando", async () => {
+    const { deliverCard, card } = await cardWithConnection();
+    deliverAnswer = queuedAnswer;
+    const out = await deliverCard(card.id, { branch: "main", authorized: true, by: "mussa", from: card.id });
+    expect(out.output).toContain("timeout de 300000 ms");
   });
 
   it("ordem vinda de outro card não pede fila nem grava nada", async () => {
