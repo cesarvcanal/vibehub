@@ -12,7 +12,7 @@ function runnerProcess(pid: number, cpuPct: number, cardId?: string, rssMb = 100
   return { pid, comm: `proc-${pid}`, ...(cardId ? { cardId } : {}), cpuPct, rssMb, ageSeconds: 60, args: `proc-${pid} --run` };
 }
 
-function snapshotWith(change: { cpu?: Partial<RunnerSnapshot["cpu"]>; pressure?: Partial<RunnerSnapshot["pressure"]>;
+function snapshotWith(change: { cpu?: Partial<RunnerSnapshot["cpu"]>; pressure?: Partial<NonNullable<RunnerSnapshot["pressure"]>>;
   memory?: Partial<RunnerSnapshot["memory"]>; processes?: RunnerProcess[] } = {}): RunnerSnapshot {
   return {
     intervalSeconds: 2,
@@ -59,6 +59,32 @@ describe("diagnoseSlowness — o veredito", () => {
     expect(ownerView(snapshotWith({ processes: [runnerProcess(1, 40, WORKING.id)] })).findings.map((finding) => finding.kind))
       .toEqual(["no_runner_bottleneck"]);
   });
+
+  it("card parado que gasta um núcleo ou mais é apontado como parado gastando CPU, não só como pesado", () => {
+    const kinds = ownerView(snapshotWith({ processes: [runnerProcess(1, 300, WAITING.id)] })).findings.map((finding) => finding.kind);
+    expect(kinds).toEqual(["idle_card_busy"]);
+  });
+
+  it("card pausado conta como parado mesmo com a bolinha ainda em trabalhando", () => {
+    const paused: DiagnosedCard = { id: "card-paused", title: "Pausado", column: "working", status: "working", pausedAt: 1 };
+    const report = diagnoseSlowness(snapshotWith({ processes: [runnerProcess(1, 40, paused.id)] }), [paused], new Set([paused.id]), true);
+    expect(report.findings.map((finding) => finding.kind)).toEqual(["idle_card_busy"]);
+  });
+
+  it("processos sem card gastando um núcleo ou mais aparecem para o dono", () => {
+    const kinds = ownerView(snapshotWith({ processes: [runnerProcess(1, 400)] })).findings.map((finding) => finding.kind);
+    expect(kinds).toEqual(["runner_heavy"]);
+  });
+
+  it("runner sem medição de pressão nem de throttle diz o que não foi medido em vez de afirmar que está tudo bem", () => {
+    const { pressure: _pressure, ...withoutPressure } = snapshotWith();
+    const { throttledPct: _throttledPct, ...cpuWithoutThrottle } = withoutPressure.cpu;
+    const report = ownerView({ ...withoutPressure, cpu: cpuWithoutThrottle });
+    expect(report.findings).toEqual([
+      { kind: "no_runner_bottleneck", summary: expect.stringMatching(/model/) },
+      { kind: "not_measured", summary: expect.stringMatching(/pressure.*throttling/) },
+    ]);
+  });
 });
 
 describe("diagnoseSlowness — o consumo por card", () => {
@@ -76,8 +102,8 @@ describe("diagnoseSlowness — o consumo por card", () => {
     const report = ownerView(snapshotWith({
       processes: [runnerProcess(1, 5, DONE.id), runnerProcess(2, 5, "card-apagado"), runnerProcess(3, 5)],
     }));
-    expect(report.orphans.processes.map((process) => process.pid)).toEqual([1, 2]);
-    expect(report.runner?.processes.map((process) => process.pid)).toEqual([3]);
+    expect(report.orphans.topProcesses.map((process) => process.pid)).toEqual([1, 2]);
+    expect(report.runner?.topProcesses.map((process) => process.pid)).toEqual([3]);
     expect(report.cards).toEqual([]);
   });
 
@@ -89,7 +115,7 @@ describe("diagnoseSlowness — o consumo por card", () => {
       ],
     }));
     expect(report.cards.map((card) => card.id)).toEqual([WORKING.id]);
-    expect(report.orphans.processes.map((process) => process.pid)).toEqual([5]);
+    expect(report.orphans.topProcesses.map((process) => process.pid)).toEqual([5]);
     expect(report.runner).toBeUndefined();
     expect(report.others).toEqual({ cpuPct: 80, rssMb: 300, processCount: 3 });
     expect(JSON.stringify(report)).not.toContain("Segredo do dono");

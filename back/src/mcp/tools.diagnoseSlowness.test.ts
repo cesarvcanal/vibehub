@@ -43,10 +43,10 @@ describe("vibehub_diagnose_slowness", () => {
     await env.registry.stampCardActor(env.asking.id, env.owner.id);
     const answer = await env.call("vibehub_diagnose_slowness", { from: env.asking.id });
     expect(answer.findings.map((finding: { kind: string }) => finding.kind)).toEqual(
-      expect.arrayContaining(["server_steal", "cpu_limit", "heavy_card", "orphan_processes"]),
+      expect.arrayContaining(["server_steal", "cpu_limit", "idle_card_busy", "orphan_processes"]),
     );
     expect(answer.cards).toEqual([expect.objectContaining({ id: env.heavy.id, title: "Testes pesados", cpuPct: 150 })]);
-    expect(answer.orphans.processes).toEqual([expect.objectContaining({ pid: 202, comm: "chrome" })]);
+    expect(answer.orphans.topProcesses).toEqual([expect.objectContaining({ pid: 202, comm: "chrome" })]);
     expect(answer.machine.cpu.stealPct).toBe(44);
     expect(env.scripts).toHaveLength(1);
   });

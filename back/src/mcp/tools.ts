@@ -194,7 +194,7 @@ export const analysisStepInput = analysisStepFields.transform((raw, ctx): { card
 async function personBehind(fromCardId: string): Promise<PublicUser> {
   const fromCard = await getCard(fromCardId);
   if (!fromCard) throw new Error(`card not found: ${fromCardId}`);
-  if (!fromCard.actorUserId) throw new Error("nobody gave this card an order yet, so there is no one to create the card for");
+  if (!fromCard.actorUserId) throw new Error("nobody gave this card an order yet, so it acts for no one");
   const person = await findUser(fromCard.actorUserId);
   if (!person) throw new Error("the person who gave this card its order is no longer a user of this vibehub");
   return person;
@@ -924,14 +924,18 @@ export function registerMaestroTools(server: McpServer, actor: string): void {
         "DIAGNOSE A SLOW COMMAND: call it when the user says an order is taking too long, or asks why vibehub is " +
         "slow. ONE reading of about 2 s inside the runner (nothing keeps running afterwards) returns: `machine` " +
         "(CPU split into user/system/iowait/idle and `stealPct` — the share the hosting VPS's hypervisor took away " +
-        "—, the container's CPU limit throttling, load, pressure, memory, disk), `cards` (CPU and RAM of each card " +
-        "you can see, 100 = one core, with its heaviest processes and their age), `orphans` (processes of " +
-        "concluded or deleted cards still alive), `runner` (processes of no card), `others` (cards you cannot " +
-        "see, summed) and `findings`, worst first. Read the findings to the user plainly: `server_steal` and " +
-        "`cpu_limit` are the server — nothing to fix in vibehub; `heavy_card` / `idle_card_busy` name the card " +
-        "and the processes (tests running, a dev server or watcher left behind); `orphan_processes` are " +
-        "leftovers the user may want stopped; `no_runner_bottleneck` means the time went to the model or to the " +
-        "turn's own work. It only reads: NEVER kill anything without the user's OK. Call it once per question, " +
+        "—, the container's CPU limit throttling, load, pressure, memory, disk; a field the runner does not " +
+        "expose is absent), `cards` (CPU and RAM of each card you can see, 100 = one core, `turnRunning`, and " +
+        "`topProcesses`, its 5 heaviest with their age), `orphans` (processes of concluded or deleted cards " +
+        "still alive: totals plus the 5 heaviest), `runner` (owner only: processes of no card), `others` " +
+        "(totals of everything you may not see: other people's cards, deleted cards, the runner itself) and " +
+        "`findings`, the server first, then the cards. Read the findings to the user plainly: `server_steal` " +
+        "and `cpu_limit` are the server — nothing to fix in vibehub; `heavy_card` names a card working a turn " +
+        "and its processes (tests running); `idle_card_busy` names a card with NO turn running that still " +
+        "burns CPU (a dev server, watcher or test left behind — the likely bug); `orphan_processes` and " +
+        "`runner_heavy` are leftovers the user may want stopped; `no_runner_bottleneck` means the time went to " +
+        "the model or to the turn's own work; `not_measured` says what this runner could not check. It only " +
+        "reads: NEVER kill anything without the user's OK. Call it once per question, " +
         "not in a loop. `from` = YOUR OWN $VIBEHUB_CARD_ID.",
       inputSchema: {
         from: z.string().describe("YOUR OWN card id — the $VIBEHUB_CARD_ID of this terminal"),
