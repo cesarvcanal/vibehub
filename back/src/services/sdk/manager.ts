@@ -365,7 +365,7 @@ const STDERR_TAIL_MAX = 2000;
 const sessions = new Map<string, DriverSession>();
 const voiceCallSocketsByCard = new Map<string, Set<WebSocket>>();
 const VOICE_CALL_MARK_RETRIES = 3;
-const VOICE_CALL_MARK_RETRY_MS = 2_000;
+export const VOICE_CALL_MARK_RETRY_MS = 2_000;
 
 function saveVoiceCallMark(cardId: string, label: string, retriesLeft: number): void {
   const inCall = (voiceCallSocketsByCard.get(cardId)?.size ?? 0) > 0;

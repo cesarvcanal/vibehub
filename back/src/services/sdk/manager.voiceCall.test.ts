@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakeDriverChild } from "../../testkit/fakeDriverChild.js";
 import { FakeSocket } from "../../testkit/fakeSocket.js";
+import { VOICE_CALL_MARK_RETRY_MS } from "./manager.js";
 
 vi.setConfig({ testTimeout: 30_000 });
 
@@ -40,6 +41,7 @@ async function boot() {
   env.config.dataDir = dir;
   const manager = await import("./manager.js");
   const registry = await import("../board/registry.js");
+  const { logger } = await import("../../utils/logger.js");
   manager.setDriverSpawnerForTesting(() => fakeDriverChild() as never);
   const project = await registry.createProject({ name: "Shop" });
   const card = await registry.createCard({ projectId: project.id, title: "Checkout" });
@@ -57,7 +59,7 @@ async function boot() {
   };
   const callStamp = async (): Promise<number | null | undefined> => (await registry.getCard(card.id))?.voiceCallAt;
   const settleBoardWrites = () => registry.setCardPendingQuestion(card.id, null);
-  return { manager, registry, card, startDriver, openTab, callStamp, settleBoardWrites };
+  return { manager, registry, logger, card, startDriver, openTab, callStamp, settleBoardWrites };
 }
 
 describe("chamada de voz no chat do card — o board sabe que tem gente falando com a IA", () => {
@@ -102,11 +104,39 @@ describe("chamada de voz no chat do card — o board sabe que tem gente falando 
     const albert = world.openTab(ALBERT);
     albert.emit("message", voiceCall(true));
     await vi.waitFor(async () => expect(typeof (await world.callStamp())).toBe("number"));
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    onTestFinished(() => void vi.useRealTimers());
     voiceCallWriteFailures.remaining = 1;
     albert.emit("message", voiceCall(false));
     await world.settleBoardWrites();
     expect(typeof (await world.callStamp())).toBe("number");
-    await vi.waitFor(async () => expect((await world.callStamp()) ?? null).toBeNull(), { timeout: 10_000 });
+    await vi.advanceTimersByTimeAsync(VOICE_CALL_MARK_RETRY_MS);
+    await world.settleBoardWrites();
+    expect((await world.callStamp()) ?? null).toBeNull();
+  });
+
+  it("esgotadas as 3 novas tentativas, a falha vai ao log de erro e a marca fica até o boot seguinte, que a limpa", async () => {
+    const world = await boot();
+    const albert = world.openTab(ALBERT);
+    albert.emit("message", voiceCall(true));
+    await vi.waitFor(async () => expect(typeof (await world.callStamp())).toBe("number"));
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    onTestFinished(() => void vi.useRealTimers());
+    const loggedErrors = vi.spyOn(world.logger, "error");
+    voiceCallWriteFailures.remaining = 4;
+    albert.emit("message", voiceCall(false));
+    const runNextRetry = async () => {
+      await world.settleBoardWrites();
+      await vi.advanceTimersByTimeAsync(VOICE_CALL_MARK_RETRY_MS);
+    };
+    await runNextRetry();
+    await runNextRetry();
+    await runNextRetry();
+    await world.settleBoardWrites();
+    expect(loggedErrors).toHaveBeenCalledWith(expect.objectContaining({ detail: "disk full" }), "could not save the card's voice call mark");
+    expect(typeof (await world.callStamp())).toBe("number");
+    await world.registry.clearStaleVoiceCalls();
+    expect((await world.callStamp()) ?? null).toBeNull();
   });
 
   it("o aviso de chamada nunca vira mensagem para a IA", async () => {

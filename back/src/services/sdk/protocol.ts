@@ -780,7 +780,7 @@ export function parseVoiceCallFrame(raw: string): boolean | null {
   return parseActiveFlagFrame(raw, "voice_call");
 }
 
-export const QUEUED_NOTE_MAX_TEXT = 4_000;
+const QUEUED_NOTE_MAX_TEXT = 4_000;
 
 export function parseQueuedNoteFrame(raw: string): string | null {
   const trimmed = raw.trim();
