@@ -10,6 +10,7 @@ import {
   delegationReply,
   agentAnswerForVoice,
   delegationRequest,
+  parseVoiceRequest,
 } from "./voiceDelegation";
 
 const turn = (role: VoiceTurn["role"], text: string, n: number): VoiceTurn => ({ vid: `vc-${role}${n}`, role, text, at: n, final: true });
@@ -38,6 +39,26 @@ describe("delegationRequest", () => {
     expect(request).toContain("frase 59");
     expect(request).not.toContain("frase 0 ");
     expect(request.length).toBeLessThan(DELEGATION_TRANSCRIPT_MAX_CHARS + 600);
+  });
+});
+
+describe("parseVoiceRequest", () => {
+  it("separa do pedido que o agente recebeu o pedido da pessoa e o contexto em volta", () => {
+    const asked = "Faça uma revisão completa.\n\nNão altere código.";
+    const request = delegationRequest(asked, [turn("user", "faz um review", 1), turn("assistant", "Tá, vou pedir", 2)]);
+    const parsed = parseVoiceRequest(request);
+    expect(parsed?.asked).toBe(asked);
+    expect(parsed?.context).toContain("Pessoa: faz um review");
+    expect(parsed?.context).toContain("Urgente");
+    expect(parsed?.context).not.toContain(asked);
+  });
+
+  it.each([
+    ["mensagem comum", "roda os testes"],
+    ["só o marcador, sem pedido", "[pedido por voz]\n   "],
+    ["marcador no meio do texto", "olha isso: [pedido por voz]\nroda"],
+  ])("%s não é pedido por voz", (_case, text) => {
+    expect(parseVoiceRequest(text)).toBeNull();
   });
 });
 

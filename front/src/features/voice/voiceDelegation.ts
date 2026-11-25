@@ -17,6 +17,9 @@ export const DELEGATION_NOT_SENT =
 export const DELEGATION_SILENT =
   "O agente do card não deu resposta em texto a este pedido — o trabalho dele pode ter sido interrompido (uma atualização do painel, por exemplo). Diga isso à pessoa em poucas palavras e pergunte se ela quer que você peça de novo.";
 
+const VOICE_REQUEST_MARK = "[pedido por voz]\n";
+const TRANSCRIPT_HEADER = "Transcrição recente da chamada de voz (pode ter erros de transcrição):";
+
 export function delegationRequest(asked: string, turns: VoiceTurn[]): string {
   const lines: string[] = [];
   let used = 0;
@@ -30,12 +33,22 @@ export function delegationRequest(asked: string, turns: VoiceTurn[]): string {
     used += line.length + 1;
   }
   return [
-    `[pedido por voz]\n${asked.trim()}`,
-    `Transcrição recente da chamada de voz (pode ter erros de transcrição):\n${lines.reverse().join("\n")}`,
+    `${VOICE_REQUEST_MARK}${asked.trim()}`,
+    `${TRANSCRIPT_HEADER}\n${lines.reverse().join("\n")}`,
     "Urgente: a pessoa está esperando na chamada. Se estiver no meio de outra tarefa, pare o que está fazendo, atenda este pedido " +
       "primeiro (responda ou execute, com as suas ferramentas) e encerre o turno com a resposta, curta e direta: a voz vai falá-la para a pessoa. " +
       "Se parou outra tarefa para isso, diga o que ficou interrompido, para a pessoa decidir se você retoma.",
   ].join("\n\n");
+}
+
+export function parseVoiceRequest(text: string): { asked: string; context: string } | null {
+  if (!text.startsWith(VOICE_REQUEST_MARK)) return null;
+  const body = text.slice(VOICE_REQUEST_MARK.length);
+  const contextStart = body.indexOf(`\n\n${TRANSCRIPT_HEADER}`);
+  const asked = (contextStart < 0 ? body : body.slice(0, contextStart)).trim();
+  if (asked === "") return null;
+  const context = contextStart < 0 ? "" : body.slice(contextStart).trim();
+  return { asked, context };
 }
 
 export function askedOfAgent(argumentsJson: string): string | null {
