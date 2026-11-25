@@ -23,14 +23,18 @@ describe("what the voice is told about the chat", () => {
     expect(typedContext("/work/.uploads/c1/1-a.png", "mussa")).toContain("Chegou uma mensagem de mussa no chat");
   });
 
-  it("das mensagens do chat, só as de outra pessoa contam como recado de terceiro, cada uma com chave estável entre replays", () => {
+  it("das mensagens do chat, contam as de outra pessoa e as da mesma conta vindas de outro dispositivo, cada uma com chave estável entre replays", () => {
     const rows: SdkRow[] = [
-      { kind: "user", id: "u1", text: "minha", state: "sent", from: { kind: "owner", name: "albert" }, at: 1 },
+      { kind: "user", id: "u1", text: "desta aba", state: "sent", from: { kind: "owner", name: "albert" }, at: 1 },
       { kind: "user", id: "u2", text: "do mussa", state: "sent", from: { kind: "user", name: "mussa" }, at: 2 },
       { kind: "user", id: "u3", text: "de outro card", state: "sent", from: { kind: "agent", name: "Card X" }, at: 3 },
       { kind: "user", id: "u4", text: "sem autor", state: "sent", at: 4 },
+      { kind: "user", id: "u5", text: "do celular", state: "sent", from: { kind: "owner", name: "albert" }, at: 5 },
     ];
-    expect(peerMessages(rows, "albert")).toEqual([{ key: "2\u0000do mussa", text: "do mussa", author: "mussa" }]);
+    expect(peerMessages(rows, "albert", new Set(["desta aba"]))).toEqual([
+      { key: "2\u0000do mussa", text: "do mussa", author: "mussa" },
+      { key: "5\u0000do celular", text: "do celular", author: "albert" },
+    ]);
   });
 
   it("the agent's answer is flattened onto one line", () => {

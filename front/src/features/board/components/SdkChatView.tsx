@@ -665,6 +665,7 @@ export function SdkChatView({
    * leaves, and only a `user_ack` takes them off it. This is the whole difference between "the
    * socket accepted" (which a half-open connection also does, into the void) and "the server has it".
    */
+  const sentFromThisTab = React.useRef(new Set<string>());
   const sendTurn = React.useCallback(
     (frame: { type: "user" | "edit_user"; text: string; original?: string; first?: boolean; now?: boolean }, shown: string, cid: string): void => {
       const entry: OutboxMessage = {
@@ -680,6 +681,7 @@ export function SdkChatView({
         ...sendMark(deliveredUserTexts(rowsRef.current, viewer), shown),
       };
       setOutbox((prev) => addToOutbox(prev, entry));
+      sentFromThisTab.current.add(shown);
       try {
         sendFrame({ ...frame, cid });
       } catch (err) {
@@ -1355,7 +1357,13 @@ export function SdkChatView({
     },
     [announceContext],
   );
-  usePeerMessagesForVoice({ live: callLive, rows: state.rows, viewer, announce: announcePeerMessage });
+  usePeerMessagesForVoice({
+    live: callLive,
+    rows: state.rows,
+    viewer,
+    sentFromThisTab: sentFromThisTab.current,
+    announce: announcePeerMessage,
+  });
   useVoiceCallSignal({ connected, callLive, sendFrame });
   useVoiceDelegation({
     call,

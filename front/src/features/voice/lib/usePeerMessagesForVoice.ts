@@ -6,17 +6,18 @@ export interface UsePeerMessagesForVoiceOptions {
   live: boolean;
   rows: SdkRow[];
   viewer: string | undefined;
+  sentFromThisTab: ReadonlySet<string>;
   announce: (note: string) => void;
 }
 
-export function usePeerMessagesForVoice({ live, rows, viewer, announce }: UsePeerMessagesForVoiceOptions): void {
+export function usePeerMessagesForVoice({ live, rows, viewer, sentFromThisTab, announce }: UsePeerMessagesForVoiceOptions): void {
   const heard = React.useRef<Set<string> | null>(null);
   React.useEffect(() => {
     if (!live) {
       heard.current = null;
       return;
     }
-    const messages = peerMessages(rows, viewer);
+    const messages = peerMessages(rows, viewer, sentFromThisTab);
     if (heard.current === null) {
       heard.current = new Set(messages.map((message) => message.key));
       return;
@@ -28,5 +29,5 @@ export function usePeerMessagesForVoice({ live, rows, viewer, announce }: UsePee
       const note = typedContext(message.text, message.author);
       if (note) announce(note);
     }
-  }, [live, rows, viewer, announce]);
+  }, [live, rows, viewer, sentFromThisTab, announce]);
 }

@@ -227,6 +227,27 @@ describe("a voice call inside the card's chat", () => {
     expect(peerNotes()).toHaveLength(1);
   });
 
+  it("a mensagem da mesma pessoa vinda de outro dispositivo chega à voz; a que esta aba enviou não se repete depois de um reconnect", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    const commentary = () =>
+      channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append" && sentEvent.content !== SERVER_BACK_CONTEXT);
+    await userEvent.type(screen.getByRole("textbox"), "daqui da aba{Enter}");
+    await waitFor(() => expect(commentary()).toHaveLength(1));
+    ws.deliver({ type: "user", text: "do notebook", at: 3, from: { kind: "owner", name: "operator" } });
+    await waitFor(() => expect(commentary()).toHaveLength(2));
+    expect(commentary()[1]).toEqual(expect.objectContaining({ content: expect.stringMatching(/operator.*«do notebook»/) }));
+
+    ws.drop();
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: 5_000 });
+    const again = FakeSocket.instances[1]!;
+    again.accept();
+    again.deliver({ type: "user", text: "daqui da aba", at: 2, from: { kind: "owner", name: "operator" } });
+    again.deliver({ type: "user", text: "do notebook", at: 3, from: { kind: "owner", name: "operator" } });
+    again.deliver({ type: "ready" });
+    expect(commentary()).toHaveLength(2);
+  });
+
   it("o chat diz ao servidor quando a chamada entra no ar, repete depois de um reconnect e avisa quando ela termina", async () => {
     const { ws } = await openChat();
     const callFrames = (socket: FakeSocket) =>
