@@ -22,7 +22,7 @@ import { readCardChanges, readCardFileDiff } from "../maestro/changes.js";
 import { mergeTaskEvent, taskSnapshot, toolResultEvent, type AgentTaskEvent, type RawTaskEvent, type RawToolResultEvent } from "./toolResult.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
-  NOTE_CONVERSATION_CLEARED, buildLateAnswerText, buildOrphanAnswerText, mergePeerAnswers, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseVoiceCallFrame, parseQuestionDraftFrame, isEmptyQuestionDraft, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
+  NOTE_CONVERSATION_CLEARED, buildLateAnswerText, buildOrphanAnswerText, mergePeerAnswers, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseVoiceCallFrame, parseQueuedNoteFrame, parseQuestionDraftFrame, isEmptyQuestionDraft, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
   type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type EffortAckEvent, type QuestionAnswerControl, type QuestionDraft, type StopHow, type UserQuestionItem,
   type WorkflowFeedEvent, type WorkflowFeedRequest, type DetailRequest, type ResultEvent,
 } from "./protocol.js";
@@ -2408,6 +2408,11 @@ export function attachSocket(
     const voiceCall = parseVoiceCallFrame(text);
     if (voiceCall !== null) {
       noteVoiceCall(voiceCall);
+      return;
+    }
+    const queuedNote = parseQueuedNoteFrame(text);
+    if (queuedNote !== null) {
+      if (origin && queuedNote !== "") broadcast(session, { type: "peer_queued", name: origin.name, text: queuedNote }, socket);
       return;
     }
     const draft = parseQuestionDraftFrame(text);

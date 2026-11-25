@@ -780,6 +780,20 @@ export function parseVoiceCallFrame(raw: string): boolean | null {
   return parseActiveFlagFrame(raw, "voice_call");
 }
 
+export const QUEUED_NOTE_MAX_TEXT = 4_000;
+
+export function parseQueuedNoteFrame(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as { type?: unknown; text?: unknown };
+    if (parsed.type !== "queued_note") return null;
+    return typeof parsed.text === "string" ? parsed.text.slice(0, QUEUED_NOTE_MAX_TEXT) : "";
+  } catch {
+    return null;
+  }
+}
+
 function parseActiveFlagFrame(raw: string, frameType: "typing" | "voice_call"): boolean | null {
   const trimmed = raw.trim();
   if (!trimmed.startsWith("{")) return null;

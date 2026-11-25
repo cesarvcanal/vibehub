@@ -118,6 +118,19 @@ describe("chamada de voz no chat do card — o board sabe que tem gente falando 
     expect((await readHistory(world.card.id)).filter((event) => event.type === "user")).toEqual([]);
   });
 
+  it("a mensagem que espera na fila de uma aba chega às outras abas do card com o nome de quem escreveu, sem virar histórico nem mensagem para a IA", async () => {
+    const world = await boot();
+    const albert = world.openTab(ALBERT);
+    const mussa = world.openTab(MUSSA);
+    mussa.emit("message", Buffer.from(JSON.stringify({ type: "queued_note", text: "olha a requisição" })));
+    const peerQueued = (socket: FakeSocket) =>
+      socket.sent.map((raw) => JSON.parse(raw) as { type: string }).filter((frame) => frame.type === "peer_queued");
+    expect(peerQueued(albert)).toEqual([{ type: "peer_queued", name: "mussa", text: "olha a requisição" }]);
+    expect(peerQueued(mussa)).toEqual([]);
+    const { readHistory } = await import("./history.js");
+    expect((await readHistory(world.card.id)).filter((event) => event.type === "user")).toEqual([]);
+  });
+
   it("no boot do servidor, a marca que sobrou de uma chamada de antes do restart é limpa", async () => {
     const world = await boot();
     await world.registry.setCardVoiceCall(world.card.id, 1_000);
