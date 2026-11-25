@@ -1917,3 +1917,25 @@ describe("CardTerminalView — ?review=1 opens the panel", () => {
     expect(screen.queryByTestId("review-panel")).toBeNull();
   });
 });
+
+describe("CardTerminalView — merge guardado esperando o CI", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    serve();
+  });
+
+  it("com a ordem de merge guardada, o cabeçalho diz que o merge está na fila e, no tooltip, para qual branch e até quando", async () => {
+    renderWithCache([card({
+      openedAt: 10,
+      mergeOrder: { sha: "b3ca4b2", target: "main", prUrl: "https://github.com/o/r/pull/411", orderedAt: 1 },
+    })]);
+    const queued = await screen.findByText("merge queued");
+    expect(queued.closest("[title]")).toHaveAttribute("title", "merge into main queued: goes out once the PR's CI is green");
+  });
+
+  it("sem ordem de merge guardada, o cabeçalho não fala em fila", async () => {
+    renderWithCache([card({ openedAt: 10 })]);
+    await screen.findByTestId("xterm");
+    expect(screen.queryByText("merge queued")).not.toBeInTheDocument();
+  });
+});

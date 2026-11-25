@@ -1011,6 +1011,7 @@ function SidebarCard({
   // The PR line: the review's state under the card. A cancelled review is NO review (the server
   // never sends one on a card, and a stale cache must not bring the line back).
   const review = card.review && card.review.phase !== "cancelled" ? card.review : null;
+  const mergeQueued = card.analysisMerging ? undefined : card.mergeOrder;
   // A ready PR whose author's AI is working reads "IA trabalhando" — the server's own rule (`isBusy`), sent
   // on the card's summary: what it pushes goes back to the reviewer.
   const pill = reviewPill(review ?? undefined, { authorWorking: review?.authorWorking === true, gate: review?.mergeGateState });
@@ -1047,7 +1048,7 @@ function SidebarCard({
             "flex w-full items-center gap-2 py-1.5 pl-9 pr-3 text-left text-sm transition-colors [-webkit-touch-callout:none]",
             active ? "text-foreground" : "text-muted-foreground hover:text-foreground",
             // Close to the line below it, so the two read as one thing.
-            (review || card.analysisMerging) && "pb-0.5",
+            (review || card.analysisMerging || mergeQueued) && "pb-0.5",
           )}
         >
           {/* Always the same 12px slot, so titles stay aligned whether or not there is a state. */}
@@ -1060,6 +1061,12 @@ function SidebarCard({
           <p className={cn("flex items-center gap-2 pb-1.5 pl-9 pr-3 text-[11px]", BADGE_TEXT.ok)}>
             <GitMerge aria-hidden className="h-3 w-3 shrink-0 animate-pulse" />
             <span className="truncate">{t("analysis.sidebar.merging")}</span>
+          </p>
+        ) : null}
+        {mergeQueued ? (
+          <p className={cn("flex items-start gap-2 pb-1.5 pl-9 pr-3 text-[11px]", BADGE_TEXT.info)}>
+            <GitMerge aria-hidden className="mt-px h-3 w-3 shrink-0" />
+            <span>{t("card.mergeQueued", { target: mergeQueued.target })}</span>
           </p>
         ) : null}
         {review ? (

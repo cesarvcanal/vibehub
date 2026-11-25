@@ -1567,6 +1567,8 @@ export const en: Record<string, string> = {
   "analysis.merge.refused.other": "The last merge did not go through. vibehub's output:",
   "analysis.merge.unconfirmed": "Could not confirm the merge: the connection dropped and the server has no merge running and no refusal recorded. Check the PR on GitHub before trying again.",
   "analysis.sidebar.merging": "merging the PR…",
+  "card.mergeQueued": "merge into {target} queued: goes out once the PR's CI is green",
+  "card.mergeQueuedShort": "merge queued",
   "analysis.merge.done": "PR #{n} merged; the card moved to Done.",
   "analysis.merge.merged": "PR #{n} merged",
   "analysis.tab.report": "Report",
