@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { Readable } from "node:stream";
 
 /**
  * DELETING A CARD MUST ERASE THE CARD — the fear this file exists to answer: "eu deleto, ele
@@ -265,7 +266,7 @@ describe("purgeCard — the card and everything that belonged to it", () => {
     const { card } = await seed();
     await purge.purgeCard(card.id);
     // The two halves of the upload feature: nothing can be attached, nothing can be read.
-    await expect(ws.uploadCardImage(card.id, "x.png", "AAAA")).rejects.toThrow(/card not found/);
+    await expect(ws.uploadCardFile(card.id, "x.png", Readable.from([Buffer.from("x")]), 1)).rejects.toThrow(/card not found/);
     await expect(ws.readCardUpload(card.id, "1790375878344-x.png")).rejects.toThrow(/card not found/);
     // And the queue refuses to accept anything for it.
     await expect(outbox.queueMessage(card.id, "oi")).rejects.toThrow(/card not found/);

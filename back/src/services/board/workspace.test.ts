@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, onTestFinished, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { PassThrough, Readable } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cardCdpEndpoint } from "../browser/ports.js";
@@ -1729,40 +1730,86 @@ describe("image upload into the card", () => {
     expect(ws.uploadContentType("1731000000000-foto.jpg")).toBe("image/jpeg");
   });
 
+  async function uploadHost(runnerLine: string) {
+    const scratch = await mkdtemp(join(tmpdir(), "vh-upload-"));
+    onTestFinished(() => rm(scratch, { recursive: true, force: true }));
+    const pipeCommand = vi.fn(() => ({ file: "bash", args: ["-c", runnerLine.replaceAll("$SCRATCH", scratch)] }));
+    vi.mocked(host.hostExecutor).mockReturnValue({
+      kind: "local", label: "this machine", runScript, ptyCommand, pipeCommand,
+    } as unknown as import("../../runtime/host.js").HostExecutor);
+    return { pipeCommand, received: join(scratch, "received") };
+  }
+
   it("an upload named without an extension is written under a name the read accepts", async () => {
     const { card } = await seed();
-    const { path } = await ws.uploadCardImage(card.id, "README", Buffer.from("hello").toString("base64"));
+    await uploadHost("cat > /dev/null");
+    const { path } = await ws.uploadCardFile(card.id, "README", Readable.from([Buffer.from("hello")]), 5);
     const file = path.split("/").pop()!;
     expect(file).toMatch(/^\d+-readme\.bin$/);
     expect(ws.uploadContentType(file)).toBe("application/octet-stream");
   });
 
-  it("the base64 rides on the script's stdin, after one exec line — never in argv nor in a heredoc; the path comes back", async () => {
+  it("o arquivo cru vai pelo stdin do processo do runner, nunca em argv; o caminho volta", async () => {
     const { card } = await seed();
-    const b64 = Buffer.from("image-content").toString("base64");
-    const { path } = await ws.uploadCardImage(card.id, "Screen Area (1).PNG", b64, "local:tester");
+    const { pipeCommand, received } = await uploadHost("cat > $SCRATCH/received");
+    const content = Buffer.from("PK\x03\x04 $(reboot) `id`");
+    const { path } = await ws.uploadCardFile(card.id, "Notas Fiscais (1).ZIP", Readable.from([content]), content.length, "local:tester");
 
-    expect(path).toMatch(new RegExp(`^/work/\\.uploads/${card.id}/\\d+-screen-area-1-\\.png$`));
-    expect(runScript).toHaveBeenCalledTimes(1);
-    const script = scriptAt(0);
-    const [command, payload, rest] = script.split("\n");
-    // bash parses ONE line and hands the stream to docker: the payload is read by base64, not bash
-    expect(command).toMatch(new RegExp(`^exec docker exec -i '${CONTAINER}' sh -c `));
-    expect(command).toContain(`mkdir -p '\\''/work/.uploads/${card.id}'\\''`);
-    expect(command).toContain(`base64 -d > '\\''${path}'\\''`);
-    expect(payload).toBe(b64);
-    expect(rest).toBe("");
-    expect(script).not.toContain("<<");
+    expect(path).toMatch(new RegExp(`^/work/\\.uploads/${card.id}/\\d+-notas-fiscais-1-\\.zip$`));
+    expect(await readFile(received)).toEqual(content);
+    expect(pipeCommand).toHaveBeenCalledTimes(1);
+    expect(pipeCommand).toHaveBeenCalledWith(
+      ws.buildUploadCommand({ containerName: CONTAINER, destDir: `/work/.uploads/${card.id}`, destPath: path, bytes: content.length }),
+    );
+    expect(JSON.stringify(pipeCommand.mock.calls)).not.toContain("reboot");
+    expect(runScript).not.toHaveBeenCalled();
   });
 
-  it("refuses: over 10 MB, invalid base64 (injection) and an unknown card — nothing runs on the host", async () => {
+  it("recusa sem tamanho, acima de 1 GB e card desconhecido — nada roda no host", async () => {
     const { card } = await seed();
-    const big = "A".repeat(Math.ceil(((ws.UPLOAD_MAX_BYTES + 3) * 4) / 3 / 4) * 4);
-    await expect(ws.uploadCardImage(card.id, "g.png", big)).rejects.toThrow(/10 MB/);
-    await expect(ws.uploadCardImage(card.id, "x.png", "abc'; rm -rf /; '")).rejects.toThrow(/invalid base64/);
-    await expect(ws.uploadCardImage(card.id, "x.png", "$(reboot)")).rejects.toThrow(/invalid base64/);
-    await expect(ws.uploadCardImage("nope", "x.png", "aGk=")).rejects.toThrow(/card not found/);
-    expect(runScript).not.toHaveBeenCalled();
+    const { pipeCommand } = await uploadHost("cat > /dev/null");
+    const body = () => Readable.from([Buffer.from("x")]);
+    await expect(ws.uploadCardFile(card.id, "a.zip", body(), Number.NaN)).rejects.toThrow(/file size is required/);
+    await expect(ws.uploadCardFile(card.id, "a.zip", body(), 0)).rejects.toThrow(/file size is required/);
+    await expect(ws.uploadCardFile(card.id, "a.zip", body(), ws.UPLOAD_MAX_BYTES + 1)).rejects.toThrow(/larger than 1 GB/);
+    await expect(ws.uploadCardFile("nope", "a.zip", body(), 1)).rejects.toThrow(/card not found/);
+    expect(pipeCommand).not.toHaveBeenCalled();
+  });
+
+  it("1 GB exato é aceito: o teto é inclusivo", async () => {
+    const { card } = await seed();
+    const { pipeCommand } = await uploadHost("cat > /dev/null; exit 1");
+    await expect(ws.uploadCardFile(card.id, "a.zip", Readable.from([Buffer.from("x")]), ws.UPLOAD_MAX_BYTES)).rejects.toThrow(/ended before the whole file/);
+    expect(pipeCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("o navegador que larga o envio no meio recebe a falha", async () => {
+    const { card } = await seed();
+    await uploadHost("cat > /dev/null");
+    const body = new PassThrough();
+    const upload = ws.uploadCardFile(card.id, "a.zip", body, 1_000);
+    body.write(Buffer.from("metade"));
+    body.destroy(new Error("aborted"));
+    await expect(upload).rejects.toThrow(/aborted/);
+  });
+
+  it("um envio parado por UPLOAD_STALL_MS é abandonado", async () => {
+    const { card } = await seed();
+    await uploadHost("cat > /dev/null");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    onTestFinished(() => { vi.useRealTimers(); });
+    const body = new PassThrough();
+    const upload = ws.uploadCardFile(card.id, "a.zip", body, 1_000);
+    const outcome = expect(upload).rejects.toThrow(/upload stalled/);
+    await vi.advanceTimersByTimeAsync(ws.UPLOAD_STALL_MS);
+    await outcome;
+  });
+
+  it("a host failure during the upload surfaces the clear runner error", async () => {
+    const { card } = await seed();
+    await uploadHost("cat > /dev/null; echo 'no such container' >&2; exit 1");
+    await expect(ws.uploadCardFile(card.id, "x.png", Readable.from([Buffer.from("hi")]), 2))
+      .rejects.toThrow(/the runner on this machine could not run the command: no such container/);
   });
 
   it("reads an upload back out of the runner, as the bytes plus what they are", async () => {
@@ -1923,17 +1970,6 @@ describe("image upload into the card", () => {
   it("um runner fora do ar não derruba a faxina — ela espera a próxima passada", async () => {
     runScript.mockRejectedValueOnce(new Error("runner unreachable"));
     await expect(ws.sweepCardUploads()).resolves.toBeUndefined();
-  });
-
-  it("buildUploadScript refuses a payload that is not strict base64", () => {
-    expect(() => ws.buildUploadScript({ containerName: "c", destDir: "/d", destPath: "/d/f", base64: "VIBEHUB_B64" }))
-      .toThrow(/invalid base64/);
-  });
-
-  it("a host failure during the upload surfaces the clear runner error", async () => {
-    const { card } = await seed();
-    runScript.mockRejectedValue(new host.HostExecError("no such container"));
-    await expect(ws.uploadCardImage(card.id, "x.png", "aGk=")).rejects.toThrow(/the runner on this machine could not run the command: no such container/);
   });
 });
 
