@@ -27,6 +27,7 @@
  * other file (a PDF, a spreadsheet) becomes a chip that opens it.
  */
 const PREVIEW_SOURCE = "\\/preview\\/\\d{1,5}\\/(?:[^\\s<>()]*[^\\s<>().,;:!?])?";
+const WHOLE_PREVIEW_PATH = new RegExp(`^${PREVIEW_SOURCE}$`);
 
 /**
  * An image the composer uploaded into THIS install's runner.
@@ -206,7 +207,7 @@ export function safeUrl(url: string): string {
   const raw = String(url ?? "").trim();
   if (/^https?:\/\/[^\s]/i.test(raw)) return raw;
   if (/^mailto:[^\s]/i.test(raw)) return raw;
-  if (new RegExp(`^${PREVIEW_SOURCE}$`).test(raw)) return raw;
+  if (WHOLE_PREVIEW_PATH.test(raw)) return raw;
   return "";
 }
 
@@ -239,8 +240,7 @@ function escapeHtml(node: MdNode): void {
 
 /**
  * Links the panel's relative `/preview/<port>/…` paths, which GFM's autolink does not (it only
- * knows absolute URLs and e-mails). Walks TEXT nodes only, so a path inside `code` or an existing
- * link is left exactly as it is — no nested anchors, no rewritten snippets.
+ * knows absolute URLs and e-mails).
  */
 export function remarkPreviewPaths() {
   return (tree: MdNode): void => linkPreviewPaths(tree);
@@ -252,6 +252,11 @@ function linkPreviewPaths(node: MdNode): void {
   if (node.type === "link" || node.type === "linkReference") return; // a link inside a link is not a thing
   for (let i = 0; i < children.length; i += 1) {
     const child = children[i] as MdNode;
+    const isPreviewPathCode = child.type === "inlineCode" && WHOLE_PREVIEW_PATH.test(child.value ?? "");
+    if (isPreviewPathCode) {
+      children.splice(i, 1, { type: "link", url: child.value, children: [child] });
+      continue;
+    }
     if (child.type !== "text") {
       linkPreviewPaths(child);
       continue;
