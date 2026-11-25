@@ -22,7 +22,7 @@ import { readCardChanges, readCardFileDiff } from "../maestro/changes.js";
 import { mergeTaskEvent, taskSnapshot, toolResultEvent, type AgentTaskEvent, type RawTaskEvent, type RawToolResultEvent } from "./toolResult.js";
 import { isHarnessFiller } from "../chat/chat.js";
 import {
-  NOTE_CONVERSATION_CLEARED, buildLateAnswerText, buildOrphanAnswerText, mergePeerAnswers, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseVoiceCallFrame, parseQueuedNoteFrame, parseQuestionDraftFrame, isEmptyQuestionDraft, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
+  NOTE_CONVERSATION_CLEARED, appendStoppedTasksNotice, buildLateAnswerText, buildOrphanAnswerText, mergePeerAnswers, buildSupersedeText, interruptNote, normalizeSlashCommands, withBtwCommand, parseDriverLine, parseSdkClientFrame, parseTypingFrame, parseVoiceCallFrame, parseQueuedNoteFrame, parseQuestionDraftFrame, isEmptyQuestionDraft, parseWorkflowFeedFrame, parseDetailFrame, encodeControl,
   type BackgroundTaskInfo, type CatalogEvent, type DriverControl, type DriverEvent, type EffortAckEvent, type QuestionAnswerControl, type QuestionDraft, type StopHow, type UserQuestionItem,
   type WorkflowFeedEvent, type WorkflowFeedRequest, type DetailRequest, type ResultEvent,
 } from "./protocol.js";
@@ -198,6 +198,8 @@ export interface DriverSession {
    * opens a turn for it when the model is free. Until then the notice is work a deploy would erase.
    */
   pendingNotices: string[];
+  stoppedTasksUnknownToModel: string[];
+  sentTextByShownText: Map<string, string>;
   /**
    * An AUTOMATIC resume (injectSystemTurn) that has not produced anything yet. `marker` is its
    * in-flight marker: the first text or tool call rewrites it with `progressed: true` — the proof the
@@ -780,6 +782,8 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
     const key = raw.toolUseId || [...session.tasks.values()].find((t) => t.taskId === raw.taskId)?.toolUseId;
     const merged = key ? mergeTaskEvent(session.tasks.get(key), { ...raw, toolUseId: key }, Date.now()) : null;
     if (!merged) return;
+    const stoppedNow = merged.status === "stopped" && session.tasks.get(merged.toolUseId)?.status !== "stopped";
+    if (stoppedNow) session.stoppedTasksUnknownToModel.push(merged.description || "tarefa em segundo plano");
     session.tasks.set(merged.toolUseId, merged);
     // Cap: a long session fires hundreds of tasks; the oldest finished ones go first.
     if (session.tasks.size > TASKS_MAX) {
@@ -1024,6 +1028,7 @@ function applyDriverEvent(session: DriverSession, event: DriverEvent): void {
       logger.warn({ card: session.label, detail: (err as Error).message }, "could not clear the sdk chat history");
     });
     forgetCardWorkflows(session.cardId);
+    session.stoppedTasksUnknownToModel = [];
     // The erased conversation takes up nothing any more: its meter goes with it (the new session's reading
     // arrives at the end of the /clear's turn).
     session.contextUsage = undefined;
@@ -1225,6 +1230,8 @@ export function ensureDriverSession(opts: EnsureDriverOpts): DriverSession {
     agentSignals: 0,
     backgroundTasks: [],
     pendingNotices: [],
+    stoppedTasksUnknownToModel: [],
+    sentTextByShownText: new Map(),
     tasks: new Map(),
     rateLimits: new Map(),
     loginFailed: false,
@@ -1522,7 +1529,8 @@ export function dispatchClientFrame(
     // conversation can be taken back to before the original, `fallback` the supersede used when it
     // cannot. Either way the edit reaches the model — the choice is never "nothing happens".
     const first = control.first === true ? { first: true } : {};
-    if (!writeToDriver(session, { type: "edit_user", original: control.original, text: control.text, fallback: wrapped, ...first })) {
+    const originalAsSent = session.sentTextByShownText.get(control.original) ?? control.original;
+    if (!writeToDriver(session, { type: "edit_user", original: originalAsSent, text: control.text, fallback: wrapped, ...first })) {
       return { kind: "refused", cid: control.cid, reason: "driver-gone" };
     }
     // Which message a `rewound: ok` will cut the log back to, and which words went in its place.
@@ -1550,11 +1558,18 @@ export function dispatchClientFrame(
     // it whatever question is open.
     if (control.now && session.openAsks.size > 0) noteStop(session, origin, "send_now");
     else if (control.now && session.activeTurns > 0) noteUserStop(session.cardId, session.label, Date.now());
-    if (!writeToDriver(session, control)) return { kind: "refused", cid: control.cid, reason: "driver-gone" };
-    countSentTurn(session, control.text);
+    const sentText = appendStoppedTasksNotice(control.text, session.stoppedTasksUnknownToModel);
+    if (!writeToDriver(session, { ...control, text: sentText })) return { kind: "refused", cid: control.cid, reason: "driver-gone" };
+    const noticeWent = sentText !== control.text;
+    if (noticeWent) {
+      session.stoppedTasksUnknownToModel = [];
+      session.sentTextByShownText.set(control.text, sentText);
+    }
+    countSentTurn(session, sentText);
     noteChatActivity(session, typistUserId);
     const at = Date.now();
-    const line: HistoryEvent = { type: "user", text: control.text, at, from: origin };
+    const sent = noticeWent ? { sent: sentText } : {};
+    const line: HistoryEvent = { type: "user", text: control.text, ...sent, at, from: origin };
     const persisted = appendHistoryReported(session.cardId, line);
     relayToPeers(session, sender, line);
     // The durable "turn in flight" record: if a deploy kills the back (and this driver with it)

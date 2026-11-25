@@ -36,6 +36,7 @@ import { readInflightMarker } from "./inflight.js";
 import { loadQuestionDrafts, questionDraftsSettled } from "./questionDrafts.js";
 import { lastContextSettled, readLastContext } from "./lastContext.js";
 import { BTW_COMMAND } from "./protocol.js";
+import type { AgentTaskEvent } from "./toolResult.js";
 import { createMirrorState, driverKeysFor, forgetDriverKeys, mirrorNewEvents } from "./mirror.js";
 import { notifyCardSessionKill } from "../board/workspace.js";
 import { mergeTranscriptReplay } from "./transcript.js";
@@ -2833,6 +2834,97 @@ describe("background_tasks — o trabalho que segue depois do turno", () => {
     spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
     socket.emit("message", Buffer.from(`{"type":"interrupt"}`));
     expect(session.pendingInterruptNote).toBeUndefined();
+  });
+});
+
+describe("subagente em segundo plano parado — o modelo fica sabendo que o resultado não vai chegar", () => {
+  const userTextsWritten = (): string[] =>
+    spawned[0]!.stdin.written
+      .map((written) => JSON.parse(written) as { type: string; text?: string })
+      .filter((frame) => frame.type === "user")
+      .map((frame) => frame.text ?? "");
+
+  const reviewerEndsWith = (status: AgentTaskEvent["status"]): FakeSocket => {
+    const session = ensure();
+    const socket = fakeSocket();
+    attachSocket(session, socket as never);
+    spawned[0]!.stdout.emit("data", line({ type: "ready" }));
+    socket.emit("message", Buffer.from(`{"type":"user","text":"revisa a branch"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "task_started", taskId: "a1", toolUseId: "t1", description: "Code review · spec", taskType: "local_agent" }));
+    spawned[0]!.stdout.emit("data", line({ type: "background_tasks", tasks: [{ id: "a1", type: "local_agent", description: "Code review · spec" }] }));
+    socket.emit("message", Buffer.from(`{"type":"interrupt"}`));
+    spawned[0]!.stdout.emit("data", line({ type: "task_notification", taskId: "a1", toolUseId: "t1", status }));
+    spawned[0]!.stdout.emit("data", line({ type: "background_tasks", tasks: [] }));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: true, subtype: "error_during_execution" }));
+    return socket;
+  };
+
+  const sendUser = (socket: FakeSocket, text: string) => {
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "user", text })));
+  };
+
+  it("caso real (card mais-de-10-mb-de-upload): o stop matou o revisor e a próxima mensagem da pessoa leva o aviso ao modelo", async () => {
+    sendUser(reviewerEndsWith("stopped"), "so segue ae");
+
+    const sent = userTextsWritten().at(-1)!;
+    expect(sent.startsWith("so segue ae")).toBe(true);
+    expect(sent).toContain("Code review · spec");
+    expect(sent).toContain("não vai chegar");
+    await vi.waitFor(async () => {
+      const history = await readHistory(CARD);
+      const userLines = history.filter((entry) => entry.type === "user") as { text: string; sent?: string }[];
+      expect(userLines.map((entry) => entry.text)).toEqual(["revisa a branch", "so segue ae"]);
+      expect(userLines.at(-1)?.sent).toBe(sent);
+    });
+  });
+
+  it("o aviso vai uma vez só: a mensagem seguinte sai limpa", () => {
+    const socket = reviewerEndsWith("stopped");
+    sendUser(socket, "so segue ae");
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    sendUser(socket, "e o PR?");
+
+    expect(userTextsWritten().at(-1)).toBe("e o PR?");
+  });
+
+  it("editar a mensagem que levou o aviso acha no transcript o texto que de fato foi ao modelo", () => {
+    const socket = reviewerEndsWith("stopped");
+    sendUser(socket, "so segue ae");
+    const sentWithNotice = userTextsWritten().at(-1)!;
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "edit_user", original: "so segue ae", text: "so abre o PR" })));
+
+    const edit = spawned[0]!.stdin.written
+      .map((written) => JSON.parse(written) as { type: string; original?: string; text?: string })
+      .find((frame) => frame.type === "edit_user");
+    expect(edit?.original).toBe(sentWithNotice);
+    expect(edit?.text).toBe("so abre o PR");
+  });
+
+  it("comando de barra sai intacto e o aviso espera a próxima mensagem comum", () => {
+    const socket = reviewerEndsWith("stopped");
+    sendUser(socket, "/model sonnet");
+    expect(userTextsWritten().at(-1)).toBe("/model sonnet");
+
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    sendUser(socket, "so segue ae");
+    expect(userTextsWritten().at(-1)).toContain("Code review · spec");
+  });
+
+  it("o /clear leva o aviso junto com a conversa apagada", () => {
+    const socket = reviewerEndsWith("stopped");
+    sendUser(socket, "/clear");
+    spawned[0]!.stdout.emit("data", line({ type: "conversation_reset", trigger: "clear" }));
+    spawned[0]!.stdout.emit("data", line({ type: "result", isError: false }));
+    sendUser(socket, "comeca de novo");
+
+    expect(userTextsWritten().at(-1)).toBe("comeca de novo");
+  });
+
+  it.each(["completed", "failed"] as const)("subagente que termina com %s não gera aviso: o CLI já entrega o resultado ao modelo", (status) => {
+    sendUser(reviewerEndsWith(status), "so segue ae");
+
+    expect(userTextsWritten().at(-1)).toBe("so segue ae");
   });
 });
 
