@@ -71,7 +71,7 @@ export function listPortsScript(container: string): string {
     "  printf '%s %s %s\\n' \"$inode\" \"$pid\" \"$comm\"",
     "done",
     `echo ${CWD_MARKER}`,
-    "find /proc/[0-9]*/cwd -maxdepth 0 -printf '%h %l\\n' 2>/dev/null",
+    "find /proc/[0-9]*/cwd -maxdepth 0 -printf '%h %l\\n' 2>/dev/null || true",
     "VIBEHUB_PORTS",
   ].join("\n");
 }
