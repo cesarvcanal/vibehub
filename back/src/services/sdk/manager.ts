@@ -364,6 +364,19 @@ const STDERR_TAIL_MAX = 2000;
 
 const sessions = new Map<string, DriverSession>();
 const voiceCallSocketsByCard = new Map<string, Set<WebSocket>>();
+const VOICE_CALL_MARK_RETRIES = 3;
+const VOICE_CALL_MARK_RETRY_MS = 2_000;
+
+function saveVoiceCallMark(cardId: string, label: string, retriesLeft: number): void {
+  const inCall = (voiceCallSocketsByCard.get(cardId)?.size ?? 0) > 0;
+  void registry.setCardVoiceCall(cardId, inCall ? Date.now() : null).catch((err: unknown) => {
+    if (retriesLeft === 0) {
+      logger.error({ card: label, detail: (err as Error).message }, "could not save the card's voice call mark");
+      return;
+    }
+    setTimeout(() => saveVoiceCallMark(cardId, label, retriesLeft - 1), VOICE_CALL_MARK_RETRY_MS).unref();
+  });
+}
 
 /* ------------------------------------------------------------- test seams */
 
@@ -2371,9 +2384,7 @@ export function attachSocket(
     if (inCall) voiceCallSocketsByCard.set(session.cardId, cardCallSockets);
     else voiceCallSocketsByCard.delete(session.cardId);
     if (inCall === wasInCall) return;
-    void registry.setCardVoiceCall(session.cardId, inCall ? Date.now() : null).catch((err: unknown) => {
-      logger.warn({ card: session.label, detail: (err as Error).message }, "could not mark the card's voice call");
-    });
+    saveVoiceCallMark(session.cardId, session.label, VOICE_CALL_MARK_RETRIES);
   };
 
   const answerFeed = createFeedResponder(session, socket);
