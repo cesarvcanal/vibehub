@@ -112,7 +112,6 @@ export interface SdkEvent {
   text?: string;
   sessionId?: string;
   resume?: string;
-  /** On `ready`: the back's live turn count says a turn is ALREADY running (reattach mid-turn). */
   turnActive?: boolean;
   id?: string;
   name?: string;
@@ -1903,7 +1902,7 @@ export function applySdkEvent(state: SdkChatState, event: SdkEvent): SdkChatStat
     case "result": {
       const next: SdkChatState = {
         ...state,
-        turnActive: false,
+        turnActive: event.turnActive === true,
         awaiting: false,
         interruptRequested: false,
         rows: settleCompaction(settleLiveTools(dropProvisionalTools(settleStreaming(state.rows)))),
