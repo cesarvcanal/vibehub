@@ -1474,6 +1474,7 @@ export const en: Record<string, string> = {
   "voice.notice.expired": "The session reached its time limit.",
   "voice.notice.moderation": "The session was ended by content moderation.",
   "voice.notice.remoteEnded": "The session was ended by the server.",
+  "voice.notice.reconnecting": "The voice connection was lost. Reconnecting…",
   "voice.playAudio": "Play assistant audio",
   "voice.call.label": "Voice call",
   "voice.call.end": "End voice call",

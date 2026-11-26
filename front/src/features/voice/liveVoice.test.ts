@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CLOSE_TIMEOUT_MS, CONTEXT_MAX_CHARS, LiveVoiceSession, START_TIMEOUT_MS, STATS_INTERVAL_MS, errorMessage } from "./liveVoice";
+import { CLOSE_TIMEOUT_MS, CONTEXT_MAX_CHARS, LiveVoiceSession, RECONNECT_DELAYS_MS, START_TIMEOUT_MS, STATS_INTERVAL_MS, errorMessage } from "./liveVoice";
 import { fakeRig, FakeStream } from "./fakeWebRtc";
+import type { VoiceDropReport } from "../../api/types";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -236,13 +237,12 @@ describe("LiveVoiceSession — while live", () => {
     expect(closed).toEqual(["ok"]);
   });
 
-  it("a failure mid-sentence still saves what was said", async () => {
+  it("a connection lost mid-sentence still saves what was said", async () => {
     const { session, rig } = await liveSession();
     const closed: string[] = [];
     session.onFinalTurn((turn) => closed.push(turn.text));
     rig.peer().channel!.emit({ type: "session.input_transcript.delta", delta: "estava falando" });
     rig.peer().fail();
-    expect(session.snapshot().state).toBe("error");
     expect(closed).toEqual(["estava falando"]);
   });
 
@@ -304,20 +304,6 @@ describe("LiveVoiceSession — while live", () => {
     expect(session.snapshot()).toMatchObject({ state: "live", notice: "moderation cut the reply" });
   });
 
-  it("a failed connection ends in error and releases everything", async () => {
-    const { session, rig } = await liveSession();
-    rig.peer().fail();
-    expect(session.snapshot()).toMatchObject({ state: "error", error: "voice.err.connectionLost" });
-    expect(released(rig)).toBe(true);
-  });
-
-  it("the channel closing without session.closed is a disconnect", async () => {
-    const { session, rig } = await liveSession();
-    rig.peer().channel!.close();
-    expect(session.snapshot()).toMatchObject({ state: "error", error: "voice.err.disconnected" });
-    expect(released(rig)).toBe(true);
-  });
-
   it("the server ending the session says why", async () => {
     const { session, rig } = await liveSession();
     rig.peer().channel!.emit({ type: "session.closed", reason: "expired" });
@@ -328,6 +314,129 @@ describe("LiveVoiceSession — while live", () => {
     const { session, rig } = await liveSession();
     rig.peer().channel!.dispatchEvent(Object.assign(new Event("message"), { data: "{not json" }));
     expect(session.snapshot().state).toBe("live");
+  });
+});
+
+describe("LiveVoiceSession — dropped connection", () => {
+  it("a connection lost mid-call reconnects on its own with a new session", async () => {
+    vi.useFakeTimers();
+    const { session, rig } = await liveSession();
+    const droppedPeer = rig.peer();
+    const droppedMic = rig.mic();
+    droppedPeer.fail();
+    expect(session.snapshot()).toMatchObject({ state: "connecting", error: null, notice: "voice.notice.reconnecting" });
+    expect(droppedPeer.closed).toBe(true);
+    expect(droppedMic.tracks.every((track) => track.stopped)).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[0]!);
+    expect(rig.exchanges).toHaveLength(2);
+    expect(rig.peer()).not.toBe(droppedPeer);
+    rig.peer().channel!.emit({ type: "session.started", session: { id: "live_2" } });
+    expect(session.snapshot()).toMatchObject({ state: "live", error: null, notice: null });
+  });
+
+  it("the channel closing without session.closed reconnects too", async () => {
+    vi.useFakeTimers();
+    const { session, rig } = await liveSession();
+    rig.peer().channel!.close();
+    expect(session.snapshot()).toMatchObject({ state: "connecting", notice: "voice.notice.reconnecting" });
+    await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[0]!);
+    expect(rig.exchanges).toHaveLength(2);
+  });
+
+  it("gives up after every reconnect attempt failed, showing the last failure", async () => {
+    vi.useFakeTimers();
+    const answers = [{ sessionId: "live_1", sdp: "v=0 answer" }];
+    const rig = fakeRig({
+      exchangeOffer: async () => {
+        const answer = answers.shift();
+        if (!answer) throw { response: { data: { error: "could not reach OpenAI" } } };
+        return answer;
+      },
+    });
+    const { session } = await liveSession(rig);
+    rig.peer().fail();
+    for (const delay of RECONNECT_DELAYS_MS.slice(0, -1)) {
+      await vi.advanceTimersByTimeAsync(delay);
+      expect(session.snapshot()).toMatchObject({ state: "connecting", notice: "voice.notice.reconnecting" });
+    }
+    await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[RECONNECT_DELAYS_MS.length - 1]!);
+    expect(rig.exchanges).toHaveLength(1 + RECONNECT_DELAYS_MS.length);
+    expect(session.snapshot()).toMatchObject({ state: "error", error: "could not reach OpenAI", notice: null });
+    expect(released(rig)).toBe(true);
+  });
+
+  it("a reconnect that never confirms the session counts as a failed attempt", async () => {
+    vi.useFakeTimers();
+    const { session, rig } = await liveSession();
+    rig.peer().fail();
+    await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[0]! + START_TIMEOUT_MS);
+    expect(session.snapshot()).toMatchObject({ state: "connecting", notice: "voice.notice.reconnecting" });
+    await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[1]!);
+    expect(rig.exchanges).toHaveLength(3);
+  });
+
+  it("a call that came back gets every reconnect attempt again on the next drop", async () => {
+    vi.useFakeTimers();
+    const { session, rig } = await liveSession();
+    for (const round of [2, 3, 4]) {
+      rig.peer().fail();
+      await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[0]!);
+      expect(rig.exchanges).toHaveLength(round);
+      rig.peer().channel!.emit({ type: "session.started", session: { id: `live_${round}` } });
+      expect(session.snapshot().state).toBe("live");
+    }
+  });
+
+  it("ending the call while it waits to reconnect opens no new session", async () => {
+    vi.useFakeTimers();
+    const { session, rig } = await liveSession();
+    rig.peer().fail();
+    session.stop();
+    await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[0]!);
+    expect(rig.exchanges).toHaveLength(1);
+    expect(session.snapshot()).toMatchObject({ state: "idle", notice: null });
+  });
+
+  it("the connection failing before session.started is a startup error, not a reconnect", async () => {
+    const rig = fakeRig();
+    const session = new LiveVoiceSession(rig.deps);
+    await session.start();
+    rig.peer().fail();
+    expect(session.snapshot()).toMatchObject({ state: "error", error: "voice.err.connectionLost" });
+  });
+
+  it("each drop is reported with what the connection looked like when it went", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    const { session, rig } = await liveSession();
+    const reports: VoiceDropReport[] = [];
+    session.onDrop((report) => reports.push(report));
+    const peer = rig.peer();
+    peer.stats = [
+      { type: "outbound-rtp", kind: "audio", bytesSent: 5_000 },
+      { type: "inbound-rtp", kind: "audio", bytesReceived: 9_000, audioLevel: 0 },
+    ];
+    peer.channel!.emit({ type: "session.input_transcript.delta", delta: "oi" });
+    await vi.advanceTimersByTimeAsync(60_000);
+    peer.iceConnectionState = "disconnected";
+    peer.dispatchEvent(new Event("iceconnectionstatechange"));
+    await vi.advanceTimersByTimeAsync(30_000);
+    peer.fail();
+
+    expect(reports).toEqual([{
+      cause: "peer_failed",
+      sessionId: "live_1",
+      liveForMs: 90_000,
+      peer: "failed",
+      ice: "disconnected",
+      channel: "open",
+      iceDisconnectedForMs: 30_000,
+      sentBytes: 5_000,
+      receivedBytes: 9_000,
+      lastInputAgoMs: 90_000,
+      lastOutputAgoMs: null,
+    }]);
   });
 });
 

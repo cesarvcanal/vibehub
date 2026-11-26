@@ -196,8 +196,8 @@ describe("useVoiceCall — lifecycle", () => {
     const { result } = setup();
     await goLive(result);
     expect(audio.resumed).toBeGreaterThan(0);
-    act(() => rig.peer().fail());
-    expect(result.current.snap.state).toBe("error");
+    act(() => rig.peer().channel!.emit({ type: "session.closed", reason: "expired" }));
+    expect(result.current.snap.state).toBe("idle");
     expect(audio.closed).toBe(true);
     expect(rig.mic().tracks.every((t) => t.stopped)).toBe(true);
   });
