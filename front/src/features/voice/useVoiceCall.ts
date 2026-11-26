@@ -185,7 +185,7 @@ export function useVoiceCall({
   }, [session, sendDropNotes]);
 
   React.useEffect(() => {
-    if (snap.state === "live") void sendDropNotes();
+    if (snap.state === "live" || snap.state === "idle") void sendDropNotes();
   }, [snap.state, sendDropNotes]);
 
   // The tab closing mid-call: the call ends (closing what was being said into a turn) and the turns
