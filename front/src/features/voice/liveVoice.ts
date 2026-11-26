@@ -107,7 +107,7 @@ export const ICE_TIMEOUT_MS = 10_000;
 export const START_TIMEOUT_MS = 20_000;
 /** How long `stop` waits for `session.closed` (pending work drains) before tearing down anyway. */
 export const CLOSE_TIMEOUT_MS = 15_000;
-export const RECONNECT_DELAYS_MS: readonly number[] = [2_000, 8_000];
+export const RECONNECT_DELAYS_MS: readonly number[] = [1_000, 3_000, 5_000, 10_000, 15_000, 30_000];
 const RECONNECTING_NOTICE = "voice.notice.reconnecting";
 
 interface CallCarryOver {
@@ -545,7 +545,7 @@ export class LiveVoiceSession {
     const report = this.buildDropReport(cause, Date.now());
     this.teardown();
     for (const listener of this.dropListeners) listener(report);
-    this.scheduleReconnect(dropErrorKey(cause));
+    this.scheduleReconnect();
   }
 
   private buildDropReport(cause: VoiceDropCause, now: number): VoiceDropReport {
@@ -567,12 +567,9 @@ export class LiveVoiceSession {
     };
   }
 
-  private scheduleReconnect(failure: string): void {
-    const delay = RECONNECT_DELAYS_MS[this.reconnectTries];
-    if (delay === undefined) {
-      this.set({ state: "error", error: failure, notice: null });
-      return;
-    }
+  private scheduleReconnect(): void {
+    const steadyDelay = RECONNECT_DELAYS_MS[RECONNECT_DELAYS_MS.length - 1]!;
+    const delay = RECONNECT_DELAYS_MS[this.reconnectTries] ?? steadyDelay;
     this.reconnectTries += 1;
     this.set({ state: "connecting", error: null, notice: RECONNECTING_NOTICE });
     this.reconnectTimer = setTimeout(() => {
@@ -592,7 +589,7 @@ export class LiveVoiceSession {
   private fail(attempt: number, message: string): void {
     if (attempt !== this.attempt) return;
     this.teardown();
-    if (this.reconnectTries > 0) this.scheduleReconnect(message);
+    if (this.reconnectTries > 0) this.scheduleReconnect();
     else this.set({ state: "error", error: message });
   }
 

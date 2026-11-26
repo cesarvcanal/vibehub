@@ -344,26 +344,54 @@ describe("LiveVoiceSession — dropped connection", () => {
     expect(rig.exchanges).toHaveLength(2);
   });
 
-  it("gives up after every reconnect attempt failed, showing the last failure", async () => {
+  it("with the network down for minutes, keeps trying until it comes back, never ending the call on its own", async () => {
     vi.useFakeTimers();
-    const answers = [{ sessionId: "live_1", sdp: "v=0 answer" }];
+    const network = { up: true };
     const rig = fakeRig({
       exchangeOffer: async () => {
-        const answer = answers.shift();
-        if (!answer) throw { response: { data: { error: "could not reach OpenAI" } } };
-        return answer;
+        if (!network.up) throw new Error("Network Error");
+        return { sessionId: "live_n", sdp: "v=0 answer" };
       },
     });
     const { session } = await liveSession(rig);
+    network.up = false;
     rig.peer().fail();
-    for (const delay of RECONNECT_DELAYS_MS.slice(0, -1)) {
-      await vi.advanceTimersByTimeAsync(delay);
-      expect(session.snapshot()).toMatchObject({ state: "connecting", notice: "voice.notice.reconnecting" });
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(session.snapshot()).toMatchObject({ state: "connecting", error: null, notice: "voice.notice.reconnecting" });
+
+    network.up = true;
+    const triesWhileDown = rig.exchanges.length;
+    const advanceUntilNextTry = async (secondsLeft: number): Promise<void> => {
+      if (rig.exchanges.length > triesWhileDown || secondsLeft === 0) return;
+      await vi.advanceTimersByTimeAsync(1_000);
+      await advanceUntilNextTry(secondsLeft - 1);
+    };
+    await advanceUntilNextTry(RECONNECT_DELAYS_MS[RECONNECT_DELAYS_MS.length - 1]! / 1_000);
+    expect(rig.exchanges.length).toBeGreaterThan(triesWhileDown);
+    rig.peer().channel!.emit({ type: "session.started", session: { id: "live_n" } });
+    expect(session.snapshot()).toMatchObject({ state: "live", notice: null });
+  });
+
+  it("the waits grow, then hold at the last one", async () => {
+    vi.useFakeTimers();
+    const network = { up: true };
+    const rig = fakeRig({
+      exchangeOffer: async () => {
+        if (!network.up) throw new Error("Network Error");
+        return { sessionId: "live_1", sdp: "v=0 answer" };
+      },
+    });
+    await liveSession(rig);
+    network.up = false;
+    rig.peer().fail();
+    const steadyWait = RECONNECT_DELAYS_MS[RECONNECT_DELAYS_MS.length - 1]!;
+    const waits = [...RECONNECT_DELAYS_MS, steadyWait, steadyWait];
+    for (const [index, wait] of waits.entries()) {
+      await vi.advanceTimersByTimeAsync(wait - 1);
+      expect(rig.exchanges).toHaveLength(1 + index);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(rig.exchanges).toHaveLength(2 + index);
     }
-    await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[RECONNECT_DELAYS_MS.length - 1]!);
-    expect(rig.exchanges).toHaveLength(1 + RECONNECT_DELAYS_MS.length);
-    expect(session.snapshot()).toMatchObject({ state: "error", error: "could not reach OpenAI", notice: null });
-    expect(released(rig)).toBe(true);
   });
 
   it("a reconnect that never confirms the session counts as a failed attempt", async () => {
