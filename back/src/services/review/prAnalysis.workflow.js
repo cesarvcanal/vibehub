@@ -233,18 +233,21 @@ const reviews = await parallel(applicableDimensions.map((dimension) => () => age
 
 const reviewedDimensions = applicableDimensions.map((dimension, index) => {
   const review = reviews[index]
-  if (!review) return { dimension, verifiedFindings: [], aboveCapCount: 0, answered: false }
-  const verifiedFindings = review.findings.slice(0, MAX_VERIFIED_PER_DIMENSION)
-  return { dimension, verifiedFindings, aboveCapCount: review.findings.length - verifiedFindings.length, answered: true }
+  if (!review) return { dimension, findingsWithinCap: [], aboveCapCount: 0, answered: false }
+  const findingsWithinCap = review.findings.slice(0, MAX_VERIFIED_PER_DIMENSION)
+  return { dimension, findingsWithinCap, aboveCapCount: review.findings.length - findingsWithinCap.length, answered: true }
 })
 
 const candidates = reviewedDimensions
-  .flatMap((reviewed) => reviewed.verifiedFindings.map((finding) => ({ dimension: reviewed.dimension, finding })))
+  .flatMap((reviewed) => reviewed.findingsWithinCap.map((finding) => ({ dimension: reviewed.dimension, finding })))
   .map((candidate, index) => ({ ...candidate, id: `c${index + 1}` }))
 const candidateById = new Map(candidates.map((candidate) => [candidate.id, candidate]))
 
 const findPartitionProblem = (consolidation) => {
   if (!consolidation) return 'o agente de consolidação não respondeu'
+  const hasNoMembers = (group) => !Array.isArray(group.members) || group.members.length === 0
+  const emptyGroupTitles = consolidation.findings.filter(hasNoMembers).map((group) => group.title)
+  if (emptyGroupTitles.length > 0) return `devolveu grupo sem achado (${emptyGroupTitles.join(', ')})`
   const memberIds = consolidation.findings.flatMap((group) => group.members)
   const unknownIds = memberIds.filter((id) => !candidateById.has(id))
   if (unknownIds.length > 0) return `citou achado que não existe (${unknownIds.join(', ')})`
@@ -284,15 +287,13 @@ const confirmedGroups = checkedGroups
 const refutedCount = checkedGroups.filter((checked) => checked.verdict && !checked.verdict.confirmed).length
 const membersWithoutVerdict = checkedGroups.filter((checked) => !checked.verdict).flatMap((checked) => checked.group.members)
 
-const dimensionRunOf = ({ dimension, aboveCapCount, answered }) => {
+const dimensionRunOf = ({ dimension, aboveCapCount, answered }, unverifiedMembers) => {
   if (!answered) return { key: dimension.key, status: 'not_run', reason: 'o agente de revisão não respondeu' }
   const capReason = aboveCapCount === 1
     ? `1 achado acima do teto de ${MAX_VERIFIED_PER_DIMENSION} não foi verificado`
     : `${aboveCapCount} achados acima do teto de ${MAX_VERIFIED_PER_DIMENSION} não foram verificados`
-  if (aboveCapCount > 0) log(`${dimension.key}: ${capReason}`)
-  const withoutVerdictCount = membersWithoutVerdict.filter((member) => member.dimension === dimension).length
+  const withoutVerdictCount = unverifiedMembers.filter((member) => member.dimension === dimension).length
   const withoutVerdictReason = `${withoutVerdictCount} ${withoutVerdictCount === 1 ? 'achado sem veredito' : 'achados sem veredito'} (o verificador não respondeu)`
-  if (withoutVerdictCount > 0) log(`${dimension.key}: ${withoutVerdictReason}`)
   const reasons = [aboveCapCount > 0 ? capReason : '', withoutVerdictCount > 0 ? withoutVerdictReason : ''].filter(Boolean)
   const unverifiedCount = aboveCapCount + withoutVerdictCount
   return {
@@ -302,7 +303,9 @@ const dimensionRunOf = ({ dimension, aboveCapCount, answered }) => {
   }
 }
 
-const dimensionRuns = reviewedDimensions.map(dimensionRunOf)
+const dimensionRuns = reviewedDimensions.map((reviewed) => dimensionRunOf(reviewed, membersWithoutVerdict))
+const partiallyVerifiedRuns = dimensionRuns.filter((run) => run.status === 'ran' && run.reason)
+for (const run of partiallyVerifiedRuns) log(`${run.key}: ${run.reason}`)
 
 phase('Julgamento')
 const judgment = confirmedGroups.length === 0

@@ -479,14 +479,35 @@ describe("frota da análise de PR", () => {
     });
 
     it.each([
-      ["não responde", null],
-      ["deixa um achado de fora", groupsOf([{ title: "a", members: ["c1", "c3"] }, { title: "b", members: ["c2"] }])],
-      ["põe um achado em dois grupos", groupsOf([{ title: "a", members: ["c1", "c3"] }, { title: "b", members: ["c2", "c3"] }, { title: "c", members: ["c4"] }])],
-      ["cita um achado que não existe", groupsOf([{ title: "a", members: ["c1", "c3", "c9"] }, { title: "b", members: ["c2"] }, { title: "c", members: ["c4"] }])],
-    ])("consolidação que %s não perde achado: cada um é verificado sozinho e o log diz o motivo", async (_case, consolidation) => {
+      ["não responde", null, "o agente de consolidação não respondeu"],
+      ["deixa um achado de fora", groupsOf([{ title: "a", members: ["c1", "c3"] }, { title: "b", members: ["c2"] }]), "deixou achado de fora (c4)"],
+      [
+        "põe um achado em dois grupos",
+        groupsOf([{ title: "a", members: ["c1", "c3"] }, { title: "b", members: ["c2", "c3"] }, { title: "c", members: ["c4"] }]),
+        "pôs achado em mais de um grupo (c3)",
+      ],
+      [
+        "cita um achado que não existe",
+        groupsOf([{ title: "a", members: ["c1", "c3", "c9"] }, { title: "b", members: ["c2"] }, { title: "c", members: ["c4"] }]),
+        "citou achado que não existe (c9)",
+      ],
+      [
+        "devolve um grupo vazio",
+        groupsOf([{ title: "a", members: ["c1", "c3"] }, { title: "vazio", members: [] }, { title: "b", members: ["c2"] }, { title: "c", members: ["c4"] }]),
+        "devolveu grupo sem achado (vazio)",
+      ],
+    ])("consolidação que %s não perde achado: cada um é verificado sozinho e o log diz o motivo", async (_case, consolidation, expectedReason) => {
       const { calls, logs } = await fleetWithConsolidation(consolidation);
       expect(callsIn(calls, "Verificação")).toHaveLength(4);
-      expect(logs.join("\n")).toMatch(/consolidação/);
+      expect(logs).toContain(`consolidação: ${expectedReason}; cada achado é verificado sozinho`);
+    });
+
+    it("a consolidação só junta o mesmo defeito: no mesmo arquivo e linha, causa ou correção diferente fica separada, e na dúvida também", async () => {
+      const { calls } = await fleetWithConsolidation(packagingMerged);
+      const consolidationPrompt = callsIn(calls, "Consolidação")[0]!.prompt;
+      expect(consolidationPrompt).toContain("Junte dois achados só quando são o mesmo defeito: a mesma causa, e a mesma correção resolve os dois");
+      expect(consolidationPrompt).toContain("mesmo arquivo e linha com causa ou correção diferente ficam separados; na dúvida, separados");
+      expect(consolidationPrompt).toContain("Não julgue se os achados procedem");
     });
 
     it("com um achado só, não há o que consolidar e a consolidação não roda", async () => {
