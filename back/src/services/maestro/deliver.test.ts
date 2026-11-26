@@ -474,6 +474,9 @@ describe("buildCiChecksScript", () => {
     expect(s).toContain(`-lt ${Math.ceil(deliver.CI_WAIT_SECONDS / deliver.CI_POLL_SECONDS)} ] || break`);
     expect(s).toContain(`[ "$WF" = 1 ] && [ "$i" -lt ${Math.ceil(deliver.CI_APPEAR_SECONDS / deliver.CI_POLL_SECONDS)} ] || break`);
     expect(s).toContain(deliver.PR_WORKFLOWS_DETECT);
+    const baseReadAt = s.indexOf(`BASE=$(gh pr view '${PR}' --json baseRefName`);
+    expect(baseReadAt).toBeGreaterThan(-1);
+    expect(baseReadAt).toBeLessThan(s.indexOf(deliver.PR_WORKFLOWS_DETECT));
     // the commit whose checks were read comes back: the merge is pinned to it
     expect(s).toContain('echo "__VIBEHUB_CI__ done $HEAD"');
     // the checks are read only once the PR points at the pushed commit
@@ -483,37 +486,62 @@ describe("buildCiChecksScript", () => {
 });
 
 describe("PR_WORKFLOWS_DETECT: só espera CI aparecer quando algum workflow roda em PR ou push", () => {
-  const detect = async (files: Record<string, string>): Promise<string> => {
-    const { deliver } = await load();
-    const repo = await mkdtemp(join(tmpdir(), "vibehub-wf-"));
-    try {
-      await mkdir(join(repo, ".github/workflows"), { recursive: true });
-      for (const [name, body] of Object.entries(files)) await writeFile(join(repo, ".github/workflows", name), body);
-      return execFileSync("bash", ["-c", `${deliver.PR_WORKFLOWS_DETECT}; echo "$WF"`], { cwd: repo }).toString().trim();
-    } finally {
-      await rm(repo, { recursive: true, force: true });
-    }
+  const gitEnv = {
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
+    GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null",
   };
+  const sh = (cwd: string, script: string) => execFileSync("bash", ["-c", script], { cwd, encoding: "utf8", env: gitEnv });
+  const commitCommand = (message: string) => `git -c user.name=t -c user.email=t@t commit -q --allow-empty -m ${message}`;
+  const commitWorkflows = async (repo: string, files: Record<string, string>) => {
+    await mkdir(join(repo, ".github/workflows"), { recursive: true });
+    for (const [name, body] of Object.entries(files)) await writeFile(join(repo, ".github/workflows", name), body);
+    sh(repo, `git add -A && ${commitCommand("wf")}`);
+  };
+
+  const detect = async (
+    headFiles: Record<string, string>, baseFilesAfterBranching: Record<string, string> = {}, base = "main",
+  ): Promise<string> => {
+    const { deliver } = await load();
+    const root = await mkdtemp(join(tmpdir(), "vibehub-wf-"));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
+    sh(root, "git init -q --bare remote.git && git clone -q remote.git card 2>/dev/null");
+    const card = join(root, "card");
+    sh(card, `${commitCommand("base")} && git push -q origin HEAD:refs/heads/main`);
+    sh(card, "git checkout -q -b card/x");
+    await commitWorkflows(card, headFiles);
+    sh(root, "git clone -q -b main remote.git other 2>/dev/null");
+    await commitWorkflows(join(root, "other"), baseFilesAfterBranching);
+    sh(join(root, "other"), "git push -q origin main");
+    return sh(card, `BASE=${base}\n${deliver.PR_WORKFLOWS_DETECT}\necho "$WF"`).trim();
+  };
+
+  it("caso real: o CI que chegou na base depois de a branch do PR nascer conta, porque o GitHub roda o workflow do merge com a base", async () => {
+    expect(await detect({}, { "ci.yml": "name: CI\non:\n  pull_request:\n    branches: [main]\n" })).toBe("1");
+  });
+
+  it("base que não dá para ler (fetch falhou): não descarta o CI e espera ele aparecer", async () => {
+    expect(await detect({}, {}, "base-que-nao-existe")).toBe("1");
+  });
 
   it("caso real (tech.multi #215): workflow só de agenda não faz o merge esperar 2 min por check que nunca vem", async () => {
     expect(await detect({ "external-port-check.yml": "name: x\non:\n  schedule:\n    - cron: \"17 * * * *\"\n  workflow_dispatch:\n" })).toBe("0");
   });
 
-  it("as formas de disparar em PR/push contam, em .yml e .yaml", async () => {
-    for (const body of [
-      "on: push\n",
-      "on: [push, pull_request]\n",
-      "\"on\":\n  pull_request:\n    branches: [main]\n",
-      "on:\n  - pull_request_target\n",
-      "on:\n  workflow_dispatch:\n  push:\n    branches: [main]\n",
-    ]) {
-      expect(await detect({ "ci.yaml": body })).toBe("1");
-    }
+  it.each([
+    "on: push\n",
+    "on: [push, pull_request]\n",
+    "\"on\":\n  pull_request:\n    branches: [main]\n",
+    "on:\n  - pull_request_target\n",
+    "on:\n  workflow_dispatch:\n  push:\n    branches: [main]\n",
+  ])("a forma de disparar em PR/push conta, em .yaml: %j", async (body) => {
+    expect(await detect({ "ci.yaml": body })).toBe("1");
   });
 
-  it("sem pasta de workflows, ou só com agenda e dispatch manual: não espera", async () => {
-    expect(await detect({})).toBe("0");
-    expect(await detect({ "a.yml": "on:\n  workflow_dispatch:\n", "b.yaml": "on: schedule\n" })).toBe("0");
+  it.each([
+    ["sem pasta de workflows", {}],
+    ["só com agenda e dispatch manual", { "a.yml": "on:\n  workflow_dispatch:\n", "b.yaml": "on: schedule\n" }],
+  ])("%s, nem no PR nem na base: não espera", async (_case, files: Record<string, string>) => {
+    expect(await detect(files, files)).toBe("0");
   });
 });
 
