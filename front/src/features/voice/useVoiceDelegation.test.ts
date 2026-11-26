@@ -11,7 +11,6 @@ import {
   DELEGATION_NOT_SENT,
   DELEGATION_QUEUED,
   DELEGATION_RECOVERY_MS,
-  DELEGATION_RESENT,
   DELEGATION_SLOW,
   DELEGATION_SLOW_MS,
   DELEGATION_STARTED,
@@ -184,38 +183,39 @@ describe("useVoiceDelegation — pedido que ficou sem resposta (interrupção, d
     expect(call.announceContext.mock.calls).toEqual([[expect.stringContaining("12 verdes.")]]);
   });
 
-  it("sem retomada no prazo, o pedido é reenviado uma vez, avisando o agente para não refazer o que já fez", () => {
-    const { call, deliverToAgent, request } = stalled();
+  it("sem retomada no prazo, a voz diz a falha uma vez, sem pergunta, e nada vai de novo ao agente", () => {
+    const { call, deliverToAgent } = stalled();
     act(() => vi.advanceTimersByTime(DELEGATION_RECOVERY_MS - 1));
-    expect(deliveredTexts(deliverToAgent)).toHaveLength(1);
-    act(() => vi.advanceTimersByTime(1));
-    const [, retry] = deliveredTexts(deliverToAgent);
-    expect(retry).not.toBe(request);
-    expect(retry).toContain("Rode os testes do back.");
-    expect(retry).toContain("não repita nenhuma ação que já foi concluída");
-    expect(call.appendContext).toHaveBeenCalledWith(aboutRequestForVoice("Rode os testes do back.", DELEGATION_RESENT));
-  });
-
-  it("a resposta ao reenvio é falada como resposta ao pedido da pessoa", () => {
-    const { call, view, deliverToAgent, requestRow } = stalled();
-    act(() => vi.advanceTimersByTime(DELEGATION_RECOVERY_MS));
-    const retryRow: SdkRow = { kind: "user", id: "u2", text: deliveredTexts(deliverToAgent)[1]!, state: "sent" };
-    view.rerender({ rows: [requestRow, retryRow, { kind: "assistant", id: "a1", text: "12 verdes.", streaming: false }], turnRunning: false });
-    expect(call.announceContext.mock.calls).toEqual([[expect.stringContaining("Rode os testes do back.")]]);
-    expect(call.announceContext).toHaveBeenCalledWith(expect.stringContaining("12 verdes."));
-  });
-
-  it("o reenvio também sem resposta: a voz diz a falha, sem pergunta, e nada é reenviado de novo", () => {
-    const { call, view, deliverToAgent, requestRow } = stalled();
-    act(() => vi.advanceTimersByTime(DELEGATION_RECOVERY_MS));
-    const retryRow: SdkRow = { kind: "user", id: "u2", text: deliveredTexts(deliverToAgent)[1]!, state: "sent" };
-    view.rerender({ rows: [requestRow, retryRow], turnRunning: false });
+    expect(call.announceContext).not.toHaveBeenCalled();
     act(() => vi.advanceTimersByTime(DELEGATION_RECOVERY_MS * 3));
-    expect(deliveredTexts(deliverToAgent)).toHaveLength(2);
+    expect(deliveredTexts(deliverToAgent)).toHaveLength(1);
     expect(call.announceContext.mock.calls).toEqual([[aboutRequestForVoice("Rode os testes do back.", DELEGATION_FAILED)]]);
   });
 
-  it("pedido que o servidor não confirmou não é reenviado pela voz: a voz diz que ficou como não entregue", () => {
+  it("deploy depois de o agente começar a falar: o texto do meio não vira resposta, a da retomada sim", () => {
+    const { call, view, requestRow } = stalled();
+    const halfway: SdkRow = { kind: "assistant", id: "a1", text: "Vou rodar a suíte.", streaming: false };
+    const resuming: SdkRow = { kind: "note", id: "n1", text: "retomando…" };
+    view.rerender({ rows: [requestRow, halfway, resuming], turnRunning: false });
+    expect(call.announceContext).not.toHaveBeenCalled();
+    expect(call.appendContext).not.toHaveBeenCalledWith(expect.stringContaining("Vou rodar a suíte."));
+    view.rerender({ rows: [requestRow, halfway, resuming, { kind: "assistant", id: "a2", text: "12 verdes.", streaming: false }], turnRunning: false });
+    expect(call.announceContext.mock.calls).toEqual([[expect.stringContaining("12 verdes.")]]);
+  });
+
+  it("pedido que ficou na fila sem conexão por todo o prazo: a voz diz que ele ficou guardado, sem pergunta", () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const { call, view, ask } = setup({ deliverToAgent: vi.fn((): AgentDelivery => "queued") });
+    ask("call_q", "Rode os testes.");
+    view.rerender({ rows: [], turnRunning: false });
+    act(() => vi.advanceTimersByTime(DELEGATION_RECOVERY_MS));
+    expect(call.announceContext.mock.calls).toEqual([[aboutRequestForVoice("Rode os testes.", DELEGATION_UNDELIVERED)]]);
+  });
+
+  it("pedido que o servidor não confirmou nunca é reenviado pela voz: a voz diz que ficou como não entregue", () => {
     const { call, view, deliverToAgent, request } = stalled();
     view.rerender({ rows: [{ kind: "user", id: "u1", text: request, state: "undelivered" }], turnRunning: false });
     act(() => vi.advanceTimersByTime(DELEGATION_RECOVERY_MS * 3));

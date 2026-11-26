@@ -1377,12 +1377,13 @@ export function SdkChatView({
   });
   announceQueuedRef.current = announceQueued;
   useVoiceCallSignal({ connected, callLive, sendFrame });
+  const replayStillArriving = !state.ready;
   const { stopPendingAsks } = useVoiceDelegation({
     call,
     rows: state.rows,
     // Not `callWorking`: a dropped wire clears `connected` but not the turn, and the delegation must
     // wait for the turn's real end, not answer with whatever was said before the blip.
-    turnRunning: state.awaiting || state.turnActive,
+    turnRunning: replayStillArriving || state.awaiting || state.turnActive,
     deliverToAgent: (text) => {
       setSentDuringCall(true);
       const wireUp = connected && socketRef.current?.readyState === WebSocket.OPEN;
@@ -1393,7 +1394,7 @@ export function SdkChatView({
       try {
         dispatchTurn(text, true);
       } catch {
-        return "queued";
+        return "undelivered";
       }
       return "sent";
     },

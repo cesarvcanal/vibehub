@@ -11,7 +11,6 @@ import {
   DELEGATION_NOT_SENT,
   DELEGATION_QUEUED,
   DELEGATION_RECOVERY_MS,
-  DELEGATION_RESENT,
   DELEGATION_SLOW,
   DELEGATION_SLOW_MS,
   DELEGATION_STARTED,
@@ -22,7 +21,6 @@ import {
   askedOfAgent,
   delegationReply,
   delegationRequest,
-  delegationRetryRequest,
   isAgentAnswer,
   nextRecoveryStep,
   type DelegationAnchor,
@@ -33,11 +31,10 @@ import type { VoiceTurn } from "./voiceTurns";
 
 const ASK_AGENT_TOOL = "ask_card_agent";
 
-export type AgentDelivery = "sent" | "queued";
+export type AgentDelivery = "sent" | "queued" | "undelivered";
 
 interface PendingAsk {
   asked: string;
-  turns: VoiceTurn[];
   anchor: DelegationAnchor;
   slowTimer: ReturnType<typeof setTimeout>;
   recovery: DelegationRecovery;
@@ -72,13 +69,13 @@ export function useVoiceDelegation({ call, rows, turnRunning, deliverToAgent, ru
   const pending = React.useRef<PendingAsk[]>([]);
   const [asksSent, setAsksSent] = React.useState(0);
   const recoveryTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [recoveryClock, setRecoveryClock] = React.useState(0);
 
   React.useEffect(() => {
     const sendRequest = (asked: string, turns: VoiceTurn[]): HandOver => {
       const request = delegationRequest(asked, turns);
       const delivery = deliverRef.current(request);
-      return { state: "sent", anchor: { request }, status: delivery === "queued" ? DELEGATION_QUEUED : DELEGATION_STARTED };
+      const status = delivery === "sent" ? DELEGATION_STARTED : DELEGATION_QUEUED;
+      return { state: "sent", anchor: { request, queued: delivery === "queued" }, status };
     };
     const answerOpenQuestion = (question: OpenQuestion, turns: VoiceTurn[]): HandOver => {
       const answers = voiceAnswers(question.questions, turns);
@@ -101,9 +98,7 @@ export function useVoiceDelegation({ call, rows, turnRunning, deliverToAgent, ru
       }
       answerToolCall(toolCall.callId, { ok: true, status: handOver.status });
       const slowTimer = setTimeout(() => appendContext(DELEGATION_SLOW), DELEGATION_SLOW_MS);
-      const choiceHasNoRequestToResend = question !== null;
-      const recovery = choiceHasNoRequestToResend ? { ...NO_RECOVERY, resent: true } : NO_RECOVERY;
-      pending.current.push({ asked, turns: toolCall.turns, anchor: handOver.anchor, slowTimer, recovery });
+      pending.current.push({ asked, anchor: handOver.anchor, slowTimer, recovery: NO_RECOVERY });
       setAsksSent((count) => count + 1);
     };
     return onToolCall((toolCall) => {
@@ -134,7 +129,7 @@ export function useVoiceDelegation({ call, rows, turnRunning, deliverToAgent, ru
 
   const told = React.useRef<Set<string> | null>(null);
   const readQuestions = React.useRef(new Set<string>());
-  React.useEffect(() => {
+  const followPendingAsks = (): void => {
     if (!live) {
       told.current = null;
       readQuestions.current.clear();
@@ -159,13 +154,6 @@ export function useVoiceDelegation({ call, rows, turnRunning, deliverToAgent, ru
           if (step.tell) appendContext(aboutRequestForVoice(ask.asked, DELEGATION_INTERRUPTED));
           stillWaiting.push({ ...ask, recovery: step.recovery });
           break;
-        case "resend": {
-          const retry = delegationRetryRequest(ask.asked, ask.turns);
-          deliverRef.current(retry);
-          appendContext(aboutRequestForVoice(ask.asked, DELEGATION_RESENT));
-          stillWaiting.push({ ...ask, anchor: { request: retry }, recovery: step.recovery });
-          break;
-        }
         case "answered":
           clearTimeout(ask.slowTimer);
           announceContext(agentAnswerForVoice(ask.asked, step.text));
@@ -197,8 +185,11 @@ export function useVoiceDelegation({ call, rows, turnRunning, deliverToAgent, ru
     const deadlines = pending.current.flatMap(({ recovery }) => (recovery.stalledSince === null ? [] : [recovery.stalledSince + DELEGATION_RECOVERY_MS]));
     recoveryTimer.current = deadlines.length === 0
       ? null
-      : setTimeout(() => setRecoveryClock((tick) => tick + 1), Math.max(0, Math.min(...deadlines) - now));
-  }, [rows, turnRunning, live, asksSent, recoveryClock, appendContext, announceContext, clearPending]);
+      : setTimeout(() => followPendingAsksRef.current(), Math.max(0, Math.min(...deadlines) - now));
+  };
+  const followPendingAsksRef = React.useRef(followPendingAsks);
+  followPendingAsksRef.current = followPendingAsks;
+  React.useEffect(() => followPendingAsksRef.current(), [rows, turnRunning, live, asksSent]);
 
   return { stopPendingAsks };
 }
