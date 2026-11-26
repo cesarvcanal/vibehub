@@ -388,6 +388,38 @@ describe("LiveVoiceSession — dropped connection", () => {
     }
   });
 
+  it("a muted call stays muted across the reconnect: the new mic track is off and the model is told", async () => {
+    vi.useFakeTimers();
+    const { session, rig } = await liveSession();
+    session.setMuted(true);
+    rig.peer().fail();
+    await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[0]!);
+    expect(rig.mic().tracks.every((track) => !track.enabled)).toBe(true);
+    rig.peer().channel!.emit({ type: "session.started", session: { id: "live_2" } });
+    expect(session.snapshot().muted).toBe(true);
+    expect(rig.peer().channel!.sent).toContainEqual({ type: "session.input_audio.mute" });
+  });
+
+  it("the turns said before the drop stay in the call while it reconnects and after it is back", async () => {
+    vi.useFakeTimers();
+    const { session, rig } = await liveSession();
+    rig.peer().channel!.emit({ type: "session.input_transcript.delta", delta: "antes da queda" });
+    rig.peer().fail();
+    await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[0]!);
+    expect(session.snapshot().turns.map((turn) => turn.text)).toEqual(["antes da queda"]);
+    rig.peer().channel!.emit({ type: "session.started", session: { id: "live_2" } });
+    rig.peer().channel!.emit({ type: "session.input_transcript.delta", delta: "depois da volta" });
+    expect(session.snapshot().turns.map((turn) => turn.text)).toEqual(["antes da queda", "depois da volta"]);
+  });
+
+  it("a new call starts with no turns from the previous one", async () => {
+    const { session, rig } = await liveSession();
+    rig.peer().channel!.emit({ type: "session.input_transcript.delta", delta: "chamada anterior" });
+    rig.peer().channel!.emit({ type: "session.closed", reason: "close_requested" });
+    await session.start();
+    expect(session.snapshot().turns).toEqual([]);
+  });
+
   it("ending the call while it waits to reconnect opens no new session", async () => {
     vi.useFakeTimers();
     const { session, rig } = await liveSession();
