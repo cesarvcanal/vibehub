@@ -1,5 +1,6 @@
 import { EventEnvelope } from "./audioLevel";
 import { TurnSegmenter, newCallId, type VoiceTurn } from "./voiceTurns";
+import type { VoiceDropCause, VoiceDropReport } from "../../api/types";
 
 /**
  * VOICE MODE — the browser half of a GPT-Live conversation, held inside a card's chat.
@@ -106,6 +107,14 @@ export const ICE_TIMEOUT_MS = 10_000;
 export const START_TIMEOUT_MS = 20_000;
 /** How long `stop` waits for `session.closed` (pending work drains) before tearing down anyway. */
 export const CLOSE_TIMEOUT_MS = 15_000;
+export const RECONNECT_DELAYS_MS: readonly number[] = [2_000, 8_000];
+const RECONNECTING_NOTICE = "voice.notice.reconnecting";
+
+interface CallCarryOver {
+  notice: string | null;
+  earlierTurns: VoiceTurn[];
+  muted: boolean;
+}
 
 class Cancelled extends Error {}
 
@@ -130,6 +139,13 @@ export class LiveVoiceSession {
   private segmenter: TurnSegmenter | null = null;
   private readonly finalListeners = new Set<(turn: VoiceTurn) => void>();
   private readonly toolCallListeners = new Set<ToolCallListener>();
+  private readonly dropListeners = new Set<(report: VoiceDropReport) => void>();
+  private sessionId: string | null = null;
+  private liveSince: number | null = null;
+  private earlierTurns: VoiceTurn[] = [];
+  private iceDisconnectedAt: number | null = null;
+  private reconnectTries = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   /** The assistant "speaking" by its transcript — the orb's last resort when no audio is measurable. */
   readonly speech = new EventEnvelope();
 
@@ -156,6 +172,11 @@ export class LiveVoiceSession {
   onFinalTurn(listener: (turn: VoiceTurn) => void): () => void {
     this.finalListeners.add(listener);
     return () => this.finalListeners.delete(listener);
+  }
+
+  onDrop(listener: (report: VoiceDropReport) => void): () => void {
+    this.dropListeners.add(listener);
+    return () => this.dropListeners.delete(listener);
   }
 
   onToolCall(listener: ToolCallListener): () => void {
@@ -216,12 +237,21 @@ export class LiveVoiceSession {
 
   async start(): Promise<void> {
     if (this.snap.state !== "idle" && this.snap.state !== "error") return;
+    this.reconnectTries = 0;
+    await this.connect({ notice: null, earlierTurns: [], muted: false });
+  }
+
+  private async connect({ notice, earlierTurns, muted }: CallCarryOver): Promise<void> {
     const attempt = ++this.attempt;
     const abort = new AbortController();
     this.abort = abort;
     this.segmenter = new TurnSegmenter(newCallId());
+    this.earlierTurns = earlierTurns;
     this.speech.reset();
-    this.set({ state: "connecting", muted: false, turns: [], error: null, notice: null, diag: EMPTY_DIAG });
+    this.sessionId = null;
+    this.liveSince = null;
+    this.iceDisconnectedAt = null;
+    this.set({ state: "connecting", muted, turns: earlierTurns, error: null, notice, diag: EMPTY_DIAG });
 
     const alive = (): void => {
       if (attempt !== this.attempt || abort.signal.aborted) throw new Cancelled();
@@ -237,6 +267,7 @@ export class LiveVoiceSession {
         throw new Cancelled();
       }
       this.mic = mic;
+      for (const track of mic.getAudioTracks()) track.enabled = !muted;
       // Bounded from the grant on: the time a person spends on the browser's permission prompt is
       // theirs (and "end call" still cancels it), the network handshake after it is not.
       this.startTimer = setTimeout(() => this.fail(attempt, "voice.err.startTimeout"), START_TIMEOUT_MS);
@@ -268,10 +299,15 @@ export class LiveVoiceSession {
       peer.addEventListener("connectionstatechange", () => {
         if (attempt !== this.attempt) return;
         this.setDiag({ peer: peer.connectionState });
-        if (peer.connectionState === "failed") this.fail(attempt, "voice.err.connectionLost");
+        if (peer.connectionState === "failed") this.recoverFromDrop(attempt, "peer_failed");
       });
       peer.addEventListener("iceconnectionstatechange", () => {
-        if (attempt === this.attempt) this.setDiag({ ice: peer.iceConnectionState });
+        if (attempt !== this.attempt) return;
+        const ice = peer.iceConnectionState;
+        const reachable = ice !== "disconnected" && ice !== "failed";
+        if (reachable) this.iceDisconnectedAt = null;
+        else this.iceDisconnectedAt ??= Date.now();
+        this.setDiag({ ice });
       });
       this.setDiag({ peer: peer.connectionState ?? null, ice: peer.iceConnectionState ?? null });
       for (const track of mic.getAudioTracks()) peer.addTrack(track, mic);
@@ -296,6 +332,7 @@ export class LiveVoiceSession {
 
       const result = await this.deps.exchangeOffer(offer, abort.signal);
       alive();
+      this.sessionId = result.sessionId;
       await peer.setRemoteDescription({ type: "answer", sdp: result.sdp });
       // The HTTP request started the session: `session.started` arrives on the channel. Never send
       // `session.start` here.
@@ -310,7 +347,7 @@ export class LiveVoiceSession {
     const { state } = this.snap;
     if (state === "connecting") {
       this.teardown();
-      this.set({ state: "idle" });
+      this.set({ state: "idle", notice: null });
       return;
     }
     if (state !== "live") return;
@@ -347,6 +384,7 @@ export class LiveVoiceSession {
     this.listeners.clear();
     this.finalListeners.clear();
     this.toolCallListeners.clear();
+    this.dropListeners.clear();
   }
 
   private send(event: Record<string, unknown>): boolean {
@@ -383,7 +421,12 @@ export class LiveVoiceSession {
     switch (event.type) {
       case "session.started":
         this.clearStartTimer();
-        if (this.snap.state === "connecting") this.set({ state: "live" });
+        this.liveSince = Date.now();
+        this.reconnectTries = 0;
+        if (this.snap.state === "connecting") {
+          this.set({ state: "live", notice: this.snap.notice === RECONNECTING_NOTICE ? null : this.snap.notice });
+        }
+        if (this.snap.muted) this.send({ type: "session.input_audio.mute" });
         break;
       case "session.closed":
         this.teardown();
@@ -477,7 +520,7 @@ export class LiveVoiceSession {
 
   /** New snapshot of the turns, then the closed ones to the listeners. */
   private publishTurns(closed: VoiceTurn[]): void {
-    if (this.segmenter) this.set({ turns: this.segmenter.turns.slice() });
+    if (this.segmenter) this.set({ turns: [...this.earlierTurns, ...this.segmenter.turns] });
     for (const turn of closed) for (const listener of this.finalListeners) listener(turn);
   }
 
@@ -489,8 +532,53 @@ export class LiveVoiceSession {
       this.teardown();
       this.set({ state: "idle", notice: "voice.notice.closeUnconfirmed" });
     } else {
-      this.fail(attempt, "voice.err.disconnected");
+      this.recoverFromDrop(attempt, "channel_closed");
     }
+  }
+
+  private recoverFromDrop(attempt: number, cause: VoiceDropCause): void {
+    if (attempt !== this.attempt) return;
+    if (this.snap.state !== "live") {
+      this.fail(attempt, dropErrorKey(cause));
+      return;
+    }
+    const report = this.buildDropReport(cause, Date.now());
+    this.teardown();
+    for (const listener of this.dropListeners) listener(report);
+    this.scheduleReconnect(dropErrorKey(cause));
+  }
+
+  private buildDropReport(cause: VoiceDropCause, now: number): VoiceDropReport {
+    const { diag } = this.snap;
+    if (this.liveSince === null) throw new Error("a live call has no session.started time");
+    const agoMs = (at: number | null): number | null => (at === null ? null : now - at);
+    return {
+      cause,
+      sessionId: this.sessionId,
+      liveForMs: now - this.liveSince,
+      peer: diag.peer,
+      ice: diag.ice,
+      channel: diag.channel,
+      iceDisconnectedForMs: agoMs(this.iceDisconnectedAt),
+      sentBytes: diag.sentBytes,
+      receivedBytes: diag.receivedBytes,
+      lastInputAgoMs: agoMs(diag.lastInputAt),
+      lastOutputAgoMs: agoMs(diag.lastOutputAt),
+    };
+  }
+
+  private scheduleReconnect(failure: string): void {
+    const delay = RECONNECT_DELAYS_MS[this.reconnectTries];
+    if (delay === undefined) {
+      this.set({ state: "error", error: failure, notice: null });
+      return;
+    }
+    this.reconnectTries += 1;
+    this.set({ state: "connecting", error: null, notice: RECONNECTING_NOTICE });
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.connect({ notice: RECONNECTING_NOTICE, earlierTurns: this.snap.turns, muted: this.snap.muted });
+    }, delay);
   }
 
   /** Fragments carry no turn id: the segmenter settles them into turns (./voiceTurns.ts). */
@@ -504,7 +592,8 @@ export class LiveVoiceSession {
   private fail(attempt: number, message: string): void {
     if (attempt !== this.attempt) return;
     this.teardown();
-    this.set({ state: "error", error: message });
+    if (this.reconnectTries > 0) this.scheduleReconnect(message);
+    else this.set({ state: "error", error: message });
   }
 
   private clearStartTimer(): void {
@@ -520,6 +609,8 @@ export class LiveVoiceSession {
     this.segmenter = null;
     this.speech.reset();
     this.clearStartTimer();
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
     if (this.closeTimer) clearTimeout(this.closeTimer);
     this.closeTimer = null;
     if (this.statsTimer) clearInterval(this.statsTimer);
@@ -569,6 +660,15 @@ function waitIceComplete(peer: RTCPeerConnection, signal: AbortSignal): Promise<
     peer.addEventListener("icegatheringstatechange", onState);
     signal.addEventListener("abort", onAbort);
   });
+}
+
+function dropErrorKey(cause: VoiceDropCause): string {
+  switch (cause) {
+    case "peer_failed":
+      return "voice.err.connectionLost";
+    case "channel_closed":
+      return "voice.err.disconnected";
+  }
 }
 
 function closedNotice(reason: unknown): string | null {

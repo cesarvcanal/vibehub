@@ -57,6 +57,7 @@ export interface VoiceDelegation {
 export function useVoiceDelegation({ call, rows, agentTurn, deliverToAgent, runAction, answerQuestion }: UseVoiceDelegationOptions): VoiceDelegation {
   const { onToolCall, answerToolCall, appendContext, announceContext } = call;
   const live = call.snap.state === "live";
+  const callEnded = call.snap.state === "idle" || call.snap.state === "error";
   const deliverRef = React.useRef(deliverToAgent);
   deliverRef.current = deliverToAgent;
   const runActionRef = React.useRef(runAction);
@@ -130,6 +131,7 @@ export function useVoiceDelegation({ call, rows, agentTurn, deliverToAgent, runA
   const readQuestions = React.useRef(new Set<string>());
   const followPendingAsks = (): void => {
     if (!live) {
+      if (!callEnded) return;
       told.current = null;
       readQuestions.current.clear();
       clearPending();
@@ -193,7 +195,7 @@ export function useVoiceDelegation({ call, rows, agentTurn, deliverToAgent, runA
   };
   const followPendingAsksRef = React.useRef(followPendingAsks);
   followPendingAsksRef.current = followPendingAsks;
-  React.useEffect(() => followPendingAsksRef.current(), [rows, agentTurn, live]);
+  React.useEffect(() => followPendingAsksRef.current(), [rows, agentTurn, live, callEnded]);
 
   return { stopPendingAsks };
 }

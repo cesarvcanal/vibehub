@@ -1486,6 +1486,7 @@ export const ptBR: Record<string, string> = {
   "voice.notice.expired": "A sessão chegou ao limite de tempo.",
   "voice.notice.moderation": "A sessão foi encerrada pela moderação de conteúdo.",
   "voice.notice.remoteEnded": "A sessão foi encerrada pelo servidor.",
+  "voice.notice.reconnecting": "A conexão de voz caiu. Reconectando…",
   "voice.playAudio": "Tocar áudio do assistente",
   "voice.call.label": "Chamada de voz",
   "voice.call.end": "Encerrar chamada de voz",

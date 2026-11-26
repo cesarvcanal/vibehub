@@ -1,5 +1,6 @@
 import * as React from "react";
 import { api, post } from "@/lib/api";
+import type { VoiceDropNote } from "@/api/types";
 import { useReloadHold } from "@/lib/versionCheck";
 import { LiveVoiceSession, type ToolCallListener, type LiveVoiceDeps, type LiveVoiceSnapshot } from "./liveVoice";
 import { AI_TUNING, LevelMeter, MIC_TUNING, createCallAudioContext, visualLevel } from "./audioLevel";
@@ -38,6 +39,7 @@ export const DEAD_ANALYSER_MS = 700;
 export const SAVE_RETRY_MS = [1_000, 3_000, 8_000, 20_000];
 /** Turns per save request — the server's `TURNS_MAX` (back/src/services/voice/turns.ts). */
 const SAVE_BATCH_MAX = 40;
+const UNSENT_DROP_NOTES_MAX = 10;
 
 /** A turn as the server takes it — a monologue past its cap is clipped here, not refused there. */
 function wireTurn({ vid, role, text, at }: VoiceTurn) {
@@ -159,6 +161,32 @@ export function useVoiceCall({
       void flush();
     });
   }, [session, flush]);
+
+  const unsentDropNotes = React.useRef<VoiceDropNote[]>([]);
+  const sendDropNotes = React.useCallback(async (): Promise<void> => {
+    const notes = unsentDropNotes.current;
+    unsentDropNotes.current = [];
+    for (const note of notes) {
+      try {
+        await post(`/cards/${encodeURIComponent(cardId)}/voice/drops`, note);
+      } catch {
+        unsentDropNotes.current = [...unsentDropNotes.current, note].slice(-UNSENT_DROP_NOTES_MAX);
+      }
+    }
+  }, [cardId]);
+
+  React.useEffect(() => {
+    if (!session) return;
+    return session.onDrop((report) => {
+      const note: VoiceDropNote = { ...report, online: navigator.onLine, hidden: document.visibilityState === "hidden" };
+      unsentDropNotes.current = [...unsentDropNotes.current, note].slice(-UNSENT_DROP_NOTES_MAX);
+      void sendDropNotes();
+    });
+  }, [session, sendDropNotes]);
+
+  React.useEffect(() => {
+    if (snap.state === "live") void sendDropNotes();
+  }, [snap.state, sendDropNotes]);
 
   // The tab closing mid-call: the call ends (closing what was being said into a turn) and the turns
   // not yet saved go in one last best-effort send that outlives the page. Idempotent on the server,

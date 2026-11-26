@@ -3,6 +3,7 @@ import { requireSession, requestUser, sessionUserId } from "../auth/session.js";
 import { requireCardWork } from "../auth/access.js";
 import { cardCallDelegation, cardCallInstructions, createLiveSession, voiceLiveStatus, SDP_MAX_BYTES, VoiceLiveError } from "../services/voice/live.js";
 import { parseVoiceTurns, saveVoiceTurns } from "../services/voice/turns.js";
+import { parseVoiceDrop } from "../services/voice/drop.js";
 import { speechAvailable, synthesizeSpeech, SPEECH_MAX_CHARS } from "../services/voice/speech.js";
 import { Readable } from "node:stream";
 import { originOfUser } from "../services/chat/provenance.js";
@@ -134,6 +135,24 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
         if (turns.length === 0) return await reply.send({ saved: [], duplicate: [] });
         const user = await requestUser(req);
         return await reply.send(await saveVoiceTurns(req.params.id, turns, user ? originOfUser(user) : undefined));
+      } catch (err) {
+        if (err instanceof VoiceLiveError) return await reply.code(err.status).send({ error: err.message });
+        throw err;
+      }
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: unknown }>(
+    "/api/cards/:id/voice/drops",
+    { preHandler: requireCardWork, bodyLimit: 4096 },
+    async (req, reply) => {
+      try {
+        if (!(await registry.getCard(req.params.id))) return await reply.code(404).send({ error: "card not found" });
+        const drop = parseVoiceDrop(req.body);
+        const user = await requestUser(req);
+        if (!user) return await reply.code(401).send({ error: "not authenticated" });
+        logger.warn({ action: "voice.drop", card: req.params.id, by: user.username, ...drop }, "voice call dropped");
+        return await reply.code(204).send();
       } catch (err) {
         if (err instanceof VoiceLiveError) return await reply.code(err.status).send({ error: err.message });
         throw err;

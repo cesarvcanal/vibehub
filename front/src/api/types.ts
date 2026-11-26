@@ -332,6 +332,27 @@ export interface VoiceActionResult {
   output: unknown;
 }
 
+export type VoiceDropCause = "peer_failed" | "channel_closed";
+
+export interface VoiceDropReport {
+  cause: VoiceDropCause;
+  sessionId: string | null;
+  liveForMs: number;
+  peer: RTCPeerConnectionState | null;
+  ice: RTCIceConnectionState | null;
+  channel: RTCDataChannelState | null;
+  iceDisconnectedForMs: number | null;
+  sentBytes: number | null;
+  receivedBytes: number | null;
+  lastInputAgoMs: number | null;
+  lastOutputAgoMs: number | null;
+}
+
+export interface VoiceDropNote extends VoiceDropReport {
+  online: boolean;
+  hidden: boolean;
+}
+
 /** `POST /api/cards/:id/transcribe` */
 export interface Transcription {
   text: string;
