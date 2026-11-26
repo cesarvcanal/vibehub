@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CirclePause, GitMerge, Loader2, MessageCircleQuestion, RotateCcw, X } from "lucide-react";
+import { CircleCheck, CirclePause, GitMerge, Loader2, MessageCircleQuestion, RotateCcw, X } from "lucide-react";
 import { Badge, BADGE_TEXT, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -171,16 +171,9 @@ function AnalysisMerge({ cardId, read, rereading }: { cardId: string; read: Anal
     if (gateRunning) return t("analysis.mergeGate.runningButton");
     return t(refusal ? "analysis.merge.retry" : "analysis.merge", { n: prNumber });
   };
+  const passedSha = gateState === "passed" && !merging ? read.mergeGate?.sha : undefined;
   return (
     <div className="flex shrink-0 flex-col gap-1.5">
-      {gateRunning ? (
-        <p role="status" className="flex items-center gap-1.5 rounded-md border border-sky-500/30 bg-sky-500/10 px-2.5 py-1.5 text-xs text-sky-300">
-          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" /> {t("analysis.mergeGate.running")}
-        </p>
-      ) : null}
-      {gateState === "passed" && read.mergeGate?.sha && !merging ? (
-        <p className={`text-xs ${BADGE_TEXT.ok}`}>{t("analysis.mergeGate.passed", { sha: read.mergeGate.sha.slice(0, 7) })}</p>
-      ) : null}
       {refusal ? (
         <div role="alert" className="flex flex-col gap-1 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs">
           <p className="font-medium text-destructive">{mergeRefusalTitle(refusal.reason, t)}</p>
@@ -189,11 +182,29 @@ function AnalysisMerge({ cardId, read, rereading }: { cardId: string; read: Anal
           ) : null}
         </div>
       ) : null}
-      <Button type="button" size="sm" className="self-start" disabled={mergeBlocked} onClick={() => merge.mutate()}>
-        {mergeBlocked ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitMerge className="h-3.5 w-3.5" />}
-        {mergeLabel()}
-      </Button>
-      {merging ? <p className="text-xs text-muted-foreground">{t("analysis.merge.running")}</p> : null}
+      <div
+        className={cn(
+          "flex flex-wrap items-center justify-end gap-x-3 gap-y-1.5 text-xs",
+          (passedSha || gateRunning || merging) && "rounded-md border border-border/60 bg-background/40 px-2.5 py-1.5",
+          passedSha && "border-emerald-500/30 bg-emerald-500/5",
+        )}
+      >
+        {gateRunning ? (
+          <p role="status" className="flex min-w-0 flex-1 basis-48 items-center gap-1.5 text-sky-300">
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" /> {t("analysis.mergeGate.running")}
+          </p>
+        ) : null}
+        {passedSha ? (
+          <p className={cn("flex min-w-0 flex-1 basis-48 items-center gap-1.5", BADGE_TEXT.ok)}>
+            <CircleCheck aria-hidden className="h-3.5 w-3.5 shrink-0" /> {t("analysis.mergeGate.passed", { sha: passedSha.slice(0, 7) })}
+          </p>
+        ) : null}
+        {merging ? <p className="min-w-0 flex-1 basis-48 text-muted-foreground">{t("analysis.merge.running")}</p> : null}
+        <Button type="button" size="sm" className="h-7 shrink-0 gap-1.5 px-2.5 text-xs [&_svg]:size-3.5" disabled={mergeBlocked} onClick={() => merge.mutate()}>
+          {mergeBlocked ? <Loader2 className="animate-spin" /> : <GitMerge />}
+          {mergeLabel()}
+        </Button>
+      </div>
       {refusedByClick ? <p className="whitespace-pre-wrap text-xs text-destructive">{refusedByClick}</p> : null}
       {unconfirmed ? <p role="alert" className="text-xs text-destructive">{t("analysis.merge.unconfirmed")}</p> : null}
     </div>
