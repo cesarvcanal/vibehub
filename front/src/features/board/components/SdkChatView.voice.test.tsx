@@ -11,7 +11,7 @@ import { resetLanguage, setLanguage } from "@/i18n";
 import { FakeAudioContext, fakeRig, type FakeRig } from "@/features/voice/fakeWebRtc";
 import { setVoiceCallTestHooks } from "@/features/voice/useVoiceCall";
 import { SERVER_BACK_CONTEXT } from "@/features/voice/voiceContext";
-import { DELEGATION_NOT_SENT } from "@/features/voice/voiceDelegation";
+import { DELEGATION_INTERRUPTED, DELEGATION_QUEUED } from "@/features/voice/voiceDelegation";
 import { QUESTION_ANSWER_SENT } from "@/features/voice/voiceQuestion";
 
 function toolCall(callId: string, name: string, args: Record<string, unknown>) {
@@ -399,6 +399,22 @@ describe("a voice call inside the card's chat", () => {
     expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument();
   });
 
+  it("o result do turno que o pedido urgente cortou não faz a voz achar que o agente parou: ela espera e fala a resposta", async () => {
+    const { ws } = await openChat();
+    ws.deliver({ type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } });
+    await startCall();
+    act(() => channel().emit(toolCall("call_u2", "ask_card_agent", { request: "Qual é a branch?" })));
+    await waitFor(() => expect(ws.frames).toContainEqual(expect.objectContaining({ type: "user", now: true })));
+    ws.deliver({ type: "result", isError: false, subtype: "error_during_execution", turnActive: true });
+    const commentary = () => channel().sent.filter((sentEvent) => sentEvent.type === "session.commentary.append").map((sentEvent) => String(sentEvent.content));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(thinkingSent().some((content) => content.includes(DELEGATION_INTERRUPTED))).toBe(false);
+    ws.deliver({ type: "assistant_text", text: "card/recuperar-pedidos." });
+    ws.deliver({ type: "result", isError: false, turnActive: false });
+    await waitFor(() => expect(commentary()).toContainEqual(expect.stringContaining("card/recuperar-pedidos.")));
+    expect(thinkingSent().some((content) => content.includes(DELEGATION_INTERRUPTED))).toBe(false);
+  });
+
   it("com o card parado numa pergunta de múltipla escolha desde antes da chamada, a voz lê a pergunta e o pedido dela vai como resposta, sem fechar a pergunta", async () => {
     const { ws } = await openChat();
     ws.deliver({ type: "user_question", id: "q_1", questions: [{ question: "Qual caminho?", header: "Caminho", options: [{ label: "A", description: "a" }, { label: "B", description: "b" }] }] });
@@ -415,13 +431,25 @@ describe("a voice call inside the card's chat", () => {
     expect(ws.frames.filter((frame) => frame.type === "user")).toEqual([]);
   });
 
-  it("sem conexão, a voz ouve na hora que o pedido não foi entregue, e nada fica preso na fila", async () => {
+  it("sem conexão, o pedido da voz fica guardado, sai sozinho quando ela volta, e a resposta chega à voz", async () => {
     const { ws } = await openChat();
     await startCall();
     ws.drop();
     act(() => channel().emit(toolCall("call_d2", "ask_card_agent", { request: "Rode os testes." })));
-    await waitFor(() => expect(toolOutput(channel().sent, "call_d2")).toEqual({ error: DELEGATION_NOT_SENT }));
-    expect(screen.queryByTestId("sdk-queued")).not.toBeInTheDocument();
+    await waitFor(() => expect(toolOutput(channel().sent, "call_d2")).toEqual({ ok: true, status: DELEGATION_QUEUED }));
+    expect(ws.frames.some((f) => f.type === "user")).toBe(false);
+
+    await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: 5_000 });
+    const again = FakeSocket.instances[1]!;
+    again.accept();
+    again.deliver({ type: "ready" });
+    await waitFor(() => expect(again.frames.filter((f) => f.type === "user" && f.text?.includes("Rode os testes."))).toHaveLength(1));
+    again.deliver({ type: "assistant_text", text: "Os 12 testes passaram." });
+    again.deliver({ type: "result", isError: false });
+    await waitFor(() =>
+      expect(channel().sent).toContainEqual(expect.objectContaining({ type: "session.commentary.append", content: expect.stringContaining("Os 12 testes passaram.") })),
+    );
+    expect(again.frames.filter((f) => f.type === "user")).toHaveLength(1);
   });
 
   it("ordem dada na chamada executa pela rota da voz e não interrompe o agente do card", async () => {

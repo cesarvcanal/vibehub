@@ -1262,7 +1262,7 @@ export function SdkChatView({
   }, []);
 
   const interrupt = (): void => {
-    sendInterrupt();
+    if (sendInterrupt()) stopPendingAsks();
   };
 
 
@@ -1377,17 +1377,25 @@ export function SdkChatView({
   });
   announceQueuedRef.current = announceQueued;
   useVoiceCallSignal({ connected, callLive, sendFrame });
-  useVoiceDelegation({
+  const { stopPendingAsks } = useVoiceDelegation({
     call,
     rows: state.rows,
     // Not `callWorking`: a dropped wire clears `connected` but not the turn, and the delegation must
     // wait for the turn's real end, not answer with whatever was said before the blip.
     turnRunning: state.awaiting || state.turnActive,
-    sendUrgentToAgent: (text) => {
-      const wireUp = connected && socketRef.current?.readyState === WebSocket.OPEN;
-      if (!wireUp) throw new Error(translate("sdk.offline"));
-      dispatchTurn(text, true);
+    deliverToAgent: (text) => {
       setSentDuringCall(true);
+      const wireUp = connected && socketRef.current?.readyState === WebSocket.OPEN;
+      if (!wireUp || !stateRef.current.ready) {
+        setQueue((prev) => enqueue(prev, { id: newQueueId(), text, at: Date.now(), from: selfOriginRef.current }));
+        return "queued";
+      }
+      try {
+        dispatchTurn(text, true);
+      } catch {
+        return "queued";
+      }
+      return "sent";
     },
     runAction: (toolCall) => runVoiceAction(cardId, toolCall),
     answerQuestion: (questionId, answers) => {

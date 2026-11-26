@@ -2,15 +2,26 @@ import { describe, expect, it } from "vitest";
 import type { SdkRow } from "@/features/board/lib/sdkChat";
 import type { VoiceTurn } from "./voiceTurns";
 import {
+  DELEGATION_FAILED,
+  DELEGATION_INTERRUPTED,
   DELEGATION_NOT_SENT,
-  DELEGATION_SILENT,
+  DELEGATION_QUEUED,
+  DELEGATION_RECOVERY_MS,
+  DELEGATION_RESENT,
   DELEGATION_SLOW,
   DELEGATION_STARTED,
+  DELEGATION_STOPPED,
   DELEGATION_TRANSCRIPT_MAX_CHARS,
+  DELEGATION_UNDELIVERED,
+  NO_RECOVERY,
+  aboutRequestForVoice,
   delegationReply,
+  delegationRetryRequest,
   agentAnswerForVoice,
   delegationRequest,
+  nextRecoveryStep,
   parseVoiceRequest,
+  type DelegationReply,
 } from "./voiceDelegation";
 
 const turn = (role: VoiceTurn["role"], text: string, n: number): VoiceTurn => ({ vid: `vc-${role}${n}`, role, text, at: n, final: true });
@@ -90,9 +101,84 @@ describe("a voz nunca manda a pessoa ao chat", () => {
     ["DELEGATION_STARTED", DELEGATION_STARTED],
     ["DELEGATION_SLOW", DELEGATION_SLOW],
     ["DELEGATION_NOT_SENT", DELEGATION_NOT_SENT],
-    ["DELEGATION_SILENT", DELEGATION_SILENT],
+    ["DELEGATION_QUEUED", DELEGATION_QUEUED],
+    ["DELEGATION_INTERRUPTED", DELEGATION_INTERRUPTED],
+    ["DELEGATION_RESENT", DELEGATION_RESENT],
+    ["DELEGATION_FAILED", DELEGATION_FAILED],
+    ["DELEGATION_UNDELIVERED", DELEGATION_UNDELIVERED],
+    ["DELEGATION_STOPPED", DELEGATION_STOPPED],
   ])("%s não manda a pessoa conferir, ver ou digitar no chat", (_name, text) => {
     expect(text).not.toMatch(/no chat/);
+  });
+});
+
+describe("a voz nunca pergunta se a pessoa quer repetir um pedido que ela já fez", () => {
+  it.each([
+    ["DELEGATION_QUEUED", DELEGATION_QUEUED],
+    ["DELEGATION_INTERRUPTED", DELEGATION_INTERRUPTED],
+    ["DELEGATION_RESENT", DELEGATION_RESENT],
+    ["DELEGATION_FAILED", DELEGATION_FAILED],
+    ["DELEGATION_UNDELIVERED", DELEGATION_UNDELIVERED],
+    ["DELEGATION_STOPPED", DELEGATION_STOPPED],
+  ])("%s proíbe a pergunta e não oferece pedir de novo", (_name, text) => {
+    expect(text).not.toMatch(/(?<!não )pergunte se ela quer/);
+    expect(text).toContain("não pergunte se ela quer pedir de novo");
+  });
+});
+
+describe("delegationRetryRequest — o reenvio automático de um pedido que ficou sem resposta", () => {
+  const turns = [turn("user", "roda os testes do back", 1)];
+
+  it("é o mesmo pedido por voz, com outras palavras: a âncora acha o reenvio e não o original", () => {
+    const original = delegationRequest("Rode os testes do back.", turns);
+    const retry = delegationRetryRequest("Rode os testes do back.", turns);
+    expect(retry).not.toBe(original);
+    expect(parseVoiceRequest(retry)?.asked).toBe("Rode os testes do back.");
+  });
+
+  it("manda o agente conferir o que já fez e não repetir ação concluída", () => {
+    const retry = delegationRetryRequest("Crie o card de deploy.", turns);
+    expect(retry).toContain("ficou sem resposta");
+    expect(retry).toContain("confira o que já foi feito");
+    expect(retry).toContain("não repita nenhuma ação que já foi concluída");
+  });
+});
+
+describe("nextRecoveryStep — pedido sem resposta: esperar a retomada, reenviar uma vez, depois dizer a falha", () => {
+  const answered: DelegationReply = { state: "answered", text: "12 verdes.", answers: ["12 verdes."] };
+  const waiting: DelegationReply = { state: "waiting", answers: [] };
+  const silent: DelegationReply = { state: "silent", answers: [] };
+  const undelivered: DelegationReply = { state: "undelivered", answers: [] };
+
+  it("resposta é resposta, em qualquer momento", () => {
+    expect(nextRecoveryStep(answered, { ...NO_RECOVERY, stalledSince: 0, resent: true }, 10 * DELEGATION_RECOVERY_MS)).toEqual({ kind: "answered", text: "12 verdes." });
+  });
+
+  it("turno andando de novo zera o relógio da espera", () => {
+    expect(nextRecoveryStep(waiting, { ...NO_RECOVERY, stalledSince: 5 }, 10)).toEqual({ kind: "wait", recovery: { ...NO_RECOVERY, stalledSince: null } });
+  });
+
+  it("o primeiro silêncio só começa a espera, e avisa a voz uma vez", () => {
+    expect(nextRecoveryStep(silent, NO_RECOVERY, 1_000)).toEqual({ kind: "hold", recovery: { stalledSince: 1_000, resent: false, stallTold: true }, tell: true });
+    const holding = { stalledSince: 1_000, resent: false, stallTold: true };
+    expect(nextRecoveryStep(silent, holding, 1_000 + DELEGATION_RECOVERY_MS - 1)).toEqual({ kind: "hold", recovery: holding, tell: false });
+  });
+
+  it("silêncio por todo o prazo, sem reenvio ainda: reenvia", () => {
+    expect(nextRecoveryStep(silent, { stalledSince: 0, resent: false, stallTold: true }, DELEGATION_RECOVERY_MS)).toEqual({ kind: "resend" });
+  });
+
+  it("silêncio por todo o prazo depois do reenvio: desiste com a falha dita, sem reenviar de novo", () => {
+    expect(nextRecoveryStep(silent, { stalledSince: 0, resent: true, stallTold: true }, DELEGATION_RECOVERY_MS)).toEqual({ kind: "give_up", note: DELEGATION_FAILED });
+  });
+
+  it("pedido que não chegou ao agente nunca vira reenvio por cima do que o chat já tenta entregar", () => {
+    expect(nextRecoveryStep(undelivered, NO_RECOVERY, 0)).toMatchObject({ kind: "hold" });
+    expect(nextRecoveryStep(undelivered, { stalledSince: 0, resent: false, stallTold: true }, DELEGATION_RECOVERY_MS)).toEqual({ kind: "give_up", note: DELEGATION_UNDELIVERED });
+  });
+
+  it("o aviso de estado diz a que pedido se refere", () => {
+    expect(aboutRequestForVoice("Rode os testes.", DELEGATION_FAILED)).toBe(`Sobre o pedido "Rode os testes.": ${DELEGATION_FAILED}`);
   });
 });
 
@@ -128,6 +214,13 @@ describe("delegationReply", () => {
 
   it("a turn that ends with nothing said is told as such", () => {
     expect(delegationReply([user("u1", request)], { request }, false)).toEqual({ state: "silent", answers: [] });
+  });
+
+  it("o pedido que o servidor não confirmou é não entregue, não silêncio; o que ainda espera o recibo já conta a resposta", () => {
+    const sending: SdkRow = { kind: "user", id: "u1", text: request, state: "sending" };
+    const refused: SdkRow = { kind: "user", id: "u1", text: request, state: "undelivered" };
+    expect(delegationReply([refused], { request }, false)).toEqual({ state: "undelivered", answers: [] });
+    expect(delegationReply([sending, answer("a1", "12 verdes.")], { request }, false)).toMatchObject({ state: "answered", text: "12 verdes." });
   });
 
   it("uma escolha dada por voz a uma pergunta do agente conta a partir da pergunta, não de uma mensagem", () => {
