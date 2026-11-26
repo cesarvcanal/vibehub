@@ -137,7 +137,7 @@ export type RecoveryStep =
   | { kind: "answered"; text: string }
   | { kind: "wait"; recovery: DelegationRecovery }
   | { kind: "hold"; recovery: DelegationRecovery; tell: boolean }
-  | { kind: "resend" }
+  | { kind: "resend"; recovery: DelegationRecovery }
   | { kind: "give_up"; note: string };
 
 export function nextRecoveryStep(reply: DelegationReply, recovery: DelegationRecovery, now: number): RecoveryStep {
@@ -148,6 +148,6 @@ export function nextRecoveryStep(reply: DelegationReply, recovery: DelegationRec
     return { kind: "hold", recovery: { ...recovery, stalledSince, stallTold: true }, tell: !recovery.stallTold };
   }
   if (reply.state === "undelivered") return { kind: "give_up", note: DELEGATION_UNDELIVERED };
-  if (!recovery.resent) return { kind: "resend" };
+  if (!recovery.resent) return { kind: "resend", recovery: { ...recovery, stalledSince: null, resent: true } };
   return { kind: "give_up", note: DELEGATION_FAILED };
 }

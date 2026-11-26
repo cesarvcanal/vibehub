@@ -437,19 +437,19 @@ describe("a voice call inside the card's chat", () => {
     ws.drop();
     act(() => channel().emit(toolCall("call_d2", "ask_card_agent", { request: "Rode os testes." })));
     await waitFor(() => expect(toolOutput(channel().sent, "call_d2")).toEqual({ ok: true, status: DELEGATION_QUEUED }));
-    expect(ws.frames.some((f) => f.type === "user")).toBe(false);
+    expect(ws.frames.some((frame) => frame.type === "user")).toBe(false);
 
     await waitFor(() => expect(FakeSocket.instances.length).toBe(2), { timeout: 5_000 });
     const again = FakeSocket.instances[1]!;
     again.accept();
     again.deliver({ type: "ready" });
-    await waitFor(() => expect(again.frames.filter((f) => f.type === "user" && f.text?.includes("Rode os testes."))).toHaveLength(1));
+    await waitFor(() => expect(again.frames.filter((frame) => frame.type === "user" && frame.text?.includes("Rode os testes."))).toHaveLength(1));
     again.deliver({ type: "assistant_text", text: "Os 12 testes passaram." });
     again.deliver({ type: "result", isError: false });
     await waitFor(() =>
       expect(channel().sent).toContainEqual(expect.objectContaining({ type: "session.commentary.append", content: expect.stringContaining("Os 12 testes passaram.") })),
     );
-    expect(again.frames.filter((f) => f.type === "user")).toHaveLength(1);
+    expect(again.frames.filter((frame) => frame.type === "user")).toHaveLength(1);
   });
 
   it("ordem dada na chamada executa pela rota da voz e não interrompe o agente do card", async () => {

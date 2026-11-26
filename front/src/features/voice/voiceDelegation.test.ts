@@ -164,8 +164,11 @@ describe("nextRecoveryStep — pedido sem resposta: esperar a retomada, reenviar
     expect(nextRecoveryStep(silent, holding, 1_000 + DELEGATION_RECOVERY_MS - 1)).toEqual({ kind: "hold", recovery: holding, tell: false });
   });
 
-  it("silêncio por todo o prazo, sem reenvio ainda: reenvia", () => {
-    expect(nextRecoveryStep(silent, { stalledSince: 0, resent: false, stallTold: true }, DELEGATION_RECOVERY_MS)).toEqual({ kind: "resend" });
+  it("silêncio por todo o prazo, sem reenvio ainda: reenvia e recomeça a espera, marcada como já reenviada", () => {
+    expect(nextRecoveryStep(silent, { stalledSince: 0, resent: false, stallTold: true }, DELEGATION_RECOVERY_MS)).toEqual({
+      kind: "resend",
+      recovery: { stalledSince: null, resent: true, stallTold: true },
+    });
   });
 
   it("silêncio por todo o prazo depois do reenvio: desiste com a falha dita, sem reenviar de novo", () => {

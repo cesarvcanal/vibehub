@@ -822,7 +822,7 @@ describe("streaming input — mensagem no meio do turno (turn_absorbed)", () => 
 
 describe("result — a tela fica sabendo se outro turno segue em andamento", () => {
   const resultFrames = (socket: FakeSocket) =>
-    socket.sent.map((s) => JSON.parse(s) as { type: string; turnActive?: boolean }).filter((frame) => frame.type === "result");
+    socket.sent.map((sentText) => JSON.parse(sentText) as { type: string; turnActive?: boolean }).filter((frame) => frame.type === "result");
 
   it("o result do turno cortado por um envio urgente diz que o turno do envio ainda vem; o último diz que acabou", () => {
     const session = ensure();

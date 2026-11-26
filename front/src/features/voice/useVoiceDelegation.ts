@@ -163,7 +163,7 @@ export function useVoiceDelegation({ call, rows, turnRunning, deliverToAgent, ru
           const retry = delegationRetryRequest(ask.asked, ask.turns);
           deliverRef.current(retry);
           appendContext(aboutRequestForVoice(ask.asked, DELEGATION_RESENT));
-          stillWaiting.push({ ...ask, anchor: { request: retry }, recovery: { ...ask.recovery, stalledSince: null, resent: true } });
+          stillWaiting.push({ ...ask, anchor: { request: retry }, recovery: step.recovery });
           break;
         }
         case "answered":
