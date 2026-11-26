@@ -4,6 +4,7 @@ import { post } from "@/lib/api";
 import { resetReloadHoldsForTesting, useVersionCheck } from "@/lib/versionCheck";
 import { FakeAudioContext, FakeStream, fakeRig, type FakeRig } from "./fakeWebRtc";
 import { DEAD_ANALYSER_MS, SAVE_RETRY_MS, useVoiceCall } from "./useVoiceCall";
+import { RECONNECT_DELAYS_MS } from "./liveVoice";
 
 /**
  * The call's glue, with the browser's media stack and Web Audio replaced by hand-driven fakes: the
@@ -188,6 +189,37 @@ describe("useVoiceCall — turns into the chat", () => {
     });
     expect(mockPost).toHaveBeenCalledTimes(1);
     expect(result.current.turns[0]!.save).toBe("failed");
+  });
+});
+
+describe("useVoiceCall — dropped connection", () => {
+  it("a queda da chamada vai ao servidor com o retrato da conexão, a rede e a aba", async () => {
+    const { result } = setup();
+    await goLive(result);
+    act(() => rig.peer().fail());
+    const drops = mockPost.mock.calls.filter(([url]) => url === "/cards/card-1/voice/drops");
+    expect(drops).toHaveLength(1);
+    expect(drops[0]![1]).toMatchObject({ cause: "peer_failed", sessionId: "live_1", peer: "failed", online: navigator.onLine, hidden: document.visibilityState === "hidden" });
+  });
+
+  it("a chamada que reconecta segura o áudio da chamada em vez de devolvê-lo", async () => {
+    const { result } = setup();
+    await goLive(result);
+    act(() => rig.peer().fail());
+    expect(result.current.snap.state).toBe("connecting");
+    expect(audio.closed).toBe(false);
+  });
+
+  it("o registro da queda que falha não derruba nem interrompe a reconexão", async () => {
+    mockPost.mockImplementation((url: string) => (url.endsWith("/voice/drops") ? Promise.reject(new Error("offline")) : Promise.resolve({ saved: [], duplicate: [] })));
+    const { result } = setup();
+    await goLive(result);
+    act(() => rig.peer().fail());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[0]!);
+    });
+    expect(rig.exchanges).toHaveLength(2);
+    expect(result.current.snap.state).toBe("connecting");
   });
 });
 

@@ -1,5 +1,6 @@
 import * as React from "react";
 import { api, post } from "@/lib/api";
+import type { VoiceDropNote } from "@/api/types";
 import { useReloadHold } from "@/lib/versionCheck";
 import { LiveVoiceSession, type ToolCallListener, type LiveVoiceDeps, type LiveVoiceSnapshot } from "./liveVoice";
 import { AI_TUNING, LevelMeter, MIC_TUNING, createCallAudioContext, visualLevel } from "./audioLevel";
@@ -159,6 +160,15 @@ export function useVoiceCall({
       void flush();
     });
   }, [session, flush]);
+
+  React.useEffect(() => {
+    if (!session) return;
+    return session.onDrop((report) => {
+      const note: VoiceDropNote = { ...report, online: navigator.onLine, hidden: document.visibilityState === "hidden" };
+      // eslint-disable-next-line no-restricted-syntax -- the drop note is diagnostics for the operator; the call reconnects whether or not it arrives
+      post(`/cards/${encodeURIComponent(cardId)}/voice/drops`, note).catch(() => undefined);
+    });
+  }, [session, cardId]);
 
   // The tab closing mid-call: the call ends (closing what was being said into a turn) and the turns
   // not yet saved go in one last best-effort send that outlives the page. Idempotent on the server,
