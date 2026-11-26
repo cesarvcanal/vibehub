@@ -23,6 +23,7 @@ import {
   delegationRequest,
   isAgentAnswer,
   nextRecoveryStep,
+  type AgentTurn,
   type DelegationAnchor,
   type DelegationRecovery,
 } from "./voiceDelegation";
@@ -43,8 +44,7 @@ interface PendingAsk {
 export interface UseVoiceDelegationOptions {
   call: Pick<VoiceCall, "snap" | "onToolCall" | "answerToolCall" | "appendContext" | "announceContext">;
   rows: SdkRow[];
-  /** A turn of the agent is running or about to (a message just went). */
-  turnRunning: boolean;
+  agentTurn: AgentTurn;
   deliverToAgent: (text: string) => AgentDelivery;
   runAction: (call: VoiceActionCall) => Promise<unknown>;
   answerQuestion: (questionId: string, answers: SdkQuestionAnswer[]) => boolean;
@@ -54,7 +54,7 @@ export interface VoiceDelegation {
   stopPendingAsks: () => void;
 }
 
-export function useVoiceDelegation({ call, rows, turnRunning, deliverToAgent, runAction, answerQuestion }: UseVoiceDelegationOptions): VoiceDelegation {
+export function useVoiceDelegation({ call, rows, agentTurn, deliverToAgent, runAction, answerQuestion }: UseVoiceDelegationOptions): VoiceDelegation {
   const { onToolCall, answerToolCall, appendContext, announceContext } = call;
   const live = call.snap.state === "live";
   const deliverRef = React.useRef(deliverToAgent);
@@ -67,7 +67,6 @@ export function useVoiceDelegation({ call, rows, turnRunning, deliverToAgent, ru
   rowsRef.current = rows;
   // A ref, not state: a result must go once, and two effect runs before a re-render would send it twice.
   const pending = React.useRef<PendingAsk[]>([]);
-  const [asksSent, setAsksSent] = React.useState(0);
   const recoveryTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   React.useEffect(() => {
@@ -99,7 +98,7 @@ export function useVoiceDelegation({ call, rows, turnRunning, deliverToAgent, ru
       answerToolCall(toolCall.callId, { ok: true, status: handOver.status });
       const slowTimer = setTimeout(() => appendContext(DELEGATION_SLOW), DELEGATION_SLOW_MS);
       pending.current.push({ asked, anchor: handOver.anchor, slowTimer, recovery: NO_RECOVERY });
-      setAsksSent((count) => count + 1);
+      followPendingAsksRef.current();
     };
     return onToolCall((toolCall) => {
       if (toolCall.name === ASK_AGENT_TOOL) {
@@ -143,7 +142,7 @@ export function useVoiceDelegation({ call, rows, turnRunning, deliverToAgent, ru
     const stillWaiting: PendingAsk[] = [];
     const now = Date.now();
     for (const ask of pending.current) {
-      const reply = delegationReply(rows, ask.anchor, turnRunning);
+      const reply = delegationReply(rows, ask.anchor, agentTurn);
       for (const text of reply.answers) held.add(text);
       const step = nextRecoveryStep(reply, ask.recovery, now);
       switch (step.kind) {
@@ -162,6 +161,10 @@ export function useVoiceDelegation({ call, rows, turnRunning, deliverToAgent, ru
         case "give_up":
           clearTimeout(ask.slowTimer);
           announceContext(aboutRequestForVoice(ask.asked, step.note));
+          stillWaiting.push({ ...ask, recovery: step.recovery });
+          break;
+        case "keep":
+          stillWaiting.push(ask);
           break;
       }
     }
@@ -173,7 +176,7 @@ export function useVoiceDelegation({ call, rows, turnRunning, deliverToAgent, ru
       if (asking) {
         clearTimeout(asking.slowTimer);
         pending.current = pending.current.slice(0, -1);
-        for (const text of delegationReply(rows, asking.anchor, true).answers) known.add(text);
+        for (const text of delegationReply(rows, asking.anchor, "running").answers) known.add(text);
       }
     }
     for (const row of rows) {
@@ -182,14 +185,15 @@ export function useVoiceDelegation({ call, rows, turnRunning, deliverToAgent, ru
       appendContext(agentContext(row.text));
     }
     if (recoveryTimer.current) clearTimeout(recoveryTimer.current);
-    const deadlines = pending.current.flatMap(({ recovery }) => (recovery.stalledSince === null ? [] : [recovery.stalledSince + DELEGATION_RECOVERY_MS]));
+    const deadlines = pending.current.flatMap(({ recovery }) =>
+      recovery.stalledSince === null || recovery.failureTold ? [] : [recovery.stalledSince + DELEGATION_RECOVERY_MS]);
     recoveryTimer.current = deadlines.length === 0
       ? null
       : setTimeout(() => followPendingAsksRef.current(), Math.max(0, Math.min(...deadlines) - now));
   };
   const followPendingAsksRef = React.useRef(followPendingAsks);
   followPendingAsksRef.current = followPendingAsks;
-  React.useEffect(() => followPendingAsksRef.current(), [rows, turnRunning, live, asksSent]);
+  React.useEffect(() => followPendingAsksRef.current(), [rows, agentTurn, live]);
 
   return { stopPendingAsks };
 }

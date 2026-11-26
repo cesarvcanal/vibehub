@@ -11,7 +11,7 @@ import { resetLanguage, setLanguage } from "@/i18n";
 import { FakeAudioContext, fakeRig, type FakeRig } from "@/features/voice/fakeWebRtc";
 import { setVoiceCallTestHooks } from "@/features/voice/useVoiceCall";
 import { SERVER_BACK_CONTEXT } from "@/features/voice/voiceContext";
-import { DELEGATION_INTERRUPTED, DELEGATION_QUEUED } from "@/features/voice/voiceDelegation";
+import { DELEGATION_INTERRUPTED, DELEGATION_QUEUED, DELEGATION_STOPPED } from "@/features/voice/voiceDelegation";
 import { QUESTION_ANSWER_SENT } from "@/features/voice/voiceQuestion";
 
 function toolCall(callId: string, name: string, args: Record<string, unknown>) {
@@ -412,6 +412,17 @@ describe("a voice call inside the card's chat", () => {
     again.deliver({ type: "result", isError: false });
     await waitFor(() => expect(spoken()).toEqual([expect.objectContaining({ content: expect.stringContaining("Os 12 testes passaram.") })]));
     expect(again.frames.filter((frame) => frame.type === "user")).toEqual([]);
+  });
+
+  it("a pessoa clica em parar com um pedido da voz em andamento: a voz fica sabendo que foi ela quem parou", async () => {
+    const { ws } = await openChat();
+    await startCall();
+    act(() => channel().emit(toolCall("call_s1", "ask_card_agent", { request: "Rode o deploy." })));
+    await waitFor(() => expect(ws.frames.some((frame) => frame.type === "user" && frame.text?.includes("Rode o deploy."))).toBe(true));
+    ws.deliver({ type: "tool_use", id: "t1", name: "Bash", input: { command: "npm run deploy" } });
+    await userEvent.click(await screen.findByTestId("sdk-interrupt"));
+    await waitFor(() => expect(ws.frames).toContainEqual(expect.objectContaining({ type: "interrupt" })));
+    await waitFor(() => expect(thinkingSent()).toContainEqual(expect.stringContaining(DELEGATION_STOPPED)));
   });
 
   it("um pedido da voz com o agente ocupado fura a fila: vai urgente, como o enviar agora do chat", async () => {

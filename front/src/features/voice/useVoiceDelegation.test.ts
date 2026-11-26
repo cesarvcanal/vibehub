@@ -38,7 +38,7 @@ function setup(options: Partial<Pick<UseVoiceDelegationOptions, "deliverToAgent"
   const runAction = options.runAction ?? vi.fn(async () => ({ ok: true }));
   const answerQuestion = options.answerQuestion ?? vi.fn(() => true);
   const view = renderHook((props: Partial<UseVoiceDelegationOptions>) =>
-    useVoiceDelegation({ call, rows: [], turnRunning: false, deliverToAgent, runAction, answerQuestion, ...props }),
+    useVoiceDelegation({ call, rows: [], agentTurn: "idle", deliverToAgent, runAction, answerQuestion, ...props }),
   );
   const toolCall = (callId: string, name: string, args: unknown, turns: VoiceTurn[] = said("pedido")) =>
     act(() => listeners.at(-1)!({ callId, name, argumentsJson: JSON.stringify(args), turns }));
@@ -97,8 +97,9 @@ describe("useVoiceDelegation — pergunta ao agente do card", () => {
     const { call, view, ask, deliverToAgent } = setup({ deliverToAgent: vi.fn((): AgentDelivery => "queued") });
     ask("call_6", "Rode os testes.");
     expect(call.answerToolCall.mock.calls).toEqual([["call_6", { ok: true, status: DELEGATION_QUEUED }]]);
-    view.rerender({ rows: [], turnRunning: false });
+    view.rerender({ rows: [], agentTurn: "idle" });
     expect(call.announceContext).not.toHaveBeenCalled();
+    expect(call.appendContext).not.toHaveBeenCalledWith(expect.stringContaining(DELEGATION_INTERRUPTED));
     const request = sentRequest(deliverToAgent);
     view.rerender({ rows: [{ kind: "user", id: "u1", text: request, state: "sent" }, { kind: "assistant", id: "a1", text: "12 verdes.", streaming: false }] });
     expect(call.announceContext).toHaveBeenCalledWith(expect.stringContaining("12 verdes."));
@@ -163,7 +164,7 @@ describe("useVoiceDelegation — pedido que ficou sem resposta (interrupção, d
     harness.ask("call_r", "Rode os testes do back.");
     const request = sentRequest(harness.deliverToAgent);
     const requestRow: SdkRow = { kind: "user", id: "u1", text: request, state: "sent" };
-    harness.view.rerender({ rows: [requestRow], turnRunning: false });
+    harness.view.rerender({ rows: [requestRow], agentTurn: "idle" });
     return { ...harness, request, requestRow };
   }
   const deliveredTexts = (deliver: unknown) => (deliver as ReturnType<typeof vi.fn>).mock.calls.map(([text]) => text as string);
@@ -174,11 +175,11 @@ describe("useVoiceDelegation — pedido que ficou sem resposta (interrupção, d
     expect(call.appendContext).toHaveBeenCalledWith(aboutRequestForVoice("Rode os testes do back.", DELEGATION_INTERRUPTED));
   });
 
-  it("a retomada do painel dentro do prazo traz a resposta, falada uma vez, sem reenvio", () => {
+  it("a retomada do painel traz a resposta, falada uma vez, mesmo com o turno retomado passando do prazo", () => {
     const { call, view, requestRow, deliverToAgent } = stalled();
-    view.rerender({ rows: [requestRow, { kind: "note", id: "n1", text: "retomando…" }], turnRunning: true });
+    view.rerender({ rows: [requestRow, { kind: "note", id: "n1", text: "retomando…" }], agentTurn: "running" });
     act(() => vi.advanceTimersByTime(DELEGATION_RECOVERY_MS * 2));
-    view.rerender({ rows: [requestRow, { kind: "note", id: "n1", text: "retomando…" }, { kind: "assistant", id: "a1", text: "12 verdes.", streaming: false }], turnRunning: false });
+    view.rerender({ rows: [requestRow, { kind: "note", id: "n1", text: "retomando…" }, { kind: "assistant", id: "a1", text: "12 verdes.", streaming: false }], agentTurn: "idle" });
     expect(deliveredTexts(deliverToAgent)).toHaveLength(1);
     expect(call.announceContext.mock.calls).toEqual([[expect.stringContaining("12 verdes.")]]);
   });
@@ -192,14 +193,35 @@ describe("useVoiceDelegation — pedido que ficou sem resposta (interrupção, d
     expect(call.announceContext.mock.calls).toEqual([[aboutRequestForVoice("Rode os testes do back.", DELEGATION_FAILED)]]);
   });
 
+  it("resposta que chega depois da falha dita ainda é falada à pessoa, como resposta ao pedido", () => {
+    const { call, view, requestRow } = stalled();
+    act(() => vi.advanceTimersByTime(DELEGATION_RECOVERY_MS));
+    view.rerender({ rows: [requestRow], agentTurn: "running" });
+    view.rerender({ rows: [requestRow, { kind: "assistant", id: "a1", text: "12 verdes.", streaming: false }], agentTurn: "idle" });
+    expect(call.announceContext.mock.calls).toEqual([
+      [aboutRequestForVoice("Rode os testes do back.", DELEGATION_FAILED)],
+      [expect.stringContaining("12 verdes.")],
+    ]);
+    expect(call.appendContext).not.toHaveBeenCalledWith(expect.stringContaining("12 verdes."));
+  });
+
+  it("chat reconectando sem parar (driver que cai antes de ficar pronto): a voz diz a falha no fim do prazo", () => {
+    const { call, view, requestRow } = stalled();
+    view.rerender({ rows: [], agentTurn: "unknown" });
+    view.rerender({ rows: [requestRow], agentTurn: "unknown" });
+    view.rerender({ rows: [], agentTurn: "unknown" });
+    act(() => vi.advanceTimersByTime(DELEGATION_RECOVERY_MS));
+    expect(call.announceContext.mock.calls).toEqual([[aboutRequestForVoice("Rode os testes do back.", DELEGATION_FAILED)]]);
+  });
+
   it("deploy depois de o agente começar a falar: o texto do meio não vira resposta, a da retomada sim", () => {
     const { call, view, requestRow } = stalled();
     const halfway: SdkRow = { kind: "assistant", id: "a1", text: "Vou rodar a suíte.", streaming: false };
     const resuming: SdkRow = { kind: "note", id: "n1", text: "retomando…" };
-    view.rerender({ rows: [requestRow, halfway, resuming], turnRunning: false });
+    view.rerender({ rows: [requestRow, halfway, resuming], agentTurn: "idle" });
     expect(call.announceContext).not.toHaveBeenCalled();
     expect(call.appendContext).not.toHaveBeenCalledWith(expect.stringContaining("Vou rodar a suíte."));
-    view.rerender({ rows: [requestRow, halfway, resuming, { kind: "assistant", id: "a2", text: "12 verdes.", streaming: false }], turnRunning: false });
+    view.rerender({ rows: [requestRow, halfway, resuming, { kind: "assistant", id: "a2", text: "12 verdes.", streaming: false }], agentTurn: "idle" });
     expect(call.announceContext.mock.calls).toEqual([[expect.stringContaining("12 verdes.")]]);
   });
 
@@ -210,14 +232,14 @@ describe("useVoiceDelegation — pedido que ficou sem resposta (interrupção, d
     });
     const { call, view, ask } = setup({ deliverToAgent: vi.fn((): AgentDelivery => "queued") });
     ask("call_q", "Rode os testes.");
-    view.rerender({ rows: [], turnRunning: false });
+    view.rerender({ rows: [], agentTurn: "idle" });
     act(() => vi.advanceTimersByTime(DELEGATION_RECOVERY_MS));
     expect(call.announceContext.mock.calls).toEqual([[aboutRequestForVoice("Rode os testes.", DELEGATION_UNDELIVERED)]]);
   });
 
-  it("pedido que o servidor não confirmou nunca é reenviado pela voz: a voz diz que ficou como não entregue", () => {
+  it("pedido que o servidor não confirmou: a voz diz no fim do prazo que ele ficou como não entregue", () => {
     const { call, view, deliverToAgent, request } = stalled();
-    view.rerender({ rows: [{ kind: "user", id: "u1", text: request, state: "undelivered" }], turnRunning: false });
+    view.rerender({ rows: [{ kind: "user", id: "u1", text: request, state: "undelivered" }], agentTurn: "idle" });
     act(() => vi.advanceTimersByTime(DELEGATION_RECOVERY_MS * 3));
     expect(deliveredTexts(deliverToAgent)).toHaveLength(1);
     expect(call.announceContext.mock.calls).toEqual([[aboutRequestForVoice("Rode os testes do back.", DELEGATION_UNDELIVERED)]]);
@@ -243,15 +265,15 @@ describe("useVoiceDelegation — pergunta do agente aberta", () => {
 
   it("a voz lê a pergunta aberta por commentary, uma vez", () => {
     const { call, view } = setup();
-    view.rerender({ rows: [question], turnRunning: true });
-    view.rerender({ rows: [question], turnRunning: true });
+    view.rerender({ rows: [question], agentTurn: "running" });
+    view.rerender({ rows: [question], agentTurn: "running" });
     expect(call.announceContext).toHaveBeenCalledTimes(1);
     expect(call.announceContext).toHaveBeenCalledWith(expect.stringContaining("Qual caminho?"));
   });
 
   it("ask_card_agent com a pergunta aberta responde a pergunta com a fala da pessoa, sem envio urgente", () => {
     const { call, view, toolCall, deliverToAgent, answerQuestion } = setup();
-    view.rerender({ rows: [question], turnRunning: true });
+    view.rerender({ rows: [question], agentTurn: "running" });
     toolCall("call_q1", "ask_card_agent", { request: "A pessoa escolheu B." }, said("a B"));
     expect(answerQuestion).toHaveBeenCalledWith("q_1", [{ selected: [expect.stringContaining("a B")] }]);
     expect(deliverToAgent).not.toHaveBeenCalled();
@@ -260,7 +282,7 @@ describe("useVoiceDelegation — pergunta do agente aberta", () => {
 
   it("uma escolha que o chat não consegue entregar volta como erro na saída da função", () => {
     const { call, view, toolCall, deliverToAgent } = setup({ answerQuestion: vi.fn(() => false) });
-    view.rerender({ rows: [question], turnRunning: true });
+    view.rerender({ rows: [question], agentTurn: "running" });
     toolCall("call_q2", "ask_card_agent", { request: "B" }, said("a B"));
     expect(deliverToAgent).not.toHaveBeenCalled();
     expect(call.answerToolCall.mock.calls).toEqual([["call_q2", { error: DELEGATION_NOT_SENT }]]);
@@ -272,10 +294,10 @@ describe("useVoiceDelegation — pergunta do agente aberta", () => {
       vi.useRealTimers();
     });
     const { call, view, toolCall, deliverToAgent } = setup();
-    view.rerender({ rows: [question], turnRunning: true });
+    view.rerender({ rows: [question], agentTurn: "running" });
     toolCall("call_q5", "ask_card_agent", { request: "A pessoa escolheu B." }, said("a B"));
     const answered: SdkRow = { ...question, outcome: "answered" };
-    view.rerender({ rows: [answered], turnRunning: false });
+    view.rerender({ rows: [answered], agentTurn: "idle" });
     act(() => vi.advanceTimersByTime(DELEGATION_RECOVERY_MS * 3));
     expect(deliverToAgent).not.toHaveBeenCalled();
     expect(call.announceContext).toHaveBeenLastCalledWith(aboutRequestForVoice("A pessoa escolheu B.", DELEGATION_FAILED));
@@ -283,7 +305,7 @@ describe("useVoiceDelegation — pergunta do agente aberta", () => {
 
   it("nada ouvido não responde a pergunta por ninguém", () => {
     const { call, view, toolCall, answerQuestion } = setup();
-    view.rerender({ rows: [question], turnRunning: true });
+    view.rerender({ rows: [question], agentTurn: "running" });
     toolCall("call_q3", "ask_card_agent", { request: "B" }, []);
     expect(answerQuestion).not.toHaveBeenCalled();
     expect(call.answerToolCall.mock.calls).toEqual([["call_q3", { error: ASK_WITHOUT_REQUEST }]]);
@@ -293,18 +315,18 @@ describe("useVoiceDelegation — pergunta do agente aberta", () => {
     const { call, view, ask, deliverToAgent } = setup();
     ask("call_q4", "Organize as metas.");
     const request = sentRequest(deliverToAgent);
-    view.rerender({ rows: [{ kind: "user", id: "u1", text: request, state: "sent" }, { ...question }], turnRunning: true });
-    view.rerender({ rows: [{ kind: "user", id: "u1", text: request, state: "sent" }, { ...question }], turnRunning: false });
+    view.rerender({ rows: [{ kind: "user", id: "u1", text: request, state: "sent" }, { ...question }], agentTurn: "running" });
+    view.rerender({ rows: [{ kind: "user", id: "u1", text: request, state: "sent" }, { ...question }], agentTurn: "idle" });
     expect(call.announceContext.mock.calls).toEqual([[expect.stringContaining("Qual caminho?")]]);
   });
 
   it("uma chamada nova lê de novo a pergunta que continua aberta", () => {
     const { call, view } = setup();
-    view.rerender({ rows: [question], turnRunning: true });
+    view.rerender({ rows: [question], agentTurn: "running" });
     call.snap = { ...call.snap, state: "idle" };
-    view.rerender({ rows: [question], turnRunning: true });
+    view.rerender({ rows: [question], agentTurn: "running" });
     call.snap = { ...call.snap, state: "live" };
-    view.rerender({ rows: [question], turnRunning: true });
+    view.rerender({ rows: [question], agentTurn: "running" });
     expect(call.announceContext).toHaveBeenCalledTimes(2);
   });
 });
