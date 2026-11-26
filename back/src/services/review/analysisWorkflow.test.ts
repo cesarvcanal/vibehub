@@ -5,7 +5,6 @@ import { analysisFindingFields, analysisReportInput } from "../../mcp/tools.js";
 
 type AgentOpts = { label?: string; phase?: string; model?: string; effort?: string; schema?: object };
 type AgentFake = (prompt: string, opts: AgentOpts) => Promise<unknown>;
-type PipelineStage = (previous: unknown, item: unknown, index: number) => unknown;
 
 const AsyncFunction = Object.getPrototypeOf(async () => undefined).constructor as new (
   ...params: string[]
@@ -28,18 +27,10 @@ async function runFleet(agentFake: AgentFake, fleetArgs: unknown = VALID_ARGS) {
         return null;
       }
     }));
-  const pipeline = async (items: unknown[], ...stages: PipelineStage[]) =>
-    await Promise.all(items.map(async (item, index) => {
-      try {
-        return await stages.reduce<Promise<unknown>>(async (previous, stage) => await stage(await previous, item, index), Promise.resolve(item));
-      } catch {
-        return null;
-      }
-    }));
   const scriptBody = readPrAnalysisWorkflowSource().replace("export const meta =", "const meta =");
-  const script = new AsyncFunction("agent", "parallel", "pipeline", "phase", "log", "args", scriptBody);
+  const script = new AsyncFunction("agent", "parallel", "phase", "log", "args", scriptBody);
   const fleetResult = await script(
-    agent, parallel, pipeline, () => undefined, (message: string) => logs.push(message),
+    agent, parallel, () => undefined, (message: string) => logs.push(message),
     fleetArgs,
   );
   return { fleetResult: fleetResult as Record<string, unknown>, calls, logs };
@@ -414,7 +405,12 @@ describe("frota da análise de PR", () => {
     };
     const threeDimensions = { ...ONLY_CORRECTNESS, security: true, tests: true };
     const groupsOf = (groups: { title: string; members: string[] }[]) => ({ findings: groups });
-    const fleetWithConsolidation = (consolidation: unknown, verdictFor: (prompt: string) => object = () => ({ confirmed: true, evidence: "- conferido" })) =>
+    const packagingMerged = groupsOf([
+      { title: "embalagem e fator travados só na tela", members: ["c1", "c3"] },
+      { title: "histórico conta entrada estornada", members: ["c2"] },
+      { title: "histórico perdeu as pernas de transferência", members: ["c4"] },
+    ]);
+    const fleetWithConsolidation = (consolidation: unknown, verdictFor: (prompt: string) => unknown = () => ({ confirmed: true, evidence: "- conferido" })) =>
       runFleet(async (prompt, opts) => {
         if (opts.phase === "Contexto") return brief(threeDimensions);
         if (opts.phase === "Revisão") return { findings: reviewByDimension[opts.label!] ?? [] };
@@ -438,11 +434,7 @@ describe("frota da análise de PR", () => {
     });
 
     it("o mesmo defeito visto por duas dimensões, em linhas diferentes, é verificado uma vez só, com o achado de cada revisor no pedido", async () => {
-      const { calls } = await fleetWithConsolidation(groupsOf([
-        { title: "embalagem e fator travados só na tela", members: ["c1", "c3"] },
-        { title: "histórico conta entrada estornada", members: ["c2"] },
-        { title: "histórico perdeu as pernas de transferência", members: ["c4"] },
-      ]));
+      const { calls } = await fleetWithConsolidation(packagingMerged);
       const verifications = callsIn(calls, "Verificação");
       expect(verifications).toHaveLength(3);
       const packagingVerification = verifications.find((call) => call.opts.label === "verificação: correctness · embalagem e fator travados só na tela")!;
@@ -453,11 +445,7 @@ describe("frota da análise de PR", () => {
     });
 
     it("achados parecidos mas distintos, no mesmo arquivo e linha, que a consolidação separa, são verificados cada um", async () => {
-      const { calls } = await fleetWithConsolidation(groupsOf([
-        { title: "embalagem e fator travados só na tela", members: ["c1", "c3"] },
-        { title: "histórico conta entrada estornada", members: ["c2"] },
-        { title: "histórico perdeu as pernas de transferência", members: ["c4"] },
-      ]));
+      const { calls } = await fleetWithConsolidation(packagingMerged);
       const historyVerifications = callsIn(calls, "Verificação").filter((call) => call.opts.label!.includes("histórico"));
       expect(historyVerifications.map((call) => call.opts.label)).toEqual([
         "verificação: correctness · histórico conta entrada estornada",
@@ -467,11 +455,7 @@ describe("frota da análise de PR", () => {
     });
 
     it("o juiz recebe o grupo confirmado como um achado, com o achado de cada revisor e a evidência da verificação", async () => {
-      const { calls } = await fleetWithConsolidation(groupsOf([
-        { title: "embalagem e fator travados só na tela", members: ["c1", "c3"] },
-        { title: "histórico conta entrada estornada", members: ["c2"] },
-        { title: "histórico perdeu as pernas de transferência", members: ["c4"] },
-      ]), (prompt) => ({ confirmed: prompt.includes("embalagem"), evidence: "- a linha 2060 só confere o produto" }));
+      const { calls } = await fleetWithConsolidation(packagingMerged, (prompt) => ({ confirmed: prompt.includes("embalagem"), evidence: "- a linha 2060 só confere o produto" }));
       const judgePrompt = callsIn(calls, "Julgamento")[0]!.prompt;
       const confirmedList = judgePrompt.split("Achados confirmados pela verificação, de todas as dimensões:\n")[1]!.split("\nJunte os repetidos")[0]!;
       expect(confirmedList.split("\n").filter((line) => line.startsWith("- "))).toHaveLength(1);
@@ -487,7 +471,7 @@ describe("frota da análise de PR", () => {
       const { fleetResult } = await fleetWithConsolidation(groupsOf([
         { title: "embalagem e fator travados só na tela", members: ["c1", "c3"] },
         { title: "histórico unificado", members: ["c2", "c4"] },
-      ]), (prompt) => (prompt.includes("embalagem") ? { confirmed: false, evidence: "- o servidor barra" } : null as unknown as object));
+      ]), (prompt) => (prompt.includes("embalagem") ? { confirmed: false, evidence: "- o servidor barra" } : null));
       expect(fleetResult.refutedCount).toBe(1);
       expect(fleetResult.dimensions).toContainEqual(expect.objectContaining({ key: "correctness", unverifiedCount: 1 }));
       expect(fleetResult.dimensions).toContainEqual(expect.objectContaining({ key: "tests", unverifiedCount: 1 }));
