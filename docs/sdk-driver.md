@@ -385,18 +385,27 @@ rules; that is the project's choice.
 Claude Code ships no code review subagent type: the built-in `code-review` skill forks into a
 `general-purpose` subagent, and review skills that dispatch reviewers (such as
 `mattpocock-skills:code-review`) name no type, so the model picks `general-purpose`. The driver
-registers its own profile, `code-reviewer` (`CODE_REVIEWER_AGENT`): read-only (no `Edit`, `Write`,
-`NotebookEdit` or `Agent`), the project's `CLAUDE.md` and `AGENTS.md` as the review standard, and a
-report that opens with a `## Aderência` table (each instruction and skill considered, its status,
-and the command or `file:line` that proves it; no evidence means `não verificado`).
+registers its own profile, `code-reviewer` (`CODE_REVIEWER_AGENT`): no editing tools (no `Edit`,
+`Write`, `NotebookEdit` or `Agent`; `Bash` stays, so "never edit" is an instruction, not a lock),
+the project's `CLAUDE.md` and `AGENTS.md` as the review standard (the SDK hands an `agents` subagent
+the `CLAUDE.md` files unless `omitClaudeMd` is set), and a report whose first line names the profile
+and that opens with a `## Aderência` table (each instruction and skill considered, its status, and
+the command or `file:line` that proves it; no evidence means `não verificado`).
 
 Before the permission gate, in both modes, `reviewRoutingDenial` denies:
 
-- an `Agent`/`Task` call whose `subagent_type` is `general-purpose`, `claude` or absent and whose
-  description mentions a review (or whose prompt says "code review"), telling the model to dispatch
-  the same description and prompt with `subagent_type: "code-reviewer"`;
+- an `Agent` call whose `subagent_type` is `general-purpose`, `claude` or absent and whose
+  description mentions a review (or whose prompt says "code review" or "revise a branch / o diff /
+  o PR"), telling the model to dispatch the same description and prompt with
+  `subagent_type: "code-reviewer"`. A description that asks to fix or apply something (`corrig`,
+  `aplic`, `apply`, `fix`, `implement`) is not a review: applying review findings needs the editing
+  tools the profile lacks;
 - a `Skill` call for the built-in `code-review`, telling the model to pass its args to
-  `code-reviewer` instead.
+  `code-reviewer` instead; called from inside `code-reviewer` (the hook's `agent_type`), it tells the
+  profile to review in its own context.
+
+The match is on the dispatch's text, so a review named and worded otherwise ("Auditoria", "check
+the change") still runs as `general-purpose`.
 
 Specialised types (`Explore`, `feature-dev:code-reviewer`, a project's own agents) pass untouched.
 When the session's `init` does not list `code-reviewer`, the same calls are denied with a message
